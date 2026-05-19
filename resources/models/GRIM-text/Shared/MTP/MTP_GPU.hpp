@@ -59,14 +59,16 @@ void launchMTPAccuracyKernel(
  * single source of truth for batch geometry and masking; uploadBatchToDevice()
  * is the only MTP target H2D copy site.
  *
- * @param ctx           AutogradContext with model, config, stream, step, payload
+ * @param ctx           AutogradContext with model, config, stream, payload
  * @param intermediates AutogradIntermediates owning encoder_output, centered output, loss_tensor, per-head target buffers
  * @param diagnostics   Host-side per-step MTP telemetry payload
+ * @param mtp_alpha_effective Phase2-derived MTP loss weight for this batch
  */
 void computeMTPAuxiliaryLosses(
     Autograd::AutogradContext& ctx,
     Autograd::AutogradIntermediates& intermediates,
-    MTPDiagnostics& diagnostics
+    MTPDiagnostics& diagnostics,
+    float mtp_alpha_effective
 );
 
 /**

@@ -140,7 +140,6 @@ struct AutogradContext {
     const Batching::BatchPayload* payload = nullptr;
     const Batching::BatchDeviceBindings* device_bindings = nullptr;
     uint64_t batch_idx = 0;
-    uint64_t global_step = 0;
     bool is_training = true;
     /** When true, skip duplicate equation logging on non-initial accumulation slots. */
     bool skip_equation_logging = false;
@@ -208,7 +207,6 @@ AutogradContext initAutogradContext(
     const Batching::BatchDeviceBindings& bindings,
     const HyperParameters::LossConfigHP& loss_config,
     uint64_t batch_idx,
-    uint64_t global_step,
     bool is_training = true
 );
 
@@ -236,9 +234,11 @@ ForwardResult executeAutogradForward(AutogradContext& ctx);
  * 
  * @param ctx     Autograd context (must have logits populated by executeAutogradForward,
  *                 and ctx.payload set to a valid BatchPayload)
+ * @param mtp_alpha_effective Phase2-derived MTP loss weight for this batch
  */
 LossResult computeAutogradLoss(
-    AutogradContext& ctx
+    AutogradContext& ctx,
+    float mtp_alpha_effective
 );
 
 /**
@@ -277,7 +277,7 @@ bool verifyGradientsAreConnected(AutogradContext& ctx);
  * @param accumulate     Whether to accumulate gradients (true for accumulation slots > 0)
  * @param grad_scale     Gradient scaling factor
  * @param batch_idx      Batch index used by forward-time stochastic kernels/logs
- * @param global_step    Monotonic training batch counter used by loss warmups/logs
+ * @param mtp_alpha_effective Phase2-derived MTP loss weight for this batch
  * @return LossResult with decomposed loss components and success/error status.
  *         If loss is non-finite, backward is SKIPPED and success=false.
  */
@@ -291,7 +291,7 @@ LossResult autogradTrainingStep(
     bool accumulate,
     float grad_scale,
     uint64_t batch_idx,
-    uint64_t global_step
+    float mtp_alpha_effective
 );
 
 /**

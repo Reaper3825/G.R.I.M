@@ -10,7 +10,6 @@
 #include "../../Layers/LMHead/lm_head_GPU.hpp"
 #include <iostream>
 #include <cmath>
-#include <algorithm>
 #include <stdexcept>
 
 using GRIM::CudaAlloc::cudaMallocOrThrow;
@@ -71,7 +70,8 @@ void launchMTPAccuracyKernel(
 void computeMTPAuxiliaryLosses(
     Autograd::AutogradContext& ctx,
     Autograd::AutogradIntermediates& intermediates,
-    MTPDiagnostics& diagnostics
+    MTPDiagnostics& diagnostics,
+    float mtp_alpha_effective
 ) {
     const auto* cfg = ctx.config;
     diagnostics.clear();
@@ -119,14 +119,11 @@ void computeMTPAuxiliaryLosses(
             ") — unified_loss failed before MTP. num_tokens=" + std::to_string(total_tokens) + " vocab=" + std::to_string(vocab_size));
     }
 
-    if (cfg->mtp_alpha_warmup_steps <= 0) {
-        throw std::runtime_error("computeMTPAuxiliaryLosses: mtp_alpha_warmup_steps must be > 0, got " +
-            std::to_string(cfg->mtp_alpha_warmup_steps));
+    if (!std::isfinite(mtp_alpha_effective) || mtp_alpha_effective < 0.0f) {
+        throw std::runtime_error("computeMTPAuxiliaryLosses: mtp_alpha_effective must be finite and >= 0, got " +
+            std::to_string(mtp_alpha_effective));
     }
-    const float alpha_warmup_progress = std::min(
-        1.0f,
-        static_cast<float>(ctx.global_step) / static_cast<float>(cfg->mtp_alpha_warmup_steps));
-    const float alpha_effective = cfg->mtp_alpha * alpha_warmup_progress;
+    const float alpha_effective = mtp_alpha_effective;
     float scale = 0.0f;
     if (alpha_effective > 0.0f) {
         scale = alpha_effective / static_cast<float>(K);

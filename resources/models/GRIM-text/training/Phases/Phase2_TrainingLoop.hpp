@@ -50,7 +50,6 @@ struct BatchAutogradPlan {
     bool should_accumulate = false;
     float grad_scale = 1.0f;
     uint64_t batch_idx = 0;
-    uint64_t global_step = 0;
 };
 
 /**

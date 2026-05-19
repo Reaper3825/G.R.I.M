@@ -15,7 +15,7 @@ Phase1/Phase1Startup also completes the durable handoff long before the autograd
 
 MTP shifted-target device pointers are part of the same prepared payload boundary: `BatchPayload.mtp_shifted_targets` carries the Phase1-authored host semantics, `uploadBatchToDevice()` copies those targets into `TrainingState.cached_mtp_shifted_targets_tensor`, and `BatchDeviceBindings.d_mtp_shifted_targets` is the only loss-facing device view. `BatchDeviceBindings` must not duplicate `mtp_k`; MTP geometry comes from `BatchPayload` and config. `computeMTPAuxiliaryLosses()` must not allocate per-head target tensors or perform H2D copies inside loss assembly.
 
-MTP alpha warmup is keyed by the monotonic Phase2 `global_step` passed through `AutogradContext`, not epoch-local `batch_idx` and not optimizer-step state. This keeps the auxiliary loss schedule continuous across epochs while preserving optimizer-step ownership in `OptimizerContext`.
+MTP alpha warmup is keyed by the monotonic Phase2 `TrainingContext::global_step`, but autograd must not carry a copied `global_step` field. Phase2 derives the per-batch `mtp_alpha_effective` scalar before entering `autogradTrainingStep()`, and MTP loss assembly consumes that scalar. `AutogradContext` only carries graph/loss runtime inputs, while `TrainingState::autograd_batch_idx` remains an epoch-local forward seed input for stochastic kernels.
 
 ## Primitive extraction rule
 Do not add new catch-all executors around `AutogradTraining.cu`. Extract narrow primitives first:

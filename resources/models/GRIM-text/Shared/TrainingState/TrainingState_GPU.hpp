@@ -107,7 +107,7 @@ struct TrainingState {
     // Authoritative batch index for autograd forward passes.
     // Sourced from runEpoch's active batch_idx; set by autogradTrainingStep
     // ONLY on train calls. Eval never mutates this.
-    // Controls: dropout PRNG seeds, MTP alpha warmup schedule.
+    // Controls forward-time stochastic kernels such as dropout PRNG seeds.
     uint64_t autograd_batch_idx = 0;
     
     //======================================================//

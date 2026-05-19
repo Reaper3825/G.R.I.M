@@ -159,6 +159,32 @@ float scheduledLearningRateForOptimizerStep(
         ctx.config.hyperparameters.stability_overrides_enabled);
 }
 
+float mtpAlphaEffectiveForBatch(
+    const ::GRIM::HyperParameters::LanguageModelConfig& cfg,
+    int global_step)
+{
+    if (!cfg.mtp_enabled || cfg.mtp_k <= 0) {
+        return 0.0f;
+    }
+    if (global_step < 0) {
+        throw std::runtime_error("mtpAlphaEffectiveForBatch: global_step must be >= 0, got " +
+                                 std::to_string(global_step));
+    }
+    if (cfg.mtp_alpha_warmup_steps <= 0) {
+        throw std::runtime_error("mtpAlphaEffectiveForBatch: mtp_alpha_warmup_steps must be > 0, got " +
+                                 std::to_string(cfg.mtp_alpha_warmup_steps));
+    }
+    const float progress = std::min(
+        1.0f,
+        static_cast<float>(global_step) / static_cast<float>(cfg.mtp_alpha_warmup_steps));
+    const float alpha = cfg.mtp_alpha * progress;
+    if (!std::isfinite(alpha) || alpha < 0.0f) {
+        throw std::runtime_error("mtpAlphaEffectiveForBatch: derived alpha must be finite and >= 0, got " +
+                                 std::to_string(alpha));
+    }
+    return alpha;
+}
+
 void runOptimizerWindowFromEpoch(
     TrainingContext& ctx,
     TrainingLoopState& state,
@@ -386,7 +412,7 @@ BatchResult processBatch(
         plan.should_accumulate,
         plan.grad_scale,
         plan.batch_idx,
-        plan.global_step
+        mtpAlphaEffectiveForBatch(ctx.model_config, ctx.global_step)
     );
     result.loss = loss_result.loss_value;
     result.aux_loss = loss_result.aux_loss;
@@ -625,7 +651,6 @@ EpochResult runEpoch(
         autograd_plan.should_accumulate = shouldAccumulateGradients(ctx.optimizer);
         autograd_plan.grad_scale = 1.0f / static_cast<float>(accum_steps);
         autograd_plan.batch_idx = static_cast<uint64_t>(batch_idx);
-        autograd_plan.global_step = static_cast<uint64_t>(ctx.global_step);
 
         const int optimizer_step = static_cast<int>(ctx.optimizer.optimizer_step.step);
 

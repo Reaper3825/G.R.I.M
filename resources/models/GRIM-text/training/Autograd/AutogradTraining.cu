@@ -391,13 +391,18 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
 //======================================================================
 
 LossResult computeAutogradLoss(
-    AutogradContext& ctx
+    AutogradContext& ctx,
+    float mtp_alpha_effective
 ) {
     LossResult result{};
     result.success = false;
     
     // RULE 20: Fail loud
     ctx.validate("computeAutogradLoss");
+    if (!std::isfinite(mtp_alpha_effective) || mtp_alpha_effective < 0.0f) {
+        throw std::runtime_error("computeAutogradLoss: mtp_alpha_effective must be finite and >= 0, got " +
+                                 std::to_string(mtp_alpha_effective));
+    }
     if (!ctx.payload) {
         throw std::runtime_error("computeAutogradLoss: ctx.payload is NULL — training path MUST set payload via initAutogradContext(const BatchPayload&, ...)");
     }
@@ -458,7 +463,7 @@ LossResult computeAutogradLoss(
     // 2. MTP (multi-token prediction) auxiliary losses: L_total += α/K * Σ_k L_k
     // Delegated to MTP_GPU module (see Shared/MTP/MTP_GPU.cu)
     // ═══════════════════════════════════════════════════════════════════════════
-    GRIM::MTP::computeMTPAuxiliaryLosses(ctx, intermediates, result.mtp_diagnostics);
+    GRIM::MTP::computeMTPAuxiliaryLosses(ctx, intermediates, result.mtp_diagnostics, mtp_alpha_effective);
 
     float mtp_loss = 0.0f;
     if (result.mtp_diagnostics.valid) {
@@ -1231,7 +1236,7 @@ LossResult autogradTrainingStep(
     bool accumulate,
     float grad_scale,
     uint64_t batch_idx,
-    uint64_t global_step
+    float mtp_alpha_effective
 ) {
     payload.validate("autogradTrainingStep");
 
@@ -1329,7 +1334,6 @@ LossResult autogradTrainingStep(
         bindings,
         loss_config,
         batch_idx,
-        global_step,
         true
     );
     if (loss_config.class_balanced_enabled) {
@@ -1379,7 +1383,7 @@ LossResult autogradTrainingStep(
             : 0.0f;
     }
     
-    LossResult loss_result = computeAutogradLoss(ctx);
+    LossResult loss_result = computeAutogradLoss(ctx, mtp_alpha_effective);
     if (!loss_result.success) {
         loss_result.error_message = "autogradTrainingStep: Loss failed - " + loss_result.error_message;
         // Rule 20 single-owner clear: caller's AutogradStepScope handles intermediates.
