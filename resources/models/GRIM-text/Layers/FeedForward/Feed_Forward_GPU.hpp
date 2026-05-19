@@ -98,14 +98,14 @@ public:
      * @param intermediates Storage for intermediate tensors (REQUIRED for autograd)
     * @param stream CUDA stream from the caller's forward payload/request
     * @param cublas_handle cuBLAS handle from the caller's forward payload/request
-    * @param training_step Current training/forward seed step for deterministic dropout masks
-    * @param dropout_enabled Explicit mode gate for dropout; training_step never controls mode
+    * @param batch_idx Current batch index for deterministic dropout masks
+    * @param dropout_enabled Explicit mode gate for dropout; batch_idx never controls mode
      * @param layer_idx Encoder layer index (for unique dropout seed per layer)
      * @return output [total_tokens, d_model] with grad_fn attached
      */
     Tensor forward(const Tensor& input, ForwardIntermediates& intermediates,
                 cudaStream_t stream, cublasHandle_t cublas_handle,
-                uint64_t training_step = 0, bool dropout_enabled = false, int layer_idx = 0);
+                uint64_t batch_idx = 0, bool dropout_enabled = false, int layer_idx = 0);
 
     //--------------------------------------------------
     // NOTE: Backward Pass handled by autograd

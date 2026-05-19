@@ -1325,8 +1325,8 @@ Tensor residual_add(const Tensor& x, const Tensor& residual,
  * @param causal If true, applies causal mask (autoregressive). If false, all positions attend all others.
  * @param attention_dropout_p Attention dropout DROP rate (0.0 = disabled, 0.15 = 15% drop rate).
  *        Converted internally to keep probability for FlashAttention (keep_p = 1.0 - attention_dropout_p).
- * @param dropout_seed Per-step Philox RNG seed for reproducible dropout masks.
- *        Use ctx.step * 2654435761ULL + layer_offset for per-step, per-layer uniqueness.
+ * @param dropout_seed Per-batch Philox RNG seed for reproducible dropout masks.
+ *        Use batch_idx * 2654435761ULL + layer_offset for per-batch, per-layer uniqueness.
  */
 Tensor scaled_dot_product_attention(
     const Tensor& q, const Tensor& k, const Tensor& v,

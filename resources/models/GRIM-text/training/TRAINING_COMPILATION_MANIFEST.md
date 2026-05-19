@@ -142,7 +142,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - `EmbeddingGradFn`: Issues #48/#50/#54 patterns correct (stable data, ownership, result owns grad_fn) ✅
   - PCGrad path: buffer allocation, global pointer wiring, kernel math all correct ✅
   - Tied weights: same Tensor object used for both embedding and LM head ✅
-  - **FIX**: Embedding dropout seed was FIXED (`42+500`) — same mask every batch = permanent feature deletion, NOT dropout. Changed to `ctx.step * 2654435761ULL + 500` for per-batch variation.
+  - **FIX**: Embedding dropout seed was FIXED (`42+500`) — same mask every batch = permanent feature deletion, NOT dropout. Changed to `batch_idx * 2654435761ULL + 500` for per-batch variation.
   - **DELETED**: `addSinusoidalPositionEmbeddingsKernel` + wrapper — raw in-place CUDA kernel bypassing autograd graph. ALiBi/RoPE provide position info inside attention; residual stream position differentiation is handled by learned or no pos embeddings.
   - **DELETED**: `ScaleGradFn` struct + `autograd::scale()` function + hpp declaration — dead code from reverted Issue #98 (Rule 20)
   - **CLEANED**: `LogSoftmaxGradFn` destructor stripped of 7x fprintf debug spew; `log_softmax` forward fprintf removed; `MatMulGradFn::apply` unconditional fprintf/fflush/cudaStreamSynchronize/cudaMemcpy diagnostic block removed (kept vtable corruption check as throw)
@@ -936,12 +936,12 @@ For each encoding layer (Layer 0 → Layer 11):
   - **REMOVED**: Redundant post-encoder-layer dropout from `AutogradTraining.cu` (was double-regularizing with sublayer dropout)
   - **Removed from CMakeLists.txt**: `Shared/Dropout/Dropout_GPU.cu` build reference
   - **Dropout sites (production)**:
-    1. Embedding dropout: `AutogradTraining.cu` (seed: step*2654435761+500)
-    2. Post-attention-projection: `Encoding_GPU.cu` step 6b (seed: step*2654435761+100+layer)
-    3. FFN activation (post-GELU): `Feed_Forward_GPU.cu` (seed: step*2654435761+300+layer)
-    4. Post-FFN output: `Encoding_GPU.cu` step 9b (seed: step*2654435761+200+layer)
+    1. Embedding dropout: `ModelForward_GPU.cu` (seed: batch_idx*2654435761+500)
+    2. Post-attention-projection: `Encoding_GPU.cu` step 6b (seed: batch_idx-derived seed*2654435761+100+layer)
+    3. FFN activation (post-GELU): `Feed_Forward_GPU.cu` (seed: batch_idx*2654435761+300+layer)
+    4. Post-FFN output: `Encoding_GPU.cu` step 9b (seed: batch_idx-derived seed*2654435761+200+layer)
     5. Attention dropout (inside FlashAttention): Philox PRNG, separate `attention_dropout` config
-  - All sublayer dropouts are mode-gated explicitly by `dropout_enabled`; `training_step` is seed material only and must not decide training/eval mode.
+  - All sublayer dropouts are mode-gated explicitly by `dropout_enabled`; `batch_idx` is seed material only and must not decide training/eval mode.
 
 ---
 

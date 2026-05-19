@@ -10,7 +10,7 @@ Location: `training/Phases/Phase2_TrainingLoop.cu`, owned by `runEpoch()` after 
 
 The window is intentionally narrow and ordered:
 
-1. `runEpoch()` authors a `BatchAutogradPlan` from the current accumulation slot and optimizer step.
+1. `runEpoch()` authors a `BatchAutogradPlan` from the current accumulation slot and active `batch_idx`.
 2. `processBatch()` consumes that immutable plan and produces/accumulates gradients for one microbatch.
 3. `runEpoch()` advances the accumulation gate and confirms the full microbatch window is complete.
 4. Registered gradient clipping consumes the accumulated parameter grads.

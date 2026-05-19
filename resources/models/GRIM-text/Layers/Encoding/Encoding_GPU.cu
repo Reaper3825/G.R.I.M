@@ -78,8 +78,8 @@ namespace {
 
 std::atomic<uint64_t> g_encoder_forward_counter{0};
 
-uint64_t mixEncoderForwardSeed(uint64_t training_step, uint64_t forward_nonce) {
-    uint64_t x = (training_step + 1ULL) * 0x9E3779B97F4A7C15ULL;
+uint64_t mixEncoderForwardSeed(uint64_t batch_idx, uint64_t forward_nonce) {
+    uint64_t x = (batch_idx + 1ULL) * 0x9E3779B97F4A7C15ULL;
     x ^= forward_nonce + 0xBF58476D1CE4E5B9ULL + (x << 6) + (x >> 2);
     return x;
 }
@@ -354,7 +354,7 @@ void EncodingLayer::validateConstructionSnapshot(const char* context) const {
 Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
                                const int* d_sequence_lengths, cudaStream_t stream, cublasHandle_t cublas_handle,
                                ForwardIntermediates& intermediates,
-                               uint64_t training_step,
+                               uint64_t batch_idx,
                                bool dropout_enabled,
                                int layer_idx) {
     validateReady("EncodingLayer::forward");
@@ -421,7 +421,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
                 payload.batch_size, hp.num_heads, hp.num_kv_heads, hp.head_dim);
     }
     const uint64_t forward_nonce = g_encoder_forward_counter.fetch_add(1, std::memory_order_relaxed) + 1ULL;
-    const uint64_t dropout_step_seed = mixEncoderForwardSeed(training_step, forward_nonce);
+    const uint64_t dropout_batch_seed = mixEncoderForwardSeed(batch_idx, forward_nonce);
     
     //--------------------------------------------------
     // 1. RMSNorm1: input -> ln1_out
@@ -456,7 +456,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
         *pos_encoding_,
         stream,
         cublas_handle,
-        dropout_step_seed,
+        dropout_batch_seed,
         dropout_enabled,
         layer_idx
     };
@@ -473,7 +473,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     //     Dropout applied BEFORE LayerScale and residual add.
     //--------------------------------------------------
     if (hp.dropout_rate > 0.0f && dropout_enabled) {
-        const uint64_t attn_proj_dropout_seed = dropout_step_seed * 2654435761ULL + 100 + layer_idx;
+        const uint64_t attn_proj_dropout_seed = dropout_batch_seed * 2654435761ULL + 100 + layer_idx;
         const uint64_t attn_proj_dropout_mask_stream = 0x0001000000000000ULL + static_cast<uint64_t>(layer_idx);
         intermediates.proj_out = autograd::dropout(intermediates.proj_out, hp.dropout_rate,
                                                    attn_proj_dropout_seed, true, stream,
@@ -558,7 +558,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 9: FFN...\n");
     intermediates.ffn_out = ffn_->forward(intermediates.ln2_out, intermediates,
                                           stream, cublas_handle,
-                                          dropout_step_seed, dropout_enabled, layer_idx);
+                                          dropout_batch_seed, dropout_enabled, layer_idx);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 9: FFN DONE\n");
     
     //--------------------------------------------------
@@ -567,7 +567,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     //     Dropout applied BEFORE LayerScale and residual add.
     //--------------------------------------------------
     if (hp.dropout_rate > 0.0f && dropout_enabled) {
-        const uint64_t ffn_dropout_seed = dropout_step_seed * 2654435761ULL + 200 + layer_idx;
+        const uint64_t ffn_dropout_seed = dropout_batch_seed * 2654435761ULL + 200 + layer_idx;
         const uint64_t ffn_dropout_mask_stream = 0x0002000000000000ULL + static_cast<uint64_t>(layer_idx);
         intermediates.ffn_out = autograd::dropout(intermediates.ffn_out, hp.dropout_rate,
                                                   ffn_dropout_seed, true, stream,

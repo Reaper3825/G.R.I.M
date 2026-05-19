@@ -264,7 +264,7 @@ Vector LanguageModel::executeInferenceForward_(
     request.stream = stream;
     request.payload = &payload;
     request.bindings = &bindings;
-    request.step = 0;
+    request.batch_idx = 0;
     request.mode = Forward::ModelForwardMode::InferencePrefill;
 
     Forward::ModelForwardResult result = Forward::executeModelForward(request);

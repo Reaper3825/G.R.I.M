@@ -44,7 +44,7 @@ struct EncoderSelfAttentionForwardRequest {
     const PBM::PBMSpec& pbm;
     cudaStream_t stream = nullptr;
     cublasHandle_t cublas_handle = nullptr;
-    std::uint64_t training_step = 0;
+    std::uint64_t batch_idx = 0;
     bool dropout_enabled = false;
     int layer_idx = 0;
 };

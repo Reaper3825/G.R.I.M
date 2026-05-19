@@ -104,11 +104,11 @@ struct TrainingState {
     Tensor cached_token_atom_flags;     // [max_tokens] uint32 (type-specific metadata from AtomTable)
     Tensor cached_token_to_slot_map;    // [max_tokens] int32  (-1 = non-state-bearing; >=0 = valid slot_id)
     
-    // Authoritative training step counter for autograd forward passes.
-    // Sourced from TrainingContext::global_step (checkpointed); set by
-    // autogradTrainingStep ONLY on train calls. Eval never mutates this.
+    // Authoritative batch index for autograd forward passes.
+    // Sourced from runEpoch's active batch_idx; set by autogradTrainingStep
+    // ONLY on train calls. Eval never mutates this.
     // Controls: dropout PRNG seeds, MTP alpha warmup schedule.
-    uint64_t autograd_step = 0;
+    uint64_t autograd_batch_idx = 0;
     
     //======================================================//
     //  TRAINING EXECUTION TRACE (per-forward lifecycle)

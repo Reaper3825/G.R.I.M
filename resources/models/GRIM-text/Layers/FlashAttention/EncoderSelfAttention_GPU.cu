@@ -137,7 +137,7 @@ namespace {
         if (attention_dropout_p <= 0.0f) {
             return 0;
         }
-        return request.training_step * 2654435761ULL + 42 +
+        return request.batch_idx * 2654435761ULL + 42 +
                1000 * static_cast<std::uint64_t>(request.layer_idx);
     }
 }  // namespace

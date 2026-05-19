@@ -1302,8 +1302,8 @@ LossResult autogradTrainingStep(
     // ═══════════════════════════════════════════════════════════════════════════
     
     // Write authoritative autograd batch index to TrainingState BEFORE building context.
-    // This is the ONLY mutation site for autograd_step.
-    training_state.autograd_step = batch_idx;
+    // This is the ONLY mutation site for autograd_batch_idx.
+    training_state.autograd_batch_idx = batch_idx;
 
     // Rule 20 explicit tape sealing: skip equation-tape D2H/fprintf on non-initial
     // accumulation slots across the ENTIRE step (forward + loss + backward). Sealing
