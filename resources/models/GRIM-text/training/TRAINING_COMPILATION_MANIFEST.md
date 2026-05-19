@@ -1064,7 +1064,7 @@ For each encoding layer (Layer 0 → Layer 11):
   - ScratchBlock backward verified: uses `scratchblock_grad_tap` buffer (Issue #141 fix) ✅
   - PCGrad verified: `kernel_pcgrad_combine` orthogonalizes embedding gradient when `tie_embeddings=true` ✅
   - **Issue #125**: Column centering verified — `CenterColumnsGradFn` correctly reduces hidden state correlation ✅
-  - **Issue #132**: Row centering verified — applied AFTER column centering to eliminate gradient sign flip ✅
+
   - **Issue #127**: `centered_encoder_output` member verified — stored in ForwardContext, prevents use-after-free ✅
 
 ---

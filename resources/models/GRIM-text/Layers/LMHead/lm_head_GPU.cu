@@ -21,11 +21,11 @@
 //======================================================//
 
 #include "lm_head_GPU.hpp"
+#include "../../Shared/TensorContract/LMHeadGemmDiagnostics.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 
 #include <stdexcept>
 #include <cstdio>
-#include <cmath>
 #include <string>
 #include <vector>
 
@@ -316,6 +316,7 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
     const Tensor* effective_weights = &weights_;
     if (hp_.center_hidden_states) {
         centered_weights_ = autograd::center_rows(weights_, stream);
+        centered_weights_.name = "lm_head.centered_weights";
         effective_weights = &centered_weights_;
     } else {
         // Drop any stale buffer from a previous centered run — keeps memory honest.
@@ -336,6 +337,19 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
         nullptr,  // weights persist across calls (raw or centered held by member)
         true  // transpose_b=true: logits = input @ W^T
     );
+
+    autograd::logLmHeadGemmForwardEquation(
+        *matmul_input,
+        *effective_weights,
+        logits,
+        hp_.center_hidden_states,
+        hp_.project_out_pc1,
+        hp_.center_hidden_states,
+        total_tokens,
+        d_model,
+        hp_.vocab_size,
+        stream);
+
     // Validate output shape
     const auto expected_shape = TensorContract::TensorShape::make_LOGITS(total_tokens, hp_.vocab_size);
     const size_t logits_elements = logits.shape.total_elements();

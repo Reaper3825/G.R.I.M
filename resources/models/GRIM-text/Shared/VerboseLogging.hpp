@@ -43,5 +43,9 @@ constexpr bool ENABLE_FA_EQUATION_DIAGNOSTICS = false;  ///< [FA-FWD-*], [ATTN_S
 // Keep off unless actively debugging the QKV projection path.
 constexpr bool ENABLE_QKV_PROJECTION_EQUATION_LOGS = false;  ///< [QKV_PROJECTION_EQUATION]
 
+// LM-head GEMM equation diagnostics — targeted at the hidden-state alignment / Issue #132
+// investigation path. Gated again by BatchLogTape Debug level and skipThisPass().
+constexpr bool ENABLE_GEMM_EQUATION_LOGS = true;  ///< [LM_HEAD_GEMM_EQUATION], [LM_HEAD_GEMM_BACKWARD_EQUATION]
+
 } // namespace VerboseLogging
 } // namespace GRIM

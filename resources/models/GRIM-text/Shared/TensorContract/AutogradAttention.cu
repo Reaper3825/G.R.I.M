@@ -6,8 +6,8 @@
 //======================================================//
 #include "TensorContract_GPU.hpp"
 #include "AutogradQKVDiagnostics.hpp"
+#include "LMHeadGemmDiagnostics.hpp"
 #include "../Batching/BatchPayload.hpp"
-#include "../VerboseLogging.hpp"
 #include "../CudaAllocUtils.hpp"
 #include "GradientAccumulation.hpp"
 #include "../TensorConversion/TensorConversion.hpp"
@@ -103,6 +103,8 @@ struct MatMulGradFn : public GradFn {
     cublasHandle_t cublas_handle = nullptr;
     bool transpose_b = false;  // Was B transposed in forward?
     cudaStream_t cache_stream = nullptr;  // Stream for cache copy operations
+    const char* a_name = nullptr;
+    const char* b_name = nullptr;
     
     MatMulGradFn() { op_name = "matmul"; }
     
@@ -117,6 +119,8 @@ struct MatMulGradFn : public GradFn {
         b_requires_grad = b.requires_grad;
         a_shape = a.shape;
         b_shape = b.shape;
+        a_name = a.name;
+        b_name = b.name;
         
         // Copy shared_ptrs to captured grad_fns
         a_grad_fn = a.grad_fn;
@@ -400,6 +404,19 @@ struct MatMulGradFn : public GradFn {
                 trackCublasCall("cublasSgemm_grad_B", cublas_handle, stream, sgemm_status_4);
             }
         }
+
+        logLmHeadGemmBackwardEquation(grad_output,
+                          grad_a,
+                          grad_b,
+                          a_requires_grad,
+                          b_requires_grad,
+                          a_name,
+                          b_name,
+                          M,
+                          K,
+                          N,
+                          transpose_b,
+                          stream);
 
         // Issue #142: applyLmHeadGradCorrections removed.
         // Centering backward is handled by CenterRowsGradFn/CenterColumnsGradFn
