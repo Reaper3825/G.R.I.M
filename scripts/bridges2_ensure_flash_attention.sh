@@ -2,6 +2,7 @@
 # Run on the Bridges-2 (Linux) repo root after git pull. Used by run_train_on_bridges2.sh when FAS sync is on.
 # Skips forced submodule fetch/checkout when flash-attention matches the superproject gitlink and (pinned path)
 # csrc/cutlass is already at CUTLASS_PIN — avoids clobbering a good tree. Always runs patch steps (idempotent).
+# This script only owns flash-attention/cutlass. It must not deinitialize vcpkg.
 #
 # Env:
 #   CUTLASS_PIN           Required for pinned path (default matches run_train_on_bridges2.sh).
@@ -13,10 +14,6 @@ ROOT="${1:-.}"
 cd "$ROOT"
 
 CUTLASS_PIN="${CUTLASS_PIN:-bbe579a9e3beb6ea6626d9227ec32d0dae119a49}"
-
-deinit_vcpkg() {
-  git submodule deinit -f external/vcpkg 2>/dev/null || true
-}
 
 apply_patches_pinned() {
   if [[ ! -d external/flash-attention/csrc/cutlass ]]; then
@@ -30,7 +27,6 @@ apply_patches_pinned() {
 }
 
 if [[ "${GRIM_USE_LATEST_CUTLASS:-0}" == "1" ]]; then
-  deinit_vcpkg
   WANT_FA=$(git ls-tree HEAD external/flash-attention 2>/dev/null | awk '{print $3}' || true)
   HAVE_FA=$(git -C external/flash-attention rev-parse HEAD 2>/dev/null || true)
   if [[ -n "$WANT_FA" && "$WANT_FA" == "$HAVE_FA" ]]; then
@@ -44,7 +40,6 @@ if [[ "${GRIM_USE_LATEST_CUTLASS:-0}" == "1" ]]; then
 fi
 
 # Pinned CUTLASS (default)
-deinit_vcpkg
 WANT_FA=$(git ls-tree HEAD external/flash-attention 2>/dev/null | awk '{print $3}' || true)
 HAVE_FA=$(git -C external/flash-attention rev-parse HEAD 2>/dev/null || true)
 HAVE_CUT=$(git -C external/flash-attention/csrc/cutlass rev-parse HEAD 2>/dev/null || true)

@@ -2,22 +2,27 @@
 
 The **Optimizer Window** is the single architectural boundary where accumulated gradients become durable optimizer state and updated parameter weights.
 
-Location: `training/Phases/Phase2_TrainingLoop.cu`, inside the `should_step` branch after `advanceAccumulationOrThrow()` reports a full accumulation window.
+Location: `training/Phases/Phase2_TrainingLoop.cu`, owned by `runEpoch()` after `processBatch()` returns and `advanceAccumulationOrThrow()` reports a full accumulation window.
+
+`processBatch()` is the microbatch/autograd boundary only: it uploads one `BatchPayload`, runs forward/loss/backward, emits post-backward diagnostics, and returns. It must not read or mutate `OptimizerContext`, advance accumulation slots, complete optimizer steps, or call `launchOptimizerUpdate()`.
 
 ## Boundary sequence
 
 The window is intentionally narrow and ordered:
 
-1. Accumulation gate confirms the full microbatch window is complete.
-2. Registered gradient clipping consumes the accumulated parameter grads.
-3. Pre-step diagnostics that need gradient/tying state run from Phase 2.
-4. Phase 2 calls `launchOptimizerUpdate(...)` exactly once.
-5. Post-step finite/weight diagnostics run after the optimizer stream is synchronized.
-6. `completeOptimizerStepAfterFullAccumulationWindow(...)` owns optimizer-step bookkeeping and gradient clearing.
+1. `runEpoch()` authors a `BatchAutogradPlan` from the current accumulation slot and optimizer step.
+2. `processBatch()` consumes that immutable plan and produces/accumulates gradients for one microbatch.
+3. `runEpoch()` advances the accumulation gate and confirms the full microbatch window is complete.
+4. Registered gradient clipping consumes the accumulated parameter grads.
+5. Pre-step diagnostics that need gradient/tying state run from the epoch-owned optimizer window.
+6. The optimizer window calls `launchOptimizerUpdate(...)` exactly once.
+7. Post-step finite/weight diagnostics run after the optimizer stream is synchronized.
+8. `completeOptimizerStepAfterFullAccumulationWindow(...)` owns optimizer-step bookkeeping and gradient clearing.
 
 ## Ownership policy
 
-- `Phase2_TrainingLoop.cu` owns **when** the Optimizer Window opens/closes, because it owns accumulation, clipping, diagnostics, checkpoint cadence, and loop bookkeeping.
+- `runEpoch()` owns **when** the Optimizer Window opens/closes, because it owns chronological batch iteration, accumulation-slot advancement, clipping timing, diagnostics timing, checkpoint cadence, and loop bookkeeping.
+- `processBatch()` owns only the per-microbatch autograd boundary. It receives `BatchAutogradPlan` by required reference and must not reach into `ctx.optimizer`.
 - `Shared/Optimizers/OptimizerUpdate_GPU.{hpp,cu}` owns configured optimizer dispatch. It is the only training orchestration path that may branch on `OptimizerKind`.
 - `OptimizerUpdate_GPU.hpp` must include `Shared/HyperParameters/HyperparameterGroupings.hpp` directly. Do not forward declare `OptimizerUpdateHP`; this boundary consumes the grouping contract by value/reference, not an opaque private type.
 - `Shared/Optimizers/AdamW/AdamW_Kernal_GPU.{hpp,cu}` owns only AdamW kernels and AdamW all-group stepping.
@@ -27,6 +32,8 @@ The window is intentionally narrow and ordered:
 ## Forbidden patterns
 
 - Do not branch on `optimizer_kind` or `OptimizerKind` in Phase 2.
+- Do not read or mutate `ctx.optimizer` inside `processBatch()`.
+- Do not call `advanceAccumulationOrThrow()`, `completeAccumulationSlot()`, `completeOptimizerStepAfterFullAccumulationWindow()`, or `launchOptimizerUpdate()` from `processBatch()`.
 - Do not call `launchAdamWStep(...)` or `launchRAdamWStep(...)` from Phase 2.
 - Do not read `LanguageModel::getConfig()` to configure optimizer updates.
 - Do not add embedding-freeze skip logic to Phase 2; the configured optimizer boundary owns it.

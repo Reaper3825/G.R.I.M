@@ -42,11 +42,23 @@ namespace GRIMText::Training {
 //======================================================//
 
 /**
+ * @brief Immutable per-microbatch autograd timing facts authored by runEpoch.
+ *
+ * processBatch consumes this plan but does not read or mutate OptimizerContext.
+ */
+struct BatchAutogradPlan {
+    bool should_accumulate = false;
+    float grad_scale = 1.0f;
+    int optimizer_step = 0;
+};
+
+/**
  * @brief Result of processing a single batch
  */
 struct BatchResult {
     int batch_idx = 0;
     float loss = 0.0f;
+    float aux_loss = 0.0f;
     float grad_rms = 0.0f;
     bool grad_rms_valid = false;
     float learning_rate = 0.0f;
@@ -170,7 +182,7 @@ EpochResult runEpoch(
  * @param payload Batch payload (single source of truth; built from BatchAssignment in runEpoch)
  * @param batch_idx Batch index within epoch
  * @param epoch_idx Epoch index
- * @param accum_steps Startup-authored gradient accumulation window size
+ * @param plan Epoch-authored autograd accumulation/step facts
  * @return BatchResult Result from this batch
  */
 BatchResult processBatch(
@@ -179,7 +191,7 @@ BatchResult processBatch(
     const GRIM::Batching::BatchPayload& payload,
     int batch_idx,
     int epoch_idx,
-    int accum_steps);
+     const BatchAutogradPlan& plan);
 
 //======================================================//
 //  Internal Helper Functions
