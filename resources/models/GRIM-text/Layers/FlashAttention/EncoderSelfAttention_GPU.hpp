@@ -41,6 +41,7 @@ struct EncoderSelfAttentionIntermediates {
 struct EncoderSelfAttentionForwardRequest {
     const Batching::BatchPayload& payload;
     const HyperParameters::EncoderSelfAttentionHP& hp;
+    const HyperParameters::FlashAttentionRuntimeHP& flash_attention;
     const PBM::PBMSpec& pbm;
     cudaStream_t stream = nullptr;
     cublasHandle_t cublas_handle = nullptr;

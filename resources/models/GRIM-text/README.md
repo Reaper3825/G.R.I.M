@@ -32,7 +32,7 @@ This file is intentionally concise and focused on training and engineering decis
 
 - Grouped Query Attention (GQA)
   - Reduces KV cache memory by grouping Q heads to fewer KV heads.
-  - Implemented with explicit gradient scaling (heads_per_kv_group) in backward to preserve correct gradient magnitudes.
+  - FlashAttention maps Q heads to grouped KV heads and reduces backward dK/dV with a plain chain-rule sum.
 
 - Flash Attention 2
   - O(N) working memory attention path used for long sequences (auto-activated by seq_len threshold).
@@ -92,7 +92,7 @@ GRIM-text training is organized into three clear phases to make builds, tests an
     - Gradient accumulation is tracked by `OptimizerContext` accumulation slots: one slot is one `BatchPayload` upload → forward → loss → backward pass; the optimizer runs after the configured window completes.
    - Forward pass: fused QKV projection, attention (Flash or cuBLAS path), FFN fused GELU, residual adds.
    - Loss: unified loss computes focal + smoothed CE in a single numerically-stable kernel; gradients produced and optionally scaled by Telemetry decision.
-   - Backward pass: attention backward respects GQA scaling; gradients merged into centralized gradient buffers.
+  - Backward pass: attention backward respects GQA grouping; gradients merged into centralized gradient buffers.
    - Optimizer step: AdamW GPU kernel updates master weights; mixed-precision casts applied.
    - Telemetry update: pre-clip gradients used to update TelemetryLattice and feed TelemetryControl decisions (skip/scale/soft-restart/adjust LR).
 
@@ -118,7 +118,7 @@ GRIM-text training is organized into three clear phases to make builds, tests an
 
 - Attention & GQA
   - Forward: compute Q,K,V via fused projection then run Flash Attention when eligible.
-  - Backward: KV gradients are accumulated across grouped heads with an explicit gqa_grad_scale to normalize contribution.
+  - Backward: KV gradients are accumulated across grouped heads with a plain sum, matching upstream FlashAttention semantics.
 
 - Numerical stability
   - FP16 arithmetic is used for kernels with FP32 master weights and selective FP32 accumulators in GEMMs to reduce drift.
@@ -201,7 +201,7 @@ This file is intentionally concise and focused on training and engineering decis
 
 - Grouped Query Attention (GQA)
   - Reduces KV cache memory by grouping Q heads to fewer KV heads.
-  - Implemented with explicit gradient scaling (heads_per_kv_group) in backward to preserve correct gradient magnitudes.
+  - FlashAttention maps Q heads to grouped KV heads and reduces backward dK/dV with a plain chain-rule sum.
 
 - Flash Attention 2
   - O(N) working memory attention path used for long sequences (auto-activated by seq_len threshold).
@@ -261,7 +261,7 @@ GRIM-text training is organized into three clear phases to make builds, tests an
     - Gradient accumulation is tracked by `OptimizerContext` accumulation slots: one slot is one `BatchPayload` upload → forward → loss → backward pass; the optimizer runs after the configured window completes.
    - Forward pass: fused QKV projection, attention (Flash or cuBLAS path), FFN fused GELU, residual adds.
    - Loss: unified loss computes focal + smoothed CE in a single numerically-stable kernel; gradients produced and optionally scaled by Telemetry decision.
-   - Backward pass: attention backward respects GQA scaling; gradients merged into centralized gradient buffers.
+  - Backward pass: attention backward respects GQA grouping; gradients merged into centralized gradient buffers.
    - Optimizer step: AdamW GPU kernel updates master weights; mixed-precision casts applied.
    - Telemetry update: pre-clip gradients used to update TelemetryLattice and feed TelemetryControl decisions (skip/scale/soft-restart/adjust LR).
 
@@ -287,7 +287,7 @@ GRIM-text training is organized into three clear phases to make builds, tests an
 
 - Attention & GQA
   - Forward: compute Q,K,V via fused projection then run Flash Attention when eligible.
-  - Backward: KV gradients are accumulated across grouped heads with an explicit gqa_grad_scale to normalize contribution.
+  - Backward: KV gradients are accumulated across grouped heads with a plain sum, matching upstream FlashAttention semantics.
 
 - Numerical stability
   - FP16 arithmetic is used for kernels with FP32 master weights and selective FP32 accumulators in GEMMs to reduce drift.

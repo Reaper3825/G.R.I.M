@@ -727,7 +727,9 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
     int num_heads = 0;
     int num_kv_heads = 0;
     int head_dim = 0;
+    float softmax_scale = 0.0f;
     bool causal = true;
+    bool is_bf16 = false;
     
     // ALiBi slopes (pointer to device memory, not owned - do NOT free)
     const float* alibi_slopes = nullptr;
@@ -779,68 +781,6 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
             }
             v_grad = v_grad_owner->data;
         }
-    }
-    
-    void save(const Tensor& q, const Tensor& k, const Tensor& v, const Tensor& out,
-              int b, int s, int nh, int nkv, int hd, bool is_causal,
-              const float* alibi_slopes_ptr, cudaStream_t stream) {
-        batch_size = b;
-        seq_len = s;
-        num_heads = nh;
-        num_kv_heads = nkv;
-        head_dim = hd;
-        causal = is_causal;
-        alibi_slopes = alibi_slopes_ptr;  // Save pointer (not owned)
-        
-        const size_t q_elems = static_cast<size_t>(b) * s * nh * hd;
-        const size_t kv_elems = static_cast<size_t>(b) * s * nkv * hd;
-        const size_t lse_elems = static_cast<size_t>(b) * nh * s;
-        
-        // Allocate bf16 buffers for FlashAttention
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_q_bf16), q_elems * sizeof(__nv_bfloat16), "sdpa_saved_q_bf16");
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_k_bf16), kv_elems * sizeof(__nv_bfloat16), "sdpa_saved_k_bf16");
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_v_bf16), kv_elems * sizeof(__nv_bfloat16), "sdpa_saved_v_bf16");
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_out_bf16), q_elems * sizeof(__nv_bfloat16), "sdpa_saved_out_bf16");
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_softmax_lse), lse_elems * sizeof(float), "sdpa_saved_softmax_lse");
-        
-        // Allocate backward workspace
-        const size_t dq_accum_bytes = flash_attn_dq_accum_bytes(b, s, nh, hd);
-        const size_t dsoftmax_sum_bytes = flash_attn_dsoftmax_sum_bytes(b, s, nh);
-        cudaMallocOrThrow(&dq_accum, dq_accum_bytes, "sdpa_dq_accum_workspace");
-        cudaMallocOrThrow(&dsoftmax_sum, dsoftmax_sum_bytes, "sdpa_dsoftmax_sum_workspace");
-        
-        // ISSUE #72 FIX: FlashAttention backward kernel writes dK/dV using query head index (bidh=0..num_heads-1),
-        // NOT the KV head index (bidh / h_h_k_ratio). With GQA (12 Q heads, 4 KV heads), the library writes
-        // to positions 0-11 * head_stride, but if we only allocate for 4 KV heads, heads 4-11 write out-of-bounds!
-        // This causes STATUS_STACK_BUFFER_OVERRUN crashes.
-        //
-        // Solution: Allocate dk_bf16/dv_bf16 for num_heads (not num_kv_heads), let FlashAttention write to all,
-        // then reduce the 12-head gradients down to 4 KV heads by summing grouped heads in apply().
-        const size_t dk_dv_alloc_elems = static_cast<size_t>(b) * s * nh * hd;  // Use num_heads, not num_kv_heads!
-        
-        cudaMallocOrThrow(reinterpret_cast<void**>(&dq_bf16), q_elems * sizeof(__nv_bfloat16), "sdpa_dq_bf16");
-        cudaMallocOrThrow(reinterpret_cast<void**>(&dk_bf16), dk_dv_alloc_elems * sizeof(__nv_bfloat16), "sdpa_dk_bf16");  // ISSUE #72: Sized for num_heads
-        cudaMallocOrThrow(reinterpret_cast<void**>(&dv_bf16), dk_dv_alloc_elems * sizeof(__nv_bfloat16), "sdpa_dv_bf16");  // ISSUE #72: Sized for num_heads
-        cudaMallocOrThrow(reinterpret_cast<void**>(&dout_bf16), q_elems * sizeof(__nv_bfloat16), "sdpa_dout_bf16");
-        throwIfCudaFailed(
-            cudaMemsetAsync(dq_bf16, 0, q_elems * sizeof(__nv_bfloat16), stream),
-            "ScaledDotProductAttentionGradFn::save: cudaMemsetAsync(dq_bf16) failed");
-        throwIfCudaFailed(
-            cudaMemsetAsync(dk_bf16, 0, dk_dv_alloc_elems * sizeof(__nv_bfloat16), stream),
-            "ScaledDotProductAttentionGradFn::save: cudaMemsetAsync(dk_bf16) failed");
-        throwIfCudaFailed(
-            cudaMemsetAsync(dv_bf16, 0, dk_dv_alloc_elems * sizeof(__nv_bfloat16), stream),
-            "ScaledDotProductAttentionGradFn::save: cudaMemsetAsync(dv_bf16) failed");
-        
-        // Convert FP32 BHSD inputs to BF16 BSHD for FlashAttention
-        // Q: [B, H, S, D] FP32 -> [B, S, H, D] BF16
-        TensorConversion::convert_BHSD_to_BSHD_bf16(q.data, saved_q_bf16, b, nh, s, hd, stream);
-        // K: [B, Hkv, S, D] FP32 -> [B, S, Hkv, D] BF16
-        TensorConversion::convert_BHSD_to_BSHD_bf16(k.data, saved_k_bf16, b, nkv, s, hd, stream);
-        // V: [B, Hkv, S, D] FP32 -> [B, S, Hkv, D] BF16
-        TensorConversion::convert_BHSD_to_BSHD_bf16(v.data, saved_v_bf16, b, nkv, s, hd, stream);
-        // Output: [B, H, S, D] FP32 -> [B, S, H, D] BF16
-        TensorConversion::convert_BHSD_to_BSHD_bf16(out.data, saved_out_bf16, b, nh, s, hd, stream);
     }
     
     void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
@@ -900,8 +840,9 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
             num_heads,
             num_kv_heads,
             head_dim,
+            softmax_scale,
             causal,
-            true,              // is_bf16
+            is_bf16,
             attention_dropout_p,  // Same dropout rate as forward
             dropout_seed,         // Same seed as forward (reproduces identical mask)
             stream
@@ -1021,10 +962,17 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
 
 Tensor scaled_dot_product_attention(
     const Tensor& q, const Tensor& k, const Tensor& v,
-    const float* alibi_slopes, float scale, cudaStream_t stream,
-    bool causal,
+    const float* alibi_slopes,
+    const GRIM::HyperParameters::FlashAttentionRuntimeHP& flash_hp,
+    float scale, cudaStream_t stream,
     float attention_dropout_p, uint64_t dropout_seed
 ) {
+    GRIM::HyperParameters::validateFlashAttentionRuntimeHP(
+        flash_hp, "autograd::scaled_dot_product_attention");
+    if (flash_hp.requires_alibi && !alibi_slopes) {
+        throw std::invalid_argument("autograd::scaled_dot_product_attention: FlashAttentionRuntimeHP requires ALiBi slopes but alibi_slopes is NULL");
+    }
+
     // Validate inputs are 4D BHSD layout
     if (!q.shape.is_4d() || !k.shape.is_4d() || !v.shape.is_4d()) {
         throw std::invalid_argument("autograd::scaled_dot_product_attention: Q/K/V must be BHSD layout");
@@ -1053,15 +1001,37 @@ Tensor scaled_dot_product_attention(
     if (num_heads % num_kv_heads != 0) {
         throw std::invalid_argument("autograd::scaled_dot_product_attention: num_heads must be divisible by num_kv_heads");
     }
+    if (num_heads != flash_hp.num_heads) {
+        throw std::invalid_argument("autograd::scaled_dot_product_attention: Q heads=" +
+                                    std::to_string(num_heads) +
+                                    " does not match FlashAttentionRuntimeHP num_heads=" +
+                                    std::to_string(flash_hp.num_heads));
+    }
+    if (num_kv_heads != flash_hp.num_kv_heads) {
+        throw std::invalid_argument("autograd::scaled_dot_product_attention: K heads=" +
+                                    std::to_string(num_kv_heads) +
+                                    " does not match FlashAttentionRuntimeHP num_kv_heads=" +
+                                    std::to_string(flash_hp.num_kv_heads));
+    }
+    if (head_dim != flash_hp.head_dim) {
+        throw std::invalid_argument("autograd::scaled_dot_product_attention: head_dim=" +
+                                    std::to_string(head_dim) +
+                                    " does not match FlashAttentionRuntimeHP head_dim=" +
+                                    std::to_string(flash_hp.head_dim));
+    }
     
     // Output shape: same as Q [B, H, S, D]
     auto output_shape = TensorContract::TensorShape::make_BHSD(batch_size, num_heads, seq_len, head_dim);
     bool requires_grad = q.requires_grad || k.requires_grad || v.requires_grad;
     Tensor result = Tensor::zeros(output_shape, requires_grad, stream, "sdpa_result");
     
-    // Compute default scale if not provided
+    // Compute default scale if not provided. Non-zero caller scale is part of the
+    // attention equation and must be forwarded into both FlashAttention passes.
     if (scale == 0.0f) {
         scale = 1.0f / sqrtf(static_cast<float>(head_dim));
+    }
+    if (!std::isfinite(scale) || scale <= 0.0f) {
+        throw std::invalid_argument("autograd::scaled_dot_product_attention: scale must be finite and > 0 after default resolution");
     }
     
     // Allocate bf16 buffers for FlashAttention
@@ -1092,9 +1062,8 @@ Tensor scaled_dot_product_attention(
     TensorConversion::convert_BHSD_to_BSHD_bf16(
         v.data, v_bf16, batch_size, num_kv_heads, seq_len, head_dim, stream);
     
-    // Forward pass with FlashAttention
-    // Note: FlashAttention expects scale=1/sqrt(d) internally via softmax_scale
-    // But our flash_attn_fwd_ex uses standard 1/sqrt(d) scaling
+    // Forward pass with FlashAttention. The resolved scale is passed explicitly;
+    // ignoring it silently changes the attention equation.
     flash_attn_fwd_ex(
         q_bf16,      // Q  [B, S, H, D] bf16
         k_bf16,      // K  [B, S, Hkv, D] bf16
@@ -1107,8 +1076,9 @@ Tensor scaled_dot_product_attention(
         num_heads,
         num_kv_heads,
         head_dim,
-        causal,      // Use parameter instead of hardcoded true
-        true,        // is_bf16
+        scale,
+        flash_hp.causal,
+        flash_hp.is_bf16,
         attention_dropout_p, // Attention dropout rate (0.0 = disabled)
         dropout_seed,        // Per-step Philox seed for reproducible masks
         stream
@@ -1137,7 +1107,9 @@ Tensor scaled_dot_product_attention(
         grad_fn->num_heads = num_heads;
         grad_fn->num_kv_heads = num_kv_heads;
         grad_fn->head_dim = head_dim;
-        grad_fn->causal = causal;  // Use parameter
+        grad_fn->softmax_scale = scale;
+        grad_fn->causal = flash_hp.causal;
+        grad_fn->is_bf16 = flash_hp.is_bf16;
         grad_fn->alibi_slopes = alibi_slopes;  // Save for backward pass (not owned)
         grad_fn->attention_dropout_p = attention_dropout_p;  // Same dropout for backward mask reproduction
         grad_fn->dropout_seed = dropout_seed;                // Same seed reproduces identical Philox mask

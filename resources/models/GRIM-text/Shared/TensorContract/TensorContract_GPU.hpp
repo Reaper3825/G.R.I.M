@@ -670,6 +670,7 @@ struct ParameterGroup {
     Tensor* m_tensor = nullptr;  ///< Adam first moment Tensor (nullptr until optimizer init)
     Tensor* v_tensor = nullptr;  ///< Adam second moment Tensor (nullptr until optimizer init)
     ParamGroupType type;     ///< Category for optimizer and analysis
+    HyperParameters::ParameterGroupPrecision parameter_precision = HyperParameters::ParameterGroupPrecision::UNSPECIFIED;  ///< Precision policy stamped by Phase1 registration
     ParamStatsBucket stats_bucket = ParamStatsBucket::COUNT;  ///< Explicit ModelStats accounting bucket
     int layer_index = -1;    ///< Encoder layer index (0-based), -1 for non-layer params
     float upsilon = 1.0f;    ///< Depth-aware regularization scale: Υ_l = 0.1 * sqrt(L_ref / L)
@@ -1322,7 +1323,9 @@ Tensor residual_add(const Tensor& x, const Tensor& residual,
 /**
  * Scaled dot-product attention with optional mask and ALiBi
  * 
- * @param causal If true, applies causal mask (autoregressive). If false, all positions attend all others.
+ * @param scale Softmax scale for QK^T. 0.0f selects the canonical 1/sqrt(head_dim) default.
+ * @param flash_hp Grouped FlashAttention runtime contract. Validates build/runtime head_dim,
+ *        causal, BF16 activation, GQA, and ALiBi requirements before launch.
  * @param attention_dropout_p Attention dropout DROP rate (0.0 = disabled, 0.15 = 15% drop rate).
  *        Converted internally to keep probability for FlashAttention (keep_p = 1.0 - attention_dropout_p).
  * @param dropout_seed Per-batch Philox RNG seed for reproducible dropout masks.
@@ -1330,9 +1333,10 @@ Tensor residual_add(const Tensor& x, const Tensor& residual,
  */
 Tensor scaled_dot_product_attention(
     const Tensor& q, const Tensor& k, const Tensor& v,
-    const float* alibi_slopes = nullptr, float scale = 0.0f,
+    const float* alibi_slopes,
+    const ::GRIM::HyperParameters::FlashAttentionRuntimeHP& flash_hp,
+    float scale = 0.0f,
     cudaStream_t stream = nullptr,
-    bool causal = true,
     float attention_dropout_p = 0.0f, uint64_t dropout_seed = 0);
 
 /**

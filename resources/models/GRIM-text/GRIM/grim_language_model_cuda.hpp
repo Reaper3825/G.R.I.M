@@ -283,7 +283,9 @@ public:
     // Parameter groups accessor (for direct gradient norm / clipping in Phase2)
     const std::vector<ParameterGroup>& parameterGroups() const { return parameter_groups_; }
     std::vector<ParameterGroup>& parameterGroups() { return parameter_groups_; }
-    // Build parameter groups for optimizer (must be called during init so Phase2 grad-norm has max_groups > 0)
+    // Build parameter groups for optimizer (must be called during Phase1 startup
+    // so Phase2 grad-norm has max_groups > 0). Registration reads only the
+    // actual LanguageModelConfig via model.getConfig(); no sidecar config.
     void buildParameterGroups();
     void bindOptimizerState(OptimizerState& optimizer_state, cudaStream_t stream);
 #endif

@@ -8,7 +8,9 @@
 #define GRIM_SHARED_HYPERPARAMETERS_GPU_HPP
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
@@ -533,6 +535,52 @@ enum class ModelExecutionMode {
     INFERENCE    // Lightweight inference state with only forward caches (~385MB)
 };
 
+// Parameter-group precision policy. This is config plumbing only; kernels must
+// explicitly opt in to BF16 in later changes. UNSPECIFIED is a fail-loud
+// sentinel so registration cannot silently select FP32 for a missing field.
+enum class ParameterGroupPrecision : uint8_t {
+    UNSPECIFIED,
+    FP32,
+    BF16_COMPUTE
+};
+
+inline const char* parameterGroupPrecisionToString(ParameterGroupPrecision precision) {
+    switch (precision) {
+        case ParameterGroupPrecision::UNSPECIFIED:  return "UNSPECIFIED";
+        case ParameterGroupPrecision::FP32:         return "FP32";
+        case ParameterGroupPrecision::BF16_COMPUTE: return "BF16_COMPUTE";
+    }
+    throw std::runtime_error("parameterGroupPrecisionToString: unknown ParameterGroupPrecision enum value");
+}
+
+inline ParameterGroupPrecision parseParameterGroupPrecision(const std::string& value) {
+    std::string precision = value;
+    std::transform(precision.begin(), precision.end(), precision.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+
+    if (precision == "fp32" || precision == "float32") {
+        return ParameterGroupPrecision::FP32;
+    }
+    if (precision == "bf16_compute" || precision == "bf16" || precision == "bfloat16_compute") {
+        return ParameterGroupPrecision::BF16_COMPUTE;
+    }
+
+    throw std::runtime_error(
+        "parseParameterGroupPrecision: unknown precision value '" + value +
+        "'. Valid values: fp32, bf16_compute");
+}
+
+inline void validateParameterGroupPrecision(ParameterGroupPrecision precision,
+                                            const char* field,
+                                            const char* caller) {
+    if (precision == ParameterGroupPrecision::UNSPECIFIED) {
+        throw std::runtime_error(
+            std::string(caller) + ": " + field +
+            " is UNSPECIFIED (valid: fp32, bf16_compute)");
+    }
+}
+
 struct LanguageModelConfig : public ModelArchitecture {
     // Architecture fields (d_model, num_heads, num_kv_heads, head_dim, d_ff,
     // num_layers, max_seq_len, dropout_rate, attention_dropout, positional_encoding,
@@ -571,6 +619,20 @@ struct LanguageModelConfig : public ModelArchitecture {
 
     // Execution mode - determines memory allocation strategy
     ModelExecutionMode execution_mode = ModelExecutionMode::INFERENCE;
+
+    // Parameter-group precision policy. Registration reads these from the
+    // actual LanguageModelConfig carried by LanguageModel::getConfig(); do not
+    // pass a sidecar precision wrapper beside the model config.
+    ParameterGroupPrecision parameter_precision_embedding = ParameterGroupPrecision::UNSPECIFIED;
+    ParameterGroupPrecision parameter_precision_lm_head = ParameterGroupPrecision::UNSPECIFIED;
+    ParameterGroupPrecision parameter_precision_attention = ParameterGroupPrecision::UNSPECIFIED;
+    ParameterGroupPrecision parameter_precision_ffn = ParameterGroupPrecision::UNSPECIFIED;
+    ParameterGroupPrecision parameter_precision_rmsnorm = ParameterGroupPrecision::UNSPECIFIED;
+    ParameterGroupPrecision parameter_precision_scratchblock = ParameterGroupPrecision::UNSPECIFIED;
+    ParameterGroupPrecision parameter_precision_mtp = ParameterGroupPrecision::UNSPECIFIED;
+    ParameterGroupPrecision parameter_precision_reasoning_head = ParameterGroupPrecision::UNSPECIFIED;
+    ParameterGroupPrecision parameter_precision_execution_block = ParameterGroupPrecision::UNSPECIFIED;
+    ParameterGroupPrecision parameter_precision_slot_selector = ParameterGroupPrecision::UNSPECIFIED;
 
     // ScratchBlock reasoning layer config
     bool use_scratch_block = true;
@@ -982,6 +1044,16 @@ inline void validateTrainingHyperparameters(const GRIM::Config::TrainingHyperpar
     if (params.validation_interval <= 0) {
         throw std::runtime_error("FATAL: validation_interval must be > 0, got " + std::to_string(params.validation_interval));
     }
+    validateParameterGroupPrecision(params.architecture.parameter_precision_embedding, "precision.parameter_groups.embedding", "validateTrainingHyperparameters");
+    validateParameterGroupPrecision(params.architecture.parameter_precision_lm_head, "precision.parameter_groups.lm_head", "validateTrainingHyperparameters");
+    validateParameterGroupPrecision(params.architecture.parameter_precision_attention, "precision.parameter_groups.attention", "validateTrainingHyperparameters");
+    validateParameterGroupPrecision(params.architecture.parameter_precision_ffn, "precision.parameter_groups.ffn", "validateTrainingHyperparameters");
+    validateParameterGroupPrecision(params.architecture.parameter_precision_rmsnorm, "precision.parameter_groups.rmsnorm", "validateTrainingHyperparameters");
+    validateParameterGroupPrecision(params.architecture.parameter_precision_scratchblock, "precision.parameter_groups.scratchblock", "validateTrainingHyperparameters");
+    validateParameterGroupPrecision(params.architecture.parameter_precision_mtp, "precision.parameter_groups.mtp", "validateTrainingHyperparameters");
+    validateParameterGroupPrecision(params.architecture.parameter_precision_reasoning_head, "precision.parameter_groups.reasoning_head", "validateTrainingHyperparameters");
+    validateParameterGroupPrecision(params.architecture.parameter_precision_execution_block, "precision.parameter_groups.execution_block", "validateTrainingHyperparameters");
+    validateParameterGroupPrecision(params.architecture.parameter_precision_slot_selector, "precision.parameter_groups.slot_selector", "validateTrainingHyperparameters");
 }
 
 //======================================================//

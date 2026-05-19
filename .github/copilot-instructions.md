@@ -111,6 +111,32 @@ Examples: `cached_token_ids_tensor`, `cached_targets_tensor`, `cached_token_nume
 
 ---
 
+### 🔴 Rule 20 — Hyperparameter Grouping Boundary Discipline
+
+`Shared/HyperParameters/HyperparameterGroupings.hpp` is a grouped read-view layer only. Never wrap it, mirror it, or pass a second config object beside the actual config already owned by Phase 1 / `LanguageModelConfig`.
+
+**FORBIDDEN:**
+
+❌ Creating sidecar structs like `FooPolicy`, `FooHPWrapper`, or `FooConfig` when the data already belongs on `TrainingHyperparameters`, `LanguageModelConfig`, or an existing grouping.  
+❌ Passing `buildThing(actual_config, separate_policy)` when `actual_config` is already the authoritative config consumed by that subsystem.  
+❌ Adding a new grouping just to smuggle one feature flag across a boundary.  
+❌ Forward-declaring grouping structs/classes in consumer files or alternate headers to avoid including `HyperparameterGroupings.hpp`.  
+❌ Accessing config through any facade/accessor file that is not `HyperParameters_GPU.hpp` or `HyperparameterGroupings.hpp`.  
+❌ Rebuilding or re-slicing config in Phase 2 when Phase 1 already authored the durable handoff.
+
+**REQUIRED:**
+
+✅ Authored fields live in `HyperParameters_GPU.hpp` structs.  
+✅ Grouped read views only slice/derive from those structs and never become config owners.  
+✅ New grouping types are declared and defined in `HyperparameterGroupings.hpp`; consumers include that header and receive explicit grouping payloads.  
+✅ Config access helpers live only in `HyperParameters_GPU.hpp` or `HyperparameterGroupings.hpp`; other files consume typed payloads passed to them.  
+✅ Consumers receive one authoritative config object, or a grouping that directly slices it — not both.  
+✅ Registration boundaries such as `ParameterGroupRegistration` read the actual `LanguageModelConfig` / registered metadata and stamp durable `ParameterGroup` facts there.
+
+**Why:** Parallel config payloads silently desynchronize. A sidecar policy can say BF16 while `LanguageModelConfig`, optimizer state, checkpoints, or diagnostics still believe FP32. Forward declarations and random accessor files hide those parallel paths until the build graph, docs, and runtime behavior disagree. That is an architectural bug, not just style.
+
+---
+
 ## 🟡 Equation-Based Diagnostic Logging (Rule 21)
 
 When adding diagnostic logging for ML math, use the `[*_EQUATION]` format:

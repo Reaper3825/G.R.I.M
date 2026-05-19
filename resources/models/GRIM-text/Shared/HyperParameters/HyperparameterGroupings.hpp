@@ -167,6 +167,15 @@ struct EncoderSelfAttentionHP {
     bool is_gqa = false;
 };
 
+struct FlashAttentionRuntimeHP {
+    int num_heads = 0;
+    int num_kv_heads = 0;
+    int head_dim = 0;
+    bool causal = false;
+    bool is_bf16 = false;
+    bool requires_alibi = false;
+};
+
 struct FeedForwardLayerConstructionHP {
     int d_model = 0;
     int d_ff = 0;
@@ -497,6 +506,90 @@ inline void validateEncoderSelfAttentionHP(
         requirePositiveGroupingValue(hp.min_seq_len_for_flash,
                                      "min_seq_len_for_flash",
                                      caller);
+    }
+}
+
+inline void validateFlashAttentionRuntimeHP(
+    const FlashAttentionRuntimeHP& hp,
+    const char* caller)
+{
+    requirePositiveGroupingValue(hp.num_heads, "num_heads", caller);
+    requirePositiveGroupingValue(hp.num_kv_heads, "num_kv_heads", caller);
+    requirePositiveGroupingValue(hp.head_dim, "head_dim", caller);
+
+    if (!isValidGQAConfig(hp.num_heads, hp.num_kv_heads)) {
+        throw std::runtime_error(std::string(caller) + ": invalid FlashAttention GQA config num_heads=" +
+                                 std::to_string(hp.num_heads) + " num_kv_heads=" +
+                                 std::to_string(hp.num_kv_heads));
+    }
+    if (!isValidFlashAttentionHeadDim(hp.head_dim)) {
+        throw std::runtime_error(std::string(caller) + ": head_dim=" +
+                                 std::to_string(hp.head_dim) +
+                                 " is not supported by FlashAttention grouping");
+    }
+    if (!hp.requires_alibi) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": requires_alibi=false but GRIM FlashAttention consumes PBM ALiBi slopes");
+    }
+
+#ifdef GRIM_FLASHATTN_HDIM64_ONLY
+    if (hp.head_dim != FLASH_ATTN_HEAD_DIM_64) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": binary was compiled with GRIM_FLASHATTN_HDIM64_ONLY but grouped head_dim=" +
+                                 std::to_string(hp.head_dim));
+    }
+#endif
+
+#ifdef GRIM_FLASHATTN_CAUSAL_ONLY
+    if (!hp.causal) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": binary was compiled with GRIM_FLASHATTN_CAUSAL_ONLY but grouped causal=false");
+    }
+#endif
+
+#ifdef GRIM_FLASHATTN_BF16_ONLY
+    if (!hp.is_bf16) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": binary was compiled with GRIM_FLASHATTN_BF16_ONLY but grouped is_bf16=false");
+    }
+#endif
+}
+
+inline void validateFlashAttentionRuntimeForEncoderSelfAttentionHP(
+    const FlashAttentionRuntimeHP& flash_hp,
+    const EncoderSelfAttentionHP& attention_hp,
+    const char* caller)
+{
+    validateEncoderSelfAttentionHP(attention_hp, caller);
+    validateFlashAttentionRuntimeHP(flash_hp, caller);
+
+    if (!attention_hp.use_flash_attention) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": use_flash_attention=false but GRIM encoder attention is FlashAttention-backed");
+    }
+    if (flash_hp.num_heads != attention_hp.num_heads) {
+        throw std::runtime_error(std::string(caller) + ": FlashAttention num_heads=" +
+                                 std::to_string(flash_hp.num_heads) +
+                                 " does not match EncoderSelfAttentionHP num_heads=" +
+                                 std::to_string(attention_hp.num_heads));
+    }
+    if (flash_hp.num_kv_heads != attention_hp.num_kv_heads) {
+        throw std::runtime_error(std::string(caller) + ": FlashAttention num_kv_heads=" +
+                                 std::to_string(flash_hp.num_kv_heads) +
+                                 " does not match EncoderSelfAttentionHP num_kv_heads=" +
+                                 std::to_string(attention_hp.num_kv_heads));
+    }
+    if (flash_hp.head_dim != attention_hp.head_dim) {
+        throw std::runtime_error(std::string(caller) + ": FlashAttention head_dim=" +
+                                 std::to_string(flash_hp.head_dim) +
+                                 " does not match EncoderSelfAttentionHP head_dim=" +
+                                 std::to_string(attention_hp.head_dim));
+    }
+    if (flash_hp.causal != attention_hp.causal_mask) {
+        throw std::runtime_error(std::string(caller) + ": FlashAttention causal=" +
+                                 std::to_string(static_cast<int>(flash_hp.causal)) +
+                                 " does not match EncoderSelfAttentionHP causal_mask=" +
+                                 std::to_string(static_cast<int>(attention_hp.causal_mask)));
     }
 }
 
@@ -936,6 +1029,27 @@ inline EncoderSelfAttentionHP encoderSelfAttentionHP(
     view.qk_norm_enabled = encoder_hp.qk_norm_enabled;
     view.is_gqa = encoder_hp.is_gqa;
     validateEncoderSelfAttentionHP(view, "encoderSelfAttentionHP");
+    return view;
+}
+
+inline FlashAttentionRuntimeHP flashAttentionRuntimeHP(
+    const EncoderSelfAttentionHP& attention_hp)
+{
+    validateEncoderSelfAttentionHP(attention_hp, "flashAttentionRuntimeHP");
+    if (!attention_hp.use_flash_attention) {
+        throw std::runtime_error(
+            "flashAttentionRuntimeHP: use_flash_attention=false but GRIM encoder attention is FlashAttention-backed");
+    }
+
+    FlashAttentionRuntimeHP view;
+    view.num_heads = attention_hp.num_heads;
+    view.num_kv_heads = attention_hp.num_kv_heads;
+    view.head_dim = attention_hp.head_dim;
+    view.causal = attention_hp.causal_mask;
+    view.is_bf16 = true;
+    view.requires_alibi = true;
+    validateFlashAttentionRuntimeForEncoderSelfAttentionHP(
+        view, attention_hp, "flashAttentionRuntimeHP");
     return view;
 }
 

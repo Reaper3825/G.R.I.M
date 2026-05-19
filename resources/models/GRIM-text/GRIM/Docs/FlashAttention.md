@@ -27,6 +27,14 @@ and it propagated downstream into `grad_v_fp32`, `SplitQKV.merge grad_V_bhsd`, t
 
 Validation signal after switching GRIM to the seqK-parallel contract: Bridges-2 session `1779067735859356347` (`w008.ib.bridges2.psc.edu`, `2026-05-17 21:28 EDT`) no longer showed the explosion. In `train_latest.err`, representative registered gradient checks stayed around `preclip_registered_global≈4.9e-5..7.0e-5`, `enc_rms_pre≈4.9e-5..7.0e-5`, `clipped=NO`, with top groups at ordinary `~1e-4..6e-4` RMS instead of qkv bias at `5.0966443327488e13` RMS. In the matching `latest_run.log`, 312 FlashAttention backward samples showed `dK`/`dV` at ordinary `~1e-7` RMS and the old `SDPA.apply dv_bf16_post_bwd≈1e10` / qkv-bias `5.0966443327488e13` signatures were absent.
 
+## Softmax scale plumbing
+`autograd::scaled_dot_product_attention(..., scale, ...)` resolves `scale == 0.0f` to the canonical `1 / sqrt(head_dim)` default. Any non-zero scale must be finite and positive, and it must be passed unchanged into both `flash_attn_fwd_ex` and the matching `flash_attn_bwd_ex` call. The wrapper then stamps `params.scale_softmax`, `params.scale_softmax_log2`, and `params.scale_softmax_rp_dropout` from that same resolved scale.
+
+Do not reintroduce a local `1 / sqrt(head_dim)` inside the contiguous forward/backward param initialization path; that silently changes the caller's attention equation and desynchronizes backward from the saved forward LSE.
+
+## KV-cache forward dispatch
+`flash_attn_fwd_kvcache()` is inference-only, but its kernel dispatch must still mirror `flash_attn_fwd_ex`: respect the caller's `head_dim`, `causal`, and `is_bf16` flags, then fail loud when compile-time gates such as `GRIM_FLASHATTN_HDIM64_ONLY`, `GRIM_FLASHATTN_CAUSAL_ONLY`, or `GRIM_FLASHATTN_BF16_ONLY` make a requested mode unavailable. Do not hardcode `run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, true>` in this path.
+
 ## Issue #84 — `dot_do_o` preprocessing
 `flash_bwd_dot_do_o_kernel` MUST run **before** the seqK-parallel main backward kernel. Without it, `dsoftmax_sum` is garbage for most m_blocks → dQ/dK explosion.
 

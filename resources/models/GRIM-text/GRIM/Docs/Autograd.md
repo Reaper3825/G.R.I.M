@@ -76,6 +76,8 @@ QKV-specific diagnostics live in `Shared/TensorContract/AutogradQKVDiagnostics.h
 
 `ScaledDotProductAttentionGradFn` owns the `Tensor::grad_` shared-pointer owners for captured Q/K/V gradient buffers, not only raw `q_grad` / `k_grad` / `v_grad` pointers. This is required so attention-internal Q/K/V tensors can be scoped locally without leaving SDPA backward with dangling pointers into destroyed non-leaf gradient tensors. Do not revert SDPA capture to raw grad pointers only.
 
+`ScaledDotProductAttentionGradFn` must not grow a separate `save()` helper. SDPA forward owns one coherent setup path: run FlashAttention forward, keep the exact BF16 Q/K/V/O buffers and matching `softmax_lse`, stamp the resolved softmax scale/dropout metadata on the GradFn, and allocate backward workspaces there. A second save path risks uninitialized LSE or mismatched scale/dropout state.
+
 ## GradFn accumulation contract
 GradFns must never overwrite a persistent leaf gradient buffer during backward. If a backward kernel writes directly into `tensor.grad_data()`, it must use additive writes (`+=` or `atomicAdd`) because `ensure_grad()` only allocates/zeroes the buffer once; step/microbatch zeroing owns the accumulation window.
 

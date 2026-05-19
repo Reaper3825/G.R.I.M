@@ -596,6 +596,20 @@
                 "kind": "radamw"
             },
             "per_token_grad_scale": true,
+            "precision": {
+                "parameter_groups": {
+                    "attention": "fp32",
+                    "embedding": "fp32",
+                    "execution_block": "fp32",
+                    "ffn": "fp32",
+                    "lm_head": "fp32",
+                    "mtp": "fp32",
+                    "reasoning_head": "fp32",
+                    "rmsnorm": "fp32",
+                    "scratchblock": "fp32",
+                    "slot_selector": "fp32"
+                }
+            },
             "positional_encoding": {
                 "use_alibi": true,
                 "use_rope": true

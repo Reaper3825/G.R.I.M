@@ -307,6 +307,19 @@ inline size_t dsoftmax_sum_bytes(int batch, int seqlen, int n_heads) {
     return static_cast<size_t>(batch) * n_heads * seqlen_rounded * sizeof(float);
 }
 
+inline float resolve_softmax_scale(float requested_scale, int head_dim, const char* caller) {
+    if (head_dim <= 0) {
+        throw std::runtime_error(std::string(caller) + ": head_dim must be > 0, got " + std::to_string(head_dim));
+    }
+    if (requested_scale == 0.0f) {
+        return 1.0f / std::sqrt(static_cast<float>(head_dim));
+    }
+    if (!std::isfinite(requested_scale) || requested_scale <= 0.0f) {
+        throw std::runtime_error(std::string(caller) + ": softmax_scale must be finite and > 0 when explicitly provided, got " + std::to_string(requested_scale));
+    }
+    return requested_scale;
+}
+
 template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Is_local, bool Has_alibi, bool Is_even_MN,
          bool Is_even_K, bool Return_softmax>
 __global__ void flash_fwd_kernel(const FLASH_PARAMS_NS::Flash_fwd_params params) {
@@ -493,25 +506,25 @@ void run_flash_bwd(Flash_bwd_params& params, cudaStream_t stream) {
 }
 
 template<typename T, bool Is_causal>
-void run_mha_fwd_hdim32(Flash_fwd_params& params, cudaStream_t stream) {
+void run_flash_attn_fwd_hdim32(Flash_fwd_params& params, cudaStream_t stream) {
     constexpr int Headdim = 32;
     run_flash_fwd<Flash_fwd_kernel_traits<Headdim, 128, 128, 4, false, false, T>, Is_causal>(params, stream);
 }
 
 template<typename T, bool Is_causal>
-void run_mha_fwd_hdim64(Flash_fwd_params& params, cudaStream_t stream) {
+void run_flash_attn_fwd_hdim64(Flash_fwd_params& params, cudaStream_t stream) {
     constexpr int Headdim = 64;
     run_flash_fwd<Flash_fwd_kernel_traits<Headdim, 128, 128, 4, false, false, T>, Is_causal>(params, stream);
 }
 
 template<typename T, bool Is_causal>
-void run_mha_bwd_hdim32(Flash_bwd_params& params, cudaStream_t stream) {
+void run_flash_attn_bwd_hdim32(Flash_bwd_params& params, cudaStream_t stream) {
     constexpr int Headdim = 32;
     run_flash_bwd<Flash_bwd_kernel_traits<Headdim, 128, 128, 8, 4, 4, 4, true, false, T>, Is_causal>(params, stream);
 }
 
 template<typename T, bool Is_causal>
-void run_mha_bwd_hdim64(Flash_bwd_params& params, cudaStream_t stream) {
+void run_flash_attn_bwd_hdim64(Flash_bwd_params& params, cudaStream_t stream) {
     constexpr int Headdim = 64;
     int device = 0;
     check_cuda(cudaGetDevice(&device), "cudaGetDevice");
@@ -531,7 +544,7 @@ void init_fwd_params_contiguous(Flash_fwd_params& params,
                                 void* out, void* softmax_lse,
                                 const float* alibi_slopes,
                                 int batch, int seqlen, int n_heads, int n_kv_heads, int head_dim,
-                                bool is_bf16, bool is_causal,
+                                float softmax_scale, bool is_bf16, bool is_causal,
                                 float attention_dropout_p, uint64_t dropout_seed) {
     params = {};
     params.is_bf16 = is_bf16;
@@ -570,7 +583,7 @@ void init_fwd_params_contiguous(Flash_fwd_params& params,
     params.rotary_dim = 0;
     params.total_q = batch * seqlen;
 
-    const float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
+    const float scale = resolve_softmax_scale(softmax_scale, head_dim, "init_fwd_params_contiguous");
     params.scale_softmax = scale;
     params.scale_softmax_log2 = scale * kLog2e;
     params.softcap = 0.0f;
@@ -738,12 +751,12 @@ void init_bwd_params_contiguous(Flash_bwd_params& params,
                                 void* dq, void* dk, void* dv,
                                 void* dq_accum, void* dsoftmax_sum,
                                 int batch, int seqlen, int n_heads, int n_kv_heads, int head_dim,
-                                bool is_bf16, bool is_causal,
+                                float softmax_scale, bool is_bf16, bool is_causal,
                                 float attention_dropout_p, uint64_t dropout_seed) {
     init_fwd_params_contiguous(params, q, k, v,
                                const_cast<void*>(out), const_cast<void*>(softmax_lse),
                                alibi_slopes,
-                               batch, seqlen, n_heads, n_kv_heads, head_dim, is_bf16, is_causal,
+                               batch, seqlen, n_heads, n_kv_heads, head_dim, softmax_scale, is_bf16, is_causal,
                                attention_dropout_p, dropout_seed);
     params.do_ptr = const_cast<void*>(dout);
     params.dq_ptr = dq;
@@ -809,6 +822,7 @@ extern "C" void flash_attn_fwd_ex(
     int n_heads,
     int n_kv_heads,
     int head_dim,
+    float softmax_scale,
     bool causal,
     bool is_bf16,
     float attention_dropout_p,
@@ -850,7 +864,7 @@ extern "C" void flash_attn_fwd_ex(
     grim_flash::detail::init_fwd_params_contiguous(params, q, k, v, out, softmax_lse,
                                                    alibi_slopes,
                                                    batch, seqlen, n_heads, n_kv_heads, head_dim,
-                                                   is_bf16, causal,
+                                                   softmax_scale, is_bf16, causal,
                                                    attention_dropout_p, dropout_seed);
 
     // FIX: Allocate rng_state when dropout is enabled.
@@ -987,7 +1001,8 @@ extern "C" void flash_attn_fwd_ex(
         k_rms_mean /= sample_tokens;
         
         // Compute attention scores for sample positions
-        const float scale = 1.0f / sqrtf(static_cast<float>(head_dim));
+        const float scale = params.scale_softmax;
+        const float default_scale = 1.0f / sqrtf(static_cast<float>(head_dim));
         std::vector<float> scores_sample(static_cast<size_t>(sample_tokens) * sample_tokens);
         float score_max = std::numeric_limits<float>::lowest(), score_min = std::numeric_limits<float>::max();
         double score_sum_sq = 0.0;
@@ -1055,7 +1070,7 @@ extern "C" void flash_attn_fwd_ex(
             fprintf(stderr, "  K (sample %d tokens, head 0): shape=[%d,%d] min=%.4f max=%.4f rms=%.4f\n",
                     sample_tokens, sample_tokens, head_dim, k_min, k_max, k_rms);
             fprintf(stderr, "  Q_row_rms: mean=%.4f | K_row_rms: mean=%.4f\n", q_rms_mean, k_rms_mean);
-            fprintf(stderr, "  scale = 1/sqrt(%d) = %.6f\n", head_dim, scale);
+            fprintf(stderr, "  scale = %.6f (default 1/sqrt(%d) = %.6f)\n", scale, head_dim, default_scale);
             fprintf(stderr, "  alibi_slope[head0] = %.6f (max_distance=%d -> max_bias=%.4f)\n",
                     h_slopes[0], seqlen - 1, h_slopes[0] * static_cast<float>(seqlen - 1));
             fprintf(stderr, "  EXPECTED score = Q_row_rms * K_row_rms * head_dim * scale = %.4f * %.4f * %d * %.6f ≈ %.4f\n",
@@ -1087,33 +1102,33 @@ extern "C" void flash_attn_fwd_ex(
 #if defined(GRIM_FLASHATTN_HDIM64_ONLY)
 #if defined(GRIM_FLASHATTN_CAUSAL_ONLY)
 #if defined(GRIM_FLASHATTN_BF16_ONLY)
-    grim_flash::detail::run_mha_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+    grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
 #else
     if (is_bf16) {
-        grim_flash::detail::run_mha_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+        grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
     } else {
-        grim_flash::detail::run_mha_fwd_hdim64<cutlass::half_t, true>(params, stream);
+        grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::half_t, true>(params, stream);
     }
 #endif
 #else
     if (causal) {
 #if defined(GRIM_FLASHATTN_BF16_ONLY)
-        grim_flash::detail::run_mha_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+        grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
 #else
         if (is_bf16) {
-            grim_flash::detail::run_mha_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+            grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
         } else {
-            grim_flash::detail::run_mha_fwd_hdim64<cutlass::half_t, true>(params, stream);
+            grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::half_t, true>(params, stream);
         }
 #endif
     } else {
 #if defined(GRIM_FLASHATTN_BF16_ONLY)
-        grim_flash::detail::run_mha_fwd_hdim64<cutlass::bfloat16_t, false>(params, stream);
+        grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, false>(params, stream);
 #else
         if (is_bf16) {
-            grim_flash::detail::run_mha_fwd_hdim64<cutlass::bfloat16_t, false>(params, stream);
+            grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, false>(params, stream);
         } else {
-            grim_flash::detail::run_mha_fwd_hdim64<cutlass::half_t, false>(params, stream);
+            grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::half_t, false>(params, stream);
         }
 #endif
     }
@@ -1122,33 +1137,33 @@ extern "C" void flash_attn_fwd_ex(
     if (head_dim == 32) {
 #if defined(GRIM_FLASHATTN_CAUSAL_ONLY)
 #if defined(GRIM_FLASHATTN_BF16_ONLY)
-        grim_flash::detail::run_mha_fwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
+        grim_flash::detail::run_flash_attn_fwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
 #else
         if (is_bf16) {
-            grim_flash::detail::run_mha_fwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
+            grim_flash::detail::run_flash_attn_fwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
         } else {
-            grim_flash::detail::run_mha_fwd_hdim32<cutlass::half_t, true>(params, stream);
+            grim_flash::detail::run_flash_attn_fwd_hdim32<cutlass::half_t, true>(params, stream);
         }
 #endif
 #else
         if (causal) {
 #if defined(GRIM_FLASHATTN_BF16_ONLY)
-            grim_flash::detail::run_mha_fwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
+            grim_flash::detail::run_flash_attn_fwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
 #else
             if (is_bf16) {
-                grim_flash::detail::run_mha_fwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
+                grim_flash::detail::run_flash_attn_fwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
             } else {
-                grim_flash::detail::run_mha_fwd_hdim32<cutlass::half_t, true>(params, stream);
+                grim_flash::detail::run_flash_attn_fwd_hdim32<cutlass::half_t, true>(params, stream);
             }
 #endif
         } else {
 #if defined(GRIM_FLASHATTN_BF16_ONLY)
-            grim_flash::detail::run_mha_fwd_hdim32<cutlass::bfloat16_t, false>(params, stream);
+            grim_flash::detail::run_flash_attn_fwd_hdim32<cutlass::bfloat16_t, false>(params, stream);
 #else
             if (is_bf16) {
-                grim_flash::detail::run_mha_fwd_hdim32<cutlass::bfloat16_t, false>(params, stream);
+                grim_flash::detail::run_flash_attn_fwd_hdim32<cutlass::bfloat16_t, false>(params, stream);
             } else {
-                grim_flash::detail::run_mha_fwd_hdim32<cutlass::half_t, false>(params, stream);
+                grim_flash::detail::run_flash_attn_fwd_hdim32<cutlass::half_t, false>(params, stream);
             }
 #endif
         }
@@ -1156,33 +1171,33 @@ extern "C" void flash_attn_fwd_ex(
     } else {
 #if defined(GRIM_FLASHATTN_CAUSAL_ONLY)
 #if defined(GRIM_FLASHATTN_BF16_ONLY)
-        grim_flash::detail::run_mha_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+        grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
 #else
         if (is_bf16) {
-            grim_flash::detail::run_mha_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+            grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
         } else {
-            grim_flash::detail::run_mha_fwd_hdim64<cutlass::half_t, true>(params, stream);
+            grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::half_t, true>(params, stream);
         }
 #endif
 #else
         if (causal) {
 #if defined(GRIM_FLASHATTN_BF16_ONLY)
-            grim_flash::detail::run_mha_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+            grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
 #else
             if (is_bf16) {
-                grim_flash::detail::run_mha_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+                grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
             } else {
-                grim_flash::detail::run_mha_fwd_hdim64<cutlass::half_t, true>(params, stream);
+                grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::half_t, true>(params, stream);
             }
 #endif
         } else {
 #if defined(GRIM_FLASHATTN_BF16_ONLY)
-            grim_flash::detail::run_mha_fwd_hdim64<cutlass::bfloat16_t, false>(params, stream);
+            grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, false>(params, stream);
 #else
             if (is_bf16) {
-                grim_flash::detail::run_mha_fwd_hdim64<cutlass::bfloat16_t, false>(params, stream);
+                grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, false>(params, stream);
             } else {
-                grim_flash::detail::run_mha_fwd_hdim64<cutlass::half_t, false>(params, stream);
+                grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::half_t, false>(params, stream);
             }
 #endif
         }
@@ -1321,11 +1336,29 @@ extern "C" void flash_attn_fwd_kvcache(
     if (!v_cache) throw std::runtime_error("flash_attn_fwd_kvcache: v_cache is NULL");
     if (!out) throw std::runtime_error("flash_attn_fwd_kvcache: out is NULL");
     if (!softmax_lse) throw std::runtime_error("flash_attn_fwd_kvcache: softmax_lse is NULL");
-    if (head_dim != 32 && head_dim != 64)
+#if defined(GRIM_FLASHATTN_HDIM64_ONLY)
+    if (head_dim != 64) {
+        throw std::runtime_error("flash_attn_fwd_kvcache: head_dim must be 64 (GRIM_FLASHATTN_HDIM64_ONLY), got " + std::to_string(head_dim));
+    }
+#else
+    if (head_dim != 32 && head_dim != 64) {
         throw std::runtime_error("flash_attn_fwd_kvcache: head_dim must be 32 or 64, got " + std::to_string(head_dim));
-    if (n_heads % n_kv_heads != 0)
-        throw std::runtime_error("flash_attn_fwd_kvcache: n_heads (" + std::to_string(n_heads) +
-                                 ") must be divisible by n_kv_heads (" + std::to_string(n_kv_heads) + ")");
+    }
+#endif
+    if (n_heads <= 0 || n_kv_heads <= 0 || n_heads % n_kv_heads != 0) {
+        throw std::runtime_error("flash_attn_fwd_kvcache: invalid head configuration n_heads=" + std::to_string(n_heads) +
+                                 " n_kv_heads=" + std::to_string(n_kv_heads));
+    }
+#if defined(GRIM_FLASHATTN_CAUSAL_ONLY)
+    if (!causal) {
+        throw std::runtime_error("flash_attn_fwd_kvcache: non-causal disabled (GRIM_FLASHATTN_CAUSAL_ONLY)");
+    }
+#endif
+#if defined(GRIM_FLASHATTN_BF16_ONLY)
+    if (!is_bf16) {
+        throw std::runtime_error("flash_attn_fwd_kvcache: FP16 disabled (GRIM_FLASHATTN_BF16_ONLY)");
+    }
+#endif
     if (seqlen_q > seqlen_k)
         throw std::runtime_error("flash_attn_fwd_kvcache: seqlen_q (" + std::to_string(seqlen_q) +
                                  ") > seqlen_k (" + std::to_string(seqlen_k) + ")");
@@ -1345,42 +1378,74 @@ extern "C" void flash_attn_fwd_kvcache(
 
     // --- Kernel dispatch (same template dispatch as flash_attn_fwd_ex) ---
 #if defined(GRIM_FLASHATTN_HDIM64_ONLY)
-    grim_flash::detail::run_mha_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+#if defined(GRIM_FLASHATTN_CAUSAL_ONLY)
+#if defined(GRIM_FLASHATTN_BF16_ONLY)
+    grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+#else
+    if (is_bf16) {
+        grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+    } else {
+        grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::half_t, true>(params, stream);
+    }
+#endif
+#else
+    if (causal) {
+#if defined(GRIM_FLASHATTN_BF16_ONLY)
+        grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+#else
+        if (is_bf16) {
+            grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+        } else {
+            grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::half_t, true>(params, stream);
+        }
+#endif
+    } else {
+#if defined(GRIM_FLASHATTN_BF16_ONLY)
+        grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, false>(params, stream);
+#else
+        if (is_bf16) {
+            grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, false>(params, stream);
+        } else {
+            grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::half_t, false>(params, stream);
+        }
+#endif
+    }
+#endif
 #else
     if (head_dim == 32) {
 #if defined(GRIM_FLASHATTN_CAUSAL_ONLY) && defined(GRIM_FLASHATTN_BF16_ONLY)
-        grim_flash::detail::run_mha_fwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
+        grim_flash::detail::run_flash_attn_fwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
 #elif defined(GRIM_FLASHATTN_CAUSAL_ONLY)
-        if (is_bf16) grim_flash::detail::run_mha_fwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
-        else         grim_flash::detail::run_mha_fwd_hdim32<cutlass::half_t, true>(params, stream);
+        if (is_bf16) grim_flash::detail::run_flash_attn_fwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
+        else         grim_flash::detail::run_flash_attn_fwd_hdim32<cutlass::half_t, true>(params, stream);
 #elif defined(GRIM_FLASHATTN_BF16_ONLY)
-        if (causal) grim_flash::detail::run_mha_fwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
-        else        grim_flash::detail::run_mha_fwd_hdim32<cutlass::bfloat16_t, false>(params, stream);
+        if (causal) grim_flash::detail::run_flash_attn_fwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
+        else        grim_flash::detail::run_flash_attn_fwd_hdim32<cutlass::bfloat16_t, false>(params, stream);
 #else
         if (causal) {
-            if (is_bf16) grim_flash::detail::run_mha_fwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
-            else         grim_flash::detail::run_mha_fwd_hdim32<cutlass::half_t, true>(params, stream);
+            if (is_bf16) grim_flash::detail::run_flash_attn_fwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
+            else         grim_flash::detail::run_flash_attn_fwd_hdim32<cutlass::half_t, true>(params, stream);
         } else {
-            if (is_bf16) grim_flash::detail::run_mha_fwd_hdim32<cutlass::bfloat16_t, false>(params, stream);
-            else         grim_flash::detail::run_mha_fwd_hdim32<cutlass::half_t, false>(params, stream);
+            if (is_bf16) grim_flash::detail::run_flash_attn_fwd_hdim32<cutlass::bfloat16_t, false>(params, stream);
+            else         grim_flash::detail::run_flash_attn_fwd_hdim32<cutlass::half_t, false>(params, stream);
         }
 #endif
     } else {
 #if defined(GRIM_FLASHATTN_CAUSAL_ONLY) && defined(GRIM_FLASHATTN_BF16_ONLY)
-        grim_flash::detail::run_mha_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+        grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
 #elif defined(GRIM_FLASHATTN_CAUSAL_ONLY)
-        if (is_bf16) grim_flash::detail::run_mha_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
-        else         grim_flash::detail::run_mha_fwd_hdim64<cutlass::half_t, true>(params, stream);
+        if (is_bf16) grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+        else         grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::half_t, true>(params, stream);
 #elif defined(GRIM_FLASHATTN_BF16_ONLY)
-        if (causal) grim_flash::detail::run_mha_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
-        else        grim_flash::detail::run_mha_fwd_hdim64<cutlass::bfloat16_t, false>(params, stream);
+        if (causal) grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+        else        grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, false>(params, stream);
 #else
         if (causal) {
-            if (is_bf16) grim_flash::detail::run_mha_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
-            else         grim_flash::detail::run_mha_fwd_hdim64<cutlass::half_t, true>(params, stream);
+            if (is_bf16) grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+            else         grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::half_t, true>(params, stream);
         } else {
-            if (is_bf16) grim_flash::detail::run_mha_fwd_hdim64<cutlass::bfloat16_t, false>(params, stream);
-            else         grim_flash::detail::run_mha_fwd_hdim64<cutlass::half_t, false>(params, stream);
+            if (is_bf16) grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, false>(params, stream);
+            else         grim_flash::detail::run_flash_attn_fwd_hdim64<cutlass::half_t, false>(params, stream);
         }
 #endif
     }
@@ -1418,6 +1483,7 @@ extern "C" void flash_attn_bwd_ex(
     int n_heads,
     int n_kv_heads,
     int head_dim,
+    float softmax_scale,
     bool causal,
     bool is_bf16,
     float attention_dropout_p,
@@ -1432,9 +1498,10 @@ extern "C" void flash_attn_bwd_ex(
         snprintf(input_msg, sizeof(input_msg),
                  "[FlashAttention] flash_attn_bwd_ex called with q=%p, k=%p, v=%p, out=%p, dout=%p, "
                  "softmax_lse=%p, dq=%p, dk=%p, dv=%p (batch=%d, seqlen=%d, n_heads=%d, n_kv_heads=%d, "
-                 "head_dim=%d, causal=%s, is_bf16=%s)",
+                 "head_dim=%d, softmax_scale=%f, causal=%s, is_bf16=%s)",
                  q, k, v, out, dout, softmax_lse, dq, dk, dv,
                  batch, seqlen, n_heads, n_kv_heads, head_dim,
+                 grim_flash::detail::resolve_softmax_scale(softmax_scale, head_dim, "flash_attn_bwd_ex"),
                  causal ? "true" : "false", is_bf16 ? "true" : "false");
         FlashAttentionLog::info(input_msg);
     }
@@ -1511,7 +1578,7 @@ extern "C" void flash_attn_bwd_ex(
                                                    dq, dk, dv,
                                                    dq_accum, dsoftmax_sum,
                                                    batch, seqlen, n_heads, n_kv_heads, head_dim,
-                                                   is_bf16, causal,
+                                                   softmax_scale, is_bf16, causal,
                                                    attention_dropout_p, dropout_seed);
 
     // FIX: Allocate rng_state when dropout is enabled.
@@ -1676,33 +1743,33 @@ extern "C" void flash_attn_bwd_ex(
 #if defined(GRIM_FLASHATTN_HDIM64_ONLY)
 #if defined(GRIM_FLASHATTN_CAUSAL_ONLY)
 #if defined(GRIM_FLASHATTN_BF16_ONLY)
-    grim_flash::detail::run_mha_bwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+    grim_flash::detail::run_flash_attn_bwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
 #else
     if (is_bf16) {
-        grim_flash::detail::run_mha_bwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+        grim_flash::detail::run_flash_attn_bwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
     } else {
-        grim_flash::detail::run_mha_bwd_hdim64<cutlass::half_t, true>(params, stream);
+        grim_flash::detail::run_flash_attn_bwd_hdim64<cutlass::half_t, true>(params, stream);
     }
 #endif
 #else
     if (causal) {
 #if defined(GRIM_FLASHATTN_BF16_ONLY)
-        grim_flash::detail::run_mha_bwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+        grim_flash::detail::run_flash_attn_bwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
 #else
         if (is_bf16) {
-            grim_flash::detail::run_mha_bwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+            grim_flash::detail::run_flash_attn_bwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
         } else {
-            grim_flash::detail::run_mha_bwd_hdim64<cutlass::half_t, true>(params, stream);
+            grim_flash::detail::run_flash_attn_bwd_hdim64<cutlass::half_t, true>(params, stream);
         }
 #endif
     } else {
 #if defined(GRIM_FLASHATTN_BF16_ONLY)
-        grim_flash::detail::run_mha_bwd_hdim64<cutlass::bfloat16_t, false>(params, stream);
+        grim_flash::detail::run_flash_attn_bwd_hdim64<cutlass::bfloat16_t, false>(params, stream);
 #else
         if (is_bf16) {
-            grim_flash::detail::run_mha_bwd_hdim64<cutlass::bfloat16_t, false>(params, stream);
+            grim_flash::detail::run_flash_attn_bwd_hdim64<cutlass::bfloat16_t, false>(params, stream);
         } else {
-            grim_flash::detail::run_mha_bwd_hdim64<cutlass::half_t, false>(params, stream);
+            grim_flash::detail::run_flash_attn_bwd_hdim64<cutlass::half_t, false>(params, stream);
         }
 #endif
     }
@@ -1711,33 +1778,33 @@ extern "C" void flash_attn_bwd_ex(
     if (head_dim == 32) {
 #if defined(GRIM_FLASHATTN_CAUSAL_ONLY)
 #if defined(GRIM_FLASHATTN_BF16_ONLY)
-        grim_flash::detail::run_mha_bwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
+        grim_flash::detail::run_flash_attn_bwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
 #else
         if (is_bf16) {
-            grim_flash::detail::run_mha_bwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
+            grim_flash::detail::run_flash_attn_bwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
         } else {
-            grim_flash::detail::run_mha_bwd_hdim32<cutlass::half_t, true>(params, stream);
+            grim_flash::detail::run_flash_attn_bwd_hdim32<cutlass::half_t, true>(params, stream);
         }
 #endif
 #else
         if (causal) {
 #if defined(GRIM_FLASHATTN_BF16_ONLY)
-            grim_flash::detail::run_mha_bwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
+            grim_flash::detail::run_flash_attn_bwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
 #else
             if (is_bf16) {
-                grim_flash::detail::run_mha_bwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
+                grim_flash::detail::run_flash_attn_bwd_hdim32<cutlass::bfloat16_t, true>(params, stream);
             } else {
-                grim_flash::detail::run_mha_bwd_hdim32<cutlass::half_t, true>(params, stream);
+                grim_flash::detail::run_flash_attn_bwd_hdim32<cutlass::half_t, true>(params, stream);
             }
 #endif
         } else {
 #if defined(GRIM_FLASHATTN_BF16_ONLY)
-            grim_flash::detail::run_mha_bwd_hdim32<cutlass::bfloat16_t, false>(params, stream);
+            grim_flash::detail::run_flash_attn_bwd_hdim32<cutlass::bfloat16_t, false>(params, stream);
 #else
             if (is_bf16) {
-                grim_flash::detail::run_mha_bwd_hdim32<cutlass::bfloat16_t, false>(params, stream);
+                grim_flash::detail::run_flash_attn_bwd_hdim32<cutlass::bfloat16_t, false>(params, stream);
             } else {
-                grim_flash::detail::run_mha_bwd_hdim32<cutlass::half_t, false>(params, stream);
+                grim_flash::detail::run_flash_attn_bwd_hdim32<cutlass::half_t, false>(params, stream);
             }
 #endif
         }
@@ -1745,33 +1812,33 @@ extern "C" void flash_attn_bwd_ex(
     } else {
 #if defined(GRIM_FLASHATTN_CAUSAL_ONLY)
 #if defined(GRIM_FLASHATTN_BF16_ONLY)
-        grim_flash::detail::run_mha_bwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+        grim_flash::detail::run_flash_attn_bwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
 #else
         if (is_bf16) {
-            grim_flash::detail::run_mha_bwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+            grim_flash::detail::run_flash_attn_bwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
         } else {
-            grim_flash::detail::run_mha_bwd_hdim64<cutlass::half_t, true>(params, stream);
+            grim_flash::detail::run_flash_attn_bwd_hdim64<cutlass::half_t, true>(params, stream);
         }
 #endif
 #else
         if (causal) {
 #if defined(GRIM_FLASHATTN_BF16_ONLY)
-            grim_flash::detail::run_mha_bwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+            grim_flash::detail::run_flash_attn_bwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
 #else
             if (is_bf16) {
-                grim_flash::detail::run_mha_bwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
+                grim_flash::detail::run_flash_attn_bwd_hdim64<cutlass::bfloat16_t, true>(params, stream);
             } else {
-                grim_flash::detail::run_mha_bwd_hdim64<cutlass::half_t, true>(params, stream);
+                grim_flash::detail::run_flash_attn_bwd_hdim64<cutlass::half_t, true>(params, stream);
             }
 #endif
         } else {
 #if defined(GRIM_FLASHATTN_BF16_ONLY)
-            grim_flash::detail::run_mha_bwd_hdim64<cutlass::bfloat16_t, false>(params, stream);
+            grim_flash::detail::run_flash_attn_bwd_hdim64<cutlass::bfloat16_t, false>(params, stream);
 #else
             if (is_bf16) {
-                grim_flash::detail::run_mha_bwd_hdim64<cutlass::bfloat16_t, false>(params, stream);
+                grim_flash::detail::run_flash_attn_bwd_hdim64<cutlass::bfloat16_t, false>(params, stream);
             } else {
-                grim_flash::detail::run_mha_bwd_hdim64<cutlass::half_t, false>(params, stream);
+                grim_flash::detail::run_flash_attn_bwd_hdim64<cutlass::half_t, false>(params, stream);
             }
 #endif
         }

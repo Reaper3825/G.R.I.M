@@ -440,6 +440,8 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     }
     const HyperParameters::EncoderSelfAttentionHP attention_hp =
         HyperParameters::encoderSelfAttentionHP(hp);
+    const HyperParameters::FlashAttentionRuntimeHP flash_attention_hp =
+        HyperParameters::flashAttentionRuntimeHP(attention_hp);
     Attention::EncoderSelfAttentionWeights attention_weights{W_qkv_, b_qkv_, W_o_, b_o_};
     Attention::EncoderSelfAttentionIntermediates attention_intermediates{
         intermediates.qkv_out,
@@ -453,6 +455,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     Attention::EncoderSelfAttentionForwardRequest attention_request{
         payload,
         attention_hp,
+        flash_attention_hp,
         *pos_encoding_,
         stream,
         cublas_handle,

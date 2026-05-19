@@ -22,14 +22,11 @@
 #include <memory>
 
 #include "../grim_layer_gpu.hpp"
+#include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 
 namespace GRIM {
-
-namespace HyperParameters {
-struct ScratchBlockConstructionHP;
-}
 
 //======================================================//
 //  ScratchBlock Configuration

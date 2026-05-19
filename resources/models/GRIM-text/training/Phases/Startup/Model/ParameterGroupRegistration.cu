@@ -6,6 +6,7 @@
 #include "../../../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../../../Shared/Optimizers/OptimizerState_GPU.hpp"
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <sstream>
@@ -27,6 +28,7 @@ using GRIM::ParameterGroup;
 using GRIM::ParamStatsBucket;
 using GRIM::ParamGroupType;
 using GRIM::Tensor;
+using GRIM::HyperParameters::ParameterGroupPrecision;
 using GRIM::HyperParameters::LanguageModelConfig;
 
 std::string tensorDebugSummary(const Tensor& tensor) {
@@ -40,6 +42,58 @@ std::string tensorDebugSummary(const Tensor& tensor) {
 
 void emitInfo(const std::string& message) {
     GRIM::Logging::EmitModuleInfo(kRegistrationModule, message);
+}
+
+size_t paramGroupTypeIndex(ParamGroupType type) {
+    switch (type) {
+        case ParamGroupType::EMBEDDING:       return 0;
+        case ParamGroupType::LM_HEAD:         return 1;
+        case ParamGroupType::ATTENTION:       return 2;
+        case ParamGroupType::FFN:             return 3;
+        case ParamGroupType::RMSNORM:         return 4;
+        case ParamGroupType::SCRATCHBLOCK:    return 5;
+        case ParamGroupType::MTP:             return 6;
+        case ParamGroupType::REASONING_HEAD:  return 7;
+        case ParamGroupType::EXECUTION_BLOCK: return 8;
+        case ParamGroupType::SLOT_SELECTOR:   return 9;
+        case ParamGroupType::COUNT: break;
+    }
+    throw std::runtime_error("[buildParameterGroups] invalid ParamGroupType::COUNT in registered group summary");
+}
+
+const char* paramGroupTypeSummaryName(ParamGroupType type) {
+    switch (type) {
+        case ParamGroupType::EMBEDDING:       return "embedding";
+        case ParamGroupType::LM_HEAD:         return "lm_head";
+        case ParamGroupType::ATTENTION:       return "attention";
+        case ParamGroupType::FFN:             return "ffn";
+        case ParamGroupType::RMSNORM:         return "rmsnorm";
+        case ParamGroupType::SCRATCHBLOCK:    return "scratchblock";
+        case ParamGroupType::MTP:             return "mtp";
+        case ParamGroupType::REASONING_HEAD:  return "reasoning_head";
+        case ParamGroupType::EXECUTION_BLOCK: return "execution_block";
+        case ParamGroupType::SLOT_SELECTOR:   return "slot_selector";
+        case ParamGroupType::COUNT: break;
+    }
+    throw std::runtime_error("[buildParameterGroups] invalid ParamGroupType::COUNT in registered group summary");
+}
+
+size_t parameterPrecisionIndex(ParameterGroupPrecision precision) {
+    switch (precision) {
+        case ParameterGroupPrecision::FP32:         return 0;
+        case ParameterGroupPrecision::BF16_COMPUTE: return 1;
+        case ParameterGroupPrecision::UNSPECIFIED: break;
+    }
+    throw std::runtime_error("[buildParameterGroups] invalid ParameterGroupPrecision in registered group summary");
+}
+
+const char* parameterPrecisionSummaryName(ParameterGroupPrecision precision) {
+    switch (precision) {
+        case ParameterGroupPrecision::FP32:         return "FP32";
+        case ParameterGroupPrecision::BF16_COMPUTE: return "BF16_COMPUTE";
+        case ParameterGroupPrecision::UNSPECIFIED: break;
+    }
+    throw std::runtime_error("[buildParameterGroups] invalid ParameterGroupPrecision in registered group summary");
 }
 
 template <typename LayerT>
@@ -59,7 +113,9 @@ void throwUntrainableTensor(const std::string& name, const Tensor& tensor, int l
 
 class Registrar {
 public:
-    explicit Registrar(std::vector<ParameterGroup>& groups) : groups_(groups) {}
+    Registrar(std::vector<ParameterGroup>& groups,
+              const LanguageModelConfig& config)
+        : groups_(groups), config_(config) {}
 
     void addTensor(const std::string& name,
                    Tensor& tensor,
@@ -88,6 +144,7 @@ public:
         group.m_tensor = nullptr;
         group.v_tensor = nullptr;
         group.type = type;
+        group.parameter_precision = precisionForType(type);
         group.stats_bucket = stats_bucket;
         group.layer_index = layer;
         group.weight_decay_multiplier = wd_mult;
@@ -128,7 +185,25 @@ public:
     }
 
 private:
+    ParameterGroupPrecision precisionForType(ParamGroupType type) const {
+        switch (type) {
+            case ParamGroupType::EMBEDDING:       return config_.parameter_precision_embedding;
+            case ParamGroupType::LM_HEAD:         return config_.parameter_precision_lm_head;
+            case ParamGroupType::ATTENTION:       return config_.parameter_precision_attention;
+            case ParamGroupType::FFN:             return config_.parameter_precision_ffn;
+            case ParamGroupType::RMSNORM:         return config_.parameter_precision_rmsnorm;
+            case ParamGroupType::SCRATCHBLOCK:    return config_.parameter_precision_scratchblock;
+            case ParamGroupType::MTP:             return config_.parameter_precision_mtp;
+            case ParamGroupType::REASONING_HEAD:  return config_.parameter_precision_reasoning_head;
+            case ParamGroupType::EXECUTION_BLOCK: return config_.parameter_precision_execution_block;
+            case ParamGroupType::SLOT_SELECTOR:   return config_.parameter_precision_slot_selector;
+            case ParamGroupType::COUNT: break;
+        }
+        throw std::runtime_error("[buildParameterGroups] invalid ParamGroupType::COUNT for parameter precision lookup");
+    }
+
     std::vector<ParameterGroup>& groups_;
+    const LanguageModelConfig& config_;
     std::unordered_set<const void*> registered_data_;
 };
 
@@ -483,6 +558,29 @@ void validateOptimizerStateAllocation(const std::vector<ParameterGroup>& groups,
 }
 
 void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
+    constexpr size_t kParamGroupTypeCount = static_cast<size_t>(ParamGroupType::COUNT);
+    constexpr size_t kPrecisionCount = 2;
+    static_assert(kParamGroupTypeCount == 10,
+                  "Registered group precision summary must list every ParamGroupType");
+
+    const std::array<ParamGroupType, kParamGroupTypeCount> group_types = {
+        ParamGroupType::EMBEDDING,
+        ParamGroupType::LM_HEAD,
+        ParamGroupType::ATTENTION,
+        ParamGroupType::FFN,
+        ParamGroupType::RMSNORM,
+        ParamGroupType::SCRATCHBLOCK,
+        ParamGroupType::MTP,
+        ParamGroupType::REASONING_HEAD,
+        ParamGroupType::EXECUTION_BLOCK,
+        ParamGroupType::SLOT_SELECTOR
+    };
+    const std::array<ParameterGroupPrecision, kPrecisionCount> precisions = {
+        ParameterGroupPrecision::FP32,
+        ParameterGroupPrecision::BF16_COMPUTE
+    };
+    std::array<std::array<int, kPrecisionCount>, kParamGroupTypeCount> precision_counts{};
+
     int emb_count = 0;
     int attn_count = 0;
     int ffn_count = 0;
@@ -492,11 +590,26 @@ void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
     for (const auto& group : groups) {
         switch (group.type) {
             case ParamGroupType::EMBEDDING: ++emb_count; break;
+            case ParamGroupType::LM_HEAD: ++other_count; break;
             case ParamGroupType::ATTENTION: ++attn_count; break;
             case ParamGroupType::FFN: ++ffn_count; break;
             case ParamGroupType::RMSNORM: ++rms_count; break;
-            default: ++other_count; break;
+            case ParamGroupType::SCRATCHBLOCK: ++other_count; break;
+            case ParamGroupType::MTP: ++other_count; break;
+            case ParamGroupType::REASONING_HEAD: ++other_count; break;
+            case ParamGroupType::EXECUTION_BLOCK: ++other_count; break;
+            case ParamGroupType::SLOT_SELECTOR: ++other_count; break;
+            case ParamGroupType::COUNT:
+                throw std::runtime_error("[buildParameterGroups] group " + group.name +
+                                         " has invalid ParamGroupType::COUNT");
         }
+
+        if (group.parameter_precision == ParameterGroupPrecision::UNSPECIFIED) {
+            throw std::runtime_error("[buildParameterGroups] group " + group.name +
+                                     " has UNSPECIFIED parameter_precision");
+        }
+
+        ++precision_counts[paramGroupTypeIndex(group.type)][parameterPrecisionIndex(group.parameter_precision)];
     }
 
     emitInfo("[buildParameterGroups] Parameter group summary: total=" + std::to_string(groups.size()) +
@@ -505,12 +618,47 @@ void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
              " ffn=" + std::to_string(ffn_count) +
              " rms=" + std::to_string(rms_count) +
              " other=" + std::to_string(other_count));
+
+    std::ostringstream precision_summary;
+    precision_summary << "[buildParameterGroups] Registered group precision summary:";
+    for (const ParamGroupType type : group_types) {
+        const size_t type_index = paramGroupTypeIndex(type);
+        int type_total = 0;
+        for (const ParameterGroupPrecision precision : precisions) {
+            type_total += precision_counts[type_index][parameterPrecisionIndex(precision)];
+        }
+        if (type_total == 0) {
+            continue;
+        }
+
+        precision_summary << ' ' << paramGroupTypeSummaryName(type) << "{";
+        for (size_t precision_index = 0; precision_index < precisions.size(); ++precision_index) {
+            if (precision_index != 0) {
+                precision_summary << ',';
+            }
+            const ParameterGroupPrecision precision = precisions[precision_index];
+            precision_summary << parameterPrecisionSummaryName(precision) << '='
+                              << precision_counts[type_index][precision_index];
+        }
+        precision_summary << '}';
+    }
+    emitInfo(precision_summary.str());
 }
 
 void validateParameterRegistrationConfig(const LanguageModelConfig& config) {
     GRIM::HyperParameters::requireValidGQAGrouping(config, "buildParameterGroups");
     GRIM::HyperParameters::requirePositiveGroupingValue(config.num_layers, "num_layers", "buildParameterGroups");
     GRIM::HyperParameters::requirePositiveGroupingValue(config.vocab_size, "vocab_size", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_embedding, "precision.parameter_groups.embedding", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_lm_head, "precision.parameter_groups.lm_head", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_attention, "precision.parameter_groups.attention", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_ffn, "precision.parameter_groups.ffn", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_rmsnorm, "precision.parameter_groups.rmsnorm", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_scratchblock, "precision.parameter_groups.scratchblock", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_mtp, "precision.parameter_groups.mtp", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_reasoning_head, "precision.parameter_groups.reasoning_head", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_execution_block, "precision.parameter_groups.execution_block", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_slot_selector, "precision.parameter_groups.slot_selector", "buildParameterGroups");
 }
 
 } // namespace
@@ -523,7 +671,7 @@ void buildParameterGroups(LanguageModel& model) {
     std::vector<ParameterGroup> rebuilt_groups;
     rebuilt_groups.reserve(model_groups.size());
 
-    Registrar registrar(rebuilt_groups);
+    Registrar registrar(rebuilt_groups, config);
     registerTopLevelParameters(model, registrar, config);
     registerEncoderParameters(model, registrar, config);
 

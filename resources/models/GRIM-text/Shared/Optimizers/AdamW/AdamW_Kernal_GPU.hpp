@@ -35,7 +35,7 @@ void launchAdamWKernel(ParameterGroup& group,
 //  parameter groups — no model dependency.
 //
 //  Callers are responsible for:
-//    1. Building parameter groups (via model.buildParameterGroups())
+//    1. Building parameter groups through Phase1 ParameterGroupRegistration
 //    2. Providing a valid stream
 //    3. Incrementing step AFTER calling launchAdamWStep()
 

@@ -31,6 +31,7 @@ std::size_t flash_attn_dsoftmax_sum_bytes(int batch,
 // K,V:[batch, seqlen, n_kv_heads, head_dim] (FP16 or BF16)
 // O:  [batch, seqlen, n_heads, head_dim]    (FP16 or BF16)
 // LSE:[batch, n_heads, seqlen]              (FP32, dense, no padding)
+// softmax_scale: 0.0f means canonical 1/sqrt(head_dim); otherwise must be finite and > 0.
 void flash_attn_fwd_ex(const void* q,
                        const void* k,
                        const void* v,
@@ -42,6 +43,7 @@ void flash_attn_fwd_ex(const void* q,
                        int n_heads,
                        int n_kv_heads,
                        int head_dim,
+                       float softmax_scale,
                        bool causal,
                        bool is_bf16,
                        float attention_dropout_p,
@@ -53,10 +55,10 @@ void flash_attn_fwd_ex(const void* q,
 // For autoregressive decoding: Q has seqlen_q new tokens, K/V cache has
 // seqlen_k total tokens (including the new ones already appended by caller).
 //
-// Q:       [batch, seqlen_q, n_heads, head_dim]      (BF16)
-// K_cache: [batch, seqlen_k, n_kv_heads, head_dim]   (BF16) — full cache including new tokens
-// V_cache: [batch, seqlen_k, n_kv_heads, head_dim]   (BF16) — full cache including new tokens
-// O:       [batch, seqlen_q, n_heads, head_dim]       (BF16)
+// Q:       [batch, seqlen_q, n_heads, head_dim]      (FP16 or BF16)
+// K_cache: [batch, seqlen_k, n_kv_heads, head_dim]   (FP16 or BF16) — full cache including new tokens
+// V_cache: [batch, seqlen_k, n_kv_heads, head_dim]   (FP16 or BF16) — full cache including new tokens
+// O:       [batch, seqlen_q, n_heads, head_dim]       (FP16 or BF16)
 // LSE:     [batch, n_heads, seqlen_q]                 (FP32)
 //
 // Typical decode usage: seqlen_q=1, seqlen_k=total_cached_tokens
@@ -79,6 +81,7 @@ void flash_attn_fwd_kvcache(const void* q,
 
 // FlashAttention v2 backward.
 // Requires softmax_lse from the matching forward pass.
+// softmax_scale must match the forward pass. 0.0f means canonical 1/sqrt(head_dim).
 void flash_attn_bwd_ex(const void* q,
                        const void* k,
                        const void* v,
@@ -96,6 +99,7 @@ void flash_attn_bwd_ex(const void* q,
                        int n_heads,
                        int n_kv_heads,
                        int head_dim,
+                       float softmax_scale,
                        bool causal,
                        bool is_bf16,
                        float attention_dropout_p,

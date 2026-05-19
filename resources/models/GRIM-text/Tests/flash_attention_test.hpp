@@ -37,6 +37,7 @@ std::vector<AttentionTestResult> runAllAttentionTests();
 // Individual test declarations
 bool testFlashForwardBasic(std::string& message);
 bool testFlashForwardCausalMask(std::string& message);
+bool testFlashForwardCustomScale(std::string& message);
 bool testFlashBackwardGradientFlow(std::string& message);
 bool testFlashBackwardNumericalGradient(std::string& message);
 bool testFlashForwardVsNaive(std::string& message);

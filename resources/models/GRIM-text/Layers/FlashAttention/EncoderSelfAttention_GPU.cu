@@ -148,15 +148,13 @@ void encoderSelfAttentionForward(const Tensor& norm_input,
                                  EncoderSelfAttentionWeights weights,
                                  EncoderSelfAttentionIntermediates intermediates,
                                  const EncoderSelfAttentionForwardRequest& request) {
-    HyperParameters::validateEncoderSelfAttentionHP(request.hp, "encoderSelfAttentionForward");
+    HyperParameters::validateFlashAttentionRuntimeForEncoderSelfAttentionHP(
+        request.flash_attention, request.hp, "encoderSelfAttentionForward");
     if (!request.stream) {
         throw std::runtime_error("encoderSelfAttentionForward: stream is NULL");
     }
     if (!request.cublas_handle) {
         throw std::runtime_error("encoderSelfAttentionForward: cublas_handle is NULL");
-    }
-    if (!request.hp.use_flash_attention) {
-        throw std::runtime_error("encoderSelfAttentionForward: use_flash_attention=false but GRIM encoder attention is FlashAttention-backed");
     }
     if (!norm_input.data) {
         throw std::runtime_error("encoderSelfAttentionForward: norm_input.data is NULL");
@@ -244,7 +242,7 @@ void encoderSelfAttentionForward(const Tensor& norm_input,
     const std::uint64_t dropout_seed = attentionDropoutSeed(request);
     intermediates.attn_out_bhsd = autograd::scaled_dot_product_attention(
         intermediates.Q_bhsd, intermediates.K_bhsd, intermediates.V_bhsd,
-        request.pbm.alibi_slopes, 0.0f, request.stream, request.hp.causal_mask,
+        request.pbm.alibi_slopes, request.flash_attention, 0.0f, request.stream,
         attention_dropout_p, dropout_seed);
     if (qkv_debug > 0) {
         autograd::checkQKVTensorFinite("AutogradSDPA:attn_out_bhsd", intermediates.attn_out_bhsd, request.stream);

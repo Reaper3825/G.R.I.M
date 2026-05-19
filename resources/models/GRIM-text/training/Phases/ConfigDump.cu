@@ -60,6 +60,9 @@ std::string fmt(::GRIM::HyperParameters::ModelExecutionMode v) {
     }
     throw std::runtime_error("fmt(ModelExecutionMode): unknown enum value");
 }
+std::string fmt(::GRIM::HyperParameters::ParameterGroupPrecision v) {
+    return ::GRIM::HyperParameters::parameterGroupPrecisionToString(v);
+}
 std::string fmt(::GRIM::HyperParameters::LanguageModelConfig::HardcodedPattern v) {
     using HCP = ::GRIM::HyperParameters::LanguageModelConfig::HardcodedPattern;
     switch (v) {
@@ -109,6 +112,7 @@ void dumpAllHyperparameters(
 #define DUMP_LOG_RECORDER(field) rows.emplace_back("log_recorder." #field, fmt(hp.log_recorder.field))
 #define DUMP_LOG_RECORDER_LAYER(field) rows.emplace_back("log_recorder.layers." #field, fmt(hp.log_recorder.layers.field))
 #define DUMP_TAPE_LOGGING(field) rows.emplace_back("tape_logging." #field, fmt(hp.tape_logging.field))
+#define DUMP_PARAM_PRECISION(json_field, config_field) rows.emplace_back("precision.parameter_groups." json_field, fmt(hp.architecture.config_field))
 #define SECTION(label) rows.emplace_back(std::string("---"), std::string(label))
 
     SECTION("Run selectors");
@@ -156,6 +160,18 @@ void dumpAllHyperparameters(
     DUMP_ARCH(num_threads);
     DUMP_ARCH(use_bias);
     DUMP_ARCH(execution_mode);
+
+    SECTION("Parameter precision");
+    DUMP_PARAM_PRECISION("embedding", parameter_precision_embedding);
+    DUMP_PARAM_PRECISION("lm_head", parameter_precision_lm_head);
+    DUMP_PARAM_PRECISION("attention", parameter_precision_attention);
+    DUMP_PARAM_PRECISION("ffn", parameter_precision_ffn);
+    DUMP_PARAM_PRECISION("rmsnorm", parameter_precision_rmsnorm);
+    DUMP_PARAM_PRECISION("scratchblock", parameter_precision_scratchblock);
+    DUMP_PARAM_PRECISION("mtp", parameter_precision_mtp);
+    DUMP_PARAM_PRECISION("reasoning_head", parameter_precision_reasoning_head);
+    DUMP_PARAM_PRECISION("execution_block", parameter_precision_execution_block);
+    DUMP_PARAM_PRECISION("slot_selector", parameter_precision_slot_selector);
 
     SECTION("Core training");
     DUMP(epochs);
@@ -404,6 +420,7 @@ void dumpAllHyperparameters(
 #undef DUMP_LOG_RECORDER
 #undef DUMP_LOG_RECORDER_LAYER
 #undef DUMP_TAPE_LOGGING
+#undef DUMP_PARAM_PRECISION
 #undef SECTION
 
     //==================================================//

@@ -940,7 +940,7 @@ For each encoding layer (Layer 0 → Layer 11):
     - `RMSNormGradFn::capture_inputs()` - allocates grad buffer with `cudaMalloc()`, sets `owns_input_grad=true` ✅
     - `RMSNormGradFn::~RMSNormGradFn()` - frees own buffer only when `owns_input_grad=true` ✅
     - `CenterColumnsGradFn::~CenterColumnsGradFn()` - does NOT delete input's GradFn (ownership transferred to persistent tensor) ✅
-    - `ScaledDotProductAttentionGradFn::save()` - allocates GQA buffers for num_heads (not num_kv_heads) to prevent overflow (Issue #72) ✅
+    - SDPA forward/GradFn setup allocates GQA backward buffers for num_heads (not num_kv_heads) to prevent overflow (Issue #72); no duplicate `ScaledDotProductAttentionGradFn::save()` path ✅
   - Pattern verified: ALL GradFn subclasses set `data_cached = true` (Issue #48 fix) ✅
   - Pattern verified: `grad_output_tap` size checks before copy, cudaMemcpy error checked ✅
 
@@ -951,10 +951,10 @@ For each encoding layer (Layer 0 → Layer 11):
 - [ ] **Layers/FlashAttention/Flash_Attention_Kernal.cu**
   - Flash Attention v2 backward pass
   - **Issue #84**: Preprocessing kernel (flash_bwd_dot_do_o_kernel) MUST be called FIRST - VERIFY present
-  - **Issue #72 + #73**: GQA gradient reduction and scaling - VERIFY `gqa_grad_scale = 1.0 / heads_per_kv_group`
+  - **Issue #72 + #85**: GQA dK/dV temporary buffers use `num_heads`, then reduce to `num_kv_heads` with a plain sum - VERIFY present
   - **Issue #87**: Removed dQ/dK normalization that was crushing gradients - VERIFY NOT present
   - Pattern to check: Search for `flash_bwd_dot_do_o_kernel<<<` to verify preprocessing kernel call
-  - Pattern to check: Search for dK/dV reduction with `gqa_grad_scale` multiplication
+  - Pattern to check: Search for `kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32` and verify no `gqa_grad_scale` multiplication
   - Pattern to check: Verify NO scaling of dQ/dK to dV magnitude (Issue #87 would re-appear here)
 
 ---

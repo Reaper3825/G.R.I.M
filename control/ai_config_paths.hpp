@@ -515,6 +515,16 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         "per_token_grad_scale", "warmup_fraction", "force_rebuild_vocab", "max_seq_len", "log_interval",
         "atom_stats_interval", "atom_stats_max_seqs",
         "validation_interval", "checkpoint_interval", "use_gpu", "use_flash_attention",
+        "precision.parameter_groups.embedding",
+        "precision.parameter_groups.lm_head",
+        "precision.parameter_groups.attention",
+        "precision.parameter_groups.ffn",
+        "precision.parameter_groups.rmsnorm",
+        "precision.parameter_groups.scratchblock",
+        "precision.parameter_groups.mtp",
+        "precision.parameter_groups.reasoning_head",
+        "precision.parameter_groups.execution_block",
+        "precision.parameter_groups.slot_selector",
         
         // Feature enables
         "cosine_decay.enabled",
@@ -635,6 +645,35 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     assignTrainingField(params.architecture.use_gpu, trainConfig, "use_gpu");
     assignTrainingField(params.architecture.use_flash_attention, trainConfig, "use_flash_attention");
     // architecture.min_seq_len_for_flash: derived from max_seq_len (see deriveComputedHyperparameters)
+
+    if (auto it = trainConfig.find("precision"); it != trainConfig.end()) {
+        if (!it->is_object()) {
+            throw std::runtime_error("[ai_config] training.config.precision must be an object");
+        }
+        const auto& precision = *it;
+        if (!precision.contains("parameter_groups") || !precision["parameter_groups"].is_object()) {
+            throw std::runtime_error("[ai_config] training.config.precision.parameter_groups must be an object");
+        }
+        const auto& groups = precision["parameter_groups"];
+        auto parse_group_precision = [&](const char* key) {
+            if (!groups.contains(key) || !groups[key].is_string()) {
+                throw std::runtime_error(std::string("[ai_config] training.config.precision.parameter_groups.") +
+                                         key + " must be a string");
+            }
+            return ::GRIM::HyperParameters::parseParameterGroupPrecision(groups[key].get<std::string>());
+        };
+
+        params.architecture.parameter_precision_embedding = parse_group_precision("embedding");
+        params.architecture.parameter_precision_lm_head = parse_group_precision("lm_head");
+        params.architecture.parameter_precision_attention = parse_group_precision("attention");
+        params.architecture.parameter_precision_ffn = parse_group_precision("ffn");
+        params.architecture.parameter_precision_rmsnorm = parse_group_precision("rmsnorm");
+        params.architecture.parameter_precision_scratchblock = parse_group_precision("scratchblock");
+        params.architecture.parameter_precision_mtp = parse_group_precision("mtp");
+        params.architecture.parameter_precision_reasoning_head = parse_group_precision("reasoning_head");
+        params.architecture.parameter_precision_execution_block = parse_group_precision("execution_block");
+        params.architecture.parameter_precision_slot_selector = parse_group_precision("slot_selector");
+    }
 
     if (auto it = trainConfig.find("soft_restart"); it != trainConfig.end()) {
         const auto& soft = *it;

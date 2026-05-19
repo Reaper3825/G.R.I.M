@@ -20,7 +20,7 @@ Batch schedule ownership is single-pass: `PlannedBatchesReady()` is the only Pha
 
 `.grmt` header ownership is centralized in `Shared/GRMT/GrmtFormat.hpp`: the magic value, four-field header layout, current-version check, nonzero sequence/vocab guards, and header writes live there. Startup/data tools may read the header only through that boundary; after it returns a validated header, callers continue with their own stream-specific payload work.
 
-Startup model tensor registration lives in `training/Phases/Startup/Model/ParameterGroupRegistration.{hpp,cu}`. `LanguageModel` still owns the durable `parameter_groups_` vector and parameter tensors; the startup module only discovers trainable tensors, records non-owning `ParameterGroup` metadata, and binds optimizer moment tensors owned by `OptimizerState`.
+Startup model tensor registration lives in `training/Phases/Startup/Model/ParameterGroupRegistration.{hpp,cu}`. `LanguageModel` still owns the durable `parameter_groups_` vector and parameter tensors; the startup module only discovers trainable tensors, records non-owning `ParameterGroup` metadata, stamps each group from the model's actual `LanguageModelConfig` precision fields, and binds optimizer moment tensors owned by `OptimizerState`. Registration must not receive a separate sidecar config/policy object beside the model/config it already consumes.
 
 `buildParameterGroups()` is transaction-safe: registration rebuilds a local vector, performs all configured trainable-tensor validation there, and swaps it into `LanguageModel::parameter_groups_` only after success. A thrown registration check must never leave `LanguageModel` with a half-rebuilt parameter inventory.
 
