@@ -1230,7 +1230,8 @@ LossResult autogradTrainingStep(
     const HyperParameters::LossConfigHP& loss_config,
     bool accumulate,
     float grad_scale,
-    uint64_t batch_idx
+    uint64_t batch_idx,
+    uint64_t global_step
 ) {
     payload.validate("autogradTrainingStep");
 
@@ -1328,6 +1329,7 @@ LossResult autogradTrainingStep(
         bindings,
         loss_config,
         batch_idx,
+        global_step,
         true
     );
     if (loss_config.class_balanced_enabled) {

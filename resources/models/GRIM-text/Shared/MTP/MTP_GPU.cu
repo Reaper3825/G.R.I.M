@@ -119,9 +119,18 @@ void computeMTPAuxiliaryLosses(
             ") — unified_loss failed before MTP. num_tokens=" + std::to_string(total_tokens) + " vocab=" + std::to_string(vocab_size));
     }
 
-    const float alpha_effective = cfg->mtp_alpha * std::min(1.0f,
-        static_cast<float>(ctx.step) / static_cast<float>(cfg->mtp_alpha_warmup_steps > 0 ? cfg->mtp_alpha_warmup_steps : 1));
-    const float scale = (K > 0 && alpha_effective > 0.0f) ? (alpha_effective / static_cast<float>(K)) : 0.0f;
+    if (cfg->mtp_alpha_warmup_steps <= 0) {
+        throw std::runtime_error("computeMTPAuxiliaryLosses: mtp_alpha_warmup_steps must be > 0, got " +
+            std::to_string(cfg->mtp_alpha_warmup_steps));
+    }
+    const float alpha_warmup_progress = std::min(
+        1.0f,
+        static_cast<float>(ctx.global_step) / static_cast<float>(cfg->mtp_alpha_warmup_steps));
+    const float alpha_effective = cfg->mtp_alpha * alpha_warmup_progress;
+    float scale = 0.0f;
+    if (alpha_effective > 0.0f) {
+        scale = alpha_effective / static_cast<float>(K);
+    }
     intermediates.mtp_logits_tensors.clear();
     diagnostics.head_loss.clear();
     diagnostics.head_acc.clear();

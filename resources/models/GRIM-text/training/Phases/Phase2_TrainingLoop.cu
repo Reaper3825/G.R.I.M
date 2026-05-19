@@ -385,7 +385,8 @@ BatchResult processBatch(
         ctx.loss_config,
         plan.should_accumulate,
         plan.grad_scale,
-        plan.batch_idx
+        plan.batch_idx,
+        plan.global_step
     );
     result.loss = loss_result.loss_value;
     result.aux_loss = loss_result.aux_loss;
@@ -624,6 +625,7 @@ EpochResult runEpoch(
         autograd_plan.should_accumulate = shouldAccumulateGradients(ctx.optimizer);
         autograd_plan.grad_scale = 1.0f / static_cast<float>(accum_steps);
         autograd_plan.batch_idx = static_cast<uint64_t>(batch_idx);
+        autograd_plan.global_step = static_cast<uint64_t>(ctx.global_step);
 
         const int optimizer_step = static_cast<int>(ctx.optimizer.optimizer_step.step);
 
