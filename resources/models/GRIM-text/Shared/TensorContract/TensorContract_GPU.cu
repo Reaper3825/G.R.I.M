@@ -419,6 +419,26 @@ namespace TensorContract {
 
 constexpr int BLOCK_SIZE = GRIM::HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
 
+const char* precision_name(PrecisionType precision) {
+    switch (precision) {
+        case PrecisionType::FP32: return "FP32";
+        case PrecisionType::BF16_COMPUTE: return "BF16_COMPUTE";
+    }
+    throw std::runtime_error("TensorContract::precision_name: unknown PrecisionType enum value");
+}
+
+PrecisionType precision_from_parameter_group_precision(::GRIM::HyperParameters::ParameterGroupPrecision precision) {
+    switch (precision) {
+        case ::GRIM::HyperParameters::ParameterGroupPrecision::FP32:
+            return PrecisionType::FP32;
+        case ::GRIM::HyperParameters::ParameterGroupPrecision::BF16_COMPUTE:
+            return PrecisionType::BF16_COMPUTE;
+        case ::GRIM::HyperParameters::ParameterGroupPrecision::UNSPECIFIED:
+            break;
+    }
+    throw std::runtime_error("TensorContract::precision_from_parameter_group_precision: UNSPECIFIED or unknown ParameterGroupPrecision");
+}
+
 //======================================================//
 //  CUDA Error Checking
 //======================================================//
@@ -464,6 +484,7 @@ std::string TensorView::to_string() const {
     }
     
     oss << "] " << layout_name(shape.layout);
+    oss << " precision=" << precision_name(compute_precision);
     oss << " @ " << static_cast<void*>(ptr);
     return oss.str();
 }
@@ -848,6 +869,7 @@ inline dim3 gridForCount(size_t count) {
 Tensor::Tensor(Tensor&& other) noexcept
     : data(other.data)
     , shape(other.shape)
+    , compute_precision(other.compute_precision)
     , owns_data(other.owns_data)
     , grad_(std::move(other.grad_))
     , grad_fn(std::move(other.grad_fn))
@@ -869,6 +891,7 @@ Tensor& Tensor::operator=(Tensor&& other) noexcept {
         
         data = other.data;
         shape = other.shape;
+        compute_precision = other.compute_precision;
         owns_data = other.owns_data;
         grad_ = std::move(other.grad_);
         grad_fn = std::move(other.grad_fn);
@@ -901,6 +924,7 @@ Tensor Tensor::zeros(TensorContract::TensorShape shape, bool requires_grad, cuda
     
     Tensor t;
     t.shape = shape;
+    t.compute_precision = TensorContract::PrecisionType::FP32;
     t.requires_grad = requires_grad;
     t.is_leaf = true;
     t.stream = stream;
@@ -968,6 +992,7 @@ Tensor Tensor::empty(TensorContract::TensorShape shape, bool requires_grad, cuda
     
     Tensor t;
     t.shape = shape;
+    t.compute_precision = TensorContract::PrecisionType::FP32;
     t.requires_grad = requires_grad;
     t.is_leaf = true;
     t.stream = stream;
@@ -996,6 +1021,7 @@ Tensor Tensor::from_ptr(float* ptr, TensorContract::TensorShape shape, bool take
     Tensor t;
     t.data = ptr;
     t.shape = shape;
+    t.compute_precision = TensorContract::PrecisionType::FP32;
     t.owns_data = takes_ownership;
     t.requires_grad = requires_grad;
     t.is_leaf = true;
@@ -1041,6 +1067,7 @@ Tensor Tensor::xavier_uniform(TensorContract::TensorShape shape, bool requires_g
     
     Tensor t;
     t.shape = shape;
+    t.compute_precision = TensorContract::PrecisionType::FP32;
     t.requires_grad = requires_grad;
     t.is_leaf = true;
     t.stream = stream;
@@ -1151,6 +1178,7 @@ void Tensor::ensure_grad() {
     auto grad_tensor = std::make_shared<Tensor>();
     grad_tensor->data = ptr;
     grad_tensor->shape = shape;
+    grad_tensor->compute_precision = TensorContract::PrecisionType::FP32;
     grad_tensor->owns_data = true;
     grad_tensor->requires_grad = false;
     grad_tensor->is_leaf = true;
@@ -1247,6 +1275,7 @@ Tensor Tensor::detach() const {
     Tensor t;
     t.data = data;
     t.shape = shape;
+    t.compute_precision = compute_precision;
     t.owns_data = false;  // Non-owning view
     t.grad_ = nullptr;    // ISSUE #59: Detached tensor has no gradient
     t.grad_fn = nullptr;

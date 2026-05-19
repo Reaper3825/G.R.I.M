@@ -146,6 +146,18 @@ std::string getCurrentGradFnContext();
 namespace TensorContract {
 
 //======================================================//
+//  Tensor Precision Metadata
+//======================================================//
+
+enum class PrecisionType : uint8_t {
+    FP32,
+    BF16_COMPUTE
+};
+
+const char* precision_name(PrecisionType precision);
+PrecisionType precision_from_parameter_group_precision(::GRIM::HyperParameters::ParameterGroupPrecision precision);
+
+//======================================================//
 //  Tensor Layout Enum
 //======================================================//
 
@@ -363,29 +375,30 @@ struct TensorView {
     float* ptr = nullptr;
     TensorShape shape;
     const char* name = nullptr;  // Optional debug name
+    PrecisionType compute_precision = PrecisionType::FP32;
     
     // Constructors
     TensorView() = default;
     
     // Construct with pre-built shape
-    TensorView(float* p, TensorShape s, const char* n = nullptr)
-        : ptr(p), shape(s), name(n) {}
+    TensorView(float* p, TensorShape s, const char* n = nullptr, PrecisionType precision = PrecisionType::FP32)
+        : ptr(p), shape(s), name(n), compute_precision(precision) {}
     
     // Convenience constructors for specific layouts
-    static TensorView make_BSM(float* p, int tokens, int d_model, const char* n = nullptr) {
-        return TensorView(p, TensorShape::make_BSM(tokens, d_model), n);
+    static TensorView make_BSM(float* p, int tokens, int d_model, const char* n = nullptr, PrecisionType precision = PrecisionType::FP32) {
+        return TensorView(p, TensorShape::make_BSM(tokens, d_model), n, precision);
     }
     
-    static TensorView make_QKV_FUSED(float* p, int tokens, int total_qkv_dim, const char* n = nullptr) {
-        return TensorView(p, TensorShape::make_QKV_FUSED(tokens, total_qkv_dim), n);
+    static TensorView make_QKV_FUSED(float* p, int tokens, int total_qkv_dim, const char* n = nullptr, PrecisionType precision = PrecisionType::FP32) {
+        return TensorView(p, TensorShape::make_QKV_FUSED(tokens, total_qkv_dim), n, precision);
     }
     
-    static TensorView make_LOGITS(float* p, int tokens, int vocab_size, const char* n = nullptr) {
-        return TensorView(p, TensorShape::make_LOGITS(tokens, vocab_size), n);
+    static TensorView make_LOGITS(float* p, int tokens, int vocab_size, const char* n = nullptr, PrecisionType precision = PrecisionType::FP32) {
+        return TensorView(p, TensorShape::make_LOGITS(tokens, vocab_size), n, precision);
     }
     
-    static TensorView make_BHSD(float* p, int batch, int heads, int seq, int head_dim, const char* n = nullptr) {
-        return TensorView(p, TensorShape::make_BHSD(batch, heads, seq, head_dim), n);
+    static TensorView make_BHSD(float* p, int batch, int heads, int seq, int head_dim, const char* n = nullptr, PrecisionType precision = PrecisionType::FP32) {
+        return TensorView(p, TensorShape::make_BHSD(batch, heads, seq, head_dim), n, precision);
     }
     
     // Query layout type
@@ -791,6 +804,7 @@ struct Tensor {
     
     float* data = nullptr;              ///< GPU memory for values
     TensorContract::TensorShape shape;  ///< Layout-aware shape (2D or 4D)
+    TensorContract::PrecisionType compute_precision = TensorContract::PrecisionType::FP32;  ///< TensorContract-owned compute precision metadata
     bool owns_data = false;             ///< RAII ownership flag for data
     
     //--------------------------------------------------//
@@ -955,13 +969,13 @@ struct Tensor {
     
     /// Get a non-owning view of data
     TensorContract::TensorView view() const {
-        return TensorContract::TensorView(data, shape, name);
+        return TensorContract::TensorView(data, shape, name, compute_precision);
     }
     
     /// Get a non-owning view of gradient data
     /// Note: Returns mutable view even from const Tensor (gradient is logically separate)
     TensorContract::TensorView grad_view() const {
-        return TensorContract::TensorView(grad_ ? grad_->data : nullptr, shape, name);
+        return TensorContract::TensorView(grad_ ? grad_->data : nullptr, shape, name, TensorContract::PrecisionType::FP32);
     }
     
     //--------------------------------------------------//
@@ -971,7 +985,15 @@ struct Tensor {
     size_t numel() const { return shape.total_elements(); }
     size_t size_bytes() const { return numel() * sizeof(float); }
     TensorContract::Layout layout() const { return shape.layout; }
+    TensorContract::PrecisionType precision() const { return compute_precision; }
     bool is_contiguous() const { return true; }  // Always true (no stride support)
+    Tensor& set_compute_precision(TensorContract::PrecisionType precision, const char* context) {
+        if (context == nullptr || *context == '\0') {
+            throw std::runtime_error("Tensor::set_compute_precision: context is NULL or empty");
+        }
+        compute_precision = precision;
+        return *this;
+    }
     
     //--------------------------------------------------//
     // RULE 20: Validation Methods (Fail Loud)

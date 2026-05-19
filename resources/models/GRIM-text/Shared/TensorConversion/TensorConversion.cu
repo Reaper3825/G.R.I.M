@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <string>
 #include <algorithm>  // for std::max in split/merge GQA
+#include <limits>
 
 namespace TensorConversion {
 
@@ -17,6 +18,51 @@ namespace TensorConversion {
 using GRIM::HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
 
 constexpr int BLOCK_SIZE = CUDA_BLOCK_SIZE_STANDARD;
+
+constexpr int kMaxGridDimY = 65535;
+
+dim3 gridForCount(std::size_t count) {
+    if (count == 0) {
+        throw std::runtime_error("TensorConversion::gridForCount: count is zero");
+    }
+    const std::size_t blocks = (count + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    if (blocks <= static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        return dim3(static_cast<unsigned int>(blocks), 1, 1);
+    }
+    const std::size_t grid_x = (blocks + kMaxGridDimY - 1) / kMaxGridDimY;
+    if (grid_x > static_cast<std::size_t>(std::numeric_limits<unsigned int>::max())) {
+        throw std::runtime_error("TensorConversion::gridForCount: tensor is too large for CUDA grid dimensions");
+    }
+    return dim3(static_cast<unsigned int>(grid_x), kMaxGridDimY, 1);
+}
+
+__device__ std::size_t globalLinearIndex() {
+    return (static_cast<std::size_t>(blockIdx.y) * gridDim.x + blockIdx.x) * blockDim.x + threadIdx.x;
+}
+
+// ----------------------------------------------------------------------------
+// Generic FP32 <-> BF16 Conversions
+// ----------------------------------------------------------------------------
+
+__global__ void kernel_fp32_to_bf16(
+    const float* __restrict__ src,
+    __nv_bfloat16* __restrict__ dst,
+    std::size_t count)
+{
+    const std::size_t idx = globalLinearIndex();
+    if (idx >= count) return;
+    dst[idx] = __float2bfloat16_rn(src[idx]);
+}
+
+__global__ void kernel_bf16_to_fp32(
+    const __nv_bfloat16* __restrict__ src,
+    float* __restrict__ dst,
+    std::size_t count)
+{
+    const std::size_t idx = globalLinearIndex();
+    if (idx >= count) return;
+    dst[idx] = __bfloat162float(src[idx]);
+}
 
 // ----------------------------------------------------------------------------
 // BHSD float <-> BSHD bf16 Conversions (FlashAttention v2 input/output)
@@ -314,6 +360,28 @@ __global__ void kernel_merge_qkv_grads_gqa(
 // ============================================================================
 // Host Wrapper Functions
 // ============================================================================
+
+void convert_fp32_to_bf16(const float* src, __nv_bfloat16* dst,
+                          std::size_t count,
+                          cudaStream_t stream)
+{
+    if (!src) throw std::runtime_error("convert_fp32_to_bf16: src is NULL");
+    if (!dst) throw std::runtime_error("convert_fp32_to_bf16: dst is NULL");
+    if (count == 0) throw std::runtime_error("convert_fp32_to_bf16: count is zero");
+    if (stream == nullptr) throw std::runtime_error("convert_fp32_to_bf16: stream is NULL - caller MUST provide valid CUDA stream");
+    kernel_fp32_to_bf16<<<gridForCount(count), BLOCK_SIZE, 0, stream>>>(src, dst, count);
+}
+
+void convert_bf16_to_fp32(const __nv_bfloat16* src, float* dst,
+                          std::size_t count,
+                          cudaStream_t stream)
+{
+    if (!src) throw std::runtime_error("convert_bf16_to_fp32: src is NULL");
+    if (!dst) throw std::runtime_error("convert_bf16_to_fp32: dst is NULL");
+    if (count == 0) throw std::runtime_error("convert_bf16_to_fp32: count is zero");
+    if (stream == nullptr) throw std::runtime_error("convert_bf16_to_fp32: stream is NULL - caller MUST provide valid CUDA stream");
+    kernel_bf16_to_fp32<<<gridForCount(count), BLOCK_SIZE, 0, stream>>>(src, dst, count);
+}
 
 void convert_BHSD_to_BSHD_bf16(const float* src, __nv_bfloat16* dst,
                                int B, int H, int S, int D,

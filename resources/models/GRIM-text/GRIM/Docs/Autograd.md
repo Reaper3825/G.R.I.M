@@ -56,6 +56,11 @@ When kernel B reads data written by kernel A via `atomicAdd`, you MUST `cudaStre
 ## Registered parameter gradient lifecycle
 Parameter gradient zeroing is owned by the TensorContract `ParameterGroup` inventory. `executeAutogradBackward()` calls `zeroParameterGradients(model.parameterGroups(), stream)` only when `accumulate=false`; it must not enumerate embedding, LM-head, encoder, MTP, execution-block, selector, or reasoning-head tensors directly. Adding a trainable tensor means registering it in `Startup/Model/ParameterGroupRegistration.{hpp,cu}` so optimizer stepping, clipping, diagnostics, and zeroing all see the same source of truth.
 
+## Tensor precision metadata
+Tensor precision is TensorContract metadata, just like shape/layout. Startup `ParameterGroupRegistration` maps the authored `LanguageModelConfig::parameter_precision_*` value onto both the registered `ParameterGroup` and the owning `Tensor::compute_precision`. TensorContract operators are responsible for reading that metadata at operation boundaries and invoking conversion when needed; layers, optimizer code, and diagnostics must not carry a second precision policy object.
+
+`Shared/TensorConversion` owns raw precision conversion operators (`convert_fp32_to_bf16`, `convert_bf16_to_fp32`) and layout conversion kernels. TensorContract may call TensorConversion, but conversion kernels must not be copied into GradFns or layer files. Persistent parameter data, gradient buffers, and optimizer moments remain FP32 unless an explicit TensorContract operator changes that contract. During gradient accumulation, leaf gradients are still Category 2 state and must be accumulated additively.
+
 ## Gradient connectivity verification
 `verifyGradientsAreConnected()` scans each checked gradient tensor in full when computing finite/nonzero/RMS diagnostics. Do not reintroduce prefix sampling caps: a zero prefix (for example the first rows of `attnWqkv.grad`) is not evidence that the full parameter tensor missed gradient signal.
 

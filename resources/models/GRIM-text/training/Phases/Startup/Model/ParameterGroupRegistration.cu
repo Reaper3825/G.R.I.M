@@ -96,6 +96,25 @@ const char* parameterPrecisionSummaryName(ParameterGroupPrecision precision) {
     throw std::runtime_error("[buildParameterGroups] invalid ParameterGroupPrecision in registered group summary");
 }
 
+void validateRegisteredPrecisionSupport(const std::string& name,
+                                        ParamGroupType type,
+                                        ParameterGroupPrecision precision) {
+    switch (precision) {
+        case ParameterGroupPrecision::FP32:
+            return;
+        case ParameterGroupPrecision::BF16_COMPUTE:
+            throw std::runtime_error("[buildParameterGroups] " + name +
+                                     " requests BF16_COMPUTE for parameter group type " +
+                                     paramGroupTypeSummaryName(type) +
+                                     ", but TensorContract implicit BF16 compute consumers are not wired for optimizer-visible parameter tensors in this build; set training.config.precision.parameter_groups." +
+                                     paramGroupTypeSummaryName(type) + " to fp32");
+        case ParameterGroupPrecision::UNSPECIFIED:
+            break;
+    }
+    throw std::runtime_error("[buildParameterGroups] " + name +
+                             " has UNSPECIFIED or unknown ParameterGroupPrecision");
+}
+
 template <typename LayerT>
 LayerT& requireLayer(LayerT* layer, const char* layer_name, const char* caller) {
     if (!layer) {
@@ -138,13 +157,28 @@ public:
                                      tensorDebugSummary(tensor) + " layer=" + std::to_string(layer));
         }
 
+        const ParameterGroupPrecision precision = precisionForType(type);
+        validateRegisteredPrecisionSupport(name, type, precision);
+
+        const TensorContract::PrecisionType tensor_precision =
+            TensorContract::precision_from_parameter_group_precision(precision);
+        if (tensor.precision() != TensorContract::PrecisionType::FP32 &&
+            tensor.precision() != tensor_precision) {
+            throw std::runtime_error("[buildParameterGroups] " + name +
+                                     " tensor precision metadata already equals " +
+                                     TensorContract::precision_name(tensor.precision()) +
+                                     " but registration requires " +
+                                     TensorContract::precision_name(tensor_precision));
+        }
+        tensor.set_compute_precision(tensor_precision, "ParameterGroupRegistration::Registrar::addTensor");
+
         ParameterGroup group{};
         group.name = name;
         group.tensor = &tensor;
         group.m_tensor = nullptr;
         group.v_tensor = nullptr;
         group.type = type;
-        group.parameter_precision = precisionForType(type);
+        group.parameter_precision = precision;
         group.stats_bucket = stats_bucket;
         group.layer_index = layer;
         group.weight_decay_multiplier = wd_mult;
@@ -224,6 +258,12 @@ void validateEmbeddingLmHeadAliasing(const Tensor& embedding_weights,
     if (!tied && same_data) {
         throw std::runtime_error("[buildParameterGroups] tie_embeddings=false but embedding and LM-head data pointers are identical: embedding=" +
                                  tensorDebugSummary(embedding_weights) + " lm_head=" + tensorDebugSummary(lm_head_weights));
+    }
+    if (tied && config.parameter_precision_embedding != config.parameter_precision_lm_head) {
+        throw std::runtime_error("[buildParameterGroups] tie_embeddings=true requires precision.parameter_groups.embedding and precision.parameter_groups.lm_head to match; embedding=" +
+                                 std::string(parameterPrecisionSummaryName(config.parameter_precision_embedding)) +
+                                 " lm_head=" +
+                                 std::string(parameterPrecisionSummaryName(config.parameter_precision_lm_head)));
     }
 }
 
@@ -557,6 +597,26 @@ void validateOptimizerStateAllocation(const std::vector<ParameterGroup>& groups,
     }
 }
 
+void validateRegisteredTensorPrecisionMetadata(const std::vector<ParameterGroup>& groups) {
+    for (const auto& group : groups) {
+        if (!group.tensor) {
+            throw std::runtime_error("[buildParameterGroups] group " + group.name +
+                                     " has NULL tensor while validating precision metadata");
+        }
+        validateRegisteredPrecisionSupport(group.name, group.type, group.parameter_precision);
+        const TensorContract::PrecisionType expected =
+            TensorContract::precision_from_parameter_group_precision(group.parameter_precision);
+        const TensorContract::PrecisionType actual = group.tensor->precision();
+        if (actual != expected) {
+            throw std::runtime_error("[buildParameterGroups] group " + group.name +
+                                     " parameter_precision=" +
+                                     parameterPrecisionSummaryName(group.parameter_precision) +
+                                     " but TensorContract tensor metadata is " +
+                                     TensorContract::precision_name(actual));
+        }
+    }
+}
+
 void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
     constexpr size_t kParamGroupTypeCount = static_cast<size_t>(ParamGroupType::COUNT);
     constexpr size_t kPrecisionCount = 2;
@@ -681,6 +741,7 @@ void buildParameterGroups(LanguageModel& model) {
     registerMtpParameters(model, registrar, config);
     registerFinalRmsGamma(model, registrar, config);
 
+    validateRegisteredTensorPrecisionMetadata(rebuilt_groups);
     clearOptimizerBindings(rebuilt_groups);
 
     // Transaction boundary: model.parameterGroups() is replaced only after the

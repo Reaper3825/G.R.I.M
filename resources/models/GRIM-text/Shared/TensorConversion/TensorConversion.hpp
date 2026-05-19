@@ -25,6 +25,32 @@
 namespace TensorConversion {
 
 // ============================================================================
+// Generic Precision Conversions
+// ============================================================================
+
+/**
+ * Convert a contiguous FP32 buffer to BF16.
+ * TensorContract owns the tensor metadata and calls this owner when an operation
+ * boundary requires an implicit precision conversion.
+ *
+ * @throws std::runtime_error if src/dst/stream is NULL or count is zero
+ */
+void convert_fp32_to_bf16(const float* src, __nv_bfloat16* dst,
+                          std::size_t count,
+                          cudaStream_t stream);
+
+/**
+ * Convert a contiguous BF16 buffer to FP32.
+ * TensorContract owns the tensor metadata and calls this owner when an operation
+ * boundary requires an implicit precision conversion.
+ *
+ * @throws std::runtime_error if src/dst/stream is NULL or count is zero
+ */
+void convert_bf16_to_fp32(const __nv_bfloat16* src, float* dst,
+                          std::size_t count,
+                          cudaStream_t stream);
+
+// ============================================================================
 // Attention Tensor Conversions (4D tensors)
 // ============================================================================
 
