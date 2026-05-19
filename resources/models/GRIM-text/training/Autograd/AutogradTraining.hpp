@@ -96,9 +96,6 @@ struct BackwardResult {
  * backward, put it in AutogradIntermediates (owned by TrainingState).
  */
 struct AutogradContext {
-    explicit AutogradContext(const HyperParameters::LossConfigHP& phase1_loss_config)
-        : loss_config(phase1_loss_config) {}
-
     // ═══════════════════════════════════════════════════════════════════════════
     // MODEL REFERENCES (non-owning pointers)
     // ═══════════════════════════════════════════════════════════════════════════
@@ -145,12 +142,10 @@ struct AutogradContext {
     bool skip_equation_logging = false;
     
     // ═══════════════════════════════════════════════════════════════════════════
-    // LOSS CONFIGURATION
-    // Borrowed from the Phase1-authored TrainingContext.loss_config grouping.
-    // d_class_weights is runtime TrainingState, kept separate from
-    // hyperparameter ownership.
+    // LOSS RUNTIME INPUTS
+    // d_class_weights is runtime TrainingState, kept separate from the
+    // Phase1-authored LossConfigHP grouping passed directly to loss assembly.
     // ═══════════════════════════════════════════════════════════════════════════
-    const HyperParameters::LossConfigHP& loss_config;
     const float* d_class_weights = nullptr;
     
 
@@ -205,7 +200,6 @@ AutogradContext initAutogradContext(
     cudaStream_t stream,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
-    const HyperParameters::LossConfigHP& loss_config,
     uint64_t batch_idx,
     bool is_training = true
 );
@@ -234,10 +228,12 @@ ForwardResult executeAutogradForward(AutogradContext& ctx);
  * 
  * @param ctx     Autograd context (must have logits populated by executeAutogradForward,
  *                 and ctx.payload set to a valid BatchPayload)
+ * @param loss_config Phase1-authored loss hyperparameter grouping
  * @param mtp_alpha_effective Phase2-derived MTP loss weight for this batch
  */
 LossResult computeAutogradLoss(
     AutogradContext& ctx,
+    const HyperParameters::LossConfigHP& loss_config,
     float mtp_alpha_effective
 );
 

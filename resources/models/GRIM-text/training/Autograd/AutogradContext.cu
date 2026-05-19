@@ -88,13 +88,12 @@ AutogradContext initAutogradContext(
     cudaStream_t stream,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
-    const HyperParameters::LossConfigHP& loss_config,
     uint64_t batch_idx,
     bool is_training
 ) {
     validateDeviceBindingsForPayload(payload, bindings, "initAutogradContext(payload)");
 
-    AutogradContext ctx(loss_config);
+    AutogradContext ctx;
     populateCommonContext(
         ctx, config, training_state, gpu_encoder, embedding_layer, lm_head,
         scratch_block, reasoning_head, execution_block, cublas_handle, stream,

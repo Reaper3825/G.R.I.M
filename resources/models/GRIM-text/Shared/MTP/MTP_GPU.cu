@@ -71,6 +71,7 @@ void computeMTPAuxiliaryLosses(
     Autograd::AutogradContext& ctx,
     Autograd::AutogradIntermediates& intermediates,
     MTPDiagnostics& diagnostics,
+    const HyperParameters::LossConfigHP& loss_config,
     float mtp_alpha_effective
 ) {
     const auto* cfg = ctx.config;
@@ -184,7 +185,7 @@ void computeMTPAuxiliaryLosses(
             payload,
             *ctx.device_bindings,
             k,
-            ctx.loss_config,
+            loss_config,
             ctx.d_class_weights,
             ctx.stream
         );

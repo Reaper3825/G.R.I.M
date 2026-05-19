@@ -62,12 +62,14 @@ void launchMTPAccuracyKernel(
  * @param ctx           AutogradContext with model, config, stream, payload
  * @param intermediates AutogradIntermediates owning encoder_output, centered output, loss_tensor, per-head target buffers
  * @param diagnostics   Host-side per-step MTP telemetry payload
+ * @param loss_config   Phase1-authored loss hyperparameter grouping
  * @param mtp_alpha_effective Phase2-derived MTP loss weight for this batch
  */
 void computeMTPAuxiliaryLosses(
     Autograd::AutogradContext& ctx,
     Autograd::AutogradIntermediates& intermediates,
     MTPDiagnostics& diagnostics,
+    const HyperParameters::LossConfigHP& loss_config,
     float mtp_alpha_effective
 );
 

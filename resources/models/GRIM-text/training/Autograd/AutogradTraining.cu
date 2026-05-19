@@ -392,6 +392,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
 
 LossResult computeAutogradLoss(
     AutogradContext& ctx,
+    const HyperParameters::LossConfigHP& loss_config,
     float mtp_alpha_effective
 ) {
     LossResult result{};
@@ -442,7 +443,7 @@ LossResult computeAutogradLoss(
         intermediates.logits_tensor,
         payload,
         *ctx.device_bindings,
-        ctx.loss_config,
+        loss_config,
         ctx.d_class_weights,
         ctx.stream
     );
@@ -463,7 +464,7 @@ LossResult computeAutogradLoss(
     // 2. MTP (multi-token prediction) auxiliary losses: L_total += α/K * Σ_k L_k
     // Delegated to MTP_GPU module (see Shared/MTP/MTP_GPU.cu)
     // ═══════════════════════════════════════════════════════════════════════════
-    GRIM::MTP::computeMTPAuxiliaryLosses(ctx, intermediates, result.mtp_diagnostics, mtp_alpha_effective);
+    GRIM::MTP::computeMTPAuxiliaryLosses(ctx, intermediates, result.mtp_diagnostics, loss_config, mtp_alpha_effective);
 
     float mtp_loss = 0.0f;
     if (result.mtp_diagnostics.valid) {
@@ -1332,7 +1333,6 @@ LossResult autogradTrainingStep(
         stream,
         payload,
         bindings,
-        loss_config,
         batch_idx,
         true
     );
@@ -1383,7 +1383,7 @@ LossResult autogradTrainingStep(
             : 0.0f;
     }
     
-    LossResult loss_result = computeAutogradLoss(ctx, mtp_alpha_effective);
+    LossResult loss_result = computeAutogradLoss(ctx, loss_config, mtp_alpha_effective);
     if (!loss_result.success) {
         loss_result.error_message = "autogradTrainingStep: Loss failed - " + loss_result.error_message;
         // Rule 20 single-owner clear: caller's AutogradStepScope handles intermediates.

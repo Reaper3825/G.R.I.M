@@ -1034,9 +1034,9 @@ For each encoding layer (Layer 0 → Layer 11):
   - **LossContext.hpp DELETED:** final loss-options wrapper moved into `HyperParameters::LossConfigHP` in `HyperparameterGroupings.hpp`; no loss-owned/model-owned config wrapper remains.
   - **CMakeLists.txt UPDATED:** Removed `CrossEntropy_GPU.cu` from `grim_training_kernels` STATIC library
   - **Verification:** `Loss::LossContext` was NEVER constructed in any .cu file. All 5 sub-module functions only had declarations + implementations — zero callers.
-  - **Production loss path** (UNCHANGED): `BatchPayload → AutogradContext → computeAutogradLoss() → unified_loss()` via AutogradLoss.cu
+  - **Production loss path**: `BatchPayload + LossConfigHP → AutogradContext → computeAutogradLoss() → unified_loss()` via AutogradLoss.cu
   - **Still alive:**
-    - `HyperParameters::LossConfigHP` — config flow: Phase1 `TrainingContext.loss_config` → autogradTrainingStep → unified_loss
+    - `HyperParameters::LossConfigHP` — config flow: Phase1 `TrainingContext.loss_config` → autogradTrainingStep → computeAutogradLoss/MTP → unified_loss
     - `autograd::unified_loss()` — the one true loss path (AutogradLoss.cu/hpp)
     - `NumericLoss/NumericLoss_GPU.cu/hpp` — auxiliary numeric regression head (called from AutogradTraining.cu)
 
@@ -1051,7 +1051,7 @@ For each encoding layer (Layer 0 → Layer 11):
 - [x] **AutogradTraining.cu** ✅ AUDITED & FULLY REFACTORED (2070 lines, 4 major functions)
   - **PRIMARY BACKWARD PATH**: `executeAutogradBackward(ctx)` — handles text loss + numeric loss + learned weighting + ScratchBlock backward
   - **PRIMARY FORWARD PATH**: `executeAutogradForward(ctx)` — full model forward through autograd graph
-  - **PRIMARY LOSS PATH**: `computeAutogradLoss(ctx, payload)` — text CE + numeric + learned weighting, returns `LossResult`
+  - **PRIMARY LOSS PATH**: `computeAutogradLoss(ctx, loss_config, mtp_alpha_effective)` — text CE + auxiliary loss assembly, returns `LossResult`
   - **PRIMARY TRAINING STEP**: `autogradTrainingStep(model, training_state, payload, ...)` — GPU copies + forward + loss + backward in single call
   - **FIXED (Issue #140)**: Removed √d_model embedding scaling (scale=1.0f) — eliminates 27.7x gradient asymmetry for tied weights
   - **FIXED (Issue #141)**: ScratchBlock backward now uses gradient tap buffer — `atom_projection_` and `atom_type_embeddings_` are trained ✅
