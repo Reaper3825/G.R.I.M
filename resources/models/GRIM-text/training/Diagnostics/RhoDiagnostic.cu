@@ -194,8 +194,11 @@ void computeRhoDiagnostic(
         float rms_min_val = *std::min_element(rms_vals.begin(), rms_vals.end());
         float rms_max_val = *std::max_element(rms_vals.begin(), rms_vals.end());
 
-        // Compute pairwise |cos| over sampled position pairs
-        // Also accumulate raw |dot| and norm products separately.
+        // Compute pairwise |cos| over sampled position pairs.
+        // Raw dot metrics use P = C(n_sample, 2):
+        //   avg_signed_dot = P^-1 Σ_{i<j}(h_i · h_j)
+        //   centered_avg_abs_dot = P^-1 Σ_{i<j}|h̃_i · h̃_j|
+        // Rho alone skips zero-denominator pairs because cos is undefined there.
         // cos = |dot| / (rms_i * rms_j * d_model)
         double cos_acc = 0.0;
         double dot_acc = 0.0;       // Σ|dot(h_i, h_j)|
@@ -203,13 +206,12 @@ void computeRhoDiagnostic(
         double centered_dot_acc = 0.0; // Σ|dot(h_i - μ, h_j - μ)|
         double norm_prod_acc = 0.0; // Σ(rms_i * rms_j * d_model)
         int n_pairs = 0;
+        int n_cos_pairs = 0;
         for (int si = 0; si < n_sample; ++si) {
             const int vi = sample_indices[si];
-            if (rms_vals[vi] < 1e-8f) continue;
             const int ri = valid_positions[vi];
             for (int sj = si + 1; sj < n_sample; ++sj) {
                 const int vj = sample_indices[sj];
-                if (rms_vals[vj] < 1e-8f) continue;
                 const int rj = valid_positions[vj];
                 double dot = 0.0;
                 double centered_dot = 0.0;
@@ -221,19 +223,31 @@ void computeRhoDiagnostic(
                 }
                 double abs_dot = std::abs(dot);
                 double denom = static_cast<double>(rms_vals[vi]) * rms_vals[vj] * d_model;
-                cos_acc += abs_dot / denom;
                 dot_acc += abs_dot;
                 signed_dot_acc += dot;
                 centered_dot_acc += std::abs(centered_dot);
                 norm_prod_acc += denom;
                 ++n_pairs;
+                if (denom > 1e-8) {
+                    cos_acc += abs_dot / denom;
+                    ++n_cos_pairs;
+                }
             }
         }
-        float rho = (n_pairs > 0) ? static_cast<float>(cos_acc / n_pairs) : 0.0f;
-        float avg_abs_dot = (n_pairs > 0) ? static_cast<float>(dot_acc / n_pairs) : 0.0f;
-        float avg_signed_dot = (n_pairs > 0) ? static_cast<float>(signed_dot_acc / n_pairs) : 0.0f;
-        float centered_avg_abs_dot = (n_pairs > 0) ? static_cast<float>(centered_dot_acc / n_pairs) : 0.0f;
-        float avg_norm_prod = (n_pairs > 0) ? static_cast<float>(norm_prod_acc / n_pairs) : 0.0f;
+        float rho = 0.0f;
+        if (n_cos_pairs > 0) {
+            rho = static_cast<float>(cos_acc / n_cos_pairs);
+        }
+        float avg_abs_dot = 0.0f;
+        float avg_signed_dot = 0.0f;
+        float centered_avg_abs_dot = 0.0f;
+        float avg_norm_prod = 0.0f;
+        if (n_pairs > 0) {
+            avg_abs_dot = static_cast<float>(dot_acc / n_pairs);
+            avg_signed_dot = static_cast<float>(signed_dot_acc / n_pairs);
+            centered_avg_abs_dot = static_cast<float>(centered_dot_acc / n_pairs);
+            avg_norm_prod = static_cast<float>(norm_prod_acc / n_pairs);
+        }
         return {rho, avg_rms, avg_abs_dot, avg_signed_dot, avg_norm_prod,
                 rms_min_val, rms_max_val, centered_avg_abs_dot, mean_rms};
     };
@@ -315,9 +329,9 @@ void computeRhoDiagnostic(
     rho_eq << std::fixed << std::setprecision(4);
     rho_eq << "[RHO_BUILDUP_EQUATION] ρ(l) = avg|cos(h_i^l, h_j^l)|, "
            << "Δρ = ρ(l) - ρ(prev_collected)\n";
-        rho_eq << "  RAW DOT: avg_signed_dot(l)=avg_{i<j}(h_i^l · h_j^l)\n";
+        rho_eq << "  RAW DOT: avg_signed_dot(l)=P^-1 Σ_{i<j}(h_i^l · h_j^l), P=C(n_sample,2)\n";
         rho_eq << "  CENTERED DOT: μ_l=(1/N)Σ_i h_i^l, h̃_i^l=h_i^l-μ_l, "
-            << "centered_avg_abs_dot(l)=avg_{i<j}|h̃_i^l · h̃_j^l|, "
+            << "centered_avg_abs_dot(l)=P^-1 Σ_{i<j}|h̃_i^l · h̃_j^l|, "
             << "mean_rms(l)=sqrt((1/d_model)Σ_d μ_{l,d}²)\n";
     rho_eq << "  ARCH: h^l = h^{l-1} + LS*Attn(RMSNorm(h^{l-1})) "
            << "+ LS*FFN(RMSNorm(...))\n";
@@ -456,7 +470,7 @@ void computeRhoDiagnostic(
         } else if (rms_spread > 2.0f) {
             rho_eq << "  [WARNING] rms spread >2x — watch denominator";
         }
-        rho_eq << "\n";
+         rho_eq << "\n";
          rho_eq << "  CENTERED(" << last_label << "): centered_avg_abs_dot="
              << last_lr.centered_avg_abs_dot
              << " mean_rms=" << last_lr.mean_rms << "\n";
