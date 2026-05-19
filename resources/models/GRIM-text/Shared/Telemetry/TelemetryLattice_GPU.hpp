@@ -225,6 +225,12 @@ enum class MetricStream : int {
     INIT_OPT_GROUPS_TOTAL = 52,  // count of parameter groups built
     INIT_OPT_GROUPS_EMB   = 53,  // groups whose tensor matches emb_weight_ptr
     INIT_OPT_GROUPS_LM    = 54,  // groups whose tensor matches lm_weight_ptr
+
+    // Rho mean-removal / signed-dot diagnostics — final collected layer only,
+    // emitted by RHO_BUILDUP_EQUATION at the rho diagnostic cadence.
+    RHO_RAW_AVG_SIGNED_DOT   = 55, // mean dot(h_i,h_j) over sampled valid pairs
+    RHO_CENTERED_AVG_ABS_DOT = 56, // mean|dot(h_i-μ,h_j-μ)| over sampled valid pairs
+    RHO_MEAN_VECTOR_RMS      = 57, // sqrt(mean_d μ_d²), μ = mean_i h_i
 };
 
 const char* getMetricStreamName(MetricStream stream);

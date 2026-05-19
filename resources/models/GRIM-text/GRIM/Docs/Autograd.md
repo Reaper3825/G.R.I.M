@@ -29,6 +29,9 @@ The Rule 20 ownership taxonomy in `.github/copilot-instructions.md` is the autho
 ## Mandatory `return` in autograd forwards
 Always explicitly `return output;` from any autograd forward function. A missing return destroys the `grad_fn` chain during forward → illegal memory access in backward.
 
+## Mandatory GradFn operation names
+Every concrete `GradFn` constructor must set `op_name` to a non-empty static string before the node is attached to a tensor. TensorContract grad-flow diagnostics fail loud on a missing name so debug logs can attribute backward anomalies to the exact operation instead of emitting anonymous tape nodes.
+
 ## Boundary call sites (single-owner rule)
 - `autograd_intermediates.clear()` — exactly **one** call site (the RAII `AutogradStepScope`).
 - `flushDeferredCleanup()` — owned by `Tensor::backward()`. No external calls.

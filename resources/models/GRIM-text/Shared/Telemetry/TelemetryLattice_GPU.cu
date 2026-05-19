@@ -359,6 +359,9 @@ const char* getMetricStreamName(MetricStream stream) {
         case MetricStream::INIT_OPT_GROUPS_TOTAL: return "init_opt_groups_total";
         case MetricStream::INIT_OPT_GROUPS_EMB: return "init_opt_groups_emb";
         case MetricStream::INIT_OPT_GROUPS_LM: return "init_opt_groups_lm";
+        case MetricStream::RHO_RAW_AVG_SIGNED_DOT: return "rho_raw_avg_signed_dot";
+        case MetricStream::RHO_CENTERED_AVG_ABS_DOT: return "rho_centered_avg_abs_dot";
+        case MetricStream::RHO_MEAN_VECTOR_RMS: return "rho_mean_vector_rms";
         default: return "unknown";
     }
 }

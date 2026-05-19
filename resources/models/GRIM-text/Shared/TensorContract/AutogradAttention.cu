@@ -1753,6 +1753,8 @@ struct RoPEGradFn : public GradFn {
     // SplitAndReshapeQKVGradFn from reading a dangling pointer.
     std::shared_ptr<float> owned_grad_buf;
 
+    RoPEGradFn() { op_name = "rope_rotation"; }
+
     void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
         if (!shared) {
             throw std::runtime_error("RoPEGradFn::apply: shared state is NULL - RoPE forward must initialize shared state");

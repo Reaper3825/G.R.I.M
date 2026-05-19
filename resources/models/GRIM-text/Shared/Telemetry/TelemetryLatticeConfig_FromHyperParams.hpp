@@ -38,6 +38,8 @@ namespace GRIM::Telemetry {
  *  39-44  h<->W alignment
  *  45-46  unigram-dir cosine
  *  47     lm_head_w_rms_rms
+ *  48-54  init-time invariants
+ *  55-57  rho signed/centered/mean-vector diagnostics
  */
 inline LatticeConfig makeLatticeConfigFromHyperparameters(
     const ::GRIM::Config::TrainingHyperparameters& hp,

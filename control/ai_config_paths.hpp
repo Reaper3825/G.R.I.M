@@ -423,12 +423,13 @@ inline void setDefaultHyperparameters(TrainingHyperparameters& params) {
     params.telemetry_plateau_noise_max_per_epoch = 3;
 
     // ── Telemetry lattice (TelemetryLattice construction params) ──
-    // num_streams=55: 0-4 core, 5-8 rho, 9-13 adam, 14-20 exec block, 21-26 EB/SB injection,
+    // num_streams=58: 0-4 core, 5-8 rho, 9-13 adam, 14-20 exec block, 21-26 EB/SB injection,
     // 27-30 PBM, 31-34 rho raw, 35-37 RMS gamma, 38 rho rms-spread, 39-44 h<->W alignment,
     // 45-46 unigram-dir cosine, 47 lm_head_w_rms_rms,
-    // 48-54 init-time structural invariants (tie/ownership/optimizer-group; see InitFacts.cu)
+    // 48-54 init-time structural invariants (tie/ownership/optimizer-group; see InitFacts.cu),
+    // 55-57 rho signed/centered/mean-vector diagnostics.
     params.telemetry_lattice_num_levels = 8;     // k in [0,7]: strides [1,2,4,8,16,32,64,128]
-    params.telemetry_lattice_num_streams = 55;
+    params.telemetry_lattice_num_streams = 58;
     params.telemetry_lattice_beta_mu = 0.95f;
     params.telemetry_lattice_beta_a = 0.995f;
     params.telemetry_lattice_beta_delta = 0.90f;

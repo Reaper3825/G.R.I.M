@@ -636,7 +636,7 @@
                     "epsilon": 1e-07,
                     "k_out0": 2.5,
                     "num_levels": 8,
-                    "num_streams": 55,
+                    "num_streams": 58,
                     "strict_mode": true
                 },
                 "logging": {
