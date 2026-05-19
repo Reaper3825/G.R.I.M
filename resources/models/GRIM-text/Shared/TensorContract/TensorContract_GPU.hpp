@@ -1177,6 +1177,20 @@ Tensor layer_scale(const Tensor& x, Tensor& scale_param, cudaStream_t stream = n
 Tensor center_rows(const Tensor& x, cudaStream_t stream = nullptr);
 
 /**
+ * Fixed hard token-layout type gate over rows whose row index is a token ID.
+ * Forward: y[v,d] = x[v,d] inside token-type subspace(v), else 0.
+ * Backward applies the same mask before propagating to x.
+ */
+Tensor type_gate_rows_by_token_type(const Tensor& x, cudaStream_t stream = nullptr);
+
+/**
+ * Fixed hard token-layout type gate plus row centering inside the active
+ * subspace only. Inactive dimensions stay exactly zero in forward and backward.
+ * Intended for LM-head effective weights when hidden-state centering is active.
+ */
+Tensor center_rows_by_token_type_gate(const Tensor& x, cudaStream_t stream = nullptr);
+
+/**
  * Center columns (positions) - subtract mean across rows for each column
  * ISSUE #118 PROPER FIX: This is the CORRECT centering dimension!
  * 

@@ -153,11 +153,12 @@ private:
     // accessors above, this constrains writes to the four declared paths.
     Tensor final_rms_gamma_frozen_or_trained_;  // [d_model] — pre-LM-head RMSNorm gamma, always owned
 
-    // April 2026: Workspace for the row-centered LM head weight matrix
-    // (Σ_d W[v,d]=0 constraint that replaces row-centering of hidden states).
-    // Held as a member so its data buffer outlives forward() — the matmul GradFn
-    // captures W via this tensor, and backward must dereference its .data and
-    // grad chain after forward() has returned.
+    // Workspace for the effective LM-head weight matrix. It is always hard
+    // token-type gated. When hidden-state centering is enabled, active dims are
+    // also row-centered inside the token-type subspace. Held as a member so its
+    // data buffer outlives forward() — the matmul GradFn captures W_eff via this
+    // tensor and backward must dereference its .data and grad chain after
+    // forward() has returned.
     Tensor centered_weights_;
 
     bool owns_weights_ = true;  // false when tied to embedding weights

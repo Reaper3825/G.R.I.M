@@ -69,12 +69,15 @@ struct EmbeddingGradFn : public GradFn {
 };
 
 /**
- * Embedding lookup: output[i] = weight[token_ids[i]] * embedding_scale
+ * Embedding lookup with fixed hard token-type gate:
+ *   output[i,d] = weight[token_ids[i],d] * embedding_scale
+ *                 if d is in the token-layout type subspace, else 0.
  *
- * Forward gathers from a 2D weight table [vocab_size, d_model] and writes a
- * BSM-shaped [num_tokens, d_model] activation. If weight.requires_grad, an
- * EmbeddingGradFn is attached to the result so that the eventual backward
- * scatter-adds into weight.grad.
+ * Forward gathers from a 2D weight table [vocab_size, d_model], applies the
+ * same fixed token-layout type gate used by the LM head, and writes a BSM-shaped
+ * [num_tokens, d_model] activation. If weight.requires_grad, an EmbeddingGradFn
+ * is attached to the result so that the eventual backward scatter-adds into
+ * weight.grad only inside the active type subspace.
  *
  * Public signature is also declared in TensorContract_GPU.hpp under
  * namespace GRIM::autograd; the definition lives in EmbeddingGradFn.cu.

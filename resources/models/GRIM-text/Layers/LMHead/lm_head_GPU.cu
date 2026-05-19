@@ -307,21 +307,21 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
     weights_.requires_grad = true;
     weights_.shape = TensorContract::TensorShape::make_BSM(hp_.vocab_size, hp_.d_model);
 
-    // April 2026: When hidden-state centering is enabled, project through a
-    // row-centered VIEW of W (Σ_d W[v,d]=0). Forward and backward both pick up
-    // the invariance described above. centered_weights_ is held as a member so
-    // its data buffer and CenterRowsGradFn chain survive past this function and
-    // remain valid for backward(). When centering is disabled we project through
-    // raw weights_ as before.
-    const Tensor* effective_weights = &weights_;
+    // Hard type gate: project through W_eff whose row index is interpreted as a
+    // token ID and whose active dimensions are fixed by TokenLayout class
+    // (special/byte/atom/unigram). This is symmetric with autograd::embedding()
+    // so tied embeddings cannot leak inactive dimensions through the classifier.
+    const Tensor* effective_weights = nullptr;
     if (hp_.center_hidden_states) {
-        centered_weights_ = autograd::center_rows(weights_, stream);
-        centered_weights_.name = "lm_head.centered_weights";
-        effective_weights = &centered_weights_;
+        centered_weights_ = autograd::center_rows_by_token_type_gate(weights_, stream);
+        centered_weights_.name = "lm_head.centered_token_type_gated_weights";
     } else {
-        // Drop any stale buffer from a previous centered run — keeps memory honest.
-        centered_weights_ = Tensor();
+        centered_weights_ = autograd::type_gate_rows_by_token_type(weights_, stream);
     }
+    centered_weights_.name = hp_.center_hidden_states
+        ? "lm_head.centered_token_type_gated_weights"
+        : "lm_head.token_type_gated_weights";
+    effective_weights = &centered_weights_;
 
     if (!matmul_input->data) {
         throw std::runtime_error("LMHeadLayer::forward: matmul input has null data - cannot compute weight gradient. "
@@ -345,6 +345,7 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
         hp_.center_hidden_states,
         hp_.project_out_pc1,
         hp_.center_hidden_states,
+        true,
         total_tokens,
         d_model,
         hp_.vocab_size,

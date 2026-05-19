@@ -168,6 +168,7 @@ void logLmHeadGemmForwardEquation(const Tensor& lm_input,
                                   bool center_hidden_states,
                                   bool project_out_pc1,
                                   bool used_centered_weights,
+                                  bool used_token_type_gate,
                                   int total_tokens,
                                   int d_model,
                                   int vocab_size,
@@ -225,8 +226,12 @@ void logLmHeadGemmForwardEquation(const Tensor& lm_input,
         lm_input_expr = "project_out_pc1(" + lm_input_expr + ")";
     }
     std::string w_eff_expr = "W_lm";
-    if (used_centered_weights) {
+    if (used_centered_weights && used_token_type_gate) {
+        w_eff_expr = "center_rows_by_token_type_gate(W_lm)";
+    } else if (used_centered_weights) {
         w_eff_expr = "center_rows(W_lm)";
+    } else if (used_token_type_gate) {
+        w_eff_expr = "type_gate_rows_by_token_type(W_lm)";
     }
 
     std::ostringstream eq;
@@ -261,7 +266,7 @@ void logLmHeadGemmForwardEquation(const Tensor& lm_input,
        << " rms=" << logit_stats.rms << " ratio=" << ratio
        << " nan=" << logit_stats.nan_count << " inf=" << logit_stats.inf_count << "\n";
     if (used_centered_weights && weight_stats.row_mean_abs_max > 1e-4f) {
-        eq << "  [ANOMALY] W_eff row means are not near zero after center_rows(W_lm): max_abs="
+        eq << "  [ANOMALY] W_eff row means are not near zero after " << w_eff_expr << ": max_abs="
            << weight_stats.row_mean_abs_max << "\n";
     }
     if (std::isfinite(ratio) && ratio > 3.0f) {

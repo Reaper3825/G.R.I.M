@@ -14,6 +14,7 @@
 
 #include "EmbeddingGradFn.hpp"
 #include "../TensorContract_GPU.hpp"
+#include "../TokenTypeGate.hpp"
 #include "../../CudaAllocUtils.hpp"
 
 #include <cuda_runtime.h>
@@ -37,7 +38,8 @@ namespace {
 
 constexpr int AUTOGRAD_BLOCK_SIZE = 256;
 
-// Embedding forward: gather from embedding table with optional scaling
+// Embedding forward: gather from embedding table with optional scaling and a
+// hard token-layout type gate. Inactive dimensions are exactly zero.
 __global__ void kernel_embedding_forward(
     const int* token_ids,       // [tokens]
     const float* weight,        // [vocab_size, d_model]
@@ -60,13 +62,24 @@ __global__ void kernel_embedding_forward(
     const float* weight_row = weight + static_cast<size_t>(token_id) * d_model;
     float* output_row = output + static_cast<size_t>(token_idx) * d_model;
 
-    // Gather with scaling: output[token_idx] = weight[token_id] * scale
+    const auto gate = GRIM::TensorContract::tokenTypeGateRangeForTokenId(token_id, d_model, vocab_size);
+    if (gate.width <= 0) {
+        printf("FATAL: invalid token type gate for token_id=%d d_model=%d vocab_size=%d in kernel_embedding_forward\n",
+               token_id, d_model, vocab_size);
+        __trap();
+    }
+
+    // Gather with scaling and hard gate:
+    // output[token_idx,d] = weight[token_id,d] * scale inside the type subspace, else 0.
     for (int i = threadIdx.x; i < d_model; i += blockDim.x) {
-        output_row[i] = weight_row[i] * embedding_scale;
+        output_row[i] = (i >= gate.start && i < gate.end)
+            ? weight_row[i] * embedding_scale
+            : 0.0f;
     }
 }
 
-// Embedding backward: scatter-add gradients to embedding table
+// Embedding backward: scatter-add gradients to embedding table only in the
+// active token-layout type subspace.
 __global__ void kernel_embedding_backward(
     const float* grad_output,   // [tokens, d_model]
     const int* token_ids,       // [tokens]
@@ -89,10 +102,19 @@ __global__ void kernel_embedding_backward(
     const float* token_grad = grad_output + static_cast<size_t>(token_idx) * d_model;
     float* weight_grad = grad_weight + static_cast<size_t>(token_id) * d_model;
 
+    const auto gate = GRIM::TensorContract::tokenTypeGateRangeForTokenId(token_id, d_model, vocab_size);
+    if (gate.width <= 0) {
+        printf("FATAL: invalid token type gate for token_id=%d d_model=%d vocab_size=%d in kernel_embedding_backward\n",
+               token_id, d_model, vocab_size);
+        __trap();
+    }
+
     // Scatter-add: weight_grad[token_id] += grad_output[token_idx] * scale
     // Chain rule: if forward was y = w * scale, then grad_w = grad_y * scale
     for (int i = threadIdx.x; i < d_model; i += blockDim.x) {
-        atomicAdd(&weight_grad[i], token_grad[i] * embedding_scale);
+        if (i >= gate.start && i < gate.end) {
+            atomicAdd(&weight_grad[i], token_grad[i] * embedding_scale);
+        }
     }
 }
 
@@ -226,10 +248,14 @@ Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens, cud
     }
 
     const int d_model = weight.shape.as_2d().cols;
+    if (d_model < 4) {
+        throw std::invalid_argument("autograd::embedding: d_model must be >= 4 for hard token-type gate, got " +
+                                    std::to_string(d_model));
+    }
     auto output_shape = TensorContract::TensorShape::make_BSM(num_tokens, d_model);
     Tensor result = Tensor::empty(output_shape, weight.requires_grad, stream, "embedding_result");
 
-    // Forward: gather from weight table with scaling
+    // Forward: gather from weight table with scaling and fixed hard type gate.
     // Issue #140: Scale is 1.0f in production (AIAYN sqrt(d_model) removed for tied weights)
     const int vocab_size = weight.shape.as_2d().rows;
     kernel_embedding_forward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
