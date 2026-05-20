@@ -252,6 +252,7 @@ add_library(grim_cuda_kernels OBJECT
     # QKV projector wrappers deleted; autograd attention calls TensorConversion directly.
     # Old Embedding_GPU.cu (dead code) removed. New Embedding_GPU.cu in grim_training_kernels (Pattern B layer).
     ../../Shared/Optimizers/OptimizerUpdate_GPU.cu
+    ../../Shared/Optimizers/OptimizerUpdateTrace.cu
     ../../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.cu
     ../../Shared/Optimizers/RAdamW/RAdamW_Kernal_GPU.cu
     ../BiasGradientKernel.cu  # Bias gradient kernel (was in deleted BackwardKernels.cu)
@@ -457,6 +458,8 @@ add_executable(train_gpu
     ../Diagnostics/LossStatsDiagnostic.hpp
     ../Diagnostics/GradientNormDiagnostic.cu
     ../Diagnostics/GradientNormDiagnostic.hpp
+    ../Diagnostics/PostClipParamGradEmbLmEquation.cu
+    ../Diagnostics/PostClipParamGradEmbLmEquation.hpp
     ../Diagnostics/OptimizerStepGuards.cu
     ../Diagnostics/OptimizerStepGuards.hpp
     ../Diagnostics/TieVerifyDiagnostic.cu

@@ -303,6 +303,7 @@ GeneratedSequence LanguageModel::generateSequenceGPU(
     const auto& prompt_tokens = prompt_payload.input_ids;
     const auto& prompt_numeric_values = prompt_payload.numeric_values;
     const auto& prompt_atom_mask = prompt_payload.atom_mask;
+    const auto& prompt_atom_flags = prompt_payload.atom_flags;
     const auto& prompt_token_to_slot_map = prompt_payload.token_to_slot_map;
     const auto& prompt_atom_entry_ids = prompt_payload.atom_entry_ids;
     const auto& prompt_atom_table = prompt_payload.seq_atom_tables[0];
@@ -331,9 +332,11 @@ GeneratedSequence LanguageModel::generateSequenceGPU(
                                  std::to_string(config_.max_seq_len));
     }
     if (prompt_numeric_values.size() != prompt_tokens.size() ||
-        prompt_atom_mask.size() != prompt_tokens.size()) {
+        prompt_atom_mask.size() != prompt_tokens.size() ||
+        prompt_atom_flags.size() != prompt_tokens.size()) {
         throw std::runtime_error("generateSequenceGPU: side-channel length mismatch");
     }
+    std::vector<uint32_t> sequence_atom_flags = prompt_atom_flags;
     
     if (cfg.max_new_tokens < 0) {
         throw std::runtime_error("generateSequenceGPU: max_new_tokens must be non-negative");
@@ -437,7 +440,7 @@ GeneratedSequence LanguageModel::generateSequenceGPU(
     // =========================================================================
     // AUTOREGRESSIVE GENERATION
     // Step 0: Process full prompt with forwardInit().
-    // Step 1+: forwardStep() chooses the valid path for the active geometry:
+    // Step 1+: forwardStep(BatchPayload) chooses the valid path for the active geometry:
     //   - sequence-local configs: KV-cached single-token decode;
     //   - sequence-coupled centering/projection configs: full current-sequence
     //     prefill, because a one-row decode cannot compute sequence means or PC1.
@@ -555,9 +558,37 @@ GeneratedSequence LanguageModel::generateSequenceGPU(
             break;
         }
         
-        // Run forward pass for this token WITH ScratchBlock metadata
-        logits_vec = forwardStep(sample.token_id, token_numeric_value, token_atom_mask_val,
-                                 new_token_slot_id);
+        // Run forward pass for the caller-authored current sequence payload WITH
+        // ScratchBlock metadata. Inference decode receives the same BatchPayload
+        // contract as prefill; BatchDeviceBindings are produced by uploadBatchToDevice().
+        std::vector<int> next_token_ids = sequence.token_ids;
+        std::vector<float> next_numeric_values = sequence.token_numeric_values;
+        std::vector<uint8_t> next_atom_mask = sequence.token_atom_mask;
+        std::vector<uint32_t> next_atom_flags = sequence_atom_flags;
+        std::vector<int32_t> next_token_to_slot_map = sequence.token_to_slot_map;
+        std::vector<uint32_t> next_atom_entry_ids = sequence.atom_entry_ids;
+
+        next_token_ids.push_back(sample.token_id);
+        next_numeric_values.push_back(token_numeric_value);
+        next_atom_mask.push_back(token_atom_mask_val);
+        next_atom_flags.push_back(0);
+        next_token_to_slot_map.push_back(new_token_slot_id);
+        next_atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
+
+        Batching::BatchPayload step_payload = Batching::buildInferenceBatchPayload(
+            next_token_ids,
+            next_numeric_values,
+            next_atom_mask,
+            next_atom_flags,
+            prompt_atom_table,
+            next_atom_entry_ids,
+            next_token_to_slot_map,
+            config_.vocab_size,
+            static_cast<size_t>(config_.max_cached_batch),
+            static_cast<size_t>(config_.max_cached_seq_len),
+            config_.execution_block_num_slots);
+
+        logits_vec = forwardStep(step_payload);
         if (logits_vec.data.empty()) {
             throw std::runtime_error("generateSequenceGPU: forwardStep returned empty logits");
         }
@@ -569,6 +600,7 @@ GeneratedSequence LanguageModel::generateSequenceGPU(
         sequence.token_atom_mask.push_back(token_atom_mask_val);
         sequence.token_to_slot_map.push_back(new_token_slot_id);
         sequence.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
+        sequence_atom_flags.push_back(0);
         sequence.score += sample.log_probability;
         
         if (stream_callback) {

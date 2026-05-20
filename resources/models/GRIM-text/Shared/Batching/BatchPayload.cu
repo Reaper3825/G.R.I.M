@@ -726,20 +726,6 @@ BatchPayload buildInferenceBatchPayload(
     return payload;
 }
 
-BatchPayload buildInferenceStagedPayload(
-    int seq_len,
-    int vocab_size,
-    size_t max_cached_seq_len,
-    bool execution_active)
-{
-    const char* caller = "buildInferenceStagedPayload";
-    BatchPayload payload = makeInferenceBasePayload(
-        seq_len, vocab_size, 1, max_cached_seq_len,
-        BatchPayloadMode::InferenceStaged, execution_active, caller);
-    payload.validate(caller);
-    return payload;
-}
-
 BatchPayload buildInferenceDecodePayload(int vocab_size)
 {
     const char* caller = "buildInferenceDecodePayload";

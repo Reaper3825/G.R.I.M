@@ -51,7 +51,6 @@ using TeacherStep = GRIM::Execution::TeacherStep;
 enum class BatchPayloadMode {
     Training,
     InferencePrefill,
-    InferenceStaged,
     InferenceDecode
 };
 
@@ -192,7 +191,6 @@ struct BatchPayload {
     bool isTraining() const { return mode == BatchPayloadMode::Training; }
     bool isInference() const { return mode != BatchPayloadMode::Training; }
     bool isInferencePrefill() const { return mode == BatchPayloadMode::InferencePrefill; }
-    bool isInferenceStaged() const { return mode == BatchPayloadMode::InferenceStaged; }
     bool isInferenceDecode() const { return mode == BatchPayloadMode::InferenceDecode; }
     bool ownsHostInputData() const {
         return mode == BatchPayloadMode::Training || mode == BatchPayloadMode::InferencePrefill;
@@ -203,7 +201,6 @@ struct BatchPayload {
         switch (mode) {
             case BatchPayloadMode::Training: return "training";
             case BatchPayloadMode::InferencePrefill: return "inference_prefill";
-            case BatchPayloadMode::InferenceStaged: return "inference_staged";
             case BatchPayloadMode::InferenceDecode: return "inference_decode";
         }
         throw std::runtime_error("BatchPayload.mode contains an unknown value");
@@ -509,17 +506,6 @@ BatchPayload buildInferenceBatchPayload(
     size_t max_cached_batch,
     size_t max_cached_seq_len,
     int execution_num_slots);
-
-/**
- * Build an inference payload for data that is already staged in device cache
- * tensors. This preserves explicit geometry without pretending host arrays own
- * the current device contents.
- */
-BatchPayload buildInferenceStagedPayload(
-    int seq_len,
-    int vocab_size,
-    size_t max_cached_seq_len,
-    bool execution_active);
 
 /** Build a single-token inference decode geometry payload. */
 BatchPayload buildInferenceDecodePayload(int vocab_size);

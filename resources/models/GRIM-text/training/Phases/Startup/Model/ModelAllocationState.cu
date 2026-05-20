@@ -184,18 +184,9 @@ ModelAllocationState captureAndValidateModelAllocationOrThrow(const TrainingCont
                                  " stem=" + std::to_string(cap.max_tokens_per_batch) + ")");
     }
 
-    const auto& token_shape = state.cached_token_ids_tensor.shape.require("ModelAllocated cached_token_ids_tensor");
-    if (!token_shape.is_2d_layout()) {
-        throw std::runtime_error("FATAL: cached_token_ids_tensor must be a 2D token buffer");
-    }
     const auto& logits_shape = state.cached_logits_tensor.shape.require("ModelAllocated cached_logits_tensor");
     if (!logits_shape.is_2d_layout()) {
         throw std::runtime_error("FATAL: cached_logits_tensor must be a 2D logits buffer");
-    }
-    if (token_shape.as_2d().cols != static_cast<int>(cap.max_tokens_per_batch)) {
-        throw std::runtime_error("FATAL: cached_token_ids_tensor capacity does not match RunCapacity (tensor=" +
-                                 std::to_string(token_shape.as_2d().cols) +
-                                 " stem=" + std::to_string(cap.max_tokens_per_batch) + ")");
     }
     if (logits_shape.as_2d().rows != static_cast<int>(cap.max_tokens_per_batch)) {
         throw std::runtime_error("FATAL: cached_logits_tensor row capacity does not match RunCapacity (tensor=" +

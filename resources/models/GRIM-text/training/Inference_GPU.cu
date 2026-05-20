@@ -3,8 +3,7 @@
 //  Inference using the shared mode-explicit forward primitive
 //  
 //  Single inference entry point: executeInferenceForward_()
-//  All public inference methods copy data to cached_* tensors
-//  then call this private method.
+//  Public inference methods pass BatchPayload + BatchDeviceBindings explicitly.
 //
 //  Rule 20: Payload-authored inference only - uses autograd forward only
 //  Rule 26: One inference path, not two
@@ -37,7 +36,7 @@ namespace {
 ScratchBlockLayer::RowLocalAtomView buildDecodeExecutionAtomView(
     ScratchBlockLayer& scratch_block,
     const HyperParameters::LanguageModelConfig& cfg,
-    TrainingState& ts,
+    const Batching::BatchDeviceBindings& bindings,
     cudaStream_t stream,
     int token_pos)
 {
@@ -46,20 +45,20 @@ ScratchBlockLayer::RowLocalAtomView buildDecodeExecutionAtomView(
                                  what + ": " + cudaGetErrorString(err));
     };
 
-    if (!ts.cached_token_ids_tensor.data) {
-        throw std::runtime_error("buildDecodeExecutionAtomView: cached_token_ids_tensor is NULL");
+    if (!bindings.d_input_ids) {
+        throw std::runtime_error("buildDecodeExecutionAtomView: BatchDeviceBindings.d_input_ids is NULL");
     }
-    if (!ts.cached_token_numeric_values.data) {
-        throw std::runtime_error("buildDecodeExecutionAtomView: cached_token_numeric_values is NULL");
+    if (!bindings.d_numeric_values) {
+        throw std::runtime_error("buildDecodeExecutionAtomView: BatchDeviceBindings.d_numeric_values is NULL");
     }
-    if (!ts.cached_token_atom_mask.data) {
-        throw std::runtime_error("buildDecodeExecutionAtomView: cached_token_atom_mask is NULL");
+    if (!bindings.d_atom_mask) {
+        throw std::runtime_error("buildDecodeExecutionAtomView: BatchDeviceBindings.d_atom_mask is NULL");
     }
-    if (!ts.cached_token_atom_flags.data) {
-        throw std::runtime_error("buildDecodeExecutionAtomView: cached_token_atom_flags is NULL");
+    if (!bindings.d_atom_flags) {
+        throw std::runtime_error("buildDecodeExecutionAtomView: BatchDeviceBindings.d_atom_flags is NULL");
     }
-    if (!ts.cached_token_to_slot_map.data) {
-        throw std::runtime_error("buildDecodeExecutionAtomView: cached_token_to_slot_map is NULL during decode-time execution");
+    if (!bindings.d_token_to_slot_map) {
+        throw std::runtime_error("buildDecodeExecutionAtomView: BatchDeviceBindings.d_token_to_slot_map is NULL during decode-time execution");
     }
 
     auto dummy_hidden = Tensor::zeros({1, cfg.d_model}, stream, "decode_exec_atom_dummy_hidden");
@@ -69,11 +68,11 @@ ScratchBlockLayer::RowLocalAtomView buildDecodeExecutionAtomView(
     scratch_block.runForwardKernels(
         dummy_hidden.data,
         1,
-        reinterpret_cast<const int*>(ts.cached_token_ids_tensor.data) + token_pos,
-        ts.cached_token_numeric_values.data + token_pos,
-        reinterpret_cast<const uint8_t*>(ts.cached_token_atom_mask.data) + token_pos,
-        reinterpret_cast<const uint32_t*>(ts.cached_token_atom_flags.data) + token_pos,
-        reinterpret_cast<const int32_t*>(ts.cached_token_to_slot_map.data) + token_pos,
+        bindings.d_input_ids + token_pos,
+        bindings.d_numeric_values + token_pos,
+        bindings.d_atom_mask + token_pos,
+        bindings.d_atom_flags + token_pos,
+        bindings.d_token_to_slot_map + token_pos,
         stream,
         exec_first_type_only);
     cudaError_t err = cudaGetLastError();
@@ -83,7 +82,7 @@ ScratchBlockLayer::RowLocalAtomView buildDecodeExecutionAtomView(
 
     int32_t slot_id = -1;
     err = cudaMemcpyAsync(&slot_id,
-                          reinterpret_cast<const int32_t*>(ts.cached_token_to_slot_map.data) + token_pos,
+                          bindings.d_token_to_slot_map + token_pos,
                           sizeof(int32_t),
                           cudaMemcpyDeviceToHost,
                           stream);
@@ -97,28 +96,6 @@ ScratchBlockLayer::RowLocalAtomView buildDecodeExecutionAtomView(
     }
 
     return view;
-}
-
-Batching::BatchDeviceBindings buildInferencePrefillBindings(TrainingState& ts, int seq_len) {
-    if (seq_len <= 0) {
-        throw std::runtime_error("buildInferencePrefillBindings: seq_len <= 0");
-    }
-    Batching::BatchDeviceBindings bindings;
-    bindings.batch_size = 1;
-    bindings.max_seq_len = seq_len;
-    bindings.d_input_ids = reinterpret_cast<int*>(ts.cached_token_ids_tensor.data);
-    bindings.d_numeric_values = ts.cached_token_numeric_values.data;
-    bindings.d_atom_mask = reinterpret_cast<uint8_t*>(ts.cached_token_atom_mask.data);
-    bindings.d_atom_flags = reinterpret_cast<uint32_t*>(ts.cached_token_atom_flags.data);
-    bindings.d_token_to_slot_map = reinterpret_cast<int32_t*>(ts.cached_token_to_slot_map.data);
-
-    if (!bindings.d_input_ids) {
-        throw std::runtime_error("buildInferencePrefillBindings: cached_token_ids_tensor.data is NULL");
-    }
-    if (!bindings.d_token_to_slot_map) {
-        throw std::runtime_error("buildInferencePrefillBindings: cached_token_to_slot_map.data is NULL");
-    }
-    return bindings;
 }
 
 bool sequenceCoupledGeometryRequiresFullPrefill(
@@ -177,33 +154,10 @@ void updateDecodeSelectorAfterPrefill(LanguageModel& model,
 
 //======================================================//
 //  executeInferenceForward_ - THE single inference forward path
-//  Assumes all data already in cached_* tensors.
-//  Builds an explicit inference prefill request, runs forward, returns last-token logits.
+//  Consumes explicit BatchPayload + BatchDeviceBindings, runs forward, returns last-token logits.
 //  When populate_kv_cache=true, extracts per-layer K,V from autograd
 //  intermediates and converts to BF16 BSHD format in KV cache buffers.
 //======================================================//
-Vector LanguageModel::executeInferenceForward_(int seq_len,
-                                               bool populate_kv_cache,
-                                               bool update_decode_selector_after_prefill) {
-    if (!training_state_.initialized) {
-        throw std::runtime_error("executeInferenceForward_: training state not initialized");
-    }
-    if (seq_len <= 0 || seq_len > config_.max_seq_len) {
-        throw std::runtime_error("executeInferenceForward_: seq_len=" + std::to_string(seq_len) +
-                                 " out of range [1, " + std::to_string(config_.max_seq_len) + "]");
-    }
-
-    cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
-
-    Batching::BatchDeviceBindings bindings = buildInferencePrefillBindings(training_state_, seq_len);
-    Batching::BatchPayload payload = Batching::buildInferenceStagedPayload(
-        seq_len, config_.vocab_size, static_cast<size_t>(config_.max_cached_seq_len),
-        generation_state_.has_exec_memory);
-
-    return executeInferenceForward_(payload, bindings, populate_kv_cache,
-                                    update_decode_selector_after_prefill);
-}
-
 Vector LanguageModel::executeInferenceForward_(
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
@@ -386,12 +340,18 @@ Vector LanguageModel::forwardInit(const Batching::BatchPayload& prompt_payload) 
 }
 
 //======================================================//
-//  forwardStep - Decode phase for one appended token
+//  forwardStep - Decode phase for caller-authored current-sequence payload
 //  Uses KV-cache decode only when the config is sequence-local. Configs with
 //  sequence-coupled centering/projection rerun the full current sequence.
 //======================================================//
-Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t atom_mask,
-                                  int32_t new_token_slot_id) {
+Vector LanguageModel::forwardStep(const Batching::BatchPayload& step_payload) {
+    step_payload.validate("forwardStep(BatchPayload)");
+    if (!step_payload.isInferencePrefill()) {
+        throw std::runtime_error("forwardStep(BatchPayload): payload must be InferencePrefill");
+    }
+    if (step_payload.batch_size != 1) {
+        throw std::runtime_error("forwardStep(BatchPayload): batch_size must be 1");
+    }
     if (!training_state_.initialized) {
         throw std::runtime_error("forwardStep: training state not initialized");
     }
@@ -400,7 +360,12 @@ Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t at
     }
 
     const int token_pos = generation_state_.kv_cache_len;
-    const int new_seq_len = token_pos + 1;
+    const int new_seq_len = step_payload.max_seq_len;
+    if (new_seq_len != token_pos + 1) {
+        throw std::runtime_error(
+            "forwardStep(BatchPayload): payload length " + std::to_string(new_seq_len) +
+            " must equal committed generation length + 1 (" + std::to_string(token_pos + 1) + ")");
+    }
     
     if (new_seq_len > config_.max_seq_len) {
         throw std::runtime_error("forwardStep: sequence exceeds max_seq_len");
@@ -409,38 +374,7 @@ Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t at
         throw std::runtime_error("forwardStep: KV cache not allocated — call initInferenceState first");
     }
 
-    cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
-    
-    // Append new token to device buffer (needed for embedding lookup)
-    int* token_ids_ptr = reinterpret_cast<int*>(training_state_.cached_token_ids_tensor.data);
-    cudaMemcpyAsync(token_ids_ptr + token_pos,
-                    &new_token, sizeof(int),
-                    cudaMemcpyHostToDevice, stream);
-    
-    // Append numeric side-channel
-    cudaMemcpyAsync(training_state_.cached_token_numeric_values.data + token_pos,
-                    &numeric_value, sizeof(float),
-                    cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(reinterpret_cast<uint8_t*>(training_state_.cached_token_atom_mask.data) + token_pos,
-                    &atom_mask, sizeof(uint8_t),
-                    cudaMemcpyHostToDevice, stream);
-
-    if (!training_state_.cached_token_atom_flags.data) {
-        throw std::runtime_error("forwardStep: cached_token_atom_flags.data is NULL");
-    }
-    uint32_t zero_atom_flags = 0;
-    cudaMemcpyAsync(reinterpret_cast<uint32_t*>(training_state_.cached_token_atom_flags.data) + token_pos,
-                    &zero_atom_flags, sizeof(uint32_t),
-                    cudaMemcpyHostToDevice, stream);
-
-    if (training_state_.cached_token_to_slot_map.data) {
-        auto* slot_dst = reinterpret_cast<int32_t*>(training_state_.cached_token_to_slot_map.data) + token_pos;
-        cudaError_t serr = cudaMemcpyAsync(slot_dst, &new_token_slot_id, sizeof(int32_t),
-                                           cudaMemcpyHostToDevice, stream);
-        if (serr != cudaSuccess) {
-            throw std::runtime_error(std::string("forwardStep slot map: ") + cudaGetErrorString(serr));
-        }
-    }
+    const auto bindings = uploadBatchToDevice(step_payload);
 
     // Sequence-coupled geometry cannot be evaluated from a single decoded row:
     // - encoder residual centering changes the residual stream mean over the
@@ -451,7 +385,8 @@ Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t at
     // fast KV path below.
     if (sequenceCoupledGeometryRequiresFullPrefill(config_)) {
         Vector logits = executeInferenceForward_(
-            new_seq_len,
+            step_payload,
+            bindings,
             /*populate_kv_cache=*/false,
             /*update_decode_selector_after_prefill=*/true);
         generation_state_.kv_cache_len = new_seq_len;
@@ -460,7 +395,7 @@ Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t at
 
     // Commit kv_cache_len AFTER success — if decode throws, the cache
     // must not claim it holds a token that never completed the forward path.
-    Vector logits = executeDecodeForward_(token_pos);
+    Vector logits = executeDecodeForward_(step_payload, bindings, token_pos);
     generation_state_.kv_cache_len = new_seq_len;
     return logits;
 }
@@ -470,12 +405,33 @@ Vector LanguageModel::forwardStep(int new_token, float numeric_value, uint8_t at
 //  Processes one token through all encoder layers using
 //  cached K,V from prior tokens. O(n) per layer instead of O(n²).
 //======================================================//
-Vector LanguageModel::executeDecodeForward_(int token_pos) {
+Vector LanguageModel::executeDecodeForward_(
+    const Batching::BatchPayload& step_payload,
+    const Batching::BatchDeviceBindings& bindings,
+    int token_pos) {
     if (!training_state_.initialized) {
         throw std::runtime_error("executeDecodeForward_: training state not initialized");
     }
     if (!generation_state_.kvReady()) {
         throw std::runtime_error("executeDecodeForward_: KV cache not allocated");
+    }
+    step_payload.validate("executeDecodeForward_(BatchPayload)");
+    if (!step_payload.isInferencePrefill()) {
+        throw std::runtime_error("executeDecodeForward_: payload must be InferencePrefill");
+    }
+    if (bindings.batch_size != step_payload.batch_size || bindings.max_seq_len != step_payload.max_seq_len) {
+        throw std::runtime_error(
+            "executeDecodeForward_: BatchDeviceBindings geometry (" +
+            std::to_string(bindings.batch_size) + "x" + std::to_string(bindings.max_seq_len) +
+            ") does not match BatchPayload geometry (" + std::to_string(step_payload.batch_size) + "x" +
+            std::to_string(step_payload.max_seq_len) + ")");
+    }
+    if (token_pos < 0 || token_pos >= step_payload.total_tokens) {
+        throw std::runtime_error("executeDecodeForward_: token_pos=" + std::to_string(token_pos) +
+                                 " outside payload.total_tokens=" + std::to_string(step_payload.total_tokens));
+    }
+    if (!bindings.d_input_ids) {
+        throw std::runtime_error("executeDecodeForward_: BatchDeviceBindings.d_input_ids is NULL");
     }
 
     using namespace TensorContract;
@@ -509,7 +465,7 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
     Tensor emb_view = emb_layer->tokenWeights().detach(stream);
 
     // Token ID is at device offset token_pos
-    const int* token_id_ptr = reinterpret_cast<const int*>(ts.cached_token_ids_tensor.data) + token_pos;
+    const int* token_id_ptr = bindings.d_input_ids + token_pos;
 
     Tensor hidden = ag::embedding(emb_view, token_id_ptr, 1, stream, 1.0f);
     // hidden: [1, d_model]
@@ -537,27 +493,27 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
         && !gen.execution_trace_by_row.empty();
 
     if (scratch_block && scratch_block->isEnabled()) {
-        if (!ts.cached_token_numeric_values.data) {
-            throw std::runtime_error("executeDecodeForward_: ScratchBlock vector gate requires cached_token_numeric_values");
+        if (!bindings.d_numeric_values) {
+            throw std::runtime_error("executeDecodeForward_: ScratchBlock vector gate requires BatchDeviceBindings.d_numeric_values");
         }
-        if (!ts.cached_token_atom_mask.data) {
-            throw std::runtime_error("executeDecodeForward_: ScratchBlock vector gate requires cached_token_atom_mask");
+        if (!bindings.d_atom_mask) {
+            throw std::runtime_error("executeDecodeForward_: ScratchBlock vector gate requires BatchDeviceBindings.d_atom_mask");
         }
-        if (!ts.cached_token_atom_flags.data) {
-            throw std::runtime_error("executeDecodeForward_: ScratchBlock vector gate requires cached_token_atom_flags");
+        if (!bindings.d_atom_flags) {
+            throw std::runtime_error("executeDecodeForward_: ScratchBlock vector gate requires BatchDeviceBindings.d_atom_flags");
         }
-        if (!ts.cached_token_to_slot_map.data) {
-            throw std::runtime_error("executeDecodeForward_: ScratchBlock vector gate requires cached_token_to_slot_map");
+        if (!bindings.d_token_to_slot_map) {
+            throw std::runtime_error("executeDecodeForward_: ScratchBlock vector gate requires BatchDeviceBindings.d_token_to_slot_map");
         }
 
         const bool exec_first_type_only = cfg.execution_block_enabled && cfg.scratch_block_execution_first_type_only;
         Tensor structured_state = ag::scratch_block_project_all_tokens(
             *scratch_block,
             token_id_ptr,
-            ts.cached_token_numeric_values.data + token_pos,
-            reinterpret_cast<const uint8_t*>(ts.cached_token_atom_mask.data) + token_pos,
-            reinterpret_cast<const uint32_t*>(ts.cached_token_atom_flags.data) + token_pos,
-            reinterpret_cast<const int32_t*>(ts.cached_token_to_slot_map.data) + token_pos,
+            bindings.d_numeric_values + token_pos,
+            bindings.d_atom_mask + token_pos,
+            bindings.d_atom_flags + token_pos,
+            bindings.d_token_to_slot_map + token_pos,
             1,
             stream,
             exec_first_type_only,
@@ -744,33 +700,32 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
         // ── ExecutionBlock: K execution steps at exec_layer ──
         if (exec_block_active && layer_idx == exec_layer) {
             const float T = cfg.execution_block_temp_start;
-            const int32_t* slot_ptr = ts.cached_token_to_slot_map.data
-                ? reinterpret_cast<const int32_t*>(ts.cached_token_to_slot_map.data) + token_pos
+            const int32_t* slot_ptr = bindings.d_token_to_slot_map
+                ? bindings.d_token_to_slot_map + token_pos
                 : nullptr;
             auto row_atom_view = buildDecodeExecutionAtomView(
-                *scratch_block, cfg, ts, stream, token_pos);
+                *scratch_block, cfg, bindings, stream, token_pos);
 
             // Bootstrap the new token's slot binding into execution memory.
             // During prefill, bootstrap runs inside AutogradTraining. During
             // decode, the single new token's numeric_value + slot_id must be
             // injected here so the execution block can operate on it.
             // WS7: Fail loud if bootstrap data is missing while execution is active.
-            if (!slot_ptr || !ts.cached_token_numeric_values.data) {
+            if (!slot_ptr || !bindings.d_numeric_values) {
                 throw std::runtime_error(
                     "Inference: decode-time execution is active but slot map or numeric values "
                     "are missing for bootstrap at token_pos " + std::to_string(token_pos));
             }
             exec_block->bootstrapMemoryFromSlotMap(
                 gen.exec_memory,
-                ts.cached_token_numeric_values.data + token_pos,
+                bindings.d_numeric_values + token_pos,
                 slot_ptr,
                 1, stream);
 
             // Construct the shared single-token inference decode payload plus a
             // single-token BatchDeviceBindings for decode-time execution.
-            // Decode is NOT a full training step — there is no host-side payload
-            // upload, just the row-local slot map / atom mask already living in
-            // TrainingState's cached buffers.
+            // Decode is NOT a full training step; the row-local device view is
+            // sliced from the BatchDeviceBindings produced for step_payload.
             GRIM::Batching::BatchPayload decode_payload =
                 GRIM::Batching::buildInferenceDecodePayload(cfg.vocab_size);
 
@@ -779,8 +734,8 @@ Vector LanguageModel::executeDecodeForward_(int token_pos) {
             decode_bindings.max_seq_len = 1;
             decode_bindings.d_token_to_slot_map = const_cast<int32_t*>(slot_ptr);
             decode_bindings.d_atom_mask =
-                ts.cached_token_atom_mask.data
-                    ? reinterpret_cast<uint8_t*>(ts.cached_token_atom_mask.data) + token_pos
+                bindings.d_atom_mask
+                    ? bindings.d_atom_mask + token_pos
                     : nullptr;
 
             ExecutionBlockStepOutput last_step_diag;

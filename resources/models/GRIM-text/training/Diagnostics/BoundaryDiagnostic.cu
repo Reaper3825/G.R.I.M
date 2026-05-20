@@ -91,18 +91,16 @@ void runBoundaryDiagnostic(
             diag << "  payload.total_tokens=" << payload.total_tokens << "\n";
             diag << "  payload.lm_valid_tokens=" << payload.lm_valid_tokens << "\n";
             
-            // Training cache allocation check. Authored capacity comes from
-            // LanguageModelConfig; actual allocation capacity comes from Tensor shapes.
-            const auto& token_shape = ts.cached_token_ids_tensor.shape.require("BoundaryDiagnostic cached_token_ids_tensor");
+            // Training allocation check. Authored token capacity comes from RunCapacity;
+            // logits allocation capacity comes from the Tensor shape.
             const auto& logits_shape = ts.cached_logits_tensor.shape.require("BoundaryDiagnostic cached_logits_tensor");
-            const size_t token_capacity = static_cast<size_t>(token_shape.as_2d().cols);
+            const size_t token_capacity = ctx.run_capacity.max_tokens_per_batch;
             const size_t logit_token_capacity = static_cast<size_t>(logits_shape.as_2d().rows);
             diag << "[BOUNDARY_DIAGNOSTIC] AUTHORED CAPACITY:\n";
             diag << "  model.max_cached_batch=" << ctx.run_capacity.batch_rows << "\n";
             diag << "  model.max_cached_seq_len=" << ctx.run_capacity.seq_cap << "\n";
             diag << "  model.max_tokens_per_batch=" << ctx.run_capacity.max_tokens_per_batch << "\n";
             diag << "[BOUNDARY_DIAGNOSTIC] ALLOCATED CACHE CAPACITY:\n";
-            diag << "  cached_token_ids_tensor.cols=" << token_capacity << "\n";
             diag << "  cached_logits_tensor.rows=" << logit_token_capacity << "\n";
             
             // Check if sequence fits in TRAINING cache — use payload.total_tokens (already batch*max_seq)

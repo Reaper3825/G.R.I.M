@@ -4,20 +4,19 @@
 //  Consumes the existing global clipping measurement, logs gated diagnostics,
 //  and throws on hard validation failures. It never launches GradNorm kernels,
 //  allocates scratch, or mutates training-loop results. The optional
-//  EMB_GRAD_EQUATION path is an explicitly gated sync diagnostic because it
-//  performs host-side inspection of device data.
+//  POSTCLIP_PARAM_GRAD_EMB_LM_EQUATION path is an explicitly gated sync
+//  diagnostic because it performs host-side inspection of device data.
 //======================================================//
 
 #include "GradientNormDiagnostic.hpp"
 
 #include "DiagnosticGates.hpp"
-#include "TrainingDiagnostics.hpp"
+#include "PostClipParamGradEmbLmEquation.hpp"
 
 #include "../Phases/Phase2_TrainingLoop.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
 #include "../../Shared/LogRecorder/LogTypes.hpp"
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"
-#include "../../Shared/TrainingState/TrainingState_GPU.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -28,8 +27,6 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-
-#include <cuda_runtime.h>
 
 namespace GRIM::Diagnostics {
 
@@ -190,7 +187,8 @@ void runGradientNormClipDiagnostic(
     GRIMText::Training::TrainingLoopState& state,
     const GRIM::Batching::BatchPayload& payload,
     const GRIM::GradClip::ClipResult& clip,
-    int batch_idx)
+    int batch_idx,
+    cudaStream_t clip_stream)
 {
     const bool sync_diag = GRIM::Diagnostics::shouldSyncDiagnostics(ctx, batch_idx);
 
@@ -219,46 +217,7 @@ void runGradientNormClipDiagnostic(
                             " sb_rms_pre=" + formatScalar(sb_rms_pre, 6));
     ctx.logging.logger->log(formatTopGradientGroups(clip, groups));
 
-    // ========================================================================
-    // DIAGNOSTIC: [EMB_GRAD_EQUATION] Embedding gradient spike analysis (Issue #141)
-    // Rule 21 equation-based logging for tied-weight gradient decomposition.
-    // Runs every diag_interval batches (same cadence as other sync diagnostics).
-    // This is sync-safe only under shouldSyncDiagnostics(): computeEmbGradEquation()
-    // performs blocking D2H copies for host-side row/frequency analysis.
-    // Identifies which token rows concentrate gradient mass and whether
-    // atomicAdd scatter density correlates with spike magnitude.
-    // ========================================================================
-    {
-        const bool kEmbGradDiagEnabled = sync_diag && ctx.logging.tape &&
-            ctx.logging.tape->accepts(GRIM::Logging::LogLevel::Debug);
-
-        if (kEmbGradDiagEnabled) {
-            const auto& ts = ctx.model->getTrainingState();
-            cudaStream_t emb_stream = ts.stream_ctrl.getPrimaryStream();
-
-            const int total_tokens_diag = payload.total_tokens;
-            const int* d_tok_ids = reinterpret_cast<const int*>(ts.cached_token_ids_tensor.data);
-
-            if (d_tok_ids && total_tokens_diag > 0) {
-                const float prev_emb_rms = state.diagnostics.has_prev_emb_rms
-                    ? state.diagnostics.prev_emb_rms
-                    : emb_rms_pre;
-                GRIM::Diagnostics::EmbGradEquationDiag emb_diag = GRIM::Diagnostics::computeEmbGradEquation(
-                    ctx.model->getEmbeddingLayer(), d_tok_ids, total_tokens_diag,
-                    ctx.model_config.d_model, static_cast<int>(ctx.data_info.actual_vocab_size),
-                    prev_emb_rms, emb_rms_pre,
-                    emb_stream);
-
-                std::string emb_eq_str = GRIM::Diagnostics::formatEmbGradEquation(emb_diag, batch_idx);
-                ctx.logging.logger->log(emb_eq_str);
-
-                EQ_LOG(ctx.logging.tape.get(), GRIM::Logging::LogGroup::Embedding, GRIM::Logging::LogPhase::GRADIENT_CLIP, 0, "EMB_GRAD_EQUATION", emb_eq_str.c_str());
-
-                state.diagnostics.prev_emb_rms = emb_rms_pre;
-                state.diagnostics.has_prev_emb_rms = true;
-            }
-        }
-    }
+    runPostClipParamGradEmbLmEquation(ctx, state, payload, emb_rms_pre, batch_idx, sync_diag, clip_stream);
 
 }
 

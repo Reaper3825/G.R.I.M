@@ -15,6 +15,7 @@
 #include "LossBaselineDiagnostic.hpp"
 #include "LossStatsDiagnostic.hpp"
 #include "GradientNormDiagnostic.hpp"
+#include "PostClipParamGradEmbLmEquation.hpp"
 #include "OptimizerStepGuards.hpp"
 #include "TieVerifyDiagnostic.hpp"
 #include "MtpDiagnostic.hpp"

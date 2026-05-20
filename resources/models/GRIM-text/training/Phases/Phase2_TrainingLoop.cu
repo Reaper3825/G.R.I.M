@@ -235,7 +235,7 @@ void runOptimizerWindowFromEpoch(
         clip_metrics = clip;
         has_clip_metrics = true;
 
-        GRIM::Diagnostics::runGradientNormClipDiagnostic(ctx, state, payload, clip, batch_idx);
+        GRIM::Diagnostics::runGradientNormClipDiagnostic(ctx, state, payload, clip, batch_idx, clip_stream);
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -278,9 +278,9 @@ void runOptimizerWindowFromEpoch(
         ctx, batch_idx, accum_steps, sync_diag);
 
     // Post-optimizer LM-head sample, GradTrace POST log, [UpdateMag],
-    // and per-component Adam update_rms trace (Issue #150).
+    // and optimizer-boundary adaptive update trace.
     GRIM::Diagnostics::runPostOptimizerWeightTrace(
-        ctx, result, pre_sample, batch_idx, sync_diag);
+        ctx, result, optimizer_update_hp, pre_sample, sync_diag);
 
     ctx.optimizer.completeOptimizerStepAfterFullAccumulationWindow(accum_steps);
 

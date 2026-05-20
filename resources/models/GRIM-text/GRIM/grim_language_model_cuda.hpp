@@ -239,11 +239,10 @@ public:
     // Returns logits for the last prompt token (ready for first sampling)
     Vector forwardInit(const GRIM::Batching::BatchPayload& prompt_payload);
     
-    // Process one sampled token and return logits for the next sampling step.
-    // Uses KV decode only when the active config has no sequence-coupled geometry;
-    // otherwise appends the token and reruns the full current sequence.
-    Vector forwardStep(int new_token, float numeric_value, uint8_t atom_mask,
-                       int32_t new_token_slot_id = -1);
+    // Process the caller-authored current-sequence payload and return logits for
+    // the next sampling step. Uses KV decode only when the active config has no
+    // sequence-coupled geometry; otherwise reruns the full current sequence.
+    Vector forwardStep(const GRIM::Batching::BatchPayload& step_payload);
 
     // Ensure KV cache + decode scratch buffers are allocated.
     // Safe to call repeatedly — skips if already allocated.
@@ -356,24 +355,21 @@ public:
                                           HyperParameters::GenerationStreamCallback* stream_callback = nullptr);
     
 private:
-    // Core inference forward: assumes data already in cached_* tensors.
-    // Runs autograd forward, extracts last-token logits, returns them.
-    // All public inference methods (forwardGPU, getNextTokenLogitsGPU,
-    // forwardInit, forwardStep) copy their data to cached tensors then call this.
-    // When populate_kv_cache=true, extracts K,V from autograd intermediates
-    // into BF16 KV cache buffers before clearing intermediates.
-    Vector executeInferenceForward_(int seq_len,
-                                    bool populate_kv_cache = false,
-                                    bool update_decode_selector_after_prefill = false);
+    // Core inference forward: consumes an explicit BatchPayload + matching
+    // BatchDeviceBindings pair. Runs mode-explicit forward, extracts last-token
+    // logits, and optionally populates GenerationState KV cache before clearing
+    // intermediates.
     Vector executeInferenceForward_(const GRIM::Batching::BatchPayload& payload,
                                     const GRIM::Batching::BatchDeviceBindings& bindings,
                                     bool populate_kv_cache = false,
                                     bool update_decode_selector_after_prefill = false);
 
-    // KV-cached decode: processes a single token at position token_pos
-    // through all encoder layers using cached K,V from prior tokens.
-    // Returns logits vector for the new token.
-    Vector executeDecodeForward_(int token_pos);
+    // KV-cached decode: processes the final token in step_payload through all
+    // encoder layers using cached K,V from prior tokens. Device addresses come
+    // only from BatchDeviceBindings, not hidden TrainingState token caches.
+    Vector executeDecodeForward_(const GRIM::Batching::BatchPayload& step_payload,
+                                 const GRIM::Batching::BatchDeviceBindings& bindings,
+                                 int token_pos);
 
     HyperParameters::LanguageModelConfig config_;
     std::unique_ptr<GrimEmbeddingStack> embedder_;
