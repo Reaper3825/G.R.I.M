@@ -40,7 +40,7 @@ struct EmbeddingGradFn : public GradFn {
     // Captured weight metadata (stable across backward)
     bool weight_requires_grad = false;
     float* weight_grad = nullptr;
-    TensorContract::TensorShape weight_shape;
+    ::TensorContract::TensorShape weight_shape;
     std::shared_ptr<GradFn> weight_grad_fn;
 
     // Captured token IDs (device pointer; may be owned)

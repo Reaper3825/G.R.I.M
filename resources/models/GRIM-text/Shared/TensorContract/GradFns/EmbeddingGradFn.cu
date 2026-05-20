@@ -252,7 +252,7 @@ Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens, cud
         throw std::invalid_argument("autograd::embedding: d_model must be >= 4 for hard token-type gate, got " +
                                     std::to_string(d_model));
     }
-    auto output_shape = TensorContract::TensorShape::make_BSM(num_tokens, d_model);
+    auto output_shape = ::TensorContract::TensorShape::make_BSM(num_tokens, d_model);
     Tensor result = Tensor::empty(output_shape, weight.requires_grad, stream, "embedding_result");
 
     // Forward: gather from weight table with scaling and fixed hard type gate.
