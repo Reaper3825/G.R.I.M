@@ -81,10 +81,6 @@ BatchPayload makeInferenceBasePayload(
     payload.vocab_size = vocab_size;
     payload.seq_lengths.assign(1, seq_len);
     payload.valid_target_counts.assign(1, 0);
-    payload.packing_efficiency = 1.0f;
-    payload.min_seq_len = seq_len;
-    payload.length_variance = 0.0f;
-    payload.overflow = false;
     payload.fits_in_cache = true;
 
     payload.token_stats.batch_size = 1;
@@ -126,6 +122,12 @@ BatchPayload buildBatchPayload(
     if (payload.batch_size <= 0) {
         throw std::runtime_error(
             "buildBatchPayload: batch has 0 sequences — scheduler produced empty batch");
+    }
+    if (static_cast<size_t>(payload.batch_size) != max_cached_batch) {
+        throw std::runtime_error(
+            "buildBatchPayload: assignment batch_size=" + std::to_string(payload.batch_size) +
+            " != fixed max_cached_batch=" + std::to_string(max_cached_batch) +
+            " — training uses fixed batch rows; scheduler must emit full batches");
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -330,26 +332,6 @@ BatchPayload buildBatchPayload(
     payload.total_tokens = payload.batch_size * payload.max_seq_len;
     payload.padding_tokens = payload.total_tokens - payload.actual_tokens;
     payload.vocab_size = vocab_size;
-    payload.packing_efficiency = (payload.total_tokens > 0)
-        ? static_cast<float>(payload.actual_tokens) / static_cast<float>(payload.total_tokens)
-        : 0.0f;
-
-    // Scheduler-only fields carried from assignment (BatchPayload is single source of truth)
-    payload.overflow = assignment.overflow;
-    if (!payload.seq_lengths.empty()) {
-        payload.min_seq_len = *std::min_element(payload.seq_lengths.begin(), payload.seq_lengths.end());
-        if (payload.seq_lengths.size() >= 2) {
-            float mean = 0.0f;
-            for (int len : payload.seq_lengths) mean += static_cast<float>(len);
-            mean /= static_cast<float>(payload.seq_lengths.size());
-            float var = 0.0f;
-            for (int len : payload.seq_lengths) {
-                float diff = static_cast<float>(len) - mean;
-                var += diff * diff;
-            }
-            payload.length_variance = var / static_cast<float>(payload.seq_lengths.size());
-        }
-    }
 
     // ═════════════════════════════════════════════════════════════════════════
     // PHASE 3: Cache fit check

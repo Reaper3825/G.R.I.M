@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-#include "Batching_GPU.hpp" // PackingStrategy, BatchOrdering
+#include "Batching_GPU.hpp" // BatchOrdering
 
 namespace GRIM::Batching {
 
@@ -12,20 +12,10 @@ namespace GRIM::Batching {
  * Capacity (max_tokens_per_batch, max_batch_size) must be passed separately.
  */
 struct PackerPolicy {
-    // === Packing strategy ===
-    PackingStrategy strategy = PackingStrategy::SIMILARITY_GROUPED;
-    uint32_t bucket_step = 128;
-    float similarity_threshold = 0.25f;
+    // === Batch ordering ===
+    BatchOrdering batch_ordering = BatchOrdering::PRESERVE;
 
-    // === Curriculum / ordering hints ===
-    bool prefer_short_first = false;
-    float curriculum_progress = 1.0f;
-
-    // === Batch ordering (post-packing) ===
-    BatchOrdering batch_ordering = BatchOrdering::LENGTH_ASCENDING;
-    bool interleave_overflow = true;
-
-    // === RNG for shuffling ===
+    // === RNG for shuffling. Zero means preserve input order. ===
     uint64_t rng_seed = 0;
 };
 

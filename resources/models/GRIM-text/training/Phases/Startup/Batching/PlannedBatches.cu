@@ -185,13 +185,11 @@ void PlannedBatchesReady(TrainingContext& ctx) {
     //======================================================//
     // Validation: build a fixed BatchSchedule + payload vector.
     //
-    // Validation never shuffles, so we use buildBatches directly with the
-    // same policy Phase2 used historically (bucket_step=256, defaults
-    // otherwise). val_payloads are iterated in order.
+    // Validation never shuffles: default PackerPolicy preserves source order.
+    // val_payloads are iterated in order.
     //======================================================//
     if (!ctx.data.val_views.empty()) {
         GRIM::Batching::PackerPolicy val_policy;
-        val_policy.bucket_step = 256;
 
         ctx.fixed_val_schedule = GRIM::Batching::buildBatches(
             ctx.data.val_seq_lengths,

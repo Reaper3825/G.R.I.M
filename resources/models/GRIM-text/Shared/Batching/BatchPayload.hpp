@@ -76,8 +76,8 @@ struct BatchPayload {
     // Single source of truth for per-batch seq_len: downstream code must use
     // payload.batch_size, payload.max_seq_len, payload.total_tokens, etc. — not config.
     // ═══════════════════════════════════════════════════════════════════════════
-    int batch_size = 0;                      // number of sequences
-    int max_seq_len = 0;                     // longest sequence (pad target)
+    int batch_size = 0;                      // training: fixed batch rows; inference: prompt/decode rows
+    int max_seq_len = 0;                     // training: fixed sequence cap; inference: prompt/decode length
     int total_tokens = 0;                    // batch_size * max_seq_len (includes padding)
     int actual_tokens = 0;                   // sum of real sequence lengths (no padding)
     int padding_tokens = 0;                  // total_tokens - actual_tokens
@@ -89,10 +89,6 @@ struct BatchPayload {
     int vocab_size = 0;                      // vocabulary size (for loss kernels + target validation)
     std::vector<int> seq_lengths;            // [batch_size] — original length per sequence before padding
     std::vector<int> valid_target_counts;    // [batch_size] — unmasked targets per sequence
-    float packing_efficiency = 0.0f;         // actual_tokens / total_tokens
-    int min_seq_len = 0;                     // shortest sequence in batch (for logging)
-    float length_variance = 0.0f;            // variance of seq_lengths (scheduler metric)
-    bool overflow = false;                   // true if single seq exceeded token budget (scheduler)
 
     // ═══════════════════════════════════════════════════════════════════════════
     // PADDED DATA (flat [batch_size * max_seq_len] layout, computed ONCE)

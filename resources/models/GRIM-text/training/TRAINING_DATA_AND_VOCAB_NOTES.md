@@ -9,7 +9,7 @@
 
 **What actually determines batch count:**
 
-- Batches are built in **dynamic batching** (`Batching_GPU.cu::buildBatches`): sequences are packed into batches with a **token budget** `batch_size × max_seq_len` (e.g. 8 × 1024 = 8192) and `max_batch_size = 8`. Every sequence with `seq_length > 0` is included; none are dropped by the packing logic.
+- Batches are built with **fixed batch rows** (`Batching_GPU.cu::buildBatches`): every emitted training batch must contain exactly `batch_size` sequence IDs, and every row is padded by `BatchPayload` to the fixed sequence cap derived from `max_tokens_per_batch / batch_size` (e.g. 8 × 1024 = 8192). The scheduler fails loud if a post-window sequence exceeds the sequence cap or if it would emit a partial batch. It does not length-sort, prefer short rows first, or run a curriculum packing policy; training randomization is seeded shuffle only.
 - So the number of batches is determined by **how many sequences are in the train catalog** when the epoch runs. That catalog is built from `train_views` / `train_seqs` **after**:
   - Sliding window (can increase sequence count)
   - **filterOverlong** (removes sequences with `token_ids.size() > max_seq_len`)
@@ -19,7 +19,7 @@
 
 1. **Logs at startup:** Look for:
    - `"Train sequences: XXXXX"` — this is the count **after** all filters. If this is ~38,800 instead of 55,935, the difference is from overlong/short filtering.
-   - `"Created Y dynamic batches"` at the start of each epoch — Y should equal `ceil(Train sequences / 8)` (roughly, depending on packing).
+   - `"Created Y fixed batches"` at startup — Y must equal `Train sequences / 8` for batch size 8. A non-divisible train sequence count is a startup contract violation, not a smaller final batch.
 
 2. **If "Train sequences" is 55,935 but you still see ~4850 batches:** Then something else is wrong (e.g. a cap or mis-read of the number). The code path does not cap the number of batches; it builds one batch per “slot” of sequences up to the token budget and batch size.
 
@@ -27,7 +27,7 @@
    - **Overlong:** Increase `max_seq_len` in config, or ensure your data isn’t longer than 1024 after sliding window.
    - **Short:** If `min_seq_valid_tokens > 0`, lower it or set to 0 so short sequences aren’t dropped.
 
-So: confirm the actual **Train sequences** and **Created Y dynamic batches** in the logs; that will tell you whether the “missing” data is from filtering (then fix max_seq_len / min_seq_valid_tokens) or from a different bug.
+So: confirm the actual **Train sequences** and **Created Y fixed batches** in the logs; that will tell you whether the “missing” data is from filtering (then fix max_seq_len / min_seq_valid_tokens) or from a different bug.
 
 ---
 
@@ -67,5 +67,5 @@ So: confirm the actual **Train sequences** and **Created Y dynamic batches** in 
 
 | Issue | Cause | Fix |
 |-------|--------|-----|
-| ~4850 batches instead of ~6992 | Fewer sequences after overlong/short filters, or mis-reading the number | Check logs for "Train sequences" and "Created Y dynamic batches"; adjust max_seq_len and min_seq_valid_tokens if needed. |
+| ~4850 batches instead of ~6992 | Fewer sequences after overlong/short filters, or mis-reading the number | Check logs for "Train sequences" and "Created Y fixed batches"; adjust max_seq_len and min_seq_valid_tokens if needed. |
 | Vocab 2250 instead of 10000 | .grmt was encoded with a tokenizer that had only ~1988 unigram pieces (total 2250) | Delete vocab.bin and .grmt; re-run DataLoader/encode so a new tokenizer (e.g. 10000 pieces) is built and .grmt is re-encoded; optionally lower min_subword_freq or add data if vocab still small. |
