@@ -230,6 +230,8 @@ void applySlidingWindows(std::vector<TrainingSequence>& sequences,
                 window.token_ids.back() = GRIM::Tokenizer::EOS_TOKEN_ID;
                 window.token_numeric_values.back() = 0.0f;
                 window.token_atom_mask.back() = 0;
+                window.atom_entry_ids.back() = GRIM::Tokenizer::kAtomEntryNone;
+                window.token_atom_flags.back() = 0;
                 if (!window.token_exec_slots.empty())
                     window.token_exec_slots.back() = static_cast<int32_t>(-1);
                 if (!window.slot_selection_targets.empty())

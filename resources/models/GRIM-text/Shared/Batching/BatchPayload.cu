@@ -114,7 +114,6 @@ BatchPayload buildBatchPayload(
     int execution_num_steps,
     int mtp_k)
 {
-    (void)token_layout;
     BatchPayload payload;
     payload.mode = BatchPayloadMode::Training;
 
@@ -238,6 +237,34 @@ BatchPayload buildBatchPayload(
                     " has invalid target token " + std::to_string(tid) +
                     " at position " + std::to_string(t) +
                     " (must be -1 or in [0, " + std::to_string(vocab_size) + "))");
+            }
+
+            const bool token_is_atom = token_layout.isAtom(iid);
+            const bool mask_is_atom = seq->token_atom_mask[t] != 0;
+            const bool entry_is_atom = seq->atom_entry_ids[t] != GRIM::Tokenizer::kAtomEntryNone;
+            const bool flags_are_atom = seq->token_atom_flags[t] != 0;
+            if (token_is_atom != mask_is_atom) {
+                throw std::runtime_error(
+                    "buildBatchPayload: sequence " + std::to_string(sid) +
+                    " token_atom_mask mismatch at position " + std::to_string(t) +
+                    " for input token " + std::to_string(iid) +
+                    " (token_is_atom=" + std::to_string(token_is_atom) +
+                    ", atom_mask=" + std::to_string(static_cast<int>(seq->token_atom_mask[t])) + ")");
+            }
+            if (token_is_atom != entry_is_atom) {
+                throw std::runtime_error(
+                    "buildBatchPayload: sequence " + std::to_string(sid) +
+                    " atom_entry_ids mismatch at position " + std::to_string(t) +
+                    " for input token " + std::to_string(iid) +
+                    " (token_is_atom=" + std::to_string(token_is_atom) +
+                    ", atom_entry_id=" + std::to_string(seq->atom_entry_ids[t]) + ")");
+            }
+            if (!token_is_atom && flags_are_atom) {
+                throw std::runtime_error(
+                    "buildBatchPayload: sequence " + std::to_string(sid) +
+                    " has nonzero token_atom_flags=" + std::to_string(seq->token_atom_flags[t]) +
+                    " at non-atom input token " + std::to_string(iid) +
+                    " position " + std::to_string(t));
             }
         }
 
