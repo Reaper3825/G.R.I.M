@@ -49,11 +49,7 @@ const char* modeName(ModelForwardMode mode) {
 }
 
 void requireCenteringSequenceLengths(const Batching::BatchPayload& payload,
-                                     const Batching::BatchDeviceBindings& bindings,
                                      const char* caller) {
-    if (!bindings.d_seq_lengths) {
-        throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings.d_seq_lengths is NULL");
-    }
     if (payload.batch_size <= 0 || payload.max_seq_len <= 0) {
         throw std::runtime_error(std::string(caller) + ": invalid payload geometry batch=" +
                                  std::to_string(payload.batch_size) + " seq=" +
@@ -96,9 +92,6 @@ void ModelForwardRequest::validate(const char* caller) const {
             ") does not match BatchPayload geometry (" + std::to_string(payload->batch_size) + "x" +
             std::to_string(payload->max_seq_len) + ")");
     }
-    if (!bindings->d_seq_lengths) {
-        throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings.d_seq_lengths is NULL");
-    }
     if (static_cast<int>(payload->seq_lengths.size()) != payload->batch_size) {
         throw std::runtime_error(std::string(caller) + ": payload.seq_lengths size (" +
                                  std::to_string(payload->seq_lengths.size()) +
@@ -123,13 +116,13 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
     auto* ts = request.runtime_state;
     const auto* cfg = request.config;
     auto& intermediates = ts->autograd_intermediates;
-    const auto* bindings = request.bindings;
     const auto& payload = *request.payload;
+    const auto* bindings = request.bindings;
     const bool is_training = request.trainingGraph();
     const bool preserve_layer_intermediates = request.preservesLayerIntermediates();
 
     if (cfg->center_encoder_residuals || cfg->lm_head_center_hidden_states) {
-        requireCenteringSequenceLengths(payload, *bindings, "ModelForward");
+        requireCenteringSequenceLengths(payload, "ModelForward");
     }
 
     const int total_tokens = payload.total_tokens;
@@ -308,7 +301,7 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
 
             Tensor& layer_input = (layer_idx == 0) ? intermediates.embedding_tensor : running;
             Tensor layer_output_view = enc_layer->forward(
-                layer_input, payload, bindings->d_seq_lengths, request.stream, request.cublas_handle, *layer_storage,
+                layer_input, payload, request.stream, request.cublas_handle, *layer_storage,
                 request.batch_idx, false, layer_idx);
 
             Tensor owned = Tensor::empty(layer_output_view.shape, false, request.stream, "no_grad_layer_output");
@@ -370,7 +363,7 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
                 : intermediates.encoder_layer_outputs.back();
 
             Tensor layer_output = enc_layer->forward(
-                layer_input, payload, bindings->d_seq_lengths, request.stream, request.cublas_handle, layer_storage,
+                layer_input, payload, request.stream, request.cublas_handle, layer_storage,
                 request.batch_idx, is_training, layer_idx);
 
             if (layer_idx == exec_layer && request.execution_block) {
@@ -542,7 +535,7 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
                     throw std::runtime_error("ModelForward: center_encoder_residuals requires payload.max_seq_len > 1; single-row column centering would erase the residual stream");
                 }
                 layer_output = autograd::center_columns_by_sequence_lengths(
-                    layer_output, bindings->d_seq_lengths, payload.batch_size, payload.max_seq_len, request.stream);
+                    layer_output, payload.seq_lengths, payload.batch_size, payload.max_seq_len, request.stream);
             }
 
             intermediates.encoder_layer_outputs.push_back(std::move(layer_output));
@@ -576,9 +569,7 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
     Tensor logits_tensor = request.lm_head->forward(
         intermediates.encoder_output_tensor,
         intermediates.centered_encoder_output,
-        bindings->d_seq_lengths,
-        payload.batch_size,
-        payload.max_seq_len,
+        payload,
         request.stream,
         request.cublas_handle);
 

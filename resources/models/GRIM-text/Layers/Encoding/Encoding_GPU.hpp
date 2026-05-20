@@ -117,7 +117,6 @@ public:
      * 
      * @param input [total_tokens, d_model] - encoder input (from embedding or prev layer)
     * @param payload Host-side batch geometry and sequence lengths
-    * @param d_sequence_lengths Device [batch_size] real lengths for padding-aware centering
     * @param stream CUDA stream from the caller's forward payload/request
     * @param cublas_handle cuBLAS handle from the caller's forward payload/request
      * @param intermediates Storage for this layer's intermediate tensors (REQUIRED for autograd)
@@ -127,7 +126,7 @@ public:
      * @return output [total_tokens, d_model] with grad_fn attached
      */
     Tensor forward(const Tensor& input, const BatchPayload& payload,
-                         const int* d_sequence_lengths, cudaStream_t stream, cublasHandle_t cublas_handle,
+                         cudaStream_t stream, cublasHandle_t cublas_handle,
                          ForwardIntermediates& intermediates,
                          uint64_t batch_idx = 0,
                 bool dropout_enabled = false,

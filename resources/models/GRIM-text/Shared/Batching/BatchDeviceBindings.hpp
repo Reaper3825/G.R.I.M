@@ -22,10 +22,10 @@
 //
 //  OWNERSHIP
 //  =========
-//  BatchDeviceBindings owns NOTHING. The underlying device
-//  memory is owned by TrainingState (cached_token_ids_tensor,
-//  cached_token_to_slot_map, etc.). BatchDeviceBindings is a
-//  view: pointers + the geometry used to interpret them.
+//  BatchDeviceBindings owns NOTHING. The underlying device memory is borrowed
+//  from the current lifecycle boundary. Batch semantics and geometry, including
+//  sequence lengths, remain on BatchPayload instead of being mirrored as device
+//  mailboxes.
 //
 //  LIFETIME
 //  ========
@@ -56,7 +56,6 @@ struct BatchPayload;
 struct BatchDeviceBindings {
     int*      d_input_ids       = nullptr;  // [batch_size * max_seq_len]
     int*      d_target_ids      = nullptr;  // [batch_size * max_seq_len]
-    int*      d_seq_lengths     = nullptr;  // [batch_size] real token count per padded row
     float*    d_numeric_values  = nullptr;  // [batch_size * max_seq_len]
     uint8_t*  d_atom_mask       = nullptr;  // [batch_size * max_seq_len] (nullable when atom mask not used)
     uint32_t* d_atom_flags      = nullptr;  // [batch_size * max_seq_len] (nullable when not allocated)

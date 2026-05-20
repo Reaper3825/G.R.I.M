@@ -352,7 +352,7 @@ void EncodingLayer::validateConstructionSnapshot(const char* context) const {
 //======================================================//
 
 Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
-                               const int* d_sequence_lengths, cudaStream_t stream, cublasHandle_t cublas_handle,
+                               cudaStream_t stream, cublasHandle_t cublas_handle,
                                ForwardIntermediates& intermediates,
                                uint64_t batch_idx,
                                bool dropout_enabled,
@@ -399,9 +399,6 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     }
     
     if (hp.center_encoder_residuals) {
-        if (!d_sequence_lengths) {
-            throw std::runtime_error("EncodingLayer::forward: center_encoder_residuals requires non-null d_sequence_lengths");
-        }
         if (static_cast<int>(payload.seq_lengths.size()) != payload.batch_size) {
             throw std::runtime_error("EncodingLayer::forward: payload.seq_lengths size (" +
                                      std::to_string(payload.seq_lengths.size()) +
@@ -540,7 +537,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
             throw std::runtime_error("EncodingLayer::forward: center_encoder_residuals requires payload.max_seq_len > 1; single-row column centering would erase the residual stream");
         }
         intermediates.residual1 = autograd::center_columns_by_sequence_lengths(
-            intermediates.residual1, d_sequence_lengths, payload.batch_size, payload.max_seq_len, stream);
+            intermediates.residual1, payload.seq_lengths, payload.batch_size, payload.max_seq_len, stream);
     }
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 7: Residual1 (pre-norm, no sandwich) DONE\n");
     

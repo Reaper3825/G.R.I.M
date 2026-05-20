@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <vector>
 #include <cuda_runtime.h>
 
 namespace GRIM {
@@ -22,8 +23,7 @@ struct CenterColumnsGradFn : public GradFn {
     int rows_per_group = 0;
     int group_count = 0;
     bool use_sequence_lengths = false;
-    int* sequence_lengths = nullptr;
-    std::shared_ptr<int> owned_sequence_lengths;
+    std::vector<int> sequence_lengths;
 
     float* input_grad = nullptr;
     std::shared_ptr<GradFn> input_grad_fn;
@@ -34,7 +34,7 @@ struct CenterColumnsGradFn : public GradFn {
     CenterColumnsGradFn();
 
     void capture_input(Tensor& input, int cols, int rows, int group_rows,
-                       const int* d_sequence_lengths, int groups,
+                       const std::vector<int>* sequence_lengths, int groups,
                        cudaStream_t stream);
     void apply_impl(const Tensor& grad_output, cudaStream_t stream) override;
     void release_saved() override;

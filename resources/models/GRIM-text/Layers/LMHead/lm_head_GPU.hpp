@@ -26,6 +26,7 @@
 
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
+#include "../../Shared/Batching/BatchPayload.hpp"
 
 namespace GRIM {
 
@@ -127,14 +128,12 @@ public:
     ///
     /// @param input                    [total_tokens, d_model] - encoder output (MUST have grad_fn if training)
     /// @param out_centered_hidden      Output: centered hidden states (valid only if centering enabled, for diagnostics)
-    /// @param d_sequence_lengths       Device [batch_size] real lengths for padding-aware hidden centering
-    /// @param batch_size               Number of flattened sequences/samples
-    /// @param rows_per_sequence        Padded contiguous rows per sequence/sample in the flattened input
+    /// @param payload                  Host-side batch geometry and real lengths for padding-aware hidden centering
     /// @param stream                   CUDA stream from the caller's forward payload/request
     /// @param cublas_handle            cuBLAS handle from the caller's forward payload/request
     /// @return logits [total_tokens, vocab_size] with grad_fn attached
     Tensor forward(const Tensor& input, Tensor& out_centered_hidden,
-                   const int* d_sequence_lengths, int batch_size, int rows_per_sequence,
+                   const Batching::BatchPayload& payload,
                    cudaStream_t stream, cublasHandle_t cublas_handle);
 
 

@@ -83,10 +83,6 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
             throw std::runtime_error("uploadBatchToDevice: cached_targets_tensor.data is NULL for training payload");
         }
     }
-    int* cached_seq_lengths_ptr = reinterpret_cast<int*>(training_state_.cached_seq_lengths_tensor.data);
-    if (!cached_seq_lengths_ptr) {
-        throw std::runtime_error("uploadBatchToDevice: cached_seq_lengths_tensor.data is NULL");
-    }
     int* cached_mtp_shifted_targets_ptr = nullptr;
     if (!payload.mtp_shifted_targets.empty()) {
         const auto mtp_hp = HyperParameters::mtpFeatureHP(cfg);
@@ -120,7 +116,6 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
 
     const size_t input_ids_bytes   = payload.inputIdBytes();
     const size_t target_ids_bytes  = payload.targetIdBytes();
-    const size_t seq_lengths_bytes = payload.seq_lengths.size() * sizeof(int);
     const size_t numeric_val_bytes = payload.numericValueBytes();
     const size_t atom_mask_bytes   = payload.atomMaskBytes();
     const size_t atom_flag_bytes   = payload.atomFlagBytes();
@@ -140,8 +135,6 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
         CUDA_CHECK(cudaMemcpyAsync(cached_targets_ptr, payload.target_ids.data(),
             target_ids_bytes, cudaMemcpyHostToDevice, stream));
     }
-    CUDA_CHECK(cudaMemcpyAsync(cached_seq_lengths_ptr, payload.seq_lengths.data(),
-        seq_lengths_bytes, cudaMemcpyHostToDevice, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
     // Round 2: numeric_values + atom_mask.
@@ -194,7 +187,6 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
     Batching::BatchDeviceBindings bindings;
     bindings.d_input_ids        = cached_token_ids_ptr;
     bindings.d_target_ids       = cached_targets_ptr;
-    bindings.d_seq_lengths      = cached_seq_lengths_ptr;
     bindings.d_numeric_values   = cached_numeric_values_ptr;
     bindings.d_atom_mask        = reinterpret_cast<uint8_t*>(cached_atom_mask_ptr);
     bindings.d_atom_flags       = training_state_.cached_token_atom_flags.data

@@ -164,8 +164,13 @@ void EmbeddingGradFn::save(const int* ids, int tokens, int d, bool copy_ids, cud
 
     if (copy_ids) {
         cudaMallocOrThrow(reinterpret_cast<void**>(&token_ids), tokens * sizeof(int), "EmbeddingGradFn_token_ids");
-        cudaMemcpyAsync(token_ids, ids, tokens * sizeof(int), cudaMemcpyDeviceToDevice, stream);
         owns_token_ids = true;
+        const cudaError_t copy_err = cudaMemcpyAsync(
+            token_ids, ids, tokens * sizeof(int), cudaMemcpyDeviceToDevice, stream);
+        if (copy_err != cudaSuccess) {
+            throw std::runtime_error(std::string("EmbeddingGradFn::save: cudaMemcpyAsync(token_ids) failed: ") +
+                                     cudaGetErrorString(copy_err));
+        }
     } else {
         token_ids = const_cast<int*>(ids);
         owns_token_ids = false;
@@ -184,10 +189,10 @@ void EmbeddingGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream)
         AG_TRACE("[EmbeddingGradFn::apply] SKIP - already applied\n");
         return;
     }
-    applied = true;
 
     if (!weight_requires_grad) {
         AG_TRACE("[EmbeddingGradFn::apply] SKIP - weight does not require grad\n");
+        applied = true;
         return;
     }
     if (!token_ids) {
@@ -201,6 +206,13 @@ void EmbeddingGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream)
     if (!grad_output.data) {
         throw std::runtime_error("EmbeddingGradFn::apply: grad_output.data is NULL");
     }
+    const size_t expected_count = static_cast<size_t>(num_tokens) * static_cast<size_t>(d_model);
+    const size_t actual_count = grad_output.numel();
+    if (actual_count != expected_count) {
+        throw std::runtime_error("EmbeddingGradFn::apply: grad_output element count mismatch. expected=" +
+                                 std::to_string(expected_count) + " got=" +
+                                 std::to_string(actual_count));
+    }
 
     // PyTorch-style direct accumulation — embedding grad writes
     // to same buffer where LM head grad already lives. Natural ~90% cancellation
@@ -208,6 +220,7 @@ void EmbeddingGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream)
     kernel_embedding_backward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
         grad_output.data, token_ids, weight_grad, num_tokens, d_model, vocab_size, embedding_scale);
     trackKernelLaunch("kernel_embedding_backward", stream);
+    applied = true;
 
     // CONTINUE AUTOGRAD CHAIN using stored grad_fn
     if (weight_grad_fn) {
@@ -260,6 +273,7 @@ Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens, cud
     const int vocab_size = weight.shape.as_2d().rows;
     kernel_embedding_forward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
         token_ids, weight.data, result.data, num_tokens, d_model, vocab_size, embedding_scale);
+    trackKernelLaunch("kernel_embedding_forward", stream);
 
     // Set up backward - ISSUE #48: capture stable data, not Tensor*
     if (weight.requires_grad) {

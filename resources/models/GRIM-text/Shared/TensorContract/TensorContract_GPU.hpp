@@ -1243,14 +1243,14 @@ Tensor center_columns_by_sequence(const Tensor& x, int rows_per_sequence, cudaSt
  * centering mean while keeping each sample independent.
  *
  * @param x Input tensor [batch_size * rows_per_sequence, D]
- * @param d_sequence_lengths Device int32 array [batch_size]
+ * @param sequence_lengths Host-side real lengths from BatchPayload [batch_size]
  * @param batch_size Number of sequences/samples in the flattened tensor
  * @param rows_per_sequence Padded row stride per sequence/sample
  * @param stream CUDA stream
  * @return Centered tensor; valid rows are centered, padded rows are zeroed
  */
 Tensor center_columns_by_sequence_lengths(const Tensor& x,
-                                          const int* d_sequence_lengths,
+                                          const std::vector<int>& sequence_lengths,
                                           int batch_size,
                                           int rows_per_sequence,
                                           cudaStream_t stream = nullptr);

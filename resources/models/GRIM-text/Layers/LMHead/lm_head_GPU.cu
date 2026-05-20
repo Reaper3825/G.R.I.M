@@ -166,7 +166,7 @@ LMHeadLayer& LMHeadLayer::operator=(LMHeadLayer&& other) noexcept {
 //======================================================//
 
 Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
-                            const int* d_sequence_lengths, int batch_size, int rows_per_sequence,
+                            const Batching::BatchPayload& payload,
                             cudaStream_t stream, cublasHandle_t cublas_handle) {
     // Rule 20: Crash on invalid state
     if (!weights_.data) {
@@ -183,6 +183,8 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
 
     const int total_tokens = input.shape.as_2d().rows;
     const int d_model = input.shape.as_2d().cols;
+    const int batch_size = payload.batch_size;
+    const int rows_per_sequence = payload.max_seq_len;
 
     if (rows_per_sequence <= 0) {
         throw std::runtime_error("LMHeadLayer::forward: rows_per_sequence must be > 0, got " +
@@ -191,6 +193,11 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
     if (batch_size <= 0) {
         throw std::runtime_error("LMHeadLayer::forward: batch_size must be > 0, got " +
                                  std::to_string(batch_size));
+    }
+    if (static_cast<int>(payload.seq_lengths.size()) != batch_size) {
+        throw std::runtime_error("LMHeadLayer::forward: payload.seq_lengths size (" +
+                                 std::to_string(payload.seq_lengths.size()) +
+                                 ") != batch_size (" + std::to_string(batch_size) + ")");
     }
     if (total_tokens % rows_per_sequence != 0) {
         throw std::runtime_error("LMHeadLayer::forward: input rows (" + std::to_string(total_tokens) +
@@ -256,15 +263,12 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
         if (rows_per_sequence <= 1) {
             throw std::runtime_error("LMHeadLayer::forward: center_hidden_states requires rows_per_sequence > 1; single-token decode cannot column-center hidden states without erasing the signal");
         }
-        if (!d_sequence_lengths) {
-            throw std::runtime_error("LMHeadLayer::forward: center_hidden_states requires non-null d_sequence_lengths");
-        }
         // Column-center h within each sequence: removes common direction across
         // valid positions without coupling samples inside the batch or including
         // PAD activations in the mean (Issue #125).
         // Row-centering moved to W at STEP 2 (April 2026 reformulation).
         centered_hidden_for_pc1 = autograd::center_columns_by_sequence_lengths(
-            *current_input, d_sequence_lengths, batch_size, rows_per_sequence, stream);
+            *current_input, payload.seq_lengths, batch_size, rows_per_sequence, stream);
         matmul_input = &centered_hidden_for_pc1;
     }
 

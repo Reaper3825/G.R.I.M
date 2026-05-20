@@ -82,14 +82,6 @@ void TrainingState::allocateStepDeviceWorkspaces(
     std::cout << "✓ Allocated token IDs cache (Tensor API) [" << token_capacity
               << "]" << std::endl;
 
-    cached_seq_lengths_tensor = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(1, max_batch_size),
-        false,
-        stream,
-        "cached_seq_lengths");
-    std::cout << "✓ Allocated sequence-length cache (Tensor API) [" << config.max_cached_batch
-              << "]" << std::endl;
-
     cached_token_numeric_values = Tensor::empty(
         TensorContract::TensorShape::make_BSM(1, max_tokens),
         false,
