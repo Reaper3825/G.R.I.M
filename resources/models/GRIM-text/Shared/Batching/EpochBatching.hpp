@@ -31,8 +31,8 @@ using EpochBatchingLogFn = std::function<void(const std::string&)>;
 // Build the BatchSchedule for one epoch.
 //
 //  sequence_lengths       — sequence lengths; index is the seq_id.
-//  max_tokens_per_batch — run capacity token rectangle (batch_rows * seq_cap).
-//  max_batch_size       — run capacity batch rows.
+//  fixed_sequence_cap    — configured max_seq_len / run sequence cap.
+//  fixed_batch_size      — configured batch_size.
 //  global_step  — current optimizer step; accepted to keep the call boundary explicit.
 //  epoch        — 0-based epoch index used for deterministic per-epoch RNG.
 //  data_seed    — base data RNG seed; per-epoch seed = data_seed + epoch + 1.
@@ -41,8 +41,8 @@ using EpochBatchingLogFn = std::function<void(const std::string&)>;
 //======================================================//
 BatchSchedule buildEpochBatches(
     const std::vector<uint32_t>& sequence_lengths,
-    uint32_t max_tokens_per_batch,
-    uint32_t max_batch_size,
+    uint32_t fixed_sequence_cap,
+    uint32_t fixed_batch_size,
     int global_step,
     int epoch,
     uint64_t data_seed,
@@ -56,7 +56,6 @@ BatchSchedule buildEpochBatches(
 //======================================================//
 void logBatchSchedule(
     const BatchSchedule& schedule,
-    uint32_t max_tokens_per_batch,
     const EpochBatchingLogFn& log_fn);
 
 } } // namespace GRIM::Batching

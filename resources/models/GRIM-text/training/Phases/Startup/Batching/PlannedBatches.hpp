@@ -25,7 +25,7 @@
 //  =============
 //  - LoadTrainingData (train/val views and sequence lengths populated)
 //  - ModelAllocated (ctx.model is non-null)
-//  - CapacityStemReady (ctx.run_capacity has token rectangle + batch rows)
+//  - HyperparametersReady (ctx.config has fixed max_seq_len and batch_size)
 //  - PayloadBuildInputsReady (ctx.payload_build_inputs is authored)
 //  - RngReady (ctx.rng.data_seed is set so epoch permutations are deterministic)
 //

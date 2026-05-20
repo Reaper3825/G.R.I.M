@@ -410,9 +410,9 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **DELETED**: `estimateBatching()` + `BatchEstimate` struct — zero external callers (Rule 26)
   - **DELETED**: `GRADIENT_BALANCED` enum variant — unimplemented, fell through to GREEDY (Rule 20)
   - **DELETED**: Runtime `adaptive_token_budget` feature — redundant with `analyzeAndRecommend()` already called in Phase2 (Rule 26)
-  - **FIXED**: `max_tokens_per_batch` default changed 8192→0 (Rule 20: caller MUST set, throws if 0)
+  - **FIXED**: scheduler capacity no longer derives sequence length from `max_tokens_per_batch`; callers pass configured `max_seq_len` and `batch_size`
   - **FIXED**: `BatchOrdering::RANDOM` seed changed from hardcoded 42 → derived from `opts.rng_seed`
-  - **FIXED**: `buildBatches()` throws on `max_tokens_per_batch=0` or `max_batch_size=0` instead of silent empty return (Rule 20)
+  - **FIXED**: `buildBatches()` throws on `fixed_sequence_cap=0` or `fixed_batch_size=0` instead of silently accepting invalid geometry (Rule 20)
   - **DELETED**: `Shared/DynaSeqs/DynaSeq_GPU.{hpp,cu}` catalog middleman — scheduler now consumes Phase1-authored sequence length vectors directly
   - BatchPayload.cu: Excellent Rule 20 compliance — thorough cross-check validation ✅
 

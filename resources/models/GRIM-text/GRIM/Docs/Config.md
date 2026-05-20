@@ -52,7 +52,7 @@ if (max_seq_len == 0)
 ```
 
 ## Validation token budget
-Validation MUST use Phase1-authored capacity/grouping facts (`ctx.run_capacity.max_tokens_per_batch`, `ctx.model_allocation.model_max_tokens_per_batch`, or an explicit `HyperparameterGroupings.hpp` view), never the `LanguageModel` config accessor and never a hardcoded constant — buffer overflow crash otherwise.
+Validation MUST use Phase1-authored config/grouping facts (`capacityHP(ctx.config)`, `ctx.model_allocation.model_max_tokens_per_batch`, or another explicit `HyperparameterGroupings.hpp` view), never the `LanguageModel` config accessor and never a hardcoded constant — buffer overflow crash otherwise. Batch scheduling consumes configured `max_seq_len` and `batch_size` directly; it must not derive sequence length from `max_tokens_per_batch`.
 
 ## `per_token_grad_scale=true`
 Required. See [Encoder.md](Encoder.md).

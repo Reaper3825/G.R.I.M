@@ -9,7 +9,8 @@ namespace GRIM::Batching {
 /**
  * @brief Policy-only scheduler inputs (no capacity ownership).
  *
- * Capacity (max_tokens_per_batch, max_batch_size) must be passed separately.
+ * Fixed run geometry (sequence cap, batch rows) must be passed separately from
+ * the config/hyperparameter-authored capacity path.
  */
 struct PackerPolicy {
     // === Batch ordering ===

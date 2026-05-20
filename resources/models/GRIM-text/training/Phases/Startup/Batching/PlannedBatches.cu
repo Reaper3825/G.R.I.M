@@ -9,7 +9,7 @@
 #include "../../../../Shared/Batching/EpochBatching.hpp"      // buildEpochBatches
 #include "../../../../Shared/Batching/PackerPolicy.hpp"
 #include "../../../../Shared/Batching/Batching_GPU.hpp"       // buildBatches
-#include "../../../../Shared/HyperParameters/HyperparameterGroupings.hpp"  // coreRunHP
+#include "../../../../Shared/HyperParameters/HyperparameterGroupings.hpp"  // capacityHP, coreRunHP
 #include "../../../../Shared/UnigramByte/UniByte.hpp"          // GRIM::Tokenizer::TokenLayout
 
 #include <algorithm>
@@ -110,14 +110,12 @@ void PlannedBatchesReady(TrainingContext& ctx) {
             "FATAL: PlannedBatchesReady requires PayloadBuildInputsReady to "
             "have authored ctx.payload_build_inputs");
     }
-    if (ctx.run_capacity.batch_rows == 0 ||
-        ctx.run_capacity.seq_cap == 0 ||
-        ctx.run_capacity.max_tokens_per_batch == 0) {
+    const auto capacity = ::GRIM::HyperParameters::capacityHP(ctx.config);
+    if (capacity.batch_size <= 0 || capacity.max_seq_len <= 0) {
         std::ostringstream oss;
-        oss << "FATAL: PlannedBatchesReady requires a valid RunCapacity "
-            << "(batch_rows=" << ctx.run_capacity.batch_rows
-            << " seq_cap=" << ctx.run_capacity.seq_cap
-            << " max_tokens_per_batch=" << ctx.run_capacity.max_tokens_per_batch
+        oss << "FATAL: PlannedBatchesReady requires configured batching hyperparameters "
+            << "(batch_size=" << capacity.batch_size
+            << " max_seq_len=" << capacity.max_seq_len
             << ")";
         throw std::runtime_error(oss.str());
     }
@@ -152,8 +150,8 @@ void PlannedBatchesReady(TrainingContext& ctx) {
 
     ctx.fixed_train_schedule = GRIM::Batching::buildEpochBatches(
         ctx.data.train_seq_lengths,
-        ctx.run_capacity.max_tokens_per_batch,
-        ctx.run_capacity.batch_rows,
+        static_cast<uint32_t>(capacity.max_seq_len),
+        static_cast<uint32_t>(capacity.batch_size),
         /*global_step=*/0,
         /*epoch=*/0,
         /*data_seed=*/ctx.rng.data_seed,
@@ -193,8 +191,8 @@ void PlannedBatchesReady(TrainingContext& ctx) {
 
         ctx.fixed_val_schedule = GRIM::Batching::buildBatches(
             ctx.data.val_seq_lengths,
-            ctx.run_capacity.max_tokens_per_batch,
-            ctx.run_capacity.batch_rows,
+            static_cast<uint32_t>(capacity.max_seq_len),
+            static_cast<uint32_t>(capacity.batch_size),
             val_policy);
 
         const int num_val_batches =

@@ -30,10 +30,11 @@ struct BatchAssignment {
 struct BatchSchedule {
     std::vector<BatchAssignment> batches;
     
-    // Token statistics. `sequence_cap` is derived from the run capacity
-    // rectangle: max_tokens_per_batch / max_batch_size. Payloads pad each row to
-    // this cap, so schedule totals use batch_size * sequence_cap, not per-batch
-    // observed max length.
+    // Token statistics. `sequence_cap` and `batch_size` are authored by the
+    // startup config/hyperparameter path. Payloads pad each row to this
+    // fixed cap, so schedule totals use batch_size * sequence_cap, not per-batch
+    // observed max length. The scheduler must not derive geometry from a token
+    // budget.
     uint32_t sequence_cap = 0;
     uint64_t total_tokens = 0;           // total compute tokens (with fixed padding)
     uint64_t actual_tokens = 0;          // actual content tokens
@@ -58,14 +59,14 @@ struct BatchSchedule {
 // =============================================================================
 
 // Build batches from sequence lengths with given options. The vector index is the
-// seq_id consumed later by buildBatchPayload(). max_tokens_per_batch must be the
-// fixed run rectangle (max_batch_size * sequence_cap); buildBatches derives the
-// single sequence cap from it and fails if any post-window sequence exceeds it.
+// seq_id consumed later by buildBatchPayload(). fixed_sequence_cap and
+// fixed_batch_size must be the configured hyperparameter-authored run geometry;
+// buildBatches fails if any post-window sequence exceeds that fixed cap.
 struct PackerPolicy;
 BatchSchedule buildBatches(
     const std::vector<uint32_t>& sequence_lengths,
-    uint32_t max_tokens_per_batch,
-    uint32_t max_batch_size,
+    uint32_t fixed_sequence_cap,
+    uint32_t fixed_batch_size,
     const PackerPolicy& policy);
 
 } // namespace GRIM::Batching

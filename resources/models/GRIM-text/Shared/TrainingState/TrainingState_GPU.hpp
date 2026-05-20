@@ -87,6 +87,13 @@ struct TrainingState {
     // AutogradIntermediates is cleared at the forward/backward boundary.
     Tensor cached_encoder_output;       // [max_tokens, d_model] LM-head input snapshot for diagnostics only
     Tensor cached_logits_tensor;        // [max_tokens, vocab_size] logits snapshot for diagnostics/inference return
+    Tensor cached_targets_tensor;       // [max_tokens, 1] reusable target upload workspace
+    Tensor cached_token_ids_tensor;     // [1, max_tokens] reusable token-id upload workspace
+    Tensor cached_token_numeric_values; // [1, max_tokens] reusable numeric side-channel upload workspace
+    Tensor cached_mtp_shifted_targets_tensor; // [mtp_k, max_tokens] reusable MTP target upload workspace
+    Tensor cached_token_atom_mask;      // [1, max_tokens] reusable atom-mask upload workspace
+    Tensor cached_token_atom_flags;     // [1, max_tokens] reusable atom-flags upload workspace
+    Tensor cached_token_to_slot_map;    // [1, max_tokens] reusable token-to-slot upload workspace
     
     // Authoritative batch index for autograd forward passes.
     // Sourced from runEpoch's active batch_idx; set by autogradTrainingStep

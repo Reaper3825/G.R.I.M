@@ -20,26 +20,6 @@ inline uint32_t percentile(const std::vector<uint32_t>& sorted_lengths, float p)
     return sorted_lengths[std::min(idx, sorted_lengths.size() - 1)];
 }
 
-inline uint32_t deriveSequenceCap(uint32_t max_tokens_per_batch, uint32_t max_batch_size) {
-    if (max_batch_size == 0) {
-        throw std::runtime_error("deriveSequenceCap: max_batch_size=0 — caller MUST set batch size limit");
-    }
-    if (max_tokens_per_batch % max_batch_size != 0) {
-        throw std::runtime_error(
-            "buildBatches: max_tokens_per_batch (" + std::to_string(max_tokens_per_batch) +
-            ") is not divisible by max_batch_size (" + std::to_string(max_batch_size) +
-            ") — run capacity MUST be a fixed rectangle batch_rows * sequence_cap");
-    }
-    const uint32_t sequence_cap = max_tokens_per_batch / max_batch_size;
-    if (sequence_cap == 0) {
-        throw std::runtime_error(
-            "buildBatches: derived sequence_cap=0 from max_tokens_per_batch=" +
-            std::to_string(max_tokens_per_batch) + " max_batch_size=" +
-            std::to_string(max_batch_size));
-    }
-    return sequence_cap;
-}
-
 inline uint64_t sumActualTokens(
     const BatchAssignment& batch,
     const std::vector<uint32_t>& sequence_lengths)
@@ -97,25 +77,25 @@ std::string BatchSchedule::summary() const {
 // =============================================================================
 BatchSchedule buildBatches(
     const std::vector<uint32_t>& sequence_lengths,
-    uint32_t max_tokens_per_batch,
-    uint32_t max_batch_size,
+    uint32_t fixed_sequence_cap,
+    uint32_t fixed_batch_size,
     const PackerPolicy& policy)
 {
     BatchSchedule schedule{};
-    
+
+    if (fixed_sequence_cap == 0) {
+        throw std::runtime_error("buildBatches: fixed_sequence_cap=0 — caller MUST pass configured max_seq_len");
+    }
+    if (fixed_batch_size == 0) {
+        throw std::runtime_error("buildBatches: fixed_batch_size=0 — caller MUST pass configured batch_size");
+    }
+
+    schedule.sequence_cap = fixed_sequence_cap;
+    schedule.batch_size = fixed_batch_size;
+
     if (sequence_lengths.empty()) {
         return schedule;
     }
-    if (max_tokens_per_batch == 0) {
-        throw std::runtime_error("buildBatches: max_tokens_per_batch=0 — caller MUST set token budget");
-    }
-    if (max_batch_size == 0) {
-        throw std::runtime_error("buildBatches: max_batch_size=0 — caller MUST set batch size limit");
-    }
-
-    const uint32_t sequence_cap = deriveSequenceCap(max_tokens_per_batch, max_batch_size);
-    schedule.sequence_cap = sequence_cap;
-    schedule.batch_size = max_batch_size;
 
     // Build indices of valid sequences + compute length percentiles in ONE pass
     std::vector<uint32_t> view_indices;
@@ -152,7 +132,7 @@ BatchSchedule buildBatches(
     // =======================================================================
     
     BatchAssignment current{};
-    current.seq_ids.reserve(max_batch_size);
+    current.seq_ids.reserve(fixed_batch_size);
 
     for (uint32_t entry_idx : view_indices) {
         const uint32_t seq_len = sequence_lengths[entry_idx];
@@ -160,26 +140,26 @@ BatchSchedule buildBatches(
         
         // Capacity contract (Rule 20): no overflow batches. If a single
         // sequence violates the fixed sequence cap, fail loud with identifiers.
-        if (seq_len > sequence_cap) {
+        if (seq_len > fixed_sequence_cap) {
             throw std::runtime_error(
                 "buildBatches: sequence exceeds fixed sequence cap (seq_id=" + std::to_string(seq_id) +
                 " seq_len=" + std::to_string(seq_len) +
-                " sequence_cap=" + std::to_string(sequence_cap) + ")");
+                " sequence_cap=" + std::to_string(fixed_sequence_cap) + ")");
         }
 
         current.seq_ids.push_back(seq_id);
-        if (current.seq_ids.size() == max_batch_size) {
+        if (current.seq_ids.size() == fixed_batch_size) {
             schedule.batches.push_back(std::move(current));
             current = BatchAssignment{};
-            current.seq_ids.reserve(max_batch_size);
+            current.seq_ids.reserve(fixed_batch_size);
         }
     }
 
     if (!current.seq_ids.empty()) {
         throw std::runtime_error(
-            "buildBatches: input sequence count does not fill fixed batch rows (remaining=" +
-            std::to_string(current.seq_ids.size()) + " batch_rows=" +
-            std::to_string(max_batch_size) + ") — upstream planning MUST provide a divisible sequence count");
+            "buildBatches: input sequence count does not fill fixed batch size (remaining=" +
+            std::to_string(current.seq_ids.size()) + " batch_size=" +
+            std::to_string(fixed_batch_size) + ") — upstream planning MUST provide a divisible sequence count");
     }
     
     // =======================================================================
@@ -191,20 +171,20 @@ BatchSchedule buildBatches(
     
     for (const auto& batch : schedule.batches) {
         const uint32_t size = static_cast<uint32_t>(batch.seq_ids.size());
-        if (size != max_batch_size) {
+        if (size != fixed_batch_size) {
             throw std::runtime_error(
                 "buildBatches: non-fixed batch size emitted (batch_size=" +
-                std::to_string(size) + " expected=" + std::to_string(max_batch_size) +
-                ") — fixed batch rows are required; upstream data count/order must produce full batches");
+                std::to_string(size) + " expected=" + std::to_string(fixed_batch_size) +
+                ") — fixed batch size is required; upstream data count/order must produce full batches");
         }
         const uint64_t batch_actual = sumActualTokens(batch, sequence_lengths);
-        const uint64_t batch_compute = static_cast<uint64_t>(sequence_cap) * max_batch_size;
+        const uint64_t batch_compute = static_cast<uint64_t>(fixed_sequence_cap) * fixed_batch_size;
         if (batch_compute < batch_actual) {
             throw std::runtime_error(
                 "buildBatches: fixed compute tokens smaller than actual tokens (batch_compute=" +
                 std::to_string(batch_compute) + " batch_actual=" +
                 std::to_string(batch_actual) + " sequence_cap=" +
-                std::to_string(sequence_cap) + " batch_size=" +
+                std::to_string(fixed_sequence_cap) + " batch_size=" +
                 std::to_string(batch.seq_ids.size()) + ")");
         }
         total_actual += batch_actual;

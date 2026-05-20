@@ -9,7 +9,7 @@
 
 **What actually determines batch count:**
 
-- Batches are built with **fixed batch rows** (`Batching_GPU.cu::buildBatches`): every emitted training batch must contain exactly `batch_size` sequence IDs, and every row is padded by `BatchPayload` to the fixed sequence cap derived from `max_tokens_per_batch / batch_size` (e.g. 8 × 1024 = 8192). The scheduler fails loud if a post-window sequence exceeds the sequence cap or if it would emit a partial batch. It does not length-sort, prefer short rows first, or run a curriculum packing policy; training randomization is seeded shuffle only.
+- Batches are built with **fixed batch size** (`Batching_GPU.cu::buildBatches`): every emitted training batch must contain exactly `batch_size` sequence IDs, and every row is padded by `BatchPayload` to the configured fixed sequence cap (`max_seq_len`, e.g. 1024). The padded token rectangle is `batch_size × max_seq_len` (e.g. 8 × 1024 = 8192), but the scheduler consumes `max_seq_len` and `batch_size` directly from the config/hyperparameter path; it does not derive sequence length from a token budget. The scheduler fails loud if a post-window sequence exceeds the sequence cap or if it would emit a partial batch. It does not length-sort, prefer short rows first, or run a curriculum packing policy; training randomization is seeded shuffle only.
 - So the number of batches is determined by **how many sequences are in the train catalog** when the epoch runs. That catalog is built from `train_views` / `train_seqs` **after**:
   - Sliding window (can increase sequence count)
   - **filterOverlong** (removes sequences with `token_ids.size() > max_seq_len`)
@@ -21,7 +21,7 @@
    - `"Train sequences: XXXXX"` — this is the count **after** all filters. If this is ~38,800 instead of 55,935, the difference is from overlong/short filtering.
    - `"Created Y fixed batches"` at startup — Y must equal `Train sequences / 8` for batch size 8. A non-divisible train sequence count is a startup contract violation, not a smaller final batch.
 
-2. **If "Train sequences" is 55,935 but you still see ~4850 batches:** Then something else is wrong (e.g. a cap or mis-read of the number). The code path does not cap the number of batches; it builds one batch per “slot” of sequences up to the token budget and batch size.
+2. **If "Train sequences" is 55,935 but you still see ~4850 batches:** Then something else is wrong (e.g. a mis-read of the number). The code path does not cap the number of batches; it chunks all valid sequences by the configured fixed `batch_size`.
 
 3. **If "Train sequences" is ~38,800:** Then ~17k sequences are being removed by:
    - **Overlong:** Increase `max_seq_len` in config, or ensure your data isn’t longer than 1024 after sliding window.
