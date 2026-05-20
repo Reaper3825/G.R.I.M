@@ -76,10 +76,10 @@ struct TrainingState {
     // BatchPayload remains the host-side source of truth for batch geometry
     // and token semantics.
     //
-    // Training/eval upload copies BatchPayload host arrays into these reusable
-    // device buffers and returns BatchDeviceBindings as the canonical per-step
-    // device view. Forward/loss code should consume BatchDeviceBindings, not
-    // rediscover the "current batch" by reading these fields directly.
+    // Training/eval/inference upload copies BatchPayload host arrays into the
+    // per-call BatchDeviceBindings object. Forward/loss code consumes that
+    // explicit address carrier; TrainingState does not mirror the current
+    // batch as token/target device cache fields.
     //
     // Autograd Tensors with grad_fn live in autograd_intermediates, not here.
     // Output snapshots written by executeAutogradForward(). They are NOT graph
@@ -87,22 +87,6 @@ struct TrainingState {
     // AutogradIntermediates is cleared at the forward/backward boundary.
     Tensor cached_encoder_output;       // [max_tokens, d_model] LM-head input snapshot for diagnostics only
     Tensor cached_logits_tensor;        // [max_tokens, vocab_size] logits snapshot for diagnostics/inference return
-    
-    // Device mirrors of BatchPayload arrays that are true reusable token/target
-    // backing stores. LanguageModel::uploadBatchToDevice() writes them for
-    // training/eval/inference-prefill and returns BatchDeviceBindings as the
-    // only forward/loss reader-facing view. Per-step geometry such as sequence
-    // lengths is owned by BatchPayload and materialized only inside that binding
-    // boundary; TrainingState must not mirror it as a hidden global mailbox.
-    Tensor cached_targets_tensor;       // [max_tokens] int32
-    Tensor cached_token_ids_tensor;     // [max_tokens] int32
-    Tensor cached_token_numeric_values; // [max_tokens] float
-    Tensor cached_mtp_shifted_targets_tensor; // [mtp_k, max_tokens] int32 head-major MTP targets
-    
-    // Unified atom side-channel
-    Tensor cached_token_atom_mask;      // [max_tokens] uint8 (1 = atom token)
-    Tensor cached_token_atom_flags;     // [max_tokens] uint32 (type-specific metadata from AtomTable)
-    Tensor cached_token_to_slot_map;    // [max_tokens] int32  (-1 = non-state-bearing; >=0 = valid slot_id)
     
     // Authoritative batch index for autograd forward passes.
     // Sourced from runEpoch's active batch_idx; set by autogradTrainingStep

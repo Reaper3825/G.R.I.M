@@ -184,13 +184,6 @@ void LanguageModel::initGPU(uint64_t weight_init_seed) {
         //======================================================//
         //  6) Build optional model heads/subsystems
         //======================================================//
-        const auto reasoning_hp = HyperParameters::reasoningHeadConstructionHP(model_cfg);
-        if (reasoning_hp.enabled) {
-            const uint64_t rh_seed = weight_init_seed + 10;
-            reasoning_head_layer_ = std::make_unique<ReasoningHeadLayer>(reasoning_hp, rh_seed, enc_bindings.init_stream);
-            std::cout << "✓ ReasoningHead layer created\n";
-        }
-
         const auto execution_hp = HyperParameters::executionBlockConstructionHP(model_cfg);
         if (execution_hp.enabled) {
             const uint64_t eb_seed = weight_init_seed + 20;

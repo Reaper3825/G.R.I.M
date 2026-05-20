@@ -13,12 +13,10 @@
 //    buildBatchPayload() returns, no field may be written
 //    by Phase2, the loss path, or the upload path.
 //  - The forward/loss path still needs *device* addresses
-//    for this step (slot map, atom mask, etc.). Those come
-//    from TrainingState's reusable cache buffers AFTER the
-//    H2D copies for this batch land. Naming them on a
-//    struct that is passed alongside `BatchPayload` keeps
-//    the host-vs-device split explicit (no hidden state on
-//    payload, no implicit "current batch" on TrainingState).
+//    for this step (slot map, atom mask, etc.). Naming them on
+//    a struct that is passed alongside `BatchPayload` keeps the
+//    host-vs-device split explicit (no hidden state on payload,
+//    no implicit "current batch" on TrainingState).
 //
 //  OWNERSHIP
 //  =========
@@ -30,8 +28,8 @@
 //  LIFETIME
 //  ========
 //  Valid only between the upload's final stream sync and the
-//  next H2D for a different batch. Phase2 must not cache one
-//  beyond the step that produced it.
+//  lifecycle boundary that owns the current batch's device addresses. Phase2
+//  must not cache one beyond the step that produced it.
 //======================================================//
 
 #pragma once

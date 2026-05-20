@@ -105,16 +105,6 @@ void LanguageModel::initInferenceState() {
                   << (lm_hp.tie_embeddings ? "true" : "false") << ")" << std::endl;
     }
 
-    // ReasoningHead layer (inference — loaded from checkpoint if present)
-    const auto reasoning_hp = HyperParameters::reasoningHeadConstructionHP(model_cfg);
-    if (reasoning_hp.enabled) {
-
-        reasoning_head_layer_ = std::make_unique<ReasoningHeadLayer>(reasoning_hp, /*seed=*/0, primary_stream);
-        std::cout << "  ✓ ReasoningHeadLayer initialized (inference, d_total="
-                  << (reasoning_hp.d_model + reasoning_hp.atom_embedding_dim)
-                  << ", num_ops=" << reasoning_hp.num_ops << ")" << std::endl;
-    }
-
     // ExecutionBlock layer (inference — loaded from checkpoint if present)
     const auto execution_hp = HyperParameters::executionBlockConstructionHP(model_cfg);
     if (execution_hp.enabled) {

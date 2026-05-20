@@ -427,25 +427,6 @@ void registerScratchBlockParameters(LanguageModel& model,
                         ParamStatsBucket::ENCODER);
 }
 
-void registerReasoningHeadParameters(LanguageModel& model,
-                                     Registrar& registrar,
-                                     const LanguageModelConfig& config) {
-    auto* reasoning_head = model.getReasoningHeadLayer();
-
-    if (!config.reasoning_head_enabled) {
-        if (reasoning_head) {
-            throw std::runtime_error("[buildParameterGroups] ReasoningHead layer exists while config.reasoning_head_enabled=false");
-        }
-        return;
-    }
-
-    auto& head = requireLayer(reasoning_head, "ReasoningHeadLayer", "registerReasoningHeadParameters");
-    registrar.addTensor("reasoning_head_w_op", head.W_op(), ParamGroupType::REASONING_HEAD, ParamStatsBucket::ENCODER);
-    registrar.addNonDecayTensor("reasoning_head_b_op", head.b_op(), ParamGroupType::REASONING_HEAD, ParamStatsBucket::ENCODER);
-    registrar.addTensor("reasoning_head_w_arg1", head.w_arg1(), ParamGroupType::REASONING_HEAD, ParamStatsBucket::ENCODER);
-    registrar.addTensor("reasoning_head_w_arg2", head.w_arg2(), ParamGroupType::REASONING_HEAD, ParamStatsBucket::ENCODER);
-}
-
 void registerExecutionBlockParameters(LanguageModel& model,
                                       Registrar& registrar,
                                       const LanguageModelConfig& config) {
@@ -742,7 +723,6 @@ void buildParameterGroups(LanguageModel& model) {
     registerEncoderParameters(model, registrar, config);
 
     registerScratchBlockParameters(model, registrar, config);
-    registerReasoningHeadParameters(model, registrar, config);
     registerExecutionBlockParameters(model, registrar, config);
     registerMtpParameters(model, registrar, config);
     registerFinalRmsGamma(model, registrar, config);
