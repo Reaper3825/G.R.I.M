@@ -565,6 +565,7 @@ Tensor project_out_pc1(const Tensor& x, int n_power_iters, cudaStream_t stream) 
     result.requires_grad = track_grad;
     result.is_leaf = false;
     result.stream = stream;
+    result.name = "project_out_pc1_result";
 
     kernel_pc1_project<<<T, 256, 0, stream>>>(x.data, g_buf.get(), out_data.get(), T, D);
     throwIfCudaFailed(cudaGetLastError(), "project_out_pc1: kernel_pc1_project launch failed");
