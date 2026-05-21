@@ -314,7 +314,7 @@ GradientSignalBaselines captureGradientVerificationBaselines(
 
     if (activity.text_loss_active) {
         captureExpected(ctx.lm_head->weights(), "lm_head weights");
-        if (ctx.gpu_encoder && ctx.gpu_encoder->getNumLayers() > 0) {
+        if (ctx.gpu_encoder && ctx.config->num_layers > 0) {
             auto* enc0 = ctx.gpu_encoder->getLayer(0);
             if (enc0) {
                 captureExpected(enc0->attnWqkv(), "layer 0 attnWqkv");
@@ -356,7 +356,7 @@ bool verifyGradientsAreConnectedImpl(
 );
 }  // namespace
 
-ForwardResult executeAutogradForward(AutogradContext& ctx) {
+void executeAutogradForward(AutogradContext& ctx) {
     ctx.validate("executeAutogradForward");
 
     Forward::ModelForwardRequest request{};
@@ -373,22 +373,9 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
     request.payload = ctx.payload;
     request.bindings = ctx.device_bindings;
     request.batch_idx = ctx.batch_idx;
-    request.mode = ctx.is_training
-        ? Forward::ModelForwardMode::TrainingGraph
-        : Forward::ModelForwardMode::EvalNoGrad;
+    request.mode = Forward::ModelForwardMode::TrainingGraph;
 
-    Forward::ModelForwardResult shared_result = Forward::executeModelForward(request);
-
-    ForwardResult result{};
-    result.encoder_output = shared_result.encoder_output;
-    result.logits_output = shared_result.logits_output;
-    result.lm_head_input = shared_result.lm_head_input;
-    result.total_tokens = shared_result.total_tokens;
-    result.vocab_size = shared_result.vocab_size;
-    result.hidden_size = shared_result.hidden_size;
-    result.success = shared_result.success;
-    result.error_message = std::move(shared_result.error_message);
-    return result;
+    Forward::executeModelForward(request);
 }
 //======================================================================
 // Autograd Loss Computation
@@ -913,7 +900,7 @@ BackwardResult executeAutogradBackward(
 
         // Sample first encoder layer attnWqkv gradient
         float enc_sample = 0.0f;
-        if (ctx.gpu_encoder && ctx.gpu_encoder->getNumLayers() > 0) {
+        if (ctx.gpu_encoder && ctx.config->num_layers > 0) {
             auto* enc0 = ctx.gpu_encoder->getLayer(0);
             if (enc0) {
                 float* wqkv_grads = enc0->attnWqkv().grad_data();
@@ -925,7 +912,7 @@ BackwardResult executeAutogradBackward(
 
         // Sample RMSNorm gamma gradient (layer 0)
         float rms_sample = 0.0f;
-        if (ctx.gpu_encoder && ctx.gpu_encoder->getNumLayers() > 0) {
+        if (ctx.gpu_encoder && ctx.config->num_layers > 0) {
             auto* enc0 = ctx.gpu_encoder->getLayer(0);
             if (enc0) {
                 float* rms_grads = enc0->rms1Gamma().grad_data();
@@ -1116,7 +1103,7 @@ bool verifyGradientsAreConnectedImpl(
     }
 
     if (ctx.gpu_encoder) {
-        const int num_layers = ctx.gpu_encoder->getNumLayers();
+        const int num_layers = ctx.config->num_layers;
         for (int layer = 0; layer < num_layers; ++layer) {
             auto* enc = ctx.gpu_encoder->getLayer(layer);
             if (!enc) {
@@ -1375,8 +1362,7 @@ LossResult autogradTrainingStep(
         stream,
         payload,
         bindings,
-        batch_idx,
-        true
+        batch_idx
     );
     if (loss_config.class_balanced_enabled) {
         if (!training_state.class_weights_tensor.data) {
@@ -1407,10 +1393,7 @@ LossResult autogradTrainingStep(
         CUDA_CHECK(cudaMemsetAsync(training_state.read_gate_accum_tensor.data, 0, 2 * sizeof(float), stream));
     }
     
-    ForwardResult fwd_result = executeAutogradForward(ctx);
-    if (!fwd_result.success) {
-        throw std::runtime_error("autogradTrainingStep: Forward failed - " + fwd_result.error_message);
-    }
+    executeAutogradForward(ctx);
 
     // Read back the cross-attention read gate accumulator (sum/count on device)
     // Snapshot Category 3 workspace into Category 2 telemetry scalar BEFORE the

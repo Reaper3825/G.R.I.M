@@ -48,20 +48,6 @@ using ::GRIM::HyperParameters::LanguageModelConfig;
 using ::GRIM::LanguageModel;
 
 /**
- * Result of autograd forward pass
- */
-struct ForwardResult {
-    float* encoder_output = nullptr;  // Raw pointer to encoder output data
-    const float* logits_output = nullptr;
-    const float* lm_head_input = nullptr;
-    int total_tokens = 0;
-    int vocab_size = 0;
-    int hidden_size = 0;
-    bool success = false;
-    std::string error_message;
-};
-
-/**
  * Result of autograd loss computation
  * Contains decomposed loss components for logging and gradient weighting.
  */
@@ -143,7 +129,6 @@ struct AutogradContext {
     const Batching::BatchPayload* payload = nullptr;
     const Batching::BatchDeviceBindings* device_bindings = nullptr;
     uint64_t batch_idx = 0;
-    bool is_training = true;
     /** When true, skip duplicate equation logging on non-initial accumulation slots. */
     bool skip_equation_logging = false;
     
@@ -199,8 +184,7 @@ AutogradContext initAutogradContext(
     cudaStream_t stream,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
-    uint64_t batch_idx,
-    bool is_training = true
+    uint64_t batch_idx
 );
 
 /**
@@ -212,7 +196,7 @@ AutogradContext initAutogradContext(
  * @param ctx Thin input context
  * @return Forward result (success/error only, tensors in TrainingState)
  */
-ForwardResult executeAutogradForward(AutogradContext& ctx);
+void executeAutogradForward(AutogradContext& ctx);
 
 /**
  * Compute loss with autograd

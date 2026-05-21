@@ -382,11 +382,11 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 - [x] **Forward_GPU.cu** ✅ AUDITED & FIXED (103→97 lines)
   - NOT a forward pass orchestrator — is `GPUGrimEncoder::Impl` layer container only
-  - Creates `GPUEncoderLayer` instances from `EncoderLayerConstructionHP`, stores in `gpu_layers_` vector, exposes `getLayer()`
+  - Creates `GPUEncoderLayer` instances from `EncoderLayerConstructionHP`, stores in `gpu_layers_` vector, exposes `getLayer()`; loop counts come from config-owned `num_layers`
   - Actual forward orchestration lives in `AutogradTraining.cu` (section 4.1)
   - **FIXED**: `FWD_ERROR + std::abort()` → `throw std::runtime_error()` (Rule 20), validation moved before config copy
   - **DELETED**: `FWD_ERROR` macro — only 2 usages, both replaced by the throw
-  - No stale code, no dead functions. All 4 public methods have callers ✅
+  - No stale code, no dead functions; encoder public API is construction + layer accessors only ✅
 
 - [x] **Inference_GPU.cu** ✅ AUDITED & FIXED (phase-2 boundary split)
   - Inference-mode prefill enters `Shared/Forward/ModelForward_GPU.cu` with `ModelForwardMode::InferencePrefill`; it no longer creates `AutogradContext` or calls `executeAutogradForward()`.
@@ -398,7 +398,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **DELETED**: `forwardWithCache()` dead text-feature/text-mask params — never passed, never used
   - **DELETED**: Misleading header comment block claiming incremental O(n) behavior
   - Rule 20 compliant: All error paths throw ✅
-  - Correctly sets `is_training=false` in AutogradContext (disables dropout) ✅
+  - No AutogradContext inference path remains; prefill uses `ModelForwardMode::InferencePrefill`, which disables dropout/no-grad tracking and preserves layer intermediates for KV handoff ✅
 
 ---
 

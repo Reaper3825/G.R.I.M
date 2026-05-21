@@ -69,10 +69,6 @@ const GPUEncoderLayer* GPUGrimEncoder::getLayer(int index) const {
     return pImpl->gpu_layers_[index].get();
 }
 
-int GPUGrimEncoder::getNumLayers() const {
-    return static_cast<int>(pImpl->gpu_layers_.size());
-}
-
 #endif // USE_CUDA
 
 } // namespace GRIM

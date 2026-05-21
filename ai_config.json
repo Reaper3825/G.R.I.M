@@ -515,7 +515,7 @@
                 "freeze_learned_rms_gammas": true,
                 "project_out_pc1": true
             },
-            "log_interval": 10,
+            "log_interval": 1,
             "log_recorder": {
                 "default_level": "Trace",
                 "enabled": true,

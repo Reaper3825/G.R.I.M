@@ -447,7 +447,6 @@ public:
 
     GPUEncoderLayer* getLayer(int index);
     const GPUEncoderLayer* getLayer(int index) const;
-    int getNumLayers() const;
 
 private:
     struct Impl;

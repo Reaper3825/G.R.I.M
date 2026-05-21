@@ -24,7 +24,7 @@ All sizes float32, 4 bytes per element.
 
 **Pre-allocated TrainingState upload workspaces (max_tokens=8192):**
 
-Durable LM-head input/logits snapshots were deleted. Forward outputs now live in `AutogradIntermediates` / `ModelForwardResult` only; TrainingState keeps reusable upload/staging buffers such as targets, token ids, numeric side-channels, atom side-channels, and sequence weights.
+Durable LM-head input/logits snapshots were deleted. Forward outputs now live in `AutogradIntermediates` only; TrainingState keeps reusable upload/staging buffers such as targets, token ids, numeric side-channels, atom side-channels, and sequence weights.
 
 The remaining fixed upload buffers are tiny at this config (well under 1 MiB total).
 - **Running tally: ~1.61 GiB**
@@ -81,7 +81,7 @@ Device total: 40,441 MB (from log: "Memory: 40441 MB"). Our breakdown accounts f
 
 ## Logits (this config)
 
-There is no durable TrainingState logits cache. Full-batch logits are graph-owned by `AutogradIntermediates::logits_tensor` during the active forward/loss/backward window, then released at `AutogradStepScope` teardown. Inference prefill copies the returned last-token logits from `ModelForwardResult::logits_output` before clearing intermediates.
+There is no durable TrainingState logits cache and no logits pointer on the forward result. Full-batch logits are graph-owned by `AutogradIntermediates::logits_tensor` during the active forward/loss/backward window, then released at `AutogradStepScope` teardown. Inference prefill copies the last-token logits directly from `AutogradIntermediates::logits_tensor` before clearing intermediates.
 
 ---
 

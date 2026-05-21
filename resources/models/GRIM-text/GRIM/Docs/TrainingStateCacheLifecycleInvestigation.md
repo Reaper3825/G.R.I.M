@@ -2,13 +2,13 @@
 
 ## Resolution status
 
-`TrainingState::cached_logits_tensor` and `TrainingState::cached_encoder_output` have been deleted from the production contract. `ModelForwardResult` exposes the live logits pointer and LM-head input pointer for inference prefill, and training diagnostics consume `AutogradIntermediates::logits_tensor` plus the live LM-head input tensor before `AutogradStepScope` clears the boundary.
+`TrainingState::cached_logits_tensor` and `TrainingState::cached_encoder_output` have been deleted from the production contract. `ModelForwardResult` was deleted as a value handoff; inference prefill, loss, and diagnostics consume `AutogradIntermediates::logits_tensor` plus the live LM-head input tensor before `AutogradIntermediates::clear()` / `AutogradStepScope` teardown.
 
 The remaining notes below document the anti-pattern that was removed and should not be recreated.
 
 ## Historical finding
 
-`TrainingState` cache tensors have two different meanings in the current system:
+`TrainingState` cache tensors had two different meanings before the cleanup:
 
 - reusable device storage owned by `TrainingState`, addressed through explicit per-call views such as `BatchDeviceBindings`;
 - implicit "last forward/current batch" mailboxes read directly from `TrainingState` by diagnostics, inference, and some production helper logic.
@@ -43,16 +43,16 @@ This works only by convention. The cache tensors are durable buffers with stale 
 
 ## Confirmed Leak: `cached_logits_tensor`
 
-Owner and writer:
+Historical owner and writer:
 
 - `Shared/TrainingState/TrainingStateGPU.cu`: `TrainingState::allocateStepDeviceWorkspaces()` allocates the full `[max_tokens_per_batch, vocab_size]` logits slab.
-- `Shared/Forward/ModelForward_GPU.cu`: `Forward::executeModelForward()` computes the LM-head `logits_tensor`, copies it into `TrainingState::cached_logits_tensor`, then stores the live autograd tensor in `AutogradIntermediates::logits_tensor`.
+- `Shared/Forward/ModelForward_GPU.cu`: `Forward::executeModelForward()` computed the LM-head `logits_tensor`, copied it into `TrainingState::cached_logits_tensor`, then stored the live autograd tensor in `AutogradIntermediates::logits_tensor`.
 
 Correct active consumer:
 
 - `training/Autograd/AutogradTraining.cu`: `computeAutogradLoss()` consumes `AutogradIntermediates::logits_tensor`, not the cache.
 
-Direct cache readers:
+Historical direct cache readers:
 
 - `training/Diagnostics/PredictionDistributionDiagnostic.cu`: copies logits from `cached_logits_tensor` for prediction distribution and logit trace.
 - `training/Diagnostics/LogitScaleDiagnostic.cu`: copies logits from `cached_logits_tensor` for logit-scale statistics.
@@ -140,10 +140,10 @@ It is suspicious if the code:
 
 Recommended order:
 
-1. Add explicit forward result views for logits and LM-head input.
-   - `Forward::ModelForwardResult` should expose the live logits view and row/column shape.
-   - Training should pass that view to diagnostics and guess-cache while still inside the active step scope.
-   - Inference prefill should copy return logits from the live forward result before clearing intermediates.
+1. Keep forward observations inside `AutogradIntermediates`.
+   - Do not add `Forward::ModelForwardResult` tensor views or shape mirrors.
+   - Training diagnostics should consume live tensors from `AutogradIntermediates` while still inside the active step scope.
+   - Inference prefill should copy return logits from `AutogradIntermediates::logits_tensor` before clearing intermediates.
 
 2. Convert diagnostics to accept explicit observation inputs.
    - Diagnostics may stay outside gradient math.
@@ -162,7 +162,7 @@ Recommended order:
 ## Open Questions
 
 - `GuessCacheTraining` appears to be monitoring-only now. It was originally intended as something different, but current usage looks like an attempt to keep a dead feature alive. Treat it as a candidate for removal or reduction to explicit telemetry before designing a new logits handoff for it.
-- Inference prefill needs further investigation. The unresolved design question is whether it should share the same full-forward result type as training or copy into an inference-specific logits output buffer owned by `GenerationState`.
+- Inference prefill now copies from `AutogradIntermediates::logits_tensor` before clear. A future `GenerationState` logits buffer is only justified if a post-boundary logits lifetime is required; do not reintroduce a shared forward-result tensor view for that.
 - Diagnostics should not run outside the lifecycle graph of the information they need. They can run outside gradient math, but not outside the lifetime/freshness boundary for the tensors they observe.
 - Additional non-`TrainingState` caches need further investigation, especially layer-local diagnostic caches or GradFn-adjacent caches that survive beyond the graph boundary.
 

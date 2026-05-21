@@ -77,7 +77,6 @@ Added layer accessors:
 // Header
 GPUEncoderLayer* getLayer(int index);
 const GPUEncoderLayer* getLayer(int index) const;
-int getNumLayers() const;
 
 // Implementation
 GPUEncoderLayer* GPUGrimEncoder::getLayer(int index) {
@@ -87,6 +86,9 @@ GPUEncoderLayer* GPUGrimEncoder::getLayer(int index) {
     return pImpl->gpu_layers_[index].get();
 }
 ```
+
+Loop counts are owned by `LanguageModelConfig::num_layers` / grouped hyperparameters,
+not by `GPUGrimEncoder`; encoder runtime code fetches the owned layer by index only.
 
 ### 8. LanguageModel::updateWeights() (grim_language_model_gpu.cu)
 Fully implemented weight updates using new accessors:

@@ -31,6 +31,18 @@
 
 namespace GRIM {
 
+namespace {
+
+// Local experiment toggle only. Keep this file-local until we decide whether
+// LM-head token-layout gating should become an authored config field.
+//
+// IMPORTANT: setting this false disables the LM-head-side hard token-type gate
+// without changing embedding lookup, so tied embeddings no longer have strict
+// embedding/LM symmetry. That asymmetry is intentional for local experiments.
+constexpr bool kEnableLmHeadTokenTypeGateExperiment = true;
+
+}  // namespace
+
 //======================================================//
 //  Self-Allocating Constructor (Pattern B)
 //======================================================//
@@ -303,29 +315,30 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
     //   MatMulGradFn::apply() computes:
     //     grad_input  = grad_output @ weights      (for backward to encoder)
     //     grad_weights = lm_input^T @ grad_output  (for weight update)
-    //
-    // Pass explicit a_cache (like FFN) so grad_B computation has valid source.
-    // Avoids MatMulGradFn::set_cache_copy "a_cache is NULL" when tensor.data
-    // is null (moved-from, zero-size, or lifecycle edge case).
     // ════════════════════════════════════════════════════════════════════
     weights_.requires_grad = true;
     weights_.shape = TensorContract::TensorShape::make_BSM(hp_.vocab_size, hp_.d_model);
 
-    // Hard type gate: project through W_eff whose row index is interpreted as a
-    // token ID and whose active dimensions are fixed by TokenLayout class
-    // (special/byte/atom/unigram). This is symmetric with autograd::embedding()
-    // so tied embeddings cannot leak inactive dimensions through the classifier.
-    const Tensor* effective_weights = nullptr;
-    if (hp_.center_hidden_states) {
+    // Default path: hard type gate W_eff so the LM row indexed by token ID only
+    // sees the TokenLayout class subspace assigned to that token type.
+    // Local experiment path: bypass the hard token-type gate inside the LM head
+    // only, without plumbing a new authored config field yet.
+    const bool use_token_type_gate = kEnableLmHeadTokenTypeGateExperiment;
+    const bool use_centered_weights = hp_.center_hidden_states;
+    const Tensor* effective_weights = &weights_;
+    if (use_centered_weights && use_token_type_gate) {
         centered_weights_ = autograd::center_rows_by_token_type_gate(weights_, stream);
         centered_weights_.name = "lm_head.centered_token_type_gated_weights";
-    } else {
+        effective_weights = &centered_weights_;
+    } else if (use_centered_weights) {
+        centered_weights_ = autograd::center_rows(weights_, stream);
+        centered_weights_.name = "lm_head.centered_weights";
+        effective_weights = &centered_weights_;
+    } else if (use_token_type_gate) {
         centered_weights_ = autograd::type_gate_rows_by_token_type(weights_, stream);
+        centered_weights_.name = "lm_head.token_type_gated_weights";
+        effective_weights = &centered_weights_;
     }
-    centered_weights_.name = hp_.center_hidden_states
-        ? "lm_head.centered_token_type_gated_weights"
-        : "lm_head.token_type_gated_weights";
-    effective_weights = &centered_weights_;
 
     if (!matmul_input->data) {
         throw std::runtime_error("LMHeadLayer::forward: matmul input has null data - cannot compute weight gradient. "
@@ -348,8 +361,8 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
         logits,
         hp_.center_hidden_states,
         hp_.project_out_pc1,
-        hp_.center_hidden_states,
-        true,
+        use_centered_weights,
+        use_token_type_gate,
         total_tokens,
         d_model,
         hp_.vocab_size,

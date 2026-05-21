@@ -37,19 +37,7 @@ namespace Forward {
 
 enum class ModelForwardMode {
     TrainingGraph,
-    EvalNoGrad,
     InferencePrefill
-};
-
-struct ModelForwardResult {
-    float* encoder_output = nullptr;
-    const float* logits_output = nullptr;
-    const float* lm_head_input = nullptr;
-    int total_tokens = 0;
-    int vocab_size = 0;
-    int hidden_size = 0;
-    bool success = false;
-    std::string error_message;
 };
 
 struct ModelForwardRequest {
@@ -71,11 +59,10 @@ struct ModelForwardRequest {
     ModelForwardMode mode = ModelForwardMode::TrainingGraph;
 
     bool trainingGraph() const { return mode == ModelForwardMode::TrainingGraph; }
-    bool preservesLayerIntermediates() const { return mode == ModelForwardMode::InferencePrefill; }
     void validate(const char* caller) const;
 };
 
-ModelForwardResult executeModelForward(ModelForwardRequest& request);
+void executeModelForward(ModelForwardRequest& request);
 
 }  // namespace Forward
 }  // namespace GRIM

@@ -1612,9 +1612,9 @@ std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
     Tensor K_bhsd = Tensor::zeros(k_shape, requires_grad, stream, "qkv_split_K");
     Tensor V_bhsd = Tensor::zeros(v_shape, requires_grad, stream, "qkv_split_V");
     
-    // Inference-only: drain stale CUDA error from earlier in this layer (rms_norm, matmul,
-    // broadcast_add) or from no_grad_layer_storage.clear() in the loop. Without this,
-    // cudaGetLastError() after the launch reports that stale error and we throw incorrectly.
+    // Inference-only: drain stale CUDA error from earlier in this layer (rms_norm,
+    // matmul, broadcast_add). Without this, cudaGetLastError() after the launch
+    // reports that stale error and we throw incorrectly.
     (void)cudaGetLastError();
     
     // Forward: split fused qkv_out directly to BHSD using TensorConversion's

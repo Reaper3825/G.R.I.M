@@ -196,21 +196,31 @@ Vector LanguageModel::executeInferenceForward_(
     request.batch_idx = 0;
     request.mode = Forward::ModelForwardMode::InferencePrefill;
 
-    Forward::ModelForwardResult result = Forward::executeModelForward(request);
-    if (!result.success) {
-        throw std::runtime_error("executeInferenceForward_: forward failed - " + result.error_message);
-    }
+    Forward::executeModelForward(request);
 
-    // Extract last-token logits from the explicit live forward result before
-    // AutogradIntermediates is cleared.
-    if (!result.logits_output) {
-        throw std::runtime_error("executeInferenceForward_: ModelForwardResult.logits_output is NULL");
+    // Extract last-token logits from the active forward boundary before
+    // AutogradIntermediates is cleared. Do not route logits through a result
+    // side channel; the live tensor is the source of truth for this pass.
+    const auto& live_logits = training_state_.autograd_intermediates.logits_tensor;
+    if (!live_logits.data) {
+        throw std::runtime_error("executeInferenceForward_: AutogradIntermediates.logits_tensor.data is NULL after forward");
+    }
+    if (payload.vocab_size != config_.vocab_size) {
+        throw std::runtime_error(
+            "executeInferenceForward_: payload.vocab_size=" + std::to_string(payload.vocab_size) +
+            " != config_.vocab_size=" + std::to_string(config_.vocab_size));
+    }
+    const size_t expected_logits = static_cast<size_t>(payload.total_tokens) * static_cast<size_t>(config_.vocab_size);
+    if (static_cast<size_t>(live_logits.numel()) < expected_logits) {
+        throw std::runtime_error(
+            "executeInferenceForward_: live logits numel=" + std::to_string(live_logits.numel()) +
+            " < expected payload.total_tokens * config.vocab_size=" + std::to_string(expected_logits));
     }
     Vector logits(config_.vocab_size);
-    const size_t last_token_offset = static_cast<size_t>(payload.max_seq_len - 1) * static_cast<size_t>(result.vocab_size);
+    const size_t last_token_offset = static_cast<size_t>(payload.max_seq_len - 1) * static_cast<size_t>(config_.vocab_size);
     cudaMemcpyAsync(logits.data.data(),
-                    result.logits_output + last_token_offset,
-                    static_cast<size_t>(result.vocab_size) * sizeof(float),
+                    live_logits.data + last_token_offset,
+                    static_cast<size_t>(config_.vocab_size) * sizeof(float),
                     cudaMemcpyDeviceToHost, stream);
 
     cudaStreamSynchronize(stream);

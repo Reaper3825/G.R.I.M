@@ -42,7 +42,6 @@ namespace {
 const char* modeName(ModelForwardMode mode) {
     switch (mode) {
     case ModelForwardMode::TrainingGraph: return "training_graph";
-    case ModelForwardMode::EvalNoGrad: return "eval_no_grad";
     case ModelForwardMode::InferencePrefill: return "inference_prefill";
     }
     throw std::runtime_error("ModelForward: unknown ModelForwardMode");
@@ -100,11 +99,8 @@ void ModelForwardRequest::validate(const char* caller) const {
     }
 }
 
-ModelForwardResult executeModelForward(ModelForwardRequest& request) {
+void executeModelForward(ModelForwardRequest& request) {
     request.validate("executeModelForward");
-
-    ModelForwardResult result{};
-    result.success = false;
 
     auto* ts = request.runtime_state;
     const auto* cfg = request.config;
@@ -112,16 +108,12 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
     const auto& payload = *request.payload;
     const auto* bindings = request.bindings;
     const bool is_training = request.trainingGraph();
-    const bool preserve_layer_intermediates = request.preservesLayerIntermediates();
 
     if (cfg->center_encoder_residuals || cfg->lm_head_center_hidden_states) {
         requireCenteringSequenceLengths(payload, "ModelForward");
     }
 
     const int total_tokens = payload.total_tokens;
-    result.total_tokens = total_tokens;
-    result.vocab_size = payload.vocab_size;
-    result.hidden_size = cfg->d_model;
 
     MFWD_INFO("forward: batch=" << payload.batch_size << " seq=" << payload.max_seq_len
               << " tokens=" << total_tokens << " vocab=" << payload.vocab_size
@@ -248,7 +240,7 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
             is_training,
             request.stream,
             kEmbeddingDropoutMaskStream);
-        MFWD_INFO("Step 1c: Embedding-fusion dropout " << (is_training ? "applied" : "skipped (eval mode)")
+        MFWD_INFO("Step 1c: Embedding-fusion dropout " << (is_training ? "applied" : "skipped (no-grad mode)")
                   << " (p=" << cfg->dropout_rate << ", batch_idx=" << request.batch_idx << ")");
     }
 
@@ -256,7 +248,7 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
         throw std::runtime_error("ModelForward: gpu_encoder is NULL - pass encoder in request");
     }
 
-    const int num_layers = request.gpu_encoder->getNumLayers();
+    const int num_layers = cfg->num_layers;
     intermediates.encoder_layer_outputs.clear();
     intermediates.layer_intermediates.layers.clear();
     intermediates.embedding_tensor.is_leaf = false;
@@ -264,11 +256,8 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
     float* encoder_output = nullptr;
 
     if (!is_training) {
-        ForwardIntermediates no_grad_layer_storage;
         Tensor running;
-        if (preserve_layer_intermediates) {
-            intermediates.layer_intermediates.layers.reserve(num_layers);
-        }
+        intermediates.layer_intermediates.layers.reserve(num_layers);
         MFWD_INFO("Step 2: Running " << num_layers << " encoder layers (no_grad)...");
 
         for (int layer_idx = 0; layer_idx < num_layers; ++layer_idx) {
@@ -284,18 +273,12 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
                 }
             }
 
-            ForwardIntermediates* layer_storage = nullptr;
-            if (preserve_layer_intermediates) {
-                intermediates.layer_intermediates.layers.emplace_back();
-                layer_storage = &intermediates.layer_intermediates.layers.back();
-            } else {
-                no_grad_layer_storage.clear();
-                layer_storage = &no_grad_layer_storage;
-            }
+            intermediates.layer_intermediates.layers.emplace_back();
+            ForwardIntermediates& layer_storage = intermediates.layer_intermediates.layers.back();
 
             Tensor& layer_input = (layer_idx == 0) ? intermediates.embedding_tensor : running;
             Tensor layer_output_view = enc_layer->forward(
-                layer_input, payload, request.stream, request.cublas_handle, *layer_storage,
+                layer_input, payload, request.stream, request.cublas_handle, layer_storage,
                 request.batch_idx, false, layer_idx);
 
             Tensor owned = Tensor::empty(layer_output_view.shape, false, request.stream, "no_grad_layer_output");
@@ -539,8 +522,6 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
         encoder_output = intermediates.encoder_layer_outputs.back().data;
     }
 
-    result.encoder_output = encoder_output;
-
     if (is_training) {
         const bool lmhead_track_grad = true;
         Tensor encoder_output_tensor = Tensor::from_ptr(
@@ -574,7 +555,6 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
     if (!lm_input_ptr) {
         throw std::runtime_error("ModelForward: LM-head input snapshot is NULL after LMHeadLayer::forward");
     }
-    result.lm_head_input = lm_input_ptr;
 
     if constexpr (GRIM::VerboseLogging::ENABLE_EXPENSIVE_DIAGNOSTICS) {
         constexpr int kSamplePositions = 1024;
@@ -669,7 +649,6 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
         }
     }
 
-    result.logits_output = logits_tensor.data;
     intermediates.logits_tensor = std::move(logits_tensor);
 
     if (request.reasoning_head && request.scratch_block && request.scratch_block->isEnabled()
@@ -707,9 +686,6 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
     }
 
     MFWD_INFO("Forward complete: logits shape=[" << total_tokens << ", " << cfg->vocab_size << "]");
-
-    result.success = true;
-    return result;
 }
 
 }  // namespace Forward
