@@ -9,7 +9,6 @@
 #include "../../../../Shared/Batching/EpochBatching.hpp"      // buildEpochBatches
 #include "../../../../Shared/Batching/PackerPolicy.hpp"
 #include "../../../../Shared/Batching/Batching_GPU.hpp"       // buildBatches
-#include "../../../../Shared/HyperParameters/HyperparameterGroupings.hpp"  // capacityHP, coreRunHP
 #include "../../../../Shared/UnigramByte/UniByte.hpp"          // GRIM::Tokenizer::TokenLayout
 
 #include <algorithm>
@@ -110,12 +109,13 @@ void PlannedBatchesReady(TrainingContext& ctx) {
             "FATAL: PlannedBatchesReady requires PayloadBuildInputsReady to "
             "have authored ctx.payload_build_inputs");
     }
-    const auto capacity = ::GRIM::HyperParameters::capacityHP(ctx.config);
-    if (capacity.batch_size <= 0 || capacity.max_seq_len <= 0) {
+    const int fixed_batch_size = ctx.config.hyperparameters.batch_size;
+    const int fixed_max_seq_len = ctx.config.max_seq_len;
+    if (fixed_batch_size <= 0 || fixed_max_seq_len <= 0) {
         std::ostringstream oss;
         oss << "FATAL: PlannedBatchesReady requires configured batching hyperparameters "
-            << "(batch_size=" << capacity.batch_size
-            << " max_seq_len=" << capacity.max_seq_len
+            << "(batch_size=" << fixed_batch_size
+            << " max_seq_len=" << fixed_max_seq_len
             << ")";
         throw std::runtime_error(oss.str());
     }
@@ -125,9 +125,8 @@ void PlannedBatchesReady(TrainingContext& ctx) {
             "ctx.data.train_views");
     }
 
-    const auto core    = ::GRIM::HyperParameters::coreRunHP(ctx.config);
     const auto& hp     = ctx.config.hyperparameters;
-    const int num_epochs = core.epochs;
+    const int num_epochs = hp.epochs;
     if (num_epochs <= 0) {
         throw std::runtime_error(
             "FATAL: PlannedBatchesReady requires hp.epochs > 0 (got " +
@@ -150,8 +149,8 @@ void PlannedBatchesReady(TrainingContext& ctx) {
 
     ctx.fixed_train_schedule = GRIM::Batching::buildEpochBatches(
         ctx.data.train_seq_lengths,
-        static_cast<uint32_t>(capacity.max_seq_len),
-        static_cast<uint32_t>(capacity.batch_size),
+        static_cast<uint32_t>(fixed_max_seq_len),
+        static_cast<uint32_t>(fixed_batch_size),
         /*global_step=*/0,
         /*epoch=*/0,
         /*data_seed=*/ctx.rng.data_seed,
@@ -191,14 +190,19 @@ void PlannedBatchesReady(TrainingContext& ctx) {
 
         ctx.fixed_val_schedule = GRIM::Batching::buildBatches(
             ctx.data.val_seq_lengths,
-            static_cast<uint32_t>(capacity.max_seq_len),
-            static_cast<uint32_t>(capacity.batch_size),
+            static_cast<uint32_t>(fixed_max_seq_len),
+            static_cast<uint32_t>(fixed_batch_size),
             val_policy);
 
         const int num_val_batches =
             static_cast<int>(ctx.fixed_val_schedule.batches.size());
         log("[PlannedBatches] Built " + std::to_string(num_val_batches) +
             " val batches");
+        if (ctx.fixed_val_schedule.discarded_tail_sequences > 0) {
+            log("[PlannedBatches] Discarded " +
+                std::to_string(ctx.fixed_val_schedule.discarded_tail_sequences) +
+                " validation sequence(s) that did not fill a full fixed batch");
+        }
 
         ctx.val_payloads.clear();
         ctx.val_payloads.reserve(num_val_batches);
@@ -226,8 +230,8 @@ void PlannedBatchesReady(TrainingContext& ctx) {
     ctx.epoch_batch_order.assign(num_epochs, std::vector<int>{});
     for (int epoch = 0; epoch < num_epochs; ++epoch) {
         auto& order = ctx.epoch_batch_order[epoch];
-        if (core.single_batch_overfit_enabled) {
-            order.assign(core.single_batch_overfit_max_steps, 0);
+        if (hp.single_batch_overfit_enabled) {
+            order.assign(hp.single_batch_overfit_max_steps, 0);
         } else {
             order.resize(num_train_batches);
             std::iota(order.begin(), order.end(), 0);
@@ -243,10 +247,10 @@ void PlannedBatchesReady(TrainingContext& ctx) {
             }
         }
     }
-    if (core.single_batch_overfit_enabled) {
+    if (hp.single_batch_overfit_enabled) {
         log("[PlannedBatches] Authored single-batch overfit diagnostic order for " +
             std::to_string(num_epochs) + " epochs (" +
-            std::to_string(core.single_batch_overfit_max_steps) +
+            std::to_string(hp.single_batch_overfit_max_steps) +
             " repeated steps/epoch)");
     } else {
         log("[PlannedBatches] Authored epoch_batch_order for " +

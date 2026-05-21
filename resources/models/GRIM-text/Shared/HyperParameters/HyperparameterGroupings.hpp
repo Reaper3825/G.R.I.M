@@ -14,20 +14,6 @@ namespace GRIM::HyperParameters {
 // Groupings are read views over HyperParameters_GPU.hpp-owned config and constants.
 // Do not introduce authored defaults here; add them to HyperParameters_GPU.hpp first.
 
-struct CoreRunHP {
-    int epochs = 0;
-    int64_t seed = 0;
-    int gradient_accumulation_steps = 0;
-    bool single_batch_overfit_enabled = false;
-    int single_batch_overfit_max_steps = 0;
-};
-
-struct CapacityHP {
-    int batch_size = 0;
-    int max_seq_len = 0;
-    int gradient_accumulation_steps = 0;
-};
-
 struct DataLoadingHP {
     int min_seq_valid_tokens = 0;
     int sliding_window_stride = 0;
@@ -630,25 +616,6 @@ inline void validatePBMConstructionHP(
                                  ": alibi_max_bias must be finite and <= 0, got " +
                                  std::to_string(hp.alibi_max_bias));
     }
-}
-
-inline CoreRunHP coreRunHP(const StartupConfig& config) {
-    const auto& hp = config.hyperparameters;
-    CoreRunHP view;
-    view.epochs = hp.epochs;
-    view.seed = hp.seed;
-    view.gradient_accumulation_steps = hp.gradient_accumulation_steps;
-    view.single_batch_overfit_enabled = hp.single_batch_overfit_enabled;
-    view.single_batch_overfit_max_steps = hp.single_batch_overfit_max_steps;
-    return view;
-}
-
-inline CapacityHP capacityHP(const StartupConfig& config) {
-    CapacityHP view;
-    view.batch_size = config.hyperparameters.batch_size;
-    view.max_seq_len = config.max_seq_len;
-    view.gradient_accumulation_steps = config.hyperparameters.gradient_accumulation_steps;
-    return view;
 }
 
 inline DataLoadingHP dataLoadingHP(const StartupConfig& config) {

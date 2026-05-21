@@ -70,9 +70,15 @@ std::unique_ptr<GRIM::Tokenizer::UniByte> initializeTokenizer(
 SequenceData buildPhase1SequenceData(
     const GRIM::HyperParameters::TokenizerHP& tokenizer_hp,
     const GRIM::HyperParameters::DataLoadingHP& data_hp,
-    const GRIM::HyperParameters::CapacityHP& capacity_hp,
+    int max_seq_len,
     TrainingLogger& logger)
 {
+    if (max_seq_len <= 0) {
+        throw std::runtime_error(
+            "buildPhase1SequenceData: max_seq_len must be configured before sliding-window data loading (got " +
+            std::to_string(max_seq_len) + ")");
+    }
+
     SequenceData data;
 
     GRMTDataLoader loader;
@@ -88,10 +94,10 @@ SequenceData buildPhase1SequenceData(
     data.val_seqs.assign(all_sequences.begin(), all_sequences.begin() + val_size);
 
     applySlidingWindows(data.train_seqs, "train",
-                        capacity_hp.max_seq_len, data_hp.sliding_window_stride, data_hp.min_seq_valid_tokens,
+                        max_seq_len, data_hp.sliding_window_stride, data_hp.min_seq_valid_tokens,
                         tokenizer_hp.add_bos, tokenizer_hp.add_eos, logger);
     applySlidingWindows(data.val_seqs, "val",
-                        capacity_hp.max_seq_len, data_hp.sliding_window_stride, data_hp.min_seq_valid_tokens,
+                        max_seq_len, data_hp.sliding_window_stride, data_hp.min_seq_valid_tokens,
                         tokenizer_hp.add_bos, tokenizer_hp.add_eos, logger);
 
     data.train_views.reserve(data.train_seqs.size());
@@ -148,7 +154,7 @@ void LoadTrainingData(TrainingContext& ctx) {
 
     const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(ctx.config);
     const auto data_hp = GRIM::HyperParameters::dataLoadingHP(ctx.config);
-    const auto capacity_hp = GRIM::HyperParameters::capacityHP(ctx.config);
+    const int max_seq_len = ctx.config.max_seq_len;
 
     EmitModuleInfo(ModuleId::Training, "[Phase1] Validating paths...", 0);
     Internal::validateStartupPaths(tokenizer_hp, ctx.config.paths);
@@ -160,7 +166,7 @@ void LoadTrainingData(TrainingContext& ctx) {
     ctx.data = Internal::buildPhase1SequenceData(
         tokenizer_hp,
         data_hp,
-        capacity_hp,
+        max_seq_len,
         *ctx.logging.logger);
 
     ctx.data_info = summarizeDataInfoOrThrow(ctx.data);

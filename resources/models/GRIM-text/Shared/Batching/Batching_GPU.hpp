@@ -44,6 +44,7 @@ struct BatchSchedule {
     uint32_t batch_size = 0;              // fixed run batch rows
     uint32_t max_seq_len_observed = 0;   // longest actual post-window sequence
     float packing_efficiency = 0.0f;     // actual_tokens / total_tokens
+    uint32_t discarded_tail_sequences = 0; // valid rows dropped because they did not fill a full fixed batch
     
     // Distribution info
     uint32_t p50_seq_len = 0;            // median sequence length

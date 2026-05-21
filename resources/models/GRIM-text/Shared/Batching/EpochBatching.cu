@@ -24,6 +24,11 @@ void logBatchSchedule(
             std::to_string(static_cast<uint64_t>(schedule.sequence_cap) * schedule.batch_size));
     log_fn("[Batching] Packing efficiency: " +
             std::to_string(static_cast<int>(schedule.packing_efficiency * 100)) + "%");
+        if (schedule.discarded_tail_sequences > 0) {
+        log_fn("[Batching] Discarded " +
+               std::to_string(schedule.discarded_tail_sequences) +
+               " trailing sequence(s) that did not fill a full fixed batch");
+        }
 }
 
 BatchSchedule buildEpochBatches(

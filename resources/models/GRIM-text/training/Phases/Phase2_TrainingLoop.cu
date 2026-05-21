@@ -19,7 +19,7 @@
 #include "../Autograd/AutogradTraining.hpp"  // autogradTrainingStep: unified forward+loss+backward
 #include "../../Shared/Optimizers/OptimizerUpdate_GPU.hpp"  // launchOptimizerUpdate
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"  // single entry point; transitively pulls in control/ai_config_paths.hpp (resolveGrimRoot, etc.)
-#include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"  // CoreRunHP / LearningRateScheduleInputs — single source of truth for grouped HP reads
+#include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"  // grouped HP reads without duplicating authored config
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -83,7 +83,7 @@ float getScheduledLearningRate(
 } // namespace Internal
 
 //======================================================//
-//  CoreRunHP read path
+//  Phase2 plan validation
 //
 //  All BatchPayloads are authored once in Phase1
 //  (Startup/Batching/PlannedBatches.cu); Phase2 only INDEXES into
@@ -94,16 +94,13 @@ float getScheduledLearningRate(
 //======================================================//
 namespace {
 
-// Single Phase2 entry point for CoreRunHP fields still needed inside the
-// compute loop. Executable epoch/batch geometry is authored by Phase1 in
-// ctx.epoch_batch_order; do not rederive it here.
-::GRIM::HyperParameters::CoreRunHP validatedCoreRunHP(const TrainingContext& ctx) {
-    auto core = ::GRIM::HyperParameters::coreRunHP(ctx.config);
-    if (core.gradient_accumulation_steps <= 0) {
+int validatedAccumulationSteps(const TrainingContext& ctx) {
+    const int accum_steps = ctx.config.hyperparameters.gradient_accumulation_steps;
+    if (accum_steps <= 0) {
         throw std::runtime_error("FATAL: gradient_accumulation_steps must be > 0 in Phase2 (got " +
-                                 std::to_string(core.gradient_accumulation_steps) + ")");
+                                 std::to_string(accum_steps) + ")");
     }
-    return core;
+    return accum_steps;
 }
 
 void validateAccumulationPositionBeforeBackward(
@@ -750,9 +747,8 @@ bool executePhase2(TrainingContext& ctx) {
     // second source of truth that drifts every time a field is added.
     EmitModuleInfo(ModuleId::Training, "Starting training...", ctx.global_step);
 
-    const auto core = validatedCoreRunHP(ctx);
-    const int accum_steps = core.gradient_accumulation_steps;
-    const int num_epochs = core.epochs;
+    const int accum_steps = validatedAccumulationSteps(ctx);
+    const int num_epochs = hp.epochs;
     if (num_epochs <= 0) {
         throw std::runtime_error("FATAL: epochs must be > 0 in Phase2");
     }

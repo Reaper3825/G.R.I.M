@@ -63,6 +63,7 @@ std::string BatchSchedule::summary() const {
     ss << "BatchSchedule Summary:\n";
     ss << "  Total batches: " << batches.size() << "\n";
     ss << "  Batch size: " << batch_size << "\n";
+    ss << "  Discarded tail sequences: " << discarded_tail_sequences << "\n";
     ss << "  Tokens: " << actual_tokens << " actual / " << total_tokens << " compute";
     ss << " (padding: " << padding_tokens << ", " << (100.0f * padding_tokens / (total_tokens > 0 ? total_tokens : uint64_t(1))) << "%)\n";
     ss << "  Packing efficiency: " << (100.0f * packing_efficiency) << "%\n";
@@ -156,10 +157,7 @@ BatchSchedule buildBatches(
     }
 
     if (!current.seq_ids.empty()) {
-        throw std::runtime_error(
-            "buildBatches: input sequence count does not fill fixed batch size (remaining=" +
-            std::to_string(current.seq_ids.size()) + " batch_size=" +
-            std::to_string(fixed_batch_size) + ") — upstream planning MUST provide a divisible sequence count");
+        schedule.discarded_tail_sequences = static_cast<uint32_t>(current.seq_ids.size());
     }
     
     // =======================================================================
