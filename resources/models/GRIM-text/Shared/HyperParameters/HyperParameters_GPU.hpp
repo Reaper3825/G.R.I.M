@@ -690,9 +690,9 @@ struct LanguageModelConfig : public ModelArchitecture {
     float value_match_epsilon = 1e-6f;
     float final_slot_consistency_weight = 0.0f;
 
-    // LM Head centering config (Issue #37 / #40 fixes)
+    // LM Head / RMSNorm gamma config (Issue #37 / #40 fixes)
     bool lm_head_center_hidden_states = false;
-    bool lm_head_freeze_final_rms_gamma = false;
+    bool freeze_learned_rms_gammas = false;
     bool project_out_pc1 = false;
     int  pc1_power_iters = 5;
     bool center_logits = false;
@@ -934,7 +934,7 @@ struct TrainingHyperparameters {
 
 
     // LM Head centering master toggle (training-only, no LMC counterpart).
-    // The per-knob fields (center_hidden_states / freeze_final_rms_gamma /
+    // The per-knob fields (center_hidden_states / freeze_learned_rms_gammas /
     // center_logits / center_encoder_residuals / project_out_pc1 /
     // pc1_power_iters) live in `architecture` (LanguageModelConfig).
     bool lm_head_centering_enabled;

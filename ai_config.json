@@ -512,10 +512,10 @@
                 "center_hidden_states": true,
                 "center_logits": true,
                 "enabled": true,
-                "freeze_final_rms_gamma": true,
+                "freeze_learned_rms_gammas": true,
                 "project_out_pc1": true
             },
-            "log_interval": 1,
+            "log_interval": 10,
             "log_recorder": {
                 "default_level": "Trace",
                 "enabled": true,
@@ -583,7 +583,7 @@
                 }
             },
             "max_seq_len": 1024,
-            "sliding_window_stride": 896,
+            "sliding_window_stride": 768,
             "multi_token_prediction": {
                 "enabled": false
             },

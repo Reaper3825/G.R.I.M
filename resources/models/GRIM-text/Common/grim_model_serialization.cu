@@ -396,7 +396,7 @@ bool LanguageModel::load(const std::string& path) {
     request.capabilities.requires_scratch_block   = (scratch_block_layer_ != nullptr && scratch_block_layer_->isEnabled());
     request.capabilities.requires_final_rms_gamma = (lm_head_layer_ != nullptr
                                                       && lm_head_layer_->finalRmsGamma().data != nullptr
-                                                      && !config_.lm_head_freeze_final_rms_gamma);
+                                                      && !config_.freeze_learned_rms_gammas);
 
     if (config_.use_gpu) {
         if (!embedding_layer_ || !embedding_layer_->tokenWeights().data) {
@@ -445,8 +445,10 @@ bool LanguageModel::load(const std::string& path) {
         assignWrite(view.ffn_w1, enc->ffnW1().data, d_model * d_ff);
         assignWrite(view.ffn_w2, enc->ffnW2().data, d_ff * d_model);
         assignWrite(view.ffn_b2, enc->ffnB2().data, d_model);
-        assignWrite(view.rms1_gamma, enc->rms1Gamma().data, d_model);
-        assignWrite(view.rms2_gamma, enc->rms2Gamma().data, d_model);
+        if (!config_.freeze_learned_rms_gammas) {
+            assignWrite(view.rms1_gamma, enc->rms1Gamma().data, d_model);
+            assignWrite(view.rms2_gamma, enc->rms2Gamma().data, d_model);
+        }
         // Issue #148: Sandwich norm gammas REMOVED — not loaded from checkpoint
         // LayerScale (Issue #109) — per-channel gamma vector per sublayer
         requireLayerScaleVector(enc->layerScale1(), d_model, "layer_scale1", layer_idx);
@@ -558,7 +560,7 @@ bool LanguageModel::load(const std::string& path) {
     // Issue #33: Final RMSNorm gamma destination — owned by LMHeadLayer
     // When frozen, γ_final stays at 1.0 — do NOT overwrite from checkpoint.
     if (lm_head_layer_ && lm_head_layer_->finalRmsGamma().data
-        && !config_.lm_head_freeze_final_rms_gamma) {
+        && !config_.freeze_learned_rms_gammas) {
         assignWrite(request.final_rms_gamma,
                     lm_head_layer_->finalRmsGammaMutable_UnfrozenOnly("serialization::load").data,
                     static_cast<std::size_t>(config_.d_model));

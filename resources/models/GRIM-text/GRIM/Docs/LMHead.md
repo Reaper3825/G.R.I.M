@@ -23,12 +23,12 @@ LM head backward and embedding backward write to the **same buffer** via PyTorch
 - Generation must use the full-context prefill path, not KV single-token decode, whenever sequence-coupled geometry is enabled (`center_encoder_residuals`, `lm_head_center_hidden_states`, or `project_out_pc1`). KV decode is valid only for sequence-local configs; otherwise the sampler cannot compute sequence means/PC1 and will either throw or produce erased hidden states.
 - Telemetry stream 38 (`rho_raw_rms_spread`): healthy 1.0–1.5×, >2× warn, >4× anomaly.
 
-## γ_final (final RMSNorm gamma)
+## Learned RMSNorm gammas
 Registered as `ParamGroupType::RMSNORM` with `wd_mult=1.0` AND `lr_mult=0.1`. Without both, γ_final inflates as a logit temperature → mode collapse.
 
-Empirically the inflation gradient still wins. Set `ai_config.json → training.config.lm_head_centering.freeze_final_rms_gamma=true` to hold γ_final at 1.0; the LM head W absorbs scale (GPT-2-style). Frozen mode skips `requires_grad_()`, `ensure_grad()`, and param-group registration.
+Empirically the inflation gradient still wins. Set `ai_config.json → training.config.lm_head_centering.freeze_learned_rms_gammas=true` to hold **all 25 learned RMSNorm gamma vectors** at 1.0 (24 encoder gammas + `γ_final`); the LM head W and the rest of the model absorb scale instead. Frozen mode skips `requires_grad_()`, `ensure_grad()`, checkpoint overwrite on load, and param-group registration.
 
-Per-layer gammas (γ₁, γ₂) keep `lr_mult=1.0` and no decay — encoder nonlinearities give them mixed gradient signals that constrain growth naturally.
+When `freeze_learned_rms_gammas=false`, per-layer gammas (γ₁, γ₂) keep `lr_mult=1.0` and no decay — encoder nonlinearities give them mixed gradient signals that constrain growth naturally.
 
 ## Embedding scale = 1.0
 Do **not** scale embeddings by `sqrt(d_model)`. ALiBi/RoPE inject position **inside** attention; the AIAYN scaling has no purpose here and creates a 27.7× gradient asymmetry with tied weights.

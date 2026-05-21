@@ -95,10 +95,10 @@ public:
     // Any other path that obtains a mutable reference will trip the throw and
     // produce a stack trace pinpointing the leak.
     Tensor& finalRmsGammaMutable_UnfrozenOnly(const char* caller) {
-        if (hp_.freeze_final_rms_gamma) {
+        if (hp_.freeze_learned_rms_gammas) {
             throw std::runtime_error(
                 std::string("[FROZEN-GAMMA-LEAK] mutable access to final_rms_gamma while "
-                            "freeze_final_rms_gamma=true. caller=") +
+                            "freeze_learned_rms_gammas=true. caller=") +
                 (caller ? caller : "<unknown>"));
         }
         return final_rms_gamma_frozen_or_trained_;

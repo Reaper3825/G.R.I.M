@@ -1091,8 +1091,8 @@ bool verifyGradientsAreConnectedImpl(
     
     // ═══════════════════════════════════════════════════════════════════════════
     // Final RMSNorm gamma (Pattern B: owned by LMHeadLayer)
-    // When lm_head_freeze_final_rms_gamma=true, requires_grad=false and we skip the check
-    // (no grad is correct, not a bug).
+    // When freeze_learned_rms_gammas=true, final_rms_gamma requires_grad=false and
+    // we skip the check (no grad is correct, not a bug).
     // ═══════════════════════════════════════════════════════════════════════════
     if (ctx.lm_head->finalRmsGamma().data
         && ctx.lm_head->finalRmsGamma().requires_grad
@@ -1123,8 +1123,19 @@ bool verifyGradientsAreConnectedImpl(
             auto check = [&](Tensor& t, const char* name) {
                 if (t.data) requireAllocatedFinite(t, "layer " + std::to_string(layer) + " " + std::string(name));
             };
-            check(enc->rms1Gamma(), "rms1Gamma");
-            check(enc->rms2Gamma(), "rms2Gamma");
+            if (ctx.config->freeze_learned_rms_gammas) {
+                if (enc->rms1Gamma().has_grad()) {
+                    AG_WARN("layer " << layer << " rms1Gamma has a grad buffer while freeze_learned_rms_gammas=true");
+                    ok = false;
+                }
+                if (enc->rms2Gamma().has_grad()) {
+                    AG_WARN("layer " << layer << " rms2Gamma has a grad buffer while freeze_learned_rms_gammas=true");
+                    ok = false;
+                }
+            } else {
+                check(enc->rms1Gamma(), "rms1Gamma");
+                check(enc->rms2Gamma(), "rms2Gamma");
+            }
             // Issue #148: Sandwich norm gammas REMOVED
             check(enc->attnWqkv(), "attnWqkv");
             check(enc->attnBqkv(), "attnBqkv");

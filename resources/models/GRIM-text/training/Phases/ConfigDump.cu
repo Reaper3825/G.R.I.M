@@ -288,7 +288,7 @@ void dumpAllHyperparameters(
     SECTION("LM head centering");
     DUMP(lm_head_centering_enabled);
     DUMP_ARCH(lm_head_center_hidden_states);
-    DUMP_ARCH(lm_head_freeze_final_rms_gamma);
+    DUMP_ARCH(freeze_learned_rms_gammas);
     DUMP_ARCH(center_logits);
     DUMP_ARCH(center_encoder_residuals);
     DUMP_ARCH(project_out_pc1);

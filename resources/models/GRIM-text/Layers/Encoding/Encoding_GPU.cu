@@ -187,16 +187,20 @@ void EncodingLayer::allocateWeights(uint64_t seed, cudaStream_t init_stream) {
     };
     
     //==================================================//
-    //  RMSNorm gammas (4x) — initialized to 1.0
+    //  RMSNorm gammas (2x) — initialized to 1.0
     //==================================================//
     rms1_gamma_ = Tensor::zeros({d_model}, stream, "enc_rms1_gamma_own");
-    rms1_gamma_.requires_grad_();
-    rms1_gamma_.ensure_grad();
+    if (!hp.freeze_learned_rms_gammas) {
+        rms1_gamma_.requires_grad_();
+        rms1_gamma_.ensure_grad();
+    }
     fillOnes(rms1_gamma_);
     
     rms2_gamma_ = Tensor::zeros({d_model}, stream, "enc_rms2_gamma_own");
-    rms2_gamma_.requires_grad_();
-    rms2_gamma_.ensure_grad();
+    if (!hp.freeze_learned_rms_gammas) {
+        rms2_gamma_.requires_grad_();
+        rms2_gamma_.ensure_grad();
+    }
     fillOnes(rms2_gamma_);
 
     //==================================================//

@@ -361,16 +361,29 @@ void registerEncoderParameters(LanguageModel& model,
                                                config.use_bias,
                                                "config.use_bias=false");
 
-        registrar.addNonDecayTensor(prefix + "_rms1_gamma",
-                        enc->rms1Gamma(),
-                        ParamGroupType::RMSNORM,
-                        ParamStatsBucket::ENCODER,
-                        layer);
-        registrar.addNonDecayTensor(prefix + "_rms2_gamma",
-                        enc->rms2Gamma(),
-                        ParamGroupType::RMSNORM,
-                        ParamStatsBucket::ENCODER,
-                        layer);
+        if (config.freeze_learned_rms_gammas) {
+            if (enc->rms1Gamma().has_grad()) {
+                throw std::runtime_error("[buildParameterGroups] " + prefix +
+                                         "_rms1_gamma is frozen by config but still has a grad buffer: " +
+                                         tensorDebugSummary(enc->rms1Gamma()));
+            }
+            if (enc->rms2Gamma().has_grad()) {
+                throw std::runtime_error("[buildParameterGroups] " + prefix +
+                                         "_rms2_gamma is frozen by config but still has a grad buffer: " +
+                                         tensorDebugSummary(enc->rms2Gamma()));
+            }
+        } else {
+            registrar.addNonDecayTensor(prefix + "_rms1_gamma",
+                            enc->rms1Gamma(),
+                            ParamGroupType::RMSNORM,
+                            ParamStatsBucket::ENCODER,
+                            layer);
+            registrar.addNonDecayTensor(prefix + "_rms2_gamma",
+                            enc->rms2Gamma(),
+                            ParamGroupType::RMSNORM,
+                            ParamStatsBucket::ENCODER,
+                            layer);
+        }
 
         registrar.addConfigGatedNonDecayTensor(prefix + "_layer_scale1",
                                                enc->layerScale1(),
@@ -530,7 +543,7 @@ void registerFinalRmsGamma(LanguageModel& model,
     auto& lm_head = requireLayer(model.getLmHeadLayer(), "LMHeadLayer", "registerFinalRmsGamma");
     const Tensor& final_gamma = lm_head.finalRmsGamma();
 
-    if (config.lm_head_freeze_final_rms_gamma) {
+    if (config.freeze_learned_rms_gammas) {
         if (final_gamma.has_grad()) {
             throw std::runtime_error("[buildParameterGroups] final_rms_gamma is frozen by config but still has a grad buffer: " +
                                      tensorDebugSummary(final_gamma));

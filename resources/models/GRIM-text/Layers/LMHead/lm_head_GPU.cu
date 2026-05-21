@@ -117,10 +117,10 @@ LMHeadLayer::LMHeadLayer(const HyperParameters::LMHeadLayerConstructionHP& hp,
     {
         final_rms_gamma_frozen_or_trained_ = Tensor::zeros({hp_.d_model}, init_stream, "final_rms_gamma");
 
-        // freeze_final_rms_gamma=true: γ stays at 1.0 forever — do NOT mark as a leaf
+        // freeze_learned_rms_gammas=true: γ stays at 1.0 forever — do NOT mark as a leaf
         // parameter. autograd will skip producing its gradient and buildParameterGroups
         // will skip registering it (gated on has_grad()).
-        if (!hp_.freeze_final_rms_gamma) {
+        if (!hp_.freeze_learned_rms_gammas) {
             final_rms_gamma_frozen_or_trained_.requires_grad_();
             final_rms_gamma_frozen_or_trained_.ensure_grad();
         }
@@ -132,7 +132,7 @@ LMHeadLayer::LMHeadLayer(const HyperParameters::LMHeadLayerConstructionHP& hp,
 
         fprintf(stdout, "[LMHeadLayer] Final RMSNorm gamma: [%d] initialized to 1.0 (eps=%.1e) frozen=%s\n",
             hp_.d_model, hp_.rms_epsilon,
-            hp_.freeze_final_rms_gamma ? "true" : "false");
+            hp_.freeze_learned_rms_gammas ? "true" : "false");
     }
 
     fprintf(stdout, "[LMHeadLayer] Initialized: owns_weights=%s, has_bias=%s, has_rms_norm=true\n",
@@ -229,7 +229,7 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
     if (final_rms_gamma_frozen_or_trained_.data) {
         // Only flip requires_grad when γ is trainable. When frozen the rms_norm
         // GradFn will skip the gamma path entirely (no grad accumulation).
-        if (!hp_.freeze_final_rms_gamma) {
+        if (!hp_.freeze_learned_rms_gammas) {
             final_rms_gamma_frozen_or_trained_.requires_grad = true;
         }
         normalized = autograd::rms_norm(input, final_rms_gamma_frozen_or_trained_, hp_.rms_epsilon, stream);

@@ -75,7 +75,6 @@ void dumpBinaryAnalysis(const std::vector<uint8_t>& buffer, std::size_t file_siz
 
     std::size_t head_len = std::min<std::size_t>(256, file_size);
     if (head_len > 0) hexDumpRange(0, head_len, "First 256 bytes");
-
     if (file_size > 512) {
         std::size_t tail_start = file_size - 256;
         hexDumpRange(tail_start, file_size, "Last 256 bytes");
@@ -479,8 +478,9 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
 
         std::vector<float> h_rms1(fb_layer->rms1()->gamma()->begin(), fb_layer->rms1()->gamma()->end());
         std::vector<float> h_rms2(fb_layer->rms2()->gamma()->begin(), fb_layer->rms2()->gamma()->end());
-        if (!upload_device_vector(h_rms1, layer_view.rms1_gamma, "rms1.gamma") ||
-            !upload_device_vector(h_rms2, layer_view.rms2_gamma, "rms2.gamma"))
+        if (layer_view.rms1_gamma.ptr && !upload_device_vector(h_rms1, layer_view.rms1_gamma, "rms1.gamma"))
+            return false;
+        if (layer_view.rms2_gamma.ptr && !upload_device_vector(h_rms2, layer_view.rms2_gamma, "rms2.gamma"))
             return false;
 
         if (layer_view.layer_scale1.ptr) {

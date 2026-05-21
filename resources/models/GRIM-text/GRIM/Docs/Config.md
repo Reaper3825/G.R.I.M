@@ -63,4 +63,4 @@ Required. See [Encoder.md](Encoder.md).
 `training.config.loss` — see [Loss.md](Loss.md).
 
 ## LM head centering
-`training.config.lm_head_centering.freeze_final_rms_gamma=true` — see [LMHead.md](LMHead.md).
+`training.config.lm_head_centering.freeze_learned_rms_gammas=true` — see [LMHead.md](LMHead.md).

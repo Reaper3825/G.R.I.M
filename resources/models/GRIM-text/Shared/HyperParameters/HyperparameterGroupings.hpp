@@ -141,6 +141,7 @@ struct EncoderLayerConstructionHP {
     bool qk_norm_enabled = false;
     float residual_projection_init_gain = 0.0f;
     bool is_gqa = false;
+    bool freeze_learned_rms_gammas = false;
 };
 
 struct EncoderSelfAttentionHP {
@@ -191,7 +192,7 @@ struct LMHeadLayerConstructionHP {
     bool project_out_pc1 = false;
     int pc1_power_iters = 0;
     bool center_logits = false;
-    bool freeze_final_rms_gamma = false;
+    bool freeze_learned_rms_gammas = false;
     float rms_epsilon = 0.0f;
 };
 
@@ -1007,6 +1008,7 @@ inline EncoderLayerConstructionHP encoderLayerConstructionHP(
     view.residual_projection_init_gain =
         1.0f / std::sqrt(2.0f * static_cast<float>(cfg.num_layers));
     view.is_gqa = cfg.num_kv_heads < cfg.num_heads;
+    view.freeze_learned_rms_gammas = cfg.freeze_learned_rms_gammas;
     validateEncoderLayerConstructionHP(view, "encoderLayerConstructionHP");
     return view;
 }
@@ -1105,7 +1107,7 @@ inline LMHeadLayerConstructionHP lmHeadLayerConstructionHP(
     view.project_out_pc1 = cfg.project_out_pc1;
     view.pc1_power_iters = cfg.pc1_power_iters;
     view.center_logits = cfg.center_logits;
-    view.freeze_final_rms_gamma = cfg.lm_head_freeze_final_rms_gamma;
+    view.freeze_learned_rms_gammas = cfg.freeze_learned_rms_gammas;
     view.rms_epsilon = cfg.rms_epsilon;
     return view;
 }

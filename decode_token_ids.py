@@ -381,6 +381,26 @@ def validate_grmt_vocab_pair(header: dict, vocab: dict, grmt: Path):
         )
 
 
+def parse_cli_token_ids(raw_values: list[str]) -> list[int]:
+    """Parse --ids values, accepting either whitespace- or comma-separated integers."""
+    parsed_ids = []
+
+    for raw_value in raw_values:
+        for piece in raw_value.split(","):
+            piece = piece.strip()
+            if not piece:
+                continue
+            try:
+                parsed_ids.append(int(piece))
+            except ValueError as exc:
+                raise ValueError(f"Invalid token ID {piece!r} in --ids; expected integers") from exc
+
+    if not parsed_ids:
+        raise ValueError("--ids requires at least one integer token ID")
+
+    return parsed_ids
+
+
 # ── CLI actions ───────────────────────────────────────────────────────────────
 
 def cmd_decode_ids(args, vocab):
@@ -389,6 +409,9 @@ def cmd_decode_ids(args, vocab):
         text = decode_token(tid, vocab)
         region = token_type_label(tid)
         print(f"  {tid:>6d}  [{region:>7s}]  {text!r}")
+
+    print("\nDecoded sequence:")
+    print(f"  {decode_sequence(args.ids, vocab)!r}")
 
 
 def wrap_text(text: str, width: int = 100) -> str:
@@ -573,8 +596,8 @@ def main():
                         help="Path to vocab.bin")
     parser.add_argument("--grmt", default=str(GRMT_FILE),
                         help="Path to training_data.grmt")
-    parser.add_argument("--ids", type=int, nargs="+",
-                        help="Decode specific token IDs (e.g. --ids 277 512 36)")
+    parser.add_argument("--ids", nargs="+",
+                        help="Decode token IDs (e.g. --ids 277 512 36 or --ids 277,512,36)")
     parser.add_argument("--seq", type=int, nargs="*",
                         help="Sequence range: --seq START END (default: first 10)")
     parser.add_argument("--search", type=str,
@@ -597,6 +620,7 @@ def main():
     print(f"Loaded {len(vocab)} token mappings\n")
 
     if args.ids:
+        args.ids = parse_cli_token_ids(args.ids)
         cmd_decode_ids(args, vocab)
     elif args.search:
         cmd_search(args, vocab)

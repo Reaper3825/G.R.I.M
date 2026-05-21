@@ -569,6 +569,7 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
 
         // LM head centering choices
         "lm_head_centering.center_hidden_states",
+        "lm_head_centering.freeze_learned_rms_gammas",
         "lm_head_centering.center_logits",
         "lm_head_centering.center_encoder_residuals",
         "lm_head_centering.project_out_pc1",
@@ -986,11 +987,11 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     
     // LM Head centering configuration (Issue #37 / #40)
     // Master toggle is training-only (lm_head_centering_enabled). Per-knob fields
-    // (center_hidden_states / freeze_final_rms_gamma / center_logits /
+    // (center_hidden_states / freeze_learned_rms_gammas / center_logits /
     // center_encoder_residuals / project_out_pc1 / pc1_power_iters) live on architecture.
     params.lm_head_centering_enabled = false;  // Default to disabled (standard implementation)
     params.architecture.lm_head_center_hidden_states = false;
-    params.architecture.lm_head_freeze_final_rms_gamma = false;  // Default: γ_final is trainable
+    params.architecture.freeze_learned_rms_gammas = false;  // Default: all learned RMSNorm gammas are trainable
     params.architecture.center_logits = false;  // Default to disabled (standard implementation)
     params.architecture.center_encoder_residuals = false;  // Default: disabled. Enable to prevent ρ buildup across layers (mode collapse fix).
                                                // Gradient cost: (1-1/n_tokens)^24 ≈ 0.996 for n≈6000 — negligible.
@@ -1000,7 +1001,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         const auto& lmc = *it;
         params.lm_head_centering_enabled = lmc.value("enabled", false);
         params.architecture.lm_head_center_hidden_states = lmc.value("center_hidden_states", false);
-        params.architecture.lm_head_freeze_final_rms_gamma = lmc.value("freeze_final_rms_gamma", false);
+        params.architecture.freeze_learned_rms_gammas = lmc.value("freeze_learned_rms_gammas", false);
         params.architecture.center_logits = lmc.value("center_logits", false);
         params.architecture.center_encoder_residuals = lmc.value("center_encoder_residuals", false);
         params.architecture.project_out_pc1 = lmc.value("project_out_pc1", false);

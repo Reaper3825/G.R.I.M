@@ -45,7 +45,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // AUTOGRAD DEBUG TOGGLE - Set to true to trace autograd chain execution
 // ═══════════════════════════════════════════════════════════════════════════
-bool g_autograd_verbose = false;  // DEBUG: Set true to trace autograd chain (KILLS PERF with fflush!)
+bool g_autograd_verbose = true;  // DEBUG: Set true to trace autograd chain (KILLS PERF with fflush!)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Tensor Lifecycle Counters - sequential IDs for alloc/free/delete tracking
