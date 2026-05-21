@@ -19,18 +19,20 @@ PayloadBuildInputs derivePayloadBuildInputsOrThrow(const TrainingContext& ctx) {
             "call LoadTrainingData before this step");
     }
 
+    const auto fixed_shape = GRIM::HyperParameters::trainingFixedShapeHP(ctx.config);
+
     // Rule 20: TrainingState allocation consumes batch/token capacity only.
-    // Sequence capacity remains owned by RunCapacity and the BatchPayload path.
-    if (ctx.model_allocation.model_max_cached_batch != static_cast<int>(ctx.run_capacity.batch_rows)) {
+    // Sequence capacity remains owned by HyperparameterGroupings and the BatchPayload path.
+    if (ctx.model_allocation.model_max_cached_batch != fixed_shape.batch_size) {
         throw std::runtime_error(
-            "FATAL: model max_cached_batch does not match RunCapacity (model=" +
+            "FATAL: model max_cached_batch does not match trainingFixedShapeHP (model=" +
             std::to_string(ctx.model_allocation.model_max_cached_batch) +
-            " stem=" + std::to_string(ctx.run_capacity.batch_rows) + ")");
+            " grouping=" + std::to_string(fixed_shape.batch_size) + ")");
     }
 
     PayloadBuildInputs inputs;
-    inputs.max_cached_batch          = static_cast<std::size_t>(ctx.run_capacity.batch_rows);
-    inputs.max_cached_seq            = static_cast<std::size_t>(ctx.run_capacity.seq_cap);
+    inputs.max_cached_batch          = static_cast<std::size_t>(fixed_shape.batch_size);
+    inputs.max_cached_seq            = static_cast<std::size_t>(fixed_shape.max_seq_len);
     inputs.execution_block_num_slots = ctx.model_config.execution_block_num_slots;
     inputs.execution_block_num_ops   = ctx.model_config.execution_block_num_ops;
     inputs.execution_block_num_steps = ctx.model_config.execution_block_num_steps;

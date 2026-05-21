@@ -167,31 +167,36 @@ ModelAllocationState captureAndValidateModelAllocationOrThrow(const TrainingCont
     }
 
     const auto& state = ctx.model->getTrainingState();
-    const auto& cap = ctx.run_capacity;
+    const auto fixed_shape = GRIM::HyperParameters::trainingFixedShapeHP(ctx.config);
 
     ModelAllocationState allocation;
-    allocation.model_max_cached_batch = static_cast<int>(cap.batch_rows);
-    allocation.model_max_tokens_per_batch = static_cast<int>(cap.max_tokens_per_batch);
+    allocation.model_max_cached_batch = ctx.model_config.max_cached_batch;
+    allocation.model_max_tokens_per_batch = ctx.model_config.max_tokens_per_batch;
 
-    if (allocation.model_max_cached_batch != static_cast<int>(cap.batch_rows)) {
-        throw std::runtime_error("FATAL: model max_cached_batch does not match RunCapacity (model=" +
+    if (allocation.model_max_cached_batch != fixed_shape.batch_size) {
+        throw std::runtime_error("FATAL: model max_cached_batch does not match trainingFixedShapeHP (model=" +
                                  std::to_string(allocation.model_max_cached_batch) +
-                                 " stem=" + std::to_string(cap.batch_rows) + ")");
+                                 " grouping=" + std::to_string(fixed_shape.batch_size) + ")");
     }
-    if (allocation.model_max_tokens_per_batch != static_cast<int>(cap.max_tokens_per_batch)) {
-        throw std::runtime_error("FATAL: model max_tokens_per_batch does not match RunCapacity (model=" +
+    if (ctx.model_config.max_cached_seq_len != fixed_shape.max_seq_len) {
+        throw std::runtime_error("FATAL: model max_cached_seq_len does not match trainingFixedShapeHP (model=" +
+                                 std::to_string(ctx.model_config.max_cached_seq_len) +
+                                 " grouping=" + std::to_string(fixed_shape.max_seq_len) + ")");
+    }
+    if (allocation.model_max_tokens_per_batch != fixed_shape.max_tokens_per_batch) {
+        throw std::runtime_error("FATAL: model max_tokens_per_batch does not match trainingFixedShapeHP (model=" +
                                  std::to_string(allocation.model_max_tokens_per_batch) +
-                                 " stem=" + std::to_string(cap.max_tokens_per_batch) + ")");
+                                 " grouping=" + std::to_string(fixed_shape.max_tokens_per_batch) + ")");
     }
 
     const auto& logits_shape = state.cached_logits_tensor.shape.require("ModelAllocated cached_logits_tensor");
     if (!logits_shape.is_2d_layout()) {
         throw std::runtime_error("FATAL: cached_logits_tensor must be a 2D logits buffer");
     }
-    if (logits_shape.as_2d().rows != static_cast<int>(cap.max_tokens_per_batch)) {
-        throw std::runtime_error("FATAL: cached_logits_tensor row capacity does not match RunCapacity (tensor=" +
+    if (logits_shape.as_2d().rows != fixed_shape.max_tokens_per_batch) {
+        throw std::runtime_error("FATAL: cached_logits_tensor row capacity does not match trainingFixedShapeHP (tensor=" +
                                  std::to_string(logits_shape.as_2d().rows) +
-                                 " stem=" + std::to_string(cap.max_tokens_per_batch) + ")");
+                                 " grouping=" + std::to_string(fixed_shape.max_tokens_per_batch) + ")");
     }
 
     return allocation;
@@ -203,12 +208,11 @@ void ModelAllocated(TrainingContext& ctx) {
     using GRIM::Logging::ModuleId;
 
     ctx.rng = Internal::initializeRNG(ctx.config, *ctx.logging.logger);
+    const auto fixed_shape = GRIM::HyperParameters::trainingFixedShapeHP(ctx.config);
     ctx.model_config = GRIM::HyperParameters::startupLanguageModelConfig(
         ctx.config,
         ctx.data_info.actual_vocab_size,
-        static_cast<int>(ctx.run_capacity.batch_rows),
-        static_cast<int>(ctx.run_capacity.seq_cap),
-        static_cast<int>(ctx.run_capacity.max_tokens_per_batch));
+        fixed_shape);
 
     try {
         ctx.model = Internal::initializeModel(

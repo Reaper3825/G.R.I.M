@@ -111,7 +111,7 @@ The token buffers are therefore a mixed case:
 
 Some references to cache tensors are not value leaks:
 
-- `Startup/Model/ModelAllocationState.cu`: checks allocated tensor shapes against `RunCapacity`.
+- `Startup/Model/ModelAllocationState.cu`: checks allocated tensor shapes against `HyperparameterGroupings.hpp::trainingFixedShapeHP()`.
 - `Shared/Batching/BatchDeviceUpload.cu`: checks logits capacity before upload.
 - `training/Diagnostics/BoundaryDiagnostic.cu`: reports allocation capacity.
 - `training/Autograd/AutogradTraining.cu`: validates that the logits buffer can hold the current payload.

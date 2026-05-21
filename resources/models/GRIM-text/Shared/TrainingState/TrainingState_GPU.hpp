@@ -71,7 +71,7 @@ struct TrainingState {
     //======================================================//
     //  STEP DEVICE WORKSPACES / SNAPSHOTS (Category 3)
     //======================================================//
-    // Capacity is authored upstream by RunCapacity -> LanguageModelConfig.
+    // Capacity is authored upstream by HyperparameterGroupings -> LanguageModelConfig.
     // Allocated Tensor shapes are the only TrainingState-local capacity record.
     // BatchPayload remains the host-side source of truth for batch geometry
     // and token semantics.

@@ -12,12 +12,6 @@
 
 namespace GRIMText::Training {
 
-TelemetryInitInputs makeTelemetryInitInputs(const TrainingContext& ctx) {
-    TelemetryInitInputs inputs;
-    inputs.capacity = ctx.run_capacity;
-    return inputs;
-}
-
 void TelemetryReady(TrainingContext& ctx) {
     using GRIM::Logging::EmitModuleInfo;
     using GRIM::Logging::ModuleId;
@@ -35,16 +29,17 @@ void TelemetryReady(TrainingContext& ctx) {
     ctx.logging.logger->log("✓ Telemetry CSV logger: " + csv_path);
 
     EmitModuleInfo(ModuleId::Training, "[Phase1] Initializing telemetry control...", 0);
-    const uint32_t token_budget = ctx.run_capacity.max_tokens_per_batch;
-    const uint32_t seq_cap = ctx.run_capacity.seq_cap;
+    const auto fixed_shape = GRIM::HyperParameters::trainingFixedShapeHP(ctx.config);
+    const uint32_t token_budget = static_cast<uint32_t>(fixed_shape.max_tokens_per_batch);
+    const uint32_t seq_cap = static_cast<uint32_t>(fixed_shape.max_seq_len);
     if (token_budget == 0 || seq_cap == 0) {
-        throw std::runtime_error("FATAL: RunCapacity is invalid (token_budget=" +
+        throw std::runtime_error("FATAL: trainingFixedShapeHP is invalid (token_budget=" +
                                  std::to_string(token_budget) + " seq_cap=" + std::to_string(seq_cap) + ")");
     }
     if (static_cast<uint32_t>(ctx.model_allocation.model_max_tokens_per_batch) != token_budget) {
-        throw std::runtime_error("FATAL: model max_tokens_per_batch does not match RunCapacity (model=" +
+        throw std::runtime_error("FATAL: model max_tokens_per_batch does not match trainingFixedShapeHP (model=" +
                                  std::to_string(ctx.model_allocation.model_max_tokens_per_batch) +
-                                 " stem=" + std::to_string(token_budget) + ")");
+                                 " grouping=" + std::to_string(token_budget) + ")");
     }
     ctx.telemetry.control_config = GRIM::Telemetry::makeControlConfigFromHyperparameters(
         ctx.config.hyperparameters,

@@ -66,7 +66,6 @@
 // Extracted startup subsystems
 #include "Startup/Rng.hpp"
 #include "Startup/Logging.hpp"
-#include "Startup/Capacity/RunCapacity.hpp"
 #include "Startup/Capacity/MemorySnapshot.hpp"
 #include "Startup/Data/DataInfo.hpp"
 #include "Startup/Model/ModelAllocationState.hpp"
@@ -233,8 +232,6 @@ struct TrainingContext {
     // handed to Phase2; training code must not rebuild or route alternate static
     // model wrappers around it.
     GRIM::HyperParameters::LanguageModelConfig model_config;
-    // Capacity stem (single author after HP policy)
-    RunCapacity run_capacity;
     // Memory snapshot (evidence only; never authors capacity)
     MemorySnapshot memory_snapshot;
     // Post-allocation validation evidence (fails loud on mismatch)

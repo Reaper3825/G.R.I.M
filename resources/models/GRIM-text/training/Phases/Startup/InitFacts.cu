@@ -198,10 +198,11 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
     emitInitFactKeyValue("architecture.execution_block_enabled", boolText(arch.execution_block_enabled));
     emitInitFactKeyValue("architecture.mtp_enabled", boolText(arch.mtp_enabled));
 
-    emitInitFactLine("[INIT_FACTS] --- Run capacity ---------------------------------------------------------");
-    emitInitFactKeyValue("run_capacity.batch_rows", fmtSize(ctx.run_capacity.batch_rows));
-    emitInitFactKeyValue("run_capacity.seq_cap", fmtSize(ctx.run_capacity.seq_cap));
-    emitInitFactKeyValue("run_capacity.max_tokens_per_batch", fmtSize(ctx.run_capacity.max_tokens_per_batch));
+    const auto fixed_shape = GRIM::HyperParameters::trainingFixedShapeHP(ctx.config);
+    emitInitFactLine("[INIT_FACTS] --- Fixed training shape -------------------------------------------------");
+    emitInitFactKeyValue("fixed_shape.batch_size", fmtInt(fixed_shape.batch_size));
+    emitInitFactKeyValue("fixed_shape.max_seq_len", fmtInt(fixed_shape.max_seq_len));
+    emitInitFactKeyValue("fixed_shape.max_tokens_per_batch", fmtInt(fixed_shape.max_tokens_per_batch));
     emitInitFactKeyValue("startup.max_seq_len", fmtInt(ctx.config.max_seq_len));
     emitInitFactKeyValue("startup.sliding_window_stride", fmtInt(ctx.config.sliding_window_stride));
 

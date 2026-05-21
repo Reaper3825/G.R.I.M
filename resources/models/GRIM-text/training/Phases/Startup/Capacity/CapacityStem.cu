@@ -9,10 +9,7 @@ void HyperparametersReady(TrainingContext& ctx) {
     // Validate the loss grouping against the authoritative hyperparameters
     // without storing a second config owner on TrainingContext.
     static_cast<void>(GRIM::HyperParameters::lossConfigHP(ctx.config.hyperparameters));
-}
-
-void CapacityStemReady(TrainingContext& ctx) {
-    ctx.run_capacity = deriveRunCapacityOrThrow(ctx.config);
+    static_cast<void>(GRIM::HyperParameters::trainingFixedShapeHP(ctx.config));
 }
 
 } // namespace GRIMText::Training

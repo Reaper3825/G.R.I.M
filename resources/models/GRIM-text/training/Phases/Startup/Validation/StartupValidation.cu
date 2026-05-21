@@ -21,18 +21,17 @@ void require(bool ok, const std::string& message) {
 
 void validateStartupOrThrow(const StartupValidationInputs& inputs) {
     const TrainingContext& ctx = inputs.ctx;
+        const auto fixed_shape = GRIM::HyperParameters::trainingFixedShapeHP(ctx.config);
 
     require(ctx.logging.logger != nullptr, "logging logger is null");
     require(ctx.logging.status_writer != nullptr, "status writer is null");
     require(ctx.memory_snapshot.device >= 0, "memory snapshot not captured");
     require(ctx.memory_snapshot.total_bytes > 0, "memory snapshot total_bytes is zero");
 
-    require(ctx.config.hyperparameters.batch_size > 0, "hyperparameters.batch_size <= 0");
-    require(ctx.config.max_seq_len > 0, "config.max_seq_len <= 0");
-    require(ctx.run_capacity.batch_rows == static_cast<std::uint32_t>(ctx.config.hyperparameters.batch_size),
-            "RunCapacity.batch_rows does not match post-policy hyperparameters.batch_size");
-    require(ctx.run_capacity.seq_cap == static_cast<std::uint32_t>(ctx.config.max_seq_len),
-            "RunCapacity.seq_cap does not match config.max_seq_len");
+    require(fixed_shape.batch_size == ctx.config.hyperparameters.batch_size,
+            "trainingFixedShapeHP.batch_size does not match post-policy hyperparameters.batch_size");
+    require(fixed_shape.max_seq_len == ctx.config.max_seq_len,
+            "trainingFixedShapeHP.max_seq_len does not match config.max_seq_len");
 
     require(ctx.data_info.actual_vocab_size >= static_cast<std::uint32_t>(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET),
             "DataInfo.actual_vocab_size does not include special+byte+atom token ranges");
@@ -42,17 +41,17 @@ void validateStartupOrThrow(const StartupValidationInputs& inputs) {
             "DataInfo val sequence count does not match SequenceData");
 
     require(ctx.model != nullptr, "model is null");
-    require(ctx.model_allocation.model_max_cached_batch == static_cast<int>(ctx.run_capacity.batch_rows),
-            "model allocation batch mirror does not match RunCapacity");
-    require(ctx.model_allocation.model_max_tokens_per_batch == static_cast<int>(ctx.run_capacity.max_tokens_per_batch),
-            "model allocation token mirror does not match RunCapacity");
+    require(ctx.model_allocation.model_max_cached_batch == fixed_shape.batch_size,
+            "model allocation batch mirror does not match trainingFixedShapeHP");
+    require(ctx.model_allocation.model_max_tokens_per_batch == fixed_shape.max_tokens_per_batch,
+            "model allocation token mirror does not match trainingFixedShapeHP");
 
     require(ctx.telemetry.lattice != nullptr, "telemetry lattice is null");
     require(ctx.telemetry.csv_logger != nullptr, "telemetry CSV logger is null");
-    require(static_cast<std::uint32_t>(ctx.telemetry.control_config.reference_tokens) == ctx.run_capacity.max_tokens_per_batch,
-            "telemetry reference token budget does not match RunCapacity");
-    require(static_cast<std::uint32_t>(ctx.telemetry.control_config.reference_seq_len) == ctx.run_capacity.seq_cap,
-            "telemetry reference seq len does not match RunCapacity");
+    require(ctx.telemetry.control_config.reference_tokens == fixed_shape.max_tokens_per_batch,
+            "telemetry reference token budget does not match trainingFixedShapeHP");
+    require(ctx.telemetry.control_config.reference_seq_len == fixed_shape.max_seq_len,
+            "telemetry reference seq len does not match trainingFixedShapeHP");
 
     require(!ctx.train_payloads.empty(), "train_payloads is empty");
     require(ctx.fixed_train_schedule.batches.size() == ctx.train_payloads.size(),

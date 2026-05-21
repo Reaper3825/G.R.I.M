@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -88,6 +89,12 @@ struct LossConfigHP {
 
     bool class_balanced_enabled = false;
     float class_balanced_beta = 0.0f;
+};
+
+struct TrainingFixedShapeHP {
+    int batch_size = 0;
+    int max_seq_len = 0;
+    int max_tokens_per_batch = 0;
 };
 
 struct GpuModelInitializationHP {
@@ -618,6 +625,54 @@ inline void validatePBMConstructionHP(
     }
 }
 
+inline void validateTrainingFixedShapeHP(
+    const TrainingFixedShapeHP& hp,
+    const char* caller)
+{
+    requirePositiveGroupingValue(hp.batch_size, "batch_size", caller);
+    requirePositiveGroupingValue(hp.max_seq_len, "max_seq_len", caller);
+    requirePositiveGroupingValue(hp.max_tokens_per_batch, "max_tokens_per_batch", caller);
+
+    const std::int64_t expected_tokens =
+        static_cast<std::int64_t>(hp.batch_size) * static_cast<std::int64_t>(hp.max_seq_len);
+    if (expected_tokens > static_cast<std::int64_t>(std::numeric_limits<int>::max())) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": batch_size * max_seq_len overflowed int capacity (batch_size=" +
+                                 std::to_string(hp.batch_size) + " max_seq_len=" +
+                                 std::to_string(hp.max_seq_len) + " product=" +
+                                 std::to_string(expected_tokens) + ")");
+    }
+    if (hp.max_tokens_per_batch != static_cast<int>(expected_tokens)) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": max_tokens_per_batch=" +
+                                 std::to_string(hp.max_tokens_per_batch) +
+                                 " does not match batch_size * max_seq_len=" +
+                                 std::to_string(expected_tokens));
+    }
+}
+
+inline TrainingFixedShapeHP trainingFixedShapeHP(
+    const StartupConfig& config)
+{
+    TrainingFixedShapeHP view;
+    view.batch_size = config.hyperparameters.batch_size;
+    view.max_seq_len = config.max_seq_len;
+
+    const std::int64_t token_budget =
+        static_cast<std::int64_t>(view.batch_size) * static_cast<std::int64_t>(view.max_seq_len);
+    if (token_budget > static_cast<std::int64_t>(std::numeric_limits<int>::max())) {
+        throw std::runtime_error("trainingFixedShapeHP: max_tokens_per_batch overflow: batch_size=" +
+                                 std::to_string(view.batch_size) +
+                                 " max_seq_len=" + std::to_string(view.max_seq_len) +
+                                 " product=" + std::to_string(token_budget) +
+                                 " exceeds int max");
+    }
+
+    view.max_tokens_per_batch = static_cast<int>(token_budget);
+    validateTrainingFixedShapeHP(view, "trainingFixedShapeHP");
+    return view;
+}
+
 inline DataLoadingHP dataLoadingHP(const StartupConfig& config) {
     DataLoadingHP view;
     view.min_seq_valid_tokens = config.hyperparameters.min_seq_valid_tokens;
@@ -818,9 +873,7 @@ inline void validateInferenceLanguageModelConfig(
 inline LanguageModelConfig startupLanguageModelConfig(
     const StartupConfig& config,
     std::uint32_t vocab_size,
-    int max_cached_batch,
-    int max_cached_seq_len,
-    int max_tokens_per_batch)
+    const TrainingFixedShapeHP& fixed_shape)
 {
     LanguageModelConfig cfg = config.hyperparameters.architecture;
 
@@ -837,9 +890,10 @@ inline LanguageModelConfig startupLanguageModelConfig(
     cfg.use_pre_norm = true;
     cfg.fuse_qkv = true;
 
-    cfg.max_cached_batch = max_cached_batch;
-    cfg.max_cached_seq_len = max_cached_seq_len;
-    cfg.max_tokens_per_batch = max_tokens_per_batch;
+    validateTrainingFixedShapeHP(fixed_shape, "startupLanguageModelConfig");
+    cfg.max_cached_batch = fixed_shape.batch_size;
+    cfg.max_cached_seq_len = fixed_shape.max_seq_len;
+    cfg.max_tokens_per_batch = fixed_shape.max_tokens_per_batch;
 
     cfg.computeDerivedValues();
     validateStartupLanguageModelConfig(cfg);

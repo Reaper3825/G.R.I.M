@@ -91,15 +91,16 @@ void runBoundaryDiagnostic(
             diag << "  payload.total_tokens=" << payload.total_tokens << "\n";
             diag << "  payload.lm_valid_tokens=" << payload.lm_valid_tokens << "\n";
             
-            // Training allocation check. Authored token capacity comes from RunCapacity;
+            // Training allocation check. Authored token capacity comes from trainingFixedShapeHP();
             // logits allocation capacity comes from the Tensor shape.
             const auto& logits_shape = ts.cached_logits_tensor.shape.require("BoundaryDiagnostic cached_logits_tensor");
-            const size_t token_capacity = ctx.run_capacity.max_tokens_per_batch;
+            const auto fixed_shape = GRIM::HyperParameters::trainingFixedShapeHP(ctx.config);
+            const size_t token_capacity = static_cast<size_t>(fixed_shape.max_tokens_per_batch);
             const size_t logit_token_capacity = static_cast<size_t>(logits_shape.as_2d().rows);
             diag << "[BOUNDARY_DIAGNOSTIC] AUTHORED CAPACITY:\n";
-            diag << "  model.max_cached_batch=" << ctx.run_capacity.batch_rows << "\n";
-            diag << "  model.max_cached_seq_len=" << ctx.run_capacity.seq_cap << "\n";
-            diag << "  model.max_tokens_per_batch=" << ctx.run_capacity.max_tokens_per_batch << "\n";
+            diag << "  fixed_shape.batch_size=" << fixed_shape.batch_size << "\n";
+            diag << "  fixed_shape.max_seq_len=" << fixed_shape.max_seq_len << "\n";
+            diag << "  fixed_shape.max_tokens_per_batch=" << fixed_shape.max_tokens_per_batch << "\n";
             diag << "[BOUNDARY_DIAGNOSTIC] ALLOCATED CACHE CAPACITY:\n";
             diag << "  cached_logits_tensor.rows=" << logit_token_capacity << "\n";
             
@@ -109,9 +110,9 @@ void runBoundaryDiagnostic(
                 diag << "  *** WARNING: Batch exceeds training cache capacity! ***\n";
                 diag << "  *** Need " << payload.total_tokens << " but have " << token_capacity << " ***\n";
             }
-            if (max_seq_len > static_cast<size_t>(ctx.run_capacity.seq_cap)) {
+            if (max_seq_len > static_cast<size_t>(fixed_shape.max_seq_len)) {
                 diag << "  *** WARNING: Sequence exceeds max_cached_seq_len! ***\n";
-                diag << "  *** max_seq_len=" << max_seq_len << " > max_cached=" << ctx.run_capacity.seq_cap << " ***\n";
+                diag << "  *** max_seq_len=" << max_seq_len << " > max_cached=" << fixed_shape.max_seq_len << " ***\n";
             }
             
             // NOTE: FlashAttention v2 uses O(N) tiled attention, NOT O(N²) buffers.

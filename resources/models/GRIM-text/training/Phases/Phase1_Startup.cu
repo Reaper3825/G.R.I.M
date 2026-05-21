@@ -93,7 +93,6 @@ Phase1Result executePhase1(int argc, char** argv) {
         return result;
     }
 
-    CapacityStemReady(*ctx);
     LoadTrainingData(*ctx);
     ModelAllocated(*ctx);
     ResumeStateReady(*ctx);

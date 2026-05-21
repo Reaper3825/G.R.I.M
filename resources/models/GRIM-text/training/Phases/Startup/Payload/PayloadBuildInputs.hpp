@@ -10,7 +10,7 @@
 //  The fields that buildBatchPayload(...) needs from "the run" — model cache
 //  geometry, execution-block sizes, vocab size, token layout, MTP head count —
 //  are all run-invariant. Phase2 used to re-read them per batch from
-//  the LanguageModel config accessor and ctx.run_capacity, AND re-check the invariant
+//  the LanguageModel config accessor and a re-derived fixed-shape grouping, AND re-check the invariant
 //  that the model and the capacity stem agreed on cache dimensions. Both the
 //  reads and the contract check are properly Phase1's job:
 //
@@ -53,9 +53,9 @@ struct PayloadBuildInputs {
 };
 
 // Snapshots run-invariant payload inputs and re-validates the model ↔
-// run_capacity cache-dimension contract. Throws on any mismatch (Rule 20).
-// Requires ctx.model, ctx.run_capacity, ctx.config, and ctx.tokenizer to be
-// initialized — i.e. must run after ModelAllocated and CapacityStemReady.
+// grouped fixed-shape cache-dimension contract. Throws on any mismatch (Rule 20).
+// Requires ctx.model, ctx.config, and ctx.tokenizer to be initialized — i.e.
+// must run after ModelAllocated.
 PayloadBuildInputs derivePayloadBuildInputsOrThrow(const TrainingContext& ctx);
 
 void PayloadBuildInputsReady(TrainingContext& ctx);

@@ -241,6 +241,7 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
 
     try {
         const auto start = std::chrono::steady_clock::now();
+        const auto fixed_shape = GRIM::HyperParameters::trainingFixedShapeHP(ctx.config);
         const std::vector<int32_t> prompt_token_to_slot_map;
         auto prompt_payload = GRIM::Batching::buildInferenceBatchPayload(
             prompt_tokens,
@@ -251,8 +252,8 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
             prompt_atom_entry_ids,
             prompt_token_to_slot_map,
             static_cast<int>(ctx.data_info.actual_vocab_size),
-            static_cast<size_t>(ctx.run_capacity.batch_rows),
-            static_cast<size_t>(ctx.run_capacity.seq_cap),
+            static_cast<size_t>(fixed_shape.batch_size),
+            static_cast<size_t>(fixed_shape.max_seq_len),
             ctx.model_config.execution_block_num_slots);
         std::vector<GRIM::GeneratedSequence> outputs = ctx.model->generate(
             prompt_payload,
