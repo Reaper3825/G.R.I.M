@@ -92,6 +92,8 @@ For non-leaf inputs, a GradFn may write its local Jacobian result into an owned 
 
 Use `Shared/TensorContract/GradientAccumulation.hpp` for generic `dst += src * scale` pass-through or scratch-to-leaf accumulation. Do not add per-translation-unit `kernel_accumulate_grad` copies in GradFns; operator-specific derivatives may still use their own additive kernels when they compute a real local Jacobian (for example GELU, RMSNorm, embedding scatter-add, or broadcast reductions).
 
+`EmbeddingGradFn` treats `Tokenizer::PAD_TOKEN_ID` as layout padding, not content: forward writes exact-zero activation rows for PAD, and backward returns before the embedding scatter-add so PAD never contributes through lookup-backward. Rectangular `BatchPayload.input_ids` padding must therefore not rely on downstream loss masks to neutralize PAD activations.
+
 ## GradFn saved-buffer lifecycle
 GradFns own Category 1 saved forward data and non-leaf gradient scratch only for the active tape window. Leaf tensors reuse their persistent `Tensor.grad_` buffers; non-leaf tensors allocate owned scratch, zero it before use, and release it from `release_saved()` / RAII deleters after `Tensor::backward()` has synchronized. Large loss buffers follow this same immediate GradFn lifecycle: `LogSoftmaxGradFn` owns the saved log-probability buffer, `NLLLossGradFn` borrows that saved buffer through the upstream GradFn, owns CE forward scalar scratch from `capture_inputs()`, owns its `grad_log_probs` backward scratch, and releases all of that tape-local state from `release_saved()`. Promoting full-vocab loss workspaces to durable preallocation would require a dedicated loss-workspace owner, not `TrainingState`.
 

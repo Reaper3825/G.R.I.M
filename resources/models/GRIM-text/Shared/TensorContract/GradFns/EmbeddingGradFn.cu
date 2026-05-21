@@ -59,8 +59,16 @@ __global__ void kernel_embedding_forward(
                token_id, vocab_size, token_idx);
         __trap();
     }
-    const float* weight_row = weight + static_cast<size_t>(token_id) * d_model;
     float* output_row = output + static_cast<size_t>(token_idx) * d_model;
+
+    if (token_id == GRIM::Tokenizer::PAD_TOKEN_ID) {
+        for (int i = threadIdx.x; i < d_model; i += blockDim.x) {
+            output_row[i] = 0.0f;
+        }
+        return;
+    }
+
+    const float* weight_row = weight + static_cast<size_t>(token_id) * d_model;
 
     const auto gate = GRIM::TensorContract::tokenTypeGateRangeForTokenId(token_id, d_model, vocab_size);
     if (gate.width <= 0) {
@@ -99,6 +107,11 @@ __global__ void kernel_embedding_backward(
                token_id, vocab_size, token_idx);
         __trap();
     }
+
+    if (token_id == GRIM::Tokenizer::PAD_TOKEN_ID) {
+        return;
+    }
+
     const float* token_grad = grad_output + static_cast<size_t>(token_idx) * d_model;
     float* weight_grad = grad_weight + static_cast<size_t>(token_id) * d_model;
 

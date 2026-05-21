@@ -16,6 +16,7 @@
 #include "../../Shared/Batching/BatchPayload.hpp"
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../../Shared/LogRecorder/LogTypes.hpp"
+#include "../../Shared/UnigramByte/TokenLayout.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -53,6 +54,8 @@ struct PostClipParamGradEmbLmEquationDiag {
 
     int current_payload_most_frequent_token = -1;
     int current_payload_most_frequent_count = 0;
+    int current_payload_pad_slots_skipped = 0;
+    int current_payload_real_tokens_counted = 0;
 
     float prev_emb_rms = 0.0f;
     float curr_emb_rms = 0.0f;
@@ -70,7 +73,7 @@ void cudaCheck(cudaError_t err, const char* where) {
 PostClipParamGradEmbLmEquationDiag computePostClipParamGradEmbLmEquation(
     const GRIM::EmbeddingLayer* embedding_layer,
     const GRIM::LMHeadLayer* lm_head_layer,
-    const std::vector<int>& token_ids,
+    const GRIM::Batching::BatchPayload& payload,
     int d_model,
     int vocab_size,
     bool tied_embeddings,
@@ -83,10 +86,22 @@ PostClipParamGradEmbLmEquationDiag computePostClipParamGradEmbLmEquation(
             std::string("[") + kPostClipParamGradEmbLmEquationOp +
             "] embedding_layer is NULL");
     }
-    if (token_ids.empty()) {
+    if (payload.input_ids.empty()) {
         throw std::runtime_error(
             std::string("[") + kPostClipParamGradEmbLmEquationOp +
             "] BatchPayload.input_ids is empty at enabled diagnostic boundary");
+    }
+    if (static_cast<int>(payload.input_ids.size()) != payload.total_tokens) {
+        throw std::runtime_error(
+            std::string("[") + kPostClipParamGradEmbLmEquationOp +
+            "] BatchPayload.input_ids.size()=" + std::to_string(payload.input_ids.size()) +
+            " != payload.total_tokens=" + std::to_string(payload.total_tokens));
+    }
+    if (static_cast<int>(payload.seq_lengths.size()) != payload.batch_size) {
+        throw std::runtime_error(
+            std::string("[") + kPostClipParamGradEmbLmEquationOp +
+            "] BatchPayload.seq_lengths.size()=" + std::to_string(payload.seq_lengths.size()) +
+            " != payload.batch_size=" + std::to_string(payload.batch_size));
     }
     if (d_model <= 0) {
         throw std::runtime_error(
@@ -141,9 +156,26 @@ PostClipParamGradEmbLmEquationDiag computePostClipParamGradEmbLmEquation(
     diag.emb_rms_delta = curr_emb_rms - prev_emb_rms;
 
     std::unordered_map<int, int> token_freq;
-    for (int tok : token_ids) {
-        if (tok >= 0 && tok < vocab_size) {
-            token_freq[tok]++;
+    for (int b = 0; b < payload.batch_size; ++b) {
+        const int seq_len = payload.seq_lengths[static_cast<size_t>(b)];
+        if (seq_len < 0 || seq_len > payload.max_seq_len) {
+            throw std::runtime_error(
+                std::string("[") + kPostClipParamGradEmbLmEquationOp +
+                "] invalid BatchPayload.seq_lengths[" + std::to_string(b) + "]=" +
+                std::to_string(seq_len) + " for max_seq_len=" + std::to_string(payload.max_seq_len));
+        }
+        diag.current_payload_pad_slots_skipped += payload.max_seq_len - seq_len;
+        const int row_offset = b * payload.max_seq_len;
+        for (int t = 0; t < seq_len; ++t) {
+            const int tok = payload.input_ids[static_cast<size_t>(row_offset + t)];
+            if (tok == GRIM::Tokenizer::PAD_TOKEN_ID) {
+                ++diag.current_payload_pad_slots_skipped;
+                continue;
+            }
+            if (tok >= 0 && tok < vocab_size) {
+                token_freq[tok]++;
+                ++diag.current_payload_real_tokens_counted;
+            }
         }
     }
 
@@ -277,9 +309,11 @@ std::string formatPostClipParamGradEmbLmEquation(
         oss << "tok" << diag.top_tokens[k] << "=" << diag.top_rms[k];
     }
     oss << "\n";
-    oss << "  CURRENT PAYLOAD SCATTER CONTEXT: most_frequent=tok"
+    oss << "  CURRENT PAYLOAD SCATTER CONTEXT: most_frequent_real_nonpad=tok"
         << diag.current_payload_most_frequent_token
-        << " (count=" << diag.current_payload_most_frequent_count << ")\n";
+        << " (count=" << diag.current_payload_most_frequent_count << ")"
+        << " real_nonpad_count=" << diag.current_payload_real_tokens_counted
+        << " pad_slots_skipped=" << diag.current_payload_pad_slots_skipped << "\n";
     oss << "  GRAD WINDOW TREND: prev_emb_rms=" << diag.prev_emb_rms
         << " curr_emb_rms=" << diag.curr_emb_rms
         << " delta=" << std::showpos << diag.emb_rms_delta << std::noshowpos << "\n";
@@ -331,7 +365,7 @@ void runPostClipParamGradEmbLmEquation(
     const PostClipParamGradEmbLmEquationDiag diag = computePostClipParamGradEmbLmEquation(
         ctx.model->getEmbeddingLayer(),
         ctx.model->getLmHeadLayer(),
-        payload.input_ids,
+        payload,
         ctx.model_config.d_model,
         static_cast<int>(ctx.data_info.actual_vocab_size),
         ctx.model_config.tie_embeddings,
