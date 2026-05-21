@@ -20,6 +20,9 @@ Diagnostics must use the Phase1-authored `BatchPayload` for `batch_size`, `max_s
 ## Kernel timing
 Use CUDA events (`cudaEventRecord` / `cudaEventElapsedTime`) — not `cudaStreamSynchronize` wall-time. Sync timing includes draining prior pipeline work.
 
+## Inference sample cadence
+`training/Diagnostics/DiagnosticInference.cu` runs the training-time sample generator on `optimizer_step % interval == 0`, where `interval = GRIM_SAMPLE_INTERVAL` when the environment variable is present, otherwise `max(training.config.log_interval, 10)`. This keeps inference sampling sparser than the main training log cadence by default without changing other diagnostics.
+
 ## QKV finite scans
 `GRIM_DEBUG_QKV` enables full-tensor finite checks around encoder QKV / SDPA boundaries. Clean tensors are silent; any NaN/Inf emits a `[QKV_NONFINITE] FATAL ...` module error with counts and first offending index/value, then throws immediately. Do not log `nan=0 inf=0` summaries — they hide the real anomaly signal.
 

@@ -35,6 +35,8 @@
 namespace GRIMText::Training {
 namespace {
 
+constexpr int kDefaultInferenceDiagnosticInterval = 10;
+
 //------------------------------------------------------
 //  Environment helpers (self-contained, no Phase2 deps)
 //------------------------------------------------------
@@ -148,7 +150,8 @@ std::string decodeWithAtomSideChannel(
 
 void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
     const auto& hp = ctx.config.hyperparameters;
-    const int interval = readEnvInt("GRIM_SAMPLE_INTERVAL", hp.log_interval);
+    const int default_interval = std::max(hp.log_interval, kDefaultInferenceDiagnosticInterval);
+    const int interval = readEnvInt("GRIM_SAMPLE_INTERVAL", default_interval);
     if (interval <= 0) {
         return;
     }

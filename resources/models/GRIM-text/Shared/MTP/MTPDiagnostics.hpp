@@ -10,7 +10,7 @@
 namespace GRIM::MTP {
 
 struct MTPDiagnostics {
-    std::vector<float> head_loss;
+    std::vector<float> head_loss;  // Raw per-head CE/NLL loss, not alpha/K weighted
     std::vector<float> head_acc;
     float L0_main = 0.0f;       // Main (next-token) loss before adding MTP terms
     float alpha_effective = 0.0f;

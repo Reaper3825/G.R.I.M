@@ -4,6 +4,7 @@
 //======================================================//
 
 #include "AutogradTraining.hpp"
+#include "AutogradMtpAuxiliaryLoss.hpp"
 #include "AutogradSelectorSupervisionLoss.hpp"
 
 // MUST include full definition of GPUGrimEncoder for method calls
@@ -17,7 +18,6 @@
 #include "../../Shared/CudaAllocUtils.hpp"
 #include "../../Shared/Forward/ModelForward_GPU.hpp"
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
-#include "../../Shared/MTP/MTP_GPU.hpp"
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../../Shared/UnigramByte/Unigram.hpp"
 #include "../../Shared/Execution/ExecutionPayloadValidation.hpp"
@@ -462,16 +462,54 @@ LossResult computeAutogradLoss(
 
     // ═══════════════════════════════════════════════════════════════════════════
     // 2. MTP (multi-token prediction) auxiliary losses: L_total += α/K * Σ_k L_k
-    // Delegated to MTP_GPU module (see Shared/MTP/MTP_GPU.cu)
+    //
+    // Autograd owns the representation boundary: MTP consumes the same hidden
+    // representation as the LM head, but the Shared/MTP kernel file must never
+    // reach through LMHeadLayer or AutogradContext to decide that policy.
     // ═══════════════════════════════════════════════════════════════════════════
-    GRIM::MTP::computeMTPAuxiliaryLosses(ctx, intermediates, result.mtp_diagnostics, loss_config, mtp_alpha_effective);
-
     float mtp_loss = 0.0f;
-    if (result.mtp_diagnostics.valid) {
-        for (float head_contribution : result.mtp_diagnostics.head_loss) {
-            mtp_loss += head_contribution;
+    result.mtp_diagnostics.clear();
+    if (cfg->mtp_enabled && cfg->mtp_k > 0) {
+        if (!ctx.model) {
+            throw std::runtime_error("computeAutogradLoss: ctx.model is NULL while MTP is enabled — MTP heads are model-owned");
         }
-        result.mtp_diagnostics.L_total = text_ce_loss + mtp_loss;
+        if (ctx.model->getMtpK() != cfg->mtp_k) {
+            throw std::runtime_error("computeAutogradLoss: model.getMtpK()=" + std::to_string(ctx.model->getMtpK()) +
+                " != ctx.config->mtp_k=" + std::to_string(cfg->mtp_k) +
+                " — AutogradContext config must be the model-owned config");
+        }
+
+        Tensor* mtp_input = nullptr;
+        if (mtp_alpha_effective == 0.0f) {
+            mtp_input = &intermediates.encoder_output_tensor;
+        } else if (intermediates.centered_encoder_output.data) {
+            mtp_input = &intermediates.centered_encoder_output;
+        } else if (ctx.lm_head->finalRmsGamma().data) {
+            intermediates.mtp_input_tensor = autograd::rms_norm(
+                intermediates.encoder_output_tensor,
+                ctx.lm_head->finalRmsGamma(),
+                ctx.lm_head->hp().rms_epsilon,
+                ctx.stream
+            );
+            mtp_input = &intermediates.mtp_input_tensor;
+        } else {
+            mtp_input = &intermediates.encoder_output_tensor;
+        }
+
+        mtp_loss = computeAutogradMtpAuxiliaryLosses(
+            *ctx.model,
+            *mtp_input,
+            intermediates.loss_tensor,
+            intermediates.mtp_logits_tensors,
+            result.mtp_diagnostics,
+            payload,
+            *ctx.device_bindings,
+            loss_config,
+            ctx.d_class_weights,
+            ctx.stream,
+            mtp_alpha_effective,
+            text_ce_loss
+        );
     }
 
     float text_plus_mtp_loss = 0.0f;
@@ -1115,8 +1153,29 @@ bool verifyGradientsAreConnectedImpl(
         checkScratch(ctx.scratch_block->atomProjection(), "atomProjection");
     }
 
-    if (ctx.model && !GRIM::MTP::verifyMTPGradients(*ctx.model)) {
-        ok = false;
+    if (ctx.config->mtp_enabled && ctx.config->mtp_k > 0) {
+        if (!ctx.model) {
+            AG_WARN("ctx.model is NULL during MTP gradient verification while MTP is enabled");
+            ok = false;
+        } else {
+            bool saw_mtp_group = false;
+            for (ParameterGroup& group : ctx.model->parameterGroups()) {
+                if (group.type != ParamGroupType::MTP) {
+                    continue;
+                }
+                saw_mtp_group = true;
+                if (!group.tensor) {
+                    AG_WARN("registered MTP ParameterGroup " << group.name << " has NULL tensor");
+                    ok = false;
+                    continue;
+                }
+                requireAllocatedFinite(*group.tensor, "registered MTP parameter " + group.name);
+            }
+            if (!saw_mtp_group) {
+                AG_WARN("MTP is enabled but no ParamGroupType::MTP entries were registered");
+                ok = false;
+            }
+        }
     }
 
     // ExecutionBlock parameters
@@ -1341,7 +1400,7 @@ LossResult autogradTrainingStep(
         ctx.d_class_weights = nullptr;
     }
     ctx.skip_equation_logging = accumulate;  // Skip D2H + fprintf on non-initial accumulation slots
-    ctx.model = &model;  // For MTP head access in computeAutogradLoss
+    ctx.model = &model;  // Model-owned MTP heads consumed by autograd MTP loss assembly
 
     // ═══════════════════════════════════════════════════════════════════════════
     // FORWARD → LOSS → BACKWARD

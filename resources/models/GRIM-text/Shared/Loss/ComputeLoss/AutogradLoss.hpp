@@ -80,8 +80,10 @@ Tensor unified_loss_for_mtp_head(
 // AutogradLoss.hpp exposes payload/bindings entry points for primary CE and MTP.
 
 /**
- * MTP kernels moved to Shared/MTP/MTP_GPU.hpp
- * (launchMTPAccuracyKernel, computeMTPAuxiliaryLosses)
+ * MTP accuracy kernel lives in Shared/MTP/MTP_GPU.hpp. Autograd MTP loss
+ * assembly lives in training/Autograd/AutogradMtpAuxiliaryLoss.* so the shared
+ * kernel module does not own model, LM-head, TrainingState, or AutogradContext
+ * boundaries.
  */
 
 // Issue #142: cross_entropy_loss() DELETED (Rule 26: dead code).
