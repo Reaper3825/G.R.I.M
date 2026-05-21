@@ -30,20 +30,20 @@ struct BatchAssignment {
 struct BatchSchedule {
     std::vector<BatchAssignment> batches;
     
-    // Token statistics. `sequence_cap` and `batch_size` are authored by the
-    // startup config/hyperparameter path. Payloads pad each row to this
-    // fixed cap, so schedule totals use batch_size * sequence_cap, not per-batch
-    // observed max length. The scheduler must not derive geometry from a token
-    // budget.
-    uint32_t sequence_cap = 0;
-    uint64_t total_tokens = 0;           // total compute tokens (with fixed padding)
-    uint64_t actual_tokens = 0;          // actual content tokens
-    uint64_t padding_tokens = 0;         // wasted tokens
+    // Schedule-level token statistics. `actual_tokens` is true content-token
+    // count across emitted full batches. The remaining token fields are
+    // projections derived from the caller-authored fixed rectangle
+    // (`batch_size * fixed_sequence_cap`) that BatchPayload currently
+    // materializes later; the scheduler itself does not own or mirror that
+    // config geometry.
+    uint64_t projected_total_tokens = 0;   // projected fixed-rectangle compute tokens
+    uint64_t actual_tokens = 0;            // actual content tokens across emitted full batches
+    uint64_t projected_padding_tokens = 0; // projected fixed-rectangle padding tokens
     
     // Batch statistics
     uint32_t batch_size = 0;              // fixed run batch rows
     uint32_t max_seq_len_observed = 0;   // longest actual post-window sequence
-    float packing_efficiency = 0.0f;     // actual_tokens / total_tokens
+    float projected_packing_efficiency = 0.0f; // actual_tokens / projected_total_tokens
     uint32_t discarded_tail_sequences = 0; // valid rows dropped because they did not fill a full fixed batch
     
     // Distribution info

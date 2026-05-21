@@ -13,11 +13,12 @@ The window is intentionally narrow and ordered:
 1. `runEpoch()` authors a `BatchAutogradPlan` from the current accumulation slot and active `batch_idx`.
 2. `processBatch()` consumes that immutable plan and produces/accumulates gradients for one microbatch.
 3. `runEpoch()` advances the accumulation gate and confirms the full microbatch window is complete.
-4. Registered gradient clipping consumes the accumulated parameter grads.
-5. Pre-step diagnostics that need gradient/tying state run from the epoch-owned optimizer window.
-6. The optimizer window calls `launchOptimizerUpdate(...)` exactly once.
-7. Post-step finite/weight diagnostics run after the optimizer stream is synchronized.
-8. `completeOptimizerStepAfterFullAccumulationWindow(...)` owns optimizer-step bookkeeping and gradient clearing.
+4. Phase2 scales the registered parameter gradients once by `1 / accum_steps` for the completed window.
+5. Registered gradient clipping consumes the normalized parameter grads.
+6. Pre-step diagnostics that need gradient/tying state run from the epoch-owned optimizer window.
+7. The optimizer window calls `launchOptimizerUpdate(...)` exactly once.
+8. Post-step finite/weight diagnostics run after the optimizer stream is synchronized.
+9. `completeOptimizerStepAfterFullAccumulationWindow(...)` owns optimizer-step bookkeeping and gradient clearing.
 
 ## Ownership policy
 
@@ -53,4 +54,4 @@ The dispatcher validates these inputs fail-loud, selects the concrete optimizer,
 
 ## Non-ownership
 
-The Optimizer Window does not own backward seed scaling. The `1 / accum_steps` scaling is applied before/during backward accumulation so the window receives already-normalized accumulated parameter gradients.
+Autograd does not own accumulation-window normalization. `executeAutogradBackward()` runs with the default root seed, while the Optimizer Window owns the single post-accumulation `1 / accum_steps` scaling pass over the registered parameter gradients before clipping and optimizer update.

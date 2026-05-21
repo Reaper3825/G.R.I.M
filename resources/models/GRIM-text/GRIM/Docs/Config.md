@@ -51,6 +51,8 @@ if (max_seq_len == 0)
     throw std::runtime_error("max_seq_len missing from ai_config.json");
 ```
 
+`training.config.sliding_window_stride` is an authored field, not a derived fallback. It must be set explicitly in `ai_config.json`, must be `> 0`, and must be `<=` the effective startup `max_seq_len` after stability overrides. If you want the old 12.5% overlap behavior for `max_seq_len=1024`, set `sliding_window_stride` to `896`.
+
 ## Validation token budget
 Validation MUST use Phase1-authored config facts (`ctx.config.max_seq_len`, `ctx.config.hyperparameters.batch_size`, `ctx.model_allocation.model_max_tokens_per_batch`, or a non-duplicate explicit `HyperparameterGroupings.hpp` view), never the `LanguageModel` config accessor and never a hardcoded constant — buffer overflow crash otherwise. Batch scheduling consumes configured `max_seq_len` and `batch_size` directly; it must not derive sequence length from `max_tokens_per_batch` or a capacity wrapper.
 

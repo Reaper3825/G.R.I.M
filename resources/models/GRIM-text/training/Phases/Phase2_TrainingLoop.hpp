@@ -45,10 +45,11 @@ namespace GRIMText::Training {
  * @brief Immutable per-microbatch autograd timing facts authored by runEpoch.
  *
  * processBatch consumes this plan but does not read or mutate OptimizerContext.
+ * Accumulation-window normalization is owned later by the optimizer window,
+ * not by autograd.
  */
 struct BatchAutogradPlan {
     bool should_accumulate = false;
-    float grad_scale = 1.0f;
     uint64_t batch_idx = 0;
 };
 

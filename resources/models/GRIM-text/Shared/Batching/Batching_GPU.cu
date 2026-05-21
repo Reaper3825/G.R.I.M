@@ -64,10 +64,12 @@ std::string BatchSchedule::summary() const {
     ss << "  Total batches: " << batches.size() << "\n";
     ss << "  Batch size: " << batch_size << "\n";
     ss << "  Discarded tail sequences: " << discarded_tail_sequences << "\n";
-    ss << "  Tokens: " << actual_tokens << " actual / " << total_tokens << " compute";
-    ss << " (padding: " << padding_tokens << ", " << (100.0f * padding_tokens / (total_tokens > 0 ? total_tokens : uint64_t(1))) << "%)\n";
-    ss << "  Packing efficiency: " << (100.0f * packing_efficiency) << "%\n";
-    ss << "  Sequence cap: " << sequence_cap << "\n";
+    ss << "  Projected fixed-rectangle tokens: " << actual_tokens << " actual / "
+       << projected_total_tokens << " projected compute";
+    ss << " (projected padding: " << projected_padding_tokens << ", "
+       << (100.0f * projected_padding_tokens /
+           (projected_total_tokens > 0 ? projected_total_tokens : uint64_t(1))) << "%)\n";
+    ss << "  Projected packing efficiency: " << (100.0f * projected_packing_efficiency) << "%\n";
     ss << "  Max observed seq len: " << max_seq_len_observed << "\n";
     ss << "  Seq len percentiles: p50=" << p50_seq_len << " p90=" << p90_seq_len << " p99=" << p99_seq_len << "\n";
     return ss.str();
@@ -91,7 +93,6 @@ BatchSchedule buildBatches(
         throw std::runtime_error("buildBatches: fixed_batch_size=0 — caller MUST pass configured batch_size");
     }
 
-    schedule.sequence_cap = fixed_sequence_cap;
     schedule.batch_size = fixed_batch_size;
 
     if (sequence_lengths.empty()) {
@@ -193,11 +194,11 @@ BatchSchedule buildBatches(
     }
     
     schedule.actual_tokens = total_actual;
-    schedule.total_tokens = total_compute;
-    schedule.padding_tokens = total_compute - total_actual;
+    schedule.projected_total_tokens = total_compute;
+    schedule.projected_padding_tokens = total_compute - total_actual;
     
     if (total_compute > 0) {
-        schedule.packing_efficiency = static_cast<float>(total_actual) / static_cast<float>(total_compute);
+        schedule.projected_packing_efficiency = static_cast<float>(total_actual) / static_cast<float>(total_compute);
     }
     
     // =======================================================================

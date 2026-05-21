@@ -12,6 +12,7 @@
 
 #include "../Phases/Phase2_TrainingLoop.hpp"
 #include "../../Layers/Embedding/Embedding_GPU.hpp"
+#include "../../Layers/LMHead/lm_head_GPU.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../../Shared/LogRecorder/LogTypes.hpp"
@@ -34,6 +35,7 @@ namespace {
 
 struct PostClipParamGradEmbLmEquationDiag {
     bool valid = false;
+    bool tied_embeddings = false;
 
     float grad_rms = 0.0f;
     float mean_row_rms = 0.0f;
@@ -67,9 +69,11 @@ void cudaCheck(cudaError_t err, const char* where) {
 
 PostClipParamGradEmbLmEquationDiag computePostClipParamGradEmbLmEquation(
     const GRIM::EmbeddingLayer* embedding_layer,
+    const GRIM::LMHeadLayer* lm_head_layer,
     const std::vector<int>& token_ids,
     int d_model,
     int vocab_size,
+    bool tied_embeddings,
     float prev_emb_rms,
     float curr_emb_rms,
     cudaStream_t stream)
@@ -94,20 +98,43 @@ PostClipParamGradEmbLmEquationDiag computePostClipParamGradEmbLmEquation(
             std::string("[") + kPostClipParamGradEmbLmEquationOp +
             "] vocab_size must be > 0, got " + std::to_string(vocab_size));
     }
+    if (!lm_head_layer) {
+        throw std::runtime_error(
+            std::string("[") + kPostClipParamGradEmbLmEquationOp +
+            "] lm_head_layer is NULL");
+    }
     if (!stream) {
         throw std::runtime_error(
             std::string("[") + kPostClipParamGradEmbLmEquationOp +
             "] stream is NULL — caller MUST provide the active training stream");
     }
 
-    const float* grad_ptr = embedding_layer->tokenWeights().grad_data();
-    if (!grad_ptr) {
+    const float* embedding_grad_ptr = embedding_layer->tokenWeights().grad_data();
+    if (!embedding_grad_ptr) {
         throw std::runtime_error(
             std::string("[") + kPostClipParamGradEmbLmEquationOp +
             "] embedding tokenWeights grad_data is NULL after clipping measurement");
     }
 
+    const float* lm_grad_ptr = lm_head_layer->weights().grad_data();
+    if (!lm_grad_ptr) {
+        throw std::runtime_error(
+            std::string("[") + kPostClipParamGradEmbLmEquationOp +
+            "] lm_head weights grad_data is NULL after clipping measurement");
+    }
+    if (tied_embeddings && lm_grad_ptr != embedding_grad_ptr) {
+        throw std::runtime_error(
+            std::string("[") + kPostClipParamGradEmbLmEquationOp +
+            "] tied-embedding invariant violated: LM head grad buffer does not alias embedding grad buffer");
+    }
+    if (!tied_embeddings && lm_grad_ptr == embedding_grad_ptr) {
+        throw std::runtime_error(
+            std::string("[") + kPostClipParamGradEmbLmEquationOp +
+            "] untied-embedding invariant violated: LM head and embedding grad buffers unexpectedly alias");
+    }
+
     PostClipParamGradEmbLmEquationDiag diag{};
+    diag.tied_embeddings = tied_embeddings;
     diag.total_vocab = vocab_size;
     diag.prev_emb_rms = prev_emb_rms;
     diag.curr_emb_rms = curr_emb_rms;
@@ -128,24 +155,43 @@ PostClipParamGradEmbLmEquationDiag computePostClipParamGradEmbLmEquation(
     }
 
     const size_t grad_size = static_cast<size_t>(vocab_size) * static_cast<size_t>(d_model);
-    std::vector<float> h_grad(grad_size);
+    std::vector<float> h_embedding_grad(grad_size);
     cudaCheck(cudaMemcpyAsync(
-        h_grad.data(), grad_ptr, grad_size * sizeof(float), cudaMemcpyDeviceToHost, stream),
-        "cudaMemcpyAsync(embedding/LM grad D2H)");
-    cudaCheck(cudaStreamSynchronize(stream), "cudaStreamSynchronize(embedding/LM grad D2H)");
+        h_embedding_grad.data(), embedding_grad_ptr, grad_size * sizeof(float), cudaMemcpyDeviceToHost, stream),
+        tied_embeddings ? "cudaMemcpyAsync(shared embedding/LM grad D2H)"
+                         : "cudaMemcpyAsync(embedding grad D2H)");
+
+    std::vector<float> h_lm_grad;
+    if (!tied_embeddings) {
+        h_lm_grad.resize(grad_size);
+        cudaCheck(cudaMemcpyAsync(
+            h_lm_grad.data(), lm_grad_ptr, grad_size * sizeof(float), cudaMemcpyDeviceToHost, stream),
+            "cudaMemcpyAsync(lm grad D2H)");
+    }
+    cudaCheck(cudaStreamSynchronize(stream), tied_embeddings
+        ? "cudaStreamSynchronize(shared embedding/LM grad D2H)"
+        : "cudaStreamSynchronize(embedding+lm grad D2H)");
 
     std::vector<float> row_rms_vals(vocab_size, 0.0f);
     double total_sum_sq = 0.0;
     size_t total_count = 0;
     for (int v = 0; v < vocab_size; ++v) {
-        const float* row = h_grad.data() + static_cast<size_t>(v) * static_cast<size_t>(d_model);
+        const float* embedding_row =
+            h_embedding_grad.data() + static_cast<size_t>(v) * static_cast<size_t>(d_model);
+        const float* lm_row = tied_embeddings
+            ? embedding_row
+            : h_lm_grad.data() + static_cast<size_t>(v) * static_cast<size_t>(d_model);
         double row_sq = 0.0;
         for (int d = 0; d < d_model; ++d) {
-            row_sq += static_cast<double>(row[d]) * static_cast<double>(row[d]);
+            row_sq += static_cast<double>(lm_row[d]) * static_cast<double>(lm_row[d]);
+            if (!tied_embeddings) {
+                row_sq += static_cast<double>(embedding_row[d]) * static_cast<double>(embedding_row[d]);
+            }
         }
-        row_rms_vals[v] = static_cast<float>(std::sqrt(row_sq / static_cast<double>(d_model)));
+        const double row_count = static_cast<double>(d_model) * (tied_embeddings ? 1.0 : 2.0);
+        row_rms_vals[v] = static_cast<float>(std::sqrt(row_sq / row_count));
         total_sum_sq += row_sq;
-        total_count += static_cast<size_t>(d_model);
+        total_count += static_cast<size_t>(d_model) * static_cast<size_t>(tied_embeddings ? 1 : 2);
         if (row_rms_vals[v] > 1e-10f) {
             diag.num_active_rows++;
         }
@@ -205,10 +251,18 @@ std::string formatPostClipParamGradEmbLmEquation(
     oss << std::fixed << std::setprecision(6);
 
     oss << "[" << kPostClipParamGradEmbLmEquationOp << "] accum_boundary_batch="
-        << (batch_idx + 1) << " WEIGHT_GRAD: grad_W_tied = grad_lm + grad_emb (direct accumulation)\n";
-    oss << "  EQUATION: grad_lm[v] = centered^T @ grad_logits[:,v] (dense matmul)\n";
-    oss << "            grad_emb[tok] += grad_encoder[t] * emb_scale (sparse atomicAdd)\n";
-    oss << "            postclip_param_grad_tied = grad_lm + grad_emb (same embedding/LM parameter buffer)\n";
+        << (batch_idx + 1);
+    if (diag.tied_embeddings) {
+        oss << " WEIGHT_GRAD: grad_W_tied = grad_lm + grad_emb (direct accumulation)\n";
+        oss << "  EQUATION: grad_lm[v] = centered^T @ grad_logits[:,v] (dense matmul)\n";
+        oss << "            grad_emb[tok] += grad_encoder[t] * emb_scale (sparse atomicAdd)\n";
+        oss << "            postclip_param_grad_tied = grad_lm + grad_emb (same embedding/LM parameter buffer)\n";
+    } else {
+        oss << " WEIGHT_GRAD: untied grad_lm + grad_emb inspected together after component clipping\n";
+        oss << "  EQUATION: grad_lm[v] = centered^T @ grad_logits[:,v] (dense matmul)\n";
+        oss << "            grad_emb[tok] += grad_encoder[t] * emb_scale (sparse atomicAdd)\n";
+        oss << "            postclip_param_grad_joint[v] = concat(grad_lm[v], grad_emb[v]) (host-side row aggregation across untied buffers)\n";
+    }
     oss << "  GRADIENT BUFFER: rms=" << diag.grad_rms
         << " active_rows=" << diag.num_active_rows << "/" << diag.total_vocab
         << " active_ratio=" << std::setprecision(4) << diag.active_ratio << "\n";
@@ -234,7 +288,10 @@ std::string formatPostClipParamGradEmbLmEquation(
         oss << "  [ANOMALY] SPIKE_RATIO=" << std::setprecision(1) << diag.spike_ratio
             << "x > 10x — single token row dominates post-clip parameter gradient. "
             << "Likely cause: frequent current-payload token (tok" << diag.max_row_token
-            << ") with high embedding scatter contribution OR concentrated LM head gradient.\n";
+            << ") with high embedding scatter contribution"
+            << (diag.tied_embeddings
+                ? " OR concentrated LM head gradient into the shared buffer.\n"
+                : " OR concentrated LM head gradient in the untied projection weights.\n");
     }
     if (diag.emb_rms_delta > diag.prev_emb_rms * 0.5f && diag.prev_emb_rms > 0.01f) {
         oss << "  [ANOMALY] EMB_RMS_SPIKE: delta=" << diag.emb_rms_delta
@@ -267,21 +324,17 @@ void runPostClipParamGradEmbLmEquation(
         return;
     }
 
-    if (!ctx.model_config.tie_embeddings) {
-        throw std::runtime_error(
-            std::string("[") + kPostClipParamGradEmbLmEquationOp +
-            "] requires tied embeddings because it inspects one shared embedding/LM grad buffer");
-    }
-
     const float prev_emb_rms = state.diagnostics.has_prev_emb_rms
         ? state.diagnostics.prev_emb_rms
         : emb_rms_pre;
 
     const PostClipParamGradEmbLmEquationDiag diag = computePostClipParamGradEmbLmEquation(
         ctx.model->getEmbeddingLayer(),
+        ctx.model->getLmHeadLayer(),
         payload.input_ids,
         ctx.model_config.d_model,
         static_cast<int>(ctx.data_info.actual_vocab_size),
+        ctx.model_config.tie_embeddings,
         prev_emb_rms,
         emb_rms_pre,
         stream);

@@ -1311,7 +1311,7 @@ void Tensor::backward(const Tensor* grad_output, float scale) {
         ensure_grad();
         const size_t count = shape.total_elements();
         
-        // For scalar loss, set grad to the provided scale (usually 1.0 or 1.0/accumulation_steps)
+        // For scalar loss, set grad to the provided root scale (typically 1.0).
         if (count == 1) {
             cudaMemcpyAsync(grad_data(), &scale, sizeof(float), cudaMemcpyHostToDevice, stream);
         } else {

@@ -825,12 +825,13 @@ struct TrainingHyperparameters {
     float grad_clip_norm;
     bool per_token_grad_scale;
     float warmup_fraction;  // Fraction of total optimizer steps for warmup (e.g. 0.05 = 5%)
-    int warmup_steps = 0;   // Derived in Phase2 from warmup_fraction * estimated_total_steps
+    int warmup_steps;   // Derived in Phase2 from warmup_fraction * estimated_total_steps
     bool force_rebuild_vocab;
     bool cosine_decay_enabled;
     bool cosine_warm_restarts;
     float cosine_decay_min_lr;
     // max_seq_len, use_gpu, use_flash_attention, min_seq_len_for_flash now live in `architecture` (Phase 3b)
+    int sliding_window_stride;  // Hop size between training windows; must be > 0 and <= effective max_seq_len
     int min_seq_valid_tokens;  // Minimum valid tokens required (after masking first/last positions)
     int log_interval;
     int atom_stats_interval;
@@ -1043,6 +1044,20 @@ inline void validateTrainingHyperparameters(const GRIM::Config::TrainingHyperpar
     }
     if (params.validation_interval <= 0) {
         throw std::runtime_error("FATAL: validation_interval must be > 0, got " + std::to_string(params.validation_interval));
+    }
+    if (params.sliding_window_stride <= 0) {
+        throw std::runtime_error("FATAL: sliding_window_stride must be > 0, got " +
+                                 std::to_string(params.sliding_window_stride));
+    }
+    if (params.architecture.max_seq_len <= 0) {
+        throw std::runtime_error("FATAL: architecture.max_seq_len must be > 0, got " +
+                                 std::to_string(params.architecture.max_seq_len));
+    }
+    if (params.sliding_window_stride > params.architecture.max_seq_len) {
+        throw std::runtime_error("FATAL: sliding_window_stride=" +
+                                 std::to_string(params.sliding_window_stride) +
+                                 " exceeds max_seq_len=" +
+                                 std::to_string(params.architecture.max_seq_len));
     }
     validateParameterGroupPrecision(params.architecture.parameter_precision_embedding, "precision.parameter_groups.embedding", "validateTrainingHyperparameters");
     validateParameterGroupPrecision(params.architecture.parameter_precision_lm_head, "precision.parameter_groups.lm_head", "validateTrainingHyperparameters");
@@ -1409,7 +1424,7 @@ struct StartupConfig {
     ModelArchitecture& architecture() { return hyperparameters.architecture; }
     const ModelArchitecture& architecture() const { return hyperparameters.architecture; }
 
-    // Derived values (populated by loadStartupConfig)
+    // Resolved startup values (populated by loadStartupConfig)
     int max_seq_len = 0;
     int sliding_window_stride = 0;
 
@@ -1428,7 +1443,7 @@ struct StartupConfig {
  *   5. loadModelArchitecture()      — JSON → ModelArchitecture
  *   6. loadGenerationConfig()       — JSON → GenerationConfig
  *   7. Resolve max_seq_len (stability_override vs hyperparameters.architecture.max_seq_len)
- *   8. Derive sliding_window_stride = max_seq_len * 7/8
+ *   8. Resolve sliding_window_stride from training.config and validate it against effective max_seq_len
  *   9. Apply stability overrides to batch_size + grad_clip_norm
  *  10. Apply CLI overrides (--data, --vocab, --output, --epochs,
  *      --batch-size, --lr, --save-test, --help)
@@ -1497,10 +1512,21 @@ inline StartupConfig loadStartupConfig(int argc, char** argv) {
         }
     }
 
-    // 8. Stride: 7/8 of max_seq_len → 12.5% sliding-window overlap
-    //    (50% overlap wastes ~30% of GPU compute on masked tokens; 12.5% is
-    //    the standard balance between context continuity and token budget.)
-    config.sliding_window_stride = std::max(1, config.max_seq_len * 7 / 8);
+    // 8. Resolve configured stride against the effective max_seq_len.
+    if (config.hyperparameters.sliding_window_stride <= 0) {
+        throw std::runtime_error(
+            "FATAL: sliding_window_stride must be > 0 in ai_config.json, got " +
+            std::to_string(config.hyperparameters.sliding_window_stride));
+    }
+    config.sliding_window_stride = config.hyperparameters.sliding_window_stride;
+    if (config.sliding_window_stride > config.max_seq_len) {
+        throw std::runtime_error(
+            "FATAL: sliding_window_stride=" +
+            std::to_string(config.sliding_window_stride) +
+            " exceeds effective max_seq_len=" +
+            std::to_string(config.max_seq_len) +
+            ". Update training.config.sliding_window_stride or stability_overrides.max_seq_len.");
+    }
 
     // 9. Stability overrides (batch_size, grad_clip_norm)
     {

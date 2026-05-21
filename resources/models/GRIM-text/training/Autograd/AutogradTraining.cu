@@ -810,18 +810,13 @@ LossResult computeAutogradLoss(
 
 BackwardResult executeAutogradBackward(
     AutogradContext& ctx,
-    bool accumulate,
-    float grad_scale
+    bool accumulate
 ) {
     BackwardResult result{};
     result.success = false;
     result.grad_rms = 0.0f;
     
     ctx.validate("executeAutogradBackward");
-    if (!std::isfinite(grad_scale) || grad_scale <= 0.0f) {
-        throw std::runtime_error("executeAutogradBackward: grad_scale must be finite and > 0, got " +
-                                 std::to_string(grad_scale));
-    }
     
     auto* ts = ctx.training_state;
     auto& intermediates = ts->autograd_intermediates;
@@ -836,7 +831,7 @@ BackwardResult executeAutogradBackward(
         throw std::runtime_error("executeAutogradBackward: model is NULL - registered parameter gradient lifecycle requires LanguageModel");
     }
     
-    AG_INFO("Executing backward pass (accumulate=" << accumulate << ", scale=" << grad_scale << ")");
+        AG_INFO("Executing backward pass (accumulate=" << accumulate << ")");
 
     // Parameter gradients are lifecycle-managed through the registered
     // TensorContract ParameterGroup inventory. AutogradTraining must not walk
@@ -853,10 +848,10 @@ BackwardResult executeAutogradBackward(
     GradientSignalBaselines gradient_signal_baselines =
         captureGradientVerificationBaselines(ctx, accumulate);
     
-    // Call backward on the text loss (single loss path)
-    // Starting with grad_scale (usually 1/accumulation_steps)
-    AG_INFO("Calling loss_tensor.backward(nullptr, " << grad_scale << ")...");
-    intermediates.loss_tensor.backward(nullptr, grad_scale);
+    // Call backward on the text loss (single loss path). Accumulation-window
+    // normalization is owned later by the optimizer boundary, not by autograd.
+    AG_INFO("Calling loss_tensor.backward(nullptr)...");
+    intermediates.loss_tensor.backward(nullptr);
     AG_INFO("loss_tensor.backward() returned successfully");
 
     // ════════════════════════════════════════════════════════════════════
@@ -899,10 +894,10 @@ BackwardResult executeAutogradBackward(
         }
 
         fprintf(stderr,
-            "[GRAD_DIAG] POST-BACKWARD accumulate=%d grad_scale=%.4f "
+            "[GRAD_DIAG] POST-BACKWARD accumulate=%d "
             "lm_grad[0]=%.10e enc_wqkv_grad[0]=%.10e enc0_rms1_gamma_grad[0]=%.10e "
             "lm_ptr=%p\n",
-            static_cast<int>(accumulate), grad_scale,
+            static_cast<int>(accumulate),
             lm_sample, enc_sample, rms_sample,
             static_cast<void*>(lm_grads));
     }
@@ -918,11 +913,9 @@ BackwardResult executeAutogradBackward(
     }
     AG_INFO("Gradient connectivity verified");
     
-    // ISSUE #149: Manual parameter gradient scaling REMOVED.
-    // We now scale the root gradient (the loss) at the start of backward()
-    // which propagates the scale through the entire computation graph.
-    // This is mathematically equivalent, more efficient (fewer kernels),
-    // and safer against omission bugs when adding new layers.
+    // Accumulation-window normalization is intentionally not part of backward.
+    // Phase2 scales registered parameter gradients exactly once after the full
+    // accumulation window completes, before clipping and optimizer update.
     
     AG_INFO("Backward complete");
     
@@ -1235,7 +1228,6 @@ LossResult autogradTrainingStep(
     const HyperParameters::LanguageModelConfig& model_config,
     const HyperParameters::LossConfigHP& loss_config,
     bool accumulate,
-    float grad_scale,
     uint64_t batch_idx,
     float mtp_alpha_effective
 ) {
@@ -1399,7 +1391,7 @@ LossResult autogradTrainingStep(
         return loss_result;
     }
     
-    BackwardResult bwd_result = executeAutogradBackward(ctx, accumulate, grad_scale);
+    BackwardResult bwd_result = executeAutogradBackward(ctx, accumulate);
     if (!bwd_result.success) {
         loss_result.success = false;
         loss_result.error_message = "autogradTrainingStep: Backward failed - " + bwd_result.error_message;

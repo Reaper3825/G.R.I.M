@@ -94,6 +94,54 @@ float getScheduledLearningRate(
 //======================================================//
 namespace {
 
+float accumulationNormalizationScaleForOptimizerWindow(int accum_steps) {
+    if (accum_steps <= 0) {
+        throw std::runtime_error(
+            "accumulationNormalizationScaleForOptimizerWindow: accum_steps must be > 0, got " +
+            std::to_string(accum_steps));
+    }
+    return 1.0f / static_cast<float>(accum_steps);
+}
+
+void scaleRegisteredParameterGradientsForOptimizerWindow(
+    std::vector<GRIM::ParameterGroup>& groups,
+    float accumulation_scale,
+    cudaStream_t stream)
+{
+    if (groups.empty()) {
+        throw std::runtime_error(
+            "scaleRegisteredParameterGradientsForOptimizerWindow: parameter groups are empty");
+    }
+    if (!stream) {
+        throw std::runtime_error(
+            "scaleRegisteredParameterGradientsForOptimizerWindow: stream is NULL");
+    }
+    if (!std::isfinite(accumulation_scale) || accumulation_scale <= 0.0f) {
+        throw std::runtime_error(
+            "scaleRegisteredParameterGradientsForOptimizerWindow: accumulation_scale must be finite and > 0, got " +
+            std::to_string(accumulation_scale));
+    }
+    if (accumulation_scale == 1.0f) {
+        return;
+    }
+
+    for (auto& group : groups) {
+        if (!group.grads() || group.size() == 0) {
+            continue;
+        }
+        if (group.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+            throw std::runtime_error(
+                "scaleRegisteredParameterGradientsForOptimizerWindow: group '" + group.name +
+                "' exceeds launchScaleGradients int element limit with size=" + std::to_string(group.size()));
+        }
+        launchScaleGradients(
+            group.grads(),
+            static_cast<int>(group.size()),
+            accumulation_scale,
+            stream);
+    }
+}
+
 int validatedAccumulationSteps(const TrainingContext& ctx) {
     const int accum_steps = ctx.config.hyperparameters.gradient_accumulation_steps;
     if (accum_steps <= 0) {
@@ -211,14 +259,24 @@ void runOptimizerWindowFromEpoch(
             ctx.model->getLmHeadLayer(), ctx.model->getTrainingState(), true);
     }
 
-    // Global clipping on accumulated + 1/M-scaled gradients.
-    // Norm measurement, global aggregation, and gradient scaling all happen
-    // inside GradientCC against the registered ParameterGroup tensors.
-    if (clipping_enabled) {
-        auto& clip_ts = ctx.model->getTrainingState();
-        cudaStream_t clip_stream = clip_ts.stream_ctrl.getPrimaryStream();
-        auto& clip_groups = ctx.model->parameterGroups();
+    auto& clip_ts = ctx.model->getTrainingState();
+    cudaStream_t clip_stream = clip_ts.stream_ctrl.getPrimaryStream();
+    auto& clip_groups = ctx.model->parameterGroups();
+    const float accumulation_scale =
+        accumulationNormalizationScaleForOptimizerWindow(accum_steps);
 
+    // Accumulation normalization happens exactly once at the optimizer window
+    // boundary, after the full microbatch window has completed and before any
+    // clipping/update logic consumes the registered parameter gradients.
+    scaleRegisteredParameterGradientsForOptimizerWindow(
+        clip_groups,
+        accumulation_scale,
+        clip_stream);
+
+    // Global clipping on post-accumulation normalized gradients.
+    // Norm measurement, global aggregation, and clipping all happen inside
+    // GradientCC against the registered ParameterGroup tensors.
+    if (clipping_enabled) {
         GRIM::GradClip::ClipConfig clip_cfg;
         clip_cfg.max_rms = effective_per_token_limit;
 
@@ -407,7 +465,6 @@ BatchResult processBatch(
         ctx.model_config,
         ctx.loss_config,
         plan.should_accumulate,
-        plan.grad_scale,
         plan.batch_idx,
         mtpAlphaEffectiveForBatch(ctx.model_config, ctx.global_step)
     );
@@ -646,7 +703,6 @@ EpochResult runEpoch(
         // autograd plan and must not read or mutate OptimizerContext.
         BatchAutogradPlan autograd_plan;
         autograd_plan.should_accumulate = shouldAccumulateGradients(ctx.optimizer);
-        autograd_plan.grad_scale = 1.0f / static_cast<float>(accum_steps);
         autograd_plan.batch_idx = static_cast<uint64_t>(batch_idx);
 
         const int optimizer_step = static_cast<int>(ctx.optimizer.optimizer_step.step);

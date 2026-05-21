@@ -56,6 +56,7 @@ BatchSchedule buildEpochBatches(
 //======================================================//
 void logBatchSchedule(
     const BatchSchedule& schedule,
+    uint32_t fixed_sequence_cap,
     const EpochBatchingLogFn& log_fn);
 
 } } // namespace GRIM::Batching

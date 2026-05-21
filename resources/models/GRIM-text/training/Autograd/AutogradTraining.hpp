@@ -244,8 +244,7 @@ LossResult computeAutogradLoss(
  */
 BackwardResult executeAutogradBackward(
     AutogradContext& ctx,
-    bool accumulate,
-    float grad_scale
+    bool accumulate
 );
 
 /**
@@ -271,7 +270,6 @@ bool verifyGradientsAreConnected(AutogradContext& ctx);
  * @param model_config   Grouped startup model config produced by HyperparameterGroupings.hpp
  * @param loss_config    Durable loss grouping from HyperparameterGroupings.hpp
  * @param accumulate     Whether to accumulate gradients (true for accumulation slots > 0)
- * @param grad_scale     Gradient scaling factor
  * @param batch_idx      Batch index used by forward-time stochastic kernels/logs
  * @param mtp_alpha_effective Phase2-derived MTP loss weight for this batch
  * @return LossResult with decomposed loss components and success/error status.
@@ -285,7 +283,6 @@ LossResult autogradTrainingStep(
     const HyperParameters::LanguageModelConfig& model_config,
     const HyperParameters::LossConfigHP& loss_config,
     bool accumulate,
-    float grad_scale,
     uint64_t batch_idx,
     float mtp_alpha_effective
 );

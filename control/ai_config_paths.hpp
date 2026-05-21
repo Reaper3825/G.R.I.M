@@ -512,7 +512,8 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         // Core training
         "epochs", "seed", "batch_size", "gradient_accumulation_steps",
         "batch_strategy", "learning_rate", "weight_decay",
-        "per_token_grad_scale", "warmup_fraction", "force_rebuild_vocab", "max_seq_len", "log_interval",
+        "per_token_grad_scale", "warmup_fraction", "force_rebuild_vocab", "max_seq_len",
+        "sliding_window_stride", "log_interval",
         "atom_stats_interval", "atom_stats_max_seqs",
         "validation_interval", "checkpoint_interval", "use_gpu", "use_flash_attention",
         "precision.parameter_groups.embedding",
@@ -626,6 +627,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     assignTrainingField(params.per_token_grad_scale, trainConfig, "per_token_grad_scale");
     assignTrainingField(params.force_rebuild_vocab, trainConfig, "force_rebuild_vocab");
     assignTrainingField(params.architecture.max_seq_len, trainConfig, "max_seq_len");
+    assignTrainingField(params.sliding_window_stride, trainConfig, "sliding_window_stride");
     // min_seq_valid_tokens: derived as max_seq_len / 4 (see deriveComputedHyperparameters)
     // architecture.min_seq_len_for_flash: derived as max_seq_len / 4 (see deriveComputedHyperparameters)
     assignTrainingField(params.warmup_fraction, trainConfig, "warmup_fraction");
