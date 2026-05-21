@@ -28,7 +28,6 @@
 #include "Phase1_Startup.hpp"
 #include "../TrainingEvents.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
-#include "../../Layers/GRIMTS/GRIM-TS.hpp"
 #include "../../Shared/Loss/LossSignals/LossSignals.hpp"
 #include "../../Shared/MTP/MTPDiagnostics.hpp"
 
@@ -192,7 +191,7 @@ BatchResult processBatch(
     const GRIM::Batching::BatchPayload& payload,
     int batch_idx,
     int epoch_idx,
-     const BatchAutogradPlan& plan);
+    const BatchAutogradPlan& plan);
 
 //======================================================//
 //  Internal Helper Functions

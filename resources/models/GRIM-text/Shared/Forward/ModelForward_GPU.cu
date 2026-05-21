@@ -85,13 +85,6 @@ void ModelForwardRequest::validate(const char* caller) const {
     if (!bindings) throw std::runtime_error(std::string(caller) + ": bindings is NULL");
     if (payload->batch_size <= 0) throw std::runtime_error(std::string(caller) + ": BatchPayload.batch_size <= 0");
     if (payload->max_seq_len <= 0) throw std::runtime_error(std::string(caller) + ": BatchPayload.max_seq_len <= 0");
-    if (bindings->batch_size != payload->batch_size || bindings->max_seq_len != payload->max_seq_len) {
-        throw std::runtime_error(
-            std::string(caller) + ": BatchDeviceBindings geometry (" +
-            std::to_string(bindings->batch_size) + "x" + std::to_string(bindings->max_seq_len) +
-            ") does not match BatchPayload geometry (" + std::to_string(payload->batch_size) + "x" +
-            std::to_string(payload->max_seq_len) + ")");
-    }
     if (static_cast<int>(payload->seq_lengths.size()) != payload->batch_size) {
         throw std::runtime_error(std::string(caller) + ": payload.seq_lengths size (" +
                                  std::to_string(payload->seq_lengths.size()) +

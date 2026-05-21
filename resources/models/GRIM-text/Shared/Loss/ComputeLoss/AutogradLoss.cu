@@ -552,14 +552,6 @@ __host__ Tensor unified_loss(
     if (!bindings.d_target_ids) {
         throw std::runtime_error("[unified_loss] BatchDeviceBindings.d_target_ids is NULL — caller MUST upload BatchPayload before loss");
     }
-    if (bindings.batch_size != payload.batch_size) {
-        throw std::runtime_error("[unified_loss] bindings.batch_size=" + std::to_string(bindings.batch_size) +
-            " != payload.batch_size=" + std::to_string(payload.batch_size));
-    }
-    if (bindings.max_seq_len != payload.max_seq_len) {
-        throw std::runtime_error("[unified_loss] bindings.max_seq_len=" + std::to_string(bindings.max_seq_len) +
-            " != payload.max_seq_len=" + std::to_string(payload.max_seq_len));
-    }
 
     return unifiedLossFromTargetSelection(
         logits,
@@ -587,9 +579,6 @@ __host__ Tensor unified_loss_for_mtp_head(
         throw std::runtime_error("[unified_loss_for_mtp_head] head_idx=" + std::to_string(head_idx) +
             " out of range for payload.mtp_shifted_targets.size()=" +
             std::to_string(payload.mtp_shifted_targets.size()));
-    }
-    if (bindings.batch_size != payload.batch_size || bindings.max_seq_len != payload.max_seq_len) {
-        throw std::runtime_error("[unified_loss_for_mtp_head] BatchDeviceBindings geometry does not match BatchPayload");
     }
     if (!bindings.d_mtp_shifted_targets) {
         throw std::runtime_error("[unified_loss_for_mtp_head] BatchDeviceBindings.d_mtp_shifted_targets is NULL");

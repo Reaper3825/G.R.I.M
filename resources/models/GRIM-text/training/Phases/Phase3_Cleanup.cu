@@ -443,13 +443,6 @@ void releaseResources(TrainingContext& ctx) {
 
     // Release model (LanguageModel subobjects free PBM; TrainingState frees Tensor buffers, TeacherLogits, etc.)
     if (ctx.model) {
-        // GuessCacheScope owns GRIMTS shutdown and cache buffers, so it must be
-        // released before the model/TrainingState borrowed stream disappears.
-        ctx.guess_cache_scope.reset();
-        ctx.guess_cache_state.batch_buffers.reset();
-        ctx.guess_cache_state.guess_cache_ready = false;
-        ctx.guess_cache_state.guess_cache_faulted = false;
-
         ctx.model.reset();
         EmitModuleInfo(ModuleId::Training, "✓ Model released", ctx.global_step);
     }

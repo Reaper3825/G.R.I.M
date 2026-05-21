@@ -60,9 +60,8 @@ void validateLossConfigForCompute(
     }
 }
 
-void validateBatchDeviceBindingsGeometry(
+void validateCrossEntropyPayloadGeometry(
     const Batching::BatchPayload& payload,
-    const Batching::BatchDeviceBindings& bindings,
     const char* caller
 ) {
     if (payload.total_tokens <= 0) {
@@ -72,16 +71,6 @@ void validateBatchDeviceBindingsGeometry(
     if (payload.vocab_size <= 0) {
         throw std::runtime_error(std::string("[") + caller + "] BatchPayload.vocab_size=" +
             std::to_string(payload.vocab_size) + " — must be > 0");
-    }
-    if (bindings.batch_size != payload.batch_size) {
-        throw std::runtime_error(std::string("[") + caller + "] BatchDeviceBindings.batch_size=" +
-            std::to_string(bindings.batch_size) + " != BatchPayload.batch_size=" +
-            std::to_string(payload.batch_size));
-    }
-    if (bindings.max_seq_len != payload.max_seq_len) {
-        throw std::runtime_error(std::string("[") + caller + "] BatchDeviceBindings.max_seq_len=" +
-            std::to_string(bindings.max_seq_len) + " != BatchPayload.max_seq_len=" +
-            std::to_string(payload.max_seq_len));
     }
 }
 
@@ -160,7 +149,7 @@ const int* resolveDeviceTargetsForSelection(
     const CrossEntropyTargetSelection& target_selection,
     const char* caller
 ) {
-    validateBatchDeviceBindingsGeometry(payload, bindings, caller);
+    validateCrossEntropyPayloadGeometry(payload, caller);
 
     switch (target_selection.source) {
         case CrossEntropyTargetSource::PrimaryLm:

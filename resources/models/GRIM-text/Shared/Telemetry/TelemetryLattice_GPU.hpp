@@ -73,8 +73,8 @@ public:
     /**
      * @brief Update from BatchPayload (single source of truth)
      *
-     * Extracts tokens from payload.token_stats.total_tokens.
-     * Fails loud if total_tokens <= 0.
+     * Extracts tokens from payload.actual_tokens.
+     * Fails loud if actual_tokens <= 0.
      */
     TelemetryError updateFromBatch(
         const ::GRIM::Batching::BatchPayload& payload,

@@ -148,7 +148,6 @@ const char* ModuleIdToString(ModuleId id) {
         case ModuleId::Optimizer: return "Optimizer";
         case ModuleId::Scheduler: return "Scheduler";
         case ModuleId::Activations: return "Activations";
-        case ModuleId::GuessCache: return "GuessCache";
         case ModuleId::Validation: return "Validation";
         case ModuleId::Checkpoint: return "Checkpoint";
         case ModuleId::DataLoader: return "DataLoader";
@@ -268,20 +267,19 @@ void EmitModuleLog(const std::string& module_name,
         else if (module_name == "Optimizer")        group = moduleIdToLogGroup(2);
         else if (module_name == "Scheduler")        group = moduleIdToLogGroup(3);
         else if (module_name == "Activations")      group = moduleIdToLogGroup(4);
-        else if (module_name == "GuessCache")       group = moduleIdToLogGroup(5);
-        else if (module_name == "Validation")       group = moduleIdToLogGroup(6);
-        else if (module_name == "Checkpoint")       group = moduleIdToLogGroup(7);
-        else if (module_name == "DataLoader")       group = moduleIdToLogGroup(8);
-        else if (module_name == "Inference")        group = moduleIdToLogGroup(9);
-        else if (module_name == "LogRecorder")      group = moduleIdToLogGroup(10);
-        else if (module_name == "Training")         group = moduleIdToLogGroup(11);
-        else if (module_name == "TrainingOrchestrator") group = moduleIdToLogGroup(12);
-        else if (module_name == "StreamController") group = moduleIdToLogGroup(13);
-        else if (module_name == "Loss")             group = moduleIdToLogGroup(14);
-        else if (module_name == "Attention")        group = moduleIdToLogGroup(15);
-        else if (module_name == "Custom")           group = moduleIdToLogGroup(16);
-        else if (module_name == "Autograd")         group = moduleIdToLogGroup(17);
-        else if (module_name == "ExecutionBlock")   group = moduleIdToLogGroup(18);
+        else if (module_name == "Validation")       group = moduleIdToLogGroup(5);
+        else if (module_name == "Checkpoint")       group = moduleIdToLogGroup(6);
+        else if (module_name == "DataLoader")       group = moduleIdToLogGroup(7);
+        else if (module_name == "Inference")        group = moduleIdToLogGroup(8);
+        else if (module_name == "LogRecorder")      group = moduleIdToLogGroup(9);
+        else if (module_name == "Training")         group = moduleIdToLogGroup(10);
+        else if (module_name == "TrainingOrchestrator") group = moduleIdToLogGroup(11);
+        else if (module_name == "StreamController") group = moduleIdToLogGroup(12);
+        else if (module_name == "Loss")             group = moduleIdToLogGroup(13);
+        else if (module_name == "Attention")        group = moduleIdToLogGroup(14);
+        else if (module_name == "Custom")           group = moduleIdToLogGroup(15);
+        else if (module_name == "Autograd")         group = moduleIdToLogGroup(16);
+        else if (module_name == "ExecutionBlock")   group = moduleIdToLogGroup(17);
         
         if (!tape->accepts(log_level, group)) {
             return;

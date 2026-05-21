@@ -419,30 +419,29 @@ static_assert(sizeof(LogEntry) <= 600, "LogEntry should be ~576 bytes; check ali
 inline LogGroup moduleIdToLogGroup(int module_id) {
     // ModuleId values (LogRecorder.hpp):
     //   ForwardPass=0, BackwardPass=1, Optimizer=2, Scheduler=3,
-    //   Activations=4, GuessCache=5, Validation=6, Checkpoint=7,
-    //   DataLoader=8, Inference=9, LogRecorder=10, Training=11,
-    //   TrainingOrchestrator=12, StreamController=13, Loss=14,
-    //   Attention=15, Custom=16, Autograd=17, ExecutionBlock=18
+    //   Activations=4, Validation=5, Checkpoint=6, DataLoader=7,
+    //   Inference=8, LogRecorder=9, Training=10,
+    //   TrainingOrchestrator=11, StreamController=12, Loss=13,
+    //   Attention=14, Custom=15, Autograd=16, ExecutionBlock=17
     switch (module_id) {
         case 0:  return LogGroup::System;          // ForwardPass
         case 1:  return LogGroup::System;          // BackwardPass
         case 2:  return LogGroup::Optimizer;       // Optimizer
         case 3:  return LogGroup::Scheduler;       // Scheduler
         case 4:  return LogGroup::Attention;       // Activations
-        case 5:  return LogGroup::System;          // GuessCache
-        case 6:  return LogGroup::Validation;      // Validation
-        case 7:  return LogGroup::Checkpoint;      // Checkpoint
-        case 8:  return LogGroup::DataLoader;      // DataLoader
-        case 9:  return LogGroup::System;          // Inference
-        case 10: return LogGroup::System;          // LogRecorder
-        case 11: return LogGroup::System;          // Training
-        case 12: return LogGroup::System;          // TrainingOrchestrator
-        case 13: return LogGroup::Stream;          // StreamController
-        case 14: return LogGroup::Loss;            // Loss
-        case 15: return LogGroup::Attention;       // Attention
-        case 16: return LogGroup::System;          // Custom
-        case 17: return LogGroup::System;          // Autograd
-        case 18: return LogGroup::ExecutionBlock;  // ExecutionBlock
+        case 5:  return LogGroup::Validation;      // Validation
+        case 6:  return LogGroup::Checkpoint;      // Checkpoint
+        case 7:  return LogGroup::DataLoader;      // DataLoader
+        case 8:  return LogGroup::System;          // Inference
+        case 9:  return LogGroup::System;          // LogRecorder
+        case 10: return LogGroup::System;          // Training
+        case 11: return LogGroup::System;          // TrainingOrchestrator
+        case 12: return LogGroup::Stream;          // StreamController
+        case 13: return LogGroup::Loss;            // Loss
+        case 14: return LogGroup::Attention;       // Attention
+        case 15: return LogGroup::System;          // Custom
+        case 16: return LogGroup::System;          // Autograd
+        case 17: return LogGroup::ExecutionBlock;  // ExecutionBlock
         default: return LogGroup::System;
     }
 }

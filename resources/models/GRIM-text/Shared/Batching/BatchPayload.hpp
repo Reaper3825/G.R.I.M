@@ -1,6 +1,6 @@
 //======================================================//
 //  BatchPayload.hpp
-//  Single source of truth for per-batch metadata
+//  Realized per-batch runtime payload
 //
 //  REPLACES: BatchPreparationResult, batch_prep_* staging
 //  vectors in TrainingState, and scattered metadata
@@ -54,12 +54,6 @@ enum class BatchPayloadMode {
     InferenceDecode
 };
 
-struct BatchTokenStats {
-    std::int64_t total_tokens = 0;
-    int max_sequence_length = 0;
-    int batch_size = 0;
-};
-
 // =============================================================================
 // BatchPayload — immutable batch datum
 // =============================================================================
@@ -72,14 +66,16 @@ struct BatchPayload {
     std::vector<uint32_t> seq_ids;           // which sequences are in this batch
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // GEOMETRY (computed ONCE during buildBatchPayload)
-    // Single source of truth for per-batch seq_len: downstream code must use
-    // payload.batch_size, payload.max_seq_len, payload.total_tokens, etc. — not config.
+    // GEOMETRY (computed/materialized ONCE during buildBatchPayload)
+    // For fixed-shape training/eval, batch_size/max_seq_len are config-owned
+    // runtime facts authored through HyperParameters/HyperparameterGroupings
+    // and realized here for row layout / payload validation. Inference
+    // prefill/decode payloads carry their explicit runtime geometry.
     // ═══════════════════════════════════════════════════════════════════════════
     int batch_size = 0;                      // training: fixed batch rows; inference: prompt/decode rows
     int max_seq_len = 0;                     // training: fixed sequence cap; inference: prompt/decode length
     int total_tokens = 0;                    // batch_size * max_seq_len (includes padding)
-    int actual_tokens = 0;                   // sum of real sequence lengths (no padding)
+    int actual_tokens = 0;                   // sum of real sequence lengths (no padding); telemetry/diagnostics token count owner
     int padding_tokens = 0;                  // total_tokens - actual_tokens
     int valid_tokens = 0;                    // total unmasked targets (for loss mean reduction)
     // LM-supervised token count AFTER execution-slot target masking.
@@ -170,11 +166,6 @@ struct BatchPayload {
     // ═══════════════════════════════════════════════════════════════════════════
     std::vector<std::vector<int>> mtp_shifted_targets;  // [K][total_tokens]
     std::vector<int> mtp_valid_counts;                   // [K] valid targets per head
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // TOKEN STATS (for gradient clipping — computed ONCE)
-    // ═══════════════════════════════════════════════════════════════════════════
-    BatchTokenStats token_stats;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // CACHE FIT (computed ONCE against model limits)

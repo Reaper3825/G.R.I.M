@@ -1225,7 +1225,6 @@ LossResult autogradTrainingStep(
     TrainingState& training_state,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
-    const HyperParameters::LanguageModelConfig& model_config,
     const HyperParameters::LossConfigHP& loss_config,
     bool accumulate,
     uint64_t batch_idx,
@@ -1233,7 +1232,7 @@ LossResult autogradTrainingStep(
 ) {
     payload.validate("autogradTrainingStep");
 
-    const auto& cfg = model_config;
+    const auto& cfg = model.getConfig();
 
     // Execution payload validation (WS4: single shared validator)
     GRIM::Execution::validateExecutionPayload(
@@ -1404,7 +1403,7 @@ LossResult autogradTrainingStep(
     
     // Rule 20 ownership taxonomy: AutogradIntermediates::clear() is owned by
     // the caller's AutogradStepScope RAII guard. Do NOT clear here. Post-step
-    // diagnostics (Phase2_TrainingLoop, GuessCache) read
+    // diagnostics read
     // from TrainingState::cached_logits_tensor (Cat 3 step-output snapshot),
     // never from intermediates.logits_tensor (Cat 1, transient).
     

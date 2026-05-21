@@ -123,8 +123,11 @@ struct AutogradContext {
     
     // ═══════════════════════════════════════════════════════════════════════════
     // BATCH PAYLOAD VIEW
-    // Training only: payload points to the caller-owned BatchPayload
-    // (single source of truth for batch geometry and supervision). Inference
+    // Training only: payload points to the caller-owned BatchPayload runtime
+    // datum. Fixed-shape training geometry is config-owned via
+    // HyperparameterGroupings/LanguageModelConfig and enforced at upload; the
+    // payload carries the realized supervision, token stats, and row layout.
+    // Inference
     // MUST NOT enter AutogradContext; use Shared/Forward/ModelForward_GPU.hpp
     // with ModelForwardMode::InferencePrefill instead.
     // payload is NEVER null after the training initAutogradContext overload.
@@ -163,14 +166,6 @@ struct AutogradContext {
         if (!payload) throw std::runtime_error(std::string(caller) + ": payload is NULL");
         if (!device_bindings) throw std::runtime_error(std::string(caller) + ": device_bindings is NULL");
         payload->validate(caller);
-        if (device_bindings->batch_size != payload->batch_size || device_bindings->max_seq_len != payload->max_seq_len) {
-            throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings geometry (" +
-                                     std::to_string(device_bindings->batch_size) + "x" +
-                                     std::to_string(device_bindings->max_seq_len) +
-                                     ") does not match payload (" +
-                                     std::to_string(payload->batch_size) + "x" +
-                                     std::to_string(payload->max_seq_len) + ")");
-        }
         if (!device_bindings->d_input_ids || !device_bindings->d_target_ids || !device_bindings->d_token_to_slot_map) {
             throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings has NULL device pointers");
         }
@@ -183,9 +178,10 @@ struct AutogradContext {
 };
 
 /**
- * Initialize autograd context for TRAINING (borrows batch geometry from payload).
- * `bindings` must describe the same batch as `payload` (geometry-checked) and
- * must point at device memory already populated by uploadBatchToDevice().
+ * Initialize autograd context for TRAINING. `payload` is the realized runtime
+ * batch datum; fixed-shape training geometry is config-owned and validated at
+ * uploadBatchToDevice(). `bindings` must point at device memory already
+ * populated by uploadBatchToDevice().
  */
 AutogradContext initAutogradContext(
     const LanguageModelConfig* config,
@@ -228,7 +224,7 @@ ForwardResult executeAutogradForward(AutogradContext& ctx);
  * 
  * @param ctx     Autograd context (must have logits populated by executeAutogradForward,
  *                 and ctx.payload set to a valid BatchPayload)
- * @param loss_config Phase1-authored loss hyperparameter grouping
+ * @param loss_config Caller-derived loss hyperparameter grouping
  * @param mtp_alpha_effective Phase2-derived MTP loss weight for this batch
  */
 LossResult computeAutogradLoss(
@@ -265,10 +261,9 @@ bool verifyGradientsAreConnected(AutogradContext& ctx);
  *
  * @param model          LanguageModel (provides config, encoder, layers)
  * @param training_state TrainingState (GPU buffers, optimizer state)
- * @param payload        BatchPayload (host-only single source of truth)
+ * @param payload        BatchPayload runtime datum (supervision, row layout, token stats)
  * @param bindings       BatchDeviceBindings produced by uploadBatchToDevice(payload)
- * @param model_config   Grouped startup model config produced by HyperparameterGroupings.hpp
- * @param loss_config    Durable loss grouping from HyperparameterGroupings.hpp
+ * @param loss_config    Explicit loss grouping derived from authoritative hyperparameters
  * @param accumulate     Whether to accumulate gradients (true for accumulation slots > 0)
  * @param batch_idx      Batch index used by forward-time stochastic kernels/logs
  * @param mtp_alpha_effective Phase2-derived MTP loss weight for this batch
@@ -280,7 +275,6 @@ LossResult autogradTrainingStep(
     TrainingState& training_state,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
-    const HyperParameters::LanguageModelConfig& model_config,
     const HyperParameters::LossConfigHP& loss_config,
     bool accumulate,
     uint64_t batch_idx,

@@ -21,9 +21,9 @@
 //  OWNERSHIP
 //  =========
 //  BatchDeviceBindings owns NOTHING. The underlying device memory is borrowed
-//  from the current lifecycle boundary. Batch semantics and geometry, including
-//  sequence lengths, remain on BatchPayload instead of being mirrored as device
-//  mailboxes.
+//  from the current lifecycle boundary. Fixed-shape training/eval geometry is
+//  authored by HyperParameters/HyperparameterGroupings and enforced at the
+//  upload boundary; this struct is only the borrowed device-address view.
 //
 //  LIFETIME
 //  ========
@@ -47,21 +47,14 @@ struct BatchPayload;
 // consumed by autogradTrainingStep / executeStep
 // without ever writing back through this struct.
 //
-// Geometry (batch_size, max_seq_len) is duplicated from BatchPayload
-// purely as a row-stride hint for kernels that index bindings without
-// the payload (e.g. inference decode). The authoritative geometry
-// always lives on BatchPayload.
 struct BatchDeviceBindings {
-    int*      d_input_ids       = nullptr;  // [batch_size * max_seq_len]
-    int*      d_target_ids      = nullptr;  // [batch_size * max_seq_len]
-    float*    d_numeric_values  = nullptr;  // [batch_size * max_seq_len]
-    uint8_t*  d_atom_mask       = nullptr;  // [batch_size * max_seq_len] (nullable when atom mask not used)
-    uint32_t* d_atom_flags      = nullptr;  // [batch_size * max_seq_len] (nullable when not allocated)
-    int32_t*  d_token_to_slot_map = nullptr; // [batch_size * max_seq_len]
-    int*      d_mtp_shifted_targets = nullptr; // [payload.mtp_shifted_targets.size() * batch_size * max_seq_len], head-major; nullable when MTP disabled
-
-    int batch_size  = 0;
-    int max_seq_len = 0;
+    int*      d_input_ids       = nullptr;  // [payload.total_tokens]
+    int*      d_target_ids      = nullptr;  // [payload.total_tokens] for training payloads
+    float*    d_numeric_values  = nullptr;  // [payload.total_tokens]
+    uint8_t*  d_atom_mask       = nullptr;  // [payload.total_tokens] (nullable when atom mask not used)
+    uint32_t* d_atom_flags      = nullptr;  // [payload.total_tokens] (nullable when not allocated)
+    int32_t*  d_token_to_slot_map = nullptr; // [payload.total_tokens]
+    int*      d_mtp_shifted_targets = nullptr; // [payload.mtp_shifted_targets.size() * payload.total_tokens], head-major; nullable when MTP disabled
 };
 
 }  // namespace Batching

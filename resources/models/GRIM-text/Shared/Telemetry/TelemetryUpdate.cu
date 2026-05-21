@@ -5,7 +5,7 @@
 //
 //  Extracts all telemetry metric computation from Phase2_TrainingLoop.cu
 //  into a single updateTelemetryObservations() call, following the same
-//  pattern as GuessCacheTraining.cu.
+//  ownership pattern used by the rest of the training runtime.
 //
 //======================================================//
 
@@ -14,7 +14,6 @@
 #include "../../training/Phases/Phase2_TrainingLoop.hpp"  // BatchResult
 #include "../../training/Diagnostics/DiagnosticInference.hpp"
 #include "../../training/Diagnostics/MtpDiagnostic.hpp"
-#include "../../Layers/GRIMTS/GuessCacheTraining.hpp"
 #include "../TrainingState/TrainingState_GPU.hpp"
 
 #include <cuda_runtime.h>
@@ -394,11 +393,6 @@ void logIntervalTelemetry(
                                 formatMetric("lr", batch_result.learning_rate, 8));
 
         GRIM::Diagnostics::runMtpDiagnostic(ctx, batch_result);
-
-        if (ctx.config.hyperparameters.guess_aux_enabled) {
-            GRIMTS::Training::logGuessCacheTelemetry(
-                ctx.guess_cache_state, ctx.global_step);
-        }
     }
 
     GRIMText::Training::logDiagnosticSample(ctx, state);

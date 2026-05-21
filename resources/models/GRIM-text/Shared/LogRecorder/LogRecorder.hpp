@@ -47,20 +47,19 @@ enum class ModuleId : int {
     Optimizer = 2,
     Scheduler = 3,
     Activations = 4,
-    GuessCache = 5,
-    Validation = 6,
-    Checkpoint = 7,
-    DataLoader = 8,
-    Inference = 9,
-    LogRecorder = 10,
-    Training = 11,
-    TrainingOrchestrator = 12,
-    StreamController = 13,
-    Loss = 14,
-    Attention = 15,
-    Custom = 16,
-    Autograd = 17,
-    ExecutionBlock = 18
+    Validation = 5,
+    Checkpoint = 6,
+    DataLoader = 7,
+    Inference = 8,
+    LogRecorder = 9,
+    Training = 10,
+    TrainingOrchestrator = 11,
+    StreamController = 12,
+    Loss = 13,
+    Attention = 14,
+    Custom = 15,
+    Autograd = 16,
+    ExecutionBlock = 17
 };
 
 const char* ModuleIdToString(ModuleId id);

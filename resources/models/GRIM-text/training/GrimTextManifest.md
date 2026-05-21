@@ -882,7 +882,7 @@ For each encoding layer (Layer 0 → Layer 11):
   - **Verification:** `Loss::LossContext` was NEVER constructed in any .cu file. All 5 sub-module functions only had declarations + implementations — zero callers.
   - **Production loss path**: `BatchPayload + LossConfigHP → AutogradContext → computeAutogradLoss() → unified_loss()` via AutogradLoss.cu
   - **Still alive:**
-    - `HyperParameters::LossConfigHP` — config flow: Phase1 `TrainingContext.loss_config` → autogradTrainingStep → computeAutogradLoss/MTP → unified_loss
+    - `HyperParameters::LossConfigHP` — config flow: authoritative `TrainingHyperparameters` → Phase2/startup local `lossConfigHP(...)` derivation → autogradTrainingStep → computeAutogradLoss/MTP → unified_loss
     - `autograd::unified_loss()` — the one true loss path (AutogradLoss.cu/hpp)
     - `NumericLoss/NumericLoss_GPU.cu/hpp` — auxiliary numeric regression head (called from AutogradTraining.cu)
 

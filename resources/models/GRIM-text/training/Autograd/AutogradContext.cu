@@ -10,7 +10,7 @@
 
 namespace GRIM {
 namespace Autograd {
-
+ 
 namespace {
 
 void populateCommonContext(
@@ -49,14 +49,6 @@ void validateDeviceBindingsForPayload(
 {
     payload.validate(caller);
 
-    if (bindings.batch_size != payload.batch_size || bindings.max_seq_len != payload.max_seq_len) {
-        throw std::runtime_error(
-            std::string(caller) + ": BatchDeviceBindings geometry (" +
-            std::to_string(bindings.batch_size) + "x" + std::to_string(bindings.max_seq_len) +
-            ") does not match payload (" +
-            std::to_string(payload.batch_size) + "x" + std::to_string(payload.max_seq_len) +
-            ")");
-    }
     if (!bindings.d_input_ids || !bindings.d_target_ids || !bindings.d_token_to_slot_map) {
         throw std::runtime_error(
             std::string(caller) + ": BatchDeviceBindings has NULL device pointers - "
@@ -72,9 +64,10 @@ void validateDeviceBindingsForPayload(
 
 } // namespace
 
-// Training overload — borrows batch geometry from BatchPayload.
-// `bindings` must describe the same batch (geometry-checked) and must already
-// have been populated by uploadBatchToDevice(payload) at the H2D sync slice.
+// Training overload — payload carries the realized host batch datum, while the
+// fixed-shape training geometry itself is enforced against config at the upload
+// boundary. `bindings` must already have been populated by
+// uploadBatchToDevice(payload) at the H2D sync slice.
 AutogradContext initAutogradContext(
     const LanguageModelConfig* config,
     TrainingState* training_state,

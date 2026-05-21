@@ -177,13 +177,6 @@ Vector LanguageModel::executeInferenceForward_(
         throw std::runtime_error("executeInferenceForward_: payload max_seq_len=" + std::to_string(payload.max_seq_len) +
                                  " out of range [1, " + std::to_string(config_.max_seq_len) + "]");
     }
-    if (bindings.batch_size != payload.batch_size || bindings.max_seq_len != payload.max_seq_len) {
-        throw std::runtime_error(
-            "executeInferenceForward_: BatchDeviceBindings geometry (" +
-            std::to_string(bindings.batch_size) + "x" + std::to_string(bindings.max_seq_len) +
-            ") does not match payload (" + std::to_string(payload.batch_size) + "x" +
-            std::to_string(payload.max_seq_len) + ")");
-    }
 
     cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
 
@@ -418,13 +411,6 @@ Vector LanguageModel::executeDecodeForward_(
     step_payload.validate("executeDecodeForward_(BatchPayload)");
     if (!step_payload.isInferencePrefill()) {
         throw std::runtime_error("executeDecodeForward_: payload must be InferencePrefill");
-    }
-    if (bindings.batch_size != step_payload.batch_size || bindings.max_seq_len != step_payload.max_seq_len) {
-        throw std::runtime_error(
-            "executeDecodeForward_: BatchDeviceBindings geometry (" +
-            std::to_string(bindings.batch_size) + "x" + std::to_string(bindings.max_seq_len) +
-            ") does not match BatchPayload geometry (" + std::to_string(step_payload.batch_size) + "x" +
-            std::to_string(step_payload.max_seq_len) + ")");
     }
     if (token_pos < 0 || token_pos >= step_payload.total_tokens) {
         throw std::runtime_error("executeDecodeForward_: token_pos=" + std::to_string(token_pos) +
@@ -730,8 +716,6 @@ Vector LanguageModel::executeDecodeForward_(
                 GRIM::Batching::buildInferenceDecodePayload(cfg.vocab_size);
 
             GRIM::Batching::BatchDeviceBindings decode_bindings;
-            decode_bindings.batch_size  = 1;
-            decode_bindings.max_seq_len = 1;
             decode_bindings.d_token_to_slot_map = const_cast<int32_t*>(slot_ptr);
             decode_bindings.d_atom_mask =
                 bindings.d_atom_mask

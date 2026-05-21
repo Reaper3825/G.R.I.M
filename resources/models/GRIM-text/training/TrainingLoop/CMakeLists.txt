@@ -428,8 +428,6 @@ add_executable(train_gpu
     ../Phases/Startup/ClassBalancedWeights.hpp
     ../Phases/Startup/InitFacts.cu
     ../Phases/Startup/InitFacts.hpp
-    ../Phases/Startup/GuessCache/GuessCacheInit.cu
-    ../Phases/Startup/GuessCache/GuessCacheInit.hpp
     ../Phases/ConfigDump.cu
     ../Phases/ConfigDump.hpp
     ../Phases/DataStatsDump.cu
@@ -493,8 +491,6 @@ add_executable(train_gpu
     ../../Shared/DataLoader/DataLoader.cu
     ../../Shared/DataLoader/ConceptExecutionSequenceBuilder.cu
     ../../Shared/SoftRestart/SoftRestart.cu
-    ../../Layers/GRIMTS/GRIM-TS.cu
-    ../../Layers/GRIMTS/GuessCacheTraining.cu
 )
 
 set_target_properties(train_gpu PROPERTIES

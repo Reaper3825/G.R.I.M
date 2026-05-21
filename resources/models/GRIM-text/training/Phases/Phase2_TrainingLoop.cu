@@ -358,7 +358,7 @@ void runOptimizerWindowFromEpoch(
         tel_input.loss              = result.loss;
         tel_input.preclip_grad_rms  = clip_metrics.global_rms_pre;
         tel_input.learning_rate     = result.learning_rate;
-        tel_input.total_tokens      = payload.token_stats.total_tokens;
+        tel_input.total_tokens      = payload.actual_tokens;
         tel_input.enc_rms_pre       = clip_metrics.encoder_rms_pre;
         tel_input.optimizer_step    = optimizer_step;
         tel_input.should_step       = true;
@@ -457,13 +457,13 @@ BatchResult processBatch(
     // returned BatchDeviceBindings inside autogradTrainingStep — payload itself
     // is host-only/immutable and never carries device pointers.
     const auto train_bindings = ctx.model->uploadBatchToDevice(payload);
+    const auto loss_config = GRIM::HyperParameters::lossConfigHP(ctx.config.hyperparameters);
     auto loss_result = GRIM::Autograd::autogradTrainingStep(
         *ctx.model,
         ctx.model->getTrainingState(),
         payload,
         train_bindings,
-        ctx.model_config,
-        ctx.loss_config,
+        loss_config,
         plan.should_accumulate,
         plan.batch_idx,
         mtpAlphaEffectiveForBatch(ctx.model_config, ctx.global_step)
@@ -495,18 +495,7 @@ BatchResult processBatch(
             "[autogradTrainingStep] FAILED batch=" + std::to_string(batch_idx + 1) +
             ": " + loss_result.error_message);
     }
-    
-    // Update guess cache with predictions from this batch
-    if (std::isfinite(result.loss) && ctx.config.hyperparameters.guess_aux_enabled) {
-        GRIMTS::Training::updateGuessCacheFromBatch(
-            ctx.model->getTrainingState(),
-            payload,
-            result.loss,
-            epoch_idx,
-            ctx.global_step,
-            ctx.guess_cache_state);
-    }
-    
+
     // Log model predictions (what it predicts vs targets) - uses ForwardPass module for filtering
     // (extracted to Diagnostics/PredictionDistributionDiagnostic.cu)
     GRIM::Diagnostics::runPredictionDistributionAndLogitTrace(ctx, payload, result.loss, batch_idx);
@@ -595,7 +584,7 @@ BatchResult processBatch(
     }
     
     result.sequences_processed = payload.batch_size;
-    result.tokens_processed = static_cast<int>(payload.token_stats.total_tokens);
+    result.tokens_processed = payload.actual_tokens;
 
     // First-batch CUDA check (runs even if telemetry disabled): last point
     // before returning to runEpoch's accumulation/optimizer boundary.
@@ -645,13 +634,7 @@ EpochResult runEpoch(
     
     ctx.logging.logger->log("Epoch " + std::to_string(epoch_idx + 1) + "/" + std::to_string(num_epochs));
     
-    // Reset guess cache at epoch start
-    if (ctx.config.hyperparameters.guess_aux_enabled) {
-        GRIMTS::Training::resetGuessCacheForEpoch(
-            ctx.model->getTrainingState(), ctx.guess_cache_state);
-    }
-    
-    PHASE2_DEBUG_STDERR("[DEBUG-EPOCH] After ResetGuessCache, indexing Phase1 schedule...\n");
+    PHASE2_DEBUG_STDERR("[DEBUG-EPOCH] Indexing Phase1 schedule...\n");
 
     // Phase1 owns all batch packing (Startup/Batching/PlannedBatches.cu).
     // Phase2 NEVER shuffles ctx.data.train_views, never rebuilds

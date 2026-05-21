@@ -81,7 +81,7 @@ constexpr size_t CUDA_FALLBACK_MAX_LOSS_TOKENS = DEFAULT_MAX_SEQ_LEN * 4;  // 4x
 //======================================================//
 constexpr float EPSILON_SAFE_DIV = 1e-8f;         // Division safety (AdamW, etc.)
 constexpr float EPSILON_LOG_PROB = 1e-7f;         // Log probability clamping (loss)
-constexpr float EPSILON_VARIANCE = 1e-4f;         // Variance computation (GRIM-TS)
+constexpr float EPSILON_VARIANCE = 1e-4f;         // Variance computation
 constexpr float EPSILON_TEMPERATURE = 1e-6f;      // Temperature comparison threshold
 constexpr float EPSILON_RMSNORM = 1e-5f;          // RMSNorm numerical stability
 constexpr float EPSILON_GRADIENT_CLIP = 1e-6f;    // Gradient clipping minimum threshold
@@ -90,7 +90,7 @@ constexpr float NEG_INF_ATTENTION = -1e9f;        // Attention masking value
 constexpr float NEG_INF_THRESHOLD = -1e30f;       // Invalid/uninitialized threshold
 constexpr float PROBABILITY_FLOOR = 1e-12f;       // Minimum probability (prevents log(0))
 constexpr float SOFTMAX_CLIP_THRESHOLD = -20.0f;  // exp(x) ≈ 0 for x < this
-constexpr float NORMALIZED_CLAMP = 4.0f;          // Clamp for normalized values (GRIM-TS)
+constexpr float NORMALIZED_CLAMP = 4.0f;          // Clamp for normalized values
 
 //======================================================//
 // Tensor/Matrix Operation Constants

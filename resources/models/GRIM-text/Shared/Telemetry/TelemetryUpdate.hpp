@@ -83,7 +83,7 @@ void updateTelemetryObservations(
     const GRIM::Batching::BatchPayload* payload);
 
 /// Emits log-interval telemetry/monitoring derived from the latest batch:
-/// step loss/lr, MTP per-head telemetry, and GuessCache telemetry.
+/// step loss/lr and MTP per-head telemetry.
 void logIntervalTelemetry(
     GRIMText::Training::TrainingContext& ctx,
     GRIMText::Training::TrainingLoopState& state,

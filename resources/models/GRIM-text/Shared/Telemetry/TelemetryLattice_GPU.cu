@@ -565,12 +565,12 @@ TelemetryError TelemetryLattice::updateFromBatch(
     float loss, float grad_norm, float learning_rate,
     uint32_t global_step)
 {
-    if (payload.token_stats.total_tokens <= 0) {
-        fprintf(stderr, "[Telemetry] FATAL: BatchPayload.token_stats.total_tokens=%lld (must be > 0)\n",
-                static_cast<long long>(payload.token_stats.total_tokens));
+    if (payload.actual_tokens <= 0) {
+        fprintf(stderr, "[Telemetry] FATAL: BatchPayload.actual_tokens=%d (must be > 0)\n",
+                payload.actual_tokens);
         return TelemetryError::ERR_INVALID_PARAMS;
     }
-    const float tokens = static_cast<float>(payload.token_stats.total_tokens);
+    const float tokens = static_cast<float>(payload.actual_tokens);
     float obs[5] = { loss, grad_norm, grad_norm, learning_rate, tokens };
     return update(obs, global_step);
 }

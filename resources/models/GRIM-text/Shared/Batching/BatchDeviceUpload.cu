@@ -180,9 +180,9 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
     }
 
     // The bindings struct returned below is the canonical reader-facing device
-    // view for this step. Batch geometry and valid-token counts stay on the
-    // Phase1-authored BatchPayload; TrainingState must not mirror per-step
-    // semantics as a hidden global mailbox.
+    // view for this step. Fixed-shape training geometry is HyperParameters-owned
+    // and must match the realized payload here; TrainingState must not mirror
+    // per-step semantics as a hidden global mailbox.
 
     Batching::BatchDeviceBindings bindings;
     bindings.d_input_ids        = cached_token_ids_ptr;
@@ -194,8 +194,25 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
         : nullptr;
     bindings.d_token_to_slot_map = cached_slot_map_ptr;
     bindings.d_mtp_shifted_targets = cached_mtp_shifted_targets_ptr;
-    bindings.batch_size  = payload.batch_size;
-    bindings.max_seq_len = payload.max_seq_len;
+
+    if (payload.isTraining()) {
+        if (cfg.max_cached_batch <= 0) {
+            throw std::runtime_error(
+                "uploadBatchToDevice: training payload requires config.max_cached_batch > 0");
+        }
+        if (cfg.max_seq_len <= 0) {
+            throw std::runtime_error(
+                "uploadBatchToDevice: training payload requires config.max_seq_len > 0");
+        }
+        if (payload.batch_size != cfg.max_cached_batch || payload.max_seq_len != cfg.max_seq_len) {
+            throw std::runtime_error(
+                "uploadBatchToDevice: fixed-shape training payload geometry ("
+                + std::to_string(payload.batch_size) + "x" + std::to_string(payload.max_seq_len)
+                + ") does not match HyperParameters-owned model geometry ("
+                + std::to_string(cfg.max_cached_batch) + "x" + std::to_string(cfg.max_seq_len)
+                + ")");
+        }
+    }
     return bindings;
 }
 

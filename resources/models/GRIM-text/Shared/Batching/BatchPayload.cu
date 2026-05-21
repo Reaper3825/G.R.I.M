@@ -83,10 +83,6 @@ BatchPayload makeInferenceBasePayload(
     payload.valid_target_counts.assign(1, 0);
     payload.fits_in_cache = true;
 
-    payload.token_stats.batch_size = 1;
-    payload.token_stats.total_tokens = seq_len;
-    payload.token_stats.max_sequence_length = seq_len;
-
     payload.execution_active.assign(1, row_execution_active);
     payload.compiled_bootstrap_bindings.resize(1);
     payload.teacher_steps.resize(1);
@@ -159,11 +155,6 @@ BatchPayload buildBatchPayload(
     payload.seq_lengths.resize(payload.batch_size);
     payload.max_seq_len = 0;
     payload.actual_tokens = 0;
-
-    // Token stats are Phase1-authored metadata consumed by Phase2 diagnostics/clipping.
-    payload.token_stats.batch_size = payload.batch_size;
-    payload.token_stats.total_tokens = 0;
-    payload.token_stats.max_sequence_length = 0;
 
     for (int b = 0; b < payload.batch_size; ++b) {
         const uint32_t sid = payload.seq_ids[b];
@@ -300,10 +291,6 @@ BatchPayload buildBatchPayload(
         payload.seq_lengths[b] = seq_len;
         payload.actual_tokens += seq_len;
 
-        // Token stats accumulation: actual (pre-padding) per-row max for diagnostics.
-        payload.token_stats.total_tokens += seq_len;
-        payload.token_stats.max_sequence_length = std::max(
-            payload.token_stats.max_sequence_length, seq_len);
     }
 
     // Pad every batch to the configured sliding-window / cache cap so the

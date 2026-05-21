@@ -46,7 +46,6 @@
 #include "../../Shared/Optimizers/OptimizerStep.hpp"
 #include "../../Shared/UnigramByte/UniByte.hpp"
 #include "../../Layers/Encoding/Encoding_GPU.hpp"
-#include "../../Layers/GRIMTS/GuessCacheTraining.hpp"
 #include "../../Shared/DataLoader/DataLoader.hpp"
 #include "../../Shared/Batching/Batching_GPU.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
@@ -234,9 +233,6 @@ struct TrainingContext {
     // handed to Phase2; training code must not rebuild or route alternate static
     // model wrappers around it.
     GRIM::HyperParameters::LanguageModelConfig model_config;
-    // Phase1-authored static loss grouping. Phase2 consumes this directly;
-    // it must not rebuild loss hyperparameter wrappers inside the training loop.
-    GRIM::HyperParameters::LossConfigHP loss_config;
     // Capacity stem (single author after HP policy)
     RunCapacity run_capacity;
     // Memory snapshot (evidence only; never authors capacity)
@@ -245,9 +241,6 @@ struct TrainingContext {
     ModelAllocationState model_allocation;
     // Resume metadata (populated after optimizer sidecar restore attempt)
     ResumeState resume_state;
-    // GuessCache lifecycle/state (authored during Phase1 startup; Phase2 only uses it)
-    std::unique_ptr<GRIMTS::Training::GuessCacheScope> guess_cache_scope;
-    GRIMTS::Training::GuessCacheState guess_cache_state;
     // Data summary/reference artifact (SequenceData remains storage owner)
     DataInfo data_info;
     // Startup-owned epoch plan facts (LR schedule config, total steps, warmup)

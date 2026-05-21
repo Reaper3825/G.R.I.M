@@ -70,8 +70,6 @@ void ExecutionBlockLayer::validateExecuteStepInputsOrThrow(
     EXEC_CHECK(atom_positions != nullptr,
                "atom_positions is null - caller MUST provide a row-local atom view (empty buffer allowed)");
     EXEC_CHECK(bindings.d_token_to_slot_map != nullptr, "bindings.d_token_to_slot_map is null");
-    EXEC_CHECK(bindings.batch_size == payload.batch_size && bindings.max_seq_len == payload.max_seq_len,
-               "BatchDeviceBindings geometry must match BatchPayload");
     EXEC_CHECK(num_atoms >= 0, "num_atoms must be non-negative");
     EXEC_CHECK(payload.total_tokens > 0, "payload.total_tokens must be positive");
     EXEC_CHECK(step >= 0 && step < hp_.num_exec_steps, "step out of range");

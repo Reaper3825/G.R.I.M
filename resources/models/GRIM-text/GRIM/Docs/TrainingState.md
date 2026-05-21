@@ -1,6 +1,6 @@
 # TrainingState — Training GPU Resource Controller
 
-Training-owned GPU resources MUST go through `TrainingState`. Generation-owned GPU resources live in `GenerationState` (`Shared/InferenceState/GenerationState_GPU.hpp`) and are owned directly by `LanguageModel`, not smuggled through TrainingState. GRIM-TS guess-cache buffers are owned by `GRIMTS::Training::GuessCacheScope`, not `TrainingState`; that scope only borrows `TrainingState.stream_ctrl` for the primary stream.
+Training-owned GPU resources MUST go through `TrainingState`. Generation-owned GPU resources live in `GenerationState` (`Shared/InferenceState/GenerationState_GPU.hpp`) and are owned directly by `LanguageModel`, not smuggled through TrainingState.
 
 `TrainingState` owns runtime allocations only. Cache capacity is authored on `LanguageModelConfig` by startup/server config construction; the TrainingState allocator consumes `max_cached_batch` and `max_tokens_per_batch` only. `max_cached_seq_len` belongs to prompt/KV/payload capacity paths, not the TrainingState token-cache validation path. `LanguageModel::initTrainingState()` and `LanguageModel::initInferenceState()` verify resource startup order, then pass the authored `LanguageModelConfig` plus the primary stream to `TrainingState::allocateStepDeviceWorkspaces()`. `TrainingState` validates the consumed config before allocation, but it must not preserve per-batch/prompt geometry.
 
@@ -17,7 +17,6 @@ RAII helper modules:
 - `Shared/TrainingState/CublasHandleOwner_GPU.{hpp,cu}` owns `cublasDestroy` for `TrainingState::cublas_handle`.
 - `CublasHandleOwner` keeps the raw handle private. Use `outParam()` only at `cublasCreate` sites and `.get()` at every raw `cublasHandle_t` borrow site; do not pass the owner object itself across runtime payload boundaries.
 - `Shared/TrainingState/DeviceAllocation_GPU.{hpp,cu}` owns raw CUDA device allocations used by typed runtime owners, including `GenerationState` KV/decode buffers.
-- `Layers/GRIMTS/GuessCacheTraining.{hpp,cu}` owns GRIM-TS guess-cache records, keys, bloom, calibration, and pinned async-transfer buffers through `GuessCacheScope::OwnedBuffers`.
 
 `ScratchBlockPool` was deleted. Batch upload copies `BatchPayload` host vectors directly into the TrainingState device cache tensors, and ScratchBlock reasoning owns its own layer buffers.
 

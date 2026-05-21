@@ -6,7 +6,6 @@
 #include "Startup/Data/TrainingData.hpp"
 #include "Startup/Model/ModelAllocationState.hpp"
 #include "Startup/Resume/ResumeState.hpp"
-#include "Startup/GuessCache/GuessCacheInit.hpp"
 #include "Startup/Telemetry/TelemetryInitInputs.hpp"
 #include "Startup/Epoch/EpochPlan.hpp"
 #include "Startup/Payload/PayloadBuildInputs.hpp"
@@ -98,7 +97,6 @@ Phase1Result executePhase1(int argc, char** argv) {
     LoadTrainingData(*ctx);
     ModelAllocated(*ctx);
     ResumeStateReady(*ctx);
-    GuessCacheReady(*ctx);
     TelemetryReady(*ctx);
     PayloadBuildInputsReady(*ctx);
     PlannedBatchesReady(*ctx);
