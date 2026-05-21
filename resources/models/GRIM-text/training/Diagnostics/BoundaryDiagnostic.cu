@@ -93,16 +93,16 @@ void runBoundaryDiagnostic(
             
             // Training allocation check. Authored token capacity comes from trainingFixedShapeHP();
             // logits allocation capacity comes from the Tensor shape.
-            const auto& logits_shape = ts.cached_logits_tensor.shape.require("BoundaryDiagnostic cached_logits_tensor");
+            const auto& token_ids_shape = ts.cached_token_ids_tensor.shape.require("BoundaryDiagnostic cached_token_ids_tensor");
             const auto fixed_shape = GRIM::HyperParameters::trainingFixedShapeHP(ctx.config);
             const size_t token_capacity = static_cast<size_t>(fixed_shape.max_tokens_per_batch);
-            const size_t logit_token_capacity = static_cast<size_t>(logits_shape.as_2d().rows);
+            const size_t uploaded_token_capacity = static_cast<size_t>(token_ids_shape.as_2d().cols);
             diag << "[BOUNDARY_DIAGNOSTIC] AUTHORED CAPACITY:\n";
             diag << "  fixed_shape.batch_size=" << fixed_shape.batch_size << "\n";
             diag << "  fixed_shape.max_seq_len=" << fixed_shape.max_seq_len << "\n";
             diag << "  fixed_shape.max_tokens_per_batch=" << fixed_shape.max_tokens_per_batch << "\n";
             diag << "[BOUNDARY_DIAGNOSTIC] ALLOCATED CACHE CAPACITY:\n";
-            diag << "  cached_logits_tensor.rows=" << logit_token_capacity << "\n";
+            diag << "  cached_token_ids_tensor.cols=" << uploaded_token_capacity << "\n";
             
             // Check if sequence fits in TRAINING cache — use payload.total_tokens (already batch*max_seq)
             diag << "  Required tokens for this batch: " << payload.total_tokens << "\n";

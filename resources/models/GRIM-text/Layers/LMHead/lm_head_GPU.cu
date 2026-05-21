@@ -281,13 +281,13 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
         matmul_input = &out_centered_hidden;
     } else if (hp_.center_hidden_states) {
         // Store in out_centered_hidden so it survives this scope (Issue #127)
-        // and so cached_encoder_output reflects the actual matmul input for diagnostics.
+        // and boundary-safe forward observers see the actual matmul input.
         out_centered_hidden = std::move(centered_hidden_for_pc1);
         matmul_input = &out_centered_hidden;
     } else {
         if (current_input == &normalized) {
             // RMSNorm was applied but no centering — preserve the normalized
-            // tensor in out_centered_hidden so cached_a doesn't dangle when
+            // tensor in out_centered_hidden so the explicit matmul-input view doesn't dangle when
             // this function returns (normalized is a local).
             out_centered_hidden = std::move(normalized);
             matmul_input = &out_centered_hidden;

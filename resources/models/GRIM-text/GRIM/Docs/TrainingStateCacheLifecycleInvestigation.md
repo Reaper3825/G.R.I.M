@@ -1,6 +1,12 @@
 # TrainingState Cache Lifecycle Investigation
 
-## Finding
+## Resolution status
+
+`TrainingState::cached_logits_tensor` and `TrainingState::cached_encoder_output` have been deleted from the production contract. `ModelForwardResult` exposes the live logits pointer and LM-head input pointer for inference prefill, and training diagnostics consume `AutogradIntermediates::logits_tensor` plus the live LM-head input tensor before `AutogradStepScope` clears the boundary.
+
+The remaining notes below document the anti-pattern that was removed and should not be recreated.
+
+## Historical finding
 
 `TrainingState` cache tensors have two different meanings in the current system:
 

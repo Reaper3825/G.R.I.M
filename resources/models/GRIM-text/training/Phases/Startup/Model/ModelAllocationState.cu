@@ -189,13 +189,23 @@ ModelAllocationState captureAndValidateModelAllocationOrThrow(const TrainingCont
                                  " grouping=" + std::to_string(fixed_shape.max_tokens_per_batch) + ")");
     }
 
-    const auto& logits_shape = state.cached_logits_tensor.shape.require("ModelAllocated cached_logits_tensor");
-    if (!logits_shape.is_2d_layout()) {
-        throw std::runtime_error("FATAL: cached_logits_tensor must be a 2D logits buffer");
+    const auto& token_ids_shape = state.cached_token_ids_tensor.shape.require("ModelAllocated cached_token_ids_tensor");
+    if (!token_ids_shape.is_2d_layout()) {
+        throw std::runtime_error("FATAL: cached_token_ids_tensor must be a 2D token-id buffer");
     }
-    if (logits_shape.as_2d().rows != fixed_shape.max_tokens_per_batch) {
-        throw std::runtime_error("FATAL: cached_logits_tensor row capacity does not match trainingFixedShapeHP (tensor=" +
-                                 std::to_string(logits_shape.as_2d().rows) +
+    if (token_ids_shape.as_2d().cols != fixed_shape.max_tokens_per_batch) {
+        throw std::runtime_error("FATAL: cached_token_ids_tensor token capacity does not match trainingFixedShapeHP (tensor=" +
+                                 std::to_string(token_ids_shape.as_2d().cols) +
+                                 " grouping=" + std::to_string(fixed_shape.max_tokens_per_batch) + ")");
+    }
+
+    const auto& targets_shape = state.cached_targets_tensor.shape.require("ModelAllocated cached_targets_tensor");
+    if (!targets_shape.is_2d_layout()) {
+        throw std::runtime_error("FATAL: cached_targets_tensor must be a 2D target upload buffer");
+    }
+    if (targets_shape.as_2d().rows != fixed_shape.max_tokens_per_batch) {
+        throw std::runtime_error("FATAL: cached_targets_tensor row capacity does not match trainingFixedShapeHP (tensor=" +
+                                 std::to_string(targets_shape.as_2d().rows) +
                                  " grouping=" + std::to_string(fixed_shape.max_tokens_per_batch) + ")");
     }
 

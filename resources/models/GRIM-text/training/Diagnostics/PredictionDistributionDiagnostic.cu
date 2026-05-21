@@ -77,6 +77,7 @@ void runTargetDistributionLog(
 void runPredictionDistributionAndLogitTrace(
     GRIMText::Training::TrainingContext& ctx,
     const GRIM::Batching::BatchPayload& payload,
+    const GRIM::Tensor& logits_tensor,
     float loss,
     int batch_idx)
 {
@@ -88,13 +89,33 @@ void runPredictionDistributionAndLogitTrace(
     if (shouldSyncDiagnostics(ctx, batch_idx)) {
         const auto& ts = ctx.model->getTrainingState();
         cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
-        if (ts.cached_logits_tensor.data && payload.batch_size > 0 && payload.max_seq_len > 0) {
+        if (payload.batch_size > 0 && payload.max_seq_len > 0) {
+            if (!logits_tensor.data) {
+                throw std::runtime_error("runPredictionDistributionAndLogitTrace: live logits tensor is NULL inside active autograd scope");
+            }
             const int total_tokens = payload.total_tokens;
             const int vocab_size = static_cast<int>(ctx.data_info.actual_vocab_size);
+            const auto& logits_shape = logits_tensor.shape.require("runPredictionDistributionAndLogitTrace logits_tensor");
+            if (!logits_shape.is_2d_layout()) {
+                throw std::runtime_error("runPredictionDistributionAndLogitTrace: logits tensor must be a 2D LOGITS buffer");
+            }
+            const auto logits_dims = logits_shape.as_2d();
+            if (logits_dims.rows < total_tokens) {
+                throw std::runtime_error(
+                    "runPredictionDistributionAndLogitTrace: logits rows (" +
+                    std::to_string(logits_dims.rows) + ") < payload.total_tokens (" +
+                    std::to_string(total_tokens) + ")");
+            }
+            if (logits_dims.cols != vocab_size) {
+                throw std::runtime_error(
+                    "runPredictionDistributionAndLogitTrace: logits cols (" +
+                    std::to_string(logits_dims.cols) + ") != vocab_size (" +
+                    std::to_string(vocab_size) + ")");
+            }
             const int sample_positions = total_tokens;
             const size_t logit_bytes = static_cast<size_t>(sample_positions) * vocab_size * sizeof(float);
             std::vector<float> logit_sample(sample_positions * vocab_size);
-            cudaMemcpyAsync(logit_sample.data(), ts.cached_logits_tensor.data, logit_bytes, cudaMemcpyDeviceToHost, stream);
+            cudaMemcpyAsync(logit_sample.data(), logits_tensor.data, logit_bytes, cudaMemcpyDeviceToHost, stream);
             cudaStreamSynchronize(stream);
             // Count argmax predictions
             std::map<int, int> pred_counts;
@@ -184,7 +205,7 @@ void runPredictionDistributionAndLogitTrace(
 
                 std::ostringstream trace_msg;
                 trace_msg << std::fixed << std::setprecision(6);
-                trace_msg << "[LogitTrace][PostLoss] source=cached_logits"
+                trace_msg << "[LogitTrace][PostLoss] source=live_logits"
                           << " batch=" << (batch_idx + 1)
                           << " pos=" << debug_pos
                           << " b=" << debug_b

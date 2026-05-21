@@ -82,11 +82,9 @@ struct TrainingState {
     // batch as token/target device cache fields.
     //
     // Autograd Tensors with grad_fn live in autograd_intermediates, not here.
-    // Output snapshots written by executeAutogradForward(). They are NOT graph
-    // owners; they preserve reduced step outputs for diagnostics/inference after
-    // AutogradIntermediates is cleared at the forward/backward boundary.
-    Tensor cached_encoder_output;       // [max_tokens, d_model] LM-head input snapshot for diagnostics only
-    Tensor cached_logits_tensor;        // [max_tokens, vocab_size] logits snapshot for diagnostics/inference return
+    // Active forward observations (LM-head input / logits) stay inside the
+    // forward/autograd boundary as explicit live views. TrainingState owns only
+    // reusable upload/storage workspaces, never "last forward" mailboxes.
     Tensor cached_targets_tensor;       // [max_tokens, 1] reusable target upload workspace
     Tensor cached_token_ids_tensor;     // [1, max_tokens] reusable token-id upload workspace
     Tensor cached_token_numeric_values; // [1, max_tokens] reusable numeric side-channel upload workspace

@@ -22,17 +22,14 @@ All sizes float32, 4 bytes per element.
 - 107,798,346 × 4 × 4 = 1,724,773,536 bytes ≈ **1.61 GiB**.
 - **Running tally: 1.61 GiB**
 
-**Pre-allocated TrainingState step workspaces/snapshots (max_tokens=8192):**
+**Pre-allocated TrainingState upload workspaces (max_tokens=8192):**
 
-| Buffer | Formula | Bytes |
-|--------|--------|--------|
-| cached_encoder_output | 8192 × 768 × 4 | 25,165,824 |
-| cached_logits_tensor | 8192 × 2512 × 4 | 82,362,368 |
+Durable LM-head input/logits snapshots were deleted. Forward outputs now live in `AutogradIntermediates` / `ModelForwardResult` only; TrainingState keeps reusable upload/staging buffers such as targets, token ids, numeric side-channels, atom side-channels, and sequence weights.
 
-Sum of above buffers: 107,528,192 bytes ≈ **0.10 GiB**.
-- **Running tally: 1.61 + 0.10 = 1.71 GiB**
+The remaining fixed upload buffers are tiny at this config (well under 1 MiB total).
+- **Running tally: ~1.61 GiB**
 
-**Startup total (params + these buffers):** 1.71 GiB.
+**Startup total (params + upload workspaces):** ~1.61 GiB.
 
 Historical note: TrainingState-owned `grad_encoder`, `grad_ffn_*`, `grad_attn_*`, `grad_q/k/v`, `grad_qkv_*`, and `grad_logits_tensor` buffers were deleted. TensorContract owns activation/intermediate gradient lifecycle through `Tensor.grad_` and GradFn scratch.
 
@@ -47,7 +44,7 @@ Approximate per-layer total: 696 MiB. Over 12 layers: 696 × 12 = 8,352 MiB ≈ 
 Flash Attention backward workspace (per layer, batch=8, seqlen=1024, n_heads=12, head_dim=64): dq_accum + dsoftmax_sum ≈ **0.67 GiB** (12 layers). ScaledDotProductAttentionGradFn also allocates **dq_bf16, dk_bf16, dv_bf16, dout_bf16** per layer (TensorContract_GPU.cu): 12 × (4 × 8×1024×12×64×2) ≈ **0.87 GiB**.
 
 **First-batch additional (autograd + FA scratch + FA bf16 grads):** ~8.16 + 0.67 + 0.87 ≈ **9.7 GiB**.
-- **Running tally: 1.71 + 9.7 = 11.41 GiB**
+- **Running tally: 1.61 + 9.7 = 11.31 GiB**
 
 ---
 
@@ -56,20 +53,20 @@ Flash Attention backward workspace (per layer, batch=8, seqlen=1024, n_heads=12,
 | Item | GiB | Cumulative GiB |
 |------|-----|----------------|
 | Params (weights, grads, Adam m, Adam v) | 1.61 | 1.61 |
-| Pre-allocated buffers (encoder/logits caches) | 0.10 | 1.71 |
-| First-batch autograd (12-layer intermediates) | 8.16 | 9.87 |
-| First-batch Flash Attention scratch (dq_accum + dsoftmax_sum) | 0.67 | 10.54 |
-| First-batch Flash Attention bf16 grads (dq/dk/dv/dout × 12 layers) | 0.87 | 11.41 |
-| GRIM-TS (this run: disabled) | 0 | 11.41 |
-| Telemetry (lattice 8×5 + control disabled) | ~0.000004 | 11.41 |
+| Pre-allocated upload buffers | ~0.00 | 1.61 |
+| First-batch autograd (12-layer intermediates) | 8.16 | 9.77 |
+| First-batch Flash Attention scratch (dq_accum + dsoftmax_sum) | 0.67 | 10.44 |
+| First-batch Flash Attention bf16 grads (dq/dk/dv/dout × 12 layers) | 0.87 | 11.31 |
+| GRIM-TS (this run: disabled) | 0 | 11.31 |
+| Telemetry (lattice 8×5 + control disabled) | ~0.000004 | 11.31 |
 
-**Total accounted for: 11.41 GiB**
+**Total accounted for: 11.31 GiB**
 
 ---
 
 ## Sum vs reported 40 GB
 
-Device total: 40,441 MB (from log: "Memory: 40441 MB"). Our breakdown accounts for **11.41 GiB** of *tracked* allocations (params, buffers, first-batch autograd + FA). So **40,441 MB − 11.41 GiB ≈ 28–29 GiB is unaccounted**: we do not attribute it to any buffer in this doc. Likely sources include CUDA allocator reserved/fragmentation, cuBLAS/cuDNN workspace, and other runtime pools. Until we measure or instrument those, the gap remains unexplained.
+Device total: 40,441 MB (from log: "Memory: 40441 MB"). Our breakdown accounts for **11.31 GiB** of *tracked* allocations (params, upload workspaces, first-batch autograd + FA). So **40,441 MB − 11.31 GiB ≈ 28–29 GiB is unaccounted**: we do not attribute it to any buffer in this doc. Likely sources include CUDA allocator reserved/fragmentation, cuBLAS/cuDNN workspace, and other runtime pools. Until we measure or instrument those, the gap remains unexplained.
 
 ---
 
@@ -78,13 +75,13 @@ Device total: 40,441 MB (from log: "Memory: 40441 MB"). Our breakdown accounts f
 | When | Log line | Interpretation |
 |------|----------|----------------|
 | Pre-validation checkpoint | `GPU memory: 37197 MB free / 40441 MB total` | **37,197 MB = ~37.2 GiB used**; remaining capacity = 40,441 − 37,197 = **3,244 MB = ~3.2 GiB free**. Steady state between steps (autograd intermediates cleared). So at that moment ~37 GiB was in use; we only account for ~12 GiB of it. |
-| Peak (first fwd/bwd) | — | We *account* for **~11.41 GiB**; actual device *used* at peak is not logged here. If at peak the driver reports e.g. 35–37 GiB used, we still only explain ~11.4 GiB; the rest is the same unaccounted ~28 GiB. |
+| Peak (first fwd/bwd) | — | We *account* for **~11.31 GiB**; actual device *used* at peak is not logged here. If at peak the driver reports e.g. 35–37 GiB used, we still only explain ~11.3 GiB; the rest is the same unaccounted ~28 GiB. |
 
 ---
 
 ## Logits (this config)
 
-max_logit_tokens = 8192, vocab_size = 2512. One logits buffer: 8192 × 2512 × 4 = 82,362,368 bytes ≈ 78.5 MiB. Two (cached + grad): **~157 MiB**. Logits are not a large share of VRAM at this batch/seq/vocab.
+There is no durable TrainingState logits cache. Full-batch logits are graph-owned by `AutogradIntermediates::logits_tensor` during the active forward/loss/backward window, then released at `AutogradStepScope` teardown. Inference prefill copies the returned last-token logits from `ModelForwardResult::logits_output` before clearing intermediates.
 
 ---
 
@@ -137,8 +134,8 @@ LatticeLevelState = TelemetryState (20 float + 2 uint32) + stride (uint32_t) + l
 - **HyperparameterGroupings.hpp / trainingFixedShapeHP():** derives the checked startup fixed-shape rectangle from post-policy `StartupConfig` (`batch_size`, `max_seq_len`, checked `max_tokens_per_batch`). `startupLanguageModelConfig()` mirrors that grouped view into `LanguageModelConfig`.
 - **InitTrainingState.cu:** passes `LanguageModelConfig` plus the primary stream to `TrainingState::allocateStepDeviceWorkspaces()`.
 - **InitInferenceState.cu:** uses `LanguageModelConfig` fields for inference-owned KV/decode allocation and calls the same TrainingState owner with `LanguageModelConfig` plus the primary stream.
-- **TrainingStateGPU.cu:** owns allocation of `cached_encoder_output`, `cached_logits_tensor`, target/token staging tensors, and `sequence_weights_tensor`; logits capacity is the same startup token capacity.
-- **memoryusestartup.txt**: "Cache allocation: batch=8, seq_len=1024, tokens=8192"; "total_params=107798346"; "Allocated cached_logits [8192 x 2512]"; "[GuessCache][INFO] Guess cache disabled (guess_aux.enabled=false)".
+- **TrainingStateGPU.cu:** owns allocation of target/token staging tensors and `sequence_weights_tensor`; LM-head input/logits are not durable TrainingState allocations.
+- **memoryusestartup.txt**: "Cache allocation: batch=8, seq_len=1024, tokens=8192"; "total_params=107798346"; older logs may mention `Allocated cached_logits`, but that durable snapshot allocation has been deleted.
 - **GRIM-TS:** `GuessCacheScope::OwnedBuffers::allocate` in GuessCacheTraining.cu (capacity, `sizeof(GRIMTS::GuessRecord)`=96, `sizeof(GRIMTS::GuessMetadata)`=32); GuessCacheScope uses kDefaultGuessCacheCapacity=16384, diversity_bloom_bits=65536, pinned_buffer_size=8192. GRIM-TS.hpp static_assert(sizeof(GuessRecord)==96).
 - **Telemetry:** TelemetryLattice_GPU.cu constructor: levels_ = num_levels × num_streams × sizeof(LatticeLevelState); observations_ = Tensor::zeros({num_streams}); scratch_vectors_ = Tensor::zeros({num_streams, 10}); d_error_flag_ = 4 bytes. TelemetryState_GPU.hpp LatticeLevelState = TelemetryState + stride + last_update (96 bytes). Log: "8 levels, 5 streams". TelemetryControl_GPU.cu initGPU: d_config_, d_state_ (64), d_decision_ (48), d_input_ (32).
 
@@ -149,7 +146,7 @@ LatticeLevelState = TelemetryState (20 float + 2 uint32) + stride (uint32_t) + l
 | Allocation | Cleared where |
 |------------|----------------|
 | **Params, grads, optimizer m/v** | Tensor / vector members of TrainingState; freed in ~TrainingState when members destruct. |
-| **Pre-allocated caches** (cached_encoder_output, cached_logits, cached_targets, token caches, sequence_weights) | Tensor members; Tensor::~Tensor() → release() → cudaFree(data). |
+| **Pre-allocated upload workspaces** (cached_targets, token caches, sequence_weights) | Tensor members; Tensor::~Tensor() → release() → cudaFree(data). |
 | **class_weights_tensor** | Tensor member; `Tensor::~Tensor()` releases class-balanced weights. |
 | **PBM (alibi_slopes, rope_inv_freq)** | `LanguageModel::pbm_owner_` (`PBM::PBMStateOwner`) RAII releases PBM buffers and upload event; `PBMSpec` is only a non-owning attention view. |
 | **TeacherLogits / reference_logits** | `TeacherLogits::Buffer` RAII destructor releases device storage. |
@@ -176,8 +173,6 @@ Every GPU allocation site that can run during training, with source and size for
 | **InitTrainingState** | Params (weights) | Phase1 / model load | `total_params × 4` |
 | | Grads | InitTrainingState / optimizer | `total_params × 4` |
 | | Adam m, Adam v | TrainingStateGPU.cu | `total_params × 4` each |
-| | cached_encoder_output | TrainingStateGPU.cu | `max_tokens × d_model × 4` |
-| | cached_logits_tensor | TrainingStateGPU.cu | `max_logit_tokens × vocab_size × 4` |
 | | cached_targets_tensor | TrainingStateGPU.cu | `max_logit_tokens × 1 × 4` |
 | | cached_token_ids_tensor | TrainingStateGPU.cu | `1 × max_tokens × 4` (int32) |
 | | cached_token_numeric_values | TrainingStateGPU.cu | `1 × max_tokens × 4` |
@@ -213,8 +208,6 @@ Symbols: **T** = max_tokens (batch × seq_len), **T_logit** = max_logit_tokens, 
 | Buffer | Dimensions (shape) | Bytes formula | Example (this config) |
 |--------|--------------------|---------------|------------------------|
 | Params (weights) | — | `total_params × 4` | 431,193,384 → 1.61 GiB / 4 copies |
-| cached_encoder_output | [T, D] | `T × D × 4` | 8192×768×4 = 25.2 MiB |
-| cached_logits_tensor | [T_logit, V] | `T_logit × V × 4` | 8192×2512×4 = 82.4 MiB |
 | cached_targets_tensor | [T_logit, 1] | `T_logit × 4` | 32.8 KiB |
 | cached_token_ids_tensor | [1, T] | `T × 4` | 32.8 KiB |
 | cached_token_numeric_values | [1, T] | `T × 4` | 32.8 KiB |

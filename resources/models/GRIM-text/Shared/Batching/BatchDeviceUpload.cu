@@ -59,15 +59,16 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
 
     const size_t total_tokens = static_cast<size_t>(payload.total_tokens);
 
-    const auto& logits_shape = training_state_.cached_logits_tensor.shape.require("uploadBatchToDevice cached_logits_tensor");
-    if (!logits_shape.is_2d_layout()) {
-        throw std::runtime_error("uploadBatchToDevice: cached_logits_tensor must be a 2D LOGITS buffer");
+    const auto& token_ids_shape = training_state_.cached_token_ids_tensor.shape.require("uploadBatchToDevice cached_token_ids_tensor");
+    if (!token_ids_shape.is_2d_layout()) {
+        throw std::runtime_error("uploadBatchToDevice: cached_token_ids_tensor must be a 2D token-id buffer");
     }
-    const size_t logit_limit = static_cast<size_t>(logits_shape.as_2d().rows);
-    if (total_tokens > logit_limit) {
+    const auto token_dims = token_ids_shape.as_2d();
+    const size_t token_limit = static_cast<size_t>(token_dims.cols);
+    if (total_tokens > token_limit) {
         throw std::runtime_error(
             "uploadBatchToDevice: total_tokens=" + std::to_string(total_tokens) +
-            " exceeds logit buffer capacity=" + std::to_string(logit_limit));
+            " exceeds token upload capacity=" + std::to_string(token_limit));
     }
 
     cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();

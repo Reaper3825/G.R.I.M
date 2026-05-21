@@ -54,11 +54,10 @@ struct AutogradIntermediates {
     Tensor encoder_output_tensor;      // [total_tokens, d_model] - after final RMSNorm
     Tensor centered_encoder_output;    // [total_tokens, d_model] - Issue #127
     // Cat 1 (graph-owned, transient): the autograd Tensor wrapper for the LM
-    // head output. Used INSIDE the autograd boundary (loss assembly,
-    // backward). Post-backward consumers MUST read from
-    // TrainingState::cached_logits_tensor (Cat 3 step-output snapshot)
-    // populated in executeAutogradForward() — NOT from this field, which
-    // AutogradStepScope clears at the boundary.
+    // head output. Used INSIDE the active autograd/forward boundary (loss
+    // assembly, backward, boundary-safe diagnostics). Any consumer that needs
+    // logits must observe this tensor explicitly before AutogradStepScope
+    // clears the boundary; there is no durable TrainingState logits snapshot.
     Tensor logits_tensor;              // [total_tokens, vocab_size] - autograd wrapper
     Tensor loss_tensor;                // Scalar loss driving backward
     std::vector<Tensor> mtp_logits_tensors;  // MTP head logits (one per k) — kept alive for backward

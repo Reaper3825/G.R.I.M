@@ -121,6 +121,7 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
     const int total_tokens = payload.total_tokens;
     result.total_tokens = total_tokens;
     result.vocab_size = payload.vocab_size;
+    result.hidden_size = cfg->d_model;
 
     MFWD_INFO("forward: batch=" << payload.batch_size << " seq=" << payload.max_seq_len
               << " tokens=" << total_tokens << " vocab=" << payload.vocab_size
@@ -554,17 +555,15 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
         intermediates.encoder_output_tensor = std::move(encoder_output_tensor);
     }
 
-    float* logits_output = ts->cached_logits_tensor.data;
-    if (!logits_output) {
-        throw std::runtime_error("ModelForward: cached_logits_tensor buffer is NULL - TrainingState MUST allocate logits buffer for forward snapshots");
-    }
-
     Tensor logits_tensor = request.lm_head->forward(
         intermediates.encoder_output_tensor,
         intermediates.centered_encoder_output,
         payload,
         request.stream,
         request.cublas_handle);
+    if (!logits_tensor.data) {
+        throw std::runtime_error("ModelForward: LMHeadLayer::forward returned logits tensor with NULL data");
+    }
 
     const float* lm_input_ptr = nullptr;
     if (intermediates.centered_encoder_output.data) {
@@ -575,12 +574,7 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
     if (!lm_input_ptr) {
         throw std::runtime_error("ModelForward: LM-head input snapshot is NULL after LMHeadLayer::forward");
     }
-    if (!ts->cached_encoder_output.data) {
-        throw std::runtime_error("ModelForward: cached_encoder_output buffer is NULL - TrainingState MUST allocate LM-head input snapshot buffer");
-    }
-    cudaMemcpyAsync(ts->cached_encoder_output.data, lm_input_ptr,
-                    static_cast<size_t>(total_tokens) * cfg->d_model * sizeof(float),
-                    cudaMemcpyDeviceToDevice, request.stream);
+    result.lm_head_input = lm_input_ptr;
 
     if constexpr (GRIM::VerboseLogging::ENABLE_EXPENSIVE_DIAGNOSTICS) {
         constexpr int kSamplePositions = 1024;
@@ -675,10 +669,7 @@ ModelForwardResult executeModelForward(ModelForwardRequest& request) {
         }
     }
 
-    cudaMemcpyAsync(logits_output, logits_tensor.data,
-                    logits_tensor.shape.total_elements() * sizeof(float),
-                    cudaMemcpyDeviceToDevice, request.stream);
-
+    result.logits_output = logits_tensor.data;
     intermediates.logits_tensor = std::move(logits_tensor);
 
     if (request.reasoning_head && request.scratch_block && request.scratch_block->isEnabled()

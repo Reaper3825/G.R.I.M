@@ -40,7 +40,8 @@
 //   - AutogradLoss.cu: forward skips target==-1, backward zeros grad for target==-1
 //   - BatchPayload.cu: defense-masks non-content tokens with target=-1
 //   - DataLoader.cu: masks non-content tokens during data loading
-// The -inf masking was poisoning every diagnostic that read cached_logits_tensor
+// The -inf masking was poisoning every diagnostic that sampled logits through
+// the old durable cached-logits side channel
 // (logit_min=-inf → logit_range=inf → logit_mean=-inf → logit_std=NaN).
 // Inference-time masking in grim_language_model_gpu.cu is SEPARATE and stays.
 
@@ -380,8 +381,11 @@ ForwardResult executeAutogradForward(AutogradContext& ctx) {
 
     ForwardResult result{};
     result.encoder_output = shared_result.encoder_output;
+    result.logits_output = shared_result.logits_output;
+    result.lm_head_input = shared_result.lm_head_input;
     result.total_tokens = shared_result.total_tokens;
     result.vocab_size = shared_result.vocab_size;
+    result.hidden_size = shared_result.hidden_size;
     result.success = shared_result.success;
     result.error_message = std::move(shared_result.error_message);
     return result;
@@ -1328,8 +1332,6 @@ LossResult autogradTrainingStep(
         }
     }
 
-    const int total_tokens = payload.total_tokens;
-    
     // Get encoder for autograd forward
     GPUGrimEncoder& gpu_encoder = model.getGpuEncoder();
     EmbeddingLayer* embedding_layer = model.getEmbeddingLayer();
@@ -1343,27 +1345,6 @@ LossResult autogradTrainingStep(
     // initAutogradContext is the single sync-boundary validator for the returned
     // BatchDeviceBindings; this step never authors payload geometry or H2D copies.
     // ═══════════════════════════════════════════════════════════════════════════
-
-    // Logit buffer capacity is still enforced here so a mis-sized payload trips
-    // immediately, before any forward kernel is launched.
-    const auto& logits_shape = training_state.cached_logits_tensor.shape.require("autogradTrainingStep cached_logits_tensor");
-    if (!logits_shape.is_2d_layout()) {
-        throw std::runtime_error("autogradTrainingStep: cached_logits_tensor must be a 2D LOGITS buffer");
-    }
-    const auto logits_dims = logits_shape.as_2d();
-    const size_t logit_limit = static_cast<size_t>(logits_dims.rows);
-    if (static_cast<size_t>(total_tokens) > logit_limit) {
-        throw std::runtime_error(
-            "autogradTrainingStep: total_tokens=" + std::to_string(total_tokens) +
-            " exceeds logit buffer capacity=" + std::to_string(logit_limit));
-    }
-    if (logits_dims.cols != payload.vocab_size) {
-        throw std::runtime_error(
-            "autogradTrainingStep: cached_logits_tensor cols=" + std::to_string(logits_dims.cols) +
-            " != payload/cfg vocab_size=" + std::to_string(payload.vocab_size) +
-            " (rows=" + std::to_string(logits_dims.rows) +
-            ", total_tokens=" + std::to_string(total_tokens) + ")");
-    }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // AUTOGRAD CONTEXT
@@ -1473,9 +1454,9 @@ LossResult autogradTrainingStep(
     
     // Rule 20 ownership taxonomy: AutogradIntermediates::clear() is owned by
     // the caller's AutogradStepScope RAII guard. Do NOT clear here. Post-step
-    // diagnostics read
-    // from TrainingState::cached_logits_tensor (Cat 3 step-output snapshot),
-    // never from intermediates.logits_tensor (Cat 1, transient).
+    // diagnostics that need live logits/LM-head input must run before that
+    // scope ends and consume explicit current-step tensors, not TrainingState
+    // snapshots.
     
     AG_INFO("Training step complete: loss=" << loss_result.loss_value);
     

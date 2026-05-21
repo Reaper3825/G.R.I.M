@@ -51,25 +51,10 @@ void TrainingState::allocateStepDeviceWorkspaces(
     const std::size_t token_capacity = static_cast<std::size_t>(config.max_tokens_per_batch);
 
     const auto max_tokens = static_cast<int>(token_capacity);
-    const auto logit_token_capacity = max_tokens;
     const auto max_batch_size = config.max_cached_batch;
 
-    cached_encoder_output = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(max_tokens, config.d_model),
-        false,
-        stream,
-        "cached_encoder_output");
-
-    cached_logits_tensor = Tensor::empty(
-        TensorContract::TensorShape::make_LOGITS(logit_token_capacity, config.vocab_size),
-        false,
-        stream,
-        "cached_logits");
-    std::cout << "✓ Allocated cached_logits [" << token_capacity << " x "
-              << config.vocab_size << "] LOGITS layout" << std::endl;
-
     cached_targets_tensor = Tensor::empty(
-        TensorContract::TensorShape::make_BSM(logit_token_capacity, 1),
+        TensorContract::TensorShape::make_BSM(max_tokens, 1),
         false,
         stream,
         "cached_targets");

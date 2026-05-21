@@ -14,6 +14,7 @@
 #include "../../GRIM/grim_language_model_cuda.hpp"
 
 namespace GRIMText { namespace Training { struct TrainingContext; } }
+namespace GRIM { struct Tensor; }
 
 namespace GRIM::Diagnostics {
 
@@ -25,6 +26,7 @@ void runTargetDistributionLog(
 void runPredictionDistributionAndLogitTrace(
     GRIMText::Training::TrainingContext& ctx,
     const GRIM::Batching::BatchPayload& payload,
+    const GRIM::Tensor& logits_tensor,
     float loss,
     int batch_idx);
 

@@ -201,15 +201,16 @@ Vector LanguageModel::executeInferenceForward_(
         throw std::runtime_error("executeInferenceForward_: forward failed - " + result.error_message);
     }
 
-    // Extract last token logits
-    if (!training_state_.cached_logits_tensor.data) {
-        throw std::runtime_error("executeInferenceForward_: cached_logits_tensor not initialized");
+    // Extract last-token logits from the explicit live forward result before
+    // AutogradIntermediates is cleared.
+    if (!result.logits_output) {
+        throw std::runtime_error("executeInferenceForward_: ModelForwardResult.logits_output is NULL");
     }
     Vector logits(config_.vocab_size);
-    const size_t last_token_offset = static_cast<size_t>(payload.max_seq_len - 1) * config_.vocab_size;
+    const size_t last_token_offset = static_cast<size_t>(payload.max_seq_len - 1) * static_cast<size_t>(result.vocab_size);
     cudaMemcpyAsync(logits.data.data(),
-                    training_state_.cached_logits_tensor.data + last_token_offset,
-                    config_.vocab_size * sizeof(float),
+                    result.logits_output + last_token_offset,
+                    static_cast<size_t>(result.vocab_size) * sizeof(float),
                     cudaMemcpyDeviceToHost, stream);
 
     cudaStreamSynchronize(stream);

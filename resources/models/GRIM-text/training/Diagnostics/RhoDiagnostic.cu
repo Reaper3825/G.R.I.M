@@ -53,8 +53,7 @@ void computeRhoDiagnostic(
     const GRIM::Batching::BatchPayload& payload,
     int batch_idx)
 {
-    const auto& ts = ctx.model->getTrainingState();
-    const auto& ai = ts.autograd_intermediates;
+    const auto& ai = ctx.model->getTrainingState().autograd_intermediates;
     const int num_layers = static_cast<int>(ai.encoder_layer_outputs.size());
     const int d_model = ctx.model_config.d_model;
     const int max_seq_len = payload.max_seq_len;
@@ -297,21 +296,27 @@ void computeRhoDiagnostic(
         }
     }
 
-    // LM head input (post-centering when centering is enabled).
-    // cached_encoder_output is overwritten with centered data after LM head forward.
-    // Using layer_id = num_layers to distinguish from raw encoder layers.
-    if (ts.cached_encoder_output.data) {
-        const auto& cached_shape = ts.cached_encoder_output.shape.require("RhoDiagnostic cached_encoder_output");
-        if (!cached_shape.is_2d_layout()) {
-            throw std::runtime_error("[RhoDiagnostic] cached_encoder_output must be a 2D buffer");
+    // LM-head input (post-centering when centering is enabled) stays live only
+    // inside the current autograd boundary. Using layer_id = num_layers to
+    // distinguish it from raw encoder layers.
+    const Tensor* lm_head_input_tensor = nullptr;
+    if (ai.centered_encoder_output.data) {
+        lm_head_input_tensor = &ai.centered_encoder_output;
+    } else if (ai.encoder_output_tensor.data) {
+        lm_head_input_tensor = &ai.encoder_output_tensor;
+    }
+    if (lm_head_input_tensor && lm_head_input_tensor->data) {
+        const auto& live_shape = lm_head_input_tensor->shape.require("RhoDiagnostic lm_head_input_tensor");
+        if (!live_shape.is_2d_layout()) {
+            throw std::runtime_error("[RhoDiagnostic] LM-head input tensor must be a 2D buffer");
         }
-        if (payload.total_tokens > cached_shape.as_2d().rows) {
+        if (payload.total_tokens > live_shape.as_2d().rows) {
             throw std::runtime_error(
                 "[RhoDiagnostic] payload.total_tokens (" + std::to_string(payload.total_tokens) +
-                ") exceeds cached_encoder_output rows (" + std::to_string(cached_shape.as_2d().rows) +
+                ") exceeds LM-head input rows (" + std::to_string(live_shape.as_2d().rows) +
                 ") at " + __FILE__ + ":" + std::to_string(__LINE__));
         }
-        auto raw = compute_rho(ts.cached_encoder_output.data);
+        auto raw = compute_rho(lm_head_input_tensor->data);
         float delta = 0.0f;
         int vs_id = -2;
         if (!layer_rhos.empty()) {

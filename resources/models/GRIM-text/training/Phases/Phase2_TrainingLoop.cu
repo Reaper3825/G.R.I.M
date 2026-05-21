@@ -496,9 +496,31 @@ BatchResult processBatch(
             ": " + loss_result.error_message);
     }
 
+    auto& active_intermediates = ctx.model->getTrainingState().autograd_intermediates;
+    if (!active_intermediates.logits_tensor.data) {
+        throw std::runtime_error(
+            "processBatch: live logits tensor is NULL after successful autogradTrainingStep — "
+            "diagnostics must run before AutogradStepScope teardown");
+    }
+    GRIM::Tensor* live_lm_head_input = nullptr;
+    if (active_intermediates.centered_encoder_output.data) {
+        live_lm_head_input = &active_intermediates.centered_encoder_output;
+    } else if (active_intermediates.encoder_output_tensor.data) {
+        live_lm_head_input = &active_intermediates.encoder_output_tensor;
+    }
+    if (!live_lm_head_input || !live_lm_head_input->data) {
+        throw std::runtime_error(
+            "processBatch: live LM-head input tensor is NULL after successful autogradTrainingStep");
+    }
+
     // Log model predictions (what it predicts vs targets) - uses ForwardPass module for filtering
     // (extracted to Diagnostics/PredictionDistributionDiagnostic.cu)
-    GRIM::Diagnostics::runPredictionDistributionAndLogitTrace(ctx, payload, result.loss, batch_idx);
+    GRIM::Diagnostics::runPredictionDistributionAndLogitTrace(
+        ctx,
+        payload,
+        active_intermediates.logits_tensor,
+        result.loss,
+        batch_idx);
     // NOTE: Loss variance computation removed (was causing 5-second GPU sync bottleneck).
     // Variance is now tracked on GPU by TelemetryLattice (σ_tilde, v_σ fields).
     // Use computeTelemetryFeedback() to access grad_norm variance for adaptive decisions.
@@ -513,7 +535,12 @@ BatchResult processBatch(
     // TRAINING SIGNAL: Logit Statistics (argmax distribution, confidence)
     // (extracted to Diagnostics/LogitScaleDiagnostic.cu)
     // ========================================================================
-    GRIM::Diagnostics::runLogitScaleDiagnostic(ctx, payload, batch_idx);
+    GRIM::Diagnostics::runLogitScaleDiagnostic(
+        ctx,
+        payload,
+        active_intermediates.logits_tensor,
+        *live_lm_head_input,
+        batch_idx);
     
     if (!std::isfinite(result.loss)) {
         throw std::runtime_error("Non-finite batch loss: " + std::to_string(result.loss));

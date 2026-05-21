@@ -52,8 +52,11 @@ using ::GRIM::LanguageModel;
  */
 struct ForwardResult {
     float* encoder_output = nullptr;  // Raw pointer to encoder output data
+    const float* logits_output = nullptr;
+    const float* lm_head_input = nullptr;
     int total_tokens = 0;
     int vocab_size = 0;
+    int hidden_size = 0;
     bool success = false;
     std::string error_message;
 };

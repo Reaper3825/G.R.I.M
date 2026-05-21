@@ -121,6 +121,8 @@ std::vector<int> buildLmValidPositionsOrThrow(
 void runLogitScaleDiagnostic(
     GRIMText::Training::TrainingContext& ctx,
     const GRIM::Batching::BatchPayload& payload,
+    const GRIM::Tensor& logits_tensor,
+    const GRIM::Tensor& lm_head_input_tensor,
     int batch_idx)
 {
     namespace Internal = ::GRIMText::Training::Internal;
@@ -129,7 +131,15 @@ void runLogitScaleDiagnostic(
     // ========================================================================
     {
         const auto& ts = ctx.model->getTrainingState();
-        if (ts.cached_logits_tensor.data && payload.batch_size > 0 && payload.max_seq_len > 0) {
+        if (payload.batch_size > 0 && payload.max_seq_len > 0) {
+            if (!logits_tensor.data) {
+                throw std::runtime_error(
+                    "runLogitScaleDiagnostic: live logits tensor is NULL inside active autograd scope");
+            }
+            if (!lm_head_input_tensor.data) {
+                throw std::runtime_error(
+                    "runLogitScaleDiagnostic: live LM-head input tensor is NULL inside active autograd scope");
+            }
             const int total_tokens = payload.total_tokens;
             const int vocab_size = payload.vocab_size;
             const int d_model = ctx.model_config.d_model;
@@ -145,21 +155,21 @@ void runLogitScaleDiagnostic(
                     std::to_string(__LINE__));
             }
 
-            const auto& logits_shape = ts.cached_logits_tensor.shape.require("runLogitScaleDiagnostic cached_logits_tensor");
+            const auto& logits_shape = logits_tensor.shape.require("runLogitScaleDiagnostic logits_tensor");
             if (!logits_shape.is_2d_layout()) {
-                throw std::runtime_error("runLogitScaleDiagnostic: cached_logits_tensor must be a 2D LOGITS buffer");
+                throw std::runtime_error("runLogitScaleDiagnostic: logits tensor must be a 2D LOGITS buffer");
             }
             const auto logits_dims = logits_shape.as_2d();
             if (logits_dims.rows < total_tokens) {
                 throw std::runtime_error(
-                    "runLogitScaleDiagnostic: cached_logits_tensor rows (" +
+                    "runLogitScaleDiagnostic: logits rows (" +
                     std::to_string(logits_dims.rows) + ") < payload.total_tokens (" +
                     std::to_string(total_tokens) + ") at " + __FILE__ + ":" +
                     std::to_string(__LINE__));
             }
             if (logits_dims.cols != vocab_size) {
                 throw std::runtime_error(
-                    "runLogitScaleDiagnostic: cached_logits_tensor cols (" +
+                    "runLogitScaleDiagnostic: logits cols (" +
                     std::to_string(logits_dims.cols) + ") != payload.vocab_size (" +
                     std::to_string(vocab_size) + ") at " + __FILE__ + ":" +
                     std::to_string(__LINE__));
@@ -172,7 +182,7 @@ void runLogitScaleDiagnostic(
             const size_t logit_bytes = static_cast<size_t>(total_tokens) * vocab_size * sizeof(float);
             std::vector<float> logit_sample(static_cast<size_t>(total_tokens) * vocab_size);
             cudaError_t logits_copy_err = cudaMemcpy(
-                logit_sample.data(), ts.cached_logits_tensor.data, logit_bytes, cudaMemcpyDeviceToHost);
+                logit_sample.data(), logits_tensor.data, logit_bytes, cudaMemcpyDeviceToHost);
             if (logits_copy_err != cudaSuccess) {
                 throw std::runtime_error(
                     std::string("runLogitScaleDiagnostic: cudaMemcpy logits failed: ") +
@@ -335,28 +345,23 @@ void runLogitScaleDiagnostic(
                 const float avg_per_pos_range = per_pos_range_sum / sample_positions;
                 
                 // --- Hidden state norms at LM head input ---
-                // cached_encoder_output contains centered data (overwritten after LM head forward)
-                const float* h_src = ts.cached_encoder_output.data;
-                if (!h_src) {
-                    throw std::runtime_error(
-                        "runLogitScaleDiagnostic: cached_encoder_output.data is NULL; "
-                        "LOGIT_SCALE_EQUATION requires the LM-head input buffer");
-                }
-                const auto& h_shape = ts.cached_encoder_output.shape.require("runLogitScaleDiagnostic cached_encoder_output");
+                // The live LM-head input tensor is centered when centering is enabled.
+                const float* h_src = lm_head_input_tensor.data;
+                const auto& h_shape = lm_head_input_tensor.shape.require("runLogitScaleDiagnostic lm_head_input_tensor");
                 if (!h_shape.is_2d_layout()) {
-                    throw std::runtime_error("runLogitScaleDiagnostic: cached_encoder_output must be a 2D hidden-state buffer");
+                    throw std::runtime_error("runLogitScaleDiagnostic: LM-head input tensor must be a 2D hidden-state buffer");
                 }
                 const auto h_dims = h_shape.as_2d();
                 if (h_dims.rows < total_tokens) {
                     throw std::runtime_error(
-                        "runLogitScaleDiagnostic: cached_encoder_output rows (" +
+                        "runLogitScaleDiagnostic: LM-head input rows (" +
                         std::to_string(h_dims.rows) + ") < payload.total_tokens (" +
                         std::to_string(total_tokens) + ") at " + __FILE__ + ":" +
                         std::to_string(__LINE__));
                 }
                 if (h_dims.cols != d_model) {
                     throw std::runtime_error(
-                        "runLogitScaleDiagnostic: cached_encoder_output cols (" +
+                        "runLogitScaleDiagnostic: LM-head input cols (" +
                         std::to_string(h_dims.cols) + ") != d_model (" +
                         std::to_string(d_model) + ") at " + __FILE__ + ":" +
                         std::to_string(__LINE__));
