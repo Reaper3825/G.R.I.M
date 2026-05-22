@@ -4,7 +4,6 @@
 //======================================================//
 
 #include "DropoutGradFn.hpp"
-#include "AddGradFn.hpp"
 #include "../TensorContract_GPU.hpp"
 #include "../../CudaAllocUtils.hpp"
 
@@ -228,38 +227,26 @@ void DropoutGradFn::release_saved() {
     input_grad_fn.reset();
 }
 
-Tensor dropout(const Tensor& x, float p, std::uint64_t seed, bool training, cudaStream_t stream,
+Tensor dropout(const Tensor& x, float p, std::uint64_t seed, cudaStream_t stream,
                std::uint64_t mask_stream_id) {
-    Tensor result = Tensor::empty(x.shape, x.requires_grad, stream, "dropout_seeded_result");
-
-    if (!training || p == 0.0f) {
-        cudaMemcpyAsync(result.data, x.data, x.size_bytes(), cudaMemcpyDeviceToDevice, stream);
-
-        if (x.requires_grad) {
-            result.is_leaf = false;
-            auto grad_fn = std::make_shared<AddGradFn>();
-            grad_fn->capture_single_input(const_cast<Tensor&>(x), stream);
-            result.grad_fn = grad_fn;
-        }
-        return result;
-    }
-
-    if (p < 0.0f || p >= 1.0f) {
+    if (p <= 0.0f || p >= 1.0f) {
         throw std::invalid_argument(
-            "autograd::dropout: dropout probability p must be in [0, 1), got " +
+            "autograd::dropout: training-only dropout probability p must be in (0, 1), got " +
             std::to_string(p));
+    }
+    if (!stream) {
+        throw std::runtime_error("autograd::dropout: stream is NULL - caller MUST provide valid stream");
+    }
+    if (!x.data) {
+        throw std::runtime_error("autograd::dropout: x.data is NULL");
     }
 
     const size_t count = x.numel();
     if (count == 0) {
-        if (x.requires_grad) {
-            result.is_leaf = false;
-            auto grad_fn = std::make_shared<AddGradFn>();
-            grad_fn->capture_single_input(const_cast<Tensor&>(x), stream);
-            result.grad_fn = grad_fn;
-        }
-        return result;
+        throw std::runtime_error("autograd::dropout: x.numel() is 0 - dropout caller must provide a non-empty training tensor");
     }
+
+    Tensor result = Tensor::empty(x.shape, x.requires_grad, stream, "dropout_seeded_result");
     const float scale = 1.0f / (1.0f - p);
     const std::uint64_t effective_seed = deriveDropoutMaskSeed(seed, mask_stream_id);
 

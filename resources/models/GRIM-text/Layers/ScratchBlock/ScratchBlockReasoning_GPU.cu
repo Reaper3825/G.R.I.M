@@ -744,7 +744,8 @@ Tensor scratch_block_project_all_tokens(
     int total_tokens,
     cudaStream_t stream,
     bool execution_first_type_only,
-    bool track_grad)
+    bool track_grad,
+    const ScratchBlockProjectionParameterViews* parameter_views)
 {
     const auto& cfg = layer.config();
     if (!token_ids) throw std::runtime_error("scratch_block_project_all_tokens: token_ids is NULL");
@@ -753,7 +754,21 @@ Tensor scratch_block_project_all_tokens(
     if (!atom_flags) throw std::runtime_error("scratch_block_project_all_tokens: atom_flags is NULL");
     if (!stream) throw std::runtime_error("scratch_block_project_all_tokens: stream is NULL");
     if (total_tokens <= 0) throw std::runtime_error("scratch_block_project_all_tokens: total_tokens must be positive");
-    if (!layer.atomProjection().data || !layer.atomTypeEmbeddings().data) {
+    if (track_grad && parameter_views) {
+        throw std::runtime_error(
+            "scratch_block_project_all_tokens: track_grad=true cannot use explicit read-only parameter views");
+    }
+
+    const Tensor& atom_type_embeddings =
+        (parameter_views && parameter_views->atom_type_embeddings)
+            ? *parameter_views->atom_type_embeddings
+            : layer.atomTypeEmbeddings();
+    const Tensor& atom_projection =
+        (parameter_views && parameter_views->atom_projection)
+            ? *parameter_views->atom_projection
+            : layer.atomProjection();
+
+    if (!atom_projection.data || !atom_type_embeddings.data) {
         throw std::runtime_error("scratch_block_project_all_tokens: ScratchBlock weights are not allocated");
     }
 
@@ -781,7 +796,7 @@ Tensor scratch_block_project_all_tokens(
             layer.atomPositionsBuffer(),
             layer.numAtomsBuffer(),
             cfg.max_atoms,
-            layer.atomTypeEmbeddings().data,
+            atom_type_embeddings.data,
             numeric_values,
             atom_flags,
             atom_mask,
@@ -796,13 +811,13 @@ Tensor scratch_block_project_all_tokens(
             layer.numAtomsBuffer(),
             cfg.max_atoms,
             layer.atomEmbeddingsBuffer(),
-            layer.atomProjection().data,
+            atom_projection.data,
             cfg.atom_embedding_dim,
             cfg.d_model,
             cfg.atom_scale);
     }
 
-    if (track_grad && (layer.atomProjection().requires_grad || layer.atomTypeEmbeddings().requires_grad)) {
+    if (track_grad && (atom_projection.requires_grad || atom_type_embeddings.requires_grad)) {
         auto grad_fn = std::make_shared<ScratchBlockProjectionGradFn>();
         grad_fn->atom_embedding_dim = cfg.atom_embedding_dim;
         grad_fn->d_model = cfg.d_model;

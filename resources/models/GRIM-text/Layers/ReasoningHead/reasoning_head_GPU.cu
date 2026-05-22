@@ -266,7 +266,8 @@ ReasoningHeadOutput ReasoningHeadLayer::forward(
     int num_atoms,
     int total_tokens,
     cudaStream_t stream,
-    cublasHandle_t cublas_handle)
+    cublasHandle_t cublas_handle,
+    const ReasoningHeadParameterViews* parameter_views)
 {
     // ════════════════════════════════════════════════════
     // Hard-fail validation (Rule 20)
@@ -290,6 +291,15 @@ ReasoningHeadOutput ReasoningHeadLayer::forward(
             throw std::runtime_error("ReasoningHeadLayer::forward: atom_positions is NULL but num_atoms=" + std::to_string(num_atoms));
     }
 
+    const Tensor& w_op =
+        (parameter_views && parameter_views->w_op) ? *parameter_views->w_op : w_op_;
+    const Tensor& b_op =
+        (parameter_views && parameter_views->b_op) ? *parameter_views->b_op : b_op_;
+    const Tensor& w_arg1 =
+        (parameter_views && parameter_views->w_arg1) ? *parameter_views->w_arg1 : w_arg1_;
+    const Tensor& w_arg2 =
+        (parameter_views && parameter_views->w_arg2) ? *parameter_views->w_arg2 : w_arg2_;
+
     // Shape validation
     if (!encoder_output.shape.is_2d_layout())
         throw std::runtime_error("ReasoningHeadLayer::forward: encoder_output must be 2D");
@@ -312,21 +322,21 @@ ReasoningHeadOutput ReasoningHeadLayer::forward(
     // Weight shape validation
     const int dt = d_total();
     {
-        const auto& ws = w_op_.shape.as_2d();
+        const auto& ws = w_op.shape.as_2d();
         if (ws.rows != hp_.num_ops || ws.cols != dt)
             throw std::runtime_error("ReasoningHeadLayer::forward: W_op shape mismatch: got [" +
                 std::to_string(ws.rows) + ", " + std::to_string(ws.cols) +
                 "], expected [" + std::to_string(hp_.num_ops) + ", " + std::to_string(dt) + "]");
     }
     {
-        const auto& ws = w_arg1_.shape.as_2d();
+        const auto& ws = w_arg1.shape.as_2d();
         if (ws.rows != 1 || ws.cols != dt)
             throw std::runtime_error("ReasoningHeadLayer::forward: w_arg1 shape mismatch: got [" +
                 std::to_string(ws.rows) + ", " + std::to_string(ws.cols) +
                 "], expected [1, " + std::to_string(dt) + "]");
     }
     {
-        const auto& ws = w_arg2_.shape.as_2d();
+        const auto& ws = w_arg2.shape.as_2d();
         if (ws.rows != 1 || ws.cols != dt)
             throw std::runtime_error("ReasoningHeadLayer::forward: w_arg2 shape mismatch: got [" +
                 std::to_string(ws.rows) + ", " + std::to_string(ws.cols) +
@@ -418,11 +428,9 @@ ReasoningHeadOutput ReasoningHeadLayer::forward(
     // ════════════════════════════════════════════════════
     // Step 4: Op logits  z_pool @ W_op^T + b_op → [1, num_ops]
     // ════════════════════════════════════════════════════
-    w_op_.requires_grad = true;
-
     Tensor op_logits = autograd::matmul(
         z_pool,
-        w_op_,
+        w_op,
         stream,
         z_pool.data,   // a_cache
         nullptr,       // b_cache (weights persist)
@@ -430,20 +438,18 @@ ReasoningHeadOutput ReasoningHeadLayer::forward(
     );
 
     // Add bias
-    if (b_op_.data) {
+    if (b_op.data) {
         const int grid = (hp_.num_ops + kBlockSize - 1) / kBlockSize;
         kernelReasoningBias<<<grid, kBlockSize, 0, stream>>>(
-            op_logits.data, b_op_.data, hp_.num_ops);
+            op_logits.data, b_op.data, hp_.num_ops);
     }
 
     // ════════════════════════════════════════════════════
     // Step 5: Arg1 logits  Z @ w_arg1^T → [num_atoms, 1]
     // ════════════════════════════════════════════════════
-    w_arg1_.requires_grad = true;
-
     Tensor arg1_raw = autograd::matmul(
         Z,
-        w_arg1_,
+        w_arg1,
         stream,
         Z.data,
         nullptr,
@@ -455,11 +461,9 @@ ReasoningHeadOutput ReasoningHeadLayer::forward(
     // ════════════════════════════════════════════════════
     // Step 6: Arg2 logits  Z @ w_arg2^T → [num_atoms, 1]
     // ════════════════════════════════════════════════════
-    w_arg2_.requires_grad = true;
-
     Tensor arg2_raw = autograd::matmul(
         Z,
-        w_arg2_,
+        w_arg2,
         stream,
         Z.data,
         nullptr,

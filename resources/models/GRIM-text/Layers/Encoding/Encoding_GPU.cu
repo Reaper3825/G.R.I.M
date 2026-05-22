@@ -480,7 +480,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
         const uint64_t attn_proj_dropout_seed = dropout_batch_seed * 2654435761ULL + 100 + layer_idx;
         const uint64_t attn_proj_dropout_mask_stream = 0x0001000000000000ULL + static_cast<uint64_t>(layer_idx);
         intermediates.proj_out = autograd::dropout(intermediates.proj_out, hp.dropout_rate,
-                                                   attn_proj_dropout_seed, true, stream,
+                                                   attn_proj_dropout_seed, stream,
                                                    attn_proj_dropout_mask_stream);
     }
     
@@ -574,7 +574,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
         const uint64_t ffn_dropout_seed = dropout_batch_seed * 2654435761ULL + 200 + layer_idx;
         const uint64_t ffn_dropout_mask_stream = 0x0002000000000000ULL + static_cast<uint64_t>(layer_idx);
         intermediates.ffn_out = autograd::dropout(intermediates.ffn_out, hp.dropout_rate,
-                                                  ffn_dropout_seed, true, stream,
+                                                  ffn_dropout_seed, stream,
                                                   ffn_dropout_mask_stream);
     }
     

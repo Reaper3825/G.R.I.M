@@ -32,6 +32,13 @@
 
 namespace GRIM {
 
+struct ReasoningHeadParameterViews {
+    const Tensor* w_op = nullptr;
+    const Tensor* b_op = nullptr;
+    const Tensor* w_arg1 = nullptr;
+    const Tensor* w_arg2 = nullptr;
+};
+
 //======================================================//
 //  ReasoningHeadOutput — returned from forward
 //======================================================//
@@ -113,7 +120,8 @@ public:
         int num_atoms,
         int total_tokens,
         cudaStream_t stream,
-        cublasHandle_t cublas_handle);
+        cublasHandle_t cublas_handle,
+        const ReasoningHeadParameterViews* parameter_views = nullptr);
 
     // Parameter access
     Tensor& W_op()    { return w_op_; }

@@ -461,7 +461,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   4. `emb_output = autograd::embedding(emb_weights, token_ids, total_tokens, stream, 1.0f)` ✅
   5. Learned position embeddings: `use_learned_pos_emb = (positional_encoding == NONE)` → **FALSE** with ALIBI_ROPE → SKIPPED ✅
   6. `intermediates.embedding_tensor = std::move(emb_output)` ✅ ownership transferred
-  7. Embedding dropout: `autograd::dropout(emb, 0.15, step*2654435761+500, is_training, stream)` ✅
+  7. Embedding dropout: training-only branch calls `autograd::dropout(emb, 0.15, step*2654435761+500, stream)`; inference skips dropout entirely ✅
   8. ScratchBlock forward operates in-place on `intermediates.embedding_tensor.data` ✅ Issue #90 fixed
 
   **Backward Path Trace (PCGrad for tied weights):**

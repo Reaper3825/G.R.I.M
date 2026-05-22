@@ -16,6 +16,7 @@
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
+#include "../../Shared/Forward/ModelForwardRuntimePayload.hpp"
 #include "../../Shared/Forward/ModelForward_GPU.hpp"
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"
@@ -359,9 +360,14 @@ bool verifyGradientsAreConnectedImpl(
 void executeAutogradForward(AutogradContext& ctx) {
     ctx.validate("executeAutogradForward");
 
+    Forward::ModelForwardRuntimePayload runtime_payload{};
+    runtime_payload.autograd_intermediates = &ctx.training_state->autograd_intermediates;
+    runtime_payload.execution_trace_by_row = &ctx.training_state->execution_trace_by_row;
+    runtime_payload.trace_state_by_row = &ctx.training_state->trace_state_by_row;
+    runtime_payload.read_gate_accum_tensor = &ctx.training_state->read_gate_accum_tensor;
+
     Forward::ModelForwardRequest request{};
     request.config = ctx.config;
-    request.runtime_state = ctx.training_state;
     request.gpu_encoder = ctx.gpu_encoder;
     request.cublas_handle = ctx.cublas_handle;
     request.stream = ctx.stream;
@@ -375,7 +381,7 @@ void executeAutogradForward(AutogradContext& ctx) {
     request.batch_idx = ctx.batch_idx;
     request.mode = Forward::ModelForwardMode::TrainingGraph;
 
-    Forward::executeModelForward(request);
+    Forward::executeModelForward(request, runtime_payload);
 }
 //======================================================================
 // Autograd Loss Computation

@@ -179,10 +179,20 @@ LMHeadLayer& LMHeadLayer::operator=(LMHeadLayer&& other) noexcept {
 
 Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
                             const Batching::BatchPayload& payload,
-                            cudaStream_t stream, cublasHandle_t cublas_handle) {
+                            cudaStream_t stream, cublasHandle_t cublas_handle,
+                            const LMHeadParameterViews* parameter_views) {
+    const Tensor& lm_weights =
+        (parameter_views && parameter_views->weights) ? *parameter_views->weights : weights_;
+    const Tensor& lm_bias =
+        (parameter_views && parameter_views->bias) ? *parameter_views->bias : bias_;
+    const Tensor& lm_final_rms_gamma =
+        (parameter_views && parameter_views->final_rms_gamma)
+            ? *parameter_views->final_rms_gamma
+            : final_rms_gamma_frozen_or_trained_;
+
     // Rule 20: Crash on invalid state
-    if (!weights_.data) {
-        throw std::runtime_error("LMHeadLayer::forward: weights not initialized");
+    if (!lm_weights.data) {
+        throw std::runtime_error("LMHeadLayer::forward: selected weights view is not initialized");
     }
     if (!stream) {
         throw std::runtime_error("LMHeadLayer::forward: stream is NULL");
@@ -193,10 +203,31 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
 
     autograd::set_autograd_cublas_handle(cublas_handle);
 
-    const int total_tokens = input.shape.as_2d().rows;
-    const int d_model = input.shape.as_2d().cols;
-    const int batch_size = payload.batch_size;
-    const int rows_per_sequence = payload.max_seq_len;
+    const int d_model = hp_.d_model;
+    int batch_size = 0;
+    int rows_per_sequence = 0;
+    int total_tokens = 0;
+
+    if (payload.isTraining()) {
+        batch_size = hp_.training_batch_size;
+        rows_per_sequence = hp_.training_rows_per_sequence;
+        if (batch_size <= 0 || rows_per_sequence <= 0) {
+            throw std::runtime_error(
+                "LMHeadLayer::forward: training payload requires config-authored fixed shape, got training_batch_size=" +
+                std::to_string(batch_size) + " training_rows_per_sequence=" +
+                std::to_string(rows_per_sequence));
+        }
+        total_tokens = batch_size * rows_per_sequence;
+    } else {
+        batch_size = payload.batch_size;
+        rows_per_sequence = payload.max_seq_len;
+        total_tokens = payload.total_tokens;
+        const int input_rows = input.shape.as_2d().rows;
+        if (input_rows != total_tokens) {
+            throw std::runtime_error("LMHeadLayer::forward: input rows (" + std::to_string(input_rows) +
+                                     ") != payload total_tokens (" + std::to_string(total_tokens) + ")");
+        }
+    }
 
     if (rows_per_sequence <= 0) {
         throw std::runtime_error("LMHeadLayer::forward: rows_per_sequence must be > 0, got " +
@@ -211,22 +242,6 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
                                  std::to_string(payload.seq_lengths.size()) +
                                  ") != batch_size (" + std::to_string(batch_size) + ")");
     }
-    if (total_tokens % rows_per_sequence != 0) {
-        throw std::runtime_error("LMHeadLayer::forward: input rows (" + std::to_string(total_tokens) +
-                                 ") must be divisible by rows_per_sequence (" +
-                                 std::to_string(rows_per_sequence) + ")");
-    }
-    if (total_tokens != batch_size * rows_per_sequence) {
-        throw std::runtime_error("LMHeadLayer::forward: input rows (" + std::to_string(total_tokens) +
-                                 ") != batch_size * rows_per_sequence (" + std::to_string(batch_size) +
-                                 " * " + std::to_string(rows_per_sequence) + ")");
-    }
-
-    if (d_model != hp_.d_model) {
-        throw std::runtime_error("LMHeadLayer::forward: input d_model mismatch (" +
-                                 std::to_string(d_model) + " vs config " +
-                                 std::to_string(hp_.d_model) + ")");
-    }
 
     // ════════════════════════════════════════════════════════════════════
     // STEP 0: Optional Final RMSNorm (pre-LM-head normalization)
@@ -238,13 +253,8 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
     const Tensor* current_input = &input;
     Tensor normalized;
 
-    if (final_rms_gamma_frozen_or_trained_.data) {
-        // Only flip requires_grad when γ is trainable. When frozen the rms_norm
-        // GradFn will skip the gamma path entirely (no grad accumulation).
-        if (!hp_.freeze_learned_rms_gammas) {
-            final_rms_gamma_frozen_or_trained_.requires_grad = true;
-        }
-        normalized = autograd::rms_norm(input, final_rms_gamma_frozen_or_trained_, hp_.rms_epsilon, stream);
+    if (lm_final_rms_gamma.data) {
+        normalized = autograd::rms_norm(input, lm_final_rms_gamma, hp_.rms_epsilon, stream);
         current_input = &normalized;
     }
 
@@ -316,8 +326,17 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
     //     grad_input  = grad_output @ weights      (for backward to encoder)
     //     grad_weights = lm_input^T @ grad_output  (for weight update)
     // ════════════════════════════════════════════════════════════════════
-    weights_.requires_grad = true;
-    weights_.shape = TensorContract::TensorShape::make_BSM(hp_.vocab_size, hp_.d_model);
+    if (!lm_weights.shape.is_2d_layout()) {
+        throw std::runtime_error("LMHeadLayer::forward: weights must be 2D [vocab_size, d_model]");
+    }
+    const auto weights_shape = lm_weights.shape.as_2d();
+    if (weights_shape.rows != hp_.vocab_size || weights_shape.cols != hp_.d_model) {
+        throw std::runtime_error(
+            "LMHeadLayer::forward: weights shape mismatch. expected=[" +
+            std::to_string(hp_.vocab_size) + "," + std::to_string(hp_.d_model) +
+            "] got=[" + std::to_string(weights_shape.rows) + "," +
+            std::to_string(weights_shape.cols) + "]");
+    }
 
     // Default path: hard type gate W_eff so the LM row indexed by token ID only
     // sees the TokenLayout class subspace assigned to that token type.
@@ -325,19 +344,20 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
     // only, without plumbing a new authored config field yet.
     const bool use_token_type_gate = kEnableLmHeadTokenTypeGateExperiment;
     const bool use_centered_weights = hp_.center_hidden_states;
-    const Tensor* effective_weights = &weights_;
+    Tensor effective_weights_storage;
+    const Tensor* effective_weights = &lm_weights;
     if (use_centered_weights && use_token_type_gate) {
-        centered_weights_ = autograd::center_rows_by_token_type_gate(weights_, stream);
-        centered_weights_.name = "lm_head.centered_token_type_gated_weights";
-        effective_weights = &centered_weights_;
+        effective_weights_storage = autograd::center_rows_by_token_type_gate(lm_weights, stream);
+        effective_weights_storage.name = "lm_head.centered_token_type_gated_weights";
+        effective_weights = &effective_weights_storage;
     } else if (use_centered_weights) {
-        centered_weights_ = autograd::center_rows(weights_, stream);
-        centered_weights_.name = "lm_head.centered_weights";
-        effective_weights = &centered_weights_;
+        effective_weights_storage = autograd::center_rows(lm_weights, stream);
+        effective_weights_storage.name = "lm_head.centered_weights";
+        effective_weights = &effective_weights_storage;
     } else if (use_token_type_gate) {
-        centered_weights_ = autograd::type_gate_rows_by_token_type(weights_, stream);
-        centered_weights_.name = "lm_head.token_type_gated_weights";
-        effective_weights = &centered_weights_;
+        effective_weights_storage = autograd::type_gate_rows_by_token_type(lm_weights, stream);
+        effective_weights_storage.name = "lm_head.token_type_gated_weights";
+        effective_weights = &effective_weights_storage;
     }
 
     if (!matmul_input->data) {
@@ -351,7 +371,7 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
         *effective_weights,
         stream,
         a_cache,
-        nullptr,  // weights persist across calls (raw or centered held by member)
+        nullptr,  // matmul copies the effective B cache it needs for backward
         true  // transpose_b=true: logits = input @ W^T
     );
 
@@ -398,9 +418,8 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
     //   grad_logits passes through to input
     //   grad_bias = sum(grad_logits, dim=0)
     // ════════════════════════════════════════════════════════════════════
-    if (hp_.use_bias && bias_.data) {
-        bias_.requires_grad = true;
-        logits = autograd::broadcast_add(logits, bias_, stream);
+    if (hp_.use_bias && lm_bias.data) {
+        logits = autograd::broadcast_add(logits, lm_bias, stream);
         logits.shape = expected_shape;  // Preserve LOGITS layout after broadcast_add
     }
 

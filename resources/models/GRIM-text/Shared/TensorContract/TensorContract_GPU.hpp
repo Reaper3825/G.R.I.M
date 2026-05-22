@@ -1344,20 +1344,21 @@ Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens,
 Tensor log_softmax(const Tensor& x, cudaStream_t stream = nullptr, bool save_output_copy = true);
 
 /**
- * Dropout with auto-generated mask: y = x * mask / (1 - p)
- * Generates mask internally using Philox PRNG.
+ * Training-only dropout with auto-generated mask: y = x * mask / (1 - p).
+ * Generates mask internally using Philox PRNG. Inference callers MUST NOT call
+ * this primitive as an identity/no-op path; guard at the training/inference
+ * boundary instead.
  * 
  * @param x Input tensor
  * @param p Dropout probability (fraction to drop, e.g., 0.1 = drop 10%)
  * @param seed Base random seed for mask generation (for reproducibility)
- * @param training If false, no dropout is applied (identity function) 
  * @param mask_stream_id Non-zero deterministic id for this dropout call site/layer.
  *        It is mixed with seed so equal base seeds do not replay masks across
  *        distinct dropout sites. Reusing both seed and mask_stream_id deliberately
  *        reproduces the same mask.
  */
-Tensor dropout(const Tensor& x, float p, uint64_t seed, bool training,
-               cudaStream_t stream, uint64_t mask_stream_id);
+Tensor dropout(const Tensor& x, float p, uint64_t seed, cudaStream_t stream,
+               uint64_t mask_stream_id);
 
 /**
  * Residual/skip connection add: y = x + residual

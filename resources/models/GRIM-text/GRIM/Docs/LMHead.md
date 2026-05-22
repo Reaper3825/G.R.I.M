@@ -11,7 +11,11 @@ LM head backward and embedding backward write to the **same buffer** via PyTorch
 
 `LMHeadLayer` consumes `HyperParameters::LMHeadLayerConstructionHP` directly. It stores that grouped construction-HP snapshot as `hp_` only because startup grouping temporaries go out of scope before forward/backward; it is **not** a second authored config owner. Runtime tying ownership must match the grouping: `tie_embeddings=true` requires a non-null embedding weight pointer, and `tie_embeddings=false` requires `nullptr`.
 
+- `LMHeadLayer::forward` is read-only over durable parameter state. Training may pass the live trainable tensors so autograd can attach graph edges, but inference-prefill must pass detached views. Forward must not restamp `weights_.shape`, toggle `requires_grad`, or cache forward-derived `W_eff` on the durable layer object.
+- The effective LM-head weight tensor (`W_eff` after token-type gating and/or row centering) is Category 1 graph-time state. It is built per call inside `LMHeadLayer::forward` and consumed immediately by `autograd::matmul`; it is not a persistent `LMHeadLayer` member.
+
 ## Hidden-state centering
+- `LMHeadLayer::forward` treats fixed-shape training geometry as config-authored via its grouped construction HP snapshot (`training_batch_size`, `training_rows_per_sequence`) and only uses `BatchPayload` to mirror/validate that rectangle plus supply `seq_lengths`. Inference prefill/decode still source runtime geometry from the payload modes.
 - Column-center `h` per sequence over real tokens only (`Σ_{t < seq_lengths[b]} h[b,t,d] = 0`) before LM head via `autograd::center_columns_by_sequence_lengths`. Never center over the full `[batch_size * seq_len, d_model]` matrix; that leaks batch-row information. Never center over the padded row stride without lengths; PAD activations are real vectors and would steer the mean.
 - The length-aware centering op zeros padded rows in forward and zeros their gradients in backward. `BatchDeviceBindings.d_seq_lengths` is the required device-side source of truth for this mask.
 - `project_out_pc1=true` composes after hidden-state centering when both flags are enabled. The LM-head matmul input is therefore `project_out_pc1(center_columns_by_sequence_lengths(RMSNorm(h)))`, not an implicit `center_hidden_states`-wins branch. This keeps the config truth aligned with the executed graph.

@@ -30,6 +30,12 @@
 
 namespace GRIM {
 
+struct LMHeadParameterViews {
+    const Tensor* weights = nullptr;
+    const Tensor* bias = nullptr;
+    const Tensor* final_rms_gamma = nullptr;
+};
+
 //======================================================//
 //  LMHeadLayer - Self-Allocating (Pattern B: Layer Ownership)
 //
@@ -128,13 +134,15 @@ public:
     ///
     /// @param input                    [total_tokens, d_model] - encoder output (MUST have grad_fn if training)
     /// @param out_centered_hidden      Output: centered hidden states (valid only if centering enabled, for diagnostics)
-    /// @param payload                  Host-side batch geometry and real lengths for padding-aware hidden centering
+    /// @param payload                  Host-side batch contents and real lengths; inference geometry comes from payload,
+    ///                                 while fixed-shape training geometry is validated against config-authored hp_
     /// @param stream                   CUDA stream from the caller's forward payload/request
     /// @param cublas_handle            cuBLAS handle from the caller's forward payload/request
     /// @return logits [total_tokens, vocab_size] with grad_fn attached
     Tensor forward(const Tensor& input, Tensor& out_centered_hidden,
                    const Batching::BatchPayload& payload,
-                   cudaStream_t stream, cublasHandle_t cublas_handle);
+                   cudaStream_t stream, cublasHandle_t cublas_handle,
+                   const LMHeadParameterViews* parameter_views = nullptr);
 
 
 
@@ -151,14 +159,6 @@ private:
     // outside this class fails to compile. Combined with the split const/mutable
     // accessors above, this constrains writes to the four declared paths.
     Tensor final_rms_gamma_frozen_or_trained_;  // [d_model] — pre-LM-head RMSNorm gamma, always owned
-
-    // Workspace for the effective LM-head weight matrix when forward() applies
-    // a derived transform to W_lm (token-type gating and/or row centering).
-    // Held as a member so its data buffer outlives forward() — the matmul
-    // GradFn captures W_eff via this tensor and backward must dereference its
-    // .data and grad chain after forward() has returned. When neither transform
-    // is active, forward() uses weights_ directly.
-    Tensor centered_weights_;
 
     bool owns_weights_ = true;  // false when tied to embedding weights
 };

@@ -186,6 +186,8 @@ struct EmbeddingLayerConstructionHP {
 struct LMHeadLayerConstructionHP {
     int d_model = 0;
     int vocab_size = 0;
+    int training_batch_size = 0;
+    int training_rows_per_sequence = 0;
     bool use_bias = false;
     bool tie_embeddings = false;
     bool center_hidden_states = false;
@@ -1101,6 +1103,16 @@ inline LMHeadLayerConstructionHP lmHeadLayerConstructionHP(
     }
     view.d_model = cfg.d_model;
     view.vocab_size = cfg.vocab_size;
+    if (cfg.execution_mode == ModelExecutionMode::TRAINING) {
+        requirePositiveGroupingValue(cfg.max_cached_batch,
+                                     "max_cached_batch",
+                                     "lmHeadLayerConstructionHP");
+        requirePositiveGroupingValue(cfg.max_cached_seq_len,
+                                     "max_cached_seq_len",
+                                     "lmHeadLayerConstructionHP");
+        view.training_batch_size = cfg.max_cached_batch;
+        view.training_rows_per_sequence = cfg.max_cached_seq_len;
+    }
     view.use_bias = cfg.use_bias;
     view.tie_embeddings = cfg.tie_embeddings;
     view.center_hidden_states = cfg.lm_head_center_hidden_states;

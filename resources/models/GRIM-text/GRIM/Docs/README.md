@@ -11,6 +11,7 @@ Per-feature documentation. Load only the feature(s) relevant to the current task
 | [Optimizer.md](Optimizer.md) | Optimizer Window boundary and dispatch ownership |
 | [TrainingState.md](TrainingState.md) | Centralized GPU resource ownership |
 | [InferenceBoundary.md](InferenceBoundary.md) | Inference/training forward split TODO |
+| [ForwardReadOnlyPlan.md](ForwardReadOnlyPlan.md) | Plan to make shared forward read-only over durable parameter state |
 | [Autograd.md](Autograd.md) | TensorContract, GradFn, intermediates lifetime |
 | [Loss.md](Loss.md) | Unified loss, registered global gradient clipping |
 | [GQA.md](GQA.md) | Grouped Query Attention shapes & backward scaling |

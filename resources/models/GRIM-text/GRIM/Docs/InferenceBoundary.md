@@ -2,6 +2,8 @@
 
 Scope: split inference execution from training/autograd orchestration while still sharing model layers and CUDA kernels.
 
+Detailed ownership-tightening work for making the shared forward primitive read-only over durable parameter state lives in [ForwardReadOnlyPlan.md](ForwardReadOnlyPlan.md).
+
 ## Target ownership boundary
 
 - Training owns `AutogradContext`, loss assembly, backward, optimizer state, and `AutogradStepScope`.

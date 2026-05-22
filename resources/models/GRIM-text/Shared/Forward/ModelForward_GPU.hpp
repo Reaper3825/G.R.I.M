@@ -21,6 +21,7 @@
 
 #include "../Batching/BatchPayload.hpp"
 #include "../Batching/BatchDeviceBindings.hpp"
+#include "ModelForwardRuntimePayload.hpp"
 #include "../HyperParameters/HyperParameters_GPU.hpp"
 
 namespace GRIM {
@@ -31,7 +32,6 @@ class ScratchBlockLayer;
 class ReasoningHeadLayer;
 class ExecutionBlockLayer;
 class GPUGrimEncoder;
-struct TrainingState;
 
 namespace Forward {
 
@@ -42,7 +42,6 @@ enum class ModelForwardMode {
 
 struct ModelForwardRequest {
     const HyperParameters::LanguageModelConfig* config = nullptr;
-    TrainingState* runtime_state = nullptr;
     GPUGrimEncoder* gpu_encoder = nullptr;
     cublasHandle_t cublas_handle = nullptr;
     cudaStream_t stream = nullptr;
@@ -62,7 +61,8 @@ struct ModelForwardRequest {
     void validate(const char* caller) const;
 };
 
-void executeModelForward(ModelForwardRequest& request);
+void executeModelForward(const ModelForwardRequest& request,
+                         ModelForwardRuntimePayload& runtime_payload);
 
 }  // namespace Forward
 }  // namespace GRIM

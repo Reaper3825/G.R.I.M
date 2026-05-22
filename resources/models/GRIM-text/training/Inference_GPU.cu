@@ -18,6 +18,7 @@
 #include <stdexcept>
 
 #include "../GRIM/grim_language_model_cuda.hpp"
+#include "../Shared/Forward/ModelForwardRuntimePayload.hpp"
 #include "../Shared/Forward/ModelForward_GPU.hpp"
 #include "../Layers/Encoding/Encoding_GPU.hpp"
 #include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
@@ -180,9 +181,14 @@ Vector LanguageModel::executeInferenceForward_(
 
     cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
 
+    Forward::ModelForwardRuntimePayload runtime_payload{};
+    runtime_payload.autograd_intermediates = &training_state_.autograd_intermediates;
+    runtime_payload.execution_trace_by_row = &generation_state_.execution_trace_by_row;
+    runtime_payload.trace_state_by_row = &generation_state_.trace_state_by_row;
+    runtime_payload.read_gate_accum_tensor = nullptr;
+
     Forward::ModelForwardRequest request{};
     request.config = &config_;
-    request.runtime_state = &training_state_;
     request.gpu_encoder = &getGpuEncoder();
     request.embedding_layer = getEmbeddingLayer();
     request.lm_head = getLmHeadLayer();
@@ -196,7 +202,7 @@ Vector LanguageModel::executeInferenceForward_(
     request.batch_idx = 0;
     request.mode = Forward::ModelForwardMode::InferencePrefill;
 
-    Forward::executeModelForward(request);
+    Forward::executeModelForward(request, runtime_payload);
 
     // Extract last-token logits from the active forward boundary before
     // AutogradIntermediates is cleared. Do not route logits through a result

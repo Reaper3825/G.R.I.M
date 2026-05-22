@@ -42,6 +42,11 @@ struct ScratchBlockConfig {
     cudaStream_t stream = nullptr;
 };
 
+struct ScratchBlockProjectionParameterViews {
+    const Tensor* atom_type_embeddings = nullptr;
+    const Tensor* atom_projection = nullptr;
+};
+
 //======================================================//
 //  ScratchBlockGradFn — Proper autograd backward node
 //
@@ -144,6 +149,9 @@ public:
     Tensor& atomTypeEmbeddings()      { return atom_type_embeddings_; }
     Tensor& atomProjection()          { return atom_projection_; }
     Tensor& structuredGateWeight()    { return structured_gate_weight_; }
+    const Tensor& atomTypeEmbeddings() const { return atom_type_embeddings_; }
+    const Tensor& atomProjection() const { return atom_projection_; }
+    const Tensor& structuredGateWeight() const { return structured_gate_weight_; }
 
     //--------------------------------------------------//
     // Statistics
@@ -272,7 +280,8 @@ Tensor scratch_block_project_all_tokens(
     int total_tokens,
     cudaStream_t stream,
     bool execution_first_type_only = false,
-    bool track_grad = true);
+    bool track_grad = true,
+    const ScratchBlockProjectionParameterViews* parameter_views = nullptr);
 
 }  // namespace autograd
 
