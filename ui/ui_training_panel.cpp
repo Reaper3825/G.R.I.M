@@ -356,15 +356,14 @@ UITrainingPanel::UITrainingPanel()
 
     trainingDatasetTarget_ = [&]() -> std::unique_ptr<DatasetTarget> {
         namespace fs = std::filesystem;
-        GRIM::Config::GrimTextPaths paths;
-        GRIM::Config::loadGrimTextPaths(paths);
+        auto snapshot = GRIM::Config::loadAiConfigSnapshot();
         fs::path grimRoot = GRIM::Config::detail::resolveGrimRoot();
-        fs::path modelStoreRoot = paths.model_store.empty()
+        fs::path modelStoreRoot = !snapshot || snapshot->grim_text_model_store.empty()
             ? grimRoot / "resources" / "models" / "model_store"
-            : fs::path(paths.model_store);
-        fs::path massDatasetPath = paths.training_data.empty()
+            : fs::path(snapshot->grim_text_model_store);
+        fs::path massDatasetPath = !snapshot || snapshot->grim_text_training_data.empty()
             ? grimRoot / "resources" / "models" / "GRIM-text" / "training" / "data" / "mass_dataset.jsonl"
-            : fs::path(paths.training_data).parent_path() / "mass_dataset.jsonl";
+            : fs::path(snapshot->grim_text_training_data).parent_path() / "mass_dataset.jsonl";
         auto dt = std::make_unique<DatasetTarget>(modelStoreRoot, massDatasetPath);
         dt->loadCurriculumRegistry();
         return dt;
@@ -1258,12 +1257,11 @@ void UITrainingPanel::submitNewModel() {
     // Auto-create model directory under model_store
     {
         namespace fs = std::filesystem;
-        GRIM::Config::GrimTextPaths paths;
-        GRIM::Config::loadGrimTextPaths(paths);
+        auto snapshot = GRIM::Config::loadAiConfigSnapshot();
         fs::path grimRoot = GRIM::Config::detail::resolveGrimRoot();
-        fs::path modelStoreRoot = paths.model_store.empty()
+        fs::path modelStoreRoot = !snapshot || snapshot->grim_text_model_store.empty()
             ? grimRoot / "resources" / "models" / "model_store"
-            : fs::path(paths.model_store);
+            : fs::path(snapshot->grim_text_model_store);
         fs::path modelDir = modelStoreRoot / bufId_;
         std::error_code ec;
         fs::create_directories(modelDir, ec);
@@ -2485,10 +2483,12 @@ void UITrainingPanel::startTrainingSession() {
     addLog("Training data found", 0);
     currentConfig.dataPath = "data/training_data.grmt";
 
-    GRIM::Config::GrimTextPaths paths;
-    if (GRIM::Config::loadGrimTextPaths(paths)) {
-        currentConfig.vocabPath = paths.vocab;
-        currentConfig.outputPath = paths.model;
+    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
+    if (snapshot && snapshot->hasRequiredGrimTextPaths()) {
+        currentConfig.dataPath = snapshot->grim_text_training_data;
+        currentConfig.vocabPath = snapshot->grim_text_vocab;
+        currentConfig.outputPath = snapshot->grim_text_model;
+        addLog("Data: " + currentConfig.dataPath, 0);
         addLog("Vocab: " + currentConfig.vocabPath, 0);
         addLog("Output: " + currentConfig.outputPath, 0);
     } else {
@@ -2744,11 +2744,11 @@ void UITrainingPanel::updateCheckpointStats() {
 }
 
 std::string UITrainingPanel::readDatasetSizeSnapshot() {
-    GRIM::Config::GrimTextPaths paths;
-    if (!GRIM::Config::loadGrimTextPaths(paths))
+    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
+    if (!snapshot || !snapshot->hasRequiredGrimTextPaths())
         return "Dataset: Config error";
 
-    const std::string grmtPath = paths.training_data;
+    const std::string grmtPath = snapshot->grim_text_training_data;
     try {
         if (std::filesystem::exists(grmtPath)) {
             auto fileSize = std::filesystem::file_size(grmtPath);
@@ -2906,18 +2906,12 @@ void UITrainingPanel::updateResourceMonitoring(float dt) {
 
 void UITrainingPanel::loadPathsFromConfig() {
     try {
-        std::ifstream configFile("ai_config.json");
-        if (!configFile.is_open()) return;
-
-        nlohmann::json config;
-        configFile >> config;
-
-        if (config.contains("paths") && config["paths"].contains("grim_text")) {
-            auto& paths = config["paths"]["grim_text"];
-            if (paths.contains("vocab")) vocabPathBuffer = paths["vocab"].get<std::string>();
-            if (paths.contains("model")) modelPathBuffer = paths["model"].get<std::string>();
-            if (paths.contains("checkpoints")) checkpointsPathBuffer = paths["checkpoints"].get<std::string>();
-            if (paths.contains("logs")) logsPathBuffer = paths["logs"].get<std::string>();
+        auto snapshot = GRIM::Config::loadAiConfigSnapshot();
+        if (snapshot && snapshot->has_grim_paths) {
+            vocabPathBuffer = makeRelativeToGrimRoot(snapshot->grim_text_vocab);
+            modelPathBuffer = makeRelativeToGrimRoot(snapshot->grim_text_model);
+            checkpointsPathBuffer = makeRelativeToGrimRoot(snapshot->grim_text_checkpoints);
+            logsPathBuffer = makeRelativeToGrimRoot(snapshot->grim_text_logs);
         }
     } catch (const std::exception& e) {
         LOG_ERROR("UITrainingPanel", "Error loading paths: " + std::string(e.what()));

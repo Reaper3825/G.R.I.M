@@ -6,12 +6,12 @@
 // This file defines the C++ structs that parse ai_config.json.
 // The JSON→C++ mapping is:
 //
-// JSON Section                → C++ Struct
-// ----------------------------------------
-// paths.grim_text            → GrimTextPaths
+// JSON Section                → C++ Owner
+// ---------------------------------------
+// paths.grim_text            → AiConfigSnapshot grim_text_* fields
 // training.config            → TrainingHyperparameters (incl. execution_block, scratch_blocks, …)
-// tokenizer                  → TokenizerConfig
-// data_collection            → DataCollectionConfig
+// tokenizer                  → AiConfigSnapshot tokenizer_* fields
+// data_collection            → AiConfigSnapshot data_collection_* fields
 //
 // RULE: All runtime defaults in TrainingHyperparameters MUST
 // match compile-time defaults in HyperParameters_GPU.hpp.
@@ -58,114 +58,15 @@ namespace GRIM {
 namespace Config {
 
 /**
- * @brief Load GRIM-text paths from ai_config.json
- * 
- * This function reads the centralized ai_config.json file that is written by
- * the UI Training Panel in GRIM.exe and provides the absolute paths for:
- * - vocab: Vocabulary file path
- * - model: Model file path
- * - training_data: Training data file path (.grmt)
- * - checkpoints: Checkpoints directory path
- * - logs: Logs directory path
- * 
- * All components (training_control_server, train_gpu, data_collection_server)
- * should use this function to ensure they read the same paths that the UI writes.
- * 
- * @param configPath Path to ai_config.json (defaults to "./ai_config.json")
- * @return true if paths were loaded successfully, false otherwise
- */
-struct GrimTextPaths {
-    std::string vocab;
-    std::string model;
-    std::string training_data;
-    std::string checkpoints;
-    std::string collected;
-    std::string directory_collection;
-    std::string verified;
-    std::string logs;
-    std::string training_status;
-    std::string collector_log;
-    std::string source_config;  // Path to source_data.json for data collection
-    std::string model_store;   // Path to model store directory for per-model configs
-    
-    bool isValid() const {
-        // At minimum, we need vocab and training_data to do any work
-        return !vocab.empty() && !training_data.empty();
-    }
-    
-    void printPaths() const {
-        std::cout << "[Config] GRIM-text paths from ai_config.json:" << std::endl;
-        std::cout << "  vocab: " << (vocab.empty() ? "(not set)" : vocab) << std::endl;
-        std::cout << "  model: " << (model.empty() ? "(not set)" : model) << std::endl;
-        std::cout << "  training_data: " << (training_data.empty() ? "(not set)" : training_data) << std::endl;
-        std::cout << "  checkpoints: " << (checkpoints.empty() ? "(not set)" : checkpoints) << std::endl;
-        std::cout << "  collected: " << (collected.empty() ? "(not set)" : collected) << std::endl;
-        std::cout << "  directory_collection: " << (directory_collection.empty() ? "(not set)" : directory_collection) << std::endl;
-        std::cout << "  verified: " << (verified.empty() ? "(not set)" : verified) << std::endl;
-        std::cout << "  logs: " << (logs.empty() ? "(not set)" : logs) << std::endl;
-        std::cout << "  training_status: " << (training_status.empty() ? "(not set)" : training_status) << std::endl;
-        std::cout << "  collector_log: " << (collector_log.empty() ? "(not set)" : collector_log) << std::endl;
-        std::cout << "  source_config: " << (source_config.empty() ? "(not set)" : source_config) << std::endl;
-        std::cout << "  model_store: " << (model_store.empty() ? "(not set)" : model_store) << std::endl;
-    }
-};
-
-/**
- * @brief Data collection configuration
- * 
- * Controls behavior of data collection pipeline (collection, verification, merging)
- */
-struct DataCollectionConfig {
-    bool clear_merged_cache_on_merge = false;  // Whether to clear merged_verified_cache.jsonl on merge
-    int max_new_entries_per_run = 5000;        // Global limit: stop after collecting this many NEW entries
-};
-
-/**
- * @brief Tokenizer configuration from ai_config.json
- * 
- * This loads the tokenizer configuration (vocab_size, max_length, model_type, etc.)
- * from the tokenizer section of ai_config.json.
- * 
- * Note: This mirrors GRIM::TokenizerConfig from Tokenizer_GPU.hpp
- * All values MUST be loaded from ai_config.json - no hardcoded defaults
- */
-struct TokenizerConfig {
-    int vocab_size = 50000;  // Target vocab size for training new tokenizer (actual size comes from vocab.bin)
-    int max_vocab_size = 0;  // Hard cap on loaded vocab (0 = no cap, >0 = keep top-K most frequent tokens)
-    int max_length = 8192;
-    int min_cleaned_text_length = 0;  // Minimum rendered/cleaned text bytes required before GRMT encoding
-    int min_subword_freq = 3;  // Minimum frequency for subwords to be included in vocab
-    bool prune_during_mining = false;  // Enable memory pruning during subword mining (disable if RAM is plentiful)
-    bool enable_parallel_subword_mining = true;  // Parallelize subword mining during vocab training
-    int subword_mining_workers = 0;  // 0 = auto, >0 fixed worker count
-    size_t subword_mining_max_bytes = 0;  // 0 = use tokenizer default ceap
-    std::string model_type = "unibytes";
-    std::vector<std::string> special_tokens = {"<pad>", "<unk>", "<s>", "</s>"};
-    bool add_bos = true;
-    bool add_eos = true;
-    std::string unk_token = "<unk>";
-    std::string pad_token = "<pad>";
-    std::string bos_token = "<s>";
-    std::string eos_token = "</s>";
-    bool enable_nfkc_normalization = true;
-    bool enable_lowercasing = true;
-    bool enable_parallel_tokenization = true;
-    int parallel_threshold = 1000;
-    bool enable_byte_fallback = true;
-    uint32_t expected_checksum = 0;
-    bool save_text_vocab = true;  // Also save human-readable .txt alongside .bin
-    float vocab_score_multiplier = 1.0f;  // Multiply all vocab scores by this value on save (experiment knob)
-};
-
-/**
  * @brief Subprocess coordinator configuration
  *
  * Read by the primitive subprocess coordinator (training/Subprocess/) BEFORE
  * any training phase begins. The fields here aggregate the JSON keys consumed
  * by the coordinator across multiple top-level sections (subprocess.* and
  * training.config.*). This is the single, centralized C++ view those flags;
- * Subprocess/ code MUST go through this struct (via loadAiConfigSnapshot /
- * loadSubprocessConfig) and MUST NOT raw-parse ai_config.json itself.
+ * Subprocess/ code MUST go through AiConfigSnapshot plus the snapshot-based
+ * loadSubprocessConfig() accessor and MUST NOT raw-parse ai_config.json
+ * itself or re-introduce a second path-based loader.
  */
 struct SubprocessConfig {
     // subprocess.tokenizer.only_mode
@@ -180,16 +81,72 @@ struct SubprocessConfig {
 struct AiConfigSnapshot {
     std::filesystem::path config_path;
     nlohmann::json document;
-    GrimTextPaths grim_paths;
+    std::string grim_text_vocab;
+    std::string grim_text_model;
+    std::string grim_text_training_data;
+    std::string grim_text_checkpoints;
+    std::string grim_text_collected;
+    std::string grim_text_directory_collection;
+    std::string grim_text_verified;
+    std::string grim_text_logs;
+    std::string grim_text_training_status;
+    std::string grim_text_collector_log;
+    std::string grim_text_source_config;
+    std::string grim_text_model_store;
     TrainingHyperparameters hyperparameters;
-    TokenizerConfig tokenizer_config;
-    DataCollectionConfig data_collection_config;
+    int tokenizer_vocab_size = 50000;
+    int tokenizer_max_vocab_size = 0;
+    int tokenizer_max_length = 8192;
+    int tokenizer_min_cleaned_text_length = 0;
+    int tokenizer_min_subword_freq = 3;
+    bool tokenizer_prune_during_mining = false;
+    bool tokenizer_enable_parallel_subword_mining = true;
+    int tokenizer_subword_mining_workers = 0;
+    size_t tokenizer_subword_mining_max_bytes = 0;
+    std::string tokenizer_model_type = "unibytes";
+    std::vector<std::string> tokenizer_special_tokens = {"<pad>", "<unk>", "<s>", "</s>"};
+    bool tokenizer_add_bos = true;
+    bool tokenizer_add_eos = true;
+    std::string tokenizer_unk_token = "<unk>";
+    std::string tokenizer_pad_token = "<pad>";
+    std::string tokenizer_bos_token = "<s>";
+    std::string tokenizer_eos_token = "</s>";
+    bool tokenizer_enable_nfkc_normalization = true;
+    bool tokenizer_enable_lowercasing = true;
+    bool tokenizer_enable_parallel_tokenization = true;
+    int tokenizer_parallel_threshold = 1000;
+    bool tokenizer_enable_byte_fallback = true;
+    uint32_t tokenizer_expected_checksum = 0;
+    bool tokenizer_save_text_vocab = true;
+    float tokenizer_vocab_score_multiplier = 1.0f;
+    bool data_collection_clear_merged_cache_on_merge = false;
+    int data_collection_max_new_entries_per_run = 5000;
     SubprocessConfig subprocess_config;
     bool has_grim_paths = false;
     bool has_training = false;
     bool has_tokenizer = false;
     bool has_data_collection = false;
     bool has_subprocess = false;
+
+    bool hasRequiredGrimTextPaths() const {
+        return !grim_text_vocab.empty() && !grim_text_training_data.empty();
+    }
+
+    void printGrimTextPaths() const {
+        std::cout << "[Config] GRIM-text paths from ai_config.json:" << std::endl;
+        std::cout << "  vocab: " << (grim_text_vocab.empty() ? "(not set)" : grim_text_vocab) << std::endl;
+        std::cout << "  model: " << (grim_text_model.empty() ? "(not set)" : grim_text_model) << std::endl;
+        std::cout << "  training_data: " << (grim_text_training_data.empty() ? "(not set)" : grim_text_training_data) << std::endl;
+        std::cout << "  checkpoints: " << (grim_text_checkpoints.empty() ? "(not set)" : grim_text_checkpoints) << std::endl;
+        std::cout << "  collected: " << (grim_text_collected.empty() ? "(not set)" : grim_text_collected) << std::endl;
+        std::cout << "  directory_collection: " << (grim_text_directory_collection.empty() ? "(not set)" : grim_text_directory_collection) << std::endl;
+        std::cout << "  verified: " << (grim_text_verified.empty() ? "(not set)" : grim_text_verified) << std::endl;
+        std::cout << "  logs: " << (grim_text_logs.empty() ? "(not set)" : grim_text_logs) << std::endl;
+        std::cout << "  training_status: " << (grim_text_training_status.empty() ? "(not set)" : grim_text_training_status) << std::endl;
+        std::cout << "  collector_log: " << (grim_text_collector_log.empty() ? "(not set)" : grim_text_collector_log) << std::endl;
+        std::cout << "  source_config: " << (grim_text_source_config.empty() ? "(not set)" : grim_text_source_config) << std::endl;
+        std::cout << "  model_store: " << (grim_text_model_store.empty() ? "(not set)" : grim_text_model_store) << std::endl;
+    }
 };
 
 inline std::optional<AiConfigSnapshot> loadAiConfigSnapshot(const std::string& configPath = "ai_config.json");
@@ -274,7 +231,7 @@ inline std::filesystem::path resolveGrimRoot() {
     return fs::current_path();
 }
 
-inline bool populateGrimTextPathsFromConfig(const nlohmann::json& config, GrimTextPaths& paths) {
+inline bool populateGrimTextPathFieldsFromConfig(const nlohmann::json& config, AiConfigSnapshot& snapshot) {
     if (!config.contains("paths")) {
         std::cerr << "[Config] WARNING: ai_config.json does not contain 'paths' section" << std::endl;
         return false;
@@ -310,18 +267,18 @@ inline bool populateGrimTextPathsFromConfig(const nlohmann::json& config, GrimTe
         }
     };
 
-    assignIfPresent("vocab", paths.vocab);
-    assignIfPresent("model", paths.model);
-    assignIfPresent("training_data", paths.training_data);
-    assignIfPresent("checkpoints", paths.checkpoints);
-    assignIfPresent("collected", paths.collected);
-    assignIfPresent("directory_collection", paths.directory_collection);
-    assignIfPresent("verified", paths.verified);
-    assignIfPresent("logs", paths.logs);
-    assignIfPresent("training_status", paths.training_status);
-    assignIfPresent("collector_log", paths.collector_log);
-    assignIfPresent("source_config", paths.source_config);
-    assignIfPresent("model_store", paths.model_store);
+    assignIfPresent("vocab", snapshot.grim_text_vocab);
+    assignIfPresent("model", snapshot.grim_text_model);
+    assignIfPresent("training_data", snapshot.grim_text_training_data);
+    assignIfPresent("checkpoints", snapshot.grim_text_checkpoints);
+    assignIfPresent("collected", snapshot.grim_text_collected);
+    assignIfPresent("directory_collection", snapshot.grim_text_directory_collection);
+    assignIfPresent("verified", snapshot.grim_text_verified);
+    assignIfPresent("logs", snapshot.grim_text_logs);
+    assignIfPresent("training_status", snapshot.grim_text_training_status);
+    assignIfPresent("collector_log", snapshot.grim_text_collector_log);
+    assignIfPresent("source_config", snapshot.grim_text_source_config);
+    assignIfPresent("model_store", snapshot.grim_text_model_store);
 
     return true;
 }
@@ -1248,20 +1205,6 @@ inline void deriveComputedHyperparameters(TrainingHyperparameters& params, const
     params.stability_override_lr_min = params.learning_rate * 0.83f;
 }
 
-/// Derive warmup_steps and dependent fields once estimated_total_steps is known (Phase2).
-/// Must be called after deriveComputedHyperparameters() and before the training loop.
-inline void deriveWarmupSteps(TrainingHyperparameters& params, int estimated_total_steps) {
-    if (estimated_total_steps <= 0)
-        throw std::runtime_error("deriveWarmupSteps: estimated_total_steps must be > 0, got " + std::to_string(estimated_total_steps));
-    if (params.warmup_fraction <= 0.0f || params.warmup_fraction >= 1.0f)
-        throw std::runtime_error("deriveWarmupSteps: warmup_fraction must be in (0, 1), got " + std::to_string(params.warmup_fraction));
-
-    params.warmup_steps = std::max(1, static_cast<int>(params.warmup_fraction * estimated_total_steps));
-    params.architecture.mtp_alpha_warmup_steps = params.warmup_steps;
-    params.telemetry_warmup_steps = params.warmup_steps;
-    params.architecture.execution_block_gate_warmup_steps = params.warmup_steps;
-}
-
 inline bool populateTrainingHyperparametersFromConfig(const nlohmann::json& config, TrainingHyperparameters& params) {
     if (config.contains("training") && config["training"].contains("config")) {
         const auto& training = config["training"];
@@ -1283,7 +1226,7 @@ inline bool populateTrainingHyperparametersFromConfig(const nlohmann::json& conf
     return false;
 }
 
-inline bool populateDataCollectionConfigFromConfig(const nlohmann::json& config, DataCollectionConfig& dc_config) {
+inline bool populateDataCollectionFieldsFromConfig(const nlohmann::json& config, AiConfigSnapshot& snapshot) {
     if (!config.contains("data_collection")) {
         return false;
     }
@@ -1293,8 +1236,12 @@ inline bool populateDataCollectionConfigFromConfig(const nlohmann::json& config,
         return false;
     }
 
-    assignTrainingField(dc_config.clear_merged_cache_on_merge, dc, "clear_merged_cache_on_merge");
-    assignTrainingField(dc_config.max_new_entries_per_run, dc, "max_new_entries_per_run");
+    assignTrainingField(snapshot.data_collection_clear_merged_cache_on_merge,
+                        dc,
+                        "clear_merged_cache_on_merge");
+    assignTrainingField(snapshot.data_collection_max_new_entries_per_run,
+                        dc,
+                        "max_new_entries_per_run");
 
     return true;
 }
@@ -1334,67 +1281,6 @@ inline bool populateSubprocessConfigFromConfig(const nlohmann::json& config, Sub
     return found_any;
 }
 
-inline bool populateTokenizerConfigFromConfig(const nlohmann::json& config, TokenizerConfig& tokenizer_config, TrainingHyperparameters& hyperparameters) {
-    if (!config.contains("tokenizer")) {
-        return false;
-    }
-
-    const auto& tok = config["tokenizer"];
-    if (!tok.is_object()) {
-        return false;
-    }
-
-    assignTrainingField(tokenizer_config.vocab_size, tok, "vocab_size");
-    assignTrainingField(tokenizer_config.max_vocab_size, tok, "max_vocab_size");
-    assignTrainingField(tokenizer_config.max_length, tok, "max_length");
-    assignTrainingField(tokenizer_config.min_cleaned_text_length, tok, "min_cleaned_text_length");
-    assignTrainingField(tokenizer_config.min_subword_freq, tok, "min_subword_freq");
-    assignTrainingField(tokenizer_config.prune_during_mining, tok, "prune_during_mining");
-    assignTrainingField(tokenizer_config.enable_parallel_subword_mining, tok, "enable_parallel_subword_mining");
-    assignTrainingField(tokenizer_config.subword_mining_workers, tok, "subword_mining_workers");
-    assignTrainingField(tokenizer_config.subword_mining_max_bytes, tok, "subword_mining_max_bytes");
-    assignTrainingField(tokenizer_config.model_type, tok, "model_type");
-    assignTrainingField(tokenizer_config.add_bos, tok, "add_bos");
-    assignTrainingField(tokenizer_config.add_eos, tok, "add_eos");
-    assignTrainingField(tokenizer_config.unk_token, tok, "unk_token");
-    assignTrainingField(tokenizer_config.pad_token, tok, "pad_token");
-    assignTrainingField(tokenizer_config.bos_token, tok, "bos_token");
-    assignTrainingField(tokenizer_config.eos_token, tok, "eos_token");
-    assignTrainingField(tokenizer_config.enable_nfkc_normalization, tok, "enable_nfkc_normalization");
-    assignTrainingField(tokenizer_config.enable_lowercasing, tok, "enable_lowercasing");
-    assignTrainingField(tokenizer_config.enable_parallel_tokenization, tok, "enable_parallel_tokenization");
-    assignTrainingField(tokenizer_config.parallel_threshold, tok, "parallel_threshold");
-    assignTrainingField(tokenizer_config.enable_byte_fallback, tok, "enable_byte_fallback");
-    assignTrainingField(tokenizer_config.expected_checksum, tok, "expected_checksum");
-    assignTrainingField(tokenizer_config.save_text_vocab, tok, "save_text_vocab");
-    assignTrainingField(tokenizer_config.vocab_score_multiplier, tok, "vocab_score_multiplier");
-
-    // If vocab_size is intentionally omitted, max_vocab_size becomes the target size.
-    if (!tok.contains("vocab_size") &&
-        tok.contains("max_vocab_size") &&
-        tokenizer_config.max_vocab_size > 0) {
-        tokenizer_config.vocab_size = tokenizer_config.max_vocab_size;
-    }
-
-    // Scratch block reasoning configuration - load into hyperparameters (single source of truth)
-    if (tok.contains("scratch_block_reasoning") && tok["scratch_block_reasoning"].is_object()) {
-        const auto& sbr = tok["scratch_block_reasoning"];
-        assignTrainingField(hyperparameters.tokenizer_enable_scratch_block_reasoning, sbr, "enabled");
-        assignTrainingField(hyperparameters.tokenizer_detect_numbers, sbr, "detect_numbers");
-    }
-
-    if (tok.contains("special_tokens") && tok["special_tokens"].is_array()) {
-        tokenizer_config.special_tokens.clear();
-        for (const auto& token : tok["special_tokens"]) {
-            if (token.is_string()) {
-                tokenizer_config.special_tokens.push_back(token.get<std::string>());
-            }
-        }
-    }
-
-    return true;
-}
-
 } // namespace detail
 
 /// Derive warmup_steps and dependent fields once estimated_total_steps is known (Phase2).
@@ -1432,47 +1318,72 @@ inline std::optional<AiConfigSnapshot> loadAiConfigSnapshot(const std::string& c
         AiConfigSnapshot snapshot;
         snapshot.config_path = *resolved_path;
         snapshot.document = std::move(config);
-        snapshot.has_grim_paths = detail::populateGrimTextPathsFromConfig(snapshot.document, snapshot.grim_paths);
+        snapshot.has_grim_paths = detail::populateGrimTextPathFieldsFromConfig(snapshot.document, snapshot);
         snapshot.has_training = detail::populateTrainingHyperparametersFromConfig(snapshot.document, snapshot.hyperparameters);
-        snapshot.has_tokenizer = detail::populateTokenizerConfigFromConfig(snapshot.document, snapshot.tokenizer_config, snapshot.hyperparameters);
-        snapshot.has_data_collection = detail::populateDataCollectionConfigFromConfig(snapshot.document, snapshot.data_collection_config);
+        snapshot.has_tokenizer = false;
+        if (snapshot.document.contains("tokenizer")) {
+            const auto& tok = snapshot.document["tokenizer"];
+            if (tok.is_object()) {
+                snapshot.has_tokenizer = true;
+
+                assignTrainingField(snapshot.tokenizer_vocab_size, tok, "vocab_size");
+                assignTrainingField(snapshot.tokenizer_max_vocab_size, tok, "max_vocab_size");
+                assignTrainingField(snapshot.tokenizer_max_length, tok, "max_length");
+                assignTrainingField(snapshot.tokenizer_min_cleaned_text_length, tok, "min_cleaned_text_length");
+                assignTrainingField(snapshot.tokenizer_min_subword_freq, tok, "min_subword_freq");
+                assignTrainingField(snapshot.tokenizer_prune_during_mining, tok, "prune_during_mining");
+                assignTrainingField(snapshot.tokenizer_enable_parallel_subword_mining, tok, "enable_parallel_subword_mining");
+                assignTrainingField(snapshot.tokenizer_subword_mining_workers, tok, "subword_mining_workers");
+                assignTrainingField(snapshot.tokenizer_subword_mining_max_bytes, tok, "subword_mining_max_bytes");
+                assignTrainingField(snapshot.tokenizer_model_type, tok, "model_type");
+                assignTrainingField(snapshot.tokenizer_add_bos, tok, "add_bos");
+                assignTrainingField(snapshot.tokenizer_add_eos, tok, "add_eos");
+                assignTrainingField(snapshot.tokenizer_unk_token, tok, "unk_token");
+                assignTrainingField(snapshot.tokenizer_pad_token, tok, "pad_token");
+                assignTrainingField(snapshot.tokenizer_bos_token, tok, "bos_token");
+                assignTrainingField(snapshot.tokenizer_eos_token, tok, "eos_token");
+                assignTrainingField(snapshot.tokenizer_enable_nfkc_normalization, tok, "enable_nfkc_normalization");
+                assignTrainingField(snapshot.tokenizer_enable_lowercasing, tok, "enable_lowercasing");
+                assignTrainingField(snapshot.tokenizer_enable_parallel_tokenization, tok, "enable_parallel_tokenization");
+                assignTrainingField(snapshot.tokenizer_parallel_threshold, tok, "parallel_threshold");
+                assignTrainingField(snapshot.tokenizer_enable_byte_fallback, tok, "enable_byte_fallback");
+                assignTrainingField(snapshot.tokenizer_expected_checksum, tok, "expected_checksum");
+                assignTrainingField(snapshot.tokenizer_save_text_vocab, tok, "save_text_vocab");
+                assignTrainingField(snapshot.tokenizer_vocab_score_multiplier, tok, "vocab_score_multiplier");
+
+                if (!tok.contains("vocab_size") &&
+                    tok.contains("max_vocab_size") &&
+                    snapshot.tokenizer_max_vocab_size > 0) {
+                    snapshot.tokenizer_vocab_size = snapshot.tokenizer_max_vocab_size;
+                }
+
+                if (tok.contains("scratch_block_reasoning") && tok["scratch_block_reasoning"].is_object()) {
+                    const auto& sbr = tok["scratch_block_reasoning"];
+                    assignTrainingField(snapshot.hyperparameters.tokenizer_enable_scratch_block_reasoning,
+                                        sbr,
+                                        "enabled");
+                    assignTrainingField(snapshot.hyperparameters.tokenizer_detect_numbers,
+                                        sbr,
+                                        "detect_numbers");
+                }
+
+                if (tok.contains("special_tokens") && tok["special_tokens"].is_array()) {
+                    snapshot.tokenizer_special_tokens.clear();
+                    for (const auto& token : tok["special_tokens"]) {
+                        if (token.is_string()) {
+                            snapshot.tokenizer_special_tokens.push_back(token.get<std::string>());
+                        }
+                    }
+                }
+            }
+        }
+        snapshot.has_data_collection = detail::populateDataCollectionFieldsFromConfig(snapshot.document, snapshot);
         snapshot.has_subprocess = detail::populateSubprocessConfigFromConfig(snapshot.document, snapshot.subprocess_config);
         return snapshot;
     } catch (const std::exception& e) {
         std::cerr << "[Config] ERROR: Exception loading ai_config.json: " << e.what() << std::endl;
         return std::nullopt;
     }
-}
-
-inline bool loadGrimTextPaths(GrimTextPaths& paths, const std::string& configPath = "ai_config.json") {
-    auto snapshot = loadAiConfigSnapshot(configPath);
-    if (!snapshot) {
-        return false;
-    }
-
-    if (!snapshot->has_grim_paths) {
-        return false;
-    }
-
-    paths = snapshot->grim_paths;
-
-    // Avoid spamming logs when polled frequently (e.g., from UI timers)
-    static std::string lastPrintedSignature;
-    const std::string signature =
-        snapshot->config_path.string() + "|" +
-        paths.vocab + "|" + paths.model + "|" + paths.training_data + "|" +
-        paths.checkpoints + "|" + paths.collected + "|" + paths.directory_collection + "|" + paths.verified + "|" +
-        paths.logs + "|" + paths.training_status + "|" +
-        paths.collector_log + "|" + paths.source_config +
-        "|" + paths.model_store;
-
-    if (signature != lastPrintedSignature) {
-        std::cout << "[Config] Loading GRIM-text paths from: " << snapshot->config_path << std::endl;
-        paths.printPaths();
-        lastPrintedSignature = signature;
-    }
-
-    return paths.isValid();
 }
 
 inline bool loadTrainingHyperparameters(TrainingHyperparameters& params, const std::string& configPath = "ai_config.json") {
@@ -1489,72 +1400,17 @@ inline bool loadTrainingHyperparameters(TrainingHyperparameters& params, const s
     return true;
 }
 
-inline bool loadTokenizerConfig(TokenizerConfig& config, const std::string& configPath = "ai_config.json") {
-    auto snapshot = loadAiConfigSnapshot(configPath);
-    if (!snapshot) {
-        return false;
-    }
-
-    if (!snapshot->has_tokenizer) {
-        return false;
-    }
-
-    config = snapshot->tokenizer_config;
-    std::cout << "[Config] Loaded tokenizer config from: " << snapshot->config_path << std::endl;
-    std::cout << "  vocab_size: " << config.vocab_size << std::endl;
-    std::cout << "  max_vocab_size: " << config.max_vocab_size << std::endl;
-    std::cout << "  max_length: " << config.max_length << std::endl;
-    std::cout << "  min_cleaned_text_length: " << config.min_cleaned_text_length << std::endl;
-    std::cout << "  enable_parallel_subword_mining: "
-              << (config.enable_parallel_subword_mining ? "true" : "false") << std::endl;
-    std::cout << "  subword_mining_workers: " << config.subword_mining_workers << std::endl;
-    std::cout << "  subword_mining_max_bytes: " << config.subword_mining_max_bytes << std::endl;
-    std::cout << "  model_type: " << config.model_type << std::endl;
-    std::cout << "  add_bos: " << (config.add_bos ? "true" : "false") << std::endl;
-    std::cout << "  add_eos: " << (config.add_eos ? "true" : "false") << std::endl;
-    std::cout << "  enable_lowercasing: " << (config.enable_lowercasing ? "true" : "false") << std::endl;
-    std::cout << "  enable_nfkc_normalization: " << (config.enable_nfkc_normalization ? "true" : "false") << std::endl;
-    std::cout << "  enable_parallel_tokenization: " << (config.enable_parallel_tokenization ? "true" : "false") << std::endl;
-    std::cout << "  parallel_threshold: " << config.parallel_threshold << std::endl;
-    std::cout << "  special_tokens: [";
-    for (size_t i = 0; i < config.special_tokens.size(); ++i) {
-        std::cout << "\"" << config.special_tokens[i] << "\"";
-        if (i + 1 < config.special_tokens.size()) std::cout << ", ";
-    }
-    std::cout << "]" << std::endl;
-    return true;
-}
-
-inline bool loadDataCollectionConfig(DataCollectionConfig& config, const std::string& configPath = "ai_config.json") {
-    auto snapshot = loadAiConfigSnapshot(configPath);
-    if (!snapshot) {
-        return false;
-    }
-
-    if (!snapshot->has_data_collection) {
-        return false;
-    }
-
-    config = snapshot->data_collection_config;
-    return true;
-}
-
 /**
- * @brief Load the SubprocessConfig view (subprocess.tokenizer.*) from ai_config.json.
+ * @brief Load the SubprocessConfig view from an already-loaded AiConfigSnapshot.
  *
- * Returns true on success, false if the config file is missing or unreadable.
- * Throws std::runtime_error (via the populator) on a present-but-malformed
- * field — the coordinator MUST fail loud rather than spawn a subprocess with
- * silently-wrong flags.
+ * The snapshot owns the single ai_config.json parse. Subprocess code should
+ * receive or load that one root object, then slice the subprocess view from it
+ * instead of reparsing the file by path.
  *
  * Missing fields default to false (the field defaults on SubprocessConfig).
  */
-inline bool loadSubprocessConfig(SubprocessConfig& config, const std::string& configPath = "ai_config.json") {
-    auto snapshot = loadAiConfigSnapshot(configPath);
-    if (!snapshot) {
-        return false;
-    }
-    config = snapshot->subprocess_config;
+inline bool loadSubprocessConfig(SubprocessConfig& config, const AiConfigSnapshot& snapshot) {
+    config = snapshot.subprocess_config;
     return true;
 }
 
@@ -1571,9 +1427,9 @@ inline bool loadSubprocessConfig(SubprocessConfig& config, const std::string& co
  */
 inline std::string getTrainingStatusFilePath() {
     // First, try to load from ai_config.json
-    GrimTextPaths paths;
-    if (loadGrimTextPaths(paths) && !paths.training_status.empty()) {
-        return paths.training_status;
+    auto snapshot = loadAiConfigSnapshot();
+    if (snapshot && snapshot->has_grim_paths && !snapshot->grim_text_training_status.empty()) {
+        return snapshot->grim_text_training_status;
     }
     
     // Fallback: Status file lives in the training directory
@@ -1605,9 +1461,9 @@ inline std::string getTrainingStatusFilePath() {
  */
 inline std::string getCheckpointDir() {
     // First, try to load from ai_config.json
-    GrimTextPaths paths;
-    if (loadGrimTextPaths(paths) && !paths.checkpoints.empty()) {
-        return paths.checkpoints;
+    auto snapshot = loadAiConfigSnapshot();
+    if (snapshot && snapshot->has_grim_paths && !snapshot->grim_text_checkpoints.empty()) {
+        return snapshot->grim_text_checkpoints;
     }
     
     // Fallback: Checkpoint directory
@@ -1632,9 +1488,9 @@ inline std::string getCheckpointDir() {
  */
 inline std::string getCollectorLogPath() {
     // First, try to load from ai_config.json
-    GrimTextPaths paths;
-    if (loadGrimTextPaths(paths) && !paths.collector_log.empty()) {
-        return paths.collector_log;
+    auto snapshot = loadAiConfigSnapshot();
+    if (snapshot && snapshot->has_grim_paths && !snapshot->grim_text_collector_log.empty()) {
+        return snapshot->grim_text_collector_log;
     }
     
     // Fallback: Collector log path
@@ -1659,9 +1515,9 @@ inline std::string getCollectorLogPath() {
  */
 inline std::string getCollectedDir() {
     // First, try to load from ai_config.json
-    GrimTextPaths paths;
-    if (loadGrimTextPaths(paths) && !paths.collected.empty()) {
-        return paths.collected;
+    auto snapshot = loadAiConfigSnapshot();
+    if (snapshot && snapshot->has_grim_paths && !snapshot->grim_text_collected.empty()) {
+        return snapshot->grim_text_collected;
     }
     
     // Fallback: Collected data directory
@@ -1686,9 +1542,9 @@ inline std::string getCollectedDir() {
  */
 inline std::string getVerifiedDir() {
     // First, try to load from ai_config.json
-    GrimTextPaths paths;
-    if (loadGrimTextPaths(paths) && !paths.verified.empty()) {
-        return paths.verified;
+    auto snapshot = loadAiConfigSnapshot();
+    if (snapshot && snapshot->has_grim_paths && !snapshot->grim_text_verified.empty()) {
+        return snapshot->grim_text_verified;
     }
     
     // Fallback: Verified data directory
@@ -1722,9 +1578,9 @@ inline uint32_t getActualVocabSize(const std::string& vocabPath = "") {
         
         // Auto-detect vocab path if not provided
         if (path.empty()) {
-            GrimTextPaths paths;
-            if (loadGrimTextPaths(paths) && !paths.vocab.empty()) {
-                path = paths.vocab;
+            auto snapshot = loadAiConfigSnapshot();
+            if (snapshot && snapshot->has_grim_paths && !snapshot->grim_text_vocab.empty()) {
+                path = snapshot->grim_text_vocab;
             } else {
                 // Fallback
                 std::filesystem::path grimRoot = std::filesystem::current_path();

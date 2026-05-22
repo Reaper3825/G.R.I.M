@@ -25,18 +25,18 @@ StageResult StageInitialize::execute(PipelineContext& ctx) {
     std::cout << "[Initialize] Resolving paths and loading config...\n";
 
     // ── Load paths from ai_config.json ──────────────────
-    GRIM::Config::GrimTextPaths grimPaths;
-    if (GRIM::Config::loadGrimTextPaths(grimPaths)) {
-        if (ctx.config.sourceConfigPath.empty() && !grimPaths.source_config.empty())
-            ctx.config.sourceConfigPath = grimPaths.source_config;
-        if (ctx.config.checkpointDir.empty() && !grimPaths.checkpoints.empty())
-            ctx.config.checkpointDir = grimPaths.checkpoints;
-        if (ctx.config.rawDir.empty() && !grimPaths.collected.empty())
-            ctx.config.rawDir = grimPaths.collected;
-        if (ctx.config.verifiedDir.empty() && !grimPaths.verified.empty())
-            ctx.config.verifiedDir = grimPaths.verified;
-        if (ctx.config.outputDir.empty() && !grimPaths.training_data.empty()) {
-            fs::path td(grimPaths.training_data);
+    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
+    if (snapshot && snapshot->has_grim_paths) {
+        if (ctx.config.sourceConfigPath.empty() && !snapshot->grim_text_source_config.empty())
+            ctx.config.sourceConfigPath = snapshot->grim_text_source_config;
+        if (ctx.config.checkpointDir.empty() && !snapshot->grim_text_checkpoints.empty())
+            ctx.config.checkpointDir = snapshot->grim_text_checkpoints;
+        if (ctx.config.rawDir.empty() && !snapshot->grim_text_collected.empty())
+            ctx.config.rawDir = snapshot->grim_text_collected;
+        if (ctx.config.verifiedDir.empty() && !snapshot->grim_text_verified.empty())
+            ctx.config.verifiedDir = snapshot->grim_text_verified;
+        if (ctx.config.outputDir.empty() && !snapshot->grim_text_training_data.empty()) {
+            fs::path td(snapshot->grim_text_training_data);
             ctx.config.outputDir = td.parent_path().string();
         }
         std::cout << "[Initialize] Loaded paths from ai_config.json\n";

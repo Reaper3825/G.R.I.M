@@ -57,11 +57,11 @@ The GRIM project uses a three-tier configuration system:
 }
 ```
 
-**JSON → C++ Struct Mapping:**
-- `paths.grim_text` → `GrimTextPaths`
+**JSON → C++ Owner Mapping:**
+- `paths.grim_text` → `AiConfigSnapshot` `grim_text_*` fields
 - `training.config` → `TrainingHyperparameters`
-- `tokenizer` → `TokenizerConfig`
-- `data_collection` → `DataCollectionConfig`
+- `tokenizer` → `AiConfigSnapshot` `tokenizer_*` fields
+- `data_collection` → `AiConfigSnapshot` `data_collection_*` fields
 
 ### 3. ai_config_paths.hpp
 **Location:** `d:\G.R.I.M\control\ai_config_paths.hpp`
@@ -69,9 +69,11 @@ The GRIM project uses a three-tier configuration system:
 **Purpose:** C++ structs and parsers for `ai_config.json`
 
 **Contains:**
-- Struct definitions (GrimTextPaths, TrainingHyperparameters, etc.)
+- Struct definitions (`AiConfigSnapshot`, `TrainingHyperparameters`, etc.)
 - JSON parsing functions (`loadAiConfigSnapshot`, `populateTrainingHyperparametersFromConfig`)
 - Default values that match `HyperParameters_GPU.hpp`
+
+**Access rule:** Consumers should prefer loading **one** `AiConfigSnapshot` and then reading fields or slicing the remaining typed views (for example `SubprocessConfig`) from that snapshot. Do not add new path-based leaf loaders that reparse `ai_config.json` for one subsection.
 
 **Rule:** Default values in C++ structs MUST match compile-time defaults in `HyperParameters_GPU.hpp`. JSON values override both at runtime.
 

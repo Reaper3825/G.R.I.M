@@ -102,12 +102,9 @@ static std::string detectFetcherFromUrl(const std::string& url) {
 }
 
 static std::string getSourceConfigPath() {
-    GRIM::Config::GrimTextPaths paths;
-    if (GRIM::Config::loadGrimTextPaths(paths) && !paths.source_config.empty()) {
-        std::filesystem::path p(paths.source_config);
-        if (p.is_absolute())
-            return paths.source_config;
-        return (std::filesystem::path(getGrimRootDir()) / paths.source_config).string();
+    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
+    if (snapshot && snapshot->has_grim_paths && !snapshot->grim_text_source_config.empty()) {
+        return snapshot->grim_text_source_config;
     }
     return (std::filesystem::path(getGrimRootDir()) / "DataCollection" / "source_data.json").string();
 }
@@ -1007,19 +1004,18 @@ UIDataHubPanel::UIDataHubPanel()
 
     {
         namespace fs = std::filesystem;
-        GRIM::Config::GrimTextPaths paths;
-        GRIM::Config::loadGrimTextPaths(paths);
+        auto snapshot = GRIM::Config::loadAiConfigSnapshot();
 
         fs::path grimRoot = GRIM::Config::detail::resolveGrimRoot();
         fs::path modelStoreRoot;
-        if (!paths.model_store.empty())
-            modelStoreRoot = fs::path(paths.model_store);
+        if (snapshot && snapshot->has_grim_paths && !snapshot->grim_text_model_store.empty())
+            modelStoreRoot = fs::path(snapshot->grim_text_model_store);
         else
             modelStoreRoot = grimRoot / "resources" / "models" / "model_store";
 
         fs::path massDatasetPath;
-        if (!paths.training_data.empty())
-            massDatasetPath = fs::path(paths.training_data).parent_path() / "mass_dataset.jsonl";
+        if (snapshot && snapshot->has_grim_paths && !snapshot->grim_text_training_data.empty())
+            massDatasetPath = fs::path(snapshot->grim_text_training_data).parent_path() / "mass_dataset.jsonl";
         else
             massDatasetPath = grimRoot / "resources" / "models" / "GRIM-text" / "training" / "data" / "mass_dataset.jsonl";
 
@@ -3128,16 +3124,16 @@ void UIDataHubPanel::pollCollectionManager() {
 }
 
 void UIDataHubPanel::updateDatasetStats() {
-    GRIM::Config::GrimTextPaths paths;
-    if (!GRIM::Config::loadGrimTextPaths(paths)) {
+    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
+    if (!snapshot || !snapshot->hasRequiredGrimTextPaths()) {
         datasetSizeInfo_ = "Dataset: Config error";
         hudFileSize_ = "N/A";
         return;
     }
 
     try {
-        if (std::filesystem::exists(paths.training_data)) {
-            auto sz = std::filesystem::file_size(paths.training_data);
+        if (std::filesystem::exists(snapshot->grim_text_training_data)) {
+            auto sz = std::filesystem::file_size(snapshot->grim_text_training_data);
             std::stringstream ss;
             if (sz >= 1024ULL * 1024 * 1024)
                 ss << std::fixed << std::setprecision(2) << (sz / (1024.0 * 1024.0 * 1024.0)) << " GB";
@@ -3152,7 +3148,7 @@ void UIDataHubPanel::updateDatasetStats() {
             hudFileSize_ = "N/A";
         }
 
-        std::string ckptDir = getResourcePath() + "/models/GRIM-text/training/checkpoints";
+        std::string ckptDir = GRIM::Config::getCheckpointDir();
         if (std::filesystem::exists(ckptDir)) {
             int count = 0;
             for (const auto& e : std::filesystem::directory_iterator(ckptDir))
@@ -3199,13 +3195,13 @@ void UIDataHubPanel::loadDirectoryCollectionPathFromConfig() {
         return;
     }
 
-    if (snapshot->grim_paths.directory_collection.empty()) {
+    if (snapshot->grim_text_directory_collection.empty()) {
         addLog("ai_config.json missing paths.grim_text.directory_collection for directory collection", 2);
         return;
     }
 
-    dirPathInput_->setText(snapshot->grim_paths.directory_collection);
-    dirScanPath_ = snapshot->grim_paths.directory_collection;
+    dirPathInput_->setText(snapshot->grim_text_directory_collection);
+    dirScanPath_ = snapshot->grim_text_directory_collection;
     dirNeedsScan_ = true;
     addLog("Loaded directory collection path from ai_config.json", 0);
 }
@@ -5035,12 +5031,11 @@ void UIDataHubPanel::layoutCBListTypeDropdownInList(float listX, float listY, fl
 void UIDataHubPanel::populateCBModelDropdown() {
     if (!cbModelDropdown_) return;
     namespace fs = std::filesystem;
-    GRIM::Config::GrimTextPaths paths;
-    GRIM::Config::loadGrimTextPaths(paths);
+    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
     fs::path grimRoot = GRIM::Config::detail::resolveGrimRoot();
     fs::path modelStoreRoot;
-    if (!paths.model_store.empty())
-        modelStoreRoot = fs::path(paths.model_store);
+    if (snapshot && snapshot->has_grim_paths && !snapshot->grim_text_model_store.empty())
+        modelStoreRoot = fs::path(snapshot->grim_text_model_store);
     else
         modelStoreRoot = grimRoot / "resources" / "models" / "model_store";
 

@@ -1017,8 +1017,8 @@ struct TrainingHyperparameters {
 // only be entered through this header).
 #define GRIM_HP_GPU_DEFINED_TRAINING_STRUCTS 1
 
-// Include the config header (JSON loaders + path utils + TokenizerConfig +
-// GrimTextPaths + AiConfigSnapshot). ai_config_paths.hpp does NOT include
+// Include the config header (JSON loaders + path utils + AiConfigSnapshot +
+// AiConfigSnapshot tokenizer/data-collection fields). ai_config_paths.hpp does NOT include
 // this file back; it asserts via #error that the sentinel above is set, so
 // it can only be entered through this header.
 #include "../../../../../control/ai_config_paths.hpp"
@@ -1417,7 +1417,31 @@ struct PathConfig {
 struct StartupConfig {
     PathConfig paths;
     GRIM::Config::TrainingHyperparameters hyperparameters;
-    GRIM::Config::TokenizerConfig tokenizer_config;
+    int tokenizer_vocab_size = 50000;
+    int tokenizer_max_vocab_size = 0;
+    int tokenizer_max_length = 8192;
+    int tokenizer_min_cleaned_text_length = 0;
+    int tokenizer_min_subword_freq = 3;
+    bool tokenizer_prune_during_mining = false;
+    bool tokenizer_enable_parallel_subword_mining = true;
+    int tokenizer_subword_mining_workers = 0;
+    size_t tokenizer_subword_mining_max_bytes = 0;
+    std::string tokenizer_model_type = "unibytes";
+    std::vector<std::string> tokenizer_special_tokens = {"<pad>", "<unk>", "<s>", "</s>"};
+    bool tokenizer_add_bos = true;
+    bool tokenizer_add_eos = true;
+    std::string tokenizer_unk_token = "<unk>";
+    std::string tokenizer_pad_token = "<pad>";
+    std::string tokenizer_bos_token = "<s>";
+    std::string tokenizer_eos_token = "</s>";
+    bool tokenizer_enable_nfkc_normalization = true;
+    bool tokenizer_enable_lowercasing = true;
+    bool tokenizer_enable_parallel_tokenization = true;
+    int tokenizer_parallel_threshold = 1000;
+    bool tokenizer_enable_byte_fallback = true;
+    uint32_t tokenizer_expected_checksum = 0;
+    bool tokenizer_save_text_vocab = true;
+    float tokenizer_vocab_score_multiplier = 1.0f;
     GenerationConfig generation;
 
     // Convenience accessor: architecture lives inside hyperparameters now.
@@ -1439,7 +1463,7 @@ struct StartupConfig {
  *   1. Resolve --config path from argv (default: ai_config.json)
  *   2. loadAiConfigSnapshot()       — typed JSON parse
  *   3. Copy paths from snapshot->grim_paths into PathConfig
- *   4. Copy hyperparameters + tokenizer_config from snapshot
+ *   4. Copy hyperparameters + tokenizer_* fields from snapshot
  *   5. loadModelArchitecture()      — JSON → ModelArchitecture
  *   6. loadGenerationConfig()       — JSON → GenerationConfig
  *   7. Resolve max_seq_len (stability_override vs hyperparameters.architecture.max_seq_len)
@@ -1471,25 +1495,48 @@ inline StartupConfig loadStartupConfig(int argc, char** argv) {
     }
 
     // 3. Paths
-    if (!snapshot->grim_paths.isValid()) {
+    if (!snapshot->hasRequiredGrimTextPaths()) {
         throw std::runtime_error(
             "FATAL: ai_config.json paths.grim_text missing required fields "
             "(at minimum vocab + training_data must be non-empty)");
     }
     config.paths.config_path       = snapshot->config_path;
-    const auto& gp                 = snapshot->grim_paths;
-    config.paths.data_path         = gp.training_data;
-    config.paths.vocab_path        = gp.vocab;
-    config.paths.output_model_path = gp.model;
-    config.paths.checkpoint_dir    = gp.checkpoints;
-    config.paths.log_dir           = gp.logs;
-    config.paths.status_path       = gp.training_status;
+    config.paths.data_path         = snapshot->grim_text_training_data;
+    config.paths.vocab_path        = snapshot->grim_text_vocab;
+    config.paths.output_model_path = snapshot->grim_text_model;
+    config.paths.checkpoint_dir    = snapshot->grim_text_checkpoints;
+    config.paths.log_dir           = snapshot->grim_text_logs;
+    config.paths.status_path       = snapshot->grim_text_training_status;
 
-    // 4. Hyperparameters & tokenizer config
+    // 4. Hyperparameters & tokenizer settings
     if (snapshot->has_training) {
         config.hyperparameters = snapshot->hyperparameters;
     }
-    config.tokenizer_config = snapshot->tokenizer_config;
+    config.tokenizer_vocab_size = snapshot->tokenizer_vocab_size;
+    config.tokenizer_max_vocab_size = snapshot->tokenizer_max_vocab_size;
+    config.tokenizer_max_length = snapshot->tokenizer_max_length;
+    config.tokenizer_min_cleaned_text_length = snapshot->tokenizer_min_cleaned_text_length;
+    config.tokenizer_min_subword_freq = snapshot->tokenizer_min_subword_freq;
+    config.tokenizer_prune_during_mining = snapshot->tokenizer_prune_during_mining;
+    config.tokenizer_enable_parallel_subword_mining = snapshot->tokenizer_enable_parallel_subword_mining;
+    config.tokenizer_subword_mining_workers = snapshot->tokenizer_subword_mining_workers;
+    config.tokenizer_subword_mining_max_bytes = snapshot->tokenizer_subword_mining_max_bytes;
+    config.tokenizer_model_type = snapshot->tokenizer_model_type;
+    config.tokenizer_special_tokens = snapshot->tokenizer_special_tokens;
+    config.tokenizer_add_bos = snapshot->tokenizer_add_bos;
+    config.tokenizer_add_eos = snapshot->tokenizer_add_eos;
+    config.tokenizer_unk_token = snapshot->tokenizer_unk_token;
+    config.tokenizer_pad_token = snapshot->tokenizer_pad_token;
+    config.tokenizer_bos_token = snapshot->tokenizer_bos_token;
+    config.tokenizer_eos_token = snapshot->tokenizer_eos_token;
+    config.tokenizer_enable_nfkc_normalization = snapshot->tokenizer_enable_nfkc_normalization;
+    config.tokenizer_enable_lowercasing = snapshot->tokenizer_enable_lowercasing;
+    config.tokenizer_enable_parallel_tokenization = snapshot->tokenizer_enable_parallel_tokenization;
+    config.tokenizer_parallel_threshold = snapshot->tokenizer_parallel_threshold;
+    config.tokenizer_enable_byte_fallback = snapshot->tokenizer_enable_byte_fallback;
+    config.tokenizer_expected_checksum = snapshot->tokenizer_expected_checksum;
+    config.tokenizer_save_text_vocab = snapshot->tokenizer_save_text_vocab;
+    config.tokenizer_vocab_score_multiplier = snapshot->tokenizer_vocab_score_multiplier;
 
     // 5. + 6. Architecture and generation — single source of truth for JSON keys.
     //         max_seq_len/use_gpu/use_flash_attention were populated into

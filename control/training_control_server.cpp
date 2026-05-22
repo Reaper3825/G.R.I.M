@@ -314,8 +314,8 @@ public:
         // Set working directory to GRIM root so train_gpu.exe can find ai_config.json
         fs::path workingDir = fs::absolute(grimRoot);
         
-        // Use paths from config (which are now loaded from ai_config.json and resolved to absolute paths)
-        // The paths should already be absolute after populateGrimTextPathsFromConfig() resolves them
+        // Use paths from config (loaded from ai_config.json and resolved to absolute paths)
+        // The snapshot fields should already be absolute after populateGrimTextPathFieldsFromConfig() resolves them
         // But if they're still relative (backward compatibility), resolve them from GRIM root
         fs::path dataPath = config.dataPath;
         fs::path vocabPath = config.vocabPath;
@@ -1144,24 +1144,24 @@ int main(int argc, char** argv) {
     std::cout << "[Server] State initialized to Idle" << std::endl;
     
     // Load paths from ai_config.json (the centralized source of truth)
-    GRIM::Config::GrimTextPaths grimPaths;
-    if (GRIM::Config::loadGrimTextPaths(grimPaths)) {
+    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
+    if (snapshot && snapshot->has_grim_paths) {
         // Update config with loaded paths
         InternalTrainingConfig loadedConfig = g_state.getConfig();
         
-        if (!grimPaths.training_data.empty()) {
-            loadedConfig.dataPath = grimPaths.training_data;
-            std::cout << "[Server] ✓ Loaded training_data path from ai_config.json: " << grimPaths.training_data << std::endl;
+        if (!snapshot->grim_text_training_data.empty()) {
+            loadedConfig.dataPath = snapshot->grim_text_training_data;
+            std::cout << "[Server] ✓ Loaded training_data path from ai_config.json: " << snapshot->grim_text_training_data << std::endl;
         }
         
-        if (!grimPaths.vocab.empty()) {
-            loadedConfig.vocabPath = grimPaths.vocab;
-            std::cout << "[Server] ✓ Loaded vocab path from ai_config.json: " << grimPaths.vocab << std::endl;
+        if (!snapshot->grim_text_vocab.empty()) {
+            loadedConfig.vocabPath = snapshot->grim_text_vocab;
+            std::cout << "[Server] ✓ Loaded vocab path from ai_config.json: " << snapshot->grim_text_vocab << std::endl;
         }
         
-        if (!grimPaths.model.empty()) {
-            loadedConfig.outputPath = grimPaths.model;
-            std::cout << "[Server] ✓ Loaded model path from ai_config.json: " << grimPaths.model << std::endl;
+        if (!snapshot->grim_text_model.empty()) {
+            loadedConfig.outputPath = snapshot->grim_text_model;
+            std::cout << "[Server] ✓ Loaded model path from ai_config.json: " << snapshot->grim_text_model << std::endl;
         }
         
         g_state.updateConfig(loadedConfig);

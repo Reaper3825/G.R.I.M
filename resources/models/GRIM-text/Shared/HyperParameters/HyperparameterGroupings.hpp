@@ -684,31 +684,30 @@ inline DataLoadingHP dataLoadingHP(const StartupConfig& config) {
 }
 
 inline TokenizerHP tokenizerHP(const StartupConfig& config) {
-    const auto& tok = config.tokenizer_config;
     const auto& hp = config.hyperparameters;
 
     TokenizerHP view;
     view.data_path = config.paths.data_path;
     view.vocab_path = config.paths.vocab_path;
-    view.target_vocab_size = tok.vocab_size;
-    if (tok.max_vocab_size > 0 && view.target_vocab_size > tok.max_vocab_size) {
-        view.target_vocab_size = tok.max_vocab_size;
+    view.target_vocab_size = config.tokenizer_vocab_size;
+    if (config.tokenizer_max_vocab_size > 0 && view.target_vocab_size > config.tokenizer_max_vocab_size) {
+        view.target_vocab_size = config.tokenizer_max_vocab_size;
     }
     view.character_coverage = TOKENIZER_CHARACTER_COVERAGE;
-    view.min_cleaned_text_length = tok.min_cleaned_text_length;
-    view.min_subword_freq = tok.min_subword_freq;
-    view.prune_during_mining = tok.prune_during_mining;
-    view.enable_parallel_subword_mining = tok.enable_parallel_subword_mining;
-    view.subword_mining_workers = tok.subword_mining_workers;
-    view.subword_mining_max_bytes = tok.subword_mining_max_bytes;
+    view.min_cleaned_text_length = config.tokenizer_min_cleaned_text_length;
+    view.min_subword_freq = config.tokenizer_min_subword_freq;
+    view.prune_during_mining = config.tokenizer_prune_during_mining;
+    view.enable_parallel_subword_mining = config.tokenizer_enable_parallel_subword_mining;
+    view.subword_mining_workers = config.tokenizer_subword_mining_workers;
+    view.subword_mining_max_bytes = config.tokenizer_subword_mining_max_bytes;
     view.enable_scratch_block_reasoning = hp.tokenizer_enable_scratch_block_reasoning;
     view.detect_numbers = hp.tokenizer_detect_numbers;
-    view.enable_byte_fallback = tok.enable_byte_fallback;
-    view.add_bos = tok.add_bos;
-    view.add_eos = tok.add_eos;
+    view.enable_byte_fallback = config.tokenizer_enable_byte_fallback;
+    view.add_bos = config.tokenizer_add_bos;
+    view.add_eos = config.tokenizer_add_eos;
     view.force_rebuild_vocab = hp.force_rebuild_vocab;
-    view.save_text_vocab = tok.save_text_vocab;
-    view.vocab_score_multiplier = tok.vocab_score_multiplier;
+    view.save_text_vocab = config.tokenizer_save_text_vocab;
+    view.vocab_score_multiplier = config.tokenizer_vocab_score_multiplier;
     view.current_curriculum = hp.current_curriculum;
     view.current_model_training = hp.current_model_training;
     view.execution_block_num_steps = hp.architecture.execution_block_num_steps;

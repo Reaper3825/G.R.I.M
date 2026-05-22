@@ -218,8 +218,8 @@ bool ProcessManager::launchGrimTextServer(ProcessSlot& slot, const ModelInfo& mo
     }
 
     // Load paths from config
-    Config::GrimTextPaths grim_paths;
-    if (!Config::loadGrimTextPaths(grim_paths, "ai_config.json")) {
+    auto snapshot = Config::loadAiConfigSnapshot("ai_config.json");
+    if (!snapshot || !snapshot->hasRequiredGrimTextPaths()) {
         LOG_ERROR("ProcessManager", "Failed to load paths from ai_config.json for model '" + model.id + "'");
         return false;
     }
@@ -238,8 +238,8 @@ bool ProcessManager::launchGrimTextServer(ProcessSlot& slot, const ModelInfo& mo
         server_exe = fs::absolute("resources/models/GRIM-text/training/build/Release/grim_text_server.exe");
     }
 
-    fs::path vocab_path = fs::absolute(grim_paths.vocab);
-    fs::path model_weights = fs::absolute(grim_paths.model);
+    fs::path vocab_path = fs::absolute(snapshot->grim_text_vocab);
+    fs::path model_weights = fs::absolute(snapshot->grim_text_model);
 
     if (!fs::exists(server_exe)) {
         LOG_ERROR("ProcessManager", "Server executable not found: " + server_exe.string());
@@ -353,8 +353,8 @@ bool ProcessManager::launchGrimTextServer(ProcessSlot& slot, const ModelInfo& mo
     } catch (...) {}
 
     // Load paths from config
-    Config::GrimTextPaths grim_paths;
-    if (!Config::loadGrimTextPaths(grim_paths, "ai_config.json")) {
+    auto snapshot = Config::loadAiConfigSnapshot("ai_config.json");
+    if (!snapshot || !snapshot->hasRequiredGrimTextPaths()) {
         LOG_ERROR("ProcessManager", "Failed to load paths from ai_config.json for model '" + model.id + "'");
         return false;
     }
@@ -367,8 +367,8 @@ bool ProcessManager::launchGrimTextServer(ProcessSlot& slot, const ModelInfo& mo
         server_exe = fs::absolute("resources/models/GRIM-text/training/build/Release/grim_text_server");
     }
 
-    fs::path vocab_path = fs::absolute(grim_paths.vocab);
-    fs::path model_weights = fs::absolute(grim_paths.model);
+    fs::path vocab_path = fs::absolute(snapshot->grim_text_vocab);
+    fs::path model_weights = fs::absolute(snapshot->grim_text_model);
 
     if (!fs::exists(server_exe)) {
         LOG_ERROR("ProcessManager", "Server executable not found: " + server_exe.string());

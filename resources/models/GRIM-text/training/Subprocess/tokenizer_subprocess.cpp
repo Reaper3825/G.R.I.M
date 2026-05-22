@@ -53,19 +53,27 @@ tokenizer_subprocess_result run_tokenizer_subprocess(
             "tokenizer_subprocess: ai_config.json does not exist at: " + req.config_path);
     }
 
-    // Centralized config read. loadSubprocessConfig() throws on a malformed
-    // field (Rule 20: fail loud). Returns false ONLY when the file itself is
-    // missing/unreadable, which we already handled above — so a false return
-    // here is a true infrastructure failure, not a missing-field condition.
-    GRIM::Config::SubprocessConfig sub_cfg;
-    if (!GRIM::Config::loadSubprocessConfig(sub_cfg, req.config_path)) {
+    // Centralized config read. The subprocess coordinator consumes one
+    // AiConfigSnapshot root and slices SubprocessConfig from it rather than
+    // reparsing ai_config.json through a second path-based accessor.
+    auto snapshot = GRIM::Config::loadAiConfigSnapshot(req.config_path);
+    if (!snapshot) {
         throw std::runtime_error(
-            "tokenizer_subprocess: GRIM::Config::loadSubprocessConfig failed for: " + req.config_path);
+            "tokenizer_subprocess: GRIM::Config::loadAiConfigSnapshot failed for: " + req.config_path);
     }
+
+    GRIM::Config::SubprocessConfig sub_cfg;
+    if (!GRIM::Config::loadSubprocessConfig(sub_cfg, *snapshot)) {
+        throw std::runtime_error(
+            "tokenizer_subprocess: GRIM::Config::loadSubprocessConfig failed for: " +
+            snapshot->config_path.string());
+    }
+
+    const std::string resolved_config_path = snapshot->config_path.string();
 
     std::string startup_argv0 = "tokenizer_subprocess";
     std::string startup_config_flag = "--config";
-    std::string startup_config_path = req.config_path;
+    std::string startup_config_path = resolved_config_path;
     char* startup_argv[] = {
         startup_argv0.data(),
         startup_config_flag.data(),
@@ -76,7 +84,7 @@ tokenizer_subprocess_result run_tokenizer_subprocess(
     if (tokenizer_hp.vocab_path.empty() || tokenizer_hp.data_path.empty()) {
         throw std::runtime_error(
             "tokenizer_subprocess: TokenizerHP missing vocab_path and/or data_path for: " +
-            req.config_path);
+            resolved_config_path);
     }
 
     subprocess_request sreq;
@@ -86,7 +94,7 @@ tokenizer_subprocess_result run_tokenizer_subprocess(
         : req.executable_path_override;
 
     if (req.status_file_path_override.empty()) {
-        fs::path config_dir = fs::absolute(req.config_path).parent_path();
+        fs::path config_dir = snapshot->config_path.parent_path();
         sreq.status_file_path =
             (config_dir / ".subprocess" / "tokenizer_status.json").string();
     } else {
@@ -96,7 +104,7 @@ tokenizer_subprocess_result run_tokenizer_subprocess(
     sreq.arguments.push_back("--status-file");
     sreq.arguments.push_back(sreq.status_file_path);
     sreq.arguments.push_back("--config");
-    sreq.arguments.push_back(req.config_path);
+    sreq.arguments.push_back(resolved_config_path);
 
     const subprocess_result env = spawn_and_wait(sreq);
 

@@ -54,7 +54,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **FIXED**: Stability override validation - throws if `batch_size <= 0` when stability enabled (Rule 20)
   - **FIXED**: `actual_batch_size` ternary simplified - `batch_size` already overridden by loadConfiguration, no redundant access
   - **NOTE**: `debug_gradient_attribution` block exists but hardcoded `false` (production disabled) - kept for Issue #60 debugging
-  - **NOTE**: Double ai_config.json snapshot load (once for hyperparams, once for tokenizer_config) - minor, not a training bug
+  - **FIXED**: Startup config now carries tokenizer settings directly from the single `AiConfigSnapshot`; no separate `TokenizerConfig` sidecar or second tokenizer-config handoff remains.
   - File reduced from ~1828 → ~1760 lines.
 
 ---

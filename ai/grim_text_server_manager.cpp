@@ -97,16 +97,16 @@ bool GRIMTextServerManager::start() {
     LOG_DEBUG("GRIMTextServer", "Starting GRIM-text server...");
     
     // ✅ Load paths from ai_config.json
-    Config::GrimTextPaths grimPaths;
-    if (!Config::loadGrimTextPaths(grimPaths, "ai_config.json")) {
+    auto snapshot = Config::loadAiConfigSnapshot("ai_config.json");
+    if (!snapshot || !snapshot->hasRequiredGrimTextPaths()) {
         LOG_ERROR("GRIMTextServer", "Failed to load paths from ai_config.json");
         return false;
     }
     
     // Resolve absolute paths
     fs::path serverExe = fs::absolute(serverPath_);
-    fs::path vocabPath = fs::absolute(grimPaths.vocab);
-    fs::path modelPath = fs::absolute(grimPaths.model);  // ✅ Read model path from ai_config.json
+    fs::path vocabPath = fs::absolute(snapshot->grim_text_vocab);
+    fs::path modelPath = fs::absolute(snapshot->grim_text_model);  // ✅ Read model path from ai_config.json
     
     if (!fs::exists(serverExe)) {
         LOG_ERROR("GRIMTextServer", "Server executable not found: " + serverExe.string());

@@ -535,16 +535,26 @@ public:
 WebDataCollector::WebDataCollector()
     : config_(), stats_(), curl_handle_(nullptr)
 {
-    // Load checkpoint directory from ai_config
-    config_.output_dir = GRIM::Config::getCheckpointDir();
-    
-    // Load collector log path from ai_config
-    config_.log_file = GRIM::Config::getCollectorLogPath();
-    
-    // Load max_new_entries_per_run from ai_config.json
-    GRIM::Config::DataCollectionConfig dc_config;
-    if (GRIM::Config::loadDataCollectionConfig(dc_config)) {
-        config_.max_new_entries_per_run = dc_config.max_new_entries_per_run;
+    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
+    if (snapshot && snapshot->has_grim_paths) {
+        if (!snapshot->grim_text_checkpoints.empty()) {
+            config_.output_dir = snapshot->grim_text_checkpoints;
+        }
+        if (!snapshot->grim_text_collector_log.empty()) {
+            config_.log_file = snapshot->grim_text_collector_log;
+        }
+    }
+
+    if (config_.output_dir.empty()) {
+        config_.output_dir = GRIM::Config::getCheckpointDir();
+    }
+
+    if (config_.log_file.empty()) {
+        config_.log_file = GRIM::Config::getCollectorLogPath();
+    }
+
+    if (snapshot && snapshot->has_data_collection) {
+        config_.max_new_entries_per_run = snapshot->data_collection_max_new_entries_per_run;
     }
     
     curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -578,22 +588,30 @@ WebDataCollector::WebDataCollector()
 WebDataCollector::WebDataCollector(const CollectorConfig& config)
     : config_(config), stats_(), curl_handle_(nullptr)
 {
-    // If output_dir not set in config, use ai_config default
+    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
+    if (snapshot && snapshot->has_grim_paths) {
+        if (config_.output_dir.empty() && !snapshot->grim_text_checkpoints.empty()) {
+            config_.output_dir = snapshot->grim_text_checkpoints;
+        }
+        if (config_.log_file.empty() && !snapshot->grim_text_collector_log.empty()) {
+            config_.log_file = snapshot->grim_text_collector_log;
+        }
+    }
+
+    // If output_dir not set in config, use ai_config default/fallback.
     if (config_.output_dir.empty()) {
         config_.output_dir = GRIM::Config::getCheckpointDir();
     }
     
-    // If log_file not set in config, use ai_config default
+    // If log_file not set in config, use ai_config default/fallback.
     if (config_.log_file.empty()) {
         config_.log_file = GRIM::Config::getCollectorLogPath();
     }
     
-    // If max_new_entries_per_run not explicitly set, load from ai_config.json
-    if (config_.max_new_entries_per_run == 5000) {  // Check if still default
-        GRIM::Config::DataCollectionConfig dc_config;
-        if (GRIM::Config::loadDataCollectionConfig(dc_config)) {
-            config_.max_new_entries_per_run = dc_config.max_new_entries_per_run;
-        }
+    // If max_new_entries_per_run not explicitly set, load from the snapshot-owned
+    // data_collection view rather than reparsing ai_config.json through a second loader.
+    if (config_.max_new_entries_per_run == 5000 && snapshot && snapshot->has_data_collection) {  // Check if still default
+        config_.max_new_entries_per_run = snapshot->data_collection_max_new_entries_per_run;
     }
     
     curl_global_init(CURL_GLOBAL_DEFAULT);

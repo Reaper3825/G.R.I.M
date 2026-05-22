@@ -948,9 +948,9 @@ int runMerge(const std::string& checkpoint_dir, const std::string& verified_dir,
     }
     if (resolved_output_dir.empty()) {
         // Get the training data directory from ai_config.json (same location DataLoader expects)
-        GRIM::Config::GrimTextPaths paths;
-        if (GRIM::Config::loadGrimTextPaths(paths) && !paths.training_data.empty()) {
-            resolved_output_dir = fs::path(paths.training_data).parent_path().string();
+        auto snapshot = GRIM::Config::loadAiConfigSnapshot();
+        if (snapshot && snapshot->has_grim_paths && !snapshot->grim_text_training_data.empty()) {
+            resolved_output_dir = fs::path(snapshot->grim_text_training_data).parent_path().string();
             std::cout << "  Using training data directory from config: " << resolved_output_dir << "\n";
         } else {
             resolved_output_dir = "data";
@@ -1632,11 +1632,11 @@ int StartDataCollection(int argc, char** argv, std::function<void(float)> progre
 
     // Load paths from ai_config.json (centralized source of truth)
     std::cout << "[DataPipeline] Loading paths from ai_config.json..." << std::endl;
-    GRIM::Config::GrimTextPaths grimPaths;
-    if (GRIM::Config::loadGrimTextPaths(grimPaths)) {
+    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
+    if (snapshot && snapshot->has_grim_paths) {
         // Use source_config path from config (CRITICAL FIX)
-        if (!grimPaths.source_config.empty()) {
-            config_path = grimPaths.source_config;
+        if (!snapshot->grim_text_source_config.empty()) {
+            config_path = snapshot->grim_text_source_config;
             std::cout << "[DataPipeline] ✓ Using source config from ai_config.json: " << config_path << std::endl;
         } else {
             std::cerr << "[DataPipeline] WARNING: source_config not set in ai_config.json" << std::endl;
@@ -1644,26 +1644,26 @@ int StartDataCollection(int argc, char** argv, std::function<void(float)> progre
         }
         
         // Use checkpoints path from config if available
-        if (!grimPaths.checkpoints.empty()) {
-            checkpoint_dir = grimPaths.checkpoints;
+        if (!snapshot->grim_text_checkpoints.empty()) {
+            checkpoint_dir = snapshot->grim_text_checkpoints;
             std::cout << "[DataPipeline] ✓ Using checkpoints path from ai_config.json: " << checkpoint_dir << std::endl;
         }
         
         // Use collected directory from config
-        if (!grimPaths.collected.empty()) {
-            raw_dir = grimPaths.collected;
+        if (!snapshot->grim_text_collected.empty()) {
+            raw_dir = snapshot->grim_text_collected;
             std::cout << "[DataPipeline] ✓ Using collected dir from ai_config.json: " << raw_dir << std::endl;
         }
         
         // Use verified directory from config
-        if (!grimPaths.verified.empty()) {
-            verified_dir = grimPaths.verified;
+        if (!snapshot->grim_text_verified.empty()) {
+            verified_dir = snapshot->grim_text_verified;
             std::cout << "[DataPipeline] ✓ Using verified dir from ai_config.json: " << verified_dir << std::endl;
         }
         
         // Use training_data path's parent directory as output_dir
-        if (!grimPaths.training_data.empty()) {
-            fs::path trainingDataPath(grimPaths.training_data);
+        if (!snapshot->grim_text_training_data.empty()) {
+            fs::path trainingDataPath(snapshot->grim_text_training_data);
             output_dir = trainingDataPath.parent_path().string();
             std::cout << "[DataPipeline] ✓ Using output directory from ai_config.json: " << output_dir << std::endl;
         }
