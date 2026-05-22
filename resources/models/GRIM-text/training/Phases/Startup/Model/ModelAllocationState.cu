@@ -95,7 +95,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     logger.log("✓ GPU model layers fully assembled");
 
     logger.log("Registering trainable parameter groups...");
-    model->buildParameterGroups();
+    GRIMText::Training::Startup::ModelRegistration::buildParameterGroups(*model);
     logger.log("✓ Trainable parameter groups registered and verified");
 
     logger.log("Initializing TrainingState runtime workspaces...");

@@ -82,24 +82,44 @@ SequenceData buildPhase1SequenceData(
     SequenceData data;
 
     GRMTDataLoader loader;
-    if (!loader.load(tokenizer_hp.data_path)) {
+    logger.log("[Data] Loading GRMT corpus from " + tokenizer_hp.data_path + "...");
+    auto progress_logger = [&logger](const std::string& message) {
+        logger.log(message);
+    };
+    if (!loader.load(tokenizer_hp.data_path, progress_logger)) {
         throw std::runtime_error("Failed to load training data");
     }
 
     data.vocab_size = loader.vocabSize();
     const auto& all_sequences = loader.getSequences();
 
+    logger.log("[Data] Loaded raw GRMT sequences: count=" +
+               std::to_string(all_sequences.size()) +
+               " vocab_size=" + std::to_string(data.vocab_size));
+
     std::size_t val_size = all_sequences.size() / 10;
     data.train_seqs.assign(all_sequences.begin() + val_size, all_sequences.end());
     data.val_seqs.assign(all_sequences.begin(), all_sequences.begin() + val_size);
+    logger.log("[Data] Train/val split ready: train_sequences=" +
+               std::to_string(data.train_seqs.size()) +
+               " val_sequences=" + std::to_string(data.val_seqs.size()) +
+               " holdout_ratio=10%");
 
+    logger.log("[Data] Applying sliding windows to train split...");
     applySlidingWindows(data.train_seqs, "train",
                         max_seq_len, data_hp.sliding_window_stride, data_hp.min_seq_valid_tokens,
                         tokenizer_hp.add_bos, tokenizer_hp.add_eos, logger);
+    logger.log("[Data] Train split post-window sequence count=" +
+               std::to_string(data.train_seqs.size()));
+
+    logger.log("[Data] Applying sliding windows to validation split...");
     applySlidingWindows(data.val_seqs, "val",
                         max_seq_len, data_hp.sliding_window_stride, data_hp.min_seq_valid_tokens,
                         tokenizer_hp.add_bos, tokenizer_hp.add_eos, logger);
+    logger.log("[Data] Validation split post-window sequence count=" +
+               std::to_string(data.val_seqs.size()));
 
+    logger.log("[Data] Materializing train/val sequence views for batching...");
     data.train_views.reserve(data.train_seqs.size());
     data.train_seq_lengths.reserve(data.train_seqs.size());
     for (std::size_t i = 0; i < data.train_seqs.size(); ++i) {
@@ -115,6 +135,10 @@ SequenceData buildPhase1SequenceData(
         const uint32_t len = static_cast<uint32_t>(data.val_seqs[i].token_ids.size());
         data.val_seq_lengths.push_back(len);
     }
+
+    logger.log("[Data] Sequence views ready: train_views=" +
+               std::to_string(data.train_views.size()) +
+               " val_views=" + std::to_string(data.val_views.size()));
 
     return data;
 }

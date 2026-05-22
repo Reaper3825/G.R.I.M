@@ -204,10 +204,9 @@ void launchAdamWStep(std::vector<ParameterGroup>& groups,
                 " step=" + std::to_string(step));
         }
 
-        // Apply depth-aware upsilon (Υ) regularization to weight decay
-        // Formula: Υ_l = 0.1 * sqrt(L_ref / L) where L is 1-indexed layer
-        // Deeper layers get LESS regularization (smaller effective weight_decay)
-        // weight_decay_multiplier = 0.0 for biases/norms (standard AdamW practice)
+		// Apply registration-stamped depth-aware regularization.
+		// Formula: Υ_l = 0.1 * sqrt(L_ref / L) where L is 1-indexed layer.
+		// Deeper layers get LESS regularization (smaller effective weight_decay).
         const float effective_weight_decay = weight_decay * group.upsilon * group.weight_decay_multiplier;
         const float effective_lr = learning_rate * group.lr_multiplier;
 

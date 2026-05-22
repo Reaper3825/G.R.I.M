@@ -27,7 +27,7 @@
 #   --build          Build train_gpu before running.
 #   --config X       Config (default: ai_config.json).
 #   --pull-vocab     Download Bridges-2 training/data/vocab.bin, vocab.txt, and training_data.grmt into the local training data dir, then exit.
-#   --pull-logs      Download the latest Bridges-2 training log and telemetry_<session>.csv from training/logs into the local logs dir, then exit.
+#   --pull-logs      Download the latest Bridges-2 *_tape.log, training_<session>.log, and telemetry_<session>.csv from training/logs into the local logs dir, then exit.
 #   --sbatch         Submit batch job (scripts/train_bridges2.sbatch).
 #   --partition P    GPU-shared (default) or GPU.
 #   --gpu-type T     h100-80 (default), v100-32, v100-16, or l40s-48.
@@ -276,18 +276,41 @@ remote_has_command() {
   ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "command -v $q_command_name >/dev/null 2>&1"
 }
 
+remote_latest_log_matching() {
+  local remote_dir="$1"
+  local name_glob="$2"
+  local missing_message="$3"
+  local q_remote_dir
+  local q_name_glob
+  local latest
+
+  q_remote_dir="$(remote_quote "$remote_dir")"
+  q_name_glob="$(remote_quote "$name_glob")"
+  latest=$(ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "set -e; if [ ! -d $q_remote_dir ]; then echo 'ERROR: remote training log directory not found: $remote_dir' >&2; exit 1; fi; find $q_remote_dir -maxdepth 1 -type f -name $q_name_glob -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-")
+  if [[ -z "$latest" ]]; then
+    echo "$missing_message" >&2
+    exit 1
+  fi
+  printf '%s\n' "$latest"
+}
+
 remote_latest_training_log() {
   local remote_dir="$1"
   local q_remote_dir
   local latest
 
   q_remote_dir="$(remote_quote "$remote_dir")"
-  latest=$(ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "set -e; if [ ! -d $q_remote_dir ]; then echo 'ERROR: remote training log directory not found: $remote_dir' >&2; exit 1; fi; find $q_remote_dir -maxdepth 1 -type f \( -name 'training_*.log' -o -name 'training_run.log' -o -name '*telemetry*.log' \) -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-")
+  latest=$(ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "set -e; if [ ! -d $q_remote_dir ]; then echo 'ERROR: remote training log directory not found: $remote_dir' >&2; exit 1; fi; find $q_remote_dir -maxdepth 1 -type f -name 'training_*.log' ! -name '*_tape.log' -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-")
   if [[ -z "$latest" ]]; then
-    echo "ERROR: no telemetry/training .log files found in $remote_dir" >&2
+    echo "ERROR: no non-tape training_*.log files found in $remote_dir" >&2
     exit 1
   fi
   printf '%s\n' "$latest"
+}
+
+remote_latest_tape_log() {
+  local remote_dir="$1"
+  remote_latest_log_matching "$remote_dir" '*_tape.log' "ERROR: no *_tape.log files found in $remote_dir"
 }
 
 remote_latest_telemetry_csv() {
@@ -581,12 +604,16 @@ if [[ "$DO_PULL_VOCAB" == true ]]; then
 fi
 
 if [[ "$DO_PULL_LOGS" == true ]]; then
-  latest_log="$(remote_latest_training_log "$REMOTE_TRAINING_LOGS")"
+  latest_training_log="$(remote_latest_training_log "$REMOTE_TRAINING_LOGS")"
+  latest_tape_log="$(remote_latest_tape_log "$REMOTE_TRAINING_LOGS")"
   latest_telemetry_csv="$(remote_latest_telemetry_csv "$REMOTE_TRAINING_LOGS")"
-  local_log_path="$TRAINING_LOGS_DIR_EXPANDED/$(basename "$latest_log")"
+  local_training_log_path="$TRAINING_LOGS_DIR_EXPANDED/$(basename "$latest_training_log")"
+  local_tape_log_path="$TRAINING_LOGS_DIR_EXPANDED/$(basename "$latest_tape_log")"
   local_telemetry_csv_path="$TRAINING_LOGS_DIR_EXPANDED/$(basename "$latest_telemetry_csv")"
-  echo "Latest Bridges-2 training log: $latest_log"
-  download_remote_snapshot_file "$(basename "$latest_log")" "$latest_log" "$local_log_path"
+  echo "Latest Bridges-2 training log: $latest_training_log"
+  download_remote_snapshot_file "$(basename "$latest_training_log")" "$latest_training_log" "$local_training_log_path"
+  echo "Latest Bridges-2 tape log: $latest_tape_log"
+  download_remote_snapshot_file "$(basename "$latest_tape_log")" "$latest_tape_log" "$local_tape_log_path"
   echo "Latest Bridges-2 telemetry CSV: $latest_telemetry_csv"
   download_remote_snapshot_file "$(basename "$latest_telemetry_csv")" "$latest_telemetry_csv" "$local_telemetry_csv_path"
   exit 0

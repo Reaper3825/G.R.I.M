@@ -29,11 +29,9 @@ LM head backward and embedding backward write to the **same buffer** via PyTorch
 - Telemetry stream 38 (`rho_raw_rms_spread`): healthy 1.0–1.5×, >2× warn, >4× anomaly.
 
 ## Learned RMSNorm gammas
-Registered as `ParamGroupType::RMSNORM` with `wd_mult=1.0` AND `lr_mult=0.1`. Without both, γ_final inflates as a logit temperature → mode collapse.
+All learnable RMSNorm gammas register through the same startup parameter-registration path as the rest of the model. The current registration contract stamps the default optimizer multipliers (`wd_mult=1.0`, `lr_mult=1.0`) uniformly because these knobs are not actively authored yet.
 
-Empirically the inflation gradient still wins. Set `ai_config.json → training.config.lm_head_centering.freeze_learned_rms_gammas=true` to hold **all 25 learned RMSNorm gamma vectors** at 1.0 (24 encoder gammas + `γ_final`); the LM head W and the rest of the model absorb scale instead. Frozen mode skips `requires_grad_()`, `ensure_grad()`, checkpoint overwrite on load, and param-group registration.
-
-When `freeze_learned_rms_gammas=false`, per-layer gammas (γ₁, γ₂) keep `lr_mult=1.0` and no decay — encoder nonlinearities give them mixed gradient signals that constrain growth naturally.
+Set `ai_config.json → training.config.lm_head_centering.freeze_learned_rms_gammas=true` to hold **all 25 learned RMSNorm gamma vectors** at 1.0 (24 encoder gammas + `γ_final`). Frozen mode skips `requires_grad_()`, `ensure_grad()`, checkpoint overwrite on load, and param-group registration.
 
 ## Embedding scale = 1.0
 Do **not** scale embeddings by `sqrt(d_model)`. ALiBi/RoPE inject position **inside** attention; the AIAYN scaling has no purpose here and creates a 27.7× gradient asymmetry with tied weights.

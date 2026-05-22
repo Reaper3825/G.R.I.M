@@ -11,6 +11,7 @@
 #include "LMHeadWeightStats.hpp"
 
 #include "../Phases/Phase2_TrainingLoop.hpp"
+#include "../../Layers/LMHead/lm_head_GPU.hpp"
 #include "../../Shared/TrainingState/TrainingState_GPU.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/Telemetry/TelemetryUpdate.hpp"
@@ -411,8 +412,8 @@ void runLogitScaleDiagnostic(
                     );
                 }
                 
-                // --- Weight norm statistics (sample random + top tokens) ---
-                // Issue #138 FIX: Compute E[||W||²] (mean of squared norms) for correct expected logit_std.
+                // --- Effective weight norm statistics (same W_eff semantics as LMHeadLayer::forward) ---
+                // Issue #138 FIX: Compute E[||W_eff||²] (mean of squared norms) for correct expected logit_std.
                 // Old code used E[||W||] (mean of norms) which underestimates by Jensen's inequality
                 // when ||W|| distribution is skewed.
                 const float* lm_head_weights = ctx.model->getLmHeadLayer()->weights().data;
@@ -431,6 +432,9 @@ void runLogitScaleDiagnostic(
 
                 float w_rms_mean = 0.0f, w_rms_sq_mean = 0.0f, w_rms_max = 0.0f;
                 int w_rms_max_tok = -1;
+                const auto& lm_head_hp = ctx.model->getLmHeadLayer()->hp();
+                const bool use_centered_weights = lm_head_hp.center_hidden_states;
+                const bool use_token_type_gate = GRIM::kEnableLmHeadTokenTypeGateExperiment;
                 // Issue #138 / Apr 2026 follow-up: replace the 500-row host-side
                 // sampled CPU loop with a full-vocab on-device warp-shuffle
                 // reduction (Diagnostics/LMHeadWeightStats.{cu,hpp}). Result is
@@ -446,7 +450,9 @@ void runLogitScaleDiagnostic(
                             lm_head_weights,
                             payload.vocab_size,
                             d_model,
-                            diag_stream);
+                            diag_stream,
+                            use_centered_weights,
+                            use_token_type_gate);
                     w_rms_mean    = stats.w_rms_mean;
                     w_rms_sq_mean = stats.w_rms_quadmean * stats.w_rms_quadmean;
                     w_rms_max     = stats.w_rms_max;
@@ -765,11 +771,20 @@ void runLogitScaleDiagnostic(
                 scale_eq << "  HIDDEN (LM input): h_rms_mean=" << h_rms_mean
                          << " h_rms_rms=" << h_rms_rms
                          << " h_rms_max=" << h_rms_max << " h_rms_min=" << h_rms_min << "\n";
-                scale_eq << "  WEIGHTS (LM head): W_rms_mean=" << w_rms_mean
+                    scale_eq << "  WEIGHTS (LM head effective W_eff): W_rms_mean=" << w_rms_mean
                          << " W_rms_rms=" << w_rms_rms
                          << " W_rms_max=" << w_rms_max << " (tok=" << w_rms_max_tok << ")"
                          << " d_model=" << d_model << "\n";
-                scale_eq << "  EXPECTED logit_std = sqrt(d_model) × h_rms_rms × W_rms_rms\n";
+                    scale_eq << "  WEIGHT TRANSFORM: "
+                         << (use_centered_weights && use_token_type_gate
+                               ? "center_rows_by_token_type_gate(W_lm)"
+                               : use_centered_weights
+                                   ? "center_rows(W_lm)"
+                                   : use_token_type_gate
+                                       ? "type_gate_rows_by_token_type(W_lm)"
+                                       : "W_lm")
+                         << "\n";
+                    scale_eq << "  EXPECTED logit_std = sqrt(d_model) × h_rms_rms × W_eff_rms_rms\n";
                 scale_eq << "                      = sqrt(" << d_model << ") × " << h_rms_rms
                          << " × " << w_rms_rms << "\n";
                 scale_eq << "                      = " << expected_logit_std << "\n";

@@ -12,6 +12,7 @@
 //======================================================//
 
 #include "LMHeadWeightStats.hpp"
+#include "../../Shared/TensorContract/TokenTypeGate.hpp"
 
 #include <cuda_runtime.h>
 #include <stdexcept>
@@ -31,6 +32,7 @@ namespace {
 constexpr int kWarpSize = 32;
 constexpr int kMaxWarpsPerBlock = 32;  // up to blockDim.x = 1024
 
+#ifdef __CUDACC__
 __device__ __forceinline__ float warpReduceSum(float v) {
     #pragma unroll
     for (int offset = kWarpSize / 2; offset > 0; offset >>= 1) {
@@ -39,14 +41,17 @@ __device__ __forceinline__ float warpReduceSum(float v) {
     return v;
 }
 
-// One block per vocab row. Threads in the block stripe across d_model,
-// accumulate sum of squares, do warp-shuffle reduction, then a small
-// shared-memory inter-warp reduction. Per-block thread 0 finalizes
-// row_rms and atomically merges it into the three global accumulators.
+// One block per vocab row. Threads in the block stripe across the active
+// subspace for that row, optionally center it, then accumulate the resulting
+// W_eff row RMS over the full d_model denominator (inactive dimensions are 0).
+// Per-block thread 0 finalizes row_rms and atomically merges it into the
+// three global accumulators.
 __global__ void kernelLMHeadRowStats(
     const float* __restrict__ W,           // [vocab_size, d_model]
     int                       vocab_size,
     int                       d_model,
+    bool                      center_rows,
+    bool                      token_type_gate,
     float                     inv_d_model, // 1.0f / d_model precomputed on host
     float*              __restrict__ d_sum_rms,
     float*              __restrict__ d_sum_rms_sq,
@@ -59,21 +64,40 @@ __global__ void kernelLMHeadRowStats(
     const int bsz = blockDim.x;
     const float* __restrict__ row_ptr = W + static_cast<size_t>(row) * d_model;
 
-    // 1. Per-thread strided sum of squares.
+    int active_start = 0;
+    int active_end = d_model;
+    int active_width = d_model;
+    if (token_type_gate) {
+        const auto gate_range = GRIM::TensorContract::tokenTypeGateRangeForTokenId(
+            row, d_model, vocab_size);
+        active_start = gate_range.start;
+        active_end = gate_range.end;
+        active_width = gate_range.width;
+    }
+    if (active_width <= 0 || active_start < 0 || active_end > d_model || active_start >= active_end) {
+        return;
+    }
+
+    // 1. Per-thread strided active-subspace reductions.
+    float sum = 0.0f;
     float sum_sq = 0.0f;
-    for (int d = tid; d < d_model; d += bsz) {
+    for (int d = active_start + tid; d < active_end; d += bsz) {
         const float v = row_ptr[d];
+        sum += v;
         sum_sq += v * v;
     }
 
     // 2. Warp-level reduction (Hopper + Ampere both support __shfl_down_sync).
+    sum = warpReduceSum(sum);
     sum_sq = warpReduceSum(sum_sq);
 
     // 3. Inter-warp reduction via shared memory. One slot per warp.
+    __shared__ float warp_sums_active[kMaxWarpsPerBlock];
     __shared__ float warp_sums[kMaxWarpsPerBlock];
     const int lane  = tid & (kWarpSize - 1);
     const int wid   = tid >> 5;
     if (lane == 0) {
+        warp_sums_active[wid] = sum;
         warp_sums[wid] = sum_sq;
     }
     __syncthreads();
@@ -81,8 +105,43 @@ __global__ void kernelLMHeadRowStats(
     // 4. First warp reduces the per-warp partials.
     if (wid == 0) {
         const int n_warps = (bsz + kWarpSize - 1) / kWarpSize;
+        float active_sum = (lane < n_warps) ? warp_sums_active[lane] : 0.0f;
         float v = (lane < n_warps) ? warp_sums[lane] : 0.0f;
+        active_sum = warpReduceSum(active_sum);
         v = warpReduceSum(v);
+
+        __shared__ float shared_row_mean;
+        if (lane == 0) {
+            shared_row_mean = center_rows
+                ? active_sum / static_cast<float>(active_width)
+                : 0.0f;
+            warp_sums[0] = v;
+        }
+        __syncthreads();
+
+        if (center_rows) {
+            float centered_sum_sq = 0.0f;
+            for (int d = active_start + tid; d < active_end; d += bsz) {
+                const float centered = row_ptr[d] - shared_row_mean;
+                centered_sum_sq += centered * centered;
+            }
+            centered_sum_sq = warpReduceSum(centered_sum_sq);
+            if (lane == 0) {
+                warp_sums[wid] = centered_sum_sq;
+            }
+            __syncthreads();
+
+            float centered_total = (lane < n_warps) ? warp_sums[lane] : 0.0f;
+            centered_total = warpReduceSum(centered_total);
+            if (lane == 0) {
+                warp_sums[0] = centered_total;
+            }
+            __syncthreads();
+            v = warp_sums[0];
+        } else {
+            __syncthreads();
+            v = warp_sums[0];
+        }
 
         if (lane == 0) {
             const float row_rms = sqrtf(v * inv_d_model);
@@ -105,6 +164,7 @@ __global__ void kernelLMHeadRowStats(
         }
     }
 }
+#endif
 
 inline void cudaCheck(cudaError_t err, const char* where) {
     if (err != cudaSuccess) {
@@ -120,7 +180,9 @@ LMHeadWeightStats computeLMHeadWeightStats(
     const float* weights,
     int vocab_size,
     int d_model,
-    cudaStream_t stream)
+    cudaStream_t stream,
+    bool center_rows,
+    bool token_type_gate)
 {
     // ── Rule 20: validate inputs, fail loud. ──
     if (!weights) {
@@ -135,6 +197,11 @@ LMHeadWeightStats computeLMHeadWeightStats(
     if (d_model <= 0) {
         throw std::runtime_error(
             "[LMHeadWeightStats] d_model must be > 0, got " +
+            std::to_string(d_model));
+    }
+    if (token_type_gate && d_model < 4) {
+        throw std::runtime_error(
+            "[LMHeadWeightStats] token_type_gate requires d_model >= 4, got " +
             std::to_string(d_model));
     }
     if (!stream) {
@@ -169,12 +236,18 @@ LMHeadWeightStats computeLMHeadWeightStats(
 
     // ── Launch reduction kernel.
     const float inv_d_model = 1.0f / static_cast<float>(d_model);
+#ifdef __CUDACC__
     kernelLMHeadRowStats<<<vocab_size, kThreadsPerBlock, 0, stream>>>(
-        weights, vocab_size, d_model, inv_d_model,
+        weights, vocab_size, d_model, center_rows, token_type_gate, inv_d_model,
         &d_scratch->sum_rms,
         &d_scratch->sum_rms_sq,
         &d_scratch->max_packed);
     cudaCheck(cudaGetLastError(), "kernelLMHeadRowStats launch");
+#else
+    (void)inv_d_model;
+    throw std::runtime_error(
+        "[LMHeadWeightStats] computeLMHeadWeightStats requires CUDA compilation (__CUDACC__ not defined)");
+#endif
 
     // ── Pull 16 bytes back to host (sync on caller's stream).
     ScratchLayout host_scratch{};

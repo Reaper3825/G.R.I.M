@@ -3,7 +3,10 @@
 #include <vector>
 #include <string>
 #include <fstream>
+#include <functional>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <cmath>
 #include <cstdint>
 #include <algorithm>
@@ -14,8 +17,6 @@
 #include "../Shared/UnigramByte/UniByte.hpp"  // Tokenizer metadata and AtomTable
 #include "../Shared/Execution/ExecutionMetadata.hpp"
 #include "../Shared/TokenizerArtifacts/GrmtCorpusIO.hpp"
-
-namespace fs = std::filesystem;
 
 //======================================================//
 //  Training Data Structures
@@ -29,14 +30,14 @@ using TrainingSequence = GRIM::TokenizerArtifacts::GrmtSequence;
 
 class GRMTDataLoader {
 public:
-bool load(const std::string& path) {
-        // Check file extension to determine format
-        std::string ext = fs::path(path).extension().string();
-    if (ext == ".bin") {
-        std::cerr << "[DataLoader] Legacy .bin training data is unsupported; regenerate .grmt files." << std::endl;
-        return false;
+    using ProgressCallback = std::function<void(const std::string&)>;
+
+    bool load(const std::string& path) {
+        return load(path, ProgressCallback{});
     }
-    return loadGRMTFormat(path);
+
+    bool load(const std::string& path, const ProgressCallback& progress) {
+        return loadGRMTFormat(path, progress);
     }
     
     void shuffle(std::mt19937& rng) {
@@ -48,10 +49,56 @@ bool load(const std::string& path) {
     uint32_t vocabSize() const { return vocab_size_; } // Vocab size from training data file
     
 private:
-    bool loadGRMTFormat(const std::string& path) {
+    static void emitProgress(const ProgressCallback& progress, const std::string& message) {
+        if (progress) {
+            progress(message);
+        }
+    }
+
+    bool loadGRMTFormat(const std::string& path, const ProgressCallback& progress) {
         GRIM::TokenizerArtifacts::GrmtCorpus corpus;
         try {
-            corpus = GRIM::TokenizerArtifacts::loadGrmtCorpus(path);
+            GRIM::TokenizerArtifacts::GrmtCorpusReader reader(path);
+            corpus.header = reader.header();
+
+            const auto& header = corpus.header;
+            std::ostringstream header_msg;
+            header_msg << "[Data] GRMT header loaded: sequences=" << header.num_sequences
+                       << " vocab_size=" << header.vocab_size
+                       << " version=" << header.version;
+            emitProgress(progress, header_msg.str());
+
+            corpus.sequences.reserve(header.num_sequences);
+
+            const std::uint32_t progress_stride =
+                (header.num_sequences >= 20u)
+                    ? std::max<std::uint32_t>(1u, header.num_sequences / 10u)
+                    : header.num_sequences;
+            std::uint32_t next_progress = progress_stride;
+
+            GRIM::TokenizerArtifacts::GrmtSequence sequence;
+            while (reader.readNext(sequence)) {
+                corpus.sequences.push_back(std::move(sequence));
+                sequence = GRIM::TokenizerArtifacts::GrmtSequence{};
+
+                const std::uint32_t loaded = reader.sequencesRead();
+                if (header.num_sequences > 0 &&
+                    (loaded == header.num_sequences ||
+                     (progress_stride > 0 && loaded >= next_progress))) {
+                    std::ostringstream progress_msg;
+                    progress_msg << "[Data] GRMT load progress: "
+                                 << loaded << "/" << header.num_sequences
+                                 << " sequences ("
+                                 << std::fixed << std::setprecision(1)
+                                 << (100.0 * static_cast<double>(loaded) /
+                                     static_cast<double>(header.num_sequences))
+                                 << "%)";
+                    emitProgress(progress, progress_msg.str());
+                    if (loaded < header.num_sequences && progress_stride > 0) {
+                        next_progress = std::min(header.num_sequences, loaded + progress_stride);
+                    }
+                }
+            }
         } catch (const std::exception& e) {
             std::cerr << "[DataLoader] Failed to load GRMT corpus: " << e.what() << std::endl;
             return false;
@@ -69,6 +116,7 @@ private:
         std::cout << "[DataLoader] Vocab size: " << vocab_size << std::endl;
         
         sequences_ = std::move(corpus.sequences);
+            emitProgress(progress, "[Data] GRMT deserialization complete; validating side channels...");
     size_t nonfinite_total = 0;
     size_t nonfinite_sequences = 0;
 
@@ -143,6 +191,10 @@ private:
                       << "Delete .grmt files and regenerate with scratch_block_reasoning.enabled=true"
                       << std::endl;
         }
+        std::ostringstream done_msg;
+        done_msg << "[Data] GRMT validation complete: loaded_sequences=" << sequences_.size()
+                 << " vocab_size=" << vocab_size_;
+        emitProgress(progress, done_msg.str());
         return true;
     }
 

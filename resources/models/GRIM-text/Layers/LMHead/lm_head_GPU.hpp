@@ -36,6 +36,15 @@ struct LMHeadParameterViews {
     const Tensor* final_rms_gamma = nullptr;
 };
 
+// Local experiment toggle only. Keep this LM-head-local until we decide
+// whether token-layout gating should become an authored config field.
+//
+// IMPORTANT: setting this false disables the LM-head-side hard token-type
+// gate without changing embedding lookup, so tied embeddings no longer have
+// strict embedding/LM symmetry. That asymmetry is intentional for local
+// experiments.
+inline constexpr bool kEnableLmHeadTokenTypeGateExperiment = true;
+
 //======================================================//
 //  LMHeadLayer - Self-Allocating (Pattern B: Layer Ownership)
 //
@@ -95,7 +104,7 @@ public:
     // The WRITE accessor THROWS if the gamma is configured frozen.
     // Only four legitimate writers exist:
     //   1. LMHeadLayer ctor (uses the private member directly)
-    //   2. Startup/Model/ParameterGroupRegistration (register final_rms_gamma)
+    //   2. Startup/Model/ParameterGroupRegistration (top-level startup registration)
     //   3. AutogradTraining (zero_grad before backward)
     //   4. grim_model_serialization::load (assignWrite to .data)
     // Any other path that obtains a mutable reference will trip the throw and

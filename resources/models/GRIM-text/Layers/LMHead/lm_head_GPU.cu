@@ -31,18 +31,6 @@
 
 namespace GRIM {
 
-namespace {
-
-// Local experiment toggle only. Keep this file-local until we decide whether
-// LM-head token-layout gating should become an authored config field.
-//
-// IMPORTANT: setting this false disables the LM-head-side hard token-type gate
-// without changing embedding lookup, so tied embeddings no longer have strict
-// embedding/LM symmetry. That asymmetry is intentional for local experiments.
-constexpr bool kEnableLmHeadTokenTypeGateExperiment = true;
-
-}  // namespace
-
 //======================================================//
 //  Self-Allocating Constructor (Pattern B)
 //======================================================//
@@ -342,7 +330,7 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
     // sees the TokenLayout class subspace assigned to that token type.
     // Local experiment path: bypass the hard token-type gate inside the LM head
     // only, without plumbing a new authored config field yet.
-    const bool use_token_type_gate = kEnableLmHeadTokenTypeGateExperiment;
+    const bool use_token_type_gate = GRIM::kEnableLmHeadTokenTypeGateExperiment;
     const bool use_centered_weights = hp_.center_hidden_states;
     Tensor effective_weights_storage;
     const Tensor* effective_weights = &lm_weights;
