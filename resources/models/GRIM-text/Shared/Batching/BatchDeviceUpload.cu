@@ -59,15 +59,68 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
 
     const size_t total_tokens = static_cast<size_t>(payload.total_tokens);
 
-    const auto& logits_shape = training_state_.cached_logits_tensor.shape.require("uploadBatchToDevice cached_logits_tensor");
-    if (!logits_shape.is_2d_layout()) {
-        throw std::runtime_error("uploadBatchToDevice: cached_logits_tensor must be a 2D LOGITS buffer");
+    if (payload.isTraining()) {
+        if (payload.batch_size != cfg.max_cached_batch) {
+            throw std::runtime_error(
+                "uploadBatchToDevice: training payload.batch_size=" +
+                std::to_string(payload.batch_size) +
+                " != model max_cached_batch=" + std::to_string(cfg.max_cached_batch));
+        }
+        if (payload.max_seq_len != cfg.max_cached_seq_len) {
+            throw std::runtime_error(
+                "uploadBatchToDevice: training payload.max_seq_len=" +
+                std::to_string(payload.max_seq_len) +
+                " != model max_cached_seq_len=" + std::to_string(cfg.max_cached_seq_len));
+        }
+        if (payload.total_tokens != cfg.max_tokens_per_batch) {
+            throw std::runtime_error(
+                "uploadBatchToDevice: training payload.total_tokens=" +
+                std::to_string(payload.total_tokens) +
+                " != model max_tokens_per_batch=" + std::to_string(cfg.max_tokens_per_batch));
+        }
+    } else {
+        if (payload.batch_size > cfg.max_cached_batch) {
+            throw std::runtime_error(
+                "uploadBatchToDevice: payload.batch_size=" +
+                std::to_string(payload.batch_size) +
+                " exceeds model max_cached_batch=" + std::to_string(cfg.max_cached_batch));
+        }
+        if (payload.max_seq_len > cfg.max_cached_seq_len) {
+            throw std::runtime_error(
+                "uploadBatchToDevice: payload.max_seq_len=" +
+                std::to_string(payload.max_seq_len) +
+                " exceeds model max_cached_seq_len=" + std::to_string(cfg.max_cached_seq_len));
+        }
+        if (payload.total_tokens > cfg.max_tokens_per_batch) {
+            throw std::runtime_error(
+                "uploadBatchToDevice: payload.total_tokens=" +
+                std::to_string(payload.total_tokens) +
+                " exceeds model max_tokens_per_batch=" + std::to_string(cfg.max_tokens_per_batch));
+        }
     }
-    const size_t logit_limit = static_cast<size_t>(logits_shape.as_2d().rows);
-    if (total_tokens > logit_limit) {
+
+    const auto& token_ids_shape = training_state_.cached_token_ids_tensor.shape.require("uploadBatchToDevice cached_token_ids_tensor");
+    if (!token_ids_shape.is_2d_layout()) {
+        throw std::runtime_error("uploadBatchToDevice: cached_token_ids_tensor must be a 2D token-id buffer");
+    }
+    const size_t token_capacity = static_cast<size_t>(token_ids_shape.as_2d().cols);
+    if (total_tokens > token_capacity) {
         throw std::runtime_error(
             "uploadBatchToDevice: total_tokens=" + std::to_string(total_tokens) +
-            " exceeds logit buffer capacity=" + std::to_string(logit_limit));
+            " exceeds token-id buffer capacity=" + std::to_string(token_capacity));
+    }
+
+    if (payload.hasTrainingTargets()) {
+        const auto& targets_shape = training_state_.cached_targets_tensor.shape.require("uploadBatchToDevice cached_targets_tensor");
+        if (!targets_shape.is_2d_layout()) {
+            throw std::runtime_error("uploadBatchToDevice: cached_targets_tensor must be a 2D target upload buffer");
+        }
+        const size_t target_capacity = static_cast<size_t>(targets_shape.as_2d().rows);
+        if (total_tokens > target_capacity) {
+            throw std::runtime_error(
+                "uploadBatchToDevice: total_tokens=" + std::to_string(total_tokens) +
+                " exceeds target buffer capacity=" + std::to_string(target_capacity));
+        }
     }
 
     cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
@@ -94,6 +147,24 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
                 "uploadBatchToDevice: payload.mtp_shifted_targets.size()=" +
                 std::to_string(payload.mtp_shifted_targets.size()) +
                 " != config.mtp_k=" + std::to_string(mtp_hp.k));
+        }
+        const auto& mtp_shape = training_state_.cached_mtp_shifted_targets_tensor.shape.require(
+            "uploadBatchToDevice cached_mtp_shifted_targets_tensor");
+        if (!mtp_shape.is_2d_layout()) {
+            throw std::runtime_error(
+                "uploadBatchToDevice: cached_mtp_shifted_targets_tensor must be a 2D MTP target upload buffer");
+        }
+        if (mtp_shape.as_2d().rows != mtp_hp.k) {
+            throw std::runtime_error(
+                "uploadBatchToDevice: cached_mtp_shifted_targets_tensor.rows=" +
+                std::to_string(mtp_shape.as_2d().rows) +
+                " != config.mtp_k=" + std::to_string(mtp_hp.k));
+        }
+        if (static_cast<size_t>(mtp_shape.as_2d().cols) < total_tokens) {
+            throw std::runtime_error(
+                "uploadBatchToDevice: total_tokens=" + std::to_string(total_tokens) +
+                " exceeds MTP target buffer capacity=" +
+                std::to_string(mtp_shape.as_2d().cols));
         }
         cached_mtp_shifted_targets_ptr = reinterpret_cast<int*>(training_state_.cached_mtp_shifted_targets_tensor.data);
         if (!cached_mtp_shifted_targets_ptr) {
@@ -194,8 +265,6 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
         : nullptr;
     bindings.d_token_to_slot_map = cached_slot_map_ptr;
     bindings.d_mtp_shifted_targets = cached_mtp_shifted_targets_ptr;
-    bindings.batch_size  = payload.batch_size;
-    bindings.max_seq_len = payload.max_seq_len;
     return bindings;
 }
 

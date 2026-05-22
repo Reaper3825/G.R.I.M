@@ -157,11 +157,20 @@ void validateAccumulationPositionBeforeBackward(
     int batch_idx,
     int global_step)
 {
+    if (accum_steps <= 0) {
+        throw std::runtime_error(
+            "validateAccumulationPositionBeforeBackward: accum_steps must be > 0, got " +
+            std::to_string(accum_steps));
+    }
+    const int accumulation_slot = optimizer.accumulationSlot();
     try {
-        optimizer.validateBeforeAccumulationSlot(accum_steps);
+        if (accumulation_slot < 0 || accumulation_slot >= accum_steps) {
+            throw std::runtime_error(
+                "FATAL: accumulation slot cursor out of range before autograd pass");
+        }
     } catch (const std::exception& e) {
         fprintf(stderr, "\n[Phase2] FATAL: Training step attempted with accumulation_slot=%d outside accum_steps=%d\n",
-                optimizer.accumulationSlot(), accum_steps);
+                accumulation_slot, accum_steps);
         fprintf(stderr, "[Phase2] batch=%d global_step=%d\n", batch_idx + 1, global_step);
         fprintf(stderr, "[Phase2] %s\n", e.what());
         std::abort();
@@ -169,14 +178,50 @@ void validateAccumulationPositionBeforeBackward(
 }
 
 bool shouldAccumulateGradients(const OptimizerContext& optimizer) {
-    return optimizer.shouldAccumulateGradients();
+    return optimizer.accumulationSlot() > 0;
 }
 
 bool advanceAccumulationOrThrow(
     OptimizerContext& optimizer,
     int accum_steps)
 {
-    return optimizer.completeAccumulationSlot(accum_steps);
+    if (accum_steps <= 0) {
+        throw std::runtime_error(
+            "advanceAccumulationOrThrow: accum_steps must be > 0, got " +
+            std::to_string(accum_steps));
+    }
+
+    const int accumulation_slot = optimizer.accumulationSlot();
+    if (accumulation_slot < 0 || accumulation_slot >= accum_steps) {
+        throw std::runtime_error(
+            "advanceAccumulationOrThrow: accumulation slot cursor out of range before advance (slot=" +
+            std::to_string(accumulation_slot) + " accum_steps=" + std::to_string(accum_steps) + ")");
+    }
+
+    const int next_slot = accumulation_slot + 1;
+    optimizer.setAccumulationSlot(next_slot);
+    return next_slot >= accum_steps;
+}
+
+void completeOptimizerWindowBookkeepingOrThrow(
+    OptimizerContext& optimizer,
+    int accum_steps)
+{
+    if (accum_steps <= 0) {
+        throw std::runtime_error(
+            "completeOptimizerWindowBookkeepingOrThrow: accum_steps must be > 0, got " +
+            std::to_string(accum_steps));
+    }
+
+    const int accumulation_slot = optimizer.accumulationSlot();
+    if (accumulation_slot != accum_steps) {
+        throw std::runtime_error(
+            "FATAL: optimizer step requested before accumulation window completed (completed=" +
+            std::to_string(accumulation_slot) + " required=" + std::to_string(accum_steps) + ")");
+    }
+
+    optimizer.setAccumulationSlot(0);
+    optimizer.optimizer_step.step++;
 }
 
 std::unique_ptr<GRIM::Loss::LossSignalBus> makeValidationHighLossSignalBus(
@@ -337,7 +382,7 @@ void runOptimizerWindowFromEpoch(
     GRIM::Diagnostics::runPostOptimizerWeightTrace(
         ctx, result, optimizer_update_hp, pre_sample, sync_diag);
 
-    ctx.optimizer.completeOptimizerStepAfterFullAccumulationWindow(accum_steps);
+    completeOptimizerWindowBookkeepingOrThrow(ctx.optimizer, accum_steps);
 
     // Rule 20: an async CUDA error here means an optimizer-window kernel
     // launch faulted earlier. Crash with the exact error.

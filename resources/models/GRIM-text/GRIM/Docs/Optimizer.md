@@ -4,7 +4,7 @@ The **Optimizer Window** is the single architectural boundary where accumulated 
 
 Location: `training/Phases/Phase2_TrainingLoop.cu`, owned by `runEpoch()` after `processBatch()` returns and `advanceAccumulationOrThrow()` reports a full accumulation window.
 
-`processBatch()` is the microbatch/autograd boundary only: it uploads one `BatchPayload`, runs forward/loss/backward, emits post-backward diagnostics, and returns. It must not read or mutate `OptimizerContext`, advance accumulation slots, complete optimizer steps, or call `launchOptimizerUpdate()`.
+`OptimizerContext` in `training/Phases/Phase1_Startup.hpp` is a durable state carrier only (`optimizer_step`, optimizer state tensors, soft-restart controller, resumable accumulation-slot cursor). It must not own accumulation-window progression logic. `processBatch()` is the microbatch/autograd boundary only: it uploads one `BatchPayload`, runs forward/loss/backward, emits post-backward diagnostics, and returns. It must not read or mutate `OptimizerContext`, advance accumulation slots, complete optimizer steps, or call `launchOptimizerUpdate()`.
 
 ## Boundary sequence
 
@@ -18,7 +18,7 @@ The window is intentionally narrow and ordered:
 6. Pre-step diagnostics that need gradient/tying state run from the epoch-owned optimizer window.
 7. The optimizer window calls `launchOptimizerUpdate(...)` exactly once.
 8. Post-step finite/weight diagnostics run after the optimizer stream is synchronized.
-9. `completeOptimizerStepAfterFullAccumulationWindow(...)` owns optimizer-step bookkeeping and gradient clearing.
+9. `runEpoch()` completes optimizer-step bookkeeping and gradient clearing at the end of the finished accumulation window.
 
 ## Ownership policy
 
@@ -34,7 +34,7 @@ The window is intentionally narrow and ordered:
 
 - Do not branch on `optimizer_kind` or `OptimizerKind` in Phase 2.
 - Do not read or mutate `ctx.optimizer` inside `processBatch()`.
-- Do not call `advanceAccumulationOrThrow()`, `completeAccumulationSlot()`, `completeOptimizerStepAfterFullAccumulationWindow()`, or `launchOptimizerUpdate()` from `processBatch()`.
+- Do not call `advanceAccumulationOrThrow()`, `completeOptimizerWindowBookkeepingOrThrow()`, or `launchOptimizerUpdate()` from `processBatch()`.
 - Do not call `launchAdamWStep(...)` or `launchRAdamWStep(...)` from Phase 2.
 - Do not read `LanguageModel::getConfig()` to configure optimizer updates.
 - Do not add embedding-freeze skip logic to Phase 2; the configured optimizer boundary owns it.

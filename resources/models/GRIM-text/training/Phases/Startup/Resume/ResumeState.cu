@@ -33,7 +33,7 @@ void initializeOptimizer(TrainingContext& ctx) {
     sr_cfg.cooldown_steps = hp.soft_restart_cooldown_steps;
     opt.soft_restart_controller = GRIM::SoftRestart::SoftRestartController(sr_cfg);
 
-    opt.resetAccumulationWindow();
+    opt.resetAccumulationSlot();
 
     auto* gpu_encoder = &model.getGpuEncoder();
     for (int layer = 0; layer < ctx.model_config.num_layers; ++layer) {

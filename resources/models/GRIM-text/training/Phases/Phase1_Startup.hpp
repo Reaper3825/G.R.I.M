@@ -108,7 +108,10 @@ struct SequenceData {
 };
 
 /**
- * @brief Optimizer and controller state
+ * @brief Durable optimizer and resume state
+ *
+ * Phase1 owns allocation/restore of the durable state carried here.
+ * Phase2 owns accumulation-slot progression and optimizer-step bookkeeping.
  */
 struct OptimizerContext {
     GRIM::OptimizerStep optimizer_step;
@@ -117,43 +120,13 @@ struct OptimizerContext {
 
     int accumulationSlot() const { return accumulation_slot_; }
 
-    bool shouldAccumulateGradients() const {
-        return accumulation_slot_ > 0;
-    }
-
-    void validateBeforeAccumulationSlot(int accumulation_window_slots) const {
-        if (accumulation_window_slots <= 0) {
-            throw std::runtime_error("FATAL: accumulation_window_slots must be > 0");
-        }
-        if (accumulation_slot_ < 0 || accumulation_slot_ >= accumulation_window_slots) {
-            throw std::runtime_error("FATAL: accumulation slot cursor out of range before autograd pass");
-        }
-    }
-
-    bool completeAccumulationSlot(int accumulation_window_slots) {
-        validateBeforeAccumulationSlot(accumulation_window_slots);
-        accumulation_slot_++;
-        return accumulation_slot_ >= accumulation_window_slots;
-    }
-
-    void completeOptimizerStepAfterFullAccumulationWindow(int accumulation_window_slots) {
-        if (accumulation_slot_ != accumulation_window_slots) {
-            throw std::runtime_error(
-                "FATAL: optimizer step requested before accumulation window completed (completed=" +
-                std::to_string(accumulation_slot_) + " required=" +
-                std::to_string(accumulation_window_slots) + ")");
-        }
-        accumulation_slot_ = 0;
-        optimizer_step.step++;
-    }
-
-    void resetAccumulationWindow() {
+    void resetAccumulationSlot() {
         accumulation_slot_ = 0;
     }
 
-    void restoreAccumulationSlotFromCheckpoint(int accumulation_slot) {
+    void setAccumulationSlot(int accumulation_slot) {
         if (accumulation_slot < 0) {
-            throw std::runtime_error("FATAL: checkpoint accumulation_slot is negative");
+            throw std::runtime_error("FATAL: accumulation_slot is negative");
         }
         accumulation_slot_ = accumulation_slot;
     }

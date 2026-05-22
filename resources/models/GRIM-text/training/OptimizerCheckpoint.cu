@@ -363,7 +363,7 @@ bool loadOptimizerState(TrainingContext& ctx, const std::string& sidecar_path) {
     ctx.global_step                    = header.global_step;
     ctx.best_val_loss                  = header.best_val_loss;
     ctx.epochs_completed               = header.current_epoch;
-    ctx.optimizer.restoreAccumulationSlotFromCheckpoint(header.accumulation_slot);
+    ctx.optimizer.setAccumulationSlot(header.accumulation_slot);
 
     EmitModuleInfo(ModuleId::Checkpoint,
         "✓ Optimizer state restored from " + sidecar_path +
