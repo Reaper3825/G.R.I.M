@@ -266,7 +266,6 @@ bool PrepareTrainingDataFromCache(
 		throw std::runtime_error("[DataLoader] vocab path is empty; tokenizer artifacts must be saved/loaded as vocab+GRMT pair");
 	}
 
-	GRIM::Tokenizer::configureTokenLayout(GRIM::Tokenizer::kAtomTypeCount);
 	std::cout << "[DataLoader] Atom token range fixed at " << GRIM::Tokenizer::ATOM_VOCAB_SIZE
 	          << " type tokens" << std::endl;
 

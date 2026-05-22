@@ -35,7 +35,7 @@ Phase1Outcome runTokenizerSubprocessAfterHyperparameters(const TrainingContext& 
     }
 
     GRIMText::Subprocess::tokenizer_subprocess_request tok_req;
-    tok_req.config_path = ctx.config.paths.config_path.string();
+    tok_req.hp = GRIM::HyperParameters::tokenizerSubprocessHP(ctx.config);
     // Rebuild policy belongs to TokenizerHP inside train_tokenizer; Phase1
     // only supplies the config path so there is no second rebuild payload.
 
@@ -81,8 +81,16 @@ Phase1Outcome runTokenizerSubprocessAfterHyperparameters(const TrainingContext& 
 } // anonymous namespace
 
 Phase1Result executePhase1(int argc, char** argv) {
+    using GRIM::Logging::EmitModuleInfo;
+    using GRIM::Logging::ModuleId;
+
     auto ctx = std::make_unique<TrainingContext>();
-    LoggingReady(*ctx, argc, argv);
+    EmitModuleInfo(ModuleId::Training, "[Phase1] Loading configuration...", 0);
+    ctx->config = GRIM::HyperParameters::loadStartupConfig(argc, argv);
+    EmitModuleInfo(ModuleId::Training,
+        std::string("[Phase1] ✓ Configuration loaded from: ") + ctx->config.paths.config_path.string(), 0);
+
+    LoggingReady(*ctx);
     MemorySnapshotReady(*ctx);
     HyperparametersReady(*ctx);
 

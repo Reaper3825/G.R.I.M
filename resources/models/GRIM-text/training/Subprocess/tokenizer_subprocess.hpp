@@ -7,9 +7,8 @@
 // concrete subprocess wired through subprocess_manager.
 //
 // Behavior:
-//   - Loads paths and the `subprocess.tokenizer.only_mode` flag through the
-//     hyperparameter/config grouping layer (no hidden defaults; missing required
-//     fields throw).
+//   - Consumes a grouped startup snapshot from HyperparameterGroupings.hpp
+//     (no hidden defaults; missing required fields throw).
 //   - Resolves the train_tokenizer executable as a sibling of the current
 //     process binary.
 //   - Spawns it with `--status-file <path>` and `--config <ai_config.json>`,
@@ -17,7 +16,7 @@
 //     payload (vocab_size) into a tokenizer_subprocess_result.
 //   - vocab_path / training_data_path are NOT carried over IPC — they are
 //     resolved from TokenizerHP so there is exactly one tokenizer source of truth.
-//   - If `subprocess.tokenizer.only_mode` is true AND the tokenizer reports
+//   - If the grouped snapshot says `only_mode=true` AND the tokenizer reports
 //     success, the returned outcome is rewritten to ok_one_off so the caller
 //     stops cleanly instead of proceeding into model training.
 //
@@ -30,14 +29,15 @@
 #include <cstdint>
 #include <string>
 
+#include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "subprocess_status.hpp"
 
 namespace GRIMText {
 namespace Subprocess {
 
 struct tokenizer_subprocess_request {
-    // Path to ai_config.json. Required.
-    std::string config_path;
+    // Grouped startup snapshot authored once by Phase 1.
+    GRIM::HyperParameters::TokenizerSubprocessHP hp;
 
     // Optional override of the train_tokenizer executable location. When
     // empty, the manager resolves it as a sibling of the current process.

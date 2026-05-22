@@ -57,27 +57,6 @@
 namespace GRIM {
 namespace Config {
 
-/**
- * @brief Subprocess coordinator configuration
- *
- * Read by the primitive subprocess coordinator (training/Subprocess/) BEFORE
- * any training phase begins. The fields here aggregate the JSON keys consumed
- * by the coordinator across multiple top-level sections (subprocess.* and
- * training.config.*). This is the single, centralized C++ view those flags;
- * Subprocess/ code MUST go through AiConfigSnapshot plus the snapshot-based
- * loadSubprocessConfig() accessor and MUST NOT raw-parse ai_config.json
- * itself or re-introduce a second path-based loader.
- */
-struct SubprocessConfig {
-    // subprocess.tokenizer.only_mode
-    // When true, train_gpu spawns the train_tokenizer subprocess, waits for
-    // completion, and exits cleanly without entering Phase 1. When false,
-    // tokenizer training runs as a normal pre-Phase-1 step and training
-    // continues on success.
-    bool tokenizer_only_mode = false;
-
-};
-
 struct AiConfigSnapshot {
     std::filesystem::path config_path;
     nlohmann::json document;
@@ -121,12 +100,79 @@ struct AiConfigSnapshot {
     float tokenizer_vocab_score_multiplier = 1.0f;
     bool data_collection_clear_merged_cache_on_merge = false;
     int data_collection_max_new_entries_per_run = 5000;
-    SubprocessConfig subprocess_config;
+    // subprocess.tokenizer.only_mode
+    // When true, train_gpu spawns the train_tokenizer subprocess, waits for
+    // completion, and exits cleanly without entering Phase 1. When false,
+    // tokenizer training runs as a normal pre-Phase-1 step and training
+    // continues on success.
+    bool subprocess_tokenizer_only_mode = false;
     bool has_grim_paths = false;
     bool has_training = false;
     bool has_tokenizer = false;
     bool has_data_collection = false;
     bool has_subprocess = false;
+
+    template <typename FieldType>
+    void assignSnapshotField(FieldType& field, const nlohmann::json& node, const char* key) {
+        auto it = node.find(key);
+        if (it != node.end() && !it->is_null()) {
+            field = it->get<std::decay_t<FieldType>>();
+        }
+    }
+
+    void populateTokenizerFields(const nlohmann::json& tok) {
+        has_tokenizer = true;
+
+        assignSnapshotField(tokenizer_vocab_size, tok, "vocab_size");
+        assignSnapshotField(tokenizer_max_vocab_size, tok, "max_vocab_size");
+        assignSnapshotField(tokenizer_max_length, tok, "max_length");
+        assignSnapshotField(tokenizer_min_cleaned_text_length, tok, "min_cleaned_text_length");
+        assignSnapshotField(tokenizer_min_subword_freq, tok, "min_subword_freq");
+        assignSnapshotField(tokenizer_prune_during_mining, tok, "prune_during_mining");
+        assignSnapshotField(tokenizer_enable_parallel_subword_mining, tok, "enable_parallel_subword_mining");
+        assignSnapshotField(tokenizer_subword_mining_workers, tok, "subword_mining_workers");
+        assignSnapshotField(tokenizer_subword_mining_max_bytes, tok, "subword_mining_max_bytes");
+        assignSnapshotField(tokenizer_model_type, tok, "model_type");
+        assignSnapshotField(tokenizer_add_bos, tok, "add_bos");
+        assignSnapshotField(tokenizer_add_eos, tok, "add_eos");
+        assignSnapshotField(tokenizer_unk_token, tok, "unk_token");
+        assignSnapshotField(tokenizer_pad_token, tok, "pad_token");
+        assignSnapshotField(tokenizer_bos_token, tok, "bos_token");
+        assignSnapshotField(tokenizer_eos_token, tok, "eos_token");
+        assignSnapshotField(tokenizer_enable_nfkc_normalization, tok, "enable_nfkc_normalization");
+        assignSnapshotField(tokenizer_enable_lowercasing, tok, "enable_lowercasing");
+        assignSnapshotField(tokenizer_enable_parallel_tokenization, tok, "enable_parallel_tokenization");
+        assignSnapshotField(tokenizer_parallel_threshold, tok, "parallel_threshold");
+        assignSnapshotField(tokenizer_enable_byte_fallback, tok, "enable_byte_fallback");
+        assignSnapshotField(tokenizer_expected_checksum, tok, "expected_checksum");
+        assignSnapshotField(tokenizer_save_text_vocab, tok, "save_text_vocab");
+        assignSnapshotField(tokenizer_vocab_score_multiplier, tok, "vocab_score_multiplier");
+
+        if (!tok.contains("vocab_size") &&
+            tok.contains("max_vocab_size") &&
+            tokenizer_max_vocab_size > 0) {
+            tokenizer_vocab_size = tokenizer_max_vocab_size;
+        }
+
+        if (tok.contains("scratch_block_reasoning") && tok["scratch_block_reasoning"].is_object()) {
+            const auto& sbr = tok["scratch_block_reasoning"];
+            assignSnapshotField(hyperparameters.tokenizer_enable_scratch_block_reasoning,
+                                sbr,
+                                "enabled");
+            assignSnapshotField(hyperparameters.tokenizer_detect_numbers,
+                                sbr,
+                                "detect_numbers");
+        }
+
+        if (tok.contains("special_tokens") && tok["special_tokens"].is_array()) {
+            tokenizer_special_tokens.clear();
+            for (const auto& token : tok["special_tokens"]) {
+                if (token.is_string()) {
+                    tokenizer_special_tokens.push_back(token.get<std::string>());
+                }
+            }
+        }
+    }
 
     bool hasRequiredGrimTextPaths() const {
         return !grim_text_vocab.empty() && !grim_text_training_data.empty();
@@ -1246,12 +1292,11 @@ inline bool populateDataCollectionFieldsFromConfig(const nlohmann::json& config,
     return true;
 }
 
-// Populate SubprocessConfig from ai_config.json. Reads two semantically-related
-// flags from different top-level sections so the coordinator (training/Subprocess/)
-// has a single, validated, type-checked view. Throws std::runtime_error on a
-// type mismatch (Rule 20: fail loud — wrong type is NEVER silently coerced).
-// Missing fields default to false. Returns true if any subprocess field was found.
-inline bool populateSubprocessConfigFromConfig(const nlohmann::json& config, SubprocessConfig& sc) {
+// Populate subprocess-owned snapshot fields from ai_config.json.
+// Throws std::runtime_error on a type mismatch (Rule 20: fail loud — wrong
+// type is NEVER silently coerced). Missing fields default to false. Returns
+// true if any subprocess field was found.
+inline bool populateSubprocessFieldsFromConfig(const nlohmann::json& config, AiConfigSnapshot& snapshot) {
     bool found_any = false;
 
     // subprocess.tokenizer.only_mode
@@ -1272,7 +1317,7 @@ inline bool populateSubprocessConfigFromConfig(const nlohmann::json& config, Sub
                     throw std::runtime_error(
                         "ai_config.json: 'subprocess.tokenizer.only_mode' must be a boolean");
                 }
-                sc.tokenizer_only_mode = tok["only_mode"].get<bool>();
+                snapshot.subprocess_tokenizer_only_mode = tok["only_mode"].get<bool>();
                 found_any = true;
             }
         }
@@ -1324,61 +1369,11 @@ inline std::optional<AiConfigSnapshot> loadAiConfigSnapshot(const std::string& c
         if (snapshot.document.contains("tokenizer")) {
             const auto& tok = snapshot.document["tokenizer"];
             if (tok.is_object()) {
-                snapshot.has_tokenizer = true;
-
-                assignTrainingField(snapshot.tokenizer_vocab_size, tok, "vocab_size");
-                assignTrainingField(snapshot.tokenizer_max_vocab_size, tok, "max_vocab_size");
-                assignTrainingField(snapshot.tokenizer_max_length, tok, "max_length");
-                assignTrainingField(snapshot.tokenizer_min_cleaned_text_length, tok, "min_cleaned_text_length");
-                assignTrainingField(snapshot.tokenizer_min_subword_freq, tok, "min_subword_freq");
-                assignTrainingField(snapshot.tokenizer_prune_during_mining, tok, "prune_during_mining");
-                assignTrainingField(snapshot.tokenizer_enable_parallel_subword_mining, tok, "enable_parallel_subword_mining");
-                assignTrainingField(snapshot.tokenizer_subword_mining_workers, tok, "subword_mining_workers");
-                assignTrainingField(snapshot.tokenizer_subword_mining_max_bytes, tok, "subword_mining_max_bytes");
-                assignTrainingField(snapshot.tokenizer_model_type, tok, "model_type");
-                assignTrainingField(snapshot.tokenizer_add_bos, tok, "add_bos");
-                assignTrainingField(snapshot.tokenizer_add_eos, tok, "add_eos");
-                assignTrainingField(snapshot.tokenizer_unk_token, tok, "unk_token");
-                assignTrainingField(snapshot.tokenizer_pad_token, tok, "pad_token");
-                assignTrainingField(snapshot.tokenizer_bos_token, tok, "bos_token");
-                assignTrainingField(snapshot.tokenizer_eos_token, tok, "eos_token");
-                assignTrainingField(snapshot.tokenizer_enable_nfkc_normalization, tok, "enable_nfkc_normalization");
-                assignTrainingField(snapshot.tokenizer_enable_lowercasing, tok, "enable_lowercasing");
-                assignTrainingField(snapshot.tokenizer_enable_parallel_tokenization, tok, "enable_parallel_tokenization");
-                assignTrainingField(snapshot.tokenizer_parallel_threshold, tok, "parallel_threshold");
-                assignTrainingField(snapshot.tokenizer_enable_byte_fallback, tok, "enable_byte_fallback");
-                assignTrainingField(snapshot.tokenizer_expected_checksum, tok, "expected_checksum");
-                assignTrainingField(snapshot.tokenizer_save_text_vocab, tok, "save_text_vocab");
-                assignTrainingField(snapshot.tokenizer_vocab_score_multiplier, tok, "vocab_score_multiplier");
-
-                if (!tok.contains("vocab_size") &&
-                    tok.contains("max_vocab_size") &&
-                    snapshot.tokenizer_max_vocab_size > 0) {
-                    snapshot.tokenizer_vocab_size = snapshot.tokenizer_max_vocab_size;
-                }
-
-                if (tok.contains("scratch_block_reasoning") && tok["scratch_block_reasoning"].is_object()) {
-                    const auto& sbr = tok["scratch_block_reasoning"];
-                    assignTrainingField(snapshot.hyperparameters.tokenizer_enable_scratch_block_reasoning,
-                                        sbr,
-                                        "enabled");
-                    assignTrainingField(snapshot.hyperparameters.tokenizer_detect_numbers,
-                                        sbr,
-                                        "detect_numbers");
-                }
-
-                if (tok.contains("special_tokens") && tok["special_tokens"].is_array()) {
-                    snapshot.tokenizer_special_tokens.clear();
-                    for (const auto& token : tok["special_tokens"]) {
-                        if (token.is_string()) {
-                            snapshot.tokenizer_special_tokens.push_back(token.get<std::string>());
-                        }
-                    }
-                }
+                snapshot.populateTokenizerFields(tok);
             }
         }
         snapshot.has_data_collection = detail::populateDataCollectionFieldsFromConfig(snapshot.document, snapshot);
-        snapshot.has_subprocess = detail::populateSubprocessConfigFromConfig(snapshot.document, snapshot.subprocess_config);
+        snapshot.has_subprocess = detail::populateSubprocessFieldsFromConfig(snapshot.document, snapshot);
         return snapshot;
     } catch (const std::exception& e) {
         std::cerr << "[Config] ERROR: Exception loading ai_config.json: " << e.what() << std::endl;
@@ -1397,20 +1392,6 @@ inline bool loadTrainingHyperparameters(TrainingHyperparameters& params, const s
     }
 
     params = snapshot->hyperparameters;
-    return true;
-}
-
-/**
- * @brief Load the SubprocessConfig view from an already-loaded AiConfigSnapshot.
- *
- * The snapshot owns the single ai_config.json parse. Subprocess code should
- * receive or load that one root object, then slice the subprocess view from it
- * instead of reparsing the file by path.
- *
- * Missing fields default to false (the field defaults on SubprocessConfig).
- */
-inline bool loadSubprocessConfig(SubprocessConfig& config, const AiConfigSnapshot& snapshot) {
-    config = snapshot.subprocess_config;
     return true;
 }
 

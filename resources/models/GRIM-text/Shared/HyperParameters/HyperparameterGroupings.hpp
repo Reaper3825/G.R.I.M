@@ -48,6 +48,12 @@ struct TokenizerHP {
     int execution_block_num_steps = 0;
 };
 
+struct TokenizerSubprocessHP {
+    std::string config_path;
+    TokenizerHP tokenizer;
+    bool only_mode = false;
+};
+
 struct LearningRateScheduleInputs {
     float learning_rate = 0.0f;
     float cosine_decay_min_lr = 0.0f;
@@ -737,6 +743,19 @@ inline TokenizerHP tokenizerHP(const StartupConfig& config) {
         throw std::runtime_error("tokenizerHP: execution_block_num_steps must be >= 0, got " +
                                  std::to_string(view.execution_block_num_steps));
     }
+    return view;
+}
+
+inline TokenizerSubprocessHP tokenizerSubprocessHP(const StartupConfig& config)
+{
+    TokenizerSubprocessHP view;
+    if (config.paths.config_path.empty()) {
+        throw std::runtime_error("tokenizerSubprocessHP: config_path is empty");
+    }
+
+    view.config_path = config.paths.config_path.string();
+    view.tokenizer = tokenizerHP(config);
+    view.only_mode = config.subprocess_tokenizer_only_mode;
     return view;
 }
 

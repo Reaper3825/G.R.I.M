@@ -25,7 +25,7 @@ namespace GRIMText::Training {
 struct LoggingContext;
 struct TrainingContext;
 
-void LoggingReady(TrainingContext& ctx, int argc, char** argv);
+void LoggingReady(TrainingContext& ctx);
 
 namespace Internal {
 

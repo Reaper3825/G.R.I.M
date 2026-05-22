@@ -8,7 +8,6 @@
 #include "../Phase1_Startup.hpp"
 
 #include "../../../Shared/LogRecorder/LogRecorder.hpp"
-#include "../../../Shared/UnigramByte/TokenLayout.hpp"
 
 #include <chrono>
 #include <ctime>
@@ -30,33 +29,6 @@ void registerDefaultLoggingProfiles() {
 }
 
 } // anonymous namespace
-
-StartupConfig loadConfiguration(int argc, char** argv) {
-    StartupConfig config = GRIM::HyperParameters::loadStartupConfig(argc, argv);
-
-    GRIM::Tokenizer::configureTokenLayout(GRIM::Tokenizer::kAtomTypeCount);
-
-    if (config.hyperparameters.log_recorder.enabled) {
-        GRIM::Logging::InitLogRecorder(config.paths.log_dir);
-
-        const auto& layers = config.hyperparameters.log_recorder.layers;
-        GRIM::Logging::ConfigureLayerLogging(
-            config.hyperparameters.log_recorder.enabled,
-            layers.embedding,
-            layers.rms_norm,
-            layers.attention,
-            layers.feed_forward,
-            layers.residual,
-            layers.encoding,
-            layers.serialization,
-            layers.execution_block);
-    } else {
-        GRIM::Logging::ConfigureLayerLogging(
-            false, false, false, false, false, false, false, false, false);
-    }
-
-    return config;
-}
 
 LoggingContext initializeLogging(const PathConfig& paths) {
     registerDefaultLoggingProfiles();
@@ -129,7 +101,7 @@ void setupBatchLogTape(LoggingContext& logging, const StartupConfig& config) {
 
 } // namespace Internal
 
-void LoggingReady(TrainingContext& ctx, int argc, char** argv) {
+void LoggingReady(TrainingContext& ctx) {
     using GRIM::Logging::EmitModuleInfo;
     using GRIM::Logging::ModuleId;
 
@@ -137,10 +109,25 @@ void LoggingReady(TrainingContext& ctx, int argc, char** argv) {
     EmitModuleInfo(ModuleId::Training, "  Phase 1: Startup & Initialization", 0);
     EmitModuleInfo(ModuleId::Training, "  GRIM-text GPU Training v3.0.0", 0);
     EmitModuleInfo(ModuleId::Training, "========================================", 0);
-    EmitModuleInfo(ModuleId::Training, "[Phase1] Loading configuration...", 0);
-    ctx.config = Internal::loadConfiguration(argc, argv);
-    EmitModuleInfo(ModuleId::Training,
-        std::string("[Phase1] ✓ Configuration loaded from: ") + ctx.config.paths.config_path.string(), 0);
+
+    if (ctx.config.hyperparameters.log_recorder.enabled) {
+        GRIM::Logging::InitLogRecorder(ctx.config.paths.log_dir);
+
+        const auto& layers = ctx.config.hyperparameters.log_recorder.layers;
+        GRIM::Logging::ConfigureLayerLogging(
+            ctx.config.hyperparameters.log_recorder.enabled,
+            layers.embedding,
+            layers.rms_norm,
+            layers.attention,
+            layers.feed_forward,
+            layers.residual,
+            layers.encoding,
+            layers.serialization,
+            layers.execution_block);
+    } else {
+        GRIM::Logging::ConfigureLayerLogging(
+            false, false, false, false, false, false, false, false, false);
+    }
 
     if (!ctx.config.paths.log_dir.empty()) {
         fs::create_directories(ctx.config.paths.log_dir);

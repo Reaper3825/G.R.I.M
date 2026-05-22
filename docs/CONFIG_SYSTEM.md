@@ -73,7 +73,7 @@ The GRIM project uses a three-tier configuration system:
 - JSON parsing functions (`loadAiConfigSnapshot`, `populateTrainingHyperparametersFromConfig`)
 - Default values that match `HyperParameters_GPU.hpp`
 
-**Access rule:** Consumers should prefer loading **one** `AiConfigSnapshot` and then reading fields or slicing the remaining typed views (for example `SubprocessConfig`) from that snapshot. Do not add new path-based leaf loaders that reparse `ai_config.json` for one subsection.
+**Access rule:** Consumers should prefer loading **one** `AiConfigSnapshot` and then reading direct snapshot fields from that object. Do not add new sidecar config wrappers or path-based leaf loaders that reparse `ai_config.json` for one subsection.
 
 **Rule:** Default values in C++ structs MUST match compile-time defaults in `HyperParameters_GPU.hpp`. JSON values override both at runtime.
 

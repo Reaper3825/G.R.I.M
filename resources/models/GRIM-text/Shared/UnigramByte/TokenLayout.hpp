@@ -45,10 +45,10 @@ constexpr int kAtomTypeCount = static_cast<int>(AtomType::ATOM_ACTIVE_COUNT);
 //  Token ID Layout Constants
 //======================================================//
 constexpr int ATOM_TOKEN_OFFSET = BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE;  // Atoms start after byte tokens (260)
-inline int ATOM_VOCAB_SIZE = kAtomTypeCount;  // Atom slots derived from AtomType count
-inline int UNIGRAM_VOCAB_OFFSET = ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE;
-inline uint32_t ATOM_TOKEN_BASE = static_cast<uint32_t>(ATOM_TOKEN_OFFSET);
-inline uint32_t ATOM_TOKEN_MAX = static_cast<uint32_t>(UNIGRAM_VOCAB_OFFSET);
+inline constexpr int ATOM_VOCAB_SIZE = kAtomTypeCount;  // Atom slots derived from AtomType count
+inline constexpr int UNIGRAM_VOCAB_OFFSET = ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE;
+inline constexpr uint32_t ATOM_TOKEN_BASE = static_cast<uint32_t>(ATOM_TOKEN_OFFSET);
+inline constexpr uint32_t ATOM_TOKEN_MAX = static_cast<uint32_t>(UNIGRAM_VOCAB_OFFSET);
 // Sentinel: position has no registered AtomTable entry (0 is a valid AtomTable ID)
 constexpr uint32_t kAtomEntryNone = UINT32_MAX;
 constexpr int MAX_PIECE_LENGTH = 32;           // Maximum token length in bytes
@@ -117,16 +117,6 @@ struct TokenLayout {
 
     int firstContentTokenId() const { return num_special; }
 };
-
-//======================================================//
-//  Layout Configuration
-//======================================================//
-inline void configureTokenLayout(int /*atom_vocab_size*/) {
-    // Atom tokens are reserved for type-only placeholders; size derived from AtomType.
-    ATOM_VOCAB_SIZE = kAtomTypeCount;
-    UNIGRAM_VOCAB_OFFSET = ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE;
-    ATOM_TOKEN_MAX = static_cast<uint32_t>(UNIGRAM_VOCAB_OFFSET);
-}
 
 //======================================================//
 //  Token ID ↔ Index Conversion

@@ -1390,7 +1390,6 @@ inline bool loadGenerationConfig(GenerationConfig& generation,
 // tools) gets one fully-validated `StartupConfig` from a single call.
 //
 // Side effects intentionally NOT performed here (caller does them):
-//   - GRIM::Tokenizer::configureTokenLayout()   → Tokenizer subsystem
 //   - GRIM::Logging::InitLogRecorder()          → training log subsystem
 // Keeping those out preserves the Shared/HyperParameters → Training
 // layering rule (HyperParameters does not depend on training/).
@@ -1442,6 +1441,7 @@ struct StartupConfig {
     uint32_t tokenizer_expected_checksum = 0;
     bool tokenizer_save_text_vocab = true;
     float tokenizer_vocab_score_multiplier = 1.0f;
+    bool subprocess_tokenizer_only_mode = false;
     GenerationConfig generation;
 
     // Convenience accessor: architecture lives inside hyperparameters now.
@@ -1537,6 +1537,7 @@ inline StartupConfig loadStartupConfig(int argc, char** argv) {
     config.tokenizer_expected_checksum = snapshot->tokenizer_expected_checksum;
     config.tokenizer_save_text_vocab = snapshot->tokenizer_save_text_vocab;
     config.tokenizer_vocab_score_multiplier = snapshot->tokenizer_vocab_score_multiplier;
+    config.subprocess_tokenizer_only_mode = snapshot->subprocess_tokenizer_only_mode;
 
     // 5. + 6. Architecture and generation — single source of truth for JSON keys.
     //         max_seq_len/use_gpu/use_flash_attention were populated into

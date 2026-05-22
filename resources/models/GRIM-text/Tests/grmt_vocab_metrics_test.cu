@@ -471,8 +471,6 @@ int GRIM::Test::checkSanity(const GRMTCorpusMetrics& m) {
 // ════════════════════════════════════════════════════════
 
 int main(int argc, char** argv) {
-    GRIM::Tokenizer::configureTokenLayout(GRIM::Tokenizer::kAtomTypeCount);
-
     std::string vocab_path;
     std::string grmt_path;
 
