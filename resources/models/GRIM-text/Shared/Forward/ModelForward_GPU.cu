@@ -82,7 +82,6 @@ void ModelForwardRequest::validate(const char* caller) const {
     if (!bindings) throw std::runtime_error(std::string(caller) + ": bindings is NULL");
     if (payload->batch_size <= 0) throw std::runtime_error(std::string(caller) + ": BatchPayload.batch_size <= 0");
     if (payload->max_seq_len <= 0) throw std::runtime_error(std::string(caller) + ": BatchPayload.max_seq_len <= 0");
-    runtime->validate(caller, execution_block && config->execution_block_enabled);
     if (static_cast<int>(payload->seq_lengths.size()) != payload->batch_size) {
         throw std::runtime_error(std::string(caller) + ": payload.seq_lengths size (" +
                                  std::to_string(payload->seq_lengths.size()) +

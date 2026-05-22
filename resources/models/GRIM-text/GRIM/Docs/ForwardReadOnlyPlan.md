@@ -2,6 +2,8 @@
 
 Scope: make the shared model forward boundary read-only over durable parameter state while preserving the training autograd graph and keeping inference/prefill on the shared forward primitive.
 
+The phase-ownership doctrine behind this plan is documented in [GraphStateOwnership.md](GraphStateOwnership.md): forward reads state, execution/inference use state, backward measures gradient change, and optimizer/update is the durable state writer.
+
 ## Implementation status
 
 The following ownership fixes are already implemented and should be treated as current architecture, not future work:
