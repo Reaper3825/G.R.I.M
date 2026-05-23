@@ -18,7 +18,7 @@ else()
 endif()
 
 if (NOT DEFINED VCPKG_INSTALLED_DIR)
-    set(VCPKG_INSTALLED_DIR "${CMAKE_SOURCE_DIR}/external/vcpkg/installed")
+    set(VCPKG_INSTALLED_DIR "${CMAKE_SOURCE_DIR}/vcpkg_installed")
 endif()
 
 set(_dll_dir_vcpkg "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")

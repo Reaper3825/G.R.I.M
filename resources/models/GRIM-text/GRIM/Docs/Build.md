@@ -6,10 +6,25 @@ GRIM-text is a **separate build** from the main G.R.I.M program. It MUST NOT inc
 
 ```powershell
 cd resources/models/GRIM-text/training/TrainingLoop
-cmake --build build --config Release --target train_gpu
-cmake --build build --config Release --target grim_text_server
+cmake --preset windows-release
+cmake --build --preset windows-release --target train_gpu train_tokenizer
 ```
- vb
+
+TrainingLoop has its own minimal vcpkg manifest at `resources/models/GRIM-text/training/vcpkg.json`. Its presets install those dependencies into `resources/models/GRIM-text/training/vcpkg_installed` rather than the repo-root `vcpkg_installed`, because vcpkg manifest mode prunes packages that are not in the active manifest. Sharing the main GRIM install tree would let the TrainingLoop manifest remove root-project dependencies such as CPR/OpenCV/etc.
+
+For PSC Bridges-2, use the launcher as usual; it selects the TrainingLoop preset by GPU type:
+
+```bash
+./scripts/run_train_on_bridges2.sh --build --gpu-type h100-80
+```
+
+Manual Bridges-2 configure/build, after loading modules and setting CUDA 12 via `GRIM_CUDA_ROOT`, is:
+
+```bash
+cd resources/models/GRIM-text/training/TrainingLoop
+cmake --preset bridges2-h100-release -DCUDAToolkit_ROOT="$GRIM_CUDA_ROOT"
+cmake --build --preset bridges2-h100-release --target train_gpu train_tokenizer -j 100
+```
 
 ## Bridges-2 launcher dependency root
 

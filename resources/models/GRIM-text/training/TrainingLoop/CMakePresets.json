@@ -1,0 +1,104 @@
+{
+  "version": 2,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20
+  },
+  "configurePresets": [
+    {
+      "name": "windows-base",
+      "hidden": true,
+      "generator": "Visual Studio 17 2022",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/../../../../../external/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_MANIFEST_DIR": "${sourceDir}/..",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/../vcpkg_installed",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "CUDAToolkit_ROOT": "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5",
+        "GRIM_CUDA_ARCHITECTURES": "80;86;90"
+      }
+    },
+    {
+      "name": "windows-release",
+      "displayName": "TrainingLoop Windows Release",
+      "description": "Configure TrainingLoop on Windows with VS2022, CUDA 12.5, and the isolated TrainingLoop vcpkg manifest install root.",
+      "inherits": "windows-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "windows-debug",
+      "displayName": "TrainingLoop Windows Debug",
+      "description": "Configure TrainingLoop on Windows with VS2022, CUDA 12.5, and the isolated TrainingLoop vcpkg manifest install root.",
+      "inherits": "windows-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "bridges2-base",
+      "hidden": true,
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/../../../../../external/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_MANIFEST_DIR": "${sourceDir}/..",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/../vcpkg_installed",
+        "VCPKG_TARGET_TRIPLET": "x64-linux"
+      }
+    },
+    {
+      "name": "bridges2-h100-release",
+      "displayName": "TrainingLoop Bridges-2 H100 Release",
+      "description": "Configure TrainingLoop for Bridges-2 H100 nodes with sm_90 CUDA kernels and manifest-mode vcpkg.",
+      "inherits": "bridges2-base",
+      "cacheVariables": {
+        "GRIM_CUDA_ARCHITECTURES": "90"
+      }
+    },
+    {
+      "name": "bridges2-v100-release",
+      "displayName": "TrainingLoop Bridges-2 V100/L40S Release",
+      "description": "Configure TrainingLoop for Bridges-2 non-H100 GPU targets using the sm_80 CUDA kernel build used by the launcher.",
+      "inherits": "bridges2-base",
+      "cacheVariables": {
+        "GRIM_CUDA_ARCHITECTURES": "80"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-release",
+      "displayName": "Build TrainingLoop Windows Release",
+      "configuration": "Release",
+      "jobs": 100,
+      "inheritConfigureEnvironment": true
+    },
+    {
+      "name": "windows-debug",
+      "configurePreset": "windows-debug",
+      "displayName": "Build TrainingLoop Windows Debug",
+      "configuration": "Debug",
+      "jobs": 100,
+      "inheritConfigureEnvironment": true
+    },
+    {
+      "name": "bridges2-h100-release",
+      "configurePreset": "bridges2-h100-release",
+      "displayName": "Build TrainingLoop Bridges-2 H100 Release",
+      "jobs": 100,
+      "inheritConfigureEnvironment": true
+    },
+    {
+      "name": "bridges2-v100-release",
+      "configurePreset": "bridges2-v100-release",
+      "displayName": "Build TrainingLoop Bridges-2 V100/L40S Release",
+      "jobs": 100,
+      "inheritConfigureEnvironment": true
+    }
+  ]
+}

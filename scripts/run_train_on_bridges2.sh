@@ -679,8 +679,16 @@ else
   BRIDGES2_CUDA_ARCH="export GRIM_CUDA_ARCH=80; "
 fi
 
-BRIDGES2_CMAKE_OPTS="-DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=$VCPKG_TOOLCHAIN -DVCPKG_TARGET_TRIPLET=x64-linux -DVCPKG_MANIFEST_DIR=$BRIDGES2_DIR/$TRAINING_DIR"
-BRIDGES2_PREP_BUILD="if [ -f \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" ]; then cached_toolchain=\$(grep '^CMAKE_TOOLCHAIN_FILE:FILEPATH=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); if [ -n \"\$cached_toolchain\" ] && [ \"\$cached_toolchain\" != \"$VCPKG_TOOLCHAIN\" ]; then echo \"  stale CMake toolchain cache: \$cached_toolchain -> $VCPKG_TOOLCHAIN\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure with the pinned vcpkg cache\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; fi; fi"
+BRIDGES2_TRAINING_VCPKG_INSTALLED="$BRIDGES2_DIR/$TRAINING_DIR/vcpkg_installed"
+BRIDGES2_CMAKE_PRESET="${GRIM_BRIDGES2_CMAKE_PRESET:-}"
+if [[ -z "$BRIDGES2_CMAKE_PRESET" ]]; then
+  if [[ "$GPU_TYPE" == "h100-80" ]]; then
+    BRIDGES2_CMAKE_PRESET="bridges2-h100-release"
+  else
+    BRIDGES2_CMAKE_PRESET="bridges2-v100-release"
+  fi
+fi
+BRIDGES2_PREP_BUILD="if [ -f \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" ]; then cached_toolchain=\$(grep '^CMAKE_TOOLCHAIN_FILE:FILEPATH=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); cached_installed=\$(grep '^VCPKG_INSTALLED_DIR:PATH=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); if [ -n \"\$cached_toolchain\" ] && [ \"\$cached_toolchain\" != \"$VCPKG_TOOLCHAIN\" ]; then echo \"  stale CMake toolchain cache: \$cached_toolchain -> $VCPKG_TOOLCHAIN\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure with the pinned vcpkg cache\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; elif [ -n \"\$cached_installed\" ] && [ \"\$cached_installed\" != \"$BRIDGES2_TRAINING_VCPKG_INSTALLED\" ]; then echo \"  stale TrainingLoop vcpkg installed cache: \$cached_installed -> $BRIDGES2_TRAINING_VCPKG_INSTALLED\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure the manifest install root\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; fi; fi"
 
 # --build
 # Default to building train_gpu PLUS train_tokenizer because train_gpu spawns
@@ -704,7 +712,8 @@ if [[ "$DO_BUILD" == true ]]; then
   echo "Building $BUILD_TARGET on Bridges-2 ($BRIDGES2_DIR/$BUILD_DIR)..."
   echo "  GPU type: $GPU_TYPE, CUDA arch: $([ "$GPU_TYPE" == "h100-80" ] && echo sm_90 || echo sm_80), make -j $BRIDGES2_MAKE_JOBS"
   echo "  vcpkg checkout: $BRIDGES2_VCPKG (same path as local builds; pinned to external/vcpkg gitlink)"
-  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "BRIDGES2_DIR=$BRIDGES2_DIR; $BRIDGES2_CUDA_ARCH cd \$BRIDGES2_DIR && $BRIDGES2_SUBMODULE && $BRIDGES2_VCPKG_ENSURE && $BRIDGES2_MANIFEST_ENSURE && $BRIDGES2_PREP_BUILD && cd \$BRIDGES2_DIR/$TRAINING_DIR/TrainingLoop && ${BRIDGES2_CLEAN}mkdir -p build && cd build && $BRIDGES2_MODULES && $BRIDGES2_ENSURE_CUDA12 && $BRIDGES2_VCPKG_TOOL_POLICY && $BRIDGES2_VCPKG_ENV && $BRIDGES2_VCPKG_NINJA_CHECK && cmake .. $BRIDGES2_CMAKE_OPTS -DCUDAToolkit_ROOT=\$GRIM_CUDA_ROOT && make -j $BRIDGES2_MAKE_JOBS $BUILD_TARGET"
+  echo "  CMake preset: $BRIDGES2_CMAKE_PRESET"
+  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "BRIDGES2_DIR=$BRIDGES2_DIR; $BRIDGES2_CUDA_ARCH cd \$BRIDGES2_DIR && $BRIDGES2_SUBMODULE && $BRIDGES2_VCPKG_ENSURE && $BRIDGES2_MANIFEST_ENSURE && $BRIDGES2_PREP_BUILD && cd \$BRIDGES2_DIR/$TRAINING_DIR/TrainingLoop && ${BRIDGES2_CLEAN}$BRIDGES2_MODULES && $BRIDGES2_ENSURE_CUDA12 && $BRIDGES2_VCPKG_TOOL_POLICY && $BRIDGES2_VCPKG_ENV && $BRIDGES2_VCPKG_NINJA_CHECK && cmake --preset $BRIDGES2_CMAKE_PRESET -DCUDAToolkit_ROOT=\$GRIM_CUDA_ROOT && cmake --build --preset $BRIDGES2_CMAKE_PRESET --target $BUILD_TARGET -j $BRIDGES2_MAKE_JOBS"
 fi
 
 : # Transfer data

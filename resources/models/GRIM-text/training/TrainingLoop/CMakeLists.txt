@@ -9,6 +9,10 @@ get_filename_component(GRIM_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../.
 get_filename_component(GRIM_TRAINING_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 set(GRIM_VCPKG_ROOT "${GRIM_REPO_ROOT}/external/vcpkg")
 set(GRIM_VCPKG_TOOLCHAIN "${GRIM_VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
+set(GRIM_TRAINING_VCPKG_INSTALLED_DIR "${GRIM_TRAINING_ROOT}/vcpkg_installed")
+option(GRIM_TRAINING_ALLOW_REPO_VCPKG_INSTALLED_DIR
+    "Allow TrainingLoop to share the repo-root vcpkg_installed directory with the main GRIM manifest"
+    OFF)
 
 if(NOT DEFINED VCPKG_TARGET_TRIPLET)
     if(WIN32)
@@ -30,7 +34,11 @@ if(NOT DEFINED VCPKG_MANIFEST_DIR AND EXISTS "${GRIM_TRAINING_ROOT}/vcpkg.json")
 endif()
 
 if(NOT DEFINED VCPKG_INSTALLED_DIR)
-    set(VCPKG_INSTALLED_DIR "${GRIM_REPO_ROOT}/vcpkg_installed" CACHE PATH "vcpkg installed directory")
+    set(VCPKG_INSTALLED_DIR "${GRIM_TRAINING_VCPKG_INSTALLED_DIR}" CACHE PATH "TrainingLoop vcpkg installed directory")
+elseif(NOT GRIM_TRAINING_ALLOW_REPO_VCPKG_INSTALLED_DIR AND "${VCPKG_INSTALLED_DIR}" STREQUAL "${GRIM_REPO_ROOT}/vcpkg_installed")
+    message(STATUS "TrainingLoop manifest install root moved from repo-root vcpkg_installed to ${GRIM_TRAINING_VCPKG_INSTALLED_DIR}")
+    message(STATUS "  Pass -DGRIM_TRAINING_ALLOW_REPO_VCPKG_INSTALLED_DIR=ON only if you intentionally want the TrainingLoop manifest to prune the main GRIM manifest install tree.")
+    set(VCPKG_INSTALLED_DIR "${GRIM_TRAINING_VCPKG_INSTALLED_DIR}" CACHE PATH "TrainingLoop vcpkg installed directory" FORCE)
 endif()
 
 set(GRIM_VCPKG_TRIPLET_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
@@ -104,6 +112,18 @@ if(CUDAToolkit_VERSION_MAJOR LESS 12)
     "  Or from the run script (Anvil): ensure project CUDA 12 is installed and script will default to it.")
 endif()
 message(STATUS "CUDAToolkit version: ${CUDAToolkit_VERSION}")
+
+function(grim_training_repair_vcpkg_package_dir package_dir cache_var)
+    set(_pkg_dir "${GRIM_VCPKG_TRIPLET_DIR}/share/${package_dir}")
+    if(EXISTS "${_pkg_dir}")
+        set(${cache_var} "${_pkg_dir}" CACHE PATH "${package_dir} package config directory from the TrainingLoop manifest install root" FORCE)
+    elseif(DEFINED ${cache_var} AND "${${cache_var}}" MATCHES "-NOTFOUND$")
+        unset(${cache_var} CACHE)
+    endif()
+endfunction()
+
+grim_training_repair_vcpkg_package_dir("nlohmann_json" nlohmann_json_DIR)
+grim_training_repair_vcpkg_package_dir("flatbuffers" flatbuffers_DIR)
 
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(flatbuffers CONFIG REQUIRED)
@@ -671,8 +691,10 @@ target_link_libraries(unigrambyte_self_test PRIVATE
     CUDA::cudart
     grim_unigrambyte_tokenizer
     Threads::Threads
-    stdc++fs
 )
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_link_libraries(unigrambyte_self_test PRIVATE stdc++fs)
+endif()
 
 target_include_directories(unigrambyte_self_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../..
@@ -700,8 +722,10 @@ target_link_libraries(grmt_vocab_metrics_test PRIVATE
     nlohmann_json::nlohmann_json
     CUDA::cudart
     grim_unigrambyte_tokenizer
-    stdc++fs
 )
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_link_libraries(grmt_vocab_metrics_test PRIVATE stdc++fs)
+endif()
 
 target_include_directories(grmt_vocab_metrics_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../..
