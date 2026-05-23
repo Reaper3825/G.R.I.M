@@ -200,7 +200,7 @@ public:
         // ── LM Head ──
         addBool  (params.lm_head_centering_enabled,                "lm_head_centering_enabled",       "Centering Enabled",     "LM Head");
         addBool  (params.architecture.lm_head_center_hidden_states,    "lm_head_center_hidden_states",    "Center Hidden States",  "LM Head");
-        addBool  (params.architecture.lm_head_freeze_final_rms_gamma,  "lm_head_freeze_final_rms_gamma",  "Freeze γ_final",        "LM Head");
+        addBool  (params.architecture.freeze_learned_rms_gammas,       "freeze_learned_rms_gammas",       "Freeze Learned RMS γ", "LM Head");
         addBool  (params.architecture.center_logits,                   "center_logits",                   "Center Logits",         "LM Head");
         addBool  (params.architecture.center_encoder_residuals,      "center_encoder_residuals",      "Center Encoder Resids", "LM Head");
         addBool  (params.architecture.project_out_pc1,               "project_out_pc1",               "Project Out PC1",       "LM Head");
@@ -285,7 +285,6 @@ public:
         addInt   (params.stability_override_batch_size,      "stability_override_batch_size",      "Override Batch",    "Stability");
         addInt   (params.stability_override_max_seq_len,     "stability_override_max_seq_len",     "Override Max Seq",  "Stability");
         addFloat (params.stability_override_clip_per_token,  "stability_override_clip_per_token",  "Override Clip/Tok", "Stability");
-        addFloat (params.stability_override_lr_min,          "stability_override_lr_min",          "Override LR Min",   "Stability");
 
         // ── Diagnostics ──
         addInt   (params.architecture.hardcoded_log_every_n_batches,      "hardcoded_log_every_n_batches",      "Log Every N Batches",    "Diagnostics");

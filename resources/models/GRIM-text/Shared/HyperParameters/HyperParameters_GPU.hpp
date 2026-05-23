@@ -277,7 +277,7 @@ struct ModelArchitecture {
 
     // Flash Attention (architectural choice — affects kernel selection)
     bool use_flash_attention = true;
-    int min_seq_len_for_flash = 0;     // Derived: max_seq_len / 4 (see deriveComputedHyperparameters)
+    int min_seq_len_for_flash = 0;     // Derived: max_seq_len / 4 (see deriveComputedTrainingHyperparameters)
 
     // Runtime device flag (GPU-only build forces this true; kept for plumbing)
     bool use_gpu = true;
@@ -551,11 +551,11 @@ struct LanguageModelConfig : public ModelArchitecture {
     ParameterGroupPrecision parameter_precision_slot_selector = ParameterGroupPrecision::UNSPECIFIED;
 
     // ScratchBlock reasoning layer config
-    bool use_scratch_block = true;
-    int scratch_block_atom_embedding_dim = 64;
-    int scratch_block_max_atoms = 256;
-    float scratch_block_atom_scale = 1.0f;
-    bool scratch_block_execution_first_type_only = true;
+    bool use_scratch_block = false;
+    int scratch_block_atom_embedding_dim = 0;
+    int scratch_block_max_atoms = 0;
+    float scratch_block_atom_scale = 0.0f;
+    bool scratch_block_execution_first_type_only = false;
 
     // ReasoningHead config
     bool reasoning_head_enabled = false;
@@ -564,17 +564,17 @@ struct LanguageModelConfig : public ModelArchitecture {
     // ExecutionBlock config — differentiable register machine
     bool execution_block_enabled = false;
     int execution_block_layer = -1;
-    int execution_block_num_ops = 4;
-    int execution_block_num_slots = 4;
+    int execution_block_num_ops = 0;
+    int execution_block_num_slots = 0;
     int execution_block_num_scratch_slots = 0;
-    int execution_block_num_steps = 2;
+    int execution_block_num_steps = 0;
     int execution_block_value_decode_input_dim = 0;
     int execution_block_value_decode_hidden_dim = 0;
-    int execution_block_d_key = 64;
-    int execution_block_d_type = 8;
-    int execution_block_cross_attn_head_dim = 64;
-    int execution_block_cross_attn_topk = 1;
-    float execution_block_usage_decay = 0.9f;
+    int execution_block_d_key = 0;
+    int execution_block_d_type = 0;
+    int execution_block_cross_attn_head_dim = 0;
+    int execution_block_cross_attn_topk = 0;
+    float execution_block_usage_decay = 0.0f;
     float execution_block_inject_gate_temp = 0.0f;
     int execution_block_result_slot_mode = 0;
     int execution_block_result_slot_index = 0;
@@ -582,22 +582,22 @@ struct LanguageModelConfig : public ModelArchitecture {
     float execution_block_entropy_collapse_threshold = 0.0f;
     float execution_block_write_collapse_threshold = 0.0f;
     float execution_block_magnitude_limit = 0.0f;
-    float execution_block_diversity_kappa = 2.0f;
-    float execution_block_temp_start = 2.0f;
-    float execution_block_temp_end = 0.5f;
+    float execution_block_diversity_kappa = 0.0f;
+    float execution_block_temp_start = 0.0f;
+    float execution_block_temp_end = 0.0f;
     int   execution_block_temp_schedule = 0;
-    float execution_block_entropy_weight = 0.01f;
+    float execution_block_entropy_weight = 0.0f;
 
     // Causal state loss weights (Fixes 1-9)
     float execution_block_transition_hard_threshold = 0.0f;
     int   execution_block_gate_warmup_steps = 0;
-    float execution_block_causal_w1_transition = 1.0f;
+    float execution_block_causal_w1_transition = 0.0f;
 
     float div_invalid_penalty_weight = 0.0f;
     float div_magnitude_penalty_weight = 0.0f;
 
     float arg_reinforce_weight = 0.0f;
-    float arg_reinforce_baseline_decay = 0.99f;
+    float arg_reinforce_baseline_decay = 0.0f;
 
     bool  structured_ce_enabled = false;
     float structured_ce_weight  = 0.0f;
@@ -605,25 +605,25 @@ struct LanguageModelConfig : public ModelArchitecture {
     // Decode-time slot selector config
     bool  selector_enabled = false;
     int   decode_time_slot_feature_dim = 0;
-    int   selector_d_selector = 64;
-    float selector_selection_margin = 1.0f;
+    int   selector_d_selector = 0;
+    float selector_selection_margin = 0.0f;
     float selector_supervision_weight = 0.0f;
 
     // Execution-first structured CE loss config (Step X / Y multipliers)
-    float step_x_multiplier = 2.0f;
-    float step_y_multiplier = 2.0f;
+    float step_x_multiplier = 0.0f;
+    float step_y_multiplier = 0.0f;
     bool  step_y_overrides_x = false;
     float entropy_aux_weight = 0.0f;
-    float value_match_epsilon = 1e-6f;
+    float value_match_epsilon = 0.0f;
     float final_slot_consistency_weight = 0.0f;
 
     // LM Head / RMSNorm gamma config (Issue #37 / #40 fixes)
     bool lm_head_center_hidden_states = false;
     bool freeze_learned_rms_gammas = false;
     bool project_out_pc1 = false;
-    int  pc1_power_iters = 5;
+    int  pc1_power_iters = 0;
     bool center_logits = false;
-    bool center_encoder_residuals = true;
+    bool center_encoder_residuals = false;
 
     // Hardcoded Hidden States Diagnostic (Issue #42)
     enum class HardcodedPattern {
@@ -635,15 +635,15 @@ struct LanguageModelConfig : public ModelArchitecture {
         ZERO_MEAN_SINE
     };
     HardcodedPattern hardcoded_hidden_pattern = HardcodedPattern::DISABLED;
-    int hardcoded_log_every_n_batches = 1;
+    int hardcoded_log_every_n_batches = 0;
 
     GenerationConfig generation;
 
     // Multi-token prediction (MTP) - auxiliary heads (Gloeckle et al. 2024)
     bool mtp_enabled = false;
     int mtp_k = 0;
-    float mtp_alpha = 0.2f;
-    int mtp_alpha_warmup_steps = 500;
+    float mtp_alpha = 0.0f;
+    int mtp_alpha_warmup_steps = 0;
 };
 
 } // namespace HyperParameters
@@ -678,20 +678,20 @@ namespace Config {
  * Controls modular logging levels and overrides.
  */
 struct LogRecorderConfig {
-    bool enabled = true;
-    std::string default_level = "Info";
+    bool enabled = false;
+    std::string default_level;
     std::map<std::string, std::string> modules;
     
     // Layer logging enables (for RecordLayerLogHost)
     struct LayerEnables {
-        bool embedding = true;
-        bool rms_norm = true;
-        bool attention = true;
-        bool feed_forward = true;
-        bool residual = true;
-        bool encoding = true;     // Aggregate gradient logs
-        bool serialization = true;
-        bool execution_block = true;
+        bool embedding = false;
+        bool rms_norm = false;
+        bool attention = false;
+        bool feed_forward = false;
+        bool residual = false;
+        bool encoding = false;     // Aggregate gradient logs
+        bool serialization = false;
+        bool execution_block = false;
     } layers;
 };
 
@@ -700,10 +700,10 @@ struct LogRecorderConfig {
  * Parsed from training.config.logging in ai_config.json.
  */
 struct TapeLogConfig {
-    std::string default_level = "Info";
-    bool equation_csv_enabled = true;
-    bool stderr_enabled = true;
-    size_t initial_capacity = 2048;
+    std::string default_level;
+    bool equation_csv_enabled = false;
+    bool stderr_enabled = false;
+    size_t initial_capacity = 0;
     std::map<std::string, std::string> group_overrides;
 };
 
@@ -851,8 +851,8 @@ struct TrainingHyperparameters {
     float loss_entropy_reg_lambda;
 
     // Class-balanced loss: reweights per-token loss by 1/freq^β
-    bool loss_class_balanced_enabled = false;
-    float loss_class_balanced_beta = 0.5f;
+    bool loss_class_balanced_enabled;
+    float loss_class_balanced_beta;
 
 
     // LM Head centering master toggle (training-only, no LMC counterpart).
@@ -864,29 +864,24 @@ struct TrainingHyperparameters {
     // LayerScale, QK-norm, hardcoded-hidden-states fields live in `architecture`.
     
     // Embedding freeze guard - freezes embedding weights after N optimizer steps
-    bool embedding_freeze_enabled = false;
-    int embedding_freeze_after_step = 0;
+    bool embedding_freeze_enabled;
+    int embedding_freeze_after_step;
 
-    // Optimizer selection - NO DEFAULTS for kind, but betas/eps fall back to
-    // HyperParameters constants if absent in JSON. Single source of truth for
-    // the *constants* is HyperParameters_GPU.hpp; runtime values live here and
-    // are passed to launch*Step(...) by signature.
-    //
-    // optimizer_kind ∈ {"adamw", "radamw"}.  Default "adamw" preserves prior behavior.
+    // Optimizer selection - NO DEFAULTS.
+    // optimizer_kind ∈ {"adamw", "radamw"}.
     // Selecting "radamw" runs the full Liu et al. 2019 rectified update with
     // decoupled weight decay (the "R" + "W" in RAdamW). There is no rectification
     // toggle — rectification IS RAdamW; for plain bias-corrected AdamW use "adamw".
-    std::string optimizer_kind = "adamw";
-    float optimizer_beta1   = 0.9f;
-    float optimizer_beta2   = 0.999f;
-    float optimizer_epsilon = 1e-8f;
+    std::string optimizer_kind;
+    float optimizer_beta1;
+    float optimizer_beta2;
+    float optimizer_epsilon;
 
     // Stability overrides - NO DEFAULTS
     bool stability_overrides_enabled;
     int stability_override_batch_size;
     int stability_override_max_seq_len;
     float stability_override_clip_per_token;
-    float stability_override_lr_min;
     
     // Scratch blocks - NO DEFAULTS
     bool scratch_blocks_enabled;
@@ -908,7 +903,7 @@ struct TrainingHyperparameters {
 
     // Multi-token prediction (MTP) — log-ratio monitor is training-only.
     // The other MTP fields (enabled, k, alpha, alpha_warmup_steps) live in `architecture`.
-    bool mtp_log_ratio_monitor = true;
+    bool mtp_log_ratio_monitor;
 
     // Prediction comparison - NO DEFAULTS
     bool prediction_comparison_enabled;
@@ -934,6 +929,14 @@ struct TrainingHyperparameters {
 } // namespace Config
 } // namespace GRIM
 
+namespace GRIM {
+namespace HyperParameters {
+
+inline void deriveComputedTrainingHyperparameters(GRIM::Config::TrainingHyperparameters& params);
+
+} // namespace HyperParameters
+} // namespace GRIM
+
 // Sentinel: tells ai_config_paths.hpp that the structs it needs are now in
 // scope. Without this, ai_config_paths.hpp #errors out (enforces that it can
 // only be entered through this header).
@@ -951,6 +954,48 @@ struct TrainingHyperparameters {
 
 namespace GRIM {
 namespace HyperParameters {
+
+inline void deriveComputedTrainingHyperparameters(GRIM::Config::TrainingHyperparameters& params) {
+    if (params.architecture.max_seq_len <= 0) {
+        throw std::runtime_error(
+            "deriveComputedTrainingHyperparameters: architecture.max_seq_len must be > 0, got " +
+            std::to_string(params.architecture.max_seq_len));
+    }
+    params.min_seq_valid_tokens = params.architecture.max_seq_len / 4;
+    params.architecture.min_seq_len_for_flash = params.architecture.max_seq_len / 4;
+    params.scratch_max_tokens_per_block = static_cast<size_t>(params.architecture.max_seq_len);
+    params.architecture.attention_dropout = params.architecture.dropout_rate;
+    params.architecture.d_ff = params.architecture.d_model * D_FF_MULTIPLIER;
+
+    if (params.cosine_decay_enabled) {
+        if (params.learning_rate <= 0.0f) {
+            throw std::runtime_error(
+                "deriveComputedTrainingHyperparameters: learning_rate must be > 0 when cosine_decay is enabled, got " +
+                std::to_string(params.learning_rate));
+        }
+        params.cosine_decay_min_lr = params.learning_rate * 0.1f;
+    }
+
+    if (params.architecture.d_model <= 0 || params.architecture.num_heads <= 0) {
+        throw std::runtime_error(
+            "deriveComputedTrainingHyperparameters: architecture.d_model and architecture.num_heads must be > 0");
+    }
+    if ((params.architecture.d_model % params.architecture.num_heads) != 0) {
+        throw std::runtime_error(
+            "deriveComputedTrainingHyperparameters: architecture.d_model (" +
+            std::to_string(params.architecture.d_model) + ") must be divisible by architecture.num_heads (" +
+            std::to_string(params.architecture.num_heads) + ")");
+    }
+    const int head_dim = params.architecture.d_model / params.architecture.num_heads;
+    params.architecture.execution_block_d_key = head_dim;
+    params.architecture.execution_block_cross_attn_head_dim = head_dim;
+
+    if (params.warmup_fraction <= 0.0f || params.warmup_fraction >= 1.0f) {
+        throw std::runtime_error(
+            "deriveComputedTrainingHyperparameters: warmup_fraction must be in (0, 1), got " +
+            std::to_string(params.warmup_fraction));
+    }
+}
 
 //======================================================//
 // (A) Validation primitive.
@@ -1093,66 +1138,15 @@ namespace HyperParameters {
  */
 // Snapshot-based overload — preferred entry point. Avoids re-reading
 // ai_config.json when the caller already loaded a snapshot (e.g. Phase1).
-// All architecture fields come from the snapshot's typed structs +
-// training.config block; this is the SINGLE place where JSON keys like
-// d_model / num_layers / positional_encoding are translated to the typed
-// ModelArchitecture struct.
+// All architecture fields come from the snapshot's typed structs; raw JSON
+// key translation is owned by AiConfigSnapshot / ai_config_paths.hpp.
 inline bool loadModelArchitecture(const GRIM::Config::AiConfigSnapshot& snapshot,
                                   ModelArchitecture& arch) {
     if (!snapshot.has_training) {
         throw std::runtime_error("loadModelArchitecture: snapshot.has_training is false");
     }
 
-    const auto& doc = snapshot.document;
-    const auto& training = ::GRIM::Config::requireJsonObjectField(doc, "training", "ai_config.json");
-    const auto& cfg = ::GRIM::Config::requireJsonObjectField(training, "config", "training");
-
-    arch.d_model = ::GRIM::Config::getRequiredJsonValue<int>(cfg, "d_model", "training.config");
-    arch.num_layers = ::GRIM::Config::getRequiredJsonValue<int>(cfg, "num_layers", "training.config");
-    arch.num_heads = ::GRIM::Config::getRequiredJsonValue<int>(cfg, "num_heads", "training.config");
-    arch.num_kv_heads = ::GRIM::Config::getRequiredJsonValue<int>(cfg, "num_kv_heads", "training.config");
-    arch.max_seq_len = ::GRIM::Config::getRequiredJsonValue<int>(cfg, "max_seq_len", "training.config");
-    arch.use_gpu = ::GRIM::Config::getRequiredJsonValue<bool>(cfg, "use_gpu", "training.config");
-    arch.use_flash_attention = ::GRIM::Config::getRequiredJsonValue<bool>(cfg, "use_flash_attention", "training.config");
-    arch.min_seq_len_for_flash = arch.max_seq_len / 4;
-    // d_ff: always derived as d_model * D_FF_MULTIPLIER (never read from JSON)
-    arch.d_ff = arch.d_model * D_FF_MULTIPLIER;
-    arch.tie_embeddings = ::GRIM::Config::getRequiredJsonValue<bool>(cfg, "tie_embeddings", "training.config");
-    arch.dropout_rate = ::GRIM::Config::getRequiredJsonValue<float>(cfg, "dropout_rate", "training.config");
-    // attention_dropout: always derived from dropout_rate
-    arch.attention_dropout = arch.dropout_rate;
-
-    // Issue #142: Parse positional encoding. Used by both training (Phase1)
-    // and runtime inference/server startup; semantics must match exactly.
-    const auto& pe = ::GRIM::Config::requireJsonObjectField(cfg, "positional_encoding", "training.config");
-    const bool use_rope =
-        ::GRIM::Config::getRequiredJsonValue<bool>(pe, "use_rope", "training.config.positional_encoding");
-    const bool use_alibi =
-        ::GRIM::Config::getRequiredJsonValue<bool>(pe, "use_alibi", "training.config.positional_encoding");
-    if (use_rope && use_alibi) {
-        arch.positional_encoding = PositionalEncodingType::ALIBI_ROPE;
-    } else if (use_rope) {
-        arch.positional_encoding = PositionalEncodingType::ROPE;
-    } else if (use_alibi) {
-        arch.positional_encoding = PositionalEncodingType::ALIBI;
-    } else {
-        // Rule 20: learned position embeddings were removed; require ALiBi and/or RoPE.
-        throw std::runtime_error(
-            "loadModelArchitecture: positional_encoding requires use_rope and/or use_alibi "
-            "(learned position embeddings have been removed)");
-    }
-    arch.rope_base_seq_len =
-        ::GRIM::Config::getRequiredJsonValue<int>(pe, "rope_base_seq_len", "training.config.positional_encoding");
-    arch.alibi_min_locality_distance =
-        ::GRIM::Config::getRequiredJsonValue<int>(pe, "alibi_min_locality_distance", "training.config.positional_encoding");
-    arch.alibi_slope_exponent =
-        ::GRIM::Config::getRequiredJsonValue<float>(pe, "alibi_slope_exponent", "training.config.positional_encoding");
-    arch.alibi_max_bias =
-        ::GRIM::Config::getRequiredJsonValue<float>(pe, "alibi_max_bias", "training.config.positional_encoding");
-    arch.rope_theta =
-        ::GRIM::Config::getRequiredJsonValue<float>(pe, "rope_theta", "training.config.positional_encoding");
-    arch.rope_scaling =
-        ::GRIM::Config::getRequiredJsonValue<float>(pe, "rope_scaling", "training.config.positional_encoding");
+    arch = static_cast<const ModelArchitecture&>(snapshot.hyperparameters.architecture);
 
     // Validate and compute derived values (head_dim)
     arch.validate();
@@ -1197,41 +1191,15 @@ inline void printModelArchitecture(const ModelArchitecture& arch) {
 }
 
 //======================================================//
-// Generation config loader (single source of truth for
-// translating training.config.generation JSON → GenerationConfig)
+// Generation config loader (snapshot-owned typed handoff)
 //======================================================//
 inline bool loadGenerationConfig(const GRIM::Config::AiConfigSnapshot& snapshot,
                                  GenerationConfig& generation) {
-    const auto& doc = snapshot.document;
-    const auto& training = ::GRIM::Config::requireJsonObjectField(doc, "training", "ai_config.json");
-    const auto& cfg = ::GRIM::Config::requireJsonObjectField(training, "config", "training");
-    const auto& gen = ::GRIM::Config::requireJsonObjectField(cfg, "generation", "training.config");
+    if (!snapshot.has_training) {
+        throw std::runtime_error("loadGenerationConfig: snapshot.has_training is false");
+    }
 
-    const std::string strat =
-        ::GRIM::Config::getRequiredJsonValue<std::string>(gen, "strategy", "training.config.generation");
-    if (strat == "greedy") {
-        generation.strategy = SamplingStrategy::GREEDY;
-    } else if (strat == "top_k")       generation.strategy = SamplingStrategy::TOP_K;
-    else if (strat == "top_p")       generation.strategy = SamplingStrategy::TOP_P;
-    else if (strat == "min_p")       generation.strategy = SamplingStrategy::MIN_P;
-    else if (strat == "typical")     generation.strategy = SamplingStrategy::TYPICAL;
-    else if (strat == "top_k_top_p") generation.strategy = SamplingStrategy::TOP_K_TOP_P;
-    else throw std::runtime_error("loadGenerationConfig: unknown generation.strategy: " + strat);
-
-    generation.max_new_tokens = ::GRIM::Config::getRequiredJsonValue<int>(gen, "max_new_tokens", "training.config.generation");
-    generation.min_new_tokens = ::GRIM::Config::getRequiredJsonValue<int>(gen, "min_new_tokens", "training.config.generation");
-    generation.temperature = ::GRIM::Config::getRequiredJsonValue<float>(gen, "temperature", "training.config.generation");
-    generation.top_k = ::GRIM::Config::getRequiredJsonValue<int>(gen, "top_k", "training.config.generation");
-    generation.top_p = ::GRIM::Config::getRequiredJsonValue<float>(gen, "top_p", "training.config.generation");
-    generation.min_p = ::GRIM::Config::getRequiredJsonValue<float>(gen, "min_p", "training.config.generation");
-    generation.typical_p = ::GRIM::Config::getRequiredJsonValue<float>(gen, "typical_p", "training.config.generation");
-    generation.repetition_penalty = ::GRIM::Config::getRequiredJsonValue<float>(gen, "repetition_penalty", "training.config.generation");
-    generation.repetition_penalty_window = ::GRIM::Config::getRequiredJsonValue<int>(gen, "repetition_penalty_window", "training.config.generation");
-    generation.frequency_penalty = ::GRIM::Config::getRequiredJsonValue<float>(gen, "frequency_penalty", "training.config.generation");
-    generation.presence_penalty = ::GRIM::Config::getRequiredJsonValue<float>(gen, "presence_penalty", "training.config.generation");
-    generation.no_repeat_ngram_size = ::GRIM::Config::getRequiredJsonValue<int>(gen, "no_repeat_ngram_size", "training.config.generation");
-    generation.do_sample = ::GRIM::Config::getRequiredJsonValue<bool>(gen, "do_sample", "training.config.generation");
-    generation.enable_scratchblock_reasoning = ::GRIM::Config::getRequiredJsonValue<bool>(gen, "enable_scratchblock_reasoning", "training.config.generation");
+    generation = snapshot.hyperparameters.architecture.generation;
     return true;
 }
 
@@ -1252,7 +1220,6 @@ inline bool loadGenerationConfig(GenerationConfig& generation,
 //   - JSON parsing                  → Phase1_Startup.cu
 //   - architecture validation       → ModelArchitecture::validate()
 //   - hyperparameter validation     → validateTrainingHyperparameters()
-//   - generation config translation → loadGenerationConfig()
 //   - max_seq_len / stride / batch  → Phase1_Startup.cu (manual)
 //   - CLI overrides                 → Phase1_Startup.cu
 // across multiple files, each independently re-asking the same
@@ -1286,35 +1253,12 @@ struct PathConfig {
 
 struct StartupConfig {
     PathConfig paths;
+    // Single raw upload point for authored ai_config.json values. GRIM-text
+    // startup may slice model/training/tokenizer/subprocess leaves from this
+    // snapshot, but must not treat GRIM process-owned data_collection leaves as
+    // training/inference startup config.
+    GRIM::Config::AiConfigSnapshot ai_config_snapshot;
     GRIM::Config::TrainingHyperparameters hyperparameters;
-    int tokenizer_vocab_size = 50000;
-    int tokenizer_max_vocab_size = 0;
-    int tokenizer_max_length = 8192;
-    float tokenizer_character_coverage = 0.0f;
-    int tokenizer_min_cleaned_text_length = 0;
-    int tokenizer_min_subword_freq = 3;
-    bool tokenizer_prune_during_mining = false;
-    bool tokenizer_enable_parallel_subword_mining = true;
-    int tokenizer_subword_mining_workers = 0;
-    size_t tokenizer_subword_mining_max_bytes = 0;
-    std::string tokenizer_model_type = "unibytes";
-    std::vector<std::string> tokenizer_special_tokens = {"<pad>", "<unk>", "<s>", "</s>"};
-    bool tokenizer_add_bos = true;
-    bool tokenizer_add_eos = true;
-    std::string tokenizer_unk_token = "<unk>";
-    std::string tokenizer_pad_token = "<pad>";
-    std::string tokenizer_bos_token = "<s>";
-    std::string tokenizer_eos_token = "</s>";
-    bool tokenizer_enable_nfkc_normalization = true;
-    bool tokenizer_enable_lowercasing = true;
-    bool tokenizer_enable_parallel_tokenization = true;
-    int tokenizer_parallel_threshold = 1000;
-    bool tokenizer_enable_byte_fallback = true;
-    uint32_t tokenizer_expected_checksum = 0;
-    bool tokenizer_save_text_vocab = true;
-    float tokenizer_vocab_score_multiplier = 1.0f;
-    bool subprocess_tokenizer_only_mode = false;
-    GenerationConfig generation;
 
     // Convenience accessor: architecture lives inside hyperparameters now.
     ModelArchitecture& architecture() { return hyperparameters.architecture; }
@@ -1333,17 +1277,16 @@ struct StartupConfig {
  *
  * Performs, in order:
  *   1. Resolve --config path from argv (default: ai_config.json)
- *   2. loadAiConfigSnapshot()       — typed JSON parse
+ *   2. loadAiConfigSnapshot()       — single raw load + raw validation
  *   3. Copy paths from snapshot->grim_paths into PathConfig
- *   4. Copy hyperparameters + tokenizer_* fields from snapshot
- *   5. loadModelArchitecture()      — JSON → ModelArchitecture
- *   6. loadGenerationConfig()       — JSON → GenerationConfig
- *   7. Resolve max_seq_len (stability_override vs hyperparameters.architecture.max_seq_len)
- *   8. Resolve sliding_window_stride from training.config and validate it against effective max_seq_len
- *   9. Apply stability overrides to batch_size + grad_clip_norm
- *  10. Apply CLI overrides (--data, --vocab, --output, --epochs,
+ *   4. Store the raw snapshot and copy hyperparameters from it
+ *   5. loadModelArchitecture()      — snapshot typed surface → ModelArchitecture
+ *   6. Resolve max_seq_len (stability_override vs hyperparameters.architecture.max_seq_len)
+ *   7. Resolve sliding_window_stride from training.config and validate it against effective max_seq_len
+ *   8. Apply stability overrides to batch_size + grad_clip_norm
+ *   9. Apply CLI overrides (--data, --vocab, --output, --epochs,
  *      --batch-size, --lr, --save-test, --help)
- *  11. validateTrainingHyperparameters() + ModelArchitecture::validate()
+ *  10. validateTrainingHyperparameters() + ModelArchitecture::validate()
  *
  * Throws std::runtime_error on any failure (fail-loud, no fallbacks).
  */
@@ -1380,44 +1323,17 @@ inline StartupConfig loadStartupConfig(int argc, char** argv) {
     config.paths.log_dir           = snapshot->grim_text_logs;
     config.paths.status_path       = snapshot->grim_text_training_status;
 
-    // 4. Hyperparameters & tokenizer settings
+    // 4. Retain the single raw snapshot and copy mutable startup hyperparameters.
+    config.ai_config_snapshot = *snapshot;
     config.hyperparameters = snapshot->hyperparameters;
-    config.tokenizer_vocab_size = snapshot->tokenizer_vocab_size;
-    config.tokenizer_max_vocab_size = snapshot->tokenizer_max_vocab_size;
-    config.tokenizer_max_length = snapshot->tokenizer_max_length;
-    config.tokenizer_character_coverage = snapshot->tokenizer_character_coverage;
-    config.tokenizer_min_cleaned_text_length = snapshot->tokenizer_min_cleaned_text_length;
-    config.tokenizer_min_subword_freq = snapshot->tokenizer_min_subword_freq;
-    config.tokenizer_prune_during_mining = snapshot->tokenizer_prune_during_mining;
-    config.tokenizer_enable_parallel_subword_mining = snapshot->tokenizer_enable_parallel_subword_mining;
-    config.tokenizer_subword_mining_workers = snapshot->tokenizer_subword_mining_workers;
-    config.tokenizer_subword_mining_max_bytes = snapshot->tokenizer_subword_mining_max_bytes;
-    config.tokenizer_model_type = snapshot->tokenizer_model_type;
-    config.tokenizer_special_tokens = snapshot->tokenizer_special_tokens;
-    config.tokenizer_add_bos = snapshot->tokenizer_add_bos;
-    config.tokenizer_add_eos = snapshot->tokenizer_add_eos;
-    config.tokenizer_unk_token = snapshot->tokenizer_unk_token;
-    config.tokenizer_pad_token = snapshot->tokenizer_pad_token;
-    config.tokenizer_bos_token = snapshot->tokenizer_bos_token;
-    config.tokenizer_eos_token = snapshot->tokenizer_eos_token;
-    config.tokenizer_enable_nfkc_normalization = snapshot->tokenizer_enable_nfkc_normalization;
-    config.tokenizer_enable_lowercasing = snapshot->tokenizer_enable_lowercasing;
-    config.tokenizer_enable_parallel_tokenization = snapshot->tokenizer_enable_parallel_tokenization;
-    config.tokenizer_parallel_threshold = snapshot->tokenizer_parallel_threshold;
-    config.tokenizer_enable_byte_fallback = snapshot->tokenizer_enable_byte_fallback;
-    config.tokenizer_expected_checksum = snapshot->tokenizer_expected_checksum;
-    config.tokenizer_save_text_vocab = snapshot->tokenizer_save_text_vocab;
-    config.tokenizer_vocab_score_multiplier = snapshot->tokenizer_vocab_score_multiplier;
-    config.subprocess_tokenizer_only_mode = snapshot->subprocess_tokenizer_only_mode;
 
-    // 5. + 6. Architecture and generation — single source of truth for JSON keys.
+    // 5. Architecture — single source of truth for JSON keys.
     //         max_seq_len/use_gpu/use_flash_attention were populated into
     //         hyperparameters.architecture by the TrainingHyperparameters loader
     //         (Phase 3b); loadModelArchitecture fills the remaining arch fields.
     loadModelArchitecture(*snapshot, config.hyperparameters.architecture);
-    loadGenerationConfig(*snapshot, config.generation);
 
-    // 7. Derive max_seq_len (no fallback — must be configured)
+    // 6. Derive max_seq_len (must be configured)
     {
         const auto& hp = config.hyperparameters;
         if (hp.stability_overrides_enabled && hp.stability_override_max_seq_len > 0) {
@@ -1431,7 +1347,7 @@ inline StartupConfig loadStartupConfig(int argc, char** argv) {
         }
     }
 
-    // 8. Resolve configured stride against the effective max_seq_len.
+    // 7. Resolve configured stride against the effective max_seq_len.
     if (config.hyperparameters.sliding_window_stride <= 0) {
         throw std::runtime_error(
             "FATAL: sliding_window_stride must be > 0 in ai_config.json, got " +
@@ -1447,7 +1363,7 @@ inline StartupConfig loadStartupConfig(int argc, char** argv) {
             ". Update training.config.sliding_window_stride or stability_overrides.max_seq_len.");
     }
 
-    // 9. Stability overrides (batch_size, grad_clip_norm)
+    // 8. Stability overrides (batch_size, grad_clip_norm)
     {
         const auto& hp = config.hyperparameters;
         if (hp.stability_overrides_enabled) {
@@ -1466,7 +1382,7 @@ inline StartupConfig loadStartupConfig(int argc, char** argv) {
         }
     }
 
-    // 10. CLI overrides
+    // 9. CLI overrides
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--data" && i + 1 < argc) {
@@ -1502,7 +1418,7 @@ inline StartupConfig loadStartupConfig(int argc, char** argv) {
         }
     }
 
-    // 11. Final validation — fail loud if anything is inconsistent
+    // 10. Final validation — fail loud if anything is inconsistent
     validateTrainingHyperparameters(config.hyperparameters);
 
     return config;

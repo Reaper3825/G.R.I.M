@@ -9,9 +9,9 @@
 // JSON Section                → C++ Owner
 // ---------------------------------------
 // paths.grim_text            → AiConfigSnapshot grim_text_* fields
-// training.config            → TrainingHyperparameters (incl. execution_block, scratch_blocks, …)
+// training.config            → TrainingHyperparameters (incl. generation, execution_block, scratch_blocks, …)
 // tokenizer                  → AiConfigSnapshot tokenizer_* fields
-// data_collection            → AiConfigSnapshot data_collection_* fields
+// data_collection            → AiConfigSnapshot data_collection_* fields (GRIM process config, not training/inference startup)
 //
 // RULE: All runtime defaults in TrainingHyperparameters MUST
 // be authored in ai_config.json or derived in HyperParameters_GPU.hpp.
@@ -171,7 +171,7 @@ struct AiConfigSnapshot {
         field = getRequiredJsonValue<FieldType>(node, key, "tokenizer");
     }
 
-    void populateTokenizerFields(const nlohmann::json& tok) {
+    void assignTokenizerFields(const nlohmann::json& tok) {
         has_tokenizer = true;
 
         assignSnapshotField(tokenizer_vocab_size, tok, "vocab_size");
@@ -239,8 +239,22 @@ struct AiConfigSnapshot {
 };
 
 inline std::optional<AiConfigSnapshot> loadAiConfigSnapshot(const std::string& configPath = "ai_config.json");
+inline void validateAiConfigDocument(const nlohmann::json& config);
 
 namespace detail {
+
+inline constexpr const char* kRootConfigPath = "ai_config.json";
+inline constexpr const char* kTrainingPath = "training";
+inline constexpr const char* kTrainingConfigPath = "training.config";
+inline constexpr const char* kTrainingGenerationPath = "training.config.generation";
+
+inline const nlohmann::json& requireTrainingObject(const nlohmann::json& config) {
+    return requireJsonObjectField(config, "training", kRootConfigPath);
+}
+
+inline const nlohmann::json& requireTrainingConfigObject(const nlohmann::json& config) {
+    return requireJsonObjectField(requireTrainingObject(config), "config", kTrainingPath);
+}
 
 inline std::filesystem::path resolveAiConfigPath(const std::string& configPath) {
     namespace fs = std::filesystem;
@@ -322,7 +336,7 @@ inline std::filesystem::path resolveGrimRoot() {
     return fs::current_path();
 }
 
-inline bool populateGrimTextPathFieldsFromConfig(const nlohmann::json& config, AiConfigSnapshot& snapshot) {
+inline bool assignGrimTextPathFields(const nlohmann::json& config, AiConfigSnapshot& snapshot) {
     const auto& pathsNode = requireJsonObjectField(config, "paths", "ai_config.json");
     const auto& grimTextPaths = requireJsonObjectField(pathsNode, "grim_text", "paths");
 
@@ -360,7 +374,7 @@ inline bool populateGrimTextPathFieldsFromConfig(const nlohmann::json& config, A
 
 template <typename FieldType>
 inline void assignTrainingField(FieldType& field, const nlohmann::json& node, const char* key) {
-    field = getRequiredJsonValue<FieldType>(node, key, "training.config");
+    field = getRequiredJsonValue<FieldType>(node, key, kTrainingConfigPath);
 }
 
 /**
@@ -384,155 +398,15 @@ inline bool jsonPathExists(const nlohmann::json& json, const std::string& path) 
 }
 
 /**
- * @brief Set sensible defaults for all non-base hyperparameters.
- * Called BEFORE JSON parsing, so JSON values override these defaults.
- * Future: Replace this function body with a trained hyperparameter prediction model.
- * @param params The hyperparameters struct to populate with defaults
- */
-inline void setDefaultHyperparameters(TrainingHyperparameters& params) {
-    // ── Auto stop ──
-    params.auto_stop_plateau_patience = 18;
-    params.auto_stop_plateau_min_delta = 0.004f;
-    params.auto_stop_high_loss_threshold = 6.0f;
-    params.auto_stop_high_loss_patience = 12;
-
-    // ── Soft restart ──
-    params.soft_restart_loss_increase_threshold = 3.0f;
-    params.soft_restart_max_step_window = 50;
-    params.soft_restart_cooldown_steps = 200;
-
-    // ── Single batch overfit ──
-    params.single_batch_overfit_max_steps = 1000;
-
-    // ── Shuffle ──
-    params.shuffle_train_epochs = 1;
-
-    // ── Embedding freeze ──
-    params.embedding_freeze_after_step = 0;
-
-    // ── Scratch blocks ──
-    params.scratch_num_blocks = 4;
-    params.scratch_write_combined = true;
-
-    // ── Scratch block reasoning (model fields, live on architecture) ──
-    params.architecture.scratch_block_max_atoms = 8192;
-    params.architecture.scratch_block_atom_scale = 1.0f;
-
-    // ── Telemetry control ──
-    params.telemetry_spike_mild_threshold = 3.0f;
-    params.telemetry_spike_moderate_threshold = 5.0f;
-    params.telemetry_spike_severe_threshold = 10.0f;
-    params.telemetry_moderate_grad_scale = 0.5f;
-    params.telemetry_moderate_cooldown_extension = 3;
-    params.telemetry_min_grad_for_nonzero_loss = 1e-10f;
-    params.telemetry_loss_threshold_for_grad_check = 0.01f;
-    params.telemetry_max_consecutive_zero_grad_steps = 0;
-    params.telemetry_seq_len_regime_change_threshold = 0.3f;
-    params.telemetry_regime_change_suppression_steps = 2;
-    params.telemetry_volatility_damping_threshold = 150.0f;
-    params.telemetry_max_volatility_damping = 0.9f;
-    params.telemetry_gradient_decay_threshold = 0.0f;
-    params.telemetry_max_decay_boost = 1.0f;
-    params.telemetry_progress_boost_threshold = 100.0f;
-    params.telemetry_max_progress_boost = 1.0f;
-    params.telemetry_outlier_frequency_trigger = 0.95f;
-    params.telemetry_outlier_persistence_trigger = 0.9f;
-    params.telemetry_anchor_drift_sigma_multiplier = 5.0f;
-    params.telemetry_soft_restart_cooldown_steps = 100000;
-    params.telemetry_baseline_stabilization_steps = 100;
-    params.telemetry_plateau_noise_patience = 30;
-    params.telemetry_plateau_noise_variance_threshold = 0.008f;
-    params.telemetry_plateau_noise_std = 0.1f;
-    params.telemetry_plateau_noise_proportional = true;
-    params.telemetry_plateau_noise_cooldown = 10;
-    params.telemetry_plateau_noise_max_per_epoch = 3;
-
-    // ── Telemetry lattice (TelemetryLattice construction params) ──
-    // num_streams=58: 0-4 core, 5-8 rho, 9-13 adam, 14-20 exec block, 21-26 EB/SB injection,
-    // 27-30 PBM, 31-34 rho raw, 35-37 RMS gamma, 38 rho rms-spread, 39-44 h<->W alignment,
-    // 45-46 unigram-dir cosine, 47 lm_head_w_rms_rms,
-    // 48-54 init-time structural invariants (tie/ownership/optimizer-group; see InitFacts.cu),
-    // 55-57 rho signed/centered/mean-vector diagnostics.
-    params.telemetry_lattice_num_levels = 8;     // k in [0,7]: strides [1,2,4,8,16,32,64,128]
-    params.telemetry_lattice_num_streams = 58;
-    params.telemetry_lattice_beta_mu = 0.95f;
-    params.telemetry_lattice_beta_a = 0.995f;
-    params.telemetry_lattice_beta_delta = 0.90f;
-    params.telemetry_lattice_beta_r = 0.85f;
-    params.telemetry_lattice_beta_run = 0.80f;
-    params.telemetry_lattice_beta_v = 0.90f;
-    params.telemetry_lattice_k_out0 = 2.5f;
-    params.telemetry_lattice_alpha_v = 1.5f;
-    params.telemetry_lattice_epsilon = 1e-7f;
-    params.telemetry_lattice_strict_mode = true;  // Rule 20: fail loud on NaN/Inf
-
-    // ── Loss sub-parameters ──
-    params.loss_label_smoothing_epsilon = 0.05f;
-    params.loss_focal_gamma = 0.75f;
-    params.loss_focal_alpha = 1.0f;
-    params.loss_preference_beta = 0.1f;
-    params.loss_distillation_temperature = 1.0f;
-    params.loss_distillation_lambda = 0.5f;
-    params.loss_entropy_reg_lambda = 0.0f;
-    params.loss_class_balanced_beta = 0.5f;
-
-    // ── LM head centering (model fields, live on architecture) ──
-    params.architecture.pc1_power_iters = 5;
-
-    // ── Layer scale (model field, lives on architecture) ──
-    params.architecture.layer_scale_init = 1.0f;
-
-    // ── Execution block tuning (model fields, live on architecture) ──
-    params.architecture.execution_block_cross_attn_topk = 2;
-    params.architecture.execution_block_usage_decay = 0.95f;
-    params.architecture.execution_block_diversity_kappa = 2.0f;
-    params.architecture.execution_block_temp_start = 1.5f;
-    params.architecture.execution_block_temp_end = 0.5f;
-    params.architecture.execution_block_temp_schedule = 0;
-    params.architecture.execution_block_entropy_weight = 0.01f;
-    params.architecture.step_x_multiplier = 2.0f;
-    params.architecture.step_y_multiplier = 3.0f;
-    params.architecture.step_y_overrides_x = false;
-    params.architecture.entropy_aux_weight = 0.01f;
-    params.architecture.value_match_epsilon = 0.0001f;
-    params.architecture.final_slot_consistency_weight = 0.1f;
-    params.architecture.execution_block_transition_hard_threshold = 0.0f;
-    params.architecture.execution_block_causal_w1_transition = 1.5f;
-    params.architecture.div_invalid_penalty_weight = 0.5f;
-    params.architecture.div_magnitude_penalty_weight = 0.1f;
-    params.architecture.arg_reinforce_weight = 0.0f;
-    params.architecture.arg_reinforce_baseline_decay = 0.99f;
-    params.architecture.structured_ce_weight = 0.1f;
-    params.architecture.selector_d_selector = 64;
-    params.architecture.selector_selection_margin = 1.0f;
-    params.architecture.selector_supervision_weight = 1.0f;
-
-    // ── Multi-token prediction (k/alpha live on architecture; monitor flag is training-only) ──
-    params.architecture.mtp_k = 3;
-    params.architecture.mtp_alpha = 0.2f;
-    params.mtp_log_ratio_monitor = true;
-
-    // ── Diagnostics (hardcoded-hidden lives on architecture as enum) ──
-    params.architecture.hardcoded_hidden_pattern = ::GRIM::HyperParameters::LanguageModelConfig::HardcodedPattern::DISABLED;
-    params.architecture.hardcoded_log_every_n_batches = 1;
-    params.prediction_comparison_interval = 100;
-    params.prediction_comparison_top_k = 5;
-    params.prediction_comparison_max_positions = 8;
-    params.prediction_comparison_log_path = "resources/models/GRIM-text/training/prediction_comparison.log";
-    params.logit_update_trace_interval = 50;
-    params.attention_diag_layer = -1;
-    params.attention_diag_head = 0;
-}
-
-/**
  * @brief Validate required (base+enable) fields exist in training.config JSON
  * @param trainConfig The training.config JSON object
  * @throws std::runtime_error listing all missing required fields
  *
- * Rule 20: Base parameters and feature enables MUST be explicitly set.
- * Non-base parameters get sensible defaults from setDefaultHyperparameters().
+ * Rule 20: authored runtime parameters and feature enables MUST be explicitly set.
+ * Formula-derived values are computed after parsing; there are no runtime defaults here.
  */
-inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
+inline void appendMissingTrainingConfigPaths(const nlohmann::json& trainConfig,
+                                             std::vector<std::string>& missing) {
     static const std::vector<std::string> REQUIRED = {
         // Core training
         "epochs", "seed", "batch_size", "gradient_accumulation_steps",
@@ -563,14 +437,20 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         "precision.parameter_groups.slot_selector",
         
         // Feature enables
-        "cosine_decay.enabled",
-        "single_batch.enabled",
-        "soft_restart.enabled",
-        "auto_stop.enabled",
-        "shuffle.enabled",
+        "cosine_decay.enabled", "cosine_decay.warm_restarts",
+        "single_batch.enabled", "single_batch.max_steps",
+        "soft_restart.enabled", "soft_restart.loss_increase_threshold",
+        "soft_restart.max_step_window", "soft_restart.cooldown_steps",
+        "auto_stop.enabled", "auto_stop.plateau_patience",
+        "auto_stop.plateau_min_delta", "auto_stop.high_loss_threshold",
+        "auto_stop.high_loss_patience",
+        "shuffle.enabled", "shuffle.epochs",
         
         "telemetry_control.enabled",
         "stability_overrides_enabled",
+        "stability_overrides.batch_size",
+        "stability_overrides.max_seq_len",
+        "stability_overrides.clip_per_token",
         "multi_token_prediction.enabled",
         "execution_block.enabled",
         "scratch_blocks.enabled",
@@ -585,10 +465,12 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         "attention_diagnostics.enabled",
 
         // Loss enables
-        "loss.label_smoothing.enabled",
-        "loss.focal.enabled",
-        "loss.preference.enabled",
-        "loss.distillation.enabled",
+        "loss.label_smoothing.enabled", "loss.label_smoothing.epsilon",
+        "loss.focal.enabled", "loss.focal.gamma", "loss.focal.alpha",
+        "loss.preference.enabled", "loss.preference.beta",
+        "loss.distillation.enabled", "loss.distillation.temperature", "loss.distillation.lambda",
+        "loss.entropy_reg.enabled", "loss.entropy_reg.lambda",
+        "loss.class_balanced.enabled", "loss.class_balanced.beta",
         "loss.masking.enabled", "loss.masking.tag",
 
         // Execution block structural (architecture choices)
@@ -601,6 +483,8 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         "execution_block.value_decode_input_dim",
         "execution_block.value_decode_hidden_dim",
         "execution_block.d_type",
+        "execution_block.cross_attn_topk",
+        "execution_block.usage_decay",
         "execution_block.inject_gate_temp",
         "execution_block.result_slot_mode",
         "execution_block.result_slot_index",
@@ -608,9 +492,30 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         "execution_block.entropy_collapse_threshold",
         "execution_block.write_collapse_threshold",
         "execution_block.magnitude_limit",
+        "execution_block.diversity_kappa",
+        "execution_block.temp_start",
+        "execution_block.temp_end",
+        "execution_block.temp_schedule",
+        "execution_block.entropy_weight",
+        "execution_block.step_x_multiplier",
+        "execution_block.step_y_multiplier",
+        "execution_block.step_y_overrides_x",
+        "execution_block.entropy_aux_weight",
+        "execution_block.value_match_epsilon",
+        "execution_block.final_slot_consistency_weight",
+        "execution_block.transition_hard_threshold",
+        "execution_block.causal_w1_transition",
+        "execution_block.div_invalid_penalty_weight",
+        "execution_block.div_magnitude_penalty_weight",
+        "execution_block.arg_reinforce_weight",
+        "execution_block.arg_reinforce_baseline_decay",
         "execution_block.structured_ce_enabled",
+        "execution_block.structured_ce_weight",
         "execution_block.selector.enabled",
         "execution_block.selector.d_slot_features",
+        "execution_block.selector.d_selector",
+        "execution_block.selector.selection_margin",
+        "execution_block.selector.supervision_weight",
 
         // LM head centering choices
         "lm_head_centering.center_hidden_states",
@@ -618,12 +523,97 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         "lm_head_centering.center_logits",
         "lm_head_centering.center_encoder_residuals",
         "lm_head_centering.project_out_pc1",
+        "lm_head_centering.pc1_power_iters",
+        "layer_scale.init_value",
+        "hardcoded_hidden_states.pattern",
+        "hardcoded_hidden_states.log_every_n_batches",
+        "embedding_freeze.freeze_after_step",
+        "optimizer.kind", "optimizer.beta1", "optimizer.beta2", "optimizer.epsilon",
+        "scratch_blocks.num_blocks", "scratch_blocks.use_write_combined",
+        "scratch_block_reasoning.atom_embedding_dim",
+        "scratch_block_reasoning.max_atoms",
+        "scratch_block_reasoning.atom_scale",
+        "multi_token_prediction.k",
+        "multi_token_prediction.alpha",
+        "multi_token_prediction.log_ratio_monitor",
+        "prediction_comparison.interval",
+        "prediction_comparison.top_k",
+        "prediction_comparison.max_positions",
+        "prediction_comparison.log_path",
+        "logit_update_trace.interval",
+        "attention_diagnostics.layer",
+        "attention_diagnostics.head",
 
         // Logging
+        "logging.default_level", "logging.equation_csv_enabled",
+        "logging.stderr_enabled", "logging.initial_capacity", "logging.group_overrides",
         "log_recorder.enabled", "log_recorder.default_level",
+        "log_recorder.modules",
+        "log_recorder.layers.embedding",
+        "log_recorder.layers.rms_norm",
+        "log_recorder.layers.attention",
+        "log_recorder.layers.feed_forward",
+        "log_recorder.layers.residual",
+        "log_recorder.layers.encoding",
+        "log_recorder.layers.serialization",
+        "log_recorder.layers.execution_block",
         "telemetry_control.logging.verbose",
         "telemetry_control.logging.fail_loud_on_accumulation_bug",
         "telemetry_control.plateau_noise.enabled",
+        "telemetry_control.spike_thresholds.mild",
+        "telemetry_control.spike_thresholds.moderate",
+        "telemetry_control.spike_thresholds.severe",
+        "telemetry_control.response.moderate_grad_scale",
+        "telemetry_control.response.moderate_cooldown_extension",
+        "telemetry_control.accumulation_guard.min_grad_for_nonzero_loss",
+        "telemetry_control.accumulation_guard.loss_threshold",
+        "telemetry_control.accumulation_guard.max_consecutive_zero_grad_steps",
+        "telemetry_control.regime_change.seq_len_threshold",
+        "telemetry_control.regime_change.suppression_steps",
+        "telemetry_control.volatility_damping.threshold",
+        "telemetry_control.volatility_damping.max_damping",
+        "telemetry_control.gradient_decay.threshold",
+        "telemetry_control.gradient_decay.max_boost",
+        "telemetry_control.progress_boost.threshold",
+        "telemetry_control.progress_boost.max_boost",
+        "telemetry_control.outlier.frequency_trigger",
+        "telemetry_control.outlier.persistence_trigger",
+        "telemetry_control.drift.anchor_sigma_multiplier",
+        "telemetry_control.soft_restart.cooldown_steps",
+        "telemetry_control.baseline.stabilization_steps",
+        "telemetry_control.plateau_noise.patience",
+        "telemetry_control.plateau_noise.variance_threshold",
+        "telemetry_control.plateau_noise.noise_std",
+        "telemetry_control.plateau_noise.proportional",
+        "telemetry_control.plateau_noise.cooldown",
+        "telemetry_control.plateau_noise.max_per_epoch",
+        "telemetry_control.lattice.num_levels",
+        "telemetry_control.lattice.num_streams",
+        "telemetry_control.lattice.beta_mu",
+        "telemetry_control.lattice.beta_a",
+        "telemetry_control.lattice.beta_delta",
+        "telemetry_control.lattice.beta_r",
+        "telemetry_control.lattice.beta_run",
+        "telemetry_control.lattice.beta_v",
+        "telemetry_control.lattice.k_out0",
+        "telemetry_control.lattice.alpha_v",
+        "telemetry_control.lattice.epsilon",
+        "telemetry_control.lattice.strict_mode",
+        "generation.strategy",
+        "generation.max_new_tokens",
+        "generation.min_new_tokens",
+        "generation.temperature",
+        "generation.top_k",
+        "generation.top_p",
+        "generation.min_p",
+        "generation.typical_p",
+        "generation.repetition_penalty",
+        "generation.repetition_penalty_window",
+        "generation.frequency_penalty",
+        "generation.presence_penalty",
+        "generation.no_repeat_ngram_size",
+        "generation.do_sample",
+        "generation.enable_scratchblock_reasoning",
 
         // CUDA execution
         "cuda_execution.single_stream_mode",
@@ -631,33 +621,20 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         "cuda_execution.synchronize_after_kernels",
     };
     
-    std::vector<std::string> missing;
-    
     for (const auto& path : REQUIRED) {
         if (!jsonPathExists(trainConfig, path)) {
             missing.push_back(path);
         }
     }
-    
+
     if (!jsonPathExists(trainConfig, "gradient_clip")) {
         missing.push_back("gradient_clip");
-    }
-    
-    if (!missing.empty()) {
-        std::ostringstream oss;
-        oss << "FATAL: ai_config.json training.config missing " << missing.size() << " required fields:\n";
-        for (const auto& m : missing) {
-            oss << "  - " << m << "\n";
-        }
-        oss << "\nRule 20: Base parameters and feature enables MUST be explicitly set.\n";
-        oss << "Non-base parameters get sensible defaults from setDefaultHyperparameters().";
-        throw std::runtime_error(oss.str());
     }
 }
 
 inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, TrainingHyperparameters& params) {
     if (!trainConfig.is_object()) {
-        throw std::runtime_error("ai_config.json: training.config must be an object");
+        throw std::runtime_error(std::string("ai_config.json: ") + kTrainingConfigPath + " must be an object");
     }
     
     assignTrainingField(params.epochs, trainConfig, "epochs");
@@ -670,17 +647,23 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     params.grad_clip_norm = getRequiredJsonValue<float>(trainConfig, "gradient_clip", "training.config");
     assignTrainingField(params.per_token_grad_scale, trainConfig, "per_token_grad_scale");
     assignTrainingField(params.force_rebuild_vocab, trainConfig, "force_rebuild_vocab");
+    assignTrainingField(params.architecture.d_model, trainConfig, "d_model");
+    assignTrainingField(params.architecture.num_layers, trainConfig, "num_layers");
+    assignTrainingField(params.architecture.num_heads, trainConfig, "num_heads");
+    assignTrainingField(params.architecture.num_kv_heads, trainConfig, "num_kv_heads");
     assignTrainingField(params.architecture.max_seq_len, trainConfig, "max_seq_len");
+    assignTrainingField(params.architecture.tie_embeddings, trainConfig, "tie_embeddings");
+    assignTrainingField(params.architecture.dropout_rate, trainConfig, "dropout_rate");
     assignTrainingField(params.sliding_window_stride, trainConfig, "sliding_window_stride");
-    // min_seq_valid_tokens: derived as max_seq_len / 4 (see deriveComputedHyperparameters)
-    // architecture.min_seq_len_for_flash: derived as max_seq_len / 4 (see deriveComputedHyperparameters)
+    // min_seq_valid_tokens: derived in HyperParameters_GPU.hpp after raw parse.
+    // architecture.min_seq_len_for_flash: derived in HyperParameters_GPU.hpp after raw parse.
     assignTrainingField(params.warmup_fraction, trainConfig, "warmup_fraction");
     const auto& cosine_decay = requireJsonObjectField(trainConfig, "cosine_decay", "training.config");
     params.cosine_decay_enabled =
         getRequiredJsonValue<bool>(cosine_decay, "enabled", "training.config.cosine_decay");
     params.cosine_warm_restarts =
         getRequiredJsonValue<bool>(cosine_decay, "warm_restarts", "training.config.cosine_decay");
-    // cosine_decay_min_lr: derived as learning_rate * 0.1 (see deriveComputedHyperparameters)
+    // cosine_decay_min_lr: derived in HyperParameters_GPU.hpp after raw parse.
     assignTrainingField(params.log_interval, trainConfig, "log_interval");
     assignTrainingField(params.atom_stats_interval, trainConfig, "atom_stats_interval");
     assignTrainingField(params.atom_stats_max_seqs, trainConfig, "atom_stats_max_seqs");
@@ -688,7 +671,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     assignTrainingField(params.checkpoint_interval, trainConfig, "checkpoint_interval");
     assignTrainingField(params.architecture.use_gpu, trainConfig, "use_gpu");
     assignTrainingField(params.architecture.use_flash_attention, trainConfig, "use_flash_attention");
-    // architecture.min_seq_len_for_flash: derived from max_seq_len (see deriveComputedHyperparameters)
+    // architecture.min_seq_len_for_flash: derived from max_seq_len in HyperParameters_GPU.hpp.
 
     {
         const auto& precision = requireJsonObjectField(trainConfig, "precision", "training.config");
@@ -1079,6 +1062,15 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     }
 
     assignTrainingField(params.stability_overrides_enabled, trainConfig, "stability_overrides_enabled");
+    {
+        const auto& stability = requireJsonObjectField(trainConfig, "stability_overrides", "training.config");
+        params.stability_override_batch_size =
+            getRequiredJsonValue<int>(stability, "batch_size", "training.config.stability_overrides");
+        params.stability_override_max_seq_len =
+            getRequiredJsonValue<int>(stability, "max_seq_len", "training.config.stability_overrides");
+        params.stability_override_clip_per_token =
+            getRequiredJsonValue<float>(stability, "clip_per_token", "training.config.stability_overrides");
+    }
 
     {
         const auto& scratch = requireJsonObjectField(trainConfig, "scratch_blocks", "training.config");
@@ -1247,76 +1239,76 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         params.attention_diag_head =
             getRequiredJsonValue<int>(attn_diag, "head", "training.config.attention_diagnostics");
     }
-}
 
-// Compute formula-derived hyperparameters from base fields.
-// Called AFTER applyTrainingConfigObject() so base fields are populated from JSON.
-// These ALWAYS overwrite — they are mathematical derivations, not defaults.
-// Rule 20: throws if any base field needed for derivation is invalid.
-inline void deriveComputedHyperparameters(TrainingHyperparameters& params, const nlohmann::json& trainConfig) {
-    // ── Sequence length derivations (max_seq_len lives on architecture, Phase 3b) ──
-    if (params.architecture.max_seq_len <= 0)
-        throw std::runtime_error("deriveComputedHyperparameters: architecture.max_seq_len must be > 0, got " + std::to_string(params.architecture.max_seq_len));
-    params.min_seq_valid_tokens = params.architecture.max_seq_len / 4;
-    params.architecture.min_seq_len_for_flash = params.architecture.max_seq_len / 4;
-    params.scratch_max_tokens_per_block = static_cast<size_t>(params.architecture.max_seq_len);
-
-    // ── LR floor ──
-    if (params.cosine_decay_enabled) {
-        if (params.learning_rate <= 0.0f)
-            throw std::runtime_error("deriveComputedHyperparameters: learning_rate must be > 0 when cosine_decay is enabled, got " + std::to_string(params.learning_rate));
-        params.cosine_decay_min_lr = params.learning_rate * 0.1f;
-    }
-
-    // ── Head dimension propagation (model fields live on architecture) ──
     {
-        int d_model = getRequiredJsonValue<int>(trainConfig, "d_model", "training.config");
-        int num_heads = getRequiredJsonValue<int>(trainConfig, "num_heads", "training.config");
-        if (d_model <= 0 || num_heads <= 0) {
-            throw std::runtime_error(
-                "deriveComputedHyperparameters: d_model and num_heads must be > 0");
+        const auto& gen = requireJsonObjectField(trainConfig, "generation", kTrainingConfigPath);
+        const std::string strategy =
+            getRequiredJsonValue<std::string>(gen, "strategy", kTrainingGenerationPath);
+
+        using SamplingStrategy = ::GRIM::HyperParameters::SamplingStrategy;
+        if (strategy == "greedy") {
+            params.architecture.generation.strategy = SamplingStrategy::GREEDY;
+        } else if (strategy == "top_k") {
+            params.architecture.generation.strategy = SamplingStrategy::TOP_K;
+        } else if (strategy == "top_p") {
+            params.architecture.generation.strategy = SamplingStrategy::TOP_P;
+        } else if (strategy == "min_p") {
+            params.architecture.generation.strategy = SamplingStrategy::MIN_P;
+        } else if (strategy == "typical") {
+            params.architecture.generation.strategy = SamplingStrategy::TYPICAL;
+        } else if (strategy == "top_k_top_p") {
+            params.architecture.generation.strategy = SamplingStrategy::TOP_K_TOP_P;
+        } else {
+            throw std::runtime_error("ai_config.json: training.config.generation.strategy has unknown value '" +
+                                     strategy + "'");
         }
-        int head_dim = d_model / num_heads;
-        params.architecture.execution_block_d_key = head_dim;
-        params.architecture.execution_block_cross_attn_head_dim = head_dim;
-        params.architecture.scratch_block_atom_embedding_dim = d_model / 8;
+
+        params.architecture.generation.max_new_tokens =
+            getRequiredJsonValue<int>(gen, "max_new_tokens", kTrainingGenerationPath);
+        params.architecture.generation.min_new_tokens =
+            getRequiredJsonValue<int>(gen, "min_new_tokens", kTrainingGenerationPath);
+        params.architecture.generation.temperature =
+            getRequiredJsonValue<float>(gen, "temperature", kTrainingGenerationPath);
+        params.architecture.generation.top_k =
+            getRequiredJsonValue<int>(gen, "top_k", kTrainingGenerationPath);
+        params.architecture.generation.top_p =
+            getRequiredJsonValue<float>(gen, "top_p", kTrainingGenerationPath);
+        params.architecture.generation.min_p =
+            getRequiredJsonValue<float>(gen, "min_p", kTrainingGenerationPath);
+        params.architecture.generation.typical_p =
+            getRequiredJsonValue<float>(gen, "typical_p", kTrainingGenerationPath);
+        params.architecture.generation.repetition_penalty =
+            getRequiredJsonValue<float>(gen, "repetition_penalty", kTrainingGenerationPath);
+        params.architecture.generation.repetition_penalty_window =
+            getRequiredJsonValue<int>(gen, "repetition_penalty_window", kTrainingGenerationPath);
+        params.architecture.generation.frequency_penalty =
+            getRequiredJsonValue<float>(gen, "frequency_penalty", kTrainingGenerationPath);
+        params.architecture.generation.presence_penalty =
+            getRequiredJsonValue<float>(gen, "presence_penalty", kTrainingGenerationPath);
+        params.architecture.generation.no_repeat_ngram_size =
+            getRequiredJsonValue<int>(gen, "no_repeat_ngram_size", kTrainingGenerationPath);
+        params.architecture.generation.do_sample =
+            getRequiredJsonValue<bool>(gen, "do_sample", kTrainingGenerationPath);
+        params.architecture.generation.enable_scratchblock_reasoning =
+            getRequiredJsonValue<bool>(gen, "enable_scratchblock_reasoning", kTrainingGenerationPath);
     }
-
-    // ── Warmup fraction validation (warmup_steps derived in Phase2 from warmup_fraction * total_steps) ──
-    if (params.warmup_fraction <= 0.0f || params.warmup_fraction >= 1.0f)
-        throw std::runtime_error("deriveComputedHyperparameters: warmup_fraction must be in (0, 1), got " + std::to_string(params.warmup_fraction));
-    // warmup_steps, mtp_alpha_warmup_steps, telemetry_warmup_steps,
-    // execution_block_gate_warmup_steps are all
-    // derived in Phase2 via deriveWarmupSteps() once estimated_total_steps is known.
-
-    // ── Stability overrides derived from base values ──
-    params.stability_override_batch_size = params.batch_size * 2 / 3;
-    if (params.stability_override_batch_size < 1) params.stability_override_batch_size = 1;
-    params.stability_override_max_seq_len = params.architecture.max_seq_len;
-    params.stability_override_clip_per_token = 0.02f;
-    params.stability_override_lr_min = params.learning_rate * 0.83f;
 }
 
-inline bool populateTrainingHyperparametersFromConfig(const nlohmann::json& config, TrainingHyperparameters& params) {
-    const auto& training = requireJsonObjectField(config, "training", "ai_config.json");
-    params.current_model_training =
-        getRequiredJsonValue<std::string>(training, "current_model_training", "training");
-    params.current_curriculum =
-        getRequiredJsonValue<std::string>(training, "current_curriculum", "training");
-
-    const auto& trainConfig = requireJsonObjectField(training, "config", "training");
-    // Phase 1: Set derived placeholder values before strict JSON assignment.
-    setDefaultHyperparameters(params);
-    // Phase 2: Validate base+enable fields exist.
-    validateTrainingConfigJson(trainConfig);
-    // Phase 3: Parse JSON.
+inline bool assignTrainingHyperparametersFromDocument(const nlohmann::json& config, TrainingHyperparameters& params) {
+    const auto& training = requireTrainingObject(config);
+    const auto& trainConfig = requireTrainingConfigObject(config);
+    // Phase 1: Reset to value-initialized sentinels so repeated loads cannot
+    // retain stale caller state. Authored runtime values are assigned below;
+    // formula-derived values are computed in HyperParameters_GPU.hpp after raw parsing.
+    params = TrainingHyperparameters{};
+    params.current_model_training = getRequiredJsonValue<std::string>(training, "current_model_training", "training");
+    params.current_curriculum = getRequiredJsonValue<std::string>(training, "current_curriculum", "training");
+    // Phase 2: Parse authored JSON after the top-level validator has already run.
     applyTrainingConfigObject(trainConfig, params);
-    // Phase 4: Compute formula-derived values.
-    deriveComputedHyperparameters(params, trainConfig);
     return true;
 }
 
-inline bool populateDataCollectionFieldsFromConfig(const nlohmann::json& config, AiConfigSnapshot& snapshot) {
+inline bool assignDataCollectionFields(const nlohmann::json& config, AiConfigSnapshot& snapshot) {
     const auto& dc = requireJsonObjectField(config, "data_collection", "ai_config.json");
 
     snapshot.data_collection_clear_merged_cache_on_merge =
@@ -1331,7 +1323,7 @@ inline bool populateDataCollectionFieldsFromConfig(const nlohmann::json& config,
 // Throws std::runtime_error on a type mismatch (Rule 20: fail loud — wrong
 // type is NEVER silently coerced). Missing fields default to false. Returns
 // true if any subprocess field was found.
-inline bool populateSubprocessFieldsFromConfig(const nlohmann::json& config, AiConfigSnapshot& snapshot) {
+inline bool assignSubprocessFields(const nlohmann::json& config, AiConfigSnapshot& snapshot) {
     const auto& subp = requireJsonObjectField(config, "subprocess", "ai_config.json");
     const auto& tok = requireJsonObjectField(subp, "tokenizer", "subprocess");
     snapshot.subprocess_tokenizer_only_mode =
@@ -1341,8 +1333,71 @@ inline bool populateSubprocessFieldsFromConfig(const nlohmann::json& config, AiC
 
 } // namespace detail
 
+inline void validateAiConfigDocument(const nlohmann::json& config) {
+    if (!config.is_object()) {
+        throw std::runtime_error("ai_config.json: root document must be an object");
+    }
+
+    const auto& pathsNode = requireJsonObjectField(config, "paths", "ai_config.json");
+    const auto& grimTextPaths = requireJsonObjectField(pathsNode, "grim_text", "paths");
+    static const char* REQUIRED_GRIM_PATHS[] = {
+        "vocab", "model", "training_data", "checkpoints", "collected",
+        "directory_collection", "verified", "logs", "training_status",
+        "collector_log", "source_config", "model_store"
+    };
+    for (const char* key : REQUIRED_GRIM_PATHS) {
+        requireJsonField(grimTextPaths, key, "paths.grim_text");
+    }
+
+    const auto& training = detail::requireTrainingObject(config);
+    requireJsonField(training, "current_model_training", "training");
+    requireJsonField(training, "current_curriculum", "training");
+    const auto& trainConfig = detail::requireTrainingConfigObject(config);
+
+    std::vector<std::string> missing;
+    detail::appendMissingTrainingConfigPaths(trainConfig, missing);
+    if (!missing.empty()) {
+        std::ostringstream oss;
+        oss << "FATAL: ai_config.json training.config missing " << missing.size() << " required fields:\n";
+        for (const auto& m : missing) {
+            oss << "  - " << m << "\n";
+        }
+        oss << "\nRule 20: authored runtime parameters and feature enables MUST be explicitly set.\n";
+        oss << "Formula-derived values belong to HyperParameters_GPU.hpp; runtime defaults are forbidden.";
+        throw std::runtime_error(oss.str());
+    }
+
+    const auto& tok = requireJsonObjectField(config, "tokenizer", "ai_config.json");
+    static const char* REQUIRED_TOKENIZER_FIELDS[] = {
+        "vocab_size", "max_vocab_size", "max_length", "character_coverage",
+        "min_cleaned_text_length", "min_subword_freq", "prune_during_mining",
+        "enable_parallel_subword_mining", "subword_mining_workers",
+        "subword_mining_max_bytes", "model_type", "add_bos", "add_eos",
+        "unk_token", "pad_token", "bos_token", "eos_token",
+        "enable_nfkc_normalization", "enable_lowercasing",
+        "enable_parallel_tokenization", "parallel_threshold",
+        "enable_byte_fallback", "expected_checksum", "save_text_vocab",
+        "vocab_score_multiplier"
+    };
+    for (const char* key : REQUIRED_TOKENIZER_FIELDS) {
+        requireJsonField(tok, key, "tokenizer");
+    }
+    requireJsonArrayField(tok, "special_tokens", "tokenizer");
+    const auto& tokenizerScratch = requireJsonObjectField(tok, "scratch_block_reasoning", "tokenizer");
+    requireJsonField(tokenizerScratch, "enabled", "tokenizer.scratch_block_reasoning");
+    requireJsonField(tokenizerScratch, "detect_numbers", "tokenizer.scratch_block_reasoning");
+
+    const auto& dc = requireJsonObjectField(config, "data_collection", "ai_config.json");
+    requireJsonField(dc, "clear_merged_cache_on_merge", "data_collection");
+    requireJsonField(dc, "max_new_entries_per_run", "data_collection");
+
+    const auto& subp = requireJsonObjectField(config, "subprocess", "ai_config.json");
+    const auto& subTok = requireJsonObjectField(subp, "tokenizer", "subprocess");
+    requireJsonField(subTok, "only_mode", "subprocess.tokenizer");
+}
+
 /// Derive warmup_steps and dependent fields once estimated_total_steps is known (Phase2).
-/// Must be called after populateTrainingHyperparametersFromConfig() and before the training loop.
+/// Must be called after loadAiConfigSnapshot() and before the training loop.
 inline void deriveWarmupSteps(TrainingHyperparameters& params, int estimated_total_steps) {
     if (estimated_total_steps <= 0)
         throw std::runtime_error("deriveWarmupSteps: estimated_total_steps must be > 0, got " + std::to_string(estimated_total_steps));
@@ -1366,31 +1421,21 @@ inline std::optional<AiConfigSnapshot> loadAiConfigSnapshot(const std::string& c
 
     nlohmann::json config;
     configFile >> config;
+    validateAiConfigDocument(config);
 
     AiConfigSnapshot snapshot;
     snapshot.config_path = resolved_path;
     snapshot.document = std::move(config);
-    snapshot.has_grim_paths = detail::populateGrimTextPathFieldsFromConfig(snapshot.document, snapshot);
-    snapshot.has_training = detail::populateTrainingHyperparametersFromConfig(snapshot.document, snapshot.hyperparameters);
+    snapshot.has_grim_paths = detail::assignGrimTextPathFields(snapshot.document, snapshot);
+    snapshot.has_training = detail::assignTrainingHyperparametersFromDocument(snapshot.document, snapshot.hyperparameters);
+    if (snapshot.has_training) {
+        ::GRIM::HyperParameters::deriveComputedTrainingHyperparameters(snapshot.hyperparameters);
+    }
     const auto& tok = requireJsonObjectField(snapshot.document, "tokenizer", "ai_config.json");
-    snapshot.populateTokenizerFields(tok);
-    snapshot.has_data_collection = detail::populateDataCollectionFieldsFromConfig(snapshot.document, snapshot);
-    snapshot.has_subprocess = detail::populateSubprocessFieldsFromConfig(snapshot.document, snapshot);
+    snapshot.assignTokenizerFields(tok);
+    snapshot.has_data_collection = detail::assignDataCollectionFields(snapshot.document, snapshot);
+    snapshot.has_subprocess = detail::assignSubprocessFields(snapshot.document, snapshot);
     return snapshot;
-}
-
-inline bool loadTrainingHyperparameters(TrainingHyperparameters& params, const std::string& configPath = "ai_config.json") {
-    auto snapshot = loadAiConfigSnapshot(configPath);
-    if (!snapshot) {
-        throw std::runtime_error("loadTrainingHyperparameters: loadAiConfigSnapshot returned no snapshot");
-    }
-
-    if (!snapshot->has_training) {
-        throw std::runtime_error("loadTrainingHyperparameters: training config was not populated");
-    }
-
-    params = snapshot->hyperparameters;
-    return true;
 }
 
 /**

@@ -724,6 +724,11 @@
                 "max_step_window": 50
             },
             "stability_overrides_enabled": false,
+            "stability_overrides": {
+                "batch_size": 8,
+                "clip_per_token": 0.02,
+                "max_seq_len": 1024
+            },
             "telemetry_control": {
                 "accumulation_guard": {
                     "loss_threshold": 0.01,

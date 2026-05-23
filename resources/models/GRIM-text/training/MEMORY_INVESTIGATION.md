@@ -38,9 +38,9 @@ For batch=10, seq=1024, heads=16, head_dim=64:
 ### 1. Unigram Tokenizer Runtime Workspace
 ```cpp
 // HyperParameters_GPU.hpp
-constexpr size_t UNIGRAM_MAX_SEQUENCE_LENGTH = DEFAULT_MAX_SEQ_LEN * 4;  // default floor, currently 1024*4 = 4096
+constexpr size_t UNIGRAM_MAX_SEQUENCE_LENGTH = 4096;  // static tokenizer workspace floor, not model sequence policy
 ```
-- `UNIGRAM_MAX_SEQUENCE_LENGTH` is only the default-capacity floor for generic/server tokenizer runtime init.
+- `UNIGRAM_MAX_SEQUENCE_LENGTH` is only the static capacity floor for generic/server tokenizer runtime init.
 - Corpus training/GRMT generation dynamically finalizes tokenizer runtime state with `longest_normalized_e_step_segment` via `UnigramTrainingRuntimeReport`; long concept rows must not be capped by this static floor.
 - `d_viterbi_scores`, `d_viterbi_prev`, `d_viterbi_tokens`: `workspace_max_length + 1` elements each.
 - **Not a major factor**, but tokenizer workspace capacity is now workload-sized for corpus encoding instead of being silently tied to model `max_seq_len`.

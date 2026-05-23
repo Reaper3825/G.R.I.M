@@ -1290,15 +1290,13 @@ int runMerge(const std::string& checkpoint_dir, const std::string& verified_dir,
     currentPhase = "Preprocessing";
     std::cout << "[4/7] Preprocessing...\n";
     
-    // Load max_seq_len from training config
-    GRIM::Config::TrainingHyperparameters train_params;
-    int max_seq_len = 900;  // Default fallback
-    if (GRIM::Config::loadTrainingHyperparameters(train_params)) {
-        max_seq_len = train_params.architecture.max_seq_len;
-        std::cout << "  Using max_seq_len=" << max_seq_len << " from ai_config.json\n";
-    } else {
-        std::cout << "  WARNING: Could not load training config, using default max_seq_len=" << max_seq_len << "\n";
+    // Load max_seq_len from the single config snapshot.
+    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
+    if (!snapshot || !snapshot->has_training) {
+        throw std::runtime_error("runMerge: loadAiConfigSnapshot did not produce training hyperparameters");
     }
+    const int max_seq_len = snapshot->hyperparameters.architecture.max_seq_len;
+    std::cout << "  Using max_seq_len=" << max_seq_len << " from ai_config.json\n";
     
     // Calculate max chars based on max_seq_len (approx 4 chars per token)
     const int chars_per_token = 4;

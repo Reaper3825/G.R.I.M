@@ -691,29 +691,34 @@ inline DataLoadingHP dataLoadingHP(const StartupConfig& config) {
 
 inline TokenizerHP tokenizerHP(const StartupConfig& config) {
     const auto& hp = config.hyperparameters;
+    // Tokenizer JSON leaves are owned by AiConfigSnapshot; StartupConfig only carries the snapshot.
+    const auto& snapshot = config.ai_config_snapshot;
+    if (!snapshot.has_tokenizer) {
+        throw std::runtime_error("tokenizerHP: AiConfigSnapshot.has_tokenizer is false");
+    }
 
     TokenizerHP view;
     view.data_path = config.paths.data_path;
     view.vocab_path = config.paths.vocab_path;
-    view.target_vocab_size = config.tokenizer_vocab_size;
-    if (config.tokenizer_max_vocab_size > 0 && view.target_vocab_size > config.tokenizer_max_vocab_size) {
-        view.target_vocab_size = config.tokenizer_max_vocab_size;
+    view.target_vocab_size = snapshot.tokenizer_vocab_size;
+    if (snapshot.tokenizer_max_vocab_size > 0 && view.target_vocab_size > snapshot.tokenizer_max_vocab_size) {
+        view.target_vocab_size = snapshot.tokenizer_max_vocab_size;
     }
-    view.character_coverage = config.tokenizer_character_coverage;
-    view.min_cleaned_text_length = config.tokenizer_min_cleaned_text_length;
-    view.min_subword_freq = config.tokenizer_min_subword_freq;
-    view.prune_during_mining = config.tokenizer_prune_during_mining;
-    view.enable_parallel_subword_mining = config.tokenizer_enable_parallel_subword_mining;
-    view.subword_mining_workers = config.tokenizer_subword_mining_workers;
-    view.subword_mining_max_bytes = config.tokenizer_subword_mining_max_bytes;
+    view.character_coverage = snapshot.tokenizer_character_coverage;
+    view.min_cleaned_text_length = snapshot.tokenizer_min_cleaned_text_length;
+    view.min_subword_freq = snapshot.tokenizer_min_subword_freq;
+    view.prune_during_mining = snapshot.tokenizer_prune_during_mining;
+    view.enable_parallel_subword_mining = snapshot.tokenizer_enable_parallel_subword_mining;
+    view.subword_mining_workers = snapshot.tokenizer_subword_mining_workers;
+    view.subword_mining_max_bytes = snapshot.tokenizer_subword_mining_max_bytes;
     view.enable_scratch_block_reasoning = hp.tokenizer_enable_scratch_block_reasoning;
     view.detect_numbers = hp.tokenizer_detect_numbers;
-    view.enable_byte_fallback = config.tokenizer_enable_byte_fallback;
-    view.add_bos = config.tokenizer_add_bos;
-    view.add_eos = config.tokenizer_add_eos;
+    view.enable_byte_fallback = snapshot.tokenizer_enable_byte_fallback;
+    view.add_bos = snapshot.tokenizer_add_bos;
+    view.add_eos = snapshot.tokenizer_add_eos;
     view.force_rebuild_vocab = hp.force_rebuild_vocab;
-    view.save_text_vocab = config.tokenizer_save_text_vocab;
-    view.vocab_score_multiplier = config.tokenizer_vocab_score_multiplier;
+    view.save_text_vocab = snapshot.tokenizer_save_text_vocab;
+    view.vocab_score_multiplier = snapshot.tokenizer_vocab_score_multiplier;
     view.current_curriculum = hp.current_curriculum;
     view.current_model_training = hp.current_model_training;
     view.execution_block_num_steps = hp.architecture.execution_block_num_steps;
@@ -752,10 +757,13 @@ inline TokenizerSubprocessHP tokenizerSubprocessHP(const StartupConfig& config)
     if (config.paths.config_path.empty()) {
         throw std::runtime_error("tokenizerSubprocessHP: config_path is empty");
     }
+    if (!config.ai_config_snapshot.has_subprocess) {
+        throw std::runtime_error("tokenizerSubprocessHP: AiConfigSnapshot.has_subprocess is false");
+    }
 
     view.config_path = config.paths.config_path.string();
     view.tokenizer = tokenizerHP(config);
-    view.only_mode = config.subprocess_tokenizer_only_mode;
+    view.only_mode = config.ai_config_snapshot.subprocess_tokenizer_only_mode;
     return view;
 }
 
@@ -940,7 +948,6 @@ inline LanguageModelConfig inferenceLanguageModelConfig(
     cfg.use_pre_norm = true;
     cfg.fuse_qkv = true;
     cfg.use_gpu = true;
-    cfg.generation = config.generation;
 
     cfg.max_cached_batch = 1;
     cfg.max_cached_seq_len = config.max_seq_len;

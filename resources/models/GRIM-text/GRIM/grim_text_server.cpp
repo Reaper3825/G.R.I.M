@@ -349,7 +349,7 @@ int main(int argc, char** argv)
         startup_config = HyperParameters::loadStartupConfig(
             static_cast<int>(startup_argv.size()),
             startup_argv.data());
-        g_generation_defaults = startup_config.generation;
+        g_generation_defaults = startup_config.hyperparameters.architecture.generation;
     } catch (const std::exception& e) {
         std::cerr << "[GRIM-text] ERROR: Failed to load startup config: " << e.what() << "\n";
         return 1;

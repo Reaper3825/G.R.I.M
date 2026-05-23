@@ -94,7 +94,7 @@ Config-driven tokenizer paths consume `GRIM::HyperParameters::TokenizerHP` direc
 - `DataLoader.cu` receives that grouping and constructs `UniByte` from it directly while building vocab + GRMT artifacts.
 - `LoadTrainingData()`, `tokenizer_runner.cu`, and `tokenizer_self_test.cu` construct `UniByte` from the same grouping for runtime validation/loading.
 
-Do not hand-copy `AiConfigSnapshot`/`StartupConfig` `tokenizer_*` fields plus `TrainingHyperparameters` into a tokenizer wrapper. `UniByte` stores `TokenizerHP` directly; isolated tokenizer tests use explicit `TokenizerHP` fixtures when they need non-config startup values.
+Do not hand-copy `AiConfigSnapshot` `tokenizer_*` fields plus `TrainingHyperparameters` into a tokenizer wrapper or `StartupConfig::tokenizer_*` mirror. `UniByte` stores `TokenizerHP` directly; isolated tokenizer tests use explicit `TokenizerHP` fixtures when they need non-config startup values.
 
 ## Trie / detector registry construction
 - Trie is built from learned unigram pieces only. Layout special tokens are not trie entries.
@@ -130,7 +130,7 @@ AtomTable safety contracts:
 - HTML must be stripped before tokenization. `DataLoader.cu` handles `stripHtmlTags()` / `decodeHtmlEntities()` / `normalizeWhitespace()` automatically.
 - `DataLoader.cu` tokenizes raw content only. It must not add `BOS`/`EOS`; Phase 1 startup routes sequences through `SlidingWindow.cu` for that layout work.
 - `UniByte` intentionally exposes per-text encode paths only. Do not reintroduce `encodeBatch()` / vector-of-vector tokenization; corpus batching, `BOS`/`EOS`, and sequence windows belong to the `DataLoader.cu` → `SlidingWindow.cu` startup path.
-- Minimum text-length gating is config-owned: `tokenizer.min_cleaned_text_length` is parsed onto `AiConfigSnapshot` / `StartupConfig` `tokenizer_min_cleaned_text_length`, sliced through `TokenizerHP`, and consumed by `DataLoader.cu` before GRMT encoding. Do not hard-code this threshold in the loader.
+- Minimum text-length gating is config-owned: `tokenizer.min_cleaned_text_length` is parsed onto `AiConfigSnapshot::tokenizer_min_cleaned_text_length`, sliced directly through `TokenizerHP`, and consumed by `DataLoader.cu` before GRMT encoding. Do not hard-code this threshold in the loader.
 - Sliding window: `overlap_len = raw_overlap - 1` when `raw_overlap > 0`, to avoid masking the same boundary target in two consecutive windows.
 
 ## Self-test

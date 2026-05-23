@@ -315,7 +315,7 @@ public:
         fs::path workingDir = fs::absolute(grimRoot);
         
         // Use paths from config (loaded from ai_config.json and resolved to absolute paths)
-        // The snapshot fields should already be absolute after populateGrimTextPathFieldsFromConfig() resolves them
+        // The snapshot fields should already be absolute after assignGrimTextPathFields() resolves them.
         // But if they're still relative (backward compatibility), resolve them from GRIM root
         fs::path dataPath = config.dataPath;
         fs::path vocabPath = config.vocabPath;
@@ -1169,9 +1169,9 @@ int main(int argc, char** argv) {
         std::cout << "[Server] WARNING: Could not load paths from ai_config.json, using defaults" << std::endl;
     }
     
-    // Also load training hyperparameters
-    GRIM::Config::TrainingHyperparameters hyperparams;
-    if (GRIM::Config::loadTrainingHyperparameters(hyperparams)) {
+    // Also load training hyperparameters from the single config snapshot
+    if (snapshot && snapshot->has_training) {
+        const auto& hyperparams = snapshot->hyperparameters;
         InternalTrainingConfig config = g_state.getConfig();
         config.epochs = hyperparams.epochs;
         config.batchSize = hyperparams.batch_size;

@@ -70,12 +70,12 @@ The GRIM project uses a three-tier configuration system:
 
 **Contains:**
 - Struct definitions (`AiConfigSnapshot`, `TrainingHyperparameters`, etc.)
-- JSON parsing functions (`loadAiConfigSnapshot`, `populateTrainingHyperparametersFromConfig`)
-- Default values that match `HyperParameters_GPU.hpp`
+- One raw validator (`validateAiConfigDocument`) and one raw loader (`loadAiConfigSnapshot`)
+- Raw JSON parsing/assignment helpers for the collapsed snapshot surface
 
-**Access rule:** Consumers should prefer loading **one** `AiConfigSnapshot` and then reading direct snapshot fields from that object. Do not add new sidecar config wrappers or path-based leaf loaders that reparse `ai_config.json` for one subsection.
+**Access rule:** Consumers should load **one** `AiConfigSnapshot` and then read direct snapshot fields from that object. Do not add sidecar config wrappers or path-based leaf loaders that reparse `ai_config.json` for one subsection.
 
-**Rule:** Default values in C++ structs MUST match compile-time defaults in `HyperParameters_GPU.hpp`. JSON values override both at runtime.
+**Rule:** `ai_config_paths.hpp` is the raw authored-config layer only. It must not own runtime policy defaults or formula-derived values.
 
 ## Configuration Flow
 
@@ -100,8 +100,8 @@ Runtime:
 ## Value Priority (highest to lowest)
 
 1. **Runtime JSON override** - Values in `ai_config.json` take precedence
-2. **C++ struct default** - Fallback if JSON key missing (should match HyperParameters)
-3. **Compile-time constant** - Used when no runtime override provided
+2. **HyperParameters derivation** - Pure formulas computed from authored values after parsing
+3. **Compile-time constant** - Only for static math/kernel capabilities, never runtime policy fallback
 
 ## Example: Learning Rate Configuration
 
@@ -109,17 +109,11 @@ Runtime:
 // 1. Compile-time default (HyperParameters_GPU.hpp)
 // Not defined here - learning rate is runtime-only
 
-// 2. C++ struct default (ai_config_paths.hpp)
-struct TrainingHyperparameters {
-    float learning_rate = 0.00003f;  // Fallback if JSON missing
-    // ...
-};
-
-// 3. Runtime override (ai_config.json)
+// 2. Runtime authored value (ai_config.json)
 {
   "training": {
     "config": {
-      "learning_rate": 0.0001  // ACTIVE VALUE (overrides C++ default)
+      "learning_rate": 0.0001  // ACTIVE VALUE
     }
   }
 }
@@ -164,7 +158,7 @@ float rms = std::sqrt(variance + EPSILON_RMSNORM);
    };
    ```
 
-2. Add JSON parser in `applyTrainingConfigObject()`:
+2. Add raw assignment in `applyTrainingConfigObject()` and require it in `validateAiConfigDocument()`:
    ```cpp
    assignTrainingField(params.my_new_feature, trainConfig, "my_new_feature");
    ```
@@ -254,16 +248,16 @@ float loss_focal_gamma = 2.0f;  // Match HyperParameters::DEFAULT_LOSS_FOCAL_GAM
 2. Check constant is in correct namespace: `GRIM::HyperParameters::CONSTANT_NAME`
 3. For CUDA files: Ensure include path configured in CMakeLists.txt
 
-### "Training uses wrong default value"
-1. Check C++ struct default matches HyperParameters constant
-2. Verify JSON key is present and spelled correctly
-3. Look for typos in `assignTrainingField()` key string
+### "Training uses wrong config value"
+1. Verify the authored JSON key is present and spelled correctly
+2. Check `validateAiConfigDocument()` requires the field at the correct path
+3. Look for typos in `assignTrainingField()` or the relevant raw snapshot assignment
 
 ## Recent Changes (Dec 2024)
 
 ### Consolidation Updates
 - **Removed duplicates:** `prediction_comparison`, `attention_diagnostics` now only in `training.config`
-- **Aligned defaults:** Loss function defaults now match `HyperParameters_GPU.hpp`
+- **Removed defaults:** Authored runtime fields must be present in `ai_config.json`; pure formulas are derived in `HyperParameters_GPU.hpp`
 - **Fixed cache_limits:** Removed duplicate parsing block in `ai_config_paths.hpp`
 - **Organized constants:** All hyperparameters now follow Rule 20 (single source of truth)
 
@@ -271,8 +265,8 @@ float loss_focal_gamma = 2.0f;  // Match HyperParameters::DEFAULT_LOSS_FOCAL_GAM
 Made 13 constants explicitly derived from base values in `HyperParameters_GPU.hpp`:
 - Block sizes: `CUDA_QUANTIZATION_THREADS`, `CUDA_REDUCTION_MAX_BLOCKS` from `CUDA_BLOCK_SIZE_STANDARD`
 - Tile dimensions: `CUDA_TILE_DIM_TRANSPOSE` from `CUDA_WARP_SIZE`
-- Sequence lengths: `CUDA_FALLBACK_MAX_LOSS_TOKENS`, `UNIGRAM_MAX_SEQUENCE_LENGTH` from `DEFAULT_MAX_SEQ_LEN * 4`
-- Model arch: `DEFAULT_D_FF` from `DEFAULT_D_MODEL * DEFAULT_D_FF_MULTIPLIER`
+- Static tokenizer workspace: `UNIGRAM_MAX_SEQUENCE_LENGTH` documents implementation capacity, not model sequence policy
+- Model arch: runtime `d_ff` is derived from authored `d_model * D_FF_MULTIPLIER` in `HyperParameters_GPU.hpp`
 - Flash Attention: Block sizes from `CUDA_WARP_SIZE` and `CUDA_BLOCK_SIZE_STANDARD`
 - Tokenizer: `ATOM_TOKEN_START`, `ATOM_TOKEN_END` from `BYTE_TOKEN_END` and derived formulas
 

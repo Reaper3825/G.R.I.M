@@ -316,7 +316,6 @@ void dumpAllHyperparameters(
     DUMP(stability_override_batch_size);
     DUMP(stability_override_max_seq_len);
     DUMP(stability_override_clip_per_token);
-    DUMP(stability_override_lr_min);
 
     SECTION("Scratch blocks");
     DUMP(scratch_blocks_enabled);

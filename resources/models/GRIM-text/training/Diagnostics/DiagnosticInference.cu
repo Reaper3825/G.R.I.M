@@ -230,8 +230,8 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
                                      prompt_atom_entry_ids.begin() + drop);
     }
 
-    // Use generation config from ai_config.json (configurable strategy, penalties, etc.)
-    GRIM::HyperParameters::GenerationConfig cfg = ctx.config.generation;
+    // Use generation config from the AiConfigSnapshot-backed typed model surface.
+    GRIM::HyperParameters::GenerationConfig cfg = ctx.config.hyperparameters.architecture.generation;
     cfg.max_new_tokens = max_new_tokens;
     if (cfg.min_new_tokens <= 0) {
         cfg.min_new_tokens = std::max(1, max_new_tokens / 4);
