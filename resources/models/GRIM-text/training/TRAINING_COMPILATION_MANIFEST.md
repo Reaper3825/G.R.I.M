@@ -65,7 +65,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - PrepareTrainingDataFromCache: Reads merged_verified_cache.jsonl → tokenizes → writes single GRMT file
   - training_data_loader.hpp: GRMTDataLoader reads .grmt binary format for Phase1_Startup
   - **FIXED**: `catch(...)` now `catch(const std::exception&)` + counts/logs malformed JSONL lines
-  - **FIXED**: Hardcoded `character_coverage = 0.9995f` → uses `GRIM::HyperParameters::TOKENIZER_CHARACTER_COVERAGE`
+  - **FIXED**: Hardcoded `character_coverage = 0.9995f` → uses `tokenizer.character_coverage` from `ai_config.json` via `TokenizerHP`
   - **FIXED**: Deleted dead `loadBinaryFormat()` from training_data_loader.hpp (~35 lines, never called, Rule 20)
   - **FIXED**: Deleted dead `stripBosEosMarkers()` — `stripHtmlTags(<[^>]+>)` already strips `<s>` and `</s>` 
   - **FIXED**: Removed wrong `targets[0] = -1` unconditional masking — BOS→first_token is valid training signal

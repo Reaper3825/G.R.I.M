@@ -46,10 +46,6 @@ namespace {
 
 namespace GRIM {
 
-
-static_assert(GRIM::HyperParameters::SOFTMAX_TEMPERATURE == 1.0f,
-              "FlashAttention v2 forward requires softmax_temperature=1.0f.");
-
 //======================================================//
 //  CUDA Error Checking
 //======================================================//

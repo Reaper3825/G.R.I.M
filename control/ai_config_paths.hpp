@@ -14,8 +14,9 @@
 // data_collection            → AiConfigSnapshot data_collection_* fields
 //
 // RULE: All runtime defaults in TrainingHyperparameters MUST
-// match compile-time defaults in HyperParameters_GPU.hpp.
-// The JSON overrides those defaults at runtime.
+// be authored in ai_config.json or derived in HyperParameters_GPU.hpp.
+// HyperParameters_GPU.hpp may keep only formulas/static kernel capabilities,
+// never runtime policy fallbacks.
 //
 // For compile-time constants (CUDA blocks, epsilons, etc.),
 // see HyperParameters_GPU.hpp - DO NOT duplicate them here.
@@ -128,6 +129,7 @@ struct AiConfigSnapshot {
     int tokenizer_vocab_size = 50000;
     int tokenizer_max_vocab_size = 0;
     int tokenizer_max_length = 8192;
+    float tokenizer_character_coverage = 0.0f;
     int tokenizer_min_cleaned_text_length = 0;
     int tokenizer_min_subword_freq = 3;
     bool tokenizer_prune_during_mining = false;
@@ -175,6 +177,7 @@ struct AiConfigSnapshot {
         assignSnapshotField(tokenizer_vocab_size, tok, "vocab_size");
         assignSnapshotField(tokenizer_max_vocab_size, tok, "max_vocab_size");
         assignSnapshotField(tokenizer_max_length, tok, "max_length");
+        assignSnapshotField(tokenizer_character_coverage, tok, "character_coverage");
         assignSnapshotField(tokenizer_min_cleaned_text_length, tok, "min_cleaned_text_length");
         assignSnapshotField(tokenizer_min_subword_freq, tok, "min_subword_freq");
         assignSnapshotField(tokenizer_prune_during_mining, tok, "prune_during_mining");
@@ -401,10 +404,6 @@ inline void setDefaultHyperparameters(TrainingHyperparameters& params) {
     // ── Single batch overfit ──
     params.single_batch_overfit_max_steps = 1000;
 
-    // ── Guess aux ──
-    params.guess_aux_lambda = 0.25f;
-    params.guess_aux_min_confidence = 0.7f;
-
     // ── Shuffle ──
     params.shuffle_train_epochs = 1;
 
@@ -568,7 +567,6 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         "single_batch.enabled",
         "soft_restart.enabled",
         "auto_stop.enabled",
-        "guess_aux.enabled",
         "shuffle.enabled",
         
         "telemetry_control.enabled",
@@ -598,10 +596,21 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         "execution_block.layer",
         "execution_block.num_ops",
         "execution_block.num_slots",
+        "execution_block.num_scratch_slots",
         "execution_block.num_steps",
+        "execution_block.value_decode_input_dim",
+        "execution_block.value_decode_hidden_dim",
         "execution_block.d_type",
+        "execution_block.inject_gate_temp",
+        "execution_block.result_slot_mode",
+        "execution_block.result_slot_index",
+        "execution_block.debug_mode",
+        "execution_block.entropy_collapse_threshold",
+        "execution_block.write_collapse_threshold",
+        "execution_block.magnitude_limit",
         "execution_block.structured_ce_enabled",
         "execution_block.selector.enabled",
+        "execution_block.selector.d_slot_features",
 
         // LM head centering choices
         "lm_head_centering.center_hidden_states",
@@ -748,16 +757,6 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
             throw std::runtime_error(
                 "ai_config.json: training.config.shuffle.epochs must be >= 0");
         }
-    }
-
-    {
-        const auto& guess = requireJsonObjectField(trainConfig, "guess_aux", "training.config");
-        params.guess_aux_enabled =
-            getRequiredJsonValue<bool>(guess, "enabled", "training.config.guess_aux");
-        params.guess_aux_lambda =
-            getRequiredJsonValue<float>(guess, "lambda", "training.config.guess_aux");
-        params.guess_aux_min_confidence =
-            getRequiredJsonValue<float>(guess, "min_confidence", "training.config.guess_aux");
     }
 
     {
@@ -1115,14 +1114,34 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
             getRequiredJsonValue<int>(eb, "num_ops", "training.config.execution_block");
         params.architecture.execution_block_num_slots =
             getRequiredJsonValue<int>(eb, "num_slots", "training.config.execution_block");
+        params.architecture.execution_block_num_scratch_slots =
+            getRequiredJsonValue<int>(eb, "num_scratch_slots", "training.config.execution_block");
         params.architecture.execution_block_num_steps =
             getRequiredJsonValue<int>(eb, "num_steps", "training.config.execution_block");
+        params.architecture.execution_block_value_decode_input_dim =
+            getRequiredJsonValue<int>(eb, "value_decode_input_dim", "training.config.execution_block");
+        params.architecture.execution_block_value_decode_hidden_dim =
+            getRequiredJsonValue<int>(eb, "value_decode_hidden_dim", "training.config.execution_block");
         params.architecture.execution_block_d_type =
             getRequiredJsonValue<int>(eb, "d_type", "training.config.execution_block");
         params.architecture.execution_block_cross_attn_topk =
             getRequiredJsonValue<int>(eb, "cross_attn_topk", "training.config.execution_block");
         params.architecture.execution_block_usage_decay =
             getRequiredJsonValue<float>(eb, "usage_decay", "training.config.execution_block");
+        params.architecture.execution_block_inject_gate_temp =
+            getRequiredJsonValue<float>(eb, "inject_gate_temp", "training.config.execution_block");
+        params.architecture.execution_block_result_slot_mode =
+            getRequiredJsonValue<int>(eb, "result_slot_mode", "training.config.execution_block");
+        params.architecture.execution_block_result_slot_index =
+            getRequiredJsonValue<int>(eb, "result_slot_index", "training.config.execution_block");
+        params.architecture.execution_block_debug_mode =
+            getRequiredJsonValue<bool>(eb, "debug_mode", "training.config.execution_block");
+        params.architecture.execution_block_entropy_collapse_threshold =
+            getRequiredJsonValue<float>(eb, "entropy_collapse_threshold", "training.config.execution_block");
+        params.architecture.execution_block_write_collapse_threshold =
+            getRequiredJsonValue<float>(eb, "write_collapse_threshold", "training.config.execution_block");
+        params.architecture.execution_block_magnitude_limit =
+            getRequiredJsonValue<float>(eb, "magnitude_limit", "training.config.execution_block");
         params.architecture.execution_block_diversity_kappa =
             getRequiredJsonValue<float>(eb, "diversity_kappa", "training.config.execution_block");
         params.architecture.execution_block_temp_start =
@@ -1165,6 +1184,8 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         const auto& sel = requireJsonObjectField(eb, "selector", "training.config.execution_block");
         params.architecture.selector_enabled =
             getRequiredJsonValue<bool>(sel, "enabled", "training.config.execution_block.selector");
+        params.architecture.decode_time_slot_feature_dim =
+            getRequiredJsonValue<int>(sel, "d_slot_features", "training.config.execution_block.selector");
         params.architecture.selector_d_selector =
             getRequiredJsonValue<int>(sel, "d_selector", "training.config.execution_block.selector");
         params.architecture.selector_selection_margin =

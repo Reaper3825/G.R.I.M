@@ -2151,10 +2151,6 @@ bool UITrainingPanel::persistHyperparamToJSON(const GRIM::Config::HyperparamEntr
         // Shuffle
         if (!handled && k == "shuffle_train_enabled") { setNested("shuffle", "enabled"); handled = true; }
         if (!handled && k == "shuffle_train_epochs")  { setNested("shuffle", "epochs");  handled = true; }
-        // Guess aux
-        if (!handled && k.rfind("guess_aux_", 0) == 0) {
-            setNested("guess_aux", k.substr(10)); handled = true;
-        }
         // Loss (double-nested under loss.subsection)
         if (!handled && k.rfind("loss_label_smoothing_", 0) == 0) {
             setDoubleNested("loss", "label_smoothing", k.substr(21)); handled = true;

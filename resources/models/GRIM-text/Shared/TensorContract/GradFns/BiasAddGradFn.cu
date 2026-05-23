@@ -20,7 +20,7 @@
 #include "../AutogradQKVDiagnostics.hpp"
 #include "../GradientAccumulation.hpp"
 #include "../TensorContract_GPU.hpp"
-#include "../HyperParameters/HyperParameters_GPU.hpp"
+#include "../../HyperParameters/HyperParameters_GPU.hpp"
 #include "../../CudaAllocUtils.hpp"
 
 #include <cuda_runtime.h>

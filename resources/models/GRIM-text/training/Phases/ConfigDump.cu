@@ -45,6 +45,9 @@ std::string fmt(const std::string& v) { return v; }
 std::string fmt(::GRIM::HyperParameters::PositionalEncodingType v) {
     using PET = ::GRIM::HyperParameters::PositionalEncodingType;
     switch (v) {
+        case PET::UNSPECIFIED:
+            throw std::runtime_error(
+                "fmt(PositionalEncodingType): UNSPECIFIED is invalid - config must author positional encoding");
         case PET::NONE:       return "NONE";
         case PET::ALIBI:      return "ALIBI";
         case PET::ROPE:       return "ROPE";
@@ -209,11 +212,6 @@ void dumpAllHyperparameters(
     DUMP(auto_stop_plateau_min_delta);
     DUMP(auto_stop_high_loss_threshold);
     DUMP(auto_stop_high_loss_patience);
-
-    SECTION("Guess aux");
-    DUMP(guess_aux_enabled);
-    DUMP(guess_aux_lambda);
-    DUMP(guess_aux_min_confidence);
 
     SECTION("Shuffle");
     DUMP(shuffle_train_enabled);

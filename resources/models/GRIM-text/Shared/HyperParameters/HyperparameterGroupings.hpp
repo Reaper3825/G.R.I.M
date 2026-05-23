@@ -227,22 +227,22 @@ struct ExecutionBlockConstructionHP {
     int atom_embedding_dim = 0;
     int num_ops = 0;
     int num_slots = 0;
-    int num_scratch_slots = EXECUTION_BLOCK_NUM_SCRATCH_SLOTS;
+    int num_scratch_slots = 0;
     int num_exec_steps = 0;
-    int value_decode_input_dim = EXECUTION_BLOCK_VALUE_DECODE_INPUT_DIM;
-    int value_decode_hidden_dim = EXECUTION_BLOCK_VALUE_DECODE_HIDDEN_DIM;
+    int value_decode_input_dim = 0;
+    int value_decode_hidden_dim = 0;
     int d_key = 0;
     int d_type = 0;
     int cross_attn_head_dim = 0;
     int cross_attn_topk = 0;
     float usage_decay = 0.0f;
-    float inject_gate_temp = EXECUTION_BLOCK_INJECT_GATE_TEMP;
-    int result_slot_mode = EXECUTION_BLOCK_RESULT_SLOT_MODE;
-    int result_slot_index = EXECUTION_BLOCK_RESULT_SLOT_INDEX;
-    bool debug_mode = EXECUTION_BLOCK_DEBUG_MODE;
-    float entropy_collapse_threshold = EXECUTION_BLOCK_ENTROPY_COLLAPSE_THRESHOLD;
-    float write_collapse_threshold = EXECUTION_BLOCK_WRITE_COLLAPSE_THRESHOLD;
-    float magnitude_limit = EXECUTION_BLOCK_MAGNITUDE_LIMIT;
+    float inject_gate_temp = 0.0f;
+    int result_slot_mode = 0;
+    int result_slot_index = 0;
+    bool debug_mode = false;
+    float entropy_collapse_threshold = 0.0f;
+    float write_collapse_threshold = 0.0f;
+    float magnitude_limit = 0.0f;
     float transition_hard_threshold = 0.0f;
     float div_invalid_penalty_weight = 0.0f;
     float div_magnitude_penalty_weight = 0.0f;
@@ -254,9 +254,9 @@ struct DecodeTimeSelectorConstructionHP {
     bool enabled = false;
     int d_model = 0;
     int d_selector = 0;
-    int d_slot_features = DECODE_TIME_SLOT_FEATURE_DIM;
+    int d_slot_features = 0;
     int num_slots = 0;
-    int scratch_slots = EXECUTION_BLOCK_NUM_SCRATCH_SLOTS;
+    int scratch_slots = 0;
     float selection_margin = 0.0f;
 };
 
@@ -699,7 +699,7 @@ inline TokenizerHP tokenizerHP(const StartupConfig& config) {
     if (config.tokenizer_max_vocab_size > 0 && view.target_vocab_size > config.tokenizer_max_vocab_size) {
         view.target_vocab_size = config.tokenizer_max_vocab_size;
     }
-    view.character_coverage = TOKENIZER_CHARACTER_COVERAGE;
+    view.character_coverage = config.tokenizer_character_coverage;
     view.min_cleaned_text_length = config.tokenizer_min_cleaned_text_length;
     view.min_subword_freq = config.tokenizer_min_subword_freq;
     view.prune_during_mining = config.tokenizer_prune_during_mining;
@@ -1201,22 +1201,22 @@ inline ExecutionBlockConstructionHP executionBlockConstructionHP(
     view.atom_embedding_dim = cfg.scratch_block_atom_embedding_dim;
     view.num_ops = cfg.execution_block_num_ops;
     view.num_slots = cfg.execution_block_num_slots;
-    view.num_scratch_slots = EXECUTION_BLOCK_NUM_SCRATCH_SLOTS;
+    view.num_scratch_slots = cfg.execution_block_num_scratch_slots;
     view.num_exec_steps = cfg.execution_block_num_steps;
-    view.value_decode_input_dim = EXECUTION_BLOCK_VALUE_DECODE_INPUT_DIM;
-    view.value_decode_hidden_dim = EXECUTION_BLOCK_VALUE_DECODE_HIDDEN_DIM;
+    view.value_decode_input_dim = cfg.execution_block_value_decode_input_dim;
+    view.value_decode_hidden_dim = cfg.execution_block_value_decode_hidden_dim;
     view.d_key = cfg.execution_block_d_key;
     view.d_type = cfg.execution_block_d_type;
     view.cross_attn_head_dim = cfg.execution_block_cross_attn_head_dim;
     view.cross_attn_topk = cfg.execution_block_cross_attn_topk;
     view.usage_decay = cfg.execution_block_usage_decay;
-    view.inject_gate_temp = EXECUTION_BLOCK_INJECT_GATE_TEMP;
-    view.result_slot_mode = EXECUTION_BLOCK_RESULT_SLOT_MODE;
-    view.result_slot_index = EXECUTION_BLOCK_RESULT_SLOT_INDEX;
-    view.debug_mode = EXECUTION_BLOCK_DEBUG_MODE;
-    view.entropy_collapse_threshold = EXECUTION_BLOCK_ENTROPY_COLLAPSE_THRESHOLD;
-    view.write_collapse_threshold = EXECUTION_BLOCK_WRITE_COLLAPSE_THRESHOLD;
-    view.magnitude_limit = EXECUTION_BLOCK_MAGNITUDE_LIMIT;
+    view.inject_gate_temp = cfg.execution_block_inject_gate_temp;
+    view.result_slot_mode = cfg.execution_block_result_slot_mode;
+    view.result_slot_index = cfg.execution_block_result_slot_index;
+    view.debug_mode = cfg.execution_block_debug_mode;
+    view.entropy_collapse_threshold = cfg.execution_block_entropy_collapse_threshold;
+    view.write_collapse_threshold = cfg.execution_block_write_collapse_threshold;
+    view.magnitude_limit = cfg.execution_block_magnitude_limit;
     view.transition_hard_threshold = cfg.execution_block_transition_hard_threshold;
     view.div_invalid_penalty_weight = cfg.div_invalid_penalty_weight;
     view.div_magnitude_penalty_weight = cfg.div_magnitude_penalty_weight;
@@ -1252,6 +1252,31 @@ inline ExecutionBlockConstructionHP executionBlockConstructionHP(
         requirePositiveGroupingValue(view.cross_attn_topk,
                                      "execution_block_cross_attn_topk",
                                      "executionBlockConstructionHP");
+        requirePositiveFiniteGroupingValue(view.usage_decay,
+                                           "execution_block_usage_decay",
+                                           "executionBlockConstructionHP");
+        requirePositiveFiniteGroupingValue(view.inject_gate_temp,
+                                           "execution_block_inject_gate_temp",
+                                           "executionBlockConstructionHP");
+        requirePositiveFiniteGroupingValue(view.magnitude_limit,
+                                           "execution_block_magnitude_limit",
+                                           "executionBlockConstructionHP");
+        if (view.entropy_collapse_threshold < 0.0f || view.entropy_collapse_threshold > 1.0f) {
+            throw std::runtime_error(
+                "executionBlockConstructionHP: entropy_collapse_threshold must be in [0,1], got " +
+                std::to_string(view.entropy_collapse_threshold));
+        }
+        if (view.write_collapse_threshold < 0.0f || view.write_collapse_threshold > 1.0f) {
+            throw std::runtime_error(
+                "executionBlockConstructionHP: write_collapse_threshold must be in [0,1], got " +
+                std::to_string(view.write_collapse_threshold));
+        }
+        if (view.result_slot_index < -1 || view.result_slot_index >= view.num_slots) {
+            throw std::runtime_error(
+                "executionBlockConstructionHP: result_slot_index=" +
+                std::to_string(view.result_slot_index) +
+                " out of range [-1, num_slots)");
+        }
     }
     return view;
 }
@@ -1263,9 +1288,9 @@ inline DecodeTimeSelectorConstructionHP decodeTimeSelectorConstructionHP(
     view.enabled = cfg.selector_enabled;
     view.d_model = cfg.d_model;
     view.d_selector = cfg.selector_d_selector;
-    view.d_slot_features = DECODE_TIME_SLOT_FEATURE_DIM;
+    view.d_slot_features = cfg.decode_time_slot_feature_dim;
     view.num_slots = cfg.execution_block_num_slots;
-    view.scratch_slots = EXECUTION_BLOCK_NUM_SCRATCH_SLOTS;
+    view.scratch_slots = cfg.execution_block_num_scratch_slots;
     view.selection_margin = cfg.selector_selection_margin;
     if (view.enabled) {
         if (!cfg.execution_block_enabled) {

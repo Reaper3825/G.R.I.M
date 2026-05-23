@@ -43,6 +43,12 @@ DecodeTimeNumPolicy::DecodeTimeNumPolicy(const HyperParameters::DecodeTimeSelect
         throw std::runtime_error("DecodeTimeNumPolicy: num_slots must be positive, got " +
                                  std::to_string(hp_.num_slots));
     }
+    if (hp_.d_slot_features != kSlotFeatureDim) {
+        throw std::runtime_error("DecodeTimeNumPolicy: hp.d_slot_features=" +
+                                 std::to_string(hp_.d_slot_features) +
+                                 " must match fixed policy feature layout width=" +
+                                 std::to_string(kSlotFeatureDim));
+    }
     if (hp_.scratch_slots < 0 || hp_.scratch_slots >= hp_.num_slots) {
         throw std::runtime_error("DecodeTimeNumPolicy: scratch_slots=" +
                                  std::to_string(hp_.scratch_slots) +

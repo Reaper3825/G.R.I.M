@@ -26,6 +26,12 @@ Subprocess coordinator code follows the same single-root rule: Phase 1 loads con
 
 `tokenizer.min_cleaned_text_length` owns the minimum rendered/cleaned text byte length required before `DataLoader.cu` encodes a concept/plaintext row into GRMT. Keep this threshold in `ai_config.json`, load it into the collapsed `AiConfigSnapshot` authored surface, assign it into HyperParameters-owned config, and slice it into `TokenizerHP`; do not reintroduce a file-local DataLoader constant.
 
+`tokenizer.character_coverage` is authored tokenizer policy. It must flow through `AiConfigSnapshot::tokenizer_character_coverage`, `StartupConfig::tokenizer_character_coverage`, and `TokenizerHP::character_coverage`; do not reintroduce a `TOKENIZER_CHARACTER_COVERAGE` constexpr in `HyperParameters_GPU.hpp`.
+
+`training.config.guess_aux` has been removed. The downstream GuessCache/guess-aux config gating path is no longer part of the training config contract, so do not require, parse, dump, or registry-expose `guess_aux.enabled`, `guess_aux.lambda`, or `guess_aux.min_confidence`.
+
+ExecutionBlock runtime policy values such as `num_scratch_slots`, value-decode dimensions, inject-gate temperature, result-slot policy, debug mode, collapse thresholds, magnitude limit, and decode-time slot feature dimension are authored under `training.config.execution_block` / `.selector`. They live on `LanguageModelConfig`, are parsed by `ai_config_paths.hpp`, and are sliced by `executionBlockConstructionHP()` / `decodeTimeSelectorConstructionHP()`. Do not reintroduce `EXECUTION_BLOCK_*` or `DECODE_TIME_SLOT_FEATURE_DIM` constexpr defaults for those runtime knobs. Kernel launch constants like FlashAttention tile sizes remain compile-time constants.
+
 `LanguageModel` owns only `LanguageModelConfig` plus runtime/model state. It must not retain `TrainingHyperparameters` pointers or expose pass-through accessors for Phase 1 config. After `TrainingContext.model_config` is authored, Phase2 and diagnostics must consume that handoff directly instead of reading `ctx.config.hyperparameters.architecture` or rebuilding static model groupings.
 
 Grouped construction views also own repeated derived dimensions for their consumers. For encoder construction, `EncoderLayerConstructionHP` carries validated GQA/QKV dimensions (`head_dim`, `heads_per_kv_group`, `kv_dim`, `qkv_dim`, `is_gqa`) so layer code does not recompute config geometry locally.

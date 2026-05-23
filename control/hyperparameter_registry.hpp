@@ -10,7 +10,7 @@
 //
 // Categories map to logical feature groups for filtering:
 //   Core, Optimizer, SoftRestart, AutoStop,
-//   GuessAux, Shuffle, Telemetry, Loss, LMHead, Attention,
+//   Shuffle, Telemetry, Loss, LMHead, Attention,
 //   LayerScale, ScratchBlock, ExecutionBlock, ActivationQuant,
 //   CUDA, MTP, Diagnostics
 //======================================================//
@@ -126,11 +126,6 @@ public:
         addFloat (params.auto_stop_plateau_min_delta,   "auto_stop_plateau_min_delta",   "Plateau Min Delta",   "Auto Stop");
         addFloat (params.auto_stop_high_loss_threshold, "auto_stop_high_loss_threshold", "High Loss Threshold", "Auto Stop");
         addInt   (params.auto_stop_high_loss_patience,  "auto_stop_high_loss_patience",  "High Loss Patience",  "Auto Stop");
-
-        // ── Guess Aux ──
-        addBool  (params.guess_aux_enabled,        "guess_aux_enabled",        "Enabled",        "Guess Aux");
-        addFloat (params.guess_aux_lambda,         "guess_aux_lambda",         "Lambda",         "Guess Aux");
-        addFloat (params.guess_aux_min_confidence, "guess_aux_min_confidence", "Min Confidence", "Guess Aux");
 
         // ── Shuffle ──
         addBool  (params.shuffle_train_enabled, "shuffle_train_enabled", "Enabled",     "Shuffle");

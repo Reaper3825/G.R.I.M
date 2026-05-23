@@ -68,7 +68,7 @@ __global__ void kernelLMHeadRowStats(
     int active_end = d_model;
     int active_width = d_model;
     if (token_type_gate) {
-        const auto gate_range = GRIM::TensorContract::tokenTypeGateRangeForTokenId(
+        const auto gate_range = ::TensorContract::tokenTypeGateRangeForTokenId(
             row, d_model, vocab_size);
         active_start = gate_range.start;
         active_end = gate_range.end;

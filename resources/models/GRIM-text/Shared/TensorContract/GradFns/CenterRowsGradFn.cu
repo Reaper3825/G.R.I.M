@@ -71,7 +71,7 @@ __global__ void kernel_type_gate_rows(
     const int row_idx = blockIdx.x;
     if (row_idx >= num_rows) return;
 
-    const auto gate = GRIM::TensorContract::tokenTypeGateRangeForTokenId(row_idx, row_dim, num_rows);
+    const auto gate = ::TensorContract::tokenTypeGateRangeForTokenId(row_idx, row_dim, num_rows);
     if (gate.width <= 0) {
         printf("FATAL: invalid token type gate for row_idx=%d row_dim=%d num_rows=%d in kernel_type_gate_rows\n",
                row_idx, row_dim, num_rows);
@@ -94,7 +94,7 @@ __global__ void kernel_center_rows_by_token_type_gate(
     const int row_idx = blockIdx.x;
     if (row_idx >= num_rows) return;
 
-    const auto gate = GRIM::TensorContract::tokenTypeGateRangeForTokenId(row_idx, row_dim, num_rows);
+    const auto gate = ::TensorContract::tokenTypeGateRangeForTokenId(row_idx, row_dim, num_rows);
     if (gate.width <= 0) {
         printf("FATAL: invalid token type gate for row_idx=%d row_dim=%d num_rows=%d in kernel_center_rows_by_token_type_gate\n",
                row_idx, row_dim, num_rows);

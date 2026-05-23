@@ -19,7 +19,7 @@
 #define GRIM_TOKEN_GATE_HD
 #endif
 
-namespace GRIM::TensorContract {
+namespace TensorContract {
 
 constexpr int TOKEN_TYPE_GATE_UNIGRAM_OFFSET =
     GRIM::Tokenizer::ATOM_TOKEN_OFFSET + GRIM::Tokenizer::kAtomTypeCount;
@@ -126,6 +126,6 @@ GRIM_TOKEN_GATE_HD inline bool tokenTypeGateAllowsDimension(
     return dim >= range.start && dim < range.end;
 }
 
-}  // namespace GRIM::TensorContract
+}  // namespace TensorContract
 
 #undef GRIM_TOKEN_GATE_HD

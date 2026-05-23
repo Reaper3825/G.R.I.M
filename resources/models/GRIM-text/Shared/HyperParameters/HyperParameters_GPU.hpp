@@ -155,13 +155,6 @@ constexpr int ATOM_TOKEN_START = BYTE_TOKEN_END;  // First atom token ID (immedi
 constexpr int ATOM_TOKEN_END = ATOM_TOKEN_START + Tokenizer::kAtomTypeCount;  // 260 + kAtomTypeCount
 constexpr uint32_t MAX_REASONABLE_VOCAB_SIZE = 2000000; // Sanity check for vocab detection
 
-//======================================================//
-// UnigramByte Tokenizer Initialization Constants
-// Single source of truth for tokenizer configuration
-// (Overridable per-run via ai_config.json [tokenizer] section)
-//======================================================//
-constexpr float TOKENIZER_CHARACTER_COVERAGE = 0.9995f;  // Character coverage for SentencePiece-style vocab building
-
 // BOS/EOS Token Insertion Control
 // These flags are loaded from ai_config.json [tokenizer] section:
 //   add_bos: true/false - Controls whether to prepend BOS token to sequences
@@ -177,14 +170,9 @@ constexpr int FLASH_ATTN_BLOCK_Q = CUDA_WARP_SIZE;    // Block size for Q tiles 
 constexpr int FLASH_ATTN_BLOCK_KV = CUDA_WARP_SIZE;   // Block size for K/V tiles (= warp size)
 constexpr int FLASH_ATTN_NUM_THREADS = CUDA_BLOCK_SIZE_STANDARD;  // Threads per block
 
-// Supported head dimensions for Flash Attention kernel (derived from architecture)
+// Supported head dimensions for Flash Attention kernel
 constexpr int FLASH_ATTN_HEAD_DIM_32 = 32;
 constexpr int FLASH_ATTN_HEAD_DIM_64 = 64;  // Primary supported head_dim
-
-// Softmax temperature for attention (MUST match between forward and backward!)
-// Standard value is 1.0 (no scaling). Lower values sharpen attention (risk saturation).
-// Higher values spread attention more evenly (risk over-smoothing).
-constexpr float SOFTMAX_TEMPERATURE = 1.0f;
 
 //======================================================//
 // Grouped Query Attention (GQA) Configuration
@@ -262,27 +250,6 @@ inline bool usesALiBi(PositionalEncodingType type) {
 inline bool usesRoPE(PositionalEncodingType type) {
     return type == PositionalEncodingType::ROPE || type == PositionalEncodingType::ALIBI_ROPE;
 }
-
-//======================================================//
-// ExecutionBlock (training.config.execution_block in ai_config.json)
-//
-// Parsed into GRIM::Config::TrainingHyperparameters (ai_config_paths.hpp).
-// Training startup maps those fields onto GRIM::HyperParameters::LanguageModelConfig in Phase1_Startup.cu.
-// LanguageModelConfig inherits from ModelArchitecture — architecture fields
-// are defined ONLY here (Single Source of Truth). The encoder consumes
-// LanguageModelConfig directly; there is no intermediate EncoderConfig.
-//======================================================//
-constexpr int DECODE_TIME_SLOT_FEATURE_DIM = 5;
-constexpr int EXECUTION_BLOCK_NUM_SCRATCH_SLOTS = 0;
-constexpr int EXECUTION_BLOCK_VALUE_DECODE_INPUT_DIM = 24;
-constexpr int EXECUTION_BLOCK_VALUE_DECODE_HIDDEN_DIM = 16;
-constexpr float EXECUTION_BLOCK_INJECT_GATE_TEMP = 0.5f;
-constexpr int EXECUTION_BLOCK_RESULT_SLOT_MODE = 0;
-constexpr int EXECUTION_BLOCK_RESULT_SLOT_INDEX = -1;
-constexpr bool EXECUTION_BLOCK_DEBUG_MODE = true;
-constexpr float EXECUTION_BLOCK_ENTROPY_COLLAPSE_THRESHOLD = 0.01f;
-constexpr float EXECUTION_BLOCK_WRITE_COLLAPSE_THRESHOLD = 0.98f;
-constexpr float EXECUTION_BLOCK_MAGNITUDE_LIMIT = 1e6f;
 
 //======================================================//
 // Model Architecture Validation & Computation
@@ -599,12 +566,22 @@ struct LanguageModelConfig : public ModelArchitecture {
     int execution_block_layer = -1;
     int execution_block_num_ops = 4;
     int execution_block_num_slots = 4;
+    int execution_block_num_scratch_slots = 0;
     int execution_block_num_steps = 2;
+    int execution_block_value_decode_input_dim = 0;
+    int execution_block_value_decode_hidden_dim = 0;
     int execution_block_d_key = 64;
     int execution_block_d_type = 8;
     int execution_block_cross_attn_head_dim = 64;
     int execution_block_cross_attn_topk = 1;
     float execution_block_usage_decay = 0.9f;
+    float execution_block_inject_gate_temp = 0.0f;
+    int execution_block_result_slot_mode = 0;
+    int execution_block_result_slot_index = 0;
+    bool execution_block_debug_mode = false;
+    float execution_block_entropy_collapse_threshold = 0.0f;
+    float execution_block_write_collapse_threshold = 0.0f;
+    float execution_block_magnitude_limit = 0.0f;
     float execution_block_diversity_kappa = 2.0f;
     float execution_block_temp_start = 2.0f;
     float execution_block_temp_end = 0.5f;
@@ -627,6 +604,7 @@ struct LanguageModelConfig : public ModelArchitecture {
 
     // Decode-time slot selector config
     bool  selector_enabled = false;
+    int   decode_time_slot_feature_dim = 0;
     int   selector_d_selector = 64;
     float selector_selection_margin = 1.0f;
     float selector_supervision_weight = 0.0f;
@@ -800,11 +778,6 @@ struct TrainingHyperparameters {
     float auto_stop_plateau_min_delta;
     float auto_stop_high_loss_threshold;
     int auto_stop_high_loss_patience;
-    
-    // Guess aux - NO DEFAULTS
-    bool guess_aux_enabled;
-    float guess_aux_lambda;
-    float guess_aux_min_confidence;
     
     // Shuffle - NO DEFAULTS
     bool shuffle_train_enabled;
@@ -1317,6 +1290,7 @@ struct StartupConfig {
     int tokenizer_vocab_size = 50000;
     int tokenizer_max_vocab_size = 0;
     int tokenizer_max_length = 8192;
+    float tokenizer_character_coverage = 0.0f;
     int tokenizer_min_cleaned_text_length = 0;
     int tokenizer_min_subword_freq = 3;
     bool tokenizer_prune_during_mining = false;
@@ -1411,6 +1385,7 @@ inline StartupConfig loadStartupConfig(int argc, char** argv) {
     config.tokenizer_vocab_size = snapshot->tokenizer_vocab_size;
     config.tokenizer_max_vocab_size = snapshot->tokenizer_max_vocab_size;
     config.tokenizer_max_length = snapshot->tokenizer_max_length;
+    config.tokenizer_character_coverage = snapshot->tokenizer_character_coverage;
     config.tokenizer_min_cleaned_text_length = snapshot->tokenizer_min_cleaned_text_length;
     config.tokenizer_min_subword_freq = snapshot->tokenizer_min_subword_freq;
     config.tokenizer_prune_during_mining = snapshot->tokenizer_prune_during_mining;

@@ -70,7 +70,7 @@ __global__ void kernel_embedding_forward(
 
     const float* weight_row = weight + static_cast<size_t>(token_id) * d_model;
 
-    const auto gate = GRIM::TensorContract::tokenTypeGateRangeForTokenId(token_id, d_model, vocab_size);
+    const auto gate = ::TensorContract::tokenTypeGateRangeForTokenId(token_id, d_model, vocab_size);
     if (gate.width <= 0) {
         printf("FATAL: invalid token type gate for token_id=%d d_model=%d vocab_size=%d in kernel_embedding_forward\n",
                token_id, d_model, vocab_size);
@@ -115,7 +115,7 @@ __global__ void kernel_embedding_backward(
     const float* token_grad = grad_output + static_cast<size_t>(token_idx) * d_model;
     float* weight_grad = grad_weight + static_cast<size_t>(token_id) * d_model;
 
-    const auto gate = GRIM::TensorContract::tokenTypeGateRangeForTokenId(token_id, d_model, vocab_size);
+    const auto gate = ::TensorContract::tokenTypeGateRangeForTokenId(token_id, d_model, vocab_size);
     if (gate.width <= 0) {
         printf("FATAL: invalid token type gate for token_id=%d d_model=%d vocab_size=%d in kernel_embedding_backward\n",
                token_id, d_model, vocab_size);

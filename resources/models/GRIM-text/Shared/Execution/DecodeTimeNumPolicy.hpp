@@ -61,7 +61,10 @@ struct SlotSelectionResult {
 // [2] valid_bit       (from ExecutionMemory::valid_mask)
 // [3] recent_write    (from ExecutionMemory::recent_write_mask)
 // [4] usage_scalar    (from ExecutionMemory::usage)
-static constexpr int kSlotFeatureDim = HyperParameters::DECODE_TIME_SLOT_FEATURE_DIM;
+// Static implementation capacity for the fixed feature assembler. The authored
+// config value hp.d_slot_features must match this exactly; the constructor
+// fails loud otherwise instead of silently changing feature layout semantics.
+static constexpr int kSlotFeatureDim = 5;
 
 // Maximum supported live slots (matches DecodeTimeSlotSelectorLayer::kMaxSlots)
 static constexpr int kPolicyMaxSlots = 16;
