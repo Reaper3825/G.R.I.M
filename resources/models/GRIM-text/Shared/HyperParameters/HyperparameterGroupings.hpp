@@ -980,12 +980,12 @@ inline PBMConstructionHP pbmConstructionHP(
     view.head_dim = cfg.head_dim;
     view.rotary_dim = cfg.head_dim;
     view.max_seq_len = cfg.max_seq_len;
-    view.rope_base_seq_len = ROPE_BASE_SEQ_LEN;
-    view.alibi_min_locality_distance = ALIBI_MIN_LOCALITY_DISTANCE;
-    view.alibi_slope_exponent = ALIBI_SLOPE_EXPONENT;
-    view.alibi_max_bias = ALIBI_MAX_BIAS;
-    view.rope_theta = ROPE_THETA;
-    view.rope_scaling = ROPE_SCALING;
+    view.rope_base_seq_len = cfg.rope_base_seq_len;
+    view.alibi_min_locality_distance = cfg.alibi_min_locality_distance;
+    view.alibi_slope_exponent = cfg.alibi_slope_exponent;
+    view.alibi_max_bias = cfg.alibi_max_bias;
+    view.rope_theta = cfg.rope_theta;
+    view.rope_scaling = cfg.rope_scaling;
     validatePBMConstructionHP(view, "pbmConstructionHP");
     return view;
 }

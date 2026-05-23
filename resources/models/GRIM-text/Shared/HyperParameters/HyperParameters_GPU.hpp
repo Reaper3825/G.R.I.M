@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -58,22 +59,12 @@ constexpr int CUDA_QUANTIZATION_THREADS = CUDA_BLOCK_SIZE_STANDARD;  // Quantiza
 constexpr int CUDA_REDUCTION_MAX_BLOCKS = CUDA_BLOCK_SIZE_STANDARD;  // Cap grid size for reductions
 
 //======================================================//
-// Model Architecture Defaults (declare early for derived constants)
-// Used when config values are missing or for validation
+// Model Architecture Formula Constants
+// Architecture values themselves are authored in ai_config.json and loaded
+// into ModelArchitecture. Constants in this section may only be formulas or
+// static kernel capabilities, never fallback model defaults.
 //======================================================//
-constexpr int DEFAULT_D_MODEL = 768;
-constexpr int DEFAULT_NUM_LAYERS = 6;
-constexpr int DEFAULT_NUM_HEADS = 12;
-constexpr int DEFAULT_D_FF_MULTIPLIER = 4;  // d_ff = d_model * multiplier
-constexpr int DEFAULT_MAX_SEQ_LEN = 1024;
-constexpr float DEFAULT_DROPOUT_RATE = 0.1f;
-// Residual and attention dropout are always derived from dropout_rate (no separate defaults)
-
-// Derived model constants
-constexpr int DEFAULT_HEAD_DIM = DEFAULT_D_MODEL / DEFAULT_NUM_HEADS;    // 64
-
-// Sequence-length derived constants
-constexpr size_t CUDA_FALLBACK_MAX_LOSS_TOKENS = DEFAULT_MAX_SEQ_LEN * 4;  // 4x max_seq_len for batching
+constexpr int D_FF_MULTIPLIER = 4;  // d_ff = d_model * multiplier
 
 //======================================================//
 // Numerical Stability Constants
@@ -106,18 +97,6 @@ constexpr int TELEMETRY_MAX_LEVELS = 8;           // TelemetryLattice temporal l
 constexpr int TELEMETRY_MAX_STREAMS = 58;         // TelemetryLattice metric streams (0-46 dynamic, 47 logit-scale, 48-54 init invariants, 55-57 rho centered/signed-dot)
 
 //======================================================//
-// Equation Logging Configuration
-// Controls diagnostic equation-based logging for training
-//======================================================//
-constexpr bool DEFAULT_EQ_LOG_ENABLED = false;    // Disabled: equation logging causes GPU sync + D2H every forward
-constexpr int DEFAULT_EQ_LOG_INTERVAL = 1;       // Log every N batches (0 = every batch)
-
-//======================================================//
-// Gradient Scaling Defaults
-//======================================================//
-constexpr bool DEFAULT_GRAD_SCALE_PER_TOKEN = false;  // Apply 1/valid_tokens in backward
-
-//======================================================//
 // UnigramLM Training Constants
 // Parameters for vocabulary training/pruning
 //======================================================//
@@ -126,7 +105,7 @@ constexpr float UNIGRAM_PRUNE_THRESHOLD = 0.0001f;    // Tokens <0.01% usage get
 constexpr int UNIGRAM_MIN_VOCAB_SIZE = 8000;          // Don't prune below this
 constexpr double UNIGRAM_MIN_COUNT = 1.0;             // Tokens used <1 time get pruned
 constexpr size_t UNIGRAM_MAX_SUBWORD_BYTES = 100ULL * 1024 * 1024;  // 100MB limit for subword mining
-constexpr size_t UNIGRAM_MAX_SEQUENCE_LENGTH = DEFAULT_MAX_SEQ_LEN * 4;  // 4x max_seq_len for Viterbi
+constexpr size_t UNIGRAM_MAX_SEQUENCE_LENGTH = 4096;  // Static tokenizer workspace floor; not a model fallback
 
 //======================================================//
 // GELU Activation Constants
@@ -200,30 +179,12 @@ constexpr int FLASH_ATTN_NUM_THREADS = CUDA_BLOCK_SIZE_STANDARD;  // Threads per
 
 // Supported head dimensions for Flash Attention kernel (derived from architecture)
 constexpr int FLASH_ATTN_HEAD_DIM_32 = 32;
-constexpr int FLASH_ATTN_HEAD_DIM_64 = DEFAULT_HEAD_DIM;  // Primary supported head_dim
+constexpr int FLASH_ATTN_HEAD_DIM_64 = 64;  // Primary supported head_dim
 
 // Softmax temperature for attention (MUST match between forward and backward!)
 // Standard value is 1.0 (no scaling). Lower values sharpen attention (risk saturation).
 // Higher values spread attention more evenly (risk over-smoothing).
 constexpr float SOFTMAX_TEMPERATURE = 1.0f;
-
-//======================================================//
-// Positional Bias Method (PBM) Configuration
-// Hybrid ALiBi + RoPE for position encoding
-//======================================================//
-constexpr float ROPE_THETA = 10000.0f;        // RoPE base frequency (standard: 10000)
-constexpr float ROPE_SCALING = 1.0f;          // NTK scaling factor (1.0 = no scaling)
-constexpr int ROPE_BASE_SEQ_LEN = 2048;       // Base context length for NTK-aware RoPE scaling
-constexpr float ALIBI_SLOPE_EXPONENT = -8.0f; // Controls ALiBi slope decay across heads
-constexpr int ALIBI_MIN_LOCALITY_DISTANCE = 16; // Minimum locality distance for ALiBi slope calibration
-
-// ISSUE #78: ALiBi bias capping (optional safety net for softmax backward stability)
-// Issue #84 fixed the ROOT CAUSE of dQ/dK explosion (missing FlashAttention preprocessing
-// kernel), so capping is no longer required for correctness.
-// 
-// Set to -10.0f to enable capping (limits exp(bias) ≥ exp(-10) ≈ 0.000045).
-// Set to 0.0f to disable capping (current: disabled, safe after Issue #84 fix).
-constexpr float ALIBI_MAX_BIAS = 0.0f;
 
 //======================================================//
 // Grouped Query Attention (GQA) Configuration
@@ -235,9 +196,6 @@ constexpr float ALIBI_MAX_BIAS = 0.0f;
 // Memory savings: KV cache reduced by factor of (num_heads / num_kv_heads)
 // Quality tradeoff: GQA (4-8 KV heads) often matches MHA quality
 //======================================================//
-constexpr int DEFAULT_NUM_KV_HEADS = 4;        // GQA default: 4 KV heads for 12 Q heads (3:1 ratio)
-constexpr bool GQA_ENABLED = true;            // Master switch for GQA
-
 // Validate GQA configuration
 inline bool isValidGQAConfig(int num_heads, int num_kv_heads) {
     if (num_kv_heads <= 0 || num_heads <= 0) return false;
@@ -248,7 +206,11 @@ inline bool isValidGQAConfig(int num_heads, int num_kv_heads) {
 
 // Compute the number of Q heads per KV group
 inline int computeHeadsPerKVGroup(int num_heads, int num_kv_heads) {
-    return (num_kv_heads > 0) ? (num_heads / num_kv_heads) : num_heads;
+    if (num_heads <= 0 || num_kv_heads <= 0) {
+        throw std::runtime_error(
+            "computeHeadsPerKVGroup: num_heads and num_kv_heads must be > 0");
+    }
+    return num_heads / num_kv_heads;
 }
 
 // Compute KV projection size (reduced from Q projection in GQA)
@@ -272,40 +234,23 @@ inline bool isValidFlashAttentionHeadDim(int head_dim) {
 // Supports ALiBi, RoPE, and Hybrid (ALiBi+RoPE)
 //======================================================//
 enum class PositionalEncodingType {
+    UNSPECIFIED,// Fail-loud sentinel; JSON must author a real encoding type
     NONE,       // Learned/additive position embeddings (no ALiBi/RoPE inside attention)
     ALIBI,      // Attention with Linear Biases (bias-based, good for long-range)
     ROPE,       // Rotary Position Embedding (rotation-based, good for local patterns)
     ALIBI_ROPE  // Hybrid: ALiBi for long-range + RoPE for local patterns (recommended)
 };
 
-// Default positional encoding configuration
-constexpr PositionalEncodingType DEFAULT_POSITIONAL_ENCODING = PositionalEncodingType::ALIBI_ROPE;
-
-// RoPE base frequency (for computing rotation frequencies)
-constexpr float ROPE_BASE_FREQ = 10000.0f;
-
 // Helper to get string representation of positional encoding type
 inline const char* positionalEncodingTypeToString(PositionalEncodingType type) {
     switch (type) {
+        case PositionalEncodingType::UNSPECIFIED: return "UNSPECIFIED";
         case PositionalEncodingType::NONE: return "NONE";
         case PositionalEncodingType::ALIBI: return "ALIBI";
         case PositionalEncodingType::ROPE: return "ROPE";
         case PositionalEncodingType::ALIBI_ROPE: return "ALIBI_ROPE";
         default: return "UNKNOWN";
     }
-}
-
-// Helper to parse positional encoding type from string
-inline PositionalEncodingType parsePositionalEncodingType(const std::string& str) {
-    if (str == "NONE" || str == "none") return PositionalEncodingType::NONE;
-    if (str == "ALIBI" || str == "alibi") return PositionalEncodingType::ALIBI;
-    if (str == "ROPE" || str == "rope") return PositionalEncodingType::ROPE;
-    if (str == "ALIBI_ROPE" || str == "alibi_rope" || str == "hybrid" || str == "HYBRID") 
-        return PositionalEncodingType::ALIBI_ROPE;
-    
-    // STRICT: Unknown encoding types are errors, not silent fallbacks
-    throw std::runtime_error("parsePositionalEncodingType: unknown encoding type '" + str + 
-                             "'. Valid: NONE, ALIBI, ROPE, ALIBI_ROPE/hybrid");
 }
 
 // Check if positional encoding type uses ALiBi
@@ -317,51 +262,6 @@ inline bool usesALiBi(PositionalEncodingType type) {
 inline bool usesRoPE(PositionalEncodingType type) {
     return type == PositionalEncodingType::ROPE || type == PositionalEncodingType::ALIBI_ROPE;
 }
-
-//======================================================//
-// Loss Configuration Defaults
-// Centralizes all loss-related hyperparameters
-//======================================================//
-
-// Label Smoothing: regularization technique that prevents overconfidence
-constexpr bool DEFAULT_LOSS_LABEL_SMOOTHING_ENABLED = true;
-constexpr float DEFAULT_LOSS_LABEL_SMOOTHING_EPSILON = 0.1f;  // Standard epsilon when enabled
-
-// Focal Loss: down-weights easy examples, focuses on hard examples
-constexpr bool DEFAULT_LOSS_FOCAL_ENABLED = false;
-constexpr float DEFAULT_LOSS_FOCAL_GAMMA = 2.0f;   // Standard gamma when enabled (higher = more focus on hard examples)
-constexpr float DEFAULT_LOSS_FOCAL_ALPHA = 1.0f;   // 1.0 = no class weighting (standard), <1.0 = downscale all losses
-
-// Distillation: knowledge transfer from teacher model
-constexpr bool DEFAULT_LOSS_DISTILLATION_ENABLED = false;
-constexpr float DEFAULT_LOSS_DISTILLATION_TEMPERATURE = 1.0f;
-constexpr float DEFAULT_LOSS_DISTILLATION_LAMBDA = 0.5f;  // Weight of distillation loss when enabled
-
-// Preference (KL divergence for RLHF-style training)
-constexpr bool DEFAULT_LOSS_PREFERENCE_ENABLED = false;
-constexpr float DEFAULT_LOSS_PREFERENCE_BETA = 0.1f;  // KL penalty coefficient
-
-// Token Masking: exclude specific tokens from loss
-constexpr bool DEFAULT_LOSS_MASKING_ENABLED = true;
-
-// Entropy Regularization: penalizes low entropy (overconfidence), encourages diversity
-// reg = -λ * H(p) = λ * Σ p*log(p)
-constexpr bool DEFAULT_LOSS_ENTROPY_REG_ENABLED = false;
-constexpr float DEFAULT_LOSS_ENTROPY_REG_LAMBDA = 0.0f;  // Regularization strength when enabled (try 0.1-1.0)
-
-// Class-balanced loss: w_v = 1/freq(v)^β reweights per-token loss
-// β=0.5 → sqrt inverse frequency. Counteracts frequency-biased CE gradient.
-constexpr bool DEFAULT_LOSS_CLASS_BALANCED_ENABLED = false;
-constexpr float DEFAULT_LOSS_CLASS_BALANCED_BETA = 0.5f;  // sqrt inverse frequency (try 0.3-0.9)
-
-//======================================================//
-// Scratch Block Configuration (ScratchBlock Reasoning Layer)
-// Pool block size is computed from the HyperparameterGroupings-authored fixed token rectangle
-// in InitTrainingState.
-//======================================================//
-constexpr bool DEFAULT_SCRATCH_BLOCKS_ENABLED = true;
-constexpr size_t DEFAULT_SCRATCH_NUM_BLOCKS = 2;  // Double buffer for pinned memory staging
-constexpr bool DEFAULT_SCRATCH_WRITE_COMBINED = false;
 
 //======================================================//
 // ExecutionBlock (training.config.execution_block in ai_config.json)
@@ -388,16 +288,25 @@ constexpr float EXECUTION_BLOCK_MAGNITUDE_LIMIT = 1e6f;
 // Model Architecture Validation & Computation
 //======================================================//
 struct ModelArchitecture {
-    int d_model = DEFAULT_D_MODEL;
-    int num_layers = DEFAULT_NUM_LAYERS;
-    int num_heads = DEFAULT_NUM_HEADS;
-    int num_kv_heads = DEFAULT_NUM_KV_HEADS;  // GQA: number of KV heads
+    int d_model = 0;
+    int num_layers = 0;
+    int num_heads = 0;
+    int num_kv_heads = 0;  // GQA: number of KV heads
     int d_ff = 0;  // Must be set from config or computed as d_model * multiplier
-    int max_seq_len = DEFAULT_MAX_SEQ_LEN;
-    float dropout_rate = DEFAULT_DROPOUT_RATE;
-    float attention_dropout = DEFAULT_DROPOUT_RATE;        // Derived: always = dropout_rate
+    int max_seq_len = 0;
+    float dropout_rate = 0.0f;
+    float attention_dropout = 0.0f;        // Derived: always = dropout_rate
     bool tie_embeddings = true;  // Weight tying: share embedding/LM head weights
-    PositionalEncodingType positional_encoding = DEFAULT_POSITIONAL_ENCODING;
+    PositionalEncodingType positional_encoding = PositionalEncodingType::UNSPECIFIED;
+
+    // Positional Bias Method (PBM) authored by training.config.positional_encoding.
+    // These are policy/config values, not math constants.
+    int rope_base_seq_len = 0;
+    int alibi_min_locality_distance = 0;
+    float alibi_slope_exponent = 0.0f;
+    float alibi_max_bias = std::numeric_limits<float>::quiet_NaN();
+    float rope_theta = 0.0f;
+    float rope_scaling = 0.0f;
 
     // Flash Attention (architectural choice — affects kernel selection)
     bool use_flash_attention = true;
@@ -407,12 +316,54 @@ struct ModelArchitecture {
     bool use_gpu = true;
     
     // Derived (computed from above)
-    int head_dim = DEFAULT_HEAD_DIM;
+    int head_dim = 0;
     
     // Validate architecture and compute derived values. Throws on invalid config.
     void validate() {
+        if (d_model <= 0) {
+            throw std::runtime_error("Invalid ModelArchitecture: d_model must be > 0, got " + std::to_string(d_model));
+        }
+        if (num_layers <= 0) {
+            throw std::runtime_error("Invalid ModelArchitecture: num_layers must be > 0, got " + std::to_string(num_layers));
+        }
         if (num_heads <= 0) {
             throw std::runtime_error("Invalid ModelArchitecture: num_heads must be > 0, got " + std::to_string(num_heads));
+        }
+        if (num_kv_heads <= 0) {
+            throw std::runtime_error("Invalid ModelArchitecture: num_kv_heads must be > 0, got " + std::to_string(num_kv_heads));
+        }
+        if (max_seq_len <= 0) {
+            throw std::runtime_error("Invalid ModelArchitecture: max_seq_len must be > 0, got " + std::to_string(max_seq_len));
+        }
+        if (!std::isfinite(dropout_rate) || dropout_rate < 0.0f || dropout_rate >= 1.0f) {
+            throw std::runtime_error("Invalid ModelArchitecture: dropout_rate must be in [0, 1), got " + std::to_string(dropout_rate));
+        }
+        if (!std::isfinite(attention_dropout) || attention_dropout < 0.0f || attention_dropout >= 1.0f) {
+            throw std::runtime_error("Invalid ModelArchitecture: attention_dropout must be in [0, 1), got " + std::to_string(attention_dropout));
+        }
+        if (positional_encoding == PositionalEncodingType::UNSPECIFIED) {
+            throw std::runtime_error("Invalid ModelArchitecture: positional_encoding is UNSPECIFIED; training.config.positional_encoding must author it");
+        }
+        if (positional_encoding == PositionalEncodingType::NONE) {
+            throw std::runtime_error("Invalid ModelArchitecture: positional_encoding=NONE is unsupported; learned position embeddings were removed");
+        }
+        if (rope_base_seq_len <= 0) {
+            throw std::runtime_error("Invalid ModelArchitecture: rope_base_seq_len must be > 0, got " + std::to_string(rope_base_seq_len));
+        }
+        if (alibi_min_locality_distance <= 0) {
+            throw std::runtime_error("Invalid ModelArchitecture: alibi_min_locality_distance must be > 0, got " + std::to_string(alibi_min_locality_distance));
+        }
+        if (!std::isfinite(alibi_slope_exponent) || alibi_slope_exponent == 0.0f) {
+            throw std::runtime_error("Invalid ModelArchitecture: alibi_slope_exponent must be finite and non-zero, got " + std::to_string(alibi_slope_exponent));
+        }
+        if (!std::isfinite(alibi_max_bias) || alibi_max_bias > 0.0f) {
+            throw std::runtime_error("Invalid ModelArchitecture: alibi_max_bias must be finite and <= 0, got " + std::to_string(alibi_max_bias));
+        }
+        if (!std::isfinite(rope_theta) || rope_theta <= 0.0f) {
+            throw std::runtime_error("Invalid ModelArchitecture: rope_theta must be positive finite, got " + std::to_string(rope_theta));
+        }
+        if (!std::isfinite(rope_scaling) || rope_scaling <= 0.0f) {
+            throw std::runtime_error("Invalid ModelArchitecture: rope_scaling must be positive finite, got " + std::to_string(rope_scaling));
         }
         
         // Validate divisibility BEFORE computing head_dim
@@ -437,19 +388,17 @@ struct ModelArchitecture {
         
         // Compute d_ff if not explicitly set
         if (d_ff <= 0) {
-            d_ff = d_model * DEFAULT_D_FF_MULTIPLIER;
+            d_ff = d_model * D_FF_MULTIPLIER;
         }
     }
 };
 
 // Helper to compute head_dim inline
 inline int computeHeadDim(int d_model, int num_heads) {
-    return (num_heads > 0) ? (d_model / num_heads) : DEFAULT_HEAD_DIM;
-}
-
-// Helper to compute d_ff inline
-inline int computeDFF(int d_model, int multiplier = DEFAULT_D_FF_MULTIPLIER) {
-    return d_model * multiplier;
+    if (d_model <= 0 || num_heads <= 0) {
+        throw std::runtime_error("computeHeadDim: d_model and num_heads must be > 0");
+    }
+    return d_model / num_heads;
 }
 
 struct DerivationContext {
@@ -1160,9 +1109,8 @@ namespace HyperParameters {
  * This is THE authoritative function for getting model architecture.
  * All other code should call this rather than using hardcoded values.
  * 
- * Priority order:
- * 1. ai_config.json training.config section (runtime overrides)
- * 2. HyperParameters::DEFAULT_* constants (compile-time fallbacks)
+ * Rule 20: every architecture field is authored by ai_config.json
+ * training.config. There is no compile-time fallback path.
  * 
  * Note: vocab_size is NOT loaded here - it comes from the .grmt training data file
  * 
@@ -1178,83 +1126,60 @@ namespace HyperParameters {
 // ModelArchitecture struct.
 inline bool loadModelArchitecture(const GRIM::Config::AiConfigSnapshot& snapshot,
                                   ModelArchitecture& arch) {
-    // Start with defaults for the fields THIS function owns (other fields like
-    // max_seq_len / use_gpu / use_flash_attention are populated upstream by the
-    // TrainingHyperparameters JSON loader — do NOT reset them here).
-    arch.d_model = DEFAULT_D_MODEL;
-    arch.num_layers = DEFAULT_NUM_LAYERS;
-    arch.num_heads = DEFAULT_NUM_HEADS;
-    arch.d_ff = DEFAULT_D_MODEL * DEFAULT_D_FF_MULTIPLIER;
-    arch.dropout_rate = DEFAULT_DROPOUT_RATE;
-    arch.attention_dropout = DEFAULT_DROPOUT_RATE;       // = dropout_rate
-
     if (!snapshot.has_training) {
-        arch.validate();
-        return false;
+        throw std::runtime_error("loadModelArchitecture: snapshot.has_training is false");
     }
 
     const auto& doc = snapshot.document;
-    if (doc.contains("training") && doc["training"].contains("config")) {
-        const auto& cfg = doc["training"]["config"];
+    const auto& training = ::GRIM::Config::requireJsonObjectField(doc, "training", "ai_config.json");
+    const auto& cfg = ::GRIM::Config::requireJsonObjectField(training, "config", "training");
 
-        if (cfg.contains("d_model") && cfg["d_model"].is_number()) {
-            arch.d_model = cfg["d_model"].get<int>();
-        }
-        if (cfg.contains("num_layers") && cfg["num_layers"].is_number()) {
-            arch.num_layers = cfg["num_layers"].get<int>();
-        }
-        if (cfg.contains("num_heads") && cfg["num_heads"].is_number()) {
-            arch.num_heads = cfg["num_heads"].get<int>();
-        }
-        if (cfg.contains("num_kv_heads") && cfg["num_kv_heads"].is_number()) {
-            arch.num_kv_heads = cfg["num_kv_heads"].get<int>();
-        }
-        // d_ff: always derived as d_model * DEFAULT_D_FF_MULTIPLIER (never read from JSON)
-        arch.d_ff = arch.d_model * DEFAULT_D_FF_MULTIPLIER;
-        if (cfg.contains("tie_embeddings") && cfg["tie_embeddings"].is_boolean()) {
-            arch.tie_embeddings = cfg["tie_embeddings"].get<bool>();
-        }
-        if (cfg.contains("dropout_rate") && cfg["dropout_rate"].is_number()) {
-            arch.dropout_rate = cfg["dropout_rate"].get<float>();
-        }
-        // attention_dropout: always derived from dropout_rate
-        arch.attention_dropout = arch.dropout_rate;
+    arch.d_model = ::GRIM::Config::getRequiredJsonValue<int>(cfg, "d_model", "training.config");
+    arch.num_layers = ::GRIM::Config::getRequiredJsonValue<int>(cfg, "num_layers", "training.config");
+    arch.num_heads = ::GRIM::Config::getRequiredJsonValue<int>(cfg, "num_heads", "training.config");
+    arch.num_kv_heads = ::GRIM::Config::getRequiredJsonValue<int>(cfg, "num_kv_heads", "training.config");
+    arch.max_seq_len = ::GRIM::Config::getRequiredJsonValue<int>(cfg, "max_seq_len", "training.config");
+    arch.use_gpu = ::GRIM::Config::getRequiredJsonValue<bool>(cfg, "use_gpu", "training.config");
+    arch.use_flash_attention = ::GRIM::Config::getRequiredJsonValue<bool>(cfg, "use_flash_attention", "training.config");
+    arch.min_seq_len_for_flash = arch.max_seq_len / 4;
+    // d_ff: always derived as d_model * D_FF_MULTIPLIER (never read from JSON)
+    arch.d_ff = arch.d_model * D_FF_MULTIPLIER;
+    arch.tie_embeddings = ::GRIM::Config::getRequiredJsonValue<bool>(cfg, "tie_embeddings", "training.config");
+    arch.dropout_rate = ::GRIM::Config::getRequiredJsonValue<float>(cfg, "dropout_rate", "training.config");
+    // attention_dropout: always derived from dropout_rate
+    arch.attention_dropout = arch.dropout_rate;
 
-        // Issue #142: Parse positional encoding. Used by both training (Phase1)
-        // and runtime inference/server startup; semantics must match exactly.
-        if (cfg.contains("positional_encoding")) {
-            const auto& pe = cfg["positional_encoding"];
-            if (pe.is_object()) {
-                const bool use_rope = pe.value("use_rope", false);
-                const bool use_alibi = pe.value("use_alibi", false);
-                if (use_rope && use_alibi) {
-                    arch.positional_encoding = PositionalEncodingType::ALIBI_ROPE;
-                } else if (use_rope) {
-                    arch.positional_encoding = PositionalEncodingType::ROPE;
-                } else if (use_alibi) {
-                    arch.positional_encoding = PositionalEncodingType::ALIBI;
-                } else {
-                    // Rule 20: learned position embeddings were removed; require ALiBi and/or RoPE.
-                    throw std::runtime_error(
-                        "loadModelArchitecture: positional_encoding requires use_rope and/or use_alibi "
-                        "(learned position embeddings have been removed)");
-                }
-            } else if (pe.is_string()) {
-                arch.positional_encoding = parsePositionalEncodingType(pe.get<std::string>());
-                if (arch.positional_encoding == PositionalEncodingType::NONE) {
-                    throw std::runtime_error(
-                        "loadModelArchitecture: positional_encoding=NONE is no longer supported "
-                        "(learned position embeddings have been removed). Use ALIBI, ROPE, or ALIBI_ROPE.");
-                }
-            } else {
-                throw std::runtime_error(
-                    "loadModelArchitecture: training.config.positional_encoding must be object or string");
-            }
-        }
+    // Issue #142: Parse positional encoding. Used by both training (Phase1)
+    // and runtime inference/server startup; semantics must match exactly.
+    const auto& pe = ::GRIM::Config::requireJsonObjectField(cfg, "positional_encoding", "training.config");
+    const bool use_rope =
+        ::GRIM::Config::getRequiredJsonValue<bool>(pe, "use_rope", "training.config.positional_encoding");
+    const bool use_alibi =
+        ::GRIM::Config::getRequiredJsonValue<bool>(pe, "use_alibi", "training.config.positional_encoding");
+    if (use_rope && use_alibi) {
+        arch.positional_encoding = PositionalEncodingType::ALIBI_ROPE;
+    } else if (use_rope) {
+        arch.positional_encoding = PositionalEncodingType::ROPE;
+    } else if (use_alibi) {
+        arch.positional_encoding = PositionalEncodingType::ALIBI;
+    } else {
+        // Rule 20: learned position embeddings were removed; require ALiBi and/or RoPE.
+        throw std::runtime_error(
+            "loadModelArchitecture: positional_encoding requires use_rope and/or use_alibi "
+            "(learned position embeddings have been removed)");
     }
-
-    // max_seq_len is populated by the TrainingHyperparameters JSON loader (Phase 3b);
-    // do not source from snapshot.hyperparameters here.
+    arch.rope_base_seq_len =
+        ::GRIM::Config::getRequiredJsonValue<int>(pe, "rope_base_seq_len", "training.config.positional_encoding");
+    arch.alibi_min_locality_distance =
+        ::GRIM::Config::getRequiredJsonValue<int>(pe, "alibi_min_locality_distance", "training.config.positional_encoding");
+    arch.alibi_slope_exponent =
+        ::GRIM::Config::getRequiredJsonValue<float>(pe, "alibi_slope_exponent", "training.config.positional_encoding");
+    arch.alibi_max_bias =
+        ::GRIM::Config::getRequiredJsonValue<float>(pe, "alibi_max_bias", "training.config.positional_encoding");
+    arch.rope_theta =
+        ::GRIM::Config::getRequiredJsonValue<float>(pe, "rope_theta", "training.config.positional_encoding");
+    arch.rope_scaling =
+        ::GRIM::Config::getRequiredJsonValue<float>(pe, "rope_scaling", "training.config.positional_encoding");
 
     // Validate and compute derived values (head_dim)
     arch.validate();
@@ -1266,16 +1191,7 @@ inline bool loadModelArchitecture(const GRIM::Config::AiConfigSnapshot& snapshot
 inline bool loadModelArchitecture(ModelArchitecture& arch, const std::string& configPath = "ai_config.json") {
     auto snapshot = GRIM::Config::loadAiConfigSnapshot(configPath);
     if (!snapshot) {
-        // No config available — populate defaults and bail.
-        arch.d_model = DEFAULT_D_MODEL;
-        arch.num_layers = DEFAULT_NUM_LAYERS;
-        arch.num_heads = DEFAULT_NUM_HEADS;
-        arch.d_ff = DEFAULT_D_MODEL * DEFAULT_D_FF_MULTIPLIER;
-        arch.max_seq_len = DEFAULT_MAX_SEQ_LEN;
-        arch.dropout_rate = DEFAULT_DROPOUT_RATE;
-        arch.attention_dropout = DEFAULT_DROPOUT_RATE;
-        arch.validate();
-        return false;
+        throw std::runtime_error("loadModelArchitecture: loadAiConfigSnapshot returned no snapshot");
     }
     return loadModelArchitecture(*snapshot, arch);
 }
@@ -1314,62 +1230,44 @@ inline void printModelArchitecture(const ModelArchitecture& arch) {
 inline bool loadGenerationConfig(const GRIM::Config::AiConfigSnapshot& snapshot,
                                  GenerationConfig& generation) {
     const auto& doc = snapshot.document;
-    if (!doc.contains("training") || !doc["training"].contains("config")) {
-        return false;
-    }
-    const auto& cfg = doc["training"]["config"];
-    if (!cfg.contains("generation") || !cfg["generation"].is_object()) {
-        return false;
-    }
-    const auto& gen = cfg["generation"];
+    const auto& training = ::GRIM::Config::requireJsonObjectField(doc, "training", "ai_config.json");
+    const auto& cfg = ::GRIM::Config::requireJsonObjectField(training, "config", "training");
+    const auto& gen = ::GRIM::Config::requireJsonObjectField(cfg, "generation", "training.config");
 
-    if (gen.contains("strategy") && gen["strategy"].is_string()) {
-        const std::string strat = gen["strategy"].get<std::string>();
-        if (strat == "greedy") {
-            generation.strategy = SamplingStrategy::GREEDY;
-            generation.do_sample = false;
-        } else if (strat == "top_k")       generation.strategy = SamplingStrategy::TOP_K;
-        else if (strat == "top_p")       generation.strategy = SamplingStrategy::TOP_P;
-        else if (strat == "min_p")       generation.strategy = SamplingStrategy::MIN_P;
-        else if (strat == "typical")     generation.strategy = SamplingStrategy::TYPICAL;
-        else if (strat == "top_k_top_p") generation.strategy = SamplingStrategy::TOP_K_TOP_P;
-        else throw std::runtime_error("loadGenerationConfig: unknown generation.strategy: " + strat);
-    }
-    if (gen.contains("max_new_tokens") && gen["max_new_tokens"].is_number())
-        generation.max_new_tokens = gen["max_new_tokens"].get<int>();
-    if (gen.contains("min_new_tokens") && gen["min_new_tokens"].is_number())
-        generation.min_new_tokens = gen["min_new_tokens"].get<int>();
-    if (gen.contains("temperature") && gen["temperature"].is_number())
-        generation.temperature = gen["temperature"].get<float>();
-    if (gen.contains("top_k") && gen["top_k"].is_number())
-        generation.top_k = gen["top_k"].get<int>();
-    if (gen.contains("top_p") && gen["top_p"].is_number())
-        generation.top_p = gen["top_p"].get<float>();
-    if (gen.contains("min_p") && gen["min_p"].is_number())
-        generation.min_p = gen["min_p"].get<float>();
-    if (gen.contains("typical_p") && gen["typical_p"].is_number())
-        generation.typical_p = gen["typical_p"].get<float>();
-    if (gen.contains("repetition_penalty") && gen["repetition_penalty"].is_number())
-        generation.repetition_penalty = gen["repetition_penalty"].get<float>();
-    if (gen.contains("repetition_penalty_window") && gen["repetition_penalty_window"].is_number())
-        generation.repetition_penalty_window = gen["repetition_penalty_window"].get<int>();
-    if (gen.contains("frequency_penalty") && gen["frequency_penalty"].is_number())
-        generation.frequency_penalty = gen["frequency_penalty"].get<float>();
-    if (gen.contains("presence_penalty") && gen["presence_penalty"].is_number())
-        generation.presence_penalty = gen["presence_penalty"].get<float>();
-    if (gen.contains("no_repeat_ngram_size") && gen["no_repeat_ngram_size"].is_number())
-        generation.no_repeat_ngram_size = gen["no_repeat_ngram_size"].get<int>();
-    if (gen.contains("do_sample") && gen["do_sample"].is_boolean())
-        generation.do_sample = gen["do_sample"].get<bool>();
-    if (gen.contains("enable_scratchblock_reasoning") && gen["enable_scratchblock_reasoning"].is_boolean())
-        generation.enable_scratchblock_reasoning = gen["enable_scratchblock_reasoning"].get<bool>();
+    const std::string strat =
+        ::GRIM::Config::getRequiredJsonValue<std::string>(gen, "strategy", "training.config.generation");
+    if (strat == "greedy") {
+        generation.strategy = SamplingStrategy::GREEDY;
+    } else if (strat == "top_k")       generation.strategy = SamplingStrategy::TOP_K;
+    else if (strat == "top_p")       generation.strategy = SamplingStrategy::TOP_P;
+    else if (strat == "min_p")       generation.strategy = SamplingStrategy::MIN_P;
+    else if (strat == "typical")     generation.strategy = SamplingStrategy::TYPICAL;
+    else if (strat == "top_k_top_p") generation.strategy = SamplingStrategy::TOP_K_TOP_P;
+    else throw std::runtime_error("loadGenerationConfig: unknown generation.strategy: " + strat);
+
+    generation.max_new_tokens = ::GRIM::Config::getRequiredJsonValue<int>(gen, "max_new_tokens", "training.config.generation");
+    generation.min_new_tokens = ::GRIM::Config::getRequiredJsonValue<int>(gen, "min_new_tokens", "training.config.generation");
+    generation.temperature = ::GRIM::Config::getRequiredJsonValue<float>(gen, "temperature", "training.config.generation");
+    generation.top_k = ::GRIM::Config::getRequiredJsonValue<int>(gen, "top_k", "training.config.generation");
+    generation.top_p = ::GRIM::Config::getRequiredJsonValue<float>(gen, "top_p", "training.config.generation");
+    generation.min_p = ::GRIM::Config::getRequiredJsonValue<float>(gen, "min_p", "training.config.generation");
+    generation.typical_p = ::GRIM::Config::getRequiredJsonValue<float>(gen, "typical_p", "training.config.generation");
+    generation.repetition_penalty = ::GRIM::Config::getRequiredJsonValue<float>(gen, "repetition_penalty", "training.config.generation");
+    generation.repetition_penalty_window = ::GRIM::Config::getRequiredJsonValue<int>(gen, "repetition_penalty_window", "training.config.generation");
+    generation.frequency_penalty = ::GRIM::Config::getRequiredJsonValue<float>(gen, "frequency_penalty", "training.config.generation");
+    generation.presence_penalty = ::GRIM::Config::getRequiredJsonValue<float>(gen, "presence_penalty", "training.config.generation");
+    generation.no_repeat_ngram_size = ::GRIM::Config::getRequiredJsonValue<int>(gen, "no_repeat_ngram_size", "training.config.generation");
+    generation.do_sample = ::GRIM::Config::getRequiredJsonValue<bool>(gen, "do_sample", "training.config.generation");
+    generation.enable_scratchblock_reasoning = ::GRIM::Config::getRequiredJsonValue<bool>(gen, "enable_scratchblock_reasoning", "training.config.generation");
     return true;
 }
 
 inline bool loadGenerationConfig(GenerationConfig& generation,
                                  const std::string& configPath = "ai_config.json") {
     auto snapshot = GRIM::Config::loadAiConfigSnapshot(configPath);
-    if (!snapshot) return false;
+    if (!snapshot) {
+        throw std::runtime_error("loadGenerationConfig: loadAiConfigSnapshot returned no snapshot");
+    }
     return loadGenerationConfig(*snapshot, generation);
 }
 
@@ -1509,9 +1407,7 @@ inline StartupConfig loadStartupConfig(int argc, char** argv) {
     config.paths.status_path       = snapshot->grim_text_training_status;
 
     // 4. Hyperparameters & tokenizer settings
-    if (snapshot->has_training) {
-        config.hyperparameters = snapshot->hyperparameters;
-    }
+    config.hyperparameters = snapshot->hyperparameters;
     config.tokenizer_vocab_size = snapshot->tokenizer_vocab_size;
     config.tokenizer_max_vocab_size = snapshot->tokenizer_max_vocab_size;
     config.tokenizer_max_length = snapshot->tokenizer_max_length;

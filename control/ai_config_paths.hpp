@@ -57,6 +57,58 @@
 namespace GRIM {
 namespace Config {
 
+inline const nlohmann::json& requireJsonField(const nlohmann::json& node,
+                                             const char* key,
+                                             const char* parentPath) {
+    if (!node.is_object()) {
+        throw std::runtime_error(
+            std::string("ai_config.json: expected object at '") + parentPath + "'");
+    }
+
+    auto it = node.find(key);
+    if (it == node.end() || it->is_null()) {
+        throw std::runtime_error(
+            std::string("ai_config.json: missing required field '") + parentPath + "." + key + "'");
+    }
+    return *it;
+}
+
+inline const nlohmann::json& requireJsonObjectField(const nlohmann::json& node,
+                                                    const char* key,
+                                                    const char* parentPath) {
+    const auto& field = requireJsonField(node, key, parentPath);
+    if (!field.is_object()) {
+        throw std::runtime_error(
+            std::string("ai_config.json: field '") + parentPath + "." + key + "' must be an object");
+    }
+    return field;
+}
+
+inline const nlohmann::json& requireJsonArrayField(const nlohmann::json& node,
+                                                   const char* key,
+                                                   const char* parentPath) {
+    const auto& field = requireJsonField(node, key, parentPath);
+    if (!field.is_array()) {
+        throw std::runtime_error(
+            std::string("ai_config.json: field '") + parentPath + "." + key + "' must be an array");
+    }
+    return field;
+}
+
+template <typename FieldType>
+inline std::decay_t<FieldType> getRequiredJsonValue(const nlohmann::json& node,
+                                                    const char* key,
+                                                    const char* parentPath) {
+    const auto& field = requireJsonField(node, key, parentPath);
+    try {
+        return field.get<std::decay_t<FieldType>>();
+    } catch (const std::exception& e) {
+        throw std::runtime_error(
+            std::string("ai_config.json: invalid value for field '") + parentPath + "." + key + "': " +
+            e.what());
+    }
+}
+
 struct AiConfigSnapshot {
     std::filesystem::path config_path;
     nlohmann::json document;
@@ -114,10 +166,7 @@ struct AiConfigSnapshot {
 
     template <typename FieldType>
     void assignSnapshotField(FieldType& field, const nlohmann::json& node, const char* key) {
-        auto it = node.find(key);
-        if (it != node.end() && !it->is_null()) {
-            field = it->get<std::decay_t<FieldType>>();
-        }
+        field = getRequiredJsonValue<FieldType>(node, key, "tokenizer");
     }
 
     void populateTokenizerFields(const nlohmann::json& tok) {
@@ -148,29 +197,20 @@ struct AiConfigSnapshot {
         assignSnapshotField(tokenizer_save_text_vocab, tok, "save_text_vocab");
         assignSnapshotField(tokenizer_vocab_score_multiplier, tok, "vocab_score_multiplier");
 
-        if (!tok.contains("vocab_size") &&
-            tok.contains("max_vocab_size") &&
-            tokenizer_max_vocab_size > 0) {
-            tokenizer_vocab_size = tokenizer_max_vocab_size;
-        }
+        const auto& sbr = requireJsonObjectField(tok, "scratch_block_reasoning", "tokenizer");
+        hyperparameters.tokenizer_enable_scratch_block_reasoning =
+            getRequiredJsonValue<bool>(sbr, "enabled", "tokenizer.scratch_block_reasoning");
+        hyperparameters.tokenizer_detect_numbers =
+            getRequiredJsonValue<bool>(sbr, "detect_numbers", "tokenizer.scratch_block_reasoning");
 
-        if (tok.contains("scratch_block_reasoning") && tok["scratch_block_reasoning"].is_object()) {
-            const auto& sbr = tok["scratch_block_reasoning"];
-            assignSnapshotField(hyperparameters.tokenizer_enable_scratch_block_reasoning,
-                                sbr,
-                                "enabled");
-            assignSnapshotField(hyperparameters.tokenizer_detect_numbers,
-                                sbr,
-                                "detect_numbers");
-        }
-
-        if (tok.contains("special_tokens") && tok["special_tokens"].is_array()) {
-            tokenizer_special_tokens.clear();
-            for (const auto& token : tok["special_tokens"]) {
-                if (token.is_string()) {
-                    tokenizer_special_tokens.push_back(token.get<std::string>());
-                }
+        const auto& special_tokens = requireJsonArrayField(tok, "special_tokens", "tokenizer");
+        tokenizer_special_tokens.clear();
+        for (const auto& token : special_tokens) {
+            if (!token.is_string()) {
+                throw std::runtime_error(
+                    "ai_config.json: tokenizer.special_tokens entries must all be strings");
             }
+            tokenizer_special_tokens.push_back(token.get<std::string>());
         }
     }
 
@@ -180,18 +220,18 @@ struct AiConfigSnapshot {
 
     void printGrimTextPaths() const {
         std::cout << "[Config] GRIM-text paths from ai_config.json:" << std::endl;
-        std::cout << "  vocab: " << (grim_text_vocab.empty() ? "(not set)" : grim_text_vocab) << std::endl;
-        std::cout << "  model: " << (grim_text_model.empty() ? "(not set)" : grim_text_model) << std::endl;
-        std::cout << "  training_data: " << (grim_text_training_data.empty() ? "(not set)" : grim_text_training_data) << std::endl;
-        std::cout << "  checkpoints: " << (grim_text_checkpoints.empty() ? "(not set)" : grim_text_checkpoints) << std::endl;
-        std::cout << "  collected: " << (grim_text_collected.empty() ? "(not set)" : grim_text_collected) << std::endl;
-        std::cout << "  directory_collection: " << (grim_text_directory_collection.empty() ? "(not set)" : grim_text_directory_collection) << std::endl;
-        std::cout << "  verified: " << (grim_text_verified.empty() ? "(not set)" : grim_text_verified) << std::endl;
-        std::cout << "  logs: " << (grim_text_logs.empty() ? "(not set)" : grim_text_logs) << std::endl;
-        std::cout << "  training_status: " << (grim_text_training_status.empty() ? "(not set)" : grim_text_training_status) << std::endl;
-        std::cout << "  collector_log: " << (grim_text_collector_log.empty() ? "(not set)" : grim_text_collector_log) << std::endl;
-        std::cout << "  source_config: " << (grim_text_source_config.empty() ? "(not set)" : grim_text_source_config) << std::endl;
-        std::cout << "  model_store: " << (grim_text_model_store.empty() ? "(not set)" : grim_text_model_store) << std::endl;
+        std::cout << "  vocab: " << grim_text_vocab << std::endl;
+        std::cout << "  model: " << grim_text_model << std::endl;
+        std::cout << "  training_data: " << grim_text_training_data << std::endl;
+        std::cout << "  checkpoints: " << grim_text_checkpoints << std::endl;
+        std::cout << "  collected: " << grim_text_collected << std::endl;
+        std::cout << "  directory_collection: " << grim_text_directory_collection << std::endl;
+        std::cout << "  verified: " << grim_text_verified << std::endl;
+        std::cout << "  logs: " << grim_text_logs << std::endl;
+        std::cout << "  training_status: " << grim_text_training_status << std::endl;
+        std::cout << "  collector_log: " << grim_text_collector_log << std::endl;
+        std::cout << "  source_config: " << grim_text_source_config << std::endl;
+        std::cout << "  model_store: " << grim_text_model_store << std::endl;
     }
 };
 
@@ -199,7 +239,7 @@ inline std::optional<AiConfigSnapshot> loadAiConfigSnapshot(const std::string& c
 
 namespace detail {
 
-inline std::optional<std::filesystem::path> resolveAiConfigPath(const std::string& configPath) {
+inline std::filesystem::path resolveAiConfigPath(const std::string& configPath) {
     namespace fs = std::filesystem;
     fs::path candidate(configPath);
     if (!configPath.empty() && fs::exists(candidate)) {
@@ -220,7 +260,9 @@ inline std::optional<std::filesystem::path> resolveAiConfigPath(const std::strin
         }
     }
 
-    return std::nullopt;
+    throw std::runtime_error(
+        "resolveAiConfigPath: ai_config.json not found at: " + configPath +
+        " (also searched current directory and parent directories)");
 }
 
 inline std::filesystem::path resolveGrimRoot() {
@@ -278,63 +320,44 @@ inline std::filesystem::path resolveGrimRoot() {
 }
 
 inline bool populateGrimTextPathFieldsFromConfig(const nlohmann::json& config, AiConfigSnapshot& snapshot) {
-    if (!config.contains("paths")) {
-        std::cerr << "[Config] WARNING: ai_config.json does not contain 'paths' section" << std::endl;
-        return false;
-    }
-
-    const auto& pathsNode = config["paths"];
-    if (!pathsNode.contains("grim_text")) {
-        std::cerr << "[Config] WARNING: ai_config.json does not contain 'paths.grim_text' section" << std::endl;
-        return false;
-    }
-
-    const auto& grimTextPaths = pathsNode["grim_text"];
-    if (!grimTextPaths.is_object()) {
-        std::cerr << "[Config] WARNING: 'paths.grim_text' is not an object" << std::endl;
-        return false;
-    }
+    const auto& pathsNode = requireJsonObjectField(config, "paths", "ai_config.json");
+    const auto& grimTextPaths = requireJsonObjectField(pathsNode, "grim_text", "paths");
 
     // Get GRIM root for resolving relative paths
     std::filesystem::path grimRoot = resolveGrimRoot();
     
-    auto assignIfPresent = [&](const char* key, std::string& field) {
-        if (grimTextPaths.contains(key) && grimTextPaths[key].is_string()) {
-            std::string pathStr = grimTextPaths[key].get<std::string>();
-            std::filesystem::path path(pathStr);
-            
-            // If path is relative, resolve it relative to GRIM root
-            if (path.is_relative()) {
-                field = (grimRoot / path).string();
-            } else {
-                // Path is already absolute, use as-is
-                field = pathStr;
-            }
+    auto assignRequiredPath = [&](const char* key, std::string& field) {
+        std::string pathStr = getRequiredJsonValue<std::string>(grimTextPaths, key, "paths.grim_text");
+        std::filesystem::path path(pathStr);
+
+        // If path is relative, resolve it relative to GRIM root
+        if (path.is_relative()) {
+            field = (grimRoot / path).string();
+        } else {
+            // Path is already absolute, use as-is
+            field = pathStr;
         }
     };
 
-    assignIfPresent("vocab", snapshot.grim_text_vocab);
-    assignIfPresent("model", snapshot.grim_text_model);
-    assignIfPresent("training_data", snapshot.grim_text_training_data);
-    assignIfPresent("checkpoints", snapshot.grim_text_checkpoints);
-    assignIfPresent("collected", snapshot.grim_text_collected);
-    assignIfPresent("directory_collection", snapshot.grim_text_directory_collection);
-    assignIfPresent("verified", snapshot.grim_text_verified);
-    assignIfPresent("logs", snapshot.grim_text_logs);
-    assignIfPresent("training_status", snapshot.grim_text_training_status);
-    assignIfPresent("collector_log", snapshot.grim_text_collector_log);
-    assignIfPresent("source_config", snapshot.grim_text_source_config);
-    assignIfPresent("model_store", snapshot.grim_text_model_store);
+    assignRequiredPath("vocab", snapshot.grim_text_vocab);
+    assignRequiredPath("model", snapshot.grim_text_model);
+    assignRequiredPath("training_data", snapshot.grim_text_training_data);
+    assignRequiredPath("checkpoints", snapshot.grim_text_checkpoints);
+    assignRequiredPath("collected", snapshot.grim_text_collected);
+    assignRequiredPath("directory_collection", snapshot.grim_text_directory_collection);
+    assignRequiredPath("verified", snapshot.grim_text_verified);
+    assignRequiredPath("logs", snapshot.grim_text_logs);
+    assignRequiredPath("training_status", snapshot.grim_text_training_status);
+    assignRequiredPath("collector_log", snapshot.grim_text_collector_log);
+    assignRequiredPath("source_config", snapshot.grim_text_source_config);
+    assignRequiredPath("model_store", snapshot.grim_text_model_store);
 
     return true;
 }
 
 template <typename FieldType>
 inline void assignTrainingField(FieldType& field, const nlohmann::json& node, const char* key) {
-    auto it = node.find(key);
-    if (it != node.end() && !it->is_null()) {
-        field = it->get<std::decay_t<FieldType>>();
-    }
+    field = getRequiredJsonValue<FieldType>(node, key, "training.config");
 }
 
 /**
@@ -516,6 +539,16 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         "epochs", "seed", "batch_size", "gradient_accumulation_steps",
         "batch_strategy", "learning_rate", "weight_decay",
         "per_token_grad_scale", "warmup_fraction", "force_rebuild_vocab", "max_seq_len",
+        "d_model", "num_layers", "num_heads", "num_kv_heads",
+        "tie_embeddings", "dropout_rate",
+        "positional_encoding.use_rope",
+        "positional_encoding.use_alibi",
+        "positional_encoding.rope_base_seq_len",
+        "positional_encoding.alibi_min_locality_distance",
+        "positional_encoding.alibi_slope_exponent",
+        "positional_encoding.alibi_max_bias",
+        "positional_encoding.rope_theta",
+        "positional_encoding.rope_scaling",
         "sliding_window_stride", "log_interval",
         "atom_stats_interval", "atom_stats_max_seqs",
         "validation_interval", "checkpoint_interval", "use_gpu", "use_flash_attention",
@@ -597,9 +630,8 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
         }
     }
     
-    // Check gradient clip (accepts either name)
-    if (!trainConfig.contains("grad_clip_norm") && !trainConfig.contains("gradient_clip")) {
-        missing.push_back("grad_clip_norm (or gradient_clip)");
+    if (!jsonPathExists(trainConfig, "gradient_clip")) {
+        missing.push_back("gradient_clip");
     }
     
     if (!missing.empty()) {
@@ -616,7 +648,7 @@ inline void validateTrainingConfigJson(const nlohmann::json& trainConfig) {
 
 inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, TrainingHyperparameters& params) {
     if (!trainConfig.is_object()) {
-        return;
+        throw std::runtime_error("ai_config.json: training.config must be an object");
     }
     
     assignTrainingField(params.epochs, trainConfig, "epochs");
@@ -626,8 +658,7 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     assignTrainingField(params.batch_strategy, trainConfig, "batch_strategy");
     assignTrainingField(params.learning_rate, trainConfig, "learning_rate");
     assignTrainingField(params.weight_decay, trainConfig, "weight_decay");
-    assignTrainingField(params.grad_clip_norm, trainConfig, "gradient_clip");
-    assignTrainingField(params.grad_clip_norm, trainConfig, "grad_clip_norm");
+    params.grad_clip_norm = getRequiredJsonValue<float>(trainConfig, "gradient_clip", "training.config");
     assignTrainingField(params.per_token_grad_scale, trainConfig, "per_token_grad_scale");
     assignTrainingField(params.force_rebuild_vocab, trainConfig, "force_rebuild_vocab");
     assignTrainingField(params.architecture.max_seq_len, trainConfig, "max_seq_len");
@@ -635,14 +666,12 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     // min_seq_valid_tokens: derived as max_seq_len / 4 (see deriveComputedHyperparameters)
     // architecture.min_seq_len_for_flash: derived as max_seq_len / 4 (see deriveComputedHyperparameters)
     assignTrainingField(params.warmup_fraction, trainConfig, "warmup_fraction");
-    if (auto it = trainConfig.find("cosine_decay"); it != trainConfig.end() && it->is_object()) {
-        params.cosine_decay_enabled = it->value("enabled", false);
-        params.cosine_warm_restarts = it->value("warm_restarts", false);
-        // cosine_decay_min_lr: derived as learning_rate * 0.1 (see deriveComputedHyperparameters)
-    } else {
-        params.cosine_decay_enabled = false;
-        params.cosine_warm_restarts = false;
-    }
+    const auto& cosine_decay = requireJsonObjectField(trainConfig, "cosine_decay", "training.config");
+    params.cosine_decay_enabled =
+        getRequiredJsonValue<bool>(cosine_decay, "enabled", "training.config.cosine_decay");
+    params.cosine_warm_restarts =
+        getRequiredJsonValue<bool>(cosine_decay, "warm_restarts", "training.config.cosine_decay");
+    // cosine_decay_min_lr: derived as learning_rate * 0.1 (see deriveComputedHyperparameters)
     assignTrainingField(params.log_interval, trainConfig, "log_interval");
     assignTrainingField(params.atom_stats_interval, trainConfig, "atom_stats_interval");
     assignTrainingField(params.atom_stats_max_seqs, trainConfig, "atom_stats_max_seqs");
@@ -652,15 +681,9 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
     assignTrainingField(params.architecture.use_flash_attention, trainConfig, "use_flash_attention");
     // architecture.min_seq_len_for_flash: derived from max_seq_len (see deriveComputedHyperparameters)
 
-    if (auto it = trainConfig.find("precision"); it != trainConfig.end()) {
-        if (!it->is_object()) {
-            throw std::runtime_error("[ai_config] training.config.precision must be an object");
-        }
-        const auto& precision = *it;
-        if (!precision.contains("parameter_groups") || !precision["parameter_groups"].is_object()) {
-            throw std::runtime_error("[ai_config] training.config.precision.parameter_groups must be an object");
-        }
-        const auto& groups = precision["parameter_groups"];
+    {
+        const auto& precision = requireJsonObjectField(trainConfig, "precision", "training.config");
+        const auto& groups = requireJsonObjectField(precision, "parameter_groups", "training.config.precision");
         auto parse_group_precision = [&](const char* key) {
             if (!groups.contains(key) || !groups[key].is_string()) {
                 throw std::runtime_error(std::string("[ai_config] training.config.precision.parameter_groups.") +
@@ -681,527 +704,527 @@ inline void applyTrainingConfigObject(const nlohmann::json& trainConfig, Trainin
         params.architecture.parameter_precision_slot_selector = parse_group_precision("slot_selector");
     }
 
-    if (auto it = trainConfig.find("soft_restart"); it != trainConfig.end()) {
-        const auto& soft = *it;
-        if (soft.is_boolean()) {
-            params.soft_restart_enabled = soft.get<bool>();
-        } else if (soft.is_object()) {
-            params.soft_restart_enabled = soft.value("enabled", params.soft_restart_enabled);
-            params.soft_restart_loss_increase_threshold =
-                soft.value("loss_increase_threshold", params.soft_restart_loss_increase_threshold);
-            params.soft_restart_max_step_window = soft.value("max_step_window", params.soft_restart_max_step_window);
-            params.soft_restart_cooldown_steps = soft.value("cooldown_steps", params.soft_restart_cooldown_steps);
-        }
+    {
+        const auto& soft = requireJsonObjectField(trainConfig, "soft_restart", "training.config");
+        params.soft_restart_enabled =
+            getRequiredJsonValue<bool>(soft, "enabled", "training.config.soft_restart");
+        params.soft_restart_loss_increase_threshold =
+            getRequiredJsonValue<float>(soft, "loss_increase_threshold", "training.config.soft_restart");
+        params.soft_restart_max_step_window =
+            getRequiredJsonValue<int>(soft, "max_step_window", "training.config.soft_restart");
+        params.soft_restart_cooldown_steps =
+            getRequiredJsonValue<int>(soft, "cooldown_steps", "training.config.soft_restart");
     }
 
-    if (auto it = trainConfig.find("auto_stop"); it != trainConfig.end()) {
-        const auto& autoStop = *it;
-        if (autoStop.is_boolean()) {
-            params.auto_stop_enabled = autoStop.get<bool>();
-        } else if (autoStop.is_object()) {
-            params.auto_stop_enabled = autoStop.value("enabled", params.auto_stop_enabled);
-            params.auto_stop_plateau_patience = autoStop.value("plateau_patience", params.auto_stop_plateau_patience);
-            params.auto_stop_plateau_min_delta = autoStop.value("plateau_min_delta", params.auto_stop_plateau_min_delta);
-            params.auto_stop_high_loss_threshold = autoStop.value("high_loss_threshold", params.auto_stop_high_loss_threshold);
-            params.auto_stop_high_loss_patience = autoStop.value("high_loss_patience", params.auto_stop_high_loss_patience);
-        }
+    {
+        const auto& autoStop = requireJsonObjectField(trainConfig, "auto_stop", "training.config");
+        params.auto_stop_enabled =
+            getRequiredJsonValue<bool>(autoStop, "enabled", "training.config.auto_stop");
+        params.auto_stop_plateau_patience =
+            getRequiredJsonValue<int>(autoStop, "plateau_patience", "training.config.auto_stop");
+        params.auto_stop_plateau_min_delta =
+            getRequiredJsonValue<float>(autoStop, "plateau_min_delta", "training.config.auto_stop");
+        params.auto_stop_high_loss_threshold =
+            getRequiredJsonValue<float>(autoStop, "high_loss_threshold", "training.config.auto_stop");
+        params.auto_stop_high_loss_patience =
+            getRequiredJsonValue<int>(autoStop, "high_loss_patience", "training.config.auto_stop");
     }
 
-    if (auto it = trainConfig.find("atom_stats"); it != trainConfig.end() && it->is_object()) {
-        const auto& atom_stats = *it;
-        params.atom_stats_interval = atom_stats.value("interval", params.atom_stats_interval);
-        params.atom_stats_max_seqs = atom_stats.value("max_seqs", params.atom_stats_max_seqs);
+    {
+        const auto& single = requireJsonObjectField(trainConfig, "single_batch", "training.config");
+        params.single_batch_overfit_enabled =
+            getRequiredJsonValue<bool>(single, "enabled", "training.config.single_batch");
+        params.single_batch_overfit_max_steps =
+            getRequiredJsonValue<int>(single, "max_steps", "training.config.single_batch");
     }
 
-    if (auto it = trainConfig.find("single_batch"); it != trainConfig.end()) {
-        const auto& single = *it;
-        if (single.is_boolean()) {
-            params.single_batch_overfit_enabled = single.get<bool>();
-        } else if (single.is_object()) {
-            params.single_batch_overfit_enabled = single.value("enabled", params.single_batch_overfit_enabled);
-            params.single_batch_overfit_max_steps = single.value("max_steps", params.single_batch_overfit_max_steps);
-        }
-    }
-
-    if (auto it = trainConfig.find("shuffle"); it != trainConfig.end()) {
-        const auto& shuffle = *it;
-        if (shuffle.is_boolean()) {
-            params.shuffle_train_enabled = shuffle.get<bool>();
-        } else if (shuffle.is_object()) {
-            params.shuffle_train_enabled = shuffle.value("enabled", params.shuffle_train_enabled);
-            params.shuffle_train_epochs = shuffle.value("epochs", params.shuffle_train_epochs);
-        }
+    {
+        const auto& shuffle = requireJsonObjectField(trainConfig, "shuffle", "training.config");
+        params.shuffle_train_enabled =
+            getRequiredJsonValue<bool>(shuffle, "enabled", "training.config.shuffle");
+        params.shuffle_train_epochs =
+            getRequiredJsonValue<int>(shuffle, "epochs", "training.config.shuffle");
         if (params.shuffle_train_epochs < 0) {
-            params.shuffle_train_epochs = 0;
+            throw std::runtime_error(
+                "ai_config.json: training.config.shuffle.epochs must be >= 0");
         }
     }
 
-    if (auto it = trainConfig.find("guess_aux"); it != trainConfig.end()) {
-        const auto& guess = *it;
-        if (guess.is_boolean()) {
-            params.guess_aux_enabled = guess.get<bool>();
-        } else if (guess.is_object()) {
-            params.guess_aux_enabled = guess.value("enabled", params.guess_aux_enabled);
-            params.guess_aux_lambda = guess.value("lambda", params.guess_aux_lambda);
-            params.guess_aux_min_confidence = guess.value("min_confidence", params.guess_aux_min_confidence);
+    {
+        const auto& guess = requireJsonObjectField(trainConfig, "guess_aux", "training.config");
+        params.guess_aux_enabled =
+            getRequiredJsonValue<bool>(guess, "enabled", "training.config.guess_aux");
+        params.guess_aux_lambda =
+            getRequiredJsonValue<float>(guess, "lambda", "training.config.guess_aux");
+        params.guess_aux_min_confidence =
+            getRequiredJsonValue<float>(guess, "min_confidence", "training.config.guess_aux");
+    }
+
+    {
+        const auto& tc = requireJsonObjectField(trainConfig, "telemetry_control", "training.config");
+        params.telemetry_control_enabled =
+            getRequiredJsonValue<bool>(tc, "enabled", "training.config.telemetry_control");
+
+        const auto& spike = requireJsonObjectField(tc, "spike_thresholds", "training.config.telemetry_control");
+        params.telemetry_spike_mild_threshold =
+            getRequiredJsonValue<float>(spike, "mild", "training.config.telemetry_control.spike_thresholds");
+        params.telemetry_spike_moderate_threshold =
+            getRequiredJsonValue<float>(spike, "moderate", "training.config.telemetry_control.spike_thresholds");
+        params.telemetry_spike_severe_threshold =
+            getRequiredJsonValue<float>(spike, "severe", "training.config.telemetry_control.spike_thresholds");
+
+        const auto& response = requireJsonObjectField(tc, "response", "training.config.telemetry_control");
+        params.telemetry_moderate_grad_scale =
+            getRequiredJsonValue<float>(response, "moderate_grad_scale", "training.config.telemetry_control.response");
+        params.telemetry_moderate_cooldown_extension =
+            getRequiredJsonValue<int>(response, "moderate_cooldown_extension", "training.config.telemetry_control.response");
+
+        const auto& acc = requireJsonObjectField(tc, "accumulation_guard", "training.config.telemetry_control");
+        params.telemetry_min_grad_for_nonzero_loss =
+            getRequiredJsonValue<float>(acc, "min_grad_for_nonzero_loss", "training.config.telemetry_control.accumulation_guard");
+        params.telemetry_loss_threshold_for_grad_check =
+            getRequiredJsonValue<float>(acc, "loss_threshold", "training.config.telemetry_control.accumulation_guard");
+        params.telemetry_max_consecutive_zero_grad_steps =
+            getRequiredJsonValue<int>(acc, "max_consecutive_zero_grad_steps", "training.config.telemetry_control.accumulation_guard");
+
+        const auto& regime = requireJsonObjectField(tc, "regime_change", "training.config.telemetry_control");
+        params.telemetry_seq_len_regime_change_threshold =
+            getRequiredJsonValue<float>(regime, "seq_len_threshold", "training.config.telemetry_control.regime_change");
+        params.telemetry_regime_change_suppression_steps =
+            getRequiredJsonValue<int>(regime, "suppression_steps", "training.config.telemetry_control.regime_change");
+
+        const auto& vol = requireJsonObjectField(tc, "volatility_damping", "training.config.telemetry_control");
+        params.telemetry_volatility_damping_threshold =
+            getRequiredJsonValue<float>(vol, "threshold", "training.config.telemetry_control.volatility_damping");
+        params.telemetry_max_volatility_damping =
+            getRequiredJsonValue<float>(vol, "max_damping", "training.config.telemetry_control.volatility_damping");
+
+        const auto& decay = requireJsonObjectField(tc, "gradient_decay", "training.config.telemetry_control");
+        params.telemetry_gradient_decay_threshold =
+            getRequiredJsonValue<float>(decay, "threshold", "training.config.telemetry_control.gradient_decay");
+        params.telemetry_max_decay_boost =
+            getRequiredJsonValue<float>(decay, "max_boost", "training.config.telemetry_control.gradient_decay");
+
+        const auto& boost = requireJsonObjectField(tc, "progress_boost", "training.config.telemetry_control");
+        params.telemetry_progress_boost_threshold =
+            getRequiredJsonValue<float>(boost, "threshold", "training.config.telemetry_control.progress_boost");
+        params.telemetry_max_progress_boost =
+            getRequiredJsonValue<float>(boost, "max_boost", "training.config.telemetry_control.progress_boost");
+
+        const auto& outlier = requireJsonObjectField(tc, "outlier", "training.config.telemetry_control");
+        params.telemetry_outlier_frequency_trigger =
+            getRequiredJsonValue<float>(outlier, "frequency_trigger", "training.config.telemetry_control.outlier");
+        params.telemetry_outlier_persistence_trigger =
+            getRequiredJsonValue<float>(outlier, "persistence_trigger", "training.config.telemetry_control.outlier");
+
+        const auto& drift = requireJsonObjectField(tc, "drift", "training.config.telemetry_control");
+        params.telemetry_anchor_drift_sigma_multiplier =
+            getRequiredJsonValue<float>(drift, "anchor_sigma_multiplier", "training.config.telemetry_control.drift");
+
+        const auto& sr = requireJsonObjectField(tc, "soft_restart", "training.config.telemetry_control");
+        params.telemetry_soft_restart_cooldown_steps =
+            getRequiredJsonValue<int>(sr, "cooldown_steps", "training.config.telemetry_control.soft_restart");
+
+        const auto& base = requireJsonObjectField(tc, "baseline", "training.config.telemetry_control");
+        params.telemetry_baseline_stabilization_steps =
+            getRequiredJsonValue<int>(base, "stabilization_steps", "training.config.telemetry_control.baseline");
+
+        const auto& logging = requireJsonObjectField(tc, "logging", "training.config.telemetry_control");
+        params.telemetry_verbose_logging =
+            getRequiredJsonValue<bool>(logging, "verbose", "training.config.telemetry_control.logging");
+        params.telemetry_fail_loud_on_accumulation_bug =
+            getRequiredJsonValue<bool>(logging, "fail_loud_on_accumulation_bug", "training.config.telemetry_control.logging");
+
+        const auto& pn = requireJsonObjectField(tc, "plateau_noise", "training.config.telemetry_control");
+        params.telemetry_plateau_noise_enabled =
+            getRequiredJsonValue<bool>(pn, "enabled", "training.config.telemetry_control.plateau_noise");
+        params.telemetry_plateau_noise_patience =
+            getRequiredJsonValue<int>(pn, "patience", "training.config.telemetry_control.plateau_noise");
+        params.telemetry_plateau_noise_variance_threshold =
+            getRequiredJsonValue<float>(pn, "variance_threshold", "training.config.telemetry_control.plateau_noise");
+        params.telemetry_plateau_noise_std =
+            getRequiredJsonValue<float>(pn, "noise_std", "training.config.telemetry_control.plateau_noise");
+        params.telemetry_plateau_noise_proportional =
+            getRequiredJsonValue<bool>(pn, "proportional", "training.config.telemetry_control.plateau_noise");
+        params.telemetry_plateau_noise_cooldown =
+            getRequiredJsonValue<int>(pn, "cooldown", "training.config.telemetry_control.plateau_noise");
+        params.telemetry_plateau_noise_max_per_epoch =
+            getRequiredJsonValue<int>(pn, "max_per_epoch", "training.config.telemetry_control.plateau_noise");
+
+        const auto& lat = requireJsonObjectField(tc, "lattice", "training.config.telemetry_control");
+        params.telemetry_lattice_num_levels =
+            getRequiredJsonValue<int>(lat, "num_levels", "training.config.telemetry_control.lattice");
+        params.telemetry_lattice_num_streams =
+            getRequiredJsonValue<int>(lat, "num_streams", "training.config.telemetry_control.lattice");
+        params.telemetry_lattice_beta_mu =
+            getRequiredJsonValue<float>(lat, "beta_mu", "training.config.telemetry_control.lattice");
+        params.telemetry_lattice_beta_a =
+            getRequiredJsonValue<float>(lat, "beta_a", "training.config.telemetry_control.lattice");
+        params.telemetry_lattice_beta_delta =
+            getRequiredJsonValue<float>(lat, "beta_delta", "training.config.telemetry_control.lattice");
+        params.telemetry_lattice_beta_r =
+            getRequiredJsonValue<float>(lat, "beta_r", "training.config.telemetry_control.lattice");
+        params.telemetry_lattice_beta_run =
+            getRequiredJsonValue<float>(lat, "beta_run", "training.config.telemetry_control.lattice");
+        params.telemetry_lattice_beta_v =
+            getRequiredJsonValue<float>(lat, "beta_v", "training.config.telemetry_control.lattice");
+        params.telemetry_lattice_k_out0 =
+            getRequiredJsonValue<float>(lat, "k_out0", "training.config.telemetry_control.lattice");
+        params.telemetry_lattice_alpha_v =
+            getRequiredJsonValue<float>(lat, "alpha_v", "training.config.telemetry_control.lattice");
+        params.telemetry_lattice_epsilon =
+            getRequiredJsonValue<float>(lat, "epsilon", "training.config.telemetry_control.lattice");
+        params.telemetry_lattice_strict_mode =
+            getRequiredJsonValue<bool>(lat, "strict_mode", "training.config.telemetry_control.lattice");
+    }
+
+    {
+        const auto& logCfg = requireJsonObjectField(trainConfig, "logging", "training.config");
+        params.tape_logging.default_level =
+            getRequiredJsonValue<std::string>(logCfg, "default_level", "training.config.logging");
+        params.tape_logging.equation_csv_enabled =
+            getRequiredJsonValue<bool>(logCfg, "equation_csv_enabled", "training.config.logging");
+        params.tape_logging.stderr_enabled =
+            getRequiredJsonValue<bool>(logCfg, "stderr_enabled", "training.config.logging");
+        params.tape_logging.initial_capacity =
+            getRequiredJsonValue<size_t>(logCfg, "initial_capacity", "training.config.logging");
+        params.tape_logging.group_overrides.clear();
+        const auto& group_overrides = requireJsonObjectField(logCfg, "group_overrides", "training.config.logging");
+        for (auto& [key, val] : group_overrides.items()) {
+            if (!val.is_string()) {
+                throw std::runtime_error(
+                    std::string("ai_config.json: training.config.logging.group_overrides.") + key +
+                    " must be a string");
+            }
+            params.tape_logging.group_overrides[key] = val.get<std::string>();
         }
     }
 
-    // Load telemetry control configuration (includes plateau noise)
-    if (auto it = trainConfig.find("telemetry_control"); it != trainConfig.end()) {
-        const auto& tc = *it;
-        if (tc.is_boolean()) {
-            params.telemetry_control_enabled = tc.get<bool>();
-        } else if (tc.is_object()) {
-            params.telemetry_control_enabled = tc.value("enabled", params.telemetry_control_enabled);
+    {
+        const auto& logRec = requireJsonObjectField(trainConfig, "log_recorder", "training.config");
+        params.log_recorder.enabled =
+            getRequiredJsonValue<bool>(logRec, "enabled", "training.config.log_recorder");
+        params.log_recorder.default_level =
+            getRequiredJsonValue<std::string>(logRec, "default_level", "training.config.log_recorder");
 
-            if (auto spike_it = tc.find("spike_thresholds"); spike_it != tc.end() && spike_it->is_object()) {
-                const auto& spike = *spike_it;
-                params.telemetry_spike_mild_threshold = spike.value("mild", params.telemetry_spike_mild_threshold);
-                params.telemetry_spike_moderate_threshold = spike.value("moderate", params.telemetry_spike_moderate_threshold);
-                params.telemetry_spike_severe_threshold = spike.value("severe", params.telemetry_spike_severe_threshold);
+        params.log_recorder.modules.clear();
+        const auto& modules = requireJsonObjectField(logRec, "modules", "training.config.log_recorder");
+        for (auto& [key, val] : modules.items()) {
+            if (!val.is_string()) {
+                throw std::runtime_error(
+                    std::string("ai_config.json: training.config.log_recorder.modules.") + key +
+                    " must be a string");
             }
-
-            if (auto resp_it = tc.find("response"); resp_it != tc.end() && resp_it->is_object()) {
-                const auto& response = *resp_it;
-                params.telemetry_moderate_grad_scale = response.value("moderate_grad_scale", params.telemetry_moderate_grad_scale);
-                params.telemetry_moderate_cooldown_extension = response.value("moderate_cooldown_extension", params.telemetry_moderate_cooldown_extension);
-            }
-
-            if (auto acc_it = tc.find("accumulation_guard"); acc_it != tc.end() && acc_it->is_object()) {
-                const auto& acc = *acc_it;
-                params.telemetry_min_grad_for_nonzero_loss = acc.value("min_grad_for_nonzero_loss", params.telemetry_min_grad_for_nonzero_loss);
-                params.telemetry_loss_threshold_for_grad_check = acc.value("loss_threshold", params.telemetry_loss_threshold_for_grad_check);
-                params.telemetry_max_consecutive_zero_grad_steps = acc.value("max_consecutive_zero_grad_steps", params.telemetry_max_consecutive_zero_grad_steps);
-            }
-
-            if (auto regime_it = tc.find("regime_change"); regime_it != tc.end() && regime_it->is_object()) {
-                const auto& regime = *regime_it;
-                params.telemetry_seq_len_regime_change_threshold = regime.value("seq_len_threshold", params.telemetry_seq_len_regime_change_threshold);
-                params.telemetry_regime_change_suppression_steps = regime.value("suppression_steps", params.telemetry_regime_change_suppression_steps);
-            }
-
-            if (auto vol_it = tc.find("volatility_damping"); vol_it != tc.end() && vol_it->is_object()) {
-                const auto& vol = *vol_it;
-                params.telemetry_volatility_damping_threshold = vol.value("threshold", params.telemetry_volatility_damping_threshold);
-                params.telemetry_max_volatility_damping = vol.value("max_damping", params.telemetry_max_volatility_damping);
-            }
-
-            if (auto decay_it = tc.find("gradient_decay"); decay_it != tc.end() && decay_it->is_object()) {
-                const auto& decay = *decay_it;
-                params.telemetry_gradient_decay_threshold = decay.value("threshold", params.telemetry_gradient_decay_threshold);
-                params.telemetry_max_decay_boost = decay.value("max_boost", params.telemetry_max_decay_boost);
-            }
-
-            if (auto boost_it = tc.find("progress_boost"); boost_it != tc.end() && boost_it->is_object()) {
-                const auto& boost = *boost_it;
-                params.telemetry_progress_boost_threshold = boost.value("threshold", params.telemetry_progress_boost_threshold);
-                params.telemetry_max_progress_boost = boost.value("max_boost", params.telemetry_max_progress_boost);
-            }
-
-            if (auto out_it = tc.find("outlier"); out_it != tc.end() && out_it->is_object()) {
-                const auto& outlier = *out_it;
-                params.telemetry_outlier_frequency_trigger = outlier.value("frequency_trigger", params.telemetry_outlier_frequency_trigger);
-                params.telemetry_outlier_persistence_trigger = outlier.value("persistence_trigger", params.telemetry_outlier_persistence_trigger);
-            }
-
-            if (auto drift_it = tc.find("drift"); drift_it != tc.end() && drift_it->is_object()) {
-                const auto& drift = *drift_it;
-                params.telemetry_anchor_drift_sigma_multiplier = drift.value("anchor_sigma_multiplier", params.telemetry_anchor_drift_sigma_multiplier);
-            }
-
-            if (auto sr_it = tc.find("soft_restart"); sr_it != tc.end() && sr_it->is_object()) {
-                const auto& sr = *sr_it;
-                params.telemetry_soft_restart_cooldown_steps = sr.value("cooldown_steps", params.telemetry_soft_restart_cooldown_steps);
-            }
-
-            if (auto base_it = tc.find("baseline"); base_it != tc.end() && base_it->is_object()) {
-                const auto& base = *base_it;
-                // telemetry_warmup_steps: derived as warmup_steps (see deriveComputedHyperparameters)
-                params.telemetry_baseline_stabilization_steps = base.value("stabilization_steps", params.telemetry_baseline_stabilization_steps);
-            }
-
-            if (auto log_it = tc.find("logging"); log_it != tc.end() && log_it->is_object()) {
-                const auto& logging = *log_it;
-                params.telemetry_verbose_logging = logging.value("verbose", params.telemetry_verbose_logging);
-                params.telemetry_fail_loud_on_accumulation_bug = logging.value("fail_loud_on_accumulation_bug", params.telemetry_fail_loud_on_accumulation_bug);
-            }
-            
-            // Plateau noise sub-config
-            if (auto pn_it = tc.find("plateau_noise"); pn_it != tc.end() && pn_it->is_object()) {
-                const auto& pn = *pn_it;
-                params.telemetry_plateau_noise_enabled = pn.value("enabled", params.telemetry_plateau_noise_enabled);
-                params.telemetry_plateau_noise_patience = pn.value("patience", params.telemetry_plateau_noise_patience);
-                params.telemetry_plateau_noise_variance_threshold = pn.value("variance_threshold", params.telemetry_plateau_noise_variance_threshold);
-                params.telemetry_plateau_noise_std = pn.value("noise_std", params.telemetry_plateau_noise_std);
-                params.telemetry_plateau_noise_proportional = pn.value("proportional", params.telemetry_plateau_noise_proportional);
-                params.telemetry_plateau_noise_cooldown = pn.value("cooldown", params.telemetry_plateau_noise_cooldown);
-                params.telemetry_plateau_noise_max_per_epoch = pn.value("max_per_epoch", params.telemetry_plateau_noise_max_per_epoch);
-            }
-
-            // Lattice construction sub-config (TelemetryLattice EMA hyperparams)
-            if (auto lat_it = tc.find("lattice"); lat_it != tc.end() && lat_it->is_object()) {
-                const auto& lat = *lat_it;
-                params.telemetry_lattice_num_levels  = lat.value("num_levels",  params.telemetry_lattice_num_levels);
-                params.telemetry_lattice_num_streams = lat.value("num_streams", params.telemetry_lattice_num_streams);
-                params.telemetry_lattice_beta_mu     = lat.value("beta_mu",     params.telemetry_lattice_beta_mu);
-                params.telemetry_lattice_beta_a      = lat.value("beta_a",      params.telemetry_lattice_beta_a);
-                params.telemetry_lattice_beta_delta  = lat.value("beta_delta",  params.telemetry_lattice_beta_delta);
-                params.telemetry_lattice_beta_r      = lat.value("beta_r",      params.telemetry_lattice_beta_r);
-                params.telemetry_lattice_beta_run    = lat.value("beta_run",    params.telemetry_lattice_beta_run);
-                params.telemetry_lattice_beta_v      = lat.value("beta_v",      params.telemetry_lattice_beta_v);
-                params.telemetry_lattice_k_out0      = lat.value("k_out0",      params.telemetry_lattice_k_out0);
-                params.telemetry_lattice_alpha_v     = lat.value("alpha_v",     params.telemetry_lattice_alpha_v);
-                params.telemetry_lattice_epsilon     = lat.value("epsilon",     params.telemetry_lattice_epsilon);
-                params.telemetry_lattice_strict_mode = lat.value("strict_mode", params.telemetry_lattice_strict_mode);
-            }
+            params.log_recorder.modules[key] = val.get<std::string>();
         }
-    }
-    // Legacy: simple bool telemetry_control_enabled (backwards compat removed per Rule 20)
-    // If you had "telemetry_control_enabled": true, migrate to "telemetry_control": { "enabled": true }
 
-    // Load unified tape logging configuration
-    if (auto it = trainConfig.find("logging"); it != trainConfig.end() && it->is_object()) {
-        const auto& logCfg = *it;
-        params.tape_logging.default_level = logCfg.value("default_level", params.tape_logging.default_level);
-        params.tape_logging.equation_csv_enabled = logCfg.value("equation_csv_enabled", params.tape_logging.equation_csv_enabled);
-        params.tape_logging.stderr_enabled = logCfg.value("stderr_enabled", params.tape_logging.stderr_enabled);
-        params.tape_logging.initial_capacity = logCfg.value("initial_capacity", params.tape_logging.initial_capacity);
-        if (logCfg.contains("group_overrides") && logCfg["group_overrides"].is_object()) {
-            for (auto& [key, val] : logCfg["group_overrides"].items()) {
-                if (val.is_string()) {
-                    params.tape_logging.group_overrides[key] = val.get<std::string>();
-                }
-            }
-        }
+        const auto& layers = requireJsonObjectField(logRec, "layers", "training.config.log_recorder");
+        params.log_recorder.layers.embedding =
+            getRequiredJsonValue<bool>(layers, "embedding", "training.config.log_recorder.layers");
+        params.log_recorder.layers.rms_norm =
+            getRequiredJsonValue<bool>(layers, "rms_norm", "training.config.log_recorder.layers");
+        params.log_recorder.layers.attention =
+            getRequiredJsonValue<bool>(layers, "attention", "training.config.log_recorder.layers");
+        params.log_recorder.layers.feed_forward =
+            getRequiredJsonValue<bool>(layers, "feed_forward", "training.config.log_recorder.layers");
+        params.log_recorder.layers.residual =
+            getRequiredJsonValue<bool>(layers, "residual", "training.config.log_recorder.layers");
+        params.log_recorder.layers.encoding =
+            getRequiredJsonValue<bool>(layers, "encoding", "training.config.log_recorder.layers");
+        params.log_recorder.layers.serialization =
+            getRequiredJsonValue<bool>(layers, "serialization", "training.config.log_recorder.layers");
+        params.log_recorder.layers.execution_block =
+            getRequiredJsonValue<bool>(layers, "execution_block", "training.config.log_recorder.layers");
     }
 
-    // Load Log Recorder configuration
-    if (auto it = trainConfig.find("log_recorder"); it != trainConfig.end()) {
-        const auto& logRec = *it;
-        if (logRec.is_object()) {
-            params.log_recorder.enabled = logRec.value("enabled", params.log_recorder.enabled);
-            params.log_recorder.default_level = logRec.value("default_level", params.log_recorder.default_level);
-            
-            if (logRec.contains("modules") && logRec["modules"].is_object()) {
-                for (auto& [key, val] : logRec["modules"].items()) {
-                    if (val.is_string()) {
-                        params.log_recorder.modules[key] = val.get<std::string>();
-                    }
-                }
-            }
-            
-            // Parse layer logging enables
-            if (logRec.contains("layers") && logRec["layers"].is_object()) {
-                const auto& layers = logRec["layers"];
-                params.log_recorder.layers.embedding = layers.value("embedding", params.log_recorder.layers.embedding);
-                params.log_recorder.layers.rms_norm = layers.value("rms_norm", params.log_recorder.layers.rms_norm);
-                params.log_recorder.layers.attention = layers.value("attention", params.log_recorder.layers.attention);
-                params.log_recorder.layers.feed_forward = layers.value("feed_forward", params.log_recorder.layers.feed_forward);
-                params.log_recorder.layers.residual = layers.value("residual", params.log_recorder.layers.residual);
-                params.log_recorder.layers.encoding = layers.value("encoding", params.log_recorder.layers.encoding);
-                params.log_recorder.layers.serialization = layers.value("serialization", params.log_recorder.layers.serialization);
-                params.log_recorder.layers.execution_block = layers.value("execution_block", params.log_recorder.layers.execution_block);
-            }
-        }
-    }
-    
-    // Load loss options
-    if (auto it = trainConfig.find("loss"); it != trainConfig.end() && it->is_object()) {
-        const auto& loss_cfg = *it;
-        
-        if (auto ls_it = loss_cfg.find("label_smoothing"); ls_it != loss_cfg.end()) {
-            const auto& ls = *ls_it;
-            if (ls.is_boolean()) {
-                params.loss_label_smoothing_enabled = ls.get<bool>();
-            } else if (ls.is_object()) {
-                params.loss_label_smoothing_enabled = ls.value("enabled", params.loss_label_smoothing_enabled);
-                params.loss_label_smoothing_epsilon = ls.value("epsilon", params.loss_label_smoothing_epsilon);
-            }
-        }
-        
-        if (auto fc_it = loss_cfg.find("focal"); fc_it != loss_cfg.end()) {
-            const auto& fc = *fc_it;
-            if (fc.is_boolean()) {
-                params.loss_focal_enabled = fc.get<bool>();
-            } else if (fc.is_object()) {
-                params.loss_focal_enabled = fc.value("enabled", params.loss_focal_enabled);
-                params.loss_focal_gamma = fc.value("gamma", params.loss_focal_gamma);
-                params.loss_focal_alpha = fc.value("alpha", params.loss_focal_alpha);
-            }
-        }
-        
-        // Issue #44 FIX: Entropy regularization to prevent mode collapse
-        if (auto er_it = loss_cfg.find("entropy_reg"); er_it != loss_cfg.end()) {
-            const auto& er = *er_it;
-            if (er.is_boolean()) {
-                params.loss_entropy_reg_enabled = er.get<bool>();
-            } else if (er.is_object()) {
-                params.loss_entropy_reg_enabled = er.value("enabled", params.loss_entropy_reg_enabled);
-                params.loss_entropy_reg_lambda = er.value("lambda", params.loss_entropy_reg_lambda);
-            }
-        }
+    {
+        const auto& loss_cfg = requireJsonObjectField(trainConfig, "loss", "training.config");
 
-        // Class-balanced loss: reweights per-token loss by 1/freq^β
-        if (auto cb_it = loss_cfg.find("class_balanced"); cb_it != loss_cfg.end()) {
-            const auto& cb = *cb_it;
-            if (cb.is_boolean()) {
-                params.loss_class_balanced_enabled = cb.get<bool>();
-            } else if (cb.is_object()) {
-                params.loss_class_balanced_enabled = cb.value("enabled", params.loss_class_balanced_enabled);
-                params.loss_class_balanced_beta = cb.value("beta", params.loss_class_balanced_beta);
-            }
-        }
+        const auto& ls = requireJsonObjectField(loss_cfg, "label_smoothing", "training.config.loss");
+        params.loss_label_smoothing_enabled =
+            getRequiredJsonValue<bool>(ls, "enabled", "training.config.loss.label_smoothing");
+        params.loss_label_smoothing_epsilon =
+            getRequiredJsonValue<float>(ls, "epsilon", "training.config.loss.label_smoothing");
 
-        
-        if (auto pref_it = loss_cfg.find("preference"); pref_it != loss_cfg.end()) {
-            const auto& pref = *pref_it;
-            if (pref.is_boolean()) {
-                params.loss_preference_enabled = pref.get<bool>();
-            } else if (pref.is_object()) {
-                params.loss_preference_enabled = pref.value("enabled", params.loss_preference_enabled);
-                params.loss_preference_beta = pref.value("beta", params.loss_preference_beta);
-            }
-        }
-        
-        if (auto dist_it = loss_cfg.find("distillation"); dist_it != loss_cfg.end()) {
-            const auto& dist = *dist_it;
-            if (dist.is_boolean()) {
-                params.loss_distillation_enabled = dist.get<bool>();
-            } else if (dist.is_object()) {
-                params.loss_distillation_enabled = dist.value("enabled", params.loss_distillation_enabled);
-                params.loss_distillation_temperature = dist.value("temperature", params.loss_distillation_temperature);
-                params.loss_distillation_lambda = dist.value("lambda", params.loss_distillation_lambda);
-            }
-        }
-        
-        if (auto mask_it = loss_cfg.find("masking"); mask_it != loss_cfg.end()) {
-            const auto& mask = *mask_it;
-            if (mask.is_boolean()) {
-                params.loss_masking_enabled = mask.get<bool>();
-            } else if (mask.is_object()) {
-                params.loss_masking_enabled = mask.value("enabled", params.loss_masking_enabled);
-                if (mask.contains("tag") && mask["tag"].is_string()) {
-                    params.loss_masking_tag = mask["tag"].get<std::string>();
-                }
-            }
-        }
-    }
-    
-    // LM Head centering configuration (Issue #37 / #40)
-    // Master toggle is training-only (lm_head_centering_enabled). Per-knob fields
-    // (center_hidden_states / freeze_learned_rms_gammas / center_logits /
-    // center_encoder_residuals / project_out_pc1 / pc1_power_iters) live on architecture.
-    params.lm_head_centering_enabled = false;  // Default to disabled (standard implementation)
-    params.architecture.lm_head_center_hidden_states = false;
-    params.architecture.freeze_learned_rms_gammas = false;  // Default: all learned RMSNorm gammas are trainable
-    params.architecture.center_logits = false;  // Default to disabled (standard implementation)
-    params.architecture.center_encoder_residuals = false;  // Default: disabled. Enable to prevent ρ buildup across layers (mode collapse fix).
-                                               // Gradient cost: (1-1/n_tokens)^24 ≈ 0.996 for n≈6000 — negligible.
-    params.architecture.project_out_pc1 = false;  // Default: disabled (Issue #149)
-    params.architecture.pc1_power_iters = 5;
-    if (auto it = trainConfig.find("lm_head_centering"); it != trainConfig.end() && it->is_object()) {
-        const auto& lmc = *it;
-        params.lm_head_centering_enabled = lmc.value("enabled", false);
-        params.architecture.lm_head_center_hidden_states = lmc.value("center_hidden_states", false);
-        params.architecture.freeze_learned_rms_gammas = lmc.value("freeze_learned_rms_gammas", false);
-        params.architecture.center_logits = lmc.value("center_logits", false);
-        params.architecture.center_encoder_residuals = lmc.value("center_encoder_residuals", false);
-        params.architecture.project_out_pc1 = lmc.value("project_out_pc1", false);
-        params.architecture.pc1_power_iters = lmc.value("pc1_power_iters", 5);
-    }
-    
-    // Issue #109: LayerScale (per-channel learnable residual scaling)
-    // Reduces correlation buildup while allowing each hidden feature channel to learn its own gate.
-    params.architecture.use_layer_scale = false;   // Default: disabled (standard residual connections)
-    params.architecture.layer_scale_init = 1.0f;   // Issue #129: 0.1 caused gradient attenuation in GRIM-text
-    if (auto it = trainConfig.find("layer_scale"); it != trainConfig.end() && it->is_object()) {
-        const auto& ls = *it;
-        params.architecture.use_layer_scale = ls.value("enabled", false);
-        params.architecture.layer_scale_init = ls.value("init_value", 1.0f);
-    }
-    
-    // QK-norm: Per-head RMSNorm applied to Q and K after QKV projection, before RoPE.
-    // Bounds attention logit magnitudes, prevents entropy collapse in deeper models.
-    params.architecture.qk_norm_enabled = false;   // Default: disabled (standard unscaled Q/K)
-    if (auto it = trainConfig.find("qk_norm"); it != trainConfig.end() && it->is_object()) {
-        const auto& qkn = *it;
-        params.architecture.qk_norm_enabled = qkn.value("enabled", false);
-    }
-    
-    // Hardcoded Hidden States Diagnostic (Issue #42)
-    using HCP = ::GRIM::HyperParameters::LanguageModelConfig::HardcodedPattern;
-    params.architecture.hardcoded_hidden_pattern = HCP::DISABLED;
-    params.architecture.hardcoded_log_every_n_batches = 1;
-    if (auto it = trainConfig.find("hardcoded_hidden_states"); it != trainConfig.end() && it->is_object()) {
-        const auto& hcs = *it;
-        if (hcs.value("enabled", false)) {
-            std::string pattern_str = hcs.value("pattern", "random_centered");
-            if (pattern_str == "random_centered") {
-                params.architecture.hardcoded_hidden_pattern = HCP::RANDOM_CENTERED;
-            } else if (pattern_str == "orthogonal_w277") {
-                params.architecture.hardcoded_hidden_pattern = HCP::ORTHOGONAL_W277;
-            } else if (pattern_str == "aligned_w277") {
-                params.architecture.hardcoded_hidden_pattern = HCP::ALIGNED_W277;
-            } else if (pattern_str == "constant_uniform") {
-                params.architecture.hardcoded_hidden_pattern = HCP::CONSTANT_UNIFORM;
-            } else if (pattern_str == "zero_mean_sine") {
-                params.architecture.hardcoded_hidden_pattern = HCP::ZERO_MEAN_SINE;
-            }
-            params.architecture.hardcoded_log_every_n_batches = hcs.value("log_every_n_batches", 1);
-        }
-    }
-    
-    // Load embedding freeze guard
-    if (auto it = trainConfig.find("embedding_freeze"); it != trainConfig.end() && it->is_object()) {
-        const auto& ef = *it;
-        params.embedding_freeze_enabled = ef.value("enabled", params.embedding_freeze_enabled);
-        params.embedding_freeze_after_step = ef.value("freeze_after_step", params.embedding_freeze_after_step);
+        const auto& fc = requireJsonObjectField(loss_cfg, "focal", "training.config.loss");
+        params.loss_focal_enabled =
+            getRequiredJsonValue<bool>(fc, "enabled", "training.config.loss.focal");
+        params.loss_focal_gamma =
+            getRequiredJsonValue<float>(fc, "gamma", "training.config.loss.focal");
+        params.loss_focal_alpha =
+            getRequiredJsonValue<float>(fc, "alpha", "training.config.loss.focal");
+
+        const auto& er = requireJsonObjectField(loss_cfg, "entropy_reg", "training.config.loss");
+        params.loss_entropy_reg_enabled =
+            getRequiredJsonValue<bool>(er, "enabled", "training.config.loss.entropy_reg");
+        params.loss_entropy_reg_lambda =
+            getRequiredJsonValue<float>(er, "lambda", "training.config.loss.entropy_reg");
+
+        const auto& cb = requireJsonObjectField(loss_cfg, "class_balanced", "training.config.loss");
+        params.loss_class_balanced_enabled =
+            getRequiredJsonValue<bool>(cb, "enabled", "training.config.loss.class_balanced");
+        params.loss_class_balanced_beta =
+            getRequiredJsonValue<float>(cb, "beta", "training.config.loss.class_balanced");
+
+        const auto& pref = requireJsonObjectField(loss_cfg, "preference", "training.config.loss");
+        params.loss_preference_enabled =
+            getRequiredJsonValue<bool>(pref, "enabled", "training.config.loss.preference");
+        params.loss_preference_beta =
+            getRequiredJsonValue<float>(pref, "beta", "training.config.loss.preference");
+
+        const auto& dist = requireJsonObjectField(loss_cfg, "distillation", "training.config.loss");
+        params.loss_distillation_enabled =
+            getRequiredJsonValue<bool>(dist, "enabled", "training.config.loss.distillation");
+        params.loss_distillation_temperature =
+            getRequiredJsonValue<float>(dist, "temperature", "training.config.loss.distillation");
+        params.loss_distillation_lambda =
+            getRequiredJsonValue<float>(dist, "lambda", "training.config.loss.distillation");
+
+        const auto& mask = requireJsonObjectField(loss_cfg, "masking", "training.config.loss");
+        params.loss_masking_enabled =
+            getRequiredJsonValue<bool>(mask, "enabled", "training.config.loss.masking");
+        params.loss_masking_tag =
+            getRequiredJsonValue<std::string>(mask, "tag", "training.config.loss.masking");
     }
 
-    // Load optimizer selector.
-    // JSON layout (all fields optional; struct defaults from HyperParameters apply):
-    //   "optimizer": {
-    //     "kind": "adamw" | "radamw",
-    //     "beta1": 0.9, "beta2": 0.999, "epsilon": 1e-8
-    //   }
-    if (auto it = trainConfig.find("optimizer"); it != trainConfig.end() && it->is_object()) {
-        const auto& opt = *it;
-        params.optimizer_kind   = opt.value("kind",    params.optimizer_kind);
-        params.optimizer_beta1  = opt.value("beta1",   params.optimizer_beta1);
-        params.optimizer_beta2  = opt.value("beta2",   params.optimizer_beta2);
-        params.optimizer_epsilon = opt.value("epsilon", params.optimizer_epsilon);
-        // Rule 20: validate kind explicitly — fail loud on typo.
+    {
+        const auto& lmc = requireJsonObjectField(trainConfig, "lm_head_centering", "training.config");
+        params.lm_head_centering_enabled =
+            getRequiredJsonValue<bool>(lmc, "enabled", "training.config.lm_head_centering");
+        params.architecture.lm_head_center_hidden_states =
+            getRequiredJsonValue<bool>(lmc, "center_hidden_states", "training.config.lm_head_centering");
+        params.architecture.freeze_learned_rms_gammas =
+            getRequiredJsonValue<bool>(lmc, "freeze_learned_rms_gammas", "training.config.lm_head_centering");
+        params.architecture.center_logits =
+            getRequiredJsonValue<bool>(lmc, "center_logits", "training.config.lm_head_centering");
+        params.architecture.center_encoder_residuals =
+            getRequiredJsonValue<bool>(lmc, "center_encoder_residuals", "training.config.lm_head_centering");
+        params.architecture.project_out_pc1 =
+            getRequiredJsonValue<bool>(lmc, "project_out_pc1", "training.config.lm_head_centering");
+        params.architecture.pc1_power_iters =
+            getRequiredJsonValue<int>(lmc, "pc1_power_iters", "training.config.lm_head_centering");
+    }
+
+    {
+        const auto& ls = requireJsonObjectField(trainConfig, "layer_scale", "training.config");
+        params.architecture.use_layer_scale =
+            getRequiredJsonValue<bool>(ls, "enabled", "training.config.layer_scale");
+        params.architecture.layer_scale_init =
+            getRequiredJsonValue<float>(ls, "init_value", "training.config.layer_scale");
+    }
+
+    {
+        const auto& qkn = requireJsonObjectField(trainConfig, "qk_norm", "training.config");
+        params.architecture.qk_norm_enabled =
+            getRequiredJsonValue<bool>(qkn, "enabled", "training.config.qk_norm");
+    }
+
+    {
+        const auto& hcs = requireJsonObjectField(trainConfig, "hardcoded_hidden_states", "training.config");
+        const bool hardcoded_enabled =
+            getRequiredJsonValue<bool>(hcs, "enabled", "training.config.hardcoded_hidden_states");
+        const std::string pattern_str =
+            getRequiredJsonValue<std::string>(hcs, "pattern", "training.config.hardcoded_hidden_states");
+        params.architecture.hardcoded_log_every_n_batches =
+            getRequiredJsonValue<int>(hcs, "log_every_n_batches", "training.config.hardcoded_hidden_states");
+
+        using HCP = ::GRIM::HyperParameters::LanguageModelConfig::HardcodedPattern;
+        HCP parsed_pattern = HCP::DISABLED;
+        if (pattern_str == "disabled") {
+            parsed_pattern = HCP::DISABLED;
+        } else if (pattern_str == "random_centered") {
+            parsed_pattern = HCP::RANDOM_CENTERED;
+        } else if (pattern_str == "orthogonal_w277") {
+            parsed_pattern = HCP::ORTHOGONAL_W277;
+        } else if (pattern_str == "aligned_w277") {
+            parsed_pattern = HCP::ALIGNED_W277;
+        } else if (pattern_str == "constant_uniform") {
+            parsed_pattern = HCP::CONSTANT_UNIFORM;
+        } else if (pattern_str == "zero_mean_sine") {
+            parsed_pattern = HCP::ZERO_MEAN_SINE;
+        } else {
+            throw std::runtime_error(
+                "ai_config.json: training.config.hardcoded_hidden_states.pattern has unknown value '" +
+                pattern_str + "'");
+        }
+        if (hardcoded_enabled) {
+            params.architecture.hardcoded_hidden_pattern = parsed_pattern;
+        } else {
+            params.architecture.hardcoded_hidden_pattern = HCP::DISABLED;
+        }
+    }
+
+    {
+        const auto& ef = requireJsonObjectField(trainConfig, "embedding_freeze", "training.config");
+        params.embedding_freeze_enabled =
+            getRequiredJsonValue<bool>(ef, "enabled", "training.config.embedding_freeze");
+        params.embedding_freeze_after_step =
+            getRequiredJsonValue<int>(ef, "freeze_after_step", "training.config.embedding_freeze");
+    }
+
+    {
+        const auto& opt = requireJsonObjectField(trainConfig, "optimizer", "training.config");
+        params.optimizer_kind =
+            getRequiredJsonValue<std::string>(opt, "kind", "training.config.optimizer");
+        params.optimizer_beta1 =
+            getRequiredJsonValue<float>(opt, "beta1", "training.config.optimizer");
+        params.optimizer_beta2 =
+            getRequiredJsonValue<float>(opt, "beta2", "training.config.optimizer");
+        params.optimizer_epsilon =
+            getRequiredJsonValue<float>(opt, "epsilon", "training.config.optimizer");
         if (params.optimizer_kind != "adamw" && params.optimizer_kind != "radamw") {
             throw std::runtime_error(
-                "[ai_config] training.config.optimizer.kind must be \"adamw\" or \"radamw\", got \""
-                + params.optimizer_kind + "\"");
+                "[ai_config] training.config.optimizer.kind must be \"adamw\" or \"radamw\", got \"" +
+                params.optimizer_kind + "\"");
         }
     }
 
-    // Load stability overrides - ALWAYS parse values even if disabled
-    // (Phase1_Startup copies them unconditionally, so they must be initialized)
-    params.stability_overrides_enabled = trainConfig.value("stability_overrides_enabled", params.stability_overrides_enabled);
-    if (auto it = trainConfig.find("stability_overrides"); it != trainConfig.end() && it->is_object()) {
-        const auto& stab = *it;
-        params.stability_override_batch_size = stab.value("batch_size", params.stability_override_batch_size);
-        params.stability_override_max_seq_len = stab.value("max_seq_len", params.stability_override_max_seq_len);
-        params.stability_override_clip_per_token = stab.value("clip_per_token", params.stability_override_clip_per_token);
-        params.stability_override_lr_min = stab.value("lr_min", params.stability_override_lr_min);
-    }
-    
-    // Load scratch blocks configuration
-    if (auto it = trainConfig.find("scratch_blocks"); it != trainConfig.end()) {
-        const auto& scratch = *it;
-        if (scratch.is_boolean()) {
-            params.scratch_blocks_enabled = scratch.get<bool>();
-        } else if (scratch.is_object()) {
-            params.scratch_blocks_enabled = scratch.value("enabled", params.scratch_blocks_enabled);
-            // scratch_max_tokens_per_block: derived as max_seq_len (see deriveComputedHyperparameters)
-            params.scratch_num_blocks = scratch.value("num_blocks", params.scratch_num_blocks);
-            params.scratch_write_combined = scratch.value("use_write_combined", params.scratch_write_combined);
-        }
-    }
-    
-    // Load scratch_block_reasoning configuration (model fields, live on architecture)
-    if (auto it = trainConfig.find("scratch_block_reasoning"); it != trainConfig.end() && it->is_object()) {
-        const auto& sbr = *it;
-        params.architecture.use_scratch_block = sbr.value("enabled", params.architecture.use_scratch_block);
-        params.architecture.scratch_block_atom_embedding_dim = sbr.value("atom_embedding_dim", params.architecture.scratch_block_atom_embedding_dim);
-        params.architecture.scratch_block_max_atoms = sbr.value("max_atoms", params.architecture.scratch_block_max_atoms);
-        params.architecture.scratch_block_atom_scale = sbr.value("atom_scale", params.architecture.scratch_block_atom_scale);
+    assignTrainingField(params.stability_overrides_enabled, trainConfig, "stability_overrides_enabled");
+
+    {
+        const auto& scratch = requireJsonObjectField(trainConfig, "scratch_blocks", "training.config");
+        params.scratch_blocks_enabled =
+            getRequiredJsonValue<bool>(scratch, "enabled", "training.config.scratch_blocks");
+        params.scratch_num_blocks =
+            getRequiredJsonValue<size_t>(scratch, "num_blocks", "training.config.scratch_blocks");
+        params.scratch_write_combined =
+            getRequiredJsonValue<bool>(scratch, "use_write_combined", "training.config.scratch_blocks");
     }
 
-    if (auto it = trainConfig.find("execution_block"); it != trainConfig.end() && it->is_object()) {
-        const auto& eb = *it;
-        assignTrainingField(params.architecture.execution_block_enabled, eb, "enabled");
-        assignTrainingField(params.architecture.scratch_block_execution_first_type_only, eb, "execution_first_type_only");
-        assignTrainingField(params.architecture.execution_block_layer, eb, "layer");
-        assignTrainingField(params.architecture.execution_block_num_ops, eb, "num_ops");
-        assignTrainingField(params.architecture.execution_block_num_slots, eb, "num_slots");
-        assignTrainingField(params.architecture.execution_block_num_steps, eb, "num_steps");
-        // execution_block_d_key: derived as d_model / num_heads (see deriveComputedHyperparameters)
-        assignTrainingField(params.architecture.execution_block_d_type, eb, "d_type");
-        // execution_block_cross_attn_head_dim: derived as d_model / num_heads (see deriveComputedHyperparameters)
-        assignTrainingField(params.architecture.execution_block_cross_attn_topk, eb, "cross_attn_topk");
-        assignTrainingField(params.architecture.execution_block_usage_decay, eb, "usage_decay");
-        assignTrainingField(params.architecture.execution_block_diversity_kappa, eb, "diversity_kappa");
-        assignTrainingField(params.architecture.execution_block_temp_start, eb, "temp_start");
-        assignTrainingField(params.architecture.execution_block_temp_end, eb, "temp_end");
-        assignTrainingField(params.architecture.execution_block_temp_schedule, eb, "temp_schedule");
-        assignTrainingField(params.architecture.execution_block_entropy_weight, eb, "entropy_weight");
-        assignTrainingField(params.architecture.step_x_multiplier, eb, "step_x_multiplier");
-        assignTrainingField(params.architecture.step_y_multiplier, eb, "step_y_multiplier");
-        assignTrainingField(params.architecture.step_y_overrides_x, eb, "step_y_overrides_x");
-        assignTrainingField(params.architecture.entropy_aux_weight, eb, "entropy_aux_weight");
-        assignTrainingField(params.architecture.value_match_epsilon, eb, "value_match_epsilon");
-        assignTrainingField(params.architecture.final_slot_consistency_weight, eb, "final_slot_consistency_weight");
-        assignTrainingField(params.architecture.execution_block_transition_hard_threshold, eb, "transition_hard_threshold");
-        // execution_block_gate_warmup_steps: derived as warmup_steps (see deriveComputedHyperparameters)
-        assignTrainingField(params.architecture.execution_block_causal_w1_transition, eb, "causal_w1_transition");
-        assignTrainingField(params.architecture.div_invalid_penalty_weight, eb, "div_invalid_penalty_weight");
-        assignTrainingField(params.architecture.div_magnitude_penalty_weight, eb, "div_magnitude_penalty_weight");
-        assignTrainingField(params.architecture.arg_reinforce_weight, eb, "arg_reinforce_weight");
-        assignTrainingField(params.architecture.arg_reinforce_baseline_decay, eb, "arg_reinforce_baseline_decay");
-        assignTrainingField(params.architecture.structured_ce_enabled, eb, "structured_ce_enabled");
-        assignTrainingField(params.architecture.structured_ce_weight, eb, "structured_ce_weight");
-
-        // Decode-time slot selector (nested under execution_block)
-        if (auto sit = eb.find("selector"); sit != eb.end() && sit->is_object()) {
-            const auto& sel = *sit;
-            assignTrainingField(params.architecture.selector_enabled, sel, "enabled");
-            assignTrainingField(params.architecture.selector_d_selector, sel, "d_selector");
-            assignTrainingField(params.architecture.selector_selection_margin, sel, "selection_margin");
-            assignTrainingField(params.architecture.selector_supervision_weight, sel, "supervision_weight");
-        }
-    }
-    
-    // Load CUDA execution mode configuration
-    if (auto it = trainConfig.find("cuda_execution"); it != trainConfig.end() && it->is_object()) {
-        const auto& cuda_exec = *it;
-        params.single_stream_mode = cuda_exec.value("single_stream_mode", params.single_stream_mode);
-        params.disable_async_frees = cuda_exec.value("disable_async_frees", params.disable_async_frees);
-        params.synchronize_after_kernels = cuda_exec.value("synchronize_after_kernels", params.synchronize_after_kernels);
-    }
-    
-    // Load multi_token_prediction (MTP) configuration
-    if (auto it = trainConfig.find("multi_token_prediction"); it != trainConfig.end() && it->is_object()) {
-        const auto& mtp = *it;
-        params.architecture.mtp_enabled = mtp.value("enabled", params.architecture.mtp_enabled);
-        params.architecture.mtp_k = mtp.value("k", params.architecture.mtp_k);
-        params.architecture.mtp_alpha = mtp.value("alpha", params.architecture.mtp_alpha);
-        // mtp_alpha_warmup_steps: derived as warmup_steps (see deriveComputedHyperparameters)
-        params.mtp_log_ratio_monitor = mtp.value("log_ratio_monitor", params.mtp_log_ratio_monitor);
+    {
+        const auto& sbr = requireJsonObjectField(trainConfig, "scratch_block_reasoning", "training.config");
+        params.architecture.use_scratch_block =
+            getRequiredJsonValue<bool>(sbr, "enabled", "training.config.scratch_block_reasoning");
+        params.architecture.scratch_block_atom_embedding_dim =
+            getRequiredJsonValue<int>(sbr, "atom_embedding_dim", "training.config.scratch_block_reasoning");
+        params.architecture.scratch_block_max_atoms =
+            getRequiredJsonValue<int>(sbr, "max_atoms", "training.config.scratch_block_reasoning");
+        params.architecture.scratch_block_atom_scale =
+            getRequiredJsonValue<float>(sbr, "atom_scale", "training.config.scratch_block_reasoning");
     }
 
-    // Load prediction comparison configuration
-    if (auto it = trainConfig.find("prediction_comparison"); it != trainConfig.end() && it->is_object()) {
-        const auto& pred_cmp = *it;
-        params.prediction_comparison_enabled = pred_cmp.value("enabled", params.prediction_comparison_enabled);
-        params.prediction_comparison_interval = pred_cmp.value("interval", params.prediction_comparison_interval);
-        params.prediction_comparison_top_k = pred_cmp.value("top_k", params.prediction_comparison_top_k);
-        params.prediction_comparison_max_positions = pred_cmp.value("max_positions", params.prediction_comparison_max_positions);
-        params.prediction_comparison_log_path = pred_cmp.value("log_path", params.prediction_comparison_log_path);
+    {
+        const auto& eb = requireJsonObjectField(trainConfig, "execution_block", "training.config");
+        params.architecture.execution_block_enabled =
+            getRequiredJsonValue<bool>(eb, "enabled", "training.config.execution_block");
+        params.architecture.scratch_block_execution_first_type_only =
+            getRequiredJsonValue<bool>(eb, "execution_first_type_only", "training.config.execution_block");
+        params.architecture.execution_block_layer =
+            getRequiredJsonValue<int>(eb, "layer", "training.config.execution_block");
+        params.architecture.execution_block_num_ops =
+            getRequiredJsonValue<int>(eb, "num_ops", "training.config.execution_block");
+        params.architecture.execution_block_num_slots =
+            getRequiredJsonValue<int>(eb, "num_slots", "training.config.execution_block");
+        params.architecture.execution_block_num_steps =
+            getRequiredJsonValue<int>(eb, "num_steps", "training.config.execution_block");
+        params.architecture.execution_block_d_type =
+            getRequiredJsonValue<int>(eb, "d_type", "training.config.execution_block");
+        params.architecture.execution_block_cross_attn_topk =
+            getRequiredJsonValue<int>(eb, "cross_attn_topk", "training.config.execution_block");
+        params.architecture.execution_block_usage_decay =
+            getRequiredJsonValue<float>(eb, "usage_decay", "training.config.execution_block");
+        params.architecture.execution_block_diversity_kappa =
+            getRequiredJsonValue<float>(eb, "diversity_kappa", "training.config.execution_block");
+        params.architecture.execution_block_temp_start =
+            getRequiredJsonValue<float>(eb, "temp_start", "training.config.execution_block");
+        params.architecture.execution_block_temp_end =
+            getRequiredJsonValue<float>(eb, "temp_end", "training.config.execution_block");
+        params.architecture.execution_block_temp_schedule =
+            getRequiredJsonValue<int>(eb, "temp_schedule", "training.config.execution_block");
+        params.architecture.execution_block_entropy_weight =
+            getRequiredJsonValue<float>(eb, "entropy_weight", "training.config.execution_block");
+        params.architecture.step_x_multiplier =
+            getRequiredJsonValue<float>(eb, "step_x_multiplier", "training.config.execution_block");
+        params.architecture.step_y_multiplier =
+            getRequiredJsonValue<float>(eb, "step_y_multiplier", "training.config.execution_block");
+        params.architecture.step_y_overrides_x =
+            getRequiredJsonValue<bool>(eb, "step_y_overrides_x", "training.config.execution_block");
+        params.architecture.entropy_aux_weight =
+            getRequiredJsonValue<float>(eb, "entropy_aux_weight", "training.config.execution_block");
+        params.architecture.value_match_epsilon =
+            getRequiredJsonValue<float>(eb, "value_match_epsilon", "training.config.execution_block");
+        params.architecture.final_slot_consistency_weight =
+            getRequiredJsonValue<float>(eb, "final_slot_consistency_weight", "training.config.execution_block");
+        params.architecture.execution_block_transition_hard_threshold =
+            getRequiredJsonValue<float>(eb, "transition_hard_threshold", "training.config.execution_block");
+        params.architecture.execution_block_causal_w1_transition =
+            getRequiredJsonValue<float>(eb, "causal_w1_transition", "training.config.execution_block");
+        params.architecture.div_invalid_penalty_weight =
+            getRequiredJsonValue<float>(eb, "div_invalid_penalty_weight", "training.config.execution_block");
+        params.architecture.div_magnitude_penalty_weight =
+            getRequiredJsonValue<float>(eb, "div_magnitude_penalty_weight", "training.config.execution_block");
+        params.architecture.arg_reinforce_weight =
+            getRequiredJsonValue<float>(eb, "arg_reinforce_weight", "training.config.execution_block");
+        params.architecture.arg_reinforce_baseline_decay =
+            getRequiredJsonValue<float>(eb, "arg_reinforce_baseline_decay", "training.config.execution_block");
+        params.architecture.structured_ce_enabled =
+            getRequiredJsonValue<bool>(eb, "structured_ce_enabled", "training.config.execution_block");
+        params.architecture.structured_ce_weight =
+            getRequiredJsonValue<float>(eb, "structured_ce_weight", "training.config.execution_block");
+
+        const auto& sel = requireJsonObjectField(eb, "selector", "training.config.execution_block");
+        params.architecture.selector_enabled =
+            getRequiredJsonValue<bool>(sel, "enabled", "training.config.execution_block.selector");
+        params.architecture.selector_d_selector =
+            getRequiredJsonValue<int>(sel, "d_selector", "training.config.execution_block.selector");
+        params.architecture.selector_selection_margin =
+            getRequiredJsonValue<float>(sel, "selection_margin", "training.config.execution_block.selector");
+        params.architecture.selector_supervision_weight =
+            getRequiredJsonValue<float>(sel, "supervision_weight", "training.config.execution_block.selector");
     }
 
-    // Logit update trace configuration
-    if (auto it = trainConfig.find("logit_update_trace"); it != trainConfig.end()) {
-        const auto& trace = *it;
-        if (trace.is_boolean()) {
-            params.logit_update_trace_enabled = trace.get<bool>();
-        } else if (trace.is_object()) {
-            params.logit_update_trace_enabled = trace.value("enabled", params.logit_update_trace_enabled);
-            params.logit_update_trace_interval = trace.value("interval", params.logit_update_trace_interval);
-        }
+    {
+        const auto& cuda_exec = requireJsonObjectField(trainConfig, "cuda_execution", "training.config");
+        params.single_stream_mode =
+            getRequiredJsonValue<bool>(cuda_exec, "single_stream_mode", "training.config.cuda_execution");
+        params.disable_async_frees =
+            getRequiredJsonValue<bool>(cuda_exec, "disable_async_frees", "training.config.cuda_execution");
+        params.synchronize_after_kernels =
+            getRequiredJsonValue<bool>(cuda_exec, "synchronize_after_kernels", "training.config.cuda_execution");
     }
-    
-    // Load attention diagnostics configuration
-    // Use this to diagnose training plateau (saturated attention, gradient collapse)
-    if (auto it = trainConfig.find("attention_diagnostics"); it != trainConfig.end() && it->is_object()) {
-        const auto& attn_diag = *it;
-        params.attention_diag_enabled = attn_diag.value("enabled", params.attention_diag_enabled);
-        params.attention_diag_layer = attn_diag.value("layer", params.attention_diag_layer);
-        params.attention_diag_head = attn_diag.value("head", params.attention_diag_head);
+
+    {
+        const auto& mtp = requireJsonObjectField(trainConfig, "multi_token_prediction", "training.config");
+        params.architecture.mtp_enabled =
+            getRequiredJsonValue<bool>(mtp, "enabled", "training.config.multi_token_prediction");
+        params.architecture.mtp_k =
+            getRequiredJsonValue<int>(mtp, "k", "training.config.multi_token_prediction");
+        params.architecture.mtp_alpha =
+            getRequiredJsonValue<float>(mtp, "alpha", "training.config.multi_token_prediction");
+        params.mtp_log_ratio_monitor =
+            getRequiredJsonValue<bool>(mtp, "log_ratio_monitor", "training.config.multi_token_prediction");
+    }
+
+    {
+        const auto& pred_cmp = requireJsonObjectField(trainConfig, "prediction_comparison", "training.config");
+        params.prediction_comparison_enabled =
+            getRequiredJsonValue<bool>(pred_cmp, "enabled", "training.config.prediction_comparison");
+        params.prediction_comparison_interval =
+            getRequiredJsonValue<int>(pred_cmp, "interval", "training.config.prediction_comparison");
+        params.prediction_comparison_top_k =
+            getRequiredJsonValue<int>(pred_cmp, "top_k", "training.config.prediction_comparison");
+        params.prediction_comparison_max_positions =
+            getRequiredJsonValue<int>(pred_cmp, "max_positions", "training.config.prediction_comparison");
+        params.prediction_comparison_log_path =
+            getRequiredJsonValue<std::string>(pred_cmp, "log_path", "training.config.prediction_comparison");
+    }
+
+    {
+        const auto& trace = requireJsonObjectField(trainConfig, "logit_update_trace", "training.config");
+        params.logit_update_trace_enabled =
+            getRequiredJsonValue<bool>(trace, "enabled", "training.config.logit_update_trace");
+        params.logit_update_trace_interval =
+            getRequiredJsonValue<int>(trace, "interval", "training.config.logit_update_trace");
+    }
+
+    {
+        const auto& attn_diag = requireJsonObjectField(trainConfig, "attention_diagnostics", "training.config");
+        params.attention_diag_enabled =
+            getRequiredJsonValue<bool>(attn_diag, "enabled", "training.config.attention_diagnostics");
+        params.attention_diag_layer =
+            getRequiredJsonValue<int>(attn_diag, "layer", "training.config.attention_diagnostics");
+        params.attention_diag_head =
+            getRequiredJsonValue<int>(attn_diag, "head", "training.config.attention_diagnostics");
     }
 }
 
@@ -1225,15 +1248,17 @@ inline void deriveComputedHyperparameters(TrainingHyperparameters& params, const
     }
 
     // ── Head dimension propagation (model fields live on architecture) ──
-    if (trainConfig.contains("d_model") && trainConfig.contains("num_heads")) {
-        int d_model = trainConfig["d_model"].get<int>();
-        int num_heads = trainConfig["num_heads"].get<int>();
-        if (d_model > 0 && num_heads > 0) {
-            int head_dim = d_model / num_heads;
-            params.architecture.execution_block_d_key = head_dim;
-            params.architecture.execution_block_cross_attn_head_dim = head_dim;
-            params.architecture.scratch_block_atom_embedding_dim = d_model / 8;
+    {
+        int d_model = getRequiredJsonValue<int>(trainConfig, "d_model", "training.config");
+        int num_heads = getRequiredJsonValue<int>(trainConfig, "num_heads", "training.config");
+        if (d_model <= 0 || num_heads <= 0) {
+            throw std::runtime_error(
+                "deriveComputedHyperparameters: d_model and num_heads must be > 0");
         }
+        int head_dim = d_model / num_heads;
+        params.architecture.execution_block_d_key = head_dim;
+        params.architecture.execution_block_cross_attn_head_dim = head_dim;
+        params.architecture.scratch_block_atom_embedding_dim = d_model / 8;
     }
 
     // ── Warmup fraction validation (warmup_steps derived in Phase2 from warmup_fraction * total_steps) ──
@@ -1252,42 +1277,31 @@ inline void deriveComputedHyperparameters(TrainingHyperparameters& params, const
 }
 
 inline bool populateTrainingHyperparametersFromConfig(const nlohmann::json& config, TrainingHyperparameters& params) {
-    if (config.contains("training") && config["training"].contains("config")) {
-        const auto& training = config["training"];
-        // Parse training-level selectors (sibling to "config")
-        assignTrainingField(params.current_model_training, training, "current_model_training");
-        assignTrainingField(params.current_curriculum, training, "current_curriculum");
+    const auto& training = requireJsonObjectField(config, "training", "ai_config.json");
+    params.current_model_training =
+        getRequiredJsonValue<std::string>(training, "current_model_training", "training");
+    params.current_curriculum =
+        getRequiredJsonValue<std::string>(training, "current_curriculum", "training");
 
-        const auto& trainConfig = training["config"];
-        // Phase 1: Set sensible defaults for all non-base params
-        setDefaultHyperparameters(params);
-        // Phase 2: Validate base+enable fields exist
-        validateTrainingConfigJson(trainConfig);
-        // Phase 3: Parse JSON (overwrites defaults only for keys present)
-        applyTrainingConfigObject(trainConfig, params);
-        // Phase 4: Compute formula-derived values (always overwrites)
-        deriveComputedHyperparameters(params, trainConfig);
-        return true;
-    }
-    return false;
+    const auto& trainConfig = requireJsonObjectField(training, "config", "training");
+    // Phase 1: Set derived placeholder values before strict JSON assignment.
+    setDefaultHyperparameters(params);
+    // Phase 2: Validate base+enable fields exist.
+    validateTrainingConfigJson(trainConfig);
+    // Phase 3: Parse JSON.
+    applyTrainingConfigObject(trainConfig, params);
+    // Phase 4: Compute formula-derived values.
+    deriveComputedHyperparameters(params, trainConfig);
+    return true;
 }
 
 inline bool populateDataCollectionFieldsFromConfig(const nlohmann::json& config, AiConfigSnapshot& snapshot) {
-    if (!config.contains("data_collection")) {
-        return false;
-    }
+    const auto& dc = requireJsonObjectField(config, "data_collection", "ai_config.json");
 
-    const auto& dc = config["data_collection"];
-    if (!dc.is_object()) {
-        return false;
-    }
-
-    assignTrainingField(snapshot.data_collection_clear_merged_cache_on_merge,
-                        dc,
-                        "clear_merged_cache_on_merge");
-    assignTrainingField(snapshot.data_collection_max_new_entries_per_run,
-                        dc,
-                        "max_new_entries_per_run");
+    snapshot.data_collection_clear_merged_cache_on_merge =
+        getRequiredJsonValue<bool>(dc, "clear_merged_cache_on_merge", "data_collection");
+    snapshot.data_collection_max_new_entries_per_run =
+        getRequiredJsonValue<int>(dc, "max_new_entries_per_run", "data_collection");
 
     return true;
 }
@@ -1297,33 +1311,11 @@ inline bool populateDataCollectionFieldsFromConfig(const nlohmann::json& config,
 // type is NEVER silently coerced). Missing fields default to false. Returns
 // true if any subprocess field was found.
 inline bool populateSubprocessFieldsFromConfig(const nlohmann::json& config, AiConfigSnapshot& snapshot) {
-    bool found_any = false;
-
-    // subprocess.tokenizer.only_mode
-    if (config.contains("subprocess")) {
-        const auto& subp = config["subprocess"];
-        if (!subp.is_object()) {
-            throw std::runtime_error(
-                "ai_config.json: 'subprocess' must be an object");
-        }
-        if (subp.contains("tokenizer")) {
-            const auto& tok = subp["tokenizer"];
-            if (!tok.is_object()) {
-                throw std::runtime_error(
-                    "ai_config.json: 'subprocess.tokenizer' must be an object");
-            }
-            if (tok.contains("only_mode")) {
-                if (!tok["only_mode"].is_boolean()) {
-                    throw std::runtime_error(
-                        "ai_config.json: 'subprocess.tokenizer.only_mode' must be a boolean");
-                }
-                snapshot.subprocess_tokenizer_only_mode = tok["only_mode"].get<bool>();
-                found_any = true;
-            }
-        }
-    }
-
-    return found_any;
+    const auto& subp = requireJsonObjectField(config, "subprocess", "ai_config.json");
+    const auto& tok = requireJsonObjectField(subp, "tokenizer", "subprocess");
+    snapshot.subprocess_tokenizer_only_mode =
+        getRequiredJsonValue<bool>(tok, "only_mode", "subprocess.tokenizer");
+    return true;
 }
 
 } // namespace detail
@@ -1343,52 +1335,37 @@ inline void deriveWarmupSteps(TrainingHyperparameters& params, int estimated_tot
 }
 
 inline std::optional<AiConfigSnapshot> loadAiConfigSnapshot(const std::string& configPath) {
-    try {
-        auto resolved_path = detail::resolveAiConfigPath(configPath);
-        if (!resolved_path) {
-            std::cerr << "[Config] ERROR: ai_config.json not found at: " << configPath << std::endl;
-            std::cerr << "[Config]        Also searched current directory and parent directories" << std::endl;
-            return std::nullopt;
-        }
+    auto resolved_path = detail::resolveAiConfigPath(configPath);
 
-        std::ifstream configFile(*resolved_path);
-        if (!configFile.is_open()) {
-            std::cerr << "[Config] ERROR: Could not open ai_config.json at: " << *resolved_path << std::endl;
-            return std::nullopt;
-        }
-
-        nlohmann::json config;
-        configFile >> config;
-
-        AiConfigSnapshot snapshot;
-        snapshot.config_path = *resolved_path;
-        snapshot.document = std::move(config);
-        snapshot.has_grim_paths = detail::populateGrimTextPathFieldsFromConfig(snapshot.document, snapshot);
-        snapshot.has_training = detail::populateTrainingHyperparametersFromConfig(snapshot.document, snapshot.hyperparameters);
-        snapshot.has_tokenizer = false;
-        if (snapshot.document.contains("tokenizer")) {
-            const auto& tok = snapshot.document["tokenizer"];
-            if (tok.is_object()) {
-                snapshot.populateTokenizerFields(tok);
-            }
-        }
-        snapshot.has_data_collection = detail::populateDataCollectionFieldsFromConfig(snapshot.document, snapshot);
-        snapshot.has_subprocess = detail::populateSubprocessFieldsFromConfig(snapshot.document, snapshot);
-        return snapshot;
-    } catch (const std::exception& e) {
-        std::cerr << "[Config] ERROR: Exception loading ai_config.json: " << e.what() << std::endl;
-        return std::nullopt;
+    std::ifstream configFile(resolved_path);
+    if (!configFile.is_open()) {
+        throw std::runtime_error(
+            "loadAiConfigSnapshot: could not open ai_config.json at: " + resolved_path.string());
     }
+
+    nlohmann::json config;
+    configFile >> config;
+
+    AiConfigSnapshot snapshot;
+    snapshot.config_path = resolved_path;
+    snapshot.document = std::move(config);
+    snapshot.has_grim_paths = detail::populateGrimTextPathFieldsFromConfig(snapshot.document, snapshot);
+    snapshot.has_training = detail::populateTrainingHyperparametersFromConfig(snapshot.document, snapshot.hyperparameters);
+    const auto& tok = requireJsonObjectField(snapshot.document, "tokenizer", "ai_config.json");
+    snapshot.populateTokenizerFields(tok);
+    snapshot.has_data_collection = detail::populateDataCollectionFieldsFromConfig(snapshot.document, snapshot);
+    snapshot.has_subprocess = detail::populateSubprocessFieldsFromConfig(snapshot.document, snapshot);
+    return snapshot;
 }
 
 inline bool loadTrainingHyperparameters(TrainingHyperparameters& params, const std::string& configPath = "ai_config.json") {
     auto snapshot = loadAiConfigSnapshot(configPath);
     if (!snapshot) {
-        return false;
+        throw std::runtime_error("loadTrainingHyperparameters: loadAiConfigSnapshot returned no snapshot");
     }
 
     if (!snapshot->has_training) {
-        return false;
+        throw std::runtime_error("loadTrainingHyperparameters: training config was not populated");
     }
 
     params = snapshot->hyperparameters;
@@ -1407,27 +1384,15 @@ inline bool loadTrainingHyperparameters(TrainingHyperparameters& params, const s
  * @return Absolute path to training_status.fb
  */
 inline std::string getTrainingStatusFilePath() {
-    // First, try to load from ai_config.json
     auto snapshot = loadAiConfigSnapshot();
-    if (snapshot && snapshot->has_grim_paths && !snapshot->grim_text_training_status.empty()) {
-        return snapshot->grim_text_training_status;
+    if (!snapshot) {
+        throw std::runtime_error("getTrainingStatusFilePath: failed to load ai_config.json");
     }
-    
-    // Fallback: Status file lives in the training directory
-    // This ensures train_gpu.exe and training_control_server.exe can both find it
-    std::filesystem::path grimRoot = std::filesystem::current_path();
-    
-    // Walk up to find GRIM root (has both 'control' and 'resources' directories)
-    for (int i = 0; i < 5 && grimRoot.has_parent_path(); ++i) {
-        if (std::filesystem::exists(grimRoot / "control") && 
-            std::filesystem::exists(grimRoot / "resources")) {
-            break;
-        }
-        grimRoot = grimRoot.parent_path();
+    if (!snapshot->has_grim_paths || snapshot->grim_text_training_status.empty()) {
+        throw std::runtime_error(
+            "getTrainingStatusFilePath: paths.grim_text.training_status missing from ai_config.json");
     }
-    
-    std::filesystem::path statusPath = grimRoot / "resources" / "models" / "GRIM-text" / "training" / "training_status.fb";
-    return statusPath.string();
+    return snapshot->grim_text_training_status;
 }
 
 /**
@@ -1441,26 +1406,15 @@ inline std::string getTrainingStatusFilePath() {
  * @return Absolute path to checkpoints directory
  */
 inline std::string getCheckpointDir() {
-    // First, try to load from ai_config.json
     auto snapshot = loadAiConfigSnapshot();
-    if (snapshot && snapshot->has_grim_paths && !snapshot->grim_text_checkpoints.empty()) {
-        return snapshot->grim_text_checkpoints;
+    if (!snapshot) {
+        throw std::runtime_error("getCheckpointDir: failed to load ai_config.json");
     }
-    
-    // Fallback: Checkpoint directory
-    std::filesystem::path grimRoot = std::filesystem::current_path();
-    
-    // Walk up to find GRIM root (has both 'control' and 'resources' directories)
-    for (int i = 0; i < 5 && grimRoot.has_parent_path(); ++i) {
-        if (std::filesystem::exists(grimRoot / "control") && 
-            std::filesystem::exists(grimRoot / "resources")) {
-            break;
-        }
-        grimRoot = grimRoot.parent_path();
+    if (!snapshot->has_grim_paths || snapshot->grim_text_checkpoints.empty()) {
+        throw std::runtime_error(
+            "getCheckpointDir: paths.grim_text.checkpoints missing from ai_config.json");
     }
-    
-    std::filesystem::path checkpointPath = grimRoot / "resources" / "models" / "GRIM-text" / "checkpoints";
-    return checkpointPath.string();
+    return snapshot->grim_text_checkpoints;
 }
 
 /**
@@ -1468,26 +1422,15 @@ inline std::string getCheckpointDir() {
  * Falls back to automatic discovery if not in config.
  */
 inline std::string getCollectorLogPath() {
-    // First, try to load from ai_config.json
     auto snapshot = loadAiConfigSnapshot();
-    if (snapshot && snapshot->has_grim_paths && !snapshot->grim_text_collector_log.empty()) {
-        return snapshot->grim_text_collector_log;
+    if (!snapshot) {
+        throw std::runtime_error("getCollectorLogPath: failed to load ai_config.json");
     }
-    
-    // Fallback: Collector log path
-    std::filesystem::path grimRoot = std::filesystem::current_path();
-    
-    // Walk up to find GRIM root (has both 'control' and 'resources' directories)
-    for (int i = 0; i < 5 && grimRoot.has_parent_path(); ++i) {
-        if (std::filesystem::exists(grimRoot / "control") && 
-            std::filesystem::exists(grimRoot / "resources")) {
-            break;
-        }
-        grimRoot = grimRoot.parent_path();
+    if (!snapshot->has_grim_paths || snapshot->grim_text_collector_log.empty()) {
+        throw std::runtime_error(
+            "getCollectorLogPath: paths.grim_text.collector_log missing from ai_config.json");
     }
-    
-    std::filesystem::path logPath = grimRoot / "resources" / "models" / "GRIM-text" / "training" / "logs" / "collector.log";
-    return logPath.string();
+    return snapshot->grim_text_collector_log;
 }
 
 /**
@@ -1495,26 +1438,15 @@ inline std::string getCollectorLogPath() {
  * Falls back to automatic discovery if not in config.
  */
 inline std::string getCollectedDir() {
-    // First, try to load from ai_config.json
     auto snapshot = loadAiConfigSnapshot();
-    if (snapshot && snapshot->has_grim_paths && !snapshot->grim_text_collected.empty()) {
-        return snapshot->grim_text_collected;
+    if (!snapshot) {
+        throw std::runtime_error("getCollectedDir: failed to load ai_config.json");
     }
-    
-    // Fallback: Collected data directory
-    std::filesystem::path grimRoot = std::filesystem::current_path();
-    
-    // Walk up to find GRIM root (has both 'control' and 'resources' directories)
-    for (int i = 0; i < 5 && grimRoot.has_parent_path(); ++i) {
-        if (std::filesystem::exists(grimRoot / "control") && 
-            std::filesystem::exists(grimRoot / "resources")) {
-            break;
-        }
-        grimRoot = grimRoot.parent_path();
+    if (!snapshot->has_grim_paths || snapshot->grim_text_collected.empty()) {
+        throw std::runtime_error(
+            "getCollectedDir: paths.grim_text.collected missing from ai_config.json");
     }
-    
-    std::filesystem::path collectedPath = grimRoot / "resources" / "models" / "GRIM-text" / "data" / "collected";
-    return collectedPath.string();
+    return snapshot->grim_text_collected;
 }
 
 /**
@@ -1522,26 +1454,15 @@ inline std::string getCollectedDir() {
  * Falls back to automatic discovery if not in config.
  */
 inline std::string getVerifiedDir() {
-    // First, try to load from ai_config.json
     auto snapshot = loadAiConfigSnapshot();
-    if (snapshot && snapshot->has_grim_paths && !snapshot->grim_text_verified.empty()) {
-        return snapshot->grim_text_verified;
+    if (!snapshot) {
+        throw std::runtime_error("getVerifiedDir: failed to load ai_config.json");
     }
-    
-    // Fallback: Verified data directory
-    std::filesystem::path grimRoot = std::filesystem::current_path();
-    
-    // Walk up to find GRIM root (has both 'control' and 'resources' directories)
-    for (int i = 0; i < 5 && grimRoot.has_parent_path(); ++i) {
-        if (std::filesystem::exists(grimRoot / "control") && 
-            std::filesystem::exists(grimRoot / "resources")) {
-            break;
-        }
-        grimRoot = grimRoot.parent_path();
+    if (!snapshot->has_grim_paths || snapshot->grim_text_verified.empty()) {
+        throw std::runtime_error(
+            "getVerifiedDir: paths.grim_text.verified missing from ai_config.json");
     }
-    
-    std::filesystem::path verifiedPath = grimRoot / "resources" / "models" / "GRIM-text" / "data" / "verified";
-    return verifiedPath.string();
+    return snapshot->grim_text_verified;
 }
 
 /**
@@ -1551,72 +1472,64 @@ inline std::string getVerifiedDir() {
  * This is the authoritative source for vocab size, not ai_config.json.
  * 
  * @param vocabPath Path to vocab.bin file (optional, auto-detects if not provided)
- * @return Vocab size from tokenizer, or 0 on error
+ * @return Vocab size from tokenizer
+ * @throws std::runtime_error on any missing config, unreadable file, or invalid vocab format
  */
 inline uint32_t getActualVocabSize(const std::string& vocabPath = "") {
-    try {
-        std::string path = vocabPath;
-        
-        // Auto-detect vocab path if not provided
-        if (path.empty()) {
-            auto snapshot = loadAiConfigSnapshot();
-            if (snapshot && snapshot->has_grim_paths && !snapshot->grim_text_vocab.empty()) {
-                path = snapshot->grim_text_vocab;
-            } else {
-                // Fallback
-                std::filesystem::path grimRoot = std::filesystem::current_path();
-                for (int i = 0; i < 5 && grimRoot.has_parent_path(); ++i) {
-                    if (std::filesystem::exists(grimRoot / "control") && 
-                        std::filesystem::exists(grimRoot / "resources")) {
-                        break;
-                    }
-                    grimRoot = grimRoot.parent_path();
-                }
-                path = (grimRoot / "resources" / "models" / "GRIM-text" / "training" / "data" / "vocab.bin").string();
-            }
+    std::string path = vocabPath;
+    
+    if (path.empty()) {
+        auto snapshot = loadAiConfigSnapshot();
+        if (!snapshot) {
+            throw std::runtime_error("getActualVocabSize: failed to load ai_config.json");
         }
-        
-        // Load tokenizer to get actual vocab size
-        // Note: This requires linking against the tokenizer library
-        // For a header-only solution, we could parse the binary format directly
-        std::ifstream file(path, std::ios::binary);
-        if (!file) {
-            std::cerr << "[Config] Failed to open vocab file: " << path << std::endl;
-            return 0;
+        if (!snapshot->has_grim_paths || snapshot->grim_text_vocab.empty()) {
+            throw std::runtime_error(
+                "getActualVocabSize: paths.grim_text.vocab missing from ai_config.json");
         }
-        
-        // Read GMKT header format (version 2)
-        char magic[4];
-        file.read(magic, 4);
-        if (magic[0] != 'K' || magic[1] != 'T' || magic[2] != 'M' || magic[3] != 'G') {
-            std::cerr << "[Config] Invalid vocab file magic" << std::endl;
-            return 0;
-        }
-        
-        uint16_t version;
-        file.read(reinterpret_cast<char*>(&version), 2);
-        
-        if (version >= 2) {
-            // Skip checksum (4 bytes)
-            file.seekg(4, std::ios::cur);
-            
-            // Skip config vocab_size (4 bytes) and max_length (4 bytes)
-            file.seekg(8, std::ios::cur);
-            
-            // Skip 3 bools (3 bytes)
-            file.seekg(3, std::ios::cur);
-        }
-        
-        // Read actual vocab size (number of tokens that follow)
-        uint32_t vocab_size;
-        file.read(reinterpret_cast<char*>(&vocab_size), 4);
-        
-        return vocab_size;
-        
-    } catch (const std::exception& e) {
-        std::cerr << "[Config] Error reading vocab size: " << e.what() << std::endl;
-        return 0;
+        path = snapshot->grim_text_vocab;
     }
+    
+    // Load tokenizer to get actual vocab size
+    // Note: This requires linking against the tokenizer library
+    // For a header-only solution, we could parse the binary format directly
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        throw std::runtime_error("getActualVocabSize: failed to open vocab file: " + path);
+    }
+    
+    // Read GMKT header format (version 2)
+    char magic[4];
+    file.read(magic, 4);
+    if (!file || magic[0] != 'K' || magic[1] != 'T' || magic[2] != 'M' || magic[3] != 'G') {
+        throw std::runtime_error("getActualVocabSize: invalid vocab file magic in: " + path);
+    }
+    
+    uint16_t version;
+    file.read(reinterpret_cast<char*>(&version), 2);
+    if (!file) {
+        throw std::runtime_error("getActualVocabSize: failed to read vocab version from: " + path);
+    }
+    
+    if (version >= 2) {
+        // Skip checksum (4 bytes)
+        file.seekg(4, std::ios::cur);
+        
+        // Skip config vocab_size (4 bytes) and max_length (4 bytes)
+        file.seekg(8, std::ios::cur);
+        
+        // Skip 3 bools (3 bytes)
+        file.seekg(3, std::ios::cur);
+    }
+    
+    // Read actual vocab size (number of tokens that follow)
+    uint32_t vocab_size;
+    file.read(reinterpret_cast<char*>(&vocab_size), 4);
+    if (!file) {
+        throw std::runtime_error("getActualVocabSize: failed to read vocab size from: " + path);
+    }
+    
+    return vocab_size;
 }
 
 } // namespace Config

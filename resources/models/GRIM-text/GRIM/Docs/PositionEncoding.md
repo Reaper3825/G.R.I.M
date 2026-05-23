@@ -1,16 +1,27 @@
 # Position Encoding (ALiBi / RoPE)
 
-Position info is injected **inside attention**, never in the residual stream. No position embeddings are added to token embeddings. Config field: `positional_encoding` (parsed in `loadConfiguration()`).
+Position info is injected **inside attention**, never in the residual stream. No position embeddings are added to token embeddings. Config field: `training.config.positional_encoding` (parsed in `HyperParameters::loadModelArchitecture()`).
+
+`training.config.positional_encoding` is authored config, not a compile-time fallback. It must provide:
+
+- `use_rope`
+- `use_alibi`
+- `rope_base_seq_len`
+- `alibi_min_locality_distance`
+- `alibi_slope_exponent`
+- `alibi_max_bias`
+- `rope_theta`
+- `rope_scaling`
 
 Construction reads use `HyperParameters::pbmConstructionHP()` / `PBMConstructionHP`; PBM kernels consume that grouped snapshot and runtime-only options, not ad-hoc PBM config defaults. RoPE launch wrappers take `BatchPayload` for per-call batch/sequence geometry and grouped attention HP for head geometry; callers must not unpack `batch_size`, `max_seq_len`, or `head_dim` into scalar PBM calls.
 
 Durable PBM device state is owned at model level by `LanguageModel::pbm_owner_` (`PBM::PBMStateOwner`, implemented in `Shared/PBM/PBMStateOwner.hpp/.cu`). The owner releases ALiBi slopes, RoPE inverse frequencies, host mirrors, and the upload event through RAII. `PBMSpec` is only a non-owning attention view into that owner. `StreamController` supplies the initialization stream but does not own PBM buffers; `GrimEmbeddingStack` owns no PBM state; `BatchPayload` supplies per-call sequence geometry but does not own PBM state; autograd intermediates own transient Q/K/V/tape tensors only.
 
 ## ALiBi
-- Slopes capped via `ALIBI_MAX_BIAS = -10.0f` in `HyperParameters_GPU.hpp`. Ensures `exp(-10) ≈ 4.5e-5` (computable) instead of `exp(-256) ≈ 0` (underflow → gradient explosion).
+- Slopes are capped via the authored `training.config.positional_encoding.alibi_max_bias` value. A negative value such as `-10.0` ensures `exp(-10) ≈ 4.5e-5` (computable) instead of `exp(-256) ≈ 0` (underflow → gradient explosion). A value of `0.0` disables the cap and is still explicitly authored.
 - FlashAttention expects **negative** slopes (library uses `+= slope * col_idx`).
 - Always match `max_seq_len` to actual context length — mismatched slopes cause weak attention at distance.
 
 ## RoPE NTK scaling
-When `max_seq_len > 2048`:
-$$\theta_{\text{eff}} = \theta \cdot \left(\frac{\text{max\_seq\_len}}{2048}\right)^{\frac{\text{rotary\_dim}}{\text{rotary\_dim} - 2}}$$
+When `max_seq_len > training.config.positional_encoding.rope_base_seq_len`:
+$$\theta_{\text{eff}} = \theta \cdot \left(\frac{\text{max\_seq\_len}}{\text{rope\_base\_seq\_len}}\right)^{\frac{\text{rotary\_dim}}{\text{rotary\_dim} - 2}}$$
