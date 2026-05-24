@@ -1,4 +1,5 @@
 #include "runtime_ai_config.hpp"
+#include "../control/training_paths.hpp"
 #include "../resources.hpp"
 #include "../logger.hpp"
 #include <fstream>
@@ -11,19 +12,17 @@ extern nlohmann::json aiConfig;
 namespace Settings {
 
 std::filesystem::path resolveAiConfigPath() {
-    fs::path grimRoot = fs::path(getGrimRootDir());
-    fs::path configPath = grimRoot / AI_CONFIG_FILE;
+    fs::path configPath = GRIM::Training::getAiConfigFilePath();
     if (fs::exists(configPath)) {
         return configPath;
     }
     throw std::runtime_error(
         "ai_config.json not found at " + configPath.string() +
-        " (GRIM root: " + grimRoot.string() + ")");
+        " (GRIM root: " + GRIM::Training::resolveGrimRoot().string() + ")");
 }
 
 std::filesystem::path resolveAiConfigLocalPath() {
-    fs::path grimRoot = fs::path(getGrimRootDir());
-    return grimRoot / AI_CONFIG_LOCAL_FILE;
+    return GRIM::Training::getAiConfigLocalFilePath();
 }
 
 void deepMerge(nlohmann::json& base, const nlohmann::json& overlay) {

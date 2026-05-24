@@ -85,10 +85,11 @@ All sliders feature **dynamic precision** based on their value range:
 - **Time Effect**: Adds `warmupSteps × timePerBatch` to total time
 
 ### Save Config Button
-- **Function**: Saves current configuration to `ai_config.json`
+- **Function**: Saves current configuration through the canonical GRIM runtime config accessor
 - **Color**: Cyan border (0xFF00AAFF)
 - **Persistence**: Configuration survives GRIM restarts
 - **Auto-save**: Also triggered when starting training
+- **Config Source**: Reads merged `ai_config.json` + `ai_config.local.json`; writes only the main config keys it owns
 - **Location**: Below configuration sliders in left panel scrollable area
 
 ---
@@ -237,7 +238,7 @@ All control buttons are stacked vertically at the bottom left of the panel using
   2. Validates training is not already in progress (checks server state)
   3. Updates configuration from sliders
   4. Validates training data exists (train.bin or .grmt file)
-  5. Loads paths from ai_config.json
+  5. Loads paths from the canonical GRIM runtime config
   6. Sends training start command via TrainingControlClient
   7. Resets progress bar and statistics
 - **Smart State Handling**: Detects and corrects UI/server state desync
@@ -502,8 +503,8 @@ Perplexity: 12.34
 **Example Log Output**:
 ```
 [19:17:12] Training panel initialized
-[19:17:12] Configuration loaded from ai_config.json
-[19:18:56] Configuration saved to ai_config.json
+[19:17:12] Configuration loaded from GRIM runtime config
+[19:18:56] Configuration saved to GRIM runtime config
 [19:19:02] Server connection established
 [19:20:15] Training data found, starting training...
 [19:20:15]   Using tokenized binary: train.bin
@@ -515,7 +516,10 @@ Perplexity: 12.34
 
 ### Configuration Files
 
-#### `ai_config.json` (Root directory)
+#### `ai_config.json` (canonical main config at GRIM root)
+
+Runtime reads merge `ai_config.local.json` on top for machine-local overrides; UI saves write only the main config keys they own.
+
 ```json
 {
   "training": {

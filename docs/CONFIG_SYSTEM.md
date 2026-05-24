@@ -4,16 +4,16 @@
 
 The GRIM project uses a three-tier configuration system:
 
-1. **Compile-time constants** - `HyperParameters_GPU.hpp`
+1. **Compile-time constants and typed runtime handoff** - `HyperParameters_GPU.hpp`
 2. **Runtime configuration** - `ai_config.json`
-3. **Configuration parser** - `ai_config_paths.hpp`
+3. **Raw configuration loader** - `ai_config_paths.hpp`
 
 ## File Organization
 
 ### 1. HyperParameters_GPU.hpp
 **Location:** `resources/models/GRIM-text/Shared/HyperParameters/`
 
-**Purpose:** Single source of truth for compile-time constants
+**Purpose:** Single source of truth for compile-time constants, typed runtime config, validation, and derivation
 
 **Contains:**
 - CUDA kernel configuration (block sizes, warp size, grid limits)
@@ -37,26 +37,22 @@ The GRIM project uses a three-tier configuration system:
 {
   "api_keys": {...},              // External service keys
   "backend": "grim_native",       // Which AI backend to use
-  "paths": {                      // File/directory paths
-    "grim_text": {...}            // GRIM-text specific paths
+  "paths": {                      // Broader GRIM runtime paths
+    "grim_text": {...}            // Transitional duplicate; GRIM-text startup reads training.config
   },
   "data_collection": {...},       // GRIM process config, not GRIM-text startup
   "training": {                   // Training hyperparameters
-    "subprocess": {
-      "tokenizer": {
-        "only_mode": false
-      }
-    },
-    "tokenizer": {...},           // GRIM-text tokenizer runtime config
     "config": {
+      "grim_text_vocab": "resources/models/GRIM-text/training/data/vocab.bin",
+      "grim_text_training_data": "resources/models/GRIM-text/training/data/training_data.grmt",
       "batch_size": 4,
       "learning_rate": 0.0001,
       "current_curriculum": "Pre-Trainingv1",
       "current_model_training": "",
       "clear_merged_cache_on_merge": false,
-      "loss": {...},              // Loss function config
-      "scratch_blocks": {...},    // Memory buffer config
-      "dynamic_lr": {...},        // Learning rate schedule
+      "loss_label_smoothing_enabled": true,
+      "scratch_blocks_enabled": true,
+      "subprocess_tokenizer_only_mode": false,
       // ... etc
     }
   },
@@ -66,26 +62,24 @@ The GRIM project uses a three-tier configuration system:
 ```
 
 **JSON → C++ Owner Mapping:**
-- `paths.grim_text` → `AiConfigSnapshot` `grim_text_*` fields
-- `training.config` → `TrainingHyperparameters`
-- `training.config.current_curriculum` → `AiConfigSnapshot::current_curriculum`
-- `training.config.current_model_training` → `AiConfigSnapshot::current_model_training`
-- `training.config` `tokenizer_*` leaves → `AiConfigSnapshot` `tokenizer_*` fields
-- `training.config.subprocess_tokenizer_only_mode` → `AiConfigSnapshot::subprocess_tokenizer_only_mode`
-- `training.config.clear_merged_cache_on_merge` → `AiConfigSnapshot::clear_merged_cache_on_merge`
+- `ai_config.json` → `AiConfigSnapshot::document`
+- `training.config.grim_text_*` → `StartupConfig::paths` via `HyperParameters_GPU.hpp`
+- `training.config` model/training/tokenizer/subprocess leaves → `TrainingHyperparameters`
+- `training.config.generation_*` leaves → `GenerationConfig` through `loadGenerationConfig()`
+- `training.config.clear_merged_cache_on_merge` → `TrainingHyperparameters::clear_merged_cache_on_merge`
 - `data_collection` → GRIM process consumers; do not add typed GRIM-text snapshot leaves for these fields
 
 ### 3. ai_config_paths.hpp
 **Location:** `d:\G.R.I.M\control\ai_config_paths.hpp`
 
-**Purpose:** C++ structs and parsers for `ai_config.json`
+**Purpose:** Raw C++ snapshot loader for `ai_config.json`
 
 **Contains:**
-- Struct definitions (`AiConfigSnapshot`, `TrainingHyperparameters`, etc.)
-- One raw validator (`validateAiConfigDocument`) and one raw loader (`loadAiConfigSnapshot`)
-- Raw JSON parsing/assignment helpers for the collapsed snapshot surface, with generic snapshot field assignment used for tokenizer/subprocess leaves
+- Struct definition (`AiConfigSnapshot`) with only `config_path` and `document`
+- One raw loader (`loadAiConfigSnapshot`)
+- No typed leaf mirrors, schema tables, or config subsection accessors
 
-**Access rule:** Consumers should load **one** `AiConfigSnapshot` and then read direct snapshot fields from that object. Do not add sidecar config wrappers or path-based leaf loaders that reparse `ai_config.json` for one subsection.
+**Access rule:** Consumers should load **one** `AiConfigSnapshot`; GRIM-text typed reads happen in `HyperParameters_GPU.hpp`, and immutable objective-specific views are produced by `HyperparameterGroupings.hpp`.
 
 **Rule:** `ai_config_paths.hpp` is the raw authored-config layer only. It must not own runtime policy defaults or formula-derived values.
 
@@ -103,7 +97,9 @@ Runtime:
   ai_config.json
     ↓ (parsed by)
   ai_config_paths.hpp
-    ↓ (loads into C++ structs)
+    ↓ (loads raw AiConfigSnapshot document)
+  HyperParameters_GPU.hpp
+    ↓ (reads authored leaves, validates, derives formulas)
   TrainingHyperparameters
     ↓ (overrides compile-time defaults)
   Training execution
@@ -162,43 +158,35 @@ float rms = std::sqrt(variance + EPSILON_RMSNORM);
 
 ### For Runtime Configuration:
 
-1. Add a flat snapshot leaf to `ai_config_paths.hpp`:
-   ```cpp
-  struct AiConfigSnapshot {
-     bool my_new_feature = false;
-       // ...
-   };
-   ```
-
-2. Add the raw assignment inside the single snapshot load operation:
-   ```cpp
-  assignTrainingField(snapshot.my_new_feature, trainConfig, "my_new_feature");
+1. Add the authored leaf to `ai_config.json` under `training.config`:
+  ```json
+  {
+    "training": {
+     "config": {
+      "my_new_feature": false
+     }
+    }
+  }
   ```
 
-3. Copy it into `TrainingHyperparameters` in `HyperParameters_GPU.hpp::loadTrainingHyperparameters()` if it is training-owned:
-  ```cpp
-  params.my_new_feature = snapshot.my_new_feature;
-   ```
-
-4. Add to `ai_config.json`:
-   ```json
-   {
-     "training": {
-       "config": {
-         "my_new_feature": false
-       }
-     }
-   }
-   ```
-
-5. Use typed config after the HyperParameters handoff:
+2. Add the typed owner field to `TrainingHyperparameters` in `HyperParameters_GPU.hpp`:
    ```cpp
-   auto snapshot = loadAiConfigSnapshot("ai_config.json");
+  bool my_new_feature = false;
+   ```
+
+3. Read the authored value in `loadTrainingHyperparameters()`:
+   ```cpp
+  assign(params.my_new_feature, "my_new_feature");
+  ```
+
+4. Use typed config after the HyperParameters handoff:
+   ```cpp
+  auto snapshot = GRIM::Config::loadAiConfigSnapshot();
   TrainingHyperparameters hp;
-  GRIM::HyperParameters::loadTrainingHyperparameters(*snapshot, hp);
+  GRIM::HyperParameters::loadTrainingHyperparameters(snapshot, hp);
   if (hp.my_new_feature) {
-       // ...
-   }
+     // ...
+  }
    ```
 
 ## Common Pitfalls
@@ -218,8 +206,8 @@ const int block_size = GRIM::HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
 // HyperParameters_GPU.hpp
 constexpr float DEFAULT_LOSS_FOCAL_GAMMA = 2.0f;
 
-// ai_config_paths.hpp
-float loss_focal_gamma = 1.5f;  // MISMATCH!
+// ai_config.json / HyperParameters typed load
+// Missing or mismatched authored value fails loud during load/validation.
 ```
 
 ### ✅ Correct: Matching defaults
@@ -227,8 +215,7 @@ float loss_focal_gamma = 1.5f;  // MISMATCH!
 // HyperParameters_GPU.hpp
 constexpr float DEFAULT_LOSS_FOCAL_GAMMA = 2.0f;
 
-// ai_config_paths.hpp
-float loss_focal_gamma = 2.0f;  // Match HyperParameters::DEFAULT_LOSS_FOCAL_GAMMA
+// Pure formulas stay in HyperParameters; runtime policy is authored once in ai_config.json.
 ```
 
 ### ❌ Wrong: Duplicate configuration sections
@@ -258,9 +245,9 @@ float loss_focal_gamma = 2.0f;  // Match HyperParameters::DEFAULT_LOSS_FOCAL_GAM
 
 ### "Value not loading from JSON"
 1. Check JSON syntax is valid (use JSON validator)
-2. Verify key name matches exactly in `assignTrainingField()` call
+2. Verify key name matches exactly in the `loadTrainingHyperparameters()` assignment
 3. Ensure struct field type matches JSON value type
-4. Check `loadAiConfigSnapshot()` returns non-null
+4. Check `loadAiConfigSnapshot()` loaded the canonical document
 
 ### "Compile error: undefined constant"
 1. Verify `#include "HyperParameters/HyperParameters_GPU.hpp"` present
@@ -269,15 +256,15 @@ float loss_focal_gamma = 2.0f;  // Match HyperParameters::DEFAULT_LOSS_FOCAL_GAM
 
 ### "Training uses wrong config value"
 1. Verify the authored JSON key is present and spelled correctly
-2. Check `validateAiConfigDocument()` requires the field at the correct path
-3. Look for typos in `assignTrainingField()` or the relevant raw snapshot assignment
+2. Check `loadTrainingHyperparameters()` requires the field at the correct path
+3. Look for typos in `HyperParameters_GPU.hpp` assignments or grouped view slicing
 
 ## Recent Changes (Dec 2024)
 
 ### Consolidation Updates
 - **Removed duplicates:** `prediction_comparison`, `attention_diagnostics` now only in `training.config`
 - **Removed defaults:** Authored runtime fields must be present in `ai_config.json`; pure formulas are derived in `HyperParameters_GPU.hpp`
-- **Fixed cache_limits:** Removed duplicate parsing block in `ai_config_paths.hpp`
+- **Collapsed raw config:** `ai_config_paths.hpp` now returns only `AiConfigSnapshot::{config_path, document}`; typed parsing moved to `HyperParameters_GPU.hpp`
 - **Organized constants:** All hyperparameters now follow Rule 20 (single source of truth)
 
 ### Derived Constants
@@ -300,11 +287,11 @@ Made 13 constants explicitly derived from base values in `HyperParameters_GPU.hp
 ### Rule 20: No File Owns Hyperparameters
 Every configuration value must have ONE authoritative source:
 - Compile-time → `HyperParameters_GPU.hpp`
-- Runtime → `ai_config.json` + `ai_config_paths.hpp`
+- Runtime → `ai_config.json` + `HyperParameters_GPU.hpp` typed load from the raw `AiConfigSnapshot` document
 - Never hardcode values in .cu/.cpp files
 
-### Backwards Compatibility: Removed
-When removing configuration options, DELETE all compatibility shims, fallbacks, and legacy code paths. Let it fail loud to expose misconnects. See copilot-instructions.md pitfall #20.
+### Legacy Shims: Removed
+When removing configuration options, DELETE all compatibility shims, fallbacks, and old code paths. Let it fail loud to expose misconnects. See copilot-instructions.md pitfall #20.
 
 ### Derived Constants: Explicit
 When one constant depends on another, make the relationship explicit:

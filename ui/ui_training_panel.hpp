@@ -388,10 +388,9 @@ private:
     float configContentHeight = 0.0f;
 
     // ═════════════════════════════════════════════════════
-    //  Hyperparameter Registry (filterable param browser)
+    //  Runtime training.config registry (filterable param browser)
     // ═════════════════════════════════════════════════════
     GRIM::Config::HyperparameterRegistry hyperparamRegistry_;
-    GRIM::Config::TrainingHyperparameters hyperparamSnapshot_;
     bool hyperparamsLoaded_ = false;
 
     std::shared_ptr<UIDropdown> paramCategoryFilter_;
@@ -415,5 +414,5 @@ private:
     void processParamBrowserClicks(const InputState& input);
     void commitParamEdit();
     void cancelParamEdit();
-    bool persistHyperparamToJSON(const GRIM::Config::HyperparamEntry& entry);
+    bool persistHyperparamToJSON(const GRIM::Config::HyperparamEntry& entry, const nlohmann::json& value);
 };

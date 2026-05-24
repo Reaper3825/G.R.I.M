@@ -18,7 +18,6 @@
 // Windows socket includes MUST come first and in correct order
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
@@ -39,7 +38,8 @@
 #include <sstream>
 #include <nlohmann/json.hpp>
 #include "training_paths.hpp"
-#include "../resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp"
+#include "../resources.hpp"
+#include "../settings/runtime_ai_config.hpp"
 
 #ifdef _WIN32
 #include "core/grim_platform.h"
@@ -314,22 +314,29 @@ public:
         // Set working directory to GRIM root so train_gpu.exe can find ai_config.json
         fs::path workingDir = fs::absolute(grimRoot);
         
-        // Use paths from config (loaded from ai_config.json and resolved to absolute paths)
-        // The snapshot fields should already be absolute after assignGrimTextPathFields() resolves them.
-        // But if they're still relative (backward compatibility), resolve them from GRIM root
+        // Use paths from config. Server startup resolves training.config grim_text_* leaves
+        // to absolute paths before storing them in process state.
         fs::path dataPath = config.dataPath;
         fs::path vocabPath = config.vocabPath;
         fs::path outputPath = config.outputPath;
         
-        // If paths are relative, resolve them from GRIM root (shouldn't happen with new code, but handle for safety)
         if (dataPath.is_relative()) {
-            dataPath = grimRoot / dataPath;
+            debugLog << "ERROR: dataPath must be absolute after config load: " << dataPath << std::endl;
+            debugLog.close();
+            std::cerr << "[Controller] ERROR: dataPath must be absolute after config load: " << dataPath << std::endl;
+            return false;
         }
         if (vocabPath.is_relative()) {
-            vocabPath = grimRoot / vocabPath;
+            debugLog << "ERROR: vocabPath must be absolute after config load: " << vocabPath << std::endl;
+            debugLog.close();
+            std::cerr << "[Controller] ERROR: vocabPath must be absolute after config load: " << vocabPath << std::endl;
+            return false;
         }
         if (outputPath.is_relative()) {
-            outputPath = grimRoot / outputPath;
+            debugLog << "ERROR: outputPath must be absolute after config load: " << outputPath << std::endl;
+            debugLog.close();
+            std::cerr << "[Controller] ERROR: outputPath must be absolute after config load: " << outputPath << std::endl;
+            return false;
         }
         
         debugLog << "GRIM root: " << grimRoot << std::endl;
@@ -1086,6 +1093,8 @@ void setupAPI(httplib::Server& server) {
 //======================================================//
 
 int main(int argc, char** argv) {
+    Settings::loadRuntimeAiConfig();
+
     // Initialize Windows Sockets
 #ifdef _WIN32
     WSADATA wsaData;
@@ -1142,45 +1151,39 @@ int main(int argc, char** argv) {
     cleanStats.lastError = "";
     g_state.updateStats(cleanStats);
     std::cout << "[Server] State initialized to Idle" << std::endl;
-    
-    // Load paths from ai_config.json (the centralized source of truth)
-    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-    if (snapshot) {
-        // Update config with loaded paths
+
+    const auto resolveFromGrimRoot = [](const std::string& rawPath) {
+        fs::path path(rawPath);
+        if (path.is_absolute()) {
+            return path;
+        }
+        return fs::path(getGrimRootDir()) / path;
+    };
+
+    // Load paths from training.config grim_text_* leaves.
+    {
+        const auto& trainConfig = aiConfig.at("training").at("config");
         InternalTrainingConfig loadedConfig = g_state.getConfig();
-        
-        if (!snapshot->grim_text_training_data.empty()) {
-            loadedConfig.dataPath = snapshot->grim_text_training_data;
-            std::cout << "[Server] ✓ Loaded training_data path from ai_config.json: " << snapshot->grim_text_training_data << std::endl;
-        }
-        
-        if (!snapshot->grim_text_vocab.empty()) {
-            loadedConfig.vocabPath = snapshot->grim_text_vocab;
-            std::cout << "[Server] ✓ Loaded vocab path from ai_config.json: " << snapshot->grim_text_vocab << std::endl;
-        }
-        
-        if (!snapshot->grim_text_model.empty()) {
-            loadedConfig.outputPath = snapshot->grim_text_model;
-            std::cout << "[Server] ✓ Loaded model path from ai_config.json: " << snapshot->grim_text_model << std::endl;
-        }
-        
+        loadedConfig.dataPath = resolveFromGrimRoot(trainConfig.at("grim_text_training_data").get<std::string>()).string();
+        loadedConfig.vocabPath = resolveFromGrimRoot(trainConfig.at("grim_text_vocab").get<std::string>()).string();
+        loadedConfig.outputPath = resolveFromGrimRoot(trainConfig.at("grim_text_model").get<std::string>()).string();
         g_state.updateConfig(loadedConfig);
-    } else {
-        std::cout << "[Server] WARNING: Could not load paths from ai_config.json, using defaults" << std::endl;
+
+        std::cout << "[Server] ✓ Loaded training_data path from ai_config.json: " << loadedConfig.dataPath << std::endl;
+        std::cout << "[Server] ✓ Loaded vocab path from ai_config.json: " << loadedConfig.vocabPath << std::endl;
+        std::cout << "[Server] ✓ Loaded model path from ai_config.json: " << loadedConfig.outputPath << std::endl;
     }
-    
-    // Also load training hyperparameters from the single config snapshot
-    if (snapshot) {
-        GRIM::Config::TrainingHyperparameters hyperparams;
-        GRIM::HyperParameters::loadTrainingHyperparameters(*snapshot, hyperparams);
+
+    {
+        const auto& hyperparams = aiConfig.at("training").at("config");
         InternalTrainingConfig config = g_state.getConfig();
-        config.epochs = hyperparams.epochs;
-        config.batchSize = hyperparams.batch_size;
-        config.learningRate = hyperparams.learning_rate;
-        config.maxSeqLen = hyperparams.max_seq_len;
-        config.warmupSteps = hyperparams.warmup_steps;  // 0 until Phase2 derives from warmup_fraction
-        config.useGPU = hyperparams.use_gpu;
-        config.useFlashAttention = hyperparams.use_flash_attention;
+        config.epochs = hyperparams.at("epochs").get<int>();
+        config.batchSize = hyperparams.at("batch_size").get<int>();
+        config.learningRate = hyperparams.at("learning_rate").get<float>();
+        config.maxSeqLen = hyperparams.at("max_seq_len").get<int>();
+        config.warmupSteps = 0;
+        config.useGPU = hyperparams.at("use_gpu").get<bool>();
+        config.useFlashAttention = hyperparams.at("use_flash_attention").get<bool>();
         g_state.updateConfig(config);
         std::cout << "[Server] ✓ Loaded training hyperparameters from ai_config.json" << std::endl;
     }

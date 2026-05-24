@@ -7,7 +7,6 @@
 //======================================================//
 
 #ifdef _WIN32
-#define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 #endif
 
@@ -30,7 +29,8 @@
 #include "collection_state.hpp"  // Persistent state tracking
 #include "data_structurer.hpp"   // LLM-powered data structuring (Q/A generation)
 #include "control/training_control_generated.h"
-#include "resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp"  // For loading paths from ai_config.json
+#include "resources.hpp"
+#include "settings/runtime_ai_config.hpp"
 #include "checkpoint_data_generated.h"  // FlatBuffers checkpoint schema
 #include <flatbuffers/flatbuffers.h>
 #include <system_error>
@@ -43,6 +43,14 @@ using namespace GRIM::Training;
 namespace fs = std::filesystem;
 
 namespace {
+    fs::path resolvePathFromGrimRoot(const std::string& rawPath) {
+        fs::path path(rawPath);
+        if (path.is_absolute()) {
+            return path;
+        }
+        return fs::path(getGrimRootDir()) / path;
+    }
+
     std::string g_checkpoint_dir;
     std::string g_verified_dir; 
     std::string g_output_dir = "data";
@@ -397,17 +405,11 @@ namespace {
         // Load limits from ai_config.json
         size_t maxPdfsPerDataset = 2000;  // Default
         size_t maxPdfsTotal = 10000;      // Default
-        try {
-            std::ifstream configFile("ai_config.json");
-            if (configFile.is_open()) {
-                nlohmann::json config = nlohmann::json::parse(configFile);
-                if (config.contains("data_collection")) {
-                    auto& dc = config["data_collection"];
-                    maxPdfsPerDataset = dc.value("max_huggingface_pdfs_per_dataset", 2000);
-                    maxPdfsTotal = dc.value("max_huggingface_pdfs_total", 10000);
-                }
-            }
-        } catch (...) {}
+        if (aiConfig.contains("data_collection") && aiConfig["data_collection"].is_object()) {
+            const auto& dc = aiConfig["data_collection"];
+            maxPdfsPerDataset = dc.value("max_huggingface_pdfs_per_dataset", 2000);
+            maxPdfsTotal = dc.value("max_huggingface_pdfs_total", 10000);
+        }
         std::cout << "  [HF PDF] Limits: " << maxPdfsPerDataset << " per dataset, " << maxPdfsTotal << " total\n";
 
         // Use moderate parallelism - 4 threads balances speed vs stability
@@ -729,11 +731,8 @@ int runCollect(const std::string& config_path, std::function<void(float)> progre
     }
     
     std::string resolved_raw_dir = g_raw_dir.empty()
-        ? GRIM::Config::getRequiredGrimTextPath("collected")
+        ? resolvePathFromGrimRoot(aiConfig.at("paths").at("grim_text").at("collected").get<std::string>()).string()
         : g_raw_dir;
-    if (resolved_raw_dir.empty()) {
-        resolved_raw_dir = "data/raw";
-    }
     fs::path raw_dir_path(resolved_raw_dir);
     std::error_code mkdirErr;
     fs::create_directories(raw_dir_path, mkdirErr);
@@ -781,18 +780,12 @@ int runVerify(const std::string& raw_dir, const std::string& verified_dir) {
 
     std::string resolved_raw_dir = raw_dir.empty() ? g_raw_dir : raw_dir;
     if (resolved_raw_dir.empty()) {
-        resolved_raw_dir = GRIM::Config::getRequiredGrimTextPath("collected");
-    }
-    if (resolved_raw_dir.empty()) {
-        resolved_raw_dir = "data/raw";
+        resolved_raw_dir = resolvePathFromGrimRoot(aiConfig.at("paths").at("grim_text").at("collected").get<std::string>()).string();
     }
 
     std::string resolved_verified_dir = verified_dir.empty() ? g_verified_dir : verified_dir;
     if (resolved_verified_dir.empty()) {
-        resolved_verified_dir = GRIM::Config::getRequiredGrimTextPath("verified");
-    }
-    if (resolved_verified_dir.empty()) {
-        resolved_verified_dir = "data/verified";
+        resolved_verified_dir = resolvePathFromGrimRoot(aiConfig.at("paths").at("grim_text").at("verified").get<std::string>()).string();
     }
 
     std::cout << "[Verify] Resolved raw_dir: " << resolved_raw_dir << "\n";
@@ -806,8 +799,7 @@ int runVerify(const std::string& raw_dir, const std::string& verified_dir) {
     fs::create_directories(resolved_verified_dir);
     
     // Initialize state manager for tracking verified content
-    std::string checkpoint_dir = GRIM::Config::getRequiredGrimTextPath("checkpoints");
-    if (checkpoint_dir.empty()) checkpoint_dir = "data/checkpoints";
+    std::string checkpoint_dir = resolvePathFromGrimRoot(aiConfig.at("paths").at("grim_text").at("checkpoints").get<std::string>()).string();
     std::string stateDir = checkpoint_dir + "/collection_state";
     if (!g_stateManager) {
         g_stateManager = std::make_unique<GRIM::DataCollection::CollectionStateManager>(stateDir);
@@ -876,7 +868,7 @@ int runVerify_Cleanup(const std::string& raw_dir) {
     // Separated cleanup function to avoid crash during verification
     std::string resolved_raw_dir = raw_dir.empty() ? g_raw_dir : raw_dir;
     if (resolved_raw_dir.empty()) {
-        resolved_raw_dir = GRIM::Config::getRequiredGrimTextPath("collected");
+        resolved_raw_dir = resolvePathFromGrimRoot(aiConfig.at("paths").at("grim_text").at("collected").get<std::string>()).string();
     }
     if (resolved_raw_dir.empty() || !fs::exists(resolved_raw_dir)) {
         return 0;
@@ -937,26 +929,14 @@ int runMerge(const std::string& checkpoint_dir, const std::string& verified_dir,
     std::string resolved_output_dir = output_dir.empty() ? g_output_dir : output_dir;
 
     if (resolved_checkpoint_dir.empty()) {
-        resolved_checkpoint_dir = GRIM::Config::getRequiredGrimTextPath("checkpoints");
-        if (resolved_checkpoint_dir.empty()) {
-            resolved_checkpoint_dir = "data/checkpoints";
-        }
+        resolved_checkpoint_dir = resolvePathFromGrimRoot(aiConfig.at("paths").at("grim_text").at("checkpoints").get<std::string>()).string();
     }
     if (resolved_verified_dir.empty()) {
-        resolved_verified_dir = GRIM::Config::getRequiredGrimTextPath("verified");
-        if (resolved_verified_dir.empty()) {
-            resolved_verified_dir = "data/verified";
-        }
+        resolved_verified_dir = resolvePathFromGrimRoot(aiConfig.at("paths").at("grim_text").at("verified").get<std::string>()).string();
     }
     if (resolved_output_dir.empty()) {
-        // Get the training data directory from ai_config.json (same location DataLoader expects)
-        auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-        if (snapshot && !snapshot->grim_text_training_data.empty()) {
-            resolved_output_dir = fs::path(snapshot->grim_text_training_data).parent_path().string();
-            std::cout << "  Using training data directory from config: " << resolved_output_dir << "\n";
-        } else {
-            resolved_output_dir = "data";
-        }
+        resolved_output_dir = resolvePathFromGrimRoot(aiConfig.at("paths").at("grim_text").at("training_data").get<std::string>()).parent_path().string();
+        std::cout << "  Using training data directory from config: " << resolved_output_dir << "\n";
     }
     
     // Initialize state manager for tracking processed content
@@ -1292,12 +1272,7 @@ int runMerge(const std::string& checkpoint_dir, const std::string& verified_dir,
     currentPhase = "Preprocessing";
     std::cout << "[4/7] Preprocessing...\n";
     
-    // Load max_seq_len from the single config snapshot.
-    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-    if (!snapshot) {
-        throw std::runtime_error("runMerge: loadAiConfigSnapshot returned no snapshot");
-    }
-    const int max_seq_len = snapshot->max_seq_len;
+    const int max_seq_len = aiConfig.at("training").at("config").at("max_seq_len").get<int>();
     std::cout << "  Using max_seq_len=" << max_seq_len << " from ai_config.json\n";
     
     // Calculate max chars based on max_seq_len (approx 4 chars per token)
@@ -1605,6 +1580,10 @@ int runMerge(const std::string& checkpoint_dir, const std::string& verified_dir,
 int StartDataCollection(int argc, char** argv, std::function<void(float)> progressCallback) {
     std::cout << "[StartDataCollection] Entry point called with argc=" << argc << "\n";
     std::cout.flush();
+
+    if (aiConfig.empty()) {
+        Settings::loadRuntimeAiConfig();
+    }
     
     if (argc < 2) {
         printUsage();
@@ -1632,85 +1611,46 @@ int StartDataCollection(int argc, char** argv, std::function<void(float)> progre
 
     // Load paths from ai_config.json (centralized source of truth)
     std::cout << "[DataPipeline] Loading paths from ai_config.json..." << std::endl;
-    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-    if (snapshot) {
-        // Use source_config path from config (CRITICAL FIX)
-        if (!snapshot->grim_text_source_config.empty()) {
-            config_path = snapshot->grim_text_source_config;
-            std::cout << "[DataPipeline] ✓ Using source config from ai_config.json: " << config_path << std::endl;
-        } else {
-            std::cerr << "[DataPipeline] WARNING: source_config not set in ai_config.json" << std::endl;
-            config_path = "DataCollection/source_data.json";  // Fallback
-        }
-        
-        // Use checkpoints path from config if available
-        if (!snapshot->grim_text_checkpoints.empty()) {
-            checkpoint_dir = snapshot->grim_text_checkpoints;
-            std::cout << "[DataPipeline] ✓ Using checkpoints path from ai_config.json: " << checkpoint_dir << std::endl;
-        }
-        
-        // Use collected directory from config
-        if (!snapshot->grim_text_collected.empty()) {
-            raw_dir = snapshot->grim_text_collected;
-            std::cout << "[DataPipeline] ✓ Using collected dir from ai_config.json: " << raw_dir << std::endl;
-        }
-        
-        // Use verified directory from config
-        if (!snapshot->grim_text_verified.empty()) {
-            verified_dir = snapshot->grim_text_verified;
-            std::cout << "[DataPipeline] ✓ Using verified dir from ai_config.json: " << verified_dir << std::endl;
-        }
-        
-        // Use training_data path's parent directory as output_dir
-        if (!snapshot->grim_text_training_data.empty()) {
-            fs::path trainingDataPath(snapshot->grim_text_training_data);
-            output_dir = trainingDataPath.parent_path().string();
-            std::cout << "[DataPipeline] ✓ Using output directory from ai_config.json: " << output_dir << std::endl;
-        }
-    } else {
-        std::cout << "[DataPipeline] WARNING: Could not load paths from ai_config.json, using defaults" << std::endl;
-    }
+    const auto& grimTextPaths = aiConfig.at("paths").at("grim_text");
+    config_path = resolvePathFromGrimRoot(grimTextPaths.at("source_config").get<std::string>()).string();
+    checkpoint_dir = resolvePathFromGrimRoot(grimTextPaths.at("checkpoints").get<std::string>()).string();
+    raw_dir = resolvePathFromGrimRoot(grimTextPaths.at("collected").get<std::string>()).string();
+    verified_dir = resolvePathFromGrimRoot(grimTextPaths.at("verified").get<std::string>()).string();
+    output_dir = resolvePathFromGrimRoot(grimTextPaths.at("training_data").get<std::string>()).parent_path().string();
+
+    std::cout << "[DataPipeline] ✓ Using source config from ai_config.json: " << config_path << std::endl;
+    std::cout << "[DataPipeline] ✓ Using checkpoints path from ai_config.json: " << checkpoint_dir << std::endl;
+    std::cout << "[DataPipeline] ✓ Using collected dir from ai_config.json: " << raw_dir << std::endl;
+    std::cout << "[DataPipeline] ✓ Using verified dir from ai_config.json: " << verified_dir << std::endl;
+    std::cout << "[DataPipeline] ✓ Using output directory from ai_config.json: " << output_dir << std::endl;
 
     // Load Q/A JSONL paths from ai_config.json data_collection section
-    try {
-        std::ifstream configFile("ai_config.json");
-        if (configFile.is_open()) {
-            nlohmann::json config = nlohmann::json::parse(configFile);
-            if (config.contains("data_collection") && config["data_collection"].contains("qa_jsonl_paths")) {
-                auto& qa_paths = config["data_collection"]["qa_jsonl_paths"];
-                if (qa_paths.is_array()) {
-                    for (const auto& p : qa_paths) {
-                        if (p.is_string()) {
-                            g_qa_jsonl_paths.push_back(p.get<std::string>());
-                        }
-                    }
-                    if (!g_qa_jsonl_paths.empty()) {
-                        std::cout << "[DataPipeline] ✓ Loaded " << g_qa_jsonl_paths.size()
-                                  << " Q/A JSONL path(s) from ai_config.json\n";
-                    }
+    if (aiConfig.contains("data_collection") && aiConfig["data_collection"].contains("qa_jsonl_paths")) {
+        auto& qa_paths = aiConfig["data_collection"]["qa_jsonl_paths"];
+        if (qa_paths.is_array()) {
+            for (const auto& p : qa_paths) {
+                if (p.is_string()) {
+                    g_qa_jsonl_paths.push_back(resolvePathFromGrimRoot(p.get<std::string>()).string());
                 }
             }
+            if (!g_qa_jsonl_paths.empty()) {
+                std::cout << "[DataPipeline] ✓ Loaded " << g_qa_jsonl_paths.size()
+                          << " Q/A JSONL path(s) from ai_config.json\n";
+            }
         }
-    } catch (...) {}
+    }
 
     // Load data_structuring config from ai_config.json
-    try {
-        std::ifstream configFile2("ai_config.json");
-        if (configFile2.is_open()) {
-            nlohmann::json config = nlohmann::json::parse(configFile2);
-            if (config.contains("data_collection") && config["data_collection"].contains("data_structuring")) {
-                g_structuring_config = GRIM::DataCollection::DataStructuringConfig::fromJson(
-                    config["data_collection"]["data_structuring"]);
-                // Load ollama_url from top-level config if not in structuring block
-                if (g_structuring_config.ollama_url.empty() && config.contains("ollama_url")) {
-                    g_structuring_config.ollama_url = config["ollama_url"].get<std::string>();
-                }
-                std::cout << "[DataPipeline] \xE2\x9C\x93 Data structuring config loaded (mode: "
-                          << g_structuring_config.mode << ", enabled: "
-                          << (g_structuring_config.enabled ? "yes" : "no") << ")\n";
-            }
+    if (aiConfig.contains("data_collection") && aiConfig["data_collection"].contains("data_structuring")) {
+        g_structuring_config = GRIM::DataCollection::DataStructuringConfig::fromJson(
+            aiConfig["data_collection"]["data_structuring"]);
+        if (g_structuring_config.ollama_url.empty() && aiConfig.contains("ollama_url")) {
+            g_structuring_config.ollama_url = aiConfig["ollama_url"].get<std::string>();
         }
-    } catch (...) {}
+        std::cout << "[DataPipeline] \xE2\x9C\x93 Data structuring config loaded (mode: "
+                  << g_structuring_config.mode << ", enabled: "
+                  << (g_structuring_config.enabled ? "yes" : "no") << ")\n";
+    }
 
     // Command-line arguments override ai_config.json
     for (int i = 2; i < argc; i++) {

@@ -16,11 +16,11 @@
 #include <functional>
 #include <iostream>
 #include <limits>
-#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -1038,6 +1038,34 @@ struct TrainingHyperparameters {
     // Scratch block reasoning configuration - NO DEFAULTS
     bool tokenizer_enable_scratch_block_reasoning;
     bool tokenizer_detect_numbers;
+    int tokenizer_vocab_size = 0;
+    int tokenizer_max_vocab_size = 0;
+    int tokenizer_max_length = 0;
+    float tokenizer_character_coverage = 0.0f;
+    int tokenizer_min_cleaned_text_length = 0;
+    int tokenizer_min_subword_freq = 0;
+    bool tokenizer_prune_during_mining = false;
+    bool tokenizer_enable_parallel_subword_mining = false;
+    int tokenizer_subword_mining_workers = 0;
+    size_t tokenizer_subword_mining_max_bytes = 0;
+    std::string tokenizer_model_type;
+    std::vector<std::string> tokenizer_special_tokens;
+    bool tokenizer_add_bos = false;
+    bool tokenizer_add_eos = false;
+    std::string tokenizer_unk_token;
+    std::string tokenizer_pad_token;
+    std::string tokenizer_bos_token;
+    std::string tokenizer_eos_token;
+    bool tokenizer_enable_nfkc_normalization = false;
+    bool tokenizer_enable_lowercasing = false;
+    bool tokenizer_enable_parallel_tokenization = false;
+    int tokenizer_parallel_threshold = 0;
+    bool tokenizer_enable_byte_fallback = false;
+    uint32_t tokenizer_expected_checksum = 0;
+    bool tokenizer_save_text_vocab = false;
+    float tokenizer_vocab_score_multiplier = 0.0f;
+    bool clear_merged_cache_on_merge = false;
+    bool subprocess_tokenizer_only_mode = false;
 };
 
 } // namespace Config
@@ -1056,8 +1084,8 @@ inline void deriveComputedTrainingHyperparameters(GRIM::Config::TrainingHyperpar
 // only be entered through this header).
 #define GRIM_HP_GPU_DEFINED_TRAINING_STRUCTS 1
 
-// Include the config header (JSON loaders + path utils + AiConfigSnapshot +
-// AiConfigSnapshot GRIM-text startup leaves). ai_config_paths.hpp does NOT include
+// Include the config header (raw JSON loader + AiConfigSnapshot document).
+// ai_config_paths.hpp does NOT include
 // this file back; it asserts via #error that the sentinel above is set, so
 // it can only be entered through this header.
 #include "../../../../../control/ai_config_paths.hpp"
@@ -1570,6 +1598,122 @@ inline void applyTrainingHyperparameterPolicy(
 namespace GRIM {
 namespace HyperParameters {
 
+inline const nlohmann::json& requireJsonField(const nlohmann::json& node,
+                                             const char* key,
+                                             const std::string& parentPath) {
+    if (!node.is_object()) {
+        throw std::runtime_error(
+            std::string("ai_config.json: expected object at '") + parentPath + "'");
+    }
+
+    auto it = node.find(key);
+    if (it == node.end() || it->is_null()) {
+        throw std::runtime_error(
+            std::string("ai_config.json: missing required field '") + parentPath + "." + key + "'");
+    }
+    return *it;
+}
+
+inline const nlohmann::json& requireJsonObjectField(const nlohmann::json& node,
+                                                    const char* key,
+                                                    const std::string& parentPath) {
+    const auto& field = requireJsonField(node, key, parentPath);
+    if (!field.is_object()) {
+        throw std::runtime_error(
+            std::string("ai_config.json: field '") + parentPath + "." + key + "' must be an object");
+    }
+    return field;
+}
+
+inline const nlohmann::json& requireJsonArrayField(const nlohmann::json& node,
+                                                   const char* key,
+                                                   const std::string& parentPath) {
+    const auto& field = requireJsonField(node, key, parentPath);
+    if (!field.is_array()) {
+        throw std::runtime_error(
+            std::string("ai_config.json: field '") + parentPath + "." + key + "' must be an array");
+    }
+    return field;
+}
+
+template <typename FieldType>
+inline std::decay_t<FieldType> getRequiredJsonValue(const nlohmann::json& node,
+                                                    const char* key,
+                                                    const std::string& parentPath) {
+    const auto& field = requireJsonField(node, key, parentPath);
+    try {
+        return field.get<std::decay_t<FieldType>>();
+    } catch (const std::exception& e) {
+        throw std::runtime_error(
+            std::string("ai_config.json: invalid value for field '") + parentPath + "." + key + "': " +
+            e.what());
+    }
+}
+
+inline std::string childJsonPath(const std::string& parentPath, const char* childPath) {
+    if (childPath == nullptr || childPath[0] == '\0') {
+        return parentPath;
+    }
+    return parentPath + "." + childPath;
+}
+
+inline const nlohmann::json& requireTrainingConfig(const GRIM::Config::AiConfigSnapshot& snapshot) {
+    return requireJsonObjectField(
+        requireJsonObjectField(snapshot.document, "training", "ai_config.json"),
+        "config",
+        "training");
+}
+
+template <typename FieldType>
+inline std::decay_t<FieldType> trainingConfigValue(const nlohmann::json& trainConfig,
+                                                   const char* key) {
+    return getRequiredJsonValue<FieldType>(trainConfig, key, "training.config");
+}
+
+inline std::map<std::string, std::string> getRequiredStringMap(const nlohmann::json& node,
+                                                               const char* key,
+                                                               const std::string& parentPath) {
+    std::map<std::string, std::string> values;
+    const auto& jsonMap = requireJsonObjectField(node, key, parentPath);
+    for (const auto& [entryKey, entryValue] : jsonMap.items()) {
+        if (!entryValue.is_string()) {
+            throw std::runtime_error(
+                std::string("ai_config.json: ") + childJsonPath(childJsonPath(parentPath, key), entryKey.c_str()) +
+                " must be a string");
+        }
+        values.emplace(entryKey, entryValue.get<std::string>());
+    }
+    return values;
+}
+
+inline std::vector<std::string> getRequiredStringArray(const nlohmann::json& node,
+                                                       const char* key,
+                                                       const std::string& parentPath) {
+    std::vector<std::string> values;
+    const auto& jsonArray = requireJsonArrayField(node, key, parentPath);
+    values.reserve(jsonArray.size());
+    for (const auto& entryValue : jsonArray) {
+        if (!entryValue.is_string()) {
+            throw std::runtime_error(
+                std::string("ai_config.json: ") + childJsonPath(parentPath, key) +
+                " entries must all be strings");
+        }
+        values.push_back(entryValue.get<std::string>());
+    }
+    return values;
+}
+
+inline std::string resolveTrainingConfigPath(const GRIM::Config::AiConfigSnapshot& snapshot,
+                                             const char* key) {
+    const auto& trainConfig = requireTrainingConfig(snapshot);
+    std::string pathStr = trainingConfigValue<std::string>(trainConfig, key);
+    std::filesystem::path path(pathStr);
+    if (!path.is_relative()) {
+        return pathStr;
+    }
+    return (snapshot.config_path.parent_path() / path).string();
+}
+
 inline HardcodedPattern parseHardcodedHiddenPattern(const std::string& pattern) {
     if (pattern == "disabled") return HardcodedPattern::DISABLED;
     if (pattern == "random_centered") return HardcodedPattern::RANDOM_CENTERED;
@@ -1586,258 +1730,294 @@ inline HardcodedPattern parseHardcodedHiddenPattern(const std::string& pattern) 
 inline bool loadTrainingHyperparameters(const GRIM::Config::AiConfigSnapshot& snapshot,
                                         GRIM::Config::TrainingHyperparameters& params) {
     params = GRIM::Config::TrainingHyperparameters{};
-    params.current_model_training = snapshot.current_model_training;
-    params.current_curriculum = snapshot.current_curriculum;
-    params.epochs = snapshot.epochs;
-    params.seed = snapshot.seed;
-    params.batch_size = snapshot.batch_size;
-    params.gradient_accumulation_steps = snapshot.gradient_accumulation_steps;
-    params.batch_strategy = snapshot.batch_strategy;
-    params.learning_rate = snapshot.learning_rate;
-    params.weight_decay = snapshot.weight_decay;
-    params.grad_clip_norm = snapshot.grad_clip_norm;
-    params.per_token_grad_scale = snapshot.per_token_grad_scale;
-    params.force_rebuild_vocab = snapshot.force_rebuild_vocab;
-    params.d_model = snapshot.d_model;
-    params.num_layers = snapshot.num_layers;
-    params.num_heads = snapshot.num_heads;
-    params.num_kv_heads = snapshot.num_kv_heads;
-    params.max_seq_len = snapshot.max_seq_len;
-    params.tie_embeddings = snapshot.tie_embeddings;
-    params.dropout_rate = snapshot.dropout_rate;
-    params.sliding_window_stride = snapshot.sliding_window_stride;
-    params.warmup_fraction = snapshot.warmup_fraction;
-    params.cosine_decay_enabled = snapshot.cosine_decay_enabled;
-    params.cosine_warm_restarts = snapshot.cosine_warm_restarts;
-    params.log_interval = snapshot.log_interval;
-    params.atom_stats_interval = snapshot.atom_stats_interval;
-    params.atom_stats_max_seqs = snapshot.atom_stats_max_seqs;
-    params.validation_interval = snapshot.validation_interval;
-    params.checkpoint_interval = snapshot.checkpoint_interval;
-    params.use_gpu = snapshot.use_gpu;
-    params.use_flash_attention = snapshot.use_flash_attention;
+    const auto& trainConfig = requireTrainingConfig(snapshot);
+    const auto assign = [&](auto& field, const char* key) {
+        field = trainingConfigValue<std::decay_t<decltype(field)>>(trainConfig, key);
+    };
 
-    params.parameter_precision_embedding = parseParameterGroupPrecision(snapshot.parameter_precision_embedding);
-    params.parameter_precision_lm_head = parseParameterGroupPrecision(snapshot.parameter_precision_lm_head);
-    params.parameter_precision_attention = parseParameterGroupPrecision(snapshot.parameter_precision_attention);
-    params.parameter_precision_ffn = parseParameterGroupPrecision(snapshot.parameter_precision_ffn);
-    params.parameter_precision_rmsnorm = parseParameterGroupPrecision(snapshot.parameter_precision_rmsnorm);
-    params.parameter_precision_scratchblock = parseParameterGroupPrecision(snapshot.parameter_precision_scratchblock);
-    params.parameter_precision_mtp = parseParameterGroupPrecision(snapshot.parameter_precision_mtp);
-    params.parameter_precision_reasoning_head = parseParameterGroupPrecision(snapshot.parameter_precision_reasoning_head);
-    params.parameter_precision_execution_block = parseParameterGroupPrecision(snapshot.parameter_precision_execution_block);
-    params.parameter_precision_slot_selector = parseParameterGroupPrecision(snapshot.parameter_precision_slot_selector);
+    assign(params.current_model_training, "current_model_training");
+    assign(params.current_curriculum, "current_curriculum");
+    assign(params.clear_merged_cache_on_merge, "clear_merged_cache_on_merge");
+    assign(params.epochs, "epochs");
+    assign(params.seed, "seed");
+    assign(params.batch_size, "batch_size");
+    assign(params.gradient_accumulation_steps, "gradient_accumulation_steps");
+    assign(params.batch_strategy, "batch_strategy");
+    assign(params.learning_rate, "learning_rate");
+    assign(params.weight_decay, "weight_decay");
+    assign(params.grad_clip_norm, "gradient_clip");
+    assign(params.per_token_grad_scale, "per_token_grad_scale");
+    assign(params.force_rebuild_vocab, "force_rebuild_vocab");
+    assign(params.d_model, "d_model");
+    assign(params.num_layers, "num_layers");
+    assign(params.num_heads, "num_heads");
+    assign(params.num_kv_heads, "num_kv_heads");
+    assign(params.max_seq_len, "max_seq_len");
+    assign(params.tie_embeddings, "tie_embeddings");
+    assign(params.dropout_rate, "dropout_rate");
+    assign(params.sliding_window_stride, "sliding_window_stride");
+    assign(params.warmup_fraction, "warmup_fraction");
+    assign(params.cosine_decay_enabled, "cosine_decay_enabled");
+    assign(params.cosine_warm_restarts, "cosine_warm_restarts");
+    assign(params.log_interval, "log_interval");
+    assign(params.atom_stats_interval, "atom_stats_interval");
+    assign(params.atom_stats_max_seqs, "atom_stats_max_seqs");
+    assign(params.validation_interval, "validation_interval");
+    assign(params.checkpoint_interval, "checkpoint_interval");
+    assign(params.use_gpu, "use_gpu");
+    assign(params.use_flash_attention, "use_flash_attention");
 
-    if (snapshot.use_rope && snapshot.use_alibi) {
+    params.parameter_precision_embedding = parseParameterGroupPrecision(trainingConfigValue<std::string>(trainConfig, "parameter_precision_embedding"));
+    params.parameter_precision_lm_head = parseParameterGroupPrecision(trainingConfigValue<std::string>(trainConfig, "parameter_precision_lm_head"));
+    params.parameter_precision_attention = parseParameterGroupPrecision(trainingConfigValue<std::string>(trainConfig, "parameter_precision_attention"));
+    params.parameter_precision_ffn = parseParameterGroupPrecision(trainingConfigValue<std::string>(trainConfig, "parameter_precision_ffn"));
+    params.parameter_precision_rmsnorm = parseParameterGroupPrecision(trainingConfigValue<std::string>(trainConfig, "parameter_precision_rmsnorm"));
+    params.parameter_precision_scratchblock = parseParameterGroupPrecision(trainingConfigValue<std::string>(trainConfig, "parameter_precision_scratchblock"));
+    params.parameter_precision_mtp = parseParameterGroupPrecision(trainingConfigValue<std::string>(trainConfig, "parameter_precision_mtp"));
+    params.parameter_precision_reasoning_head = parseParameterGroupPrecision(trainingConfigValue<std::string>(trainConfig, "parameter_precision_reasoning_head"));
+    params.parameter_precision_execution_block = parseParameterGroupPrecision(trainingConfigValue<std::string>(trainConfig, "parameter_precision_execution_block"));
+    params.parameter_precision_slot_selector = parseParameterGroupPrecision(trainingConfigValue<std::string>(trainConfig, "parameter_precision_slot_selector"));
+
+    const bool use_rope = trainingConfigValue<bool>(trainConfig, "use_rope");
+    const bool use_alibi = trainingConfigValue<bool>(trainConfig, "use_alibi");
+    if (use_rope && use_alibi) {
         params.positional_encoding = PositionalEncodingType::ALIBI_ROPE;
-    } else if (snapshot.use_rope) {
+    } else if (use_rope) {
         params.positional_encoding = PositionalEncodingType::ROPE;
-    } else if (snapshot.use_alibi) {
+    } else if (use_alibi) {
         params.positional_encoding = PositionalEncodingType::ALIBI;
     } else {
         throw std::runtime_error("ai_config.json: training.config must enable at least one of use_rope or use_alibi");
     }
-    params.rope_base_seq_len = snapshot.rope_base_seq_len;
-    params.alibi_min_locality_distance = snapshot.alibi_min_locality_distance;
-    params.alibi_slope_exponent = snapshot.alibi_slope_exponent;
-    params.alibi_max_bias = snapshot.alibi_max_bias;
-    params.rope_theta = snapshot.rope_theta;
-    params.rope_scaling = snapshot.rope_scaling;
+    assign(params.rope_base_seq_len, "rope_base_seq_len");
+    assign(params.alibi_min_locality_distance, "alibi_min_locality_distance");
+    assign(params.alibi_slope_exponent, "alibi_slope_exponent");
+    assign(params.alibi_max_bias, "alibi_max_bias");
+    assign(params.rope_theta, "rope_theta");
+    assign(params.rope_scaling, "rope_scaling");
 
-    params.soft_restart_enabled = snapshot.soft_restart_enabled;
-    params.soft_restart_loss_increase_threshold = snapshot.soft_restart_loss_increase_threshold;
-    params.soft_restart_max_step_window = snapshot.soft_restart_max_step_window;
-    params.soft_restart_cooldown_steps = snapshot.soft_restart_cooldown_steps;
-    params.auto_stop_enabled = snapshot.auto_stop_enabled;
-    params.auto_stop_plateau_patience = snapshot.auto_stop_plateau_patience;
-    params.auto_stop_plateau_min_delta = snapshot.auto_stop_plateau_min_delta;
-    params.auto_stop_high_loss_threshold = snapshot.auto_stop_high_loss_threshold;
-    params.auto_stop_high_loss_patience = snapshot.auto_stop_high_loss_patience;
-    params.single_batch_overfit_enabled = snapshot.single_batch_overfit_enabled;
-    params.single_batch_overfit_max_steps = snapshot.single_batch_overfit_max_steps;
-    params.shuffle_train_enabled = snapshot.shuffle_train_enabled;
-    params.shuffle_train_epochs = snapshot.shuffle_train_epochs;
+    assign(params.soft_restart_enabled, "soft_restart_enabled");
+    assign(params.soft_restart_loss_increase_threshold, "soft_restart_loss_increase_threshold");
+    assign(params.soft_restart_max_step_window, "soft_restart_max_step_window");
+    assign(params.soft_restart_cooldown_steps, "soft_restart_cooldown_steps");
+    assign(params.auto_stop_enabled, "auto_stop_enabled");
+    assign(params.auto_stop_plateau_patience, "auto_stop_plateau_patience");
+    assign(params.auto_stop_plateau_min_delta, "auto_stop_plateau_min_delta");
+    assign(params.auto_stop_high_loss_threshold, "auto_stop_high_loss_threshold");
+    assign(params.auto_stop_high_loss_patience, "auto_stop_high_loss_patience");
+    assign(params.single_batch_overfit_enabled, "single_batch_overfit_enabled");
+    assign(params.single_batch_overfit_max_steps, "single_batch_overfit_max_steps");
+    assign(params.shuffle_train_enabled, "shuffle_train_enabled");
+    assign(params.shuffle_train_epochs, "shuffle_train_epochs");
     if (params.shuffle_train_epochs < 0) {
         throw std::runtime_error("ai_config.json: training.config.shuffle_train_epochs must be >= 0");
     }
 
-    params.telemetry_control_enabled = snapshot.telemetry_control_enabled;
-    params.telemetry_spike_mild_threshold = snapshot.telemetry_spike_mild_threshold;
-    params.telemetry_spike_moderate_threshold = snapshot.telemetry_spike_moderate_threshold;
-    params.telemetry_spike_severe_threshold = snapshot.telemetry_spike_severe_threshold;
-    params.telemetry_moderate_grad_scale = snapshot.telemetry_moderate_grad_scale;
-    params.telemetry_moderate_cooldown_extension = snapshot.telemetry_moderate_cooldown_extension;
-    params.telemetry_min_grad_for_nonzero_loss = snapshot.telemetry_min_grad_for_nonzero_loss;
-    params.telemetry_loss_threshold_for_grad_check = snapshot.telemetry_loss_threshold_for_grad_check;
-    params.telemetry_max_consecutive_zero_grad_steps = snapshot.telemetry_max_consecutive_zero_grad_steps;
-    params.telemetry_seq_len_regime_change_threshold = snapshot.telemetry_seq_len_regime_change_threshold;
-    params.telemetry_regime_change_suppression_steps = snapshot.telemetry_regime_change_suppression_steps;
-    params.telemetry_volatility_damping_threshold = snapshot.telemetry_volatility_damping_threshold;
-    params.telemetry_max_volatility_damping = snapshot.telemetry_max_volatility_damping;
-    params.telemetry_gradient_decay_threshold = snapshot.telemetry_gradient_decay_threshold;
-    params.telemetry_max_decay_boost = snapshot.telemetry_max_decay_boost;
-    params.telemetry_progress_boost_threshold = snapshot.telemetry_progress_boost_threshold;
-    params.telemetry_max_progress_boost = snapshot.telemetry_max_progress_boost;
-    params.telemetry_outlier_frequency_trigger = snapshot.telemetry_outlier_frequency_trigger;
-    params.telemetry_outlier_persistence_trigger = snapshot.telemetry_outlier_persistence_trigger;
-    params.telemetry_anchor_drift_sigma_multiplier = snapshot.telemetry_anchor_drift_sigma_multiplier;
-    params.telemetry_soft_restart_cooldown_steps = snapshot.telemetry_soft_restart_cooldown_steps;
-    params.telemetry_baseline_stabilization_steps = snapshot.telemetry_baseline_stabilization_steps;
-    params.telemetry_verbose_logging = snapshot.telemetry_verbose_logging;
-    params.telemetry_fail_loud_on_accumulation_bug = snapshot.telemetry_fail_loud_on_accumulation_bug;
-    params.telemetry_plateau_noise_enabled = snapshot.telemetry_plateau_noise_enabled;
-    params.telemetry_plateau_noise_patience = snapshot.telemetry_plateau_noise_patience;
-    params.telemetry_plateau_noise_variance_threshold = snapshot.telemetry_plateau_noise_variance_threshold;
-    params.telemetry_plateau_noise_std = snapshot.telemetry_plateau_noise_std;
-    params.telemetry_plateau_noise_proportional = snapshot.telemetry_plateau_noise_proportional;
-    params.telemetry_plateau_noise_cooldown = snapshot.telemetry_plateau_noise_cooldown;
-    params.telemetry_plateau_noise_max_per_epoch = snapshot.telemetry_plateau_noise_max_per_epoch;
-    params.telemetry_lattice_num_levels = snapshot.telemetry_lattice_num_levels;
-    params.telemetry_lattice_num_streams = snapshot.telemetry_lattice_num_streams;
-    params.telemetry_lattice_beta_mu = snapshot.telemetry_lattice_beta_mu;
-    params.telemetry_lattice_beta_a = snapshot.telemetry_lattice_beta_a;
-    params.telemetry_lattice_beta_delta = snapshot.telemetry_lattice_beta_delta;
-    params.telemetry_lattice_beta_r = snapshot.telemetry_lattice_beta_r;
-    params.telemetry_lattice_beta_run = snapshot.telemetry_lattice_beta_run;
-    params.telemetry_lattice_beta_v = snapshot.telemetry_lattice_beta_v;
-    params.telemetry_lattice_k_out0 = snapshot.telemetry_lattice_k_out0;
-    params.telemetry_lattice_alpha_v = snapshot.telemetry_lattice_alpha_v;
-    params.telemetry_lattice_epsilon = snapshot.telemetry_lattice_epsilon;
-    params.telemetry_lattice_strict_mode = snapshot.telemetry_lattice_strict_mode;
+    assign(params.telemetry_control_enabled, "telemetry_control_enabled");
+    assign(params.telemetry_spike_mild_threshold, "telemetry_spike_mild_threshold");
+    assign(params.telemetry_spike_moderate_threshold, "telemetry_spike_moderate_threshold");
+    assign(params.telemetry_spike_severe_threshold, "telemetry_spike_severe_threshold");
+    assign(params.telemetry_moderate_grad_scale, "telemetry_moderate_grad_scale");
+    assign(params.telemetry_moderate_cooldown_extension, "telemetry_moderate_cooldown_extension");
+    assign(params.telemetry_min_grad_for_nonzero_loss, "telemetry_min_grad_for_nonzero_loss");
+    assign(params.telemetry_loss_threshold_for_grad_check, "telemetry_loss_threshold_for_grad_check");
+    assign(params.telemetry_max_consecutive_zero_grad_steps, "telemetry_max_consecutive_zero_grad_steps");
+    assign(params.telemetry_seq_len_regime_change_threshold, "telemetry_seq_len_regime_change_threshold");
+    assign(params.telemetry_regime_change_suppression_steps, "telemetry_regime_change_suppression_steps");
+    assign(params.telemetry_volatility_damping_threshold, "telemetry_volatility_damping_threshold");
+    assign(params.telemetry_max_volatility_damping, "telemetry_max_volatility_damping");
+    assign(params.telemetry_gradient_decay_threshold, "telemetry_gradient_decay_threshold");
+    assign(params.telemetry_max_decay_boost, "telemetry_max_decay_boost");
+    assign(params.telemetry_progress_boost_threshold, "telemetry_progress_boost_threshold");
+    assign(params.telemetry_max_progress_boost, "telemetry_max_progress_boost");
+    assign(params.telemetry_outlier_frequency_trigger, "telemetry_outlier_frequency_trigger");
+    assign(params.telemetry_outlier_persistence_trigger, "telemetry_outlier_persistence_trigger");
+    assign(params.telemetry_anchor_drift_sigma_multiplier, "telemetry_anchor_drift_sigma_multiplier");
+    assign(params.telemetry_soft_restart_cooldown_steps, "telemetry_soft_restart_cooldown_steps");
+    assign(params.telemetry_baseline_stabilization_steps, "telemetry_baseline_stabilization_steps");
+    assign(params.telemetry_verbose_logging, "telemetry_verbose_logging");
+    assign(params.telemetry_fail_loud_on_accumulation_bug, "telemetry_fail_loud_on_accumulation_bug");
+    assign(params.telemetry_plateau_noise_enabled, "telemetry_plateau_noise_enabled");
+    assign(params.telemetry_plateau_noise_patience, "telemetry_plateau_noise_patience");
+    assign(params.telemetry_plateau_noise_variance_threshold, "telemetry_plateau_noise_variance_threshold");
+    assign(params.telemetry_plateau_noise_std, "telemetry_plateau_noise_std");
+    assign(params.telemetry_plateau_noise_proportional, "telemetry_plateau_noise_proportional");
+    assign(params.telemetry_plateau_noise_cooldown, "telemetry_plateau_noise_cooldown");
+    assign(params.telemetry_plateau_noise_max_per_epoch, "telemetry_plateau_noise_max_per_epoch");
+    assign(params.telemetry_lattice_num_levels, "telemetry_lattice_num_levels");
+    assign(params.telemetry_lattice_num_streams, "telemetry_lattice_num_streams");
+    assign(params.telemetry_lattice_beta_mu, "telemetry_lattice_beta_mu");
+    assign(params.telemetry_lattice_beta_a, "telemetry_lattice_beta_a");
+    assign(params.telemetry_lattice_beta_delta, "telemetry_lattice_beta_delta");
+    assign(params.telemetry_lattice_beta_r, "telemetry_lattice_beta_r");
+    assign(params.telemetry_lattice_beta_run, "telemetry_lattice_beta_run");
+    assign(params.telemetry_lattice_beta_v, "telemetry_lattice_beta_v");
+    assign(params.telemetry_lattice_k_out0, "telemetry_lattice_k_out0");
+    assign(params.telemetry_lattice_alpha_v, "telemetry_lattice_alpha_v");
+    assign(params.telemetry_lattice_epsilon, "telemetry_lattice_epsilon");
+    assign(params.telemetry_lattice_strict_mode, "telemetry_lattice_strict_mode");
 
-    params.tape_logging.default_level = snapshot.logging_default_level;
-    params.tape_logging.equation_csv_enabled = snapshot.logging_equation_csv_enabled;
-    params.tape_logging.stderr_enabled = snapshot.logging_stderr_enabled;
-    params.tape_logging.initial_capacity = snapshot.logging_initial_capacity;
-    params.tape_logging.group_overrides = snapshot.logging_group_overrides;
-    params.log_recorder.enabled = snapshot.log_recorder_enabled;
-    params.log_recorder.default_level = snapshot.log_recorder_default_level;
-    params.log_recorder.modules = snapshot.log_recorder_modules;
-    params.log_recorder.layers.embedding = snapshot.log_recorder_layer_embedding;
-    params.log_recorder.layers.rms_norm = snapshot.log_recorder_layer_rms_norm;
-    params.log_recorder.layers.attention = snapshot.log_recorder_layer_attention;
-    params.log_recorder.layers.feed_forward = snapshot.log_recorder_layer_feed_forward;
-    params.log_recorder.layers.residual = snapshot.log_recorder_layer_residual;
-    params.log_recorder.layers.encoding = snapshot.log_recorder_layer_encoding;
-    params.log_recorder.layers.serialization = snapshot.log_recorder_layer_serialization;
-    params.log_recorder.layers.execution_block = snapshot.log_recorder_layer_execution_block;
+    assign(params.tape_logging.default_level, "logging_default_level");
+    assign(params.tape_logging.equation_csv_enabled, "logging_equation_csv_enabled");
+    assign(params.tape_logging.stderr_enabled, "logging_stderr_enabled");
+    assign(params.tape_logging.initial_capacity, "logging_initial_capacity");
+    params.tape_logging.group_overrides = getRequiredStringMap(trainConfig, "logging_group_overrides", "training.config");
+    assign(params.log_recorder.enabled, "log_recorder_enabled");
+    assign(params.log_recorder.default_level, "log_recorder_default_level");
+    params.log_recorder.modules = getRequiredStringMap(trainConfig, "log_recorder_modules", "training.config");
+    assign(params.log_recorder.layers.embedding, "log_recorder_layer_embedding");
+    assign(params.log_recorder.layers.rms_norm, "log_recorder_layer_rms_norm");
+    assign(params.log_recorder.layers.attention, "log_recorder_layer_attention");
+    assign(params.log_recorder.layers.feed_forward, "log_recorder_layer_feed_forward");
+    assign(params.log_recorder.layers.residual, "log_recorder_layer_residual");
+    assign(params.log_recorder.layers.encoding, "log_recorder_layer_encoding");
+    assign(params.log_recorder.layers.serialization, "log_recorder_layer_serialization");
+    assign(params.log_recorder.layers.execution_block, "log_recorder_layer_execution_block");
 
-    params.loss_label_smoothing_enabled = snapshot.loss_label_smoothing_enabled;
-    params.loss_label_smoothing_epsilon = snapshot.loss_label_smoothing_epsilon;
-    params.loss_focal_enabled = snapshot.loss_focal_enabled;
-    params.loss_focal_gamma = snapshot.loss_focal_gamma;
-    params.loss_focal_alpha = snapshot.loss_focal_alpha;
-    params.loss_entropy_reg_enabled = snapshot.loss_entropy_reg_enabled;
-    params.loss_entropy_reg_lambda = snapshot.loss_entropy_reg_lambda;
-    params.loss_class_balanced_enabled = snapshot.loss_class_balanced_enabled;
-    params.loss_class_balanced_beta = snapshot.loss_class_balanced_beta;
-    params.loss_preference_enabled = snapshot.loss_preference_enabled;
-    params.loss_preference_beta = snapshot.loss_preference_beta;
-    params.loss_distillation_enabled = snapshot.loss_distillation_enabled;
-    params.loss_distillation_temperature = snapshot.loss_distillation_temperature;
-    params.loss_distillation_lambda = snapshot.loss_distillation_lambda;
-    params.loss_masking_enabled = snapshot.loss_masking_enabled;
-    params.loss_masking_tag = snapshot.loss_masking_tag;
-    params.lm_head_centering_enabled = snapshot.lm_head_centering_enabled;
-    params.lm_head_center_hidden_states = snapshot.lm_head_center_hidden_states;
-    params.freeze_learned_rms_gammas = snapshot.freeze_learned_rms_gammas;
-    params.center_logits = snapshot.center_logits;
-    params.center_encoder_residuals = snapshot.center_encoder_residuals;
-    params.project_out_pc1 = snapshot.project_out_pc1;
-    params.pc1_power_iters = snapshot.pc1_power_iters;
-    params.use_layer_scale = snapshot.use_layer_scale;
-    params.layer_scale_init = snapshot.layer_scale_init;
-    params.qk_norm_enabled = snapshot.qk_norm_enabled;
-    const HardcodedPattern parsed_pattern = parseHardcodedHiddenPattern(snapshot.hardcoded_hidden_states_pattern);
-    params.hardcoded_hidden_pattern = snapshot.hardcoded_hidden_states_enabled
+    assign(params.loss_label_smoothing_enabled, "loss_label_smoothing_enabled");
+    assign(params.loss_label_smoothing_epsilon, "loss_label_smoothing_epsilon");
+    assign(params.loss_focal_enabled, "loss_focal_enabled");
+    assign(params.loss_focal_gamma, "loss_focal_gamma");
+    assign(params.loss_focal_alpha, "loss_focal_alpha");
+    assign(params.loss_entropy_reg_enabled, "loss_entropy_reg_enabled");
+    assign(params.loss_entropy_reg_lambda, "loss_entropy_reg_lambda");
+    assign(params.loss_class_balanced_enabled, "loss_class_balanced_enabled");
+    assign(params.loss_class_balanced_beta, "loss_class_balanced_beta");
+    assign(params.loss_preference_enabled, "loss_preference_enabled");
+    assign(params.loss_preference_beta, "loss_preference_beta");
+    assign(params.loss_distillation_enabled, "loss_distillation_enabled");
+    assign(params.loss_distillation_temperature, "loss_distillation_temperature");
+    assign(params.loss_distillation_lambda, "loss_distillation_lambda");
+    assign(params.loss_masking_enabled, "loss_masking_enabled");
+    assign(params.loss_masking_tag, "loss_masking_tag");
+    assign(params.lm_head_centering_enabled, "lm_head_centering_enabled");
+    assign(params.lm_head_center_hidden_states, "lm_head_center_hidden_states");
+    assign(params.freeze_learned_rms_gammas, "freeze_learned_rms_gammas");
+    assign(params.center_logits, "center_logits");
+    assign(params.center_encoder_residuals, "center_encoder_residuals");
+    assign(params.project_out_pc1, "project_out_pc1");
+    assign(params.pc1_power_iters, "pc1_power_iters");
+    assign(params.use_layer_scale, "use_layer_scale");
+    assign(params.layer_scale_init, "layer_scale_init");
+    assign(params.qk_norm_enabled, "qk_norm_enabled");
+    const bool hardcoded_hidden_states_enabled = trainingConfigValue<bool>(trainConfig, "hardcoded_hidden_states_enabled");
+    const HardcodedPattern parsed_pattern = parseHardcodedHiddenPattern(trainingConfigValue<std::string>(trainConfig, "hardcoded_hidden_states_pattern"));
+    params.hardcoded_hidden_pattern = hardcoded_hidden_states_enabled
         ? parsed_pattern
         : HardcodedPattern::DISABLED;
-    params.hardcoded_log_every_n_batches = snapshot.hardcoded_log_every_n_batches;
-    params.embedding_freeze_enabled = snapshot.embedding_freeze_enabled;
-    params.embedding_freeze_after_step = snapshot.embedding_freeze_after_step;
-    params.optimizer_kind = snapshot.optimizer_kind;
-    params.optimizer_beta1 = snapshot.optimizer_beta1;
-    params.optimizer_beta2 = snapshot.optimizer_beta2;
-    params.optimizer_epsilon = snapshot.optimizer_epsilon;
+    assign(params.hardcoded_log_every_n_batches, "hardcoded_log_every_n_batches");
+    assign(params.embedding_freeze_enabled, "embedding_freeze_enabled");
+    assign(params.embedding_freeze_after_step, "embedding_freeze_after_step");
+    assign(params.optimizer_kind, "optimizer_kind");
+    assign(params.optimizer_beta1, "optimizer_beta1");
+    assign(params.optimizer_beta2, "optimizer_beta2");
+    assign(params.optimizer_epsilon, "optimizer_epsilon");
     if (params.optimizer_kind != "adamw" && params.optimizer_kind != "radamw") {
         throw std::runtime_error(
             "[ai_config] training.config.optimizer_kind must be \"adamw\" or \"radamw\", got \"" +
             params.optimizer_kind + "\"");
     }
 
-    params.stability_overrides_enabled = snapshot.stability_overrides_enabled;
-    params.stability_override_batch_size = snapshot.stability_override_batch_size;
-    params.stability_override_max_seq_len = snapshot.stability_override_max_seq_len;
-    params.stability_override_clip_per_token = snapshot.stability_override_clip_per_token;
-    params.scratch_blocks_enabled = snapshot.scratch_blocks_enabled;
-    params.scratch_num_blocks = snapshot.scratch_num_blocks;
-    params.scratch_write_combined = snapshot.scratch_write_combined;
-    params.use_scratch_block = snapshot.use_scratch_block;
-    params.scratch_block_atom_embedding_dim = snapshot.scratch_block_atom_embedding_dim;
-    params.scratch_block_max_atoms = snapshot.scratch_block_max_atoms;
-    params.scratch_block_atom_scale = snapshot.scratch_block_atom_scale;
-    params.execution_block_enabled = snapshot.execution_block_enabled;
-    params.scratch_block_execution_first_type_only = snapshot.scratch_block_execution_first_type_only;
-    params.execution_block_debug_mode = snapshot.execution_block_debug_mode;
-    params.step_y_overrides_x = snapshot.step_y_overrides_x;
-    params.structured_ce_enabled = snapshot.structured_ce_enabled;
-    params.selector_enabled = snapshot.selector_enabled;
-    params.execution_block_layer = snapshot.execution_block_layer;
-    params.execution_block_num_ops = snapshot.execution_block_num_ops;
-    params.execution_block_num_slots = snapshot.execution_block_num_slots;
-    params.execution_block_num_scratch_slots = snapshot.execution_block_num_scratch_slots;
-    params.execution_block_num_steps = snapshot.execution_block_num_steps;
-    params.execution_block_value_decode_input_dim = snapshot.execution_block_value_decode_input_dim;
-    params.execution_block_value_decode_hidden_dim = snapshot.execution_block_value_decode_hidden_dim;
-    params.execution_block_d_type = snapshot.execution_block_d_type;
-    params.execution_block_cross_attn_topk = snapshot.execution_block_cross_attn_topk;
-    params.execution_block_result_slot_mode = snapshot.execution_block_result_slot_mode;
-    params.execution_block_result_slot_index = snapshot.execution_block_result_slot_index;
-    params.execution_block_temp_schedule = snapshot.execution_block_temp_schedule;
-    params.decode_time_slot_feature_dim = snapshot.decode_time_slot_feature_dim;
-    params.selector_d_selector = snapshot.selector_d_selector;
-    params.execution_block_usage_decay = snapshot.execution_block_usage_decay;
-    params.execution_block_inject_gate_temp = snapshot.execution_block_inject_gate_temp;
-    params.execution_block_entropy_collapse_threshold = snapshot.execution_block_entropy_collapse_threshold;
-    params.execution_block_write_collapse_threshold = snapshot.execution_block_write_collapse_threshold;
-    params.execution_block_magnitude_limit = snapshot.execution_block_magnitude_limit;
-    params.execution_block_diversity_kappa = snapshot.execution_block_diversity_kappa;
-    params.execution_block_temp_start = snapshot.execution_block_temp_start;
-    params.execution_block_temp_end = snapshot.execution_block_temp_end;
-    params.execution_block_entropy_weight = snapshot.execution_block_entropy_weight;
-    params.step_x_multiplier = snapshot.step_x_multiplier;
-    params.step_y_multiplier = snapshot.step_y_multiplier;
-    params.entropy_aux_weight = snapshot.entropy_aux_weight;
-    params.value_match_epsilon = snapshot.value_match_epsilon;
-    params.final_slot_consistency_weight = snapshot.final_slot_consistency_weight;
-    params.execution_block_transition_hard_threshold = snapshot.execution_block_transition_hard_threshold;
-    params.execution_block_causal_w1_transition = snapshot.execution_block_causal_w1_transition;
-    params.div_invalid_penalty_weight = snapshot.div_invalid_penalty_weight;
-    params.div_magnitude_penalty_weight = snapshot.div_magnitude_penalty_weight;
-    params.arg_reinforce_weight = snapshot.arg_reinforce_weight;
-    params.arg_reinforce_baseline_decay = snapshot.arg_reinforce_baseline_decay;
-    params.structured_ce_weight = snapshot.structured_ce_weight;
-    params.selector_selection_margin = snapshot.selector_selection_margin;
-    params.selector_supervision_weight = snapshot.selector_supervision_weight;
-    params.single_stream_mode = snapshot.single_stream_mode;
-    params.disable_async_frees = snapshot.disable_async_frees;
-    params.synchronize_after_kernels = snapshot.synchronize_after_kernels;
-    params.mtp_enabled = snapshot.mtp_enabled;
-    params.mtp_log_ratio_monitor = snapshot.mtp_log_ratio_monitor;
-    params.mtp_k = snapshot.mtp_k;
-    params.mtp_alpha = snapshot.mtp_alpha;
-    params.prediction_comparison_enabled = snapshot.prediction_comparison_enabled;
-    params.prediction_comparison_interval = snapshot.prediction_comparison_interval;
-    params.prediction_comparison_top_k = snapshot.prediction_comparison_top_k;
-    params.prediction_comparison_max_positions = snapshot.prediction_comparison_max_positions;
-    params.prediction_comparison_log_path = snapshot.prediction_comparison_log_path;
-    params.logit_update_trace_enabled = snapshot.logit_update_trace_enabled;
-    params.logit_update_trace_interval = snapshot.logit_update_trace_interval;
-    params.attention_diag_enabled = snapshot.attention_diag_enabled;
-    params.attention_diag_layer = snapshot.attention_diag_layer;
-    params.attention_diag_head = snapshot.attention_diag_head;
-    params.tokenizer_enable_scratch_block_reasoning = snapshot.tokenizer_enable_scratch_block_reasoning;
-    params.tokenizer_detect_numbers = snapshot.tokenizer_detect_numbers;
+    assign(params.stability_overrides_enabled, "stability_overrides_enabled");
+    assign(params.stability_override_batch_size, "stability_override_batch_size");
+    assign(params.stability_override_max_seq_len, "stability_override_max_seq_len");
+    assign(params.stability_override_clip_per_token, "stability_override_clip_per_token");
+    assign(params.scratch_blocks_enabled, "scratch_blocks_enabled");
+    assign(params.scratch_num_blocks, "scratch_num_blocks");
+    assign(params.scratch_write_combined, "scratch_write_combined");
+    assign(params.use_scratch_block, "use_scratch_block");
+    assign(params.scratch_block_atom_embedding_dim, "scratch_block_atom_embedding_dim");
+    assign(params.scratch_block_max_atoms, "scratch_block_max_atoms");
+    assign(params.scratch_block_atom_scale, "scratch_block_atom_scale");
+    assign(params.execution_block_enabled, "execution_block_enabled");
+    assign(params.scratch_block_execution_first_type_only, "execution_block_execution_first_type_only");
+    assign(params.execution_block_debug_mode, "execution_block_debug_mode");
+    assign(params.step_y_overrides_x, "execution_block_step_y_overrides_x");
+    assign(params.structured_ce_enabled, "execution_block_structured_ce_enabled");
+    assign(params.selector_enabled, "selector_enabled");
+    assign(params.execution_block_layer, "execution_block_layer");
+    assign(params.execution_block_num_ops, "execution_block_num_ops");
+    assign(params.execution_block_num_slots, "execution_block_num_slots");
+    assign(params.execution_block_num_scratch_slots, "execution_block_num_scratch_slots");
+    assign(params.execution_block_num_steps, "execution_block_num_steps");
+    assign(params.execution_block_value_decode_input_dim, "execution_block_value_decode_input_dim");
+    assign(params.execution_block_value_decode_hidden_dim, "execution_block_value_decode_hidden_dim");
+    assign(params.execution_block_d_type, "execution_block_d_type");
+    assign(params.execution_block_cross_attn_topk, "execution_block_cross_attn_topk");
+    assign(params.execution_block_result_slot_mode, "execution_block_result_slot_mode");
+    assign(params.execution_block_result_slot_index, "execution_block_result_slot_index");
+    assign(params.execution_block_temp_schedule, "execution_block_temp_schedule");
+    assign(params.decode_time_slot_feature_dim, "selector_d_slot_features");
+    assign(params.selector_d_selector, "selector_d_selector");
+    assign(params.execution_block_usage_decay, "execution_block_usage_decay");
+    assign(params.execution_block_inject_gate_temp, "execution_block_inject_gate_temp");
+    assign(params.execution_block_entropy_collapse_threshold, "execution_block_entropy_collapse_threshold");
+    assign(params.execution_block_write_collapse_threshold, "execution_block_write_collapse_threshold");
+    assign(params.execution_block_magnitude_limit, "execution_block_magnitude_limit");
+    assign(params.execution_block_diversity_kappa, "execution_block_diversity_kappa");
+    assign(params.execution_block_temp_start, "execution_block_temp_start");
+    assign(params.execution_block_temp_end, "execution_block_temp_end");
+    assign(params.execution_block_entropy_weight, "execution_block_entropy_weight");
+    assign(params.step_x_multiplier, "execution_block_step_x_multiplier");
+    assign(params.step_y_multiplier, "execution_block_step_y_multiplier");
+    assign(params.entropy_aux_weight, "execution_block_entropy_aux_weight");
+    assign(params.value_match_epsilon, "execution_block_value_match_epsilon");
+    assign(params.final_slot_consistency_weight, "execution_block_final_slot_consistency_weight");
+    assign(params.execution_block_transition_hard_threshold, "execution_block_transition_hard_threshold");
+    assign(params.execution_block_causal_w1_transition, "execution_block_causal_w1_transition");
+    assign(params.div_invalid_penalty_weight, "execution_block_div_invalid_penalty_weight");
+    assign(params.div_magnitude_penalty_weight, "execution_block_div_magnitude_penalty_weight");
+    assign(params.arg_reinforce_weight, "execution_block_arg_reinforce_weight");
+    assign(params.arg_reinforce_baseline_decay, "execution_block_arg_reinforce_baseline_decay");
+    assign(params.structured_ce_weight, "execution_block_structured_ce_weight");
+    assign(params.selector_selection_margin, "selector_selection_margin");
+    assign(params.selector_supervision_weight, "selector_supervision_weight");
+    assign(params.single_stream_mode, "single_stream_mode");
+    assign(params.disable_async_frees, "disable_async_frees");
+    assign(params.synchronize_after_kernels, "synchronize_after_kernels");
+    assign(params.mtp_enabled, "mtp_enabled");
+    assign(params.mtp_log_ratio_monitor, "mtp_log_ratio_monitor");
+    assign(params.mtp_k, "mtp_k");
+    assign(params.mtp_alpha, "mtp_alpha");
+    assign(params.prediction_comparison_enabled, "prediction_comparison_enabled");
+    assign(params.prediction_comparison_interval, "prediction_comparison_interval");
+    assign(params.prediction_comparison_top_k, "prediction_comparison_top_k");
+    assign(params.prediction_comparison_max_positions, "prediction_comparison_max_positions");
+    assign(params.prediction_comparison_log_path, "prediction_comparison_log_path");
+    assign(params.logit_update_trace_enabled, "logit_update_trace_enabled");
+    assign(params.logit_update_trace_interval, "logit_update_trace_interval");
+    assign(params.attention_diag_enabled, "attention_diag_enabled");
+    assign(params.attention_diag_layer, "attention_diag_layer");
+    assign(params.attention_diag_head, "attention_diag_head");
+    assign(params.tokenizer_enable_scratch_block_reasoning, "tokenizer_enable_scratch_block_reasoning");
+    assign(params.tokenizer_detect_numbers, "tokenizer_detect_numbers");
+    assign(params.tokenizer_vocab_size, "tokenizer_vocab_size");
+    assign(params.tokenizer_max_vocab_size, "tokenizer_max_vocab_size");
+    assign(params.tokenizer_max_length, "tokenizer_max_length");
+    assign(params.tokenizer_min_cleaned_text_length, "tokenizer_min_cleaned_text_length");
+    assign(params.tokenizer_min_subword_freq, "tokenizer_min_subword_freq");
+    assign(params.tokenizer_subword_mining_workers, "tokenizer_subword_mining_workers");
+    assign(params.tokenizer_parallel_threshold, "tokenizer_parallel_threshold");
+    assign(params.tokenizer_character_coverage, "tokenizer_character_coverage");
+    assign(params.tokenizer_vocab_score_multiplier, "tokenizer_vocab_score_multiplier");
+    assign(params.tokenizer_subword_mining_max_bytes, "tokenizer_subword_mining_max_bytes");
+    assign(params.tokenizer_prune_during_mining, "tokenizer_prune_during_mining");
+    assign(params.tokenizer_enable_parallel_subword_mining, "tokenizer_enable_parallel_subword_mining");
+    assign(params.tokenizer_add_bos, "tokenizer_add_bos");
+    assign(params.tokenizer_add_eos, "tokenizer_add_eos");
+    assign(params.tokenizer_enable_nfkc_normalization, "tokenizer_enable_nfkc_normalization");
+    assign(params.tokenizer_enable_lowercasing, "tokenizer_enable_lowercasing");
+    assign(params.tokenizer_enable_parallel_tokenization, "tokenizer_enable_parallel_tokenization");
+    assign(params.tokenizer_enable_byte_fallback, "tokenizer_enable_byte_fallback");
+    assign(params.tokenizer_save_text_vocab, "tokenizer_save_text_vocab");
+    assign(params.tokenizer_model_type, "tokenizer_model_type");
+    assign(params.tokenizer_unk_token, "tokenizer_unk_token");
+    assign(params.tokenizer_pad_token, "tokenizer_pad_token");
+    assign(params.tokenizer_bos_token, "tokenizer_bos_token");
+    assign(params.tokenizer_eos_token, "tokenizer_eos_token");
+    assign(params.tokenizer_expected_checksum, "tokenizer_expected_checksum");
+    params.tokenizer_special_tokens = getRequiredStringArray(trainConfig, "tokenizer_special_tokens", "training.config");
+    assign(params.subprocess_tokenizer_only_mode, "subprocess_tokenizer_only_mode");
 
     deriveComputedTrainingHyperparameters(params);
     return true;
@@ -1859,8 +2039,8 @@ inline bool loadTrainingHyperparameters(const GRIM::Config::AiConfigSnapshot& sn
  */
 // Snapshot-based overload — preferred entry point. Avoids re-reading
 // ai_config.json when the caller already loaded a snapshot (e.g. Phase1).
-// All architecture fields come from flat AiConfigSnapshot leaves; typed
-// TrainingHyperparameters derivation is owned by HyperParameters_GPU.hpp.
+// All architecture fields come from TrainingHyperparameters after this header
+// reads the raw AiConfigSnapshot document.
 inline bool loadModelArchitecture(const GRIM::Config::AiConfigSnapshot& snapshot,
                                   ModelArchitecture& arch) {
     GRIM::Config::TrainingHyperparameters hp;
@@ -1873,10 +2053,7 @@ inline bool loadModelArchitecture(const GRIM::Config::AiConfigSnapshot& snapshot
 // already hold the raw authored snapshot.
 inline bool loadModelArchitecture(ModelArchitecture& arch) {
     auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-    if (!snapshot) {
-        throw std::runtime_error("loadModelArchitecture: loadAiConfigSnapshot returned no snapshot");
-    }
-    return loadModelArchitecture(*snapshot, arch);
+    return loadModelArchitecture(snapshot, arch);
 }
 
 /**
@@ -1923,30 +2100,28 @@ inline SamplingStrategy parseGenerationSamplingStrategy(const std::string& strat
 
 inline bool loadGenerationConfig(const GRIM::Config::AiConfigSnapshot& snapshot,
                                  GenerationConfig& generation) {
-    generation.strategy = parseGenerationSamplingStrategy(snapshot.generation_strategy);
-    generation.max_new_tokens = snapshot.generation_max_new_tokens;
-    generation.min_new_tokens = snapshot.generation_min_new_tokens;
-    generation.top_k = snapshot.generation_top_k;
-    generation.repetition_penalty_window = snapshot.generation_repetition_penalty_window;
-    generation.no_repeat_ngram_size = snapshot.generation_no_repeat_ngram_size;
-    generation.temperature = snapshot.generation_temperature;
-    generation.top_p = snapshot.generation_top_p;
-    generation.min_p = snapshot.generation_min_p;
-    generation.typical_p = snapshot.generation_typical_p;
-    generation.repetition_penalty = snapshot.generation_repetition_penalty;
-    generation.frequency_penalty = snapshot.generation_frequency_penalty;
-    generation.presence_penalty = snapshot.generation_presence_penalty;
-    generation.do_sample = snapshot.generation_do_sample;
-    generation.enable_scratchblock_reasoning = snapshot.generation_enable_scratchblock_reasoning;
+    const auto& trainConfig = requireTrainingConfig(snapshot);
+    generation.strategy = parseGenerationSamplingStrategy(trainingConfigValue<std::string>(trainConfig, "generation_strategy"));
+    generation.max_new_tokens = trainingConfigValue<int>(trainConfig, "generation_max_new_tokens");
+    generation.min_new_tokens = trainingConfigValue<int>(trainConfig, "generation_min_new_tokens");
+    generation.top_k = trainingConfigValue<int>(trainConfig, "generation_top_k");
+    generation.repetition_penalty_window = trainingConfigValue<int>(trainConfig, "generation_repetition_penalty_window");
+    generation.no_repeat_ngram_size = trainingConfigValue<int>(trainConfig, "generation_no_repeat_ngram_size");
+    generation.temperature = trainingConfigValue<float>(trainConfig, "generation_temperature");
+    generation.top_p = trainingConfigValue<float>(trainConfig, "generation_top_p");
+    generation.min_p = trainingConfigValue<float>(trainConfig, "generation_min_p");
+    generation.typical_p = trainingConfigValue<float>(trainConfig, "generation_typical_p");
+    generation.repetition_penalty = trainingConfigValue<float>(trainConfig, "generation_repetition_penalty");
+    generation.frequency_penalty = trainingConfigValue<float>(trainConfig, "generation_frequency_penalty");
+    generation.presence_penalty = trainingConfigValue<float>(trainConfig, "generation_presence_penalty");
+    generation.do_sample = trainingConfigValue<bool>(trainConfig, "generation_do_sample");
+    generation.enable_scratchblock_reasoning = trainingConfigValue<bool>(trainConfig, "generation_enable_scratchblock_reasoning");
     return true;
 }
 
 inline bool loadGenerationConfig(GenerationConfig& generation) {
     auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-    if (!snapshot) {
-        throw std::runtime_error("loadGenerationConfig: loadAiConfigSnapshot returned no snapshot");
-    }
-    return loadGenerationConfig(*snapshot, generation);
+    return loadGenerationConfig(snapshot, generation);
 }
 
 //======================================================//
@@ -2010,9 +2185,9 @@ struct StartupConfig {
  *
  * Performs, in order:
  *   1. loadAiConfigSnapshot()       — single raw load + raw validation
- *   2. Copy paths from snapshot->grim_paths into PathConfig
- *   3. Store the raw snapshot and copy hyperparameters from it
- *   4. loadModelArchitecture()      — snapshot typed surface → ModelArchitecture
+ *   2. Copy paths from training.config grim_text_* leaves into PathConfig
+ *   3. Store the raw snapshot and derive hyperparameters from it
+ *   4. loadModelArchitecture()      — HyperParameters typed surface → ModelArchitecture
  *   5. Resolve max_seq_len (stability_override vs hyperparameters.max_seq_len)
  *   6. Resolve sliding_window_stride from training.config and validate it against effective max_seq_len
  *   7. Apply stability overrides to batch_size + grad_clip_norm
@@ -2025,28 +2200,24 @@ struct StartupConfig {
 inline StartupConfig loadStartupConfig(int argc, char** argv) {
     StartupConfig config;
 
-    // 1. Load typed snapshot (single JSON parse for the entire program)
+    // 1. Load raw snapshot (single JSON parse for the entire program)
     auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-    if (!snapshot) {
-        throw std::runtime_error("FATAL: ai_config.json not found or unreadable");
-    }
 
     // 2. Paths
-    if (!snapshot->hasRequiredGrimTextPaths()) {
+    config.paths.config_path       = snapshot.config_path;
+    config.paths.data_path         = resolveTrainingConfigPath(snapshot, "grim_text_training_data");
+    config.paths.vocab_path        = resolveTrainingConfigPath(snapshot, "grim_text_vocab");
+    config.paths.output_model_path = resolveTrainingConfigPath(snapshot, "grim_text_model");
+    config.paths.checkpoint_dir    = resolveTrainingConfigPath(snapshot, "grim_text_checkpoints");
+    config.paths.log_dir           = resolveTrainingConfigPath(snapshot, "grim_text_logs");
+    config.paths.status_path       = resolveTrainingConfigPath(snapshot, "grim_text_training_status");
+    if (!config.paths.validate()) {
         throw std::runtime_error(
-            "FATAL: ai_config.json paths.grim_text missing required fields "
-            "(at minimum vocab + training_data must be non-empty)");
+            "FATAL: ai_config.json training.config grim_text_* path fields must all be non-empty");
     }
-    config.paths.config_path       = snapshot->config_path;
-    config.paths.data_path         = snapshot->grim_text_training_data;
-    config.paths.vocab_path        = snapshot->grim_text_vocab;
-    config.paths.output_model_path = snapshot->grim_text_model;
-    config.paths.checkpoint_dir    = snapshot->grim_text_checkpoints;
-    config.paths.log_dir           = snapshot->grim_text_logs;
-    config.paths.status_path       = snapshot->grim_text_training_status;
 
     // 3. Retain the single raw snapshot and derive mutable startup hyperparameters.
-    config.ai_config_snapshot = *snapshot;
+    config.ai_config_snapshot = snapshot;
     loadTrainingHyperparameters(config.ai_config_snapshot, config.hyperparameters);
 
     // 4. Model config validation — single source of truth for JSON keys.

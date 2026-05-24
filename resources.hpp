@@ -30,6 +30,10 @@ extern nlohmann::json aiConfig;
 // Hugging Face token resolution order: HF_TOKEN, HUGGINGFACE_HUB_TOKEN, then
 // aiConfig api_keys.huggingface (after merge with ai_config.local.json).
 std::string resolveHuggingFaceApiToken();
+std::filesystem::path getGrimAiConfigPath();
+std::filesystem::path getGrimLocalAiConfigPath();
+nlohmann::json loadGrimRuntimeAiConfig();
+nlohmann::json saveGrimRuntimeAiConfig(const nlohmann::json& pending);
 
 // ====================================================
 // Global runtime state

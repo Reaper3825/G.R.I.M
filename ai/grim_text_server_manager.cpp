@@ -4,7 +4,7 @@
 
 #include "grim_text_server_manager.hpp"
 #include "../logger.hpp"
-#include "../resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp"  // For reading paths from ai_config.json
+#include "../resources.hpp"
 #include <cpr/cpr.h>
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -95,18 +95,21 @@ bool GRIMTextServerManager::start() {
 #endif
     
     LOG_DEBUG("GRIMTextServer", "Starting GRIM-text server...");
-    
-    // ✅ Load paths from ai_config.json
-    auto snapshot = Config::loadAiConfigSnapshot();
-    if (!snapshot || !snapshot->hasRequiredGrimTextPaths()) {
-        LOG_ERROR("GRIMTextServer", "Failed to load paths from ai_config.json");
-        return false;
-    }
+
+    const auto resolveFromGrimRoot = [](const std::string& rawPath) {
+        fs::path path(rawPath);
+        if (path.is_absolute()) {
+            return path;
+        }
+        return fs::path(getGrimRootDir()) / path;
+    };
+
+    const json& grimTextPaths = aiConfig.at("paths").at("grim_text");
     
     // Resolve absolute paths
-    fs::path serverExe = fs::absolute(serverPath_);
-    fs::path vocabPath = fs::absolute(snapshot->grim_text_vocab);
-    fs::path modelPath = fs::absolute(snapshot->grim_text_model);  // ✅ Read model path from ai_config.json
+    fs::path serverExe = resolveFromGrimRoot(serverPath_);
+    fs::path vocabPath = resolveFromGrimRoot(grimTextPaths.at("vocab").get<std::string>());
+    fs::path modelPath = resolveFromGrimRoot(grimTextPaths.at("model").get<std::string>());
     
     if (!fs::exists(serverExe)) {
         LOG_ERROR("GRIMTextServer", "Server executable not found: " + serverExe.string());

@@ -50,7 +50,7 @@ using json = nlohmann::json;
 #include "html_extractor.hpp"
 
 // AI Config for paths
-#include "../resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp"
+#include "../resources.hpp"
 
 // Persistent state tracking for deduplication
 #include "collection_state.hpp"
@@ -533,41 +533,25 @@ public:
 //  Implementation: WebDataCollector
 //======================================================//
 
-inline int loadGrimCollectorMaxNewEntriesPerRun(const GRIM::Config::AiConfigSnapshot& snapshot) {
-    const auto& dc = GRIM::Config::requireJsonObjectField(
-        snapshot.document,
-        "data_collection",
-        "ai_config.json");
-    return GRIM::Config::getRequiredJsonValue<int>(
-        dc,
-        "max_new_entries_per_run",
-        "data_collection");
+inline int loadGrimCollectorMaxNewEntriesPerRun(const nlohmann::json& runtimeConfig) {
+    return runtimeConfig.at("data_collection").at("max_new_entries_per_run").get<int>();
 }
 
 WebDataCollector::WebDataCollector()
     : config_(), stats_(), curl_handle_(nullptr)
 {
-    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-    if (!snapshot) {
-        throw std::runtime_error("WebDataCollector: loadAiConfigSnapshot returned no snapshot");
-    }
+    const auto resolveFromGrimRoot = [](const std::string& rawPath) {
+        std::filesystem::path path(rawPath);
+        if (path.is_absolute()) {
+            return path.string();
+        }
+        return (std::filesystem::path(getGrimRootDir()) / path).string();
+    };
 
-    if (!snapshot->grim_text_checkpoints.empty()) {
-        config_.output_dir = snapshot->grim_text_checkpoints;
-    }
-    if (!snapshot->grim_text_collector_log.empty()) {
-        config_.log_file = snapshot->grim_text_collector_log;
-    }
-
-    if (config_.output_dir.empty()) {
-        config_.output_dir = GRIM::Config::getRequiredGrimTextPath("checkpoints");
-    }
-
-    if (config_.log_file.empty()) {
-        config_.log_file = GRIM::Config::getRequiredGrimTextPath("collector_log");
-    }
-
-    config_.max_new_entries_per_run = loadGrimCollectorMaxNewEntriesPerRun(*snapshot);
+    const auto& grimTextPaths = aiConfig.at("paths").at("grim_text");
+    config_.output_dir = resolveFromGrimRoot(grimTextPaths.at("checkpoints").get<std::string>());
+    config_.log_file = resolveFromGrimRoot(grimTextPaths.at("collector_log").get<std::string>());
+    config_.max_new_entries_per_run = loadGrimCollectorMaxNewEntriesPerRun(aiConfig);
     
     curl_global_init(CURL_GLOBAL_DEFAULT);
     curl_handle_ = curl_easy_init();
@@ -600,32 +584,26 @@ WebDataCollector::WebDataCollector()
 WebDataCollector::WebDataCollector(const CollectorConfig& config)
     : config_(config), stats_(), curl_handle_(nullptr)
 {
-    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-    if (!snapshot) {
-        throw std::runtime_error("WebDataCollector: loadAiConfigSnapshot returned no snapshot");
-    }
+    const auto resolveFromGrimRoot = [](const std::string& rawPath) {
+        std::filesystem::path path(rawPath);
+        if (path.is_absolute()) {
+            return path.string();
+        }
+        return (std::filesystem::path(getGrimRootDir()) / path).string();
+    };
 
-    if (config_.output_dir.empty() && !snapshot->grim_text_checkpoints.empty()) {
-        config_.output_dir = snapshot->grim_text_checkpoints;
-    }
-    if (config_.log_file.empty() && !snapshot->grim_text_collector_log.empty()) {
-        config_.log_file = snapshot->grim_text_collector_log;
-    }
+    const auto& grimTextPaths = aiConfig.at("paths").at("grim_text");
 
-    // If output_dir not set in config, use ai_config default/fallback.
     if (config_.output_dir.empty()) {
-        config_.output_dir = GRIM::Config::getRequiredGrimTextPath("checkpoints");
+        config_.output_dir = resolveFromGrimRoot(grimTextPaths.at("checkpoints").get<std::string>());
     }
-    
-    // If log_file not set in config, use ai_config default/fallback.
+
     if (config_.log_file.empty()) {
-        config_.log_file = GRIM::Config::getRequiredGrimTextPath("collector_log");
+        config_.log_file = resolveFromGrimRoot(grimTextPaths.at("collector_log").get<std::string>());
     }
-    
-    // If max_new_entries_per_run was not explicitly set by the caller, read the
-    // GRIM collector-owned runtime field from the already-loaded document.
+
     if (config_.max_new_entries_per_run == 5000) {
-        config_.max_new_entries_per_run = loadGrimCollectorMaxNewEntriesPerRun(*snapshot);
+        config_.max_new_entries_per_run = loadGrimCollectorMaxNewEntriesPerRun(aiConfig);
     }
     
     curl_global_init(CURL_GLOBAL_DEFAULT);

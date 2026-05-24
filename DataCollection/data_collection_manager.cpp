@@ -1,6 +1,6 @@
 #include "data_collection_manager.hpp"
 #include "collection_state.hpp"
-#include "resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp"
+#include "resources.hpp"
 #include "nlohmann/json.hpp"
 #include <filesystem>
 #include <fstream>
@@ -11,8 +11,6 @@
 
 // Forward declare the renamed main function from grim_data_pipeline.cpp
 extern int StartDataCollection(int argc, char** argv, std::function<void(float)> progressCallback);
-
-namespace fs = std::filesystem;
 
 namespace GRIM {
 namespace DataCollection {
@@ -33,12 +31,12 @@ bool DataCollectionManager::initialize(const std::string& stateDir) {
     // Determine state directory
     if (stateDir.empty()) {
         // Use default from ai_config or fallback
-        auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-        if (snapshot && !snapshot->grim_text_collected.empty()) {
-            stateDir_ = (fs::path(snapshot->grim_text_collected).parent_path() / "collection_state").string();
-        } else {
-            stateDir_ = "data/collection_state";
+        const std::string collectedPath = aiConfig.at("paths").at("grim_text").at("collected").get<std::string>();
+        std::filesystem::path collectedFsPath(collectedPath);
+        if (collectedFsPath.is_relative()) {
+            collectedFsPath = std::filesystem::path(getGrimRootDir()) / collectedFsPath;
         }
+        stateDir_ = (collectedFsPath.parent_path() / "collection_state").string();
     } else {
         stateDir_ = stateDir;
     }

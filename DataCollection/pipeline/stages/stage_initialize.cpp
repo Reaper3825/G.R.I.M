@@ -4,7 +4,7 @@
 #include "DataCollection/io/dataset_io_json.hpp"
 #include "DataCollection/collection_state.hpp"
 #include "DataCollection/training_paths.hpp"
-#include "resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp"
+#include "resources.hpp"
 
 #include <nlohmann/json.hpp>
 #include <chrono>
@@ -24,25 +24,29 @@ StageResult StageInitialize::execute(PipelineContext& ctx) {
 
     std::cout << "[Initialize] Resolving paths and loading config...\n";
 
-    // ── Load paths from ai_config.json ──────────────────
-    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-    if (snapshot) {
-        if (ctx.config.sourceConfigPath.empty() && !snapshot->grim_text_source_config.empty())
-            ctx.config.sourceConfigPath = snapshot->grim_text_source_config;
-        if (ctx.config.checkpointDir.empty() && !snapshot->grim_text_checkpoints.empty())
-            ctx.config.checkpointDir = snapshot->grim_text_checkpoints;
-        if (ctx.config.rawDir.empty() && !snapshot->grim_text_collected.empty())
-            ctx.config.rawDir = snapshot->grim_text_collected;
-        if (ctx.config.verifiedDir.empty() && !snapshot->grim_text_verified.empty())
-            ctx.config.verifiedDir = snapshot->grim_text_verified;
-        if (ctx.config.outputDir.empty() && !snapshot->grim_text_training_data.empty()) {
-            fs::path td(snapshot->grim_text_training_data);
-            ctx.config.outputDir = td.parent_path().string();
+    const auto resolveFromGrimRoot = [](const std::string& rawPath) {
+        fs::path path(rawPath);
+        if (path.is_absolute()) {
+            return path;
         }
-        std::cout << "[Initialize] Loaded paths from ai_config.json\n";
-    } else {
-        std::cout << "[Initialize] WARNING: Could not load ai_config.json, using defaults\n";
+        return fs::path(getGrimRootDir()) / path;
+    };
+
+    // ── Load paths from ai_config.json ──────────────────
+    const auto& grimTextPaths = aiConfig.at("paths").at("grim_text");
+    if (ctx.config.sourceConfigPath.empty())
+        ctx.config.sourceConfigPath = resolveFromGrimRoot(grimTextPaths.at("source_config").get<std::string>()).string();
+    if (ctx.config.checkpointDir.empty())
+        ctx.config.checkpointDir = resolveFromGrimRoot(grimTextPaths.at("checkpoints").get<std::string>()).string();
+    if (ctx.config.rawDir.empty())
+        ctx.config.rawDir = resolveFromGrimRoot(grimTextPaths.at("collected").get<std::string>()).string();
+    if (ctx.config.verifiedDir.empty())
+        ctx.config.verifiedDir = resolveFromGrimRoot(grimTextPaths.at("verified").get<std::string>()).string();
+    if (ctx.config.outputDir.empty()) {
+        fs::path td = resolveFromGrimRoot(grimTextPaths.at("training_data").get<std::string>());
+        ctx.config.outputDir = td.parent_path().string();
     }
+    std::cout << "[Initialize] Loaded paths from ai_config.json\n";
 
     if (ctx.config.checkpointDir.empty())  ctx.config.checkpointDir  = "data/checkpoints";
     if (ctx.config.rawDir.empty())         ctx.config.rawDir         = "data/raw";
@@ -50,21 +54,14 @@ StageResult StageInitialize::execute(PipelineContext& ctx) {
     if (ctx.config.outputDir.empty())      ctx.config.outputDir      = "data";
 
     // ── Load Q/A JSONL paths from ai_config ─────────────
-    try {
-        std::ifstream configFile("ai_config.json");
-        if (configFile.is_open()) {
-            nlohmann::json config = nlohmann::json::parse(configFile);
-            if (config.contains("data_collection") &&
-                config["data_collection"].contains("qa_jsonl_paths")) {
-                auto& qa = config["data_collection"]["qa_jsonl_paths"];
-                if (qa.is_array()) {
-                    for (const auto& p : qa) {
-                        if (p.is_string()) ctx.config.qaJsonlPaths.push_back(p.get<std::string>());
-                    }
-                }
+    const auto& dataCollection = aiConfig.at("data_collection");
+    if (dataCollection.contains("qa_jsonl_paths") && dataCollection["qa_jsonl_paths"].is_array()) {
+        for (const auto& p : dataCollection["qa_jsonl_paths"]) {
+            if (p.is_string()) {
+                ctx.config.qaJsonlPaths.push_back(resolveFromGrimRoot(p.get<std::string>()).string());
             }
         }
-    } catch (...) {}
+    }
 
     // ── Generate run ID and layout ──────────────────────
     auto now = std::chrono::system_clock::now();

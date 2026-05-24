@@ -34,7 +34,6 @@
 #include "../MMO/Core/ResourceSignal.hpp"
 #include "ai/training_server_manager.hpp"
 #include "resources.hpp"
-#include "resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "DataCollection/dataset_target.hpp"
 
 using namespace GRIMText;
@@ -185,6 +184,16 @@ static std::vector<std::string> splitCommaTags(const std::string& input) {
 static const std::vector<std::string> kBackendOptions = {
     "grim_text_server", "llama_cpp", "ollama", "external"
 };
+
+static std::filesystem::path resolvePathFromGrimRoot(const std::string& rawPath) {
+    std::filesystem::path path(rawPath);
+    if (path.is_absolute()) {
+        return path;
+    }
+    return std::filesystem::path(getGrimRootDir()) / path;
+}
+
+static std::string makeRelativeToGrimRoot(const std::string& pathStr);
 
 // ============================================================
 // Constructor
@@ -356,14 +365,10 @@ UITrainingPanel::UITrainingPanel()
 
     trainingDatasetTarget_ = [&]() -> std::unique_ptr<DatasetTarget> {
         namespace fs = std::filesystem;
-        auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-        fs::path grimRoot = GRIM::Config::detail::resolveGrimRoot();
-        fs::path modelStoreRoot = !snapshot || snapshot->grim_text_model_store.empty()
-            ? grimRoot / "resources" / "models" / "model_store"
-            : fs::path(snapshot->grim_text_model_store);
-        fs::path massDatasetPath = !snapshot || snapshot->grim_text_training_data.empty()
-            ? grimRoot / "resources" / "models" / "GRIM-text" / "training" / "data" / "mass_dataset.jsonl"
-            : fs::path(snapshot->grim_text_training_data).parent_path() / "mass_dataset.jsonl";
+        fs::path modelStoreRoot = resolvePathFromGrimRoot(
+            aiConfig.at("paths").at("grim_text").at("model_store").get<std::string>());
+        fs::path massDatasetPath = resolvePathFromGrimRoot(
+            aiConfig.at("paths").at("grim_text").at("training_data").get<std::string>()).parent_path() / "mass_dataset.jsonl";
         auto dt = std::make_unique<DatasetTarget>(modelStoreRoot, massDatasetPath);
         dt->loadCurriculumRegistry();
         return dt;
@@ -1257,11 +1262,8 @@ void UITrainingPanel::submitNewModel() {
     // Auto-create model directory under model_store
     {
         namespace fs = std::filesystem;
-        auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-        fs::path grimRoot = GRIM::Config::detail::resolveGrimRoot();
-        fs::path modelStoreRoot = !snapshot || snapshot->grim_text_model_store.empty()
-            ? grimRoot / "resources" / "models" / "model_store"
-            : fs::path(snapshot->grim_text_model_store);
+        fs::path modelStoreRoot = resolvePathFromGrimRoot(
+            aiConfig.at("paths").at("grim_text").at("model_store").get<std::string>());
         fs::path modelDir = modelStoreRoot / bufId_;
         std::error_code ec;
         fs::create_directories(modelDir, ec);
@@ -1439,46 +1441,29 @@ void UITrainingPanel::refreshModelList() {
 }
 
 // ============================================================
-// Config persistence (ai_config.json → mmo.sub_models)
+// Config persistence (GRIM runtime config → mmo.sub_models)
 // ============================================================
 
 bool UITrainingPanel::persistSubModel(const GRIM::MMO::ModelInfo& model) {
-    namespace fs = std::filesystem;
-
     try {
-        nlohmann::json config;
-        {
-            std::ifstream f(AI_CONFIG_FILE);
-            if (!f.is_open()) {
-                LOG_ERROR("UITrainingPanel", "Cannot open ai_config.json for reading");
-                return false;
-            }
-            f >> config;
-        }
+        const nlohmann::json config = loadGrimRuntimeAiConfig();
 
         if (!config.contains("mmo") || !config["mmo"].is_object()) {
             LOG_ERROR("UITrainingPanel", "ai_config.json missing 'mmo' section");
             return false;
         }
 
-        if (!config["mmo"].contains("sub_models"))
-            config["mmo"]["sub_models"] = nlohmann::json::array();
+        nlohmann::json updatedSubModels = config["mmo"].contains("sub_models")
+            ? config["mmo"]["sub_models"]
+            : nlohmann::json::array();
 
-        config["mmo"]["sub_models"].push_back(
+        updatedSubModels.push_back(
             GRIM::MMO::ModelRegistry::serializeModelToJson(model));
 
-        const std::string tmpPath = std::string(AI_CONFIG_FILE) + ".tmp";
-        {
-            std::ofstream out(tmpPath);
-            if (!out.is_open()) {
-                LOG_ERROR("UITrainingPanel", "Cannot write temp config file");
-                return false;
-            }
-            out << config.dump(4);
-        }
-        fs::rename(tmpPath, AI_CONFIG_FILE);
+        nlohmann::json pending;
+        pending["mmo"]["sub_models"] = std::move(updatedSubModels);
+        saveGrimRuntimeAiConfig(pending);
 
-        aiConfig = config;
         return true;
     } catch (const std::exception& e) {
         LOG_ERROR("UITrainingPanel", std::string("persistSubModel failed: ") + e.what());
@@ -1487,20 +1472,13 @@ bool UITrainingPanel::persistSubModel(const GRIM::MMO::ModelInfo& model) {
 }
 
 bool UITrainingPanel::removeSubModelFromConfig(const std::string& model_id) {
-    namespace fs = std::filesystem;
-
     try {
-        nlohmann::json config;
-        {
-            std::ifstream f(AI_CONFIG_FILE);
-            if (!f.is_open()) return false;
-            f >> config;
-        }
+        const nlohmann::json config = loadGrimRuntimeAiConfig();
 
         if (!config.contains("mmo") || !config["mmo"].contains("sub_models"))
             return false;
 
-        auto& subs = config["mmo"]["sub_models"];
+        nlohmann::json subs = config["mmo"]["sub_models"];
         bool found = false;
         for (auto it = subs.begin(); it != subs.end(); ++it) {
             if (it->value("id", "") == model_id) {
@@ -1511,15 +1489,10 @@ bool UITrainingPanel::removeSubModelFromConfig(const std::string& model_id) {
         }
         if (!found) return false;
 
-        const std::string tmpPath = std::string(AI_CONFIG_FILE) + ".tmp";
-        {
-            std::ofstream out(tmpPath);
-            if (!out.is_open()) return false;
-            out << config.dump(4);
-        }
-        fs::rename(tmpPath, AI_CONFIG_FILE);
+        nlohmann::json pending;
+        pending["mmo"]["sub_models"] = std::move(subs);
+        saveGrimRuntimeAiConfig(pending);
 
-        aiConfig = config;
         return true;
     } catch (const std::exception& e) {
         LOG_ERROR("UITrainingPanel", std::string("removeSubModelFromConfig failed: ") + e.what());
@@ -1766,14 +1739,21 @@ void UITrainingPanel::processToolGapClicks(const InputState& input, const PanelR
 // ============================================================
 
 void UITrainingPanel::loadHyperparamSnapshot() {
-    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-    if (!snapshot) {
+    try {
+        const nlohmann::json runtimeConfig = loadGrimRuntimeAiConfig();
+        if (!runtimeConfig.contains("training") || !runtimeConfig.at("training").is_object()) {
+            throw std::runtime_error("ai_config.json missing object: training");
+        }
+        const nlohmann::json& training = runtimeConfig.at("training");
+        if (!training.contains("config") || !training.at("config").is_object()) {
+            throw std::runtime_error("ai_config.json missing object: training.config");
+        }
+        hyperparamRegistry_.populate(training.at("config"));
+        hyperparamsLoaded_ = true;
+    } catch (const std::exception& e) {
+        LOG_ERROR("UITrainingPanel", std::string("Failed to load hyperparameter snapshot: ") + e.what());
         hyperparamsLoaded_ = false;
-        return;
     }
-    GRIM::HyperParameters::loadTrainingHyperparameters(*snapshot, hyperparamSnapshot_);
-    hyperparamRegistry_.populate(hyperparamSnapshot_);
-    hyperparamsLoaded_ = true;
 }
 
 // ============================================================
@@ -1893,7 +1873,7 @@ void UITrainingPanel::drawParamBrowser(OverlayRenderer& renderer, const Vec2& or
                 // Color-code booleans
                 uint32_t valColor = Colors::TextValue;
                 if (entry->type == GRIM::Config::HyperparamType::Bool) {
-                    valColor = (entry->ptr_bool && *entry->ptr_bool) ? Colors::Success : Colors::TextMuted;
+                    valColor = entry->value.get<bool>() ? Colors::Success : Colors::TextMuted;
                 }
 
                 renderer.drawText({x + nameColW, drawY + 3.0f}, valStr, valColor);
@@ -2010,10 +1990,8 @@ void UITrainingPanel::processParamBrowserClicks(const InputState& input) {
             if (entry->type == GRIM::Config::HyperparamType::Bool) {
                 // Toggle booleans immediately
                 if (editingParamIndex_ >= 0) commitParamEdit();
-                if (entry->ptr_bool) {
-                    *entry->ptr_bool = !(*entry->ptr_bool);
-                    persistHyperparamToJSON(*entry);
-                }
+                persistHyperparamToJSON(*entry, !entry->value.get<bool>());
+                loadHyperparamSnapshot();
             } else {
                 // Open inline editor for non-bool types
                 if (editingParamIndex_ >= 0) commitParamEdit();
@@ -2054,29 +2032,10 @@ void UITrainingPanel::commitParamEdit() {
         const std::string& val = editParamBuffer_;
 
         try {
-            switch (entry->type) {
-                case GRIM::Config::HyperparamType::Int:
-                    if (entry->ptr_int) *entry->ptr_int = std::stoi(val);
-                    break;
-                case GRIM::Config::HyperparamType::Int64:
-                    if (entry->ptr_int64) *entry->ptr_int64 = std::stoll(val);
-                    break;
-                case GRIM::Config::HyperparamType::Float:
-                    if (entry->ptr_float) *entry->ptr_float = std::stof(val);
-                    break;
-                case GRIM::Config::HyperparamType::String:
-                    if (entry->ptr_string) *entry->ptr_string = val;
-                    break;
-                case GRIM::Config::HyperparamType::SizeT:
-                    if (entry->ptr_sizet) *entry->ptr_sizet = static_cast<size_t>(std::stoull(val));
-                    break;
-                case GRIM::Config::HyperparamType::Bool:
-                    // Bools are toggled on click, not edited via text
-                    break;
-            }
-            persistHyperparamToJSON(*entry);
-        } catch (const std::exception&) {
-            // Invalid input — discard change silently (value stays as-is)
+            persistHyperparamToJSON(*entry, entry->parseEditedValue(val));
+            loadHyperparamSnapshot();
+        } catch (const std::exception& e) {
+            LOG_ERROR("UITrainingPanel", std::string("Invalid hyperparameter edit for ") + entry->key + ": " + e.what());
         }
     }
 
@@ -2090,45 +2049,19 @@ void UITrainingPanel::cancelParamEdit() {
 }
 
 // ============================================================
-// Persist single hyperparam value to ai_config.json
+// Persist single hyperparam value through GRIM runtime config
 // ============================================================
 
-bool UITrainingPanel::persistHyperparamToJSON(const GRIM::Config::HyperparamEntry& entry) {
+bool UITrainingPanel::persistHyperparamToJSON(const GRIM::Config::HyperparamEntry& entry, const nlohmann::json& value) {
     try {
-        std::ifstream fileIn("ai_config.json");
-        nlohmann::json j;
-        if (fileIn.is_open()) { fileIn >> j; fileIn.close(); }
-
-        if (!j.contains("training")) j["training"] = nlohmann::json::object();
-        if (!j["training"].contains("config")) j["training"]["config"] = nlohmann::json::object();
-        auto& tc = j["training"]["config"];
-
-        // Get the value as a JSON type
-        nlohmann::json val;
-        switch (entry.type) {
-            case GRIM::Config::HyperparamType::Bool:   val = entry.ptr_bool   ? *entry.ptr_bool   : false; break;
-            case GRIM::Config::HyperparamType::Int:    val = entry.ptr_int    ? *entry.ptr_int    : 0;     break;
-            case GRIM::Config::HyperparamType::Int64:  val = entry.ptr_int64  ? *entry.ptr_int64  : 0;     break;
-            case GRIM::Config::HyperparamType::Float:  val = entry.ptr_float  ? *entry.ptr_float  : 0.0f;  break;
-            case GRIM::Config::HyperparamType::String: val = entry.ptr_string ? *entry.ptr_string : "";    break;
-            case GRIM::Config::HyperparamType::SizeT:  val = entry.ptr_sizet  ? static_cast<int64_t>(*entry.ptr_sizet) : 0; break;
-        }
-
-        // ── JSON path mapping ──
-        // Keys not matched here are written as flat leaves to training.config.
-        // Collapsed schema leaves must not be mapped back into nested objects.
-        const std::string& k = entry.key;
-
         // Persist all surviving hyperparameter keys as direct leaves.
-        tc[k] = val;
-
-        // Write back
-        std::ofstream fileOut("ai_config.json");
-        if (!fileOut.is_open()) return false;
-        fileOut << std::setw(4) << j << std::endl;
+        nlohmann::json pending;
+        pending["training"]["config"][entry.key] = value;
+        saveGrimRuntimeAiConfig(pending);
         return true;
 
-    } catch (const std::exception&) {
+    } catch (const std::exception& e) {
+        LOG_ERROR("UITrainingPanel", std::string("persistHyperparamToJSON failed for ") + entry.key + ": " + e.what());
         return false;
     }
 }
@@ -2331,7 +2264,8 @@ void UITrainingPanel::startTrainingSession() {
     currentStats = TrainingStats();
     if (trainingProgressBar) trainingProgressBar->setValue(0.0f);
 
-    std::string grmtPath = "resources/models/GRIM-text/training/data/training_data.grmt";
+    std::string grmtPath = resolvePathFromGrimRoot(
+        aiConfig.at("paths").at("grim_text").at("training_data").get<std::string>()).string();
     std::ifstream checkGrmt(grmtPath, std::ios::binary | std::ios::ate);
     bool hasGrmt = checkGrmt.is_open() && checkGrmt.tellg() > 0;
     checkGrmt.close();
@@ -2344,19 +2278,14 @@ void UITrainingPanel::startTrainingSession() {
     }
 
     addLog("Training data found", 0);
-    currentConfig.dataPath = "data/training_data.grmt";
-
-    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-    if (snapshot && snapshot->hasRequiredGrimTextPaths()) {
-        currentConfig.dataPath = snapshot->grim_text_training_data;
-        currentConfig.vocabPath = snapshot->grim_text_vocab;
-        currentConfig.outputPath = snapshot->grim_text_model;
-        addLog("Data: " + currentConfig.dataPath, 0);
-        addLog("Vocab: " + currentConfig.vocabPath, 0);
-        addLog("Output: " + currentConfig.outputPath, 0);
-    } else {
-        addLog("Failed to load paths from config, using defaults", 1);
-    }
+    currentConfig.dataPath = grmtPath;
+    currentConfig.vocabPath = resolvePathFromGrimRoot(
+        aiConfig.at("paths").at("grim_text").at("vocab").get<std::string>()).string();
+    currentConfig.outputPath = resolvePathFromGrimRoot(
+        aiConfig.at("paths").at("grim_text").at("model").get<std::string>()).string();
+    addLog("Data: " + currentConfig.dataPath, 0);
+    addLog("Vocab: " + currentConfig.vocabPath, 0);
+    addLog("Output: " + currentConfig.outputPath, 0);
 
     checkpointMergeStatus = "";
     if (trainingController && trainingController->startTraining(currentConfig)) {
@@ -2482,13 +2411,13 @@ uint32_t UITrainingPanel::getStateColor(Control::TrainingState state) const {
 void UITrainingPanel::loadConfigFromJSON() {
     currentConfig = TrainingConfigManager::loadFromJSON();
     updateSlidersFromConfig();
-    addLog("Configuration loaded from ai_config.json", 0);
+    addLog("Configuration loaded from GRIM runtime config", 0);
 }
 
 void UITrainingPanel::saveConfigToJSON() {
     updateConfigFromSliders();
     if (TrainingConfigManager::saveToJSON(currentConfig))
-        addLog("Configuration saved", 0);
+        addLog("Configuration saved to GRIM runtime config", 0);
     else
         addLog("Failed to save configuration", 2);
 }
@@ -2607,11 +2536,8 @@ void UITrainingPanel::updateCheckpointStats() {
 }
 
 std::string UITrainingPanel::readDatasetSizeSnapshot() {
-    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-    if (!snapshot || !snapshot->hasRequiredGrimTextPaths())
-        return "Dataset: Config error";
-
-    const std::string grmtPath = snapshot->grim_text_training_data;
+    const std::string grmtPath = resolvePathFromGrimRoot(
+        aiConfig.at("paths").at("grim_text").at("training_data").get<std::string>()).string();
     try {
         if (std::filesystem::exists(grmtPath)) {
             auto fileSize = std::filesystem::file_size(grmtPath);
@@ -2769,13 +2695,11 @@ void UITrainingPanel::updateResourceMonitoring(float dt) {
 
 void UITrainingPanel::loadPathsFromConfig() {
     try {
-        auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-        if (snapshot) {
-            vocabPathBuffer = makeRelativeToGrimRoot(snapshot->grim_text_vocab);
-            modelPathBuffer = makeRelativeToGrimRoot(snapshot->grim_text_model);
-            checkpointsPathBuffer = makeRelativeToGrimRoot(snapshot->grim_text_checkpoints);
-            logsPathBuffer = makeRelativeToGrimRoot(snapshot->grim_text_logs);
-        }
+        const auto& grimTextPaths = aiConfig.at("paths").at("grim_text");
+        vocabPathBuffer = makeRelativeToGrimRoot(resolvePathFromGrimRoot(grimTextPaths.at("vocab").get<std::string>()).string());
+        modelPathBuffer = makeRelativeToGrimRoot(resolvePathFromGrimRoot(grimTextPaths.at("model").get<std::string>()).string());
+        checkpointsPathBuffer = makeRelativeToGrimRoot(resolvePathFromGrimRoot(grimTextPaths.at("checkpoints").get<std::string>()).string());
+        logsPathBuffer = makeRelativeToGrimRoot(resolvePathFromGrimRoot(grimTextPaths.at("logs").get<std::string>()).string());
     } catch (const std::exception& e) {
         LOG_ERROR("UITrainingPanel", "Error loading paths: " + std::string(e.what()));
     }
@@ -2806,34 +2730,14 @@ static std::string makeRelativeToGrimRoot(const std::string& pathStr) {
 
 void UITrainingPanel::savePathsToConfig() {
     try {
-        std::ifstream configFileIn("ai_config.json");
-        if (!configFileIn.is_open()) return;
+        nlohmann::json pending;
 
-        nlohmann::json config;
-        configFileIn >> config;
-        configFileIn.close();
+        pending["paths"]["grim_text"]["vocab"] = makeRelativeToGrimRoot(vocabPathBuffer);
+        pending["paths"]["grim_text"]["model"] = makeRelativeToGrimRoot(modelPathBuffer);
+        pending["paths"]["grim_text"]["checkpoints"] = makeRelativeToGrimRoot(checkpointsPathBuffer);
+        pending["paths"]["grim_text"]["logs"] = makeRelativeToGrimRoot(logsPathBuffer);
 
-        if (!config.contains("paths")) config["paths"] = nlohmann::json::object();
-        if (!config["paths"].contains("grim_text")) config["paths"]["grim_text"] = nlohmann::json::object();
-
-        config["paths"]["grim_text"]["vocab"] = makeRelativeToGrimRoot(vocabPathBuffer);
-        config["paths"]["grim_text"]["model"] = makeRelativeToGrimRoot(modelPathBuffer);
-        config["paths"]["grim_text"]["checkpoints"] = makeRelativeToGrimRoot(checkpointsPathBuffer);
-        config["paths"]["grim_text"]["logs"] = makeRelativeToGrimRoot(logsPathBuffer);
-
-        auto preserveRelative = [&](const std::string& key) {
-            if (config["paths"]["grim_text"].contains(key))
-                config["paths"]["grim_text"][key] = makeRelativeToGrimRoot(config["paths"]["grim_text"][key].get<std::string>());
-        };
-        preserveRelative("collected");
-        preserveRelative("verified");
-        preserveRelative("collector_log");
-        preserveRelative("source_config");
-
-        std::ofstream configFileOut("ai_config.json");
-        if (!configFileOut.is_open()) return;
-        configFileOut << config.dump(4);
-        configFileOut.close();
+        saveGrimRuntimeAiConfig(pending);
     } catch (const std::exception& e) {
         LOG_ERROR("UITrainingPanel", "Error saving paths: " + std::string(e.what()));
     }

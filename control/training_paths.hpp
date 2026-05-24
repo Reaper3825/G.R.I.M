@@ -80,6 +80,22 @@ inline std::filesystem::path resolveResourceRoot() {
     return cached;
 }
 
+inline std::filesystem::path resolveGrimRoot() {
+    const std::filesystem::path resourceRoot = resolveResourceRoot();
+    if (resourceRoot.filename() == "resources") {
+        return resourceRoot.parent_path();
+    }
+    return resourceRoot;
+}
+
+inline std::filesystem::path getAiConfigFilePath() {
+    return resolveGrimRoot() / "ai_config.json";
+}
+
+inline std::filesystem::path getAiConfigLocalFilePath() {
+    return resolveGrimRoot() / "ai_config.local.json";
+}
+
 inline std::filesystem::path getTrainingStatusFilePath() {
     return resolveResourceRoot() / "models/GRIM-text/training/training_status.fb";
 }

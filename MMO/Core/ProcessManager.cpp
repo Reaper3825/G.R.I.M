@@ -4,7 +4,7 @@
 
 #include "ProcessManager.hpp"
 #include "../../logger.hpp"
-#include "../../resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp"
+#include "../../resources.hpp"
 
 #include <cpr/cpr.h>
 #include <nlohmann/json.hpp>
@@ -217,12 +217,15 @@ bool ProcessManager::launchGrimTextServer(ProcessSlot& slot, const ModelInfo& mo
         // cleaned up by OS.
     }
 
-    // Load paths from config
-    auto snapshot = Config::loadAiConfigSnapshot();
-    if (!snapshot || !snapshot->hasRequiredGrimTextPaths()) {
-        LOG_ERROR("ProcessManager", "Failed to load paths from ai_config.json for model '" + model.id + "'");
-        return false;
-    }
+    const auto resolveFromGrimRoot = [](const std::string& rawPath) {
+        fs::path path(rawPath);
+        if (path.is_absolute()) {
+            return path;
+        }
+        return fs::path(getGrimRootDir()) / path;
+    };
+
+    const nlohmann::json& grimTextPaths = aiConfig.at("paths").at("grim_text");
 
     // Determine executable path — use model-specific path if provided, else default
     fs::path server_exe;
@@ -235,11 +238,11 @@ bool ProcessManager::launchGrimTextServer(ProcessSlot& slot, const ModelInfo& mo
             server_exe = fs::absolute("resources/models/GRIM-text/training/build/Release/grim_text_server.exe");
         }
     } else {
-        server_exe = fs::absolute("resources/models/GRIM-text/training/build/Release/grim_text_server.exe");
+        server_exe = resolveFromGrimRoot("resources/models/GRIM-text/training/build/Release/grim_text_server.exe");
     }
 
-    fs::path vocab_path = fs::absolute(snapshot->grim_text_vocab);
-    fs::path model_weights = fs::absolute(snapshot->grim_text_model);
+    fs::path vocab_path = resolveFromGrimRoot(grimTextPaths.at("vocab").get<std::string>());
+    fs::path model_weights = resolveFromGrimRoot(grimTextPaths.at("model").get<std::string>());
 
     if (!fs::exists(server_exe)) {
         LOG_ERROR("ProcessManager", "Server executable not found: " + server_exe.string());
@@ -352,23 +355,26 @@ bool ProcessManager::launchGrimTextServer(ProcessSlot& slot, const ModelInfo& mo
         }
     } catch (...) {}
 
-    // Load paths from config
-    auto snapshot = Config::loadAiConfigSnapshot();
-    if (!snapshot || !snapshot->hasRequiredGrimTextPaths()) {
-        LOG_ERROR("ProcessManager", "Failed to load paths from ai_config.json for model '" + model.id + "'");
-        return false;
-    }
+    const auto resolveFromGrimRoot = [](const std::string& rawPath) {
+        fs::path path(rawPath);
+        if (path.is_absolute()) {
+            return path;
+        }
+        return fs::path(getGrimRootDir()) / path;
+    };
+
+    const nlohmann::json& grimTextPaths = aiConfig.at("paths").at("grim_text");
 
     // Determine executable path
     fs::path server_exe;
     if (!model.model_path.empty() && fs::exists(model.model_path) && model.model_path.ends_with(".exe")) {
         server_exe = fs::absolute(model.model_path);
     } else {
-        server_exe = fs::absolute("resources/models/GRIM-text/training/build/Release/grim_text_server");
+        server_exe = resolveFromGrimRoot("resources/models/GRIM-text/training/build/Release/grim_text_server");
     }
 
-    fs::path vocab_path = fs::absolute(snapshot->grim_text_vocab);
-    fs::path model_weights = fs::absolute(snapshot->grim_text_model);
+    fs::path vocab_path = resolveFromGrimRoot(grimTextPaths.at("vocab").get<std::string>());
+    fs::path model_weights = resolveFromGrimRoot(grimTextPaths.at("model").get<std::string>());
 
     if (!fs::exists(server_exe)) {
         LOG_ERROR("ProcessManager", "Server executable not found: " + server_exe.string());

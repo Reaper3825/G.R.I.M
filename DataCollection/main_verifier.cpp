@@ -1,11 +1,27 @@
 #include "verifier.hpp"
+#include "resources.hpp"
+#include "settings/runtime_ai_config.hpp"
+#include <nlohmann/json.hpp>
 #include <iostream>
 #include <fstream>
+#include <filesystem>
 
 int main(int argc, char** argv) {
+    Settings::loadRuntimeAiConfig();
+
+    const auto resolveFromGrimRoot = [](const std::string& rawPath) {
+        std::filesystem::path path(rawPath);
+        if (path.is_absolute()) {
+            return path.string();
+        }
+        return (std::filesystem::path(getGrimRootDir()) / path).string();
+    };
+
+    const auto& grimTextPaths = aiConfig.at("paths").at("grim_text");
+
     Config config;
-    config.input_dir = GRIM::Config::getRequiredGrimTextPath("collected");
-    config.output_dir = GRIM::Config::getRequiredGrimTextPath("verified");
+    config.input_dir = resolveFromGrimRoot(grimTextPaths.at("collected").get<std::string>());
+    config.output_dir = resolveFromGrimRoot(grimTextPaths.at("verified").get<std::string>());
     config.reliability_threshold = 0.3f;  // Lower threshold for basic validation
     config.min_length = 50;
     config.max_length = 100000;

@@ -6,7 +6,7 @@
 #include <unordered_map>
 #include <memory>
 #include <iostream>
-#include "../resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp"
+#include <functional>
 
 struct UnverifiedEntry {
     std::string content;

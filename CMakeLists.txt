@@ -63,8 +63,6 @@ include_directories("${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include")
 if(EXISTS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include/opencv4")
   include_directories("${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include/opencv4")
 endif()
-# Make GRIM-text shared headers available to all targets (e.g., TrainingLoop)
-include_directories("${CMAKE_SOURCE_DIR}/resources/models/GRIM-text/Shared")
 
 # Add library search paths for both Debug and Release
 link_directories("${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib")

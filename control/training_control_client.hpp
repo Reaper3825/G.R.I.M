@@ -58,7 +58,7 @@ struct TrainingConfig {
     bool useGPU = true;
     bool useFlashAttention = true;
     
-    // Internal path fields - populated from AiConfigSnapshot grim_text_* fields at runtime
+    // Internal path fields - populated from training.config grim_text_* leaves at runtime
     // DO NOT save/load these directly - load one snapshot and copy the needed fields
     std::string dataPath = "";
     std::string vocabPath = "";

@@ -230,7 +230,7 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
                                      prompt_atom_entry_ids.begin() + drop);
     }
 
-    // Use generation config from the flat AiConfigSnapshot generation_* leaves.
+    // Use generation config from training.config through the HyperParameters handoff.
     GRIM::HyperParameters::GenerationConfig cfg;
     GRIM::HyperParameters::loadGenerationConfig(ctx.config.ai_config_snapshot, cfg);
     cfg.max_new_tokens = max_new_tokens;

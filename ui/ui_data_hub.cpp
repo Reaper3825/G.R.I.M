@@ -8,7 +8,6 @@
 #include "ui_draw_helpers.hpp"
 #include "logger.hpp"
 #include "resources.hpp"
-#include "resources/models/GRIM-text/Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "core/input_parser.hpp"
 #include "MMO/Core/ModelRegistry.hpp"
 
@@ -102,14 +101,22 @@ static std::string detectFetcherFromUrl(const std::string& url) {
 }
 
 static std::string getSourceConfigPath() {
-    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-    if (snapshot && !snapshot->grim_text_source_config.empty()) {
-        return snapshot->grim_text_source_config;
+    std::filesystem::path sourcePath = aiConfig.at("paths").at("grim_text").at("source_config").get<std::string>();
+    if (sourcePath.is_relative()) {
+        sourcePath = std::filesystem::path(getGrimRootDir()) / sourcePath;
     }
-    return (std::filesystem::path(getGrimRootDir()) / "DataCollection" / "source_data.json").string();
+    return sourcePath.string();
 }
 
 namespace {
+std::filesystem::path resolvePathFromGrimRoot(const std::string& rawPath) {
+    std::filesystem::path path(rawPath);
+    if (path.is_absolute()) {
+        return path;
+    }
+    return std::filesystem::path(getGrimRootDir()) / path;
+}
+
 struct CurriculumTabLayout {
     float listX   = 0.0f;
     float listY   = 0.0f;
@@ -1004,31 +1011,19 @@ UIDataHubPanel::UIDataHubPanel()
 
     {
         namespace fs = std::filesystem;
-        auto snapshot = GRIM::Config::loadAiConfigSnapshot();
+        fs::path modelStoreRoot = resolvePathFromGrimRoot(
+            aiConfig.at("paths").at("grim_text").at("model_store").get<std::string>());
 
-        fs::path grimRoot = GRIM::Config::detail::resolveGrimRoot();
-        fs::path modelStoreRoot;
-        if (snapshot && !snapshot->grim_text_model_store.empty())
-            modelStoreRoot = fs::path(snapshot->grim_text_model_store);
-        else
-            modelStoreRoot = grimRoot / "resources" / "models" / "model_store";
-
-        fs::path massDatasetPath;
-        if (snapshot && !snapshot->grim_text_training_data.empty())
-            massDatasetPath = fs::path(snapshot->grim_text_training_data).parent_path() / "mass_dataset.jsonl";
-        else
-            massDatasetPath = grimRoot / "resources" / "models" / "GRIM-text" / "training" / "data" / "mass_dataset.jsonl";
+        fs::path massDatasetPath = resolvePathFromGrimRoot(
+            aiConfig.at("paths").at("grim_text").at("training_data").get<std::string>()).parent_path() / "mass_dataset.jsonl";
 
         datasetTarget_ = std::make_unique<DatasetTarget>(modelStoreRoot, massDatasetPath);
 
         GRIM::DataCollection::DataStructuringConfig structCfg;
-        try {
-            auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-            if (snapshot && snapshot->document.contains("data_structuring")) {
-                structCfg = GRIM::DataCollection::DataStructuringConfig::fromJson(
-                    snapshot->document["data_structuring"]);
-            }
-        } catch (...) {}
+        if (aiConfig.contains("data_collection") && aiConfig["data_collection"].contains("data_structuring")) {
+            structCfg = GRIM::DataCollection::DataStructuringConfig::fromJson(
+                aiConfig["data_collection"]["data_structuring"]);
+        }
         if (structCfg.ollama_model.empty()) structCfg.ollama_model = "llama3.1:8b";
         structurer_ = std::make_unique<GRIM::DataCollection::DataStructurer>(structCfg);
     }
@@ -3124,16 +3119,14 @@ void UIDataHubPanel::pollCollectionManager() {
 }
 
 void UIDataHubPanel::updateDatasetStats() {
-    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-    if (!snapshot || !snapshot->hasRequiredGrimTextPaths()) {
-        datasetSizeInfo_ = "Dataset: Config error";
-        hudFileSize_ = "N/A";
-        return;
-    }
+    const std::filesystem::path trainingDataPath = resolvePathFromGrimRoot(
+        aiConfig.at("paths").at("grim_text").at("training_data").get<std::string>());
+    const std::filesystem::path checkpointDir = resolvePathFromGrimRoot(
+        aiConfig.at("paths").at("grim_text").at("checkpoints").get<std::string>());
 
     try {
-        if (std::filesystem::exists(snapshot->grim_text_training_data)) {
-            auto sz = std::filesystem::file_size(snapshot->grim_text_training_data);
+        if (std::filesystem::exists(trainingDataPath)) {
+            auto sz = std::filesystem::file_size(trainingDataPath);
             std::stringstream ss;
             if (sz >= 1024ULL * 1024 * 1024)
                 ss << std::fixed << std::setprecision(2) << (sz / (1024.0 * 1024.0 * 1024.0)) << " GB";
@@ -3148,10 +3141,9 @@ void UIDataHubPanel::updateDatasetStats() {
             hudFileSize_ = "N/A";
         }
 
-        std::string ckptDir = GRIM::Config::getRequiredGrimTextPath("checkpoints");
-        if (std::filesystem::exists(ckptDir)) {
+        if (std::filesystem::exists(checkpointDir)) {
             int count = 0;
-            for (const auto& e : std::filesystem::directory_iterator(ckptDir))
+            for (const auto& e : std::filesystem::directory_iterator(checkpointDir))
                 if (e.path().extension() == ".ckpt") count++;
             hudCheckpoints_ = count;
             checkpointStatsInfo_ = "Checkpoints: " + std::to_string(count);
@@ -3189,19 +3181,11 @@ void UIDataHubPanel::loadDirectoryCollectionPathFromConfig() {
         throw std::runtime_error("dirPathInput_ is NULL - Home tab directory input must exist");
     }
 
-    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-    if (!snapshot) {
-        addLog("Failed to load ai_config.json paths for directory collection", 2);
-        return;
-    }
+    const std::string directoryCollectionPath = resolvePathFromGrimRoot(
+        aiConfig.at("paths").at("grim_text").at("directory_collection").get<std::string>()).string();
 
-    if (snapshot->grim_text_directory_collection.empty()) {
-        addLog("ai_config.json missing paths.grim_text.directory_collection for directory collection", 2);
-        return;
-    }
-
-    dirPathInput_->setText(snapshot->grim_text_directory_collection);
-    dirScanPath_ = snapshot->grim_text_directory_collection;
+    dirPathInput_->setText(directoryCollectionPath);
+    dirScanPath_ = directoryCollectionPath;
     dirNeedsScan_ = true;
     addLog("Loaded directory collection path from ai_config.json", 0);
 }
@@ -4105,7 +4089,7 @@ void UIDataHubPanel::saveSequenceCard(size_t cardId) {
 // =========================================================
 
 void UIDataHubPanel::loadUIConfig() {
-    std::string path = GRIM::Config::getRequiredGrimTextPath("checkpoints") + "/collection_state/ui_config.json";
+    std::string path = (resolvePathFromGrimRoot(aiConfig.at("paths").at("grim_text").at("checkpoints").get<std::string>()) / "collection_state" / "ui_config.json").string();
     try {
         if (!std::filesystem::exists(path)) return;
         std::ifstream f(path);
@@ -4123,7 +4107,7 @@ void UIDataHubPanel::loadUIConfig() {
 }
 
 void UIDataHubPanel::saveUIConfig() {
-    std::string stateDir = GRIM::Config::getRequiredGrimTextPath("checkpoints") + "/collection_state";
+    std::string stateDir = (resolvePathFromGrimRoot(aiConfig.at("paths").at("grim_text").at("checkpoints").get<std::string>()) / "collection_state").string();
     std::string path = stateDir + "/ui_config.json";
     try {
         std::filesystem::create_directories(stateDir);
@@ -4139,7 +4123,7 @@ void UIDataHubPanel::saveUIConfig() {
 }
 
 void UIDataHubPanel::loadDownloadQueue() {
-    std::string path = GRIM::Config::getRequiredGrimTextPath("checkpoints") + "/collection_state/download_queue.json";
+    std::string path = (resolvePathFromGrimRoot(aiConfig.at("paths").at("grim_text").at("checkpoints").get<std::string>()) / "collection_state" / "download_queue.json").string();
     try {
         if (!std::filesystem::exists(path)) return;
         std::ifstream f(path);
@@ -4168,7 +4152,7 @@ void UIDataHubPanel::loadDownloadQueue() {
 }
 
 void UIDataHubPanel::saveDownloadQueue() {
-    std::string stateDir = GRIM::Config::getRequiredGrimTextPath("checkpoints") + "/collection_state";
+    std::string stateDir = (resolvePathFromGrimRoot(aiConfig.at("paths").at("grim_text").at("checkpoints").get<std::string>()) / "collection_state").string();
     std::string path = stateDir + "/download_queue.json";
     try {
         std::filesystem::create_directories(stateDir);
@@ -5031,13 +5015,8 @@ void UIDataHubPanel::layoutCBListTypeDropdownInList(float listX, float listY, fl
 void UIDataHubPanel::populateCBModelDropdown() {
     if (!cbModelDropdown_) return;
     namespace fs = std::filesystem;
-    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-    fs::path grimRoot = GRIM::Config::detail::resolveGrimRoot();
-    fs::path modelStoreRoot;
-    if (snapshot && !snapshot->grim_text_model_store.empty())
-        modelStoreRoot = fs::path(snapshot->grim_text_model_store);
-    else
-        modelStoreRoot = grimRoot / "resources" / "models" / "model_store";
+    fs::path modelStoreRoot = resolvePathFromGrimRoot(
+        aiConfig.at("paths").at("grim_text").at("model_store").get<std::string>());
 
     std::vector<std::string> names;
     try {

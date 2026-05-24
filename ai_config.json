@@ -406,6 +406,18 @@
     "silence_timeout_ms": 4000,
     "training": {
         "config": {
+            "grim_text_vocab": "resources/models/GRIM-text/training/data/vocab.bin",
+            "grim_text_model": "resources/models/GRIM-text/grim_text.bin",
+            "grim_text_training_data": "resources/models/GRIM-text/training/data/training_data.grmt",
+            "grim_text_checkpoints": "resources/models/GRIM-text/checkpoints",
+            "grim_text_collected": "resources/models/GRIM-text/data/collected",
+            "grim_text_directory_collection": "resources/models/GRIM-text/data/collected",
+            "grim_text_verified": "resources/models/GRIM-text/data/verified",
+            "grim_text_logs": "resources/models/GRIM-text/training/logs",
+            "grim_text_training_status": "resources/models/GRIM-text/training/training_status.fb",
+            "grim_text_collector_log": "resources/models/GRIM-text/training/logs/collector.log",
+            "grim_text_source_config": "DataCollection/source_data.json",
+            "grim_text_model_store": "resources/models/model_store",
             "atom_stats_interval": 200,
             "atom_stats_max_seqs": 32,
             "attention_diag_enabled": false,

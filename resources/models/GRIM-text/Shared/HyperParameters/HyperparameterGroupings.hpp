@@ -699,31 +699,29 @@ inline DataLoadingHP dataLoadingHP(const StartupConfig& config) {
 
 inline TokenizerHP tokenizerHP(const StartupConfig& config) {
     const ::GRIM::Config::TrainingHyperparameters& hp = config.hyperparameters;
-    // Tokenizer JSON leaves are owned by AiConfigSnapshot; StartupConfig only carries the snapshot.
-    const ::GRIM::Config::AiConfigSnapshot& snapshot = config.ai_config_snapshot;
 
     TokenizerHP view;
     view.data_path = config.paths.data_path;
     view.vocab_path = config.paths.vocab_path;
-    view.target_vocab_size = snapshot.tokenizer_vocab_size;
-    if (snapshot.tokenizer_max_vocab_size > 0 && view.target_vocab_size > snapshot.tokenizer_max_vocab_size) {
-        view.target_vocab_size = snapshot.tokenizer_max_vocab_size;
+    view.target_vocab_size = hp.tokenizer_vocab_size;
+    if (hp.tokenizer_max_vocab_size > 0 && view.target_vocab_size > hp.tokenizer_max_vocab_size) {
+        view.target_vocab_size = hp.tokenizer_max_vocab_size;
     }
-    view.character_coverage = snapshot.tokenizer_character_coverage;
-    view.min_cleaned_text_length = snapshot.tokenizer_min_cleaned_text_length;
-    view.min_subword_freq = snapshot.tokenizer_min_subword_freq;
-    view.prune_during_mining = snapshot.tokenizer_prune_during_mining;
-    view.enable_parallel_subword_mining = snapshot.tokenizer_enable_parallel_subword_mining;
-    view.subword_mining_workers = snapshot.tokenizer_subword_mining_workers;
-    view.subword_mining_max_bytes = snapshot.tokenizer_subword_mining_max_bytes;
+    view.character_coverage = hp.tokenizer_character_coverage;
+    view.min_cleaned_text_length = hp.tokenizer_min_cleaned_text_length;
+    view.min_subword_freq = hp.tokenizer_min_subword_freq;
+    view.prune_during_mining = hp.tokenizer_prune_during_mining;
+    view.enable_parallel_subword_mining = hp.tokenizer_enable_parallel_subword_mining;
+    view.subword_mining_workers = hp.tokenizer_subword_mining_workers;
+    view.subword_mining_max_bytes = hp.tokenizer_subword_mining_max_bytes;
     view.enable_scratch_block_reasoning = hp.tokenizer_enable_scratch_block_reasoning;
     view.detect_numbers = hp.tokenizer_detect_numbers;
-    view.enable_byte_fallback = snapshot.tokenizer_enable_byte_fallback;
-    view.add_bos = snapshot.tokenizer_add_bos;
-    view.add_eos = snapshot.tokenizer_add_eos;
+    view.enable_byte_fallback = hp.tokenizer_enable_byte_fallback;
+    view.add_bos = hp.tokenizer_add_bos;
+    view.add_eos = hp.tokenizer_add_eos;
     view.force_rebuild_vocab = hp.force_rebuild_vocab;
-    view.save_text_vocab = snapshot.tokenizer_save_text_vocab;
-    view.vocab_score_multiplier = snapshot.tokenizer_vocab_score_multiplier;
+    view.save_text_vocab = hp.tokenizer_save_text_vocab;
+    view.vocab_score_multiplier = hp.tokenizer_vocab_score_multiplier;
     view.current_curriculum = hp.current_curriculum;
     view.current_model_training = hp.current_model_training;
     view.execution_block_num_steps = hp.execution_block_num_steps;
@@ -759,9 +757,8 @@ inline TokenizerHP tokenizerHP(const StartupConfig& config) {
 inline TokenizerSubprocessHP tokenizerSubprocessHP(const StartupConfig& config)
 {
     TokenizerSubprocessHP view;
-    const ::GRIM::Config::AiConfigSnapshot& snapshot = config.ai_config_snapshot;
     view.tokenizer = tokenizerHP(config);
-    view.only_mode = snapshot.subprocess_tokenizer_only_mode;
+    view.only_mode = config.hyperparameters.subprocess_tokenizer_only_mode;
     return view;
 }
 

@@ -1,6 +1,8 @@
 #include "resources.hpp"
 #include "console_history.hpp"
 #include "logger.hpp"
+#include "control/training_paths.hpp"
+#include "settings/runtime_ai_config.hpp"
 #include <nlohmann/json.hpp>
 
 #include <cstdlib>
@@ -233,4 +235,20 @@ std::string resolveHuggingFaceApiToken() {
         if (!t.empty()) return t;
     }
     return {};
+}
+
+std::filesystem::path getGrimAiConfigPath() {
+    return GRIM::Training::getAiConfigFilePath();
+}
+
+std::filesystem::path getGrimLocalAiConfigPath() {
+    return GRIM::Training::getAiConfigLocalFilePath();
+}
+
+nlohmann::json loadGrimRuntimeAiConfig() {
+    return Settings::loadRuntimeAiConfig();
+}
+
+nlohmann::json saveGrimRuntimeAiConfig(const nlohmann::json& pending) {
+    return Settings::saveRuntimeAiConfig(pending);
 }
