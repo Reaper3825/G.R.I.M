@@ -3148,7 +3148,7 @@ void UIDataHubPanel::updateDatasetStats() {
             hudFileSize_ = "N/A";
         }
 
-        std::string ckptDir = GRIM::Config::getCheckpointDir();
+        std::string ckptDir = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::Checkpoints);
         if (std::filesystem::exists(ckptDir)) {
             int count = 0;
             for (const auto& e : std::filesystem::directory_iterator(ckptDir))
@@ -4105,7 +4105,7 @@ void UIDataHubPanel::saveSequenceCard(size_t cardId) {
 // =========================================================
 
 void UIDataHubPanel::loadUIConfig() {
-    std::string path = GRIM::Config::getCheckpointDir() + "/collection_state/ui_config.json";
+    std::string path = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::Checkpoints) + "/collection_state/ui_config.json";
     try {
         if (!std::filesystem::exists(path)) return;
         std::ifstream f(path);
@@ -4123,7 +4123,7 @@ void UIDataHubPanel::loadUIConfig() {
 }
 
 void UIDataHubPanel::saveUIConfig() {
-    std::string stateDir = GRIM::Config::getCheckpointDir() + "/collection_state";
+    std::string stateDir = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::Checkpoints) + "/collection_state";
     std::string path = stateDir + "/ui_config.json";
     try {
         std::filesystem::create_directories(stateDir);
@@ -4139,7 +4139,7 @@ void UIDataHubPanel::saveUIConfig() {
 }
 
 void UIDataHubPanel::loadDownloadQueue() {
-    std::string path = GRIM::Config::getCheckpointDir() + "/collection_state/download_queue.json";
+    std::string path = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::Checkpoints) + "/collection_state/download_queue.json";
     try {
         if (!std::filesystem::exists(path)) return;
         std::ifstream f(path);
@@ -4168,7 +4168,7 @@ void UIDataHubPanel::loadDownloadQueue() {
 }
 
 void UIDataHubPanel::saveDownloadQueue() {
-    std::string stateDir = GRIM::Config::getCheckpointDir() + "/collection_state";
+    std::string stateDir = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::Checkpoints) + "/collection_state";
     std::string path = stateDir + "/download_queue.json";
     try {
         std::filesystem::create_directories(stateDir);

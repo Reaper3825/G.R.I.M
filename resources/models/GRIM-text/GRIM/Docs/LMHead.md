@@ -31,7 +31,7 @@ LM head backward and embedding backward write to the **same buffer** via PyTorch
 ## Learned RMSNorm gammas
 All learnable RMSNorm gammas register through the same startup parameter-registration path as the rest of the model. The current registration contract stamps the default optimizer multipliers (`wd_mult=1.0`, `lr_mult=1.0`) uniformly because these knobs are not actively authored yet.
 
-Set `ai_config.json → training.config.lm_head_centering.freeze_learned_rms_gammas=true` to hold **all 25 learned RMSNorm gamma vectors** at 1.0 (24 encoder gammas + `γ_final`). Frozen mode skips `requires_grad_()`, `ensure_grad()`, checkpoint overwrite on load, and param-group registration.
+Set `ai_config.json → training.config.freeze_learned_rms_gammas=true` to hold **all 25 learned RMSNorm gamma vectors** at 1.0 (24 encoder gammas + `γ_final`). Frozen mode skips `requires_grad_()`, `ensure_grad()`, checkpoint overwrite on load, and param-group registration.
 
 ## Embedding scale = 1.0
 Do **not** scale embeddings by `sqrt(d_model)`. ALiBi/RoPE inject position **inside** attention; the AIAYN scaling has no purpose here and creates a 27.7× gradient asymmetry with tied weights.

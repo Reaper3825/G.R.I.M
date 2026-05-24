@@ -105,7 +105,7 @@ void validateRegisteredPrecisionSupport(const std::string& name,
             throw std::runtime_error("[buildParameterGroups] " + name +
                                      " requests BF16_COMPUTE for parameter group type " +
                                      paramGroupTypeSummaryName(type) +
-                                     ", but TensorContract implicit BF16 compute consumers are not wired for optimizer-visible parameter tensors in this build; set training.config.precision.parameter_groups." +
+                                     ", but TensorContract implicit BF16 compute consumers are not wired for optimizer-visible parameter tensors in this build; set training.config.parameter_precision_" +
                                      paramGroupTypeSummaryName(type) + " to fp32");
         case ParameterGroupPrecision::UNSPECIFIED:
             break;
@@ -254,7 +254,7 @@ void validateEmbeddingLmHeadAliasing(const Tensor& embedding_weights,
                                  tensorDebugSummary(embedding_weights) + " lm_head=" + tensorDebugSummary(lm_head_weights));
     }
     if (tied && config.parameter_precision_embedding != config.parameter_precision_lm_head) {
-        throw std::runtime_error("[buildParameterGroups] tie_embeddings=true requires precision.parameter_groups.embedding and precision.parameter_groups.lm_head to match; embedding=" +
+        throw std::runtime_error("[buildParameterGroups] tie_embeddings=true requires parameter_precision_embedding and parameter_precision_lm_head to match; embedding=" +
                                  std::string(parameterPrecisionSummaryName(config.parameter_precision_embedding)) +
                                  " lm_head=" +
                                  std::string(parameterPrecisionSummaryName(config.parameter_precision_lm_head)));
@@ -694,16 +694,16 @@ void validateParameterRegistrationConfig(const LanguageModelConfig& config) {
     GRIM::HyperParameters::requireValidGQAGrouping(config, "buildParameterGroups");
     GRIM::HyperParameters::requirePositiveGroupingValue(config.num_layers, "num_layers", "buildParameterGroups");
     GRIM::HyperParameters::requirePositiveGroupingValue(config.vocab_size, "vocab_size", "buildParameterGroups");
-    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_embedding, "precision.parameter_groups.embedding", "buildParameterGroups");
-    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_lm_head, "precision.parameter_groups.lm_head", "buildParameterGroups");
-    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_attention, "precision.parameter_groups.attention", "buildParameterGroups");
-    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_ffn, "precision.parameter_groups.ffn", "buildParameterGroups");
-    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_rmsnorm, "precision.parameter_groups.rmsnorm", "buildParameterGroups");
-    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_scratchblock, "precision.parameter_groups.scratchblock", "buildParameterGroups");
-    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_mtp, "precision.parameter_groups.mtp", "buildParameterGroups");
-    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_reasoning_head, "precision.parameter_groups.reasoning_head", "buildParameterGroups");
-    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_execution_block, "precision.parameter_groups.execution_block", "buildParameterGroups");
-    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_slot_selector, "precision.parameter_groups.slot_selector", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_embedding, "parameter_precision_embedding", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_lm_head, "parameter_precision_lm_head", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_attention, "parameter_precision_attention", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_ffn, "parameter_precision_ffn", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_rmsnorm, "parameter_precision_rmsnorm", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_scratchblock, "parameter_precision_scratchblock", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_mtp, "parameter_precision_mtp", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_reasoning_head, "parameter_precision_reasoning_head", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_execution_block, "parameter_precision_execution_block", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_slot_selector, "parameter_precision_slot_selector", "buildParameterGroups");
 }
 
 } // namespace

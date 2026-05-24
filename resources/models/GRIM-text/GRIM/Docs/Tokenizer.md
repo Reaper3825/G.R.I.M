@@ -88,7 +88,7 @@ Special-token ownership is deliberately narrow:
 - Do not add raw CUDA pointer members, cleanup lambdas, or `cudaMalloc`/`cudaFree` blocks back into `Unigram.hpp` or `Unigram.cu`; extend `UnigramGpuMemory` instead.
 
 ## Hyperparameter grouping
-Config-driven tokenizer paths consume `GRIM::HyperParameters::TokenizerHP` directly from `HyperparameterGroupings.hpp`. `TokenizerHP` carries resolved `data_path`, `vocab_path`, and `force_rebuild_vocab`; tokenizer code must not carry `StartupConfig.paths`, `PathConfig`, or rebuild booleans beside it:
+Config-driven tokenizer paths consume `GRIM::HyperParameters::TokenizerHP` directly from `HyperparameterGroupings.hpp`. `TokenizerHP` carries resolved `data_path`, `vocab_path`, and `force_rebuild_vocab`; tokenizer code must not carry `StartupConfig.paths`, `PathConfig`, or rebuild booleans beside it. Tokenizer leaves collapsed directly under `training.config` use the `tokenizer_*` prefix, including `tokenizer_vocab_size`, `tokenizer_max_vocab_size`, `tokenizer_max_length`, `tokenizer_character_coverage`, `tokenizer_min_cleaned_text_length`, `tokenizer_min_subword_freq`, `tokenizer_prune_during_mining`, `tokenizer_enable_parallel_subword_mining`, `tokenizer_subword_mining_workers`, `tokenizer_subword_mining_max_bytes`, `tokenizer_model_type`, `tokenizer_add_bos`, `tokenizer_add_eos`, `tokenizer_unk_token`, `tokenizer_pad_token`, `tokenizer_bos_token`, `tokenizer_eos_token`, `tokenizer_enable_nfkc_normalization`, `tokenizer_enable_lowercasing`, `tokenizer_enable_parallel_tokenization`, `tokenizer_parallel_threshold`, `tokenizer_enable_byte_fallback`, `tokenizer_expected_checksum`, `tokenizer_save_text_vocab`, `tokenizer_vocab_score_multiplier`, `tokenizer_special_tokens`, `tokenizer_enable_scratch_block_reasoning`, and `tokenizer_detect_numbers`; do not recreate nested `training.config.tokenizer.*` fields:
 
 - `train_tokenizer.cu` creates the grouping after `loadStartupConfig()` and passes it into `PrepareTrainingDataFromCache()`.
 - `DataLoader.cu` receives that grouping and constructs `UniByte` from it directly while building vocab + GRMT artifacts.
@@ -130,7 +130,7 @@ AtomTable safety contracts:
 - HTML must be stripped before tokenization. `DataLoader.cu` handles `stripHtmlTags()` / `decodeHtmlEntities()` / `normalizeWhitespace()` automatically.
 - `DataLoader.cu` tokenizes raw content only. It must not add `BOS`/`EOS`; Phase 1 startup routes sequences through `SlidingWindow.cu` for that layout work.
 - `UniByte` intentionally exposes per-text encode paths only. Do not reintroduce `encodeBatch()` / vector-of-vector tokenization; corpus batching, `BOS`/`EOS`, and sequence windows belong to the `DataLoader.cu` → `SlidingWindow.cu` startup path.
-- Minimum text-length gating is config-owned: `tokenizer.min_cleaned_text_length` is parsed onto `AiConfigSnapshot::tokenizer_min_cleaned_text_length`, sliced directly through `TokenizerHP`, and consumed by `DataLoader.cu` before GRMT encoding. Do not hard-code this threshold in the loader.
+- Minimum text-length gating is config-owned: `training.config.tokenizer_min_cleaned_text_length` is parsed onto `AiConfigSnapshot::tokenizer_min_cleaned_text_length`, sliced directly through `TokenizerHP`, and consumed by `DataLoader.cu` before GRMT encoding. Do not hard-code this threshold in the loader.
 - Sliding window: `overlap_len = raw_overlap - 1` when `raw_overlap > 0`, to avoid masking the same boundary target in two consecutive windows.
 
 ## Self-test

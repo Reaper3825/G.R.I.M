@@ -67,7 +67,7 @@ inline EpochPlan finalizeEpochPlanOrThrow(
                                  std::to_string(accum) + ")");
     }
 
-    ::GRIM::Config::deriveWarmupSteps(config.hyperparameters, plan.estimated_total_steps);
+    ::GRIM::HyperParameters::deriveWarmupSteps(config.hyperparameters, plan.estimated_total_steps);
     plan.steps_per_epoch = plan.total_batches / accum;
     if (plan.steps_per_epoch <= 0) {
         throw std::runtime_error("FATAL: steps_per_epoch computed as <= 0 during startup (batches=" +

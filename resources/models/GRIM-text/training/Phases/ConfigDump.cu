@@ -66,8 +66,8 @@ std::string fmt(::GRIM::HyperParameters::ModelExecutionMode v) {
 std::string fmt(::GRIM::HyperParameters::ParameterGroupPrecision v) {
     return ::GRIM::HyperParameters::parameterGroupPrecisionToString(v);
 }
-std::string fmt(::GRIM::HyperParameters::LanguageModelConfig::HardcodedPattern v) {
-    using HCP = ::GRIM::HyperParameters::LanguageModelConfig::HardcodedPattern;
+std::string fmt(::GRIM::HyperParameters::HardcodedPattern v) {
+    using HCP = ::GRIM::HyperParameters::HardcodedPattern;
     switch (v) {
         case HCP::DISABLED:          return "DISABLED";
         case HCP::RANDOM_CENTERED:   return "RANDOM_CENTERED";
@@ -111,11 +111,11 @@ void dumpAllHyperparameters(
     rows.reserve(320);
 
 #define DUMP(field) rows.emplace_back(#field, fmt(hp.field))
-#define DUMP_ARCH(field) rows.emplace_back("architecture." #field, fmt(hp.architecture.field))
+#define DUMP_MODEL(field) rows.emplace_back(#field, fmt(hp.field))
 #define DUMP_LOG_RECORDER(field) rows.emplace_back("log_recorder." #field, fmt(hp.log_recorder.field))
 #define DUMP_LOG_RECORDER_LAYER(field) rows.emplace_back("log_recorder.layers." #field, fmt(hp.log_recorder.layers.field))
 #define DUMP_TAPE_LOGGING(field) rows.emplace_back("tape_logging." #field, fmt(hp.tape_logging.field))
-#define DUMP_PARAM_PRECISION(json_field, config_field) rows.emplace_back("precision.parameter_groups." json_field, fmt(hp.architecture.config_field))
+#define DUMP_PARAM_PRECISION(json_field, config_field) rows.emplace_back("parameter_precision_" json_field, fmt(hp.config_field))
 #define SECTION(label) rows.emplace_back(std::string("---"), std::string(label))
 
     SECTION("Run selectors");
@@ -140,29 +140,29 @@ void dumpAllHyperparameters(
     rows.emplace_back("tape_logging.initial_capacity", std::to_string(hp.tape_logging.initial_capacity));
     rows.emplace_back("tape_logging.group_overrides", fmtStringMap(hp.tape_logging.group_overrides));
 
-    SECTION("Model architecture");
-    DUMP_ARCH(d_model);
-    DUMP_ARCH(num_layers);
-    DUMP_ARCH(num_heads);
-    DUMP_ARCH(num_kv_heads);
-    DUMP_ARCH(head_dim);
-    DUMP_ARCH(d_ff);
-    DUMP_ARCH(max_seq_len);
-    DUMP_ARCH(dropout_rate);
-    DUMP_ARCH(attention_dropout);
-    DUMP_ARCH(tie_embeddings);
-    DUMP_ARCH(positional_encoding);
-    DUMP_ARCH(use_gpu);
-    DUMP_ARCH(use_flash_attention);
-    DUMP_ARCH(min_seq_len_for_flash);
-    DUMP_ARCH(rms_epsilon);
-    DUMP_ARCH(causal_mask);
-    DUMP_ARCH(use_pre_norm);
-    DUMP_ARCH(fuse_qkv);
-    DUMP_ARCH(use_simd);
-    DUMP_ARCH(num_threads);
-    DUMP_ARCH(use_bias);
-    DUMP_ARCH(execution_mode);
+    SECTION("Model config");
+    DUMP_MODEL(d_model);
+    DUMP_MODEL(num_layers);
+    DUMP_MODEL(num_heads);
+    DUMP_MODEL(num_kv_heads);
+    DUMP_MODEL(head_dim);
+    DUMP_MODEL(d_ff);
+    DUMP_MODEL(max_seq_len);
+    DUMP_MODEL(dropout_rate);
+    DUMP_MODEL(attention_dropout);
+    DUMP_MODEL(tie_embeddings);
+    DUMP_MODEL(positional_encoding);
+    DUMP_MODEL(use_gpu);
+    DUMP_MODEL(use_flash_attention);
+    DUMP_MODEL(min_seq_len_for_flash);
+    DUMP_MODEL(rms_epsilon);
+    DUMP_MODEL(causal_mask);
+    DUMP_MODEL(use_pre_norm);
+    DUMP_MODEL(fuse_qkv);
+    DUMP_MODEL(use_simd);
+    DUMP_MODEL(num_threads);
+    DUMP_MODEL(use_bias);
+    DUMP_MODEL(execution_mode);
 
     SECTION("Parameter precision");
     DUMP_PARAM_PRECISION("embedding", parameter_precision_embedding);
@@ -285,21 +285,21 @@ void dumpAllHyperparameters(
 
     SECTION("LM head centering");
     DUMP(lm_head_centering_enabled);
-    DUMP_ARCH(lm_head_center_hidden_states);
-    DUMP_ARCH(freeze_learned_rms_gammas);
-    DUMP_ARCH(center_logits);
-    DUMP_ARCH(center_encoder_residuals);
-    DUMP_ARCH(project_out_pc1);
-    DUMP_ARCH(pc1_power_iters);
+    DUMP_MODEL(lm_head_center_hidden_states);
+    DUMP_MODEL(freeze_learned_rms_gammas);
+    DUMP_MODEL(center_logits);
+    DUMP_MODEL(center_encoder_residuals);
+    DUMP_MODEL(project_out_pc1);
+    DUMP_MODEL(pc1_power_iters);
 
     SECTION("LayerScale / QK-norm");
-    DUMP_ARCH(use_layer_scale);
-    DUMP_ARCH(layer_scale_init);
-    DUMP_ARCH(qk_norm_enabled);
+    DUMP_MODEL(use_layer_scale);
+    DUMP_MODEL(layer_scale_init);
+    DUMP_MODEL(qk_norm_enabled);
 
     SECTION("Hardcoded hidden states diag");
-    DUMP_ARCH(hardcoded_hidden_pattern);
-    DUMP_ARCH(hardcoded_log_every_n_batches);
+    DUMP_MODEL(hardcoded_hidden_pattern);
+    DUMP_MODEL(hardcoded_log_every_n_batches);
 
     SECTION("Embedding freeze");
     DUMP(embedding_freeze_enabled);
@@ -324,51 +324,51 @@ void dumpAllHyperparameters(
     DUMP(scratch_write_combined);
 
     SECTION("ScratchBlock reasoning");
-    DUMP_ARCH(use_scratch_block);
-    DUMP_ARCH(scratch_block_atom_embedding_dim);
-    DUMP_ARCH(scratch_block_max_atoms);
-    DUMP_ARCH(scratch_block_atom_scale);
+    DUMP_MODEL(use_scratch_block);
+    DUMP_MODEL(scratch_block_atom_embedding_dim);
+    DUMP_MODEL(scratch_block_max_atoms);
+    DUMP_MODEL(scratch_block_atom_scale);
 
     SECTION("ReasoningHead");
-    DUMP_ARCH(reasoning_head_enabled);
-    DUMP_ARCH(reasoning_num_ops);
+    DUMP_MODEL(reasoning_head_enabled);
+    DUMP_MODEL(reasoning_num_ops);
 
     SECTION("ExecutionBlock");
-    DUMP_ARCH(execution_block_enabled);
-    DUMP_ARCH(scratch_block_execution_first_type_only);
-    DUMP_ARCH(execution_block_layer);
-    DUMP_ARCH(execution_block_num_ops);
-    DUMP_ARCH(execution_block_num_slots);
-    DUMP_ARCH(execution_block_num_steps);
-    DUMP_ARCH(execution_block_d_key);
-    DUMP_ARCH(execution_block_d_type);
-    DUMP_ARCH(execution_block_cross_attn_head_dim);
-    DUMP_ARCH(execution_block_cross_attn_topk);
-    DUMP_ARCH(execution_block_usage_decay);
-    DUMP_ARCH(execution_block_diversity_kappa);
-    DUMP_ARCH(execution_block_temp_start);
-    DUMP_ARCH(execution_block_temp_end);
-    DUMP_ARCH(execution_block_temp_schedule);
-    DUMP_ARCH(execution_block_entropy_weight);
-    DUMP_ARCH(step_x_multiplier);
-    DUMP_ARCH(step_y_multiplier);
-    DUMP_ARCH(step_y_overrides_x);
-    DUMP_ARCH(entropy_aux_weight);
-    DUMP_ARCH(value_match_epsilon);
-    DUMP_ARCH(final_slot_consistency_weight);
-    DUMP_ARCH(execution_block_transition_hard_threshold);
-    DUMP_ARCH(execution_block_gate_warmup_steps);
-    DUMP_ARCH(execution_block_causal_w1_transition);
-    DUMP_ARCH(div_invalid_penalty_weight);
-    DUMP_ARCH(div_magnitude_penalty_weight);
-    DUMP_ARCH(arg_reinforce_weight);
-    DUMP_ARCH(arg_reinforce_baseline_decay);
-    DUMP_ARCH(structured_ce_enabled);
-    DUMP_ARCH(structured_ce_weight);
-    DUMP_ARCH(selector_enabled);
-    DUMP_ARCH(selector_d_selector);
-    DUMP_ARCH(selector_selection_margin);
-    DUMP_ARCH(selector_supervision_weight);
+    DUMP_MODEL(execution_block_enabled);
+    DUMP_MODEL(scratch_block_execution_first_type_only);
+    DUMP_MODEL(execution_block_layer);
+    DUMP_MODEL(execution_block_num_ops);
+    DUMP_MODEL(execution_block_num_slots);
+    DUMP_MODEL(execution_block_num_steps);
+    DUMP_MODEL(execution_block_d_key);
+    DUMP_MODEL(execution_block_d_type);
+    DUMP_MODEL(execution_block_cross_attn_head_dim);
+    DUMP_MODEL(execution_block_cross_attn_topk);
+    DUMP_MODEL(execution_block_usage_decay);
+    DUMP_MODEL(execution_block_diversity_kappa);
+    DUMP_MODEL(execution_block_temp_start);
+    DUMP_MODEL(execution_block_temp_end);
+    DUMP_MODEL(execution_block_temp_schedule);
+    DUMP_MODEL(execution_block_entropy_weight);
+    DUMP_MODEL(step_x_multiplier);
+    DUMP_MODEL(step_y_multiplier);
+    DUMP_MODEL(step_y_overrides_x);
+    DUMP_MODEL(entropy_aux_weight);
+    DUMP_MODEL(value_match_epsilon);
+    DUMP_MODEL(final_slot_consistency_weight);
+    DUMP_MODEL(execution_block_transition_hard_threshold);
+    DUMP_MODEL(execution_block_gate_warmup_steps);
+    DUMP_MODEL(execution_block_causal_w1_transition);
+    DUMP_MODEL(div_invalid_penalty_weight);
+    DUMP_MODEL(div_magnitude_penalty_weight);
+    DUMP_MODEL(arg_reinforce_weight);
+    DUMP_MODEL(arg_reinforce_baseline_decay);
+    DUMP_MODEL(structured_ce_enabled);
+    DUMP_MODEL(structured_ce_weight);
+    DUMP_MODEL(selector_enabled);
+    DUMP_MODEL(selector_d_selector);
+    DUMP_MODEL(selector_selection_margin);
+    DUMP_MODEL(selector_supervision_weight);
 
     SECTION("CUDA execution mode");
     DUMP(single_stream_mode);
@@ -376,10 +376,10 @@ void dumpAllHyperparameters(
     DUMP(synchronize_after_kernels);
 
     SECTION("Multi-token prediction");
-    DUMP_ARCH(mtp_enabled);
-    DUMP_ARCH(mtp_k);
-    DUMP_ARCH(mtp_alpha);
-    DUMP_ARCH(mtp_alpha_warmup_steps);
+    DUMP_MODEL(mtp_enabled);
+    DUMP_MODEL(mtp_k);
+    DUMP_MODEL(mtp_alpha);
+    DUMP_MODEL(mtp_alpha_warmup_steps);
     DUMP(mtp_log_ratio_monitor);
 
     SECTION("Prediction comparison");
@@ -413,7 +413,7 @@ void dumpAllHyperparameters(
     }
 
 #undef DUMP
-#undef DUMP_ARCH
+#undef DUMP_MODEL
 #undef DUMP_LOG_RECORDER
 #undef DUMP_LOG_RECORDER_LAYER
 #undef DUMP_TAPE_LOGGING

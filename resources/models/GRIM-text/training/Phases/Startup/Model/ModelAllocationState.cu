@@ -38,7 +38,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
 
     logger.log("Initializing model with weight_init_seed=" + std::to_string(weight_init_seed) + "...");
 
-    if (model_config.hardcoded_hidden_pattern != GRIM::HyperParameters::LanguageModelConfig::HardcodedPattern::DISABLED) {
+    if (model_config.hardcoded_hidden_pattern != GRIM::HyperParameters::HardcodedPattern::DISABLED) {
         logger.log("⚠️  Hardcoded hidden-state diagnostic mode is active; exact config values are listed by ConfigDump.");
         logger.log("⚠️  Encoder output will be REPLACED with synthetic patterns - this is a DIAGNOSTIC MODE ONLY!");
     }

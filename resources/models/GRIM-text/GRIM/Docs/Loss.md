@@ -20,7 +20,7 @@ $$L = \alpha (1 - p_t)^\gamma \cdot \mathrm{CE}_{\text{smooth}} + \lambda \cdot 
 (focal + label smoothing + entropy regularization in a single autograd kernel)
 
 ## Config
-`ai_config.json → training.config.loss`
+`ai_config.json → training.config.loss_*` direct leaves. Do not recreate a nested `training.config.loss` sidecar object; `ai_config_paths.hpp` requires and parses the flat `loss_label_smoothing_*`, `loss_focal_*`, `loss_entropy_reg_*`, `loss_class_balanced_*`, `loss_preference_*`, `loss_distillation_*`, and `loss_masking_*` leaves.
 
 ## Gradient clipping
 

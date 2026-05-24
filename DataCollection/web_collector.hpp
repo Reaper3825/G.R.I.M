@@ -32,6 +32,7 @@
 #include <fstream>
 #include <sstream>
 #include <iostream>
+#include <stdexcept>
 #include <curl/curl.h>
 
 // For JSON parsing
@@ -532,11 +533,26 @@ public:
 //  Implementation: WebDataCollector
 //======================================================//
 
+inline int loadGrimCollectorMaxNewEntriesPerRun(const GRIM::Config::AiConfigSnapshot& snapshot) {
+    const auto& dc = GRIM::Config::requireJsonObjectField(
+        snapshot.document,
+        "data_collection",
+        "ai_config.json");
+    return GRIM::Config::getRequiredJsonValue<int>(
+        dc,
+        "max_new_entries_per_run",
+        "data_collection");
+}
+
 WebDataCollector::WebDataCollector()
     : config_(), stats_(), curl_handle_(nullptr)
 {
     auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-    if (snapshot && snapshot->has_grim_paths) {
+    if (!snapshot) {
+        throw std::runtime_error("WebDataCollector: loadAiConfigSnapshot returned no snapshot");
+    }
+
+    if (snapshot->has_grim_paths) {
         if (!snapshot->grim_text_checkpoints.empty()) {
             config_.output_dir = snapshot->grim_text_checkpoints;
         }
@@ -546,16 +562,14 @@ WebDataCollector::WebDataCollector()
     }
 
     if (config_.output_dir.empty()) {
-        config_.output_dir = GRIM::Config::getCheckpointDir();
+        config_.output_dir = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::Checkpoints);
     }
 
     if (config_.log_file.empty()) {
-        config_.log_file = GRIM::Config::getCollectorLogPath();
+        config_.log_file = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::CollectorLog);
     }
 
-    if (snapshot && snapshot->has_data_collection) {
-        config_.max_new_entries_per_run = snapshot->data_collection_max_new_entries_per_run;
-    }
+    config_.max_new_entries_per_run = loadGrimCollectorMaxNewEntriesPerRun(*snapshot);
     
     curl_global_init(CURL_GLOBAL_DEFAULT);
     curl_handle_ = curl_easy_init();
@@ -589,7 +603,11 @@ WebDataCollector::WebDataCollector(const CollectorConfig& config)
     : config_(config), stats_(), curl_handle_(nullptr)
 {
     auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-    if (snapshot && snapshot->has_grim_paths) {
+    if (!snapshot) {
+        throw std::runtime_error("WebDataCollector: loadAiConfigSnapshot returned no snapshot");
+    }
+
+    if (snapshot->has_grim_paths) {
         if (config_.output_dir.empty() && !snapshot->grim_text_checkpoints.empty()) {
             config_.output_dir = snapshot->grim_text_checkpoints;
         }
@@ -600,18 +618,18 @@ WebDataCollector::WebDataCollector(const CollectorConfig& config)
 
     // If output_dir not set in config, use ai_config default/fallback.
     if (config_.output_dir.empty()) {
-        config_.output_dir = GRIM::Config::getCheckpointDir();
+        config_.output_dir = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::Checkpoints);
     }
     
     // If log_file not set in config, use ai_config default/fallback.
     if (config_.log_file.empty()) {
-        config_.log_file = GRIM::Config::getCollectorLogPath();
+        config_.log_file = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::CollectorLog);
     }
     
-    // If max_new_entries_per_run not explicitly set, load from the snapshot-owned
-    // data_collection view rather than reparsing ai_config.json through a second loader.
-    if (config_.max_new_entries_per_run == 5000 && snapshot && snapshot->has_data_collection) {  // Check if still default
-        config_.max_new_entries_per_run = snapshot->data_collection_max_new_entries_per_run;
+    // If max_new_entries_per_run was not explicitly set by the caller, read the
+    // GRIM collector-owned runtime field from the already-loaded document.
+    if (config_.max_new_entries_per_run == 5000) {
+        config_.max_new_entries_per_run = loadGrimCollectorMaxNewEntriesPerRun(*snapshot);
     }
     
     curl_global_init(CURL_GLOBAL_DEFAULT);

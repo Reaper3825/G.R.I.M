@@ -1771,7 +1771,7 @@ void UITrainingPanel::loadHyperparamSnapshot() {
         hyperparamsLoaded_ = false;
         return;
     }
-    hyperparamSnapshot_ = snapshot->hyperparameters;
+    GRIM::HyperParameters::loadTrainingHyperparameters(*snapshot, hyperparamSnapshot_);
     hyperparamRegistry_.populate(hyperparamSnapshot_);
     hyperparamsLoaded_ = true;
 }
@@ -2114,146 +2114,13 @@ bool UITrainingPanel::persistHyperparamToJSON(const GRIM::Config::HyperparamEntr
             case GRIM::Config::HyperparamType::SizeT:  val = entry.ptr_sizet  ? static_cast<int64_t>(*entry.ptr_sizet) : 0; break;
         }
 
-        // ── Nested JSON path mapping ──
-        // The loader (applyTrainingConfigObject) reads many fields from nested objects.
-        // We must write to the same nested path so changes round-trip correctly.
-        // Keys not matched here are written as flat keys to training.config.
+        // ── JSON path mapping ──
+        // Keys not matched here are written as flat leaves to training.config.
+        // Collapsed schema leaves must not be mapped back into nested objects.
         const std::string& k = entry.key;
 
-        auto setNested = [&](const std::string& section, const std::string& field) {
-            if (!tc.contains(section) || !tc[section].is_object())
-                tc[section] = nlohmann::json::object();
-            tc[section][field] = val;
-        };
-        auto setDoubleNested = [&](const std::string& s1, const std::string& s2, const std::string& field) {
-            if (!tc.contains(s1) || !tc[s1].is_object())
-                tc[s1] = nlohmann::json::object();
-            if (!tc[s1].contains(s2) || !tc[s1][s2].is_object())
-                tc[s1][s2] = nlohmann::json::object();
-            tc[s1][s2][field] = val;
-        };
-
-        bool handled = false;
-
-        // Cosine decay
-        if (k == "cosine_decay_enabled")  { setNested("cosine_decay", "enabled"); handled = true; }
-        if (k == "cosine_decay_min_lr")   { setNested("cosine_decay", "min_lr");  handled = true; }
-
-        // Soft restart
-        if (!handled && k.rfind("soft_restart_", 0) == 0) {
-            setNested("soft_restart", k.substr(13)); handled = true;
-        }
-        // Auto stop
-        if (!handled && k.rfind("auto_stop_", 0) == 0) {
-            setNested("auto_stop", k.substr(10)); handled = true;
-        }
-
-        // Shuffle
-        if (!handled && k == "shuffle_train_enabled") { setNested("shuffle", "enabled"); handled = true; }
-        if (!handled && k == "shuffle_train_epochs")  { setNested("shuffle", "epochs");  handled = true; }
-        // Loss (double-nested under loss.subsection)
-        if (!handled && k.rfind("loss_label_smoothing_", 0) == 0) {
-            setDoubleNested("loss", "label_smoothing", k.substr(21)); handled = true;
-        }
-        if (!handled && k.rfind("loss_focal_", 0) == 0) {
-            setDoubleNested("loss", "focal", k.substr(11)); handled = true;
-        }
-        if (!handled && k.rfind("loss_preference_", 0) == 0) {
-            setDoubleNested("loss", "preference", k.substr(16)); handled = true;
-        }
-        if (!handled && k.rfind("loss_distillation_", 0) == 0) {
-            setDoubleNested("loss", "distillation", k.substr(18)); handled = true;
-        }
-        if (!handled && k.rfind("loss_masking_", 0) == 0) {
-            setDoubleNested("loss", "masking", k.substr(13)); handled = true;
-        }
-        if (!handled && k.rfind("loss_entropy_reg_", 0) == 0) {
-            setDoubleNested("loss", "entropy_reg", k.substr(17)); handled = true;
-        }
-        if (!handled && k.rfind("loss_class_balanced_", 0) == 0) {
-            setDoubleNested("loss", "class_balanced", k.substr(20)); handled = true;
-        }
-        // LM head centering
-        if (!handled && k == "lm_head_centering_enabled")       { setNested("lm_head_centering", "enabled"); handled = true; }
-        if (!handled && k == "lm_head_center_hidden_states")    { setNested("lm_head_centering", "center_hidden_states"); handled = true; }
-        if (!handled && k == "freeze_learned_rms_gammas")       { setNested("lm_head_centering", "freeze_learned_rms_gammas"); handled = true; }
-        if (!handled && k == "center_logits")                 { setNested("lm_head_centering", "center_logits"); handled = true; }
-        if (!handled && k == "center_encoder_residuals")      { setNested("lm_head_centering", "center_encoder_residuals"); handled = true; }
-        if (!handled && k == "project_out_pc1")               { setNested("lm_head_centering", "project_out_pc1"); handled = true; }
-        if (!handled && k == "pc1_power_iters")               { setNested("lm_head_centering", "pc1_power_iters"); handled = true; }
-        // Layer scale
-        if (!handled && k == "use_layer_scale")  { setNested("layer_scale", "enabled");    handled = true; }
-        if (!handled && k == "layer_scale_init") { setNested("layer_scale", "init_value"); handled = true; }
-        // QK-norm
-        if (!handled && k == "qk_norm_enabled") { setNested("qk_norm", "enabled"); handled = true; }
-        // Attention diagnostics
-        if (!handled && k == "attention_diag_enabled") { setNested("attention_diagnostics", "enabled"); handled = true; }
-        if (!handled && k == "attention_diag_layer")   { setNested("attention_diagnostics", "layer");   handled = true; }
-        if (!handled && k == "attention_diag_head")    { setNested("attention_diagnostics", "head");    handled = true; }
-        // Scratch blocks
-        if (!handled && k == "scratch_blocks_enabled")       { setNested("scratch_blocks", "enabled"); handled = true; }
-        if (!handled && k == "scratch_max_tokens_per_block") { setNested("scratch_blocks", "max_tokens_per_block"); handled = true; }
-        if (!handled && k == "scratch_num_blocks")           { setNested("scratch_blocks", "num_blocks"); handled = true; }
-        if (!handled && k == "scratch_write_combined")       { setNested("scratch_blocks", "use_write_combined"); handled = true; }
-        // Scratch block reasoning
-        if (!handled && k.rfind("scratch_block_reasoning_", 0) == 0) {
-            setNested("scratch_block_reasoning", k.substr(24)); handled = true;
-        }
-        // Execution block
-        if (!handled && k.rfind("execution_block_", 0) == 0) {
-            setNested("execution_block", k.substr(16)); handled = true;
-        }
-        if (!handled && k.rfind("execution_step_", 0) == 0) {
-            setNested("execution_block", k.substr(10)); handled = true;
-        }
-        if (!handled && k.rfind("execution_entropy_", 0) == 0) {
-            setNested("execution_block", k.substr(10)); handled = true;
-        }
-        if (!handled && k.rfind("execution_value_", 0) == 0) {
-            setNested("execution_block", k.substr(10)); handled = true;
-        }
-        if (!handled && k.rfind("execution_final_", 0) == 0) {
-            setNested("execution_block", k.substr(10)); handled = true;
-        }
-        // Selector (nested under execution_block.selector)
-        if (!handled && k.rfind("selector_", 0) == 0) {
-            setDoubleNested("execution_block", "selector", k.substr(9)); handled = true;
-        }
-        // Embedding freeze
-        if (!handled && k == "embedding_freeze_enabled")    { setNested("embedding_freeze", "enabled"); handled = true; }
-        if (!handled && k == "embedding_freeze_after_step") { setNested("embedding_freeze", "freeze_after_step"); handled = true; }
-        // Stability overrides
-        if (!handled && k.rfind("stability_override_", 0) == 0 && k != "stability_overrides_enabled") {
-            setNested("stability_overrides", k.substr(19)); handled = true;
-        }
-        // CUDA execution
-        if (!handled && (k == "single_stream_mode" || k == "disable_async_frees" || k == "synchronize_after_kernels")) {
-            setNested("cuda_execution", k); handled = true;
-        }
-        // MTP
-        if (!handled && k.rfind("mtp_", 0) == 0) {
-            setNested("multi_token_prediction", k.substr(4)); handled = true;
-        }
-        // Telemetry control (top-level enable; sub-sections like spike_thresholds
-        // are deeply nested and written as flat keys as a best-effort fallback)
-        if (!handled && k == "telemetry_control_enabled") {
-            setNested("telemetry_control", "enabled"); handled = true;
-        }
-        if (!handled && k == "telemetry_verbose_logging") {
-            setDoubleNested("telemetry_control", "logging", "verbose"); handled = true;
-        }
-        if (!handled && k == "telemetry_fail_loud_on_accumulation_bug") {
-            setDoubleNested("telemetry_control", "logging", "fail_loud_on_accumulation_bug"); handled = true;
-        }
-        if (!handled && k == "telemetry_plateau_noise_enabled") {
-            setDoubleNested("telemetry_control", "plateau_noise", "enabled"); handled = true;
-        }
-
-        // Fallback: write as flat key (works for core/optimizer fields
-        // like learning_rate, epochs, batch_size, warmup_steps, etc.)
-        if (!handled) {
-            tc[k] = val;
-        }
+        // Persist all surviving hyperparameter keys as direct leaves.
+        tc[k] = val;
 
         // Write back
         std::ofstream fileOut("ai_config.json");

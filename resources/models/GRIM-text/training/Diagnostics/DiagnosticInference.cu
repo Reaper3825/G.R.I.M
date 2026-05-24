@@ -203,7 +203,7 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
         return;
     }
 
-    const int max_seq_len = hp.architecture.max_seq_len;
+    const int max_seq_len = hp.max_seq_len;
     if (max_seq_len > 1 && static_cast<int>(prompt_tokens.size()) >= max_seq_len) {
         const size_t keep = static_cast<size_t>(max_seq_len - 1);
         const size_t drop = prompt_tokens.size() - keep;
@@ -230,8 +230,9 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
                                      prompt_atom_entry_ids.begin() + drop);
     }
 
-    // Use generation config from the AiConfigSnapshot-backed typed model surface.
-    GRIM::HyperParameters::GenerationConfig cfg = ctx.config.hyperparameters.architecture.generation;
+    // Use generation config from the flat AiConfigSnapshot generation_* leaves.
+    GRIM::HyperParameters::GenerationConfig cfg;
+    GRIM::HyperParameters::loadGenerationConfig(ctx.config.ai_config_snapshot, cfg);
     cfg.max_new_tokens = max_new_tokens;
     if (cfg.min_new_tokens <= 0) {
         cfg.min_new_tokens = std::max(1, max_new_tokens / 4);

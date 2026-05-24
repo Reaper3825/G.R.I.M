@@ -12,7 +12,7 @@ LayerScale uses one learnable gamma vector per residual branch, not one scalar:
 
 `output[t,d] = residual1[t,d] + gamma_ffn[d] * ffn_out[t,d]`
 
-Each gamma tensor has shape `[1, d_model]` and is initialized from `training.config.layer_scale.init_value`. Use `init_value = 1.0` in `ai_config.json`; `0.1` causes catastrophic gradient vanishing through encoder layers.
+Each gamma tensor has shape `[1, d_model]` and is initialized from `training.config.layer_scale_init`. Use `layer_scale_init = 1.0` in `ai_config.json`; `0.1` causes catastrophic gradient vanishing through encoder layers.
 
 Backward keeps TensorContract's parameter convention: `grad_gamma[d] = sum_t(grad_out[t,d] * sublayer_out[t,d])`. Do **not** divide by token count inside LayerScale; cross-entropy/root backward already mean-scales `grad_out`.
 

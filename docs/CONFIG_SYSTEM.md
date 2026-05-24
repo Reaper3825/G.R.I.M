@@ -40,9 +40,15 @@ The GRIM project uses a three-tier configuration system:
   "paths": {                      // File/directory paths
     "grim_text": {...}            // GRIM-text specific paths
   },
-  "data_collection": {...},       // Data pipeline config
-  "tokenizer": {...},             // Tokenizer runtime config
+  "clear_merged_cache_on_merge": false, // Snapshot-level merge control
+  "data_collection": {...},       // GRIM process config, not GRIM-text startup
   "training": {                   // Training hyperparameters
+    "subprocess": {
+      "tokenizer": {
+        "only_mode": false
+      }
+    },
+    "tokenizer": {...},           // GRIM-text tokenizer runtime config
     "config": {
       "batch_size": 4,
       "learning_rate": 0.0001,
@@ -60,8 +66,10 @@ The GRIM project uses a three-tier configuration system:
 **JSON → C++ Owner Mapping:**
 - `paths.grim_text` → `AiConfigSnapshot` `grim_text_*` fields
 - `training.config` → `TrainingHyperparameters`
-- `tokenizer` → `AiConfigSnapshot` `tokenizer_*` fields
-- `data_collection` → `AiConfigSnapshot` `data_collection_*` fields
+- `training.config` `tokenizer_*` leaves → `AiConfigSnapshot` `tokenizer_*` fields
+- `training.config.subprocess_tokenizer_only_mode` → `AiConfigSnapshot::subprocess_tokenizer_only_mode`
+- `clear_merged_cache_on_merge` → `AiConfigSnapshot::clear_merged_cache_on_merge`
+- `data_collection` → GRIM process consumers; do not add typed GRIM-text snapshot leaves for these fields
 
 ### 3. ai_config_paths.hpp
 **Location:** `d:\G.R.I.M\control\ai_config_paths.hpp`
@@ -71,7 +79,7 @@ The GRIM project uses a three-tier configuration system:
 **Contains:**
 - Struct definitions (`AiConfigSnapshot`, `TrainingHyperparameters`, etc.)
 - One raw validator (`validateAiConfigDocument`) and one raw loader (`loadAiConfigSnapshot`)
-- Raw JSON parsing/assignment helpers for the collapsed snapshot surface
+- Raw JSON parsing/assignment helpers for the collapsed snapshot surface, with generic snapshot field assignment used for tokenizer/subprocess leaves
 
 **Access rule:** Consumers should load **one** `AiConfigSnapshot` and then read direct snapshot fields from that object. Do not add sidecar config wrappers or path-based leaf loaders that reparse `ai_config.json` for one subsection.
 
@@ -150,20 +158,25 @@ float rms = std::sqrt(variance + EPSILON_RMSNORM);
 
 ### For Runtime Configuration:
 
-1. Add field to `ai_config_paths.hpp`:
+1. Add a flat snapshot leaf to `ai_config_paths.hpp`:
    ```cpp
-   struct TrainingHyperparameters {
-       bool my_new_feature = true;  // C++ default
+  struct AiConfigSnapshot {
+     bool my_new_feature = false;
        // ...
    };
    ```
 
-2. Add raw assignment in `applyTrainingConfigObject()` and require it in `validateAiConfigDocument()`:
+2. Add the raw assignment inside the single snapshot load operation:
    ```cpp
-   assignTrainingField(params.my_new_feature, trainConfig, "my_new_feature");
+  assignTrainingField(snapshot.my_new_feature, trainConfig, "my_new_feature");
+  ```
+
+3. Copy it into `TrainingHyperparameters` in `HyperParameters_GPU.hpp::loadTrainingHyperparameters()` if it is training-owned:
+  ```cpp
+  params.my_new_feature = snapshot.my_new_feature;
    ```
 
-3. Add to `ai_config.json`:
+4. Add to `ai_config.json`:
    ```json
    {
      "training": {
@@ -174,10 +187,12 @@ float rms = std::sqrt(variance + EPSILON_RMSNORM);
    }
    ```
 
-4. Use in code:
+5. Use typed config after the HyperParameters handoff:
    ```cpp
    auto snapshot = loadAiConfigSnapshot("ai_config.json");
-   if (snapshot->hyperparameters.my_new_feature) {
+  TrainingHyperparameters hp;
+  GRIM::HyperParameters::loadTrainingHyperparameters(*snapshot, hp);
+  if (hp.my_new_feature) {
        // ...
    }
    ```

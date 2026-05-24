@@ -4,8 +4,8 @@
 
 int main(int argc, char** argv) {
     Config config;
-    config.input_dir = GRIM::Config::getCollectedDir();
-    config.output_dir = GRIM::Config::getVerifiedDir();
+    config.input_dir = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::Collected);
+    config.output_dir = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::Verified);
     config.reliability_threshold = 0.3f;  // Lower threshold for basic validation
     config.min_length = 50;
     config.max_length = 100000;

@@ -96,14 +96,14 @@ public:
         addBool  (params.single_batch_overfit_enabled, "single_batch_overfit_enabled", "Single Batch Overfit", "Core");
         addInt   (params.single_batch_overfit_max_steps, "single_batch_overfit_max_steps", "Overfit Max Steps", "Core");
         addString(params.batch_strategy,      "batch_strategy",      "Batch Strategy",      "Core");
-        addInt   (params.architecture.max_seq_len,         "max_seq_len",         "Max Seq Length",      "Core");
+        addInt   (params.max_seq_len,         "max_seq_len",         "Max Seq Length",      "Core");
         addInt   (params.min_seq_valid_tokens,"min_seq_valid_tokens","Min Valid Tokens",    "Core");
         addInt   (params.log_interval,        "log_interval",        "Log Interval",        "Core");
         addInt   (params.atom_stats_interval, "atom_stats_interval", "Atom Stats Interval", "Core");
         addInt   (params.atom_stats_max_seqs, "atom_stats_max_seqs", "Atom Stats Max Seqs", "Core");
         addInt   (params.validation_interval, "validation_interval", "Validation Interval", "Core");
         addInt   (params.checkpoint_interval, "checkpoint_interval", "Checkpoint Interval", "Core");
-        addBool  (params.architecture.use_gpu,             "use_gpu",             "Use GPU",             "Core");
+        addBool  (params.use_gpu,             "use_gpu",             "Use GPU",             "Core");
 
         // ── Optimizer ──
         addFloat (params.weight_decay,        "weight_decay",        "Weight Decay",        "Optimizer");
@@ -199,70 +199,70 @@ public:
 
         // ── LM Head ──
         addBool  (params.lm_head_centering_enabled,                "lm_head_centering_enabled",       "Centering Enabled",     "LM Head");
-        addBool  (params.architecture.lm_head_center_hidden_states,    "lm_head_center_hidden_states",    "Center Hidden States",  "LM Head");
-        addBool  (params.architecture.freeze_learned_rms_gammas,       "freeze_learned_rms_gammas",       "Freeze Learned RMS γ", "LM Head");
-        addBool  (params.architecture.center_logits,                   "center_logits",                   "Center Logits",         "LM Head");
-        addBool  (params.architecture.center_encoder_residuals,      "center_encoder_residuals",      "Center Encoder Resids", "LM Head");
-        addBool  (params.architecture.project_out_pc1,               "project_out_pc1",               "Project Out PC1",       "LM Head");
-        addInt   (params.architecture.pc1_power_iters,               "pc1_power_iters",               "PC1 Power Iters",       "LM Head");
+        addBool  (params.lm_head_center_hidden_states,    "lm_head_center_hidden_states",    "Center Hidden States",  "LM Head");
+        addBool  (params.freeze_learned_rms_gammas,       "freeze_learned_rms_gammas",       "Freeze Learned RMS γ", "LM Head");
+        addBool  (params.center_logits,                   "center_logits",                   "Center Logits",         "LM Head");
+        addBool  (params.center_encoder_residuals,      "center_encoder_residuals",      "Center Encoder Resids", "LM Head");
+        addBool  (params.project_out_pc1,               "project_out_pc1",               "Project Out PC1",       "LM Head");
+        addInt   (params.pc1_power_iters,               "pc1_power_iters",               "PC1 Power Iters",       "LM Head");
 
         // ── Attention ──
-        addBool  (params.architecture.use_flash_attention,      "use_flash_attention",      "Flash Attention",      "Attention");
-        addInt   (params.architecture.min_seq_len_for_flash,    "min_seq_len_for_flash",    "Min Seq For Flash",    "Attention");
-        addBool  (params.architecture.qk_norm_enabled,          "qk_norm_enabled",          "QK-Norm",              "Attention");
+        addBool  (params.use_flash_attention,      "use_flash_attention",      "Flash Attention",      "Attention");
+        addInt   (params.min_seq_len_for_flash,    "min_seq_len_for_flash",    "Min Seq For Flash",    "Attention");
+        addBool  (params.qk_norm_enabled,          "qk_norm_enabled",          "QK-Norm",              "Attention");
         addBool  (params.attention_diag_enabled,   "attention_diag_enabled",   "Attention Diag",       "Attention");
         addInt   (params.attention_diag_layer,     "attention_diag_layer",     "Diag Layer",           "Attention");
         addInt   (params.attention_diag_head,      "attention_diag_head",      "Diag Head",            "Attention");
 
         // ── Layer Scale ──
-        addBool  (params.architecture.use_layer_scale,  "use_layer_scale",  "Enabled",    "Layer Scale");
-        addFloat (params.architecture.layer_scale_init, "layer_scale_init", "Init Value", "Layer Scale");
+        addBool  (params.use_layer_scale,  "use_layer_scale",  "Enabled",    "Layer Scale");
+        addFloat (params.layer_scale_init, "layer_scale_init", "Init Value", "Layer Scale");
 
         // ── Scratch Block ──
         addBool  (params.scratch_blocks_enabled,               "scratch_blocks_enabled",               "Enabled",                "Scratch Block");
         addSizeT (params.scratch_max_tokens_per_block,         "scratch_max_tokens_per_block",         "Max Tokens/Block",       "Scratch Block");
         addSizeT (params.scratch_num_blocks,                   "scratch_num_blocks",                   "Num Blocks",             "Scratch Block");
         addBool  (params.scratch_write_combined,               "scratch_write_combined",               "Write Combined",         "Scratch Block");
-        addBool  (params.architecture.use_scratch_block,                    "use_scratch_block",                    "Reasoning Enabled",      "Scratch Block");
-        addInt   (params.architecture.scratch_block_atom_embedding_dim,     "scratch_block_atom_embedding_dim",     "Atom Embed Dim",         "Scratch Block");
-        addInt   (params.architecture.scratch_block_max_atoms,              "scratch_block_max_atoms",              "Max Atoms",              "Scratch Block");
-        addFloat (params.architecture.scratch_block_atom_scale,             "scratch_block_atom_scale",             "Atom Scale",             "Scratch Block");
+        addBool  (params.use_scratch_block,                    "use_scratch_block",                    "Reasoning Enabled",      "Scratch Block");
+        addInt   (params.scratch_block_atom_embedding_dim,     "scratch_block_atom_embedding_dim",     "Atom Embed Dim",         "Scratch Block");
+        addInt   (params.scratch_block_max_atoms,              "scratch_block_max_atoms",              "Max Atoms",              "Scratch Block");
+        addFloat (params.scratch_block_atom_scale,             "scratch_block_atom_scale",             "Atom Scale",             "Scratch Block");
 
         // ── Execution Block ──
-        addBool  (params.architecture.execution_block_enabled,                    "execution_block_enabled",                    "Enabled",                  "Execution Block");
-        addBool  (params.architecture.scratch_block_execution_first_type_only,    "scratch_block_execution_first_type_only",    "Type-Only Scratch",        "Execution Block");
-        addInt   (params.architecture.execution_block_layer,                      "execution_block_layer",                      "Layer",                    "Execution Block");
-        addInt   (params.architecture.execution_block_num_ops,                    "execution_block_num_ops",                    "Num Ops",                  "Execution Block");
-        addInt   (params.architecture.execution_block_num_slots,                  "execution_block_num_slots",                  "Num Slots",                "Execution Block");
-        addInt   (params.architecture.execution_block_num_steps,                  "execution_block_num_steps",                  "Num Steps",                "Execution Block");
-        addInt   (params.architecture.execution_block_d_key,                      "execution_block_d_key",                      "d_key",                    "Execution Block");
-        addInt   (params.architecture.execution_block_d_type,                     "execution_block_d_type",                     "d_type",                   "Execution Block");
-        addInt   (params.architecture.execution_block_cross_attn_head_dim,        "execution_block_cross_attn_head_dim",        "Cross-Attn Head Dim",      "Execution Block");
-        addInt   (params.architecture.execution_block_cross_attn_topk,            "execution_block_cross_attn_topk",            "Cross-Attn Top-K",         "Execution Block");
-        addFloat (params.architecture.execution_block_usage_decay,                "execution_block_usage_decay",                "Usage Decay",              "Execution Block");
-        addFloat (params.architecture.execution_block_diversity_kappa,            "execution_block_diversity_kappa",            "Diversity Kappa",          "Execution Block");
-        addFloat (params.architecture.execution_block_temp_start,                 "execution_block_temp_start",                 "Temp Start",               "Execution Block");
-        addFloat (params.architecture.execution_block_temp_end,                   "execution_block_temp_end",                   "Temp End",                 "Execution Block");
-        addInt   (params.architecture.execution_block_temp_schedule,              "execution_block_temp_schedule",              "Temp Schedule",            "Execution Block");
-        addFloat (params.architecture.execution_block_entropy_weight,             "execution_block_entropy_weight",             "Entropy Weight",           "Execution Block");
-        addFloat (params.architecture.step_x_multiplier,                          "step_x_multiplier",                          "Step X Multiplier",        "Execution Block");
-        addFloat (params.architecture.step_y_multiplier,                          "step_y_multiplier",                          "Step Y Multiplier",        "Execution Block");
-        addBool  (params.architecture.step_y_overrides_x,                         "step_y_overrides_x",                         "Y Overrides X",            "Execution Block");
-        addFloat (params.architecture.entropy_aux_weight,                         "entropy_aux_weight",                         "Entropy Aux Weight",       "Execution Block");
-        addFloat (params.architecture.value_match_epsilon,                        "value_match_epsilon",                        "Value Match Epsilon",      "Execution Block");
-        addFloat (params.architecture.final_slot_consistency_weight,              "final_slot_consistency_weight",              "Slot Consistency Weight",  "Execution Block");
-        addFloat (params.architecture.execution_block_transition_hard_threshold,  "execution_block_transition_hard_threshold",  "Transition Hard Threshold","Execution Block");
-        addInt   (params.architecture.execution_block_gate_warmup_steps,          "execution_block_gate_warmup_steps",          "Gate Warmup Steps",        "Execution Block");
-        addFloat (params.architecture.execution_block_causal_w1_transition,       "execution_block_causal_w1_transition",       "Causal W1 Transition",    "Execution Block");
-        addFloat (params.architecture.div_magnitude_penalty_weight,               "div_magnitude_penalty_weight",               "Div Magnitude Penalty",   "Execution Block");
-        addFloat (params.architecture.arg_reinforce_weight,                       "arg_reinforce_weight",                       "Arg REINFORCE Weight",    "Execution Block");
-        addFloat (params.architecture.arg_reinforce_baseline_decay,               "arg_reinforce_baseline_decay",               "REINFORCE Baseline Decay","Execution Block");
-        addBool  (params.architecture.structured_ce_enabled,                       "structured_ce_enabled",                       "Structured CE Enabled",   "Execution Block");
-        addFloat (params.architecture.structured_ce_weight,                        "structured_ce_weight",                        "Structured CE Weight",    "Execution Block");
-        addBool  (params.architecture.selector_enabled,                           "selector_enabled",                           "Selector Enabled",         "Execution Block");
-        addInt   (params.architecture.selector_d_selector,                        "selector_d_selector",                        "Selector d_selector",      "Execution Block");
-        addFloat (params.architecture.selector_selection_margin,                  "selector_selection_margin",                  "Selection Margin",         "Execution Block");
-        addFloat (params.architecture.selector_supervision_weight,                "selector_supervision_weight",                "Supervision Weight",       "Execution Block");
+        addBool  (params.execution_block_enabled,                    "execution_block_enabled",                    "Enabled",                  "Execution Block");
+        addBool  (params.scratch_block_execution_first_type_only,    "scratch_block_execution_first_type_only",    "Type-Only Scratch",        "Execution Block");
+        addInt   (params.execution_block_layer,                      "execution_block_layer",                      "Layer",                    "Execution Block");
+        addInt   (params.execution_block_num_ops,                    "execution_block_num_ops",                    "Num Ops",                  "Execution Block");
+        addInt   (params.execution_block_num_slots,                  "execution_block_num_slots",                  "Num Slots",                "Execution Block");
+        addInt   (params.execution_block_num_steps,                  "execution_block_num_steps",                  "Num Steps",                "Execution Block");
+        addInt   (params.execution_block_d_key,                      "execution_block_d_key",                      "d_key",                    "Execution Block");
+        addInt   (params.execution_block_d_type,                     "execution_block_d_type",                     "d_type",                   "Execution Block");
+        addInt   (params.execution_block_cross_attn_head_dim,        "execution_block_cross_attn_head_dim",        "Cross-Attn Head Dim",      "Execution Block");
+        addInt   (params.execution_block_cross_attn_topk,            "execution_block_cross_attn_topk",            "Cross-Attn Top-K",         "Execution Block");
+        addFloat (params.execution_block_usage_decay,                "execution_block_usage_decay",                "Usage Decay",              "Execution Block");
+        addFloat (params.execution_block_diversity_kappa,            "execution_block_diversity_kappa",            "Diversity Kappa",          "Execution Block");
+        addFloat (params.execution_block_temp_start,                 "execution_block_temp_start",                 "Temp Start",               "Execution Block");
+        addFloat (params.execution_block_temp_end,                   "execution_block_temp_end",                   "Temp End",                 "Execution Block");
+        addInt   (params.execution_block_temp_schedule,              "execution_block_temp_schedule",              "Temp Schedule",            "Execution Block");
+        addFloat (params.execution_block_entropy_weight,             "execution_block_entropy_weight",             "Entropy Weight",           "Execution Block");
+        addFloat (params.step_x_multiplier,                          "step_x_multiplier",                          "Step X Multiplier",        "Execution Block");
+        addFloat (params.step_y_multiplier,                          "step_y_multiplier",                          "Step Y Multiplier",        "Execution Block");
+        addBool  (params.step_y_overrides_x,                         "step_y_overrides_x",                         "Y Overrides X",            "Execution Block");
+        addFloat (params.entropy_aux_weight,                         "entropy_aux_weight",                         "Entropy Aux Weight",       "Execution Block");
+        addFloat (params.value_match_epsilon,                        "value_match_epsilon",                        "Value Match Epsilon",      "Execution Block");
+        addFloat (params.final_slot_consistency_weight,              "final_slot_consistency_weight",              "Slot Consistency Weight",  "Execution Block");
+        addFloat (params.execution_block_transition_hard_threshold,  "execution_block_transition_hard_threshold",  "Transition Hard Threshold","Execution Block");
+        addInt   (params.execution_block_gate_warmup_steps,          "execution_block_gate_warmup_steps",          "Gate Warmup Steps",        "Execution Block");
+        addFloat (params.execution_block_causal_w1_transition,       "execution_block_causal_w1_transition",       "Causal W1 Transition",    "Execution Block");
+        addFloat (params.div_magnitude_penalty_weight,               "div_magnitude_penalty_weight",               "Div Magnitude Penalty",   "Execution Block");
+        addFloat (params.arg_reinforce_weight,                       "arg_reinforce_weight",                       "Arg REINFORCE Weight",    "Execution Block");
+        addFloat (params.arg_reinforce_baseline_decay,               "arg_reinforce_baseline_decay",               "REINFORCE Baseline Decay","Execution Block");
+        addBool  (params.structured_ce_enabled,                       "structured_ce_enabled",                       "Structured CE Enabled",   "Execution Block");
+        addFloat (params.structured_ce_weight,                        "structured_ce_weight",                        "Structured CE Weight",    "Execution Block");
+        addBool  (params.selector_enabled,                           "selector_enabled",                           "Selector Enabled",         "Execution Block");
+        addInt   (params.selector_d_selector,                        "selector_d_selector",                        "Selector d_selector",      "Execution Block");
+        addFloat (params.selector_selection_margin,                  "selector_selection_margin",                  "Selection Margin",         "Execution Block");
+        addFloat (params.selector_supervision_weight,                "selector_supervision_weight",                "Supervision Weight",       "Execution Block");
 
         // ── CUDA ──
         addBool  (params.single_stream_mode,         "single_stream_mode",         "Single Stream Mode",     "CUDA");
@@ -270,10 +270,10 @@ public:
         addBool  (params.synchronize_after_kernels,  "synchronize_after_kernels",  "Sync After Kernels",     "CUDA");
 
         // ── MTP ──
-        addBool  (params.architecture.mtp_enabled,               "mtp_enabled",               "Enabled",            "MTP");
-        addInt   (params.architecture.mtp_k,                     "mtp_k",                     "K (Lookahead)",      "MTP");
-        addFloat (params.architecture.mtp_alpha,                 "mtp_alpha",                 "Alpha",              "MTP");
-        addInt   (params.architecture.mtp_alpha_warmup_steps,    "mtp_alpha_warmup_steps",    "Alpha Warmup Steps", "MTP");
+        addBool  (params.mtp_enabled,               "mtp_enabled",               "Enabled",            "MTP");
+        addInt   (params.mtp_k,                     "mtp_k",                     "K (Lookahead)",      "MTP");
+        addFloat (params.mtp_alpha,                 "mtp_alpha",                 "Alpha",              "MTP");
+        addInt   (params.mtp_alpha_warmup_steps,    "mtp_alpha_warmup_steps",    "Alpha Warmup Steps", "MTP");
         addBool  (params.mtp_log_ratio_monitor,     "mtp_log_ratio_monitor",     "Log Ratio Monitor",  "MTP");
 
         // ── Embedding ──
@@ -287,7 +287,7 @@ public:
         addFloat (params.stability_override_clip_per_token,  "stability_override_clip_per_token",  "Override Clip/Tok", "Stability");
 
         // ── Diagnostics ──
-        addInt   (params.architecture.hardcoded_log_every_n_batches,      "hardcoded_log_every_n_batches",      "Log Every N Batches",    "Diagnostics");
+        addInt   (params.hardcoded_log_every_n_batches,      "hardcoded_log_every_n_batches",      "Log Every N Batches",    "Diagnostics");
         addBool  (params.prediction_comparison_enabled,      "prediction_comparison_enabled",      "Pred Compare Enabled",   "Diagnostics");
         addInt   (params.prediction_comparison_interval,     "prediction_comparison_interval",     "Pred Compare Interval",  "Diagnostics");
         addInt   (params.prediction_comparison_top_k,        "prediction_comparison_top_k",        "Pred Compare Top-K",     "Diagnostics");

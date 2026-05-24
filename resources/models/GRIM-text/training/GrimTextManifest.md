@@ -509,11 +509,11 @@ Use this checklist to systematically audit each file in the order it's used duri
 
   **🟡 BUG H: Shared architecture loader ignored positional_encoding (server/runtime path) — [FIXED Issue #142]**
 
-  `HyperParameters::loadModelArchitecture()` did not parse `training.config.positional_encoding`.
+  `HyperParameters::loadModelArchitecture()` did not receive authored positional fields from the raw `training.config` PBM leaves.
   `grim_text_server.cpp` also did not propagate `arch.positional_encoding` into `LanguageModelConfig`.
 
   **Fix (implemented):**
-  - `HyperParameters_GPU.hpp`: Parse `positional_encoding` from object or string forms
+  - `HyperParameters_GPU.hpp`: Consume the authored positional encoding mode after raw config parsing
   - `grim_text_server.cpp`: Propagate `num_kv_heads`, `tie_embeddings`, and `positional_encoding` from `ModelArchitecture`
 
   ---
@@ -540,7 +540,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
   **🟡 BUG K: `use_learned` positional mode parsed but position table never allocated — [FIXED Issue #143]**
 
-  `Phase1_Startup.cu` maps `training.config.positional_encoding.use_learned=true` to
+  `Phase1_Startup.cu` maps the removed learned-position mode to
   `PositionalEncodingType::NONE`, and `AutogradTraining.cu` treats `NONE` as the
   additive learned-position path. But `TrainingTensors::initializeParams()` never
   allocated `position_embedding_weights` for `NONE`, so the forward gate:
@@ -549,7 +549,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
   **Fix (implemented):**
   - `TrainingTensors.cu`: Allocate/init `position_embedding_weights` when `positional_encoding == NONE`
-  - `Phase1_Startup.cu`: Parse `training.config.positional_encoding` in both object and string forms, with fail-loud type validation
+  - `Phase1_Startup.cu`: Parse positional encoding with fail-loud type validation
 
   ---
 

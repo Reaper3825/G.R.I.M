@@ -1171,15 +1171,16 @@ int main(int argc, char** argv) {
     
     // Also load training hyperparameters from the single config snapshot
     if (snapshot && snapshot->has_training) {
-        const auto& hyperparams = snapshot->hyperparameters;
+        GRIM::Config::TrainingHyperparameters hyperparams;
+        GRIM::HyperParameters::loadTrainingHyperparameters(*snapshot, hyperparams);
         InternalTrainingConfig config = g_state.getConfig();
         config.epochs = hyperparams.epochs;
         config.batchSize = hyperparams.batch_size;
         config.learningRate = hyperparams.learning_rate;
-        config.maxSeqLen = hyperparams.architecture.max_seq_len;
+        config.maxSeqLen = hyperparams.max_seq_len;
         config.warmupSteps = hyperparams.warmup_steps;  // 0 until Phase2 derives from warmup_fraction
-        config.useGPU = hyperparams.architecture.use_gpu;
-        config.useFlashAttention = hyperparams.architecture.use_flash_attention;
+        config.useGPU = hyperparams.use_gpu;
+        config.useFlashAttention = hyperparams.use_flash_attention;
         g_state.updateConfig(config);
         std::cout << "[Server] ✓ Loaded training hyperparameters from ai_config.json" << std::endl;
     }

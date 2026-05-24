@@ -728,7 +728,9 @@ int runCollect(const std::string& config_path, std::function<void(float)> progre
         return 1;
     }
     
-    std::string resolved_raw_dir = g_raw_dir.empty() ? GRIM::Config::getCollectedDir() : g_raw_dir;
+    std::string resolved_raw_dir = g_raw_dir.empty()
+        ? GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::Collected)
+        : g_raw_dir;
     if (resolved_raw_dir.empty()) {
         resolved_raw_dir = "data/raw";
     }
@@ -779,7 +781,7 @@ int runVerify(const std::string& raw_dir, const std::string& verified_dir) {
 
     std::string resolved_raw_dir = raw_dir.empty() ? g_raw_dir : raw_dir;
     if (resolved_raw_dir.empty()) {
-        resolved_raw_dir = GRIM::Config::getCollectedDir();
+        resolved_raw_dir = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::Collected);
     }
     if (resolved_raw_dir.empty()) {
         resolved_raw_dir = "data/raw";
@@ -787,7 +789,7 @@ int runVerify(const std::string& raw_dir, const std::string& verified_dir) {
 
     std::string resolved_verified_dir = verified_dir.empty() ? g_verified_dir : verified_dir;
     if (resolved_verified_dir.empty()) {
-        resolved_verified_dir = GRIM::Config::getVerifiedDir();
+        resolved_verified_dir = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::Verified);
     }
     if (resolved_verified_dir.empty()) {
         resolved_verified_dir = "data/verified";
@@ -804,7 +806,7 @@ int runVerify(const std::string& raw_dir, const std::string& verified_dir) {
     fs::create_directories(resolved_verified_dir);
     
     // Initialize state manager for tracking verified content
-    std::string checkpoint_dir = GRIM::Config::getCheckpointDir();
+    std::string checkpoint_dir = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::Checkpoints);
     if (checkpoint_dir.empty()) checkpoint_dir = "data/checkpoints";
     std::string stateDir = checkpoint_dir + "/collection_state";
     if (!g_stateManager) {
@@ -874,7 +876,7 @@ int runVerify_Cleanup(const std::string& raw_dir) {
     // Separated cleanup function to avoid crash during verification
     std::string resolved_raw_dir = raw_dir.empty() ? g_raw_dir : raw_dir;
     if (resolved_raw_dir.empty()) {
-        resolved_raw_dir = GRIM::Config::getCollectedDir();
+        resolved_raw_dir = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::Collected);
     }
     if (resolved_raw_dir.empty() || !fs::exists(resolved_raw_dir)) {
         return 0;
@@ -935,13 +937,13 @@ int runMerge(const std::string& checkpoint_dir, const std::string& verified_dir,
     std::string resolved_output_dir = output_dir.empty() ? g_output_dir : output_dir;
 
     if (resolved_checkpoint_dir.empty()) {
-        resolved_checkpoint_dir = GRIM::Config::getCheckpointDir();
+        resolved_checkpoint_dir = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::Checkpoints);
         if (resolved_checkpoint_dir.empty()) {
             resolved_checkpoint_dir = "data/checkpoints";
         }
     }
     if (resolved_verified_dir.empty()) {
-        resolved_verified_dir = GRIM::Config::getVerifiedDir();
+        resolved_verified_dir = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::Verified);
         if (resolved_verified_dir.empty()) {
             resolved_verified_dir = "data/verified";
         }
@@ -1293,9 +1295,9 @@ int runMerge(const std::string& checkpoint_dir, const std::string& verified_dir,
     // Load max_seq_len from the single config snapshot.
     auto snapshot = GRIM::Config::loadAiConfigSnapshot();
     if (!snapshot || !snapshot->has_training) {
-        throw std::runtime_error("runMerge: loadAiConfigSnapshot did not produce training hyperparameters");
+        throw std::runtime_error("runMerge: loadAiConfigSnapshot did not produce training config");
     }
-    const int max_seq_len = snapshot->hyperparameters.architecture.max_seq_len;
+    const int max_seq_len = snapshot->max_seq_len;
     std::cout << "  Using max_seq_len=" << max_seq_len << " from ai_config.json\n";
     
     // Calculate max chars based on max_seq_len (approx 4 chars per token)

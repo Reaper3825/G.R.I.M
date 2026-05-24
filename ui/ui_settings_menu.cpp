@@ -1129,16 +1129,11 @@ void UISettingsMenu::createMemoryWidgets() {
     scrollBox->addChild(maxEntriesSlider);
     
     // --- Clear Merged Cache on Merge ---
-    bool clearCache = false;
-    if (pendingConfig.contains("data_collection") && pendingConfig["data_collection"].is_object()) {
-        clearCache = pendingConfig["data_collection"].value("clear_merged_cache_on_merge", false);
-    }
+    bool clearCache = pendingConfig.value("clear_merged_cache_on_merge", false);
     auto clearCacheToggle = std::make_shared<UIToggle>(
         "Clear Cache on Merge:", clearCache,
         [this](bool val) {
-            if (!pendingConfig.contains("data_collection") || !pendingConfig["data_collection"].is_object())
-                pendingConfig["data_collection"] = nlohmann::json::object();
-            pendingConfig["data_collection"]["clear_merged_cache_on_merge"] = val;
+            pendingConfig["clear_merged_cache_on_merge"] = val;
             hasChanges = true;
         }
     );
