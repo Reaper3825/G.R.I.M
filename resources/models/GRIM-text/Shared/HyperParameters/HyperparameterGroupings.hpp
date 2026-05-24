@@ -49,7 +49,6 @@ struct TokenizerHP {
 };
 
 struct TokenizerSubprocessHP {
-    std::string config_path;
     TokenizerHP tokenizer;
     bool only_mode = false;
 };
@@ -702,9 +701,6 @@ inline TokenizerHP tokenizerHP(const StartupConfig& config) {
     const ::GRIM::Config::TrainingHyperparameters& hp = config.hyperparameters;
     // Tokenizer JSON leaves are owned by AiConfigSnapshot; StartupConfig only carries the snapshot.
     const ::GRIM::Config::AiConfigSnapshot& snapshot = config.ai_config_snapshot;
-    if (!snapshot.has_tokenizer) {
-        throw std::runtime_error("tokenizerHP: AiConfigSnapshot.has_tokenizer is false");
-    }
 
     TokenizerHP view;
     view.data_path = config.paths.data_path;
@@ -764,14 +760,6 @@ inline TokenizerSubprocessHP tokenizerSubprocessHP(const StartupConfig& config)
 {
     TokenizerSubprocessHP view;
     const ::GRIM::Config::AiConfigSnapshot& snapshot = config.ai_config_snapshot;
-    if (config.paths.config_path.empty()) {
-        throw std::runtime_error("tokenizerSubprocessHP: config_path is empty");
-    }
-    if (!snapshot.has_subprocess) {
-        throw std::runtime_error("tokenizerSubprocessHP: AiConfigSnapshot.has_subprocess is false");
-    }
-
-    view.config_path = config.paths.config_path.string();
     view.tokenizer = tokenizerHP(config);
     view.only_mode = snapshot.subprocess_tokenizer_only_mode;
     return view;
@@ -909,125 +897,6 @@ inline void validateInferenceLanguageModelConfig(
     validateLanguageModelCacheCapacity(cfg, "inferenceLanguageModelConfig");
 }
 
-inline LanguageModelConfig languageModelConfigFromTrainingHyperparameters(
-    const ::GRIM::Config::TrainingHyperparameters& hp,
-    const GenerationConfig& generation)
-{
-    LanguageModelConfig cfg;
-    cfg.d_model = hp.d_model;
-    cfg.num_layers = hp.num_layers;
-    cfg.num_heads = hp.num_heads;
-    cfg.num_kv_heads = hp.num_kv_heads;
-    cfg.d_ff = hp.d_ff;
-    cfg.max_seq_len = hp.max_seq_len;
-    cfg.dropout_rate = hp.dropout_rate;
-    cfg.attention_dropout = hp.attention_dropout;
-    cfg.tie_embeddings = hp.tie_embeddings;
-    cfg.positional_encoding = hp.positional_encoding;
-    cfg.rope_base_seq_len = hp.rope_base_seq_len;
-    cfg.alibi_min_locality_distance = hp.alibi_min_locality_distance;
-    cfg.alibi_slope_exponent = hp.alibi_slope_exponent;
-    cfg.alibi_max_bias = hp.alibi_max_bias;
-    cfg.rope_theta = hp.rope_theta;
-    cfg.rope_scaling = hp.rope_scaling;
-    cfg.use_flash_attention = hp.use_flash_attention;
-    cfg.min_seq_len_for_flash = hp.min_seq_len_for_flash;
-    cfg.use_gpu = hp.use_gpu;
-    cfg.head_dim = hp.head_dim;
-    cfg.vocab_size = hp.vocab_size;
-    cfg.max_cached_batch = hp.max_cached_batch;
-    cfg.max_cached_seq_len = hp.max_cached_seq_len;
-    cfg.max_tokens_per_batch = hp.max_tokens_per_batch;
-    cfg.rms_epsilon = hp.rms_epsilon;
-    cfg.causal_mask = hp.causal_mask;
-    cfg.use_pre_norm = hp.use_pre_norm;
-    cfg.fuse_qkv = hp.fuse_qkv;
-    cfg.use_simd = hp.use_simd;
-    cfg.num_threads = hp.num_threads;
-    cfg.use_bias = hp.use_bias;
-    cfg.qk_norm_enabled = hp.qk_norm_enabled;
-    cfg.use_layer_scale = hp.use_layer_scale;
-    cfg.layer_scale_init = hp.layer_scale_init;
-    cfg.vocab_path = hp.vocab_path;
-    cfg.execution_mode = hp.execution_mode;
-    cfg.parameter_precision_embedding = hp.parameter_precision_embedding;
-    cfg.parameter_precision_lm_head = hp.parameter_precision_lm_head;
-    cfg.parameter_precision_attention = hp.parameter_precision_attention;
-    cfg.parameter_precision_ffn = hp.parameter_precision_ffn;
-    cfg.parameter_precision_rmsnorm = hp.parameter_precision_rmsnorm;
-    cfg.parameter_precision_scratchblock = hp.parameter_precision_scratchblock;
-    cfg.parameter_precision_mtp = hp.parameter_precision_mtp;
-    cfg.parameter_precision_reasoning_head = hp.parameter_precision_reasoning_head;
-    cfg.parameter_precision_execution_block = hp.parameter_precision_execution_block;
-    cfg.parameter_precision_slot_selector = hp.parameter_precision_slot_selector;
-    cfg.use_scratch_block = hp.use_scratch_block;
-    cfg.scratch_block_atom_embedding_dim = hp.scratch_block_atom_embedding_dim;
-    cfg.scratch_block_max_atoms = hp.scratch_block_max_atoms;
-    cfg.scratch_block_atom_scale = hp.scratch_block_atom_scale;
-    cfg.scratch_block_execution_first_type_only = hp.scratch_block_execution_first_type_only;
-    cfg.reasoning_head_enabled = hp.reasoning_head_enabled;
-    cfg.reasoning_num_ops = hp.reasoning_num_ops;
-    cfg.execution_block_enabled = hp.execution_block_enabled;
-    cfg.execution_block_layer = hp.execution_block_layer;
-    cfg.execution_block_num_ops = hp.execution_block_num_ops;
-    cfg.execution_block_num_slots = hp.execution_block_num_slots;
-    cfg.execution_block_num_scratch_slots = hp.execution_block_num_scratch_slots;
-    cfg.execution_block_num_steps = hp.execution_block_num_steps;
-    cfg.execution_block_value_decode_input_dim = hp.execution_block_value_decode_input_dim;
-    cfg.execution_block_value_decode_hidden_dim = hp.execution_block_value_decode_hidden_dim;
-    cfg.execution_block_d_key = hp.execution_block_d_key;
-    cfg.execution_block_d_type = hp.execution_block_d_type;
-    cfg.execution_block_cross_attn_head_dim = hp.execution_block_cross_attn_head_dim;
-    cfg.execution_block_cross_attn_topk = hp.execution_block_cross_attn_topk;
-    cfg.execution_block_usage_decay = hp.execution_block_usage_decay;
-    cfg.execution_block_inject_gate_temp = hp.execution_block_inject_gate_temp;
-    cfg.execution_block_result_slot_mode = hp.execution_block_result_slot_mode;
-    cfg.execution_block_result_slot_index = hp.execution_block_result_slot_index;
-    cfg.execution_block_debug_mode = hp.execution_block_debug_mode;
-    cfg.execution_block_entropy_collapse_threshold = hp.execution_block_entropy_collapse_threshold;
-    cfg.execution_block_write_collapse_threshold = hp.execution_block_write_collapse_threshold;
-    cfg.execution_block_magnitude_limit = hp.execution_block_magnitude_limit;
-    cfg.execution_block_diversity_kappa = hp.execution_block_diversity_kappa;
-    cfg.execution_block_temp_start = hp.execution_block_temp_start;
-    cfg.execution_block_temp_end = hp.execution_block_temp_end;
-    cfg.execution_block_temp_schedule = hp.execution_block_temp_schedule;
-    cfg.execution_block_entropy_weight = hp.execution_block_entropy_weight;
-    cfg.execution_block_transition_hard_threshold = hp.execution_block_transition_hard_threshold;
-    cfg.execution_block_gate_warmup_steps = hp.execution_block_gate_warmup_steps;
-    cfg.execution_block_causal_w1_transition = hp.execution_block_causal_w1_transition;
-    cfg.div_invalid_penalty_weight = hp.div_invalid_penalty_weight;
-    cfg.div_magnitude_penalty_weight = hp.div_magnitude_penalty_weight;
-    cfg.arg_reinforce_weight = hp.arg_reinforce_weight;
-    cfg.arg_reinforce_baseline_decay = hp.arg_reinforce_baseline_decay;
-    cfg.structured_ce_enabled = hp.structured_ce_enabled;
-    cfg.structured_ce_weight = hp.structured_ce_weight;
-    cfg.selector_enabled = hp.selector_enabled;
-    cfg.decode_time_slot_feature_dim = hp.decode_time_slot_feature_dim;
-    cfg.selector_d_selector = hp.selector_d_selector;
-    cfg.selector_selection_margin = hp.selector_selection_margin;
-    cfg.selector_supervision_weight = hp.selector_supervision_weight;
-    cfg.step_x_multiplier = hp.step_x_multiplier;
-    cfg.step_y_multiplier = hp.step_y_multiplier;
-    cfg.step_y_overrides_x = hp.step_y_overrides_x;
-    cfg.entropy_aux_weight = hp.entropy_aux_weight;
-    cfg.value_match_epsilon = hp.value_match_epsilon;
-    cfg.final_slot_consistency_weight = hp.final_slot_consistency_weight;
-    cfg.lm_head_center_hidden_states = hp.lm_head_center_hidden_states;
-    cfg.freeze_learned_rms_gammas = hp.freeze_learned_rms_gammas;
-    cfg.project_out_pc1 = hp.project_out_pc1;
-    cfg.pc1_power_iters = hp.pc1_power_iters;
-    cfg.center_logits = hp.center_logits;
-    cfg.center_encoder_residuals = hp.center_encoder_residuals;
-    cfg.hardcoded_hidden_pattern = hp.hardcoded_hidden_pattern;
-    cfg.hardcoded_log_every_n_batches = hp.hardcoded_log_every_n_batches;
-    cfg.generation = generation;
-    cfg.mtp_enabled = hp.mtp_enabled;
-    cfg.mtp_k = hp.mtp_k;
-    cfg.mtp_alpha = hp.mtp_alpha;
-    cfg.mtp_alpha_warmup_steps = hp.mtp_alpha_warmup_steps;
-    return cfg;
-}
-
 inline LanguageModelConfig startupLanguageModelConfig(
     const StartupConfig& config,
     std::uint32_t vocab_size,
@@ -1035,7 +904,8 @@ inline LanguageModelConfig startupLanguageModelConfig(
 {
     GenerationConfig generation;
     loadGenerationConfig(config.ai_config_snapshot, generation);
-    LanguageModelConfig cfg = languageModelConfigFromTrainingHyperparameters(config.hyperparameters, generation);
+    LanguageModelConfig cfg;
+    cfg.loadFromTrainingHyperparameters(config.hyperparameters, generation);
 
     // Runtime startup facts authored outside ai_config.json but still mapped
     // through this grouping layer so model startup has one config read path.
@@ -1071,7 +941,8 @@ inline LanguageModelConfig inferenceLanguageModelConfig(
 
     GenerationConfig generation;
     loadGenerationConfig(config.ai_config_snapshot, generation);
-    LanguageModelConfig cfg = languageModelConfigFromTrainingHyperparameters(config.hyperparameters, generation);
+    LanguageModelConfig cfg;
+    cfg.loadFromTrainingHyperparameters(config.hyperparameters, generation);
     cfg.max_seq_len = config.max_seq_len;
     cfg.vocab_size = static_cast<int>(vocab_size);
     cfg.vocab_path = vocab_path;

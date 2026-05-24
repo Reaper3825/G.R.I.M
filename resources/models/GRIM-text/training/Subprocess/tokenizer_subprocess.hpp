@@ -11,9 +11,9 @@
 //     (no hidden defaults; missing required fields throw).
 //   - Resolves the train_tokenizer executable as a sibling of the current
 //     process binary.
-//   - Spawns it with `--status-file <path>` and `--config <ai_config.json>`,
-//     waits for completion, and decodes the tokenizer-specific success
-//     payload (vocab_size) into a tokenizer_subprocess_result.
+//   - Spawns it with `--status-file <path>`, waits for completion, and
+//     decodes the tokenizer-specific success payload (vocab_size) into a
+//     tokenizer_subprocess_result.
 //   - vocab_path / training_data_path are NOT carried over IPC — they are
 //     resolved from TokenizerHP so there is exactly one tokenizer source of truth.
 //   - If the grouped snapshot says `only_mode=true` AND the tokenizer reports
@@ -44,8 +44,8 @@ struct tokenizer_subprocess_request {
     std::string executable_path_override;
 
     // Optional override of the status file path. When empty, the manager
-    // writes it next to ai_config.json under
-    //   <config_dir>/.subprocess/tokenizer_status.json
+    // writes it next to the tokenizer vocab artifact under
+    //   <vocab_dir>/.subprocess/tokenizer_status.json
     std::string status_file_path_override;
 
 };

@@ -34,21 +34,10 @@ std::uint32_t extract_vocab_size(const subprocess_result& env,
 
 tokenizer_subprocess_result run_tokenizer_subprocess(
     const tokenizer_subprocess_request& req) {
-    if (req.hp.config_path.empty()) {
-        throw std::runtime_error(
-            "tokenizer_subprocess: tokenizer_subprocess_request.hp.config_path is empty");
-    }
-    if (!fs::exists(req.hp.config_path)) {
-        throw std::runtime_error(
-            "tokenizer_subprocess: ai_config.json does not exist at: " + req.hp.config_path);
-    }
-
-    const std::string& resolved_config_path = req.hp.config_path;
     const auto& tokenizer_hp = req.hp.tokenizer;
     if (tokenizer_hp.vocab_path.empty() || tokenizer_hp.data_path.empty()) {
         throw std::runtime_error(
-            "tokenizer_subprocess: TokenizerHP missing vocab_path and/or data_path for: " +
-            resolved_config_path);
+            "tokenizer_subprocess: TokenizerHP missing vocab_path and/or data_path");
     }
 
     subprocess_request sreq;
@@ -58,17 +47,15 @@ tokenizer_subprocess_result run_tokenizer_subprocess(
         : req.executable_path_override;
 
     if (req.status_file_path_override.empty()) {
-        fs::path config_dir = fs::path(resolved_config_path).parent_path();
+        fs::path vocab_dir = fs::absolute(tokenizer_hp.vocab_path).parent_path();
         sreq.status_file_path =
-            (config_dir / ".subprocess" / "tokenizer_status.json").string();
+            (vocab_dir / ".subprocess" / "tokenizer_status.json").string();
     } else {
         sreq.status_file_path = req.status_file_path_override;
     }
 
     sreq.arguments.push_back("--status-file");
     sreq.arguments.push_back(sreq.status_file_path);
-    sreq.arguments.push_back("--config");
-    sreq.arguments.push_back(resolved_config_path);
 
     const subprocess_result env = spawn_and_wait(sreq);
 

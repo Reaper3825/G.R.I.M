@@ -26,6 +26,12 @@
 
 #include "../UnigramByte/Unigram.hpp"
 
+namespace GRIM {
+namespace Config {
+struct TrainingHyperparameters;
+}
+}
+
 //======================================================//
 // HyperParameters_GPU.hpp - Single Source of Truth
 // 
@@ -284,6 +290,10 @@ struct ModelArchitecture {
     
     // Derived (computed from above)
     int head_dim = 0;
+
+    // Mass-load architecture leaves from the finalized typed owner.
+    // Defined after TrainingHyperparameters is complete.
+    void loadFromTrainingHyperparameters(const GRIM::Config::TrainingHyperparameters& hp);
     
     // Validate architecture and compute derived values. Throws on invalid config.
     void validate() {
@@ -518,6 +528,10 @@ struct LanguageModelConfig : public ModelArchitecture {
     void computeDerivedValues() {
         validate();  // ModelArchitecture::validate() computes head_dim and validates all arch fields
     }
+
+    using ModelArchitecture::loadFromTrainingHyperparameters;
+    void loadFromTrainingHyperparameters(const GRIM::Config::TrainingHyperparameters& hp,
+                                         const GenerationConfig& generation_config);
 
     // Cache limits
     int max_cached_batch = 0;
@@ -1098,6 +1112,130 @@ inline void deriveComputedTrainingHyperparameters(GRIM::Config::TrainingHyperpar
     }
 }
 
+inline void ModelArchitecture::loadFromTrainingHyperparameters(
+    const GRIM::Config::TrainingHyperparameters& hp)
+{
+    d_model = hp.d_model;
+    num_layers = hp.num_layers;
+    num_heads = hp.num_heads;
+    num_kv_heads = hp.num_kv_heads;
+    d_ff = hp.d_ff;
+    max_seq_len = hp.max_seq_len;
+    dropout_rate = hp.dropout_rate;
+    attention_dropout = hp.attention_dropout;
+    tie_embeddings = hp.tie_embeddings;
+    positional_encoding = hp.positional_encoding;
+    rope_base_seq_len = hp.rope_base_seq_len;
+    alibi_min_locality_distance = hp.alibi_min_locality_distance;
+    alibi_slope_exponent = hp.alibi_slope_exponent;
+    alibi_max_bias = hp.alibi_max_bias;
+    rope_theta = hp.rope_theta;
+    rope_scaling = hp.rope_scaling;
+    use_flash_attention = hp.use_flash_attention;
+    min_seq_len_for_flash = hp.min_seq_len_for_flash;
+    use_gpu = hp.use_gpu;
+    head_dim = hp.head_dim;
+    validate();
+}
+
+inline void LanguageModelConfig::loadFromTrainingHyperparameters(
+    const GRIM::Config::TrainingHyperparameters& hp,
+    const GenerationConfig& generation_config)
+{
+    static_cast<ModelArchitecture&>(*this).loadFromTrainingHyperparameters(hp);
+    vocab_size = hp.vocab_size;
+    max_cached_batch = hp.max_cached_batch;
+    max_cached_seq_len = hp.max_cached_seq_len;
+    max_tokens_per_batch = hp.max_tokens_per_batch;
+    rms_epsilon = hp.rms_epsilon;
+    causal_mask = hp.causal_mask;
+    use_pre_norm = hp.use_pre_norm;
+    fuse_qkv = hp.fuse_qkv;
+    use_simd = hp.use_simd;
+    num_threads = hp.num_threads;
+    use_bias = hp.use_bias;
+    qk_norm_enabled = hp.qk_norm_enabled;
+    use_layer_scale = hp.use_layer_scale;
+    layer_scale_init = hp.layer_scale_init;
+    vocab_path = hp.vocab_path;
+    execution_mode = hp.execution_mode;
+    parameter_precision_embedding = hp.parameter_precision_embedding;
+    parameter_precision_lm_head = hp.parameter_precision_lm_head;
+    parameter_precision_attention = hp.parameter_precision_attention;
+    parameter_precision_ffn = hp.parameter_precision_ffn;
+    parameter_precision_rmsnorm = hp.parameter_precision_rmsnorm;
+    parameter_precision_scratchblock = hp.parameter_precision_scratchblock;
+    parameter_precision_mtp = hp.parameter_precision_mtp;
+    parameter_precision_reasoning_head = hp.parameter_precision_reasoning_head;
+    parameter_precision_execution_block = hp.parameter_precision_execution_block;
+    parameter_precision_slot_selector = hp.parameter_precision_slot_selector;
+    use_scratch_block = hp.use_scratch_block;
+    scratch_block_atom_embedding_dim = hp.scratch_block_atom_embedding_dim;
+    scratch_block_max_atoms = hp.scratch_block_max_atoms;
+    scratch_block_atom_scale = hp.scratch_block_atom_scale;
+    scratch_block_execution_first_type_only = hp.scratch_block_execution_first_type_only;
+    reasoning_head_enabled = hp.reasoning_head_enabled;
+    reasoning_num_ops = hp.reasoning_num_ops;
+    execution_block_enabled = hp.execution_block_enabled;
+    execution_block_layer = hp.execution_block_layer;
+    execution_block_num_ops = hp.execution_block_num_ops;
+    execution_block_num_slots = hp.execution_block_num_slots;
+    execution_block_num_scratch_slots = hp.execution_block_num_scratch_slots;
+    execution_block_num_steps = hp.execution_block_num_steps;
+    execution_block_value_decode_input_dim = hp.execution_block_value_decode_input_dim;
+    execution_block_value_decode_hidden_dim = hp.execution_block_value_decode_hidden_dim;
+    execution_block_d_key = hp.execution_block_d_key;
+    execution_block_d_type = hp.execution_block_d_type;
+    execution_block_cross_attn_head_dim = hp.execution_block_cross_attn_head_dim;
+    execution_block_cross_attn_topk = hp.execution_block_cross_attn_topk;
+    execution_block_usage_decay = hp.execution_block_usage_decay;
+    execution_block_inject_gate_temp = hp.execution_block_inject_gate_temp;
+    execution_block_result_slot_mode = hp.execution_block_result_slot_mode;
+    execution_block_result_slot_index = hp.execution_block_result_slot_index;
+    execution_block_debug_mode = hp.execution_block_debug_mode;
+    execution_block_entropy_collapse_threshold = hp.execution_block_entropy_collapse_threshold;
+    execution_block_write_collapse_threshold = hp.execution_block_write_collapse_threshold;
+    execution_block_magnitude_limit = hp.execution_block_magnitude_limit;
+    execution_block_diversity_kappa = hp.execution_block_diversity_kappa;
+    execution_block_temp_start = hp.execution_block_temp_start;
+    execution_block_temp_end = hp.execution_block_temp_end;
+    execution_block_temp_schedule = hp.execution_block_temp_schedule;
+    execution_block_entropy_weight = hp.execution_block_entropy_weight;
+    execution_block_transition_hard_threshold = hp.execution_block_transition_hard_threshold;
+    execution_block_gate_warmup_steps = hp.execution_block_gate_warmup_steps;
+    execution_block_causal_w1_transition = hp.execution_block_causal_w1_transition;
+    div_invalid_penalty_weight = hp.div_invalid_penalty_weight;
+    div_magnitude_penalty_weight = hp.div_magnitude_penalty_weight;
+    arg_reinforce_weight = hp.arg_reinforce_weight;
+    arg_reinforce_baseline_decay = hp.arg_reinforce_baseline_decay;
+    structured_ce_enabled = hp.structured_ce_enabled;
+    structured_ce_weight = hp.structured_ce_weight;
+    selector_enabled = hp.selector_enabled;
+    decode_time_slot_feature_dim = hp.decode_time_slot_feature_dim;
+    selector_d_selector = hp.selector_d_selector;
+    selector_selection_margin = hp.selector_selection_margin;
+    selector_supervision_weight = hp.selector_supervision_weight;
+    step_x_multiplier = hp.step_x_multiplier;
+    step_y_multiplier = hp.step_y_multiplier;
+    step_y_overrides_x = hp.step_y_overrides_x;
+    entropy_aux_weight = hp.entropy_aux_weight;
+    value_match_epsilon = hp.value_match_epsilon;
+    final_slot_consistency_weight = hp.final_slot_consistency_weight;
+    lm_head_center_hidden_states = hp.lm_head_center_hidden_states;
+    freeze_learned_rms_gammas = hp.freeze_learned_rms_gammas;
+    project_out_pc1 = hp.project_out_pc1;
+    pc1_power_iters = hp.pc1_power_iters;
+    center_logits = hp.center_logits;
+    center_encoder_residuals = hp.center_encoder_residuals;
+    hardcoded_hidden_pattern = hp.hardcoded_hidden_pattern;
+    hardcoded_log_every_n_batches = hp.hardcoded_log_every_n_batches;
+    generation = generation_config;
+    mtp_enabled = hp.mtp_enabled;
+    mtp_k = hp.mtp_k;
+    mtp_alpha = hp.mtp_alpha;
+    mtp_alpha_warmup_steps = hp.mtp_alpha_warmup_steps;
+}
+
 inline void deriveWarmupSteps(GRIM::Config::TrainingHyperparameters& params, int estimated_total_steps) {
     if (estimated_total_steps <= 0) {
         throw std::runtime_error(
@@ -1114,6 +1252,197 @@ inline void deriveWarmupSteps(GRIM::Config::TrainingHyperparameters& params, int
     params.mtp_alpha_warmup_steps = params.warmup_steps;
     params.telemetry_warmup_steps = params.warmup_steps;
     params.execution_block_gate_warmup_steps = params.warmup_steps;
+}
+
+inline void validateExecutionBlockHyperparameters(
+    const GRIM::Config::TrainingHyperparameters& params)
+{
+    auto requirePositiveInt = [](int value, const char* field) {
+        if (value <= 0) {
+            throw std::runtime_error(std::string("validateExecutionBlockHyperparameters: ") +
+                                     field + " must be > 0, got " + std::to_string(value));
+        }
+    };
+    auto requireNonNegativeInt = [](int value, const char* field) {
+        if (value < 0) {
+            throw std::runtime_error(std::string("validateExecutionBlockHyperparameters: ") +
+                                     field + " must be >= 0, got " + std::to_string(value));
+        }
+    };
+    auto requirePositiveFinite = [](float value, const char* field) {
+        if (!std::isfinite(value) || value <= 0.0f) {
+            throw std::runtime_error(std::string("validateExecutionBlockHyperparameters: ") +
+                                     field + " must be a positive finite value, got " +
+                                     std::to_string(value));
+        }
+    };
+    auto requireNonNegativeFinite = [](float value, const char* field) {
+        if (!std::isfinite(value) || value < 0.0f) {
+            throw std::runtime_error(std::string("validateExecutionBlockHyperparameters: ") +
+                                     field + " must be finite and >= 0, got " +
+                                     std::to_string(value));
+        }
+    };
+    auto requireUnitInterval = [](float value, const char* field) {
+        if (!std::isfinite(value) || value < 0.0f || value > 1.0f) {
+            throw std::runtime_error(std::string("validateExecutionBlockHyperparameters: ") +
+                                     field + " must be finite and in [0,1], got " +
+                                     std::to_string(value));
+        }
+    };
+
+    if (params.use_scratch_block || params.execution_block_enabled) {
+        requirePositiveInt(params.scratch_block_atom_embedding_dim,
+                           "scratch_block_atom_embedding_dim");
+        requirePositiveInt(params.scratch_block_max_atoms,
+                           "scratch_block_max_atoms");
+        requirePositiveFinite(params.scratch_block_atom_scale,
+                              "scratch_block_atom_scale");
+    }
+
+    if (params.structured_ce_enabled) {
+        requirePositiveFinite(params.structured_ce_weight,
+                              "execution_block_structured_ce_weight");
+    }
+    requireNonNegativeFinite(params.step_x_multiplier,
+                             "execution_block_step_x_multiplier");
+    requireNonNegativeFinite(params.step_y_multiplier,
+                             "execution_block_step_y_multiplier");
+    requireNonNegativeFinite(params.entropy_aux_weight,
+                             "execution_block_entropy_aux_weight");
+    requirePositiveFinite(params.value_match_epsilon,
+                          "execution_block_value_match_epsilon");
+    requireNonNegativeFinite(params.final_slot_consistency_weight,
+                             "execution_block_final_slot_consistency_weight");
+
+    if (params.selector_enabled && !params.execution_block_enabled) {
+        throw std::runtime_error(
+            "validateExecutionBlockHyperparameters: selector_enabled=true requires execution_block_enabled=true");
+    }
+
+    if (!params.execution_block_enabled) {
+        return;
+    }
+
+    if (!params.use_scratch_block) {
+        throw std::runtime_error(
+            "validateExecutionBlockHyperparameters: execution_block_enabled=true requires use_scratch_block=true");
+    }
+    if (params.execution_block_layer < -1) {
+        throw std::runtime_error(
+            "validateExecutionBlockHyperparameters: execution_block_layer must be -1 or >= 0, got " +
+            std::to_string(params.execution_block_layer));
+    }
+    if (params.execution_block_layer >= params.num_layers) {
+        throw std::runtime_error(
+            "validateExecutionBlockHyperparameters: execution_block_layer=" +
+            std::to_string(params.execution_block_layer) +
+            " exceeds num_layers=" + std::to_string(params.num_layers));
+    }
+
+    requirePositiveInt(params.execution_block_num_ops, "execution_block_num_ops");
+    requirePositiveInt(params.execution_block_num_slots, "execution_block_num_slots");
+    requireNonNegativeInt(params.execution_block_num_scratch_slots,
+                          "execution_block_num_scratch_slots");
+    if (params.execution_block_num_scratch_slots >= params.execution_block_num_slots) {
+        throw std::runtime_error(
+            "validateExecutionBlockHyperparameters: execution_block_num_scratch_slots=" +
+            std::to_string(params.execution_block_num_scratch_slots) +
+            " must be < execution_block_num_slots=" +
+            std::to_string(params.execution_block_num_slots));
+    }
+    requirePositiveInt(params.execution_block_num_steps, "execution_block_num_steps");
+    requirePositiveInt(params.execution_block_value_decode_input_dim,
+                       "execution_block_value_decode_input_dim");
+    requirePositiveInt(params.execution_block_value_decode_hidden_dim,
+                       "execution_block_value_decode_hidden_dim");
+    if (params.execution_block_value_decode_input_dim + 16 > params.scratch_block_atom_embedding_dim) {
+        throw std::runtime_error(
+            "validateExecutionBlockHyperparameters: execution_block_value_decode_input_dim + 16 must fit scratch_block_atom_embedding_dim");
+    }
+
+    requirePositiveInt(params.execution_block_d_key, "execution_block_d_key");
+    if (params.execution_block_d_key > 64) {
+        throw std::runtime_error(
+            "validateExecutionBlockHyperparameters: execution_block_d_key must be <= 64, got " +
+            std::to_string(params.execution_block_d_key));
+    }
+    requirePositiveInt(params.execution_block_d_type, "execution_block_d_type");
+    requirePositiveInt(params.execution_block_cross_attn_head_dim,
+                       "execution_block_cross_attn_head_dim");
+    requirePositiveInt(params.execution_block_cross_attn_topk,
+                       "execution_block_cross_attn_topk");
+    if (params.execution_block_cross_attn_topk > params.execution_block_num_slots) {
+        throw std::runtime_error(
+            "validateExecutionBlockHyperparameters: execution_block_cross_attn_topk=" +
+            std::to_string(params.execution_block_cross_attn_topk) +
+            " exceeds execution_block_num_slots=" +
+            std::to_string(params.execution_block_num_slots));
+    }
+
+    requirePositiveFinite(params.execution_block_usage_decay,
+                          "execution_block_usage_decay");
+    if (params.execution_block_usage_decay > 1.0f) {
+        throw std::runtime_error(
+            "validateExecutionBlockHyperparameters: execution_block_usage_decay must be <= 1, got " +
+            std::to_string(params.execution_block_usage_decay));
+    }
+    requirePositiveFinite(params.execution_block_inject_gate_temp,
+                          "execution_block_inject_gate_temp");
+    requireUnitInterval(params.execution_block_entropy_collapse_threshold,
+                        "execution_block_entropy_collapse_threshold");
+    requireUnitInterval(params.execution_block_write_collapse_threshold,
+                        "execution_block_write_collapse_threshold");
+    requirePositiveFinite(params.execution_block_magnitude_limit,
+                          "execution_block_magnitude_limit");
+    requirePositiveFinite(params.execution_block_diversity_kappa,
+                          "execution_block_diversity_kappa");
+    requirePositiveFinite(params.execution_block_temp_start,
+                          "execution_block_temp_start");
+    requirePositiveFinite(params.execution_block_temp_end,
+                          "execution_block_temp_end");
+    requireNonNegativeInt(params.execution_block_temp_schedule,
+                          "execution_block_temp_schedule");
+    requireNonNegativeFinite(params.execution_block_entropy_weight,
+                             "execution_block_entropy_weight");
+    requireNonNegativeFinite(params.execution_block_transition_hard_threshold,
+                             "execution_block_transition_hard_threshold");
+    requireNonNegativeInt(params.execution_block_gate_warmup_steps,
+                          "execution_block_gate_warmup_steps");
+    requireNonNegativeFinite(params.execution_block_causal_w1_transition,
+                             "execution_block_causal_w1_transition");
+    requireNonNegativeFinite(params.div_invalid_penalty_weight,
+                             "execution_block_div_invalid_penalty_weight");
+    requireNonNegativeFinite(params.div_magnitude_penalty_weight,
+                             "execution_block_div_magnitude_penalty_weight");
+    requireNonNegativeFinite(params.arg_reinforce_weight,
+                             "execution_block_arg_reinforce_weight");
+    requireUnitInterval(params.arg_reinforce_baseline_decay,
+                        "execution_block_arg_reinforce_baseline_decay");
+
+    if (params.execution_block_result_slot_index < -1 ||
+        params.execution_block_result_slot_index >= params.execution_block_num_slots) {
+        throw std::runtime_error(
+            "validateExecutionBlockHyperparameters: execution_block_result_slot_index=" +
+            std::to_string(params.execution_block_result_slot_index) +
+            " out of range [-1, execution_block_num_slots)");
+    }
+    if (params.execution_block_result_slot_mode < 0 || params.execution_block_result_slot_mode > 1) {
+        throw std::runtime_error(
+            "validateExecutionBlockHyperparameters: execution_block_result_slot_mode must be 0 or 1, got " +
+            std::to_string(params.execution_block_result_slot_mode));
+    }
+
+    if (params.selector_enabled) {
+        requirePositiveInt(params.decode_time_slot_feature_dim,
+                           "selector_d_slot_features");
+        requirePositiveInt(params.selector_d_selector,
+                           "selector_d_selector");
+        requireNonNegativeFinite(params.selector_selection_margin,
+                                 "selector_selection_margin");
+        requireNonNegativeFinite(params.selector_supervision_weight,
+                                 "selector_supervision_weight");
+    }
 }
 
 //======================================================//
@@ -1155,6 +1484,7 @@ inline void validateTrainingHyperparameters(const GRIM::Config::TrainingHyperpar
     validateParameterGroupPrecision(params.parameter_precision_reasoning_head, "parameter_precision_reasoning_head", "validateTrainingHyperparameters");
     validateParameterGroupPrecision(params.parameter_precision_execution_block, "parameter_precision_execution_block", "validateTrainingHyperparameters");
     validateParameterGroupPrecision(params.parameter_precision_slot_selector, "parameter_precision_slot_selector", "validateTrainingHyperparameters");
+    validateExecutionBlockHyperparameters(params);
 }
 
 //======================================================//
@@ -1255,10 +1585,6 @@ inline HardcodedPattern parseHardcodedHiddenPattern(const std::string& pattern) 
 
 inline bool loadTrainingHyperparameters(const GRIM::Config::AiConfigSnapshot& snapshot,
                                         GRIM::Config::TrainingHyperparameters& params) {
-    if (!snapshot.has_training) {
-        throw std::runtime_error("loadTrainingHyperparameters: snapshot.has_training is false");
-    }
-
     params = GRIM::Config::TrainingHyperparameters{};
     params.current_model_training = snapshot.current_model_training;
     params.current_curriculum = snapshot.current_curriculum;
@@ -1529,7 +1855,6 @@ inline bool loadTrainingHyperparameters(const GRIM::Config::AiConfigSnapshot& sn
  * Note: vocab_size is NOT loaded here - it comes from the .grmt training data file
  * 
  * @param arch Output ModelArchitecture struct to populate
- * @param configPath Path to ai_config.json (defaults to auto-discovery)
  * @return true if config was loaded, false if using defaults only
  */
 // Snapshot-based overload — preferred entry point. Avoids re-reading
@@ -1538,41 +1863,16 @@ inline bool loadTrainingHyperparameters(const GRIM::Config::AiConfigSnapshot& sn
 // TrainingHyperparameters derivation is owned by HyperParameters_GPU.hpp.
 inline bool loadModelArchitecture(const GRIM::Config::AiConfigSnapshot& snapshot,
                                   ModelArchitecture& arch) {
-    if (!snapshot.has_training) {
-        throw std::runtime_error("loadModelArchitecture: snapshot.has_training is false");
-    }
-
     GRIM::Config::TrainingHyperparameters hp;
     loadTrainingHyperparameters(snapshot, hp);
-    arch.d_model = hp.d_model;
-    arch.num_layers = hp.num_layers;
-    arch.num_heads = hp.num_heads;
-    arch.num_kv_heads = hp.num_kv_heads;
-    arch.d_ff = hp.d_ff;
-    arch.max_seq_len = hp.max_seq_len;
-    arch.dropout_rate = hp.dropout_rate;
-    arch.attention_dropout = hp.attention_dropout;
-    arch.tie_embeddings = hp.tie_embeddings;
-    arch.positional_encoding = hp.positional_encoding;
-    arch.rope_base_seq_len = hp.rope_base_seq_len;
-    arch.alibi_min_locality_distance = hp.alibi_min_locality_distance;
-    arch.alibi_slope_exponent = hp.alibi_slope_exponent;
-    arch.alibi_max_bias = hp.alibi_max_bias;
-    arch.rope_theta = hp.rope_theta;
-    arch.rope_scaling = hp.rope_scaling;
-    arch.use_flash_attention = hp.use_flash_attention;
-    arch.min_seq_len_for_flash = hp.min_seq_len_for_flash;
-    arch.use_gpu = hp.use_gpu;
-
-    // Validate and compute derived values (head_dim)
-    arch.validate();
+    arch.loadFromTrainingHyperparameters(hp);
     return true;
 }
 
-// Path-based overload — loads a snapshot internally. Kept for callers that
-// don't already hold a snapshot (e.g. grim_text_server startup).
-inline bool loadModelArchitecture(ModelArchitecture& arch, const std::string& configPath = "ai_config.json") {
-    auto snapshot = GRIM::Config::loadAiConfigSnapshot(configPath);
+// Convenience overload — loads a snapshot internally for callers that do not
+// already hold the raw authored snapshot.
+inline bool loadModelArchitecture(ModelArchitecture& arch) {
+    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
     if (!snapshot) {
         throw std::runtime_error("loadModelArchitecture: loadAiConfigSnapshot returned no snapshot");
     }
@@ -1585,9 +1885,9 @@ inline bool loadModelArchitecture(ModelArchitecture& arch, const std::string& co
  * Returns a fully populated ModelArchitecture struct.
  * Uses config if available, falls back to defaults.
  */
-inline ModelArchitecture getModelArchitecture(const std::string& configPath = "ai_config.json") {
+inline ModelArchitecture getModelArchitecture() {
     ModelArchitecture arch;
-    loadModelArchitecture(arch, configPath);
+    loadModelArchitecture(arch);
     return arch;
 }
 
@@ -1623,10 +1923,6 @@ inline SamplingStrategy parseGenerationSamplingStrategy(const std::string& strat
 
 inline bool loadGenerationConfig(const GRIM::Config::AiConfigSnapshot& snapshot,
                                  GenerationConfig& generation) {
-    if (!snapshot.has_training) {
-        throw std::runtime_error("loadGenerationConfig: snapshot.has_training is false");
-    }
-
     generation.strategy = parseGenerationSamplingStrategy(snapshot.generation_strategy);
     generation.max_new_tokens = snapshot.generation_max_new_tokens;
     generation.min_new_tokens = snapshot.generation_min_new_tokens;
@@ -1645,9 +1941,8 @@ inline bool loadGenerationConfig(const GRIM::Config::AiConfigSnapshot& snapshot,
     return true;
 }
 
-inline bool loadGenerationConfig(GenerationConfig& generation,
-                                 const std::string& configPath = "ai_config.json") {
-    auto snapshot = GRIM::Config::loadAiConfigSnapshot(configPath);
+inline bool loadGenerationConfig(GenerationConfig& generation) {
+    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
     if (!snapshot) {
         throw std::runtime_error("loadGenerationConfig: loadAiConfigSnapshot returned no snapshot");
     }
@@ -1714,40 +2009,29 @@ struct StartupConfig {
  * @brief Single entry point for startup configuration loading.
  *
  * Performs, in order:
- *   1. Resolve --config path from argv (default: ai_config.json)
- *   2. loadAiConfigSnapshot()       — single raw load + raw validation
- *   3. Copy paths from snapshot->grim_paths into PathConfig
- *   4. Store the raw snapshot and copy hyperparameters from it
- *   5. loadModelArchitecture()      — snapshot typed surface → ModelArchitecture
- *   6. Resolve max_seq_len (stability_override vs hyperparameters.max_seq_len)
- *   7. Resolve sliding_window_stride from training.config and validate it against effective max_seq_len
- *   8. Apply stability overrides to batch_size + grad_clip_norm
- *   9. Apply CLI overrides (--data, --vocab, --output, --epochs,
+ *   1. loadAiConfigSnapshot()       — single raw load + raw validation
+ *   2. Copy paths from snapshot->grim_paths into PathConfig
+ *   3. Store the raw snapshot and copy hyperparameters from it
+ *   4. loadModelArchitecture()      — snapshot typed surface → ModelArchitecture
+ *   5. Resolve max_seq_len (stability_override vs hyperparameters.max_seq_len)
+ *   6. Resolve sliding_window_stride from training.config and validate it against effective max_seq_len
+ *   7. Apply stability overrides to batch_size + grad_clip_norm
+ *   8. Apply CLI overrides (--data, --vocab, --output, --epochs,
  *      --batch-size, --lr, --save-test, --help)
- *  10. validateTrainingHyperparameters() + ModelArchitecture::validate()
+ *   9. validateTrainingHyperparameters() + ModelArchitecture::validate()
  *
  * Throws std::runtime_error on any failure (fail-loud, no fallbacks).
  */
 inline StartupConfig loadStartupConfig(int argc, char** argv) {
     StartupConfig config;
 
-    // 1. Resolve --config (early scan, single pass below for the rest)
-    std::string config_path = "ai_config.json";
-    for (int i = 1; i < argc; ++i) {
-        if (std::string(argv[i]) == "--config" && i + 1 < argc) {
-            config_path = argv[++i];
-            break;
-        }
-    }
-
-    // 2. Load typed snapshot (single JSON parse for the entire program)
-    auto snapshot = GRIM::Config::loadAiConfigSnapshot(config_path);
+    // 1. Load typed snapshot (single JSON parse for the entire program)
+    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
     if (!snapshot) {
-        throw std::runtime_error(
-            "FATAL: ai_config.json not found or unreadable at: " + config_path);
+        throw std::runtime_error("FATAL: ai_config.json not found or unreadable");
     }
 
-    // 3. Paths
+    // 2. Paths
     if (!snapshot->hasRequiredGrimTextPaths()) {
         throw std::runtime_error(
             "FATAL: ai_config.json paths.grim_text missing required fields "
@@ -1761,15 +2045,15 @@ inline StartupConfig loadStartupConfig(int argc, char** argv) {
     config.paths.log_dir           = snapshot->grim_text_logs;
     config.paths.status_path       = snapshot->grim_text_training_status;
 
-    // 4. Retain the single raw snapshot and derive mutable startup hyperparameters.
+    // 3. Retain the single raw snapshot and derive mutable startup hyperparameters.
     config.ai_config_snapshot = *snapshot;
     loadTrainingHyperparameters(config.ai_config_snapshot, config.hyperparameters);
 
-    // 5. Model config validation — single source of truth for JSON keys.
+    // 4. Model config validation — single source of truth for JSON keys.
     ModelArchitecture architecture_check;
     loadModelArchitecture(config.ai_config_snapshot, architecture_check);
 
-    // 6. Derive max_seq_len (must be configured)
+    // 5. Derive max_seq_len (must be configured)
     {
         const auto& hp = config.hyperparameters;
         if (hp.stability_overrides_enabled && hp.stability_override_max_seq_len > 0) {
@@ -1818,7 +2102,7 @@ inline StartupConfig loadStartupConfig(int argc, char** argv) {
         }
     }
 
-    // 9. CLI overrides
+    // 8. CLI overrides
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--data" && i + 1 < argc) {
@@ -1836,13 +2120,13 @@ inline StartupConfig loadStartupConfig(int argc, char** argv) {
                 static_cast<float>(std::atof(argv[++i]));
         } else if (arg == "--save-test") {
             config.save_test_mode = true;
-        } else if (arg == "--config" && i + 1 < argc) {
-            ++i;  // consumed in step 1
+        } else if (arg == "--config") {
+            throw std::runtime_error(
+                "loadStartupConfig: --config is no longer supported; use the canonical ai_config.json");
         } else if (arg == "--help") {
             std::cout
                 << "Usage: " << argv[0] << " [options]\n"
                 << "Options:\n"
-                << "  --config <path>    Config file (ai_config.json)\n"
                 << "  --data <path>      Training data path\n"
                 << "  --vocab <path>     Vocabulary path\n"
                 << "  --output <path>    Output model path\n"
@@ -1854,7 +2138,7 @@ inline StartupConfig loadStartupConfig(int argc, char** argv) {
         }
     }
 
-    // 10. Final validation — fail loud if anything is inconsistent
+    // 9. Final validation — fail loud if anything is inconsistent
     validateTrainingHyperparameters(config.hyperparameters);
 
     return config;

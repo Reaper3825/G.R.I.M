@@ -1145,7 +1145,7 @@ int main(int argc, char** argv) {
     
     // Load paths from ai_config.json (the centralized source of truth)
     auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-    if (snapshot && snapshot->has_grim_paths) {
+    if (snapshot) {
         // Update config with loaded paths
         InternalTrainingConfig loadedConfig = g_state.getConfig();
         
@@ -1170,7 +1170,7 @@ int main(int argc, char** argv) {
     }
     
     // Also load training hyperparameters from the single config snapshot
-    if (snapshot && snapshot->has_training) {
+    if (snapshot) {
         GRIM::Config::TrainingHyperparameters hyperparams;
         GRIM::HyperParameters::loadTrainingHyperparameters(*snapshot, hyperparams);
         InternalTrainingConfig config = g_state.getConfig();

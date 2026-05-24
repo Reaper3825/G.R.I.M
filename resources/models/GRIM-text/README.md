@@ -145,7 +145,7 @@ cmake --build build --config Release --target train_gpu
 3. Run training (example):
 
 ```powershell
-.\TrainingLoop\build\Release\train_gpu.exe --config ..\model_config.json
+.\TrainingLoop\build\Release\train_gpu.exe
 ```
 
 4. Inspect telemetry & logs: training writes telemetry and logs to the training `logs/` directory and updates `training_status.fb` (search the repo for this filename to find runtime artifacts).
@@ -314,7 +314,7 @@ cmake --build build --config Release --target train_gpu
 3. Run training (example):
 
 ```powershell
-.\TrainingLoop\build\Release\train_gpu.exe --config ..\model_config.json
+.\TrainingLoop\build\Release\train_gpu.exe
 ```
 
 4. Inspect telemetry & logs: training writes telemetry and logs to the training `logs/` directory and updates `training_status.fb` (search the repo for this filename to find runtime artifacts).
@@ -810,8 +810,8 @@ cd Release
 # Start HTTP server (default port 8080)
 ./grim_text_server.exe
 
-# Custom configuration
-./grim_text_server.exe --config ../model_config.json --port 8080
+# Custom port
+./grim_text_server.exe ./path/to/model.bin 8080
 ```
 
 ### Example Usage

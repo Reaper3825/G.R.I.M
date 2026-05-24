@@ -97,7 +97,7 @@ bool GRIMTextServerManager::start() {
     LOG_DEBUG("GRIMTextServer", "Starting GRIM-text server...");
     
     // ✅ Load paths from ai_config.json
-    auto snapshot = Config::loadAiConfigSnapshot("ai_config.json");
+    auto snapshot = Config::loadAiConfigSnapshot();
     if (!snapshot || !snapshot->hasRequiredGrimTextPaths()) {
         LOG_ERROR("GRIMTextServer", "Failed to load paths from ai_config.json");
         return false;

@@ -55,7 +55,6 @@ using GrimTokenizer = GRIM::Tokenizer::UniByte;
 struct RunnerOptions {
     std::string vocab_path;
     std::string data_path;
-    std::string config_path = "ai_config.json";
     std::string encode_text;  // non-empty = encode mode
     bool verbose = false;
     bool standalone = false;  // true = standalone mode (human-readable output)
@@ -676,8 +675,6 @@ static RunnerOptions parseOptions(int argc, char** argv) {
             opts.vocab_path = argv[++i];
         } else if (arg == "--data" && i + 1 < argc) {
             opts.data_path = argv[++i];
-        } else if (arg == "--config" && i + 1 < argc) {
-            opts.config_path = argv[++i];
         } else if (arg == "--encode" && i + 1 < argc) {
             opts.encode_text = argv[++i];
         } else if (arg == "--verbose" || arg == "-v") {
@@ -691,7 +688,6 @@ static RunnerOptions parseOptions(int argc, char** argv) {
             fprintf(stderr, "Options:\n");
             fprintf(stderr, "  --vocab PATH      Path to vocab.bin (default: from ai_config.json)\n");
             fprintf(stderr, "  --data PATH       Path to training_data.grmt (default: from ai_config.json)\n");
-            fprintf(stderr, "  --config PATH     Path to ai_config.json (default: ai_config.json)\n");
             fprintf(stderr, "  --encode TEXT     Encode text and output token IDs (skips validation)\n");
             fprintf(stderr, "  --verbose, -v     Show detailed validation output on stderr\n");
             fprintf(stderr, "  --standalone      Human-readable output (for direct invocation)\n");

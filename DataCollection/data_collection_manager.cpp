@@ -34,7 +34,7 @@ bool DataCollectionManager::initialize(const std::string& stateDir) {
     if (stateDir.empty()) {
         // Use default from ai_config or fallback
         auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-        if (snapshot && snapshot->has_grim_paths && !snapshot->grim_text_collected.empty()) {
+        if (snapshot && !snapshot->grim_text_collected.empty()) {
             stateDir_ = (fs::path(snapshot->grim_text_collected).parent_path() / "collection_state").string();
         } else {
             stateDir_ = "data/collection_state";

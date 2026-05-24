@@ -302,58 +302,26 @@ int main(int argc, char** argv)
     std::cout << "========================================\n";
 
     std::vector<std::string> positionals;
-    std::string config_path = "ai_config.json";
-    bool explicit_config = false;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg == "--config" && i + 1 < argc) {
-            config_path = argv[++i];
-            explicit_config = true;
+        if (arg == "--config") {
+            std::cerr << "[GRIM-text] ERROR: --config is no longer supported; use the canonical ai_config.json\n";
+            return 2;
         } else {
             positionals.push_back(arg);
         }
     }
 
-    // Try to find ai_config.json from multiple locations
-    if (!explicit_config && !std::filesystem::exists(config_path)) {
-        config_path = "../../../../../../ai_config.json";  // From Release dir
-    }
-    if (!explicit_config && !std::filesystem::exists(config_path)) {
-        // Try to find GRIM root and look for ai_config.json there
-        std::filesystem::path searchPath = std::filesystem::current_path();
-        for (int i = 0; i < 10 && searchPath.has_parent_path(); ++i) {
-            if (std::filesystem::exists(searchPath / "control") && 
-                std::filesystem::exists(searchPath / "resources")) {
-                std::filesystem::path configCandidate = searchPath / "ai_config.json";
-                if (std::filesystem::exists(configCandidate)) {
-                    config_path = configCandidate.string();
-                    break;
-                }
-            }
-            searchPath = searchPath.parent_path();
-        }
-    }
-
-    std::cout << "[GRIM-text] Using config: " << config_path << " (exists: " 
-              << (std::filesystem::exists(config_path) ? "yes" : "no") << ")\n";
-
-    std::vector<std::string> startup_args = {argv[0], "--config", config_path};
-    std::vector<char*> startup_argv;
-    startup_argv.reserve(startup_args.size());
-    for (auto& arg : startup_args) {
-        startup_argv.push_back(arg.data());
-    }
-
     HyperParameters::StartupConfig startup_config;
     try {
-        startup_config = HyperParameters::loadStartupConfig(
-            static_cast<int>(startup_argv.size()),
-            startup_argv.data());
+        startup_config = HyperParameters::loadStartupConfig(argc, argv);
         HyperParameters::loadGenerationConfig(startup_config.ai_config_snapshot, g_generation_defaults);
     } catch (const std::exception& e) {
         std::cerr << "[GRIM-text] ERROR: Failed to load startup config: " << e.what() << "\n";
         return 1;
     }
+
+    std::cout << "[GRIM-text] Using config: " << startup_config.paths.config_path.string() << "\n";
 
     std::string model_path = startup_config.paths.output_model_path;
     int port = 11435;

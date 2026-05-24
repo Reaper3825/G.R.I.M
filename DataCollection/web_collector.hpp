@@ -552,21 +552,19 @@ WebDataCollector::WebDataCollector()
         throw std::runtime_error("WebDataCollector: loadAiConfigSnapshot returned no snapshot");
     }
 
-    if (snapshot->has_grim_paths) {
-        if (!snapshot->grim_text_checkpoints.empty()) {
-            config_.output_dir = snapshot->grim_text_checkpoints;
-        }
-        if (!snapshot->grim_text_collector_log.empty()) {
-            config_.log_file = snapshot->grim_text_collector_log;
-        }
+    if (!snapshot->grim_text_checkpoints.empty()) {
+        config_.output_dir = snapshot->grim_text_checkpoints;
+    }
+    if (!snapshot->grim_text_collector_log.empty()) {
+        config_.log_file = snapshot->grim_text_collector_log;
     }
 
     if (config_.output_dir.empty()) {
-        config_.output_dir = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::Checkpoints);
+        config_.output_dir = GRIM::Config::getRequiredGrimTextPath("checkpoints");
     }
 
     if (config_.log_file.empty()) {
-        config_.log_file = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::CollectorLog);
+        config_.log_file = GRIM::Config::getRequiredGrimTextPath("collector_log");
     }
 
     config_.max_new_entries_per_run = loadGrimCollectorMaxNewEntriesPerRun(*snapshot);
@@ -607,23 +605,21 @@ WebDataCollector::WebDataCollector(const CollectorConfig& config)
         throw std::runtime_error("WebDataCollector: loadAiConfigSnapshot returned no snapshot");
     }
 
-    if (snapshot->has_grim_paths) {
-        if (config_.output_dir.empty() && !snapshot->grim_text_checkpoints.empty()) {
-            config_.output_dir = snapshot->grim_text_checkpoints;
-        }
-        if (config_.log_file.empty() && !snapshot->grim_text_collector_log.empty()) {
-            config_.log_file = snapshot->grim_text_collector_log;
-        }
+    if (config_.output_dir.empty() && !snapshot->grim_text_checkpoints.empty()) {
+        config_.output_dir = snapshot->grim_text_checkpoints;
+    }
+    if (config_.log_file.empty() && !snapshot->grim_text_collector_log.empty()) {
+        config_.log_file = snapshot->grim_text_collector_log;
     }
 
     // If output_dir not set in config, use ai_config default/fallback.
     if (config_.output_dir.empty()) {
-        config_.output_dir = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::Checkpoints);
+        config_.output_dir = GRIM::Config::getRequiredGrimTextPath("checkpoints");
     }
     
     // If log_file not set in config, use ai_config default/fallback.
     if (config_.log_file.empty()) {
-        config_.log_file = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::CollectorLog);
+        config_.log_file = GRIM::Config::getRequiredGrimTextPath("collector_log");
     }
     
     // If max_new_entries_per_run was not explicitly set by the caller, read the

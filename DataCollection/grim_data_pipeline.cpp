@@ -729,7 +729,7 @@ int runCollect(const std::string& config_path, std::function<void(float)> progre
     }
     
     std::string resolved_raw_dir = g_raw_dir.empty()
-        ? GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::Collected)
+        ? GRIM::Config::getRequiredGrimTextPath("collected")
         : g_raw_dir;
     if (resolved_raw_dir.empty()) {
         resolved_raw_dir = "data/raw";
@@ -781,7 +781,7 @@ int runVerify(const std::string& raw_dir, const std::string& verified_dir) {
 
     std::string resolved_raw_dir = raw_dir.empty() ? g_raw_dir : raw_dir;
     if (resolved_raw_dir.empty()) {
-        resolved_raw_dir = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::Collected);
+        resolved_raw_dir = GRIM::Config::getRequiredGrimTextPath("collected");
     }
     if (resolved_raw_dir.empty()) {
         resolved_raw_dir = "data/raw";
@@ -789,7 +789,7 @@ int runVerify(const std::string& raw_dir, const std::string& verified_dir) {
 
     std::string resolved_verified_dir = verified_dir.empty() ? g_verified_dir : verified_dir;
     if (resolved_verified_dir.empty()) {
-        resolved_verified_dir = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::Verified);
+        resolved_verified_dir = GRIM::Config::getRequiredGrimTextPath("verified");
     }
     if (resolved_verified_dir.empty()) {
         resolved_verified_dir = "data/verified";
@@ -806,7 +806,7 @@ int runVerify(const std::string& raw_dir, const std::string& verified_dir) {
     fs::create_directories(resolved_verified_dir);
     
     // Initialize state manager for tracking verified content
-    std::string checkpoint_dir = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::Checkpoints);
+    std::string checkpoint_dir = GRIM::Config::getRequiredGrimTextPath("checkpoints");
     if (checkpoint_dir.empty()) checkpoint_dir = "data/checkpoints";
     std::string stateDir = checkpoint_dir + "/collection_state";
     if (!g_stateManager) {
@@ -876,7 +876,7 @@ int runVerify_Cleanup(const std::string& raw_dir) {
     // Separated cleanup function to avoid crash during verification
     std::string resolved_raw_dir = raw_dir.empty() ? g_raw_dir : raw_dir;
     if (resolved_raw_dir.empty()) {
-        resolved_raw_dir = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::Collected);
+        resolved_raw_dir = GRIM::Config::getRequiredGrimTextPath("collected");
     }
     if (resolved_raw_dir.empty() || !fs::exists(resolved_raw_dir)) {
         return 0;
@@ -937,13 +937,13 @@ int runMerge(const std::string& checkpoint_dir, const std::string& verified_dir,
     std::string resolved_output_dir = output_dir.empty() ? g_output_dir : output_dir;
 
     if (resolved_checkpoint_dir.empty()) {
-        resolved_checkpoint_dir = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::Checkpoints);
+        resolved_checkpoint_dir = GRIM::Config::getRequiredGrimTextPath("checkpoints");
         if (resolved_checkpoint_dir.empty()) {
             resolved_checkpoint_dir = "data/checkpoints";
         }
     }
     if (resolved_verified_dir.empty()) {
-        resolved_verified_dir = GRIM::Config::getRequiredGrimTextPath(GRIM::Config::GrimTextPathKey::Verified);
+        resolved_verified_dir = GRIM::Config::getRequiredGrimTextPath("verified");
         if (resolved_verified_dir.empty()) {
             resolved_verified_dir = "data/verified";
         }
@@ -951,7 +951,7 @@ int runMerge(const std::string& checkpoint_dir, const std::string& verified_dir,
     if (resolved_output_dir.empty()) {
         // Get the training data directory from ai_config.json (same location DataLoader expects)
         auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-        if (snapshot && snapshot->has_grim_paths && !snapshot->grim_text_training_data.empty()) {
+        if (snapshot && !snapshot->grim_text_training_data.empty()) {
             resolved_output_dir = fs::path(snapshot->grim_text_training_data).parent_path().string();
             std::cout << "  Using training data directory from config: " << resolved_output_dir << "\n";
         } else {
@@ -1294,8 +1294,8 @@ int runMerge(const std::string& checkpoint_dir, const std::string& verified_dir,
     
     // Load max_seq_len from the single config snapshot.
     auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-    if (!snapshot || !snapshot->has_training) {
-        throw std::runtime_error("runMerge: loadAiConfigSnapshot did not produce training config");
+    if (!snapshot) {
+        throw std::runtime_error("runMerge: loadAiConfigSnapshot returned no snapshot");
     }
     const int max_seq_len = snapshot->max_seq_len;
     std::cout << "  Using max_seq_len=" << max_seq_len << " from ai_config.json\n";
@@ -1633,7 +1633,7 @@ int StartDataCollection(int argc, char** argv, std::function<void(float)> progre
     // Load paths from ai_config.json (centralized source of truth)
     std::cout << "[DataPipeline] Loading paths from ai_config.json..." << std::endl;
     auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-    if (snapshot && snapshot->has_grim_paths) {
+    if (snapshot) {
         // Use source_config path from config (CRITICAL FIX)
         if (!snapshot->grim_text_source_config.empty()) {
             config_path = snapshot->grim_text_source_config;

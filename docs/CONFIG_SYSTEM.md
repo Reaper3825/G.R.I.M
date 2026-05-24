@@ -40,7 +40,6 @@ The GRIM project uses a three-tier configuration system:
   "paths": {                      // File/directory paths
     "grim_text": {...}            // GRIM-text specific paths
   },
-  "clear_merged_cache_on_merge": false, // Snapshot-level merge control
   "data_collection": {...},       // GRIM process config, not GRIM-text startup
   "training": {                   // Training hyperparameters
     "subprocess": {
@@ -52,6 +51,9 @@ The GRIM project uses a three-tier configuration system:
     "config": {
       "batch_size": 4,
       "learning_rate": 0.0001,
+      "current_curriculum": "Pre-Trainingv1",
+      "current_model_training": "",
+      "clear_merged_cache_on_merge": false,
       "loss": {...},              // Loss function config
       "scratch_blocks": {...},    // Memory buffer config
       "dynamic_lr": {...},        // Learning rate schedule
@@ -66,9 +68,11 @@ The GRIM project uses a three-tier configuration system:
 **JSON → C++ Owner Mapping:**
 - `paths.grim_text` → `AiConfigSnapshot` `grim_text_*` fields
 - `training.config` → `TrainingHyperparameters`
+- `training.config.current_curriculum` → `AiConfigSnapshot::current_curriculum`
+- `training.config.current_model_training` → `AiConfigSnapshot::current_model_training`
 - `training.config` `tokenizer_*` leaves → `AiConfigSnapshot` `tokenizer_*` fields
 - `training.config.subprocess_tokenizer_only_mode` → `AiConfigSnapshot::subprocess_tokenizer_only_mode`
-- `clear_merged_cache_on_merge` → `AiConfigSnapshot::clear_merged_cache_on_merge`
+- `training.config.clear_merged_cache_on_merge` → `AiConfigSnapshot::clear_merged_cache_on_merge`
 - `data_collection` → GRIM process consumers; do not add typed GRIM-text snapshot leaves for these fields
 
 ### 3. ai_config_paths.hpp

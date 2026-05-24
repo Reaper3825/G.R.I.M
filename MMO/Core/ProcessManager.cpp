@@ -218,7 +218,7 @@ bool ProcessManager::launchGrimTextServer(ProcessSlot& slot, const ModelInfo& mo
     }
 
     // Load paths from config
-    auto snapshot = Config::loadAiConfigSnapshot("ai_config.json");
+    auto snapshot = Config::loadAiConfigSnapshot();
     if (!snapshot || !snapshot->hasRequiredGrimTextPaths()) {
         LOG_ERROR("ProcessManager", "Failed to load paths from ai_config.json for model '" + model.id + "'");
         return false;
@@ -353,7 +353,7 @@ bool ProcessManager::launchGrimTextServer(ProcessSlot& slot, const ModelInfo& mo
     } catch (...) {}
 
     // Load paths from config
-    auto snapshot = Config::loadAiConfigSnapshot("ai_config.json");
+    auto snapshot = Config::loadAiConfigSnapshot();
     if (!snapshot || !snapshot->hasRequiredGrimTextPaths()) {
         LOG_ERROR("ProcessManager", "Failed to load paths from ai_config.json for model '" + model.id + "'");
         return false;

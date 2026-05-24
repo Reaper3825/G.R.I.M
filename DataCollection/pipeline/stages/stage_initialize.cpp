@@ -26,7 +26,7 @@ StageResult StageInitialize::execute(PipelineContext& ctx) {
 
     // ── Load paths from ai_config.json ──────────────────
     auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-    if (snapshot && snapshot->has_grim_paths) {
+    if (snapshot) {
         if (ctx.config.sourceConfigPath.empty() && !snapshot->grim_text_source_config.empty())
             ctx.config.sourceConfigPath = snapshot->grim_text_source_config;
         if (ctx.config.checkpointDir.empty() && !snapshot->grim_text_checkpoints.empty())

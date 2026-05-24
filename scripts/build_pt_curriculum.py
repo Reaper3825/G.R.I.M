@@ -208,7 +208,7 @@ def main():
     print(collected[0]["question"][:300])
     print("...")
 
-    print(f"\nDone! Set ai_config.json training.current_curriculum to '{CURRICULUM_NAME}' to use.")
+    print(f"\nDone! Set ai_config.json training.config.current_curriculum to '{CURRICULUM_NAME}' to use.")
 
 
 if __name__ == "__main__":

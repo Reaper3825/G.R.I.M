@@ -771,7 +771,6 @@ void runAllTests(GRIM::LanguageModel* model, GRIM::Tokenizer::UniByte* tokenizer
 
 int main(int argc, char** argv) {
     int level = 0;  // 0 = all levels
-    std::string config_path = "ai_config.json";
     
     // Parse command line
     for (int i = 1; i < argc; ++i) {
@@ -780,14 +779,14 @@ int main(int argc, char** argv) {
             level = std::stoi(argv[++i]);
         } else if (arg == "--all") {
             level = 0;
-        } else if (arg == "--config" && i + 1 < argc) {
-            config_path = argv[++i];
+        } else if (arg == "--config") {
+            std::cerr << "--config is no longer supported; use the canonical ai_config.json\n";
+            return 2;
         } else if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: " << argv[0] << " [options]\n";
             std::cout << "Options:\n";
             std::cout << "  --level N    Run specific test level (1-6)\n";
             std::cout << "  --all        Run all test levels (default)\n";
-            std::cout << "  --config F   Path to ai_config.json\n";
             std::cout << "\nTest Levels:\n";
             std::cout << "  1: Single-token causality proof\n";
             std::cout << "  2: Causal mask correctness\n";
@@ -806,9 +805,6 @@ int main(int argc, char** argv) {
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, device);
     std::cout << "Using GPU: " << prop.name << "\n";
-    
-    // Load config
-    std::cout << "Loading config from: " << config_path << "\n";
     
     // TODO: Load model and tokenizer from config
     // For now, this is a skeleton - you'll need to integrate with your actual loading code

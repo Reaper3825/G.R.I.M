@@ -1766,8 +1766,8 @@ void UITrainingPanel::processToolGapClicks(const InputState& input, const PanelR
 // ============================================================
 
 void UITrainingPanel::loadHyperparamSnapshot() {
-    auto snapshot = GRIM::Config::loadAiConfigSnapshot("ai_config.json");
-    if (!snapshot || !snapshot->has_training) {
+    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
+    if (!snapshot) {
         hyperparamsLoaded_ = false;
         return;
     }
@@ -2770,7 +2770,7 @@ void UITrainingPanel::updateResourceMonitoring(float dt) {
 void UITrainingPanel::loadPathsFromConfig() {
     try {
         auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-        if (snapshot && snapshot->has_grim_paths) {
+        if (snapshot) {
             vocabPathBuffer = makeRelativeToGrimRoot(snapshot->grim_text_vocab);
             modelPathBuffer = makeRelativeToGrimRoot(snapshot->grim_text_model);
             checkpointsPathBuffer = makeRelativeToGrimRoot(snapshot->grim_text_checkpoints);

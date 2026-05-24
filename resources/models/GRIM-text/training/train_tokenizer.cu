@@ -9,7 +9,7 @@
 // Invoked by GRIMText::Subprocess::run_tokenizer_subprocess.
 //
 // Usage:
-//   train_tokenizer --status-file <path> [--config <ai_config.json>]
+//   train_tokenizer --status-file <path>
 //
 // Contract (Rule 20): the process MUST write a status JSON file at
 // <status-file> before exiting, regardless of outcome:
@@ -50,13 +50,11 @@ namespace {
 
 struct CliArgs {
     std::string status_file;
-    std::string config_file = "ai_config.json";
 };
 
 [[noreturn]] void usageError(const std::string& msg) {
     std::cerr << "train_tokenizer: " << msg << "\n"
-              << "Usage: train_tokenizer --status-file <path> "
-                      "[--config <ai_config.json>]\n";
+              << "Usage: train_tokenizer --status-file <path>\n";
     std::exit(2);
 }
 
@@ -67,9 +65,6 @@ CliArgs parseArgs(int argc, char** argv) {
         if (a == "--status-file") {
             if (i + 1 >= argc) usageError("--status-file requires a path");
             out.status_file = argv[++i];
-        } else if (a == "--config") {
-            if (i + 1 >= argc) usageError("--config requires a path");
-            out.config_file = argv[++i];
         } else {
             usageError("unknown argument: " + a);
         }
@@ -108,11 +103,6 @@ int main(int argc, char** argv) {
     }
 
     try {
-        if (!fs::exists(args.config_file)) {
-            throw std::runtime_error(
-                "ai_config.json not found at: " + args.config_file);
-        }
-
         const auto startup_config = GRIM::HyperParameters::loadStartupConfig(argc, argv);
         const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(startup_config);
 
@@ -122,7 +112,6 @@ int main(int argc, char** argv) {
         }
 
         std::cout << "=== GRIM Tokenizer Subprocess ===\n"
-                  << "Config:      " << args.config_file << "\n"
                   << "Status file: " << args.status_file << "\n"
                   << "Mode:        " << (tokenizer_hp.force_rebuild_vocab ? "FORCE REBUILD" : "build if missing/mismatched") << "\n"
                   << "Vocab path:  " << tokenizer_hp.vocab_path << "\n"
