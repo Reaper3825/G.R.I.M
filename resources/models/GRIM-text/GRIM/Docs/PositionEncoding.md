@@ -1,6 +1,6 @@
 # Position Encoding (ALiBi / RoPE)
 
-Position info is injected **inside attention**, never in the residual stream. No position embeddings are added to token embeddings. Config fields: flat PBM leaves under `training.config` (parsed in `ai_config_paths.hpp` and validated in `HyperParameters::loadModelArchitecture()`).
+Position info is injected **inside attention**, never in the residual stream. No position embeddings are added to token embeddings. Config fields are flat PBM leaves under `training.config`, loaded directly into `LanguageModelConfig` by the single HyperParameters root registry, computed there, and validated during HyperParameters model-architecture derivation.
 
 Flat `training.config` PBM leaves are authored config, not a compile-time fallback. They must provide:
 

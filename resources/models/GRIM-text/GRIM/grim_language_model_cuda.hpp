@@ -100,11 +100,11 @@ public:
 //  Configuration ownership
 //
 //  All model hyperparameters live in HyperParameters_GPU.hpp:
-//    - ModelArchitecture        (d_model, num_heads, ...)
-//    - LanguageModelConfig      (full model + feature toggles, inherits ModelArchitecture)
-//    - GenerationConfig         (sampling / decoding)
+//    - LanguageModelConfig      (architecture fields + full model feature toggles)
 //    - SamplingStrategy
 //    - ModelExecutionMode       (TRAINING vs INFERENCE)
+//  Generation callsites consume GenerationHP grouped views derived from
+//  LanguageModelConfig, never a second config owner.
 //
 //  This header MUST NOT redeclare any of those fields. The encoder
 //  consumes grouped construction views derived from LanguageModelConfig;
@@ -207,10 +207,10 @@ public:
     // Main inference API: callers must build BatchPayload through Shared/Batching.
     Vector getNextTokenLogits(const GRIM::Batching::BatchPayload& context_payload);
     std::vector<GeneratedSequence> generate(const GRIM::Batching::BatchPayload& prompt_payload,
-                                            const HyperParameters::GenerationConfig* gen_config = nullptr);
+                              const HyperParameters::GenerationHP& gen_config);
     GeneratedSequence generateStream(const GRIM::Batching::BatchPayload& prompt_payload,
                                      HyperParameters::GenerationStreamCallback callback,
-                                     const HyperParameters::GenerationConfig* gen_config = nullptr);
+                          const HyperParameters::GenerationHP& gen_config);
     
     // Training/inference payload upload.
     //
@@ -346,7 +346,7 @@ public:
 #endif
     
     GeneratedSequence generateSequenceGPU(const GRIM::Batching::BatchPayload& prompt_payload,
-                                          const HyperParameters::GenerationConfig& cfg,
+                                          const HyperParameters::GenerationHP& cfg,
                                           HyperParameters::GenerationStreamCallback* stream_callback = nullptr);
     
 private:

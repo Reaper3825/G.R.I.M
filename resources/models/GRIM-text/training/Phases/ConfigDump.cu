@@ -66,6 +66,9 @@ std::string fmt(::GRIM::HyperParameters::ModelExecutionMode v) {
 std::string fmt(::GRIM::HyperParameters::ParameterGroupPrecision v) {
     return ::GRIM::HyperParameters::parameterGroupPrecisionToString(v);
 }
+std::string fmt(::GRIM::HyperParameters::OptimizerKind v) {
+    return ::GRIM::HyperParameters::optimizerKindToString(v);
+}
 std::string fmt(::GRIM::HyperParameters::HardcodedPattern v) {
     using HCP = ::GRIM::HyperParameters::HardcodedPattern;
     switch (v) {
@@ -99,7 +102,7 @@ std::string fmtStringMap(const std::map<std::string, std::string>& values) {
 } // namespace
 
 void dumpAllHyperparameters(
-    const GRIM::Config::TrainingHyperparameters& hp,
+    const GRIM::HyperParameters::LanguageModelConfig& hp,
     const GRIM::HyperParameters::DerivedScheduleInfo* derived,
     const DataStatsSnapshot* data_stats,
     const ConfigDumpOptions& opts,
@@ -112,9 +115,6 @@ void dumpAllHyperparameters(
 
 #define DUMP(field) rows.emplace_back(#field, fmt(hp.field))
 #define DUMP_MODEL(field) rows.emplace_back(#field, fmt(hp.field))
-#define DUMP_LOG_RECORDER(field) rows.emplace_back("log_recorder." #field, fmt(hp.log_recorder.field))
-#define DUMP_LOG_RECORDER_LAYER(field) rows.emplace_back("log_recorder.layers." #field, fmt(hp.log_recorder.layers.field))
-#define DUMP_TAPE_LOGGING(field) rows.emplace_back("tape_logging." #field, fmt(hp.tape_logging.field))
 #define DUMP_PARAM_PRECISION(json_field, config_field) rows.emplace_back("parameter_precision_" json_field, fmt(hp.config_field))
 #define SECTION(label) rows.emplace_back(std::string("---"), std::string(label))
 
@@ -123,22 +123,22 @@ void dumpAllHyperparameters(
     DUMP(current_curriculum);
 
     SECTION("Logging");
-    DUMP_LOG_RECORDER(enabled);
-    DUMP_LOG_RECORDER(default_level);
-    rows.emplace_back("log_recorder.modules", fmtStringMap(hp.log_recorder.modules));
-    DUMP_LOG_RECORDER_LAYER(embedding);
-    DUMP_LOG_RECORDER_LAYER(rms_norm);
-    DUMP_LOG_RECORDER_LAYER(attention);
-    DUMP_LOG_RECORDER_LAYER(feed_forward);
-    DUMP_LOG_RECORDER_LAYER(residual);
-    DUMP_LOG_RECORDER_LAYER(encoding);
-    DUMP_LOG_RECORDER_LAYER(serialization);
-    DUMP_LOG_RECORDER_LAYER(execution_block);
-    DUMP_TAPE_LOGGING(default_level);
-    DUMP_TAPE_LOGGING(equation_csv_enabled);
-    DUMP_TAPE_LOGGING(stderr_enabled);
-    rows.emplace_back("tape_logging.initial_capacity", std::to_string(hp.tape_logging.initial_capacity));
-    rows.emplace_back("tape_logging.group_overrides", fmtStringMap(hp.tape_logging.group_overrides));
+    rows.emplace_back("log_recorder.enabled", fmt(hp.log_recorder_enabled));
+    rows.emplace_back("log_recorder.default_level", fmt(hp.log_recorder_default_level));
+    rows.emplace_back("log_recorder.modules", fmtStringMap(hp.log_recorder_modules));
+    rows.emplace_back("log_recorder.layers.embedding", fmt(hp.log_recorder_layer_embedding));
+    rows.emplace_back("log_recorder.layers.rms_norm", fmt(hp.log_recorder_layer_rms_norm));
+    rows.emplace_back("log_recorder.layers.attention", fmt(hp.log_recorder_layer_attention));
+    rows.emplace_back("log_recorder.layers.feed_forward", fmt(hp.log_recorder_layer_feed_forward));
+    rows.emplace_back("log_recorder.layers.residual", fmt(hp.log_recorder_layer_residual));
+    rows.emplace_back("log_recorder.layers.encoding", fmt(hp.log_recorder_layer_encoding));
+    rows.emplace_back("log_recorder.layers.serialization", fmt(hp.log_recorder_layer_serialization));
+    rows.emplace_back("log_recorder.layers.execution_block", fmt(hp.log_recorder_layer_execution_block));
+    rows.emplace_back("tape_logging.default_level", fmt(hp.logging_default_level));
+    rows.emplace_back("tape_logging.equation_csv_enabled", fmt(hp.logging_equation_csv_enabled));
+    rows.emplace_back("tape_logging.stderr_enabled", fmt(hp.logging_stderr_enabled));
+    rows.emplace_back("tape_logging.initial_capacity", std::to_string(hp.logging_initial_capacity));
+    rows.emplace_back("tape_logging.group_overrides", fmtStringMap(hp.logging_group_overrides));
 
     SECTION("Model config");
     DUMP_MODEL(d_model);
@@ -414,9 +414,6 @@ void dumpAllHyperparameters(
 
 #undef DUMP
 #undef DUMP_MODEL
-#undef DUMP_LOG_RECORDER
-#undef DUMP_LOG_RECORDER_LAYER
-#undef DUMP_TAPE_LOGGING
 #undef DUMP_PARAM_PRECISION
 #undef SECTION
 
@@ -445,7 +442,7 @@ void dumpAllHyperparameters(
         return std::string(n, ch);
     };
 
-    // Banner: ===== Hyperparameters (post-policy, N entries) =====
+    // Banner: ===== Hyperparameters (startup-final, N entries) =====
     {
         std::ostringstream title;
         title << " " << opts.banner_label

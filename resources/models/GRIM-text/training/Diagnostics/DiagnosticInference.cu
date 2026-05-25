@@ -17,6 +17,7 @@
 //======================================================//
 
 #include "DiagnosticInference.hpp"
+#include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../Shared/UnigramByte/Unigram.hpp"
 #include "../../Shared/UnigramByte/AtomTable.hpp"
 
@@ -149,8 +150,10 @@ std::string decodeWithAtomSideChannel(
 //======================================================//
 
 void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
-    const auto& hp = ctx.config.hyperparameters;
-    const int default_interval = std::max(hp.log_interval, kDefaultInferenceDiagnosticInterval);
+    const auto runtime_hp =
+        GRIM::HyperParameters::trainingRuntimeControlHP(ctx.config);
+    const int default_interval = std::max(runtime_hp.log_interval,
+                                          kDefaultInferenceDiagnosticInterval);
     const int interval = readEnvInt("GRIM_SAMPLE_INTERVAL", default_interval);
     if (interval <= 0) {
         return;
@@ -203,7 +206,7 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
         return;
     }
 
-    const int max_seq_len = hp.max_seq_len;
+    const int max_seq_len = ctx.config.max_seq_len;
     if (max_seq_len > 1 && static_cast<int>(prompt_tokens.size()) >= max_seq_len) {
         const size_t keep = static_cast<size_t>(max_seq_len - 1);
         const size_t drop = prompt_tokens.size() - keep;
@@ -230,16 +233,11 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
                                      prompt_atom_entry_ids.begin() + drop);
     }
 
-    // Use generation config from training.config through the HyperParameters handoff.
-    GRIM::HyperParameters::GenerationConfig cfg;
-    GRIM::HyperParameters::loadGenerationConfig(ctx.config.ai_config_snapshot, cfg);
+    // Start from the finalized root generation view and apply diagnostic overrides locally.
+    GRIM::HyperParameters::GenerationHP cfg = GRIM::HyperParameters::generationHP(ctx.model_config);
     cfg.max_new_tokens = max_new_tokens;
-    if (cfg.min_new_tokens <= 0) {
-        cfg.min_new_tokens = std::max(1, max_new_tokens / 4);
-    }
+    cfg.min_new_tokens = std::max(1, max_new_tokens / 4);
     cfg.num_return_sequences = 1;
-    cfg.eos_token_id = GRIM::Tokenizer::EOS_TOKEN_ID;
-    cfg.pad_token_id = GRIM::Tokenizer::PAD_TOKEN_ID;
     // Seed from optimizer step for reproducible but varied samples per step
     cfg.seed = static_cast<unsigned int>(optimizer_step);
 
@@ -255,13 +253,13 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
             prompt_atom_table,
             prompt_atom_entry_ids,
             prompt_token_to_slot_map,
-            static_cast<int>(ctx.data_info.actual_vocab_size),
+            ctx.model_config.vocab_size,
             static_cast<size_t>(fixed_shape.batch_size),
             static_cast<size_t>(fixed_shape.max_seq_len),
             ctx.model_config.execution_block_num_slots);
         std::vector<GRIM::GeneratedSequence> outputs = ctx.model->generate(
             prompt_payload,
-            &cfg);
+            cfg);
         const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start).count();
 

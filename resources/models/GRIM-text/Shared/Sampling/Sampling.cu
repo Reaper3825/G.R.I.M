@@ -618,9 +618,9 @@ Strategy convertStrategy(int legacy_strategy) {
 }
 
 //======================================================//
-//  Bridge: Build SamplingConfig from GenerationConfig fields
+//  Build SamplingConfig from root-derived generation fields
 //======================================================//
-SamplingConfig buildFromGenerationConfig(
+SamplingConfig buildFromGenerationFields(
     int strategy,
     bool do_sample,
     float temperature,

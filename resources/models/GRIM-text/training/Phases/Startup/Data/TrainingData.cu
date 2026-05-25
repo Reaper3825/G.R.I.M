@@ -25,7 +25,7 @@ namespace Internal {
 
 void validateStartupPaths(
     const GRIM::HyperParameters::TokenizerHP& tokenizer_hp,
-    const PathConfig& paths)
+    const GRIM::HyperParameters::PathsHP& paths_hp)
 {
     if (!fs::exists(tokenizer_hp.vocab_path)) {
         throw std::runtime_error("Vocabulary file does not exist: " + tokenizer_hp.vocab_path);
@@ -33,22 +33,22 @@ void validateStartupPaths(
     if (!fs::exists(tokenizer_hp.data_path)) {
         throw std::runtime_error("Training data file does not exist: " + tokenizer_hp.data_path);
     }
-    if (paths.output_model_path.empty()) {
+    if (paths_hp.output_model_path.empty()) {
         throw std::runtime_error("Output model path not configured");
     }
-    if (paths.checkpoint_dir.empty()) {
+    if (paths_hp.checkpoint_dir.empty()) {
         throw std::runtime_error("Checkpoint directory not configured");
     }
-    if (paths.log_dir.empty()) {
+    if (paths_hp.log_dir.empty()) {
         throw std::runtime_error("Log directory not configured");
     }
 
-    auto model_parent = fs::path(paths.output_model_path).parent_path();
+    auto model_parent = fs::path(paths_hp.output_model_path).parent_path();
     if (!model_parent.empty()) {
         fs::create_directories(model_parent);
     }
-    fs::create_directories(paths.checkpoint_dir);
-    fs::create_directories(paths.log_dir);
+    fs::create_directories(paths_hp.checkpoint_dir);
+    fs::create_directories(paths_hp.log_dir);
 }
 
 std::unique_ptr<GRIM::Tokenizer::UniByte> initializeTokenizer(
@@ -177,11 +177,12 @@ void LoadTrainingData(TrainingContext& ctx) {
     using GRIM::Logging::ModuleId;
 
     const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(ctx.config);
+    const auto paths_hp = GRIM::HyperParameters::pathsHP(ctx.config);
     const auto data_hp = GRIM::HyperParameters::dataLoadingHP(ctx.config);
     const int max_seq_len = ctx.config.max_seq_len;
 
     EmitModuleInfo(ModuleId::Training, "[Phase1] Validating paths...", 0);
-    Internal::validateStartupPaths(tokenizer_hp, ctx.config.paths);
+    Internal::validateStartupPaths(tokenizer_hp, paths_hp);
     EmitModuleInfo(ModuleId::Training, "[Phase1] ✓ All paths validated", 0);
 
     ctx.tokenizer = Internal::initializeTokenizer(
@@ -200,13 +201,12 @@ void LoadTrainingData(TrainingContext& ctx) {
     }
 
     GRIM::HyperParameters::DerivationContext hp_ctx;
+    const auto runtime_hp =
+        GRIM::HyperParameters::trainingRuntimeControlHP(ctx.config);
     hp_ctx.train_sequence_count = static_cast<int>(ctx.data.train_seqs.size());
-    hp_ctx.validation_interval = ctx.config.hyperparameters.validation_interval;
+    hp_ctx.validation_interval = runtime_hp.validation_interval;
     ctx.derived_schedule = GRIM::HyperParameters::computeDerivedSchedule(
-        ctx.config.hyperparameters, hp_ctx);
-    auto hp_logger = [&](const std::string& msg) { ctx.logging.logger->log(msg); };
-    GRIM::HyperParameters::applyTrainingHyperparameterPolicy(
-        ctx.config.hyperparameters, ctx.derived_schedule, hp_ctx, hp_logger);
+        ctx.config, hp_ctx);
 
     GRIMText::Training::DataStatsSnapshot data_stats;
     data_stats.data_path = tokenizer_hp.data_path;
@@ -220,7 +220,7 @@ void LoadTrainingData(TrainingContext& ctx) {
     data_stats.memory_free_bytes = ctx.memory_snapshot.free_bytes;
 
     dumpAllHyperparameters(
-        ctx.config.hyperparameters,
+        ctx.config,
         &ctx.derived_schedule,
         &data_stats,
         [](const std::string& msg) { GRIM::Logging::EmitModuleInfo(GRIM::Logging::ModuleId::Training, msg, 0); });

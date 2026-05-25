@@ -428,6 +428,8 @@ add_executable(train_gpu
     ../Phases/Startup/Data/TrainingData.hpp
     ../Phases/Startup/Model/ModelAllocationState.cu
     ../Phases/Startup/Model/ModelAllocationState.hpp
+    ../Phases/Startup/CheckpointLoad.cu
+    ../Phases/Startup/CheckpointLoad.hpp
     ../Phases/Startup/Resume/ResumeState.cu
     ../Phases/Startup/Resume/ResumeState.hpp
     ../Phases/Startup/Epoch/EpochPlan.cu

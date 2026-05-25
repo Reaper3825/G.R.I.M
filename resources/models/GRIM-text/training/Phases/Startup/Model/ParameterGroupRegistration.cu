@@ -2,7 +2,7 @@
 
 #include "../../../../GRIM/grim_language_model_cuda.hpp"
 #include "../../../../Layers/Encoding/Encoding_GPU.hpp"
-#include "../../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
+#include "../../../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../../../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../../../Shared/Optimizers/OptimizerState_GPU.hpp"
 
@@ -691,9 +691,16 @@ void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
 }
 
 void validateParameterRegistrationConfig(const LanguageModelConfig& config) {
-    GRIM::HyperParameters::requireValidGQAGrouping(config, "buildParameterGroups");
-    GRIM::HyperParameters::requirePositiveGroupingValue(config.num_layers, "num_layers", "buildParameterGroups");
-    GRIM::HyperParameters::requirePositiveGroupingValue(config.vocab_size, "vocab_size", "buildParameterGroups");
+    GRIM::HyperParameters::validateRootConfigDocument(
+        config, "buildParameterGroups");
+    if (config.num_layers <= 0) {
+        throw std::runtime_error("buildParameterGroups: num_layers must be > 0, got " +
+                                 std::to_string(config.num_layers));
+    }
+    if (config.vocab_size <= 0) {
+        throw std::runtime_error("buildParameterGroups: vocab_size must be > 0, got " +
+                                 std::to_string(config.vocab_size));
+    }
     GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_embedding, "parameter_precision_embedding", "buildParameterGroups");
     GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_lm_head, "parameter_precision_lm_head", "buildParameterGroups");
     GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_attention, "parameter_precision_attention", "buildParameterGroups");

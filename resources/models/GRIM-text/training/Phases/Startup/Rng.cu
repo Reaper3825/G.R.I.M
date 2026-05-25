@@ -5,7 +5,7 @@
 //======================================================//
 
 #include "Rng.hpp"
-#include "../Phase1_Startup.hpp"   // StartupConfig, TrainingLogger include chain
+#include "../Phase1_Startup.hpp"   // LanguageModelConfig, TrainingLogger include chain
 
 #include <chrono>
 #include <sstream>
@@ -73,13 +73,16 @@ RNGContext& RNGContext::operator=(RNGContext&& other) noexcept {
 
 namespace Internal {
 
-RNGContext initializeRNG(const StartupConfig& config, TrainingLogger& logger) {
+RNGContext initializeRNG(
+    const ::GRIM::HyperParameters::LanguageModelConfig& config,
+    TrainingLogger& logger) {
     RNGContext ctx;
+    const auto seed_hp = GRIM::HyperParameters::trainingSeedHP(config);
 
     logger.log("Initializing production-grade RNG system...");
 
-    // Seed already loaded from ai_config.json via config.hyperparameters.seed
-    int64_t config_seed = config.hyperparameters.seed;
+    // Seed already loaded from ai_config.json on the single root config
+    int64_t config_seed = seed_hp.seed;
 
     if (config_seed < 0) {
         auto now = std::chrono::high_resolution_clock::now();

@@ -211,7 +211,7 @@ std::pair<float, float> getGPUMemoryStats();
 /**
  * Clean up temporary files if requested
  */
-void cleanupTemporaryFiles(const PathConfig& paths);
+void cleanupTemporaryFiles(const ::GRIM::HyperParameters::LanguageModelConfig& config);
 
 } // namespace Internal
 

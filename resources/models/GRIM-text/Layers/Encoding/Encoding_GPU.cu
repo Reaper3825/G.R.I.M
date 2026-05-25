@@ -335,7 +335,6 @@ void EncodingLayer::validateReady(const char* context) const {
 }
 
 void EncodingLayer::validateConstructionSnapshot(const char* context) const {
-    HyperParameters::validateEncoderLayerConstructionHP(hp_, context);
     if (!pos_encoding_) {
         throw std::invalid_argument(std::string(context) +
             ": pos_encoding_ is NULL - PBM must be initialized before encoder construction");

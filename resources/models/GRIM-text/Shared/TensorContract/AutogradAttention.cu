@@ -49,7 +49,9 @@ inline void throwIfCudaFailed(cudaError_t err, const char* context) {
 
 static void requireEncoderAttentionHP(const GRIM::HyperParameters::EncoderSelfAttentionHP& hp,
                                       const char* caller) {
-    GRIM::HyperParameters::validateEncoderSelfAttentionHP(hp, caller);
+    if (hp.d_model <= 0 || hp.num_heads <= 0 || hp.num_kv_heads <= 0 || hp.head_dim <= 0) {
+        throw std::runtime_error(std::string(caller) + ": EncoderSelfAttentionHP has invalid dimensions");
+    }
 }
 
 // Issue #142: applyLmHeadGradCorrections DELETED.
@@ -984,8 +986,6 @@ Tensor scaled_dot_product_attention(
     float scale, cudaStream_t stream,
     float attention_dropout_p, uint64_t dropout_seed
 ) {
-    GRIM::HyperParameters::validateFlashAttentionRuntimeHP(
-        flash_hp, "autograd::scaled_dot_product_attention");
     if (flash_hp.requires_alibi && !alibi_slopes) {
         throw std::invalid_argument("autograd::scaled_dot_product_attention: FlashAttentionRuntimeHP requires ALiBi slopes but alibi_slopes is NULL");
     }

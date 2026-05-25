@@ -32,7 +32,6 @@ struct GPUGrimEncoder::Impl {
          const EncoderConstructionBindings& bindings,
          uint64_t weight_seed)
     {
-        HyperParameters::validateEncoderLayerConstructionHP(hp, "GPUGrimEncoder::Impl");
         if (!bindings.pos_encoding) {
             throw std::runtime_error("[GPUGrimEncoder] pos_encoding is NULL — "
                                      "PBM must be initialized BEFORE encoder construction");

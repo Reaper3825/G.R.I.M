@@ -5,6 +5,7 @@
 #include "Startup/Capacity/CapacityStem.hpp"
 #include "Startup/Data/TrainingData.hpp"
 #include "Startup/Model/ModelAllocationState.hpp"
+#include "Startup/CheckpointLoad.hpp"
 #include "Startup/Resume/ResumeState.hpp"
 #include "Startup/Telemetry/TelemetryInitInputs.hpp"
 #include "Startup/Epoch/EpochPlan.hpp"
@@ -28,11 +29,6 @@ Phase1Outcome runTokenizerSubprocessAfterHyperparameters(const TrainingContext& 
     using GRIM::Logging::EmitModuleInfo;
     using GRIM::Logging::ModuleId;
     using GRIMText::Subprocess::subprocess_outcome;
-
-    if (ctx.config.paths.config_path.empty()) {
-        throw std::runtime_error(
-            "Phase1 tokenizer subprocess: StartupConfig.paths.config_path is empty after hyperparameter initialization");
-    }
 
     GRIMText::Subprocess::tokenizer_subprocess_request tok_req;
     tok_req.hp = GRIM::HyperParameters::tokenizerSubprocessHP(ctx.config);
@@ -80,41 +76,38 @@ Phase1Outcome runTokenizerSubprocessAfterHyperparameters(const TrainingContext& 
 
 } // anonymous namespace
 
-Phase1Result executePhase1(int argc, char** argv) {
-    using GRIM::Logging::EmitModuleInfo;
-    using GRIM::Logging::ModuleId;
+Phase1Result executePhase1(GRIM::HyperParameters::LanguageModelConfig config) {
+    if (config.execution_mode != GRIM::HyperParameters::ModelExecutionMode::TRAINING) {
+        throw std::runtime_error(
+            "Phase1 requires a TRAINING execution_mode config root");
+    }
 
-    auto ctx = std::make_unique<TrainingContext>();
-    EmitModuleInfo(ModuleId::Training, "[Phase1] Loading configuration...", 0);
-    ctx->config = GRIM::HyperParameters::loadStartupConfig(argc, argv);
-    EmitModuleInfo(ModuleId::Training,
-        std::string("[Phase1] ✓ Configuration loaded from: ") + ctx->config.paths.config_path.string(), 0);
+    TrainingContext ctx;
+    ctx.config = std::move(config);
 
-    LoggingReady(*ctx);
-    MemorySnapshotReady(*ctx);
-    HyperparametersReady(*ctx);
+    LoggingReady(ctx);
+    MemorySnapshotReady(ctx);
+    HyperparametersReady(ctx);
 
-    const Phase1Outcome tokenizer_outcome = runTokenizerSubprocessAfterHyperparameters(*ctx);
+    const Phase1Outcome tokenizer_outcome = runTokenizerSubprocessAfterHyperparameters(ctx);
     if (tokenizer_outcome == Phase1Outcome::tokenizer_only_complete) {
         Phase1Result result;
         result.outcome = Phase1Outcome::tokenizer_only_complete;
         return result;
     }
 
-    LoadTrainingData(*ctx);
-    ModelAllocated(*ctx);
-    ResumeStateReady(*ctx);
-    TelemetryReady(*ctx);
-    PayloadBuildInputsReady(*ctx);
-    PlannedBatchesReady(*ctx);
-    EpochPlanReady(*ctx);
-    StartupValidated(*ctx);
-    Phase2HandoffReady(*ctx);
+    LoadTrainingData(ctx);
+    ModelAllocated(ctx);
+    CheckpointLoaded(ctx);
+    ResumeStateReady(ctx);
+    TelemetryReady(ctx);
+    PayloadBuildInputsReady(ctx);
+    PlannedBatchesReady(ctx);
+    EpochPlanReady(ctx);
+    StartupValidated(ctx);
+    Phase2HandoffReady(ctx);
 
-    Phase1Result result;
-    result.outcome = Phase1Outcome::ready_for_training;
-    result.context = std::move(ctx);
-    return result;
+    return Phase1Result{Phase1Outcome::ready_for_training, std::move(ctx)};
 }
 
 } // namespace GRIMText::Training

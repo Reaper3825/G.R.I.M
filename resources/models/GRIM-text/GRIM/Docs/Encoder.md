@@ -29,7 +29,7 @@ Encoder/FFN/LM-head/reasoning/selector layers must not store forward-time `cudaS
 Encoder and FFN dropout rates must come from `HyperParameters_GPU.hpp` → `EncoderLayerConstructionHP` → `FeedForwardLayerConstructionHP`. `EncodingLayer` stores the grouped encoder HP snapshot directly as `hp_` plus a borrowed PBM spec pointer; `FeedForwardLayer` stores its grouped FFN HP snapshot directly as `hp_`. Do not reintroduce layer-local dropout defaults, thin FFN config wrappers, or forward-runtime handle fields.
 
 ## Encoder dimension HP ownership
-Encoder GQA/QKV derived dimensions (`head_dim`, `heads_per_kv_group`, `kv_dim`, `qkv_dim`, `is_gqa`) are computed and validated in `HyperparameterGroupings.hpp` from `HyperParameters_GPU.hpp` helpers. `Encoding_GPU.cu` must consume those `EncoderLayerConstructionHP` fields directly from `hp_`; do not recompute them in layer methods.
+Encoder GQA/QKV derived dimensions (`head_dim`, `heads_per_kv_group`, `kv_dim`, `qkv_dim`, `is_gqa`) are computed on the HyperParameters-owned typed config surface before grouping assignment. `HyperparameterGroupings.hpp` only slices those finalized values into `EncoderLayerConstructionHP`; `Encoding_GPU.cu` must consume those fields directly from `hp_` and must not recompute config geometry in layer methods.
 
 Encoder-facing autograd calls (`split_and_reshape_qkv`, `rope_rotation`, `reshape_bhsd_to_flat`) take an `EncoderSelfAttentionHP` snapshot sliced from the owning `EncoderLayerConstructionHP`. Do not construct a local `TensorContract::GQADims` in encoder files; TensorContract may keep GQA payload structs only for lower-level tensor/view APIs.
 

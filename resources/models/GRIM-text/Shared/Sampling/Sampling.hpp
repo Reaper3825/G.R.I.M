@@ -194,18 +194,14 @@ private:
 };
 
 //======================================================//
-//  Utility: Create SamplingConfig from GenerationConfig
-//  (bridge between old and new API)
+//  Utility: Create SamplingConfig from root-derived generation fields
 //======================================================//
-// Forward-declared; implementation in Sampling.cu uses GenerationConfig from
-// grim_language_model_cuda.hpp.
 
-/// Convert a legacy SamplingStrategy enum to Sampling::Strategy
+/// Convert a HyperParameters::SamplingStrategy enum value to Sampling::Strategy
 Strategy convertStrategy(int legacy_strategy);
 
-/// Build a SamplingConfig from GenerationConfig fields.
-/// This is the glue between the old server API and the new pipeline.
-SamplingConfig buildFromGenerationConfig(
+/// Build a SamplingConfig from GenerationHP/root generation fields.
+SamplingConfig buildFromGenerationFields(
     int strategy,        // Cast from SamplingStrategy
     bool do_sample,
     float temperature,

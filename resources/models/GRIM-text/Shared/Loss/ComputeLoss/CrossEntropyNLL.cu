@@ -44,7 +44,6 @@ void validateLossConfigForCompute(
     const float* d_class_weights,
     const char* caller
 ) {
-    HyperParameters::validateLossConfigHP(config, caller);
     if (config.entropy_reg_enabled && config.entropy_reg_lambda == 0.0f) {
         throw std::runtime_error(std::string("[") + caller + "] entropy_reg_enabled=true but entropy_reg_lambda is 0");
     }

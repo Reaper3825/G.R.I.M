@@ -131,9 +131,9 @@ LatticeLevelState = TelemetryState (20 float + 2 uint32) + stride (uint32_t) + l
 
 ## Where the numbers come from
 
-- **HyperparameterGroupings.hpp / trainingFixedShapeHP():** derives the checked startup fixed-shape rectangle from post-policy `StartupConfig` (`batch_size`, `max_seq_len`, checked `max_tokens_per_batch`). `startupLanguageModelConfig()` mirrors that grouped view into `LanguageModelConfig`.
-- **InitTrainingState.cu:** passes `LanguageModelConfig` plus the primary stream to `TrainingState::allocateStepDeviceWorkspaces()`.
-- **InitInferenceState.cu:** uses `LanguageModelConfig` fields for inference-owned KV/decode allocation and calls the same TrainingState owner with `LanguageModelConfig` plus the primary stream.
+- **HyperParameters_GPU.hpp + HyperparameterGroupings.hpp / trainingFixedShapeHP():** `HyperParameters_GPU.hpp` validates and computes the startup fixed-shape rectangle from root `StartupConfig` / `TrainingHyperparameters` facts, then `trainingFixedShapeHP()` slices the immutable view (`batch_size`, `max_seq_len`, `max_tokens_per_batch`). `finalizeLanguageModelConfig(..., ModelExecutionMode::TRAINING)` lives in `HyperParameters_GPU.hpp` and mirrors the validated root facts into `LanguageModelConfig` without accepting a grouping payload.
+- **InitTrainingState.cu:** slices `HyperParameters::TrainingStateWorkspaceHP` from finalized config and passes that grouping plus the primary stream to `TrainingState::allocateStepDeviceWorkspaces()`.
+- **InitInferenceState.cu:** uses `LanguageModelConfig` for inference-owned KV/decode allocation, but slices `HyperParameters::TrainingStateWorkspaceHP` before calling the TrainingState runtime owner.
 - **TrainingStateGPU.cu:** owns allocation of target/token staging tensors and `sequence_weights_tensor`; LM-head input/logits are not durable TrainingState allocations.
 - **memoryusestartup.txt**: "Cache allocation: batch=8, seq_len=1024, tokens=8192"; "total_params=107798346"; older logs may mention `Allocated cached_logits`, but that durable snapshot allocation has been deleted.
 - **GRIM-TS:** `GuessCacheScope::OwnedBuffers::allocate` in GuessCacheTraining.cu (capacity, `sizeof(GRIMTS::GuessRecord)`=96, `sizeof(GRIMTS::GuessMetadata)`=32); GuessCacheScope uses kDefaultGuessCacheCapacity=16384, diversity_bloom_bits=65536, pinned_buffer_size=8192. GRIM-TS.hpp static_assert(sizeof(GuessRecord)==96).

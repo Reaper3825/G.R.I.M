@@ -26,7 +26,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - Records diagnostics, equation logging, and error messages
   - Part of grim_log_recorder static library (shared by all targets)
   - **FIXED**: Removed hardcoded fallback path `kDefaultLogsPath` (Rule 20). InitLogRecorder now throws if rootPath is empty.
-  - **FIXED**: Phase1_Startup.cu now passes `config.paths.log_dir` to InitLogRecorder().
+  - **FIXED**: Startup logging now slices `PathsHP` and passes `paths_hp.log_dir` to `InitLogRecorder()`.
   - **DELETED**: All dead device-side logging code (RecordLayerLog, RecordLayerLogSimple, DeviceBufferLogger, device kernels, DeviceLogBuffer/DeviceLogDelegate types, GetDeviceLogBuffer, InstallDefaultDeviceLogger, RegisterDeviceLogCallback, ClearDeviceLogCallbacks) — zero callers in any kernel.
   - **DELETED**: LogMirrorScope class — zero callers.
   - **DELETED**: ParseModuleOverrideSpec — zero external callers.
@@ -42,7 +42,8 @@ Use this checklist to systematically audit each file in the order it's used duri
 ### 1.2 Configuration Loading & Validation
 
 - [x] **Phase1_Startup.cu / Phase1_Startup.hpp** ✅ AUDITED
-  - Configuration loading from ai_config.json
+  - `train_gpu.cu` loads the validated training startup config root from canonical `ai_config.json`
+  - `Phase1_Startup` receives that config handoff and performs startup validation/initialization against it
   - Path validation (model, data, checkpoint dirs)
   - **Issue #106**: Reseeding W_qkv with 1/sqrt(d_model) scaling - ✅ Applied (`ctx.rng.init_seed` passes directly into `LanguageModel::initGPU(weight_init_seed)`)
   - **Issue #107**: Fixed LCG PRNG correlation with splitmix64 - ✅ Applied (Tensor::xavier_uniform_() with Philox PRNG)

@@ -453,7 +453,6 @@ __host__ Tensor unifiedLossFromTargetSelection(
     if (!stream) {
         throw std::runtime_error(std::string("[") + caller + "] stream is NULL — caller MUST provide a valid CUDA stream");
     }
-    HyperParameters::validateLossConfigHP(config, caller);
     if (config.entropy_reg_enabled && config.entropy_reg_lambda == 0.0f) {
         throw std::runtime_error(std::string("[") + caller + "] entropy_reg_enabled=true but entropy_reg_lambda is 0");
     }

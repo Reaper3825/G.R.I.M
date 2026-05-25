@@ -22,7 +22,8 @@ void runMtpDiagnostic(
     const GRIMText::Training::BatchResult& batch_result)
 {
     namespace Internal = ::GRIMText::Training::Internal;
-    const auto& hp = ctx.config.hyperparameters;
+    const auto diagnostic_hp =
+        GRIM::HyperParameters::mtpDiagnosticHP(ctx.config);
 
     const auto& mtp = batch_result.mtp_diagnostics;
     if (mtp.valid && !mtp.head_loss.empty()) {
@@ -40,7 +41,7 @@ void runMtpDiagnostic(
                 << " L_total=" << Internal::formatScalar(mtp.L_total, 4);
         ctx.logging.logger->log(mtp_log.str());
         // MTP Monitor: Lk/L0 with healthy-range indication (configurable via log_ratio_monitor)
-        if (hp.mtp_log_ratio_monitor) {
+        if (diagnostic_hp.log_ratio_monitor) {
             static const float kHealthyLow[] = { 1.1f, 1.3f, 1.5f, 1.6f };
             static const float kHealthyHigh[] = { 1.3f, 1.6f, 2.0f, 2.2f };
             std::ostringstream mon;

@@ -73,7 +73,7 @@ GRIM::Vector runInferencePrefill(GRIM::LanguageModel* model,
         atom_entry_ids,
         token_to_slot_map,
         cfg.vocab_size,
-        static_cast<size_t>(cfg.max_cached_batch),
+        static_cast<size_t>(cfg.batch_size),
         static_cast<size_t>(cfg.max_cached_seq_len),
         cfg.execution_block_num_slots);
     return model->getNextTokenLogits(payload);

@@ -3,7 +3,8 @@
 //  Three-phase training architecture
 //  
 //  Phases:
-//  - Phase 1: Startup (config, model init, data loading)
+//  - Orchestrator handoff: load validated training startup config root
+//  - Phase 1: Startup (tokenizer, model init, data loading)
 //  - Phase 2: Training loop (epochs, batches, optimization)
 //  - Phase 3: Cleanup (final save, status, resources)
 //  
@@ -19,6 +20,7 @@
 //  Version: 3.0.0 - Three-Phase Architecture
 //======================================================//
 
+#include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "Phases/Phase1_Startup.hpp"
 #include "Phases/Phase2_TrainingLoop.hpp"
 #include "Phases/Phase3_Cleanup.hpp"
@@ -153,8 +155,17 @@ int main(int argc, char** argv) {
         // PHASE 1: STARTUP
         //==================================================
         printPhaseHeader(1, "Startup");
+
+        EmitModuleInfo(ModuleId::TrainingOrchestrator,
+            "[Phase 1] Loading startup config...", 0);
+        auto startup_config = GRIM::HyperParameters::loadStartupConfig(
+            argc,
+            argv,
+            GRIM::HyperParameters::ModelExecutionMode::TRAINING);
+        EmitModuleInfo(ModuleId::TrainingOrchestrator,
+            "[Phase 1] ✓ Startup config ready from canonical ai_config.json", 0);
         
-        auto phase1 = GRIMText::Training::executePhase1(argc, argv);
+        auto phase1 = GRIMText::Training::executePhase1(std::move(startup_config));
 
         if (phase1.outcome == GRIMText::Training::Phase1Outcome::tokenizer_only_complete) {
             return 0;
@@ -162,18 +173,19 @@ int main(int argc, char** argv) {
 
         auto ctx = std::move(phase1.context);
         
-        if (!ctx || !ctx->model || !ctx->tokenizer) {
+        if (!ctx.model || !ctx.tokenizer) {
             EmitModuleError(ModuleId::TrainingOrchestrator, 
                 "Phase 1 failed: model or tokenizer not initialized", 0);
             return 1;
         }
         
         {
+            const auto paths_hp = GRIM::HyperParameters::pathsHP(ctx.config);
             std::ostringstream oss;
-            oss << "[Phase 1] ✓ Complete | Model: " << ctx->config.paths.output_model_path
-                << " | Train: " << ctx->data.train_views.size()
-                << " | Val: " << ctx->data.val_views.size()
-                << " | Vocab: " << ctx->data_info.actual_vocab_size;
+            oss << "[Phase 1] ✓ Complete | Model: " << paths_hp.output_model_path
+                << " | Train: " << ctx.data.train_views.size()
+                << " | Val: " << ctx.data.val_views.size()
+                << " | Vocab: " << ctx.data_info.actual_vocab_size;
             EmitModuleInfo(ModuleId::TrainingOrchestrator, oss.str(), 0);
         }
         
@@ -182,25 +194,25 @@ int main(int argc, char** argv) {
         //==================================================
         printPhaseHeader(2, "Training Loop");
         
-        bool training_success = GRIMText::Training::executePhase2(*ctx);
+        bool training_success = GRIMText::Training::executePhase2(ctx);
         
         if (training_success) {
             // Use project logger directly (avoid temporary ostringstream)
             std::string msg = "[Phase 2] ✓ Complete | Steps: ";
-            msg += std::to_string(ctx->global_step);
+            msg += std::to_string(ctx.global_step);
             msg += " | Best val loss: ";
-            msg += std::to_string(ctx->best_val_loss);
-            if (ctx->auto_stop_triggered) {
+            msg += std::to_string(ctx.best_val_loss);
+            if (ctx.auto_stop_triggered) {
                 msg += " | Auto-stopped: ";
-                msg += ctx->auto_stop_reason;
+                msg += ctx.auto_stop_reason;
                 msg += " (epoch ";
-                msg += std::to_string(ctx->auto_stop_epoch);
+                msg += std::to_string(ctx.auto_stop_epoch);
                 msg += ")";
             }
-            EmitModuleInfo(ModuleId::TrainingOrchestrator, msg, ctx->global_step);
+            EmitModuleInfo(ModuleId::TrainingOrchestrator, msg, ctx.global_step);
         } else {
             EmitModuleError(ModuleId::TrainingOrchestrator,
-                "[Phase 2] ✗ Training failed", ctx->global_step);
+                "[Phase 2] ✗ Training failed", ctx.global_step);
             exit_code = 1;
         }
         
@@ -209,7 +221,7 @@ int main(int argc, char** argv) {
         //==================================================
         printPhaseHeader(3, "Cleanup");
         
-        auto cleanup_result = GRIMText::Training::executePhase3(*ctx);
+        auto cleanup_result = GRIMText::Training::executePhase3(ctx);
         
         if (cleanup_result.success) {
             std::ostringstream oss;
@@ -220,11 +232,11 @@ int main(int argc, char** argv) {
             oss << " | Duration: " 
                 << GRIMText::Training::Internal::formatDuration(
                        cleanup_result.summary.total_duration_seconds);
-            EmitModuleInfo(ModuleId::TrainingOrchestrator, oss.str(), ctx->global_step);
+            EmitModuleInfo(ModuleId::TrainingOrchestrator, oss.str(), ctx.global_step);
         } else {
             std::ostringstream oss;
             oss << "[Phase 3] ✗ Cleanup failed: " << cleanup_result.error_message;
-            EmitModuleError(ModuleId::TrainingOrchestrator, oss.str(), ctx->global_step);
+            EmitModuleError(ModuleId::TrainingOrchestrator, oss.str(), ctx.global_step);
             exit_code = 1;
         }
         

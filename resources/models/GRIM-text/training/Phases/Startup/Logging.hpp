@@ -12,12 +12,11 @@
 
 class TrainingLogger;
 
-// PathConfig + StartupConfig live in Shared/HyperParameters/HyperParameters_GPU.hpp;
-// forward-declare them here in their owning namespace to avoid a circular
+// LanguageModelConfig lives in Shared/HyperParameters/HyperParameters_GPU.hpp;
+// forward-declare it here in its owning namespace to avoid a circular
 // include with Phase1_Startup.hpp.
 namespace GRIM { namespace HyperParameters {
-    struct PathConfig;
-    struct StartupConfig;
+    struct LanguageModelConfig;
 } }
 
 namespace GRIMText::Training {
@@ -34,17 +33,17 @@ namespace Internal {
  *        TrainingLogger, MetricsCollector, StatusFileWriter.
  *        Also registers default logging profiles on first call.
  */
-LoggingContext initializeLogging(const ::GRIM::HyperParameters::PathConfig& paths);
+LoggingContext initializeLogging(const ::GRIM::HyperParameters::LanguageModelConfig& config);
 
 /**
  * @brief Build the BatchLogTape and attach sinks (text / equation CSV /
- *        stderr) according to config.hyperparameters.tape_logging.
+ *        stderr) according to HyperparameterGroupings.hpp::tapeLogHP().
  *        Installs the global tape pointer for layer-level code.
  *
  * Must be called after initializeLogging (uses session_id and logger).
  */
 void setupBatchLogTape(LoggingContext& logging,
-                       const ::GRIM::HyperParameters::StartupConfig& config);
+                       const ::GRIM::HyperParameters::LanguageModelConfig& config);
 
 } // namespace Internal
 } // namespace GRIMText::Training

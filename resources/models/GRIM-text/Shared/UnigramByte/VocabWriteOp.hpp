@@ -80,10 +80,11 @@ inline int learnedPieceLimitFromTokenizerHP(
     const ::GRIM::HyperParameters::TokenizerHP& tokenizer_hp,
     const char* caller) {
     requireUnigramVocabWriteCaller(caller);
-    ::GRIM::HyperParameters::requirePositiveGroupingValue(
-        tokenizer_hp.target_vocab_size,
-        "target_vocab_size",
-        caller);
+    if (tokenizer_hp.target_vocab_size <= 0) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": target_vocab_size must be > 0, got " +
+                                 std::to_string(tokenizer_hp.target_vocab_size));
+    }
     return tokenizer_hp.target_vocab_size;
 }
 

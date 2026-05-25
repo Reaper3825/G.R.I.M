@@ -1,13 +1,13 @@
 #pragma once
 //======================================================//
 //  Phase1_Startup.hpp
-//  Configuration loading, model initialization, data loading
+//  Startup config handoff, model initialization, data loading
 //======================================================//
 //
 //  PURPOSE
 //  =======
 //  This phase handles all startup operations before training:
-//  - Configuration loading (ai_config.json)
+//  - Receives the validated training startup config root
 //  - Tokenizer initialization
 //  - Model initialization
 //  - Data loading and preprocessing
@@ -69,6 +69,7 @@
 #include "Startup/Capacity/MemorySnapshot.hpp"
 #include "Startup/Data/DataInfo.hpp"
 #include "Startup/Model/ModelAllocationState.hpp"
+#include "Startup/CheckpointLoad.hpp"
 #include "Startup/Epoch/EpochPlan.hpp"
 #include "Startup/Payload/PayloadBuildInputs.hpp"
 #include "Startup/Resume/ResumeState.hpp"
@@ -78,17 +79,6 @@ namespace GRIMText::Training {
 // Use types from training_data_loader.hpp (global namespace)
 using ::TrainingSequence;
 using ::GRMTDataLoader;
-
-//======================================================//
-//  Startup Configuration Structures
-//======================================================//
-
-// PathConfig + StartupConfig are owned by Shared/HyperParameters/HyperParameters_GPU.hpp
-// (single source of truth for ai_config.json loading + validation +
-// derivation). The aliases below give phase-internal code the short
-// names it has always used; do NOT redefine these types here.
-using PathConfig    = ::GRIM::HyperParameters::PathConfig;
-using StartupConfig = ::GRIM::HyperParameters::StartupConfig;
 
 //======================================================//
 //  Data Structures for Training Loop
@@ -200,7 +190,7 @@ struct TelemetryContext {
  */
 struct TrainingContext {
     // Configuration
-    StartupConfig config;
+    GRIM::HyperParameters::LanguageModelConfig config;
     // Phase1-authored static model config. This is the single model-config set
     // handed to Phase2; training code must not rebuild or route alternate static
     // model wrappers around it.
@@ -320,18 +310,21 @@ enum class Phase1Outcome : int {
 
 struct Phase1Result {
     Phase1Outcome outcome = Phase1Outcome::ready_for_training;
-    std::unique_ptr<TrainingContext> context;
+    TrainingContext context;
+
+    Phase1Result() = default;
+    Phase1Result(Phase1Outcome outcome_value, TrainingContext&& context_value)
+        : outcome(outcome_value), context(std::move(context_value)) {}
 };
 
 /**
  * @brief Execute Phase 1 - Startup and initialization
  * 
- * @param argc Command line argument count
- * @param argv Command line arguments
+ * @param config Fully loaded training startup config root
  * @return Phase1Result containing either a fully initialized context for Phase 2
  *         or an explicit tokenizer-only completion outcome.
  * @throws std::runtime_error on any initialization failure
  */
-Phase1Result executePhase1(int argc, char** argv);
+Phase1Result executePhase1(GRIM::HyperParameters::LanguageModelConfig config);
 
 } // namespace GRIMText::Training

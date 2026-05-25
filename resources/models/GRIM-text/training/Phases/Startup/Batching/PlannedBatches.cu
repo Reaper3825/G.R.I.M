@@ -43,9 +43,9 @@ GRIM::Batching::BatchPayload buildPayloadFromAssignmentImpl(
     layout.num_unigram = inputs.token_layout.num_unigram;
 
     return GRIM::Batching::buildBatchPayload(
-        assignment, views, inputs.actual_vocab_size,
+        assignment, views, inputs.vocab_size,
         layout,
-        inputs.max_cached_batch, inputs.max_cached_seq,
+        inputs.configured_batch_size, inputs.max_cached_seq,
         inputs.execution_block_num_slots,
         inputs.execution_block_num_ops,
         inputs.execution_block_num_steps,
@@ -104,12 +104,12 @@ void PlannedBatchesReady(TrainingContext& ctx) {
             "FATAL: PlannedBatchesReady requires an allocated model — "
             "call ModelAllocated before this step");
     }
-    if (ctx.payload_build_inputs.actual_vocab_size <= 0) {
+    if (ctx.payload_build_inputs.vocab_size <= 0) {
         throw std::runtime_error(
             "FATAL: PlannedBatchesReady requires PayloadBuildInputsReady to "
             "have authored ctx.payload_build_inputs");
     }
-    const int fixed_batch_size = ctx.config.hyperparameters.batch_size;
+    const int fixed_batch_size = ctx.config.batch_size;
     const int fixed_max_seq_len = ctx.config.max_seq_len;
     if (fixed_batch_size <= 0 || fixed_max_seq_len <= 0) {
         std::ostringstream oss;
@@ -125,11 +125,12 @@ void PlannedBatchesReady(TrainingContext& ctx) {
             "ctx.data.train_views");
     }
 
-    const auto& hp     = ctx.config.hyperparameters;
-    const int num_epochs = hp.epochs;
+    const auto schedule_hp =
+        GRIM::HyperParameters::trainingScheduleHP(ctx.config);
+    const int num_epochs = schedule_hp.epochs;
     if (num_epochs <= 0) {
         throw std::runtime_error(
-            "FATAL: PlannedBatchesReady requires hp.epochs > 0 (got " +
+            "FATAL: PlannedBatchesReady requires hyperparameters.epochs > 0 (got " +
             std::to_string(num_epochs) + ")");
     }
 
@@ -230,15 +231,16 @@ void PlannedBatchesReady(TrainingContext& ctx) {
     ctx.epoch_batch_order.assign(num_epochs, std::vector<int>{});
     for (int epoch = 0; epoch < num_epochs; ++epoch) {
         auto& order = ctx.epoch_batch_order[epoch];
-        if (hp.single_batch_overfit_enabled) {
-            order.assign(hp.single_batch_overfit_max_steps, 0);
+        if (schedule_hp.single_batch_overfit_enabled) {
+            order.assign(schedule_hp.single_batch_overfit_max_steps, 0);
         } else {
             order.resize(num_train_batches);
             std::iota(order.begin(), order.end(), 0);
 
             const bool shuffle_this_epoch =
-                hp.shuffle_train_enabled &&
-                (hp.shuffle_train_epochs == 0 || epoch < hp.shuffle_train_epochs);
+                schedule_hp.shuffle_train_enabled &&
+                (schedule_hp.shuffle_train_epochs == 0 ||
+                 epoch < schedule_hp.shuffle_train_epochs);
 
             if (shuffle_this_epoch) {
                 std::mt19937_64 epoch_rng(
@@ -247,10 +249,10 @@ void PlannedBatchesReady(TrainingContext& ctx) {
             }
         }
     }
-    if (hp.single_batch_overfit_enabled) {
+    if (schedule_hp.single_batch_overfit_enabled) {
         log("[PlannedBatches] Authored single-batch overfit diagnostic order for " +
             std::to_string(num_epochs) + " epochs (" +
-            std::to_string(hp.single_batch_overfit_max_steps) +
+            std::to_string(schedule_hp.single_batch_overfit_max_steps) +
             " repeated steps/epoch)");
     } else {
         log("[PlannedBatches] Authored epoch_batch_order for " +

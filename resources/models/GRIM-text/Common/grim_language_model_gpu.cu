@@ -43,8 +43,8 @@
 
 namespace GRIM {
 
-// Generation types live in HyperParameters_GPU.hpp (single source of truth).
-using GRIM::HyperParameters::GenerationConfig;
+// Generation views are sliced from the finalized HyperParameters root.
+using GRIM::HyperParameters::GenerationHP;
 using GRIM::HyperParameters::SamplingStrategy;
 using GRIM::HyperParameters::GenerationStreamCallback;
 
@@ -234,7 +234,7 @@ Vector LanguageModel::getNextTokenLogits(const Batching::BatchPayload& context_p
 
 std::vector<GeneratedSequence> LanguageModel::generate(
     const Batching::BatchPayload& prompt_payload,
-    const GenerationConfig* gen_config)
+    const GenerationHP& gen_config)
 {
 #ifdef USE_CUDA
     prompt_payload.validate("LanguageModel::generate(BatchPayload)");
@@ -245,14 +245,14 @@ std::vector<GeneratedSequence> LanguageModel::generate(
         throw std::runtime_error("LanguageModel::generate(BatchPayload): batch_size must be 1");
     }
     if (config_.use_gpu && gpu_encoder_) {
-        GenerationConfig cfg = gen_config ? *gen_config : config_.generation;
+        GenerationHP cfg = gen_config;
         if (cfg.num_return_sequences <= 0) {
             throw std::runtime_error("LanguageModel::generate(BatchPayload): num_return_sequences must be > 0");
         }
         std::vector<GeneratedSequence> outputs;
         outputs.reserve(static_cast<size_t>(cfg.num_return_sequences));
         for (int i = 0; i < cfg.num_return_sequences; ++i) {
-            GenerationConfig seq_cfg = cfg;
+            GenerationHP seq_cfg = cfg;
             if (seq_cfg.seed != 0) seq_cfg.seed += i;
             outputs.push_back(generateSequenceGPU(prompt_payload, seq_cfg, nullptr));
         }
@@ -265,7 +265,7 @@ std::vector<GeneratedSequence> LanguageModel::generate(
 GeneratedSequence LanguageModel::generateStream(
     const Batching::BatchPayload& prompt_payload,
     GenerationStreamCallback callback,
-    const GenerationConfig* gen_config)
+    const GenerationHP& gen_config)
 {
 #ifdef USE_CUDA
     prompt_payload.validate("LanguageModel::generateStream(BatchPayload)");
@@ -276,7 +276,7 @@ GeneratedSequence LanguageModel::generateStream(
         throw std::runtime_error("LanguageModel::generateStream(BatchPayload): batch_size must be 1");
     }
     if (config_.use_gpu && gpu_encoder_) {
-        GenerationConfig cfg = gen_config ? *gen_config : config_.generation;
+        GenerationHP cfg = gen_config;
         return generateSequenceGPU(prompt_payload, cfg, &callback);
     }
 #endif
@@ -287,7 +287,7 @@ GeneratedSequence LanguageModel::generateStream(
 // Generate a token sequence from prompt, applying autoregressive decoding.
 GeneratedSequence LanguageModel::generateSequenceGPU(
     const Batching::BatchPayload& prompt_payload,
-    const GenerationConfig& cfg,
+    const GenerationHP& cfg,
     GenerationStreamCallback* stream_callback) {
     prompt_payload.validate("generateSequenceGPU(BatchPayload)");
     if (!prompt_payload.isInferencePrefill()) {
@@ -338,8 +338,14 @@ GeneratedSequence LanguageModel::generateSequenceGPU(
     }
     std::vector<uint32_t> sequence_atom_flags = prompt_atom_flags;
     
-    if (cfg.max_new_tokens < 0) {
-        throw std::runtime_error("generateSequenceGPU: max_new_tokens must be non-negative");
+    if (cfg.max_new_tokens <= 0) {
+        throw std::runtime_error("generateSequenceGPU: max_new_tokens must be > 0");
+    }
+    if (cfg.min_new_tokens < 0) {
+        throw std::runtime_error("generateSequenceGPU: min_new_tokens must be non-negative");
+    }
+    if (cfg.min_new_tokens > cfg.max_new_tokens) {
+        throw std::runtime_error("generateSequenceGPU: min_new_tokens exceeds max_new_tokens");
     }
     const int max_steps = cfg.max_new_tokens;
     if (config_.vocab_size <= 0) {
@@ -362,9 +368,9 @@ GeneratedSequence LanguageModel::generateSequenceGPU(
     }
     
     // =========================================================================
-    // Build SamplingPipeline from GenerationConfig (single sampling path)
+    // Build SamplingPipeline from the root-derived generation view (single sampling path)
     // =========================================================================
-    Sampling::SamplingConfig sampling_cfg = Sampling::buildFromGenerationConfig(
+    Sampling::SamplingConfig sampling_cfg = Sampling::buildFromGenerationFields(
         static_cast<int>(cfg.strategy),
         cfg.do_sample,
         cfg.temperature,
@@ -389,10 +395,7 @@ GeneratedSequence LanguageModel::generateSequenceGPU(
     if (config_.execution_block_enabled) {
         std::vector<int> numeric_mask = cfg.masked_numeric_literal_ids;
         if (numeric_mask.empty()) {
-            numeric_mask.reserve(10);
-            for (int b = 0x30; b <= 0x39; ++b) {
-                numeric_mask.push_back(Tokenizer::BYTE_TOKEN_OFFSET + b);
-            }
+            throw std::runtime_error("generateSequenceGPU: masked_numeric_literal_ids is empty while execution block is enabled");
         }
         sampling_cfg.bad_token_ids.insert(sampling_cfg.bad_token_ids.end(),
                                             numeric_mask.begin(), numeric_mask.end());
@@ -584,7 +587,7 @@ GeneratedSequence LanguageModel::generateSequenceGPU(
             next_atom_entry_ids,
             next_token_to_slot_map,
             config_.vocab_size,
-            static_cast<size_t>(config_.max_cached_batch),
+            static_cast<size_t>(config_.batch_size),
             static_cast<size_t>(config_.max_cached_seq_len),
             config_.execution_block_num_slots);
 

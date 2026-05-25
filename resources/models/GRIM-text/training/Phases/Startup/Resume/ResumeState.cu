@@ -20,7 +20,8 @@ void initializeOptimizer(TrainingContext& ctx) {
     auto& logger = *ctx.logging.logger;
     auto& opt = ctx.optimizer;
     auto& model = *ctx.model;
-    const auto& hp = ctx.config.hyperparameters;
+    const auto soft_restart_hp =
+        GRIM::HyperParameters::softRestartHP(ctx.config);
 
     logger.log("Initializing optimizer state...");
     opt.optimizer_step.step = 0;
@@ -30,7 +31,7 @@ void initializeOptimizer(TrainingContext& ctx) {
         model.getTrainingState().stream_ctrl.getPrimaryStream());
 
     GRIM::SoftRestart::SoftRestartConfig sr_cfg;
-    sr_cfg.cooldown_steps = hp.soft_restart_cooldown_steps;
+    sr_cfg.cooldown_steps = soft_restart_hp.cooldown_steps;
     opt.soft_restart_controller = GRIM::SoftRestart::SoftRestartController(sr_cfg);
 
     opt.resetAccumulationSlot();
@@ -86,7 +87,7 @@ void ResumeStateReady(TrainingContext& ctx) {
     Internal::initializeOptimizer(ctx);
     ctx.resume_state = captureResumeState(ctx);
 
-    const auto loss_config = GRIM::HyperParameters::lossConfigHP(ctx.config.hyperparameters);
+    const auto loss_config = GRIM::HyperParameters::lossConfigHP(ctx.config);
     if (loss_config.class_balanced_enabled) {
         computeAndUploadClassBalancedWeights(
             ctx.data.train_seqs,

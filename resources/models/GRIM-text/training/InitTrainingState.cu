@@ -177,8 +177,9 @@ void LanguageModel::initTrainingState() {
     // geometry/semantics come from BatchPayload at upload/forward time,
     // never from this init path.
     std::cout << "📊 Allocating TrainingState step workspaces" << std::endl;
-    
-    training_state_.allocateStepDeviceWorkspaces(cfg, primary_stream);
+
+    const auto workspace_hp = HyperParameters::trainingStateWorkspaceHP(cfg);
+    training_state_.allocateStepDeviceWorkspaces(workspace_hp, primary_stream);
     // ═══════════════════════════════════════════════════════════════════════════
     //  STEP FINAL: Confirm initialization complete
     // ═══════════════════════════════════════════════════════════════════════════

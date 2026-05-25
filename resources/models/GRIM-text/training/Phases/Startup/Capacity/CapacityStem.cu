@@ -5,10 +5,9 @@
 namespace GRIMText::Training {
 
 void HyperparametersReady(TrainingContext& ctx) {
-    GRIM::HyperParameters::validateTrainingHyperparameters(ctx.config.hyperparameters);
-    // Validate the loss grouping against the authoritative hyperparameters
-    // without storing a second config owner on TrainingContext.
-    static_cast<void>(GRIM::HyperParameters::lossConfigHP(ctx.config.hyperparameters));
+    // Slice grouping payloads against the authoritative root config without
+    // storing second config owners on TrainingContext.
+    static_cast<void>(GRIM::HyperParameters::lossConfigHP(ctx.config));
     static_cast<void>(GRIM::HyperParameters::trainingFixedShapeHP(ctx.config));
 }
 

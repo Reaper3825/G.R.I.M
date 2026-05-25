@@ -173,13 +173,14 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
     emitInitFactLine("[INIT_FACTS] ========================================================================");
 
     emitInitFactLine("[INIT_FACTS] --- Run identity ---------------------------------------------------------");
+    const auto paths_hp = GRIM::HyperParameters::pathsHP(ctx.config);
     emitInitFactKeyValue("session_id", ctx.logging.session_id);
-    emitInitFactKeyValue("config_path", ctx.config.paths.config_path.string());
-    emitInitFactKeyValue("log_dir", ctx.config.paths.log_dir);
-    emitInitFactKeyValue("training_data", ctx.config.paths.data_path);
-    emitInitFactKeyValue("vocab_path", ctx.config.paths.vocab_path);
-    emitInitFactKeyValue("checkpoint_dir", ctx.config.paths.checkpoint_dir);
-    emitInitFactKeyValue("output_model_path", ctx.config.paths.output_model_path);
+    emitInitFactKeyValue("config_source", "canonical ai_config.json document");
+    emitInitFactKeyValue("log_dir", paths_hp.log_dir);
+    emitInitFactKeyValue("training_data", paths_hp.data_path);
+    emitInitFactKeyValue("vocab_path", paths_hp.vocab_path);
+    emitInitFactKeyValue("checkpoint_dir", paths_hp.checkpoint_dir);
+    emitInitFactKeyValue("output_model_path", paths_hp.output_model_path);
     emitInitFactKeyValue("loaded_checkpoint_path", ctx.loaded_checkpoint_path);
 
     emitInitFactLine("[INIT_FACTS] --- Effective architecture -----------------------------------------------");

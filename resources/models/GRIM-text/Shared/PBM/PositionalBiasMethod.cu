@@ -51,7 +51,13 @@ void requireRoPELaunchGeometry(const GRIM::Batching::BatchPayload& payload,
                                int rotary_dim,
                                const char* caller) {
     payload.validate(caller);
-    GRIM::HyperParameters::validateEncoderSelfAttentionHP(hp, caller);
+    if (hp.d_model <= 0 || hp.num_heads <= 0 || hp.num_kv_heads <= 0 || hp.head_dim <= 0) {
+        throw std::runtime_error(std::string(kTag) + " " + caller +
+            ": invalid attention dimensions d_model=" + std::to_string(hp.d_model) +
+            " num_heads=" + std::to_string(hp.num_heads) +
+            " num_kv_heads=" + std::to_string(hp.num_kv_heads) +
+            " head_dim=" + std::to_string(hp.head_dim));
+    }
 
     if (rotary_dim <= 0 || (rotary_dim & 1) != 0 || rotary_dim > hp.head_dim) {
         throw std::runtime_error(std::string(kTag) + " " + caller +
@@ -324,8 +330,7 @@ bool computeRoPEInvFreq(const PBMConstructionHP& hp,
 bool initializePBM(const PBMConstructionHP& hp,
                    PBMState& state,
                    PBMRuntimeOptions runtime) {
-    GRIM::HyperParameters::validatePBMConstructionHP(hp, "PBM::initializePBM");
-
+    GRIM::PBM::requirePBMConstructionShape(hp, "PBM::initializePBM");
     // Clean up any existing state
     releasePBM(state);
     
@@ -431,8 +436,7 @@ bool initializePBM(const PBMConstructionHP& hp,
 bool ensurePBM(const PBMConstructionHP& hp,
                PBMState& state,
                PBMRuntimeOptions runtime) {
-    GRIM::HyperParameters::validatePBMConstructionHP(hp, "PBM::ensurePBM");
-
+    GRIM::PBM::requirePBMConstructionShape(hp, "PBM::ensurePBM");
     // Check if re-initialization needed using the grouped HP snapshot.
     const bool config_match = state.initialized &&
                               samePBMConstructionHP(state.construction_hp, hp);
@@ -471,7 +475,7 @@ PBMSpec getPBMSpec(const PBMState& state) {
     PBMSpec spec{};
 
     requirePBMInitialized(state, "PBM::getPBMSpec");
-    GRIM::HyperParameters::validatePBMConstructionHP(state.construction_hp, "PBM::getPBMSpec");
+    GRIM::PBM::requirePBMConstructionShape(state.construction_hp, "PBM::getPBMSpec");
     if (state.construction_hp.num_heads <= 0 || state.construction_hp.num_kv_heads <= 0) {
         throw std::runtime_error("PBM::getPBMSpec: initialized state has invalid heads num_heads=" +
                                  std::to_string(state.construction_hp.num_heads) +

@@ -725,7 +725,10 @@ int main(int argc, char** argv) {
             fprintf(stderr, "[tokenizer_runner] Loading configuration...\n");
         }
 
-        auto startup_config = GRIM::HyperParameters::loadStartupConfig(argc, argv);
+        auto startup_config = GRIM::HyperParameters::loadStartupConfig(
+            argc,
+            argv,
+            GRIM::HyperParameters::ModelExecutionMode::TRAINING);
         const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(startup_config);
 
         if (tokenizer_hp.vocab_path.empty()) {

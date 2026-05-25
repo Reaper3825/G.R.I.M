@@ -9,15 +9,15 @@
 // JSON Section                → C++ Owner
 // ---------------------------------------
 // ai_config.json              → AiConfigSnapshot::document
-// training.config leaves      → HyperParameterGroupings_GPU.hpp typed owners
+// training.config leaves      → HyperParameters_GPU.hpp typed owners
 //
-// RULE: All runtime fields in TrainingHyperparameters MUST
-// be authored in ai_config.json training.config or derived in HyperParameterGroupings_GPU.hpp.
-// HyperParameter_GPU.hpp may keep only formulas/static kernel capabilities,
+// RULE: All runtime fields in LanguageModelConfig MUST
+// be authored in ai_config.json training.config leaves or derived in HyperParameters_GPU.hpp.
+// HyperParameters_GPU.hpp may keep only formulas/static kernel capabilities,
 // never runtime policy fallbacks.
 //
 // For compile-time constants (CUDA blocks, epsilons, etc.),
-// see HyperParameter_GPU.hpp - DO NOT duplicate them here.
+// see HyperParameters_GPU.hpp - DO NOT duplicate them here.
 //======================================================//
 
 // Include guard macro for detection by other headers
@@ -41,7 +41,6 @@ namespace GRIM {
 namespace Config {
 
 struct AiConfigSnapshot {
-    std::filesystem::path config_path;
     nlohmann::json document;
 };
 
@@ -88,7 +87,6 @@ inline AiConfigSnapshot loadAiConfigSnapshot() {
         }
 
         AiConfigSnapshot snapshot;
-        snapshot.config_path = resolved_path;
         snapshot.document = document;
         return snapshot;
     } catch (const std::exception& e) {

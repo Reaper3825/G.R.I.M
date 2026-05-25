@@ -455,8 +455,8 @@ struct BatchPayload {
  *
  * @param assignment     Batch assignment from scheduler (seq_ids, etc.)
  * @param views          Sequence data views indexed by seq_id
- * @param vocab_size     Actual vocab size for target validation
- * @param max_cached_batch   GPU cache batch capacity
+ * @param vocab_size     Model token-space width for target validation
+ * @param batch_size         Fixed training batch size / row capacity
  * @param max_cached_seq_len GPU cache sequence length capacity
  * @param execution_num_slots  ExecutionBlock slot count (from config)
  * @param execution_num_ops    ExecutionBlock op count (from config)
@@ -468,7 +468,7 @@ BatchPayload buildBatchPayload(
     const std::vector<GRIM::TokenizerArtifacts::GrmtSequence*>& views,
     int vocab_size,
     const GRIM::Tokenizer::TokenLayout& token_layout,
-    size_t max_cached_batch,
+    size_t batch_size,
     size_t max_cached_seq_len,
     int execution_num_slots,
     int execution_num_ops,
@@ -490,7 +490,7 @@ BatchPayload buildInferenceBatchPayload(
     const std::vector<uint32_t>& atom_entry_ids,
     const std::vector<int32_t>& token_to_slot_map,
     int vocab_size,
-    size_t max_cached_batch,
+    size_t batch_capacity,
     size_t max_cached_seq_len,
     int execution_num_slots);
 

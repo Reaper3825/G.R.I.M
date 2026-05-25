@@ -28,8 +28,9 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ### 1.2 Configuration Loading & Validation
 
-- [] **Phase1_Startup.cu / Phase1_Startup.hpp** 
-  - Configuration loading from ai_config.json
+- [] **train_gpu.cu + Phase1_Startup.cu / Phase1_Startup.hpp** 
+  - `train_gpu.cu` loads the validated training startup config root from canonical `ai_config.json`
+  - `Phase1_Startup` receives that config handoff and performs startup validation/initialization against it
   - Path validation (model, data, checkpoint dirs)
 
 ---

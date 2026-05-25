@@ -15,7 +15,9 @@ bool shouldSyncDiagnostics(const GRIMText::Training::TrainingContext& ctx, std::
     if (!ctx.logging.tape || !ctx.logging.tape->accepts(GRIM::Logging::LogLevel::Debug)) {
         return false;
     }
-    const int default_interval = ctx.config.hyperparameters.log_interval;
+    const auto runtime_hp =
+        GRIM::HyperParameters::trainingRuntimeControlHP(ctx.config);
+    const int default_interval = runtime_hp.log_interval;
     const int interval = readEnvInt("GRIM_SYNC_INTERVAL", default_interval);
     if (interval <= 0) {
         return false;
@@ -24,11 +26,13 @@ bool shouldSyncDiagnostics(const GRIMText::Training::TrainingContext& ctx, std::
 }
 
 bool shouldLogLogitTrace(const GRIMText::Training::TrainingContext& ctx, std::size_t batch_idx) {
-    const auto& hp = ctx.config.hyperparameters;
-    if (!hp.logit_update_trace_enabled) {
+    const auto runtime_hp =
+        GRIM::HyperParameters::trainingRuntimeControlHP(ctx.config);
+    if (!runtime_hp.logit_update_trace_enabled) {
         return false;
     }
-    const int interval = readEnvInt("GRIM_LOGIT_TRACE_INTERVAL", hp.logit_update_trace_interval);
+    const int interval = readEnvInt("GRIM_LOGIT_TRACE_INTERVAL",
+                                    runtime_hp.logit_update_trace_interval);
     if (interval <= 0) {
         return false;
     }
@@ -36,7 +40,9 @@ bool shouldLogLogitTrace(const GRIMText::Training::TrainingContext& ctx, std::si
 }
 
 bool shouldLogAtomStats(const GRIMText::Training::TrainingContext& ctx, int batch_idx) {
-    const int interval = ctx.config.hyperparameters.atom_stats_interval;
+    const auto runtime_hp =
+        GRIM::HyperParameters::trainingRuntimeControlHP(ctx.config);
+    const int interval = runtime_hp.atom_stats_interval;
     if (interval <= 0) {
         return false;
     }

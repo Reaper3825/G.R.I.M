@@ -21,23 +21,20 @@ PayloadBuildInputs derivePayloadBuildInputsOrThrow(const TrainingContext& ctx) {
 
     const auto fixed_shape = GRIM::HyperParameters::trainingFixedShapeHP(ctx.config);
 
-    // Rule 20: TrainingState allocation consumes batch/token capacity only.
-    // Sequence capacity remains owned by HyperparameterGroupings and the BatchPayload path.
-    if (ctx.model_allocation.model_max_cached_batch != fixed_shape.batch_size) {
-        throw std::runtime_error(
-            "FATAL: model max_cached_batch does not match trainingFixedShapeHP (model=" +
-            std::to_string(ctx.model_allocation.model_max_cached_batch) +
-            " grouping=" + std::to_string(fixed_shape.batch_size) + ")");
-    }
-
     PayloadBuildInputs inputs;
-    inputs.max_cached_batch          = static_cast<std::size_t>(fixed_shape.batch_size);
+    inputs.configured_batch_size     = static_cast<std::size_t>(fixed_shape.batch_size);
     inputs.max_cached_seq            = static_cast<std::size_t>(fixed_shape.max_seq_len);
     inputs.execution_block_num_slots = ctx.model_config.execution_block_num_slots;
     inputs.execution_block_num_ops   = ctx.model_config.execution_block_num_ops;
     inputs.execution_block_num_steps = ctx.model_config.execution_block_num_steps;
-    inputs.actual_vocab_size         = ctx.data_info.actual_vocab_size;
+    inputs.vocab_size                = ctx.model_config.vocab_size;
     inputs.train_mtp_k               = ctx.model_config.mtp_enabled ? ctx.model_config.mtp_k : 0;
+    if (ctx.data_info.actual_vocab_size > static_cast<std::uint32_t>(inputs.vocab_size)) {
+        throw std::runtime_error(
+            "FATAL: PayloadBuildInputsReady actual_vocab_size=" +
+            std::to_string(ctx.data_info.actual_vocab_size) +
+            " exceeds model vocab_size=" + std::to_string(inputs.vocab_size));
+    }
 
     const auto layout = ctx.tokenizer->tokenLayout();
     inputs.token_layout.num_special = layout.num_special;

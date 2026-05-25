@@ -25,7 +25,7 @@
 #include "../TeacherLogits/TeacherLogits_GPU.hpp"
 #include "../StreamController/StreamController_GPU.hpp"
 #include "../GradNorm/GradNormGPU.hpp"
-#include "../HyperParameters/HyperParameters_GPU.hpp"
+#include "../HyperParameters/HyperparameterGroupings.hpp"
 #include "../TensorContract/TensorContract_GPU.hpp"
 
 // Forward declaration for autograd tensor system
@@ -51,7 +51,7 @@ struct TrainingState {
     TrainingState& operator=(TrainingState&&) = delete;
 
     void allocateStepDeviceWorkspaces(
-        const HyperParameters::LanguageModelConfig& config,
+        const HyperParameters::TrainingStateWorkspaceHP& workspace_hp,
         cudaStream_t stream);
 
     //======================================================//

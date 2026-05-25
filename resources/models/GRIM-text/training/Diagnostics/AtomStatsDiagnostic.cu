@@ -104,7 +104,9 @@ void runAtomStatsDiagnostic(
         ctx.logging.logger->log(atom_msg.str());
         PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] atom_msg logged\n");
 
-        const int max_seq_log = std::max(0, ctx.config.hyperparameters.atom_stats_max_seqs);
+        const auto runtime_hp =
+            GRIM::HyperParameters::trainingRuntimeControlHP(ctx.config);
+        const int max_seq_log = std::max(0, runtime_hp.atom_stats_max_seqs);
         if (max_seq_log > 0 && !per_seq_atoms.empty()) {
             const int to_log = std::min<int>(max_seq_log,
                                              static_cast<int>(per_seq_atoms.size()));

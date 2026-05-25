@@ -29,7 +29,7 @@ TrainingState::TrainingState() = default;
 TrainingState::~TrainingState() = default;
 
 void TrainingState::allocateStepDeviceWorkspaces(
-    const HyperParameters::LanguageModelConfig& config,
+    const HyperParameters::TrainingStateWorkspaceHP& workspace_hp,
     cudaStream_t stream)
 {
     if (initialized) {
@@ -38,20 +38,19 @@ void TrainingState::allocateStepDeviceWorkspaces(
     }
     StreamController::fatalIfDefaultStream(stream,
                                            "TrainingState::allocateStepDeviceWorkspaces");
-    if (config.d_model <= 0) {
+    if (workspace_hp.batch_size <= 0) {
         throw std::runtime_error(
-            "TrainingState::allocateStepDeviceWorkspaces: d_model must be > 0");
+            "TrainingState::allocateStepDeviceWorkspaces: batch_size must be > 0");
     }
-    if (config.vocab_size <= 0) {
+    if (workspace_hp.max_tokens_per_batch <= 0) {
         throw std::runtime_error(
-            "TrainingState::allocateStepDeviceWorkspaces: vocab_size must be > 0");
+            "TrainingState::allocateStepDeviceWorkspaces: max_tokens_per_batch must be > 0");
     }
-    HyperParameters::validateLanguageModelCacheCapacity(
-        config, "TrainingState::allocateStepDeviceWorkspaces");
-    const std::size_t token_capacity = static_cast<std::size_t>(config.max_tokens_per_batch);
+    const std::size_t token_capacity =
+        static_cast<std::size_t>(workspace_hp.max_tokens_per_batch);
 
     const auto max_tokens = static_cast<int>(token_capacity);
-    const auto max_batch_size = config.max_cached_batch;
+    const auto max_batch_size = workspace_hp.batch_size;
 
     cached_targets_tensor = Tensor::empty(
         TensorContract::TensorShape::make_BSM(max_tokens, 1),
@@ -74,17 +73,17 @@ void TrainingState::allocateStepDeviceWorkspaces(
         "cached_token_numeric_values");
     std::cout << "✓ Allocated token numeric values cache (Tensor API)" << std::endl;
 
-    if (config.mtp_enabled) {
-        if (config.mtp_k <= 0) {
+    if (workspace_hp.mtp_enabled) {
+        if (workspace_hp.mtp_k <= 0) {
             throw std::runtime_error(
                 "TrainingState::allocateStepDeviceWorkspaces: mtp_enabled=true but mtp_k <= 0");
         }
         cached_mtp_shifted_targets_tensor = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(config.mtp_k, max_tokens),
+            TensorContract::TensorShape::make_BSM(workspace_hp.mtp_k, max_tokens),
             false,
             stream,
             "cached_mtp_shifted_targets");
-        std::cout << "✓ Allocated MTP shifted target cache [" << config.mtp_k
+        std::cout << "✓ Allocated MTP shifted target cache [" << workspace_hp.mtp_k
                   << " x " << token_capacity << "]" << std::endl;
     }
 

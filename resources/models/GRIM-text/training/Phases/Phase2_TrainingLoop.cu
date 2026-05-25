@@ -143,7 +143,9 @@ void scaleRegisteredParameterGradientsForOptimizerWindow(
 }
 
 int validatedAccumulationSteps(const TrainingContext& ctx) {
-    const int accum_steps = ctx.config.hyperparameters.gradient_accumulation_steps;
+    const auto schedule_hp =
+        ::GRIM::HyperParameters::trainingScheduleHP(ctx.config);
+    const int accum_steps = schedule_hp.gradient_accumulation_steps;
     if (accum_steps <= 0) {
         throw std::runtime_error("FATAL: gradient_accumulation_steps must be > 0 in Phase2 (got " +
                                  std::to_string(accum_steps) + ")");
@@ -225,11 +227,12 @@ void completeOptimizerWindowBookkeepingOrThrow(
 }
 
 std::unique_ptr<GRIM::Loss::LossSignalBus> makeValidationHighLossSignalBus(
-    const ::GRIM::Config::TrainingHyperparameters& hp)
+    const ::GRIM::HyperParameters::LanguageModelConfig& hp)
 {
+    const auto auto_stop_hp = ::GRIM::HyperParameters::autoStopHP(hp);
     GRIM::Loss::LossSignalConfig sig_cfg{};
-    sig_cfg.validation_high_threshold = hp.auto_stop_high_loss_threshold;
-    sig_cfg.validation_high_patience  = hp.auto_stop_high_loss_patience;
+    sig_cfg.validation_high_threshold = auto_stop_hp.high_loss_threshold;
+    sig_cfg.validation_high_patience  = auto_stop_hp.high_loss_patience;
     return std::make_unique<GRIM::Loss::LossSignalBus>(sig_cfg);
 }
 
@@ -241,12 +244,14 @@ float scheduledLearningRateForOptimizerStep(
         throw std::runtime_error("lr_schedule is not initialized at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
     }
 
-    const auto lr_inputs = ::GRIM::HyperParameters::learningRateScheduleInputs(ctx.config.hyperparameters);
+    const auto lr_inputs = ::GRIM::HyperParameters::learningRateScheduleInputs(ctx.config);
+    const auto stability_hp =
+        ::GRIM::HyperParameters::stabilityOverrideHP(ctx.config);
     return Internal::getScheduledLearningRate(
         *ctx.lr_schedule,
         optimizer_step,
         lr_inputs.learning_rate,
-        ctx.config.hyperparameters.stability_overrides_enabled);
+        stability_hp.enabled);
 }
 
 float mtpAlphaEffectiveForBatch(
@@ -284,7 +289,6 @@ void runOptimizerWindowFromEpoch(
     int accum_steps,
     int optimizer_step)
 {
-    const auto& hp = ctx.config.hyperparameters;
     const bool sync_diag = GRIM::Diagnostics::shouldSyncDiagnostics(ctx, batch_idx);
 
     bool has_clip_metrics = false;
@@ -293,8 +297,10 @@ void runOptimizerWindowFromEpoch(
     // Issue #135: gradient clipping is DEFERRED to post-accumulation. Clipping
     // ONCE on the averaged gradients matches PyTorch; the old per-slot clipping
     // crushed text gradients M×.
-    const auto clipping_hp = ::GRIM::HyperParameters::gradientClippingHP(hp);
-    const auto optimizer_update_hp = ::GRIM::HyperParameters::optimizerUpdateHP(hp);
+    const auto clipping_hp = ::GRIM::HyperParameters::gradientClippingHP(
+        ctx.config);
+    const auto optimizer_update_hp = ::GRIM::HyperParameters::optimizerUpdateHP(
+        ctx.config);
     const float effective_per_token_limit = clipping_hp.effective_per_token_limit;
     const bool clipping_enabled = clipping_hp.enabled;
 
@@ -502,7 +508,7 @@ BatchResult processBatch(
     // returned BatchDeviceBindings inside autogradTrainingStep — payload itself
     // is host-only/immutable and never carries device pointers.
     const auto train_bindings = ctx.model->uploadBatchToDevice(payload);
-    const auto loss_config = GRIM::HyperParameters::lossConfigHP(ctx.config.hyperparameters);
+    const auto loss_config = GRIM::HyperParameters::lossConfigHP(ctx.config);
     auto loss_result = GRIM::Autograd::autogradTrainingStep(
         *ctx.model,
         ctx.model->getTrainingState(),
@@ -840,14 +846,14 @@ EpochResult runEpoch(
 //======================================================//
 
 bool executePhase2(TrainingContext& ctx) {
-    const auto& hp = ctx.config.hyperparameters;
-    
     // Initialize loop state
     TrainingLoopState state;
+    const auto schedule_hp =
+        ::GRIM::HyperParameters::trainingScheduleHP(ctx.config);
 
     // Construct the epoch high-loss policy detector. Train-loss spike/EWMA
     // tracking is owned by TelemetryLattice.
-    state.loss_signals = makeValidationHighLossSignalBus(hp);
+    state.loss_signals = makeValidationHighLossSignalBus(ctx.config);
     
     PHASE2_DEBUG_STDERR("[DEBUG] About to initialize training log...");
  
@@ -859,7 +865,7 @@ bool executePhase2(TrainingContext& ctx) {
     EmitModuleInfo(ModuleId::Training, "Starting training...", ctx.global_step);
 
     const int accum_steps = validatedAccumulationSteps(ctx);
-    const int num_epochs = hp.epochs;
+    const int num_epochs = schedule_hp.epochs;
     if (num_epochs <= 0) {
         throw std::runtime_error("FATAL: epochs must be > 0 in Phase2");
     }

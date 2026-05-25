@@ -24,6 +24,7 @@
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/Telemetry/TelemetryUpdate.hpp"
+#include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../../../../control/training_control_generated.h"
 
 #include <iostream>
@@ -84,10 +85,11 @@ std::pair<float, float> getGPUMemoryStats() {
     return {used_mb, total_mb};
 }
 
-void cleanupTemporaryFiles(const PathConfig& paths) {
+void cleanupTemporaryFiles(const ::GRIM::HyperParameters::LanguageModelConfig& config) {
+    const auto paths_hp = ::GRIM::HyperParameters::pathsHP(config);
     // Remove any temporary checkpoint files
     try {
-        for (const auto& entry : fs::directory_iterator(paths.checkpoint_dir)) {
+        for (const auto& entry : fs::directory_iterator(paths_hp.checkpoint_dir)) {
             if (entry.path().extension() == ".tmp") {
                 fs::remove(entry.path());
             }
@@ -137,8 +139,9 @@ TrainingSummary computeTrainingSummary(const TrainingContext& ctx) {
 
 std::string saveFinalModel(TrainingContext& ctx, const std::string& suffix) {
     EmitModuleInfo(ModuleId::Checkpoint, "Saving final model...", ctx.global_step);
+    const auto paths_hp = ::GRIM::HyperParameters::pathsHP(ctx.config);
     
-    std::string final_path = ctx.config.paths.checkpoint_dir + "/checkpoint" + suffix + ".bin";
+    std::string final_path = paths_hp.checkpoint_dir + "/checkpoint" + suffix + ".bin";
     
 #ifdef USE_CUDA
     cudaError_t sync_err = cudaDeviceSynchronize();
@@ -191,8 +194,10 @@ void evaluateAutoStop(
     EpochResult& result,
     int epoch_idx)
 {
-    const auto& hp = ctx.config.hyperparameters;
-    if (!hp.auto_stop_enabled || ctx.auto_stop_triggered) {
+    const auto auto_stop_hp =
+        ::GRIM::HyperParameters::autoStopHP(ctx.config);
+
+    if (!auto_stop_hp.enabled || ctx.auto_stop_triggered) {
         return;
     }
 
@@ -200,7 +205,8 @@ void evaluateAutoStop(
     bool significant_improvement = true;
     if (std::isfinite(prev_best)) {
         significant_improvement =
-            (prev_best - result.validation.loss) > hp.auto_stop_plateau_min_delta;
+            (prev_best - result.validation.loss) >
+            auto_stop_hp.plateau_min_delta;
     }
 
     auto trip = [&](const char* reason) {
@@ -212,18 +218,20 @@ void evaluateAutoStop(
         result.auto_stop_reason = reason;
     };
 
-    if (hp.auto_stop_plateau_patience > 0) {
+    if (auto_stop_hp.plateau_patience > 0) {
         if (significant_improvement) {
             state.plateau_epochs_without_improvement = 0;
         } else {
             state.plateau_epochs_without_improvement++;
-            if (state.plateau_epochs_without_improvement >= hp.auto_stop_plateau_patience) {
+            if (state.plateau_epochs_without_improvement >=
+                auto_stop_hp.plateau_patience) {
                 trip("plateau");
             }
         }
     }
 
-    if (!ctx.auto_stop_triggered && hp.auto_stop_high_loss_patience > 0) {
+    if (!ctx.auto_stop_triggered &&
+        auto_stop_hp.high_loss_patience > 0) {
         if (state.loss_signals->latest().validation_high) {
             trip("high_loss");
         }
@@ -242,7 +250,8 @@ bool saveBestCheckpoint(
     ctx.best_val_loss = val_loss;
     ctx.logging.logger->log("✓ New best! Saving checkpoint...");
 
-    std::string checkpoint_path = ctx.config.paths.checkpoint_dir +
+    const auto paths_hp = ::GRIM::HyperParameters::pathsHP(ctx.config);
+    std::string checkpoint_path = paths_hp.checkpoint_dir +
                                   "/checkpoint_epoch_" + std::to_string(epoch + 1) + ".bin";
     try {
         bool save_result = ctx.model->save(checkpoint_path);
@@ -508,7 +517,7 @@ CleanupResult executePhase3(
         
         // Cleanup temporary files
         if (cleanup_config.cleanup_temporary_files) {
-            Internal::cleanupTemporaryFiles(ctx.config.paths);
+            Internal::cleanupTemporaryFiles(ctx.config);
             EmitModuleInfo(ModuleId::Training, "✓ Temporary files cleaned", ctx.global_step);
         }
         

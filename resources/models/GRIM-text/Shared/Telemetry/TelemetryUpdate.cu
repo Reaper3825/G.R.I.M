@@ -386,7 +386,9 @@ void logIntervalTelemetry(
     GRIMText::Training::TrainingLoopState& state,
     const GRIMText::Training::BatchResult& batch_result) {
 
-    const int interval = ctx.config.hyperparameters.log_interval;
+    const auto runtime_hp =
+        GRIM::HyperParameters::trainingRuntimeControlHP(ctx.config);
+    const int interval = runtime_hp.log_interval;
     if (interval > 0 && ctx.global_step % interval == 0) {
         ctx.logging.logger->log("[Step " + std::to_string(ctx.global_step) + "] " +
                                 formatMetric("loss", batch_result.loss) + " " +

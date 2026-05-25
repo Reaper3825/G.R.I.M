@@ -42,12 +42,12 @@ struct TokenLayoutSnapshot {
 };
 
 struct PayloadBuildInputs {
-    std::size_t max_cached_batch = 0;
+    std::size_t configured_batch_size = 0;
     std::size_t max_cached_seq   = 0;
     int execution_block_num_slots = 0;
     int execution_block_num_ops   = 0;
     int execution_block_num_steps = 0;
-    int actual_vocab_size = 0;
+    int vocab_size = 0;
     int train_mtp_k = 0;  // Effective MTP head count for training (0 if MTP disabled). Validation always uses 0.
     TokenLayoutSnapshot token_layout{};
 };

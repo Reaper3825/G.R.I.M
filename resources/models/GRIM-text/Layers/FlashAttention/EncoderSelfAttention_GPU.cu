@@ -148,8 +148,6 @@ void encoderSelfAttentionForward(const Tensor& norm_input,
                                  EncoderSelfAttentionWeights weights,
                                  EncoderSelfAttentionIntermediates intermediates,
                                  const EncoderSelfAttentionForwardRequest& request) {
-    HyperParameters::validateFlashAttentionRuntimeForEncoderSelfAttentionHP(
-        request.flash_attention, request.hp, "encoderSelfAttentionForward");
     if (!request.stream) {
         throw std::runtime_error("encoderSelfAttentionForward: stream is NULL");
     }

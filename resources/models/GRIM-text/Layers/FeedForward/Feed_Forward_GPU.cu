@@ -44,9 +44,16 @@ FeedForwardLayer::FeedForwardLayer(const HyperParameters::FeedForwardLayerConstr
     if (!std::isfinite(residual_projection_init_gain) || residual_projection_init_gain <= 0.0f) {
         throw std::runtime_error("FeedForwardLayer: residual_projection_init_gain must be a positive finite value from feedForwardLayerConstructionHP");
     }
-    HyperParameters::requirePositiveGroupingValue(hp_.d_model, "d_model", "FeedForwardLayer");
-    HyperParameters::requirePositiveGroupingValue(hp_.d_ff, "d_ff", "FeedForwardLayer");
-    HyperParameters::requireDropoutProbability(hp_.dropout_rate, "dropout_rate", "FeedForwardLayer");
+    if (hp_.d_model <= 0) {
+        throw std::runtime_error("FeedForwardLayer: d_model must be > 0, got " + std::to_string(hp_.d_model));
+    }
+    if (hp_.d_ff <= 0) {
+        throw std::runtime_error("FeedForwardLayer: d_ff must be > 0, got " + std::to_string(hp_.d_ff));
+    }
+    if (!std::isfinite(hp_.dropout_rate) || hp_.dropout_rate < 0.0f || hp_.dropout_rate >= 1.0f) {
+        throw std::runtime_error("FeedForwardLayer: dropout_rate must be finite and in [0,1), got " +
+                                 std::to_string(hp_.dropout_rate));
+    }
     
     const int d_model = hp_.d_model;
     const int d_ff = hp_.d_ff;

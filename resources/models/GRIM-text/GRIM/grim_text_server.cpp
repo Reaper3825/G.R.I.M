@@ -37,8 +37,8 @@
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 using namespace GRIM;
-// Generation types live in HyperParameters_GPU.hpp (single source of truth).
-using GRIM::HyperParameters::GenerationConfig;
+// Generation views are sliced from the finalized HyperParameters root.
+using GRIM::HyperParameters::GenerationHP;
 using GRIM::HyperParameters::SamplingStrategy;
 
 // Global model + tokenizer
@@ -47,30 +47,31 @@ std::unique_ptr<GRIM::Tokenizer::UniByte> g_tokenizer;
 
 struct InferencePayloadDefaults {
     int vocab_size = 0;
-    size_t max_cached_batch = 0;
+    size_t batch_size = 0;
     size_t max_cached_seq_len = 0;
     int execution_block_num_slots = 0;
 };
 
 InferencePayloadDefaults g_payload_defaults;
 
-GenerationConfig g_generation_defaults = [] {
-    GenerationConfig cfg;
-    cfg.strategy = SamplingStrategy::TOP_P;
-    cfg.max_new_tokens = 256;
-    cfg.temperature = 0.8f;
-    cfg.top_p = 0.9f;
-    cfg.top_k = 50;
-    return cfg;
-}();
+GenerationHP g_generation_defaults;
+bool g_generation_defaults_ready = false;
+
+const GenerationHP& requireGenerationDefaults(const char* caller)
+{
+    if (!g_generation_defaults_ready) {
+        throw std::runtime_error(std::string(caller) + ": generation defaults were not initialized from LanguageModelConfig");
+    }
+    return g_generation_defaults;
+}
 
 //======================================================//
 //  Initialize Model
 //======================================================//
-bool initializeModel(const HyperParameters::StartupConfig& startup_config,
+bool initializeModel(const HyperParameters::LanguageModelConfig& config,
                      const std::string& model_path)
 {
-    const auto tokenizer_hp = HyperParameters::tokenizerHP(startup_config);
+    const auto tokenizer_hp = HyperParameters::tokenizerHP(config);
     const std::string& vocab_path = tokenizer_hp.vocab_path;
     std::cout << "[GRIM-text] Initializing model...\n";
     std::cout << "[GRIM-text] Vocab: " << vocab_path << "\n";
@@ -88,17 +89,17 @@ bool initializeModel(const HyperParameters::StartupConfig& startup_config,
         std::cout << "[GRIM-text] EOS token ID: " << GRIM::Tokenizer::EOS_TOKEN_ID << "\n";
         std::cout << "[GRIM-text] PAD token ID: " << GRIM::Tokenizer::PAD_TOKEN_ID << "\n";
 
-        HyperParameters::LanguageModelConfig config =
-            HyperParameters::inferenceLanguageModelConfig(
-                startup_config,
-                static_cast<std::uint32_t>(g_tokenizer->vocabSize()),
-                vocab_path);
-        
-        config.generation.eos_token_id = GRIM::Tokenizer::EOS_TOKEN_ID;
-        config.generation.pad_token_id = GRIM::Tokenizer::PAD_TOKEN_ID;
+        if (g_tokenizer->vocabSize() > static_cast<std::size_t>(config.vocab_size)) {
+            throw std::runtime_error(
+                "GRIM-text server tokenizer vocabSize=" + std::to_string(g_tokenizer->vocabSize()) +
+                " exceeds configured model vocab_size=" + std::to_string(config.vocab_size));
+        }
+
+        g_generation_defaults = HyperParameters::generationHP(config);
+        g_generation_defaults_ready = true;
         const auto execution_hp = HyperParameters::executionBlockConstructionHP(config);
         g_payload_defaults.vocab_size = config.vocab_size;
-        g_payload_defaults.max_cached_batch = static_cast<size_t>(config.max_cached_batch);
+        g_payload_defaults.batch_size = static_cast<size_t>(config.batch_size);
         g_payload_defaults.max_cached_seq_len = static_cast<size_t>(config.max_cached_seq_len);
         g_payload_defaults.execution_block_num_slots = execution_hp.num_slots;
         
@@ -129,7 +130,7 @@ bool initializeModel(const HyperParameters::StartupConfig& startup_config,
 //======================================================//
 //  Generate Response
 //======================================================//
-std::string generateResponse(const std::string& prompt, const GenerationConfig& gen_config_in)
+std::string generateResponse(const std::string& prompt, const GenerationHP& gen_config_in)
 {
     if (!g_model || !g_tokenizer)
         return "Error: Model not initialized";
@@ -170,16 +171,14 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
             std::cout << "[Generate] Removed EOS from prompt, now " << tokens.size() << " tokens" << std::endl;
         }
 
-        GenerationConfig gen_config = gen_config_in;
-        
-        gen_config.eos_token_id = GRIM::Tokenizer::EOS_TOKEN_ID;
-        gen_config.pad_token_id = GRIM::Tokenizer::PAD_TOKEN_ID;
+        GenerationHP gen_config = gen_config_in;
+
         std::cout << "[Generate] EOS token ID: " << gen_config.eos_token_id 
                   << ", PAD token ID: " << gen_config.pad_token_id << std::endl;
         std::cout << "[Generate] Starting generation (max_tokens=" << gen_config.max_new_tokens << ", temp=" << gen_config.temperature << ")..." << std::endl << std::flush;
         auto start_gen = std::chrono::high_resolution_clock::now();
         if (g_payload_defaults.vocab_size <= 0 ||
-            g_payload_defaults.max_cached_batch == 0 ||
+            g_payload_defaults.batch_size == 0 ||
             g_payload_defaults.max_cached_seq_len == 0) {
             throw std::runtime_error("generateResponse: inference payload defaults were not initialized");
         }
@@ -193,10 +192,10 @@ std::string generateResponse(const std::string& prompt, const GenerationConfig& 
             atom_entry_ids,
             prompt_token_to_slot_map,
             g_payload_defaults.vocab_size,
-            g_payload_defaults.max_cached_batch,
+            g_payload_defaults.batch_size,
             g_payload_defaults.max_cached_seq_len,
             g_payload_defaults.execution_block_num_slots);
-        auto results = g_model->generate(prompt_payload, &gen_config);
+        auto results = g_model->generate(prompt_payload, gen_config);
         auto end_gen = std::chrono::high_resolution_clock::now();
         auto gen_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_gen - start_gen).count();
 
@@ -312,25 +311,28 @@ int main(int argc, char** argv)
         }
     }
 
-    HyperParameters::StartupConfig startup_config;
+    HyperParameters::LanguageModelConfig startup_config;
     try {
-        startup_config = HyperParameters::loadStartupConfig(argc, argv);
-        HyperParameters::loadGenerationConfig(startup_config.ai_config_snapshot, g_generation_defaults);
+        startup_config = HyperParameters::loadStartupConfig(
+            argc,
+            argv,
+            HyperParameters::ModelExecutionMode::INFERENCE);
     } catch (const std::exception& e) {
         std::cerr << "[GRIM-text] ERROR: Failed to load startup config: " << e.what() << "\n";
         return 1;
     }
 
-    std::cout << "[GRIM-text] Using config: " << startup_config.paths.config_path.string() << "\n";
+    std::cout << "[GRIM-text] Using canonical ai_config.json document\n";
 
-    std::string model_path = startup_config.paths.output_model_path;
+    const auto paths_hp = HyperParameters::pathsHP(startup_config);
+    std::string model_path = paths_hp.output_model_path;
     int port = 11435;
 
     std::cout << "[GRIM-text] Config paths loaded successfully\n";
-    std::cout << "[GRIM-text] Using vocab from config: " << startup_config.paths.vocab_path << "\n";
-    std::cout << "[GRIM-text] Using GRMT from config: " << startup_config.paths.data_path << "\n";
-    if (!startup_config.paths.output_model_path.empty()) {
-        model_path = startup_config.paths.output_model_path;
+    std::cout << "[GRIM-text] Using vocab from config: " << paths_hp.vocab_path << "\n";
+    std::cout << "[GRIM-text] Using GRMT from config: " << paths_hp.data_path << "\n";
+    if (!paths_hp.output_model_path.empty()) {
+        model_path = paths_hp.output_model_path;
         std::cout << "[GRIM-text] Using model from config: " << model_path << "\n";
     }
 
@@ -363,8 +365,9 @@ int main(int argc, char** argv)
         try {
             auto request = json::parse(req.body);
             std::string prompt = request.value("prompt", "");
-            int max_tokens = request.value("max_tokens", g_generation_defaults.max_new_tokens);
-            float temperature = request.value("temperature", g_generation_defaults.temperature);
+            const GenerationHP& defaults = requireGenerationDefaults("/api/generate");
+            int max_tokens = request.value("max_tokens", defaults.max_new_tokens);
+            float temperature = request.value("temperature", defaults.temperature);
 
             if (prompt.empty()) {
                 res.status = 400;
@@ -372,8 +375,8 @@ int main(int argc, char** argv)
                 return;
             }
 
-            // Build GenerationConfig from defaults + request overrides
-            GenerationConfig gen_config = g_generation_defaults;
+            // Build request generation view from root defaults + request overrides.
+            GenerationHP gen_config = defaults;
             gen_config.max_new_tokens = max_tokens;
             gen_config.temperature = temperature;
             
@@ -394,12 +397,10 @@ int main(int argc, char** argv)
             // Strategy override: "greedy", "top_k", "top_p", "min_p", "typical", "top_k_top_p"
             if (request.contains("strategy")) {
                 std::string strat = request["strategy"].get<std::string>();
-                if (strat == "greedy") { gen_config.strategy = SamplingStrategy::GREEDY; gen_config.do_sample = false; }
-                else if (strat == "top_k") gen_config.strategy = SamplingStrategy::TOP_K;
-                else if (strat == "top_p") gen_config.strategy = SamplingStrategy::TOP_P;
-                else if (strat == "min_p") gen_config.strategy = SamplingStrategy::MIN_P;
-                else if (strat == "typical") gen_config.strategy = SamplingStrategy::TYPICAL;
-                else if (strat == "top_k_top_p") gen_config.strategy = SamplingStrategy::TOP_K_TOP_P;
+                gen_config.strategy = HyperParameters::parseGenerationSamplingStrategy(strat);
+                if (gen_config.strategy == SamplingStrategy::GREEDY) {
+                    gen_config.do_sample = false;
+                }
             }
 
             std::string text = generateResponse(prompt, gen_config);
@@ -435,11 +436,12 @@ int main(int argc, char** argv)
                 prompt += "Assistant: ";
             }
 
-            int max_tokens = request.value("max_tokens", g_generation_defaults.max_new_tokens);
-            float temperature = request.value("temperature", g_generation_defaults.temperature);
+            const GenerationHP& defaults = requireGenerationDefaults("/api/chat");
+            int max_tokens = request.value("max_tokens", defaults.max_new_tokens);
+            float temperature = request.value("temperature", defaults.temperature);
 
-            // Build GenerationConfig from defaults + request overrides
-            GenerationConfig gen_config = g_generation_defaults;
+            // Build request generation view from root defaults + request overrides.
+            GenerationHP gen_config = defaults;
             gen_config.max_new_tokens = max_tokens;
             gen_config.temperature = temperature;
             
@@ -458,12 +460,10 @@ int main(int argc, char** argv)
             }
             if (request.contains("strategy")) {
                 std::string strat = request["strategy"].get<std::string>();
-                if (strat == "greedy") { gen_config.strategy = SamplingStrategy::GREEDY; gen_config.do_sample = false; }
-                else if (strat == "top_k") gen_config.strategy = SamplingStrategy::TOP_K;
-                else if (strat == "top_p") gen_config.strategy = SamplingStrategy::TOP_P;
-                else if (strat == "min_p") gen_config.strategy = SamplingStrategy::MIN_P;
-                else if (strat == "typical") gen_config.strategy = SamplingStrategy::TYPICAL;
-                else if (strat == "top_k_top_p") gen_config.strategy = SamplingStrategy::TOP_K_TOP_P;
+                gen_config.strategy = HyperParameters::parseGenerationSamplingStrategy(strat);
+                if (gen_config.strategy == SamplingStrategy::GREEDY) {
+                    gen_config.do_sample = false;
+                }
             }
 
             std::string text = generateResponse(prompt, gen_config);

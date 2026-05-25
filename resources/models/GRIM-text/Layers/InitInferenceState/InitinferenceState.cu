@@ -142,17 +142,18 @@ void LanguageModel::initInferenceState() {
     // Inference startup allocates maximum capacity from the authored
     // LanguageModelConfig. Prompt/decode geometry still flows through
     // BatchPayload on each request.
-    HyperParameters::validateLanguageModelCacheCapacity(
+    HyperParameters::validateRootConfigDocument(
         model_cfg, "LanguageModel::initInferenceState");
-    const size_t max_batch_size = static_cast<size_t>(model_cfg.max_cached_batch);
+    const auto workspace_hp = HyperParameters::trainingStateWorkspaceHP(model_cfg);
+    const size_t max_batch_size = static_cast<size_t>(workspace_hp.batch_size);
     const size_t max_seq_len_cache = static_cast<size_t>(model_cfg.max_cached_seq_len);
-    const size_t max_tokens = static_cast<size_t>(model_cfg.max_tokens_per_batch);
+    const size_t max_tokens = static_cast<size_t>(workspace_hp.max_tokens_per_batch);
     
     std::cout << "  ℹ Allocating activation caches: batch=" << max_batch_size
               << ", seq_len=" << max_seq_len_cache 
               << ", total_tokens=" << max_tokens << std::endl;
 
-    training_state_.allocateStepDeviceWorkspaces(model_cfg, primary_stream);
+    training_state_.allocateStepDeviceWorkspaces(workspace_hp, primary_stream);
     
     // DELETED: cached_embeddings_tensor - not used in inference (encoder output computed on-the-fly)
     // DELETED: encoder_layer_caches - intermediate tensor caching moved to AutogradIntermediates

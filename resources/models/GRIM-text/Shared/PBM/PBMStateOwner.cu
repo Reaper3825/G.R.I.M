@@ -73,7 +73,6 @@ PBMStateOwner& PBMStateOwner::operator=(PBMStateOwner&& other) noexcept {
 
 void PBMStateOwner::initialize(const PBMConstructionHP& hp, cudaStream_t stream, bool verbose) {
     requireExplicitStream(stream, "PBMStateOwner::initialize");
-    GRIM::HyperParameters::validatePBMConstructionHP(hp, "PBMStateOwner::initialize");
     if (state_.initialized) {
         throw std::runtime_error("PBMStateOwner::initialize: PBM state is already initialized - call ensure() or reset() explicitly");
     }
@@ -95,7 +94,6 @@ void PBMStateOwner::initialize(const PBMConstructionHP& hp, cudaStream_t stream,
 
 void PBMStateOwner::ensure(const PBMConstructionHP& hp, cudaStream_t stream, bool verbose) {
     requireExplicitStream(stream, "PBMStateOwner::ensure");
-    GRIM::HyperParameters::validatePBMConstructionHP(hp, "PBMStateOwner::ensure");
 
     PBMRuntimeOptions runtime{};
     runtime.stream = stream;

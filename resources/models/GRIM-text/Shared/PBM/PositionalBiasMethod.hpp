@@ -155,9 +155,24 @@ void launchRoPERotationGQA_backward(
 //  Memory Helpers
 // ═══════════════════════════════════════════════════════════════════════════
 
+inline void requirePBMConstructionShape(const PBMConstructionHP& hp, const char* caller) {
+    if (hp.num_heads <= 0 || hp.num_kv_heads <= 0 || hp.head_dim <= 0 || hp.rotary_dim <= 0) {
+        throw std::runtime_error(std::string(caller) + ": invalid PBM construction dimensions num_heads=" +
+                                 std::to_string(hp.num_heads) + " num_kv_heads=" +
+                                 std::to_string(hp.num_kv_heads) + " head_dim=" +
+                                 std::to_string(hp.head_dim) + " rotary_dim=" +
+                                 std::to_string(hp.rotary_dim));
+    }
+    if ((hp.rotary_dim & 1) != 0 || hp.rotary_dim > hp.head_dim) {
+        throw std::runtime_error(std::string(caller) + ": invalid PBM rotary_dim=" +
+                                 std::to_string(hp.rotary_dim) + " for head_dim=" +
+                                 std::to_string(hp.head_dim));
+    }
+}
+
 // Returns GPU bytes required for PBM buffers
 inline size_t getPBMDeviceBytes(const PBMConstructionHP& hp) {
-    GRIM::HyperParameters::validatePBMConstructionHP(hp, "PBM::getPBMDeviceBytes");
+    requirePBMConstructionShape(hp, "PBM::getPBMDeviceBytes");
     const size_t alibi_bytes = static_cast<size_t>(hp.num_heads) * sizeof(float);
     const size_t rope_bytes = static_cast<size_t>(hp.rotary_dim / 2) * sizeof(float);
     return alibi_bytes + rope_bytes;

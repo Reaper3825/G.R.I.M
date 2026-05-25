@@ -60,11 +60,11 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
     const size_t total_tokens = static_cast<size_t>(payload.total_tokens);
 
     if (payload.isTraining()) {
-        if (payload.batch_size != cfg.max_cached_batch) {
+        if (payload.batch_size != cfg.batch_size) {
             throw std::runtime_error(
                 "uploadBatchToDevice: training payload.batch_size=" +
                 std::to_string(payload.batch_size) +
-                " != model max_cached_batch=" + std::to_string(cfg.max_cached_batch));
+            " != model batch_size=" + std::to_string(cfg.batch_size));
         }
         if (payload.max_seq_len != cfg.max_cached_seq_len) {
             throw std::runtime_error(
@@ -79,11 +79,11 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
                 " != model max_tokens_per_batch=" + std::to_string(cfg.max_tokens_per_batch));
         }
     } else {
-        if (payload.batch_size > cfg.max_cached_batch) {
+        if (payload.batch_size > cfg.batch_size) {
             throw std::runtime_error(
                 "uploadBatchToDevice: payload.batch_size=" +
                 std::to_string(payload.batch_size) +
-                " exceeds model max_cached_batch=" + std::to_string(cfg.max_cached_batch));
+            " exceeds model batch_size=" + std::to_string(cfg.batch_size));
         }
         if (payload.max_seq_len > cfg.max_cached_seq_len) {
             throw std::runtime_error(

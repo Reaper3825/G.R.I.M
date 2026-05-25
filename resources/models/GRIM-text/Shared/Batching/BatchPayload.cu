@@ -39,7 +39,7 @@ void requirePositiveVocab(int vocab_size, const char* caller)
 BatchPayload makeInferenceBasePayload(
     int seq_len,
     int vocab_size,
-    size_t max_cached_batch,
+    size_t batch_capacity,
     size_t max_cached_seq_len,
     BatchPayloadMode mode,
     bool row_execution_active,
@@ -53,8 +53,8 @@ BatchPayload makeInferenceBasePayload(
                                  " (must be > 0)");
     }
     requirePositiveVocab(vocab_size, caller);
-    if (max_cached_batch == 0) {
-        throw std::runtime_error(std::string(caller) + ": max_cached_batch=0");
+    if (batch_capacity == 0) {
+        throw std::runtime_error(std::string(caller) + ": batch_capacity=0");
     }
     if (max_cached_seq_len == 0) {
         throw std::runtime_error(std::string(caller) + ": max_cached_seq_len=0");
@@ -64,7 +64,7 @@ BatchPayload makeInferenceBasePayload(
             std::string(caller) + ": seq_len=" + std::to_string(seq_len) +
             " exceeds max_cached_seq_len=" + std::to_string(max_cached_seq_len));
     }
-    if (max_cached_batch < 1) {
+    if (batch_capacity < 1) {
         throw std::runtime_error(std::string(caller) + ": inference requires cache batch capacity >= 1");
     }
 
@@ -99,7 +99,7 @@ BatchPayload buildBatchPayload(
     const std::vector<GRIM::TokenizerArtifacts::GrmtSequence*>& views,
     int vocab_size,
     const GRIM::Tokenizer::TokenLayout& token_layout,
-    size_t max_cached_batch,
+    size_t batch_size,
     size_t max_cached_seq_len,
     int execution_num_slots,
     int execution_num_ops,
@@ -119,10 +119,10 @@ BatchPayload buildBatchPayload(
         throw std::runtime_error(
             "buildBatchPayload: batch has 0 sequences — scheduler produced empty batch");
     }
-    if (static_cast<size_t>(payload.batch_size) != max_cached_batch) {
+    if (static_cast<size_t>(payload.batch_size) != batch_size) {
         throw std::runtime_error(
             "buildBatchPayload: assignment batch_size=" + std::to_string(payload.batch_size) +
-            " != fixed max_cached_batch=" + std::to_string(max_cached_batch) +
+            " != fixed batch_size=" + std::to_string(batch_size) +
             " — training uses fixed batch rows; scheduler must emit full batches");
     }
 
@@ -324,22 +324,22 @@ BatchPayload buildBatchPayload(
     // PHASE 3: Cache fit check
     // ═════════════════════════════════════════════════════════════════════════
     payload.fits_in_cache =
-        (static_cast<size_t>(payload.batch_size) <= max_cached_batch) &&
+        (static_cast<size_t>(payload.batch_size) <= batch_size) &&
         (static_cast<size_t>(payload.max_seq_len) <= max_cached_seq_len);
 
     if (!payload.fits_in_cache) {
-        const char* reason = (static_cast<size_t>(payload.batch_size) > max_cached_batch)
+        const char* reason = (static_cast<size_t>(payload.batch_size) > batch_size)
             ? "BATCH_SIZE" : "SEQ_LEN";
         fprintf(stderr,
             "[buildBatchPayload] FATAL: batch does not fit cache (%s): "
             "batch=%d [limit=%zu], max_seq_len=%d [limit=%zu]\n",
             reason,
-            payload.batch_size, max_cached_batch,
+            payload.batch_size, batch_size,
             payload.max_seq_len, max_cached_seq_len);
         throw std::runtime_error(
             "buildBatchPayload: batch does not fit GPU cache (" +
             std::string(reason) + "): batch=" + std::to_string(payload.batch_size) +
-            " limit=" + std::to_string(max_cached_batch) +
+            " limit=" + std::to_string(batch_size) +
             ", seq_len=" + std::to_string(payload.max_seq_len) +
             " limit=" + std::to_string(max_cached_seq_len));
     }
@@ -604,7 +604,7 @@ BatchPayload buildInferenceBatchPayload(
     const std::vector<uint32_t>& atom_entry_ids,
     const std::vector<int32_t>& token_to_slot_map,
     int vocab_size,
-    size_t max_cached_batch,
+    size_t batch_capacity,
     size_t max_cached_seq_len,
     int execution_num_slots)
 {
@@ -675,7 +675,7 @@ BatchPayload buildInferenceBatchPayload(
     }
 
     BatchPayload payload = makeInferenceBasePayload(
-        seq_len, vocab_size, max_cached_batch, max_cached_seq_len,
+        seq_len, vocab_size, batch_capacity, max_cached_seq_len,
         BatchPayloadMode::InferencePrefill, row_execution_active, caller);
 
     payload.input_ids = token_ids;

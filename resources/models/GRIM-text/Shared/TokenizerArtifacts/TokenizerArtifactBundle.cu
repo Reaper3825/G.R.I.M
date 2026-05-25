@@ -20,7 +20,7 @@ void ensurePathNotEmpty(const fs::path& path, const char* field) {
     }
 }
 
-void validateTokenizerArtifactHP(const GRIM::HyperParameters::TokenizerHP& hp) {
+void requireTokenizerArtifactPaths(const GRIM::HyperParameters::TokenizerHP& hp) {
     ensurePathNotEmpty(hp.data_path, "data_path");
     ensurePathNotEmpty(hp.vocab_path, "vocab_path");
 }
@@ -55,14 +55,14 @@ void validateVocabAgreement(const GRIM::GRMT::Header& header,
 } // namespace
 
 bool tokenizerArtifactBundleExists(const GRIM::HyperParameters::TokenizerHP& hp) {
-    validateTokenizerArtifactHP(hp);
+    requireTokenizerArtifactPaths(hp);
     return fs::exists(hp.data_path) && fs::exists(hp.vocab_path);
 }
 
 TokenizerBundleManifest loadTokenizerArtifactBundle(
     const GRIM::HyperParameters::TokenizerHP& hp,
     GRIM::Tokenizer::UniByte& tokenizer) {
-    validateTokenizerArtifactHP(hp);
+    requireTokenizerArtifactPaths(hp);
     const fs::path grmt_path(hp.data_path);
     const fs::path vocab_path(hp.vocab_path);
     if (!fs::exists(vocab_path)) {
@@ -88,7 +88,7 @@ TokenizerBundleSaveReport saveTokenizerArtifactBundle(
     const GRIM::HyperParameters::TokenizerHP& hp,
     const GRIM::Tokenizer::UniByte& tokenizer,
     const std::vector<GrmtSequence>& sequences) {
-    validateTokenizerArtifactHP(hp);
+    requireTokenizerArtifactPaths(hp);
     if (!std::isfinite(hp.vocab_score_multiplier)) {
         throw std::runtime_error("[TokenizerArtifactBundle] vocab_score_multiplier is not finite");
     }

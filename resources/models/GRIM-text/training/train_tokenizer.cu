@@ -103,7 +103,10 @@ int main(int argc, char** argv) {
     }
 
     try {
-        const auto startup_config = GRIM::HyperParameters::loadStartupConfig(argc, argv);
+        const auto startup_config = GRIM::HyperParameters::loadStartupConfig(
+            argc,
+            argv,
+            GRIM::HyperParameters::ModelExecutionMode::TRAINING);
         const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(startup_config);
 
         if (tokenizer_hp.data_path.empty() || tokenizer_hp.vocab_path.empty()) {

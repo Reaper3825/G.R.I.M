@@ -21,15 +21,17 @@ void require(bool ok, const std::string& message) {
 
 void validateStartupOrThrow(const StartupValidationInputs& inputs) {
     const TrainingContext& ctx = inputs.ctx;
-        const auto fixed_shape = GRIM::HyperParameters::trainingFixedShapeHP(ctx.config);
+    const auto fixed_shape = GRIM::HyperParameters::trainingFixedShapeHP(ctx.config);
+    const auto schedule_hp =
+                GRIM::HyperParameters::trainingScheduleHP(ctx.config);
 
     require(ctx.logging.logger != nullptr, "logging logger is null");
     require(ctx.logging.status_writer != nullptr, "status writer is null");
     require(ctx.memory_snapshot.device >= 0, "memory snapshot not captured");
     require(ctx.memory_snapshot.total_bytes > 0, "memory snapshot total_bytes is zero");
 
-    require(fixed_shape.batch_size == ctx.config.hyperparameters.batch_size,
-            "trainingFixedShapeHP.batch_size does not match post-policy hyperparameters.batch_size");
+    require(fixed_shape.batch_size == ctx.config.batch_size,
+            "trainingFixedShapeHP.batch_size does not match config.batch_size");
     require(fixed_shape.max_seq_len == ctx.config.max_seq_len,
             "trainingFixedShapeHP.max_seq_len does not match config.max_seq_len");
 
@@ -41,8 +43,6 @@ void validateStartupOrThrow(const StartupValidationInputs& inputs) {
             "DataInfo val sequence count does not match SequenceData");
 
     require(ctx.model != nullptr, "model is null");
-    require(ctx.model_allocation.model_max_cached_batch == fixed_shape.batch_size,
-            "model allocation batch mirror does not match trainingFixedShapeHP");
     require(ctx.model_allocation.model_max_tokens_per_batch == fixed_shape.max_tokens_per_batch,
             "model allocation token mirror does not match trainingFixedShapeHP");
 
@@ -56,8 +56,8 @@ void validateStartupOrThrow(const StartupValidationInputs& inputs) {
     require(!ctx.train_payloads.empty(), "train_payloads is empty");
     require(ctx.fixed_train_schedule.batches.size() == ctx.train_payloads.size(),
             "fixed_train_schedule batch count does not match train_payloads");
-    if (ctx.config.hyperparameters.single_batch_overfit_enabled) {
-        require(ctx.epoch_plan.total_batches == ctx.config.hyperparameters.single_batch_overfit_max_steps,
+    if (schedule_hp.single_batch_overfit_enabled) {
+        require(ctx.epoch_plan.total_batches == schedule_hp.single_batch_overfit_max_steps,
                 "EpochPlan total_batches does not match single_batch_overfit_max_steps");
     } else {
         require(ctx.epoch_plan.total_batches == static_cast<int>(ctx.train_payloads.size()),
@@ -68,7 +68,7 @@ void validateStartupOrThrow(const StartupValidationInputs& inputs) {
     require(ctx.epoch_plan.estimated_total_steps > 0, "estimated_total_steps <= 0");
     require(ctx.lr_schedule.has_value(), "lr_schedule is not initialized");
 
-    require(static_cast<int>(ctx.epoch_batch_order.size()) == ctx.config.hyperparameters.epochs,
+    require(static_cast<int>(ctx.epoch_batch_order.size()) == schedule_hp.epochs,
             "epoch_batch_order size does not match epochs");
     for (std::size_t epoch = 0; epoch < ctx.epoch_batch_order.size(); ++epoch) {
         const auto& order = ctx.epoch_batch_order[epoch];
