@@ -387,11 +387,11 @@ static std::vector<ValidationResult> runValidationChecks(
             }
             if (content_ids.empty()) continue;
 
-            std::string decoded = tokenizer.decode(content_ids);
+            std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(content_ids));
             if (decoded.empty()) continue;
 
             auto re_encoded = tokenizer.encode(decoded);
-            std::string re_decoded = tokenizer.decode(re_encoded);
+            std::string re_decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(re_encoded));
 
             // Exact comparison — no lowercasing, no whitespace normalization.
             // The tokenizer must be lossless on its own non-atom output.
@@ -426,7 +426,7 @@ static std::vector<ValidationResult> runValidationChecks(
         for (const auto& seq : corpus.sampled_sequences) {
             if (seq.empty()) continue;
             tested++;
-            std::string decoded = tokenizer.decode(seq);
+            std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(seq));
             if (!decoded.empty()) non_empty++;
         }
         r.passed = (tested > 0 && non_empty == tested);
@@ -519,7 +519,7 @@ static std::vector<ValidationResult> runValidationChecks(
                 if (text.size() < 10) continue;  // Skip trivially short entries
 
                 auto ids = tokenizer.encode(text);
-                std::string decoded = tokenizer.decode(ids);
+                std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(ids));
 
                 tested++;
                 if (decoded == text) {
@@ -583,7 +583,7 @@ static std::vector<ValidationResult> runValidationChecks(
                 tested++;
 
                 auto ids = tokenizer.encode(text);
-                std::string decoded = tokenizer.decode(ids);
+                std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(ids));
 
                 // Check case preservation
                 bool case_ok = true;
@@ -644,7 +644,7 @@ static std::vector<ValidationResult> runValidationChecks(
         ValidationResult r;
         r.name = "Invalid token ID decode safety";
         std::vector<int> bad_ids = {-1, 999999, tokenizer.vocabSize() + 100};
-        std::string decoded = tokenizer.decode(bad_ids);
+        std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(bad_ids));
         r.passed = true;  // If we got here, it didn't crash
         r.details = "decode([-1, 999999, OOB]) handled gracefully";
         results.push_back(r);
@@ -810,7 +810,7 @@ int main(int argc, char** argv) {
                 tok["id"] = id;
                 // Decode single token to get its surface form
                 std::vector<int> single = {id};
-                tok["piece"] = tokenizer.decode(single);
+                tok["piece"] = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(single));
                 // Classify token type
                 if (id < 4) {
                     tok["type"] = "special";
@@ -825,7 +825,7 @@ int main(int argc, char** argv) {
             }
 
             // Decode full sequence for round-trip check
-            std::string decoded = tokenizer.decode(ids);
+            std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(ids));
 
             json result;
             result["status"] = "success";

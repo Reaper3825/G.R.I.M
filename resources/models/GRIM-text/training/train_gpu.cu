@@ -20,24 +20,36 @@
 //  Version: 3.0.0 - Three-Phase Architecture
 //======================================================//
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#endif
+
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "Phases/Phase1_Startup.hpp"
 #include "Phases/Phase2_TrainingLoop.hpp"
+#include "Phases/Phase2_InferenceLoop.hpp"
 #include "Phases/Phase3_Cleanup.hpp"
 #include "../Shared/LogRecorder/LogRecorder.hpp"
 
+#include <chrono>
 #include <sstream>
+#include <stdexcept>
+#include <string>
 #include <utility>
 
-#ifdef _WIN32
-#include <windows.h>
-#endif
+#include <httplib.h>
+#include <nlohmann/json.hpp>
 
 using GRIM::Logging::ModuleId;
 using GRIM::Logging::EmitModuleInfo;
 using GRIM::Logging::EmitModuleError;
 
 namespace {
+
+using json = nlohmann::json;
 
 void printBanner() {
     EmitModuleInfo(ModuleId::TrainingOrchestrator, 
@@ -68,6 +80,197 @@ void printPhaseHeader(int phase, const char* description) {
     EmitModuleInfo(ModuleId::TrainingOrchestrator, line, 0);
     EmitModuleInfo(ModuleId::TrainingOrchestrator,
         "└─────────────────────────────────────────────────────────┘", 0);
+}
+
+GRIM::HyperParameters::ModelExecutionMode requestedExecutionMode(int argc, char** argv) {
+    bool requested_training = false;
+    bool requested_inference = false;
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--training") {
+            requested_training = true;
+        } else if (arg == "--inference") {
+            requested_inference = true;
+        }
+    }
+    if (requested_training && requested_inference) {
+        throw std::runtime_error("train_gpu: --training and --inference are mutually exclusive");
+    }
+    return requested_inference
+        ? GRIM::HyperParameters::ModelExecutionMode::INFERENCE
+        : GRIM::HyperParameters::ModelExecutionMode::TRAINING;
+}
+
+int requestedInferenceWorkerPort(int argc, char** argv) {
+    int port = 11436;
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--inference-worker-port") {
+            if (i + 1 >= argc) {
+                throw std::runtime_error("train_gpu: --inference-worker-port requires a value");
+            }
+            port = std::stoi(argv[++i]);
+        }
+    }
+    if (port <= 0 || port > 65535) {
+        throw std::runtime_error("train_gpu: --inference-worker-port must be in 1..65535");
+    }
+    return port;
+}
+
+const std::string& requireJsonString(const json& request, const char* field_name) {
+    if (!request.contains(field_name)) {
+        throw std::runtime_error(std::string("inference worker request missing required field: ") + field_name);
+    }
+    const auto& value = request.at(field_name);
+    if (!value.is_string()) {
+        throw std::runtime_error(std::string("inference worker request field is not a string: ") + field_name);
+    }
+    return value.get_ref<const std::string&>();
+}
+
+GRIM::HyperParameters::GenerationHP generationHPFromRequest(
+    const GRIM::HyperParameters::LanguageModelConfig& config,
+    const json& request)
+{
+    GRIM::HyperParameters::GenerationHP gen_config =
+        GRIM::HyperParameters::generationHP(config);
+
+    if (request.contains("max_tokens")) gen_config.max_new_tokens = request.at("max_tokens").get<int>();
+    if (request.contains("temperature")) gen_config.temperature = request.at("temperature").get<float>();
+    if (request.contains("top_p")) gen_config.top_p = request.at("top_p").get<float>();
+    if (request.contains("top_k")) gen_config.top_k = request.at("top_k").get<int>();
+    if (request.contains("min_p")) gen_config.min_p = request.at("min_p").get<float>();
+    if (request.contains("typical_p")) gen_config.typical_p = request.at("typical_p").get<float>();
+    if (request.contains("repetition_penalty")) gen_config.repetition_penalty = request.at("repetition_penalty").get<float>();
+    if (request.contains("frequency_penalty")) gen_config.frequency_penalty = request.at("frequency_penalty").get<float>();
+    if (request.contains("presence_penalty")) gen_config.presence_penalty = request.at("presence_penalty").get<float>();
+    if (request.contains("no_repeat_ngram_size")) gen_config.no_repeat_ngram_size = request.at("no_repeat_ngram_size").get<int>();
+    if (request.contains("seed")) gen_config.seed = request.at("seed").get<unsigned int>();
+    if (request.contains("enable_scratchblock_reasoning")) {
+        gen_config.enable_scratchblock_reasoning = request.at("enable_scratchblock_reasoning").get<bool>();
+    }
+    if (request.contains("strategy")) {
+        const std::string strategy_name = request.at("strategy").get<std::string>();
+        gen_config.strategy = GRIM::HyperParameters::parseGenerationSamplingStrategy(strategy_name);
+        if (gen_config.strategy == GRIM::HyperParameters::SamplingStrategy::GREEDY) {
+            gen_config.do_sample = false;
+        }
+    }
+
+    return gen_config;
+}
+
+json inferenceStatsJson(const GRIMText::Training::Phase2TextInferenceResult& result) {
+    return json{
+        {"prompt_token_count", result.prompt_token_count},
+        {"sequence_token_count", result.sequence_token_count},
+        {"encode_ms", result.encode_ms},
+        {"generation_ms", result.generation_ms},
+        {"decode_ms", result.decode_ms}
+    };
+}
+
+std::string chatPromptFromRequest(const json& request) {
+    if (!request.contains("messages")) {
+        throw std::runtime_error("inference worker chat request missing required field: messages");
+    }
+    const auto& messages = request.at("messages");
+    if (!messages.is_array()) {
+        throw std::runtime_error("inference worker chat request field messages is not an array");
+    }
+
+    std::string prompt;
+    for (const auto& msg : messages) {
+        const std::string role = requireJsonString(msg, "role");
+        const std::string content = requireJsonString(msg, "content");
+        if (role == "system") {
+            prompt += "System: " + content + "\n";
+        } else if (role == "user") {
+            prompt += "User: " + content + "\n";
+        } else if (role == "assistant") {
+            prompt += "Assistant: " + content + "\n";
+        } else {
+            throw std::runtime_error("inference worker chat request contains unsupported role: " + role);
+        }
+    }
+    prompt += "Assistant: ";
+    return prompt;
+}
+
+int runInferenceWorker(GRIMText::Training::TrainingContext& ctx, int port) {
+    httplib::Server svr;
+
+    svr.Get("/internal/status", [&](const httplib::Request&, httplib::Response& res) {
+        json response = {
+            {"status", "ready"},
+            {"model", "grim-text"},
+            {"execution_mode", "inference"}
+        };
+        res.set_content(response.dump(), "application/json");
+    });
+
+    svr.Post("/internal/generate", [&](const httplib::Request& req, httplib::Response& res) {
+        try {
+            const json request = json::parse(req.body);
+            const std::string prompt = requireJsonString(request, "prompt");
+            const auto gen_config = generationHPFromRequest(ctx.config, request);
+            const auto generated = GRIMText::Training::executePhase2TextInference(
+                ctx,
+                prompt,
+                gen_config);
+
+            json response = {
+                {"model", "grim-text"},
+                {"created_at", "2025-11-05T00:00:00Z"},
+                {"response", generated.text},
+                {"done", true},
+                {"stats", inferenceStatsJson(generated)}
+            };
+            res.set_content(response.dump(), "application/json");
+        } catch (const std::exception& e) {
+            res.status = 500;
+            EmitModuleError(ModuleId::TrainingOrchestrator,
+                std::string("[/internal/generate] ") + e.what(), ctx.global_step);
+            res.set_content(json({{"error", std::string(e.what())}}).dump(), "application/json");
+        }
+    });
+
+    svr.Post("/internal/chat", [&](const httplib::Request& req, httplib::Response& res) {
+        try {
+            const json request = json::parse(req.body);
+            const std::string prompt = chatPromptFromRequest(request);
+            const auto gen_config = generationHPFromRequest(ctx.config, request);
+            const auto generated = GRIMText::Training::executePhase2TextInference(
+                ctx,
+                prompt,
+                gen_config);
+
+            json response = {
+                {"model", "grim-text"},
+                {"created_at", "2025-11-05T00:00:00Z"},
+                {"message", {{"role", "assistant"}, {"content", generated.text}}},
+                {"done", true},
+                {"stats", inferenceStatsJson(generated)}
+            };
+            res.set_content(response.dump(), "application/json");
+        } catch (const std::exception& e) {
+            res.status = 500;
+            EmitModuleError(ModuleId::TrainingOrchestrator,
+                std::string("[/internal/chat] ") + e.what(), ctx.global_step);
+            res.set_content(json({{"error", std::string(e.what())}}).dump(), "application/json");
+        }
+    });
+
+    std::ostringstream ready;
+    ready << "[Phase 2] Inference worker listening on http://127.0.0.1:" << port;
+    EmitModuleInfo(ModuleId::TrainingOrchestrator, ready.str(), ctx.global_step);
+
+    if (!svr.listen("127.0.0.1", port)) {
+        throw std::runtime_error("train_gpu: inference worker failed to listen on requested port " +
+                                 std::to_string(port));
+    }
+    return 0;
 }
 
 } // anonymous namespace
@@ -158,10 +361,11 @@ int main(int argc, char** argv) {
 
         EmitModuleInfo(ModuleId::TrainingOrchestrator,
             "[Phase 1] Loading startup config...", 0);
+        const auto execution_mode = requestedExecutionMode(argc, argv);
         auto startup_config = GRIM::HyperParameters::loadStartupConfig(
             argc,
             argv,
-            GRIM::HyperParameters::ModelExecutionMode::TRAINING);
+            execution_mode);
         EmitModuleInfo(ModuleId::TrainingOrchestrator,
             "[Phase 1] ✓ Startup config ready from canonical ai_config.json", 0);
         
@@ -177,6 +381,14 @@ int main(int argc, char** argv) {
             EmitModuleError(ModuleId::TrainingOrchestrator, 
                 "Phase 1 failed: model or tokenizer not initialized", 0);
             return 1;
+        }
+
+        if (phase1.outcome == GRIMText::Training::Phase1Outcome::ready_for_inference) {
+            printPhaseHeader(2, "Inference Loop");
+            const int worker_port = requestedInferenceWorkerPort(argc, argv);
+            EmitModuleInfo(ModuleId::TrainingOrchestrator,
+                "[Phase 2] Inference context is ready; train_gpu owns request/session generation over Phase1-authored state", 0);
+            return runInferenceWorker(ctx, worker_port);
         }
         
         {

@@ -405,14 +405,12 @@ FlatBufferEmbeddingSerializer::load("embeddings.grem", embedder);
 
 ### GPU-Accelerated Inference
 
-```cpp
-#include "grim_language_model.hpp"
-
-GRIM::LanguageModel model("config.json");
-model.initGPU(/*weight_init_seed=*/1001);  // Enable CUDA acceleration
-
-auto output = model.generate("Your prompt here", 100);
-```
+Autoregressive generation is owned by Phase 2 inference, not `LanguageModel`.
+Use the GRIM-text server or run `train_gpu --inference`, which calls
+`executePhase1(...INFERENCE)` and routes text prompts through
+`executePhase2TextInference(ctx, prompt, generation_hp)`. Caller-built
+inference `BatchPayload` generation is an internal Phase 2 implementation
+detail, not a public/server boundary.
 
 ## ⚡ Performance Highlights
 
@@ -663,13 +661,9 @@ auto output = model.generate("Your prompt here", 100);
 ### Direct Use
 
 **Text Generation:**
-```cpp
-GRIM::LanguageModel model("config.json");
-model.initGPU(/*weight_init_seed=*/1001);  // Enable GPU acceleration
-
-std::string prompt = "The future of AI is";
-auto generated = model.generate(prompt, 100);  // Generate 100 tokens
-```
+Use `grim_text_server` for HTTP generation, or run `train_gpu --inference`
+and route text prompts through `executePhase2TextInference(...)` after Phase1
+startup. Explicit inference payload generation is internal to Phase 2.
 
 **HTTP API:**
 ```bash
@@ -821,18 +815,8 @@ cd Release
 #include <iostream>
 
 int main() {
-    // Load model
-    GRIM::LanguageModel model("config.json");
-    
-    // Enable GPU acceleration
-    model.initGPU(/*weight_init_seed=*/1001);
-    std::cout << "GPU initialized" << std::endl;
-    
-    // Generate text
-    std::string prompt = "Once upon a time";
-    auto output = model.generate(prompt, 50, 0.8, 0.95);
-    
-    std::cout << "Generated: " << output << std::endl;
+  std::cout << "Use grim_text_server, or train_gpu --inference with "
+      << "executePhase2TextInference(ctx, prompt, generation_hp)." << std::endl;
     
     return 0;
 }

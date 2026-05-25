@@ -1,4 +1,6 @@
 #pragma once
+#ifndef GRIMTEXT_TRAINING_PHASE1_STARTUP_HPP
+#define GRIMTEXT_TRAINING_PHASE1_STARTUP_HPP
 //======================================================//
 //  Phase1_Startup.hpp
 //  Startup config handoff, model initialization, data loading
@@ -273,6 +275,9 @@ struct TrainingContext {
     float best_val_loss = std::numeric_limits<float>::infinity();
     /** Number of epochs actually completed (set by Phase 2; used by Phase 3 for summary). */
     int epochs_completed = 0;
+
+    /** Optional explicit checkpoint path requested by the orchestrator. */
+    std::string requested_checkpoint_path;
     
     /** Path to the checkpoint that was loaded at startup (empty if fresh start). */
     std::string loaded_checkpoint_path;
@@ -306,6 +311,7 @@ struct TrainingContext {
 enum class Phase1Outcome : int {
     ready_for_training = 0,
     tokenizer_only_complete = 1,
+    ready_for_inference = 2,
 };
 
 struct Phase1Result {
@@ -328,3 +334,5 @@ struct Phase1Result {
 Phase1Result executePhase1(GRIM::HyperParameters::LanguageModelConfig config);
 
 } // namespace GRIMText::Training
+
+#endif // GRIMTEXT_TRAINING_PHASE1_STARTUP_HPP

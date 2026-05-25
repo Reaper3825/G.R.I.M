@@ -48,7 +48,7 @@ Special-token ownership is deliberately narrow:
 ## Public encode/decode surface
 - `UniByte::encode(text)` is the single high-level ID-only encode wrapper.
 - `UniByte::tokenizeWithMetadata(text)` is the metadata tokenization path for callers that need atom side channels; it is intentionally not another `encode*` overload.
-- `UniByte::decode(DecodeRequest)` is the single high-level decode wrapper. Plain `decode(ids)` calls still work through `DecodeRequest`; atom-aware decode uses `decode(UniByteResult)` so repeated same-type atoms resolve through `atom_entry_ids` and `AtomTable`.
+- `UniByte::decode(DecodeRequest)` is the single high-level decode primitive. `DecodeRequest` may carry ID-only text, tokenizer-produced `UniByteResult` atom side channels, or Phase2-generated numeric side channels; do not add local append/decode wrappers in inference, diagnostics, or server code.
 - `ByteEncoder` and `UnigramLM` each expose exactly one `encode` and one `decode` primitive. Do not add pointer/vector/GPU overload chains back into these classes.
 - `UnigramLM::decode()` is a primitive for byte fallback + learned unigram tokens only. It must reject any token outside that primitive range; layout-aware decode belongs to `UniByte::decode(DecodeRequest)`.
 - Token type classification belongs to `TokenLayout`. Do not add `UniByte::isByteToken`, `UniByte::isAtomToken`, `UniByte::isUnigramToken`, or `UniByte::tokenToString` wrappers; callers that need diagnostics should use `tokenLayout()` and read pieces directly by token ID.

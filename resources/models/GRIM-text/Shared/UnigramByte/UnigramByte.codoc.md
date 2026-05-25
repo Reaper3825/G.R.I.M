@@ -22,7 +22,7 @@ The public encode/decode surface is intentionally narrow:
 
 - `UniByte::encode(text)` — one high-level ID-only wrapper.
 - `UniByte::tokenizeWithMetadata(text)` — metadata tokenization for atom side channels; not another `encode*` overload.
-- `UniByte::decode(DecodeRequest)` — one high-level decode wrapper. `decode(ids)` and `decode(result)` both flow through `DecodeRequest`.
+- `UniByte::decode(DecodeRequest)` — one high-level decode primitive. ID-only, tokenizer-result atom side-channel, and Phase2 generated numeric side-channel decode all flow through `DecodeRequest`; do not add local append/decode wrappers.
 - `ByteEncoder` and `UnigramLM` each expose one `encode` and one `decode`; byte/unigram/atom branching is handled by small primitives inside the orchestrator, not by public overload chains.
 - `UnigramLM::decode()` decodes only byte fallback and learned unigram IDs. It must fail loudly on any token outside that primitive range; only `UniByte::decode(DecodeRequest)` is layout-aware.
 - `UniByte::vocabSize()` is the only public tokenizer vocab-size API. It returns the full token ID space that `DataLoader.cu` writes into `.grmt` headers. Learned subword count is `UnigramLM::pieceCount()` and is never a model/GRMT vocab size.

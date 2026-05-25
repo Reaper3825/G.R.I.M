@@ -94,44 +94,6 @@ namespace {
         }
     }
 
-    void logRoPEAlibiConfigOnce(const GRIM::PBM::PBMSpec& pbm,
-                                const GRIM::HyperParameters::EncoderSelfAttentionHP& hp) {
-        static bool logged_rope_alibi_config = false;
-        if (logged_rope_alibi_config) {
-            return;
-        }
-
-        const int to_copy = std::min(hp.num_heads, 12);
-        float slopes_host[12] = {0};
-        const cudaError_t copy_err = cudaMemcpy(slopes_host, pbm.alibi_slopes,
-                                                to_copy * sizeof(float), cudaMemcpyDeviceToHost);
-        if (copy_err != cudaSuccess) {
-            throw std::runtime_error(std::string("encoderSelfAttentionForward: failed to copy ALiBi slopes for config log: ") +
-                                     cudaGetErrorString(copy_err));
-        }
-
-        std::fprintf(stderr, "[ROPE_ALIBI_INTERACTION] Hybrid positional encoding active:\n");
-        std::fprintf(stderr, "  RoPE: rotary_dim=%d (rotates Q/K by position-dependent angle, preserves norm)\n",
-                     pbm.rotary_dim);
-        if (to_copy >= 1) {
-            if (to_copy >= 12) {
-                std::fprintf(stderr, "  ALiBi: slopes=[%.6f, %.6f, ... %.6f] (adds distance penalty to attention scores)\n",
-                             slopes_host[0], slopes_host[5], slopes_host[11]);
-            } else if (to_copy >= 6) {
-                std::fprintf(stderr, "  ALiBi: slopes=[%.6f, %.6f, ...] (adds distance penalty to attention scores)\n",
-                             slopes_host[0], slopes_host[5]);
-            } else if (to_copy >= 2) {
-                std::fprintf(stderr, "  ALiBi: slopes=[%.6f, %.6f, ...] (adds distance penalty to attention scores)\n",
-                             slopes_host[0], slopes_host[1]);
-            } else {
-                std::fprintf(stderr, "  ALiBi: slopes=[%.6f] (adds distance penalty to attention scores)\n",
-                             slopes_host[0]);
-            }
-        }
-        std::fprintf(stderr, "  Combined: RoPE encodes relative position directionally, ALiBi provides distance bias\n");
-        logged_rope_alibi_config = true;
-    }
-
     std::uint64_t attentionDropoutSeed(const GRIM::Attention::EncoderSelfAttentionForwardRequest& request) {
         const float attention_dropout_p = request.dropout_enabled ? request.hp.attention_dropout : 0.0f;
         if (attention_dropout_p <= 0.0f) {
@@ -233,8 +195,6 @@ void encoderSelfAttentionForward(const Tensor& norm_input,
         autograd::checkQKVTensorFinite("AutogradSDPA:K_rope", intermediates.K_bhsd, request.stream);
         autograd::checkQKVTensorFinite("AutogradSDPA:V_rope", intermediates.V_bhsd, request.stream);
     }
-
-    logRoPEAlibiConfigOnce(request.pbm, request.hp);
 
     const float attention_dropout_p = request.dropout_enabled ? request.hp.attention_dropout : 0.0f;
     const std::uint64_t dropout_seed = attentionDropoutSeed(request);

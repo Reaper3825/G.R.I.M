@@ -71,7 +71,7 @@ float addSelectorSupervisionLoss(
     }
     const auto& payload = *ctx.payload;
     if (intermediates.exec_memories.empty()) {
-        throw std::runtime_error("addSelectorSupervisionLoss: selector supervision configured but no ExecutionMemory snapshots exist; executeAutogradForward must run ExecutionBlock first");
+        throw std::runtime_error("addSelectorSupervisionLoss: selector supervision configured but no ExecutionMemory snapshots exist; materializeTrainingGraphActivations must run ExecutionBlock first");
     }
     if (!intermediates.loss_tensor.data) {
         throw std::runtime_error("addSelectorSupervisionLoss: loss_tensor is NULL before selector CE accumulation");

@@ -9,7 +9,8 @@ The phase-ownership doctrine behind this plan is documented in [GraphStateOwners
 The following ownership fixes are already implemented and should be treated as current architecture, not future work:
 
 - `Shared/Forward/ModelForwardRuntimePayload.hpp` now owns the mutable forward runtime payload boundary (`AutogradIntermediates`, trace vectors, read-gate workspace). `Shared/Forward/ModelForward_GPU.hpp/.cu` consumes that payload instead of a training-state god pointer or inline sink bag.
-- Shared prefill now detaches read-only parameter views at the boundary for embedding lookup, ScratchBlock structured projection, LM head, and reasoning head.
+- `Shared/Forward/ModelForward_GPU.hpp` now takes `ModelForwardGraphPolicy` instead of a training/inference mode enum. Training/inference identity is orchestration-only; shared forward sees only graph connectivity/dropout/retention policy.
+- Shared prefill now detaches read-only parameter views at the boundary for embedding lookup, encoder/attention/FFN, ScratchBlock structured projection, LM head, and reasoning head.
 - `LMHeadLayer::centered_weights_` is deleted; the effective LM-head weight tensor is now per-call Category 1 state.
 
 The remaining items below are the outstanding follow-up queue.
@@ -37,7 +38,7 @@ This doc is the implementation plan for the next step after `InferenceBoundary.m
 
 ### Read-only prefill rule
 
-When `ModelForwardMode::InferencePrefill` is active:
+When the caller supplies a read-only `ModelForwardGraphPolicy`:
 
 - the call must not mutate parameter tensors,
 - the call must not rely on live parameter `requires_grad=true` state,
@@ -111,7 +112,7 @@ The shared `InferencePrefill` path currently runs layer math against live traina
 - ScratchBlock projection reads `atomTypeEmbeddings()` / `atomProjection()` directly even when `track_grad=false`
 - ReasoningHead forward uses live parameter tensors if it participates in shared forward
 
-This is inconsistent with the decode path, which already detaches parameter views in `training/Inference_GPU.cu`.
+This was fixed by centralizing detached read-only parameter views in `Shared/Forward/ModelForward_GPU.cu`; the old `training/Inference_GPU.cu` decode path has been deleted.
 
 ### Forward-derived tensors stored on durable layer objects
 
@@ -130,7 +131,7 @@ This violation is now fixed by `Shared/Forward/ModelForwardRuntimePayload.hpp`. 
 - `Shared/Forward/ModelForward_GPU.hpp`
   - used to carry only `TrainingState* runtime_state`, so inference-prefill had no way to express generation/session-owned runtime sinks without going through a training owner
 
-Current contract: `ModelForwardRequest` carries immutable forward inputs, and `executeModelForward(...)` receives `ModelForwardRuntimePayload` directly for the mutable runtime sinks. `ModelForwardMode::InferencePrefill` reads model state and writes only caller-authored forward outputs / explicit session runtime state. It must not rediscover mutable runtime owners by reaching through `TrainingState`.
+Current contract: `ModelForwardRequest` carries immutable forward inputs plus a caller-authored `ModelForwardGraphPolicy`, and `executeModelForward(...)` receives `ModelForwardRuntimePayload` directly for the mutable runtime sinks. A read-only graph policy reads model state and writes only caller-authored forward outputs / explicit session runtime state. It must not rediscover mutable runtime owners by reaching through `TrainingState`.
 
 ### ScratchBlock still keeps forward workspace and telemetry on the durable layer object
 
@@ -203,7 +204,7 @@ Use this section as the implementation queue. The order below is the architectur
   - remove forward-time parameter metadata writes
   - replace hidden `TrainingState` reach-through with explicit caller-owned output/scratch payloads that do not evolve durable state as a side effect of forward
 - **Exit signal:**
-  - `ModelForwardMode::InferencePrefill` can be described as “reads model parameters, writes only forward outputs and explicit session/runtime payloads”
+  - `ModelForwardGraphPolicy{false,false,false}` can be described as “reads model parameters through detached views, writes only forward outputs and explicit session/runtime payloads”
 
 ### Patch 2 — runtime-owner split (`boundary-owner` agent)
 
@@ -211,7 +212,7 @@ Use this section as the implementation queue. The order below is the architectur
   - `Shared/Forward/ModelForward_GPU.hpp`
   - `Shared/TrainingState/TrainingState_GPU.hpp`
   - `Shared/InferenceState/GenerationState_GPU.hpp`
-  - `training/Inference_GPU.cu`
+  - `Common/grim_language_model_gpu.cu`
 - **Violation class:** training/session ownership conflation at the shared forward boundary
 - **Concrete offenders:**
   - shared forward request exposes only `TrainingState* runtime_state`
@@ -370,14 +371,14 @@ Goal: eliminate forward-time mutation of durable parameter metadata.
 
 ### Phase 2 — Build the read-only parameter-view boundary at the caller
 
-Goal: make `ModelForwardMode::InferencePrefill` explicitly build detached/read-only parameter views before entering layer math.
+Goal: make the caller-authored read-only graph policy explicitly build detached/read-only parameter views before entering layer math.
 
 ### Work
 
 - In `Shared/Forward/ModelForward_GPU.cu`, branch the parameter acquisition policy by mode:
   - `TrainingGraph` keeps live tensors,
   - `InferencePrefill` uses detached views.
-- Reuse the decode-path pattern already present in `training/Inference_GPU.cu` for:
+- Use the read-only parameter-view pattern in `Shared/Forward/ModelForward_GPU.cu` for:
   - embedding weights,
   - encoder RMS gammas,
   - attention weights/biases,
@@ -499,7 +500,7 @@ Goal: make the read-only forward boundary enforceable at build time, not just by
 | `Shared/TrainingState/TrainingState_GPU.hpp` | Keep training-only diagnostics/workspaces training-owned; stop being the only shared-forward runtime owner |
 | `Shared/InferenceState/GenerationState_GPU.hpp` | Expose generation/session-owned trace/runtime sinks needed by shared prefill |
 | `training/Autograd/AutogradTraining.cu` | Own training-only live-tensor prep if any remains after cleanup |
-| `training/Inference_GPU.cu` | Keep decode/shared-prefill detach policy aligned with the centralized shared-forward boundary |
+| `Common/grim_language_model_gpu.cu` | Route inference scoring through the centralized shared-forward boundary only |
 | `Layers/Embedding/Embedding_GPU.hpp` | Prefer const/read-only parameter access for prefill callers |
 | `Layers/Encoding/Encoding_GPU.cu` | Accept/read parameter views without mutating ownership metadata or process-global forward state |
 | `Layers/Encoding/Encoding_GPU.hpp` | Add const/read-only parameter accessors and/or view payload entry points |
@@ -543,7 +544,7 @@ Goal: make the read-only forward boundary enforceable at build time, not just by
 
 ### Ownership validation
 
-- `ModelForwardMode::InferencePrefill` can be described as “reads model state, writes only explicit forward outputs / caller-owned per-call snapshots”.
+- The read-only `ModelForwardGraphPolicy` can be described as “reads model state through detached views, writes only explicit forward outputs / caller-owned per-call snapshots”.
 - Training forward can be described as “reads model state, builds Category 1 graph state, writes explicit outputs only”.
 - Parameter registration, backward grad accumulation, optimizer stepping, and freeze policy remain startup/backward/update responsibilities only.
 
@@ -556,7 +557,7 @@ Goal: make the read-only forward boundary enforceable at build time, not just by
 
 ## Completion summary
 
-The shared forward is done when the mode-explicit primitive still serves both training and inference, but the ownership split is finally honest:
+The shared forward is done when the graph-policy primitive still serves both training and inference, but the ownership split is finally honest:
 
 - training graph reads live trainable tensors only to build autograd connectivity,
 - read-only prefill uses detached/const parameter views,

@@ -117,10 +117,16 @@ FeedForwardLayer& FeedForwardLayer::operator=(FeedForwardLayer&& other) noexcept
 
 Tensor FeedForwardLayer::forward(const Tensor& input, ForwardIntermediates& intermediates,
                                  cudaStream_t stream, cublasHandle_t cublas_handle,
-                                 uint64_t batch_idx, bool dropout_enabled, int layer_idx) {
+                                 uint64_t batch_idx, bool dropout_enabled, int layer_idx,
+                                 const FeedForwardParameterViews* parameter_views) {
+    const Tensor& W_gate = (parameter_views && parameter_views->W_gate) ? *parameter_views->W_gate : W_gate_;
+    const Tensor& W1 = (parameter_views && parameter_views->W1) ? *parameter_views->W1 : W1_;
+    const Tensor& W2 = (parameter_views && parameter_views->W2) ? *parameter_views->W2 : W2_;
+    const Tensor& b2 = (parameter_views && parameter_views->b2) ? *parameter_views->b2 : b2_;
+
     // Rule 20: Crash on invalid weights
-    if (!W_gate_.data || !W1_.data || !W2_.data) {
-        throw std::runtime_error("FeedForwardLayer::forward: weights not set (W_gate/W1/W2)");
+    if (!W_gate.data || !W1.data || !W2.data) {
+        throw std::runtime_error("FeedForwardLayer::forward: selected weights not set (W_gate/W1/W2)");
     }
     if (!stream) {
         throw std::runtime_error("FeedForwardLayer::forward: stream is NULL");
@@ -139,7 +145,7 @@ Tensor FeedForwardLayer::forward(const Tensor& input, ForwardIntermediates& inte
     //--------------------------------------------------
     // SwiGLU Gate Path: gate = SiLU(input @ W_gate)
     //--------------------------------------------------
-    intermediates.ffn_gate_out = autograd::matmul(input, W_gate_, stream,
+    intermediates.ffn_gate_out = autograd::matmul(input, W_gate, stream,
                                                    input.data, nullptr);
     intermediates.ffn_silu_out = autograd::silu(intermediates.ffn_gate_out, stream,
                                                 intermediates.ffn_gate_out.data);
@@ -147,7 +153,7 @@ Tensor FeedForwardLayer::forward(const Tensor& input, ForwardIntermediates& inte
     //--------------------------------------------------
     // SwiGLU Up Path: up = input @ W1
     //--------------------------------------------------
-    intermediates.ffn_linear1_out = autograd::matmul(input, W1_, stream,
+    intermediates.ffn_linear1_out = autograd::matmul(input, W1, stream,
                                                      input.data, nullptr);
 
     //--------------------------------------------------
@@ -171,11 +177,11 @@ Tensor FeedForwardLayer::forward(const Tensor& input, ForwardIntermediates& inte
     if (!intermediates.ffn_swiglu_out.data) {
         throw std::runtime_error("FeedForwardLayer::forward: ffn_swiglu_out.data is NULL before W2 matmul");
     }
-    Tensor output = autograd::matmul(intermediates.ffn_swiglu_out, W2_, stream,
+    Tensor output = autograd::matmul(intermediates.ffn_swiglu_out, W2, stream,
                                      intermediates.ffn_swiglu_out.data, nullptr);
     
-    if (hp_.use_bias && b2_.data) {
-        output = autograd::broadcast_add(output, b2_, stream);
+    if (hp_.use_bias && b2.data) {
+        output = autograd::broadcast_add(output, b2, stream);
     }
     
     return output;

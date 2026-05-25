@@ -30,6 +30,12 @@ struct PathsHP {
     std::string status_path;
 };
 
+struct CheckpointLoadHP {
+    std::string checkpoint_dir;
+    std::string checkpoint_path;
+    ModelExecutionMode execution_mode = ModelExecutionMode::INFERENCE;
+};
+
 struct TokenizerHP {
     std::string data_path;
     std::string vocab_path;
@@ -483,6 +489,18 @@ inline PathsHP pathsHP(const LanguageModelConfig& config)
     view.checkpoint_dir = config.checkpoint_dir;
     view.log_dir = config.log_dir;
     view.status_path = config.status_path;
+    return view;
+}
+
+inline CheckpointLoadHP checkpointLoadHP(
+    const LanguageModelConfig& config,
+    const std::string& checkpoint_path,
+    ModelExecutionMode execution_mode)
+{
+    CheckpointLoadHP view;
+    view.checkpoint_dir = config.checkpoint_dir;
+    view.checkpoint_path = checkpoint_path;
+    view.execution_mode = execution_mode;
     return view;
 }
 

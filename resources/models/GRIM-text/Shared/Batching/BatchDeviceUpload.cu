@@ -47,14 +47,9 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
     }
 
     if (!training_state_.initialized) {
-        if (cfg.execution_mode == HyperParameters::ModelExecutionMode::TRAINING) {
-            initTrainingState();
-        } else {
-            initInferenceState();
-        }
-        if (!training_state_.initialized) {
-            throw std::runtime_error("uploadBatchToDevice: state initialization completed but flag still false");
-        }
+        throw std::runtime_error(
+            "uploadBatchToDevice: runtime state is not initialized. "
+            "Caller must complete explicit startup before uploading BatchPayload data");
     }
 
     const size_t total_tokens = static_cast<size_t>(payload.total_tokens);

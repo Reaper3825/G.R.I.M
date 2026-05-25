@@ -116,15 +116,15 @@ struct AutogradContext {
     // datum. Fixed-shape training geometry is config-owned via
     // HyperparameterGroupings/LanguageModelConfig and enforced at upload; the
     // payload carries the realized supervision, token stats, and row layout.
-    // Inference
-    // MUST NOT enter AutogradContext; use Shared/Forward/ModelForward_GPU.hpp
-    // with ModelForwardMode::InferencePrefill instead.
+    // Inference MUST NOT enter AutogradContext; use
+    // Shared/Forward/ModelForward_GPU.hpp with a caller-authored read-only
+    // ModelForwardGraphPolicy instead.
     // payload is NEVER null after the training initAutogradContext overload.
     //
     // device_bindings carries the device pointers for THIS step (slot map,
     // atom mask, etc.). Replaces the old `mutable d_*` fields on BatchPayload.
     // - Training path: filled by LanguageModel::uploadBatchToDevice().
-    // Always non-null before executeAutogradForward() reads device pointers.
+    // Always non-null before materializeTrainingGraphActivations() reads device pointers.
     // ═══════════════════════════════════════════════════════════════════════════
     const Batching::BatchPayload* payload = nullptr;
     const Batching::BatchDeviceBindings* device_bindings = nullptr;
@@ -196,7 +196,7 @@ AutogradContext initAutogradContext(
  * @param ctx Thin input context
  * @return Forward result (success/error only, tensors in TrainingState)
  */
-void executeAutogradForward(AutogradContext& ctx);
+void materializeTrainingGraphActivations(AutogradContext& ctx);
 
 /**
  * Compute loss with autograd
@@ -209,7 +209,7 @@ void executeAutogradForward(AutogradContext& ctx);
  *   1. Text CE via autograd::unified_loss()
  *   2. Caches loss value in training_state for backward pass
  * 
- * @param ctx     Autograd context (must have logits populated by executeAutogradForward,
+ * @param ctx     Autograd context (must have logits populated by materializeTrainingGraphActivations,
  *                 and ctx.payload set to a valid BatchPayload)
  * @param loss_config Caller-derived loss hyperparameter grouping
  * @param mtp_alpha_effective Phase2-derived MTP loss weight for this batch

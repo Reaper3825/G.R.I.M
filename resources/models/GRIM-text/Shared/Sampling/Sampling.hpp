@@ -174,13 +174,13 @@ class SamplingPipeline {
 public:
     explicit SamplingPipeline(const SamplingConfig& config);
 
-    // Sample a single token from logits given generation history
+    // Select a single next token from logits given generation history.
     // logits: raw model output logits [vocab_size]
     // history: all tokens generated so far (prompt + generated)
     // vocab_size: must match logits.size()
-    SampleResult sample(const std::vector<float>& logits,
-                        const std::vector<int>& history,
-                        int vocab_size);
+    SampleResult selectNextToken(const std::vector<float>& logits,
+                                 const std::vector<int>& history,
+                                 int vocab_size);
 
     // Reset RNG state (e.g., for a new generation session)
     void resetRng(unsigned int seed = 0);
@@ -201,7 +201,7 @@ private:
 Strategy convertStrategy(int legacy_strategy);
 
 /// Build a SamplingConfig from GenerationHP/root generation fields.
-SamplingConfig buildFromGenerationFields(
+SamplingConfig buildSamplingConfigFromGenerationFields(
     int strategy,        // Cast from SamplingStrategy
     bool do_sample,
     float temperature,

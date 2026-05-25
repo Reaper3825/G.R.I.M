@@ -8,8 +8,7 @@
 //    - Null / Ambiguity / Selected policy decision from selector scores
 //    - Mask-or-bind interface consumed by generation path
 //    - resolveDecodeTimeNumSlotSelectionOrMask(): shared entry-point
-//      for decode-time selector evaluation, consumed by both
-//      inference (executeDecodeForward_) and generation paths.
+//      for decode-time selector evaluation consumed by Phase2 generation.
 //
 //  Does NOT own:
 //    - Trainable selector tensors (DecodeTimeSlotSelectorLayer)
@@ -147,8 +146,7 @@ private:
 // resolveDecodeTimeNumSlotSelectionOrMask
 //
 // Shared entry-point for decode-time selector evaluation.
-// Called by both inference (executeDecodeForward_) and
-// generation paths to produce a SlotSelectionResult.
+// Called by Phase2 generation paths to produce a SlotSelectionResult.
 //
 // Semantics:
 //   - Empty prompt_token_to_slot_map → all tokens mapped to -1

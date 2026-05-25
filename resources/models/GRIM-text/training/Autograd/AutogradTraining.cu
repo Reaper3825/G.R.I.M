@@ -357,8 +357,8 @@ bool verifyGradientsAreConnectedImpl(
 );
 }  // namespace
 
-void executeAutogradForward(AutogradContext& ctx) {
-    ctx.validate("executeAutogradForward");
+void materializeTrainingGraphActivations(AutogradContext& ctx) {
+    ctx.validate("materializeTrainingGraphActivations");
 
     Forward::ModelForwardRuntimePayload runtime_payload{};
     runtime_payload.autograd_intermediates = &ctx.training_state->autograd_intermediates;
@@ -379,7 +379,10 @@ void executeAutogradForward(AutogradContext& ctx) {
     request.payload = ctx.payload;
     request.bindings = ctx.device_bindings;
     request.batch_idx = ctx.batch_idx;
-    request.mode = Forward::ModelForwardMode::TrainingGraph;
+    request.graph = Forward::ModelForwardGraphPolicy{
+        /*connect_parameter_graph=*/true,
+        /*retain_backward_graph=*/true,
+        /*enable_dropout=*/true};
 
     Forward::executeModelForward(request, runtime_payload);
 }
@@ -413,7 +416,7 @@ LossResult computeAutogradLoss(
     // RULE 20: Fail loud - validate logits tensor was populated by forward pass
     auto& intermediates = ts->autograd_intermediates;
     if (!intermediates.logits_tensor.data) {
-        throw std::runtime_error("computeAutogradLoss: Logits tensor not initialized - call executeAutogradForward() first");
+        throw std::runtime_error("computeAutogradLoss: Logits tensor not initialized - call materializeTrainingGraphActivations() first");
     }
     
     // BatchPayload owns target semantics; BatchDeviceBindings is the explicit
@@ -1253,7 +1256,7 @@ bool verifyGradientsAreConnectedImpl(
         }
     }
     
-    // ReasoningHead parameters: executeAutogradForward currently invokes the
+    // ReasoningHead parameters: materializeTrainingGraphActivations currently invokes the
     // head for structured diagnostics only. No reasoning loss is assembled into
     // intermediates.loss_tensor, so verifying these params for received gradient
     // would falsely claim training connectivity. Re-enable only alongside a real
@@ -1399,7 +1402,7 @@ LossResult autogradTrainingStep(
         CUDA_CHECK(cudaMemsetAsync(training_state.read_gate_accum_tensor.data, 0, 2 * sizeof(float), stream));
     }
     
-    executeAutogradForward(ctx);
+    materializeTrainingGraphActivations(ctx);
 
     // Read back the cross-attention read gate accumulator (sum/count on device)
     // Snapshot Category 3 workspace into Category 2 telemetry scalar BEFORE the

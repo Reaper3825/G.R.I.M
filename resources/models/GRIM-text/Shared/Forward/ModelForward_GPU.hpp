@@ -3,7 +3,7 @@
 //  Shared full-model forward primitive
 //
 //  Phase 2 of the inference/training split:
-//  - Shared forward code takes a mode-explicit request.
+//  - Shared forward code takes a caller-authored graph-policy request.
 //  - Training/autograd owns AutogradContext, loss, backward, optimizer.
 //  - This boundary consumes explicit BatchDeviceBindings; it never
 //    rediscovers the active step from TrainingState cache fields.
@@ -35,9 +35,14 @@ class GPUGrimEncoder;
 
 namespace Forward {
 
-enum class ModelForwardMode {
-    TrainingGraph,
-    InferencePrefill
+struct ModelForwardGraphPolicy {
+    // Caller-authored graph policy. This is deliberately not a training-vs-inference
+    // mode enum: orchestration chooses whether this forward call may connect
+    // autograd edges to durable parameters and whether graph outputs must be
+    // retained for a later backward owner.
+    bool connect_parameter_graph = false;
+    bool retain_backward_graph = false;
+    bool enable_dropout = false;
 };
 
 struct ModelForwardRequest {
@@ -55,9 +60,8 @@ struct ModelForwardRequest {
     const Batching::BatchPayload* payload = nullptr;
     const Batching::BatchDeviceBindings* bindings = nullptr;
     uint64_t batch_idx = 0;
-    ModelForwardMode mode = ModelForwardMode::TrainingGraph;
+    ModelForwardGraphPolicy graph{};
 
-    bool trainingGraph() const { return mode == ModelForwardMode::TrainingGraph; }
     void validate(const char* caller) const;
 };
 

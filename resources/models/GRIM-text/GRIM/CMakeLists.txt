@@ -64,9 +64,28 @@ file(GLOB COMMON_CU_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../Comm
 
 # Training folder (only specific files needed for inference)
 set(TRAINING_CU_FILES
-    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Inference_GPU.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Forward_GPU.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/InitTrainingState.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Phase1_Startup.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Phase2_InferenceLoop.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Rng.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Logging.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Capacity/CapacityStem.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Capacity/MemorySnapshot.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Data/TrainingData.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Model/ModelAllocationState.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/CheckpointLoad.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Resume/ResumeState.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Epoch/EpochPlan.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Payload/PayloadBuildInputs.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Batching/PlannedBatches.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Telemetry/TelemetryInitInputs.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Validation/StartupValidation.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Validation/Phase2Handoff.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/SlidingWindow.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/ClassBalancedWeights.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/InitFacts.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Subprocess/tokenizer_subprocess.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Model/ModelGpuAssembly.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Autograd/AutogradMtpAuxiliaryLoss.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Autograd/AutogradSelectorSupervisionLoss.cu
@@ -104,7 +123,7 @@ message(STATUS "Found ${NUM_CU_FILES} CUDA source files")
 #======================================================
 # Flash Attention library (requires sm_80+ only)
 #======================================================
-add_library(grim_server_flash_attention STATIC 
+add_library(grim_server_flash_attention EXCLUDE_FROM_ALL STATIC 
     ${CMAKE_CURRENT_SOURCE_DIR}/../Layers/FlashAttention/Flash_Attention_Kernal.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../Layers/FlashAttention/AttentionDiagnostics.cu
 )
@@ -131,7 +150,7 @@ target_link_libraries(grim_server_flash_attention PUBLIC CUDA::cudart CUDA::cubl
 #======================================================
 # Main GPU implementation library (all other .cu files)
 #======================================================
-add_library(grim_server_gpu_impl OBJECT ${ALL_GPU_SOURCES})
+add_library(grim_server_gpu_impl EXCLUDE_FROM_ALL OBJECT ${ALL_GPU_SOURCES})
 set_target_properties(grim_server_gpu_impl PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF
     CUDA_ARCHITECTURES "86"  # target local GPU only for faster builds
@@ -163,32 +182,15 @@ add_executable(grim_text_server
 )
 
 set_target_properties(grim_text_server PROPERTIES
-    CUDA_SEPARABLE_COMPILATION ON
-    CUDA_RESOLVE_DEVICE_SYMBOLS ON
-    CUDA_ARCHITECTURES "86"  # target local GPU only for faster builds
-    CUDA_RUNTIME_LIBRARY Shared
-)
-
-target_compile_definitions(grim_text_server PRIVATE USE_CUDA GRIM_GPU_ONLY)
-target_compile_options(grim_text_server PRIVATE
-    $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
-)
-
-# Force exclusion of static CUDA runtime to prevent LNK2005 conflicts
-target_link_options(grim_text_server PRIVATE 
-    /NODEFAULTLIB:cudart_static.lib
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
 )
 
 target_link_libraries(grim_text_server PRIVATE
-    flatbuffers::flatbuffers
     nlohmann_json::nlohmann_json
     httplib::httplib
-    CUDA::cudart
-    CUDA::cublas
-    CUDA::nvml
-    grim_server_flash_attention
-    grim_server_gpu_impl
     $<$<CXX_COMPILER_ID:GNU>:pthread gomp>
+    $<$<PLATFORM_ID:Windows>:ws2_32>
 )
 
 target_include_directories(grim_text_server PRIVATE ${GRIM_INCLUDE_DIRS})
@@ -200,7 +202,7 @@ set_target_properties(grim_text_server PROPERTIES
 )
 
 message(STATUS "GRIM Text Server configured:")
-message(STATUS "  - grim_text_server: GPU-accelerated Ollama-compatible inference server")
+message(STATUS "  - grim_text_server: Ollama-compatible HTTP bridge to train_gpu inference worker")
 message(STATUS "  - Output: training/build/Release/grim_text_server.exe")
 
 #======================================================

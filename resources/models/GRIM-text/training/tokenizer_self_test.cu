@@ -202,7 +202,7 @@ SectionResults runSection1_EncodingDecoding(GrimTokenizer& tokenizer, bool verbo
         auto ids = tokenizer.encode(input);
         
         // Decode
-        std::string decoded = tokenizer.decode(ids);
+        std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(ids));
         test.output = decoded;
         
         // Visualization
@@ -272,7 +272,7 @@ SectionResults runSection2_SpacesGrammar(GrimTokenizer& tokenizer, bool verbose)
         test.name = "Multiple spaces normalization";
         test.input = "hello    world";  // 4 spaces
         auto ids = tokenizer.encode(test.input);
-        test.output = tokenizer.decode(ids);
+        test.output = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(ids));
         // Should normalize to single space or handle gracefully
         test.passed = true;  // Normalization is acceptable behavior
         test.details = "Encoded to " + std::to_string(ids.size()) + " tokens";
@@ -287,7 +287,7 @@ SectionResults runSection2_SpacesGrammar(GrimTokenizer& tokenizer, bool verbose)
         test.name = "Leading/trailing spaces";
         test.input = "  hello  ";
         auto ids = tokenizer.encode(test.input);
-        test.output = tokenizer.decode(ids);
+        test.output = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(ids));
         test.passed = true;  // Trimming is acceptable
         test.details = "Output: \"" + escapeString(test.output) + "\"";
         results.passed++;
@@ -309,7 +309,7 @@ SectionResults runSection2_SpacesGrammar(GrimTokenizer& tokenizer, bool verbose)
         test.name = "Punctuation: " + desc;
         test.input = input;
         auto ids = tokenizer.encode(input);
-        test.output = tokenizer.decode(ids);
+        test.output = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(ids));
         
         // Check all punctuation preserved (ignoring spaces)
         std::string input_punct, output_punct;
@@ -333,7 +333,7 @@ SectionResults runSection2_SpacesGrammar(GrimTokenizer& tokenizer, bool verbose)
         test.name = "Case handling";
         test.input = "HeLLo WoRLD";
         auto ids = tokenizer.encode(test.input);
-        test.output = tokenizer.decode(ids);
+        test.output = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(ids));
         
         // Our tokenizer lowercases, so check for that
         std::string expected_lower;
@@ -372,7 +372,7 @@ SectionResults runSection3_EdgeCases(GrimTokenizer& tokenizer, bool verbose) {
         test.name = "Empty string";
         test.input = "";
         auto ids = tokenizer.encode(test.input);
-        test.output = tokenizer.decode(ids);
+        test.output = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(ids));
         // Should handle gracefully (maybe just BOS/EOS)
         test.passed = true;
         test.details = "Token count: " + std::to_string(ids.size());
@@ -391,7 +391,7 @@ SectionResults runSection3_EdgeCases(GrimTokenizer& tokenizer, bool verbose) {
                      std::string(100, 'g') + " " + std::string(100, 'h') + " " +
                      std::string(100, 'i') + " " + std::string(100, 'j');
         auto ids = tokenizer.encode(test.input);
-        test.output = tokenizer.decode(ids);
+        test.output = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(ids));
         test.passed = (ids.size() > 0);
         test.details = "Encoded to " + std::to_string(ids.size()) + " tokens";
         if (test.passed) results.passed++; else results.failed++;
@@ -419,7 +419,7 @@ SectionResults runSection3_EdgeCases(GrimTokenizer& tokenizer, bool verbose) {
         test.name = "Unknown character handling";
         test.input = "hello\xFF\xFEworld";  // Invalid UTF-8
         auto ids = tokenizer.encode(test.input);
-        test.output = tokenizer.decode(ids);
+        test.output = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(ids));
         // Should not crash - UniByte uses byte fallback for unknown chars
         test.passed = true;
         test.details = "Handled " + std::to_string(ids.size()) + " tokens";
@@ -434,7 +434,7 @@ SectionResults runSection3_EdgeCases(GrimTokenizer& tokenizer, bool verbose) {
         test.name = "Unicode handling";
         test.input = "café naïve résumé";
         auto ids = tokenizer.encode(test.input);
-        test.output = tokenizer.decode(ids);
+        test.output = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(ids));
         test.passed = (ids.size() > 0);
         test.details = "Encoded to " + std::to_string(ids.size()) + " tokens";
         if (test.passed) results.passed++; else results.failed++;
@@ -448,7 +448,7 @@ SectionResults runSection3_EdgeCases(GrimTokenizer& tokenizer, bool verbose) {
         test.name = "Number tokenization";
         test.input = "12345 67890";
         auto ids = tokenizer.encode(test.input);
-        test.output = tokenizer.decode(ids);
+        test.output = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(ids));
         
         if (verbose) {
             std::cout << "    Number tokens: ";
@@ -470,7 +470,7 @@ SectionResults runSection3_EdgeCases(GrimTokenizer& tokenizer, bool verbose) {
         TestResult test;
         test.name = "Invalid token ID handling";
         std::vector<int> bad_ids = {-1, 999999, tokenizer.vocabSize() + 100};
-        test.output = tokenizer.decode(bad_ids);
+        test.output = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(bad_ids));
         test.passed = true;  // Should not crash
         test.details = "Decoded invalid IDs to: \"" + escapeString(test.output) + "\"";
         results.passed++;
@@ -484,7 +484,7 @@ SectionResults runSection3_EdgeCases(GrimTokenizer& tokenizer, bool verbose) {
         test.name = "DIAGNOSTIC: Space preservation";
         test.input = "hello how are you";
         auto ids = tokenizer.encode(test.input);
-        test.output = tokenizer.decode(ids);
+        test.output = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(ids));
         
         int input_spaces = std::count(test.input.begin(), test.input.end(), ' ');
         int output_spaces = std::count(test.output.begin(), test.output.end(), ' ');

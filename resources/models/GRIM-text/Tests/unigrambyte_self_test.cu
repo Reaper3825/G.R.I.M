@@ -1230,7 +1230,7 @@ bool testUniByteRoundTrip(std::string& message) {
         }
     }
     
-    std::string output = tokenizer.decode(tokens);
+    std::string output = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(tokens));
     std::cout << "[RoundTrip] Decoded: \"" << output << "\"\n";
     std::cout << "[RoundTrip] Expected: \"" << input << "\"\n";
     std::cout << "[RoundTrip] Match: " << (output == input ? "YES" : "NO") << "\n";
@@ -1600,7 +1600,7 @@ bool testFullPipeline(std::string& message) {
     ASSERT_TRUE(result.atoms.size() >= 2, "Should detect numeric structures only");
     
     // Verify we can decode back through the single atom-aware decode entry point.
-    std::string decoded = tokenizer.decode(result);
+    std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(result));
     
     // Note: With placeholders, decoded may differ from input
     // The key is that we have a valid token sequence
@@ -1679,7 +1679,7 @@ bool testEdgeCaseEmptyString(std::string& message) {
     
     ASSERT_EQ(tokens.size(), 0, "Empty string should produce no tokens");
     
-    std::string decoded = tokenizer.decode(tokens);
+    std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(tokens));
     ASSERT_STR_EQ(decoded, "", "Empty decode should be empty");
     
     return true;
@@ -1695,7 +1695,7 @@ bool testEdgeCaseSingleChar(std::string& message) {
     
     ASSERT_TRUE(tokens.size() >= 1, "Single char should produce at least 1 token");
     
-    std::string decoded = tokenizer.decode(tokens);
+    std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(tokens));
     ASSERT_STR_EQ(decoded, input, "Single char round-trip failed");
     
     return true;
@@ -1716,7 +1716,7 @@ bool testEdgeCaseOnlyWhitespace(std::string& message) {
     
     ASSERT_TRUE(tokens.size() >= 1, "Whitespace should produce tokens");
     
-    std::string decoded = tokenizer.decode(tokens);
+    std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(tokens));
     ASSERT_STR_EQ(decoded, input, "Whitespace round-trip failed");
     
     return true;
@@ -1736,7 +1736,7 @@ bool testEdgeCaseLongSequence(std::string& message) {
     std::vector<int> tokens = tokenizer.encode(input);
     ASSERT_TRUE(tokens.size() > 0, "Long sequence should produce tokens");
     
-    std::string decoded = tokenizer.decode(tokens);
+    std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(tokens));
     ASSERT_STR_EQ(decoded, input, "Long sequence round-trip failed");
     
     return true;
@@ -1769,7 +1769,7 @@ bool testEdgeCaseSpecialTokenLiterals(std::string& message) {
     std::vector<int> tokens = tokenizer.encode(input);
     ASSERT_TRUE(tokens.size() > 0, "Should produce tokens");
     
-    std::string decoded = tokenizer.decode(tokens);
+    std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(tokens));
     // Should preserve the literal text, not interpret as special tokens
     ASSERT_STR_EQ(decoded, input, "Literal special tokens should round-trip");
     
@@ -1790,7 +1790,7 @@ bool testUnicodeEmoji(std::string& message) {
     std::vector<int> tokens = tokenizer.encode(input);
     ASSERT_TRUE(tokens.size() > 0, "Emoji input should produce tokens");
     
-    std::string decoded = tokenizer.decode(tokens);
+    std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(tokens));
     ASSERT_STR_EQ(decoded, input, "Emoji round-trip failed");
     
     return true;
@@ -1806,7 +1806,7 @@ bool testUnicodeMultiLanguage(std::string& message) {
     std::vector<int> tokens = tokenizer.encode(input);
     ASSERT_TRUE(tokens.size() > 0, "Multi-language should produce tokens");
     
-    std::string decoded = tokenizer.decode(tokens);
+    std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(tokens));
     ASSERT_STR_EQ(decoded, input, "Multi-language round-trip failed");
     
     return true;
@@ -1825,7 +1825,7 @@ bool testUnicodeWithStructural(std::string& message) {
     auto result = tokenizer.tokenizeWithMetadata(input);
     ASSERT_TRUE(result.token_ids.size() > 0, "Unicode with numbers should produce tokens");
     
-    std::string decoded = tokenizer.decode(result);
+    std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(result));
     ASSERT_STR_EQ(decoded, input, "Unicode+numeric round-trip failed");
     
     return true;
@@ -2098,7 +2098,7 @@ bool testMixedVocabAndByteFallback(std::string& message) {
     std::string input = "hello xyz hello";
     
     std::vector<int> tokens = tokenizer.encode(input);
-    std::string decoded = tokenizer.decode(tokens);
+    std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(tokens));
     
     ASSERT_STR_EQ(decoded, input, "Mixed vocab+byte fallback round-trip failed");
     

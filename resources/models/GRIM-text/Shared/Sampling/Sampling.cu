@@ -446,14 +446,14 @@ void SamplingPipeline::resetRng(unsigned int seed) {
     }
 }
 
-SampleResult SamplingPipeline::sample(const std::vector<float>& logits,
-                                      const std::vector<int>& history,
-                                      int vocab_size) {
+SampleResult SamplingPipeline::selectNextToken(const std::vector<float>& logits,
+                                               const std::vector<int>& history,
+                                               int vocab_size) {
     if (logits.empty()) {
-        throw std::runtime_error("SamplingPipeline::sample: empty logits");
+        throw std::runtime_error("SamplingPipeline::selectNextToken: empty logits");
     }
     if (static_cast<int>(logits.size()) != vocab_size) {
-        throw std::runtime_error("SamplingPipeline::sample: logits.size()=" +
+        throw std::runtime_error("SamplingPipeline::selectNextToken: logits.size()=" +
                                  std::to_string(logits.size()) + " != vocab_size=" +
                                  std::to_string(vocab_size));
     }
@@ -620,7 +620,7 @@ Strategy convertStrategy(int legacy_strategy) {
 //======================================================//
 //  Build SamplingConfig from root-derived generation fields
 //======================================================//
-SamplingConfig buildFromGenerationFields(
+SamplingConfig buildSamplingConfigFromGenerationFields(
     int strategy,
     bool do_sample,
     float temperature,

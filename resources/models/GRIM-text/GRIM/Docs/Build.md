@@ -55,7 +55,7 @@ cmake --build . --config Release --target unigrambyte_self_test
 
 ## Server
 
-`grim_text_server.exe` runs on port 11435.
+`grim_text_server.exe` runs on port 11435 as a pure HTTP bridge. It launches `train_gpu --inference --inference-worker-port 11436` and proxies requests; `train_gpu` owns Phase1 startup, `TrainingContext`, tokenizer access, and Phase2 inference.
 
 ## CMake cache trap
 

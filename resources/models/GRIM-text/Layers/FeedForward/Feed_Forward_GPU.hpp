@@ -30,6 +30,13 @@
 
 namespace GRIM {
 
+struct FeedForwardParameterViews {
+    const Tensor* W_gate = nullptr;
+    const Tensor* W1 = nullptr;
+    const Tensor* W2 = nullptr;
+    const Tensor* b2 = nullptr;
+};
+
 //======================================================//
 //  FeedForwardLayer - Autograd Implementation
 //======================================================//
@@ -105,7 +112,8 @@ public:
      */
     Tensor forward(const Tensor& input, ForwardIntermediates& intermediates,
                 cudaStream_t stream, cublasHandle_t cublas_handle,
-                uint64_t batch_idx = 0, bool dropout_enabled = false, int layer_idx = 0);
+                uint64_t batch_idx = 0, bool dropout_enabled = false, int layer_idx = 0,
+                const FeedForwardParameterViews* parameter_views = nullptr);
 
     //--------------------------------------------------
     // NOTE: Backward Pass handled by autograd

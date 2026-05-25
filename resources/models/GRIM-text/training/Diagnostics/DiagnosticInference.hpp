@@ -26,8 +26,8 @@ namespace GRIMText::Training {
 
 /// Run a diagnostic inference sample if the current optimizer step
 /// matches the configured sample interval.  This function is fully
-/// self-contained: it tokenizes a prompt, runs model.generate(),
-/// decodes the output, and logs the result.
+/// self-contained: it sends a text prompt through executePhase2TextInference()
+/// and logs the decoded result.
 ///
 /// SAFETY: This function does NOT modify any model weight tensors,
 /// gradient buffers, or optimizer state. Inference paths use no training

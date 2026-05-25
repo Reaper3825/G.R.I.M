@@ -363,57 +363,25 @@ UniByteResult UniByte::encodeInternal(const std::string& text,
 // Decoding
 //--------------------------------------------------//
 
-namespace {
-
-void appendDecodedLayoutToken(std::string& result, int token_id) {
-    if (token_id == PAD_TOKEN_ID) return;
-    result += specialTokenText(token_id);
-}
-
-void appendDecodedByteToken(std::string& result, int token_id) {
-    result.push_back(static_cast<char>(token_id - BYTE_TOKEN_OFFSET));
-}
-
-void appendDecodedUnigramToken(std::string& result, const UnigramLM& unigram, int token_id) {
-    const UnigramPiece* piece = unigram.getPiece(token_id);
-    if (!piece) {
-        throw std::runtime_error("UniByte::decode: unigram token_id=" + std::to_string(token_id) +
-                                 " has no backing UnigramPiece");
-    }
-    result += piece->text;
-}
-
-void appendDecodedAtomToken(std::string& result, const DecodeRequest& request, size_t index, int token_id) {
-    if (!request.atom_entry_ids || !request.atom_table) {
-        throw std::runtime_error("UniByte::decode: atom token_id=" + std::to_string(token_id) +
-                                 " requires DecodeRequest built from UniByteResult");
-    }
-    if (request.atom_entry_count != request.token_count) {
-        throw std::runtime_error("UniByte::decode: atom_entry_count=" +
-                                 std::to_string(request.atom_entry_count) +
-                                 " != token_count=" + std::to_string(request.token_count));
-    }
-
-    const uint32_t entry_id = request.atom_entry_ids[index];
-    if (entry_id == kAtomEntryNone) {
-        throw std::runtime_error("UniByte::decode: atom token_id=" + std::to_string(token_id) +
-                                 " has kAtomEntryNone at index=" + std::to_string(index));
-    }
-
-    const auto entry = request.atom_table->getAtom(entry_id);
-    if (!entry) {
-        throw std::runtime_error("UniByte::decode: atom_entry_id=" + std::to_string(entry_id) +
-                                 " has no backing AtomEntry");
-    }
-    result += request.atom_table->atomToString(*entry);
-}
-
-} // namespace
-
 std::string UniByte::decode(const DecodeRequest& request) const {
     if (!request.token_ids && request.token_count != 0) {
         throw std::runtime_error("UniByte::decode: token_ids is NULL while token_count=" +
                                  std::to_string(request.token_count));
+    }
+    if (request.atom_entry_ids && request.atom_entry_count != request.token_count) {
+        throw std::runtime_error("UniByte::decode: atom_entry_count=" +
+                                 std::to_string(request.atom_entry_count) +
+                                 " != token_count=" + std::to_string(request.token_count));
+    }
+    if (request.token_numeric_values && request.token_numeric_count != request.token_count) {
+        throw std::runtime_error("UniByte::decode: token_numeric_count=" +
+                                 std::to_string(request.token_numeric_count) +
+                                 " != token_count=" + std::to_string(request.token_count));
+    }
+    if (request.token_atom_mask && request.token_atom_mask_count != request.token_count) {
+        throw std::runtime_error("UniByte::decode: token_atom_mask_count=" +
+                                 std::to_string(request.token_atom_mask_count) +
+                                 " != token_count=" + std::to_string(request.token_count));
     }
 
     std::string result;
@@ -421,13 +389,42 @@ std::string UniByte::decode(const DecodeRequest& request) const {
     for (size_t i = 0; i < request.token_count; ++i) {
         const int tid = request.token_ids[i];
         if (layout.isSpecial(tid)) {
-            appendDecodedLayoutToken(result, tid);
+            if (tid != PAD_TOKEN_ID) {
+                result += specialTokenText(tid);
+            }
         } else if (layout.isByte(tid)) {
-            appendDecodedByteToken(result, tid);
+            result.push_back(static_cast<char>(tid - BYTE_TOKEN_OFFSET));
         } else if (layout.isAtom(tid)) {
-            appendDecodedAtomToken(result, request, i, tid);
+            bool decoded_atom = false;
+            if (request.atom_entry_ids && request.atom_table) {
+                const uint32_t entry_id = request.atom_entry_ids[i];
+                if (entry_id != kAtomEntryNone) {
+                    const auto entry = request.atom_table->getAtom(entry_id);
+                    if (!entry) {
+                        throw std::runtime_error("UniByte::decode: atom_entry_id=" + std::to_string(entry_id) +
+                                                 " has no backing AtomEntry");
+                    }
+                    result += request.atom_table->atomToString(*entry);
+                    decoded_atom = true;
+                }
+            }
+            if (!decoded_atom && request.token_atom_mask && request.token_numeric_values &&
+                request.token_atom_mask[i] != 0) {
+                result += formatNumericValue(request.token_numeric_values[i]);
+                decoded_atom = true;
+            }
+            if (!decoded_atom) {
+                result += "<";
+                result += atomTypeName(tokenIdToAtomType(tid));
+                result += ">";
+            }
         } else if (layout.isUnigram(tid)) {
-            appendDecodedUnigramToken(result, unigram_, tid);
+            const UnigramPiece* piece = unigram_.getPiece(tid);
+            if (!piece) {
+                throw std::runtime_error("UniByte::decode: unigram token_id=" + std::to_string(tid) +
+                                         " has no backing UnigramPiece");
+            }
+            result += piece->text;
         } else {
             throw std::runtime_error("UniByte::decode: token_id=" + std::to_string(tid) +
                                      " is outside all known token ranges");

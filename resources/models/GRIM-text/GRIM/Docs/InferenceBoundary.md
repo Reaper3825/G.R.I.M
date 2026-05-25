@@ -7,8 +7,8 @@ Detailed ownership-tightening work for making the shared forward primitive read-
 ## Target ownership boundary
 
 - Training owns `AutogradContext`, loss assembly, backward, optimizer state, and `AutogradStepScope`.
-- Inference owns generation session state through `GenerationState` and inference-specific forward requests.
-- Shared code owns only mode-neutral forward primitives that consume explicit device views.
+- Phase2 inference owns generation session state. `LanguageModel` exposes only context scoring over caller-authored `BatchPayload` objects.
+- Shared code owns only mode-neutral forward primitives that consume explicit device views and a caller-authored graph policy. It must not branch on training vs inference identity.
 - No inference-only fields may live in `AutogradContext`.
 - No forward path may rediscover the active step by reading `TrainingState.cached_*` as an implicit current batch; callers must pass explicit bindings.
 
@@ -17,16 +17,16 @@ Detailed ownership-tightening work for making the shared forward primitive read-
 Status: implemented.
 
 - [x] Add a shared inference-prefill forward primitive outside `training/Autograd`.
-- [x] Route `LanguageModel::executeInferenceForward_()` through that primitive.
-- [x] Build a per-call `BatchDeviceBindings` view in inference code from the currently staged generation buffers.
-- [x] Build inference prompt ingestion through `Batching::buildInferenceBatchPayload()` and `LanguageModel::forwardInit(const BatchPayload&)` instead of server/vector-authored CUDA copies.
+- [x] Route `LanguageModel::getNextTokenLogits()` through that primitive.
+- [x] Build a per-call `BatchDeviceBindings` view from the caller-authored inference payload.
+- [x] Build inference prompt ingestion through `Batching::buildInferenceBatchPayload()` and Phase2-owned calls to `LanguageModel::getNextTokenLogits(const BatchPayload&)` instead of server/vector-authored CUDA copies or model-owned generation-session wrappers.
 - [x] Keep existing `TrainingState` cache tensors as temporary backing storage only.
-- [x] Keep training on `Autograd::executeAutogradForward()` for now.
+- [x] Keep training on `Autograd::materializeTrainingGraphActivations()` for now.
 
 Exit criteria:
 
 - Inference prefill no longer calls `initAutogradContext()`.
-- Inference prefill no longer calls `executeAutogradForward()`.
+- Inference prefill no longer calls `materializeTrainingGraphActivations()`.
 - `AutogradContext` has no inference-only fields or inference initializer overload.
 
 ## Phase 2 — Shared full-forward primitive
@@ -34,16 +34,16 @@ Exit criteria:
 Status: implemented.
 
 - [x] Extract the training/eval full-forward math from `AutogradTraining.cu` into `Shared/Forward/ModelForward_GPU.cu`.
-- [x] Make `Autograd::executeAutogradForward()` a training/eval adapter that supplies autograd workspace and graph mode.
-- [x] Route inference prefill through the mode-explicit shared primitive via `ModelForwardMode::InferencePrefill`.
-- [x] Preserve per-layer K/V intermediates only for inference prefill so KV-cache population has explicit tensors to copy before clear.
+- [x] Make `Autograd::materializeTrainingGraphActivations()` a training/eval adapter that supplies autograd workspace and graph mode.
+- [x] Route inference prefill through the shared primitive with `ModelForwardGraphPolicy{false,false,false}`: read-only parameter graph, no backward retention, no dropout.
+- [x] Delete per-layer K/V preservation for inference; Phase2 inference uses the shared full-context graph rather than a separate KV-cache decode graph.
 - [x] Delete the temporary `InferenceForward_GPU.{hpp,cu}` primitive.
 - [x] Keep loss/backward code in `training/Autograd`.
 
 Exit criteria:
 
 - `AutogradTraining.cu` contains orchestration only: context validation, forward adapter, loss, backward, training-step bridge.
-- Shared training/eval forward code takes a mode-explicit request, not `AutogradContext`.
+- Shared training/eval forward code takes a graph-policy request, not `AutogradContext` and not a training/inference mode enum.
 - Inference prefill calls `Shared/Forward/ModelForward_GPU.cu`, not a separate inference-prefill primitive.
 
 ## Phase 3 — Move generation runtime buffers
@@ -67,6 +67,22 @@ Exit criteria:
 - Inference can run without treating `TrainingState` as its session object.
 - Training-time sampling explicitly allocates/borrows generation state instead of relying on training cache identity.
 
+## Phase 3b — Shared bootstrap / inference loop seam
+
+Status: implemented for the Phase2 inference entrypoint and trainer-owned inference worker routing.
+
+- [x] `Forward::ModelForwardRequest` no longer exposes `ModelForwardMode::TrainingGraph` / `InferencePrefill`; orchestration authors graph policy before entry.
+- [x] Read-only shared prefill detaches embedding, encoder, ScratchBlock, LM-head, and reasoning-head parameter views at the boundary.
+- [x] Add `Phase2_InferenceLoop.*` next to `Phase2_TrainingLoop.*` so `train_gpu --inference` can drive inference orchestration without embedding inference policy inside shared forward or the HTTP bridge.
+- [x] Keep `Phase1_Startup` as the shared train/inference bootstrap path.
+- [x] Move text prompt tokenization, inference `BatchPayload` construction, generation config slicing, and decode into the trainer process (`executePhase2TextInference(...)` plus the train_gpu worker), not `grim_text_server`.
+
+Exit criteria:
+
+- `grim_text_server` launches and proxies to `train_gpu --inference`; it does not include Phase1/Phase2 headers, load config, store/borrow `TrainingContext`, touch tokenizer artifacts, build request `BatchPayload`, derive `GenerationHP`, decode tokens, or hand-initialize CUDA/model topology/inference state/checkpoints.
+- `train_gpu --inference` owns the Phase1-authored inference `TrainingContext`, exposes the internal worker endpoint, and routes request text/options into Phase2 inference over that state.
+- Forward files can be described as read-only graph primitives: they read explicit model/input/runtime payloads and write only explicit per-call outputs/sinks.
+
 ## Phase 4 — Build graph separation
 
 Status: not started.
@@ -78,4 +94,5 @@ Status: not started.
 Exit criteria:
 
 - `grim_text_server` does not compile or link `training/Autograd/AutogradTraining.cu`.
+- `grim_text_server` does not compile or link Phase1/Phase2/training/model CUDA objects; it links only HTTP/JSON/process-bridge dependencies.
 - Any accidental server dependency on training loss/backward fails at build time.

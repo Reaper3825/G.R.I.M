@@ -77,9 +77,10 @@ Phase1Outcome runTokenizerSubprocessAfterHyperparameters(const TrainingContext& 
 } // anonymous namespace
 
 Phase1Result executePhase1(GRIM::HyperParameters::LanguageModelConfig config) {
-    if (config.execution_mode != GRIM::HyperParameters::ModelExecutionMode::TRAINING) {
+    if (config.execution_mode != GRIM::HyperParameters::ModelExecutionMode::TRAINING &&
+        config.execution_mode != GRIM::HyperParameters::ModelExecutionMode::INFERENCE) {
         throw std::runtime_error(
-            "Phase1 requires a TRAINING execution_mode config root");
+            "Phase1 requires a TRAINING or INFERENCE execution_mode config root");
     }
 
     TrainingContext ctx;
@@ -88,6 +89,15 @@ Phase1Result executePhase1(GRIM::HyperParameters::LanguageModelConfig config) {
     LoggingReady(ctx);
     MemorySnapshotReady(ctx);
     HyperparametersReady(ctx);
+
+    if (ctx.config.execution_mode == GRIM::HyperParameters::ModelExecutionMode::INFERENCE) {
+        LoadInferenceTokenizer(ctx);
+        ModelAllocated(ctx);
+        CheckpointLoaded(ctx);
+        PayloadBuildInputsReady(ctx);
+        ctx.start_time = std::chrono::steady_clock::now();
+        return Phase1Result{Phase1Outcome::ready_for_inference, std::move(ctx)};
+    }
 
     const Phase1Outcome tokenizer_outcome = runTokenizerSubprocessAfterHyperparameters(ctx);
     if (tokenizer_outcome == Phase1Outcome::tokenizer_only_complete) {

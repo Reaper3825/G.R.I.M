@@ -1,293 +1,317 @@
 //======================================================//
 //  GRIM-text HTTP Server
-//  Ollama-compatible API for GRIM language model
-//  
-//  Runs locally at: http://127.0.0.1:11435
-//  API endpoint: /api/generate
-//  
-//  Author: GRIM Development Team
-//  Date: November 5, 2025
-//  Version: 1.0.0
+//  Ollama-compatible HTTP bridge for the trainer-owned
+//  Phase1/Phase2 inference runtime.
+//
+//  Public endpoint: http://127.0.0.1:11435
+//  Worker process:  train_gpu --inference
 //======================================================//
-
-#define CUDA_GPU_WRAPPER
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windows.h>
 #pragma comment(lib, "ws2_32.lib")
+#else
+#include <signal.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #endif
 
-#include "grim_language_model_cuda.hpp"
-#include "../Shared/UnigramByte/UniByte.hpp"
-#include "../Shared/UnigramByte/AtomTable.hpp"
-#include "../Shared/TokenizerArtifacts/TokenizerArtifactBundle.hpp"
-#include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
-#include "../Shared/HyperParameters/HyperparameterGroupings.hpp"
-#include <iostream>
-#include <filesystem>
-#include <memory>
 #include <chrono>
+#include <filesystem>
+#include <iostream>
 #include <sstream>
+#include <stdexcept>
+#include <string>
+#include <thread>
 #include <vector>
+
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 
-namespace fs = std::filesystem;
 using json = nlohmann::json;
-using namespace GRIM;
-// Generation views are sliced from the finalized HyperParameters root.
-using GRIM::HyperParameters::GenerationHP;
-using GRIM::HyperParameters::SamplingStrategy;
 
-// Global model + tokenizer
-std::unique_ptr<LanguageModel> g_model;
-std::unique_ptr<GRIM::Tokenizer::UniByte> g_tokenizer;
+namespace {
 
-struct InferencePayloadDefaults {
-    int vocab_size = 0;
-    size_t batch_size = 0;
-    size_t max_cached_seq_len = 0;
-    int execution_block_num_slots = 0;
+struct ServerOptions {
+    int public_port = 11435;
+    int worker_port = 11436;
+    std::filesystem::path train_gpu_path;
 };
 
-InferencePayloadDefaults g_payload_defaults;
-
-GenerationHP g_generation_defaults;
-bool g_generation_defaults_ready = false;
-
-const GenerationHP& requireGenerationDefaults(const char* caller)
-{
-    if (!g_generation_defaults_ready) {
-        throw std::runtime_error(std::string(caller) + ": generation defaults were not initialized from LanguageModelConfig");
+std::filesystem::path currentExecutablePath(char** argv) {
+    if (!argv || !argv[0] || std::string(argv[0]).empty()) {
+        throw std::runtime_error("grim_text_server: argv[0] is empty; cannot locate train_gpu.exe");
     }
-    return g_generation_defaults;
+    std::filesystem::path exe_path(argv[0]);
+    if (exe_path.is_relative()) {
+        exe_path = std::filesystem::current_path() / exe_path;
+    }
+    return std::filesystem::weakly_canonical(exe_path);
 }
 
-//======================================================//
-//  Initialize Model
-//======================================================//
-bool initializeModel(const HyperParameters::LanguageModelConfig& config,
-                     const std::string& model_path)
-{
-    const auto tokenizer_hp = HyperParameters::tokenizerHP(config);
-    const std::string& vocab_path = tokenizer_hp.vocab_path;
-    std::cout << "[GRIM-text] Initializing model...\n";
-    std::cout << "[GRIM-text] Vocab: " << vocab_path << "\n";
-    std::cout << "[GRIM-text] GRMT: " << tokenizer_hp.data_path << "\n";
-    std::cout << "[GRIM-text] Model: " << model_path << "\n";
+std::string pathListForError(const std::vector<std::filesystem::path>& paths) {
+    std::ostringstream oss;
+    for (const auto& path : paths) {
+        oss << "\n  - " << path.string();
+    }
+    return oss.str();
+}
 
-    try {
-        g_tokenizer = std::make_unique<GRIM::Tokenizer::UniByte>(tokenizer_hp);
-        (void)GRIM::TokenizerArtifacts::loadTokenizerArtifactBundle(tokenizer_hp, *g_tokenizer);
-        if (!g_tokenizer->initGPU()) {
-            throw std::runtime_error("GRIM-text server tokenizer GPU initialization failed; production prompt tokenization requires uploaded CUDA trie state");
+std::filesystem::path resolveTrainGpuPath(char** argv, const std::filesystem::path& explicit_path) {
+    if (!explicit_path.empty()) {
+        if (!std::filesystem::exists(explicit_path)) {
+            throw std::runtime_error("grim_text_server: --train-gpu path does not exist: " +
+                                     explicit_path.string());
+        }
+        return std::filesystem::weakly_canonical(explicit_path);
+    }
+
+    const auto server_exe = currentExecutablePath(argv);
+    const auto server_dir = server_exe.parent_path();
+    const auto cwd = std::filesystem::current_path();
+
+    std::vector<std::filesystem::path> candidates;
+#ifdef _WIN32
+    candidates.push_back(server_dir / "train_gpu.exe");
+    candidates.push_back(cwd / "resources" / "models" / "GRIM-text" / "training" / "build" / "Release" / "train_gpu.exe");
+    candidates.push_back(cwd / "resources" / "models" / "GRIM-text" / "training" / "build" / "Debug" / "train_gpu.exe");
+    candidates.push_back(cwd / "resources" / "models" / "GRIM-text" / "training" / "TrainingLoop" / "build" / "Release" / "train_gpu.exe");
+    candidates.push_back(cwd / "resources" / "models" / "GRIM-text" / "training" / "TrainingLoop" / "build" / "Debug" / "train_gpu.exe");
+#else
+    candidates.push_back(server_dir / "train_gpu");
+    candidates.push_back(cwd / "resources" / "models" / "GRIM-text" / "training" / "build" / "Release" / "train_gpu");
+    candidates.push_back(cwd / "resources" / "models" / "GRIM-text" / "training" / "build" / "Debug" / "train_gpu");
+    candidates.push_back(cwd / "resources" / "models" / "GRIM-text" / "training" / "TrainingLoop" / "build" / "train_gpu");
+#endif
+
+    for (const auto& candidate : candidates) {
+        if (std::filesystem::exists(candidate)) {
+            return std::filesystem::weakly_canonical(candidate);
+        }
+    }
+
+    throw std::runtime_error("grim_text_server: could not locate train_gpu executable. Checked:" +
+                             pathListForError(candidates) +
+                             "\nPass --train-gpu <path> to make the process boundary explicit.");
+}
+
+ServerOptions parseOptions(int argc, char** argv) {
+    ServerOptions options;
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--config") {
+            throw std::runtime_error("grim_text_server: --config is not supported; train_gpu owns startup config loading");
+        }
+        if (arg == "--port") {
+            if (i + 1 >= argc) {
+                throw std::runtime_error("grim_text_server: --port requires a value");
+            }
+            options.public_port = std::stoi(argv[++i]);
+            continue;
+        }
+        if (arg == "--worker-port") {
+            if (i + 1 >= argc) {
+                throw std::runtime_error("grim_text_server: --worker-port requires a value");
+            }
+            options.worker_port = std::stoi(argv[++i]);
+            continue;
+        }
+        if (arg == "--train-gpu") {
+            if (i + 1 >= argc) {
+                throw std::runtime_error("grim_text_server: --train-gpu requires a value");
+            }
+            options.train_gpu_path = std::filesystem::path(argv[++i]);
+            continue;
+        }
+        throw std::runtime_error("grim_text_server: unsupported argument: " + arg);
+    }
+    if (options.public_port <= 0 || options.public_port > 65535) {
+        throw std::runtime_error("grim_text_server: --port must be in 1..65535");
+    }
+    if (options.worker_port <= 0 || options.worker_port > 65535) {
+        throw std::runtime_error("grim_text_server: --worker-port must be in 1..65535");
+    }
+    if (options.public_port == options.worker_port) {
+        throw std::runtime_error("grim_text_server: --port and --worker-port must be different");
+    }
+    return options;
+}
+
+#ifdef _WIN32
+std::wstring utf8ToWide(const std::string& value) {
+    if (value.empty()) {
+        return std::wstring();
+    }
+    const int count = MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, nullptr, 0);
+    if (count <= 0) {
+        throw std::runtime_error("grim_text_server: failed to convert process command to UTF-16");
+    }
+    std::wstring wide(static_cast<size_t>(count - 1), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, wide.data(), count);
+    return wide;
+}
+#endif
+
+class TrainGpuProcess {
+public:
+    TrainGpuProcess() = default;
+    TrainGpuProcess(const TrainGpuProcess&) = delete;
+    TrainGpuProcess& operator=(const TrainGpuProcess&) = delete;
+
+    ~TrainGpuProcess() {
+        stop();
+    }
+
+    void start(const std::filesystem::path& train_gpu_path, int worker_port) {
+#ifdef _WIN32
+        STARTUPINFOW startup_info{};
+        startup_info.cb = sizeof(startup_info);
+        PROCESS_INFORMATION process_info{};
+
+        std::string command = "\"" + train_gpu_path.string() + "\" --inference --inference-worker-port " +
+                              std::to_string(worker_port);
+        std::wstring wide_command = utf8ToWide(command);
+        std::vector<wchar_t> mutable_command(wide_command.begin(), wide_command.end());
+        mutable_command.push_back(L'\0');
+
+        const BOOL created = CreateProcessW(
+            nullptr,
+            mutable_command.data(),
+            nullptr,
+            nullptr,
+            FALSE,
+            0,
+            nullptr,
+            nullptr,
+            &startup_info,
+            &process_info);
+
+        if (!created) {
+            throw std::runtime_error("grim_text_server: CreateProcessW failed for " + train_gpu_path.string() +
+                                     " (GetLastError=" + std::to_string(GetLastError()) + ")");
         }
 
-        std::cout << "[GRIM-text] Loaded " << g_tokenizer->vocabSize() << " tokens\n";
-        std::cout << "[GRIM-text] EOS token ID: " << GRIM::Tokenizer::EOS_TOKEN_ID << "\n";
-        std::cout << "[GRIM-text] PAD token ID: " << GRIM::Tokenizer::PAD_TOKEN_ID << "\n";
-
-        if (g_tokenizer->vocabSize() > static_cast<std::size_t>(config.vocab_size)) {
-            throw std::runtime_error(
-                "GRIM-text server tokenizer vocabSize=" + std::to_string(g_tokenizer->vocabSize()) +
-                " exceeds configured model vocab_size=" + std::to_string(config.vocab_size));
+        process_info_ = process_info;
+#else
+        const pid_t pid = fork();
+        if (pid < 0) {
+            throw std::runtime_error("grim_text_server: fork failed while launching train_gpu");
         }
+        if (pid == 0) {
+            const std::string worker_port_text = std::to_string(worker_port);
+            execl(train_gpu_path.c_str(), train_gpu_path.c_str(), "--inference",
+                  "--inference-worker-port", worker_port_text.c_str(), static_cast<char*>(nullptr));
+            _exit(127);
+        }
+        child_pid_ = pid;
+#endif
+    }
 
-        g_generation_defaults = HyperParameters::generationHP(config);
-        g_generation_defaults_ready = true;
-        const auto execution_hp = HyperParameters::executionBlockConstructionHP(config);
-        g_payload_defaults.vocab_size = config.vocab_size;
-        g_payload_defaults.batch_size = static_cast<size_t>(config.batch_size);
-        g_payload_defaults.max_cached_seq_len = static_cast<size_t>(config.max_cached_seq_len);
-        g_payload_defaults.execution_block_num_slots = execution_hp.num_slots;
-        
-        g_model = std::make_unique<LanguageModel>(config);
-        std::cout << "[GRIM-text] ✓ Model object created\n" << std::flush;
-
-        if (!fs::exists(model_path)) {
-            std::cerr << "[GRIM-text] ERROR: Model file missing: " << model_path << "\n" << std::flush;
+    bool isRunning() const {
+#ifdef _WIN32
+        if (!process_info_.hProcess) {
             return false;
         }
-        std::cout << "[GRIM-text] Loading weights from " << model_path << "\n" << std::flush;
-
-        if (!g_model->load(model_path)) {
-            std::cerr << "[GRIM-text] ERROR: Failed to load model weights.\n" << std::flush;
+        DWORD exit_code = 0;
+        if (!GetExitCodeProcess(process_info_.hProcess, &exit_code)) {
             return false;
         }
-
-        std::cout << "[GRIM-text] ✓ Weights loaded successfully\n" << std::flush;
-
-        return true;
-
-    } catch (const std::exception& e) {
-        std::cerr << "[GRIM-text] ERROR: " << e.what() << "\n";
-        return false;
+        return exit_code == STILL_ACTIVE;
+#else
+        if (child_pid_ <= 0) {
+            return false;
+        }
+        int status = 0;
+        const pid_t result = waitpid(child_pid_, &status, WNOHANG);
+        return result == 0;
+#endif
     }
+
+    void stop() {
+#ifdef _WIN32
+        if (process_info_.hProcess) {
+            DWORD exit_code = 0;
+            if (GetExitCodeProcess(process_info_.hProcess, &exit_code) && exit_code == STILL_ACTIVE) {
+                TerminateProcess(process_info_.hProcess, 0);
+                WaitForSingleObject(process_info_.hProcess, 5000);
+            }
+            CloseHandle(process_info_.hProcess);
+            process_info_.hProcess = nullptr;
+        }
+        if (process_info_.hThread) {
+            CloseHandle(process_info_.hThread);
+            process_info_.hThread = nullptr;
+        }
+#else
+        if (child_pid_ > 0) {
+            if (isRunning()) {
+                kill(child_pid_, SIGTERM);
+                waitpid(child_pid_, nullptr, 0);
+            }
+            child_pid_ = -1;
+        }
+#endif
+    }
+
+private:
+#ifdef _WIN32
+    PROCESS_INFORMATION process_info_{};
+#else
+    pid_t child_pid_ = -1;
+#endif
+};
+
+void waitForWorkerReady(const TrainGpuProcess& worker, int worker_port) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(10);
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (!worker.isRunning()) {
+            throw std::runtime_error("grim_text_server: train_gpu exited before inference worker became ready");
+        }
+
+        httplib::Client client("127.0.0.1", worker_port);
+        client.set_connection_timeout(0, 200000);
+        client.set_read_timeout(1, 0);
+        auto response = client.Get("/internal/status");
+        if (response && response->status == 200) {
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+
+    throw std::runtime_error("grim_text_server: timed out waiting for train_gpu inference worker readiness");
 }
 
-//======================================================//
-//  Generate Response
-//======================================================//
-std::string generateResponse(const std::string& prompt, const GenerationHP& gen_config_in)
+void forwardToWorker(
+    int worker_port,
+    const char* worker_path,
+    const httplib::Request& req,
+    httplib::Response& res)
 {
-    if (!g_model || !g_tokenizer)
-        return "Error: Model not initialized";
-
-    try {
-        std::cout << "[Generate] Encoding prompt (" << prompt.size() << " chars)..." << std::flush;
-        auto start_encode = std::chrono::high_resolution_clock::now();
-        auto encoded = g_tokenizer->tokenizeWithMetadata(prompt);
-        auto tokens = std::move(encoded.token_ids);
-        auto numeric_values = std::move(encoded.token_numeric_values);
-        auto atom_mask = std::move(encoded.token_atom_mask);
-        auto atom_flags = std::move(encoded.token_atom_flags);
-        auto prompt_atom_table = encoded.atom_table;
-        auto atom_entry_ids = std::move(encoded.atom_entry_ids);
-        auto end_encode = std::chrono::high_resolution_clock::now();
-        auto encode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_encode - start_encode).count();
-        std::cout << " " << tokens.size() << " tokens (" << encode_ms << "ms)" << std::endl;
-
-        int eos_id = GRIM::Tokenizer::EOS_TOKEN_ID;
-        if (!tokens.empty() && tokens.back() == eos_id) {
-            tokens.pop_back();
-            if (numeric_values.empty()) {
-                throw std::runtime_error("generateResponse: numeric_values empty while removing EOS");
-            }
-            numeric_values.pop_back();
-            if (atom_mask.empty()) {
-                throw std::runtime_error("generateResponse: atom_mask empty while removing EOS");
-            }
-            atom_mask.pop_back();
-            if (atom_flags.empty()) {
-                throw std::runtime_error("generateResponse: atom_flags empty while removing EOS");
-            }
-            atom_flags.pop_back();
-            if (atom_entry_ids.empty()) {
-                throw std::runtime_error("generateResponse: atom_entry_ids empty while removing EOS");
-            }
-            atom_entry_ids.pop_back();
-            std::cout << "[Generate] Removed EOS from prompt, now " << tokens.size() << " tokens" << std::endl;
-        }
-
-        GenerationHP gen_config = gen_config_in;
-
-        std::cout << "[Generate] EOS token ID: " << gen_config.eos_token_id 
-                  << ", PAD token ID: " << gen_config.pad_token_id << std::endl;
-        std::cout << "[Generate] Starting generation (max_tokens=" << gen_config.max_new_tokens << ", temp=" << gen_config.temperature << ")..." << std::endl << std::flush;
-        auto start_gen = std::chrono::high_resolution_clock::now();
-        if (g_payload_defaults.vocab_size <= 0 ||
-            g_payload_defaults.batch_size == 0 ||
-            g_payload_defaults.max_cached_seq_len == 0) {
-            throw std::runtime_error("generateResponse: inference payload defaults were not initialized");
-        }
-        const std::vector<int32_t> prompt_token_to_slot_map;
-        auto prompt_payload = GRIM::Batching::buildInferenceBatchPayload(
-            tokens,
-            numeric_values,
-            atom_mask,
-            atom_flags,
-            prompt_atom_table,
-            atom_entry_ids,
-            prompt_token_to_slot_map,
-            g_payload_defaults.vocab_size,
-            g_payload_defaults.batch_size,
-            g_payload_defaults.max_cached_seq_len,
-            g_payload_defaults.execution_block_num_slots);
-        auto results = g_model->generate(prompt_payload, gen_config);
-        auto end_gen = std::chrono::high_resolution_clock::now();
-        auto gen_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_gen - start_gen).count();
-
-        if (results.empty()) {
-            std::cout << "[Generate] FAILED - no results" << std::endl;
-            return "Error: Generation failed";
-        }
-
-        std::cout << "[Generate] Generated " << results[0].token_ids.size() << " tokens in " << gen_ms << "ms" << std::endl;
-        std::cout << "[Generate] Tokens/sec: " << (results[0].token_ids.size() * 1000.0 / gen_ms) << std::endl;
-        std::cout << "[Generate] Decoding..." << std::flush;
-        auto start_decode = std::chrono::high_resolution_clock::now();
-
-        const auto& seq = results[0];
-        const GRIM::Tokenizer::AtomTable* atom_tbl = seq.context_atom_table.get();
-        std::string output;
-        const GRIM::Tokenizer::TokenLayout layout = g_tokenizer->tokenLayout();
-        auto append_token_text = [&](int tid) {
-            if (layout.isSpecial(tid)) {
-                output += GRIM::Tokenizer::specialTokenText(tid);
-                return;
-            }
-            if (layout.isByte(tid)) {
-                output.push_back(static_cast<char>(g_tokenizer->byteEncoder().tokenToByte(tid)));
-                return;
-            }
-            if (layout.isAtom(tid)) {
-                output += "<";
-                output += GRIM::Tokenizer::atomTypeName(GRIM::Tokenizer::tokenIdToAtomType(tid));
-                output += ">";
-                return;
-            }
-            if (layout.isUnigram(tid)) {
-                const auto* piece = g_tokenizer->unigramLM().getPiece(tid);
-                if (!piece) {
-                    throw std::runtime_error("grim_text_server decode: unigram token_id=" +
-                                             std::to_string(tid) + " has no backing piece");
-                }
-                output += piece->text;
-                return;
-            }
-            throw std::runtime_error("grim_text_server decode: token_id=" + std::to_string(tid) +
-                                     " is outside the GRMT/tokenizer vocab layout");
-        };
-        for (size_t i = 0; i < seq.token_ids.size(); ++i) {
-            const int tid = seq.token_ids[i];
-
-            if (layout.isByte(tid)) {
-                append_token_text(tid);
-                continue;
-            }
-
-            if (layout.isAtom(tid)) {
-                // Context atoms: use atom table raw text
-                if (atom_tbl && i < seq.atom_entry_ids.size() &&
-                    seq.atom_entry_ids[i] != GRIM::Tokenizer::kAtomEntryNone) {
-                    const auto entry = atom_tbl->getAtom(seq.atom_entry_ids[i]);
-                    if (entry) {
-                        output += atom_tbl->atomToString(*entry);
-                        continue;
-                    }
-                }
-
-                // Model-generated <NUM>: format the predicted numeric value
-                if (i < seq.token_atom_mask.size() && seq.token_atom_mask[i] != 0 &&
-                    i < seq.token_numeric_values.size()) {
-                    output += GRIM::Tokenizer::formatNumericValue(seq.token_numeric_values[i]);
-                    continue;
-                }
-
-                append_token_text(tid);
-                continue;
-            }
-
-            append_token_text(tid);
-        }
-
-        auto end_decode = std::chrono::high_resolution_clock::now();
-        auto decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_decode - start_decode).count();
-        std::cout << " done (" << decode_ms << "ms)" << std::endl;
-
-        return output;
-
-    } catch (const std::exception& e) {
-        std::cout << "[Generate] EXCEPTION: " << e.what() << std::endl;
-        return std::string("Error: ") + e.what();
+    httplib::Client client("127.0.0.1", worker_port);
+    client.set_connection_timeout(2, 0);
+    client.set_read_timeout(600, 0);
+    auto worker_response = client.Post(worker_path, req.body, "application/json");
+    if (!worker_response) {
+        res.status = 502;
+        res.set_content(json({{"error", "train_gpu inference worker did not return a response"}}).dump(),
+                        "application/json");
+        return;
     }
+
+    res.status = worker_response->status;
+    std::string content_type = worker_response->get_header_value("Content-Type");
+    if (content_type.empty()) {
+        content_type = "application/json";
+    }
+    res.set_content(worker_response->body, content_type.c_str());
 }
 
-//======================================================//
-//  MAIN SERVER — LAZY CUDA INITIALIZATION
-//======================================================//
+} // namespace
+
 int main(int argc, char** argv)
 {
 #ifdef _WIN32
@@ -295,211 +319,64 @@ int main(int argc, char** argv)
     WSAStartup(MAKEWORD(2, 2), &wsaData);
 #endif
 
-    std::cout << "========================================\n";
-    std::cout << "  GRIM-text HTTP Server v1.0.0\n";
-    std::cout << "  Ollama-compatible API\n";
-    std::cout << "========================================\n";
-
-    std::vector<std::string> positionals;
-    for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
-        if (arg == "--config") {
-            std::cerr << "[GRIM-text] ERROR: --config is no longer supported; use the canonical ai_config.json\n";
-            return 2;
-        } else {
-            positionals.push_back(arg);
-        }
-    }
-
-    HyperParameters::LanguageModelConfig startup_config;
     try {
-        startup_config = HyperParameters::loadStartupConfig(
-            argc,
-            argv,
-            HyperParameters::ModelExecutionMode::INFERENCE);
+        const ServerOptions options = parseOptions(argc, argv);
+        const auto train_gpu_path = resolveTrainGpuPath(argv, options.train_gpu_path);
+
+        std::cout << "========================================\n";
+        std::cout << "  GRIM-text HTTP Bridge v1.0.0\n";
+        std::cout << "  Ollama-compatible API\n";
+        std::cout << "========================================\n";
+        std::cout << "[GRIM-text] Launching train_gpu inference owner: " << train_gpu_path.string() << "\n";
+        std::cout << "[GRIM-text] Internal worker port: " << options.worker_port << "\n";
+
+        TrainGpuProcess worker;
+        worker.start(train_gpu_path, options.worker_port);
+        waitForWorkerReady(worker, options.worker_port);
+        std::cout << "[GRIM-text] ✓ train_gpu inference worker ready\n";
+
+        httplib::Server svr;
+
+        svr.Get("/", [&](const httplib::Request&, httplib::Response& res) {
+            json response = { 
+                {"status", "ok"},
+                {"model", "grim-text"},
+                {"version", "1.0.0"},
+                {"runtime_owner", "train_gpu"}
+            };
+            res.set_content(response.dump(), "application/json");
+        });
+
+        svr.Get("/api/tags", [&](const httplib::Request&, httplib::Response& res) {
+            json response = {
+                {"models", json::array({
+                    {{"name", "grim-text"}, {"modified_at", "2025-11-05T00:00:00Z"},
+                     {"size", 1024 * 1024 * 768}, {"digest", "grim-text-v1"}}
+                })}
+            };
+            res.set_content(response.dump(), "application/json");
+        });
+
+        svr.Post("/api/generate", [&](const httplib::Request& req, httplib::Response& res) {
+            forwardToWorker(options.worker_port, "/internal/generate", req, res);
+        });
+
+        svr.Post("/api/chat", [&](const httplib::Request& req, httplib::Response& res) {
+            forwardToWorker(options.worker_port, "/internal/chat", req, res);
+        });
+
+        std::cout << "[GRIM-text] Starting HTTP bridge on http://127.0.0.1:" << options.public_port << "\n";
+        std::cout << "[GRIM-text] Press Ctrl+C to stop.\n";
+
+        svr.listen("127.0.0.1", options.public_port);
+        worker.stop();
     } catch (const std::exception& e) {
-        std::cerr << "[GRIM-text] ERROR: Failed to load startup config: " << e.what() << "\n";
+        std::cerr << "[GRIM-text] ERROR: " << e.what() << "\n";
+#ifdef _WIN32
+        WSACleanup();
+#endif
         return 1;
     }
-
-    std::cout << "[GRIM-text] Using canonical ai_config.json document\n";
-
-    const auto paths_hp = HyperParameters::pathsHP(startup_config);
-    std::string model_path = paths_hp.output_model_path;
-    int port = 11435;
-
-    std::cout << "[GRIM-text] Config paths loaded successfully\n";
-    std::cout << "[GRIM-text] Using vocab from config: " << paths_hp.vocab_path << "\n";
-    std::cout << "[GRIM-text] Using GRMT from config: " << paths_hp.data_path << "\n";
-    if (!paths_hp.output_model_path.empty()) {
-        model_path = paths_hp.output_model_path;
-        std::cout << "[GRIM-text] Using model from config: " << model_path << "\n";
-    }
-
-    if (positionals.size() >= 1) model_path = positionals[0];
-    if (positionals.size() >= 2) port = std::stoi(positionals[1]);
-
-    // Create server (NO CUDA YET)
-    httplib::Server svr;
-
-    //==================================================//
-    //  API ENDPOINTS (LAZY LOAD MODEL ON FIRST USE)
-    //==================================================//
-
-    svr.Get("/", [&](const httplib::Request&, httplib::Response& res) {
-        json response = {{"status", "ok"}, {"model", "grim-text"}, {"version", "1.0.0"}};
-        res.set_content(response.dump(), "application/json");
-    });
-
-    svr.Get("/api/tags", [&](const httplib::Request&, httplib::Response& res) {
-        json response = {
-            {"models", json::array({
-                {{"name", "grim-text"}, {"modified_at", "2025-11-05T00:00:00Z"},
-                 {"size", 1024 * 1024 * 768}, {"digest", "grim-text-v1"}}
-            })}
-        };
-        res.set_content(response.dump(), "application/json");
-    });
-
-    svr.Post("/api/generate", [&](const httplib::Request& req, httplib::Response& res) {
-        try {
-            auto request = json::parse(req.body);
-            std::string prompt = request.value("prompt", "");
-            const GenerationHP& defaults = requireGenerationDefaults("/api/generate");
-            int max_tokens = request.value("max_tokens", defaults.max_new_tokens);
-            float temperature = request.value("temperature", defaults.temperature);
-
-            if (prompt.empty()) {
-                res.status = 400;
-                res.set_content(json({{"error", "No prompt provided"}}).dump(), "application/json");
-                return;
-            }
-
-            // Build request generation view from root defaults + request overrides.
-            GenerationHP gen_config = defaults;
-            gen_config.max_new_tokens = max_tokens;
-            gen_config.temperature = temperature;
-            
-            // Parse optional sampling parameters
-            if (request.contains("top_p")) gen_config.top_p = request["top_p"].get<float>();
-            if (request.contains("top_k")) gen_config.top_k = request["top_k"].get<int>();
-            if (request.contains("min_p")) gen_config.min_p = request["min_p"].get<float>();
-            if (request.contains("typical_p")) gen_config.typical_p = request["typical_p"].get<float>();
-            if (request.contains("repetition_penalty")) gen_config.repetition_penalty = request["repetition_penalty"].get<float>();
-            if (request.contains("frequency_penalty")) gen_config.frequency_penalty = request["frequency_penalty"].get<float>();
-            if (request.contains("presence_penalty")) gen_config.presence_penalty = request["presence_penalty"].get<float>();
-            if (request.contains("no_repeat_ngram_size")) gen_config.no_repeat_ngram_size = request["no_repeat_ngram_size"].get<int>();
-            if (request.contains("seed")) gen_config.seed = request["seed"].get<unsigned int>();
-            if (request.contains("enable_scratchblock_reasoning")) {
-                gen_config.enable_scratchblock_reasoning = request["enable_scratchblock_reasoning"].get<bool>();
-            }
-            
-            // Strategy override: "greedy", "top_k", "top_p", "min_p", "typical", "top_k_top_p"
-            if (request.contains("strategy")) {
-                std::string strat = request["strategy"].get<std::string>();
-                gen_config.strategy = HyperParameters::parseGenerationSamplingStrategy(strat);
-                if (gen_config.strategy == SamplingStrategy::GREEDY) {
-                    gen_config.do_sample = false;
-                }
-            }
-
-            std::string text = generateResponse(prompt, gen_config);
-
-            json response = {
-                {"model", "grim-text"},
-                {"created_at", "2025-11-05T00:00:00Z"},
-                {"response", text},
-                {"done", true}
-            };
-
-            res.set_content(response.dump(), "application/json");
-
-        } catch (const std::exception& e) {
-            res.status = 500;
-            std::cerr << "[/api/generate] ERROR: " << e.what() << std::endl;
-            res.set_content(json({{"error", std::string(e.what())}}).dump(), "application/json");
-        }
-    });
-
-    svr.Post("/api/chat", [&](const httplib::Request& req, httplib::Response& res) {
-        try {
-            auto request = json::parse(req.body);
-            std::string prompt;
-
-            if (request.contains("messages")) {
-                for (const auto& msg : request["messages"]) {
-                    std::string role = msg.value("role", "");
-                    std::string content = msg.value("content", "");
-                    if (role == "user") prompt += "User: " + content + "\n";
-                    else if (role == "assistant") prompt += "Assistant: " + content + "\n";
-                }
-                prompt += "Assistant: ";
-            }
-
-            const GenerationHP& defaults = requireGenerationDefaults("/api/chat");
-            int max_tokens = request.value("max_tokens", defaults.max_new_tokens);
-            float temperature = request.value("temperature", defaults.temperature);
-
-            // Build request generation view from root defaults + request overrides.
-            GenerationHP gen_config = defaults;
-            gen_config.max_new_tokens = max_tokens;
-            gen_config.temperature = temperature;
-            
-            // Parse optional sampling parameters
-            if (request.contains("top_p")) gen_config.top_p = request["top_p"].get<float>();
-            if (request.contains("top_k")) gen_config.top_k = request["top_k"].get<int>();
-            if (request.contains("min_p")) gen_config.min_p = request["min_p"].get<float>();
-            if (request.contains("typical_p")) gen_config.typical_p = request["typical_p"].get<float>();
-            if (request.contains("repetition_penalty")) gen_config.repetition_penalty = request["repetition_penalty"].get<float>();
-            if (request.contains("frequency_penalty")) gen_config.frequency_penalty = request["frequency_penalty"].get<float>();
-            if (request.contains("presence_penalty")) gen_config.presence_penalty = request["presence_penalty"].get<float>();
-            if (request.contains("no_repeat_ngram_size")) gen_config.no_repeat_ngram_size = request["no_repeat_ngram_size"].get<int>();
-            if (request.contains("seed")) gen_config.seed = request["seed"].get<unsigned int>();
-            if (request.contains("enable_scratchblock_reasoning")) {
-                gen_config.enable_scratchblock_reasoning = request["enable_scratchblock_reasoning"].get<bool>();
-            }
-            if (request.contains("strategy")) {
-                std::string strat = request["strategy"].get<std::string>();
-                gen_config.strategy = HyperParameters::parseGenerationSamplingStrategy(strat);
-                if (gen_config.strategy == SamplingStrategy::GREEDY) {
-                    gen_config.do_sample = false;
-                }
-            }
-
-            std::string text = generateResponse(prompt, gen_config);
-
-            json response = {
-                {"model", "grim-text"},
-                {"created_at", "2025-11-05T00:00:00Z"},
-                {"message", {{"role", "assistant"}, {"content", text}}},
-                {"done", true}
-            };
-
-            res.set_content(response.dump(), "application/json");
-
-        } catch (const std::exception& e) {
-            res.status = 500;
-            std::cerr << "[/api/chat] ERROR: " << e.what() << std::endl;
-            res.set_content(json({{"error", std::string(e.what())}}).dump(), "application/json");
-        }
-    });
-
-    //==================================================//
-    //  LOAD MODEL FIRST, THEN START SERVER
-    //==================================================//
-
-    std::cout << "[GRIM-text] Loading model (this may take 30+ seconds)...\n";
-    if (!initializeModel(startup_config, model_path)) {
-        std::cerr << "[GRIM-text] ERROR: Model initialization failed\n";
-        return 1;
-    }
-
-    std::cout << "[GRIM-text] ✓ Model loaded successfully\n";
-    std::cout << "[GRIM-text] Starting HTTP server on http://127.0.0.1:" << port << "\n";
-    std::cout << "[GRIM-text] Press Ctrl+C to stop.\n";
-
-    // NOW start listening (CUDA already initialized)
-    svr.listen("127.0.0.1", port);
 
 #ifdef _WIN32
     WSACleanup();

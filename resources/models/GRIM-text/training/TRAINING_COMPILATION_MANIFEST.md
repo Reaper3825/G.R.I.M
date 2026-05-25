@@ -364,7 +364,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **FIXED**: `cudaDeviceSynchronize` failure `std::cerr + return` → `throw std::runtime_error()` (Rule 20)
   - **DELETED**: Unused `cudaError_t err;` declaration (dead variable)
   - **DELETED**: `scratch_pool = nullptr` with misleading "first use" comment — ScratchBlock inference doesn't use pool
-  - NOT dead code: Called from 4 sites in `grim_language_model_gpu.cu`, 1 in `Inference_GPU.cu`, 1 in `grim_model_serialization.cu`
+  - NOT dead code: Called by startup/model allocation and serialization paths that need inference runtime validation/allocation.
 
 ---
 
@@ -389,17 +389,11 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **DELETED**: `FWD_ERROR` macro — only 2 usages, both replaced by the throw
   - No stale code, no dead functions; encoder public API is construction + layer accessors only ✅
 
-- [x] **Inference_GPU.cu** ✅ AUDITED & FIXED (phase-2 boundary split)
-  - Inference-mode prefill enters `Shared/Forward/ModelForward_GPU.cu` with `ModelForwardMode::InferencePrefill`; it no longer creates `AutogradContext` or calls `executeAutogradForward()`.
-  - `executeInferenceForward_()`: builds explicit `BatchDeviceBindings` + geometry-only `BatchPayload`, runs shared forward, returns last-token logits, and copies preserved per-layer K/V tensors into `GenerationState` KV cache before clearing intermediates.
-  - `forwardInit()`: Prefill phase — copies prompt tokens to device, runs full forward
-  - `forwardStep()`: Decode phase — appends token, then chooses the valid generation path: KV-cached single-token decode for sequence-local configs, full current-sequence prefill for sequence-coupled geometry (`center_encoder_residuals`, `lm_head_center_hidden_states`, `project_out_pc1`)
-  - `forwardWithCache()`: Full sequence forward, returns last-token hidden states (encoder output)
-  - **DELETED**: `forwardStepIncremental()` — zero callers, alias to `forwardStep()`, header falsely claimed "O(n)" (Rule 26)
-  - **DELETED**: `forwardWithCache()` dead text-feature/text-mask params — never passed, never used
-  - **DELETED**: Misleading header comment block claiming incremental O(n) behavior
-  - Rule 20 compliant: All error paths throw ✅
-  - No AutogradContext inference path remains; prefill uses `ModelForwardMode::InferencePrefill`, which disables dropout/no-grad tracking and preserves layer intermediates for KV handoff ✅
+- [x] **Inference_GPU.cu** ✅ DELETED (phase-2 boundary split)
+  - Phase2 inference owns the generation session: prompt/current-sequence payload construction, sampling, appending, and decode.
+  - `LanguageModel::getNextTokenLogits(BatchPayload)` is the only model inference scorer; it uploads the explicit payload, enters `Shared/Forward/ModelForward_GPU.cu` with `ModelForwardGraphPolicy{false,false,false}`, returns last-token logits, and clears intermediates.
+  - **DELETED**: `scoreSequenceFullContext_()`, `primeGenerationSession()`, `continueGenerationSession()`, `scoreNextTokenWithKvCache_()`, KV-cache/decode scratch allocation, and the second encoder-layer implementation.
+  - No AutogradContext inference path remains; inference uses the shared read-only full-context graph only ✅
 
 ---
 
@@ -1051,7 +1045,7 @@ For each encoding layer (Layer 0 → Layer 11):
 
 - [x] **AutogradTraining.cu** ✅ AUDITED & FULLY REFACTORED (2070 lines, 4 major functions)
   - **PRIMARY BACKWARD PATH**: `executeAutogradBackward(ctx)` — handles text loss + numeric loss + learned weighting + ScratchBlock backward
-  - **PRIMARY FORWARD PATH**: `executeAutogradForward(ctx)` — full model forward through autograd graph
+  - **PRIMARY TRAINING GRAPH PATH**: `materializeTrainingGraphActivations(ctx)` — full model activation graph through autograd
   - **PRIMARY LOSS PATH**: `computeAutogradLoss(ctx, loss_config, mtp_alpha_effective)` — text CE + auxiliary loss assembly, returns `LossResult`
   - **PRIMARY TRAINING STEP**: `autogradTrainingStep(model, training_state, payload, ...)` — GPU copies + forward + loss + backward in single call
   - **FIXED (Issue #140)**: Removed √d_model embedding scaling (scale=1.0f) — eliminates 27.7x gradient asymmetry for tied weights

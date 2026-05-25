@@ -161,8 +161,6 @@ struct GeneratedSequence {
     std::vector<uint32_t> atom_entry_ids;  // Per-token atom entry IDs (kAtomEntryNone = no atom)
     float score = 0.0f;
     bool finished = false;
-
-    float getNormalizedScore(float length_penalty) const;
 };
 
 // OptimizerStep (AdamW/RAdamW step counter) lives in
@@ -204,58 +202,19 @@ public:
     explicit LanguageModel(const HyperParameters::LanguageModelConfig& config);
     ~LanguageModel();
     
-    // Main inference API: callers must build BatchPayload through Shared/Batching.
+    // Main inference scoring API: callers must build BatchPayload through Shared/Batching.
+    // Autoregressive generation orchestration belongs to training/Phases/Phase2_InferenceLoop.*.
     Vector getNextTokenLogits(const GRIM::Batching::BatchPayload& context_payload);
-    std::vector<GeneratedSequence> generate(const GRIM::Batching::BatchPayload& prompt_payload,
-                              const HyperParameters::GenerationHP& gen_config);
-    GeneratedSequence generateStream(const GRIM::Batching::BatchPayload& prompt_payload,
-                                     HyperParameters::GenerationStreamCallback callback,
-                          const HyperParameters::GenerationHP& gen_config);
     
     // Training/inference payload upload.
     //
     // uploadBatchToDevice() performs the H2D copies into TrainingState's
     // reusable cache buffers and returns a BatchDeviceBindings that names the
     // resulting device pointers. Training consumes those bindings through
-    // GRIM::Autograd::autogradTrainingStep(); inference prefill consumes them
-    // through executeInferenceForward_(). There is no separate eval-loss loop.
+    // GRIM::Autograd::autogradTrainingStep(); inference consumes them through
+    // getNextTokenLogits(). There is no separate eval-loss loop.
     GRIM::Batching::BatchDeviceBindings uploadBatchToDevice(
         const GRIM::Batching::BatchPayload& payload);
-    
-    // =========================================================================
-    //  GENERATION API
-    // =========================================================================
-    // Use these for token-by-token generation:
-    //   1. Build an InferencePrefill BatchPayload and call forwardInit().
-    //   2. Call forwardStep() for each sampled token.
-    //      - Sequence-local configs use KV-cached single-token decode.
-    //      - Sequence-coupled geometry (encoder residual centering, LM-head
-    //        hidden centering, PC1 projection) recomputes the full current
-    //        sequence so sequence-wise means/projections are mathematically valid.
-    //   3. Call resetKVCache() before starting a new generation session.
-    // =========================================================================
-    
-    // Initialize KV cache with prompt payload (prefill phase)
-    // Returns logits for the last prompt token (ready for first sampling)
-    Vector forwardInit(const GRIM::Batching::BatchPayload& prompt_payload);
-    
-    // Process the caller-authored current-sequence payload and return logits for
-    // the next sampling step. Uses KV decode only when the active config has no
-    // sequence-coupled geometry; otherwise reruns the full current sequence.
-    Vector forwardStep(const GRIM::Batching::BatchPayload& step_payload);
-
-    // Ensure KV cache + decode scratch buffers are allocated.
-    // Safe to call repeatedly — skips if already allocated.
-    // Required before any incremental generation (prefill + decode).
-    void ensureKVCacheAllocated();
-
-    // Clear KV cache (call before starting new generation)
-    void resetKVCache();
-    
-    // Get current generation length. For sequence-local configs this is also
-    // the number of tokens with cached K,V; for full-context configs it is only
-    // the committed sequence length.
-    int getKVCacheLength() const;
     
     void initCuBLASHandle();   // Initialize cuBLAS handle only (MUST be called before initGPU)
     void initPBM();            // Initialize PBM (ALiBi+RoPE hybrid) - MUST be called before initGPU
@@ -275,6 +234,8 @@ public:
     // Training state access (for debugging/diagnostics)
     const TrainingState& getTrainingState() const { return training_state_; }
     TrainingState& getTrainingState() { return training_state_; }
+    const GenerationState& getGenerationState() const { return generation_state_; }
+    GenerationState& getGenerationState() { return generation_state_; }
     const PBM::PBMSpec& getPBMSpec() const;
     const PBM::PBMState& getPBMState() const;
     bool isPBMInitialized() const;
@@ -345,27 +306,7 @@ public:
     
 #endif
     
-    GeneratedSequence generateSequenceGPU(const GRIM::Batching::BatchPayload& prompt_payload,
-                                          const HyperParameters::GenerationHP& cfg,
-                                          HyperParameters::GenerationStreamCallback* stream_callback = nullptr);
-    
 private:
-    // Core inference forward: consumes an explicit BatchPayload + matching
-    // BatchDeviceBindings pair. Runs mode-explicit forward, extracts last-token
-    // logits, and optionally populates GenerationState KV cache before clearing
-    // intermediates.
-    Vector executeInferenceForward_(const GRIM::Batching::BatchPayload& payload,
-                                    const GRIM::Batching::BatchDeviceBindings& bindings,
-                                    bool populate_kv_cache = false,
-                                    bool update_decode_selector_after_prefill = false);
-
-    // KV-cached decode: processes the final token in step_payload through all
-    // encoder layers using cached K,V from prior tokens. Device addresses come
-    // only from BatchDeviceBindings, not hidden TrainingState token caches.
-    Vector executeDecodeForward_(const GRIM::Batching::BatchPayload& step_payload,
-                                 const GRIM::Batching::BatchDeviceBindings& bindings,
-                                 int token_pos);
-
     HyperParameters::LanguageModelConfig config_;
     std::unique_ptr<GrimEmbeddingStack> embedder_;
     

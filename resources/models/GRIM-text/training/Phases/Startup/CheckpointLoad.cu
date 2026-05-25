@@ -1,18 +1,15 @@
-#include "CheckpointLoad.hpp"
-
-#include "InitFacts.hpp"
 #include "../Phase1_Startup.hpp"
+
+#include "CheckpointLoad.hpp"
+#include "InitFacts.hpp"
 
 #include "../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../../Shared/LogRecorder/LogRecorder.hpp"
 
-#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
-#include <utility>
-#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -20,33 +17,21 @@ namespace GRIMText::Training {
 
 namespace {
 
-std::vector<std::pair<int, std::string>> discoverCheckpointCandidates(
-    const GRIM::HyperParameters::PathsHP& paths_hp,
-    TrainingLogger& logger)
+void handleUnusableCheckpointRequest(
+    const GRIM::HyperParameters::CheckpointLoadHP& checkpoint_hp,
+    TrainingLogger& logger,
+    const std::string& reason)
 {
-    std::vector<std::pair<int, std::string>> checkpoint_candidates;
-    if (fs::exists(paths_hp.checkpoint_dir) && fs::is_directory(paths_hp.checkpoint_dir)) {
-        for (const auto& entry : fs::directory_iterator(paths_hp.checkpoint_dir)) {
-            const auto& p = entry.path();
-            if (p.extension() == ".bin" && p.stem().string().rfind("checkpoint_epoch_", 0) == 0) {
-                std::string stem = p.stem().string();
-                std::string epoch_str = stem.substr(std::string("checkpoint_epoch_").size());
-                try {
-                    int epoch = std::stoi(epoch_str);
-                    checkpoint_candidates.emplace_back(epoch, p.string());
-                } catch (const std::exception& e) {
-                    logger.log("[WARNING] Skipping malformed checkpoint filename: " + stem + " (" + e.what() + ")");
-                }
-            }
-        }
+    if (checkpoint_hp.execution_mode == GRIM::HyperParameters::ModelExecutionMode::INFERENCE) {
+        throw std::runtime_error(
+            "CheckpointLoaded: inference requires a usable explicit checkpoint path: " + reason);
     }
 
-    std::sort(checkpoint_candidates.begin(), checkpoint_candidates.end(),
-              [](const auto& a, const auto& b) { return a.first > b.first; });
-    return checkpoint_candidates;
+    logger.log("Checkpoint request unusable for TRAINING execution mode: " + reason);
+    logger.log("Starting fresh model state for TRAINING execution mode");
 }
 
-void loadMostRecentCheckpoint(TrainingContext& ctx)
+void loadRequestedCheckpoint(TrainingContext& ctx)
 {
     if (!ctx.model) {
         throw std::runtime_error("CheckpointLoaded: model is NULL; call ModelAllocated(ctx) before CheckpointLoaded(ctx)");
@@ -58,28 +43,46 @@ void loadMostRecentCheckpoint(TrainingContext& ctx)
     auto& logger = *ctx.logging.logger;
     ctx.loaded_checkpoint_path.clear();
 
-    const auto paths_hp = GRIM::HyperParameters::pathsHP(ctx.config);
-    auto checkpoint_candidates = discoverCheckpointCandidates(paths_hp, logger);
+    const auto checkpoint_hp = GRIM::HyperParameters::checkpointLoadHP(
+        ctx.config,
+        ctx.requested_checkpoint_path,
+        ctx.config.execution_mode);
 
-    bool loaded_checkpoint = false;
-    for (const auto& [epoch, checkpoint_path] : checkpoint_candidates) {
-        logger.log("Found checkpoint candidate: " + checkpoint_path + " (epoch " + std::to_string(epoch) + ")");
-        if (ctx.model->load(checkpoint_path)) {
-            logger.log("✓ Loaded weights from checkpoint: " + checkpoint_path);
-            loaded_checkpoint = true;
-            ctx.loaded_checkpoint_path = checkpoint_path;
-            break;
-        }
-        logger.log("⚠ Failed to load checkpoint candidate, trying older checkpoint");
+    if (checkpoint_hp.checkpoint_path.empty()) {
+        handleUnusableCheckpointRequest(
+            checkpoint_hp,
+            logger,
+            "no explicit checkpoint path was provided");
+        return;
     }
 
-    if (!loaded_checkpoint) {
-        if (!checkpoint_candidates.empty()) {
-            logger.log("⚠ No loadable checkpoint found, starting fresh");
-        } else {
-            logger.log("No checkpoint found, starting fresh");
-        }
+    const fs::path checkpoint_path(checkpoint_hp.checkpoint_path);
+    if (!fs::exists(checkpoint_path)) {
+        handleUnusableCheckpointRequest(
+            checkpoint_hp,
+            logger,
+            "requested checkpoint does not exist: " + checkpoint_hp.checkpoint_path);
+        return;
     }
+    if (!fs::is_regular_file(checkpoint_path)) {
+        handleUnusableCheckpointRequest(
+            checkpoint_hp,
+            logger,
+            "requested checkpoint is not a regular file: " + checkpoint_hp.checkpoint_path);
+        return;
+    }
+
+    logger.log("Loading requested checkpoint: " + checkpoint_hp.checkpoint_path);
+    if (!ctx.model->load(checkpoint_hp.checkpoint_path)) {
+        handleUnusableCheckpointRequest(
+            checkpoint_hp,
+            logger,
+            "LanguageModel::load() failed for requested checkpoint: " + checkpoint_hp.checkpoint_path);
+        return;
+    }
+
+    logger.log("✓ Loaded weights from checkpoint: " + checkpoint_hp.checkpoint_path);
+    ctx.loaded_checkpoint_path = checkpoint_hp.checkpoint_path;
 }
 
 void runSaveTestIfRequested(TrainingContext& ctx)
@@ -121,7 +124,7 @@ void runSaveTestIfRequested(TrainingContext& ctx)
 } // namespace
 
 void CheckpointLoaded(TrainingContext& ctx) {
-    loadMostRecentCheckpoint(ctx);
+    loadRequestedCheckpoint(ctx);
     verifyAndDumpInitFacts(ctx);
     runSaveTestIfRequested(ctx);
 }

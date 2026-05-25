@@ -268,7 +268,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **FIXED**: `cudaDeviceSynchronize` failure `std::cerr + return` → `throw std::runtime_error()` (Rule 20)
   - **DELETED**: Unused `cudaError_t err;` declaration (dead variable)
   - **DELETED**: `scratch_pool = nullptr` with misleading "first use" comment — ScratchBlock inference doesn't use pool
-  - NOT dead code: Called from 4 sites in `grim_language_model_gpu.cu`, 1 in `Inference_GPU.cu`, 1 in `grim_model_serialization.cu`
+  - NOT dead code: Called by startup/model allocation and serialization paths that need inference runtime validation/allocation.
 
 ---
 
@@ -293,8 +293,8 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **DELETED**: `FWD_ERROR` macro — only 2 usages, both replaced by the throw
   - No stale code, no dead functions; encoder public API is construction + layer accessors only ✅
 
-- [] **Inference_GPU.cu**  & FIXED (269→259 lines)
-  - Inference-mode forward pass via autograd (not legacy kernels)
+- [x] **Inference_GPU.cu** DELETED
+  - Phase2 inference owns generation; model inference is only `getNextTokenLogits(BatchPayload)` through shared forward.
 
 ---
 
@@ -897,7 +897,7 @@ For each encoding layer (Layer 0 → Layer 11):
 
 - [] **AutogradTraining.cu**  & FULLY REFACTORED (2070 lines, 4 major functions)
   - **PRIMARY BACKWARD PATH**: `executeAutogradBackward(ctx)` — handles text loss + numeric loss + learned weighting + ScratchBlock backward
-  - **PRIMARY FORWARD PATH**: `executeAutogradForward(ctx)` — full model forward through autograd graph
+  - **PRIMARY TRAINING GRAPH PATH**: `materializeTrainingGraphActivations(ctx)` — full model activation graph through autograd
   - **PRIMARY LOSS PATH**: `computeAutogradLoss(ctx, loss_config, mtp_alpha_effective)` — text CE + auxiliary loss assembly, returns `LossResult`
   - **PRIMARY TRAINING STEP**: `autogradTrainingStep(model, training_state, payload, ...)` — GPU copies + forward + loss + backward in single call
   - **FIXED (Issue #140)**: Removed √d_model embedding scaling (scale=1.0f) — eliminates 27.7x gradient asymmetry for tied weights

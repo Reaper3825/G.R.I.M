@@ -42,6 +42,18 @@ namespace GRIM {
 
 using Batching::BatchPayload;
 
+struct EncodingLayerParameterViews {
+    const Tensor* rms1_gamma = nullptr;
+    const Tensor* rms2_gamma = nullptr;
+    const Tensor* W_qkv = nullptr;
+    const Tensor* b_qkv = nullptr;
+    const Tensor* W_o = nullptr;
+    const Tensor* b_o = nullptr;
+    const Tensor* layer_scale1 = nullptr;
+    const Tensor* layer_scale2 = nullptr;
+    FeedForwardParameterViews ffn{};
+};
+
 //======================================================//
 //  NOTE: EncodingForwardArgs DELETED per Rule 20
 //  
@@ -130,7 +142,8 @@ public:
                          ForwardIntermediates& intermediates,
                          uint64_t batch_idx = 0,
                 bool dropout_enabled = false,
-                   int layer_idx = 0);
+                         int layer_idx = 0,
+                         const EncodingLayerParameterViews* parameter_views = nullptr);
     
     //--------------------------------------------------
     // Weight Management (Pattern B: self-allocated)

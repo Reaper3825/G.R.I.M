@@ -27,7 +27,6 @@
 #include <algorithm>  // Rule 21 diagnostic: std::min_element, std::max_element
 #include <cfloat>     // FLT_MAX
 #include <cstdio>     // fprintf, snprintf
-#include <atomic>
 
 
 namespace {
@@ -72,11 +71,9 @@ namespace GRIM {
 
 namespace {
 
-std::atomic<uint64_t> g_encoder_forward_counter{0};
-
-uint64_t mixEncoderForwardSeed(uint64_t batch_idx, uint64_t forward_nonce) {
+uint64_t mixEncoderForwardSeed(uint64_t batch_idx, uint64_t layer_nonce) {
     uint64_t x = (batch_idx + 1ULL) * 0x9E3779B97F4A7C15ULL;
-    x ^= forward_nonce + 0xBF58476D1CE4E5B9ULL + (x << 6) + (x >> 2);
+    x ^= layer_nonce + 0xBF58476D1CE4E5B9ULL + (x << 6) + (x >> 2);
     return x;
 }
 
@@ -355,9 +352,24 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
                                ForwardIntermediates& intermediates,
                                uint64_t batch_idx,
                                bool dropout_enabled,
-                               int layer_idx) {
+                               int layer_idx,
+                               const EncodingLayerParameterViews* parameter_views) {
     validateReady("EncodingLayer::forward");
     const auto& hp = hp_;
+    const Tensor& rms1_gamma = (parameter_views && parameter_views->rms1_gamma) ? *parameter_views->rms1_gamma : rms1_gamma_;
+    const Tensor& rms2_gamma = (parameter_views && parameter_views->rms2_gamma) ? *parameter_views->rms2_gamma : rms2_gamma_;
+    const Tensor& W_qkv = (parameter_views && parameter_views->W_qkv) ? *parameter_views->W_qkv : W_qkv_;
+    const Tensor& b_qkv = (parameter_views && parameter_views->b_qkv) ? *parameter_views->b_qkv : b_qkv_;
+    const Tensor& W_o = (parameter_views && parameter_views->W_o) ? *parameter_views->W_o : W_o_;
+    const Tensor& b_o = (parameter_views && parameter_views->b_o) ? *parameter_views->b_o : b_o_;
+    const Tensor& layer_scale1 = (parameter_views && parameter_views->layer_scale1) ? *parameter_views->layer_scale1 : layer_scale1_;
+    const Tensor& layer_scale2 = (parameter_views && parameter_views->layer_scale2) ? *parameter_views->layer_scale2 : layer_scale2_;
+    Tensor& layer_scale1_for_op = (parameter_views && parameter_views->layer_scale1)
+        ? *const_cast<Tensor*>(parameter_views->layer_scale1)
+        : layer_scale1_;
+    Tensor& layer_scale2_for_op = (parameter_views && parameter_views->layer_scale2)
+        ? *const_cast<Tensor*>(parameter_views->layer_scale2)
+        : layer_scale2_;
     
     // Validate input
     if (!input.data) {
@@ -416,14 +428,13 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
         fprintf(stderr, "[EncoderFwd] validated: batch=%d heads=%d kv_heads=%d head_dim=%d\n", 
                 payload.batch_size, hp.num_heads, hp.num_kv_heads, hp.head_dim);
     }
-    const uint64_t forward_nonce = g_encoder_forward_counter.fetch_add(1, std::memory_order_relaxed) + 1ULL;
-    const uint64_t dropout_batch_seed = mixEncoderForwardSeed(batch_idx, forward_nonce);
+    const uint64_t dropout_batch_seed = mixEncoderForwardSeed(batch_idx, static_cast<uint64_t>(layer_idx) + 1ULL);
     
     //--------------------------------------------------
     // 1. RMSNorm1: input -> ln1_out
     // Issue #56: Store in intermediates to keep autograd graph alive
     //--------------------------------------------------
-    intermediates.ln1_out = autograd::rms_norm(input, rms1_gamma_, hp.rms_epsilon, stream);
+    intermediates.ln1_out = autograd::rms_norm(input, rms1_gamma, hp.rms_epsilon, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 1: RMSNorm1 DONE\n");
     
     //--------------------------------------------------
@@ -438,7 +449,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
         HyperParameters::encoderSelfAttentionHP(hp);
     const HyperParameters::FlashAttentionRuntimeHP flash_attention_hp =
         HyperParameters::flashAttentionRuntimeHP(attention_hp);
-    Attention::EncoderSelfAttentionWeights attention_weights{W_qkv_, b_qkv_, W_o_, b_o_};
+    Attention::EncoderSelfAttentionWeights attention_weights{W_qkv, b_qkv, W_o, b_o};
     Attention::EncoderSelfAttentionIntermediates attention_intermediates{
         intermediates.qkv_out,
         intermediates.Q_bhsd,
@@ -490,8 +501,8 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // Issue #109: LayerScale gating for attention sublayer
     const Tensor* proj_for_residual = &intermediates.proj_out;
     if (hp.use_layer_scale) {
-        validateLayerScaleGamma(layer_scale1_, "layer_scale1_", hp.d_model, "EncodingLayer::forward");
-        intermediates.scaled_proj = autograd::layer_scale(intermediates.proj_out, layer_scale1_, stream);
+        validateLayerScaleGamma(layer_scale1, "layer_scale1_", hp.d_model, "EncodingLayer::forward");
+        intermediates.scaled_proj = autograd::layer_scale(intermediates.proj_out, layer_scale1_for_op, stream);
         proj_for_residual = &intermediates.scaled_proj;
     }
     
@@ -546,7 +557,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // Issue #56: Store in intermediates
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 8: RMSNorm2...\n");
-    intermediates.ln2_out = autograd::rms_norm(intermediates.residual1, rms2_gamma_, hp.rms_epsilon, stream);
+    intermediates.ln2_out = autograd::rms_norm(intermediates.residual1, rms2_gamma, hp.rms_epsilon, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 8: RMSNorm2 DONE\n");
     
     //--------------------------------------------------
@@ -557,7 +568,8 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 9: FFN...\n");
     intermediates.ffn_out = ffn_->forward(intermediates.ln2_out, intermediates,
                                           stream, cublas_handle,
-                                          dropout_batch_seed, dropout_enabled, layer_idx);
+                                          dropout_batch_seed, dropout_enabled, layer_idx,
+                                          parameter_views ? &parameter_views->ffn : nullptr);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 9: FFN DONE\n");
     
     //--------------------------------------------------
@@ -585,8 +597,8 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // Issue #109: LayerScale gating for FFN sublayer
     const Tensor* ffn_for_residual = &intermediates.ffn_out;
     if (hp.use_layer_scale) {
-        validateLayerScaleGamma(layer_scale2_, "layer_scale2_", hp.d_model, "EncodingLayer::forward");
-        intermediates.scaled_ffn = autograd::layer_scale(intermediates.ffn_out, layer_scale2_, stream);
+        validateLayerScaleGamma(layer_scale2, "layer_scale2_", hp.d_model, "EncodingLayer::forward");
+        intermediates.scaled_ffn = autograd::layer_scale(intermediates.ffn_out, layer_scale2_for_op, stream);
         ffn_for_residual = &intermediates.scaled_ffn;
     }
     
@@ -670,7 +682,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
             float mean = 0.0f;
             float rms = 0.0f;
         };
-        auto layerScaleStats = [&hp](Tensor& gamma, const char* name) -> LayerScaleDiagStats {
+        auto layerScaleStats = [&hp](const Tensor& gamma, const char* name) -> LayerScaleDiagStats {
             validateLayerScaleGamma(gamma, name, hp.d_model, "EncodingLayer::forward diagnostics");
             std::vector<float> h_gamma(static_cast<size_t>(hp.d_model));
             CUDA_CHECK(cudaMemcpy(h_gamma.data(), gamma.data,
@@ -693,8 +705,8 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
         LayerScaleDiagStats ls1_stats{};
         LayerScaleDiagStats ls2_stats{};
         if (hp.use_layer_scale) {
-            ls1_stats = layerScaleStats(layer_scale1_, "layer_scale1_");
-            ls2_stats = layerScaleStats(layer_scale2_, "layer_scale2_");
+            ls1_stats = layerScaleStats(layer_scale1, "layer_scale1_");
+            ls2_stats = layerScaleStats(layer_scale2, "layer_scale2_");
         }
         
         std::ostringstream eq;

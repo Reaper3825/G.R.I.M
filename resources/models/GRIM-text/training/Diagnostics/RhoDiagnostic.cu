@@ -34,7 +34,7 @@ std::string decodeAggregateTokenForDisplay(const GRIM::Tokenizer::UniByte& token
                GRIM::Tokenizer::atomTypeName(GRIM::Tokenizer::tokenIdToAtomType(token_id)) +
                ">";
     }
-    return tokenizer.decode({token_id});
+    return tokenizer.decode(GRIM::Tokenizer::DecodeRequest({token_id}));
 }
 
 void sanitizeSingleLineTokenDisplay(std::string& decoded) {

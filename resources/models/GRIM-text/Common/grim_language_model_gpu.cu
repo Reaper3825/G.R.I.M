@@ -35,18 +35,12 @@
 #include "../Layers/Encoding/Encoding_GPU.hpp"
 #include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"    // For Flash Attention kernels
 #include "../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"   // For ScratchBlock reasoning layer
+#include "../Shared/Forward/ModelForwardRuntimePayload.hpp"
+#include "../Shared/Forward/ModelForward_GPU.hpp"
 #include "../Shared/UnigramByte/Unigram.hpp"
-#include "../Shared/UnigramByte/AtomTable.hpp"
 #include "../Shared/PBM/PBMStateOwner.hpp"                        // Unified PBM RAII owner (ALiBi + RoPE)
-#include "../Shared/Sampling/Sampling.hpp"                        // SamplingPipeline
-#include "../Shared/Execution/DecodeTimeNumPolicy.hpp"            // SlotSelectionStatus
 
 namespace GRIM {
-
-// Generation views are sliced from the finalized HyperParameters root.
-using GRIM::HyperParameters::GenerationHP;
-using GRIM::HyperParameters::SamplingStrategy;
-using GRIM::HyperParameters::GenerationStreamCallback;
 
 //======================================================//
 //  GPU Runtime Accessors (StreamController pattern)
@@ -150,13 +144,6 @@ Vector& Matrix::operator[](size_t idx) { return rows[idx]; }
 
 const Vector& Matrix::operator[](size_t idx) const { return rows[idx]; }
 
-float GeneratedSequence::getNormalizedScore(float length_penalty) const {
-    if (token_ids.empty()) {
-        return score;
-    }
-    return score / std::pow(static_cast<float>(token_ids.size()), length_penalty);
-}
-
 //======================================================//
 //  Component Implementations with CUDA Kernels
 //======================================================//
@@ -213,7 +200,7 @@ LanguageModel::LanguageModel(const HyperParameters::LanguageModelConfig& config)
 LanguageModel::~LanguageModel() = default;
 
 //======================================================//
-//  BatchPayload-only inference/generation APIs
+//  BatchPayload-only inference scoring APIs
 //======================================================//
 
 Vector LanguageModel::getNextTokenLogits(const Batching::BatchPayload& context_payload) {
@@ -227,395 +214,84 @@ Vector LanguageModel::getNextTokenLogits(const Batching::BatchPayload& context_p
     if (!config_.use_gpu || !gpu_encoder_) {
         throw std::runtime_error("LanguageModel::getNextTokenLogits(BatchPayload) requires initialized GPU encoder");
     }
+    if (!training_state_.initialized) {
+        throw std::runtime_error("LanguageModel::getNextTokenLogits(BatchPayload): training state not initialized");
+    }
+    if (context_payload.max_seq_len <= 0 || context_payload.max_seq_len > config_.max_seq_len) {
+        throw std::runtime_error("LanguageModel::getNextTokenLogits(BatchPayload): payload max_seq_len=" +
+                                 std::to_string(context_payload.max_seq_len) + " out of range [1, " +
+                                 std::to_string(config_.max_seq_len) + "]");
+    }
+    if (context_payload.vocab_size != config_.vocab_size) {
+        throw std::runtime_error(
+            "LanguageModel::getNextTokenLogits(BatchPayload): payload.vocab_size=" +
+            std::to_string(context_payload.vocab_size) + " != config_.vocab_size=" +
+            std::to_string(config_.vocab_size));
+    }
 
     const auto bindings = uploadBatchToDevice(context_payload);
-    return executeInferenceForward_(context_payload, bindings, /*populate_kv_cache=*/false);
-}
 
-std::vector<GeneratedSequence> LanguageModel::generate(
-    const Batching::BatchPayload& prompt_payload,
-    const GenerationHP& gen_config)
-{
-#ifdef USE_CUDA
-    prompt_payload.validate("LanguageModel::generate(BatchPayload)");
-    if (!prompt_payload.isInferencePrefill()) {
-        throw std::runtime_error("LanguageModel::generate(BatchPayload): payload must be InferencePrefill");
-    }
-    if (prompt_payload.batch_size != 1) {
-        throw std::runtime_error("LanguageModel::generate(BatchPayload): batch_size must be 1");
-    }
-    if (config_.use_gpu && gpu_encoder_) {
-        GenerationHP cfg = gen_config;
-        if (cfg.num_return_sequences <= 0) {
-            throw std::runtime_error("LanguageModel::generate(BatchPayload): num_return_sequences must be > 0");
-        }
-        std::vector<GeneratedSequence> outputs;
-        outputs.reserve(static_cast<size_t>(cfg.num_return_sequences));
-        for (int i = 0; i < cfg.num_return_sequences; ++i) {
-            GenerationHP seq_cfg = cfg;
-            if (seq_cfg.seed != 0) seq_cfg.seed += i;
-            outputs.push_back(generateSequenceGPU(prompt_payload, seq_cfg, nullptr));
-        }
-        return outputs;
-    }
-#endif
-    throw std::runtime_error("LanguageModel::generate(BatchPayload) requires GPU initialization");
-}
+    cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
 
-GeneratedSequence LanguageModel::generateStream(
-    const Batching::BatchPayload& prompt_payload,
-    GenerationStreamCallback callback,
-    const GenerationHP& gen_config)
-{
-#ifdef USE_CUDA
-    prompt_payload.validate("LanguageModel::generateStream(BatchPayload)");
-    if (!prompt_payload.isInferencePrefill()) {
-        throw std::runtime_error("LanguageModel::generateStream(BatchPayload): payload must be InferencePrefill");
-    }
-    if (prompt_payload.batch_size != 1) {
-        throw std::runtime_error("LanguageModel::generateStream(BatchPayload): batch_size must be 1");
-    }
-    if (config_.use_gpu && gpu_encoder_) {
-        GenerationHP cfg = gen_config;
-        return generateSequenceGPU(prompt_payload, cfg, &callback);
-    }
-#endif
-    throw std::runtime_error("LanguageModel::generateStream(BatchPayload) requires GPU initialization");
-}
+    Forward::ModelForwardRuntimePayload runtime_payload{};
+    runtime_payload.autograd_intermediates = &training_state_.autograd_intermediates;
+    runtime_payload.execution_trace_by_row = &generation_state_.execution_trace_by_row;
+    runtime_payload.trace_state_by_row = &generation_state_.trace_state_by_row;
+    runtime_payload.read_gate_accum_tensor = nullptr;
 
+    Forward::ModelForwardRequest request{};
+    request.config = &config_;
+    request.gpu_encoder = &getGpuEncoder();
+    request.embedding_layer = getEmbeddingLayer();
+    request.lm_head = getLmHeadLayer();
+    request.scratch_block = getScratchBlockLayer();
+    request.reasoning_head = getReasoningHeadLayer();
+    request.execution_block = getExecutionBlockLayer();
+    request.cublas_handle = training_state_.cublas_handle.get();
+    request.stream = stream;
+    request.payload = &context_payload;
+    request.bindings = &bindings;
+    request.batch_idx = 0;
+    request.graph = Forward::ModelForwardGraphPolicy{
+        /*connect_parameter_graph=*/false,
+        /*retain_backward_graph=*/false,
+        /*enable_dropout=*/false};
 
-// Generate a token sequence from prompt, applying autoregressive decoding.
-GeneratedSequence LanguageModel::generateSequenceGPU(
-    const Batching::BatchPayload& prompt_payload,
-    const GenerationHP& cfg,
-    GenerationStreamCallback* stream_callback) {
-    prompt_payload.validate("generateSequenceGPU(BatchPayload)");
-    if (!prompt_payload.isInferencePrefill()) {
-        throw std::runtime_error("generateSequenceGPU(BatchPayload): payload must be InferencePrefill");
+    Forward::executeModelForward(request, runtime_payload);
+
+    const auto& live_logits = training_state_.autograd_intermediates.logits_tensor;
+    if (!live_logits.data) {
+        throw std::runtime_error("LanguageModel::getNextTokenLogits(BatchPayload): AutogradIntermediates.logits_tensor.data is NULL after shared forward");
     }
-    if (prompt_payload.batch_size != 1) {
-        throw std::runtime_error("generateSequenceGPU(BatchPayload): batch_size must be 1");
-    }
-    if (prompt_payload.seq_atom_tables.empty()) {
-        throw std::runtime_error("generateSequenceGPU(BatchPayload): seq_atom_tables is empty");
+    const size_t expected_logits = static_cast<size_t>(context_payload.total_tokens) * static_cast<size_t>(config_.vocab_size);
+    if (static_cast<size_t>(live_logits.numel()) < expected_logits) {
+        throw std::runtime_error(
+            "LanguageModel::getNextTokenLogits(BatchPayload): live logits numel=" +
+            std::to_string(live_logits.numel()) +
+            " < payload.total_tokens * config.vocab_size=" + std::to_string(expected_logits));
     }
 
-    const auto& prompt_tokens = prompt_payload.input_ids;
-    const auto& prompt_numeric_values = prompt_payload.numeric_values;
-    const auto& prompt_atom_mask = prompt_payload.atom_mask;
-    const auto& prompt_atom_flags = prompt_payload.atom_flags;
-    const auto& prompt_token_to_slot_map = prompt_payload.token_to_slot_map;
-    const auto& prompt_atom_entry_ids = prompt_payload.atom_entry_ids;
-    const auto& prompt_atom_table = prompt_payload.seq_atom_tables[0];
-
-    GeneratedSequence sequence;
-    sequence.token_ids = prompt_tokens;
-    sequence.token_numeric_values = prompt_numeric_values;
-    sequence.token_atom_mask = prompt_atom_mask;
-    sequence.context_atom_table = prompt_atom_table;
-    if (prompt_token_to_slot_map.size() != prompt_tokens.size()) {
-        throw std::runtime_error("generateSequenceGPU(BatchPayload): token_to_slot_map length mismatch");
+    Vector logits(config_.vocab_size);
+    const size_t last_token_offset =
+        static_cast<size_t>(context_payload.max_seq_len - 1) * static_cast<size_t>(config_.vocab_size);
+    cudaError_t copy_err = cudaMemcpyAsync(
+        logits.data.data(),
+        live_logits.data + last_token_offset,
+        static_cast<size_t>(config_.vocab_size) * sizeof(float),
+        cudaMemcpyDeviceToHost,
+        stream);
+    if (copy_err != cudaSuccess) {
+        throw std::runtime_error("LanguageModel::getNextTokenLogits(BatchPayload): cudaMemcpyAsync logits failed: " +
+                                 std::string(cudaGetErrorString(copy_err)));
     }
-    sequence.token_to_slot_map = prompt_token_to_slot_map;
-    if (prompt_atom_entry_ids.size() != prompt_tokens.size()) {
-        throw std::runtime_error("generateSequenceGPU(BatchPayload): atom_entry_ids length mismatch");
-    }
-    sequence.atom_entry_ids = prompt_atom_entry_ids;
-    
-    if (!config_.use_gpu || !gpu_encoder_) {
-        throw std::runtime_error("generateSequenceGPU requires initialized GPU encoder");
-    }
-    
-    if (prompt_tokens.size() >= static_cast<size_t>(config_.max_seq_len)) {
-        throw std::runtime_error("generateSequenceGPU: prompt length " +
-                                 std::to_string(prompt_tokens.size()) + " exceeds max_seq_len " +
-                                 std::to_string(config_.max_seq_len));
-    }
-    if (prompt_numeric_values.size() != prompt_tokens.size() ||
-        prompt_atom_mask.size() != prompt_tokens.size() ||
-        prompt_atom_flags.size() != prompt_tokens.size()) {
-        throw std::runtime_error("generateSequenceGPU: side-channel length mismatch");
-    }
-    std::vector<uint32_t> sequence_atom_flags = prompt_atom_flags;
-    
-    if (cfg.max_new_tokens <= 0) {
-        throw std::runtime_error("generateSequenceGPU: max_new_tokens must be > 0");
-    }
-    if (cfg.min_new_tokens < 0) {
-        throw std::runtime_error("generateSequenceGPU: min_new_tokens must be non-negative");
-    }
-    if (cfg.min_new_tokens > cfg.max_new_tokens) {
-        throw std::runtime_error("generateSequenceGPU: min_new_tokens exceeds max_new_tokens");
-    }
-    const int max_steps = cfg.max_new_tokens;
-    if (config_.vocab_size <= 0) {
-        throw std::runtime_error("generateSequenceGPU: invalid vocab_size");
-    }
-    const int vocab_size = config_.vocab_size;
-    const int learned_piece_count = vocab_size - GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET;
-    if (learned_piece_count < 0) {
-        throw std::runtime_error("generateSequenceGPU: vocab_size=" + std::to_string(vocab_size) +
-                                 " is smaller than fixed tokenizer offset=" +
-                                 std::to_string(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET));
-    }
-    GRIM::Tokenizer::TokenLayout token_layout;
-    token_layout.num_special = GRIM::Tokenizer::NUM_SPECIAL_TOKENS;
-    token_layout.num_bytes = GRIM::Tokenizer::BYTE_VOCAB_SIZE;
-    token_layout.num_atoms = GRIM::Tokenizer::ATOM_VOCAB_SIZE;
-    token_layout.num_unigram = learned_piece_count;
-    if (cfg.strategy == SamplingStrategy::BEAM_SEARCH) {
-        throw std::runtime_error("generateSequenceGPU: BEAM_SEARCH is not supported");
-    }
-    
-    // =========================================================================
-    // Build SamplingPipeline from the root-derived generation view (single sampling path)
-    // =========================================================================
-    Sampling::SamplingConfig sampling_cfg = Sampling::buildFromGenerationFields(
-        static_cast<int>(cfg.strategy),
-        cfg.do_sample,
-        cfg.temperature,
-        cfg.top_k,
-        cfg.top_p,
-        cfg.min_p,
-        cfg.typical_p,
-        cfg.repetition_penalty,
-        cfg.repetition_penalty_window,
-        cfg.frequency_penalty,
-        cfg.presence_penalty,
-        cfg.no_repeat_ngram_size,
-        cfg.eos_token_id,
-        cfg.bos_token_id,
-        cfg.pad_token_id,
-        cfg.unk_token_id,
-        cfg.bad_words_ids,
-        cfg.seed);
-
-    // Execution-first (spec step 10): mask raw ASCII digit byte tokens so the LM cannot
-    // decode numeric magnitudes as literal strings; `<NUM>` stays allowed (atom range).
-    if (config_.execution_block_enabled) {
-        std::vector<int> numeric_mask = cfg.masked_numeric_literal_ids;
-        if (numeric_mask.empty()) {
-            throw std::runtime_error("generateSequenceGPU: masked_numeric_literal_ids is empty while execution block is enabled");
-        }
-        sampling_cfg.bad_token_ids.insert(sampling_cfg.bad_token_ids.end(),
-                                            numeric_mask.begin(), numeric_mask.end());
-        std::sort(sampling_cfg.bad_token_ids.begin(), sampling_cfg.bad_token_ids.end());
-        sampling_cfg.bad_token_ids.erase(
-            std::unique(sampling_cfg.bad_token_ids.begin(), sampling_cfg.bad_token_ids.end()),
-            sampling_cfg.bad_token_ids.end());
+    cudaError_t sync_err = cudaStreamSynchronize(stream);
+    if (sync_err != cudaSuccess) {
+        throw std::runtime_error("LanguageModel::getNextTokenLogits(BatchPayload): cudaStreamSynchronize failed: " +
+                                 std::string(cudaGetErrorString(sync_err)));
     }
 
-    // Decode-time <NUM> admissibility: when selector is active, <NUM> is allowed
-    // only when the selector has resolved a slot (Selected status). When the
-    // selector is inactive or unavailable, <NUM> remains masked as before.
-    const bool selector_active = config_.selector_enabled
-        && getDecodeTimeSlotSelectorLayer() != nullptr
-        && getDecodeTimeNumPolicy() != nullptr
-        && config_.execution_block_enabled
-        && getScratchBlockLayer() != nullptr
-        && isScratchBlockEnabled()
-        && generation_state_.has_exec_memory;
-    if (!selector_active) {
-        // No selector → hard-mask numeric atom tokens when scratchblock generation is active
-        const bool scratchblock_generation_active = cfg.enable_scratchblock_reasoning &&
-                                                    config_.use_scratch_block &&
-                                                    isScratchBlockEnabled();
-        if (scratchblock_generation_active) {
-            const int int_tid = Tokenizer::atomTypeToTokenId(Tokenizer::AtomType::ATOM_INT);
-            const int float_tid = Tokenizer::atomTypeToTokenId(Tokenizer::AtomType::ATOM_FLOAT);
-            sampling_cfg.bad_token_ids.push_back(int_tid);
-            sampling_cfg.bad_token_ids.push_back(float_tid);
-            std::sort(sampling_cfg.bad_token_ids.begin(), sampling_cfg.bad_token_ids.end());
-            sampling_cfg.bad_token_ids.erase(
-                std::unique(sampling_cfg.bad_token_ids.begin(), sampling_cfg.bad_token_ids.end()),
-                sampling_cfg.bad_token_ids.end());
-        }
-    }
-    // When selector IS active, <NUM> masking is decided per-step below
-    
-    Sampling::SamplingPipeline pipeline(sampling_cfg);
-    
-    // ScratchBlock reasoning: determine if we should classify generated atom tokens
-    const bool scratchblock_active = cfg.enable_scratchblock_reasoning &&
-                                     config_.use_scratch_block &&
-                                     isScratchBlockEnabled();
-    
-    // =========================================================================
-    // AUTOREGRESSIVE GENERATION
-    // Step 0: Process full prompt with forwardInit().
-    // Step 1+: forwardStep(BatchPayload) chooses the valid path for the active geometry:
-    //   - sequence-local configs: KV-cached single-token decode;
-    //   - sequence-coupled centering/projection configs: full current-sequence
-    //     prefill, because a one-row decode cannot compute sequence means or PC1.
-    // =========================================================================
-    
-    // Ensure KV cache buffers exist (training path skips allocation)
-    ensureKVCacheAllocated();
-
-    // Reset KV cache for new generation
-    resetKVCache();
-    
-    // Process prompt and get logits for first new token
-    Vector logits_vec;
-    logits_vec = forwardInit(prompt_payload);
-    if (logits_vec.data.empty()) {
-        throw std::runtime_error("generateSequenceGPU: forwardInit returned first empty new token logit 0");
-    }
-
-    for (int step = 0; step < max_steps; ++step) {
-        // Check max sequence length
-        const int current_len = getKVCacheLength();
-        if (current_len >= config_.max_seq_len) {
-            sequence.finished = true;
-            break;
-        }
-        
-        // =====================================================================
-        // Selector-aware <NUM> masking (per step)
-        // When selector is active, both forwardInit (prefill) and
-        // forwardStep (decode) evaluate the selector, so
-        // generation_state_.decode_selector.valid MUST be true by this point.
-        // Allow <NUM> only when status == Selected; otherwise mask it.
-        // =====================================================================
-        if (selector_active) {
-            if (!generation_state_.decode_selector.valid) {
-                std::fprintf(stderr,
-                    "[Selector Debug] step=%d  selector_enabled=%d  selectorLayer=%d  numPolicy=%d"
-                    "  exec_block_enabled=%d  scratchLayer=%d  scratchEnabled=%d  has_exec_mem=%d"
-                    "  decode_selector_valid=%d\n",
-                    step,
-                    (int)config_.selector_enabled,
-                    (int)(getDecodeTimeSlotSelectorLayer() != nullptr),
-                    (int)(getDecodeTimeNumPolicy() != nullptr),
-                    (int)config_.execution_block_enabled,
-                    (int)(getScratchBlockLayer() != nullptr),
-                    (int)isScratchBlockEnabled(),
-                    (int)generation_state_.has_exec_memory,
-                    (int)generation_state_.decode_selector.valid);
-                throw std::runtime_error(
-                    "generateSequenceGPU: selector_active but decode_selector_valid is false at step "
-                    + std::to_string(step) + " — selector was not evaluated after "
-                    + (step == 0 ? "forwardInit (prefill)" : "forwardStep (decode)"));
-            }
-            const int int_tid = Tokenizer::atomTypeToTokenId(Tokenizer::AtomType::ATOM_INT);
-            const int float_tid = Tokenizer::atomTypeToTokenId(Tokenizer::AtomType::ATOM_FLOAT);
-                if (generation_state_.decode_selector.status
-                   != static_cast<uint8_t>(SlotSelectionStatus::Selected)) {
-                logits_vec.data[int_tid] = -1e30f;
-                logits_vec.data[float_tid] = -1e30f;
-            }
-        }
-
-        // =====================================================================
-        // Sample next token using SamplingPipeline
-        // Pipeline handles: penalties → n-gram blocking → token masking →
-        //                   temperature+softmax → filter → renorm → sample
-        // =====================================================================
-        Sampling::SampleResult sample = pipeline.sample(
-            logits_vec.data, sequence.token_ids, vocab_size);
-        
-        // Validate sampled token (Rule 20: crash, no fallback)
-        if (sample.token_id < 0 || sample.token_id >= vocab_size) {
-            throw std::runtime_error("generateSequenceGPU: sampled token out of range (token_id=" +
-                                     std::to_string(sample.token_id) + ", vocab=" +
-                                     std::to_string(vocab_size) + ")");
-        }
-        
-        float token_numeric_value = 0.0f;
-        uint8_t token_atom_mask_val = 0;
-        
-        int32_t new_token_slot_id = -1;
-
-        if (scratchblock_active && token_layout.isAtom(sample.token_id)) {
-            token_atom_mask_val = 1;
-            if (GRIM::Tokenizer::isNumericAtom(
-                    GRIM::Tokenizer::tokenIdToAtomType(sample.token_id))) {
-                // Numeric atom was sampled — selector MUST have resolved a slot
-                if (!selector_active || !generation_state_.decode_selector.valid
-                    || generation_state_.decode_selector.status
-                       != static_cast<uint8_t>(SlotSelectionStatus::Selected)) {
-                    throw std::runtime_error(
-                        "generateSequenceGPU: sampled numeric atom but selector did not resolve a slot "
-                        "(status=" + std::to_string(generation_state_.decode_selector.status) + ")");
-                }
-                new_token_slot_id = generation_state_.decode_selector.selected_slot;
-                token_numeric_value = generation_state_.decode_selector.selected_value;
-            }
-        }
-        
-        // Check for EOS BEFORE processing next step
-        // EOS (token 3) can never be an atom token (atoms are 260+), so no numeric extraction needed.
-        if (sample.token_id == cfg.eos_token_id &&
-            step + 1 >= cfg.min_new_tokens) {
-            sequence.token_ids.push_back(sample.token_id);
-            sequence.token_scores.push_back(sample.log_probability);
-            sequence.token_numeric_values.push_back(0.0f);
-            sequence.token_atom_mask.push_back(0);
-            sequence.token_to_slot_map.push_back(-1);
-            sequence.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
-            sequence.score += sample.log_probability;
-            sequence.finished = true;
-            if (stream_callback) {
-                (*stream_callback)(sample.token_id, sample.probability);
-            }
-            break;
-        }
-        
-        // Run forward pass for the caller-authored current sequence payload WITH
-        // ScratchBlock metadata. Inference decode receives the same BatchPayload
-        // contract as prefill; BatchDeviceBindings are produced by uploadBatchToDevice().
-        std::vector<int> next_token_ids = sequence.token_ids;
-        std::vector<float> next_numeric_values = sequence.token_numeric_values;
-        std::vector<uint8_t> next_atom_mask = sequence.token_atom_mask;
-        std::vector<uint32_t> next_atom_flags = sequence_atom_flags;
-        std::vector<int32_t> next_token_to_slot_map = sequence.token_to_slot_map;
-        std::vector<uint32_t> next_atom_entry_ids = sequence.atom_entry_ids;
-
-        next_token_ids.push_back(sample.token_id);
-        next_numeric_values.push_back(token_numeric_value);
-        next_atom_mask.push_back(token_atom_mask_val);
-        next_atom_flags.push_back(0);
-        next_token_to_slot_map.push_back(new_token_slot_id);
-        next_atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
-
-        Batching::BatchPayload step_payload = Batching::buildInferenceBatchPayload(
-            next_token_ids,
-            next_numeric_values,
-            next_atom_mask,
-            next_atom_flags,
-            prompt_atom_table,
-            next_atom_entry_ids,
-            next_token_to_slot_map,
-            config_.vocab_size,
-            static_cast<size_t>(config_.batch_size),
-            static_cast<size_t>(config_.max_cached_seq_len),
-            config_.execution_block_num_slots);
-
-        logits_vec = forwardStep(step_payload);
-        if (logits_vec.data.empty()) {
-            throw std::runtime_error("generateSequenceGPU: forwardStep returned empty logits");
-        }
-        
-        // Add token to sequence
-        sequence.token_ids.push_back(sample.token_id);
-        sequence.token_scores.push_back(sample.log_probability);
-        sequence.token_numeric_values.push_back(token_numeric_value);
-        sequence.token_atom_mask.push_back(token_atom_mask_val);
-        sequence.token_to_slot_map.push_back(new_token_slot_id);
-        sequence.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
-        sequence_atom_flags.push_back(0);
-        sequence.score += sample.log_probability;
-        
-        if (stream_callback) {
-            (*stream_callback)(sample.token_id, sample.probability);
-        }
-    }
-    
-    if (!sequence.finished) {
-        sequence.finished = true;
-    }
-    
-    return sequence;
+    training_state_.autograd_intermediates.clear();
+    return logits;
 }
 
 //======================================================//

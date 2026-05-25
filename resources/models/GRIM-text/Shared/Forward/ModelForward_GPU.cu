@@ -38,12 +38,14 @@ namespace Forward {
 
 namespace {
 
-const char* modeName(ModelForwardMode mode) {
-    switch (mode) {
-    case ModelForwardMode::TrainingGraph: return "training_graph";
-    case ModelForwardMode::InferencePrefill: return "inference_prefill";
+const char* graphPolicyName(const ModelForwardGraphPolicy& graph) {
+    if (graph.connect_parameter_graph && graph.retain_backward_graph) {
+        return "autograd_connected";
     }
-    throw std::runtime_error("ModelForward: unknown ModelForwardMode");
+    if (!graph.connect_parameter_graph && !graph.retain_backward_graph) {
+        return "read_only";
+    }
+    throw std::runtime_error("ModelForward: invalid graph policy — connect_parameter_graph and retain_backward_graph must agree at this boundary");
 }
 
 void requireCenteringSequenceLengths(const Batching::BatchPayload& payload,
@@ -80,6 +82,7 @@ void ModelForwardRequest::validate(const char* caller) const {
     if (!stream) throw std::runtime_error(std::string(caller) + ": stream is NULL");
     if (!payload) throw std::runtime_error(std::string(caller) + ": payload is NULL");
     if (!bindings) throw std::runtime_error(std::string(caller) + ": bindings is NULL");
+    (void)graphPolicyName(graph);
     if (payload->batch_size <= 0) throw std::runtime_error(std::string(caller) + ": BatchPayload.batch_size <= 0");
     if (payload->max_seq_len <= 0) throw std::runtime_error(std::string(caller) + ": BatchPayload.max_seq_len <= 0");
     if (static_cast<int>(payload->seq_lengths.size()) != payload->batch_size) {
@@ -109,7 +112,9 @@ void executeModelForward(const ModelForwardRequest& request,
     auto& intermediates = *runtime.autograd_intermediates;
     const auto& payload = *request.payload;
     const auto* bindings = request.bindings;
-    const bool is_training = request.trainingGraph();
+    const bool connect_parameter_graph = request.graph.connect_parameter_graph;
+    const bool retain_backward_graph = request.graph.retain_backward_graph;
+    const bool dropout_enabled = request.graph.enable_dropout;
 
     if (cfg->center_encoder_residuals || cfg->lm_head_center_hidden_states) {
         requireCenteringSequenceLengths(payload, "ModelForward");
@@ -119,7 +124,7 @@ void executeModelForward(const ModelForwardRequest& request,
 
     MFWD_INFO("forward: batch=" << payload.batch_size << " seq=" << payload.max_seq_len
               << " tokens=" << total_tokens << " vocab=" << payload.vocab_size
-              << " mode=" << modeName(request.mode));
+              << " graph=" << graphPolicyName(request.graph));
 
     autograd::set_autograd_cublas_handle(request.cublas_handle);
 
@@ -130,7 +135,7 @@ void executeModelForward(const ModelForwardRequest& request,
 
     Tensor emb_weights_view;
     const Tensor* emb_weights = &request.embedding_layer->tokenWeights();
-    if (!is_training) {
+    if (!connect_parameter_graph) {
         emb_weights_view = request.embedding_layer->tokenWeights().detach(request.stream);
         emb_weights = &emb_weights_view;
     }
@@ -182,7 +187,7 @@ void executeModelForward(const ModelForwardRequest& request,
         const ScratchBlockProjectionParameterViews* scratch_param_view_ptr = nullptr;
         Tensor scratch_atom_type_embeddings_view;
         Tensor scratch_atom_projection_view;
-        if (!is_training) {
+        if (!connect_parameter_graph) {
             scratch_atom_type_embeddings_view = request.scratch_block->atomTypeEmbeddings().detach(request.stream);
             scratch_atom_projection_view = request.scratch_block->atomProjection().detach(request.stream);
             scratch_param_views.atom_type_embeddings = &scratch_atom_type_embeddings_view;
@@ -200,7 +205,7 @@ void executeModelForward(const ModelForwardRequest& request,
             total_tokens,
             request.stream,
             exec_first_type_only,
-            is_training,
+            connect_parameter_graph,
             scratch_param_view_ptr);
 
         intermediates.embedding_gate_concat = autograd::concat(
@@ -208,7 +213,7 @@ void executeModelForward(const ModelForwardRequest& request,
             intermediates.embedding_structured_state,
             request.stream);
 
-        if (is_training) {
+        if (connect_parameter_graph) {
             intermediates.embedding_gate_logits = autograd::matmul(
                 intermediates.embedding_gate_concat,
                 request.scratch_block->structuredGateWeight(),
@@ -249,7 +254,7 @@ void executeModelForward(const ModelForwardRequest& request,
         MFWD_INFO("Step 1.5: ScratchBlock vector gate complete");
     }
 
-    if (is_training && cfg->dropout_rate > 0.0f) {
+    if (dropout_enabled && cfg->dropout_rate > 0.0f) {
         const uint64_t emb_dropout_seed = request.batch_idx * 2654435761ULL + 500;
         constexpr uint64_t kEmbeddingDropoutMaskStream = 0x0005000000000001ULL;
         intermediates.embedding_tensor = autograd::dropout(
@@ -273,7 +278,7 @@ void executeModelForward(const ModelForwardRequest& request,
 
     float* encoder_output = nullptr;
 
-    if (!is_training) {
+    if (!retain_backward_graph) {
         Tensor running;
         intermediates.layer_intermediates.layers.reserve(num_layers);
         MFWD_INFO("Step 2: Running " << num_layers << " encoder layers (no_grad)...");
@@ -295,9 +300,63 @@ void executeModelForward(const ModelForwardRequest& request,
             ForwardIntermediates& layer_storage = intermediates.layer_intermediates.layers.back();
 
             Tensor& layer_input = (layer_idx == 0) ? intermediates.embedding_tensor : running;
+
+            EncodingLayerParameterViews enc_param_views{};
+            const EncodingLayerParameterViews* enc_param_view_ptr = nullptr;
+            Tensor rms1_view;
+            Tensor rms2_view;
+            Tensor wqkv_view;
+            Tensor bqkv_view;
+            Tensor wo_view;
+            Tensor bo_view;
+            Tensor layer_scale1_view;
+            Tensor layer_scale2_view;
+            Tensor ffn_w_gate_view;
+            Tensor ffn_w1_view;
+            Tensor ffn_w2_view;
+            Tensor ffn_b2_view;
+            if (!connect_parameter_graph) {
+                rms1_view = enc_layer->rms1Gamma().detach(request.stream);
+                rms2_view = enc_layer->rms2Gamma().detach(request.stream);
+                wqkv_view = enc_layer->attnWqkv().detach(request.stream);
+                wo_view = enc_layer->attnWo().detach(request.stream);
+                enc_param_views.rms1_gamma = &rms1_view;
+                enc_param_views.rms2_gamma = &rms2_view;
+                enc_param_views.W_qkv = &wqkv_view;
+                enc_param_views.W_o = &wo_view;
+                if (enc_layer->attnBqkv().data) {
+                    bqkv_view = enc_layer->attnBqkv().detach(request.stream);
+                    enc_param_views.b_qkv = &bqkv_view;
+                }
+                if (enc_layer->attnBo().data) {
+                    bo_view = enc_layer->attnBo().detach(request.stream);
+                    enc_param_views.b_o = &bo_view;
+                }
+                if (cfg->use_layer_scale) {
+                    layer_scale1_view = enc_layer->layerScale1().detach(request.stream);
+                    layer_scale2_view = enc_layer->layerScale2().detach(request.stream);
+                    enc_param_views.layer_scale1 = &layer_scale1_view;
+                    enc_param_views.layer_scale2 = &layer_scale2_view;
+                }
+                FeedForwardLayer* ffn_layer = enc_layer->getFfnLayer();
+                if (!ffn_layer) {
+                    throw std::runtime_error("ModelForward: Encoder layer " + std::to_string(layer_idx) + " FFN layer is NULL");
+                }
+                ffn_w_gate_view = ffn_layer->W_gate().detach(request.stream);
+                ffn_w1_view = ffn_layer->W1().detach(request.stream);
+                ffn_w2_view = ffn_layer->W2().detach(request.stream);
+                enc_param_views.ffn.W_gate = &ffn_w_gate_view;
+                enc_param_views.ffn.W1 = &ffn_w1_view;
+                enc_param_views.ffn.W2 = &ffn_w2_view;
+                if (ffn_layer->b2().data) {
+                    ffn_b2_view = ffn_layer->b2().detach(request.stream);
+                    enc_param_views.ffn.b2 = &ffn_b2_view;
+                }
+                enc_param_view_ptr = &enc_param_views;
+            }
             Tensor layer_output_view = enc_layer->forward(
                 layer_input, payload, request.stream, request.cublas_handle, layer_storage,
-                request.batch_idx, false, layer_idx);
+                request.batch_idx, false, layer_idx, enc_param_view_ptr);
 
             Tensor owned = Tensor::empty(layer_output_view.shape, false, request.stream, "no_grad_layer_output");
             const size_t bytes = static_cast<size_t>(layer_output_view.shape.total_elements()) * sizeof(float);
@@ -330,7 +389,7 @@ void executeModelForward(const ModelForwardRequest& request,
         intermediates.encoder_layer_outputs.reserve(num_layers);
         intermediates.layer_intermediates.layers.reserve(num_layers);
 
-        MFWD_INFO("Step 2: Running " << num_layers << " encoder layers with autograd...");
+        MFWD_INFO("Step 2: Running " << num_layers << " encoder layers with retained graph...");
         MFWD_INFO("  embedding_tensor.grad_fn=" << (void*)intermediates.embedding_tensor.grad_fn.get()
                   << " requires_grad=" << intermediates.embedding_tensor.requires_grad);
 
@@ -359,7 +418,7 @@ void executeModelForward(const ModelForwardRequest& request,
 
             Tensor layer_output = enc_layer->forward(
                 layer_input, payload, request.stream, request.cublas_handle, layer_storage,
-                request.batch_idx, is_training, layer_idx);
+                request.batch_idx, dropout_enabled, layer_idx, nullptr);
 
             if (layer_idx == exec_layer && request.execution_block) {
                 const int ae = cfg->scratch_block_atom_embedding_dim;
@@ -383,7 +442,7 @@ void executeModelForward(const ModelForwardRequest& request,
                         && payload.execution_active[b];
                     if (row_active) {
                         trace_state_by_row[b] = Tensor::zeros({1, cfg->d_model}, request.stream, "trace_state_row");
-                        if (is_training) {
+                        if (connect_parameter_graph) {
                             trace_state_by_row[b].requires_grad_();
                             trace_state_by_row[b].ensure_grad();
                         } else {
@@ -550,7 +609,7 @@ void executeModelForward(const ModelForwardRequest& request,
         encoder_output = intermediates.encoder_layer_outputs.back().data;
     }
 
-    if (is_training) {
+    if (retain_backward_graph) {
         const bool lmhead_track_grad = true;
         Tensor encoder_output_tensor = Tensor::from_ptr(
             encoder_output,
@@ -569,7 +628,7 @@ void executeModelForward(const ModelForwardRequest& request,
     Tensor lm_head_weights_view;
     Tensor lm_head_bias_view;
     Tensor lm_head_gamma_view;
-    if (!is_training) {
+    if (!connect_parameter_graph) {
         lm_head_weights_view = request.lm_head->weights().detach(request.stream);
         lm_head_parameter_views.weights = &lm_head_weights_view;
         if (request.lm_head->bias().data) {
@@ -711,7 +770,7 @@ void executeModelForward(const ModelForwardRequest& request,
 
             intermediates.scratch_atom_embeddings = Tensor::empty(
                 TensorContract::TensorShape::make_BSM(num_atoms, atom_dim),
-                is_training,
+                connect_parameter_graph,
                 request.stream,
                 "scratch_atom_embeddings");
             cudaMemcpyAsync(
@@ -727,7 +786,7 @@ void executeModelForward(const ModelForwardRequest& request,
             Tensor reasoning_b_op_view;
             Tensor reasoning_w_arg1_view;
             Tensor reasoning_w_arg2_view;
-            if (!is_training) {
+            if (!connect_parameter_graph) {
                 reasoning_w_op_view = request.reasoning_head->W_op().detach(request.stream);
                 reasoning_b_op_view = request.reasoning_head->b_op().detach(request.stream);
                 reasoning_w_arg1_view = request.reasoning_head->w_arg1().detach(request.stream);

@@ -102,6 +102,7 @@ set(CMAKE_PCH_INSTANTIATE_TEMPLATES ON)
 
 # Find required packages
 find_package(CUDAToolkit REQUIRED)
+find_package(httplib CONFIG REQUIRED)
 
 # CUTLASS (flash-attention) requires CUDA 12+. Fail early with clear instructions.
 if(CUDAToolkit_VERSION_MAJOR LESS 12)
@@ -306,7 +307,6 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Common/grim_language_model_gpu.cu
     ../../Common/ModelStats.cu
     ../../Common/ScaleBuffer.cu
-    ../Inference_GPU.cu
     ../Forward_GPU.cu
     ../InitTrainingState.cu
     ../Phases/Startup/Model/ModelGpuAssembly.cu
@@ -456,6 +456,8 @@ add_executable(train_gpu
     ../Phases/DataStatsDump.hpp
     ../Phases/Phase2_TrainingLoop.cu
     ../Phases/Phase2_TrainingLoop.hpp
+    ../Phases/Phase2_InferenceLoop.cu
+    ../Phases/Phase2_InferenceLoop.hpp
     ../Diagnostics/TrainingDiagnostics.cu
     ../Diagnostics/TrainingDiagnostics.hpp
     ../Diagnostics/DiagnosticInference.cu
@@ -542,6 +544,7 @@ endif()
 target_link_libraries(train_gpu PRIVATE
     flatbuffers::flatbuffers
     nlohmann_json::nlohmann_json
+    httplib::httplib
     CUDA::cudart
     CUDA::cublas
     CUDA::curand
@@ -553,6 +556,7 @@ target_link_libraries(train_gpu PRIVATE
     grim_model_serialization
     grim_unigrambyte_tokenizer
     grim_log_recorder
+    $<$<PLATFORM_ID:Windows>:ws2_32>
 )
 # Link pthread and gomp for GCC/Linux (avoid genex - nvcc device link rejects $<CXX_COMPILER_ID:GNU>)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")

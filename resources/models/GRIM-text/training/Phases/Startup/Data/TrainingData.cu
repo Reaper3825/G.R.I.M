@@ -226,4 +226,27 @@ void LoadTrainingData(TrainingContext& ctx) {
         [](const std::string& msg) { GRIM::Logging::EmitModuleInfo(GRIM::Logging::ModuleId::Training, msg, 0); });
 }
 
+void LoadInferenceTokenizer(TrainingContext& ctx) {
+    using GRIM::Logging::EmitModuleInfo;
+    using GRIM::Logging::ModuleId;
+
+    const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(ctx.config);
+
+    EmitModuleInfo(ModuleId::Training, "[Phase1] Loading inference tokenizer artifact bundle...", 0);
+    ctx.tokenizer = Internal::initializeTokenizer(
+        tokenizer_hp, *ctx.logging.logger);
+
+    ctx.data_info.actual_vocab_size = static_cast<std::uint32_t>(ctx.tokenizer->vocabSize());
+    ctx.data_info.train_sequence_count = 0;
+    ctx.data_info.val_sequence_count = 0;
+    if (ctx.data_info.actual_vocab_size < static_cast<std::uint32_t>(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET)) {
+        throw std::runtime_error("FATAL: inference tokenizer vocab_size must include special+byte+atom ranges (>= " +
+            std::to_string(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET) + ")");
+    }
+
+    EmitModuleInfo(ModuleId::Training,
+        "[Phase1] ✓ Inference tokenizer ready | vocab_size=" +
+        std::to_string(ctx.data_info.actual_vocab_size), 0);
+}
+
 } // namespace GRIMText::Training

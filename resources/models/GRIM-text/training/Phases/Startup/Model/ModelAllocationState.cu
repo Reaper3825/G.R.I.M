@@ -86,9 +86,17 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     GRIMText::Training::Startup::ModelRegistration::buildParameterGroups(*model);
     logger.log("✓ Trainable parameter groups registered and verified");
 
-    logger.log("Initializing TrainingState runtime workspaces...");
-    model->initTrainingState();
-    logger.log("✓ TrainingState fully initialized");
+    if (config.execution_mode == GRIM::HyperParameters::ModelExecutionMode::TRAINING) {
+        logger.log("Initializing TrainingState runtime workspaces...");
+        model->initTrainingState();
+        logger.log("✓ TrainingState fully initialized");
+    } else if (config.execution_mode == GRIM::HyperParameters::ModelExecutionMode::INFERENCE) {
+        logger.log("Initializing inference runtime workspaces...");
+        model->initInferenceState();
+        logger.log("✓ Inference runtime fully initialized");
+    } else {
+        throw std::runtime_error("initializeModel: unsupported execution_mode");
+    }
 
 #ifdef USE_CUDA
     {

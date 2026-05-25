@@ -5,6 +5,7 @@
 #endif
 
 #include <fstream>
+#include <filesystem>
 #include <iostream>
 #include <mutex>
 #include <sstream>
@@ -21,8 +22,6 @@
 
 
 namespace GRIM {
-
-using GRIM::HyperParameters::ModelExecutionMode;
 
 //======================================================//
 //  Helper: Flatten Matrix to Vector
@@ -384,10 +383,65 @@ bool LanguageModel::save(const std::string& path) {
 
 bool LanguageModel::load(const std::string& path) {
     using namespace GRIM::Logging;
+    if (path.empty()) {
+        EmitModuleError(ModuleId::Checkpoint, "[load] Requested checkpoint path is empty");
+        std::cerr << "[LanguageModel::load] Error: requested checkpoint path is empty" << std::endl;
+        return false;
+    }
+    {
+        const std::filesystem::path checkpoint_path(path);
+        std::error_code ec;
+        const bool exists = std::filesystem::exists(checkpoint_path, ec);
+        if (ec) {
+            EmitModuleError(ModuleId::Checkpoint,
+                            "[load] Failed to query checkpoint path '" + path + "': " + ec.message());
+            std::cerr << "[LanguageModel::load] Error: failed to query checkpoint path '"
+                      << path << "': " << ec.message() << std::endl;
+            return false;
+        }
+        if (!exists) {
+            EmitModuleError(ModuleId::Checkpoint,
+                            "[load] Requested checkpoint does not exist: " + path);
+            std::cerr << "[LanguageModel::load] Error: requested checkpoint does not exist: "
+                      << path << std::endl;
+            return false;
+        }
+        const bool regular = std::filesystem::is_regular_file(checkpoint_path, ec);
+        if (ec) {
+            EmitModuleError(ModuleId::Checkpoint,
+                            "[load] Failed to inspect checkpoint path '" + path + "': " + ec.message());
+            std::cerr << "[LanguageModel::load] Error: failed to inspect checkpoint path '"
+                      << path << "': " << ec.message() << std::endl;
+            return false;
+        }
+        if (!regular) {
+            EmitModuleError(ModuleId::Checkpoint,
+                            "[load] Requested checkpoint is not a regular file: " + path);
+            std::cerr << "[LanguageModel::load] Error: requested checkpoint is not a regular file: "
+                      << path << std::endl;
+            return false;
+        }
+    }
     SerializationLayer layer(SerializationConfig{});
     SerializationLoadRequest request{};
     request.path = path;
     request.config = makeConfigView(config_);
+
+    if (!training_state_.initialized) {
+        EmitModuleError(ModuleId::Checkpoint,
+                        "[load] Runtime state is not initialized. Caller must complete explicit startup before LanguageModel::load().");
+        std::cerr << "[LanguageModel::load] Error: runtime state is not initialized. "
+                  << "Caller must complete explicit startup before load()." << std::endl;
+        return false;
+    }
+
+    if (!gpu_encoder_) {
+        EmitModuleError(ModuleId::Checkpoint,
+                        "[load] GPU encoder is not initialized. Caller must call initGPU(weight_init_seed) before LanguageModel::load().");
+        std::cerr << "[LanguageModel::load] Error: GPU encoder is not initialized. "
+                  << "Caller must call initGPU(weight_init_seed) before load()." << std::endl;
+        return false;
+    }
 
     // Pattern B: call site is the sole authority for what the model requires.
     request.capabilities.requires_execution_block = (execution_block_layer_ != nullptr);
@@ -415,10 +469,6 @@ bool LanguageModel::load(const std::string& path) {
     }
 
     auto* gpu_encoder = &getGpuEncoder();
-    if (!gpu_encoder) {
-        std::cerr << "[LanguageModel::load] Error: GPU encoder not initialized" << std::endl;
-        return false;
-    }
     request.encoder_layers.resize(config_.num_layers);
     const std::size_t d_model = static_cast<std::size_t>(config_.d_model);
     const std::size_t d_ff = static_cast<std::size_t>(config_.d_ff);
@@ -457,14 +507,6 @@ bool LanguageModel::load(const std::string& path) {
         if (enc->layerScale2().data) assignWrite(view.layer_scale2, enc->layerScale2().data, d_model);
     }
 
-    if (!training_state_.initialized) {
-        // Initialize state based on execution mode
-        if (config_.execution_mode == ModelExecutionMode::TRAINING) {
-            initTrainingState();
-        } else {
-            initInferenceState();
-        }
-    }
     if (lm_head_layer_ && lm_head_layer_->weights().data) {
         assignWrite(request.lm_head.projection,
                     lm_head_layer_->weights().data,

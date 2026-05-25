@@ -33,8 +33,8 @@ struct LayerAccess;
 //
 //  Each instance represents ONE batch row's register file [V, …].
 //  Per-row isolation: AutogradIntermediates stores a vector<ExecutionMemory>
-//  of size batch_size, and executeAutogradForward processes each row with its
-//  own M, using token_offset/row_tokens to scope H access.
+//  of size batch_size, and materializeTrainingGraphActivations processes each
+//  row with its own M, using token_offset/row_tokens to scope H access.
 //======================================================//
 struct ExecutionMemory {
     Tensor values;            // [V, 1]       scalar ground truth per slot

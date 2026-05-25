@@ -22,10 +22,10 @@
 namespace GRIM::Attention {
 
 struct EncoderSelfAttentionWeights {
-    Tensor& W_qkv;
-    Tensor& b_qkv;
-    Tensor& W_o;
-    Tensor& b_o;
+    const Tensor& W_qkv;
+    const Tensor& b_qkv;
+    const Tensor& W_o;
+    const Tensor& b_o;
 };
 
 struct EncoderSelfAttentionIntermediates {

@@ -95,7 +95,7 @@ Add **explicit supervision** (requires training changes), for example:
 
 End-to-end, ops are invoked from:
 
-1. **`Autograd::executeAutogradForward`** (`training/Autograd/AutogradTraining.cu`): encoder loop.
+1. **`Autograd::materializeTrainingGraphActivations`** (`training/Autograd/AutogradTraining.cu`): encoder loop.
 2. At **`exec_layer`**: **`bootstrapMemoryFromSlotMap`**, then **`ExecutionBlockLayer::executeStep`** × **`K`**.
 3. Inside **`executeStep`** (`Layers/ExecutionBlock/execution_block_GPU.cu`): softmax heads → argmax → **`kernelReadSlotValueByRelIdx`** → **`kernelFourOps`** → **`kernelHardPickOpForward`** → hard write + injection.
 
@@ -109,7 +109,7 @@ Later encoder layers may run **`crossAttentionRead`** from memory starting at **
 - `AutogradTraining.cu` — when the block runs; bootstrap and `executeStep` invocation.
 - `Shared/Batching/BatchPayload.*` — where `token_to_slot_map` is assembled for training.
 - `Shared/Batching/BatchDeviceUpload.cu` — H2D of `token_to_slot_map` into `cached_token_to_slot_map`.
-- `Inference_GPU.cu` / `grim_language_model_gpu.cu` — inference H2D for slot map and `forwardStep` slot argument.
+- `Phase2_InferenceLoop.cu` / `grim_language_model_gpu.cu` — Phase2-authored inference payloads and model scoring upload slot maps through `BatchDeviceBindings`.
 
 ---
 

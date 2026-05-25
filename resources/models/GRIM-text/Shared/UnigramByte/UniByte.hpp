@@ -113,22 +113,45 @@ struct DecodeRequest {
     size_t token_count = 0;
     const uint32_t* atom_entry_ids = nullptr;
     size_t atom_entry_count = 0;
+    const float* token_numeric_values = nullptr;
+    size_t token_numeric_count = 0;
+    const uint8_t* token_atom_mask = nullptr;
+    size_t token_atom_mask_count = 0;
     const AtomTable* atom_table = nullptr;
 
-    DecodeRequest(const std::vector<int>& ids)
+    explicit DecodeRequest(const std::vector<int>& ids)
         : token_ids(ids.data()), token_count(ids.size()) {}
 
-    DecodeRequest(std::initializer_list<int> ids)
+    explicit DecodeRequest(std::initializer_list<int> ids)
         : owned_token_ids(ids),
           token_ids(owned_token_ids.data()),
           token_count(owned_token_ids.size()) {}
 
-    DecodeRequest(const UniByteResult& result)
+    explicit DecodeRequest(const UniByteResult& result)
         : token_ids(result.token_ids.data()),
           token_count(result.token_ids.size()),
           atom_entry_ids(result.atom_entry_ids.data()),
           atom_entry_count(result.atom_entry_ids.size()),
+          token_numeric_values(result.token_numeric_values.data()),
+          token_numeric_count(result.token_numeric_values.size()),
+          token_atom_mask(result.token_atom_mask.data()),
+          token_atom_mask_count(result.token_atom_mask.size()),
           atom_table(result.atom_table.get()) {}
+
+    explicit DecodeRequest(const std::vector<int>& ids,
+                           const std::vector<uint32_t>& entry_ids,
+                           const AtomTable* table,
+                           const std::vector<float>& numeric_values,
+                           const std::vector<uint8_t>& atom_mask)
+        : token_ids(ids.data()),
+          token_count(ids.size()),
+          atom_entry_ids(entry_ids.data()),
+          atom_entry_count(entry_ids.size()),
+          token_numeric_values(numeric_values.data()),
+          token_numeric_count(numeric_values.size()),
+          token_atom_mask(atom_mask.data()),
+          token_atom_mask_count(atom_mask.size()),
+          atom_table(table) {}
 
     DecodeRequest(const DecodeRequest&) = delete;
     DecodeRequest& operator=(const DecodeRequest&) = delete;
