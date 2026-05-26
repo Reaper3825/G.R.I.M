@@ -7,7 +7,7 @@ Detailed ownership-tightening work for making the shared forward primitive read-
 ## Target ownership boundary
 
 - Training owns `AutogradContext`, loss assembly, backward, optimizer state, and `AutogradStepScope`.
-- Phase2 inference owns generation session state. `LanguageModel` exposes only context scoring over caller-authored `BatchPayload` objects.
+- Phase2 inference owns generation session state and the read-only context scorer over caller-authored `BatchPayload` objects.
 - Shared code owns only mode-neutral forward primitives that consume explicit device views and a caller-authored graph policy. It must not branch on training vs inference identity.
 - No inference-only fields may live in `AutogradContext`.
 - No forward path may rediscover the active step by reading `TrainingState.cached_*` as an implicit current batch; callers must pass explicit bindings.
@@ -17,16 +17,16 @@ Detailed ownership-tightening work for making the shared forward primitive read-
 Status: implemented.
 
 - [x] Add a shared inference-prefill forward primitive outside `training/Autograd`.
-- [x] Route `LanguageModel::getNextTokenLogits()` through that primitive.
+- [x] Route the Phase2-owned inference scorer through that primitive.
 - [x] Build a per-call `BatchDeviceBindings` view from the caller-authored inference payload.
-- [x] Build inference prompt ingestion through `Batching::buildInferenceBatchPayload()` and Phase2-owned calls to `LanguageModel::getNextTokenLogits(const BatchPayload&)` instead of server/vector-authored CUDA copies or model-owned generation-session wrappers.
+- [x] Build inference prompt ingestion through `Batching::buildInferenceBatchPayload()` and Phase2-owned calls to `scoreInferencePrefillLogits(const BatchPayload&)` instead of server/vector-authored CUDA copies or model-owned generation-session wrappers.
 - [x] Keep existing `TrainingState` cache tensors as temporary backing storage only.
-- [x] Keep training on `Autograd::materializeTrainingGraphActivations()` for now.
+- [x] Keep training on the shared forward primitive while Phase2 still owned only upload + loss/backward orchestration.
 
 Exit criteria:
 
 - Inference prefill no longer calls `initAutogradContext()`.
-- Inference prefill no longer calls `materializeTrainingGraphActivations()`.
+- Inference prefill no longer calls any training-only forward adapter.
 - `AutogradContext` has no inference-only fields or inference initializer overload.
 
 ## Phase 2 — Shared full-forward primitive
@@ -34,7 +34,7 @@ Exit criteria:
 Status: implemented.
 
 - [x] Extract the training/eval full-forward math from `AutogradTraining.cu` into `Shared/Forward/ModelForward_GPU.cu`.
-- [x] Make `Autograd::materializeTrainingGraphActivations()` a training/eval adapter that supplies autograd workspace and graph mode.
+- [x] Route training and inference through the same shared forward primitive; Phase2 training now calls `Forward::executeModelForward(...)` explicitly and autograd owns only loss/backward.
 - [x] Route inference prefill through the shared primitive with `ModelForwardGraphPolicy{false,false,false}`: read-only parameter graph, no backward retention, no dropout.
 - [x] Delete per-layer K/V preservation for inference; Phase2 inference uses the shared full-context graph rather than a separate KV-cache decode graph.
 - [x] Delete the temporary `InferenceForward_GPU.{hpp,cu}` primitive.

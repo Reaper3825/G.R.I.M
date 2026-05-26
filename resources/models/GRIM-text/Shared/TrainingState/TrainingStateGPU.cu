@@ -108,6 +108,9 @@ void TrainingState::allocateStepDeviceWorkspaces(
         "cached_token_to_slot_map");
     std::cout << "✓ Allocated token-to-slot map cache (Tensor API)" << std::endl;
 
+    read_gate_accum_tensor = Tensor::zeros({2}, stream, "read_gate_accum");
+    std::cout << "✓ Allocated read-gate telemetry accumulator [sum,count]" << std::endl;
+
     const auto atom_side_channel_mib =
         token_capacity * (sizeof(float) + sizeof(std::uint8_t) + sizeof(std::uint32_t)) / 1024 / 1024;
     std::cout << "✓ Allocated numeric values + atom mask + atom flags buffers ("

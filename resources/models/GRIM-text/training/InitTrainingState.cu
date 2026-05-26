@@ -180,6 +180,10 @@ void LanguageModel::initTrainingState() {
 
     const auto workspace_hp = HyperParameters::trainingStateWorkspaceHP(cfg);
     training_state_.allocateStepDeviceWorkspaces(workspace_hp, primary_stream);
+    if (!training_state_.read_gate_accum_tensor.data) {
+        throw std::runtime_error(
+            "[initTrainingState] TrainingState workspace allocation did not create read_gate_accum_tensor");
+    }
     // ═══════════════════════════════════════════════════════════════════════════
     //  STEP FINAL: Confirm initialization complete
     // ═══════════════════════════════════════════════════════════════════════════

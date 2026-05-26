@@ -4,7 +4,8 @@
 //  ⚠️ NOT BUILT — Not in CMakeLists.txt.
 //  ⚠️ BROKEN — Uses deleted LanguageModel::backward()/zeroGrad()
 //     and deleted LanguageModel::gradientMetrics().
-//  ⚠️ NEEDS FULL REWRITE to use autogradTrainingStep() + BatchPayload
+//  ⚠️ NEEDS FULL REWRITE to use explicit Phase2 shared-forward +
+//     computeAutogradLoss()/executeAutogradBackward() + BatchPayload
 //     + GradNorm::measureGradientNorms() for gradient metrics.
 //  
 //  Definitive proof tests for GRIM-text training correctness.
@@ -19,6 +20,7 @@
 //======================================================//
 
 #include "../GRIM/grim_language_model_cuda.hpp"
+#include "../training/Phases/Phase2_InferenceLoop.hpp"
 #include "../Shared/Batching/BatchPayload.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"
 #include "../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.hpp"
@@ -76,7 +78,7 @@ GRIM::Vector runInferencePrefill(GRIM::LanguageModel* model,
         static_cast<size_t>(cfg.batch_size),
         static_cast<size_t>(cfg.max_cached_seq_len),
         cfg.execution_block_num_slots);
-    return model->getNextTokenLogits(payload);
+    return GRIMText::Training::scoreInferencePrefillLogits(*model, payload);
 }
 
 //======================================================//

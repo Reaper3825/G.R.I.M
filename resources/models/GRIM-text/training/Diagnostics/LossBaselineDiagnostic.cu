@@ -66,7 +66,7 @@ void runLossBaselineAndTokenValidation(
     }
 
     // Check for CONFIRMED corruption: invalid token IDs
-    // NaN/Inf loss is already handled by autogradTrainingStep() upstream.
+    // NaN/Inf loss is already handled by the explicit Phase2 forward/loss/backward path upstream.
     // Loss-only skipping removes hard examples and destroys generalization
     bool has_invalid_tokens = false;
 

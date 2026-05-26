@@ -202,17 +202,15 @@ public:
     explicit LanguageModel(const HyperParameters::LanguageModelConfig& config);
     ~LanguageModel();
     
-    // Main inference scoring API: callers must build BatchPayload through Shared/Batching.
-    // Autoregressive generation orchestration belongs to training/Phases/Phase2_InferenceLoop.*.
-    Vector getNextTokenLogits(const GRIM::Batching::BatchPayload& context_payload);
-    
     // Training/inference payload upload.
     //
     // uploadBatchToDevice() performs the H2D copies into TrainingState's
     // reusable cache buffers and returns a BatchDeviceBindings that names the
-    // resulting device pointers. Training consumes those bindings through
-    // GRIM::Autograd::autogradTrainingStep(); inference consumes them through
-    // getNextTokenLogits(). There is no separate eval-loss loop.
+    // resulting device pointers. Phase2 training consumes those bindings
+    // through its explicit shared-forward + autograd loss/backward path;
+    // Phase2 inference consumes them through
+    // GRIMText::Training::scoreInferencePrefillLogits(). There is no separate
+    // eval-loss loop.
     GRIM::Batching::BatchDeviceBindings uploadBatchToDevice(
         const GRIM::Batching::BatchPayload& payload);
     
@@ -221,7 +219,8 @@ public:
     void initTrainingState();  // Initialize training runtime GPU workspaces
     void initInferenceState(); // Initialize inference state (allocate GPU buffers WITHOUT gradients)
     // backward() and zeroGrad() DELETED (Rule 26).
-    // Backward: Use autogradTrainingStep() which does forward+loss+backward.
+    // Backward: Phase2 runs explicit shared forward, then
+    // GRIM::Autograd::computeAutogradLoss() + executeAutogradBackward().
     // Zeroing: executeAutogradBackward() zeros registered ParameterGroup gradients
     // through TensorContract when accumulate=false.
     // updateWeights(), resetOptimizerMoments(), scaleOptimizerMoments() MOVED to

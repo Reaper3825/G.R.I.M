@@ -16,8 +16,6 @@
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
-#include "../../Shared/Forward/ModelForwardRuntimePayload.hpp"
-#include "../../Shared/Forward/ModelForward_GPU.hpp"
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../../Shared/UnigramByte/Unigram.hpp"
@@ -75,24 +73,7 @@ namespace Autograd {
 // PRODUCTION-READY: Runs entire model with autograd graph intact
 //======================================================================
 
-// Rule 20 explicit tape sealing: skip equation-tape D2H/fprintf on non-initial
-// accumulation slots. Scope MUST cover the full autograd step (forward + loss +
-// backward) — sealing only forward leaves loss/backward to log identical output
-// per slot, defeating the optimization and producing duplicate logs.
 namespace {
-struct TapeSkipScope {
-    GRIM::Logging::BatchLogTape* tape;
-    bool prev;
-    explicit TapeSkipScope(bool skip)
-        : tape(GRIM::Logging::getGlobalTape()),
-          prev(tape ? tape->skipThisPass() : false) {
-        if (tape) tape->setSkipThisPass(skip);
-    }
-    ~TapeSkipScope() { if (tape) tape->setSkipThisPass(prev); }
-    TapeSkipScope(const TapeSkipScope&) = delete;
-    TapeSkipScope& operator=(const TapeSkipScope&) = delete;
-};
-
 struct GradientSignalProbe {
     bool allocated = false;
     bool finite = true;
@@ -357,35 +338,6 @@ bool verifyGradientsAreConnectedImpl(
 );
 }  // namespace
 
-void materializeTrainingGraphActivations(AutogradContext& ctx) {
-    ctx.validate("materializeTrainingGraphActivations");
-
-    Forward::ModelForwardRuntimePayload runtime_payload{};
-    runtime_payload.autograd_intermediates = &ctx.training_state->autograd_intermediates;
-    runtime_payload.execution_trace_by_row = &ctx.training_state->execution_trace_by_row;
-    runtime_payload.trace_state_by_row = &ctx.training_state->trace_state_by_row;
-    runtime_payload.read_gate_accum_tensor = &ctx.training_state->read_gate_accum_tensor;
-
-    Forward::ModelForwardRequest request{};
-    request.config = ctx.config;
-    request.gpu_encoder = ctx.gpu_encoder;
-    request.cublas_handle = ctx.cublas_handle;
-    request.stream = ctx.stream;
-    request.embedding_layer = ctx.embedding_layer;
-    request.lm_head = ctx.lm_head;
-    request.scratch_block = ctx.scratch_block;
-    request.reasoning_head = ctx.reasoning_head;
-    request.execution_block = ctx.execution_block;
-    request.payload = ctx.payload;
-    request.bindings = ctx.device_bindings;
-    request.batch_idx = ctx.batch_idx;
-    request.graph = Forward::ModelForwardGraphPolicy{
-        /*connect_parameter_graph=*/true,
-        /*retain_backward_graph=*/true,
-        /*enable_dropout=*/true};
-
-    Forward::executeModelForward(request, runtime_payload);
-}
 //======================================================================
 // Autograd Loss Computation
 //======================================================================
@@ -416,7 +368,7 @@ LossResult computeAutogradLoss(
     // RULE 20: Fail loud - validate logits tensor was populated by forward pass
     auto& intermediates = ts->autograd_intermediates;
     if (!intermediates.logits_tensor.data) {
-        throw std::runtime_error("computeAutogradLoss: Logits tensor not initialized - call materializeTrainingGraphActivations() first");
+        throw std::runtime_error("computeAutogradLoss: Logits tensor not initialized - caller must run shared forward before loss");
     }
     
     // BatchPayload owns target semantics; BatchDeviceBindings is the explicit
@@ -1286,173 +1238,5 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
 // The old function duplicated a full L2 norm scan + cudaStreamSynchronize per batch
 // whose result was only logged and never consumed by Phase2.
 
-//======================================================================
-// Main Entry Point
-//======================================================================
-
-LossResult autogradTrainingStep(
-    LanguageModel& model,
-    TrainingState& training_state,
-    const Batching::BatchPayload& payload,
-    const Batching::BatchDeviceBindings& bindings,
-    const HyperParameters::LossConfigHP& loss_config,
-    bool accumulate,
-    uint64_t batch_idx,
-    float mtp_alpha_effective
-) {
-    payload.validate("autogradTrainingStep");
-
-    const auto& cfg = model.getConfig();
-
-    // Execution payload validation (WS4: single shared validator)
-    GRIM::Execution::validateExecutionPayload(
-        payload, "autogradTrainingStep",
-        cfg.execution_block_num_slots, cfg.execution_block_num_ops, cfg.execution_block_num_steps);
-
-    // When execution_block is disabled, teacher_steps are ignored — batch trains with plain cross-entropy.
-    if (!payload.teacher_steps.empty() && !cfg.execution_block_enabled) {
-        AG_WARN("batch has teacher_steps (arithmetic) but execution_block_enabled=false; "
-                "training with plain cross-entropy over text tokens (teacher supervision skipped)");
-    }
-
-    // WS8: Structural layer availability — crash loud if config says enabled but layers are missing.
-    if (cfg.execution_block_enabled) {
-        if (!model.getExecutionBlockLayer()) {
-            throw std::runtime_error(
-                "autogradTrainingStep: execution_block_enabled but ExecutionBlock layer is null");
-        }
-        ScratchBlockLayer* sb_check = model.getScratchBlockLayer();
-        if (!sb_check || !sb_check->isEnabled()) {
-            throw std::runtime_error(
-                "autogradTrainingStep: execution_block_enabled requires ScratchBlock enabled");
-        }
-    }
-
-    // Get encoder for autograd forward
-    GPUGrimEncoder& gpu_encoder = model.getGpuEncoder();
-    EmbeddingLayer* embedding_layer = model.getEmbeddingLayer();
-    LMHeadLayer* lm_head = model.getLmHeadLayer();
-    ScratchBlockLayer* scratch_block = model.getScratchBlockLayer();
-    ReasoningHeadLayer* reasoning_head = model.getReasoningHeadLayer();
-    cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // GPU COPIES: handled upstream by LanguageModel::uploadBatchToDevice(payload).
-    // initAutogradContext is the single sync-boundary validator for the returned
-    // BatchDeviceBindings; this step never authors payload geometry or H2D copies.
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // AUTOGRAD CONTEXT
-    // ═══════════════════════════════════════════════════════════════════════════
-    
-    // Write authoritative autograd batch index to TrainingState BEFORE building context.
-    // This is the ONLY mutation site for autograd_batch_idx.
-    training_state.autograd_batch_idx = batch_idx;
-
-    // Rule 20 explicit tape sealing: skip equation-tape D2H/fprintf on non-initial
-    // accumulation slots across the ENTIRE step (forward + loss + backward). Sealing
-    // only forward (the previous behavior) was a Rule 20 violation: loss and
-    // backward kept logging duplicated tape entries on every slot.
-    TapeSkipScope tape_skip_scope(accumulate);
-
-    ExecutionBlockLayer* execution_block = model.getExecutionBlockLayer();
-
-    AutogradContext ctx = initAutogradContext(
-        &cfg,
-        &training_state,
-        &gpu_encoder,
-        embedding_layer,
-        lm_head,
-        scratch_block,
-        reasoning_head,
-        execution_block,
-        training_state.cublas_handle.get(),
-        stream,
-        payload,
-        bindings,
-        batch_idx
-    );
-    if (loss_config.class_balanced_enabled) {
-        if (!training_state.class_weights_tensor.data) {
-            throw std::runtime_error("autogradTrainingStep: class_balanced_enabled=true but class_weights_tensor is NULL");
-        }
-        if (training_state.class_weights_vocab_size != payload.vocab_size) {
-            throw std::runtime_error("autogradTrainingStep: class_weights_vocab_size=" +
-                std::to_string(training_state.class_weights_vocab_size) + " != payload.vocab_size=" +
-                std::to_string(payload.vocab_size));
-        }
-        ctx.d_class_weights = training_state.class_weights_tensor.data;
-    } else {
-        ctx.d_class_weights = nullptr;
-    }
-    ctx.skip_equation_logging = accumulate;  // Skip D2H + fprintf on non-initial accumulation slots
-    ctx.model = &model;  // Model-owned MTP heads consumed by autograd MTP loss assembly
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // FORWARD → LOSS → BACKWARD
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    // Allocate read-gate accumulator once (Category 3 workspace on TrainingState)
-    if (!training_state.read_gate_accum_tensor.data && cfg.execution_block_enabled) {
-        training_state.read_gate_accum_tensor = Tensor::zeros({2}, stream, "read_gate_accum");
-    }
-    // Zero the accumulator before forward (sum=0, count=0)
-    if (training_state.read_gate_accum_tensor.data) {
-        CUDA_CHECK(cudaMemsetAsync(training_state.read_gate_accum_tensor.data, 0, 2 * sizeof(float), stream));
-    }
-    
-    materializeTrainingGraphActivations(ctx);
-
-    // Read back the cross-attention read gate accumulator (sum/count on device)
-    // Snapshot Category 3 workspace into Category 2 telemetry scalar BEFORE the
-    // autograd boundary (Rule 20).
-    if (training_state.read_gate_accum_tensor.data) {
-        float h_accum[2] = {0.0f, 0.0f};
-        CUDA_CHECK(cudaMemcpyAsync(h_accum, training_state.read_gate_accum_tensor.data,
-                                   2 * sizeof(float), cudaMemcpyDeviceToHost, stream));
-        CUDA_CHECK(cudaStreamSynchronize(stream));
-        training_state.h_read_gate_mean = (h_accum[1] > 0.0f)
-            ? (h_accum[0] / h_accum[1])
-            : 0.0f;
-    }
-    
-    LossResult loss_result = computeAutogradLoss(ctx, loss_config, mtp_alpha_effective);
-    if (!loss_result.success) {
-        loss_result.error_message = "autogradTrainingStep: Loss failed - " + loss_result.error_message;
-        // Rule 20 single-owner clear: caller's AutogradStepScope handles intermediates.
-        return loss_result;
-    }
-    
-    // Rule 20: Non-finite loss means forward produced garbage.
-    // Skip backward entirely — don't propagate NaN/Inf gradients.
-    if (!std::isfinite(loss_result.loss_value)) {
-        loss_result.success = false;
-        loss_result.error_message = "Non-finite loss: " + std::to_string(loss_result.loss_value);
-        // Rule 20 single-owner clear: caller's AutogradStepScope handles intermediates.
-        return loss_result;
-    }
-    
-    BackwardResult bwd_result = executeAutogradBackward(ctx, accumulate);
-    if (!bwd_result.success) {
-        loss_result.success = false;
-        loss_result.error_message = "autogradTrainingStep: Backward failed - " + bwd_result.error_message;
-        // Rule 20 single-owner clear: caller's AutogradStepScope handles intermediates.
-        return loss_result;
-    }
-    
-    // Post-backward cleanup (matches LanguageModel::backward() behavior)
-    training_state.sequence_weight_count = 0;
-    
-    // Rule 20 ownership taxonomy: AutogradIntermediates::clear() is owned by
-    // the caller's AutogradStepScope RAII guard. Do NOT clear here. Post-step
-    // diagnostics that need live logits/LM-head input must run before that
-    // scope ends and consume explicit current-step tensors, not TrainingState
-    // snapshots.
-    
-    AG_INFO("Training step complete: loss=" << loss_result.loss_value);
-    
-    return loss_result;
-}
 }  // namespace Autograd
 }  // namespace GRIM

@@ -5,6 +5,8 @@
 
 #include "Phase2_InferenceLoop.hpp"
 
+#include "../../Shared/Forward/ModelForwardRuntimePayload.hpp"
+#include "../../Shared/Forward/ModelForward_GPU.hpp"
 #include "../../Shared/Sampling/Sampling.hpp"
 #include "../../Shared/UnigramByte/AtomTable.hpp"
 #include "../../Shared/Execution/DecodeTimeNumPolicy.hpp"
@@ -16,6 +18,109 @@
 #include <stdexcept>
 
 namespace GRIMText::Training {
+
+GRIM::Vector scoreInferencePrefillLogits(
+    GRIM::LanguageModel& model,
+    const GRIM::Batching::BatchPayload& context_payload)
+{
+    context_payload.validate("scoreInferencePrefillLogits");
+    if (!context_payload.isInferencePrefill()) {
+        throw std::runtime_error("scoreInferencePrefillLogits: payload must be InferencePrefill");
+    }
+    if (context_payload.batch_size != 1) {
+        throw std::runtime_error("scoreInferencePrefillLogits: batch_size must be 1");
+    }
+
+    const auto& config = model.getConfig();
+    if (!config.use_gpu) {
+        throw std::runtime_error("scoreInferencePrefillLogits requires config.use_gpu=true");
+    }
+
+    auto& training_state = model.getTrainingState();
+    if (!training_state.initialized) {
+        throw std::runtime_error("scoreInferencePrefillLogits: training state not initialized");
+    }
+    if (context_payload.max_seq_len <= 0 || context_payload.max_seq_len > config.max_seq_len) {
+        throw std::runtime_error("scoreInferencePrefillLogits: payload max_seq_len=" +
+                                 std::to_string(context_payload.max_seq_len) + " out of range [1, " +
+                                 std::to_string(config.max_seq_len) + "]");
+    }
+    if (context_payload.vocab_size != config.vocab_size) {
+        throw std::runtime_error(
+            "scoreInferencePrefillLogits: payload.vocab_size=" +
+            std::to_string(context_payload.vocab_size) + " != config.vocab_size=" +
+            std::to_string(config.vocab_size));
+    }
+
+    const auto bindings = model.uploadBatchToDevice(context_payload);
+
+    cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
+    auto& generation_state = model.getGenerationState();
+
+    GRIM::Forward::ModelForwardRuntimePayload runtime_payload{};
+    runtime_payload.autograd_intermediates = &training_state.autograd_intermediates;
+    runtime_payload.execution_trace_by_row = &generation_state.execution_trace_by_row;
+    runtime_payload.trace_state_by_row = &generation_state.trace_state_by_row;
+    runtime_payload.read_gate_accum_tensor = nullptr;
+
+    GRIM::Forward::ModelForwardRequest request{};
+    request.config = &config;
+    request.gpu_encoder = &model.getGpuEncoder();
+    request.embedding_layer = model.getEmbeddingLayer();
+    request.lm_head = model.getLmHeadLayer();
+    request.scratch_block = model.getScratchBlockLayer();
+    request.reasoning_head = model.getReasoningHeadLayer();
+    request.execution_block = model.getExecutionBlockLayer();
+    request.cublas_handle = training_state.cublas_handle.get();
+    request.stream = stream;
+    request.payload = &context_payload;
+    request.bindings = &bindings;
+    request.batch_idx = 0;
+    request.graph = GRIM::Forward::ModelForwardGraphPolicy{
+        /*connect_parameter_graph=*/false,
+        /*retain_backward_graph=*/false,
+        /*enable_dropout=*/false};
+
+    GRIM::Forward::executeModelForward(request, runtime_payload);
+
+    const auto& live_logits = training_state.autograd_intermediates.logits_tensor;
+    if (!live_logits.data) {
+        throw std::runtime_error(
+            "scoreInferencePrefillLogits: AutogradIntermediates.logits_tensor.data is NULL after shared forward");
+    }
+
+    const size_t expected_logits =
+        static_cast<size_t>(context_payload.total_tokens) * static_cast<size_t>(config.vocab_size);
+    if (static_cast<size_t>(live_logits.numel()) < expected_logits) {
+        throw std::runtime_error(
+            "scoreInferencePrefillLogits: live logits numel=" +
+            std::to_string(live_logits.numel()) +
+            " < payload.total_tokens * config.vocab_size=" + std::to_string(expected_logits));
+    }
+
+    GRIM::Vector logits(config.vocab_size);
+    const size_t last_token_offset =
+        static_cast<size_t>(context_payload.max_seq_len - 1) * static_cast<size_t>(config.vocab_size);
+    cudaError_t copy_err = cudaMemcpyAsync(
+        logits.data.data(),
+        live_logits.data + last_token_offset,
+        static_cast<size_t>(config.vocab_size) * sizeof(float),
+        cudaMemcpyDeviceToHost,
+        stream);
+    if (copy_err != cudaSuccess) {
+        throw std::runtime_error("scoreInferencePrefillLogits: cudaMemcpyAsync logits failed: " +
+                                 std::string(cudaGetErrorString(copy_err)));
+    }
+
+    cudaError_t sync_err = cudaStreamSynchronize(stream);
+    if (sync_err != cudaSuccess) {
+        throw std::runtime_error("scoreInferencePrefillLogits: cudaStreamSynchronize failed: " +
+                                 std::string(cudaGetErrorString(sync_err)));
+    }
+
+    training_state.autograd_intermediates.clear();
+    return logits;
+}
 
 namespace {
 
@@ -185,9 +290,9 @@ GRIM::GeneratedSequence generateOneSequence(
                                      config.use_scratch_block &&
                                      model.isScratchBlockEnabled();
 
-    GRIM::Vector logits_vec = model.getNextTokenLogits(prompt_payload);
+    GRIM::Vector logits_vec = scoreInferencePrefillLogits(model, prompt_payload);
     if (logits_vec.data.empty()) {
-        throw std::runtime_error("Phase2 payload inference: getNextTokenLogits returned empty first-token logits");
+        throw std::runtime_error("Phase2 payload inference: scoreInferencePrefillLogits returned empty first-token logits");
     }
 
     for (int step = 0; step < cfg.max_new_tokens; ++step) {
@@ -297,9 +402,9 @@ GRIM::GeneratedSequence generateOneSequence(
             static_cast<size_t>(config.max_cached_seq_len),
             config.execution_block_num_slots);
 
-        logits_vec = model.getNextTokenLogits(step_payload);
+        logits_vec = scoreInferencePrefillLogits(model, step_payload);
         if (logits_vec.data.empty()) {
-            throw std::runtime_error("Phase2 payload inference: getNextTokenLogits returned empty logits");
+            throw std::runtime_error("Phase2 payload inference: scoreInferencePrefillLogits returned empty logits");
         }
 
         sequence.token_ids.push_back(sample.token_id);

@@ -116,6 +116,10 @@ void LanguageModel::initInferenceState() {
               << ", total_tokens=" << max_tokens << std::endl;
 
     training_state_.allocateStepDeviceWorkspaces(workspace_hp, primary_stream);
+    if (!training_state_.read_gate_accum_tensor.data) {
+        throw std::runtime_error(
+            "[InitInferenceState] TrainingState workspace allocation did not create read_gate_accum_tensor");
+    }
     
     // DELETED: cached_embeddings_tensor - not used in inference (encoder output computed on-the-fly)
     // DELETED: encoder_layer_caches - intermediate tensor caching moved to AutogradIntermediates

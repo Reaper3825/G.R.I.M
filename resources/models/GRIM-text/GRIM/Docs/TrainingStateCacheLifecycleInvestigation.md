@@ -57,7 +57,7 @@ Historical direct cache readers:
 - `training/Diagnostics/PredictionDistributionDiagnostic.cu`: copies logits from `cached_logits_tensor` for prediction distribution and logit trace.
 - `training/Diagnostics/LogitScaleDiagnostic.cu`: copies logits from `cached_logits_tensor` for logit-scale statistics.
 - `Layers/GRIMTS/GuessCacheTraining.cu`: copies prediction logits from `cached_logits_tensor` for guess-cache update logic.
-- `Common/grim_language_model_gpu.cu`: `LanguageModel::getNextTokenLogits()` returns last-token logits from the live `AutogradIntermediates.logits_tensor` before clearing the inference forward boundary.
+- `training/Phases/Phase2_InferenceLoop.cu`: `scoreInferencePrefillLogits()` returns last-token logits from the live `AutogradIntermediates.logits_tensor` before clearing the inference forward boundary.
 
 Why this is a boundary leak:
 
@@ -98,7 +98,7 @@ This is the right shape because the active batch identity is carried by the call
 Direct readers that should be audited:
 
 - `training/Diagnostics/GradientNormDiagnostic.cu`: reads `ts.cached_token_ids_tensor.data` directly for embedding-gradient equation diagnostics.
-- `Common/grim_language_model_gpu.cu`: inference scoring receives `BatchPayload`, calls `uploadBatchToDevice()`, and consumes only the returned `BatchDeviceBindings` for that call. Phase2 owns the evolving token sequence.
+- `training/Phases/Phase2_InferenceLoop.cu`: inference scoring receives `BatchPayload`, calls `uploadBatchToDevice()`, and consumes only the returned `BatchDeviceBindings` for that call. Phase2 owns the evolving token sequence.
 
 Why this is suspicious:
 

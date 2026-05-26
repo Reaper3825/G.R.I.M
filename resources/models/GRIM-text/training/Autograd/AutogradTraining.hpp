@@ -124,7 +124,7 @@ struct AutogradContext {
     // device_bindings carries the device pointers for THIS step (slot map,
     // atom mask, etc.). Replaces the old `mutable d_*` fields on BatchPayload.
     // - Training path: filled by LanguageModel::uploadBatchToDevice().
-    // Always non-null before materializeTrainingGraphActivations() reads device pointers.
+    // Always non-null before Phase2/shared-forward and loss code reads device pointers.
     // ═══════════════════════════════════════════════════════════════════════════
     const Batching::BatchPayload* payload = nullptr;
     const Batching::BatchDeviceBindings* device_bindings = nullptr;
@@ -188,17 +188,6 @@ AutogradContext initAutogradContext(
 );
 
 /**
- * Execute forward pass with autograd
- * 
- * Builds computation graph via grad_fn nodes.
- * Intermediate tensors stored in training_state->autograd_intermediates.
- * 
- * @param ctx Thin input context
- * @return Forward result (success/error only, tensors in TrainingState)
- */
-void materializeTrainingGraphActivations(AutogradContext& ctx);
-
-/**
  * Compute loss with autograd
  * 
  * Single entry point for ALL loss computation. Creates loss Tensor with
@@ -209,8 +198,8 @@ void materializeTrainingGraphActivations(AutogradContext& ctx);
  *   1. Text CE via autograd::unified_loss()
  *   2. Caches loss value in training_state for backward pass
  * 
- * @param ctx     Autograd context (must have logits populated by materializeTrainingGraphActivations,
- *                 and ctx.payload set to a valid BatchPayload)
+ * @param ctx     Autograd context (must have logits populated by the caller-owned
+ *                 shared forward pass, and ctx.payload set to a valid BatchPayload)
  * @param loss_config Caller-derived loss hyperparameter grouping
  * @param mtp_alpha_effective Phase2-derived MTP loss weight for this batch
  */
@@ -237,36 +226,6 @@ BackwardResult executeAutogradBackward(
 bool verifyGradientsAreConnected(AutogradContext& ctx);
 
 // computeGradientNorm() DELETED — redundant with Phase2's computeGradNorm()
-
-/**
- * Full autograd training step: forward → loss → backward.
- *
- * Caller is responsible for the H2D upload via
- * LanguageModel::uploadBatchToDevice(payload) and must pass the resulting
- * BatchDeviceBindings as `bindings`. autogradTrainingStep does not write any
- * device pointers back through `payload`.
- *
- * @param model          LanguageModel (provides config, encoder, layers)
- * @param training_state TrainingState (GPU buffers, optimizer state)
- * @param payload        BatchPayload runtime datum (supervision, row layout, token stats)
- * @param bindings       BatchDeviceBindings produced by uploadBatchToDevice(payload)
- * @param loss_config    Explicit loss grouping derived from authoritative hyperparameters
- * @param accumulate     Whether to accumulate gradients (true for accumulation slots > 0)
- * @param batch_idx      Batch index used by forward-time stochastic kernels/logs
- * @param mtp_alpha_effective Phase2-derived MTP loss weight for this batch
- * @return LossResult with decomposed loss components and success/error status.
- *         If loss is non-finite, backward is SKIPPED and success=false.
- */
-LossResult autogradTrainingStep(
-    LanguageModel& model,
-    TrainingState& training_state,
-    const Batching::BatchPayload& payload,
-    const Batching::BatchDeviceBindings& bindings,
-    const HyperParameters::LossConfigHP& loss_config,
-    bool accumulate,
-    uint64_t batch_idx,
-    float mtp_alpha_effective
-);
 
 /**
  * AutogradStepScope — RAII single-owner of AutogradIntermediates::clear().

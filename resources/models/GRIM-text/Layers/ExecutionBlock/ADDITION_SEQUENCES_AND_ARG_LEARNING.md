@@ -75,7 +75,7 @@ Add **explicit supervision** (requires training changes), for example:
 
 ## Inference and generation
 
-- **Single forward** (`forward`, `forwardInit`, `getNextTokenLogits`, etc.): upload **`token_to_slot_map`** together with tokens and numerics so bootstrap and `executeStep` see the same contract as training.
+- **Single forward** (`forward`, `forwardInit`, `scoreInferencePrefillLogits`, etc.): upload **`token_to_slot_map`** together with tokens and numerics so bootstrap and `executeStep` see the same contract as training.
 - **Autoregressive `generate` / `forwardStep`:** the default path appends new tokens with **slot id `-1`** unless you pass a non-default **`new_token_slot_id`** into **`forwardStep`** (and a policy for which slot each generated `<NUM>` should use). Without that, **decode-time** numbers do not participate in registers the same way as a fully specified prompt map.
 
 ---

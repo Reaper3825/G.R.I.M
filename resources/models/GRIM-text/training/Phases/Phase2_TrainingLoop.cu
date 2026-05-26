@@ -16,7 +16,10 @@
 #include "../../Shared/Telemetry/TelemetryUpdate.hpp"
 #include "../../Shared/UnigramByte/AtomTable.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
-#include "../Autograd/AutogradTraining.hpp"  // autogradTrainingStep: unified forward+loss+backward
+#include "../../Shared/Forward/ModelForwardRuntimePayload.hpp"
+#include "../../Shared/Forward/ModelForward_GPU.hpp"
+#include "../../Shared/Execution/ExecutionPayloadValidation.hpp"
+#include "../Autograd/AutogradTraining.hpp"
 #include "../../Shared/Optimizers/OptimizerUpdate_GPU.hpp"  // launchOptimizerUpdate
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"  // single entry point; transitively pulls in control/ai_config_paths.hpp (resolveGrimRoot, etc.)
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"  // grouped HP reads without duplicating authored config
@@ -93,6 +96,28 @@ float getScheduledLearningRate(
 //  PlannedBatchesReady.
 //======================================================//
 namespace {
+
+struct TapeSkipScope {
+    GRIM::Logging::BatchLogTape* tape;
+    bool prev;
+
+    explicit TapeSkipScope(bool skip)
+        : tape(GRIM::Logging::getGlobalTape()),
+          prev(tape ? tape->skipThisPass() : false) {
+        if (tape) {
+            tape->setSkipThisPass(skip);
+        }
+    }
+
+    ~TapeSkipScope() {
+        if (tape) {
+            tape->setSkipThisPass(prev);
+        }
+    }
+
+    TapeSkipScope(const TapeSkipScope&) = delete;
+    TapeSkipScope& operator=(const TapeSkipScope&) = delete;
+};
 
 float accumulationNormalizationScaleForOptimizerWindow(int accum_steps) {
     if (accum_steps <= 0) {
@@ -425,6 +450,123 @@ void runOptimizerWindowFromEpoch(
     }
 }
 
+void validateTrainingForwardInputs(
+    GRIM::LanguageModel& model,
+    const GRIM::Batching::BatchPayload& payload,
+    const char* caller)
+{
+    payload.validate(caller);
+
+    const auto& cfg = model.getConfig();
+    GRIM::Execution::validateExecutionPayload(
+        payload,
+        caller,
+        cfg.execution_block_num_slots,
+        cfg.execution_block_num_ops,
+        cfg.execution_block_num_steps);
+
+    if (!payload.teacher_steps.empty() && !cfg.execution_block_enabled) {
+        std::cerr << "[Phase2] WARN: batch has teacher_steps while execution_block_enabled=false; "
+                  << "training with plain cross-entropy over text tokens" << std::endl;
+    }
+
+    if (cfg.execution_block_enabled) {
+        if (!model.getExecutionBlockLayer()) {
+            throw std::runtime_error(
+                std::string(caller) + ": execution_block_enabled but ExecutionBlock layer is null");
+        }
+        GRIM::ScratchBlockLayer* scratch_block = model.getScratchBlockLayer();
+        if (!scratch_block || !scratch_block->isEnabled()) {
+            throw std::runtime_error(
+                std::string(caller) + ": execution_block_enabled requires ScratchBlock enabled");
+        }
+    }
+}
+
+void configureAutogradLossInputs(
+    GRIM::Autograd::AutogradContext& autograd_ctx,
+    GRIM::LanguageModel& model,
+    GRIM::TrainingState& training_state,
+    const GRIM::Batching::BatchPayload& payload,
+    const GRIM::HyperParameters::LossConfigHP& loss_config,
+    bool skip_equation_logging)
+{
+    if (loss_config.class_balanced_enabled) {
+        if (!training_state.class_weights_tensor.data) {
+            throw std::runtime_error(
+                "configureAutogradLossInputs: class_balanced_enabled=true but class_weights_tensor is NULL");
+        }
+        if (training_state.class_weights_vocab_size != payload.vocab_size) {
+            throw std::runtime_error(
+                "configureAutogradLossInputs: class_weights_vocab_size=" +
+                std::to_string(training_state.class_weights_vocab_size) +
+                " != payload.vocab_size=" + std::to_string(payload.vocab_size));
+        }
+        autograd_ctx.d_class_weights = training_state.class_weights_tensor.data;
+    } else {
+        autograd_ctx.d_class_weights = nullptr;
+    }
+
+    autograd_ctx.skip_equation_logging = skip_equation_logging;
+    autograd_ctx.model = &model;
+}
+
+GRIM::Forward::ModelForwardRuntimePayload buildTrainingForwardRuntimePayload(
+    GRIM::TrainingState& training_state)
+{
+    GRIM::Forward::ModelForwardRuntimePayload runtime_payload{};
+    runtime_payload.autograd_intermediates = &training_state.autograd_intermediates;
+    runtime_payload.execution_trace_by_row = &training_state.execution_trace_by_row;
+    runtime_payload.trace_state_by_row = &training_state.trace_state_by_row;
+    runtime_payload.read_gate_accum_tensor = &training_state.read_gate_accum_tensor;
+    return runtime_payload;
+}
+
+GRIM::Forward::ModelForwardRequest buildTrainingForwardRequest(
+    const GRIM::Autograd::AutogradContext& autograd_ctx)
+{
+    GRIM::Forward::ModelForwardRequest request{};
+    request.config = autograd_ctx.config;
+    request.gpu_encoder = autograd_ctx.gpu_encoder;
+    request.cublas_handle = autograd_ctx.cublas_handle;
+    request.stream = autograd_ctx.stream;
+    request.embedding_layer = autograd_ctx.embedding_layer;
+    request.lm_head = autograd_ctx.lm_head;
+    request.scratch_block = autograd_ctx.scratch_block;
+    request.reasoning_head = autograd_ctx.reasoning_head;
+    request.execution_block = autograd_ctx.execution_block;
+    request.payload = autograd_ctx.payload;
+    request.bindings = autograd_ctx.device_bindings;
+    request.batch_idx = autograd_ctx.batch_idx;
+    request.graph = GRIM::Forward::ModelForwardGraphPolicy{
+        /*connect_parameter_graph=*/true,
+        /*retain_backward_graph=*/true,
+        /*enable_dropout=*/true};
+    return request;
+}
+
+void snapshotReadGateMean(
+    GRIM::TrainingState& training_state,
+    cudaStream_t stream)
+{
+    if (!training_state.read_gate_accum_tensor.data) {
+        throw std::runtime_error(
+            "snapshotReadGateMean: TrainingState.read_gate_accum_tensor is NULL");
+    }
+
+    float h_accum[2] = {0.0f, 0.0f};
+    CUDA_CHECK(cudaMemcpyAsync(
+        h_accum,
+        training_state.read_gate_accum_tensor.data,
+        2 * sizeof(float),
+        cudaMemcpyDeviceToHost,
+        stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    training_state.h_read_gate_mean = (h_accum[1] > 0.0f)
+        ? (h_accum[0] / h_accum[1])
+        : 0.0f;
+}
+
 } // namespace
 
 //======================================================//
@@ -488,16 +630,16 @@ BatchResult processBatch(
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] forward_call_count=%d, building target distribution...\n", forward_call_count);
     GRIM::Diagnostics::runTargetDistributionLog(ctx, payload, batch_idx);
 
-    PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] About to call autogradTrainingStep...\n");
-    // First-batch CUDA check: surface any error before fwd/loss/bwd.
+    PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] About to run explicit shared forward + autograd loss/backward...\n");
+    // First-batch CUDA check: surface any error before explicit forward/loss/bwd.
     if (batch_idx == 0) {
         cudaError_t e = cudaDeviceSynchronize();
         cudaError_t last = (e != cudaSuccess) ? e : cudaGetLastError();
         if (last != cudaSuccess) {
-            ctx.logging.logger->log("[CUDA] first_batch BEFORE autogradTrainingStep: " + std::string(cudaGetErrorString(last)));
+            ctx.logging.logger->log("[CUDA] first_batch BEFORE explicit training forward: " + std::string(cudaGetErrorString(last)));
             cudaGetLastError();
         } else {
-            ctx.logging.logger->log("[CUDA] first_batch BEFORE autogradTrainingStep: ok");
+            ctx.logging.logger->log("[CUDA] first_batch BEFORE explicit training forward: ok");
         }
     }
     // Rule 20 ownership taxonomy: AutogradStepScope is the SINGLE owner of
@@ -505,52 +647,107 @@ BatchResult processBatch(
     // clear() anywhere inside this scope.
     GRIM::Autograd::AutogradStepScope autograd_step_scope(ctx.model->getTrainingState());
     // Sync slice: upload the prebuilt host BatchPayload once and reuse the
-    // returned BatchDeviceBindings inside autogradTrainingStep — payload itself
-    // is host-only/immutable and never carries device pointers.
+    // returned BatchDeviceBindings across shared forward, loss, and backward —
+    // payload itself is host-only/immutable and never carries device pointers.
     const auto train_bindings = ctx.model->uploadBatchToDevice(payload);
     const auto loss_config = GRIM::HyperParameters::lossConfigHP(ctx.config);
-    auto loss_result = GRIM::Autograd::autogradTrainingStep(
-        *ctx.model,
-        ctx.model->getTrainingState(),
+    auto& model = *ctx.model;
+    auto& training_state = model.getTrainingState();
+    const auto& model_config = model.getConfig();
+
+    validateTrainingForwardInputs(model, payload, "processBatch");
+
+    training_state.autograd_batch_idx = plan.batch_idx;
+    TapeSkipScope tape_skip_scope(plan.should_accumulate);
+
+    if (!training_state.read_gate_accum_tensor.data) {
+        throw std::runtime_error(
+            "processBatch: TrainingState.read_gate_accum_tensor is NULL - "
+            "Phase1 startup must allocate the read-gate workspace before Phase2 runs");
+    }
+
+    cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
+    CUDA_CHECK(cudaMemsetAsync(training_state.read_gate_accum_tensor.data, 0, 2 * sizeof(float), stream));
+
+    GRIM::Autograd::AutogradContext autograd_ctx = GRIM::Autograd::initAutogradContext(
+        &model_config,
+        &training_state,
+        &model.getGpuEncoder(),
+        model.getEmbeddingLayer(),
+        model.getLmHeadLayer(),
+        model.getScratchBlockLayer(),
+        model.getReasoningHeadLayer(),
+        model.getExecutionBlockLayer(),
+        training_state.cublas_handle.get(),
+        stream,
         payload,
         train_bindings,
+        plan.batch_idx);
+
+    configureAutogradLossInputs(
+        autograd_ctx,
+        model,
+        training_state,
+        payload,
         loss_config,
-        plan.should_accumulate,
-        plan.batch_idx,
-        mtpAlphaEffectiveForBatch(ctx.model_config, ctx.global_step)
-    );
+        plan.should_accumulate);
+
+    GRIM::Forward::ModelForwardRuntimePayload runtime_payload =
+        buildTrainingForwardRuntimePayload(training_state);
+    GRIM::Forward::ModelForwardRequest forward_request =
+        buildTrainingForwardRequest(autograd_ctx);
+
+    GRIM::Forward::executeModelForward(forward_request, runtime_payload);
+    snapshotReadGateMean(training_state, stream);
+
+    auto loss_result = GRIM::Autograd::computeAutogradLoss(
+        autograd_ctx,
+        loss_config,
+        mtpAlphaEffectiveForBatch(ctx.model_config, ctx.global_step));
+    if (!loss_result.success) {
+        throw std::runtime_error(
+            "[computeAutogradLoss] FAILED batch=" + std::to_string(batch_idx + 1) +
+            ": " + loss_result.error_message);
+    }
+    if (!std::isfinite(loss_result.loss_value)) {
+        throw std::runtime_error("Non-finite loss: " + std::to_string(loss_result.loss_value));
+    }
+
+    auto backward_result = GRIM::Autograd::executeAutogradBackward(
+        autograd_ctx,
+        plan.should_accumulate);
+    if (!backward_result.success) {
+        throw std::runtime_error(
+            "[executeAutogradBackward] FAILED batch=" + std::to_string(batch_idx + 1) +
+            ": " + backward_result.error_message);
+    }
+
+    training_state.sequence_weight_count = 0;
+
     result.loss = loss_result.loss_value;
     result.aux_loss = loss_result.aux_loss;
     result.mtp_diagnostics = std::move(loss_result.mtp_diagnostics);
-    PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] autogradTrainingStep returned, loss=%f success=%d\n", 
+    PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] explicit forward + autograd loss/backward returned, loss=%f success=%d\n", 
                         result.loss, static_cast<int>(loss_result.success));
 
-    // First-batch CUDA check: a fault here means fwd/loss/bwd produced it.
+    // First-batch CUDA check: a fault here means explicit forward/loss/bwd produced it.
     // Rule 20: crash with the exact error — don't defer to teardown.
     if (batch_idx == 0) {
         cudaError_t e = cudaDeviceSynchronize();
         cudaError_t last = (e != cudaSuccess) ? e : cudaGetLastError();
         if (last != cudaSuccess) {
             throw std::runtime_error(
-                std::string("[CUDA] first_batch AFTER autogradTrainingStep: ") +
+                std::string("[CUDA] first_batch AFTER explicit training forward/loss/backward: ") +
                 cudaGetErrorString(last) +
                 " (fault is in forward, loss, or backward)");
         }
-        ctx.logging.logger->log("[CUDA] first_batch AFTER autogradTrainingStep: ok");
-    }
-
-    // Rule 20: NaN/Inf loss or backward error is a real bug; crash with the
-    // propagated message instead of skipping the batch.
-    if (!loss_result.success) {
-        throw std::runtime_error(
-            "[autogradTrainingStep] FAILED batch=" + std::to_string(batch_idx + 1) +
-            ": " + loss_result.error_message);
+        ctx.logging.logger->log("[CUDA] first_batch AFTER explicit training forward/loss/backward: ok");
     }
 
     auto& active_intermediates = ctx.model->getTrainingState().autograd_intermediates;
     if (!active_intermediates.logits_tensor.data) {
         throw std::runtime_error(
-            "processBatch: live logits tensor is NULL after successful autogradTrainingStep — "
+            "processBatch: live logits tensor is NULL after successful explicit shared forward — "
             "diagnostics must run before AutogradStepScope teardown");
     }
     GRIM::Tensor* live_lm_head_input = nullptr;
@@ -561,7 +758,7 @@ BatchResult processBatch(
     }
     if (!live_lm_head_input || !live_lm_head_input->data) {
         throw std::runtime_error(
-            "processBatch: live LM-head input tensor is NULL after successful autogradTrainingStep");
+            "processBatch: live LM-head input tensor is NULL after successful explicit shared forward");
     }
 
     // Log model predictions (what it predicts vs targets) - uses ForwardPass module for filtering
@@ -607,7 +804,7 @@ BatchResult processBatch(
         ctx, state, payload, result.loss, batch_idx);
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // POST-BACKWARD: autogradTrainingStep() has produced/accumulated grads.
+    // POST-BACKWARD: explicit shared forward + autograd backward has produced/accumulated grads.
     // Diagnostics below read from TrainingState before runEpoch may open the
     // optimizer window.
     // ═══════════════════════════════════════════════════════════════════════════
@@ -828,8 +1025,9 @@ EpochResult runEpoch(
     }
     
     // No second validation/eval loop. The epoch metric is derived from the
-    // training batches already executed by autogradTrainingStep(); every op and
-    // feature is verified in that single path.
+    // training batches already executed by the explicit shared-forward +
+    // autograd loss/backward path; every op and feature is verified in that
+    // single path.
     result.validation.loss = epoch_loss / result.batches_processed;
     result.validation.sequences_processed = epoch_sequences_processed;
     result.validation.perplexity =

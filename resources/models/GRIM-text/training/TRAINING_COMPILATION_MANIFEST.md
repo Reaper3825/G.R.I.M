@@ -391,7 +391,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 - [x] **Inference_GPU.cu** ✅ DELETED (phase-2 boundary split)
   - Phase2 inference owns the generation session: prompt/current-sequence payload construction, sampling, appending, and decode.
-  - `LanguageModel::getNextTokenLogits(BatchPayload)` is the only model inference scorer; it uploads the explicit payload, enters `Shared/Forward/ModelForward_GPU.cu` with `ModelForwardGraphPolicy{false,false,false}`, returns last-token logits, and clears intermediates.
+  - `training/Phases/Phase2_InferenceLoop.cu::scoreInferencePrefillLogits(BatchPayload)` is the Phase2-owned inference scorer; it uploads the explicit payload, enters `Shared/Forward/ModelForward_GPU.cu` with `ModelForwardGraphPolicy{false,false,false}`, returns last-token logits, and clears intermediates.
   - **DELETED**: `scoreSequenceFullContext_()`, `primeGenerationSession()`, `continueGenerationSession()`, `scoreNextTokenWithKvCache_()`, KV-cache/decode scratch allocation, and the second encoder-layer implementation.
   - No AutogradContext inference path remains; inference uses the shared read-only full-context graph only ✅
 
@@ -1045,9 +1045,8 @@ For each encoding layer (Layer 0 → Layer 11):
 
 - [x] **AutogradTraining.cu** ✅ AUDITED & FULLY REFACTORED (2070 lines, 4 major functions)
   - **PRIMARY BACKWARD PATH**: `executeAutogradBackward(ctx)` — handles text loss + numeric loss + learned weighting + ScratchBlock backward
-  - **PRIMARY TRAINING GRAPH PATH**: `materializeTrainingGraphActivations(ctx)` — full model activation graph through autograd
   - **PRIMARY LOSS PATH**: `computeAutogradLoss(ctx, loss_config, mtp_alpha_effective)` — text CE + auxiliary loss assembly, returns `LossResult`
-  - **PRIMARY TRAINING STEP**: `autogradTrainingStep(model, training_state, payload, ...)` — GPU copies + forward + loss + backward in single call
+  - **PHASE2 TRAINING ORCHESTRATOR**: `Phase2_TrainingLoop.cu::processBatch(...)` — upload + explicit `Forward::executeModelForward(...)` + loss + backward
   - **FIXED (Issue #140)**: Removed √d_model embedding scaling (scale=1.0f) — eliminates 27.7x gradient asymmetry for tied weights
   - **FIXED (Issue #141)**: ScratchBlock backward now uses gradient tap buffer — `atom_projection_` and `atom_type_embeddings_` are trained ✅
   - **FIXED (Issue #141)**: `positional_encoding` config parsed from JSON (was hardcoded to ALIBI_ROPE)

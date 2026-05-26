@@ -25,6 +25,18 @@ struct Phase2TextInferenceResult {
 };
 
 /**
+ * @brief Score a caller-authored inference payload through the shared full-context graph.
+ *
+ * Phase2 owns inference scoring orchestration. The model does not expose a
+ * standalone inference scorer; callers that need last-token logits for a
+ * `BatchPayloadMode::InferencePrefill` payload must route through this Phase2
+ * boundary helper.
+ */
+GRIM::Vector scoreInferencePrefillLogits(
+    GRIM::LanguageModel& model,
+    const GRIM::Batching::BatchPayload& context_payload);
+
+/**
  * @brief Execute Phase 2 inference from a text prompt over Phase1-owned state.
  *
  * This is the only public Phase 2 inference entrypoint. It keeps tokenizer

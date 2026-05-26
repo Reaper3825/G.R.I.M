@@ -35,8 +35,6 @@
 #include "../Layers/Encoding/Encoding_GPU.hpp"
 #include "../Layers/FlashAttention/Flash_Attention_Kernal.hpp"    // For Flash Attention kernels
 #include "../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"   // For ScratchBlock reasoning layer
-#include "../Shared/Forward/ModelForwardRuntimePayload.hpp"
-#include "../Shared/Forward/ModelForward_GPU.hpp"
 #include "../Shared/UnigramByte/Unigram.hpp"
 #include "../Shared/PBM/PBMStateOwner.hpp"                        // Unified PBM RAII owner (ALiBi + RoPE)
 
@@ -198,101 +196,6 @@ LanguageModel::LanguageModel(const HyperParameters::LanguageModelConfig& config)
 }
 
 LanguageModel::~LanguageModel() = default;
-
-//======================================================//
-//  BatchPayload-only inference scoring APIs
-//======================================================//
-
-Vector LanguageModel::getNextTokenLogits(const Batching::BatchPayload& context_payload) {
-    context_payload.validate("LanguageModel::getNextTokenLogits(BatchPayload)");
-    if (!context_payload.isInferencePrefill()) {
-        throw std::runtime_error("LanguageModel::getNextTokenLogits(BatchPayload): payload must be InferencePrefill");
-    }
-    if (context_payload.batch_size != 1) {
-        throw std::runtime_error("LanguageModel::getNextTokenLogits(BatchPayload): batch_size must be 1");
-    }
-    if (!config_.use_gpu || !gpu_encoder_) {
-        throw std::runtime_error("LanguageModel::getNextTokenLogits(BatchPayload) requires initialized GPU encoder");
-    }
-    if (!training_state_.initialized) {
-        throw std::runtime_error("LanguageModel::getNextTokenLogits(BatchPayload): training state not initialized");
-    }
-    if (context_payload.max_seq_len <= 0 || context_payload.max_seq_len > config_.max_seq_len) {
-        throw std::runtime_error("LanguageModel::getNextTokenLogits(BatchPayload): payload max_seq_len=" +
-                                 std::to_string(context_payload.max_seq_len) + " out of range [1, " +
-                                 std::to_string(config_.max_seq_len) + "]");
-    }
-    if (context_payload.vocab_size != config_.vocab_size) {
-        throw std::runtime_error(
-            "LanguageModel::getNextTokenLogits(BatchPayload): payload.vocab_size=" +
-            std::to_string(context_payload.vocab_size) + " != config_.vocab_size=" +
-            std::to_string(config_.vocab_size));
-    }
-
-    const auto bindings = uploadBatchToDevice(context_payload);
-
-    cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
-
-    Forward::ModelForwardRuntimePayload runtime_payload{};
-    runtime_payload.autograd_intermediates = &training_state_.autograd_intermediates;
-    runtime_payload.execution_trace_by_row = &generation_state_.execution_trace_by_row;
-    runtime_payload.trace_state_by_row = &generation_state_.trace_state_by_row;
-    runtime_payload.read_gate_accum_tensor = nullptr;
-
-    Forward::ModelForwardRequest request{};
-    request.config = &config_;
-    request.gpu_encoder = &getGpuEncoder();
-    request.embedding_layer = getEmbeddingLayer();
-    request.lm_head = getLmHeadLayer();
-    request.scratch_block = getScratchBlockLayer();
-    request.reasoning_head = getReasoningHeadLayer();
-    request.execution_block = getExecutionBlockLayer();
-    request.cublas_handle = training_state_.cublas_handle.get();
-    request.stream = stream;
-    request.payload = &context_payload;
-    request.bindings = &bindings;
-    request.batch_idx = 0;
-    request.graph = Forward::ModelForwardGraphPolicy{
-        /*connect_parameter_graph=*/false,
-        /*retain_backward_graph=*/false,
-        /*enable_dropout=*/false};
-
-    Forward::executeModelForward(request, runtime_payload);
-
-    const auto& live_logits = training_state_.autograd_intermediates.logits_tensor;
-    if (!live_logits.data) {
-        throw std::runtime_error("LanguageModel::getNextTokenLogits(BatchPayload): AutogradIntermediates.logits_tensor.data is NULL after shared forward");
-    }
-    const size_t expected_logits = static_cast<size_t>(context_payload.total_tokens) * static_cast<size_t>(config_.vocab_size);
-    if (static_cast<size_t>(live_logits.numel()) < expected_logits) {
-        throw std::runtime_error(
-            "LanguageModel::getNextTokenLogits(BatchPayload): live logits numel=" +
-            std::to_string(live_logits.numel()) +
-            " < payload.total_tokens * config.vocab_size=" + std::to_string(expected_logits));
-    }
-
-    Vector logits(config_.vocab_size);
-    const size_t last_token_offset =
-        static_cast<size_t>(context_payload.max_seq_len - 1) * static_cast<size_t>(config_.vocab_size);
-    cudaError_t copy_err = cudaMemcpyAsync(
-        logits.data.data(),
-        live_logits.data + last_token_offset,
-        static_cast<size_t>(config_.vocab_size) * sizeof(float),
-        cudaMemcpyDeviceToHost,
-        stream);
-    if (copy_err != cudaSuccess) {
-        throw std::runtime_error("LanguageModel::getNextTokenLogits(BatchPayload): cudaMemcpyAsync logits failed: " +
-                                 std::string(cudaGetErrorString(copy_err)));
-    }
-    cudaError_t sync_err = cudaStreamSynchronize(stream);
-    if (sync_err != cudaSuccess) {
-        throw std::runtime_error("LanguageModel::getNextTokenLogits(BatchPayload): cudaStreamSynchronize failed: " +
-                                 std::string(cudaGetErrorString(sync_err)));
-    }
-
-    training_state_.autograd_intermediates.clear();
-    return logits;
-}
 
 //======================================================//
 //  ScratchBlock Helper Methods
