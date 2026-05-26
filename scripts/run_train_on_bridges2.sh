@@ -16,8 +16,10 @@
 #     (no forced submodule update when the expected commits are already checked out on the remote).
 #   - vcpkg: Script uses the repo's external/vcpkg checkout on Bridges-2 by default (same path as local builds).
 #     Override with GRIM_VCPKG_ROOT only when intentionally using another pinned vcpkg checkout.
-#   - Tool downloads: Default behavior exports VCPKG_FORCE_SYSTEM_BINARIES=1, so Bridges-2 must provide ninja.
-#     Use --allow-vcpkg-tool-downloads or env GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS=1 to let vcpkg download helper tools.
+#   - Tool downloads: Launcher always prefers Bridges-2 system cmake+ninja when they are available. By default it
+#     exports VCPKG_FORCE_SYSTEM_BINARIES=1 and requires those tools on PATH. Use --allow-vcpkg-tool-downloads or
+#     env GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS=1 only to permit vcpkg downloads when system cmake or ninja is missing;
+#     the pinned vcpkg toolchain may then pull a newer cmake.
 #   - CUDA 12+ for training (flash-attention). Bridges-2: module load cuda (check with module avail cuda)
 #
 # Bridges-2 GPU partitions: GPU-shared (1-4 GPUs, faster queue) or GPU (full node).
@@ -39,7 +41,8 @@
 #   --sync-fas       On --build, run scripts/bridges2_ensure_flash_attention.sh (skips forced git pull if FA
 #                    gitlink + pinned Cutlass SHA already match remote; still applies patches).
 #   --allow-vcpkg-tool-downloads
-#                    Allow vcpkg to download helper tools such as ninja instead of requiring system binaries.
+#                    Permit vcpkg to download helper tools only when Bridges-2 system cmake or ninja is missing.
+#                    System tools still win when present.
 #   --jobs N         make -j N for train_gpu (default 100; override with GRIM_BRIDGES2_MAKE_JOBS).
 #   --TD             Run grmt_vocab_metrics_test instead of full training (no GPU needed, uses RM-shared).
 #   --UT             Run unigrambyte_self_test instead of full training (needs GPU for GPU decode test).
@@ -633,7 +636,8 @@ if [[ "$DO_BUILD" == true ]] && [[ "$BRIDGES2_SYNCED" == true ]] && [[ "$DO_CLEA
 fi
 
 # Bridges-2 modules: cuda, gcc, cmake, ninja. CUDA 12+ required.
-BRIDGES2_MODULES="source /etc/profile.d/modules.sh 2>/dev/null || true; module load cuda 2>/dev/null || module load cuda/12 2>/dev/null || module load cuda/12.0 2>/dev/null || true; module load gcc 2>/dev/null || true; module load cmake/3.30.1 2>/dev/null || module load cmake/3.30 2>/dev/null || module load cmake/3.29 2>/dev/null || module load cmake 2>/dev/null || true; module load ninja 2>/dev/null || module load ninja/1.11 2>/dev/null || module load ninja/1.10 2>/dev/null || true"
+# TrainingLoop itself requires CMake 3.20; prefer the cluster's default cmake module instead of pinning 3.30.x here.
+BRIDGES2_MODULES="source /etc/profile.d/modules.sh 2>/dev/null || true; module load cuda 2>/dev/null || module load cuda/12 2>/dev/null || module load cuda/12.0 2>/dev/null || true; module load gcc 2>/dev/null || true; module load cmake 2>/dev/null || true; module load ninja 2>/dev/null || module load ninja/1.11 2>/dev/null || module load ninja/1.10 2>/dev/null || true"
 # Default to project CUDA 12 when 11.x is detected (CUTLASS requires 12+). Uses GRIM_PROJECT_DIR=$BRIDGES2_DIR to find cuda-12.0.
 BRIDGES2_ENSURE_CUDA12="export GRIM_PROJECT_DIR=\$BRIDGES2_DIR; source \"\$BRIDGES2_DIR/scripts/ensure_cuda12_for_training.sh\" 2>/dev/null || true"
 # CUDAToolkit_ROOT for cmake comes from GRIM_CUDA_ROOT (set by ensure_cuda12_for_training.sh). Do not inline
@@ -644,13 +648,8 @@ BRIDGES2_ENSURE_CUDA12="export GRIM_PROJECT_DIR=\$BRIDGES2_DIR; source \"\$BRIDG
 BRIDGES2_VCPKG="${GRIM_VCPKG_ROOT:-$BRIDGES2_DIR/external/vcpkg}"
 VCPKG_TOOLCHAIN="$BRIDGES2_VCPKG/scripts/buildsystems/vcpkg.cmake"
 TRAINING_VCPKG_JSON='{"name":"grim-training","version-string":"0.1.0","dependencies":["nlohmann-json","flatbuffers"]}'
-if [[ "${GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS:-0}" == "1" ]]; then
-  BRIDGES2_VCPKG_TOOL_POLICY="unset VCPKG_FORCE_SYSTEM_BINARIES"
-else
-  BRIDGES2_VCPKG_TOOL_POLICY="export VCPKG_FORCE_SYSTEM_BINARIES=1"
-fi
+BRIDGES2_VCPKG_TOOL_POLICY="if command -v cmake >/dev/null 2>&1 && command -v ninja >/dev/null 2>&1; then echo '  vcpkg helper tools: using Bridges-2 system cmake+ninja'; export VCPKG_FORCE_SYSTEM_BINARIES=1; elif [ \"${GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS:-0}\" = \"1\" ]; then echo '  vcpkg helper tools: system cmake or ninja missing; allowing vcpkg helper-tool downloads'; unset VCPKG_FORCE_SYSTEM_BINARIES; else echo 'ERROR: Bridges-2 system cmake and ninja are required unless GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS=1.' >&2; echo '  Load the cluster cmake/ninja modules or re-run with --allow-vcpkg-tool-downloads.' >&2; exit 1; fi"
 BRIDGES2_VCPKG_ENV="export VCPKG_ROOT=\"$BRIDGES2_VCPKG\"; unset Z_VCPKG_ROOT_DIR; unset _VCPKG_ROOT_DIR"
-BRIDGES2_VCPKG_NINJA_CHECK="if [ \"${GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS:-0}\" != \"1\" ] && ! command -v ninja >/dev/null 2>&1; then echo \"ERROR: ninja is not available on Bridges-2, but VCPKG_FORCE_SYSTEM_BINARIES=1 forbids vcpkg from downloading its own copy. Load a ninja module or set GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS=1.\" >&2; exit 1; fi"
 if [[ -n "${GRIM_VCPKG_ROOT:-}" ]]; then
   BRIDGES2_VCPKG_ENSURE="(set -e; $BRIDGES2_VCPKG_ENV; if [ ! -f \"$VCPKG_TOOLCHAIN\" ]; then echo \"ERROR: GRIM_VCPKG_ROOT does not contain vcpkg toolchain: $VCPKG_TOOLCHAIN\" >&2; exit 1; fi; if [ ! -x \"$BRIDGES2_VCPKG/vcpkg\" ]; then (cd \"$BRIDGES2_VCPKG\" && ./bootstrap-vcpkg.sh -disableMetrics); fi)"
 else
@@ -713,7 +712,7 @@ if [[ "$DO_BUILD" == true ]]; then
   echo "  GPU type: $GPU_TYPE, CUDA arch: $([ "$GPU_TYPE" == "h100-80" ] && echo sm_90 || echo sm_80), make -j $BRIDGES2_MAKE_JOBS"
   echo "  vcpkg checkout: $BRIDGES2_VCPKG (same path as local builds; pinned to external/vcpkg gitlink)"
   echo "  CMake preset: $BRIDGES2_CMAKE_PRESET"
-  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "BRIDGES2_DIR=$BRIDGES2_DIR; $BRIDGES2_CUDA_ARCH cd \$BRIDGES2_DIR && $BRIDGES2_SUBMODULE && $BRIDGES2_VCPKG_ENSURE && $BRIDGES2_MANIFEST_ENSURE && $BRIDGES2_PREP_BUILD && cd \$BRIDGES2_DIR/$TRAINING_DIR/TrainingLoop && ${BRIDGES2_CLEAN}$BRIDGES2_MODULES && $BRIDGES2_ENSURE_CUDA12 && $BRIDGES2_VCPKG_TOOL_POLICY && $BRIDGES2_VCPKG_ENV && $BRIDGES2_VCPKG_NINJA_CHECK && cmake --preset $BRIDGES2_CMAKE_PRESET -DCUDAToolkit_ROOT=\$GRIM_CUDA_ROOT && cmake --build --preset $BRIDGES2_CMAKE_PRESET --target $BUILD_TARGET -j $BRIDGES2_MAKE_JOBS"
+  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "BRIDGES2_DIR=$BRIDGES2_DIR; $BRIDGES2_CUDA_ARCH cd \$BRIDGES2_DIR && $BRIDGES2_SUBMODULE && $BRIDGES2_VCPKG_ENSURE && $BRIDGES2_MANIFEST_ENSURE && $BRIDGES2_PREP_BUILD && cd \$BRIDGES2_DIR/$TRAINING_DIR/TrainingLoop && ${BRIDGES2_CLEAN}$BRIDGES2_MODULES && $BRIDGES2_ENSURE_CUDA12 && $BRIDGES2_VCPKG_TOOL_POLICY && $BRIDGES2_VCPKG_ENV && cmake --preset $BRIDGES2_CMAKE_PRESET -DCUDAToolkit_ROOT=\$GRIM_CUDA_ROOT && cmake --build --preset $BRIDGES2_CMAKE_PRESET --target $BUILD_TARGET -j $BRIDGES2_MAKE_JOBS"
 fi
 
 : # Transfer data
