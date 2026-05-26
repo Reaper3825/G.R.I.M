@@ -3,10 +3,37 @@
 # 3.20: Anvil (Purdue RCAC) default module; 3.18+ needed for CUDA_ARCHITECTURES / CUDAToolkit.
 cmake_minimum_required(VERSION 3.20)
 
-# TrainingLoop uses its own minimal vcpkg manifest. Wire that manifest and the vendored toolchain
-# before project()/enable_language() so find_package() works on Windows and Linux without manual prefix setup.
+# TrainingLoop can consume manually staged header-only deps from training/third_party.
+# If those headers are absent, fall back to the minimal vendored vcpkg manifest.
 get_filename_component(GRIM_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../" ABSOLUTE)
 get_filename_component(GRIM_TRAINING_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
+set(GRIM_TRAINING_MANUAL_DEPS_ROOT "${GRIM_TRAINING_ROOT}/third_party" CACHE PATH "Root directory for manually staged TrainingLoop dependencies")
+set(GRIM_TRAINING_NLOHMANN_JSON_INCLUDE_DIR "${GRIM_TRAINING_MANUAL_DEPS_ROOT}/nlohmann_json/include" CACHE PATH "Directory containing nlohmann/json.hpp for TrainingLoop")
+set(GRIM_TRAINING_FLATBUFFERS_INCLUDE_DIR "${GRIM_TRAINING_MANUAL_DEPS_ROOT}/flatbuffers/include" CACHE PATH "Directory containing flatbuffers/flatbuffers.h for TrainingLoop")
+set(GRIM_TRAINING_HTTPLIB_INCLUDE_DIR "${GRIM_TRAINING_MANUAL_DEPS_ROOT}/cpp-httplib/include" CACHE PATH "Directory containing httplib.h for TrainingLoop")
+option(GRIM_TRAINING_USE_MANUAL_DEPS "Prefer manually staged header-only deps in resources/models/GRIM-text/training/third_party" ON)
+option(GRIM_TRAINING_ENABLE_VCPKG_FALLBACK "Allow fallback to vendored vcpkg when manual deps are not staged" ON)
+
+set(GRIM_TRAINING_MANUAL_DEPS_READY OFF)
+if(GRIM_TRAINING_USE_MANUAL_DEPS)
+    if(EXISTS "${GRIM_TRAINING_NLOHMANN_JSON_INCLUDE_DIR}/nlohmann/json.hpp"
+       AND EXISTS "${GRIM_TRAINING_FLATBUFFERS_INCLUDE_DIR}/flatbuffers/flatbuffers.h"
+       AND EXISTS "${GRIM_TRAINING_HTTPLIB_INCLUDE_DIR}/httplib.h")
+        set(GRIM_TRAINING_MANUAL_DEPS_READY ON)
+        message(STATUS "TrainingLoop manual deps: using headers staged under ${GRIM_TRAINING_MANUAL_DEPS_ROOT}")
+    elseif(NOT GRIM_TRAINING_ENABLE_VCPKG_FALLBACK)
+        message(FATAL_ERROR
+            "TrainingLoop manual deps requested, but the staged headers are incomplete.\n"
+            "  Expected:\n"
+            "    ${GRIM_TRAINING_NLOHMANN_JSON_INCLUDE_DIR}/nlohmann/json.hpp\n"
+            "    ${GRIM_TRAINING_FLATBUFFERS_INCLUDE_DIR}/flatbuffers/flatbuffers.h\n"
+            "    ${GRIM_TRAINING_HTTPLIB_INCLUDE_DIR}/httplib.h\n"
+            "  Run resources/models/GRIM-text/training/scripts/prepare_manual_deps.py or provide the include dirs explicitly.")
+    else()
+        message(STATUS "TrainingLoop manual deps not fully staged; falling back to vendored vcpkg")
+    endif()
+endif()
+
 set(GRIM_VCPKG_ROOT "${GRIM_REPO_ROOT}/external/vcpkg")
 set(GRIM_VCPKG_TOOLCHAIN "${GRIM_VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
 set(GRIM_TRAINING_VCPKG_INSTALLED_DIR "${GRIM_TRAINING_ROOT}/vcpkg_installed")
@@ -24,25 +51,25 @@ if(NOT DEFINED VCPKG_TARGET_TRIPLET)
     endif()
 endif()
 
-if(NOT DEFINED CMAKE_TOOLCHAIN_FILE AND EXISTS "${GRIM_VCPKG_TOOLCHAIN}")
+if(NOT GRIM_TRAINING_MANUAL_DEPS_READY AND NOT DEFINED CMAKE_TOOLCHAIN_FILE AND EXISTS "${GRIM_VCPKG_TOOLCHAIN}")
     set(CMAKE_TOOLCHAIN_FILE "${GRIM_VCPKG_TOOLCHAIN}" CACHE FILEPATH "vendored vcpkg toolchain")
     message(STATUS "Using vendored vcpkg toolchain: ${CMAKE_TOOLCHAIN_FILE}")
 endif()
 
-if(NOT DEFINED VCPKG_MANIFEST_DIR AND EXISTS "${GRIM_TRAINING_ROOT}/vcpkg.json")
+if(NOT GRIM_TRAINING_MANUAL_DEPS_READY AND NOT DEFINED VCPKG_MANIFEST_DIR AND EXISTS "${GRIM_TRAINING_ROOT}/vcpkg.json")
     set(VCPKG_MANIFEST_DIR "${GRIM_TRAINING_ROOT}" CACHE PATH "GRIM-text training vcpkg manifest")
 endif()
 
-if(NOT DEFINED VCPKG_INSTALLED_DIR)
+if(NOT GRIM_TRAINING_MANUAL_DEPS_READY AND NOT DEFINED VCPKG_INSTALLED_DIR)
     set(VCPKG_INSTALLED_DIR "${GRIM_TRAINING_VCPKG_INSTALLED_DIR}" CACHE PATH "TrainingLoop vcpkg installed directory")
-elseif(NOT GRIM_TRAINING_ALLOW_REPO_VCPKG_INSTALLED_DIR AND "${VCPKG_INSTALLED_DIR}" STREQUAL "${GRIM_REPO_ROOT}/vcpkg_installed")
+elseif(NOT GRIM_TRAINING_MANUAL_DEPS_READY AND NOT GRIM_TRAINING_ALLOW_REPO_VCPKG_INSTALLED_DIR AND "${VCPKG_INSTALLED_DIR}" STREQUAL "${GRIM_REPO_ROOT}/vcpkg_installed")
     message(STATUS "TrainingLoop manifest install root moved from repo-root vcpkg_installed to ${GRIM_TRAINING_VCPKG_INSTALLED_DIR}")
     message(STATUS "  Pass -DGRIM_TRAINING_ALLOW_REPO_VCPKG_INSTALLED_DIR=ON only if you intentionally want the TrainingLoop manifest to prune the main GRIM manifest install tree.")
     set(VCPKG_INSTALLED_DIR "${GRIM_TRAINING_VCPKG_INSTALLED_DIR}" CACHE PATH "TrainingLoop vcpkg installed directory" FORCE)
 endif()
 
 set(GRIM_VCPKG_TRIPLET_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
-if(EXISTS "${GRIM_VCPKG_TRIPLET_DIR}")
+if(NOT GRIM_TRAINING_MANUAL_DEPS_READY AND EXISTS "${GRIM_VCPKG_TRIPLET_DIR}")
     list(PREPEND CMAKE_PREFIX_PATH
         "${GRIM_VCPKG_TRIPLET_DIR}"
         "${GRIM_VCPKG_TRIPLET_DIR}/share"
@@ -51,9 +78,14 @@ if(EXISTS "${GRIM_VCPKG_TRIPLET_DIR}")
     set(CMAKE_PREFIX_PATH "${CMAKE_PREFIX_PATH}" CACHE STRING "Package search path" FORCE)
 endif()
 
-message(STATUS "TrainingLoop vcpkg triplet: ${VCPKG_TARGET_TRIPLET}")
-message(STATUS "TrainingLoop manifest: ${VCPKG_MANIFEST_DIR}")
-message(STATUS "TrainingLoop installed dir: ${GRIM_VCPKG_TRIPLET_DIR}")
+if(GRIM_TRAINING_MANUAL_DEPS_READY)
+    message(STATUS "TrainingLoop dependency mode: manual headers")
+else()
+    message(STATUS "TrainingLoop dependency mode: vendored vcpkg")
+    message(STATUS "TrainingLoop vcpkg triplet: ${VCPKG_TARGET_TRIPLET}")
+    message(STATUS "TrainingLoop manifest: ${VCPKG_MANIFEST_DIR}")
+    message(STATUS "TrainingLoop installed dir: ${GRIM_VCPKG_TRIPLET_DIR}")
+endif()
 
 # Use CUDAToolkit_ROOT (or GRIM_CUDA_ROOT) before enabling CUDA so CMake picks that nvcc, not one from PATH.
 # Needed on clusters (e.g. Anvil) where default module is CUDA 11 but project has CUDA 12 in project space.
@@ -113,21 +145,57 @@ function(grim_training_repair_vcpkg_package_dir package_dir cache_var)
     endif()
 endfunction()
 
-find_path(GRIM_TRAINING_HTTPLIB_INCLUDE_DIR
-    NAMES httplib.h
-    HINTS "${GRIM_VCPKG_TRIPLET_DIR}/include"
-    REQUIRED
-)
-message(STATUS "Using cpp-httplib headers from ${GRIM_TRAINING_HTTPLIB_INCLUDE_DIR}")
-if(NOT TARGET grim_training_httplib)
-    add_library(grim_training_httplib INTERFACE)
-    target_include_directories(grim_training_httplib INTERFACE "${GRIM_TRAINING_HTTPLIB_INCLUDE_DIR}")
-    target_link_libraries(grim_training_httplib INTERFACE
-        Threads::Threads
-        $<$<PLATFORM_ID:Windows>:ws2_32>
-        $<$<PLATFORM_ID:Windows>:crypt32>
+if(GRIM_TRAINING_MANUAL_DEPS_READY)
+    message(STATUS "Using nlohmann-json headers from ${GRIM_TRAINING_NLOHMANN_JSON_INCLUDE_DIR}")
+    message(STATUS "Using FlatBuffers headers from ${GRIM_TRAINING_FLATBUFFERS_INCLUDE_DIR}")
+    message(STATUS "Using cpp-httplib headers from ${GRIM_TRAINING_HTTPLIB_INCLUDE_DIR}")
+
+    if(NOT TARGET grim_training_nlohmann_json)
+        add_library(grim_training_nlohmann_json INTERFACE)
+        target_include_directories(grim_training_nlohmann_json INTERFACE "${GRIM_TRAINING_NLOHMANN_JSON_INCLUDE_DIR}")
+        target_compile_definitions(grim_training_nlohmann_json INTERFACE HAVE_NLOHMANN_JSON=1)
+        add_library(nlohmann_json::nlohmann_json ALIAS grim_training_nlohmann_json)
+    endif()
+
+    if(NOT TARGET grim_training_flatbuffers)
+        add_library(grim_training_flatbuffers INTERFACE)
+        target_include_directories(grim_training_flatbuffers INTERFACE "${GRIM_TRAINING_FLATBUFFERS_INCLUDE_DIR}")
+        add_library(flatbuffers::flatbuffers ALIAS grim_training_flatbuffers)
+    endif()
+
+    if(NOT TARGET grim_training_httplib)
+        add_library(grim_training_httplib INTERFACE)
+        target_include_directories(grim_training_httplib INTERFACE "${GRIM_TRAINING_HTTPLIB_INCLUDE_DIR}")
+        target_link_libraries(grim_training_httplib INTERFACE
+            Threads::Threads
+            $<$<PLATFORM_ID:Windows>:ws2_32>
+            $<$<PLATFORM_ID:Windows>:crypt32>
+        )
+        add_library(httplib::httplib ALIAS grim_training_httplib)
+    endif()
+else()
+    find_path(GRIM_TRAINING_HTTPLIB_INCLUDE_DIR
+        NAMES httplib.h
+        HINTS "${GRIM_VCPKG_TRIPLET_DIR}/include"
+        REQUIRED
     )
-    add_library(httplib::httplib ALIAS grim_training_httplib)
+    message(STATUS "Using cpp-httplib headers from ${GRIM_TRAINING_HTTPLIB_INCLUDE_DIR}")
+    if(NOT TARGET grim_training_httplib)
+        add_library(grim_training_httplib INTERFACE)
+        target_include_directories(grim_training_httplib INTERFACE "${GRIM_TRAINING_HTTPLIB_INCLUDE_DIR}")
+        target_link_libraries(grim_training_httplib INTERFACE
+            Threads::Threads
+            $<$<PLATFORM_ID:Windows>:ws2_32>
+            $<$<PLATFORM_ID:Windows>:crypt32>
+        )
+        add_library(httplib::httplib ALIAS grim_training_httplib)
+    endif()
+
+    grim_training_repair_vcpkg_package_dir("nlohmann_json" nlohmann_json_DIR)
+    grim_training_repair_vcpkg_package_dir("flatbuffers" flatbuffers_DIR)
+
+    find_package(nlohmann_json CONFIG REQUIRED)
+    find_package(flatbuffers CONFIG REQUIRED)
 endif()
 
 # CUTLASS (flash-attention) requires CUDA 12+. Fail early with clear instructions.
@@ -139,12 +207,6 @@ if(CUDAToolkit_VERSION_MAJOR LESS 12)
     "  Or from the run script (Anvil): ensure project CUDA 12 is installed and script will default to it.")
 endif()
 message(STATUS "CUDAToolkit version: ${CUDAToolkit_VERSION}")
-
-grim_training_repair_vcpkg_package_dir("nlohmann_json" nlohmann_json_DIR)
-grim_training_repair_vcpkg_package_dir("flatbuffers" flatbuffers_DIR)
-
-find_package(nlohmann_json CONFIG REQUIRED)
-find_package(flatbuffers CONFIG REQUIRED)
 
 # CUDA compilation flags
 # -diag-suppress=550: suppress "variable set but never used" warnings from third-party headers (FlatBuffers)

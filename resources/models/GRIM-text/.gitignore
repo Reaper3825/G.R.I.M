@@ -96,6 +96,7 @@ __pycache__/
 *$py.class
 .pytest_cache/
 .mypy_cache/
+training/third_party/
 
 # Training status files (generated)
 *.fb
