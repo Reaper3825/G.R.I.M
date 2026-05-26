@@ -20,6 +20,9 @@
 #     exports VCPKG_FORCE_SYSTEM_BINARIES=1 and requires those tools on PATH. Use --allow-vcpkg-tool-downloads or
 #     env GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS=1 only to permit vcpkg downloads when system cmake or ninja is missing;
 #     the pinned vcpkg toolchain may then pull a newer cmake.
+#   - Reusing deps: When the remote TrainingLoop `vcpkg_installed/x64-linux` tree already contains nlohmann-json,
+#     flatbuffers, and cpp-httplib, the launcher disables manifest auto-install for that configure and reuses the
+#     existing tree. Set GRIM_BRIDGES2_FORCE_VCPKG_INSTALL=1 to force a fresh vcpkg install anyway.
 #   - CUDA 12+ for training (flash-attention). Bridges-2: module load cuda (check with module avail cuda)
 #
 # Bridges-2 GPU partitions: GPU-shared (1-4 GPUs, faster queue) or GPU (full node).
@@ -88,6 +91,9 @@ DO_PULL_VOCAB=false
 DO_PULL_LOGS=false
 TT_FORCE=false
 ALLOW_VCPKG_TOOL_DOWNLOADS=false
+BRIDGES2_SESSION_CLEANED=0
+ACTIVE_REMOTE_STATE_FILE=""
+ACTIVE_REMOTE_LABEL=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -211,15 +217,135 @@ if ! ssh -f -N -M -S "$BRIDGES2_CTRL" -o ConnectTimeout=10 -o StrictHostKeyCheck
 fi
 REMOTE_SNAPSHOT_PATHS=()
 trap 'cleanup_bridges2_session' EXIT
+trap 'handle_bridges2_signal INT' INT
+trap 'handle_bridges2_signal TERM' TERM
+trap 'handle_bridges2_signal HUP' HUP
 BRIDGES2_SSH_OPTS="-S $BRIDGES2_CTRL -o ControlMaster=no"
 
 remote_quote() {
   printf '%q' "$1"
 }
 
+cancel_remote_activity() {
+  local q_state_file
+  local q_label
+
+  [[ -n "$ACTIVE_REMOTE_STATE_FILE" ]] || return 0
+
+  q_state_file="$(remote_quote "$ACTIVE_REMOTE_STATE_FILE")"
+  q_label="$(remote_quote "${ACTIVE_REMOTE_LABEL:-remote activity}")"
+
+  echo
+  echo "Canceling ${ACTIVE_REMOTE_LABEL:-remote activity} on Bridges-2 and sweeping stale locks..."
+  if ! ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "STATE_FILE=$q_state_file LABEL=$q_label bash -se" <<'EOF'
+set -e
+state_file="$STATE_FILE"
+label="$LABEL"
+
+if [ ! -f "$state_file" ]; then
+  exit 0
+fi
+
+. "$state_file"
+
+echo "  remote cleanup: terminating $label (pid=${pid:-?}, pgid=${pgid:-?})"
+if [ -n "${pgid:-}" ]; then
+  kill -TERM -- "-$pgid" 2>/dev/null || true
+fi
+if [ -n "${pid:-}" ]; then
+  kill -TERM "$pid" 2>/dev/null || true
+fi
+
+for _ in 1 2 3 4 5; do
+  if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then
+    sleep 1
+  else
+    break
+  fi
+done
+
+if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then
+  if [ -n "${pgid:-}" ]; then
+    kill -KILL -- "-$pgid" 2>/dev/null || true
+  fi
+  kill -KILL "$pid" 2>/dev/null || true
+fi
+
+lock_in_use=0
+if [ -n "${lock_path:-}" ] && [ -e "$lock_path" ]; then
+  if command -v lsof >/dev/null 2>&1; then
+    lsof "$lock_path" >/dev/null 2>&1 && lock_in_use=1 || true
+  elif command -v fuser >/dev/null 2>&1; then
+    fuser "$lock_path" >/dev/null 2>&1 && lock_in_use=1 || true
+  elif [ -n "${vcpkg_root:-}" ]; then
+    active_vcpkg=$(ps -eo pid=,args= | grep -F -- "$vcpkg_root" | grep -E '/vcpkg([[:space:]]|$)|/downloads/tools/.*/cmake([[:space:]]|$)|/downloads/tools/.*/ninja([[:space:]]|$)' | grep -v grep || true)
+    if [ -n "$active_vcpkg" ]; then
+      lock_in_use=1
+    fi
+  fi
+
+  if [ "$lock_in_use" -eq 0 ]; then
+    echo "  remote cleanup: ensuring vcpkg root marker exists at $lock_path"
+    touch "$lock_path"
+  else
+    echo "  remote cleanup: vcpkg activity still appears active; leaving root marker $lock_path in place"
+  fi
+fi
+
+if [ "${kind:-}" = "build" ]; then
+  active_build=""
+  if [ -n "${build_dir:-}" ]; then
+    active_build=$(ps -eo pid=,args= | grep -F -- "$build_dir" | grep -v grep || true)
+    if [ -z "$active_build" ] && [ -d "$build_dir" ]; then
+      echo "  remote cleanup: removing interrupted build dir $build_dir"
+      rm -rf "$build_dir"
+    fi
+  fi
+
+  if [ "$lock_in_use" -eq 0 ] && [ -n "${training_vcpkg_triplet_dir:-}" ] && [ -d "$training_vcpkg_triplet_dir" ]; then
+    active_triplet=$(ps -eo pid=,args= | grep -F -- "$training_vcpkg_triplet_dir" | grep -v grep || true)
+    if [ -z "$active_triplet" ]; then
+      echo "  remote cleanup: removing interrupted TrainingLoop install tree $training_vcpkg_triplet_dir"
+      rm -rf "$training_vcpkg_triplet_dir"
+    fi
+  fi
+fi
+
+rm -f "$state_file"
+EOF
+  then
+    echo "WARNING: remote cancellation cleanup could not complete automatically." >&2
+  fi
+}
+
+handle_bridges2_signal() {
+  local signal_name="$1"
+  local signal_exit=130
+
+  case "$signal_name" in
+    TERM) signal_exit=143 ;;
+    HUP)  signal_exit=129 ;;
+  esac
+
+  trap - INT TERM HUP
+  echo
+  echo "Caught $signal_name; canceling active Bridges-2 work before exiting..."
+  cancel_remote_activity || true
+  ACTIVE_REMOTE_STATE_FILE=""
+  ACTIVE_REMOTE_LABEL=""
+  cleanup_bridges2_session
+  exit "$signal_exit"
+}
+
 cleanup_bridges2_session() {
+  local exit_code=$?
   local snapshot_path
   local q_snapshot_path
+
+  if [[ "$BRIDGES2_SESSION_CLEANED" == "1" ]]; then
+    return "$exit_code"
+  fi
+  BRIDGES2_SESSION_CLEANED=1
 
   for snapshot_path in "${REMOTE_SNAPSHOT_PATHS[@]}"; do
     [[ -n "$snapshot_path" ]] || continue
@@ -231,6 +357,7 @@ cleanup_bridges2_session() {
 
   ssh -S "$BRIDGES2_CTRL" -O exit "$BRIDGES2_SSH" 2>/dev/null
   rm -f "$BRIDGES2_CTRL"
+  return "$exit_code"
 }
 
 verify_remote_size() {
@@ -495,7 +622,7 @@ transfer_training_file() {
 }
 
 download_training_file() {
-  local label="$1"
+  local lab el="$1"
   local remote_path="$2"
   local local_path="$3"
   local local_dir
@@ -651,9 +778,9 @@ TRAINING_VCPKG_JSON='{"name":"grim-training","version-string":"0.1.0","dependenc
 BRIDGES2_VCPKG_TOOL_POLICY="if command -v cmake >/dev/null 2>&1 && command -v ninja >/dev/null 2>&1; then echo '  vcpkg helper tools: using Bridges-2 system cmake+ninja'; export VCPKG_FORCE_SYSTEM_BINARIES=1; elif [ \"${GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS:-0}\" = \"1\" ]; then echo '  vcpkg helper tools: system cmake or ninja missing; allowing vcpkg helper-tool downloads'; unset VCPKG_FORCE_SYSTEM_BINARIES; else echo 'ERROR: Bridges-2 system cmake and ninja are required unless GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS=1.' >&2; echo '  Load the cluster cmake/ninja modules or re-run with --allow-vcpkg-tool-downloads.' >&2; exit 1; fi"
 BRIDGES2_VCPKG_ENV="export VCPKG_ROOT=\"$BRIDGES2_VCPKG\"; unset Z_VCPKG_ROOT_DIR; unset _VCPKG_ROOT_DIR"
 if [[ -n "${GRIM_VCPKG_ROOT:-}" ]]; then
-  BRIDGES2_VCPKG_ENSURE="(set -e; $BRIDGES2_VCPKG_ENV; if [ ! -f \"$VCPKG_TOOLCHAIN\" ]; then echo \"ERROR: GRIM_VCPKG_ROOT does not contain vcpkg toolchain: $VCPKG_TOOLCHAIN\" >&2; exit 1; fi; if [ ! -x \"$BRIDGES2_VCPKG/vcpkg\" ]; then (cd \"$BRIDGES2_VCPKG\" && ./bootstrap-vcpkg.sh -disableMetrics); fi)"
+  BRIDGES2_VCPKG_ENSURE="(set -e; $BRIDGES2_VCPKG_ENV; if [ ! -f \"$VCPKG_TOOLCHAIN\" ]; then echo \"ERROR: GRIM_VCPKG_ROOT does not contain vcpkg toolchain: $VCPKG_TOOLCHAIN\" >&2; exit 1; fi; if [ ! -x \"$BRIDGES2_VCPKG/vcpkg\" ]; then (cd \"$BRIDGES2_VCPKG\" && ./bootstrap-vcpkg.sh -disableMetrics); fi; touch \"$BRIDGES2_VCPKG/.vcpkg-root\")"
 else
-  BRIDGES2_VCPKG_ENSURE="(set -e; cd \"$BRIDGES2_DIR\"; $BRIDGES2_VCPKG_ENV; VCPKG_PIN=\$(git ls-tree HEAD external/vcpkg | awk '{print \$3}'); if [ -z \"\$VCPKG_PIN\" ]; then echo \"ERROR: external/vcpkg gitlink not found in repo HEAD\" >&2; exit 1; fi; if ! git -C \"$BRIDGES2_VCPKG\" rev-parse --show-toplevel >/dev/null 2>&1; then echo \"Initializing external/vcpkg to match local repo layout...\"; git submodule update --init external/vcpkg; fi; VCPKG_TOP=\$(git -C \"$BRIDGES2_VCPKG\" rev-parse --show-toplevel 2>/dev/null || true); if [ \"\$VCPKG_TOP\" != \"$BRIDGES2_VCPKG\" ]; then echo \"ERROR: $BRIDGES2_VCPKG exists but is not a vcpkg git checkout; remove it or set GRIM_VCPKG_ROOT\" >&2; exit 1; fi; if ! git -C \"$BRIDGES2_VCPKG\" cat-file -e \"\$VCPKG_PIN^{commit}\" 2>/dev/null; then git -C \"$BRIDGES2_VCPKG\" fetch --depth 1 origin \"\$VCPKG_PIN\" || git -C \"$BRIDGES2_VCPKG\" fetch origin \"\$VCPKG_PIN\"; fi; git -c advice.detachedHead=false -C \"$BRIDGES2_VCPKG\" checkout -f \"\$VCPKG_PIN\"; VCPKG_BASELINE=\$(grep -o '\"builtin-baseline\"[[:space:]]*:[[:space:]]*\"[^\"]*\"' \"$BRIDGES2_DIR/$TRAINING_DIR/vcpkg.json\" | head -n 1 | sed -E 's/.*\"([^\"]*)\"$/\1/'); if [ -z \"\$VCPKG_BASELINE\" ]; then echo \"ERROR: builtin-baseline missing from $BRIDGES2_DIR/$TRAINING_DIR/vcpkg.json\" >&2; exit 1; fi; if ! git -C \"$BRIDGES2_VCPKG\" cat-file -e \"\$VCPKG_BASELINE^{commit}\" 2>/dev/null; then git -C \"$BRIDGES2_VCPKG\" fetch --depth 1 origin \"\$VCPKG_BASELINE\" || git -C \"$BRIDGES2_VCPKG\" fetch origin \"\$VCPKG_BASELINE\"; fi; if ! git -C \"$BRIDGES2_VCPKG\" cat-file -e \"\$VCPKG_BASELINE:versions/baseline.json\" 2>/dev/null; then git -C \"$BRIDGES2_VCPKG\" fetch origin \"\$VCPKG_BASELINE\" || true; fi; if ! git -C \"$BRIDGES2_VCPKG\" cat-file -e \"\$VCPKG_BASELINE:versions/baseline.json\" 2>/dev/null; then echo \"ERROR: vcpkg builtin-baseline \$VCPKG_BASELINE is unavailable in $BRIDGES2_VCPKG; remove the checkout or fetch the missing history.\" >&2; exit 1; fi; if [ ! -f \"$VCPKG_TOOLCHAIN\" ]; then echo \"ERROR: pinned vcpkg toolchain not found: $VCPKG_TOOLCHAIN\" >&2; exit 1; fi; if [ ! -x \"$BRIDGES2_VCPKG/vcpkg\" ]; then (cd \"$BRIDGES2_VCPKG\" && ./bootstrap-vcpkg.sh -disableMetrics); fi)"
+  BRIDGES2_VCPKG_ENSURE="(set -e; cd \"$BRIDGES2_DIR\"; $BRIDGES2_VCPKG_ENV; VCPKG_PIN=\$(git ls-tree HEAD external/vcpkg | awk '{print \$3}'); if [ -z \"\$VCPKG_PIN\" ]; then echo \"ERROR: external/vcpkg gitlink not found in repo HEAD\" >&2; exit 1; fi; if ! git -C \"$BRIDGES2_VCPKG\" rev-parse --show-toplevel >/dev/null 2>&1; then echo \"Initializing external/vcpkg to match local repo layout...\"; git submodule update --init external/vcpkg; fi; VCPKG_TOP=\$(git -C \"$BRIDGES2_VCPKG\" rev-parse --show-toplevel 2>/dev/null || true); if [ \"\$VCPKG_TOP\" != \"$BRIDGES2_VCPKG\" ]; then echo \"ERROR: $BRIDGES2_VCPKG exists but is not a vcpkg git checkout; remove it or set GRIM_VCPKG_ROOT\" >&2; exit 1; fi; if ! git -C \"$BRIDGES2_VCPKG\" cat-file -e \"\$VCPKG_PIN^{commit}\" 2>/dev/null; then git -C \"$BRIDGES2_VCPKG\" fetch --depth 1 origin \"\$VCPKG_PIN\" || git -C \"$BRIDGES2_VCPKG\" fetch origin \"\$VCPKG_PIN\"; fi; VCPKG_HEAD=\$(git -C \"$BRIDGES2_VCPKG\" rev-parse HEAD 2>/dev/null || true); if [ \"\$VCPKG_HEAD\" != \"\$VCPKG_PIN\" ]; then echo \"  vcpkg checkout: aligning \$VCPKG_HEAD -> \$VCPKG_PIN\"; git -c advice.detachedHead=false -C \"$BRIDGES2_VCPKG\" checkout -f \"\$VCPKG_PIN\"; elif ! git -C \"$BRIDGES2_VCPKG\" diff --quiet --ignore-submodules HEAD -- || ! git -C \"$BRIDGES2_VCPKG\" diff --cached --quiet --ignore-submodules HEAD --; then echo \"  vcpkg checkout: dirty pinned worktree; resetting to \$VCPKG_PIN\"; git -c advice.detachedHead=false -C \"$BRIDGES2_VCPKG\" checkout -f \"\$VCPKG_PIN\"; else echo \"  vcpkg checkout: already pinned at \$VCPKG_PIN\"; fi; VCPKG_BASELINE=\$(grep -o '\"builtin-baseline\"[[:space:]]*:[[:space:]]*\"[^\"]*\"' \"$BRIDGES2_DIR/$TRAINING_DIR/vcpkg.json\" | head -n 1 | sed -E 's/.*\"([^\"]*)\"$/\1/'); if [ -z \"\$VCPKG_BASELINE\" ]; then echo \"ERROR: builtin-baseline missing from $BRIDGES2_DIR/$TRAINING_DIR/vcpkg.json\" >&2; exit 1; fi; if ! git -C \"$BRIDGES2_VCPKG\" cat-file -e \"\$VCPKG_BASELINE^{commit}\" 2>/dev/null; then git -C \"$BRIDGES2_VCPKG\" fetch --depth 1 origin \"\$VCPKG_BASELINE\" || git -C \"$BRIDGES2_VCPKG\" fetch origin \"\$VCPKG_BASELINE\"; fi; if ! git -C \"$BRIDGES2_VCPKG\" cat-file -e \"\$VCPKG_BASELINE:versions/baseline.json\" 2>/dev/null; then git -C \"$BRIDGES2_VCPKG\" fetch origin \"\$VCPKG_BASELINE\" || true; fi; if ! git -C \"$BRIDGES2_VCPKG\" cat-file -e \"\$VCPKG_BASELINE:versions/baseline.json\" 2>/dev/null; then echo \"ERROR: vcpkg builtin-baseline \$VCPKG_BASELINE is unavailable in $BRIDGES2_VCPKG; remove the checkout or fetch the missing history.\" >&2; exit 1; fi; if [ ! -f \"$VCPKG_TOOLCHAIN\" ]; then echo \"ERROR: pinned vcpkg toolchain not found: $VCPKG_TOOLCHAIN\" >&2; exit 1; fi; if [ ! -x \"$BRIDGES2_VCPKG/vcpkg\" ]; then (cd \"$BRIDGES2_VCPKG\" && ./bootstrap-vcpkg.sh -disableMetrics); fi; touch \"$BRIDGES2_VCPKG/.vcpkg-root\")"
 fi
 BRIDGES2_MANIFEST_ENSURE="mkdir -p $BRIDGES2_DIR/$TRAINING_DIR && [ -f $BRIDGES2_DIR/$TRAINING_DIR/vcpkg.json ] || printf '%s' '$TRAINING_VCPKG_JSON' > $BRIDGES2_DIR/$TRAINING_DIR/vcpkg.json"
 
@@ -679,6 +806,14 @@ else
 fi
 
 BRIDGES2_TRAINING_VCPKG_INSTALLED="$BRIDGES2_DIR/$TRAINING_DIR/vcpkg_installed"
+BRIDGES2_TRAINING_VCPKG_TRIPLET_DIR="$BRIDGES2_TRAINING_VCPKG_INSTALLED/x64-linux"
+BRIDGES2_VCPKG_MANIFEST_POLICY="cmake_manifest_install=ON; if [ \"${GRIM_BRIDGES2_FORCE_VCPKG_INSTALL:-0}\" != \"1\" ] && [ -f \"$BRIDGES2_TRAINING_VCPKG_TRIPLET_DIR/include/nlohmann/json.hpp\" ] && [ -f \"$BRIDGES2_TRAINING_VCPKG_TRIPLET_DIR/include/flatbuffers/flatbuffers.h\" ] && [ -f \"$BRIDGES2_TRAINING_VCPKG_TRIPLET_DIR/include/httplib.h\" ] && [ -f \"$BRIDGES2_TRAINING_VCPKG_TRIPLET_DIR/share/nlohmann_json/nlohmann_jsonConfig.cmake\" ] && [ -f \"$BRIDGES2_TRAINING_VCPKG_TRIPLET_DIR/share/flatbuffers/flatbuffers-config.cmake\" ]; then echo \"  vcpkg manifest install: reusing existing TrainingLoop installed tree\"; cmake_manifest_install=OFF; else echo \"  vcpkg manifest install: running because installed tree is missing or incomplete\"; fi"
+BRIDGES2_RUN_ID="$$.$RANDOM"
+BRIDGES2_REMOTE_STATE_DIR="$BRIDGES2_DIR/.grim_bridges2_runtime"
+BRIDGES2_BUILD_STATE_FILE="$BRIDGES2_REMOTE_STATE_DIR/run_train_on_bridges2.build.$BRIDGES2_RUN_ID.state"
+BRIDGES2_VCPKG_LOCK_PATH="$BRIDGES2_VCPKG/.vcpkg-root"
+BRIDGES2_VCPKG_LOCK_SWEEP="grim_lock_path=\"$BRIDGES2_VCPKG_LOCK_PATH\"; grim_state_dir=\"$BRIDGES2_REMOTE_STATE_DIR\"; grim_vcpkg_ps_regex='/vcpkg([[:space:]]|$)|/downloads/tools/.*/cmake([[:space:]]|$)|/downloads/tools/.*/ninja([[:space:]]|$)'; grim_lock_in_use=0; grim_holder_pids=\"\"; grim_active_vcpkg=\$(ps -eo pid=,args= | grep -F -- \"$BRIDGES2_VCPKG\" | grep -E \"\$grim_vcpkg_ps_regex\" | grep -v grep || true); if [ -e \"\$grim_lock_path\" ]; then if command -v lsof >/dev/null 2>&1; then grim_holder_pids=\$(lsof -t \"\$grim_lock_path\" 2>/dev/null | tr '\\n' ' '); elif command -v fuser >/dev/null 2>&1; then grim_holder_pids=\$(fuser \"\$grim_lock_path\" 2>/dev/null | tr '\\n' ' '); fi; fi; [ -n \"\$grim_active_vcpkg\" ] && grim_lock_in_use=1; [ -n \"\$grim_holder_pids\" ] && grim_lock_in_use=1; grim_other_active_state=0; if [ -d \"\$grim_state_dir\" ]; then for grim_state_path in \"\$grim_state_dir\"/run_train_on_bridges2.build.*.state; do [ -f \"\$grim_state_path\" ] || continue; [ \"\$grim_state_path\" = \"\$remote_state_file\" ] && continue; grim_state_pgid=\$(grep '^pgid=' \"\$grim_state_path\" | head -n 1 | cut -d= -f2- || true); if [ -n \"\$grim_state_pgid\" ] && ps -eo pgid= | tr -d '[:space:]' | grep -Fx \"\$grim_state_pgid\" >/dev/null 2>&1; then grim_other_active_state=1; break; fi; done; fi; if [ \"\$grim_lock_in_use\" -eq 1 ] && [ \"\$grim_other_active_state\" -eq 0 ] && [ -n \"\$grim_active_vcpkg\" ]; then echo \"  vcpkg lock sweep: recovering orphaned holder(s) with no competing launcher state\"; printf '%s\\n' \"\$grim_active_vcpkg\" | sed 's/^/    /'; grim_orphan_pids=\$(printf '%s\\n' \"\$grim_active_vcpkg\" | awk '{print \$1}' | tr '\\n' ' '); if [ -n \"\$grim_orphan_pids\" ]; then kill -TERM \$grim_orphan_pids 2>/dev/null || true; sleep 2; kill -KILL \$grim_orphan_pids 2>/dev/null || true; grim_active_vcpkg=\$(ps -eo pid=,args= | grep -F -- \"$BRIDGES2_VCPKG\" | grep -E \"\$grim_vcpkg_ps_regex\" | grep -v grep || true); [ -z \"\$grim_active_vcpkg\" ] && grim_lock_in_use=0; fi; fi; if [ \"\$grim_lock_in_use\" -eq 0 ]; then if [ ! -e \"\$grim_lock_path\" ]; then echo \"  vcpkg lock sweep: restoring missing root marker \$grim_lock_path\"; else echo \"  vcpkg lock sweep: root marker is idle at \$grim_lock_path\"; fi; touch \"\$grim_lock_path\"; else echo \"  vcpkg lock sweep: vcpkg activity appears active; leaving root marker \$grim_lock_path in place\"; [ -n \"\$grim_active_vcpkg\" ] && printf '%s\\n' \"\$grim_active_vcpkg\" | sed 's/^/    holder: /'; [ \"\$grim_other_active_state\" -eq 1 ] && echo \"    holder source: another run_train_on_bridges2 build state is still active\"; fi"
+BRIDGES2_REMOTE_BUILD_STATE_SETUP="runtime_dir=\"$BRIDGES2_REMOTE_STATE_DIR\"; mkdir -p \"\$runtime_dir\"; remote_state_file=\"$BRIDGES2_BUILD_STATE_FILE\"; remote_pgid=\$(ps -o pgid= -p \$\$ | tr -d '[:space:]'); printf '%s\\n' \"kind=build\" \"pid=\$\$\" \"pgid=\$remote_pgid\" \"lock_path=$BRIDGES2_VCPKG_LOCK_PATH\" \"vcpkg_root=$BRIDGES2_VCPKG\" \"build_dir=$BRIDGES2_DIR/$BUILD_DIR\" \"training_vcpkg_triplet_dir=$BRIDGES2_TRAINING_VCPKG_TRIPLET_DIR\" > \"\$remote_state_file\"; if command -v setsid >/dev/null 2>&1; then setsid bash -c 'state_file=\"\$1\"; target_pgid=\"\$2\"; while ps -eo pgid= | tr -d \"[:space:]\" | grep -Fx \"\$target_pgid\" >/dev/null 2>&1; do sleep 1; done; rm -f \"\$state_file\"' _ \"\$remote_state_file\" \"\$remote_pgid\" >/dev/null 2>&1 & else nohup bash -c 'state_file=\"\$1\"; target_pgid=\"\$2\"; while ps -eo pgid= | tr -d \"[:space:]\" | grep -Fx \"\$target_pgid\" >/dev/null 2>&1; do sleep 1; done; rm -f \"\$state_file\"' _ \"\$remote_state_file\" \"\$remote_pgid\" >/dev/null 2>&1 & fi"
 BRIDGES2_CMAKE_PRESET="${GRIM_BRIDGES2_CMAKE_PRESET:-}"
 if [[ -z "$BRIDGES2_CMAKE_PRESET" ]]; then
   if [[ "$GPU_TYPE" == "h100-80" ]]; then
@@ -687,6 +822,12 @@ if [[ -z "$BRIDGES2_CMAKE_PRESET" ]]; then
     BRIDGES2_CMAKE_PRESET="bridges2-v100-release"
   fi
 fi
+BRIDGES2_CMAKE_FALLBACK_PRESET=""
+case "$BRIDGES2_CMAKE_PRESET" in
+  bridges2-h100-release) BRIDGES2_CMAKE_FALLBACK_PRESET="bridges2-h100-release-make" ;;
+  bridges2-v100-release) BRIDGES2_CMAKE_FALLBACK_PRESET="bridges2-v100-release-make" ;;
+esac
+BRIDGES2_BUILD_TOOL_DETECT="grim_resolved_preset=\"$BRIDGES2_CMAKE_PRESET\"; grim_cmake_make_program=\"\"; grim_cmake_generator=\"\"; if command -v ninja >/dev/null 2>&1; then grim_cmake_make_program=\$(command -v ninja); grim_cmake_generator='Ninja'; echo \"  CMake generator backend: Ninja (\$grim_cmake_make_program)\"; elif command -v ninja-build >/dev/null 2>&1; then grim_cmake_make_program=\$(command -v ninja-build); grim_cmake_generator='Ninja'; echo \"  CMake generator backend: Ninja via ninja-build (\$grim_cmake_make_program)\"; elif command -v make >/dev/null 2>&1; then grim_cmake_make_program=\$(command -v make); grim_cmake_generator='Unix Makefiles'; if [ -n \"$BRIDGES2_CMAKE_FALLBACK_PRESET\" ]; then grim_resolved_preset=\"$BRIDGES2_CMAKE_FALLBACK_PRESET\"; fi; echo \"  CMake generator backend: Unix Makefiles fallback (\$grim_cmake_make_program)\"; elif command -v gmake >/dev/null 2>&1; then grim_cmake_make_program=\$(command -v gmake); grim_cmake_generator='Unix Makefiles'; if [ -n \"$BRIDGES2_CMAKE_FALLBACK_PRESET\" ]; then grim_resolved_preset=\"$BRIDGES2_CMAKE_FALLBACK_PRESET\"; fi; echo \"  CMake generator backend: Unix Makefiles fallback via gmake (\$grim_cmake_make_program)\"; else echo \"ERROR: no compatible CMake generator backend found on Bridges-2 (need ninja, ninja-build, make, or gmake on PATH).\" >&2; exit 1; fi; export GRIM_BRIDGES2_RESOLVED_PRESET=\"\$grim_resolved_preset\"; export GRIM_BRIDGES2_CMAKE_GENERATOR=\"\$grim_cmake_generator\"; export GRIM_BRIDGES2_CMAKE_MAKE_PROGRAM=\"\$grim_cmake_make_program\""
 BRIDGES2_PREP_BUILD="if [ -f \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" ]; then cached_toolchain=\$(grep '^CMAKE_TOOLCHAIN_FILE:FILEPATH=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); cached_installed=\$(grep '^VCPKG_INSTALLED_DIR:PATH=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); if [ -n \"\$cached_toolchain\" ] && [ \"\$cached_toolchain\" != \"$VCPKG_TOOLCHAIN\" ]; then echo \"  stale CMake toolchain cache: \$cached_toolchain -> $VCPKG_TOOLCHAIN\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure with the pinned vcpkg cache\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; elif [ -n \"\$cached_installed\" ] && [ \"\$cached_installed\" != \"$BRIDGES2_TRAINING_VCPKG_INSTALLED\" ]; then echo \"  stale TrainingLoop vcpkg installed cache: \$cached_installed -> $BRIDGES2_TRAINING_VCPKG_INSTALLED\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure the manifest install root\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; fi; fi"
 
 # --build
@@ -711,8 +852,12 @@ if [[ "$DO_BUILD" == true ]]; then
   echo "Building $BUILD_TARGET on Bridges-2 ($BRIDGES2_DIR/$BUILD_DIR)..."
   echo "  GPU type: $GPU_TYPE, CUDA arch: $([ "$GPU_TYPE" == "h100-80" ] && echo sm_90 || echo sm_80), make -j $BRIDGES2_MAKE_JOBS"
   echo "  vcpkg checkout: $BRIDGES2_VCPKG (same path as local builds; pinned to external/vcpkg gitlink)"
-  echo "  CMake preset: $BRIDGES2_CMAKE_PRESET"
-  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "BRIDGES2_DIR=$BRIDGES2_DIR; $BRIDGES2_CUDA_ARCH cd \$BRIDGES2_DIR && $BRIDGES2_SUBMODULE && $BRIDGES2_VCPKG_ENSURE && $BRIDGES2_MANIFEST_ENSURE && $BRIDGES2_PREP_BUILD && cd \$BRIDGES2_DIR/$TRAINING_DIR/TrainingLoop && ${BRIDGES2_CLEAN}$BRIDGES2_MODULES && $BRIDGES2_ENSURE_CUDA12 && $BRIDGES2_VCPKG_TOOL_POLICY && $BRIDGES2_VCPKG_ENV && cmake --preset $BRIDGES2_CMAKE_PRESET -DCUDAToolkit_ROOT=\$GRIM_CUDA_ROOT && cmake --build --preset $BRIDGES2_CMAKE_PRESET --target $BUILD_TARGET -j $BRIDGES2_MAKE_JOBS"
+  echo "  CMake preset: $BRIDGES2_CMAKE_PRESET (auto-falls back to -make when Ninja is unavailable)"
+  ACTIVE_REMOTE_STATE_FILE="$BRIDGES2_BUILD_STATE_FILE"
+  ACTIVE_REMOTE_LABEL="build"
+  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "BRIDGES2_DIR=$BRIDGES2_DIR; $BRIDGES2_CUDA_ARCH cd \$BRIDGES2_DIR && $BRIDGES2_REMOTE_BUILD_STATE_SETUP && $BRIDGES2_SUBMODULE && $BRIDGES2_VCPKG_ENSURE && $BRIDGES2_VCPKG_LOCK_SWEEP && $BRIDGES2_MANIFEST_ENSURE && $BRIDGES2_PREP_BUILD && cd \$BRIDGES2_DIR/$TRAINING_DIR/TrainingLoop && ${BRIDGES2_CLEAN}$BRIDGES2_MODULES && $BRIDGES2_ENSURE_CUDA12 && $BRIDGES2_BUILD_TOOL_DETECT && $BRIDGES2_VCPKG_TOOL_POLICY && $BRIDGES2_VCPKG_ENV && $BRIDGES2_VCPKG_MANIFEST_POLICY && echo \"  CMake profile: \$GRIM_BRIDGES2_RESOLVED_PRESET via \$GRIM_BRIDGES2_CMAKE_GENERATOR\" && cmake -S . -B \"$BRIDGES2_DIR/$BUILD_DIR\" -G \"\$GRIM_BRIDGES2_CMAKE_GENERATOR\" -DCMAKE_MAKE_PROGRAM=\"\$GRIM_BRIDGES2_CMAKE_MAKE_PROGRAM\" -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=\"$VCPKG_TOOLCHAIN\" -DVCPKG_MANIFEST_DIR=\"$BRIDGES2_DIR/$TRAINING_DIR\" -DVCPKG_INSTALLED_DIR=\"$BRIDGES2_TRAINING_VCPKG_INSTALLED\" -DVCPKG_TARGET_TRIPLET=x64-linux -DCUDAToolkit_ROOT=\$GRIM_CUDA_ROOT -DVCPKG_MANIFEST_INSTALL=\$cmake_manifest_install && cmake --build \"$BRIDGES2_DIR/$BUILD_DIR\" --target $BUILD_TARGET -j $BRIDGES2_MAKE_JOBS"
+  ACTIVE_REMOTE_STATE_FILE=""
+  ACTIVE_REMOTE_LABEL=""
 fi
 
 : # Transfer data

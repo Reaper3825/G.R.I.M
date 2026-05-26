@@ -40,6 +40,19 @@
     {
       "name": "bridges2-base",
       "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/../../../../../external/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_MANIFEST_DIR": "${sourceDir}/..",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/../vcpkg_installed",
+        "VCPKG_TARGET_TRIPLET": "x64-linux"
+      }
+    },
+    {
+      "name": "bridges2-base-make",
+      "hidden": true,
       "generator": "Unix Makefiles",
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
@@ -53,8 +66,17 @@
     {
       "name": "bridges2-h100-release",
       "displayName": "TrainingLoop Bridges-2 H100 Release",
-      "description": "Configure TrainingLoop for Bridges-2 H100 nodes with sm_90 CUDA kernels and manifest-mode vcpkg.",
+      "description": "Configure TrainingLoop for Bridges-2 H100 nodes with sm_90 CUDA kernels, the Ninja generator, and manifest-mode vcpkg.",
       "inherits": "bridges2-base",
+      "cacheVariables": {
+        "GRIM_CUDA_ARCHITECTURES": "90"
+      }
+    },
+    {
+      "name": "bridges2-h100-release-make",
+      "displayName": "TrainingLoop Bridges-2 H100 Release (Unix Makefiles)",
+      "description": "Configure TrainingLoop for Bridges-2 H100 nodes with sm_90 CUDA kernels, Unix Makefiles, and manifest-mode vcpkg.",
+      "inherits": "bridges2-base-make",
       "cacheVariables": {
         "GRIM_CUDA_ARCHITECTURES": "90"
       }
@@ -62,8 +84,17 @@
     {
       "name": "bridges2-v100-release",
       "displayName": "TrainingLoop Bridges-2 V100/L40S Release",
-      "description": "Configure TrainingLoop for Bridges-2 non-H100 GPU targets using the sm_80 CUDA kernel build used by the launcher.",
+      "description": "Configure TrainingLoop for Bridges-2 non-H100 GPU targets using the sm_80 CUDA kernel build used by the launcher and the Ninja generator.",
       "inherits": "bridges2-base",
+      "cacheVariables": {
+        "GRIM_CUDA_ARCHITECTURES": "80"
+      }
+    },
+    {
+      "name": "bridges2-v100-release-make",
+      "displayName": "TrainingLoop Bridges-2 V100/L40S Release (Unix Makefiles)",
+      "description": "Configure TrainingLoop for Bridges-2 non-H100 GPU targets using the sm_80 CUDA kernel build used by the launcher and Unix Makefiles.",
+      "inherits": "bridges2-base-make",
       "cacheVariables": {
         "GRIM_CUDA_ARCHITECTURES": "80"
       }
@@ -94,9 +125,23 @@
       "inheritConfigureEnvironment": true
     },
     {
+      "name": "bridges2-h100-release-make",
+      "configurePreset": "bridges2-h100-release-make",
+      "displayName": "Build TrainingLoop Bridges-2 H100 Release (Unix Makefiles)",
+      "jobs": 100,
+      "inheritConfigureEnvironment": true
+    },
+    {
       "name": "bridges2-v100-release",
       "configurePreset": "bridges2-v100-release",
       "displayName": "Build TrainingLoop Bridges-2 V100/L40S Release",
+      "jobs": 100,
+      "inheritConfigureEnvironment": true
+    },
+    {
+      "name": "bridges2-v100-release-make",
+      "configurePreset": "bridges2-v100-release-make",
+      "displayName": "Build TrainingLoop Bridges-2 V100/L40S Release (Unix Makefiles)",
       "jobs": 100,
       "inheritConfigureEnvironment": true
     }
