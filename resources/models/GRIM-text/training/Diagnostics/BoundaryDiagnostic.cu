@@ -29,7 +29,7 @@ void runBoundaryDiagnostic(
         const size_t total_tokens = static_cast<size_t>(payload.actual_tokens);
 
         static bool logged_max_seq = false;
-        const bool is_boundary_max_seq = (max_seq_len >= static_cast<size_t>(ctx.model_config.max_seq_len) && !logged_max_seq);
+        const bool is_boundary_max_seq = (max_seq_len >= static_cast<size_t>(ctx.config.max_seq_len) && !logged_max_seq);
 
         
         if (is_boundary_max_seq) {
@@ -38,25 +38,25 @@ void runBoundaryDiagnostic(
             diag << "[BOUNDARY_DIAGNOSTIC] Batch " << (batch_idx + 1) << " CROSSING BOUNDARY\n";
             
             // Identify which boundary was crossed
-            if (is_boundary_max_seq) diag << "[BOUNDARY_DIAGNOSTIC] *** REACHED model.max_seq_len=" << ctx.model_config.max_seq_len << " ***\n";
+            if (is_boundary_max_seq) diag << "[BOUNDARY_DIAGNOSTIC] *** REACHED model.max_seq_len=" << ctx.config.max_seq_len << " ***\n";
 
             diag << "[BOUNDARY_DIAGNOSTIC] max_seq_len=" << max_seq_len 
                  << " total_tokens=" << total_tokens 
                  << " batch_size=" << payload.batch_size << "\n";
             
             diag << "[BOUNDARY_DIAGNOSTIC] MODEL CONFIG:\n";
-            diag << "  d_model=" << ctx.model_config.d_model << "\n";
-            diag << "  max_seq_len=" << ctx.model_config.max_seq_len << "\n";
-            diag << "  num_heads=" << ctx.model_config.num_heads << "\n";
-            diag << "  num_layers=" << ctx.model_config.num_layers << "\n";
+            diag << "  d_model=" << ctx.config.d_model << "\n";
+            diag << "  max_seq_len=" << ctx.config.max_seq_len << "\n";
+            diag << "  num_heads=" << ctx.config.num_heads << "\n";
+            diag << "  num_layers=" << ctx.config.num_layers << "\n";
             diag << "  vocab_size=" << ctx.data_info.actual_vocab_size << "\n";
             
             // Position embedding checks (this IS a valid concern)
             diag << "[BOUNDARY_DIAGNOSTIC] POSITION EMBEDDING CHECKS:\n";
             diag << "  Current max_seq_len in batch: " << max_seq_len << "\n";
-            diag << "  Model max_seq_len: " << ctx.model_config.max_seq_len << "\n";
+            diag << "  Model max_seq_len: " << ctx.config.max_seq_len << "\n";
             diag << "  Position index range needed: [0, " << (max_seq_len - 1) << "]\n";
-            if (max_seq_len > static_cast<size_t>(ctx.model_config.max_seq_len)) {
+            if (max_seq_len > static_cast<size_t>(ctx.config.max_seq_len)) {
                 diag << "  *** ERROR: Sequence exceeds model max_seq_len! Position embeddings will OOB! ***\n";
             }
             
@@ -67,9 +67,9 @@ void runBoundaryDiagnostic(
                 diag << "  seq[" << s << "]: len=" << seq_len;
                 
                 // Check for position IDs that would overflow
-                if (seq_len > ctx.model_config.max_seq_len) {
+                if (seq_len > ctx.config.max_seq_len) {
                     diag << " *** OVERFLOW pos=" << seq_len 
-                         << " > max=" << ctx.model_config.max_seq_len << " ***";
+                         << " > max=" << ctx.config.max_seq_len << " ***";
                 }
                 
                 // Sample first and last tokens from flat payload

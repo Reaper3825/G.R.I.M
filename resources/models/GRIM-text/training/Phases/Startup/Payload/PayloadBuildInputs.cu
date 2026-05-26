@@ -24,11 +24,11 @@ PayloadBuildInputs derivePayloadBuildInputsOrThrow(const TrainingContext& ctx) {
     PayloadBuildInputs inputs;
     inputs.configured_batch_size     = static_cast<std::size_t>(fixed_shape.batch_size);
     inputs.max_cached_seq            = static_cast<std::size_t>(fixed_shape.max_seq_len);
-    inputs.execution_block_num_slots = ctx.model_config.execution_block_num_slots;
-    inputs.execution_block_num_ops   = ctx.model_config.execution_block_num_ops;
-    inputs.execution_block_num_steps = ctx.model_config.execution_block_num_steps;
-    inputs.vocab_size                = ctx.model_config.vocab_size;
-    inputs.train_mtp_k               = ctx.model_config.mtp_enabled ? ctx.model_config.mtp_k : 0;
+    inputs.execution_block_num_slots = ctx.config.execution_block_num_slots;
+    inputs.execution_block_num_ops   = ctx.config.execution_block_num_ops;
+    inputs.execution_block_num_steps = ctx.config.execution_block_num_steps;
+    inputs.vocab_size                = ctx.config.vocab_size;
+    inputs.train_mtp_k               = ctx.config.mtp_enabled ? ctx.config.mtp_k : 0;
     if (ctx.data_info.actual_vocab_size > static_cast<std::uint32_t>(inputs.vocab_size)) {
         throw std::runtime_error(
             "FATAL: PayloadBuildInputsReady actual_vocab_size=" +

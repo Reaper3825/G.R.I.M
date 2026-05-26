@@ -13,6 +13,8 @@
 #include <string>
 #include <vector>
 
+#include "../../Shared/Forward/ModelForwardExecutionRuntime.hpp"
+#include "../../Shared/Forward/ModelForwardOutputs.hpp"
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 
 namespace GRIM {
@@ -39,17 +41,21 @@ struct GenerationState {
 
     // Decode-time ExecutionBlock trace state for autoregressive generation.
     // Training forward traces remain TrainingState-owned; these are session state.
-    std::vector<std::vector<ExecutionRecord>> execution_trace_by_row;
-    std::vector<Tensor> trace_state_by_row;
+    Forward::ModelForwardExecutionRuntime execution_runtime;
 
     // Decode-time <NUM> selector result consumed by sampling.
     DecodeSelectorState decode_selector;
 
+    // Live outputs for the current explicit shared-forward call during
+    // inference. Category 1 state: Phase2 must clear it at the forward/sample
+    // boundary and must not treat it as durable session memory.
+    Forward::ModelForwardOutputs forward_outputs;
+
     void resetSession() {
         has_exec_memory = false;
-        execution_trace_by_row.clear();
-        trace_state_by_row.clear();
+        execution_runtime.clear();
         decode_selector.reset();
+        forward_outputs.clear();
     }
 };
 

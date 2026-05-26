@@ -123,7 +123,7 @@ struct AutogradContext {
     //
     // device_bindings carries the device pointers for THIS step (slot map,
     // atom mask, etc.). Replaces the old `mutable d_*` fields on BatchPayload.
-    // - Training path: filled by LanguageModel::uploadBatchToDevice().
+    // - Training path: filled by Batching::uploadBatchToDevice().
     // Always non-null before Phase2/shared-forward and loss code reads device pointers.
     // ═══════════════════════════════════════════════════════════════════════════
     const Batching::BatchPayload* payload = nullptr;
@@ -168,8 +168,8 @@ struct AutogradContext {
 /**
  * Initialize autograd context for TRAINING. `payload` is the realized runtime
  * batch datum; fixed-shape training geometry is config-owned and validated at
- * uploadBatchToDevice(). `bindings` must point at device memory already
- * populated by uploadBatchToDevice().
+ * Batching::uploadBatchToDevice(). `bindings` must point at device memory already
+ * populated by that upload boundary.
  */
 AutogradContext initAutogradContext(
     const LanguageModelConfig* config,

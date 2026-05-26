@@ -43,7 +43,7 @@ namespace Batching {
 struct BatchPayload;
 
 // Device pointers for a single batch step. Filled by
-// LanguageModel::uploadBatchToDevice() after H2D copies complete;
+// Batching::uploadBatchToDevice() after H2D copies complete;
 // consumed by autogradTrainingStep / executeStep
 // without ever writing back through this struct.
 //

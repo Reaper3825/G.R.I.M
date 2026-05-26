@@ -172,9 +172,7 @@ struct GeneratedSequence {
 //======================================================//
 
 class EncoderLayer;
-class TextGenerator;
 struct TrainingState;  // Forward declare for methods that return references
-struct OptimizerState;
 
 //======================================================//
 //  Parameter Group for Training
@@ -201,18 +199,6 @@ public:
     // Constructor / Destructor
     explicit LanguageModel(const HyperParameters::LanguageModelConfig& config);
     ~LanguageModel();
-    
-    // Training/inference payload upload.
-    //
-    // uploadBatchToDevice() performs the H2D copies into TrainingState's
-    // reusable cache buffers and returns a BatchDeviceBindings that names the
-    // resulting device pointers. Phase2 training consumes those bindings
-    // through its explicit shared-forward + autograd loss/backward path;
-    // Phase2 inference consumes them through
-    // GRIMText::Training::scoreInferencePrefillLogits(). There is no separate
-    // eval-loss loop.
-    GRIM::Batching::BatchDeviceBindings uploadBatchToDevice(
-        const GRIM::Batching::BatchPayload& payload);
     
     void initCuBLASHandle();   // Initialize cuBLAS handle only (MUST be called before initGPU)
     void initPBM();            // Initialize PBM (ALiBi+RoPE hybrid) - MUST be called before initGPU
@@ -319,7 +305,6 @@ private:
     GenerationState generation_state_;
     PBM::PBMStateOwner pbm_owner_;                   // Durable model-level ALiBi/RoPE buffers
     std::vector<ParameterGroup> parameter_groups_;  // Parameter groups for optimizer
-    uint32_t backward_call_count_ = 0;              // Tracks backward() calls for deterministic diagnostics
     PBM::PBMSpec pbm_spec_{};                       // Non-owning view into pbm_owner_
     bool pbm_spec_initialized_ = false;
     

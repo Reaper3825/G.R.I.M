@@ -25,6 +25,7 @@
 #include "../TeacherLogits/TeacherLogits_GPU.hpp"
 #include "../StreamController/StreamController_GPU.hpp"
 #include "../GradNorm/GradNormGPU.hpp"
+#include "../Forward/ModelForwardExecutionRuntime.hpp"
 #include "../HyperParameters/HyperparameterGroupings.hpp"
 #include "../TensorContract/TensorContract_GPU.hpp"
 
@@ -104,8 +105,7 @@ struct TrainingState {
     //  Reset at the start of every training/eval forward that runs ExecutionBlock.
     //  Inference/session trace state lives in GenerationState.
     //======================================================//
-    std::vector<std::vector<ExecutionRecord>> execution_trace_by_row;
-    std::vector<Tensor> trace_state_by_row;
+    Forward::ModelForwardExecutionRuntime execution_runtime;
     
     TeacherLogits::Buffer teacher_logits;
     TeacherLogits::Buffer reference_logits;

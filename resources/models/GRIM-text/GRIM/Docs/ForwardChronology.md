@@ -38,7 +38,7 @@ Training enters at the Phase 2 microbatch boundary and then routes into the shar
 
 2. **Upload the prepared batch payload**
    - File: `training/Phases/Phase2_TrainingLoop.cu`
-   - Call: `ctx.model->uploadBatchToDevice(payload)`
+   - Call: `Batching::uploadBatchToDevice(model.getConfig(), model.getTrainingState(), payload)`
    - Result: `BatchDeviceBindings`
 
 3. **Build/validate the training runtime context**
@@ -93,23 +93,23 @@ The public orchestration entrypoint is trainer-owned:
 Phase2-local inference primitives used by Phase 2 are:
 
 - `training/Phases/Phase2_InferenceLoop.cu`
-   - `scoreInferencePrefillLogits(const BatchPayload& context_payload)`
+   - `generateOneSequence(...)`
 
 It does **not** introduce a separate forward math path or model-owned generation session. Phase2 does:
 
-- prompt payload → `scoreInferencePrefillLogits(...)`
+- prompt payload → explicit `ModelForwardRequest` / `ModelForwardRuntimePayload`
 - sample token → append to Phase2-owned sequence vectors
-- rebuilt current-sequence payload → `scoreInferencePrefillLogits(...)`
+- rebuilt current-sequence payload → explicit `ModelForwardRequest` / `ModelForwardRuntimePayload`
 
 ### Shared-prefill chronology
 
 This is the inference path that reuses the shared full-sequence graph.
 
 1. **Public inference entry**
-   - `scoreInferencePrefillLogits(...)`
+   - `generateOneSequence(...)`
 
 2. **Upload the inference payload**
-   - Call: `uploadBatchToDevice(...)`
+   - Call: `Batching::uploadBatchToDevice(...)`
    - Result: `BatchDeviceBindings`
 
 3. **Shared full-sequence graph entry**
@@ -129,7 +129,7 @@ This is the inference path that reuses the shared full-sequence graph.
 ```mermaid
 flowchart TD
    A[Phase2_InferenceLoop current sequence] --> B[buildInferenceBatchPayload]
-   B --> C[scoreInferencePrefillLogits]
+   B --> C[generateOneSequence explicit forward payloads]
    C --> D[uploadBatchToDevice]
    D --> E[executeModelForward]
    E --> F[EncodingLayer::forward]
@@ -157,7 +157,7 @@ The chronology above was checked against the current implementation, not just in
 
 - `Forward::executeModelForward(...)` currently has exactly **two** implementation callers:
    - `training/Phases/Phase2_TrainingLoop.cu` → explicit training forward before autograd loss/backward
-   - `training/Phases/Phase2_InferenceLoop.cu` → `scoreInferencePrefillLogits(...)`
+   - `training/Phases/Phase2_InferenceLoop.cu` → `generateOneSequence(...)`
 - `Attention::encoderSelfAttentionForward(...)` currently has exactly **one** implementation caller:
    - `Layers/Encoding/Encoding_GPU.cu` → `EncodingLayer::forward(...)`
 
@@ -170,14 +170,14 @@ The chronology above was checked against the current implementation, not just in
 
 ### What this means
 
-As of this verification, training and inference both have one full-sequence route into `executeModelForward(...)`. Phase2 inference owns both the token-by-token session and the explicit payload scorer that feeds shared forward.
+As of this verification, training and inference both have one full-sequence route into `executeModelForward(...)`. Phase2 inference owns both the token-by-token session and the explicit forward request/runtime payloads that feed shared forward.
 
 ## Review checklist
 
 When tracing future regressions, ask these questions in order:
 
-1. Did the call enter through `processBatch(...)` or `scoreInferencePrefillLogits(...)`?
-2. Did it pass through `uploadBatchToDevice(...)` exactly once before forward math?
+1. Did the call enter through `processBatch(...)` or `generateOneSequence(...)`?
+2. Did it pass through `Batching::uploadBatchToDevice(...)` exactly once before forward math?
 3. Did it route into the shared full-sequence graph (`executeModelForward(...)`)?
 4. Did it hit the shared full-sequence QKV bias add?
 

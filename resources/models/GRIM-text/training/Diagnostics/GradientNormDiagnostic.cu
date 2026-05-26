@@ -201,7 +201,7 @@ void runGradientNormClipDiagnostic(
 
     validateMeasuredMetricsOrThrow(gm, clip.measured_group_count, batch_idx);
 
-    const bool tied = ctx.model_config.tie_embeddings;
+    const bool tied = ctx.config.tie_embeddings;
     const float preclip_grad_rms = clip.global_rms_pre;
     const float emb_rms_pre = computeEmbeddingDiagnosticRmsOrThrow(gm, tied, batch_idx);
     const float enc_rms_pre = computeEncoderTelemetryRms(gm, batch_idx);

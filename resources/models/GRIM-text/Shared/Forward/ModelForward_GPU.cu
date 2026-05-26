@@ -109,7 +109,7 @@ void executeModelForward(const ModelForwardRequest& request,
 
     const auto* cfg = request.config;
     auto& runtime = runtime_payload;
-    auto& intermediates = *runtime.autograd_intermediates;
+    auto& intermediates = *runtime.forward_outputs;
     const auto& payload = *request.payload;
     const auto* bindings = request.bindings;
     const bool connect_parameter_graph = request.graph.connect_parameter_graph;
@@ -432,8 +432,9 @@ void executeModelForward(const ModelForwardRequest& request,
 
                 float T = cfg->execution_block_temp_start;
 
-                auto& execution_trace_by_row = *runtime.execution_trace_by_row;
-                auto& trace_state_by_row = *runtime.trace_state_by_row;
+                auto& execution_runtime = *runtime.execution_runtime;
+                auto& execution_trace_by_row = execution_runtime.execution_trace_by_row;
+                auto& trace_state_by_row = execution_runtime.trace_state_by_row;
                 execution_trace_by_row.resize(payload.batch_size);
                 trace_state_by_row.resize(payload.batch_size);
                 for (int b = 0; b < payload.batch_size; ++b) {
@@ -565,11 +566,11 @@ void executeModelForward(const ModelForwardRequest& request,
                             row_atom_view.num_atoms, payload, *request.bindings, b,
                             step, T, request.stream,
                             &step_diag,
-                            (*runtime.trace_state_by_row)[b],
-                            (*runtime.execution_trace_by_row)[b],
+                            runtime.execution_runtime->trace_state_by_row[b],
+                            runtime.execution_runtime->execution_trace_by_row[b],
                             d_expected_target,
                             cfg->structured_ce_enabled ? &selection_targets : nullptr);
-                        (*runtime.execution_trace_by_row)[b].push_back(step_diag.record);
+                        runtime.execution_runtime->execution_trace_by_row[b].push_back(step_diag.record);
                         intermediates.exec_outputs_per_row[b].steps.push_back(std::move(step_diag));
                     }
                 }

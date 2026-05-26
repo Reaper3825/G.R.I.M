@@ -19,34 +19,25 @@
 #ifdef USE_CUDA
 
 #include <string>
-#include <vector>
 
-#include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
-#include "../../Shared/TensorContract/TensorContract_GPU.hpp"
+#include "ModelForwardExecutionRuntime.hpp"
+#include "ModelForwardOutputs.hpp"
 
 namespace GRIM {
-namespace Autograd {
-struct AutogradIntermediates;
-}
-
 namespace Forward {
 
 struct ModelForwardRuntimePayload {
-    Autograd::AutogradIntermediates* autograd_intermediates = nullptr;
-    std::vector<std::vector<ExecutionRecord>>* execution_trace_by_row = nullptr;
-    std::vector<Tensor>* trace_state_by_row = nullptr;
+    ModelForwardOutputs* forward_outputs = nullptr;
+    ModelForwardExecutionRuntime* execution_runtime = nullptr;
     Tensor* read_gate_accum_tensor = nullptr;
 
     void validate(const char* caller, bool execution_block_active) const {
-        if (!autograd_intermediates) {
-            throw std::runtime_error(std::string(caller) + ": runtime payload autograd_intermediates is NULL");
+        if (!forward_outputs) {
+            throw std::runtime_error(std::string(caller) + ": runtime payload forward_outputs is NULL");
         }
         if (execution_block_active) {
-            if (!execution_trace_by_row) {
-                throw std::runtime_error(std::string(caller) + ": runtime payload execution_trace_by_row is NULL");
-            }
-            if (!trace_state_by_row) {
-                throw std::runtime_error(std::string(caller) + ": runtime payload trace_state_by_row is NULL");
+            if (!execution_runtime) {
+                throw std::runtime_error(std::string(caller) + ": runtime payload execution_runtime is NULL");
             }
         }
     }

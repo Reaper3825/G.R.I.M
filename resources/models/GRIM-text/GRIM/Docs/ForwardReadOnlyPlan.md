@@ -125,8 +125,8 @@ That storage belongs in forward intermediates with graph-window lifetime.
 This violation is now fixed by `Shared/Forward/ModelForwardRuntimePayload.hpp`. Kept here as the resolved architectural rationale for the payload split:
 
 - `Shared/Forward/ModelForward_GPU.cu`
-  - used to resize / clear / append `TrainingState::execution_trace_by_row`
-  - used to allocate / mutate `TrainingState::trace_state_by_row`
+  - used to resize / clear / append `TrainingState::execution_runtime.execution_trace_by_row`
+  - used to allocate / mutate `TrainingState::execution_runtime.trace_state_by_row`
   - used to pass `TrainingState::read_gate_accum_tensor.data` as a hidden mutable workspace into execution-block readback
 - `Shared/Forward/ModelForward_GPU.hpp`
   - used to carry only `TrainingState* runtime_state`, so inference-prefill had no way to express generation/session-owned runtime sinks without going through a training owner
@@ -197,7 +197,7 @@ Use this section as the implementation queue. The order below is the architectur
 - **Concrete offenders:**
   - `embedding_layer->tokenWeights().requires_grad = is_training`
   - `InferencePrefill` detaches only `structuredGateWeight()` while the rest of the parameter-bearing path still consumes live tensors
-  - writes `TrainingState::execution_trace_by_row` / `trace_state_by_row`
+  - writes `TrainingState::execution_runtime.execution_trace_by_row` / `trace_state_by_row`
   - uses `TrainingState::read_gate_accum_tensor` as implicit mutable workspace
 - **Required patch:**
   - centralize mode-based parameter acquisition at the shared forward boundary

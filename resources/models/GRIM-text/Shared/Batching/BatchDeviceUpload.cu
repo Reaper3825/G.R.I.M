@@ -1,7 +1,9 @@
 #include "BatchPayload.hpp"
 #include "BatchDeviceBindings.hpp"
+#include "BatchDeviceUpload.hpp"
 
-#include "../../GRIM/grim_language_model_cuda.hpp"
+#include "../TrainingState/TrainingState_GPU.hpp"
+#include "../HyperParameters/HyperParameters_GPU.hpp"
 #include "../VerboseLogging.hpp"
 
 #include <chrono>
@@ -13,6 +15,21 @@
 #include <cuda_runtime.h>
 
 namespace GRIM {
+namespace Batching {
+
+namespace {
+
+inline void checkCudaResult(cudaError_t result, const char* expr, const char* file, int line) {
+    if (result != cudaSuccess) {
+        throw std::runtime_error(
+            std::string("BatchDeviceUpload CUDA failure at ") + file + ":" + std::to_string(line) +
+            " for " + expr + ": " + cudaGetErrorString(result));
+    }
+}
+
+}  // namespace
+
+#define BATCH_UPLOAD_CUDA_CHECK(expr) ::GRIM::Batching::checkCudaResult((expr), #expr, __FILE__, __LINE__)
 
 // =============================================================================
 // uploadBatchToDevice
@@ -28,8 +45,10 @@ namespace GRIM {
 // view. Startup/Model is intentionally not involved: startup assembles durable
 // layers, while this runs once per runtime payload.
 // =============================================================================
-Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
-    const Batching::BatchPayload& payload)
+BatchDeviceBindings uploadBatchToDevice(
+    const HyperParameters::LanguageModelConfig& config,
+    TrainingState& training_state,
+    const BatchPayload& payload)
 {
     // Re-validate (cheap) so any corruption between buildBatchPayload and the
     // upload site fails loud here instead of inside a kernel.
@@ -40,13 +59,13 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
             " payload has no host input arrays to upload");
     }
 
-    const auto& cfg = config_;
+    const auto& cfg = config;
     if (payload.isTraining() && cfg.execution_mode == HyperParameters::ModelExecutionMode::INFERENCE) {
         throw std::runtime_error(
             "uploadBatchToDevice: training BatchPayload cannot be uploaded by an inference-mode LanguageModel");
     }
 
-    if (!training_state_.initialized) {
+    if (!training_state.initialized) {
         throw std::runtime_error(
             "uploadBatchToDevice: runtime state is not initialized. "
             "Caller must complete explicit startup before uploading BatchPayload data");
@@ -94,7 +113,7 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
         }
     }
 
-    const auto& token_ids_shape = training_state_.cached_token_ids_tensor.shape.require("uploadBatchToDevice cached_token_ids_tensor");
+    const auto& token_ids_shape = training_state.cached_token_ids_tensor.shape.require("uploadBatchToDevice cached_token_ids_tensor");
     if (!token_ids_shape.is_2d_layout()) {
         throw std::runtime_error("uploadBatchToDevice: cached_token_ids_tensor must be a 2D token-id buffer");
     }
@@ -106,7 +125,7 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
     }
 
     if (payload.hasTrainingTargets()) {
-        const auto& targets_shape = training_state_.cached_targets_tensor.shape.require("uploadBatchToDevice cached_targets_tensor");
+        const auto& targets_shape = training_state.cached_targets_tensor.shape.require("uploadBatchToDevice cached_targets_tensor");
         if (!targets_shape.is_2d_layout()) {
             throw std::runtime_error("uploadBatchToDevice: cached_targets_tensor must be a 2D target upload buffer");
         }
@@ -118,15 +137,15 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
         }
     }
 
-    cudaStream_t stream = training_state_.stream_ctrl.getPrimaryStream();
+    cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
 
-    int* cached_token_ids_ptr = reinterpret_cast<int*>(training_state_.cached_token_ids_tensor.data);
+    int* cached_token_ids_ptr = reinterpret_cast<int*>(training_state.cached_token_ids_tensor.data);
     if (!cached_token_ids_ptr) {
         throw std::runtime_error("uploadBatchToDevice: cached_token_ids_tensor.data is NULL");
     }
     int* cached_targets_ptr = nullptr;
     if (payload.hasTrainingTargets()) {
-        cached_targets_ptr = reinterpret_cast<int*>(training_state_.cached_targets_tensor.data);
+        cached_targets_ptr = reinterpret_cast<int*>(training_state.cached_targets_tensor.data);
         if (!cached_targets_ptr) {
             throw std::runtime_error("uploadBatchToDevice: cached_targets_tensor.data is NULL for training payload");
         }
@@ -143,7 +162,7 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
                 std::to_string(payload.mtp_shifted_targets.size()) +
                 " != config.mtp_k=" + std::to_string(mtp_hp.k));
         }
-        const auto& mtp_shape = training_state_.cached_mtp_shifted_targets_tensor.shape.require(
+        const auto& mtp_shape = training_state.cached_mtp_shifted_targets_tensor.shape.require(
             "uploadBatchToDevice cached_mtp_shifted_targets_tensor");
         if (!mtp_shape.is_2d_layout()) {
             throw std::runtime_error(
@@ -161,20 +180,20 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
                 " exceeds MTP target buffer capacity=" +
                 std::to_string(mtp_shape.as_2d().cols));
         }
-        cached_mtp_shifted_targets_ptr = reinterpret_cast<int*>(training_state_.cached_mtp_shifted_targets_tensor.data);
+        cached_mtp_shifted_targets_ptr = reinterpret_cast<int*>(training_state.cached_mtp_shifted_targets_tensor.data);
         if (!cached_mtp_shifted_targets_ptr) {
             throw std::runtime_error("uploadBatchToDevice: cached_mtp_shifted_targets_tensor.data is NULL for MTP payload");
         }
     }
-    float* cached_numeric_values_ptr = training_state_.cached_token_numeric_values.data;
+    float* cached_numeric_values_ptr = training_state.cached_token_numeric_values.data;
     if (!cached_numeric_values_ptr) {
         throw std::runtime_error("uploadBatchToDevice: cached_token_numeric_values.data is NULL");
     }
-    float* cached_atom_mask_ptr = training_state_.cached_token_atom_mask.data;
+    float* cached_atom_mask_ptr = training_state.cached_token_atom_mask.data;
     if (!cached_atom_mask_ptr) {
         throw std::runtime_error("uploadBatchToDevice: cached_token_atom_mask.data is NULL");
     }
-    int32_t* cached_slot_map_ptr = reinterpret_cast<int32_t*>(training_state_.cached_token_to_slot_map.data);
+    int32_t* cached_slot_map_ptr = reinterpret_cast<int32_t*>(training_state.cached_token_to_slot_map.data);
     if (!cached_slot_map_ptr) {
         throw std::runtime_error("uploadBatchToDevice: cached_token_to_slot_map.data is NULL — "
             "slot map is unconditionally allocated in InitTrainingState");
@@ -185,7 +204,7 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
     const size_t numeric_val_bytes = payload.numericValueBytes();
     const size_t atom_mask_bytes   = payload.atomMaskBytes();
     const size_t atom_flag_bytes   = payload.atomFlagBytes();
-    if (!training_state_.cached_token_atom_flags.data && !payload.atom_flags.empty()) {
+    if (!training_state.cached_token_atom_flags.data && !payload.atom_flags.empty()) {
         throw std::runtime_error("uploadBatchToDevice: cached_token_atom_flags.data is NULL but payload.atom_flags is populated");
     }
     const size_t slot_map_bytes  = payload.slotMapBytes();
@@ -195,33 +214,33 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
     // Round 1: input_ids + target_ids. Targets arrive pre-masked from
     // buildBatchPayload Phase 4b; payload.lm_valid_tokens already accounts for
     // the post-masking LM-supervised count.
-    CUDA_CHECK(cudaMemcpyAsync(cached_token_ids_ptr, payload.input_ids.data(),
+    BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(cached_token_ids_ptr, payload.input_ids.data(),
         input_ids_bytes, cudaMemcpyHostToDevice, stream));
     if (payload.hasTrainingTargets()) {
-        CUDA_CHECK(cudaMemcpyAsync(cached_targets_ptr, payload.target_ids.data(),
+        BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(cached_targets_ptr, payload.target_ids.data(),
             target_ids_bytes, cudaMemcpyHostToDevice, stream));
     }
-    CUDA_CHECK(cudaStreamSynchronize(stream));
+    BATCH_UPLOAD_CUDA_CHECK(cudaStreamSynchronize(stream));
 
     // Round 2: numeric_values + atom_mask.
-    CUDA_CHECK(cudaMemcpyAsync(cached_numeric_values_ptr, payload.numeric_values.data(),
+    BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(cached_numeric_values_ptr, payload.numeric_values.data(),
         numeric_val_bytes, cudaMemcpyHostToDevice, stream));
-    CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<uint8_t*>(cached_atom_mask_ptr), payload.atom_mask.data(),
+    BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<uint8_t*>(cached_atom_mask_ptr), payload.atom_mask.data(),
         atom_mask_bytes, cudaMemcpyHostToDevice, stream));
 
     // Round 3: atom_flags.
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-    if (training_state_.cached_token_atom_flags.data) {
-        CUDA_CHECK(cudaMemcpyAsync(
-            reinterpret_cast<uint32_t*>(training_state_.cached_token_atom_flags.data), payload.atom_flags.data(),
+    BATCH_UPLOAD_CUDA_CHECK(cudaStreamSynchronize(stream));
+    if (training_state.cached_token_atom_flags.data) {
+        BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+            reinterpret_cast<uint32_t*>(training_state.cached_token_atom_flags.data), payload.atom_flags.data(),
             atom_flag_bytes, cudaMemcpyHostToDevice, stream));
     }
 
     // Round 4: token_to_slot_map.
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-    CUDA_CHECK(cudaMemcpyAsync(cached_slot_map_ptr, payload.token_to_slot_map.data(),
+    BATCH_UPLOAD_CUDA_CHECK(cudaStreamSynchronize(stream));
+    BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(cached_slot_map_ptr, payload.token_to_slot_map.data(),
         slot_map_bytes, cudaMemcpyHostToDevice, stream));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
+    BATCH_UPLOAD_CUDA_CHECK(cudaStreamSynchronize(stream));
 
     // Round 5: MTP shifted targets. These are Phase1-authored payload arrays;
     // upload owns the H2D copy so MTP loss consumes BatchDeviceBindings instead
@@ -229,14 +248,14 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
     if (cached_mtp_shifted_targets_ptr) {
         const size_t mtp_head_bytes = static_cast<size_t>(payload.total_tokens) * sizeof(int);
         for (int k = 0; k < static_cast<int>(payload.mtp_shifted_targets.size()); ++k) {
-            CUDA_CHECK(cudaMemcpyAsync(
+            BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
                 cached_mtp_shifted_targets_ptr + static_cast<size_t>(k) * payload.total_tokens,
                 payload.mtp_shifted_targets[k].data(),
                 mtp_head_bytes,
                 cudaMemcpyHostToDevice,
                 stream));
         }
-        CUDA_CHECK(cudaStreamSynchronize(stream));
+        BATCH_UPLOAD_CUDA_CHECK(cudaStreamSynchronize(stream));
     }
 
     auto copy_end = std::chrono::high_resolution_clock::now();
@@ -255,12 +274,15 @@ Batching::BatchDeviceBindings LanguageModel::uploadBatchToDevice(
     bindings.d_target_ids       = cached_targets_ptr;
     bindings.d_numeric_values   = cached_numeric_values_ptr;
     bindings.d_atom_mask        = reinterpret_cast<uint8_t*>(cached_atom_mask_ptr);
-    bindings.d_atom_flags       = training_state_.cached_token_atom_flags.data
-        ? reinterpret_cast<uint32_t*>(training_state_.cached_token_atom_flags.data)
+    bindings.d_atom_flags       = training_state.cached_token_atom_flags.data
+        ? reinterpret_cast<uint32_t*>(training_state.cached_token_atom_flags.data)
         : nullptr;
     bindings.d_token_to_slot_map = cached_slot_map_ptr;
     bindings.d_mtp_shifted_targets = cached_mtp_shifted_targets_ptr;
     return bindings;
 }
 
+}  // namespace Batching
 }  // namespace GRIM
+
+#undef BATCH_UPLOAD_CUDA_CHECK

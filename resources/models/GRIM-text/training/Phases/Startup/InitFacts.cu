@@ -111,7 +111,7 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
     const float* lm_w_ptr  = model->getLmHeadLayer()->weights().data;
     const float* emb_g_ptr = model->getEmbeddingLayer()->tokenWeights().grad_data();
     const float* lm_g_ptr  = model->getLmHeadLayer()->weights().grad_data();
-    const bool cfg_tied  = ctx.model_config.tie_embeddings;
+    const bool cfg_tied  = ctx.config.tie_embeddings;
     const bool lm_owns   = model->getLmHeadLayer()->ownsWeights();
     const bool ptrs_same  = (emb_w_ptr == lm_w_ptr);
     const bool grads_same = (emb_g_ptr == lm_g_ptr);
@@ -184,7 +184,7 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
     emitInitFactKeyValue("loaded_checkpoint_path", ctx.loaded_checkpoint_path);
 
     emitInitFactLine("[INIT_FACTS] --- Effective architecture -----------------------------------------------");
-    const auto& arch = ctx.model_config;
+    const auto& arch = ctx.config;
     emitInitFactKeyValue("architecture.d_model", fmtInt(arch.d_model));
     emitInitFactKeyValue("architecture.num_layers", fmtInt(arch.num_layers));
     emitInitFactKeyValue("architecture.num_heads", fmtInt(arch.num_heads));

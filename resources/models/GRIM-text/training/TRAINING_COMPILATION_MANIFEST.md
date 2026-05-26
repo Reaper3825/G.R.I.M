@@ -391,7 +391,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 - [x] **Inference_GPU.cu** ✅ DELETED (phase-2 boundary split)
   - Phase2 inference owns the generation session: prompt/current-sequence payload construction, sampling, appending, and decode.
-  - `training/Phases/Phase2_InferenceLoop.cu::scoreInferencePrefillLogits(BatchPayload)` is the Phase2-owned inference scorer; it uploads the explicit payload, enters `Shared/Forward/ModelForward_GPU.cu` with `ModelForwardGraphPolicy{false,false,false}`, returns last-token logits, and clears intermediates.
+  - `training/Phases/Phase2_InferenceLoop.cu::generateOneSequence(...)` now uploads the explicit payload, authors `ModelForwardRequest` / `ModelForwardRuntimePayload`, enters `Shared/Forward/ModelForward_GPU.cu` with `ModelForwardGraphPolicy{false,false,false}`, returns last-token logits to the sampler, and clears intermediates.
   - **DELETED**: `scoreSequenceFullContext_()`, `primeGenerationSession()`, `continueGenerationSession()`, `scoreNextTokenWithKvCache_()`, KV-cache/decode scratch allocation, and the second encoder-layer implementation.
   - No AutogradContext inference path remains; inference uses the shared read-only full-context graph only ✅
 

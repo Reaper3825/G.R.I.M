@@ -14,8 +14,7 @@
 
 #pragma once
 
-#include "../../Shared/TensorContract/TensorContract_GPU.hpp"
-#include "../../Shared/TensorContract/ForwardIntermediates.hpp"
+#include "../../Shared/Forward/ModelForwardOutputs.hpp"
 #include "../../Layers/ReasoningHead/reasoning_head_GPU.hpp"
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 #include "../../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
@@ -34,43 +33,14 @@ namespace Autograd {
  * This replaces the old pattern of storing intermediates in AutogradContext.
  * TrainingState owns the lifecycle, making ownership unambiguous.
  */
-struct AutogradIntermediates {
-    // ═══════════════════════════════════════════════════════════════════════════
-    // PER-LAYER INTERMEDIATES (Issue #56: keeps autograd graph alive)
-    // ═══════════════════════════════════════════════════════════════════════════
-    AllLayerIntermediates layer_intermediates;
-    
-    // ═══════════════════════════════════════════════════════════════════════════
-    // CROSS-LAYER INTERMEDIATE TENSORS
-    // These preserve the autograd graph so backward() propagates through all ops
-    // ═══════════════════════════════════════════════════════════════════════════
-    Tensor embedding_tensor;           // [total_tokens, d_model] - embedding output
-    Tensor embedding_structured_state; // [total_tokens, d_model] - all-token z for learned vector gate
-    Tensor embedding_gate_concat;      // [total_tokens, 2*d_model] - [e; z]
-    Tensor embedding_gate_logits;      // [total_tokens, d_model] - [e; z] @ Wg
-    Tensor embedding_gate_values;      // [total_tokens, d_model] - sigmoid(logits)
-    Tensor embedding_gate_delta;       // [total_tokens, d_model] - gate ⊙ z
-    std::vector<Tensor> encoder_layer_outputs;  // One per encoder layer
-    Tensor encoder_output_tensor;      // [total_tokens, d_model] - after final RMSNorm
-    Tensor centered_encoder_output;    // [total_tokens, d_model] - Issue #127
+struct AutogradIntermediates : public Forward::ModelForwardOutputs {
     // Cat 1 (graph-owned, transient): the autograd Tensor wrapper for the LM
-    // head output. Used INSIDE the active autograd/forward boundary (loss
-    // assembly, backward, boundary-safe diagnostics). Any consumer that needs
-    // logits must observe this tensor explicitly before AutogradStepScope
-    // clears the boundary; there is no durable TrainingState logits snapshot.
-    Tensor logits_tensor;              // [total_tokens, vocab_size] - autograd wrapper
+    // head output lives on the shared forward-owned base struct. Training owns
+    // the broader forward+loss+backward window through this derived type.
+
     Tensor loss_tensor;                // Scalar loss driving backward
     std::vector<Tensor> mtp_logits_tensors;  // MTP head logits (one per k) — kept alive for backward
     Tensor mtp_input_tensor;           // A1: MTP preprocessed input (RMSNorm only path) — kept alive for backward
-
-    // ReasoningHead — canonical owner of per-forward atom embeddings + output
-    Tensor scratch_atom_embeddings;    // [num_atoms, atom_embedding_dim] - copy-first from ScratchBlock
-    ReasoningHeadOutput reasoning_output;  // op_logits, arg1_logits, arg2_logits
-
-    // ExecutionBlock — per-row memory and per-(row,step) outputs
-    std::vector<ExecutionMemory> exec_memories;               // [batch_size] per-row isolation
-    std::vector<ExecutionBlockOutput> exec_outputs_per_row;   // [batch_size][K steps]
-    std::vector<Tensor> exec_expected_target_tensors;         // owned [1,1] teacher scalar tensors used while building ExecutionBlock grad nodes
     bool exec_op_ce_added = false;                            // true iff an active op-path execution loss was added to loss_tensor
     bool exec_arg_ce_added = false;                           // true iff an active arg-path execution loss was added to loss_tensor
     bool exec_write_ce_added = false;                         // true iff active write selection CE was added to loss_tensor
@@ -98,25 +68,10 @@ struct AutogradIntermediates {
     
     /** Clear all tensors. Call ONLY after backward completes. */
     void clear() {
-        layer_intermediates.clear();
-        embedding_tensor = Tensor();
-        embedding_structured_state = Tensor();
-        embedding_gate_concat = Tensor();
-        embedding_gate_logits = Tensor();
-        embedding_gate_values = Tensor();
-        embedding_gate_delta = Tensor();
-        encoder_layer_outputs.clear();
-        encoder_output_tensor = Tensor();
-        centered_encoder_output = Tensor();
-        logits_tensor = Tensor();
+        Forward::ModelForwardOutputs::clear();
         loss_tensor = Tensor();
         mtp_logits_tensors.clear();
         mtp_input_tensor = Tensor();
-        scratch_atom_embeddings = Tensor();
-        reasoning_output = ReasoningHeadOutput{};
-        exec_memories.clear();
-        exec_outputs_per_row.clear();
-        exec_expected_target_tensors.clear();
         exec_op_ce_added = false;
         exec_arg_ce_added = false;
         exec_write_ce_added = false;
@@ -130,7 +85,6 @@ struct AutogradIntermediates {
     }
     
     /** Check if intermediates are populated (forward has run) */
-    bool hasLogits() const { return logits_tensor.data != nullptr; }
     bool hasLoss() const { return loss_tensor.data != nullptr; }
 };
 

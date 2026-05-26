@@ -115,7 +115,7 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
     }
 
     // Start from the finalized root generation view and apply diagnostic overrides locally.
-    GRIM::HyperParameters::GenerationHP cfg = GRIM::HyperParameters::generationHP(ctx.model_config);
+    GRIM::HyperParameters::GenerationHP cfg = GRIM::HyperParameters::generationHP(ctx.config);
     cfg.max_new_tokens = max_new_tokens;
     cfg.min_new_tokens = std::max(1, max_new_tokens / 4);
     cfg.num_return_sequences = 1;

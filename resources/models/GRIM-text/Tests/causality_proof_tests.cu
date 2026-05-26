@@ -20,8 +20,10 @@
 //======================================================//
 
 #include "../GRIM/grim_language_model_cuda.hpp"
-#include "../training/Phases/Phase2_InferenceLoop.hpp"
 #include "../Shared/Batching/BatchPayload.hpp"
+#include "../Shared/Batching/BatchDeviceUpload.hpp"
+#include "../Shared/Forward/ModelForwardRuntimePayload.hpp"
+#include "../Shared/Forward/ModelForward_GPU.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"
 #include "../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.hpp"
 #include "../Shared/Optimizers/OptimizerStep.hpp"
@@ -78,7 +80,80 @@ GRIM::Vector runInferencePrefill(GRIM::LanguageModel* model,
         static_cast<size_t>(cfg.batch_size),
         static_cast<size_t>(cfg.max_cached_seq_len),
         cfg.execution_block_num_slots);
-    return GRIMText::Training::scoreInferencePrefillLogits(*model, payload);
+
+    auto& training_state = model->getTrainingState();
+    if (!training_state.initialized) {
+        throw std::runtime_error("runInferencePrefill: training state not initialized");
+    }
+    auto& generation_state = model->getGenerationState();
+    const auto bindings = GRIM::Batching::uploadBatchToDevice(
+        model->getConfig(),
+        model->getTrainingState(),
+        payload);
+    cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
+
+    struct ScopedInferenceIntermediatesClear {
+        GRIM::TrainingState& training_state;
+        ~ScopedInferenceIntermediatesClear() {
+            training_state.autograd_intermediates.clear();
+        }
+    } clear_scope{training_state};
+
+    GRIM::Forward::ModelForwardRuntimePayload runtime_payload{};
+    runtime_payload.forward_outputs = &training_state.autograd_intermediates;
+    runtime_payload.execution_runtime = &generation_state.execution_runtime;
+    runtime_payload.read_gate_accum_tensor = nullptr;
+
+    GRIM::Forward::ModelForwardRequest request{};
+    request.config = &cfg;
+    request.gpu_encoder = &model->getGpuEncoder();
+    request.embedding_layer = model->getEmbeddingLayer();
+    request.lm_head = model->getLmHeadLayer();
+    request.scratch_block = model->getScratchBlockLayer();
+    request.reasoning_head = model->getReasoningHeadLayer();
+    request.execution_block = model->getExecutionBlockLayer();
+    request.cublas_handle = training_state.cublas_handle.get();
+    request.stream = stream;
+    request.payload = &payload;
+    request.bindings = &bindings;
+    request.batch_idx = 0;
+    request.graph = GRIM::Forward::ModelForwardGraphPolicy{
+        /*connect_parameter_graph=*/false,
+        /*retain_backward_graph=*/false,
+        /*enable_dropout=*/false};
+
+    GRIM::Forward::executeModelForward(request, runtime_payload);
+
+    const auto& live_logits = training_state.autograd_intermediates.logits_tensor;
+    if (!live_logits.data) {
+        throw std::runtime_error("runInferencePrefill: logits_tensor.data is NULL after shared forward");
+    }
+    const size_t expected_logits =
+        static_cast<size_t>(payload.total_tokens) * static_cast<size_t>(cfg.vocab_size);
+    if (static_cast<size_t>(live_logits.numel()) < expected_logits) {
+        throw std::runtime_error("runInferencePrefill: logits tensor is smaller than expected payload span");
+    }
+
+    GRIM::Vector logits(cfg.vocab_size);
+    const size_t last_token_offset =
+        static_cast<size_t>(payload.total_tokens - 1) * static_cast<size_t>(cfg.vocab_size);
+    cudaError_t copy_err = cudaMemcpyAsync(
+        logits.data.data(),
+        live_logits.data + last_token_offset,
+        static_cast<size_t>(cfg.vocab_size) * sizeof(float),
+        cudaMemcpyDeviceToHost,
+        stream);
+    if (copy_err != cudaSuccess) {
+        throw std::runtime_error("runInferencePrefill: cudaMemcpyAsync logits failed: " +
+                                 std::string(cudaGetErrorString(copy_err)));
+    }
+    cudaError_t sync_err = cudaStreamSynchronize(stream);
+    if (sync_err != cudaSuccess) {
+        throw std::runtime_error("runInferencePrefill: cudaStreamSynchronize failed: " +
+                                 std::string(cudaGetErrorString(sync_err)));
+    }
+
+    return logits;
 }
 
 //======================================================//

@@ -50,7 +50,7 @@ void validateDeviceBindingsForPayload(
     if (!bindings.d_input_ids || !bindings.d_target_ids || !bindings.d_token_to_slot_map) {
         throw std::runtime_error(
             std::string(caller) + ": BatchDeviceBindings has NULL device pointers - "
-            "caller must invoke model.uploadBatchToDevice(payload) before initializing autograd context");
+            "caller must invoke Batching::uploadBatchToDevice(config, training_state, payload) before initializing autograd context");
     }
     if (!payload.mtp_shifted_targets.empty()) {
         if (!bindings.d_mtp_shifted_targets) {
@@ -65,7 +65,7 @@ void validateDeviceBindingsForPayload(
 // Training overload — payload carries the realized host batch datum, while the
 // fixed-shape training geometry itself is enforced against config at the upload
 // boundary. `bindings` must already have been populated by
-// uploadBatchToDevice(payload) at the H2D sync slice.
+// Batching::uploadBatchToDevice(config, training_state, payload) at the H2D sync slice.
 AutogradContext initAutogradContext(
     const LanguageModelConfig* config,
     TrainingState* training_state,

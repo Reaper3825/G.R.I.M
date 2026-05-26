@@ -63,7 +63,7 @@ Tensor unified_loss(
  * Compute unified loss for one MTP auxiliary head.
  *
  * The shifted targets are Phase1-authored in BatchPayload and uploaded by
- * LanguageModel::uploadBatchToDevice() into BatchDeviceBindings. The loss path
+ * Batching::uploadBatchToDevice() into BatchDeviceBindings. The loss path
  * must not allocate or upload target buffers during loss assembly.
  */
 Tensor unified_loss_for_mtp_head(

@@ -250,7 +250,7 @@ void populateEBInjectionStreams(
 //------------------------------------------------------
 void populateRmsGammaStreams(float* obs, GRIMText::Training::TrainingContext& ctx) {
     auto& encoder = ctx.model->getGpuEncoder();
-    const int num_layers = ctx.model_config.num_layers;
+    const int num_layers = ctx.config.num_layers;
 
     // Mean RMS(γ₁) and RMS(γ₂) across all encoder layers
     float sum_gamma1_rms = 0.0f;

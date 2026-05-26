@@ -55,7 +55,7 @@ void computeRhoDiagnostic(
 {
     const auto& ai = ctx.model->getTrainingState().autograd_intermediates;
     const int num_layers = static_cast<int>(ai.encoder_layer_outputs.size());
-    const int d_model = ctx.model_config.d_model;
+    const int d_model = ctx.config.d_model;
     const int max_seq_len = payload.max_seq_len;
     const int rect_positions = payload.total_tokens;
 

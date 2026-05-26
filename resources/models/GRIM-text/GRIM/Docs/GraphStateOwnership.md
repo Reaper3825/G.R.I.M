@@ -35,7 +35,7 @@ The graph itself must not own those orchestration decisions.
 
 ### Upload stages input state
 
-`LanguageModel::uploadBatchToDevice()` is the explicit H2D sync boundary.
+`Batching::uploadBatchToDevice()` is the explicit H2D sync boundary.
 
 It translates host `BatchPayload` into device `BatchDeviceBindings` backed by reusable runtime buffers. Upload stages the current call's input state; it does not define model semantics.
 

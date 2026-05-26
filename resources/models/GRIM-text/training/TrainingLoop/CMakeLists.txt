@@ -102,7 +102,33 @@ set(CMAKE_PCH_INSTANTIATE_TEMPLATES ON)
 
 # Find required packages
 find_package(CUDAToolkit REQUIRED)
-find_package(httplib CONFIG REQUIRED)
+find_package(Threads REQUIRED)
+
+function(grim_training_repair_vcpkg_package_dir package_dir cache_var)
+    set(_pkg_dir "${GRIM_VCPKG_TRIPLET_DIR}/share/${package_dir}")
+    if(EXISTS "${_pkg_dir}")
+        set(${cache_var} "${_pkg_dir}" CACHE PATH "${package_dir} package config directory from the TrainingLoop manifest install root" FORCE)
+    elseif(DEFINED ${cache_var} AND "${${cache_var}}" MATCHES "-NOTFOUND$")
+        unset(${cache_var} CACHE)
+    endif()
+endfunction()
+
+find_path(GRIM_TRAINING_HTTPLIB_INCLUDE_DIR
+    NAMES httplib.h
+    HINTS "${GRIM_VCPKG_TRIPLET_DIR}/include"
+    REQUIRED
+)
+message(STATUS "Using cpp-httplib headers from ${GRIM_TRAINING_HTTPLIB_INCLUDE_DIR}")
+if(NOT TARGET grim_training_httplib)
+    add_library(grim_training_httplib INTERFACE)
+    target_include_directories(grim_training_httplib INTERFACE "${GRIM_TRAINING_HTTPLIB_INCLUDE_DIR}")
+    target_link_libraries(grim_training_httplib INTERFACE
+        Threads::Threads
+        $<$<PLATFORM_ID:Windows>:ws2_32>
+        $<$<PLATFORM_ID:Windows>:crypt32>
+    )
+    add_library(httplib::httplib ALIAS grim_training_httplib)
+endif()
 
 # CUTLASS (flash-attention) requires CUDA 12+. Fail early with clear instructions.
 if(CUDAToolkit_VERSION_MAJOR LESS 12)
@@ -114,21 +140,11 @@ if(CUDAToolkit_VERSION_MAJOR LESS 12)
 endif()
 message(STATUS "CUDAToolkit version: ${CUDAToolkit_VERSION}")
 
-function(grim_training_repair_vcpkg_package_dir package_dir cache_var)
-    set(_pkg_dir "${GRIM_VCPKG_TRIPLET_DIR}/share/${package_dir}")
-    if(EXISTS "${_pkg_dir}")
-        set(${cache_var} "${_pkg_dir}" CACHE PATH "${package_dir} package config directory from the TrainingLoop manifest install root" FORCE)
-    elseif(DEFINED ${cache_var} AND "${${cache_var}}" MATCHES "-NOTFOUND$")
-        unset(${cache_var} CACHE)
-    endif()
-endfunction()
-
 grim_training_repair_vcpkg_package_dir("nlohmann_json" nlohmann_json_DIR)
 grim_training_repair_vcpkg_package_dir("flatbuffers" flatbuffers_DIR)
 
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(flatbuffers CONFIG REQUIRED)
-find_package(Threads REQUIRED)
 
 # CUDA compilation flags
 # -diag-suppress=550: suppress "variable set but never used" warnings from third-party headers (FlatBuffers)

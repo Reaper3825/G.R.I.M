@@ -16,6 +16,7 @@
 #include "../../Shared/Telemetry/TelemetryUpdate.hpp"
 #include "../../Shared/UnigramByte/AtomTable.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
+#include "../../Shared/Batching/BatchDeviceUpload.hpp"
 #include "../../Shared/Forward/ModelForwardRuntimePayload.hpp"
 #include "../../Shared/Forward/ModelForward_GPU.hpp"
 #include "../../Shared/Execution/ExecutionPayloadValidation.hpp"
@@ -444,7 +445,7 @@ void runOptimizerWindowFromEpoch(
         tel_input.batch_idx         = batch_idx;
         tel_input.global_step       = ctx.global_step;
         tel_input.actual_vocab_size = ctx.data_info.actual_vocab_size;
-        tel_input.d_model           = ctx.model_config.d_model;
+        tel_input.d_model           = ctx.config.d_model;
 
         GRIM::Telemetry::updateTelemetryObservations(ctx, tel_input, clip_metrics.metrics, &payload);
     }
@@ -515,9 +516,8 @@ GRIM::Forward::ModelForwardRuntimePayload buildTrainingForwardRuntimePayload(
     GRIM::TrainingState& training_state)
 {
     GRIM::Forward::ModelForwardRuntimePayload runtime_payload{};
-    runtime_payload.autograd_intermediates = &training_state.autograd_intermediates;
-    runtime_payload.execution_trace_by_row = &training_state.execution_trace_by_row;
-    runtime_payload.trace_state_by_row = &training_state.trace_state_by_row;
+    runtime_payload.forward_outputs = &training_state.autograd_intermediates;
+    runtime_payload.execution_runtime = &training_state.execution_runtime;
     runtime_payload.read_gate_accum_tensor = &training_state.read_gate_accum_tensor;
     return runtime_payload;
 }
@@ -646,12 +646,15 @@ BatchResult processBatch(
     // AutogradIntermediates::clear() for this batch. Do NOT add an explicit
     // clear() anywhere inside this scope.
     GRIM::Autograd::AutogradStepScope autograd_step_scope(ctx.model->getTrainingState());
+    auto& model = *ctx.model;
     // Sync slice: upload the prebuilt host BatchPayload once and reuse the
     // returned BatchDeviceBindings across shared forward, loss, and backward —
     // payload itself is host-only/immutable and never carries device pointers.
-    const auto train_bindings = ctx.model->uploadBatchToDevice(payload);
+    const auto train_bindings = GRIM::Batching::uploadBatchToDevice(
+        model.getConfig(),
+        model.getTrainingState(),
+        payload);
     const auto loss_config = GRIM::HyperParameters::lossConfigHP(ctx.config);
-    auto& model = *ctx.model;
     auto& training_state = model.getTrainingState();
     const auto& model_config = model.getConfig();
 
@@ -703,7 +706,7 @@ BatchResult processBatch(
     auto loss_result = GRIM::Autograd::computeAutogradLoss(
         autograd_ctx,
         loss_config,
-        mtpAlphaEffectiveForBatch(ctx.model_config, ctx.global_step));
+        mtpAlphaEffectiveForBatch(ctx.config, ctx.global_step));
     if (!loss_result.success) {
         throw std::runtime_error(
             "[computeAutogradLoss] FAILED batch=" + std::to_string(batch_idx + 1) +

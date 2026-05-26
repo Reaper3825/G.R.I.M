@@ -294,7 +294,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - No stale code, no dead functions; encoder public API is construction + layer accessors only ✅
 
 - [x] **Inference_GPU.cu** DELETED
-  - Phase2 inference owns generation and the read-only payload scorer `scoreInferencePrefillLogits(BatchPayload)` through shared forward.
+  - Phase2 inference owns generation and explicitly calls shared forward from `generateOneSequence(...)` via caller-authored `ModelForwardRequest` / `ModelForwardRuntimePayload`.
 
 ---
 

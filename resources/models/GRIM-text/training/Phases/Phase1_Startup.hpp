@@ -192,11 +192,10 @@ struct TelemetryContext {
  */
 struct TrainingContext {
     // Configuration
+    // Phase1-authored authoritative root config. This is the single model
+    // config handoff to Phase2; training code must not rebuild or route
+    // alternate static model wrappers around it.
     GRIM::HyperParameters::LanguageModelConfig config;
-    // Phase1-authored static model config. This is the single model-config set
-    // handed to Phase2; training code must not rebuild or route alternate static
-    // model wrappers around it.
-    GRIM::HyperParameters::LanguageModelConfig model_config;
     // Memory snapshot (evidence only; never authors capacity)
     MemorySnapshot memory_snapshot;
     // Post-allocation validation evidence (fails loud on mismatch)
@@ -225,7 +224,7 @@ struct TrainingContext {
     //
     // BatchPayload is host-only and immutable after the builder returns
     // (BatchDeviceBindings is the parallel device-pointer surface produced by
-    // LanguageModel::uploadBatchToDevice at the per-step sync boundary).
+    // Batching::uploadBatchToDevice at the per-step sync boundary).
     //==================================================//
     GRIM::Batching::BatchSchedule fixed_train_schedule;
     std::vector<GRIM::Batching::BatchPayload> train_payloads;

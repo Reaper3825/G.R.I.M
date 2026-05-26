@@ -37,7 +37,7 @@ void initializeOptimizer(TrainingContext& ctx) {
     opt.resetAccumulationSlot();
 
     auto* gpu_encoder = &model.getGpuEncoder();
-    for (int layer = 0; layer < ctx.model_config.num_layers; ++layer) {
+    for (int layer = 0; layer < ctx.config.num_layers; ++layer) {
         if (!gpu_encoder->getLayer(layer)) {
             throw std::runtime_error("Encoder layer " + std::to_string(layer) + " not initialized - "
                                      "ensure model.initGPU(weight_init_seed) completes all layers before training");

@@ -124,9 +124,9 @@ ModelAllocationState captureAndValidateModelAllocationOrThrow(const TrainingCont
 
     const auto& state = ctx.model->getTrainingState();
     const auto fixed_shape = GRIM::HyperParameters::trainingFixedShapeHP(ctx.config);
-    if (ctx.model_config.max_cached_seq_len != fixed_shape.max_seq_len) {
+    if (ctx.config.max_cached_seq_len != fixed_shape.max_seq_len) {
         throw std::runtime_error("FATAL: model max_cached_seq_len does not match trainingFixedShapeHP (model=" +
-                                 std::to_string(ctx.model_config.max_cached_seq_len) +
+                                 std::to_string(ctx.config.max_cached_seq_len) +
                                  " grouping=" + std::to_string(fixed_shape.max_seq_len) + ")");
     }
 
@@ -162,16 +162,15 @@ void ModelAllocated(TrainingContext& ctx) {
     using GRIM::Logging::ModuleId;
 
     ctx.rng = Internal::initializeRNG(ctx.config, *ctx.logging.logger);
-    ctx.model_config = ctx.config;
-    if (ctx.data_info.actual_vocab_size > static_cast<std::uint32_t>(ctx.model_config.vocab_size)) {
+    if (ctx.data_info.actual_vocab_size > static_cast<std::uint32_t>(ctx.config.vocab_size)) {
         throw std::runtime_error(
             "FATAL: GRMT actual_vocab_size=" + std::to_string(ctx.data_info.actual_vocab_size) +
-            " exceeds configured model vocab_size=" + std::to_string(ctx.model_config.vocab_size));
+            " exceeds configured model vocab_size=" + std::to_string(ctx.config.vocab_size));
     }
 
     try {
         ctx.model = Internal::initializeModel(
-            ctx.model_config,
+            ctx.config,
             ctx.rng.init_seed,
             *ctx.logging.logger);
     } catch (const std::exception& e) {

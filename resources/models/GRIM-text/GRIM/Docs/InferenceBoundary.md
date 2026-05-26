@@ -7,7 +7,7 @@ Detailed ownership-tightening work for making the shared forward primitive read-
 ## Target ownership boundary
 
 - Training owns `AutogradContext`, loss assembly, backward, optimizer state, and `AutogradStepScope`.
-- Phase2 inference owns generation session state and the read-only context scorer over caller-authored `BatchPayload` objects.
+- Phase2 inference owns generation session state and the explicit shared-forward request/runtime payload it authors over caller-authored `BatchPayload` objects, including a `GenerationState::forward_outputs` sink that is separate from training-owned `AutogradIntermediates`.
 - Shared code owns only mode-neutral forward primitives that consume explicit device views and a caller-authored graph policy. It must not branch on training vs inference identity.
 - No inference-only fields may live in `AutogradContext`.
 - No forward path may rediscover the active step by reading `TrainingState.cached_*` as an implicit current batch; callers must pass explicit bindings.
@@ -17,9 +17,9 @@ Detailed ownership-tightening work for making the shared forward primitive read-
 Status: implemented.
 
 - [x] Add a shared inference-prefill forward primitive outside `training/Autograd`.
-- [x] Route the Phase2-owned inference scorer through that primitive.
+- [x] Route the Phase2-owned inference loop through that primitive.
 - [x] Build a per-call `BatchDeviceBindings` view from the caller-authored inference payload.
-- [x] Build inference prompt ingestion through `Batching::buildInferenceBatchPayload()` and Phase2-owned calls to `scoreInferencePrefillLogits(const BatchPayload&)` instead of server/vector-authored CUDA copies or model-owned generation-session wrappers.
+- [x] Build inference prompt ingestion through `Batching::buildInferenceBatchPayload()` and Phase2-owned explicit shared-forward calls over those payloads instead of server/vector-authored CUDA copies or model-owned generation-session wrappers.
 - [x] Keep existing `TrainingState` cache tensors as temporary backing storage only.
 - [x] Keep training on the shared forward primitive while Phase2 still owned only upload + loss/backward orchestration.
 
