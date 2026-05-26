@@ -12,6 +12,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <filesystem>
 #include <memory>
 #include <stdexcept>
@@ -170,6 +171,22 @@ DataInfo summarizeDataInfoOrThrow(const SequenceData& data)
     return info;
 }
 
+void syncRuntimeVocabSizeFromActualOrThrow(TrainingContext& ctx, const char* caller)
+{
+    if (ctx.data_info.actual_vocab_size < static_cast<std::uint32_t>(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET)) {
+        throw std::runtime_error(std::string(caller) +
+            ": actual_vocab_size must include special+byte+atom ranges (>= " +
+            std::to_string(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET) + "), got " +
+            std::to_string(ctx.data_info.actual_vocab_size));
+    }
+    if (ctx.data_info.actual_vocab_size > static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
+        throw std::runtime_error(std::string(caller) +
+            ": actual_vocab_size=" + std::to_string(ctx.data_info.actual_vocab_size) +
+            " exceeds int capacity for LanguageModelConfig::vocab_size");
+    }
+    ctx.config.vocab_size = static_cast<int>(ctx.data_info.actual_vocab_size);
+}
+
 } // namespace
 
 void LoadTrainingData(TrainingContext& ctx) {
@@ -195,10 +212,7 @@ void LoadTrainingData(TrainingContext& ctx) {
         *ctx.logging.logger);
 
     ctx.data_info = summarizeDataInfoOrThrow(ctx.data);
-    if (ctx.data_info.actual_vocab_size < static_cast<uint32_t>(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET)) {
-        throw std::runtime_error("FATAL: training data vocab_size must include special+byte+atom ranges (>= " +
-            std::to_string(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET) + ")");
-    }
+    syncRuntimeVocabSizeFromActualOrThrow(ctx, "LoadTrainingData");
 
     GRIM::HyperParameters::DerivationContext hp_ctx;
     const auto runtime_hp =
@@ -239,10 +253,7 @@ void LoadInferenceTokenizer(TrainingContext& ctx) {
     ctx.data_info.actual_vocab_size = static_cast<std::uint32_t>(ctx.tokenizer->vocabSize());
     ctx.data_info.train_sequence_count = 0;
     ctx.data_info.val_sequence_count = 0;
-    if (ctx.data_info.actual_vocab_size < static_cast<std::uint32_t>(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET)) {
-        throw std::runtime_error("FATAL: inference tokenizer vocab_size must include special+byte+atom ranges (>= " +
-            std::to_string(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET) + ")");
-    }
+    syncRuntimeVocabSizeFromActualOrThrow(ctx, "LoadInferenceTokenizer");
 
     EmitModuleInfo(ModuleId::Training,
         "[Phase1] ✓ Inference tokenizer ready | vocab_size=" +

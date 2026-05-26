@@ -649,9 +649,9 @@ enum class ParamGroupType : uint8_t {
 };
 
 enum class ParamStatsBucket : uint8_t {
-    EMBEDDING = 0,  ///< Counts under LanguageModel::ModelStats::embedding_params
-    ENCODER = 1,    ///< Counts under LanguageModel::ModelStats::encoder_params
-    LM_HEAD = 2,    ///< Counts under LanguageModel::ModelStats::lm_head_params
+    EMBEDDING = 0,  ///< Counts under GRIM::ModelStats::embedding_params
+    ENCODER = 1,    ///< Counts under GRIM::ModelStats::encoder_params
+    LM_HEAD = 2,    ///< Counts under GRIM::ModelStats::lm_head_params
     COUNT = 3       ///< Invalid sentinel; registration must never leave this value
 };
 

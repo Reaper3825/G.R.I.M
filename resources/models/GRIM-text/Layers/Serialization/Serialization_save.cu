@@ -141,18 +141,13 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
 
     Logging::EmitModuleInfo(kLogModule, Msg("[save] Downloading weights: embeddings + ", cfg.num_layers, " encoder layers (GPU->CPU)..."));
 
-    if (cfg.use_gpu && request.sources.gpu_embedding.token_embeddings.ptr) {
-        auto token_embed_data = download_device_vector(request.sources.gpu_embedding.token_embeddings, "token embeddings");
-        if (token_embed_data.empty() && request.sources.gpu_embedding.token_embeddings.count > 0) return false;
-        fb_token_embed = builder.CreateVector(token_embed_data);
-    } else {
-        const auto& cpu_embed = request.sources.cpu_embedding;
-        if (cpu_embed.token_data.empty()) {
-            Logging::EmitModuleError(kLogModule, "[save] CPU embedding data is missing");
-            return false;
-        }
-        fb_token_embed = builder.CreateVector(cpu_embed.token_data);
+    if (!request.sources.gpu_embedding.token_embeddings.ptr) {
+        Logging::EmitModuleError(kLogModule, "[save] FATAL: GPU token embedding buffer is NULL");
+        return false;
     }
+    auto token_embed_data = download_device_vector(request.sources.gpu_embedding.token_embeddings, "token embeddings");
+    if (token_embed_data.empty() && request.sources.gpu_embedding.token_embeddings.count > 0) return false;
+    fb_token_embed = builder.CreateVector(token_embed_data);
 
     auto fb_embeddings = GRIMTransformer::CreateEmbeddingWeights(
         builder, fb_token_embed, 0,

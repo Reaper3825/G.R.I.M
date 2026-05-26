@@ -74,23 +74,16 @@ namespace {
         if (!pbm.rope_inv_freq) {
             throw std::runtime_error("encoderSelfAttentionForward: PBM rope_inv_freq is NULL");
         }
-        if (pbm.rotary_dim <= 0 || pbm.rotary_dim > hp.head_dim) {
-            throw std::runtime_error("encoderSelfAttentionForward: invalid PBM rotary_dim=" +
-                                     std::to_string(pbm.rotary_dim) + " for head_dim=" +
+        if (hp.rotary_dim <= 0 || hp.rotary_dim > hp.head_dim) {
+            throw std::runtime_error("encoderSelfAttentionForward: invalid attention rotary_dim=" +
+                                     std::to_string(hp.rotary_dim) + " for head_dim=" +
                                      std::to_string(hp.head_dim));
         }
         if (!pbm.alibi_slopes) {
             throw std::runtime_error("encoderSelfAttentionForward: PBM alibi_slopes is NULL");
         }
-        if (pbm.num_heads != hp.num_heads) {
-            throw std::runtime_error("encoderSelfAttentionForward: PBM num_heads mismatch. expected=" +
-                                     std::to_string(hp.num_heads) + " got=" +
-                                     std::to_string(pbm.num_heads));
-        }
-        if (pbm.num_kv_heads != hp.num_kv_heads) {
-            throw std::runtime_error("encoderSelfAttentionForward: PBM num_kv_heads mismatch. expected=" +
-                                     std::to_string(hp.num_kv_heads) + " got=" +
-                                     std::to_string(pbm.num_kv_heads));
+        if (!pbm.upload_event) {
+            throw std::runtime_error("encoderSelfAttentionForward: PBM upload_event is NULL");
         }
     }
 
@@ -134,6 +127,11 @@ void encoderSelfAttentionForward(const Tensor& norm_input,
 
     validateWeights(weights, request.hp);
     validatePBMSpec(request.pbm, request.hp);
+    cudaError_t wait_err = cudaStreamWaitEvent(request.stream, request.pbm.upload_event, 0);
+    if (wait_err != cudaSuccess) {
+        throw std::runtime_error(std::string("encoderSelfAttentionForward: cudaStreamWaitEvent(PBM upload_event) failed: ") +
+                                 cudaGetErrorString(wait_err));
+    }
     autograd::set_autograd_cublas_handle(request.cublas_handle);
 
     const int qkv_debug = autograd::qkvDebugLevel();
@@ -187,7 +185,7 @@ void encoderSelfAttentionForward(const Tensor& norm_input,
         intermediates.Q_bhsd, intermediates.K_bhsd,
         request.pbm.rope_inv_freq,
         request.payload, request.hp,
-        request.pbm.rotary_dim, request.stream);
+        request.hp.rotary_dim, request.stream);
     intermediates.Q_bhsd = std::move(Q_rot);
     intermediates.K_bhsd = std::move(K_rot);
     if (qkv_debug > 0) {

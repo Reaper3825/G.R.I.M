@@ -2,6 +2,7 @@
 #define USE_CUDA
 #endif
 
+#include "ModelStats.hpp"
 #include "../GRIM/grim_language_model_cuda.hpp"
 
 #include <cstddef>
@@ -12,19 +13,20 @@ namespace GRIM {
 
 #ifdef USE_CUDA
 
-LanguageModel::ModelStats LanguageModel::getModelStats() const {
+::GRIM::ModelStats computeModelStats(const LanguageModel& model) {
     // Rule 20 / Rule 26: parameter_groups_ is the single source of truth for
     // parameter counts. Do not estimate from config formulas; registration is
     // the only durable inventory of trainable tensors after Pattern-B layer
     // construction and feature gates.
-    if (parameter_groups_.empty()) {
+    const auto& parameter_groups = model.parameterGroups();
+    if (parameter_groups.empty()) {
         throw std::runtime_error(
-            "getModelStats called before buildParameterGroups — parameter_groups_ is empty at " +
+            "computeModelStats called before buildParameterGroups — parameter_groups is empty at " +
             std::string(__FILE__) + ":" + std::to_string(__LINE__));
     }
 
-    ModelStats stats;
-    for (const auto& group : parameter_groups_) {
+    ::GRIM::ModelStats stats;
+    for (const auto& group : parameter_groups) {
         const std::size_t group_size = group.size();
 
         switch (group.stats_bucket) {
@@ -45,7 +47,7 @@ LanguageModel::ModelStats LanguageModel::getModelStats() const {
 
             case ParamStatsBucket::COUNT:
                 throw std::runtime_error(
-                    "getModelStats: parameter group '" + group.name +
+                    "computeModelStats: parameter group '" + group.name +
                     "' has invalid ParamStatsBucket::COUNT at " +
                     std::string(__FILE__) + ":" + std::to_string(__LINE__));
         }

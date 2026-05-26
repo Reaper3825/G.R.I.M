@@ -45,7 +45,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - `train_gpu.cu` loads the validated training startup config root from canonical `ai_config.json`
   - `Phase1_Startup` receives that config handoff and performs startup validation/initialization against it
   - Path validation (model, data, checkpoint dirs)
-  - **Issue #106**: Reseeding W_qkv with 1/sqrt(d_model) scaling - ✅ Applied (`ctx.rng.init_seed` passes directly into `LanguageModel::initGPU(weight_init_seed)`)
+  - **Issue #106**: Reseeding W_qkv with 1/sqrt(d_model) scaling - ✅ Applied (`ctx.rng.init_seed` passes directly into `Startup::assembleGpuModel(*model, weight_init_seed)`)
   - **Issue #107**: Fixed LCG PRNG correlation with splitmix64 - ✅ Applied (Tensor::xavier_uniform_() with Philox PRNG)
   - **Issue #110**: PCGrad buffer allocation for tied embeddings - ✅ Applied (allocatePCGradBuffer + g_skip_embedding_backward=false)
   - **Rule 20**: max_seq_len defaults changed from 512 → 0 - ✅ Verified (defaults=0, throws if still 0)
@@ -247,7 +247,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ### 1.11 Startup Model GPU Assembly
 
-- [x] **Phases/Startup/Model/ModelGpuAssembly.cu** (`LanguageModel::initGPU`) — ✅ MOVED & AUDITED
+- [x] **Phases/Startup/Model/ModelGpuAssembly.cu** (`Startup::assembleGpuModel`) — ✅ MOVED & AUDITED
   - Startup/Model ownership is explicit: this source assembles durable GPU model layers after CUDA, streams, cuBLAS, and PBM are initialized.
   - Creates GPU encoder layers, EmbeddingLayer, LMHeadLayer, optional ReasoningHead, ExecutionBlock, DecodeTimeSlotSelector, DecodeTimeNumPolicy, and MTP heads.
   - `cfg.num_kv_heads` remains sourced from runtime JSON via grouped hyperparameter views, not compile-time defaults.
@@ -279,7 +279,8 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **DELETED**: `applyActivationQuantization()` declaration — unimplemented method for unimplemented feature, zero callers. Activation quantization config loading stays (Phase1 infrastructure), but no QuantizationLayer is wired to any forward path
   - **DELETED**: `activation_quantizer_` member — `std::unique_ptr<Quantization::QuantizationLayer>` that was never assigned, always nullptr
   - **DELETED**: `#include "Quantization_GPU.hpp"` — no longer needed after activation_quantizer_ removal
-  - **DELETED**: `LanguageModel::alibi_` member and `GrimEmbeddingStack::alibi_` wrapper ownership. `LanguageModel::initPBM()` initializes the model-level `PBM::PBMStateOwner` after `StreamController` exists; `PBMSpec` is only a non-owning attention view.
+  - **DELETED**: `LanguageModel::alibi_` member and the old `GrimEmbeddingStack` wrapper ownership. `LanguageModel::initPBM()` initializes the model-level `PBM::PBMStateOwner` after `StreamController` exists; `PBMSpec` is only a non-owning attention view.
+  - **DELETED**: `GrimEmbeddingStack`, `Matrix`, `LanguageModel::embedder_`, and `getEmbedderPtr()`. Durable token embedding ownership now lives only on `EmbeddingLayer`, and checkpoint save/load reads that device tensor directly with no parallel CPU embedding mirror.
   - **DELETED**: `getAlibiPtr()` accessor — zero callers, returned the dead `alibi_` member above
   - **NOTE (not fixed)**: `HardcodedPattern` enum is duplicated in `LanguageModelConfig` and `HardcodedStates_GPU.hpp` with `static_cast` bridge in Phase1. Fragile but diagnostic-only — defer unification.
 
@@ -512,9 +513,9 @@ Use this checklist to systematically audit each file in the order it's used duri
 
   **🔴 BUG A: ScratchBlock backward NEVER CALLED (parameters frozen) — [FIXED Issue #141]**
 
-  `AutogradTraining.cu` line 1507 guards ScratchBlock backward with:
+  Historical `AutogradTraining.cu` code guarded ScratchBlock backward with a layer-state check:
   ```cpp
-  if (ctx.scratch_block && ctx.scratch_block->isEnabled() &&
+  if (ctx.scratch_block && scratchBlockConstructionHP(*ctx.config).enabled &&
       intermediates.embedding_tensor.has_grad()) {
   ```
   But `intermediates.embedding_tensor` is a NON-LEAF tensor (dropout output). Its `grad_`

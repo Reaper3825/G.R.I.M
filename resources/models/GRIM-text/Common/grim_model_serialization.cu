@@ -13,6 +13,7 @@
 #include <cstring>
 #include <cuda_runtime.h>
 #include "../GRIM/grim_language_model_cuda.hpp"
+#include "../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../Shared/LogRecorder/LogRecorder.hpp"
 #include "../training/schemas/grim_transformer_model_generated.h"
 #include "../Layers/Encoding/Encoding_GPU.hpp"
@@ -22,41 +23,6 @@
 
 
 namespace GRIM {
-
-//======================================================//
-//  Helper: Flatten Matrix to Vector
-//======================================================//
-
-static std::vector<float> flattenMatrix(const Matrix& mat) {
-    std::vector<float> result;
-    result.reserve(mat.num_rows * mat.num_cols);
-    
-    for (int i = 0; i < mat.num_rows; ++i) {
-        const auto& row = mat.rows[i];
-        result.insert(result.end(), row.data.begin(), row.data.end());
-    }
-    
-    return result;
-}
-
-//======================================================//
-//  Helper: Unflatten Vector to Matrix
-//======================================================//
-
-static void unflattenMatrix(const std::vector<float>& data, Matrix& mat, int rows, int cols) {
-    mat.num_rows = rows;
-    mat.num_cols = cols;
-    mat.rows.clear();
-    mat.rows.reserve(rows);
-    
-    for (int i = 0; i < rows; ++i) {
-        Vector row(cols);
-        std::copy(data.begin() + i * cols, 
-                 data.begin() + (i + 1) * cols,
-                 row.data.begin());
-        mat.rows.push_back(std::move(row));
-    }
-}
 
 //======================================================//
 //  Save/Load Model to FlatBuffer via Serialization Layer
@@ -83,17 +49,6 @@ SerializationModelConfigView makeConfigView(const HyperParameters::LanguageModel
 
 std::size_t embeddingElementCount(const HyperParameters::LanguageModelConfig& cfg) {
     return static_cast<std::size_t>(cfg.vocab_size) * static_cast<std::size_t>(cfg.d_model);
-}
-
-SerializationCpuEmbeddingReadData snapshotCpuEmbedding(const GrimEmbeddingStack* embedder) {
-    SerializationCpuEmbeddingReadData data{};
-    if (!embedder) {
-        return data;
-    }
-    data.num_rows = embedder->token_embed.num_rows;
-    data.num_cols = embedder->token_embed.num_cols;
-    data.token_data = flattenMatrix(embedder->token_embed);
-    return data;
 }
 
 void assignRead(DeviceReadView& view, const float* ptr, std::size_t count) {
@@ -157,22 +112,16 @@ bool LanguageModel::save(const std::string& path) {
     EmitModuleInfo(ModuleId::Checkpoint, "Request initialized with version " + std::to_string(GRIM_MODEL_VERSION));
 
     EmitModuleInfo(ModuleId::Checkpoint, "Processing embeddings");
-    if (config_.use_gpu && embedding_layer_ && embedding_layer_->tokenWeights().data) {
-        EmitModuleInfo(ModuleId::Checkpoint, "Embedding source: GPU");
-        EmitModuleInfo(ModuleId::Checkpoint, "Using EmbeddingLayer token weights (vocab=" + std::to_string(config_.vocab_size) + ", d_model=" + std::to_string(config_.d_model) + ")");
-        assignRead(request.sources.gpu_embedding.token_embeddings,
-                   embedding_layer_->tokenWeights().data,
-                   embeddingElementCount(config_));
-    } else {
-        EmitModuleInfo(ModuleId::Checkpoint, "Embedding source: CPU");
-        EmitModuleInfo(ModuleId::Checkpoint, "Using CPU embedder snapshot");
-        request.sources.cpu_embedding = snapshotCpuEmbedding(getEmbedderPtr());
-        if (request.sources.cpu_embedding.token_data.empty()) {
-            EmitModuleError(ModuleId::Checkpoint, "CPU embedder snapshot unavailable");
-            std::cerr << "[LanguageModel::save] Error: CPU embedder snapshot unavailable" << std::endl;
-            return false;
-        }
+    if (!embedding_layer_ || !embedding_layer_->tokenWeights().data) {
+        EmitModuleError(ModuleId::Checkpoint, "EmbeddingLayer token weights unavailable during save()");
+        std::cerr << "[LanguageModel::save] Error: EmbeddingLayer token weights unavailable" << std::endl;
+        return false;
     }
+    EmitModuleInfo(ModuleId::Checkpoint, "Embedding source: GPU");
+    EmitModuleInfo(ModuleId::Checkpoint, "Using EmbeddingLayer token weights (vocab=" + std::to_string(config_.vocab_size) + ", d_model=" + std::to_string(config_.d_model) + ")");
+    assignRead(request.sources.gpu_embedding.token_embeddings,
+               embedding_layer_->tokenWeights().data,
+               embeddingElementCount(config_));
 
     EmitModuleInfo(ModuleId::Checkpoint, "Processing encoder layers (" + std::to_string(config_.num_layers) + " layers)");
     { std::ostringstream oss; oss << "gpu_encoder_ ptr = " << (void*)gpu_encoder_.get() << " this = " << (void*)this; EmitModuleInfo(ModuleId::Checkpoint, oss.str()); }
@@ -232,10 +181,15 @@ bool LanguageModel::save(const std::string& path) {
     request.sources.lm_head.bias.ptr = lm_head_layer_->bias().data;
     request.sources.lm_head.bias.count = lm_head_layer_->bias().data ? static_cast<std::size_t>(config_.vocab_size) : 0;
 
-    // Process ScratchBlock weights (if enabled)
+    const auto scratch_hp = HyperParameters::scratchBlockConstructionHP(config_);
+
+    // Process ScratchBlock weights (if enabled by authored architecture)
     // Use the layer's actual tensor sizes so copy count never exceeds allocation.
     // ScratchBlock allocates with Tokenizer::kAtomTypeCount (single source of truth).
-    if (scratch_block_layer_ && scratch_block_layer_->isEnabled()) {
+    if (scratch_hp.enabled) {
+        if (!scratch_block_layer_) {
+            throw std::runtime_error("LanguageModel::save: ScratchBlockConstructionHP.enabled=true but scratch_block_layer_ is NULL");
+        }
         Tensor& ate = scratch_block_layer_->atomTypeEmbeddings();
         Tensor& ap = scratch_block_layer_->atomProjection();
         
@@ -437,9 +391,23 @@ bool LanguageModel::load(const std::string& path) {
 
     if (!gpu_encoder_) {
         EmitModuleError(ModuleId::Checkpoint,
-                        "[load] GPU encoder is not initialized. Caller must call initGPU(weight_init_seed) before LanguageModel::load().");
+                        "[load] GPU encoder is not initialized. Caller must complete Startup::assembleGpuModel(..., weight_init_seed) before LanguageModel::load().");
         std::cerr << "[LanguageModel::load] Error: GPU encoder is not initialized. "
-                  << "Caller must call initGPU(weight_init_seed) before load()." << std::endl;
+                  << "Caller must complete Startup::assembleGpuModel(..., weight_init_seed) before load()." << std::endl;
+        return false;
+    }
+
+    const auto scratch_hp = HyperParameters::scratchBlockConstructionHP(config_);
+    if (scratch_hp.enabled && !scratch_block_layer_) {
+        EmitModuleError(ModuleId::Checkpoint,
+                        "[load] ScratchBlockConstructionHP.enabled=true but scratch_block_layer_ is NULL.");
+        std::cerr << "[LanguageModel::load] Error: ScratchBlockConstructionHP.enabled=true but scratch_block_layer_ is NULL" << std::endl;
+        return false;
+    }
+    if (!scratch_hp.enabled && scratch_block_layer_) {
+        EmitModuleError(ModuleId::Checkpoint,
+                        "[load] scratch_block_layer_ exists while ScratchBlockConstructionHP.enabled=false.");
+        std::cerr << "[LanguageModel::load] Error: scratch_block_layer_ exists while ScratchBlockConstructionHP.enabled=false" << std::endl;
         return false;
     }
 
@@ -447,26 +415,18 @@ bool LanguageModel::load(const std::string& path) {
     request.capabilities.requires_execution_block = (execution_block_layer_ != nullptr);
     request.capabilities.requires_slot_selector     = (decode_time_slot_selector_layer_ != nullptr);
     request.capabilities.requires_reasoning_head  = (reasoning_head_layer_ != nullptr);
-    request.capabilities.requires_scratch_block   = (scratch_block_layer_ != nullptr && scratch_block_layer_->isEnabled());
+    request.capabilities.requires_scratch_block   = scratch_hp.enabled;
     request.capabilities.requires_final_rms_gamma = (lm_head_layer_ != nullptr
                                                       && lm_head_layer_->finalRmsGamma().data != nullptr
                                                       && !config_.freeze_learned_rms_gammas);
 
-    if (config_.use_gpu) {
-        if (!embedding_layer_ || !embedding_layer_->tokenWeights().data) {
-            std::cerr << "[LanguageModel::load] Error: EmbeddingLayer token weights not initialized" << std::endl;
-            return false;
-        }
-        assignWrite(request.gpu_embedding.token_embeddings,
-                    embedding_layer_->tokenWeights().data,
-                    embeddingElementCount(config_));
+    if (!embedding_layer_ || !embedding_layer_->tokenWeights().data) {
+        std::cerr << "[LanguageModel::load] Error: EmbeddingLayer token weights not initialized" << std::endl;
+        return false;
     }
-
-    if (auto* embedder = getEmbedderPtr()) {
-        request.cpu_embedding.set_tokens = [embedder](const std::vector<float>& data, int rows, int cols) {
-            unflattenMatrix(data, embedder->token_embed, rows, cols);
-        };
-    }
+    assignWrite(request.gpu_embedding.token_embeddings,
+                embedding_layer_->tokenWeights().data,
+                embeddingElementCount(config_));
 
     auto* gpu_encoder = &getGpuEncoder();
     request.encoder_layers.resize(config_.num_layers);
@@ -519,9 +479,9 @@ bool LanguageModel::load(const std::string& path) {
     }
     request.lm_head.expect_bias = config_.use_bias;
 
-    // Set up ScratchBlock weight destinations (if enabled)
+    // Set up ScratchBlock weight destinations (if enabled by authored architecture)
     // Use the layer's actual tensor sizes so load size matches saved checkpoint (same as save path).
-    if (scratch_block_layer_ && scratch_block_layer_->isEnabled()) {
+    if (scratch_hp.enabled) {
         Tensor& ate = scratch_block_layer_->atomTypeEmbeddings();
         Tensor& ap = scratch_block_layer_->atomProjection();
         

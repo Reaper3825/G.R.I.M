@@ -33,14 +33,12 @@ PBMState stealState(PBMState& other) noexcept {
     moved.alibi_slopes_host = std::move(other.alibi_slopes_host);
     moved.rope_inv_freq = other.rope_inv_freq;
     moved.rope_inv_freq_host = std::move(other.rope_inv_freq_host);
-    moved.construction_hp = other.construction_hp;
     moved.upload_event = other.upload_event;
     moved.initialized = other.initialized;
 
     other.alibi_slopes = nullptr;
     other.rope_inv_freq = nullptr;
     other.upload_event = nullptr;
-    other.construction_hp = PBMConstructionHP{};
     other.initialized = false;
     other.alibi_slopes_host.clear();
     other.rope_inv_freq_host.clear();

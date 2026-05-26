@@ -20,6 +20,7 @@
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../../Shared/UnigramByte/Unigram.hpp"
 #include "../../Shared/Execution/ExecutionPayloadValidation.hpp"
+#include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
 #include "../../Shared/Execution/DecodeTimeNumPolicy.hpp"
 
@@ -1108,12 +1109,21 @@ bool verifyGradientsAreConnectedImpl(
         }
     }
 
-    if (ctx.scratch_block && ctx.scratch_block->isEnabled()) {
+    const auto scratch_hp = GRIM::HyperParameters::scratchBlockConstructionHP(*ctx.config);
+    if (scratch_hp.enabled) {
+        if (!ctx.scratch_block) {
+            AG_WARN("ScratchBlockConstructionHP.enabled=true but ctx.scratch_block is NULL during gradient verification");
+            ok = false;
+        } else {
         auto checkScratch = [&](Tensor& t, const char* name) {
             if (t.data) requireAllocatedFinite(t, "scratch block " + std::string(name));
         };
         checkScratch(ctx.scratch_block->atomTypeEmbeddings(), "atomTypeEmbeddings");
         checkScratch(ctx.scratch_block->atomProjection(), "atomProjection");
+        }
+    } else if (ctx.scratch_block) {
+        AG_WARN("ctx.scratch_block is non-null while ScratchBlockConstructionHP.enabled=false");
+        ok = false;
     }
 
     if (ctx.config->mtp_enabled && ctx.config->mtp_k > 0) {

@@ -295,6 +295,7 @@ struct EncoderLayerConstructionHP {
     int num_heads = 0;
     int num_kv_heads = 0;
     int head_dim = 0;
+    int rotary_dim = 0;
     int heads_per_kv_group = 0;
     int kv_dim = 0;
     int qkv_dim = 0;
@@ -320,6 +321,7 @@ struct EncoderSelfAttentionHP {
     int num_heads = 0;
     int num_kv_heads = 0;
     int head_dim = 0;
+    int rotary_dim = 0;
     int heads_per_kv_group = 0;
     int kv_dim = 0;
     int qkv_dim = 0;
@@ -784,6 +786,7 @@ inline EncoderLayerConstructionHP encoderLayerConstructionHP(
     view.num_heads = cfg.num_heads;
     view.num_kv_heads = cfg.num_kv_heads;
     view.head_dim = cfg.head_dim;
+    view.rotary_dim = cfg.rotary_dim;
     view.heads_per_kv_group = cfg.heads_per_kv_group;
     view.kv_dim = cfg.kv_dim;
     view.qkv_dim = cfg.qkv_dim;
@@ -825,6 +828,7 @@ inline EncoderSelfAttentionHP encoderSelfAttentionHP(
     view.num_heads = encoder_hp.num_heads;
     view.num_kv_heads = encoder_hp.num_kv_heads;
     view.head_dim = encoder_hp.head_dim;
+    view.rotary_dim = encoder_hp.rotary_dim;
     view.heads_per_kv_group = encoder_hp.heads_per_kv_group;
     view.kv_dim = encoder_hp.kv_dim;
     view.qkv_dim = encoder_hp.qkv_dim;

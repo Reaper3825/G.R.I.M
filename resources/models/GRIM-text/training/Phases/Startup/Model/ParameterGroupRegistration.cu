@@ -3,6 +3,7 @@
 #include "../../../../GRIM/grim_language_model_cuda.hpp"
 #include "../../../../Layers/Encoding/Encoding_GPU.hpp"
 #include "../../../../Shared/HyperParameters/HyperParameters_GPU.hpp"
+#include "../../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../../../Shared/Optimizers/OptimizerState_GPU.hpp"
 
@@ -29,6 +30,7 @@ using GRIM::ParamGroupType;
 using GRIM::Tensor;
 using GRIM::HyperParameters::ParameterGroupPrecision;
 using GRIM::HyperParameters::LanguageModelConfig;
+using GRIM::HyperParameters::scratchBlockConstructionHP;
 
 std::string tensorDebugSummary(const Tensor& tensor) {
     std::ostringstream oss;
@@ -414,19 +416,17 @@ void registerScratchBlockParameters(LanguageModel& model,
                                     Registrar& registrar,
                                     const LanguageModelConfig& config) {
     auto* scratch_block = model.getScratchBlockLayer();
+    const auto scratch_hp = scratchBlockConstructionHP(config);
 
-    if (!config.use_scratch_block) {
-        if (scratch_block && scratch_block->isEnabled()) {
-            throw std::runtime_error("[buildParameterGroups] ScratchBlock layer exists and is enabled while config.use_scratch_block=false");
+    if (!scratch_hp.enabled) {
+        if (scratch_block) {
+            throw std::runtime_error("[buildParameterGroups] ScratchBlock layer exists while ScratchBlockConstructionHP.enabled=false");
         }
         return;
     }
 
     if (!scratch_block) {
-        throw std::runtime_error("[buildParameterGroups] config.use_scratch_block=true but ScratchBlock layer is NULL");
-    }
-    if (!scratch_block->isEnabled()) {
-        throw std::runtime_error("[buildParameterGroups] ScratchBlock layer is present but disabled during startup registration");
+        throw std::runtime_error("[buildParameterGroups] ScratchBlockConstructionHP.enabled=true but ScratchBlock layer is NULL");
     }
 
     auto& atom_type_embeddings = scratch_block->atomTypeEmbeddings();

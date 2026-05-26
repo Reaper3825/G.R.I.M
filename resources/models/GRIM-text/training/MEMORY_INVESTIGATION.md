@@ -4,7 +4,7 @@
 
 ## Preallocated TrainingState Step Workspaces
 
-Allocation owner: `TrainingState::allocateStepDeviceWorkspaces()` in `Shared/TrainingState/TrainingStateGPU.cu`. `InitTrainingState.cu` and `InitInferenceState.cu` slice `HyperParameters::TrainingStateWorkspaceHP` from the finalized root config and pass that grouped workspace payload plus the primary stream; the runtime owner does not accept raw config.
+Allocation owner: `TrainingState::allocateStepDeviceWorkspaces()` in `Shared/TrainingState/TrainingStateGPU.cu`. `Startup/Model/ModelGpuAssembly.cu` slices `HyperParameters::TrainingStateWorkspaceHP` from the finalized root config in `Startup::initializeTrainingRuntime()` / `Startup::initializeInferenceRuntime()` and passes that grouped workspace payload plus the primary stream; the runtime owner does not accept raw config.
 
 All sizes use `batch_size * max_cached_seq_len` = 10 * 1024 = **10,240 tokens**.
 

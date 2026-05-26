@@ -442,9 +442,6 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
         if (!upload_device_vector(token_host, request.gpu_embedding.token_embeddings, "token embeddings"))
             return false;
     }
-    if (request.cpu_embedding.set_tokens) {
-        request.cpu_embedding.set_tokens(token_host, vocab_size, d_model);
-    }
 
     // ─── Encoder layers ───
     const auto* fb_layers = model_fb->encoder_layers();

@@ -151,7 +151,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ### 1.11 Startup Model GPU Assembly
 
-- [] **Phases/Startup/Model/ModelGpuAssembly.cu** (`LanguageModel::initGPU`) —
+- [] **Phases/Startup/Model/ModelGpuAssembly.cu** (`Startup::assembleGpuModel`) —
   - Startup/Model ownership is explicit: this source assembles durable GPU model layers after CUDA, streams, cuBLAS, and PBM are initialized.
   - Creates GPU encoder layers, EmbeddingLayer, LMHeadLayer, optional ReasoningHead, ExecutionBlock, DecodeTimeSlotSelector, DecodeTimeNumPolicy, and MTP heads.
   - `cfg.num_kv_heads` remains sourced from runtime JSON via grouped hyperparameter views, not compile-time defaults.
@@ -183,7 +183,8 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **DELETED**: `applyActivationQuantization()` declaration — unimplemented method for unimplemented feature, zero callers. Activation quantization config loading stays (Phase1 infrastructure), but no QuantizationLayer is wired to any forward path
   - **DELETED**: `activation_quantizer_` member — `std::unique_ptr<Quantization::QuantizationLayer>` that was never assigned, always nullptr
   - **DELETED**: `#include "Quantization_GPU.hpp"` — no longer needed after activation_quantizer_ removal
-  - **DELETED**: `LanguageModel::alibi_` member and `GrimEmbeddingStack::alibi_` wrapper ownership. `LanguageModel::initPBM()` initializes the model-level `PBM::PBMStateOwner` after `StreamController` exists; `PBMSpec` is only a non-owning attention view.
+  - **DELETED**: `LanguageModel::alibi_` member and the old `GrimEmbeddingStack` wrapper ownership. `LanguageModel::initPBM()` initializes the model-level `PBM::PBMStateOwner` after `StreamController` exists; `PBMSpec` is only a non-owning attention view.
+  - **DELETED**: `GrimEmbeddingStack`, `Matrix`, `LanguageModel::embedder_`, and `getEmbedderPtr()`. Durable token embedding ownership now lives only on `EmbeddingLayer`, and checkpoint save/load reads that device tensor directly with no parallel CPU embedding mirror.
   - **DELETED**: `getAlibiPtr()` accessor — zero callers, returned the dead `alibi_` member above
   - **NOTE (not fixed)**: `HardcodedPattern` enum is duplicated in `LanguageModelConfig` and `HardcodedStates_GPU.hpp` with `static_cast` bridge in Phase1. Fragile but diagnostic-only — defer unification.
 
@@ -382,9 +383,9 @@ Use this checklist to systematically audit each file in the order it's used duri
 
   **🔴 BUG A: ScratchBlock backward NEVER CALLED (parameters frozen) — [FIXED Issue #141]**
 
-  `AutogradTraining.cu` line 1507 guards ScratchBlock backward with:
+  Historical `AutogradTraining.cu` code guarded ScratchBlock backward with a layer-state check:
   ```cpp
-  if (ctx.scratch_block && ctx.scratch_block->isEnabled() &&
+  if (ctx.scratch_block && scratchBlockConstructionHP(*ctx.config).enabled &&
       intermediates.embedding_tensor.has_grad()) {
   ```
   But `intermediates.embedding_tensor` is a NON-LEAF tensor (dropout output). Its `grad_`

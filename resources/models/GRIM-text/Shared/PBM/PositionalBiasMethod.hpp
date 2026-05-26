@@ -49,11 +49,6 @@ struct PBMState {
     // RoPE state
     float* rope_inv_freq = nullptr;      // Device: [rotary_dim/2] inverse frequencies
     std::vector<float> rope_inv_freq_host;
-
-    // Grouped construction snapshot used for stale reuse detection and specs.
-    // HyperparameterGroupings owns the slice; PBMState only stores the durable
-    // snapshot that produced the allocated buffers.
-    PBMConstructionHP construction_hp{};
     
     // CUDA event recorded after async upload for cross-stream synchronization.
     // Consumers on a DIFFERENT stream must cudaStreamWaitEvent(their_stream, upload_event)
@@ -69,16 +64,14 @@ struct PBMState {
 // ═══════════════════════════════════════════════════════════════════════════
 
 struct PBMSpec {
-    // RoPE view (for Q,K rotation before attention)
+    // Borrowed RoPE/ALiBi device buffers (for Q,K rotation / score bias)
     const float* rope_inv_freq = nullptr;
-    int rotary_dim = 0;
-    
-    // ALiBi view (for attention bias during score computation)
     const float* alibi_slopes = nullptr;
-    int num_heads = 0;
-    
-    // GQA info
-    int num_kv_heads = 0;
+
+    // Readiness event recorded after async upload on the PBM init stream.
+    // Attention/runtime callers must wait on this event before borrowing the
+    // device buffers from a different stream.
+    cudaEvent_t upload_event = nullptr;
     
     // Valid flag
     bool valid = false;
@@ -201,15 +194,6 @@ inline const float* getRoPEInvFreq(const PBMState& state) {
                                  std::string(__FILE__) + ":" + std::to_string(__LINE__));
     }
     return state.rope_inv_freq;
-}
-
-inline int getRotaryDimension(const PBMState& state) {
-    requirePBMInitialized(state, "PBM::getRotaryDimension");
-    if (state.construction_hp.rotary_dim <= 0) {
-        throw std::runtime_error("PBM::getRotaryDimension: initialized state has invalid rotary_dim=" +
-                                 std::to_string(state.construction_hp.rotary_dim));
-    }
-    return state.construction_hp.rotary_dim;
 }
 
 } // namespace GRIM::PBM

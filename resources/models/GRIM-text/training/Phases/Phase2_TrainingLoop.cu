@@ -459,6 +459,8 @@ void validateTrainingForwardInputs(
     payload.validate(caller);
 
     const auto& cfg = model.getConfig();
+    const auto scratch_hp = GRIM::HyperParameters::scratchBlockConstructionHP(cfg);
+    const auto execution_hp = GRIM::HyperParameters::executionBlockConstructionHP(cfg);
     GRIM::Execution::validateExecutionPayload(
         payload,
         caller,
@@ -466,20 +468,20 @@ void validateTrainingForwardInputs(
         cfg.execution_block_num_ops,
         cfg.execution_block_num_steps);
 
-    if (!payload.teacher_steps.empty() && !cfg.execution_block_enabled) {
+    if (!payload.teacher_steps.empty() && !execution_hp.enabled) {
         std::cerr << "[Phase2] WARN: batch has teacher_steps while execution_block_enabled=false; "
                   << "training with plain cross-entropy over text tokens" << std::endl;
     }
 
-    if (cfg.execution_block_enabled) {
+    if (execution_hp.enabled) {
         if (!model.getExecutionBlockLayer()) {
             throw std::runtime_error(
                 std::string(caller) + ": execution_block_enabled but ExecutionBlock layer is null");
         }
         GRIM::ScratchBlockLayer* scratch_block = model.getScratchBlockLayer();
-        if (!scratch_block || !scratch_block->isEnabled()) {
+        if (!scratch_hp.enabled || !scratch_block) {
             throw std::runtime_error(
-                std::string(caller) + ": execution_block_enabled requires ScratchBlock enabled");
+                std::string(caller) + ": execution_block_enabled requires ScratchBlockConstructionHP.enabled=true and a constructed ScratchBlock layer");
         }
     }
 }

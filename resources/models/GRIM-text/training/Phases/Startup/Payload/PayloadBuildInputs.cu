@@ -29,11 +29,11 @@ PayloadBuildInputs derivePayloadBuildInputsOrThrow(const TrainingContext& ctx) {
     inputs.execution_block_num_steps = ctx.config.execution_block_num_steps;
     inputs.vocab_size                = ctx.config.vocab_size;
     inputs.train_mtp_k               = ctx.config.mtp_enabled ? ctx.config.mtp_k : 0;
-    if (ctx.data_info.actual_vocab_size > static_cast<std::uint32_t>(inputs.vocab_size)) {
+    if (inputs.vocab_size != static_cast<int>(ctx.data_info.actual_vocab_size)) {
         throw std::runtime_error(
-            "FATAL: PayloadBuildInputsReady actual_vocab_size=" +
+            "FATAL: PayloadBuildInputsReady runtime vocab mismatch: actual_vocab_size=" +
             std::to_string(ctx.data_info.actual_vocab_size) +
-            " exceeds model vocab_size=" + std::to_string(inputs.vocab_size));
+            " model vocab_size=" + std::to_string(inputs.vocab_size));
     }
 
     const auto layout = ctx.tokenizer->tokenLayout();

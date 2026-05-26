@@ -45,16 +45,6 @@ struct SerializationGpuEmbeddingWriteView {
 	DeviceWriteView token_embeddings;
 };
 
-struct SerializationCpuEmbeddingReadData {
-	std::vector<float> token_data;
-	int num_rows = 0;
-	int num_cols = 0;
-};
-
-struct SerializationCpuEmbeddingWriteOps {
-	std::function<void(const std::vector<float>& data, int rows, int cols)> set_tokens;
-};
-
 struct SerializationEncoderLayerReadView {
 	DeviceReadView attn_w_qkv;
 	DeviceReadView attn_b_qkv;

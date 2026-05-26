@@ -16,7 +16,6 @@ namespace GRIM::PBM {
 //   - ALiBi slopes device + host mirror
 //   - RoPE inverse frequencies device + host mirror
 //   - upload event for cross-stream synchronization
-//   - grouped construction HP snapshot
 //
 // This is model-level durable state. It is NOT TrainingState workspace, NOT
 // BatchPayload data, and NOT autograd tape state. Consumers borrow PBMSpec or

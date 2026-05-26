@@ -18,6 +18,7 @@
 #include "../../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
 #include "../TensorContract/TensorContract_GPU.hpp"
 #include "../TensorContract/ForwardIntermediates.hpp"
+#include "../HyperParameters/HyperparameterGroupings.hpp"
 #include "../VerboseLogging.hpp"
 
 #include <algorithm>
@@ -103,11 +104,25 @@ void ModelForwardRequest::validate(const char* caller) const {
 void executeModelForward(const ModelForwardRequest& request,
                          ModelForwardRuntimePayload& runtime_payload) {
     request.validate("executeModelForward");
+    const auto* cfg = request.config;
+    const auto scratch_hp = HyperParameters::scratchBlockConstructionHP(*cfg);
+    const auto execution_hp = HyperParameters::executionBlockConstructionHP(*cfg);
+    const auto reasoning_hp = HyperParameters::reasoningHeadConstructionHP(*cfg);
+    const bool scratch_block_active = scratch_hp.enabled && request.scratch_block != nullptr;
+    const bool execution_block_active = execution_hp.enabled && request.execution_block != nullptr;
+    const bool reasoning_head_active = reasoning_hp.enabled && request.reasoning_head != nullptr;
+
+    if (scratch_hp.enabled && !request.scratch_block) {
+        throw std::runtime_error("ModelForward: ScratchBlockConstructionHP.enabled=true but request.scratch_block is NULL");
+    }
+    if (!scratch_hp.enabled && request.scratch_block) {
+        throw std::runtime_error("ModelForward: request.scratch_block is non-null while ScratchBlockConstructionHP.enabled=false");
+    }
+
     runtime_payload.validate(
         "executeModelForward",
-        request.execution_block && request.config->execution_block_enabled);
+        execution_block_active);
 
-    const auto* cfg = request.config;
     auto& runtime = runtime_payload;
     auto& intermediates = *runtime.forward_outputs;
     const auto& payload = *request.payload;
@@ -163,7 +178,7 @@ void executeModelForward(const ModelForwardRequest& request,
     intermediates.embedding_tensor = std::move(emb_output);
     MFWD_INFO("Step 1: Token embedding complete, shape=[" << total_tokens << ", " << cfg->d_model << "]");
 
-    if (request.scratch_block && request.scratch_block->isEnabled()) {
+    if (scratch_block_active) {
         MFWD_INFO("Step 1.5: Running all-token ScratchBlock vector gate...");
         (void)cudaGetLastError();
 
@@ -175,8 +190,8 @@ void executeModelForward(const ModelForwardRequest& request,
         }
 
         const bool exec_first_type_only =
-            cfg->execution_block_enabled && cfg->scratch_block_execution_first_type_only;
-        if (cfg->execution_block_enabled && !exec_first_type_only) {
+            execution_hp.enabled && cfg->scratch_block_execution_first_type_only;
+        if (execution_hp.enabled && !exec_first_type_only) {
             throw std::runtime_error(
                 "executeModelForward: execution_block_enabled requires "
                 "scratch_block_execution_first_type_only=true to prevent value leakage "
@@ -395,7 +410,7 @@ void executeModelForward(const ModelForwardRequest& request,
 
         int exec_layer = -1;
         int exec_K = 0;
-        if (request.execution_block && cfg->execution_block_enabled && request.scratch_block && request.scratch_block->isEnabled()) {
+        if (execution_block_active && scratch_block_active) {
             exec_layer = cfg->execution_block_layer;
             if (exec_layer < 0) exec_layer = num_layers - 2;
             if (exec_layer < 0) exec_layer = 0;
@@ -759,8 +774,7 @@ void executeModelForward(const ModelForwardRequest& request,
 
     intermediates.logits_tensor = std::move(logits_tensor);
 
-    if (request.reasoning_head && request.scratch_block && request.scratch_block->isEnabled()
-        && !cfg->execution_block_enabled) {
+    if (reasoning_head_active && scratch_block_active && !execution_hp.enabled) {
         int num_atoms = 0;
         cudaMemcpyAsync(&num_atoms, request.scratch_block->numAtomsBuffer(),
                         sizeof(int), cudaMemcpyDeviceToHost, request.stream);

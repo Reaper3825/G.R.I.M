@@ -4,9 +4,9 @@ Structured reasoning layer for atom-aware hidden-state injection. See [Tokenizer
 
 ## Ownership
 
-`ScratchBlockLayer` is durable model topology (Pattern B), owned by `LanguageModel::scratch_block_layer_` and assembled in `training/Phases/Startup/Model/ModelGpuAssembly.cu` inside `LanguageModel::initGPU(weight_init_seed)`.
+`ScratchBlockLayer` is durable model topology (Pattern B), owned by `LanguageModel::scratch_block_layer_` and assembled in `training/Phases/Startup/Model/ModelGpuAssembly.cu` inside `GRIMText::Training::Startup::assembleGpuModel(model, weight_init_seed)`.
 
-`initTrainingState()` must not construct, configure, reset, or allocate `ScratchBlockLayer`. TrainingState owns only reusable runtime cache tensors. If `config.use_scratch_block=true`, startup model assembly creates the layer before parameter registration; `ParameterGroupRegistration` fails loud if the configured layer is missing or disabled.
+Startup runtime allocation must not construct, configure, reset, or allocate `ScratchBlockLayer`. TrainingState owns only reusable runtime cache tensors. If `HyperParameters::scratchBlockConstructionHP(config).enabled=true`, startup model assembly creates the layer before parameter registration; `ParameterGroupRegistration` fails loud if the configured layer is missing. Runtime code must not toggle ScratchBlock or ask `LanguageModel` whether it is enabled; it reads the authored grouping and treats layer presence as a startup invariant.
 
 Static construction values come from `HyperParameters::scratchBlockConstructionHP()` in `Shared/HyperParameters/HyperparameterGroupings.hpp`. Runtime startup resources are passed separately: the grouping does **not** own `cudaStream_t`; model assembly supplies an explicit init stream to the layer constructor.
 

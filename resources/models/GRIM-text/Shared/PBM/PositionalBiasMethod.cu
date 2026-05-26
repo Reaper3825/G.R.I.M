@@ -31,19 +31,17 @@ bool checkCuda(cudaError_t err, const char* what) {
     return false;
 }
 
-bool samePBMConstructionHP(const PBMConstructionHP& a,
-                           const PBMConstructionHP& b) {
-    return a.num_heads == b.num_heads &&
-           a.num_kv_heads == b.num_kv_heads &&
-           a.head_dim == b.head_dim &&
-           a.rotary_dim == b.rotary_dim &&
-           a.max_seq_len == b.max_seq_len &&
-           a.rope_base_seq_len == b.rope_base_seq_len &&
-           a.alibi_min_locality_distance == b.alibi_min_locality_distance &&
-           a.alibi_slope_exponent == b.alibi_slope_exponent &&
-           a.alibi_max_bias == b.alibi_max_bias &&
-           a.rope_theta == b.rope_theta &&
-           a.rope_scaling == b.rope_scaling;
+void requirePBMResourcesReady(const PBMState& state, const char* caller) {
+    requirePBMInitialized(state, caller);
+    if (!state.alibi_slopes || !state.rope_inv_freq || !state.upload_event) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": initialized PBM state has NULL resource pointer/event");
+    }
+}
+
+bool samePBMBufferContents(const std::vector<float>& lhs,
+                           const std::vector<float>& rhs) {
+    return lhs == rhs;
 }
 
 void requireRoPELaunchGeometry(const GRIM::Batching::BatchPayload& payload,
@@ -401,11 +399,6 @@ bool initializePBM(const PBMConstructionHP& hp,
         }
     }
     
-    // ─────────────────────────────────────────────────────────────────────────
-    // Step 5: Store grouped HP snapshot for stale reuse detection
-    // ─────────────────────────────────────────────────────────────────────────
-    state.construction_hp = hp;
-    
     // Record event after async upload for cross-stream safety
     if (runtime.stream) {
         if (state.upload_event == nullptr) {
@@ -425,9 +418,9 @@ bool initializePBM(const PBMConstructionHP& hp,
     state.initialized = true;
     
     std::cout << kTag << " ✓ Hybrid ALiBi+RoPE initialized successfully" << std::endl;
-    std::cout << "    ALiBi: " << state.construction_hp.num_heads << " heads, slopes @ "
+    std::cout << "    ALiBi: " << hp.num_heads << " heads, slopes @ "
               << (void*)state.alibi_slopes << std::endl;
-    std::cout << "    RoPE:  rotary_dim=" << state.construction_hp.rotary_dim
+    std::cout << "    RoPE:  rotary_dim=" << hp.rotary_dim
               << ", inv_freq @ " << (void*)state.rope_inv_freq << std::endl;
     
     return true;
@@ -437,12 +430,28 @@ bool ensurePBM(const PBMConstructionHP& hp,
                PBMState& state,
                PBMRuntimeOptions runtime) {
     GRIM::PBM::requirePBMConstructionShape(hp, "PBM::ensurePBM");
-    // Check if re-initialization needed using the grouped HP snapshot.
-    const bool config_match = state.initialized &&
-                              samePBMConstructionHP(state.construction_hp, hp);
-    
-    if (config_match) {
-        return true;  // Already initialized with matching config
+    if (state.initialized) {
+        requirePBMResourcesReady(state, "PBM::ensurePBM");
+
+        PBMRuntimeOptions compare_runtime = runtime;
+        compare_runtime.verbose = false;
+
+        std::vector<float> expected_alibi_slopes;
+        if (!computeAlibiSlopes(hp, compare_runtime, expected_alibi_slopes)) {
+            return false;
+        }
+
+        std::vector<float> expected_rope_inv_freq;
+        if (!computeRoPEInvFreq(hp, compare_runtime, expected_rope_inv_freq)) {
+            return false;
+        }
+
+        const bool config_match =
+            samePBMBufferContents(state.alibi_slopes_host, expected_alibi_slopes) &&
+            samePBMBufferContents(state.rope_inv_freq_host, expected_rope_inv_freq);
+        if (config_match) {
+            return true;
+        }
     }
     
     return initializePBM(hp, state, runtime);
@@ -466,27 +475,18 @@ void releasePBM(PBMState& state) {
     state.alibi_slopes_host.shrink_to_fit();
     state.rope_inv_freq_host.clear();
     state.rope_inv_freq_host.shrink_to_fit();
-    
-    state.construction_hp = PBMConstructionHP{};
+
     state.initialized = false;
 }
 
 PBMSpec getPBMSpec(const PBMState& state) {
     PBMSpec spec{};
 
-    requirePBMInitialized(state, "PBM::getPBMSpec");
-    GRIM::PBM::requirePBMConstructionShape(state.construction_hp, "PBM::getPBMSpec");
-    if (state.construction_hp.num_heads <= 0 || state.construction_hp.num_kv_heads <= 0) {
-        throw std::runtime_error("PBM::getPBMSpec: initialized state has invalid heads num_heads=" +
-                                 std::to_string(state.construction_hp.num_heads) +
-                                 " num_kv_heads=" + std::to_string(state.construction_hp.num_kv_heads));
-    }
+    requirePBMResourcesReady(state, "PBM::getPBMSpec");
 
     spec.rope_inv_freq = getRoPEInvFreq(state);
-    spec.rotary_dim = getRotaryDimension(state);
     spec.alibi_slopes = getAlibiSlopes(state);
-    spec.num_heads = state.construction_hp.num_heads;
-    spec.num_kv_heads = state.construction_hp.num_kv_heads;
+    spec.upload_event = state.upload_event;
     spec.valid = true;
     
     return spec;

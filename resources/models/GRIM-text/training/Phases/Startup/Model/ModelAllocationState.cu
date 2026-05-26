@@ -1,5 +1,6 @@
 #include "ModelAllocationState.hpp"
 
+#include "ModelGpuAssembly.hpp"
 #include "ParameterGroupRegistration.hpp"
 
 #include "../../Phase1_Startup.hpp"
@@ -71,15 +72,15 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     }
 
     logger.log("Initializing cuBLAS handle...");
-    model->initCuBLASHandle();
+    GRIMText::Training::Startup::initializeCuBLASHandle(*model);
     logger.log("✓ cuBLAS handle initialized with Tensor Core acceleration");
 
     logger.log("Initializing RoPE (required before encoder construction)...");
-    model->initPBM();
+    GRIMText::Training::Startup::initializePBM(*model);
     logger.log("✓ RoPE initialized");
 
     logger.log("Assembling GPU model layers with weight_init_seed=" + std::to_string(weight_init_seed) + "...");
-    model->initGPU(weight_init_seed);
+    GRIMText::Training::Startup::assembleGpuModel(*model, weight_init_seed);
     logger.log("✓ GPU model layers fully assembled");
 
     logger.log("Registering trainable parameter groups...");
@@ -88,11 +89,11 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
 
     if (config.execution_mode == GRIM::HyperParameters::ModelExecutionMode::TRAINING) {
         logger.log("Initializing TrainingState runtime workspaces...");
-        model->initTrainingState();
+        GRIMText::Training::Startup::initializeTrainingRuntime(*model);
         logger.log("✓ TrainingState fully initialized");
     } else if (config.execution_mode == GRIM::HyperParameters::ModelExecutionMode::INFERENCE) {
         logger.log("Initializing inference runtime workspaces...");
-        model->initInferenceState();
+        GRIMText::Training::Startup::initializeInferenceRuntime(*model);
         logger.log("✓ Inference runtime fully initialized");
     } else {
         throw std::runtime_error("initializeModel: unsupported execution_mode");
@@ -162,10 +163,11 @@ void ModelAllocated(TrainingContext& ctx) {
     using GRIM::Logging::ModuleId;
 
     ctx.rng = Internal::initializeRNG(ctx.config, *ctx.logging.logger);
-    if (ctx.data_info.actual_vocab_size > static_cast<std::uint32_t>(ctx.config.vocab_size)) {
+    if (ctx.config.vocab_size != static_cast<int>(ctx.data_info.actual_vocab_size)) {
         throw std::runtime_error(
-            "FATAL: GRMT actual_vocab_size=" + std::to_string(ctx.data_info.actual_vocab_size) +
-            " exceeds configured model vocab_size=" + std::to_string(ctx.config.vocab_size));
+            "FATAL: runtime model vocab_size drifted from startup artifact fact: actual_vocab_size=" +
+            std::to_string(ctx.data_info.actual_vocab_size) +
+            " config.vocab_size=" + std::to_string(ctx.config.vocab_size));
     }
 
     try {

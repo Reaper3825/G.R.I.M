@@ -11,6 +11,7 @@
 #include "../../Shared/Sampling/Sampling.hpp"
 #include "../../Shared/UnigramByte/AtomTable.hpp"
 #include "../../Shared/Execution/DecodeTimeNumPolicy.hpp"
+#include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -198,17 +199,28 @@ GRIM::GeneratedSequence generateOneSequence(
 
     auto& generation_state = model.getGenerationState();
     generation_state.resetSession();
-    const bool selector_active = config.selector_enabled
+
+    const auto scratch_hp = GRIM::HyperParameters::scratchBlockConstructionHP(config);
+    const auto execution_hp = GRIM::HyperParameters::executionBlockConstructionHP(config);
+    const auto selector_hp = GRIM::HyperParameters::decodeTimeSelectorConstructionHP(config);
+    GRIM::ScratchBlockLayer* scratch_block_layer = model.getScratchBlockLayer();
+    if (scratch_hp.enabled && !scratch_block_layer) {
+        throw std::runtime_error("Phase2 payload inference: ScratchBlockConstructionHP.enabled=true but ScratchBlock layer is NULL");
+    }
+    if (!scratch_hp.enabled && scratch_block_layer) {
+        throw std::runtime_error("Phase2 payload inference: ScratchBlock layer exists while ScratchBlockConstructionHP.enabled=false");
+    }
+
+    const bool selector_active = selector_hp.enabled
         && model.getDecodeTimeSlotSelectorLayer() != nullptr
         && model.getDecodeTimeNumPolicy() != nullptr
-        && config.execution_block_enabled
-        && model.getScratchBlockLayer() != nullptr
-        && model.isScratchBlockEnabled()
+        && execution_hp.enabled
+        && scratch_hp.enabled
+        && scratch_block_layer != nullptr
         && generation_state.has_exec_memory;
     if (!selector_active) {
         const bool scratchblock_generation_active = cfg.enable_scratchblock_reasoning &&
-                                                    config.use_scratch_block &&
-                                                    model.isScratchBlockEnabled();
+                                                    scratch_hp.enabled;
         if (scratchblock_generation_active) {
             const int int_tid = GRIM::Tokenizer::atomTypeToTokenId(GRIM::Tokenizer::AtomType::ATOM_INT);
             const int float_tid = GRIM::Tokenizer::atomTypeToTokenId(GRIM::Tokenizer::AtomType::ATOM_FLOAT);
@@ -224,8 +236,7 @@ GRIM::GeneratedSequence generateOneSequence(
     GRIM::Sampling::SamplingPipeline pipeline(sampling_cfg);
 
     const bool scratchblock_active = cfg.enable_scratchblock_reasoning &&
-                                     config.use_scratch_block &&
-                                     model.isScratchBlockEnabled();
+                                     scratch_hp.enabled;
 
     auto runSharedForwardForCurrentSequence = [&](const GRIM::Batching::BatchPayload& active_payload) {
         validateInferenceForwardPayload(model, active_payload, "generateOneSequence");
@@ -252,7 +263,7 @@ GRIM::GeneratedSequence generateOneSequence(
         request.gpu_encoder = &model.getGpuEncoder();
         request.embedding_layer = model.getEmbeddingLayer();
         request.lm_head = model.getLmHeadLayer();
-        request.scratch_block = model.getScratchBlockLayer();
+        request.scratch_block = scratch_hp.enabled ? scratch_block_layer : nullptr;
         request.reasoning_head = model.getReasoningHeadLayer();
         request.execution_block = model.getExecutionBlockLayer();
         request.cublas_handle = training_state.cublas_handle.get();
@@ -321,15 +332,15 @@ GRIM::GeneratedSequence generateOneSequence(
             if (!generation_state.decode_selector.valid) {
                 std::fprintf(stderr,
                     "[Selector Debug] step=%d selector_enabled=%d selectorLayer=%d numPolicy=%d "
-                    "exec_block_enabled=%d scratchLayer=%d scratchEnabled=%d has_exec_mem=%d "
+                    "exec_block_enabled=%d scratchLayer=%d scratchConfigured=%d has_exec_mem=%d "
                     "decode_selector_valid=%d\n",
                     step,
                     static_cast<int>(config.selector_enabled),
                     static_cast<int>(model.getDecodeTimeSlotSelectorLayer() != nullptr),
                     static_cast<int>(model.getDecodeTimeNumPolicy() != nullptr),
-                    static_cast<int>(config.execution_block_enabled),
-                    static_cast<int>(model.getScratchBlockLayer() != nullptr),
-                    static_cast<int>(model.isScratchBlockEnabled()),
+                    static_cast<int>(execution_hp.enabled),
+                    static_cast<int>(scratch_block_layer != nullptr),
+                    static_cast<int>(scratch_hp.enabled),
                     static_cast<int>(generation_state.has_exec_memory),
                     static_cast<int>(generation_state.decode_selector.valid));
                 throw std::runtime_error(

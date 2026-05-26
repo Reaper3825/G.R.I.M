@@ -30,7 +30,6 @@ struct SerializationLoadReport {
 struct SerializationSaveSources {
 	SerializationModelConfigView config;
 	SerializationGpuEmbeddingReadView gpu_embedding;
-	SerializationCpuEmbeddingReadData cpu_embedding;
 	std::vector<SerializationEncoderLayerReadView> encoder_layers;
 	SerializationLMHeadReadView lm_head;
 	SerializationScratchBlockReadView scratch_block;
@@ -52,7 +51,6 @@ struct SerializationLoadRequest {
 	CheckpointCapabilityRequirements capabilities;
 	SerializationLoadReport report;
 	SerializationGpuEmbeddingWriteView gpu_embedding;
-	SerializationCpuEmbeddingWriteOps cpu_embedding;
 	std::vector<SerializationEncoderLayerWriteView> encoder_layers;
 	SerializationLMHeadWriteView lm_head;
 	SerializationScratchBlockWriteView scratch_block;

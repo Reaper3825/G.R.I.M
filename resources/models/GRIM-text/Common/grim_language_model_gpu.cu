@@ -14,13 +14,11 @@
 #include <memory>
 #include <string>
 #include <algorithm>
-#include <cmath>
 #include <cstring>
 #include <stdexcept>
 #include <numeric>
 #include <fstream>
 #include <sstream>
-#include <random>
 #include <limits>
 #include <functional>
 #include <utility>
@@ -46,16 +44,38 @@ namespace GRIM {
 
 GPUGrimEncoder& LanguageModel::getGpuEncoder() {
     if (!gpu_encoder_) {
-        throw std::runtime_error("GPU encoder not initialized - call initGPU() first");
+        throw std::runtime_error("GPU encoder not initialized - complete Startup::assembleGpuModel() first");
     }
     return *gpu_encoder_;
 }
 
 const GPUGrimEncoder& LanguageModel::getGpuEncoder() const {
     if (!gpu_encoder_) {
-        throw std::runtime_error("GPU encoder not initialized - call initGPU() first");
+        throw std::runtime_error("GPU encoder not initialized - complete Startup::assembleGpuModel() first");
     }
     return *gpu_encoder_;
+}
+
+bool LanguageModel::isPBMInitialized() const {
+    return pbm_owner_.initialized() &&
+           pbm_spec_initialized_ && pbm_spec_.valid &&
+           pbm_spec_.rope_inv_freq != nullptr &&
+           pbm_spec_.alibi_slopes != nullptr &&
+           pbm_spec_.upload_event != nullptr;
+}
+
+const PBM::PBMSpec& LanguageModel::getPBMSpec() const {
+    if (!isPBMInitialized()) {
+        throw std::runtime_error("LanguageModel::getPBMSpec: PBM is not initialized");
+    }
+    return pbm_spec_;
+}
+
+const PBM::PBMState& LanguageModel::getPBMState() const {
+    if (!isPBMInitialized()) {
+        throw std::runtime_error("LanguageModel::getPBMState: PBM is not initialized");
+    }
+    return pbm_owner_.state();
 }
 
 LanguageModel::MTPHead* LanguageModel::getMtpHead(int k) {
@@ -122,44 +142,6 @@ Vector Vector::operator*(float scalar) const {
     return result;
 }
 
-Matrix::Matrix(int rows, int cols, float init_val, bool random) 
-    : num_rows(rows), num_cols(cols)
-{
-    this->rows.resize(rows, Vector(cols, init_val));
-    if (random) {
-        std::mt19937 gen(42);
-        float scale = std::sqrt(2.f / (rows + cols));
-        std::normal_distribution<float> dist(0.f, scale);
-        for (auto& row : this->rows) {
-            for (auto& v : row.data) {
-                v = dist(gen);
-            }
-        }
-    }
-}
-
-Vector& Matrix::operator[](size_t idx) { return rows[idx]; }
-
-const Vector& Matrix::operator[](size_t idx) const { return rows[idx]; }
-
-//======================================================//
-//  Component Implementations with CUDA Kernels
-//======================================================//
-
-// GrimEmbeddingStack implementation - uses public members directly
-GrimEmbeddingStack::GrimEmbeddingStack(int vocab_size, int d_model, int max_seq_len)
-    : vocab_size_(vocab_size),
-      d_model_(d_model),
-      max_seq_len_(max_seq_len)
-{
-    token_embed = Matrix(vocab_size, d_model, 0.0f, true);
-    // NOTE: Durable GPU embedding tensors are assembled by the Startup/Model allocation module.
-}
-
-const Matrix& GrimEmbeddingStack::getTokenEmbeddings() const {
-    return token_embed;
-}
-
 
 
 //======================================================//
@@ -169,24 +151,17 @@ const Matrix& GrimEmbeddingStack::getTokenEmbeddings() const {
 LanguageModel::LanguageModel(const HyperParameters::LanguageModelConfig& config)
     : config_(config)
 {
-    // 1. Create embedding layer
-    embedder_ = std::make_unique<GrimEmbeddingStack>(
-        config_.vocab_size,
-        config_.d_model,
-        config_.max_seq_len
-    );
-    
-    // Positional-bias device state is initialized by initPBM() after
+    // Positional-bias device state is initialized by Phase1 startup PBM bootstrap after
     // StreamController exists. The constructor only creates CPU-side model
     // topology and must not allocate CUDA PBM resources.
     
-    // NOTE: initGPU() is deliberately NOT called here anymore!
+    // NOTE: Startup::assembleGpuModel() is deliberately NOT called here anymore!
     // The initialization order MUST be:
     //   1. CUDA device context (cudaSetDevice)
     //   2. LanguageModel constructor (this)
     //   3. StreamController initialization
-    //   4. initPBM() with the StreamController primary stream
-    //   5. initGPU() explicitly called by Phase1
+    //   4. Phase1 startup PBM initialization with the StreamController primary stream
+    //   5. Startup::assembleGpuModel(*model, weight_init_seed) explicitly called by Phase1
     // This ensures StreamController exists before GPU encoder tries to use it.
 #ifdef USE_CUDA
     if (!config_.use_gpu) {
@@ -196,24 +171,6 @@ LanguageModel::LanguageModel(const HyperParameters::LanguageModelConfig& config)
 }
 
 LanguageModel::~LanguageModel() = default;
-
-//======================================================//
-//  ScratchBlock Helper Methods
-//======================================================//
-
-void LanguageModel::setScratchBlockEnabled(bool enabled) {
-    if (!scratch_block_layer_) {
-        if (enabled) {
-            throw std::runtime_error("setScratchBlockEnabled: ScratchBlock layer is not initialized");
-        }
-        return;
-    }
-    scratch_block_layer_->setEnabled(enabled);
-}
-
-bool LanguageModel::isScratchBlockEnabled() const {
-    return scratch_block_layer_ && scratch_block_layer_->isEnabled();
-}
 
 } // namespace GRIM
 

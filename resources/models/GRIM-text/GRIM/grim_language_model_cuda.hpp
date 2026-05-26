@@ -13,8 +13,6 @@
 #include <memory>
 #include <functional>
 #include <utility>
-#include <random>
-#include <cmath>
 #include <cstdint>
 #include <cstddef>
 
@@ -53,6 +51,18 @@
 #endif
 
 namespace GRIM {
+class LanguageModel;
+}
+
+namespace GRIMText {
+namespace Training {
+namespace Startup {
+struct ModelAssemblyAccess;
+} // namespace Startup
+} // namespace Training
+} // namespace GRIMText
+
+namespace GRIM {
 
 //======================================================//
 //  Forward Declarations
@@ -82,20 +92,6 @@ public:
     Vector operator*(float scalar) const;
 };
 
-// Matrix type - minimal definition
-class Matrix {
-public:
-    std::vector<Vector> rows;
-    int num_rows;
-    int num_cols;
-    
-    Matrix() = default;
-    Matrix(int rows, int cols, float init_val = 0.0f, bool random = false);
-    
-    Vector& operator[](size_t idx);
-    const Vector& operator[](size_t idx) const;
-};
-
 //======================================================//
 //  Configuration ownership
 //
@@ -109,7 +105,7 @@ public:
 //  This header MUST NOT redeclare any of those fields. The encoder
 //  consumes grouped construction views derived from LanguageModelConfig;
 //  the only thing genuinely owned here is the construction-binding struct below —
-//  borrowed startup resources that are created at initGPU() time and have
+//  borrowed startup resources that are created during startup GPU model assembly and have
 //  no place in a config object or per-forward request.
 //======================================================//
 
@@ -128,23 +124,6 @@ struct EncoderConstructionBindings {
     cudaStream_t init_stream = nullptr;
 };
 #endif
-
-// GrimEmbeddingStack
-// NOTE: Durable GPU embedding layers are assembled by the Startup/Model allocation module.
-class GrimEmbeddingStack {
-public:
-    GrimEmbeddingStack(int vocab_size, int d_model, int max_seq_len);
-    const Matrix& getTokenEmbeddings() const;
-    
-    // Public members needed by GPU code
-    Matrix token_embed;        // Token embedding matrix [vocab_size x d_model]
-    // NOTE: GPU embedding tensors are owned by EmbeddingLayer after startup model assembly.
-    
-private:
-    int vocab_size_;
-    int d_model_;
-    int max_seq_len_;
-};
 
 //======================================================//
 //  Generated Sequence
@@ -168,13 +147,6 @@ struct GeneratedSequence {
 // Consumers should include that header directly.
 
 //======================================================//
-//  Forward Declarations - Classes Defined Later
-//======================================================//
-
-class EncoderLayer;
-struct TrainingState;  // Forward declare for methods that return references
-
-//======================================================//
 //  Parameter Group for Training
 //  (Defined in TensorContract_GPU.hpp - included above)
 //======================================================//
@@ -187,23 +159,10 @@ struct TrainingState;  // Forward declare for methods that return references
 
 class LanguageModel {
 public:
-    struct ModelStats {
-        size_t total_params = 0;
-        size_t embedding_params = 0;
-        size_t encoder_params = 0;
-        size_t lm_head_params = 0;
-        size_t scratchblock_params = 0;  // Atom type embeddings + projection
-        float model_size_mb = 0.0f;
-    };
-
     // Constructor / Destructor
     explicit LanguageModel(const HyperParameters::LanguageModelConfig& config);
     ~LanguageModel();
-    
-    void initCuBLASHandle();   // Initialize cuBLAS handle only (MUST be called before initGPU)
-    void initPBM();            // Initialize PBM (ALiBi+RoPE hybrid) - MUST be called before initGPU
-    void initTrainingState();  // Initialize training runtime GPU workspaces
-    void initInferenceState(); // Initialize inference state (allocate GPU buffers WITHOUT gradients)
+
     // backward() and zeroGrad() DELETED (Rule 26).
     // Backward: Phase2 runs explicit shared forward, then
     // GRIM::Autograd::computeAutogradLoss() + executeAutogradBackward().
@@ -231,18 +190,11 @@ public:
 #endif
 
     // Utilities
-    ModelStats getModelStats() const;
     bool save(const std::string& path);
     bool load(const std::string& path);
     
     // Config access
     const HyperParameters::LanguageModelConfig& getConfig() const { return config_; }
-    
-    // GPU methods
-    void initGPU(uint64_t weight_init_seed);
-    
-    // Helper accessors for GPU implementation
-    GrimEmbeddingStack* getEmbedderPtr() { return embedder_.get(); }
     
 #ifdef USE_CUDA
     // GPU runtime accessors - return references to owned objects (fail loud if not initialized)
@@ -250,11 +202,10 @@ public:
     const GPUGrimEncoder& getGpuEncoder() const;
 
     
-    // ScratchBlock reasoning layer access
+    // ScratchBlock reasoning layer access. Presence is config-gated by
+    // HyperParameters::scratchBlockConstructionHP(config_); do not runtime-toggle it.
     ScratchBlockLayer* getScratchBlockLayer() { return scratch_block_layer_.get(); }
     const ScratchBlockLayer* getScratchBlockLayer() const { return scratch_block_layer_.get(); }
-    void setScratchBlockEnabled(bool enabled);
-    bool isScratchBlockEnabled() const;
 
     // Embedding layer access (Pattern B: persistent, self-allocating, owns token + pos weights)
     EmbeddingLayer* getEmbeddingLayer() { return embedding_layer_.get(); }
@@ -292,8 +243,9 @@ public:
 #endif
     
 private:
+    friend struct GRIMText::Training::Startup::ModelAssemblyAccess;
+
     HyperParameters::LanguageModelConfig config_;
-    std::unique_ptr<GrimEmbeddingStack> embedder_;
     
 #ifdef USE_CUDA
     // GPU runtime ownership (StreamController model - proper typed ownership, no void*)
@@ -305,10 +257,10 @@ private:
     GenerationState generation_state_;
     PBM::PBMStateOwner pbm_owner_;                   // Durable model-level ALiBi/RoPE buffers
     std::vector<ParameterGroup> parameter_groups_;  // Parameter groups for optimizer
-    PBM::PBMSpec pbm_spec_{};                       // Non-owning view into pbm_owner_
+    PBM::PBMSpec pbm_spec_{};                       // Non-owning buffer/event view into pbm_owner_
     bool pbm_spec_initialized_ = false;
     
-    // ScratchBlock reasoning layer (togglable)
+    // ScratchBlock reasoning layer (config-gated durable topology)
     std::unique_ptr<ScratchBlockLayer> scratch_block_layer_;
 
     // Embedding layer (Pattern B: persistent, self-allocating, owns token + position weights)

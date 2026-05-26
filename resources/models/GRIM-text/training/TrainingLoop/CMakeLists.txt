@@ -324,7 +324,6 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Common/ModelStats.cu
     ../../Common/ScaleBuffer.cu
     ../Forward_GPU.cu
-    ../InitTrainingState.cu
     ../Phases/Startup/Model/ModelGpuAssembly.cu
     ../../Shared/TrainingState/CublasHandleOwner_GPU.cu
     ../../Shared/TrainingState/DeviceAllocation_GPU.cu
@@ -358,7 +357,6 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Layers/FlashAttention/EncoderSelfAttention_GPU.cu
     ../../Layers/ScratchBlock/ScratchBlockReasoning_GPU.cu
     ../../Shared/Sampling/Sampling.cu
-    ../../Layers/InitInferenceState/InitinferenceState.cu
     ../../Shared/TensorConversion/TensorConversion.cu
     ${GRIM_TENSORCONTRACT_CU}
     ../../Layers/FeedForward/Feed_Forward_GPU.cu
