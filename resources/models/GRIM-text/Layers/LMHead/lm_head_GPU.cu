@@ -8,8 +8,9 @@
 //
 //  Forward: RMSNorm → optional centering → optional PC1 projection → logits = input @ W^T → bias
 //
-//  ISSUE #56 pattern: Intermediate tensors kept alive via caller-owned
-//  storage so autograd graph survives until backward().
+//  ISSUE #56 pattern: The LM head returns any materialized LM-input tensor so
+//  the caller can keep tape-local state alive without the layer mutating a
+//  caller-owned runtime sink.
 //
 //  PyTorch equivalent:
 //    class LMHead(nn.Module):
@@ -165,10 +166,11 @@ LMHeadLayer& LMHeadLayer::operator=(LMHeadLayer&& other) noexcept {
 //  Forward Pass
 //======================================================//
 
-Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
-                            const Batching::BatchPayload& payload,
-                            cudaStream_t stream, cublasHandle_t cublas_handle,
-                            const LMHeadParameterViews* parameter_views) {
+LMHeadForwardResult LMHeadLayer::forward(const Tensor& input,
+                                         const Batching::BatchPayload& payload,
+                                         cudaStream_t stream, cublasHandle_t cublas_handle,
+                                         const LMHeadParameterViews* parameter_views) {
+    LMHeadForwardResult result;
     const Tensor& lm_weights =
         (parameter_views && parameter_views->weights) ? *parameter_views->weights : weights_;
     const Tensor& lm_bias =
@@ -273,11 +275,13 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
         if (rows_per_sequence <= 1) {
             throw std::runtime_error("LMHeadLayer::forward: center_hidden_states requires rows_per_sequence > 1; single-token decode cannot column-center hidden states without erasing the signal");
         }
-        // Column-center h within each sequence: removes common direction across
-        // valid positions without coupling samples inside the batch or including
-        // PAD activations in the mean (Issue #125).
+        // Column-center h with a strict-past causal prefix mean inside each
+        // sequence: removes the running shared direction across valid positions
+        // without coupling samples inside the batch, including PAD activations
+        // in the mean, erasing token 0, or leaking future tokens into the
+        // current LM position.
         // Row-centering moved to W at STEP 2 (April 2026 reformulation).
-        centered_hidden_for_pc1 = autograd::center_columns_by_sequence_lengths(
+        centered_hidden_for_pc1 = autograd::center_columns_by_causal_prefix_lengths(
             *current_input, payload.seq_lengths, batch_size, rows_per_sequence, stream);
         matmul_input = &centered_hidden_for_pc1;
     }
@@ -287,22 +291,21 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
         // g is RMS-normalized (g·g = D), so the projection coefficient is (h·g)/D:
         //   h̃[t] = h[t] - (h[t]·g / D) * g     where g = PC1(H), stop-gradient
         // Backward: grad_h += (I - gg^T/D) * grad_h̃  (accumulates into input grad)
-        out_centered_hidden = autograd::project_out_pc1(*matmul_input, hp_.pc1_power_iters, stream);
-        matmul_input = &out_centered_hidden;
+        result.lm_input_tensor = autograd::project_out_pc1(*matmul_input, hp_.pc1_power_iters, stream);
+        matmul_input = &result.lm_input_tensor;
     } else if (hp_.center_hidden_states) {
-        // Store in out_centered_hidden so it survives this scope (Issue #127)
-        // and boundary-safe forward observers see the actual matmul input.
-        out_centered_hidden = std::move(centered_hidden_for_pc1);
-        matmul_input = &out_centered_hidden;
+        // Materialize the causal-prefix centered tensor so it survives this
+        // scope (Issue #127) and callers can explicitly keep the live LM-input
+        // handle inside the forward boundary.
+        result.lm_input_tensor = std::move(centered_hidden_for_pc1);
+        matmul_input = &result.lm_input_tensor;
     } else {
         if (current_input == &normalized) {
             // RMSNorm was applied but no centering — preserve the normalized
-            // tensor in out_centered_hidden so the explicit matmul-input view doesn't dangle when
+            // tensor in the returned LM-input view so it does not dangle when
             // this function returns (normalized is a local).
-            out_centered_hidden = std::move(normalized);
-            matmul_input = &out_centered_hidden;
-        } else {
-            out_centered_hidden = Tensor();
+            result.lm_input_tensor = std::move(normalized);
+            matmul_input = &result.lm_input_tensor;
         }
     }
 
@@ -354,7 +357,7 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
     }
     const float* a_cache = matmul_input->data;  // Explicit cache for grad_B = lm_input^T @ grad_output
 
-    Tensor logits = autograd::matmul(
+    result.logits = autograd::matmul(
         *matmul_input,
         *effective_weights,
         stream,
@@ -366,7 +369,7 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
     autograd::logLmHeadGemmForwardEquation(
         *matmul_input,
         *effective_weights,
-        logits,
+        result.logits,
         hp_.center_hidden_states,
         hp_.project_out_pc1,
         use_centered_weights,
@@ -378,7 +381,7 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
 
     // Validate output shape
     const auto expected_shape = TensorContract::TensorShape::make_LOGITS(total_tokens, hp_.vocab_size);
-    const size_t logits_elements = logits.shape.total_elements();
+    const size_t logits_elements = result.logits.shape.total_elements();
     const size_t expected_elements = expected_shape.total_elements();
     if (logits_elements != expected_elements) {
         throw std::runtime_error(
@@ -387,7 +390,7 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
             "  Expected: " + std::to_string(expected_elements) + " elements (" +
                 std::to_string(total_tokens) + "x" + std::to_string(hp_.vocab_size) + ")");
     }
-    logits.shape = expected_shape;
+    result.logits.shape = expected_shape;
 
     // ════════════════════════════════════════════════════════════════════
     // STEP 3: Optional logit centering (numerical stability)
@@ -396,7 +399,7 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
     // So centering doesn't change predictions but keeps logits near zero.
     // ════════════════════════════════════════════════════════════════════
     if (hp_.center_logits) {
-        logits = autograd::center_rows(logits, stream);
+        result.logits = autograd::center_rows(result.logits, stream);
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -407,14 +410,14 @@ Tensor LMHeadLayer::forward(const Tensor& input, Tensor& out_centered_hidden,
     //   grad_bias = sum(grad_logits, dim=0)
     // ════════════════════════════════════════════════════════════════════
     if (hp_.use_bias && lm_bias.data) {
-        logits = autograd::broadcast_add(logits, lm_bias, stream);
-        logits.shape = expected_shape;  // Preserve LOGITS layout after broadcast_add
+        result.logits = autograd::broadcast_add(result.logits, lm_bias, stream);
+        result.logits.shape = expected_shape;  // Preserve LOGITS layout after broadcast_add
     }
 
-    // CRITICAL (Issue #56): Return the output Tensor.
-    // The returned Tensor owns the grad_fn chain. If it were destroyed here,
-    // the entire autograd graph would be deleted during forward pass.
-    return logits;
+    // CRITICAL (Issue #56): Return the output Tensor plus any materialized LM
+    // input Tensor. The caller owns where those Category 1 tensors live; the
+    // layer must not smuggle them into runtime sinks through output refs.
+    return result;
 }
 
 } // namespace GRIM

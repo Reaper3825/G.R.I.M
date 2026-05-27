@@ -68,29 +68,13 @@ namespace GRIM {
 //  Forward Declarations
 //======================================================//
 
+// Concrete encoder layer type lives in Layers/Encoding/Encoding_GPU.hpp.
+// Forward declare it here for pointer-only container access; do not add a
+// second alias owner in this header.
+class EncodingLayer;
+
 // GPUGrimEncoder is defined later in this file but used by LanguageModel class
 class GPUGrimEncoder;
-
-//======================================================//
-//  Core Data Structures - Minimal Declarations
-//======================================================//
-
-// Vector type - minimal definition
-class Vector {
-public:
-    std::vector<float> data;
-    
-    Vector() = default;
-    Vector(size_t size, float val = 0.0f);
-    
-    size_t size() const;
-    float& operator[](size_t idx);
-    const float& operator[](size_t idx) const;
-    Vector& operator+=(const Vector& other);
-    Vector& operator*=(float scalar);
-    Vector operator+(const Vector& other) const;
-    Vector operator*(float scalar) const;
-};
 
 //======================================================//
 //  Configuration ownership
@@ -118,29 +102,12 @@ public:
 struct EncoderConstructionBindings {
     /// Shared positional-bias state (ALiBi/RoPE), owned by the model PBM RAII owner.
     /// REQUIRED: encoder construction throws if null.
-    const PBM::PBMSpec* pos_encoding = nullptr;
+    const PBM::PBMState* pos_encoding = nullptr;
 
     /// CUDA stream for startup self-allocation only.
     cudaStream_t init_stream = nullptr;
 };
 #endif
-
-//======================================================//
-//  Generated Sequence
-//======================================================//
-
-struct GeneratedSequence {
-    std::vector<int> token_ids;
-    std::vector<float> token_scores;
-    std::vector<float> token_numeric_values;
-    std::vector<uint8_t> token_atom_mask;
-    /// Per-token execution slot id (-1 = non-state-bearing); mirrors BatchPayload::token_to_slot_map
-    std::vector<int32_t> token_to_slot_map;
-    std::shared_ptr<const GRIM::Tokenizer::AtomTable> context_atom_table;  // Atom registry from context (null for generated tokens)
-    std::vector<uint32_t> atom_entry_ids;  // Per-token atom entry IDs (kAtomEntryNone = no atom)
-    float score = 0.0f;
-    bool finished = false;
-};
 
 // OptimizerStep (AdamW/RAdamW step counter) lives in
 // Shared/Optimizers/OptimizerStep.hpp — it is step bookkeeping, not model state.
@@ -180,9 +147,6 @@ public:
     TrainingState& getTrainingState() { return training_state_; }
     const GenerationState& getGenerationState() const { return generation_state_; }
     GenerationState& getGenerationState() { return generation_state_; }
-    const PBM::PBMSpec& getPBMSpec() const;
-    const PBM::PBMState& getPBMState() const;
-    bool isPBMInitialized() const;
     
     // Parameter groups accessor (for direct gradient norm / clipping in Phase2)
     const std::vector<ParameterGroup>& parameterGroups() const { return parameter_groups_; }
@@ -257,8 +221,6 @@ private:
     GenerationState generation_state_;
     PBM::PBMStateOwner pbm_owner_;                   // Durable model-level ALiBi/RoPE buffers
     std::vector<ParameterGroup> parameter_groups_;  // Parameter groups for optimizer
-    PBM::PBMSpec pbm_spec_{};                       // Non-owning buffer/event view into pbm_owner_
-    bool pbm_spec_initialized_ = false;
     
     // ScratchBlock reasoning layer (config-gated durable topology)
     std::unique_ptr<ScratchBlockLayer> scratch_block_layer_;
@@ -293,18 +255,6 @@ using StreamCallback = HyperParameters::GenerationStreamCallback;
 //======================================================//
 
 #ifdef USE_CUDA
-// Forward declarations for GPU classes
-struct FlashAttentionBF16Scratch {
-    __nv_bfloat16* q = nullptr;
-    __nv_bfloat16* k = nullptr;
-    __nv_bfloat16* v = nullptr;
-    __nv_bfloat16* out = nullptr;
-    size_t q_elems = 0;
-    size_t kv_elems = 0;
-};
-class EncodingLayer;
-using GPUEncoderLayer = EncodingLayer;
-
 // GPUGrimEncoder - Container for encoder layers, manages layer lifecycle.
 // Forward pass logic is in ForwardPhase2_Encoder.cu::runFullEncoder().
 // This class only owns layers and provides access to them.
@@ -317,8 +267,8 @@ public:
                    const EncoderConstructionBindings& bindings,
                    uint64_t weight_seed);
 
-    GPUEncoderLayer* getLayer(int index);
-    const GPUEncoderLayer* getLayer(int index) const;
+    EncodingLayer* getLayer(int index);
+    const EncodingLayer* getLayer(int index) const;
 
 private:
     struct Impl;

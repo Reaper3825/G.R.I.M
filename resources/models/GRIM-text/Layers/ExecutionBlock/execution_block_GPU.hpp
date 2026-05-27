@@ -204,6 +204,21 @@ public:
     );
 
     //--------------------------------------------------//
+    // Forward runtime preparation: reset caller-owned execution state for
+    // one shared-forward execution layer boundary.
+    //--------------------------------------------------//
+    void prepareForwardRuntime(
+        const Batching::BatchPayload& payload,
+        bool connect_parameter_graph,
+        cudaStream_t stream,
+        std::vector<ExecutionMemory>& exec_memories,
+        std::vector<ExecutionBlockOutput>& exec_outputs_per_row,
+        std::vector<Tensor>& exec_expected_target_tensors,
+        std::vector<std::vector<ExecutionRecord>>& execution_trace_by_row,
+        std::vector<Tensor>& trace_state_by_row
+    ) const;
+
+    //--------------------------------------------------//
     // Cross-attention read: H = H + g * W_O(R)
     // token_offset / row_tokens enable per-batch-row processing.
     //--------------------------------------------------//

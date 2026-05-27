@@ -220,7 +220,7 @@ void logLmHeadGemmForwardEquation(const Tensor& lm_input,
 
     std::string lm_input_expr = "RMSNorm(h)";
     if (center_hidden_states) {
-        lm_input_expr = "center_columns_by_sequence_lengths(RMSNorm(h))";
+        lm_input_expr = "center_columns_by_causal_prefix_lengths(RMSNorm(h))";
     }
     if (project_out_pc1) {
         lm_input_expr = "project_out_pc1(" + lm_input_expr + ")";

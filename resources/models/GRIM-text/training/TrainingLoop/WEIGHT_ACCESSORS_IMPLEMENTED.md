@@ -58,7 +58,7 @@ int getVocabSize() const { return vocab_size_; }
 int getEmbeddingDim() const { return d_model_; }
 ```
 
-### 6. GPUEncoderLayer (grim_encoder_layer_gpu.hpp)
+### 6. EncodingLayer (legacy `GPUEncoderLayer` alias removed)
 Added component accessors:
 ```cpp
 GPULayerNorm* getGPULayerNorm1() { return gpu_ln1_.get(); }
@@ -75,11 +75,11 @@ const GPUFeedForwardNetwork* getGPUFFN() const { return gpu_ffn_.get(); }
 Added layer accessors:
 ```cpp
 // Header
-GPUEncoderLayer* getLayer(int index);
-const GPUEncoderLayer* getLayer(int index) const;
+EncodingLayer* getLayer(int index);
+const EncodingLayer* getLayer(int index) const;
 
 // Implementation
-GPUEncoderLayer* GPUGrimEncoder::getLayer(int index) {
+EncodingLayer* GPUGrimEncoder::getLayer(int index) {
     if (index < 0 || index >= static_cast<int>(pImpl->gpu_layers_.size())) {
         return nullptr;
     }
@@ -191,7 +191,7 @@ All changes verified through:
 ## Files Modified
 1. `grim_language_model_cuda.hpp` - GPUBuffer const methods, GPUEmbeddingStack accessors, GPUGrimEncoder accessors
 2. `grim_transformer_gpu.hpp` - GPULayerNorm, GPUMultiHeadAttention, GPUFeedForwardNetwork accessors
-3. `grim_encoder_layer_gpu.hpp` - GPUEncoderLayer component accessors
+3. `Layers/Encoding/Encoding_GPU.hpp` - EncodingLayer component accessors
 4. `grim_language_model_gpu.cu` - updateWeights() implementation, backward() encoder loop structure, GPUGrimEncoder accessor implementations
 
 ## Training Progress

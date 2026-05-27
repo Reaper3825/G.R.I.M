@@ -31,6 +31,10 @@ struct ModelAssemblyAccess {
         return model.training_state_;
     }
 
+    static const GRIM::TrainingState& trainingState(const ::GRIM::LanguageModel& model) {
+        return model.training_state_;
+    }
+
     static GRIM::GenerationState& generationState(::GRIM::LanguageModel& model) {
         return model.generation_state_;
     }
@@ -40,13 +44,18 @@ struct ModelAssemblyAccess {
                               cudaStream_t stream) {
         model.pbm_owner_.initialize(pbm_hp, stream);
 
-        ::GRIM::PBM::PBMSpec pbm_spec = model.pbm_owner_.spec();
-        if (!pbm_spec.valid || !pbm_spec.rope_inv_freq || !pbm_spec.alibi_slopes || !pbm_spec.upload_event) {
-            throw std::runtime_error("[Startup::initializePBM] PBM spec is invalid");
+        const ::GRIM::PBM::PBMState& pbm_state = model.pbm_owner_.state();
+        if (!pbm_state.initialized || !pbm_state.rope_inv_freq || !pbm_state.alibi_slopes || !pbm_state.upload_event) {
+            throw std::runtime_error("[Startup::initializePBM] PBM state is invalid");
         }
+    }
 
-        model.pbm_spec_ = pbm_spec;
-        model.pbm_spec_initialized_ = true;
+    static bool pbmInitialized(const ::GRIM::LanguageModel& model) {
+        return model.pbm_owner_.initialized();
+    }
+
+    static const ::GRIM::PBM::PBMState& pbmState(const ::GRIM::LanguageModel& model) {
+        return model.pbm_owner_.state();
     }
 
     static ::GRIM::GPUGrimEncoder* gpuEncoderPtr(::GRIM::LanguageModel& model) {
@@ -144,7 +153,7 @@ void requireCublasHandle(const GRIM::TrainingState& training_state,
 void requirePBMReady(const GRIM::LanguageModel& model,
                      const char* caller,
                      const char* missing_pbm_message) {
-    if (!model.isPBMInitialized()) {
+    if (!GRIMText::Training::Startup::ModelAssemblyAccess::pbmInitialized(model)) {
         throw std::runtime_error(std::string("[") + caller + "] " + missing_pbm_message);
     }
 }
@@ -197,10 +206,10 @@ void verifyEncoderLayersReady(GRIM::GPUGrimEncoder& encoder,
     }
 }
 
-GRIM::EncoderConstructionBindings makeEncoderConstructionBindings(const GRIM::PBM::PBMSpec& pbm_spec,
+GRIM::EncoderConstructionBindings makeEncoderConstructionBindings(const GRIM::PBM::PBMState& pbm_state,
                                                                   cudaStream_t init_stream) {
     GRIM::EncoderConstructionBindings bindings;
-    bindings.pos_encoding = &pbm_spec;
+    bindings.pos_encoding = &pbm_state;
     bindings.init_stream = init_stream;
     GRIM::StreamController::fatalIfDefaultStream(bindings.init_stream, kAssembleGpuModelCaller);
     return bindings;
@@ -332,7 +341,7 @@ void initializeCuBLASHandle(::GRIM::LanguageModel& model) {
 
 void initializePBM(::GRIM::LanguageModel& model) {
     constexpr const char* caller = "Startup::initializePBM";
-    if (model.isPBMInitialized()) {
+    if (ModelAssemblyAccess::pbmInitialized(model)) {
         std::cout << "✓ PBM (ALiBi+RoPE) already initialized" << std::endl;
         return;
     }
@@ -519,7 +528,7 @@ void assembleGpuModel(::GRIM::LanguageModel& model, uint64_t weight_init_seed) {
         //======================================================//
 
         const auto encoder_hp = GRIM::HyperParameters::encoderLayerConstructionHP(model_cfg);
-        const GRIM::EncoderConstructionBindings enc_bindings = makeEncoderConstructionBindings(model.getPBMSpec(), init_stream);
+        const GRIM::EncoderConstructionBindings enc_bindings = makeEncoderConstructionBindings(ModelAssemblyAccess::pbmState(model), init_stream);
 
         std::cout << "[assembleGpuModel] Encoder construction bindings prepared" << std::endl;
         std::cout << "✓ Encoder using TrainingState construction bindings\n";

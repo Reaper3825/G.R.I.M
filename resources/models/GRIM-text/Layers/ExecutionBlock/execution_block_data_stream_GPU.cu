@@ -1909,9 +1909,10 @@ void executeStepCoordinatorImpl(
     // longer carries device pointers — see Shared/Batching/BatchDeviceBindings.hpp).
     const int32_t* d_slot_map_row = bindings.d_token_to_slot_map
         + static_cast<size_t>(batch_row) * payload.max_seq_len;
+    const int row_tokens = payload.seq_lengths[static_cast<size_t>(batch_row)];
 
     StepWorkingSet work;
-    prepareMemoryStepOrThrow(layer, memory, atom_positions, d_slot_map_row, num_atoms, payload.max_seq_len, diag_out, stream);
+    prepareMemoryStepOrThrow(layer, memory, atom_positions, d_slot_map_row, num_atoms, row_tokens, diag_out, stream);
     buildValueSlotCandidates(layer, memory, stream, work);
     kernelCheckFinite<<<(V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         work.slot_values.data, V_val, LayerAccess::numericErrorFlag(layer), kStageV1, layer.hp().magnitude_limit);
@@ -1929,13 +1930,13 @@ void executeStepCoordinatorImpl(
     kernelReduceMeanForward<<<(dm + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         work.context.data,
         H.data + static_cast<size_t>(batch_row) * payload.max_seq_len * dm,
-        payload.max_seq_len,
+        row_tokens,
         dm,
         d_atom_mask_row);
     CUDA_CHECK_KERNEL();
     {
         auto mean_fn = std::make_shared<ReduceMeanGradFn>();
-        mean_fn->capture(H, payload.total_tokens, dm, stream, batch_row * payload.max_seq_len, payload.max_seq_len,
+        mean_fn->capture(H, payload.total_tokens, dm, stream, batch_row * payload.max_seq_len, row_tokens,
                          d_atom_mask_row);
         work.context.grad_fn = mean_fn;
     }
@@ -2236,11 +2237,20 @@ void executeStepCoordinatorImpl(
     kernelCheckFinite<<<(dm + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         work.result_emb.data, dm, LayerAccess::numericErrorFlag(layer), kStageResultEmb, layer.hp().magnitude_limit);
 
-    if (layer.hp().result_slot_mode == 1 && layer.hp().result_slot_index >= 0 &&
-        layer.hp().result_slot_index < payload.total_tokens) {
+    const int row_final_slot = batch_row * payload.max_seq_len + row_tokens - 1;
+    if (layer.hp().result_slot_mode == 1) {
+        if (layer.hp().result_slot_index != row_final_slot) {
+            throw std::runtime_error(
+                "ExecutionBlock: fixed result_slot_index=" + std::to_string(layer.hp().result_slot_index) +
+                " would inject row-final execution memory into token " +
+                std::to_string(layer.hp().result_slot_index) +
+                " for batch_row=" + std::to_string(batch_row) +
+                "; causal shared forward requires row-final slot " +
+                std::to_string(row_final_slot));
+        }
         work.result_slot = layer.hp().result_slot_index;
     } else {
-        work.result_slot = batch_row * payload.max_seq_len + payload.max_seq_len - 1;
+        work.result_slot = row_final_slot;
     }
     EXEC_CHECK(work.result_slot >= 0 && work.result_slot < payload.total_tokens, "result_slot out of bounds");
     float inv_sqrt_d = 1.0f / sqrtf(static_cast<float>(dm));

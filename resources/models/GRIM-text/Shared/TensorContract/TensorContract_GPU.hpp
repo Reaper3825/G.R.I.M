@@ -1255,6 +1255,31 @@ Tensor center_columns_by_sequence_lengths(const Tensor& x,
                                           int rows_per_sequence,
                                           cudaStream_t stream = nullptr);
 
+/**
+ * Causal strict-past prefix column centering for flattened autoregressive batch tensors.
+ *
+ * Forward valid rows:
+ *   y[b,0,d] = x[b,0,d]
+ *   y[b,t,d] = x[b,t,d] - mean_{u < t}(x[b,u,d]) for t > 0
+ * Forward padded rows:
+ *   y[b,t,d] = 0 for t >= seq_lengths[b]
+ * Backward applies the transpose of that causal prefix-centering transform and
+ * zeros padded-row gradients. Position t never depends on positions u > t,
+ * and the first real token is preserved instead of being erased.
+ *
+ * @param x Input tensor [batch_size * rows_per_sequence, D]
+ * @param sequence_lengths Host-side real lengths from BatchPayload [batch_size]
+ * @param batch_size Number of sequences/samples in the flattened tensor
+ * @param rows_per_sequence Padded row stride per sequence/sample
+ * @param stream CUDA stream
+ * @return Centered tensor; valid rows use strict-past prefix means, padded rows are zeroed
+ */
+Tensor center_columns_by_causal_prefix_lengths(const Tensor& x,
+                                               const std::vector<int>& sequence_lengths,
+                                               int batch_size,
+                                               int rows_per_sequence,
+                                               cudaStream_t stream = nullptr);
+
     // Issue #149: project out dominant PC1 direction to prevent mode collapse
     // g = PC1(H) via n_power_iters steps of power iteration (stop-gradient)
     // Forward:  h̃[t] = h[t] - (h[t]·g)*g

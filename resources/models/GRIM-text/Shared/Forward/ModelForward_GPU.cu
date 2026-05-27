@@ -72,6 +72,28 @@ void requireCenteringSequenceLengths(const Batching::BatchPayload& payload,
     }
 }
 
+int requirePayloadRowLength(const Batching::BatchPayload& payload,
+                            int row,
+                            const char* caller) {
+    if (row < 0 || row >= payload.batch_size) {
+        throw std::runtime_error(std::string(caller) + ": row index " +
+                                 std::to_string(row) + " out of range for batch_size=" +
+                                 std::to_string(payload.batch_size));
+    }
+    if (static_cast<int>(payload.seq_lengths.size()) != payload.batch_size) {
+        throw std::runtime_error(std::string(caller) + ": payload.seq_lengths size (" +
+                                 std::to_string(payload.seq_lengths.size()) +
+                                 ") != batch_size (" + std::to_string(payload.batch_size) + ")");
+    }
+    const int row_len = payload.seq_lengths[static_cast<size_t>(row)];
+    if (row_len <= 0 || row_len > payload.max_seq_len) {
+        throw std::runtime_error(std::string(caller) + ": invalid seq_lengths[" +
+                                 std::to_string(row) + "]=" + std::to_string(row_len) +
+                                 " for payload.max_seq_len=" + std::to_string(payload.max_seq_len));
+    }
+    return row_len;
+}
+
 }  // namespace
 
 void ModelForwardRequest::validate(const char* caller) const {
@@ -427,71 +449,85 @@ void executeModelForward(const ModelForwardRequest& request,
             intermediates.layer_intermediates.layers.emplace_back();
             ForwardIntermediates& layer_storage = intermediates.layer_intermediates.layers.back();
 
-            Tensor& layer_input = (layer_idx == 0)
-                ? intermediates.embedding_tensor
-                : intermediates.encoder_layer_outputs.back();
+            const Tensor* layer_input = (layer_idx == 0)
+                ? &intermediates.embedding_tensor
+                : &intermediates.encoder_layer_outputs.back();
+            Tensor execution_read_augmented_input;
+
+            if (exec_layer >= 0 && layer_idx > exec_layer
+                && request.execution_block
+                && !intermediates.exec_memories.empty()) {
+                // executeStep(...) may export the immediate step result on the
+                // execution layer output, but persistent ExecutionMemory is a
+                // downstream side channel. Its first consumer is the next
+                // layer input at the row-final token only.
+                bool has_execution_readback = false;
+                for (int b = 0; b < payload.batch_size; ++b) {
+                    const bool row_exec_active = !payload.execution_active.empty()
+                        && payload.execution_active[b];
+                    if (!row_exec_active) continue;
+                    const Tensor& read_source = has_execution_readback
+                        ? execution_read_augmented_input
+                        : *layer_input;
+                    const int row_len = requirePayloadRowLength(
+                        payload, b, "ModelForward ExecutionBlock next-layer input readback");
+                    const int final_token_offset = b * payload.max_seq_len + row_len - 1;
+                    Tensor row_delta = request.execution_block->crossAttentionRead(
+                        read_source, intermediates.exec_memories[b],
+                        total_tokens, request.stream,
+                        final_token_offset, 1,
+                        runtime.read_gate_accum_tensor
+                            ? runtime.read_gate_accum_tensor->data
+                            : nullptr);
+                    Tensor padded = autograd::zero_pad(
+                        row_delta, final_token_offset, total_tokens, request.stream);
+                    execution_read_augmented_input = autograd::add(
+                        read_source, padded, request.stream);
+                    has_execution_readback = true;
+                }
+                if (has_execution_readback) {
+                    layer_input = &execution_read_augmented_input;
+                }
+            }
 
             Tensor layer_output = enc_layer->forward(
-                layer_input, payload, request.stream, request.cublas_handle, layer_storage,
+                *layer_input, payload, request.stream, request.cublas_handle, layer_storage,
                 request.batch_idx, dropout_enabled, layer_idx, nullptr);
 
             if (layer_idx == exec_layer && request.execution_block) {
-                const int ae = cfg->scratch_block_atom_embedding_dim;
                 const int V = cfg->execution_block_num_slots;
                 const int nop = cfg->execution_block_num_ops;
-                const int dk = cfg->execution_block_d_key;
-                const int dt = cfg->execution_block_d_type;
-
-                intermediates.exec_memories.resize(payload.batch_size);
-                intermediates.exec_outputs_per_row.resize(payload.batch_size);
 
                 float T = cfg->execution_block_temp_start;
 
                 auto& execution_runtime = *runtime.execution_runtime;
-                auto& execution_trace_by_row = execution_runtime.execution_trace_by_row;
-                auto& trace_state_by_row = execution_runtime.trace_state_by_row;
-                execution_trace_by_row.resize(payload.batch_size);
-                trace_state_by_row.resize(payload.batch_size);
-                for (int b = 0; b < payload.batch_size; ++b) {
-                    execution_trace_by_row[b].clear();
-                    const bool row_active = !payload.execution_active.empty()
-                        && payload.execution_active[b];
-                    if (row_active) {
-                        trace_state_by_row[b] = Tensor::zeros({1, cfg->d_model}, request.stream, "trace_state_row");
-                        if (connect_parameter_graph) {
-                            trace_state_by_row[b].requires_grad_();
-                            trace_state_by_row[b].ensure_grad();
-                        } else {
-                            trace_state_by_row[b].requires_grad = false;
-                        }
-                    } else {
-                        trace_state_by_row[b] = Tensor();
-                    }
-                }
+                request.execution_block->prepareForwardRuntime(
+                    payload,
+                    connect_parameter_graph,
+                    request.stream,
+                    intermediates.exec_memories,
+                    intermediates.exec_outputs_per_row,
+                    intermediates.exec_expected_target_tensors,
+                    execution_runtime.execution_trace_by_row,
+                    execution_runtime.trace_state_by_row);
 
                 const bool have_exec_teacher = !payload.teacher_steps.empty();
                 const int B_teacher = have_exec_teacher
                     ? static_cast<int>(payload.teacher_steps.size()) : 0;
-                intermediates.exec_expected_target_tensors.clear();
-                intermediates.exec_expected_target_tensors.reserve(
-                    static_cast<size_t>(payload.batch_size) * static_cast<size_t>(std::max(0, exec_K)));
 
                 for (int b = 0; b < payload.batch_size; ++b) {
                     const bool row_exec_active = !payload.execution_active.empty()
                         && payload.execution_active[b];
 
-                    intermediates.exec_outputs_per_row[b].steps.clear();
-
                     if (!row_exec_active) continue;
 
                     auto& M_b = intermediates.exec_memories[b];
-                    M_b.allocate(V, ae, cfg->d_model, dk, dt, request.stream);
-                    M_b.clear(request.stream);
 
                     const int tok_off = b * payload.max_seq_len;
+                    const int row_len = requirePayloadRowLength(payload, b, "ModelForward ExecutionBlock bootstrap");
 
                     auto row_atom_view = request.scratch_block->extractRowLocalAtomView(
-                        tok_off, payload.max_seq_len, request.stream);
+                        tok_off, row_len, request.stream);
 
                     if (!request.bindings || !request.bindings->d_token_to_slot_map
                         || !request.bindings->d_numeric_values) {
@@ -504,7 +540,7 @@ void executeModelForward(const ModelForwardRequest& request,
                         M_b,
                         request.bindings->d_numeric_values + tok_off,
                         request.bindings->d_token_to_slot_map + tok_off,
-                        payload.max_seq_len, request.stream);
+                        row_len, request.stream);
 
                     for (int step = 0; step < exec_K; ++step) {
                         ExecutionBlockStepOutput step_diag;
@@ -591,30 +627,11 @@ void executeModelForward(const ModelForwardRequest& request,
                 }
             }
 
-            if (exec_layer >= 0 && layer_idx >= exec_layer
-                && request.execution_block
-                && !intermediates.exec_memories.empty()) {
-                for (int b = 0; b < payload.batch_size; ++b) {
-                    const bool row_exec_active = !payload.execution_active.empty()
-                        && payload.execution_active[b];
-                    if (!row_exec_active) continue;
-                    Tensor row_delta = request.execution_block->crossAttentionRead(
-                        layer_output, intermediates.exec_memories[b],
-                        total_tokens, request.stream,
-                        b * payload.max_seq_len, payload.max_seq_len,
-                        runtime.read_gate_accum_tensor
-                            ? runtime.read_gate_accum_tensor->data
-                            : nullptr);
-                    Tensor padded = autograd::zero_pad(row_delta, b * payload.max_seq_len, total_tokens, request.stream);
-                    layer_output = autograd::add(layer_output, padded, request.stream);
-                }
-            }
-
             if (cfg->center_encoder_residuals) {
                 if (payload.max_seq_len <= 1) {
                     throw std::runtime_error("ModelForward: center_encoder_residuals requires payload.max_seq_len > 1; single-row column centering would erase the residual stream");
                 }
-                layer_output = autograd::center_columns_by_sequence_lengths(
+                layer_output = autograd::center_columns_by_causal_prefix_lengths(
                     layer_output, payload.seq_lengths, payload.batch_size, payload.max_seq_len, request.stream);
             }
 
@@ -658,13 +675,14 @@ void executeModelForward(const ModelForwardRequest& request,
         lm_head_parameter_view_ptr = &lm_head_parameter_views;
     }
 
-    Tensor logits_tensor = request.lm_head->forward(
+    LMHeadForwardResult lm_head_forward = request.lm_head->forward(
         intermediates.encoder_output_tensor,
-        intermediates.centered_encoder_output,
         payload,
         request.stream,
         request.cublas_handle,
         lm_head_parameter_view_ptr);
+    intermediates.centered_encoder_output = std::move(lm_head_forward.lm_input_tensor);
+    Tensor logits_tensor = std::move(lm_head_forward.logits);
     if (!logits_tensor.data) {
         throw std::runtime_error("ModelForward: LMHeadLayer::forward returned logits tensor with NULL data");
     }

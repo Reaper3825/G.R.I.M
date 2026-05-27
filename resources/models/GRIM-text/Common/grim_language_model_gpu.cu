@@ -56,28 +56,6 @@ const GPUGrimEncoder& LanguageModel::getGpuEncoder() const {
     return *gpu_encoder_;
 }
 
-bool LanguageModel::isPBMInitialized() const {
-    return pbm_owner_.initialized() &&
-           pbm_spec_initialized_ && pbm_spec_.valid &&
-           pbm_spec_.rope_inv_freq != nullptr &&
-           pbm_spec_.alibi_slopes != nullptr &&
-           pbm_spec_.upload_event != nullptr;
-}
-
-const PBM::PBMSpec& LanguageModel::getPBMSpec() const {
-    if (!isPBMInitialized()) {
-        throw std::runtime_error("LanguageModel::getPBMSpec: PBM is not initialized");
-    }
-    return pbm_spec_;
-}
-
-const PBM::PBMState& LanguageModel::getPBMState() const {
-    if (!isPBMInitialized()) {
-        throw std::runtime_error("LanguageModel::getPBMState: PBM is not initialized");
-    }
-    return pbm_owner_.state();
-}
-
 LanguageModel::MTPHead* LanguageModel::getMtpHead(int k) {
     if (k < 0 || k >= static_cast<int>(mtp_heads_.size())) {
         return nullptr;
@@ -91,58 +69,6 @@ const LanguageModel::MTPHead* LanguageModel::getMtpHead(int k) const {
     }
     return &mtp_heads_[k];
 }
-
-//======================================================//
-
-namespace {
-
-// Production constants - using centralized HyperParameters (Rule 20)
-[[maybe_unused]] constexpr float kNegInf = HyperParameters::NEG_INF_ATTENTION;
-[[maybe_unused]] constexpr float kProbabilityFloor = HyperParameters::PROBABILITY_FLOOR;
-[[maybe_unused]] constexpr float kSoftmaxClipThreshold = HyperParameters::SOFTMAX_CLIP_THRESHOLD;
-[[maybe_unused]] constexpr float kTemperatureEpsilon = HyperParameters::EPSILON_TEMPERATURE;
-
-}  // namespace
-
-//======================================================//
-//  Basic Type Implementations (from grim_text_embedding.cpp)
-//======================================================//
-
-Vector::Vector(size_t n, float v) {
-    data.resize(n, v);
-}
-
-size_t Vector::size() const { return data.size(); }
-
-float& Vector::operator[](size_t idx) { return data[idx]; }
-
-const float& Vector::operator[](size_t idx) const { return data[idx]; }
-
-Vector& Vector::operator+=(const Vector& other) {
-    for (size_t i = 0; i < data.size(); ++i) {
-        data[i] += other.data[i];
-    }
-    return *this;
-}
-
-Vector& Vector::operator*=(float s) {
-    for (auto& v : data) v *= s;
-    return *this;
-}
-
-Vector Vector::operator+(const Vector& other) const {
-    Vector result = *this;
-    result += other;
-    return result;
-}
-
-Vector Vector::operator*(float scalar) const {
-    Vector result = *this;
-    result *= scalar;
-    return result;
-}
-
-
 
 //======================================================//
 //  Constructor - moved from header to avoid duplicates

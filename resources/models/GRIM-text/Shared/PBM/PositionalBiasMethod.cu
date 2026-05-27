@@ -32,16 +32,41 @@ bool checkCuda(cudaError_t err, const char* what) {
 }
 
 void requirePBMResourcesReady(const PBMState& state, const char* caller) {
-    requirePBMInitialized(state, caller);
+    if (!state.initialized) {
+        throw std::runtime_error(std::string(caller) + ": PBM state is not initialized");
+    }
     if (!state.alibi_slopes || !state.rope_inv_freq || !state.upload_event) {
         throw std::runtime_error(std::string(caller) +
                                  ": initialized PBM state has NULL resource pointer/event");
     }
 }
 
-bool samePBMBufferContents(const std::vector<float>& lhs,
-                           const std::vector<float>& rhs) {
-    return lhs == rhs;
+void logPBMTablePreview(const PBMConstructionHP& hp,
+                        const PBMRuntimeOptions& runtime) {
+    if (!runtime.verbose) {
+        return;
+    }
+
+    std::cout << kTag << " PBM tables sourced from HyperParameters-derived immutable views:" << std::endl;
+    std::cout << "    alibi_slopes=" << hp.alibi_slopes.size
+              << ", rope_inv_freq=" << hp.rope_inv_freq.size << std::endl;
+
+    const int slope_preview = std::min(hp.num_heads, 4);
+    for (int h = 0; h < slope_preview; ++h) {
+        std::cout << "    head[" << h << "] slope=" << hp.alibi_slopes.data[h] << std::endl;
+    }
+    if (hp.num_heads > slope_preview) {
+        std::cout << "    ... (" << (hp.num_heads - slope_preview) << " more slopes)" << std::endl;
+    }
+
+    const int rope_preview = std::min(static_cast<int>(hp.rope_inv_freq.size), 4);
+    for (int i = 0; i < rope_preview; ++i) {
+        std::cout << "    inv_freq[" << i << "]=" << hp.rope_inv_freq.data[i] << std::endl;
+    }
+    if (static_cast<int>(hp.rope_inv_freq.size) > rope_preview) {
+        std::cout << "    ... (" << (static_cast<int>(hp.rope_inv_freq.size) - rope_preview)
+                  << " more inverse frequencies)" << std::endl;
+    }
 }
 
 void requireRoPELaunchGeometry(const GRIM::Batching::BatchPayload& payload,
@@ -70,255 +95,6 @@ void requireRoPELaunchGeometry(const GRIM::Batching::BatchPayload& payload,
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  ALiBi Slope Computation (Host) - Context-Aware Scaling
-//  
-//  This formula explicitly controls penalty strength at near vs far distances
-//  and automatically adapts when context length changes.
-//  
-//  Parameters:
-//    d_min = locality distance (tied to rotary_dim/2 or minimum 16)
-//    d_max = context length (max_seq_len)
-//    target_bias = |alibi_slope_exponent| (interpreted as MAX bias at max_seq_len)
-//  
-//  Formula (scaled to enforce max bias at max_seq_len for strongest head):
-//    base_m_max = target_bias / d_min
-//    base_m_min = target_bias / d_max
-//    scale = d_min / d_max
-//    m_max = base_m_max * scale  (strongest head reaches -target_bias at max distance)
-//    m_min = base_m_min * scale  (weakest head is proportionally gentler)
-//    slopes interpolated geometrically across heads
-//  
-//  WARNING: If you scale slopes for max_seq_len=2048 but run 8192 tokens,
-//           your weakest heads will be too weak. Always set max_seq_len correctly!
-// ═══════════════════════════════════════════════════════════════════════════
-
-bool computeAlibiSlopes(const PBMConstructionHP& hp,
-                        const PBMRuntimeOptions& runtime,
-                        std::vector<float>& out_slopes) {
-    if (hp.num_heads <= 0) {
-        std::cerr << kTag << " Invalid num_heads=" << hp.num_heads << std::endl;
-        return false;
-    }
-    
-    if (hp.max_seq_len <= 0) {
-        std::cerr << kTag << " Invalid max_seq_len=" << hp.max_seq_len
-                  << " - grouped PBMConstructionHP MUST carry the model context length" << std::endl;
-        return false;
-    }
-    
-    // d_max = context length (what we're calibrating ALiBi for)
-    const int d_max = hp.max_seq_len;
-    
-    // d_min = locality distance (tie to rotary_dim for hybrid ALiBi+RoPE)
-    // This controls how aggressively the STRONGEST head penalizes distance
-    const int locality_floor = std::min(hp.alibi_min_locality_distance, d_max);
-    int d_min = std::max(locality_floor, std::min(hp.rotary_dim / 2, d_max));
-    
-    // target_bias controls overall penalty strength (standard ALiBi uses 8.0)
-    // Derived from the canonical alibi_slope_exponent value
-    const float target_bias = std::abs(hp.alibi_slope_exponent);
-    
-    // Safety check: target_bias==0 would generate all-zero slopes (useless)
-    if (target_bias == 0.0f) {
-        std::cerr << kTag << " ERROR: alibi_slope_exponent=0 generates all-zero slopes!" << std::endl;
-        return false;
-    }
-    
-    // Compute slope range based on context length
-    // m_max: strongest head (reaches -target_bias at max distance)
-    // m_min: weakest head (only penalizes very distant tokens)
-    const float base_m_max = target_bias / static_cast<float>(d_min);
-    const float base_m_min = target_bias / static_cast<float>(d_max);
-    const float max_bias_scale = static_cast<float>(d_min) / static_cast<float>(d_max);
-    const float m_max = base_m_max * max_bias_scale;
-    const float m_min = base_m_min * max_bias_scale;
-    
-    // Safety check: m_min > m_max means d_min > d_max (inverted, should never happen)
-    if (m_min > m_max) {
-        std::cerr << kTag << " ERROR: m_min(" << m_min << ") > m_max(" << m_max 
-                  << ") - d_min/d_max inverted! d_min=" << d_min << ", d_max=" << d_max << std::endl;
-        return false;
-    }
-    
-    // ISSUE #76: Log context-aware ALiBi penalty computation for debugging
-    // By design, head 0 reaches -target_bias at max_seq_len (not -target_bias * d_max/d_min).
-    // Example: max_seq_len=1024, d_min=32, target_bias=8
-    //   base_m_max = 8/32 = 0.25, scale = 32/1024 = 0.03125
-    //   m_max = 0.25 * 0.03125 = 0.0078125
-    //   At position 1024, bias = -0.0078125 * 1024 = -8.0 (as designed)
-    std::cerr << "[PBM-ALIBI-ISSUE76] max_seq_len=" << hp.max_seq_len
-              << " d_min=" << d_min 
-              << " target_bias=" << target_bias
-              << " base_m_max=" << base_m_max
-              << " base_m_min=" << base_m_min
-              << " scale=" << max_bias_scale
-              << " => m_max=" << m_max << " m_min=" << m_min << std::endl;
-    std::cerr << "[PBM-ALIBI-ISSUE76] At position " << hp.max_seq_len << ":\n"
-              << "    Head 0 (strongest): bias = -" << m_max << " * " << hp.max_seq_len
-              << " = " << (-m_max * hp.max_seq_len) << std::endl;
-    std::cerr << "    Head " << (hp.num_heads - 1) << " (weakest): bias = -" << m_min << " * " << hp.max_seq_len
-              << " = " << (-m_min * hp.max_seq_len) << std::endl;
-    
-    out_slopes.resize(static_cast<size_t>(hp.num_heads));
-    
-    // ISSUE #78 FIX: Compute maximum allowed slope magnitude based on bias cap
-    // If alibi_max_bias = -10.0 and max_seq_len = 1024:
-    //   max_slope_magnitude = |-10| / 1024 = 0.00976
-    // Any slope with larger magnitude will cause bias to exceed -10 at max distance
-    const float max_bias_magnitude = std::abs(hp.alibi_max_bias);
-    const float max_slope_magnitude = (hp.alibi_max_bias != 0.0f && hp.max_seq_len > 0)
-        ? (max_bias_magnitude / static_cast<float>(hp.max_seq_len))
-        : 0.0f;  // 0 = no capping
-    
-    if (hp.num_heads == 1) {
-        // Single head: use strongest slope (with optional capping) 
-        float slope = -m_max;
-        if (max_slope_magnitude > 0.0f && m_max > max_slope_magnitude) {
-            slope = -max_slope_magnitude;
-            std::cerr << "[PBM-ALIBI-ISSUE78] Head 0 slope CAPPED: -" << m_max 
-                      << " -> " << slope << " (max_bias=" << hp.alibi_max_bias << ")" << std::endl;
-        }
-        out_slopes[0] = slope;
-        return true;
-    }
-    
-    // Interpolate slopes geometrically from m_max to m_min
-    // Head 0 = strongest (m_max), Head N-1 = weakest (m_min)
-    const float log_mmax = std::log(m_max);
-    const float log_mmin = std::log(m_min);
-    
-    int capped_count = 0;
-    for (int h = 0; h < hp.num_heads; ++h) {
-        const float t = static_cast<float>(h) / static_cast<float>(hp.num_heads - 1);
-        const float log_m = log_mmax + t * (log_mmin - log_mmax);
-        float m = std::exp(log_m);
-        
-        // ISSUE #78 FIX: Cap slope magnitude to prevent extreme biases
-        // slope * max_seq_len should not exceed alibi_max_bias
-        if (max_slope_magnitude > 0.0f && m > max_slope_magnitude) {
-            m = max_slope_magnitude;
-            ++capped_count;
-        }
-        
-        // ISSUE #69 FIX: FlashAttention library expects NEGATIVE slopes
-        // (it uses += slope * col_idx for causal attention)
-        out_slopes[static_cast<size_t>(h)] = -m;
-    }
-    
-    // Issue #78: Log how many heads were capped
-    if (capped_count > 0) {
-        std::cerr << "[PBM-ALIBI-ISSUE78] " << capped_count << "/" << hp.num_heads
-                  << " heads CAPPED to max_slope=" << max_slope_magnitude 
-                  << " (max_bias=" << hp.alibi_max_bias
-                  << " at max_seq_len=" << hp.max_seq_len << ")" << std::endl;
-        std::cerr << "[PBM-ALIBI-ISSUE78] Effective bias range: [" << hp.alibi_max_bias
-                  << ", 0] instead of [" << (-m_max * hp.max_seq_len) << ", 0]" << std::endl;
-    }
-    
-    if (runtime.verbose) {
-        std::cout << kTag << " ALiBi slopes computed (context-aware scaling):" << std::endl;
-        std::cout << "    max_seq_len=" << hp.max_seq_len
-                  << ", d_min=" << d_min 
-                  << ", target_bias=" << target_bias << std::endl;
-        std::cout << "    m_max=" << m_max << " (head 0), m_min=" << m_min 
-                  << " (head " << (hp.num_heads-1) << ")" << std::endl;
-        if (capped_count > 0) {
-            std::cout << "    ISSUE #78: " << capped_count << " heads capped to max_slope=" 
-                      << max_slope_magnitude << std::endl;
-        }
-        const int preview = std::min(hp.num_heads, 4);
-        for (int h = 0; h < preview; ++h) {
-            std::cout << "    head[" << h << "] slope=" << out_slopes[static_cast<size_t>(h)] << std::endl;
-        }
-        if (hp.num_heads > 4) {
-            std::cout << "    ... (" << (hp.num_heads - 4) << " more heads)" << std::endl;
-        }
-    }
-    return true;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  RoPE Inverse Frequency Computation (Host) - Context-Aware NTK Scaling
-//  
-//  Standard Formula: inv_freq[i] = 1.0 / theta^(2*i / rotary_dim)
-//  
-//  NTK-Aware Scaling (for extending context beyond training length):
-//    When max_seq_len > rope_base_seq_len:
-//    - scaled_theta = theta * (max_seq_len / rope_base_seq_len)^(rotary_dim / (rotary_dim - 2))
-//    - This adjusts the rotation frequencies to accommodate longer sequences
-//    - Equivalent to "dynamic NTK" / "Code Llama" style scaling
-//  
-//  rope_scaling field provides additional manual scaling (1.0 = no extra scaling)
-//  
-//  WARNING: If you set max_seq_len=2048 but run inference at 8192 tokens,
-//           position encodings will be extrapolated (may degrade quality)!
-// ═══════════════════════════════════════════════════════════════════════════
-
-bool computeRoPEInvFreq(const PBMConstructionHP& hp,
-                        const PBMRuntimeOptions& runtime,
-                        std::vector<float>& out_inv_freq) {
-    if (hp.rotary_dim <= 0 || (hp.rotary_dim & 1) != 0) {
-        std::cerr << kTag << " Invalid rotary_dim=" << hp.rotary_dim
-                  << " (must be positive and even)" << std::endl;
-        return false;
-    }
-    
-    if (hp.max_seq_len <= 0) {
-        std::cerr << kTag << " Invalid max_seq_len=" << hp.max_seq_len
-                  << " - grouped PBMConstructionHP MUST carry the model context length" << std::endl;
-        return false;
-    }
-    
-    const int half_dim = hp.rotary_dim / 2;
-    out_inv_freq.resize(static_cast<size_t>(half_dim));
-    
-    // Compute NTK-aware theta scaling if extending beyond base context
-    float effective_theta = hp.rope_theta;
-    if (hp.max_seq_len > hp.rope_base_seq_len && hp.rotary_dim > 2) {
-        // NTK-aware formula: theta_scaled = theta * (ctx / base)^(dim / (dim - 2))
-        const float ctx_ratio = static_cast<float>(hp.max_seq_len) / static_cast<float>(hp.rope_base_seq_len);
-        const float ntk_exponent = static_cast<float>(hp.rotary_dim) /
-                                   static_cast<float>(hp.rotary_dim - 2);
-        effective_theta = hp.rope_theta * std::pow(ctx_ratio, ntk_exponent);
-    }
-    
-    // Safety check: effective_theta must be positive for valid rotation frequencies
-    if (effective_theta <= 0.0f) {
-        std::cerr << kTag << " ERROR: effective_theta=" << effective_theta 
-                  << " (must be > 0). Check rope_theta=" << hp.rope_theta << std::endl;
-        return false;
-    }
-    
-    for (int i = 0; i < half_dim; ++i) {
-        const float exp_arg = static_cast<float>(2 * i) / static_cast<float>(hp.rotary_dim);
-        // Apply rope_scaling for any additional manual scaling (typically 1.0)
-        out_inv_freq[static_cast<size_t>(i)] = hp.rope_scaling /
-            std::pow(effective_theta, exp_arg);
-    }
-    
-    if (runtime.verbose) {
-        std::cout << kTag << " RoPE inverse frequencies computed (context-aware NTK scaling):" << std::endl;
-        std::cout << "    rotary_dim=" << hp.rotary_dim
-                  << ", max_seq_len=" << hp.max_seq_len << std::endl;
-        std::cout << "    base_theta=" << hp.rope_theta
-                  << ", effective_theta=" << effective_theta
-                  << ", manual_scaling=" << hp.rope_scaling << std::endl;
-        if (hp.max_seq_len > hp.rope_base_seq_len) {
-            std::cout << "    NTK scaling active: extending from " << hp.rope_base_seq_len
-                      << " to " << hp.max_seq_len << " context" << std::endl;
-        }
-        const int preview = std::min(half_dim, 4);
-        for (int i = 0; i < preview; ++i) {
-            std::cout << "    inv_freq[" << i << "]=" << out_inv_freq[static_cast<size_t>(i)] << std::endl;
-        }
-        if (half_dim > 4) {
-            std::cout << "    ... (" << (half_dim - 4) << " more frequencies)" << std::endl;
-        }
-    }
-    return true;
-}
-
 } // namespace
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -328,33 +104,15 @@ bool computeRoPEInvFreq(const PBMConstructionHP& hp,
 bool initializePBM(const PBMConstructionHP& hp,
                    PBMState& state,
                    PBMRuntimeOptions runtime) {
-    GRIM::PBM::requirePBMConstructionShape(hp, "PBM::initializePBM");
+    GRIM::PBM::requirePBMComputedTables(hp, "PBM::initializePBM");
     // Clean up any existing state
     releasePBM(state);
     
     std::cout << kTag << " Initializing Hybrid ALiBi+RoPE..." << std::endl;
+    logPBMTablePreview(hp, runtime);
     
-    // ─────────────────────────────────────────────────────────────────────────
-    // Step 1: Compute ALiBi slopes on host
-    // ─────────────────────────────────────────────────────────────────────────
-    if (!computeAlibiSlopes(hp, runtime, state.alibi_slopes_host)) {
-        std::cerr << kTag << " Failed to compute ALiBi slopes" << std::endl;
-        return false;
-    }
-    
-    // ─────────────────────────────────────────────────────────────────────────
-    // Step 2: Compute RoPE inverse frequencies on host
-    // ─────────────────────────────────────────────────────────────────────────
-    if (!computeRoPEInvFreq(hp, runtime, state.rope_inv_freq_host)) {
-        std::cerr << kTag << " Failed to compute RoPE inverse frequencies" << std::endl;
-        return false;
-    }
-    
-    // ─────────────────────────────────────────────────────────────────────────
-    // Step 3: Allocate GPU buffers
-    // ─────────────────────────────────────────────────────────────────────────
-    const size_t alibi_bytes = state.alibi_slopes_host.size() * sizeof(float);
-    const size_t rope_bytes = state.rope_inv_freq_host.size() * sizeof(float);
+    const size_t alibi_bytes = hp.alibi_slopes.size * sizeof(float);
+    const size_t rope_bytes = hp.rope_inv_freq.size * sizeof(float);
     
     if (!checkCuda(cudaMalloc(&state.alibi_slopes, alibi_bytes), "cudaMalloc(alibi_slopes)")) {
         return false;
@@ -371,13 +129,13 @@ bool initializePBM(const PBMConstructionHP& hp,
     // ─────────────────────────────────────────────────────────────────────────
     if (runtime.stream) {
         // Async upload
-        if (!checkCuda(cudaMemcpyAsync(state.alibi_slopes, state.alibi_slopes_host.data(),
+        if (!checkCuda(cudaMemcpyAsync(state.alibi_slopes, hp.alibi_slopes.data,
                                         alibi_bytes, cudaMemcpyHostToDevice, runtime.stream),
                        "cudaMemcpyAsync(alibi_slopes)")) {
             releasePBM(state);
             return false;
         }
-        if (!checkCuda(cudaMemcpyAsync(state.rope_inv_freq, state.rope_inv_freq_host.data(),
+        if (!checkCuda(cudaMemcpyAsync(state.rope_inv_freq, hp.rope_inv_freq.data,
                                         rope_bytes, cudaMemcpyHostToDevice, runtime.stream),
                        "cudaMemcpyAsync(rope_inv_freq)")) {
             releasePBM(state);
@@ -385,13 +143,13 @@ bool initializePBM(const PBMConstructionHP& hp,
         }
     } else {
         // Sync upload
-        if (!checkCuda(cudaMemcpy(state.alibi_slopes, state.alibi_slopes_host.data(),
+        if (!checkCuda(cudaMemcpy(state.alibi_slopes, hp.alibi_slopes.data,
                                    alibi_bytes, cudaMemcpyHostToDevice),
                        "cudaMemcpy(alibi_slopes)")) {
             releasePBM(state);
             return false;
         }
-        if (!checkCuda(cudaMemcpy(state.rope_inv_freq, state.rope_inv_freq_host.data(),
+        if (!checkCuda(cudaMemcpy(state.rope_inv_freq, hp.rope_inv_freq.data,
                                    rope_bytes, cudaMemcpyHostToDevice),
                        "cudaMemcpy(rope_inv_freq)")) {
             releasePBM(state);
@@ -426,37 +184,6 @@ bool initializePBM(const PBMConstructionHP& hp,
     return true;
 }
 
-bool ensurePBM(const PBMConstructionHP& hp,
-               PBMState& state,
-               PBMRuntimeOptions runtime) {
-    GRIM::PBM::requirePBMConstructionShape(hp, "PBM::ensurePBM");
-    if (state.initialized) {
-        requirePBMResourcesReady(state, "PBM::ensurePBM");
-
-        PBMRuntimeOptions compare_runtime = runtime;
-        compare_runtime.verbose = false;
-
-        std::vector<float> expected_alibi_slopes;
-        if (!computeAlibiSlopes(hp, compare_runtime, expected_alibi_slopes)) {
-            return false;
-        }
-
-        std::vector<float> expected_rope_inv_freq;
-        if (!computeRoPEInvFreq(hp, compare_runtime, expected_rope_inv_freq)) {
-            return false;
-        }
-
-        const bool config_match =
-            samePBMBufferContents(state.alibi_slopes_host, expected_alibi_slopes) &&
-            samePBMBufferContents(state.rope_inv_freq_host, expected_rope_inv_freq);
-        if (config_match) {
-            return true;
-        }
-    }
-    
-    return initializePBM(hp, state, runtime);
-}
-
 void releasePBM(PBMState& state) {
     if (state.alibi_slopes) {
         cudaFree(state.alibi_slopes);
@@ -470,26 +197,8 @@ void releasePBM(PBMState& state) {
         cudaEventDestroy(state.upload_event);
         state.upload_event = nullptr;
     }
-    
-    state.alibi_slopes_host.clear();
-    state.alibi_slopes_host.shrink_to_fit();
-    state.rope_inv_freq_host.clear();
-    state.rope_inv_freq_host.shrink_to_fit();
 
     state.initialized = false;
-}
-
-PBMSpec getPBMSpec(const PBMState& state) {
-    PBMSpec spec{};
-
-    requirePBMResourcesReady(state, "PBM::getPBMSpec");
-
-    spec.rope_inv_freq = getRoPEInvFreq(state);
-    spec.alibi_slopes = getAlibiSlopes(state);
-    spec.upload_event = state.upload_event;
-    spec.valid = true;
-    
-    return spec;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

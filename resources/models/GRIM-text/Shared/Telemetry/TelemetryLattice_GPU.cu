@@ -603,52 +603,6 @@ TelemetryError TelemetryLattice::readVector(
     return TelemetryError::OK;
 }
 
-TelemetryError TelemetryLattice::readBatched(
-    int level0, int stream_idx0, TelemetryVector* out_vector0,
-    int level1, int stream_idx1, TelemetryVector* out_vector1,
-    int level2, int stream_idx2, TelemetryVector* out_vector2) const
-{
-    if (!out_vector0 || !out_vector1 || !out_vector2) {
-        return TelemetryError::ERR_NULL_POINTER;
-    }
-
-    if (level0 < 0 || level0 >= config_.num_levels ||
-        stream_idx0 < 0 || stream_idx0 >= config_.num_streams) {
-        return TelemetryError::ERR_INVALID_PARAMS;
-    }
-    if (level1 < 0 || level1 >= config_.num_levels ||
-        stream_idx1 < 0 || stream_idx1 >= config_.num_streams) {
-        return TelemetryError::ERR_INVALID_PARAMS;
-    }
-    if (level2 < 0 || level2 >= config_.num_levels ||
-        stream_idx2 < 0 || stream_idx2 >= config_.num_streams) {
-        return TelemetryError::ERR_INVALID_PARAMS;
-    }
-
-    auto* scratch = reinterpret_cast<TelemetryVector*>(scratch_vectors_.data);
-    TelemetryVector* d_temp0 = &scratch[0];
-    TelemetryVector* d_temp1 = &scratch[1];
-    TelemetryVector* d_temp2 = &scratch[2];
-
-    extractTelemetryVectorKernel<<<1, 1, 0, config_.stream>>>(
-        levels_, d_temp0, level0, stream_idx0, config_.num_streams
-    );
-    extractTelemetryVectorKernel<<<1, 1, 0, config_.stream>>>(
-        levels_, d_temp1, level1, stream_idx1, config_.num_streams
-    );
-    extractTelemetryVectorKernel<<<1, 1, 0, config_.stream>>>(
-        levels_, d_temp2, level2, stream_idx2, config_.num_streams
-    );
-
-    cudaStreamSynchronize(config_.stream);
-
-    cudaMemcpy(out_vector0, d_temp0, sizeof(TelemetryVector), cudaMemcpyDeviceToHost);
-    cudaMemcpy(out_vector1, d_temp1, sizeof(TelemetryVector), cudaMemcpyDeviceToHost);
-    cudaMemcpy(out_vector2, d_temp2, sizeof(TelemetryVector), cudaMemcpyDeviceToHost);
-
-    return TelemetryError::OK;
-}
-
 TelemetryError TelemetryLattice::readState(
     int level, int stream_idx, TelemetryState* out_state) const
 {

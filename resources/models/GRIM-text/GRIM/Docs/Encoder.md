@@ -25,6 +25,9 @@ Layer code must not crack open `Tensor::shape` for matmul/activation compatibili
 ## Forward runtime handle ownership
 Encoder/FFN/LM-head/reasoning/selector layers must not store forward-time `cudaStream_t` or `cublasHandle_t`, and must not expose late `setStream()` / `setCublasHandle()` mutators. Startup may pass an init stream for self-allocation only. Actual forward execution handles come from the caller's payload/request (`AutogradContext` → `Forward::ModelForwardRequest`, or the inference/decode equivalent) and are passed into each forward call.
 
+## Encoder type ownership
+`GPUGrimEncoder` is only a container of `EncodingLayer` instances. `grim_language_model_cuda.hpp` may forward-declare `EncodingLayer` for pointer access, but it must not mint a second public alias such as `GPUEncoderLayer`. The concrete layer type is owned by `Layers/Encoding/Encoding_GPU.hpp`; callers that need layer methods should include that header and work with `EncodingLayer*` directly.
+
 ## Dropout HP ownership
 Encoder and FFN dropout rates must come from `HyperParameters_GPU.hpp` → `EncoderLayerConstructionHP` → `FeedForwardLayerConstructionHP`. `EncodingLayer` stores the grouped encoder HP snapshot directly as `hp_` plus a borrowed PBM spec pointer; `FeedForwardLayer` stores its grouped FFN HP snapshot directly as `hp_`. Do not reintroduce layer-local dropout defaults, thin FFN config wrappers, or forward-runtime handle fields.
 
@@ -51,14 +54,16 @@ QKV-specific diagnostic code belongs next to the autograd attention implementati
 ## Activation centering before weight grads
 Center cached activations (`cached_ln1_output`, `cached_ffn_input`, …) **before** the weight-gradient GEMMs to eliminate systematic bias from non-zero mean.
 
-## Residual centering is per-sequence and padding-aware
-`center_encoder_residuals` MUST use `autograd::center_columns_by_sequence_lengths(x, bindings.d_seq_lengths, payload.batch_size, payload.max_seq_len, stream)`, not global `center_columns(x)` or fixed-row `center_columns_by_sequence(x, payload.max_seq_len, stream)`, on flattened `[batch_size * seq_len, d_model]` tensors.
+## Residual centering is per-sequence, padding-aware, and causal-prefix only
+`center_encoder_residuals` MUST use `autograd::center_columns_by_causal_prefix_lengths(x, payload.seq_lengths, payload.batch_size, payload.max_seq_len, stream)`, not global `center_columns(x)`, fixed-row `center_columns_by_sequence(x, payload.max_seq_len, stream)`, or full-sequence `center_columns_by_sequence_lengths(...)`, on flattened `[batch_size * seq_len, d_model]` tensors.
 
-Global column-centering over the full flat matrix makes sample A depend on sample B via the batch-wide mean. Fixed-row per-sequence centering still leaks PAD activations into real-token means because `BatchPayload` pads input IDs to `Tokenizer::PAD_TOKEN_ID` and those rows produce real embeddings. The safe equation is:
+Global column-centering over the full flat matrix makes sample A depend on sample B via the batch-wide mean. Full-sequence per-row centering avoids cross-batch leakage but still leaks future positions `t+1...N` into token `t`, which is forbidden for an autoregressive model. Fixed-row per-sequence centering also leaks PAD activations into real-token means because `BatchPayload` pads input IDs to `Tokenizer::PAD_TOKEN_ID` and those rows produce real embeddings. The safe equation is:
 
-`h[b,t,d] = h[b,t,d] - mean_{u < seq_lengths[b]}(h[b,u,d])` for valid rows, and padded rows are zeroed.
+`h[b,0,d] = h[b,0,d]`
 
-This removes the shared within-sequence direction without crossing batch-row ownership boundaries or letting PAD rows steer the mean. If any centered row has `seq_lengths[b] <= 1`, fail loud; centering a single valid row would erase the residual stream.
+`h[b,t,d] = h[b,t,d] - mean_{u < t}(h[b,u,d])` for valid `t > 0`, and padded rows are zeroed.
+
+This removes the running within-sequence shared direction without crossing batch-row ownership boundaries, letting PAD rows steer the mean, erasing the first token, or leaking future tokens into the current position. If any centered row has `seq_lengths[b] <= 1`, fail loud; there is no meaningful strict-past context to center against.
 
 ## `per_token_grad_scale=true` is REQUIRED
 Gradient RMS ~1e-6 with ~3000 tokens is **correct**. Disabling causes ~3000× effective LR explosion.

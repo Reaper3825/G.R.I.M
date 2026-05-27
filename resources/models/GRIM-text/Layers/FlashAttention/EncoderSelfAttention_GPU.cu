@@ -66,10 +66,10 @@ namespace {
         }
     }
 
-    void validatePBMSpec(const GRIM::PBM::PBMSpec& pbm,
+    void validatePBMState(const GRIM::PBM::PBMState& pbm,
                          const GRIM::HyperParameters::EncoderSelfAttentionHP& hp) {
-        if (!pbm.valid) {
-            throw std::runtime_error("encoderSelfAttentionForward: PBM spec is not valid - GRIM requires RoPE+ALiBi");
+        if (!pbm.initialized) {
+            throw std::runtime_error("encoderSelfAttentionForward: PBM state is not initialized - GRIM requires RoPE+ALiBi");
         }
         if (!pbm.rope_inv_freq) {
             throw std::runtime_error("encoderSelfAttentionForward: PBM rope_inv_freq is NULL");
@@ -126,7 +126,7 @@ void encoderSelfAttentionForward(const Tensor& norm_input,
     }
 
     validateWeights(weights, request.hp);
-    validatePBMSpec(request.pbm, request.hp);
+    validatePBMState(request.pbm, request.hp);
     cudaError_t wait_err = cudaStreamWaitEvent(request.stream, request.pbm.upload_event, 0);
     if (wait_err != cudaSuccess) {
         throw std::runtime_error(std::string("encoderSelfAttentionForward: cudaStreamWaitEvent(PBM upload_event) failed: ") +

@@ -684,7 +684,7 @@ curl http://localhost:8080/v1/chat/completions \
 **Embedding Extraction:**
 ```cpp
 auto embeddings = model.getEmbeddings({"hello", "world"});
-// Returns vector<Vector> with token embeddings
+// Returns std::vector<std::vector<float>> with token embeddings
 ```
 
 ### Downstream Use

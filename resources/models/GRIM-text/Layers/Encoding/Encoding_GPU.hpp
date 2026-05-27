@@ -86,11 +86,11 @@ public:
     
     /// Self-allocating constructor — layer owns its weights
     /// @param hp_snapshot Grouped encoder construction HP from HyperparameterGroupings.hpp
-    /// @param pos_encoding Positional encoding spec initialized before encoder construction
+    /// @param pos_encoding Positional encoding state initialized before encoder construction
     /// @param seed Base PRNG seed. Offsets: +0 W_qkv, +1 W_o, +2 FFN W1, +3 FFN W2
     /// @param init_stream CUDA stream for self-allocation during startup/model assembly
     EncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp_snapshot,
-                  const PBM::PBMSpec& pos_encoding,
+                  const PBM::PBMState& pos_encoding,
                   uint64_t seed,
                   cudaStream_t init_stream);
     
@@ -199,7 +199,7 @@ private:
     void allocateWeights(uint64_t seed, cudaStream_t init_stream);
     
     HyperParameters::EncoderLayerConstructionHP hp_{};
-    const PBM::PBMSpec* pos_encoding_ = nullptr;
+    const PBM::PBMState* pos_encoding_ = nullptr;
     bool weights_ready_ = false;  // Set by allocateWeights()
     
     // RMSNorm weights (Tensor with requires_grad=true)

@@ -32,7 +32,6 @@
 // Forward declaration for autograd tensor system
 namespace GRIM {
     class EmbeddingLayer;
-    struct FlashAttentionBF16Scratch;
     enum class SlotSelectionStatus : uint8_t;
     struct SlotSelectionResult;
 }

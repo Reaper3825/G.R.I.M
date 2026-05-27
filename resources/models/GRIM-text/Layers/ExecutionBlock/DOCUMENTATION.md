@@ -74,6 +74,7 @@ Grouped fields consumed by the layer:
 Public methods:
 
 - `executeStep(...)`
+- `prepareForwardRuntime(...)`
 - `bootstrapMemoryFromSlotMap(...)`
 - `crossAttentionRead(...)`
 - `computeEntropyLoss(...)`
@@ -88,7 +89,7 @@ Deleted public APIs such as `encodeState()` and `lastDivClampCount()` are gone.
 
 The caller must provide:
 
-- `token_offset` and `row_tokens` describing the active row span inside `H`,
+- `token_offset` and `row_tokens` describing the active valid row span inside `H` (`payload.seq_lengths[b]`, not padded `payload.max_seq_len`),
 - `token_to_slot_map` for that row only,
 - `atom_positions` relative to `[0, row_tokens)`,
 - non-null row-local atom buffers even when `num_atoms == 0`.
@@ -140,7 +141,8 @@ At a high level, one step does this:
    - scalar → decode MLP → scalar,
    - scalar → `result_emb` via learned projection.
 9. **Inject into hidden state**
-   - inject `result_emb` into either the configured fixed token row or the last token of the row.
+   - inject `result_emb` into the row-final valid token only.
+   - fixed result-slot mode is legal only when the configured slot equals that row-final absolute token index.
 10. **Score write destinations**
     - compute `p_write` over all slots.
 11. **Hard write back**
@@ -154,6 +156,31 @@ At a high level, one step does this:
     - entropy / collapse checks,
     - optional transition-loss diagnostics,
     - multi-slot mutation check.
+
+## Shared-forward runtime preparation
+
+Shared forward now routes execution-layer reset through one explicit layer op:
+
+- `ExecutionBlockLayer::prepareForwardRuntime(...)`
+
+This op prepares caller-owned execution runtime for one forward execution boundary.
+It does not own the runtime; the caller still passes the actual storage explicitly:
+
+- `std::vector<ExecutionMemory>& exec_memories`
+- `std::vector<ExecutionBlockOutput>& exec_outputs_per_row`
+- `std::vector<Tensor>& exec_expected_target_tensors`
+- `std::vector<std::vector<ExecutionRecord>>& execution_trace_by_row`
+- `std::vector<Tensor>& trace_state_by_row`
+
+Current `prepareForwardRuntime(...)` behavior:
+
+1. validates config + payload execution geometry,
+2. resizes the caller-owned execution bags to `payload.batch_size`,
+3. clears prior execution traces, step diagnostics, and expected-target stash,
+4. allocates + zeroes each active row's `ExecutionMemory`,
+5. recreates each active row's `trace_state`, enabling autograd only when the caller requested a connected parameter graph.
+
+This keeps execution cleanup behind one fail-loud execution-block boundary instead of scattering vector clears and `ExecutionMemory::clear(...)` calls through shared forward.
 
 ## Write semantics
 
@@ -181,6 +208,8 @@ Current behavior:
 - update `usage` with decayed attention mass.
 
 `crossAttentionRead(...)` is also row-local via `token_offset` / `row_tokens`.
+
+In shared autoregressive forward, the row's available `ExecutionMemory` is the **row-final** post-execution register state. It is not timestep-aligned. The caller must therefore read it back only at the row-final valid token (`token_offset = b * max_seq_len + seq_lengths[b] - 1`, `row_tokens = 1`) and only on the **next layer input or later**. The execution layer may export the immediate step result directly from `executeStep(...)`, but persistent register memory should not be written and then immediately consumed on the same layer boundary. Reading that same memory into earlier positions would leak future numeric atoms through the execution side channel.
 
 ## Diagnostics and fail-loud behavior
 

@@ -441,6 +441,63 @@ void ExecutionBlockLayer::bootstrapMemoryFromSlotMap(
     CUDA_CHECK_KERNEL();
 }
 
+void ExecutionBlockLayer::prepareForwardRuntime(
+    const Batching::BatchPayload& payload,
+    bool connect_parameter_graph,
+    cudaStream_t stream,
+    std::vector<ExecutionMemory>& exec_memories,
+    std::vector<ExecutionBlockOutput>& exec_outputs_per_row,
+    std::vector<Tensor>& exec_expected_target_tensors,
+    std::vector<std::vector<ExecutionRecord>>& execution_trace_by_row,
+    std::vector<Tensor>& trace_state_by_row
+) const {
+    validateConfigOrThrow();
+    EXEC_CHECK(stream != nullptr, "prepareForwardRuntime: stream is NULL");
+    EXEC_CHECK(payload.batch_size > 0, "prepareForwardRuntime: payload.batch_size must be positive");
+    if (!payload.execution_active.empty()) {
+        EXEC_CHECK(static_cast<int>(payload.execution_active.size()) == payload.batch_size,
+                   "prepareForwardRuntime: payload.execution_active size must equal payload.batch_size");
+    }
+
+    exec_memories.resize(payload.batch_size);
+    exec_outputs_per_row.resize(payload.batch_size);
+    execution_trace_by_row.resize(payload.batch_size);
+    trace_state_by_row.resize(payload.batch_size);
+    exec_expected_target_tensors.clear();
+    exec_expected_target_tensors.reserve(
+        static_cast<size_t>(payload.batch_size) * static_cast<size_t>(hp_.num_exec_steps));
+
+    for (int b = 0; b < payload.batch_size; ++b) {
+        execution_trace_by_row[static_cast<size_t>(b)].clear();
+        exec_outputs_per_row[static_cast<size_t>(b)].steps.clear();
+
+        const bool row_exec_active = !payload.execution_active.empty()
+            && payload.execution_active[static_cast<size_t>(b)];
+        if (!row_exec_active) {
+            trace_state_by_row[static_cast<size_t>(b)] = Tensor();
+            continue;
+        }
+
+        auto& row_memory = exec_memories[static_cast<size_t>(b)];
+        row_memory.allocate(
+            hp_.num_slots,
+            hp_.atom_embedding_dim,
+            hp_.d_model,
+            hp_.d_key,
+            hp_.d_type,
+            stream);
+        row_memory.clear(stream);
+
+        trace_state_by_row[static_cast<size_t>(b)] = Tensor::zeros({1, hp_.d_model}, stream, "trace_state_row");
+        if (connect_parameter_graph) {
+            trace_state_by_row[static_cast<size_t>(b)].requires_grad_();
+            trace_state_by_row[static_cast<size_t>(b)].ensure_grad();
+        } else {
+            trace_state_by_row[static_cast<size_t>(b)].requires_grad = false;
+        }
+    }
+}
+
 // Device kernel: check if any value slot [S..S+V_val) has valid_mask >= 0.5.
 // If none valid, sets error_flag via atomicMax to fail in finalizeStepOrThrow.
 __global__ void kernelCheckAnyValueSlotValid(

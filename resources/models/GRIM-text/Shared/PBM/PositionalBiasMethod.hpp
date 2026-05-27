@@ -19,7 +19,6 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
-#include <vector>
 
 #include "../Batching/BatchPayload.hpp"
 #include "../HyperParameters/HyperparameterGroupings.hpp"
@@ -42,13 +41,9 @@ struct PBMRuntimeOptions {
 // ═══════════════════════════════════════════════════════════════════════════
 
 struct PBMState {
-    // ALiBi state
+    // ALiBi / RoPE device tables uploaded from HyperParameters-owned derived host tables.
     float* alibi_slopes = nullptr;       // Device: [num_heads] slopes
-    std::vector<float> alibi_slopes_host;
-    
-    // RoPE state
     float* rope_inv_freq = nullptr;      // Device: [rotary_dim/2] inverse frequencies
-    std::vector<float> rope_inv_freq_host;
     
     // CUDA event recorded after async upload for cross-stream synchronization.
     // Consumers on a DIFFERENT stream must cudaStreamWaitEvent(their_stream, upload_event)
@@ -60,24 +55,6 @@ struct PBMState {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  Positional Encoding Spec (passed to Flash Attention)
-// ═══════════════════════════════════════════════════════════════════════════
-
-struct PBMSpec {
-    // Borrowed RoPE/ALiBi device buffers (for Q,K rotation / score bias)
-    const float* rope_inv_freq = nullptr;
-    const float* alibi_slopes = nullptr;
-
-    // Readiness event recorded after async upload on the PBM init stream.
-    // Attention/runtime callers must wait on this event before borrowing the
-    // device buffers from a different stream.
-    cudaEvent_t upload_event = nullptr;
-    
-    // Valid flag
-    bool valid = false;
-};
-
-// ═══════════════════════════════════════════════════════════════════════════
 //  Core API
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -86,16 +63,8 @@ bool initializePBM(const PBMConstructionHP& hp,
                    PBMState& state,
                    PBMRuntimeOptions runtime = {});
 
-// Ensure state matches config (re-initializes if dimensions changed)
-bool ensurePBM(const PBMConstructionHP& hp,
-               PBMState& state,
-               PBMRuntimeOptions runtime = {});
-
 // Release GPU memory
 void releasePBM(PBMState& state);
-
-// Get spec for Flash Attention (views into state)
-PBMSpec getPBMSpec(const PBMState& state);
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  RoPE Rotation Kernels (applied to Q,K before attention)
@@ -163,37 +132,29 @@ inline void requirePBMConstructionShape(const PBMConstructionHP& hp, const char*
     }
 }
 
+inline void requirePBMComputedTables(const PBMConstructionHP& hp, const char* caller) {
+    requirePBMConstructionShape(hp, caller);
+
+    if (!hp.alibi_slopes.data || hp.alibi_slopes.size != static_cast<size_t>(hp.num_heads)) {
+        throw std::runtime_error(std::string(caller) + ": PBM alibi_slopes view is invalid for num_heads=" +
+                                 std::to_string(hp.num_heads) + " (size=" +
+                                 std::to_string(hp.alibi_slopes.size) + ")");
+    }
+
+    const size_t expected_rope_size = static_cast<size_t>(hp.rotary_dim / 2);
+    if (!hp.rope_inv_freq.data || hp.rope_inv_freq.size != expected_rope_size) {
+        throw std::runtime_error(std::string(caller) + ": PBM rope_inv_freq view is invalid for rotary_dim=" +
+                                 std::to_string(hp.rotary_dim) + " (size=" +
+                                 std::to_string(hp.rope_inv_freq.size) + ")");
+    }
+}
+
 // Returns GPU bytes required for PBM buffers
 inline size_t getPBMDeviceBytes(const PBMConstructionHP& hp) {
     requirePBMConstructionShape(hp, "PBM::getPBMDeviceBytes");
     const size_t alibi_bytes = static_cast<size_t>(hp.num_heads) * sizeof(float);
     const size_t rope_bytes = static_cast<size_t>(hp.rotary_dim / 2) * sizeof(float);
     return alibi_bytes + rope_bytes;
-}
-
-// Convenience accessors
-inline void requirePBMInitialized(const PBMState& state, const char* caller) {
-    if (!state.initialized) {
-        throw std::runtime_error(std::string(caller) + ": PBM state is not initialized");
-    }
-}
-
-inline const float* getAlibiSlopes(const PBMState& state) {
-    requirePBMInitialized(state, "PBM::getAlibiSlopes");
-    if (!state.alibi_slopes) {
-        throw std::runtime_error("PBM::getAlibiSlopes: initialized state has NULL alibi_slopes at " +
-                                 std::string(__FILE__) + ":" + std::to_string(__LINE__));
-    }
-    return state.alibi_slopes;
-}
-
-inline const float* getRoPEInvFreq(const PBMState& state) {
-    requirePBMInitialized(state, "PBM::getRoPEInvFreq");
-    if (!state.rope_inv_freq) {
-        throw std::runtime_error("PBM::getRoPEInvFreq: initialized state has NULL rope_inv_freq at " +
-                                 std::string(__FILE__) + ":" + std::to_string(__LINE__));
-    }
-    return state.rope_inv_freq;
 }
 
 } // namespace GRIM::PBM

@@ -238,6 +238,17 @@ enum class ModelExecutionMode {
     INFERENCE    // Lightweight inference state with only forward caches (~385MB)
 };
 
+struct LanguageModelConfig;
+inline std::vector<float> computeDerivedPBMAlibiSlopes(
+    const LanguageModelConfig& params,
+    const char* caller);
+inline std::vector<float> computeDerivedPBMRopeInvFreq(
+    const LanguageModelConfig& params,
+    const char* caller);
+inline void populateDerivedPBMTables(
+    LanguageModelConfig& params,
+    const char* caller);
+
 struct LanguageModelConfig {
     int d_model = 0;
     int num_layers = 0;
@@ -256,6 +267,8 @@ struct LanguageModelConfig {
     float alibi_max_bias = std::numeric_limits<float>::quiet_NaN();
     float rope_theta = 0.0f;
     float rope_scaling = 0.0f;
+    std::vector<float> pbm_alibi_slopes;
+    std::vector<float> pbm_rope_inv_freq;
 
     bool use_flash_attention = true;
     int min_seq_len_for_flash = 0;
@@ -298,6 +311,7 @@ struct LanguageModelConfig {
         qkv_dim = computeQKVProjectionSize(d_model, num_heads, num_kv_heads);
         rotary_dim = head_dim;
         is_gqa = num_kv_heads < num_heads;
+        populateDerivedPBMTables(*this, "LanguageModelConfig::computeDerivedValues");
         if (d_ff <= 0) {
             d_ff = d_model * D_FF_MULTIPLIER;
         }
@@ -991,6 +1005,131 @@ inline int computeMaxTokensPerBatch(int batch_size, int max_seq_len, const char*
     return static_cast<int>(token_budget);
 }
 
+inline std::vector<float> computeDerivedPBMAlibiSlopes(
+    const LanguageModelConfig& params,
+    const char* caller)
+{
+    if (params.num_heads <= 0) {
+        throw std::runtime_error(std::string(caller) + ": PBM num_heads must be > 0, got " +
+                                 std::to_string(params.num_heads));
+    }
+    if (params.max_seq_len <= 0) {
+        throw std::runtime_error(std::string(caller) + ": PBM max_seq_len must be > 0, got " +
+                                 std::to_string(params.max_seq_len));
+    }
+    if (params.rotary_dim <= 0 || (params.rotary_dim & 1) != 0) {
+        throw std::runtime_error(std::string(caller) + ": PBM rotary_dim must be positive and even, got " +
+                                 std::to_string(params.rotary_dim));
+    }
+
+    const int d_max = params.max_seq_len;
+    const int locality_floor = std::min(params.alibi_min_locality_distance, d_max);
+    const int d_min = std::max(locality_floor, std::min(params.rotary_dim / 2, d_max));
+    const float target_bias = std::abs(params.alibi_slope_exponent);
+    if (target_bias == 0.0f) {
+        throw std::runtime_error(std::string(caller) + ": alibi_slope_exponent must be non-zero");
+    }
+
+    const float base_m_max = target_bias / static_cast<float>(d_min);
+    const float base_m_min = target_bias / static_cast<float>(d_max);
+    const float max_bias_scale = static_cast<float>(d_min) / static_cast<float>(d_max);
+    const float m_max = base_m_max * max_bias_scale;
+    const float m_min = base_m_min * max_bias_scale;
+    if (!(m_min <= m_max)) {
+        throw std::runtime_error(std::string(caller) + ": computed ALiBi slope range is inverted");
+    }
+    if (!std::isfinite(params.alibi_max_bias) || params.alibi_max_bias > 0.0f) {
+        throw std::runtime_error(std::string(caller) + ": alibi_max_bias must be finite and <= 0, got " +
+                                 std::to_string(params.alibi_max_bias));
+    }
+
+    std::vector<float> slopes(static_cast<size_t>(params.num_heads));
+    const float max_bias_magnitude = std::abs(params.alibi_max_bias);
+    const float max_slope_magnitude = (params.alibi_max_bias != 0.0f)
+        ? (max_bias_magnitude / static_cast<float>(params.max_seq_len))
+        : 0.0f;
+
+    if (params.num_heads == 1) {
+        float slope = -m_max;
+        if (max_slope_magnitude > 0.0f && m_max > max_slope_magnitude) {
+            slope = -max_slope_magnitude;
+        }
+        slopes[0] = slope;
+        return slopes;
+    }
+
+    const float log_mmax = std::log(m_max);
+    const float log_mmin = std::log(m_min);
+    for (int h = 0; h < params.num_heads; ++h) {
+        const float t = static_cast<float>(h) / static_cast<float>(params.num_heads - 1);
+        const float log_m = log_mmax + t * (log_mmin - log_mmax);
+        float slope_magnitude = std::exp(log_m);
+        if (max_slope_magnitude > 0.0f && slope_magnitude > max_slope_magnitude) {
+            slope_magnitude = max_slope_magnitude;
+        }
+        slopes[static_cast<size_t>(h)] = -slope_magnitude;
+    }
+
+    return slopes;
+}
+
+inline std::vector<float> computeDerivedPBMRopeInvFreq(
+    const LanguageModelConfig& params,
+    const char* caller)
+{
+    if (params.rotary_dim <= 0 || (params.rotary_dim & 1) != 0) {
+        throw std::runtime_error(std::string(caller) + ": PBM rotary_dim must be positive and even, got " +
+                                 std::to_string(params.rotary_dim));
+    }
+    if (params.max_seq_len <= 0) {
+        throw std::runtime_error(std::string(caller) + ": PBM max_seq_len must be > 0, got " +
+                                 std::to_string(params.max_seq_len));
+    }
+    if (params.rope_base_seq_len <= 0) {
+        throw std::runtime_error(std::string(caller) + ": rope_base_seq_len must be > 0, got " +
+                                 std::to_string(params.rope_base_seq_len));
+    }
+    if (!(params.rope_theta > 0.0f) || !std::isfinite(params.rope_theta)) {
+        throw std::runtime_error(std::string(caller) + ": rope_theta must be a positive finite value, got " +
+                                 std::to_string(params.rope_theta));
+    }
+    if (!(params.rope_scaling > 0.0f) || !std::isfinite(params.rope_scaling)) {
+        throw std::runtime_error(std::string(caller) + ": rope_scaling must be a positive finite value, got " +
+                                 std::to_string(params.rope_scaling));
+    }
+
+    const int half_dim = params.rotary_dim / 2;
+    std::vector<float> inv_freq(static_cast<size_t>(half_dim));
+
+    float effective_theta = params.rope_theta;
+    if (params.max_seq_len > params.rope_base_seq_len && params.rotary_dim > 2) {
+        const float ctx_ratio = static_cast<float>(params.max_seq_len) /
+                                static_cast<float>(params.rope_base_seq_len);
+        const float ntk_exponent = static_cast<float>(params.rotary_dim) /
+                                   static_cast<float>(params.rotary_dim - 2);
+        effective_theta = params.rope_theta * std::pow(ctx_ratio, ntk_exponent);
+    }
+    if (!(effective_theta > 0.0f) || !std::isfinite(effective_theta)) {
+        throw std::runtime_error(std::string(caller) + ": effective RoPE theta must be a positive finite value, got " +
+                                 std::to_string(effective_theta));
+    }
+
+    for (int i = 0; i < half_dim; ++i) {
+        const float exp_arg = static_cast<float>(2 * i) / static_cast<float>(params.rotary_dim);
+        inv_freq[static_cast<size_t>(i)] = params.rope_scaling / std::pow(effective_theta, exp_arg);
+    }
+
+    return inv_freq;
+}
+
+inline void populateDerivedPBMTables(
+    LanguageModelConfig& params,
+    const char* caller)
+{
+    params.pbm_alibi_slopes = computeDerivedPBMAlibiSlopes(params, caller);
+    params.pbm_rope_inv_freq = computeDerivedPBMRopeInvFreq(params, caller);
+}
+
 inline void refreshMutableTrainingDerivedValues(LanguageModelConfig& params,
                                                 int effective_max_seq_len,
                                                 const char* caller) {
@@ -1065,6 +1204,7 @@ inline void deriveComputedLanguageModelConfig(LanguageModelConfig& params) {
     params.qkv_dim = computeQKVProjectionSize(params.d_model, params.num_heads, params.num_kv_heads);
     params.rotary_dim = head_dim;
     params.is_gqa = params.num_kv_heads < params.num_heads;
+    populateDerivedPBMTables(params, "deriveComputedLanguageModelConfig");
     if (params.num_layers <= 0) {
         throw std::runtime_error(
             "deriveComputedLanguageModelConfig: num_layers must be > 0, got " +
@@ -1194,6 +1334,18 @@ inline void validateRootConfigDocument(
                                  std::to_string(params.rotary_dim) +
                                  " must be even and <= head_dim=" +
                                  std::to_string(params.head_dim));
+    }
+    if (params.pbm_alibi_slopes.size() != static_cast<size_t>(params.num_heads)) {
+        throw std::runtime_error(std::string(caller) + ": pbm_alibi_slopes.size()=" +
+                                 std::to_string(params.pbm_alibi_slopes.size()) +
+                                 " does not match num_heads=" +
+                                 std::to_string(params.num_heads));
+    }
+    if (params.pbm_rope_inv_freq.size() != static_cast<size_t>(params.rotary_dim / 2)) {
+        throw std::runtime_error(std::string(caller) + ": pbm_rope_inv_freq.size()=" +
+                                 std::to_string(params.pbm_rope_inv_freq.size()) +
+                                 " does not match rotary_dim/2=" +
+                                 std::to_string(params.rotary_dim / 2));
     }
     validateFiniteNonZeroFields(params, {
         validationField("alibi_slope_exponent", &LanguageModelConfig::alibi_slope_exponent)

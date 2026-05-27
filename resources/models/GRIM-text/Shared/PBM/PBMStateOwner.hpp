@@ -6,20 +6,19 @@
 #pragma once
 
 #include <cuda_runtime.h>
-#include <vector>
 
 #include "PositionalBiasMethod.hpp"
 
 namespace GRIM::PBM {
 
-// Owns the durable PBM buffers used by attention:
-//   - ALiBi slopes device + host mirror
-//   - RoPE inverse frequencies device + host mirror
+// Owns the durable PBM device buffers used by attention:
+//   - ALiBi slopes device upload target
+//   - RoPE inverse frequencies device upload target
 //   - upload event for cross-stream synchronization
 //
 // This is model-level durable state. It is NOT TrainingState workspace, NOT
-// BatchPayload data, and NOT autograd tape state. Consumers borrow PBMSpec or
-// const PBMState views; only this owner releases PBMState resources.
+// BatchPayload data, and NOT autograd tape state. Consumers borrow const
+// PBMState views; only this owner releases PBMState resources.
 class PBMStateOwner final {
 public:
     PBMStateOwner() = default;
@@ -33,18 +32,9 @@ public:
     PBMStateOwner& operator=(PBMStateOwner&& other) noexcept;
 
     void initialize(const PBMConstructionHP& hp, cudaStream_t stream, bool verbose = false);
-    void ensure(const PBMConstructionHP& hp, cudaStream_t stream, bool verbose = false);
-    void reset() noexcept;
-
-    bool initialized() const noexcept { return state_.initialized; }
+    bool initialized() const noexcept;
 
     const PBMState& state() const;
-    PBMSpec spec() const;
-
-    const float* alibiSlopes() const;
-    const float* ropeInvFreq() const;
-    const std::vector<float>& alibiSlopesHost() const;
-    const std::vector<float>& ropeInvFreqHost() const;
 
 private:
     PBMState state_{};

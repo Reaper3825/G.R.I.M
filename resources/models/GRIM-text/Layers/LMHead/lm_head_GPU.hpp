@@ -36,6 +36,11 @@ struct LMHeadParameterViews {
     const Tensor* final_rms_gamma = nullptr;
 };
 
+struct LMHeadForwardResult {
+    Tensor logits;
+    Tensor lm_input_tensor;
+};
+
 // Local experiment toggle only. Keep this LM-head-local until we decide
 // whether token-layout gating should become an authored config field.
 //
@@ -43,7 +48,7 @@ struct LMHeadParameterViews {
 // gate without changing embedding lookup, so tied embeddings no longer have
 // strict embedding/LM symmetry. That asymmetry is intentional for local
 // experiments.
-inline constexpr bool kEnableLmHeadTokenTypeGateExperiment = true;
+inline constexpr bool kEnableLmHeadTokenTypeGateExperiment = false;
 
 //======================================================//
 //  LMHeadLayer - Self-Allocating (Pattern B: Layer Ownership)
@@ -133,7 +138,7 @@ public:
     //--------------------------------------------------
     /// LM head forward with autograd tracking:
     ///   0. Optional: RMSNorm(input, final_rms_gamma_frozen_or_trained_) — pre-LM-head normalization
-    ///   1. Optional: center_columns_by_sequence_lengths on normalized input (Issue #125/#132)
+    ///   1. Optional: center_columns_by_causal_prefix_lengths on normalized input (Issue #125/#132)
     ///   2. Optional: project_out_pc1 on the current LM input (composes after centering when both are enabled)
     ///   3. logits = input @ weights^T  (autograd::matmul, transpose_b=true)
     ///   4. Optional: center_rows on logits (numerical stability)
@@ -142,16 +147,19 @@ public:
     /// Builds compute graph for automatic backward().
     ///
     /// @param input                    [total_tokens, d_model] - encoder output (MUST have grad_fn if training)
-    /// @param out_centered_hidden      Output: centered hidden states (valid only if centering enabled, for diagnostics)
     /// @param payload                  Host-side batch contents and real lengths; inference geometry comes from payload,
     ///                                 while fixed-shape training geometry is validated against config-authored hp_
     /// @param stream                   CUDA stream from the caller's forward payload/request
     /// @param cublas_handle            cuBLAS handle from the caller's forward payload/request
-    /// @return logits [total_tokens, vocab_size] with grad_fn attached
-    Tensor forward(const Tensor& input, Tensor& out_centered_hidden,
-                   const Batching::BatchPayload& payload,
-                   cudaStream_t stream, cublasHandle_t cublas_handle,
-                   const LMHeadParameterViews* parameter_views = nullptr);
+    /// @return `logits` plus the actual live tensor fed into the LM GEMM when
+    ///         the head materialized a transformed input (RMSNorm / centering /
+    ///         PC1 projection). Callers that need a forward-time diagnostics
+    ///         handle must store that returned tensor themselves; LMHeadLayer
+    ///         must not mutate caller-owned runtime sinks.
+    LMHeadForwardResult forward(const Tensor& input,
+                                const Batching::BatchPayload& payload,
+                                cudaStream_t stream, cublasHandle_t cublas_handle,
+                                const LMHeadParameterViews* parameter_views = nullptr);
 
 
 

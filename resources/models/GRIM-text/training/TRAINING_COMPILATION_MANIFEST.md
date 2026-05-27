@@ -215,7 +215,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **FIXED**: Rule 20 — Duplicate PBM init fallback in `InitTrainingState.cu::initTrainingState()` REMOVED. Now throws if PBM not pre-initialized by `initPBM()`.
   - Slopes are NEGATIVE (FlashAttention uses `+= slope * col_idx`) ✅
   - Non-GQA launcher properly DELETED (Rule 20) ✅
-  - `ensurePBM()` float equality safe (config assignment, no arithmetic) ✅
+  - Dead `ensurePBM()` / `PBMStateOwner::ensure()` reinit path DELETED; PBM is a one-shot startup-owned initialization owned by `LanguageModel::pbm_owner_` ✅
   - No stale code found ✅
 
 ---
@@ -266,7 +266,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **FIXED**: `normalizeProbabilities()` now throws on invalid sum (no silent return)
   - **FIXED**: Removed debug spew in `sampleFromLogits()` and unreachable code after throws
   - **CLEANED**: `GRIM/grim_language_model_cuda.hpp` CPU fallback class blocks removed (EncoderLayer/GrimEncoder/LMHead/TextGenerator), dead accessors and members deleted
-  - **REFACTORED**: `ALiBiPositionalBias` wrapper deleted; PBM access now goes through model-level `PBM::PBMStateOwner` and `LanguageModel::getPBMState()` / `getPBMSpec()`.
+  - **REFACTORED**: `ALiBiPositionalBias` wrapper deleted; PBM device access now goes through model-level `PBM::PBMStateOwner` and startup-owned `ModelAssemblyAccess::pbmState(...)`, while derived ALiBi/RoPE host tables are HyperParameters-owned and exposed through `pbmConstructionHP()` immutable views.
   - **FIXED (Vocab authority cleanup)**: Deleted LanguageModel vocab.bin size detection/override; model construction now uses caller-supplied vocab size (GRMT header for training, tokenizer token-space size for inference).
   - **FIXED (Pass 3)**: Constructor now validates `num_heads > 0` and `d_model % num_heads == 0` BEFORE computing `d_head` (prevents divide-by-zero/UB during positional init).
   - **DELETED (Payload Inference Cleanup)**: staged prompt APIs were removed; inference callers now build `BatchPayload` and enter through payload-only logits/generation methods.
@@ -279,7 +279,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **DELETED**: `applyActivationQuantization()` declaration — unimplemented method for unimplemented feature, zero callers. Activation quantization config loading stays (Phase1 infrastructure), but no QuantizationLayer is wired to any forward path
   - **DELETED**: `activation_quantizer_` member — `std::unique_ptr<Quantization::QuantizationLayer>` that was never assigned, always nullptr
   - **DELETED**: `#include "Quantization_GPU.hpp"` — no longer needed after activation_quantizer_ removal
-  - **DELETED**: `LanguageModel::alibi_` member and the old `GrimEmbeddingStack` wrapper ownership. `LanguageModel::initPBM()` initializes the model-level `PBM::PBMStateOwner` after `StreamController` exists; `PBMSpec` is only a non-owning attention view.
+  - **DELETED**: `LanguageModel::alibi_` member and the old `GrimEmbeddingStack` wrapper ownership. `LanguageModel::initPBM()` initializes the model-level `PBM::PBMStateOwner` after `StreamController` exists; consumers now borrow the same `PBMState` instead of a duplicate `PBMSpec` view type.
   - **DELETED**: `GrimEmbeddingStack`, `Matrix`, `LanguageModel::embedder_`, and `getEmbedderPtr()`. Durable token embedding ownership now lives only on `EmbeddingLayer`, and checkpoint save/load reads that device tensor directly with no parallel CPU embedding mirror.
   - **DELETED**: `getAlibiPtr()` accessor — zero callers, returned the dead `alibi_` member above
   - **NOTE (not fixed)**: `HardcodedPattern` enum is duplicated in `LanguageModelConfig` and `HardcodedStates_GPU.hpp` with `static_cast` bridge in Phase1. Fragile but diagnostic-only — defer unification.
@@ -384,7 +384,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 - [x] **Forward_GPU.cu** ✅ AUDITED & FIXED (103→97 lines)
   - NOT a forward pass orchestrator — is `GPUGrimEncoder::Impl` layer container only
-  - Creates `GPUEncoderLayer` instances from `EncoderLayerConstructionHP`, stores in `gpu_layers_` vector, exposes `getLayer()`; loop counts come from config-owned `num_layers`
+  - Creates `EncodingLayer` instances from `EncoderLayerConstructionHP`, stores them in `gpu_layers_`, exposes `getLayer()`, and keeps loop counts config-owned via `num_layers`
   - Actual forward orchestration lives in `AutogradTraining.cu` (section 4.1)
   - **FIXED**: `FWD_ERROR + std::abort()` → `throw std::runtime_error()` (Rule 20), validation moved before config copy
   - **DELETED**: `FWD_ERROR` macro — only 2 usages, both replaced by the throw

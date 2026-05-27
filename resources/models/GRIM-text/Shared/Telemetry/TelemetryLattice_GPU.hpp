@@ -89,15 +89,6 @@ public:
                               TelemetryVector* out_vector) const;
 
     /**
-     * @brief Read 3 telemetry vectors in single sync (performance optimization)
-     * Batches 3 GPU kernel launches + 1 sync + 3 memcpy.
-     */
-    TelemetryError readBatched(
-        int level0, int stream_idx0, TelemetryVector* out_vector0,
-        int level1, int stream_idx1, TelemetryVector* out_vector1,
-        int level2, int stream_idx2, TelemetryVector* out_vector2) const;
-
-    /**
      * @brief Read full internal state (for debugging/logging)
      */
     TelemetryError readState(int level, int stream_idx,
@@ -113,9 +104,6 @@ public:
     //=========================================================================
 
     const LatticeConfig& config() const { return config_; }
-
-    LatticeLevelState* levels() { return levels_; }
-    const LatticeLevelState* levels() const { return levels_; }
     int* error_flag() { return d_error_flag_; }
 
 private:

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
 
 import argparse
 import shutil
@@ -44,47 +43,47 @@ DEPS = (
 )
 
 
-def download_file(url: str, destination: Path) -> None:
+def download_file(url, destination):
     destination.parent.mkdir(parents=True, exist_ok=True)
-    print(f"[manual-deps] Downloading {url} -> {destination}")
+    print("[manual-deps] Downloading {0} -> {1}".format(url, destination))
     with urllib.request.urlopen(url) as response, destination.open("wb") as output:
         shutil.copyfileobj(response, output)
 
 
-def ensure_archive(dep: dict, cache_dir: Path, allow_download: bool) -> Path:
+def ensure_archive(dep, cache_dir, allow_download):
     archive_path = cache_dir / dep["archive"]
     if archive_path.exists():
-        print(f"[manual-deps] Using cached archive {archive_path}")
+        print("[manual-deps] Using cached archive {0}".format(archive_path))
         return archive_path
     if not allow_download:
         raise RuntimeError(
-            f"Required archive {archive_path} is missing and downloads are disabled"
+            "Required archive {0} is missing and downloads are disabled".format(archive_path)
         )
     download_file(dep["url"], archive_path)
     return archive_path
 
 
-def extract_single_file(archive_path: Path, target_path: Path, member_suffixes: tuple[str, ...]) -> None:
+def extract_single_file(archive_path, target_path, member_suffixes):
     with tarfile.open(archive_path, "r:*") as archive:
         for member in archive.getmembers():
             if not member.isfile():
                 continue
-            member_name = f"/{member.name}"
+            member_name = "/{0}".format(member.name)
             if not any(member_name.endswith(suffix) for suffix in member_suffixes):
                 continue
             extracted = archive.extractfile(member)
             if extracted is None:
-                raise RuntimeError(f"Failed to read {member.name} from {archive_path}")
+                raise RuntimeError("Failed to read {0} from {1}".format(member.name, archive_path))
             target_path.parent.mkdir(parents=True, exist_ok=True)
             with target_path.open("wb") as output:
                 shutil.copyfileobj(extracted, output)
             return
     raise RuntimeError(
-        f"Could not find any of {member_suffixes} inside {archive_path.name}"
+        "Could not find any of {0} inside {1}".format(member_suffixes, archive_path.name)
     )
 
 
-def extract_prefixed_tree(archive_path: Path, deps_root: Path, prefix_marker: str) -> None:
+def extract_prefixed_tree(archive_path, deps_root, prefix_marker):
     wrote_any = False
     with tarfile.open(archive_path, "r:*") as archive:
         for member in archive.getmembers():
@@ -101,17 +100,17 @@ def extract_prefixed_tree(archive_path: Path, deps_root: Path, prefix_marker: st
             destination.parent.mkdir(parents=True, exist_ok=True)
             extracted = archive.extractfile(member)
             if extracted is None:
-                raise RuntimeError(f"Failed to read {member.name} from {archive_path}")
+                raise RuntimeError("Failed to read {0} from {1}".format(member.name, archive_path))
             with destination.open("wb") as output:
                 shutil.copyfileobj(extracted, output)
             wrote_any = True
     if not wrote_any:
         raise RuntimeError(
-            f"Could not find files under {prefix_marker} inside {archive_path.name}"
+            "Could not find files under {0} inside {1}".format(prefix_marker, archive_path.name)
         )
 
 
-def stage_dependency(dep: dict, archive_path: Path, deps_root: Path) -> None:
+def stage_dependency(dep, archive_path, deps_root):
     stage_dir = deps_root / dep["target"].parts[0]
     if stage_dir.exists():
         shutil.rmtree(stage_dir)
@@ -123,11 +122,11 @@ def stage_dependency(dep: dict, archive_path: Path, deps_root: Path) -> None:
 
     expected_path = deps_root / dep["target"]
     if not expected_path.exists():
-        raise RuntimeError(f"Staging {dep['name']} failed; missing {expected_path}")
-    print(f"[manual-deps] Staged {dep['name']} -> {expected_path}")
+        raise RuntimeError("Staging {0} failed; missing {1}".format(dep["name"], expected_path))
+    print("[manual-deps] Staged {0} -> {1}".format(dep["name"], expected_path))
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args():
     parser = argparse.ArgumentParser(
         description="Stage manual GRIM-text training dependencies from cached source archives"
     )
@@ -135,13 +134,13 @@ def parse_args() -> argparse.Namespace:
         "--cache-dir",
         type=Path,
         default=DEFAULT_CACHE_DIR,
-        help=f"Directory containing dependency source archives (default: {DEFAULT_CACHE_DIR})",
+        help="Directory containing dependency source archives (default: {0})".format(DEFAULT_CACHE_DIR),
     )
     parser.add_argument(
         "--deps-root",
         type=Path,
         default=DEFAULT_DEPS_ROOT,
-        help=f"Output root for staged headers (default: {DEFAULT_DEPS_ROOT})",
+        help="Output root for staged headers (default: {0})".format(DEFAULT_DEPS_ROOT),
     )
     parser.add_argument(
         "--no-download",
@@ -151,14 +150,14 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
+def main():
     args = parse_args()
     cache_dir = args.cache_dir.resolve()
     deps_root = args.deps_root.resolve()
     deps_root.mkdir(parents=True, exist_ok=True)
 
-    print(f"[manual-deps] Cache dir: {cache_dir}")
-    print(f"[manual-deps] Output dir: {deps_root}")
+    print("[manual-deps] Cache dir: {0}".format(cache_dir))
+    print("[manual-deps] Output dir: {0}".format(deps_root))
 
     for dep in DEPS:
         archive_path = ensure_archive(dep, cache_dir, allow_download=not args.no_download)
@@ -171,6 +170,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except Exception as exc:  # noqa: BLE001 - fail loud with context for build prep
-        print(f"[manual-deps] ERROR: {exc}", file=sys.stderr)
+    except Exception as exc:  # fail loud with context for build prep
+        print("[manual-deps] ERROR: {0}".format(exc), file=sys.stderr)
         raise

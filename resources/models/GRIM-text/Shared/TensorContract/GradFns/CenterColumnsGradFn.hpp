@@ -23,6 +23,7 @@ struct CenterColumnsGradFn : public GradFn {
     int rows_per_group = 0;
     int group_count = 0;
     bool use_sequence_lengths = false;
+    bool use_causal_prefix = false;
     std::vector<int> sequence_lengths;
 
     float* input_grad = nullptr;
@@ -35,7 +36,8 @@ struct CenterColumnsGradFn : public GradFn {
 
     void capture_input(Tensor& input, int cols, int rows, int group_rows,
                        const std::vector<int>* sequence_lengths, int groups,
-                       cudaStream_t stream);
+                       cudaStream_t stream,
+                       bool causal_prefix = false);
     void apply_impl(const Tensor& grad_output, cudaStream_t stream) override;
     void release_saved() override;
 };

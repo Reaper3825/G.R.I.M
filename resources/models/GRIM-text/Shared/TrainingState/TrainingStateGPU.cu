@@ -3,8 +3,6 @@
 //  TrainingState implementation details
 //======================================================//
 
-// Include grim_language_model_cuda.hpp for GPUGrimEncoder, FlashAttentionBF16Scratch, etc.
-#include "../../GRIM/grim_language_model_cuda.hpp"
 #include "../../Layers/Embedding/Embedding_GPU.hpp"
 #include "../HyperParameters/HyperparameterGroupings.hpp"
 #include "TrainingState_GPU.hpp"

@@ -14,6 +14,7 @@
 #include "../../training/Phases/Phase2_TrainingLoop.hpp"  // BatchResult
 #include "../../training/Diagnostics/DiagnosticInference.hpp"
 #include "../../training/Diagnostics/MtpDiagnostic.hpp"
+#include "../HyperParameters/HyperparameterGroupings.hpp"
 #include "../TrainingState/TrainingState_GPU.hpp"
 
 #include <cuda_runtime.h>
@@ -50,12 +51,17 @@ std::string formatMetric(std::string_view name, float value, int precision = 4) 
     return std::string(name) + "=" + formatScalar(value, precision);
 }
 
-/// Compute RMS of a host-side float vector. Returns 0 if empty.
-float vectorRMS(const std::vector<float>& v) {
-    if (v.empty()) return 0.0f;
+/// Compute RMS of a host-side float range. Returns 0 if empty.
+template <typename Range>
+float rangeRMS(const Range& values) {
     double sum_sq = 0.0;
-    for (float x : v) sum_sq += static_cast<double>(x) * x;
-    return static_cast<float>(std::sqrt(sum_sq / static_cast<double>(v.size())));
+    std::size_t count = 0;
+    for (float x : values) {
+        sum_sq += static_cast<double>(x) * x;
+        ++count;
+    }
+    if (count == 0) return 0.0f;
+    return static_cast<float>(std::sqrt(sum_sq / static_cast<double>(count)));
 }
 
 /// Compute RMS of a GPU buffer via D2H copy. Returns 0 if nullptr/empty.
@@ -275,15 +281,15 @@ void populateRmsGammaStreams(float* obs, GRIMText::Training::TrainingContext& ct
 // Streams 27-30: PBM positional encoding diagnostics
 //------------------------------------------------------
 void populatePBMStreams(float* obs, GRIMText::Training::TrainingContext& ctx, int max_seq_len) {
-    const auto& pbm = ctx.model->getPBMState();
+    const auto pbm = GRIM::HyperParameters::pbmConstructionHP(ctx.config);
 
     // Stream 27: PBM_ALIBI_SLOPE_RMS
-    obs[27] = vectorRMS(pbm.alibi_slopes_host);
+    obs[27] = rangeRMS(pbm.alibi_slopes);
 
     // Stream 28: PBM_ALIBI_EFF_BIAS_MAX
     {
         float max_abs_slope = 0.0f;
-        for (float s : pbm.alibi_slopes_host) {
+        for (float s : pbm.alibi_slopes) {
             float a = std::fabs(s);
             if (a > max_abs_slope) max_abs_slope = a;
         }
@@ -291,7 +297,7 @@ void populatePBMStreams(float* obs, GRIMText::Training::TrainingContext& ctx, in
     }
 
     // Stream 29: PBM_ROPE_INV_FREQ_RMS
-    obs[29] = vectorRMS(pbm.rope_inv_freq_host);
+    obs[29] = rangeRMS(pbm.rope_inv_freq);
 
     // Stream 30: PBM_BATCH_MAX_SEQ_LEN
     obs[30] = static_cast<float>(max_seq_len);

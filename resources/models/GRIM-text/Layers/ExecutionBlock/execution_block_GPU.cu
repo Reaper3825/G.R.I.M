@@ -10,6 +10,7 @@
 #include "execution_block_internal.hpp"
 #include "execution_block_memory_stream_GPU.hpp"
 #include "execution_block_data_stream_GPU.hpp"
+#include "../../Shared/Batching/BatchPayload.hpp"
 #include "../../Shared/Batching/BatchDeviceBindings.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
 
@@ -75,8 +76,14 @@ void ExecutionBlockLayer::validateExecuteStepInputsOrThrow(
     EXEC_CHECK(step >= 0 && step < hp_.num_exec_steps, "step out of range");
     EXEC_CHECK(batch_row >= 0, "batch_row must be non-negative");
     EXEC_CHECK(payload.max_seq_len > 0, "payload.max_seq_len must be positive");
-    EXEC_CHECK(batch_row * payload.max_seq_len + payload.max_seq_len <= payload.total_tokens,
-               "row-local span exceeds total token extent");
+    EXEC_CHECK(batch_row < payload.batch_size, "batch_row out of range for payload.batch_size");
+    EXEC_CHECK(static_cast<int>(payload.seq_lengths.size()) == payload.batch_size,
+               "payload.seq_lengths size must equal payload.batch_size");
+    const int row_tokens = payload.seq_lengths[static_cast<size_t>(batch_row)];
+    EXEC_CHECK(row_tokens > 0, "payload.seq_lengths[batch_row] must be positive");
+    EXEC_CHECK(row_tokens <= payload.max_seq_len, "payload.seq_lengths[batch_row] exceeds payload.max_seq_len");
+    EXEC_CHECK(batch_row * payload.max_seq_len + row_tokens <= payload.total_tokens,
+               "valid row-local span exceeds total token extent");
     validateMemoryOrThrow(M);
 }
 

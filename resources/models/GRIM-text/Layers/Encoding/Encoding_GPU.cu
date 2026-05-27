@@ -136,7 +136,7 @@ static __global__ void kernel_encoding_fill_value(float* data, int count, float 
 //  Optimizer sees them via the existing public accessors (rms1Gamma(), attnWqkv(), etc.)
 // ═══════════════════════════════════════════════════════════════════════════
  EncodingLayer::EncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp_snapshot,
-                                        const PBM::PBMSpec& pos_encoding,
+                                        const PBM::PBMState& pos_encoding,
                                         uint64_t seed,
                                         cudaStream_t init_stream)
      : hp_(hp_snapshot)
@@ -531,22 +531,26 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     //   shared direction through layers: ρ grows +0.01-0.04 per layer.
     //   Over 12 layers: ρ(emb)=0.05 → ρ(final)=0.44 → mode collapse.
     //
-    // WHAT: center_columns_by_sequence_lengths subtracts the cross-position mean
-    //   over VALID (unpadded) tokens for each feature WITHIN EACH BATCH ROW:
-    //   h[b,t,d] -= mean_{u < seq_lengths[b]}(h[b,u,d])   for valid t
-    //   h[b,t,d] = 0                                      for padded t
-    //   This removes the rank-1 shared direction at each layer without making
-    //   sample A's hidden state depend on sample B's hidden state or on PAD rows.
+    // WHAT: center_columns_by_causal_prefix_lengths subtracts the strict-past
+    //   prefix mean over VALID (unpadded) tokens for each feature WITHIN EACH
+    //   BATCH ROW:
+    //   h[b,0,d] = h[b,0,d]
+    //   h[b,t,d] -= mean_{u < t}(h[b,u,d])   for valid t > 0
+    //   h[b,t,d] = 0                         for padded t
+    //   This removes the running shared direction at each layer without making
+    //   sample A depend on sample B, including PAD rows, or leaking future
+    //   positions into token t. Strict-past also preserves the first token
+    //   instead of erasing it with mean_{u <= 0}.
     //
-    // GRADIENT COST: The centering projection P = I - 11^T/n has backward
-    //   grad_input = P * grad_output within each sequence. Only the per-sequence
-    //   constant mode is projected out; non-constant token modes are preserved.
+    // GRADIENT COST: The centering projection is lower-triangular. Backward
+    //   applies its transpose within each sequence; no gradient path crosses
+    //   from future inputs into earlier forward positions.
     // ========================================================================
     if (hp.center_encoder_residuals) {
         if (payload.max_seq_len <= 1) {
             throw std::runtime_error("EncodingLayer::forward: center_encoder_residuals requires payload.max_seq_len > 1; single-row column centering would erase the residual stream");
         }
-        intermediates.residual1 = autograd::center_columns_by_sequence_lengths(
+        intermediates.residual1 = autograd::center_columns_by_causal_prefix_lengths(
             intermediates.residual1, payload.seq_lengths, payload.batch_size, payload.max_seq_len, stream);
     }
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 7: Residual1 (pre-norm, no sandwich) DONE\n");

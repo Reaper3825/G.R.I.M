@@ -53,9 +53,9 @@ NumericSideChannel makeNumericSideChannel(size_t count) {
     return channel;
 }
 
-GRIM::Vector runInferencePrefill(GRIM::LanguageModel* model,
-                                 const std::vector<int>& tokens,
-                                 const NumericSideChannel& numeric) {
+std::vector<float> runInferencePrefill(GRIM::LanguageModel* model,
+                                       const std::vector<int>& tokens,
+                                       const NumericSideChannel& numeric) {
     if (!model) {
         throw std::runtime_error("runInferencePrefill: model is NULL");
     }
@@ -134,11 +134,11 @@ GRIM::Vector runInferencePrefill(GRIM::LanguageModel* model,
         throw std::runtime_error("runInferencePrefill: logits tensor is smaller than expected payload span");
     }
 
-    GRIM::Vector logits(cfg.vocab_size);
+    std::vector<float> logits(static_cast<size_t>(cfg.vocab_size));
     const size_t last_token_offset =
         static_cast<size_t>(payload.total_tokens - 1) * static_cast<size_t>(cfg.vocab_size);
     cudaError_t copy_err = cudaMemcpyAsync(
-        logits.data.data(),
+        logits.data(),
         live_logits.data + last_token_offset,
         static_cast<size_t>(cfg.vocab_size) * sizeof(float),
         cudaMemcpyDeviceToHost,
@@ -223,18 +223,18 @@ TestResult level1_single_token_causality(GRIM::LanguageModel* model, GRIM::Token
     // 2. Run forward pass
     std::vector<int> input_tokens(tokens.begin(), tokens.begin() + t + 1);
     auto numeric = makeNumericSideChannel(input_tokens.size());
-    GRIM::Vector logits = runInferencePrefill(model, input_tokens, numeric);
+    std::vector<float> logits = runInferencePrefill(model, input_tokens, numeric);
     
-    PROOF_ASSERT(logits.data.size() == static_cast<size_t>(vocab_size), 
+    PROOF_ASSERT(logits.size() == static_cast<size_t>(vocab_size), 
                  "Logits shape mismatch: expected " + std::to_string(vocab_size) + 
-                 ", got " + std::to_string(logits.data.size()));
+                 ", got " + std::to_string(logits.size()));
     
     // 3. Compute softmax manually
-    float max_logit = *std::max_element(logits.data.begin(), logits.data.end());
+    float max_logit = *std::max_element(logits.begin(), logits.end());
     std::vector<float> probs(vocab_size);
     float sum_exp = 0.0f;
     for (int i = 0; i < vocab_size; ++i) {
-        probs[i] = std::exp(logits.data[i] - max_logit);
+        probs[i] = std::exp(logits[i] - max_logit);
         sum_exp += probs[i];
     }
     for (int i = 0; i < vocab_size; ++i) {
@@ -317,12 +317,12 @@ TestResult level2_causal_mask_correctness(GRIM::LanguageModel* model, GRIM::Toke
     
     // Test 1: Run forward with full sequence
     auto full_numeric = makeNumericSideChannel(tokens.size());
-    GRIM::Vector logits_full = runInferencePrefill(model, tokens, full_numeric);
+    std::vector<float> logits_full = runInferencePrefill(model, tokens, full_numeric);
     
     // Test 2: Run forward with truncated sequence (only up to position t)
     std::vector<int> truncated_tokens(tokens.begin(), tokens.begin() + test_pos + 1);
     auto truncated_numeric = makeNumericSideChannel(truncated_tokens.size());
-    GRIM::Vector logits_truncated = runInferencePrefill(model, truncated_tokens, truncated_numeric);
+    std::vector<float> logits_truncated = runInferencePrefill(model, truncated_tokens, truncated_numeric);
     
     // If causal mask works, logits for position t should be IDENTICAL
     // regardless of whether future tokens exist
@@ -339,7 +339,7 @@ TestResult level2_causal_mask_correctness(GRIM::LanguageModel* model, GRIM::Toke
     // Get prediction at position 0 (should be based on nothing but BOS)
     std::vector<int> single_token = {tokens[0]};
     auto single_numeric = makeNumericSideChannel(single_token.size());
-    GRIM::Vector logits_pos0 = runInferencePrefill(model, single_token, single_numeric);
+    std::vector<float> logits_pos0 = runInferencePrefill(model, single_token, single_numeric);
     
     // The predicted token should NOT be exactly token[0] with probability 1
     // (unless the model has memorized, which is fine)
@@ -349,15 +349,15 @@ TestResult level2_causal_mask_correctness(GRIM::LanguageModel* model, GRIM::Toke
     if (modified_token[0] >= cfg.vocab_size) modified_token[0] = 0;
     
     auto modified_numeric = makeNumericSideChannel(modified_token.size());
-    GRIM::Vector logits_modified = runInferencePrefill(model, modified_token, modified_numeric);
+    std::vector<float> logits_modified = runInferencePrefill(model, modified_token, modified_numeric);
     
     // Logits should be different
     float diff_rms = 0.0f;
-    for (size_t i = 0; i < logits_pos0.data.size(); ++i) {
-        float d = logits_pos0.data[i] - logits_modified.data[i];
+    for (size_t i = 0; i < logits_pos0.size(); ++i) {
+        float d = logits_pos0[i] - logits_modified[i];
         diff_rms += d * d;
     }
-    diff_rms = std::sqrt(diff_rms / logits_pos0.data.size());
+    diff_rms = std::sqrt(diff_rms / logits_pos0.size());
     
     PROOF_LOG("Logits difference RMS when changing input: " + std::to_string(diff_rms));
     
@@ -402,7 +402,7 @@ TestResult level3_gradient_reaches_embeddings(GRIM::LanguageModel* model, GRIM::
     
     // Forward pass
     auto numeric = makeNumericSideChannel(tokens.size());
-    GRIM::Vector logits = runInferencePrefill(model, tokens, numeric);
+    std::vector<float> logits = runInferencePrefill(model, tokens, numeric);
     
     // Compute loss (using token[1] as target for predicting from token[0])
     float loss = 1.0f;  // Placeholder - actual loss computed in backward
@@ -461,8 +461,8 @@ TestResult level4_learning_changes_logits(GRIM::LanguageModel* model, GRIM::Toke
     
     // 1. Get logits BEFORE training
     auto before_numeric = makeNumericSideChannel(input_tokens.size());
-    GRIM::Vector logits_before = runInferencePrefill(model, input_tokens, before_numeric);
-    float logit_y_before = logits_before.data[target_y];
+    std::vector<float> logits_before = runInferencePrefill(model, input_tokens, before_numeric);
+    float logit_y_before = logits_before[target_y];
     
     PROOF_LOG("logit[y] BEFORE = " + std::to_string(logit_y_before));
     
@@ -475,12 +475,12 @@ TestResult level4_learning_changes_logits(GRIM::LanguageModel* model, GRIM::Toke
     runInferencePrefill(model, tokens, train_numeric);  // Full sequence for training
     
     // Compute actual cross-entropy loss for logging
-    float max_logit = *std::max_element(logits_before.data.begin(), logits_before.data.end());
+    float max_logit = *std::max_element(logits_before.begin(), logits_before.end());
     float sum_exp = 0.0f;
-    for (size_t i = 0; i < logits_before.data.size(); ++i) {
-        sum_exp += std::exp(logits_before.data[i] - max_logit);
+    for (size_t i = 0; i < logits_before.size(); ++i) {
+        sum_exp += std::exp(logits_before[i] - max_logit);
     }
-    float prob_y = std::exp(logits_before.data[target_y] - max_logit) / sum_exp;
+    float prob_y = std::exp(logits_before[target_y] - max_logit) / sum_exp;
     float loss = -std::log(prob_y + 1e-10f);
     
     PROOF_LOG("Loss = " + std::to_string(loss));
@@ -501,8 +501,8 @@ TestResult level4_learning_changes_logits(GRIM::LanguageModel* model, GRIM::Toke
     
     // 5. Get logits AFTER training
     auto after_numeric = makeNumericSideChannel(input_tokens.size());
-    GRIM::Vector logits_after = runInferencePrefill(model, input_tokens, after_numeric);
-    float logit_y_after = logits_after.data[target_y];
+    std::vector<float> logits_after = runInferencePrefill(model, input_tokens, after_numeric);
+    float logit_y_after = logits_after[target_y];
     
     PROOF_LOG("logit[y] AFTER  = " + std::to_string(logit_y_after));
     PROOF_LOG("Change: " + std::to_string(logit_y_after - logit_y_before));
@@ -686,14 +686,14 @@ TestResult level6_autoregressive_emergence(GRIM::LanguageModel* model, GRIM::Tok
     
     for (int i = 0; i < max_gen; ++i) {
         auto numeric = makeNumericSideChannel(generated.size());
-        GRIM::Vector logits = runInferencePrefill(model, generated, numeric);
+        std::vector<float> logits = runInferencePrefill(model, generated, numeric);
         
         // Greedy decode: pick argmax
         int next_token = 0;
-        float max_logit = logits.data[0];
-        for (int j = 1; j < static_cast<int>(logits.data.size()); ++j) {
-            if (logits.data[j] > max_logit) {
-                max_logit = logits.data[j];
+        float max_logit = logits[0];
+        for (int j = 1; j < static_cast<int>(logits.size()); ++j) {
+            if (logits[j] > max_logit) {
+                max_logit = logits[j];
                 next_token = j;
             }
         }

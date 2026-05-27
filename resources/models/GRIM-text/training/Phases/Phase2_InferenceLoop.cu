@@ -6,6 +6,7 @@
 #include "Phase2_InferenceLoop.hpp"
 
 #include "../../Shared/Batching/BatchDeviceUpload.hpp"
+#include "Shared/Forward/GeneratedSequence.hpp"
 #include "../../Shared/Forward/ModelForwardRuntimePayload.hpp"
 #include "../../Shared/Forward/ModelForward_GPU.hpp"
 #include "../../Shared/Sampling/Sampling.hpp"
@@ -18,6 +19,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <stdexcept>
+#include <vector>
 
 namespace GRIMText::Training {
 
@@ -238,7 +240,8 @@ GRIM::GeneratedSequence generateOneSequence(
     const bool scratchblock_active = cfg.enable_scratchblock_reasoning &&
                                      scratch_hp.enabled;
 
-    auto runSharedForwardForCurrentSequence = [&](const GRIM::Batching::BatchPayload& active_payload) {
+    auto runSharedForwardForCurrentSequence = [&](const GRIM::Batching::BatchPayload& active_payload)
+        -> std::vector<float> {
         validateInferenceForwardPayload(model, active_payload, "generateOneSequence");
 
         auto& training_state = model.getTrainingState();
@@ -293,11 +296,11 @@ GRIM::GeneratedSequence generateOneSequence(
                 " < payload.total_tokens * config.vocab_size=" + std::to_string(expected_logits));
         }
 
-        GRIM::Vector logits(config.vocab_size);
+        std::vector<float> logits(static_cast<size_t>(config.vocab_size));
         const size_t last_token_offset =
             static_cast<size_t>(active_payload.total_tokens - 1) * static_cast<size_t>(config.vocab_size);
         cudaError_t copy_err = cudaMemcpyAsync(
-            logits.data.data(),
+            logits.data(),
             live_logits.data + last_token_offset,
             static_cast<size_t>(config.vocab_size) * sizeof(float),
             cudaMemcpyDeviceToHost,
@@ -316,8 +319,8 @@ GRIM::GeneratedSequence generateOneSequence(
         return logits;
     };
 
-    GRIM::Vector logits_vec = runSharedForwardForCurrentSequence(prompt_payload);
-    if (logits_vec.data.empty()) {
+    std::vector<float> logits_vec = runSharedForwardForCurrentSequence(prompt_payload);
+    if (logits_vec.empty()) {
         throw std::runtime_error("Phase2 payload inference: shared forward returned empty first-token logits");
     }
 
@@ -351,13 +354,13 @@ GRIM::GeneratedSequence generateOneSequence(
             const int float_tid = GRIM::Tokenizer::atomTypeToTokenId(GRIM::Tokenizer::AtomType::ATOM_FLOAT);
             if (generation_state.decode_selector.status
                 != static_cast<uint8_t>(GRIM::SlotSelectionStatus::Selected)) {
-                logits_vec.data[int_tid] = -1e30f;
-                logits_vec.data[float_tid] = -1e30f;
+                logits_vec[int_tid] = -1e30f;
+                logits_vec[float_tid] = -1e30f;
             }
         }
 
         GRIM::Sampling::SampleResult sample = pipeline.selectNextToken(
-            logits_vec.data, sequence.token_ids, vocab_size);
+            logits_vec, sequence.token_ids, vocab_size);
 
         if (sample.token_id < 0 || sample.token_id >= vocab_size) {
             throw std::runtime_error("Phase2 payload inference: sampled token out of range (token_id=" +
@@ -429,7 +432,7 @@ GRIM::GeneratedSequence generateOneSequence(
             config.execution_block_num_slots);
 
         logits_vec = runSharedForwardForCurrentSequence(step_payload);
-        if (logits_vec.data.empty()) {
+        if (logits_vec.empty()) {
             throw std::runtime_error("Phase2 payload inference: shared forward returned empty logits");
         }
 

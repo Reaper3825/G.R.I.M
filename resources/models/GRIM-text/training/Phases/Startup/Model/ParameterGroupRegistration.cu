@@ -315,7 +315,7 @@ void registerEncoderParameters(LanguageModel& model,
     GRIM::GPUGrimEncoder& gpu_encoder = model.getGpuEncoder();
 
     for (int layer = 0; layer < config.num_layers; ++layer) {
-        GRIM::GPUEncoderLayer* enc = gpu_encoder.getLayer(layer);
+        GRIM::EncodingLayer* enc = gpu_encoder.getLayer(layer);
         if (!enc) {
             throw std::runtime_error("[buildParameterGroups] Encoder layer " + std::to_string(layer) +
                                      " is NULL - initGPU() did not build the configured topology");

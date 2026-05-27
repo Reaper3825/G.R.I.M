@@ -14,13 +14,10 @@
 #     Override with GRIM_BRIDGES2_TRANSFER_METHOD=auto|rsync|zstd|gzip|raw. gzip level defaults to 1 via GRIM_BRIDGES2_GZIP_LEVEL.
 #   - Submodules: With --sync-fas / SYNC_FAS, flash-attention is refreshed via bridges2_ensure_flash_attention.sh
 #     (no forced submodule update when the expected commits are already checked out on the remote).
-#   - Manual deps (default): Launcher stages nlohmann-json, FlatBuffers, and cpp-httplib headers under
-#     resources/models/GRIM-text/training/third_party on Bridges-2 via training/scripts/prepare_manual_deps.py.
-#     It seeds the three source archives from external/vcpkg/downloads when possible so the remote never has to fetch
-#     them slowly from GitHub. Set GRIM_BRIDGES2_USE_MANUAL_DEPS=0 only if you intentionally want the old vcpkg path.
-#   - vcpkg fallback: When GRIM_BRIDGES2_USE_MANUAL_DEPS=0, the script uses the repo's external/vcpkg checkout on
-#     Bridges-2 by default (same path as local builds). Override with GRIM_VCPKG_ROOT only when intentionally using
-#     another pinned vcpkg checkout.
+#   - TrainingLoop deps: Launcher uses the repo's TrainingLoop vcpkg manifest on Bridges-2 by default
+#     (resources/models/GRIM-text/training/vcpkg.json) so the Linux build matches local manifest-mode builds.
+#     It uses the repo's pinned external/vcpkg checkout and installs into training/vcpkg_installed/x64-linux.
+#     The old manual-header staging path is intentionally not used by this launcher anymore.
 #   - Tool downloads: In vcpkg mode, launcher prefers Bridges-2 system cmake+ninja when they satisfy the pinned helper
 #     minimums. It exports VCPKG_DOWNLOADS (default: external/vcpkg/downloads; override with
 #     GRIM_BRIDGES2_VCPKG_DOWNLOADS) so helper archives stay cached between runs. Use --allow-vcpkg-tool-downloads or
@@ -28,7 +25,7 @@
 #     when the cluster cmake is older than the pinned helper requirement; the launcher then prefetches the helper
 #     CMake archive with aria2c/wget/curl when possible so vcpkg reuses the cached file instead of waiting on its own
 #     slow download.
-#   - Reusing deps: In vcpkg mode, when the remote TrainingLoop `vcpkg_installed/x64-linux` tree already contains
+#   - Reusing deps: When the remote TrainingLoop `vcpkg_installed/x64-linux` tree already contains
 #     nlohmann-json, flatbuffers, and cpp-httplib, the launcher disables manifest auto-install for that configure and
 #     reuses the existing tree. Set GRIM_BRIDGES2_FORCE_VCPKG_INSTALL=1 to force a fresh vcpkg install anyway.
 #   - CUDA 12+ for training (flash-attention). Bridges-2: module load cuda (check with module avail cuda)
@@ -151,6 +148,14 @@ done
 
 if [[ "$ALLOW_VCPKG_TOOL_DOWNLOADS" == true ]]; then
   export GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS=1
+fi
+
+if [[ "${GRIM_BRIDGES2_USE_MANUAL_DEPS:-0}" == "1" ]]; then
+  echo "ERROR: GRIM_BRIDGES2_USE_MANUAL_DEPS=1 is no longer supported by scripts/run_train_on_bridges2.sh." >&2
+  echo "  Bridges-2 now builds TrainingLoop through resources/models/GRIM-text/training/vcpkg.json" >&2
+  echo "  using the repo's pinned external/vcpkg checkout, matching local manifest-mode builds." >&2
+  echo "  Remove GRIM_BRIDGES2_USE_MANUAL_DEPS from your environment and rerun." >&2
+  exit 1
 fi
 
 # MCS/CBS/CRS/FAS = merged cache / concept blocks / curriculum registry / flash-attention (build). Default: skip all; opt in via flags or SYNC_* env.
@@ -398,6 +403,47 @@ verify_local_size() {
   echo "  verified: $actual_bytes bytes"
 }
 
+compute_file_sha512() {
+  local file_path="$1"
+
+  if command -v sha512sum >/dev/null 2>&1; then
+    sha512sum "$file_path" | awk '{print tolower($1)}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 512 "$file_path" | awk '{print tolower($1)}'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha512 "$file_path" | sed 's/^.*= //' | tr '[:upper:]' '[:lower:]'
+  elif command -v powershell.exe >/dev/null 2>&1; then
+    FILE_PATH_FOR_HASH="$file_path" powershell.exe -NoProfile -Command '$p=$env:FILE_PATH_FOR_HASH; (Get-FileHash -Algorithm SHA512 -LiteralPath $p).Hash.ToLowerInvariant()' | tr -d '\r'
+  elif command -v pwsh >/dev/null 2>&1; then
+    FILE_PATH_FOR_HASH="$file_path" pwsh -NoProfile -Command '$p=$env:FILE_PATH_FOR_HASH; (Get-FileHash -Algorithm SHA512 -LiteralPath $p).Hash.ToLowerInvariant()' | tr -d '\r'
+  else
+    echo "ERROR: cannot compute SHA512 for $file_path (need sha512sum, shasum, openssl, powershell.exe, or pwsh)." >&2
+    return 1
+  fi
+}
+
+remote_compute_file_sha512() {
+  local remote_path="$1"
+  local q_remote_path
+
+  q_remote_path="$(remote_quote "$remote_path")"
+  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "REMOTE_HASH_PATH=$q_remote_path bash -se" <<'EOF'
+set -e
+remote_hash_path="$REMOTE_HASH_PATH"
+
+if command -v sha512sum >/dev/null 2>&1; then
+  sha512sum "$remote_hash_path" | awk '{print tolower($1)}'
+elif command -v shasum >/dev/null 2>&1; then
+  shasum -a 512 "$remote_hash_path" | awk '{print tolower($1)}'
+elif command -v openssl >/dev/null 2>&1; then
+  openssl dgst -sha512 "$remote_hash_path" | sed 's/^.*= //' | tr '[:upper:]' '[:lower:]'
+else
+  echo "ERROR: cannot compute SHA512 for $remote_hash_path on Bridges-2 (need sha512sum, shasum, or openssl)." >&2
+  exit 1
+fi
+EOF
+}
+
 remote_file_size() {
   local remote_path="$1"
   local q_remote_path
@@ -633,13 +679,28 @@ download_local_helper_file() {
   local label="$1"
   local url="$2"
   local local_path="$3"
+  local expected_sha512="${4,,}"
   local local_dir
   local tmp_path
   local archive_name
+  local actual_sha512
 
   if [[ -f "$local_path" ]]; then
-    echo "  local helper cache: using cached $label at $local_path"
-    return 0
+    if [[ -n "$expected_sha512" ]]; then
+      actual_sha512="$(compute_file_sha512 "$local_path")" || return 1
+      if [[ "$actual_sha512" == "$expected_sha512" ]]; then
+        echo "  local helper cache: using cached $label at $local_path"
+        return 0
+      fi
+
+      echo "  local helper cache: deleting stale $label because SHA512 mismatched"
+      echo "    expected: $expected_sha512"
+      echo "    actual:   $actual_sha512"
+      rm -f "$local_path" "$local_path.partial"
+    else
+      echo "  local helper cache: using cached $label at $local_path"
+      return 0
+    fi
   fi
 
   local_dir="$(dirname "$local_path")"
@@ -668,6 +729,16 @@ download_local_helper_file() {
   fi
 
   mv -f "$tmp_path" "$local_path"
+  if [[ -n "$expected_sha512" ]]; then
+    actual_sha512="$(compute_file_sha512 "$local_path")" || return 1
+    if [[ "$actual_sha512" != "$expected_sha512" ]]; then
+      echo "WARNING: local helper cache: downloaded $label with the wrong SHA512; deleting it so Bridges-2 can fetch a clean copy." >&2
+      echo "  expected: $expected_sha512" >&2
+      echo "  actual:   $actual_sha512" >&2
+      rm -f "$local_path"
+      return 1
+    fi
+  fi
   echo "  local helper cache: cached $label"
 }
 
@@ -675,21 +746,37 @@ seed_remote_vcpkg_helper_archive() {
   local local_archive_path="$1"
   local remote_archive_path="$2"
   local archive_label="$3"
+  local helper_url="$4"
+  local expected_sha512="${5,,}"
   local q_remote_archive_path
   local q_remote_downloads_dir
+  local remote_actual_sha512
 
   q_remote_archive_path="$(remote_quote "$remote_archive_path")"
   q_remote_downloads_dir="$(remote_quote "$(dirname "$remote_archive_path")")"
 
   ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "mkdir -p $q_remote_downloads_dir"
   if ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "test -f $q_remote_archive_path"; then
-    echo "  vcpkg helper seed: remote cache already has $(basename "$remote_archive_path")"
-    return 0
+    if [[ -n "$expected_sha512" ]]; then
+      remote_actual_sha512="$(remote_compute_file_sha512 "$remote_archive_path")" || return 1
+      if [[ "$remote_actual_sha512" == "$expected_sha512" ]]; then
+        echo "  vcpkg helper seed: remote cache already has a valid $(basename "$remote_archive_path")"
+        return 0
+      fi
+
+      echo "  vcpkg helper seed: replacing stale remote $(basename "$remote_archive_path") because SHA512 mismatched"
+      echo "    expected: $expected_sha512"
+      echo "    actual:   $remote_actual_sha512"
+      ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "rm -f $q_remote_archive_path ${q_remote_archive_path}.partial"
+    else
+      echo "  vcpkg helper seed: remote cache already has $(basename "$remote_archive_path")"
+      return 0
+    fi
   fi
 
   if [[ ! -f "$local_archive_path" ]]; then
     if [[ "${GRIM_BRIDGES2_PREFETCH_HELPER_LOCALLY:-1}" == "1" ]]; then
-      if ! download_local_helper_file "$archive_label" "$BRIDGES2_VCPKG_CMAKE_URL" "$local_archive_path"; then
+      if ! download_local_helper_file "$archive_label" "$helper_url" "$local_archive_path" "$expected_sha512"; then
         echo "WARNING: vcpkg helper seed: local prefetch failed; remote will download $archive_label if required." >&2
         return 0
       fi
@@ -702,40 +789,8 @@ seed_remote_vcpkg_helper_archive() {
   transfer_training_file "$archive_label" "$local_archive_path" "$remote_archive_path"
 }
 
-seed_remote_manual_dep_archive() {
-  local local_archive_path="$1"
-  local remote_archive_path="$2"
-  local archive_label="$3"
-  local archive_url="$4"
-  local q_remote_archive_path
-  local q_remote_downloads_dir
-
-  q_remote_archive_path="$(remote_quote "$remote_archive_path")"
-  q_remote_downloads_dir="$(remote_quote "$(dirname "$remote_archive_path")")"
-
-  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "mkdir -p $q_remote_downloads_dir"
-  if ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "test -f $q_remote_archive_path"; then
-    echo "  manual deps seed: remote cache already has $(basename "$remote_archive_path")"
-    return 0
-  fi
-
-  if [[ ! -f "$local_archive_path" ]]; then
-    if [[ "${GRIM_BRIDGES2_PREFETCH_HELPER_LOCALLY:-1}" == "1" ]]; then
-      if ! download_local_helper_file "$archive_label" "$archive_url" "$local_archive_path"; then
-        echo "WARNING: manual deps seed: local prefetch failed; remote will download $archive_label if required." >&2
-        return 0
-      fi
-    else
-      echo "  manual deps seed: local cache miss for $local_archive_path; remote will download $archive_label if required"
-      return 0
-    fi
-  fi
-
-  transfer_training_file "$archive_label" "$local_archive_path" "$remote_archive_path"
-}
-
 download_training_file() {
-  local lab el="$1"
+  local label="$1"
   local remote_path="$2"
   local local_path="$3"
   local local_dir
@@ -887,41 +942,57 @@ BRIDGES2_ENSURE_CUDA12="export GRIM_PROJECT_DIR=\$BRIDGES2_DIR; source \"\$BRIDG
 # If GRIM_VCPKG_ROOT is set, use that checkout instead.
 BRIDGES2_VCPKG="${GRIM_VCPKG_ROOT:-$BRIDGES2_DIR/external/vcpkg}"
 VCPKG_TOOLCHAIN="$BRIDGES2_VCPKG/scripts/buildsystems/vcpkg.cmake"
-TRAINING_VCPKG_JSON='{"name":"grim-training","version-string":"0.1.0","dependencies":["nlohmann-json","flatbuffers"]}'
 BRIDGES2_VCPKG_DOWNLOADS="${GRIM_BRIDGES2_VCPKG_DOWNLOADS:-$BRIDGES2_VCPKG/downloads}"
 LOCAL_VCPKG_DOWNLOADS="${GRIM_LOCAL_VCPKG_DOWNLOADS:-$REPO_ROOT/external/vcpkg/downloads}"
-BRIDGES2_USE_MANUAL_DEPS="${GRIM_BRIDGES2_USE_MANUAL_DEPS:-1}"
-BRIDGES2_MANUAL_DEPS_ROOT="$BRIDGES2_DIR/$TRAINING_DIR/third_party"
-REMOTE_MANUAL_DEP_PREP_SCRIPT="$BRIDGES2_DIR/$TRAINING_DIR/scripts/prepare_manual_deps.py"
-MANUAL_NLOHMANN_JSON_ARCHIVE="nlohmann-json-v3.12.0.tar.gz"
-MANUAL_NLOHMANN_JSON_URL="https://github.com/nlohmann/json/archive/refs/tags/v3.12.0.tar.gz"
-LOCAL_MANUAL_NLOHMANN_JSON_ARCHIVE_PATH="$LOCAL_VCPKG_DOWNLOADS/$MANUAL_NLOHMANN_JSON_ARCHIVE"
-REMOTE_MANUAL_NLOHMANN_JSON_ARCHIVE_PATH="$BRIDGES2_VCPKG_DOWNLOADS/$MANUAL_NLOHMANN_JSON_ARCHIVE"
-MANUAL_FLATBUFFERS_ARCHIVE="google-flatbuffers-v25.2.10.tar.gz"
-MANUAL_FLATBUFFERS_URL="https://github.com/google/flatbuffers/archive/refs/tags/v25.2.10.tar.gz"
-LOCAL_MANUAL_FLATBUFFERS_ARCHIVE_PATH="$LOCAL_VCPKG_DOWNLOADS/$MANUAL_FLATBUFFERS_ARCHIVE"
-REMOTE_MANUAL_FLATBUFFERS_ARCHIVE_PATH="$BRIDGES2_VCPKG_DOWNLOADS/$MANUAL_FLATBUFFERS_ARCHIVE"
-MANUAL_HTTPLIB_ARCHIVE="yhirose-cpp-httplib-v0.26.0.tar.gz"
-MANUAL_HTTPLIB_URL="https://github.com/yhirose/cpp-httplib/archive/refs/tags/v0.26.0.tar.gz"
-LOCAL_MANUAL_HTTPLIB_ARCHIVE_PATH="$LOCAL_VCPKG_DOWNLOADS/$MANUAL_HTTPLIB_ARCHIVE"
-REMOTE_MANUAL_HTTPLIB_ARCHIVE_PATH="$BRIDGES2_VCPKG_DOWNLOADS/$MANUAL_HTTPLIB_ARCHIVE"
 # Keep this helper CMake metadata aligned with external/vcpkg/scripts/vcpkg-tools.json. Override only when you are
 # intentionally testing a different pinned helper archive.
 BRIDGES2_VCPKG_CMAKE_VERSION="${GRIM_BRIDGES2_VCPKG_CMAKE_VERSION:-3.30.1}"
 BRIDGES2_VCPKG_CMAKE_ARCHIVE="${GRIM_BRIDGES2_VCPKG_CMAKE_ARCHIVE:-cmake-${BRIDGES2_VCPKG_CMAKE_VERSION}-linux-x86_64.tar.gz}"
+BRIDGES2_VCPKG_CMAKE_SHA512="${GRIM_BRIDGES2_VCPKG_CMAKE_SHA512:-84ce1333ed696a1736986fba2853c5d8db0e4c9addaf4a4723911248c6d49ecf545adf8bd46091d198fc7bd1e6c896798661463aa1ce3a726a093883aaa19adf}"
 BRIDGES2_VCPKG_CMAKE_URL="${GRIM_BRIDGES2_VCPKG_CMAKE_URL:-https://github.com/Kitware/CMake/releases/download/v${BRIDGES2_VCPKG_CMAKE_VERSION}/${BRIDGES2_VCPKG_CMAKE_ARCHIVE}}"
 LOCAL_VCPKG_CMAKE_ARCHIVE_PATH="$LOCAL_VCPKG_DOWNLOADS/$BRIDGES2_VCPKG_CMAKE_ARCHIVE"
 REMOTE_VCPKG_CMAKE_ARCHIVE_PATH="$BRIDGES2_VCPKG_DOWNLOADS/$BRIDGES2_VCPKG_CMAKE_ARCHIVE"
-BRIDGES2_VCPKG_TOOL_POLICY="grim_required_cmake_version=\"$BRIDGES2_VCPKG_CMAKE_VERSION\"; grim_system_cmake_version=\"\"; grim_has_compatible_cmake=0; grim_need_helper_downloads=0; if command -v cmake >/dev/null 2>&1; then grim_system_cmake_version=\$(cmake --version | awk 'NR==1 {print \$3}'); fi; if [ -n \"\$grim_system_cmake_version\" ] && [ \"\$(printf '%s\\n%s\\n' \"$BRIDGES2_VCPKG_CMAKE_VERSION\" \"\$grim_system_cmake_version\" | sort -V | head -n1)\" = \"$BRIDGES2_VCPKG_CMAKE_VERSION\" ]; then grim_has_compatible_cmake=1; fi; command -v ninja >/dev/null 2>&1 || grim_need_helper_downloads=1; [ \"\$grim_has_compatible_cmake\" = \"1\" ] || grim_need_helper_downloads=1; if [ \"\$grim_need_helper_downloads\" = \"0\" ]; then echo '  vcpkg helper tools: using Bridges-2 system cmake+ninja'; echo \"    system cmake: \$grim_system_cmake_version (required >= $BRIDGES2_VCPKG_CMAKE_VERSION)\"; export VCPKG_FORCE_SYSTEM_BINARIES=1; elif [ \"${GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS:-0}\" = \"1\" ]; then if [ -z \"\$grim_system_cmake_version\" ]; then echo '  vcpkg helper tools: system cmake missing; allowing helper-tool downloads'; elif [ \"\$grim_has_compatible_cmake\" != \"1\" ]; then echo \"  vcpkg helper tools: system cmake \$grim_system_cmake_version is older than required $BRIDGES2_VCPKG_CMAKE_VERSION; allowing helper-tool downloads\"; else echo '  vcpkg helper tools: system cmake is fine; helper-tool downloads remain enabled because ninja is missing'; fi; if [ \"\$grim_has_compatible_cmake\" != \"1\" ]; then grim_cmake_archive=\"$BRIDGES2_VCPKG_CMAKE_ARCHIVE\"; grim_cmake_url=\"$BRIDGES2_VCPKG_CMAKE_URL\"; grim_cmake_cache_path=\"$BRIDGES2_VCPKG_DOWNLOADS/\$grim_cmake_archive\"; if [ -f \"\$grim_cmake_cache_path\" ]; then echo \"  vcpkg helper tools: using cached \$grim_cmake_archive from $BRIDGES2_VCPKG_DOWNLOADS\"; else echo \"  vcpkg helper tools: prefetching \$grim_cmake_archive into $BRIDGES2_VCPKG_DOWNLOADS\"; grim_tmp_download=\"\$grim_cmake_cache_path.partial\"; rm -f \"\$grim_tmp_download\"; if command -v aria2c >/dev/null 2>&1; then aria2c --allow-overwrite=true --auto-file-renaming=false --continue=true --dir=\"$BRIDGES2_VCPKG_DOWNLOADS\" --out=\"\$grim_cmake_archive.partial\" -x 8 -s 8 -k 1M \"\$grim_cmake_url\"; mv -f \"\$grim_tmp_download\" \"\$grim_cmake_cache_path\"; elif command -v wget >/dev/null 2>&1; then wget -O \"\$grim_tmp_download\" \"\$grim_cmake_url\"; mv -f \"\$grim_tmp_download\" \"\$grim_cmake_cache_path\"; elif command -v curl >/dev/null 2>&1; then curl -L --fail --retry 5 --continue-at - --output \"\$grim_tmp_download\" \"\$grim_cmake_url\"; mv -f \"\$grim_tmp_download\" \"\$grim_cmake_cache_path\"; else echo 'ERROR: helper downloads are enabled but aria2c, wget, and curl are all unavailable for CMake prefetch.' >&2; exit 1; fi; fi; fi; unset VCPKG_FORCE_SYSTEM_BINARIES; else if [ -z \"\$grim_system_cmake_version\" ]; then echo 'ERROR: Bridges-2 system cmake is missing and GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS is not enabled.' >&2; elif ! command -v ninja >/dev/null 2>&1; then echo 'ERROR: Bridges-2 system ninja is missing and GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS is not enabled.' >&2; else echo \"ERROR: Bridges-2 system cmake \$grim_system_cmake_version is older than required $BRIDGES2_VCPKG_CMAKE_VERSION and helper downloads are disabled.\" >&2; fi; echo '  Load the cluster cmake/ninja modules or re-run with --allow-vcpkg-tool-downloads.' >&2; exit 1; fi"
+BRIDGES2_REMOTE_SHA512_FUNC='grim_compute_sha512() {
+  local grim_hash_path="$1"
+  if command -v sha512sum >/dev/null 2>&1; then
+    sha512sum "$grim_hash_path" | awk "{print tolower(\$1)}"
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 512 "$grim_hash_path" | awk "{print tolower(\$1)}"
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha512 "$grim_hash_path" | sed "s/^.*= //" | tr "[:upper:]" "[:lower:]"
+  else
+    echo "ERROR: cannot compute SHA512 for $grim_hash_path on Bridges-2 (need sha512sum, shasum, or openssl)." >&2
+    return 1
+  fi
+}'
+BRIDGES2_REMOTE_VALIDATE_CMAKE_ARCHIVE_FUNC='grim_validate_cmake_archive() {
+  local archive_path="$1"
+  local expected_sha512="$2"
+  local actual_sha512
+
+  if [ ! -f "$archive_path" ]; then
+    return 1
+  fi
+
+  actual_sha512=$(grim_compute_sha512 "$archive_path") || return 2
+  if [ "$actual_sha512" = "$expected_sha512" ]; then
+    return 0
+  fi
+
+  echo "  vcpkg helper tools: deleting stale $(basename "$archive_path") because SHA512 mismatched"
+  echo "    expected: $expected_sha512"
+  echo "    actual:   $actual_sha512"
+  rm -f "$archive_path" "$archive_path.partial"
+  return 1
+}'
+BRIDGES2_VCPKG_TOOL_POLICY="$BRIDGES2_REMOTE_SHA512_FUNC; $BRIDGES2_REMOTE_VALIDATE_CMAKE_ARCHIVE_FUNC; grim_required_cmake_version=\"$BRIDGES2_VCPKG_CMAKE_VERSION\"; grim_expected_cmake_sha512=\"$BRIDGES2_VCPKG_CMAKE_SHA512\"; grim_system_cmake_version=\"\"; grim_has_compatible_cmake=0; grim_need_helper_downloads=0; if command -v cmake >/dev/null 2>&1; then grim_system_cmake_version=\$(cmake --version | awk 'NR==1 {print \$3}'); fi; if [ -n \"\$grim_system_cmake_version\" ] && [ \"\$(printf '%s\\n%s\\n' \"$BRIDGES2_VCPKG_CMAKE_VERSION\" \"\$grim_system_cmake_version\" | sort -V | head -n1)\" = \"$BRIDGES2_VCPKG_CMAKE_VERSION\" ]; then grim_has_compatible_cmake=1; fi; command -v ninja >/dev/null 2>&1 || grim_need_helper_downloads=1; [ \"\$grim_has_compatible_cmake\" = \"1\" ] || grim_need_helper_downloads=1; if [ \"\$grim_need_helper_downloads\" = \"0\" ]; then echo '  vcpkg helper tools: using Bridges-2 system cmake+ninja'; echo \"    system cmake: \$grim_system_cmake_version (required >= $BRIDGES2_VCPKG_CMAKE_VERSION)\"; export VCPKG_FORCE_SYSTEM_BINARIES=1; elif [ \"${GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS:-0}\" = \"1\" ]; then if [ -z \"\$grim_system_cmake_version\" ]; then echo '  vcpkg helper tools: system cmake missing; allowing helper-tool downloads'; elif [ \"\$grim_has_compatible_cmake\" != \"1\" ]; then echo \"  vcpkg helper tools: system cmake \$grim_system_cmake_version is older than required $BRIDGES2_VCPKG_CMAKE_VERSION; allowing helper-tool downloads\"; else echo '  vcpkg helper tools: system cmake is fine; helper-tool downloads remain enabled because ninja is missing'; fi; if [ \"\$grim_has_compatible_cmake\" != \"1\" ]; then grim_cmake_archive=\"$BRIDGES2_VCPKG_CMAKE_ARCHIVE\"; grim_cmake_url=\"$BRIDGES2_VCPKG_CMAKE_URL\"; grim_cmake_cache_path=\"$BRIDGES2_VCPKG_DOWNLOADS/\$grim_cmake_archive\"; if grim_validate_cmake_archive \"\$grim_cmake_cache_path\" \"\$grim_expected_cmake_sha512\"; then echo \"  vcpkg helper tools: using cached \$grim_cmake_archive from $BRIDGES2_VCPKG_DOWNLOADS\"; else echo \"  vcpkg helper tools: prefetching \$grim_cmake_archive into $BRIDGES2_VCPKG_DOWNLOADS\"; grim_tmp_download=\"\$grim_cmake_cache_path.partial\"; rm -f \"\$grim_tmp_download\"; if command -v aria2c >/dev/null 2>&1; then aria2c --allow-overwrite=true --auto-file-renaming=false --continue=true --dir=\"$BRIDGES2_VCPKG_DOWNLOADS\" --out=\"\$grim_cmake_archive.partial\" -x 8 -s 8 -k 1M \"\$grim_cmake_url\"; mv -f \"\$grim_tmp_download\" \"\$grim_cmake_cache_path\"; elif command -v wget >/dev/null 2>&1; then wget -O \"\$grim_tmp_download\" \"\$grim_cmake_url\"; mv -f \"\$grim_tmp_download\" \"\$grim_cmake_cache_path\"; elif command -v curl >/dev/null 2>&1; then curl -L --fail --retry 5 --continue-at - --output \"\$grim_tmp_download\" \"\$grim_cmake_url\"; mv -f \"\$grim_tmp_download\" \"\$grim_cmake_cache_path\"; else echo 'ERROR: helper downloads are enabled but aria2c, wget, and curl are all unavailable for CMake prefetch.' >&2; exit 1; fi; if ! grim_validate_cmake_archive \"\$grim_cmake_cache_path\" \"\$grim_expected_cmake_sha512\"; then echo \"ERROR: cached helper archive \$grim_cmake_archive still failed SHA512 validation after download.\" >&2; echo '  Remove the bad archive from the Bridges-2 downloads cache and rerun if this persists.' >&2; exit 1; fi; fi; fi; unset VCPKG_FORCE_SYSTEM_BINARIES; else if [ -z \"\$grim_system_cmake_version\" ]; then echo 'ERROR: Bridges-2 system cmake is missing and GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS is not enabled.' >&2; elif ! command -v ninja >/dev/null 2>&1; then echo 'ERROR: Bridges-2 system ninja is missing and GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS is not enabled.' >&2; else echo \"ERROR: Bridges-2 system cmake \$grim_system_cmake_version is older than required $BRIDGES2_VCPKG_CMAKE_VERSION and helper downloads are disabled.\" >&2; fi; echo '  Load the cluster cmake/ninja modules or re-run with --allow-vcpkg-tool-downloads.' >&2; exit 1; fi"
 BRIDGES2_VCPKG_ENV="mkdir -p \"$BRIDGES2_VCPKG_DOWNLOADS\"; export VCPKG_ROOT=\"$BRIDGES2_VCPKG\"; export VCPKG_DOWNLOADS=\"$BRIDGES2_VCPKG_DOWNLOADS\"; unset Z_VCPKG_ROOT_DIR; unset _VCPKG_ROOT_DIR"
 if [[ -n "${GRIM_VCPKG_ROOT:-}" ]]; then
   BRIDGES2_VCPKG_ENSURE="(set -e; $BRIDGES2_VCPKG_ENV; if [ ! -f \"$VCPKG_TOOLCHAIN\" ]; then echo \"ERROR: GRIM_VCPKG_ROOT does not contain vcpkg toolchain: $VCPKG_TOOLCHAIN\" >&2; exit 1; fi; if [ ! -x \"$BRIDGES2_VCPKG/vcpkg\" ]; then (cd \"$BRIDGES2_VCPKG\" && ./bootstrap-vcpkg.sh -disableMetrics); fi; touch \"$BRIDGES2_VCPKG/.vcpkg-root\")"
 else
   BRIDGES2_VCPKG_ENSURE="(set -e; cd \"$BRIDGES2_DIR\"; $BRIDGES2_VCPKG_ENV; VCPKG_PIN=\$(git ls-tree HEAD external/vcpkg | awk '{print \$3}'); if [ -z \"\$VCPKG_PIN\" ]; then echo \"ERROR: external/vcpkg gitlink not found in repo HEAD\" >&2; exit 1; fi; if ! git -C \"$BRIDGES2_VCPKG\" rev-parse --show-toplevel >/dev/null 2>&1; then echo \"Initializing external/vcpkg to match local repo layout...\"; git submodule update --init external/vcpkg; fi; VCPKG_TOP=\$(git -C \"$BRIDGES2_VCPKG\" rev-parse --show-toplevel 2>/dev/null || true); if [ \"\$VCPKG_TOP\" != \"$BRIDGES2_VCPKG\" ]; then echo \"ERROR: $BRIDGES2_VCPKG exists but is not a vcpkg git checkout; remove it or set GRIM_VCPKG_ROOT\" >&2; exit 1; fi; if ! git -C \"$BRIDGES2_VCPKG\" cat-file -e \"\$VCPKG_PIN^{commit}\" 2>/dev/null; then git -C \"$BRIDGES2_VCPKG\" fetch --depth 1 origin \"\$VCPKG_PIN\" || git -C \"$BRIDGES2_VCPKG\" fetch origin \"\$VCPKG_PIN\"; fi; VCPKG_HEAD=\$(git -C \"$BRIDGES2_VCPKG\" rev-parse HEAD 2>/dev/null || true); if [ \"\$VCPKG_HEAD\" != \"\$VCPKG_PIN\" ]; then echo \"  vcpkg checkout status: aligning \$VCPKG_HEAD -> \$VCPKG_PIN\"; git -c advice.detachedHead=false -C \"$BRIDGES2_VCPKG\" checkout -f \"\$VCPKG_PIN\"; elif ! git -C \"$BRIDGES2_VCPKG\" diff --quiet --ignore-submodules HEAD -- || ! git -C \"$BRIDGES2_VCPKG\" diff --cached --quiet --ignore-submodules HEAD --; then echo \"  vcpkg checkout status: dirty pinned worktree; resetting to \$VCPKG_PIN\"; git -c advice.detachedHead=false -C \"$BRIDGES2_VCPKG\" checkout -f \"\$VCPKG_PIN\"; else echo \"  vcpkg checkout status: already pinned at \$VCPKG_PIN\"; fi; VCPKG_BASELINE=\$(grep -o '\"builtin-baseline\"[[:space:]]*:[[:space:]]*\"[^\"]*\"' \"$BRIDGES2_DIR/$TRAINING_DIR/vcpkg.json\" | head -n 1 | sed -E 's/.*\"([^\"]*)\"$/\1/'); if [ -z \"\$VCPKG_BASELINE\" ]; then echo \"ERROR: builtin-baseline missing from $BRIDGES2_DIR/$TRAINING_DIR/vcpkg.json\" >&2; exit 1; fi; if ! git -C \"$BRIDGES2_VCPKG\" cat-file -e \"\$VCPKG_BASELINE^{commit}\" 2>/dev/null; then git -C \"$BRIDGES2_VCPKG\" fetch --depth 1 origin \"\$VCPKG_BASELINE\" || git -C \"$BRIDGES2_VCPKG\" fetch origin \"\$VCPKG_BASELINE\"; fi; if ! git -C \"$BRIDGES2_VCPKG\" cat-file -e \"\$VCPKG_BASELINE:versions/baseline.json\" 2>/dev/null; then git -C \"$BRIDGES2_VCPKG\" fetch origin \"\$VCPKG_BASELINE\" || true; fi; if ! git -C \"$BRIDGES2_VCPKG\" cat-file -e \"\$VCPKG_BASELINE:versions/baseline.json\" 2>/dev/null; then echo \"ERROR: vcpkg builtin-baseline \$VCPKG_BASELINE is unavailable in $BRIDGES2_VCPKG; remove the checkout or fetch the missing history.\" >&2; exit 1; fi; if [ ! -f \"$VCPKG_TOOLCHAIN\" ]; then echo \"ERROR: pinned vcpkg toolchain not found: $VCPKG_TOOLCHAIN\" >&2; exit 1; fi; if [ ! -x \"$BRIDGES2_VCPKG/vcpkg\" ]; then (cd \"$BRIDGES2_VCPKG\" && ./bootstrap-vcpkg.sh -disableMetrics); fi; touch \"$BRIDGES2_VCPKG/.vcpkg-root\")"
 fi
-BRIDGES2_MANIFEST_ENSURE="mkdir -p $BRIDGES2_DIR/$TRAINING_DIR && [ -f $BRIDGES2_DIR/$TRAINING_DIR/vcpkg.json ] || printf '%s' '$TRAINING_VCPKG_JSON' > $BRIDGES2_DIR/$TRAINING_DIR/vcpkg.json"
-
-BRIDGES2_MANUAL_DEPS_PREP="grim_python=\"\"; if command -v python3 >/dev/null 2>&1; then grim_python=\$(command -v python3); elif command -v python >/dev/null 2>&1; then grim_python=\$(command -v python); else echo 'ERROR: python3/python is required to stage manual GRIM-text deps on Bridges-2.' >&2; exit 1; fi; \"\$grim_python\" \"$REMOTE_MANUAL_DEP_PREP_SCRIPT\" --cache-dir \"$BRIDGES2_VCPKG_DOWNLOADS\" --deps-root \"$BRIDGES2_MANUAL_DEPS_ROOT\""
+BRIDGES2_MANIFEST_ASSERT="if [ ! -f \"$BRIDGES2_DIR/$TRAINING_DIR/vcpkg.json\" ]; then echo \"ERROR: expected TrainingLoop manifest at $BRIDGES2_DIR/$TRAINING_DIR/vcpkg.json after repo sync\" >&2; exit 1; fi"
 
 # Flash-attention + Cutlass: remote script skips forced submodule pull when gitlink + pin already match.
 CUTLASS_PIN="bbe579a9e3beb6ea6626d9227ec32d0dae119a49"
@@ -951,8 +1022,118 @@ BRIDGES2_RUN_ID="$$.$RANDOM"
 BRIDGES2_REMOTE_STATE_DIR="$BRIDGES2_DIR/.grim_bridges2_runtime"
 BRIDGES2_BUILD_STATE_FILE="$BRIDGES2_REMOTE_STATE_DIR/run_train_on_bridges2.build.$BRIDGES2_RUN_ID.state"
 BRIDGES2_VCPKG_LOCK_PATH="$BRIDGES2_VCPKG/.vcpkg-root"
-BRIDGES2_VCPKG_LOCK_SWEEP="grim_lock_path=\"$BRIDGES2_VCPKG_LOCK_PATH\"; grim_state_dir=\"$BRIDGES2_REMOTE_STATE_DIR\"; grim_vcpkg_ps_regex='/vcpkg([[:space:]]|$)|/downloads/tools/.*/cmake([[:space:]]|$)|/downloads/tools/.*/ninja([[:space:]]|$)'; grim_lock_in_use=0; grim_holder_pids=\"\"; grim_active_vcpkg=\$(ps -eo pid=,args= | grep -F -- \"$BRIDGES2_VCPKG\" | grep -E \"\$grim_vcpkg_ps_regex\" | grep -v grep || true); if [ -e \"\$grim_lock_path\" ]; then if command -v lsof >/dev/null 2>&1; then grim_holder_pids=\$(lsof -t \"\$grim_lock_path\" 2>/dev/null | tr '\\n' ' '); elif command -v fuser >/dev/null 2>&1; then grim_holder_pids=\$(fuser \"\$grim_lock_path\" 2>/dev/null | tr '\\n' ' '); fi; fi; [ -n \"\$grim_active_vcpkg\" ] && grim_lock_in_use=1; [ -n \"\$grim_holder_pids\" ] && grim_lock_in_use=1; grim_other_active_state=0; if [ -d \"\$grim_state_dir\" ]; then for grim_state_path in \"\$grim_state_dir\"/run_train_on_bridges2.build.*.state; do [ -f \"\$grim_state_path\" ] || continue; [ \"\$grim_state_path\" = \"\$remote_state_file\" ] && continue; grim_state_pgid=\$(grep '^pgid=' \"\$grim_state_path\" | head -n 1 | cut -d= -f2- || true); if [ -n \"\$grim_state_pgid\" ] && ps -eo pgid= | tr -d '[:space:]' | grep -Fx \"\$grim_state_pgid\" >/dev/null 2>&1; then grim_other_active_state=1; break; fi; done; fi; if [ \"\$grim_lock_in_use\" -eq 1 ] && [ \"\$grim_other_active_state\" -eq 0 ] && [ -n \"\$grim_active_vcpkg\" ]; then echo \"  vcpkg lock sweep: recovering orphaned holder(s) with no competing launcher state\"; printf '%s\\n' \"\$grim_active_vcpkg\" | sed 's/^/    /'; grim_orphan_pids=\$(printf '%s\\n' \"\$grim_active_vcpkg\" | awk '{print \$1}' | tr '\\n' ' '); if [ -n \"\$grim_orphan_pids\" ]; then kill -TERM \$grim_orphan_pids 2>/dev/null || true; sleep 2; kill -KILL \$grim_orphan_pids 2>/dev/null || true; grim_active_vcpkg=\$(ps -eo pid=,args= | grep -F -- \"$BRIDGES2_VCPKG\" | grep -E \"\$grim_vcpkg_ps_regex\" | grep -v grep || true); [ -z \"\$grim_active_vcpkg\" ] && grim_lock_in_use=0; fi; fi; if [ \"\$grim_lock_in_use\" -eq 0 ]; then if [ ! -e \"\$grim_lock_path\" ]; then echo \"  vcpkg lock sweep: restoring missing root marker \$grim_lock_path\"; else echo \"  vcpkg lock sweep: root marker is idle at \$grim_lock_path\"; fi; touch \"\$grim_lock_path\"; else echo \"  vcpkg lock sweep: vcpkg activity appears active; leaving root marker \$grim_lock_path in place\"; [ -n \"\$grim_active_vcpkg\" ] && printf '%s\\n' \"\$grim_active_vcpkg\" | sed 's/^/    holder: /'; [ \"\$grim_other_active_state\" -eq 1 ] && echo \"    holder source: another run_train_on_bridges2 build state is still active\"; fi"
-BRIDGES2_REMOTE_BUILD_STATE_SETUP="runtime_dir=\"$BRIDGES2_REMOTE_STATE_DIR\"; mkdir -p \"\$runtime_dir\"; remote_state_file=\"$BRIDGES2_BUILD_STATE_FILE\"; remote_pgid=\$(ps -o pgid= -p \$\$ | tr -d '[:space:]'); printf '%s\\n' \"kind=build\" \"pid=\$\$\" \"pgid=\$remote_pgid\" \"lock_path=$BRIDGES2_VCPKG_LOCK_PATH\" \"vcpkg_root=$BRIDGES2_VCPKG\" \"build_dir=$BRIDGES2_DIR/$BUILD_DIR\" \"training_vcpkg_triplet_dir=$BRIDGES2_TRAINING_VCPKG_TRIPLET_DIR\" > \"\$remote_state_file\"; if command -v setsid >/dev/null 2>&1; then setsid bash -c 'state_file=\"\$1\"; target_pgid=\"\$2\"; while ps -eo pgid= | tr -d \"[:space:]\" | grep -Fx \"\$target_pgid\" >/dev/null 2>&1; do sleep 1; done; rm -f \"\$state_file\"' _ \"\$remote_state_file\" \"\$remote_pgid\" >/dev/null 2>&1 & else nohup bash -c 'state_file=\"\$1\"; target_pgid=\"\$2\"; while ps -eo pgid= | tr -d \"[:space:]\" | grep -Fx \"\$target_pgid\" >/dev/null 2>&1; do sleep 1; done; rm -f \"\$state_file\"' _ \"\$remote_state_file\" \"\$remote_pgid\" >/dev/null 2>&1 & fi"
+BRIDGES2_VCPKG_LOCK_SWEEP="grim_lock_path=\"$BRIDGES2_VCPKG_LOCK_PATH\";
+grim_state_dir=\"$BRIDGES2_REMOTE_STATE_DIR\";
+grim_vcpkg_ps_regex='/vcpkg([[:space:]]|$)|/downloads/tools/.*/cmake([[:space:]]|$)|/downloads/tools/.*/ninja([[:space:]]|$)';
+grim_lock_in_use=0;
+grim_holder_pids=\"\";
+grim_active_vcpkg=\$(ps -eo pid=,args= | grep -F -- \"$BRIDGES2_VCPKG\" | grep -E \"\$grim_vcpkg_ps_regex\" | grep -v grep || true);
+grim_scan_lock_holders() {
+  grim_holder_pids=\"\";
+  if [ -e \"\$grim_lock_path\" ]; then
+    if command -v lsof >/dev/null 2>&1; then
+      grim_holder_pids=\$(lsof -t \"\$grim_lock_path\" 2>/dev/null | tr '\\n' ' ');
+    elif command -v fuser >/dev/null 2>&1; then
+      grim_holder_pids=\$(fuser \"\$grim_lock_path\" 2>/dev/null | tr '\\n' ' ');
+    fi;
+  fi;
+};
+grim_detect_lock_state() {
+  grim_lock_probe_result=unknown;
+  grim_lock_probe_error=\"\";
+  grim_lock_probe_rc=0;
+  if [ ! -e \"\$grim_lock_path\" ]; then
+    touch \"\$grim_lock_path\";
+  fi;
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>>\"\$grim_lock_path\";
+    grim_lock_probe_error=\$(flock -n 9 2>&1);
+    grim_lock_probe_rc=\$?;
+    if [ \"\$grim_lock_probe_rc\" -eq 0 ]; then
+      grim_lock_probe_result=free;
+      flock -u 9;
+    elif [ \"\$grim_lock_probe_rc\" -eq 1 ]; then
+      grim_lock_probe_result=busy;
+    else
+      grim_lock_probe_result=unsupported;
+    fi;
+    exec 9>&-;
+  fi;
+};
+grim_scan_lock_holders;
+[ -n \"\$grim_active_vcpkg\" ] && grim_lock_in_use=1;
+[ -n \"\$grim_holder_pids\" ] && grim_lock_in_use=1;
+grim_other_active_state=0;
+if [ -d \"\$grim_state_dir\" ]; then
+  for grim_state_path in \"\$grim_state_dir\"/run_train_on_bridges2.build.*.state; do
+    [ -f \"\$grim_state_path\" ] || continue;
+    [ \"\$grim_state_path\" = \"\$remote_state_file\" ] && continue;
+    grim_state_pgid=\$(grep '^pgid=' \"\$grim_state_path\" | head -n 1 | cut -d= -f2- || true);
+    if [ -n \"\$grim_state_pgid\" ] && ps -eo pgid= | tr -d '[:space:]' | grep -Fx \"\$grim_state_pgid\" >/dev/null 2>&1; then
+      grim_other_active_state=1;
+      break;
+    fi;
+  done;
+fi;
+if [ \"\$grim_lock_in_use\" -eq 1 ] && [ \"\$grim_other_active_state\" -eq 0 ] && { [ -n \"\$grim_active_vcpkg\" ] || [ -n \"\$grim_holder_pids\" ]; }; then
+  echo \"  vcpkg lock sweep: recovering orphaned holder(s) with no competing launcher state\";
+  printf '%s\\n' \"\$grim_active_vcpkg\" | sed 's/^/    /';
+  grim_orphan_pids=\$({ printf '%s\\n' \"\$grim_active_vcpkg\" | awk '{print \$1}'; printf '%s\\n' \"\$grim_holder_pids\" | tr ' ' '\\n'; } | sed '/^$/d' | sort -u | tr '\\n' ' ');
+  if [ -n \"\$grim_orphan_pids\" ]; then
+    kill -TERM \$grim_orphan_pids 2>/dev/null || true;
+    sleep 2;
+    grim_active_vcpkg=\$(ps -eo pid=,args= | grep -F -- \"$BRIDGES2_VCPKG\" | grep -E \"\$grim_vcpkg_ps_regex\" | grep -v grep || true);
+    grim_scan_lock_holders;
+    grim_detect_lock_state;
+    if [ -n \"\$grim_active_vcpkg\" ] || [ -n \"\$grim_holder_pids\" ] || [ \"\$grim_lock_probe_result\" = busy ]; then
+      kill -KILL \$grim_orphan_pids 2>/dev/null || true;
+    fi;
+    for _ in 1 2 3 4 5; do
+      sleep 1;
+      grim_active_vcpkg=\$(ps -eo pid=,args= | grep -F -- \"$BRIDGES2_VCPKG\" | grep -E \"\$grim_vcpkg_ps_regex\" | grep -v grep || true);
+      grim_scan_lock_holders;
+      grim_detect_lock_state;
+      if [ -z \"\$grim_active_vcpkg\" ] && [ -z \"\$grim_holder_pids\" ] && [ \"\$grim_lock_probe_result\" != busy ]; then
+        break;
+      fi;
+    done;
+  fi;
+fi;
+grim_active_vcpkg=\$(ps -eo pid=,args= | grep -F -- \"$BRIDGES2_VCPKG\" | grep -E \"\$grim_vcpkg_ps_regex\" | grep -v grep || true);
+grim_scan_lock_holders;
+grim_detect_lock_state;
+grim_lock_in_use=0;
+if [ \"\$grim_lock_probe_result\" = busy ]; then
+  [ -n \"\$grim_active_vcpkg\" ] && grim_lock_in_use=1;
+  [ -n \"\$grim_holder_pids\" ] && grim_lock_in_use=1;
+  [ \"\$grim_other_active_state\" -eq 1 ] && grim_lock_in_use=1;
+elif [ \"\$grim_lock_probe_result\" != free ]; then
+  [ -n \"\$grim_active_vcpkg\" ] && grim_lock_in_use=1;
+  [ -n \"\$grim_holder_pids\" ] && grim_lock_in_use=1;
+  [ \"\$grim_other_active_state\" -eq 1 ] && grim_lock_in_use=1;
+fi;
+if [ \"\$grim_lock_in_use\" -eq 0 ]; then
+  if [ \"\$grim_lock_probe_result\" = free ]; then
+    echo \"  vcpkg lock sweep: filesystem lock is free at \$grim_lock_path\";
+  elif [ \"\$grim_lock_probe_result\" = busy ]; then
+    echo \"  vcpkg lock sweep: flock reported a busy lock at \$grim_lock_path, but no holder is visible; treating the probe as unreliable on this filesystem and continuing\";
+  elif [ \"\$grim_lock_probe_result\" = unsupported ]; then
+    echo \"  vcpkg lock sweep: flock probe is unavailable for \$grim_lock_path; falling back to process scan\";
+    [ -n \"\$grim_lock_probe_error\" ] && echo \"    flock probe detail: \$grim_lock_probe_error\";
+  else
+    echo \"  vcpkg lock sweep: no active holder detected for \$grim_lock_path\";
+  fi;
+else
+  echo \"  vcpkg lock sweep: filesystem lock still appears busy at \$grim_lock_path\";
+  [ -n \"\$grim_active_vcpkg\" ] && printf '%s\\n' \"\$grim_active_vcpkg\" | sed 's/^/    holder: /';
+  [ -n \"\$grim_holder_pids\" ] && echo \"    holder pids: \$grim_holder_pids\";
+  [ \"\$grim_other_active_state\" -eq 1 ] && echo \"    holder source: another run_train_on_bridges2 build state is still active\";
+  [ \"\$grim_lock_probe_result\" = unsupported ] && [ -n \"\$grim_lock_probe_error\" ] && echo \"    flock probe detail: \$grim_lock_probe_error\";
+  echo \"ERROR: refusing to continue while the vcpkg filesystem lock is still busy.\" >&2;
+  echo \"  Wait for the holder above to exit, or clear that stuck process on Bridges-2, then rerun.\" >&2;
+  exit 1;
+fi"
+BRIDGES2_REMOTE_BUILD_STATE_SETUP="runtime_dir=\"$BRIDGES2_REMOTE_STATE_DIR\"; mkdir -p \"\$runtime_dir\"; remote_state_file=\"$BRIDGES2_BUILD_STATE_FILE\"; remote_pgid=\$(ps -o pgid= -p \$\$ | tr -d '[:space:]'); printf '%s\\n' \"kind=build\" \"pid=\$\$\" \"pgid=\$remote_pgid\" \"lock_path=$BRIDGES2_VCPKG_LOCK_PATH\" \"vcpkg_root=$BRIDGES2_VCPKG\" \"build_dir=$BRIDGES2_DIR/$BUILD_DIR\" \"training_vcpkg_triplet_dir=$BRIDGES2_TRAINING_VCPKG_TRIPLET_DIR\" > \"\$remote_state_file\"; if command -v setsid >/dev/null 2>&1; then { setsid bash -c 'state_file=\"\$1\"; target_pgid=\"\$2\"; while ps -eo pgid= | tr -d \"[:space:]\" | grep -Fx \"\$target_pgid\" >/dev/null 2>&1; do sleep 1; done; rm -f \"\$state_file\"' _ \"\$remote_state_file\" \"\$remote_pgid\" >/dev/null 2>&1 & }; else { nohup bash -c 'state_file=\"\$1\"; target_pgid=\"\$2\"; while ps -eo pgid= | tr -d \"[:space:]\" | grep -Fx \"\$target_pgid\" >/dev/null 2>&1; do sleep 1; done; rm -f \"\$state_file\"' _ \"\$remote_state_file\" \"\$remote_pgid\" >/dev/null 2>&1 & }; fi"
 BRIDGES2_CMAKE_PRESET="${GRIM_BRIDGES2_CMAKE_PRESET:-}"
 if [[ -z "$BRIDGES2_CMAKE_PRESET" ]]; then
   if [[ "$GPU_TYPE" == "h100-80" ]]; then
@@ -967,19 +1148,13 @@ case "$BRIDGES2_CMAKE_PRESET" in
   bridges2-v100-release) BRIDGES2_CMAKE_FALLBACK_PRESET="bridges2-v100-release-make" ;;
 esac
 BRIDGES2_BUILD_TOOL_DETECT="grim_resolved_preset=\"$BRIDGES2_CMAKE_PRESET\"; grim_cmake_make_program=\"\"; grim_cmake_generator=\"\"; if command -v ninja >/dev/null 2>&1; then grim_cmake_make_program=\$(command -v ninja); grim_cmake_generator='Ninja'; echo \"  CMake generator backend: Ninja (\$grim_cmake_make_program)\"; elif command -v ninja-build >/dev/null 2>&1; then grim_cmake_make_program=\$(command -v ninja-build); grim_cmake_generator='Ninja'; echo \"  CMake generator backend: Ninja via ninja-build (\$grim_cmake_make_program)\"; elif command -v make >/dev/null 2>&1; then grim_cmake_make_program=\$(command -v make); grim_cmake_generator='Unix Makefiles'; if [ -n \"$BRIDGES2_CMAKE_FALLBACK_PRESET\" ]; then grim_resolved_preset=\"$BRIDGES2_CMAKE_FALLBACK_PRESET\"; fi; echo \"  CMake generator backend: Unix Makefiles fallback (\$grim_cmake_make_program)\"; elif command -v gmake >/dev/null 2>&1; then grim_cmake_make_program=\$(command -v gmake); grim_cmake_generator='Unix Makefiles'; if [ -n \"$BRIDGES2_CMAKE_FALLBACK_PRESET\" ]; then grim_resolved_preset=\"$BRIDGES2_CMAKE_FALLBACK_PRESET\"; fi; echo \"  CMake generator backend: Unix Makefiles fallback via gmake (\$grim_cmake_make_program)\"; else echo \"ERROR: no compatible CMake generator backend found on Bridges-2 (need ninja, ninja-build, make, or gmake on PATH).\" >&2; exit 1; fi; export GRIM_BRIDGES2_RESOLVED_PRESET=\"\$grim_resolved_preset\"; export GRIM_BRIDGES2_CMAKE_GENERATOR=\"\$grim_cmake_generator\"; export GRIM_BRIDGES2_CMAKE_MAKE_PROGRAM=\"\$grim_cmake_make_program\""
-if [[ "$BRIDGES2_USE_MANUAL_DEPS" == "1" ]]; then
-  BRIDGES2_DEP_MODE_LABEL="manual headers"
-  BRIDGES2_DEP_BOOTSTRAP="mkdir -p \"$BRIDGES2_VCPKG_DOWNLOADS\""
-  BRIDGES2_DEP_PRECONFIG="$BRIDGES2_MANUAL_DEPS_PREP"
-  BRIDGES2_CMAKE_DEP_ARGS="-DGRIM_TRAINING_USE_MANUAL_DEPS=ON -DGRIM_TRAINING_ENABLE_VCPKG_FALLBACK=OFF"
-  BRIDGES2_PREP_BUILD="if [ -f \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" ]; then cached_toolchain=\$(grep '^CMAKE_TOOLCHAIN_FILE:FILEPATH=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); cached_manual=\$(grep '^GRIM_TRAINING_USE_MANUAL_DEPS:BOOL=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); if [ -n \"\$cached_toolchain\" ]; then echo \"  stale CMake toolchain cache from prior vcpkg configure: \$cached_toolchain\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure without vcpkg\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; elif [ \"\$cached_manual\" != \"ON\" ]; then echo \"  stale TrainingLoop dependency mode cache: manual deps -> ON\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure for staged headers\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; fi; fi"
-else
-  BRIDGES2_DEP_MODE_LABEL="vendored vcpkg"
-  BRIDGES2_DEP_BOOTSTRAP="$BRIDGES2_VCPKG_ENSURE && $BRIDGES2_VCPKG_LOCK_SWEEP && $BRIDGES2_MANIFEST_ENSURE"
-  BRIDGES2_DEP_PRECONFIG="$BRIDGES2_VCPKG_TOOL_POLICY && $BRIDGES2_VCPKG_ENV && $BRIDGES2_VCPKG_MANIFEST_POLICY"
-  BRIDGES2_CMAKE_DEP_ARGS="-DCMAKE_TOOLCHAIN_FILE=\"$VCPKG_TOOLCHAIN\" -DVCPKG_MANIFEST_DIR=\"$BRIDGES2_DIR/$TRAINING_DIR\" -DVCPKG_INSTALLED_DIR=\"$BRIDGES2_TRAINING_VCPKG_INSTALLED\" -DVCPKG_TARGET_TRIPLET=x64-linux -DGRIM_TRAINING_USE_MANUAL_DEPS=OFF"
-  BRIDGES2_PREP_BUILD="if [ -f \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" ]; then cached_toolchain=\$(grep '^CMAKE_TOOLCHAIN_FILE:FILEPATH=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); cached_installed=\$(grep '^VCPKG_INSTALLED_DIR:PATH=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); if [ -n \"\$cached_toolchain\" ] && [ \"\$cached_toolchain\" != \"$VCPKG_TOOLCHAIN\" ]; then echo \"  stale CMake toolchain cache: \$cached_toolchain -> $VCPKG_TOOLCHAIN\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure with the pinned vcpkg cache\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; elif [ -n \"\$cached_installed\" ] && [ \"\$cached_installed\" != \"$BRIDGES2_TRAINING_VCPKG_INSTALLED\" ]; then echo \"  stale TrainingLoop vcpkg installed cache: \$cached_installed -> $BRIDGES2_TRAINING_VCPKG_INSTALLED\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure the manifest install root\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; fi; fi"
-fi
+BRIDGES2_DEP_MODE_LABEL="TrainingLoop vcpkg manifest"
+BRIDGES2_DEP_BOOTSTRAP="$BRIDGES2_VCPKG_ENSURE && $BRIDGES2_VCPKG_LOCK_SWEEP && $BRIDGES2_MANIFEST_ASSERT"
+BRIDGES2_DEP_PRECONFIG="$BRIDGES2_VCPKG_TOOL_POLICY && $BRIDGES2_VCPKG_ENV && $BRIDGES2_VCPKG_MANIFEST_POLICY"
+BRIDGES2_CMAKE_DEP_ARGS="-DCMAKE_TOOLCHAIN_FILE=\"$VCPKG_TOOLCHAIN\" -DVCPKG_MANIFEST_DIR=\"$BRIDGES2_DIR/$TRAINING_DIR\" -DVCPKG_INSTALLED_DIR=\"$BRIDGES2_TRAINING_VCPKG_INSTALLED\" -DVCPKG_TARGET_TRIPLET=x64-linux -DVCPKG_MANIFEST_INSTALL=\$cmake_manifest_install -DGRIM_TRAINING_USE_MANUAL_DEPS=OFF -DGRIM_TRAINING_ENABLE_VCPKG_FALLBACK=ON"
+BRIDGES2_PREP_BUILD="grim_need_configure=0; if [ -f \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" ]; then cached_toolchain=\$(grep '^CMAKE_TOOLCHAIN_FILE:FILEPATH=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); cached_installed=\$(grep '^VCPKG_INSTALLED_DIR:PATH=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); cached_manual=\$(grep '^GRIM_TRAINING_USE_MANUAL_DEPS:BOOL=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); if [ -n \"\$cached_toolchain\" ] && [ \"\$cached_toolchain\" != \"$VCPKG_TOOLCHAIN\" ]; then echo \"  stale CMake toolchain cache: \$cached_toolchain -> $VCPKG_TOOLCHAIN\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure with the pinned vcpkg cache\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; grim_need_configure=1; elif [ -n \"\$cached_installed\" ] && [ \"\$cached_installed\" != \"$BRIDGES2_TRAINING_VCPKG_INSTALLED\" ]; then echo \"  stale TrainingLoop vcpkg installed cache: \$cached_installed -> $BRIDGES2_TRAINING_VCPKG_INSTALLED\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure the manifest install root\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; grim_need_configure=1; elif [ -n \"\$cached_manual\" ] && [ \"\$cached_manual\" != \"OFF\" ]; then echo \"  stale TrainingLoop dependency mode cache: manual deps -> OFF\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure for manifest-mode vcpkg\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; grim_need_configure=1; fi; else grim_need_configure=1; fi"
+BRIDGES2_PRECONFIGURE_BUILD="{ if [ -f \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" ]; then cached_generator=\$(grep '^CMAKE_GENERATOR:INTERNAL=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); cached_make_program=\$(grep '^CMAKE_MAKE_PROGRAM:FILEPATH=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); if [ -n \"\$cached_generator\" ] && [ \"\$cached_generator\" != \"\$GRIM_BRIDGES2_CMAKE_GENERATOR\" ]; then echo \"  stale CMake generator cache: \$cached_generator -> \$GRIM_BRIDGES2_CMAKE_GENERATOR\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure with the current generator backend\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; grim_need_configure=1; elif [ -n \"\$cached_make_program\" ] && [ \"\$cached_make_program\" != \"\$GRIM_BRIDGES2_CMAKE_MAKE_PROGRAM\" ]; then echo \"  stale CMake make-program cache: \$cached_make_program -> \$GRIM_BRIDGES2_CMAKE_MAKE_PROGRAM\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure with the current generator executable\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; grim_need_configure=1; fi; fi; if [ ! -f \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" ]; then grim_need_configure=1; fi; }"
+BRIDGES2_CONFIGURE_STEP="{ if [ \"\${cmake_manifest_install}\" = \"ON\" ] || [ \"\${grim_need_configure:-1}\" = \"1\" ]; then echo \"  CMake configure: running for $BRIDGES2_DIR/$BUILD_DIR\"; cmake -S . -B \"$BRIDGES2_DIR/$BUILD_DIR\" -G \"\$GRIM_BRIDGES2_CMAKE_GENERATOR\" -DCMAKE_MAKE_PROGRAM=\"\$GRIM_BRIDGES2_CMAKE_MAKE_PROGRAM\" -DCMAKE_BUILD_TYPE=Release -DCUDAToolkit_ROOT=\$GRIM_CUDA_ROOT $BRIDGES2_CMAKE_DEP_ARGS; else echo \"  CMake configure: reusing existing build tree $BRIDGES2_DIR/$BUILD_DIR\"; fi; }"
 
 # --build
 # Default to building train_gpu PLUS train_tokenizer because train_gpu spawns
@@ -1000,31 +1175,22 @@ elif [[ "$DO_TT" == true ]]; then
 fi
 
 if [[ "$DO_BUILD" == true ]]; then
-  if [[ "$BRIDGES2_USE_MANUAL_DEPS" == "1" ]]; then
-    echo "Seeding Bridges-2 manual dependency archive cache from local downloads when available..."
-    echo "  local source archive cache: $LOCAL_VCPKG_DOWNLOADS"
-    seed_remote_manual_dep_archive "$LOCAL_MANUAL_NLOHMANN_JSON_ARCHIVE_PATH" "$REMOTE_MANUAL_NLOHMANN_JSON_ARCHIVE_PATH" "$MANUAL_NLOHMANN_JSON_ARCHIVE" "$MANUAL_NLOHMANN_JSON_URL"
-    seed_remote_manual_dep_archive "$LOCAL_MANUAL_FLATBUFFERS_ARCHIVE_PATH" "$REMOTE_MANUAL_FLATBUFFERS_ARCHIVE_PATH" "$MANUAL_FLATBUFFERS_ARCHIVE" "$MANUAL_FLATBUFFERS_URL"
-    seed_remote_manual_dep_archive "$LOCAL_MANUAL_HTTPLIB_ARCHIVE_PATH" "$REMOTE_MANUAL_HTTPLIB_ARCHIVE_PATH" "$MANUAL_HTTPLIB_ARCHIVE" "$MANUAL_HTTPLIB_URL"
-  elif [[ "${GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS:-0}" == "1" ]]; then
+  if [[ "${GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS:-0}" == "1" ]]; then
     echo "Seeding Bridges-2 helper-tool cache from local downloads when available..."
     echo "  local helper cache: $LOCAL_VCPKG_DOWNLOADS"
-    seed_remote_vcpkg_helper_archive "$LOCAL_VCPKG_CMAKE_ARCHIVE_PATH" "$REMOTE_VCPKG_CMAKE_ARCHIVE_PATH" "$BRIDGES2_VCPKG_CMAKE_ARCHIVE"
+    seed_remote_vcpkg_helper_archive "$LOCAL_VCPKG_CMAKE_ARCHIVE_PATH" "$REMOTE_VCPKG_CMAKE_ARCHIVE_PATH" "$BRIDGES2_VCPKG_CMAKE_ARCHIVE" "$BRIDGES2_VCPKG_CMAKE_URL" "$BRIDGES2_VCPKG_CMAKE_SHA512"
   fi
   echo "Building $BUILD_TARGET on Bridges-2 ($BRIDGES2_DIR/$BUILD_DIR)..."
   echo "  GPU type: $GPU_TYPE, CUDA arch: $([ "$GPU_TYPE" == "h100-80" ] && echo sm_90 || echo sm_80), make -j $BRIDGES2_MAKE_JOBS"
   echo "  dependency mode: $BRIDGES2_DEP_MODE_LABEL"
-  if [[ "$BRIDGES2_USE_MANUAL_DEPS" == "1" ]]; then
-    echo "  manual deps root: $BRIDGES2_MANUAL_DEPS_ROOT"
-    echo "  source archive cache: $BRIDGES2_VCPKG_DOWNLOADS"
-  else
-    echo "  vcpkg checkout path: $BRIDGES2_VCPKG (same path as local builds; pinned to external/vcpkg gitlink)"
-    echo "  vcpkg downloads cache: $BRIDGES2_VCPKG_DOWNLOADS"
-  fi
+  echo "  vcpkg checkout path: $BRIDGES2_VCPKG (same path as local builds; pinned to external/vcpkg gitlink)"
+  echo "  vcpkg manifest: $BRIDGES2_DIR/$TRAINING_DIR/vcpkg.json"
+  echo "  vcpkg installed dir: $BRIDGES2_TRAINING_VCPKG_INSTALLED"
+  echo "  vcpkg downloads cache: $BRIDGES2_VCPKG_DOWNLOADS"
   echo "  CMake preset: $BRIDGES2_CMAKE_PRESET (auto-falls back to -make when Ninja is unavailable)"
   ACTIVE_REMOTE_STATE_FILE="$BRIDGES2_BUILD_STATE_FILE"
   ACTIVE_REMOTE_LABEL="build"
-  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "BRIDGES2_DIR=$BRIDGES2_DIR; $BRIDGES2_CUDA_ARCH cd \$BRIDGES2_DIR && $BRIDGES2_REMOTE_BUILD_STATE_SETUP && $BRIDGES2_SUBMODULE && $BRIDGES2_DEP_BOOTSTRAP && $BRIDGES2_PREP_BUILD && cd \$BRIDGES2_DIR/$TRAINING_DIR/TrainingLoop && ${BRIDGES2_CLEAN}$BRIDGES2_MODULES && $BRIDGES2_ENSURE_CUDA12 && $BRIDGES2_BUILD_TOOL_DETECT && $BRIDGES2_DEP_PRECONFIG && echo \"  CMake profile: \$GRIM_BRIDGES2_RESOLVED_PRESET via \$GRIM_BRIDGES2_CMAKE_GENERATOR\" && cmake -S . -B \"$BRIDGES2_DIR/$BUILD_DIR\" -G \"\$GRIM_BRIDGES2_CMAKE_GENERATOR\" -DCMAKE_MAKE_PROGRAM=\"\$GRIM_BRIDGES2_CMAKE_MAKE_PROGRAM\" -DCMAKE_BUILD_TYPE=Release -DCUDAToolkit_ROOT=\$GRIM_CUDA_ROOT $BRIDGES2_CMAKE_DEP_ARGS && cmake --build \"$BRIDGES2_DIR/$BUILD_DIR\" --target $BUILD_TARGET -j $BRIDGES2_MAKE_JOBS"
+  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "BRIDGES2_DIR=$BRIDGES2_DIR; $BRIDGES2_CUDA_ARCH cd \$BRIDGES2_DIR && $BRIDGES2_REMOTE_BUILD_STATE_SETUP && $BRIDGES2_SUBMODULE && $BRIDGES2_DEP_BOOTSTRAP && $BRIDGES2_PREP_BUILD && cd \$BRIDGES2_DIR/$TRAINING_DIR/TrainingLoop && ${BRIDGES2_CLEAN}$BRIDGES2_MODULES && $BRIDGES2_ENSURE_CUDA12 && $BRIDGES2_BUILD_TOOL_DETECT && $BRIDGES2_PRECONFIGURE_BUILD && $BRIDGES2_DEP_PRECONFIG && echo \"  CMake profile: \$GRIM_BRIDGES2_RESOLVED_PRESET via \$GRIM_BRIDGES2_CMAKE_GENERATOR\" && $BRIDGES2_CONFIGURE_STEP && cmake --build \"$BRIDGES2_DIR/$BUILD_DIR\" --target $BUILD_TARGET -j $BRIDGES2_MAKE_JOBS"
   ACTIVE_REMOTE_STATE_FILE=""
   ACTIVE_REMOTE_LABEL=""
 fi

@@ -147,7 +147,7 @@ LatticeLevelState = TelemetryState (20 float + 2 uint32) + stride (uint32_t) + l
 | **Params, grads, optimizer m/v** | Tensor / vector members of TrainingState; freed in ~TrainingState when members destruct. |
 | **Pre-allocated upload workspaces** (cached_targets, token caches, sequence_weights) | Tensor members; Tensor::~Tensor() → release() → cudaFree(data). |
 | **class_weights_tensor** | Tensor member; `Tensor::~Tensor()` releases class-balanced weights. |
-| **PBM (alibi_slopes, rope_inv_freq)** | `LanguageModel::pbm_owner_` (`PBM::PBMStateOwner`) RAII releases PBM buffers and upload event; `PBMSpec` is only a non-owning attention view. |
+| **PBM (alibi_slopes, rope_inv_freq)** | `LanguageModel::pbm_owner_` (`PBM::PBMStateOwner`) RAII releases PBM buffers and upload event; consumers borrow the same `PBMState` instead of a duplicate view struct. |
 | **TeacherLogits / reference_logits** | `TeacherLogits::Buffer` RAII destructor releases device storage. |
 | **Optimizer states** | `Training::OptimizerContext::optimizer_state.clear()` clears dedicated optimizer-state owner tensors. |
 | **Guess cache (GRIM-TS)** | `GuessCacheScope::OwnedBuffers` RAII member; released when `ctx.guess_cache_scope.reset()` runs before model teardown. |

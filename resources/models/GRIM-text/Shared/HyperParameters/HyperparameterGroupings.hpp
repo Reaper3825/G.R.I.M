@@ -16,6 +16,21 @@ namespace GRIM::HyperParameters {
 // validation policy, or derived-value computation here; add those to
 // HyperParameters_GPU.hpp first.
 
+template <typename T>
+struct ImmutableArrayView {
+    const T* data = nullptr;
+    std::size_t size = 0;
+
+    bool empty() const noexcept { return size == 0; }
+    const T* begin() const noexcept { return data; }
+    const T* end() const noexcept { return data ? data + size : nullptr; }
+};
+
+template <typename T>
+inline ImmutableArrayView<T> immutableArrayView(const std::vector<T>& values) {
+    return ImmutableArrayView<T>{values.empty() ? nullptr : values.data(), values.size()};
+}
+
 struct DataLoadingHP {
     int min_seq_valid_tokens = 0;
     int sliding_window_stride = 0;
@@ -287,6 +302,8 @@ struct PBMConstructionHP {
     float alibi_max_bias = 0.0f;
     float rope_theta = 0.0f;
     float rope_scaling = 0.0f;
+    ImmutableArrayView<float> alibi_slopes{};
+    ImmutableArrayView<float> rope_inv_freq{};
 };
 
 struct EncoderLayerConstructionHP {
@@ -774,6 +791,8 @@ inline PBMConstructionHP pbmConstructionHP(
     view.alibi_max_bias = cfg.alibi_max_bias;
     view.rope_theta = cfg.rope_theta;
     view.rope_scaling = cfg.rope_scaling;
+    view.alibi_slopes = immutableArrayView(cfg.pbm_alibi_slopes);
+    view.rope_inv_freq = immutableArrayView(cfg.pbm_rope_inv_freq);
     return view;
 }
 

@@ -26,7 +26,7 @@ namespace GRIM {
 // ModelForwardRequest/AutogradContext.
 //======================================================//
 struct GPUGrimEncoder::Impl {
-    std::vector<std::unique_ptr<GPUEncoderLayer>> gpu_layers_;
+    std::vector<std::unique_ptr<EncodingLayer>> gpu_layers_;
 
     Impl(const HyperParameters::EncoderLayerConstructionHP& hp,
          const EncoderConstructionBindings& bindings,
@@ -41,7 +41,7 @@ struct GPUGrimEncoder::Impl {
             // Pattern B: Layer self-allocates and Xavier-inits its own weights.
             // Seed offsets per layer: base + 2 + layer*10
             const uint64_t layer_seed = weight_seed + 2 + i * 10;
-            gpu_layers_.emplace_back(std::make_unique<GPUEncoderLayer>(
+            gpu_layers_.emplace_back(std::make_unique<EncodingLayer>(
                 hp, *bindings.pos_encoding, layer_seed, bindings.init_stream));
         }
     }
@@ -54,14 +54,14 @@ GPUGrimEncoder::GPUGrimEncoder(const HyperParameters::EncoderLayerConstructionHP
 {
 }
 
-GPUEncoderLayer* GPUGrimEncoder::getLayer(int index) {
+EncodingLayer* GPUGrimEncoder::getLayer(int index) {
     if (index < 0 || index >= static_cast<int>(pImpl->gpu_layers_.size())) {
         return nullptr;
     }
     return pImpl->gpu_layers_[index].get();
 }
 
-const GPUEncoderLayer* GPUGrimEncoder::getLayer(int index) const {
+const EncodingLayer* GPUGrimEncoder::getLayer(int index) const {
     if (index < 0 || index >= static_cast<int>(pImpl->gpu_layers_.size())) {
         return nullptr;
     }
