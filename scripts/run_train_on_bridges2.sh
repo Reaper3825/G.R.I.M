@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run GRIM-text training on PSC Bridges-2 via SSH.
-# Usage: ./scripts/run_train_on_bridges2.sh [--build] [--jobs N] [--config CONFIG] [--sbatch] [--sync TARGET...] [--sync-all|--sync-mcs|--sync-cbs|--sync-crs|--sync-fas] [--pull-vocab] [--pull-logs] [--allow-vcpkg-tool-downloads]
+# Usage: ./scripts/run_train_on_bridges2.sh [--build] [--jobs N] [--sbatch] [--sync TARGET...] [--sync-all|--sync-mcs|--sync-cbs|--sync-crs|--sync-fas] [--pull-vocab] [--pull-logs] [--allow-vcpkg-tool-downloads]
 #
 # Prerequisites:
 #   - SSH: ssh uwadkins@bridges2.psc.edu (or add to ~/.ssh/config as Host bridges2)
@@ -35,7 +35,7 @@
 #
 # Options:
 #   --build          Build train_gpu before running.
-#   --config X       Config (default: ai_config.json).
+#   ai_config.json   Canonical config at the repo root. Edit that file before launching.
 #   --pull-vocab     Download Bridges-2 training/data/vocab.bin, vocab.txt, and training_data.grmt into the local training data dir, then exit.
 #   --pull-logs      Download the latest Bridges-2 *_tape.log, training_<session>.log, and telemetry_<session>.csv from training/logs into the local logs dir, then exit.
 #   --sbatch         Submit batch job (scripts/train_bridges2.sbatch).
@@ -64,7 +64,6 @@ TRAINING_DIR="resources/models/GRIM-text/training"
 GRIM_DIR="resources/models/GRIM-text/GRIM"
 BUILD_DIR="$TRAINING_DIR/TrainingLoop/build"
 EXE="$BUILD_DIR/train_gpu"
-CONFIG="${CONFIG:-../../../../ai_config.json}"
 TRAINING_DATA_DIR="$REPO_ROOT/resources/models/GRIM-text/training/data"
 TRAINING_LOGS_DIR="$REPO_ROOT/resources/models/GRIM-text/training/logs"
 CACHE_PATH="$TRAINING_DATA_DIR/merged_verified_cache.jsonl"
@@ -105,7 +104,12 @@ while [[ $# -gt 0 ]]; do
     --build)          DO_BUILD=true; shift ;;
     --incremental)    DO_INCREMENTAL=true; shift ;;
     --clean)          DO_CLEAN_BUILD=true; shift ;;
-    --config)         CONFIG="$2"; shift 2 ;;
+    --config)
+      echo "ERROR: --config is no longer supported by scripts/run_train_on_bridges2.sh." >&2
+      echo "  train_gpu now loads the canonical ai_config.json from the repo root on Bridges-2." >&2
+      echo "  Edit ./ai_config.json locally, then rerun this launcher so it transfers that file." >&2
+      exit 1
+      ;;
     --pull-vocab)     DO_PULL_VOCAB=true; shift ;;
     --pull-logs)      DO_PULL_LOGS=true; shift ;;
     --sbatch)         USE_SBATCH=true; shift ;;
@@ -1161,7 +1165,7 @@ BRIDGES2_CONFIGURE_STEP="{ if [ \"\${cmake_manifest_install}\" = \"ON\" ] || [ \
 # train_tokenizer as a subprocess at runtime (see Subprocess/tokenizer_subprocess.cpp);
 # rebuilding train_gpu alone leaves a stale train_tokenizer that's pinned to whatever
 # IPC contract was current the last time it was built. The two binaries share an
-# IPC schema (--status-file / --config flags + status JSON envelope), so any time
+# IPC schema (--status-file + status JSON envelope), so any time
 # train_gpu is rebuilt train_tokenizer MUST be rebuilt too or the parent will fail
 # with "subprocess exited but did not write a status file" the first time it spawns
 # the child. Sub-target builds (--TD/--UT/--TT) keep their single-target footprint.
@@ -1219,11 +1223,14 @@ else
   echo "Skipping curriculum_registry.json (not found at $CURRICULUM_REGISTRY_PATH_EXPANDED)."
 fi
 
-# Transfer ai_config.json
-if [[ -f "$REPO_ROOT/ai_config.json" ]]; then
-  echo "Transferring ai_config.json..."
-  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cat > $BRIDGES2_DIR/ai_config.json" < "$REPO_ROOT/ai_config.json"
+# Transfer canonical ai_config.json
+if [[ ! -f "$REPO_ROOT/ai_config.json" ]]; then
+  echo "ERROR: canonical ai_config.json not found at $REPO_ROOT/ai_config.json" >&2
+  echo "  scripts/run_train_on_bridges2.sh requires the repo-root ai_config.json so train_gpu can load it canonically." >&2
+  exit 1
 fi
+echo "Transferring ai_config.json..."
+ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cat > $BRIDGES2_DIR/ai_config.json" < "$REPO_ROOT/ai_config.json"
 
 # Batch job
 if [[ "$USE_SBATCH" == true ]]; then
@@ -1236,11 +1243,7 @@ if [[ "$USE_SBATCH" == true ]]; then
   ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "mkdir -p $BRIDGES2_DIR/scripts $BRIDGES2_DIR/logs"
   ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cat > $BRIDGES2_DIR/scripts/train_bridges2.sbatch" < "$SBATCH_PATH"
   echo "Submitting batch job (partition=$PARTITION, gpu=$GPU_TYPE)..."
-  # Batch script defaults to ai_config.json at repo root (same as transferred file). Pass through --config when set.
   SBATCH_EXPORT="ALL,GRIM_BRIDGES2_DIR=$BRIDGES2_DIR"
-  if [[ "$CONFIG" != "../../../../ai_config.json" ]] && [[ "$CONFIG" != "ai_config.json" ]]; then
-    SBATCH_EXPORT="$SBATCH_EXPORT,GRIM_TRAIN_CONFIG=$CONFIG"
-  fi
   SUBMIT_OUT=$(ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && sbatch --export=$SBATCH_EXPORT --output=$BRIDGES2_DIR/logs/train_%j.out --error=$BRIDGES2_DIR/logs/train_%j.err $SLURM_MAIL_ARGS -p $PARTITION $SLURM_ACCOUNT_ARGS --gpus=$GPU_TYPE:1 -t 24:00:00 scripts/train_bridges2.sbatch")
   echo "$SUBMIT_OUT"
   exit 0
@@ -1289,7 +1292,7 @@ elif [[ "$DO_TD" == true ]]; then
   fi
 else
   # Normal: srun train_gpu (load cuda module + set LD_LIBRARY_PATH so compute node finds libcudart)
-  BRIDGES2_RUN_WRAPPER="bash -c 'source /etc/profile.d/modules.sh 2>/dev/null || true; module load cuda 2>/dev/null || true; export GRIM_PROJECT_DIR=\"$BRIDGES2_DIR\"; source \"$BRIDGES2_DIR/scripts/ensure_cuda12_for_training.sh\" 2>/dev/null || true; export PATH=\"\${GRIM_CUDA_ROOT:-}/bin:\$PATH\"; export LD_LIBRARY_PATH=\"\${GRIM_CUDA_ROOT:-}/lib64:\$LD_LIBRARY_PATH\"; exec \"$REMOTE_EXE\" --config \"$BRIDGES2_DIR/ai_config.json\"'"
+  BRIDGES2_RUN_WRAPPER="bash -c 'source /etc/profile.d/modules.sh 2>/dev/null || true; module load cuda 2>/dev/null || true; export GRIM_PROJECT_DIR=\"$BRIDGES2_DIR\"; source \"$BRIDGES2_DIR/scripts/ensure_cuda12_for_training.sh\" 2>/dev/null || true; export PATH=\"\${GRIM_CUDA_ROOT:-}/bin:\$PATH\"; export LD_LIBRARY_PATH=\"\${GRIM_CUDA_ROOT:-}/lib64:\$LD_LIBRARY_PATH\"; cd \"$BRIDGES2_DIR\" && exec \"$REMOTE_EXE\"'"
   echo "Running train_gpu on Bridges-2 (partition=$PARTITION, gpu=$GPU_TYPE)..."
   SRUN_ARGS="-p $PARTITION $SLURM_ACCOUNT_ARGS --gres=gpu:$GPU_TYPE:1 -t 24:00:00 --pty"
   if [[ -t 0 ]]; then

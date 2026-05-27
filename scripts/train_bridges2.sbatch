@@ -31,8 +31,7 @@
 # Do not run this .sbatch file with ./ on a laptop — it only runs on a compute node
 # after sbatch (SLURM_JOB_ID will be set).
 #
-# Optional env (same idea as scripts/train_anvil.sbatch):
-#   GRIM_TRAIN_CONFIG   Config path relative to repo root, or absolute (default: ai_config.json at repo root)
+w# Canonical config: train_gpu loads ai_config.json from the repo root. Do not pass a config override.
 
 set -e
 if [[ -z "${SLURM_JOB_ID:-}" ]]; then
@@ -57,15 +56,17 @@ TRAINING_DIR="resources/models/GRIM-text/training"
 BUILD_DIR="$TRAINING_DIR/TrainingLoop/build"
 EXE="$GRIM_ROOT/$BUILD_DIR/train_gpu"
 
-# Same default as interactive: $GRIM_ROOT/ai_config.json. run_train_on_bridges2.sh --sbatch --config X sets GRIM_TRAIN_CONFIG.
 if [[ -n "${GRIM_TRAIN_CONFIG:-}" ]]; then
-  if [[ "$GRIM_TRAIN_CONFIG" = /* ]]; then
-    CONFIG_PATH="$GRIM_TRAIN_CONFIG"
-  else
-    CONFIG_PATH="$GRIM_ROOT/$GRIM_TRAIN_CONFIG"
-  fi
-else
-  CONFIG_PATH="$GRIM_ROOT/ai_config.json"
+  echo "ERROR: GRIM_TRAIN_CONFIG is no longer supported by scripts/train_bridges2.sbatch." >&2
+  echo "  train_gpu now loads the canonical ai_config.json from the repo root." >&2
+  echo "  Update $GRIM_ROOT/ai_config.json before submitting the job." >&2
+  exit 1
+fi
+
+CONFIG_PATH="$GRIM_ROOT/ai_config.json"
+if [[ ! -f "$CONFIG_PATH" ]]; then
+  echo "ERROR: canonical ai_config.json not found at $CONFIG_PATH" >&2
+  exit 1
 fi
 
 # Mirror BRIDGES2_RUN_WRAPPER in scripts/run_train_on_bridges2.sh
@@ -80,5 +81,5 @@ echo "Running train_gpu on $(hostname) at $(date)"
 echo "  GRIM_ROOT=$GRIM_ROOT"
 echo "  EXE=$EXE"
 echo "  config=$CONFIG_PATH"
-"$EXE" --config "$CONFIG_PATH"
+"$EXE"
 echo "Done at $(date)"

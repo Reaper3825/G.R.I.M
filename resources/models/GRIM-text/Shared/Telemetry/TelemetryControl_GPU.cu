@@ -375,7 +375,7 @@ ControlDecision TelemetryControl::evaluate(
     }
     
     // Extract device pointers from lattice (Pattern B: public accessors)
-    const LatticeLevelState* d_lattice_levels = lattice->levels();
+    const LatticeLevelState* d_lattice_levels = latticeLevelsDevicePtr(*lattice);
     const int num_lattice_streams = lattice->config().num_streams;
     
     // Launch kernel with device pointers (not host struct pointer!)

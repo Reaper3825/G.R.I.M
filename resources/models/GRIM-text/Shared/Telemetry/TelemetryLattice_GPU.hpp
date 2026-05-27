@@ -107,6 +107,8 @@ public:
     int* error_flag() { return d_error_flag_; }
 
 private:
+    friend const LatticeLevelState* latticeLevelsDevicePtr(const TelemetryLattice& lattice);
+
     LatticeConfig config_;
 
     // Pattern B: GRIM::Tensor for float-based GPU buffers
