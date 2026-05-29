@@ -366,9 +366,9 @@ void runPostClipParamGradEmbLmEquation(
         ctx.model->getEmbeddingLayer(),
         ctx.model->getLmHeadLayer(),
         payload,
-        ctx.config.d_model,
+        GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "d_model"),
         static_cast<int>(ctx.data_info.actual_vocab_size),
-        ctx.config.tie_embeddings,
+        GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "tie_embeddings"),
         prev_emb_rms,
         emb_rms_pre,
         stream);

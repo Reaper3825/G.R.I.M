@@ -21,13 +21,14 @@ namespace GRIMText::Training {
 namespace Internal {
 
 std::unique_ptr<GRIM::LanguageModel> initializeModel(
-    const GRIM::HyperParameters::LanguageModelConfig& config,
+    const GRIM::Config::AiConfigSnapshot& config_snapshot,
+    Startup::GpuModelState& gpu_model_state,
     uint64_t weight_init_seed,
     TrainingLogger& logger)
 {
     logger.log("Initializing model with weight_init_seed=" + std::to_string(weight_init_seed) + "...");
 
-    if (config.hardcoded_hidden_pattern != GRIM::HyperParameters::HardcodedPattern::DISABLED) {
+    if (GRIM::HyperParameters::snapshotTrainingConfigField<GRIM::HyperParameters::HardcodedPattern>(config_snapshot, "hardcoded_hidden_pattern") != GRIM::HyperParameters::HardcodedPattern::DISABLED) {
         logger.log("⚠️  Hardcoded hidden-state diagnostic mode is active; exact config values are listed by ConfigDump.");
         logger.log("⚠️  Encoder output will be REPLACED with synthetic patterns - this is a DIAGNOSTIC MODE ONLY!");
     }
@@ -59,7 +60,8 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
         logger.log("✓ CUDA device initialized: " + std::string(props.name));
     }
 
-    auto model = std::make_unique<GRIM::LanguageModel>(config);
+    auto model = std::make_unique<GRIM::LanguageModel>(config_snapshot);
+    model->bindGpuModelState(gpu_model_state);
 
     {
         GRIM::StreamControllerConfig stream_config;
@@ -80,20 +82,21 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     logger.log("✓ RoPE initialized");
 
     logger.log("Assembling GPU model layers with weight_init_seed=" + std::to_string(weight_init_seed) + "...");
-    GRIMText::Training::Startup::assembleGpuModel(*model, weight_init_seed);
+    GRIMText::Training::Startup::assembleGpuModel(*model, gpu_model_state, weight_init_seed);
     logger.log("✓ GPU model layers fully assembled");
 
     logger.log("Registering trainable parameter groups...");
-    GRIMText::Training::Startup::ModelRegistration::buildParameterGroups(*model);
+    GRIMText::Training::Startup::ModelRegistration::buildParameterGroups(*model, gpu_model_state);
     logger.log("✓ Trainable parameter groups registered and verified");
 
-    if (config.execution_mode == GRIM::HyperParameters::ModelExecutionMode::TRAINING) {
+    const auto execution_mode = GRIM::HyperParameters::snapshotExecutionMode(config_snapshot);
+    if (execution_mode == GRIM::HyperParameters::ModelExecutionMode::TRAINING) {
         logger.log("Initializing TrainingState runtime workspaces...");
         GRIMText::Training::Startup::initializeTrainingRuntime(*model);
         logger.log("✓ TrainingState fully initialized");
-    } else if (config.execution_mode == GRIM::HyperParameters::ModelExecutionMode::INFERENCE) {
+    } else if (execution_mode == GRIM::HyperParameters::ModelExecutionMode::INFERENCE) {
         logger.log("Initializing inference runtime workspaces...");
-        GRIMText::Training::Startup::initializeInferenceRuntime(*model);
+        GRIMText::Training::Startup::initializeInferenceRuntime(*model, gpu_model_state);
         logger.log("✓ Inference runtime fully initialized");
     } else {
         throw std::runtime_error("initializeModel: unsupported execution_mode");
@@ -101,9 +104,10 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
 
 #ifdef USE_CUDA
     {
-        auto* gpu_encoder = &model->getGpuEncoder();
-        for (int layer = 0; layer < config.num_layers; ++layer) {
-            auto* enc = gpu_encoder->getLayer(layer);
+        auto& gpu_encoder = gpu_model_state.requireGpuEncoder("ModelAllocationState::initializeModel");
+        const int num_layers = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config_snapshot, "num_layers");
+        for (int layer = 0; layer < num_layers; ++layer) {
+            auto* enc = gpu_encoder.getLayer(layer);
             if (!enc) {
                 throw std::runtime_error("Encoder layer " + std::to_string(layer) + " is NULL after GPU model layer assembly");
             }
@@ -123,36 +127,16 @@ ModelAllocationState captureAndValidateModelAllocationOrThrow(const TrainingCont
         throw std::runtime_error("FATAL: ModelAllocated validation called before model exists");
     }
 
-    const auto& state = ctx.model->getTrainingState();
     const auto fixed_shape = GRIM::HyperParameters::trainingFixedShapeHP(ctx.config);
-    if (ctx.config.max_cached_seq_len != fixed_shape.max_seq_len) {
+    const int max_cached_seq_len = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "max_cached_seq_len");
+    if (max_cached_seq_len != fixed_shape.max_seq_len) {
         throw std::runtime_error("FATAL: model max_cached_seq_len does not match trainingFixedShapeHP (model=" +
-                                 std::to_string(ctx.config.max_cached_seq_len) +
+                                 std::to_string(max_cached_seq_len) +
                                  " grouping=" + std::to_string(fixed_shape.max_seq_len) + ")");
     }
 
-    const auto& token_ids_shape = state.cached_token_ids_tensor.shape.require("ModelAllocated cached_token_ids_tensor");
-    if (!token_ids_shape.is_2d_layout()) {
-        throw std::runtime_error("FATAL: cached_token_ids_tensor must be a 2D token-id buffer");
-    }
-
     ModelAllocationState allocation;
-    allocation.model_max_tokens_per_batch = token_ids_shape.as_2d().cols;
-    if (token_ids_shape.as_2d().cols != fixed_shape.max_tokens_per_batch) {
-        throw std::runtime_error("FATAL: cached_token_ids_tensor token capacity does not match trainingFixedShapeHP (tensor=" +
-                                 std::to_string(token_ids_shape.as_2d().cols) +
-                                 " grouping=" + std::to_string(fixed_shape.max_tokens_per_batch) + ")");
-    }
-
-    const auto& targets_shape = state.cached_targets_tensor.shape.require("ModelAllocated cached_targets_tensor");
-    if (!targets_shape.is_2d_layout()) {
-        throw std::runtime_error("FATAL: cached_targets_tensor must be a 2D target upload buffer");
-    }
-    if (targets_shape.as_2d().rows != fixed_shape.max_tokens_per_batch) {
-        throw std::runtime_error("FATAL: cached_targets_tensor row capacity does not match trainingFixedShapeHP (tensor=" +
-                                 std::to_string(targets_shape.as_2d().rows) +
-                                 " grouping=" + std::to_string(fixed_shape.max_tokens_per_batch) + ")");
-    }
+    allocation.model_max_tokens_per_batch = fixed_shape.max_tokens_per_batch;
 
     return allocation;
 }
@@ -163,16 +147,18 @@ void ModelAllocated(TrainingContext& ctx) {
     using GRIM::Logging::ModuleId;
 
     ctx.rng = Internal::initializeRNG(ctx.config, *ctx.logging.logger);
-    if (ctx.config.vocab_size != static_cast<int>(ctx.data_info.actual_vocab_size)) {
+    const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "vocab_size");
+    if (vocab_size != static_cast<int>(ctx.data_info.actual_vocab_size)) {
         throw std::runtime_error(
             "FATAL: runtime model vocab_size drifted from startup artifact fact: actual_vocab_size=" +
             std::to_string(ctx.data_info.actual_vocab_size) +
-            " config.vocab_size=" + std::to_string(ctx.config.vocab_size));
+            " config.vocab_size=" + std::to_string(vocab_size));
     }
 
     try {
         ctx.model = Internal::initializeModel(
             ctx.config,
+            ctx.gpu_model,
             ctx.rng.init_seed,
             *ctx.logging.logger);
     } catch (const std::exception& e) {

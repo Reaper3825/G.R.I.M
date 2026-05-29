@@ -59,6 +59,13 @@ void dumpAllHyperparameters(
     const ConfigDumpOptions& opts,
     const ConfigDumpLogFn& log_fn);
 
+void dumpAllHyperparameters(
+    const GRIM::Config::AiConfigSnapshot& snapshot,
+    const GRIM::HyperParameters::DerivedScheduleInfo* derived,
+    const DataStatsSnapshot* data_stats,
+    const ConfigDumpOptions& opts,
+    const ConfigDumpLogFn& log_fn);
+
 // Convenience overload using ConfigDumpOptions{} defaults.
 inline void dumpAllHyperparameters(
     const GRIM::HyperParameters::LanguageModelConfig& hp,
@@ -67,6 +74,15 @@ inline void dumpAllHyperparameters(
     const ConfigDumpLogFn& log_fn)
 {
     dumpAllHyperparameters(hp, derived, data_stats, ConfigDumpOptions{}, log_fn);
+}
+
+inline void dumpAllHyperparameters(
+    const GRIM::Config::AiConfigSnapshot& snapshot,
+    const GRIM::HyperParameters::DerivedScheduleInfo* derived,
+    const DataStatsSnapshot* data_stats,
+    const ConfigDumpLogFn& log_fn)
+{
+    dumpAllHyperparameters(snapshot, derived, data_stats, ConfigDumpOptions{}, log_fn);
 }
 
 } } // namespace GRIMText::Training

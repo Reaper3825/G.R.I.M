@@ -71,7 +71,6 @@ struct DeviceIntScalar {
 
 float computeAutogradMtpAuxiliaryLosses(
     LanguageModel& model,
-    Tensor& mtp_input,
     Tensor& loss_tensor,
     std::vector<Tensor>& mtp_logits_tensors,
     MTP::MTPDiagnostics& diagnostics,
@@ -106,9 +105,6 @@ float computeAutogradMtpAuxiliaryLosses(
         return 0.0f;
     }
 
-    if (!mtp_input.data) {
-        throw std::runtime_error("computeAutogradMtpAuxiliaryLosses: mtp_input.data is NULL — caller must resolve the LM-head input representation before MTP loss");
-    }
     if (!loss_tensor.data) {
         throw std::runtime_error("computeAutogradMtpAuxiliaryLosses: loss_tensor.data is NULL — text CE must be assembled before MTP loss");
     }
@@ -124,11 +120,13 @@ float computeAutogradMtpAuxiliaryLosses(
     if (!bindings.d_mtp_shifted_targets) {
         throw std::runtime_error("computeAutogradMtpAuxiliaryLosses: BatchDeviceBindings.d_mtp_shifted_targets is NULL for MTP payload");
     }
-
-    mtp_logits_tensors.clear();
-    mtp_logits_tensors.reserve(static_cast<size_t>(model.getMtpK()));
     if (mtp_alpha_effective == 0.0f) {
         return 0.0f;
+    }
+    if (static_cast<int>(mtp_logits_tensors.size()) != model.getMtpK()) {
+        throw std::runtime_error("computeAutogradMtpAuxiliaryLosses: mtp_logits_tensors.size()=" +
+            std::to_string(mtp_logits_tensors.size()) + " != model.getMtpK()=" + std::to_string(model.getMtpK()) +
+            " — caller must materialize all MTP logits during forward before loss assembly");
     }
 
     const float per_head_loss_weight = mtp_alpha_effective / static_cast<float>(model.getMtpK());
@@ -136,71 +134,20 @@ float computeAutogradMtpAuxiliaryLosses(
     bool any_valid_head = false;
 
     for (int k = 0; k < model.getMtpK(); ++k) {
-        LanguageModel::MTPHead* head = model.getMtpHead(k);
-        if (!head) {
-            throw std::runtime_error("computeAutogradMtpAuxiliaryLosses: model.getMtpHead(" +
-                                     std::to_string(k) + ") returned NULL for enabled MTP head");
-        }
-        if (!head->weight.data) {
-            throw std::runtime_error("computeAutogradMtpAuxiliaryLosses: MTP head " +
-                                     std::to_string(k) + " weight.data is NULL");
-        }
-        if (!head->bias.data) {
-            throw std::runtime_error("computeAutogradMtpAuxiliaryLosses: MTP head " +
-                                     std::to_string(k) + " bias.data is NULL");
-        }
-
-        const auto& input_shape = require2DShape(mtp_input, "mtp_input");
-        const auto& weight_shape = require2DShape(head->weight, "MTP head weight");
-        const auto& bias_shape = require2DShape(head->bias, "MTP head bias");
-        if (input_shape.rows != payload.total_tokens) {
-            throw std::runtime_error("computeAutogradMtpAuxiliaryLosses: mtp_input rows=" +
-                std::to_string(input_shape.rows) + " != payload.total_tokens=" +
-                std::to_string(payload.total_tokens));
-        }
-        if (weight_shape.rows != payload.vocab_size) {
-            throw std::runtime_error("computeAutogradMtpAuxiliaryLosses: MTP head " + std::to_string(k) +
-                " weight rows=" + std::to_string(weight_shape.rows) +
-                " != payload.vocab_size=" + std::to_string(payload.vocab_size));
-        }
-        if (weight_shape.cols != input_shape.cols) {
-            throw std::runtime_error("computeAutogradMtpAuxiliaryLosses: MTP head " + std::to_string(k) +
-                " weight cols=" + std::to_string(weight_shape.cols) +
-                " != mtp_input cols=" + std::to_string(input_shape.cols));
-        }
-        if (head->bias.numel() != static_cast<size_t>(payload.vocab_size)) {
-            throw std::runtime_error("computeAutogradMtpAuxiliaryLosses: MTP head " + std::to_string(k) +
-                " bias elements=" + std::to_string(head->bias.numel()) +
-                " != payload.vocab_size=" + std::to_string(payload.vocab_size));
-        }
-        if (bias_shape.cols != payload.vocab_size && bias_shape.rows != payload.vocab_size) {
-            throw std::runtime_error("computeAutogradMtpAuxiliaryLosses: MTP head " + std::to_string(k) +
-                " bias shape=[" + std::to_string(bias_shape.rows) + "," + std::to_string(bias_shape.cols) +
-                "] cannot represent vocab_size=" + std::to_string(payload.vocab_size));
-        }
-
+        Tensor& logits_k = mtp_logits_tensors[static_cast<size_t>(k)];
         if (payload.mtp_valid_counts[k] == 0) {
             diagnostics.head_loss.push_back(0.0f);
             diagnostics.head_acc.push_back(0.0f);
-            mtp_logits_tensors.push_back(Tensor());
             continue;
         }
         any_valid_head = true;
 
-        const int* d_targets_k = bindings.d_mtp_shifted_targets +
-            static_cast<size_t>(k) * static_cast<size_t>(payload.total_tokens);
+        if (!logits_k.data) {
+            throw std::runtime_error("computeAutogradMtpAuxiliaryLosses: MTP head " + std::to_string(k) +
+                " logits are NULL — forward must materialize valid-head logits before loss assembly");
+        }
 
-        Tensor logits_k = autograd::matmul(
-            mtp_input,
-            head->weight,
-            stream,
-            mtp_input.data,
-            nullptr,
-            true
-        );
-        logits_k = autograd::broadcast_add(logits_k, head->bias, stream);
-        mtp_logits_tensors.push_back(std::move(logits_k));
-        const auto& logits_shape = require2DShape(mtp_logits_tensors.back(), "MTP head logits");
+        const auto& logits_shape = require2DShape(logits_k, "MTP head logits");
         if (logits_shape.rows != payload.total_tokens || logits_shape.cols != payload.vocab_size) {
             throw std::runtime_error("computeAutogradMtpAuxiliaryLosses: MTP head " + std::to_string(k) +
                 " logits shape=[" + std::to_string(logits_shape.rows) + "," + std::to_string(logits_shape.cols) +
@@ -208,8 +155,11 @@ float computeAutogradMtpAuxiliaryLosses(
                 ", vocab_size=" + std::to_string(payload.vocab_size) + "]");
         }
 
+        const int* d_targets_k = bindings.d_mtp_shifted_targets +
+            static_cast<size_t>(k) * static_cast<size_t>(payload.total_tokens);
+
         Tensor loss_k = autograd::unified_loss_for_mtp_head(
-            mtp_logits_tensors.back(),
+            logits_k,
             payload,
             bindings,
             k,
@@ -225,7 +175,7 @@ float computeAutogradMtpAuxiliaryLosses(
         DeviceIntScalar d_correct("mtp_d_correct", stream);
         DeviceIntScalar d_valid("mtp_d_valid", stream);
         MTP::launchMTPAccuracyKernel(
-            mtp_logits_tensors.back().data,
+            logits_k.data,
             d_targets_k,
             payload,
             d_correct.ptr,

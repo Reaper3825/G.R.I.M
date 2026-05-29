@@ -130,7 +130,7 @@ const std::string& requireJsonString(const json& request, const char* field_name
 }
 
 GRIM::HyperParameters::GenerationHP generationHPFromRequest(
-    const GRIM::HyperParameters::LanguageModelConfig& config,
+    const GRIM::Config::AiConfigSnapshot& config,
     const json& request)
 {
     GRIM::HyperParameters::GenerationHP gen_config =
@@ -362,7 +362,9 @@ int main(int argc, char** argv) {
         EmitModuleInfo(ModuleId::TrainingOrchestrator,
             "[Phase 1] Loading startup config...", 0);
         const auto execution_mode = requestedExecutionMode(argc, argv);
-        auto startup_config = GRIM::HyperParameters::loadStartupConfig(
+        const auto config_snapshot = GRIM::Config::loadAiConfigSnapshot();
+        auto startup_config = GRIM::HyperParameters::finalizeAiConfigSnapshot(
+            config_snapshot,
             argc,
             argv,
             execution_mode);

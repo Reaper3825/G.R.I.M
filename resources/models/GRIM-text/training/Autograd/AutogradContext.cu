@@ -15,7 +15,7 @@ namespace {
 
 void populateCommonContext(
     AutogradContext& ctx,
-    const LanguageModelConfig* config,
+    const Config::AiConfigSnapshot* config,
     TrainingState* training_state,
     GPUGrimEncoder* gpu_encoder,
     EmbeddingLayer* embedding_layer,
@@ -67,7 +67,7 @@ void validateDeviceBindingsForPayload(
 // boundary. `bindings` must already have been populated by
 // Batching::uploadBatchToDevice(config, training_state, payload) at the H2D sync slice.
 AutogradContext initAutogradContext(
-    const LanguageModelConfig* config,
+    const Config::AiConfigSnapshot* config,
     TrainingState* training_state,
     GPUGrimEncoder* gpu_encoder,
     EmbeddingLayer* embedding_layer,

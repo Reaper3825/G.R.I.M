@@ -12,12 +12,16 @@
 #include "execution_block_data_stream_GPU.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
 #include "../../Shared/Batching/BatchDeviceBindings.hpp"
+#include "../../Shared/Forward/ModelForwardOutputs.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
 
 using GRIM::CudaAlloc::cudaMallocOrThrow;
 
 namespace GRIM {
 using namespace ExecutionBlockInternal;
+using Forward::ExecutionBlockOutput;
+using Forward::ExecutionBlockStepOutput;
+using Forward::ExecutionRecord;
 
 //======================================================//
 //  Validation helpers
@@ -123,10 +127,12 @@ ExecutionBlockLayer::~ExecutionBlockLayer() {
 ExecutionBlockLayer::ExecutionBlockLayer(const HyperParameters::ExecutionBlockConstructionHP& hp,
                                        uint64_t seed,
                                        cudaStream_t init_stream)
-    : hp_(hp)
+        : hp_(hp),
+            parameters_(std::make_unique<ExecutionBlockParameterTensors>())
 {
     validateConfigOrThrow();
     EXEC_CHECK(init_stream != nullptr, "init_stream is NULL");
+        auto& params = parametersOrThrow();
 
     cudaMallocOrThrow(reinterpret_cast<void**>(&d_numeric_error_flag_), sizeof(int), "exec_numeric_error_flag");
     CUDA_CHECK(cudaMemsetAsync(d_numeric_error_flag_, 0, sizeof(int), init_stream));
@@ -175,73 +181,73 @@ ExecutionBlockLayer::ExecutionBlockLayer(const HyperParameters::ExecutionBlockCo
     };
 
     // Value decode MLP
-    w_decode_1_ = make_param(vid, vhd, seed,     "exec_block.w_decode_1");
-    b_decode_1_ = make_bias(vhd,                 "exec_block.b_decode_1");
-    w_decode_2_ = make_param(vhd, 1, seed + 1,   "exec_block.w_decode_2");
+    params.w_decode_1 = make_param(vid, vhd, seed,     "exec_block.w_decode_1");
+    params.b_decode_1 = make_bias(vhd,                 "exec_block.b_decode_1");
+    params.w_decode_2 = make_param(vhd, 1, seed + 1,   "exec_block.w_decode_2");
 
     // Arg selection: decision_input [1, 3*dm] → query [1, dm] via w_arg_select [3*dm, dm]
-    w_arg1_select_ = make_param(3 * dm, dm, seed + 2, "exec_block.w_arg1_select");
-    w_arg2_select_ = make_param(3 * dm, dm, seed + 3, "exec_block.w_arg2_select");
+    params.w_arg1_select = make_param(3 * dm, dm, seed + 2, "exec_block.w_arg1_select");
+    params.w_arg2_select = make_param(3 * dm, dm, seed + 3, "exec_block.w_arg2_select");
 
     // Op selection: decision_input [1, 3*dm] → logits [1, nop]
     // Detached from arg selection: op sees (context, trace, step_emb) only.
-    W_op_select_ = make_param(3 * dm, nop, seed + 4, "exec_block.W_op_select");
+    params.W_op_select = make_param(3 * dm, nop, seed + 4, "exec_block.W_op_select");
 
     // Key projection from result embedding
-    W_key_proj_ = make_param(dm, dk, seed + 5, "exec_block.W_key_proj");
+    params.W_key_proj = make_param(dm, dk, seed + 5, "exec_block.W_key_proj");
 
     // Write-head (write_context = 4*d_model -> d_key query)
     // Detached from arg selection: sees (context, result, trace, step) only.
-    W_write_query_ = make_param(4 * dm, dk, seed + 7, "exec_block.W_write_query");
-    W_write_key_   = make_param(dk, dk, seed + 8, "exec_block.W_write_key");
+    params.W_write_query = make_param(4 * dm, dk, seed + 7, "exec_block.W_write_query");
+    params.W_write_key   = make_param(dk, dk, seed + 8, "exec_block.W_write_key");
 
     // Learned scalars (init 1.0)
-    alpha_ = make_scalar(1.0f, "exec_block.alpha");
-    beta_  = make_scalar(1.0f, "exec_block.beta");
+    params.alpha = make_scalar(1.0f, "exec_block.alpha");
+    params.beta  = make_scalar(1.0f, "exec_block.beta");
 
     // Step encoding
-    step_embeddings_ = make_param(K, dm, seed + 9, "exec_block.step_embeddings");
+    params.step_embeddings = make_param(K, dm, seed + 9, "exec_block.step_embeddings");
 
     // Type embedding
-    type_num_embed_ = make_param(1, dt, seed + 10, "exec_block.type_num_embed");
+    params.type_num_embed = make_param(1, dt, seed + 10, "exec_block.type_num_embed");
 
     // Linear value embedding (scalar -> d_model)
-    W_value_to_emb_ = make_param(1, dm, seed + 15, "exec_block.W_value_to_emb");
-    b_value_to_emb_ = make_bias(dm,                "exec_block.b_value_to_emb");
+    params.W_value_to_emb = make_param(1, dm, seed + 15, "exec_block.W_value_to_emb");
+    params.b_value_to_emb = make_bias(dm,                "exec_block.b_value_to_emb");
 
     // Injection gate: init to -2.0 so gate starts at sigmoid(-2) ≈ 0.12
-    w_inject_gate_ = Tensor::zeros(TensorContract::TensorShape::make_BSM(dm, 1),
+    params.w_inject_gate = Tensor::zeros(TensorContract::TensorShape::make_BSM(dm, 1),
                                    true, init_stream, "exec_block.w_inject_gate");
-    w_inject_gate_.requires_grad_();
-    w_inject_gate_.ensure_grad();
+    params.w_inject_gate.requires_grad_();
+    params.w_inject_gate.ensure_grad();
     kernelFillConstant<<<(dm + kBlockSize - 1) / kBlockSize, kBlockSize, 0, init_stream>>>(
-        w_inject_gate_.data, -2.0f, dm);
+        params.w_inject_gate.data, -2.0f, dm);
     CUDA_CHECK_KERNEL();
 
     // Cross-attention read
-    W_Q_read_    = make_param(dm, hd, seed + 11, "exec_block.W_Q_read");
-    W_K_read_    = make_param(dk, hd, seed + 12, "exec_block.W_K_read");
-    W_V_read_    = make_param(dm, hd, seed + 13, "exec_block.W_V_read");
-    W_O_read_    = make_param(hd, dm, seed + 14, "exec_block.W_O_read");
-    W_gate_read_ = Tensor::zeros(TensorContract::TensorShape::make_BSM(dm, 1),
+    params.W_Q_read    = make_param(dm, hd, seed + 11, "exec_block.W_Q_read");
+    params.W_K_read    = make_param(dk, hd, seed + 12, "exec_block.W_K_read");
+    params.W_V_read    = make_param(dm, hd, seed + 13, "exec_block.W_V_read");
+    params.W_O_read    = make_param(hd, dm, seed + 14, "exec_block.W_O_read");
+    params.W_gate_read = Tensor::zeros(TensorContract::TensorShape::make_BSM(dm, 1),
                                  true, init_stream, "exec_block.W_gate_read");
-    W_gate_read_.requires_grad_();
-    W_gate_read_.ensure_grad();
+    params.W_gate_read.requires_grad_();
+    params.W_gate_read.ensure_grad();
 
     // Temperature (init 1.0)
-    tau_ = make_scalar(1.0f, "exec_block.tau");
+    params.tau = make_scalar(1.0f, "exec_block.tau");
 
     // Trace encoding weights
-    E_slot_  = make_param(V, dm, seed + 16, "exec_block.E_slot");
-    E_op_    = make_param(nop, dm, seed + 17, "exec_block.E_op");
-    W_scal_  = make_param(3, dm, seed + 18, "exec_block.W_scal");
-    b_scal_  = make_bias(dm,                "exec_block.b_scal");
-    W_trace_ = make_param(K * dm, dm, seed + 19, "exec_block.W_trace");
-    b_trace_ = make_bias(dm,                "exec_block.b_trace");
+    params.E_slot  = make_param(V, dm, seed + 16, "exec_block.E_slot");
+    params.E_op    = make_param(nop, dm, seed + 17, "exec_block.E_op");
+    params.W_scal  = make_param(3, dm, seed + 18, "exec_block.W_scal");
+    params.b_scal  = make_bias(dm,                "exec_block.b_scal");
+    params.W_trace = make_param(K * dm, dm, seed + 19, "exec_block.W_trace");
+    params.b_trace = make_bias(dm,                "exec_block.b_trace");
 
     // Reasoning state update: candidate + gated interpolation
-    W_reason_gate_ = make_param(2 * dm, dm, seed + 20, "exec_block.W_reason_gate");
-    W_trace_gate_  = make_param(2 * dm, dm, seed + 21, "exec_block.W_trace_gate");
+    params.W_reason_gate = make_param(2 * dm, dm, seed + 20, "exec_block.W_reason_gate");
+    params.W_trace_gate  = make_param(2 * dm, dm, seed + 21, "exec_block.W_trace_gate");
 }
 
 //======================================================//
@@ -256,36 +262,7 @@ ExecutionBlockLayer::ExecutionBlockLayer(ExecutionBlockLayer&& other) noexcept
       d_exec_record_i_(other.d_exec_record_i_),
       d_exec_record_f_(other.d_exec_record_f_),
       d_reinforce_baseline_(other.d_reinforce_baseline_),
-      w_decode_1_(std::move(other.w_decode_1_)),
-      b_decode_1_(std::move(other.b_decode_1_)),
-      w_decode_2_(std::move(other.w_decode_2_)),
-      w_arg1_select_(std::move(other.w_arg1_select_)),
-      w_arg2_select_(std::move(other.w_arg2_select_)),
-      W_op_select_(std::move(other.W_op_select_)),
-      W_key_proj_(std::move(other.W_key_proj_)),
-      W_write_query_(std::move(other.W_write_query_)),
-      W_write_key_(std::move(other.W_write_key_)),
-      alpha_(std::move(other.alpha_)),
-      beta_(std::move(other.beta_)),
-      step_embeddings_(std::move(other.step_embeddings_)),
-      type_num_embed_(std::move(other.type_num_embed_)),
-      W_value_to_emb_(std::move(other.W_value_to_emb_)),
-      b_value_to_emb_(std::move(other.b_value_to_emb_)),
-      w_inject_gate_(std::move(other.w_inject_gate_)),
-      W_Q_read_(std::move(other.W_Q_read_)),
-      W_K_read_(std::move(other.W_K_read_)),
-      W_V_read_(std::move(other.W_V_read_)),
-      W_O_read_(std::move(other.W_O_read_)),
-      W_gate_read_(std::move(other.W_gate_read_)),
-      tau_(std::move(other.tau_)),
-      E_slot_(std::move(other.E_slot_)),
-      E_op_(std::move(other.E_op_)),
-      W_scal_(std::move(other.W_scal_)),
-      b_scal_(std::move(other.b_scal_)),
-      W_trace_(std::move(other.W_trace_)),
-      b_trace_(std::move(other.b_trace_)),
-      W_reason_gate_(std::move(other.W_reason_gate_)),
-      W_trace_gate_(std::move(other.W_trace_gate_))
+    parameters_(std::move(other.parameters_))
 {
     other.d_numeric_error_flag_ = nullptr;
     other.d_div_clamp_count_ = nullptr;
@@ -320,39 +297,86 @@ ExecutionBlockLayer& ExecutionBlockLayer::operator=(ExecutionBlockLayer&& other)
         other.d_exec_record_i_      = nullptr;
         other.d_exec_record_f_      = nullptr;
         other.d_reinforce_baseline_ = nullptr;
-        w_decode_1_    = std::move(other.w_decode_1_);
-        b_decode_1_    = std::move(other.b_decode_1_);
-        w_decode_2_    = std::move(other.w_decode_2_);
-        w_arg1_select_ = std::move(other.w_arg1_select_);
-        w_arg2_select_ = std::move(other.w_arg2_select_);
-        W_op_select_   = std::move(other.W_op_select_);
-        W_key_proj_    = std::move(other.W_key_proj_);
-        W_write_query_ = std::move(other.W_write_query_);
-        W_write_key_   = std::move(other.W_write_key_);
-        alpha_         = std::move(other.alpha_);
-        beta_          = std::move(other.beta_);
-        step_embeddings_= std::move(other.step_embeddings_);
-        type_num_embed_ = std::move(other.type_num_embed_);
-        W_value_to_emb_= std::move(other.W_value_to_emb_);
-        b_value_to_emb_= std::move(other.b_value_to_emb_);
-        w_inject_gate_ = std::move(other.w_inject_gate_);
-        W_Q_read_      = std::move(other.W_Q_read_);
-        W_K_read_      = std::move(other.W_K_read_);
-        W_V_read_      = std::move(other.W_V_read_);
-        W_O_read_      = std::move(other.W_O_read_);
-        W_gate_read_   = std::move(other.W_gate_read_);
-        tau_           = std::move(other.tau_);
-        E_slot_        = std::move(other.E_slot_);
-        E_op_          = std::move(other.E_op_);
-        W_scal_        = std::move(other.W_scal_);
-        b_scal_        = std::move(other.b_scal_);
-        W_trace_       = std::move(other.W_trace_);
-        b_trace_       = std::move(other.b_trace_);
-        W_reason_gate_ = std::move(other.W_reason_gate_);
-        W_trace_gate_  = std::move(other.W_trace_gate_);
+        parameters_          = std::move(other.parameters_);
     }
     return *this;
 }
+
+ExecutionBlockParameterTensors& ExecutionBlockLayer::parametersOrThrow() {
+    if (!parameters_) {
+        throw std::runtime_error("ExecutionBlockLayer: parameter storage is NULL");
+    }
+    return *parameters_;
+}
+
+const ExecutionBlockParameterTensors& ExecutionBlockLayer::parametersOrThrow() const {
+    if (!parameters_) {
+        throw std::runtime_error("ExecutionBlockLayer: parameter storage is NULL");
+    }
+    return *parameters_;
+}
+
+Tensor& ExecutionBlockLayer::w_decode_1() { return parametersOrThrow().w_decode_1; }
+Tensor& ExecutionBlockLayer::b_decode_1() { return parametersOrThrow().b_decode_1; }
+Tensor& ExecutionBlockLayer::w_decode_2() { return parametersOrThrow().w_decode_2; }
+Tensor& ExecutionBlockLayer::w_arg1_select() { return parametersOrThrow().w_arg1_select; }
+Tensor& ExecutionBlockLayer::w_arg2_select() { return parametersOrThrow().w_arg2_select; }
+Tensor& ExecutionBlockLayer::W_op_select() { return parametersOrThrow().W_op_select; }
+Tensor& ExecutionBlockLayer::W_key_proj() { return parametersOrThrow().W_key_proj; }
+Tensor& ExecutionBlockLayer::W_write_query() { return parametersOrThrow().W_write_query; }
+Tensor& ExecutionBlockLayer::W_write_key() { return parametersOrThrow().W_write_key; }
+Tensor& ExecutionBlockLayer::alpha() { return parametersOrThrow().alpha; }
+Tensor& ExecutionBlockLayer::beta() { return parametersOrThrow().beta; }
+Tensor& ExecutionBlockLayer::step_embeddings() { return parametersOrThrow().step_embeddings; }
+Tensor& ExecutionBlockLayer::type_num_embed() { return parametersOrThrow().type_num_embed; }
+Tensor& ExecutionBlockLayer::W_value_to_emb() { return parametersOrThrow().W_value_to_emb; }
+Tensor& ExecutionBlockLayer::b_value_to_emb() { return parametersOrThrow().b_value_to_emb; }
+Tensor& ExecutionBlockLayer::w_inject_gate() { return parametersOrThrow().w_inject_gate; }
+Tensor& ExecutionBlockLayer::W_Q_read() { return parametersOrThrow().W_Q_read; }
+Tensor& ExecutionBlockLayer::W_K_read() { return parametersOrThrow().W_K_read; }
+Tensor& ExecutionBlockLayer::W_V_read() { return parametersOrThrow().W_V_read; }
+Tensor& ExecutionBlockLayer::W_O_read() { return parametersOrThrow().W_O_read; }
+Tensor& ExecutionBlockLayer::W_gate_read() { return parametersOrThrow().W_gate_read; }
+Tensor& ExecutionBlockLayer::tau() { return parametersOrThrow().tau; }
+Tensor& ExecutionBlockLayer::E_slot() { return parametersOrThrow().E_slot; }
+Tensor& ExecutionBlockLayer::E_op() { return parametersOrThrow().E_op; }
+Tensor& ExecutionBlockLayer::W_scal() { return parametersOrThrow().W_scal; }
+Tensor& ExecutionBlockLayer::b_scal() { return parametersOrThrow().b_scal; }
+Tensor& ExecutionBlockLayer::W_trace() { return parametersOrThrow().W_trace; }
+Tensor& ExecutionBlockLayer::b_trace() { return parametersOrThrow().b_trace; }
+Tensor& ExecutionBlockLayer::W_reason_gate() { return parametersOrThrow().W_reason_gate; }
+Tensor& ExecutionBlockLayer::W_trace_gate() { return parametersOrThrow().W_trace_gate; }
+
+const Tensor& ExecutionBlockLayer::w_decode_1() const { return parametersOrThrow().w_decode_1; }
+const Tensor& ExecutionBlockLayer::b_decode_1() const { return parametersOrThrow().b_decode_1; }
+const Tensor& ExecutionBlockLayer::w_decode_2() const { return parametersOrThrow().w_decode_2; }
+const Tensor& ExecutionBlockLayer::w_arg1_select() const { return parametersOrThrow().w_arg1_select; }
+const Tensor& ExecutionBlockLayer::w_arg2_select() const { return parametersOrThrow().w_arg2_select; }
+const Tensor& ExecutionBlockLayer::W_op_select() const { return parametersOrThrow().W_op_select; }
+const Tensor& ExecutionBlockLayer::W_key_proj() const { return parametersOrThrow().W_key_proj; }
+const Tensor& ExecutionBlockLayer::W_write_query() const { return parametersOrThrow().W_write_query; }
+const Tensor& ExecutionBlockLayer::W_write_key() const { return parametersOrThrow().W_write_key; }
+const Tensor& ExecutionBlockLayer::alpha() const { return parametersOrThrow().alpha; }
+const Tensor& ExecutionBlockLayer::beta() const { return parametersOrThrow().beta; }
+const Tensor& ExecutionBlockLayer::step_embeddings() const { return parametersOrThrow().step_embeddings; }
+const Tensor& ExecutionBlockLayer::type_num_embed() const { return parametersOrThrow().type_num_embed; }
+const Tensor& ExecutionBlockLayer::W_value_to_emb() const { return parametersOrThrow().W_value_to_emb; }
+const Tensor& ExecutionBlockLayer::b_value_to_emb() const { return parametersOrThrow().b_value_to_emb; }
+const Tensor& ExecutionBlockLayer::w_inject_gate() const { return parametersOrThrow().w_inject_gate; }
+const Tensor& ExecutionBlockLayer::W_Q_read() const { return parametersOrThrow().W_Q_read; }
+const Tensor& ExecutionBlockLayer::W_K_read() const { return parametersOrThrow().W_K_read; }
+const Tensor& ExecutionBlockLayer::W_V_read() const { return parametersOrThrow().W_V_read; }
+const Tensor& ExecutionBlockLayer::W_O_read() const { return parametersOrThrow().W_O_read; }
+const Tensor& ExecutionBlockLayer::W_gate_read() const { return parametersOrThrow().W_gate_read; }
+const Tensor& ExecutionBlockLayer::tau() const { return parametersOrThrow().tau; }
+const Tensor& ExecutionBlockLayer::E_slot() const { return parametersOrThrow().E_slot; }
+const Tensor& ExecutionBlockLayer::E_op() const { return parametersOrThrow().E_op; }
+const Tensor& ExecutionBlockLayer::W_scal() const { return parametersOrThrow().W_scal; }
+const Tensor& ExecutionBlockLayer::b_scal() const { return parametersOrThrow().b_scal; }
+const Tensor& ExecutionBlockLayer::W_trace() const { return parametersOrThrow().W_trace; }
+const Tensor& ExecutionBlockLayer::b_trace() const { return parametersOrThrow().b_trace; }
+const Tensor& ExecutionBlockLayer::W_reason_gate() const { return parametersOrThrow().W_reason_gate; }
+const Tensor& ExecutionBlockLayer::W_trace_gate() const { return parametersOrThrow().W_trace_gate; }
 
 //======================================================//
 //  Thin public wrappers
@@ -370,9 +394,7 @@ void ExecutionBlockLayer::executeStep(
     cudaStream_t stream,
     ExecutionBlockStepOutput* diag_out,
     Tensor& trace_state,
-    const std::vector<ExecutionRecord>& prior_records,
-    const float* expected_target,
-    const TeacherSelectionTargets* selection_targets)
+    const std::vector<ExecutionRecord>& prior_records)
 {
     validateExecuteStepInputsOrThrow(H, atom_positions,
                                      num_atoms, payload, bindings, batch_row, M, step);
@@ -390,9 +412,7 @@ void ExecutionBlockLayer::executeStep(
         stream,
         diag_out,
         trace_state,
-        prior_records,
-        expected_target,
-        selection_targets);
+        prior_records);
 }
 
 //======================================================//

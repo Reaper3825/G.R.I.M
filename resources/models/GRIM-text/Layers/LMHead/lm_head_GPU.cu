@@ -8,9 +8,8 @@
 //
 //  Forward: RMSNorm → optional centering → optional PC1 projection → logits = input @ W^T → bias
 //
-//  ISSUE #56 pattern: The LM head returns any materialized LM-input tensor so
-//  the caller can keep tape-local state alive without the layer mutating a
-//  caller-owned runtime sink.
+//  ISSUE #56 pattern: The LM head writes any materialized LM-input tensor plus
+//  logits into the canonical shared-forward sink owned by the active caller.
 //
 //  PyTorch equivalent:
 //    class LMHead(nn.Module):
@@ -166,11 +165,15 @@ LMHeadLayer& LMHeadLayer::operator=(LMHeadLayer&& other) noexcept {
 //  Forward Pass
 //======================================================//
 
-LMHeadForwardResult LMHeadLayer::forward(const Tensor& input,
-                                         const Batching::BatchPayload& payload,
-                                         cudaStream_t stream, cublasHandle_t cublas_handle,
-                                         const LMHeadParameterViews* parameter_views) {
-    LMHeadForwardResult result;
+void LMHeadLayer::forward(
+    const Tensor& input,
+    const Batching::BatchPayload& payload,
+    cudaStream_t stream,
+    cublasHandle_t cublas_handle,
+    Forward::ModelForwardOutputs& forward_outputs,
+    const LMHeadParameterViews* parameter_views) {
+    forward_outputs.lm_head_input_tensor = Tensor();
+    forward_outputs.logits_tensor = Tensor();
     const Tensor& lm_weights =
         (parameter_views && parameter_views->weights) ? *parameter_views->weights : weights_;
     const Tensor& lm_bias =
@@ -291,21 +294,21 @@ LMHeadForwardResult LMHeadLayer::forward(const Tensor& input,
         // g is RMS-normalized (g·g = D), so the projection coefficient is (h·g)/D:
         //   h̃[t] = h[t] - (h[t]·g / D) * g     where g = PC1(H), stop-gradient
         // Backward: grad_h += (I - gg^T/D) * grad_h̃  (accumulates into input grad)
-        result.lm_input_tensor = autograd::project_out_pc1(*matmul_input, hp_.pc1_power_iters, stream);
-        matmul_input = &result.lm_input_tensor;
+        forward_outputs.lm_head_input_tensor = autograd::project_out_pc1(*matmul_input, hp_.pc1_power_iters, stream);
+        matmul_input = &forward_outputs.lm_head_input_tensor;
     } else if (hp_.center_hidden_states) {
         // Materialize the causal-prefix centered tensor so it survives this
         // scope (Issue #127) and callers can explicitly keep the live LM-input
         // handle inside the forward boundary.
-        result.lm_input_tensor = std::move(centered_hidden_for_pc1);
-        matmul_input = &result.lm_input_tensor;
+        forward_outputs.lm_head_input_tensor = std::move(centered_hidden_for_pc1);
+        matmul_input = &forward_outputs.lm_head_input_tensor;
     } else {
         if (current_input == &normalized) {
             // RMSNorm was applied but no centering — preserve the normalized
-            // tensor in the returned LM-input view so it does not dangle when
+            // tensor in the forward sink LM-input view so it does not dangle when
             // this function returns (normalized is a local).
-            result.lm_input_tensor = std::move(normalized);
-            matmul_input = &result.lm_input_tensor;
+            forward_outputs.lm_head_input_tensor = std::move(normalized);
+            matmul_input = &forward_outputs.lm_head_input_tensor;
         }
     }
 
@@ -357,7 +360,7 @@ LMHeadForwardResult LMHeadLayer::forward(const Tensor& input,
     }
     const float* a_cache = matmul_input->data;  // Explicit cache for grad_B = lm_input^T @ grad_output
 
-    result.logits = autograd::matmul(
+    forward_outputs.logits_tensor = autograd::matmul(
         *matmul_input,
         *effective_weights,
         stream,
@@ -369,7 +372,7 @@ LMHeadForwardResult LMHeadLayer::forward(const Tensor& input,
     autograd::logLmHeadGemmForwardEquation(
         *matmul_input,
         *effective_weights,
-        result.logits,
+        forward_outputs.logits_tensor,
         hp_.center_hidden_states,
         hp_.project_out_pc1,
         use_centered_weights,
@@ -381,7 +384,7 @@ LMHeadForwardResult LMHeadLayer::forward(const Tensor& input,
 
     // Validate output shape
     const auto expected_shape = TensorContract::TensorShape::make_LOGITS(total_tokens, hp_.vocab_size);
-    const size_t logits_elements = result.logits.shape.total_elements();
+    const size_t logits_elements = forward_outputs.logits_tensor.shape.total_elements();
     const size_t expected_elements = expected_shape.total_elements();
     if (logits_elements != expected_elements) {
         throw std::runtime_error(
@@ -390,7 +393,7 @@ LMHeadForwardResult LMHeadLayer::forward(const Tensor& input,
             "  Expected: " + std::to_string(expected_elements) + " elements (" +
                 std::to_string(total_tokens) + "x" + std::to_string(hp_.vocab_size) + ")");
     }
-    result.logits.shape = expected_shape;
+    forward_outputs.logits_tensor.shape = expected_shape;
 
     // ════════════════════════════════════════════════════════════════════
     // STEP 3: Optional logit centering (numerical stability)
@@ -399,7 +402,7 @@ LMHeadForwardResult LMHeadLayer::forward(const Tensor& input,
     // So centering doesn't change predictions but keeps logits near zero.
     // ════════════════════════════════════════════════════════════════════
     if (hp_.center_logits) {
-        result.logits = autograd::center_rows(result.logits, stream);
+        forward_outputs.logits_tensor = autograd::center_rows(forward_outputs.logits_tensor, stream);
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -410,14 +413,9 @@ LMHeadForwardResult LMHeadLayer::forward(const Tensor& input,
     //   grad_bias = sum(grad_logits, dim=0)
     // ════════════════════════════════════════════════════════════════════
     if (hp_.use_bias && lm_bias.data) {
-        result.logits = autograd::broadcast_add(result.logits, lm_bias, stream);
-        result.logits.shape = expected_shape;  // Preserve LOGITS layout after broadcast_add
+        forward_outputs.logits_tensor = autograd::broadcast_add(forward_outputs.logits_tensor, lm_bias, stream);
+        forward_outputs.logits_tensor.shape = expected_shape;  // Preserve LOGITS layout after broadcast_add
     }
-
-    // CRITICAL (Issue #56): Return the output Tensor plus any materialized LM
-    // input Tensor. The caller owns where those Category 1 tensors live; the
-    // layer must not smuggle them into runtime sinks through output refs.
-    return result;
 }
 
 } // namespace GRIM

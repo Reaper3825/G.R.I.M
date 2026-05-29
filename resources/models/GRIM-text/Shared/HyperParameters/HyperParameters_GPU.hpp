@@ -40,8 +40,8 @@
 // 3. Helper functions that don't need JSON (always available)
 //
 // RULE: NO other file should define hyperparameters!
-// Raw authored values enter through loadAiConfigSnapshot().document; typed values,
-// validation, and formula-derived fields are owned here.
+// Raw authored values enter through loadAiConfigSnapshot().document; validation
+// and formula-derived fields are owned here.
 // NO OTHER FILE SHOULD HAVE TRAINING CONFIGURABLE CONSTANTS OR DEFAULTS.
 //======================================================//
 
@@ -63,8 +63,8 @@ constexpr int CUDA_REDUCTION_MAX_BLOCKS = CUDA_BLOCK_SIZE_STANDARD;  // Cap grid
 
 //======================================================//
 // Model Architecture Formula Constants
-// Architecture values themselves are authored in ai_config.json and loaded
-// into LanguageModelConfig root fields. Constants in
+// Architecture values themselves are authored in ai_config.json and consumed
+// through the HyperParameters snapshot-document finalization boundary. Constants in
 // this section may only be formulas or static kernel capabilities, never
 // authored model defaults.
 //======================================================//
@@ -1669,6 +1669,11 @@ inline void validateRootConfigDocument(
 // finalization stamps it later once estimated_total_steps exists.
 // Caller MUST have already passed validateRootConfigDocument().
 //======================================================//
+template <typename T>
+inline T snapshotTrainingConfigField(
+    const GRIM::Config::AiConfigSnapshot& snapshot,
+    const char* name);
+
 inline DerivedScheduleInfo computeDerivedSchedule(
     const LanguageModelConfig& params,
     const DerivationContext& context) {
@@ -1677,6 +1682,19 @@ inline DerivedScheduleInfo computeDerivedSchedule(
     const int sequence_count  = std::max(0, context.train_sequence_count);
     info.batches_per_epoch    = std::max(1, (sequence_count + safe_batch_size - 1) / safe_batch_size);
     info.total_training_steps = std::max(1, info.batches_per_epoch * params.epochs);
+    info.safe_last_step       = std::max(info.total_training_steps - 1, 1);
+    return info;
+}
+
+inline DerivedScheduleInfo computeDerivedSchedule(
+    const GRIM::Config::AiConfigSnapshot& snapshot,
+    const DerivationContext& context) {
+    DerivedScheduleInfo info;
+    const int safe_batch_size = snapshotTrainingConfigField<int>(snapshot, "batch_size");
+    const int sequence_count  = std::max(0, context.train_sequence_count);
+    const int epochs          = snapshotTrainingConfigField<int>(snapshot, "epochs");
+    info.batches_per_epoch    = std::max(1, (sequence_count + safe_batch_size - 1) / safe_batch_size);
+    info.total_training_steps = std::max(1, info.batches_per_epoch * epochs);
     info.safe_last_step       = std::max(info.total_training_steps - 1, 1);
     return info;
 }
@@ -1987,11 +2005,12 @@ inline LanguageModelConfig loadLanguageModelConfig(
 }
 
 //======================================================//
-// Startup configuration — the single concrete root config owner.
+// Startup configuration finalization.
 //
 // control/ai_config_paths.hpp::loadAiConfigSnapshot() is the raw authored
-// source. This header owns the raw snapshot -> typed owner -> startup/runtime
-// policy pipeline so every consumer gets one validated LanguageModelConfig.
+// source. This header consumes AiConfigSnapshot::document directly, computes
+// and validates the startup/runtime values, and returns the transitional typed
+// handoff still required by downstream CUDA/model consumers.
 //
 // Side effects intentionally NOT performed here (caller does them):
 //   - GRIM::Logging::InitLogRecorder()          → training log subsystem
@@ -2027,21 +2046,475 @@ inline void loadResolvedPathFields(
             "FATAL: ai_config.json training.config grim_text_* path fields must all be non-empty");
     }
 }
-inline LanguageModelConfig loadStartupConfig(
+
+inline const nlohmann::json& snapshotTrainingConfig(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    return snapshot.document.at("training").at("config");
+}
+
+inline nlohmann::json& mutableSnapshotTrainingConfig(
+    GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    return snapshot.document.at("training").at("config");
+}
+
+template <typename T>
+inline T snapshotTrainingConfigField(
+    const GRIM::Config::AiConfigSnapshot& snapshot,
+    const char* name)
+{
+    return snapshotTrainingConfig(snapshot).at(name).get<T>();
+}
+
+inline int snapshotEffectiveBatchSize(
+    const GRIM::Config::AiConfigSnapshot& snapshot,
+    const char* caller)
+{
+    const int batch_size = snapshotTrainingConfigField<int>(snapshot, "batch_size");
+    if (!snapshotTrainingConfigField<bool>(snapshot, "stability_overrides_enabled")) {
+        return batch_size;
+    }
+
+    const int override_batch_size =
+        snapshotTrainingConfigField<int>(snapshot, "stability_override_batch_size");
+    if (override_batch_size <= 0) {
+        throw std::runtime_error(
+            std::string(caller) +
+            ": stability_overrides_enabled=true but stability_override_batch_size=" +
+            std::to_string(override_batch_size));
+    }
+    return override_batch_size;
+}
+
+inline int snapshotEffectiveMaxSeqLen(
+    const GRIM::Config::AiConfigSnapshot& snapshot,
+    const char* caller)
+{
+    int max_seq_len = snapshotTrainingConfigField<int>(snapshot, "max_seq_len");
+    if (snapshotTrainingConfigField<bool>(snapshot, "stability_overrides_enabled")) {
+        const int override_max_seq_len =
+            snapshotTrainingConfigField<int>(snapshot, "stability_override_max_seq_len");
+        if (override_max_seq_len > 0) {
+            max_seq_len = override_max_seq_len;
+        }
+    }
+
+    if (max_seq_len <= 0) {
+        throw std::runtime_error(
+            std::string(caller) +
+            ": max_seq_len not configured in ai_config.json "
+            "(stability overrides or root config)");
+    }
+    return max_seq_len;
+}
+
+inline float snapshotEffectiveGradClipNorm(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    float grad_clip_norm = snapshotTrainingConfigField<float>(snapshot, "gradient_clip");
+    if (snapshotTrainingConfigField<bool>(snapshot, "stability_overrides_enabled")) {
+        const float override_clip =
+            snapshotTrainingConfigField<float>(snapshot, "stability_override_clip_per_token");
+        if (override_clip > 0.0f) {
+            grad_clip_norm = override_clip;
+        }
+    }
+    return grad_clip_norm;
+}
+
+inline int snapshotTokenizerTargetVocabSize(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    int target_vocab_size = snapshotTrainingConfigField<int>(snapshot, "tokenizer_vocab_size");
+    const int max_vocab_size = snapshotTrainingConfigField<int>(snapshot, "tokenizer_max_vocab_size");
+    if (max_vocab_size > 0 && target_vocab_size > max_vocab_size) {
+        target_vocab_size = max_vocab_size;
+    }
+    return target_vocab_size;
+}
+
+inline std::vector<int> snapshotMaskedNumericLiteralIds()
+{
+    std::vector<int> ids;
+    ids.reserve(10);
+    for (int byte_value = 0x30; byte_value <= 0x39; ++byte_value) {
+        ids.push_back(Tokenizer::BYTE_TOKEN_OFFSET + byte_value);
+    }
+    return ids;
+}
+
+inline const char* modelExecutionModeToJsonString(ModelExecutionMode mode)
+{
+    switch (mode) {
+        case ModelExecutionMode::TRAINING: return "training";
+        case ModelExecutionMode::INFERENCE: return "inference";
+    }
+    throw std::runtime_error("modelExecutionModeToJsonString: unsupported ModelExecutionMode value");
+}
+
+inline ModelExecutionMode parseModelExecutionMode(const std::string& value)
+{
+    const std::string normalized = normalizeHyperparameterEnumToken(value);
+    if (normalized == "training") {
+        return ModelExecutionMode::TRAINING;
+    }
+    if (normalized == "inference") {
+        return ModelExecutionMode::INFERENCE;
+    }
+    throw std::runtime_error("parseModelExecutionMode: expected training or inference, got '" + value + "'");
+}
+
+inline ModelExecutionMode snapshotExecutionMode(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    return parseModelExecutionMode(snapshotTrainingConfigField<std::string>(snapshot, "execution_mode"));
+}
+
+inline void writeFinalizedLanguageModelConfigToSnapshot(
+    GRIM::Config::AiConfigSnapshot& snapshot,
+    const LanguageModelConfig& config)
+{
+    auto& cfg = mutableSnapshotTrainingConfig(snapshot);
+
+#define GRIM_WRITE_FINAL_CONFIG_FIELD(member) cfg[#member] = config.member
+    GRIM_WRITE_FINAL_CONFIG_FIELD(d_model);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(num_layers);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(num_heads);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(num_kv_heads);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(d_ff);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(max_seq_len);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(dropout_rate);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(attention_dropout);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tie_embeddings);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(positional_encoding);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(rope_base_seq_len);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(alibi_min_locality_distance);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(alibi_slope_exponent);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(alibi_max_bias);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(rope_theta);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(rope_scaling);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(pbm_alibi_slopes);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(pbm_rope_inv_freq);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(use_flash_attention);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(min_seq_len_for_flash);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(use_gpu);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(head_dim);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(heads_per_kv_group);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(kv_dim);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(qkv_dim);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(rotary_dim);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(is_gqa);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(residual_projection_init_gain);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(vocab_size);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(max_cached_seq_len);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(max_tokens_per_batch);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(rms_epsilon);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(causal_mask);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(use_pre_norm);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(fuse_qkv);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(use_bias);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(qk_norm_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(use_layer_scale);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(layer_scale_init);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(data_path);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(vocab_path);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(output_model_path);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(checkpoint_dir);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(log_dir);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(status_path);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(save_test_mode);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_embedding);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_lm_head);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_attention);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_ffn);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_rmsnorm);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_scratchblock);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_mtp);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_reasoning_head);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_execution_block);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_slot_selector);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(use_scratch_block);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(scratch_block_atom_embedding_dim);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(scratch_block_max_atoms);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(scratch_block_atom_scale);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(scratch_block_execution_first_type_only);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(reasoning_head_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(reasoning_num_ops);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_layer);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_num_ops);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_num_slots);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_num_scratch_slots);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_num_steps);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_value_decode_input_dim);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_value_decode_hidden_dim);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_d_key);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_d_type);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_cross_attn_head_dim);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_cross_attn_topk);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_usage_decay);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_inject_gate_temp);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_result_slot_mode);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_result_slot_index);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_debug_mode);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_entropy_collapse_threshold);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_write_collapse_threshold);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_magnitude_limit);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_diversity_kappa);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_temp_start);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_temp_end);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_temp_schedule);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_entropy_weight);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_transition_hard_threshold);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_gate_warmup_steps);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_causal_w1_transition);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(div_invalid_penalty_weight);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(div_magnitude_penalty_weight);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(arg_reinforce_weight);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(arg_reinforce_baseline_decay);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(structured_ce_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(structured_ce_weight);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(selector_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(decode_time_slot_feature_dim);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(selector_d_selector);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(selector_selection_margin);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(selector_supervision_weight);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(step_x_multiplier);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(step_y_multiplier);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(step_y_overrides_x);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(entropy_aux_weight);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(value_match_epsilon);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(final_slot_consistency_weight);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(lm_head_center_hidden_states);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(freeze_learned_rms_gammas);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(project_out_pc1);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(pc1_power_iters);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(center_logits);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(center_encoder_residuals);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(hardcoded_hidden_pattern);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(hardcoded_log_every_n_batches);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_strategy);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_max_new_tokens);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_min_new_tokens);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_temperature);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_top_k);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_top_p);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_min_p);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_typical_p);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_repetition_penalty);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_repetition_penalty_window);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_frequency_penalty);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_presence_penalty);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_no_repeat_ngram_size);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_do_sample);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_num_return_sequences);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_eos_token_id);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_pad_token_id);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_bos_token_id);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_unk_token_id);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_bad_words_ids);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_masked_numeric_literal_ids);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_seed);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(generation_enable_scratchblock_reasoning);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(mtp_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(mtp_k);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(mtp_alpha);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(mtp_alpha_warmup_steps);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(current_model_training);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(current_curriculum);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(log_recorder_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(log_recorder_default_level);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(log_recorder_modules);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(log_recorder_layer_embedding);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(log_recorder_layer_rms_norm);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(log_recorder_layer_attention);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(log_recorder_layer_feed_forward);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(log_recorder_layer_residual);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(log_recorder_layer_encoding);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(log_recorder_layer_serialization);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(log_recorder_layer_execution_block);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(logging_default_level);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(logging_equation_csv_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(logging_stderr_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(logging_initial_capacity);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(logging_group_overrides);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(epochs);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(seed);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(batch_size);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(gradient_accumulation_steps);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(single_batch_overfit_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(single_batch_overfit_max_steps);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(batch_strategy);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(learning_rate);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(weight_decay);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(grad_clip_norm);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(grad_clip_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(effective_per_token_grad_limit);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(per_token_grad_scale);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(warmup_fraction);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(warmup_steps);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(force_rebuild_vocab);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(cosine_decay_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(cosine_warm_restarts);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(cosine_decay_min_lr);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(sliding_window_stride);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(min_seq_valid_tokens);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(log_interval);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(atom_stats_interval);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(atom_stats_max_seqs);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(validation_interval);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(checkpoint_interval);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(soft_restart_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(soft_restart_loss_increase_threshold);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(soft_restart_max_step_window);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(soft_restart_cooldown_steps);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(auto_stop_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(auto_stop_plateau_patience);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(auto_stop_plateau_min_delta);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(auto_stop_high_loss_threshold);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(auto_stop_high_loss_patience);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(shuffle_train_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(shuffle_train_epochs);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_control_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_spike_mild_threshold);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_spike_moderate_threshold);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_spike_severe_threshold);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_moderate_grad_scale);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_moderate_cooldown_extension);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_min_grad_for_nonzero_loss);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_loss_threshold_for_grad_check);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_max_consecutive_zero_grad_steps);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_seq_len_regime_change_threshold);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_regime_change_suppression_steps);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_volatility_damping_threshold);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_max_volatility_damping);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_gradient_decay_threshold);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_max_decay_boost);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_progress_boost_threshold);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_max_progress_boost);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_outlier_frequency_trigger);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_outlier_persistence_trigger);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_anchor_drift_sigma_multiplier);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_soft_restart_cooldown_steps);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_warmup_steps);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_baseline_stabilization_steps);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_verbose_logging);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_fail_loud_on_accumulation_bug);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_plateau_noise_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_plateau_noise_patience);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_plateau_noise_variance_threshold);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_plateau_noise_std);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_plateau_noise_proportional);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_plateau_noise_cooldown);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_plateau_noise_max_per_epoch);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_lattice_num_levels);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_lattice_num_streams);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_lattice_beta_mu);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_lattice_beta_a);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_lattice_beta_delta);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_lattice_beta_r);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_lattice_beta_run);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_lattice_beta_v);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_lattice_k_out0);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_lattice_alpha_v);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_lattice_epsilon);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(telemetry_lattice_strict_mode);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(loss_label_smoothing_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(loss_label_smoothing_epsilon);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(loss_focal_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(loss_focal_gamma);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(loss_focal_alpha);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(loss_preference_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(loss_preference_beta);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(loss_distillation_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(loss_distillation_temperature);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(loss_distillation_lambda);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(loss_masking_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(loss_masking_tag);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(loss_entropy_reg_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(loss_entropy_reg_lambda);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(loss_class_balanced_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(loss_class_balanced_beta);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(lm_head_centering_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(embedding_freeze_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(embedding_freeze_after_step);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(optimizer_kind);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(optimizer_beta1);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(optimizer_beta2);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(optimizer_epsilon);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(optimizer_embedding_freeze_after_step);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(stability_overrides_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(stability_override_batch_size);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(stability_override_max_seq_len);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(stability_override_clip_per_token);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(single_stream_mode);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(disable_async_frees);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(synchronize_after_kernels);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(mtp_log_ratio_monitor);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(prediction_comparison_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(prediction_comparison_interval);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(prediction_comparison_top_k);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(prediction_comparison_max_positions);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(prediction_comparison_log_path);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(logit_update_trace_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(logit_update_trace_interval);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(attention_diag_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(attention_diag_layer);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(attention_diag_head);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_enable_scratch_block_reasoning);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_detect_numbers);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_target_vocab_size);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_vocab_size);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_max_vocab_size);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_max_length);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_character_coverage);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_min_cleaned_text_length);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_min_subword_freq);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_prune_during_mining);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_enable_parallel_subword_mining);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_subword_mining_workers);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_subword_mining_max_bytes);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_model_type);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_special_tokens);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_add_bos);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_add_eos);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_unk_token);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_pad_token);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_bos_token);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_eos_token);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_enable_nfkc_normalization);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_enable_lowercasing);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_enable_parallel_tokenization);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_parallel_threshold);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_enable_byte_fallback);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_expected_checksum);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_save_text_vocab);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_vocab_score_multiplier);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(clear_merged_cache_on_merge);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(subprocess_tokenizer_only_mode);
+#undef GRIM_WRITE_FINAL_CONFIG_FIELD
+
+    cfg["execution_mode"] = modelExecutionModeToJsonString(config.execution_mode);
+    cfg["grim_text_training_data"] = config.data_path;
+    cfg["grim_text_vocab"] = config.vocab_path;
+    cfg["grim_text_model"] = config.output_model_path;
+    cfg["grim_text_checkpoints"] = config.checkpoint_dir;
+    cfg["grim_text_logs"] = config.log_dir;
+    cfg["grim_text_training_status"] = config.status_path;
+}
+
+inline LanguageModelConfig finalizeLanguageModelConfig(
+    const nlohmann::json& document,
     int argc,
     char** argv,
     ModelExecutionMode execution_mode)
 {
-    LanguageModelConfig config;
+    // 1. Root registry + resolved path leaves from the raw snapshot document.
+    LanguageModelConfig config = loadLanguageModelConfig(document);
+    loadResolvedPathFields(config, document);
 
-    // 1. Load raw snapshot (single JSON parse for the entire program)
-    auto snapshot = GRIM::Config::loadAiConfigSnapshot();
-    
-    // 2. Root registry + resolved path leaves
-    config = loadLanguageModelConfig(snapshot.document);
-    loadResolvedPathFields(config, snapshot.document);
-
-    // 3. Resolve max_seq_len (must be configured)
+    // 2. Resolve max_seq_len (must be configured)
     if (config.stability_overrides_enabled &&
         config.stability_override_max_seq_len > 0) {
         config.max_seq_len = config.stability_override_max_seq_len;
@@ -2053,7 +2526,7 @@ inline LanguageModelConfig loadStartupConfig(
             "(stability overrides or root config)");
     }
 
-    // 4. Resolve configured stride against the effective max_seq_len.
+    // 3. Resolve configured stride against the effective max_seq_len.
     if (config.sliding_window_stride <= 0) {
         throw std::runtime_error(
             "FATAL: sliding_window_stride must be > 0 in ai_config.json, got " +
@@ -2068,7 +2541,7 @@ inline LanguageModelConfig loadStartupConfig(
             ". Update training.config.sliding_window_stride or stability_overrides.max_seq_len.");
     }
 
-    // 5. Stability overrides (batch_size, grad_clip_norm)
+    // 4. Stability overrides (batch_size, grad_clip_norm)
     if (config.stability_overrides_enabled) {
         if (config.stability_override_batch_size <= 0) {
             throw std::runtime_error(
@@ -2082,7 +2555,7 @@ inline LanguageModelConfig loadStartupConfig(
             config.grad_clip_norm = config.stability_override_clip_per_token;
         }
     }
-    // 6. CLI overrides
+    // 5. CLI overrides
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--data" && i + 1 < argc) {
@@ -2102,7 +2575,7 @@ inline LanguageModelConfig loadStartupConfig(
             config.save_test_mode = true;
         } else if (arg == "--config") {
             throw std::runtime_error(
-                "loadStartupConfig: --config is no longer supported; use the canonical ai_config.json");
+                "finalizeLanguageModelConfig: --config is no longer supported; use the canonical ai_config.json");
         } else if (arg == "--help") {
             std::cout
                 << "Usage: " << argv[0] << " [options]\n"
@@ -2121,7 +2594,7 @@ inline LanguageModelConfig loadStartupConfig(
     refreshMutableTrainingDerivedValues(
         config,
         config.max_seq_len,
-        "loadStartupConfig");
+        "finalizeLanguageModelConfig");
 
     config.vocab_size = config.tokenizer_target_vocab_size;
     config.execution_mode = execution_mode;
@@ -2132,23 +2605,65 @@ inline LanguageModelConfig loadStartupConfig(
     const char* caller = nullptr;
     switch (execution_mode) {
         case ModelExecutionMode::TRAINING:
-            caller = "loadStartupConfig(TRAINING)";
+            caller = "finalizeLanguageModelConfig(TRAINING)";
             config.max_cached_seq_len = config.max_seq_len;
             break;
         case ModelExecutionMode::INFERENCE:
-            caller = "loadStartupConfig(INFERENCE)";
+            caller = "finalizeLanguageModelConfig(INFERENCE)";
             config.use_gpu = true;
             config.batch_size = 1;
             config.max_cached_seq_len = config.max_seq_len;
             config.max_tokens_per_batch = config.max_seq_len;
             break;
         default:
-            throw std::runtime_error("loadStartupConfig: unsupported ModelExecutionMode value");
+            throw std::runtime_error("finalizeLanguageModelConfig: unsupported ModelExecutionMode value");
     }
 
     config.computeDerivedValues();
     validateRootConfigDocument(config, caller);
     return config;
+}
+
+inline GRIM::Config::AiConfigSnapshot finalizeAiConfigSnapshot(
+    GRIM::Config::AiConfigSnapshot snapshot,
+    int argc,
+    char** argv,
+    ModelExecutionMode execution_mode)
+{
+    const LanguageModelConfig finalized = finalizeLanguageModelConfig(
+        snapshot.document,
+        argc,
+        argv,
+        execution_mode);
+    writeFinalizedLanguageModelConfigToSnapshot(snapshot, finalized);
+    return snapshot;
+}
+
+inline void setSnapshotRuntimeVocabSize(
+    GRIM::Config::AiConfigSnapshot& snapshot,
+    int vocab_size,
+    const char* caller)
+{
+    if (vocab_size < static_cast<int>(Tokenizer::UNIGRAM_VOCAB_OFFSET)) {
+        throw std::runtime_error(std::string(caller) +
+            ": vocab_size must include special+byte+atom ranges (>= " +
+            std::to_string(Tokenizer::UNIGRAM_VOCAB_OFFSET) + "), got " +
+            std::to_string(vocab_size));
+    }
+    mutableSnapshotTrainingConfig(snapshot).at("vocab_size") = vocab_size;
+}
+
+inline LanguageModelConfig loadStartupConfig(
+    int argc,
+    char** argv,
+    ModelExecutionMode execution_mode)
+{
+    const auto snapshot = GRIM::Config::loadAiConfigSnapshot();
+    return finalizeLanguageModelConfig(
+        snapshot.document,
+        argc,
+        argv,
+        execution_mode);
 }
 } // namespace HyperParameters
 } // namespace GRIM

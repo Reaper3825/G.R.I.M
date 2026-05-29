@@ -74,7 +74,7 @@ RNGContext& RNGContext::operator=(RNGContext&& other) noexcept {
 namespace Internal {
 
 RNGContext initializeRNG(
-    const ::GRIM::HyperParameters::LanguageModelConfig& config,
+    const ::GRIM::Config::AiConfigSnapshot& config,
     TrainingLogger& logger) {
     RNGContext ctx;
     const auto seed_hp = GRIM::HyperParameters::trainingSeedHP(config);

@@ -5,7 +5,7 @@
 //  Owns:
 //    - kernel_embedding_forward    (anonymous namespace, this TU)
 //    - kernel_embedding_backward   (anonymous namespace, this TU)
-//    - EmbeddingGradFn methods     (capture_weight, save, apply, release_saved)
+//    - EmbeddingGradFn methods     (capture_weight, capture_batch_view, apply, release_saved)
 //    - autograd::embedding(...)    (forward op)
 //
 //  Single-file extraction from TensorContract_GPU.cu — same math, same
@@ -168,31 +168,39 @@ void EmbeddingGradFn::capture_weight(Tensor& w) {
     }
 }
 
-void EmbeddingGradFn::save(const int* ids, int tokens, int d, bool copy_ids, cudaStream_t stream) {
-    num_tokens = tokens;
-    d_model = d;
-
-    AG_TRACE("[EmbeddingGradFn::save] ids=%p tokens=%d d=%d copy_ids=%s\n",
-            (void*)ids, tokens, d, copy_ids ? "true" : "false");
-
-    if (copy_ids) {
-        cudaMallocOrThrow(reinterpret_cast<void**>(&token_ids), tokens * sizeof(int), "EmbeddingGradFn_token_ids");
-        owns_token_ids = true;
-        const cudaError_t copy_err = cudaMemcpyAsync(
-            token_ids, ids, tokens * sizeof(int), cudaMemcpyDeviceToDevice, stream);
-        if (copy_err != cudaSuccess) {
-            throw std::runtime_error(std::string("EmbeddingGradFn::save: cudaMemcpyAsync(token_ids) failed: ") +
-                                     cudaGetErrorString(copy_err));
-        }
-    } else {
-        token_ids = const_cast<int*>(ids);
-        owns_token_ids = false;
+void EmbeddingGradFn::capture_batch_view(const Batching::BatchPayload& payload_,
+                                         const Batching::BatchDeviceBindings& bindings_) {
+    payload_.validate("EmbeddingGradFn::capture_batch_view");
+    if (!bindings_.d_input_ids) {
+        throw std::runtime_error("EmbeddingGradFn::capture_batch_view: BatchDeviceBindings.d_input_ids is NULL");
     }
+    if (payload_.vocab_size != vocab_size) {
+        throw std::runtime_error("EmbeddingGradFn::capture_batch_view: payload.vocab_size=" +
+                                 std::to_string(payload_.vocab_size) + " != embedding vocab_size=" +
+                                 std::to_string(vocab_size));
+    }
+
+    payload = &payload_;
+    bindings = bindings_;
 }
 
 void EmbeddingGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
     // RULE 20: Track current operation for error context
     setCurrentGradFnOp("embedding", this);
+
+    if (!payload) {
+        throw std::runtime_error("EmbeddingGradFn::apply: payload is NULL - capture_batch_view() must be called first");
+    }
+    payload->validate("EmbeddingGradFn::apply");
+    if (!bindings.d_input_ids) {
+        throw std::runtime_error("EmbeddingGradFn::apply: BatchDeviceBindings.d_input_ids is NULL - orchestration-owned input IDs are required");
+    }
+    if (!weight_shape.is_2d_layout()) {
+        throw std::runtime_error("EmbeddingGradFn::apply: captured weight_shape is not 2D");
+    }
+
+    const int num_tokens = payload->total_tokens;
+    const int d_model = weight_shape.as_2d().cols;
 
     AG_TRACE("[EmbeddingGradFn::apply] ENTER - tokens=%d d=%d\n",
             num_tokens, d_model);
@@ -208,10 +216,6 @@ void EmbeddingGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream)
         applied = true;
         return;
     }
-    if (!token_ids) {
-        throw std::runtime_error("EmbeddingGradFn::apply: token_ids is NULL - save() must store token IDs for backward scatter");
-    }
-
     if (!weight_grad) {
         throw std::runtime_error("EmbeddingGradFn::apply: weight_grad is NULL - capture_weight() must be called first");
     }
@@ -231,7 +235,7 @@ void EmbeddingGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream)
     // to same buffer where LM head grad already lives. Natural ~90% cancellation
     // for frequent tokens acts as frequency-proportional regularization.
     kernel_embedding_backward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-        grad_output.data, token_ids, weight_grad, num_tokens, d_model, vocab_size, embedding_scale);
+        grad_output.data, bindings.d_input_ids, weight_grad, num_tokens, d_model, vocab_size, embedding_scale);
     trackKernelLaunch("kernel_embedding_backward", stream);
     applied = true;
 
@@ -247,7 +251,8 @@ void EmbeddingGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream)
 
 void EmbeddingGradFn::release_saved() {
     GradFn::release_saved();
-    if (owns_token_ids && token_ids) { cudaFree(token_ids); token_ids = nullptr; }
+    payload = nullptr;
+    bindings = Batching::BatchDeviceBindings{};
     weight_grad = nullptr;
     weight_grad_fn.reset();
 }
@@ -256,15 +261,17 @@ void EmbeddingGradFn::release_saved() {
 // autograd::embedding — forward op
 // ═══════════════════════════════════════════════════════════════════════════
 
-Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens, cudaStream_t stream, float embedding_scale) {
+Tensor embedding(const Tensor& weight,
+                 const Batching::BatchPayload& payload,
+                 const Batching::BatchDeviceBindings& bindings,
+                 cudaStream_t stream,
+                 float embedding_scale) {
+    payload.validate("autograd::embedding");
     if (!weight.shape.is_2d_layout()) {
         throw std::invalid_argument("autograd::embedding: weight must be 2D [vocab_size, d_model]");
     }
-    if (!token_ids) {
-        throw std::invalid_argument("autograd::embedding: token_ids is NULL");
-    }
-    if (num_tokens <= 0) {
-        throw std::invalid_argument("autograd::embedding: num_tokens must be > 0");
+    if (!bindings.d_input_ids) {
+        throw std::invalid_argument("autograd::embedding: BatchDeviceBindings.d_input_ids is NULL");
     }
     if (!weight.data) {
         throw std::invalid_argument("autograd::embedding: weight.data is NULL");
@@ -274,18 +281,23 @@ Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens, cud
     }
 
     const int d_model = weight.shape.as_2d().cols;
+    const int vocab_size = weight.shape.as_2d().rows;
+    if (vocab_size != payload.vocab_size) {
+        throw std::invalid_argument("autograd::embedding: weight vocab_size=" + std::to_string(vocab_size) +
+                                    " != payload.vocab_size=" + std::to_string(payload.vocab_size));
+    }
     if (d_model < 4) {
         throw std::invalid_argument("autograd::embedding: d_model must be >= 4 for hard token-type gate, got " +
                                     std::to_string(d_model));
     }
+    const int num_tokens = payload.total_tokens;
     auto output_shape = ::TensorContract::TensorShape::make_BSM(num_tokens, d_model);
     Tensor result = Tensor::empty(output_shape, weight.requires_grad, stream, "embedding_result");
 
     // Forward: gather from weight table with scaling and fixed hard type gate.
     // Issue #140: Scale is 1.0f in production (AIAYN sqrt(d_model) removed for tied weights)
-    const int vocab_size = weight.shape.as_2d().rows;
     kernel_embedding_forward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-        token_ids, weight.data, result.data, num_tokens, d_model, vocab_size, embedding_scale);
+        bindings.d_input_ids, weight.data, result.data, num_tokens, d_model, vocab_size, embedding_scale);
     trackKernelLaunch("kernel_embedding_forward", stream);
 
     // Set up backward - ISSUE #48: capture stable data, not Tensor*
@@ -293,7 +305,7 @@ Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens, cud
         result.is_leaf = false;
         auto grad_fn = std::make_shared<EmbeddingGradFn>();
         grad_fn->capture_weight(const_cast<Tensor&>(weight));
-        grad_fn->save(token_ids, num_tokens, d_model, true, stream);
+        grad_fn->capture_batch_view(payload, bindings);
         grad_fn->embedding_scale = embedding_scale;   // Store for backward scaling
         result.grad_fn = grad_fn;
     }

@@ -10,16 +10,18 @@
 
 #include "BatchPayload.hpp"
 #include "BatchDeviceBindings.hpp"
+#include "BatchDeviceStorage.hpp"
 #include "../HyperParameters/HyperParameters_GPU.hpp"
-#include "../TrainingState/TrainingState_GPU.hpp"
+
+#include <cuda_runtime.h>
 
 namespace GRIM {
 namespace Batching {
 
 BatchDeviceBindings uploadBatchToDevice(
-    const HyperParameters::LanguageModelConfig& config,
-    TrainingState& training_state,
-    const BatchPayload& payload);
+    const Config::AiConfigSnapshot& config,
+    BatchPayload& payload,
+    cudaStream_t stream);
 
 }  // namespace Batching
 }  // namespace GRIM

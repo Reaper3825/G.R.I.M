@@ -46,7 +46,7 @@ void loadRequestedCheckpoint(TrainingContext& ctx)
     const auto checkpoint_hp = GRIM::HyperParameters::checkpointLoadHP(
         ctx.config,
         ctx.requested_checkpoint_path,
-        ctx.config.execution_mode);
+        GRIM::HyperParameters::snapshotExecutionMode(ctx.config));
 
     if (checkpoint_hp.checkpoint_path.empty()) {
         handleUnusableCheckpointRequest(
@@ -87,7 +87,7 @@ void loadRequestedCheckpoint(TrainingContext& ctx)
 
 void runSaveTestIfRequested(TrainingContext& ctx)
 {
-    if (!ctx.config.save_test_mode) {
+    if (!GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "save_test_mode")) {
         return;
     }
     if (!ctx.model) {

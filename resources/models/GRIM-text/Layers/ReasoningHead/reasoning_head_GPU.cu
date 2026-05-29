@@ -12,6 +12,7 @@
 //======================================================//
 
 #include "reasoning_head_GPU.hpp"
+#include "../../Shared/Forward/ModelForwardOutputs.hpp"
 
 #include <stdexcept>
 #include <cstdio>
@@ -259,7 +260,7 @@ ReasoningHeadLayer& ReasoningHeadLayer::operator=(ReasoningHeadLayer&& other) no
 //======================================================//
 //  Forward
 //======================================================//
-ReasoningHeadOutput ReasoningHeadLayer::forward(
+Forward::ReasoningHeadOutput ReasoningHeadLayer::forward(
     Tensor& encoder_output,
     Tensor& atom_embeddings,
     int* atom_positions,
@@ -347,7 +348,7 @@ ReasoningHeadOutput ReasoningHeadLayer::forward(
     // num_atoms == 0: skip head, return null tensors
     // ════════════════════════════════════════════════════
     if (num_atoms == 0) {
-        return ReasoningHeadOutput{};
+        return Forward::ReasoningHeadOutput{};
     }
 
     // ════════════════════════════════════════════════════
@@ -478,7 +479,7 @@ ReasoningHeadOutput ReasoningHeadLayer::forward(
                                  cudaGetErrorString(err));
     }
 
-    return ReasoningHeadOutput{
+    return Forward::ReasoningHeadOutput{
         std::move(op_logits),
         std::move(arg1_raw),
         std::move(arg2_raw)

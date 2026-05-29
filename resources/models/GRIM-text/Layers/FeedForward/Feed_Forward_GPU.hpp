@@ -11,8 +11,7 @@
 //  Uses autograd::matmul, autograd::silu, autograd::elementwise_mul
 //  for automatic differentiation.
 //  
-//  ISSUE #56 FIX: Forward now accepts ForwardIntermediates& to keep
-//  intermediate tensors alive until backward completes.
+//  Writes retained FFN tensors directly into ModelForwardOutputs.
 //======================================================//
 
 #pragma once
@@ -24,8 +23,8 @@
 #include <cstddef>
 #include <memory>
 
+#include "../../Shared/Forward/ModelForwardOutputs.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
-#include "../../Shared/TensorContract/ForwardIntermediates.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
 namespace GRIM {
@@ -85,7 +84,7 @@ public:
     const Tensor& b2() const { return b2_; }
 
     //--------------------------------------------------
-    // Forward Pass - Autograd with ForwardIntermediates (Issue #56 Fix)
+    // Forward Pass - Autograd writing retained FFN tensors into the sink
     //--------------------------------------------------
     /**
      * SwiGLU FFN forward with autograd tracking:
@@ -94,26 +93,22 @@ public:
      *   hidden = gate ⊙ up
      *   output = hidden @ W2 + b2
      * 
-     * Builds compute graph for automatic backward().
-     * 
-     * CRITICAL: Intermediate tensors are stored in ForwardIntermediates
-     * to keep the autograd graph alive. Without this, grad_fn objects
-     * are destroyed when forward() returns, causing use-after-free
-     * in backward pass.
+    * Builds compute graph for automatic backward(). Retained FFN tensors are
+    * written directly into the canonical per-call forward sink.
      * 
      * @param input [total_tokens, d_model] - MUST have requires_grad if training
-     * @param intermediates Storage for intermediate tensors (REQUIRED for autograd)
     * @param stream CUDA stream from the caller's forward payload/request
     * @param cublas_handle cuBLAS handle from the caller's forward payload/request
     * @param batch_idx Current batch index for deterministic dropout masks
     * @param dropout_enabled Explicit mode gate for dropout; batch_idx never controls mode
+    * @param forward_outputs Canonical per-call forward sink
      * @param layer_idx Encoder layer index (for unique dropout seed per layer)
-     * @return output [total_tokens, d_model] with grad_fn attached
      */
-    Tensor forward(const Tensor& input, ForwardIntermediates& intermediates,
-                cudaStream_t stream, cublasHandle_t cublas_handle,
-                uint64_t batch_idx = 0, bool dropout_enabled = false, int layer_idx = 0,
-                const FeedForwardParameterViews* parameter_views = nullptr);
+    void forward(const Tensor& input,
+             cudaStream_t stream, cublasHandle_t cublas_handle,
+             Forward::ModelForwardOutputs& forward_outputs,
+             uint64_t batch_idx = 0, bool dropout_enabled = false, int layer_idx = 0,
+             const FeedForwardParameterViews* parameter_views = nullptr);
 
     //--------------------------------------------------
     // NOTE: Backward Pass handled by autograd

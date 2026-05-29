@@ -55,7 +55,7 @@ void computeRhoDiagnostic(
 {
     const auto& ai = ctx.model->getTrainingState().autograd_intermediates;
     const int num_layers = static_cast<int>(ai.encoder_layer_outputs.size());
-    const int d_model = ctx.config.d_model;
+    const int d_model = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "d_model");
     const int max_seq_len = payload.max_seq_len;
     const int rect_positions = payload.total_tokens;
 
@@ -299,12 +299,7 @@ void computeRhoDiagnostic(
     // LM-head input (post-centering when centering is enabled) stays live only
     // inside the current autograd boundary. Using layer_id = num_layers to
     // distinguish it from raw encoder layers.
-    const Tensor* lm_head_input_tensor = nullptr;
-    if (ai.centered_encoder_output.data) {
-        lm_head_input_tensor = &ai.centered_encoder_output;
-    } else if (ai.encoder_output_tensor.data) {
-        lm_head_input_tensor = &ai.encoder_output_tensor;
-    }
+    const Tensor* lm_head_input_tensor = ai.liveLmHeadInputOrNull();
     if (lm_head_input_tensor && lm_head_input_tensor->data) {
         const auto& live_shape = lm_head_input_tensor->shape.require("RhoDiagnostic lm_head_input_tensor");
         if (!live_shape.is_2d_layout()) {

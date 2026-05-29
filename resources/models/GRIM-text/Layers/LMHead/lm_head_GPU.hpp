@@ -25,6 +25,7 @@
 #include <cstdint>
 
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
+#include "../../Shared/Forward/ModelForwardOutputs.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
 
@@ -34,11 +35,6 @@ struct LMHeadParameterViews {
     const Tensor* weights = nullptr;
     const Tensor* bias = nullptr;
     const Tensor* final_rms_gamma = nullptr;
-};
-
-struct LMHeadForwardResult {
-    Tensor logits;
-    Tensor lm_input_tensor;
 };
 
 // Local experiment toggle only. Keep this LM-head-local until we decide
@@ -151,15 +147,17 @@ public:
     ///                                 while fixed-shape training geometry is validated against config-authored hp_
     /// @param stream                   CUDA stream from the caller's forward payload/request
     /// @param cublas_handle            cuBLAS handle from the caller's forward payload/request
-    /// @return `logits` plus the actual live tensor fed into the LM GEMM when
-    ///         the head materialized a transformed input (RMSNorm / centering /
-    ///         PC1 projection). Callers that need a forward-time diagnostics
-    ///         handle must store that returned tensor themselves; LMHeadLayer
-    ///         must not mutate caller-owned runtime sinks.
-    LMHeadForwardResult forward(const Tensor& input,
-                                const Batching::BatchPayload& payload,
-                                cudaStream_t stream, cublasHandle_t cublas_handle,
-                                const LMHeadParameterViews* parameter_views = nullptr);
+    /// @param forward_outputs          Canonical per-call forward sink. This function
+    ///                                 writes `forward_outputs.lm_head_input_tensor`
+    ///                                 when it materializes a transformed LM input
+    ///                                 and always writes `forward_outputs.logits_tensor`.
+    void forward(
+        const Tensor& input,
+        const Batching::BatchPayload& payload,
+        cudaStream_t stream,
+        cublasHandle_t cublas_handle,
+        Forward::ModelForwardOutputs& forward_outputs,
+        const LMHeadParameterViews* parameter_views = nullptr);
 
 
 

@@ -344,17 +344,30 @@ void EncodingLayer::validateConstructionSnapshot(const char* context) const {
 // its own intermediate Tensors. This was orphaned GPU memory.
 
 //======================================================//
-//  Forward Pass - Autograd Implementation with ForwardIntermediates (Issue #56 Fix)
+//  Forward Pass - Autograd Implementation writing into ModelForwardOutputs
 //======================================================//
 
-Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
-                               cudaStream_t stream, cublasHandle_t cublas_handle,
-                               ForwardIntermediates& intermediates,
-                               uint64_t batch_idx,
-                               bool dropout_enabled,
-                               int layer_idx,
-                               const EncodingLayerParameterViews* parameter_views) {
+void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
+                            cudaStream_t stream, cublasHandle_t cublas_handle,
+                            Forward::ModelForwardOutputs& forward_outputs,
+                            uint64_t batch_idx,
+                            bool dropout_enabled,
+                            int layer_idx,
+                            const EncodingLayerParameterViews* parameter_views) {
     validateReady("EncodingLayer::forward");
+    if (layer_idx < 0) {
+        throw std::runtime_error("EncodingLayer::forward: layer_idx must be >= 0, got " + std::to_string(layer_idx));
+    }
+    const size_t layer_slot = static_cast<size_t>(layer_idx);
+    forward_outputs.validateLayerIndex(layer_slot, "EncodingLayer::forward");
+    Tensor& ln1_out = forward_outputs.ln1_out_per_layer[layer_slot];
+    Tensor& residual1 = forward_outputs.residual1_per_layer[layer_slot];
+    Tensor& ln2_out = forward_outputs.ln2_out_per_layer[layer_slot];
+    Tensor& scaled_proj = forward_outputs.scaled_proj_per_layer[layer_slot];
+    Tensor& scaled_ffn = forward_outputs.scaled_ffn_per_layer[layer_slot];
+    Tensor& proj_out = forward_outputs.proj_out_per_layer[layer_slot];
+    Tensor& ffn_out = forward_outputs.ffn_out_per_layer[layer_slot];
+    Tensor& output = forward_outputs.output_per_layer[layer_slot];
     const auto& hp = hp_;
     const Tensor& rms1_gamma = (parameter_views && parameter_views->rms1_gamma) ? *parameter_views->rms1_gamma : rms1_gamma_;
     const Tensor& rms2_gamma = (parameter_views && parameter_views->rms2_gamma) ? *parameter_views->rms2_gamma : rms2_gamma_;
@@ -432,9 +445,9 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     
     //--------------------------------------------------
     // 1. RMSNorm1: input -> ln1_out
-    // Issue #56: Store in intermediates to keep autograd graph alive
+    // Retained in ModelForwardOutputs.
     //--------------------------------------------------
-    intermediates.ln1_out = autograd::rms_norm(input, rms1_gamma, hp.rms_epsilon, stream);
+    ln1_out = autograd::rms_norm(input, rms1_gamma, hp.rms_epsilon, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 1: RMSNorm1 DONE\n");
     
     //--------------------------------------------------
@@ -450,15 +463,6 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     const HyperParameters::FlashAttentionRuntimeHP flash_attention_hp =
         HyperParameters::flashAttentionRuntimeHP(attention_hp);
     Attention::EncoderSelfAttentionWeights attention_weights{W_qkv, b_qkv, W_o, b_o};
-    Attention::EncoderSelfAttentionIntermediates attention_intermediates{
-        intermediates.qkv_out,
-        intermediates.Q_bhsd,
-        intermediates.K_bhsd,
-        intermediates.V_bhsd,
-        intermediates.attn_out_bhsd,
-        intermediates.attn_out,
-        intermediates.proj_out
-    };
     Attention::EncoderSelfAttentionForwardRequest attention_request{
         payload,
         attention_hp,
@@ -471,10 +475,10 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
         layer_idx
     };
     Attention::encoderSelfAttentionForward(
-        intermediates.ln1_out,
+        ln1_out,
         attention_weights,
-        attention_intermediates,
-        attention_request);
+        attention_request,
+        forward_outputs);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 2: Attention facade DONE\n");
     
     //--------------------------------------------------
@@ -485,25 +489,25 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     if (hp.dropout_rate > 0.0f && dropout_enabled) {
         const uint64_t attn_proj_dropout_seed = dropout_batch_seed * 2654435761ULL + 100 + layer_idx;
         const uint64_t attn_proj_dropout_mask_stream = 0x0001000000000000ULL + static_cast<uint64_t>(layer_idx);
-        intermediates.proj_out = autograd::dropout(intermediates.proj_out, hp.dropout_rate,
-                                                   attn_proj_dropout_seed, stream,
-                                                   attn_proj_dropout_mask_stream);
+        proj_out = autograd::dropout(proj_out, hp.dropout_rate,
+                                     attn_proj_dropout_seed, stream,
+                                     attn_proj_dropout_mask_stream);
     }
     
     //--------------------------------------------------
     // 7. Residual1: input + proj_out -> residual1
-    // Issue #56: Store in intermediates
+    // Issue #56: Store on ModelForwardOutputs
     // Issue #109: Apply LayerScale to proj_out before residual addition
     // Note: Standard pre-norm architecture (Issue #148: Sandwich Norm removed).
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 7: Residual1...\n");
     
     // Issue #109: LayerScale gating for attention sublayer
-    const Tensor* proj_for_residual = &intermediates.proj_out;
+    const Tensor* proj_for_residual = &proj_out;
     if (hp.use_layer_scale) {
         validateLayerScaleGamma(layer_scale1, "layer_scale1_", hp.d_model, "EncodingLayer::forward");
-        intermediates.scaled_proj = autograd::layer_scale(intermediates.proj_out, layer_scale1_for_op, stream);
-        proj_for_residual = &intermediates.scaled_proj;
+        scaled_proj = autograd::layer_scale(proj_out, layer_scale1_for_op, stream);
+        proj_for_residual = &scaled_proj;
     }
     
     // ========================================================================
@@ -521,7 +525,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     //   3. Initial rho(0)=0.21 (vs PyTorch 0.05-0.08) → started halfway to collapse
     //   4. Combined with causal attention prefix averaging → mode collapse by batch 3
     // ========================================================================
-    intermediates.residual1 = autograd::add(input, *proj_for_residual, stream);
+    residual1 = autograd::add(input, *proj_for_residual, stream);
     
     // ========================================================================
     // RESIDUAL CENTERING (Issue #118 / Mode Collapse Fix)
@@ -550,30 +554,30 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
         if (payload.max_seq_len <= 1) {
             throw std::runtime_error("EncodingLayer::forward: center_encoder_residuals requires payload.max_seq_len > 1; single-row column centering would erase the residual stream");
         }
-        intermediates.residual1 = autograd::center_columns_by_causal_prefix_lengths(
-            intermediates.residual1, payload.seq_lengths, payload.batch_size, payload.max_seq_len, stream);
+        residual1 = autograd::center_columns_by_causal_prefix_lengths(
+            residual1, payload.seq_lengths, payload.batch_size, payload.max_seq_len, stream);
     }
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 7: Residual1 (pre-norm, no sandwich) DONE\n");
     
     
     //--------------------------------------------------
     // 8. RMSNorm2: residual1 -> ln2_out
-    // Issue #56: Store in intermediates
+    // Retained in ModelForwardOutputs.
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 8: RMSNorm2...\n");
-    intermediates.ln2_out = autograd::rms_norm(intermediates.residual1, rms2_gamma, hp.rms_epsilon, stream);
+    ln2_out = autograd::rms_norm(residual1, rms2_gamma, hp.rms_epsilon, stream);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 8: RMSNorm2 DONE\n");
     
     //--------------------------------------------------
     // 9. FFN: ln2_out -> ffn_out (already using autograd)
-    // Issue #56: FFN also stores its intermediates in this same ForwardIntermediates
-    // (ffn_gate_out, ffn_silu_out, ffn_linear1_out, ffn_swiglu_out are written by SwiGLU forward)
+    // Retained in ModelForwardOutputs.
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 9: FFN...\n");
-    intermediates.ffn_out = ffn_->forward(intermediates.ln2_out, intermediates,
-                                          stream, cublas_handle,
-                                          dropout_batch_seed, dropout_enabled, layer_idx,
-                                          parameter_views ? &parameter_views->ffn : nullptr);
+    ffn_->forward(ln2_out,
+                  stream, cublas_handle,
+                  forward_outputs,
+                  dropout_batch_seed, dropout_enabled, layer_idx,
+                  parameter_views ? &parameter_views->ffn : nullptr);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 9: FFN DONE\n");
     
     //--------------------------------------------------
@@ -584,9 +588,9 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     if (hp.dropout_rate > 0.0f && dropout_enabled) {
         const uint64_t ffn_dropout_seed = dropout_batch_seed * 2654435761ULL + 200 + layer_idx;
         const uint64_t ffn_dropout_mask_stream = 0x0002000000000000ULL + static_cast<uint64_t>(layer_idx);
-        intermediates.ffn_out = autograd::dropout(intermediates.ffn_out, hp.dropout_rate,
-                                                  ffn_dropout_seed, stream,
-                                                  ffn_dropout_mask_stream);
+        ffn_out = autograd::dropout(ffn_out, hp.dropout_rate,
+                                    ffn_dropout_seed, stream,
+                                    ffn_dropout_mask_stream);
     }
     
     //--------------------------------------------------
@@ -599,11 +603,11 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 10: Residual2...\n");
     
     // Issue #109: LayerScale gating for FFN sublayer
-    const Tensor* ffn_for_residual = &intermediates.ffn_out;
+    const Tensor* ffn_for_residual = &ffn_out;
     if (hp.use_layer_scale) {
         validateLayerScaleGamma(layer_scale2, "layer_scale2_", hp.d_model, "EncodingLayer::forward");
-        intermediates.scaled_ffn = autograd::layer_scale(intermediates.ffn_out, layer_scale2_for_op, stream);
-        ffn_for_residual = &intermediates.scaled_ffn;
+        scaled_ffn = autograd::layer_scale(ffn_out, layer_scale2_for_op, stream);
+        ffn_for_residual = &scaled_ffn;
     }
     
     // ========================================================================
@@ -613,7 +617,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     //
     // No post-residual normalization. Matches standard PyTorch GPT pre-norm.
     // ========================================================================
-    intermediates.output = autograd::add(intermediates.residual1, *ffn_for_residual, stream);
+    output = autograd::add(residual1, *ffn_for_residual, stream);
     
     // Issue #155: Post-FFN centering REMOVED from here — moved to AutogradTraining.cu
     // so it happens AFTER all layer-output modifications (including crossAttentionRead).
@@ -635,7 +639,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // Skipped on non-initial accumulation slots (same weights → duplicate output)
     // ═══════════════════════════════════════════════════════════════════════════
     // Log ALL layers so per-layer ρ trajectory is visible.
-    // NOTE: intermediates.output is the PRE-centering output — the post-layer center_columns
+    // NOTE: output is the PRE-centering output — the post-layer center_columns
     // in AutogradTraining.cu hasn't run yet. Logged ρ values will be slightly higher than
     // what the NEXT layer actually receives as input.
     if (isEquationLoggingEnabled() && !(GRIM::Logging::getGlobalTape() && GRIM::Logging::getGlobalTape()->skipThisPass())) {
@@ -644,7 +648,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
         // Copy layer output to host for analysis
         const int output_size = payload.total_tokens * hp.d_model;
         std::vector<float> h_output(output_size);
-        CUDA_CHECK(cudaMemcpy(h_output.data(), intermediates.output.data,
+        CUDA_CHECK(cudaMemcpy(h_output.data(), output.data,
                               output_size * sizeof(float), cudaMemcpyDeviceToHost));
         
         // Compute row RMS
@@ -655,7 +659,7 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
                 float v = h_output[t * hp.d_model + d];
                 norm_sq += v * v;
             }
-            row_rms[t] = sqrtf(norm_sq / hp.d_model);
+            row_rms[t] = sqrtf(norm_sq / hp.d_model); 
         }
         
         // Sample pairwise cosine similarity
@@ -736,23 +740,9 @@ Tensor EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
         EQ_LOG(GRIM::Logging::getGlobalTape(), GRIM::Logging::LogGroup::Attention, GRIM::Logging::LogPhase::RESIDUAL_POST_ATTN, layer_idx, "LAYER_COSINE_EQUATION", eq.str().c_str());
     }
     
-    // Return a non-owning view of the output
-    // The actual Tensor lives in intermediates and stays alive until backward completes
-    if (!intermediates.output.data || !intermediates.output.grad_fn) {
-        throw std::runtime_error("EncodingLayer::forward: intermediates.output must own data and grad_fn before returning view");
+    if (!output.data) {
+        throw std::runtime_error("EncodingLayer::forward: result.output.data is NULL before return");
     }
-    Tensor result = Tensor::from_ptr(
-        intermediates.output.data,
-        intermediates.output.shape,
-        false,  // doesn't own data - intermediates.output owns it
-        true,    // requires_grad
-        "enc_layer_output"
-    );
-    result.is_leaf = false;
-    result.grad_fn = intermediates.output.grad_fn;
-    result.stream = stream;
-    
-    return result;
 }
 
 } // namespace GRIM

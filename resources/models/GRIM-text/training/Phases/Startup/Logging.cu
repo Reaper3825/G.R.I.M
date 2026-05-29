@@ -30,7 +30,7 @@ void registerDefaultLoggingProfiles() {
 
 } // anonymous namespace
 
-LoggingContext initializeLogging(const ::GRIM::HyperParameters::LanguageModelConfig& config) {
+LoggingContext initializeLogging(const ::GRIM::Config::AiConfigSnapshot& config) {
     registerDefaultLoggingProfiles();
 
     LoggingContext ctx;
@@ -61,7 +61,7 @@ LoggingContext initializeLogging(const ::GRIM::HyperParameters::LanguageModelCon
 
 void setupBatchLogTape(
     LoggingContext& logging,
-    const ::GRIM::HyperParameters::LanguageModelConfig& config) {
+    const ::GRIM::Config::AiConfigSnapshot& config) {
     const auto tape_cfg = ::GRIM::HyperParameters::tapeLogHP(config);
     const auto paths_hp = ::GRIM::HyperParameters::pathsHP(config);
 

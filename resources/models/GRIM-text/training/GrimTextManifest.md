@@ -326,7 +326,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   1. `token_ids = reinterpret_cast<int*>(ts->cached_token_ids_tensor.data)` Rule 20 null check
   2. `emb_weights = ts->tensors_->embedding_weights` Rule 20 null check + shape validation
   3. `embedding_scale = 1.0f` Issue #140: removed √d_model (correct for tied weights + ALiBi/RoPE)
-  4. `emb_output = autograd::embedding(emb_weights, token_ids, total_tokens, stream, 1.0f)`
+  4. `emb_output = autograd::embedding(emb_weights, payload, bindings, stream, 1.0f)`
   5. Learned position embeddings: `use_learned_pos_emb = (positional_encoding == NONE)` → **FALSE** with ALIBI_ROPE → SKIPPED.
   6. Embedding dropout: training-only branch calls `autograd::dropout(emb, 0.15, step*2654435761+500, stream)`; inference skips dropout entirely ✅
   7. ScratchBlock forward operates in-place on `intermediates.embedding_tensor.data` ✅ Issue #90 fixed

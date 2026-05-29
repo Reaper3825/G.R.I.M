@@ -188,7 +188,7 @@ EpochResult runEpoch(
 BatchResult processBatch(
     TrainingContext& ctx,
     TrainingLoopState& state,
-    const GRIM::Batching::BatchPayload& payload,
+    GRIM::Batching::BatchPayload& payload,
     int batch_idx,
     int epoch_idx,
     const BatchAutogradPlan& plan);

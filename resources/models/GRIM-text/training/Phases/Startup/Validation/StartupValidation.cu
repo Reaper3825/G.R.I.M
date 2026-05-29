@@ -30,9 +30,9 @@ void validateStartupOrThrow(const StartupValidationInputs& inputs) {
     require(ctx.memory_snapshot.device >= 0, "memory snapshot not captured");
     require(ctx.memory_snapshot.total_bytes > 0, "memory snapshot total_bytes is zero");
 
-    require(fixed_shape.batch_size == ctx.config.batch_size,
+    require(fixed_shape.batch_size == GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "batch_size"),
             "trainingFixedShapeHP.batch_size does not match config.batch_size");
-    require(fixed_shape.max_seq_len == ctx.config.max_seq_len,
+    require(fixed_shape.max_seq_len == GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "max_seq_len"),
             "trainingFixedShapeHP.max_seq_len does not match config.max_seq_len");
 
     require(ctx.data_info.actual_vocab_size >= static_cast<std::uint32_t>(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET),

@@ -10,7 +10,7 @@
 | GPU delegate system (`Shared/Delegate/Delegate.hpp`) | Zero registered callbacks — Rule 26 |
 | `centering_scratch_tensor` | Live LM-head input tensor is the source of truth inside the forward/autograd boundary |
 | `TrainingState::cached_logits_tensor` | Live logits are observed through `AutogradIntermediates::logits_tensor` inside the active boundary; no durable logits mailbox or result pointer |
-| `TrainingState::cached_encoder_output` | Live LM-head input is observed through `centered_encoder_output` or `encoder_output_tensor`; no durable hidden-state mailbox |
+| `TrainingState::cached_encoder_output` | Live LM-head input is observed through `lm_head_input_tensor` or `encoder_output_tensor`; no durable hidden-state mailbox |
 | `TrainingState::cached_batch_size`, `cached_seq_len`, `cached_valid_tokens` | Phase1 `BatchPayload` owns per-step geometry; TrainingState must not preserve current-batch shadow metadata |
 | `TrainingState::max_cached_batch`, `max_cached_seq_len`, `max_cached_tokens`, `max_logit_tokens` | Deleted shadow capacity state. `HyperparameterGroupings.hpp::trainingFixedShapeHP()` / `LanguageModelConfig` own authored `batch_size`, `max_cached_seq_len`, and token budget; Tensor shapes own allocated capacity |
 | `TrainingState::cached_num_layers`, `ModelAllocationState::model_max_cached_seq_len` | Dead shadow mirrors; layer count belongs to `LanguageModelConfig` / model topology, and sequence capacity belongs to `HyperparameterGroupings.hpp::trainingFixedShapeHP()` / payload or generation paths |

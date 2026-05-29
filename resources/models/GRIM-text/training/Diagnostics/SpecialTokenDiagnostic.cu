@@ -32,7 +32,7 @@ void runSpecialTokenDiagnostic(
     namespace Internal = ::GRIMText::Training::Internal;
     (void)payload;  // payload not consumed in this block — kept in signature for symmetry
     if (shouldSyncDiagnostics(ctx, batch_idx) && ctx.logging.tape && ctx.logging.tape->accepts(GRIM::Logging::LogLevel::Debug)) {
-        const int d_model = ctx.config.d_model;
+        const int d_model = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "d_model");
         const float* weights_ptr = ctx.model->getLmHeadLayer()->weights().data;
         // Issue #150: When tied=no, LM head and embedding are DIFFERENT tensors.
         // Read gradients from the SAME layer as weights (LM head) so rms(W) and

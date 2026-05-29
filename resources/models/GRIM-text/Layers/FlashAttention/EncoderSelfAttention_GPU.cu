@@ -99,10 +99,24 @@ namespace {
 
 namespace GRIM::Attention {
 
-void encoderSelfAttentionForward(const Tensor& norm_input,
-                                 EncoderSelfAttentionWeights weights,
-                                 EncoderSelfAttentionIntermediates intermediates,
-                                 const EncoderSelfAttentionForwardRequest& request) {
+void encoderSelfAttentionForward(
+    const Tensor& norm_input,
+    EncoderSelfAttentionWeights weights,
+    const EncoderSelfAttentionForwardRequest& request,
+    Forward::ModelForwardOutputs& forward_outputs) {
+    if (request.layer_idx < 0) {
+        throw std::runtime_error("encoderSelfAttentionForward: layer_idx must be >= 0, got " +
+                                 std::to_string(request.layer_idx));
+    }
+    const size_t layer_slot = static_cast<size_t>(request.layer_idx);
+    forward_outputs.validateLayerIndex(layer_slot, "encoderSelfAttentionForward");
+    Tensor& qkv_out = forward_outputs.qkv_out_per_layer[layer_slot];
+    Tensor& Q_bhsd = forward_outputs.Q_bhsd_per_layer[layer_slot];
+    Tensor& K_bhsd = forward_outputs.K_bhsd_per_layer[layer_slot];
+    Tensor& V_bhsd = forward_outputs.V_bhsd_per_layer[layer_slot];
+    Tensor& attn_out_bhsd = forward_outputs.attn_out_bhsd_per_layer[layer_slot];
+    Tensor& attn_out = forward_outputs.attn_out_per_layer[layer_slot];
+    Tensor& proj_out = forward_outputs.proj_out_per_layer[layer_slot];
     if (!request.stream) {
         throw std::runtime_error("encoderSelfAttentionForward: stream is NULL");
     }
@@ -152,68 +166,68 @@ void encoderSelfAttentionForward(const Tensor& norm_input,
     if constexpr (kEnableAttentionStepLogs) {
         std::fprintf(stderr, "[EncoderSelfAttention] QKV projection...\n");
     }
-    intermediates.qkv_out = autograd::matmul(norm_input, weights.W_qkv, request.stream,
-                                             norm_input.data, nullptr, true);
+    qkv_out = autograd::matmul(norm_input, weights.W_qkv, request.stream,
+                               norm_input.data, nullptr, true);
     if (qkv_debug > 0) {
-        autograd::checkQKVTensorFinite("AutogradQKV:qkv_out_prebias", intermediates.qkv_out, request.stream);
+        autograd::checkQKVTensorFinite("AutogradQKV:qkv_out_prebias", qkv_out, request.stream);
     }
 
     if (request.hp.use_bias) {
-        intermediates.qkv_out = autograd::broadcast_add(intermediates.qkv_out, weights.b_qkv, request.stream);
+        qkv_out = autograd::broadcast_add(qkv_out, weights.b_qkv, request.stream);
     }
     autograd::logQKVProjectionEquation(
-        norm_input, weights.W_qkv, weights.b_qkv, intermediates.qkv_out,
+        norm_input, weights.W_qkv, weights.b_qkv, qkv_out,
         request.payload, request.hp, request.stream, request.layer_idx);
     if (qkv_debug > 0) {
-        autograd::checkQKVTensorFinite("AutogradQKV:qkv_out", intermediates.qkv_out, request.stream);
+        autograd::checkQKVTensorFinite("AutogradQKV:qkv_out", qkv_out, request.stream);
     }
 
     auto [Q_bhsd_tmp, K_bhsd_tmp, V_bhsd_tmp] = autograd::split_and_reshape_qkv(
-        intermediates.qkv_out,
+        qkv_out,
         request.payload, request.hp,
         request.stream);
-    intermediates.Q_bhsd = std::move(Q_bhsd_tmp);
-    intermediates.K_bhsd = std::move(K_bhsd_tmp);
-    intermediates.V_bhsd = std::move(V_bhsd_tmp);
+    Q_bhsd = std::move(Q_bhsd_tmp);
+    K_bhsd = std::move(K_bhsd_tmp);
+    V_bhsd = std::move(V_bhsd_tmp);
     if (qkv_debug > 0) {
-        autograd::checkQKVTensorFinite("AutogradQKV:Q_bhsd", intermediates.Q_bhsd, request.stream);
-        autograd::checkQKVTensorFinite("AutogradQKV:K_bhsd", intermediates.K_bhsd, request.stream);
-        autograd::checkQKVTensorFinite("AutogradQKV:V_bhsd", intermediates.V_bhsd, request.stream);
+        autograd::checkQKVTensorFinite("AutogradQKV:Q_bhsd", Q_bhsd, request.stream);
+        autograd::checkQKVTensorFinite("AutogradQKV:K_bhsd", K_bhsd, request.stream);
+        autograd::checkQKVTensorFinite("AutogradQKV:V_bhsd", V_bhsd, request.stream);
     }
 
     auto [Q_rot, K_rot] = autograd::rope_rotation(
-        intermediates.Q_bhsd, intermediates.K_bhsd,
+        Q_bhsd, K_bhsd,
         request.pbm.rope_inv_freq,
         request.payload, request.hp,
         request.hp.rotary_dim, request.stream);
-    intermediates.Q_bhsd = std::move(Q_rot);
-    intermediates.K_bhsd = std::move(K_rot);
+    Q_bhsd = std::move(Q_rot);
+    K_bhsd = std::move(K_rot);
     if (qkv_debug > 0) {
-        autograd::checkQKVTensorFinite("AutogradSDPA:Q_rope", intermediates.Q_bhsd, request.stream);
-        autograd::checkQKVTensorFinite("AutogradSDPA:K_rope", intermediates.K_bhsd, request.stream);
-        autograd::checkQKVTensorFinite("AutogradSDPA:V_rope", intermediates.V_bhsd, request.stream);
+        autograd::checkQKVTensorFinite("AutogradSDPA:Q_rope", Q_bhsd, request.stream);
+        autograd::checkQKVTensorFinite("AutogradSDPA:K_rope", K_bhsd, request.stream);
+        autograd::checkQKVTensorFinite("AutogradSDPA:V_rope", V_bhsd, request.stream);
     }
 
     const float attention_dropout_p = request.dropout_enabled ? request.hp.attention_dropout : 0.0f;
     const std::uint64_t dropout_seed = attentionDropoutSeed(request);
-    intermediates.attn_out_bhsd = autograd::scaled_dot_product_attention(
-        intermediates.Q_bhsd, intermediates.K_bhsd, intermediates.V_bhsd,
+    attn_out_bhsd = autograd::scaled_dot_product_attention(
+        Q_bhsd, K_bhsd, V_bhsd,
         request.pbm.alibi_slopes, request.flash_attention, 0.0f, request.stream,
         attention_dropout_p, dropout_seed);
     if (qkv_debug > 0) {
-        autograd::checkQKVTensorFinite("AutogradSDPA:attn_out_bhsd", intermediates.attn_out_bhsd, request.stream);
+        autograd::checkQKVTensorFinite("AutogradSDPA:attn_out_bhsd", attn_out_bhsd, request.stream);
     }
 
-    intermediates.attn_out = autograd::reshape_bhsd_to_flat(
-        intermediates.attn_out_bhsd, request.payload, request.hp, request.stream);
+    attn_out = autograd::reshape_bhsd_to_flat(
+        attn_out_bhsd, request.payload, request.hp, request.stream);
 
-    if (!intermediates.attn_out.data) {
+    if (!attn_out.data) {
         throw std::runtime_error("encoderSelfAttentionForward: attn_out.data is NULL before output projection matmul");
     }
-    intermediates.proj_out = autograd::matmul(intermediates.attn_out, weights.W_o, request.stream,
-                                              intermediates.attn_out.data, nullptr, true);
+    proj_out = autograd::matmul(attn_out, weights.W_o, request.stream,
+                                attn_out.data, nullptr, true);
     if (request.hp.use_bias) {
-        intermediates.proj_out = autograd::broadcast_add(intermediates.proj_out, weights.b_o, request.stream);
+        proj_out = autograd::broadcast_add(proj_out, weights.b_o, request.stream);
     }
 
     if constexpr (kEnableAttentionStepLogs) {

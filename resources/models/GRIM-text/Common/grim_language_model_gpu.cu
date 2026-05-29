@@ -43,38 +43,38 @@ namespace GRIM {
 //======================================================//
 
 GPUGrimEncoder& LanguageModel::getGpuEncoder() {
-    if (!gpu_encoder_) {
+    if (!gpu_model_state_ || !gpu_model_state_->gpu_encoder) {
         throw std::runtime_error("GPU encoder not initialized - complete Startup::assembleGpuModel() first");
     }
-    return *gpu_encoder_;
+    return *gpu_model_state_->gpu_encoder;
 }
 
 const GPUGrimEncoder& LanguageModel::getGpuEncoder() const {
-    if (!gpu_encoder_) {
+    if (!gpu_model_state_ || !gpu_model_state_->gpu_encoder) {
         throw std::runtime_error("GPU encoder not initialized - complete Startup::assembleGpuModel() first");
     }
-    return *gpu_encoder_;
+    return *gpu_model_state_->gpu_encoder;
 }
 
 LanguageModel::MTPHead* LanguageModel::getMtpHead(int k) {
-    if (k < 0 || k >= static_cast<int>(mtp_heads_.size())) {
+    if (!gpu_model_state_ || k < 0 || k >= static_cast<int>(gpu_model_state_->mtp_heads.size())) {
         return nullptr;
     }
-    return &mtp_heads_[k];
+    return &gpu_model_state_->mtp_heads[static_cast<std::size_t>(k)];
 }
 
 const LanguageModel::MTPHead* LanguageModel::getMtpHead(int k) const {
-    if (k < 0 || k >= static_cast<int>(mtp_heads_.size())) {
+    if (!gpu_model_state_ || k < 0 || k >= static_cast<int>(gpu_model_state_->mtp_heads.size())) {
         return nullptr;
     }
-    return &mtp_heads_[k];
+    return &gpu_model_state_->mtp_heads[static_cast<std::size_t>(k)];
 }
 
 //======================================================//
 //  Constructor - moved from header to avoid duplicates
 //======================================================//
 
-LanguageModel::LanguageModel(const HyperParameters::LanguageModelConfig& config)
+LanguageModel::LanguageModel(const Config::AiConfigSnapshot& config)
     : config_(config)
 {
     // Positional-bias device state is initialized by Phase1 startup PBM bootstrap after
@@ -90,7 +90,7 @@ LanguageModel::LanguageModel(const HyperParameters::LanguageModelConfig& config)
     //   5. Startup::assembleGpuModel(*model, weight_init_seed) explicitly called by Phase1
     // This ensures StreamController exists before GPU encoder tries to use it.
 #ifdef USE_CUDA
-    if (!config_.use_gpu) {
+    if (!HyperParameters::snapshotTrainingConfigField<bool>(config_, "use_gpu")) {
         throw std::runtime_error("grim_language_model_gpu.cu requires config.use_gpu=true with CUDA available");
     }
 #endif

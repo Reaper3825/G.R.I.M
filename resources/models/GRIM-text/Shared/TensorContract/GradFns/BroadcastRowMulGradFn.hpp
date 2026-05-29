@@ -8,7 +8,8 @@
 //    grad_x[i, j]  += grad_out[i, j] * scale[i, 0]
 //
 //  Backward holds non-owning cache references to scale/x — both must
-//  outlive backward (guaranteed by ForwardIntermediates / Issue #56).
+//  outlive backward (guaranteed by ModelForwardOutputs-owned per-layer
+//  tensors under Issue #56).
 //
 //  Owns:
 //    - struct BroadcastRowMulGradFn   (declared here)

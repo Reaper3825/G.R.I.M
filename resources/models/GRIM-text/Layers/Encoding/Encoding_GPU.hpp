@@ -31,11 +31,12 @@
 #include <memory>
 
 #include "../grim_layer_gpu.hpp"
+#include "../FlashAttention/EncoderSelfAttention_GPU.hpp"
 #include "../FeedForward/Feed_Forward_GPU.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../Shared/PBM/PositionalBiasMethod.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
-#include "../../Shared/TensorContract/ForwardIntermediates.hpp"
+#include "../../Shared/Forward/ModelForwardOutputs.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
 
 namespace GRIM {
@@ -109,10 +110,10 @@ public:
     //--------------------------------------------------
     const HyperParameters::EncoderLayerConstructionHP& hp() const noexcept { return hp_; }
     
-    //--------------------------------------------------
-    // Forward Pass - Pure Autograd with ForwardIntermediates
-    // backward() handled automatically via output.backward()
-    //--------------------------------------------------
+   //--------------------------------------------------
+   // Forward Pass - Pure Autograd writing retained layer tensors into the sink
+   // backward() handled automatically via output.backward()
+   //--------------------------------------------------
     /**
      * Encoder forward with autograd tracking (Issue #56 Fix)
      * 
@@ -122,28 +123,25 @@ public:
      *   ln2 = RMSNorm(attn_out)
      *   output = FFN(ln2) + attn_out  (residual)
      * 
-     * CRITICAL: Caller MUST provide ForwardIntermediates storage for this layer.
-     * All intermediate tensors are moved to the storage to keep the autograd
-     * graph alive until backward completes. Without this, grad_fn objects are
-     * destroyed when this function returns, causing use-after-free in backward.
+      * All intermediate tensors are written directly into the canonical per-call
+      * forward sink for the active layer slot.
      * 
      * @param input [total_tokens, d_model] - encoder input (from embedding or prev layer)
-    * @param payload Host-side batch geometry and sequence lengths
-    * @param stream CUDA stream from the caller's forward payload/request
-    * @param cublas_handle cuBLAS handle from the caller's forward payload/request
-     * @param intermediates Storage for this layer's intermediate tensors (REQUIRED for autograd)
-    * @param batch_idx Current batch index for deterministic dropout masks
-    * @param dropout_enabled Explicit mode gate for dropout; batch_idx never controls mode
-     * @param layer_idx Layer index within encoder stack (for equation logging and dropout seed)
-     * @return output [total_tokens, d_model] with grad_fn attached
+        * @param payload Host-side batch geometry and sequence lengths
+        * @param stream CUDA stream from the caller's forward payload/request
+        * @param cublas_handle cuBLAS handle from the caller's forward payload/request
+        * @param forward_outputs Canonical per-call forward sink
+        * @param batch_idx Current batch index for deterministic dropout masks
+        * @param dropout_enabled Explicit mode gate for dropout; batch_idx never controls mode
+     * @param layer_idx Layer index within encoder stack (for equation logging, sink slot, and dropout seed)
      */
-    Tensor forward(const Tensor& input, const BatchPayload& payload,
-                         cudaStream_t stream, cublasHandle_t cublas_handle,
-                         ForwardIntermediates& intermediates,
-                         uint64_t batch_idx = 0,
-                bool dropout_enabled = false,
-                         int layer_idx = 0,
-                         const EncodingLayerParameterViews* parameter_views = nullptr);
+        void forward(const Tensor& input, const BatchPayload& payload,
+                        cudaStream_t stream, cublasHandle_t cublas_handle,
+                        Forward::ModelForwardOutputs& forward_outputs,
+                        uint64_t batch_idx = 0,
+                        bool dropout_enabled = false,
+                        int layer_idx = 0,
+                        const EncodingLayerParameterViews* parameter_views = nullptr);
     
     //--------------------------------------------------
     // Weight Management (Pattern B: self-allocated)

@@ -192,10 +192,10 @@ struct TelemetryContext {
  */
 struct TrainingContext {
     // Configuration
-    // Phase1-authored authoritative root config. This is the single model
-    // config handoff to Phase2; training code must not rebuild or route
-    // alternate static model wrappers around it.
-    GRIM::HyperParameters::LanguageModelConfig config;
+    // Phase1-authored authoritative root config snapshot. HyperParameters
+    // finalization writes computed/validated leaves back into document;
+    // consumers slice immutable grouped views from this snapshot.
+    GRIM::Config::AiConfigSnapshot config;
     // Memory snapshot (evidence only; never authors capacity)
     MemorySnapshot memory_snapshot;
     // Post-allocation validation evidence (fails loud on mismatch)
@@ -210,6 +210,9 @@ struct TrainingContext {
     // Contract-checks the model ↔ run_capacity cache agreement once at startup so
     // Phase2's per-batch payload builder never re-reads or re-validates them.
     PayloadBuildInputs payload_build_inputs;
+    // Startup-owned durable GPU model topology. LanguageModel borrows this
+    // state; it is not the owner of encoder/layer/MTP objects.
+    GRIMText::Training::Startup::GpuModelState gpu_model;
 
     //==================================================//
     // Phase1-owned PLANNED BATCHES (PrecomputeBatchPayloads.plan.md)
@@ -222,9 +225,10 @@ struct TrainingContext {
     //      indices, never over sequence membership).
     //   2. Iterates val_payloads in order for validation.
     //
-    // BatchPayload is host-only and immutable after the builder returns
-    // (BatchDeviceBindings is the parallel device-pointer surface produced by
-    // Batching::uploadBatchToDevice at the per-step sync boundary).
+    // BatchPayload host semantics are immutable after the builder returns.
+    // The payload may also carry an explicit BatchDeviceStorage owner; runtime
+    // code still reads device addresses only through BatchDeviceBindings at the
+    // per-step sync boundary.
     //==================================================//
     GRIM::Batching::BatchSchedule fixed_train_schedule;
     std::vector<GRIM::Batching::BatchPayload> train_payloads;
@@ -325,12 +329,12 @@ struct Phase1Result {
 /**
  * @brief Execute Phase 1 - Startup and initialization
  * 
- * @param config Fully loaded training startup config root
+ * @param config Fully loaded and finalized startup config snapshot
  * @return Phase1Result containing either a fully initialized context for Phase 2
  *         or an explicit tokenizer-only completion outcome.
  * @throws std::runtime_error on any initialization failure
  */
-Phase1Result executePhase1(GRIM::HyperParameters::LanguageModelConfig config);
+Phase1Result executePhase1(GRIM::Config::AiConfigSnapshot config);
 
 } // namespace GRIMText::Training
 

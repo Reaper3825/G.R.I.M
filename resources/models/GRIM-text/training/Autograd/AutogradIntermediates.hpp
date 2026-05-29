@@ -39,8 +39,6 @@ struct AutogradIntermediates : public Forward::ModelForwardOutputs {
     // the broader forward+loss+backward window through this derived type.
 
     Tensor loss_tensor;                // Scalar loss driving backward
-    std::vector<Tensor> mtp_logits_tensors;  // MTP head logits (one per k) — kept alive for backward
-    Tensor mtp_input_tensor;           // A1: MTP preprocessed input (RMSNorm only path) — kept alive for backward
     bool exec_op_ce_added = false;                            // true iff an active op-path execution loss was added to loss_tensor
     bool exec_arg_ce_added = false;                           // true iff an active arg-path execution loss was added to loss_tensor
     bool exec_write_ce_added = false;                         // true iff active write selection CE was added to loss_tensor
@@ -70,8 +68,6 @@ struct AutogradIntermediates : public Forward::ModelForwardOutputs {
     void clear() {
         Forward::ModelForwardOutputs::clear();
         loss_tensor = Tensor();
-        mtp_logits_tensors.clear();
-        mtp_input_tensor = Tensor();
         exec_op_ce_added = false;
         exec_arg_ce_added = false;
         exec_write_ce_added = false;

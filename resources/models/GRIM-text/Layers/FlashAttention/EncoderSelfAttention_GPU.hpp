@@ -15,6 +15,7 @@
 #include <cublas_v2.h>
 
 #include "../../Shared/Batching/BatchPayload.hpp"
+#include "../../Shared/Forward/ModelForwardOutputs.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../Shared/PBM/PositionalBiasMethod.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
@@ -26,16 +27,6 @@ struct EncoderSelfAttentionWeights {
     const Tensor& b_qkv;
     const Tensor& W_o;
     const Tensor& b_o;
-};
-
-struct EncoderSelfAttentionIntermediates {
-    Tensor& qkv_out;
-    Tensor& Q_bhsd;
-    Tensor& K_bhsd;
-    Tensor& V_bhsd;
-    Tensor& attn_out_bhsd;
-    Tensor& attn_out;
-    Tensor& proj_out;
 };
 
 struct EncoderSelfAttentionForwardRequest {
@@ -50,9 +41,10 @@ struct EncoderSelfAttentionForwardRequest {
     int layer_idx = 0;
 };
 
-void encoderSelfAttentionForward(const Tensor& norm_input,
-                                 EncoderSelfAttentionWeights weights,
-                                 EncoderSelfAttentionIntermediates intermediates,
-                                 const EncoderSelfAttentionForwardRequest& request);
+void encoderSelfAttentionForward(
+    const Tensor& norm_input,
+    EncoderSelfAttentionWeights weights,
+    const EncoderSelfAttentionForwardRequest& request,
+    Forward::ModelForwardOutputs& forward_outputs);
 
 }  // namespace GRIM::Attention

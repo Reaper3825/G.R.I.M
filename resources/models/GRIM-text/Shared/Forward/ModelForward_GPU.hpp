@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
@@ -35,18 +36,26 @@ class GPUGrimEncoder;
 
 namespace Forward {
 
+struct MTPHeadForwardView {
+    Tensor weight;
+    Tensor bias;
+};
+
 struct ModelForwardGraphPolicy {
     // Caller-authored graph policy. This is deliberately not a training-vs-inference
     // mode enum: orchestration chooses whether this forward call may connect
     // autograd edges to durable parameters and whether graph outputs must be
-    // retained for a later backward owner.
+    // retained for a later backward owner. Optional forward products such as
+    // MTP logits are requested explicitly here rather than inferred from
+    // training-vs-inference identity.
     bool connect_parameter_graph = false;
     bool retain_backward_graph = false;
     bool enable_dropout = false;
+    bool emit_mtp_logits = false;
 };
 
 struct ModelForwardRequest {
-    const HyperParameters::LanguageModelConfig* config = nullptr;
+    const Config::AiConfigSnapshot* config = nullptr;
     GPUGrimEncoder* gpu_encoder = nullptr;
     cublasHandle_t cublas_handle = nullptr;
     cudaStream_t stream = nullptr;
@@ -56,6 +65,7 @@ struct ModelForwardRequest {
     ScratchBlockLayer* scratch_block = nullptr;
     ReasoningHeadLayer* reasoning_head = nullptr;
     ExecutionBlockLayer* execution_block = nullptr;
+    std::vector<MTPHeadForwardView> mtp_heads;
 
     const Batching::BatchPayload* payload = nullptr;
     const Batching::BatchDeviceBindings* bindings = nullptr;

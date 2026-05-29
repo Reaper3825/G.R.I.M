@@ -1,4 +1,5 @@
 #include "execution_block_memory_stream_GPU.hpp"
+#include "../../Shared/Forward/ModelForwardOutputs.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
 
@@ -9,6 +10,9 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 namespace GRIM {
 
 using namespace ExecutionBlockInternal;
+using Forward::ExecutionBlockOutput;
+using Forward::ExecutionBlockStepOutput;
+using Forward::ExecutionRecord;
 
 // Bootstrap slots — last-token-wins semantics for duplicate slot mappings.
 // Multiple tokens may map to the same slot; we use atomicExch on valid_mask
@@ -429,15 +433,15 @@ void ExecutionBlockLayer::bootstrapMemoryFromSlotMap(
     kernelBootstrapSlotEmbeddings<<<V, kBlockSize, smem_bytes, stream>>>(
         M.state_embeds.data, M.key_embeds.data,
         M.values.data, M.valid_mask.data,
-        W_value_to_emb_.data, b_value_to_emb_.data,
-        W_key_proj_.data,
+        W_value_to_emb().data, b_value_to_emb().data,
+        W_key_proj().data,
         V, dm, dk);
     CUDA_CHECK_KERNEL();
 
     const int dt = hp_.d_type;
     kernelBootstrapTypeEmbed<<<V, kBlockSize, 0, stream>>>(
         M.type_embed.data, M.valid_mask.data,
-        type_num_embed_.data, V, dt);
+        type_num_embed().data, V, dt);
     CUDA_CHECK_KERNEL();
 }
 
@@ -447,7 +451,6 @@ void ExecutionBlockLayer::prepareForwardRuntime(
     cudaStream_t stream,
     std::vector<ExecutionMemory>& exec_memories,
     std::vector<ExecutionBlockOutput>& exec_outputs_per_row,
-    std::vector<Tensor>& exec_expected_target_tensors,
     std::vector<std::vector<ExecutionRecord>>& execution_trace_by_row,
     std::vector<Tensor>& trace_state_by_row
 ) const {
@@ -463,9 +466,6 @@ void ExecutionBlockLayer::prepareForwardRuntime(
     exec_outputs_per_row.resize(payload.batch_size);
     execution_trace_by_row.resize(payload.batch_size);
     trace_state_by_row.resize(payload.batch_size);
-    exec_expected_target_tensors.clear();
-    exec_expected_target_tensors.reserve(
-        static_cast<size_t>(payload.batch_size) * static_cast<size_t>(hp_.num_exec_steps));
 
     for (int b = 0; b < payload.batch_size; ++b) {
         execution_trace_by_row[static_cast<size_t>(b)].clear();

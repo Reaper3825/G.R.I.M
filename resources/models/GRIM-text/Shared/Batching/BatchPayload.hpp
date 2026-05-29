@@ -40,6 +40,7 @@ namespace Tokenizer { struct TokenLayout; }
 
 namespace Batching {
 struct BatchAssignment;
+struct BatchDeviceStorage;
 }
 
 namespace Batching {
@@ -99,10 +100,11 @@ struct BatchPayload {
     // NOTE: Device pointers used to live here as `mutable d_token_to_slot_map`
     // and `mutable d_atom_mask`, written by the upload path and read by the
     // forward/loss path. They have moved to `GRIM::Batching::BatchDeviceBindings`
-    // (Shared/Batching/BatchDeviceBindings.hpp). BatchPayload is host-only and
-    // immutable after buildBatchPayload() returns — see the header banner and
-    // the BatchPayload contract section in
-    // .cursor/plans/precomputebatchpayloads_*.plan.md.
+    // (Shared/Batching/BatchDeviceBindings.hpp). The underlying device buffer
+    // ownership is explicit on this payload via `device_storage`; callers may
+    // borrow step-local addresses only through `BatchDeviceBindings`.
+    // Host semantic fields remain immutable after buildBatchPayload() returns.
+    std::shared_ptr<BatchDeviceStorage> device_storage;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // TEACHER EXECUTION STEPS (for structured CE supervision)

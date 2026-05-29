@@ -2,7 +2,7 @@
 
 ## Resolution status
 
-`TrainingState::cached_logits_tensor` and `TrainingState::cached_encoder_output` have been deleted from the production contract. `ModelForwardResult` was deleted as a value handoff; inference prefill, loss, and diagnostics consume `AutogradIntermediates::logits_tensor` plus the live LM-head input tensor before `AutogradIntermediates::clear()` / `AutogradStepScope` teardown.
+`TrainingState::cached_logits_tensor` and `TrainingState::cached_encoder_output` have been deleted from the production contract. `ModelForwardResult` was deleted as a value handoff; inference prefill, loss, and diagnostics consume `AutogradIntermediates::logits_tensor` plus the live LM-head input tensor (`AutogradIntermediates::lm_head_input_tensor` when materialized, otherwise `encoder_output_tensor`) before `AutogradIntermediates::clear()` / `AutogradStepScope` teardown.
 
 The remaining notes below document the anti-pattern that was removed and should not be recreated.
 

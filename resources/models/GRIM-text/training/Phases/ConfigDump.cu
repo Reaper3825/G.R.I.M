@@ -493,4 +493,17 @@ void dumpAllHyperparameters(
     }
 }
 
+void dumpAllHyperparameters(
+    const GRIM::Config::AiConfigSnapshot& snapshot,
+    const GRIM::HyperParameters::DerivedScheduleInfo* derived,
+    const DataStatsSnapshot* data_stats,
+    const ConfigDumpOptions& opts,
+    const ConfigDumpLogFn& log_fn)
+{
+    auto hp = GRIM::HyperParameters::loadLanguageModelConfig(snapshot.document);
+    GRIM::HyperParameters::loadResolvedPathFields(hp, snapshot.document);
+    hp.execution_mode = GRIM::HyperParameters::snapshotExecutionMode(snapshot);
+    dumpAllHyperparameters(hp, derived, data_stats, opts, log_fn);
+}
+
 } } // namespace GRIMText::Training

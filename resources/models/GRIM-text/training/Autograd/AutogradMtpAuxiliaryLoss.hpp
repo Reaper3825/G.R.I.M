@@ -29,19 +29,19 @@ struct MTPDiagnostics;
 namespace Autograd {
 
 /**
- * Add MTP auxiliary losses into the active autograd loss tensor.
+ * Add MTP auxiliary losses into the active autograd loss tensor using
+ * precomputed shared-forward-owned MTP logits.
  *
  * Ownership boundary:
- * - Caller resolves `mtp_input` from the LM-head/autograd representation policy.
- * - This primitive consumes model-owned MTP heads, Phase1-authored payload
- *   semantics, and uploaded BatchDeviceBindings target slices.
- * - It mutates only Category 1 graph state: `loss_tensor` and
- *   `mtp_logits_tensors`, and returns host telemetry in `diagnostics`.
- * - It never reads AutogradContext, TrainingState, or LMHeadLayer fields.
+ * - Caller must have already requested MTP logits from shared forward and kept
+ *   the resulting Category 1 tensors alive through loss assembly.
+ * - This primitive consumes uploaded BatchDeviceBindings target slices,
+ *   appends weighted MTP losses into `loss_tensor`, and returns host
+ *   telemetry in `diagnostics`.
+ * - It MUST NOT create logits or re-run forward math.
  */
 float computeAutogradMtpAuxiliaryLosses(
     LanguageModel& model,
-    Tensor& mtp_input,
     Tensor& loss_tensor,
     std::vector<Tensor>& mtp_logits_tensors,
     MTP::MTPDiagnostics& diagnostics,

@@ -9,6 +9,7 @@
 #include "ExecutionBlockTest.hpp"
 
 #include "../Layers/ExecutionBlock/execution_block_GPU.hpp"
+#include "../Shared/Forward/ModelForwardOutputs.hpp"
 
 #include <cuda_runtime.h>
 
@@ -16,6 +17,7 @@
 #include <vector>
 
 using namespace GRIM;
+using namespace GRIM::Forward;
 using namespace GRIM::Test;
 
 //======================================================//
@@ -66,7 +68,7 @@ bool testBatchedMemoryIsolation(std::string& message) {
 //======================================================//
 
 bool testStepOutputDefaults(std::string& message) {
-    ExecutionBlockStepOutput sout{};
+    GRIM::Forward::ExecutionBlockStepOutput sout{};
 
     EB_ASSERT_TRUE(!sout.p_arg1.data, "p_arg1 should start null");
     EB_ASSERT_TRUE(!sout.p_arg2.data, "p_arg2 should start null");
@@ -84,12 +86,20 @@ bool testStepOutputDefaults(std::string& message) {
     EB_ASSERT_TRUE(!sout.state_after_valid.data,
                    "state_after_valid should start null");
 
-    EB_ASSERT_TRUE(!sout.transition_error_hard.data,
-                   "transition_error_hard should start null");
-    EB_ASSERT_TRUE(!sout.transition_loss.data,
-                   "transition_loss should start null");
-    EB_ASSERT_TRUE(!sout.used_expected_target,
-                   "used_expected_target should default false");
+    EB_ASSERT_TRUE(!sout.arg1_logits_tensor.data,
+                   "arg1_logits_tensor should start null");
+    EB_ASSERT_TRUE(!sout.arg2_logits_tensor.data,
+                   "arg2_logits_tensor should start null");
+    EB_ASSERT_TRUE(!sout.op_logits_tensor.data,
+                   "op_logits_tensor should start null");
+    EB_ASSERT_TRUE(!sout.write_logits_tensor.data,
+                   "write_logits_tensor should start null");
+    EB_ASSERT_TRUE(!sout.v_out_tensor.data,
+                   "v_out_tensor should start null");
+    EB_ASSERT_NEAR(sout.selection_temperature, 0.0f, 1e-6f,
+                   "selection_temperature should default zero");
+    EB_ASSERT_TRUE(!sout.div_was_clamped,
+                   "div_was_clamped should default false");
 
     EB_ASSERT_EQ(sout.record.arg1_slot, -1, "record.arg1_slot default");
     EB_ASSERT_EQ(sout.record.arg2_slot, -1, "record.arg2_slot default");
@@ -117,19 +127,19 @@ bool testExecutionMemoryAllocateShapes(std::string& message) {
     M.allocate(V, ae, dm, dk, dt, stream);
     cudaStreamSynchronize(stream);
 
-    EB_ASSERT_EQ(M.values.shape[0], V, "values rows");
-    EB_ASSERT_EQ(M.values.shape[1], 1, "values cols");
-    EB_ASSERT_EQ(M.atom_embeds.shape[0], V, "atom_embeds rows");
-    EB_ASSERT_EQ(M.atom_embeds.shape[1], ae, "atom_embeds cols");
-    EB_ASSERT_EQ(M.state_embeds.shape[0], V, "state_embeds rows");
-    EB_ASSERT_EQ(M.state_embeds.shape[1], dm, "state_embeds cols");
-    EB_ASSERT_EQ(M.valid_mask.shape[1], V, "valid_mask dim");
-    EB_ASSERT_EQ(M.usage.shape[1], V, "usage dim");
-    EB_ASSERT_EQ(M.key_embeds.shape[0], V, "key_embeds rows");
-    EB_ASSERT_EQ(M.key_embeds.shape[1], dk, "key_embeds cols");
-    EB_ASSERT_EQ(M.type_embed.shape[0], V, "type_embed rows");
-    EB_ASSERT_EQ(M.type_embed.shape[1], dt, "type_embed cols");
-    EB_ASSERT_EQ(M.recent_write_mask.shape[1], V, "recent_write_mask dim");
+    EB_ASSERT_EQ(M.values.shape.as_2d().rows, V, "values rows");
+    EB_ASSERT_EQ(M.values.shape.as_2d().cols, 1, "values cols");
+    EB_ASSERT_EQ(M.atom_embeds.shape.as_2d().rows, V, "atom_embeds rows");
+    EB_ASSERT_EQ(M.atom_embeds.shape.as_2d().cols, ae, "atom_embeds cols");
+    EB_ASSERT_EQ(M.state_embeds.shape.as_2d().rows, V, "state_embeds rows");
+    EB_ASSERT_EQ(M.state_embeds.shape.as_2d().cols, dm, "state_embeds cols");
+    EB_ASSERT_EQ(M.valid_mask.shape.as_2d().cols, V, "valid_mask dim");
+    EB_ASSERT_EQ(M.usage.shape.as_2d().cols, V, "usage dim");
+    EB_ASSERT_EQ(M.key_embeds.shape.as_2d().rows, V, "key_embeds rows");
+    EB_ASSERT_EQ(M.key_embeds.shape.as_2d().cols, dk, "key_embeds cols");
+    EB_ASSERT_EQ(M.type_embed.shape.as_2d().rows, V, "type_embed rows");
+    EB_ASSERT_EQ(M.type_embed.shape.as_2d().cols, dt, "type_embed cols");
+    EB_ASSERT_EQ(M.recent_write_mask.shape.as_2d().cols, V, "recent_write_mask dim");
 
     EB_ASSERT_TRUE(M.values.data != nullptr, "values allocated");
     EB_ASSERT_TRUE(M.atom_embeds.data != nullptr, "atom_embeds allocated");
@@ -266,7 +276,7 @@ bool testExecutionBlockConstructionHPDefaults(std::string& message) {
 //======================================================//
 
 bool testExecutionRecordDefaults(std::string& message) {
-    ExecutionRecord rec{};
+    GRIM::Forward::ExecutionRecord rec{};
 
     EB_ASSERT_EQ(rec.arg1_slot, -1, "arg1_slot default -1");
     EB_ASSERT_EQ(rec.arg2_slot, -1, "arg2_slot default -1");
@@ -283,7 +293,7 @@ bool testExecutionRecordDefaults(std::string& message) {
 //======================================================//
 
 bool testExecStepMetricsDefaults(std::string& message) {
-    ExecStepMetrics m{};
+    GRIM::Forward::ExecStepMetrics m{};
 
     EB_ASSERT_NEAR(m.arg1_entropy, 0.0f, 1e-6f, "arg1_entropy default");
     EB_ASSERT_NEAR(m.arg2_entropy, 0.0f, 1e-6f, "arg2_entropy default");
@@ -373,12 +383,12 @@ bool testBootstrapSlotMapSemantics(std::string& message) {
 //======================================================//
 
 bool testExecutionBlockOutputMultiStep(std::string& message) {
-    ExecutionBlockOutput output;
+    GRIM::Forward::ExecutionBlockOutput output;
 
     EB_ASSERT_EQ(static_cast<int>(output.steps.size()), 0, "steps starts empty");
 
     for (int k = 0; k < 3; ++k) {
-        ExecutionBlockStepOutput s{};
+        GRIM::Forward::ExecutionBlockStepOutput s{};
         s.record.op_id = k;
         output.steps.push_back(std::move(s));
     }

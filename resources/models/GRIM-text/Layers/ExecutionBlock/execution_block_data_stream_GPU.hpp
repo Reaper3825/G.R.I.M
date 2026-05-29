@@ -19,11 +19,9 @@ void executeStepCoordinatorImpl(
 	int step,
 	float temperature,
 	cudaStream_t stream,
-	ExecutionBlockStepOutput* diag_out,
+	Forward::ExecutionBlockStepOutput* diag_out,
 	Tensor& trace_state,
-	const std::vector<ExecutionRecord>& prior_records,
-	const float* expected_target,
-	const TeacherSelectionTargets* selection_targets);
+	const std::vector<Forward::ExecutionRecord>& prior_records);
 }
 
 #endif  // USE_CUDA

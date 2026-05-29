@@ -37,14 +37,14 @@ Historical note: TrainingState-owned `grad_encoder`, `grad_ffn_*`, `grad_attn_*`
 
 ## First forward/backward (autograd intermediates)
 
-Per-layer `ForwardIntermediates` (one per of 12 layers): tensors such as ln1_out, ln2_out, qkv_out, Q, K, V, Q_bhsd, K_bhsd, V_bhsd, attn_out_bhsd, attn_out, proj_out, residual1, ffn_out, output, ffn_gate_out, ffn_silu_out, ffn_linear1_out, ffn_swiglu_out. Shapes [8192, d_model] or [8192, d_ff] or [8192, kv_dim] with d_model=768, d_ff=3072, qkv fused 1280, kv_dim=256.
+Per-layer tensors owned directly by `ModelForwardOutputs` (one retained slot per layer across 12 layers): ln1_out, ln2_out, qkv_out, Q_bhsd, K_bhsd, V_bhsd, attn_out_bhsd, attn_out, proj_out, scaled_proj, residual1, ffn_out, scaled_ffn, output, ffn_gate_out, ffn_silu_out, ffn_linear1_out, ffn_swiglu_out. Shapes [8192, d_model] or [8192, d_ff] or [8192, kv_dim] with d_model=768, d_ff=3072, qkv fused 1280, kv_dim=256.
 
-Approximate per-layer total: 696 MiB. Over 12 layers: 696 × 12 = 8,352 MiB ≈ **8.16 GiB**.
+Approximate per-layer total: 704 MiB. Over 12 layers: 704 × 12 = 8,448 MiB ≈ **8.25 GiB**.
 
 Flash Attention backward workspace (per layer, batch=8, seqlen=1024, n_heads=12, head_dim=64): dq_accum + dsoftmax_sum ≈ **0.67 GiB** (12 layers). ScaledDotProductAttentionGradFn also allocates **dq_bf16, dk_bf16, dv_bf16, dout_bf16** per layer (TensorContract_GPU.cu): 12 × (4 × 8×1024×12×64×2) ≈ **0.87 GiB**.
 
-**First-batch additional (autograd + FA scratch + FA bf16 grads):** ~8.16 + 0.67 + 0.87 ≈ **9.7 GiB**.
-- **Running tally: 1.61 + 9.7 = 11.31 GiB**
+**First-batch additional (autograd + FA scratch + FA bf16 grads):** ~8.25 + 0.67 + 0.87 ≈ **9.79 GiB**.
+- **Running tally: 1.61 + 9.79 = 11.40 GiB**
 
 ---
 
@@ -54,19 +54,19 @@ Flash Attention backward workspace (per layer, batch=8, seqlen=1024, n_heads=12,
 |------|-----|----------------|
 | Params (weights, grads, Adam m, Adam v) | 1.61 | 1.61 |
 | Pre-allocated upload buffers | ~0.00 | 1.61 |
-| First-batch autograd (12-layer intermediates) | 8.16 | 9.77 |
-| First-batch Flash Attention scratch (dq_accum + dsoftmax_sum) | 0.67 | 10.44 |
-| First-batch Flash Attention bf16 grads (dq/dk/dv/dout × 12 layers) | 0.87 | 11.31 |
+| First-batch autograd (12-layer intermediates) | 8.25 | 9.86 |
+| First-batch Flash Attention scratch (dq_accum + dsoftmax_sum) | 0.67 | 10.53 |
+| First-batch Flash Attention bf16 grads (dq/dk/dv/dout × 12 layers) | 0.87 | 11.40 |
 | GRIM-TS (this run: disabled) | 0 | 11.31 |
-| Telemetry (lattice 8×5 + control disabled) | ~0.000004 | 11.31 |
+| Telemetry (lattice 8×5 + control disabled) | ~0.000004 | 11.40 |
 
-**Total accounted for: 11.31 GiB**
+**Total accounted for: 11.40 GiB**
 
 ---
 
 ## Sum vs reported 40 GB
 
-Device total: 40,441 MB (from log: "Memory: 40441 MB"). Our breakdown accounts for **11.31 GiB** of *tracked* allocations (params, upload workspaces, first-batch autograd + FA). So **40,441 MB − 11.31 GiB ≈ 28–29 GiB is unaccounted**: we do not attribute it to any buffer in this doc. Likely sources include CUDA allocator reserved/fragmentation, cuBLAS/cuDNN workspace, and other runtime pools. Until we measure or instrument those, the gap remains unexplained.
+Device total: 40,441 MB (from log: "Memory: 40441 MB"). Our breakdown accounts for **11.40 GiB** of *tracked* allocations (params, upload workspaces, first-batch autograd + FA). So **40,441 MB − 11.40 GiB ≈ 28–29 GiB is unaccounted**: we do not attribute it to any buffer in this doc. Likely sources include CUDA allocator reserved/fragmentation, cuBLAS/cuDNN workspace, and other runtime pools. Until we measure or instrument those, the gap remains unexplained.
 
 ---
 
@@ -125,7 +125,7 @@ LatticeLevelState = TelemetryState (20 float + 2 uint32) + stride (uint32_t) + l
 
 **TelemetryControl** (TelemetryControl_GPU.cu), when initGPU() is called: d_config_ (sizeof(TelemetryControlConfig)), d_state_ 64, d_decision_ 48, d_input_ 32 (TelemetryControl_GPU.hpp static_asserts). Config is one struct of floats/ints/bools; total control is on the order of **~0.5 KiB** if allocated.
 
-**Telemetry total (this run):** lattice 4,064 B; control 0 (disabled). **~4 KiB** GPU. Negligible for the running tally; cumulative stays 11.11 GiB.
+**Telemetry total (this run):** lattice 4,064 B; control 0 (disabled). **~4 KiB** GPU. Negligible for the running tally; cumulative stays 11.40 GiB.
 
 ---
 
@@ -153,7 +153,7 @@ LatticeLevelState = TelemetryState (20 float + 2 uint32) + stride (uint32_t) + l
 | **Guess cache (GRIM-TS)** | `GuessCacheScope::OwnedBuffers` RAII member; released when `ctx.guess_cache_scope.reset()` runs before model teardown. |
 | **Debug grad buffers** | ~TrainingState: `freeDebugGradBuffers()` (assigns Tensor() to release). |
 | **GradNorm scratch** | `std::unique_ptr<GradNormScratch>` member; `GradNormScratch::~GradNormScratch()` releases GPU/pinned buffers. |
-| **Autograd intermediates** (layer_intermediates, embedding_tensor, encoder_layer_outputs, logits_tensor, loss_tensor, etc.) | Cleared after each backward in training loop; at shutdown, **Phase3 releaseResources()** calls `ctx.model->getTrainingState().autograd_intermediates.clear()` before `ctx.model.reset()` so grad_fns and intermediates are released in a controlled order. When ~TrainingState runs, AutogradIntermediates member destructor also clears. |
+| **Autograd intermediates** (`layer_outputs`, `embedding_tensor`, `encoder_layer_outputs`, `logits_tensor`, `loss_tensor`, etc.) | Cleared after each backward in training loop; at shutdown, **Phase3 releaseResources()** calls `ctx.model->getTrainingState().autograd_intermediates.clear()` before `ctx.model.reset()` so grad_fns and intermediates are released in a controlled order. When ~TrainingState runs, AutogradIntermediates member destructor also clears. |
 | **Per-layer grad_fns** (ScaledDotProductAttentionGradFn dq_accum, dsoftmax_sum, dq/dk/dv/dout_bf16, saved_*) | When intermediates are cleared or Tensors destruct, grad_fn refcount drops; ~ScaledDotProductAttentionGradFn calls release_saved() which cudaFrees all 11 buffers. |
 | **Telemetry (lattice, control)** | Owned by TrainingContext (ctx.telemetry); when ctx is destroyed, unique_ptrs destruct; TelemetryLattice_GPU and TelemetryControl_GPU destructors cudaFree their buffers. |
 | **KV/decode BF16/FP32 buffers** | `DeviceAllocation` RAII members/vectors release typed CUDA buffers. |
@@ -185,7 +185,7 @@ Every GPU allocation site that can run during training, with source and size for
 | | dsoftmax_sum | TensorContract_GPU.cu | `round(seq,128)×batch×n_heads×4` |
 | | dq_bf16, dout_bf16 | TensorContract_GPU.cu | `batch×seq×num_heads×head_dim×2` each |
 | | dk_bf16, dv_bf16 | TensorContract_GPU.cu | `batch×seq×num_heads×head_dim×2` each (sized for num_heads) |
-| **ForwardIntermediates** (per layer × 12) | ln1_out, ln2_out, Q, K, V, attn_out, proj_out, residual1, ffn_out, output, attention-output-sized tensors | ForwardIntermediates.hpp / Encoding | `[tokens, d_model]` or `[tokens, kv_dim]` or `[tokens, d_ff]`; see Geometry map |
+| **ModelForwardOutputs per-layer retained tensors** (per layer × 12) | ln1_out, ln2_out, qkv_out, Q_bhsd, K_bhsd, V_bhsd, attn_out_bhsd, attn_out, proj_out, scaled_proj, residual1, ffn_out, scaled_ffn, output, FFN intermediate tensors | ModelForwardOutputs.hpp / Encoding | `[tokens, d_model]` or `[tokens, kv_dim]` or `[tokens, d_ff]`; see Geometry map |
 | | qkv_out | Encoding | `[tokens, d_model + 2×kv_dim]×4` |
 | | Q_bhsd, K_bhsd, V_bhsd, attn_out_bhsd | Encoding | `[batch, heads, seq, head_dim]×4` |
 | | ffn_gate_out, ffn_silu_out, ffn_linear1_out, ffn_swiglu_out | Encoding | `[tokens, d_ff]×4` |
@@ -214,11 +214,10 @@ Symbols: **T** = max_tokens (batch × seq_len), **T_logit** = max_logit_tokens, 
 | cached_token_atom_flags | [1, T] | `T × 4` | 32.8 KiB |
 | sequence_weights_tensor | [B, 1] | `B × 4` | 32 B |
 | class_weights_tensor | [V] | `V × 4` | 2512×4 = 10 KiB |
-| **Per-layer ForwardIntermediates** | | | |
+| **Per-layer tensors on ModelForwardOutputs** | | | |
 | ln1_out, ln2_out | [T, D] | `T × D × 4` | 25.2 MiB each |
 | qkv_out | [T, D + 2×H_kv×d] | `T × (D + 2×H_kv×d) × 4` | 8192×1280×4 = 41.9 MiB |
-| Q, proj_out, residual1, ffn_out, output | [T, D] | `T × D × 4` | 25.2 MiB each |
-| K, V | [T, H_kv×d] | `T × H_kv × d × 4` | 8192×256×4 = 8.4 MiB each |
+| proj_out, scaled_proj, residual1, ffn_out, scaled_ffn, output | [T, D] | `T × D × 4` | 25.2 MiB each |
 | Q_bhsd, attn_out_bhsd | [B, H, S, d] | `B × H × S × d × 4` | 8×12×1024×64×4 = 25.2 MiB each |
 | K_bhsd, V_bhsd | [B, H_kv, S, d] | `B × H_kv × S × d × 4` | 8×4×1024×64×4 = 8.4 MiB each |
 | attn_out | [T, D] | `T × D × 4` | 25.2 MiB |
@@ -231,4 +230,4 @@ Symbols: **T** = max_tokens (batch × seq_len), **T_logit** = max_logit_tokens, 
 | **GradNorm** | d_partial_sums | [max_groups] | `max_groups × 4` | small |
 | **Teacher/Reference logits** | Buffer | [tokens, V] | `tokens × V × 4` (when used) | 82.4 MiB per buffer |
 
-Example totals for this config: startup (params + pre-allocated + small caches) ≈ 2.28 GiB; first forward adds 12 × ForwardIntermediates ≈ 8.16 GiB; first backward adds 12 × (dq_accum + dsoftmax_sum + 4×bf16) ≈ 0.67 + 0.87 ≈ 1.54 GiB FA backward. Total accounted: 2.28 + 9.7 = **11.98 GiB**. The ~29 GB gap vs 40 GB device total remains unaccounted (fragmentation, cuBLAS/cuDNN workspace, or other allocators).
+Example totals for this config: startup (params + pre-allocated + small caches) ≈ 1.61 GiB; first forward adds 12 × retained per-layer `ModelForwardOutputs` slots ≈ 8.25 GiB; first backward adds 12 × (dq_accum + dsoftmax_sum + 4×bf16) ≈ 0.67 + 0.87 ≈ 1.54 GiB FA backward. Total accounted: 1.61 + 9.79 = **11.40 GiB**. The ~29 GB gap vs 40 GB device total remains unaccounted (fragmentation, cuBLAS/cuDNN workspace, or other allocators).

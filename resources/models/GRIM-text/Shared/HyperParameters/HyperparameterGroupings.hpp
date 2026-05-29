@@ -471,6 +471,126 @@ struct MTPDiagnosticHP {
     bool log_ratio_monitor = false;
 };
 
+// Unified model-side config payload for future Phase2 handoff -> Phase2 training.
+// Immutable read view rooted on AiConfigSnapshot (raw document owner) and
+// assembled from training.config authored leaves plus explicit derived formulas.
+struct ModelHP {
+    int training_batch_size = 0;
+    int training_max_seq_len = 0;
+    int training_max_tokens_per_batch = 0;
+
+    int embedding_vocab_size = 0;
+    int embedding_d_model = 0;
+
+    int encoder_num_layers = 0;
+    int encoder_d_model = 0;
+    int encoder_num_heads = 0;
+    int encoder_num_kv_heads = 0;
+    int encoder_head_dim = 0;
+    int encoder_rotary_dim = 0;
+    int encoder_heads_per_kv_group = 0;
+    int encoder_kv_dim = 0;
+    int encoder_qkv_dim = 0;
+    int encoder_d_ff = 0;
+    float encoder_rms_epsilon = 0.0f;
+    bool encoder_causal_mask = false;
+    bool encoder_use_flash_attention = false;
+    int encoder_min_seq_len_for_flash = 0;
+    bool encoder_use_layer_scale = false;
+    float encoder_layer_scale_init = 0.0f;
+    bool encoder_center_encoder_residuals = false;
+    bool encoder_use_bias = false;
+    float encoder_dropout_rate = 0.0f;
+    float encoder_attention_dropout = 0.0f;
+    bool encoder_qk_norm_enabled = false;
+    float encoder_residual_projection_init_gain = 0.0f;
+    bool encoder_is_gqa = false;
+    bool encoder_freeze_learned_rms_gammas = false;
+
+    int lm_head_d_model = 0;
+    int lm_head_vocab_size = 0;
+    int lm_head_training_batch_size = 0;
+    int lm_head_training_rows_per_sequence = 0;
+    bool lm_head_use_bias = false;
+    bool lm_head_tie_embeddings = false;
+    bool lm_head_center_hidden_states = false;
+    bool lm_head_project_out_pc1 = false;
+    int lm_head_pc1_power_iters = 0;
+    bool lm_head_center_logits = false;
+    bool lm_head_freeze_learned_rms_gammas = false;
+    float lm_head_rms_epsilon = 0.0f;
+
+    bool scratch_block_enabled = false;
+    int scratch_block_d_model = 0;
+    int scratch_block_max_atoms = 0;
+    int scratch_block_atom_embedding_dim = 0;
+    int scratch_block_atom_token_start = ATOM_TOKEN_START;
+    int scratch_block_atom_token_end = ATOM_TOKEN_END;
+    float scratch_block_atom_scale = 0.0f;
+
+    bool reasoning_head_enabled = false;
+    int reasoning_head_d_model = 0;
+    int reasoning_head_atom_embedding_dim = 0;
+    int reasoning_head_num_ops = 0;
+
+    bool execution_block_enabled = false;
+    int execution_block_layer = -1;
+    int execution_block_d_model = 0;
+    int execution_block_atom_embedding_dim = 0;
+    int execution_block_num_ops = 0;
+    int execution_block_num_slots = 0;
+    int execution_block_num_scratch_slots = 0;
+    int execution_block_num_exec_steps = 0;
+    int execution_block_value_decode_input_dim = 0;
+    int execution_block_value_decode_hidden_dim = 0;
+    int execution_block_d_key = 0;
+    int execution_block_d_type = 0;
+    int execution_block_cross_attn_head_dim = 0;
+    int execution_block_cross_attn_topk = 0;
+    float execution_block_usage_decay = 0.0f;
+    float execution_block_inject_gate_temp = 0.0f;
+    int execution_block_result_slot_mode = 0;
+    int execution_block_result_slot_index = 0;
+    bool execution_block_debug_mode = false;
+    float execution_block_entropy_collapse_threshold = 0.0f;
+    float execution_block_write_collapse_threshold = 0.0f;
+    float execution_block_magnitude_limit = 0.0f;
+    float execution_block_diversity_kappa = 0.0f;
+    float execution_block_temp_start = 0.0f;
+    float execution_block_temp_end = 0.0f;
+    int execution_block_temp_schedule = 0;
+    float execution_block_entropy_weight = 0.0f;
+    float execution_block_transition_hard_threshold = 0.0f;
+    int execution_block_gate_warmup_steps = 0;
+    float execution_block_causal_w1_transition = 0.0f;
+    float execution_block_div_invalid_penalty_weight = 0.0f;
+    float execution_block_div_magnitude_penalty_weight = 0.0f;
+    float execution_block_arg_reinforce_weight = 0.0f;
+    float execution_block_arg_reinforce_baseline_decay = 0.0f;
+    float execution_block_entropy_aux_weight = 0.0f;
+    float execution_block_structured_ce_weight = 0.0f;
+
+    bool decode_time_selector_enabled = false;
+    int decode_time_selector_d_model = 0;
+    int decode_time_selector_d_selector = 0;
+    int decode_time_selector_d_slot_features = 0;
+    int decode_time_selector_num_slots = 0;
+    int decode_time_selector_scratch_slots = 0;
+    float decode_time_selector_selection_margin = 0.0f;
+    float decode_time_selector_supervision_weight = 0.0f;
+
+    bool mtp_enabled = false;
+    int mtp_k = 0;
+    int mtp_vocab_size = 0;
+    int mtp_d_model = 0;
+    float mtp_alpha = 0.0f;
+    int mtp_alpha_warmup_steps = 0;
+
+    PositionalEncodingType positional_encoding = PositionalEncodingType::UNSPECIFIED;
+    bool scratch_block_execution_first_type_only = false;
+    bool structured_ce_enabled = false;
+};
+
 inline TrainingFixedShapeHP trainingFixedShapeHP(
     const LanguageModelConfig& config)
 {
@@ -567,6 +687,18 @@ inline LearningRateScheduleInputs learningRateScheduleInputs(
     inputs.warmup_steps = hp.warmup_steps;
     inputs.cosine_decay_enabled = hp.cosine_decay_enabled;
     inputs.cosine_warm_restarts = hp.cosine_warm_restarts;
+    return inputs;
+}
+
+inline LearningRateScheduleInputs learningRateScheduleInputs(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    LearningRateScheduleInputs inputs;
+    inputs.learning_rate = snapshotTrainingConfigField<float>(snapshot, "learning_rate");
+    inputs.cosine_decay_min_lr = snapshotTrainingConfigField<float>(snapshot, "cosine_decay_min_lr");
+    inputs.warmup_steps = snapshotTrainingConfigField<int>(snapshot, "warmup_steps");
+    inputs.cosine_decay_enabled = snapshotTrainingConfigField<bool>(snapshot, "cosine_decay_enabled");
+    inputs.cosine_warm_restarts = snapshotTrainingConfigField<bool>(snapshot, "cosine_warm_restarts");
     return inputs;
 }
 
@@ -796,6 +928,32 @@ inline PBMConstructionHP pbmConstructionHP(
     return view;
 }
 
+inline PBMConstructionHP pbmConstructionHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    PBMConstructionHP view;
+    view.num_heads = snapshotTrainingConfigField<int>(snapshot, "num_heads");
+    view.num_kv_heads = snapshotTrainingConfigField<int>(snapshot, "num_kv_heads");
+    view.head_dim = snapshotTrainingConfigField<int>(snapshot, "head_dim");
+    view.rotary_dim = snapshotTrainingConfigField<int>(snapshot, "rotary_dim");
+    view.max_seq_len = snapshotTrainingConfigField<int>(snapshot, "max_seq_len");
+    view.rope_base_seq_len = snapshotTrainingConfigField<int>(snapshot, "rope_base_seq_len");
+    view.alibi_min_locality_distance = snapshotTrainingConfigField<int>(snapshot, "alibi_min_locality_distance");
+    view.alibi_slope_exponent = snapshotTrainingConfigField<float>(snapshot, "alibi_slope_exponent");
+    view.alibi_max_bias = snapshotTrainingConfigField<float>(snapshot, "alibi_max_bias");
+    view.rope_theta = snapshotTrainingConfigField<float>(snapshot, "rope_theta");
+    view.rope_scaling = snapshotTrainingConfigField<float>(snapshot, "rope_scaling");
+    const auto alibi_slopes = snapshotTrainingConfigField<std::vector<float>>(snapshot, "pbm_alibi_slopes");
+    const auto rope_inv_freq = snapshotTrainingConfigField<std::vector<float>>(snapshot, "pbm_rope_inv_freq");
+    static thread_local std::vector<float> alibi_storage;
+    static thread_local std::vector<float> rope_storage;
+    alibi_storage = alibi_slopes;
+    rope_storage = rope_inv_freq;
+    view.alibi_slopes = immutableArrayView(alibi_storage);
+    view.rope_inv_freq = immutableArrayView(rope_storage);
+    return view;
+}
+
 inline EncoderLayerConstructionHP encoderLayerConstructionHP(
     const LanguageModelConfig& cfg)
 {
@@ -1013,6 +1171,672 @@ inline MTPDiagnosticHP mtpDiagnosticHP(
     return view;
 }
 
+inline TrainingFixedShapeHP trainingFixedShapeHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    TrainingFixedShapeHP view;
+    view.batch_size = snapshotEffectiveBatchSize(snapshot, "trainingFixedShapeHP(snapshot)");
+    view.max_seq_len = snapshotEffectiveMaxSeqLen(snapshot, "trainingFixedShapeHP(snapshot)");
+    view.max_tokens_per_batch = computeMaxTokensPerBatch(
+        view.batch_size,
+        view.max_seq_len,
+        "trainingFixedShapeHP(snapshot)");
+    return view;
+}
+
+inline TrainingStateWorkspaceHP trainingStateWorkspaceHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    const auto fixed_shape = trainingFixedShapeHP(snapshot);
+
+    TrainingStateWorkspaceHP view;
+    view.batch_size = fixed_shape.batch_size;
+    view.max_tokens_per_batch = fixed_shape.max_tokens_per_batch;
+    view.mtp_enabled = snapshotTrainingConfigField<bool>(snapshot, "mtp_enabled");
+    view.mtp_k = snapshotTrainingConfigField<int>(snapshot, "mtp_k");
+    return view;
+}
+
+inline DataLoadingHP dataLoadingHP(const GRIM::Config::AiConfigSnapshot& snapshot) {
+    const auto fixed_shape = trainingFixedShapeHP(snapshot);
+
+    DataLoadingHP view;
+    view.min_seq_valid_tokens = fixed_shape.max_seq_len / 4;
+    view.sliding_window_stride = snapshotTrainingConfigField<int>(snapshot, "sliding_window_stride");
+    return view;
+}
+
+inline PathsHP pathsHP(const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    PathsHP view;
+    view.data_path = resolveMappedPath(snapshotTrainingConfigField<std::string>(snapshot, "grim_text_training_data"));
+    view.vocab_path = resolveMappedPath(snapshotTrainingConfigField<std::string>(snapshot, "grim_text_vocab"));
+    view.output_model_path = resolveMappedPath(snapshotTrainingConfigField<std::string>(snapshot, "grim_text_model"));
+    view.checkpoint_dir = resolveMappedPath(snapshotTrainingConfigField<std::string>(snapshot, "grim_text_checkpoints"));
+    view.log_dir = resolveMappedPath(snapshotTrainingConfigField<std::string>(snapshot, "grim_text_logs"));
+    view.status_path = resolveMappedPath(snapshotTrainingConfigField<std::string>(snapshot, "grim_text_training_status"));
+    return view;
+}
+
+inline CheckpointLoadHP checkpointLoadHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot,
+    const std::string& checkpoint_path,
+    ModelExecutionMode execution_mode)
+{
+    CheckpointLoadHP view;
+    view.checkpoint_dir = pathsHP(snapshot).checkpoint_dir;
+    view.checkpoint_path = checkpoint_path;
+    view.execution_mode = execution_mode;
+    return view;
+}
+
+inline TokenizerHP tokenizerHP(const GRIM::Config::AiConfigSnapshot& snapshot) {
+    const auto paths = pathsHP(snapshot);
+
+    TokenizerHP view;
+    view.data_path = paths.data_path;
+    view.vocab_path = paths.vocab_path;
+    view.target_vocab_size = snapshotTokenizerTargetVocabSize(snapshot);
+    view.character_coverage = snapshotTrainingConfigField<float>(snapshot, "tokenizer_character_coverage");
+    view.min_cleaned_text_length = snapshotTrainingConfigField<int>(snapshot, "tokenizer_min_cleaned_text_length");
+    view.min_subword_freq = snapshotTrainingConfigField<int>(snapshot, "tokenizer_min_subword_freq");
+    view.prune_during_mining = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_prune_during_mining");
+    view.enable_parallel_subword_mining = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_enable_parallel_subword_mining");
+    view.subword_mining_workers = snapshotTrainingConfigField<int>(snapshot, "tokenizer_subword_mining_workers");
+    view.subword_mining_max_bytes = snapshotTrainingConfigField<std::size_t>(snapshot, "tokenizer_subword_mining_max_bytes");
+    view.enable_scratch_block_reasoning = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_enable_scratch_block_reasoning");
+    view.detect_numbers = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_detect_numbers");
+    view.enable_byte_fallback = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_enable_byte_fallback");
+    view.add_bos = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_add_bos");
+    view.add_eos = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_add_eos");
+    view.force_rebuild_vocab = snapshotTrainingConfigField<bool>(snapshot, "force_rebuild_vocab");
+    view.save_text_vocab = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_save_text_vocab");
+    view.vocab_score_multiplier = snapshotTrainingConfigField<float>(snapshot, "tokenizer_vocab_score_multiplier");
+    view.current_curriculum = snapshotTrainingConfigField<std::string>(snapshot, "current_curriculum");
+    view.current_model_training = snapshotTrainingConfigField<std::string>(snapshot, "current_model_training");
+    view.execution_block_num_steps = snapshotTrainingConfigField<int>(snapshot, "execution_block_num_steps");
+    return view;
+}
+
+inline TokenizerSubprocessHP tokenizerSubprocessHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    TokenizerSubprocessHP view;
+    view.tokenizer = tokenizerHP(snapshot);
+    view.only_mode = snapshotTrainingConfigField<bool>(snapshot, "subprocess_tokenizer_only_mode");
+    return view;
+}
+
+inline TrainingSeedHP trainingSeedHP(const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    TrainingSeedHP view;
+    view.seed = snapshotTrainingConfigField<int64_t>(snapshot, "seed");
+    return view;
+}
+
+inline TapeLogHP tapeLogHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    TapeLogHP view;
+    view.default_level = snapshotTrainingConfigField<std::string>(snapshot, "logging_default_level");
+    view.equation_csv_enabled = snapshotTrainingConfigField<bool>(snapshot, "logging_equation_csv_enabled");
+    view.stderr_enabled = snapshotTrainingConfigField<bool>(snapshot, "logging_stderr_enabled");
+    view.initial_capacity = snapshotTrainingConfigField<std::size_t>(snapshot, "logging_initial_capacity");
+    view.group_overrides = snapshotTrainingConfigField<std::map<std::string, std::string>>(snapshot, "logging_group_overrides");
+    return view;
+}
+
+inline LogRecorderHP logRecorderHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    LogRecorderHP view;
+    view.enabled = snapshotTrainingConfigField<bool>(snapshot, "log_recorder_enabled");
+    view.default_level = snapshotTrainingConfigField<std::string>(snapshot, "log_recorder_default_level");
+    view.modules = snapshotTrainingConfigField<std::map<std::string, std::string>>(snapshot, "log_recorder_modules");
+    view.layers.embedding = snapshotTrainingConfigField<bool>(snapshot, "log_recorder_layer_embedding");
+    view.layers.rms_norm = snapshotTrainingConfigField<bool>(snapshot, "log_recorder_layer_rms_norm");
+    view.layers.attention = snapshotTrainingConfigField<bool>(snapshot, "log_recorder_layer_attention");
+    view.layers.feed_forward = snapshotTrainingConfigField<bool>(snapshot, "log_recorder_layer_feed_forward");
+    view.layers.residual = snapshotTrainingConfigField<bool>(snapshot, "log_recorder_layer_residual");
+    view.layers.encoding = snapshotTrainingConfigField<bool>(snapshot, "log_recorder_layer_encoding");
+    view.layers.serialization = snapshotTrainingConfigField<bool>(snapshot, "log_recorder_layer_serialization");
+    view.layers.execution_block = snapshotTrainingConfigField<bool>(snapshot, "log_recorder_layer_execution_block");
+    return view;
+}
+
+inline OptimizerUpdateHP optimizerUpdateHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    OptimizerUpdateHP view;
+    view.kind = snapshotTrainingConfigField<OptimizerKind>(snapshot, "optimizer_kind");
+    view.weight_decay = snapshotTrainingConfigField<float>(snapshot, "weight_decay");
+    view.beta1 = snapshotTrainingConfigField<float>(snapshot, "optimizer_beta1");
+    view.beta2 = snapshotTrainingConfigField<float>(snapshot, "optimizer_beta2");
+    view.epsilon = snapshotTrainingConfigField<float>(snapshot, "optimizer_epsilon");
+    if (snapshotTrainingConfigField<bool>(snapshot, "embedding_freeze_enabled")) {
+        view.embedding_freeze_after_step = snapshotTrainingConfigField<int>(snapshot, "embedding_freeze_after_step");
+    } else {
+        view.embedding_freeze_after_step = -1;
+    }
+    return view;
+}
+
+inline GradientClippingHP gradientClippingHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    const auto configured_clip_norm = snapshotEffectiveGradClipNorm(snapshot);
+
+    GradientClippingHP view;
+    view.configured_clip_norm = configured_clip_norm;
+    view.enabled = configured_clip_norm > 0.0f;
+    view.effective_per_token_limit = std::max(configured_clip_norm, EPSILON_GRADIENT_CLIP);
+    return view;
+}
+
+inline LossConfigHP lossConfigHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    LossConfigHP view;
+    view.focal_enabled = snapshotTrainingConfigField<bool>(snapshot, "loss_focal_enabled");
+    view.focal_alpha = snapshotTrainingConfigField<float>(snapshot, "loss_focal_alpha");
+    view.focal_gamma = snapshotTrainingConfigField<float>(snapshot, "loss_focal_gamma");
+    view.smoothing_enabled = snapshotTrainingConfigField<bool>(snapshot, "loss_label_smoothing_enabled");
+    view.smoothing_epsilon = snapshotTrainingConfigField<float>(snapshot, "loss_label_smoothing_epsilon");
+    view.entropy_reg_enabled = snapshotTrainingConfigField<bool>(snapshot, "loss_entropy_reg_enabled");
+    view.entropy_reg_lambda = snapshotTrainingConfigField<float>(snapshot, "loss_entropy_reg_lambda");
+    view.class_balanced_enabled = snapshotTrainingConfigField<bool>(snapshot, "loss_class_balanced_enabled");
+    view.class_balanced_beta = snapshotTrainingConfigField<float>(snapshot, "loss_class_balanced_beta");
+    return view;
+}
+
+inline AutoStopHP autoStopHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    AutoStopHP view;
+    view.enabled = snapshotTrainingConfigField<bool>(snapshot, "auto_stop_enabled");
+    view.plateau_patience = snapshotTrainingConfigField<int>(snapshot, "auto_stop_plateau_patience");
+    view.plateau_min_delta = snapshotTrainingConfigField<float>(snapshot, "auto_stop_plateau_min_delta");
+    view.high_loss_threshold = snapshotTrainingConfigField<float>(snapshot, "auto_stop_high_loss_threshold");
+    view.high_loss_patience = snapshotTrainingConfigField<int>(snapshot, "auto_stop_high_loss_patience");
+    return view;
+}
+
+inline TrainingScheduleHP trainingScheduleHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    TrainingScheduleHP view;
+    view.epochs = snapshotTrainingConfigField<int>(snapshot, "epochs");
+    view.gradient_accumulation_steps = snapshotTrainingConfigField<int>(snapshot, "gradient_accumulation_steps");
+    view.single_batch_overfit_enabled = snapshotTrainingConfigField<bool>(snapshot, "single_batch_overfit_enabled");
+    view.single_batch_overfit_max_steps = snapshotTrainingConfigField<int>(snapshot, "single_batch_overfit_max_steps");
+    view.shuffle_train_enabled = snapshotTrainingConfigField<bool>(snapshot, "shuffle_train_enabled");
+    view.shuffle_train_epochs = snapshotTrainingConfigField<int>(snapshot, "shuffle_train_epochs");
+    return view;
+}
+
+inline SoftRestartHP softRestartHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    SoftRestartHP view;
+    view.enabled = snapshotTrainingConfigField<bool>(snapshot, "soft_restart_enabled");
+    view.loss_increase_threshold = snapshotTrainingConfigField<float>(snapshot, "soft_restart_loss_increase_threshold");
+    view.max_step_window = snapshotTrainingConfigField<int>(snapshot, "soft_restart_max_step_window");
+    view.cooldown_steps = snapshotTrainingConfigField<int>(snapshot, "soft_restart_cooldown_steps");
+    return view;
+}
+
+inline TrainingRuntimeControlHP trainingRuntimeControlHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    TrainingRuntimeControlHP view;
+    view.log_interval = snapshotTrainingConfigField<int>(snapshot, "log_interval");
+    view.atom_stats_interval = snapshotTrainingConfigField<int>(snapshot, "atom_stats_interval");
+    view.atom_stats_max_seqs = snapshotTrainingConfigField<int>(snapshot, "atom_stats_max_seqs");
+    view.validation_interval = snapshotTrainingConfigField<int>(snapshot, "validation_interval");
+    view.checkpoint_interval = snapshotTrainingConfigField<int>(snapshot, "checkpoint_interval");
+    view.logit_update_trace_enabled = snapshotTrainingConfigField<bool>(snapshot, "logit_update_trace_enabled");
+    view.logit_update_trace_interval = snapshotTrainingConfigField<int>(snapshot, "logit_update_trace_interval");
+    return view;
+}
+
+inline TelemetryControlHP telemetryControlHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    TelemetryControlHP view;
+    view.enabled = snapshotTrainingConfigField<bool>(snapshot, "telemetry_control_enabled");
+    view.spike_mild_threshold = snapshotTrainingConfigField<float>(snapshot, "telemetry_spike_mild_threshold");
+    view.spike_moderate_threshold = snapshotTrainingConfigField<float>(snapshot, "telemetry_spike_moderate_threshold");
+    view.spike_severe_threshold = snapshotTrainingConfigField<float>(snapshot, "telemetry_spike_severe_threshold");
+    view.moderate_grad_scale = snapshotTrainingConfigField<float>(snapshot, "telemetry_moderate_grad_scale");
+    view.moderate_cooldown_extension = snapshotTrainingConfigField<int>(snapshot, "telemetry_moderate_cooldown_extension");
+    view.min_grad_for_nonzero_loss = snapshotTrainingConfigField<float>(snapshot, "telemetry_min_grad_for_nonzero_loss");
+    view.loss_threshold_for_grad_check = snapshotTrainingConfigField<float>(snapshot, "telemetry_loss_threshold_for_grad_check");
+    view.max_consecutive_zero_grad_steps = snapshotTrainingConfigField<int>(snapshot, "telemetry_max_consecutive_zero_grad_steps");
+    view.seq_len_regime_change_threshold = snapshotTrainingConfigField<float>(snapshot, "telemetry_seq_len_regime_change_threshold");
+    view.regime_change_suppression_steps = snapshotTrainingConfigField<int>(snapshot, "telemetry_regime_change_suppression_steps");
+    view.volatility_damping_threshold = snapshotTrainingConfigField<float>(snapshot, "telemetry_volatility_damping_threshold");
+    view.max_volatility_damping = snapshotTrainingConfigField<float>(snapshot, "telemetry_max_volatility_damping");
+    view.gradient_decay_threshold = snapshotTrainingConfigField<float>(snapshot, "telemetry_gradient_decay_threshold");
+    view.max_decay_boost = snapshotTrainingConfigField<float>(snapshot, "telemetry_max_decay_boost");
+    view.progress_boost_threshold = snapshotTrainingConfigField<float>(snapshot, "telemetry_progress_boost_threshold");
+    view.max_progress_boost = snapshotTrainingConfigField<float>(snapshot, "telemetry_max_progress_boost");
+    view.outlier_frequency_trigger = snapshotTrainingConfigField<float>(snapshot, "telemetry_outlier_frequency_trigger");
+    view.outlier_persistence_trigger = snapshotTrainingConfigField<float>(snapshot, "telemetry_outlier_persistence_trigger");
+    view.anchor_drift_sigma_multiplier = snapshotTrainingConfigField<float>(snapshot, "telemetry_anchor_drift_sigma_multiplier");
+    view.soft_restart_cooldown_steps = snapshotTrainingConfigField<int>(snapshot, "telemetry_soft_restart_cooldown_steps");
+    view.warmup_steps = 0;
+    view.baseline_stabilization_steps = snapshotTrainingConfigField<int>(snapshot, "telemetry_baseline_stabilization_steps");
+    view.verbose_logging = snapshotTrainingConfigField<bool>(snapshot, "telemetry_verbose_logging");
+    view.fail_loud_on_accumulation_bug = snapshotTrainingConfigField<bool>(snapshot, "telemetry_fail_loud_on_accumulation_bug");
+    view.plateau_noise_enabled = snapshotTrainingConfigField<bool>(snapshot, "telemetry_plateau_noise_enabled");
+    view.plateau_noise_patience = snapshotTrainingConfigField<int>(snapshot, "telemetry_plateau_noise_patience");
+    view.plateau_noise_variance_threshold = snapshotTrainingConfigField<float>(snapshot, "telemetry_plateau_noise_variance_threshold");
+    view.plateau_noise_std = snapshotTrainingConfigField<float>(snapshot, "telemetry_plateau_noise_std");
+    view.plateau_noise_proportional = snapshotTrainingConfigField<bool>(snapshot, "telemetry_plateau_noise_proportional");
+    view.plateau_noise_cooldown = snapshotTrainingConfigField<int>(snapshot, "telemetry_plateau_noise_cooldown");
+    view.plateau_noise_max_per_epoch = snapshotTrainingConfigField<int>(snapshot, "telemetry_plateau_noise_max_per_epoch");
+    return view;
+}
+
+inline TelemetryLatticeHP telemetryLatticeHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    TelemetryLatticeHP view;
+    view.num_levels = snapshotTrainingConfigField<int>(snapshot, "telemetry_lattice_num_levels");
+    view.num_streams = snapshotTrainingConfigField<int>(snapshot, "telemetry_lattice_num_streams");
+    view.beta_mu = snapshotTrainingConfigField<float>(snapshot, "telemetry_lattice_beta_mu");
+    view.beta_a = snapshotTrainingConfigField<float>(snapshot, "telemetry_lattice_beta_a");
+    view.beta_delta = snapshotTrainingConfigField<float>(snapshot, "telemetry_lattice_beta_delta");
+    view.beta_r = snapshotTrainingConfigField<float>(snapshot, "telemetry_lattice_beta_r");
+    view.beta_run = snapshotTrainingConfigField<float>(snapshot, "telemetry_lattice_beta_run");
+    view.beta_v = snapshotTrainingConfigField<float>(snapshot, "telemetry_lattice_beta_v");
+    view.k_out0 = snapshotTrainingConfigField<float>(snapshot, "telemetry_lattice_k_out0");
+    view.alpha_v = snapshotTrainingConfigField<float>(snapshot, "telemetry_lattice_alpha_v");
+    view.epsilon = snapshotTrainingConfigField<float>(snapshot, "telemetry_lattice_epsilon");
+    view.strict_mode = snapshotTrainingConfigField<bool>(snapshot, "telemetry_lattice_strict_mode");
+    return view;
+}
+
+inline StabilityOverrideHP stabilityOverrideHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    StabilityOverrideHP view;
+    view.enabled = snapshotTrainingConfigField<bool>(snapshot, "stability_overrides_enabled");
+    view.batch_size = snapshotTrainingConfigField<int>(snapshot, "stability_override_batch_size");
+    view.max_seq_len = snapshotTrainingConfigField<int>(snapshot, "stability_override_max_seq_len");
+    view.clip_per_token = snapshotTrainingConfigField<float>(snapshot, "stability_override_clip_per_token");
+    return view;
+}
+
+inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    const auto& cfg = snapshotTrainingConfig(snapshot);
+    const auto requireInt = [&](const char* name) -> int {
+        return cfg.at(name).get<int>();
+    };
+    const auto requireFloat = [&](const char* name) -> float {
+        return cfg.at(name).get<float>();
+    };
+    const auto requireBool = [&](const char* name) -> bool {
+        return cfg.at(name).get<bool>();
+    };
+
+    const int batch_size = snapshotEffectiveBatchSize(snapshot, "modelHP(snapshot)");
+    const int max_seq_len = snapshotEffectiveMaxSeqLen(snapshot, "modelHP(snapshot)");
+    const int d_model = requireInt("d_model");
+    const int num_layers = requireInt("num_layers");
+    const int num_heads = requireInt("num_heads");
+    const int num_kv_heads = requireInt("num_kv_heads");
+
+    if (d_model <= 0 || num_layers <= 0 || num_heads <= 0 || num_kv_heads <= 0) {
+        throw std::runtime_error(
+            "modelHP(snapshot): d_model, num_layers, num_heads, and num_kv_heads must all be > 0");
+    }
+    if ((d_model % num_heads) != 0) {
+        throw std::runtime_error(
+            "modelHP(snapshot): d_model must be divisible by num_heads (d_model=" +
+            std::to_string(d_model) + ", num_heads=" + std::to_string(num_heads) + ")");
+    }
+    if (!isValidGQAConfig(num_heads, num_kv_heads)) {
+        throw std::runtime_error(
+            "modelHP(snapshot): invalid GQA config (num_heads=" +
+            std::to_string(num_heads) + ", num_kv_heads=" + std::to_string(num_kv_heads) + ")");
+    }
+
+    const int head_dim = d_model / num_heads;
+    const int heads_per_kv_group = computeHeadsPerKVGroup(num_heads, num_kv_heads);
+    const int kv_dim = computeKVProjectionSize(d_model, num_heads, num_kv_heads);
+    const int qkv_dim = computeQKVProjectionSize(d_model, num_heads, num_kv_heads);
+    const int rotary_dim = head_dim;
+    const int d_ff = d_model * D_FF_MULTIPLIER;
+    const int min_seq_len_for_flash = max_seq_len / 4;
+    const float dropout_rate = requireFloat("dropout_rate");
+    const float attention_dropout = dropout_rate;
+    const float residual_projection_init_gain =
+        1.0f / std::sqrt(2.0f * static_cast<float>(num_layers));
+    const bool is_gqa = num_kv_heads < num_heads;
+    const int vocab_size = snapshotTokenizerTargetVocabSize(snapshot);
+
+    ModelHP view;
+    view.training_batch_size = batch_size;
+    view.training_max_seq_len = max_seq_len;
+    view.training_max_tokens_per_batch =
+        computeMaxTokensPerBatch(batch_size, max_seq_len, "modelHP(snapshot)");
+
+    view.embedding_vocab_size = vocab_size;
+    view.embedding_d_model = d_model;
+
+    view.encoder_num_layers = num_layers;
+    view.encoder_d_model = d_model;
+    view.encoder_num_heads = num_heads;
+    view.encoder_num_kv_heads = num_kv_heads;
+    view.encoder_head_dim = head_dim;
+    view.encoder_rotary_dim = rotary_dim;
+    view.encoder_heads_per_kv_group = heads_per_kv_group;
+    view.encoder_kv_dim = kv_dim;
+    view.encoder_qkv_dim = qkv_dim;
+    view.encoder_d_ff = d_ff;
+    view.encoder_rms_epsilon = EPSILON_RMSNORM;
+    view.encoder_causal_mask = true;
+    view.encoder_use_flash_attention = requireBool("use_flash_attention");
+    view.encoder_min_seq_len_for_flash = min_seq_len_for_flash;
+    view.encoder_use_layer_scale = requireBool("use_layer_scale");
+    view.encoder_layer_scale_init = requireFloat("layer_scale_init");
+    view.encoder_center_encoder_residuals = requireBool("center_encoder_residuals");
+    view.encoder_use_bias = true;
+    view.encoder_dropout_rate = dropout_rate;
+    view.encoder_attention_dropout = attention_dropout;
+    view.encoder_qk_norm_enabled = requireBool("qk_norm_enabled");
+    view.encoder_residual_projection_init_gain = residual_projection_init_gain;
+    view.encoder_is_gqa = is_gqa;
+    view.encoder_freeze_learned_rms_gammas = requireBool("freeze_learned_rms_gammas");
+
+    view.lm_head_d_model = d_model;
+    view.lm_head_vocab_size = vocab_size;
+    view.lm_head_training_batch_size = batch_size;
+    view.lm_head_training_rows_per_sequence = max_seq_len;
+    view.lm_head_use_bias = true;
+    view.lm_head_tie_embeddings = requireBool("tie_embeddings");
+    view.lm_head_center_hidden_states = requireBool("lm_head_center_hidden_states");
+    view.lm_head_project_out_pc1 = requireBool("project_out_pc1");
+    view.lm_head_pc1_power_iters = requireInt("pc1_power_iters");
+    view.lm_head_center_logits = requireBool("center_logits");
+    view.lm_head_freeze_learned_rms_gammas = requireBool("freeze_learned_rms_gammas");
+    view.lm_head_rms_epsilon = EPSILON_RMSNORM;
+
+    view.scratch_block_enabled = requireBool("use_scratch_block");
+    view.scratch_block_d_model = d_model;
+    view.scratch_block_max_atoms = requireInt("scratch_block_max_atoms");
+    view.scratch_block_atom_embedding_dim = requireInt("scratch_block_atom_embedding_dim");
+    view.scratch_block_atom_token_start = ATOM_TOKEN_START;
+    view.scratch_block_atom_token_end = ATOM_TOKEN_END;
+    view.scratch_block_atom_scale = requireFloat("scratch_block_atom_scale");
+
+    view.reasoning_head_enabled = false;
+    view.reasoning_head_d_model = d_model;
+    view.reasoning_head_atom_embedding_dim = view.scratch_block_atom_embedding_dim;
+    view.reasoning_head_num_ops = 8;
+
+    view.execution_block_enabled = requireBool("execution_block_enabled");
+    view.execution_block_layer = requireInt("execution_block_layer");
+    view.execution_block_d_model = d_model;
+    view.execution_block_atom_embedding_dim = view.scratch_block_atom_embedding_dim;
+    view.execution_block_num_ops = requireInt("execution_block_num_ops");
+    view.execution_block_num_slots = requireInt("execution_block_num_slots");
+    view.execution_block_num_scratch_slots = requireInt("execution_block_num_scratch_slots");
+    view.execution_block_num_exec_steps = requireInt("execution_block_num_steps");
+    view.execution_block_value_decode_input_dim = requireInt("execution_block_value_decode_input_dim");
+    view.execution_block_value_decode_hidden_dim = requireInt("execution_block_value_decode_hidden_dim");
+    view.execution_block_d_key = head_dim;
+    view.execution_block_d_type = requireInt("execution_block_d_type");
+    view.execution_block_cross_attn_head_dim = head_dim;
+    view.execution_block_cross_attn_topk = requireInt("execution_block_cross_attn_topk");
+    view.execution_block_usage_decay = requireFloat("execution_block_usage_decay");
+    view.execution_block_inject_gate_temp = requireFloat("execution_block_inject_gate_temp");
+    view.execution_block_result_slot_mode = requireInt("execution_block_result_slot_mode");
+    view.execution_block_result_slot_index = requireInt("execution_block_result_slot_index");
+    view.execution_block_debug_mode = requireBool("execution_block_debug_mode");
+    view.execution_block_entropy_collapse_threshold = requireFloat("execution_block_entropy_collapse_threshold");
+    view.execution_block_write_collapse_threshold = requireFloat("execution_block_write_collapse_threshold");
+    view.execution_block_magnitude_limit = requireFloat("execution_block_magnitude_limit");
+    view.execution_block_diversity_kappa = requireFloat("execution_block_diversity_kappa");
+    view.execution_block_temp_start = requireFloat("execution_block_temp_start");
+    view.execution_block_temp_end = requireFloat("execution_block_temp_end");
+    view.execution_block_temp_schedule = requireInt("execution_block_temp_schedule");
+    view.execution_block_entropy_weight = requireFloat("execution_block_entropy_weight");
+    view.execution_block_transition_hard_threshold = requireFloat("execution_block_transition_hard_threshold");
+    view.execution_block_gate_warmup_steps = 0;
+    view.execution_block_causal_w1_transition = requireFloat("execution_block_causal_w1_transition");
+    view.execution_block_div_invalid_penalty_weight = requireFloat("execution_block_div_invalid_penalty_weight");
+    view.execution_block_div_magnitude_penalty_weight = requireFloat("execution_block_div_magnitude_penalty_weight");
+    view.execution_block_arg_reinforce_weight = requireFloat("execution_block_arg_reinforce_weight");
+    view.execution_block_arg_reinforce_baseline_decay = requireFloat("execution_block_arg_reinforce_baseline_decay");
+    view.execution_block_entropy_aux_weight = requireFloat("execution_block_entropy_aux_weight");
+    view.execution_block_structured_ce_weight = requireFloat("execution_block_structured_ce_weight");
+
+    view.decode_time_selector_enabled = requireBool("selector_enabled");
+    view.decode_time_selector_d_model = d_model;
+    view.decode_time_selector_d_selector = requireInt("selector_d_selector");
+    view.decode_time_selector_d_slot_features = requireInt("selector_d_slot_features");
+    view.decode_time_selector_num_slots = view.execution_block_num_slots;
+    view.decode_time_selector_scratch_slots = view.execution_block_num_scratch_slots;
+    view.decode_time_selector_selection_margin = requireFloat("selector_selection_margin");
+    view.decode_time_selector_supervision_weight = requireFloat("selector_supervision_weight");
+
+    view.mtp_enabled = requireBool("mtp_enabled");
+    view.mtp_k = requireInt("mtp_k");
+    view.mtp_vocab_size = vocab_size;
+    view.mtp_d_model = d_model;
+    view.mtp_alpha = requireFloat("mtp_alpha");
+    view.mtp_alpha_warmup_steps = 0;
+
+    view.positional_encoding = parsePositionalEncodingFlags(
+        requireBool("use_rope"), requireBool("use_alibi"));
+    view.scratch_block_execution_first_type_only =
+        requireBool("execution_block_execution_first_type_only");
+    view.structured_ce_enabled = requireBool("execution_block_structured_ce_enabled");
+    return view;
+}
+
+inline GpuModelInitializationHP gpuModelInitializationHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    const auto model = modelHP(snapshot);
+
+    GpuModelInitializationHP view;
+    view.use_gpu = snapshotTrainingConfigField<bool>(snapshot, "use_gpu");
+    view.num_layers = model.encoder_num_layers;
+    view.use_flash_attention = model.encoder_use_flash_attention;
+    view.min_seq_len_for_flash = model.encoder_min_seq_len_for_flash;
+    return view;
+}
+
+inline EncoderLayerConstructionHP encoderLayerConstructionHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    const auto model = modelHP(snapshot);
+
+    EncoderLayerConstructionHP view;
+    view.num_layers = model.encoder_num_layers;
+    view.d_model = model.encoder_d_model;
+    view.num_heads = model.encoder_num_heads;
+    view.num_kv_heads = model.encoder_num_kv_heads;
+    view.head_dim = model.encoder_head_dim;
+    view.rotary_dim = model.encoder_rotary_dim;
+    view.heads_per_kv_group = model.encoder_heads_per_kv_group;
+    view.kv_dim = model.encoder_kv_dim;
+    view.qkv_dim = model.encoder_qkv_dim;
+    view.d_ff = model.encoder_d_ff;
+    view.rms_epsilon = model.encoder_rms_epsilon;
+    view.causal_mask = model.encoder_causal_mask;
+    view.use_flash_attention = model.encoder_use_flash_attention;
+    view.min_seq_len_for_flash = model.encoder_min_seq_len_for_flash;
+    view.use_layer_scale = model.encoder_use_layer_scale;
+    view.layer_scale_init = model.encoder_layer_scale_init;
+    view.center_encoder_residuals = model.encoder_center_encoder_residuals;
+    view.use_bias = model.encoder_use_bias;
+    view.dropout_rate = model.encoder_dropout_rate;
+    view.attention_dropout = model.encoder_attention_dropout;
+    view.qk_norm_enabled = model.encoder_qk_norm_enabled;
+    view.residual_projection_init_gain = model.encoder_residual_projection_init_gain;
+    view.is_gqa = model.encoder_is_gqa;
+    view.freeze_learned_rms_gammas = model.encoder_freeze_learned_rms_gammas;
+    return view;
+}
+
+inline EmbeddingLayerConstructionHP embeddingLayerConstructionHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    const auto model = modelHP(snapshot);
+
+    EmbeddingLayerConstructionHP view;
+    view.vocab_size = model.embedding_vocab_size;
+    view.d_model = model.embedding_d_model;
+    return view;
+}
+
+inline LMHeadLayerConstructionHP lmHeadLayerConstructionHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    const auto model = modelHP(snapshot);
+
+    LMHeadLayerConstructionHP view;
+    view.d_model = model.lm_head_d_model;
+    view.vocab_size = model.lm_head_vocab_size;
+    view.training_batch_size = model.lm_head_training_batch_size;
+    view.training_rows_per_sequence = model.lm_head_training_rows_per_sequence;
+    view.use_bias = model.lm_head_use_bias;
+    view.tie_embeddings = model.lm_head_tie_embeddings;
+    view.center_hidden_states = model.lm_head_center_hidden_states;
+    view.project_out_pc1 = model.lm_head_project_out_pc1;
+    view.pc1_power_iters = model.lm_head_pc1_power_iters;
+    view.center_logits = model.lm_head_center_logits;
+    view.freeze_learned_rms_gammas = model.lm_head_freeze_learned_rms_gammas;
+    view.rms_epsilon = model.lm_head_rms_epsilon;
+    return view;
+}
+
+inline ScratchBlockConstructionHP scratchBlockConstructionHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    const auto model = modelHP(snapshot);
+
+    ScratchBlockConstructionHP view;
+    view.enabled = model.scratch_block_enabled;
+    view.d_model = model.scratch_block_d_model;
+    view.max_atoms = model.scratch_block_max_atoms;
+    view.atom_embedding_dim = model.scratch_block_atom_embedding_dim;
+    view.atom_token_start = model.scratch_block_atom_token_start;
+    view.atom_token_end = model.scratch_block_atom_token_end;
+    view.atom_scale = model.scratch_block_atom_scale;
+    return view;
+}
+
+inline ReasoningHeadConstructionHP reasoningHeadConstructionHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    const auto model = modelHP(snapshot);
+
+    ReasoningHeadConstructionHP view;
+    view.enabled = model.reasoning_head_enabled;
+    view.d_model = model.reasoning_head_d_model;
+    view.atom_embedding_dim = model.reasoning_head_atom_embedding_dim;
+    view.num_ops = model.reasoning_head_num_ops;
+    return view;
+}
+
+inline ExecutionBlockConstructionHP executionBlockConstructionHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    const auto model = modelHP(snapshot);
+
+    ExecutionBlockConstructionHP view;
+    view.enabled = model.execution_block_enabled;
+    view.layer = model.execution_block_layer;
+    view.d_model = model.execution_block_d_model;
+    view.atom_embedding_dim = model.execution_block_atom_embedding_dim;
+    view.num_ops = model.execution_block_num_ops;
+    view.num_slots = model.execution_block_num_slots;
+    view.num_scratch_slots = model.execution_block_num_scratch_slots;
+    view.num_exec_steps = model.execution_block_num_exec_steps;
+    view.value_decode_input_dim = model.execution_block_value_decode_input_dim;
+    view.value_decode_hidden_dim = model.execution_block_value_decode_hidden_dim;
+    view.d_key = model.execution_block_d_key;
+    view.d_type = model.execution_block_d_type;
+    view.cross_attn_head_dim = model.execution_block_cross_attn_head_dim;
+    view.cross_attn_topk = model.execution_block_cross_attn_topk;
+    view.usage_decay = model.execution_block_usage_decay;
+    view.inject_gate_temp = model.execution_block_inject_gate_temp;
+    view.result_slot_mode = model.execution_block_result_slot_mode;
+    view.result_slot_index = model.execution_block_result_slot_index;
+    view.debug_mode = model.execution_block_debug_mode;
+    view.entropy_collapse_threshold = model.execution_block_entropy_collapse_threshold;
+    view.write_collapse_threshold = model.execution_block_write_collapse_threshold;
+    view.magnitude_limit = model.execution_block_magnitude_limit;
+    view.diversity_kappa = model.execution_block_diversity_kappa;
+    view.temp_start = model.execution_block_temp_start;
+    view.temp_end = model.execution_block_temp_end;
+    view.temp_schedule = model.execution_block_temp_schedule;
+    view.entropy_weight = model.execution_block_entropy_weight;
+    view.transition_hard_threshold = model.execution_block_transition_hard_threshold;
+    view.gate_warmup_steps = model.execution_block_gate_warmup_steps;
+    view.causal_w1_transition = model.execution_block_causal_w1_transition;
+    view.div_invalid_penalty_weight = model.execution_block_div_invalid_penalty_weight;
+    view.div_magnitude_penalty_weight = model.execution_block_div_magnitude_penalty_weight;
+    view.arg_reinforce_weight = model.execution_block_arg_reinforce_weight;
+    view.arg_reinforce_baseline_decay = model.execution_block_arg_reinforce_baseline_decay;
+    return view;
+}
+
+inline DecodeTimeSelectorConstructionHP decodeTimeSelectorConstructionHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    const auto model = modelHP(snapshot);
+
+    DecodeTimeSelectorConstructionHP view;
+    view.enabled = model.decode_time_selector_enabled;
+    view.d_model = model.decode_time_selector_d_model;
+    view.d_selector = model.decode_time_selector_d_selector;
+    view.d_slot_features = model.decode_time_selector_d_slot_features;
+    view.num_slots = model.decode_time_selector_num_slots;
+    view.scratch_slots = model.decode_time_selector_scratch_slots;
+    view.selection_margin = model.decode_time_selector_selection_margin;
+    view.supervision_weight = model.decode_time_selector_supervision_weight;
+    return view;
+}
+
+inline MTPConstructionHP mtpConstructionHP(const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    const auto model = modelHP(snapshot);
+
+    MTPConstructionHP view;
+    view.enabled = model.mtp_enabled;
+    view.k = model.mtp_k;
+    view.vocab_size = model.mtp_vocab_size;
+    view.d_model = model.mtp_d_model;
+    view.alpha = model.mtp_alpha;
+    view.alpha_warmup_steps = model.mtp_alpha_warmup_steps;
+    return view;
+}
+
+inline MTPFeatureHP mtpFeatureHP(const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    const auto model = modelHP(snapshot);
+
+    MTPFeatureHP view;
+    view.enabled = model.mtp_enabled;
+    view.k = model.mtp_k;
+    return view;
+}
+
+inline MTPDiagnosticHP mtpDiagnosticHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    MTPDiagnosticHP view;
+    view.log_ratio_monitor = snapshotTrainingConfigField<bool>(snapshot, "mtp_log_ratio_monitor");
+    return view;
+}
+
 inline GenerationHP generationHP(const LanguageModelConfig& cfg)
 {
     GenerationHP view;
@@ -1039,6 +1863,35 @@ inline GenerationHP generationHP(const LanguageModelConfig& cfg)
     view.masked_numeric_literal_ids = cfg.generation_masked_numeric_literal_ids;
     view.seed = cfg.generation_seed;
     view.enable_scratchblock_reasoning = cfg.generation_enable_scratchblock_reasoning;
+    return view;
+}
+
+inline GenerationHP generationHP(const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    GenerationHP view;
+    view.strategy = snapshotTrainingConfigField<SamplingStrategy>(snapshot, "generation_strategy");
+    view.max_new_tokens = snapshotTrainingConfigField<int>(snapshot, "generation_max_new_tokens");
+    view.min_new_tokens = snapshotTrainingConfigField<int>(snapshot, "generation_min_new_tokens");
+    view.temperature = snapshotTrainingConfigField<float>(snapshot, "generation_temperature");
+    view.top_k = snapshotTrainingConfigField<int>(snapshot, "generation_top_k");
+    view.top_p = snapshotTrainingConfigField<float>(snapshot, "generation_top_p");
+    view.min_p = snapshotTrainingConfigField<float>(snapshot, "generation_min_p");
+    view.typical_p = snapshotTrainingConfigField<float>(snapshot, "generation_typical_p");
+    view.repetition_penalty = snapshotTrainingConfigField<float>(snapshot, "generation_repetition_penalty");
+    view.repetition_penalty_window = snapshotTrainingConfigField<int>(snapshot, "generation_repetition_penalty_window");
+    view.frequency_penalty = snapshotTrainingConfigField<float>(snapshot, "generation_frequency_penalty");
+    view.presence_penalty = snapshotTrainingConfigField<float>(snapshot, "generation_presence_penalty");
+    view.num_return_sequences = 1;
+    view.eos_token_id = Tokenizer::EOS_TOKEN_ID;
+    view.pad_token_id = Tokenizer::PAD_TOKEN_ID;
+    view.bos_token_id = Tokenizer::BOS_TOKEN_ID;
+    view.unk_token_id = Tokenizer::UNK_TOKEN_ID;
+    view.no_repeat_ngram_size = snapshotTrainingConfigField<int>(snapshot, "generation_no_repeat_ngram_size");
+    view.do_sample = snapshotTrainingConfigField<bool>(snapshot, "generation_do_sample");
+    view.masked_numeric_literal_ids = snapshotMaskedNumericLiteralIds();
+    view.seed = 0;
+    view.enable_scratchblock_reasoning =
+        snapshotTrainingConfigField<bool>(snapshot, "generation_enable_scratchblock_reasoning");
     return view;
 }
 

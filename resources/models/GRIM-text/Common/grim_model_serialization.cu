@@ -30,25 +30,26 @@ namespace GRIM {
 
 namespace {
 
-SerializationModelConfigView makeConfigView(const HyperParameters::LanguageModelConfig& cfg) {
+SerializationModelConfigView makeConfigView(const Config::AiConfigSnapshot& cfg) {
     SerializationModelConfigView view{};
-    view.vocab_size = cfg.vocab_size;
-    view.d_model = cfg.d_model;
-    view.num_layers = cfg.num_layers;
-    view.num_heads = cfg.num_heads;
-    view.num_kv_heads = cfg.num_kv_heads;  // GQA: must propagate for correct W_qkv sizing
-    view.d_ff = cfg.d_ff;
-    view.max_seq_len = cfg.max_seq_len;
-    view.dropout_rate = cfg.dropout_rate;
-    view.positional_encoding = cfg.positional_encoding;
-    view.tie_embeddings = cfg.tie_embeddings;
-    view.use_gpu = cfg.use_gpu;
-    view.use_bias = cfg.use_bias;
+    view.vocab_size = HyperParameters::snapshotTrainingConfigField<int>(cfg, "vocab_size");
+    view.d_model = HyperParameters::snapshotTrainingConfigField<int>(cfg, "d_model");
+    view.num_layers = HyperParameters::snapshotTrainingConfigField<int>(cfg, "num_layers");
+    view.num_heads = HyperParameters::snapshotTrainingConfigField<int>(cfg, "num_heads");
+    view.num_kv_heads = HyperParameters::snapshotTrainingConfigField<int>(cfg, "num_kv_heads");
+    view.d_ff = HyperParameters::snapshotTrainingConfigField<int>(cfg, "d_ff");
+    view.max_seq_len = HyperParameters::snapshotTrainingConfigField<int>(cfg, "max_seq_len");
+    view.dropout_rate = HyperParameters::snapshotTrainingConfigField<float>(cfg, "dropout_rate");
+    view.positional_encoding = HyperParameters::snapshotTrainingConfigField<HyperParameters::PositionalEncodingType>(cfg, "positional_encoding");
+    view.tie_embeddings = HyperParameters::snapshotTrainingConfigField<bool>(cfg, "tie_embeddings");
+    view.use_gpu = HyperParameters::snapshotTrainingConfigField<bool>(cfg, "use_gpu");
+    view.use_bias = HyperParameters::snapshotTrainingConfigField<bool>(cfg, "use_bias");
     return view;
 }
 
-std::size_t embeddingElementCount(const HyperParameters::LanguageModelConfig& cfg) {
-    return static_cast<std::size_t>(cfg.vocab_size) * static_cast<std::size_t>(cfg.d_model);
+std::size_t embeddingElementCount(const Config::AiConfigSnapshot& cfg) {
+    return static_cast<std::size_t>(HyperParameters::snapshotTrainingConfigField<int>(cfg, "vocab_size")) *
+           static_cast<std::size_t>(HyperParameters::snapshotTrainingConfigField<int>(cfg, "d_model"));
 }
 
 void assignRead(DeviceReadView& view, const float* ptr, std::size_t count) {
@@ -109,42 +110,56 @@ bool LanguageModel::save(const std::string& path) {
     request.path = path;
     request.model_version = GRIM_MODEL_VERSION;
     request.sources.config = makeConfigView(config_);
+    const int vocab_size = HyperParameters::snapshotTrainingConfigField<int>(config_, "vocab_size");
+    const int d_model_i = HyperParameters::snapshotTrainingConfigField<int>(config_, "d_model");
+    const int num_layers = HyperParameters::snapshotTrainingConfigField<int>(config_, "num_layers");
+    const int num_kv_heads = HyperParameters::snapshotTrainingConfigField<int>(config_, "num_kv_heads");
+    const int d_ff_i = HyperParameters::snapshotTrainingConfigField<int>(config_, "d_ff");
+    const int head_dim = HyperParameters::snapshotTrainingConfigField<int>(config_, "head_dim");
+    const float scratch_block_atom_scale = HyperParameters::snapshotTrainingConfigField<float>(config_, "scratch_block_atom_scale");
+    const bool mtp_enabled = HyperParameters::snapshotTrainingConfigField<bool>(config_, "mtp_enabled");
+    auto* embedding_layer = getEmbeddingLayer();
+    auto* lm_head_layer = getLmHeadLayer();
+    auto* scratch_block_layer = getScratchBlockLayer();
+    auto* reasoning_head_layer = getReasoningHeadLayer();
+    auto* execution_block_layer = getExecutionBlockLayer();
+    auto* decode_time_slot_selector_layer = getDecodeTimeSlotSelectorLayer();
+    auto* gpu_encoder_owner = (gpu_model_state_ ? gpu_model_state_->gpu_encoder.get() : nullptr);
     EmitModuleInfo(ModuleId::Checkpoint, "Request initialized with version " + std::to_string(GRIM_MODEL_VERSION));
 
     EmitModuleInfo(ModuleId::Checkpoint, "Processing embeddings");
-    if (!embedding_layer_ || !embedding_layer_->tokenWeights().data) {
+    if (!embedding_layer || !embedding_layer->tokenWeights().data) {
         EmitModuleError(ModuleId::Checkpoint, "EmbeddingLayer token weights unavailable during save()");
         std::cerr << "[LanguageModel::save] Error: EmbeddingLayer token weights unavailable" << std::endl;
         return false;
     }
     EmitModuleInfo(ModuleId::Checkpoint, "Embedding source: GPU");
-    EmitModuleInfo(ModuleId::Checkpoint, "Using EmbeddingLayer token weights (vocab=" + std::to_string(config_.vocab_size) + ", d_model=" + std::to_string(config_.d_model) + ")");
+    EmitModuleInfo(ModuleId::Checkpoint, "Using EmbeddingLayer token weights (vocab=" + std::to_string(vocab_size) + ", d_model=" + std::to_string(d_model_i) + ")");
     assignRead(request.sources.gpu_embedding.token_embeddings,
-               embedding_layer_->tokenWeights().data,
+               embedding_layer->tokenWeights().data,
                embeddingElementCount(config_));
 
-    EmitModuleInfo(ModuleId::Checkpoint, "Processing encoder layers (" + std::to_string(config_.num_layers) + " layers)");
-    { std::ostringstream oss; oss << "gpu_encoder_ ptr = " << (void*)gpu_encoder_.get() << " this = " << (void*)this; EmitModuleInfo(ModuleId::Checkpoint, oss.str()); }
-    auto* gpu_encoder = &getGpuEncoder();
+    EmitModuleInfo(ModuleId::Checkpoint, "Processing encoder layers (" + std::to_string(num_layers) + " layers)");
+    { std::ostringstream oss; oss << "gpu_model_state.gpu_encoder ptr = " << (void*)gpu_encoder_owner << " this = " << (void*)this; EmitModuleInfo(ModuleId::Checkpoint, oss.str()); }
+    auto* gpu_encoder = gpu_model_state_ ? &gpu_model_state_->requireGpuEncoder("LanguageModel::save") : nullptr;
     { std::ostringstream oss; oss << "getGpuEncoder() returned " << (void*)gpu_encoder; EmitModuleInfo(ModuleId::Checkpoint, oss.str()); }
     if (!gpu_encoder) {
         EmitModuleError(ModuleId::Checkpoint, "GPU encoder not initialized");
         std::cerr << "[LanguageModel::save] Error: GPU encoder not initialized" << std::endl;
         return false;
     }
-    request.sources.encoder_layers.resize(config_.num_layers);
-    const std::size_t d_model = static_cast<std::size_t>(config_.d_model);
-    const std::size_t d_ff = static_cast<std::size_t>(config_.d_ff);
+    request.sources.encoder_layers.resize(num_layers);
+    const std::size_t d_model = static_cast<std::size_t>(d_model_i);
+    const std::size_t d_ff = static_cast<std::size_t>(d_ff_i);
     
     // GQA dimensions for W_qkv sizing (no fallback - num_kv_heads must be properly set)
-    const int head_dim = config_.head_dim;  // Use pre-computed value from config
-    const int kv_dim = config_.num_kv_heads * head_dim;
-    const int total_qkv_dim = config_.d_model + 2 * kv_dim;  // Q + K + V with GQA
+    const int kv_dim = num_kv_heads * head_dim;
+    const int total_qkv_dim = d_model_i + 2 * kv_dim;  // Q + K + V with GQA
     const std::size_t qkv_weight_size = static_cast<std::size_t>(total_qkv_dim) * d_model;
     
-    for (int layer_idx = 0; layer_idx < config_.num_layers; ++layer_idx) {
+    for (int layer_idx = 0; layer_idx < num_layers; ++layer_idx) {
         if (layer_idx % 2 == 0) {
-            EmitModuleInfo(ModuleId::Checkpoint, "Processing layer " + std::to_string(layer_idx) + "/" + std::to_string(config_.num_layers));
+            EmitModuleInfo(ModuleId::Checkpoint, "Processing layer " + std::to_string(layer_idx) + "/" + std::to_string(num_layers));
         }
         auto* enc = gpu_encoder->getLayer(layer_idx);
         if (!enc) {
@@ -172,14 +187,14 @@ bool LanguageModel::save(const std::string& path) {
         if (enc->layerScale2().data) assignRead(view.layer_scale2, enc->layerScale2().data, d_model);
     }
 
-    if (!lm_head_layer_) throw std::runtime_error("LMHeadLayer is NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
-    EmitModuleInfo(ModuleId::Checkpoint, "Processing LM head (projection=" + std::string(lm_head_layer_->weights().data ? "yes" : "no") + ", bias=" + std::string(lm_head_layer_->bias().data ? "yes" : "no") + ")");
-    request.sources.lm_head.has_projection = (lm_head_layer_->weights().data != nullptr);
-    request.sources.lm_head.projection.ptr = lm_head_layer_->weights().data;
-    request.sources.lm_head.projection.count = lm_head_layer_->weights().data ? embeddingElementCount(config_) : 0;
-    request.sources.lm_head.has_bias = (lm_head_layer_->bias().data != nullptr);
-    request.sources.lm_head.bias.ptr = lm_head_layer_->bias().data;
-    request.sources.lm_head.bias.count = lm_head_layer_->bias().data ? static_cast<std::size_t>(config_.vocab_size) : 0;
+    if (!lm_head_layer) throw std::runtime_error("LMHeadLayer is NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    EmitModuleInfo(ModuleId::Checkpoint, "Processing LM head (projection=" + std::string(lm_head_layer->weights().data ? "yes" : "no") + ", bias=" + std::string(lm_head_layer->bias().data ? "yes" : "no") + ")");
+    request.sources.lm_head.has_projection = (lm_head_layer->weights().data != nullptr);
+    request.sources.lm_head.projection.ptr = lm_head_layer->weights().data;
+    request.sources.lm_head.projection.count = lm_head_layer->weights().data ? embeddingElementCount(config_) : 0;
+    request.sources.lm_head.has_bias = (lm_head_layer->bias().data != nullptr);
+    request.sources.lm_head.bias.ptr = lm_head_layer->bias().data;
+    request.sources.lm_head.bias.count = lm_head_layer->bias().data ? static_cast<std::size_t>(vocab_size) : 0;
 
     const auto scratch_hp = HyperParameters::scratchBlockConstructionHP(config_);
 
@@ -187,15 +202,15 @@ bool LanguageModel::save(const std::string& path) {
     // Use the layer's actual tensor sizes so copy count never exceeds allocation.
     // ScratchBlock allocates with Tokenizer::kAtomTypeCount (single source of truth).
     if (scratch_hp.enabled) {
-        if (!scratch_block_layer_) {
-            throw std::runtime_error("LanguageModel::save: ScratchBlockConstructionHP.enabled=true but scratch_block_layer_ is NULL");
+        if (!scratch_block_layer) {
+            throw std::runtime_error("LanguageModel::save: ScratchBlockConstructionHP.enabled=true but scratch_block_layer is NULL");
         }
-        Tensor& ate = scratch_block_layer_->atomTypeEmbeddings();
-        Tensor& ap = scratch_block_layer_->atomProjection();
+        Tensor& ate = scratch_block_layer->atomTypeEmbeddings();
+        Tensor& ap = scratch_block_layer->atomProjection();
         
         request.sources.scratch_block.enabled = true;
-        request.sources.scratch_block.d_model = config_.d_model;
-        request.sources.scratch_block.atom_scale = config_.scratch_block_atom_scale;
+        request.sources.scratch_block.d_model = d_model_i;
+        request.sources.scratch_block.atom_scale = scratch_block_atom_scale;
         
         if (ate.data && ate.shape.is_2d_layout()) {
             const size_t ate_numel = ate.numel();
@@ -218,84 +233,84 @@ bool LanguageModel::save(const std::string& path) {
     }
 
     // ReasoningHead weights
-    if (reasoning_head_layer_) {
-        const int dt = reasoning_head_layer_->d_total();
-        const int nops = reasoning_head_layer_->num_ops();
+    if (reasoning_head_layer) {
+        const int dt = reasoning_head_layer->d_total();
+        const int nops = reasoning_head_layer->num_ops();
         request.sources.reasoning_head.enabled = true;
         request.sources.reasoning_head.num_ops = nops;
         request.sources.reasoning_head.d_total = dt;
-        request.sources.reasoning_head.w_op.ptr = reasoning_head_layer_->W_op().data;
+        request.sources.reasoning_head.w_op.ptr = reasoning_head_layer->W_op().data;
         request.sources.reasoning_head.w_op.count = static_cast<std::size_t>(nops) * dt;
-        request.sources.reasoning_head.b_op.ptr = reasoning_head_layer_->b_op().data;
+        request.sources.reasoning_head.b_op.ptr = reasoning_head_layer->b_op().data;
         request.sources.reasoning_head.b_op.count = static_cast<std::size_t>(nops);
-        request.sources.reasoning_head.w_arg1.ptr = reasoning_head_layer_->w_arg1().data;
+        request.sources.reasoning_head.w_arg1.ptr = reasoning_head_layer->w_arg1().data;
         request.sources.reasoning_head.w_arg1.count = static_cast<std::size_t>(dt);
-        request.sources.reasoning_head.w_arg2.ptr = reasoning_head_layer_->w_arg2().data;
+        request.sources.reasoning_head.w_arg2.ptr = reasoning_head_layer->w_arg2().data;
         request.sources.reasoning_head.w_arg2.count = static_cast<std::size_t>(dt);
         EmitModuleInfo(ModuleId::Checkpoint, "Processing ReasoningHead weights (d_total=" +
                        std::to_string(dt) + ", num_ops=" + std::to_string(nops) + ")");
     }
 
     // ExecutionBlock v2 weights — serialized via FlatBuffer
-    if (execution_block_layer_) {
+    if (execution_block_layer) {
         auto assignRead = [](DeviceReadView& v, const Tensor& t) {
             v.ptr = t.data;
             v.count = static_cast<std::size_t>(t.numel());
         };
         request.sources.execution_block.enabled = true;
-        assignRead(request.sources.execution_block.w_decode_1, execution_block_layer_->w_decode_1());
-        assignRead(request.sources.execution_block.b_decode_1, execution_block_layer_->b_decode_1());
-        assignRead(request.sources.execution_block.w_decode_2, execution_block_layer_->w_decode_2());
-        assignRead(request.sources.execution_block.w_arg1_select, execution_block_layer_->w_arg1_select());
-        assignRead(request.sources.execution_block.w_arg2_select, execution_block_layer_->w_arg2_select());
-        assignRead(request.sources.execution_block.W_op_select, execution_block_layer_->W_op_select());
-        assignRead(request.sources.execution_block.W_key_proj, execution_block_layer_->W_key_proj());
-        assignRead(request.sources.execution_block.W_write_query, execution_block_layer_->W_write_query());
-        assignRead(request.sources.execution_block.W_write_key, execution_block_layer_->W_write_key());
-        assignRead(request.sources.execution_block.alpha, execution_block_layer_->alpha());
-        assignRead(request.sources.execution_block.beta, execution_block_layer_->beta());
-        assignRead(request.sources.execution_block.step_embeddings, execution_block_layer_->step_embeddings());
-        assignRead(request.sources.execution_block.type_num_embed, execution_block_layer_->type_num_embed());
-        assignRead(request.sources.execution_block.W_value_to_emb, execution_block_layer_->W_value_to_emb());
-        assignRead(request.sources.execution_block.b_value_to_emb, execution_block_layer_->b_value_to_emb());
-        assignRead(request.sources.execution_block.w_inject_gate, execution_block_layer_->w_inject_gate());
-        assignRead(request.sources.execution_block.W_Q_read, execution_block_layer_->W_Q_read());
-        assignRead(request.sources.execution_block.W_K_read, execution_block_layer_->W_K_read());
-        assignRead(request.sources.execution_block.W_V_read, execution_block_layer_->W_V_read());
-        assignRead(request.sources.execution_block.W_O_read, execution_block_layer_->W_O_read());
-        assignRead(request.sources.execution_block.W_gate_read, execution_block_layer_->W_gate_read());
-        assignRead(request.sources.execution_block.tau, execution_block_layer_->tau());
-        assignRead(request.sources.execution_block.E_slot, execution_block_layer_->E_slot());
-        assignRead(request.sources.execution_block.E_op, execution_block_layer_->E_op());
-        assignRead(request.sources.execution_block.W_scal, execution_block_layer_->W_scal());
-        assignRead(request.sources.execution_block.b_scal, execution_block_layer_->b_scal());
-        assignRead(request.sources.execution_block.W_trace, execution_block_layer_->W_trace());
-        assignRead(request.sources.execution_block.b_trace, execution_block_layer_->b_trace());
-        assignRead(request.sources.execution_block.W_reason_gate, execution_block_layer_->W_reason_gate());
-        assignRead(request.sources.execution_block.W_trace_gate, execution_block_layer_->W_trace_gate());
+        assignRead(request.sources.execution_block.w_decode_1, execution_block_layer->w_decode_1());
+        assignRead(request.sources.execution_block.b_decode_1, execution_block_layer->b_decode_1());
+        assignRead(request.sources.execution_block.w_decode_2, execution_block_layer->w_decode_2());
+        assignRead(request.sources.execution_block.w_arg1_select, execution_block_layer->w_arg1_select());
+        assignRead(request.sources.execution_block.w_arg2_select, execution_block_layer->w_arg2_select());
+        assignRead(request.sources.execution_block.W_op_select, execution_block_layer->W_op_select());
+        assignRead(request.sources.execution_block.W_key_proj, execution_block_layer->W_key_proj());
+        assignRead(request.sources.execution_block.W_write_query, execution_block_layer->W_write_query());
+        assignRead(request.sources.execution_block.W_write_key, execution_block_layer->W_write_key());
+        assignRead(request.sources.execution_block.alpha, execution_block_layer->alpha());
+        assignRead(request.sources.execution_block.beta, execution_block_layer->beta());
+        assignRead(request.sources.execution_block.step_embeddings, execution_block_layer->step_embeddings());
+        assignRead(request.sources.execution_block.type_num_embed, execution_block_layer->type_num_embed());
+        assignRead(request.sources.execution_block.W_value_to_emb, execution_block_layer->W_value_to_emb());
+        assignRead(request.sources.execution_block.b_value_to_emb, execution_block_layer->b_value_to_emb());
+        assignRead(request.sources.execution_block.w_inject_gate, execution_block_layer->w_inject_gate());
+        assignRead(request.sources.execution_block.W_Q_read, execution_block_layer->W_Q_read());
+        assignRead(request.sources.execution_block.W_K_read, execution_block_layer->W_K_read());
+        assignRead(request.sources.execution_block.W_V_read, execution_block_layer->W_V_read());
+        assignRead(request.sources.execution_block.W_O_read, execution_block_layer->W_O_read());
+        assignRead(request.sources.execution_block.W_gate_read, execution_block_layer->W_gate_read());
+        assignRead(request.sources.execution_block.tau, execution_block_layer->tau());
+        assignRead(request.sources.execution_block.E_slot, execution_block_layer->E_slot());
+        assignRead(request.sources.execution_block.E_op, execution_block_layer->E_op());
+        assignRead(request.sources.execution_block.W_scal, execution_block_layer->W_scal());
+        assignRead(request.sources.execution_block.b_scal, execution_block_layer->b_scal());
+        assignRead(request.sources.execution_block.W_trace, execution_block_layer->W_trace());
+        assignRead(request.sources.execution_block.b_trace, execution_block_layer->b_trace());
+        assignRead(request.sources.execution_block.W_reason_gate, execution_block_layer->W_reason_gate());
+        assignRead(request.sources.execution_block.W_trace_gate, execution_block_layer->W_trace_gate());
         EmitModuleInfo(ModuleId::Checkpoint, "Processing ExecutionBlock v2 weights for FlatBuffer serialization");
     }
 
     // DecodeTimeSlotSelector weights — serialized via FlatBuffer
-    if (decode_time_slot_selector_layer_) {
+    if (decode_time_slot_selector_layer) {
         auto assignRead = [](DeviceReadView& v, const Tensor& t) {
             v.ptr = t.data;
             v.count = static_cast<std::size_t>(t.numel());
         };
         request.sources.slot_selector.enabled = true;
-        assignRead(request.sources.slot_selector.w_q_select, decode_time_slot_selector_layer_->W_q_select());
-        assignRead(request.sources.slot_selector.w_k_select, decode_time_slot_selector_layer_->W_k_select());
-        assignRead(request.sources.slot_selector.null_key_select, decode_time_slot_selector_layer_->null_key_select());
-        assignRead(request.sources.slot_selector.null_logit_bias, decode_time_slot_selector_layer_->null_logit_bias());
+        assignRead(request.sources.slot_selector.w_q_select, decode_time_slot_selector_layer->W_q_select());
+        assignRead(request.sources.slot_selector.w_k_select, decode_time_slot_selector_layer->W_k_select());
+        assignRead(request.sources.slot_selector.null_key_select, decode_time_slot_selector_layer->null_key_select());
+        assignRead(request.sources.slot_selector.null_logit_bias, decode_time_slot_selector_layer->null_logit_bias());
         EmitModuleInfo(ModuleId::Checkpoint, "Processing SlotSelector weights for FlatBuffer serialization");
     }
 
     // Issue #33: Final RMSNorm gamma (normalizes encoder output before LM head) — owned by LMHeadLayer
-    if (lm_head_layer_ && lm_head_layer_->finalRmsGamma().data) {
-        request.sources.final_rms_gamma.ptr = lm_head_layer_->finalRmsGamma().data;
-        request.sources.final_rms_gamma.count = static_cast<std::size_t>(config_.d_model);
+    if (lm_head_layer && lm_head_layer->finalRmsGamma().data) {
+        request.sources.final_rms_gamma.ptr = lm_head_layer->finalRmsGamma().data;
+        request.sources.final_rms_gamma.count = static_cast<std::size_t>(d_model_i);
         EmitModuleInfo(ModuleId::Checkpoint, "Processing final_rms_gamma (size=" + 
-                       std::to_string(config_.d_model) + ")");
+                   std::to_string(d_model_i) + ")");
     }
 
     EmitModuleInfo(ModuleId::Checkpoint, "Calling SerializationLayer::save()");
@@ -304,7 +319,7 @@ bool LanguageModel::save(const std::string& path) {
     if (!result) return false;
 
     // MTP heads: save to sidecar <path>.mtp (checkpoint has no MTP in FlatBuffer schema)
-    if (config_.mtp_enabled && getMtpK() > 0) {
+    if (mtp_enabled && getMtpK() > 0) {
         const std::string mtp_path = path + ".mtp";
         std::ofstream ofs(mtp_path, std::ios::binary);
         if (!ofs) {
@@ -313,11 +328,11 @@ bool LanguageModel::save(const std::string& path) {
         }
         const uint32_t K = static_cast<uint32_t>(getMtpK());
         ofs.write(reinterpret_cast<const char*>(&K), sizeof(K));
-        const std::size_t weight_elems = static_cast<std::size_t>(config_.vocab_size) * static_cast<std::size_t>(config_.d_model);
-        const std::size_t bias_elems = static_cast<std::size_t>(config_.vocab_size);
+        const std::size_t weight_elems = static_cast<std::size_t>(vocab_size) * static_cast<std::size_t>(d_model_i);
+        const std::size_t bias_elems = static_cast<std::size_t>(vocab_size);
         std::vector<float> h_buf(std::max(weight_elems, bias_elems));
         for (uint32_t k = 0; k < K; ++k) {
-            LanguageModel::MTPHead* head = getMtpHead(static_cast<int>(k));
+            LanguageModel::MTPHead* head = gpu_model_state_ ? gpu_model_state_->getMtpHead(static_cast<int>(k)) : nullptr;
             if (!head || !head->weight.data || !head->bias.data) continue;
             if (cudaMemcpy(h_buf.data(), head->weight.data, weight_elems * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
                 EmitModuleError(ModuleId::Checkpoint, "[save] MTP head " + std::to_string(k) + " weight D2H failed");
@@ -380,6 +395,25 @@ bool LanguageModel::load(const std::string& path) {
     SerializationLoadRequest request{};
     request.path = path;
     request.config = makeConfigView(config_);
+    const int vocab_size = HyperParameters::snapshotTrainingConfigField<int>(config_, "vocab_size");
+    const int d_model_i = HyperParameters::snapshotTrainingConfigField<int>(config_, "d_model");
+    const int num_layers = HyperParameters::snapshotTrainingConfigField<int>(config_, "num_layers");
+    const int num_heads = HyperParameters::snapshotTrainingConfigField<int>(config_, "num_heads");
+    const int num_kv_heads = HyperParameters::snapshotTrainingConfigField<int>(config_, "num_kv_heads");
+    const int d_ff_i = HyperParameters::snapshotTrainingConfigField<int>(config_, "d_ff");
+    const int max_seq_len = HyperParameters::snapshotTrainingConfigField<int>(config_, "max_seq_len");
+    const int head_dim = HyperParameters::snapshotTrainingConfigField<int>(config_, "head_dim");
+    const bool freeze_learned_rms_gammas = HyperParameters::snapshotTrainingConfigField<bool>(config_, "freeze_learned_rms_gammas");
+    const bool use_bias = HyperParameters::snapshotTrainingConfigField<bool>(config_, "use_bias");
+    const bool use_gpu = HyperParameters::snapshotTrainingConfigField<bool>(config_, "use_gpu");
+    const bool tie_embeddings = HyperParameters::snapshotTrainingConfigField<bool>(config_, "tie_embeddings");
+    const bool mtp_enabled = HyperParameters::snapshotTrainingConfigField<bool>(config_, "mtp_enabled");
+    auto* embedding_layer = getEmbeddingLayer();
+    auto* lm_head_layer = getLmHeadLayer();
+    auto* scratch_block_layer = getScratchBlockLayer();
+    auto* reasoning_head_layer = getReasoningHeadLayer();
+    auto* execution_block_layer = getExecutionBlockLayer();
+    auto* decode_time_slot_selector_layer = getDecodeTimeSlotSelectorLayer();
 
     if (!training_state_.initialized) {
         EmitModuleError(ModuleId::Checkpoint,
@@ -389,7 +423,7 @@ bool LanguageModel::load(const std::string& path) {
         return false;
     }
 
-    if (!gpu_encoder_) {
+    if (!gpu_model_state_ || !gpu_model_state_->gpu_encoder) {
         EmitModuleError(ModuleId::Checkpoint,
                         "[load] GPU encoder is not initialized. Caller must complete Startup::assembleGpuModel(..., weight_init_seed) before LanguageModel::load().");
         std::cerr << "[LanguageModel::load] Error: GPU encoder is not initialized. "
@@ -398,49 +432,48 @@ bool LanguageModel::load(const std::string& path) {
     }
 
     const auto scratch_hp = HyperParameters::scratchBlockConstructionHP(config_);
-    if (scratch_hp.enabled && !scratch_block_layer_) {
+    if (scratch_hp.enabled && !scratch_block_layer) {
         EmitModuleError(ModuleId::Checkpoint,
-                        "[load] ScratchBlockConstructionHP.enabled=true but scratch_block_layer_ is NULL.");
-        std::cerr << "[LanguageModel::load] Error: ScratchBlockConstructionHP.enabled=true but scratch_block_layer_ is NULL" << std::endl;
+                        "[load] ScratchBlockConstructionHP.enabled=true but scratch_block_layer is NULL.");
+        std::cerr << "[LanguageModel::load] Error: ScratchBlockConstructionHP.enabled=true but scratch_block_layer is NULL" << std::endl;
         return false;
     }
-    if (!scratch_hp.enabled && scratch_block_layer_) {
+    if (!scratch_hp.enabled && scratch_block_layer) {
         EmitModuleError(ModuleId::Checkpoint,
-                        "[load] scratch_block_layer_ exists while ScratchBlockConstructionHP.enabled=false.");
-        std::cerr << "[LanguageModel::load] Error: scratch_block_layer_ exists while ScratchBlockConstructionHP.enabled=false" << std::endl;
+                        "[load] scratch_block_layer exists while ScratchBlockConstructionHP.enabled=false.");
+        std::cerr << "[LanguageModel::load] Error: scratch_block_layer exists while ScratchBlockConstructionHP.enabled=false" << std::endl;
         return false;
     }
 
     // Pattern B: call site is the sole authority for what the model requires.
-    request.capabilities.requires_execution_block = (execution_block_layer_ != nullptr);
-    request.capabilities.requires_slot_selector     = (decode_time_slot_selector_layer_ != nullptr);
-    request.capabilities.requires_reasoning_head  = (reasoning_head_layer_ != nullptr);
+    request.capabilities.requires_execution_block = (execution_block_layer != nullptr);
+    request.capabilities.requires_slot_selector     = (decode_time_slot_selector_layer != nullptr);
+    request.capabilities.requires_reasoning_head  = (reasoning_head_layer != nullptr);
     request.capabilities.requires_scratch_block   = scratch_hp.enabled;
-    request.capabilities.requires_final_rms_gamma = (lm_head_layer_ != nullptr
-                                                      && lm_head_layer_->finalRmsGamma().data != nullptr
-                                                      && !config_.freeze_learned_rms_gammas);
+    request.capabilities.requires_final_rms_gamma = (lm_head_layer != nullptr
+                                                      && lm_head_layer->finalRmsGamma().data != nullptr
+                                                      && !freeze_learned_rms_gammas);
 
-    if (!embedding_layer_ || !embedding_layer_->tokenWeights().data) {
+    if (!embedding_layer || !embedding_layer->tokenWeights().data) {
         std::cerr << "[LanguageModel::load] Error: EmbeddingLayer token weights not initialized" << std::endl;
         return false;
     }
     assignWrite(request.gpu_embedding.token_embeddings,
-                embedding_layer_->tokenWeights().data,
+                embedding_layer->tokenWeights().data,
                 embeddingElementCount(config_));
 
-    auto* gpu_encoder = &getGpuEncoder();
-    request.encoder_layers.resize(config_.num_layers);
-    const std::size_t d_model = static_cast<std::size_t>(config_.d_model);
-    const std::size_t d_ff = static_cast<std::size_t>(config_.d_ff);
+    auto* gpu_encoder = gpu_model_state_ ? &gpu_model_state_->requireGpuEncoder("LanguageModel::load") : nullptr;
+    request.encoder_layers.resize(num_layers);
+    const std::size_t d_model = static_cast<std::size_t>(d_model_i);
+    const std::size_t d_ff = static_cast<std::size_t>(d_ff_i);
     
     // GQA dimensions for W_qkv sizing - MUST match save() calculation!
     // BUG FIX Issue #24: load() was using MHA formula (d_model * 3) but save() uses GQA formula
-    const int head_dim = config_.head_dim;  // Use pre-computed value from config
-    const int kv_dim = config_.num_kv_heads * head_dim;
-    const int total_qkv_dim = config_.d_model + 2 * kv_dim;  // Q + K + V with GQA
+    const int kv_dim = num_kv_heads * head_dim;
+    const int total_qkv_dim = d_model_i + 2 * kv_dim;  // Q + K + V with GQA
     const std::size_t qkv_weight_size = static_cast<std::size_t>(total_qkv_dim) * d_model;
     
-    for (int layer_idx = 0; layer_idx < config_.num_layers; ++layer_idx) {
+    for (int layer_idx = 0; layer_idx < num_layers; ++layer_idx) {
         auto* enc = gpu_encoder->getLayer(layer_idx);
         if (!enc) {
             std::cerr << "[LanguageModel::load] Error: GPU layer " << layer_idx << " is null" << std::endl;
@@ -455,7 +488,7 @@ bool LanguageModel::load(const std::string& path) {
         assignWrite(view.ffn_w1, enc->ffnW1().data, d_model * d_ff);
         assignWrite(view.ffn_w2, enc->ffnW2().data, d_ff * d_model);
         assignWrite(view.ffn_b2, enc->ffnB2().data, d_model);
-        if (!config_.freeze_learned_rms_gammas) {
+        if (!freeze_learned_rms_gammas) {
             assignWrite(view.rms1_gamma, enc->rms1Gamma().data, d_model);
             assignWrite(view.rms2_gamma, enc->rms2Gamma().data, d_model);
         }
@@ -467,23 +500,23 @@ bool LanguageModel::load(const std::string& path) {
         if (enc->layerScale2().data) assignWrite(view.layer_scale2, enc->layerScale2().data, d_model);
     }
 
-    if (lm_head_layer_ && lm_head_layer_->weights().data) {
+    if (lm_head_layer && lm_head_layer->weights().data) {
         assignWrite(request.lm_head.projection,
-                    lm_head_layer_->weights().data,
+                    lm_head_layer->weights().data,
                     embeddingElementCount(config_));
     }
-    if (lm_head_layer_ && lm_head_layer_->bias().data) {
+    if (lm_head_layer && lm_head_layer->bias().data) {
         assignWrite(request.lm_head.bias,
-                    lm_head_layer_->bias().data,
-                    static_cast<std::size_t>(config_.vocab_size));
+                    lm_head_layer->bias().data,
+                    static_cast<std::size_t>(vocab_size));
     }
-    request.lm_head.expect_bias = config_.use_bias;
+    request.lm_head.expect_bias = use_bias;
 
     // Set up ScratchBlock weight destinations (if enabled by authored architecture)
     // Use the layer's actual tensor sizes so load size matches saved checkpoint (same as save path).
     if (scratch_hp.enabled) {
-        Tensor& ate = scratch_block_layer_->atomTypeEmbeddings();
-        Tensor& ap = scratch_block_layer_->atomProjection();
+        Tensor& ate = scratch_block_layer->atomTypeEmbeddings();
+        Tensor& ap = scratch_block_layer->atomProjection();
         
         if (ate.data) {
             assignWrite(request.scratch_block.atom_type_embeddings, ate.data, ate.numel());
@@ -498,74 +531,74 @@ bool LanguageModel::load(const std::string& path) {
     }
 
     // ReasoningHead weight destinations
-    if (reasoning_head_layer_) {
-        const int dt = reasoning_head_layer_->d_total();
-        const int nops = reasoning_head_layer_->num_ops();
+    if (reasoning_head_layer) {
+        const int dt = reasoning_head_layer->d_total();
+        const int nops = reasoning_head_layer->num_ops();
         assignWrite(request.reasoning_head.w_op,
-                    reasoning_head_layer_->W_op().data,
+                    reasoning_head_layer->W_op().data,
                     static_cast<std::size_t>(nops) * dt);
         assignWrite(request.reasoning_head.b_op,
-                    reasoning_head_layer_->b_op().data,
+                    reasoning_head_layer->b_op().data,
                     static_cast<std::size_t>(nops));
         assignWrite(request.reasoning_head.w_arg1,
-                    reasoning_head_layer_->w_arg1().data,
+                    reasoning_head_layer->w_arg1().data,
                     static_cast<std::size_t>(dt));
         assignWrite(request.reasoning_head.w_arg2,
-                    reasoning_head_layer_->w_arg2().data,
+                    reasoning_head_layer->w_arg2().data,
                     static_cast<std::size_t>(dt));
         request.reasoning_head.num_ops = nops;
         request.reasoning_head.d_total = dt;
     }
 
     // ExecutionBlock v2 weight destinations — loaded via FlatBuffer
-    if (execution_block_layer_) {
-        assignWrite(request.execution_block.w_decode_1, execution_block_layer_->w_decode_1().data, static_cast<std::size_t>(execution_block_layer_->w_decode_1().numel()));
-        assignWrite(request.execution_block.b_decode_1, execution_block_layer_->b_decode_1().data, static_cast<std::size_t>(execution_block_layer_->b_decode_1().numel()));
-        assignWrite(request.execution_block.w_decode_2, execution_block_layer_->w_decode_2().data, static_cast<std::size_t>(execution_block_layer_->w_decode_2().numel()));
-        assignWrite(request.execution_block.w_arg1_select, execution_block_layer_->w_arg1_select().data, static_cast<std::size_t>(execution_block_layer_->w_arg1_select().numel()));
-        assignWrite(request.execution_block.w_arg2_select, execution_block_layer_->w_arg2_select().data, static_cast<std::size_t>(execution_block_layer_->w_arg2_select().numel()));
-        assignWrite(request.execution_block.W_op_select, execution_block_layer_->W_op_select().data, static_cast<std::size_t>(execution_block_layer_->W_op_select().numel()));
-        assignWrite(request.execution_block.W_key_proj, execution_block_layer_->W_key_proj().data, static_cast<std::size_t>(execution_block_layer_->W_key_proj().numel()));
-        assignWrite(request.execution_block.W_write_query, execution_block_layer_->W_write_query().data, static_cast<std::size_t>(execution_block_layer_->W_write_query().numel()));
-        assignWrite(request.execution_block.W_write_key, execution_block_layer_->W_write_key().data, static_cast<std::size_t>(execution_block_layer_->W_write_key().numel()));
-        assignWrite(request.execution_block.alpha, execution_block_layer_->alpha().data, static_cast<std::size_t>(execution_block_layer_->alpha().numel()));
-        assignWrite(request.execution_block.beta, execution_block_layer_->beta().data, static_cast<std::size_t>(execution_block_layer_->beta().numel()));
-        assignWrite(request.execution_block.step_embeddings, execution_block_layer_->step_embeddings().data, static_cast<std::size_t>(execution_block_layer_->step_embeddings().numel()));
-        assignWrite(request.execution_block.type_num_embed, execution_block_layer_->type_num_embed().data, static_cast<std::size_t>(execution_block_layer_->type_num_embed().numel()));
-        assignWrite(request.execution_block.W_value_to_emb, execution_block_layer_->W_value_to_emb().data, static_cast<std::size_t>(execution_block_layer_->W_value_to_emb().numel()));
-        assignWrite(request.execution_block.b_value_to_emb, execution_block_layer_->b_value_to_emb().data, static_cast<std::size_t>(execution_block_layer_->b_value_to_emb().numel()));
-        assignWrite(request.execution_block.w_inject_gate, execution_block_layer_->w_inject_gate().data, static_cast<std::size_t>(execution_block_layer_->w_inject_gate().numel()));
-        assignWrite(request.execution_block.W_Q_read, execution_block_layer_->W_Q_read().data, static_cast<std::size_t>(execution_block_layer_->W_Q_read().numel()));
-        assignWrite(request.execution_block.W_K_read, execution_block_layer_->W_K_read().data, static_cast<std::size_t>(execution_block_layer_->W_K_read().numel()));
-        assignWrite(request.execution_block.W_V_read, execution_block_layer_->W_V_read().data, static_cast<std::size_t>(execution_block_layer_->W_V_read().numel()));
-        assignWrite(request.execution_block.W_O_read, execution_block_layer_->W_O_read().data, static_cast<std::size_t>(execution_block_layer_->W_O_read().numel()));
-        assignWrite(request.execution_block.W_gate_read, execution_block_layer_->W_gate_read().data, static_cast<std::size_t>(execution_block_layer_->W_gate_read().numel()));
-        assignWrite(request.execution_block.tau, execution_block_layer_->tau().data, static_cast<std::size_t>(execution_block_layer_->tau().numel()));
-        assignWrite(request.execution_block.E_slot, execution_block_layer_->E_slot().data, static_cast<std::size_t>(execution_block_layer_->E_slot().numel()));
-        assignWrite(request.execution_block.E_op, execution_block_layer_->E_op().data, static_cast<std::size_t>(execution_block_layer_->E_op().numel()));
-        assignWrite(request.execution_block.W_scal, execution_block_layer_->W_scal().data, static_cast<std::size_t>(execution_block_layer_->W_scal().numel()));
-        assignWrite(request.execution_block.b_scal, execution_block_layer_->b_scal().data, static_cast<std::size_t>(execution_block_layer_->b_scal().numel()));
-        assignWrite(request.execution_block.W_trace, execution_block_layer_->W_trace().data, static_cast<std::size_t>(execution_block_layer_->W_trace().numel()));
-        assignWrite(request.execution_block.b_trace, execution_block_layer_->b_trace().data, static_cast<std::size_t>(execution_block_layer_->b_trace().numel()));
-        assignWrite(request.execution_block.W_reason_gate, execution_block_layer_->W_reason_gate().data, static_cast<std::size_t>(execution_block_layer_->W_reason_gate().numel()));
-        assignWrite(request.execution_block.W_trace_gate, execution_block_layer_->W_trace_gate().data, static_cast<std::size_t>(execution_block_layer_->W_trace_gate().numel()));
+    if (execution_block_layer) {
+        assignWrite(request.execution_block.w_decode_1, execution_block_layer->w_decode_1().data, static_cast<std::size_t>(execution_block_layer->w_decode_1().numel()));
+        assignWrite(request.execution_block.b_decode_1, execution_block_layer->b_decode_1().data, static_cast<std::size_t>(execution_block_layer->b_decode_1().numel()));
+        assignWrite(request.execution_block.w_decode_2, execution_block_layer->w_decode_2().data, static_cast<std::size_t>(execution_block_layer->w_decode_2().numel()));
+        assignWrite(request.execution_block.w_arg1_select, execution_block_layer->w_arg1_select().data, static_cast<std::size_t>(execution_block_layer->w_arg1_select().numel()));
+        assignWrite(request.execution_block.w_arg2_select, execution_block_layer->w_arg2_select().data, static_cast<std::size_t>(execution_block_layer->w_arg2_select().numel()));
+        assignWrite(request.execution_block.W_op_select, execution_block_layer->W_op_select().data, static_cast<std::size_t>(execution_block_layer->W_op_select().numel()));
+        assignWrite(request.execution_block.W_key_proj, execution_block_layer->W_key_proj().data, static_cast<std::size_t>(execution_block_layer->W_key_proj().numel()));
+        assignWrite(request.execution_block.W_write_query, execution_block_layer->W_write_query().data, static_cast<std::size_t>(execution_block_layer->W_write_query().numel()));
+        assignWrite(request.execution_block.W_write_key, execution_block_layer->W_write_key().data, static_cast<std::size_t>(execution_block_layer->W_write_key().numel()));
+        assignWrite(request.execution_block.alpha, execution_block_layer->alpha().data, static_cast<std::size_t>(execution_block_layer->alpha().numel()));
+        assignWrite(request.execution_block.beta, execution_block_layer->beta().data, static_cast<std::size_t>(execution_block_layer->beta().numel()));
+        assignWrite(request.execution_block.step_embeddings, execution_block_layer->step_embeddings().data, static_cast<std::size_t>(execution_block_layer->step_embeddings().numel()));
+        assignWrite(request.execution_block.type_num_embed, execution_block_layer->type_num_embed().data, static_cast<std::size_t>(execution_block_layer->type_num_embed().numel()));
+        assignWrite(request.execution_block.W_value_to_emb, execution_block_layer->W_value_to_emb().data, static_cast<std::size_t>(execution_block_layer->W_value_to_emb().numel()));
+        assignWrite(request.execution_block.b_value_to_emb, execution_block_layer->b_value_to_emb().data, static_cast<std::size_t>(execution_block_layer->b_value_to_emb().numel()));
+        assignWrite(request.execution_block.w_inject_gate, execution_block_layer->w_inject_gate().data, static_cast<std::size_t>(execution_block_layer->w_inject_gate().numel()));
+        assignWrite(request.execution_block.W_Q_read, execution_block_layer->W_Q_read().data, static_cast<std::size_t>(execution_block_layer->W_Q_read().numel()));
+        assignWrite(request.execution_block.W_K_read, execution_block_layer->W_K_read().data, static_cast<std::size_t>(execution_block_layer->W_K_read().numel()));
+        assignWrite(request.execution_block.W_V_read, execution_block_layer->W_V_read().data, static_cast<std::size_t>(execution_block_layer->W_V_read().numel()));
+        assignWrite(request.execution_block.W_O_read, execution_block_layer->W_O_read().data, static_cast<std::size_t>(execution_block_layer->W_O_read().numel()));
+        assignWrite(request.execution_block.W_gate_read, execution_block_layer->W_gate_read().data, static_cast<std::size_t>(execution_block_layer->W_gate_read().numel()));
+        assignWrite(request.execution_block.tau, execution_block_layer->tau().data, static_cast<std::size_t>(execution_block_layer->tau().numel()));
+        assignWrite(request.execution_block.E_slot, execution_block_layer->E_slot().data, static_cast<std::size_t>(execution_block_layer->E_slot().numel()));
+        assignWrite(request.execution_block.E_op, execution_block_layer->E_op().data, static_cast<std::size_t>(execution_block_layer->E_op().numel()));
+        assignWrite(request.execution_block.W_scal, execution_block_layer->W_scal().data, static_cast<std::size_t>(execution_block_layer->W_scal().numel()));
+        assignWrite(request.execution_block.b_scal, execution_block_layer->b_scal().data, static_cast<std::size_t>(execution_block_layer->b_scal().numel()));
+        assignWrite(request.execution_block.W_trace, execution_block_layer->W_trace().data, static_cast<std::size_t>(execution_block_layer->W_trace().numel()));
+        assignWrite(request.execution_block.b_trace, execution_block_layer->b_trace().data, static_cast<std::size_t>(execution_block_layer->b_trace().numel()));
+        assignWrite(request.execution_block.W_reason_gate, execution_block_layer->W_reason_gate().data, static_cast<std::size_t>(execution_block_layer->W_reason_gate().numel()));
+        assignWrite(request.execution_block.W_trace_gate, execution_block_layer->W_trace_gate().data, static_cast<std::size_t>(execution_block_layer->W_trace_gate().numel()));
     }
 
     // DecodeTimeSlotSelector weight destinations — loaded via FlatBuffer
-    if (decode_time_slot_selector_layer_) {
-        assignWrite(request.slot_selector.w_q_select, decode_time_slot_selector_layer_->W_q_select().data, static_cast<std::size_t>(decode_time_slot_selector_layer_->W_q_select().numel()));
-        assignWrite(request.slot_selector.w_k_select, decode_time_slot_selector_layer_->W_k_select().data, static_cast<std::size_t>(decode_time_slot_selector_layer_->W_k_select().numel()));
-        assignWrite(request.slot_selector.null_key_select, decode_time_slot_selector_layer_->null_key_select().data, static_cast<std::size_t>(decode_time_slot_selector_layer_->null_key_select().numel()));
-        assignWrite(request.slot_selector.null_logit_bias, decode_time_slot_selector_layer_->null_logit_bias().data, static_cast<std::size_t>(decode_time_slot_selector_layer_->null_logit_bias().numel()));
+    if (decode_time_slot_selector_layer) {
+        assignWrite(request.slot_selector.w_q_select, decode_time_slot_selector_layer->W_q_select().data, static_cast<std::size_t>(decode_time_slot_selector_layer->W_q_select().numel()));
+        assignWrite(request.slot_selector.w_k_select, decode_time_slot_selector_layer->W_k_select().data, static_cast<std::size_t>(decode_time_slot_selector_layer->W_k_select().numel()));
+        assignWrite(request.slot_selector.null_key_select, decode_time_slot_selector_layer->null_key_select().data, static_cast<std::size_t>(decode_time_slot_selector_layer->null_key_select().numel()));
+        assignWrite(request.slot_selector.null_logit_bias, decode_time_slot_selector_layer->null_logit_bias().data, static_cast<std::size_t>(decode_time_slot_selector_layer->null_logit_bias().numel()));
     }
 
     // Issue #33: Final RMSNorm gamma destination — owned by LMHeadLayer
     // When frozen, γ_final stays at 1.0 — do NOT overwrite from checkpoint.
-    if (lm_head_layer_ && lm_head_layer_->finalRmsGamma().data
-        && !config_.freeze_learned_rms_gammas) {
+    if (lm_head_layer && lm_head_layer->finalRmsGamma().data
+        && !freeze_learned_rms_gammas) {
         assignWrite(request.final_rms_gamma,
-                    lm_head_layer_->finalRmsGammaMutable_UnfrozenOnly("serialization::load").data,
-                    static_cast<std::size_t>(config_.d_model));
+                    lm_head_layer->finalRmsGammaMutable_UnfrozenOnly("serialization::load").data,
+                    static_cast<std::size_t>(d_model_i));
     }
 
     bool result = layer.load(request);
@@ -574,18 +607,18 @@ bool LanguageModel::load(const std::string& path) {
         EmitModuleError(ModuleId::Checkpoint, "[load]   path=" + path);
         {
             std::ostringstream oss;
-            oss << "[load]   model config: vocab=" << config_.vocab_size
-                << " d_model=" << config_.d_model << " num_layers=" << config_.num_layers
-                << " num_heads=" << config_.num_heads << " num_kv_heads=" << config_.num_kv_heads
-                << " d_ff=" << config_.d_ff << " max_seq_len=" << config_.max_seq_len
-                << " head_dim=" << config_.head_dim;
+            oss << "[load]   model config: vocab=" << vocab_size
+                << " d_model=" << d_model_i << " num_layers=" << num_layers
+                << " num_heads=" << num_heads << " num_kv_heads=" << num_kv_heads
+                << " d_ff=" << d_ff_i << " max_seq_len=" << max_seq_len
+                << " head_dim=" << head_dim;
             EmitModuleError(ModuleId::Checkpoint, oss.str());
         }
         {
             std::ostringstream oss;
-            oss << "[load]   tie_embeddings=" << config_.tie_embeddings
-                << " use_bias=" << config_.use_bias << " use_gpu=" << config_.use_gpu
-                << " mtp_enabled=" << config_.mtp_enabled;
+            oss << "[load]   tie_embeddings=" << tie_embeddings
+                << " use_bias=" << use_bias << " use_gpu=" << use_gpu
+                << " mtp_enabled=" << mtp_enabled;
             EmitModuleError(ModuleId::Checkpoint, oss.str());
         }
         {
@@ -599,12 +632,12 @@ bool LanguageModel::load(const std::string& path) {
         }
         {
             std::ostringstream oss;
-            oss << "[load]   layer pointers: embedding=" << (embedding_layer_ ? "OK" : "NULL")
-                << " lm_head=" << (lm_head_layer_ ? "OK" : "NULL")
-                << " scratch_block=" << (scratch_block_layer_ ? "OK" : "NULL")
-                << " reasoning_head=" << (reasoning_head_layer_ ? "OK" : "NULL")
-                << " exec_block=" << (execution_block_layer_ ? "OK" : "NULL")
-                << " slot_selector=" << (decode_time_slot_selector_layer_ ? "OK" : "NULL");
+            oss << "[load]   layer pointers: embedding=" << (embedding_layer ? "OK" : "NULL")
+                << " lm_head=" << (lm_head_layer ? "OK" : "NULL")
+                << " scratch_block=" << (scratch_block_layer ? "OK" : "NULL")
+                << " reasoning_head=" << (reasoning_head_layer ? "OK" : "NULL")
+                << " exec_block=" << (execution_block_layer ? "OK" : "NULL")
+                << " slot_selector=" << (decode_time_slot_selector_layer ? "OK" : "NULL");
             EmitModuleError(ModuleId::Checkpoint, oss.str());
         }
         {
@@ -647,7 +680,7 @@ bool LanguageModel::load(const std::string& path) {
     }
 
     // MTP heads: load from sidecar <path>.mtp if present and config has MTP enabled
-    if (config_.mtp_enabled && getMtpK() > 0) {
+    if (mtp_enabled && getMtpK() > 0) {
         const std::string mtp_path = path + ".mtp";
         std::ifstream ifs(mtp_path, std::ios::binary);
         if (ifs) {
@@ -655,12 +688,12 @@ bool LanguageModel::load(const std::string& path) {
             if (!ifs.read(reinterpret_cast<char*>(&file_k), sizeof(file_k)) || file_k != static_cast<uint32_t>(getMtpK())) {
                 EmitModuleInfo(ModuleId::Checkpoint, "[load] MTP sidecar K mismatch or read failed — using freshly initialized MTP heads");
             } else {
-                const std::size_t weight_elems = static_cast<std::size_t>(config_.vocab_size) * static_cast<std::size_t>(config_.d_model);
-                const std::size_t bias_elems = static_cast<std::size_t>(config_.vocab_size);
+                const std::size_t weight_elems = static_cast<std::size_t>(vocab_size) * static_cast<std::size_t>(d_model_i);
+                const std::size_t bias_elems = static_cast<std::size_t>(vocab_size);
                 std::vector<float> h_buf(std::max(weight_elems, bias_elems));
                 bool ok = true;
                 for (uint32_t k = 0; k < file_k && ok; ++k) {
-                    LanguageModel::MTPHead* head = getMtpHead(static_cast<int>(k));
+                    LanguageModel::MTPHead* head = gpu_model_state_ ? gpu_model_state_->getMtpHead(static_cast<int>(k)) : nullptr;
                     if (!head || !head->weight.data || !head->bias.data) { ok = false; break; }
                     if (!ifs.read(reinterpret_cast<char*>(h_buf.data()), weight_elems * sizeof(float))) { ok = false; break; }
                     if (cudaMemcpy(head->weight.data, h_buf.data(), weight_elems * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess) { ok = false; break; }

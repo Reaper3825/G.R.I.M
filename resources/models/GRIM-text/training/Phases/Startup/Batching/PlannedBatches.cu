@@ -6,6 +6,7 @@
 
 #include "../../Phase1_Startup.hpp"
 
+#include "../../../../Shared/Batching/BatchDeviceStorage.hpp"
 #include "../../../../Shared/Batching/EpochBatching.hpp"      // buildEpochBatches
 #include "../../../../Shared/Batching/PackerPolicy.hpp"
 #include "../../../../Shared/Batching/Batching_GPU.hpp"       // buildBatches
@@ -64,6 +65,13 @@ void validatePlannedPayloadOrThrow(
 {
     payload.validate("PlannedBatches");
 
+    if (!payload.device_storage) {
+        std::ostringstream oss;
+        oss << "FATAL: PlannedBatches " << split << " batch " << batch_idx
+            << " has no attached BatchDeviceStorage owner";
+        throw std::runtime_error(oss.str());
+    }
+
     if (payload.batch_size <= 0) {
         std::ostringstream oss;
         oss << "FATAL: PlannedBatches " << split << " batch " << batch_idx
@@ -109,8 +117,8 @@ void PlannedBatchesReady(TrainingContext& ctx) {
             "FATAL: PlannedBatchesReady requires PayloadBuildInputsReady to "
             "have authored ctx.payload_build_inputs");
     }
-    const int fixed_batch_size = ctx.config.batch_size;
-    const int fixed_max_seq_len = ctx.config.max_seq_len;
+    const int fixed_batch_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "batch_size");
+    const int fixed_max_seq_len = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "max_seq_len");
     if (fixed_batch_size <= 0 || fixed_max_seq_len <= 0) {
         std::ostringstream oss;
         oss << "FATAL: PlannedBatchesReady requires configured batching hyperparameters "
@@ -164,6 +172,10 @@ void PlannedBatchesReady(TrainingContext& ctx) {
             "FATAL: PlannedBatchesReady produced 0 training batches");
     }
 
+    auto shared_device_storage = GRIM::Batching::createBatchDeviceStorage(
+        ctx.config,
+        ctx.model->getTrainingState().stream_ctrl.getPrimaryStream());
+
     //======================================================//
     // Train payloads: materialize a host BatchPayload per assignment.
     //
@@ -174,6 +186,10 @@ void PlannedBatchesReady(TrainingContext& ctx) {
     ctx.train_payloads.reserve(num_train_batches);
     for (int i = 0; i < num_train_batches; ++i) {
         auto payload = buildTrainPayload(ctx, ctx.fixed_train_schedule.batches[i]);
+        GRIM::Batching::attachBatchDeviceStorage(
+            payload,
+            shared_device_storage,
+            "PlannedBatchesReady(train)");
         validatePlannedPayloadOrThrow(payload, "train", i);
         ctx.train_payloads.push_back(std::move(payload));
     }
@@ -209,6 +225,10 @@ void PlannedBatchesReady(TrainingContext& ctx) {
         ctx.val_payloads.reserve(num_val_batches);
         for (int i = 0; i < num_val_batches; ++i) {
             auto payload = buildValPayload(ctx, ctx.fixed_val_schedule.batches[i]);
+            GRIM::Batching::attachBatchDeviceStorage(
+                payload,
+                shared_device_storage,
+                "PlannedBatchesReady(val)");
             validatePlannedPayloadOrThrow(payload, "val", i);
             ctx.val_payloads.push_back(std::move(payload));
         }

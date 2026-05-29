@@ -143,7 +143,7 @@ void runLogitScaleDiagnostic(
             }
             const int total_tokens = payload.total_tokens;
             const int vocab_size = payload.vocab_size;
-            const int d_model = ctx.config.d_model;
+            const int d_model = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "d_model");
             const std::vector<int> lm_valid_positions =
                 buildLmValidPositionsOrThrow(payload, "runLogitScaleDiagnostic");
             const int sample_positions = static_cast<int>(lm_valid_positions.size());
@@ -424,7 +424,7 @@ void runLogitScaleDiagnostic(
                 if (!embedding_weights) {
                     throw std::runtime_error("runLogitScaleDiagnostic: embedding weights are NULL");
                 }
-                if (ctx.config.tie_embeddings) {
+                if (GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "tie_embeddings")) {
                     if (lm_head_weights != embedding_weights) {
                         throw std::runtime_error("Tied embeddings: lm_head_weights and embedding_weights must alias the same buffer.");
                     }

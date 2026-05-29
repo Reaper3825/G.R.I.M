@@ -9,10 +9,10 @@
 // JSON Section                → C++ Owner
 // ---------------------------------------
 // ai_config.json              → AiConfigSnapshot::document
-// training.config leaves      → HyperParameters_GPU.hpp typed owners
+// training.config leaves      → HyperParameters_GPU.hpp direct document compute/validate boundary
 //
-// RULE: All runtime fields in LanguageModelConfig MUST
-// be authored in ai_config.json training.config leaves or derived in HyperParameters_GPU.hpp.
+// RULE: All runtime fields MUST be authored in ai_config.json training.config
+// leaves or derived in HyperParameters_GPU.hpp from AiConfigSnapshot::document.
 // HyperParameters_GPU.hpp may keep only formulas/static kernel capabilities,
 // never runtime policy fallbacks.
 //

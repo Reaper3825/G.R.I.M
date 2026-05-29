@@ -6,6 +6,7 @@
 #include "AutogradSelectorSupervisionLoss.hpp"
 #include "AutogradTraining.hpp"
 
+#include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/Execution/DecodeTimeNumPolicy.hpp"
 #include "../../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
@@ -28,6 +29,8 @@ float addSelectorSupervisionLoss(
     if (!cfg) {
         throw std::runtime_error("addSelectorSupervisionLoss: ctx.config is NULL");
     }
+    const auto selector_hp = HyperParameters::decodeTimeSelectorConstructionHP(*cfg);
+    const auto execution_hp = HyperParameters::executionBlockConstructionHP(*cfg);
 
     float selector_supervision_loss = 0.0f;
 
@@ -39,7 +42,7 @@ float addSelectorSupervisionLoss(
     intermediates.selector_slot_feature_inputs.clear();
 
     const bool selector_supervision_configured =
-        cfg->selector_enabled && cfg->selector_supervision_weight > 0.0f;
+        selector_hp.enabled && selector_hp.supervision_weight > 0.0f;
     const bool selector_targets_supplied =
         ctx.payload && !ctx.payload->slot_selection_targets.empty();
 
@@ -60,7 +63,7 @@ float addSelectorSupervisionLoss(
         return selector_supervision_loss;
     }
 
-    if (!cfg->execution_block_enabled) {
+    if (!execution_hp.enabled) {
         throw std::runtime_error("addSelectorSupervisionLoss: selector supervision configured but execution_block_enabled=false; final candidate state cannot be built");
     }
     if (!ctx.model) {
@@ -87,11 +90,10 @@ float addSelectorSupervisionLoss(
         throw std::runtime_error("addSelectorSupervisionLoss: selector supervision configured but DecodeTimeNumPolicy is NULL");
     }
 
-    const int d_model = cfg->d_model;
+    const int d_model = selector_hp.d_model;
     const int seq_len = payload.max_seq_len;
-    const float* d_hidden = intermediates.centered_encoder_output.data
-                          ? intermediates.centered_encoder_output.data
-                          : intermediates.encoder_output_tensor.data;
+    const Tensor* live_lm_head_input = intermediates.liveLmHeadInputOrNull();
+    const float* d_hidden = live_lm_head_input ? live_lm_head_input->data : nullptr;
     if (!d_hidden) {
         throw std::runtime_error("addSelectorSupervisionLoss: encoder output tensor is NULL for selector supervision");
     }
@@ -149,7 +151,7 @@ float addSelectorSupervisionLoss(
         return selector_supervision_loss;
     }
 
-    const float per_pos_weight = cfg->selector_supervision_weight
+    const float per_pos_weight = selector_hp.supervision_weight
                                / static_cast<float>(ce_count);
 
     selector_fwd_results.reserve(static_cast<size_t>(ce_count));

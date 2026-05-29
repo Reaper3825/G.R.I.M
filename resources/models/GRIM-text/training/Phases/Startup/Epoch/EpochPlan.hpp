@@ -21,7 +21,7 @@ struct EpochPlan {
 };
 
 inline EpochPlan finalizeEpochPlanOrThrow(
-    ::GRIM::HyperParameters::LanguageModelConfig& config,
+    ::GRIM::Config::AiConfigSnapshot& config,
     int authored_train_batches)
 {
     const auto schedule_hp =
@@ -69,18 +69,22 @@ inline EpochPlan finalizeEpochPlanOrThrow(
                                  std::to_string(accum) + ")");
     }
 
-    if (config.warmup_fraction <= 0.0f ||
-        config.warmup_fraction >= 1.0f) {
+    const float warmup_fraction =
+        ::GRIM::HyperParameters::snapshotTrainingConfigField<float>(config, "warmup_fraction");
+    if (warmup_fraction <= 0.0f ||
+        warmup_fraction >= 1.0f) {
         throw std::runtime_error(
             "FATAL: warmup_fraction must be in (0, 1) during startup epoch-plan finalization, got " +
-            std::to_string(config.warmup_fraction));
+            std::to_string(warmup_fraction));
     }
-    config.warmup_steps = std::max(
+    const int warmup_steps = std::max(
         1,
-        static_cast<int>(config.warmup_fraction * plan.estimated_total_steps));
-    config.mtp_alpha_warmup_steps = config.warmup_steps;
-    config.telemetry_warmup_steps = config.warmup_steps;
-    config.execution_block_gate_warmup_steps = config.warmup_steps;
+        static_cast<int>(warmup_fraction * plan.estimated_total_steps));
+    auto& cfg = ::GRIM::HyperParameters::mutableSnapshotTrainingConfig(config);
+    cfg.at("warmup_steps") = warmup_steps;
+    cfg.at("mtp_alpha_warmup_steps") = warmup_steps;
+    cfg.at("telemetry_warmup_steps") = warmup_steps;
+    cfg.at("execution_block_gate_warmup_steps") = warmup_steps;
 
     plan.steps_per_epoch = plan.total_batches / accum;
     if (plan.steps_per_epoch <= 0) {
@@ -88,7 +92,7 @@ inline EpochPlan finalizeEpochPlanOrThrow(
                                  std::to_string(plan.total_batches) + " accum=" +
                                  std::to_string(accum) + ")");
     }
-    plan.warmup_steps = config.warmup_steps;
+    plan.warmup_steps = warmup_steps;
     plan.lr_config = ::GRIM::HyperParameters::makeLRScheduleConfig(
         ::GRIM::HyperParameters::learningRateScheduleInputs(config),
         plan.estimated_total_steps,

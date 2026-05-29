@@ -9,7 +9,7 @@
 #include "BoundaryDiagnostic.hpp"
 
 #include "../Phases/Phase2_TrainingLoop.hpp"
-#include "../../Shared/TrainingState/TrainingState_GPU.hpp"
+#include "../../Shared/Batching/BatchDeviceStorage.hpp"
 
 #include <sstream>
 #include <algorithm>
@@ -27,9 +27,13 @@ void runBoundaryDiagnostic(
         // Use payload geometry — single source of truth
         const size_t max_seq_len = static_cast<size_t>(payload.max_seq_len);
         const size_t total_tokens = static_cast<size_t>(payload.actual_tokens);
+        const int config_d_model = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "d_model");
+        const int config_max_seq_len = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "max_seq_len");
+        const int config_num_heads = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "num_heads");
+        const int config_num_layers = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "num_layers");
 
         static bool logged_max_seq = false;
-        const bool is_boundary_max_seq = (max_seq_len >= static_cast<size_t>(ctx.config.max_seq_len) && !logged_max_seq);
+        const bool is_boundary_max_seq = (max_seq_len >= static_cast<size_t>(config_max_seq_len) && !logged_max_seq);
 
         
         if (is_boundary_max_seq) {
@@ -38,25 +42,25 @@ void runBoundaryDiagnostic(
             diag << "[BOUNDARY_DIAGNOSTIC] Batch " << (batch_idx + 1) << " CROSSING BOUNDARY\n";
             
             // Identify which boundary was crossed
-            if (is_boundary_max_seq) diag << "[BOUNDARY_DIAGNOSTIC] *** REACHED model.max_seq_len=" << ctx.config.max_seq_len << " ***\n";
+            if (is_boundary_max_seq) diag << "[BOUNDARY_DIAGNOSTIC] *** REACHED model.max_seq_len=" << config_max_seq_len << " ***\n";
 
             diag << "[BOUNDARY_DIAGNOSTIC] max_seq_len=" << max_seq_len 
                  << " total_tokens=" << total_tokens 
                  << " batch_size=" << payload.batch_size << "\n";
             
             diag << "[BOUNDARY_DIAGNOSTIC] MODEL CONFIG:\n";
-            diag << "  d_model=" << ctx.config.d_model << "\n";
-            diag << "  max_seq_len=" << ctx.config.max_seq_len << "\n";
-            diag << "  num_heads=" << ctx.config.num_heads << "\n";
-            diag << "  num_layers=" << ctx.config.num_layers << "\n";
+            diag << "  d_model=" << config_d_model << "\n";
+            diag << "  max_seq_len=" << config_max_seq_len << "\n";
+            diag << "  num_heads=" << config_num_heads << "\n";
+            diag << "  num_layers=" << config_num_layers << "\n";
             diag << "  vocab_size=" << ctx.data_info.actual_vocab_size << "\n";
             
             // Position embedding checks (this IS a valid concern)
             diag << "[BOUNDARY_DIAGNOSTIC] POSITION EMBEDDING CHECKS:\n";
             diag << "  Current max_seq_len in batch: " << max_seq_len << "\n";
-            diag << "  Model max_seq_len: " << ctx.config.max_seq_len << "\n";
+            diag << "  Model max_seq_len: " << config_max_seq_len << "\n";
             diag << "  Position index range needed: [0, " << (max_seq_len - 1) << "]\n";
-            if (max_seq_len > static_cast<size_t>(ctx.config.max_seq_len)) {
+            if (max_seq_len > static_cast<size_t>(config_max_seq_len)) {
                 diag << "  *** ERROR: Sequence exceeds model max_seq_len! Position embeddings will OOB! ***\n";
             }
             
@@ -67,9 +71,9 @@ void runBoundaryDiagnostic(
                 diag << "  seq[" << s << "]: len=" << seq_len;
                 
                 // Check for position IDs that would overflow
-                if (seq_len > ctx.config.max_seq_len) {
+                if (seq_len > config_max_seq_len) {
                     diag << " *** OVERFLOW pos=" << seq_len 
-                         << " > max=" << ctx.config.max_seq_len << " ***";
+                         << " > max=" << config_max_seq_len << " ***";
                 }
                 
                 // Sample first and last tokens from flat payload
@@ -83,17 +87,22 @@ void runBoundaryDiagnostic(
                 diag << "\n";
             }
             
-            // Training state checks - TRAINING cache info (not inference KV cache)
-            const auto& ts = ctx.model->getTrainingState();
             diag << "[BOUNDARY_DIAGNOSTIC] PAYLOAD GEOMETRY:\n";
             diag << "  payload.batch_size=" << payload.batch_size << "\n";
             diag << "  payload.max_seq_len=" << payload.max_seq_len << "\n";
             diag << "  payload.total_tokens=" << payload.total_tokens << "\n";
             diag << "  payload.lm_valid_tokens=" << payload.lm_valid_tokens << "\n";
             
+            if (!payload.device_storage) {
+                throw std::runtime_error(
+                    "BoundaryDiagnostic: payload.device_storage is NULL - "
+                    "PlannedBatchesReady must attach explicit batch device storage");
+            }
+
             // Training allocation check. Authored token capacity comes from trainingFixedShapeHP();
-            // logits allocation capacity comes from the Tensor shape.
-            const auto& token_ids_shape = ts.cached_token_ids_tensor.shape.require("BoundaryDiagnostic cached_token_ids_tensor");
+            // explicit batch device storage reports the reusable upload capacity.
+            const auto& token_ids_shape = payload.device_storage->input_ids_tensor.shape.require(
+                "BoundaryDiagnostic input_ids_tensor");
             const auto fixed_shape = GRIM::HyperParameters::trainingFixedShapeHP(ctx.config);
             const size_t token_capacity = static_cast<size_t>(fixed_shape.max_tokens_per_batch);
             const size_t uploaded_token_capacity = static_cast<size_t>(token_ids_shape.as_2d().cols);
@@ -101,8 +110,8 @@ void runBoundaryDiagnostic(
             diag << "  fixed_shape.batch_size=" << fixed_shape.batch_size << "\n";
             diag << "  fixed_shape.max_seq_len=" << fixed_shape.max_seq_len << "\n";
             diag << "  fixed_shape.max_tokens_per_batch=" << fixed_shape.max_tokens_per_batch << "\n";
-            diag << "[BOUNDARY_DIAGNOSTIC] ALLOCATED CACHE CAPACITY:\n";
-            diag << "  cached_token_ids_tensor.cols=" << uploaded_token_capacity << "\n";
+            diag << "[BOUNDARY_DIAGNOSTIC] ALLOCATED PAYLOAD STORAGE CAPACITY:\n";
+            diag << "  payload.device_storage.input_ids_tensor.cols=" << uploaded_token_capacity << "\n";
             
             // Check if sequence fits in TRAINING cache — use payload.total_tokens (already batch*max_seq)
             diag << "  Required tokens for this batch: " << payload.total_tokens << "\n";

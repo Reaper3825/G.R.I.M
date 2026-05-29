@@ -103,7 +103,9 @@ int main(int argc, char** argv) {
     }
 
     try {
-        const auto startup_config = GRIM::HyperParameters::loadStartupConfig(
+        auto config_snapshot = GRIM::Config::loadAiConfigSnapshot();
+        auto startup_config = GRIM::HyperParameters::finalizeAiConfigSnapshot(
+            std::move(config_snapshot),
             argc,
             argv,
             GRIM::HyperParameters::ModelExecutionMode::TRAINING);

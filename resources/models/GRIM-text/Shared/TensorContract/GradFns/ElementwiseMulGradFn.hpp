@@ -7,8 +7,9 @@
 //            grad_b = grad_y ⊙ a
 //
 //  MEMORY OPTIMIZATION: backward holds NON-OWNING references to a/b
-//  (cached_a / cached_b). Safe because ForwardIntermediates (Issue #56)
-//  guarantees both input tensors persist until after backward completes.
+//  (cached_a / cached_b). Safe because ModelForwardOutputs owns the retained
+//  per-layer tensors directly, and Issue #56 guarantees those inputs persist
+//  until after backward completes.
 //
 //  Owns:
 //    - struct ElementwiseMulGradFn   (declared here)

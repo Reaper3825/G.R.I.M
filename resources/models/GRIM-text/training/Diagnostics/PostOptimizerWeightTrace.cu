@@ -72,7 +72,7 @@ void runPostOptimizerWeightTrace(
             const auto trace_lines = formatOptimizerUpdateTraceLines(
                 update_trace,
                 optimizer_step,
-                ctx.config.tie_embeddings);
+                GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "tie_embeddings"));
             for (const auto& trace_line : trace_lines) {
                 ctx.logging.logger->log(trace_line);
             }

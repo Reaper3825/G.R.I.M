@@ -85,7 +85,7 @@ std::pair<float, float> getGPUMemoryStats() {
     return {used_mb, total_mb};
 }
 
-void cleanupTemporaryFiles(const ::GRIM::HyperParameters::LanguageModelConfig& config) {
+void cleanupTemporaryFiles(const ::GRIM::Config::AiConfigSnapshot& config) {
     const auto paths_hp = ::GRIM::HyperParameters::pathsHP(config);
     // Remove any temporary checkpoint files
     try {
@@ -94,8 +94,8 @@ void cleanupTemporaryFiles(const ::GRIM::HyperParameters::LanguageModelConfig& c
                 fs::remove(entry.path());
             }
         }
-    } catch (const std::exception&) {
-        // Ignore cleanup errors
+    } catch (const std::exception& e) {
+        throw std::runtime_error(std::string("cleanupTemporaryFiles failed: ") + e.what());
     }
 }
 

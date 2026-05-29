@@ -4,6 +4,7 @@
 //======================================================//
 
 #include "AutogradTraining.hpp"
+#include "AutogradExecutionLoss.hpp"
 #include "AutogradMtpAuxiliaryLoss.hpp"
 #include "AutogradSelectorSupervisionLoss.hpp"
 
@@ -269,10 +270,8 @@ GradientVerificationActivity detectGradientVerificationActivity(AutogradContext&
         // actually added into the normalized execution auxiliary objective.
         // Do not infer activity from exec_outputs_per_row: that includes padded
         // or inactive diagnostics that may never reach loss_tensor.
-        activity.exec_op_loss_active = intermediates.exec_op_ce_added
-            || intermediates.exec_transition_added;
-        activity.exec_arg_loss_active = intermediates.exec_arg_ce_added
-            || intermediates.exec_transition_added;
+        activity.exec_op_loss_active = intermediates.exec_op_ce_added;
+        activity.exec_arg_loss_active = intermediates.exec_arg_ce_added;
         activity.exec_write_selection_ce_active = intermediates.exec_write_ce_added;
     }
     return activity;
@@ -289,6 +288,7 @@ GradientSignalBaselines captureGradientVerificationBaselines(
     }
 
     const GradientVerificationActivity activity = detectGradientVerificationActivity(ctx);
+    const auto model_hp = GRIM::HyperParameters::modelHP(*ctx.config);
     auto captureExpected = [&](Tensor& tensor, const std::string& label) {
         if (tensor.data) {
             baselines.expected.push_back(captureGradientExpectation(tensor, label, ctx.stream));
@@ -297,7 +297,7 @@ GradientSignalBaselines captureGradientVerificationBaselines(
 
     if (activity.text_loss_active) {
         captureExpected(ctx.lm_head->weights(), "lm_head weights");
-        if (ctx.gpu_encoder && ctx.config->num_layers > 0) {
+        if (ctx.gpu_encoder && model_hp.encoder_num_layers > 0) {
             auto* enc0 = ctx.gpu_encoder->getLayer(0);
             if (enc0) {
                 captureExpected(enc0->attnWqkv(), "layer 0 attnWqkv");
@@ -305,7 +305,7 @@ GradientSignalBaselines captureGradientVerificationBaselines(
         }
     }
 
-    if (ctx.execution_block && ctx.config->execution_block_enabled) {
+    if (ctx.execution_block && model_hp.execution_block_enabled) {
         auto& eb = *ctx.execution_block;
         if (activity.exec_op_loss_active) {
             captureExpected(eb.W_op_select(), "exec block W_op_select");
@@ -319,7 +319,7 @@ GradientSignalBaselines captureGradientVerificationBaselines(
         }
     }
 
-    if (ctx.model && ctx.config->selector_enabled && activity.selector_loss_active) {
+    if (ctx.model && model_hp.decode_time_selector_enabled && activity.selector_loss_active) {
         auto* selector = ctx.model->getDecodeTimeSlotSelectorLayer();
         if (selector) {
             captureExpected(selector->W_q_select(), "selector W_q_select");
@@ -365,6 +365,7 @@ LossResult computeAutogradLoss(
     
     auto* ts = ctx.training_state;
     const auto* cfg = ctx.config;
+    const auto model_hp = GRIM::HyperParameters::modelHP(*cfg);
     
     // RULE 20: Fail loud - validate logits tensor was populated by forward pass
     auto& intermediates = ts->autograd_intermediates;
@@ -391,8 +392,10 @@ LossResult computeAutogradLoss(
     // 1. TEXT CROSS-ENTROPY LOSS (autograd::unified_loss)
     // ═══════════════════════════════════════════════════════════════════════════
     
-    // Compute text CE - returns scalar Tensor with NLLLossGradFn → LogSoftmaxGradFn chain
-    Tensor loss_tensor = autograd::unified_loss(
+    // Compute text CE directly into the canonical Category 1 owner consumed
+    // later by executeAutogradBackward(). Phase2 receives the host-side
+    // LossResult from computeAutogradLoss(); it does not own a second loss Tensor.
+    intermediates.loss_tensor = autograd::unified_loss(
         intermediates.logits_tensor,
         payload,
         *ctx.device_bindings,
@@ -400,9 +403,6 @@ LossResult computeAutogradLoss(
         ctx.d_class_weights,
         ctx.stream
     );
-    
-    // Move loss tensor to intermediates (TrainingState owns it during backward)
-    intermediates.loss_tensor = std::move(loss_tensor);
 
     float text_ce_loss = 0.0f;
     cudaMemcpyAsync(&text_ce_loss, intermediates.loss_tensor.data, sizeof(float),
@@ -416,42 +416,24 @@ LossResult computeAutogradLoss(
     // ═══════════════════════════════════════════════════════════════════════════
     // 2. MTP (multi-token prediction) auxiliary losses: L_total += α/K * Σ_k L_k
     //
-    // Autograd owns the representation boundary: MTP consumes the same hidden
-    // representation as the LM head, but the Shared/MTP kernel file must never
-    // reach through LMHeadLayer or AutogradContext to decide that policy.
+    // MTP logits must already exist as forward-owned Category 1 tensors.
+    // Loss assembly only consumes those tensors and adds the auxiliary losses;
+    // it must not create logits or re-run LM-head-side forward math.
     // ═══════════════════════════════════════════════════════════════════════════
     float mtp_loss = 0.0f;
     result.mtp_diagnostics.clear();
-    if (cfg->mtp_enabled && cfg->mtp_k > 0) {
+    if (model_hp.mtp_enabled && model_hp.mtp_k > 0) {
         if (!ctx.model) {
             throw std::runtime_error("computeAutogradLoss: ctx.model is NULL while MTP is enabled — MTP heads are model-owned");
         }
-        if (ctx.model->getMtpK() != cfg->mtp_k) {
+        if (ctx.model->getMtpK() != model_hp.mtp_k) {
             throw std::runtime_error("computeAutogradLoss: model.getMtpK()=" + std::to_string(ctx.model->getMtpK()) +
-                " != ctx.config->mtp_k=" + std::to_string(cfg->mtp_k) +
+                " != ctx.config->mtp_k=" + std::to_string(model_hp.mtp_k) +
                 " — AutogradContext config must be the model-owned config");
-        }
-
-        Tensor* mtp_input = nullptr;
-        if (mtp_alpha_effective == 0.0f) {
-            mtp_input = &intermediates.encoder_output_tensor;
-        } else if (intermediates.centered_encoder_output.data) {
-            mtp_input = &intermediates.centered_encoder_output;
-        } else if (ctx.lm_head->finalRmsGamma().data) {
-            intermediates.mtp_input_tensor = autograd::rms_norm(
-                intermediates.encoder_output_tensor,
-                ctx.lm_head->finalRmsGamma(),
-                ctx.lm_head->hp().rms_epsilon,
-                ctx.stream
-            );
-            mtp_input = &intermediates.mtp_input_tensor;
-        } else {
-            mtp_input = &intermediates.encoder_output_tensor;
         }
 
         mtp_loss = computeAutogradMtpAuxiliaryLosses(
             *ctx.model,
-            *mtp_input,
             intermediates.loss_tensor,
             intermediates.mtp_logits_tensors,
             result.mtp_diagnostics,
@@ -485,263 +467,16 @@ LossResult computeAutogradLoss(
     result.valid_tokens = lm_valid_tokens;
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // EXECUTION BLOCK LOSS — autograd-connected CE + transition loss
-    //
-    // Two gradient-connected paths:
-    //   1. transition_loss — L1 on soft-computed value vs teacher expected_value
-    //   2. selection CE — logits-space CE on op/arg1/arg2/write selections
-    //      (computed inside executeStep via autograd::cross_entropy_logits)
-    //
-    // The execution auxiliary objective is averaged over active scalar loss
-    // terms before it is added to loss_tensor. This keeps effective execution
-    // weight invariant to teacher-step count / batch composition.
-    //
-    // Monitoring-only (host scalars, no gradients):
-    //   - exec_entropy_monitor — distribution collapse detection
-    //   - exec_structured_ce — scalar readback of device CE for logging parity
+    // EXECUTION BLOCK LOSS — assembled at the explicit autograd loss boundary
+    // from retained forward tensors (logits, v_out, teacher scalar, clamp flag).
     // ═══════════════════════════════════════════════════════════════════════════
-    float exec_structured_ce = 0.0f;
-    float exec_entropy_monitor = 0.0f;
-
-    if (cfg->execution_block_enabled && ctx.execution_block
-        && !intermediates.exec_outputs_per_row.empty()) {
-
-        if (static_cast<int>(intermediates.exec_outputs_per_row.size()) != payload.batch_size) {
-            throw std::runtime_error(
-                "computeAutogradLoss: exec_outputs_per_row size="
-                + std::to_string(intermediates.exec_outputs_per_row.size())
-                + " does not match payload.batch_size=" + std::to_string(payload.batch_size)
-                + " — execution forward must produce exactly one row output per payload row");
-        }
-        if (!ctx.payload->execution_active.empty()
-            && static_cast<int>(ctx.payload->execution_active.size()) != payload.batch_size) {
-            throw std::runtime_error(
-                "computeAutogradLoss: execution_active size="
-                + std::to_string(ctx.payload->execution_active.size())
-                + " does not match payload.batch_size=" + std::to_string(payload.batch_size)
-                + " — Phase1 payload row masks must align with execution outputs");
-        }
-
-        intermediates.exec_op_ce_added = false;
-        intermediates.exec_arg_ce_added = false;
-        intermediates.exec_write_ce_added = false;
-        intermediates.exec_transition_added = false;
-
-        const bool have_step_mask = (ctx.payload && !ctx.payload->teacher_step_mask.empty());
-        const float ce_weight = cfg->structured_ce_weight;
-
-        // Accumulate autograd losses locally, then normalize once before adding
-        // to the main loss. Adding raw per-step sums makes rows with more
-        // teacher steps exert larger pressure than rows with fewer steps.
-        Tensor exec_loss_sum;
-        bool have_exec_loss_sum = false;
-        int exec_active_step_count = 0;
-        int exec_loss_term_count = 0;
-        int ce_tensor_count = 0;
-        float ce_scalar_sum = 0.0f;
-
-        enum class ExecLossFlag {
-            Op,
-            Arg,
-            Write,
-            Transition
-        };
-
-        auto addExecLossTerm = [&](Tensor&& contribution, const char* name, int b, int k, ExecLossFlag flag) {
-            if (!contribution.data || !contribution.grad_fn) {
-                throw std::runtime_error(
-                    std::string("AutogradTraining: execution loss tensor '") + name
-                    + "' has no data/grad_fn at row=" + std::to_string(b)
-                    + " step=" + std::to_string(k)
-                    + " — execution auxiliary loss must remain autograd-connected");
-            }
-            if (contribution.numel() != 1) {
-                throw std::runtime_error(
-                    std::string("AutogradTraining: execution loss tensor '") + name
-                    + "' is not scalar at row=" + std::to_string(b)
-                    + " step=" + std::to_string(k)
-                    + " numel=" + std::to_string(contribution.numel()));
-            }
-            if (!have_exec_loss_sum) {
-                exec_loss_sum = std::move(contribution);
-                have_exec_loss_sum = true;
-            } else {
-                exec_loss_sum = autograd::add(exec_loss_sum, contribution, ctx.stream);
-            }
-            switch (flag) {
-                case ExecLossFlag::Op:
-                    intermediates.exec_op_ce_added = true;
-                    break;
-                case ExecLossFlag::Arg:
-                    intermediates.exec_arg_ce_added = true;
-                    break;
-                case ExecLossFlag::Write:
-                    intermediates.exec_write_ce_added = true;
-                    break;
-                case ExecLossFlag::Transition:
-                    intermediates.exec_transition_added = true;
-                    break;
-            }
-            exec_loss_term_count++;
-        };
-
-        for (int b = 0; b < payload.batch_size; ++b) {
-            if (!ctx.payload->execution_active.empty()
-                && !ctx.payload->execution_active[b])
-                continue;
-
-            const auto& row_steps = intermediates.exec_outputs_per_row[b].steps;
-            for (int k = 0; k < static_cast<int>(row_steps.size()); ++k) {
-                // Skip padded steps — no gradient contribution
-                if (have_step_mask
-                    && b < static_cast<int>(ctx.payload->teacher_step_mask.size())
-                    && k < static_cast<int>(ctx.payload->teacher_step_mask[b].size())
-                    && ctx.payload->teacher_step_mask[b][k] == 0)
-                    continue;
-
-                exec_active_step_count++;
-
-                const auto& sout = row_steps[k];
-
-                // transition_loss → autograd graph (L1 value supervision)
-                if (sout.transition_loss.data && sout.transition_loss.grad_fn) {
-                    auto scaled = autograd::scale_scalar(
-                        sout.transition_loss,
-                        cfg->execution_block_causal_w1_transition,
-                        ctx.stream);
-                    addExecLossTerm(std::move(scaled), "transition_loss", b, k, ExecLossFlag::Transition);
-                }
-
-                // Fix #6: div_invalid_penalty → autograd graph
-                // Penalizes p_op[3] when division was clamped (|v2| < eps).
-                // Gradient flows: penalty → p_op → softmax → op_logits → W_op_select.
-                if (sout.div_invalid_penalty.data && sout.div_invalid_penalty.grad_fn) {
-                    auto scaled = autograd::scale_scalar(
-                        sout.div_invalid_penalty,
-                        1.0f,
-                        ctx.stream);
-                    addExecLossTerm(std::move(scaled), "div_invalid_penalty", b, k, ExecLossFlag::Op);
-                }
-
-                // Fix #8: div_magnitude_penalty → autograd graph
-                // Penalizes large |v_out| after clamped division.
-                // Gradient flows: penalty → v_out → FourOpMixGradFn → v1, v2.
-                if (sout.div_magnitude_penalty.data && sout.div_magnitude_penalty.grad_fn) {
-                    auto scaled = autograd::scale_scalar(
-                        sout.div_magnitude_penalty,
-                        1.0f,
-                        ctx.stream);
-                    addExecLossTerm(std::move(scaled), "div_magnitude_penalty", b, k, ExecLossFlag::Transition);
-                }
-
-                // Fix #7: arg_reinforce_loss → autograd graph
-                // REINFORCE: λ * detached(|v_out-target|) * (-log p_arg[k])
-                // Gradient flows ONLY to arg logits. No soft weighting of values.
-                if (sout.arg_reinforce_loss.data && sout.arg_reinforce_loss.grad_fn) {
-                    auto scaled = autograd::scale_scalar(
-                        sout.arg_reinforce_loss,
-                        1.0f,
-                        ctx.stream);
-                    addExecLossTerm(std::move(scaled), "arg_reinforce_loss", b, k, ExecLossFlag::Arg);
-                }
-
-                // selection CE → autograd graph (direct per-decision supervision)
-                if (cfg->structured_ce_enabled && sout.has_selection_ce) {
-                    auto accumulate_ce = [&](const Tensor& ce_tensor, const char* name, ExecLossFlag flag) {
-                        if (!ce_tensor.data || !ce_tensor.grad_fn)
-                            throw std::runtime_error(
-                                std::string("AutogradTraining: selection CE tensor '")
-                                + name + "' has no data/grad_fn at row=" + std::to_string(b)
-                                + " step=" + std::to_string(k)
-                                + " — CrossEntropyLogitsGradFn was not attached");
-                        auto scaled = autograd::scale_scalar(ce_tensor, ce_weight, ctx.stream);
-                        addExecLossTerm(std::move(scaled), name, b, k, flag);
-                    };
-
-                    accumulate_ce(sout.selection_ce_op,    "selection_ce_op",    ExecLossFlag::Op);
-                    accumulate_ce(sout.selection_ce_arg1,  "selection_ce_arg1",  ExecLossFlag::Arg);
-                    accumulate_ce(sout.selection_ce_arg2,  "selection_ce_arg2",  ExecLossFlag::Arg);
-                    accumulate_ce(sout.selection_ce_write, "selection_ce_write", ExecLossFlag::Write);
-
-                    // Scalar readback for logging parity (one sync per step is acceptable
-                    // since we're already doing cudaMemcpy for expected_value upload)
-                    float h_ce[4];
-                    cudaMemcpyAsync(&h_ce[0], sout.selection_ce_op.data,    sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
-                    cudaMemcpyAsync(&h_ce[1], sout.selection_ce_arg1.data,  sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
-                    cudaMemcpyAsync(&h_ce[2], sout.selection_ce_arg2.data,  sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
-                    cudaMemcpyAsync(&h_ce[3], sout.selection_ce_write.data, sizeof(float), cudaMemcpyDeviceToHost, ctx.stream);
-                    cudaStreamSynchronize(ctx.stream);
-                    ce_scalar_sum += h_ce[0] + h_ce[1] + h_ce[2] + h_ce[3];
-                    ce_tensor_count++;
-                }
-            }
-        }
-
-        if (ce_tensor_count > 0) {
-            exec_structured_ce = ce_scalar_sum / static_cast<float>(ce_tensor_count);
-        }
-
-        if (have_exec_loss_sum) {
-            if (exec_loss_term_count <= 0) {
-                throw std::runtime_error(
-                    "AutogradTraining: have_exec_loss_sum=true but exec_loss_term_count<=0 — execution loss normalization invariant broken");
-            }
-            const float exec_loss_norm = 1.0f / static_cast<float>(exec_loss_term_count);
-            Tensor normalized_exec_loss = autograd::scale_scalar(
-                exec_loss_sum,
-                exec_loss_norm,
-                ctx.stream);
-            intermediates.loss_tensor = autograd::add(
-                intermediates.loss_tensor, normalized_exec_loss, ctx.stream);
-            AG_INFO("Execution auxiliary loss normalized over " << exec_loss_term_count
-                    << " scalar loss terms across " << exec_active_step_count
-                    << " active execution steps");
-        }
-
-        // Optional entropy monitor (non-differentiable; not added to loss_tensor)
-        if (cfg->entropy_aux_weight > 0.0f) {
-            int monitored_entropy_rows = 0;
-            for (int b = 0; b < payload.batch_size; ++b) {
-                if (!ctx.payload->execution_active.empty()
-                    && !ctx.payload->execution_active[b])
-                    continue;
-
-                const auto& all_steps = intermediates.exec_outputs_per_row[b].steps;
-                std::vector<const ExecutionBlockStepOutput*> real_steps;
-                if (have_step_mask
-                    && b < static_cast<int>(ctx.payload->teacher_step_mask.size())
-                    && !ctx.payload->teacher_step_mask[b].empty()) {
-                    for (int k = 0; k < static_cast<int>(all_steps.size()); ++k) {
-                        if (k < static_cast<int>(ctx.payload->teacher_step_mask[b].size())
-                            && ctx.payload->teacher_step_mask[b][k] == 0)
-                            continue;
-                        real_steps.push_back(&all_steps[k]);
-                    }
-                } else {
-                    for (const auto& s : all_steps)
-                        real_steps.push_back(&s);
-                }
-                if (real_steps.empty()) {
-                    continue;
-                }
-                Tensor ent = ctx.execution_block->computeEntropyLoss(
-                    real_steps,
-                    cfg->entropy_aux_weight,
-                    ctx.stream);
-                if (!ent.data) {
-                    throw std::runtime_error(
-                        "computeAutogradLoss: execution entropy monitor returned NULL tensor data for row="
-                        + std::to_string(b) + " with real_steps=" + std::to_string(real_steps.size()));
-                }
-                float h_ent = 0.0f;
-                cudaStreamSynchronize(ctx.stream);
-                cudaMemcpy(&h_ent, ent.data, sizeof(float), cudaMemcpyDeviceToHost);
-                exec_entropy_monitor += h_ent;
-                monitored_entropy_rows++;
-            }
-            if (monitored_entropy_rows > 0)
-                exec_entropy_monitor /= static_cast<float>(monitored_entropy_rows);
-        }
+    const ExecutionAuxiliaryLossSummary exec_summary = addExecutionAuxiliaryLoss(ctx, intermediates);
+    const float exec_structured_ce = exec_summary.structured_ce;
+    const float exec_entropy_monitor = exec_summary.entropy_monitor;
+    if (exec_summary.scalar_loss_terms > 0) {
+        AG_INFO("Execution auxiliary loss normalized over " << exec_summary.scalar_loss_terms
+                << " scalar loss terms across " << exec_summary.active_steps
+                << " active execution steps");
     }
     result.entropy_monitor = exec_entropy_monitor;
 
@@ -811,6 +546,7 @@ BackwardResult executeAutogradBackward(
     
     auto* ts = ctx.training_state;
     auto& intermediates = ts->autograd_intermediates;
+    const auto model_hp = GRIM::HyperParameters::modelHP(*ctx.config);
     if (!intermediates.loss_tensor.data) {
         throw std::runtime_error("executeAutogradBackward: Loss tensor not initialized - call computeAutogradLoss() first");
     }
@@ -862,7 +598,7 @@ BackwardResult executeAutogradBackward(
 
         // Sample first encoder layer attnWqkv gradient
         float enc_sample = 0.0f;
-        if (ctx.gpu_encoder && ctx.config->num_layers > 0) {
+        if (ctx.gpu_encoder && model_hp.encoder_num_layers > 0) {
             auto* enc0 = ctx.gpu_encoder->getLayer(0);
             if (enc0) {
                 float* wqkv_grads = enc0->attnWqkv().grad_data();
@@ -874,7 +610,7 @@ BackwardResult executeAutogradBackward(
 
         // Sample RMSNorm gamma gradient (layer 0)
         float rms_sample = 0.0f;
-        if (ctx.gpu_encoder && ctx.config->num_layers > 0) {
+        if (ctx.gpu_encoder && model_hp.encoder_num_layers > 0) {
             auto* enc0 = ctx.gpu_encoder->getLayer(0);
             if (enc0) {
                 float* rms_grads = enc0->rms1Gamma().grad_data();
@@ -925,6 +661,7 @@ bool verifyGradientsAreConnectedImpl(
 ) {
     bool ok = true;
     const GradientVerificationActivity activity = detectGradientVerificationActivity(ctx);
+    const auto model_hp = GRIM::HyperParameters::modelHP(*ctx.config);
     const bool reasoning_loss_active = false;  // ReasoningHead forward is diagnostic-only until a real reasoning loss path is assembled.
 
     auto requireAllocatedFinite = [&](Tensor& t, const std::string& label) {
@@ -1065,7 +802,7 @@ bool verifyGradientsAreConnectedImpl(
     }
 
     if (ctx.gpu_encoder) {
-        const int num_layers = ctx.config->num_layers;
+        const int num_layers = model_hp.encoder_num_layers;
         for (int layer = 0; layer < num_layers; ++layer) {
             auto* enc = ctx.gpu_encoder->getLayer(layer);
             if (!enc) {
@@ -1076,7 +813,7 @@ bool verifyGradientsAreConnectedImpl(
             auto check = [&](Tensor& t, const char* name) {
                 if (t.data) requireAllocatedFinite(t, "layer " + std::to_string(layer) + " " + std::string(name));
             };
-            if (ctx.config->freeze_learned_rms_gammas) {
+            if (model_hp.encoder_freeze_learned_rms_gammas) {
                 if (enc->rms1Gamma().has_grad()) {
                     AG_WARN("layer " << layer << " rms1Gamma has a grad buffer while freeze_learned_rms_gammas=true");
                     ok = false;
@@ -1126,7 +863,7 @@ bool verifyGradientsAreConnectedImpl(
         ok = false;
     }
 
-    if (ctx.config->mtp_enabled && ctx.config->mtp_k > 0) {
+    if (model_hp.mtp_enabled && model_hp.mtp_k > 0) {
         if (!ctx.model) {
             AG_WARN("ctx.model is NULL during MTP gradient verification while MTP is enabled");
             ok = false;
@@ -1152,7 +889,7 @@ bool verifyGradientsAreConnectedImpl(
     }
 
     // ExecutionBlock parameters
-    if (ctx.execution_block && ctx.config->execution_block_enabled) {
+    if (ctx.execution_block && model_hp.execution_block_enabled) {
         auto checkEB = [&](Tensor& t, const char* name) {
             if (t.data) requireAllocatedFinite(t, "exec block " + std::string(name));
         };
@@ -1200,7 +937,7 @@ bool verifyGradientsAreConnectedImpl(
     }
 
     // DecodeTimeSlotSelector parameters
-    if (ctx.model && ctx.config->selector_enabled) {
+    if (ctx.model && model_hp.decode_time_selector_enabled) {
         auto* selector = ctx.model->getDecodeTimeSlotSelectorLayer();
         if (selector) {
             auto checkSel = [&](Tensor& t, const char* name) {

@@ -86,11 +86,11 @@ std::vector<float> runInferencePrefill(GRIM::LanguageModel* model,
         throw std::runtime_error("runInferencePrefill: training state not initialized");
     }
     auto& generation_state = model->getGenerationState();
+    cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
     const auto bindings = GRIM::Batching::uploadBatchToDevice(
         model->getConfig(),
-        model->getTrainingState(),
-        payload);
-    cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
+        payload,
+        stream);
 
     struct ScopedInferenceIntermediatesClear {
         GRIM::TrainingState& training_state;

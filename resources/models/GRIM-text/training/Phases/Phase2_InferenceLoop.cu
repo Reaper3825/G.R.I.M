@@ -72,33 +72,73 @@ void validateInferenceForwardPayload(
     }
 
     const auto& config = model.getConfig();
-    if (!config.use_gpu) {
+    const bool use_gpu = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "use_gpu");
+    const int max_seq_len = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "max_seq_len");
+    const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "vocab_size");
+    if (!use_gpu) {
         throw std::runtime_error(std::string(caller) + ": config.use_gpu must be true");
     }
-    if (active_payload.max_seq_len <= 0 || active_payload.max_seq_len > config.max_seq_len) {
+    if (active_payload.max_seq_len <= 0 || active_payload.max_seq_len > max_seq_len) {
         throw std::runtime_error(std::string(caller) + ": payload max_seq_len=" +
                                  std::to_string(active_payload.max_seq_len) + " out of range [1, " +
-                                 std::to_string(config.max_seq_len) + "]");
+                                 std::to_string(max_seq_len) + "]");
     }
     if (active_payload.total_tokens <= 0) {
         throw std::runtime_error(std::string(caller) + ": payload total_tokens must be > 0");
     }
-    if (active_payload.vocab_size != config.vocab_size) {
+    if (active_payload.vocab_size != vocab_size) {
         throw std::runtime_error(std::string(caller) + ": payload.vocab_size=" +
                                  std::to_string(active_payload.vocab_size) +
-                                 " != config.vocab_size=" + std::to_string(config.vocab_size));
+                                 " != config.vocab_size=" + std::to_string(vocab_size));
     }
+}
+
+std::vector<GRIM::Forward::MTPHeadForwardView> buildDetachedForwardMtpHeadViews(
+    GRIMText::Training::Startup::GpuModelState& gpu_model_state,
+    int mtp_k,
+    cudaStream_t stream)
+{
+    std::vector<GRIM::Forward::MTPHeadForwardView> views;
+    if (mtp_k <= 0) {
+        return views;
+    }
+
+    views.reserve(static_cast<size_t>(mtp_k));
+    for (int k = 0; k < mtp_k; ++k) {
+        auto* head = gpu_model_state.getMtpHead(k);
+        if (!head) {
+            throw std::runtime_error(
+                "Phase2 payload inference: gpu_model_state.getMtpHead(" + std::to_string(k) + ") returned NULL");
+        }
+        if (!head->weight.data || !head->bias.data) {
+            throw std::runtime_error(
+                "Phase2 payload inference: MTP head " + std::to_string(k) +
+                " has NULL weight or bias tensor");
+        }
+
+        GRIM::Forward::MTPHeadForwardView view{};
+        view.weight = head->weight.detach(stream);
+        view.bias = head->bias.detach(stream);
+        views.push_back(std::move(view));
+    }
+
+    return views;
 }
 
 GRIM::GeneratedSequence generateOneSequence(
     GRIM::LanguageModel& model,
-    const GRIM::Batching::BatchPayload& prompt_payload,
+    GRIMText::Training::Startup::GpuModelState& gpu_model_state,
+    GRIM::Batching::BatchPayload& prompt_payload,
     const GenerationHP& cfg,
     GenerationStreamCallback* stream_callback)
 {
     validatePromptPayload(prompt_payload);
 
     const auto& config = model.getConfig();
+    const bool use_gpu = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "use_gpu");
+    const int max_seq_len = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "max_seq_len");
+    const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "vocab_size");
+    const bool execution_block_enabled = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "execution_block_enabled");
     const auto& prompt_tokens = prompt_payload.input_ids;
     const auto& prompt_numeric_values = prompt_payload.numeric_values;
     const auto& prompt_atom_mask = prompt_payload.atom_mask;
@@ -121,14 +161,14 @@ GRIM::GeneratedSequence generateOneSequence(
     }
     sequence.atom_entry_ids = prompt_atom_entry_ids;
 
-    if (!config.use_gpu) {
+    if (!use_gpu) {
         throw std::runtime_error("Phase2 payload inference requires config.use_gpu=true");
     }
 
-    if (prompt_tokens.size() >= static_cast<size_t>(config.max_seq_len)) {
+    if (prompt_tokens.size() >= static_cast<size_t>(max_seq_len)) {
         throw std::runtime_error("Phase2 payload inference: prompt length " +
                                  std::to_string(prompt_tokens.size()) + " exceeds max_seq_len " +
-                                 std::to_string(config.max_seq_len));
+                                 std::to_string(max_seq_len));
     }
     if (prompt_numeric_values.size() != prompt_tokens.size() ||
         prompt_atom_mask.size() != prompt_tokens.size() ||
@@ -146,10 +186,9 @@ GRIM::GeneratedSequence generateOneSequence(
     if (cfg.min_new_tokens > cfg.max_new_tokens) {
         throw std::runtime_error("Phase2 payload inference: min_new_tokens exceeds max_new_tokens");
     }
-    if (config.vocab_size <= 0) {
+    if (vocab_size <= 0) {
         throw std::runtime_error("Phase2 payload inference: invalid vocab_size");
     }
-    const int vocab_size = config.vocab_size;
     const int learned_piece_count = vocab_size - GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET;
     if (learned_piece_count < 0) {
         throw std::runtime_error("Phase2 payload inference: vocab_size=" + std::to_string(vocab_size) +
@@ -186,7 +225,7 @@ GRIM::GeneratedSequence generateOneSequence(
         cfg.bad_words_ids,
         cfg.seed);
 
-    if (config.execution_block_enabled) {
+    if (execution_block_enabled) {
         std::vector<int> numeric_mask = cfg.masked_numeric_literal_ids;
         if (numeric_mask.empty()) {
             throw std::runtime_error("Phase2 payload inference: masked_numeric_literal_ids is empty while execution block is enabled");
@@ -240,7 +279,7 @@ GRIM::GeneratedSequence generateOneSequence(
     const bool scratchblock_active = cfg.enable_scratchblock_reasoning &&
                                      scratch_hp.enabled;
 
-    auto runSharedForwardForCurrentSequence = [&](const GRIM::Batching::BatchPayload& active_payload)
+    auto runSharedForwardForCurrentSequence = [&](GRIM::Batching::BatchPayload& active_payload)
         -> std::vector<float> {
         validateInferenceForwardPayload(model, active_payload, "generateOneSequence");
 
@@ -250,11 +289,11 @@ GRIM::GeneratedSequence generateOneSequence(
         }
         InferenceForwardScope inference_forward_scope{generation_state};
 
+        cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
         const auto bindings = GRIM::Batching::uploadBatchToDevice(
             model.getConfig(),
-            model.getTrainingState(),
-            active_payload);
-        cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
+            active_payload,
+            stream);
 
         GRIM::Forward::ModelForwardRuntimePayload runtime_payload{};
         runtime_payload.forward_outputs = &generation_state.forward_outputs;
@@ -263,7 +302,7 @@ GRIM::GeneratedSequence generateOneSequence(
 
         GRIM::Forward::ModelForwardRequest request{};
         request.config = &config;
-        request.gpu_encoder = &model.getGpuEncoder();
+        request.gpu_encoder = &gpu_model_state.requireGpuEncoder("Phase2::generateOneSequence");
         request.embedding_layer = model.getEmbeddingLayer();
         request.lm_head = model.getLmHeadLayer();
         request.scratch_block = scratch_hp.enabled ? scratch_block_layer : nullptr;
@@ -274,21 +313,35 @@ GRIM::GeneratedSequence generateOneSequence(
         request.payload = &active_payload;
         request.bindings = &bindings;
         request.batch_idx = 0;
+        const bool emit_mtp_logits = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "mtp_enabled")
+            && model.getMtpK() > 0;
+        if (emit_mtp_logits) {
+            request.mtp_heads = buildDetachedForwardMtpHeadViews(gpu_model_state, model.getMtpK(), stream);
+        }
         request.graph = GRIM::Forward::ModelForwardGraphPolicy{
             /*connect_parameter_graph=*/false,
             /*retain_backward_graph=*/false,
-            /*enable_dropout=*/false};
+            /*enable_dropout=*/false,
+            /*emit_mtp_logits=*/emit_mtp_logits};
 
         GRIM::Forward::executeModelForward(request, runtime_payload);
 
-    const auto& live_logits = generation_state.forward_outputs.logits_tensor;
+        const auto& live_logits = generation_state.forward_outputs.logits_tensor;
         if (!live_logits.data) {
             throw std::runtime_error(
-        "generateOneSequence: GenerationState.forward_outputs.logits_tensor.data is NULL after shared forward");
+                "generateOneSequence: GenerationState.forward_outputs.logits_tensor.data is NULL after shared forward");
+        }
+        if (emit_mtp_logits && generation_state.forward_outputs.mtp_logits_tensors.size()
+                != static_cast<size_t>(model.getMtpK())) {
+            throw std::runtime_error(
+                "generateOneSequence: GenerationState.forward_outputs.mtp_logits_tensors.size()=" +
+                std::to_string(generation_state.forward_outputs.mtp_logits_tensors.size()) +
+                " != model.getMtpK()=" + std::to_string(model.getMtpK()) +
+                " after shared forward");
         }
 
         const size_t expected_logits =
-            static_cast<size_t>(active_payload.total_tokens) * static_cast<size_t>(config.vocab_size);
+            static_cast<size_t>(active_payload.total_tokens) * static_cast<size_t>(vocab_size);
         if (static_cast<size_t>(live_logits.numel()) < expected_logits) {
             throw std::runtime_error(
                 "generateOneSequence: live logits numel=" +
@@ -296,13 +349,13 @@ GRIM::GeneratedSequence generateOneSequence(
                 " < payload.total_tokens * config.vocab_size=" + std::to_string(expected_logits));
         }
 
-        std::vector<float> logits(static_cast<size_t>(config.vocab_size));
+        std::vector<float> logits(static_cast<size_t>(vocab_size));
         const size_t last_token_offset =
-            static_cast<size_t>(active_payload.total_tokens - 1) * static_cast<size_t>(config.vocab_size);
+            static_cast<size_t>(active_payload.total_tokens - 1) * static_cast<size_t>(vocab_size);
         cudaError_t copy_err = cudaMemcpyAsync(
             logits.data(),
             live_logits.data + last_token_offset,
-            static_cast<size_t>(config.vocab_size) * sizeof(float),
+            static_cast<size_t>(vocab_size) * sizeof(float),
             cudaMemcpyDeviceToHost,
             stream);
         if (copy_err != cudaSuccess) {
@@ -326,7 +379,7 @@ GRIM::GeneratedSequence generateOneSequence(
 
     for (int step = 0; step < cfg.max_new_tokens; ++step) {
         const int current_len = static_cast<int>(sequence.token_ids.size());
-        if (current_len >= config.max_seq_len) {
+        if (current_len >= max_seq_len) {
             sequence.finished = true;
             break;
         }
@@ -338,7 +391,7 @@ GRIM::GeneratedSequence generateOneSequence(
                     "exec_block_enabled=%d scratchLayer=%d scratchConfigured=%d has_exec_mem=%d "
                     "decode_selector_valid=%d\n",
                     step,
-                    static_cast<int>(config.selector_enabled),
+                    static_cast<int>(selector_hp.enabled),
                     static_cast<int>(model.getDecodeTimeSlotSelectorLayer() != nullptr),
                     static_cast<int>(model.getDecodeTimeNumPolicy() != nullptr),
                     static_cast<int>(execution_hp.enabled),
@@ -426,10 +479,10 @@ GRIM::GeneratedSequence generateOneSequence(
             prompt_atom_table,
             next_atom_entry_ids,
             next_token_to_slot_map,
-            config.vocab_size,
-            static_cast<size_t>(config.batch_size),
-            static_cast<size_t>(config.max_cached_seq_len),
-            config.execution_block_num_slots);
+            vocab_size,
+            /*batch_capacity=*/1,
+            static_cast<size_t>(max_seq_len),
+            execution_hp.num_slots);
 
         logits_vec = runSharedForwardForCurrentSequence(step_payload);
         if (logits_vec.empty()) {
@@ -459,7 +512,7 @@ GRIM::GeneratedSequence generateOneSequence(
 
 std::vector<GRIM::GeneratedSequence> generatePayloadSequences(
     TrainingContext& ctx,
-    const GRIM::Batching::BatchPayload& prompt_payload,
+    GRIM::Batching::BatchPayload& prompt_payload,
     const GRIM::HyperParameters::GenerationHP& generation_hp,
     GRIM::HyperParameters::GenerationStreamCallback* stream_callback)
 {
@@ -479,7 +532,7 @@ std::vector<GRIM::GeneratedSequence> generatePayloadSequences(
         if (sequence_hp.seed != 0) {
             sequence_hp.seed += static_cast<unsigned int>(i);
         }
-        outputs.push_back(generateOneSequence(*ctx.model, prompt_payload, sequence_hp, stream_callback));
+        outputs.push_back(generateOneSequence(*ctx.model, ctx.gpu_model, prompt_payload, sequence_hp, stream_callback));
     }
     return outputs;
 }
@@ -498,6 +551,9 @@ Phase2TextInferenceResult executePhase2TextInference(
 
     auto& tokenizer = *ctx.tokenizer;
     const auto& model_config = ctx.config;
+    const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(model_config, "vocab_size");
+    const int batch_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(model_config, "batch_size");
+    const int max_cached_seq_len = GRIM::HyperParameters::snapshotTrainingConfigField<int>(model_config, "max_cached_seq_len");
     const auto execution_hp = GRIM::HyperParameters::executionBlockConstructionHP(model_config);
 
     Phase2TextInferenceResult result;
@@ -546,9 +602,9 @@ Phase2TextInferenceResult executePhase2TextInference(
         prompt_atom_table,
         atom_entry_ids,
         prompt_token_to_slot_map,
-        model_config.vocab_size,
-        static_cast<size_t>(model_config.batch_size),
-        static_cast<size_t>(model_config.max_cached_seq_len),
+        vocab_size,
+        static_cast<size_t>(batch_size),
+        static_cast<size_t>(max_cached_seq_len),
         execution_hp.num_slots);
 
     const auto start_generation = std::chrono::high_resolution_clock::now();

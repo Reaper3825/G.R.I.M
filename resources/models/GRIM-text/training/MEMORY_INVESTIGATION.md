@@ -65,7 +65,7 @@ If vocab from tokenizer/GRMT is 20k-50k, this becomes 800 MB-2 GB for those two 
 
 ### 2. **d_ff mismatch**
 Config shows `d_ff: 1024` (same as d_model). Typical is `4 x d_model`.
-If some path uses `DEFAULT_D_FF = 3072` or `4*1024`, per-layer ForwardIntermediates and TensorContract GradFn scratch grow.
+If some path uses `DEFAULT_D_FF = 3072` or `4*1024`, the per-layer tensors retained on `ModelForwardOutputs` and TensorContract GradFn scratch grow.
 Verify `arch.d_ff` matches intent.
 
 ### 3. **cuBLAS / library workspace**

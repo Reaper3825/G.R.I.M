@@ -24,11 +24,13 @@ PayloadBuildInputs derivePayloadBuildInputsOrThrow(const TrainingContext& ctx) {
     PayloadBuildInputs inputs;
     inputs.configured_batch_size     = static_cast<std::size_t>(fixed_shape.batch_size);
     inputs.max_cached_seq            = static_cast<std::size_t>(fixed_shape.max_seq_len);
-    inputs.execution_block_num_slots = ctx.config.execution_block_num_slots;
-    inputs.execution_block_num_ops   = ctx.config.execution_block_num_ops;
-    inputs.execution_block_num_steps = ctx.config.execution_block_num_steps;
-    inputs.vocab_size                = ctx.config.vocab_size;
-    inputs.train_mtp_k               = ctx.config.mtp_enabled ? ctx.config.mtp_k : 0;
+    inputs.execution_block_num_slots = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "execution_block_num_slots");
+    inputs.execution_block_num_ops   = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "execution_block_num_ops");
+    inputs.execution_block_num_steps = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "execution_block_num_steps");
+    inputs.vocab_size                = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "vocab_size");
+    inputs.train_mtp_k               = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "mtp_enabled")
+        ? GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "mtp_k")
+        : 0;
     if (inputs.vocab_size != static_cast<int>(ctx.data_info.actual_vocab_size)) {
         throw std::runtime_error(
             "FATAL: PayloadBuildInputsReady runtime vocab mismatch: actual_vocab_size=" +

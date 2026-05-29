@@ -26,7 +26,6 @@
 #include "../StreamController/StreamController_GPU.hpp"
 #include "../GradNorm/GradNormGPU.hpp"
 #include "../Forward/ModelForwardExecutionRuntime.hpp"
-#include "../HyperParameters/HyperparameterGroupings.hpp"
 #include "../TensorContract/TensorContract_GPU.hpp"
 
 // Forward declaration for autograd tensor system
@@ -50,9 +49,7 @@ struct TrainingState {
     TrainingState(TrainingState&&) = delete;
     TrainingState& operator=(TrainingState&&) = delete;
 
-    void allocateStepDeviceWorkspaces(
-        const HyperParameters::TrainingStateWorkspaceHP& workspace_hp,
-        cudaStream_t stream);
+    void allocateReadGateWorkspace(cudaStream_t stream);
 
     //======================================================//
     //  PARAMETER TENSORS (weights + gradients via autograd)
@@ -67,31 +64,6 @@ struct TrainingState {
     //
     // Session 7: TrainingTensors deleted — zero weight parameters remain in god object.
     // Weight init seed is passed directly from Phase1 RNG into Startup/Model GPU assembly.
-    
-    //======================================================//
-    //  STEP DEVICE WORKSPACES / SNAPSHOTS (Category 3)
-    //======================================================//
-    // Capacity is authored upstream by HyperparameterGroupings -> LanguageModelConfig.
-    // Allocated Tensor shapes are the only TrainingState-local capacity record.
-    // BatchPayload remains the host-side source of truth for batch geometry
-    // and token semantics.
-    //
-    // Training/eval/inference upload copies BatchPayload host arrays into the
-    // per-call BatchDeviceBindings object. Forward/loss code consumes that
-    // explicit address carrier; TrainingState does not mirror the current
-    // batch as token/target device cache fields.
-    //
-    // Autograd Tensors with grad_fn live in autograd_intermediates, not here.
-    // Active forward observations (LM-head input / logits) stay inside the
-    // forward/autograd boundary as explicit live views. TrainingState owns only
-    // reusable upload/storage workspaces, never "last forward" mailboxes.
-    Tensor cached_targets_tensor;       // [max_tokens, 1] reusable target upload workspace
-    Tensor cached_token_ids_tensor;     // [1, max_tokens] reusable token-id upload workspace
-    Tensor cached_token_numeric_values; // [1, max_tokens] reusable numeric side-channel upload workspace
-    Tensor cached_mtp_shifted_targets_tensor; // [mtp_k, max_tokens] reusable MTP target upload workspace
-    Tensor cached_token_atom_mask;      // [1, max_tokens] reusable atom-mask upload workspace
-    Tensor cached_token_atom_flags;     // [1, max_tokens] reusable atom-flags upload workspace
-    Tensor cached_token_to_slot_map;    // [1, max_tokens] reusable token-to-slot upload workspace
     
     // Authoritative batch index for autograd forward passes.
     // Sourced from runEpoch's active batch_idx; set by autogradTrainingStep
@@ -108,9 +80,6 @@ struct TrainingState {
     
     TeacherLogits::Buffer teacher_logits;
     TeacherLogits::Buffer reference_logits;
-    Tensor sequence_weights_tensor;    // [max_sequences]
-    int sequence_weight_count = 0;
-    int sequence_weight_capacity = 0;
 
     // Owns ALL intermediate tensors during forward→backward cycle
     // Replaces old autograd_ctx (which mixed input args with tensor storage)
@@ -144,9 +113,6 @@ struct TrainingState {
     //======================================================//
     Tensor class_weights_tensor;          // [1, vocab_size] on GPU, w_v = 1/freq(v)^β
     int class_weights_vocab_size = 0;     // For validation
-
-    // DELETED: batch_prep_* vectors (Rule 20) — replaced by BatchPayload struct
-    
 };
 
 } // namespace GRIM

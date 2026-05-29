@@ -182,9 +182,12 @@ void syncRuntimeVocabSizeFromActualOrThrow(TrainingContext& ctx, const char* cal
     if (ctx.data_info.actual_vocab_size > static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
         throw std::runtime_error(std::string(caller) +
             ": actual_vocab_size=" + std::to_string(ctx.data_info.actual_vocab_size) +
-            " exceeds int capacity for LanguageModelConfig::vocab_size");
+            " exceeds int capacity for AiConfigSnapshot training.config.vocab_size");
     }
-    ctx.config.vocab_size = static_cast<int>(ctx.data_info.actual_vocab_size);
+    GRIM::HyperParameters::setSnapshotRuntimeVocabSize(
+        ctx.config,
+        static_cast<int>(ctx.data_info.actual_vocab_size),
+        caller);
 }
 
 } // namespace
@@ -196,7 +199,7 @@ void LoadTrainingData(TrainingContext& ctx) {
     const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(ctx.config);
     const auto paths_hp = GRIM::HyperParameters::pathsHP(ctx.config);
     const auto data_hp = GRIM::HyperParameters::dataLoadingHP(ctx.config);
-    const int max_seq_len = ctx.config.max_seq_len;
+    const int max_seq_len = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "max_seq_len");
 
     EmitModuleInfo(ModuleId::Training, "[Phase1] Validating paths...", 0);
     Internal::validateStartupPaths(tokenizer_hp, paths_hp);

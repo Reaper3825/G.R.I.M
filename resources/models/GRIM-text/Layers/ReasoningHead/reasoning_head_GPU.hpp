@@ -32,20 +32,15 @@
 
 namespace GRIM {
 
+namespace Forward {
+struct ReasoningHeadOutput;
+}
+
 struct ReasoningHeadParameterViews {
     const Tensor* w_op = nullptr;
     const Tensor* b_op = nullptr;
     const Tensor* w_arg1 = nullptr;
     const Tensor* w_arg2 = nullptr;
-};
-
-//======================================================//
-//  ReasoningHeadOutput — returned from forward
-//======================================================//
-struct ReasoningHeadOutput {
-    Tensor op_logits;     // [1, num_ops]
-    Tensor arg1_logits;   // [1, num_atoms]
-    Tensor arg2_logits;   // [1, num_atoms]
 };
 
 //======================================================//
@@ -113,7 +108,7 @@ public:
     /// atom_positions:  device int* [num_atoms] — token indices
     /// num_atoms:       HOST int (from D2H copy of numAtomsBuffer)
     /// total_tokens:    HOST int
-    ReasoningHeadOutput forward(
+    Forward::ReasoningHeadOutput forward(
         Tensor& encoder_output,
         Tensor& atom_embeddings,
         int* atom_positions,

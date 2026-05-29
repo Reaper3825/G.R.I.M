@@ -111,7 +111,7 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
     const float* lm_w_ptr  = model->getLmHeadLayer()->weights().data;
     const float* emb_g_ptr = model->getEmbeddingLayer()->tokenWeights().grad_data();
     const float* lm_g_ptr  = model->getLmHeadLayer()->weights().grad_data();
-    const bool cfg_tied  = ctx.config.tie_embeddings;
+    const bool cfg_tied  = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "tie_embeddings");
     const bool lm_owns   = model->getLmHeadLayer()->ownsWeights();
     const bool ptrs_same  = (emb_w_ptr == lm_w_ptr);
     const bool grads_same = (emb_g_ptr == lm_g_ptr);
@@ -184,28 +184,27 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
     emitInitFactKeyValue("loaded_checkpoint_path", ctx.loaded_checkpoint_path);
 
     emitInitFactLine("[INIT_FACTS] --- Effective architecture -----------------------------------------------");
-    const auto& arch = ctx.config;
-    emitInitFactKeyValue("architecture.d_model", fmtInt(arch.d_model));
-    emitInitFactKeyValue("architecture.num_layers", fmtInt(arch.num_layers));
-    emitInitFactKeyValue("architecture.num_heads", fmtInt(arch.num_heads));
-    emitInitFactKeyValue("architecture.num_kv_heads", fmtInt(arch.num_kv_heads));
-    emitInitFactKeyValue("architecture.head_dim", fmtInt(arch.head_dim));
-    emitInitFactKeyValue("architecture.d_ff", fmtInt(arch.d_ff));
-    emitInitFactKeyValue("architecture.max_seq_len", fmtInt(arch.max_seq_len));
+    emitInitFactKeyValue("architecture.d_model", fmtInt(GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "d_model")));
+    emitInitFactKeyValue("architecture.num_layers", fmtInt(GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "num_layers")));
+    emitInitFactKeyValue("architecture.num_heads", fmtInt(GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "num_heads")));
+    emitInitFactKeyValue("architecture.num_kv_heads", fmtInt(GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "num_kv_heads")));
+    emitInitFactKeyValue("architecture.head_dim", fmtInt(GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "head_dim")));
+    emitInitFactKeyValue("architecture.d_ff", fmtInt(GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "d_ff")));
+    emitInitFactKeyValue("architecture.max_seq_len", fmtInt(GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "max_seq_len")));
     emitInitFactKeyValue("data_info.actual_vocab_size", fmtUInt64(ctx.data_info.actual_vocab_size));
-    emitInitFactKeyValue("architecture.tie_embeddings", boolText(arch.tie_embeddings));
-    emitInitFactKeyValue("architecture.use_bias", boolText(arch.use_bias));
-    emitInitFactKeyValue("architecture.use_scratch_block", boolText(arch.use_scratch_block));
-    emitInitFactKeyValue("architecture.execution_block_enabled", boolText(arch.execution_block_enabled));
-    emitInitFactKeyValue("architecture.mtp_enabled", boolText(arch.mtp_enabled));
+    emitInitFactKeyValue("architecture.tie_embeddings", boolText(GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "tie_embeddings")));
+    emitInitFactKeyValue("architecture.use_bias", boolText(GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "use_bias")));
+    emitInitFactKeyValue("architecture.use_scratch_block", boolText(GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "use_scratch_block")));
+    emitInitFactKeyValue("architecture.execution_block_enabled", boolText(GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "execution_block_enabled")));
+    emitInitFactKeyValue("architecture.mtp_enabled", boolText(GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "mtp_enabled")));
 
     const auto fixed_shape = GRIM::HyperParameters::trainingFixedShapeHP(ctx.config);
     emitInitFactLine("[INIT_FACTS] --- Fixed training shape -------------------------------------------------");
     emitInitFactKeyValue("fixed_shape.batch_size", fmtInt(fixed_shape.batch_size));
     emitInitFactKeyValue("fixed_shape.max_seq_len", fmtInt(fixed_shape.max_seq_len));
     emitInitFactKeyValue("fixed_shape.max_tokens_per_batch", fmtInt(fixed_shape.max_tokens_per_batch));
-    emitInitFactKeyValue("startup.max_seq_len", fmtInt(ctx.config.max_seq_len));
-    emitInitFactKeyValue("startup.sliding_window_stride", fmtInt(ctx.config.sliding_window_stride));
+    emitInitFactKeyValue("startup.max_seq_len", fmtInt(GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "max_seq_len")));
+    emitInitFactKeyValue("startup.sliding_window_stride", fmtInt(GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "sliding_window_stride")));
 
     emitInitFactLine("[INIT_FACTS] --- Tied embedding / LM-head contract -----------------------------------");
     emitInitFactKeyValue("config.tie_embeddings", boolText(cfg_tied));

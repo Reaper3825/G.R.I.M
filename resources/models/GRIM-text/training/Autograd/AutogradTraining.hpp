@@ -17,7 +17,6 @@
 
 #include "AutogradIntermediates.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
-#include "../../Shared/TensorContract/ForwardIntermediates.hpp"
 #include "../../Shared/TrainingState/TrainingState_GPU.hpp"
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
@@ -44,7 +43,6 @@ namespace GRIM {
 namespace Autograd {
 
 using ::GRIM::GPUGrimEncoder;
-using ::GRIM::HyperParameters::LanguageModelConfig;
 using ::GRIM::LanguageModel;
 
 /**
@@ -88,7 +86,7 @@ struct AutogradContext {
     // ═══════════════════════════════════════════════════════════════════════════
     // MODEL REFERENCES (non-owning pointers)
     // ═══════════════════════════════════════════════════════════════════════════
-    const LanguageModelConfig* config = nullptr;
+    const Config::AiConfigSnapshot* config = nullptr;
     TrainingState* training_state = nullptr;
     GPUGrimEncoder* gpu_encoder = nullptr;
     cublasHandle_t cublas_handle = nullptr;
@@ -172,7 +170,7 @@ struct AutogradContext {
  * populated by that upload boundary.
  */
 AutogradContext initAutogradContext(
-    const LanguageModelConfig* config,
+    const Config::AiConfigSnapshot* config,
     TrainingState* training_state,
     GPUGrimEncoder* gpu_encoder,
     EmbeddingLayer* embedding_layer,
@@ -191,15 +189,20 @@ AutogradContext initAutogradContext(
  * Compute loss with autograd
  * 
  * Single entry point for ALL loss computation. Creates loss Tensor with
- * CrossEntropyGradFn attached. Loss tensor stored in
- * training_state->autograd_intermediates.loss_tensor.
+ * CrossEntropyGradFn attached, stores that Tensor directly in
+ * training_state->autograd_intermediates.loss_tensor for backward, and returns
+ * the host-side LossResult consumed by Phase2.
  * 
  * Handles:
  *   1. Text CE via autograd::unified_loss()
- *   2. Caches loss value in training_state for backward pass
+ *   2. Consumes any shared-forward-owned MTP logits emitted for this batch
+ *   3. Leaves the canonical loss Tensor on AutogradIntermediates for backward
+ *   4. Returns decomposed host-side loss scalars/diagnostics to Phase2
  * 
  * @param ctx     Autograd context (must have logits populated by the caller-owned
- *                 shared forward pass, and ctx.payload set to a valid BatchPayload)
+ *                 shared forward pass, any active MTP logits emitted by that
+ *                 shared forward call, and ctx.payload set to a valid
+ *                 BatchPayload)
  * @param loss_config Caller-derived loss hyperparameter grouping
  * @param mtp_alpha_effective Phase2-derived MTP loss weight for this batch
  */

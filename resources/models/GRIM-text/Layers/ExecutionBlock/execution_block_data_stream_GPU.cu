@@ -1,5 +1,6 @@
 #include "execution_block_data_stream_GPU.hpp"
 #include "execution_block_memory_stream_GPU.hpp"
+#include "../../Shared/Forward/ModelForwardOutputs.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
 
@@ -8,6 +9,9 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 #ifdef USE_CUDA
 
 namespace GRIM::ExecutionBlockInternal {
+
+using GRIM::Forward::ExecutionBlockStepOutput;
+using GRIM::Forward::ExecutionRecord;
 
 // ── Warp-level reduction primitives (all 32 threads must participate) ──
 __device__ __forceinline__ float warpReduceSum(float val) {
@@ -335,38 +339,6 @@ __global__ void kernelHardPickOpForward(
     v_out[0] = results[k];
 }
 
-// Fix #6: Division invalid penalty.
-// penalty = div_invalid_flag * weight * p_op[div_op_idx]
-// Teaches: "don't select ÷ when |v2| < eps."
-// The clamped division is kept for numerical stability, but the model learns
-// that division is an invalid operation for this (v1, v2) pair.
-__global__ void kernelDivInvalidPenalty(
-    float* __restrict__ out_loss,        // [1] scalar penalty
-    const float* __restrict__ p_op,      // [num_ops] softmax probs
-    const int* __restrict__ div_flag,    // [1] 0 or 1
-    float weight,
-    int div_op_idx                       // = 3
-) {
-    if (threadIdx.x != 0) return;
-    out_loss[0] = div_flag[0] ? (weight * p_op[div_op_idx]) : 0.0f;
-}
-
-__global__ void kernelDivInvalidPenaltyBackward(
-    float* __restrict__ grad_p_op,       // [num_ops] output gradient
-    const float* __restrict__ grad_out,  // [1] incoming gradient
-    const int* __restrict__ div_flag,    // [1] saved flag
-    float weight,
-    int div_op_idx,
-    int num_ops
-) {
-    if (threadIdx.x != 0) return;
-    // Only select division slot gets gradient — all others stay zero
-    for (int k = 0; k < num_ops; ++k)
-        grad_p_op[k] = 0.0f;
-    if (div_flag[0])
-        grad_p_op[div_op_idx] = weight * grad_out[0];
-}
-
 __global__ void kernelAssembleExecRecord(
     int* __restrict__ out_i,
     float* __restrict__ out_f,
@@ -592,67 +564,6 @@ __global__ void kernelEncodeScalarToAtomEmbed(
     out[d] = result;
 }
 
-__global__ void kernelAbsDiff(
-    float* __restrict__ out,
-    const float* __restrict__ a,
-    const float* __restrict__ b,
-    int* __restrict__ error_flag,
-    int stage_id,
-    float hard_threshold
-) {
-    if (threadIdx.x != 0) return;
-    float diff = fabsf(a[0] - b[0]);
-    out[0] = diff;
-    if (hard_threshold > 0.0f && diff > hard_threshold && error_flag)
-        atomicMax(error_flag, stage_id);
-}
-
-__global__ void kernelRecomputeOpResult(
-    float* __restrict__ expected,
-    const float* __restrict__ M_values,
-    const int* __restrict__ d_arg1_rel,
-    const int* __restrict__ d_arg2_rel,
-    const int* __restrict__ d_op_id,
-    int S, int V, int V_val, float eps
-) {
-    if (threadIdx.x != 0) return;
-    int r1 = d_arg1_rel[0];
-    int r2 = d_arg2_rel[0];
-    int op = d_op_id[0];
-    if (r1 < 0 || r1 >= V_val || r2 < 0 || r2 >= V_val) {
-        expected[0] = 0.0f;
-        return;
-    }
-    int s1 = S + r1;
-    int s2 = S + r2;
-    float v1 = M_values[s1];
-    float v2 = M_values[s2];
-    switch (op) {
-        case 0: expected[0] = v1 + v2; break;
-        case 1: expected[0] = v1 - v2; break;
-        case 2: expected[0] = v1 * v2; break;
-        case 3: {
-            float abs_v2 = fabsf(v2);
-            float denom = (abs_v2 > eps) ? v2 : copysignf(eps, v2);
-            expected[0] = v1 / denom;
-            break;
-        }
-        default: expected[0] = 0.0f; break;
-    }
-}
-
-__global__ void kernelL1LossBackward(
-    float* __restrict__ grad_input,
-    const float* __restrict__ grad_output,
-    const float* __restrict__ a,
-    const float* __restrict__ b
-) {
-    if (threadIdx.x != 0) return;
-    float diff = a[0] - b[0];
-    float s = (fabsf(diff) > 1e-10f) ? copysignf(1.0f, diff) : 0.0f;
-    grad_input[0] += grad_output[0] * s;
-}
-
 __global__ void kernelNormalizeUsage(
     float* __restrict__ out,
     const float* __restrict__ usage,
@@ -719,8 +630,8 @@ __global__ void kernelFourOpMixBackward(
     //
     // Now: backward matches forward exactly — only the hard-selected op
     // contributes derivative signal.  p_op has ZERO influence on any
-    // gradient path.  The ONLY training signal for op selection is
-    // selection_ce_op (CE classification).
+    // gradient path.  Op selection supervision is assembled later at the
+    // explicit autograd loss boundary from retained logits.
 
     if (tid == 0) {
         constexpr float kDerivClip = 10.0f;
@@ -904,389 +815,6 @@ struct FourOpMixGradFn : public GradFn {
         v1_grad_fn.reset();
         v2_grad_fn.reset();
         p_op_grad_fn.reset();
-    }
-};
-
-// Fix #6: Penalty for selecting division when |v2| < eps.
-// Forward:  penalty = flag * weight * p_op[div_idx]
-// Backward: d_p_op[div_idx] = flag * weight * grad_out   (others zero)
-// Connects through p_op's softmax grad_fn → op_logits → W_op_select.
-struct DivInvalidPenaltyGradFn : public GradFn {
-    int* saved_div_flag = nullptr;    // device [1] — 0 or 1
-    float weight = 0.0f;
-    int div_op_idx = 3;
-    int num_ops = 4;
-
-    float* grad_p_op = nullptr;
-    std::shared_ptr<float> owned_grad_p_op;
-    std::shared_ptr<GradFn> p_op_grad_fn;
-    TensorContract::TensorShape p_op_shape;
-    bool p_op_requires_grad = false;
-
-    DivInvalidPenaltyGradFn() { op_name = "div_invalid_penalty"; }
-    ~DivInvalidPenaltyGradFn() override {
-        if (saved_div_flag) { cudaFree(saved_div_flag); saved_div_flag = nullptr; }
-    }
-
-    void capture(const int* d_div_flag, float w, int op_idx, int nop,
-                 Tensor& p_op_t, cudaStream_t stream) {
-        weight = w;
-        div_op_idx = op_idx;
-        num_ops = nop;
-
-        // Save a copy of the flag (it gets reset each step)
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_div_flag), sizeof(int), "div_penalty_saved_flag");
-        cudaMemcpyAsync(saved_div_flag, d_div_flag, sizeof(int), cudaMemcpyDeviceToDevice, stream);
-
-        p_op_requires_grad = p_op_t.requires_grad;
-        p_op_shape = p_op_t.shape;
-        p_op_grad_fn = p_op_t.grad_fn;
-
-        // Allocate gradient buffer for p_op
-        float* buf = nullptr;
-        cudaMallocOrThrow(reinterpret_cast<void**>(&buf), nop * sizeof(float), "div_penalty_grad_p_op");
-        cudaMemsetAsync(buf, 0, nop * sizeof(float), stream);
-        owned_grad_p_op = std::shared_ptr<float>(buf, [](float* p) { cudaFree(p); });
-        grad_p_op = owned_grad_p_op.get();
-    }
-
-    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
-        if (applied) return;
-        applied = true;
-
-        kernelDivInvalidPenaltyBackward<<<1, 1, 0, stream>>>(
-            grad_p_op, grad_output.data, saved_div_flag,
-            weight, div_op_idx, num_ops);
-        CUDA_CHECK_KERNEL();
-
-        if (p_op_requires_grad && p_op_grad_fn) {
-            Tensor view;
-            view.data = grad_p_op;
-            view.shape = p_op_shape;
-            view.owns_data = false;
-            view.stream = stream;
-            p_op_grad_fn->apply(view, stream);
-        }
-    }
-
-    void release_saved() override {
-        GradFn::release_saved();
-        if (saved_div_flag) { cudaFree(saved_div_flag); saved_div_flag = nullptr; }
-        grad_p_op = nullptr;
-        p_op_grad_fn.reset();
-    }
-};
-
-// ─── Fix #8: Division Magnitude Penalty ─────────────────────────────────────
-// Penalizes large |v_out| after clamped division to prevent division exploit.
-// Forward:  loss = div_flag * weight * |v_out|
-// Backward: d_v_out = div_flag * weight * sign(v_out) * grad_out
-// Gradient flows through v_out → FourOpMixGradFn → v1, v2.
-
-__global__ void kernelDivMagnitudePenalty(
-    float* __restrict__ out_loss,
-    const float* __restrict__ v_out,
-    const int* __restrict__ div_flag,
-    float weight
-) {
-    if (threadIdx.x != 0) return;
-    if (div_flag[0]) {
-        out_loss[0] = weight * fabsf(v_out[0]);
-    } else {
-        out_loss[0] = 0.0f;
-    }
-}
-
-__global__ void kernelDivMagnitudePenaltyBackward(
-    float* __restrict__ grad_v_out,
-    const float* __restrict__ grad_out,
-    const float* __restrict__ saved_v_out,
-    const int* __restrict__ saved_div_flag,
-    float weight
-) {
-    if (threadIdx.x != 0) return;
-    if (saved_div_flag[0]) {
-        float sign_v = (saved_v_out[0] >= 0.0f) ? 1.0f : -1.0f;
-        grad_v_out[0] += grad_out[0] * weight * sign_v;
-    }
-}
-
-struct DivMagnitudePenaltyGradFn : public GradFn {
-    float* saved_v_out = nullptr;
-    int* saved_div_flag = nullptr;
-    float weight_ = 0.0f;
-
-    float* grad_v_out = nullptr;
-    std::shared_ptr<float> owned_grad_v_out;
-    std::shared_ptr<GradFn> v_out_grad_fn;
-    TensorContract::TensorShape v_out_shape;
-    bool v_out_requires_grad = false;
-
-    DivMagnitudePenaltyGradFn() { op_name = "div_magnitude_penalty"; }
-    ~DivMagnitudePenaltyGradFn() override {
-        if (saved_v_out) cudaFree(saved_v_out);
-        if (saved_div_flag) cudaFree(saved_div_flag);
-    }
-
-    void capture(Tensor& v_out_t, const int* d_div_flag, float w, cudaStream_t stream) {
-        weight_ = w;
-        v_out_requires_grad = v_out_t.requires_grad;
-        v_out_shape = v_out_t.shape;
-        v_out_grad_fn = v_out_t.grad_fn;
-
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_v_out), sizeof(float), "div_mag_saved_vout");
-        cudaMemcpyAsync(saved_v_out, v_out_t.data, sizeof(float), cudaMemcpyDeviceToDevice, stream);
-
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_div_flag), sizeof(int), "div_mag_saved_flag");
-        cudaMemcpyAsync(saved_div_flag, d_div_flag, sizeof(int), cudaMemcpyDeviceToDevice, stream);
-
-        if (v_out_requires_grad) {
-            v_out_t.ensure_grad();
-            if (v_out_t.is_leaf) {
-                grad_v_out = v_out_t.grad_data();
-            } else {
-                float* buf = nullptr;
-                cudaMallocOrThrow(reinterpret_cast<void**>(&buf), sizeof(float), "div_mag_grad_vout");
-                cudaMemsetAsync(buf, 0, sizeof(float), stream);
-                owned_grad_v_out = std::shared_ptr<float>(buf, [](float* p) { cudaFree(p); });
-                grad_v_out = owned_grad_v_out.get();
-            }
-        }
-    }
-
-    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
-        if (applied) return;
-        applied = true;
-        if (!v_out_requires_grad || !grad_v_out) return;
-
-        kernelDivMagnitudePenaltyBackward<<<1, 1, 0, stream>>>(
-            grad_v_out, grad_output.data, saved_v_out, saved_div_flag, weight_);
-        CUDA_CHECK_KERNEL();
-
-        if (v_out_grad_fn) {
-            Tensor view;
-            view.data = grad_v_out;
-            view.shape = v_out_shape;
-            view.owns_data = false;
-            view.stream = stream;
-            v_out_grad_fn->apply(view, stream);
-        }
-    }
-
-    void release_saved() override {
-        GradFn::release_saved();
-        if (saved_v_out) { cudaFree(saved_v_out); saved_v_out = nullptr; }
-        if (saved_div_flag) { cudaFree(saved_div_flag); saved_div_flag = nullptr; }
-        grad_v_out = nullptr;
-        owned_grad_v_out.reset();
-        v_out_grad_fn.reset();
-    }
-};
-
-// ─── Fix #7: Arg REINFORCE Loss ─────────────────────────────────────────────
-// REINFORCE policy gradient for discrete arg selection.
-// Forward:  loss = weight * detached_err * (-log p_arg1[k1] - log p_arg2[k2])
-// Backward: d_p_arg1[k1] = -weight * detached_err / p_arg1[k1]  (all others 0)
-//           d_p_arg2[k2] = -weight * detached_err / p_arg2[k2]  (all others 0)
-// Then propagated through softmax grad_fn → arg_logits → W_arg_select.
-//
-// transition_err is DETACHED — just a scalar multiplier, no gradient into v_out/p_op.
-// This is standard policy gradient: -reward * log π(action).
-
-__global__ void kernelArgReinforceLossForward(
-    float* __restrict__ out_loss,
-    float* __restrict__ out_advantage,   // [1] written for backward to read
-    const float* __restrict__ p_arg1,
-    const float* __restrict__ p_arg2,
-    const int* __restrict__ idx1,       // d_exec_idx[0]
-    const int* __restrict__ idx2,       // d_exec_idx[1]
-    const float* __restrict__ transition_err,  // detached scalar |v_out - target|
-    float* __restrict__ baseline,       // [1] EMA baseline (read-modify-write)
-    float baseline_decay,               // EMA decay rate (e.g. 0.99)
-    float weight
-) {
-    if (threadIdx.x != 0) return;
-    int k1 = idx1[0];
-    int k2 = idx2[0];
-    float err = transition_err[0];
-    // Variance-reduction baseline: advantage = err - E[err]
-    float b = baseline[0];
-    float advantage = err - b;
-    // Clamp advantage to prevent gradient explosions from error spikes
-    constexpr float kAdvClamp = 5.0f;
-    advantage = fminf(fmaxf(advantage, -kAdvClamp), kAdvClamp);
-    // Update EMA baseline ONLY when weight > 0 (op matches teacher target).
-    // Wrong-op cases must not pollute baseline statistics — they would distort
-    // the advantage term on subsequent valid arg updates.
-    if (weight > 0.0f) {
-        float new_b = baseline_decay * b + (1.0f - baseline_decay) * err;
-        constexpr float kBaselineMin = 0.0f;
-        constexpr float kBaselineMax = 1e6f;
-        baseline[0] = fminf(fmaxf(new_b, kBaselineMin), kBaselineMax);
-    }
-    // Save advantage for backward pass
-    out_advantage[0] = advantage;
-    // Clamp log for numerical safety (p near 0 → large -log)
-    constexpr float kMinProb = 1e-7f;
-    float nll1 = -logf(fmaxf(p_arg1[k1], kMinProb));
-    float nll2 = -logf(fmaxf(p_arg2[k2], kMinProb));
-    out_loss[0] = weight * advantage * (nll1 + nll2);
-}
-
-__global__ void kernelArgReinforceLossBackward(
-    float* __restrict__ grad_p_arg1,    // [N] output — sparse write at k1 only
-    float* __restrict__ grad_p_arg2,    // [N] output — sparse write at k2 only
-    const float* __restrict__ grad_out, // [1]
-    const int* __restrict__ idx1,
-    const int* __restrict__ idx2,
-    const float* __restrict__ saved_p_arg1,
-    const float* __restrict__ saved_p_arg2,
-    const float* __restrict__ saved_advantage,
-    float weight,
-    int N                               // distribution size
-) {
-    if (threadIdx.x != 0) return;
-    int k1 = idx1[0];
-    int k2 = idx2[0];
-    float adv = saved_advantage[0];
-    float g = grad_out[0];
-    constexpr float kMinProb = 1e-7f;
-    // d(loss)/d(p_arg1[k1]) = weight * advantage * (-1 / p_arg1[k1])
-    if (grad_p_arg1) {
-        float p1 = fmaxf(saved_p_arg1[k1], kMinProb);
-        grad_p_arg1[k1] += g * weight * adv * (-1.0f / p1);
-    }
-    if (grad_p_arg2) {
-        float p2 = fmaxf(saved_p_arg2[k2], kMinProb);
-        grad_p_arg2[k2] += g * weight * adv * (-1.0f / p2);
-    }
-}
-
-struct ArgReinforceLossGradFn : public GradFn {
-    int* saved_idx1 = nullptr;
-    int* saved_idx2 = nullptr;
-    float* saved_p_arg1 = nullptr;
-    float* saved_p_arg2 = nullptr;
-    float* saved_advantage = nullptr;  // written by forward kernel, read by backward
-    float weight_ = 0.0f;
-    int N_ = 0;
-
-    float* grad_p_arg1 = nullptr;
-    float* grad_p_arg2 = nullptr;
-    std::shared_ptr<float> owned_grad_p_arg1;
-    std::shared_ptr<float> owned_grad_p_arg2;
-    std::shared_ptr<GradFn> p_arg1_grad_fn;
-    std::shared_ptr<GradFn> p_arg2_grad_fn;
-    TensorContract::TensorShape p_arg1_shape;
-    TensorContract::TensorShape p_arg2_shape;
-    bool p_arg1_requires_grad = false;
-    bool p_arg2_requires_grad = false;
-
-    ArgReinforceLossGradFn() { op_name = "arg_reinforce_loss"; }
-
-    ~ArgReinforceLossGradFn() override {
-        if (saved_idx1) cudaFree(saved_idx1);
-        if (saved_idx2) cudaFree(saved_idx2);
-        if (saved_p_arg1) cudaFree(saved_p_arg1);
-        if (saved_p_arg2) cudaFree(saved_p_arg2);
-        if (saved_advantage) cudaFree(saved_advantage);
-    }
-
-    // Allocates saved_advantage buffer BEFORE kernel launch.
-    // Forward kernel writes advantage into this buffer.
-    // Backward reads it back.
-    float* allocate_advantage_buffer(cudaStream_t stream) {
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_advantage), sizeof(float), "reinforce_saved_advantage");
-        cudaMemsetAsync(saved_advantage, 0, sizeof(float), stream);
-        return saved_advantage;
-    }
-
-    void capture(const int* d_idx1, const int* d_idx2,
-                 Tensor& p_arg1_t, Tensor& p_arg2_t,
-                 float weight, int N,
-                 cudaStream_t stream) {
-        weight_ = weight;
-        N_ = N;
-
-        // Save copies of indices and probabilities (they change each step)
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_idx1), sizeof(int), "reinforce_saved_idx1");
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_idx2), sizeof(int), "reinforce_saved_idx2");
-        cudaMemcpyAsync(saved_idx1, d_idx1, sizeof(int), cudaMemcpyDeviceToDevice, stream);
-        cudaMemcpyAsync(saved_idx2, d_idx2, sizeof(int), cudaMemcpyDeviceToDevice, stream);
-
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_p_arg1), N * sizeof(float), "reinforce_saved_p_arg1");
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_p_arg2), N * sizeof(float), "reinforce_saved_p_arg2");
-        cudaMemcpyAsync(saved_p_arg1, p_arg1_t.data, N * sizeof(float), cudaMemcpyDeviceToDevice, stream);
-        cudaMemcpyAsync(saved_p_arg2, p_arg2_t.data, N * sizeof(float), cudaMemcpyDeviceToDevice, stream);
-
-        // saved_advantage was already allocated and written by the forward kernel
-        // (via allocate_advantage_buffer + kernelArgReinforceLossForward)
-
-        p_arg1_requires_grad = p_arg1_t.requires_grad;
-        p_arg2_requires_grad = p_arg2_t.requires_grad;
-        p_arg1_shape = p_arg1_t.shape;
-        p_arg2_shape = p_arg2_t.shape;
-        p_arg1_grad_fn = p_arg1_t.grad_fn;
-        p_arg2_grad_fn = p_arg2_t.grad_fn;
-
-        auto alloc_grad = [&](Tensor& t, float*& gp, std::shared_ptr<float>& owned, size_t n) {
-            if (!t.requires_grad) return;
-            t.ensure_grad();
-            if (t.is_leaf) {
-                gp = t.grad_data();
-            } else {
-                float* buf = nullptr;
-                cudaMallocOrThrow(reinterpret_cast<void**>(&buf), n * sizeof(float), "reinforce_grad_buf");
-                cudaMemsetAsync(buf, 0, n * sizeof(float), stream);
-                owned = std::shared_ptr<float>(buf, [](float* p) { cudaFree(p); });
-                gp = owned.get();
-            }
-        };
-        alloc_grad(p_arg1_t, grad_p_arg1, owned_grad_p_arg1, N);
-        alloc_grad(p_arg2_t, grad_p_arg2, owned_grad_p_arg2, N);
-    }
-
-    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
-        if (applied) return;
-        applied = true;
-
-        kernelArgReinforceLossBackward<<<1, kWarpSize, 0, stream>>>(
-            grad_p_arg1, grad_p_arg2,
-            grad_output.data,
-            saved_idx1, saved_idx2,
-            saved_p_arg1, saved_p_arg2,
-            saved_advantage, weight_, N_);
-        CUDA_CHECK_KERNEL();
-
-        if (p_arg1_requires_grad && p_arg1_grad_fn) {
-            Tensor view;
-            view.data = grad_p_arg1;
-            view.shape = p_arg1_shape;
-            view.owns_data = false;
-            view.stream = stream;
-            p_arg1_grad_fn->apply(view, stream);
-        }
-        if (p_arg2_requires_grad && p_arg2_grad_fn) {
-            Tensor view;
-            view.data = grad_p_arg2;
-            view.shape = p_arg2_shape;
-            view.owns_data = false;
-            view.stream = stream;
-            p_arg2_grad_fn->apply(view, stream);
-        }
-    }
-
-    void release_saved() override {
-        GradFn::release_saved();
-        if (saved_idx1) { cudaFree(saved_idx1); saved_idx1 = nullptr; }
-        if (saved_idx2) { cudaFree(saved_idx2); saved_idx2 = nullptr; }
-        if (saved_p_arg1) { cudaFree(saved_p_arg1); saved_p_arg1 = nullptr; }
-        if (saved_p_arg2) { cudaFree(saved_p_arg2); saved_p_arg2 = nullptr; }
-        if (saved_advantage) { cudaFree(saved_advantage); saved_advantage = nullptr; }
-        grad_p_arg1 = nullptr;
-        grad_p_arg2 = nullptr;
-        p_arg1_grad_fn.reset();
-        p_arg2_grad_fn.reset();
     }
 };
 
@@ -1601,76 +1129,6 @@ struct RecordEncodeGradFn : public GradFn {
     }
 };
 
-struct L1ScalarLossGradFn : public GradFn {
-    float* saved_a_ = nullptr;
-    float* saved_b_ = nullptr;
-    float* grad_a_ = nullptr;
-    std::shared_ptr<float> owned_grad_a_;
-
-    std::shared_ptr<GradFn> a_grad_fn_;
-    TensorContract::TensorShape a_shape_;
-    bool a_requires_grad_ = false;
-
-    L1ScalarLossGradFn() { op_name = "l1_scalar_loss"; }
-
-    ~L1ScalarLossGradFn() override {
-        if (saved_a_) cudaFree(saved_a_);
-        if (saved_b_) cudaFree(saved_b_);
-    }
-
-    void capture(Tensor& a_tensor, const float* target_device_ptr, cudaStream_t stream) {
-        a_requires_grad_ = a_tensor.requires_grad;
-        a_shape_ = a_tensor.shape;
-        a_grad_fn_ = a_tensor.grad_fn;
-
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_a_), sizeof(float), "datastream_saved_a");
-        CUDA_CHECK(cudaMemcpyAsync(saved_a_, a_tensor.data, sizeof(float), cudaMemcpyDeviceToDevice, stream));
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_b_), sizeof(float), "datastream_saved_b");
-        CUDA_CHECK(cudaMemcpyAsync(saved_b_, target_device_ptr, sizeof(float), cudaMemcpyDeviceToDevice, stream));
-
-        if (a_requires_grad_) {
-            a_tensor.ensure_grad();
-            if (a_tensor.is_leaf) {
-                grad_a_ = a_tensor.grad_data();
-            } else {
-                float* buf = nullptr;
-                cudaMallocOrThrow(reinterpret_cast<void**>(&buf), sizeof(float), "datastream_grad_a");
-                CUDA_CHECK(cudaMemsetAsync(buf, 0, sizeof(float), stream));
-                owned_grad_a_ = std::shared_ptr<float>(buf, [](float* p) { cudaFree(p); });
-                grad_a_ = owned_grad_a_.get();
-            }
-        }
-    }
-
-    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
-        if (applied) return;
-        applied = true;
-        if (!a_requires_grad_ || !grad_a_) return;
-
-        kernelL1LossBackward<<<1, 1, 0, stream>>>(
-            grad_a_, grad_output.data, saved_a_, saved_b_);
-        CUDA_CHECK_KERNEL();
-
-        if (a_grad_fn_) {
-            Tensor view;
-            view.data = grad_a_;
-            view.shape = a_shape_;
-            view.owns_data = false;
-            view.stream = stream;
-            a_grad_fn_->apply(view, stream);
-        }
-    }
-
-    void release_saved() override {
-        GradFn::release_saved();
-        if (saved_a_) { cudaFree(saved_a_); saved_a_ = nullptr; }
-        if (saved_b_) { cudaFree(saved_b_); saved_b_ = nullptr; }
-        grad_a_ = nullptr;
-        owned_grad_a_.reset();
-        a_grad_fn_.reset();
-    }
-};
-
 // Fix #5: Gated trace update GradFn.
 // Forward: out = gate * old_trace + (1 - gate) * candidate,  gate = sigmoid(gate_logits)
 // Backward chains to old_trace, candidate (from W_reason_gate matmul), gate_logits (from W_trace_gate matmul).
@@ -1888,9 +1346,7 @@ void executeStepCoordinatorImpl(
     cudaStream_t stream,
     ExecutionBlockStepOutput* diag_out,
     Tensor& trace_state,
-    const std::vector<ExecutionRecord>& prior_records,
-    const float* expected_target,
-    const TeacherSelectionTargets* selection_targets
+    const std::vector<ExecutionRecord>& prior_records
 ) {
     const int dm = layer.hp().d_model;
     const int V = layer.hp().num_slots;
@@ -2034,13 +1490,11 @@ void executeStepCoordinatorImpl(
     kernelApplyLogitMask<<<(V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         arg1_logits.data, arg1_logits.data, work.cand_mask.data, V_val);
     CUDA_CHECK_KERNEL();
-    // ── Selection CE for arg1 (logits-space, before softmax) ──
-    if (selection_targets && selection_targets->valid) {
-        if (!diag_out) throw std::runtime_error("selection_targets->valid requires diag_out != nullptr");
-        diag_out->selection_ce_arg1 = autograd::cross_entropy_logits(
-            arg1_logits, selection_targets->arg1_target, stream);
-    }
     work.p_arg1 = autograd::softmax(arg1_logits, temperature, stream);
+    if (diag_out) {
+        diag_out->arg1_logits_tensor = std::move(arg1_logits);
+        diag_out->selection_temperature = temperature;
+    }
     kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_arg1.data, V_val, LayerAccess::numericErrorFlag(layer), kStagePArg1);
     kernelCheckEntropyCollapse<<<1, kWarpSize, 0, stream>>>(
         work.p_arg1.data, V_val, LayerAccess::numericErrorFlag(layer), kStageEntropyArg1, layer.hp().entropy_collapse_threshold);
@@ -2050,13 +1504,10 @@ void executeStepCoordinatorImpl(
     kernelApplyLogitMask<<<(V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         arg2_logits.data, arg2_logits.data, work.cand_mask.data, V_val);
     CUDA_CHECK_KERNEL();
-    // ── Selection CE for arg2 (logits-space, before softmax) ──
-    if (selection_targets && selection_targets->valid) {
-        if (!diag_out) throw std::runtime_error("selection_targets->valid requires diag_out != nullptr");
-        diag_out->selection_ce_arg2 = autograd::cross_entropy_logits(
-            arg2_logits, selection_targets->arg2_target, stream);
-    }
     work.p_arg2 = autograd::softmax(arg2_logits, temperature, stream);
+    if (diag_out) {
+        diag_out->arg2_logits_tensor = std::move(arg2_logits);
+    }
     kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_arg2.data, V_val, LayerAccess::numericErrorFlag(layer), kStagePArg2);
     kernelCheckEntropyCollapse<<<1, kWarpSize, 0, stream>>>(
         work.p_arg2.data, V_val, LayerAccess::numericErrorFlag(layer), kStageEntropyArg2, layer.hp().entropy_collapse_threshold);
@@ -2079,13 +1530,10 @@ void executeStepCoordinatorImpl(
     // op sees (context_enriched, trace_state, step_emb) only — same as decision_input.
     // arg selection cannot influence op selection through the gradient path.
     auto op_logits = autograd::matmul(decision_input, layer.W_op_select(), stream, decision_input.data, nullptr);
-    // ── Selection CE for op (logits-space, before softmax) ──
-    if (selection_targets && selection_targets->valid) {
-        if (!diag_out) throw std::runtime_error("selection_targets->valid requires diag_out != nullptr");
-        diag_out->selection_ce_op = autograd::cross_entropy_logits(
-            op_logits, selection_targets->op_target, stream);
-    }
     work.p_op = autograd::softmax(op_logits, temperature, stream);
+    if (diag_out) {
+        diag_out->op_logits_tensor = std::move(op_logits);
+    }
     kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_op.data, nop, LayerAccess::numericErrorFlag(layer), kStagePOp);
     kernelCheckEntropyCollapse<<<1, kWarpSize, 0, stream>>>(
         work.p_op.data, nop, LayerAccess::numericErrorFlag(layer), kStageEntropyOp, layer.hp().entropy_collapse_threshold);
@@ -2093,14 +1541,18 @@ void executeStepCoordinatorImpl(
     work.op_results = Tensor::zeros({1, nop}, stream, "exec_op_results");
     // Fix #6: Reset per-step division invalid flag before FourOps
     int* d_div_flag = LayerAccess::divInvalidFlag(layer);
+    int h_div_flag = 0;
     CUDA_CHECK(cudaMemsetAsync(d_div_flag, 0, sizeof(int), stream));
     kernelFourOps<<<1, kWarpSize, 0, stream>>>(work.op_results.data, work.v1.data, work.v2.data, kEps, LayerAccess::divClampCount(layer), d_div_flag);
     CUDA_CHECK_KERNEL();
+    if (diag_out) {
+        CUDA_CHECK(cudaMemcpyAsync(&h_div_flag, d_div_flag, sizeof(int), cudaMemcpyDeviceToHost, stream));
+    }
 
     // Hard op selection (clean classification).
     // Forward: argmax(p_op) → pick discrete result.  v_out = results[hard_op].
     // Backward: grad_p_op is ZERO — no execution-value gradient into op selection.
-    // The ONLY training signal for op is selection_ce_op (CE classification).
+    // Op supervision is assembled later from retained logits at the loss boundary.
     // Blending +/-/*/÷ results is FUCKING STUPID! for a register machine.
     kernelArgmax1DIntData<<<1, kWarpSize, 0, stream>>>(d_exec_idx + 2, work.p_op.data, nop);
     CUDA_CHECK_KERNEL();
@@ -2117,43 +1569,6 @@ void executeStepCoordinatorImpl(
         grad_fn->capture(work.v1, work.v2, work.p_op, d_exec_idx + 2,
                          nop, stream);
         work.v_out.grad_fn = grad_fn;
-    }
-
-    // Fix #6: Division invalid penalty — penalize p_op[3] when division was clamped.
-    // Gradient: d_p_op[3] = flag * weight * grad_out → softmax → op_logits → W_op_select.
-    // This teaches: "don't select ÷ when |v2| < eps."
-    if (diag_out && layer.hp().div_invalid_penalty_weight > 0.0f) {
-        constexpr int kDivOpIdx = 3;
-        const float penalty_w = layer.hp().div_invalid_penalty_weight;
-
-        diag_out->div_invalid_penalty = Tensor::zeros({1, 1}, stream, "exec_div_penalty");
-        kernelDivInvalidPenalty<<<1, 1, 0, stream>>>(
-            diag_out->div_invalid_penalty.data, work.p_op.data, d_div_flag, penalty_w, kDivOpIdx);
-        CUDA_CHECK_KERNEL();
-
-        auto pen_fn = std::make_shared<DivInvalidPenaltyGradFn>();
-        pen_fn->capture(d_div_flag, penalty_w, kDivOpIdx, nop, work.p_op, stream);
-        diag_out->div_invalid_penalty.grad_fn = pen_fn;
-        diag_out->div_invalid_penalty.requires_grad = true;
-        diag_out->div_invalid_penalty.is_leaf = false;
-    }
-
-    // Fix #8: Division magnitude penalty — penalize large |v_out| after clamped division.
-    // Gradient: d_v_out = div_flag * weight * sign(v_out) → FourOpMixGradFn → v1, v2.
-    // This teaches: "produce smaller operands so division doesn't blow up."
-    if (diag_out && layer.hp().div_magnitude_penalty_weight > 0.0f) {
-        const float mag_w = layer.hp().div_magnitude_penalty_weight;
-
-        diag_out->div_magnitude_penalty = Tensor::zeros({1, 1}, stream, "exec_div_mag_penalty");
-        kernelDivMagnitudePenalty<<<1, 1, 0, stream>>>(
-            diag_out->div_magnitude_penalty.data, work.v_out.data, d_div_flag, mag_w);
-        CUDA_CHECK_KERNEL();
-
-        auto mag_fn = std::make_shared<DivMagnitudePenaltyGradFn>();
-        mag_fn->capture(work.v_out, d_div_flag, mag_w, stream);
-        diag_out->div_magnitude_penalty.grad_fn = mag_fn;
-        diag_out->div_magnitude_penalty.requires_grad = true;
-        diag_out->div_magnitude_penalty.is_leaf = false;
     }
 
     kernelAssembleExecRecord<<<1, 1, 0, stream>>>(
@@ -2327,113 +1742,13 @@ void executeStepCoordinatorImpl(
         kernelMaskScratchSlots<<<(S + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(write_logits.data, S);
         CUDA_CHECK_KERNEL();
     }
-
-    // ── Selection CE for write (logits-space, before softmax) ──
-    if (selection_targets && selection_targets->valid) {
-        if (!diag_out) throw std::runtime_error("selection_targets->valid requires diag_out != nullptr");
-        diag_out->selection_ce_write = autograd::cross_entropy_logits(
-            write_logits, selection_targets->write_target, stream);
-        diag_out->has_selection_ce = true;
-    }
-
     work.p_write = autograd::softmax(write_logits, temperature, stream);
+    if (diag_out) {
+        diag_out->write_logits_tensor = std::move(write_logits);
+    }
     kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_write.data, V, LayerAccess::numericErrorFlag(layer), kStagePWrite);
     kernelCheckWriteCollapse<<<1, kWarpSize, 0, stream>>>(
         work.p_write.data, V, LayerAccess::numericErrorFlag(layer), kStageWriteCollapse, layer.hp().write_collapse_threshold);
-
-    if (diag_out) {
-        // Hard recomputed result: re-evaluate the argmax-selected op from memory values
-        auto recomputed_result = Tensor::zeros({1, 1}, stream, "exec_recomputed");
-        kernelRecomputeOpResult<<<1, 1, 0, stream>>>(
-            recomputed_result.data, memory.values.data, d_exec_idx, d_exec_idx + 1, d_exec_idx + 2,
-            S, V, V_val, kEps);
-        CUDA_CHECK_KERNEL();
-
-        // transition_error_hard: |hard_recomputed - target|
-        // Measures how far the argmax-selected op result is from the teacher target.
-        const float* target_ptr = expected_target ? expected_target : work.v_out.data;
-        diag_out->used_expected_target = (expected_target != nullptr);
-
-        diag_out->transition_error_hard = Tensor::zeros({1, 1}, stream, "exec_te_hard");
-        kernelAbsDiff<<<1, 1, 0, stream>>>(
-            diag_out->transition_error_hard.data, recomputed_result.data, target_ptr, nullptr, 0, 0.0f);
-        CUDA_CHECK_KERNEL();
-
-        // transition_loss: |v_out - target| (autograd-connected through FourOpMixGradFn)
-        // v_out is hard-picked results[argmax(p_op)]; backward uses hard derivative for v1/v2.
-        // Gradient chain: transition_loss → L1ScalarLossGradFn → v_out → FourOpMixGradFn
-        //   → v1,v2 (dead end — detached from p_arg per Fix #1)
-        // Arg alignment is handled by Fix #7 (REINFORCE) below.
-        diag_out->transition_loss = Tensor::zeros({1, 1}, stream, "exec_trans_loss");
-        kernelAbsDiff<<<1, 1, 0, stream>>>(
-            diag_out->transition_loss.data, work.v_out.data, target_ptr, nullptr, 0, 0.0f);
-        CUDA_CHECK_KERNEL();
-
-        {
-            auto l1_fn = std::make_shared<L1ScalarLossGradFn>();
-            l1_fn->capture(work.v_out, target_ptr, stream);
-            diag_out->transition_loss.grad_fn = l1_fn;
-            diag_out->transition_loss.requires_grad = true;
-            diag_out->transition_loss.is_leaf = false;
-        }
-
-        // Fix #7: Arg REINFORCE — use advantage (err - baseline) as DETACHED reward.
-        // loss = λ * (|v_out-target| - baseline) * (-log p_arg1[k1] - log p_arg2[k2])
-        // Gradient: ONLY into arg logits (through p_arg softmax grad_fn).
-        // Baseline is an EMA of transition_err for variance reduction.
-        // Op-correctness gate: only train arg selection when op matches teacher target.
-        // Wrong op → reward is meaningless for arg credit assignment.
-        if (layer.hp().arg_reinforce_weight > 0.0f) {
-            float op_gate = 1.0f;
-            if (selection_targets && selection_targets->valid) {
-                int op_target = selection_targets->op_target;
-                int h_op_idx = 0;
-                CUDA_CHECK(cudaMemcpyAsync(&h_op_idx, d_exec_idx + 2, sizeof(int),
-                                           cudaMemcpyDeviceToHost, stream));
-                CUDA_CHECK(cudaStreamSynchronize(stream));
-                op_gate = (h_op_idx == op_target) ? 1.0f : 0.0f;
-            }
-
-            int* d_exec_idx_local = LayerAccess::execIndices(layer);
-            const float arf_w = layer.hp().arg_reinforce_weight * op_gate;
-            const float bld   = layer.hp().arg_reinforce_baseline_decay;
-
-            auto arf_fn = std::make_shared<ArgReinforceLossGradFn>();
-            // Allocate advantage buffer BEFORE kernel launch — kernel writes advantage here
-            float* d_advantage = arf_fn->allocate_advantage_buffer(stream);
-
-            diag_out->arg_reinforce_loss = Tensor::zeros({1, 1}, stream, "exec_arg_reinforce");
-            // transition_loss.data already contains |v_out - target| — use as detached reward
-            kernelArgReinforceLossForward<<<1, 1, 0, stream>>>(
-                diag_out->arg_reinforce_loss.data,
-                d_advantage,
-                work.p_arg1.data, work.p_arg2.data,
-                d_exec_idx_local, d_exec_idx_local + 1,
-                diag_out->transition_loss.data,  // DETACHED: just the scalar value
-                LayerAccess::reinforceBaseline(layer),  // persistent EMA baseline
-                bld,
-                arf_w);
-            CUDA_CHECK_KERNEL();
-
-            arf_fn->capture(d_exec_idx_local, d_exec_idx_local + 1,
-                           work.p_arg1, work.p_arg2,
-                           arf_w, V_val, stream);
-            diag_out->arg_reinforce_loss.grad_fn = arf_fn;
-            diag_out->arg_reinforce_loss.requires_grad = true;
-            diag_out->arg_reinforce_loss.is_leaf = false;
-        }
-
-        if (layer.hp().transition_hard_threshold > 0.0f) {
-            kernelAbsDiff<<<1, 1, 0, stream>>>(
-                diag_out->transition_error_hard.data,
-                recomputed_result.data,
-                target_ptr,
-                LayerAccess::numericErrorFlag(layer),
-                kStageTransitionInvalid,
-                layer.hp().transition_hard_threshold);
-            CUDA_CHECK_KERNEL();
-        }
-    }
 
     work.state_new = Tensor::zeros({1, dm}, stream, "exec_state_new");
     const float* step_emb_ptr = layer.step_embeddings().data + static_cast<size_t>(step) * dm;
@@ -2451,12 +1766,16 @@ void executeStepCoordinatorImpl(
         diag_out->metrics.inject_gate_value = h_inject_gate_value;
     }
     finalizeStepOrThrow(layer, diag_out, step, stream);
+    if (diag_out) {
+        diag_out->div_was_clamped = (h_div_flag != 0);
+        diag_out->v_out_tensor = std::move(work.v_out);
+    }
 }
 
 }  // namespace GRIM::ExecutionBlockInternal
 
 GRIM::Tensor GRIM::ExecutionBlockLayer::computeEntropyLoss(
-    const std::vector<const GRIM::ExecutionBlockStepOutput*>& steps,
+    const std::vector<const GRIM::Forward::ExecutionBlockStepOutput*>& steps,
     float weight,
     cudaStream_t stream) const
 {

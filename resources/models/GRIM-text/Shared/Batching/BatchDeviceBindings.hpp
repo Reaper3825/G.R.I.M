@@ -21,15 +21,16 @@
 //  OWNERSHIP
 //  =========
 //  BatchDeviceBindings owns NOTHING. The underlying device memory is borrowed
-//  from the current lifecycle boundary. Fixed-shape training/eval geometry is
-//  authored by HyperParameters/HyperparameterGroupings and enforced at the
-//  upload boundary; this struct is only the borrowed device-address view.
+//  from the BatchPayload-attached BatchDeviceStorage owner for the active
+//  upload boundary. Fixed-shape training/eval geometry is authored by
+//  HyperParameters/HyperparameterGroupings and enforced at the upload
+//  boundary; this struct is only the borrowed device-address view.
 //
 //  LIFETIME
 //  ========
-//  Valid only between the upload's final stream sync and the
-//  lifecycle boundary that owns the current batch's device addresses. Phase2
-//  must not cache one beyond the step that produced it.
+//  Valid only between the upload's final stream sync and the next upload that
+//  reuses the same BatchDeviceStorage owner. Phase2 must not cache one beyond
+//  the step that produced it.
 //======================================================//
 
 #pragma once

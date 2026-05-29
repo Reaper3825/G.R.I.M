@@ -77,6 +77,7 @@ extern bool g_autograd_verbose;
 #include <tuple>      // for std::tuple (ISSUE #61: split_and_reshape_qkv return type)
 #include <atomic>     // for tensor lifecycle counters
 #include "../Batching/BatchPayload.hpp"
+#include "../Batching/BatchDeviceBindings.hpp"
 #include "../HyperParameters/HyperparameterGroupings.hpp"
 
 //======================================================//
@@ -1351,11 +1352,14 @@ Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps = 1e-5f,
                 cudaStream_t stream = nullptr, const float* input_cache = nullptr);
 
 /**
- * Embedding lookup: output[i] = weight[token_ids[i]] * embedding_scale
+ * Embedding lookup over the orchestration-owned batch device view.
  * @param embedding_scale Scale factor for embeddings (default 1.0, use sqrt(d_model) for AIAYN-style)
  */
-Tensor embedding(const Tensor& weight, const int* token_ids, int num_tokens,
-                 cudaStream_t stream = nullptr, float embedding_scale = 1.0f);
+Tensor embedding(const Tensor& weight,
+                 const Batching::BatchPayload& payload,
+                 const Batching::BatchDeviceBindings& bindings,
+                 cudaStream_t stream = nullptr,
+                 float embedding_scale = 1.0f);
 
 /**
  * Log-Softmax: y[i] = x[i] - logsumexp(x) — numerically stable log(softmax(x))

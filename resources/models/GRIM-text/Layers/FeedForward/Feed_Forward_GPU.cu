@@ -112,13 +112,27 @@ FeedForwardLayer& FeedForwardLayer::operator=(FeedForwardLayer&& other) noexcept
 }
 
 //======================================================//
-//  Forward Pass - SwiGLU with ForwardIntermediates (Issue #56 Fix)
+//  Forward Pass - SwiGLU writing retained tensors into the shared sink
 //======================================================//
 
-Tensor FeedForwardLayer::forward(const Tensor& input, ForwardIntermediates& intermediates,
-                                 cudaStream_t stream, cublasHandle_t cublas_handle,
-                                 uint64_t batch_idx, bool dropout_enabled, int layer_idx,
-                                 const FeedForwardParameterViews* parameter_views) {
+void FeedForwardLayer::forward(const Tensor& input,
+                               cudaStream_t stream,
+                               cublasHandle_t cublas_handle,
+                               Forward::ModelForwardOutputs& forward_outputs,
+                               uint64_t batch_idx,
+                               bool dropout_enabled,
+                               int layer_idx,
+                               const FeedForwardParameterViews* parameter_views) {
+    if (layer_idx < 0) {
+        throw std::runtime_error("FeedForwardLayer::forward: layer_idx must be >= 0, got " + std::to_string(layer_idx));
+    }
+    const size_t layer_slot = static_cast<size_t>(layer_idx);
+    forward_outputs.validateLayerIndex(layer_slot, "FeedForwardLayer::forward");
+    Tensor& ffn_gate_out = forward_outputs.ffn_gate_out_per_layer[layer_slot];
+    Tensor& ffn_silu_out = forward_outputs.ffn_silu_out_per_layer[layer_slot];
+    Tensor& ffn_linear1_out = forward_outputs.ffn_linear1_out_per_layer[layer_slot];
+    Tensor& ffn_swiglu_out = forward_outputs.ffn_swiglu_out_per_layer[layer_slot];
+    Tensor& ffn_out = forward_outputs.ffn_out_per_layer[layer_slot];
     const Tensor& W_gate = (parameter_views && parameter_views->W_gate) ? *parameter_views->W_gate : W_gate_;
     const Tensor& W1 = (parameter_views && parameter_views->W1) ? *parameter_views->W1 : W1_;
     const Tensor& W2 = (parameter_views && parameter_views->W2) ? *parameter_views->W2 : W2_;
@@ -145,46 +159,44 @@ Tensor FeedForwardLayer::forward(const Tensor& input, ForwardIntermediates& inte
     //--------------------------------------------------
     // SwiGLU Gate Path: gate = SiLU(input @ W_gate)
     //--------------------------------------------------
-    intermediates.ffn_gate_out = autograd::matmul(input, W_gate, stream,
-                                                   input.data, nullptr);
-    intermediates.ffn_silu_out = autograd::silu(intermediates.ffn_gate_out, stream,
-                                                intermediates.ffn_gate_out.data);
+    ffn_gate_out = autograd::matmul(input, W_gate, stream,
+                                    input.data, nullptr);
+    ffn_silu_out = autograd::silu(ffn_gate_out, stream,
+                                  ffn_gate_out.data);
 
     //--------------------------------------------------
     // SwiGLU Up Path: up = input @ W1
     //--------------------------------------------------
-    intermediates.ffn_linear1_out = autograd::matmul(input, W1, stream,
-                                                     input.data, nullptr);
+    ffn_linear1_out = autograd::matmul(input, W1, stream,
+                                       input.data, nullptr);
 
     //--------------------------------------------------
     // SwiGLU Combine: hidden = gate ⊙ up
     //--------------------------------------------------
-    intermediates.ffn_swiglu_out = autograd::elementwise_mul(
-        intermediates.ffn_silu_out, intermediates.ffn_linear1_out, stream);
+    ffn_swiglu_out = autograd::elementwise_mul(
+        ffn_silu_out, ffn_linear1_out, stream);
 
     // Activation dropout: applied after SwiGLU gating, before W2 projection
     if (hp_.dropout_rate > 0.0f && dropout_enabled) {
         const uint64_t ffn_act_dropout_seed = batch_idx * 2654435761ULL + 300 + layer_idx;
         const uint64_t ffn_act_dropout_mask_stream = 0x0003000000000000ULL + static_cast<uint64_t>(layer_idx);
-        intermediates.ffn_swiglu_out = autograd::dropout(intermediates.ffn_swiglu_out, hp_.dropout_rate,
-                                                          ffn_act_dropout_seed, stream,
-                                                          ffn_act_dropout_mask_stream);
+        ffn_swiglu_out = autograd::dropout(ffn_swiglu_out, hp_.dropout_rate,
+                                           ffn_act_dropout_seed, stream,
+                                           ffn_act_dropout_mask_stream);
     }
 
     //--------------------------------------------------
     // Down Projection: output = hidden @ W2 + b2
     //--------------------------------------------------
-    if (!intermediates.ffn_swiglu_out.data) {
+    if (!ffn_swiglu_out.data) {
         throw std::runtime_error("FeedForwardLayer::forward: ffn_swiglu_out.data is NULL before W2 matmul");
     }
-    Tensor output = autograd::matmul(intermediates.ffn_swiglu_out, W2, stream,
-                                     intermediates.ffn_swiglu_out.data, nullptr);
+    ffn_out = autograd::matmul(ffn_swiglu_out, W2, stream,
+                               ffn_swiglu_out.data, nullptr);
     
     if (hp_.use_bias && b2.data) {
-        output = autograd::broadcast_add(output, b2, stream);
+        ffn_out = autograd::broadcast_add(ffn_out, b2, stream);
     }
-    
-    return output;
 }
 
 } // namespace GRIM

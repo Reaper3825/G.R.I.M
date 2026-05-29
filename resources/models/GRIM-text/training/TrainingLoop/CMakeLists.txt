@@ -397,6 +397,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/Gradients/GradStatsCollector.cu
     ../../Shared/Forward/ModelForward_GPU.cu
     ../Autograd/AutogradContext.cu
+    ../Autograd/AutogradExecutionLoss.cu
     ../Autograd/AutogradMtpAuxiliaryLoss.cu
     ../Autograd/AutogradSelectorSupervisionLoss.cu
     ../Autograd/AutogradTraining.cu

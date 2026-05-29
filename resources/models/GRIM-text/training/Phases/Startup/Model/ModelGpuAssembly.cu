@@ -26,74 +26,38 @@ namespace Startup {
 
 #ifdef USE_CUDA
 
-struct ModelAssemblyAccess {
-    static GRIM::TrainingState& trainingState(::GRIM::LanguageModel& model) {
-        return model.training_state_;
-    }
+GpuModelState::GpuModelState() = default;
+GpuModelState::~GpuModelState() = default;
+GpuModelState::GpuModelState(GpuModelState&&) noexcept = default;
+GpuModelState& GpuModelState::operator=(GpuModelState&&) noexcept = default;
 
-    static const GRIM::TrainingState& trainingState(const ::GRIM::LanguageModel& model) {
-        return model.training_state_;
+GRIM::GPUGrimEncoder& GpuModelState::requireGpuEncoder(const char* caller) {
+    if (!gpu_encoder) {
+        throw std::runtime_error(std::string(caller) + ": GPU encoder not initialized - complete Startup::assembleGpuModel() first");
     }
+    return *gpu_encoder;
+}
 
-    static GRIM::GenerationState& generationState(::GRIM::LanguageModel& model) {
-        return model.generation_state_;
+const GRIM::GPUGrimEncoder& GpuModelState::requireGpuEncoder(const char* caller) const {
+    if (!gpu_encoder) {
+        throw std::runtime_error(std::string(caller) + ": GPU encoder not initialized - complete Startup::assembleGpuModel() first");
     }
+    return *gpu_encoder;
+}
 
-    static void initializePBM(::GRIM::LanguageModel& model,
-                              const ::GRIM::HyperParameters::PBMConstructionHP& pbm_hp,
-                              cudaStream_t stream) {
-        model.pbm_owner_.initialize(pbm_hp, stream);
-
-        const ::GRIM::PBM::PBMState& pbm_state = model.pbm_owner_.state();
-        if (!pbm_state.initialized || !pbm_state.rope_inv_freq || !pbm_state.alibi_slopes || !pbm_state.upload_event) {
-            throw std::runtime_error("[Startup::initializePBM] PBM state is invalid");
-        }
+GRIM::MTPHead* GpuModelState::getMtpHead(int k) noexcept {
+    if (k < 0 || k >= static_cast<int>(mtp_heads.size())) {
+        return nullptr;
     }
+    return &mtp_heads[static_cast<std::size_t>(k)];
+}
 
-    static bool pbmInitialized(const ::GRIM::LanguageModel& model) {
-        return model.pbm_owner_.initialized();
+const GRIM::MTPHead* GpuModelState::getMtpHead(int k) const noexcept {
+    if (k < 0 || k >= static_cast<int>(mtp_heads.size())) {
+        return nullptr;
     }
-
-    static const ::GRIM::PBM::PBMState& pbmState(const ::GRIM::LanguageModel& model) {
-        return model.pbm_owner_.state();
-    }
-
-    static ::GRIM::GPUGrimEncoder* gpuEncoderPtr(::GRIM::LanguageModel& model) {
-        return model.gpu_encoder_.get();
-    }
-
-    static std::unique_ptr<::GRIM::GPUGrimEncoder>& gpuEncoder(::GRIM::LanguageModel& model) {
-        return model.gpu_encoder_;
-    }
-
-    static std::unique_ptr<::GRIM::ScratchBlockLayer>& scratchBlockLayer(::GRIM::LanguageModel& model) {
-        return model.scratch_block_layer_;
-    }
-
-    static std::unique_ptr<::GRIM::EmbeddingLayer>& embeddingLayer(::GRIM::LanguageModel& model) {
-        return model.embedding_layer_;
-    }
-
-    static std::unique_ptr<::GRIM::LMHeadLayer>& lmHeadLayer(::GRIM::LanguageModel& model) {
-        return model.lm_head_layer_;
-    }
-
-    static std::unique_ptr<::GRIM::ExecutionBlockLayer>& executionBlockLayer(::GRIM::LanguageModel& model) {
-        return model.execution_block_layer_;
-    }
-
-    static std::unique_ptr<::GRIM::DecodeTimeSlotSelectorLayer>& decodeTimeSlotSelectorLayer(::GRIM::LanguageModel& model) {
-        return model.decode_time_slot_selector_layer_;
-    }
-
-    static std::unique_ptr<::GRIM::DecodeTimeNumPolicy>& decodeTimeNumPolicy(::GRIM::LanguageModel& model) {
-        return model.decode_time_num_policy_;
-    }
-
-    static std::vector<::GRIM::LanguageModel::MTPHead>& mtpHeads(::GRIM::LanguageModel& model) {
-        return model.mtp_heads_;
-    }
-};
+    return &mtp_heads[static_cast<std::size_t>(k)];
+}
 
 #endif // USE_CUDA
 
@@ -150,10 +114,10 @@ void requireCublasHandle(const GRIM::TrainingState& training_state,
     throw std::runtime_error(error);
 }
 
-void requirePBMReady(const GRIM::LanguageModel& model,
+void requirePBMReady(bool pbm_initialized,
                      const char* caller,
                      const char* missing_pbm_message) {
-    if (!GRIMText::Training::Startup::ModelAssemblyAccess::pbmInitialized(model)) {
+    if (!pbm_initialized) {
         throw std::runtime_error(std::string("[") + caller + "] " + missing_pbm_message);
     }
 }
@@ -167,30 +131,31 @@ void requireReadGateWorkspace(const GRIM::TrainingState& training_state,
 }
 
 void allocateRuntimeWorkspaces(GRIM::TrainingState& training_state,
-                               const GRIM::HyperParameters::TrainingStateWorkspaceHP& workspace_hp,
                                cudaStream_t primary_stream,
                                const char* caller,
                                const char* allocation_banner) {
     std::cout << allocation_banner << std::endl;
-    training_state.allocateStepDeviceWorkspaces(workspace_hp, primary_stream);
+    training_state.allocateReadGateWorkspace(primary_stream);
     requireReadGateWorkspace(training_state, caller);
 }
 
-void validatePBMConfigOrThrow(const GRIM::HyperParameters::LanguageModelConfig& model_cfg,
+void validatePBMConfigOrThrow(const GRIM::Config::AiConfigSnapshot& model_cfg,
                               const GRIM::HyperParameters::PBMConstructionHP& pbm_hp,
                               const char* caller) {
-    if (model_cfg.positional_encoding != GRIM::HyperParameters::PositionalEncodingType::ALIBI_ROPE &&
-        model_cfg.positional_encoding != GRIM::HyperParameters::PositionalEncodingType::ALIBI) {
+    const auto positional_encoding = GRIM::HyperParameters::snapshotTrainingConfigField<GRIM::HyperParameters::PositionalEncodingType>(model_cfg, "positional_encoding");
+    if (positional_encoding != GRIM::HyperParameters::PositionalEncodingType::ALIBI_ROPE &&
+        positional_encoding != GRIM::HyperParameters::PositionalEncodingType::ALIBI) {
         throw std::runtime_error(
             std::string("[") + caller + "] unified PBM requires ALIBI or ALIBI_ROPE, got " +
-            GRIM::HyperParameters::positionalEncodingTypeToString(model_cfg.positional_encoding));
+            GRIM::HyperParameters::positionalEncodingTypeToString(positional_encoding));
     }
 
     const int expected_d_model = pbm_hp.num_heads * pbm_hp.head_dim;
-    if (model_cfg.d_model != expected_d_model) {
+    const int d_model = GRIM::HyperParameters::snapshotTrainingConfigField<int>(model_cfg, "d_model");
+    if (d_model != expected_d_model) {
         throw std::runtime_error(
             std::string("[") + caller + "] grouped PBM geometry does not match d_model (d_model=" +
-            std::to_string(model_cfg.d_model) + " expected=" + std::to_string(expected_d_model) + ")");
+            std::to_string(d_model) + " expected=" + std::to_string(expected_d_model) + ")");
     }
 }
 
@@ -219,7 +184,7 @@ void initializeExecutionSubsystems(
     std::unique_ptr<GRIM::ExecutionBlockLayer>& execution_block_layer,
     std::unique_ptr<GRIM::DecodeTimeSlotSelectorLayer>& decode_time_slot_selector_layer,
     std::unique_ptr<GRIM::DecodeTimeNumPolicy>& decode_time_num_policy,
-    const GRIM::HyperParameters::LanguageModelConfig& model_cfg,
+    const GRIM::Config::AiConfigSnapshot& model_cfg,
     uint64_t weight_init_seed,
     cudaStream_t init_stream) {
     const auto execution_hp = GRIM::HyperParameters::executionBlockConstructionHP(model_cfg);
@@ -284,7 +249,7 @@ void requireWeightsReady(const LayerT* layer,
     }
 }
 
-void logInferenceMemorySummary(const GRIM::HyperParameters::LanguageModelConfig& model_cfg,
+void logInferenceMemorySummary(const GRIM::Config::AiConfigSnapshot& model_cfg,
                                size_t max_batch_size,
                                size_t max_seq_len_cache,
                                size_t max_tokens) {
@@ -294,9 +259,12 @@ void logInferenceMemorySummary(const GRIM::HyperParameters::LanguageModelConfig&
               << ", tokens=" << max_tokens << std::endl;
 
     const size_t token_cache_bytes = max_tokens * sizeof(float) * 3;
-    const size_t encoder_out_bytes = max_tokens * static_cast<size_t>(model_cfg.d_model) * sizeof(float);
-    const size_t logits_bytes = max_tokens * static_cast<size_t>(model_cfg.vocab_size) * sizeof(float);
-    const size_t workspace_bytes = static_cast<size_t>(model_cfg.d_ff) * max_seq_len_cache * 4 * sizeof(float);
+    const size_t d_model = static_cast<size_t>(GRIM::HyperParameters::snapshotTrainingConfigField<int>(model_cfg, "d_model"));
+    const size_t vocab_size = static_cast<size_t>(GRIM::HyperParameters::snapshotTrainingConfigField<int>(model_cfg, "vocab_size"));
+    const size_t d_ff = static_cast<size_t>(GRIM::HyperParameters::snapshotTrainingConfigField<int>(model_cfg, "d_ff"));
+    const size_t encoder_out_bytes = max_tokens * d_model * sizeof(float);
+    const size_t logits_bytes = max_tokens * vocab_size * sizeof(float);
+    const size_t workspace_bytes = d_ff * max_seq_len_cache * 4 * sizeof(float);
     const size_t total_bytes = token_cache_bytes + encoder_out_bytes + logits_bytes + workspace_bytes;
 
     std::cout << "  📊 Total GPU activation memory: ~" << (total_bytes / 1024.0 / 1024.0) << " MB" << std::endl;
@@ -316,7 +284,7 @@ namespace GRIMText::Training::Startup {
 //======================================================//
 
 void initializeCuBLASHandle(::GRIM::LanguageModel& model) {
-    auto& training_state = ModelAssemblyAccess::trainingState(model);
+    auto& training_state = model.getTrainingState();
     constexpr const char* caller = "Startup::initializeCuBLASHandle";
     cudaStream_t primary_stream = requirePrimaryStream(
         training_state,
@@ -341,12 +309,12 @@ void initializeCuBLASHandle(::GRIM::LanguageModel& model) {
 
 void initializePBM(::GRIM::LanguageModel& model) {
     constexpr const char* caller = "Startup::initializePBM";
-    if (ModelAssemblyAccess::pbmInitialized(model)) {
+    if (model.pbm_owner_.initialized()) {
         std::cout << "✓ PBM (ALiBi+RoPE) already initialized" << std::endl;
         return;
     }
 
-    auto& training_state = ModelAssemblyAccess::trainingState(model);
+    auto& training_state = model.getTrainingState();
     const auto& model_cfg = model.getConfig();
     cudaStream_t stream = requirePrimaryStream(
         training_state,
@@ -356,14 +324,19 @@ void initializePBM(::GRIM::LanguageModel& model) {
     const auto pbm_hp = GRIM::HyperParameters::pbmConstructionHP(model_cfg);
     validatePBMConfigOrThrow(model_cfg, pbm_hp, caller);
 
-    ModelAssemblyAccess::initializePBM(model, pbm_hp, stream);
+    model.pbm_owner_.initialize(pbm_hp, stream);
+
+    const ::GRIM::PBM::PBMState& pbm_state = model.pbm_owner_.state();
+    if (!pbm_state.initialized || !pbm_state.rope_inv_freq || !pbm_state.alibi_slopes || !pbm_state.upload_event) {
+        throw std::runtime_error("[Startup::initializePBM] PBM state is invalid");
+    }
 
     std::cout << "✓ PBM (Hybrid ALiBi+RoPE) initialized" << std::endl;
 }
 
 void initializeTrainingRuntime(::GRIM::LanguageModel& model) {
     constexpr const char* caller = "Startup::initializeTrainingRuntime";
-    auto& training_state = ModelAssemblyAccess::trainingState(model);
+    auto& training_state = model.getTrainingState();
     requireRuntimeNotInitialized(training_state, caller, "training runtime");
 
     cudaStream_t primary_stream = requirePrimaryStream(
@@ -375,20 +348,19 @@ void initializeTrainingRuntime(::GRIM::LanguageModel& model) {
     requireCublasHandle(training_state, caller, "cuBLAS handle not initialized. Call Startup::initializeCuBLASHandle() first!");
     std::cout << "✓ Using pre-initialized cuBLAS handle" << std::endl;
 
-    requirePBMReady(model, caller, "PBM not initialized! Call Startup::initializePBM() before training runtime allocation — Rule 20: no silent fallbacks");
+    requirePBMReady(model.pbm_owner_.initialized(), caller, "PBM not initialized! Call Startup::initializePBM() before training runtime allocation — Rule 20: no silent fallbacks");
     std::cout << "✓ PBM (Hybrid ALiBi+RoPE) pre-initialized" << std::endl;
 
-    const auto workspace_hp = GRIM::HyperParameters::trainingStateWorkspaceHP(model.getConfig());
-    allocateRuntimeWorkspaces(training_state, workspace_hp, primary_stream, caller, "📊 Allocating TrainingState step workspaces");
+    allocateRuntimeWorkspaces(training_state, primary_stream, caller, "📊 Allocating TrainingState runtime workspaces");
 
-    std::cout << "✓ TrainingState step workspaces allocated" << std::endl;
+    std::cout << "✓ TrainingState runtime workspaces allocated" << std::endl;
     training_state.initialized = true;
     std::cout << "✓ Training state initialized with runtime workspaces" << std::endl;
 }
 
-void initializeInferenceRuntime(::GRIM::LanguageModel& model) {
+void initializeInferenceRuntime(::GRIM::LanguageModel& model, const GpuModelState& gpu_model_state) {
     constexpr const char* caller = "Startup::initializeInferenceRuntime";
-    auto& training_state = ModelAssemblyAccess::trainingState(model);
+    auto& training_state = model.getTrainingState();
     requireRuntimeNotInitialized(training_state, caller, "inference runtime");
 
     const auto& model_cfg = model.getConfig();
@@ -402,9 +374,9 @@ void initializeInferenceRuntime(::GRIM::LanguageModel& model) {
         caller,
         "[Startup::initializeInferenceRuntime] StreamController not initialized. Caller must initialize stream_ctrl before inference runtime allocation.");
     requireCublasHandle(training_state, caller, "cuBLAS handle not initialized. Caller must initialize cuBLAS before inference runtime allocation.");
-    requirePBMReady(model, caller, "PBM not initialized. Caller must initialize PBM before inference runtime allocation.");
+    requirePBMReady(model.pbm_owner_.initialized(), caller, "PBM not initialized. Caller must initialize PBM before inference runtime allocation.");
 
-    if (!ModelAssemblyAccess::gpuEncoderPtr(model)) {
+    if (!gpu_model_state.gpu_encoder) {
         throw std::runtime_error(std::string("[") + caller + "] GPU encoder not initialized. Caller must complete Startup::assembleGpuModel(...) before inference runtime allocation.");
     }
     requireWeightsReady(model.getEmbeddingLayer(), caller, "EmbeddingLayer", "not assembled by Startup::assembleGpuModel().");
@@ -421,26 +393,24 @@ void initializeInferenceRuntime(::GRIM::LanguageModel& model) {
     }
 
     const auto mtp_hp = GRIM::HyperParameters::mtpConstructionHP(model_cfg);
-    if (mtp_hp.enabled && static_cast<int>(ModelAssemblyAccess::mtpHeads(model).size()) != mtp_hp.k) {
+    if (mtp_hp.enabled && static_cast<int>(gpu_model_state.mtp_heads.size()) != mtp_hp.k) {
         throw std::runtime_error(std::string("[") + caller + "] MTP heads were not assembled by Startup::assembleGpuModel() while mtp is enabled.");
     }
 
     cublasSetStream(training_state.cublas_handle.get(), primary_stream);
     std::cout << "  ✓ Using pre-initialized StreamController and cuBLAS handle" << std::endl;
 
-    GRIM::HyperParameters::validateRootConfigDocument(model_cfg, caller);
-    const auto workspace_hp = GRIM::HyperParameters::trainingStateWorkspaceHP(model_cfg);
-    const size_t max_batch_size = static_cast<size_t>(workspace_hp.batch_size);
-    const size_t max_seq_len_cache = static_cast<size_t>(model_cfg.max_cached_seq_len);
-    const size_t max_tokens = static_cast<size_t>(workspace_hp.max_tokens_per_batch);
+    const size_t max_batch_size = static_cast<size_t>(GRIM::HyperParameters::snapshotTrainingConfigField<int>(model_cfg, "batch_size"));
+    const size_t max_seq_len_cache = static_cast<size_t>(GRIM::HyperParameters::snapshotTrainingConfigField<int>(model_cfg, "max_cached_seq_len"));
+    const size_t max_tokens = static_cast<size_t>(GRIM::HyperParameters::snapshotTrainingConfigField<int>(model_cfg, "max_tokens_per_batch"));
 
     std::cout << "  ℹ Allocating activation caches: batch=" << max_batch_size
               << ", seq_len=" << max_seq_len_cache
               << ", total_tokens=" << max_tokens << std::endl;
 
-    allocateRuntimeWorkspaces(training_state, workspace_hp, primary_stream, caller, "  ↳ Allocating inference runtime workspaces");
+    allocateRuntimeWorkspaces(training_state, primary_stream, caller, "  ↳ Allocating inference runtime workspaces");
 
-    ModelAssemblyAccess::generationState(model).resetSession();
+    model.getGenerationState().resetSession();
     std::cout << "  ✓ Reset Phase2 inference session state" << std::endl;
 
     const auto scratch_hp = GRIM::HyperParameters::scratchBlockConstructionHP(model_cfg);
@@ -497,7 +467,7 @@ namespace GRIM {
 
 namespace GRIMText::Training::Startup {
 
-void assembleGpuModel(::GRIM::LanguageModel& model, uint64_t weight_init_seed) {
+void assembleGpuModel(::GRIM::LanguageModel& model, GpuModelState& gpu_model_state, uint64_t weight_init_seed) {
     const auto& model_cfg = model.getConfig();
     const auto init_hp = GRIM::HyperParameters::gpuModelInitializationHP(model_cfg);
 
@@ -510,11 +480,11 @@ void assembleGpuModel(::GRIM::LanguageModel& model, uint64_t weight_init_seed) {
         std::cout << "[assembleGpuModel] Assembling GPU model layer objects..." << std::endl;
 
         const cudaStream_t init_stream = requirePrimaryStream(
-            ModelAssemblyAccess::trainingState(model),
+            model.getTrainingState(),
             kAssembleGpuModelCaller,
             "FATAL: StreamController not initialized. ModelAllocationState must initialize stream_ctrl before Startup::assembleGpuModel().");
-        requireCublasHandle(ModelAssemblyAccess::trainingState(model), kAssembleGpuModelCaller, "cuBLAS handle not initialized. ModelAllocationState must initialize cuBLAS before Startup::assembleGpuModel().");
-        requirePBMReady(model, kAssembleGpuModelCaller, "PBM not initialized before encoder construction. ModelAllocationState must initialize PBM before Startup::assembleGpuModel().");
+        requireCublasHandle(model.getTrainingState(), kAssembleGpuModelCaller, "cuBLAS handle not initialized. ModelAllocationState must initialize cuBLAS before Startup::assembleGpuModel().");
+        requirePBMReady(model.pbm_owner_.initialized(), kAssembleGpuModelCaller, "PBM not initialized before encoder construction. ModelAllocationState must initialize PBM before Startup::assembleGpuModel().");
 
         //======================================================//
         //  1) Build GPU encoder
@@ -528,14 +498,13 @@ void assembleGpuModel(::GRIM::LanguageModel& model, uint64_t weight_init_seed) {
         //======================================================//
 
         const auto encoder_hp = GRIM::HyperParameters::encoderLayerConstructionHP(model_cfg);
-        const GRIM::EncoderConstructionBindings enc_bindings = makeEncoderConstructionBindings(ModelAssemblyAccess::pbmState(model), init_stream);
+    const GRIM::EncoderConstructionBindings enc_bindings = makeEncoderConstructionBindings(model.pbm_owner_.state(), init_stream);
 
         std::cout << "[assembleGpuModel] Encoder construction bindings prepared" << std::endl;
         std::cout << "✓ Encoder using TrainingState construction bindings\n";
 
-        auto* encoder_ptr = new GRIM::GPUGrimEncoder(encoder_hp, enc_bindings, weight_init_seed);
-        ModelAssemblyAccess::gpuEncoder(model).reset(encoder_ptr);
-        verifyEncoderLayersReady(*encoder_ptr, init_hp.num_layers, kAssembleGpuModelCaller);
+    gpu_model_state.gpu_encoder = std::make_unique<GRIM::GPUGrimEncoder>(encoder_hp, enc_bindings, weight_init_seed);
+    verifyEncoderLayersReady(*gpu_model_state.gpu_encoder, init_hp.num_layers, kAssembleGpuModelCaller);
         std::cout << "✓ Encoder layers self-allocated weights\n";
 
         //======================================================//
@@ -548,7 +517,7 @@ void assembleGpuModel(::GRIM::LanguageModel& model, uint64_t weight_init_seed) {
         //======================================================//
         {
             const auto emb_hp = GRIM::HyperParameters::embeddingLayerConstructionHP(model_cfg);
-            auto& embedding_layer = ModelAssemblyAccess::embeddingLayer(model);
+            auto& embedding_layer = gpu_model_state.embedding_layer;
             embedding_layer = std::make_unique<GRIM::EmbeddingLayer>(emb_hp, weight_init_seed, enc_bindings.init_stream, true);
 
             if (!embedding_layer->weightsReady()) {
@@ -566,8 +535,8 @@ void assembleGpuModel(::GRIM::LanguageModel& model, uint64_t weight_init_seed) {
         //======================================================//
         {
             const auto lm_hp = GRIM::HyperParameters::lmHeadLayerConstructionHP(model_cfg);
-            auto& embedding_layer = ModelAssemblyAccess::embeddingLayer(model);
-            auto& lm_head_layer = ModelAssemblyAccess::lmHeadLayer(model);
+            auto& embedding_layer = gpu_model_state.embedding_layer;
+            auto& lm_head_layer = gpu_model_state.lm_head_layer;
 
             GRIM::Tensor* tied_emb = nullptr;
             if (lm_hp.tie_embeddings) {
@@ -595,7 +564,7 @@ void assembleGpuModel(::GRIM::LanguageModel& model, uint64_t weight_init_seed) {
         //======================================================//
         const auto scratch_hp = GRIM::HyperParameters::scratchBlockConstructionHP(model_cfg);
         if (scratch_hp.enabled) {
-            auto& scratch_block_layer = ModelAssemblyAccess::scratchBlockLayer(model);
+            auto& scratch_block_layer = gpu_model_state.scratch_block_layer;
             scratch_block_layer = std::make_unique<GRIM::ScratchBlockLayer>(
                 scratch_hp, enc_bindings.init_stream);
 
@@ -610,15 +579,15 @@ void assembleGpuModel(::GRIM::LanguageModel& model, uint64_t weight_init_seed) {
         //  5) Build optional model heads/subsystems
         //======================================================//
         initializeExecutionSubsystems(
-            ModelAssemblyAccess::executionBlockLayer(model),
-            ModelAssemblyAccess::decodeTimeSlotSelectorLayer(model),
-            ModelAssemblyAccess::decodeTimeNumPolicy(model),
+            gpu_model_state.execution_block_layer,
+            gpu_model_state.decode_time_slot_selector_layer,
+            gpu_model_state.decode_time_num_policy,
             model_cfg,
             weight_init_seed,
             enc_bindings.init_stream);
 
         initializeMtpHeads(
-            ModelAssemblyAccess::mtpHeads(model),
+            gpu_model_state.mtp_heads,
             GRIM::HyperParameters::mtpConstructionHP(model_cfg),
             weight_init_seed,
             enc_bindings.init_stream);

@@ -16,10 +16,10 @@
 // Phase1_Startup.hpp before this header so a forward decl is safe.
 class TrainingLogger;
 
-// LanguageModelConfig lives in Shared/HyperParameters/HyperParameters_GPU.hpp.
+// AiConfigSnapshot lives behind Shared/HyperParameters/HyperParameters_GPU.hpp.
 // Forward-declare in its owning namespace to avoid pulling that header
 // transitively (and to keep this header circular-include-safe).
-namespace GRIM { namespace HyperParameters { struct LanguageModelConfig; } }
+namespace GRIM { namespace Config { struct AiConfigSnapshot; } }
 
 namespace GRIMText::Training {
 
@@ -65,7 +65,7 @@ namespace Internal {
  * @brief Initialize RNG with hierarchical seeding from config.
  *        Reads training.config.seed (-1 = nondeterministic).
  */
-RNGContext initializeRNG(const ::GRIM::HyperParameters::LanguageModelConfig& config,
+RNGContext initializeRNG(const ::GRIM::Config::AiConfigSnapshot& config,
                          TrainingLogger& logger);
 
 } // namespace Internal

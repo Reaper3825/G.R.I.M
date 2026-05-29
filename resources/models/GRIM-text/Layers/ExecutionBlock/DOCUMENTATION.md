@@ -153,8 +153,7 @@ At a high level, one step does this:
 12. **Run fail-loud post-step validation**
     - numeric checks,
     - softmax validity checks,
-    - entropy / collapse checks,
-    - optional transition-loss diagnostics,
+   - entropy / collapse checks,
     - multi-slot mutation check.
 
 ## Shared-forward runtime preparation
@@ -167,16 +166,22 @@ This op prepares caller-owned execution runtime for one forward execution bounda
 It does not own the runtime; the caller still passes the actual storage explicitly:
 
 - `std::vector<ExecutionMemory>& exec_memories`
-- `std::vector<ExecutionBlockOutput>& exec_outputs_per_row`
-- `std::vector<Tensor>& exec_expected_target_tensors`
-- `std::vector<std::vector<ExecutionRecord>>& execution_trace_by_row`
+- `std::vector<Forward::ExecutionBlockOutput>& exec_outputs_per_row`
+- `std::vector<std::vector<Forward::ExecutionRecord>>& execution_trace_by_row`
 - `std::vector<Tensor>& trace_state_by_row`
+
+`Forward::ExecutionBlockOutput`, `Forward::ExecutionBlockStepOutput`,
+`Forward::ExecutionRecord`, and `Forward::ExecStepMetrics` are declared in
+`Shared/Forward/ModelForwardOutputs.hpp` because they are forward-owned Category 1
+sink payloads even though `ExecutionBlockLayer` populates them. Durable
+`ExecutionBlockParameterTensors` do NOT live there; they are layer-owned state
+declared on the execution-block boundary in `execution_block_GPU.hpp`.
 
 Current `prepareForwardRuntime(...)` behavior:
 
 1. validates config + payload execution geometry,
 2. resizes the caller-owned execution bags to `payload.batch_size`,
-3. clears prior execution traces, step diagnostics, and expected-target stash,
+3. clears prior execution traces and step diagnostics,
 4. allocates + zeroes each active row's `ExecutionMemory`,
 5. recreates each active row's `trace_state`, enabling autograd only when the caller requested a connected parameter graph.
 

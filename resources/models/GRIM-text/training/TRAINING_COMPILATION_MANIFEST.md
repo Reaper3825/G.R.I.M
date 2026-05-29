@@ -392,7 +392,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 - [x] **Inference_GPU.cu** ✅ DELETED (phase-2 boundary split)
   - Phase2 inference owns the generation session: prompt/current-sequence payload construction, sampling, appending, and decode.
-  - `training/Phases/Phase2_InferenceLoop.cu::generateOneSequence(...)` now uploads the explicit payload, authors `ModelForwardRequest` / `ModelForwardRuntimePayload`, enters `Shared/Forward/ModelForward_GPU.cu` with `ModelForwardGraphPolicy{false,false,false}`, returns last-token logits to the sampler, and clears intermediates.
+  - `training/Phases/Phase2_InferenceLoop.cu::generateOneSequence(...)` now uploads the explicit payload, authors `ModelForwardRequest` / `ModelForwardRuntimePayload`, enters `Shared/Forward/ModelForward_GPU.cu` with `ModelForwardGraphPolicy{false,false,false,false}`, returns last-token logits to the sampler, and clears intermediates.
   - **DELETED**: `scoreSequenceFullContext_()`, `primeGenerationSession()`, `continueGenerationSession()`, `scoreNextTokenWithKvCache_()`, KV-cache/decode scratch allocation, and the second encoder-layer implementation.
   - No AutogradContext inference path remains; inference uses the shared read-only full-context graph only ✅
 
@@ -454,7 +454,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   1. `token_ids = reinterpret_cast<int*>(ts->cached_token_ids_tensor.data)` ✅ Rule 20 null check
   2. `emb_weights = ts->tensors_->embedding_weights` ✅ Rule 20 null check + shape validation
   3. `embedding_scale = 1.0f` ✅ Issue #140: removed √d_model (correct for tied weights + ALiBi/RoPE)
-  4. `emb_output = autograd::embedding(emb_weights, token_ids, total_tokens, stream, 1.0f)` ✅
+  4. `emb_output = autograd::embedding(emb_weights, payload, bindings, stream, 1.0f)` ✅
   5. Learned position embeddings: `use_learned_pos_emb = (positional_encoding == NONE)` → **FALSE** with ALIBI_ROPE → SKIPPED ✅
   6. `intermediates.embedding_tensor = std::move(emb_output)` ✅ ownership transferred
   7. Embedding dropout: training-only branch calls `autograd::dropout(emb, 0.15, step*2654435761+500, stream)`; inference skips dropout entirely ✅
@@ -868,8 +868,8 @@ For each encoding layer (Layer 0 → Layer 11):
 
 - [x] **Layers/FeedForward/Feed_Forward_GPU.cu** — AUDITED Feb 2026, CLEAN (244 lines)
   - Issue #97: Uses `autograd::broadcast_add()` for both b1 and b2 ✓
-  - Issue #56: Stores intermediates in ForwardIntermediates ✓
-  - Issue #25 note: Old `cudaMemcpyAsync(..., args.cache_ffn_output)` pattern NOT present — autograd handles caching via `intermediates.ffn_gelu_out` (correct for autograd architecture)
+  - Issue #56: Stores retained tensors on ModelForwardOutputs ✓
+  - Issue #25 note: Old `cudaMemcpyAsync(..., args.cache_ffn_output)` pattern NOT present — autograd handles caching via the retained ModelForwardOutputs FFN tensors (correct for autograd architecture)
   - No dead code, no stale diagnostics, fully autograd-based
 
 #### 2.5j GELU Activation

@@ -1,5 +1,7 @@
 #include "ParameterGroupRegistration.hpp"
 
+#include "ModelGpuState.hpp"
+
 #include "../../../../GRIM/grim_language_model_cuda.hpp"
 #include "../../../../Layers/Encoding/Encoding_GPU.hpp"
 #include "../../../../Shared/HyperParameters/HyperParameters_GPU.hpp"
@@ -29,7 +31,6 @@ using GRIM::ParamStatsBucket;
 using GRIM::ParamGroupType;
 using GRIM::Tensor;
 using GRIM::HyperParameters::ParameterGroupPrecision;
-using GRIM::HyperParameters::LanguageModelConfig;
 using GRIM::HyperParameters::scratchBlockConstructionHP;
 
 std::string tensorDebugSummary(const Tensor& tensor) {
@@ -134,7 +135,7 @@ void throwUntrainableTensor(const std::string& name, const Tensor& tensor, int l
 class Registrar {
 public:
     Registrar(std::vector<ParameterGroup>& groups,
-              const LanguageModelConfig& config)
+              const GRIM::Config::AiConfigSnapshot& config)
         : groups_(groups), config_(config) {}
 
     void addTensor(const std::string& name,
@@ -217,35 +218,35 @@ public:
 private:
     ParameterGroupPrecision precisionForType(ParamGroupType type) const {
         switch (type) {
-            case ParamGroupType::EMBEDDING:       return config_.parameter_precision_embedding;
-            case ParamGroupType::LM_HEAD:         return config_.parameter_precision_lm_head;
-            case ParamGroupType::ATTENTION:       return config_.parameter_precision_attention;
-            case ParamGroupType::FFN:             return config_.parameter_precision_ffn;
-            case ParamGroupType::RMSNORM:         return config_.parameter_precision_rmsnorm;
-            case ParamGroupType::SCRATCHBLOCK:    return config_.parameter_precision_scratchblock;
-            case ParamGroupType::MTP:             return config_.parameter_precision_mtp;
-            case ParamGroupType::REASONING_HEAD:  return config_.parameter_precision_reasoning_head;
-            case ParamGroupType::EXECUTION_BLOCK: return config_.parameter_precision_execution_block;
-            case ParamGroupType::SLOT_SELECTOR:   return config_.parameter_precision_slot_selector;
+            case ParamGroupType::EMBEDDING:       return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_embedding");
+            case ParamGroupType::LM_HEAD:         return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_lm_head");
+            case ParamGroupType::ATTENTION:       return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_attention");
+            case ParamGroupType::FFN:             return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_ffn");
+            case ParamGroupType::RMSNORM:         return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_rmsnorm");
+            case ParamGroupType::SCRATCHBLOCK:    return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_scratchblock");
+            case ParamGroupType::MTP:             return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_mtp");
+            case ParamGroupType::REASONING_HEAD:  return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_reasoning_head");
+            case ParamGroupType::EXECUTION_BLOCK: return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_execution_block");
+            case ParamGroupType::SLOT_SELECTOR:   return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_slot_selector");
             case ParamGroupType::COUNT: break;
         }
         throw std::runtime_error("[buildParameterGroups] invalid ParamGroupType::COUNT for parameter precision lookup");
     }
 
     std::vector<ParameterGroup>& groups_;
-    const LanguageModelConfig& config_;
+    const GRIM::Config::AiConfigSnapshot& config_;
     std::vector<const void*> registered_data_;
 };
 
 void validateEmbeddingLmHeadAliasing(const Tensor& embedding_weights,
                                      const Tensor& lm_head_weights,
-                                     const LanguageModelConfig& config) {
+                                     const GRIM::Config::AiConfigSnapshot& config) {
     if (!embedding_weights.data || !lm_head_weights.data) {
         throw std::runtime_error("[buildParameterGroups] cannot validate embedding/LM-head aliasing with NULL data: embedding=" +
                                  tensorDebugSummary(embedding_weights) + " lm_head=" + tensorDebugSummary(lm_head_weights));
     }
 
-    const bool tied = config.tie_embeddings;
+    const bool tied = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "tie_embeddings");
     const bool same_data = embedding_weights.data == lm_head_weights.data;
     if (tied && !same_data) {
         throw std::runtime_error("[buildParameterGroups] tie_embeddings=true but embedding and LM-head data pointers differ: embedding=" +
@@ -255,22 +256,28 @@ void validateEmbeddingLmHeadAliasing(const Tensor& embedding_weights,
         throw std::runtime_error("[buildParameterGroups] tie_embeddings=false but embedding and LM-head data pointers are identical: embedding=" +
                                  tensorDebugSummary(embedding_weights) + " lm_head=" + tensorDebugSummary(lm_head_weights));
     }
-    if (tied && config.parameter_precision_embedding != config.parameter_precision_lm_head) {
+    const auto embedding_precision = GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_embedding");
+    const auto lm_head_precision = GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_lm_head");
+    if (tied && embedding_precision != lm_head_precision) {
         throw std::runtime_error("[buildParameterGroups] tie_embeddings=true requires parameter_precision_embedding and parameter_precision_lm_head to match; embedding=" +
-                                 std::string(parameterPrecisionSummaryName(config.parameter_precision_embedding)) +
+                                 std::string(parameterPrecisionSummaryName(embedding_precision)) +
                                  " lm_head=" +
-                                 std::string(parameterPrecisionSummaryName(config.parameter_precision_lm_head)));
+                                 std::string(parameterPrecisionSummaryName(lm_head_precision)));
     }
 }
 
 void registerTopLevelParameters(LanguageModel& model,
                                 Registrar& registrar,
-                                const LanguageModelConfig& config) {
+                                const GRIM::Config::AiConfigSnapshot& config) {
     auto& embedding = requireLayer(model.getEmbeddingLayer(), "EmbeddingLayer", "registerTopLevelParameters");
     auto& lm_head = requireLayer(model.getLmHeadLayer(), "LMHeadLayer", "registerTopLevelParameters");
     validateEmbeddingLmHeadAliasing(embedding.tokenWeights(), lm_head.weights(), config);
 
-    if (!config.tie_embeddings) {
+    const bool tie_embeddings = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "tie_embeddings");
+    const bool use_bias = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "use_bias");
+    const bool freeze_learned_rms_gammas = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "freeze_learned_rms_gammas");
+
+    if (!tie_embeddings) {
         registrar.addTensor("embedding",
                             embedding.tokenWeights(),
                             ParamGroupType::EMBEDDING,
@@ -292,11 +299,11 @@ void registerTopLevelParameters(LanguageModel& model,
                                    ParamGroupType::LM_HEAD,
                                    ParamStatsBucket::LM_HEAD,
                                    -1,
-                                   config.use_bias,
+                                   use_bias,
                                    "config.use_bias=false");
 
     const Tensor& final_gamma = lm_head.finalRmsGamma();
-    if (config.freeze_learned_rms_gammas) {
+    if (freeze_learned_rms_gammas) {
         if (final_gamma.has_grad()) {
             throw std::runtime_error("[buildParameterGroups] final_rms_gamma is frozen by config but still has a grad buffer: " +
                                      tensorDebugSummary(final_gamma));
@@ -309,12 +316,16 @@ void registerTopLevelParameters(LanguageModel& model,
     }
 }
 
-void registerEncoderParameters(LanguageModel& model,
+void registerEncoderParameters(Startup::GpuModelState& gpu_model_state,
                                Registrar& registrar,
-                               const LanguageModelConfig& config) {
-    GRIM::GPUGrimEncoder& gpu_encoder = model.getGpuEncoder();
+                               const GRIM::Config::AiConfigSnapshot& config) {
+    GRIM::GPUGrimEncoder& gpu_encoder = gpu_model_state.requireGpuEncoder("ModelRegistration::registerEncoderParameters");
+    const int num_layers = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "num_layers");
+    const bool use_bias = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "use_bias");
+    const bool freeze_learned_rms_gammas = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "freeze_learned_rms_gammas");
+    const bool use_layer_scale = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "use_layer_scale");
 
-    for (int layer = 0; layer < config.num_layers; ++layer) {
+    for (int layer = 0; layer < num_layers; ++layer) {
         GRIM::EncodingLayer* enc = gpu_encoder.getLayer(layer);
         if (!enc) {
             throw std::runtime_error("[buildParameterGroups] Encoder layer " + std::to_string(layer) +
@@ -333,7 +344,7 @@ void registerEncoderParameters(LanguageModel& model,
                            ParamGroupType::ATTENTION,
                            ParamStatsBucket::ENCODER,
                            layer,
-                           config.use_bias,
+                           use_bias,
                            "config.use_bias=false");
         registrar.addTensor(prefix + "_wo_weight",
                     enc->attnWo(),
@@ -345,7 +356,7 @@ void registerEncoderParameters(LanguageModel& model,
                            ParamGroupType::ATTENTION,
                            ParamStatsBucket::ENCODER,
                            layer,
-                           config.use_bias,
+                           use_bias,
                            "config.use_bias=false");
 
         registrar.addTensor(prefix + "_ffn_w_gate",
@@ -368,10 +379,10 @@ void registerEncoderParameters(LanguageModel& model,
                            ParamGroupType::FFN,
                            ParamStatsBucket::ENCODER,
                            layer,
-                           config.use_bias,
+                           use_bias,
                            "config.use_bias=false");
 
-        if (config.freeze_learned_rms_gammas) {
+        if (freeze_learned_rms_gammas) {
             if (enc->rms1Gamma().has_grad()) {
                 throw std::runtime_error("[buildParameterGroups] " + prefix +
                                          "_rms1_gamma is frozen by config but still has a grad buffer: " +
@@ -400,21 +411,21 @@ void registerEncoderParameters(LanguageModel& model,
                                        ParamGroupType::RMSNORM,
                                        ParamStatsBucket::ENCODER,
                                        layer,
-                                       config.use_layer_scale,
+                                       use_layer_scale,
                                        "config.use_layer_scale=false");
         registrar.addConfigGatedTensor(prefix + "_layer_scale2",
                                        enc->layerScale2(),
                                        ParamGroupType::RMSNORM,
                                        ParamStatsBucket::ENCODER,
                                        layer,
-                                       config.use_layer_scale,
+                                                    use_layer_scale,
                                        "config.use_layer_scale=false");
     }
 }
 
 void registerScratchBlockParameters(LanguageModel& model,
                                     Registrar& registrar,
-                                    const LanguageModelConfig& config) {
+                                                const GRIM::Config::AiConfigSnapshot& config) {
     auto* scratch_block = model.getScratchBlockLayer();
     const auto scratch_hp = scratchBlockConstructionHP(config);
 
@@ -450,15 +461,17 @@ void registerScratchBlockParameters(LanguageModel& model,
 
 void registerExecutionBlockParameters(LanguageModel& model,
                                       Registrar& registrar,
-                                      const LanguageModelConfig& config) {
+                                      const GRIM::Config::AiConfigSnapshot& config) {
     auto* execution_block = model.getExecutionBlockLayer();
     auto* slot_selector = model.getDecodeTimeSlotSelectorLayer();
+    const auto execution_hp = GRIM::HyperParameters::executionBlockConstructionHP(config);
+    const auto selector_hp = GRIM::HyperParameters::decodeTimeSelectorConstructionHP(config);
 
-    if (!config.execution_block_enabled) {
+    if (!execution_hp.enabled) {
         if (execution_block) {
             throw std::runtime_error("[buildParameterGroups] ExecutionBlock layer exists while config.execution_block_enabled=false");
         }
-        if (config.selector_enabled || slot_selector) {
+        if (selector_hp.enabled || slot_selector) {
             throw std::runtime_error("[buildParameterGroups] Slot selector requires config.execution_block_enabled=true");
         }
         return;
@@ -496,7 +509,7 @@ void registerExecutionBlockParameters(LanguageModel& model,
     registrar.addTensor("exec_block_W_reason_gate", block.W_reason_gate(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
     registrar.addTensor("exec_block_W_trace_gate", block.W_trace_gate(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
 
-    if (!config.selector_enabled) {
+    if (!selector_hp.enabled) {
         if (slot_selector) {
             throw std::runtime_error("[buildParameterGroups] DecodeTimeSlotSelector exists while config.selector_enabled=false");
         }
@@ -510,25 +523,27 @@ void registerExecutionBlockParameters(LanguageModel& model,
     registrar.addTensor("selector_null_logit_bias", selector.null_logit_bias(), ParamGroupType::SLOT_SELECTOR, ParamStatsBucket::ENCODER);
 }
 
-void registerMtpParameters(LanguageModel& model,
+void registerMtpParameters(Startup::GpuModelState& gpu_model_state,
+                           LanguageModel& model,
                            Registrar& registrar,
-                           const LanguageModelConfig& config) {
-    if (!config.mtp_enabled) {
-        if (model.getMtpHead(0)) {
+                           const GRIM::Config::AiConfigSnapshot& config) {
+    const auto mtp_hp = GRIM::HyperParameters::mtpFeatureHP(config);
+    if (!mtp_hp.enabled) {
+        if (gpu_model_state.getMtpHead(0)) {
             throw std::runtime_error("[buildParameterGroups] MTP heads exist while config.mtp_enabled=false");
         }
         return;
     }
 
-    if (config.mtp_k <= 0) {
+    if (mtp_hp.k <= 0) {
         throw std::runtime_error("[buildParameterGroups] config.mtp_enabled=true but config.mtp_k <= 0");
     }
 
-    for (int k = 0; k < config.mtp_k; ++k) {
-        auto* head = model.getMtpHead(k);
+    for (int k = 0; k < mtp_hp.k; ++k) {
+        auto* head = gpu_model_state.getMtpHead(k);
         if (!head) {
             throw std::runtime_error("[buildParameterGroups] Missing MTP head " + std::to_string(k) +
-                                     " for configured mtp_k=" + std::to_string(config.mtp_k));
+                                     " for configured mtp_k=" + std::to_string(mtp_hp.k));
         }
         registrar.addTensor("mtp_head_" + std::to_string(k) + "_weight",
                             head->weight,
@@ -540,7 +555,7 @@ void registerMtpParameters(LanguageModel& model,
                     ParamStatsBucket::ENCODER);
     }
 
-    if (model.getMtpHead(config.mtp_k)) {
+    if (gpu_model_state.getMtpHead(mtp_hp.k)) {
         throw std::runtime_error("[buildParameterGroups] MTP head vector contains more entries than config.mtp_k");
     }
 }
@@ -690,33 +705,34 @@ void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
     emitInfo(precision_summary.str());
 }
 
-void validateParameterRegistrationConfig(const LanguageModelConfig& config) {
-    GRIM::HyperParameters::validateRootConfigDocument(
-        config, "buildParameterGroups");
-    if (config.num_layers <= 0) {
+void validateParameterRegistrationConfig(const GRIM::Config::AiConfigSnapshot& config) {
+    const int num_layers = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "num_layers");
+    const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "vocab_size");
+    if (num_layers <= 0) {
         throw std::runtime_error("buildParameterGroups: num_layers must be > 0, got " +
-                                 std::to_string(config.num_layers));
+                                 std::to_string(num_layers));
     }
-    if (config.vocab_size <= 0) {
+    if (vocab_size <= 0) {
         throw std::runtime_error("buildParameterGroups: vocab_size must be > 0, got " +
-                                 std::to_string(config.vocab_size));
+                                 std::to_string(vocab_size));
     }
-    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_embedding, "parameter_precision_embedding", "buildParameterGroups");
-    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_lm_head, "parameter_precision_lm_head", "buildParameterGroups");
-    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_attention, "parameter_precision_attention", "buildParameterGroups");
-    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_ffn, "parameter_precision_ffn", "buildParameterGroups");
-    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_rmsnorm, "parameter_precision_rmsnorm", "buildParameterGroups");
-    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_scratchblock, "parameter_precision_scratchblock", "buildParameterGroups");
-    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_mtp, "parameter_precision_mtp", "buildParameterGroups");
-    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_reasoning_head, "parameter_precision_reasoning_head", "buildParameterGroups");
-    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_execution_block, "parameter_precision_execution_block", "buildParameterGroups");
-    GRIM::HyperParameters::validateParameterGroupPrecision(config.parameter_precision_slot_selector, "parameter_precision_slot_selector", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_embedding"), "parameter_precision_embedding", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_lm_head"), "parameter_precision_lm_head", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_attention"), "parameter_precision_attention", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_ffn"), "parameter_precision_ffn", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_rmsnorm"), "parameter_precision_rmsnorm", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_scratchblock"), "parameter_precision_scratchblock", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_mtp"), "parameter_precision_mtp", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_reasoning_head"), "parameter_precision_reasoning_head", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_execution_block"), "parameter_precision_execution_block", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_slot_selector"), "parameter_precision_slot_selector", "buildParameterGroups");
 }
 
 } // namespace
 
-void buildParameterGroups(LanguageModel& model) {
-    const LanguageModelConfig& config = model.getConfig();
+void buildParameterGroups(LanguageModel& model,
+                          Startup::GpuModelState& gpu_model_state) {
+    const GRIM::Config::AiConfigSnapshot& config = model.getConfig();
     validateParameterRegistrationConfig(config);
 
     auto& model_groups = model.parameterGroups();
@@ -725,11 +741,11 @@ void buildParameterGroups(LanguageModel& model) {
 
     Registrar registrar(rebuilt_groups, config);
     registerTopLevelParameters(model, registrar, config);
-    registerEncoderParameters(model, registrar, config);
+    registerEncoderParameters(gpu_model_state, registrar, config);
 
     registerScratchBlockParameters(model, registrar, config);
     registerExecutionBlockParameters(model, registrar, config);
-    registerMtpParameters(model, registrar, config);
+    registerMtpParameters(gpu_model_state, model, registrar, config);
 
     validateRegisteredTensorPrecisionMetadata(rebuilt_groups);
     clearOptimizerBindings(rebuilt_groups);

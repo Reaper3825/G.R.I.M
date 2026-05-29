@@ -9,8 +9,8 @@
 //    - kernel_silu_backward       (defined in SiluGradFn.cu)
 //    - autograd::silu(...)        (forward op; defined in SiluGradFn.cu)
 //
-//  Memory: uses non-owning cache reference (ForwardIntermediates / ISSUE #56
-//  guarantees the source tensor outlives backward).
+//  Memory: uses a non-owning cache reference into ModelForwardOutputs-owned
+//  per-layer tensors (Issue #56 guarantees the source tensor outlives backward).
 //======================================================//
 
 #include "../TensorContract_GPU.hpp"

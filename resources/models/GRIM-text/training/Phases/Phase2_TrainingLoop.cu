@@ -253,7 +253,7 @@ void completeOptimizerWindowBookkeepingOrThrow(
 }
 
 std::unique_ptr<GRIM::Loss::LossSignalBus> makeValidationHighLossSignalBus(
-    const ::GRIM::HyperParameters::LanguageModelConfig& hp)
+    const ::GRIM::Config::AiConfigSnapshot& hp)
 {
     const auto auto_stop_hp = ::GRIM::HyperParameters::autoStopHP(hp);
     GRIM::Loss::LossSignalConfig sig_cfg{};
@@ -281,24 +281,29 @@ float scheduledLearningRateForOptimizerStep(
 }
 
 float mtpAlphaEffectiveForBatch(
-    const ::GRIM::HyperParameters::LanguageModelConfig& cfg,
+    const ::GRIM::Config::AiConfigSnapshot& cfg,
     int global_step)
 {
-    if (!cfg.mtp_enabled || cfg.mtp_k <= 0) {
+    const bool mtp_enabled = ::GRIM::HyperParameters::snapshotTrainingConfigField<bool>(cfg, "mtp_enabled");
+    const int mtp_k = ::GRIM::HyperParameters::snapshotTrainingConfigField<int>(cfg, "mtp_k");
+    if (!mtp_enabled || mtp_k <= 0) {
         return 0.0f;
     }
     if (global_step < 0) {
         throw std::runtime_error("mtpAlphaEffectiveForBatch: global_step must be >= 0, got " +
                                  std::to_string(global_step));
     }
-    if (cfg.mtp_alpha_warmup_steps <= 0) {
+    const int mtp_alpha_warmup_steps =
+        ::GRIM::HyperParameters::snapshotTrainingConfigField<int>(cfg, "mtp_alpha_warmup_steps");
+    if (mtp_alpha_warmup_steps <= 0) {
         throw std::runtime_error("mtpAlphaEffectiveForBatch: mtp_alpha_warmup_steps must be > 0, got " +
-                                 std::to_string(cfg.mtp_alpha_warmup_steps));
+                                 std::to_string(mtp_alpha_warmup_steps));
     }
+    const float mtp_alpha = ::GRIM::HyperParameters::snapshotTrainingConfigField<float>(cfg, "mtp_alpha");
     const float progress = std::min(
         1.0f,
-        static_cast<float>(global_step) / static_cast<float>(cfg.mtp_alpha_warmup_steps));
-    const float alpha = cfg.mtp_alpha * progress;
+        static_cast<float>(global_step) / static_cast<float>(mtp_alpha_warmup_steps));
+    const float alpha = mtp_alpha * progress;
     if (!std::isfinite(alpha) || alpha < 0.0f) {
         throw std::runtime_error("mtpAlphaEffectiveForBatch: derived alpha must be finite and >= 0, got " +
                                  std::to_string(alpha));
@@ -445,7 +450,7 @@ void runOptimizerWindowFromEpoch(
         tel_input.batch_idx         = batch_idx;
         tel_input.global_step       = ctx.global_step;
         tel_input.actual_vocab_size = ctx.data_info.actual_vocab_size;
-        tel_input.d_model           = ctx.config.d_model;
+        tel_input.d_model           = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "d_model");
 
         GRIM::Telemetry::updateTelemetryObservations(ctx, tel_input, clip_metrics.metrics, &payload);
     }
@@ -464,9 +469,9 @@ void validateTrainingForwardInputs(
     GRIM::Execution::validateExecutionPayload(
         payload,
         caller,
-        cfg.execution_block_num_slots,
-        cfg.execution_block_num_ops,
-        cfg.execution_block_num_steps);
+        execution_hp.num_slots,
+        execution_hp.num_ops,
+        execution_hp.num_exec_steps);
 
     if (!payload.teacher_steps.empty() && !execution_hp.enabled) {
         std::cerr << "[Phase2] WARN: batch has teacher_steps while execution_block_enabled=false; "
@@ -524,8 +529,68 @@ GRIM::Forward::ModelForwardRuntimePayload buildTrainingForwardRuntimePayload(
     return runtime_payload;
 }
 
+std::vector<GRIM::Forward::MTPHeadForwardView> buildConnectedForwardMtpHeadViews(
+    GRIMText::Training::Startup::GpuModelState& gpu_model_state,
+    int mtp_k,
+    cudaStream_t stream)
+{
+    auto buildConnectedParameterView = [stream](GRIM::Tensor& parameter, const char* name) -> GRIM::Tensor {
+        if (!parameter.data) {
+            throw std::runtime_error(std::string("buildForwardMtpHeadViews: parameter data is NULL for ") + name);
+        }
+
+        GRIM::Tensor view = GRIM::Tensor::from_ptr(
+            parameter.data,
+            parameter.shape,
+            false,
+            parameter.requires_grad,
+            name);
+        view.compute_precision = parameter.compute_precision;
+        view.is_leaf = parameter.is_leaf;
+        view.retain_grad = parameter.retain_grad;
+        view.stream = stream;
+        view.grad_fn = parameter.grad_fn;
+        if (parameter.requires_grad && parameter.is_leaf) {
+            if (!parameter.grad()) {
+                parameter.ensure_grad();
+            }
+            view.share_grad(parameter);
+        }
+        return view;
+    };
+
+    std::vector<GRIM::Forward::MTPHeadForwardView> views;
+    if (mtp_k <= 0) {
+        return views;
+    }
+
+    views.reserve(static_cast<size_t>(mtp_k));
+    for (int k = 0; k < mtp_k; ++k) {
+        auto* head = gpu_model_state.getMtpHead(k);
+        if (!head) {
+            throw std::runtime_error(
+                "buildForwardMtpHeadViews: gpu_model_state.getMtpHead(" + std::to_string(k) + ") returned NULL");
+        }
+        if (!head->weight.data || !head->bias.data) {
+            throw std::runtime_error(
+                "buildForwardMtpHeadViews: MTP head " + std::to_string(k) +
+                " has NULL weight or bias tensor");
+        }
+
+        GRIM::Forward::MTPHeadForwardView view{};
+        view.weight = buildConnectedParameterView(head->weight, "mtp_head_weight_view");
+        view.bias = buildConnectedParameterView(head->bias, "mtp_head_bias_view");
+        views.push_back(std::move(view));
+    }
+
+    return views;
+}
+
 GRIM::Forward::ModelForwardRequest buildTrainingForwardRequest(
-    const GRIM::Autograd::AutogradContext& autograd_ctx)
+    GRIMText::Training::Startup::GpuModelState& gpu_model_state,
+    int mtp_k,
+    const GRIM::Autograd::AutogradContext& autograd_ctx,
+    bool emit_mtp_logits)
 {
     GRIM::Forward::ModelForwardRequest request{};
     request.config = autograd_ctx.config;
@@ -540,10 +605,17 @@ GRIM::Forward::ModelForwardRequest buildTrainingForwardRequest(
     request.payload = autograd_ctx.payload;
     request.bindings = autograd_ctx.device_bindings;
     request.batch_idx = autograd_ctx.batch_idx;
+    if (emit_mtp_logits) {
+        request.mtp_heads = buildConnectedForwardMtpHeadViews(
+            gpu_model_state,
+            mtp_k,
+            autograd_ctx.stream);
+    }
     request.graph = GRIM::Forward::ModelForwardGraphPolicy{
         /*connect_parameter_graph=*/true,
         /*retain_backward_graph=*/true,
-        /*enable_dropout=*/true};
+        /*enable_dropout=*/true,
+        /*emit_mtp_logits=*/emit_mtp_logits};
     return request;
 }
 
@@ -578,7 +650,7 @@ void snapshotReadGateMean(
 BatchResult processBatch(
     TrainingContext& ctx,
     TrainingLoopState& state,
-    const GRIM::Batching::BatchPayload& payload,
+    GRIM::Batching::BatchPayload& payload,
     int batch_idx,
     int epoch_idx,
     const BatchAutogradPlan& plan) {
@@ -649,15 +721,16 @@ BatchResult processBatch(
     // clear() anywhere inside this scope.
     GRIM::Autograd::AutogradStepScope autograd_step_scope(ctx.model->getTrainingState());
     auto& model = *ctx.model;
+    auto& training_state = model.getTrainingState();
+    cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
     // Sync slice: upload the prebuilt host BatchPayload once and reuse the
     // returned BatchDeviceBindings across shared forward, loss, and backward —
     // payload itself is host-only/immutable and never carries device pointers.
     const auto train_bindings = GRIM::Batching::uploadBatchToDevice(
         model.getConfig(),
-        model.getTrainingState(),
-        payload);
+        payload,
+        stream);
     const auto loss_config = GRIM::HyperParameters::lossConfigHP(ctx.config);
-    auto& training_state = model.getTrainingState();
     const auto& model_config = model.getConfig();
 
     validateTrainingForwardInputs(model, payload, "processBatch");
@@ -671,13 +744,12 @@ BatchResult processBatch(
             "Phase1 startup must allocate the read-gate workspace before Phase2 runs");
     }
 
-    cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
     CUDA_CHECK(cudaMemsetAsync(training_state.read_gate_accum_tensor.data, 0, 2 * sizeof(float), stream));
 
     GRIM::Autograd::AutogradContext autograd_ctx = GRIM::Autograd::initAutogradContext(
         &model_config,
         &training_state,
-        &model.getGpuEncoder(),
+        &ctx.gpu_model.requireGpuEncoder("Phase2::processBatch"),
         model.getEmbeddingLayer(),
         model.getLmHeadLayer(),
         model.getScratchBlockLayer(),
@@ -699,8 +771,12 @@ BatchResult processBatch(
 
     GRIM::Forward::ModelForwardRuntimePayload runtime_payload =
         buildTrainingForwardRuntimePayload(training_state);
+    const float mtp_alpha_effective = mtpAlphaEffectiveForBatch(ctx.config, ctx.global_step);
+    const bool emit_mtp_logits = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "mtp_enabled")
+        && model.getMtpK() > 0
+        && mtp_alpha_effective > 0.0f;
     GRIM::Forward::ModelForwardRequest forward_request =
-        buildTrainingForwardRequest(autograd_ctx);
+        buildTrainingForwardRequest(ctx.gpu_model, model.getMtpK(), autograd_ctx, emit_mtp_logits);
 
     GRIM::Forward::executeModelForward(forward_request, runtime_payload);
     snapshotReadGateMean(training_state, stream);
@@ -708,7 +784,7 @@ BatchResult processBatch(
     auto loss_result = GRIM::Autograd::computeAutogradLoss(
         autograd_ctx,
         loss_config,
-        mtpAlphaEffectiveForBatch(ctx.config, ctx.global_step));
+        mtp_alpha_effective);
     if (!loss_result.success) {
         throw std::runtime_error(
             "[computeAutogradLoss] FAILED batch=" + std::to_string(batch_idx + 1) +
@@ -726,8 +802,6 @@ BatchResult processBatch(
             "[executeAutogradBackward] FAILED batch=" + std::to_string(batch_idx + 1) +
             ": " + backward_result.error_message);
     }
-
-    training_state.sequence_weight_count = 0;
 
     result.loss = loss_result.loss_value;
     result.aux_loss = loss_result.aux_loss;
@@ -755,12 +829,7 @@ BatchResult processBatch(
             "processBatch: live logits tensor is NULL after successful explicit shared forward — "
             "diagnostics must run before AutogradStepScope teardown");
     }
-    GRIM::Tensor* live_lm_head_input = nullptr;
-    if (active_intermediates.centered_encoder_output.data) {
-        live_lm_head_input = &active_intermediates.centered_encoder_output;
-    } else if (active_intermediates.encoder_output_tensor.data) {
-        live_lm_head_input = &active_intermediates.encoder_output_tensor;
-    }
+    const GRIM::Tensor* live_lm_head_input = active_intermediates.liveLmHeadInputOrNull();
     if (!live_lm_head_input || !live_lm_head_input->data) {
         throw std::runtime_error(
             "processBatch: live LM-head input tensor is NULL after successful explicit shared forward");
@@ -956,7 +1025,7 @@ EpochResult runEpoch(
     // the plan is:
     //     active_batch = ctx.train_payloads[ctx.epoch_batch_order[epoch_idx][batch_idx]]
     for (int batch_idx = 0; batch_idx < total_batches; ++batch_idx) {
-        const GRIM::Batching::BatchPayload& payload =
+        GRIM::Batching::BatchPayload& payload =
             ctx.train_payloads[ctx.epoch_batch_order[epoch_idx][batch_idx]];
 
         validateAccumulationPositionBeforeBackward(

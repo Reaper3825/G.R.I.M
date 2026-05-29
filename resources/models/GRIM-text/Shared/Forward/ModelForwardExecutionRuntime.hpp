@@ -12,7 +12,7 @@
 
 #include <vector>
 
-#include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
+#include "ModelForwardOutputs.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 
 namespace GRIM {

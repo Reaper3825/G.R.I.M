@@ -255,8 +255,8 @@ void populateEBInjectionStreams(
 // Streams 35-37: RMSNorm learned gamma tracking
 //------------------------------------------------------
 void populateRmsGammaStreams(float* obs, GRIMText::Training::TrainingContext& ctx) {
-    auto& encoder = ctx.model->getGpuEncoder();
-    const int num_layers = ctx.config.num_layers;
+    auto& encoder = ctx.gpu_model.requireGpuEncoder("Telemetry::populateRmsGammaStreams");
+    const int num_layers = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "num_layers");
 
     // Mean RMS(γ₁) and RMS(γ₂) across all encoder layers
     float sum_gamma1_rms = 0.0f;
