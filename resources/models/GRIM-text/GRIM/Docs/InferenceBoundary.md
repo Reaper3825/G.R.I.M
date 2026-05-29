@@ -72,7 +72,7 @@ Exit criteria:
 Status: implemented for the Phase2 inference entrypoint and trainer-owned inference worker routing.
 
 - [x] `Forward::ModelForwardRequest` no longer exposes `ModelForwardMode::TrainingGraph` / `InferencePrefill`; orchestration authors graph policy before entry.
-- [x] Read-only shared prefill detaches embedding, encoder, ScratchBlock, LM-head, and reasoning-head parameter views at the boundary.
+- [x] Read-only shared prefill detaches embedding, encoder, ScratchBlock, LM-head, execution-block, and selector parameter views at the boundary.
 - [x] Add `Phase2_InferenceLoop.*` next to `Phase2_TrainingLoop.*` so `train_gpu --inference` can drive inference orchestration without embedding inference policy inside shared forward or the HTTP bridge.
 - [x] Keep `Phase1_Startup` as the shared train/inference bootstrap path.
 - [x] Move text prompt tokenization, inference `BatchPayload` construction, generation config slicing, and decode into the trainer process (`executePhase2TextInference(...)` plus the train_gpu worker), not `grim_text_server`.

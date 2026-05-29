@@ -90,20 +90,19 @@ enum class LogGroup : uint8_t {
     RMSNorm        = 4,
     ScratchBlock   = 5,
     MTP            = 6,
-    ReasoningHead  = 7,
-    ExecutionBlock = 8,
-    SlotSelector   = 9,
+    ExecutionBlock = 7,
+    SlotSelector   = 8,
     // System groups
-    Loss           = 10,
-    Optimizer      = 11,
-    Scheduler      = 12,
-    DataLoader     = 13,
-    Checkpoint     = 14,
-    Telemetry      = 15,
-    Stream         = 16,
-    Validation     = 17,
-    System         = 18,
-    COUNT          = 19
+    Loss           = 9,
+    Optimizer      = 10,
+    Scheduler      = 11,
+    DataLoader     = 12,
+    Checkpoint     = 13,
+    Telemetry      = 14,
+    Stream         = 15,
+    Validation     = 16,
+    System         = 17,
+    COUNT          = 18
 };
 
 inline const char* logGroupToString(LogGroup group) {
@@ -115,7 +114,6 @@ inline const char* logGroupToString(LogGroup group) {
         case LogGroup::RMSNorm:        return "NORM";
         case LogGroup::ScratchBlock:   return "SB";
         case LogGroup::MTP:            return "MTP";
-        case LogGroup::ReasoningHead:  return "RHEAD";
         case LogGroup::ExecutionBlock: return "EB";
         case LogGroup::SlotSelector:   return "SLOT";
         case LogGroup::Loss:           return "LOSS";
@@ -141,7 +139,6 @@ inline LogGroup logGroupFromString(const char* str) {
     if (std::strcmp(str, "NORM")  == 0 || std::strcmp(str, "RMSNorm")        == 0) return LogGroup::RMSNorm;
     if (std::strcmp(str, "SB")    == 0 || std::strcmp(str, "ScratchBlock")   == 0) return LogGroup::ScratchBlock;
     if (std::strcmp(str, "MTP")   == 0)                                            return LogGroup::MTP;
-    if (std::strcmp(str, "RHEAD") == 0 || std::strcmp(str, "ReasoningHead")  == 0) return LogGroup::ReasoningHead;
     if (std::strcmp(str, "EB")    == 0 || std::strcmp(str, "ExecutionBlock") == 0) return LogGroup::ExecutionBlock;
     if (std::strcmp(str, "SLOT")  == 0 || std::strcmp(str, "SlotSelector")   == 0) return LogGroup::SlotSelector;
     if (std::strcmp(str, "LOSS")  == 0 || std::strcmp(str, "Loss")           == 0) return LogGroup::Loss;

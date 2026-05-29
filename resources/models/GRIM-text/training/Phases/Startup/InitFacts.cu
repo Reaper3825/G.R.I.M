@@ -71,7 +71,6 @@ const char* paramGroupTypeName(GRIM::ParamGroupType type) {
         case GRIM::ParamGroupType::RMSNORM: return "RMSNORM";
         case GRIM::ParamGroupType::SCRATCHBLOCK: return "SCRATCHBLOCK";
         case GRIM::ParamGroupType::MTP: return "MTP";
-        case GRIM::ParamGroupType::REASONING_HEAD: return "REASONING_HEAD";
         case GRIM::ParamGroupType::EXECUTION_BLOCK: return "EXECUTION_BLOCK";
         case GRIM::ParamGroupType::SLOT_SELECTOR: return "SLOT_SELECTOR";
         case GRIM::ParamGroupType::COUNT: break;

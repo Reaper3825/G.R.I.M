@@ -30,7 +30,6 @@ namespace GRIM {
 class EmbeddingLayer;
 class LMHeadLayer;
 class ScratchBlockLayer;
-class ReasoningHeadLayer;
 class ExecutionBlockLayer;
 class GPUGrimEncoder;
 
@@ -63,7 +62,6 @@ struct ModelForwardRequest {
     EmbeddingLayer* embedding_layer = nullptr;
     LMHeadLayer* lm_head = nullptr;
     ScratchBlockLayer* scratch_block = nullptr;
-    ReasoningHeadLayer* reasoning_head = nullptr;
     ExecutionBlockLayer* execution_block = nullptr;
     std::vector<MTPHeadForwardView> mtp_heads;
 

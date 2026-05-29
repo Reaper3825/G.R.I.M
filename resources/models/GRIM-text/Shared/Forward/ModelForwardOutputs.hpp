@@ -76,12 +76,6 @@ struct ExecutionBlockOutput {
     std::vector<ExecutionBlockStepOutput> steps;
 };
 
-struct ReasoningHeadOutput {
-    Tensor op_logits;     // [1, num_ops]
-    Tensor arg1_logits;   // [1, num_atoms]
-    Tensor arg2_logits;   // [1, num_atoms]
-};
-
 struct ModelForwardOutputs {
 private:
     static int countGradFns(const std::vector<Tensor>& tensors) {
@@ -282,7 +276,6 @@ public:
 
     // Optional reasoning / execution forward-owned state.
     Tensor scratch_atom_embeddings;
-    ReasoningHeadOutput reasoning_output;
     std::vector<ExecutionMemory> exec_memories;
     std::vector<ExecutionBlockOutput> exec_outputs_per_row;
 
@@ -320,7 +313,6 @@ public:
         logits_tensor = Tensor();
         clearTensorVector(mtp_logits_tensors);
         scratch_atom_embeddings = Tensor();
-        reasoning_output = ReasoningHeadOutput{};
         exec_memories.clear();
         exec_outputs_per_row.clear();
     }

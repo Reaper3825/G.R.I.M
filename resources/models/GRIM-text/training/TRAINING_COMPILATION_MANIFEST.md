@@ -249,7 +249,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 - [x] **Phases/Startup/Model/ModelGpuAssembly.cu** (`Startup::assembleGpuModel`) — ✅ MOVED & AUDITED
   - Startup/Model ownership is explicit: this source assembles durable GPU model layers after CUDA, streams, cuBLAS, and PBM are initialized.
-  - Creates GPU encoder layers, EmbeddingLayer, LMHeadLayer, optional ReasoningHead, ExecutionBlock, DecodeTimeSlotSelector, DecodeTimeNumPolicy, and MTP heads.
+  - Creates GPU encoder layers, EmbeddingLayer, LMHeadLayer, ScratchBlock, ExecutionBlock, DecodeTimeSlotSelector, DecodeTimeNumPolicy, and MTP heads.
   - `cfg.num_kv_heads` remains sourced from runtime JSON via grouped hyperparameter views, not compile-time defaults.
   - Rule 20 compliance: throws on use_gpu=false, missing StreamController/cuBLAS/PBM, null tied embedding data, or not-ready layer weights.
   - Does not allocate TrainingState activation caches, optimizer state, parameter groups, checkpoints, forward/backward, or Phase2 training loop state.

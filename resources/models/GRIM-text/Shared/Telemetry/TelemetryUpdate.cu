@@ -254,15 +254,26 @@ void populateEBInjectionStreams(
 //------------------------------------------------------
 // Streams 35-37: RMSNorm learned gamma tracking
 //------------------------------------------------------
-void populateRmsGammaStreams(float* obs, GRIMText::Training::TrainingContext& ctx) {
-    auto& encoder = ctx.gpu_model.requireGpuEncoder("Telemetry::populateRmsGammaStreams");
-    const int num_layers = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "num_layers");
+void populateRmsGammaStreams(
+    float* obs,
+    const GRIM::Config::AiConfigSnapshot& config,
+    const GRIMText::Training::Startup::GpuModelState& gpu_model_state) {
+    auto* gpu_encoder = gpu_model_state.gpu_encoder.get();
+    if (!gpu_encoder) {
+        throw std::runtime_error(
+            "Telemetry::populateRmsGammaStreams: gpu_model_state.gpu_encoder is NULL");
+    }
+    const int num_layers = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "num_layers");
 
     // Mean RMS(γ₁) and RMS(γ₂) across all encoder layers
     float sum_gamma1_rms = 0.0f;
     float sum_gamma2_rms = 0.0f;
     for (int i = 0; i < num_layers; ++i) {
-        auto* layer = encoder.getLayer(i);
+        auto* layer = gpu_encoder->getLayer(i);
+        if (!layer) {
+            throw std::runtime_error(
+                "Telemetry::populateRmsGammaStreams: encoder layer " + std::to_string(i) + " is NULL");
+        }
         const auto& g1 = layer->rms1Gamma();
         const auto& g2 = layer->rms2Gamma();
         sum_gamma1_rms += gpuBufferRMS(g1.data, g1.numel());
@@ -272,7 +283,11 @@ void populateRmsGammaStreams(float* obs, GRIMText::Training::TrainingContext& ct
     obs[36] = (num_layers > 0) ? (sum_gamma2_rms / static_cast<float>(num_layers)) : 0.0f;
 
     // Final RMSNorm gamma (LM head)
-    auto* lm_head = ctx.model->getLmHeadLayer();
+    auto* lm_head = gpu_model_state.lm_head_layer.get();
+    if (!lm_head) {
+        throw std::runtime_error(
+            "Telemetry::populateRmsGammaStreams: gpu_model_state.lm_head_layer is NULL");
+    }
     const auto& g_final = lm_head->finalRmsGamma();
     obs[37] = gpuBufferRMS(g_final.data, g_final.numel());
 }
@@ -354,7 +369,7 @@ void updateTelemetryObservations(
     populatePBMStreams(obs, ctx, input.max_seq_len);
 
     // Streams 35-37: RMSNorm learned gamma tracking
-    populateRmsGammaStreams(obs, ctx);
+    populateRmsGammaStreams(obs, ctx.config, ctx.gpu_model);
 
     // Run lattice update
     GRIM::Telemetry::TelemetryError tel_err = ctx.telemetry.lattice->update(obs, input.global_step);

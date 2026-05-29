@@ -566,11 +566,11 @@ std::vector<GRIM::Forward::MTPHeadForwardView> buildConnectedForwardMtpHeadViews
 
     views.reserve(static_cast<size_t>(mtp_k));
     for (int k = 0; k < mtp_k; ++k) {
-        auto* head = gpu_model_state.getMtpHead(k);
-        if (!head) {
+        if (k < 0 || k >= static_cast<int>(gpu_model_state.mtp_heads.size())) {
             throw std::runtime_error(
-                "buildForwardMtpHeadViews: gpu_model_state.getMtpHead(" + std::to_string(k) + ") returned NULL");
+                "buildForwardMtpHeadViews: gpu_model_state.mtp_heads is missing head " + std::to_string(k));
         }
+        auto* head = &gpu_model_state.mtp_heads[static_cast<std::size_t>(k)];
         if (!head->weight.data || !head->bias.data) {
             throw std::runtime_error(
                 "buildForwardMtpHeadViews: MTP head " + std::to_string(k) +
@@ -600,7 +600,6 @@ GRIM::Forward::ModelForwardRequest buildTrainingForwardRequest(
     request.embedding_layer = autograd_ctx.embedding_layer;
     request.lm_head = autograd_ctx.lm_head;
     request.scratch_block = autograd_ctx.scratch_block;
-    request.reasoning_head = autograd_ctx.reasoning_head;
     request.execution_block = autograd_ctx.execution_block;
     request.payload = autograd_ctx.payload;
     request.bindings = autograd_ctx.device_bindings;
@@ -744,16 +743,22 @@ BatchResult processBatch(
             "Phase1 startup must allocate the read-gate workspace before Phase2 runs");
     }
 
+    auto* gpu_encoder = ctx.gpu_model.gpu_encoder.get();
+    if (!gpu_encoder) {
+        throw std::runtime_error(
+            "Phase2::processBatch: ctx.gpu_model.gpu_encoder is NULL - "
+            "Startup::assembleGpuModel(*ctx.model, ctx.gpu_model, weight_init_seed) must complete before Phase2 runs");
+    }
+
     CUDA_CHECK(cudaMemsetAsync(training_state.read_gate_accum_tensor.data, 0, 2 * sizeof(float), stream));
 
     GRIM::Autograd::AutogradContext autograd_ctx = GRIM::Autograd::initAutogradContext(
         &model_config,
         &training_state,
-        &ctx.gpu_model.requireGpuEncoder("Phase2::processBatch"),
+        gpu_encoder,
         model.getEmbeddingLayer(),
         model.getLmHeadLayer(),
         model.getScratchBlockLayer(),
-        model.getReasoningHeadLayer(),
         model.getExecutionBlockLayer(),
         training_state.cublas_handle.get(),
         stream,

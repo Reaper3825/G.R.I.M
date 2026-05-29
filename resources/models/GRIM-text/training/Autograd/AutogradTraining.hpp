@@ -26,8 +26,6 @@
 #include "../../GRIM/grim_language_model_cuda.hpp"
 // ScratchBlock for autograd forward path
 #include "../../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"
-// ReasoningHead for structured reasoning
-#include "../../Layers/ReasoningHead/reasoning_head_GPU.hpp"
 // ExecutionBlock for internal numeric reasoning
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 
@@ -102,7 +100,6 @@ struct AutogradContext {
     // OPTIONAL COMPONENTS (nullptr if disabled)
     // ═══════════════════════════════════════════════════════════════════════════
     ScratchBlockLayer* scratch_block = nullptr;
-    ReasoningHeadLayer* reasoning_head = nullptr;
     ExecutionBlockLayer* execution_block = nullptr;
 
     /** Model pointer for MTP head access in computeAutogradLoss; set by autogradTrainingStep. */
@@ -176,7 +173,6 @@ AutogradContext initAutogradContext(
     EmbeddingLayer* embedding_layer,
     LMHeadLayer* lm_head,
     ScratchBlockLayer* scratch_block,
-    ReasoningHeadLayer* reasoning_head,
     ExecutionBlockLayer* execution_block,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,

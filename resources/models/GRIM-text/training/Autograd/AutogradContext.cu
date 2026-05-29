@@ -21,7 +21,6 @@ void populateCommonContext(
     EmbeddingLayer* embedding_layer,
     LMHeadLayer* lm_head,
     ScratchBlockLayer* scratch_block,
-    ReasoningHeadLayer* reasoning_head,
     ExecutionBlockLayer* execution_block,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
@@ -33,7 +32,6 @@ void populateCommonContext(
     ctx.embedding_layer = embedding_layer;
     ctx.lm_head = lm_head;
     ctx.scratch_block = scratch_block;
-    ctx.reasoning_head = reasoning_head;
     ctx.execution_block = execution_block;
     ctx.cublas_handle = cublas_handle;
     ctx.stream = stream;
@@ -73,7 +71,6 @@ AutogradContext initAutogradContext(
     EmbeddingLayer* embedding_layer,
     LMHeadLayer* lm_head,
     ScratchBlockLayer* scratch_block,
-    ReasoningHeadLayer* reasoning_head,
     ExecutionBlockLayer* execution_block,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
@@ -86,7 +83,7 @@ AutogradContext initAutogradContext(
     AutogradContext ctx;
     populateCommonContext(
         ctx, config, training_state, gpu_encoder, embedding_layer, lm_head,
-        scratch_block, reasoning_head, execution_block, cublas_handle, stream,
+        scratch_block, execution_block, cublas_handle, stream,
         batch_idx);
 
     ctx.payload = &payload;

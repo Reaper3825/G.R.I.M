@@ -11,7 +11,6 @@ class GPUGrimEncoder;
 class ScratchBlockLayer;
 class EmbeddingLayer;
 class LMHeadLayer;
-class ReasoningHeadLayer;
 class ExecutionBlockLayer;
 class DecodeTimeSlotSelectorLayer;
 class DecodeTimeNumPolicy;
@@ -33,16 +32,10 @@ struct GpuModelState {
     GpuModelState(GpuModelState&&) noexcept;
     GpuModelState& operator=(GpuModelState&&) noexcept;
 
-    GRIM::GPUGrimEncoder& requireGpuEncoder(const char* caller);
-    const GRIM::GPUGrimEncoder& requireGpuEncoder(const char* caller) const;
-    GRIM::MTPHead* getMtpHead(int k) noexcept;
-    const GRIM::MTPHead* getMtpHead(int k) const noexcept;
-
     std::unique_ptr<GRIM::GPUGrimEncoder> gpu_encoder;
     std::unique_ptr<GRIM::ScratchBlockLayer> scratch_block_layer;
     std::unique_ptr<GRIM::EmbeddingLayer> embedding_layer;
     std::unique_ptr<GRIM::LMHeadLayer> lm_head_layer;
-    std::unique_ptr<GRIM::ReasoningHeadLayer> reasoning_head_layer;
     std::unique_ptr<GRIM::ExecutionBlockLayer> execution_block_layer;
     std::unique_ptr<GRIM::DecodeTimeSlotSelectorLayer> decode_time_slot_selector_layer;
     std::unique_ptr<GRIM::DecodeTimeNumPolicy> decode_time_num_policy;

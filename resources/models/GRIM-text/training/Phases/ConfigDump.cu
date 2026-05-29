@@ -172,7 +172,6 @@ void dumpAllHyperparameters(
     DUMP_PARAM_PRECISION("rmsnorm", parameter_precision_rmsnorm);
     DUMP_PARAM_PRECISION("scratchblock", parameter_precision_scratchblock);
     DUMP_PARAM_PRECISION("mtp", parameter_precision_mtp);
-    DUMP_PARAM_PRECISION("reasoning_head", parameter_precision_reasoning_head);
     DUMP_PARAM_PRECISION("execution_block", parameter_precision_execution_block);
     DUMP_PARAM_PRECISION("slot_selector", parameter_precision_slot_selector);
 
@@ -328,10 +327,6 @@ void dumpAllHyperparameters(
     DUMP_MODEL(scratch_block_atom_embedding_dim);
     DUMP_MODEL(scratch_block_max_atoms);
     DUMP_MODEL(scratch_block_atom_scale);
-
-    SECTION("ReasoningHead");
-    DUMP_MODEL(reasoning_head_enabled);
-    DUMP_MODEL(reasoning_num_ops);
 
     SECTION("ExecutionBlock");
     DUMP_MODEL(execution_block_enabled);

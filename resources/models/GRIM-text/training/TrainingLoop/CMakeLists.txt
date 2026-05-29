@@ -382,7 +382,6 @@ target_link_libraries(grim_cuda_kernels PUBLIC
 
 # Language model GPU implementation object library
 add_library(grim_language_model_gpu_impl OBJECT
-    ../../Common/grim_language_model_gpu.cu
     ../../Common/ModelStats.cu
     ../../Common/ScaleBuffer.cu
     ../Forward_GPU.cu
@@ -404,7 +403,6 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Layers/HardcodedStates/HardcodedStates_GPU.cu
     ../../Layers/Embedding/Embedding_GPU.cu
     ../../Layers/LMHead/lm_head_GPU.cu
-    ../../Layers/ReasoningHead/reasoning_head_GPU.cu
     ../../Layers/ExecutionBlock/execution_block_GPU.cu
     ../../Layers/ExecutionBlock/execution_block_memory_stream_GPU.cu
     ../../Layers/ExecutionBlock/execution_block_data_stream_GPU.cu

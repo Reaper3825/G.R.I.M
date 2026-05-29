@@ -13,7 +13,6 @@
 #include "../../Layers/Encoding/Encoding_GPU.hpp"
 #include "../../Layers/LMHead/lm_head_GPU.hpp"
 #include "../../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"
-#include "../../Layers/ReasoningHead/reasoning_head_GPU.hpp"
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 #include "../../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
 #include "../TensorContract/TensorContract_GPU.hpp"
@@ -254,7 +253,6 @@ void executeModelForward(const ModelForwardRequest& request,
     const auto* cfg = request.config;
     const auto scratch_hp = HyperParameters::scratchBlockConstructionHP(*cfg);
     const auto execution_hp = HyperParameters::executionBlockConstructionHP(*cfg);
-    const auto reasoning_hp = HyperParameters::reasoningHeadConstructionHP(*cfg);
     const bool center_encoder_residuals = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "center_encoder_residuals");
     const bool lm_head_center_hidden_states = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "lm_head_center_hidden_states");
     const int vocab_size = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "vocab_size");
@@ -272,7 +270,6 @@ void executeModelForward(const ModelForwardRequest& request,
     const int scratch_block_atom_embedding_dim = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "scratch_block_atom_embedding_dim");
     const bool scratch_block_active = scratch_hp.enabled && request.scratch_block != nullptr;
     const bool execution_block_active = execution_hp.enabled && request.execution_block != nullptr;
-    const bool reasoning_head_active = reasoning_hp.enabled && request.reasoning_head != nullptr;
 
     if (scratch_hp.enabled && !request.scratch_block) {
         throw std::runtime_error("ModelForward: ScratchBlockConstructionHP.enabled=true but request.scratch_block is NULL");
@@ -859,58 +856,6 @@ void executeModelForward(const ModelForwardRequest& request,
             fprintf(stderr, "RESULT:\n");
             fprintf(stderr, "  logit[%d]=%.6f (PREDICTED argmax token)\n", argmax_token, max_logit_val);
             fprintf(stderr, "\n");
-        }
-    }
-
-    if (reasoning_head_active && scratch_block_active && !execution_hp.enabled) {
-        int num_atoms = 0;
-        cudaMemcpyAsync(&num_atoms, request.scratch_block->numAtomsBuffer(),
-                        sizeof(int), cudaMemcpyDeviceToHost, request.stream);
-        cudaStreamSynchronize(request.stream);
-
-        if (num_atoms > 0) {
-            const int atom_dim = scratch_block_atom_embedding_dim;
-
-            forward_outputs.scratch_atom_embeddings = Tensor::empty(
-                TensorContract::TensorShape::make_BSM(num_atoms, atom_dim),
-                connect_parameter_graph,
-                request.stream,
-                "scratch_atom_embeddings");
-            cudaMemcpyAsync(
-                forward_outputs.scratch_atom_embeddings.data,
-                request.scratch_block->atomEmbeddingsBuffer(),
-                static_cast<size_t>(num_atoms) * atom_dim * sizeof(float),
-                cudaMemcpyDeviceToDevice,
-                request.stream);
-
-            ReasoningHeadParameterViews reasoning_parameter_views{};
-            const ReasoningHeadParameterViews* reasoning_parameter_view_ptr = nullptr;
-            Tensor reasoning_w_op_view;
-            Tensor reasoning_b_op_view;
-            Tensor reasoning_w_arg1_view;
-            Tensor reasoning_w_arg2_view;
-            if (!connect_parameter_graph) {
-                reasoning_w_op_view = request.reasoning_head->W_op().detach(request.stream);
-                reasoning_b_op_view = request.reasoning_head->b_op().detach(request.stream);
-                reasoning_w_arg1_view = request.reasoning_head->w_arg1().detach(request.stream);
-                reasoning_w_arg2_view = request.reasoning_head->w_arg2().detach(request.stream);
-                reasoning_parameter_views.w_op = &reasoning_w_op_view;
-                reasoning_parameter_views.b_op = &reasoning_b_op_view;
-                reasoning_parameter_views.w_arg1 = &reasoning_w_arg1_view;
-                reasoning_parameter_views.w_arg2 = &reasoning_w_arg2_view;
-                reasoning_parameter_view_ptr = &reasoning_parameter_views;
-            }
-
-            ReasoningHeadOutput rh_out = request.reasoning_head->forward(
-                forward_outputs.encoder_output_tensor,
-                forward_outputs.scratch_atom_embeddings,
-                request.scratch_block->atomPositionsBuffer(),
-                num_atoms,
-                total_tokens,
-                request.stream,
-                request.cublas_handle,
-                reasoning_parameter_view_ptr);
-            forward_outputs.reasoning_output = std::move(rh_out);
         }
     }
 

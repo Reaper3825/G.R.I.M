@@ -15,6 +15,7 @@
 #include <utility>
 #include <cstdint>
 #include <cstddef>
+#include <stdexcept>
 
 // HyperParameters - single entry point for model configuration snapshot helpers
 #include "../Shared/HyperParameters/HyperParameters_GPU.hpp"
@@ -40,7 +41,6 @@
 #include "../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"
 #include "../Layers/Embedding/Embedding_GPU.hpp"
 #include "../Layers/LMHead/lm_head_GPU.hpp"
-#include "../Layers/ReasoningHead/reasoning_head_GPU.hpp"
 #include "../Layers/ExecutionBlock/execution_block_GPU.hpp"
 #include "../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
 #include "../Shared/Execution/DecodeTimeNumPolicy.hpp"
@@ -131,8 +131,19 @@ struct EncoderConstructionBindings {
 class LanguageModel {
 public:
     // Constructor / Destructor
-    explicit LanguageModel(const Config::AiConfigSnapshot& config);
-    ~LanguageModel();
+    explicit LanguageModel(const Config::AiConfigSnapshot& config)
+        : config_(config)
+    {
+        // Startup owns all CUDA-side assembly sequencing. The model constructor
+        // only captures the finalized config and fail-loud validates the CUDA
+        // execution contract.
+#ifdef USE_CUDA
+        if (!HyperParameters::snapshotTrainingConfigField<bool>(config_, "use_gpu")) {
+            throw std::runtime_error("LanguageModel requires config.use_gpu=true when built with CUDA");
+        }
+#endif
+    }
+    ~LanguageModel() = default;
 
     // backward() and zeroGrad() DELETED (Rule 26).
     // Backward: Phase2 runs explicit shared forward, then
@@ -171,11 +182,6 @@ public:
     const Config::AiConfigSnapshot& getConfig() const { return config_; }
     
 #ifdef USE_CUDA
-    // GPU runtime accessors - return references to owned objects (fail loud if not initialized)
-    GPUGrimEncoder& getGpuEncoder();
-    const GPUGrimEncoder& getGpuEncoder() const;
-
-    
     // ScratchBlock reasoning layer access. Presence is config-gated by
     // HyperParameters::scratchBlockConstructionHP(config_); do not runtime-toggle it.
     ScratchBlockLayer* getScratchBlockLayer() { return gpu_model_state_ ? gpu_model_state_->scratch_block_layer.get() : nullptr; }
@@ -189,10 +195,6 @@ public:
     LMHeadLayer* getLmHeadLayer() { return gpu_model_state_ ? gpu_model_state_->lm_head_layer.get() : nullptr; }
     const LMHeadLayer* getLmHeadLayer() const { return gpu_model_state_ ? gpu_model_state_->lm_head_layer.get() : nullptr; }
 
-    // Reasoning Head layer access (nullptr when disabled)
-    ReasoningHeadLayer* getReasoningHeadLayer() { return gpu_model_state_ ? gpu_model_state_->reasoning_head_layer.get() : nullptr; }
-    const ReasoningHeadLayer* getReasoningHeadLayer() const { return gpu_model_state_ ? gpu_model_state_->reasoning_head_layer.get() : nullptr; }
-
     // Execution Block layer access (nullptr when disabled)
     ExecutionBlockLayer* getExecutionBlockLayer() { return gpu_model_state_ ? gpu_model_state_->execution_block_layer.get() : nullptr; }
     const ExecutionBlockLayer* getExecutionBlockLayer() const { return gpu_model_state_ ? gpu_model_state_->execution_block_layer.get() : nullptr; }
@@ -205,16 +207,14 @@ public:
     DecodeTimeNumPolicy* getDecodeTimeNumPolicy() { return gpu_model_state_ ? gpu_model_state_->decode_time_num_policy.get() : nullptr; }
     const DecodeTimeNumPolicy* getDecodeTimeNumPolicy() const { return gpu_model_state_ ? gpu_model_state_->decode_time_num_policy.get() : nullptr; }
 
-    // Multi-token prediction (MTP) auxiliary heads - one weight + bias per head (indices 0..mtp_k-1)
+    // Multi-token prediction (MTP) auxiliary heads are startup-owned on GpuModelState.
     using MTPHead = ::GRIM::MTPHead;
     int getMtpK() const {
         return HyperParameters::snapshotTrainingConfigField<bool>(config_, "mtp_enabled")
             ? HyperParameters::snapshotTrainingConfigField<int>(config_, "mtp_k")
             : 0;
     }
-    MTPHead* getMtpHead(int k);
-    const MTPHead* getMtpHead(int k) const;
-    
+
 #endif
     
 private:

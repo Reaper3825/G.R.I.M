@@ -106,11 +106,11 @@ std::vector<float> runInferencePrefill(GRIM::LanguageModel* model,
 
     GRIM::Forward::ModelForwardRequest request{};
     request.config = &cfg;
-    request.gpu_encoder = &model->getGpuEncoder();
+    // Deleted ownership branch: gpu_encoder now comes from startup-owned GpuModelState,
+    // and this dead test requires a full rewrite before it can source that owner correctly.
     request.embedding_layer = model->getEmbeddingLayer();
     request.lm_head = model->getLmHeadLayer();
     request.scratch_block = model->getScratchBlockLayer();
-    request.reasoning_head = model->getReasoningHeadLayer();
     request.execution_block = model->getExecutionBlockLayer();
     request.cublas_handle = training_state.cublas_handle.get();
     request.stream = stream;

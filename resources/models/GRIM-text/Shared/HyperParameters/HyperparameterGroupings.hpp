@@ -398,13 +398,6 @@ struct ScratchBlockConstructionHP {
     float atom_scale = 0.0f;
 };
 
-struct ReasoningHeadConstructionHP {
-    bool enabled = false;
-    int d_model = 0;
-    int atom_embedding_dim = 0;
-    int num_ops = 0;
-};
-
 struct ExecutionBlockConstructionHP {
     bool enabled = false;
     int layer = -1;
@@ -527,11 +520,6 @@ struct ModelHP {
     int scratch_block_atom_token_start = ATOM_TOKEN_START;
     int scratch_block_atom_token_end = ATOM_TOKEN_END;
     float scratch_block_atom_scale = 0.0f;
-
-    bool reasoning_head_enabled = false;
-    int reasoning_head_d_model = 0;
-    int reasoning_head_atom_embedding_dim = 0;
-    int reasoning_head_num_ops = 0;
 
     bool execution_block_enabled = false;
     int execution_block_layer = -1;
@@ -1076,17 +1064,6 @@ inline ScratchBlockConstructionHP scratchBlockConstructionHP(
     return view;
 }
 
-inline ReasoningHeadConstructionHP reasoningHeadConstructionHP(
-    const LanguageModelConfig& cfg)
-{
-    ReasoningHeadConstructionHP view;
-    view.enabled = cfg.reasoning_head_enabled;
-    view.d_model = cfg.d_model;
-    view.atom_embedding_dim = cfg.scratch_block_atom_embedding_dim;
-    view.num_ops = cfg.reasoning_num_ops;
-    return view;
-}
-
 inline ExecutionBlockConstructionHP executionBlockConstructionHP(
     const LanguageModelConfig& cfg)
 {
@@ -1572,11 +1549,6 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.scratch_block_atom_token_end = ATOM_TOKEN_END;
     view.scratch_block_atom_scale = requireFloat("scratch_block_atom_scale");
 
-    view.reasoning_head_enabled = false;
-    view.reasoning_head_d_model = d_model;
-    view.reasoning_head_atom_embedding_dim = view.scratch_block_atom_embedding_dim;
-    view.reasoning_head_num_ops = 8;
-
     view.execution_block_enabled = requireBool("execution_block_enabled");
     view.execution_block_layer = requireInt("execution_block_layer");
     view.execution_block_d_model = d_model;
@@ -1729,19 +1701,6 @@ inline ScratchBlockConstructionHP scratchBlockConstructionHP(
     view.atom_token_start = model.scratch_block_atom_token_start;
     view.atom_token_end = model.scratch_block_atom_token_end;
     view.atom_scale = model.scratch_block_atom_scale;
-    return view;
-}
-
-inline ReasoningHeadConstructionHP reasoningHeadConstructionHP(
-    const GRIM::Config::AiConfigSnapshot& snapshot)
-{
-    const auto model = modelHP(snapshot);
-
-    ReasoningHeadConstructionHP view;
-    view.enabled = model.reasoning_head_enabled;
-    view.d_model = model.reasoning_head_d_model;
-    view.atom_embedding_dim = model.reasoning_head_atom_embedding_dim;
-    view.num_ops = model.reasoning_head_num_ops;
     return view;
 }
 

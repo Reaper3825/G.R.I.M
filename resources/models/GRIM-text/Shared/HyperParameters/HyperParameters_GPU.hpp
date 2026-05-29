@@ -358,7 +358,6 @@ struct LanguageModelConfig {
     ParameterGroupPrecision parameter_precision_rmsnorm = ParameterGroupPrecision::UNSPECIFIED;
     ParameterGroupPrecision parameter_precision_scratchblock = ParameterGroupPrecision::UNSPECIFIED;
     ParameterGroupPrecision parameter_precision_mtp = ParameterGroupPrecision::UNSPECIFIED;
-    ParameterGroupPrecision parameter_precision_reasoning_head = ParameterGroupPrecision::UNSPECIFIED;
     ParameterGroupPrecision parameter_precision_execution_block = ParameterGroupPrecision::UNSPECIFIED;
     ParameterGroupPrecision parameter_precision_slot_selector = ParameterGroupPrecision::UNSPECIFIED;
 
@@ -368,10 +367,6 @@ struct LanguageModelConfig {
     int scratch_block_max_atoms = 0;
     float scratch_block_atom_scale = 0.0f;
     bool scratch_block_execution_first_type_only = false;
-
-    // ReasoningHead config
-    bool reasoning_head_enabled = false;
-    int reasoning_num_ops = 8;
 
     // ExecutionBlock config — differentiable register machine
     bool execution_block_enabled = false;
@@ -1395,7 +1390,6 @@ inline void validateRootConfigDocument(
     validateParameterGroupPrecision(params.parameter_precision_rmsnorm, "parameter_precision_rmsnorm", caller);
     validateParameterGroupPrecision(params.parameter_precision_scratchblock, "parameter_precision_scratchblock", caller);
     validateParameterGroupPrecision(params.parameter_precision_mtp, "parameter_precision_mtp", caller);
-    validateParameterGroupPrecision(params.parameter_precision_reasoning_head, "parameter_precision_reasoning_head", caller);
     validateParameterGroupPrecision(params.parameter_precision_execution_block, "parameter_precision_execution_block", caller);
     validateParameterGroupPrecision(params.parameter_precision_slot_selector, "parameter_precision_slot_selector", caller);
 
@@ -1444,18 +1438,13 @@ inline void validateRootConfigDocument(
         validationField("execution_block_num_steps", &LanguageModelConfig::execution_block_num_steps)
     }, caller);
 
-    if (params.use_scratch_block || params.reasoning_head_enabled || params.execution_block_enabled) {
+    if (params.use_scratch_block || params.execution_block_enabled) {
         validatePositiveFields(params, {
             validationField("scratch_block_atom_embedding_dim", &LanguageModelConfig::scratch_block_atom_embedding_dim),
             validationField("scratch_block_max_atoms", &LanguageModelConfig::scratch_block_max_atoms)
         }, caller);
         validatePositiveFiniteFields(params, {
             validationField("scratch_block_atom_scale", &LanguageModelConfig::scratch_block_atom_scale)
-        }, caller);
-    }
-    if (params.reasoning_head_enabled) {
-        validatePositiveFields(params, {
-            validationField("reasoning_num_ops", &LanguageModelConfig::reasoning_num_ops)
         }, caller);
     }
     if (params.structured_ce_enabled) {
@@ -1760,7 +1749,6 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(parameter_precision_rmsnorm);
     GRIM_LOAD_CONFIG_FIELD(parameter_precision_scratchblock);
     GRIM_LOAD_CONFIG_FIELD(parameter_precision_mtp);
-    GRIM_LOAD_CONFIG_FIELD(parameter_precision_reasoning_head);
     GRIM_LOAD_CONFIG_FIELD(parameter_precision_execution_block);
     GRIM_LOAD_CONFIG_FIELD(parameter_precision_slot_selector);
 
@@ -2231,7 +2219,6 @@ inline void writeFinalizedLanguageModelConfigToSnapshot(
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_rmsnorm);
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_scratchblock);
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_mtp);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_reasoning_head);
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_execution_block);
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_slot_selector);
     GRIM_WRITE_FINAL_CONFIG_FIELD(use_scratch_block);
@@ -2239,8 +2226,6 @@ inline void writeFinalizedLanguageModelConfigToSnapshot(
     GRIM_WRITE_FINAL_CONFIG_FIELD(scratch_block_max_atoms);
     GRIM_WRITE_FINAL_CONFIG_FIELD(scratch_block_atom_scale);
     GRIM_WRITE_FINAL_CONFIG_FIELD(scratch_block_execution_first_type_only);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(reasoning_head_enabled);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(reasoning_num_ops);
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_layer);
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_num_ops);

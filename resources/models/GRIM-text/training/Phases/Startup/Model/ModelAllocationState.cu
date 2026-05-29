@@ -104,10 +104,14 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
 
 #ifdef USE_CUDA
     {
-        auto& gpu_encoder = gpu_model_state.requireGpuEncoder("ModelAllocationState::initializeModel");
+        auto* gpu_encoder = gpu_model_state.gpu_encoder.get();
+        if (!gpu_encoder) {
+            throw std::runtime_error(
+                "ModelAllocationState::initializeModel: gpu_model_state.gpu_encoder is NULL after GPU model layer assembly");
+        }
         const int num_layers = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config_snapshot, "num_layers");
         for (int layer = 0; layer < num_layers; ++layer) {
-            auto* enc = gpu_encoder.getLayer(layer);
+            auto* enc = gpu_encoder->getLayer(layer);
             if (!enc) {
                 throw std::runtime_error("Encoder layer " + std::to_string(layer) + " is NULL after GPU model layer assembly");
             }

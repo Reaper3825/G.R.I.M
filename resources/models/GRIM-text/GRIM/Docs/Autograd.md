@@ -9,7 +9,7 @@ Embedding lookup follows the same prepared-payload rule as CE/NLL loss: `autogra
 
 `AutogradContext` and `Forward::ModelForwardRequest` must not mirror `batch_size`, `seq_len`/`max_seq_len`, or accumulation-window normalization policy. Batch geometry is read directly from the caller-owned `BatchPayload` (validated against `BatchDeviceBindings`). `executeAutogradBackward()` seeds backward with the default root gradient, while Phase2 owns any accumulation normalization later at the optimizer-window boundary.
 
-Forward runtime handles are sibling payload data, not layer state: `AutogradContext` carries the `cudaStream_t` and `cublasHandle_t` borrowed from `TrainingState`, and `Forward::ModelForwardRequest` passes them through to encoder, FFN, LM head, reasoning head, and selector forwards. Do not patch those handles into layer configs or mutate layers with late setter calls.
+Forward runtime handles are sibling payload data, not layer state: `AutogradContext` carries the `cudaStream_t` and `cublasHandle_t` borrowed from `TrainingState`, and `Forward::ModelForwardRequest` passes them through to encoder, FFN, LM head, execution-block, and selector forwards. Do not patch those handles into layer configs or mutate layers with late setter calls.
 
 Dropout is a training-only TensorContract primitive. `autograd::dropout()` must not carry an identity/non-training branch, and inference/prefill code must not call it as a no-op wrapper. The training/inference boundary owns that policy: `TrainingGraph` may apply embedding/layer dropout, while `InferencePrefill` skips dropout calls entirely.
 
@@ -34,7 +34,7 @@ Current extracted primitives:
 
 The Rule 20 ownership taxonomy in `.github/copilot-instructions.md` is the authoritative contract for tape-bound vs. persistent state. This doc covers the implementation-level traps.
 
-`Shared/Forward/ModelForwardOutputs.hpp` is the canonical home for the top-level shared-forward sink, the per-layer retained tensor vectors it owns directly, and the retained shared-forward payload types (`Forward::ExecutionBlockOutput`, `Forward::ExecutionBlockStepOutput`, `Forward::ExecutionRecord`, `Forward::ExecStepMetrics`, `Forward::ReasoningHeadOutput`). Do not recreate a separate ownership/include layer or a second helper-type wrapper for forward-result storage.
+`Shared/Forward/ModelForwardOutputs.hpp` is the canonical home for the top-level shared-forward sink, the per-layer retained tensor vectors it owns directly, and the retained shared-forward payload types (`Forward::ExecutionBlockOutput`, `Forward::ExecutionBlockStepOutput`, `Forward::ExecutionRecord`, `Forward::ExecStepMetrics`). Do not recreate a separate ownership/include layer or a second helper-type wrapper for forward-result storage.
 
 ## Mandatory `return` in autograd forwards
 Always explicitly `return output;` from any autograd forward function. A missing return destroys the `grad_fn` chain during forward → illegal memory access in backward.
@@ -62,7 +62,7 @@ When kernel B reads data written by kernel A via `atomicAdd`, you MUST `cudaStre
 `cudaStreamSynchronize` inside `computeGradNorm` drains the entire backward pipeline. Pass `sync_for_host_read=false` for non-logging steps; only sync when logging gradient components.
 
 ## Registered parameter gradient lifecycle
-Parameter gradient zeroing is owned by the TensorContract `ParameterGroup` inventory. `executeAutogradBackward()` calls `zeroParameterGradients(model.parameterGroups(), stream)` only when `accumulate=false`; it must not enumerate embedding, LM-head, encoder, MTP, execution-block, selector, or reasoning-head tensors directly. Adding a trainable tensor means registering it in `Startup/Model/ParameterGroupRegistration.{hpp,cu}` so optimizer stepping, clipping, diagnostics, and zeroing all see the same source of truth.
+Parameter gradient zeroing is owned by the TensorContract `ParameterGroup` inventory. `executeAutogradBackward()` calls `zeroParameterGradients(model.parameterGroups(), stream)` only when `accumulate=false`; it must not enumerate embedding, LM-head, encoder, MTP, execution-block, or selector tensors directly. Adding a trainable tensor means registering it in `Startup/Model/ParameterGroupRegistration.{hpp,cu}` so optimizer stepping, clipping, diagnostics, and zeroing all see the same source of truth.
 
 ## Tensor precision metadata
 Tensor precision is TensorContract metadata, just like shape/layout. Startup `ParameterGroupRegistration` maps the authored `LanguageModelConfig::parameter_precision_*` value onto both the registered `ParameterGroup` and the owning `Tensor::compute_precision`. TensorContract operators are responsible for reading that metadata at operation boundaries and invoking conversion when needed; layers, optimizer code, and diagnostics must not carry a second precision policy object.

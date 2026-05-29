@@ -4,6 +4,8 @@ Scope: make the shared model forward boundary read-only over durable parameter s
 
 The phase-ownership doctrine behind this plan is documented in [GraphStateOwnership.md](GraphStateOwnership.md): forward reads state, execution/inference use state, backward measures gradient change, and optimizer/update is the durable state writer.
 
+> Note: `Layers/ReasoningHead/reasoning_head_GPU.{hpp,cu}` has since been deleted. Any remaining references below are historical plan context only; live shared forward now routes structured reasoning through ScratchBlock + ExecutionBlock instead of a parallel reasoning-head subsystem.
+
 ## Implementation status
 
 The following ownership fixes are already implemented and should be treated as current architecture, not future work:
@@ -212,7 +214,7 @@ Use this section as the implementation queue. The order below is the architectur
   - `Shared/Forward/ModelForward_GPU.hpp`
   - `Shared/TrainingState/TrainingState_GPU.hpp`
   - `Shared/InferenceState/GenerationState_GPU.hpp`
-  - `Common/grim_language_model_gpu.cu`
+  - `training/Phases/Phase2_InferenceLoop.cu`
 - **Violation class:** training/session ownership conflation at the shared forward boundary
 - **Concrete offenders:**
   - shared forward request exposes only `TrainingState* runtime_state`
@@ -500,7 +502,7 @@ Goal: make the read-only forward boundary enforceable at build time, not just by
 | `Shared/TrainingState/TrainingState_GPU.hpp` | Keep training-only diagnostics/workspaces training-owned; stop being the only shared-forward runtime owner |
 | `Shared/InferenceState/GenerationState_GPU.hpp` | Expose generation/session-owned trace/runtime sinks needed by shared prefill |
 | `training/Autograd/AutogradTraining.cu` | Own training-only live-tensor prep if any remains after cleanup |
-| `Common/grim_language_model_gpu.cu` | Route inference scoring through the centralized shared-forward boundary only |
+| `training/Phases/Phase2_InferenceLoop.cu` | Route inference scoring through the centralized shared-forward boundary only |
 | `Layers/Embedding/Embedding_GPU.hpp` | Prefer const/read-only parameter access for prefill callers |
 | `Layers/Encoding/Encoding_GPU.cu` | Accept/read parameter views without mutating ownership metadata or process-global forward state |
 | `Layers/Encoding/Encoding_GPU.hpp` | Add const/read-only parameter accessors and/or view payload entry points |

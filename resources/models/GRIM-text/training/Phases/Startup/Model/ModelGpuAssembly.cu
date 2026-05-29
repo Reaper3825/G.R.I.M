@@ -31,34 +31,6 @@ GpuModelState::~GpuModelState() = default;
 GpuModelState::GpuModelState(GpuModelState&&) noexcept = default;
 GpuModelState& GpuModelState::operator=(GpuModelState&&) noexcept = default;
 
-GRIM::GPUGrimEncoder& GpuModelState::requireGpuEncoder(const char* caller) {
-    if (!gpu_encoder) {
-        throw std::runtime_error(std::string(caller) + ": GPU encoder not initialized - complete Startup::assembleGpuModel() first");
-    }
-    return *gpu_encoder;
-}
-
-const GRIM::GPUGrimEncoder& GpuModelState::requireGpuEncoder(const char* caller) const {
-    if (!gpu_encoder) {
-        throw std::runtime_error(std::string(caller) + ": GPU encoder not initialized - complete Startup::assembleGpuModel() first");
-    }
-    return *gpu_encoder;
-}
-
-GRIM::MTPHead* GpuModelState::getMtpHead(int k) noexcept {
-    if (k < 0 || k >= static_cast<int>(mtp_heads.size())) {
-        return nullptr;
-    }
-    return &mtp_heads[static_cast<std::size_t>(k)];
-}
-
-const GRIM::MTPHead* GpuModelState::getMtpHead(int k) const noexcept {
-    if (k < 0 || k >= static_cast<int>(mtp_heads.size())) {
-        return nullptr;
-    }
-    return &mtp_heads[static_cast<std::size_t>(k)];
-}
-
 #endif // USE_CUDA
 
 } // namespace Startup

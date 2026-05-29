@@ -301,23 +301,6 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         }
     }
 
-    flatbuffers::Offset<GRIMTransformer::ReasoningHeadWeights> fb_reasoning_head = 0;
-    const auto& rh_view = request.sources.reasoning_head;
-    if (rh_view.enabled && rh_view.w_op.ptr) {
-        auto rh_w_op = download_device_vector(rh_view.w_op, "ReasoningHead W_op");
-        auto rh_b_op = download_device_vector(rh_view.b_op, "ReasoningHead b_op");
-        auto rh_w_arg1 = download_device_vector(rh_view.w_arg1, "ReasoningHead w_arg1");
-        auto rh_w_arg2 = download_device_vector(rh_view.w_arg2, "ReasoningHead w_arg2");
-        fb_reasoning_head = GRIMTransformer::CreateReasoningHeadWeights(
-            builder,
-            builder.CreateVector(rh_w_op), builder.CreateVector(rh_b_op),
-            builder.CreateVector(rh_w_arg1), builder.CreateVector(rh_w_arg2),
-            static_cast<uint32_t>(rh_view.num_ops),
-            static_cast<uint32_t>(rh_view.d_total));
-        Logging::EmitModuleInfo(kLogModule, Msg("[save] ReasoningHead: W_op=", rh_w_op.size(),
-            " b_op=", rh_b_op.size(), " w_arg1=", rh_w_arg1.size(), " w_arg2=", rh_w_arg2.size()));
-    }
-
     flatbuffers::Offset<GRIMTransformer::ExecutionBlockWeights> fb_execution_block = 0;
     const auto& eb_view = request.sources.execution_block;
     if (eb_view.enabled && eb_view.w_decode_1.ptr) {
@@ -406,7 +389,7 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         fb_metadata,
         0, 0,
         timestamp, timestamp,
-        fb_reasoning_head,
+        0,
         fb_execution_block,
         fb_slot_selector);
 
@@ -489,7 +472,6 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
                 verify_component("lm_head", raw->lm_head());
                 verify_component("scratch_block", raw->scratch_block());
                 verify_component("training_metadata", raw->training_metadata());
-                verify_component("reasoning_head", raw->reasoning_head());
                 verify_component("execution_block", raw->execution_block());
                 verify_component("slot_selector", raw->slot_selector());
 

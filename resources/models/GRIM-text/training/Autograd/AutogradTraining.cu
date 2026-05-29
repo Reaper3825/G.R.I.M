@@ -44,7 +44,8 @@
 // The -inf masking was poisoning every diagnostic that sampled logits through
 // the old durable cached-logits side channel
 // (logit_min=-inf → logit_range=inf → logit_mean=-inf → logit_std=NaN).
-// Inference-time masking in grim_language_model_gpu.cu is SEPARATE and stays.
+// Inference-time sampling/masking policy remains Phase2-owned in
+// training/Phases/Phase2_InferenceLoop.cu over the shared-forward boundary.
 
 // Logging macros - guarded by VerboseLogging flags for production
 #define AG_INFO(msg) do { \
@@ -662,7 +663,6 @@ bool verifyGradientsAreConnectedImpl(
     bool ok = true;
     const GradientVerificationActivity activity = detectGradientVerificationActivity(ctx);
     const auto model_hp = GRIM::HyperParameters::modelHP(*ctx.config);
-    const bool reasoning_loss_active = false;  // ReasoningHead forward is diagnostic-only until a real reasoning loss path is assembled.
 
     auto requireAllocatedFinite = [&](Tensor& t, const std::string& label) {
         if (!t.data) return;
@@ -953,23 +953,6 @@ bool verifyGradientsAreConnectedImpl(
                 requireReceivedGradient(selector->null_logit_bias(), "selector null_logit_bias");
             }
         }
-    }
-    
-    // ReasoningHead parameters: materializeTrainingGraphActivations currently invokes the
-    // head for structured diagnostics only. No reasoning loss is assembled into
-    // intermediates.loss_tensor, so verifying these params for received gradient
-    // would falsely claim training connectivity. Re-enable only alongside a real
-    // reasoning loss path.
-    if (ctx.reasoning_head && reasoning_loss_active) {
-        auto checkRH = [&](Tensor& t, const char* name) {
-            if (t.data) requireAllocatedFinite(t, "reasoning head " + std::string(name));
-        };
-        checkRH(ctx.reasoning_head->W_op(), "W_op");
-        checkRH(ctx.reasoning_head->b_op(), "b_op");
-        checkRH(ctx.reasoning_head->w_arg1(), "w_arg1");
-        checkRH(ctx.reasoning_head->w_arg2(), "w_arg2");
-    } else if (ctx.reasoning_head) {
-        AG_INFO("ReasoningHead gradient verification skipped: no reasoning loss path is connected to loss_tensor");
     }
     
     return ok;

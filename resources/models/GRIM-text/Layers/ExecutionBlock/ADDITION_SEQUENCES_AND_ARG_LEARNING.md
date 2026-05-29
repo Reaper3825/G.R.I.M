@@ -109,7 +109,7 @@ Later encoder layers may run **`crossAttentionRead`** from memory starting at **
 - `AutogradTraining.cu` — when the block runs; bootstrap and `executeStep` invocation.
 - `Shared/Batching/BatchPayload.*` — where `token_to_slot_map` is assembled for training.
 - `Shared/Batching/BatchDeviceUpload.cu` — H2D of `token_to_slot_map` into `cached_token_to_slot_map`.
-- `Phase2_InferenceLoop.cu` / `grim_language_model_gpu.cu` — Phase2-authored inference payloads and model scoring upload slot maps through `BatchDeviceBindings`.
+- `Phase2_InferenceLoop.cu` / `Shared/Forward/ModelForward_GPU.cu` — Phase2 authors inference payloads, uploads slot maps through `BatchDeviceBindings`, and drives shared-forward model scoring.
 
 ---
 

@@ -15,7 +15,6 @@
 #pragma once
 
 #include "../../Shared/Forward/ModelForwardOutputs.hpp"
-#include "../../Layers/ReasoningHead/reasoning_head_GPU.hpp"
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 #include "../../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
 

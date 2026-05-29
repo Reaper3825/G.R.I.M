@@ -534,26 +534,6 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
             fb_sb->num_atom_types(), " atom_dim=", fb_sb->atom_embedding_dim()));
     }
 
-    // ─── ReasoningHead (gated by requires_reasoning_head) ───
-    if (req.requires_reasoning_head) {
-        const auto* fb_rh = model_fb->reasoning_head();
-        std::vector<float> rh_w_op(fb_rh->w_op_data()->begin(), fb_rh->w_op_data()->end());
-        if (!upload_device_vector(rh_w_op, request.reasoning_head.w_op, "ReasoningHead W_op"))
-            return false;
-        std::vector<float> rh_b_op(fb_rh->b_op_data()->begin(), fb_rh->b_op_data()->end());
-        if (!upload_device_vector(rh_b_op, request.reasoning_head.b_op, "ReasoningHead b_op"))
-            return false;
-        std::vector<float> rh_w_arg1(fb_rh->w_arg1_data()->begin(), fb_rh->w_arg1_data()->end());
-        if (!upload_device_vector(rh_w_arg1, request.reasoning_head.w_arg1, "ReasoningHead w_arg1"))
-            return false;
-        std::vector<float> rh_w_arg2(fb_rh->w_arg2_data()->begin(), fb_rh->w_arg2_data()->end());
-        if (!upload_device_vector(rh_w_arg2, request.reasoning_head.w_arg2, "ReasoningHead w_arg2"))
-            return false;
-        request.report.reasoning_head_loaded = true;
-        Logging::EmitModuleInfo(kLogModule, Msg("[load] ReasoningHead: num_ops=",
-            fb_rh->num_ops(), " d_total=", fb_rh->d_total()));
-    }
-
     // ─── ExecutionBlock (gated by requires_execution_block) ───
     if (req.requires_execution_block) {
         const auto* fb_eb = model_fb->execution_block();
@@ -635,10 +615,6 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
     }
 
     // ─── Step 7: Final load verification (safety) ───
-    if (req.requires_reasoning_head && !request.report.reasoning_head_loaded) {
-        Logging::EmitModuleError(kLogModule, "[load] FATAL: ReasoningHead required but not loaded");
-        return false;
-    }
     if (req.requires_scratch_block && !request.report.scratch_block_loaded) {
         Logging::EmitModuleError(kLogModule, "[load] FATAL: ScratchBlock required but not loaded");
         return false;

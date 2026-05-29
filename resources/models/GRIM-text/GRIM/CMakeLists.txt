@@ -107,7 +107,7 @@ list(FILTER ALL_GPU_SOURCES EXCLUDE REGEX "Flash_Attention")
 # Feed_Forward_GPU exclusion removed - implementation now complete with CRTP design
 list(FILTER ALL_GPU_SOURCES EXCLUDE REGEX "GRIM-TS")
 list(FILTER ALL_GPU_SOURCES EXCLUDE REGEX "LayerNorm_GPU\\.cu")  # Layer class - using RMSNorm instead
-# Keep LayerNorm_Kernal_GPU.cu - launchLayerNorm is still called from grim_language_model_gpu.cu
+# Keep LayerNorm_Kernal_GPU.cu - launchLayerNorm is still referenced by live shared-forward/model sources
 
 # Exclude SoftRestart - references training-only LanguageModel::resetOptimizerMoments
 list(FILTER ALL_GPU_SOURCES EXCLUDE REGEX "SoftRestart")

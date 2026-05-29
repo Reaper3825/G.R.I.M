@@ -121,7 +121,6 @@ bool LanguageModel::save(const std::string& path) {
     auto* embedding_layer = getEmbeddingLayer();
     auto* lm_head_layer = getLmHeadLayer();
     auto* scratch_block_layer = getScratchBlockLayer();
-    auto* reasoning_head_layer = getReasoningHeadLayer();
     auto* execution_block_layer = getExecutionBlockLayer();
     auto* decode_time_slot_selector_layer = getDecodeTimeSlotSelectorLayer();
     auto* gpu_encoder_owner = (gpu_model_state_ ? gpu_model_state_->gpu_encoder.get() : nullptr);
@@ -141,8 +140,8 @@ bool LanguageModel::save(const std::string& path) {
 
     EmitModuleInfo(ModuleId::Checkpoint, "Processing encoder layers (" + std::to_string(num_layers) + " layers)");
     { std::ostringstream oss; oss << "gpu_model_state.gpu_encoder ptr = " << (void*)gpu_encoder_owner << " this = " << (void*)this; EmitModuleInfo(ModuleId::Checkpoint, oss.str()); }
-    auto* gpu_encoder = gpu_model_state_ ? &gpu_model_state_->requireGpuEncoder("LanguageModel::save") : nullptr;
-    { std::ostringstream oss; oss << "getGpuEncoder() returned " << (void*)gpu_encoder; EmitModuleInfo(ModuleId::Checkpoint, oss.str()); }
+    auto* gpu_encoder = gpu_encoder_owner;
+    { std::ostringstream oss; oss << "gpu_encoder ptr = " << (void*)gpu_encoder; EmitModuleInfo(ModuleId::Checkpoint, oss.str()); }
     if (!gpu_encoder) {
         EmitModuleError(ModuleId::Checkpoint, "GPU encoder not initialized");
         std::cerr << "[LanguageModel::save] Error: GPU encoder not initialized" << std::endl;
@@ -232,25 +231,6 @@ bool LanguageModel::save(const std::string& path) {
                        ", atom_proj=" + std::to_string(request.sources.scratch_block.atom_projection.count) + ")");
     }
 
-    // ReasoningHead weights
-    if (reasoning_head_layer) {
-        const int dt = reasoning_head_layer->d_total();
-        const int nops = reasoning_head_layer->num_ops();
-        request.sources.reasoning_head.enabled = true;
-        request.sources.reasoning_head.num_ops = nops;
-        request.sources.reasoning_head.d_total = dt;
-        request.sources.reasoning_head.w_op.ptr = reasoning_head_layer->W_op().data;
-        request.sources.reasoning_head.w_op.count = static_cast<std::size_t>(nops) * dt;
-        request.sources.reasoning_head.b_op.ptr = reasoning_head_layer->b_op().data;
-        request.sources.reasoning_head.b_op.count = static_cast<std::size_t>(nops);
-        request.sources.reasoning_head.w_arg1.ptr = reasoning_head_layer->w_arg1().data;
-        request.sources.reasoning_head.w_arg1.count = static_cast<std::size_t>(dt);
-        request.sources.reasoning_head.w_arg2.ptr = reasoning_head_layer->w_arg2().data;
-        request.sources.reasoning_head.w_arg2.count = static_cast<std::size_t>(dt);
-        EmitModuleInfo(ModuleId::Checkpoint, "Processing ReasoningHead weights (d_total=" +
-                       std::to_string(dt) + ", num_ops=" + std::to_string(nops) + ")");
-    }
-
     // ExecutionBlock v2 weights — serialized via FlatBuffer
     if (execution_block_layer) {
         auto assignRead = [](DeviceReadView& v, const Tensor& t) {
@@ -332,7 +312,10 @@ bool LanguageModel::save(const std::string& path) {
         const std::size_t bias_elems = static_cast<std::size_t>(vocab_size);
         std::vector<float> h_buf(std::max(weight_elems, bias_elems));
         for (uint32_t k = 0; k < K; ++k) {
-            LanguageModel::MTPHead* head = gpu_model_state_ ? gpu_model_state_->getMtpHead(static_cast<int>(k)) : nullptr;
+            LanguageModel::MTPHead* head =
+                (gpu_model_state_ && k < gpu_model_state_->mtp_heads.size())
+                    ? &gpu_model_state_->mtp_heads[k]
+                    : nullptr;
             if (!head || !head->weight.data || !head->bias.data) continue;
             if (cudaMemcpy(h_buf.data(), head->weight.data, weight_elems * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
                 EmitModuleError(ModuleId::Checkpoint, "[save] MTP head " + std::to_string(k) + " weight D2H failed");
@@ -411,7 +394,6 @@ bool LanguageModel::load(const std::string& path) {
     auto* embedding_layer = getEmbeddingLayer();
     auto* lm_head_layer = getLmHeadLayer();
     auto* scratch_block_layer = getScratchBlockLayer();
-    auto* reasoning_head_layer = getReasoningHeadLayer();
     auto* execution_block_layer = getExecutionBlockLayer();
     auto* decode_time_slot_selector_layer = getDecodeTimeSlotSelectorLayer();
 
@@ -448,7 +430,6 @@ bool LanguageModel::load(const std::string& path) {
     // Pattern B: call site is the sole authority for what the model requires.
     request.capabilities.requires_execution_block = (execution_block_layer != nullptr);
     request.capabilities.requires_slot_selector     = (decode_time_slot_selector_layer != nullptr);
-    request.capabilities.requires_reasoning_head  = (reasoning_head_layer != nullptr);
     request.capabilities.requires_scratch_block   = scratch_hp.enabled;
     request.capabilities.requires_final_rms_gamma = (lm_head_layer != nullptr
                                                       && lm_head_layer->finalRmsGamma().data != nullptr
@@ -462,7 +443,7 @@ bool LanguageModel::load(const std::string& path) {
                 embedding_layer->tokenWeights().data,
                 embeddingElementCount(config_));
 
-    auto* gpu_encoder = gpu_model_state_ ? &gpu_model_state_->requireGpuEncoder("LanguageModel::load") : nullptr;
+    auto* gpu_encoder = gpu_model_state_->gpu_encoder.get();
     request.encoder_layers.resize(num_layers);
     const std::size_t d_model = static_cast<std::size_t>(d_model_i);
     const std::size_t d_ff = static_cast<std::size_t>(d_ff_i);
@@ -528,26 +509,6 @@ bool LanguageModel::load(const std::string& path) {
         if (ap.data) {
             assignWrite(request.scratch_block.atom_projection, ap.data, ap.numel());
         }
-    }
-
-    // ReasoningHead weight destinations
-    if (reasoning_head_layer) {
-        const int dt = reasoning_head_layer->d_total();
-        const int nops = reasoning_head_layer->num_ops();
-        assignWrite(request.reasoning_head.w_op,
-                    reasoning_head_layer->W_op().data,
-                    static_cast<std::size_t>(nops) * dt);
-        assignWrite(request.reasoning_head.b_op,
-                    reasoning_head_layer->b_op().data,
-                    static_cast<std::size_t>(nops));
-        assignWrite(request.reasoning_head.w_arg1,
-                    reasoning_head_layer->w_arg1().data,
-                    static_cast<std::size_t>(dt));
-        assignWrite(request.reasoning_head.w_arg2,
-                    reasoning_head_layer->w_arg2().data,
-                    static_cast<std::size_t>(dt));
-        request.reasoning_head.num_ops = nops;
-        request.reasoning_head.d_total = dt;
     }
 
     // ExecutionBlock v2 weight destinations — loaded via FlatBuffer
@@ -625,7 +586,6 @@ bool LanguageModel::load(const std::string& path) {
             std::ostringstream oss;
             oss << "[load]   capabilities: exec_block=" << request.capabilities.requires_execution_block
                 << " slot_selector=" << request.capabilities.requires_slot_selector
-                << " reasoning=" << request.capabilities.requires_reasoning_head
                 << " scratch=" << request.capabilities.requires_scratch_block
                 << " final_rms=" << request.capabilities.requires_final_rms_gamma;
             EmitModuleError(ModuleId::Checkpoint, oss.str());
@@ -635,7 +595,6 @@ bool LanguageModel::load(const std::string& path) {
             oss << "[load]   layer pointers: embedding=" << (embedding_layer ? "OK" : "NULL")
                 << " lm_head=" << (lm_head_layer ? "OK" : "NULL")
                 << " scratch_block=" << (scratch_block_layer ? "OK" : "NULL")
-                << " reasoning_head=" << (reasoning_head_layer ? "OK" : "NULL")
                 << " exec_block=" << (execution_block_layer ? "OK" : "NULL")
                 << " slot_selector=" << (decode_time_slot_selector_layer ? "OK" : "NULL");
             EmitModuleError(ModuleId::Checkpoint, oss.str());
@@ -693,7 +652,10 @@ bool LanguageModel::load(const std::string& path) {
                 std::vector<float> h_buf(std::max(weight_elems, bias_elems));
                 bool ok = true;
                 for (uint32_t k = 0; k < file_k && ok; ++k) {
-                    LanguageModel::MTPHead* head = gpu_model_state_ ? gpu_model_state_->getMtpHead(static_cast<int>(k)) : nullptr;
+                    LanguageModel::MTPHead* head =
+                        (gpu_model_state_ && k < gpu_model_state_->mtp_heads.size())
+                            ? &gpu_model_state_->mtp_heads[k]
+                            : nullptr;
                     if (!head || !head->weight.data || !head->bias.data) { ok = false; break; }
                     if (!ifs.read(reinterpret_cast<char*>(h_buf.data()), weight_elems * sizeof(float))) { ok = false; break; }
                     if (cudaMemcpy(head->weight.data, h_buf.data(), weight_elems * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess) { ok = false; break; }

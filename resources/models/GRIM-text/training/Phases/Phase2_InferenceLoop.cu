@@ -105,11 +105,11 @@ std::vector<GRIM::Forward::MTPHeadForwardView> buildDetachedForwardMtpHeadViews(
 
     views.reserve(static_cast<size_t>(mtp_k));
     for (int k = 0; k < mtp_k; ++k) {
-        auto* head = gpu_model_state.getMtpHead(k);
-        if (!head) {
+        if (k < 0 || k >= static_cast<int>(gpu_model_state.mtp_heads.size())) {
             throw std::runtime_error(
-                "Phase2 payload inference: gpu_model_state.getMtpHead(" + std::to_string(k) + ") returned NULL");
+                "Phase2 payload inference: gpu_model_state.mtp_heads is missing head " + std::to_string(k));
         }
+        auto* head = &gpu_model_state.mtp_heads[static_cast<std::size_t>(k)];
         if (!head->weight.data || !head->bias.data) {
             throw std::runtime_error(
                 "Phase2 payload inference: MTP head " + std::to_string(k) +
@@ -300,13 +300,18 @@ GRIM::GeneratedSequence generateOneSequence(
         runtime_payload.execution_runtime = &generation_state.execution_runtime;
         runtime_payload.read_gate_accum_tensor = nullptr;
 
+        auto* gpu_encoder = gpu_model_state.gpu_encoder.get();
+        if (!gpu_encoder) {
+            throw std::runtime_error(
+                "Phase2::generateOneSequence: gpu_model_state.gpu_encoder is NULL");
+        }
+
         GRIM::Forward::ModelForwardRequest request{};
         request.config = &config;
-        request.gpu_encoder = &gpu_model_state.requireGpuEncoder("Phase2::generateOneSequence");
+        request.gpu_encoder = gpu_encoder;
         request.embedding_layer = model.getEmbeddingLayer();
         request.lm_head = model.getLmHeadLayer();
         request.scratch_block = scratch_hp.enabled ? scratch_block_layer : nullptr;
-        request.reasoning_head = model.getReasoningHeadLayer();
         request.execution_block = model.getExecutionBlockLayer();
         request.cublas_handle = training_state.cublas_handle.get();
         request.stream = stream;

@@ -178,30 +178,6 @@ bool validate_checkpoint_capabilities(
         }
     }
 
-    // ─── ReasoningHead ───
-    if (req.requires_reasoning_head) {
-        const auto* fb_rh = model_fb->reasoning_head();
-        if (!fb_rh) {
-            Logging::EmitModuleError(kLogModule, "[load] FATAL: ReasoningHead required but missing in checkpoint");
-            return false;
-        }
-        const int nops = static_cast<int>(fb_rh->num_ops());
-        const int dt   = static_cast<int>(fb_rh->d_total());
-        if (load_req.reasoning_head.num_ops != nops || load_req.reasoning_head.d_total != dt) {
-            Logging::EmitModuleError(kLogModule,
-                Msg("[load] FATAL: ReasoningHead shape mismatch: checkpoint num_ops=", nops,
-                    " d_total=", dt, " model num_ops=", load_req.reasoning_head.num_ops,
-                    " d_total=", load_req.reasoning_head.d_total));
-            return false;
-        }
-        const std::size_t wop_sz = static_cast<std::size_t>(nops) * dt;
-        if (!check_fb_vec_size(fb_rh->w_op_data(), wop_sz, "ReasoningHead W_op")) return false;
-        if (!check_fb_vec_size(fb_rh->b_op_data(), static_cast<std::size_t>(nops), "ReasoningHead b_op")) return false;
-        if (!check_fb_vec_size(fb_rh->w_arg1_data(), static_cast<std::size_t>(dt), "ReasoningHead w_arg1")) return false;
-        if (!check_fb_vec_size(fb_rh->w_arg2_data(), static_cast<std::size_t>(dt), "ReasoningHead w_arg2")) return false;
-        if (!cross_check_view(load_req.reasoning_head.w_op, wop_sz, "ReasoningHead W_op")) return false;
-    }
-
     // ─── ScratchBlock ───
     if (req.requires_scratch_block) {
         const auto* fb_sb = model_fb->scratch_block();

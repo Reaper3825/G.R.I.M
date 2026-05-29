@@ -36,6 +36,8 @@ OptimizerTraceFormula resolveTraceFormula(const HyperParameters::OptimizerUpdate
 
     OptimizerTraceFormula formula{};
     switch (hp.kind) {
+        case HyperParameters::OptimizerKind::UNSPECIFIED:
+            throw std::runtime_error("[computeOptimizerUpdateTrace] optimizer kind is UNSPECIFIED");
         case HyperParameters::OptimizerKind::ADAMW:
             formula.beta1 = HyperParameters::ADAMW_BETA1;
             formula.beta2 = HyperParameters::ADAMW_BETA2;
@@ -143,7 +145,6 @@ const char* OptimizerUpdateTraceMetrics::typeName(int type_idx) {
         case ParamGroupType::RMSNORM: return "rmsnorm";
         case ParamGroupType::SCRATCHBLOCK: return "sb";
         case ParamGroupType::MTP: return "mtp";
-        case ParamGroupType::REASONING_HEAD: return "reasoning";
         case ParamGroupType::EXECUTION_BLOCK: return "exec";
         case ParamGroupType::SLOT_SELECTOR: return "slot_selector";
         case ParamGroupType::COUNT: return "?";

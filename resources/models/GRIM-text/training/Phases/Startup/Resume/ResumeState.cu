@@ -36,10 +36,15 @@ void initializeOptimizer(TrainingContext& ctx) {
 
     opt.resetAccumulationSlot();
 
-    auto& gpu_encoder = ctx.gpu_model.requireGpuEncoder("ResumeState::initializeOptimizer");
+    auto* gpu_encoder = ctx.gpu_model.gpu_encoder.get();
+    if (!gpu_encoder) {
+        throw std::runtime_error(
+            "ResumeState::initializeOptimizer: ctx.gpu_model.gpu_encoder is NULL - "
+            "ensure Startup::assembleGpuModel(*model, ctx.gpu_model, weight_init_seed) completes before optimizer init");
+    }
     const int num_layers = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "num_layers");
     for (int layer = 0; layer < num_layers; ++layer) {
-        if (!gpu_encoder.getLayer(layer)) {
+        if (!gpu_encoder->getLayer(layer)) {
             throw std::runtime_error("Encoder layer " + std::to_string(layer) + " not initialized - "
                                      "ensure Startup::assembleGpuModel(*model, weight_init_seed) completes all layers before training");
         }

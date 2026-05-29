@@ -107,9 +107,9 @@ float rmsOrThrow(double sum_sq, uint64_t count, const char* label) {
 
 float encoderTelemetryRms(const GRIM::GradNorm::GradMetrics& gm) {
 	const double sum_sq = gm.attention_sum_sq + gm.ffn_sum_sq + gm.rmsnorm_sum_sq +
-		gm.scratchblock_sum_sq + gm.reasoning_head_sum_sq + gm.execution_block_sum_sq;
+		gm.scratchblock_sum_sq + gm.execution_block_sum_sq;
 	const uint64_t count = gm.attention_count + gm.ffn_count +
-		gm.rmsnorm_count + gm.scratchblock_count + gm.reasoning_head_count +
+		gm.rmsnorm_count + gm.scratchblock_count +
 		gm.execution_block_count;
 	if (count == 0) {
 		return std::numeric_limits<float>::quiet_NaN();
