@@ -1,11 +1,12 @@
 //======================================================//
-//  DecodeTimeNumPolicy — implementation
+//  DecodeTimeNumPolicy — decode-time selector ops
 //
 //  Constructs live candidate set L from ExecutionMemory,
 //  assembles fixed slot features, evaluates selector
 //  scores to produce Selected / Null / Ambiguous.
 //======================================================//
 
+#include "DecodeTimeResolveResult.hpp"
 #include "DecodeTimeNumPolicy.hpp"
 
 #ifdef __CUDACC__
@@ -17,6 +18,9 @@
 #include <algorithm>
 #include <cmath>
 
+#include "../Batching/BatchPayload.hpp"
+#include "../Batching/BatchDeviceBindings.hpp"
+#include "../Forward/ModelForwardExecutionRuntime.hpp"
 #include "../../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 
@@ -30,252 +34,350 @@ namespace GRIM {
     } \
 } while (0)
 
-// ─── Constructor ─────────────────────────────────────
+namespace {
 
-DecodeTimeNumPolicy::DecodeTimeNumPolicy(const HyperParameters::DecodeTimeSelectorConstructionHP& hp)
-    : hp_(hp)
-{
-    if (hp_.selection_margin < 0.0f) {
-        throw std::runtime_error("DecodeTimeNumPolicy: selection_margin must be non-negative, got " +
-                                 std::to_string(hp_.selection_margin));
-    }
-    if (hp_.num_slots <= 0) {
-        throw std::runtime_error("DecodeTimeNumPolicy: num_slots must be positive, got " +
-                                 std::to_string(hp_.num_slots));
-    }
-    if (hp_.d_slot_features != kSlotFeatureDim) {
-        throw std::runtime_error("DecodeTimeNumPolicy: hp.d_slot_features=" +
-                                 std::to_string(hp_.d_slot_features) +
-                                 " must match fixed policy feature layout width=" +
-                                 std::to_string(kSlotFeatureDim));
-    }
-    if (hp_.scratch_slots < 0 || hp_.scratch_slots >= hp_.num_slots) {
-        throw std::runtime_error("DecodeTimeNumPolicy: scratch_slots=" +
-                                 std::to_string(hp_.scratch_slots) +
-                                 " out of range [0, " + std::to_string(hp_.num_slots) + ")");
-    }
-
-    const int V = hp_.num_slots;
-
-    // Allocate host staging buffers
-    h_valid_mask_   = new float[V];
-    h_values_       = new float[V];
-    h_recent_write_ = new float[V];
-    h_usage_        = new float[V];
-    h_scores_       = new float[kPolicyMaxSlots + 1]; // NULL + max candidates
-
-    // Allocate device slot features buffer
-    POLICY_CUDA_CHECK(cudaMalloc(&candidates_.d_slot_features,
-                                  static_cast<size_t>(kPolicyMaxSlots) * kSlotFeatureDim * sizeof(float)));
-
-    candidates_.num_live_slots = 0;
-}
-
-// ─── Destructor ──────────────────────────────────────
-
-DecodeTimeNumPolicy::~DecodeTimeNumPolicy() {
-    delete[] h_valid_mask_;
-    delete[] h_values_;
-    delete[] h_recent_write_;
-    delete[] h_usage_;
-    delete[] h_scores_;
-
-    if (candidates_.d_slot_features) {
-        cudaFree(candidates_.d_slot_features);
-        candidates_.d_slot_features = nullptr;
-    }
-}
-
-// ─── Move semantics ─────────────────────────────────
-
-DecodeTimeNumPolicy::DecodeTimeNumPolicy(DecodeTimeNumPolicy&& other) noexcept
-    : hp_(other.hp_),
-      candidates_(other.candidates_),
-      h_valid_mask_(other.h_valid_mask_),
-      h_values_(other.h_values_),
-      h_recent_write_(other.h_recent_write_),
-      h_usage_(other.h_usage_),
-      h_scores_(other.h_scores_)
-{
-    other.h_valid_mask_ = nullptr;
-    other.h_values_ = nullptr;
-    other.h_recent_write_ = nullptr;
-    other.h_usage_ = nullptr;
-    other.h_scores_ = nullptr;
-    other.candidates_.d_slot_features = nullptr;
-}
-
-DecodeTimeNumPolicy& DecodeTimeNumPolicy::operator=(DecodeTimeNumPolicy&& other) noexcept {
-    if (this != &other) {
-        delete[] h_valid_mask_;
-        delete[] h_values_;
-        delete[] h_recent_write_;
-        delete[] h_usage_;
-        delete[] h_scores_;
-        if (candidates_.d_slot_features) cudaFree(candidates_.d_slot_features);
-
-        hp_ = other.hp_;
-        candidates_ = other.candidates_;
-        h_valid_mask_ = other.h_valid_mask_;
-        h_values_ = other.h_values_;
-        h_recent_write_ = other.h_recent_write_;
-        h_usage_ = other.h_usage_;
-        h_scores_ = other.h_scores_;
-
-        other.h_valid_mask_ = nullptr;
-        other.h_values_ = nullptr;
-        other.h_recent_write_ = nullptr;
-        other.h_usage_ = nullptr;
-        other.h_scores_ = nullptr;
-        other.candidates_.d_slot_features = nullptr;
-    }
-    return *this;
-}
-
-// ─── buildCandidateSet ──────────────────────────────
-
-void DecodeTimeNumPolicy::buildCandidateSet(
-    const float* d_valid_mask,
-    const float* d_values,
-    const float* d_recent_write,
-    const float* d_usage,
+__global__ void kernelBuildPolicyCandidateSet(
+    const float* __restrict__ d_valid_mask,
+    const float* __restrict__ d_values,
+    const float* __restrict__ d_recent_write,
+    const float* __restrict__ d_usage,
     int V,
     int scratch_slots,
-    cudaStream_t stream)
+    int32_t* __restrict__ d_live_slot_ids,
+    float* __restrict__ d_slot_features,
+    int* __restrict__ d_num_live_slots)
 {
-    if (!d_valid_mask) throw std::runtime_error("DecodeTimeNumPolicy::buildCandidateSet: d_valid_mask is NULL");
-    if (!d_values)     throw std::runtime_error("DecodeTimeNumPolicy::buildCandidateSet: d_values is NULL");
-    if (!d_recent_write) throw std::runtime_error("DecodeTimeNumPolicy::buildCandidateSet: d_recent_write is NULL");
-    if (!d_usage)      throw std::runtime_error("DecodeTimeNumPolicy::buildCandidateSet: d_usage is NULL");
-    if (!stream)       throw std::runtime_error("DecodeTimeNumPolicy::buildCandidateSet: stream is NULL");
-    if (V != hp_.num_slots) {
-        throw std::runtime_error("DecodeTimeNumPolicy::buildCandidateSet: V=" + std::to_string(V) +
-                                 " != hp.num_slots=" + std::to_string(hp_.num_slots));
-    }
+    if (blockIdx.x != 0 || threadIdx.x != 0) return;
 
-    // Synchronous D2H copy of slot metadata for candidate construction
-    // These are small vectors (V scalars each, V ≤ 16 typically)
-    POLICY_CUDA_CHECK(cudaMemcpyAsync(h_valid_mask_, d_valid_mask,
-                                       V * sizeof(float), cudaMemcpyDeviceToHost, stream));
-    POLICY_CUDA_CHECK(cudaMemcpyAsync(h_values_, d_values,
-                                       V * sizeof(float), cudaMemcpyDeviceToHost, stream));
-    POLICY_CUDA_CHECK(cudaMemcpyAsync(h_recent_write_, d_recent_write,
-                                       V * sizeof(float), cudaMemcpyDeviceToHost, stream));
-    POLICY_CUDA_CHECK(cudaMemcpyAsync(h_usage_, d_usage,
-                                       V * sizeof(float), cudaMemcpyDeviceToHost, stream));
-
-    // Must synchronize to read host data
-    POLICY_CUDA_CHECK(cudaStreamSynchronize(stream));
-
-    // Build L: live candidate set = valid value slots (indices [S, V))
     int count = 0;
     for (int s = scratch_slots; s < V; ++s) {
-        if (h_valid_mask_[s] > 0.5f) {
-            if (count >= kPolicyMaxSlots) {
-                throw std::runtime_error("DecodeTimeNumPolicy::buildCandidateSet: exceeded kPolicyMaxSlots=" +
-                                         std::to_string(kPolicyMaxSlots));
-            }
-            candidates_.live_slot_ids[count] = s;
-
-            // Assemble fixed feature vector for this slot
-            float* feat = candidates_.slot_features + count * kSlotFeatureDim;
-            feat[0] = static_cast<float>(s);            // slot_id
-            feat[1] = h_values_[s];                      // numeric_value
-            feat[2] = h_valid_mask_[s];                  // valid_bit (always ~1.0 here)
-            feat[3] = h_recent_write_[s];                // recent_write
-            feat[4] = h_usage_[s];                       // usage_scalar
-
+        if (d_valid_mask[s] > 0.5f) {
+            d_live_slot_ids[count] = static_cast<int32_t>(s);
+            float* feat = d_slot_features + count * kSlotFeatureDim;
+            feat[0] = static_cast<float>(s);
+            feat[1] = d_values[s];
+            feat[2] = d_valid_mask[s];
+            feat[3] = d_recent_write[s];
+            feat[4] = d_usage[s];
             ++count;
         }
     }
-    candidates_.num_live_slots = count;
-
-    // Upload features to device
-    if (count > 0) {
-        POLICY_CUDA_CHECK(cudaMemcpyAsync(
-            candidates_.d_slot_features,
-            candidates_.slot_features,
-            static_cast<size_t>(count) * kSlotFeatureDim * sizeof(float),
-            cudaMemcpyHostToDevice, stream));
-    }
+    *d_num_live_slots = count;
 }
 
-// ─── evaluateScores ─────────────────────────────────
-
-SlotSelectionResult DecodeTimeNumPolicy::evaluateScores(
-    const float* d_scores,
+__global__ void kernelEvaluatePolicyScores(
+    const float* __restrict__ d_scores,
+    const int32_t* __restrict__ d_live_slot_ids,
     int num_live_slots,
-    cudaStream_t stream)
+    float selection_margin,
+    int32_t* __restrict__ d_status,
+    int32_t* __restrict__ d_selected_slot,
+    float* __restrict__ d_confidence)
 {
-    if (!d_scores) throw std::runtime_error("DecodeTimeNumPolicy::evaluateScores: d_scores is NULL");
-    if (!stream)   throw std::runtime_error("DecodeTimeNumPolicy::evaluateScores: stream is NULL");
-    if (num_live_slots != candidates_.num_live_slots) {
-        throw std::runtime_error("DecodeTimeNumPolicy::evaluateScores: num_live_slots=" +
-                                 std::to_string(num_live_slots) +
-                                 " != candidates_.num_live_slots=" +
-                                 std::to_string(candidates_.num_live_slots));
-    }
+    if (blockIdx.x != 0 || threadIdx.x != 0) return;
 
-    const int total = 1 + num_live_slots; // NULL + candidates
+    d_selected_slot[0] = -1;
+    d_confidence[0] = 0.0f;
 
-    // D2H copy of score vector
-    POLICY_CUDA_CHECK(cudaMemcpyAsync(h_scores_, d_scores,
-                                       total * sizeof(float), cudaMemcpyDeviceToHost, stream));
-    POLICY_CUDA_CHECK(cudaStreamSynchronize(stream));
-
-    SlotSelectionResult result;
-    result.selected_slot = -1;
-    result.confidence = 0.0f;
-
-    // Case: no live slots → always Null
     if (num_live_slots == 0) {
-        result.status = SlotSelectionStatus::Null;
-        result.confidence = h_scores_[0]; // NULL score is the only score
-        return result;
+        d_status[0] = static_cast<int32_t>(SlotSelectionStatus::Null);
+        d_confidence[0] = d_scores[0];
+        return;
     }
 
-    // Find top-1 and top-2 across all options (NULL + candidates)
+    const int total = 1 + num_live_slots;
     int top1_idx = 0;
-    float top1_val = h_scores_[0];
+    float top1_val = d_scores[0];
     for (int i = 1; i < total; ++i) {
-        if (h_scores_[i] > top1_val) {
-            top1_val = h_scores_[i];
+        const float v = d_scores[i];
+        if (v > top1_val) {
+            top1_val = v;
             top1_idx = i;
         }
     }
 
-    float top2_val = -INFINITY;
+    float top2_val = -3.4028234663852886e38f;
     for (int i = 0; i < total; ++i) {
-        if (i != top1_idx && h_scores_[i] > top2_val) {
-            top2_val = h_scores_[i];
+        if (i == top1_idx) continue;
+        const float v = d_scores[i];
+        if (v > top2_val) {
+            top2_val = v;
         }
     }
 
-    float margin = top1_val - top2_val;
-    result.confidence = margin;
+    const float margin = top1_val - top2_val;
+    d_confidence[0] = margin;
 
-    // Check margin gate
-    if (margin < hp_.selection_margin) {
-        result.status = SlotSelectionStatus::Ambiguous;
-        return result;
+    if (margin < selection_margin) {
+        d_status[0] = static_cast<int32_t>(SlotSelectionStatus::Ambiguous);
+        return;
     }
 
-    // Margin sufficient — check if winner is NULL or a candidate
     if (top1_idx == 0) {
-        // NULL won
-        result.status = SlotSelectionStatus::Null;
-    } else {
-        // A candidate won — map back to real slot index
-        int candidate_idx = top1_idx - 1;
-        if (candidate_idx < 0 || candidate_idx >= num_live_slots) {
-            throw std::runtime_error("DecodeTimeNumPolicy::evaluateScores: candidate_idx=" +
-                                     std::to_string(candidate_idx) + " out of range");
+        d_status[0] = static_cast<int32_t>(SlotSelectionStatus::Null);
+        return;
+    }
+
+    const int candidate_idx = top1_idx - 1;
+    d_status[0] = static_cast<int32_t>(SlotSelectionStatus::Selected);
+    d_selected_slot[0] = d_live_slot_ids[candidate_idx];
+}
+
+__global__ void kernelResolvePolicyTargetIndex(
+    const int32_t* __restrict__ d_live_slot_ids,
+    int num_live_slots,
+    int32_t target_slot,
+    int32_t* __restrict__ d_target_index)
+{
+    if (blockIdx.x != 0 || threadIdx.x != 0) return;
+
+    int32_t target_index = -1;
+    for (int c = 0; c < num_live_slots; ++c) {
+        if (d_live_slot_ids[c] == target_slot) {
+            target_index = static_cast<int32_t>(1 + c);
+            break;
         }
+    }
+    d_target_index[0] = target_index;
+}
+
+} // namespace
+
+void validateDecodeTimeNumPolicyConfig(
+    const HyperParameters::DecodeTimeSelectorConstructionHP& hp)
+{
+    const int max_live_slots = hp.num_slots - hp.scratch_slots;
+    if (hp.selection_margin < 0.0f) {
+        throw std::runtime_error("validateDecodeTimeNumPolicyConfig: selection_margin must be non-negative, got " +
+                                 std::to_string(hp.selection_margin));
+    }
+    if (hp.num_slots <= 0) {
+        throw std::runtime_error("validateDecodeTimeNumPolicyConfig: num_slots must be positive, got " +
+                                 std::to_string(hp.num_slots));
+    }
+    if (hp.d_slot_features != kSlotFeatureDim) {
+        throw std::runtime_error("validateDecodeTimeNumPolicyConfig: hp.d_slot_features=" +
+                                 std::to_string(hp.d_slot_features) +
+                                 " must match fixed policy feature layout width=" +
+                                 std::to_string(kSlotFeatureDim));
+    }
+    if (hp.scratch_slots < 0 || hp.scratch_slots >= hp.num_slots) {
+        throw std::runtime_error("validateDecodeTimeNumPolicyConfig: scratch_slots=" +
+                                 std::to_string(hp.scratch_slots) +
+                                 " out of range [0, " + std::to_string(hp.num_slots) + ")");
+    }
+    if (max_live_slots <= 0) {
+        throw std::runtime_error("validateDecodeTimeNumPolicyConfig: value slot capacity must be positive, got " +
+                                 std::to_string(max_live_slots));
+    }
+}
+
+void buildDecodeTimeCandidateSet(
+    const HyperParameters::DecodeTimeSelectorConstructionHP& hp,
+    const float* d_valid_mask,
+    const float* d_values,
+    const float* d_recent_write,
+    const float* d_usage,
+    Forward::DecodeTimeSelectorRuntime& runtime,
+    int V,
+    int scratch_slots,
+    cudaStream_t stream)
+{
+    validateDecodeTimeNumPolicyConfig(hp);
+    const int max_live_slots = hp.num_slots - hp.scratch_slots;
+    if (!d_valid_mask) throw std::runtime_error("buildDecodeTimeCandidateSet: d_valid_mask is NULL");
+    if (!d_values)     throw std::runtime_error("buildDecodeTimeCandidateSet: d_values is NULL");
+    if (!d_recent_write) throw std::runtime_error("buildDecodeTimeCandidateSet: d_recent_write is NULL");
+    if (!d_usage)      throw std::runtime_error("buildDecodeTimeCandidateSet: d_usage is NULL");
+    if (!stream)       throw std::runtime_error("buildDecodeTimeCandidateSet: stream is NULL");
+    if (V != hp.num_slots) {
+        throw std::runtime_error("buildDecodeTimeCandidateSet: V=" + std::to_string(V) +
+                                 " != hp.num_slots=" + std::to_string(hp.num_slots));
+    }
+    if (scratch_slots != hp.scratch_slots) {
+        throw std::runtime_error("buildDecodeTimeCandidateSet: scratch_slots=" +
+                                 std::to_string(scratch_slots) +
+                                 " != hp.scratch_slots=" + std::to_string(hp.scratch_slots));
+    }
+    if (V - scratch_slots != max_live_slots) {
+        throw std::runtime_error("buildDecodeTimeCandidateSet: value slot capacity=" +
+                                 std::to_string(V - scratch_slots) +
+                                 " != hp value-slot capacity=" + std::to_string(max_live_slots));
+    }
+    runtime.ensureWorkspace(max_live_slots, kSlotFeatureDim, stream);
+    if (!runtime.d_slot_features()) throw std::runtime_error("buildDecodeTimeCandidateSet: runtime d_slot_features is NULL");
+    if (!runtime.d_live_slot_ids()) throw std::runtime_error("buildDecodeTimeCandidateSet: runtime d_live_slot_ids is NULL");
+    if (!runtime.d_num_live_slots()) throw std::runtime_error("buildDecodeTimeCandidateSet: runtime d_num_live_slots is NULL");
+
+    kernelBuildPolicyCandidateSet<<<1, 1, 0, stream>>>(
+        d_valid_mask,
+        d_values,
+        d_recent_write,
+        d_usage,
+        V,
+        scratch_slots,
+        runtime.d_live_slot_ids(),
+        runtime.d_slot_features(),
+        runtime.d_num_live_slots());
+    POLICY_CUDA_CHECK(cudaGetLastError());
+
+    POLICY_CUDA_CHECK(cudaMemcpyAsync(
+        &runtime.num_live_slots,
+        runtime.d_num_live_slots(),
+        sizeof(int),
+        cudaMemcpyDeviceToHost,
+        stream));
+    POLICY_CUDA_CHECK(cudaStreamSynchronize(stream));
+
+    if (runtime.num_live_slots < 0 || runtime.num_live_slots > max_live_slots) {
+        throw std::runtime_error("buildDecodeTimeCandidateSet: GPU candidate count=" +
+                                 std::to_string(runtime.num_live_slots) +
+                                 " out of range [0, " + std::to_string(max_live_slots) + "]");
+    }
+}
+
+void buildDecodeTimeCandidateSet(
+    const HyperParameters::DecodeTimeSelectorConstructionHP& hp,
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
+    const ExecutionMemory& exec_memory,
+    Forward::DecodeTimeSelectorRuntime& runtime,
+    int batch_row,
+    cudaStream_t stream)
+{
+    validateDecodeTimeNumPolicyConfig(hp);
+    payload.validate("buildDecodeTimeCandidateSet(payload)");
+    if (batch_row < 0 || batch_row >= payload.batch_size) {
+        throw std::runtime_error("buildDecodeTimeCandidateSet(payload): batch_row=" +
+                                 std::to_string(batch_row) + " out of range [0, " +
+                                 std::to_string(payload.batch_size) + ")");
+    }
+    if (payload.execution_active.empty()) {
+        throw std::runtime_error("buildDecodeTimeCandidateSet(payload): payload.execution_active is empty");
+    }
+    if (!payload.execution_active[static_cast<size_t>(batch_row)]) {
+        throw std::runtime_error("buildDecodeTimeCandidateSet(payload): row " +
+                                 std::to_string(batch_row) + " is not execution-active");
+    }
+    if (!bindings.d_numeric_values) {
+        throw std::runtime_error("buildDecodeTimeCandidateSet(payload): bindings.d_numeric_values is NULL");
+    }
+    if (!bindings.d_token_to_slot_map) {
+        throw std::runtime_error("buildDecodeTimeCandidateSet(payload): bindings.d_token_to_slot_map is NULL");
+    }
+
+    buildDecodeTimeCandidateSet(
+        hp,
+        exec_memory.valid_mask.data,
+        exec_memory.values.data,
+        exec_memory.recent_write_mask.data,
+        exec_memory.usage.data,
+        runtime,
+        hp.num_slots,
+        hp.scratch_slots,
+        stream);
+}
+
+GRIM::SlotSelectionResult evaluateDecodeTimeSelectionScores(
+    const HyperParameters::DecodeTimeSelectorConstructionHP& hp,
+    const float* d_scores,
+    Forward::DecodeTimeSelectorRuntime& runtime,
+    int num_live_slots,
+    cudaStream_t stream)
+{
+    validateDecodeTimeNumPolicyConfig(hp);
+    if (!d_scores) throw std::runtime_error("evaluateDecodeTimeSelectionScores: d_scores is NULL");
+    if (!stream)   throw std::runtime_error("evaluateDecodeTimeSelectionScores: stream is NULL");
+    if (num_live_slots != runtime.num_live_slots) {
+        throw std::runtime_error("evaluateDecodeTimeSelectionScores: num_live_slots=" +
+                                 std::to_string(num_live_slots) +
+                                 " != runtime.num_live_slots=" +
+                                 std::to_string(runtime.num_live_slots));
+    }
+    if (!runtime.d_live_slot_ids()) throw std::runtime_error("evaluateDecodeTimeSelectionScores: runtime d_live_slot_ids is NULL");
+    if (!runtime.d_selection_status()) throw std::runtime_error("evaluateDecodeTimeSelectionScores: runtime d_selection_status is NULL");
+    if (!runtime.d_selection_slot()) throw std::runtime_error("evaluateDecodeTimeSelectionScores: runtime d_selection_slot is NULL");
+    if (!runtime.d_selection_confidence()) throw std::runtime_error("evaluateDecodeTimeSelectionScores: runtime d_selection_confidence is NULL");
+
+    GRIM::SlotSelectionResult result;
+    result.selected_slot = -1;
+    result.confidence = 0.0f;
+
+    kernelEvaluatePolicyScores<<<1, 1, 0, stream>>>(
+        d_scores,
+        runtime.d_live_slot_ids(),
+        num_live_slots,
+        hp.selection_margin,
+        runtime.d_selection_status(),
+        runtime.d_selection_slot(),
+        runtime.d_selection_confidence());
+    POLICY_CUDA_CHECK(cudaGetLastError());
+
+    int32_t status = -1;
+    POLICY_CUDA_CHECK(cudaMemcpyAsync(&status, runtime.d_selection_status(), sizeof(int32_t), cudaMemcpyDeviceToHost, stream));
+    POLICY_CUDA_CHECK(cudaMemcpyAsync(&result.selected_slot, runtime.d_selection_slot(), sizeof(int32_t), cudaMemcpyDeviceToHost, stream));
+    POLICY_CUDA_CHECK(cudaMemcpyAsync(&result.confidence, runtime.d_selection_confidence(), sizeof(float), cudaMemcpyDeviceToHost, stream));
+    POLICY_CUDA_CHECK(cudaStreamSynchronize(stream));
+
+    if (status == static_cast<int32_t>(SlotSelectionStatus::Selected)) {
         result.status = SlotSelectionStatus::Selected;
-        result.selected_slot = candidates_.live_slot_ids[candidate_idx];
+    } else if (status == static_cast<int32_t>(SlotSelectionStatus::Null)) {
+        result.status = SlotSelectionStatus::Null;
+    } else if (status == static_cast<int32_t>(SlotSelectionStatus::Ambiguous)) {
+        result.status = SlotSelectionStatus::Ambiguous;
+    } else {
+        throw std::runtime_error("evaluateDecodeTimeSelectionScores: GPU status=" +
+                                 std::to_string(status) + " is not a legal SlotSelectionStatus");
+    }
+    if (result.status == SlotSelectionStatus::Selected
+        && (result.selected_slot < hp.scratch_slots || result.selected_slot >= hp.num_slots)) {
+        throw std::runtime_error("evaluateDecodeTimeSelectionScores: selected_slot=" +
+                                 std::to_string(result.selected_slot) + " out of value-slot range [" +
+                                 std::to_string(hp.scratch_slots) + ", " +
+                                 std::to_string(hp.num_slots) + ")");
     }
 
     return result;
+}
+
+int resolveDecodeTimeTargetIndexForSlot(
+    const HyperParameters::DecodeTimeSelectorConstructionHP& hp,
+    int32_t target_slot,
+    Forward::DecodeTimeSelectorRuntime& runtime,
+    cudaStream_t stream)
+{
+    validateDecodeTimeNumPolicyConfig(hp);
+    const int max_live_slots = hp.num_slots - hp.scratch_slots;
+    if (!stream) throw std::runtime_error("resolveDecodeTimeTargetIndexForSlot: stream is NULL");
+    if (!runtime.d_live_slot_ids()) {
+        throw std::runtime_error("resolveDecodeTimeTargetIndexForSlot: runtime d_live_slot_ids is NULL");
+    }
+    if (!runtime.d_target_index()) {
+        throw std::runtime_error("resolveDecodeTimeTargetIndexForSlot: runtime d_target_index is NULL");
+    }
+    if (runtime.num_live_slots < 0 || runtime.num_live_slots > max_live_slots) {
+        throw std::runtime_error("resolveDecodeTimeTargetIndexForSlot: num_live_slots=" +
+                                 std::to_string(runtime.num_live_slots) +
+                                 " out of range [0, " + std::to_string(max_live_slots) + "]");
+    }
+    if (target_slot < hp.scratch_slots || target_slot >= hp.num_slots) {
+        throw std::runtime_error("resolveDecodeTimeTargetIndexForSlot: target_slot=" +
+                                 std::to_string(target_slot) + " out of value-slot range [" +
+                                 std::to_string(hp.scratch_slots) + ", " +
+                                 std::to_string(hp.num_slots) + ")");
+    }
+
+    kernelResolvePolicyTargetIndex<<<1, 1, 0, stream>>>(
+        runtime.d_live_slot_ids(),
+        runtime.num_live_slots,
+        target_slot,
+        runtime.d_target_index());
+    POLICY_CUDA_CHECK(cudaGetLastError());
+
+    int32_t target_index = -1;
+    POLICY_CUDA_CHECK(cudaMemcpyAsync(&target_index, runtime.d_target_index(), sizeof(int32_t), cudaMemcpyDeviceToHost, stream));
+    POLICY_CUDA_CHECK(cudaStreamSynchronize(stream));
+    return static_cast<int>(target_index);
 }
 
 //══════════════════════════════════════════════════════════════════════════════
@@ -283,8 +385,9 @@ SlotSelectionResult DecodeTimeNumPolicy::evaluateScores(
 //══════════════════════════════════════════════════════════════════════════════
 
 DecodeTimeResolveResult resolveDecodeTimeNumSlotSelectionOrMask(
-    DecodeTimeSlotSelectorLayer* selector,
-    DecodeTimeNumPolicy* policy,
+    const DecodeTimeSlotSelector* selector,
+    const HyperParameters::DecodeTimeSelectorConstructionHP& selector_hp,
+    Forward::DecodeTimeSelectorRuntime& runtime,
     bool selector_enabled,
     bool exec_block_active,
     bool has_exec_memory,
@@ -294,42 +397,46 @@ DecodeTimeResolveResult resolveDecodeTimeNumSlotSelectionOrMask(
     cublasHandle_t cublas_handle)
 {
     DecodeTimeResolveResult out;
+    validateDecodeTimeNumPolicyConfig(selector_hp);
 
-    if (!selector_enabled || !selector || !policy
+    if (!selector_enabled || !selector
         || !exec_block_active || !has_exec_memory) {
         return out;  // valid=false → caller knows selector didn't run
     }
 
-    policy->buildCandidateSet(
+    buildDecodeTimeCandidateSet(
+        selector_hp,
         exec_memory.valid_mask.data,
         exec_memory.values.data,
         exec_memory.recent_write_mask.data,
         exec_memory.usage.data,
-        policy->hp().num_slots,
-        policy->hp().scratch_slots,
+        runtime,
+        selector_hp.num_slots,
+        selector_hp.scratch_slots,
         stream);
 
-    const auto& cands = policy->candidates();
-    if (cands.num_live_slots > 0) {
+    if (runtime.num_live_slots > 0) {
         // Create non-owning Tensor views for inference forward
         Tensor h_t_view = Tensor::from_ptr(
             const_cast<float*>(d_hidden_state),
-            TensorContract::TensorShape::make_BSM(1, selector->hp().d_model),
+            TensorContract::TensorShape::make_BSM(1, selector_hp.d_model),
             /*takes_ownership=*/false, /*requires_grad=*/false,
             "policy_h_t_view");
         Tensor slot_feat_view;
-        if (cands.d_slot_features && cands.num_live_slots > 0) {
+        if (runtime.d_slot_features() && runtime.num_live_slots > 0) {
             slot_feat_view = Tensor::from_ptr(
-                const_cast<float*>(cands.d_slot_features),
-                TensorContract::TensorShape::make_BSM(cands.num_live_slots, selector->hp().d_slot_features),
+                const_cast<float*>(runtime.d_slot_features()),
+                TensorContract::TensorShape::make_BSM(runtime.num_live_slots, selector_hp.d_slot_features),
                 /*takes_ownership=*/false, /*requires_grad=*/false,
                 "policy_slot_feat_view");
         }
-        SelectorForwardResult fwd = selector->forward(
+        Forward::SelectorForwardResult fwd = forwardDecodeTimeSlotSelector(
+            *selector,
+            selector_hp,
             h_t_view, slot_feat_view,
-            cands.num_live_slots, stream, cublas_handle);
-        SlotSelectionResult result = policy->evaluateScores(
-            fwd.scores.data, fwd.num_live_slots, stream);
+            runtime.num_live_slots, stream, cublas_handle);
+        GRIM::SlotSelectionResult result = evaluateDecodeTimeSelectionScores(
+            selector_hp, fwd.scores.data, runtime, fwd.num_live_slots, stream);
         out.status = result.status;
         out.selected_slot = result.selected_slot;
         if (result.status == SlotSelectionStatus::Selected

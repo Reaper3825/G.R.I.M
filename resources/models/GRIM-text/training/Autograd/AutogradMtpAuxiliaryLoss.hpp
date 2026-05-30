@@ -10,7 +10,6 @@
 
 namespace GRIM {
 
-class LanguageModel;
 struct Tensor;
 
 namespace Batching {
@@ -20,6 +19,7 @@ struct BatchPayload;
 
 namespace HyperParameters {
 struct LossConfigHP;
+struct MTPFeatureHP;
 }
 
 namespace MTP {
@@ -41,7 +41,7 @@ namespace Autograd {
  * - It MUST NOT create logits or re-run forward math.
  */
 float computeAutogradMtpAuxiliaryLosses(
-    LanguageModel& model,
+    const HyperParameters::MTPFeatureHP& mtp_hp,
     Tensor& loss_tensor,
     std::vector<Tensor>& mtp_logits_tensors,
     MTP::MTPDiagnostics& diagnostics,

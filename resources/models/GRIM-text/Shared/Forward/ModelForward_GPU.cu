@@ -209,6 +209,7 @@ void materializeForwardMtpLogits(
 void ModelForwardRequest::validate(const char* caller) const {
     if (!config) throw std::runtime_error(std::string(caller) + ": config is NULL");
     if (!gpu_encoder) throw std::runtime_error(std::string(caller) + ": gpu_encoder is NULL");
+    if (!this->pbm) throw std::runtime_error(std::string(caller) + ": pbm is NULL");
     if (!embedding_layer) throw std::runtime_error(std::string(caller) + ": embedding_layer is NULL");
     if (!lm_head) throw std::runtime_error(std::string(caller) + ": lm_head is NULL");
     if (!cublas_handle) throw std::runtime_error(std::string(caller) + ": cublas_handle is NULL");
@@ -255,7 +256,6 @@ void executeModelForward(const ModelForwardRequest& request,
     const auto execution_hp = HyperParameters::executionBlockConstructionHP(*cfg);
     const bool center_encoder_residuals = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "center_encoder_residuals");
     const bool lm_head_center_hidden_states = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "lm_head_center_hidden_states");
-    const int vocab_size = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "vocab_size");
     const int d_model = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "d_model");
     const auto positional_encoding = HyperParameters::snapshotTrainingConfigField<HyperParameters::PositionalEncodingType>(*cfg, "positional_encoding");
     const bool scratch_block_execution_first_type_only = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "scratch_block_execution_first_type_only");
@@ -320,7 +320,7 @@ void executeModelForward(const ModelForwardRequest& request,
 
     if (!emb_weights->shape.is_valid()) {
         throw std::runtime_error("ModelForward: embedding token_weights.shape is INVALID - EmbeddingLayer MUST initialize with correct shape [vocab_size="
-                                + std::to_string(vocab_size) + ", d_model=" + std::to_string(d_model) + "]");
+                                + std::to_string(payload.vocab_size) + ", d_model=" + std::to_string(d_model) + "]");
     }
 
     const float embedding_scale = 1.0f;
@@ -528,7 +528,7 @@ void executeModelForward(const ModelForwardRequest& request,
                 enc_param_view_ptr = &enc_param_views;
             }
             enc_layer->forward(
-                layer_input, payload, request.stream, request.cublas_handle,
+                layer_input, payload, *request.pbm, request.stream, request.cublas_handle,
                 forward_outputs,
                 request.batch_idx, false, layer_idx, enc_param_view_ptr);
             Tensor layer_output_view = viewCommittedTensor(
@@ -632,7 +632,7 @@ void executeModelForward(const ModelForwardRequest& request,
             }
 
             enc_layer->forward(
-                *layer_input, payload, request.stream, request.cublas_handle,
+                *layer_input, payload, *request.pbm, request.stream, request.cublas_handle,
                 forward_outputs,
                 request.batch_idx, dropout_enabled, layer_idx, nullptr);
             Tensor layer_output = viewCommittedTensor(
@@ -769,27 +769,25 @@ void executeModelForward(const ModelForwardRequest& request,
 
     if constexpr (GRIM::VerboseLogging::ENABLE_EXPENSIVE_DIAGNOSTICS) {
         constexpr int kSamplePositions = 1024;
-        const int vocab_size_local = vocab_size;
-
         const int sample_size = std::min(kSamplePositions, total_tokens);
         std::vector<float> h_encoder(sample_size * d_model);
-        std::vector<float> h_logits(sample_size * vocab_size_local);
+        std::vector<float> h_logits(sample_size * payload.vocab_size);
 
         cudaMemcpyAsync(h_encoder.data(), live_lm_head_input->data,
                         sample_size * d_model * sizeof(float),
                         cudaMemcpyDeviceToHost, request.stream);
         cudaMemcpyAsync(h_logits.data(), forward_outputs.logits_tensor.data,
-                        sample_size * vocab_size_local * sizeof(float),
+                        sample_size * payload.vocab_size * sizeof(float),
                         cudaMemcpyDeviceToHost, request.stream);
         cudaStreamSynchronize(request.stream);
 
         for (int pos = 0; pos < sample_size; ++pos) {
             const float* h = h_encoder.data() + pos * d_model;
-            const float* logits_row = h_logits.data() + pos * vocab_size_local;
+            const float* logits_row = h_logits.data() + pos * payload.vocab_size;
 
             int argmax_token = 0;
             float max_logit_val = logits_row[0];
-            for (int v = 1; v < vocab_size_local; ++v) {
+            for (int v = 1; v < payload.vocab_size; ++v) {
                 if (logits_row[v] > max_logit_val) {
                     max_logit_val = logits_row[v];
                     argmax_token = v;
@@ -860,10 +858,10 @@ void executeModelForward(const ModelForwardRequest& request,
     }
 
     if (emit_mtp_logits) {
-        MFWD_INFO("Forward complete: logits shape=[" << total_tokens << ", " << vocab_size
+        MFWD_INFO("Forward complete: logits shape=[" << total_tokens << ", " << payload.vocab_size
                   << "] mtp_heads=" << forward_outputs.mtp_logits_tensors.size());
     } else {
-        MFWD_INFO("Forward complete: logits shape=[" << total_tokens << ", " << vocab_size << "]");
+        MFWD_INFO("Forward complete: logits shape=[" << total_tokens << ", " << payload.vocab_size << "]");
     }
 }
 

@@ -3,6 +3,8 @@
 //  Differentiable Register Machine — GPU
 //
 //  Declares: ExecutionMemory, ExecutionBlockLayer.
+//  Durable trainable parameter ownership lives in
+//  training/Phases/Startup/Model/ParameterRegistry.hpp.
 //  Forward-owned execution output payload types live in
 //  Shared/Forward/ModelForwardOutputs.hpp.
 //
@@ -24,63 +26,7 @@
 
 namespace GRIM {
 
-// Durable ExecutionBlockLayer parameter ownership.
-// These tensors are persistent layer state, not Category 1 forward outputs.
-struct ExecutionBlockParameterTensors {
-    // Value decode MLP (atom embedding dims 16-39 -> scalar)
-    Tensor w_decode_1;     // [24, 16]
-    Tensor b_decode_1;     // [16]
-    Tensor w_decode_2;     // [16, 1]
-
-    // Arg selection: decision_input [1,3*dm] @ [3*dm,dm] → query [1,dm] → @ cand^T → [1,V_val]
-    Tensor w_arg1_select;  // [3 * d_model, d_model]
-    Tensor w_arg2_select;  // [3 * d_model, d_model]
-
-    // Op selection: decision_input [1,3*dm] → [1,nop] (detached from arg selection)
-    Tensor W_op_select;    // [3 * d_model, num_ops]
-
-    // Key generation from result embedding
-    Tensor W_key_proj;     // [d_model, d_key]
-
-    // Write-head: write_ctx [1,4*dm] = (ctx,result_emb,trace_state,step_emb) → d_key query
-    Tensor W_write_query;  // [4 * d_model, d_key]
-    Tensor W_write_key;    // [d_key, d_key]
-    Tensor alpha;          // [1] learned content score scalar (init 1.0)
-    Tensor beta;           // [1] learned usage penalty scalar (init 1.0)
-
-    // Step encoding
-    Tensor step_embeddings; // [K, d_model]
-
-    // Type embedding
-    Tensor type_num_embed;  // [d_type]
-
-    // Linear value embedding (replaces sinusoidal re_embed)
-    Tensor W_value_to_emb; // [1, d_model]
-    Tensor b_value_to_emb; // [1, d_model]
-
-    // Injection gate
-    Tensor w_inject_gate;  // [d_model, 1]
-
-    // Cross-attention read (gated + sharpened)
-    Tensor W_Q_read;       // [d_model, head_dim]
-    Tensor W_K_read;       // [d_key, head_dim]
-    Tensor W_V_read;       // [d_model, head_dim]
-    Tensor W_O_read;       // [head_dim, d_model]
-    Tensor W_gate_read;    // [d_model, 1] per-token read gate
-    Tensor tau;            // [1] learnable temperature (init 1.0)
-
-    // Trace encoding weights
-    Tensor E_slot;          // [num_slots, d_model] slot embedding for record encoding
-    Tensor E_op;            // [num_ops, d_model]   op embedding for record encoding
-    Tensor W_scal;          // [3, d_model]         scalar projection for (v1, v2, v_out)
-    Tensor b_scal;          // [1, d_model]         scalar projection bias
-    Tensor W_trace;         // [K * d_model, d_model] flattened history → d_model
-    Tensor b_trace;         // [1, d_model]         trace projection bias
-
-    // Reasoning state update: candidate + gate
-    Tensor W_reason_gate;   // [2 * d_model, d_model] concat(trace_state, cur_enc) → candidate
-    Tensor W_trace_gate;    // [2 * d_model, d_model] concat(trace_state, cur_enc) → gate logits
-};
+struct ExecutionBlockParameterTensors;
 
 namespace Batching { struct BatchPayload; struct BatchDeviceBindings; }
 namespace Forward {
@@ -123,6 +69,7 @@ public:
     ExecutionBlockLayer() = delete;
 
     explicit ExecutionBlockLayer(const HyperParameters::ExecutionBlockConstructionHP& hp,
+                                ExecutionBlockParameterTensors& parameters,
                                 uint64_t seed,
                                 cudaStream_t init_stream);
 
@@ -229,71 +176,6 @@ public:
         const ExecutionMemory& M,
         int total_tokens) const;
 
-    //--------------------------------------------------//
-    // Parameter access (for registration + serialization)
-    //--------------------------------------------------//
-    Tensor& w_decode_1();
-    Tensor& b_decode_1();
-    Tensor& w_decode_2();
-    Tensor& w_arg1_select();
-    Tensor& w_arg2_select();
-    Tensor& W_op_select();
-    Tensor& W_key_proj();
-    Tensor& W_write_query();
-    Tensor& W_write_key();
-    Tensor& alpha();
-    Tensor& beta();
-    Tensor& step_embeddings();
-    Tensor& type_num_embed();
-    Tensor& W_value_to_emb();
-    Tensor& b_value_to_emb();
-    Tensor& w_inject_gate();
-    Tensor& W_Q_read();
-    Tensor& W_K_read();
-    Tensor& W_V_read();
-    Tensor& W_O_read();
-    Tensor& W_gate_read();
-    Tensor& tau();
-    Tensor& E_slot();
-    Tensor& E_op();
-    Tensor& W_scal();
-    Tensor& b_scal();
-    Tensor& W_trace();
-    Tensor& b_trace();
-    Tensor& W_reason_gate();
-    Tensor& W_trace_gate();
-
-    const Tensor& w_decode_1() const;
-    const Tensor& b_decode_1() const;
-    const Tensor& w_decode_2() const;
-    const Tensor& w_arg1_select() const;
-    const Tensor& w_arg2_select() const;
-    const Tensor& W_op_select() const;
-    const Tensor& W_key_proj() const;
-    const Tensor& W_write_query() const;
-    const Tensor& W_write_key() const;
-    const Tensor& alpha() const;
-    const Tensor& beta() const;
-    const Tensor& step_embeddings() const;
-    const Tensor& type_num_embed() const;
-    const Tensor& W_value_to_emb() const;
-    const Tensor& b_value_to_emb() const;
-    const Tensor& w_inject_gate() const;
-    const Tensor& W_Q_read() const;
-    const Tensor& W_K_read() const;
-    const Tensor& W_V_read() const;
-    const Tensor& W_O_read() const;
-    const Tensor& W_gate_read() const;
-    const Tensor& tau() const;
-    const Tensor& E_slot() const;
-    const Tensor& E_op() const;
-    const Tensor& W_scal() const;
-    const Tensor& b_scal() const;
-    const Tensor& W_trace() const;
-    const Tensor& b_trace() const;
-    const Tensor& W_reason_gate() const;
-    const Tensor& W_trace_gate() const;
-
     const HyperParameters::ExecutionBlockConstructionHP& hp() const { return hp_; }
     float* reinforceBaselineBuffer() { return d_reinforce_baseline_; }
 
@@ -310,9 +192,7 @@ private:
     int* d_exec_record_i_      = nullptr;  // [3] packed for ExecutionRecord ints
     float* d_exec_record_f_    = nullptr;  // [3] value_before_1, value_before_2, value_after
     float* d_reinforce_baseline_ = nullptr; // [1] EMA of transition_err for REINFORCE variance reduction
-    ExecutionBlockParameterTensors& parametersOrThrow();
-    const ExecutionBlockParameterTensors& parametersOrThrow() const;
-    std::unique_ptr<ExecutionBlockParameterTensors> parameters_;
+    ExecutionBlockParameterTensors* parameters_ = nullptr;
 };
 
 }  // namespace GRIM

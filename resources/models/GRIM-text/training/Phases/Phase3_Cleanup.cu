@@ -20,6 +20,7 @@
 #include "Phase2_TrainingLoop.hpp"
 #include "../OptimizerCheckpoint.hpp"
 
+#include "../../Common/grim_model_serialization.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
@@ -152,7 +153,7 @@ std::string saveFinalModel(TrainingContext& ctx, const std::string& suffix) {
 #endif
     
     try {
-        bool save_result = ctx.model->save(final_path);
+        bool save_result = GRIM::saveLanguageModelCheckpoint(*ctx.model, ctx.gpu_model, ctx.parameter_registry, final_path);
         if (save_result) {
             EmitModuleInfo(ModuleId::Checkpoint, 
                 "✓ Final model saved: " + final_path, ctx.global_step);
@@ -254,7 +255,7 @@ bool saveBestCheckpoint(
     std::string checkpoint_path = paths_hp.checkpoint_dir +
                                   "/checkpoint_epoch_" + std::to_string(epoch + 1) + ".bin";
     try {
-        bool save_result = ctx.model->save(checkpoint_path);
+        bool save_result = GRIM::saveLanguageModelCheckpoint(*ctx.model, ctx.gpu_model, ctx.parameter_registry, checkpoint_path);
         if (save_result) {
             ctx.logging.logger->log("  ✓ Checkpoint saved: " + checkpoint_path);
             if (fs::exists(checkpoint_path)) {

@@ -885,37 +885,6 @@ inline StabilityOverrideHP stabilityOverrideHP(
     return view;
 }
 
-inline GpuModelInitializationHP gpuModelInitializationHP(
-    const LanguageModelConfig& cfg)
-{
-    GpuModelInitializationHP view;
-    view.use_gpu = cfg.use_gpu;
-    view.num_layers = cfg.num_layers;
-    view.use_flash_attention = cfg.use_flash_attention;
-    view.min_seq_len_for_flash = cfg.min_seq_len_for_flash;
-    return view;
-}
-
-inline PBMConstructionHP pbmConstructionHP(
-    const LanguageModelConfig& cfg)
-{
-    PBMConstructionHP view;
-    view.num_heads = cfg.num_heads;
-    view.num_kv_heads = cfg.num_kv_heads;
-    view.head_dim = cfg.head_dim;
-    view.rotary_dim = cfg.rotary_dim;
-    view.max_seq_len = cfg.max_seq_len;
-    view.rope_base_seq_len = cfg.rope_base_seq_len;
-    view.alibi_min_locality_distance = cfg.alibi_min_locality_distance;
-    view.alibi_slope_exponent = cfg.alibi_slope_exponent;
-    view.alibi_max_bias = cfg.alibi_max_bias;
-    view.rope_theta = cfg.rope_theta;
-    view.rope_scaling = cfg.rope_scaling;
-    view.alibi_slopes = immutableArrayView(cfg.pbm_alibi_slopes);
-    view.rope_inv_freq = immutableArrayView(cfg.pbm_rope_inv_freq);
-    return view;
-}
-
 inline PBMConstructionHP pbmConstructionHP(
     const GRIM::Config::AiConfigSnapshot& snapshot)
 {
@@ -939,37 +908,6 @@ inline PBMConstructionHP pbmConstructionHP(
     rope_storage = rope_inv_freq;
     view.alibi_slopes = immutableArrayView(alibi_storage);
     view.rope_inv_freq = immutableArrayView(rope_storage);
-    return view;
-}
-
-inline EncoderLayerConstructionHP encoderLayerConstructionHP(
-    const LanguageModelConfig& cfg)
-{
-    EncoderLayerConstructionHP view;
-    view.num_layers = cfg.num_layers;
-    view.d_model = cfg.d_model;
-    view.num_heads = cfg.num_heads;
-    view.num_kv_heads = cfg.num_kv_heads;
-    view.head_dim = cfg.head_dim;
-    view.rotary_dim = cfg.rotary_dim;
-    view.heads_per_kv_group = cfg.heads_per_kv_group;
-    view.kv_dim = cfg.kv_dim;
-    view.qkv_dim = cfg.qkv_dim;
-    view.d_ff = cfg.d_ff;
-    view.rms_epsilon = cfg.rms_epsilon;
-    view.causal_mask = cfg.causal_mask;
-    view.use_flash_attention = cfg.use_flash_attention;
-    view.min_seq_len_for_flash = cfg.min_seq_len_for_flash;
-    view.use_layer_scale = cfg.use_layer_scale;
-    view.layer_scale_init = cfg.layer_scale_init;
-    view.center_encoder_residuals = cfg.center_encoder_residuals;
-    view.use_bias = cfg.use_bias;
-    view.dropout_rate = cfg.dropout_rate;
-    view.attention_dropout = cfg.attention_dropout;
-    view.qk_norm_enabled = cfg.qk_norm_enabled;
-    view.residual_projection_init_gain = cfg.residual_projection_init_gain;
-    view.is_gqa = cfg.is_gqa;
-    view.freeze_learned_rms_gammas = cfg.freeze_learned_rms_gammas;
     return view;
 }
 
@@ -1017,134 +955,6 @@ inline FlashAttentionRuntimeHP flashAttentionRuntimeHP(
     view.causal = attention_hp.causal_mask;
     view.is_bf16 = true;
     view.requires_alibi = true;
-    return view;
-}
-
-inline EmbeddingLayerConstructionHP embeddingLayerConstructionHP(
-    const LanguageModelConfig& cfg)
-{
-    EmbeddingLayerConstructionHP view;
-    view.vocab_size = cfg.vocab_size;
-    view.d_model = cfg.d_model;
-    return view;
-}
-
-inline LMHeadLayerConstructionHP lmHeadLayerConstructionHP(
-    const LanguageModelConfig& cfg)
-{
-    LMHeadLayerConstructionHP view;
-    view.d_model = cfg.d_model;
-    view.vocab_size = cfg.vocab_size;
-    if (cfg.execution_mode == ModelExecutionMode::TRAINING) {
-        view.training_batch_size = cfg.batch_size;
-        view.training_rows_per_sequence = cfg.max_cached_seq_len;
-    }
-    view.use_bias = cfg.use_bias;
-    view.tie_embeddings = cfg.tie_embeddings;
-    view.center_hidden_states = cfg.lm_head_center_hidden_states;
-    view.project_out_pc1 = cfg.project_out_pc1;
-    view.pc1_power_iters = cfg.pc1_power_iters;
-    view.center_logits = cfg.center_logits;
-    view.freeze_learned_rms_gammas = cfg.freeze_learned_rms_gammas;
-    view.rms_epsilon = cfg.rms_epsilon;
-    return view;
-}
-
-inline ScratchBlockConstructionHP scratchBlockConstructionHP(
-    const LanguageModelConfig& cfg)
-{
-    ScratchBlockConstructionHP view;
-    view.enabled = cfg.use_scratch_block;
-    view.d_model = cfg.d_model;
-    view.max_atoms = cfg.scratch_block_max_atoms;
-    view.atom_embedding_dim = cfg.scratch_block_atom_embedding_dim;
-    view.atom_token_start = ATOM_TOKEN_START;
-    view.atom_token_end = ATOM_TOKEN_END;
-    view.atom_scale = cfg.scratch_block_atom_scale;
-    return view;
-}
-
-inline ExecutionBlockConstructionHP executionBlockConstructionHP(
-    const LanguageModelConfig& cfg)
-{
-    ExecutionBlockConstructionHP view;
-    view.enabled = cfg.execution_block_enabled;
-    view.layer = cfg.execution_block_layer;
-    view.d_model = cfg.d_model;
-    view.atom_embedding_dim = cfg.scratch_block_atom_embedding_dim;
-    view.num_ops = cfg.execution_block_num_ops;
-    view.num_slots = cfg.execution_block_num_slots;
-    view.num_scratch_slots = cfg.execution_block_num_scratch_slots;
-    view.num_exec_steps = cfg.execution_block_num_steps;
-    view.value_decode_input_dim = cfg.execution_block_value_decode_input_dim;
-    view.value_decode_hidden_dim = cfg.execution_block_value_decode_hidden_dim;
-    view.d_key = cfg.execution_block_d_key;
-    view.d_type = cfg.execution_block_d_type;
-    view.cross_attn_head_dim = cfg.execution_block_cross_attn_head_dim;
-    view.cross_attn_topk = cfg.execution_block_cross_attn_topk;
-    view.usage_decay = cfg.execution_block_usage_decay;
-    view.inject_gate_temp = cfg.execution_block_inject_gate_temp;
-    view.result_slot_mode = cfg.execution_block_result_slot_mode;
-    view.result_slot_index = cfg.execution_block_result_slot_index;
-    view.debug_mode = cfg.execution_block_debug_mode;
-    view.entropy_collapse_threshold = cfg.execution_block_entropy_collapse_threshold;
-    view.write_collapse_threshold = cfg.execution_block_write_collapse_threshold;
-    view.magnitude_limit = cfg.execution_block_magnitude_limit;
-    view.diversity_kappa = cfg.execution_block_diversity_kappa;
-    view.temp_start = cfg.execution_block_temp_start;
-    view.temp_end = cfg.execution_block_temp_end;
-    view.temp_schedule = cfg.execution_block_temp_schedule;
-    view.entropy_weight = cfg.execution_block_entropy_weight;
-    view.transition_hard_threshold = cfg.execution_block_transition_hard_threshold;
-    view.gate_warmup_steps = cfg.execution_block_gate_warmup_steps;
-    view.causal_w1_transition = cfg.execution_block_causal_w1_transition;
-    view.div_invalid_penalty_weight = cfg.div_invalid_penalty_weight;
-    view.div_magnitude_penalty_weight = cfg.div_magnitude_penalty_weight;
-    view.arg_reinforce_weight = cfg.arg_reinforce_weight;
-    view.arg_reinforce_baseline_decay = cfg.arg_reinforce_baseline_decay;
-    return view;
-}
-
-inline DecodeTimeSelectorConstructionHP decodeTimeSelectorConstructionHP(
-    const LanguageModelConfig& cfg)
-{
-    DecodeTimeSelectorConstructionHP view;
-    view.enabled = cfg.selector_enabled;
-    view.d_model = cfg.d_model;
-    view.d_selector = cfg.selector_d_selector;
-    view.d_slot_features = cfg.decode_time_slot_feature_dim;
-    view.num_slots = cfg.execution_block_num_slots;
-    view.scratch_slots = cfg.execution_block_num_scratch_slots;
-    view.selection_margin = cfg.selector_selection_margin;
-    view.supervision_weight = cfg.selector_supervision_weight;
-    return view;
-}
-
-inline MTPConstructionHP mtpConstructionHP(const LanguageModelConfig& cfg)
-{
-    MTPConstructionHP view;
-    view.enabled = cfg.mtp_enabled;
-    view.k = cfg.mtp_k;
-    view.vocab_size = cfg.vocab_size;
-    view.d_model = cfg.d_model;
-    view.alpha = cfg.mtp_alpha;
-    view.alpha_warmup_steps = cfg.mtp_alpha_warmup_steps;
-    return view;
-}
-
-inline MTPFeatureHP mtpFeatureHP(const LanguageModelConfig& cfg)
-{
-    MTPFeatureHP view;
-    view.enabled = cfg.mtp_enabled;
-    view.k = cfg.mtp_k;
-    return view;
-}
-
-inline MTPDiagnosticHP mtpDiagnosticHP(
-    const LanguageModelConfig& hp)
-{
-    MTPDiagnosticHP view;
-    view.log_ratio_monitor = hp.mtp_log_ratio_monitor;
     return view;
 }
 
@@ -1492,7 +1302,7 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     const float residual_projection_init_gain =
         1.0f / std::sqrt(2.0f * static_cast<float>(num_layers));
     const bool is_gqa = num_kv_heads < num_heads;
-    const int vocab_size = snapshotTokenizerTargetVocabSize(snapshot);
+    const int vocab_size = snapshotTrainingConfigField<int>(snapshot, "vocab_size");
 
     ModelHP view;
     view.training_batch_size = batch_size;

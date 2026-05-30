@@ -9,9 +9,10 @@
 #include "Shared/Forward/GeneratedSequence.hpp"
 #include "../../Shared/Forward/ModelForwardRuntimePayload.hpp"
 #include "../../Shared/Forward/ModelForward_GPU.hpp"
+#include "../../Shared/Execution/DecodeTimeNumPolicy.hpp"
+#include "../../Shared/Execution/DecodeTimeResolveResult.hpp"
 #include "../../Shared/Sampling/Sampling.hpp"
 #include "../../Shared/UnigramByte/AtomTable.hpp"
-#include "../../Shared/Execution/DecodeTimeNumPolicy.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
 #include <algorithm>
@@ -27,6 +28,7 @@ namespace {
 
 using GRIM::HyperParameters::GenerationHP;
 using GRIM::HyperParameters::GenerationStreamCallback;
+using GRIM::HyperParameters::MTPFeatureHP;
 using GRIM::HyperParameters::SamplingStrategy;
 
 struct InferenceForwardScope {
@@ -94,22 +96,23 @@ void validateInferenceForwardPayload(
 }
 
 std::vector<GRIM::Forward::MTPHeadForwardView> buildDetachedForwardMtpHeadViews(
-    GRIMText::Training::Startup::GpuModelState& gpu_model_state,
-    int mtp_k,
+    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const MTPFeatureHP& mtp_hp,
     cudaStream_t stream)
 {
     std::vector<GRIM::Forward::MTPHeadForwardView> views;
-    if (mtp_k <= 0) {
+    if (!mtp_hp.enabled || mtp_hp.k <= 0) {
         return views;
     }
 
-    views.reserve(static_cast<size_t>(mtp_k));
-    for (int k = 0; k < mtp_k; ++k) {
-        if (k < 0 || k >= static_cast<int>(gpu_model_state.mtp_heads.size())) {
+    views.reserve(static_cast<size_t>(mtp_hp.k));
+    auto& mtp_head_parameter_tensors = parameter_registry.mtpHeadParameterTensors();
+    for (int k = 0; k < mtp_hp.k; ++k) {
+        if (k < 0 || k >= static_cast<int>(mtp_head_parameter_tensors.size())) {
             throw std::runtime_error(
-                "Phase2 payload inference: gpu_model_state.mtp_heads is missing head " + std::to_string(k));
+                "Phase2 payload inference: parameter_registry is missing MTP head " + std::to_string(k));
         }
-        auto* head = &gpu_model_state.mtp_heads[static_cast<std::size_t>(k)];
+        auto* head = &mtp_head_parameter_tensors[static_cast<std::size_t>(k)];
         if (!head->weight.data || !head->bias.data) {
             throw std::runtime_error(
                 "Phase2 payload inference: MTP head " + std::to_string(k) +
@@ -128,6 +131,8 @@ std::vector<GRIM::Forward::MTPHeadForwardView> buildDetachedForwardMtpHeadViews(
 GRIM::GeneratedSequence generateOneSequence(
     GRIM::LanguageModel& model,
     GRIMText::Training::Startup::GpuModelState& gpu_model_state,
+    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const GRIM::PBM::PBMState& pbm,
     GRIM::Batching::BatchPayload& prompt_payload,
     const GenerationHP& cfg,
     GenerationStreamCallback* stream_callback)
@@ -244,6 +249,8 @@ GRIM::GeneratedSequence generateOneSequence(
     const auto scratch_hp = GRIM::HyperParameters::scratchBlockConstructionHP(config);
     const auto execution_hp = GRIM::HyperParameters::executionBlockConstructionHP(config);
     const auto selector_hp = GRIM::HyperParameters::decodeTimeSelectorConstructionHP(config);
+    const auto mtp_hp = GRIM::HyperParameters::mtpFeatureHP(config);
+    auto* decode_time_slot_selector = parameter_registry.getDecodeTimeSlotSelector();
     GRIM::ScratchBlockLayer* scratch_block_layer = model.getScratchBlockLayer();
     if (scratch_hp.enabled && !scratch_block_layer) {
         throw std::runtime_error("Phase2 payload inference: ScratchBlockConstructionHP.enabled=true but ScratchBlock layer is NULL");
@@ -253,8 +260,7 @@ GRIM::GeneratedSequence generateOneSequence(
     }
 
     const bool selector_active = selector_hp.enabled
-        && model.getDecodeTimeSlotSelectorLayer() != nullptr
-        && model.getDecodeTimeNumPolicy() != nullptr
+        && decode_time_slot_selector != nullptr
         && execution_hp.enabled
         && scratch_hp.enabled
         && scratch_block_layer != nullptr
@@ -309,6 +315,7 @@ GRIM::GeneratedSequence generateOneSequence(
         GRIM::Forward::ModelForwardRequest request{};
         request.config = &config;
         request.gpu_encoder = gpu_encoder;
+        request.pbm = &pbm;
         request.embedding_layer = model.getEmbeddingLayer();
         request.lm_head = model.getLmHeadLayer();
         request.scratch_block = scratch_hp.enabled ? scratch_block_layer : nullptr;
@@ -318,10 +325,9 @@ GRIM::GeneratedSequence generateOneSequence(
         request.payload = &active_payload;
         request.bindings = &bindings;
         request.batch_idx = 0;
-        const bool emit_mtp_logits = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "mtp_enabled")
-            && model.getMtpK() > 0;
+        const bool emit_mtp_logits = mtp_hp.enabled && mtp_hp.k > 0;
         if (emit_mtp_logits) {
-            request.mtp_heads = buildDetachedForwardMtpHeadViews(gpu_model_state, model.getMtpK(), stream);
+            request.mtp_heads = buildDetachedForwardMtpHeadViews(parameter_registry, mtp_hp, stream);
         }
         request.graph = GRIM::Forward::ModelForwardGraphPolicy{
             /*connect_parameter_graph=*/false,
@@ -331,17 +337,55 @@ GRIM::GeneratedSequence generateOneSequence(
 
         GRIM::Forward::executeModelForward(request, runtime_payload);
 
+        generation_state.decode_selector.reset();
+        if (selector_active) {
+            const GRIM::Tensor* live_lm_head_input = generation_state.forward_outputs.liveLmHeadInputOrNull();
+            if (!live_lm_head_input || !live_lm_head_input->data) {
+                throw std::runtime_error(
+                    "generateOneSequence: selector_active but live LM-head input tensor is NULL after shared forward");
+            }
+            const auto& live_shape = live_lm_head_input->shape.require(
+                "generateOneSequence selector live_lm_head_input").as_2d();
+            if (live_shape.rows < active_payload.total_tokens) {
+                throw std::runtime_error(
+                    "generateOneSequence: selector live_lm_head_input rows=" +
+                    std::to_string(live_shape.rows) + " < payload.total_tokens=" +
+                    std::to_string(active_payload.total_tokens));
+            }
+            if (live_shape.cols != selector_hp.d_model) {
+                throw std::runtime_error(
+                    "generateOneSequence: selector live_lm_head_input cols=" +
+                    std::to_string(live_shape.cols) + " != selector_hp.d_model=" +
+                    std::to_string(selector_hp.d_model));
+            }
+
+            const float* d_last_hidden_state = live_lm_head_input->data +
+                static_cast<size_t>(active_payload.total_tokens - 1) *
+                static_cast<size_t>(selector_hp.d_model);
+            generation_state.decode_selector = GRIM::resolveDecodeTimeNumSlotSelectionOrMask(
+                decode_time_slot_selector,
+                selector_hp,
+                generation_state.execution_runtime.decode_time_selector_runtime,
+                selector_hp.enabled,
+                execution_hp.enabled,
+                generation_state.has_exec_memory,
+                generation_state.exec_memory,
+                d_last_hidden_state,
+                stream,
+                training_state.cublas_handle.get());
+        }
+
         const auto& live_logits = generation_state.forward_outputs.logits_tensor;
         if (!live_logits.data) {
             throw std::runtime_error(
                 "generateOneSequence: GenerationState.forward_outputs.logits_tensor.data is NULL after shared forward");
         }
         if (emit_mtp_logits && generation_state.forward_outputs.mtp_logits_tensors.size()
-                != static_cast<size_t>(model.getMtpK())) {
+                != static_cast<size_t>(mtp_hp.k)) {
             throw std::runtime_error(
                 "generateOneSequence: GenerationState.forward_outputs.mtp_logits_tensors.size()=" +
                 std::to_string(generation_state.forward_outputs.mtp_logits_tensors.size()) +
-                " != model.getMtpK()=" + std::to_string(model.getMtpK()) +
+                " != mtp_hp.k=" + std::to_string(mtp_hp.k) +
                 " after shared forward");
         }
 
@@ -392,13 +436,12 @@ GRIM::GeneratedSequence generateOneSequence(
         if (selector_active) {
             if (!generation_state.decode_selector.valid) {
                 std::fprintf(stderr,
-                    "[Selector Debug] step=%d selector_enabled=%d selectorLayer=%d numPolicy=%d "
+                    "[Selector Debug] step=%d selector_enabled=%d selectorLayer=%d "
                     "exec_block_enabled=%d scratchLayer=%d scratchConfigured=%d has_exec_mem=%d "
                     "decode_selector_valid=%d\n",
                     step,
                     static_cast<int>(selector_hp.enabled),
-                    static_cast<int>(model.getDecodeTimeSlotSelectorLayer() != nullptr),
-                    static_cast<int>(model.getDecodeTimeNumPolicy() != nullptr),
+                    static_cast<int>(decode_time_slot_selector != nullptr),
                     static_cast<int>(execution_hp.enabled),
                     static_cast<int>(scratch_block_layer != nullptr),
                     static_cast<int>(scratch_hp.enabled),
@@ -410,8 +453,8 @@ GRIM::GeneratedSequence generateOneSequence(
             }
             const int int_tid = GRIM::Tokenizer::atomTypeToTokenId(GRIM::Tokenizer::AtomType::ATOM_INT);
             const int float_tid = GRIM::Tokenizer::atomTypeToTokenId(GRIM::Tokenizer::AtomType::ATOM_FLOAT);
-            if (generation_state.decode_selector.status
-                != static_cast<uint8_t>(GRIM::SlotSelectionStatus::Selected)) {
+            if (static_cast<int>(generation_state.decode_selector.status)
+                != static_cast<int>(GRIM::SlotSelectionStatus::Selected)) {
                 logits_vec[int_tid] = -1e30f;
                 logits_vec[float_tid] = -1e30f;
             }
@@ -435,11 +478,11 @@ GRIM::GeneratedSequence generateOneSequence(
             if (GRIM::Tokenizer::isNumericAtom(
                     GRIM::Tokenizer::tokenIdToAtomType(sample.token_id))) {
                 if (!selector_active || !generation_state.decode_selector.valid
-                    || generation_state.decode_selector.status
-                       != static_cast<uint8_t>(GRIM::SlotSelectionStatus::Selected)) {
+                          || static_cast<int>(generation_state.decode_selector.status)
+                              != static_cast<int>(GRIM::SlotSelectionStatus::Selected)) {
                     throw std::runtime_error(
                         "Phase2 payload inference: sampled numeric atom but selector did not resolve a slot "
-                        "(status=" + std::to_string(generation_state.decode_selector.status) + ")");
+                        "(status=" + std::to_string(static_cast<int>(generation_state.decode_selector.status)) + ")");
                 }
                 new_token_slot_id = generation_state.decode_selector.selected_slot;
                 token_numeric_value = generation_state.decode_selector.selected_value;
@@ -537,7 +580,8 @@ std::vector<GRIM::GeneratedSequence> generatePayloadSequences(
         if (sequence_hp.seed != 0) {
             sequence_hp.seed += static_cast<unsigned int>(i);
         }
-        outputs.push_back(generateOneSequence(*ctx.model, ctx.gpu_model, prompt_payload, sequence_hp, stream_callback));
+        outputs.push_back(generateOneSequence(*ctx.model, ctx.gpu_model, ctx.parameter_registry, ctx.pbm_owner.state(), prompt_payload, sequence_hp, stream_callback));
+
     }
     return outputs;
 }

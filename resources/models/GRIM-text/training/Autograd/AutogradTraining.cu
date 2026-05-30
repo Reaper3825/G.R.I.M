@@ -23,7 +23,6 @@
 #include "../../Shared/Execution/ExecutionPayloadValidation.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
-#include "../../Shared/Execution/DecodeTimeNumPolicy.hpp"
 
 #include <iostream>
 #include <cmath>
@@ -307,25 +306,34 @@ GradientSignalBaselines captureGradientVerificationBaselines(
     }
 
     if (ctx.execution_block && model_hp.execution_block_enabled) {
-        auto& eb = *ctx.execution_block;
+        if (!ctx.parameter_registry) {
+            throw std::runtime_error("captureGradientSignalBaselines: execution-block loss is active but ctx.parameter_registry is NULL");
+        }
+        auto* execution_block_parameters = ctx.parameter_registry->getExecutionBlockParameters();
+        if (!execution_block_parameters) {
+            throw std::runtime_error("captureGradientSignalBaselines: execution-block layer exists but registry-owned execution-block parameters are NULL");
+        }
         if (activity.exec_op_loss_active) {
-            captureExpected(eb.W_op_select(), "exec block W_op_select");
+            captureExpected(execution_block_parameters->W_op_select, "exec block W_op_select");
         }
         if (activity.exec_arg_loss_active) {
-            captureExpected(eb.w_arg1_select(), "exec block w_arg1_select");
-            captureExpected(eb.w_arg2_select(), "exec block w_arg2_select");
+            captureExpected(execution_block_parameters->w_arg1_select, "exec block w_arg1_select");
+            captureExpected(execution_block_parameters->w_arg2_select, "exec block w_arg2_select");
         }
         if (activity.exec_write_selection_ce_active) {
-            captureExpected(eb.W_write_query(), "exec block W_write_query");
+            captureExpected(execution_block_parameters->W_write_query, "exec block W_write_query");
         }
     }
 
-    if (ctx.model && model_hp.decode_time_selector_enabled && activity.selector_loss_active) {
-        auto* selector = ctx.model->getDecodeTimeSlotSelectorLayer();
+    if (model_hp.decode_time_selector_enabled && activity.selector_loss_active) {
+        if (!ctx.parameter_registry) {
+            throw std::runtime_error("captureGradientSignalBaselines: selector loss is active but ctx.parameter_registry is NULL");
+        }
+        auto* selector = ctx.parameter_registry->getDecodeTimeSlotSelector();
         if (selector) {
-            captureExpected(selector->W_q_select(), "selector W_q_select");
-            captureExpected(selector->W_k_select(), "selector W_k_select");
-            captureExpected(selector->null_logit_bias(), "selector null_logit_bias");
+            captureExpected(selector->W_q_select, "selector W_q_select");
+            captureExpected(selector->W_k_select, "selector W_k_select");
+            captureExpected(selector->null_logit_bias, "selector null_logit_bias");
         }
     }
 
@@ -367,6 +375,7 @@ LossResult computeAutogradLoss(
     auto* ts = ctx.training_state;
     const auto* cfg = ctx.config;
     const auto model_hp = GRIM::HyperParameters::modelHP(*cfg);
+    const auto mtp_hp = GRIM::HyperParameters::mtpFeatureHP(*cfg);
     
     // RULE 20: Fail loud - validate logits tensor was populated by forward pass
     auto& intermediates = ts->autograd_intermediates;
@@ -423,18 +432,9 @@ LossResult computeAutogradLoss(
     // ═══════════════════════════════════════════════════════════════════════════
     float mtp_loss = 0.0f;
     result.mtp_diagnostics.clear();
-    if (model_hp.mtp_enabled && model_hp.mtp_k > 0) {
-        if (!ctx.model) {
-            throw std::runtime_error("computeAutogradLoss: ctx.model is NULL while MTP is enabled — MTP heads are model-owned");
-        }
-        if (ctx.model->getMtpK() != model_hp.mtp_k) {
-            throw std::runtime_error("computeAutogradLoss: model.getMtpK()=" + std::to_string(ctx.model->getMtpK()) +
-                " != ctx.config->mtp_k=" + std::to_string(model_hp.mtp_k) +
-                " — AutogradContext config must be the model-owned config");
-        }
-
+    if (mtp_hp.enabled && mtp_hp.k > 0) {
         mtp_loss = computeAutogradMtpAuxiliaryLosses(
-            *ctx.model,
+            mtp_hp,
             intermediates.loss_tensor,
             intermediates.mtp_logits_tensors,
             result.mtp_diagnostics,
@@ -890,67 +890,77 @@ bool verifyGradientsAreConnectedImpl(
 
     // ExecutionBlock parameters
     if (ctx.execution_block && model_hp.execution_block_enabled) {
+        if (!ctx.parameter_registry) {
+            throw std::runtime_error("verifyGradientsAreConnectedImpl: execution_block_enabled but ctx.parameter_registry is NULL");
+        }
+        auto* execution_block_parameters = ctx.parameter_registry->getExecutionBlockParameters();
+        if (!execution_block_parameters) {
+            throw std::runtime_error("verifyGradientsAreConnectedImpl: execution_block_enabled but registry-owned execution-block parameters are NULL");
+        }
         auto checkEB = [&](Tensor& t, const char* name) {
             if (t.data) requireAllocatedFinite(t, "exec block " + std::string(name));
         };
-        auto& eb = *ctx.execution_block;
-        checkEB(eb.w_decode_1(), "w_decode_1");
-        checkEB(eb.b_decode_1(), "b_decode_1");
-        checkEB(eb.w_decode_2(), "w_decode_2");
-        checkEB(eb.w_arg1_select(), "w_arg1_select");
-        checkEB(eb.w_arg2_select(), "w_arg2_select");
-        checkEB(eb.W_op_select(), "W_op_select");
-        checkEB(eb.W_key_proj(), "W_key_proj");
-        checkEB(eb.W_write_query(), "W_write_query");
-        checkEB(eb.W_write_key(), "W_write_key");
-        checkEB(eb.alpha(), "alpha");
-        checkEB(eb.beta(), "beta");
-        checkEB(eb.step_embeddings(), "step_embeddings");
-        checkEB(eb.type_num_embed(), "type_num_embed");
-        checkEB(eb.W_value_to_emb(), "W_value_to_emb");
-        checkEB(eb.b_value_to_emb(), "b_value_to_emb");
-        checkEB(eb.w_inject_gate(), "w_inject_gate");
-        checkEB(eb.W_Q_read(), "W_Q_read");
-        checkEB(eb.W_K_read(), "W_K_read");
-        checkEB(eb.W_V_read(), "W_V_read");
-        checkEB(eb.W_O_read(), "W_O_read");
-        checkEB(eb.W_gate_read(), "W_gate_read");
-        checkEB(eb.tau(), "tau");
-        checkEB(eb.E_slot(), "E_slot");
-        checkEB(eb.E_op(), "E_op");
-        checkEB(eb.W_scal(), "W_scal");
-        checkEB(eb.b_scal(), "b_scal");
-        checkEB(eb.W_trace(), "W_trace");
-        checkEB(eb.b_trace(), "b_trace");
-        checkEB(eb.W_reason_gate(), "W_reason_gate");
-        checkEB(eb.W_trace_gate(), "W_trace_gate");
+        auto& eb = *execution_block_parameters;
+        checkEB(eb.w_decode_1, "w_decode_1");
+        checkEB(eb.b_decode_1, "b_decode_1");
+        checkEB(eb.w_decode_2, "w_decode_2");
+        checkEB(eb.w_arg1_select, "w_arg1_select");
+        checkEB(eb.w_arg2_select, "w_arg2_select");
+        checkEB(eb.W_op_select, "W_op_select");
+        checkEB(eb.W_key_proj, "W_key_proj");
+        checkEB(eb.W_write_query, "W_write_query");
+        checkEB(eb.W_write_key, "W_write_key");
+        checkEB(eb.alpha, "alpha");
+        checkEB(eb.beta, "beta");
+        checkEB(eb.step_embeddings, "step_embeddings");
+        checkEB(eb.type_num_embed, "type_num_embed");
+        checkEB(eb.W_value_to_emb, "W_value_to_emb");
+        checkEB(eb.b_value_to_emb, "b_value_to_emb");
+        checkEB(eb.w_inject_gate, "w_inject_gate");
+        checkEB(eb.W_Q_read, "W_Q_read");
+        checkEB(eb.W_K_read, "W_K_read");
+        checkEB(eb.W_V_read, "W_V_read");
+        checkEB(eb.W_O_read, "W_O_read");
+        checkEB(eb.W_gate_read, "W_gate_read");
+        checkEB(eb.tau, "tau");
+        checkEB(eb.E_slot, "E_slot");
+        checkEB(eb.E_op, "E_op");
+        checkEB(eb.W_scal, "W_scal");
+        checkEB(eb.b_scal, "b_scal");
+        checkEB(eb.W_trace, "W_trace");
+        checkEB(eb.b_trace, "b_trace");
+        checkEB(eb.W_reason_gate, "W_reason_gate");
+        checkEB(eb.W_trace_gate, "W_trace_gate");
         if (activity.exec_op_loss_active) {
-            requireReceivedGradient(eb.W_op_select(), "exec block W_op_select");
+            requireReceivedGradient(eb.W_op_select, "exec block W_op_select");
         }
         if (activity.exec_arg_loss_active) {
-            requireReceivedGradient(eb.w_arg1_select(), "exec block w_arg1_select");
-            requireReceivedGradient(eb.w_arg2_select(), "exec block w_arg2_select");
+            requireReceivedGradient(eb.w_arg1_select, "exec block w_arg1_select");
+            requireReceivedGradient(eb.w_arg2_select, "exec block w_arg2_select");
         }
         if (activity.exec_write_selection_ce_active) {
-            requireReceivedGradient(eb.W_write_query(), "exec block W_write_query");
+            requireReceivedGradient(eb.W_write_query, "exec block W_write_query");
         }
     }
 
     // DecodeTimeSlotSelector parameters
-    if (ctx.model && model_hp.decode_time_selector_enabled) {
-        auto* selector = ctx.model->getDecodeTimeSlotSelectorLayer();
+    if (model_hp.decode_time_selector_enabled) {
+        if (!ctx.parameter_registry) {
+            throw std::runtime_error("verifyGradientsAreConnectedImpl: decode_time_selector_enabled but ctx.parameter_registry is NULL");
+        }
+        auto* selector = ctx.parameter_registry->getDecodeTimeSlotSelector();
         if (selector) {
             auto checkSel = [&](Tensor& t, const char* name) {
                 if (t.data) requireAllocatedFinite(t, "selector " + std::string(name));
             };
-            checkSel(selector->W_q_select(), "W_q_select");
-            checkSel(selector->W_k_select(), "W_k_select");
-            checkSel(selector->null_key_select(), "null_key_select");
-            checkSel(selector->null_logit_bias(), "null_logit_bias");
+            checkSel(selector->W_q_select, "W_q_select");
+            checkSel(selector->W_k_select, "W_k_select");
+            checkSel(selector->null_key_select, "null_key_select");
+            checkSel(selector->null_logit_bias, "null_logit_bias");
             if (activity.selector_loss_active) {
-                requireReceivedGradient(selector->W_q_select(), "selector W_q_select");
-                requireReceivedGradient(selector->W_k_select(), "selector W_k_select");
-                requireReceivedGradient(selector->null_logit_bias(), "selector null_logit_bias");
+                requireReceivedGradient(selector->W_q_select, "selector W_q_select");
+                requireReceivedGradient(selector->W_k_select, "selector W_k_select");
+                requireReceivedGradient(selector->null_logit_bias, "selector null_logit_bias");
             }
         }
     }

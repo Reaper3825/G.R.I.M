@@ -45,7 +45,7 @@
 #include "../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
 #include "../Shared/Execution/DecodeTimeNumPolicy.hpp"
 #include "../Shared/GPUBuffer/GPUBuffer.hpp"
-#include "../Shared/PBM/PBMStateOwner.hpp"
+#include "../Shared/PBM/PositionalBiasMethod.hpp"
 #include "../Shared/TrainingState/TrainingState_GPU.hpp"
 #include "../Shared/InferenceState/GenerationState_GPU.hpp"
 #include "../training/Phases/Startup/Model/ModelGpuState.hpp"
@@ -53,15 +53,22 @@
 
 namespace GRIM {
 class LanguageModel;
+namespace PBM {
+class PBMStateOwner;
+}
 }
 
 namespace GRIMText {
 namespace Training {
 namespace Startup {
-void initializePBM(::GRIM::LanguageModel& model);
-void assembleGpuModel(::GRIM::LanguageModel& model, GpuModelState& gpu_model_state, std::uint64_t weight_init_seed);
-void initializeTrainingRuntime(::GRIM::LanguageModel& model);
-void initializeInferenceRuntime(::GRIM::LanguageModel& model, const GpuModelState& gpu_model_state);
+namespace ModelRegistration::ParameterRegistry {
+struct StartupParameterRegistry;
+}
+void initializeCuBLASHandle(::GRIM::TrainingState& training_state);
+void initializePBM(const ::GRIM::Config::AiConfigSnapshot& model_cfg, ::GRIM::TrainingState& training_state, ::GRIM::PBM::PBMStateOwner& pbm_owner);
+void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg, ::GRIM::TrainingState& training_state, const ::GRIM::PBM::PBMStateOwner& pbm_owner, GpuModelState& gpu_model_state, ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry, std::uint64_t weight_init_seed);
+void initializeTrainingRuntime(::GRIM::TrainingState& training_state, const ::GRIM::PBM::PBMStateOwner& pbm_owner);
+void initializeInferenceRuntime(const ::GRIM::Config::AiConfigSnapshot& model_cfg, ::GRIM::TrainingState& training_state, ::GRIM::GenerationState& generation_state, const ::GRIM::PBM::PBMStateOwner& pbm_owner, const GpuModelState& gpu_model_state, const ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry);
 } // namespace Startup
 } // namespace Training
 } // namespace GRIMText
@@ -91,27 +98,10 @@ class GPUGrimEncoder;
 //  AiConfigSnapshot, never a second config owner.
 //
 //  This header MUST NOT redeclare any of those fields. The encoder
-//  consumes grouped construction views derived from AiConfigSnapshot;
-//  the only thing genuinely owned here is the construction-binding struct below —
-//  borrowed startup resources that are created during startup GPU model assembly and have
+//  consumes grouped construction views derived from AiConfigSnapshot.
+//  Borrowed startup resources are passed explicitly by startup GPU model assembly and have
 //  no place in a config object or per-forward request.
 //======================================================//
-
-#ifdef USE_CUDA
-/// Startup device bindings for GPUGrimEncoder construction.
-///
-/// These are NOT hyperparameters. They are startup/model-assembly inputs.
-/// Forward-time stream/cuBLAS handles are carried by the forward payload/request
-/// (`AutogradContext` / `Forward::ModelForwardRequest`), never stored on layers.
-struct EncoderConstructionBindings {
-    /// Shared positional-bias state (ALiBi/RoPE), owned by the model PBM RAII owner.
-    /// REQUIRED: encoder construction throws if null.
-    const PBM::PBMState* pos_encoding = nullptr;
-
-    /// CUDA stream for startup self-allocation only.
-    cudaStream_t init_stream = nullptr;
-};
-#endif
 
 // OptimizerStep (AdamW/RAdamW step counter) lives in
 // Shared/Optimizers/OptimizerStep.hpp — it is step bookkeeping, not model state.
@@ -168,16 +158,12 @@ public:
     void bindGpuModelState(GRIMText::Training::Startup::GpuModelState& gpu_model_state) noexcept {
         gpu_model_state_ = &gpu_model_state;
     }
-    
+
     // Parameter groups accessor (for direct gradient norm / clipping in Phase2)
     const std::vector<ParameterGroup>& parameterGroups() const { return parameter_groups_; }
     std::vector<ParameterGroup>& parameterGroups() { return parameter_groups_; }
 #endif
 
-    // Utilities
-    bool save(const std::string& path);
-    bool load(const std::string& path);
-    
     // Config access
     const Config::AiConfigSnapshot& getConfig() const { return config_; }
     
@@ -199,30 +185,9 @@ public:
     ExecutionBlockLayer* getExecutionBlockLayer() { return gpu_model_state_ ? gpu_model_state_->execution_block_layer.get() : nullptr; }
     const ExecutionBlockLayer* getExecutionBlockLayer() const { return gpu_model_state_ ? gpu_model_state_->execution_block_layer.get() : nullptr; }
 
-    // Decode-time slot selector layer (nullptr when disabled)
-    DecodeTimeSlotSelectorLayer* getDecodeTimeSlotSelectorLayer() { return gpu_model_state_ ? gpu_model_state_->decode_time_slot_selector_layer.get() : nullptr; }
-    const DecodeTimeSlotSelectorLayer* getDecodeTimeSlotSelectorLayer() const { return gpu_model_state_ ? gpu_model_state_->decode_time_slot_selector_layer.get() : nullptr; }
-
-    // Decode-time <NUM> policy (nullptr when selector disabled)
-    DecodeTimeNumPolicy* getDecodeTimeNumPolicy() { return gpu_model_state_ ? gpu_model_state_->decode_time_num_policy.get() : nullptr; }
-    const DecodeTimeNumPolicy* getDecodeTimeNumPolicy() const { return gpu_model_state_ ? gpu_model_state_->decode_time_num_policy.get() : nullptr; }
-
-    // Multi-token prediction (MTP) auxiliary heads are startup-owned on GpuModelState.
-    using MTPHead = ::GRIM::MTPHead;
-    int getMtpK() const {
-        return HyperParameters::snapshotTrainingConfigField<bool>(config_, "mtp_enabled")
-            ? HyperParameters::snapshotTrainingConfigField<int>(config_, "mtp_k")
-            : 0;
-    }
-
 #endif
     
 private:
-    friend void GRIMText::Training::Startup::initializePBM(::GRIM::LanguageModel& model);
-    friend void GRIMText::Training::Startup::assembleGpuModel(::GRIM::LanguageModel& model, GRIMText::Training::Startup::GpuModelState& gpu_model_state, std::uint64_t weight_init_seed);
-    friend void GRIMText::Training::Startup::initializeTrainingRuntime(::GRIM::LanguageModel& model);
-    friend void GRIMText::Training::Startup::initializeInferenceRuntime(::GRIM::LanguageModel& model, const GRIMText::Training::Startup::GpuModelState& gpu_model_state);
-
     Config::AiConfigSnapshot config_;
     
 #ifdef USE_CUDA
@@ -233,7 +198,6 @@ private:
 #ifdef USE_CUDA
     TrainingState training_state_;
     GenerationState generation_state_;
-    PBM::PBMStateOwner pbm_owner_;                   // Durable model-level ALiBi/RoPE buffers
     std::vector<ParameterGroup> parameter_groups_;  // Parameter groups for optimizer
 #endif
 };
@@ -249,12 +213,13 @@ using StreamCallback = HyperParameters::GenerationStreamCallback;
 // Forward pass logic is in ForwardPhase2_Encoder.cu::runFullEncoder().
 // This class only owns layers and provides access to them.
 //
-// Constructor takes the grouped encoder hyperparameter view and startup model-
-// assembly bindings. Forward pass runtime handles live on the forward request.
+// Constructor takes the grouped encoder hyperparameter view plus explicit
+// startup/model-assembly resources. Forward pass runtime handles live on the
+// forward request.
 class GPUGrimEncoder {
 public:
     GPUGrimEncoder(const HyperParameters::EncoderLayerConstructionHP& hp,
-                   const EncoderConstructionBindings& bindings,
+                   cudaStream_t init_stream,
                    uint64_t weight_seed);
 
     EncodingLayer* getLayer(int index);

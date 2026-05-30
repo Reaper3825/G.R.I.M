@@ -33,7 +33,6 @@ struct EncoderSelfAttentionForwardRequest {
     const Batching::BatchPayload& payload;
     const HyperParameters::EncoderSelfAttentionHP& hp;
     const HyperParameters::FlashAttentionRuntimeHP& flash_attention;
-    const PBM::PBMState& pbm;
     cudaStream_t stream = nullptr;
     cublasHandle_t cublas_handle = nullptr;
     std::uint64_t batch_idx = 0;
@@ -44,6 +43,7 @@ struct EncoderSelfAttentionForwardRequest {
 void encoderSelfAttentionForward(
     const Tensor& norm_input,
     EncoderSelfAttentionWeights weights,
+    const PBM::PBMState& pbm,
     const EncoderSelfAttentionForwardRequest& request,
     Forward::ModelForwardOutputs& forward_outputs);
 

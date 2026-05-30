@@ -125,14 +125,16 @@ ExecutionBlockLayer::~ExecutionBlockLayer() {
 }
 
 ExecutionBlockLayer::ExecutionBlockLayer(const HyperParameters::ExecutionBlockConstructionHP& hp,
+                                       ExecutionBlockParameterTensors& parameters,
                                        uint64_t seed,
                                        cudaStream_t init_stream)
         : hp_(hp),
-            parameters_(std::make_unique<ExecutionBlockParameterTensors>())
+            parameters_(&parameters)
 {
     validateConfigOrThrow();
     EXEC_CHECK(init_stream != nullptr, "init_stream is NULL");
-        auto& params = parametersOrThrow();
+    EXEC_CHECK(parameters_ != nullptr, "ExecutionBlockLayer parameters is NULL");
+    auto& params = *parameters_;
 
     cudaMallocOrThrow(reinterpret_cast<void**>(&d_numeric_error_flag_), sizeof(int), "exec_numeric_error_flag");
     CUDA_CHECK(cudaMemsetAsync(d_numeric_error_flag_, 0, sizeof(int), init_stream));
@@ -262,7 +264,7 @@ ExecutionBlockLayer::ExecutionBlockLayer(ExecutionBlockLayer&& other) noexcept
       d_exec_record_i_(other.d_exec_record_i_),
       d_exec_record_f_(other.d_exec_record_f_),
       d_reinforce_baseline_(other.d_reinforce_baseline_),
-    parameters_(std::move(other.parameters_))
+            parameters_(other.parameters_)
 {
     other.d_numeric_error_flag_ = nullptr;
     other.d_div_clamp_count_ = nullptr;
@@ -271,6 +273,7 @@ ExecutionBlockLayer::ExecutionBlockLayer(ExecutionBlockLayer&& other) noexcept
     other.d_exec_record_i_ = nullptr;
     other.d_exec_record_f_ = nullptr;
     other.d_reinforce_baseline_ = nullptr;
+        other.parameters_ = nullptr;
 }
 
 ExecutionBlockLayer& ExecutionBlockLayer::operator=(ExecutionBlockLayer&& other) noexcept {
@@ -290,6 +293,7 @@ ExecutionBlockLayer& ExecutionBlockLayer::operator=(ExecutionBlockLayer&& other)
         d_exec_record_i_      = other.d_exec_record_i_;
         d_exec_record_f_      = other.d_exec_record_f_;
         d_reinforce_baseline_ = other.d_reinforce_baseline_;
+        parameters_           = other.parameters_;
         other.d_numeric_error_flag_ = nullptr;
         other.d_div_clamp_count_    = nullptr;
         other.d_div_invalid_flag_   = nullptr;
@@ -297,86 +301,10 @@ ExecutionBlockLayer& ExecutionBlockLayer::operator=(ExecutionBlockLayer&& other)
         other.d_exec_record_i_      = nullptr;
         other.d_exec_record_f_      = nullptr;
         other.d_reinforce_baseline_ = nullptr;
-        parameters_          = std::move(other.parameters_);
+        other.parameters_           = nullptr;
     }
     return *this;
 }
-
-ExecutionBlockParameterTensors& ExecutionBlockLayer::parametersOrThrow() {
-    if (!parameters_) {
-        throw std::runtime_error("ExecutionBlockLayer: parameter storage is NULL");
-    }
-    return *parameters_;
-}
-
-const ExecutionBlockParameterTensors& ExecutionBlockLayer::parametersOrThrow() const {
-    if (!parameters_) {
-        throw std::runtime_error("ExecutionBlockLayer: parameter storage is NULL");
-    }
-    return *parameters_;
-}
-
-Tensor& ExecutionBlockLayer::w_decode_1() { return parametersOrThrow().w_decode_1; }
-Tensor& ExecutionBlockLayer::b_decode_1() { return parametersOrThrow().b_decode_1; }
-Tensor& ExecutionBlockLayer::w_decode_2() { return parametersOrThrow().w_decode_2; }
-Tensor& ExecutionBlockLayer::w_arg1_select() { return parametersOrThrow().w_arg1_select; }
-Tensor& ExecutionBlockLayer::w_arg2_select() { return parametersOrThrow().w_arg2_select; }
-Tensor& ExecutionBlockLayer::W_op_select() { return parametersOrThrow().W_op_select; }
-Tensor& ExecutionBlockLayer::W_key_proj() { return parametersOrThrow().W_key_proj; }
-Tensor& ExecutionBlockLayer::W_write_query() { return parametersOrThrow().W_write_query; }
-Tensor& ExecutionBlockLayer::W_write_key() { return parametersOrThrow().W_write_key; }
-Tensor& ExecutionBlockLayer::alpha() { return parametersOrThrow().alpha; }
-Tensor& ExecutionBlockLayer::beta() { return parametersOrThrow().beta; }
-Tensor& ExecutionBlockLayer::step_embeddings() { return parametersOrThrow().step_embeddings; }
-Tensor& ExecutionBlockLayer::type_num_embed() { return parametersOrThrow().type_num_embed; }
-Tensor& ExecutionBlockLayer::W_value_to_emb() { return parametersOrThrow().W_value_to_emb; }
-Tensor& ExecutionBlockLayer::b_value_to_emb() { return parametersOrThrow().b_value_to_emb; }
-Tensor& ExecutionBlockLayer::w_inject_gate() { return parametersOrThrow().w_inject_gate; }
-Tensor& ExecutionBlockLayer::W_Q_read() { return parametersOrThrow().W_Q_read; }
-Tensor& ExecutionBlockLayer::W_K_read() { return parametersOrThrow().W_K_read; }
-Tensor& ExecutionBlockLayer::W_V_read() { return parametersOrThrow().W_V_read; }
-Tensor& ExecutionBlockLayer::W_O_read() { return parametersOrThrow().W_O_read; }
-Tensor& ExecutionBlockLayer::W_gate_read() { return parametersOrThrow().W_gate_read; }
-Tensor& ExecutionBlockLayer::tau() { return parametersOrThrow().tau; }
-Tensor& ExecutionBlockLayer::E_slot() { return parametersOrThrow().E_slot; }
-Tensor& ExecutionBlockLayer::E_op() { return parametersOrThrow().E_op; }
-Tensor& ExecutionBlockLayer::W_scal() { return parametersOrThrow().W_scal; }
-Tensor& ExecutionBlockLayer::b_scal() { return parametersOrThrow().b_scal; }
-Tensor& ExecutionBlockLayer::W_trace() { return parametersOrThrow().W_trace; }
-Tensor& ExecutionBlockLayer::b_trace() { return parametersOrThrow().b_trace; }
-Tensor& ExecutionBlockLayer::W_reason_gate() { return parametersOrThrow().W_reason_gate; }
-Tensor& ExecutionBlockLayer::W_trace_gate() { return parametersOrThrow().W_trace_gate; }
-
-const Tensor& ExecutionBlockLayer::w_decode_1() const { return parametersOrThrow().w_decode_1; }
-const Tensor& ExecutionBlockLayer::b_decode_1() const { return parametersOrThrow().b_decode_1; }
-const Tensor& ExecutionBlockLayer::w_decode_2() const { return parametersOrThrow().w_decode_2; }
-const Tensor& ExecutionBlockLayer::w_arg1_select() const { return parametersOrThrow().w_arg1_select; }
-const Tensor& ExecutionBlockLayer::w_arg2_select() const { return parametersOrThrow().w_arg2_select; }
-const Tensor& ExecutionBlockLayer::W_op_select() const { return parametersOrThrow().W_op_select; }
-const Tensor& ExecutionBlockLayer::W_key_proj() const { return parametersOrThrow().W_key_proj; }
-const Tensor& ExecutionBlockLayer::W_write_query() const { return parametersOrThrow().W_write_query; }
-const Tensor& ExecutionBlockLayer::W_write_key() const { return parametersOrThrow().W_write_key; }
-const Tensor& ExecutionBlockLayer::alpha() const { return parametersOrThrow().alpha; }
-const Tensor& ExecutionBlockLayer::beta() const { return parametersOrThrow().beta; }
-const Tensor& ExecutionBlockLayer::step_embeddings() const { return parametersOrThrow().step_embeddings; }
-const Tensor& ExecutionBlockLayer::type_num_embed() const { return parametersOrThrow().type_num_embed; }
-const Tensor& ExecutionBlockLayer::W_value_to_emb() const { return parametersOrThrow().W_value_to_emb; }
-const Tensor& ExecutionBlockLayer::b_value_to_emb() const { return parametersOrThrow().b_value_to_emb; }
-const Tensor& ExecutionBlockLayer::w_inject_gate() const { return parametersOrThrow().w_inject_gate; }
-const Tensor& ExecutionBlockLayer::W_Q_read() const { return parametersOrThrow().W_Q_read; }
-const Tensor& ExecutionBlockLayer::W_K_read() const { return parametersOrThrow().W_K_read; }
-const Tensor& ExecutionBlockLayer::W_V_read() const { return parametersOrThrow().W_V_read; }
-const Tensor& ExecutionBlockLayer::W_O_read() const { return parametersOrThrow().W_O_read; }
-const Tensor& ExecutionBlockLayer::W_gate_read() const { return parametersOrThrow().W_gate_read; }
-const Tensor& ExecutionBlockLayer::tau() const { return parametersOrThrow().tau; }
-const Tensor& ExecutionBlockLayer::E_slot() const { return parametersOrThrow().E_slot; }
-const Tensor& ExecutionBlockLayer::E_op() const { return parametersOrThrow().E_op; }
-const Tensor& ExecutionBlockLayer::W_scal() const { return parametersOrThrow().W_scal; }
-const Tensor& ExecutionBlockLayer::b_scal() const { return parametersOrThrow().b_scal; }
-const Tensor& ExecutionBlockLayer::W_trace() const { return parametersOrThrow().W_trace; }
-const Tensor& ExecutionBlockLayer::b_trace() const { return parametersOrThrow().b_trace; }
-const Tensor& ExecutionBlockLayer::W_reason_gate() const { return parametersOrThrow().W_reason_gate; }
-const Tensor& ExecutionBlockLayer::W_trace_gate() const { return parametersOrThrow().W_trace_gate; }
 
 //======================================================//
 //  Thin public wrappers

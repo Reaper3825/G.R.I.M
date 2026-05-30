@@ -15,25 +15,12 @@
 
 #include "../../Shared/Forward/ModelForwardExecutionRuntime.hpp"
 #include "../../Shared/Forward/ModelForwardOutputs.hpp"
+#include "../../Shared/Execution/DecodeTimeResolveResult.hpp"
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 
 namespace GRIM {
 
 struct GenerationState {
-    struct DecodeSelectorState {
-        bool valid = false;
-        int32_t selected_slot = -1;       // Real slot index when Selected
-        float selected_value = 0.0f;      // Numeric value from selected slot
-        uint8_t status = 0;               // Cast of SlotSelectionStatus
-
-        void reset() {
-            valid = false;
-            selected_slot = -1;
-            selected_value = 0.0f;
-            status = 0;
-        }
-    };
-
     // Persistent inference execution state. Survives prefill -> decode steps
     // within a generation session and is invalidated only at session reset.
     ExecutionMemory exec_memory;
@@ -44,7 +31,7 @@ struct GenerationState {
     Forward::ModelForwardExecutionRuntime execution_runtime;
 
     // Decode-time <NUM> selector result consumed by sampling.
-    DecodeSelectorState decode_selector;
+    DecodeTimeResolveResult decode_selector;
 
     // Live outputs for the current explicit shared-forward call during
     // inference. Category 1 state: Phase2 must clear it at the forward/sample

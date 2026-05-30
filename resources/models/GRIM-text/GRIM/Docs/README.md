@@ -28,4 +28,4 @@ Per-feature documentation. Load only the feature(s) relevant to the current task
 | [Diagnostics.md](Diagnostics.md) | RMSNorm formula, CUDA events, LibTorch baselines |
 | [Config.md](Config.md) | ai_config.json conventions, fail-loud defaults |
 | [CppCudaFootguns.md](CppCudaFootguns.md) | General language/runtime traps |
-| [DeletedCode.md](DeletedCode.md) | Removed subsystems — do not recreate |
+| [DeletedCode.md](DeletedCode.md) | Removed subsystems and marked-for-removal class targets — do not recreate or deepen dependencies |

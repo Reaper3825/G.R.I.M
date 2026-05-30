@@ -34,7 +34,7 @@ float addSelectorSupervisionLoss(
 
     float selector_supervision_loss = 0.0f;
 
-    // Keep SelectorForwardResult objects alive until backward completes — stored in
+    // Keep Forward::SelectorForwardResult objects alive until backward completes — stored in
     // autograd_intermediates so they survive past computeAutogradLoss() return.
     auto& selector_fwd_results = intermediates.selector_fwd_results;
     selector_fwd_results.clear();
@@ -80,15 +80,19 @@ float addSelectorSupervisionLoss(
         throw std::runtime_error("addSelectorSupervisionLoss: loss_tensor is NULL before selector CE accumulation");
     }
 
-    auto* selector = ctx.model->getDecodeTimeSlotSelectorLayer();
-    auto* policy = ctx.model->getDecodeTimeNumPolicy();
+    if (!ctx.parameter_registry) {
+        throw std::runtime_error("addSelectorSupervisionLoss: selector supervision configured but ctx.parameter_registry is NULL");
+    }
+    auto* selector = ctx.parameter_registry->getDecodeTimeSlotSelector();
 
     if (!selector) {
-        throw std::runtime_error("addSelectorSupervisionLoss: selector supervision configured but DecodeTimeSlotSelectorLayer is NULL");
+        throw std::runtime_error("addSelectorSupervisionLoss: selector supervision configured but DecodeTimeSlotSelector is NULL");
     }
-    if (!policy) {
-        throw std::runtime_error("addSelectorSupervisionLoss: selector supervision configured but DecodeTimeNumPolicy is NULL");
+    if (!ctx.training_state) {
+        throw std::runtime_error("addSelectorSupervisionLoss: ctx.training_state is NULL");
     }
+
+    validateDecodeTimeNumPolicyConfig(selector_hp);
 
     const int d_model = selector_hp.d_model;
     const int seq_len = payload.max_seq_len;
@@ -175,15 +179,18 @@ float addSelectorSupervisionLoss(
         const auto& mem = intermediates.exec_memories[b];
         if (!mem.valid_mask.data) continue;
 
-        policy->buildCandidateSet(
-            mem.valid_mask.data,
-            mem.values.data,
-            mem.recent_write_mask.data,
-            mem.usage.data,
-            policy->hp().num_slots,
-            policy->hp().scratch_slots,
+        if (!ctx.device_bindings) {
+            throw std::runtime_error("addSelectorSupervisionLoss: ctx.device_bindings is NULL before candidate construction");
+        }
+        auto& selector_runtime = ctx.training_state->execution_runtime.decode_time_selector_runtime;
+        buildDecodeTimeCandidateSet(
+            selector_hp,
+            payload,
+            *ctx.device_bindings,
+            mem,
+            selector_runtime,
+            b,
             ctx.stream);
-        const auto& cands = policy->candidates();
 
         const int row_len = std::min(seq_len, static_cast<int>(row_targets.size()));
         for (int t = 0; t < row_len; ++t) {
@@ -213,8 +220,8 @@ float addSelectorSupervisionLoss(
             intermediates.selector_h_t_inputs.push_back(std::move(h_t_owned));
             Tensor& h_t_input = intermediates.selector_h_t_inputs.back();
 
-            int num_live = cands.num_live_slots > 0 ? cands.num_live_slots : 0;
-            if (num_live <= 0 || !cands.d_slot_features) {
+            int num_live = selector_runtime.num_live_slots > 0 ? selector_runtime.num_live_slots : 0;
+            if (num_live <= 0 || !selector_runtime.d_slot_features()) {
                 throw std::runtime_error(
                     "addSelectorSupervisionLoss: selector target row=" + std::to_string(b)
                     + " token=" + std::to_string(t)
@@ -226,7 +233,7 @@ float addSelectorSupervisionLoss(
                 false,
                 ctx.stream,
                 "selector_slot_features_owned_detached");
-            cudaMemcpyAsync(slot_feat_owned.data, cands.d_slot_features,
+            cudaMemcpyAsync(slot_feat_owned.data, selector_runtime.d_slot_features(),
                             static_cast<size_t>(num_live) * kSlotFeatureDim * sizeof(float),
                             cudaMemcpyDeviceToDevice, ctx.stream);
             intermediates.selector_slot_feature_inputs.push_back(std::move(slot_feat_owned));
@@ -236,12 +243,11 @@ float addSelectorSupervisionLoss(
             if (tgt.kind == Execution::SlotSelectionTargetKind::Null) {
                 target_idx = 0;
             } else if (tgt.kind == Execution::SlotSelectionTargetKind::Slot) {
-                for (int c = 0; c < cands.num_live_slots; ++c) {
-                    if (cands.live_slot_ids[c] == tgt.slot_id) {
-                        target_idx = 1 + c;
-                        break;
-                    }
-                }
+                target_idx = resolveDecodeTimeTargetIndexForSlot(
+                    selector_hp,
+                    tgt.slot_id,
+                    selector_runtime,
+                    ctx.stream);
                 if (target_idx < 0) {
                     throw std::runtime_error(
                         "addSelectorSupervisionLoss: selector target slot=" + std::to_string(tgt.slot_id)
@@ -256,7 +262,9 @@ float addSelectorSupervisionLoss(
                     + " has illegal target kind=" + std::to_string(static_cast<int>(tgt.kind)));
             }
 
-            SelectorForwardResult fwd = selector->forward(
+            Forward::SelectorForwardResult fwd = forwardDecodeTimeSlotSelector(
+                *selector,
+                selector_hp,
                 h_t_input, slot_feat_input, num_live, ctx.stream, ctx.cublas_handle);
 
             Tensor ce = autograd::cross_entropy_logits(

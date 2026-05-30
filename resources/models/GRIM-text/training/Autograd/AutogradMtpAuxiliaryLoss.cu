@@ -5,7 +5,6 @@
 
 #include "AutogradMtpAuxiliaryLoss.hpp"
 
-#include "../../GRIM/grim_language_model_cuda.hpp"
 #include "../../Shared/Batching/BatchDeviceBindings.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
@@ -70,7 +69,7 @@ struct DeviceIntScalar {
 }  // namespace
 
 float computeAutogradMtpAuxiliaryLosses(
-    LanguageModel& model,
+    const HyperParameters::MTPFeatureHP& mtp_hp,
     Tensor& loss_tensor,
     std::vector<Tensor>& mtp_logits_tensors,
     MTP::MTPDiagnostics& diagnostics,
@@ -101,21 +100,21 @@ float computeAutogradMtpAuxiliaryLosses(
     diagnostics.alpha_effective = mtp_alpha_effective;
     diagnostics.L_total = text_ce_loss;
 
-    if (model.getMtpK() <= 0) {
+    if (!mtp_hp.enabled || mtp_hp.k <= 0) {
         return 0.0f;
     }
 
     if (!loss_tensor.data) {
         throw std::runtime_error("computeAutogradMtpAuxiliaryLosses: loss_tensor.data is NULL — text CE must be assembled before MTP loss");
     }
-    if (static_cast<int>(payload.mtp_shifted_targets.size()) != model.getMtpK()) {
+    if (static_cast<int>(payload.mtp_shifted_targets.size()) != mtp_hp.k) {
         throw std::runtime_error("computeAutogradMtpAuxiliaryLosses: payload.mtp_shifted_targets.size()=" +
-            std::to_string(payload.mtp_shifted_targets.size()) + " != model.getMtpK()=" + std::to_string(model.getMtpK()) +
+            std::to_string(payload.mtp_shifted_targets.size()) + " != mtp_hp.k=" + std::to_string(mtp_hp.k) +
             " — buildBatchPayload must author shifted targets for every MTP head");
     }
-    if (static_cast<int>(payload.mtp_valid_counts.size()) != model.getMtpK()) {
+    if (static_cast<int>(payload.mtp_valid_counts.size()) != mtp_hp.k) {
         throw std::runtime_error("computeAutogradMtpAuxiliaryLosses: payload.mtp_valid_counts.size()=" +
-            std::to_string(payload.mtp_valid_counts.size()) + " != model.getMtpK()=" + std::to_string(model.getMtpK()));
+            std::to_string(payload.mtp_valid_counts.size()) + " != mtp_hp.k=" + std::to_string(mtp_hp.k));
     }
     if (!bindings.d_mtp_shifted_targets) {
         throw std::runtime_error("computeAutogradMtpAuxiliaryLosses: BatchDeviceBindings.d_mtp_shifted_targets is NULL for MTP payload");
@@ -123,17 +122,17 @@ float computeAutogradMtpAuxiliaryLosses(
     if (mtp_alpha_effective == 0.0f) {
         return 0.0f;
     }
-    if (static_cast<int>(mtp_logits_tensors.size()) != model.getMtpK()) {
+    if (static_cast<int>(mtp_logits_tensors.size()) != mtp_hp.k) {
         throw std::runtime_error("computeAutogradMtpAuxiliaryLosses: mtp_logits_tensors.size()=" +
-            std::to_string(mtp_logits_tensors.size()) + " != model.getMtpK()=" + std::to_string(model.getMtpK()) +
+            std::to_string(mtp_logits_tensors.size()) + " != mtp_hp.k=" + std::to_string(mtp_hp.k) +
             " — caller must materialize all MTP logits during forward before loss assembly");
     }
 
-    const float per_head_loss_weight = mtp_alpha_effective / static_cast<float>(model.getMtpK());
+    const float per_head_loss_weight = mtp_alpha_effective / static_cast<float>(mtp_hp.k);
     float mtp_loss = 0.0f;
     bool any_valid_head = false;
 
-    for (int k = 0; k < model.getMtpK(); ++k) {
+    for (int k = 0; k < mtp_hp.k; ++k) {
         Tensor& logits_k = mtp_logits_tensors[static_cast<size_t>(k)];
         if (payload.mtp_valid_counts[k] == 0) {
             diagnostics.head_loss.push_back(0.0f);

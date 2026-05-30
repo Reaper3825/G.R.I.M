@@ -3,6 +3,7 @@
 #include "CheckpointLoad.hpp"
 #include "InitFacts.hpp"
 
+#include "../../../Common/grim_model_serialization.hpp"
 #include "../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../../Shared/LogRecorder/LogRecorder.hpp"
 
@@ -73,11 +74,11 @@ void loadRequestedCheckpoint(TrainingContext& ctx)
     }
 
     logger.log("Loading requested checkpoint: " + checkpoint_hp.checkpoint_path);
-    if (!ctx.model->load(checkpoint_hp.checkpoint_path)) {
+    if (!GRIM::loadLanguageModelCheckpoint(*ctx.model, ctx.gpu_model, ctx.parameter_registry, checkpoint_hp.checkpoint_path)) {
         handleUnusableCheckpointRequest(
             checkpoint_hp,
             logger,
-            "LanguageModel::load() failed for requested checkpoint: " + checkpoint_hp.checkpoint_path);
+            "loadLanguageModelCheckpoint() failed for requested checkpoint: " + checkpoint_hp.checkpoint_path);
         return;
     }
 
@@ -106,8 +107,8 @@ void runSaveTestIfRequested(TrainingContext& ctx)
     ctx.logging.logger->log("  SAVE TEST MODE");
     ctx.logging.logger->log("========================================");
     std::string test_save_path = paths_hp.checkpoint_dir + "/save_test.bin";
-    ctx.logging.logger->log("Testing model->save() to: " + test_save_path);
-    bool save_ok = ctx.model->save(test_save_path);
+    ctx.logging.logger->log("Testing saveLanguageModelCheckpoint() to: " + test_save_path);
+    bool save_ok = GRIM::saveLanguageModelCheckpoint(*ctx.model, ctx.gpu_model, ctx.parameter_registry, test_save_path);
     if (save_ok) {
         EmitModuleInfo(ModuleId::Checkpoint, "✓ Save test PASSED", 0);
         if (fs::exists(test_save_path)) {

@@ -24,6 +24,7 @@
 #include "../Batching/BatchDeviceBindings.hpp"
 #include "ModelForwardRuntimePayload.hpp"
 #include "../HyperParameters/HyperParameters_GPU.hpp"
+#include "../PBM/PositionalBiasMethod.hpp"
 
 namespace GRIM {
 
@@ -56,6 +57,7 @@ struct ModelForwardGraphPolicy {
 struct ModelForwardRequest {
     const Config::AiConfigSnapshot* config = nullptr;
     GPUGrimEncoder* gpu_encoder = nullptr;
+    const PBM::PBMState* pbm = nullptr;
     cublasHandle_t cublas_handle = nullptr;
     cudaStream_t stream = nullptr;
 

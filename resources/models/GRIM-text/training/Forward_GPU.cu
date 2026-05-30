@@ -21,36 +21,31 @@ namespace GRIM {
 //
 // Hyperparameters come from EncoderLayerConstructionHP, the grouped read view
 // owned by HyperparameterGroupings.hpp. Startup model-assembly resource inputs
-// (PBM, init stream) come from EncoderConstructionBindings; the Phase1 RNG seed
-// is an explicit constructor input. Forward-time stream/cuBLAS handles come from
+// (PBM, init stream) are passed explicitly; the Phase1 RNG seed is an explicit
+// constructor input. Forward-time stream/cuBLAS handles come from
 // ModelForwardRequest/AutogradContext.
 //======================================================//
 struct GPUGrimEncoder::Impl {
     std::vector<std::unique_ptr<EncodingLayer>> gpu_layers_;
 
     Impl(const HyperParameters::EncoderLayerConstructionHP& hp,
-         const EncoderConstructionBindings& bindings,
+         cudaStream_t init_stream,
          uint64_t weight_seed)
     {
-        if (!bindings.pos_encoding) {
-            throw std::runtime_error("[GPUGrimEncoder] pos_encoding is NULL — "
-                                     "PBM must be initialized BEFORE encoder construction");
-        }
-
         for (int i = 0; i < hp.num_layers; ++i) {
             // Pattern B: Layer self-allocates and Xavier-inits its own weights.
             // Seed offsets per layer: base + 2 + layer*10
             const uint64_t layer_seed = weight_seed + 2 + i * 10;
             gpu_layers_.emplace_back(std::make_unique<EncodingLayer>(
-                hp, *bindings.pos_encoding, layer_seed, bindings.init_stream));
+                hp, layer_seed, init_stream));
         }
     }
 };
 
 GPUGrimEncoder::GPUGrimEncoder(const HyperParameters::EncoderLayerConstructionHP& hp,
-                               const EncoderConstructionBindings& bindings,
+                               cudaStream_t init_stream,
                                uint64_t weight_seed)
-    : pImpl(new Impl(hp, bindings, weight_seed))
+    : pImpl(new Impl(hp, init_stream, weight_seed))
 {
 }
 

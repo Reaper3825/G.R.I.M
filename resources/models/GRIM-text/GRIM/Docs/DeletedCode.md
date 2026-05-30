@@ -27,3 +27,18 @@
 | `TrainingState::MTPDiagnostics`, `TrainingState::mtp_diagnostics` | Moved to `Shared/MTP/MTPDiagnostics.hpp` and routed through `Autograd::LossResult` / `Training::BatchResult`; per-step MTP telemetry is not TrainingState-owned GPU resource state. |
 | `DataLoadInputs` | Deleted local Phase1 data-load mirror; `LoadTrainingData()` consumes `TokenizerHP` / `DataLoadingHP` and reads `StartupConfig.max_seq_len` directly, while `DataInfo` remains only the durable GRMT/data summary fact stored on `TrainingContext`. |
 | `Layers/ReasoningHead/reasoning_head_GPU.{hpp,cu}`, `Forward::ReasoningHeadOutput`, `ParamGroupType::REASONING_HEAD` | Dead architecture. ExecutionBlock owns live structured reasoning, ScratchBlock owns atom detection/injection, and the old ReasoningHead had no active training loss or runtime path when execution was enabled. Do not recreate atom-op logits as a parallel subsystem. |
+| `DecodeTimeNumPolicy` class | Replaced by free decode-time selector ops in `Shared/Execution/DecodeTimeNumPolicy.{hpp,cu}`; startup no longer constructs a policy owner, and callers pass `DecodeTimeSelectorConstructionHP` directly. |
+| `DecodeTimeSlotSelectorLayer` class | Replaced by the startup-owned `GRIM::DecodeTimeSlotSelector` tensor struct declared in `training/Phases/Startup/Model/ParameterRegistry.hpp` plus free selector ops in `Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.{hpp,cu}`; `TrainingContext::parameter_registry` is the durable selector tensor owner, while callers pass `DecodeTimeSelectorConstructionHP` explicitly into selector ops instead of storing config on the owner. |
+
+## Marked for Removal — Do Not Deepen Dependencies
+
+These classes still exist in the current tree, but they are teardown targets. Do not add new wrappers, new ownership claims, or new helper APIs that make them harder to delete.
+
+| Target | Current temporary role | Removal guidance |
+|--------|------------------------|------------------|
+| `GPUGrimEncoder` | Startup-owned container for encoder layer objects on `TrainingContext::gpu_model` | New work should consume explicit forward/runtime payloads and config-owned layer counts, not add more class-centric reach-through. |
+| `EmbeddingLayer` | Temporary owner of token embedding tensors during the startup-to-forward migration | New paths should take explicit tensor inputs/views instead of adding new `LanguageModel`/`GpuModelState` accessors. |
+| `LMHeadLayer` | Temporary owner of LM projection / `γ_final` tensors during the migration | Do not defend it as a permanent abstraction boundary; migrate consumers toward explicit tensor handoff. |
+| `ScratchBlockLayer` | Optional reasoning-layer class still assembled by startup | Do not add new lifecycle helpers or runtime toggles; deletion work should collapse it into direct handoff or remove the subsystem entirely. |
+| `ExecutionBlockLayer` | Optional execution-reasoning class still assembled by startup | Do not build new telemetry, checkpoint, or forward wrappers around it; shrink callsites until the class can disappear. |
+| `MtpHeadParameterTensors` | Auxiliary MTP head parameter-tensor bundle still stored on `TrainingContext::parameter_registry` | New MTP work must not add more durable owner layers around those parameter tensors. |

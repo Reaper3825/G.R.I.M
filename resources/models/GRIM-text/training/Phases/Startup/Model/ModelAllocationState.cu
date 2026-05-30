@@ -22,11 +22,19 @@ namespace Internal {
 
 std::unique_ptr<GRIM::LanguageModel> initializeModel(
     const GRIM::Config::AiConfigSnapshot& config_snapshot,
+    GRIM::PBM::PBMStateOwner& pbm_owner,
     Startup::GpuModelState& gpu_model_state,
-    uint64_t weight_init_seed,
+    Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const Startup::LayerAssembly& layer_assembly,
     TrainingLogger& logger)
 {
+    const auto& assembly = layer_assembly.requireReady("ModelAllocationState::initializeModel");
+    const uint64_t weight_init_seed = assembly.inputs.weight_init_seed;
+    const auto encoder_hp = GRIM::HyperParameters::encoderLayerConstructionHP(config_snapshot);
+
     logger.log("Initializing model with weight_init_seed=" + std::to_string(weight_init_seed) + "...");
+    logger.log("Layer assembly inputs prepared: actual_vocab_size=" +
+               std::to_string(assembly.inputs.actual_vocab_size));
 
     if (GRIM::HyperParameters::snapshotTrainingConfigField<GRIM::HyperParameters::HardcodedPattern>(config_snapshot, "hardcoded_hidden_pattern") != GRIM::HyperParameters::HardcodedPattern::DISABLED) {
         logger.log("⚠️  Hardcoded hidden-state diagnostic mode is active; exact config values are listed by ConfigDump.");
@@ -74,29 +82,46 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     }
 
     logger.log("Initializing cuBLAS handle...");
-    GRIMText::Training::Startup::initializeCuBLASHandle(*model);
+    GRIMText::Training::Startup::initializeCuBLASHandle(model->getTrainingState());
     logger.log("✓ cuBLAS handle initialized with Tensor Core acceleration");
 
     logger.log("Initializing RoPE (required before encoder construction)...");
-    GRIMText::Training::Startup::initializePBM(*model);
+    GRIMText::Training::Startup::initializePBM(
+        config_snapshot,
+        model->getTrainingState(),
+        pbm_owner);
     logger.log("✓ RoPE initialized");
 
     logger.log("Assembling GPU model layers with weight_init_seed=" + std::to_string(weight_init_seed) + "...");
-    GRIMText::Training::Startup::assembleGpuModel(*model, gpu_model_state, weight_init_seed);
+    GRIMText::Training::Startup::assembleGpuModel(
+        config_snapshot,
+        model->getTrainingState(),
+        pbm_owner,
+        gpu_model_state,
+        parameter_registry,
+        weight_init_seed);
     logger.log("✓ GPU model layers fully assembled");
 
     logger.log("Registering trainable parameter groups...");
-    GRIMText::Training::Startup::ModelRegistration::buildParameterGroups(*model, gpu_model_state);
+    GRIMText::Training::Startup::ModelRegistration::buildParameterGroups(*model, gpu_model_state, parameter_registry);
     logger.log("✓ Trainable parameter groups registered and verified");
 
     const auto execution_mode = GRIM::HyperParameters::snapshotExecutionMode(config_snapshot);
     if (execution_mode == GRIM::HyperParameters::ModelExecutionMode::TRAINING) {
         logger.log("Initializing TrainingState runtime workspaces...");
-        GRIMText::Training::Startup::initializeTrainingRuntime(*model);
+        GRIMText::Training::Startup::initializeTrainingRuntime(
+            model->getTrainingState(),
+            pbm_owner);
         logger.log("✓ TrainingState fully initialized");
     } else if (execution_mode == GRIM::HyperParameters::ModelExecutionMode::INFERENCE) {
         logger.log("Initializing inference runtime workspaces...");
-        GRIMText::Training::Startup::initializeInferenceRuntime(*model, gpu_model_state);
+        GRIMText::Training::Startup::initializeInferenceRuntime(
+            config_snapshot,
+            model->getTrainingState(),
+            model->getGenerationState(),
+            pbm_owner,
+            gpu_model_state,
+            parameter_registry);
         logger.log("✓ Inference runtime fully initialized");
     } else {
         throw std::runtime_error("initializeModel: unsupported execution_mode");
@@ -109,7 +134,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
             throw std::runtime_error(
                 "ModelAllocationState::initializeModel: gpu_model_state.gpu_encoder is NULL after GPU model layer assembly");
         }
-        const int num_layers = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config_snapshot, "num_layers");
+        const int num_layers = encoder_hp.num_layers;
         for (int layer = 0; layer < num_layers; ++layer) {
             auto* enc = gpu_encoder->getLayer(layer);
             if (!enc) {
@@ -150,7 +175,6 @@ void ModelAllocated(TrainingContext& ctx) {
     using GRIM::Logging::EmitModuleInfo;
     using GRIM::Logging::ModuleId;
 
-    ctx.rng = Internal::initializeRNG(ctx.config, *ctx.logging.logger);
     const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "vocab_size");
     if (vocab_size != static_cast<int>(ctx.data_info.actual_vocab_size)) {
         throw std::runtime_error(
@@ -159,11 +183,21 @@ void ModelAllocated(TrainingContext& ctx) {
             " config.vocab_size=" + std::to_string(vocab_size));
     }
 
+    const auto& layer_assembly = ctx.layer_assembly.requireReady("ModelAllocated");
+    if (layer_assembly.inputs.actual_vocab_size != ctx.data_info.actual_vocab_size) {
+        throw std::runtime_error(
+            "FATAL: layer assembly actual_vocab_size drifted from DataInfo.actual_vocab_size (assembly=" +
+            std::to_string(layer_assembly.inputs.actual_vocab_size) +
+            " data_info=" + std::to_string(ctx.data_info.actual_vocab_size) + ")");
+    }
+
     try {
         ctx.model = Internal::initializeModel(
             ctx.config,
+            ctx.pbm_owner,
             ctx.gpu_model,
-            ctx.rng.init_seed,
+            ctx.parameter_registry,
+            layer_assembly,
             *ctx.logging.logger);
     } catch (const std::exception& e) {
         EmitModuleError(ModuleId::Training, std::string("FATAL: Model initialization failed: ") + e.what(), 0);

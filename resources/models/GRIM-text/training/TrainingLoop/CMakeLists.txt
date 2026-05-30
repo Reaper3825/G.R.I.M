@@ -501,6 +501,8 @@ add_executable(train_gpu
     ../Phases/Startup/Data/DataInfo.hpp
     ../Phases/Startup/Data/TrainingData.cu
     ../Phases/Startup/Data/TrainingData.hpp
+    ../Phases/Startup/Model/LayerAssembly.cu
+    ../Phases/Startup/Model/LayerAssembly.hpp
     ../Phases/Startup/Model/ModelAllocationState.cu
     ../Phases/Startup/Model/ModelAllocationState.hpp
     ../Phases/Startup/CheckpointLoad.cu

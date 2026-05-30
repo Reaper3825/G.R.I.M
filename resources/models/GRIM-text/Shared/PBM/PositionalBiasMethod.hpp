@@ -45,9 +45,9 @@ struct PBMState {
     float* alibi_slopes = nullptr;       // Device: [num_heads] slopes
     float* rope_inv_freq = nullptr;      // Device: [rotary_dim/2] inverse frequencies
     
-    // CUDA event recorded after async upload for cross-stream synchronization.
-    // Consumers on a DIFFERENT stream must cudaStreamWaitEvent(their_stream, upload_event)
-    // before reading alibi_slopes or rope_inv_freq buffers.
+    // CUDA event recorded after async upload.
+    // Phase1 startup seals PBM readiness before any forward pass begins; this
+    // event is startup-owned upload bookkeeping, not a forward-time dependency.
     cudaEvent_t upload_event = nullptr;
     
     // Status

@@ -82,9 +82,6 @@ namespace {
         if (!pbm.alibi_slopes) {
             throw std::runtime_error("encoderSelfAttentionForward: PBM alibi_slopes is NULL");
         }
-        if (!pbm.upload_event) {
-            throw std::runtime_error("encoderSelfAttentionForward: PBM upload_event is NULL");
-        }
     }
 
     std::uint64_t attentionDropoutSeed(const GRIM::Attention::EncoderSelfAttentionForwardRequest& request) {
@@ -102,6 +99,7 @@ namespace GRIM::Attention {
 void encoderSelfAttentionForward(
     const Tensor& norm_input,
     EncoderSelfAttentionWeights weights,
+    const GRIM::PBM::PBMState& pbm,
     const EncoderSelfAttentionForwardRequest& request,
     Forward::ModelForwardOutputs& forward_outputs) {
     if (request.layer_idx < 0) {
@@ -140,12 +138,7 @@ void encoderSelfAttentionForward(
     }
 
     validateWeights(weights, request.hp);
-    validatePBMState(request.pbm, request.hp);
-    cudaError_t wait_err = cudaStreamWaitEvent(request.stream, request.pbm.upload_event, 0);
-    if (wait_err != cudaSuccess) {
-        throw std::runtime_error(std::string("encoderSelfAttentionForward: cudaStreamWaitEvent(PBM upload_event) failed: ") +
-                                 cudaGetErrorString(wait_err));
-    }
+    validatePBMState(pbm, request.hp);
     autograd::set_autograd_cublas_handle(request.cublas_handle);
 
     const int qkv_debug = autograd::qkvDebugLevel();
@@ -197,7 +190,7 @@ void encoderSelfAttentionForward(
 
     auto [Q_rot, K_rot] = autograd::rope_rotation(
         Q_bhsd, K_bhsd,
-        request.pbm.rope_inv_freq,
+        pbm.rope_inv_freq,
         request.payload, request.hp,
         request.hp.rotary_dim, request.stream);
     Q_bhsd = std::move(Q_rot);
@@ -212,7 +205,7 @@ void encoderSelfAttentionForward(
     const std::uint64_t dropout_seed = attentionDropoutSeed(request);
     attn_out_bhsd = autograd::scaled_dot_product_attention(
         Q_bhsd, K_bhsd, V_bhsd,
-        request.pbm.alibi_slopes, request.flash_attention, 0.0f, request.stream,
+        pbm.alibi_slopes, request.flash_attention, 0.0f, request.stream,
         attention_dropout_p, dropout_seed);
     if (qkv_debug > 0) {
         autograd::checkQKVTensorFinite("AutogradSDPA:attn_out_bhsd", attn_out_bhsd, request.stream);

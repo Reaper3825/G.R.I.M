@@ -45,7 +45,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - `train_gpu.cu` loads the validated training startup config root from canonical `ai_config.json`
   - `Phase1_Startup` receives that config handoff and performs startup validation/initialization against it
   - Path validation (model, data, checkpoint dirs)
-  - **Issue #106**: Reseeding W_qkv with 1/sqrt(d_model) scaling - ✅ Applied (`ctx.rng.init_seed` passes directly into `Startup::assembleGpuModel(*model, weight_init_seed)`)
+  - **Issue #106**: Reseeding W_qkv with 1/sqrt(d_model) scaling - ✅ Applied (`ctx.rng.init_seed` passes directly into `Startup::assembleGpuModel(config, training_state, gpu_model_state, parameter_registry, weight_init_seed)`)
   - **Issue #107**: Fixed LCG PRNG correlation with splitmix64 - ✅ Applied (Tensor::xavier_uniform_() with Philox PRNG)
   - **Issue #110**: PCGrad buffer allocation for tied embeddings - ✅ Applied (allocatePCGradBuffer + g_skip_embedding_backward=false)
   - **Rule 20**: max_seq_len defaults changed from 512 → 0 - ✅ Verified (defaults=0, throws if still 0)
@@ -215,7 +215,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **FIXED**: Rule 20 — Duplicate PBM init fallback in `InitTrainingState.cu::initTrainingState()` REMOVED. Now throws if PBM not pre-initialized by `initPBM()`.
   - Slopes are NEGATIVE (FlashAttention uses `+= slope * col_idx`) ✅
   - Non-GQA launcher properly DELETED (Rule 20) ✅
-  - Dead `ensurePBM()` / `PBMStateOwner::ensure()` reinit path DELETED; PBM is a one-shot startup-owned initialization owned by `LanguageModel::pbm_owner_` ✅
+  - Dead `ensurePBM()` / `PBMStateOwner::ensure()` reinit path DELETED; PBM is a one-shot startup-owned initialization owned by `TrainingContext::pbm_owner` ✅
   - No stale code found ✅
 
 ---
@@ -249,7 +249,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 - [x] **Phases/Startup/Model/ModelGpuAssembly.cu** (`Startup::assembleGpuModel`) — ✅ MOVED & AUDITED
   - Startup/Model ownership is explicit: this source assembles durable GPU model layers after CUDA, streams, cuBLAS, and PBM are initialized.
-  - Creates GPU encoder layers, EmbeddingLayer, LMHeadLayer, ScratchBlock, ExecutionBlock, DecodeTimeSlotSelector, DecodeTimeNumPolicy, and MTP heads.
+  - Creates GPU encoder layers, EmbeddingLayer, LMHeadLayer, ScratchBlock, ExecutionBlock, DecodeTimeSlotSelector, and MTP heads; decode-time candidate/selection logic now lives as free ops in `Shared/Execution/DecodeTimeNumPolicy.{hpp,cu}`.
   - `cfg.num_kv_heads` remains sourced from runtime JSON via grouped hyperparameter views, not compile-time defaults.
   - Rule 20 compliance: throws on use_gpu=false, missing StreamController/cuBLAS/PBM, null tied embedding data, or not-ready layer weights.
   - Does not allocate TrainingState activation caches, optimizer state, parameter groups, checkpoints, forward/backward, or Phase2 training loop state.
@@ -266,7 +266,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **FIXED**: `normalizeProbabilities()` now throws on invalid sum (no silent return)
   - **FIXED**: Removed debug spew in `sampleFromLogits()` and unreachable code after throws
   - **CLEANED**: `GRIM/grim_language_model_cuda.hpp` CPU fallback class blocks removed (EncoderLayer/GrimEncoder/LMHead/TextGenerator), dead accessors and members deleted
-  - **REFACTORED**: `ALiBiPositionalBias` wrapper deleted; PBM device access now goes through model-level `PBM::PBMStateOwner` and startup-owned `ModelAssemblyAccess::pbmState(...)`, while derived ALiBi/RoPE host tables are HyperParameters-owned and exposed through `pbmConstructionHP()` immutable views.
+  - **REFACTORED**: `ALiBiPositionalBias` wrapper deleted; PBM device access now goes through startup-owned `TrainingContext::pbm_owner`, while derived ALiBi/RoPE host tables are HyperParameters-owned and exposed through `pbmConstructionHP()` immutable views.
   - **FIXED (Vocab authority cleanup)**: Deleted LanguageModel vocab.bin size detection/override; model construction now uses caller-supplied vocab size (GRMT header for training, tokenizer token-space size for inference).
   - **FIXED (Pass 3)**: Constructor now validates `num_heads > 0` and `d_model % num_heads == 0` BEFORE computing `d_head` (prevents divide-by-zero/UB during positional init).
   - **DELETED (Payload Inference Cleanup)**: staged prompt APIs were removed; inference callers now build `BatchPayload` and enter through payload-only logits/generation methods.
@@ -279,7 +279,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **DELETED**: `applyActivationQuantization()` declaration — unimplemented method for unimplemented feature, zero callers. Activation quantization config loading stays (Phase1 infrastructure), but no QuantizationLayer is wired to any forward path
   - **DELETED**: `activation_quantizer_` member — `std::unique_ptr<Quantization::QuantizationLayer>` that was never assigned, always nullptr
   - **DELETED**: `#include "Quantization_GPU.hpp"` — no longer needed after activation_quantizer_ removal
-  - **DELETED**: `LanguageModel::alibi_` member and the old `GrimEmbeddingStack` wrapper ownership. `LanguageModel::initPBM()` initializes the model-level `PBM::PBMStateOwner` after `StreamController` exists; consumers now borrow the same `PBMState` instead of a duplicate `PBMSpec` view type.
+  - **DELETED**: `LanguageModel::alibi_` member and the old `GrimEmbeddingStack` wrapper ownership. Phase 1 startup initializes the startup-owned `TrainingContext::pbm_owner` after `StreamController` exists; consumers now borrow the same `PBMState` instead of a duplicate `PBMSpec` view type.
   - **DELETED**: `GrimEmbeddingStack`, `Matrix`, `LanguageModel::embedder_`, and `getEmbedderPtr()`. Durable token embedding ownership now lives only on `EmbeddingLayer`, and checkpoint save/load reads that device tensor directly with no parallel CPU embedding mirror.
   - **DELETED**: `getAlibiPtr()` accessor — zero callers, returned the dead `alibi_` member above
   - **NOTE (not fixed)**: `HardcodedPattern` enum is duplicated in `LanguageModelConfig` and `HardcodedStates_GPU.hpp` with `static_cast` bridge in Phase1. Fragile but diagnostic-only — defer unification.

@@ -11,6 +11,7 @@
 //  This phase handles all startup operations before training:
 //  - Receives the validated training startup config root
 //  - Tokenizer initialization
+//  - Layer assembly-line input handoff
 //  - Model initialization
 //  - Data loading and preprocessing
 //  - Optimizer state initialization
@@ -60,6 +61,7 @@
 #include "../../Shared/LogRecorder/Sinks/TextLogSink.hpp"
 #include "../../Shared/LogRecorder/Sinks/CsvEquationSink.hpp"
 #include "../../Shared/LogRecorder/Sinks/StderrSink.hpp"
+#include "../../Shared/PBM/PBMStateOwner.hpp"
 #include "../training_logger.hpp"
 #include "../training_status_writer.hpp"
 #include "../metrics_collector.hpp"
@@ -70,6 +72,8 @@
 #include "Startup/Logging.hpp"
 #include "Startup/Capacity/MemorySnapshot.hpp"
 #include "Startup/Data/DataInfo.hpp"
+#include "Startup/Model/LayerAssembly.hpp"
+#include "Startup/Model/ParameterRegistry.hpp"
 #include "Startup/Model/ModelAllocationState.hpp"
 #include "Startup/CheckpointLoad.hpp"
 #include "Startup/Epoch/EpochPlan.hpp"
@@ -83,7 +87,7 @@ using ::TrainingSequence;
 using ::GRMTDataLoader;
 
 //======================================================//
-//  Data Structures for Training Loop
+//  Data Structures for Training Loop 
 //======================================================//
 
 /**
@@ -204,15 +208,29 @@ struct TrainingContext {
     ResumeState resume_state;
     // Data summary/reference artifact (SequenceData remains storage owner)
     DataInfo data_info;
+    // Phase1-authored startup/model input seam gathered after tokenizer/data
+    // facts and RNG are ready, but before ModelAllocated consumes it. It is
+    // not a topology or documentation owner.
+    GRIMText::Training::Startup::LayerAssembly layer_assembly;
     // Startup-owned epoch plan facts (LR schedule config, total steps, warmup)
     EpochPlan epoch_plan;
     // Phase1-authored snapshot of static inputs to GRIM::Batching::buildBatchPayload.
     // Contract-checks the model ↔ run_capacity cache agreement once at startup so
     // Phase2's per-batch payload builder never re-reads or re-validates them.
     PayloadBuildInputs payload_build_inputs;
-    // Startup-owned durable GPU model topology. LanguageModel borrows this
-    // state; it is not the owner of encoder/layer/MTP objects.
+    // Startup-owned durable PBM buffers. This is the explicit PBM owner;
+    // GpuModelState and LanguageModel only borrow PBM state during startup/
+    // runtime assembly.
+    GRIM::PBM::PBMStateOwner pbm_owner;
+    // Startup-owned durable GPU model topology. `layer_assembly` is the
+    // pre-allocation input seam; `gpu_model` is the actual long-
+    // lived owner once assembly happens. LanguageModel borrows this state; it
+    // is not the owner of encoder/layer topology.
     GRIMText::Training::Startup::GpuModelState gpu_model;
+    // Single startup-owned writable-parameter access point. ParameterRegistry
+    // declares the owner types; ParameterGroupRegistration sequences assembly,
+    // validation, and inventory publication against this durable registry.
+    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry parameter_registry;
 
     //==================================================//
     // Phase1-owned PLANNED BATCHES (PrecomputeBatchPayloads.plan.md)

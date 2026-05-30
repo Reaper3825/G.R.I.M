@@ -23,6 +23,8 @@ namespace GRIM { namespace Config { struct AiConfigSnapshot; } }
 
 namespace GRIMText::Training {
 
+struct TrainingContext;
+
 /**
  * @brief Production-grade RNG context with reproducibility support.
  *
@@ -69,4 +71,7 @@ RNGContext initializeRNG(const ::GRIM::Config::AiConfigSnapshot& config,
                          TrainingLogger& logger);
 
 } // namespace Internal
+
+void RngReady(::GRIMText::Training::TrainingContext& ctx);
+
 } // namespace GRIMText::Training

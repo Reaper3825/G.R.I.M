@@ -16,6 +16,7 @@
 #pragma once
 
 #include "AutogradIntermediates.hpp"
+#include "../Phases/Startup/Model/ParameterRegistry.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/TrainingState/TrainingState_GPU.hpp"
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
@@ -101,6 +102,7 @@ struct AutogradContext {
     // ═══════════════════════════════════════════════════════════════════════════
     ScratchBlockLayer* scratch_block = nullptr;
     ExecutionBlockLayer* execution_block = nullptr;
+    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry* parameter_registry = nullptr;
 
     /** Model pointer for MTP head access in computeAutogradLoss; set by autogradTrainingStep. */
     LanguageModel* model = nullptr;
@@ -174,6 +176,7 @@ AutogradContext initAutogradContext(
     LMHeadLayer* lm_head,
     ScratchBlockLayer* scratch_block,
     ExecutionBlockLayer* execution_block,
+    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
     const Batching::BatchPayload& payload,

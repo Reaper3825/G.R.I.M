@@ -136,11 +136,9 @@ static __global__ void kernel_encoding_fill_value(float* data, int count, float 
 //  Optimizer sees them via the existing public accessors (rms1Gamma(), attnWqkv(), etc.)
 // ═══════════════════════════════════════════════════════════════════════════
  EncodingLayer::EncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp_snapshot,
-                                        const PBM::PBMState& pos_encoding,
                                         uint64_t seed,
                                         cudaStream_t init_stream)
-     : hp_(hp_snapshot)
-     , pos_encoding_(&pos_encoding) {
+     : hp_(hp_snapshot) {
      validateConstructionSnapshot("EncodingLayer::EncodingLayer");
     allocateWeights(seed, init_stream);
 }
@@ -265,7 +263,6 @@ EncodingLayer::~EncodingLayer() {
 
 EncodingLayer::EncodingLayer(EncodingLayer&& other) noexcept
     : hp_(other.hp_)
-    , pos_encoding_(other.pos_encoding_)
     , weights_ready_(other.weights_ready_)
     , rms1_gamma_(std::move(other.rms1_gamma_))
     , rms2_gamma_(std::move(other.rms2_gamma_))
@@ -277,8 +274,6 @@ EncodingLayer::EncodingLayer(EncodingLayer&& other) noexcept
     , layer_scale1_(std::move(other.layer_scale1_))
     , layer_scale2_(std::move(other.layer_scale2_))
 {
-    // Null out the moved-from object
-    other.pos_encoding_ = nullptr;
     other.weights_ready_ = false;
 }
 
@@ -287,7 +282,6 @@ EncodingLayer& EncodingLayer::operator=(EncodingLayer&& other) noexcept {
         freeWeights();
         
         hp_ = other.hp_;
-        pos_encoding_ = other.pos_encoding_;
         weights_ready_ = other.weights_ready_;
         rms1_gamma_ = std::move(other.rms1_gamma_);
         rms2_gamma_ = std::move(other.rms2_gamma_);
@@ -299,7 +293,6 @@ EncodingLayer& EncodingLayer::operator=(EncodingLayer&& other) noexcept {
         layer_scale1_ = std::move(other.layer_scale1_);
         layer_scale2_ = std::move(other.layer_scale2_);
         
-        other.pos_encoding_ = nullptr;
         other.weights_ready_ = false;
     }
     return *this;
@@ -332,9 +325,11 @@ void EncodingLayer::validateReady(const char* context) const {
 }
 
 void EncodingLayer::validateConstructionSnapshot(const char* context) const {
-    if (!pos_encoding_) {
+    if (hp_.d_model <= 0 || hp_.num_layers <= 0 || hp_.qkv_dim <= 0) {
         throw std::invalid_argument(std::string(context) +
-            ": pos_encoding_ is NULL - PBM must be initialized before encoder construction");
+            ": invalid encoder construction snapshot d_model=" + std::to_string(hp_.d_model) +
+            " num_layers=" + std::to_string(hp_.num_layers) +
+            " qkv_dim=" + std::to_string(hp_.qkv_dim));
     }
 }
 
@@ -348,6 +343,7 @@ void EncodingLayer::validateConstructionSnapshot(const char* context) const {
 //======================================================//
 
 void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
+                            const PBM::PBMState& pos_encoding,
                             cudaStream_t stream, cublasHandle_t cublas_handle,
                             Forward::ModelForwardOutputs& forward_outputs,
                             uint64_t batch_idx,
@@ -455,9 +451,6 @@ void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // Attention owns QKV projection, RoPE/ALiBi, SDPA, diagnostics, dropout seed,
     // BHSD flattening, and output projection. Encoder only supplies the PBM spec.
     //--------------------------------------------------
-    if (!pos_encoding_) {
-        throw std::runtime_error("EncodingLayer::forward: pos_encoding_ is NULL before attention call");
-    }
     const HyperParameters::EncoderSelfAttentionHP attention_hp =
         HyperParameters::encoderSelfAttentionHP(hp);
     const HyperParameters::FlashAttentionRuntimeHP flash_attention_hp =
@@ -467,7 +460,6 @@ void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
         payload,
         attention_hp,
         flash_attention_hp,
-        *pos_encoding_,
         stream,
         cublas_handle,
         dropout_batch_seed,
@@ -477,6 +469,7 @@ void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     Attention::encoderSelfAttentionForward(
         ln1_out,
         attention_weights,
+        pos_encoding,
         attention_request,
         forward_outputs);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 2: Attention facade DONE\n");

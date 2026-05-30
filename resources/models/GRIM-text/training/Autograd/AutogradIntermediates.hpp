@@ -16,7 +16,6 @@
 
 #include "../../Shared/Forward/ModelForwardOutputs.hpp"
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
-#include "../../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
 
 #include <vector>
 
@@ -43,15 +42,16 @@ struct AutogradIntermediates : public Forward::ModelForwardOutputs {
     bool exec_write_ce_added = false;                         // true iff active write selection CE was added to loss_tensor
     bool exec_transition_added = false;                       // true iff active transition/value execution loss was added to loss_tensor
 
-    // Selector supervision — SelectorForwardResult owns intermediate Tensors
+    // Selector supervision — Forward::SelectorForwardResult owns intermediate Tensors
     // (q, slot_keys) whose .data is cached by MatMulGradFn nodes. MUST stay
     // alive from computeAutogradLoss() through executeAutogradBackward().
     // The selector input tensors below own copies of h_t and slot_features;
     // selector grad fns need those buffers for W_q/W_k gradients, so borrowed
-    // views into ExecutionMemory/DecodeTimeNumPolicy are forbidden here.
+    // views into ExecutionMemory/decode-time selector runtime scratch are
+    // forbidden here.
     std::vector<Tensor> selector_h_t_inputs;
     std::vector<Tensor> selector_slot_feature_inputs;
-    std::vector<SelectorForwardResult> selector_fwd_results;
+    std::vector<Forward::SelectorForwardResult> selector_fwd_results;
 
     // NOTE (Rule 20 — Ownership Taxonomy): The cross-attention read-gate
     // accumulator (Category 3 workspace) and its host snapshot (Category 2

@@ -1,8 +1,8 @@
 #pragma once
 //======================================================//
-//  DecodeTimeNumPolicy — decode-time <NUM> policy
+//  DecodeTimeNumPolicy — decode-time <NUM> selector ops
 //
-//  Owns:
+//  Exposes:
 //    - Live candidate set L construction from ExecutionMemory
 //    - Fixed deterministic slot_features[s] assembly (non-trainable)
 //    - Null / Ambiguity / Selected policy decision from selector scores
@@ -11,10 +11,11 @@
 //      for decode-time selector evaluation consumed by Phase2 generation.
 //
 //  Does NOT own:
-//    - Trainable selector tensors (DecodeTimeSlotSelectorLayer)
-//    - Learned slot-state encoding (DecodeTimeSlotSelectorLayer)
+//    - Trainable selector tensors (DecodeTimeSlotSelector owner)
+//    - Learned slot-state encoding (DecodeTimeSlotSelector ops)
 //    - Sampler mask application (generation path)
 //    - ExecutionMemory allocation/lifecycle (ExecutionBlockLayer)
+//    - Runtime candidate/scratch buffers (owned by DecodeTimeSelectorRuntime)
 //======================================================//
 
 #ifdef __CUDACC__
@@ -27,26 +28,21 @@ struct cublasContext;
 using cublasHandle_t = cublasContext*;
 #endif
 
-#include <cstdint>
+#include "DecodeTimeResolveResult.hpp"
 #include "../HyperParameters/HyperparameterGroupings.hpp"
 
 namespace GRIM {
 
-//──────────────────────────────────────────────────────
-// Selector policy result types
-//──────────────────────────────────────────────────────
+namespace Forward {
+struct DecodeTimeSelectorRuntime;
+}
 
-enum class SlotSelectionStatus : uint8_t {
-    Selected,   // Exactly one legal slot resolved
-    Null,       // Explicit null selection (no slot needed)
-    Ambiguous   // Legal candidates exist but no unique winner
-};
+namespace Batching {
+struct BatchPayload;
+struct BatchDeviceBindings;
+}
 
-struct SlotSelectionResult {
-    SlotSelectionStatus status;
-    int32_t selected_slot;   // Valid only when status == Selected; actual slot index in L
-    float confidence;        // top1 - top2 margin when applicable
-};
+struct ExecutionMemory;
 
 //──────────────────────────────────────────────────────
 // Slot feature layout for fixed feature assembly
@@ -65,88 +61,77 @@ struct SlotSelectionResult {
 // fails loud otherwise instead of silently changing feature layout semantics.
 static constexpr int kSlotFeatureDim = 5;
 
-// Maximum supported live slots (matches DecodeTimeSlotSelectorLayer::kMaxSlots)
-static constexpr int kPolicyMaxSlots = 16;
-
 //──────────────────────────────────────────────────────
 // PolicyCandidateSet — assembled live slot data
 //──────────────────────────────────────────────────────
 
-struct PolicyCandidateSet {
-    int num_live_slots;                            // |L|
-    int32_t live_slot_ids[kPolicyMaxSlots];         // Actual slot indices for each candidate
-    float slot_features[kPolicyMaxSlots * kSlotFeatureDim]; // Host-side packed features
-    float* d_slot_features;                         // Device pointer [num_live, kSlotFeatureDim]
-};
+// Validate the grouped selector construction contract that all decode-time
+// selector ops rely on.
+void validateDecodeTimeNumPolicyConfig(
+    const HyperParameters::DecodeTimeSelectorConstructionHP& hp);
 
-//──────────────────────────────────────────────────────
-// DecodeTimeNumPolicy
-//──────────────────────────────────────────────────────
+// Build live candidate set L from ExecutionMemory fields.
+// All inputs are device pointers to ExecutionMemory tensors.
+//
+//   d_valid_mask:       [V]   float valid bits
+//   d_values:           [V,1] float scalar values
+//   d_recent_write:     [V]   float recent-write one-hot
+//   d_usage:            [V]   float usage scalars
+//   V:                  total slots
+//   scratch_slots:      S — slots [0..S-1] are scratch-only (excluded from L)
+//   stream:             CUDA stream for GPU build + tiny count readback
+//
+// Populates the caller-owned runtime candidate set. Host-side code receives
+// only num_live_slots; compact live slot ids remain device-resident.
+void buildDecodeTimeCandidateSet(
+    const HyperParameters::DecodeTimeSelectorConstructionHP& hp,
+    const float* d_valid_mask,
+    const float* d_values,
+    const float* d_recent_write,
+    const float* d_usage,
+    Forward::DecodeTimeSelectorRuntime& runtime,
+    int V,
+    int scratch_slots,
+    cudaStream_t stream);
 
-class DecodeTimeNumPolicy {
-public:
-    explicit DecodeTimeNumPolicy(const HyperParameters::DecodeTimeSelectorConstructionHP& hp);
-    ~DecodeTimeNumPolicy();
+// Batch-aware entry point for training/shared-forward consumers.
+// BatchPayload owns row runtime semantics, BatchDeviceBindings owns the
+// uploaded GPU addresses for that row, and ExecutionMemory owns final slot
+// state. Candidate feature packing remains GPU-only inside the shared runtime.
+void buildDecodeTimeCandidateSet(
+    const HyperParameters::DecodeTimeSelectorConstructionHP& hp,
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
+    const ExecutionMemory& exec_memory,
+    Forward::DecodeTimeSelectorRuntime& runtime,
+    int batch_row,
+    cudaStream_t stream);
 
-    DecodeTimeNumPolicy(DecodeTimeNumPolicy&& other) noexcept;
-    DecodeTimeNumPolicy& operator=(DecodeTimeNumPolicy&& other) noexcept;
+// Evaluate selector scores to produce a selection decision.
+//
+//   d_scores:        device pointer [1 + num_live_slots] from selector
+//   num_live_slots:  must match runtime.num_live_slots
+//   stream:          CUDA stream
+GRIM::SlotSelectionResult evaluateDecodeTimeSelectionScores(
+    const HyperParameters::DecodeTimeSelectorConstructionHP& hp,
+    const float* d_scores,
+    Forward::DecodeTimeSelectorRuntime& runtime,
+    int num_live_slots,
+    cudaStream_t stream);
 
-    DecodeTimeNumPolicy(const DecodeTimeNumPolicy&) = delete;
-    DecodeTimeNumPolicy& operator=(const DecodeTimeNumPolicy&) = delete;
-
-    // Build live candidate set L from ExecutionMemory fields.
-    // All inputs are device pointers to ExecutionMemory tensors.
-    //
-    //   d_valid_mask:       [V]   float valid bits
-    //   d_values:           [V,1] float scalar values
-    //   d_recent_write:     [V]   float recent-write one-hot
-    //   d_usage:            [V]   float usage scalars
-    //   V:                  total slots
-    //   scratch_slots:      S — slots [0..S-1] are scratch-only (excluded from L)
-    //   stream:             CUDA stream for H2D copies
-    //
-    // Populates internal candidate set and uploads features to device.
-    void buildCandidateSet(const float* d_valid_mask,
-                           const float* d_values,
-                           const float* d_recent_write,
-                           const float* d_usage,
-                           int V,
-                           int scratch_slots,
-                           cudaStream_t stream);
-
-    // Evaluate selector scores to produce a selection decision.
-    //
-    //   d_scores:        device pointer [1 + num_live_slots] from selector
-    //   num_live_slots:  must match candidates_.num_live_slots
-    //   stream:          CUDA stream
-    //
-    // Returns SlotSelectionResult with status, selected_slot (real slot index), confidence.
-    SlotSelectionResult evaluateScores(const float* d_scores,
-                                       int num_live_slots,
-                                       cudaStream_t stream);
-
-    // Access candidate set after buildCandidateSet()
-    const PolicyCandidateSet& candidates() const { return candidates_; }
-
-    const HyperParameters::DecodeTimeSelectorConstructionHP& hp() const { return hp_; }
-
-private:
-    HyperParameters::DecodeTimeSelectorConstructionHP hp_;
-    PolicyCandidateSet candidates_;
-
-    // Host staging buffers for H2D reads during candidate construction
-    float* h_valid_mask_ = nullptr;
-    float* h_values_ = nullptr;
-    float* h_recent_write_ = nullptr;
-    float* h_usage_ = nullptr;
-    float* h_scores_ = nullptr;
-};
+// Resolve a host-authored real slot id to the selector CE class index using
+// the device compact candidate list. Returns -1 if the slot is absent.
+int resolveDecodeTimeTargetIndexForSlot(
+    const HyperParameters::DecodeTimeSelectorConstructionHP& hp,
+    int32_t target_slot,
+    Forward::DecodeTimeSelectorRuntime& runtime,
+    cudaStream_t stream);
 
 //──────────────────────────────────────────────────────
 // resolveDecodeTimeNumSlotSelectionOrMask
 //
 // Shared entry-point for decode-time selector evaluation.
-// Called by Phase2 generation paths to produce a SlotSelectionResult.
+// Called by Phase2 generation paths to produce a selection result.
 //
 // Semantics:
 //   - Empty prompt_token_to_slot_map → all tokens mapped to -1
@@ -163,20 +148,12 @@ private:
 //──────────────────────────────────────────────────────
 
 // Forward declarations for types used by the resolver
-class DecodeTimeSlotSelectorLayer;
-struct ExecutionMemory;
-
-struct DecodeTimeResolveResult {
-    bool valid = false;
-    SlotSelectionStatus status = SlotSelectionStatus::Null;
-    int32_t selected_slot = -1;
-    float selected_value = 0.0f;
-};
+struct DecodeTimeSlotSelector;
 
 /// Evaluate the decode-time slot selector against the current execution memory.
 ///
 /// @param selector       Trainable selector layer (nullable — returns invalid if null)
-/// @param policy         Decode-time policy (nullable — returns invalid if null)
+/// @param selector_hp    Grouped selector construction/read-view payload
 /// @param selector_enabled  Config flag controlling selector
 /// @param exec_block_active Whether execution block was active for this sequence
 /// @param has_exec_memory   Whether inference exec memory is populated
@@ -187,8 +164,9 @@ struct DecodeTimeResolveResult {
 ///
 /// @return DecodeTimeResolveResult with valid/status/selected_slot/selected_value
 DecodeTimeResolveResult resolveDecodeTimeNumSlotSelectionOrMask(
-    DecodeTimeSlotSelectorLayer* selector,
-    DecodeTimeNumPolicy* policy,
+    const DecodeTimeSlotSelector* selector,
+    const HyperParameters::DecodeTimeSelectorConstructionHP& selector_hp,
+    Forward::DecodeTimeSelectorRuntime& runtime,
     bool selector_enabled,
     bool exec_block_active,
     bool has_exec_memory,

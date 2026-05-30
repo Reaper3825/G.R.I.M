@@ -31,8 +31,6 @@
 // Forward declaration for autograd tensor system
 namespace GRIM {
     class EmbeddingLayer;
-    enum class SlotSelectionStatus : uint8_t;
-    struct SlotSelectionResult;
 }
 
 // AutogradIntermediates: owns all intermediate tensors during forward→backward

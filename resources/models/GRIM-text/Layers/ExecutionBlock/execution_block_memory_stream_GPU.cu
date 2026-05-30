@@ -405,6 +405,7 @@ void ExecutionBlockLayer::bootstrapMemoryFromSlotMap(
     EXEC_CHECK(device_slot_map != nullptr, "bootstrapMemoryFromSlotMap: device_slot_map is null");
     EXEC_CHECK(row_tokens > 0, "bootstrapMemoryFromSlotMap: row_tokens must be positive");
     validateMemoryOrThrow(M);
+    const auto& params = ExecutionBlockInternal::LayerAccess::parameters(*this);
 
     const int V = hp_.num_slots;
 
@@ -433,15 +434,15 @@ void ExecutionBlockLayer::bootstrapMemoryFromSlotMap(
     kernelBootstrapSlotEmbeddings<<<V, kBlockSize, smem_bytes, stream>>>(
         M.state_embeds.data, M.key_embeds.data,
         M.values.data, M.valid_mask.data,
-        W_value_to_emb().data, b_value_to_emb().data,
-        W_key_proj().data,
+        params.W_value_to_emb.data, params.b_value_to_emb.data,
+        params.W_key_proj.data,
         V, dm, dk);
     CUDA_CHECK_KERNEL();
 
     const int dt = hp_.d_type;
     kernelBootstrapTypeEmbed<<<V, kBlockSize, 0, stream>>>(
         M.type_embed.data, M.valid_mask.data,
-        type_num_embed().data, V, dt);
+        params.type_num_embed.data, V, dt);
     CUDA_CHECK_KERNEL();
 }
 
@@ -644,6 +645,7 @@ void applyHardWriteback(
     cudaStream_t stream,
     const StepWorkingSet& work
 ) {
+    const auto& params = LayerAccess::parameters(layer);
     const int V = layer.hp().num_slots;
     const int S = layer.hp().num_scratch_slots;
     const int dm = layer.hp().d_model;
@@ -666,7 +668,7 @@ void applyHardWriteback(
     CUDA_CHECK_KERNEL();
     kernelHardWriteRowDev<<<1, kBlockSize, 0, stream>>>(memory.atom_embeds.data, d_exec_idx + 3, ae, work.atom_new.data);
     CUDA_CHECK_KERNEL();
-    kernelHardWriteRowDev<<<1, kBlockSize, 0, stream>>>(memory.type_embed.data, d_exec_idx + 3, dt, layer.type_num_embed().data);
+    kernelHardWriteRowDev<<<1, kBlockSize, 0, stream>>>(memory.type_embed.data, d_exec_idx + 3, dt, params.type_num_embed.data);
     CUDA_CHECK_KERNEL();
     kernelSetValidMaskDev<<<1, 1, 0, stream>>>(memory.valid_mask.data, d_exec_idx + 3);
     CUDA_CHECK_KERNEL();
@@ -774,6 +776,7 @@ Tensor crossAttentionReadImpl(
     float* d_gate_accum  // [2] device accumulator: [sum, count]. nullptr = skip.
 ) {
     using namespace autograd;
+    const auto& params = LayerAccess::parameters(layer);
 
     const int dm = layer.hp().d_model;
     const int dk = layer.hp().d_key;
@@ -790,13 +793,13 @@ Tensor crossAttentionReadImpl(
     auto H_view = Tensor::from_ptr(H_row, {row_tokens, dm}, stream, "exec_read_H_view");
 
     // Q = H_view @ W_Q_read  [row_tokens, hd]
-    Tensor Q = matmul(H_view, layer.W_Q_read(), stream, nullptr, nullptr, false);
+    Tensor Q = matmul(H_view, params.W_Q_read, stream, nullptr, nullptr, false);
 
     // K_proj = key_embeds @ W_K_read  [nv, hd]
-    Tensor K_proj = matmul(memory.key_embeds, layer.W_K_read(), stream, nullptr, nullptr, false);
+    Tensor K_proj = matmul(memory.key_embeds, params.W_K_read, stream, nullptr, nullptr, false);
 
     // V_proj = state_embeds @ W_V_read  [nv, hd]
-    Tensor V_proj = matmul(memory.state_embeds, layer.W_V_read(), stream, nullptr, nullptr, false);
+    Tensor V_proj = matmul(memory.state_embeds, params.W_V_read, stream, nullptr, nullptr, false);
 
     // raw_scores = Q @ K_proj^T  [row_tokens, nv]
     Tensor raw_scores = matmul(Q, K_proj, stream, nullptr, nullptr, true);
@@ -808,7 +811,7 @@ Tensor crossAttentionReadImpl(
     // Read tau to host for softmax temperature — matches original behavior.
     // (tau gradient can be added later with broadcast_mul primitive if needed.)
     float h_tau = 0.0f;
-    CUDA_CHECK(cudaMemcpyAsync(&h_tau, layer.tau().data, sizeof(float), cudaMemcpyDeviceToHost, stream));
+    CUDA_CHECK(cudaMemcpyAsync(&h_tau, params.tau.data, sizeof(float), cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
     if (h_tau < 0.01f) h_tau = 0.01f;
 
@@ -827,11 +830,11 @@ Tensor crossAttentionReadImpl(
     Tensor R = matmul(attn_weights, V_proj, stream, nullptr, nullptr, false);
 
     // proj = R @ W_O_read  [row_tokens, dm]
-    Tensor proj = matmul(R, layer.W_O_read(), stream, nullptr, nullptr, false);
+    Tensor proj = matmul(R, params.W_O_read, stream, nullptr, nullptr, false);
 
     // gate = sigmoid(H_view @ W_gate_read) [row_tokens, 1]
     // Composed from primitives: sigmoid(x) = reciprocal(add_scalar(exp(mul_scalar(x, -1)), 1))
-    Tensor gate_logits = matmul(H_view, layer.W_gate_read(), stream, nullptr, nullptr, false);
+    Tensor gate_logits = matmul(H_view, params.W_gate_read, stream, nullptr, nullptr, false);
     Tensor neg_logits = mul_scalar(gate_logits, -1.0f, stream);
     Tensor exp_neg = exp(neg_logits, stream);
     Tensor one_plus_exp = add_scalar(exp_neg, 1.0f, stream);

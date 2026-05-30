@@ -76,6 +76,18 @@ struct ExecutionBlockOutput {
     std::vector<ExecutionBlockStepOutput> steps;
 };
 
+// Decode-time selector forward result: autograd-tracked score tensor plus
+// keep-alive intermediates whose .data pointers are captured by upstream
+// MatMulGradFn nodes. This payload is Category 1 graph-owned forward state.
+struct SelectorForwardResult {
+    Tensor scores;           // [1, 1+num_live_slots] — logits over { NULL } ∪ L
+    int num_live_slots = 0;
+
+    // These intermediates MUST stay alive until backward() completes.
+    Tensor q;                // [1, d_selector]
+    Tensor slot_keys;        // [num_live, d_selector] (empty if no slots)
+};
+
 struct ModelForwardOutputs {
 private:
     static int countGradFns(const std::vector<Tensor>& tensors) {

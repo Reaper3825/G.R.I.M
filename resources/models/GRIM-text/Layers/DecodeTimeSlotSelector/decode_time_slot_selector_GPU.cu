@@ -1,5 +1,5 @@
 //======================================================//
-//  DecodeTimeSlotSelectorLayer — implementation
+//  DecodeTimeSlotSelector — implementation
 //
 //  Pattern B (self-managed autograd):
 //  Forward uses autograd::matmul, autograd::add, autograd::concat.
@@ -32,33 +32,45 @@ namespace GRIM {
     } \
 } while (0)
 
-// ─── Constructor ─────────────────────────────────────
+void validateDecodeTimeSlotSelectorConfig(
+    const HyperParameters::DecodeTimeSelectorConstructionHP& hp)
+{
+    if (hp.d_model <= 0) {
+        throw std::runtime_error("DecodeTimeSlotSelector: d_model must be positive, got " +
+                                 std::to_string(hp.d_model));
+    }
+    if (hp.d_selector <= 0) {
+        throw std::runtime_error("DecodeTimeSlotSelector: d_selector must be positive, got " +
+                                 std::to_string(hp.d_selector));
+    }
+    if (hp.d_slot_features <= 0) {
+        throw std::runtime_error("DecodeTimeSlotSelector: d_slot_features must be positive, got " +
+                                 std::to_string(hp.d_slot_features));
+    }
+    if (hp.num_slots <= 0) {
+        throw std::runtime_error("DecodeTimeSlotSelector: num_slots must be positive, got " +
+                                 std::to_string(hp.num_slots));
+    }
+    if (hp.scratch_slots < 0 || hp.scratch_slots >= hp.num_slots) {
+        throw std::runtime_error("DecodeTimeSlotSelector: scratch_slots=" +
+                                 std::to_string(hp.scratch_slots) +
+                                 " out of range [0, " + std::to_string(hp.num_slots) + ")");
+    }
+}
 
-DecodeTimeSlotSelectorLayer::DecodeTimeSlotSelectorLayer(
+DecodeTimeSlotSelector createDecodeTimeSlotSelector(
     const HyperParameters::DecodeTimeSelectorConstructionHP& hp,
     uint64_t seed,
     cudaStream_t init_stream)
-    : hp_(hp)
 {
-    if (hp_.d_model <= 0) {
-        throw std::runtime_error("DecodeTimeSlotSelectorLayer: d_model must be positive, got " +
-                                 std::to_string(hp_.d_model));
-    }
-    if (hp_.d_selector <= 0) {
-        throw std::runtime_error("DecodeTimeSlotSelectorLayer: d_selector must be positive, got " +
-                                 std::to_string(hp_.d_selector));
-    }
-    if (hp_.d_slot_features <= 0) {
-        throw std::runtime_error("DecodeTimeSlotSelectorLayer: d_slot_features must be positive, got " +
-                                 std::to_string(hp_.d_slot_features));
-    }
+    validateDecodeTimeSlotSelectorConfig(hp);
     if (!init_stream) {
-        throw std::runtime_error("DecodeTimeSlotSelectorLayer: init_stream is NULL");
+        throw std::runtime_error("createDecodeTimeSlotSelector: init_stream is NULL");
     }
 
-    const int dm = hp_.d_model;
-    const int ds = hp_.d_selector;
-    const int df = hp_.d_slot_features;
+    const int dm = hp.d_model;
+    const int ds = hp.d_selector;
+    const int df = hp.d_slot_features;
 
     auto make_param = [&](int rows, int cols, uint64_t s, const char* name) -> Tensor {
         auto t = Tensor::zeros(TensorContract::TensorShape::make_BSM(rows, cols),
@@ -69,76 +81,47 @@ DecodeTimeSlotSelectorLayer::DecodeTimeSlotSelectorLayer(
         return t;
     };
 
-    // W_q_select: [d_model, d_selector]
-    W_q_select_ = make_param(dm, ds, seed, "selector.W_q_select");
+    DecodeTimeSlotSelector selector{};
+    selector.W_q_select = make_param(dm, ds, seed, "selector.W_q_select");
+    selector.W_k_select = make_param(df, ds, seed + 1, "selector.W_k_select");
+    selector.null_key_select = make_param(1, ds, seed + 2, "selector.null_key_select");
+    selector.null_logit_bias = Tensor::zeros(TensorContract::TensorShape::make_BSM(1, 1),
+                                             true, init_stream, "selector.null_logit_bias");
+    selector.null_logit_bias.requires_grad_();
+    selector.null_logit_bias.ensure_grad();
 
-    // W_k_select: [d_slot_features, d_selector]
-    W_k_select_ = make_param(df, ds, seed + 1, "selector.W_k_select");
-
-    // null_key_select: [1, d_selector] — learnable NULL key
-    null_key_select_ = make_param(1, ds, seed + 2, "selector.null_key_select");
-
-    // null_logit_bias: [1, 1] scalar — init to 0
-    null_logit_bias_ = Tensor::zeros(TensorContract::TensorShape::make_BSM(1, 1),
-                                     true, init_stream, "selector.null_logit_bias");
-    null_logit_bias_.requires_grad_();
-    null_logit_bias_.ensure_grad();
-
-    std::fprintf(stderr, "[DecodeTimeSlotSelectorLayer] Autograd self-allocated: "
+    std::fprintf(stderr, "[DecodeTimeSlotSelector] Autograd self-allocated: "
                  "W_q=[%d,%d], W_k=[%d,%d], null_key=[1,%d], bias=[1,1]\n",
                  dm, ds, df, ds, ds);
-}
-
-// ─── Destructor ──────────────────────────────────────
-
-DecodeTimeSlotSelectorLayer::~DecodeTimeSlotSelectorLayer() {
-    // Tensors clean up via RAII — no manual buffers
-}
-
-// ─── Move semantics ──────────────────────────────────
-
-DecodeTimeSlotSelectorLayer::DecodeTimeSlotSelectorLayer(DecodeTimeSlotSelectorLayer&& other) noexcept
-        : hp_(other.hp_),
-            W_q_select_(std::move(other.W_q_select_)),
-      W_k_select_(std::move(other.W_k_select_)),
-      null_key_select_(std::move(other.null_key_select_)),
-      null_logit_bias_(std::move(other.null_logit_bias_))
-{
-}
-
-DecodeTimeSlotSelectorLayer& DecodeTimeSlotSelectorLayer::operator=(DecodeTimeSlotSelectorLayer&& other) noexcept {
-    if (this != &other) {
-        hp_ = other.hp_;
-        W_q_select_ = std::move(other.W_q_select_);
-        W_k_select_ = std::move(other.W_k_select_);
-        null_key_select_ = std::move(other.null_key_select_);
-        null_logit_bias_ = std::move(other.null_logit_bias_);
-    }
-    return *this;
+    return selector;
 }
 
 // ─── Forward (Pattern B: autograd primitives only) ───
 
-SelectorForwardResult DecodeTimeSlotSelectorLayer::forward(
+GRIM::Forward::SelectorForwardResult forwardDecodeTimeSlotSelector(
+    const DecodeTimeSlotSelector& selector,
+    const HyperParameters::DecodeTimeSelectorConstructionHP& hp,
     const Tensor& h_t,
     const Tensor& slot_features,
     int num_live_slots,
     cudaStream_t stream,
     cublasHandle_t cublas_handle)
 {
+    validateDecodeTimeSlotSelectorConfig(hp);
     if (!stream) {
-        throw std::runtime_error("DecodeTimeSlotSelectorLayer::forward: stream is NULL");
+        throw std::runtime_error("forwardDecodeTimeSlotSelector: stream is NULL");
     }
     if (!h_t.data) {
-        throw std::runtime_error("DecodeTimeSlotSelectorLayer::forward: h_t.data is NULL");
+        throw std::runtime_error("forwardDecodeTimeSlotSelector: h_t.data is NULL");
     }
-    if (num_live_slots < 0 || num_live_slots > kMaxSlots) {
-        throw std::runtime_error("DecodeTimeSlotSelectorLayer::forward: num_live_slots=" +
+    const int max_live_slots = hp.num_slots - hp.scratch_slots;
+    if (num_live_slots < 0 || num_live_slots > max_live_slots) {
+        throw std::runtime_error("forwardDecodeTimeSlotSelector: num_live_slots=" +
                                  std::to_string(num_live_slots) + " out of range [0, " +
-                                 std::to_string(kMaxSlots) + "]");
+                                 std::to_string(max_live_slots) + "]");
     }
     if (num_live_slots > 0 && !slot_features.data) {
-        throw std::runtime_error("DecodeTimeSlotSelectorLayer::forward: slot_features.data is NULL with num_live_slots > 0");
+        throw std::runtime_error("forwardDecodeTimeSlotSelector: slot_features.data is NULL with num_live_slots > 0");
     }
     if (num_live_slots > 0) {
         // Validate slot_features shape matches [num_live_slots, d_slot_features].
@@ -146,46 +129,46 @@ SelectorForwardResult DecodeTimeSlotSelectorLayer::forward(
         // wrong score vectors via the W_k matmul.
         if (slot_features.shape.layout == TensorContract::Layout::UNKNOWN) {
             throw std::runtime_error(
-                "DecodeTimeSlotSelectorLayer::forward: slot_features has UNKNOWN layout "
+                "forwardDecodeTimeSlotSelector: slot_features has UNKNOWN layout "
                 "with num_live_slots=" + std::to_string(num_live_slots));
         }
         const auto& sf = slot_features.shape.as_2d();
         if (sf.rows != num_live_slots) {
             throw std::runtime_error(
-                "DecodeTimeSlotSelectorLayer::forward: slot_features.rows=" +
+                "forwardDecodeTimeSlotSelector: slot_features.rows=" +
                 std::to_string(sf.rows) + " != num_live_slots=" +
                 std::to_string(num_live_slots));
         }
-        if (sf.cols != hp_.d_slot_features) {
+        if (sf.cols != hp.d_slot_features) {
             throw std::runtime_error(
-                "DecodeTimeSlotSelectorLayer::forward: slot_features.cols=" +
+                "forwardDecodeTimeSlotSelector: slot_features.cols=" +
                 std::to_string(sf.cols) + " != hp.d_slot_features=" +
-                std::to_string(hp_.d_slot_features));
+                std::to_string(hp.d_slot_features));
         }
     }
 
     // Set cuBLAS handle for autograd matmul
     if (!cublas_handle) {
-        throw std::runtime_error("DecodeTimeSlotSelectorLayer::forward: cublas_handle is NULL");
+        throw std::runtime_error("forwardDecodeTimeSlotSelector: cublas_handle is NULL");
     }
     autograd::set_autograd_cublas_handle(cublas_handle);
 
-    SelectorForwardResult result;
+    GRIM::Forward::SelectorForwardResult result;
     result.num_live_slots = num_live_slots;
 
     // Step 1: q = h_t @ W_q  →  [1, d_selector]
-    result.q = autograd::matmul(h_t, W_q_select_, stream, h_t.data, nullptr);
+    result.q = autograd::matmul(h_t, selector.W_q_select, stream, h_t.data, nullptr);
 
     // Step 2: null_score = q @ null_key^T  →  [1, 1]
-    Tensor null_score = autograd::matmul(result.q, null_key_select_, stream,
+    Tensor null_score = autograd::matmul(result.q, selector.null_key_select, stream,
                                           result.q.data, nullptr, /*transpose_b=*/true);
 
     // Step 3: null_score_biased = null_score + null_logit_bias  →  [1, 1]
-    Tensor null_score_biased = autograd::add(null_score, null_logit_bias_, stream);
+    Tensor null_score_biased = autograd::add(null_score, selector.null_logit_bias, stream);
 
     if (num_live_slots > 0) {
         // Step 4: slot_keys = slot_features @ W_k  →  [L, d_selector]
-        result.slot_keys = autograd::matmul(slot_features, W_k_select_, stream,
+        result.slot_keys = autograd::matmul(slot_features, selector.W_k_select, stream,
                                              slot_features.data, nullptr);
 
         // Step 5: slot_scores = q @ slot_keys^T  →  [1, L]

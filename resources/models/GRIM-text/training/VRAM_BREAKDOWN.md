@@ -147,7 +147,7 @@ LatticeLevelState = TelemetryState (20 float + 2 uint32) + stride (uint32_t) + l
 | **Params, grads, optimizer m/v** | Tensor / vector members of TrainingState; freed in ~TrainingState when members destruct. |
 | **Pre-allocated upload workspaces** (cached_targets, token caches, sequence_weights) | Tensor members; Tensor::~Tensor() → release() → cudaFree(data). |
 | **class_weights_tensor** | Tensor member; `Tensor::~Tensor()` releases class-balanced weights. |
-| **PBM (alibi_slopes, rope_inv_freq)** | `LanguageModel::pbm_owner_` (`PBM::PBMStateOwner`) RAII releases PBM buffers and upload event; consumers borrow the same `PBMState` instead of a duplicate view struct. |
+| **PBM (alibi_slopes, rope_inv_freq)** | `TrainingContext::pbm_owner` (`PBM::PBMStateOwner`) RAII releases PBM buffers and upload event; consumers borrow the same `PBMState` instead of a duplicate view struct. |
 | **TeacherLogits / reference_logits** | `TeacherLogits::Buffer` RAII destructor releases device storage. |
 | **Optimizer states** | `Training::OptimizerContext::optimizer_state.clear()` clears dedicated optimizer-state owner tensors. |
 | **Guess cache (GRIM-TS)** | `GuessCacheScope::OwnedBuffers` RAII member; released when `ctx.guess_cache_scope.reset()` runs before model teardown. |
@@ -159,7 +159,7 @@ LatticeLevelState = TelemetryState (20 float + 2 uint32) + stride (uint32_t) + l
 | **KV/decode BF16/FP32 buffers** | `DeviceAllocation` RAII members/vectors release typed CUDA buffers. |
 | **StreamController / cublas_handle** | streams owned by `StreamController`; cuBLAS owned by `CublasHandleOwner` RAII member. |
 
-Shutdown order: Phase3 `releaseResources()` → clear autograd_intermediates → ctx.model.reset() → ~LanguageModel (`LanguageModel::pbm_owner_` releases PBM before TrainingState stream/cuBLAS teardown) → defaulted ~TrainingState member teardown (TeacherLogits RAII, DeviceAllocation KV/decode buffers, GradNorm unique_ptr, cuBLAS owner, Tensor members). Telemetry is released when TrainingContext is destroyed after Phase3.
+Shutdown order: Phase3 `releaseResources()` → clear autograd_intermediates → ctx.model.reset() → ~LanguageModel → ~TrainingContext members in reverse declaration order, including `ctx.gpu_model` (layer topology teardown) and `ctx.pbm_owner` (PBM release), then the destroyed model's `TrainingState` teardown (TeacherLogits RAII, DeviceAllocation KV/decode buffers, GradNorm unique_ptr, cuBLAS owner, Tensor members). Telemetry is released when TrainingContext is destroyed after Phase3.
 
 ---
 

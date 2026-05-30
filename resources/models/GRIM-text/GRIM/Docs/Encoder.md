@@ -25,11 +25,13 @@ Layer code must not crack open `Tensor::shape` for matmul/activation compatibili
 ## Forward runtime handle ownership
 Encoder/FFN/LM-head/reasoning/selector layers must not store forward-time `cudaStream_t` or `cublasHandle_t`, and must not expose late `setStream()` / `setCublasHandle()` mutators. Startup may pass an init stream for self-allocation only. Actual forward execution handles come from the caller's payload/request (`AutogradContext` → `Forward::ModelForwardRequest`, or the inference/decode equivalent) and are passed into each forward call.
 
+PBM follows the same rule for forward-time ownership: Phase1 owns PBM initialization/readiness, but encoder layers do **not** cache a borrowed `PBMState*` as durable layer state. The shared forward request carries the borrowed Phase1-owned PBM state, `EncodingLayer::forward(...)` takes that borrowed PBM explicitly, and `encoderSelfAttentionForward(...)` takes PBM as an explicit signature input for the RoPE/ALiBi math call.
+
 ## Encoder type ownership
 `GPUGrimEncoder` is only a container of `EncodingLayer` instances. `grim_language_model_cuda.hpp` may forward-declare `EncodingLayer` for pointer access, but it must not mint a second public alias such as `GPUEncoderLayer`. The concrete layer type is owned by `Layers/Encoding/Encoding_GPU.hpp`; callers that need layer methods should include that header and work with `EncodingLayer*` directly.
 
 ## Dropout HP ownership
-Encoder and FFN dropout rates must come from `HyperParameters_GPU.hpp` → `EncoderLayerConstructionHP` → `FeedForwardLayerConstructionHP`. `EncodingLayer` stores the grouped encoder HP snapshot directly as `hp_` plus a borrowed PBM spec pointer; `FeedForwardLayer` stores its grouped FFN HP snapshot directly as `hp_`. Do not reintroduce layer-local dropout defaults, thin FFN config wrappers, or forward-runtime handle fields.
+Encoder and FFN dropout rates must come from `HyperParameters_GPU.hpp` → `EncoderLayerConstructionHP` → `FeedForwardLayerConstructionHP`. `EncodingLayer` stores the grouped encoder HP snapshot directly as `hp_`; `FeedForwardLayer` stores its grouped FFN HP snapshot directly as `hp_`. Do not reintroduce layer-local dropout defaults, thin FFN config wrappers, hidden PBM pointer state, or forward-runtime handle fields.
 
 ## Encoder dimension HP ownership
 Encoder GQA/QKV derived dimensions (`head_dim`, `heads_per_kv_group`, `kv_dim`, `qkv_dim`, `is_gqa`) are computed on the HyperParameters-owned typed config surface before grouping assignment. `HyperparameterGroupings.hpp` only slices those finalized values into `EncoderLayerConstructionHP`; `Encoding_GPU.cu` must consume those fields directly from `hp_` and must not recompute config geometry in layer methods.

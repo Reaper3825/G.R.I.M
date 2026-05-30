@@ -1,4 +1,5 @@
 #include "ParameterGroupRegistration.hpp"
+#include "ParameterRegistry.hpp"
 
 #include "ModelGpuState.hpp"
 
@@ -320,7 +321,7 @@ void registerEncoderParameters(Startup::GpuModelState& gpu_model_state,
     if (!gpu_encoder) {
         throw std::runtime_error(
             "[buildParameterGroups] gpu_model_state.gpu_encoder is NULL - "
-            "Startup::assembleGpuModel(model, gpu_model_state, weight_init_seed) must complete before parameter registration");
+            "Startup::assembleGpuModel(config, training_state, gpu_model_state, parameter_registry, weight_init_seed) must complete before parameter registration");
     }
     const int num_layers = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "num_layers");
     const bool use_bias = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "use_bias");
@@ -462,10 +463,12 @@ void registerScratchBlockParameters(LanguageModel& model,
 }
 
 void registerExecutionBlockParameters(LanguageModel& model,
+                                      ParameterRegistry::StartupParameterRegistry& parameter_registry,
                                       Registrar& registrar,
                                       const GRIM::Config::AiConfigSnapshot& config) {
     auto* execution_block = model.getExecutionBlockLayer();
-    auto* slot_selector = model.getDecodeTimeSlotSelectorLayer();
+    auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
+    auto* slot_selector = parameter_registry.getDecodeTimeSlotSelector();
     const auto execution_hp = GRIM::HyperParameters::executionBlockConstructionHP(config);
     const auto selector_hp = GRIM::HyperParameters::decodeTimeSelectorConstructionHP(config);
 
@@ -473,43 +476,21 @@ void registerExecutionBlockParameters(LanguageModel& model,
         if (execution_block) {
             throw std::runtime_error("[buildParameterGroups] ExecutionBlock layer exists while config.execution_block_enabled=false");
         }
+        if (execution_block_parameters) {
+            throw std::runtime_error("[buildParameterGroups] ExecutionBlock parameter owner exists while config.execution_block_enabled=false");
+        }
         if (selector_hp.enabled || slot_selector) {
             throw std::runtime_error("[buildParameterGroups] Slot selector requires config.execution_block_enabled=true");
         }
         return;
     }
 
-    auto& block = requireLayer(execution_block, "ExecutionBlockLayer", "registerExecutionBlockParameters");
-    registrar.addTensor("exec_block_w_decode_1", block.w_decode_1(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_b_decode_1", block.b_decode_1(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_w_decode_2", block.w_decode_2(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_w_arg1_select", block.w_arg1_select(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_w_arg2_select", block.w_arg2_select(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_W_op_select", block.W_op_select(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_W_key_proj", block.W_key_proj(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_W_write_query", block.W_write_query(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_W_write_key", block.W_write_key(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_alpha", block.alpha(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_beta", block.beta(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_step_embeddings", block.step_embeddings(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_type_num_embed", block.type_num_embed(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_W_value_to_emb", block.W_value_to_emb(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_b_value_to_emb", block.b_value_to_emb(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_w_inject_gate", block.w_inject_gate(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_W_Q_read", block.W_Q_read(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_W_K_read", block.W_K_read(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_W_V_read", block.W_V_read(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_W_O_read", block.W_O_read(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_W_gate_read", block.W_gate_read(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_tau", block.tau(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_E_slot", block.E_slot(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_E_op", block.E_op(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_W_scal", block.W_scal(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_b_scal", block.b_scal(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_W_trace", block.W_trace(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_b_trace", block.b_trace(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_W_reason_gate", block.W_reason_gate(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
-    registrar.addTensor("exec_block_W_trace_gate", block.W_trace_gate(), ParamGroupType::EXECUTION_BLOCK, ParamStatsBucket::ENCODER);
+    requireLayer(execution_block, "ExecutionBlockLayer", "registerExecutionBlockParameters");
+    auto& execution_block_tensor_owner = requireLayer(
+        execution_block_parameters,
+        "ExecutionBlockParameterTensors",
+        "registerExecutionBlockParameters");
+    ParameterRegistry::registerExecutionBlockParameters(execution_block_tensor_owner, registrar);
 
     if (!selector_hp.enabled) {
         if (slot_selector) {
@@ -518,20 +499,17 @@ void registerExecutionBlockParameters(LanguageModel& model,
         return;
     }
 
-    auto& selector = requireLayer(slot_selector, "DecodeTimeSlotSelectorLayer", "registerExecutionBlockParameters");
-    registrar.addTensor("selector_W_q_select", selector.W_q_select(), ParamGroupType::SLOT_SELECTOR, ParamStatsBucket::ENCODER);
-    registrar.addTensor("selector_W_k_select", selector.W_k_select(), ParamGroupType::SLOT_SELECTOR, ParamStatsBucket::ENCODER);
-    registrar.addTensor("selector_null_key_select", selector.null_key_select(), ParamGroupType::SLOT_SELECTOR, ParamStatsBucket::ENCODER);
-    registrar.addTensor("selector_null_logit_bias", selector.null_logit_bias(), ParamGroupType::SLOT_SELECTOR, ParamStatsBucket::ENCODER);
+    auto& selector = requireLayer(slot_selector, "DecodeTimeSlotSelector", "registerExecutionBlockParameters");
+    ParameterRegistry::registerDecodeTimeSlotSelectorParameters(selector, registrar);
 }
 
-void registerMtpParameters(Startup::GpuModelState& gpu_model_state,
-                           LanguageModel& model,
+void registerMtpParameters(ParameterRegistry::StartupParameterRegistry& parameter_registry,
                            Registrar& registrar,
                            const GRIM::Config::AiConfigSnapshot& config) {
     const auto mtp_hp = GRIM::HyperParameters::mtpFeatureHP(config);
+    auto& mtp_heads = parameter_registry.mtpHeadParameterTensors();
     if (!mtp_hp.enabled) {
-        if (!gpu_model_state.mtp_heads.empty()) {
+        if (!mtp_heads.empty()) {
             throw std::runtime_error("[buildParameterGroups] MTP heads exist while config.mtp_enabled=false");
         }
         return;
@@ -542,22 +520,15 @@ void registerMtpParameters(Startup::GpuModelState& gpu_model_state,
     }
 
     for (int k = 0; k < mtp_hp.k; ++k) {
-        if (k < 0 || k >= static_cast<int>(gpu_model_state.mtp_heads.size())) {
+        if (k < 0 || k >= static_cast<int>(mtp_heads.size())) {
             throw std::runtime_error("[buildParameterGroups] Missing MTP head " + std::to_string(k) +
                                      " for configured mtp_k=" + std::to_string(mtp_hp.k));
         }
-        auto* head = &gpu_model_state.mtp_heads[static_cast<std::size_t>(k)];
-        registrar.addTensor("mtp_head_" + std::to_string(k) + "_weight",
-                            head->weight,
-                    ParamGroupType::MTP,
-                    ParamStatsBucket::ENCODER);
-        registrar.addTensor("mtp_head_" + std::to_string(k) + "_bias",
-                    head->bias,
-                    ParamGroupType::MTP,
-                    ParamStatsBucket::ENCODER);
+        auto& mtp_head_parameters = mtp_heads[static_cast<std::size_t>(k)];
+        ParameterRegistry::registerMtpHeadParameters(mtp_head_parameters, k, registrar);
     }
 
-    if (static_cast<int>(gpu_model_state.mtp_heads.size()) > mtp_hp.k) {
+    if (static_cast<int>(mtp_heads.size()) > mtp_hp.k) {
         throw std::runtime_error("[buildParameterGroups] MTP head vector contains more entries than config.mtp_k");
     }
 }
@@ -730,7 +701,8 @@ void validateParameterRegistrationConfig(const GRIM::Config::AiConfigSnapshot& c
 } // namespace
 
 void buildParameterGroups(LanguageModel& model,
-                          Startup::GpuModelState& gpu_model_state) {
+                          Startup::GpuModelState& gpu_model_state,
+                          ParameterRegistry::StartupParameterRegistry& parameter_registry) {
     const GRIM::Config::AiConfigSnapshot& config = model.getConfig();
     validateParameterRegistrationConfig(config);
 
@@ -743,8 +715,8 @@ void buildParameterGroups(LanguageModel& model,
     registerEncoderParameters(gpu_model_state, registrar, config);
 
     registerScratchBlockParameters(model, registrar, config);
-    registerExecutionBlockParameters(model, registrar, config);
-    registerMtpParameters(gpu_model_state, model, registrar, config);
+    registerExecutionBlockParameters(model, parameter_registry, registrar, config);
+    registerMtpParameters(parameter_registry, registrar, config);
 
     validateRegisteredTensorPrecisionMetadata(rebuilt_groups);
     clearOptimizerBindings(rebuilt_groups);

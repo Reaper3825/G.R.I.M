@@ -22,6 +22,7 @@ void populateCommonContext(
     LMHeadLayer* lm_head,
     ScratchBlockLayer* scratch_block,
     ExecutionBlockLayer* execution_block,
+    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
     uint64_t batch_idx)
@@ -33,6 +34,7 @@ void populateCommonContext(
     ctx.lm_head = lm_head;
     ctx.scratch_block = scratch_block;
     ctx.execution_block = execution_block;
+    ctx.parameter_registry = &parameter_registry;
     ctx.cublas_handle = cublas_handle;
     ctx.stream = stream;
     ctx.batch_idx = batch_idx;
@@ -72,6 +74,7 @@ AutogradContext initAutogradContext(
     LMHeadLayer* lm_head,
     ScratchBlockLayer* scratch_block,
     ExecutionBlockLayer* execution_block,
+    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
     const Batching::BatchPayload& payload,
@@ -83,7 +86,7 @@ AutogradContext initAutogradContext(
     AutogradContext ctx;
     populateCommonContext(
         ctx, config, training_state, gpu_encoder, embedding_layer, lm_head,
-        scratch_block, execution_block, cublas_handle, stream,
+        scratch_block, execution_block, parameter_registry, cublas_handle, stream,
         batch_idx);
 
     ctx.payload = &payload;

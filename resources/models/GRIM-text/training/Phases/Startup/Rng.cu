@@ -139,4 +139,12 @@ RNGContext initializeRNG(
 }
 
 } // namespace Internal
+
+void RngReady(::GRIMText::Training::TrainingContext& ctx) {
+    if (!ctx.logging.logger) {
+        throw std::runtime_error("RngReady requires ctx.logging.logger");
+    }
+    ctx.rng = Internal::initializeRNG(ctx.config, *ctx.logging.logger);
+}
+
 } // namespace GRIMText::Training

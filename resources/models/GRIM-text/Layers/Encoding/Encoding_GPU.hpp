@@ -87,11 +87,9 @@ public:
     
     /// Self-allocating constructor — layer owns its weights
     /// @param hp_snapshot Grouped encoder construction HP from HyperparameterGroupings.hpp
-    /// @param pos_encoding Positional encoding state initialized before encoder construction
     /// @param seed Base PRNG seed. Offsets: +0 W_qkv, +1 W_o, +2 FFN W1, +3 FFN W2
     /// @param init_stream CUDA stream for self-allocation during startup/model assembly
     EncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp_snapshot,
-                  const PBM::PBMState& pos_encoding,
                   uint64_t seed,
                   cudaStream_t init_stream);
     
@@ -128,6 +126,7 @@ public:
      * 
      * @param input [total_tokens, d_model] - encoder input (from embedding or prev layer)
         * @param payload Host-side batch geometry and sequence lengths
+          * @param pos_encoding Borrowed Phase1-owned PBM state for the attention sublayer
         * @param stream CUDA stream from the caller's forward payload/request
         * @param cublas_handle cuBLAS handle from the caller's forward payload/request
         * @param forward_outputs Canonical per-call forward sink
@@ -136,6 +135,7 @@ public:
      * @param layer_idx Layer index within encoder stack (for equation logging, sink slot, and dropout seed)
      */
         void forward(const Tensor& input, const BatchPayload& payload,
+                const PBM::PBMState& pos_encoding,
                         cudaStream_t stream, cublasHandle_t cublas_handle,
                         Forward::ModelForwardOutputs& forward_outputs,
                         uint64_t batch_idx = 0,
@@ -197,7 +197,6 @@ private:
     void allocateWeights(uint64_t seed, cudaStream_t init_stream);
     
     HyperParameters::EncoderLayerConstructionHP hp_{};
-    const PBM::PBMState* pos_encoding_ = nullptr;
     bool weights_ready_ = false;  // Set by allocateWeights()
     
     // RMSNorm weights (Tensor with requires_grad=true)

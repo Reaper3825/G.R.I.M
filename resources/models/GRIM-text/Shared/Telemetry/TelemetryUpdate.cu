@@ -224,13 +224,12 @@ void populateEBInjectionStreams(
     // Streams 23-24: Gate weight norms
     float inject_w_rms = 0.0f;
     float read_w_rms = 0.0f;
-    auto* eb = ctx.model->getExecutionBlockLayer();
-    if (eb) {
-        const auto& w_inj = eb->w_inject_gate();
-        inject_w_rms = gpuBufferRMS(w_inj.data, w_inj.numel());
-
-        const auto& w_read = eb->W_gate_read();
-        read_w_rms = gpuBufferRMS(w_read.data, w_read.numel());
+    auto* execution_block_parameters = ctx.parameter_registry.getExecutionBlockParameters();
+    if (execution_block_parameters) {
+        inject_w_rms = gpuBufferRMS(execution_block_parameters->w_inject_gate.data,
+                                    execution_block_parameters->w_inject_gate.numel());
+        read_w_rms = gpuBufferRMS(execution_block_parameters->W_gate_read.data,
+                                  execution_block_parameters->W_gate_read.numel());
     }
     obs[23] = inject_w_rms;
     obs[24] = read_w_rms;
