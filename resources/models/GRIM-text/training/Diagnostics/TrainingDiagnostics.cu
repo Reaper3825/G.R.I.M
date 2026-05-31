@@ -9,9 +9,6 @@
 
 #include "TrainingDiagnostics.hpp"
 
-#include "../../Layers/LMHead/lm_head_GPU.hpp"
-#include "../../Shared/TrainingState/TrainingState_GPU.hpp"
-
 #include <string>
 #include <sstream>
 #include <iomanip>
@@ -23,9 +20,9 @@ namespace GRIM::Diagnostics {
 //  WeightSample
 //======================================================//
 
-WeightSample sampleWeightStats(const GRIM::LMHeadLayer* lm_head, const GRIM::TrainingState& ts, bool sync_for_host) {
+WeightSample sampleWeightStats(const GRIM::Tensor& lm_head_weights, const GRIM::TrainingState& ts, bool sync_for_host) {
     WeightSample sample{};
-    if (!lm_head || !lm_head->weights().data) {
+    if (!lm_head_weights.data) {
         return sample;
     }
 
@@ -34,7 +31,7 @@ WeightSample sampleWeightStats(const GRIM::LMHeadLayer* lm_head, const GRIM::Tra
     }
 
     cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
-    cudaMemcpyAsync(sample.values, lm_head->weights().data,
+    cudaMemcpyAsync(sample.values, lm_head_weights.data,
                     kWeightSampleSize * sizeof(float),
                     cudaMemcpyDeviceToHost, stream);
     // Sync primary stream only (not full device) so we can read the values

@@ -24,7 +24,7 @@ All sizes float32, 4 bytes per element.
 
 **Pre-allocated TrainingState upload workspaces (max_tokens=8192):**
 
-Durable LM-head input/logits snapshots were deleted. Forward outputs now live in `AutogradIntermediates` only; TrainingState keeps reusable upload/staging buffers such as targets, token ids, numeric side-channels, atom side-channels, and sequence weights.
+Durable LM-head input/logits snapshots were deleted. Forward outputs now live in `TrainingState::forward_outputs` only; TrainingState keeps reusable upload/staging buffers such as targets, token ids, numeric side-channels, atom side-channels, and sequence weights.
 
 The remaining fixed upload buffers are tiny at this config (well under 1 MiB total).
 - **Running tally: ~1.61 GiB**
@@ -81,7 +81,7 @@ Device total: 40,441 MB (from log: "Memory: 40441 MB"). Our breakdown accounts f
 
 ## Logits (this config)
 
-There is no durable TrainingState logits cache and no logits pointer on the forward result. Full-batch logits are graph-owned by `AutogradIntermediates::logits_tensor` during the active forward/loss/backward window, then released at `AutogradStepScope` teardown. Inference prefill copies the last-token logits directly from `AutogradIntermediates::logits_tensor` before clearing intermediates.
+There is no durable TrainingState logits cache and no logits pointer on the forward result. Full-batch logits are graph-owned by `TrainingState::forward_outputs.logits_tensor` during the active forward/loss/backward window, then released at `AutogradStepScope` teardown. Inference prefill copies the last-token logits directly from `TrainingState::forward_outputs.logits_tensor` before clearing intermediates.
 
 ---
 
@@ -153,13 +153,13 @@ LatticeLevelState = TelemetryState (20 float + 2 uint32) + stride (uint32_t) + l
 | **Guess cache (GRIM-TS)** | `GuessCacheScope::OwnedBuffers` RAII member; released when `ctx.guess_cache_scope.reset()` runs before model teardown. |
 | **Debug grad buffers** | ~TrainingState: `freeDebugGradBuffers()` (assigns Tensor() to release). |
 | **GradNorm scratch** | `std::unique_ptr<GradNormScratch>` member; `GradNormScratch::~GradNormScratch()` releases GPU/pinned buffers. |
-| **Autograd intermediates** (`layer_outputs`, `embedding_tensor`, `encoder_layer_outputs`, `logits_tensor`, `loss_tensor`, etc.) | Cleared after each backward in training loop; at shutdown, **Phase3 releaseResources()** calls `ctx.model->getTrainingState().autograd_intermediates.clear()` before `ctx.model.reset()` so grad_fns and intermediates are released in a controlled order. When ~TrainingState runs, AutogradIntermediates member destructor also clears. |
+| **Autograd step state** (`forward_outputs.layer_outputs`, `forward_outputs.embedding_tensor`, `forward_outputs.encoder_layer_outputs`, `forward_outputs.logits_tensor`, sibling `autograd_loss_state.loss_tensor`, etc.) | Cleared after each backward in training loop; at shutdown, **Phase3 releaseResources()** clears both `ctx.model->getTrainingState().forward_outputs` and `ctx.model->getTrainingState().autograd_loss_state` before `ctx.model.reset()` so grad_fns and intermediates are released in a controlled order. When ~TrainingState runs, both member destructors also clear. |
 | **Per-layer grad_fns** (ScaledDotProductAttentionGradFn dq_accum, dsoftmax_sum, dq/dk/dv/dout_bf16, saved_*) | When intermediates are cleared or Tensors destruct, grad_fn refcount drops; ~ScaledDotProductAttentionGradFn calls release_saved() which cudaFrees all 11 buffers. |
 | **Telemetry (lattice, control)** | Owned by TrainingContext (ctx.telemetry); when ctx is destroyed, unique_ptrs destruct; TelemetryLattice_GPU and TelemetryControl_GPU destructors cudaFree their buffers. |
 | **KV/decode BF16/FP32 buffers** | `DeviceAllocation` RAII members/vectors release typed CUDA buffers. |
 | **StreamController / cublas_handle** | streams owned by `StreamController`; cuBLAS owned by `CublasHandleOwner` RAII member. |
 
-Shutdown order: Phase3 `releaseResources()` → clear autograd_intermediates → ctx.model.reset() → ~LanguageModel → ~TrainingContext members in reverse declaration order, including `ctx.gpu_model` (layer topology teardown) and `ctx.pbm_owner` (PBM release), then the destroyed model's `TrainingState` teardown (TeacherLogits RAII, DeviceAllocation KV/decode buffers, GradNorm unique_ptr, cuBLAS owner, Tensor members). Telemetry is released when TrainingContext is destroyed after Phase3.
+Shutdown order: Phase3 `releaseResources()` → clear forward_outputs + autograd_loss_state → ctx.model.reset() → ~LanguageModel → ~TrainingContext members in reverse declaration order, including `ctx.gpu_model` (layer topology teardown) and `ctx.pbm_owner` (PBM release), then the destroyed model's `TrainingState` teardown (TeacherLogits RAII, DeviceAllocation KV/decode buffers, GradNorm unique_ptr, cuBLAS owner, Tensor members). Telemetry is released when TrainingContext is destroyed after Phase3.
 
 ---
 

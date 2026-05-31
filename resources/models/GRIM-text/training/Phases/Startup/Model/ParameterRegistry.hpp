@@ -6,6 +6,7 @@
 //  inventory slices.
 //
 //  Current migrated surface:
+//    - LM head durable tensor owner
 //    - DecodeTimeSlotSelector durable tensor owner
 //    - DecodeTimeSlotSelector parameter-group inventory
 //    - ExecutionBlock durable parameter tensor owner
@@ -23,6 +24,7 @@
 #include <string>
 #include <vector>
 
+#include "../../../../Layers/LMHead/lm_head_GPU.hpp"
 #include "../../../../Shared/TensorContract/TensorContract_GPU.hpp"
 
 namespace GRIM {
@@ -78,9 +80,32 @@ struct MtpHeadParameterTensors {
 namespace GRIMText::Training::Startup::ModelRegistration::ParameterRegistry {
 
 struct StartupParameterRegistry {
+    std::unique_ptr<GRIM::LMHeadParameterTensors> lm_head_parameters;
     std::unique_ptr<GRIM::DecodeTimeSlotSelector> decode_time_slot_selector;
     std::unique_ptr<GRIM::ExecutionBlockParameterTensors> execution_block_parameters;
     std::vector<GRIM::MtpHeadParameterTensors> mtp_head_parameter_tensors;
+
+    GRIM::LMHeadParameterTensors* getLmHeadParameters() {
+        return lm_head_parameters.get();
+    }
+
+    const GRIM::LMHeadParameterTensors* getLmHeadParameters() const {
+        return lm_head_parameters.get();
+    }
+
+    GRIM::LMHeadParameterTensors& requireLmHeadParameters(const char* caller) {
+        if (!lm_head_parameters) {
+            throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.lm_head_parameters is NULL");
+        }
+        return *lm_head_parameters;
+    }
+
+    const GRIM::LMHeadParameterTensors& requireLmHeadParameters(const char* caller) const {
+        if (!lm_head_parameters) {
+            throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.lm_head_parameters is NULL");
+        }
+        return *lm_head_parameters;
+    }
 
     GRIM::DecodeTimeSlotSelector* getDecodeTimeSlotSelector() {
         return decode_time_slot_selector.get();

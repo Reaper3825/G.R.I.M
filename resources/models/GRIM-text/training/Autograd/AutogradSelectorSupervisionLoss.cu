@@ -23,7 +23,8 @@ namespace Autograd {
 
 float addSelectorSupervisionLoss(
     AutogradContext& ctx,
-    AutogradIntermediates& intermediates
+    Forward::ModelForwardOutputs& forward_outputs,
+    AutogradLossState& loss_state
 ) {
     const auto* cfg = ctx.config;
     if (!cfg) {
@@ -35,11 +36,11 @@ float addSelectorSupervisionLoss(
     float selector_supervision_loss = 0.0f;
 
     // Keep Forward::SelectorForwardResult objects alive until backward completes — stored in
-    // autograd_intermediates so they survive past computeAutogradLoss() return.
-    auto& selector_fwd_results = intermediates.selector_fwd_results;
+    // forward_outputs so they survive past computeAutogradLoss() return.
+    auto& selector_fwd_results = forward_outputs.selector_fwd_results;
     selector_fwd_results.clear();
-    intermediates.selector_h_t_inputs.clear();
-    intermediates.selector_slot_feature_inputs.clear();
+    forward_outputs.selector_h_t_inputs.clear();
+    forward_outputs.selector_slot_feature_inputs.clear();
 
     const bool selector_supervision_configured =
         selector_hp.enabled && selector_hp.supervision_weight > 0.0f;
@@ -73,10 +74,10 @@ float addSelectorSupervisionLoss(
         throw std::runtime_error("addSelectorSupervisionLoss: selector supervision configured but ctx.payload is NULL");
     }
     const auto& payload = *ctx.payload;
-    if (intermediates.exec_memories.empty()) {
+    if (forward_outputs.exec_memories.empty()) {
         throw std::runtime_error("addSelectorSupervisionLoss: selector supervision configured but no ExecutionMemory snapshots exist; materializeTrainingGraphActivations must run ExecutionBlock first");
     }
-    if (!intermediates.loss_tensor.data) {
+    if (!loss_state.loss_tensor.data) {
         throw std::runtime_error("addSelectorSupervisionLoss: loss_tensor is NULL before selector CE accumulation");
     }
 
@@ -96,7 +97,7 @@ float addSelectorSupervisionLoss(
 
     const int d_model = selector_hp.d_model;
     const int seq_len = payload.max_seq_len;
-    const Tensor* live_lm_head_input = intermediates.liveLmHeadInputOrNull();
+    const Tensor* live_lm_head_input = forward_outputs.liveLmHeadInputOrNull();
     const float* d_hidden = live_lm_head_input ? live_lm_head_input->data : nullptr;
     if (!d_hidden) {
         throw std::runtime_error("addSelectorSupervisionLoss: encoder output tensor is NULL for selector supervision");
@@ -117,10 +118,10 @@ float addSelectorSupervisionLoss(
         }
         const auto& row_targets = payload.slot_selection_targets[b];
         if (row_targets.empty()) continue;
-        if (b >= static_cast<int>(intermediates.exec_memories.size())) {
+        if (b >= static_cast<int>(forward_outputs.exec_memories.size())) {
             continue;
         }
-        const auto& mem = intermediates.exec_memories[b];
+        const auto& mem = forward_outputs.exec_memories[b];
         if (!mem.valid_mask.data) continue;
 
         const int row_len = std::min(seq_len, static_cast<int>(row_targets.size()));
@@ -159,8 +160,8 @@ float addSelectorSupervisionLoss(
                                / static_cast<float>(ce_count);
 
     selector_fwd_results.reserve(static_cast<size_t>(ce_count));
-    intermediates.selector_h_t_inputs.reserve(static_cast<size_t>(ce_count));
-    intermediates.selector_slot_feature_inputs.reserve(static_cast<size_t>(ce_count));
+    forward_outputs.selector_h_t_inputs.reserve(static_cast<size_t>(ce_count));
+    forward_outputs.selector_slot_feature_inputs.reserve(static_cast<size_t>(ce_count));
 
     // Second pass: autograd forward + CE for each supervised final position.
     for (int b = 0; b < payload.batch_size; ++b) {
@@ -173,10 +174,10 @@ float addSelectorSupervisionLoss(
         }
         const auto& row_targets = payload.slot_selection_targets[b];
         if (row_targets.empty()) continue;
-        if (b >= static_cast<int>(intermediates.exec_memories.size())) {
+        if (b >= static_cast<int>(forward_outputs.exec_memories.size())) {
             continue;
         }
-        const auto& mem = intermediates.exec_memories[b];
+        const auto& mem = forward_outputs.exec_memories[b];
         if (!mem.valid_mask.data) continue;
 
         if (!ctx.device_bindings) {
@@ -217,8 +218,8 @@ float addSelectorSupervisionLoss(
             cudaMemcpyAsync(h_t_owned.data, h_t_ptr,
                             static_cast<size_t>(d_model) * sizeof(float),
                             cudaMemcpyDeviceToDevice, ctx.stream);
-            intermediates.selector_h_t_inputs.push_back(std::move(h_t_owned));
-            Tensor& h_t_input = intermediates.selector_h_t_inputs.back();
+            forward_outputs.selector_h_t_inputs.push_back(std::move(h_t_owned));
+            Tensor& h_t_input = forward_outputs.selector_h_t_inputs.back();
 
             int num_live = selector_runtime.num_live_slots > 0 ? selector_runtime.num_live_slots : 0;
             if (num_live <= 0 || !selector_runtime.d_slot_features()) {
@@ -236,8 +237,8 @@ float addSelectorSupervisionLoss(
             cudaMemcpyAsync(slot_feat_owned.data, selector_runtime.d_slot_features(),
                             static_cast<size_t>(num_live) * kSlotFeatureDim * sizeof(float),
                             cudaMemcpyDeviceToDevice, ctx.stream);
-            intermediates.selector_slot_feature_inputs.push_back(std::move(slot_feat_owned));
-            Tensor& slot_feat_input = intermediates.selector_slot_feature_inputs.back();
+            forward_outputs.selector_slot_feature_inputs.push_back(std::move(slot_feat_owned));
+            Tensor& slot_feat_input = forward_outputs.selector_slot_feature_inputs.back();
 
             int target_idx = -1;
             if (tgt.kind == Execution::SlotSelectionTargetKind::Null) {
@@ -271,8 +272,8 @@ float addSelectorSupervisionLoss(
                 fwd.scores, target_idx, ctx.stream);
             Tensor ce_scaled = autograd::scale_scalar(ce, per_pos_weight, ctx.stream);
 
-            intermediates.loss_tensor = autograd::add(
-                intermediates.loss_tensor, ce_scaled, ctx.stream);
+            loss_state.loss_tensor = autograd::add(
+                loss_state.loss_tensor, ce_scaled, ctx.stream);
 
             float ce_val = 0.0f;
             cudaMemcpyAsync(&ce_val, ce.data, sizeof(float),

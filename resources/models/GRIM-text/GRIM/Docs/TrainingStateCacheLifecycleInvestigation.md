@@ -2,7 +2,7 @@
 
 ## Resolution status
 
-`TrainingState::cached_logits_tensor` and `TrainingState::cached_encoder_output` have been deleted from the production contract. `ModelForwardResult` was deleted as a value handoff; inference prefill, loss, and diagnostics consume `AutogradIntermediates::logits_tensor` plus the live LM-head input tensor (`AutogradIntermediates::lm_head_input_tensor` when materialized, otherwise `encoder_output_tensor`) before `AutogradIntermediates::clear()` / `AutogradStepScope` teardown.
+`TrainingState::cached_logits_tensor` and `TrainingState::cached_encoder_output` have been deleted from the production contract. `ModelForwardResult` was deleted as a value handoff; inference prefill, loss, and diagnostics consume `TrainingState::forward_outputs.logits_tensor` plus the live LM-head input tensor (`TrainingState::forward_outputs.lm_head_input_tensor` when materialized, otherwise `encoder_output_tensor`) before `forward_outputs.clear()` / `AutogradStepScope` teardown.
 
 The remaining notes below document the anti-pattern that was removed and should not be recreated.
 
@@ -27,7 +27,7 @@ BatchPayload + BatchDeviceBindings
   -> active logits/hidden views
   -> loss and diagnostics observe explicit current-step views
   -> reduced telemetry snapshots are kept if needed after clear
-  -> AutogradIntermediates clear
+   -> forward_outputs clear
 ```
 
 The current problematic path is:
@@ -46,18 +46,18 @@ This works only by convention. The cache tensors are durable buffers with stale 
 Historical owner and writer:
 
 - `Shared/TrainingState/TrainingStateGPU.cu`: `TrainingState::allocateStepDeviceWorkspaces()` allocates the full `[max_tokens_per_batch, vocab_size]` logits slab.
-- `Shared/Forward/ModelForward_GPU.cu`: `Forward::executeModelForward()` computed the LM-head `logits_tensor`, copied it into `TrainingState::cached_logits_tensor`, then stored the live autograd tensor in `AutogradIntermediates::logits_tensor`.
+- `Shared/Forward/ModelForward_GPU.cu`: `Forward::executeModelForward()` computed the LM-head `logits_tensor`, copied it into `TrainingState::cached_logits_tensor`, then stored the live autograd tensor in `TrainingState::forward_outputs.logits_tensor`.
 
 Correct active consumer:
 
-- `training/Autograd/AutogradTraining.cu`: `computeAutogradLoss()` consumes `AutogradIntermediates::logits_tensor`, not the cache.
+- `training/Autograd/AutogradTraining.cu`: `computeAutogradLoss()` consumes `TrainingState::forward_outputs.logits_tensor`, not the cache.
 
 Historical direct cache readers:
 
 - `training/Diagnostics/PredictionDistributionDiagnostic.cu`: copies logits from `cached_logits_tensor` for prediction distribution and logit trace.
 - `training/Diagnostics/LogitScaleDiagnostic.cu`: copies logits from `cached_logits_tensor` for logit-scale statistics.
 - `Layers/GRIMTS/GuessCacheTraining.cu`: copies prediction logits from `cached_logits_tensor` for guess-cache update logic.
-- `training/Phases/Phase2_InferenceLoop.cu`: `generateOneSequence(...)` reads last-token logits from the live `AutogradIntermediates.logits_tensor` after its explicit shared-forward call and before clearing the inference forward boundary.
+- `training/Phases/Phase2_InferenceLoop.cu`: `generateOneSequence(...)` reads last-token logits from the live `GenerationState::forward_outputs.logits_tensor` after its explicit shared-forward call and before clearing the inference forward boundary.
 
 Why this is a boundary leak:
 
@@ -131,7 +131,7 @@ It is suspicious if the code:
 
 - reads `.data` from `TrainingState.cached_*` after forward/loss/backward instead of receiving an explicit view;
 - uses a cache field to infer "current batch", "current logits", "current token", or "current sequence";
-- preserves values across `AutogradIntermediates::clear()`;
+- preserves values across `forward_outputs.clear()`;
 - uses a training cache as generation session state;
 - copies from a cache without checking the active row count from `BatchPayload` or a returned result object.
 
@@ -139,10 +139,10 @@ It is suspicious if the code:
 
 Recommended order:
 
-1. Keep forward observations inside `AutogradIntermediates`.
+1. Keep forward observations inside the explicit forward sink (`forward_outputs`).
    - Do not add `Forward::ModelForwardResult` tensor views or shape mirrors.
-   - Training diagnostics should consume live tensors from `AutogradIntermediates` while still inside the active step scope.
-   - Inference prefill should copy return logits from `AutogradIntermediates::logits_tensor` before clearing intermediates.
+   - Training diagnostics should consume live tensors from `TrainingState::forward_outputs` while still inside the active step scope.
+   - Inference prefill should copy return logits from `GenerationState::forward_outputs.logits_tensor` before clearing intermediates.
 
 2. Convert diagnostics to accept explicit observation inputs.
    - Diagnostics may stay outside gradient math.
@@ -161,7 +161,7 @@ Recommended order:
 ## Open Questions
 
 - `GuessCacheTraining` appears to be monitoring-only now. It was originally intended as something different, but current usage looks like an attempt to keep a dead feature alive. Treat it as a candidate for removal or reduction to explicit telemetry before designing a new logits handoff for it.
-- Inference prefill now copies from `AutogradIntermediates::logits_tensor` before clear. A future `GenerationState` logits buffer is only justified if a post-boundary logits lifetime is required; do not reintroduce a shared forward-result tensor view for that.
+- Inference prefill now copies from `GenerationState::forward_outputs.logits_tensor` before clear. A future `GenerationState` logits buffer is only justified if a post-boundary logits lifetime is required; do not reintroduce a shared forward-result tensor view for that.
 - Diagnostics should not run outside the lifecycle graph of the information they need. They can run outside gradient math, but not outside the lifetime/freshness boundary for the tensors they observe.
 - Additional non-`TrainingState` caches need further investigation, especially layer-local diagnostic caches or GradFn-adjacent caches that survive beyond the graph boundary.
 

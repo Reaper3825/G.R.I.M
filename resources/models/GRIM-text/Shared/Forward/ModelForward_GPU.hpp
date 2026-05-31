@@ -22,6 +22,7 @@
 
 #include "../Batching/BatchPayload.hpp"
 #include "../Batching/BatchDeviceBindings.hpp"
+#include "ModelForwardOutputs.hpp"
 #include "ModelForwardRuntimePayload.hpp"
 #include "../HyperParameters/HyperParameters_GPU.hpp"
 #include "../PBM/PositionalBiasMethod.hpp"
@@ -75,8 +76,8 @@ struct ModelForwardRequest {
     void validate(const char* caller) const;
 };
 
-void executeModelForward(const ModelForwardRequest& request,
-                         ModelForwardRuntimePayload& runtime_payload);
+ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
+                                        ModelForwardRuntimePayload& runtime_payload);
 
 }  // namespace Forward
 }  // namespace GRIM

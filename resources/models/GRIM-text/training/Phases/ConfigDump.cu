@@ -306,6 +306,7 @@ void dumpAllHyperparameters(
 
     SECTION("Optimizer");
     DUMP(optimizer_kind);
+    DUMP(use_depth_aware_upsilon);
     DUMP(optimizer_beta1);
     DUMP(optimizer_beta2);
     DUMP(optimizer_epsilon);

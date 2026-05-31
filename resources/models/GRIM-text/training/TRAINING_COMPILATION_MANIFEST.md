@@ -953,7 +953,7 @@ For each encoding layer (Layer 0 → Layer 11):
   - `computeGradNorm` now logs `wall_time` (3-53ms) AND `gpu_kernel_time` (~1ms) separately — eliminates misleading timing variance
   - **Issue #57**: Numeric head backward VERIFIED called from `executeAutogradBackward()` when enabled ✅
   - Backward path verified: `model->backward(loss)` → `executeAutogradBackward(ctx)` → `loss_tensor.backward(nullptr)` + numeric head backward (if enabled) ✅
-  - Pattern verified: Loss stored in `training_state.autograd_intermediates.loss_tensor`, gradients flow to all parameters ✅
+  - Pattern verified: Loss stored in `training_state.autograd_loss_state.loss_tensor`, gradients flow to all parameters ✅
 
 ---
 

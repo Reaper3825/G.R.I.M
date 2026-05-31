@@ -1,10 +1,11 @@
 //======================================================//
 //  lm_head_GPU.cu
 //  GPU-accelerated LM Head layer using autograd
-//  Pattern B: Layer Ownership — self-allocates weights
+//  LM head tensors live on a startup-owned registry bundle and the layer
+//  borrows them for forward/backward.
 //
-//  Owns: weights [vocab_size, d_model] (or aliased from embedding),
-//        bias [vocab_size] (optional), final_rms_gamma [d_model].
+//  Borrows: weights [vocab_size, d_model] (or aliased from embedding),
+//           bias [vocab_size] (optional), final_rms_gamma [d_model].
 //
 //  Forward: RMSNorm → optional centering → optional PC1 projection → logits = input @ W^T → bias
 //
@@ -36,11 +37,18 @@ namespace GRIM {
 //======================================================//
 
 LMHeadLayer::LMHeadLayer(const HyperParameters::LMHeadLayerConstructionHP& hp,
+                         GRIM::LMHeadParameterTensors& parameter_tensors,
                          uint64_t seed,
                          cudaStream_t init_stream,
                          Tensor* tied_embedding_weights)
-    : hp_(hp), owns_weights_(!tied_embedding_weights)
+    : hp_(hp)
 {
+    parameter_tensors.weights = Tensor();
+    parameter_tensors.bias = Tensor();
+    parameter_tensors.final_rms_gamma = Tensor();
+    parameter_tensors.owns_weights = !tied_embedding_weights;
+    parameters_ = &parameter_tensors;
+
     // Rule 20: Fail loud on invalid configuration
     if (hp_.d_model <= 0) {
         throw std::runtime_error("LMHeadLayer: d_model must be positive, got " + std::to_string(hp_.d_model));
@@ -77,25 +85,25 @@ LMHeadLayer::LMHeadLayer(const HyperParameters::LMHeadLayerConstructionHP& hp,
                 "], got [" + std::to_string(ews.rows) + "," + std::to_string(ews.cols) + "]");
         }
 
-        weights_ = Tensor::from_ptr(
+        parameter_tensors.weights = Tensor::from_ptr(
             tied_embedding_weights->data,
             tied_embedding_weights->shape,
             false, true,
             "lm_head.weights_tied"
         );
         // CRITICAL: Share the grad (Issue #59 shared_ptr semantics)
-        weights_.share_grad(*tied_embedding_weights);
-        weights_.owns_data = false;  // embedding_weights owns the data
-        weights_.requires_grad = true;
+        parameter_tensors.weights.share_grad(*tied_embedding_weights);
+        parameter_tensors.weights.owns_data = false;  // embedding_weights owns the data
+        parameter_tensors.weights.requires_grad = true;
 
         fprintf(stdout, "[LMHeadLayer] Weights TIED to embedding: data=%p grad=%p\n",
-                (void*)weights_.data, (void*)weights_.grad_data());
+                (void*)parameter_tensors.weights.data, (void*)parameter_tensors.weights.grad_data());
     } else {
         // Independent weights: Xavier init
-        weights_ = Tensor::zeros({hp_.vocab_size, hp_.d_model}, init_stream, "lm_head.weights");
-        weights_.requires_grad_();
-        weights_.ensure_grad();
-        Tensor::xavier_uniform_(weights_, seed, init_stream);
+        parameter_tensors.weights = Tensor::zeros({hp_.vocab_size, hp_.d_model}, init_stream, "lm_head.weights");
+        parameter_tensors.weights.requires_grad_();
+        parameter_tensors.weights.ensure_grad();
+        Tensor::xavier_uniform_(parameter_tensors.weights, seed, init_stream);
 
         fprintf(stdout, "[LMHeadLayer] Weights INDEPENDENT: [%d, %d] Xavier seed=%llu\n",
         hp_.vocab_size, hp_.d_model, static_cast<unsigned long long>(seed));
@@ -105,29 +113,31 @@ LMHeadLayer::LMHeadLayer(const HyperParameters::LMHeadLayerConstructionHP& hp,
     //  BIAS: Optional, always independently allocated
     // ══════════════════════════════════════════════════════════════
     if (hp_.use_bias) {
-        bias_ = Tensor::zeros({hp_.vocab_size}, init_stream, "lm_head.bias");
-        bias_.requires_grad_();
-        bias_.ensure_grad();
+        parameter_tensors.bias = Tensor::zeros({hp_.vocab_size}, init_stream, "lm_head.bias");
+        parameter_tensors.bias.requires_grad_();
+        parameter_tensors.bias.ensure_grad();
         fprintf(stdout, "[LMHeadLayer] Bias: [%d] initialized to zeros\n", hp_.vocab_size);
+    } else {
+        parameter_tensors.bias = Tensor();
     }
 
     // ══════════════════════════════════════════════════════════════
     //  FINAL RMSNORM GAMMA: Always self-allocated, initialized to 1.0
     // ══════════════════════════════════════════════════════════════
     {
-        final_rms_gamma_frozen_or_trained_ = Tensor::zeros({hp_.d_model}, init_stream, "final_rms_gamma");
+        parameter_tensors.final_rms_gamma = Tensor::zeros({hp_.d_model}, init_stream, "final_rms_gamma");
 
         // freeze_learned_rms_gammas=true: γ stays at 1.0 forever — do NOT mark as a leaf
         // parameter. autograd will skip producing its gradient and buildParameterGroups
         // will skip registering it (gated on has_grad()).
         if (!hp_.freeze_learned_rms_gammas) {
-            final_rms_gamma_frozen_or_trained_.requires_grad_();
-            final_rms_gamma_frozen_or_trained_.ensure_grad();
+            parameter_tensors.final_rms_gamma.requires_grad_();
+            parameter_tensors.final_rms_gamma.ensure_grad();
         }
 
         // Initialize gamma to 1.0 (identity normalization at start)
         std::vector<float> ones(hp_.d_model, 1.0f);
-        cudaMemcpyAsync(final_rms_gamma_frozen_or_trained_.data, ones.data(),
+        cudaMemcpyAsync(parameter_tensors.final_rms_gamma.data, ones.data(),
             hp_.d_model * sizeof(float), cudaMemcpyHostToDevice, init_stream);
 
         fprintf(stdout, "[LMHeadLayer] Final RMSNorm gamma: [%d] initialized to 1.0 (eps=%.1e) frozen=%s\n",
@@ -136,27 +146,21 @@ LMHeadLayer::LMHeadLayer(const HyperParameters::LMHeadLayerConstructionHP& hp,
     }
 
     fprintf(stdout, "[LMHeadLayer] Initialized: owns_weights=%s, has_bias=%s, has_rms_norm=true\n",
-            owns_weights_ ? "true" : "false",
+            parameter_tensors.owns_weights ? "true" : "false",
             hp_.use_bias ? "true" : "false");
 }
 
 LMHeadLayer::LMHeadLayer(LMHeadLayer&& other) noexcept
     : hp_(other.hp_)
-    , weights_(std::move(other.weights_))
-    , bias_(std::move(other.bias_))
-    , final_rms_gamma_frozen_or_trained_(std::move(other.final_rms_gamma_frozen_or_trained_))
-    , owns_weights_(other.owns_weights_) {
-    other.owns_weights_ = false;
+    , parameters_(other.parameters_) {
+    other.parameters_ = nullptr;
 }
 
 LMHeadLayer& LMHeadLayer::operator=(LMHeadLayer&& other) noexcept {
     if (this != &other) {
         hp_ = other.hp_;
-        weights_ = std::move(other.weights_);
-        bias_ = std::move(other.bias_);
-        final_rms_gamma_frozen_or_trained_ = std::move(other.final_rms_gamma_frozen_or_trained_);
-        owns_weights_ = other.owns_weights_;
-        other.owns_weights_ = false;
+        parameters_ = other.parameters_;
+        other.parameters_ = nullptr;
     }
     return *this;
 }
@@ -175,13 +179,13 @@ void LMHeadLayer::forward(
     forward_outputs.lm_head_input_tensor = Tensor();
     forward_outputs.logits_tensor = Tensor();
     const Tensor& lm_weights =
-        (parameter_views && parameter_views->weights) ? *parameter_views->weights : weights_;
+        (parameter_views && parameter_views->weights) ? *parameter_views->weights : weights();
     const Tensor& lm_bias =
-        (parameter_views && parameter_views->bias) ? *parameter_views->bias : bias_;
+        (parameter_views && parameter_views->bias) ? *parameter_views->bias : bias();
     const Tensor& lm_final_rms_gamma =
         (parameter_views && parameter_views->final_rms_gamma)
             ? *parameter_views->final_rms_gamma
-            : final_rms_gamma_frozen_or_trained_;
+            : finalRmsGamma();
 
     // Rule 20: Crash on invalid state
     if (!lm_weights.data) {

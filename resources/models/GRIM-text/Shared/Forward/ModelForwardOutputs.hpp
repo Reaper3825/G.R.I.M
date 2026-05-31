@@ -291,6 +291,14 @@ public:
     std::vector<ExecutionMemory> exec_memories;
     std::vector<ExecutionBlockOutput> exec_outputs_per_row;
 
+    // Selector keep-alive state. Shared forward does not populate these
+    // directly; training-time selector supervision appends detached inputs and
+    // selector forward results here so MatMulGradFn-captured buffers survive
+    // until backward completes.
+    std::vector<Tensor> selector_h_t_inputs;
+    std::vector<Tensor> selector_slot_feature_inputs;
+    std::vector<SelectorForwardResult> selector_fwd_results;
+
     Tensor* liveLmHeadInputOrNull() {
         if (lm_head_input_tensor.data) {
             return &lm_head_input_tensor;
@@ -327,6 +335,9 @@ public:
         scratch_atom_embeddings = Tensor();
         exec_memories.clear();
         exec_outputs_per_row.clear();
+        clearTensorVector(selector_h_t_inputs);
+        clearTensorVector(selector_slot_feature_inputs);
+        selector_fwd_results.clear();
     }
 
     bool hasLogits() const { return logits_tensor.data != nullptr; }

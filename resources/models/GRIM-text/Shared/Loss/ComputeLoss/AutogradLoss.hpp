@@ -26,7 +26,7 @@ namespace autograd {
 /**
  * Compute unified loss with autograd support
  * 
- * Architecture (PyTorch gold standard):
+ * Architecture:
  *   logits → autograd::log_softmax() → log_probs → NLL loss → scalar loss
  *
  * Internally composes:

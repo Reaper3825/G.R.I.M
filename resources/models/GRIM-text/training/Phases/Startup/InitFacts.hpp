@@ -7,7 +7,7 @@
 //  previously lived in Phase1_Startup.cu.
 //
 //  One-shot init facts are emitted as a full key/value dump through the
-//  LogRecorder tape text sink (`training_<session>_tape.log`). The compact
+//  LogRecorder text sink in the shared session log (`training_<session>.log`). The compact
 //  bool/count mirror is also published through TELEMETRY lattice streams
 //  INIT_TIE_CFG..INIT_OPT_GROUPS_LM (indices 48-54). Those are written to
 //  ctx.telemetry.last_obs[48..54]; Phase2's per-step lattice update naturally

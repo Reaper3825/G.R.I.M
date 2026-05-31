@@ -93,14 +93,13 @@ std::vector<float> runInferencePrefill(GRIM::LanguageModel* model,
         stream);
 
     struct ScopedInferenceIntermediatesClear {
-        GRIM::TrainingState& training_state;
+        GRIM::Forward::ModelForwardOutputs& forward_outputs;
         ~ScopedInferenceIntermediatesClear() {
-            training_state.autograd_intermediates.clear();
+            forward_outputs.clear();
         }
-    } clear_scope{training_state};
+    };
 
     GRIM::Forward::ModelForwardRuntimePayload runtime_payload{};
-    runtime_payload.forward_outputs = &training_state.autograd_intermediates;
     runtime_payload.execution_runtime = &generation_state.execution_runtime;
     runtime_payload.read_gate_accum_tensor = nullptr;
 
@@ -122,9 +121,10 @@ std::vector<float> runInferencePrefill(GRIM::LanguageModel* model,
         /*retain_backward_graph=*/false,
         /*enable_dropout=*/false};
 
-    GRIM::Forward::executeModelForward(request, runtime_payload);
+    auto forward_outputs = GRIM::Forward::executeModelForward(request, runtime_payload);
+    ScopedInferenceIntermediatesClear clear_scope{forward_outputs};
 
-    const auto& live_logits = training_state.autograd_intermediates.logits_tensor;
+    const auto& live_logits = forward_outputs.logits_tensor;
     if (!live_logits.data) {
         throw std::runtime_error("runInferencePrefill: logits_tensor.data is NULL after shared forward");
     }

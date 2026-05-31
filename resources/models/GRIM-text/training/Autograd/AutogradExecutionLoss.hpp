@@ -6,10 +6,13 @@
 #pragma once
 
 namespace GRIM {
+namespace Forward {
+struct ModelForwardOutputs;
+}
 namespace Autograd {
 
 struct AutogradContext;
-struct AutogradIntermediates;
+struct AutogradLossState;
 
 struct ExecutionAuxiliaryLossSummary {
     float structured_ce = 0.0f;      // Unweighted raw CE monitor averaged over emitted CE tensors
@@ -19,20 +22,21 @@ struct ExecutionAuxiliaryLossSummary {
 };
 
 /**
- * Adds execution auxiliary losses into intermediates.loss_tensor.
+ * Adds execution auxiliary losses into loss_state.loss_tensor.
  *
  * Contract:
  * - Consumes retained Category 1 tensors from Forward::ExecutionBlockStepOutput
  *   entries stored on ModelForwardOutputs::exec_outputs_per_row.
  * - Resolves teacher targets from Phase1-authored BatchPayload.teacher_steps.
- * - Mutates only Category 1 autograd state in AutogradIntermediates.
+ * - Mutates only Category 1 autograd state in Forward::ModelForwardOutputs + AutogradLossState.
  * - Returns host telemetry for logging / diagnostics.
  * - Throws on missing retained tensors, invalid teacher targets, or broken
  *   execution output/payload alignment.
  */
 ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
     AutogradContext& ctx,
-    AutogradIntermediates& intermediates);
+    Forward::ModelForwardOutputs& forward_outputs,
+    AutogradLossState& loss_state);
 
 }  // namespace Autograd
 }  // namespace GRIM

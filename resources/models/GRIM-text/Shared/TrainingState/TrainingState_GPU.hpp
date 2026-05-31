@@ -33,9 +33,6 @@ namespace GRIM {
     class EmbeddingLayer;
 }
 
-// AutogradIntermediates: owns all intermediate tensors during forward→backward
-#include "../../training/Autograd/AutogradIntermediates.hpp"
-
 namespace GRIM {
 
 struct TrainingState {
@@ -56,7 +53,7 @@ struct TrainingState {
     //
     // ALL weight tensors are owned by Pattern B layers (self-managing):
     //   - Embedding: LanguageModel::getEmbeddingLayer()->tokenWeights()
-    //   - LM Head: LanguageModel::getLmHeadLayer()->weights() / bias() / finalRmsGamma()
+    //   - LM Head: TrainingContext::parameter_registry.getLmHeadParameters()->weights / bias / final_rms_gamma
     //   - Encoder: Each EncodingLayer self-allocates in constructor
     //   - ScratchBlock: ScratchBlockLayer self-allocates in constructor
     //
@@ -78,10 +75,6 @@ struct TrainingState {
     
     TeacherLogits::Buffer teacher_logits;
     TeacherLogits::Buffer reference_logits;
-
-    // Owns ALL intermediate tensors during forward→backward cycle
-    // Replaces old autograd_ctx (which mixed input args with tensor storage)
-    Autograd::AutogradIntermediates autograd_intermediates;
 
     //======================================================//
     //  CROSS-ATTENTION READ-GATE TELEMETRY (Rule 20 ownership taxonomy)

@@ -3,8 +3,9 @@
 //  Full autograd-based training flow using TensorContract
 //  
 //  REFACTORED: AutogradContext is now a THIN INPUT STRUCT.
-//  All intermediate tensor ownership lives in TrainingState
-//  (via its autograd_intermediates member). This eliminates:
+//  Retained forward tensors and the scalar loss root are passed through
+//  explicit step-state owners instead of routed through TrainingState. This
+//  eliminates:
 //  - Dual-buffer sync (cached_embeddings_tensor is DELETED)
 //  - Fragile clearIntermediates() lifecycle
 //  - 30+ field bloated context struct
@@ -76,10 +77,11 @@ struct BackwardResult {
  * AutogradContext - THIN INPUT STRUCT
  * 
  * Contains ONLY what the forward/backward functions need as INPUT.
- * All intermediate tensors are stored in TrainingState::autograd_intermediates.
+ * Retained forward tensors and the scalar loss root are provided through
+ * explicit step-state owners for the active batch.
  * 
  * Rule 20: No tensor ownership here. If you need to store a Tensor for
- * backward, put it in AutogradIntermediates (owned by TrainingState).
+ * backward lifetime, put it on the explicit caller-owned step-state owners.
  */
 struct AutogradContext {
     // ═══════════════════════════════════════════════════════════════════════════
@@ -87,6 +89,8 @@ struct AutogradContext {
     // ═══════════════════════════════════════════════════════════════════════════
     const Config::AiConfigSnapshot* config = nullptr;
     TrainingState* training_state = nullptr;
+    Forward::ModelForwardOutputs* forward_outputs = nullptr;
+    AutogradLossState* loss_state = nullptr;
     GPUGrimEncoder* gpu_encoder = nullptr;
     cublasHandle_t cublas_handle = nullptr;
     cudaStream_t stream = nullptr;
@@ -144,6 +148,8 @@ struct AutogradContext {
     void validate(const char* caller) const {
         if (!config) throw std::runtime_error(std::string(caller) + ": config is NULL");
         if (!training_state) throw std::runtime_error(std::string(caller) + ": training_state is NULL");
+        if (!forward_outputs) throw std::runtime_error(std::string(caller) + ": forward_outputs is NULL");
+        if (!loss_state) throw std::runtime_error(std::string(caller) + ": loss_state is NULL");
         if (!gpu_encoder) throw std::runtime_error(std::string(caller) + ": gpu_encoder is NULL");
         if (!embedding_layer) throw std::runtime_error(std::string(caller) + ": embedding_layer is NULL");
         if (!lm_head) throw std::runtime_error(std::string(caller) + ": lm_head is NULL");
@@ -171,6 +177,8 @@ struct AutogradContext {
 AutogradContext initAutogradContext(
     const Config::AiConfigSnapshot* config,
     TrainingState* training_state,
+    Forward::ModelForwardOutputs& forward_outputs,
+    AutogradLossState& loss_state,
     GPUGrimEncoder* gpu_encoder,
     EmbeddingLayer* embedding_layer,
     LMHeadLayer* lm_head,
@@ -189,13 +197,13 @@ AutogradContext initAutogradContext(
  * 
  * Single entry point for ALL loss computation. Creates loss Tensor with
  * CrossEntropyGradFn attached, stores that Tensor directly in
- * training_state->autograd_intermediates.loss_tensor for backward, and returns
+ * the caller-owned AutogradLossState for backward, and returns
  * the host-side LossResult consumed by Phase2.
  * 
  * Handles:
  *   1. Text CE via autograd::unified_loss()
  *   2. Consumes any shared-forward-owned MTP logits emitted for this batch
- *   3. Leaves the canonical loss Tensor on AutogradIntermediates for backward
+ *   3. Leaves the canonical loss Tensor on AutogradLossState for backward
  *   4. Returns decomposed host-side loss scalars/diagnostics to Phase2
  * 
  * @param ctx     Autograd context (must have logits populated by the caller-owned
@@ -230,7 +238,7 @@ bool verifyGradientsAreConnected(AutogradContext& ctx);
 // computeGradientNorm() DELETED — redundant with Phase2's computeGradNorm()
 
 /**
- * AutogradStepScope — RAII single-owner of AutogradIntermediates::clear().
+ * AutogradStepScope — RAII single-owner of autograd step-state clear().
  *
  * Rule 20 ownership taxonomy enforcement: clearing of Category 1 (graph-owned,
  * transient) state MUST happen at exactly one site per autograd step. Wrap the
@@ -240,19 +248,28 @@ bool verifyGradientsAreConnected(AutogradContext& ctx);
  * paths are no longer required and MUST NOT be added back.
  *
  * Lifetime contract: the scope MUST outlive every reader of any field in
- * training_state.autograd_intermediates. After the scope ends, those fields
- * are reset to default-constructed Tensors — reading them is undefined.
+ * the active `forward_outputs` / `loss_state` owners.
+ * After the scope ends, those fields are reset to default-constructed Tensors
+ * — reading them is undefined.
  */
 class AutogradStepScope {
 public:
-    explicit AutogradStepScope(TrainingState& ts) : ts_(ts) {}
-    ~AutogradStepScope() { ts_.autograd_intermediates.clear(); }
+        AutogradStepScope(
+                Forward::ModelForwardOutputs& forward_outputs,
+                AutogradLossState& loss_state)
+                : forward_outputs_(forward_outputs),
+                    loss_state_(loss_state) {}
+    ~AutogradStepScope() {
+                forward_outputs_.clear();
+                loss_state_.clear();
+    }
     AutogradStepScope(const AutogradStepScope&) = delete;
     AutogradStepScope& operator=(const AutogradStepScope&) = delete;
     AutogradStepScope(AutogradStepScope&&) = delete;
     AutogradStepScope& operator=(AutogradStepScope&&) = delete;
 private:
-    TrainingState& ts_;
+    Forward::ModelForwardOutputs& forward_outputs_;
+    AutogradLossState& loss_state_;
 };
 
 }  // namespace Autograd

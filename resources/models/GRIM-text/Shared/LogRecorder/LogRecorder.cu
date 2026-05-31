@@ -296,12 +296,11 @@ void EmitModuleLog(const std::string& module_name,
         entry.setMessage("%.*s", static_cast<int>(std::min(message.size(), size_t(511))), message.data());
         entry.primary = __builtin_nanf("");
         entry.secondary = __builtin_nanf("");
-        if (force_sync) {
-            tape->emitImmediate(entry);
-            tape->flushSinks();
-        } else {
-            tape->recordLifecycle(entry);
-        }
+        tape->emitImmediate(entry);
+        // Shared training_<session>.log must remain chronological relative to
+        // TrainingLogger writes. Flush each module/lifecycle line immediately
+        // instead of deferring it behind the next batch tape flush.
+        tape->flushSinks();
     } else {
         // Pre-tape initialization: write to stderr so messages aren't lost
         const char* lvl_str = "INFO";

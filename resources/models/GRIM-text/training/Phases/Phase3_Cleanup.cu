@@ -443,12 +443,8 @@ void releaseResources(TrainingContext& ctx) {
     EmitModuleInfo(ModuleId::Training, "Releasing resources...", ctx.global_step);
 
 #ifdef USE_CUDA
-    // Clear autograd intermediates before destroying model so all grad_fns and layer
-    // intermediates are released in a controlled order (avoids relying only on destructor order).
-    if (ctx.model) {
-        ctx.model->getTrainingState().autograd_intermediates.clear();
-        EmitModuleInfo(ModuleId::Training, "✓ Autograd intermediates cleared", ctx.global_step);
-    }
+    // No durable ModelForwardOutputs owner remains on TrainingState/GenerationState.
+    // Per-call shared-forward outputs are cleared by their Phase2 scopes.
 #endif
 
     // Release model (LanguageModel subobjects free PBM; TrainingState frees Tensor buffers, TeacherLogits, etc.)

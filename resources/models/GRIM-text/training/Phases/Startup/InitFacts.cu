@@ -106,12 +106,14 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
 
     // ── Collect the live structural facts ────────────────────────────
     auto* model = ctx.model.get();
-    const float* emb_w_ptr = model->getEmbeddingLayer()->tokenWeights().data;
-    const float* lm_w_ptr  = model->getLmHeadLayer()->weights().data;
-    const float* emb_g_ptr = model->getEmbeddingLayer()->tokenWeights().grad_data();
-    const float* lm_g_ptr  = model->getLmHeadLayer()->weights().grad_data();
+    auto& embedding_layer = ctx.gpu_model.requireEmbeddingLayer("verifyAndDumpInitFacts");
+    auto& lm_head_parameters = ctx.parameter_registry.requireLmHeadParameters("verifyAndDumpInitFacts");
+    const float* emb_w_ptr = embedding_layer.tokenWeights().data;
+    const float* lm_w_ptr  = lm_head_parameters.weights.data;
+    const float* emb_g_ptr = embedding_layer.tokenWeights().grad_data();
+    const float* lm_g_ptr  = lm_head_parameters.weights.grad_data();
     const bool cfg_tied  = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "tie_embeddings");
-    const bool lm_owns   = model->getLmHeadLayer()->ownsWeights();
+    const bool lm_owns   = lm_head_parameters.owns_weights;
     const bool ptrs_same  = (emb_w_ptr == lm_w_ptr);
     const bool grads_same = (emb_g_ptr == lm_g_ptr);
 
@@ -164,8 +166,8 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
     ctx.telemetry.last_obs[kInitOptGroupsEmb]   = static_cast<float>(emb_groups);
     ctx.telemetry.last_obs[kInitOptGroupsLm]    = static_cast<float>(lm_groups);
 
-    // Success path: full human-readable dump through the LogRecorder tape.
-    // The text sink is training_<session>_tape.log. Each value gets its own
+    // Success path: full human-readable dump through the LogRecorder text sink.
+    // The text sink shares training_<session>.log with TrainingLogger. Each value gets its own
     // line to avoid the fixed LogEntry message buffer truncating the payload.
     emitInitFactLine("[INIT_FACTS] ========================================================================");
     emitInitFactLine("[INIT_FACTS] Init structural facts: effective configuration and live model state");
@@ -254,7 +256,7 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
     emitInitFactLine("[INIT_FACTS] ========================================================================");
 
     if (ctx.logging.logger) {
-        ctx.logging.logger->log("✓ Init facts verified and dumped to LogRecorder tape");
+        ctx.logging.logger->log("✓ Init facts verified and dumped to the shared session log");
     }
 }
 

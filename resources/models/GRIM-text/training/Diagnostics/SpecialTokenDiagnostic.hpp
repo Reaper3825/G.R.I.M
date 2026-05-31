@@ -7,6 +7,7 @@
 //======================================================//
 
 #include "../../GRIM/grim_language_model_cuda.hpp"
+#include "../Phases/Startup/Model/ParameterRegistry.hpp"
 
 namespace GRIMText { namespace Training { struct TrainingContext; } }
 
@@ -14,6 +15,7 @@ namespace GRIM::Diagnostics {
 
 void runSpecialTokenDiagnostic(
     GRIMText::Training::TrainingContext& ctx,
+    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const GRIM::Batching::BatchPayload& payload,
     int batch_idx);
 

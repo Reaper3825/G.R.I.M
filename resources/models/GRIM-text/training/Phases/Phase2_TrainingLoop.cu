@@ -316,11 +316,16 @@ void runOptimizerWindowFromEpoch(
     TrainingLoopState& state,
     const GRIM::Batching::BatchPayload& payload,
     BatchResult& result,
+    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    GRIM::TrainingState& training_state,
+    std::vector<GRIM::ParameterGroup>& parameter_groups,
     int batch_idx,
     int accum_steps,
     int optimizer_step)
 {
     const bool sync_diag = GRIM::Diagnostics::shouldSyncDiagnostics(ctx, batch_idx);
+    const GRIM::Tensor& lm_head_weights =
+        parameter_registry.requireLmHeadParameters("runOptimizerWindowFromEpoch").weights;
 
     bool has_clip_metrics = false;
     GRIM::GradClip::ClipResult clip_metrics{};
@@ -338,12 +343,10 @@ void runOptimizerWindowFromEpoch(
     GRIM::Diagnostics::WeightSample pre_sample{};
     if (sync_diag) {
         pre_sample = GRIM::Diagnostics::sampleWeightStats(
-            ctx.model->getLmHeadLayer(), ctx.model->getTrainingState(), true);
+            lm_head_weights, training_state, true);
     }
 
-    auto& clip_ts = ctx.model->getTrainingState();
-    cudaStream_t clip_stream = clip_ts.stream_ctrl.getPrimaryStream();
-    auto& clip_groups = ctx.model->parameterGroups();
+    cudaStream_t clip_stream = training_state.stream_ctrl.getPrimaryStream();
     const float accumulation_scale =
         accumulationNormalizationScaleForOptimizerWindow(accum_steps);
 
@@ -351,7 +354,7 @@ void runOptimizerWindowFromEpoch(
     // boundary, after the full microbatch window has completed and before any
     // clipping/update logic consumes the registered parameter gradients.
     scaleRegisteredParameterGradientsForOptimizerWindow(
-        clip_groups,
+        parameter_groups,
         accumulation_scale,
         clip_stream);
 
@@ -363,8 +366,8 @@ void runOptimizerWindowFromEpoch(
         clip_cfg.max_rms = effective_per_token_limit;
 
         const auto clip = GRIM::GradClip::clipGradientNorms(
-            clip_groups.data(), clip_groups.size(),
-            clip_ts.grad_norm_scratch, clip_cfg, clip_stream);
+            parameter_groups.data(), parameter_groups.size(),
+            training_state.grad_norm_scratch, clip_cfg, clip_stream);
 
         result.grad_rms = clip.global_rms_post;
         result.grad_rms_valid = true;
@@ -379,33 +382,31 @@ void runOptimizerWindowFromEpoch(
     // RUNTIME tie_embeddings pointer verification (every optimizer step)
     // (extracted to Diagnostics/TieVerifyDiagnostic.cu)
     // ════════════════════════════════════════════════════════════════════
-    GRIM::Diagnostics::runTieVerifyDiagnostic(ctx, batch_idx);
+    GRIM::Diagnostics::runTieVerifyDiagnostic(ctx, parameter_registry, batch_idx);
 
     // Optimizer Window: runEpoch owns the accumulation-complete boundary;
     // Shared/Optimizers owns configured optimizer dispatch. The window only
     // provides filled-window grads, LR, step, stream, and grouped HP.
-    GRIM::launchOptimizerUpdate(ctx.model->parameterGroups(),
+    GRIM::launchOptimizerUpdate(parameter_groups,
                                 optimizer_update_hp,
                                 result.learning_rate,
                                 optimizer_step,
-                                ctx.model->getTrainingState().stream_ctrl.getPrimaryStream());
+                                training_state.stream_ctrl.getPrimaryStream());
 
     // Rule 20: post-optimizer weight NaN spot check. Stream ownership stays
     // in Phase2; the guard only inspects optimizer parameter groups.
     {
-        auto& post_step_state = ctx.model->getTrainingState();
         cudaError_t post_step_sync = cudaStreamSynchronize(
-            post_step_state.stream_ctrl.getPrimaryStream());
+            training_state.stream_ctrl.getPrimaryStream());
         if (post_step_sync != cudaSuccess) {
             throw std::runtime_error(
                 std::string("[FATAL] Failed to synchronize stream before post-optimizer finite check: ") +
                 cudaGetErrorString(post_step_sync));
         }
 
-        const auto& post_step_groups = ctx.model->parameterGroups();
         GRIM::Diagnostics::checkPostOptimizerWeightsFinite(
-            post_step_groups.data(),
-            post_step_groups.size(),
+            parameter_groups.data(),
+            parameter_groups.size(),
             optimizer_step,
             result.learning_rate,
             batch_idx);
@@ -417,7 +418,14 @@ void runOptimizerWindowFromEpoch(
     // Post-optimizer LM-head sample, GradTrace POST log, [UpdateMag],
     // and optimizer-boundary adaptive update trace.
     GRIM::Diagnostics::runPostOptimizerWeightTrace(
-        ctx, result, optimizer_update_hp, pre_sample, sync_diag);
+        ctx,
+        result,
+        parameter_registry,
+        training_state,
+        parameter_groups,
+        optimizer_update_hp,
+        pre_sample,
+        sync_diag);
 
     completeOptimizerWindowBookkeepingOrThrow(ctx.optimizer, accum_steps);
 
@@ -447,12 +455,24 @@ void runOptimizerWindowFromEpoch(
         tel_input.total_loss_value  = result.loss;
         tel_input.aux_loss          = result.aux_loss;
         tel_input.max_seq_len       = payload.max_seq_len;
+        tel_input.exec_selection_entropy = result.exec_selection_entropy;
+        tel_input.exec_op_entropy        = result.exec_op_entropy;
+        tel_input.exec_div_clamp_rate    = result.exec_div_clamp_rate;
+        tel_input.exec_max_p_write       = result.exec_max_p_write;
+        tel_input.exec_active_ratio      = result.exec_active_ratio;
+        tel_input.inject_gate_mean       = result.inject_gate_mean;
         tel_input.batch_idx         = batch_idx;
         tel_input.global_step       = ctx.global_step;
         tel_input.actual_vocab_size = ctx.data_info.actual_vocab_size;
         tel_input.d_model           = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "d_model");
 
-        GRIM::Telemetry::updateTelemetryObservations(ctx, tel_input, clip_metrics.metrics, &payload);
+        GRIM::Telemetry::updateTelemetryObservations(
+            ctx,
+            training_state,
+            ctx.gpu_model,
+            parameter_registry,
+            tel_input,
+            clip_metrics.metrics);
     }
 }
 
@@ -512,7 +532,6 @@ GRIM::Forward::ModelForwardRuntimePayload buildTrainingForwardRuntimePayload(
     GRIM::TrainingState& training_state)
 {
     GRIM::Forward::ModelForwardRuntimePayload runtime_payload{};
-    runtime_payload.forward_outputs = &training_state.autograd_intermediates;
     runtime_payload.execution_runtime = &training_state.execution_runtime;
     runtime_payload.read_gate_accum_tensor = &training_state.read_gate_accum_tensor;
     return runtime_payload;
@@ -580,27 +599,33 @@ GRIM::Forward::ModelForwardRequest buildTrainingForwardRequest(
     GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     int mtp_k,
     const GRIM::PBM::PBMState& pbm,
-    const GRIM::Autograd::AutogradContext& autograd_ctx,
+    const GRIM::Config::AiConfigSnapshot& config,
+    const GRIMText::Training::Startup::ForwardTopologyView& forward_topology,
+    const GRIM::TrainingState& training_state,
+    cudaStream_t stream,
+    const GRIM::Batching::BatchPayload& payload,
+    const GRIM::Batching::BatchDeviceBindings& bindings,
+    uint64_t batch_idx,
     bool emit_mtp_logits)
 {
     GRIM::Forward::ModelForwardRequest request{};
-    request.config = autograd_ctx.config;
-    request.gpu_encoder = autograd_ctx.gpu_encoder;
+    request.config = &config;
+    request.gpu_encoder = forward_topology.gpu_encoder;
     request.pbm = &pbm;
-    request.cublas_handle = autograd_ctx.cublas_handle;
-    request.stream = autograd_ctx.stream;
-    request.embedding_layer = autograd_ctx.embedding_layer;
-    request.lm_head = autograd_ctx.lm_head;
-    request.scratch_block = autograd_ctx.scratch_block;
-    request.execution_block = autograd_ctx.execution_block;
-    request.payload = autograd_ctx.payload;
-    request.bindings = autograd_ctx.device_bindings;
-    request.batch_idx = autograd_ctx.batch_idx;
+    request.cublas_handle = training_state.cublas_handle.get();
+    request.stream = stream;
+    request.embedding_layer = forward_topology.embedding_layer;
+    request.lm_head = forward_topology.lm_head_layer;
+    request.scratch_block = forward_topology.scratch_block;
+    request.execution_block = forward_topology.execution_block_layer;
+    request.payload = &payload;
+    request.bindings = &bindings;
+    request.batch_idx = batch_idx;
     if (emit_mtp_logits) {
         request.mtp_heads = buildConnectedForwardMtpHeadViews(
             parameter_registry,
             mtp_k,
-            autograd_ctx.stream);
+            stream);
     }
     request.graph = GRIM::Forward::ModelForwardGraphPolicy{
         /*connect_parameter_graph=*/true,
@@ -630,6 +655,68 @@ void snapshotReadGateMean(
     training_state.h_read_gate_mean = (h_accum[1] > 0.0f)
         ? (h_accum[0] / h_accum[1])
         : 0.0f;
+}
+
+void snapshotExecutionTelemetry(
+    const GRIM::Forward::ModelForwardOutputs& forward_outputs,
+    const GRIM::Batching::BatchPayload& payload,
+    BatchResult& result)
+{
+    if (forward_outputs.exec_outputs_per_row.empty()) {
+        return;
+    }
+    if (static_cast<int>(forward_outputs.exec_outputs_per_row.size()) != payload.batch_size) {
+        throw std::runtime_error(
+            "snapshotExecutionTelemetry: exec_outputs_per_row size=" +
+            std::to_string(forward_outputs.exec_outputs_per_row.size()) +
+            " != payload.batch_size=" + std::to_string(payload.batch_size));
+    }
+    if (static_cast<int>(payload.execution_active.size()) != payload.batch_size) {
+        throw std::runtime_error(
+            "snapshotExecutionTelemetry: payload.execution_active size=" +
+            std::to_string(payload.execution_active.size()) +
+            " != payload.batch_size=" + std::to_string(payload.batch_size));
+    }
+
+    int active_rows = 0;
+    int total_steps = 0;
+    float sum_selection_entropy = 0.0f;
+    float sum_op_entropy = 0.0f;
+    int total_div_clamps = 0;
+    float sum_max_p_write = 0.0f;
+    float sum_inject_gate = 0.0f;
+    int inject_gate_count = 0;
+
+    for (int b = 0; b < payload.batch_size; ++b) {
+        if (!payload.execution_active[static_cast<size_t>(b)]) {
+            continue;
+        }
+        active_rows++;
+
+        for (const auto& step : forward_outputs.exec_outputs_per_row[static_cast<size_t>(b)].steps) {
+            const auto& m = step.metrics;
+            sum_selection_entropy += (m.arg1_entropy + m.arg2_entropy + m.op_entropy + m.write_entropy) / 4.0f;
+            sum_op_entropy += m.op_entropy;
+            total_div_clamps += m.div_clamp_count;
+            sum_max_p_write += m.max_p_write;
+            sum_inject_gate += m.inject_gate_value;
+            total_steps++;
+            inject_gate_count++;
+        }
+    }
+
+    if (total_steps > 0) {
+        result.exec_selection_entropy = sum_selection_entropy / static_cast<float>(total_steps);
+        result.exec_op_entropy = sum_op_entropy / static_cast<float>(total_steps);
+        result.exec_div_clamp_rate = static_cast<float>(total_div_clamps) / static_cast<float>(total_steps);
+        result.exec_max_p_write = sum_max_p_write / static_cast<float>(total_steps);
+    }
+    if (payload.batch_size > 0) {
+        result.exec_active_ratio = static_cast<float>(active_rows) / static_cast<float>(payload.batch_size);
+    }
+    if (inject_gate_count > 0) {
+        result.inject_gate_mean = sum_inject_gate / static_cast<float>(inject_gate_count);
+    }
 }
 
 } // namespace
@@ -707,12 +794,9 @@ BatchResult processBatch(
             ctx.logging.logger->log("[CUDA] first_batch BEFORE explicit training forward: ok");
         }
     }
-    // Rule 20 ownership taxonomy: AutogradStepScope is the SINGLE owner of
-    // AutogradIntermediates::clear() for this batch. Do NOT add an explicit
-    // clear() anywhere inside this scope.
-    GRIM::Autograd::AutogradStepScope autograd_step_scope(ctx.model->getTrainingState());
     auto& model = *ctx.model;
     auto& training_state = model.getTrainingState();
+    GRIM::Autograd::AutogradLossState autograd_loss_state;
     cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
     // Sync slice: upload the prebuilt host BatchPayload once and reuse the
     // returned BatchDeviceBindings across shared forward, loss, and backward —
@@ -741,9 +825,44 @@ BatchResult processBatch(
 
     CUDA_CHECK(cudaMemsetAsync(training_state.read_gate_accum_tensor.data, 0, 2 * sizeof(float), stream));
 
+    GRIM::Forward::ModelForwardRuntimePayload runtime_payload =
+        buildTrainingForwardRuntimePayload(training_state);
+    const float mtp_alpha_effective = mtpAlphaEffectiveForBatch(ctx.config, ctx.global_step);
+    const bool mtp_enabled =
+        GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "mtp_enabled");
+    const int mtp_k = mtp_enabled
+        ? GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "mtp_k")
+        : 0;
+    const bool emit_mtp_logits = mtp_enabled
+        && mtp_k > 0
+        && mtp_alpha_effective > 0.0f;
+    GRIM::Forward::ModelForwardRequest forward_request =
+        buildTrainingForwardRequest(
+            ctx.parameter_registry,
+            mtp_k,
+            ctx.pbm_owner.state(),
+            model_config,
+            forward_topology,
+            training_state,
+            stream,
+            payload,
+            train_bindings,
+            plan.batch_idx,
+            emit_mtp_logits);
+
+    auto forward_outputs = GRIM::Forward::executeModelForward(forward_request, runtime_payload);
+    // Rule 20 ownership taxonomy: AutogradStepScope is the SINGLE owner of
+    // the active forward/loss step-state clear() for this batch. Do NOT add an
+    // explicit clear() anywhere inside this scope.
+    GRIM::Autograd::AutogradStepScope autograd_step_scope(
+        forward_outputs,
+        autograd_loss_state);
+
     GRIM::Autograd::AutogradContext autograd_ctx = GRIM::Autograd::initAutogradContext(
         &model_config,
         &training_state,
+        forward_outputs,
+        autograd_loss_state,
         forward_topology.gpu_encoder,
         forward_topology.embedding_layer,
         forward_topology.lm_head_layer,
@@ -764,21 +883,6 @@ BatchResult processBatch(
         loss_config,
         plan.should_accumulate);
 
-    GRIM::Forward::ModelForwardRuntimePayload runtime_payload =
-        buildTrainingForwardRuntimePayload(training_state);
-    const float mtp_alpha_effective = mtpAlphaEffectiveForBatch(ctx.config, ctx.global_step);
-    const bool mtp_enabled =
-        GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "mtp_enabled");
-    const int mtp_k = mtp_enabled
-        ? GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "mtp_k")
-        : 0;
-    const bool emit_mtp_logits = mtp_enabled
-        && mtp_k > 0
-        && mtp_alpha_effective > 0.0f;
-    GRIM::Forward::ModelForwardRequest forward_request =
-        buildTrainingForwardRequest(ctx.parameter_registry, mtp_k, ctx.pbm_owner.state(), autograd_ctx, emit_mtp_logits);
-
-    GRIM::Forward::executeModelForward(forward_request, runtime_payload);
     snapshotReadGateMean(training_state, stream);
 
     auto loss_result = GRIM::Autograd::computeAutogradLoss(
@@ -823,13 +927,12 @@ BatchResult processBatch(
         ctx.logging.logger->log("[CUDA] first_batch AFTER explicit training forward/loss/backward: ok");
     }
 
-    auto& active_intermediates = ctx.model->getTrainingState().autograd_intermediates;
-    if (!active_intermediates.logits_tensor.data) {
+    if (!forward_outputs.logits_tensor.data) {
         throw std::runtime_error(
             "processBatch: live logits tensor is NULL after successful explicit shared forward — "
             "diagnostics must run before AutogradStepScope teardown");
     }
-    const GRIM::Tensor* live_lm_head_input = active_intermediates.liveLmHeadInputOrNull();
+    const GRIM::Tensor* live_lm_head_input = forward_outputs.liveLmHeadInputOrNull();
     if (!live_lm_head_input || !live_lm_head_input->data) {
         throw std::runtime_error(
             "processBatch: live LM-head input tensor is NULL after successful explicit shared forward");
@@ -840,7 +943,7 @@ BatchResult processBatch(
     GRIM::Diagnostics::runPredictionDistributionAndLogitTrace(
         ctx,
         payload,
-        active_intermediates.logits_tensor,
+        forward_outputs.logits_tensor,
         result.loss,
         batch_idx);
     // NOTE: Loss variance computation removed (was causing 5-second GPU sync bottleneck).
@@ -859,10 +962,13 @@ BatchResult processBatch(
     // ========================================================================
     GRIM::Diagnostics::runLogitScaleDiagnostic(
         ctx,
+        ctx.parameter_registry,
         payload,
-        active_intermediates.logits_tensor,
+        forward_outputs.logits_tensor,
         *live_lm_head_input,
         batch_idx);
+    GRIM::Diagnostics::computeRhoDiagnostic(ctx, payload, forward_outputs, batch_idx);
+    snapshotExecutionTelemetry(forward_outputs, payload, result);
     
     if (!std::isfinite(result.loss)) {
         throw std::runtime_error("Non-finite batch loss: " + std::to_string(result.loss));
@@ -884,12 +990,15 @@ BatchResult processBatch(
     // ═══════════════════════════════════════════════════════════════════════════
 
     // Issue #142: special-token weight & gradient verification
-    GRIM::Diagnostics::runSpecialTokenDiagnostic(ctx, payload, batch_idx);
+    GRIM::Diagnostics::runSpecialTokenDiagnostic(
+        ctx,
+        ctx.parameter_registry,
+        payload,
+        batch_idx);
 
     const bool sync_diag = GRIM::Diagnostics::shouldSyncDiagnostics(ctx, batch_idx);
 
     if (sync_diag) {
-        auto& training_state = ctx.model->getTrainingState();
         const auto flush_result = GRIM::GradStats::flushAndLog(
             training_state.stream_ctrl.getPrimaryStream(),
             ctx.global_step,
@@ -964,6 +1073,7 @@ BatchResult processBatch(
 EpochResult runEpoch(
     TrainingContext& ctx,
     TrainingLoopState& state,
+    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     int epoch_idx,
     int num_epochs,
     int accum_steps) {
@@ -1014,9 +1124,10 @@ EpochResult runEpoch(
                 std::to_string(active_idx));
         }
     }
-
     const int total_batches = static_cast<int>(batch_order.size());
     const auto epoch_start = std::chrono::steady_clock::now();
+    auto& training_state = ctx.model->getTrainingState();
+    auto& parameter_groups = ctx.model->parameterGroups();
     float epoch_loss = 0.0f;
     int epoch_sequences_processed = 0;
 
@@ -1055,6 +1166,9 @@ EpochResult runEpoch(
                 state,
                 payload,
                 batch_result,
+                parameter_registry,
+                training_state,
+                parameter_groups,
                 batch_idx,
                 accum_steps,
                 optimizer_step);
@@ -1138,6 +1252,7 @@ bool executePhase2(TrainingContext& ctx) {
 
     const int accum_steps = validatedAccumulationSteps(ctx);
     const int num_epochs = schedule_hp.epochs;
+    auto& parameter_registry = ctx.parameter_registry;
     if (num_epochs <= 0) {
         throw std::runtime_error("FATAL: epochs must be > 0 in Phase2");
     }
@@ -1150,7 +1265,7 @@ bool executePhase2(TrainingContext& ctx) {
     
     try {
         for (int epoch = 0; epoch < num_epochs; ++epoch) {
-            EpochResult epoch_result = runEpoch(ctx, state, epoch, num_epochs, accum_steps);
+            EpochResult epoch_result = runEpoch(ctx, state, parameter_registry, epoch, num_epochs, accum_steps);
             ctx.epochs_completed = epoch + 1;
             
             if (epoch_result.auto_stop_triggered) {

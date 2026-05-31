@@ -51,9 +51,9 @@ void sanitizeSingleLineTokenDisplay(std::string& decoded) {
 void computeRhoDiagnostic(
     GRIMText::Training::TrainingContext& ctx,
     const GRIM::Batching::BatchPayload& payload,
+    const GRIM::Forward::ModelForwardOutputs& ai,
     int batch_idx)
 {
-    const auto& ai = ctx.model->getTrainingState().autograd_intermediates;
     const int num_layers = static_cast<int>(ai.encoder_layer_outputs.size());
     const int d_model = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "d_model");
     const int max_seq_len = payload.max_seq_len;

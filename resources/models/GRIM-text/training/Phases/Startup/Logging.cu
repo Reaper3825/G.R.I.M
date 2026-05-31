@@ -79,10 +79,8 @@ void setupBatchLogTape(
     logging.tape = std::make_unique<GRIM::Logging::BatchLogTape>(tc);
 
     // Sinks
-    std::string text_log_path =
-        paths_hp.log_dir + "/training_" + logging.session_id + "_tape.log";
     logging.text_sink = std::make_unique<GRIM::Logging::TextLogSink>(
-        text_log_path.c_str(), /*also_stdout=*/false);
+        logging.raw_log_path.c_str(), /*also_stdout=*/false);
     logging.tape->addSink(logging.text_sink.get());
 
     if (tape_cfg.equation_csv_enabled) {

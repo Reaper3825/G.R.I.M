@@ -14,8 +14,10 @@
 #include "TelemetryState_GPU.hpp"
 #include "TelemetryLattice_GPU.hpp"
 #include "TelemetryCsvLogger.hpp"
-#include "../Batching/BatchPayload.hpp"
 #include "../GradNorm/GradNormGPU.hpp"
+
+#include "../../training/Phases/Startup/Model/ModelGpuState.hpp"
+#include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
 
 #include <string>
 #include <cstdint>
@@ -56,6 +58,14 @@ struct TelemetryBatchInput {
     // Batch geometry (stream 30)
     int   max_seq_len           = 0;
 
+    // Reduced execution-block forward snapshots authored inside processBatch
+    float exec_selection_entropy = 0.0f;
+    float exec_op_entropy        = 0.0f;
+    float exec_div_clamp_rate    = 0.0f;
+    float exec_max_p_write       = 0.0f;
+    float exec_active_ratio      = 0.0f;
+    float inject_gate_mean       = 0.0f;
+
     // Identifiers for error messages
     int   batch_idx             = 0;
     int   global_step           = 0;
@@ -73,14 +83,18 @@ struct TelemetryBatchInput {
 /// exports CSV, and validates NaN/Inf. Throws on any anomaly (Rule 20).
 ///
 /// @param ctx      Training context (owns telemetry state, logger, model)
+/// @param training_state Explicit durable training-state owner
+/// @param gpu_model Explicit durable GPU topology owner
+/// @param parameter_registry Explicit durable startup parameter owner
 /// @param input    Pre-computed metrics from processBatch
 /// @param gm       Gradient metrics (for EB grad norm)
-/// @param payload  Batch payload (for execution_active flags); may be nullptr
 void updateTelemetryObservations(
     GRIMText::Training::TrainingContext& ctx,
+    const GRIM::TrainingState& training_state,
+    const GRIMText::Training::Startup::GpuModelState& gpu_model,
+    const GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const TelemetryBatchInput& input,
-    const GRIM::GradNorm::GradMetrics& gm,
-    const GRIM::Batching::BatchPayload* payload);
+    const GRIM::GradNorm::GradMetrics& gm);
 
 /// Emits log-interval telemetry/monitoring derived from the latest batch:
 /// step loss/lr and MTP per-head telemetry.

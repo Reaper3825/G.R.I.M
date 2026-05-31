@@ -9,6 +9,17 @@ LM head backward and embedding backward write to the **same buffer** via PyTorch
 
 `embedding_grads` and `lm_head_weight_grads` are the **same pointer**. Never zero both separately, register both in param groups, or free both.
 
+## Durable ownership
+
+- Durable LM-head tensors now live on `TrainingContext::parameter_registry.lm_head_parameters` as the single startup-owned bundle for:
+	- `weights`
+	- `bias`
+	- `final_rms_gamma`
+- `GpuModelState::lm_head_layer` remains the forward/topology object, but it **borrows** that registry-owned bundle and must not be treated as the durable tensor owner.
+- Direct runtime diagnostics/startup verification code should read LM-head tensors through the registry owner, not through `LanguageModel::getLmHeadLayer()` wrappers.
+- Phase2 LM-head diagnostics/consumers must take `StartupParameterRegistry&` directly when they need LM-head durable tensors. The helper boundary should read `parameter_registry.requireLmHeadParameters(...)` from that explicit owner input, not from `TrainingContext`, `LanguageModel`, or `LMHeadLayer` reach-throughs. Current runtime examples include logit-scale, special-token, tie-verification, post-optimizer traces, and the post-clip parameter-gradient equation diagnostic.
+- Tied embeddings remain valid under this ownership split because `lm_head_parameters.weights` aliases `EmbeddingLayer::tokenWeights()` and shares the same grad buffer.
+
 `LMHeadLayer` consumes `HyperParameters::LMHeadLayerConstructionHP` directly. It stores that grouped construction-HP snapshot as `hp_` only because startup grouping temporaries go out of scope before forward/backward; it is **not** a second authored config owner. Runtime tying ownership must match the grouping: `tie_embeddings=true` requires a non-null embedding weight pointer, and `tie_embeddings=false` requires `nullptr`.
 
 - `LMHeadLayer::forward` is read-only over durable parameter state. Training may pass the live trainable tensors so autograd can attach graph edges, but inference-prefill must pass detached views. Forward must not restamp `weights_.shape`, toggle `requires_grad`, or cache forward-derived `W_eff` on the durable layer object.

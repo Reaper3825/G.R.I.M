@@ -21,10 +21,14 @@
 
 #include <cstdint>
 
-#include "../../GRIM/grim_language_model_cuda.hpp"
+#include "../../Shared/Batching/BatchPayload.hpp"
 
 namespace GRIMText::Training {
     struct TrainingContext;
+}
+
+namespace GRIM::Forward {
+    struct ModelForwardOutputs;
 }
 
 namespace GRIM::Diagnostics {
@@ -41,6 +45,7 @@ namespace GRIM::Diagnostics {
 void computeRhoDiagnostic(
     GRIMText::Training::TrainingContext& ctx,
     const GRIM::Batching::BatchPayload& payload,
+    const GRIM::Forward::ModelForwardOutputs& forward_outputs,
     int batch_idx);
 
 } // namespace GRIM::Diagnostics

@@ -12,7 +12,6 @@
 
 #include "../Phases/Phase2_TrainingLoop.hpp"
 #include "../../Layers/Embedding/Embedding_GPU.hpp"
-#include "../../Layers/LMHead/lm_head_GPU.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../../Shared/LogRecorder/LogTypes.hpp"
@@ -71,8 +70,8 @@ void cudaCheck(cudaError_t err, const char* where) {
 }
 
 PostClipParamGradEmbLmEquationDiag computePostClipParamGradEmbLmEquation(
-    const GRIM::EmbeddingLayer* embedding_layer,
-    const GRIM::LMHeadLayer* lm_head_layer,
+    const GRIM::EmbeddingLayer& embedding_layer,
+    const GRIM::Tensor& lm_head_weights,
     const GRIM::Batching::BatchPayload& payload,
     int d_model,
     int vocab_size,
@@ -81,11 +80,6 @@ PostClipParamGradEmbLmEquationDiag computePostClipParamGradEmbLmEquation(
     float curr_emb_rms,
     cudaStream_t stream)
 {
-    if (!embedding_layer) {
-        throw std::runtime_error(
-            std::string("[") + kPostClipParamGradEmbLmEquationOp +
-            "] embedding_layer is NULL");
-    }
     if (payload.input_ids.empty()) {
         throw std::runtime_error(
             std::string("[") + kPostClipParamGradEmbLmEquationOp +
@@ -113,25 +107,20 @@ PostClipParamGradEmbLmEquationDiag computePostClipParamGradEmbLmEquation(
             std::string("[") + kPostClipParamGradEmbLmEquationOp +
             "] vocab_size must be > 0, got " + std::to_string(vocab_size));
     }
-    if (!lm_head_layer) {
-        throw std::runtime_error(
-            std::string("[") + kPostClipParamGradEmbLmEquationOp +
-            "] lm_head_layer is NULL");
-    }
     if (!stream) {
         throw std::runtime_error(
             std::string("[") + kPostClipParamGradEmbLmEquationOp +
             "] stream is NULL — caller MUST provide the active training stream");
     }
 
-    const float* embedding_grad_ptr = embedding_layer->tokenWeights().grad_data();
+    const float* embedding_grad_ptr = embedding_layer.tokenWeights().grad_data();
     if (!embedding_grad_ptr) {
         throw std::runtime_error(
             std::string("[") + kPostClipParamGradEmbLmEquationOp +
             "] embedding tokenWeights grad_data is NULL after clipping measurement");
     }
 
-    const float* lm_grad_ptr = lm_head_layer->weights().grad_data();
+    const float* lm_grad_ptr = lm_head_weights.grad_data();
     if (!lm_grad_ptr) {
         throw std::runtime_error(
             std::string("[") + kPostClipParamGradEmbLmEquationOp +
@@ -346,6 +335,8 @@ std::string formatPostClipParamGradEmbLmEquation(
 void runPostClipParamGradEmbLmEquation(
     GRIMText::Training::TrainingContext& ctx,
     GRIMText::Training::TrainingLoopState& state,
+    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const GRIM::EmbeddingLayer& embedding_layer,
     const GRIM::Batching::BatchPayload& payload,
     float emb_rms_pre,
     int batch_idx,
@@ -361,10 +352,12 @@ void runPostClipParamGradEmbLmEquation(
     const float prev_emb_rms = state.diagnostics.has_prev_emb_rms
         ? state.diagnostics.prev_emb_rms
         : emb_rms_pre;
+    const GRIM::Tensor& lm_head_weights =
+        parameter_registry.requireLmHeadParameters("runPostClipParamGradEmbLmEquation").weights;
 
     const PostClipParamGradEmbLmEquationDiag diag = computePostClipParamGradEmbLmEquation(
-        ctx.model->getEmbeddingLayer(),
-        ctx.model->getLmHeadLayer(),
+        embedding_layer,
+        lm_head_weights,
         payload,
         GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "d_model"),
         static_cast<int>(ctx.data_info.actual_vocab_size),

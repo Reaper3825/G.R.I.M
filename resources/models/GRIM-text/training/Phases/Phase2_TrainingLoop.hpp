@@ -59,6 +59,12 @@ struct BatchResult {
     int batch_idx = 0;
     float loss = 0.0f;
     float aux_loss = 0.0f;
+    float exec_selection_entropy = 0.0f;
+    float exec_op_entropy = 0.0f;
+    float exec_div_clamp_rate = 0.0f;
+    float exec_max_p_write = 0.0f;
+    float exec_active_ratio = 0.0f;
+    float inject_gate_mean = 0.0f;
     float grad_rms = 0.0f;
     bool grad_rms_valid = false;
     float learning_rate = 0.0f;
@@ -170,6 +176,7 @@ bool executePhase2(TrainingContext& ctx);
 EpochResult runEpoch(
     TrainingContext& ctx,
     TrainingLoopState& state,
+    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     int epoch_idx,
     int num_epochs,
     int accum_steps);

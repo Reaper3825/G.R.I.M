@@ -152,6 +152,7 @@ struct LogRecorderHP {
 struct OptimizerUpdateHP {
     OptimizerKind kind = OptimizerKind::ADAMW;
     float weight_decay = 0.0f;
+    bool use_depth_aware_upsilon = false;
     float beta1 = 0.0f;
     float beta2 = 0.0f;
     float epsilon = 0.0f;
@@ -733,6 +734,7 @@ inline OptimizerUpdateHP optimizerUpdateHP(
     OptimizerUpdateHP view;
     view.kind = hp.optimizer_kind;
     view.weight_decay = hp.weight_decay;
+    view.use_depth_aware_upsilon = hp.use_depth_aware_upsilon;
     view.beta1 = hp.optimizer_beta1;
     view.beta2 = hp.optimizer_beta2;
     view.epsilon = hp.optimizer_epsilon;
@@ -1097,6 +1099,7 @@ inline OptimizerUpdateHP optimizerUpdateHP(
     OptimizerUpdateHP view;
     view.kind = snapshotTrainingConfigField<OptimizerKind>(snapshot, "optimizer_kind");
     view.weight_decay = snapshotTrainingConfigField<float>(snapshot, "weight_decay");
+    view.use_depth_aware_upsilon = snapshotTrainingConfigField<bool>(snapshot, "use_depth_aware_upsilon");
     view.beta1 = snapshotTrainingConfigField<float>(snapshot, "optimizer_beta1");
     view.beta2 = snapshotTrainingConfigField<float>(snapshot, "optimizer_beta2");
     view.epsilon = snapshotTrainingConfigField<float>(snapshot, "optimizer_epsilon");

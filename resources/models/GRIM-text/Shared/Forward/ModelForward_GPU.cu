@@ -248,8 +248,8 @@ void ModelForwardRequest::validate(const char* caller) const {
     }
 }
 
-void executeModelForward(const ModelForwardRequest& request,
-                         ModelForwardRuntimePayload& runtime_payload) {
+ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
+                                        ModelForwardRuntimePayload& runtime_payload) {
     request.validate("executeModelForward");
     const auto* cfg = request.config;
     const auto scratch_hp = HyperParameters::scratchBlockConstructionHP(*cfg);
@@ -283,7 +283,7 @@ void executeModelForward(const ModelForwardRequest& request,
         execution_block_active);
 
     auto& runtime = runtime_payload;
-    auto& forward_outputs = *runtime.forward_outputs;
+    ModelForwardOutputs forward_outputs;
     const auto& payload = *request.payload;
     const auto* bindings = request.bindings;
     const bool connect_parameter_graph = request.graph.connect_parameter_graph;
@@ -863,6 +863,8 @@ void executeModelForward(const ModelForwardRequest& request,
     } else {
         MFWD_INFO("Forward complete: logits shape=[" << total_tokens << ", " << payload.vocab_size << "]");
     }
+
+    return forward_outputs;
 }
 
 }  // namespace Forward

@@ -32,6 +32,7 @@ using GRIM::ParamStatsBucket;
 using GRIM::ParamGroupType;
 using GRIM::Tensor;
 using GRIM::HyperParameters::ParameterGroupPrecision;
+using GRIM::HyperParameters::OptimizerUpdateHP;
 using GRIM::HyperParameters::scratchBlockConstructionHP;
 
 std::string tensorDebugSummary(const Tensor& tensor) {
@@ -135,7 +136,7 @@ class Registrar {
 public:
     Registrar(std::vector<ParameterGroup>& groups,
               const GRIM::Config::AiConfigSnapshot& config)
-        : groups_(groups), config_(config) {}
+    : groups_(groups), config_(config), optimizer_hp_(GRIM::HyperParameters::optimizerUpdateHP(config)) {}
 
     void addTensor(const std::string& name,
                    Tensor& tensor,
@@ -187,7 +188,7 @@ public:
         group.layer_index = layer;
         group.weight_decay_multiplier = wd_mult;
         group.lr_multiplier = lr_mult;
-        if (layer >= 0) {
+        if (optimizer_hp_.use_depth_aware_upsilon && layer >= 0) {
             group.upsilon = GRIM::HyperParameters::UPSILON_BASE *
                 std::sqrt(static_cast<float>(GRIM::HyperParameters::UPSILON_REFERENCE_LAYERS) /
                           static_cast<float>(layer + 1));
@@ -233,6 +234,7 @@ private:
 
     std::vector<ParameterGroup>& groups_;
     const GRIM::Config::AiConfigSnapshot& config_;
+    const OptimizerUpdateHP optimizer_hp_;
     std::vector<const void*> registered_data_;
 };
 
@@ -265,11 +267,13 @@ void validateEmbeddingLmHeadAliasing(const Tensor& embedding_weights,
 }
 
 void registerTopLevelParameters(LanguageModel& model,
+                                ParameterRegistry::StartupParameterRegistry& parameter_registry,
                                 Registrar& registrar,
                                 const GRIM::Config::AiConfigSnapshot& config) {
     auto& embedding = requireLayer(model.getEmbeddingLayer(), "EmbeddingLayer", "registerTopLevelParameters");
-    auto& lm_head = requireLayer(model.getLmHeadLayer(), "LMHeadLayer", "registerTopLevelParameters");
-    validateEmbeddingLmHeadAliasing(embedding.tokenWeights(), lm_head.weights(), config);
+    requireLayer(model.getLmHeadLayer(), "LMHeadLayer", "registerTopLevelParameters");
+    auto& lm_head_parameters = parameter_registry.requireLmHeadParameters("registerTopLevelParameters");
+    validateEmbeddingLmHeadAliasing(embedding.tokenWeights(), lm_head_parameters.weights, config);
 
     const bool tie_embeddings = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "tie_embeddings");
     const bool use_bias = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "use_bias");
@@ -282,25 +286,25 @@ void registerTopLevelParameters(LanguageModel& model,
                             ParamStatsBucket::EMBEDDING);
 
         registrar.addTensor("lm_head_weight",
-                            lm_head.weights(),
+                            lm_head_parameters.weights,
                             ParamGroupType::LM_HEAD,
                             ParamStatsBucket::LM_HEAD);
     } else {
         registrar.addTensor("embedding_lm_head_tied",
-                            lm_head.weights(),
+                            lm_head_parameters.weights,
                             ParamGroupType::LM_HEAD,
                             ParamStatsBucket::EMBEDDING);
     }
 
     registrar.addConfigGatedTensor("lm_head_bias",
-                                   lm_head.bias(),
+                                   lm_head_parameters.bias,
                                    ParamGroupType::LM_HEAD,
                                    ParamStatsBucket::LM_HEAD,
                                    -1,
                                    use_bias,
                                    "config.use_bias=false");
 
-    const Tensor& final_gamma = lm_head.finalRmsGamma();
+    const Tensor& final_gamma = lm_head_parameters.final_rms_gamma;
     if (freeze_learned_rms_gammas) {
         if (final_gamma.has_grad()) {
             throw std::runtime_error("[buildParameterGroups] final_rms_gamma is frozen by config but still has a grad buffer: " +
@@ -308,7 +312,7 @@ void registerTopLevelParameters(LanguageModel& model,
         }
     } else {
         registrar.addTensor("final_rms_gamma",
-                            lm_head.finalRmsGammaMutable_UnfrozenOnly("ParameterGroupRegistration::buildParameterGroups"),
+                            lm_head_parameters.final_rms_gamma,
                             ParamGroupType::RMSNORM,
                             ParamStatsBucket::LM_HEAD);
     }
@@ -711,7 +715,7 @@ void buildParameterGroups(LanguageModel& model,
     rebuilt_groups.reserve(model_groups.size());
 
     Registrar registrar(rebuilt_groups, config);
-    registerTopLevelParameters(model, registrar, config);
+    registerTopLevelParameters(model, parameter_registry, registrar, config);
     registerEncoderParameters(gpu_model_state, registrar, config);
 
     registerScratchBlockParameters(model, registrar, config);

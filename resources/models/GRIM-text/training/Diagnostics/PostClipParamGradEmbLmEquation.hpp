@@ -8,7 +8,10 @@
 
 #include <cuda_runtime.h>
 
+#include "../Phases/Startup/Model/ParameterRegistry.hpp"
+
 namespace GRIM::Batching { struct BatchPayload; }
+namespace GRIM { class EmbeddingLayer; }
 namespace GRIMText::Training {
     struct TrainingContext;
     struct TrainingLoopState;
@@ -27,6 +30,8 @@ inline constexpr const char* kPostClipParamGradEmbLmEquationOp =
 void runPostClipParamGradEmbLmEquation(
     GRIMText::Training::TrainingContext& ctx,
     GRIMText::Training::TrainingLoopState& state,
+    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const GRIM::EmbeddingLayer& embedding_layer,
     const GRIM::Batching::BatchPayload& payload,
     float emb_rms_pre,
     int batch_idx,

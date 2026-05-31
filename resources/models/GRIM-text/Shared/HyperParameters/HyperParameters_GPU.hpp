@@ -499,6 +499,7 @@ struct LanguageModelConfig {
     std::string batch_strategy;
     float learning_rate = 0.0f;
     float weight_decay = 0.0f;
+    bool use_depth_aware_upsilon = false;
     float grad_clip_norm = 0.0f;
     bool grad_clip_enabled = false;
     float effective_per_token_grad_limit = EPSILON_GRADIENT_CLIP;
@@ -1721,6 +1722,7 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(batch_strategy);
     GRIM_LOAD_CONFIG_FIELD(learning_rate);
     GRIM_LOAD_CONFIG_FIELD(weight_decay);
+    GRIM_LOAD_CONFIG_FIELD(use_depth_aware_upsilon);
     GRIM_LOAD_CONFIG_LEAF("gradient_clip", grad_clip_norm);
     GRIM_LOAD_CONFIG_FIELD(per_token_grad_scale);
     GRIM_LOAD_CONFIG_FIELD(force_rebuild_vocab);
@@ -2333,6 +2335,7 @@ inline void writeFinalizedLanguageModelConfigToSnapshot(
     GRIM_WRITE_FINAL_CONFIG_FIELD(batch_strategy);
     GRIM_WRITE_FINAL_CONFIG_FIELD(learning_rate);
     GRIM_WRITE_FINAL_CONFIG_FIELD(weight_decay);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(use_depth_aware_upsilon);
     GRIM_WRITE_FINAL_CONFIG_FIELD(grad_clip_norm);
     GRIM_WRITE_FINAL_CONFIG_FIELD(grad_clip_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(effective_per_token_grad_limit);

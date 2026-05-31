@@ -43,7 +43,7 @@ struct LayerAccess;
 //  ExecutionMemory — addressable register file
 //
 //  Each instance represents ONE batch row's register file [V, …].
-//  Per-row isolation: AutogradIntermediates stores a vector<ExecutionMemory>
+//  Per-row isolation: the active forward sink stores a vector<ExecutionMemory>
 //  of size batch_size, and materializeTrainingGraphActivations processes each
 //  row with its own M, using token_offset/row_tokens to scope H access.
 //======================================================//

@@ -16,7 +16,10 @@
 #pragma once
 
 #include "TrainingDiagnostics.hpp"      // WeightSample, formatWeightSample
+#include "../Phases/Startup/Model/ParameterRegistry.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
+
+#include <vector>
 
 namespace GRIMText { namespace Training {
     struct TrainingContext;
@@ -28,6 +31,9 @@ namespace GRIM::Diagnostics {
 void runPostOptimizerWeightTrace(
     GRIMText::Training::TrainingContext& ctx,
     GRIMText::Training::BatchResult& result,
+    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const GRIM::TrainingState& training_state,
+    const std::vector<GRIM::ParameterGroup>& parameter_groups,
     const GRIM::HyperParameters::OptimizerUpdateHP& optimizer_hp,
     const WeightSample& pre_sample,
     bool sync_diag);

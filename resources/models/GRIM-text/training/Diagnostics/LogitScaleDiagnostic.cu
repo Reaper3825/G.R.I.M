@@ -34,6 +34,92 @@ namespace GRIM::Diagnostics {
 
 namespace {
 
+const char* cudaMemoryTypeName(cudaMemoryType type)
+{
+    switch (type) {
+        case cudaMemoryTypeHost:    return "host";
+        case cudaMemoryTypeDevice:  return "device";
+        case cudaMemoryTypeManaged: return "managed";
+        case cudaMemoryTypeUnregistered: return "unregistered";
+        default:                    return "unknown";
+    }
+}
+
+void validateLmHeadWeightsConsumerBoundaryOrThrow(
+    GRIMText::Training::TrainingContext& ctx,
+    const float* lm_head_weights,
+    const float* embedding_weights,
+    bool tie_embeddings,
+    int vocab_size,
+    int d_model,
+    int batch_idx,
+    const char* consumer,
+    const char* stage)
+{
+    if (!lm_head_weights) {
+        throw std::runtime_error(
+            std::string("[DEBUG-LM-WEIGHTS] ") + consumer + " " + stage +
+            ": LM-head weights pointer is NULL at " + __FILE__ + ":" +
+            std::to_string(__LINE__));
+    }
+    if (vocab_size <= 0) {
+        throw std::runtime_error(
+            std::string("[DEBUG-LM-WEIGHTS] ") + consumer + " " + stage +
+            ": vocab_size must be > 0, got " + std::to_string(vocab_size));
+    }
+    if (d_model <= 0) {
+        throw std::runtime_error(
+            std::string("[DEBUG-LM-WEIGHTS] ") + consumer + " " + stage +
+            ": d_model must be > 0, got " + std::to_string(d_model));
+    }
+    if (tie_embeddings) {
+        if (!embedding_weights) {
+            throw std::runtime_error(
+                std::string("[DEBUG-LM-WEIGHTS] ") + consumer + " " + stage +
+                ": tie_embeddings=true but embedding weights pointer is NULL at " +
+                __FILE__ + ":" + std::to_string(__LINE__));
+        }
+        if (lm_head_weights != embedding_weights) {
+            throw std::runtime_error(
+                std::string("[DEBUG-LM-WEIGHTS] ") + consumer + " " + stage +
+                ": tie_embeddings=true but LM-head/embedding pointers do not alias. lm_head=" +
+                std::to_string(reinterpret_cast<uintptr_t>(lm_head_weights)) +
+                " embedding=" + std::to_string(reinterpret_cast<uintptr_t>(embedding_weights)));
+        }
+    }
+
+    cudaPointerAttributes attrs{};
+    cudaError_t attr_err = cudaPointerGetAttributes(&attrs, lm_head_weights);
+    if (attr_err != cudaSuccess) {
+        throw std::runtime_error(
+            std::string("[DEBUG-LM-WEIGHTS] ") + consumer + " " + stage +
+            ": cudaPointerGetAttributes failed for LM-head weights ptr=" +
+            std::to_string(reinterpret_cast<uintptr_t>(lm_head_weights)) +
+            " error=" + cudaGetErrorString(attr_err) + " at " + __FILE__ + ":" +
+            std::to_string(__LINE__));
+    }
+    if (attrs.type != cudaMemoryTypeDevice && attrs.type != cudaMemoryTypeManaged) {
+        throw std::runtime_error(
+            std::string("[DEBUG-LM-WEIGHTS] ") + consumer + " " + stage +
+            ": LM-head weights ptr=" + std::to_string(reinterpret_cast<uintptr_t>(lm_head_weights)) +
+            " resolved to unsupported memory type " + cudaMemoryTypeName(attrs.type) +
+            " at " + __FILE__ + ":" + std::to_string(__LINE__));
+    }
+
+    std::ostringstream oss;
+    oss << "[DEBUG-LM-WEIGHTS] consumer=" << consumer
+        << " stage=" << stage
+        << " batch=" << (batch_idx + 1)
+        << " ptr=" << static_cast<const void*>(lm_head_weights)
+        << " vocab_size=" << vocab_size
+        << " d_model=" << d_model
+        << " tie_embeddings=" << (tie_embeddings ? "true" : "false")
+        << " aliased_embedding=" << ((lm_head_weights == embedding_weights) ? "true" : "false")
+        << " mem_type=" << cudaMemoryTypeName(attrs.type)
+        << " attr_device=" << attrs.device;
+    ctx.logging.logger->log(oss.str());
+}
+
 std::vector<int> buildLmValidPositionsOrThrow(
     const GRIM::Batching::BatchPayload& payload,
     const char* caller)
@@ -121,12 +207,16 @@ std::vector<int> buildLmValidPositionsOrThrow(
 
 void runLogitScaleDiagnostic(
     GRIMText::Training::TrainingContext& ctx,
+    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const GRIM::Batching::BatchPayload& payload,
     const GRIM::Tensor& logits_tensor,
     const GRIM::Tensor& lm_head_input_tensor,
     int batch_idx)
 {
     namespace Internal = ::GRIMText::Training::Internal;
+    auto& embedding_layer = ctx.gpu_model.requireEmbeddingLayer("runLogitScaleDiagnostic");
+    auto& lm_head_layer = ctx.gpu_model.requireLmHeadLayer("runLogitScaleDiagnostic");
+    auto& lm_head_parameters = parameter_registry.requireLmHeadParameters("runLogitScaleDiagnostic");
     // ========================================================================
     // TRAINING SIGNAL: Logit Statistics (argmax distribution, confidence)
     // ========================================================================
@@ -416,8 +506,8 @@ void runLogitScaleDiagnostic(
                 // Issue #138 FIX: Compute E[||W_eff||²] (mean of squared norms) for correct expected logit_std.
                 // Old code used E[||W||] (mean of norms) which underestimates by Jensen's inequality
                 // when ||W|| distribution is skewed.
-                const float* lm_head_weights = ctx.model->getLmHeadLayer()->weights().data;
-                const float* embedding_weights = ctx.model->getEmbeddingLayer()->tokenWeights().data;
+                const float* lm_head_weights = lm_head_parameters.weights.data;
+                const float* embedding_weights = embedding_layer.tokenWeights().data;
                 if (!lm_head_weights) {
                     throw std::runtime_error("runLogitScaleDiagnostic: LM-head weights are NULL");
                 }
@@ -429,10 +519,12 @@ void runLogitScaleDiagnostic(
                         throw std::runtime_error("Tied embeddings: lm_head_weights and embedding_weights must alias the same buffer.");
                     }
                 }
+                const bool tie_embeddings =
+                    GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "tie_embeddings");
 
                 float w_rms_mean = 0.0f, w_rms_sq_mean = 0.0f, w_rms_max = 0.0f;
                 int w_rms_max_tok = -1;
-                const auto& lm_head_hp = ctx.model->getLmHeadLayer()->hp();
+                const auto& lm_head_hp = lm_head_layer.hp();
                 const bool use_centered_weights = lm_head_hp.center_hidden_states;
                 const bool use_token_type_gate = GRIM::kEnableLmHeadTokenTypeGateExperiment;
                 // Issue #138 / Apr 2026 follow-up: replace the 500-row host-side
@@ -445,6 +537,16 @@ void runLogitScaleDiagnostic(
                     // SSoT: vocab_size from BatchPayload (validated by payload.validate()),
                     // d_model from ModelArchitecture (validated at config load).
                     cudaStream_t diag_stream = ts.stream_ctrl.getPrimaryStream();
+                    validateLmHeadWeightsConsumerBoundaryOrThrow(
+                        ctx,
+                        lm_head_weights,
+                        embedding_weights,
+                        tie_embeddings,
+                        payload.vocab_size,
+                        d_model,
+                        batch_idx,
+                        "computeLMHeadWeightStats",
+                        "PRE");
                     GRIM::Diagnostics::LMHeadWeightStats stats =
                         GRIM::Diagnostics::computeLMHeadWeightStats(
                             lm_head_weights,
@@ -453,6 +555,16 @@ void runLogitScaleDiagnostic(
                             diag_stream,
                             use_centered_weights,
                             use_token_type_gate);
+                    validateLmHeadWeightsConsumerBoundaryOrThrow(
+                        ctx,
+                        lm_head_weights,
+                        embedding_weights,
+                        tie_embeddings,
+                        payload.vocab_size,
+                        d_model,
+                        batch_idx,
+                        "computeLMHeadWeightStats",
+                        "POST");
                     w_rms_mean    = stats.w_rms_mean;
                     w_rms_sq_mean = stats.w_rms_quadmean * stats.w_rms_quadmean;
                     w_rms_max     = stats.w_rms_max;
@@ -551,6 +663,17 @@ void runLogitScaleDiagnostic(
                     std::vector<float>  w_row_buf(d_model);
                     std::vector<double> w_bar(d_model, 0.0);
 
+                    validateLmHeadWeightsConsumerBoundaryOrThrow(
+                        ctx,
+                        lm_head_weights,
+                        embedding_weights,
+                        tie_embeddings,
+                        vocab_size,
+                        d_model,
+                        batch_idx,
+                        "HW_ALIGNMENT",
+                        "PRE");
+
                     long double cos_sq_sum  = 0.0L;  // long double for RMS over up to 500*sample_positions terms
                     long double cos_signed  = 0.0L;
                     double      cos_abs_max_d = 0.0;
@@ -606,6 +729,17 @@ void runLogitScaleDiagnostic(
                         hw_cos_signed_mean = static_cast<float>(static_cast<double>(cos_signed * inv_n));
                         hw_cos_abs_max     = static_cast<float>(cos_abs_max_d);
                     }
+
+                    validateLmHeadWeightsConsumerBoundaryOrThrow(
+                        ctx,
+                        lm_head_weights,
+                        embedding_weights,
+                        tie_embeddings,
+                        vocab_size,
+                        d_model,
+                        batch_idx,
+                        "HW_ALIGNMENT",
+                        "POST");
 
                     // (4) Rank-1 DC channel: cos(h_bar, W_bar).
                     if (w_sampled > 0) {
@@ -806,18 +940,27 @@ void runLogitScaleDiagnostic(
                 ctx.logging.logger->log(scale_eq.str());
             }
             
-            // RHO_BUILDUP_EQUATION: Per-layer hidden state correlation
-            // (moved to Diagnostics/RhoDiagnostic.cu)
-            GRIM::Diagnostics::computeRhoDiagnostic(ctx, payload, batch_idx);
-            
             // ================================================================
             // LM HEAD DIAGNOSTICS: Row norms ||W[v]|| for top predicted tokens
             // ================================================================
-            const float* lm_head_weights_for_norms = ctx.model->getLmHeadLayer()->weights().data;
+            const float* lm_head_weights_for_norms = lm_head_parameters.weights.data;
             if (!lm_head_weights_for_norms) {
                 throw std::runtime_error("[LMHeadNorm] LM-head weights are NULL");
             }
             {
+                const bool tie_embeddings =
+                    GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "tie_embeddings");
+                const float* embedding_weights = embedding_layer.tokenWeights().data;
+                validateLmHeadWeightsConsumerBoundaryOrThrow(
+                    ctx,
+                    lm_head_weights_for_norms,
+                    embedding_weights,
+                    tie_embeddings,
+                    vocab_size,
+                    d_model,
+                    batch_idx,
+                    "LMHeadNorm",
+                    "PRE");
                 // Copy LM head rows for top-5 predicted tokens
                 std::ostringstream lm_stats;
                 lm_stats << "[LMHeadNorm] batch=" << (batch_idx + 1) << " rms(W[v])=[";
@@ -849,6 +992,16 @@ void runLogitScaleDiagnostic(
                 }
                 lm_stats << "]";
                 ctx.logging.logger->log(lm_stats.str());
+                validateLmHeadWeightsConsumerBoundaryOrThrow(
+                    ctx,
+                    lm_head_weights_for_norms,
+                    embedding_weights,
+                    tie_embeddings,
+                    vocab_size,
+                    d_model,
+                    batch_idx,
+                    "LMHeadNorm",
+                    "POST");
             }
         }
     }

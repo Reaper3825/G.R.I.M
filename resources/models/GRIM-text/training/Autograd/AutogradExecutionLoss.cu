@@ -795,7 +795,8 @@ Tensor makeNormalizedEntropy(Tensor& probs_tensor, cudaStream_t stream) {
 
 ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
     AutogradContext& ctx,
-    AutogradIntermediates& intermediates
+    Forward::ModelForwardOutputs& forward_outputs,
+    AutogradLossState& loss_state
 ) {
     ExecutionAuxiliaryLossSummary summary{};
 
@@ -808,7 +809,7 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
     if (!ctx.execution_block) {
         throw std::runtime_error("addExecutionAuxiliaryLoss: ctx.execution_block is NULL");
     }
-    if (!intermediates.loss_tensor.data) {
+    if (!loss_state.loss_tensor.data) {
         throw std::runtime_error("addExecutionAuxiliaryLoss: loss_tensor is NULL before execution loss assembly");
     }
 
@@ -816,14 +817,14 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
     const auto execution_hp = HyperParameters::executionBlockConstructionHP(*ctx.config);
     const auto& payload = *ctx.payload;
 
-    if (!model_hp.execution_block_enabled || intermediates.exec_outputs_per_row.empty()) {
+    if (!model_hp.execution_block_enabled || forward_outputs.exec_outputs_per_row.empty()) {
         return summary;
     }
 
-    if (static_cast<int>(intermediates.exec_outputs_per_row.size()) != payload.batch_size) {
+    if (static_cast<int>(forward_outputs.exec_outputs_per_row.size()) != payload.batch_size) {
         throw std::runtime_error(
             "addExecutionAuxiliaryLoss: exec_outputs_per_row size="
-            + std::to_string(intermediates.exec_outputs_per_row.size())
+            + std::to_string(forward_outputs.exec_outputs_per_row.size())
             + " does not match payload.batch_size=" + std::to_string(payload.batch_size));
     }
     if (!payload.execution_active.empty()
@@ -859,10 +860,10 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
         }
     }
 
-    intermediates.exec_op_ce_added = false;
-    intermediates.exec_arg_ce_added = false;
-    intermediates.exec_write_ce_added = false;
-    intermediates.exec_transition_added = false;
+    loss_state.exec_op_ce_added = false;
+    loss_state.exec_arg_ce_added = false;
+    loss_state.exec_write_ce_added = false;
+    loss_state.exec_transition_added = false;
 
     enum class ExecLossFlag {
         Op,
@@ -915,16 +916,16 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
         }
         switch (flag) {
             case ExecLossFlag::Op:
-                intermediates.exec_op_ce_added = true;
+                loss_state.exec_op_ce_added = true;
                 break;
             case ExecLossFlag::Arg:
-                intermediates.exec_arg_ce_added = true;
+                loss_state.exec_arg_ce_added = true;
                 break;
             case ExecLossFlag::Write:
-                intermediates.exec_write_ce_added = true;
+                loss_state.exec_write_ce_added = true;
                 break;
             case ExecLossFlag::Transition:
-                intermediates.exec_transition_added = true;
+                loss_state.exec_transition_added = true;
                 break;
         }
         summary.scalar_loss_terms++;
@@ -935,7 +936,7 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
             continue;
         }
 
-        auto& row_steps = intermediates.exec_outputs_per_row[b].steps;
+        auto& row_steps = forward_outputs.exec_outputs_per_row[b].steps;
         Tensor row_entropy_sum;
         bool have_row_entropy_sum = false;
         int row_entropy_terms = 0;
@@ -1188,7 +1189,7 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
         }
         const float norm = 1.0f / static_cast<float>(summary.scalar_loss_terms);
         Tensor normalized_exec_loss = autograd::scale_scalar(exec_loss_sum, norm, ctx.stream);
-        intermediates.loss_tensor = autograd::add(intermediates.loss_tensor, normalized_exec_loss, ctx.stream);
+        loss_state.loss_tensor = autograd::add(loss_state.loss_tensor, normalized_exec_loss, ctx.stream);
     }
 
     if (have_entropy_loss_sum) {
@@ -1200,7 +1201,7 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
             entropy_loss_sum,
             1.0f / static_cast<float>(monitored_entropy_rows),
             ctx.stream);
-        intermediates.loss_tensor = autograd::add(intermediates.loss_tensor, normalized_entropy_loss, ctx.stream);
+        loss_state.loss_tensor = autograd::add(loss_state.loss_tensor, normalized_entropy_loss, ctx.stream);
         summary.entropy_monitor /= static_cast<float>(monitored_entropy_rows);
     }
 

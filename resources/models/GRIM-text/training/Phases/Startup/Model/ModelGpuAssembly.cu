@@ -520,6 +520,8 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
             const auto lm_hp = GRIM::HyperParameters::lmHeadLayerConstructionHP(model_cfg);
             auto& embedding_layer = gpu_model_state.embedding_layer;
             auto& lm_head_layer = gpu_model_state.lm_head_layer;
+            parameter_registry.lm_head_parameters = std::make_unique<GRIM::LMHeadParameterTensors>();
+            auto& lm_head_parameters = *parameter_registry.lm_head_parameters;
 
             GRIM::Tensor* tied_emb = nullptr;
             if (lm_hp.tie_embeddings) {
@@ -530,7 +532,7 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
             }
 
             lm_head_layer = std::make_unique<GRIM::LMHeadLayer>(
-                lm_hp, weight_init_seed + 1, init_stream, tied_emb);
+                lm_hp, lm_head_parameters, weight_init_seed + 1, init_stream, tied_emb);
 
             if (!lm_head_layer->weightsReady()) {
                 throw std::runtime_error("[assembleGpuModel] FATAL: LMHeadLayer not ready after construction!");

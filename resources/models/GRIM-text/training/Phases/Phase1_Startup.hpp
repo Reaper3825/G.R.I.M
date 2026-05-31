@@ -228,8 +228,9 @@ struct TrainingContext {
     // is not the owner of encoder/layer topology.
     GRIMText::Training::Startup::GpuModelState gpu_model;
     // Single startup-owned writable-parameter access point. ParameterRegistry
-    // declares the owner types; ParameterGroupRegistration sequences assembly,
-    // validation, and inventory publication against this durable registry.
+    // owns the flattened LM-head tensor bundle plus migrated subsystem tensor
+    // owners; ParameterGroupRegistration sequences assembly, validation, and
+    // inventory publication against this durable registry.
     GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry parameter_registry;
 
     //==================================================//

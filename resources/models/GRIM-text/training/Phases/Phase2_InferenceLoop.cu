@@ -32,9 +32,9 @@ using GRIM::HyperParameters::MTPFeatureHP;
 using GRIM::HyperParameters::SamplingStrategy;
 
 struct InferenceForwardScope {
-    GRIM::GenerationState& generation_state;
+    GRIM::Forward::ModelForwardOutputs& forward_outputs;
     ~InferenceForwardScope() {
-        generation_state.forward_outputs.clear();
+        forward_outputs.clear();
     }
 };
 
@@ -293,8 +293,6 @@ GRIM::GeneratedSequence generateOneSequence(
         if (!training_state.initialized) {
             throw std::runtime_error("generateOneSequence: training state not initialized");
         }
-        InferenceForwardScope inference_forward_scope{generation_state};
-
         cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
         const auto bindings = GRIM::Batching::uploadBatchToDevice(
             model.getConfig(),
@@ -302,7 +300,6 @@ GRIM::GeneratedSequence generateOneSequence(
             stream);
 
         GRIM::Forward::ModelForwardRuntimePayload runtime_payload{};
-        runtime_payload.forward_outputs = &generation_state.forward_outputs;
         runtime_payload.execution_runtime = &generation_state.execution_runtime;
         runtime_payload.read_gate_accum_tensor = nullptr;
 
@@ -335,11 +332,12 @@ GRIM::GeneratedSequence generateOneSequence(
             /*enable_dropout=*/false,
             /*emit_mtp_logits=*/emit_mtp_logits};
 
-        GRIM::Forward::executeModelForward(request, runtime_payload);
+        auto forward_outputs = GRIM::Forward::executeModelForward(request, runtime_payload);
+        InferenceForwardScope inference_forward_scope{forward_outputs};
 
         generation_state.decode_selector.reset();
         if (selector_active) {
-            const GRIM::Tensor* live_lm_head_input = generation_state.forward_outputs.liveLmHeadInputOrNull();
+            const GRIM::Tensor* live_lm_head_input = forward_outputs.liveLmHeadInputOrNull();
             if (!live_lm_head_input || !live_lm_head_input->data) {
                 throw std::runtime_error(
                     "generateOneSequence: selector_active but live LM-head input tensor is NULL after shared forward");
@@ -375,16 +373,16 @@ GRIM::GeneratedSequence generateOneSequence(
                 training_state.cublas_handle.get());
         }
 
-        const auto& live_logits = generation_state.forward_outputs.logits_tensor;
+        const auto& live_logits = forward_outputs.logits_tensor;
         if (!live_logits.data) {
             throw std::runtime_error(
-                "generateOneSequence: GenerationState.forward_outputs.logits_tensor.data is NULL after shared forward");
+            "generateOneSequence: live logits tensor is NULL after shared forward");
         }
-        if (emit_mtp_logits && generation_state.forward_outputs.mtp_logits_tensors.size()
+        if (emit_mtp_logits && forward_outputs.mtp_logits_tensors.size()
                 != static_cast<size_t>(mtp_hp.k)) {
             throw std::runtime_error(
-                "generateOneSequence: GenerationState.forward_outputs.mtp_logits_tensors.size()=" +
-                std::to_string(generation_state.forward_outputs.mtp_logits_tensors.size()) +
+            "generateOneSequence: live mtp_logits_tensors.size()=" +
+            std::to_string(forward_outputs.mtp_logits_tensors.size()) +
                 " != mtp_hp.k=" + std::to_string(mtp_hp.k) +
                 " after shared forward");
         }

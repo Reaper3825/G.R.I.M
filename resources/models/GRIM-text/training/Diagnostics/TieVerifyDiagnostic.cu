@@ -19,12 +19,15 @@ namespace GRIM::Diagnostics {
 
 void runTieVerifyDiagnostic(
     GRIMText::Training::TrainingContext& ctx,
+    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     std::size_t batch_idx)
 {
-    const float* emb_w = ctx.model->getEmbeddingLayer()->tokenWeights().data;
-    const float* emb_g = ctx.model->getEmbeddingLayer()->tokenWeights().grad_data();
-    const float* lm_w  = ctx.model->getLmHeadLayer()->weights().data;
-    const float* lm_g  = ctx.model->getLmHeadLayer()->weights().grad_data();
+    auto& embedding_layer = ctx.gpu_model.requireEmbeddingLayer("runTieVerifyDiagnostic");
+    auto& lm_head_parameters = parameter_registry.requireLmHeadParameters("runTieVerifyDiagnostic");
+    const float* emb_w = embedding_layer.tokenWeights().data;
+    const float* emb_g = embedding_layer.tokenWeights().grad_data();
+    const float* lm_w  = lm_head_parameters.weights.data;
+    const float* lm_g  = lm_head_parameters.weights.grad_data();
     const bool cfg_tied = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "tie_embeddings");
     const bool w_same = (emb_w == lm_w);
     const bool g_same = (emb_g == lm_g);

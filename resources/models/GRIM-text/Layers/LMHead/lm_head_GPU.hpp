@@ -1,9 +1,9 @@
 //======================================================//
-//  LM Head Layer - GPU (Pattern B: Layer Ownership)
+//  LM Head Layer - GPU (registry-owned parameter tensors)
 //  Linear projection from hidden states to vocabulary logits
 //
-//  Owns: weights [vocab_size, d_model], bias [vocab_size] (optional),
-//        final_rms_gamma [d_model] (pre-LM-head normalization).
+//  Borrows: weights [vocab_size, d_model], bias [vocab_size] (optional),
+//           final_rms_gamma [d_model] (pre-LM-head normalization).
 //
 //  Architecture: logits = projected(centered(RMSNorm(encoder_output))) @ W^T + bias
 //  Where W is either tied to embedding weights or independently allocated.
@@ -37,6 +37,13 @@ struct LMHeadParameterViews {
     const Tensor* final_rms_gamma = nullptr;
 };
 
+struct LMHeadParameterTensors {
+    Tensor weights;
+    Tensor bias;
+    Tensor final_rms_gamma;
+    bool owns_weights = true;
+};
+
 // Local experiment toggle only. Keep this LM-head-local until we decide
 // whether token-layout gating should become an authored config field.
 //
@@ -47,11 +54,11 @@ struct LMHeadParameterViews {
 inline constexpr bool kEnableLmHeadTokenTypeGateExperiment = false;
 
 //======================================================//
-//  LMHeadLayer - Self-Allocating (Pattern B: Layer Ownership)
+//  LMHeadLayer - Borrowed parameter owner
 //
-//  Owns its own weights (allocated in constructor) OR aliases
-//  embedding weights when tie_embeddings=true (Issue #60).
-//  Also owns final_rms_gamma for pre-LM-head normalization.
+//  Startup-owned LMHeadParameterTensors hold the durable weights, optional
+//  bias, and final_rms_gamma. This layer validates and uses those tensors for
+//  forward/backward, but it is not the durable owner.
 //
 //  forward() applies: RMSNorm → optional centering → optional PC1 projection → matmul → bias
 //  backward() handled by autograd chain (RMSNormGradFn → MatMulGradFn etc.)
@@ -62,17 +69,21 @@ public:
     // Rule 20: Default constructor deleted
     LMHeadLayer() = delete;
 
-    /// Self-allocating constructor (Pattern B - Layer Ownership)
+    /// Constructor that populates a startup-owned LM-head tensor owner.
     ///
-    /// When tied_embedding_weights is non-null, weights alias embedding (Issue #60 weight tying).
-    /// When null, weights are independently allocated with Xavier init.
-    /// final_rms_gamma is ALWAYS self-allocated (initialized to 1.0).
+    /// When tied_embedding_weights is non-null, the registry-owned LM-head
+    /// weight tensor aliases embedding (Issue #60 weight tying). When null,
+    /// the registry-owned LM-head weight tensor is independently allocated with
+    /// Xavier init. final_rms_gamma is always allocated into the supplied
+    /// owner and initialized to 1.0.
     ///
     /// @param hp                   Grouped construction hyperparameters
+    /// @param parameter_tensors     Durable startup-owned LM-head tensor owner
     /// @param seed                  Xavier init seed for independent weights
     /// @param init_stream           CUDA stream for allocation
     /// @param tied_embedding_weights If non-null, weights alias this tensor (from_ptr + share_grad)
     explicit LMHeadLayer(const HyperParameters::LMHeadLayerConstructionHP& hp,
+                         GRIM::LMHeadParameterTensors& parameter_tensors,
                          uint64_t seed,
                          cudaStream_t init_stream,
                          Tensor* tied_embedding_weights = nullptr);
@@ -95,12 +106,12 @@ public:
     //--------------------------------------------------
     // Weight Accessors (for training/serialization)
     //--------------------------------------------------
-    Tensor& weights() { return weights_; }
-    Tensor& bias() { return bias_; }
+    Tensor& weights() { return requireParameters("LMHeadLayer::weights").weights; }
+    Tensor& bias() { return requireParameters("LMHeadLayer::bias").bias; }
 
     // ---- final_rms_gamma access ----
     // The READ accessor is always safe (telemetry, save, MTP forward, warn-checks).
-    const Tensor& finalRmsGamma() const { return final_rms_gamma_frozen_or_trained_; }
+    const Tensor& finalRmsGamma() const { return requireParameters("LMHeadLayer::finalRmsGamma").final_rms_gamma; }
 
     // The WRITE accessor THROWS if the gamma is configured frozen.
     // Only four legitimate writers exist:
@@ -117,17 +128,17 @@ public:
                             "freeze_learned_rms_gammas=true. caller=") +
                 (caller ? caller : "<unknown>"));
         }
-        return final_rms_gamma_frozen_or_trained_;
+        return requireParameters("LMHeadLayer::finalRmsGammaMutable_UnfrozenOnly").final_rms_gamma;
     }
 
-    const Tensor& weights() const { return weights_; }
-    const Tensor& bias() const { return bias_; }
+    const Tensor& weights() const { return requireParameters("LMHeadLayer::weights const").weights; }
+    const Tensor& bias() const { return requireParameters("LMHeadLayer::bias const").bias; }
 
     /// Whether this layer allocated its own weights (false = tied to embedding)
-    bool ownsWeights() const { return owns_weights_; }
+    bool ownsWeights() const { return requireParameters("LMHeadLayer::ownsWeights").owns_weights; }
 
     /// Whether weights are initialized and ready for forward pass
-    bool weightsReady() const { return weights_.data != nullptr; }
+    bool weightsReady() const { return requireParameters("LMHeadLayer::weightsReady").weights.data != nullptr; }
 
     //--------------------------------------------------
     // Forward Pass - Autograd
@@ -162,20 +173,26 @@ public:
 
 
 private:
+    LMHeadParameterTensors& requireParameters(const char* caller) {
+        if (!parameters_) {
+            throw std::runtime_error(std::string(caller) + ": LMHeadLayer parameter owner is not initialized");
+        }
+        return *parameters_;
+    }
+
+    const LMHeadParameterTensors& requireParameters(const char* caller) const {
+        if (!parameters_) {
+            throw std::runtime_error(std::string(caller) + ": LMHeadLayer parameter owner is not initialized");
+        }
+        return *parameters_;
+    }
+
     // Immutable grouped read view from HyperparameterGroupings.hpp. This is not
     // a second authored config owner; it is the layer's durable construction HP
     // snapshot needed after startup-local grouping objects go out of scope.
     HyperParameters::LMHeadLayerConstructionHP hp_{};
 
-    // Weight Tensors with autograd (requires_grad=true)
-    Tensor weights_;          // [vocab_size, d_model] — owned or aliased from embedding
-    Tensor bias_;             // [vocab_size] — optional, always owned
-    // Renamed (April 2026) so any stray reference to the old name `final_rms_gamma_`
-    // outside this class fails to compile. Combined with the split const/mutable
-    // accessors above, this constrains writes to the four declared paths.
-    Tensor final_rms_gamma_frozen_or_trained_;  // [d_model] — pre-LM-head RMSNorm gamma, always owned
-
-    bool owns_weights_ = true;  // false when tied to embedding weights
+    LMHeadParameterTensors* parameters_ = nullptr;
 };
 
 } // namespace GRIM

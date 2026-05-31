@@ -65,10 +65,17 @@ float rangeRMS(const Range& values) {
 }
 
 /// Compute RMS of a GPU buffer via D2H copy. Returns 0 if nullptr/empty.
-float gpuBufferRMS(const float* d_ptr, size_t count) {
+float gpuBufferRMS(const float* d_ptr, size_t count, const char* label) {
     if (!d_ptr || count == 0) return 0.0f;
     std::vector<float> h_buf(count);
-    cudaMemcpy(h_buf.data(), d_ptr, count * sizeof(float), cudaMemcpyDeviceToHost);
+    const cudaError_t copy_err = cudaMemcpy(h_buf.data(), d_ptr, count * sizeof(float), cudaMemcpyDeviceToHost);
+    if (copy_err != cudaSuccess) {
+        throw std::runtime_error(
+            std::string("Telemetry::gpuBufferRMS failed for ") + label +
+            " ptr=" + std::to_string(reinterpret_cast<std::uintptr_t>(d_ptr)) +
+            " count=" + std::to_string(count) +
+            " error=" + cudaGetErrorString(copy_err));
+    }
     double sum_sq = 0.0;
     for (size_t i = 0; i < count; ++i) sum_sq += static_cast<double>(h_buf[i]) * h_buf[i];
     return static_cast<float>(std::sqrt(sum_sq / static_cast<double>(count)));
@@ -119,70 +126,25 @@ void populateAdamCausationStreams(float* obs, const TelemetryBatchInput& input,
 void populateExecBlockHealthStreams(
     float* obs,
     const GRIM::GradNorm::GradMetrics& gm,
-    float enc_rms_pre,
-    const GRIM::TrainingState& training_state,
-    const GRIM::Batching::BatchPayload* payload) {
+    const TelemetryBatchInput& input) {
 
     float exec_grad_norm = 0.0f;
     float exec_grad_ratio = 0.0f;
-    float exec_selection_entropy = 0.0f;
-    float exec_op_entropy = 0.0f;
-    float exec_div_clamp_rate = 0.0f;
-    float exec_max_p_write = 0.0f;
-    float exec_active_ratio = 0.0f;
 
     if (gm.execution_block_count > 0) {
         exec_grad_norm = static_cast<float>(std::sqrt(gm.execution_block_sum_sq / static_cast<double>(gm.execution_block_count)));
-        if (enc_rms_pre > 1e-12f) {
-            exec_grad_ratio = exec_grad_norm / enc_rms_pre;
-        }
-    }
-
-    const auto& ai = training_state.autograd_intermediates;
-    if (!ai.exec_outputs_per_row.empty() && payload) {
-        int active_rows = 0;
-        int total_steps = 0;
-        float sum_selection_entropy = 0.0f;
-        float sum_op_entropy = 0.0f;
-        int total_div_clamps = 0;
-        float sum_max_p_write = 0.0f;
-
-        const int B = static_cast<int>(ai.exec_outputs_per_row.size());
-        for (int b = 0; b < B; ++b) {
-            const bool row_active = !payload->execution_active.empty()
-                && b < static_cast<int>(payload->execution_active.size())
-                && payload->execution_active[b];
-            if (!row_active) continue;
-            active_rows++;
-
-            for (const auto& step : ai.exec_outputs_per_row[b].steps) {
-                const auto& m = step.metrics;
-                sum_selection_entropy += (m.arg1_entropy + m.arg2_entropy + m.op_entropy + m.write_entropy) / 4.0f;
-                sum_op_entropy += m.op_entropy;
-                total_div_clamps += m.div_clamp_count;
-                sum_max_p_write += m.max_p_write;
-                total_steps++;
-            }
-        }
-
-        if (total_steps > 0) {
-            exec_selection_entropy = sum_selection_entropy / static_cast<float>(total_steps);
-            exec_op_entropy = sum_op_entropy / static_cast<float>(total_steps);
-            exec_div_clamp_rate = static_cast<float>(total_div_clamps) / static_cast<float>(total_steps);
-            exec_max_p_write = sum_max_p_write / static_cast<float>(total_steps);
-        }
-        if (B > 0) {
-            exec_active_ratio = static_cast<float>(active_rows) / static_cast<float>(B);
+        if (input.enc_rms_pre > 1e-12f) {
+            exec_grad_ratio = exec_grad_norm / input.enc_rms_pre;
         }
     }
 
     obs[14] = exec_grad_norm;
     obs[15] = exec_grad_ratio;
-    obs[16] = exec_selection_entropy;
-    obs[17] = exec_op_entropy;
-    obs[18] = exec_div_clamp_rate;
-    obs[19] = exec_max_p_write;
-    obs[20] = exec_active_ratio;
+    obs[16] = input.exec_selection_entropy;
+    obs[17] = input.exec_op_entropy;
+    obs[18] = input.exec_div_clamp_rate;
+    obs[19] = input.exec_max_p_write;
+    obs[20] = input.exec_active_ratio;
 }
 
 //------------------------------------------------------
@@ -191,32 +153,12 @@ void populateExecBlockHealthStreams(
 void populateEBInjectionStreams(
     float* obs,
     const GRIM::TrainingState& training_state,
-    const GRIM::Batching::BatchPayload* payload,
-    GRIMText::Training::TrainingContext& ctx) {
-
-    const auto& ai = training_state.autograd_intermediates;
+    const TelemetryBatchInput& input,
+    const GRIMText::Training::Startup::GpuModelState& gpu_model,
+    const GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry) {
 
     // Stream 21: EB_INJECT_GATE
-    float inject_gate_mean = 0.0f;
-    if (!ai.exec_outputs_per_row.empty() && payload) {
-        float sum_gate = 0.0f;
-        int gate_count = 0;
-        const int B = static_cast<int>(ai.exec_outputs_per_row.size());
-        for (int b = 0; b < B; ++b) {
-            const bool row_active = !payload->execution_active.empty()
-                && b < static_cast<int>(payload->execution_active.size())
-                && payload->execution_active[b];
-            if (!row_active) continue;
-            for (const auto& step : ai.exec_outputs_per_row[b].steps) {
-                sum_gate += step.metrics.inject_gate_value;
-                gate_count++;
-            }
-        }
-        if (gate_count > 0) {
-            inject_gate_mean = sum_gate / static_cast<float>(gate_count);
-        }
-    }
-    obs[21] = inject_gate_mean;
+    obs[21] = input.inject_gate_mean;
 
     // Stream 22: EB_READ_GATE_MEAN (Category 2 telemetry snapshot on TrainingState)
     obs[22] = training_state.h_read_gate_mean;
@@ -224,12 +166,14 @@ void populateEBInjectionStreams(
     // Streams 23-24: Gate weight norms
     float inject_w_rms = 0.0f;
     float read_w_rms = 0.0f;
-    auto* execution_block_parameters = ctx.parameter_registry.getExecutionBlockParameters();
+    auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
     if (execution_block_parameters) {
         inject_w_rms = gpuBufferRMS(execution_block_parameters->w_inject_gate.data,
-                                    execution_block_parameters->w_inject_gate.numel());
+                                    execution_block_parameters->w_inject_gate.numel(),
+                                    "execution_block_parameters.w_inject_gate");
         read_w_rms = gpuBufferRMS(execution_block_parameters->W_gate_read.data,
-                                  execution_block_parameters->W_gate_read.numel());
+                                  execution_block_parameters->W_gate_read.numel(),
+                                  "execution_block_parameters.W_gate_read");
     }
     obs[23] = inject_w_rms;
     obs[24] = read_w_rms;
@@ -242,10 +186,10 @@ void populateEBInjectionStreams(
 
     // Stream 26: SB_ATOM_EMBED_RMS
     float atom_embed_rms = 0.0f;
-    auto* sb = ctx.model->getScratchBlockLayer();
+    auto* sb = gpu_model.scratch_block_layer.get();
     if (sb) {
         const auto& ate = sb->atomTypeEmbeddings();
-        atom_embed_rms = gpuBufferRMS(ate.data, ate.numel());
+        atom_embed_rms = gpuBufferRMS(ate.data, ate.numel(), "scratch_block.atomTypeEmbeddings");
     }
     obs[26] = atom_embed_rms;
 }
@@ -256,7 +200,8 @@ void populateEBInjectionStreams(
 void populateRmsGammaStreams(
     float* obs,
     const GRIM::Config::AiConfigSnapshot& config,
-    const GRIMText::Training::Startup::GpuModelState& gpu_model_state) {
+    const GRIMText::Training::Startup::GpuModelState& gpu_model_state,
+    const GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry) {
     auto* gpu_encoder = gpu_model_state.gpu_encoder.get();
     if (!gpu_encoder) {
         throw std::runtime_error(
@@ -275,20 +220,20 @@ void populateRmsGammaStreams(
         }
         const auto& g1 = layer->rms1Gamma();
         const auto& g2 = layer->rms2Gamma();
-        sum_gamma1_rms += gpuBufferRMS(g1.data, g1.numel());
-        sum_gamma2_rms += gpuBufferRMS(g2.data, g2.numel());
+        sum_gamma1_rms += gpuBufferRMS(g1.data, g1.numel(), "encoder_layer.rms1Gamma");
+        sum_gamma2_rms += gpuBufferRMS(g2.data, g2.numel(), "encoder_layer.rms2Gamma");
     }
     obs[35] = (num_layers > 0) ? (sum_gamma1_rms / static_cast<float>(num_layers)) : 0.0f;
     obs[36] = (num_layers > 0) ? (sum_gamma2_rms / static_cast<float>(num_layers)) : 0.0f;
 
     // Final RMSNorm gamma (LM head)
-    auto* lm_head = gpu_model_state.lm_head_layer.get();
-    if (!lm_head) {
+    auto* lm_head_parameters = parameter_registry.getLmHeadParameters();
+    if (!lm_head_parameters) {
         throw std::runtime_error(
-            "Telemetry::populateRmsGammaStreams: gpu_model_state.lm_head_layer is NULL");
+            "Telemetry::populateRmsGammaStreams: parameter_registry.lm_head_parameters is NULL");
     }
-    const auto& g_final = lm_head->finalRmsGamma();
-    obs[37] = gpuBufferRMS(g_final.data, g_final.numel());
+    const auto& g_final = lm_head_parameters->final_rms_gamma;
+    obs[37] = gpuBufferRMS(g_final.data, g_final.numel(), "lm_head.final_rms_gamma");
 }
 
 //------------------------------------------------------
@@ -325,9 +270,11 @@ void populatePBMStreams(float* obs, GRIMText::Training::TrainingContext& ctx, in
 
 void updateTelemetryObservations(
     GRIMText::Training::TrainingContext& ctx,
+    const GRIM::TrainingState& training_state,
+    const GRIMText::Training::Startup::GpuModelState& gpu_model,
+    const GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const TelemetryBatchInput& input,
-    const GRIM::GradNorm::GradMetrics& gm,
-    const GRIM::Batching::BatchPayload* payload) {
+    const GRIM::GradNorm::GradMetrics& gm) {
 
     if (!ctx.telemetry.lattice || !ctx.telemetry.enabled) return;
 
@@ -345,7 +292,6 @@ void updateTelemetryObservations(
                             " grad_rms=" + formatScalar(input.preclip_grad_rms, 6));
 
     float* obs = ctx.telemetry.last_obs;
-    auto& training_state = ctx.model->getTrainingState();
 
     // Streams 0-4: Core metrics
     populateCoreStreams(obs, input);
@@ -354,10 +300,10 @@ void updateTelemetryObservations(
     populateAdamCausationStreams(obs, input, ctx.telemetry.adam_cumulative_disp);
 
     // Streams 14-20: Execution Block health
-    populateExecBlockHealthStreams(obs, gm, input.enc_rms_pre, training_state, payload);
+    populateExecBlockHealthStreams(obs, gm, input);
 
     // Streams 21-26: EB injection diagnostics
-    populateEBInjectionStreams(obs, training_state, payload, ctx);
+    populateEBInjectionStreams(obs, training_state, input, gpu_model, parameter_registry);
 
     // stream 25: EB_LOSS_FRAC (needs loss values from input)
     if (input.total_loss_value > 1e-12f) {
@@ -368,7 +314,7 @@ void updateTelemetryObservations(
     populatePBMStreams(obs, ctx, input.max_seq_len);
 
     // Streams 35-37: RMSNorm learned gamma tracking
-    populateRmsGammaStreams(obs, ctx.config, ctx.gpu_model);
+    populateRmsGammaStreams(obs, ctx.config, gpu_model, parameter_registry);
 
     // Run lattice update
     GRIM::Telemetry::TelemetryError tel_err = ctx.telemetry.lattice->update(obs, input.global_step);

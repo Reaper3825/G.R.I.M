@@ -509,7 +509,7 @@
             "learning_rate": 0.0006,
             "lm_head_center_hidden_states": true,
             "lm_head_centering_enabled": true,
-            "freeze_learned_rms_gammas": true,
+            "freeze_learned_rms_gammas": false,
             "center_logits": true,
             "center_encoder_residuals": true,
             "pc1_power_iters": 5,
@@ -708,6 +708,7 @@
             "validation_interval": 2000,
             "warmup_fraction": 0.05,
             "weight_decay": 0.01,
+            "use_depth_aware_upsilon": false,
             "clear_merged_cache_on_merge": false,
             "current_curriculum": "Pre-Trainingv1",
             "current_model_training": ""

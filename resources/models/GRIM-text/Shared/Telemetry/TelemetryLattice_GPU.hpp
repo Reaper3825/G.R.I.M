@@ -205,7 +205,8 @@ enum class MetricStream : int {
     // buildParameterGroups) and held constant for the whole run. Phase2's
     // per-step lattice update keeps re-pushing them, so mu == value and
     // sigma == 0 across every level. Full pointer/config/parameter-group
-    // init facts are dumped to LogRecorder (`training_<session>_tape.log`).
+    // init facts are dumped to LogRecorder in the shared session log
+    // (`training_<session>.log`).
     // Pointer values do not fit in float streams; invariant failures include
     // them in the thrown error text.
     INIT_TIE_CFG          = 48,  // 1.0 if config.tie_embeddings, else 0.0

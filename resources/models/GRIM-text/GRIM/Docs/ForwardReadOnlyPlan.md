@@ -10,7 +10,7 @@ The phase-ownership doctrine behind this plan is documented in [GraphStateOwners
 
 The following ownership fixes are already implemented and should be treated as current architecture, not future work:
 
-- `Shared/Forward/ModelForwardRuntimePayload.hpp` now owns the mutable forward runtime payload boundary (`AutogradIntermediates`, trace vectors, read-gate workspace). `Shared/Forward/ModelForward_GPU.hpp/.cu` consumes that payload instead of a training-state god pointer or inline sink bag.
+- `Shared/Forward/ModelForwardRuntimePayload.hpp` now owns the mutable forward runtime payload boundary (`TrainingState::forward_outputs`, `GenerationState::forward_outputs`, trace vectors, read-gate workspace). `Shared/Forward/ModelForward_GPU.hpp/.cu` consumes that payload instead of a training-state god pointer or inline sink bag.
 - `Shared/Forward/ModelForward_GPU.hpp` now takes `ModelForwardGraphPolicy` instead of a training/inference mode enum. Training/inference identity is orchestration-only; shared forward sees only graph connectivity/dropout/retention policy.
 - Shared prefill now detaches read-only parameter views at the boundary for embedding lookup, encoder/attention/FFN, ScratchBlock structured projection, LM head, and reasoning head.
 - `LMHeadLayer::centered_weights_` is deleted; the effective LM-head weight tensor is now per-call Category 1 state.
@@ -436,7 +436,7 @@ Goal: stop storing forward-derived LM-head tensors on the durable layer object.
 - Store effective LM-head weight tensors (`W_eff`) in a per-call forward workspace.
 - Candidate owners:
   - a small LM-head forward-intermediate payload, or
-  - `AutogradIntermediates` / shared forward intermediates when the tensor must survive until backward.
+  - the explicit forward sink (`TrainingState::forward_outputs` on training, `GenerationState::forward_outputs` on inference) when the tensor must survive until backward/sample.
 - Keep the lifetime explicit: the tensor exists only for the active forward/backward window.
 
 ### Exit criteria

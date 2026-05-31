@@ -12,7 +12,8 @@
 #include <string>
 #include <cuda_runtime.h>
 
-#include "../../GRIM/grim_language_model_cuda.hpp"
+#include "../../Shared/TensorContract/TensorContract_GPU.hpp"
+#include "../../Shared/TrainingState/TrainingState_GPU.hpp"
 
 namespace GRIM::Diagnostics {
 
@@ -28,7 +29,7 @@ struct WeightSample {
     float rms = 0.0f;
 };
 
-WeightSample sampleWeightStats(const GRIM::LMHeadLayer* lm_head, const GRIM::TrainingState& ts, bool sync_for_host = false);
+WeightSample sampleWeightStats(const GRIM::Tensor& lm_head_weights, const GRIM::TrainingState& ts, bool sync_for_host = false);
 std::string formatWeightSample(const WeightSample& sample);
 float computeUpdateRms(const WeightSample& before, const WeightSample& after);
 

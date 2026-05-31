@@ -26,24 +26,26 @@ namespace GRIM::Diagnostics {
 
 void runSpecialTokenDiagnostic(
     GRIMText::Training::TrainingContext& ctx,
+    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const GRIM::Batching::BatchPayload& payload,
     int batch_idx)
 {
     namespace Internal = ::GRIMText::Training::Internal;
     (void)payload;  // payload not consumed in this block — kept in signature for symmetry
     if (shouldSyncDiagnostics(ctx, batch_idx) && ctx.logging.tape && ctx.logging.tape->accepts(GRIM::Logging::LogLevel::Debug)) {
+        auto& embedding_layer = ctx.gpu_model.requireEmbeddingLayer("runSpecialTokenDiagnostic");
+        auto& lm_head_parameters = parameter_registry.requireLmHeadParameters("runSpecialTokenDiagnostic");
         const int d_model = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "d_model");
-        const float* weights_ptr = ctx.model->getLmHeadLayer()->weights().data;
+        const float* weights_ptr = lm_head_parameters.weights.data;
         // Issue #150: When tied=no, LM head and embedding are DIFFERENT tensors.
         // Read gradients from the SAME layer as weights (LM head) so rms(W) and
         // rms(grad) refer to the same parameter. Previously read embedding grads,
         // which showed PAD scatter-add accumulation (~1754 positions) as 76x spike
         // vs BOS/EOS — misleading because that gradient doesn't affect LM head.
-        const bool weights_tied = ctx.model->getEmbeddingLayer()->tokenWeights().data
-                               == ctx.model->getLmHeadLayer()->weights().data;
+        const bool weights_tied = embedding_layer.tokenWeights().data == lm_head_parameters.weights.data;
         const float* grads_ptr = weights_tied
-            ? ctx.model->getEmbeddingLayer()->tokenWeights().grad_data()   // tied: same tensor, either pointer works
-            : ctx.model->getLmHeadLayer()->weights().grad_data();          // untied: use LM head's own gradients
+            ? embedding_layer.tokenWeights().grad_data()   // tied: same tensor, either pointer works
+            : lm_head_parameters.weights.grad_data();      // untied: use LM head's own gradients
 
         if (weights_ptr) {
                 constexpr int SPECIAL_IDS[] = {

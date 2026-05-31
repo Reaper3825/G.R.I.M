@@ -261,18 +261,18 @@ GradientDeltaProbe probeGradientDelta(
 GradientVerificationActivity detectGradientVerificationActivity(AutogradContext& ctx) {
     GradientVerificationActivity activity{};
     activity.text_loss_active = ctx.payload && ctx.payload->lm_valid_tokens > 0;
-    activity.selector_loss_active = ctx.training_state
-        && !ctx.training_state->autograd_intermediates.selector_fwd_results.empty();
-    if (ctx.training_state) {
-        const auto& intermediates = ctx.training_state->autograd_intermediates;
+    activity.selector_loss_active = ctx.forward_outputs
+        && !ctx.forward_outputs->selector_fwd_results.empty();
+    if (ctx.loss_state) {
+        const auto& loss_state = *ctx.loss_state;
         // These flags are set only by computeAutogradLoss() when an execution
         // loss term passes execution_active / teacher_step_mask filtering and is
         // actually added into the normalized execution auxiliary objective.
         // Do not infer activity from exec_outputs_per_row: that includes padded
         // or inactive diagnostics that may never reach loss_tensor.
-        activity.exec_op_loss_active = intermediates.exec_op_ce_added;
-        activity.exec_arg_loss_active = intermediates.exec_arg_ce_added;
-        activity.exec_write_selection_ce_active = intermediates.exec_write_ce_added;
+        activity.exec_op_loss_active = loss_state.exec_op_ce_added;
+        activity.exec_arg_loss_active = loss_state.exec_arg_ce_added;
+        activity.exec_write_selection_ce_active = loss_state.exec_write_ce_added;
     }
     return activity;
 }
@@ -372,14 +372,14 @@ LossResult computeAutogradLoss(
     const auto& payload = *ctx.payload;
     payload.validate("computeAutogradLoss");
     
-    auto* ts = ctx.training_state;
     const auto* cfg = ctx.config;
     const auto model_hp = GRIM::HyperParameters::modelHP(*cfg);
     const auto mtp_hp = GRIM::HyperParameters::mtpFeatureHP(*cfg);
     
     // RULE 20: Fail loud - validate logits tensor was populated by forward pass
-    auto& intermediates = ts->autograd_intermediates;
-    if (!intermediates.logits_tensor.data) {
+    auto& forward_outputs = *ctx.forward_outputs;
+    auto& loss_state = *ctx.loss_state;
+    if (!forward_outputs.logits_tensor.data) {
         throw std::runtime_error("computeAutogradLoss: Logits tensor not initialized - caller must run shared forward before loss");
     }
     
@@ -405,8 +405,8 @@ LossResult computeAutogradLoss(
     // Compute text CE directly into the canonical Category 1 owner consumed
     // later by executeAutogradBackward(). Phase2 receives the host-side
     // LossResult from computeAutogradLoss(); it does not own a second loss Tensor.
-    intermediates.loss_tensor = autograd::unified_loss(
-        intermediates.logits_tensor,
+    loss_state.loss_tensor = autograd::unified_loss(
+        forward_outputs.logits_tensor,
         payload,
         *ctx.device_bindings,
         loss_config,
@@ -415,7 +415,7 @@ LossResult computeAutogradLoss(
     );
 
     float text_ce_loss = 0.0f;
-    cudaMemcpyAsync(&text_ce_loss, intermediates.loss_tensor.data, sizeof(float),
+    cudaMemcpyAsync(&text_ce_loss, loss_state.loss_tensor.data, sizeof(float),
                     cudaMemcpyDeviceToHost, ctx.stream);
     cudaStreamSynchronize(ctx.stream);
     if (!std::isfinite(text_ce_loss)) {
@@ -435,8 +435,8 @@ LossResult computeAutogradLoss(
     if (mtp_hp.enabled && mtp_hp.k > 0) {
         mtp_loss = computeAutogradMtpAuxiliaryLosses(
             mtp_hp,
-            intermediates.loss_tensor,
-            intermediates.mtp_logits_tensors,
+            loss_state.loss_tensor,
+            forward_outputs.mtp_logits_tensors,
             result.mtp_diagnostics,
             payload,
             *ctx.device_bindings,
@@ -449,7 +449,7 @@ LossResult computeAutogradLoss(
     }
 
     float text_plus_mtp_loss = 0.0f;
-    cudaMemcpyAsync(&text_plus_mtp_loss, intermediates.loss_tensor.data, sizeof(float),
+    cudaMemcpyAsync(&text_plus_mtp_loss, loss_state.loss_tensor.data, sizeof(float),
                     cudaMemcpyDeviceToHost, ctx.stream);
     cudaStreamSynchronize(ctx.stream);
 
@@ -471,7 +471,7 @@ LossResult computeAutogradLoss(
     // EXECUTION BLOCK LOSS — assembled at the explicit autograd loss boundary
     // from retained forward tensors (logits, v_out, teacher scalar, clamp flag).
     // ═══════════════════════════════════════════════════════════════════════════
-    const ExecutionAuxiliaryLossSummary exec_summary = addExecutionAuxiliaryLoss(ctx, intermediates);
+    const ExecutionAuxiliaryLossSummary exec_summary = addExecutionAuxiliaryLoss(ctx, forward_outputs, loss_state);
     const float exec_structured_ce = exec_summary.structured_ce;
     const float exec_entropy_monitor = exec_summary.entropy_monitor;
     if (exec_summary.scalar_loss_terms > 0) {
@@ -493,7 +493,7 @@ LossResult computeAutogradLoss(
     // encoder hidden tensor because TensorContract has no parent slice/view op.
     // Weighted by cfg->selector_supervision_weight (0 = disabled).
     // ═══════════════════════════════════════════════════════════════════════════
-    float selector_supervision_loss = addSelectorSupervisionLoss(ctx, intermediates);
+    float selector_supervision_loss = addSelectorSupervisionLoss(ctx, forward_outputs, loss_state);
     result.selector_loss = selector_supervision_loss;
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -502,7 +502,7 @@ LossResult computeAutogradLoss(
     // host-side scalars. text_loss was snapshot before exec/selector additions.
     // ═══════════════════════════════════════════════════════════════════════════
     float actual_loss = 0.0f;
-    cudaMemcpyAsync(&actual_loss, intermediates.loss_tensor.data, sizeof(float),
+    cudaMemcpyAsync(&actual_loss, loss_state.loss_tensor.data, sizeof(float),
                     cudaMemcpyDeviceToHost, ctx.stream);
     cudaStreamSynchronize(ctx.stream);
 
@@ -545,14 +545,13 @@ BackwardResult executeAutogradBackward(
     
     ctx.validate("executeAutogradBackward");
     
-    auto* ts = ctx.training_state;
-    auto& intermediates = ts->autograd_intermediates;
+    auto& loss_state = *ctx.loss_state;
     const auto model_hp = GRIM::HyperParameters::modelHP(*ctx.config);
-    if (!intermediates.loss_tensor.data) {
+    if (!loss_state.loss_tensor.data) {
         throw std::runtime_error("executeAutogradBackward: Loss tensor not initialized - call computeAutogradLoss() first");
     }
     
-    if (!intermediates.loss_tensor.grad_fn) {
+    if (!loss_state.loss_tensor.grad_fn) {
         throw std::runtime_error("executeAutogradBackward: Loss tensor has no grad_fn - autograd chain broken");
     }
     if (!ctx.model) {
@@ -579,7 +578,7 @@ BackwardResult executeAutogradBackward(
     // Call backward on the text loss (single loss path). Accumulation-window
     // normalization is owned later by the optimizer boundary, not by autograd.
     AG_INFO("Calling loss_tensor.backward(nullptr)...");
-    intermediates.loss_tensor.backward(nullptr);
+    loss_state.loss_tensor.backward(nullptr);
     AG_INFO("loss_tensor.backward() returned successfully");
 
     // ════════════════════════════════════════════════════════════════════

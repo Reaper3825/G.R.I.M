@@ -24,6 +24,9 @@ namespace GRIM::Diagnostics {
 void runPostOptimizerWeightTrace(
     GRIMText::Training::TrainingContext& ctx,
     GRIMText::Training::BatchResult& result,
+    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const GRIM::TrainingState& training_state,
+    const std::vector<GRIM::ParameterGroup>& parameter_groups,
     const GRIM::HyperParameters::OptimizerUpdateHP& optimizer_hp,
     const WeightSample& pre_sample,
     bool sync_diag)
@@ -33,11 +36,13 @@ void runPostOptimizerWeightTrace(
     using GRIM::Logging::ModuleId;
     const int optimizer_step = static_cast<int>(ctx.optimizer.optimizer_step.step);
     const int iteration = optimizer_step + 1;
+    const GRIM::Tensor& lm_head_weights =
+        parameter_registry.requireLmHeadParameters("runPostOptimizerWeightTrace").weights;
 
     WeightSample post_sample{};
     std::string post_weights = "lm_head_weights=skipped";
     if (sync_diag) {
-        post_sample = sampleWeightStats(ctx.model->getLmHeadLayer(), ctx.model->getTrainingState(), true);
+        post_sample = sampleWeightStats(lm_head_weights, training_state, true);
         if (post_sample.valid) {
             post_weights = formatWeightSample(post_sample);
         }
@@ -62,11 +67,11 @@ void runPostOptimizerWeightTrace(
     // after launchOptimizerUpdate() and owns no cached state.
     if (sync_diag) {
         const auto update_trace = computeOptimizerUpdateTrace(
-            ctx.model->parameterGroups(),
+            parameter_groups,
             optimizer_hp,
             result.learning_rate,
             optimizer_step,
-            ctx.model->getTrainingState().stream_ctrl.getPrimaryStream()
+            training_state.stream_ctrl.getPrimaryStream()
         );
         if (update_trace.valid) {
             const auto trace_lines = formatOptimizerUpdateTraceLines(
