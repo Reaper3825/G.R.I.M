@@ -17,6 +17,7 @@
 #include "../FeedForward/Feed_Forward_GPU.hpp"
 #include "../../Shared/PBM/PositionalBiasMethod.hpp"
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
+#include <cmath>
 #include <cuda_runtime.h>
 #include <cstring>
 #include <stdexcept>
@@ -350,6 +351,7 @@ void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     Tensor& ffn_out = forward_outputs.ffn_out_per_layer[layer_slot];
     Tensor& output = forward_outputs.output_per_layer[layer_slot];
     const auto& hp = hp_;
+    const float residual_scale = 1.0f / std::sqrt(2.0f * static_cast<float>(hp.num_layers));
     const Tensor& rms1_gamma = (parameter_views && parameter_views->rms1_gamma) ? *parameter_views->rms1_gamma : rms1_gamma_;
     const Tensor& rms2_gamma = (parameter_views && parameter_views->rms2_gamma) ? *parameter_views->rms2_gamma : rms2_gamma_;
     const Tensor& W_qkv = (parameter_views && parameter_views->W_qkv) ? *parameter_views->W_qkv : W_qkv_;
@@ -471,6 +473,7 @@ void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
                                      attn_proj_dropout_seed, stream,
                                      attn_proj_dropout_mask_stream);
     }
+    proj_out = autograd::mul_scalar(proj_out, residual_scale, stream);
     
     //--------------------------------------------------
     // 7. Residual1: input + proj_out -> residual1
@@ -503,7 +506,7 @@ void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     //   3. Initial rho(0)=0.21 (vs PyTorch 0.05-0.08) → started halfway to collapse
     //   4. Combined with causal attention prefix averaging → mode collapse by batch 3
     // ========================================================================
-    residual1 = autograd::add(input, scaled_proj, stream);
+    residual1 = autograd::add(input, *proj_for_residual, stream);
     
     // ========================================================================
     // RESIDUAL CENTERING (Issue #118 / Mode Collapse Fix)
@@ -573,6 +576,7 @@ void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
                                     ffn_dropout_seed, stream,
                                     ffn_dropout_mask_stream);
     }
+    ffn_out = autograd::mul_scalar(ffn_out, residual_scale, stream);
     
     //--------------------------------------------------
     // 10. Residual2: residual1 + ffn_out -> output

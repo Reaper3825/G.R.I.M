@@ -387,25 +387,16 @@ void emitLayerResidualDiagnostic(const LayerResidualDiagnosticRequest& request) 
 
     std::ostringstream eq;
     eq << "[LAYER_COSINE_EQUATION] layer=" << request.layer_idx
-             << ": attn_branch[t,d] = gamma1[d] * attn_raw[t,d]; residual1[t,d] = input[t,d] + attn_branch[t,d]; ffn_branch[t,d] = gamma2[d] * ffn_raw[t,d]; output[t,d] = residual1[t,d] + ffn_branch[t,d]\n";
+       << ": residual1[t,d] = input[t,d] + gamma1[d] * attn[t,d]; output[t,d] = residual1[t,d] + gamma2[d] * ffn[t,d]\n";
     eq << "  OUTPUT h_L" << request.layer_idx << ": shape=[" << total_tokens << ", " << d_model
-       << "] row_rms_range=[" << output_agg.row_rms_min << " @row " << output_agg.row_rms_min_row
-       << ", " << output_agg.row_rms_max << " @row " << output_agg.row_rms_max_row
-             << "] row_rms_mean=" << output_agg.row_rms_mean << " scalar_mean=" << output_agg.scalar_mean << "\n";
-    eq << "  STACK row_rms_mean: input=" << input_agg.row_rms_mean
-             << " attn_raw=" << attn_raw_agg.row_rms_mean
-       << " attn_branch=" << attn_agg.row_rms_mean
-       << " residual1=" << residual_agg.row_rms_mean
-             << " ffn_raw=" << ffn_raw_agg.row_rms_mean
-       << " ffn_branch=" << ffn_agg.row_rms_mean
-             << " output=" << output_agg.row_rms_mean << "\n";
+       << "] row_rms_range=[" << output_agg.row_rms_min << ", " << output_agg.row_rms_max << "]\n";
     if (request.hp.use_layer_scale) {
-        eq << "  LAYERSCALE: LS1[min=" << ls1_stats.min << " max=" << ls1_stats.max
+        eq << "  LAYERSCALE: gamma1[min=" << ls1_stats.min << " max=" << ls1_stats.max
            << " mean=" << ls1_stats.mean << " rms=" << ls1_stats.rms << "]"
-           << " LS2[min=" << ls2_stats.min << " max=" << ls2_stats.max
-                     << " mean=" << ls2_stats.mean << " rms=" << ls2_stats.rms << "]\n";
+           << " gamma2[min=" << ls2_stats.min << " max=" << ls2_stats.max
+           << " mean=" << ls2_stats.mean << " rms=" << ls2_stats.rms << "]\n";
     } else {
-                eq << "  LAYERSCALE: disabled; attn_branch=proj_out and ffn_branch=ffn_out\n";
+        eq << "  LAYERSCALE: disabled\n";
     }
     eq << "  ACTUAL avg_cos=" << avg_cos << " (pairs=" << num_pairs
        << ") [|avg_cos|->1 = collapse, near 0 = diverse]";
