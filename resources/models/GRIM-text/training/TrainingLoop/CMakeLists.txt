@@ -415,6 +415,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/Batching/EpochBatching.cu
     ../../Shared/Execution/ExecutionPayloadValidation.cu
     ../../Layers/Encoding/Encoding_GPU.cu
+    ../../Layers/Encoding/EncoderDiagnostics.cu
     ../../Layers/FlashAttention/EncoderSelfAttention_GPU.cu
     ../../Layers/ScratchBlock/ScratchBlockReasoning_GPU.cu
     ../../Shared/Sampling/Sampling.cu

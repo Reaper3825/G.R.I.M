@@ -11,34 +11,21 @@
 //======================================================//
 
 #include "Encoding_GPU.hpp"
+#include "EncoderDiagnostics.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../FlashAttention/EncoderSelfAttention_GPU.hpp"
 #include "../FeedForward/Feed_Forward_GPU.hpp"
 #include "../../Shared/PBM/PositionalBiasMethod.hpp"
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
-#include "../../Shared/LogRecorder/BatchLogTape.hpp"  // Centralized equation logging (Rule 21)
 #include <cuda_runtime.h>
 #include <cstring>
 #include <stdexcept>
 #include <string>
-#include <sstream>
-#include <vector>
-#include <cmath>
-#include <algorithm>  // Rule 21 diagnostic: std::min_element, std::max_element
-#include <cfloat>     // FLT_MAX
 #include <cstdio>     // fprintf, snprintf
 
 
 namespace {
     constexpr bool kEnableEncoderStepLogs = false;  // Set true to enable [EncoderFwd] step logs
-    
-    // Use centralized tape for [*_EQUATION] diagnostic logs (Rule 21)
-    inline bool isEquationLoggingEnabled() {
-        auto* tape = GRIM::Logging::getGlobalTape();
-        return tape && tape->accepts(GRIM::Logging::LogLevel::Debug);
-    }
-    
-
 }
 //======================================================// 
 
@@ -518,7 +505,7 @@ void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     //   3. Initial rho(0)=0.21 (vs PyTorch 0.05-0.08) → started halfway to collapse
     //   4. Combined with causal attention prefix averaging → mode collapse by batch 3
     // ========================================================================
-    residual1 = autograd::add(input, *proj_for_residual, stream);
+    residual1 = autograd::add(input, scaled_proj, stream);
     
     // ========================================================================
     // RESIDUAL CENTERING (Issue #118 / Mode Collapse Fix)
@@ -616,126 +603,28 @@ void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // so it happens AFTER all layer-output modifications (including crossAttentionRead).
     // Post-attention centering remains here (between sublayers, no external modification).
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 10: Residual2 (pre-norm, no sandwich) DONE - layer COMPLETE\n");
-    
-    
-    // ═══════════════════════════════════════════════════════════════════════════
-    // RULE 21 DIAGNOSTIC: Per-Layer Cosine Similarity (correlation tracking)
-    //
-    // EQUATION (Pre-Norm): output = input + LS2*FFN(RMSNorm(input + LS1*Attn(RMSNorm(input))))
-    //
-    // Issue #148: Sandwich Norm removed. Standard pre-norm residual connections.
-    // Hidden state norms are now FREE to vary (not clamped to sqrt(D)).
-    //
-    // Interpretation:
-    //   |avg_cos| → 1.0 = mode collapse (all vectors aligned) = BAD
-    //   |avg_cos| near 0 = diverse representations = generally healthy
-    // Skipped on non-initial accumulation slots (same weights → duplicate output)
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Log ALL layers so per-layer ρ trajectory is visible.
-    // NOTE: output is the PRE-centering output — the post-layer center_columns
-    // in AutogradTraining.cu hasn't run yet. Logged ρ values will be slightly higher than
-    // what the NEXT layer actually receives as input.
-    if (isEquationLoggingEnabled() && !(GRIM::Logging::getGlobalTape() && GRIM::Logging::getGlobalTape()->skipThisPass())) {
-        CUDA_CHECK(cudaStreamSynchronize(stream));  // Ensure data is ready
-        
-        // Copy layer output to host for analysis
-        const int output_size = payload.total_tokens * hp.d_model;
-        std::vector<float> h_output(output_size);
-        CUDA_CHECK(cudaMemcpy(h_output.data(), output.data,
-                              output_size * sizeof(float), cudaMemcpyDeviceToHost));
-        
-        // Compute row RMS
-        std::vector<float> row_rms(payload.total_tokens);
-        for (int t = 0; t < payload.total_tokens; t++) {
-            double norm_sq = 0.0;
-            for (int d = 0; d < hp.d_model; d++) {
-                float v = h_output[t * hp.d_model + d];
-                norm_sq += v * v;
-            }
-            row_rms[t] = sqrtf(norm_sq / hp.d_model); 
-        }
-        
-        // Sample pairwise cosine similarity
-        const int sample_pairs = std::min(30, payload.total_tokens / 2);
-        const int stride = std::max(1, payload.total_tokens / sample_pairs);
-        double cos_sum = 0.0;
-        int num_pairs = 0;
-        
-        for (int i = 0; i < payload.total_tokens && num_pairs < sample_pairs; i += stride) {
-            int j = (i + payload.total_tokens / 2) % payload.total_tokens;
-            if (i == j || row_rms[i] < 1e-8f || row_rms[j] < 1e-8f) continue;
-            
-            double dot = 0.0;
-            for (int d = 0; d < hp.d_model; d++) {
-                dot += h_output[i * hp.d_model + d] * h_output[j * hp.d_model + d];
-            }
-            cos_sum += dot / (static_cast<double>(row_rms[i]) * row_rms[j] * hp.d_model);
-            num_pairs++;
-        }
-        
-        const double avg_cos = (num_pairs > 0) ? cos_sum / num_pairs : 0.0;
-        const float rms_min = *std::min_element(row_rms.begin(), row_rms.end());
-        const float rms_max = *std::max_element(row_rms.begin(), row_rms.end());
-        
-        struct LayerScaleDiagStats {
-            float min = 0.0f;
-            float max = 0.0f;
-            float mean = 0.0f;
-            float rms = 0.0f;
-        };
-        auto layerScaleStats = [&hp](const Tensor& gamma, const char* name) -> LayerScaleDiagStats {
-            validateLayerScaleGamma(gamma, name, hp.d_model, "EncodingLayer::forward diagnostics");
-            std::vector<float> h_gamma(static_cast<size_t>(hp.d_model));
-            CUDA_CHECK(cudaMemcpy(h_gamma.data(), gamma.data,
-                                  h_gamma.size() * sizeof(float), cudaMemcpyDeviceToHost));
-            LayerScaleDiagStats stats{};
-            stats.min = FLT_MAX;
-            stats.max = -FLT_MAX;
-            double sum = 0.0;
-            double sum_sq = 0.0;
-            for (float v : h_gamma) {
-                stats.min = fminf(stats.min, v);
-                stats.max = fmaxf(stats.max, v);
-                sum += v;
-                sum_sq += static_cast<double>(v) * static_cast<double>(v);
-            }
-            stats.mean = static_cast<float>(sum / hp.d_model);
-            stats.rms = sqrtf(static_cast<float>(sum_sq / hp.d_model));
-            return stats;
-        };
-        LayerScaleDiagStats ls1_stats{};
-        LayerScaleDiagStats ls2_stats{};
-        if (hp.use_layer_scale) {
-            ls1_stats = layerScaleStats(layer_scale1, "layer_scale1_");
-            ls2_stats = layerScaleStats(layer_scale2, "layer_scale2_");
-        }
-        
-        std::ostringstream eq;
-        eq << "[LAYER_COSINE_EQUATION] layer=" << layer_idx 
-           << ": residual1[t,d] = input[t,d] + gamma1[d] * attn[t,d]; output[t,d] = residual1[t,d] + gamma2[d] * ffn[t,d]\n";
-        eq << "  OUTPUT h_L" << layer_idx << ": shape=[" << payload.total_tokens << ", " << hp.d_model 
-           << "] row_rms_range=[" << rms_min << ", " << rms_max << "]\n";
-        if (hp.use_layer_scale) {
-            eq << "  LAYERSCALE gamma vectors: shape=[1," << hp.d_model << "]"
-               << " LS1[min=" << ls1_stats.min << " max=" << ls1_stats.max
-               << " mean=" << ls1_stats.mean << " rms=" << ls1_stats.rms << "]"
-               << " LS2[min=" << ls2_stats.min << " max=" << ls2_stats.max
-               << " mean=" << ls2_stats.mean << " rms=" << ls2_stats.rms << "]\n";
-        } else {
-            eq << "  LAYERSCALE: disabled\n";
-        }
-        eq << "  ACTUAL avg_cos=" << avg_cos << " (pairs=" << num_pairs 
-           << ") [|avg_cos|->1 = collapse, near 0 = diverse]\n";
-        if (fabs(avg_cos) > 0.8) {
-            eq << "  [ANOMALY] Layer " << layer_idx << " |avg_cos|=" << fabs(avg_cos) 
-               << " HIGH - possible mode collapse!\n";
-        }
-        EQ_LOG(GRIM::Logging::getGlobalTape(), GRIM::Logging::LogGroup::Attention, GRIM::Logging::LogPhase::RESIDUAL_POST_ATTN, layer_idx, "LAYER_COSINE_EQUATION", eq.str().c_str());
+    bool emitLayerResidualDiag = false;
+    if (emitLayerResidualDiag){
+    EncoderDiagnostics::emitLayerResidualDiagnostic({
+        input,
+        proj_out,
+        scaled_proj,
+        residual1,
+        ffn_out,
+        *ffn_for_residual,
+        output,
+        hp.use_layer_scale ? &layer_scale1 : nullptr,
+        hp.use_layer_scale ? &layer_scale2 : nullptr,
+        hp,
+        payload,
+        stream,
+        layer_idx,
+        emitLayerResidualDiag
+    });
     }
-    
     if (!output.data) {
         throw std::runtime_error("EncodingLayer::forward: result.output.data is NULL before return");
     }
-}
+} 
 
 } // namespace GRIM

@@ -50,6 +50,16 @@ QKV-specific diagnostic code belongs next to the autograd attention implementati
 
 `Encoding_GPU.cu` may call the diagnostic API at the attention boundary, but it must not own QKV sampling buffers, QKV non-finite scan kernels, or duplicated QKV equation logic. This keeps the visible path as: encoder orchestration → TensorContract/autograd attention API → raw TensorConversion layout kernels.
 
+## Encoder residual diagnostics ownership
+Per-layer residual/output Rule 21 logging lives in `Layers/Encoding/EncoderDiagnostics.hpp/.cu`, not inline in `Encoding_GPU.cu`. `EncodingLayer::forward(...)` passes the full live stack (`input`, raw/actual attention branch, `residual1`, raw/actual FFN branch, `output`, LayerScale gamma pointers, payload geometry, stream, layer index) to the helper after `output` is materialized.
+
+The helper emits one summary equation entry plus one ordered per-row stack entry for each flat `[batch_size * max_seq_len]` row. Per-row logs must be emitted under a single phase key and rely on the tape's stable phase sort so equal phase/layer entries retain flat-row insertion order; do not split a single row stack across multiple phases or the flushed log will appear out of order.
+
+## Encoder residual diagnostics ownership
+`Layers/Encoding/EncoderDiagnostics.{hpp,cu}` owns the Rule 21 residual-stack diagnostic emitted after `EncodingLayer::forward()` computes `output = residual1 + ffn_branch`. `Encoding_GPU.cu` must pass the full live stack (`input`, raw attention output, actual attention branch used in the residual add, `residual1`, raw FFN output, actual FFN branch used in the residual add, `output`, optional LayerScale tensors, payload geometry, stream, and layer index) and must not rebuild host-side diagnostic sampling logic inline.
+
+The diagnostic emits one compact summary equation plus `LAYER_RESIDUAL1_ROW_EQUATION` and `LAYER_RESIDUAL2_ROW_EQUATION` entries for every flattened payload row. Row entries report `(row, batch_row, seq_pos, valid)` and row-level min/max/mean/RMS for the tensors that participate in each residual equation. This is intentionally Debug-gated and skipped on non-initial accumulation slots because it performs blocking D2H copies of the active encoder stack.
+
 ## FFN post-GELU cache
 `EncodingLayer::forward()` MUST `cudaMemcpyAsync` post-GELU activations into `args.cache_ffn_output` after `ffn_->forward()`. Forgetting this leaves the cache as garbage → corrupted W2 gradients.
 
@@ -66,6 +76,8 @@ Global column-centering over the full flat matrix makes sample A depend on sampl
 `h[b,t,d] = h[b,t,d] - mean_{u < t}(h[b,u,d])` for valid `t > 0`, and padded rows are zeroed.
 
 This removes the running within-sequence shared direction without crossing batch-row ownership boundaries, letting PAD rows steer the mean, erasing the first token, or leaking future tokens into the current position. If any centered row has `seq_lengths[b] <= 1`, fail loud; there is no meaningful strict-past context to center against.
+
+`center_encoder_residuals` applies to the live intra-layer residual stream inside `EncodingLayer::forward()` at `residual1 = center_columns_by_causal_prefix_lengths(input + attn_branch, ...)`. Do **not** apply a second causal-prefix centering pass to the committed layer output in `ModelForward_GPU.cu` before handing it to the next layer. Re-applying the same non-orthogonal prefix-centering operator at the layer boundary amplifies early-token rows (`seq_pos` 1-3 showed runaway row-RMS growth while branch RMS stayed small) and makes `input_{l+1}` larger than the raw `output_l` it was derived from.
 
 ## `per_token_grad_scale=true` is REQUIRED
 Gradient RMS ~1e-6 with ~3000 tokens is **correct**. Disabling causes ~3000× effective LR explosion.

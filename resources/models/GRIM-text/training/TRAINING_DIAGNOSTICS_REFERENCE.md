@@ -8,7 +8,7 @@
 
 | Tool | Path | Purpose |
 |------|------|---------|
-| **Log Analyzer** | `training/analyze_training_log.py` | Parses training logs, detects issues, scores health |
+| **Log Analyzer** | `training/analyze_training_log.py` | Parses training logs with string search only and saves text/JSON summaries |
 | **Gradient Trace** | `training/trace_single_gradient.py` | Analyzes binary gradient dumps |
 | **Gradient Validator** | `training/validate_gradient_trace.py` | Numerical gradient checking |
 | **Causality Proofs** | `training/run_causality_proofs.py` | 6-level correctness tests |
@@ -20,20 +20,32 @@
 
 ## 🔍 Log Analyzer (`analyze_training_log.py`)
 
+Uses plain string search only (`in`, `find`, `split`, `partition`) and intentionally avoids regex.
+
 ### Usage
 ```powershell
 # Analyze latest log
 python training/analyze_training_log.py
 
 # Analyze specific log
-python training/analyze_training_log.py --log training/logs/training_17656777702397256.log
+python training/analyze_training_log.py training/logs/training_17656777702397256.log
 
-# Watch mode (live updates)
-python training/analyze_training_log.py --watch --interval 5
+# Analyze every training log in the directory
+python training/analyze_training_log.py --all-logs
 
-# JSON output
-python training/analyze_training_log.py --json
+# Analyze only the first 50,000 lines
+python training/analyze_training_log.py --max-lines 50000
+
+# Print to stdout without saving files
+python training/analyze_training_log.py --stdout-only
 ```
+
+### Saved outputs
+
+- `analysis_<session>.log` — human-readable saved report
+- `analysis_<session>.json` — machine-readable summary
+
+By default both files are written beside the source log unless `--stdout-only` or `--out-dir` is used.
 
 ### What It Extracts
 

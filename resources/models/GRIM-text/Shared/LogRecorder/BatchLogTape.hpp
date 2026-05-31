@@ -92,14 +92,17 @@ public:
         current_batch_ = batch_idx;
     }
 
-    /// Flush: sort by phase, dispatch to all sinks, clear buffer.
+    /// Flush: stable-sort by phase so equal phase/layer entries keep
+    /// insertion order (critical for per-row diagnostics).
     /// Call at the end of each training step (after backward + optimizer).
     void flush() {
         std::lock_guard<std::mutex> lock(mutex_);
         if (entries_.empty() && lifecycle_entries_.empty()) return;
 
-        // Sort batch entries by phase order, then layer
-        std::sort(entries_.begin(), entries_.end());
+        // Stable-sort batch entries by phase order, then layer. Equal-key
+        // entries (same phase/layer) must retain insertion order so row-wise
+        // diagnostics remain sequential in the flushed log.
+        std::stable_sort(entries_.begin(), entries_.end());
 
         // Dispatch batch entries to all sinks
         for (auto* sink : sinks_) {

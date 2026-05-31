@@ -105,6 +105,30 @@ private:
         tensors.clear();
     }
 
+    static void clearExecutionMemoryVector(std::vector<ExecutionMemory>& memories) {
+        for (auto& memory : memories) {
+            memory = ExecutionMemory();
+        }
+        memories.clear();
+    }
+
+    static void clearExecutionOutputVector(std::vector<ExecutionBlockOutput>& outputs) {
+        for (auto& output : outputs) {
+            for (auto& step : output.steps) {
+                step = ExecutionBlockStepOutput();
+            }
+            output.steps.clear();
+        }
+        outputs.clear();
+    }
+
+    static void clearSelectorForwardResultVector(std::vector<SelectorForwardResult>& results) {
+        for (auto& result : results) {
+            result = SelectorForwardResult();
+        }
+        results.clear();
+    }
+
     void requireConsistentLayerStorage(const char* caller) const {
         const size_t expected = ln1_out_per_layer.size();
         auto requireSize = [&](const std::vector<Tensor>& tensors, const char* name) {
@@ -327,17 +351,17 @@ public:
         embedding_gate_logits = Tensor();
         embedding_gate_values = Tensor();
         embedding_gate_delta = Tensor();
-        encoder_layer_outputs.clear();
+        clearTensorVector(encoder_layer_outputs);
         encoder_output_tensor = Tensor();
         lm_head_input_tensor = Tensor();
         logits_tensor = Tensor();
         clearTensorVector(mtp_logits_tensors);
         scratch_atom_embeddings = Tensor();
-        exec_memories.clear();
-        exec_outputs_per_row.clear();
+        clearExecutionMemoryVector(exec_memories);
+        clearExecutionOutputVector(exec_outputs_per_row);
         clearTensorVector(selector_h_t_inputs);
         clearTensorVector(selector_slot_feature_inputs);
-        selector_fwd_results.clear();
+        clearSelectorForwardResultVector(selector_fwd_results);
     }
 
     bool hasLogits() const { return logits_tensor.data != nullptr; }

@@ -701,14 +701,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 }
             }
 
-            if (center_encoder_residuals) {
-                if (payload.max_seq_len <= 1) {
-                    throw std::runtime_error("ModelForward: center_encoder_residuals requires payload.max_seq_len > 1; single-row column centering would erase the residual stream");
-                }
-                layer_output = autograd::center_columns_by_causal_prefix_lengths(
-                    layer_output, payload.seq_lengths, payload.batch_size, payload.max_seq_len, request.stream);
-            }
-
             forward_outputs.encoder_layer_outputs.push_back(std::move(layer_output));
         }
 
