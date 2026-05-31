@@ -75,8 +75,8 @@ std::string optimizerSidecarPath(const std::string& checkpoint_path) {
 
 bool saveOptimizerState(const TrainingContext& ctx, const std::string& sidecar_path) {
 #ifdef USE_CUDA
-    const auto& groups = ctx.model->parameterGroups();
-    const auto& ts     = ctx.model->getTrainingState();
+    const auto& groups = ctx.parameter_registry.requireParameterGroups("saveOptimizerState");
+    const auto& ts     = ctx.requireTrainingState("saveOptimizerState");
     const auto& opt_state = ctx.optimizer.optimizer_state;
 
     if (groups.empty()) {
@@ -209,8 +209,8 @@ bool loadOptimizerState(TrainingContext& ctx, const std::string& sidecar_path) {
         return false;  // No sidecar file — not an error, just no optimizer state to restore
     }
 
-    const auto& groups = ctx.model->parameterGroups();
-    auto& ts = ctx.model->getTrainingState();
+    const auto& groups = ctx.parameter_registry.requireParameterGroups("loadOptimizerState");
+    auto& ts = ctx.requireTrainingState("loadOptimizerState");
     auto& opt_state = ctx.optimizer.optimizer_state;
 
     if (!opt_state.allocated) {

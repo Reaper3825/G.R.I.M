@@ -87,7 +87,7 @@ void runPredictionDistributionAndLogitTrace(
     // Log model predictions (what it predicts vs targets) - uses ForwardPass module for filtering
     // GUARDED: Blocking cudaMemcpy drains GPU pipeline - only run on diagnostic sync interval
     if (shouldSyncDiagnostics(ctx, batch_idx)) {
-        const auto& ts = ctx.model->getTrainingState();
+        const auto& ts = ctx.requireTrainingState("runPredictionDistributionAndLogitTrace");
         cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
         if (payload.batch_size > 0 && payload.max_seq_len > 0) {
             if (!logits_tensor.data) {

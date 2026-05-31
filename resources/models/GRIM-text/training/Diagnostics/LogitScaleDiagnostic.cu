@@ -221,7 +221,7 @@ void runLogitScaleDiagnostic(
     // TRAINING SIGNAL: Logit Statistics (argmax distribution, confidence)
     // ========================================================================
     {
-        const auto& ts = ctx.model->getTrainingState();
+        const auto& ts = ctx.requireTrainingState("runLogitScaleDiagnostic");
         if (payload.batch_size > 0 && payload.max_seq_len > 0) {
             if (!logits_tensor.data) {
                 throw std::runtime_error(

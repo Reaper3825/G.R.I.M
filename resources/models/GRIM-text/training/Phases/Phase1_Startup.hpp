@@ -45,6 +45,8 @@
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../GRIM/grim_language_model_cuda.hpp"
+#include "../../Shared/TrainingState/TrainingState_GPU.hpp"
+#include "../../Shared/InferenceState/GenerationState_GPU.hpp"
 #include "../../Shared/Optimizers/OptimizerState_GPU.hpp"
 #include "../../Shared/Optimizers/OptimizerStep.hpp"
 #include "../../Shared/UnigramByte/UniByte.hpp"
@@ -232,6 +234,14 @@ struct TrainingContext {
     // owners; ParameterGroupRegistration sequences assembly, validation, and
     // inventory publication against this durable registry.
     ::ParameterRegistry::StartupParameterRegistry parameter_registry;
+    // Durable runtime owner for CUDA training state. Phase1 constructs and
+    // initializes it directly; Phase2 and support modules must access it from
+    // TrainingContext instead of tunneling through LanguageModel.
+    std::unique_ptr<GRIM::TrainingState> training_state = std::make_unique<GRIM::TrainingState>();
+    // Durable runtime owner for autoregressive inference/generation state.
+    // Phase1 initializes it directly for inference mode; Phase2 inference
+    // consumes it from TrainingContext instead of tunneling through LanguageModel.
+    std::unique_ptr<GRIM::GenerationState> generation_state = std::make_unique<GRIM::GenerationState>();
 
     //==================================================//
     // Phase1-owned PLANNED BATCHES (PrecomputeBatchPayloads.plan.md)
@@ -317,10 +327,40 @@ struct TrainingContext {
     TrainingContext& operator=(const TrainingContext&) = delete;
     TrainingContext(TrainingContext&&) noexcept = default;
     TrainingContext& operator=(TrainingContext&&) noexcept = default;
+
+    GRIM::TrainingState& requireTrainingState(const char* caller) {
+        if (!training_state) {
+            throw std::runtime_error(std::string(caller) + ": training_state is NULL");
+        }
+        return *training_state;
+    }
+
+    const GRIM::TrainingState& requireTrainingState(const char* caller) const {
+        if (!training_state) {
+            throw std::runtime_error(std::string(caller) + ": training_state is NULL");
+        }
+        return *training_state;
+    }
+
+    GRIM::GenerationState& requireGenerationState(const char* caller) {
+        if (!generation_state) {
+            throw std::runtime_error(std::string(caller) + ": generation_state is NULL");
+        }
+        return *generation_state;
+    }
+
+    const GRIM::GenerationState& requireGenerationState(const char* caller) const {
+        if (!generation_state) {
+            throw std::runtime_error(std::string(caller) + ": generation_state is NULL");
+        }
+        return *generation_state;
+    }
     
     // Validation check
     bool is_valid() const {
-        return model != nullptr && 
+        return model != nullptr &&
+               training_state != nullptr &&
+               generation_state != nullptr &&
                logging.logger != nullptr &&
                !data.train_views.empty();
     }

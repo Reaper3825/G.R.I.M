@@ -22,6 +22,8 @@ namespace Internal {
 
 std::unique_ptr<GRIM::LanguageModel> initializeModel(
     const GRIM::Config::AiConfigSnapshot& config_snapshot,
+    GRIM::TrainingState& training_state,
+    GRIM::GenerationState& generation_state,
     GRIM::PBM::PBMStateOwner& pbm_owner,
     Startup::GpuModelState& gpu_model_state,
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
@@ -75,27 +77,27 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
         GRIM::StreamControllerConfig stream_config;
         stream_config.verbose = true;
 
-        if (!model->getTrainingState().stream_ctrl.initialize(stream_config)) {
+        if (!training_state.stream_ctrl.initialize(stream_config)) {
             throw std::runtime_error("FATAL: Failed to initialize StreamController");
         }
         logger.log("✓ StreamController initialized");
     }
 
     logger.log("Initializing cuBLAS handle...");
-    GRIMText::Training::Startup::initializeCuBLASHandle(model->getTrainingState());
+    GRIMText::Training::Startup::initializeCuBLASHandle(training_state);
     logger.log("✓ cuBLAS handle initialized with Tensor Core acceleration");
 
     logger.log("Initializing RoPE (required before encoder construction)...");
     GRIMText::Training::Startup::initializePBM(
         config_snapshot,
-        model->getTrainingState(),
+        training_state,
         pbm_owner);
     logger.log("✓ RoPE initialized");
 
     logger.log("Assembling GPU model layers with weight_init_seed=" + std::to_string(weight_init_seed) + "...");
     GRIMText::Training::Startup::assembleGpuModel(
         config_snapshot,
-        model->getTrainingState(),
+        training_state,
         pbm_owner,
         gpu_model_state,
         parameter_registry,
@@ -103,22 +105,22 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     logger.log("✓ GPU model layers fully assembled");
 
     logger.log("Registering trainable parameter groups...");
-    GRIMText::Training::Startup::ModelRegistration::buildParameterGroups(*model, gpu_model_state, parameter_registry);
+    GRIMText::Training::Startup::ModelRegistration::buildParameterGroups(config_snapshot, gpu_model_state, parameter_registry);
     logger.log("✓ Trainable parameter groups registered and verified");
 
     const auto execution_mode = GRIM::HyperParameters::snapshotExecutionMode(config_snapshot);
     if (execution_mode == GRIM::HyperParameters::ModelExecutionMode::TRAINING) {
         logger.log("Initializing TrainingState runtime workspaces...");
         GRIMText::Training::Startup::initializeTrainingRuntime(
-            model->getTrainingState(),
+            training_state,
             pbm_owner);
         logger.log("✓ TrainingState fully initialized");
     } else if (execution_mode == GRIM::HyperParameters::ModelExecutionMode::INFERENCE) {
         logger.log("Initializing inference runtime workspaces...");
         GRIMText::Training::Startup::initializeInferenceRuntime(
             config_snapshot,
-            model->getTrainingState(),
-            model->getGenerationState(),
+            training_state,
+            generation_state,
             pbm_owner,
             gpu_model_state,
             parameter_registry);
@@ -192,8 +194,16 @@ void ModelAllocated(TrainingContext& ctx) {
     }
 
     try {
+        if (!ctx.training_state) {
+            throw std::runtime_error("FATAL: TrainingState owner is NULL before model initialization");
+        }
+        if (!ctx.generation_state) {
+            throw std::runtime_error("FATAL: GenerationState owner is NULL before model initialization");
+        }
         ctx.model = Internal::initializeModel(
             ctx.config,
+            *ctx.training_state,
+            *ctx.generation_state,
             ctx.pbm_owner,
             ctx.gpu_model,
             ctx.parameter_registry,

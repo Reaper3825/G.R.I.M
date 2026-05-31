@@ -153,13 +153,13 @@ LatticeLevelState = TelemetryState (20 float + 2 uint32) + stride (uint32_t) + l
 | **Guess cache (GRIM-TS)** | `GuessCacheScope::OwnedBuffers` RAII member; released when `ctx.guess_cache_scope.reset()` runs before model teardown. |
 | **Debug grad buffers** | ~TrainingState: `freeDebugGradBuffers()` (assigns Tensor() to release). |
 | **GradNorm scratch** | `std::unique_ptr<GradNormScratch>` member; `GradNormScratch::~GradNormScratch()` releases GPU/pinned buffers. |
-| **Autograd step state** (`forward_outputs.layer_outputs`, `forward_outputs.embedding_tensor`, `forward_outputs.encoder_layer_outputs`, `forward_outputs.logits_tensor`, sibling `autograd_loss_state.loss_tensor`, etc.) | Cleared after each backward in training loop; at shutdown, **Phase3 releaseResources()** clears both `ctx.model->getTrainingState().forward_outputs` and `ctx.model->getTrainingState().autograd_loss_state` before `ctx.model.reset()` so grad_fns and intermediates are released in a controlled order. When ~TrainingState runs, both member destructors also clear. |
+| **Autograd step state** (`forward_outputs.layer_outputs`, `forward_outputs.embedding_tensor`, `encoder_layer_outputs`, `logits_tensor`, sibling `autograd_loss_state.loss_tensor`, etc.) | Owned by the per-call `ModelForwardOutputs` / `AutogradLossState` objects in Phase2 and cleared by the active forward/autograd scope; it is not reached through `LanguageModel` or stored on `TrainingState`. |
 | **Per-layer grad_fns** (ScaledDotProductAttentionGradFn dq_accum, dsoftmax_sum, dq/dk/dv/dout_bf16, saved_*) | When intermediates are cleared or Tensors destruct, grad_fn refcount drops; ~ScaledDotProductAttentionGradFn calls release_saved() which cudaFrees all 11 buffers. |
 | **Telemetry (lattice, control)** | Owned by TrainingContext (ctx.telemetry); when ctx is destroyed, unique_ptrs destruct; TelemetryLattice_GPU and TelemetryControl_GPU destructors cudaFree their buffers. |
 | **KV/decode BF16/FP32 buffers** | `DeviceAllocation` RAII members/vectors release typed CUDA buffers. |
 | **StreamController / cublas_handle** | streams owned by `StreamController`; cuBLAS owned by `CublasHandleOwner` RAII member. |
 
-Shutdown order: Phase3 `releaseResources()` → clear forward_outputs + autograd_loss_state → ctx.model.reset() → ~LanguageModel → ~TrainingContext members in reverse declaration order, including `ctx.gpu_model` (layer topology teardown) and `ctx.pbm_owner` (PBM release), then the destroyed model's `TrainingState` teardown (TeacherLogits RAII, DeviceAllocation KV/decode buffers, GradNorm unique_ptr, cuBLAS owner, Tensor members). Telemetry is released when TrainingContext is destroyed after Phase3.
+Shutdown order: Phase3 `releaseResources()` → clear any explicit per-call forward/autograd owners → ctx.model.reset() → ~LanguageModel → ~TrainingContext members in reverse declaration order, including `ctx.training_state` (TeacherLogits RAII, GradNorm unique_ptr, cuBLAS owner, Tensor members), `ctx.gpu_model` (layer topology teardown), and `ctx.pbm_owner` (PBM release). Telemetry is released when TrainingContext is destroyed after Phase3.
 
 ---
 

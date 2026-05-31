@@ -34,7 +34,7 @@ void runTieVerifyDiagnostic(
 
     // Count parameter groups referencing each buffer
     int emb_w_groups = 0, lm_w_groups = 0;
-    for (const auto& pg : ctx.model->parameterGroups()) {
+    for (const auto& pg : ctx.parameter_registry.requireParameterGroups("runTieVerifyDiagnostic")) {
         if (pg.tensor && pg.tensor->data == emb_w) ++emb_w_groups;
         if (pg.tensor && pg.tensor->data == lm_w)  ++lm_w_groups;
     }

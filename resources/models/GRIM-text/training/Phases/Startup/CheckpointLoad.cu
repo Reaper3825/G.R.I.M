@@ -74,7 +74,7 @@ void loadRequestedCheckpoint(TrainingContext& ctx)
     }
 
     logger.log("Loading requested checkpoint: " + checkpoint_hp.checkpoint_path);
-    if (!GRIM::loadLanguageModelCheckpoint(*ctx.model, ctx.gpu_model, ctx.parameter_registry, checkpoint_hp.checkpoint_path)) {
+    if (!GRIM::loadLanguageModelCheckpoint(*ctx.model, ctx.requireTrainingState("CheckpointLoaded"), ctx.gpu_model, ctx.parameter_registry, checkpoint_hp.checkpoint_path)) {
         handleUnusableCheckpointRequest(
             checkpoint_hp,
             logger,

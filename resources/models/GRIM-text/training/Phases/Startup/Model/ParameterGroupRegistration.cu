@@ -26,7 +26,6 @@ namespace {
 
 constexpr auto kRegistrationModule = GRIM::Logging::ModuleId::Training;
 
-using GRIM::LanguageModel;
 using GRIM::ParameterGroup;
 using GRIM::ParamStatsBucket;
 using GRIM::ParamGroupType;
@@ -266,12 +265,12 @@ void validateEmbeddingLmHeadAliasing(const Tensor& embedding_weights,
     }
 }
 
-void registerTopLevelParameters(LanguageModel& model,
+void registerTopLevelParameters(Startup::GpuModelState& gpu_model_state,
                                 ParameterRegistry::StartupParameterRegistry& parameter_registry,
                                 Registrar& registrar,
                                 const GRIM::Config::AiConfigSnapshot& config) {
-    auto& embedding = requireLayer(model.getEmbeddingLayer(), "EmbeddingLayer", "registerTopLevelParameters");
-    requireLayer(model.getLmHeadLayer(), "LMHeadLayer", "registerTopLevelParameters");
+    auto& embedding = gpu_model_state.requireEmbeddingLayer("registerTopLevelParameters");
+    gpu_model_state.requireLmHeadLayer("registerTopLevelParameters");
     auto& lm_head_parameters = parameter_registry.requireLmHeadParameters("registerTopLevelParameters");
     validateEmbeddingLmHeadAliasing(embedding.tokenWeights(), lm_head_parameters.weights, config);
 
@@ -416,10 +415,10 @@ void registerEncoderParameters(Startup::GpuModelState& gpu_model_state,
     }
 }
 
-void registerScratchBlockParameters(LanguageModel& model,
+void registerScratchBlockParameters(Startup::GpuModelState& gpu_model_state,
                                     Registrar& registrar,
                                                 const GRIM::Config::AiConfigSnapshot& config) {
-    auto* scratch_block = model.getScratchBlockLayer();
+    auto* scratch_block = gpu_model_state.scratch_block_layer.get();
     const auto scratch_hp = scratchBlockConstructionHP(config);
 
     if (!scratch_hp.enabled) {
@@ -452,11 +451,11 @@ void registerScratchBlockParameters(LanguageModel& model,
                         ParamStatsBucket::ENCODER);
 }
 
-void registerExecutionBlockParameters(LanguageModel& model,
+void registerExecutionBlockParameters(Startup::GpuModelState& gpu_model_state,
                                       ParameterRegistry::StartupParameterRegistry& parameter_registry,
                                       Registrar& registrar,
                                       const GRIM::Config::AiConfigSnapshot& config) {
-    auto* execution_block = model.getExecutionBlockLayer();
+    auto* execution_block = gpu_model_state.execution_block_layer.get();
     auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
     auto* slot_selector = parameter_registry.getDecodeTimeSlotSelector();
     const auto execution_hp = GRIM::HyperParameters::executionBlockConstructionHP(config);
@@ -762,44 +761,40 @@ void initializeFeedForwardParameterTensors(
              std::to_string(encoder_hp.num_layers) + " layers");
 }
 
-void buildParameterGroups(LanguageModel& model,
+void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,
                           Startup::GpuModelState& gpu_model_state,
                           ParameterRegistry::StartupParameterRegistry& parameter_registry) {
-    const GRIM::Config::AiConfigSnapshot& config = model.getConfig();
     validateParameterRegistrationConfig(config);
 
-    auto& model_groups = model.parameterGroups();
+    auto& registry_groups = parameter_registry.parameterGroups();
     std::vector<ParameterGroup> rebuilt_groups;
-    rebuilt_groups.reserve(model_groups.size());
+    rebuilt_groups.reserve(registry_groups.size());
 
     Registrar registrar(rebuilt_groups, config);
-    registerTopLevelParameters(model, parameter_registry, registrar, config);
+    registerTopLevelParameters(gpu_model_state, parameter_registry, registrar, config);
     registerEncoderParameters(gpu_model_state, parameter_registry, registrar, config);
 
-    registerScratchBlockParameters(model, registrar, config);
-    registerExecutionBlockParameters(model, parameter_registry, registrar, config);
+    registerScratchBlockParameters(gpu_model_state, registrar, config);
+    registerExecutionBlockParameters(gpu_model_state, parameter_registry, registrar, config);
     registerMtpParameters(parameter_registry, registrar, config);
 
     validateRegisteredTensorPrecisionMetadata(rebuilt_groups);
     clearOptimizerBindings(rebuilt_groups);
 
-    // Transaction boundary: model.parameterGroups() is replaced only after the
+    // Transaction boundary: parameter_registry.parameterGroups() is replaced only after the
     // complete configured inventory has been discovered and validated. A thrown
-    // registration check must never leave LanguageModel with a half-built group
+    // registration check must never leave StartupParameterRegistry with a half-built group
     // vector that downstream optimizer/checkpoint code could observe.
-    model_groups.swap(rebuilt_groups);
+    registry_groups.swap(rebuilt_groups);
 
-    emitInfo("[buildParameterGroups] Built " + std::to_string(model_groups.size()) + " parameter groups");
-    emitGroupSummary(model_groups);
+    emitInfo("[buildParameterGroups] Built " + std::to_string(registry_groups.size()) + " parameter groups");
+    emitGroupSummary(registry_groups);
 }
 
-void bindOptimizerState(LanguageModel& model,
+void bindOptimizerState(ParameterRegistry::StartupParameterRegistry& parameter_registry,
                         GRIM::OptimizerState& optimizer_state,
                         cudaStream_t stream) {
-    auto& groups = model.parameterGroups();
-    if (groups.empty()) {
-        throw std::runtime_error("[bindOptimizerState] parameter groups are empty - caller MUST run startup parameter registration first");
-    }
+    auto& groups = parameter_registry.requireParameterGroups("bindOptimizerState");
     if (stream == nullptr) {
         throw std::runtime_error("[bindOptimizerState] stream is NULL - caller MUST provide valid CUDA stream");
     }

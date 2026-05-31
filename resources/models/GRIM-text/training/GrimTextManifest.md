@@ -206,7 +206,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - **FIXED**: Rule 20 input guards in `launchAdamWKernel()` — validates `learning_rate` finite and `>= 0`, `weight_decay` finite and `>= 0`, `step >= 0`, and non-null CUDA stream
   - **FIXED**: Bias-correction denominator validation added before inversion (prevents divide-by-zero/NaN propagation on invalid optimizer state)
   - **FIXED**: Added immediate CUDA kernel launch error check (`cudaGetLastError`) with group name in exception
-  - Optimizer states (`m_states`, `v_states`) are allocated centrally in `OptimizerState::allocate()` and bound to parameter groups in `Startup/Model/ParameterGroupRegistration::buildParameterGroups(model)` ✅
+  - Optimizer states (`m_states`, `v_states`) are allocated centrally in `OptimizerState::allocate()` and bound to registry-owned parameter groups after `Startup/Model/ParameterGroupRegistration::buildParameterGroups(config, gpu_model_state, parameter_registry)` ✅
 
 ---
 

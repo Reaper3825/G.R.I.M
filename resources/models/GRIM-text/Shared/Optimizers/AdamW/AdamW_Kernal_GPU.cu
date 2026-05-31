@@ -161,7 +161,7 @@ void launchAdamWKernel(ParameterGroup& group,
 //
 //  Moved from LanguageModel::updateWeights() to break the
 //  coupling between the model class and optimizer orchestration.
-//  The model owns the parameter groups (via buildParameterGroups()),
+//  StartupParameterRegistry owns the parameter groups (via buildParameterGroups()),
 //  but stepping the optimizer is training infrastructure, not model logic.
 //
 

@@ -27,6 +27,7 @@
 #include "../Shared/UnigramByte/UniByte.hpp"
 #include "../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.hpp"
 #include "../Shared/Optimizers/OptimizerStep.hpp"
+#include "../training/Phases/Startup/Model/ParameterRegistry.hpp"
 
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
@@ -54,10 +55,18 @@ NumericSideChannel makeNumericSideChannel(size_t count) {
 }
 
 std::vector<float> runInferencePrefill(GRIM::LanguageModel* model,
+                                       GRIM::TrainingState* training_state,
+                                       GRIM::GenerationState* generation_state,
                                        const std::vector<int>& tokens,
                                        const NumericSideChannel& numeric) {
     if (!model) {
         throw std::runtime_error("runInferencePrefill: model is NULL");
+    }
+    if (!training_state) {
+        throw std::runtime_error("runInferencePrefill: training_state is NULL");
+    }
+    if (!generation_state) {
+        throw std::runtime_error("runInferencePrefill: generation_state is NULL");
     }
     if (numeric.values.size() != tokens.size() || numeric.mask.size() != tokens.size()) {
         throw std::runtime_error("runInferencePrefill: numeric side-channel length mismatch");
@@ -81,12 +90,10 @@ std::vector<float> runInferencePrefill(GRIM::LanguageModel* model,
         static_cast<size_t>(cfg.max_cached_seq_len),
         cfg.execution_block_num_slots);
 
-    auto& training_state = model->getTrainingState();
-    if (!training_state.initialized) {
+    if (!training_state->initialized) {
         throw std::runtime_error("runInferencePrefill: training state not initialized");
     }
-    auto& generation_state = model->getGenerationState();
-    cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
+    cudaStream_t stream = training_state->stream_ctrl.getPrimaryStream();
     const auto bindings = GRIM::Batching::uploadBatchToDevice(
         model->getConfig(),
         payload,
@@ -100,7 +107,7 @@ std::vector<float> runInferencePrefill(GRIM::LanguageModel* model,
     };
 
     GRIM::Forward::ModelForwardRuntimePayload runtime_payload{};
-    runtime_payload.execution_runtime = &generation_state.execution_runtime;
+    runtime_payload.execution_runtime = &generation_state->execution_runtime;
     runtime_payload.read_gate_accum_tensor = nullptr;
 
     GRIM::Forward::ModelForwardRequest request{};
@@ -111,7 +118,7 @@ std::vector<float> runInferencePrefill(GRIM::LanguageModel* model,
     request.lm_head = model->getLmHeadLayer();
     request.scratch_block = model->getScratchBlockLayer();
     request.execution_block = model->getExecutionBlockLayer();
-    request.cublas_handle = training_state.cublas_handle.get();
+    request.cublas_handle = training_state->cublas_handle.get();
     request.stream = stream;
     request.payload = &payload;
     request.bindings = &bindings;
@@ -197,7 +204,7 @@ void printResult(const TestResult& result) {
 //  Verify forward and backward math is correct.
 //======================================================//
 
-TestResult level1_single_token_causality(GRIM::LanguageModel* model, GRIM::Tokenizer::UniByte* tokenizer) {
+TestResult level1_single_token_causality(GRIM::LanguageModel* model, GRIM::TrainingState* training_state, GRIM::GenerationState* generation_state, GRIM::Tokenizer::UniByte* tokenizer) {
     TestResult result;
     result.name = "LEVEL 1: Single-token causality proof";
     result.passed = true;
@@ -223,7 +230,7 @@ TestResult level1_single_token_causality(GRIM::LanguageModel* model, GRIM::Token
     // 2. Run forward pass
     std::vector<int> input_tokens(tokens.begin(), tokens.begin() + t + 1);
     auto numeric = makeNumericSideChannel(input_tokens.size());
-    std::vector<float> logits = runInferencePrefill(model, input_tokens, numeric);
+    std::vector<float> logits = runInferencePrefill(model, training_state, generation_state, input_tokens, numeric);
     
     PROOF_ASSERT(logits.size() == static_cast<size_t>(vocab_size), 
                  "Logits shape mismatch: expected " + std::to_string(vocab_size) + 
@@ -293,7 +300,7 @@ TestResult level1_single_token_causality(GRIM::LanguageModel* model, GRIM::Token
 //  Attention[t, t] == 0 and Attention[t, >t] == 0
 //======================================================//
 
-TestResult level2_causal_mask_correctness(GRIM::LanguageModel* model, GRIM::Tokenizer::UniByte* tokenizer) {
+TestResult level2_causal_mask_correctness(GRIM::LanguageModel* model, GRIM::TrainingState* training_state, GRIM::GenerationState* generation_state, GRIM::Tokenizer::UniByte* tokenizer) {
     TestResult result;
     result.name = "LEVEL 2: Causal mask correctness";
     result.passed = true;
@@ -317,12 +324,12 @@ TestResult level2_causal_mask_correctness(GRIM::LanguageModel* model, GRIM::Toke
     
     // Test 1: Run forward with full sequence
     auto full_numeric = makeNumericSideChannel(tokens.size());
-    std::vector<float> logits_full = runInferencePrefill(model, tokens, full_numeric);
+    std::vector<float> logits_full = runInferencePrefill(model, training_state, generation_state, tokens, full_numeric);
     
     // Test 2: Run forward with truncated sequence (only up to position t)
     std::vector<int> truncated_tokens(tokens.begin(), tokens.begin() + test_pos + 1);
     auto truncated_numeric = makeNumericSideChannel(truncated_tokens.size());
-    std::vector<float> logits_truncated = runInferencePrefill(model, truncated_tokens, truncated_numeric);
+    std::vector<float> logits_truncated = runInferencePrefill(model, training_state, generation_state, truncated_tokens, truncated_numeric);
     
     // If causal mask works, logits for position t should be IDENTICAL
     // regardless of whether future tokens exist
@@ -339,7 +346,7 @@ TestResult level2_causal_mask_correctness(GRIM::LanguageModel* model, GRIM::Toke
     // Get prediction at position 0 (should be based on nothing but BOS)
     std::vector<int> single_token = {tokens[0]};
     auto single_numeric = makeNumericSideChannel(single_token.size());
-    std::vector<float> logits_pos0 = runInferencePrefill(model, single_token, single_numeric);
+    std::vector<float> logits_pos0 = runInferencePrefill(model, training_state, generation_state, single_token, single_numeric);
     
     // The predicted token should NOT be exactly token[0] with probability 1
     // (unless the model has memorized, which is fine)
@@ -349,7 +356,7 @@ TestResult level2_causal_mask_correctness(GRIM::LanguageModel* model, GRIM::Toke
     if (modified_token[0] >= cfg.vocab_size) modified_token[0] = 0;
     
     auto modified_numeric = makeNumericSideChannel(modified_token.size());
-    std::vector<float> logits_modified = runInferencePrefill(model, modified_token, modified_numeric);
+    std::vector<float> logits_modified = runInferencePrefill(model, training_state, generation_state, modified_token, modified_numeric);
     
     // Logits should be different
     float diff_rms = 0.0f;
@@ -380,7 +387,7 @@ TestResult level2_causal_mask_correctness(GRIM::LanguageModel* model, GRIM::Toke
 //  ||∂loss/∂embedding[z]|| ≈ 0 for random non-target z
 //======================================================//
 
-TestResult level3_gradient_reaches_embeddings(GRIM::LanguageModel* model, GRIM::Tokenizer::UniByte* tokenizer) {
+TestResult level3_gradient_reaches_embeddings(GRIM::LanguageModel* model, GRIM::TrainingState* training_state, GRIM::GenerationState* generation_state, GRIM::Tokenizer::UniByte* tokenizer) {
     TestResult result;
     result.name = "LEVEL 3: Gradient path continuity";
     result.passed = true;
@@ -402,7 +409,7 @@ TestResult level3_gradient_reaches_embeddings(GRIM::LanguageModel* model, GRIM::
     
     // Forward pass
     auto numeric = makeNumericSideChannel(tokens.size());
-    std::vector<float> logits = runInferencePrefill(model, tokens, numeric);
+    std::vector<float> logits = runInferencePrefill(model, training_state, generation_state, tokens, numeric);
     
     // Compute loss (using token[1] as target for predicting from token[0])
     float loss = 1.0f;  // Placeholder - actual loss computed in backward
@@ -439,12 +446,15 @@ TestResult level3_gradient_reaches_embeddings(GRIM::LanguageModel* model, GRIM::
 //  After one optimizer step: logit[y]_after > logit[y]_before
 //======================================================//
 
-TestResult level4_learning_changes_logits(GRIM::LanguageModel* model, GRIM::Tokenizer::UniByte* tokenizer) {
+TestResult level4_learning_changes_logits(GRIM::LanguageModel* model, GRIM::TrainingState* training_state, GRIM::GenerationState* generation_state, ::ParameterRegistry::StartupParameterRegistry* parameter_registry, GRIM::Tokenizer::UniByte* tokenizer) {
     TestResult result;
     result.name = "LEVEL 4: Learning must change logits";
     result.passed = true;
     
     PROOF_LOG("Testing one-step SGD changes logits correctly...");
+    if (!parameter_registry) {
+        throw std::runtime_error("level4_learning_changes_logits: parameter_registry is NULL");
+    }
     
     const auto& cfg = model->getConfig();
     
@@ -461,7 +471,7 @@ TestResult level4_learning_changes_logits(GRIM::LanguageModel* model, GRIM::Toke
     
     // 1. Get logits BEFORE training
     auto before_numeric = makeNumericSideChannel(input_tokens.size());
-    std::vector<float> logits_before = runInferencePrefill(model, input_tokens, before_numeric);
+    std::vector<float> logits_before = runInferencePrefill(model, training_state, generation_state, input_tokens, before_numeric);
     float logit_y_before = logits_before[target_y];
     
     PROOF_LOG("logit[y] BEFORE = " + std::to_string(logit_y_before));
@@ -472,7 +482,7 @@ TestResult level4_learning_changes_logits(GRIM::LanguageModel* model, GRIM::Toke
     // 3. Forward + backward (compute gradients)
     // We need to run the full training sequence
     auto train_numeric = makeNumericSideChannel(tokens.size());
-    runInferencePrefill(model, tokens, train_numeric);  // Full sequence for training
+    runInferencePrefill(model, training_state, generation_state, tokens, train_numeric);  // Full sequence for training
     
     // Compute actual cross-entropy loss for logging
     float max_logit = *std::max_element(logits_before.begin(), logits_before.end());
@@ -494,14 +504,14 @@ TestResult level4_learning_changes_logits(GRIM::LanguageModel* model, GRIM::Toke
     // Create temporary optimizer step counter
     GRIM::OptimizerStep opt_step;
     
-    GRIM::launchAdamWStep(model->parameterGroups(), test_lr,
+    GRIM::launchAdamWStep(parameter_registry->requireParameterGroups("level4_learning_changes_logits"), test_lr,
                           GRIM::HyperParameters::ADAMW_WEIGHT_DECAY,
                           opt_step.step,
-                          model->getTrainingState().stream_ctrl.getPrimaryStream());
+                          training_state->stream_ctrl.getPrimaryStream());
     
     // 5. Get logits AFTER training
     auto after_numeric = makeNumericSideChannel(input_tokens.size());
-    std::vector<float> logits_after = runInferencePrefill(model, input_tokens, after_numeric);
+    std::vector<float> logits_after = runInferencePrefill(model, training_state, generation_state, input_tokens, after_numeric);
     float logit_y_after = logits_after[target_y];
     
     PROOF_LOG("logit[y] AFTER  = " + std::to_string(logit_y_after));
@@ -525,7 +535,7 @@ TestResult level4_learning_changes_logits(GRIM::LanguageModel* model, GRIM::Toke
 //  must receive gradients.
 //======================================================//
 
-TestResult level5_tokenizer_loss_alignment(GRIM::LanguageModel* model, GRIM::Tokenizer::UniByte* tokenizer) {
+TestResult level5_tokenizer_loss_alignment(GRIM::LanguageModel* model, GRIM::TrainingState* training_state, GRIM::GenerationState* generation_state, GRIM::Tokenizer::UniByte* tokenizer) {
     TestResult result;
     result.name = "LEVEL 5: Tokenizer–loss alignment";
     result.passed = true;
@@ -568,7 +578,7 @@ TestResult level5_tokenizer_loss_alignment(GRIM::LanguageModel* model, GRIM::Tok
     // Test 3: Forward + backward
     if (tokens.size() >= 2) {
         auto numeric = makeNumericSideChannel(tokens.size());
-        runInferencePrefill(model, tokens, numeric);
+        runInferencePrefill(model, training_state, generation_state, tokens, numeric);
         model->backward(1.0f, false, 1.0f);
         
         // TODO(REWRITE): Use GradNorm::measureGradientNorms() instead of deleted gradientMetrics()
@@ -592,7 +602,7 @@ TestResult level5_tokenizer_loss_alignment(GRIM::LanguageModel* model, GRIM::Tok
     
     if (number_tokens.size() >= 2) {
         auto numeric = makeNumericSideChannel(number_tokens.size());
-        runInferencePrefill(model, number_tokens, numeric);
+        runInferencePrefill(model, training_state, generation_state, number_tokens, numeric);
         model->backward(1.0f, false, 1.0f);
         
         // TODO(REWRITE): Use GradNorm::measureGradientNorms() instead of deleted gradientMetrics()
@@ -616,12 +626,15 @@ TestResult level5_tokenizer_loss_alignment(GRIM::LanguageModel* model, GRIM::Tok
 //  Should produce "abcabcabc..." pattern.
 //======================================================//
 
-TestResult level6_autoregressive_emergence(GRIM::LanguageModel* model, GRIM::Tokenizer::UniByte* tokenizer) {
+TestResult level6_autoregressive_emergence(GRIM::LanguageModel* model, GRIM::TrainingState* training_state, GRIM::GenerationState* generation_state, ::ParameterRegistry::StartupParameterRegistry* parameter_registry, GRIM::Tokenizer::UniByte* tokenizer) {
     TestResult result;
     result.name = "LEVEL 6: Autoregressive emergence test";
     result.passed = true;
     
     PROOF_LOG("Testing autoregressive pattern learning...");
+    if (!parameter_registry) {
+        throw std::runtime_error("level6_autoregressive_emergence: parameter_registry is NULL");
+    }
     
     const auto& cfg = model->getConfig();
     
@@ -655,7 +668,7 @@ TestResult level6_autoregressive_emergence(GRIM::LanguageModel* model, GRIM::Tok
         
         // Forward pass
         auto numeric = makeNumericSideChannel(tokens.size());
-        runInferencePrefill(model, tokens, numeric);
+        runInferencePrefill(model, training_state, generation_state, tokens, numeric);
         
         // Compute approximate loss (we'd need full loss computation here)
         float loss = 1.0f;  // Placeholder
@@ -664,10 +677,10 @@ TestResult level6_autoregressive_emergence(GRIM::LanguageModel* model, GRIM::Tok
         model->backward(loss, false, 1.0f / tokens.size());
         
         // Update
-        GRIM::launchAdamWStep(model->parameterGroups(), lr,
+        GRIM::launchAdamWStep(parameter_registry->requireParameterGroups("level6_autoregressive_emergence"), lr,
                               GRIM::HyperParameters::ADAMW_WEIGHT_DECAY,
                               opt_step.step,
-                              model->getTrainingState().stream_ctrl.getPrimaryStream());
+                              training_state->stream_ctrl.getPrimaryStream());
         
         if ((step + 1) % 20 == 0) {
             PROOF_LOG("Step " + std::to_string(step + 1) + "/" + std::to_string(num_steps));
@@ -686,7 +699,7 @@ TestResult level6_autoregressive_emergence(GRIM::LanguageModel* model, GRIM::Tok
     
     for (int i = 0; i < max_gen; ++i) {
         auto numeric = makeNumericSideChannel(generated.size());
-        std::vector<float> logits = runInferencePrefill(model, generated, numeric);
+        std::vector<float> logits = runInferencePrefill(model, training_state, generation_state, generated, numeric);
         
         // Greedy decode: pick argmax
         int next_token = 0;
@@ -765,7 +778,7 @@ TestResult level6_autoregressive_emergence(GRIM::LanguageModel* model, GRIM::Tok
 //  Test Runner
 //======================================================//
 
-void runAllTests(GRIM::LanguageModel* model, GRIM::Tokenizer::UniByte* tokenizer, int level = 0) {
+void runAllTests(GRIM::LanguageModel* model, GRIM::TrainingState* training_state, GRIM::GenerationState* generation_state, ::ParameterRegistry::StartupParameterRegistry* parameter_registry, GRIM::Tokenizer::UniByte* tokenizer, int level = 0) {
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════════╗\n";
     std::cout << "║           GRIM-text Causality Proof Test Suite                 ║\n";
@@ -777,37 +790,37 @@ void runAllTests(GRIM::LanguageModel* model, GRIM::Tokenizer::UniByte* tokenizer
     // Run tests based on level
     if (level == 0 || level == 1) {
         std::cout << "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
-        results.push_back(level1_single_token_causality(model, tokenizer));
+        results.push_back(level1_single_token_causality(model, training_state, generation_state, tokenizer));
         printResult(results.back());
     }
     
     if (level == 0 || level == 2) {
         std::cout << "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
-        results.push_back(level2_causal_mask_correctness(model, tokenizer));
+        results.push_back(level2_causal_mask_correctness(model, training_state, generation_state, tokenizer));
         printResult(results.back());
     }
     
     if (level == 0 || level == 3) {
         std::cout << "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
-        results.push_back(level3_gradient_reaches_embeddings(model, tokenizer));
+        results.push_back(level3_gradient_reaches_embeddings(model, training_state, generation_state, tokenizer));
         printResult(results.back());
     }
     
     if (level == 0 || level == 4) {
         std::cout << "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
-        results.push_back(level4_learning_changes_logits(model, tokenizer));
+        results.push_back(level4_learning_changes_logits(model, training_state, generation_state, parameter_registry, tokenizer));
         printResult(results.back());
     }
     
     if (level == 0 || level == 5) {
         std::cout << "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
-        results.push_back(level5_tokenizer_loss_alignment(model, tokenizer));
+        results.push_back(level5_tokenizer_loss_alignment(model, training_state, generation_state, tokenizer));
         printResult(results.back());
     }
     
     if (level == 0 || level == 6) {
         std::cout << "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
-        results.push_back(level6_autoregressive_emergence(model, tokenizer));
+        results.push_back(level6_autoregressive_emergence(model, training_state, generation_state, parameter_registry, tokenizer));
         printResult(results.back());
     }
     

@@ -174,7 +174,7 @@ void PlannedBatchesReady(TrainingContext& ctx) {
 
     auto shared_device_storage = GRIM::Batching::createBatchDeviceStorage(
         ctx.config,
-        ctx.model->getTrainingState().stream_ctrl.getPrimaryStream());
+        ctx.requireTrainingState("PlannedBatchesReady").stream_ctrl.getPrimaryStream());
 
     //======================================================//
     // Train payloads: materialize a host BatchPayload per assignment.

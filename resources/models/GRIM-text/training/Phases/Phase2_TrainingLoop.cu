@@ -796,7 +796,7 @@ BatchResult processBatch(
         }
     }
     auto& model = *ctx.model;
-    auto& training_state = model.getTrainingState();
+    auto& training_state = ctx.requireTrainingState("processBatch");
     GRIM::Autograd::AutogradLossState autograd_loss_state;
     cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
     // Sync slice: upload the prebuilt host BatchPayload once and reuse the
@@ -1127,8 +1127,8 @@ EpochResult runEpoch(
     }
     const int total_batches = static_cast<int>(batch_order.size());
     const auto epoch_start = std::chrono::steady_clock::now();
-    auto& training_state = ctx.model->getTrainingState();
-    auto& parameter_groups = ctx.model->parameterGroups();
+    auto& training_state = ctx.requireTrainingState("runEpoch");
+    auto& parameter_groups = parameter_registry.requireParameterGroups("runEpoch");
     float epoch_loss = 0.0f;
     int epoch_sequences_processed = 0;
 

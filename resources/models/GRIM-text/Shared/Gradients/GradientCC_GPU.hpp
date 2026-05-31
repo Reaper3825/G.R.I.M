@@ -96,7 +96,7 @@ struct ClipResult {
  *    via launchScaleGradients on each ParameterGroup's grad tensor
  * 4. Syncs stream internally — ClipResult is valid on return
  *
- * @param groups     ParameterGroup array (from model->parameterGroups())
+ * @param groups     ParameterGroup array (from StartupParameterRegistry::parameterGroups())
  * @param num_groups Number of groups in the array
  * @param scratch    TrainingState-owned GradNormScratch pointer; allocated here if null
  * @param config     Clip threshold

@@ -10,7 +10,6 @@
 #include <sstream>
 #include <vector>
 #include "SoftRestart.hpp"
-#include "../../GRIM/grim_language_model_cuda.hpp"
 #include "../Optimizers/AdamW/AdamW_Kernal_GPU.hpp"
 namespace GRIM {
 namespace SoftRestart {
@@ -28,15 +27,16 @@ void SoftRestartController::markRestart(int64_t global_step) {
     state_.last_restart_step = global_step;
 }
 
-void zeroOptimizerMoments(LanguageModel* model, GRIM::OptimizerStep* optimizer) {
-    if (!model) {
-        std::cerr << "[SoftRestart] Warning: model pointer is null, cannot zero moments." << std::endl;
-        return;
+void zeroOptimizerMoments(std::vector<ParameterGroup>& parameter_groups,
+                          TrainingState& training_state,
+                          GRIM::OptimizerStep* optimizer) {
+    if (parameter_groups.empty()) {
+        throw std::runtime_error("[SoftRestart] parameter_groups is empty, cannot zero moments");
     }
 
     // Reset all parameter-group moment buffers (m_state, v_state) via free function
-    GRIM::resetAdamWMoments(model->parameterGroups(),
-                            model->getTrainingState().stream_ctrl.getPrimaryStream());
+    GRIM::resetAdamWMoments(parameter_groups,
+                            training_state.stream_ctrl.getPrimaryStream());
 
     // OptimizerStep only tracks step count - moment buffers live in OptimizerState.
     // ParameterGroup borrows m_state/v_state, which are zeroed by resetAdamWMoments().
@@ -45,15 +45,16 @@ void zeroOptimizerMoments(LanguageModel* model, GRIM::OptimizerStep* optimizer) 
     }
 }
 
-void scaleOptimizerMoments(LanguageModel* model, float scale) {
-    if (!model) {
-        std::cerr << "[SoftRestart] Warning: model pointer is null, cannot scale moments." << std::endl;
-        return;
+void scaleOptimizerMoments(std::vector<ParameterGroup>& parameter_groups,
+                           TrainingState& training_state,
+                           float scale) {
+    if (parameter_groups.empty()) {
+        throw std::runtime_error("[SoftRestart] parameter_groups is empty, cannot scale moments");
     }
 
     // Scale all parameter-group moment buffers (m_state, v_state) via free function
-    GRIM::scaleAdamWMoments(model->parameterGroups(), scale,
-                            model->getTrainingState().stream_ctrl.getPrimaryStream());
+    GRIM::scaleAdamWMoments(parameter_groups, scale,
+                            training_state.stream_ctrl.getPrimaryStream());
     
     // Don't reset step counter - we're just damping momentum, not restarting
 }

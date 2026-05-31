@@ -2,9 +2,11 @@
 
 #include <cstddef>
 
-namespace GRIM {
+namespace ParameterRegistry {
+struct StartupParameterRegistry;
+}
 
-class LanguageModel;
+namespace GRIM {
 
 struct ModelStats {
     size_t total_params = 0;
@@ -15,6 +17,6 @@ struct ModelStats {
     float model_size_mb = 0.0f;
 };
 
-ModelStats computeModelStats(const LanguageModel& model);
+ModelStats computeModelStats(const ::ParameterRegistry::StartupParameterRegistry& parameter_registry);
 
 } // namespace GRIM

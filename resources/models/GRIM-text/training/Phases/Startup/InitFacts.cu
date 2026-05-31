@@ -105,9 +105,9 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
     }
 
     // ── Collect the live structural facts ────────────────────────────
-    auto* model = ctx.model.get();
     auto& embedding_layer = ctx.gpu_model.requireEmbeddingLayer("verifyAndDumpInitFacts");
     auto& lm_head_parameters = ctx.parameter_registry.requireLmHeadParameters("verifyAndDumpInitFacts");
+    const auto& parameter_groups = ctx.parameter_registry.requireParameterGroups("verifyAndDumpInitFacts");
     const float* emb_w_ptr = embedding_layer.tokenWeights().data;
     const float* lm_w_ptr  = lm_head_parameters.weights.data;
     const float* emb_g_ptr = embedding_layer.tokenWeights().grad_data();
@@ -119,14 +119,14 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
 
     int emb_groups = 0;
     int lm_groups  = 0;
-    for (const auto& g : model->parameterGroups()) {
+    for (const auto& g : parameter_groups) {
         if (!g.tensor) {
             throw std::runtime_error("verifyAndDumpInitFacts: parameter group '" + g.name + "' has NULL tensor");
         }
         if (g.tensor->data == emb_w_ptr) ++emb_groups;
         if (g.tensor->data == lm_w_ptr)  ++lm_groups;
     }
-    const int total_groups = static_cast<int>(model->parameterGroups().size());
+    const int total_groups = static_cast<int>(parameter_groups.size());
 
     // ── Assertions: fail loud on tying-contract violations ──────────
     // (Rule 20: structural invariants throw; success path is a single
@@ -230,7 +230,7 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
     emitInitFactKeyValue("telemetry[54].init_opt_groups_lm", fmtFloat(ctx.telemetry.last_obs[kInitOptGroupsLm]));
 
     emitInitFactLine("[INIT_FACTS] --- Parameter groups -----------------------------------------------------");
-    const auto& groups = model->parameterGroups();
+    const auto& groups = parameter_groups;
     for (std::size_t i = 0; i < groups.size(); ++i) {
         const auto& g = groups[i];
         if (!g.tensor) {

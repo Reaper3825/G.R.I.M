@@ -148,21 +148,12 @@ public:
     // Phase2 calls GradNorm::measureGradientNorms() + launchScaleGradients() directly.
     
 #ifdef USE_CUDA
-    // Training state access (for debugging/diagnostics)
-    const TrainingState& getTrainingState() const { return training_state_; }
-    TrainingState& getTrainingState() { return training_state_; }
-    const GenerationState& getGenerationState() const { return generation_state_; }
-    GenerationState& getGenerationState() { return generation_state_; }
-
     // Startup-owned GPU topology binding. LanguageModel borrows this durable
     // state; it does not own the assembled encoder/layer/MTP objects.
     void bindGpuModelState(GRIMText::Training::Startup::GpuModelState& gpu_model_state) noexcept {
         gpu_model_state_ = &gpu_model_state;
     }
 
-    // Parameter groups accessor (for direct gradient norm / clipping in Phase2)
-    const std::vector<ParameterGroup>& parameterGroups() const { return parameter_groups_; }
-    std::vector<ParameterGroup>& parameterGroups() { return parameter_groups_; }
 #endif
 
     // Config access
@@ -196,11 +187,6 @@ private:
     GRIMText::Training::Startup::GpuModelState* gpu_model_state_ = nullptr;
 #endif
     
-#ifdef USE_CUDA
-    TrainingState training_state_;
-    GenerationState generation_state_;
-    std::vector<ParameterGroup> parameter_groups_;  // Parameter groups for optimizer
-#endif
 };
 
 using StreamCallback = HyperParameters::GenerationStreamCallback;

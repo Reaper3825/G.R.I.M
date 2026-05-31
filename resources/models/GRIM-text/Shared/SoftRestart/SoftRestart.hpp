@@ -8,8 +8,10 @@
 #include <cstdint>
 #include <functional>
 #include <string_view>
+#include <vector>
 
-#include "../../GRIM/grim_language_model_cuda.hpp"
+#include "../TensorContract/TensorContract_GPU.hpp"
+#include "../TrainingState/TrainingState_GPU.hpp"
 #include "../Optimizers/OptimizerStep.hpp"
 
 namespace GRIM {
@@ -40,9 +42,13 @@ private:
     SoftRestartState state_;
 };
 
-// Zero-out the optimizer momentum/variance buffers without touching weights.
-void zeroOptimizerMoments(LanguageModel* model, OptimizerStep* optimizer);
-void scaleOptimizerMoments(LanguageModel* model, float scale);
+// Zero-out / scale the optimizer momentum/variance buffers without touching weights.
+void zeroOptimizerMoments(std::vector<ParameterGroup>& parameter_groups,
+                          TrainingState& training_state,
+                          OptimizerStep* optimizer);
+void scaleOptimizerMoments(std::vector<ParameterGroup>& parameter_groups,
+                           TrainingState& training_state,
+                           float scale);
 
 //======================================================//
 //  SoftRestart Logging Integration

@@ -16,6 +16,8 @@ struct StartupParameterRegistry;
 
 namespace GRIM {
 
+struct TrainingState;
+
 bool saveLanguageModelCheckpoint(
     LanguageModel& model,
     const GRIMText::Training::Startup::GpuModelState& gpu_model_state,
@@ -24,6 +26,7 @@ bool saveLanguageModelCheckpoint(
 
 bool loadLanguageModelCheckpoint(
     LanguageModel& model,
+    const TrainingState& training_state,
     const GRIMText::Training::Startup::GpuModelState& gpu_model_state,
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const std::string& path);

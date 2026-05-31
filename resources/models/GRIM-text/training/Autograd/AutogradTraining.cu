@@ -554,8 +554,8 @@ BackwardResult executeAutogradBackward(
     if (!loss_state.loss_tensor.grad_fn) {
         throw std::runtime_error("executeAutogradBackward: Loss tensor has no grad_fn - autograd chain broken");
     }
-    if (!ctx.model) {
-        throw std::runtime_error("executeAutogradBackward: model is NULL - registered parameter gradient lifecycle requires LanguageModel");
+    if (!ctx.parameter_registry) {
+        throw std::runtime_error("executeAutogradBackward: parameter_registry is NULL - registered parameter gradient lifecycle requires StartupParameterRegistry");
     }
     
         AG_INFO("Executing backward pass (accumulate=" << accumulate << ")");
@@ -564,7 +564,7 @@ BackwardResult executeAutogradBackward(
     // TensorContract ParameterGroup inventory. AutogradTraining must not walk
     // layer internals or special-case optional heads here.
     if (!accumulate) {
-        GRIM::zeroParameterGradients(ctx.model->parameterGroups(), ctx.stream);
+        GRIM::zeroParameterGradients(ctx.parameter_registry->requireParameterGroups("executeAutogradBackward"), ctx.stream);
     }
 
     // On accumulation slots, existing parameter grad buffers intentionally hold
@@ -872,12 +872,12 @@ bool verifyGradientsAreConnectedImpl(
     }
 
     if (model_hp.mtp_enabled && model_hp.mtp_k > 0) {
-        if (!ctx.model) {
-            AG_WARN("ctx.model is NULL during MTP gradient verification while MTP is enabled");
+        if (!ctx.parameter_registry) {
+            AG_WARN("ctx.parameter_registry is NULL during MTP gradient verification while MTP is enabled");
             ok = false;
         } else {
             bool saw_mtp_group = false;
-            for (ParameterGroup& group : ctx.model->parameterGroups()) {
+            for (ParameterGroup& group : ctx.parameter_registry->requireParameterGroups("verifyGradientsAreConnectedImpl")) {
                 if (group.type != ParamGroupType::MTP) {
                     continue;
                 }

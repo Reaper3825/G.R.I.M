@@ -98,7 +98,7 @@ void runOptimizerMomentDiagnostic(
     bool sync_diag)
 {
     namespace Internal = ::GRIMText::Training::Internal;
-    const auto& ts = ctx.model->getTrainingState();
+    const auto& ts = ctx.requireTrainingState("runOptimizerMomentDiagnostic");
     const auto moment_sample = sampleOptimizerMomentStats(ctx.optimizer.optimizer_state,
                                                          ts.stream_ctrl.getPrimaryStream(),
                                                          sync_diag);

@@ -15,6 +15,7 @@
 //    - FeedForward parameter-group inventory
 //    - MTP auxiliary-head parameter tensor owner
 //    - MTP auxiliary-head parameter-group inventory
+//    - Durable ParameterGroup inventory owner
 //
 //  Registration/validation/transaction ownership stays
 //  in ParameterGroupRegistration.cu.
@@ -94,6 +95,11 @@ struct StartupParameterRegistry {
     std::unique_ptr<GRIM::ExecutionBlockParameterTensors> execution_block_parameters;
     std::vector<GRIM::FeedForwardParameterTensors> feed_forward_parameter_tensors;
     std::vector<GRIM::MtpHeadParameterTensors> mtp_head_parameter_tensors;
+    // Single durable optimizer/autograd parameter inventory owner.
+    // ParameterGroup entries are non-owning views into the tensor owners in
+    // this registry and startup-owned layer topology. Do not mirror this
+    // vector on LanguageModel or TrainingContext.
+    std::vector<GRIM::ParameterGroup> parameter_groups;
 
     GRIM::LMHeadParameterTensors* getLmHeadParameters() {
         return lm_head_parameters.get();
@@ -165,6 +171,28 @@ struct StartupParameterRegistry {
 
     const std::vector<GRIM::MtpHeadParameterTensors>& mtpHeadParameterTensors() const {
         return mtp_head_parameter_tensors;
+    }
+
+    std::vector<GRIM::ParameterGroup>& parameterGroups() {
+        return parameter_groups;
+    }
+
+    const std::vector<GRIM::ParameterGroup>& parameterGroups() const {
+        return parameter_groups;
+    }
+
+    std::vector<GRIM::ParameterGroup>& requireParameterGroups(const char* caller) {
+        if (parameter_groups.empty()) {
+            throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.parameter_groups is empty");
+        }
+        return parameter_groups;
+    }
+
+    const std::vector<GRIM::ParameterGroup>& requireParameterGroups(const char* caller) const {
+        if (parameter_groups.empty()) {
+            throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.parameter_groups is empty");
+        }
+        return parameter_groups;
     }
 };
 

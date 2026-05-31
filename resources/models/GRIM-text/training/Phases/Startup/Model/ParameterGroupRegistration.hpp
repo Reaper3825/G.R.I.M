@@ -11,9 +11,11 @@ using cudaStream_t = CUstream_st*;
 #include <vector>
 
 namespace GRIM {
-class LanguageModel;
 struct OptimizerState;
 struct FeedForwardParameterTensors;
+namespace Config {
+struct AiConfigSnapshot;
+}
 namespace HyperParameters {
 struct EncoderLayerConstructionHP;
 }
@@ -35,8 +37,7 @@ namespace GRIMText::Training::Startup::ModelRegistration {
 //
 // Ownership contract:
 // - TrainingContext::parameter_registry owns migrated writable parameter bundles
-//   declared in ParameterRegistry.hpp.
-// - GRIM::LanguageModel owns the durable ParameterGroup vector only.
+//   and the durable ParameterGroup inventory declared in ParameterRegistry.hpp.
 // - This module discovers trainable tensors, writes non-owning ParameterGroup
 //   metadata, and binds externally owned optimizer moment tensors.
 // - OptimizerState owns Adam/RAdam moment tensor storage; ParameterGroup entries
@@ -47,10 +48,10 @@ void initializeFeedForwardParameterTensors(
     std::uint64_t weight_init_seed,
     cudaStream_t init_stream);
 
-void buildParameterGroups(GRIM::LanguageModel& model,
+void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,
                           GRIMText::Training::Startup::GpuModelState& gpu_model_state,
                           ::ParameterRegistry::StartupParameterRegistry& parameter_registry);
-void bindOptimizerState(GRIM::LanguageModel& model,
+void bindOptimizerState(::ParameterRegistry::StartupParameterRegistry& parameter_registry,
                         GRIM::OptimizerState& optimizer_state,
                         cudaStream_t stream);
 

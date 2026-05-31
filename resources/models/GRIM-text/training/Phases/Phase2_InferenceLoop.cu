@@ -42,6 +42,12 @@ void validateInferenceContext(const TrainingContext& ctx) {
     if (!ctx.model) {
         throw std::runtime_error("Phase2 payload inference: Phase1 context model is NULL");
     }
+    if (!ctx.training_state) {
+        throw std::runtime_error("Phase2 payload inference: Phase1 context training_state is NULL");
+    }
+    if (!ctx.generation_state) {
+        throw std::runtime_error("Phase2 payload inference: Phase1 context generation_state is NULL");
+    }
     if (!ctx.tokenizer) {
         throw std::runtime_error("Phase2 payload inference: Phase1 context tokenizer is NULL");
     }
@@ -130,6 +136,8 @@ std::vector<GRIM::Forward::MTPHeadForwardView> buildDetachedForwardMtpHeadViews(
 
 GRIM::GeneratedSequence generateOneSequence(
     GRIM::LanguageModel& model,
+    GRIM::TrainingState& training_state,
+    GRIM::GenerationState& generation_state,
     GRIMText::Training::Startup::GpuModelState& gpu_model_state,
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const GRIM::PBM::PBMState& pbm,
@@ -243,7 +251,6 @@ GRIM::GeneratedSequence generateOneSequence(
             sampling_cfg.bad_token_ids.end());
     }
 
-    auto& generation_state = model.getGenerationState();
     generation_state.resetSession();
 
     const auto scratch_hp = GRIM::HyperParameters::scratchBlockConstructionHP(config);
@@ -289,7 +296,6 @@ GRIM::GeneratedSequence generateOneSequence(
         -> std::vector<float> {
         validateInferenceForwardPayload(model, active_payload, "generateOneSequence");
 
-        auto& training_state = model.getTrainingState();
         if (!training_state.initialized) {
             throw std::runtime_error("generateOneSequence: training state not initialized");
         }
@@ -574,12 +580,14 @@ std::vector<GRIM::GeneratedSequence> generatePayloadSequences(
 
     std::vector<GRIM::GeneratedSequence> outputs;
     outputs.reserve(static_cast<size_t>(generation_hp.num_return_sequences));
+    auto& training_state = ctx.requireTrainingState("generatePayloadSequences");
+    auto& generation_state = ctx.requireGenerationState("generatePayloadSequences");
     for (int i = 0; i < generation_hp.num_return_sequences; ++i) {
         GenerationHP sequence_hp = generation_hp;
         if (sequence_hp.seed != 0) {
             sequence_hp.seed += static_cast<unsigned int>(i);
         }
-        outputs.push_back(generateOneSequence(*ctx.model, ctx.gpu_model, ctx.parameter_registry, ctx.pbm_owner.state(), prompt_payload, sequence_hp, stream_callback));
+        outputs.push_back(generateOneSequence(*ctx.model, training_state, generation_state, ctx.gpu_model, ctx.parameter_registry, ctx.pbm_owner.state(), prompt_payload, sequence_hp, stream_callback));
 
     }
     return outputs;

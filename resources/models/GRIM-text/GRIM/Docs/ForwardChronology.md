@@ -38,7 +38,7 @@ Training enters at the Phase 2 microbatch boundary and then routes into the shar
 
 2. **Upload the prepared batch payload**
    - File: `training/Phases/Phase2_TrainingLoop.cu`
-   - Call: `Batching::uploadBatchToDevice(model.getConfig(), model.getTrainingState(), payload)`
+   - Call: `Batching::uploadBatchToDevice(ctx.config, payload, ctx.requireTrainingState("processBatch").stream_ctrl.getPrimaryStream())`
    - Result: `BatchDeviceBindings`
 
 3. **Build/validate the training runtime context**
@@ -70,10 +70,10 @@ Training enters at the Phase 2 microbatch boundary and then routes into the shar
 ```mermaid
 flowchart TD
     A[processBatch in Phase2_TrainingLoop.cu] --> B[uploadBatchToDevice payload]
-    B --> C[autogradTrainingStep]
-    C --> D[initAutogradContext]
-   D --> E[materializeTrainingGraphActivations]
-    E --> F[executeModelForward]
+   B --> C[validateTrainingForwardInputs]
+   C --> D[buildTrainingForwardRequest]
+   D --> E[executeModelForward]
+   E --> F[initAutogradContext]
     F --> G[EncodingLayer::forward]
     G --> H[encoderSelfAttentionForward]
     H --> I[first broadcast: qkv_out plus b_qkv]

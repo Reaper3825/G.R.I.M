@@ -3,7 +3,7 @@
 #endif
 
 #include "ModelStats.hpp"
-#include "../GRIM/grim_language_model_cuda.hpp"
+#include "../training/Phases/Startup/Model/ParameterRegistry.hpp"
 
 #include <cstddef>
 #include <stdexcept>
@@ -13,17 +13,12 @@ namespace GRIM {
 
 #ifdef USE_CUDA
 
-::GRIM::ModelStats computeModelStats(const LanguageModel& model) {
-    // Rule 20 / Rule 26: parameter_groups_ is the single source of truth for
+::GRIM::ModelStats computeModelStats(const ::ParameterRegistry::StartupParameterRegistry& parameter_registry) {
+    // Rule 20 / Rule 26: registry-owned parameter_groups is the single source of truth for
     // parameter counts. Do not estimate from config formulas; registration is
     // the only durable inventory of trainable tensors after Pattern-B layer
     // construction and feature gates.
-    const auto& parameter_groups = model.parameterGroups();
-    if (parameter_groups.empty()) {
-        throw std::runtime_error(
-            "computeModelStats called before buildParameterGroups — parameter_groups is empty at " +
-            std::string(__FILE__) + ":" + std::to_string(__LINE__));
-    }
+    const auto& parameter_groups = parameter_registry.requireParameterGroups("computeModelStats");
 
     ::GRIM::ModelStats stats;
     for (const auto& group : parameter_groups) {

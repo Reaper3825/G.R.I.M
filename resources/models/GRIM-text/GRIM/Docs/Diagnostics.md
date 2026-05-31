@@ -35,7 +35,7 @@ Use CUDA events (`cudaEventRecord` / `cudaEventElapsedTime`) — not `cudaStream
 
 Encoder RMS in the clip result is optional telemetry. If the summed encoder-like group count is zero (disabled modules, early init, sparse routing), emit `NaN` for `encoder_rms_pre`; only non-finite sums with a positive count are fatal.
 
-Clip-result diagnostics validate the `ClipResult` contract directly: pre/post global RMS values must be finite and non-negative, post RMS must not exceed pre RMS, clipped results must actually reduce RMS, and unclipped results must preserve RMS within tolerance. GradNorm group-count checks compare `GradMetrics.groups_processed` against `ClipResult.measured_group_count`, not against `model->parameterGroups().size()`, so future filtered/fused clipping topologies remain valid.
+Clip-result diagnostics validate the `ClipResult` contract directly: pre/post global RMS values must be finite and non-negative, post RMS must not exceed pre RMS, clipped results must actually reduce RMS, and unclipped results must preserve RMS within tolerance. GradNorm group-count checks compare `GradMetrics.groups_processed` against `ClipResult.measured_group_count`, not against the registry-owned parameter-group vector size, so future filtered/fused clipping topologies remain valid.
 
 `emb_rms_pre` is logged in the main `POST-CLIP-MEASURE` line because embedding/LM-head rows are often the highest-variance component. The previous embedding RMS used for spike deltas lives in `TrainingLoopState.diagnostics.prev_emb_rms`; logging sinks only emit text and must not own evolving numeric diagnostic state.
 

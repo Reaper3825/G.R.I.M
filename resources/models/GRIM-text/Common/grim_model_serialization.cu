@@ -350,6 +350,7 @@ bool saveLanguageModelCheckpoint(
 
 bool loadLanguageModelCheckpoint(
     LanguageModel& model,
+    const TrainingState& training_state,
     const GRIMText::Training::Startup::GpuModelState& gpu_model_state,
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const std::string& path) {
@@ -396,7 +397,6 @@ bool loadLanguageModelCheckpoint(
     SerializationLayer layer(SerializationConfig{});
     SerializationLoadRequest request{};
     const auto& config = model.getConfig();
-    auto& training_state = model.getTrainingState();
     request.path = path;
     request.config = makeConfigView(config);
     const int vocab_size = HyperParameters::snapshotTrainingConfigField<int>(config, "vocab_size");

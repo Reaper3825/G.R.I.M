@@ -1,6 +1,6 @@
 # TrainingState — Training GPU Resource Controller
 
-Training-owned GPU resources MUST go through `TrainingState`, except the explicit batch-upload boundary now owned by `BatchPayload`/`BatchDeviceStorage`. Generation-owned GPU resources live in `GenerationState` (`Shared/InferenceState/GenerationState_GPU.hpp`) and are owned directly by `LanguageModel`, not smuggled through TrainingState.
+Training-owned GPU resources MUST go through `TrainingContext::training_state` / `TrainingContext::requireTrainingState(...)`, except the explicit batch-upload boundary now owned by `BatchPayload`/`BatchDeviceStorage`. `TrainingState` is no longer owned by `LanguageModel` and there is no `LanguageModel::getTrainingState()` tunnel; startup, Phase2, diagnostics, checkpointing, telemetry, and optimizer helpers must consume the direct `TrainingContext` owner or an explicit `TrainingState&` parameter. Generation-owned GPU resources live in `TrainingContext::generation_state` / `TrainingContext::requireGenerationState(...)`, not behind `LanguageModel`, and are not smuggled through TrainingState.
 
 `TrainingState` owns only training runtime state that is truly training-owned: stream/cuBLAS wrappers, execution-runtime diagnostics, class weights, and the read-gate telemetry workspace. The shared-forward sink is no longer a `TrainingState` or `GenerationState` field; each shared-forward call returns its own explicit `ModelForwardOutputs` owner, and Phase2 clears that Category 1 object at the forward/loss/backward or forward/sample boundary. The autograd loss root is also no longer TrainingState-owned; each training batch creates its own explicit `AutogradLossState` sibling and clears it through `AutogradStepScope`. It no longer owns per-batch token/target upload buffers. `Startup/Model/ModelGpuAssembly.cu` now brings up only the TrainingState-owned runtime pieces (`read_gate_accum_tensor`, stream/cuBLAS readiness, PBM readiness). Fixed-shape batch upload capacity is still authored on config, but the explicit reusable device owner for that boundary is `Shared/Batching/BatchDeviceStorage`, attached to `BatchPayload`, not `TrainingState`. Inference startup is not a manual CUDA/model/bootstrap path and is not owned by `grim_text_server`; `train_gpu --inference` calls `executePhase1(...INFERENCE)`, owns the returned `TrainingContext`, and exposes Phase2 inference through the internal worker endpoint.
 
@@ -34,19 +34,19 @@ Per-batch token/target/numeric/atom/slot-map/MTP upload buffers are no longer Tr
 
 | Resource | Access |
 |----------|--------|
-| CUDA streams | `training_state.stream_ctrl.getPrimaryStream()` |
+| CUDA streams | `ctx.requireTrainingState("caller").stream_ctrl.getPrimaryStream()` or an explicit `training_state.stream_ctrl.getPrimaryStream()` parameter borrow |
 | cuBLAS handle | `training_state.cublas_handle` (`CublasHandleOwner`; create with `outParam()`, borrow as raw `cublasHandle_t` through `.get()`) |
-| Parameter gradients | `Tensor.grad_` via registered `ParameterGroup` tensors; zero with `zeroParameterGradients(model.parameterGroups(), stream)` at the accumulation-window boundary |
-| Optimizer states | Not TrainingState-owned; `Training::OptimizerContext::optimizer_state` owns Adam/RAdam moment tensors and `Startup/Model/ParameterGroupRegistration` binds them to `LanguageModel` parameter groups. |
+| Parameter gradients | `Tensor.grad_` via registered `ParameterGroup` tensors; zero with `zeroParameterGradients(parameter_registry.requireParameterGroups(...), stream)` at the accumulation-window boundary |
+| Optimizer states | Not TrainingState-owned; `Training::OptimizerContext::optimizer_state` owns Adam/RAdam moment tensors and `Startup/Model/ParameterGroupRegistration` binds them to `StartupParameterRegistry` parameter groups. |
 
 Phase2 inference session state is separate from `TrainingState`:
 
 | Resource | Access |
 |----------|--------|
-| Persistent inference execution memory | `generation_state_.exec_memory` / `has_exec_memory` |
-| Decode-time selector result | `generation_state_.decode_selector` (`DecodeTimeResolveResult` from `Shared/Execution/DecodeTimeResolveResult.hpp`) |
-| Decode execution trace state | `generation_state_.execution_runtime.execution_trace_by_row` / `trace_state_by_row` |
-| Decode-time selector GPU scratch | `training_state.execution_runtime.decode_time_selector_runtime` / `generation_state_.execution_runtime.decode_time_selector_runtime` |
+| Persistent inference execution memory | `ctx.requireGenerationState("caller").exec_memory` / `has_exec_memory` |
+| Decode-time selector result | `ctx.requireGenerationState("caller").decode_selector` (`DecodeTimeResolveResult` from `Shared/Execution/DecodeTimeResolveResult.hpp`) |
+| Decode execution trace state | `ctx.requireGenerationState("caller").execution_runtime.execution_trace_by_row` / `trace_state_by_row` |
+| Decode-time selector GPU scratch | `training_state.execution_runtime.decode_time_selector_runtime` / `generation_state.execution_runtime.decode_time_selector_runtime` |
 
 Phase2 owns token-by-token generation chronology. `LanguageModel` does not own a generation session, KV cursor, KV cache, or single-token decode scratch; `training/Phases/Phase2_InferenceLoop.cu` explicitly builds its read-only `ModelForwardRequest` / `ModelForwardRuntimePayload`, calls `Forward::executeModelForward(...)`, and samples from the caller-authored `BatchPayload` objects it rebuilds each step.
 
@@ -64,7 +64,7 @@ Inference session state is **not** `TrainingState`: persistent execution memory,
 
 MTP shifted targets are payload-owned upload workspace, not `forward_outputs` and not TrainingState. `BatchDeviceStorage.mtp_shifted_targets_tensor` is head-major (`[mtp_k, max_tokens]`) so every MTP head receives a stable distinct slice through backward. Never reuse a single per-head scratch target buffer inside `computeAutogradMtpAuxiliaryLosses()`; the upload boundary must provide all head slices through `BatchDeviceBindings.d_mtp_shifted_targets` before loss assembly begins, while `mtp_k` remains payload/model-config semantics. The shared `MTP_GPU.cu` file owns only the accuracy kernel and must not reach into TrainingState, AutogradContext, or LM-head representation policy.
 
-Weight initialization seeds are **not** TrainingState-owned. Phase 1 owns the RNG hierarchy and passes `ctx.rng.init_seed` directly into `GRIMText::Training::Startup::assembleGpuModel(ctx.config, model.getTrainingState(), ctx.gpu_model, ctx.parameter_registry, weight_init_seed)`, where Pattern B layers self-allocate weights with deterministic offsets.
+Weight initialization seeds are **not** TrainingState-owned. Phase 1 owns the RNG hierarchy and passes `ctx.rng.init_seed` directly into `GRIMText::Training::Startup::assembleGpuModel(ctx.config, ctx.requireTrainingState("ModelAllocated"), ctx.gpu_model, ctx.parameter_registry, weight_init_seed)`, where Pattern B layers self-allocate weights with deterministic offsets.
 
 **Violations are bugs:**
 - ❌ Raw `cudaStream_t` locals
