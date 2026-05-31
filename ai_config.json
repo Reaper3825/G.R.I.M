@@ -544,7 +544,7 @@
                 "TrainingOrchestrator": "Info",
                 "Validation": "Info"
             },
-            "logging_default_level": "Debug",
+            "logging_default_level": "ATTN:Warning",
             "logging_equation_csv_enabled": true,
             "logging_group_overrides": {},
             "logging_initial_capacity": 2048,

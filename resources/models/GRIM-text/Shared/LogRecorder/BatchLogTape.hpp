@@ -8,7 +8,7 @@
 //  and dispatches to registered sinks at the batch boundary.
 //
 //  Key properties:
-//    - Pre-allocated buffer (no heap alloc in hot path)
+//    - Pre-allocated entry buffer (message strings may still grow as needed)
 //    - Level gate at record() time (sub-threshold = zero cost)
 //    - Phase-sorted output for readable step traces
 //    - Per-group level overrides for targeted debugging

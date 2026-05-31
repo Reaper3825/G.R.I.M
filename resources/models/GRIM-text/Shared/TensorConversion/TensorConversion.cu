@@ -106,6 +106,25 @@ __global__ void kernel_BSHD_bf16_to_BHSD(
     dst[dstIdx] = __bfloat162float(src[idx]);
 }
 
+__global__ void kernel_accumulate_BSHD_bf16_to_BHSD(
+    const __nv_bfloat16* __restrict__ src,
+    float* __restrict__ dst,
+    int B, int S, int H, int D)
+{
+    size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    size_t total = static_cast<size_t>(B) * S * H * D;
+
+    if (idx >= total) return;
+
+    int d = static_cast<int>(idx % D);
+    int h = static_cast<int>((idx / D) % H);
+    int s = static_cast<int>((idx / (static_cast<size_t>(D) * H)) % S);
+    int b = static_cast<int>(idx / (static_cast<size_t>(D) * H * S));
+
+    size_t dstIdx = (static_cast<size_t>(b) * H + h) * S * D + s * D + d;
+    dst[dstIdx] += __bfloat162float(src[idx]);
+}
+
 // ----------------------------------------------------------------------------
 // BHSD <-> BSM Conversions (attention heads to embedding format)
 // ----------------------------------------------------------------------------
@@ -399,6 +418,24 @@ void convert_BSHD_bf16_to_BHSD(const __nv_bfloat16* src, float* dst,
     size_t total = static_cast<size_t>(B) * S * H * D;
     int blocks = static_cast<int>((total + BLOCK_SIZE - 1) / BLOCK_SIZE);
     kernel_BSHD_bf16_to_BHSD<<<blocks, BLOCK_SIZE, 0, stream>>>(src, dst, B, S, H, D);
+}
+
+void accumulate_BSHD_bf16_to_BHSD(const __nv_bfloat16* src, float* dst,
+                                  int B, int S, int H, int D,
+                                  cudaStream_t stream)
+{
+    if (!src) throw std::runtime_error("accumulate_BSHD_bf16_to_BHSD: src is NULL");
+    if (!dst) throw std::runtime_error("accumulate_BSHD_bf16_to_BHSD: dst is NULL");
+    if (B <= 0 || S <= 0 || H <= 0 || D <= 0) {
+        throw std::runtime_error("accumulate_BSHD_bf16_to_BHSD: all dimensions must be > 0");
+    }
+    if (stream == nullptr || stream == 0) {
+        throw std::runtime_error("accumulate_BSHD_bf16_to_BHSD: stream is NULL - caller MUST provide valid CUDA stream");
+    }
+
+    size_t total = static_cast<size_t>(B) * S * H * D;
+    int blocks = static_cast<int>((total + BLOCK_SIZE - 1) / BLOCK_SIZE);
+    kernel_accumulate_BSHD_bf16_to_BHSD<<<blocks, BLOCK_SIZE, 0, stream>>>(src, dst, B, S, H, D);
 }
 
 void convert_BHSD_to_BSM(const float* src, float* dst,

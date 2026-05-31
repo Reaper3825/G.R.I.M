@@ -73,6 +73,20 @@ void convert_BSHD_bf16_to_BHSD(const __nv_bfloat16* src, float* dst,
                                cudaStream_t stream = nullptr);
 
 /**
+ * Accumulate BSHD (bf16) into BHSD (float) with layout change.
+ * Used for: direct backward accumulation paths that want
+ *   dst[b,h,s,d] += float(src[b,s,h,d])
+ * without staging a temporary FP32 BHSD buffer.
+ *
+ * src: [B, S, H, D] bf16 -> dst: [B, H, S, D] float (accumulate into dst)
+ *
+ * @throws std::runtime_error if src/dst/stream is NULL or any dimension <= 0
+ */
+void accumulate_BSHD_bf16_to_BHSD(const __nv_bfloat16* src, float* dst,
+                                  int B, int S, int H, int D,
+                                  cudaStream_t stream = nullptr);
+
+/**
  * Convert BHSD to BSM (separate heads to merged embedding)
  * Used for: Converting multi-head attention output to embedding format
  * src: [B, H, S, D] -> dst: [B, S, M] where M = H * D

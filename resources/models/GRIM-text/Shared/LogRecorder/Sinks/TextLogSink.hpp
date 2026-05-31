@@ -71,51 +71,30 @@ private:
         char ts_buf[32];
         std::strftime(ts_buf, sizeof(ts_buf), "%Y-%m-%d %H:%M:%S", std::localtime(&time_t));
 
-        // Build line
-        char line[768];
-        int written = 0;
+        std::ostringstream line;
+        line << '[' << ts_buf << ']'
+             << '[' << logGroupToString(e.group) << ']'
+             << '[' << logLevelToString(e.level) << ']'
+             << " s=" << e.global_step
+             << ' ' << e.tag << ": " << e.message;
 
         // Check for scalar metrics
         bool has_primary = !std::isnan(e.primary);
         bool has_secondary = !std::isnan(e.secondary);
 
         if (has_primary && has_secondary) {
-            written = std::snprintf(line, sizeof(line),
-                "[%s][%s][%s] s=%d %s: %s [%.6g, %.6g]",
-                ts_buf,
-                logGroupToString(e.group),
-                logLevelToString(e.level),
-                e.global_step,
-                e.tag,
-                e.message,
-                e.primary, e.secondary);
+            line << " [" << e.primary << ", " << e.secondary << ']';
         } else if (has_primary) {
-            written = std::snprintf(line, sizeof(line),
-                "[%s][%s][%s] s=%d %s: %s [%.6g]",
-                ts_buf,
-                logGroupToString(e.group),
-                logLevelToString(e.level),
-                e.global_step,
-                e.tag,
-                e.message,
-                e.primary);
-        } else {
-            written = std::snprintf(line, sizeof(line),
-                "[%s][%s][%s] s=%d %s: %s",
-                ts_buf,
-                logGroupToString(e.group),
-                logLevelToString(e.level),
-                e.global_step,
-                e.tag,
-                e.message);
+            line << " [" << e.primary << ']';
         }
-        (void)written;
+
+        const std::string rendered = line.str();
 
         if (file_.is_open()) {
-            file_ << line << '\n';
+            file_ << rendered << '\n';
         }
         if (write_to_stdout_) {
-            std::cout << line << '\n';
+            std::cout << rendered << '\n';
         }
     }
 

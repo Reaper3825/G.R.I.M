@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -70,61 +71,48 @@ private:
     }
 
     void writeEntry(const LogEntry& e) {
-        // Escape message for CSV (replace commas and newlines)
-        char safe_msg[520];
-        escapeCsv(e.message, safe_msg, sizeof(safe_msg));
-
-        char line[768];
-        int written = std::snprintf(line, sizeof(line),
-            "%d,%d,%d,%s,%s,%s,%s,%s,\"%s\"",
-            e.global_step,
-            e.batch_idx,
-            static_cast<int>(e.layer_idx),
-            logGroupToString(e.group),
-            logPhaseToString(e.phase),
-            e.tag,
-            formatFloat(e.primary),
-            formatFloat(e.secondary),
-            safe_msg);
-        (void)written;
+        const std::string safe_msg = escapeCsv(e.message);
 
         if (file_.is_open()) {
-            file_ << line << '\n';
+            file_ << e.global_step
+                  << ',' << e.batch_idx
+                  << ',' << static_cast<int>(e.layer_idx)
+                  << ',' << logGroupToString(e.group)
+                  << ',' << logPhaseToString(e.phase)
+                  << ',' << e.tag
+                  << ',' << formatFloat(e.primary)
+                  << ',' << formatFloat(e.secondary)
+                  << ",\"" << safe_msg << "\"\n";
         }
     }
 
-    /// Format float or "NaN" if not set
-    static const char* formatFloat(float v) {
-        // Use a thread-local buffer for each float
-        // Since we only ever write two floats per line, two buffers suffice
-        static thread_local char buf1[32], buf2[32];
-        static thread_local int which = 0;
-        char* buf = (which++ & 1) ? buf2 : buf1;
-
+    /// Format float or empty string if not set
+    static std::string formatFloat(float v) {
         if (std::isnan(v)) {
-            return "";
+            return {};
         }
-        std::snprintf(buf, 32, "%.6g", v);
-        return buf;
+        std::ostringstream oss;
+        oss << v;
+        return oss.str();
     }
 
     /// Escape string for CSV (double-quote escaping for inner quotes)
-    static void escapeCsv(const char* src, char* dst, size_t dst_size) {
-        size_t j = 0;
-        for (size_t i = 0; src[i] != '\0' && j < dst_size - 2; ++i) {
-            char c = src[i];
+    static std::string escapeCsv(const std::string& src) {
+        std::string dst;
+        dst.reserve(src.size());
+        for (char c : src) {
             if (c == '"') {
-                dst[j++] = '"';
-                if (j < dst_size - 1) dst[j++] = '"';
+                dst.push_back('"');
+                dst.push_back('"');
             } else if (c == '\n') {
-                dst[j++] = ' ';
+                dst.push_back(' ');
             } else if (c == '\r') {
                 // skip
             } else {
-                dst[j++] = c;
+                dst.push_back(c);
             }
         }
-        dst[j] = '\0';
+        return dst;
     }
 
     std::ofstream file_;

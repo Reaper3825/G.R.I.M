@@ -12,9 +12,14 @@
 //  Date: April 2026
 //======================================================//
 
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace GRIM::Logging {
 
@@ -269,10 +274,9 @@ inline const char* logPhaseToString(LogPhase phase) {
 //  Log Entry — single record on the tape
 //======================================================//
 //
-//  Fixed-size, no heap allocation. 576 bytes per entry.
-//  The 512-byte message buffer is large enough for most
-//  Rule 21 equation bodies; truncation is acceptable for
-//  the rare oversized entry.
+//  Host-owned entry. Tags stay fixed-size for compactness;
+//  messages use std::string so sinks receive the full text
+//  without truncating long Rule 21 diagnostics.
 //
 struct LogEntry {
     // Classification
@@ -289,8 +293,8 @@ struct LogEntry {
     // Tag — short identifier (e.g. "RMSNORM_EQUATION", "grad_clip")
     char tag[48];
 
-    // Message — pre-formatted text. Callers use snprintf into this.
-    char message[512];
+    // Message — pre-formatted text. Full payload is preserved.
+    std::string message;
 
     // Optional scalar metrics (NaN = not set)
     float primary;
@@ -309,15 +313,43 @@ struct LogEntry {
     }
 
     //--------------------------------------------------
+    // Convenience: store message text exactly as given
+    //--------------------------------------------------
+    void setMessageText(const char* text) {
+        message = text ? text : "";
+    }
+
+    void setMessageView(std::string_view text) {
+        message.assign(text.data(), text.size());
+    }
+
+    //--------------------------------------------------
     // Convenience: snprintf into message
     //--------------------------------------------------
     template<typename... Args>
     void setMessage(const char* fmt, Args... args) {
-        if (fmt) {
-            std::snprintf(message, sizeof(message), fmt, args...);
-        } else {
-            message[0] = '\0';
+        if (!fmt) {
+            message.clear();
+            return;
         }
+
+        std::array<char, 512> stack_buf{};
+        const int written = std::snprintf(stack_buf.data(), stack_buf.size(), fmt, args...);
+        if (written < 0) {
+            throw std::runtime_error("LogEntry::setMessage failed to format message");
+        }
+
+        if (static_cast<size_t>(written) < stack_buf.size()) {
+            message.assign(stack_buf.data(), static_cast<size_t>(written));
+            return;
+        }
+
+        std::vector<char> heap_buf(static_cast<size_t>(written) + 1, '\0');
+        const int rewritten = std::snprintf(heap_buf.data(), heap_buf.size(), fmt, args...);
+        if (rewritten != written) {
+            throw std::runtime_error("LogEntry::setMessage failed to finalize message");
+        }
+        message.assign(heap_buf.data(), static_cast<size_t>(rewritten));
     }
 
     //--------------------------------------------------
@@ -328,8 +360,6 @@ struct LogEntry {
         return layer_idx < other.layer_idx;
     }
 };
-
-static_assert(sizeof(LogEntry) <= 600, "LogEntry should be ~576 bytes; check alignment");
 
 //======================================================//
 //  BATCH_LOG macro — canonical recording point
@@ -397,8 +427,7 @@ static_assert(sizeof(LogEntry) <= 600, "LogEntry should be ~576 bytes; check ali
             _entry.global_step = (tape_ptr)->currentStep();                                \
             _entry.batch_idx   = (tape_ptr)->currentBatch();                               \
             _entry.setTag(tag_str);                                                        \
-            std::strncpy(_entry.message, (body_str), sizeof(_entry.message) - 1);          \
-            _entry.message[sizeof(_entry.message) - 1] = '\0';                             \
+            _entry.setMessageText(body_str);                                               \
             _entry.primary   = __builtin_nanf("");                                         \
             _entry.secondary = __builtin_nanf("");                                         \
             (tape_ptr)->record(_entry);                                                    \

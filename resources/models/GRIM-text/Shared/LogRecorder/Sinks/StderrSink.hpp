@@ -39,7 +39,7 @@ public:
                 logLevelToString(e.level),
                 e.global_step,
                 e.tag,
-                e.message);
+                e.message.c_str());
         }
     }
 

@@ -167,8 +167,8 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
     ctx.telemetry.last_obs[kInitOptGroupsLm]    = static_cast<float>(lm_groups);
 
     // Success path: full human-readable dump through the LogRecorder text sink.
-    // The text sink shares training_<session>.log with TrainingLogger. Each value gets its own
-    // line to avoid the fixed LogEntry message buffer truncating the payload.
+    // The text sink shares training_<session>.log with TrainingLogger. Each value keeps
+    // its own line so the init report stays readable and grep-friendly in the shared log.
     emitInitFactLine("[INIT_FACTS] ========================================================================");
     emitInitFactLine("[INIT_FACTS] Init structural facts: effective configuration and live model state");
     emitInitFactLine("[INIT_FACTS] ========================================================================");

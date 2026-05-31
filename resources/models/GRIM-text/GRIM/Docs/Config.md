@@ -76,7 +76,7 @@ RMSNorm shape/epsilon travels through the same grouped construction HP as the ow
 
 Encoder dropout is authored on the HyperParameters-owned surface, handed off through `LanguageModelConfig`, sliced through `EncoderLayerConstructionHP`, and passed to FFN construction through `FeedForwardLayerConstructionHP`. Do not add layer-local dropout defaults or copy `dropout_rate` through ad-hoc config structs.
 
-Config value logging is owned by `training/Phases/ConfigDump.{hpp,cu}`. Phase/startup modules may log lifecycle/status messages, but they MUST NOT print per-field config values (for example architecture dimensions, logging/tape knobs, telemetry lattice dimensions, or feature gate values) outside `ConfigDump`. If a value is useful in startup logs, add it to `ConfigDump` instead of emitting it at the consumer site.
+Config value logging is owned by `training/Phases/ConfigDump.{hpp,cu}`. Phase/startup modules may log lifecycle/status messages, but they MUST NOT print per-field config values (for example architecture dimensions, logging/tape knobs, telemetry lattice dimensions, or feature gate values) outside `ConfigDump`. `ConfigDump` should enumerate the finalized flat `training.config` snapshot (the registry-owned document after HyperParameters finalization/runtime sync), not maintain a second hand-authored per-field mirror of the config surface. If a value is useful in startup logs, add it to the finalized config boundary and let `ConfigDump` pick it up there instead of emitting it at the consumer site.
 
 ## Fail-loud defaults (Rule 20)
 Algorithmic config fields MUST default to `0` and throw if not loaded. Hardcoded defaults like `int max_seq_len = 512;` are forbidden — they hide silent fallbacks.

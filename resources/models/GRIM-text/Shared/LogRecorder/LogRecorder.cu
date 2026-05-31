@@ -293,7 +293,7 @@ void EmitModuleLog(const std::string& module_name,
         entry.global_step = static_cast<int32_t>(global_step);
         entry.batch_idx = tape->currentBatch();
         entry.setTag(module_name.c_str());
-        entry.setMessage("%.*s", static_cast<int>(std::min(message.size(), size_t(511))), message.data());
+        entry.setMessageView(message);
         entry.primary = __builtin_nanf("");
         entry.secondary = __builtin_nanf("");
         tape->emitImmediate(entry);
