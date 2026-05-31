@@ -15,7 +15,7 @@ namespace GRIM::Diagnostics {
 
 void runSpecialTokenDiagnostic(
     GRIMText::Training::TrainingContext& ctx,
-    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const GRIM::Batching::BatchPayload& payload,
     int batch_idx);
 

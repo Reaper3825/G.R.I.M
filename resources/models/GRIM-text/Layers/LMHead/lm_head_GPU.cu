@@ -362,14 +362,10 @@ void LMHeadLayer::forward(
         throw std::runtime_error("LMHeadLayer::forward: matmul input has null data - cannot compute weight gradient. "
             "Check encoder output and centering/PC1 buffers.");
     }
-    const float* a_cache = matmul_input->data;  // Explicit cache for grad_B = lm_input^T @ grad_output
-
     forward_outputs.logits_tensor = autograd::matmul(
         *matmul_input,
         *effective_weights,
         stream,
-        a_cache,
-        nullptr,  // matmul copies the effective B cache it needs for backward
         true  // transpose_b=true: logits = input @ W^T
     );
 

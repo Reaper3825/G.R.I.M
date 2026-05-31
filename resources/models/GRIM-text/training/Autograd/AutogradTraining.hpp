@@ -106,7 +106,7 @@ struct AutogradContext {
     // ═══════════════════════════════════════════════════════════════════════════
     ScratchBlockLayer* scratch_block = nullptr;
     ExecutionBlockLayer* execution_block = nullptr;
-    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry* parameter_registry = nullptr;
+    ::ParameterRegistry::StartupParameterRegistry* parameter_registry = nullptr;
 
     /** Model pointer for MTP head access in computeAutogradLoss; set by autogradTrainingStep. */
     LanguageModel* model = nullptr;
@@ -184,7 +184,7 @@ AutogradContext initAutogradContext(
     LMHeadLayer* lm_head,
     ScratchBlockLayer* scratch_block,
     ExecutionBlockLayer* execution_block,
-    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
     const Batching::BatchPayload& payload,

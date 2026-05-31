@@ -31,7 +31,7 @@ namespace GRIM::Diagnostics {
 void runPostOptimizerWeightTrace(
     GRIMText::Training::TrainingContext& ctx,
     GRIMText::Training::BatchResult& result,
-    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const GRIM::TrainingState& training_state,
     const std::vector<GRIM::ParameterGroup>& parameter_groups,
     const GRIM::HyperParameters::OptimizerUpdateHP& optimizer_hp,

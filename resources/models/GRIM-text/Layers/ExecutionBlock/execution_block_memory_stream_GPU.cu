@@ -793,16 +793,16 @@ Tensor crossAttentionReadImpl(
     auto H_view = Tensor::from_ptr(H_row, {row_tokens, dm}, stream, "exec_read_H_view");
 
     // Q = H_view @ W_Q_read  [row_tokens, hd]
-    Tensor Q = matmul(H_view, params.W_Q_read, stream, nullptr, nullptr, false);
+    Tensor Q = matmul(H_view, params.W_Q_read, stream);
 
     // K_proj = key_embeds @ W_K_read  [nv, hd]
-    Tensor K_proj = matmul(memory.key_embeds, params.W_K_read, stream, nullptr, nullptr, false);
+    Tensor K_proj = matmul(memory.key_embeds, params.W_K_read, stream);
 
     // V_proj = state_embeds @ W_V_read  [nv, hd]
-    Tensor V_proj = matmul(memory.state_embeds, params.W_V_read, stream, nullptr, nullptr, false);
+    Tensor V_proj = matmul(memory.state_embeds, params.W_V_read, stream);
 
     // raw_scores = Q @ K_proj^T  [row_tokens, nv]
-    Tensor raw_scores = matmul(Q, K_proj, stream, nullptr, nullptr, true);
+    Tensor raw_scores = matmul(Q, K_proj, stream, true);
 
     // Scale by 1/sqrt(hd) (constant — no gradient needed)
     Tensor scaled_scores = mul_scalar(raw_scores, inv_sqrt_d, stream);
@@ -827,14 +827,14 @@ Tensor crossAttentionReadImpl(
     Tensor attn_weights = softmax(scaled_scores, h_tau, stream);
 
     // R = attn_weights @ V_proj  [row_tokens, hd]
-    Tensor R = matmul(attn_weights, V_proj, stream, nullptr, nullptr, false);
+    Tensor R = matmul(attn_weights, V_proj, stream);
 
     // proj = R @ W_O_read  [row_tokens, dm]
-    Tensor proj = matmul(R, params.W_O_read, stream, nullptr, nullptr, false);
+    Tensor proj = matmul(R, params.W_O_read, stream);
 
     // gate = sigmoid(H_view @ W_gate_read) [row_tokens, 1]
     // Composed from primitives: sigmoid(x) = reciprocal(add_scalar(exp(mul_scalar(x, -1)), 1))
-    Tensor gate_logits = matmul(H_view, params.W_gate_read, stream, nullptr, nullptr, false);
+    Tensor gate_logits = matmul(H_view, params.W_gate_read, stream);
     Tensor neg_logits = mul_scalar(gate_logits, -1.0f, stream);
     Tensor exp_neg = exp(neg_logits, stream);
     Tensor one_plus_exp = add_scalar(exp_neg, 1.0f, stream);

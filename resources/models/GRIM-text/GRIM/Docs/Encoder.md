@@ -33,6 +33,9 @@ PBM follows the same rule for forward-time ownership: Phase1 owns PBM initializa
 ## Dropout HP ownership
 Encoder and FFN dropout rates must come from `HyperParameters_GPU.hpp` → `EncoderLayerConstructionHP` → `FeedForwardLayerConstructionHP`. `EncodingLayer` stores the grouped encoder HP snapshot directly as `hp_`; `FeedForwardLayer` stores its grouped FFN HP snapshot directly as `hp_`. Do not reintroduce layer-local dropout defaults, thin FFN config wrappers, hidden PBM pointer state, or forward-runtime handle fields.
 
+## FFN parameter ownership
+FFN trainable tensors (`W_gate`, `W1`, `W2`, optional `b2`) are durable registry state owned by `ParameterRegistry::StartupParameterRegistry::feed_forward_parameter_tensors`. `ParameterGroupRegistration::initializeFeedForwardParameterTensors()` allocates and Xavier-initializes one bundle per encoder layer, then shared forward builds per-call `FeedForwardParameterViews` directly from `ModelForwardRequest::parameter_registry`. `GPUGrimEncoder`, `EncodingLayer`, and `FeedForwardLayer` do not borrow or cache FFN parameter views during construction. `FeedForwardLayer` stores HP only and `forward()` requires explicit registry-derived parameter views. Do not add `Tensor` members, borrowed-view fields, or weight accessors back to `Feed_Forward_GPU.hpp`.
+
 ## Encoder dimension HP ownership
 Encoder GQA/QKV derived dimensions (`head_dim`, `heads_per_kv_group`, `kv_dim`, `qkv_dim`, `is_gqa`) are computed on the HyperParameters-owned typed config surface before grouping assignment. `HyperparameterGroupings.hpp` only slices those finalized values into `EncoderLayerConstructionHP`; `Encoding_GPU.cu` must consume those fields directly from `hp_` and must not recompute config geometry in layer methods.
 

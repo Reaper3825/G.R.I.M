@@ -1464,7 +1464,7 @@ void executeStepCoordinatorImpl(
         flattened.requires_grad = padded.requires_grad;
         flattened.is_leaf = false;
 
-        work.trace_vec = autograd::matmul(flattened, params.W_trace, stream, flattened.data, nullptr);
+        work.trace_vec = autograd::matmul(flattened, params.W_trace, stream);
         work.trace_vec = autograd::add(work.trace_vec, params.b_trace, stream);
 
         cudaFreeAsync(d_slot1, stream);
@@ -1486,8 +1486,8 @@ void executeStepCoordinatorImpl(
     auto dec_12 = autograd::concat(work.context_enriched, trace_state, stream);
     auto decision_input = autograd::concat(dec_12, work.step_emb, stream);
 
-    auto query1 = autograd::matmul(decision_input, params.w_arg1_select, stream, decision_input.data, nullptr);
-    auto arg1_logits = autograd::matmul(query1, work.cand_hidden, stream, nullptr, nullptr, true);
+    auto query1 = autograd::matmul(decision_input, params.w_arg1_select, stream);
+    auto arg1_logits = autograd::matmul(query1, work.cand_hidden, stream, true);
     kernelApplyLogitMask<<<(V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         arg1_logits.data, arg1_logits.data, work.cand_mask.data, V_val);
     CUDA_CHECK_KERNEL();
@@ -1500,8 +1500,8 @@ void executeStepCoordinatorImpl(
     kernelCheckEntropyCollapse<<<1, kWarpSize, 0, stream>>>(
         work.p_arg1.data, V_val, LayerAccess::numericErrorFlag(layer), kStageEntropyArg1, layer.hp().entropy_collapse_threshold);
 
-    auto query2 = autograd::matmul(decision_input, params.w_arg2_select, stream, decision_input.data, nullptr);
-    auto arg2_logits = autograd::matmul(query2, work.cand_hidden, stream, nullptr, nullptr, true);
+    auto query2 = autograd::matmul(decision_input, params.w_arg2_select, stream);
+    auto arg2_logits = autograd::matmul(query2, work.cand_hidden, stream, true);
     kernelApplyLogitMask<<<(V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         arg2_logits.data, arg2_logits.data, work.cand_mask.data, V_val);
     CUDA_CHECK_KERNEL();
@@ -1530,7 +1530,7 @@ void executeStepCoordinatorImpl(
     // Op selection is DETACHED from arg selection (Option B).
     // op sees (context_enriched, trace_state, step_emb) only — same as decision_input.
     // arg selection cannot influence op selection through the gradient path.
-    auto op_logits = autograd::matmul(decision_input, params.W_op_select, stream, decision_input.data, nullptr);
+    auto op_logits = autograd::matmul(decision_input, params.W_op_select, stream);
     work.p_op = autograd::softmax(op_logits, temperature, stream);
     if (diag_out) {
         diag_out->op_logits_tensor = std::move(op_logits);
@@ -1608,8 +1608,8 @@ void executeStepCoordinatorImpl(
         }
 
         auto update_input = autograd::concat(trace_state, cur_encoded, stream);
-        auto candidate = autograd::matmul(update_input, params.W_reason_gate, stream, update_input.data, nullptr);
-        auto gate_logits = autograd::matmul(update_input, params.W_trace_gate, stream, update_input.data, nullptr);
+        auto candidate = autograd::matmul(update_input, params.W_reason_gate, stream);
+        auto gate_logits = autograd::matmul(update_input, params.W_trace_gate, stream);
 
         // Fix #5: Gated trace update — bounded interpolation replaces unbounded accumulation.
         // trace_state = sigmoid(gate_logits) * trace_state + (1 - sigmoid(gate_logits)) * candidate
@@ -1642,13 +1642,13 @@ void executeStepCoordinatorImpl(
     decode_input.is_leaf = true;
     cudaMemcpyAsync(decode_input.data, work.atom_new.data + 16, vid * sizeof(float), cudaMemcpyDeviceToDevice, stream);
 
-    auto decode_h = autograd::matmul(decode_input, params.w_decode_1, stream, decode_input.data, nullptr);
+    auto decode_h = autograd::matmul(decode_input, params.w_decode_1, stream);
     decode_h = autograd::add(decode_h, params.b_decode_1, stream);
 
     auto decode_act = autograd::silu(decode_h, stream, decode_h.data);
 
-    work.v_decoded = autograd::matmul(decode_act, params.w_decode_2, stream, decode_act.data, nullptr);
-    work.result_emb = autograd::matmul(work.v_decoded, params.W_value_to_emb, stream, work.v_decoded.data, nullptr);
+    work.v_decoded = autograd::matmul(decode_act, params.w_decode_2, stream);
+    work.result_emb = autograd::matmul(work.v_decoded, params.W_value_to_emb, stream);
     work.result_emb = autograd::add(work.result_emb, params.b_value_to_emb, stream);
     kernelCheckFinite<<<(dm + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         work.result_emb.data, dm, LayerAccess::numericErrorFlag(layer), kStageResultEmb, layer.hp().magnitude_limit);
@@ -1704,9 +1704,9 @@ void executeStepCoordinatorImpl(
     auto write_ctx_123 = autograd::concat(write_ctx_12, trace_state, stream);
     auto write_ctx = autograd::concat(write_ctx_123, work.step_emb, stream);
 
-    auto q_write = autograd::matmul(write_ctx, params.W_write_query, stream, write_ctx.data, nullptr);
+    auto q_write = autograd::matmul(write_ctx, params.W_write_query, stream);
 
-    auto K_proj = autograd::matmul(memory.key_embeds, params.W_write_key, stream, memory.key_embeds.data, nullptr);
+    auto K_proj = autograd::matmul(memory.key_embeds, params.W_write_key, stream);
 
     auto usage_norm = Tensor::zeros({1, V}, stream, "exec_usage_norm");
     kernelNormalizeUsage<<<1, kWarpSize, 0, stream>>>(usage_norm.data, memory.usage.data, V);
@@ -1718,11 +1718,10 @@ void executeStepCoordinatorImpl(
     //
     // content_scores = q_write @ K_proj^T → [1, V]
     auto content_scores = autograd::matmul(q_write, K_proj, stream,
-        q_write.data, K_proj.data, /*transpose_b=*/true);
+        /*transpose_b=*/true);
 
     // alpha_content = alpha [1,1] @ content_scores [1,V] → [1,V] (broadcast scalar multiply)
-    auto alpha_content = autograd::matmul(params.alpha, content_scores, stream,
-        params.alpha.data, content_scores.data, /*transpose_b=*/false);
+    auto alpha_content = autograd::matmul(params.alpha, content_scores, stream);
 
     // neg_usage: detached [1,V] = -usage_norm
     auto neg_usage = Tensor::zeros({1, V}, stream, "exec_neg_usage");
@@ -1731,8 +1730,7 @@ void executeStepCoordinatorImpl(
     CUDA_CHECK_KERNEL();
 
     // beta_usage = beta [1,1] @ neg_usage [1,V] → [1,V] (broadcast scalar multiply)
-    auto beta_usage = autograd::matmul(params.beta, neg_usage, stream,
-        params.beta.data, neg_usage.data, /*transpose_b=*/false);
+    auto beta_usage = autograd::matmul(params.beta, neg_usage, stream);
 
     // Fix #4: Pure CE classification for write slot.
     // No non-differentiable bonus_bias — forward and backward see the same function.
@@ -1757,7 +1755,7 @@ void executeStepCoordinatorImpl(
         work.state_new.data, work.result_emb.data, step_emb_ptr, dm);
     CUDA_CHECK_KERNEL();
 
-    work.key_new = autograd::matmul(work.result_emb, params.W_key_proj, stream, work.result_emb.data, nullptr);
+    work.key_new = autograd::matmul(work.result_emb, params.W_key_proj, stream);
     applyHardWriteback(layer, memory, stream, work);
     copyStepDiagnostics(work, diag_out, V_val, nop, V, dm, stream);
     captureStateAfterWriteAndCheckMutations(layer, memory, diag_out, stream);

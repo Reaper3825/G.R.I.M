@@ -15,6 +15,7 @@
 #include "../../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 #include "../../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
+#include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
 #include "../TensorContract/TensorContract_GPU.hpp"
 #include "ModelForwardOutputs.hpp"
 #include "../HyperParameters/HyperparameterGroupings.hpp"
@@ -189,8 +190,6 @@ void materializeForwardMtpLogits(
             *mtp_input,
             head.weight,
             request.stream,
-            mtp_input->data,
-            nullptr,
             true);
         logits_k = autograd::broadcast_add(logits_k, head.bias, request.stream);
         const auto& logits_shape = requireTensor2DShape(logits_k, "executeModelForward", "MTP head logits");
@@ -204,11 +203,34 @@ void materializeForwardMtpLogits(
     }
 }
 
+FeedForwardParameterViews feedForwardViewsFromRegistry(
+    const ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    int layer_idx,
+    bool use_bias,
+    const char* caller) {
+    const auto& parameters = parameter_registry.requireFeedForwardParameters(layer_idx, caller);
+    FeedForwardParameterViews views{};
+    views.W_gate = &parameters.W_gate;
+    views.W1 = &parameters.W1;
+    views.W2 = &parameters.W2;
+    if (use_bias) {
+        views.b2 = &parameters.b2;
+    }
+    return views;
+}
+
 }  // namespace
 
 void ModelForwardRequest::validate(const char* caller) const {
     if (!config) throw std::runtime_error(std::string(caller) + ": config is NULL");
     if (!gpu_encoder) throw std::runtime_error(std::string(caller) + ": gpu_encoder is NULL");
+    if (!parameter_registry) throw std::runtime_error(std::string(caller) + ": parameter_registry is NULL");
+    const int num_layers = HyperParameters::snapshotTrainingConfigField<int>(*config, "num_layers");
+    if (static_cast<int>(parameter_registry->feedForwardParameterTensors().size()) != num_layers) {
+        throw std::runtime_error(std::string(caller) + ": parameter_registry FFN tensor count mismatch. size=" +
+                                 std::to_string(parameter_registry->feedForwardParameterTensors().size()) +
+                                 " num_layers=" + std::to_string(num_layers));
+    }
     if (!this->pbm) throw std::runtime_error(std::string(caller) + ": pbm is NULL");
     if (!embedding_layer) throw std::runtime_error(std::string(caller) + ": embedding_layer is NULL");
     if (!lm_head) throw std::runtime_error(std::string(caller) + ": lm_head is NULL");
@@ -261,6 +283,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const bool scratch_block_execution_first_type_only = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "scratch_block_execution_first_type_only");
     const float dropout_rate = HyperParameters::snapshotTrainingConfigField<float>(*cfg, "dropout_rate");
     const int num_layers = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "num_layers");
+    const bool use_bias = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "use_bias");
     const bool use_layer_scale = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "use_layer_scale");
     const int execution_block_layer = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "execution_block_layer");
     const int execution_block_num_steps = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "execution_block_num_steps");
@@ -392,17 +415,13 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
             forward_outputs.embedding_gate_logits = autograd::matmul(
                 forward_outputs.embedding_gate_concat,
                 request.scratch_block->structuredGateWeight(),
-                request.stream,
-                forward_outputs.embedding_gate_concat.data,
-                nullptr);
+                request.stream);
         } else {
             Tensor gate_weight_view = request.scratch_block->structuredGateWeight().detach(request.stream);
             forward_outputs.embedding_gate_logits = autograd::matmul(
                 forward_outputs.embedding_gate_concat,
                 gate_weight_view,
-                request.stream,
-                nullptr,
-                nullptr);
+                request.stream);
         }
 
         forward_outputs.embedding_gate_values = autograd::sigmoid(
@@ -511,18 +530,19 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                     enc_param_views.layer_scale1 = &layer_scale1_view;
                     enc_param_views.layer_scale2 = &layer_scale2_view;
                 }
-                FeedForwardLayer* ffn_layer = enc_layer->getFfnLayer();
-                if (!ffn_layer) {
-                    throw std::runtime_error("ModelForward: Encoder layer " + std::to_string(layer_idx) + " FFN layer is NULL");
-                }
-                ffn_w_gate_view = ffn_layer->W_gate().detach(request.stream);
-                ffn_w1_view = ffn_layer->W1().detach(request.stream);
-                ffn_w2_view = ffn_layer->W2().detach(request.stream);
+                const FeedForwardParameterViews ffn_parameter_views = feedForwardViewsFromRegistry(
+                    *request.parameter_registry,
+                    layer_idx,
+                    use_bias,
+                    "executeModelForward(no_grad)");
+                ffn_w_gate_view = ffn_parameter_views.W_gate->detach(request.stream);
+                ffn_w1_view = ffn_parameter_views.W1->detach(request.stream);
+                ffn_w2_view = ffn_parameter_views.W2->detach(request.stream);
                 enc_param_views.ffn.W_gate = &ffn_w_gate_view;
                 enc_param_views.ffn.W1 = &ffn_w1_view;
                 enc_param_views.ffn.W2 = &ffn_w2_view;
-                if (ffn_layer->b2().data) {
-                    ffn_b2_view = ffn_layer->b2().detach(request.stream);
+                if (ffn_parameter_views.b2 && ffn_parameter_views.b2->data) {
+                    ffn_b2_view = ffn_parameter_views.b2->detach(request.stream);
                     enc_param_views.ffn.b2 = &ffn_b2_view;
                 }
                 enc_param_view_ptr = &enc_param_views;
@@ -594,6 +614,12 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 ? &forward_outputs.embedding_tensor
                 : &forward_outputs.encoder_layer_outputs.back();
             Tensor execution_read_augmented_input;
+            EncodingLayerParameterViews enc_param_views{};
+            enc_param_views.ffn = feedForwardViewsFromRegistry(
+                *request.parameter_registry,
+                layer_idx,
+                use_bias,
+                "executeModelForward(retained_graph)");
 
             if (exec_layer >= 0 && layer_idx > exec_layer
                 && request.execution_block
@@ -634,7 +660,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
             enc_layer->forward(
                 *layer_input, payload, *request.pbm, request.stream, request.cublas_handle,
                 forward_outputs,
-                request.batch_idx, dropout_enabled, layer_idx, nullptr);
+                request.batch_idx, dropout_enabled, layer_idx, &enc_param_views);
             Tensor layer_output = viewCommittedTensor(
                 forward_outputs.output_per_layer[static_cast<size_t>(layer_idx)],
                 request.stream,

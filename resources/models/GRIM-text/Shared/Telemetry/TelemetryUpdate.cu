@@ -155,7 +155,7 @@ void populateEBInjectionStreams(
     const GRIM::TrainingState& training_state,
     const TelemetryBatchInput& input,
     const GRIMText::Training::Startup::GpuModelState& gpu_model,
-    const GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry) {
+    const ::ParameterRegistry::StartupParameterRegistry& parameter_registry) {
 
     // Stream 21: EB_INJECT_GATE
     obs[21] = input.inject_gate_mean;
@@ -201,7 +201,7 @@ void populateRmsGammaStreams(
     float* obs,
     const GRIM::Config::AiConfigSnapshot& config,
     const GRIMText::Training::Startup::GpuModelState& gpu_model_state,
-    const GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry) {
+    const ::ParameterRegistry::StartupParameterRegistry& parameter_registry) {
     auto* gpu_encoder = gpu_model_state.gpu_encoder.get();
     if (!gpu_encoder) {
         throw std::runtime_error(
@@ -272,7 +272,7 @@ void updateTelemetryObservations(
     GRIMText::Training::TrainingContext& ctx,
     const GRIM::TrainingState& training_state,
     const GRIMText::Training::Startup::GpuModelState& gpu_model,
-    const GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const TelemetryBatchInput& input,
     const GRIM::GradNorm::GradMetrics& gm) {
 

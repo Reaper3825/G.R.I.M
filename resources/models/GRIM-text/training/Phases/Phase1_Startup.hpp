@@ -231,7 +231,7 @@ struct TrainingContext {
     // owns the flattened LM-head tensor bundle plus migrated subsystem tensor
     // owners; ParameterGroupRegistration sequences assembly, validation, and
     // inventory publication against this durable registry.
-    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry parameter_registry;
+    ::ParameterRegistry::StartupParameterRegistry parameter_registry;
 
     //==================================================//
     // Phase1-owned PLANNED BATCHES (PrecomputeBatchPayloads.plan.md)

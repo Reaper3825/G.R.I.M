@@ -30,83 +30,65 @@ namespace GRIM {
 //  FeedForwardLayer Implementation
 //======================================================//
 
-//--------------------------------------------------
-// Self-allocating constructor (Pattern B: layer self-management)
-// Follows ScratchBlockLayer pattern: allocate → ensure_grad → Xavier init
-//--------------------------------------------------
-FeedForwardLayer::FeedForwardLayer(const HyperParameters::FeedForwardLayerConstructionHP& hp, uint64_t seed,
-                                   cudaStream_t init_stream)
-    : hp_(hp) {
-    if (!init_stream) {
-        throw std::runtime_error("FeedForwardLayer: init_stream is NULL");
-    }
-    const float residual_projection_init_gain = hp_.residual_projection_init_gain;
+namespace {
+
+void validateFeedForwardHP(const HyperParameters::FeedForwardLayerConstructionHP& hp,
+                           const char* context) {
+    const float residual_projection_init_gain = hp.residual_projection_init_gain;
     if (!std::isfinite(residual_projection_init_gain) || residual_projection_init_gain <= 0.0f) {
-        throw std::runtime_error("FeedForwardLayer: residual_projection_init_gain must be a positive finite value from feedForwardLayerConstructionHP");
+        throw std::runtime_error(std::string(context) + ": residual_projection_init_gain must be a positive finite value from feedForwardLayerConstructionHP");
     }
-    if (hp_.d_model <= 0) {
-        throw std::runtime_error("FeedForwardLayer: d_model must be > 0, got " + std::to_string(hp_.d_model));
+    if (hp.d_model <= 0) {
+        throw std::runtime_error(std::string(context) + ": d_model must be > 0, got " + std::to_string(hp.d_model));
     }
-    if (hp_.d_ff <= 0) {
-        throw std::runtime_error("FeedForwardLayer: d_ff must be > 0, got " + std::to_string(hp_.d_ff));
+    if (hp.d_ff <= 0) {
+        throw std::runtime_error(std::string(context) + ": d_ff must be > 0, got " + std::to_string(hp.d_ff));
     }
-    if (!std::isfinite(hp_.dropout_rate) || hp_.dropout_rate < 0.0f || hp_.dropout_rate >= 1.0f) {
-        throw std::runtime_error("FeedForwardLayer: dropout_rate must be finite and in [0,1), got " +
-                                 std::to_string(hp_.dropout_rate));
+    if (!std::isfinite(hp.dropout_rate) || hp.dropout_rate < 0.0f || hp.dropout_rate >= 1.0f) {
+        throw std::runtime_error(std::string(context) + ": dropout_rate must be finite and in [0,1), got " +
+                                 std::to_string(hp.dropout_rate));
     }
-    
-    const int d_model = hp_.d_model;
-    const int d_ff = hp_.d_ff;
-    const cudaStream_t stream = init_stream;
-    
-    // W_gate: [d_model, d_ff] gate projection (SiLU applied to this path)
-    W_gate_ = Tensor::zeros({d_model, d_ff}, stream, "ffn_w_gate");
-    W_gate_.requires_grad_();
-    W_gate_.ensure_grad();
-    Tensor::xavier_uniform_(W_gate_, seed, stream);
-    
-    // W1: [d_model, d_ff] up projection (linear, no activation)
-    W1_ = Tensor::zeros({d_model, d_ff}, stream, "ffn_w1");
-    W1_.requires_grad_();
-    W1_.ensure_grad();
-    Tensor::xavier_uniform_(W1_, seed + 1, stream);
-    
-    // W2: [d_ff, d_model] down projection
-    // Residual projection startup init: Xavier with explicit depth gain
-    W2_ = Tensor::zeros({d_ff, d_model}, stream, "ffn_w2");
-    W2_.requires_grad_();
-    W2_.ensure_grad();
-    Tensor::xavier_uniform_with_gain_(W2_, seed + 2, residual_projection_init_gain, stream);
-    
-    if (hp_.use_bias) {
-        b2_ = Tensor::zeros({1, d_model}, stream, "ffn_b2");
-        b2_.requires_grad_();
-        b2_.ensure_grad();
+}
+
+void validateFeedForwardParameterViews(const FeedForwardParameterViews& views,
+                                       const HyperParameters::FeedForwardLayerConstructionHP& hp,
+                                       const char* context) {
+    if (!views.W_gate || !views.W1 || !views.W2) {
+        throw std::runtime_error(std::string(context) + ": W_gate/W1/W2 parameter view pointers are required");
     }
-    
-    std::fprintf(stderr, "[FeedForwardLayer] SwiGLU self-allocated weights: W_gate=[%d,%d], W1=[%d,%d], W2=[%d,%d], residual_projection_init_gain=%.6f\n",
-                 d_model, d_ff, d_model, d_ff, d_ff, d_model, residual_projection_init_gain);
+    if (!views.W_gate->data || !views.W1->data || !views.W2->data) {
+        throw std::runtime_error(std::string(context) + ": W_gate/W1/W2 parameter tensors must have allocated data");
+    }
+    if (hp.use_bias) {
+        if (!views.b2 || !views.b2->data) {
+            throw std::runtime_error(std::string(context) + ": hp.use_bias=true requires allocated b2 parameter tensor");
+        }
+    } else if (views.b2 && views.b2->data) {
+        throw std::runtime_error(std::string(context) + ": hp.use_bias=false but b2 parameter tensor is allocated");
+    }
+}
+
+} // namespace
+
+//--------------------------------------------------
+// Compute-layer constructor. Durable tensors live in ParameterRegistry.
+//--------------------------------------------------
+FeedForwardLayer::FeedForwardLayer(const HyperParameters::FeedForwardLayerConstructionHP& hp)
+    : hp_(hp) {
+    validateFeedForwardHP(hp_, "FeedForwardLayer::FeedForwardLayer");
 }
 
 FeedForwardLayer::~FeedForwardLayer() {
-    // Tensors clean up via RAII
+    // No parameter ownership.
 }
 
 FeedForwardLayer::FeedForwardLayer(FeedForwardLayer&& other) noexcept
-    : hp_(other.hp_)
-    , W_gate_(std::move(other.W_gate_))
-    , W1_(std::move(other.W1_))
-    , W2_(std::move(other.W2_))
-    , b2_(std::move(other.b2_)) {
+    : hp_(other.hp_) {
 }
 
 FeedForwardLayer& FeedForwardLayer::operator=(FeedForwardLayer&& other) noexcept {
     if (this != &other) {
         hp_ = other.hp_;
-        W_gate_ = std::move(other.W_gate_);
-        W1_ = std::move(other.W1_);
-        W2_ = std::move(other.W2_);
-        b2_ = std::move(other.b2_);
     }
     return *this;
 }
@@ -122,7 +104,7 @@ void FeedForwardLayer::forward(const Tensor& input,
                                uint64_t batch_idx,
                                bool dropout_enabled,
                                int layer_idx,
-                               const FeedForwardParameterViews* parameter_views) {
+                               const FeedForwardParameterViews& parameter_views) {
     if (layer_idx < 0) {
         throw std::runtime_error("FeedForwardLayer::forward: layer_idx must be >= 0, got " + std::to_string(layer_idx));
     }
@@ -133,10 +115,11 @@ void FeedForwardLayer::forward(const Tensor& input,
     Tensor& ffn_linear1_out = forward_outputs.ffn_linear1_out_per_layer[layer_slot];
     Tensor& ffn_swiglu_out = forward_outputs.ffn_swiglu_out_per_layer[layer_slot];
     Tensor& ffn_out = forward_outputs.ffn_out_per_layer[layer_slot];
-    const Tensor& W_gate = (parameter_views && parameter_views->W_gate) ? *parameter_views->W_gate : W_gate_;
-    const Tensor& W1 = (parameter_views && parameter_views->W1) ? *parameter_views->W1 : W1_;
-    const Tensor& W2 = (parameter_views && parameter_views->W2) ? *parameter_views->W2 : W2_;
-    const Tensor& b2 = (parameter_views && parameter_views->b2) ? *parameter_views->b2 : b2_;
+    validateFeedForwardParameterViews(parameter_views, hp_, "FeedForwardLayer::forward");
+    const Tensor& W_gate = *parameter_views.W_gate;
+    const Tensor& W1 = *parameter_views.W1;
+    const Tensor& W2 = *parameter_views.W2;
+    const Tensor* b2 = parameter_views.b2;
 
     // Rule 20: Crash on invalid weights
     if (!W_gate.data || !W1.data || !W2.data) {
@@ -159,16 +142,14 @@ void FeedForwardLayer::forward(const Tensor& input,
     //--------------------------------------------------
     // SwiGLU Gate Path: gate = SiLU(input @ W_gate)
     //--------------------------------------------------
-    ffn_gate_out = autograd::matmul(input, W_gate, stream,
-                                    input.data, nullptr);
+    ffn_gate_out = autograd::matmul(input, W_gate, stream);
     ffn_silu_out = autograd::silu(ffn_gate_out, stream,
                                   ffn_gate_out.data);
 
     //--------------------------------------------------
     // SwiGLU Up Path: up = input @ W1
     //--------------------------------------------------
-    ffn_linear1_out = autograd::matmul(input, W1, stream,
-                                       input.data, nullptr);
+    ffn_linear1_out = autograd::matmul(input, W1, stream);
 
     //--------------------------------------------------
     // SwiGLU Combine: hidden = gate ⊙ up
@@ -191,11 +172,10 @@ void FeedForwardLayer::forward(const Tensor& input,
     if (!ffn_swiglu_out.data) {
         throw std::runtime_error("FeedForwardLayer::forward: ffn_swiglu_out.data is NULL before W2 matmul");
     }
-    ffn_out = autograd::matmul(ffn_swiglu_out, W2, stream,
-                               ffn_swiglu_out.data, nullptr);
+    ffn_out = autograd::matmul(ffn_swiglu_out, W2, stream);
     
-    if (hp_.use_bias && b2.data) {
-        ffn_out = autograd::broadcast_add(ffn_out, b2, stream);
+    if (hp_.use_bias) {
+        ffn_out = autograd::broadcast_add(ffn_out, *b2, stream);
     }
 }
 

@@ -319,6 +319,7 @@ void registerTopLevelParameters(LanguageModel& model,
 }
 
 void registerEncoderParameters(Startup::GpuModelState& gpu_model_state,
+                               ParameterRegistry::StartupParameterRegistry& parameter_registry,
                                Registrar& registrar,
                                const GRIM::Config::AiConfigSnapshot& config) {
     auto* gpu_encoder = gpu_model_state.gpu_encoder.get();
@@ -331,6 +332,11 @@ void registerEncoderParameters(Startup::GpuModelState& gpu_model_state,
     const bool use_bias = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "use_bias");
     const bool freeze_learned_rms_gammas = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "freeze_learned_rms_gammas");
     const bool use_layer_scale = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "use_layer_scale");
+    if (static_cast<int>(parameter_registry.feedForwardParameterTensors().size()) != num_layers) {
+        throw std::runtime_error("[buildParameterGroups] feed_forward_parameter_tensors size must equal config.num_layers. size=" +
+                                 std::to_string(parameter_registry.feedForwardParameterTensors().size()) +
+                                 " num_layers=" + std::to_string(num_layers));
+    }
 
     for (int layer = 0; layer < num_layers; ++layer) {
         GRIM::EncodingLayer* enc = gpu_encoder->getLayer(layer);
@@ -366,28 +372,8 @@ void registerEncoderParameters(Startup::GpuModelState& gpu_model_state,
                            use_bias,
                            "config.use_bias=false");
 
-        registrar.addTensor(prefix + "_ffn_w_gate",
-                    enc->ffnWGate(),
-                    ParamGroupType::FFN,
-                    ParamStatsBucket::ENCODER,
-                    layer);
-        registrar.addTensor(prefix + "_ffn_w1",
-                    enc->ffnW1(),
-                    ParamGroupType::FFN,
-                    ParamStatsBucket::ENCODER,
-                    layer);
-        registrar.addTensor(prefix + "_ffn_w2",
-                    enc->ffnW2(),
-                    ParamGroupType::FFN,
-                    ParamStatsBucket::ENCODER,
-                    layer);
-        registrar.addConfigGatedTensor(prefix + "_ffn_b2",
-                           enc->ffnB2(),
-                           ParamGroupType::FFN,
-                           ParamStatsBucket::ENCODER,
-                           layer,
-                           use_bias,
-                           "config.use_bias=false");
+        auto& ffn_parameters = parameter_registry.requireFeedForwardParameters(layer, "registerEncoderParameters");
+        ParameterRegistry::registerFeedForwardParameters(ffn_parameters, layer, use_bias, registrar);
 
         if (freeze_learned_rms_gammas) {
             if (enc->rms1Gamma().has_grad()) {
@@ -704,6 +690,78 @@ void validateParameterRegistrationConfig(const GRIM::Config::AiConfigSnapshot& c
 
 } // namespace
 
+void initializeFeedForwardParameterTensors(
+    std::vector<GRIM::FeedForwardParameterTensors>& feed_forward_parameter_tensors,
+    const GRIM::HyperParameters::EncoderLayerConstructionHP& encoder_hp,
+    std::uint64_t weight_init_seed,
+    cudaStream_t init_stream) {
+    if (!init_stream) {
+        throw std::runtime_error("initializeFeedForwardParameterTensors: init_stream is NULL");
+    }
+    if (encoder_hp.num_layers <= 0) {
+        throw std::runtime_error("initializeFeedForwardParameterTensors: encoder_hp.num_layers must be > 0, got " +
+                                 std::to_string(encoder_hp.num_layers));
+    }
+    if (encoder_hp.d_model <= 0) {
+        throw std::runtime_error("initializeFeedForwardParameterTensors: encoder_hp.d_model must be > 0, got " +
+                                 std::to_string(encoder_hp.d_model));
+    }
+    if (encoder_hp.d_ff <= 0) {
+        throw std::runtime_error("initializeFeedForwardParameterTensors: encoder_hp.d_ff must be > 0, got " +
+                                 std::to_string(encoder_hp.d_ff));
+    }
+    if (!feed_forward_parameter_tensors.empty()) {
+        throw std::runtime_error("initializeFeedForwardParameterTensors: registry FFN tensor vector is already initialized; refusing to allocate twice. size=" +
+                                 std::to_string(feed_forward_parameter_tensors.size()));
+    }
+
+    const auto ffn_hp = GRIM::HyperParameters::feedForwardLayerConstructionHP(encoder_hp);
+    const float residual_projection_init_gain = ffn_hp.residual_projection_init_gain;
+    if (!std::isfinite(residual_projection_init_gain) || residual_projection_init_gain <= 0.0f) {
+        throw std::runtime_error("initializeFeedForwardParameterTensors: residual_projection_init_gain must be positive finite");
+    }
+    if (!std::isfinite(ffn_hp.dropout_rate) || ffn_hp.dropout_rate < 0.0f || ffn_hp.dropout_rate >= 1.0f) {
+        throw std::runtime_error("initializeFeedForwardParameterTensors: dropout_rate must be finite and in [0,1), got " +
+                                 std::to_string(ffn_hp.dropout_rate));
+    }
+
+    feed_forward_parameter_tensors.resize(static_cast<std::size_t>(encoder_hp.num_layers));
+    for (int layer = 0; layer < encoder_hp.num_layers; ++layer) {
+        auto& tensors = feed_forward_parameter_tensors[static_cast<std::size_t>(layer)];
+        const std::uint64_t ffn_seed = weight_init_seed + 4 + static_cast<std::uint64_t>(layer) * 10ULL;
+
+        tensors.W_gate = GRIM::Tensor::zeros({ffn_hp.d_model, ffn_hp.d_ff}, init_stream, "ffn_w_gate");
+        tensors.W_gate.requires_grad_();
+        tensors.W_gate.ensure_grad();
+        GRIM::Tensor::xavier_uniform_(tensors.W_gate, ffn_seed, init_stream);
+
+        tensors.W1 = GRIM::Tensor::zeros({ffn_hp.d_model, ffn_hp.d_ff}, init_stream, "ffn_w1");
+        tensors.W1.requires_grad_();
+        tensors.W1.ensure_grad();
+        GRIM::Tensor::xavier_uniform_(tensors.W1, ffn_seed + 1, init_stream);
+
+        tensors.W2 = GRIM::Tensor::zeros({ffn_hp.d_ff, ffn_hp.d_model}, init_stream, "ffn_w2");
+        tensors.W2.requires_grad_();
+        tensors.W2.ensure_grad();
+        GRIM::Tensor::xavier_uniform_with_gain_(tensors.W2, ffn_seed + 2, residual_projection_init_gain, init_stream);
+
+        if (ffn_hp.use_bias) {
+            tensors.b2 = GRIM::Tensor::zeros({1, ffn_hp.d_model}, init_stream, "ffn_b2");
+            tensors.b2.requires_grad_();
+            tensors.b2.ensure_grad();
+        }
+    }
+
+    const cudaError_t sync_err = cudaStreamSynchronize(init_stream);
+    if (sync_err != cudaSuccess) {
+        throw std::runtime_error(std::string("initializeFeedForwardParameterTensors: cudaStreamSynchronize failed: ") +
+                                 cudaGetErrorString(sync_err));
+    }
+
+    emitInfo("[initializeFeedForwardParameterTensors] Initialized registry-owned FFN tensors for " +
+             std::to_string(encoder_hp.num_layers) + " layers");
+}
+
 void buildParameterGroups(LanguageModel& model,
                           Startup::GpuModelState& gpu_model_state,
                           ParameterRegistry::StartupParameterRegistry& parameter_registry) {
@@ -716,7 +774,7 @@ void buildParameterGroups(LanguageModel& model,
 
     Registrar registrar(rebuilt_groups, config);
     registerTopLevelParameters(model, parameter_registry, registrar, config);
-    registerEncoderParameters(gpu_model_state, registrar, config);
+    registerEncoderParameters(gpu_model_state, parameter_registry, registrar, config);
 
     registerScratchBlockParameters(model, registrar, config);
     registerExecutionBlockParameters(model, parameter_registry, registrar, config);

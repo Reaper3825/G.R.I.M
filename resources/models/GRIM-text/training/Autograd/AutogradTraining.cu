@@ -801,7 +801,15 @@ bool verifyGradientsAreConnectedImpl(
     }
 
     if (ctx.gpu_encoder) {
+        if (!ctx.parameter_registry) {
+            throw std::runtime_error("verifyGradientsAreConnectedImpl: gpu_encoder exists but ctx.parameter_registry is NULL");
+        }
         const int num_layers = model_hp.encoder_num_layers;
+        if (static_cast<int>(ctx.parameter_registry->feedForwardParameterTensors().size()) != num_layers) {
+            throw std::runtime_error("verifyGradientsAreConnectedImpl: feedForwardParameterTensors size mismatch. size=" +
+                                     std::to_string(ctx.parameter_registry->feedForwardParameterTensors().size()) +
+                                     " num_layers=" + std::to_string(num_layers));
+        }
         for (int layer = 0; layer < num_layers; ++layer) {
             auto* enc = ctx.gpu_encoder->getLayer(layer);
             if (!enc) {
@@ -830,10 +838,11 @@ bool verifyGradientsAreConnectedImpl(
             check(enc->attnBqkv(), "attnBqkv");
             check(enc->attnWo(), "attnWo");
             check(enc->attnBo(), "attnBo");
-            check(enc->ffnWGate(), "ffnWGate");
-            check(enc->ffnW1(), "ffnW1");
-            check(enc->ffnW2(), "ffnW2");
-            check(enc->ffnB2(), "ffnB2");
+            auto& ffn_parameters = ctx.parameter_registry->requireFeedForwardParameters(layer, "verifyGradientsAreConnectedImpl");
+            check(ffn_parameters.W_gate, "ffnWGate");
+            check(ffn_parameters.W1, "ffnW1");
+            check(ffn_parameters.W2, "ffnW2");
+            check(ffn_parameters.b2, "ffnB2");
             check(enc->layerScale1(), "layerScale1");
             check(enc->layerScale2(), "layerScale2");
         }

@@ -207,7 +207,7 @@ std::vector<int> buildLmValidPositionsOrThrow(
 
 void runLogitScaleDiagnostic(
     GRIMText::Training::TrainingContext& ctx,
-    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const GRIM::Batching::BatchPayload& payload,
     const GRIM::Tensor& logits_tensor,
     const GRIM::Tensor& lm_head_input_tensor,

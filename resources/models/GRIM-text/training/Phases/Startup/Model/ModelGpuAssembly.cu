@@ -14,6 +14,7 @@
 #include <cublas_v2.h>
 
 #include "ModelGpuAssembly.hpp"
+#include "ParameterGroupRegistration.hpp"
 #include "../../../../GRIM/grim_language_model_cuda.hpp"
 #include "../../../../Layers/Encoding/Encoding_GPU.hpp"
 #include "../../../../Shared/Execution/DecodeTimeNumPolicy.hpp"
@@ -335,7 +336,7 @@ void initializeInferenceRuntime(const ::GRIM::Config::AiConfigSnapshot& model_cf
                                ::GRIM::GenerationState& generation_state,
                                const ::GRIM::PBM::PBMStateOwner& pbm_owner,
                                const GpuModelState& gpu_model_state,
-                               const ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry) {
+                               const ::ParameterRegistry::StartupParameterRegistry& parameter_registry) {
     constexpr const char* caller = "Startup::initializeInferenceRuntime";
     requireRuntimeNotInitialized(training_state, caller, "inference runtime");
 
@@ -446,7 +447,7 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
                       ::GRIM::TrainingState& training_state,
                       const ::GRIM::PBM::PBMStateOwner& pbm_owner,
                       GpuModelState& gpu_model_state,
-                      ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+                      ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
                       uint64_t weight_init_seed) {
     const auto init_hp = GRIM::HyperParameters::gpuModelInitializationHP(model_cfg);
 
@@ -483,12 +484,18 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
         std::cout << "[assembleGpuModel] Encoder startup resources prepared" << std::endl;
         std::cout << "✓ Encoder using explicit init stream; PBM stays on the Phase1 forward boundary\n";
 
+        ModelRegistration::initializeFeedForwardParameterTensors(
+            parameter_registry.feedForwardParameterTensors(),
+            encoder_hp,
+            weight_init_seed,
+            init_stream);
+
         gpu_model_state.gpu_encoder = std::make_unique<GRIM::GPUGrimEncoder>(
             encoder_hp,
             init_stream,
             weight_init_seed);
         verifyEncoderLayersReady(*gpu_model_state.gpu_encoder, init_hp.num_layers, kAssembleGpuModelCaller);
-        std::cout << "✓ Encoder layers self-allocated weights\n";
+        std::cout << "✓ Encoder layers bound registry-owned FFN weights\n";
 
         //======================================================//
         //  2) Build persistent Embedding layer (Pattern B)
@@ -579,7 +586,7 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
 
         std::cout << "✓ GPU model layer assembly complete\n";
         std::cout << "  - Attention: GPU-accelerated\n";
-        std::cout << "  - FFN: GPU-accelerated with fused GELU\n";
+        std::cout << "  - FFN: GPU-accelerated SwiGLU with registry-owned parameters\n";
         std::cout << "  - Layer Norm: GPU-accelerated\n";
 
         if (init_hp.use_flash_attention) {

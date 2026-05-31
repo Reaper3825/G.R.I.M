@@ -85,9 +85,9 @@ public:
     //--------------------------------------------------
     EncodingLayer() = default;
     
-    /// Self-allocating constructor — layer owns its weights
+    /// Constructor — encoder owns attention/RMS tensors; FFN tensors are registry-owned
     /// @param hp_snapshot Grouped encoder construction HP from HyperparameterGroupings.hpp
-    /// @param seed Base PRNG seed. Offsets: +0 W_qkv, +1 W_o, +2 FFN W1, +3 FFN W2
+    /// @param seed Base PRNG seed. Offsets: +0 W_qkv, +1 W_o
     /// @param init_stream CUDA stream for self-allocation during startup/model assembly
     EncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp_snapshot,
                   uint64_t seed,
@@ -165,16 +165,6 @@ public:
     Tensor& attnWo() { return W_o_; }
     Tensor& attnBo() { return b_o_; }
     
-    // FFN weights (delegates to FeedForwardLayer, SwiGLU)
-    // Rule 20: ffn_ MUST be initialized - crash if null
-    Tensor& ffnWGate() { return ffn_->W_gate(); }
-    Tensor& ffnW1() { return ffn_->W1(); }
-    Tensor& ffnW2() { return ffn_->W2(); }
-    Tensor& ffnB2() { return ffn_->b2(); }
-    
-    // Direct access to FFN layer (for autograd forward)
-    FeedForwardLayer* getFfnLayer() { return ffn_.get(); }
-    
     // LayerScale (Issue #109)
     Tensor& layerScale1() { return layer_scale1_; }
     Tensor& layerScale2() { return layer_scale2_; }
@@ -193,7 +183,7 @@ private:
     void validateReady(const char* context) const;
     void validateConstructionSnapshot(const char* context) const;
     
-    /// Pattern B: self-allocate and Xavier-init all weights + create FFN
+    /// Self-allocate encoder-owned tensors and create FFN compute sublayer
     void allocateWeights(uint64_t seed, cudaStream_t init_stream);
     
     HyperParameters::EncoderLayerConstructionHP hp_{};
@@ -213,7 +203,7 @@ private:
     Tensor W_o_;           // [d_model, d_model]
     Tensor b_o_;           // [d_model]
     
-    // FFN layer (owns its own weights as Tensors)
+    // FFN compute layer. Durable FFN tensors are supplied through explicit forward views.
     std::unique_ptr<FeedForwardLayer> ffn_;
     
     // LayerScale parameters (Issue #109: reduces correlation buildup)

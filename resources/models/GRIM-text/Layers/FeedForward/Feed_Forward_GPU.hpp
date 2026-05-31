@@ -42,17 +42,14 @@ struct FeedForwardParameterViews {
 
 class FeedForwardLayer {
 public:
-    // Rule 20: Default constructor deleted - grouped construction HP + init stream REQUIRED
+    // Rule 20: Default constructor deleted - grouped construction HP + registry-owned parameters REQUIRED
     FeedForwardLayer() = delete;
     
-    /// Self-allocating constructor (Pattern B: layer self-management)
-    /// Allocates and Xavier-initializes W_gate, W1, W2, b2 on GPU.
-    /// Layer OWNS the memory (owns_data=true). Registers with autograd via ensure_grad().
-    /// @param hp     Grouped FFN construction HP snapshot, including residual_projection_init_gain
-    /// @param seed   Xavier initialization seed
-    /// @param init_stream CUDA stream for self-allocation during startup/model assembly
-    explicit FeedForwardLayer(const HyperParameters::FeedForwardLayerConstructionHP& hp, uint64_t seed,
-                              cudaStream_t init_stream);
+    /// Compute-layer constructor.
+    /// Durable FFN parameters are owned by ParameterRegistry::StartupParameterRegistry;
+    /// callers must pass explicit registry-derived views into forward().
+    /// @param hp Grouped FFN construction HP snapshot
+    explicit FeedForwardLayer(const HyperParameters::FeedForwardLayerConstructionHP& hp);
     
     ~FeedForwardLayer();
 
@@ -68,20 +65,6 @@ public:
     // Grouped HP snapshot
     //--------------------------------------------------
     const HyperParameters::FeedForwardLayerConstructionHP& hp() const noexcept { return hp_; }
-
-    //--------------------------------------------------
-    // Weight Management (Pattern B: self-allocated)
-    //--------------------------------------------------
-    
-    // Tensor weight accessors (for training/serialization/buildParameterGroups)
-    Tensor& W1() { return W1_; }
-    Tensor& W_gate() { return W_gate_; }
-    Tensor& W2() { return W2_; }
-    Tensor& b2() { return b2_; }
-    const Tensor& W1() const { return W1_; }
-    const Tensor& W_gate() const { return W_gate_; }
-    const Tensor& W2() const { return W2_; }
-    const Tensor& b2() const { return b2_; }
 
     //--------------------------------------------------
     // Forward Pass - Autograd writing retained FFN tensors into the sink
@@ -107,8 +90,8 @@ public:
     void forward(const Tensor& input,
              cudaStream_t stream, cublasHandle_t cublas_handle,
              Forward::ModelForwardOutputs& forward_outputs,
-             uint64_t batch_idx = 0, bool dropout_enabled = false, int layer_idx = 0,
-             const FeedForwardParameterViews* parameter_views = nullptr);
+             uint64_t batch_idx, bool dropout_enabled, int layer_idx,
+             const FeedForwardParameterViews& parameter_views);
 
     //--------------------------------------------------
     // NOTE: Backward Pass handled by autograd
@@ -117,13 +100,6 @@ public:
 
 private:
     HyperParameters::FeedForwardLayerConstructionHP hp_{};
-
-    // Weight Tensors with autograd (requires_grad=true)
-    // SwiGLU uses three projections: gate, up, down
-    Tensor W_gate_; // [d_model, d_ff] - gate projection (SiLU applied)
-    Tensor W1_;     // [d_model, d_ff] - up projection (linear)
-    Tensor W2_;     // [d_ff, d_model] - down projection
-    Tensor b2_;     // [d_model]       - down projection bias
 };
 
 } // namespace GRIM

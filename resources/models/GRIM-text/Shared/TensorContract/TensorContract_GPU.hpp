@@ -1116,15 +1116,13 @@ cublasHandle_t get_autograd_cublas_handle();
  * Creates MatMulGradFn node if either input requires_grad
  * Requires: call set_autograd_cublas_handle() first
  *
- * TAPE-BASED: Uses external cache pointers for backward pass.
- * If a_cache/b_cache is nullptr, uses tensor data directly (assumes it persists).
- * 
- * @param a_cache External cache for A (needed if B requires grad)
- * @param b_cache External cache for B (needed if A requires grad)
+ * TAPE-BASED: Saves owned forward copies of A/B internally for backward.
+ * Callers must pass the actual tensors only; there is no external cache
+ * plumbing on the public API.
+ *
  * @param transpose_b If true, computes A @ B^T instead of A @ B
  */
 Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream = nullptr,
-              const float* a_cache = nullptr, const float* b_cache = nullptr,
               bool transpose_b = false);
 
 /**

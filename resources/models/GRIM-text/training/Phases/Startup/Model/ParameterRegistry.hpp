@@ -11,6 +11,8 @@
 //    - DecodeTimeSlotSelector parameter-group inventory
 //    - ExecutionBlock durable parameter tensor owner
 //    - ExecutionBlock parameter-group inventory
+//    - FeedForward durable per-layer parameter tensor owner
+//    - FeedForward parameter-group inventory
 //    - MTP auxiliary-head parameter tensor owner
 //    - MTP auxiliary-head parameter-group inventory
 //
@@ -75,14 +77,22 @@ struct MtpHeadParameterTensors {
     Tensor bias;    // [vocab_size]
 };
 
+struct FeedForwardParameterTensors {
+    Tensor W_gate;  // [d_model, d_ff]
+    Tensor W1;      // [d_model, d_ff]
+    Tensor W2;      // [d_ff, d_model]
+    Tensor b2;      // [1, d_model] when config.use_bias=true
+};
+
 } // namespace GRIM
 
-namespace GRIMText::Training::Startup::ModelRegistration::ParameterRegistry {
+namespace ParameterRegistry {
 
 struct StartupParameterRegistry {
     std::unique_ptr<GRIM::LMHeadParameterTensors> lm_head_parameters;
     std::unique_ptr<GRIM::DecodeTimeSlotSelector> decode_time_slot_selector;
     std::unique_ptr<GRIM::ExecutionBlockParameterTensors> execution_block_parameters;
+    std::vector<GRIM::FeedForwardParameterTensors> feed_forward_parameter_tensors;
     std::vector<GRIM::MtpHeadParameterTensors> mtp_head_parameter_tensors;
 
     GRIM::LMHeadParameterTensors* getLmHeadParameters() {
@@ -123,6 +133,32 @@ struct StartupParameterRegistry {
         return execution_block_parameters.get();
     }
 
+    std::vector<GRIM::FeedForwardParameterTensors>& feedForwardParameterTensors() {
+        return feed_forward_parameter_tensors;
+    }
+
+    const std::vector<GRIM::FeedForwardParameterTensors>& feedForwardParameterTensors() const {
+        return feed_forward_parameter_tensors;
+    }
+
+    GRIM::FeedForwardParameterTensors& requireFeedForwardParameters(int layer, const char* caller) {
+        if (layer < 0 || layer >= static_cast<int>(feed_forward_parameter_tensors.size())) {
+            throw std::runtime_error(std::string(caller) + ": missing FeedForwardParameterTensors for layer " +
+                                     std::to_string(layer) + " registry_size=" +
+                                     std::to_string(feed_forward_parameter_tensors.size()));
+        }
+        return feed_forward_parameter_tensors[static_cast<std::size_t>(layer)];
+    }
+
+    const GRIM::FeedForwardParameterTensors& requireFeedForwardParameters(int layer, const char* caller) const {
+        if (layer < 0 || layer >= static_cast<int>(feed_forward_parameter_tensors.size())) {
+            throw std::runtime_error(std::string(caller) + ": missing FeedForwardParameterTensors for layer " +
+                                     std::to_string(layer) + " registry_size=" +
+                                     std::to_string(feed_forward_parameter_tensors.size()));
+        }
+        return feed_forward_parameter_tensors[static_cast<std::size_t>(layer)];
+    }
+
     std::vector<GRIM::MtpHeadParameterTensors>& mtpHeadParameterTensors() {
         return mtp_head_parameter_tensors;
     }
@@ -146,6 +182,9 @@ using DecodeTimeSlotSelectorTensorParameterSpec =
 
 using ExecutionBlockTensorParameterSpec =
     TensorParameterSpec<GRIM::ExecutionBlockParameterTensors>;
+
+using FeedForwardTensorParameterSpec =
+    TensorParameterSpec<GRIM::FeedForwardParameterTensors>;
 
 using MtpHeadTensorParameterSpec =
     TensorParameterSpec<GRIM::MtpHeadParameterTensors>;
@@ -234,6 +273,18 @@ inline constexpr std::array<MtpHeadTensorParameterSpec, 2>
          GRIM::ParamGroupType::MTP, GRIM::ParamStatsBucket::ENCODER},
     }};
 
+inline constexpr std::array<FeedForwardTensorParameterSpec, 4>
+    kFeedForwardTensorParameters = {{
+        {"ffn_w_gate", &GRIM::FeedForwardParameterTensors::W_gate,
+         GRIM::ParamGroupType::FFN, GRIM::ParamStatsBucket::ENCODER},
+        {"ffn_w1", &GRIM::FeedForwardParameterTensors::W1,
+         GRIM::ParamGroupType::FFN, GRIM::ParamStatsBucket::ENCODER},
+        {"ffn_w2", &GRIM::FeedForwardParameterTensors::W2,
+         GRIM::ParamGroupType::FFN, GRIM::ParamStatsBucket::ENCODER},
+        {"ffn_b2", &GRIM::FeedForwardParameterTensors::b2,
+         GRIM::ParamGroupType::FFN, GRIM::ParamStatsBucket::ENCODER},
+    }};
+
 template <typename RegistrarT>
 inline void registerDecodeTimeSlotSelectorParameters(
     GRIM::DecodeTimeSlotSelector& selector,
@@ -279,4 +330,35 @@ inline void registerMtpHeadParameters(
     }
 }
 
-} // namespace GRIMText::Training::Startup::ModelRegistration::ParameterRegistry
+template <typename RegistrarT>
+inline void registerFeedForwardParameters(
+    GRIM::FeedForwardParameterTensors& feed_forward_parameters,
+    int layer_index,
+    bool use_bias,
+    RegistrarT& registrar) {
+    if (layer_index < 0) {
+        throw std::runtime_error("registerFeedForwardParameters: layer_index must be non-negative");
+    }
+
+    const std::string prefix = "layer" + std::to_string(layer_index) + "_";
+    for (const auto& spec : kFeedForwardTensorParameters) {
+        if (spec.tensor_member == &GRIM::FeedForwardParameterTensors::b2) {
+            registrar.addConfigGatedTensor(prefix + spec.name,
+                                           feed_forward_parameters.*(spec.tensor_member),
+                                           spec.type,
+                                           spec.stats_bucket,
+                                           layer_index,
+                                           use_bias,
+                                           "config.use_bias=false");
+            continue;
+        }
+
+        registrar.addTensor(prefix + spec.name,
+                            feed_forward_parameters.*(spec.tensor_member),
+                            spec.type,
+                            spec.stats_bucket,
+                            layer_index);
+    }
+}
+
+} // namespace ParameterRegistry

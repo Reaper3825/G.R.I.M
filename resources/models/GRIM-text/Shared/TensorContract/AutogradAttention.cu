@@ -68,7 +68,7 @@ static void requireEncoderAttentionHP(const GRIM::HyperParameters::EncoderSelfAt
  *   grad_A = grad_C @ B^T  [M,N] @ [N,K] = [M,K]
  *   grad_B = A^T @ grad_C  [K,M] @ [M,N] = [K,N]
  *
- * TAPE-BASED: Does NOT allocate. References external caches and writes directly to grad buffers.
+ * TAPE-BASED: Saves owned forward copies of A/B for backward and writes directly to grad buffers.
  * 
  * ISSUE #48 FIX: Stores stable data (shapes, grad pointers, grad_fn) instead of Tensor* 
  * which may become dangling after the forward function returns.
@@ -184,33 +184,33 @@ struct MatMulGradFn : public GradFn {
         }
     }
     
-    // ISSUE #51 FIX: Copy cache data to owned buffers instead of storing dangling pointers.
-    // Same contract as GeluGradFn::set_cache_copy / RMSNormGradFn::set_cache_copy.
-    void set_cache_copy(const float* a_cache, const float* b_cache, int m, int k, int n, 
+    // ISSUE #51 FIX: Copy forward data to owned buffers instead of storing dangling pointers.
+    // Same owned-save pattern as GeluGradFn::set_cache_copy / RMSNormGradFn::set_cache_copy.
+    void set_cache_copy(const float* a_forward, const float* b_forward, int m, int k, int n, 
                         cublasHandle_t handle, cudaStream_t stream, bool transB = false) {
         transpose_b = transB;
         M = m; K = k; N = n;
         cublas_handle = handle;
         cache_stream = stream;
         
-        // Validate that required caches are provided
-        if (a_requires_grad && !b_cache) {
+        // Validate that required forward tensors are available for owned copies.
+        if (a_requires_grad && !b_forward) {
             throw std::runtime_error(
-                "MatMulGradFn::set_cache_copy: b_cache is NULL but input_a requires grad "
-                "(A.grad=true requires B cache for grad_A)");
+                "MatMulGradFn::set_cache_copy: b_forward is NULL but input_a requires grad "
+                "(A.grad=true requires saved B for grad_A)");
         }
-        if (b_requires_grad && !a_cache) {
+        if (b_requires_grad && !a_forward) {
             throw std::runtime_error(
-                "MatMulGradFn::set_cache_copy: a_cache is NULL but input_b requires grad "
-                "(B.grad=true requires A cache for grad_B)");
+                "MatMulGradFn::set_cache_copy: a_forward is NULL but input_b requires grad "
+                "(B.grad=true requires saved A for grad_B)");
         }
         
-        // Allocate and copy A cache (needed for grad_B = A^T @ grad_C)
-        if (b_requires_grad && a_cache) {
+        // Allocate and copy A forward tensor (needed for grad_B = A^T @ grad_C)
+        if (b_requires_grad && a_forward) {
             const size_t a_size = static_cast<size_t>(m) * k;
             float* buffer = nullptr;
             cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), a_size * sizeof(float), "MatMulGradFn_cache_a");
-            cudaMemcpyAsync(buffer, a_cache, a_size * sizeof(float), cudaMemcpyDeviceToDevice, stream);
+            cudaMemcpyAsync(buffer, a_forward, a_size * sizeof(float), cudaMemcpyDeviceToDevice, stream);
             owned_cached_a = std::shared_ptr<float>(buffer, [](float* p) {
                 queueForDeferredCleanup(p);
             });
@@ -218,13 +218,13 @@ struct MatMulGradFn : public GradFn {
             AG_TRACE("[MatMulGradFn] Copied cache_a: %zu floats to %p\n", a_size, (void*)cached_a);
         }
         
-        // Allocate and copy B cache (needed for grad_A = grad_C @ B^T)
-        if (a_requires_grad && b_cache) {
+        // Allocate and copy B forward tensor (needed for grad_A = grad_C @ B^T)
+        if (a_requires_grad && b_forward) {
             // B shape: [K,N] normal or [N,K] if transposed
             const size_t b_size = static_cast<size_t>(k) * n;
             float* buffer = nullptr;
             cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), b_size * sizeof(float), "MatMulGradFn_cache_b");
-            cudaMemcpyAsync(buffer, b_cache, b_size * sizeof(float), cudaMemcpyDeviceToDevice, stream);
+            cudaMemcpyAsync(buffer, b_forward, b_size * sizeof(float), cudaMemcpyDeviceToDevice, stream);
             owned_cached_b = std::shared_ptr<float>(buffer, [](float* p) {
                 queueForDeferredCleanup(p);
             });
@@ -488,20 +488,15 @@ cublasHandle_t get_autograd_cublas_handle() {
 /**
  * autograd::matmul - Matrix multiplication with automatic differentiation
  * 
- * TAPE-BASED: Requires caller to provide cache pointers from TrainingState.
- * Does NOT allocate internal copies of A or B.
+ * TAPE-BASED: Saves owned forward copies of A and B for backward.
  *
  * @param a Input tensor A [M, K]
  * @param b Input tensor B [K, N]
  * @param stream CUDA stream
- * @param a_cache External cache pointer for A (needed if B requires grad). 
- *                Pass nullptr if A is a weight tensor that persists.
- * @param b_cache External cache pointer for B (needed if A requires grad).
- *                Pass nullptr if B is a weight tensor that persists.
  * @return Output tensor C [M, N]
  */
 Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream,
-              const float* a_cache, const float* b_cache, bool transpose_b) {
+              bool transpose_b) {
     // RULE 20: Fail loud on invalid stream - default stream causes race conditions
     if (stream == nullptr || stream == 0) {
         throw std::runtime_error("autograd::matmul: stream is NULL - caller MUST provide valid stream");
@@ -611,21 +606,17 @@ Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream,
         // ISSUE #55 FIX: Pass stream for async allocation of owned grad buffers
         grad_fn->capture_inputs(const_cast<Tensor&>(a), const_cast<Tensor&>(b), stream);
         
-        // TAPE-BASED cache contract:
-        // - grad_B requires A cache. Enforce explicit a_cache so missing plumbing fails loud.
-        // - grad_A may still use persistent B.data when b_cache is omitted (weights typically persist).
-        const float* effective_a_cache = a_cache;
-        const float* effective_b_cache = b_cache ? b_cache : b.data;
+        // Save the actual forward inputs owned by this matmul node.
+        const float* effective_a_cache = a.data;
+        const float* effective_b_cache = b.data;
         
-        // Null check: grad_B = A^T @ grad_C requires cached A; grad_A = grad_C @ B^T requires cached B
+        // Null check: grad_B = A^T @ grad_C requires saved A; grad_A = grad_C @ B^T requires saved B
         if (grad_fn->b_requires_grad && !effective_a_cache) {
             throw std::runtime_error(
-                "autograd::matmul: Missing required a_cache for grad_B path. "
-                "input_b requires grad, so caller MUST pass explicit a_cache (forward A activation) to matmul. "
-                "This is a cache-plumbing contract failure, not a fallback path. "
+            "autograd::matmul: input_a data is NULL while input_b requires grad. "
+            "matmul must save forward A for grad_B. "
                 "Context: A.name=" + std::string(a.name ? a.name : "<unnamed>") +
                 " A.data=" + std::to_string(reinterpret_cast<uintptr_t>(a.data)) +
-                " a_cache=" + std::to_string(reinterpret_cast<uintptr_t>(a_cache)) +
                 " B.name=" + std::string(b.name ? b.name : "<unnamed>") +
                 " B.data=" + std::to_string(reinterpret_cast<uintptr_t>(b.data)) +
                 " shape(A)=[" + std::to_string(M) + "," + std::to_string(K) + "]"
@@ -634,7 +625,7 @@ Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream,
         }
         if (grad_fn->a_requires_grad && !effective_b_cache) {
             throw std::runtime_error(
-                "autograd::matmul: Cannot compute grad for input_a - weight/b cache is NULL. "
+                "autograd::matmul: Cannot compute grad for input_a - input_b data is NULL. "
                 "Second input tensor has null data.");
         }
         

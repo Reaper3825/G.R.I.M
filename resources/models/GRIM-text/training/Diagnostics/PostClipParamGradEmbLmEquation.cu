@@ -335,7 +335,7 @@ std::string formatPostClipParamGradEmbLmEquation(
 void runPostClipParamGradEmbLmEquation(
     GRIMText::Training::TrainingContext& ctx,
     GRIMText::Training::TrainingLoopState& state,
-    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const GRIM::EmbeddingLayer& embedding_layer,
     const GRIM::Batching::BatchPayload& payload,
     float emb_rms_pre,

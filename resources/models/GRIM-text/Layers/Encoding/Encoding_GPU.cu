@@ -130,7 +130,8 @@ static __global__ void kernel_encoding_fill_value(float* data, int count, float 
     allocateWeights(seed, init_stream);
 }
 
-void EncodingLayer::allocateWeights(uint64_t seed, cudaStream_t init_stream) {
+void EncodingLayer::allocateWeights(uint64_t seed,
+                                    cudaStream_t init_stream) {
     if (weights_ready_) {
         throw std::runtime_error("EncodingLayer::allocateWeights: weights already initialized! "
                                  "Cannot allocate twice.");
@@ -212,15 +213,12 @@ void EncodingLayer::allocateWeights(uint64_t seed, cudaStream_t init_stream) {
     }
     
     //==================================================//
-    //  FFN — uses the new self-allocating constructor
-    //  Seed offsets +2/+3 for W1/W2 (matches layer convention)
+    //  FFN — compute layer borrows registry-owned tensors
     //==================================================//
     {
         const HyperParameters::FeedForwardLayerConstructionHP ffn_hp =
             HyperParameters::feedForwardLayerConstructionHP(hp);
-        
-        // seed+2 is base for FFN (W1 gets seed+2, W2 gets seed+3 inside FFN ctor)
-        ffn_ = std::make_unique<FeedForwardLayer>(ffn_hp, seed + 2, stream);
+        ffn_ = std::make_unique<FeedForwardLayer>(ffn_hp);
     }
     
     //==================================================//
@@ -241,7 +239,7 @@ void EncodingLayer::allocateWeights(uint64_t seed, cudaStream_t init_stream) {
     
     weights_ready_ = true;
     
-    fprintf(stderr, "[EncodingLayer] Self-allocated weights (Pattern B)\n");
+    fprintf(stderr, "[EncodingLayer] Initialized encoder-owned tensors and bound registry-owned FFN tensors\n");
 }
 
 EncodingLayer::~EncodingLayer() {
@@ -553,11 +551,14 @@ void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // Retained in ModelForwardOutputs.
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 9: FFN...\n");
+    if (!parameter_views) {
+        throw std::runtime_error("EncodingLayer::forward: parameter_views is NULL - caller must pass registry-derived FFN parameter views");
+    }
     ffn_->forward(ln2_out,
                   stream, cublas_handle,
                   forward_outputs,
                   dropout_batch_seed, dropout_enabled, layer_idx,
-                  parameter_views ? &parameter_views->ffn : nullptr);
+                  parameter_views->ffn);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 9: FFN DONE\n");
     
     //--------------------------------------------------

@@ -157,24 +157,22 @@ GRIM::Forward::SelectorForwardResult forwardDecodeTimeSlotSelector(
     result.num_live_slots = num_live_slots;
 
     // Step 1: q = h_t @ W_q  →  [1, d_selector]
-    result.q = autograd::matmul(h_t, selector.W_q_select, stream, h_t.data, nullptr);
+    result.q = autograd::matmul(h_t, selector.W_q_select, stream);
 
     // Step 2: null_score = q @ null_key^T  →  [1, 1]
     Tensor null_score = autograd::matmul(result.q, selector.null_key_select, stream,
-                                          result.q.data, nullptr, /*transpose_b=*/true);
+                                          /*transpose_b=*/true);
 
     // Step 3: null_score_biased = null_score + null_logit_bias  →  [1, 1]
     Tensor null_score_biased = autograd::add(null_score, selector.null_logit_bias, stream);
 
     if (num_live_slots > 0) {
         // Step 4: slot_keys = slot_features @ W_k  →  [L, d_selector]
-        result.slot_keys = autograd::matmul(slot_features, selector.W_k_select, stream,
-                                             slot_features.data, nullptr);
+        result.slot_keys = autograd::matmul(slot_features, selector.W_k_select, stream);
 
         // Step 5: slot_scores = q @ slot_keys^T  →  [1, L]
         Tensor slot_scores = autograd::matmul(result.q, result.slot_keys, stream,
-                                               result.q.data, result.slot_keys.data,
-                                               /*transpose_b=*/true);
+                               /*transpose_b=*/true);
 
         // Step 6: scores = concat(null_score_biased, slot_scores)  →  [1, 1+L]
         result.scores = autograd::concat(null_score_biased, slot_scores, stream);

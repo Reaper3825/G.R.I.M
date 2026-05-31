@@ -7,16 +7,23 @@ struct CUstream_st;
 using cudaStream_t = CUstream_st*;
 #endif
 
+#include <cstdint>
+#include <vector>
+
 namespace GRIM {
 class LanguageModel;
 struct OptimizerState;
+struct FeedForwardParameterTensors;
+namespace HyperParameters {
+struct EncoderLayerConstructionHP;
+}
 }
 
 namespace GRIMText::Training::Startup {
 struct GpuModelState;
 }
 
-namespace GRIMText::Training::Startup::ModelRegistration::ParameterRegistry {
+namespace ParameterRegistry {
 struct StartupParameterRegistry;
 }
 
@@ -34,9 +41,15 @@ namespace GRIMText::Training::Startup::ModelRegistration {
 //   metadata, and binds externally owned optimizer moment tensors.
 // - OptimizerState owns Adam/RAdam moment tensor storage; ParameterGroup entries
 //   only borrow those tensors after bindOptimizerState().
+void initializeFeedForwardParameterTensors(
+    std::vector<GRIM::FeedForwardParameterTensors>& feed_forward_parameter_tensors,
+    const GRIM::HyperParameters::EncoderLayerConstructionHP& encoder_hp,
+    std::uint64_t weight_init_seed,
+    cudaStream_t init_stream);
+
 void buildParameterGroups(GRIM::LanguageModel& model,
                           GRIMText::Training::Startup::GpuModelState& gpu_model_state,
-                          GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry);
+                          ::ParameterRegistry::StartupParameterRegistry& parameter_registry);
 void bindOptimizerState(GRIM::LanguageModel& model,
                         GRIM::OptimizerState& optimizer_state,
                         cudaStream_t stream);

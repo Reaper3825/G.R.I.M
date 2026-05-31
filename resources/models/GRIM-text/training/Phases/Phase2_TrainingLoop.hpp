@@ -176,7 +176,7 @@ bool executePhase2(TrainingContext& ctx);
 EpochResult runEpoch(
     TrainingContext& ctx,
     TrainingLoopState& state,
-    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     int epoch_idx,
     int num_epochs,
     int accum_steps);

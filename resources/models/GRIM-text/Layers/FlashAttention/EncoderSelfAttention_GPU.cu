@@ -159,8 +159,7 @@ void encoderSelfAttentionForward(
     if constexpr (kEnableAttentionStepLogs) {
         std::fprintf(stderr, "[EncoderSelfAttention] QKV projection...\n");
     }
-    qkv_out = autograd::matmul(norm_input, weights.W_qkv, request.stream,
-                               norm_input.data, nullptr, true);
+    qkv_out = autograd::matmul(norm_input, weights.W_qkv, request.stream, true);
     if (qkv_debug > 0) {
         autograd::checkQKVTensorFinite("AutogradQKV:qkv_out_prebias", qkv_out, request.stream);
     }
@@ -217,8 +216,7 @@ void encoderSelfAttentionForward(
     if (!attn_out.data) {
         throw std::runtime_error("encoderSelfAttentionForward: attn_out.data is NULL before output projection matmul");
     }
-    proj_out = autograd::matmul(attn_out, weights.W_o, request.stream,
-                                attn_out.data, nullptr, true);
+    proj_out = autograd::matmul(attn_out, weights.W_o, request.stream, true);
     if (request.hp.use_bias) {
         proj_out = autograd::broadcast_add(proj_out, weights.b_o, request.stream);
     }

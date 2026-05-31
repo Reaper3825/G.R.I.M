@@ -91,7 +91,7 @@ void requireLayerScaleVector(const Tensor& gamma,
 bool saveLanguageModelCheckpoint(
     LanguageModel& model,
     const GRIMText::Training::Startup::GpuModelState& gpu_model_state,
-    const GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const std::string& path) {
     using namespace GRIM::Logging;
     EmitModuleInfo(ModuleId::Checkpoint, "save() called for path: " + path);
@@ -181,10 +181,11 @@ bool saveLanguageModelCheckpoint(
         assignRead(view.attn_b_qkv, enc->attnBqkv().data, total_qkv_dim);  // GQA-aware bias size
         assignRead(view.attn_w_o, enc->attnWo().data, d_model * d_model);
         assignRead(view.attn_b_o, enc->attnBo().data, d_model);
-        assignRead(view.ffn_w_gate, enc->ffnWGate().data, d_model * d_ff);
-        assignRead(view.ffn_w1, enc->ffnW1().data, d_model * d_ff);
-        assignRead(view.ffn_w2, enc->ffnW2().data, d_ff * d_model);
-        assignRead(view.ffn_b2, enc->ffnB2().data, d_model);
+        const auto& ffn_parameters = parameter_registry.requireFeedForwardParameters(layer_idx, "saveLanguageModelCheckpoint");
+        assignRead(view.ffn_w_gate, ffn_parameters.W_gate.data, d_model * d_ff);
+        assignRead(view.ffn_w1, ffn_parameters.W1.data, d_model * d_ff);
+        assignRead(view.ffn_w2, ffn_parameters.W2.data, d_ff * d_model);
+        assignRead(view.ffn_b2, ffn_parameters.b2.data, d_model);
         assignRead(view.rms1_gamma, enc->rms1Gamma().data, d_model);
         assignRead(view.rms2_gamma, enc->rms2Gamma().data, d_model);
         // Issue #148: Sandwich norm gammas REMOVED — not saved to checkpoint
@@ -350,7 +351,7 @@ bool saveLanguageModelCheckpoint(
 bool loadLanguageModelCheckpoint(
     LanguageModel& model,
     const GRIMText::Training::Startup::GpuModelState& gpu_model_state,
-    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const std::string& path) {
     using namespace GRIM::Logging;
     if (path.empty()) {
@@ -495,10 +496,11 @@ bool loadLanguageModelCheckpoint(
         assignWrite(view.attn_b_qkv, enc->attnBqkv().data, total_qkv_dim);  // GQA-aware bias size
         assignWrite(view.attn_w_o, enc->attnWo().data, d_model * d_model);
         assignWrite(view.attn_b_o, enc->attnBo().data, d_model);
-        assignWrite(view.ffn_w_gate, enc->ffnWGate().data, d_model * d_ff);
-        assignWrite(view.ffn_w1, enc->ffnW1().data, d_model * d_ff);
-        assignWrite(view.ffn_w2, enc->ffnW2().data, d_ff * d_model);
-        assignWrite(view.ffn_b2, enc->ffnB2().data, d_model);
+        auto& ffn_parameters = parameter_registry.requireFeedForwardParameters(layer_idx, "loadLanguageModelCheckpoint");
+        assignWrite(view.ffn_w_gate, ffn_parameters.W_gate.data, d_model * d_ff);
+        assignWrite(view.ffn_w1, ffn_parameters.W1.data, d_model * d_ff);
+        assignWrite(view.ffn_w2, ffn_parameters.W2.data, d_ff * d_model);
+        assignWrite(view.ffn_b2, ffn_parameters.b2.data, d_model);
         if (!freeze_learned_rms_gammas) {
             assignWrite(view.rms1_gamma, enc->rms1Gamma().data, d_model);
             assignWrite(view.rms2_gamma, enc->rms2Gamma().data, d_model);

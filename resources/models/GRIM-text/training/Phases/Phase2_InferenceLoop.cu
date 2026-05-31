@@ -96,7 +96,7 @@ void validateInferenceForwardPayload(
 }
 
 std::vector<GRIM::Forward::MTPHeadForwardView> buildDetachedForwardMtpHeadViews(
-    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const MTPFeatureHP& mtp_hp,
     cudaStream_t stream)
 {
@@ -131,7 +131,7 @@ std::vector<GRIM::Forward::MTPHeadForwardView> buildDetachedForwardMtpHeadViews(
 GRIM::GeneratedSequence generateOneSequence(
     GRIM::LanguageModel& model,
     GRIMText::Training::Startup::GpuModelState& gpu_model_state,
-    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const GRIM::PBM::PBMState& pbm,
     GRIM::Batching::BatchPayload& prompt_payload,
     const GenerationHP& cfg,
@@ -312,6 +312,7 @@ GRIM::GeneratedSequence generateOneSequence(
         GRIM::Forward::ModelForwardRequest request{};
         request.config = &config;
         request.gpu_encoder = gpu_encoder;
+        request.parameter_registry = &parameter_registry;
         request.pbm = &pbm;
         request.embedding_layer = model.getEmbeddingLayer();
         request.lm_head = model.getLmHeadLayer();

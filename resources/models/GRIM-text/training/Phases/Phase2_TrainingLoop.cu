@@ -316,7 +316,7 @@ void runOptimizerWindowFromEpoch(
     TrainingLoopState& state,
     const GRIM::Batching::BatchPayload& payload,
     BatchResult& result,
-    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     GRIM::TrainingState& training_state,
     std::vector<GRIM::ParameterGroup>& parameter_groups,
     int batch_idx,
@@ -538,7 +538,7 @@ GRIM::Forward::ModelForwardRuntimePayload buildTrainingForwardRuntimePayload(
 }
 
 std::vector<GRIM::Forward::MTPHeadForwardView> buildConnectedForwardMtpHeadViews(
-    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     int mtp_k,
     cudaStream_t stream)
 {
@@ -596,7 +596,7 @@ std::vector<GRIM::Forward::MTPHeadForwardView> buildConnectedForwardMtpHeadViews
 }
 
 GRIM::Forward::ModelForwardRequest buildTrainingForwardRequest(
-    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     int mtp_k,
     const GRIM::PBM::PBMState& pbm,
     const GRIM::Config::AiConfigSnapshot& config,
@@ -611,6 +611,7 @@ GRIM::Forward::ModelForwardRequest buildTrainingForwardRequest(
     GRIM::Forward::ModelForwardRequest request{};
     request.config = &config;
     request.gpu_encoder = forward_topology.gpu_encoder;
+    request.parameter_registry = &parameter_registry;
     request.pbm = &pbm;
     request.cublas_handle = training_state.cublas_handle.get();
     request.stream = stream;
@@ -1073,7 +1074,7 @@ BatchResult processBatch(
 EpochResult runEpoch(
     TrainingContext& ctx,
     TrainingLoopState& state,
-    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     int epoch_idx,
     int num_epochs,
     int accum_steps) {

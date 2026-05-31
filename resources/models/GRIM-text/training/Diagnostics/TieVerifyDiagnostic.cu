@@ -19,7 +19,7 @@ namespace GRIM::Diagnostics {
 
 void runTieVerifyDiagnostic(
     GRIMText::Training::TrainingContext& ctx,
-    GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     std::size_t batch_idx)
 {
     auto& embedding_layer = ctx.gpu_model.requireEmbeddingLayer("runTieVerifyDiagnostic");

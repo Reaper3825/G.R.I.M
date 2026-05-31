@@ -35,6 +35,14 @@ class ScratchBlockLayer;
 class ExecutionBlockLayer;
 class GPUGrimEncoder;
 
+} // namespace GRIM
+
+namespace ParameterRegistry {
+struct StartupParameterRegistry;
+}
+
+namespace GRIM {
+
 namespace Forward {
 
 struct MTPHeadForwardView {
@@ -58,6 +66,7 @@ struct ModelForwardGraphPolicy {
 struct ModelForwardRequest {
     const Config::AiConfigSnapshot* config = nullptr;
     GPUGrimEncoder* gpu_encoder = nullptr;
+    const ::ParameterRegistry::StartupParameterRegistry* parameter_registry = nullptr;
     const PBM::PBMState* pbm = nullptr;
     cublasHandle_t cublas_handle = nullptr;
     cudaStream_t stream = nullptr;

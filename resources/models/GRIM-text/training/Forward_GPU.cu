@@ -33,8 +33,9 @@ struct GPUGrimEncoder::Impl {
          uint64_t weight_seed)
     {
         for (int i = 0; i < hp.num_layers; ++i) {
-            // Pattern B: Layer self-allocates and Xavier-inits its own weights.
-            // Seed offsets per layer: base + 2 + layer*10
+            // Layer owns encoder attention/RMS tensors. FFN tensors are supplied
+            // explicitly at shared-forward time from ParameterRegistry.
+            // Seed offsets per layer for encoder-owned tensors: base + 2 + layer*10
             const uint64_t layer_seed = weight_seed + 2 + i * 10;
             gpu_layers_.emplace_back(std::make_unique<EncodingLayer>(
                 hp, layer_seed, init_stream));

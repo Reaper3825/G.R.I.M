@@ -24,7 +24,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     const GRIM::Config::AiConfigSnapshot& config_snapshot,
     GRIM::PBM::PBMStateOwner& pbm_owner,
     Startup::GpuModelState& gpu_model_state,
-    Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const Startup::LayerAssembly& layer_assembly,
     TrainingLogger& logger)
 {

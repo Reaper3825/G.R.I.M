@@ -92,7 +92,7 @@ void updateTelemetryObservations(
     GRIMText::Training::TrainingContext& ctx,
     const GRIM::TrainingState& training_state,
     const GRIMText::Training::Startup::GpuModelState& gpu_model,
-    const GRIMText::Training::Startup::ModelRegistration::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const TelemetryBatchInput& input,
     const GRIM::GradNorm::GradMetrics& gm);
 
