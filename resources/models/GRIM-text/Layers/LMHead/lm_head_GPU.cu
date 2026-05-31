@@ -379,21 +379,20 @@ void LMHeadLayer::forward(
         use_token_type_gate,
         total_tokens,
         d_model,
-        hp_.vocab_size,
+        payload.vocab_size,
         stream);
 
-    // Validate output shape
-    const auto expected_shape = TensorContract::TensorShape::make_LOGITS(total_tokens, hp_.vocab_size);
+    // Validate output geometry without restamping layout metadata here.
     const size_t logits_elements = forward_outputs.logits_tensor.shape.total_elements();
-    const size_t expected_elements = expected_shape.total_elements();
+    const size_t expected_elements = static_cast<size_t>(total_tokens) *
+                                     static_cast<size_t>(payload.vocab_size);
     if (logits_elements != expected_elements) {
         throw std::runtime_error(
             "LMHeadLayer::forward: logits shape validation FAILED\n"
             "  Got: " + std::to_string(logits_elements) + " elements\n"
             "  Expected: " + std::to_string(expected_elements) + " elements (" +
-                std::to_string(total_tokens) + "x" + std::to_string(hp_.vocab_size) + ")");
+                std::to_string(total_tokens) + "x" + std::to_string(payload.vocab_size) + ")");
     }
-    forward_outputs.logits_tensor.shape = expected_shape;
 
     // ════════════════════════════════════════════════════════════════════
     // STEP 3: Optional logit centering (numerical stability)
@@ -414,7 +413,6 @@ void LMHeadLayer::forward(
     // ════════════════════════════════════════════════════════════════════
     if (hp_.use_bias && lm_bias.data) {
         forward_outputs.logits_tensor = autograd::broadcast_add(forward_outputs.logits_tensor, lm_bias, stream);
-        forward_outputs.logits_tensor.shape = expected_shape;  // Preserve LOGITS layout after broadcast_add
     }
 }
 

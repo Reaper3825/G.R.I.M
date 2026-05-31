@@ -248,7 +248,7 @@ void runLogitScaleDiagnostic(
 
             const auto& logits_shape = logits_tensor.shape.require("runLogitScaleDiagnostic logits_tensor");
             if (!logits_shape.is_2d_layout()) {
-                throw std::runtime_error("runLogitScaleDiagnostic: logits tensor must be a 2D LOGITS buffer");
+                throw std::runtime_error("runLogitScaleDiagnostic: logits tensor must be a 2D logits buffer");
             }
             const auto logits_dims = logits_shape.as_2d();
             if (logits_dims.rows < total_tokens) {
