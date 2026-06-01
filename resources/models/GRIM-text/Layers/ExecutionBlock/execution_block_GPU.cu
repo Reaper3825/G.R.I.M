@@ -27,17 +27,46 @@ using Forward::ExecutionRecord;
 //======================================================//
 
 //======================================================//
+//  ExecutionBlockDiagnosticsBuffers — persistent device buffers
+//======================================================//
+void ExecutionBlockDiagnosticsBuffers::allocate(cudaStream_t stream) {
+    EXEC_CHECK(stream != nullptr, "ExecutionBlockDiagnosticsBuffers::allocate: stream is NULL");
+    EXEC_CHECK(!allocated(), "ExecutionBlockDiagnosticsBuffers::allocate: already allocated");
+
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_numeric_error_flag), sizeof(int), "exec_numeric_error_flag");
+    CUDA_CHECK(cudaMemsetAsync(d_numeric_error_flag, 0, sizeof(int), stream));
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_div_clamp_count), sizeof(int), "exec_div_clamp_count");
+    CUDA_CHECK(cudaMemsetAsync(d_div_clamp_count, 0, sizeof(int), stream));
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_div_invalid_flag), sizeof(int), "exec_div_invalid_flag");
+    CUDA_CHECK(cudaMemsetAsync(d_div_invalid_flag, 0, sizeof(int), stream));
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_exec_idx), 4 * sizeof(int), "exec_idx");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_exec_record_i), 3 * sizeof(int), "exec_record_i");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_exec_record_f), 3 * sizeof(float), "exec_record_f");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_reinforce_baseline), sizeof(float), "exec_reinforce_baseline");
+    CUDA_CHECK(cudaMemsetAsync(d_reinforce_baseline, 0, sizeof(float), stream));
+}
+
+void ExecutionBlockDiagnosticsBuffers::destroy() {
+    if (d_numeric_error_flag) cudaFree(d_numeric_error_flag);
+    if (d_div_clamp_count)    cudaFree(d_div_clamp_count);
+    if (d_div_invalid_flag)   cudaFree(d_div_invalid_flag);
+    if (d_exec_idx)           cudaFree(d_exec_idx);
+    if (d_exec_record_i)      cudaFree(d_exec_record_i);
+    if (d_exec_record_f)      cudaFree(d_exec_record_f);
+    if (d_reinforce_baseline) cudaFree(d_reinforce_baseline);
+    d_numeric_error_flag = nullptr;
+    d_div_clamp_count    = nullptr;
+    d_div_invalid_flag   = nullptr;
+    d_exec_idx           = nullptr;
+    d_exec_record_i      = nullptr;
+    d_exec_record_f      = nullptr;
+    d_reinforce_baseline = nullptr;
+}
+
+//======================================================//
 //  Constructor
 //======================================================//
-ExecutionBlockLayer::~ExecutionBlockLayer() {
-    if (d_numeric_error_flag_) cudaFree(d_numeric_error_flag_);
-    if (d_div_clamp_count_)    cudaFree(d_div_clamp_count_);
-    if (d_div_invalid_flag_)   cudaFree(d_div_invalid_flag_);
-    if (d_exec_idx_)           cudaFree(d_exec_idx_);
-    if (d_exec_record_i_)      cudaFree(d_exec_record_i_);
-    if (d_exec_record_f_)      cudaFree(d_exec_record_f_);
-    if (d_reinforce_baseline_) cudaFree(d_reinforce_baseline_);
-}
+ExecutionBlockLayer::~ExecutionBlockLayer() = default;
 
 ExecutionBlockLayer::ExecutionBlockLayer(const HyperParameters::ExecutionBlockConstructionHP& hp,
                                          cudaStream_t init_stream)
@@ -48,74 +77,21 @@ ExecutionBlockLayer::ExecutionBlockLayer(const HyperParameters::ExecutionBlockCo
     // validateExecutionBlockConstructionHP() (startup registration) before this
     // layer is constructed; a redundant config re-check here is forbidden.
     EXEC_CHECK(init_stream != nullptr, "init_stream is NULL");
-
-    cudaMallocOrThrow(reinterpret_cast<void**>(&d_numeric_error_flag_), sizeof(int), "exec_numeric_error_flag");
-    CUDA_CHECK(cudaMemsetAsync(d_numeric_error_flag_, 0, sizeof(int), init_stream));
-    cudaMallocOrThrow(reinterpret_cast<void**>(&d_div_clamp_count_), sizeof(int), "exec_div_clamp_count");
-    CUDA_CHECK(cudaMemsetAsync(d_div_clamp_count_, 0, sizeof(int), init_stream));
-    cudaMallocOrThrow(reinterpret_cast<void**>(&d_div_invalid_flag_), sizeof(int), "exec_div_invalid_flag");
-    CUDA_CHECK(cudaMemsetAsync(d_div_invalid_flag_, 0, sizeof(int), init_stream));
-    cudaMallocOrThrow(reinterpret_cast<void**>(&d_exec_idx_), 4 * sizeof(int), "exec_idx");
-    cudaMallocOrThrow(reinterpret_cast<void**>(&d_exec_record_i_), 3 * sizeof(int), "exec_record_i");
-    cudaMallocOrThrow(reinterpret_cast<void**>(&d_exec_record_f_), 3 * sizeof(float), "exec_record_f");
-    cudaMallocOrThrow(reinterpret_cast<void**>(&d_reinforce_baseline_), sizeof(float), "exec_reinforce_baseline");
-    CUDA_CHECK(cudaMemsetAsync(d_reinforce_baseline_, 0, sizeof(float), init_stream));
 }
 
 //======================================================//
 //  Move semantics
 //======================================================//
-ExecutionBlockLayer::ExecutionBlockLayer(ExecutionBlockLayer&& other) noexcept
-    : hp_(other.hp_),
-      d_numeric_error_flag_(other.d_numeric_error_flag_),
-      d_div_clamp_count_(other.d_div_clamp_count_),
-      d_div_invalid_flag_(other.d_div_invalid_flag_),
-      d_exec_idx_(other.d_exec_idx_),
-      d_exec_record_i_(other.d_exec_record_i_),
-      d_exec_record_f_(other.d_exec_record_f_),
-    d_reinforce_baseline_(other.d_reinforce_baseline_)
-{
-    other.d_numeric_error_flag_ = nullptr;
-    other.d_div_clamp_count_ = nullptr;
-    other.d_div_invalid_flag_ = nullptr;
-    other.d_exec_idx_ = nullptr;
-    other.d_exec_record_i_ = nullptr;
-    other.d_exec_record_f_ = nullptr;
-    other.d_reinforce_baseline_ = nullptr;
-}
+ExecutionBlockLayer::ExecutionBlockLayer(ExecutionBlockLayer&& other) noexcept = default;
 
-ExecutionBlockLayer& ExecutionBlockLayer::operator=(ExecutionBlockLayer&& other) noexcept {
-    if (this != &other) {
-        if (d_numeric_error_flag_) cudaFree(d_numeric_error_flag_);
-        if (d_div_clamp_count_)    cudaFree(d_div_clamp_count_);
-        if (d_div_invalid_flag_)   cudaFree(d_div_invalid_flag_);
-        if (d_exec_idx_)           cudaFree(d_exec_idx_);
-        if (d_exec_record_i_)     cudaFree(d_exec_record_i_);
-        if (d_exec_record_f_)     cudaFree(d_exec_record_f_);
-        if (d_reinforce_baseline_) cudaFree(d_reinforce_baseline_);
-        hp_ = other.hp_;
-        d_numeric_error_flag_ = other.d_numeric_error_flag_;
-        d_div_clamp_count_    = other.d_div_clamp_count_;
-        d_div_invalid_flag_   = other.d_div_invalid_flag_;
-        d_exec_idx_           = other.d_exec_idx_;
-        d_exec_record_i_      = other.d_exec_record_i_;
-        d_exec_record_f_      = other.d_exec_record_f_;
-        d_reinforce_baseline_ = other.d_reinforce_baseline_;
-        other.d_numeric_error_flag_ = nullptr;
-        other.d_div_clamp_count_    = nullptr;
-        other.d_div_invalid_flag_   = nullptr;
-        other.d_exec_idx_           = nullptr;
-        other.d_exec_record_i_      = nullptr;
-        other.d_exec_record_f_      = nullptr;
-        other.d_reinforce_baseline_ = nullptr;
-    }
-    return *this;
-}
+ExecutionBlockLayer& ExecutionBlockLayer::operator=(ExecutionBlockLayer&& other) noexcept = default;
 
 //======================================================//
-//  Thin public wrappers
+//  Execution-block free operations
 //======================================================//
-void ExecutionBlockLayer::executeStep(
+void executionBlockStep(
+    const HyperParameters::ExecutionBlockConstructionHP& hp,
+    ExecutionBlockDiagnosticsBuffers& diag,
     Tensor& H,
     ExecutionMemory& M,
     ExecutionBlockParameterTensors& parameters,
@@ -135,17 +111,18 @@ void ExecutionBlockLayer::executeStep(
     // max_seq_len, total_tokens) via BatchPayload::validate() +
     // validateExecutionPayload(). Only the local call-boundary contract that
     // BatchPayload does not own is checked here.
-    EXEC_CHECK_SHAPE2(H, "H (executeStep)", payload.total_tokens, hp_.d_model);
+    EXEC_CHECK_SHAPE2(H, "H (executeStep)", payload.total_tokens, hp.d_model);
     EXEC_CHECK(atom_positions != nullptr,
                "executeStep: atom_positions is null - caller MUST provide a row-local atom view");
     EXEC_CHECK(num_atoms >= 0, "executeStep: num_atoms must be non-negative");
     EXEC_CHECK(bindings.d_token_to_slot_map != nullptr,
                "executeStep: bindings.d_token_to_slot_map is null");
-    EXEC_CHECK(step >= 0 && step < hp_.num_exec_steps, "executeStep: step out of range");
+    EXEC_CHECK(step >= 0 && step < hp.num_exec_steps, "executeStep: step out of range");
     EXEC_CHECK(batch_row >= 0 && batch_row < payload.batch_size,
                "executeStep: batch_row out of range for payload.batch_size");
     executeStepCoordinatorImpl(
-        *this,
+        hp,
+        diag,
         parameters,
         H,
         M,
@@ -163,9 +140,10 @@ void ExecutionBlockLayer::executeStep(
 }
 
 //======================================================//
-//  crossAttentionRead — thin wrapper
+//  executionBlockCrossAttentionRead
 //======================================================//
-Tensor ExecutionBlockLayer::crossAttentionRead(
+Tensor executionBlockCrossAttentionRead(
+    const HyperParameters::ExecutionBlockConstructionHP& hp,
     const Tensor& hidden_states,
     ExecutionMemory& M,
     ExecutionBlockParameterTensors& parameters,
@@ -175,13 +153,13 @@ Tensor ExecutionBlockLayer::crossAttentionRead(
     int row_tokens,
     float* d_gate_accum)
 {
-    EXEC_CHECK_SHAPE2(hidden_states, "hidden_states (cross-attn)", total_tokens, hp_.d_model);
+    EXEC_CHECK_SHAPE2(hidden_states, "hidden_states (cross-attn)", total_tokens, hp.d_model);
     if (row_tokens < 0) row_tokens = total_tokens;
     EXEC_CHECK(token_offset >= 0, "token_offset must be non-negative");
     EXEC_CHECK(row_tokens > 0, "row_tokens must be positive");
     EXEC_CHECK(token_offset + row_tokens <= total_tokens,
                "crossAttentionRead row-local span exceeds total token extent");
-    return crossAttentionReadImpl(*this, parameters, hidden_states, M, stream, token_offset, row_tokens, d_gate_accum);
+    return crossAttentionReadImpl(hp, parameters, hidden_states, M, stream, token_offset, row_tokens, d_gate_accum);
 }
 
 }  // namespace GRIM

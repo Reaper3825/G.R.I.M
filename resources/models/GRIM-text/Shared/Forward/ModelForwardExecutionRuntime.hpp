@@ -15,6 +15,7 @@
 
 #include "ModelForwardOutputs.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
+#include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 
 namespace GRIM {
 namespace Forward {
@@ -138,6 +139,22 @@ struct ModelForwardExecutionRuntime {
     std::vector<std::vector<ExecutionRecord>> execution_trace_by_row;
     std::vector<Tensor> trace_state_by_row;
     DecodeTimeSelectorRuntime decode_time_selector_runtime;
+
+    // Durable home of the execution-step diagnostic / hardening buffers. The
+    // per-step flags/records are Category 3 workspace (re-written each step);
+    // reinforce_baseline is a Category 2 durable EMA. Allocated once via
+    // ensureDiagnostics() and intentionally NOT touched by clear() so the EMA
+    // survives across steps.
+    ExecutionBlockDiagnosticsBuffers execution_diag;
+
+    void ensureDiagnostics(cudaStream_t stream) {
+        if (!stream) {
+            throw std::runtime_error("ModelForwardExecutionRuntime::ensureDiagnostics: stream is NULL");
+        }
+        if (!execution_diag.allocated()) {
+            execution_diag.allocate(stream);
+        }
+    }
 
     void ensureBatchGeometry(size_t batch_size, const char* caller) {
         if (batch_size == 0) {

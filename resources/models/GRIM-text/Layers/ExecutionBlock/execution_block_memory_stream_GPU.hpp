@@ -6,7 +6,8 @@
 
 namespace GRIM::ExecutionBlockInternal {
 void prepareMemoryStepOrThrow(
-	ExecutionBlockLayer& layer,
+	const HyperParameters::ExecutionBlockConstructionHP& hp,
+	ExecutionBlockDiagnosticsBuffers& diag,
 	const ExecutionMemory& memory,
 	const int* atom_positions,
 	const int32_t* token_to_slot_map,
@@ -16,38 +17,42 @@ void prepareMemoryStepOrThrow(
 	cudaStream_t stream);
 
 void buildValueSlotCandidates(
-	ExecutionBlockLayer& layer,
+	const HyperParameters::ExecutionBlockConstructionHP& hp,
 	const ExecutionMemory& memory,
 	cudaStream_t stream,
 	StepWorkingSet& work);
 
 void materializeSelectedOperands(
-	ExecutionBlockLayer& layer,
+	const HyperParameters::ExecutionBlockConstructionHP& hp,
+	ExecutionBlockDiagnosticsBuffers& diag,
 	const ExecutionMemory& memory,
 	cudaStream_t stream,
 	StepWorkingSet& work);
 
 void applyHardWriteback(
-	ExecutionBlockLayer& layer,
+	const HyperParameters::ExecutionBlockConstructionHP& hp,
+	ExecutionBlockDiagnosticsBuffers& diag,
 	ExecutionBlockParameterTensors& parameters,
 	ExecutionMemory& memory,
 	cudaStream_t stream,
 	const StepWorkingSet& work);
 
 void captureStateAfterWriteAndCheckMutations(
-	ExecutionBlockLayer& layer,
+	const HyperParameters::ExecutionBlockConstructionHP& hp,
+	ExecutionBlockDiagnosticsBuffers& diag,
 	const ExecutionMemory& memory,
 	Forward::ExecutionBlockStepOutput* diag_out,
 	cudaStream_t stream);
 
 void finalizeStepOrThrow(
-	ExecutionBlockLayer& layer,
+	const HyperParameters::ExecutionBlockConstructionHP& hp,
+	ExecutionBlockDiagnosticsBuffers& diag,
 	Forward::ExecutionBlockStepOutput* diag_out,
 	int step,
 	cudaStream_t stream);
 
 Tensor crossAttentionReadImpl(
-	ExecutionBlockLayer& layer,
+	const HyperParameters::ExecutionBlockConstructionHP& hp,
 	ExecutionBlockParameterTensors& parameters,
 	const Tensor& hidden_states,
 	ExecutionMemory& memory,

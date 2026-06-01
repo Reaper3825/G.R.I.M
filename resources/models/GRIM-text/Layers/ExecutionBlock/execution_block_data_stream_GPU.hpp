@@ -8,7 +8,8 @@
 
 namespace GRIM::ExecutionBlockInternal {
 void executeStepCoordinatorImpl(
-	ExecutionBlockLayer& layer,
+	const HyperParameters::ExecutionBlockConstructionHP& hp,
+	ExecutionBlockDiagnosticsBuffers& diag,
 	ExecutionBlockParameterTensors& parameters,
 	Tensor& H,
 	ExecutionMemory& memory,

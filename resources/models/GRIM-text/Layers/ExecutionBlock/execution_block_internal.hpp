@@ -65,16 +65,6 @@ inline const char* stageIdToName(int id) {
 	}
 }
 
-struct LayerAccess {
-	static int* numericErrorFlag(ExecutionBlockLayer& layer) { return layer.d_numeric_error_flag_; }
-	static int* divClampCount(ExecutionBlockLayer& layer) { return layer.d_div_clamp_count_; }
-	static int* divInvalidFlag(ExecutionBlockLayer& layer) { return layer.d_div_invalid_flag_; }
-	static int* execIndices(ExecutionBlockLayer& layer) { return layer.d_exec_idx_; }
-	static int* execRecordI(ExecutionBlockLayer& layer) { return layer.d_exec_record_i_; }
-	static float* execRecordF(ExecutionBlockLayer& layer) { return layer.d_exec_record_f_; }
-	static float* reinforceBaseline(ExecutionBlockLayer& layer) { return layer.d_reinforce_baseline_; }
-};
-
 struct StepWorkingSet {
 	Tensor cand_hidden;
 	Tensor cand_mask;

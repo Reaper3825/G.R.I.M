@@ -1276,14 +1276,15 @@ static void copyStepDiagnostics(const StepWorkingSet& work,
     cudaMemcpyAsync(diag_out->result_emb.data, work.result_emb.data, dm * sizeof(float), cudaMemcpyDeviceToDevice, stream);
 }
 
-static void collectStepMetrics(ExecutionBlockLayer& layer,
+static void collectStepMetrics(const HyperParameters::ExecutionBlockConstructionHP& hp,
+                               ExecutionBlockDiagnosticsBuffers& diag,
                                const StepWorkingSet& work,
                                ExecutionBlockStepOutput* diag_out,
                                int V_val,
                                int nop,
                                int V,
                                cudaStream_t stream) {
-    if (!diag_out || !layer.hp().debug_mode) return;
+    if (!diag_out || !hp.debug_mode) return;
 
     float d_metrics[7];
     float* d_buf = nullptr;
@@ -1297,7 +1298,7 @@ static void collectStepMetrics(ExecutionBlockLayer& layer,
     CUDA_CHECK(cudaMemcpyAsync(d_metrics, d_buf, 5 * sizeof(float), cudaMemcpyDeviceToHost, stream));
 
     int div_count = 0;
-    CUDA_CHECK(cudaMemcpyAsync(&div_count, LayerAccess::divClampCount(layer), sizeof(int), cudaMemcpyDeviceToHost, stream));
+    CUDA_CHECK(cudaMemcpyAsync(&div_count, diag.divClampCount(), sizeof(int), cudaMemcpyDeviceToHost, stream));
 
     float op_dist[4] = {};
     int op_copy = (nop <= 4) ? nop : 4;
@@ -1333,7 +1334,8 @@ static void collectStepMetrics(ExecutionBlockLayer& layer,
 }
 
 void executeStepCoordinatorImpl(
-    ExecutionBlockLayer& layer,
+    const HyperParameters::ExecutionBlockConstructionHP& hp,
+    ExecutionBlockDiagnosticsBuffers& diag,
     ExecutionBlockParameterTensors& parameters,
     Tensor& H,
     ExecutionMemory& memory,
@@ -1350,18 +1352,18 @@ void executeStepCoordinatorImpl(
     const std::vector<ExecutionRecord>& prior_records
 ) {
     auto& params = parameters;
-    const int dm = layer.hp().d_model;
-    const int V = layer.hp().num_slots;
-    const int S = layer.hp().num_scratch_slots;
+    const int dm = hp.d_model;
+    const int V = hp.num_slots;
+    const int S = hp.num_scratch_slots;
     const int V_val = V - S;
-    const int dk = layer.hp().d_key;
-    const int nop = layer.hp().num_ops;
-    const int ae = layer.hp().atom_embedding_dim;
-    const int vid = layer.hp().value_decode_input_dim;
-    const int vhd = layer.hp().value_decode_hidden_dim;
-    int* d_exec_idx = LayerAccess::execIndices(layer);
-    int* d_exec_record_i = LayerAccess::execRecordI(layer);
-    float* d_exec_record_f = LayerAccess::execRecordF(layer);
+    const int dk = hp.d_key;
+    const int nop = hp.num_ops;
+    const int ae = hp.atom_embedding_dim;
+    const int vid = hp.value_decode_input_dim;
+    const int vhd = hp.value_decode_hidden_dim;
+    int* d_exec_idx = diag.execIndices();
+    int* d_exec_record_i = diag.execRecordI();
+    float* d_exec_record_f = diag.execRecordF();
 
     // Row-local device slot map: derived from BatchDeviceBindings (host BatchPayload no
     // longer carries device pointers — see Shared/Batching/BatchDeviceBindings.hpp).
@@ -1370,10 +1372,10 @@ void executeStepCoordinatorImpl(
     const int row_tokens = payload.seq_lengths[static_cast<size_t>(batch_row)];
 
     StepWorkingSet work;
-    prepareMemoryStepOrThrow(layer, memory, atom_positions, d_slot_map_row, num_atoms, row_tokens, diag_out, stream);
-    buildValueSlotCandidates(layer, memory, stream, work);
+    prepareMemoryStepOrThrow(hp, diag, memory, atom_positions, d_slot_map_row, num_atoms, row_tokens, diag_out, stream);
+    buildValueSlotCandidates(hp, memory, stream, work);
     kernelCheckFinite<<<(V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
-        work.slot_values.data, V_val, LayerAccess::numericErrorFlag(layer), kStageV1, layer.hp().magnitude_limit);
+        work.slot_values.data, V_val, diag.numericErrorFlag(), kStageV1, hp.magnitude_limit);
 
     // Row-local device atom mask: used by ReduceMean to exclude atom positions
     // from the decision context, preventing numeric surface leakage into
@@ -1399,7 +1401,7 @@ void executeStepCoordinatorImpl(
         work.context.grad_fn = mean_fn;
     }
 
-    const int K = layer.hp().num_exec_steps;
+    const int K = hp.num_exec_steps;
     const int N_prior = static_cast<int>(prior_records.size());
     if (N_prior > 0) {
         std::vector<int> h_slot1(N_prior), h_slot2(N_prior), h_ops(N_prior);
@@ -1497,9 +1499,9 @@ void executeStepCoordinatorImpl(
         diag_out->arg1_logits_tensor = std::move(arg1_logits);
         diag_out->selection_temperature = temperature;
     }
-    kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_arg1.data, V_val, LayerAccess::numericErrorFlag(layer), kStagePArg1);
+    kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_arg1.data, V_val, diag.numericErrorFlag(), kStagePArg1);
     kernelCheckEntropyCollapse<<<1, kWarpSize, 0, stream>>>(
-        work.p_arg1.data, V_val, LayerAccess::numericErrorFlag(layer), kStageEntropyArg1, layer.hp().entropy_collapse_threshold);
+        work.p_arg1.data, V_val, diag.numericErrorFlag(), kStageEntropyArg1, hp.entropy_collapse_threshold);
 
     auto query2 = autograd::matmul(decision_input, params.w_arg2_select, stream);
     auto arg2_logits = autograd::matmul(query2, work.cand_hidden, stream, true);
@@ -1510,15 +1512,15 @@ void executeStepCoordinatorImpl(
     if (diag_out) {
         diag_out->arg2_logits_tensor = std::move(arg2_logits);
     }
-    kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_arg2.data, V_val, LayerAccess::numericErrorFlag(layer), kStagePArg2);
+    kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_arg2.data, V_val, diag.numericErrorFlag(), kStagePArg2);
     kernelCheckEntropyCollapse<<<1, kWarpSize, 0, stream>>>(
-        work.p_arg2.data, V_val, LayerAccess::numericErrorFlag(layer), kStageEntropyArg2, layer.hp().entropy_collapse_threshold);
+        work.p_arg2.data, V_val, diag.numericErrorFlag(), kStageEntropyArg2, hp.entropy_collapse_threshold);
 
-    materializeSelectedOperands(layer, memory, stream, work);
+    materializeSelectedOperands(hp, diag, memory, stream, work);
     kernelCheckFinite<<<(V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
-        work.slot_values.data, V_val, LayerAccess::numericErrorFlag(layer), kStageV1, layer.hp().magnitude_limit);
-    kernelCheckFinite<<<1, 1, 0, stream>>>(work.v1.data, 1, LayerAccess::numericErrorFlag(layer), kStageV1, layer.hp().magnitude_limit);
-    kernelCheckFinite<<<1, 1, 0, stream>>>(work.v2.data, 1, LayerAccess::numericErrorFlag(layer), kStageV2, layer.hp().magnitude_limit);
+        work.slot_values.data, V_val, diag.numericErrorFlag(), kStageV1, hp.magnitude_limit);
+    kernelCheckFinite<<<1, 1, 0, stream>>>(work.v1.data, 1, diag.numericErrorFlag(), kStageV1, hp.magnitude_limit);
+    kernelCheckFinite<<<1, 1, 0, stream>>>(work.v2.data, 1, diag.numericErrorFlag(), kStageV2, hp.magnitude_limit);
 
     // v1/v2 are DETACHED from p_arg.  No gradient path from execution
     // value loss back into arg selection.  Only selection CE trains arg selection.
@@ -1536,16 +1538,16 @@ void executeStepCoordinatorImpl(
     if (diag_out) {
         diag_out->op_logits_tensor = std::move(op_logits);
     }
-    kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_op.data, nop, LayerAccess::numericErrorFlag(layer), kStagePOp);
+    kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_op.data, nop, diag.numericErrorFlag(), kStagePOp);
     kernelCheckEntropyCollapse<<<1, kWarpSize, 0, stream>>>(
-        work.p_op.data, nop, LayerAccess::numericErrorFlag(layer), kStageEntropyOp, layer.hp().entropy_collapse_threshold);
+        work.p_op.data, nop, diag.numericErrorFlag(), kStageEntropyOp, hp.entropy_collapse_threshold);
 
     work.op_results = Tensor::zeros({1, nop}, stream, "exec_op_results");
     // Fix #6: Reset per-step division invalid flag before FourOps
-    int* d_div_flag = LayerAccess::divInvalidFlag(layer);
+    int* d_div_flag = diag.divInvalidFlag();
     int h_div_flag = 0;
     CUDA_CHECK(cudaMemsetAsync(d_div_flag, 0, sizeof(int), stream));
-    kernelFourOps<<<1, kWarpSize, 0, stream>>>(work.op_results.data, work.v1.data, work.v2.data, kEps, LayerAccess::divClampCount(layer), d_div_flag);
+    kernelFourOps<<<1, kWarpSize, 0, stream>>>(work.op_results.data, work.v1.data, work.v2.data, kEps, diag.divClampCount(), d_div_flag);
     CUDA_CHECK_KERNEL();
     if (diag_out) {
         CUDA_CHECK(cudaMemcpyAsync(&h_div_flag, d_div_flag, sizeof(int), cudaMemcpyDeviceToHost, stream));
@@ -1564,7 +1566,7 @@ void executeStepCoordinatorImpl(
     work.v_out.is_leaf = false;
     kernelHardPickOpForward<<<1, 1, 0, stream>>>(work.v_out.data, work.op_results.data, d_exec_idx + 2, nop);
     CUDA_CHECK_KERNEL();
-    kernelCheckFinite<<<1, 1, 0, stream>>>(work.v_out.data, 1, LayerAccess::numericErrorFlag(layer), kStageVOut, layer.hp().magnitude_limit);
+    kernelCheckFinite<<<1, 1, 0, stream>>>(work.v_out.data, 1, diag.numericErrorFlag(), kStageVOut, hp.magnitude_limit);
 
     {
         auto grad_fn = std::make_shared<FourOpMixGradFn>();
@@ -1652,20 +1654,20 @@ void executeStepCoordinatorImpl(
     work.result_emb = autograd::matmul(work.v_decoded, params.W_value_to_emb, stream);
     work.result_emb = autograd::add(work.result_emb, params.b_value_to_emb, stream);
     kernelCheckFinite<<<(dm + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
-        work.result_emb.data, dm, LayerAccess::numericErrorFlag(layer), kStageResultEmb, layer.hp().magnitude_limit);
+        work.result_emb.data, dm, diag.numericErrorFlag(), kStageResultEmb, hp.magnitude_limit);
 
     const int row_final_slot = batch_row * payload.max_seq_len + row_tokens - 1;
-    if (layer.hp().result_slot_mode == 1) {
-        if (layer.hp().result_slot_index != row_final_slot) {
+    if (hp.result_slot_mode == 1) {
+        if (hp.result_slot_index != row_final_slot) {
             throw std::runtime_error(
-                "ExecutionBlock: fixed result_slot_index=" + std::to_string(layer.hp().result_slot_index) +
+                "ExecutionBlock: fixed result_slot_index=" + std::to_string(hp.result_slot_index) +
                 " would inject row-final execution memory into token " +
-                std::to_string(layer.hp().result_slot_index) +
+                std::to_string(hp.result_slot_index) +
                 " for batch_row=" + std::to_string(batch_row) +
                 "; causal shared forward requires row-final slot " +
                 std::to_string(row_final_slot));
         }
-        work.result_slot = layer.hp().result_slot_index;
+        work.result_slot = hp.result_slot_index;
     } else {
         work.result_slot = row_final_slot;
     }
@@ -1679,11 +1681,11 @@ void executeStepCoordinatorImpl(
     cudaMallocOrThrow(reinterpret_cast<void**>(&save_H_slot_buf), dm * sizeof(float), "datastream_save_H_slot");
     kernelInjectResultSlot<<<1, kBlockSize, 0, stream>>>(
         H.data, work.result_emb.data, params.w_inject_gate.data,
-        inv_sqrt_d, work.result_slot, dm, layer.hp().inject_gate_temp,
+        inv_sqrt_d, work.result_slot, dm, hp.inject_gate_temp,
         save_gate_buf, save_H_slot_buf);
     CUDA_CHECK_KERNEL();
     // Queue async readback of inject gate for telemetry (completes at next sync)
-    if (diag_out && layer.hp().debug_mode) {
+    if (diag_out && hp.debug_mode) {
         CUDA_CHECK(cudaMemcpyAsync(&h_inject_gate_value, save_gate_buf, sizeof(float),
                                    cudaMemcpyDeviceToHost, stream));
     }
@@ -1692,7 +1694,7 @@ void executeStepCoordinatorImpl(
         auto inject_fn = std::make_shared<ExecutionBlockInjectGradFn>();
         inject_fn->capture(H, work.result_emb, params.w_inject_gate,
                            save_gate_buf, save_H_slot_buf,
-                           inv_sqrt_d, layer.hp().inject_gate_temp,
+                           inv_sqrt_d, hp.inject_gate_temp,
                            work.result_slot, payload.total_tokens, dm, stream);
         H.grad_fn = inject_fn;
         H.is_leaf = false;
@@ -1746,9 +1748,9 @@ void executeStepCoordinatorImpl(
     if (diag_out) {
         diag_out->write_logits_tensor = std::move(write_logits);
     }
-    kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_write.data, V, LayerAccess::numericErrorFlag(layer), kStagePWrite);
+    kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_write.data, V, diag.numericErrorFlag(), kStagePWrite);
     kernelCheckWriteCollapse<<<1, kWarpSize, 0, stream>>>(
-        work.p_write.data, V, LayerAccess::numericErrorFlag(layer), kStageWriteCollapse, layer.hp().write_collapse_threshold);
+        work.p_write.data, V, diag.numericErrorFlag(), kStageWriteCollapse, hp.write_collapse_threshold);
 
     work.state_new = Tensor::zeros({1, dm}, stream, "exec_state_new");
     const float* step_emb_ptr = params.step_embeddings.data + static_cast<size_t>(step) * dm;
@@ -1757,15 +1759,15 @@ void executeStepCoordinatorImpl(
     CUDA_CHECK_KERNEL();
 
     work.key_new = autograd::matmul(work.result_emb, params.W_key_proj, stream);
-    applyHardWriteback(layer, parameters, memory, stream, work);
+    applyHardWriteback(hp, diag, parameters, memory, stream, work);
     copyStepDiagnostics(work, diag_out, V_val, nop, V, dm, stream);
-    captureStateAfterWriteAndCheckMutations(layer, memory, diag_out, stream);
-    collectStepMetrics(layer, work, diag_out, V_val, nop, V, stream);
+    captureStateAfterWriteAndCheckMutations(hp, diag, memory, diag_out, stream);
+    collectStepMetrics(hp, diag, work, diag_out, V_val, nop, V, stream);
     // collectStepMetrics synced the stream — h_inject_gate_value is now valid
-    if (diag_out && layer.hp().debug_mode) {
+    if (diag_out && hp.debug_mode) {
         diag_out->metrics.inject_gate_value = h_inject_gate_value;
     }
-    finalizeStepOrThrow(layer, diag_out, step, stream);
+    finalizeStepOrThrow(hp, diag, diag_out, step, stream);
     if (diag_out) {
         diag_out->div_was_clamped = (h_div_flag != 0);
         diag_out->v_out_tensor = std::move(work.v_out);
@@ -1774,10 +1776,10 @@ void executeStepCoordinatorImpl(
 
 }  // namespace GRIM::ExecutionBlockInternal
 
-GRIM::Tensor GRIM::ExecutionBlockLayer::computeEntropyLoss(
+GRIM::Tensor GRIM::executionBlockComputeEntropyLoss(
     const std::vector<const GRIM::Forward::ExecutionBlockStepOutput*>& steps,
     float weight,
-    cudaStream_t stream) const
+    cudaStream_t stream)
 {
     if (steps.empty() || weight <= 0.0f) {
         return GRIM::Tensor::zeros({1, 1}, stream, "exec_entropy_zero");

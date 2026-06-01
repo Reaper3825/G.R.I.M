@@ -661,8 +661,8 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                     const int row_len = requirePayloadRowLength(
                         payload, b, "ModelForward ExecutionBlock next-layer input readback");
                     const int final_token_offset = b * payload.max_seq_len + row_len - 1;
-                    Tensor row_delta = request.execution_block->crossAttentionRead(
-                        read_source, forward_outputs.exec_memories[b], *execution_block_parameters,
+                    Tensor row_delta = GRIM::executionBlockCrossAttentionRead(
+                        execution_hp, read_source, forward_outputs.exec_memories[b], *execution_block_parameters,
                         total_tokens, request.stream,
                         final_token_offset, 1,
                         runtime.read_gate_accum_tensor
@@ -708,6 +708,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                     request.stream,
                     forward_outputs,
                     execution_runtime);
+                execution_runtime.ensureDiagnostics(request.stream);
 
                 for (int b = 0; b < payload.batch_size; ++b) {
                     const bool row_exec_active = !payload.execution_active.empty()
@@ -731,7 +732,8 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                             + " has no slot map or numeric values for bootstrap — "
                             "compiled payload marks row active but bootstrap data is missing");
                     }
-                    request.execution_block->bootstrapMemoryFromSlotMap(
+                    GRIM::executionBlockBootstrapMemoryFromSlotMap(
+                        execution_hp,
                         M_b,
                         *execution_block_parameters,
                         request.bindings->d_numeric_values + tok_off,
@@ -741,7 +743,8 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                     for (int step = 0; step < exec_K; ++step) {
                         ExecutionBlockStepOutput step_diag;
 
-                        request.execution_block->executeStep(
+                        GRIM::executionBlockStep(
+                            execution_hp, execution_runtime.execution_diag,
                             layer_output, M_b, *execution_block_parameters,
                             reinterpret_cast<const int*>(row_atom_view.atom_positions.data),
                             row_atom_view.num_atoms, payload, *request.bindings, b,

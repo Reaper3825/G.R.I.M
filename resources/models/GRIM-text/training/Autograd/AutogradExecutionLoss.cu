@@ -1142,7 +1142,7 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
                         selected_arg1,
                         selected_arg2,
                         transition_loss,
-                        ctx.execution_block->reinforceBaselineBuffer(),
+                        ctx.training_state->execution_runtime.execution_diag.reinforceBaseline(),
                         execution_hp.arg_reinforce_baseline_decay,
                         effective_weight,
                         num_value_slots,

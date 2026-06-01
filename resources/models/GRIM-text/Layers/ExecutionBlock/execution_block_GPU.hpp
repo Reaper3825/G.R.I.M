@@ -35,9 +35,6 @@ struct ExecutionRecord;
 struct ExecutionBlockStepOutput;
 struct ExecutionBlockOutput;
 }
-namespace ExecutionBlockInternal {
-struct LayerAccess;
-}
 
 //======================================================//
 //  ExecutionMemory — addressable register file
@@ -62,6 +59,65 @@ struct ExecutionMemory {
 };
 
 //======================================================//
+//  ExecutionBlockDiagnosticsBuffers
+//
+//  Persistent device-side diagnostic / hardening buffers for the execution
+//  step. Allocated once, reused every step. The per-step flags/records are
+//  Category 3 workspace (stale contents between steps); reinforce_baseline is a
+//  durable EMA. Owned by one long-lived owner; the math ops borrow it.
+//======================================================//
+struct ExecutionBlockDiagnosticsBuffers {
+    int* d_numeric_error_flag = nullptr;  // atomicMax stage-id: numeric, softmax, collapse
+    int* d_div_clamp_count    = nullptr;  // atomicAdd on division clamp
+    int* d_div_invalid_flag   = nullptr;  // [1] per-step: 1 if division was clamped, 0 otherwise
+    int* d_exec_idx           = nullptr;  // [4] arg1_rel, arg2_rel, op_id, write_slot (abs)
+    int* d_exec_record_i      = nullptr;  // [3] packed for ExecutionRecord ints
+    float* d_exec_record_f    = nullptr;  // [3] value_before_1, value_before_2, value_after
+    float* d_reinforce_baseline = nullptr; // [1] EMA of transition_err for REINFORCE variance reduction
+
+    ExecutionBlockDiagnosticsBuffers() = default;
+    ~ExecutionBlockDiagnosticsBuffers() { destroy(); }
+
+    ExecutionBlockDiagnosticsBuffers(const ExecutionBlockDiagnosticsBuffers&) = delete;
+    ExecutionBlockDiagnosticsBuffers& operator=(const ExecutionBlockDiagnosticsBuffers&) = delete;
+    ExecutionBlockDiagnosticsBuffers(ExecutionBlockDiagnosticsBuffers&& other) noexcept { moveFrom(other); }
+    ExecutionBlockDiagnosticsBuffers& operator=(ExecutionBlockDiagnosticsBuffers&& other) noexcept {
+        if (this != &other) { destroy(); moveFrom(other); }
+        return *this;
+    }
+
+    bool allocated() const { return d_numeric_error_flag != nullptr; }
+    void allocate(cudaStream_t stream);  // defined in execution_block_GPU.cu
+    void destroy();                      // defined in execution_block_GPU.cu
+
+    int* numericErrorFlag() const { return d_numeric_error_flag; }
+    int* divClampCount() const    { return d_div_clamp_count; }
+    int* divInvalidFlag() const   { return d_div_invalid_flag; }
+    int* execIndices() const      { return d_exec_idx; }
+    int* execRecordI() const      { return d_exec_record_i; }
+    float* execRecordF() const    { return d_exec_record_f; }
+    float* reinforceBaseline() const { return d_reinforce_baseline; }
+
+private:
+    void moveFrom(ExecutionBlockDiagnosticsBuffers& other) noexcept {
+        d_numeric_error_flag = other.d_numeric_error_flag;
+        d_div_clamp_count    = other.d_div_clamp_count;
+        d_div_invalid_flag   = other.d_div_invalid_flag;
+        d_exec_idx           = other.d_exec_idx;
+        d_exec_record_i      = other.d_exec_record_i;
+        d_exec_record_f      = other.d_exec_record_f;
+        d_reinforce_baseline = other.d_reinforce_baseline;
+        other.d_numeric_error_flag = nullptr;
+        other.d_div_clamp_count    = nullptr;
+        other.d_div_invalid_flag   = nullptr;
+        other.d_exec_idx           = nullptr;
+        other.d_exec_record_i      = nullptr;
+        other.d_exec_record_f      = nullptr;
+        other.d_reinforce_baseline = nullptr;
+    }
+};
+
+//======================================================//
 //  ExecutionBlockLayer
 //======================================================//
 class ExecutionBlockLayer {
@@ -79,87 +135,88 @@ public:
     ExecutionBlockLayer(const ExecutionBlockLayer&) = delete;
     ExecutionBlockLayer& operator=(const ExecutionBlockLayer&) = delete;
 
-    //--------------------------------------------------//
-    // Forward: one execution step — mutates H and M
-    // token_offset / row_tokens enable per-batch-row processing:
-    //   context = reduce_mean(H[token_offset : token_offset + row_tokens])
-    //   injection at H[token_offset + row_tokens - 1]
-    //
-    // trace_state:     [1, d_model] running accumulator for this row (mutated:
-    //                  trace_state = autograd::add(trace_state, step_emb)).
-    // prior_records:   host-side ExecutionRecord history for this row (read-only).
-    //                  Used to build trace_vec = f(encoded history).
-    //--------------------------------------------------//
-    void executeStep(
-        Tensor& H,                          // [total_tokens, d_model] mutated in place
-        ExecutionMemory& M,
-        ExecutionBlockParameterTensors& parameters,
-        const int* atom_positions,          // row-local [max(1, num_atoms)] positions relative to current row [0, row_tokens)
-        int num_atoms,
-        const Batching::BatchPayload& payload,
-        const Batching::BatchDeviceBindings& bindings,
-        int batch_row,
-        int step,
-        float temperature,
-        cudaStream_t stream,
-        Forward::ExecutionBlockStepOutput* diag_out,
-        Tensor& trace_state,
-        const std::vector<Forward::ExecutionRecord>& prior_records
-    );
-
-    //--------------------------------------------------//
-    // Bootstrap: copy literal values into M.values via slot map (detached, no grad)
-    //--------------------------------------------------//
-    void bootstrapMemoryFromSlotMap(
-        ExecutionMemory& M,
-        ExecutionBlockParameterTensors& parameters,
-        const float* device_numeric_values,  // [row_tokens]
-        const int32_t* device_slot_map,      // [row_tokens]
-        int row_tokens,
-        cudaStream_t stream
-    );
-
-    //--------------------------------------------------//
-    // Cross-attention read: H = H + g * W_O(R)
-    // token_offset / row_tokens enable per-batch-row processing.
-    //--------------------------------------------------//
-    Tensor crossAttentionRead(
-        const Tensor& hidden_states,
-        ExecutionMemory& M,
-        ExecutionBlockParameterTensors& parameters,
-        int total_tokens,
-        cudaStream_t stream,
-        int token_offset = 0,
-        int row_tokens = -1,
-        float* d_gate_accum = nullptr  // [2] device: [sum, count] for telemetry
-    );
-
-    //--------------------------------------------------//
-    // Entropy loss over arg/op/write distributions
-    //--------------------------------------------------//
-    Tensor computeEntropyLoss(
-        const std::vector<const Forward::ExecutionBlockStepOutput*>& steps,
-        float weight,
-        cudaStream_t stream
-    ) const;
-
     const HyperParameters::ExecutionBlockConstructionHP& hp() const { return hp_; }
-    float* reinforceBaselineBuffer() { return d_reinforce_baseline_; }
 
 private:
-    friend struct ExecutionBlockInternal::LayerAccess;
-
     HyperParameters::ExecutionBlockConstructionHP hp_;
-
-    // Production hardening: persistent device-side error tracking
-    int* d_numeric_error_flag_ = nullptr;  // atomicMax stage-id: numeric, softmax, collapse
-    int* d_div_clamp_count_    = nullptr;  // atomicAdd on division clamp
-    int* d_div_invalid_flag_   = nullptr;  // [1] per-step: 1 if division was clamped, 0 otherwise
-    int* d_exec_idx_           = nullptr;  // [4] arg1_rel, arg2_rel, op_id, write_slot (abs)
-    int* d_exec_record_i_      = nullptr;  // [3] packed for ExecutionRecord ints
-    float* d_exec_record_f_    = nullptr;  // [3] value_before_1, value_before_2, value_after
-    float* d_reinforce_baseline_ = nullptr; // [1] EMA of transition_err for REINFORCE variance reduction
 };
+
+//======================================================//
+//  Execution-block free operations
+//
+//  The execution math no longer hangs off ExecutionBlockLayer state. Callers
+//  pass the construction hyperparameters explicitly, plus a runtime-owned
+//  ExecutionBlockDiagnosticsBuffers (durable REINFORCE baseline + per-step
+//  workspace) where the step machinery needs one.
+//======================================================//
+
+//--------------------------------------------------//
+// Forward: one execution step — mutates H and M
+// token_offset / row_tokens enable per-batch-row processing:
+//   context = reduce_mean(H[token_offset : token_offset + row_tokens])
+//   injection at H[token_offset + row_tokens - 1]
+//
+// trace_state:     [1, d_model] running accumulator for this row (mutated:
+//                  trace_state = autograd::add(trace_state, step_emb)).
+// prior_records:   host-side ExecutionRecord history for this row (read-only).
+//                  Used to build trace_vec = f(encoded history).
+//--------------------------------------------------//
+void executionBlockStep(
+    const HyperParameters::ExecutionBlockConstructionHP& hp,
+    ExecutionBlockDiagnosticsBuffers& diag,
+    Tensor& H,                          // [total_tokens, d_model] mutated in place
+    ExecutionMemory& M,
+    ExecutionBlockParameterTensors& parameters,
+    const int* atom_positions,          // row-local [max(1, num_atoms)] positions relative to current row [0, row_tokens)
+    int num_atoms,
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
+    int batch_row,
+    int step,
+    float temperature,
+    cudaStream_t stream,
+    Forward::ExecutionBlockStepOutput* diag_out,
+    Tensor& trace_state,
+    const std::vector<Forward::ExecutionRecord>& prior_records
+);
+
+//--------------------------------------------------//
+// Bootstrap: copy literal values into M.values via slot map (detached, no grad)
+//--------------------------------------------------//
+void executionBlockBootstrapMemoryFromSlotMap(
+    const HyperParameters::ExecutionBlockConstructionHP& hp,
+    ExecutionMemory& M,
+    ExecutionBlockParameterTensors& parameters,
+    const float* device_numeric_values,  // [row_tokens]
+    const int32_t* device_slot_map,      // [row_tokens]
+    int row_tokens,
+    cudaStream_t stream
+);
+
+//--------------------------------------------------//
+// Cross-attention read: H = H + g * W_O(R)
+// token_offset / row_tokens enable per-batch-row processing.
+//--------------------------------------------------//
+Tensor executionBlockCrossAttentionRead(
+    const HyperParameters::ExecutionBlockConstructionHP& hp,
+    const Tensor& hidden_states,
+    ExecutionMemory& M,
+    ExecutionBlockParameterTensors& parameters,
+    int total_tokens,
+    cudaStream_t stream,
+    int token_offset = 0,
+    int row_tokens = -1,
+    float* d_gate_accum = nullptr  // [2] device: [sum, count] for telemetry
+);
+
+//--------------------------------------------------//
+// Entropy loss over arg/op/write distributions
+//--------------------------------------------------//
+Tensor executionBlockComputeEntropyLoss(
+    const std::vector<const Forward::ExecutionBlockStepOutput*>& steps,
+    float weight,
+    cudaStream_t stream
+);
 
 }  // namespace GRIM
 
