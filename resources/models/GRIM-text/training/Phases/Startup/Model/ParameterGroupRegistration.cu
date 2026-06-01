@@ -446,16 +446,13 @@ void registerExecutionBlockParameters(Startup::GpuModelState& gpu_model_state,
                                       ParameterRegistry::StartupParameterRegistry& parameter_registry,
                                       Registrar& registrar,
                                       const GRIM::Config::AiConfigSnapshot& config) {
-    auto* execution_block = gpu_model_state.execution_block_layer.get();
+    (void)gpu_model_state;
     auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
     auto* slot_selector = parameter_registry.getDecodeTimeSlotSelector();
     const auto execution_hp = GRIM::HyperParameters::executionBlockConstructionHP(config);
     const auto selector_hp = GRIM::HyperParameters::decodeTimeSelectorConstructionHP(config);
 
     if (!execution_hp.enabled) {
-        if (execution_block) {
-            throw std::runtime_error("[buildParameterGroups] ExecutionBlock layer exists while config.execution_block_enabled=false");
-        }
         if (execution_block_parameters) {
             throw std::runtime_error("[buildParameterGroups] ExecutionBlock parameter owner exists while config.execution_block_enabled=false");
         }
@@ -465,7 +462,6 @@ void registerExecutionBlockParameters(Startup::GpuModelState& gpu_model_state,
         return;
     }
 
-    requireLayer(execution_block, "ExecutionBlockLayer", "registerExecutionBlockParameters");
     auto& execution_block_tensor_owner = requireLayer(
         execution_block_parameters,
         "ExecutionBlockParameterTensors",

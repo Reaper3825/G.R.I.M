@@ -321,7 +321,7 @@ GRIM::GeneratedSequence generateOneSequence(
         request.parameter_registry = &parameter_registry;
         request.pbm = &pbm;
         request.scratch_block = scratch_hp.enabled ? scratch_block_layer : nullptr;
-        request.execution_block = model.getExecutionBlockLayer();
+        request.execution_block_enabled = model.executionBlockEnabled();
         request.cublas_handle = training_state.cublas_handle.get();
         request.stream = stream;
         request.payload = &active_payload;

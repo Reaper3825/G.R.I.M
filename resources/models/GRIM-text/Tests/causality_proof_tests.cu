@@ -117,7 +117,7 @@ std::vector<float> runInferencePrefill(GRIM::LanguageModel* model,
     request.embedding_layer = model->getEmbeddingLayer();
     request.lm_head = model->getLmHeadLayer();
     request.scratch_block = model->getScratchBlockLayer();
-    request.execution_block = model->getExecutionBlockLayer();
+    request.execution_block_enabled = model->executionBlockEnabled();
     request.cublas_handle = training_state->cublas_handle.get();
     request.stream = stream;
     request.payload = &payload;

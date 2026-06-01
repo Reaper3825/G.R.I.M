@@ -148,7 +148,6 @@ void verifyEncoderLayersReady(GRIM::GPUGrimEncoder& encoder,
 }
 
 void initializeExecutionSubsystems(
-    std::unique_ptr<GRIM::ExecutionBlockLayer>& execution_block_layer,
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     std::unique_ptr<GRIM::DecodeTimeSlotSelector>& decode_time_slot_selector,
     const GRIM::Config::AiConfigSnapshot& model_cfg,
@@ -165,10 +164,7 @@ void initializeExecutionSubsystems(
         execution_hp,
         execution_seed,
         init_stream);
-    execution_block_layer = std::make_unique<GRIM::ExecutionBlockLayer>(
-        execution_hp,
-        init_stream);
-    std::cout << "✓ ExecutionBlock layer created\n";
+    std::cout << "✓ ExecutionBlock parameters created\n";
 
     const auto selector_hp = GRIM::HyperParameters::decodeTimeSelectorConstructionHP(model_cfg);
     if (!selector_hp.enabled) {
@@ -399,8 +395,8 @@ void initializeInferenceRuntime(const ::GRIM::Config::AiConfigSnapshot& model_cf
     (void)requireLmHeadParametersReady(parameter_registry, caller);
 
     const auto execution_hp = GRIM::HyperParameters::executionBlockConstructionHP(model_cfg);
-    if (execution_hp.enabled && !gpu_model_state.execution_block_layer) {
-        throw std::runtime_error(std::string("[") + caller + "] ExecutionBlockLayer not assembled by Startup::assembleGpuModel() while execution_block is enabled.");
+    if (execution_hp.enabled && !parameter_registry.getExecutionBlockParameters()) {
+        throw std::runtime_error(std::string("[") + caller + "] ExecutionBlock parameters not assembled by Startup::assembleGpuModel() while execution_block is enabled.");
     }
 
     const auto selector_hp = GRIM::HyperParameters::decodeTimeSelectorConstructionHP(model_cfg);
@@ -614,7 +610,6 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
         //  5) Build optional model heads/subsystems
         //======================================================//
         initializeExecutionSubsystems(
-            gpu_model_state.execution_block_layer,
             parameter_registry,
             parameter_registry.decode_time_slot_selector,
             model_cfg,

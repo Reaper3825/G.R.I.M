@@ -5,9 +5,10 @@ ExecutionBlock is a row-level register-machine side channel. Its memory is **not
 Durable trainable execution-block tensors are owned by
 `StartupParameterRegistry::execution_block_parameters` and initialized by
 `ParameterGroupRegistration::initializeExecutionBlockParameterTensors(...)`.
-`ExecutionBlockLayer` is a runtime shell: shared forward passes the
-registry-owned parameter bundle explicitly into execution-block math ops rather
-than storing a borrowed parameter pointer on the layer.
+The old `ExecutionBlockLayer` runtime shell is deleted. Shared forward now
+passes the registry-owned parameter bundle, explicit
+`ExecutionBlockConstructionHP`, and runtime-owned diagnostics workspace
+explicitly into execution-block free ops.
 
 ## Causal forward contract
 

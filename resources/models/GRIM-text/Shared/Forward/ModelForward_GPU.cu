@@ -241,12 +241,12 @@ void ModelForwardRequest::validate(const char* caller) const {
     (void)graphPolicyName(graph);
     const auto execution_hp = HyperParameters::executionBlockConstructionHP(*config);
     if (execution_hp.enabled) {
-        if (!execution_block) {
-            throw std::runtime_error(std::string(caller) + ": execution_block is NULL while execution_block_enabled=true");
+        if (!execution_block_enabled) {
+            throw std::runtime_error(std::string(caller) + ": execution_block_enabled=false while ExecutionBlockConstructionHP.enabled=true");
         }
         (void)parameter_registry->requireExecutionBlockParameters(caller);
-    } else if (execution_block) {
-        throw std::runtime_error(std::string(caller) + ": execution_block is non-null while execution_block_enabled=false");
+    } else if (execution_block_enabled) {
+        throw std::runtime_error(std::string(caller) + ": execution_block_enabled=true while ExecutionBlockConstructionHP.enabled=false");
     }
     if (payload->batch_size <= 0) throw std::runtime_error(std::string(caller) + ": BatchPayload.batch_size <= 0");
     if (payload->max_seq_len <= 0) throw std::runtime_error(std::string(caller) + ": BatchPayload.max_seq_len <= 0");
@@ -302,7 +302,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const float execution_block_temp_start = HyperParameters::snapshotTrainingConfigField<float>(*cfg, "execution_block_temp_start");
     const int scratch_block_atom_embedding_dim = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "scratch_block_atom_embedding_dim");
     const bool scratch_block_active = scratch_hp.enabled && request.scratch_block != nullptr;
-    const bool execution_block_active = execution_hp.enabled && request.execution_block != nullptr;
+    const bool execution_block_active = execution_hp.enabled && request.execution_block_enabled;
     auto* execution_block_parameters = execution_block_active
         ? &request.parameter_registry->requireExecutionBlockParameters("executeModelForward")
         : nullptr;
@@ -644,7 +644,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 "executeModelForward(retained_graph)");
 
             if (exec_layer >= 0 && layer_idx > exec_layer
-                && request.execution_block
+                && execution_block_active
                 && !forward_outputs.exec_memories.empty()) {
                 // executeStep(...) may export the immediate step result on the
                 // execution layer output, but persistent ExecutionMemory is a
@@ -689,7 +689,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 "enc_layer_output",
                 "executeModelForward(retained_graph)");
 
-            if (layer_idx == exec_layer && request.execution_block) {
+            if (layer_idx == exec_layer && execution_block_active) {
                 const int V = execution_block_num_slots;
                 const int nop = execution_block_num_ops;
 

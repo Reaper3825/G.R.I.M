@@ -101,7 +101,7 @@ struct AutogradContext {
     // OPTIONAL COMPONENTS (nullptr if disabled)
     // ═══════════════════════════════════════════════════════════════════════════
     ScratchBlockLayer* scratch_block = nullptr;
-    ExecutionBlockLayer* execution_block = nullptr;
+    bool execution_block_enabled = false;
     ::ParameterRegistry::StartupParameterRegistry* parameter_registry = nullptr;
 
     /** Model pointer for MTP head access in computeAutogradLoss; set by autogradTrainingStep. */
@@ -177,7 +177,7 @@ AutogradContext initAutogradContext(
     AutogradLossState& loss_state,
     GPUGrimEncoder* gpu_encoder,
     ScratchBlockLayer* scratch_block,
-    ExecutionBlockLayer* execution_block,
+    bool execution_block_enabled,
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,

@@ -131,7 +131,6 @@ bool saveLanguageModelCheckpoint(
     auto* lm_head_parameters = parameter_registry.getLmHeadParameters();
     auto* scratch_block_layer = model.getScratchBlockLayer();
     auto* scratch_block_parameters = parameter_registry.getScratchBlockParameters();
-    auto* execution_block_layer = model.getExecutionBlockLayer();
     auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
     auto* decode_time_slot_selector = parameter_registry.getDecodeTimeSlotSelector();
     auto* gpu_encoder_owner = gpu_model_state.gpu_encoder.get();
@@ -247,9 +246,6 @@ bool saveLanguageModelCheckpoint(
     }
 
     // ExecutionBlock v2 weights — serialized via FlatBuffer
-    if ((execution_block_layer != nullptr) != (execution_block_parameters != nullptr)) {
-        throw std::runtime_error("saveLanguageModelCheckpoint: execution-block layer/parameter owner mismatch");
-    }
     if (execution_block_parameters) {
         auto assignRead = [](DeviceReadView& v, const Tensor& t) {
             v.ptr = t.data;
@@ -423,7 +419,6 @@ bool loadLanguageModelCheckpoint(
     auto* lm_head_parameters = parameter_registry.getLmHeadParameters();
     auto* scratch_block_layer = model.getScratchBlockLayer();
     auto* scratch_block_parameters = parameter_registry.getScratchBlockParameters();
-    auto* execution_block_layer = model.getExecutionBlockLayer();
     auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
     auto* decode_time_slot_selector = parameter_registry.getDecodeTimeSlotSelector();
 
@@ -464,12 +459,6 @@ bool loadLanguageModelCheckpoint(
     }
 
     // Pattern B: call site is the sole authority for what the model requires.
-    if ((execution_block_layer != nullptr) != (execution_block_parameters != nullptr)) {
-        EmitModuleError(ModuleId::Checkpoint,
-                        "[load] ExecutionBlock layer/parameter owner mismatch during checkpoint load.");
-        std::cerr << "[loadLanguageModelCheckpoint] Error: ExecutionBlock layer/parameter owner mismatch" << std::endl;
-        return false;
-    }
     request.capabilities.requires_execution_block = (execution_block_parameters != nullptr);
     request.capabilities.requires_slot_selector     = (decode_time_slot_selector != nullptr);
     request.capabilities.requires_scratch_block   = scratch_hp.enabled;
@@ -639,7 +628,7 @@ bool loadLanguageModelCheckpoint(
                 << " lm_head_params=" << (lm_head_parameters ? "OK" : "NULL")
                 << " scratch_block=" << (scratch_block_layer ? "OK" : "NULL")
                 << " scratch_block_params=" << (scratch_block_parameters ? "OK" : "NULL")
-                << " exec_block=" << (execution_block_layer ? "OK" : "NULL")
+                << " exec_block=" << (execution_block_parameters ? "OK" : "NULL")
                 << " slot_selector=" << (decode_time_slot_selector ? "OK" : "NULL");
             EmitModuleError(ModuleId::Checkpoint, oss.str());
         }

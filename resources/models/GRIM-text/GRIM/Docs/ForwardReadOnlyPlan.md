@@ -147,31 +147,31 @@ Current contract: `ModelForwardRequest` carries immutable forward inputs plus a 
 
 The workspace buffers are Category 3 at best, but they are still parked on a long-lived layer object instead of an explicit runtime/intermediate owner. The telemetry mutation is a separate durable-state write from the forward path.
 
-### ExecutionBlock still keeps per-step scratch and training baseline on the durable layer object
+### ExecutionBlock workspace / baseline ownership (fixed)
 
-`ExecutionBlockLayer` still owns mutable device buffers that are reset and rewritten from the step-execution path:
+This violation is now fixed. The old `ExecutionBlockLayer` shell and
+`LayerAccess` helper are deleted.
 
-- `Layers/ExecutionBlock/execution_block_GPU.hpp`
-  - `d_numeric_error_flag_`
-  - `d_div_clamp_count_`
-  - `d_div_invalid_flag_`
-  - `d_exec_idx_`
-  - `d_exec_record_i_`
-  - `d_exec_record_f_`
-  - `d_reinforce_baseline_`
-- `Layers/ExecutionBlock/execution_block_memory_stream_GPU.cu`
-  - `cudaMemsetAsync(LayerAccess::numericErrorFlag(layer), 0, ...)`
-  - arg-selection / writeback code writes `LayerAccess::execIndices(layer)` from forward-time argmax decisions
-- `Layers/ExecutionBlock/execution_block_data_stream_GPU.cu`
-  - execution diagnostics and record capture reuse `LayerAccess::execRecordI(layer)` / `execRecordF(layer)`
-  - `kernelArgReinforceLossForward(...)` updates `baseline[0] = ...` through `LayerAccess::reinforceBaseline(layer)`
+Current architecture:
 
-This is two separate ownership violations:
+- `Layers/ExecutionBlock/execution_block_GPU.hpp` exports free ops plus the
+  explicit `ExecutionBlockDiagnosticsBuffers` runtime workspace.
+- `Forward::ModelForwardExecutionRuntime::execution_diag` owns that workspace;
+  training reaches it through `TrainingState::execution_runtime`, inference
+  through `GenerationState::execution_runtime`.
+- Per-step numeric flags / argmax scratch / packed execution-record scratch are
+  reset and reused through that explicit runtime owner, not a durable layer
+  object.
+- The durable REINFORCE EMA baseline now lives on the same explicit runtime
+  owner and is read in autograd via
+  `training_state->execution_runtime.execution_diag.reinforceBaseline()`.
+- `Forward::provisionExecutionForwardRuntime(...)` owns per-call execution
+  memory / trace-state provisioning, while `ensureDiagnostics(stream)` brings
+  the persistent diagnostics owner online separately.
 
-- the error / selection / record buffers are Category 3 per-step workspace parked on a durable layer object,
-- the REINFORCE EMA baseline is Category 2 training state parked on that same shared layer object.
-
-Both must move behind explicit owners. Shared forward should consume caller-owned step workspaces, and any persistent training baseline must live in training-owned state rather than a mode-neutral layer.
+Result: execution-block forward math now consumes explicit HP + runtime payloads
+and no longer mutates hidden raw device buffers parked on a durable layer
+object.
 
 ### Encoder / attention still mutate process-global forward state
 
@@ -243,7 +243,7 @@ Use this section as the implementation queue. The order below is the architectur
 - **Exit signal:**
   - ScratchBlock forward math becomes a pure parameter-read + output-write step with no hidden durable layer-state mutation
 
-### Patch 4 — ExecutionBlock workspace / baseline ownership (`execution-runtime` agent)
+### Patch 4 — ExecutionBlock workspace / baseline ownership (`execution-runtime` agent) — resolved
 
 - **Primary files:**
   - `Layers/ExecutionBlock/execution_block_GPU.hpp`
@@ -251,15 +251,16 @@ Use this section as the implementation queue. The order below is the architectur
   - `Layers/ExecutionBlock/execution_block_memory_stream_GPU.cu`
   - `Layers/ExecutionBlock/execution_block_data_stream_GPU.cu`
 - **Violation class:** per-step workspace parked on durable layer, training baseline parked on mode-neutral layer
-- **Concrete offenders:**
-  - layer-owned mutable device buffers: `d_numeric_error_flag_`, `d_div_clamp_count_`, `d_div_invalid_flag_`, `d_exec_idx_`, `d_exec_record_i_`, `d_exec_record_f_`
-  - per-step resets / writes like `cudaMemsetAsync(LayerAccess::numericErrorFlag(layer), 0, ...)` and argmax outputs stored in `LayerAccess::execIndices(layer)`
-  - persistent training EMA `d_reinforce_baseline_` updated by `baseline[0] = ...`
-- **Required patch:**
-  - move step scratch / error flags / execution-record buffers to explicit caller-owned runtime workspace
-  - move REINFORCE baseline ownership to training-owned durable state
-  - keep `ExecutionBlockLayer` as parameter owner + math entry point, not runtime scratch owner
-- **Exit signal:**
+- **Implemented result:**
+  - deleted `ExecutionBlockLayer` entirely after first moving its scratch into
+    `ExecutionBlockDiagnosticsBuffers`
+  - moved step scratch / error flags / execution-record buffers to explicit
+    runtime ownership on `ModelForwardExecutionRuntime::execution_diag`
+  - kept REINFORCE baseline on that explicit durable runtime owner instead of a
+    mode-neutral layer shell
+  - converted public execution-block entry points into free functions that take
+    explicit `ExecutionBlockConstructionHP` and runtime payloads
+- **Exit signal (achieved):**
   - execution-block forward math no longer mutates hidden raw device buffers stored on the durable layer object
 
 ### Patch 5 — LM head metadata + effective-weight lifetime (`lmhead-boundary` agent)
@@ -462,7 +463,7 @@ Goal: make the type system reflect the boundary instead of relying on call-site 
   - `Layers/LMHead/lm_head_GPU.hpp`
   - `Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp`
   - `Layers/ReasoningHead/reasoning_head_GPU.hpp`
-  - `Layers/ExecutionBlock/execution_block_GPU.hpp` (training-only today, but should still expose const reads where possible)
+  - `Layers/ExecutionBlock/execution_block_GPU.hpp` (now mostly resolved here: it exports free ops + explicit runtime workspace, and must not regrow layer-owned parameter/scratch accessors)
 
 ### Exit criteria
 
@@ -508,8 +509,8 @@ Goal: make the read-only forward boundary enforceable at build time, not just by
 | `Layers/Encoding/Encoding_GPU.hpp` | Add const/read-only parameter accessors and/or view payload entry points |
 | `Layers/FlashAttention/EncoderSelfAttention_GPU.cu` | Consume read-only attention-weight views in prefill path and remove forward-local static logging state |
 | `Layers/FlashAttention/EncoderSelfAttention_GPU.hpp` | Carry read-only attention parameter-view contracts |
-| `Layers/ExecutionBlock/execution_block_GPU.cu` | Stop owning step scratch / baseline on the durable layer object; route explicit runtime/training owners instead |
-| `Layers/ExecutionBlock/execution_block_GPU.hpp` | Remove durable raw-pointer scratch ownership from the layer boundary; expose explicit runtime workspace payloads |
+| `Layers/ExecutionBlock/execution_block_GPU.cu` | Already converted to thin free-op wrappers + diagnostics-buffer alloc/destroy; keep runtime ownership explicit and do not reintroduce layer shells |
+| `Layers/ExecutionBlock/execution_block_GPU.hpp` | Already reduced to public memory structs, explicit diagnostics workspace, and free-op declarations; do not resurrect layer-owned scratch or parameter accessors |
 | `Layers/ExecutionBlock/execution_block_memory_stream_GPU.cu` | Write per-step scratch only through caller-owned runtime workspace buffers |
 | `Layers/ExecutionBlock/execution_block_data_stream_GPU.cu` | Move execution records / flags / REINFORCE baseline updates behind explicit runtime or training owners |
 | `Layers/FeedForward/Feed_Forward_GPU.cu` | Reuse FFN math with read-only parameter views |

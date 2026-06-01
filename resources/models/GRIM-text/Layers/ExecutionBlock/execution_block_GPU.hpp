@@ -2,7 +2,7 @@
 //  execution_block_GPU.hpp
 //  Differentiable Register Machine — GPU
 //
-//  Declares: ExecutionMemory, ExecutionBlockLayer.
+//  Declares: ExecutionMemory, ExecutionBlockDiagnosticsBuffers, execution-block free operations.
 //  Durable trainable parameter ownership lives in
 //  training/Phases/Startup/Model/ParameterRegistry.hpp.
 //  Forward-owned execution output payload types live in
@@ -115,30 +115,6 @@ private:
         other.d_exec_record_f      = nullptr;
         other.d_reinforce_baseline = nullptr;
     }
-};
-
-//======================================================//
-//  ExecutionBlockLayer
-//======================================================//
-class ExecutionBlockLayer {
-public:
-    ExecutionBlockLayer() = delete;
-
-    explicit ExecutionBlockLayer(const HyperParameters::ExecutionBlockConstructionHP& hp,
-                                 cudaStream_t init_stream);
-
-    ~ExecutionBlockLayer();
-
-    ExecutionBlockLayer(ExecutionBlockLayer&& other) noexcept;
-    ExecutionBlockLayer& operator=(ExecutionBlockLayer&& other) noexcept;
-
-    ExecutionBlockLayer(const ExecutionBlockLayer&) = delete;
-    ExecutionBlockLayer& operator=(const ExecutionBlockLayer&) = delete;
-
-    const HyperParameters::ExecutionBlockConstructionHP& hp() const { return hp_; }
-
-private:
-    HyperParameters::ExecutionBlockConstructionHP hp_;
 };
 
 //======================================================//

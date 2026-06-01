@@ -96,8 +96,8 @@ Add **explicit supervision** (requires training changes), for example:
 End-to-end, ops are invoked from:
 
 1. **`Autograd::materializeTrainingGraphActivations`** (`training/Autograd/AutogradTraining.cu`): encoder loop.
-2. At **`exec_layer`**: **`bootstrapMemoryFromSlotMap`**, then **`ExecutionBlockLayer::executeStep`** × **`K`**.
-3. Inside **`executeStep`** (`Layers/ExecutionBlock/execution_block_GPU.cu`): softmax heads → argmax → **`kernelReadSlotValueByRelIdx`** → **`kernelFourOps`** → **`kernelHardPickOpForward`** → hard write + injection.
+2. At **`exec_layer`**: **`executionBlockBootstrapMemoryFromSlotMap`**, then **`executionBlockStep`** × **`K`**.
+3. Inside **`executionBlockStep`** (`Layers/ExecutionBlock/execution_block_GPU.cu` → data/memory stream impls): softmax heads → argmax → **`kernelReadSlotValueByRelIdx`** → **`kernelFourOps`** → **`kernelHardPickOpForward`** → hard write + injection.
 
 Later encoder layers may run **`crossAttentionRead`** from memory starting at **`exec_layer`**.
 

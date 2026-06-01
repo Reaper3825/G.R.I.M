@@ -27,9 +27,9 @@ Until the explicit decode-time slot selector exists, generation masks `<NUM>` in
 
 | File | Owns |
 |---|---|
-| `execution_block_GPU.hpp` | Public memory structs, diagnostics structs, `ExecutionBlockLayer` declaration |
-| `execution_block_GPU.cu` | Validation helpers, construction/destruction, thin public wrappers |
-| `execution_block_internal.hpp` | Private stage IDs, macros, `LayerAccess`, `StepWorkingSet` |
+| `execution_block_GPU.hpp` | Public memory structs, `ExecutionBlockDiagnosticsBuffers`, free execution-block op declarations |
+| `execution_block_GPU.cu` | Diagnostics buffer allocation/destruction and thin public wrappers |
+| `execution_block_internal.hpp` | Private stage IDs, macros, `StepWorkingSet` |
 | `execution_block_memory_stream_GPU.hpp/.cu` | `ExecutionMemory` allocation/clear, bootstrap, slot reads/writes, recent-write bookkeeping, cross-attention read |
 | `execution_block_data_stream_GPU.hpp/.cu` | Step-local data flow: context, trace encoding, arg/op/write distributions, result decode/injection, entropy loss |
 
@@ -39,7 +39,7 @@ Until the explicit decode-time slot selector exists, generation masks `<NUM>` in
 
 ### `ExecutionMemory`
 
-`ExecutionMemory` is the row-local register file used by the layer.
+`ExecutionMemory` is the row-local register file used by the execution-block math.
 
 | Field | Shape | Meaning |
 |---|---|---|
@@ -59,33 +59,54 @@ Public methods:
 
 ### `HyperParameters::ExecutionBlockConstructionHP`
 
-`ExecutionBlockLayer` consumes `HyperParameters::ExecutionBlockConstructionHP` directly.
-There is no layer-local compatibility config wrapper. Runtime handles such as CUDA stream and cuBLAS ownership remain explicit constructor / setter parameters, not hyperparameters.
+The public execution-block ops consume `HyperParameters::ExecutionBlockConstructionHP` explicitly.
+There is no layer-local compatibility config wrapper and no runtime shell class anymore. Runtime handles such as CUDA stream and cuBLAS ownership remain explicit per-call inputs, not hyperparameters.
 
-Grouped fields consumed by the layer:
+Grouped fields consumed by the execution-block ops:
 
 - dimensions: `d_model`, `atom_embedding_dim`, `num_ops`, `num_slots`, `num_scratch_slots`, `num_exec_steps`, `value_decode_input_dim`, `value_decode_hidden_dim`, `d_key`, `d_type`, `cross_attn_head_dim`
 - read/write behavior: `cross_attn_topk`, `usage_decay`, `inject_gate_temp`
 - result placement: `result_slot_mode`, `result_slot_index`
 - validation/debug gates: `debug_mode`, `entropy_collapse_threshold`, `write_collapse_threshold`, `magnitude_limit`, `transition_hard_threshold`
 
-### `ExecutionBlockLayer`
+### `ExecutionBlockDiagnosticsBuffers`
+
+`ExecutionBlockDiagnosticsBuffers` is the explicit runtime-owned device workspace passed into `executionBlockStep(...)`.
+
+Public methods / accessors:
+
+- `allocate(cudaStream_t stream)`
+- `destroy()`
+- `allocated()`
+- `numericErrorFlag()`
+- `divClampCount()`
+- `divInvalidFlag()`
+- `execIndices()`
+- `execRecordI()`
+- `execRecordF()`
+- `reinforceBaseline()`
+
+Ownership note:
+
+- the first six buffers are per-step execution workspace / diagnostics,
+- `reinforceBaseline()` is the durable REINFORCE EMA carried on the runtime owner.
+
+### Execution-block free operations
 
 Public methods:
 
-- `executeStep(...)`
-- `prepareForwardRuntime(...)`
-- `bootstrapMemoryFromSlotMap(...)`
-- `crossAttentionRead(...)`
-- `computeEntropyLoss(...)`
-- validation helpers
+- `executionBlockStep(...)`
+- `executionBlockBootstrapMemoryFromSlotMap(...)`
+- `executionBlockCrossAttentionRead(...)`
+- `executionBlockComputeEntropyLoss(...)`
 
-Deleted public APIs such as `encodeState()` and `lastDivClampCount()` are gone.
+Deleted public APIs such as `ExecutionBlockLayer`, `prepareForwardRuntime(...)`, the public validation helpers, `encodeState()`, and `lastDivClampCount()` are gone.
 
-The math entry points that consume trainable tensors (`executeStep(...)`,
-`bootstrapMemoryFromSlotMap(...)`, and `crossAttentionRead(...)`) now receive
-the registry-owned `ExecutionBlockParameterTensors` bundle explicitly. The
-layer stores HP and runtime scratch only.
+The math entry points that consume trainable tensors (`executionBlockStep(...)`,
+`executionBlockBootstrapMemoryFromSlotMap(...)`, and
+`executionBlockCrossAttentionRead(...)`) receive the registry-owned
+`ExecutionBlockParameterTensors` bundle explicitly. Runtime scratch is passed
+explicitly through `ExecutionBlockDiagnosticsBuffers` where needed.
 
 ## Row-local execution contract
 
@@ -98,7 +119,7 @@ The caller must provide:
 - `atom_positions` relative to `[0, row_tokens)`,
 - non-null row-local atom buffers even when `num_atoms == 0`.
 
-The layer fail-loud checks:
+The execution-block boundary fail-loud checks:
 
 - `token_offset >= 0`
 - `row_tokens > 0`
@@ -162,11 +183,11 @@ At a high level, one step does this:
 
 ## Shared-forward runtime preparation
 
-Shared forward now routes execution-layer reset through one explicit layer op:
+Shared forward now routes execution-layer reset through one explicit helper:
 
-- `ExecutionBlockLayer::prepareForwardRuntime(...)`
+- `Forward::provisionExecutionForwardRuntime(...)`
 
-This op prepares caller-owned execution runtime for one forward execution boundary.
+This helper prepares caller-owned execution runtime for one forward execution boundary.
 It does not own the runtime; the caller still passes the actual storage explicitly:
 
 - `std::vector<ExecutionMemory>& exec_memories`
@@ -177,19 +198,24 @@ It does not own the runtime; the caller still passes the actual storage explicit
 `Forward::ExecutionBlockOutput`, `Forward::ExecutionBlockStepOutput`,
 `Forward::ExecutionRecord`, and `Forward::ExecStepMetrics` are declared in
 `Shared/Forward/ModelForwardOutputs.hpp` because they are forward-owned Category 1
-sink payloads even though `ExecutionBlockLayer` populates them. Durable
+sink payloads even though execution-block free ops populate them. Durable
 `ExecutionBlockParameterTensors` do NOT live there; they are owned by
 `StartupParameterRegistry`, initialized by
 `ParameterGroupRegistration::initializeExecutionBlockParameterTensors(...)`,
 and passed explicitly into execution-block math entry points.
 
-Current `prepareForwardRuntime(...)` behavior:
+Current `provisionExecutionForwardRuntime(...)` behavior:
 
 1. validates config + payload execution geometry,
 2. resizes the caller-owned execution bags to `payload.batch_size`,
 3. clears prior execution traces and step diagnostics,
 4. allocates + zeroes each active row's `ExecutionMemory`,
 5. recreates each active row's `trace_state`, enabling autograd only when the caller requested a connected parameter graph.
+
+Durable execution-block diagnostics live alongside that runtime on
+`Forward::ModelForwardExecutionRuntime::execution_diag`; shared forward calls
+`ensureDiagnostics(stream)` separately so the REINFORCE baseline survives across
+steps while per-row Category 1 execution bags are re-provisioned.
 
 This keeps execution cleanup behind one fail-loud execution-block boundary instead of scattering vector clears and `ExecutionMemory::clear(...)` calls through shared forward.
 
@@ -224,12 +250,15 @@ In shared autoregressive forward, the row's available `ExecutionMemory` is the *
 
 ## Diagnostics and fail-loud behavior
 
-The layer carries device-side error/state buffers for runtime validation:
+The runtime carries device-side error/state buffers for validation through
+`ExecutionBlockDiagnosticsBuffers`:
 
 - numeric / stage error flag,
 - division clamp counter,
+- division-invalid flag,
 - execution index scratch,
-- packed execution-record scratch.
+- packed execution-record scratch,
+- persistent REINFORCE baseline.
 
 Softmax and numeric failures do **not** degrade gracefully.
 They accumulate a stage id and `finalizeStepOrThrow(...)` throws at the end of the step with a named stage.
@@ -287,9 +316,9 @@ forward / autograd call sites:
 - `type_num_embed`
 - `w_inject_gate`
 
-## What this layer does **not** own anymore
+## What the execution-block subsystem does **not** own anymore
 
-These concerns are outside the layer boundary now:
+These concerns are outside the execution-block math boundary now:
 
 - execution-layer placement in the encoder stack,
 - temperature scheduling over training steps,

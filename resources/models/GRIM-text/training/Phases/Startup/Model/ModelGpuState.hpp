@@ -12,7 +12,6 @@
 namespace GRIM {
 class GPUGrimEncoder;
 class ScratchBlockLayer;
-class ExecutionBlockLayer;
 }
 
 namespace GRIMText::Training::Startup {
@@ -20,7 +19,7 @@ namespace GRIMText::Training::Startup {
 struct ForwardTopologyView {
     GRIM::GPUGrimEncoder* gpu_encoder = nullptr;
     GRIM::ScratchBlockLayer* scratch_block = nullptr;
-    GRIM::ExecutionBlockLayer* execution_block_layer = nullptr;
+    bool execution_block_enabled = false;
 };
 
 struct GpuModelState {
@@ -48,7 +47,7 @@ struct GpuModelState {
         ForwardTopologyView topology{};
         topology.gpu_encoder = &requireGpuEncoder(caller);
         topology.scratch_block = scratch_block_layer.get();
-        topology.execution_block_layer = execution_block_layer.get();
+        topology.execution_block_enabled = execution_hp.enabled;
 
         if (scratch_hp.enabled && !topology.scratch_block) {
             throw std::runtime_error(
@@ -59,18 +58,9 @@ struct GpuModelState {
                 std::string(caller) + ": ScratchBlockConstructionHP.enabled=false but GpuModelState.scratch_block_layer exists");
         }
 
-        if (execution_hp.enabled) {
-            if (!topology.execution_block_layer) {
-                throw std::runtime_error(
-                    std::string(caller) + ": execution_block_enabled but GpuModelState.execution_block_layer is NULL");
-            }
-            if (!scratch_hp.enabled || !topology.scratch_block) {
-                throw std::runtime_error(
-                    std::string(caller) + ": execution_block_enabled requires ScratchBlockConstructionHP.enabled=true and a constructed GpuModelState.scratch_block_layer");
-            }
-        } else if (topology.execution_block_layer) {
+        if (execution_hp.enabled && (!scratch_hp.enabled || !topology.scratch_block)) {
             throw std::runtime_error(
-                std::string(caller) + ": execution_block_enabled=false but GpuModelState.execution_block_layer exists");
+                std::string(caller) + ": execution_block_enabled requires ScratchBlockConstructionHP.enabled=true and a constructed GpuModelState.scratch_block_layer");
         }
 
         return topology;
@@ -78,7 +68,6 @@ struct GpuModelState {
 
     std::unique_ptr<GRIM::GPUGrimEncoder> gpu_encoder;
     std::unique_ptr<GRIM::ScratchBlockLayer> scratch_block_layer;
-    std::unique_ptr<GRIM::ExecutionBlockLayer> execution_block_layer;
 };
 
 } // namespace GRIMText::Training::Startup

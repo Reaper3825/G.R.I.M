@@ -64,29 +64,6 @@ void ExecutionBlockDiagnosticsBuffers::destroy() {
 }
 
 //======================================================//
-//  Constructor
-//======================================================//
-ExecutionBlockLayer::~ExecutionBlockLayer() = default;
-
-ExecutionBlockLayer::ExecutionBlockLayer(const HyperParameters::ExecutionBlockConstructionHP& hp,
-                                         cudaStream_t init_stream)
-        : hp_(hp)
-{
-    // ExecutionBlockConstructionHP is already validated upstream by
-    // validateRootConfigDocument() (root config) and
-    // validateExecutionBlockConstructionHP() (startup registration) before this
-    // layer is constructed; a redundant config re-check here is forbidden.
-    EXEC_CHECK(init_stream != nullptr, "init_stream is NULL");
-}
-
-//======================================================//
-//  Move semantics
-//======================================================//
-ExecutionBlockLayer::ExecutionBlockLayer(ExecutionBlockLayer&& other) noexcept = default;
-
-ExecutionBlockLayer& ExecutionBlockLayer::operator=(ExecutionBlockLayer&& other) noexcept = default;
-
-//======================================================//
 //  Execution-block free operations
 //======================================================//
 void executionBlockStep(

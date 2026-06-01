@@ -806,8 +806,8 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
     if (!ctx.payload) {
         throw std::runtime_error("addExecutionAuxiliaryLoss: ctx.payload is NULL");
     }
-    if (!ctx.execution_block) {
-        throw std::runtime_error("addExecutionAuxiliaryLoss: ctx.execution_block is NULL");
+    if (!ctx.execution_block_enabled) {
+        throw std::runtime_error("addExecutionAuxiliaryLoss: ctx.execution_block_enabled is false");
     }
     if (!loss_state.loss_tensor.data) {
         throw std::runtime_error("addExecutionAuxiliaryLoss: loss_tensor is NULL before execution loss assembly");

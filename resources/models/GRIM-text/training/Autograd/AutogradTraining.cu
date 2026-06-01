@@ -306,7 +306,7 @@ GradientSignalBaselines captureGradientVerificationBaselines(
         }
     }
 
-    if (ctx.execution_block && model_hp.execution_block_enabled) {
+    if (ctx.execution_block_enabled && model_hp.execution_block_enabled) {
         if (!ctx.parameter_registry) {
             throw std::runtime_error("captureGradientSignalBaselines: execution-block loss is active but ctx.parameter_registry is NULL");
         }
@@ -918,7 +918,7 @@ bool verifyGradientsAreConnectedImpl(
     }
 
     // ExecutionBlock parameters
-    if (ctx.execution_block && model_hp.execution_block_enabled) {
+    if (ctx.execution_block_enabled) {
         if (!ctx.parameter_registry) {
             throw std::runtime_error("verifyGradientsAreConnectedImpl: execution_block_enabled but ctx.parameter_registry is NULL");
         }

@@ -21,7 +21,7 @@ void populateCommonContext(
     AutogradLossState& loss_state,
     GPUGrimEncoder* gpu_encoder,
     ScratchBlockLayer* scratch_block,
-    ExecutionBlockLayer* execution_block,
+    bool execution_block_enabled,
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
@@ -33,7 +33,7 @@ void populateCommonContext(
     ctx.loss_state = &loss_state;
     ctx.gpu_encoder = gpu_encoder;
     ctx.scratch_block = scratch_block;
-    ctx.execution_block = execution_block;
+    ctx.execution_block_enabled = execution_block_enabled;
     ctx.parameter_registry = &parameter_registry;
     ctx.cublas_handle = cublas_handle;
     ctx.stream = stream;
@@ -73,7 +73,7 @@ AutogradContext initAutogradContext(
     AutogradLossState& loss_state,
     GPUGrimEncoder* gpu_encoder,
     ScratchBlockLayer* scratch_block,
-    ExecutionBlockLayer* execution_block,
+    bool execution_block_enabled,
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
@@ -87,7 +87,7 @@ AutogradContext initAutogradContext(
     populateCommonContext(
         ctx, config, training_state, forward_outputs, loss_state,
         gpu_encoder,
-        scratch_block, execution_block, parameter_registry, cublas_handle, stream,
+        scratch_block, execution_block_enabled, parameter_registry, cublas_handle, stream,
         batch_idx);
 
     ctx.payload = &payload;

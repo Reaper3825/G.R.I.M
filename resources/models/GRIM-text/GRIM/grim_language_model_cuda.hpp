@@ -163,9 +163,13 @@ public:
     ScratchBlockLayer* getScratchBlockLayer() { return gpu_model_state_ ? gpu_model_state_->scratch_block_layer.get() : nullptr; }
     const ScratchBlockLayer* getScratchBlockLayer() const { return gpu_model_state_ ? gpu_model_state_->scratch_block_layer.get() : nullptr; }
 
-    // Execution Block layer access (nullptr when disabled)
-    ExecutionBlockLayer* getExecutionBlockLayer() { return gpu_model_state_ ? gpu_model_state_->execution_block_layer.get() : nullptr; }
-    const ExecutionBlockLayer* getExecutionBlockLayer() const { return gpu_model_state_ ? gpu_model_state_->execution_block_layer.get() : nullptr; }
+    // Execution Block presence is config-gated by
+    // HyperParameters::executionBlockConstructionHP(config_); there is no
+    // runtime layer object — durable execution-block parameters live on the
+    // StartupParameterRegistry.
+    bool executionBlockEnabled() const {
+        return HyperParameters::executionBlockConstructionHP(config_).enabled;
+    }
 
 #endif
     
