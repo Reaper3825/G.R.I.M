@@ -88,7 +88,7 @@ namespace {
     }
 
     std::uint64_t attentionDropoutSeed(const GRIM::Attention::EncoderSelfAttentionForwardRequest& request) {
-        const float attention_dropout_p = request.flash_attention.dropout_enabled ? request.hp.attention_dropout : 0.0f;
+        const float attention_dropout_p = request.hp.dropout_enabled ? request.hp.attention_dropout : 0.0f;
         if (attention_dropout_p <= 0.0f) {
             return 0;
         }
@@ -206,11 +206,11 @@ void encoderSelfAttentionForward(
         autograd::checkQKVTensorFinite("AutogradSDPA:V_rope", V_bhsd, request.stream);
     }
 
-    const float attention_dropout_p = request.flash_attention.dropout_enabled ? request.hp.attention_dropout : 0.0f;
+    const float attention_dropout_p = request.hp.dropout_enabled ? request.hp.attention_dropout : 0.0f;
     const std::uint64_t dropout_seed = attentionDropoutSeed(request);
     attn_out_bhsd = autograd::scaled_dot_product_attention(
         Q_bhsd, K_bhsd, V_bhsd,
-        pbm.alibi_slopes, request.flash_attention, 0.0f, request.stream,
+        pbm.alibi_slopes, request.hp, 0.0f, request.stream,
         attention_dropout_p, dropout_seed);
     if (qkv_debug > 0) {
         autograd::checkQKVTensorFinite("AutogradSDPA:attn_out_bhsd", attn_out_bhsd, request.stream);

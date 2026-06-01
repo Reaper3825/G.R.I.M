@@ -973,12 +973,12 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
 Tensor scaled_dot_product_attention(
     const Tensor& q, const Tensor& k, const Tensor& v,
     const float* alibi_slopes,
-    const GRIM::HyperParameters::FlashAttentionRuntimeHP& flash_hp,
+    const GRIM::HyperParameters::EncoderSelfAttentionHP& attention_hp,
     float scale, cudaStream_t stream,
     float attention_dropout_p, uint64_t dropout_seed
 ) {
-    if (flash_hp.requires_alibi && !alibi_slopes) {
-        throw std::invalid_argument("autograd::scaled_dot_product_attention: FlashAttentionRuntimeHP requires ALiBi slopes but alibi_slopes is NULL");
+    if (!alibi_slopes) {
+        throw std::invalid_argument("autograd::scaled_dot_product_attention: alibi_slopes is NULL - GRIM attention requires ALiBi slopes");
     }
 
     // Validate inputs are 4D BHSD layout
@@ -1009,26 +1009,26 @@ Tensor scaled_dot_product_attention(
     if (num_heads % num_kv_heads != 0) {
         throw std::invalid_argument("autograd::scaled_dot_product_attention: num_heads must be divisible by num_kv_heads");
     }
-    if (num_heads != flash_hp.num_heads) {
+    if (num_heads != attention_hp.num_heads) {
         throw std::invalid_argument("autograd::scaled_dot_product_attention: Q heads=" +
                                     std::to_string(num_heads) +
-                                    " does not match FlashAttentionRuntimeHP num_heads=" +
-                                    std::to_string(flash_hp.num_heads));
+                                    " does not match EncoderSelfAttentionHP num_heads=" +
+                                    std::to_string(attention_hp.num_heads));
     }
-    if (num_kv_heads != flash_hp.num_kv_heads) {
+    if (num_kv_heads != attention_hp.num_kv_heads) {
         throw std::invalid_argument("autograd::scaled_dot_product_attention: K heads=" +
                                     std::to_string(num_kv_heads) +
-                                    " does not match FlashAttentionRuntimeHP num_kv_heads=" +
-                                    std::to_string(flash_hp.num_kv_heads));
+                                    " does not match EncoderSelfAttentionHP num_kv_heads=" +
+                                    std::to_string(attention_hp.num_kv_heads));
     }
-    if (head_dim != flash_hp.head_dim) {
+    if (head_dim != attention_hp.head_dim) {
         throw std::invalid_argument("autograd::scaled_dot_product_attention: head_dim=" +
                                     std::to_string(head_dim) +
-                                    " does not match FlashAttentionRuntimeHP head_dim=" +
-                                    std::to_string(flash_hp.head_dim));
+                                    " does not match EncoderSelfAttentionHP head_dim=" +
+                                    std::to_string(attention_hp.head_dim));
     }
-    if (flash_hp.heads_per_kv_group <= 0) {
-        throw std::invalid_argument("autograd::scaled_dot_product_attention: FlashAttentionRuntimeHP heads_per_kv_group must be > 0");
+    if (attention_hp.heads_per_kv_group <= 0) {
+        throw std::invalid_argument("autograd::scaled_dot_product_attention: EncoderSelfAttentionHP heads_per_kv_group must be > 0");
     }
     
     // Output shape: same as Q [B, H, S, D]
@@ -1088,8 +1088,8 @@ Tensor scaled_dot_product_attention(
         num_kv_heads,
         head_dim,
         scale,
-        flash_hp.causal,
-        flash_hp.is_bf16,
+        attention_hp.causal_mask,
+        true,
         attention_dropout_p, // Attention dropout rate (0.0 = disabled)
         dropout_seed,        // Per-step Philox seed for reproducible masks
         stream
@@ -1118,10 +1118,10 @@ Tensor scaled_dot_product_attention(
         grad_fn->num_heads = num_heads;
         grad_fn->num_kv_heads = num_kv_heads;
         grad_fn->head_dim = head_dim;
-        grad_fn->heads_per_kv_group = flash_hp.heads_per_kv_group;
+        grad_fn->heads_per_kv_group = attention_hp.heads_per_kv_group;
         grad_fn->softmax_scale = scale;
-        grad_fn->causal = flash_hp.causal;
-        grad_fn->is_bf16 = flash_hp.is_bf16;
+        grad_fn->causal = attention_hp.causal_mask;
+        grad_fn->is_bf16 = true;
         grad_fn->alibi_slopes = alibi_slopes;  // Save for backward pass (not owned)
         grad_fn->attention_dropout_p = attention_dropout_p;  // Same dropout for backward mask reproduction
         grad_fn->dropout_seed = dropout_seed;                // Same seed reproduces identical Philox mask

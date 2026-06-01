@@ -1397,8 +1397,8 @@ Tensor residual_add(const Tensor& x, const Tensor& residual,
  * Scaled dot-product attention with optional mask and ALiBi
  * 
  * @param scale Softmax scale for QK^T. 0.0f selects the canonical 1/sqrt(head_dim) default.
- * @param flash_hp Grouped FlashAttention runtime contract. Validates build/runtime head_dim,
- *        causal, BF16 activation, grouped-head geometry, and ALiBi requirements before launch.
+ * @param attention_hp Grouped encoder-attention contract. Validates build/runtime head_dim,
+ *        causal mask, grouped-head geometry, and ALiBi requirements before launch.
  * @param attention_dropout_p Attention dropout DROP rate (0.0 = disabled, 0.15 = 15% drop rate).
  *        Converted internally to keep probability for FlashAttention (keep_p = 1.0 - attention_dropout_p).
  * @param dropout_seed Per-batch Philox RNG seed for reproducible dropout masks.
@@ -1407,7 +1407,7 @@ Tensor residual_add(const Tensor& x, const Tensor& residual,
 Tensor scaled_dot_product_attention(
     const Tensor& q, const Tensor& k, const Tensor& v,
     const float* alibi_slopes,
-    const ::GRIM::HyperParameters::FlashAttentionRuntimeHP& flash_hp,
+    const ::GRIM::HyperParameters::EncoderSelfAttentionHP& attention_hp,
     float scale = 0.0f,
     cudaStream_t stream = nullptr,
     float attention_dropout_p = 0.0f, uint64_t dropout_seed = 0);

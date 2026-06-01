@@ -348,19 +348,9 @@ struct EncoderSelfAttentionHP {
     int min_seq_len_for_flash = 0;
     bool use_bias = false;
     float attention_dropout = 0.0f;
+    bool dropout_enabled = false;
     bool qk_norm_enabled = false;
     bool is_gqa = false;
-};
-
-struct FlashAttentionRuntimeHP {
-    int num_heads = 0;
-    int num_kv_heads = 0;
-    int head_dim = 0;
-    int heads_per_kv_group = 0;
-    bool causal = false;
-    bool is_bf16 = false;
-    bool requires_alibi = false;
-    bool dropout_enabled = false;
 };
 
 struct FeedForwardLayerConstructionHP {
@@ -928,7 +918,8 @@ inline FeedForwardLayerConstructionHP feedForwardLayerConstructionHP(
 }
 
 inline EncoderSelfAttentionHP encoderSelfAttentionHP(
-    const EncoderLayerConstructionHP& encoder_hp)
+    const EncoderLayerConstructionHP& encoder_hp,
+    bool dropout_enabled)
 {
     EncoderSelfAttentionHP view;
     view.d_model = encoder_hp.d_model;
@@ -944,24 +935,9 @@ inline EncoderSelfAttentionHP encoderSelfAttentionHP(
     view.min_seq_len_for_flash = encoder_hp.min_seq_len_for_flash;
     view.use_bias = encoder_hp.use_bias;
     view.attention_dropout = encoder_hp.attention_dropout;
+    view.dropout_enabled = dropout_enabled;
     view.qk_norm_enabled = encoder_hp.qk_norm_enabled;
     view.is_gqa = encoder_hp.is_gqa;
-    return view;
-}
-
-inline FlashAttentionRuntimeHP flashAttentionRuntimeHP(
-    const EncoderSelfAttentionHP& attention_hp,
-    bool dropout_enabled)
-{
-    FlashAttentionRuntimeHP view;
-    view.num_heads = attention_hp.num_heads;
-    view.num_kv_heads = attention_hp.num_kv_heads;
-    view.head_dim = attention_hp.head_dim;
-    view.heads_per_kv_group = attention_hp.heads_per_kv_group;
-    view.causal = attention_hp.causal_mask;
-    view.is_bf16 = true;
-    view.requires_alibi = true;
-    view.dropout_enabled = dropout_enabled;
     return view;
 }
 

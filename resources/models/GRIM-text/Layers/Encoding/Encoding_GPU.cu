@@ -439,13 +439,10 @@ void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // BHSD flattening, and output projection. Encoder only supplies the PBM spec.
     //--------------------------------------------------
     const HyperParameters::EncoderSelfAttentionHP attention_hp =
-        HyperParameters::encoderSelfAttentionHP(hp);
-    const HyperParameters::FlashAttentionRuntimeHP flash_attention_hp =
-        HyperParameters::flashAttentionRuntimeHP(attention_hp, dropout_enabled);
+        HyperParameters::encoderSelfAttentionHP(hp, dropout_enabled);
     Attention::EncoderSelfAttentionForwardRequest attention_request{
         payload,
         attention_hp,
-        flash_attention_hp,
         stream,
         cublas_handle,
         dropout_batch_seed,
