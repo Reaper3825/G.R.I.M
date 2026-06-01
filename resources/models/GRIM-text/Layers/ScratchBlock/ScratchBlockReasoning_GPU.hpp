@@ -25,6 +25,7 @@
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
+#include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
 
 namespace GRIM {
 
@@ -78,9 +79,7 @@ struct ScratchBlockGradFn : public GradFn {
     //--- Temporary backward scratch (OWNED) ---
     float* d_grad_atom_embeddings = nullptr;  // [max_atoms, atom_embedding_dim]
 
-    //--- Input gradient chain (same pattern as DropoutGradFn) ---
-    float* input_grad = nullptr;
-    bool   owns_input_grad = false;
+    //--- Input gradient chain ---
     TensorContract::TensorShape input_shape;
     std::shared_ptr<GradFn> input_grad_fn;
 
@@ -89,7 +88,7 @@ struct ScratchBlockGradFn : public GradFn {
     ~ScratchBlockGradFn() override;
 
     /// Capture input tensor state for backward chain (Issue #48: stable data, not Tensor*)
-    void capture_input(Tensor& input, cudaStream_t stream);
+    void capture_input(Tensor& input);
 
     /// Capture forward activations: atom positions, types, embeddings
     void capture_forward(
@@ -146,12 +145,17 @@ public:
     // Learnable Parameter Access
     //--------------------------------------------------//
 
-    Tensor& atomTypeEmbeddings()      { return atom_type_embeddings_; }
-    Tensor& atomProjection()          { return atom_projection_; }
-    Tensor& structuredGateWeight()    { return structured_gate_weight_; }
-    const Tensor& atomTypeEmbeddings() const { return atom_type_embeddings_; }
-    const Tensor& atomProjection() const { return atom_projection_; }
-    const Tensor& structuredGateWeight() const { return structured_gate_weight_; }
+    void bindParameterTensors(ParameterRegistry::StartupParameterRegistry& parameter_registry);
+    bool hasBoundParameters() const noexcept { return parameter_tensors_ != nullptr; }
+    GRIM::ScratchBlockParameterTensors& requireParameterTensors(const char* caller);
+    const GRIM::ScratchBlockParameterTensors& requireParameterTensors(const char* caller) const;
+
+    Tensor& atomTypeEmbeddings()      { return requireParameterTensors("ScratchBlockLayer::atomTypeEmbeddings").atom_type_embeddings; }
+    Tensor& atomProjection()          { return requireParameterTensors("ScratchBlockLayer::atomProjection").atom_projection; }
+    Tensor& structuredGateWeight()    { return requireParameterTensors("ScratchBlockLayer::structuredGateWeight").structured_gate_weight; }
+    const Tensor& atomTypeEmbeddings() const { return requireParameterTensors("ScratchBlockLayer::atomTypeEmbeddings const").atom_type_embeddings; }
+    const Tensor& atomProjection() const { return requireParameterTensors("ScratchBlockLayer::atomProjection const").atom_projection; }
+    const Tensor& structuredGateWeight() const { return requireParameterTensors("ScratchBlockLayer::structuredGateWeight const").structured_gate_weight; }
 
     //--------------------------------------------------//
     // Statistics
@@ -209,15 +213,13 @@ public:
 
 private:    void allocateWeights();
     void freeWeights();
-    void initializeWeights();
+    void initializeRuntimeBuffers();
 
     ScratchBlockConfig config_;
     Stats stats_;
 
-    // GPU weights (Tensor-managed — RAII, gradient via ensure_grad)
-    Tensor atom_type_embeddings_;       // [num_atom_types, atom_embedding_dim]
-    Tensor atom_projection_;            // [atom_embedding_dim, d_model]
-    Tensor structured_gate_weight_;      // [2 * d_model, d_model], g = sigmoid([e; z] @ Wg)
+    // Registry-owned durable parameters (non-owning borrow).
+    GRIM::ScratchBlockParameterTensors* parameter_tensors_ = nullptr;
 
     // Temporary buffers for forward pass (reused across calls)
     int*   d_atom_positions_  = nullptr;  // [max_atoms]

@@ -130,6 +130,7 @@ bool saveLanguageModelCheckpoint(
     auto* embedding_parameters = parameter_registry.getEmbeddingParameters();
     auto* lm_head_parameters = parameter_registry.getLmHeadParameters();
     auto* scratch_block_layer = model.getScratchBlockLayer();
+    auto* scratch_block_parameters = parameter_registry.getScratchBlockParameters();
     auto* execution_block_layer = model.getExecutionBlockLayer();
     auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
     auto* decode_time_slot_selector = parameter_registry.getDecodeTimeSlotSelector();
@@ -215,8 +216,11 @@ bool saveLanguageModelCheckpoint(
         if (!scratch_block_layer) {
             throw std::runtime_error("saveLanguageModelCheckpoint: ScratchBlockConstructionHP.enabled=true but scratch_block_layer is NULL");
         }
-        Tensor& ate = scratch_block_layer->atomTypeEmbeddings();
-        Tensor& ap = scratch_block_layer->atomProjection();
+        if (!scratch_block_parameters) {
+            throw std::runtime_error("saveLanguageModelCheckpoint: ScratchBlockConstructionHP.enabled=true but registry scratch_block_parameters is NULL");
+        }
+        const Tensor& ate = scratch_block_parameters->atom_type_embeddings;
+        const Tensor& ap = scratch_block_parameters->atom_projection;
         
         request.sources.scratch_block.enabled = true;
         request.sources.scratch_block.d_model = d_model_i;
@@ -418,6 +422,7 @@ bool loadLanguageModelCheckpoint(
     auto* embedding_parameters = parameter_registry.getEmbeddingParameters();
     auto* lm_head_parameters = parameter_registry.getLmHeadParameters();
     auto* scratch_block_layer = model.getScratchBlockLayer();
+    auto* scratch_block_parameters = parameter_registry.getScratchBlockParameters();
     auto* execution_block_layer = model.getExecutionBlockLayer();
     auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
     auto* decode_time_slot_selector = parameter_registry.getDecodeTimeSlotSelector();
@@ -443,6 +448,12 @@ bool loadLanguageModelCheckpoint(
         EmitModuleError(ModuleId::Checkpoint,
                         "[load] ScratchBlockConstructionHP.enabled=true but scratch_block_layer is NULL.");
         std::cerr << "[loadLanguageModelCheckpoint] Error: ScratchBlockConstructionHP.enabled=true but scratch_block_layer is NULL" << std::endl;
+        return false;
+    }
+    if (scratch_hp.enabled && !scratch_block_parameters) {
+        EmitModuleError(ModuleId::Checkpoint,
+                        "[load] ScratchBlockConstructionHP.enabled=true but registry scratch_block_parameters is NULL.");
+        std::cerr << "[loadLanguageModelCheckpoint] Error: ScratchBlockConstructionHP.enabled=true but registry scratch_block_parameters is NULL" << std::endl;
         return false;
     }
     if (!scratch_hp.enabled && scratch_block_layer) {
@@ -528,8 +539,8 @@ bool loadLanguageModelCheckpoint(
     // Set up ScratchBlock weight destinations (if enabled by authored architecture)
     // Use the layer's actual tensor sizes so load size matches saved checkpoint (same as save path).
     if (scratch_hp.enabled) {
-        Tensor& ate = scratch_block_layer->atomTypeEmbeddings();
-        Tensor& ap = scratch_block_layer->atomProjection();
+        Tensor& ate = scratch_block_parameters->atom_type_embeddings;
+        Tensor& ap = scratch_block_parameters->atom_projection;
         
         if (ate.data) {
             assignWrite(request.scratch_block.atom_type_embeddings, ate.data, ate.numel());
@@ -627,6 +638,7 @@ bool loadLanguageModelCheckpoint(
                 oss << "[load]   registry pointers: embedding=" << (embedding_parameters ? "OK" : "NULL")
                 << " lm_head_params=" << (lm_head_parameters ? "OK" : "NULL")
                 << " scratch_block=" << (scratch_block_layer ? "OK" : "NULL")
+                << " scratch_block_params=" << (scratch_block_parameters ? "OK" : "NULL")
                 << " exec_block=" << (execution_block_layer ? "OK" : "NULL")
                 << " slot_selector=" << (decode_time_slot_selector ? "OK" : "NULL");
             EmitModuleError(ModuleId::Checkpoint, oss.str());

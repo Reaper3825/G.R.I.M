@@ -299,11 +299,6 @@ public:
     // CROSS-LAYER LIVE TENSORS
     // ═══════════════════════════════════════════════════════════════════════════
     Tensor embedding_tensor;
-    Tensor embedding_structured_state;
-    Tensor embedding_gate_concat;
-    Tensor embedding_gate_logits;
-    Tensor embedding_gate_values;
-    Tensor embedding_gate_delta;
     std::vector<Tensor> encoder_layer_outputs;
     Tensor encoder_output_tensor;
     Tensor lm_head_input_tensor;
@@ -346,11 +341,6 @@ public:
     void clear() {
         clearRetainedLayerOutputs();
         embedding_tensor = Tensor();
-        embedding_structured_state = Tensor();
-        embedding_gate_concat = Tensor();
-        embedding_gate_logits = Tensor();
-        embedding_gate_values = Tensor();
-        embedding_gate_delta = Tensor();
         clearTensorVector(encoder_layer_outputs);
         encoder_output_tensor = Tensor();
         lm_head_input_tensor = Tensor();

@@ -7,7 +7,7 @@
 //  - autograd::scratch_block_inject() is the entry point
 //  - Dead code deleted (kernelPassthrough, legacy lookup,
 //    detectAtomTokensAsync, injectAtomEmbeddings, onConfigure)
-//  - Broken LCG PRNG replaced with splitmix64
+//  - Parameter initialization owned by ParameterGroupRegistration
 //======================================================//
 
 #include "ScratchBlockReasoning_GPU.hpp"
@@ -352,37 +352,6 @@ __global__ void kernelExtractRowLocalAtoms(
 }
 
 //======================================================//
-//  Xavier Init — splitmix64 PRNG (replaces broken LCG)
-//======================================================//
-
-__global__ void kernelXavierInit(
-    float* __restrict__ weights,
-    int size,
-    float stddev,
-    unsigned int seed
-) {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= size) return;
-
-    // splitmix64: per-element seed with high-quality mixing
-    // Avoids the LCG correlation bug (Issue #107 pattern)
-    uint64_t state = static_cast<uint64_t>(seed) + static_cast<uint64_t>(idx) * 0x9E3779B97F4A7C15ULL;
-    state ^= state >> 30; state *= 0xBF58476D1CE4E5B9ULL;
-    state ^= state >> 27; state *= 0x94D049BB133111EBULL;
-    state ^= state >> 31;
-    float u1 = (static_cast<uint32_t>(state) & 0x7FFFFFFF) / float(0x7FFFFFFF);
-
-    state ^= state >> 30; state *= 0xBF58476D1CE4E5B9ULL;
-    state ^= state >> 27; state *= 0x94D049BB133111EBULL;
-    state ^= state >> 31;
-    float u2 = (static_cast<uint32_t>(state) & 0x7FFFFFFF) / float(0x7FFFFFFF);
-
-    // Box-Muller transform
-    float z = sqrtf(-2.0f * logf(u1 + 1e-10f)) * cosf(2.0f * 3.14159265f * u2);
-    weights[idx] = z * stddev;
-}
-
-//======================================================//
 //  ScratchBlockGradFn Implementation
 //======================================================//
 
@@ -391,7 +360,6 @@ ScratchBlockGradFn::~ScratchBlockGradFn() {
     if (cached_atom_positions)    cudaFree(cached_atom_positions);
     if (cached_atom_types)        cudaFree(cached_atom_types);
     if (d_grad_atom_embeddings)   cudaFree(d_grad_atom_embeddings);
-    if (owns_input_grad && input_grad) cudaFree(input_grad);
 }
 
 struct ScratchBlockProjectionGradFn : public GradFn {
@@ -496,22 +464,9 @@ struct ScratchBlockProjectionGradFn : public GradFn {
     }
 };
 
-void ScratchBlockGradFn::capture_input(Tensor& x, cudaStream_t stream) {
+void ScratchBlockGradFn::capture_input(Tensor& x) {
     input_shape = x.shape;
     input_grad_fn = x.grad_fn;
-
-    // Allocate OWN gradient buffer (Issue #126/#133 pattern)
-    // Input tensor may be destroyed before backward() runs.
-    if (x.requires_grad) {
-        const size_t grad_size = x.numel();
-        cudaMallocOrThrow(reinterpret_cast<void**>(&input_grad), grad_size * sizeof(float), "ScratchBlockGradFn_input_grad");
-        const cudaError_t err = cudaMemsetAsync(input_grad, 0, grad_size * sizeof(float), stream);
-        if (err != cudaSuccess) {
-            throw std::runtime_error(std::string("ScratchBlockGradFn::capture_input: cudaMemsetAsync(input_grad) failed: ") +
-                                     cudaGetErrorString(err));
-        }
-        owns_input_grad = true;
-    }
 }
 
 void ScratchBlockGradFn::capture_forward(
@@ -626,8 +581,6 @@ void ScratchBlockGradFn::release_saved() {
     if (cached_atom_positions)  { cudaFree(cached_atom_positions);  cached_atom_positions = nullptr; }
     if (cached_atom_types)      { cudaFree(cached_atom_types);      cached_atom_types = nullptr; }
     if (d_grad_atom_embeddings) { cudaFree(d_grad_atom_embeddings); d_grad_atom_embeddings = nullptr; }
-    if (owns_input_grad && input_grad) { cudaFree(input_grad); owns_input_grad = false; }
-    input_grad = nullptr;
     input_grad_fn.reset();
 }
 
@@ -685,7 +638,7 @@ Tensor scratch_block_inject(
         grad_fn->atom_scale = cfg.atom_scale;
 
         // Capture input chain
-        grad_fn->capture_input(input, stream);
+        grad_fn->capture_input(input);
 
         // Capture weight gradient pointers (layer outlives GradFn)
         grad_fn->capture_weights(
@@ -875,7 +828,7 @@ ScratchBlockLayer::ScratchBlockLayer(const ScratchBlockConfig& config)
 {
     if (config_.enabled) {
         allocateWeights();
-        initializeWeights();
+        initializeRuntimeBuffers();
     }
 }
 
@@ -893,14 +846,13 @@ ScratchBlockLayer::~ScratchBlockLayer() {
 ScratchBlockLayer::ScratchBlockLayer(ScratchBlockLayer&& other) noexcept
     : config_(other.config_)
     , stats_(other.stats_)
-    , atom_type_embeddings_(std::move(other.atom_type_embeddings_))
-    , atom_projection_(std::move(other.atom_projection_))
-    , structured_gate_weight_(std::move(other.structured_gate_weight_))
+    , parameter_tensors_(other.parameter_tensors_)
     , d_atom_positions_(other.d_atom_positions_)
     , d_num_atoms_(other.d_num_atoms_)
     , d_atom_embeddings_(other.d_atom_embeddings_)
     , weights_allocated_(other.weights_allocated_)
 {
+    other.parameter_tensors_ = nullptr;
     other.d_atom_positions_ = nullptr;
     other.d_num_atoms_ = nullptr;
     other.d_atom_embeddings_ = nullptr;
@@ -913,14 +865,13 @@ ScratchBlockLayer& ScratchBlockLayer::operator=(ScratchBlockLayer&& other) noexc
 
         config_ = other.config_;
         stats_ = other.stats_;
-        atom_type_embeddings_ = std::move(other.atom_type_embeddings_);
-        atom_projection_ = std::move(other.atom_projection_);
-        structured_gate_weight_ = std::move(other.structured_gate_weight_);
+        parameter_tensors_ = other.parameter_tensors_;
         d_atom_positions_ = other.d_atom_positions_;
         d_num_atoms_ = other.d_num_atoms_;
         d_atom_embeddings_ = other.d_atom_embeddings_;
         weights_allocated_ = other.weights_allocated_;
 
+        other.parameter_tensors_ = nullptr;
         other.d_atom_positions_ = nullptr;
         other.d_num_atoms_ = nullptr;
         other.d_atom_embeddings_ = nullptr;
@@ -934,7 +885,7 @@ void ScratchBlockLayer::setConfig(const ScratchBlockConfig& config) {
     config_ = config;
     if (config_.enabled && !was_enabled && !weights_allocated_) {
         allocateWeights();
-        initializeWeights();
+        initializeRuntimeBuffers();
     }
 }
 
@@ -943,28 +894,41 @@ void ScratchBlockLayer::setEnabled(bool enabled) {
     config_.enabled = enabled;
     if (enabled && !was_enabled && !weights_allocated_) {
         allocateWeights();
-        initializeWeights();
+        initializeRuntimeBuffers();
     }
+}
+
+void ScratchBlockLayer::bindParameterTensors(ParameterRegistry::StartupParameterRegistry& parameter_registry) {
+    auto& scratch_parameters = parameter_registry.requireScratchBlockParameters("ScratchBlockLayer::bindParameterTensors");
+    if (!scratch_parameters.atom_type_embeddings.data) {
+        throw std::runtime_error("ScratchBlockLayer::bindParameterTensors: registry atom_type_embeddings.data is NULL");
+    }
+    if (!scratch_parameters.atom_projection.data) {
+        throw std::runtime_error("ScratchBlockLayer::bindParameterTensors: registry atom_projection.data is NULL");
+    }
+    if (!scratch_parameters.structured_gate_weight.data) {
+        throw std::runtime_error("ScratchBlockLayer::bindParameterTensors: registry structured_gate_weight.data is NULL");
+    }
+    parameter_tensors_ = &scratch_parameters;
+}
+
+GRIM::ScratchBlockParameterTensors& ScratchBlockLayer::requireParameterTensors(const char* caller) {
+    if (!parameter_tensors_) {
+        throw std::runtime_error(std::string(caller) + ": ScratchBlock registry-owned parameter tensors are not bound");
+    }
+    return *parameter_tensors_;
+}
+
+const GRIM::ScratchBlockParameterTensors& ScratchBlockLayer::requireParameterTensors(const char* caller) const {
+    if (!parameter_tensors_) {
+        throw std::runtime_error(std::string(caller) + ": ScratchBlock registry-owned parameter tensors are not bound");
+    }
+    return *parameter_tensors_;
 }
 
 void ScratchBlockLayer::allocateWeights() {
     if (weights_allocated_) return;
     StreamController::fatalIfDefaultStream(config_.stream, "ScratchBlockLayer::allocateWeights");
-
-    TensorContract::Shape2D atom_emb_2d{NUM_ATOM_TYPES, config_.atom_embedding_dim};
-    TensorContract::Shape2D proj_2d{config_.atom_embedding_dim, config_.d_model};
-    TensorContract::Shape2D gate_2d{2 * config_.d_model, config_.d_model};
-
-    TensorContract::TensorShape atom_emb_shape(TensorContract::Layout::BSM, atom_emb_2d);
-    TensorContract::TensorShape proj_shape(TensorContract::Layout::BSM, proj_2d);
-    TensorContract::TensorShape gate_shape(TensorContract::Layout::BSM, gate_2d);
-
-    atom_type_embeddings_ = Tensor::zeros(atom_emb_shape, true, config_.stream, "atom_type_embeddings");
-    atom_type_embeddings_.ensure_grad();
-    atom_projection_ = Tensor::zeros(proj_shape, true, config_.stream, "atom_projection");
-    atom_projection_.ensure_grad();
-    structured_gate_weight_ = Tensor::zeros(gate_shape, true, config_.stream, "scratch_structured_gate_weight");
-    structured_gate_weight_.ensure_grad();
 
     // Temporary buffers for forward (reused across calls, NOT cached for backward — GradFn owns that)
     cudaMallocOrThrow(reinterpret_cast<void**>(&d_atom_positions_), config_.max_atoms * sizeof(int), "ScratchBlockLayer_atom_positions");
@@ -975,49 +939,26 @@ void ScratchBlockLayer::allocateWeights() {
 }
 
 void ScratchBlockLayer::freeWeights() {
-    atom_type_embeddings_ = Tensor();
-    atom_projection_ = Tensor();
-    structured_gate_weight_ = Tensor();
-
     if (d_atom_positions_)  cudaFree(d_atom_positions_);
     if (d_num_atoms_)       cudaFree(d_num_atoms_);
     if (d_atom_embeddings_) cudaFree(d_atom_embeddings_);
 
+    parameter_tensors_ = nullptr;
     d_atom_positions_ = nullptr;
     d_num_atoms_ = nullptr;
     d_atom_embeddings_ = nullptr;
     weights_allocated_ = false;
 }
 
-void ScratchBlockLayer::initializeWeights() {
+void ScratchBlockLayer::initializeRuntimeBuffers() {
     if (!weights_allocated_) return;
     StreamController::fatalIfDefaultStream(config_.stream, "ScratchBlockLayer::initializeWeights");
 
-    cudaStream_t stream = config_.stream;
-    const int block_size = 256;
-
-    // Xavier init for atom type embeddings (splitmix64 PRNG)
-    const int atom_emb_size = NUM_ATOM_TYPES * config_.atom_embedding_dim;
-    float atom_stddev = std::sqrt(2.0f / (NUM_ATOM_TYPES + config_.atom_embedding_dim));
-    int grid_size = (atom_emb_size + block_size - 1) / block_size;
-    kernelXavierInit<<<grid_size, block_size, 0, stream>>>(
-        atom_type_embeddings_.data, atom_emb_size, atom_stddev, 42);
-
-    // Xavier init for atom projection
-    const int proj_size = config_.atom_embedding_dim * config_.d_model;
-    float proj_stddev = std::sqrt(2.0f / (config_.atom_embedding_dim + config_.d_model));
-    grid_size = (proj_size + block_size - 1) / block_size;
-    kernelXavierInit<<<grid_size, block_size, 0, stream>>>(
-        atom_projection_.data, proj_size, proj_stddev, 123);
-
-    // Xavier init for learned all-token vector gate Wg: [e; z] @ Wg
-    const int gate_size = 2 * config_.d_model * config_.d_model;
-    const float gate_stddev = std::sqrt(2.0f / (3.0f * config_.d_model));
-    grid_size = (gate_size + block_size - 1) / block_size;
-    kernelXavierInit<<<grid_size, block_size, 0, stream>>>(
-        structured_gate_weight_.data, gate_size, gate_stddev, 321);
-
-    logWeightInit();
+    const cudaError_t err = cudaMemsetAsync(d_num_atoms_, 0, sizeof(int), config_.stream);
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string("ScratchBlockLayer::initializeRuntimeBuffers: cudaMemsetAsync(d_num_atoms_) failed: ") +
+                                 cudaGetErrorString(err));
+    }
 }
 
 void ScratchBlockLayer::runForwardKernels(
@@ -1030,6 +971,8 @@ void ScratchBlockLayer::runForwardKernels(
     cudaStream_t stream,
     bool execution_first_type_only)
 {
+    const auto& scratch_parameters = requireParameterTensors("ScratchBlockLayer::runForwardKernels");
+
     // Step 1: Detect atom tokens
     cudaMemsetAsync(d_num_atoms_, 0, sizeof(int), stream);
 
@@ -1050,7 +993,7 @@ void ScratchBlockLayer::runForwardKernels(
     const int type_only_flag = execution_first_type_only ? 1 : 0;
     kernelLookupAtomEmbeddingsWithValue<<<atom_blocks, config_.atom_embedding_dim, 0, stream>>>(
         token_ids, d_atom_positions_, d_num_atoms_, config_.max_atoms,
-        atom_type_embeddings_.data,
+        scratch_parameters.atom_type_embeddings.data,
         numeric_values,
         atom_flags,
         atom_mask,
@@ -1060,7 +1003,7 @@ void ScratchBlockLayer::runForwardKernels(
     // Step 3: Project and inject atom embeddings (single unified projection)
     kernelInjectAtomEmbeddings<<<atom_blocks, config_.d_model, 0, stream>>>(
         output, d_atom_positions_, d_num_atoms_, config_.max_atoms,
-        d_atom_embeddings_, atom_projection_.data,
+        d_atom_embeddings_, scratch_parameters.atom_projection.data,
         config_.atom_embedding_dim, config_.d_model, config_.atom_scale);
 }
 

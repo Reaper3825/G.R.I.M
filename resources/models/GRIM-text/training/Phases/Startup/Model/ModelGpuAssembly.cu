@@ -239,6 +239,19 @@ const GRIM::EmbeddingParameterTensors& requireEmbeddingParametersReady(
     return embedding_parameters;
 }
 
+const GRIM::ScratchBlockParameterTensors& requireScratchBlockParametersReady(
+    const ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const char* caller) {
+    const auto& scratch_block_parameters = parameter_registry.requireScratchBlockParameters(caller);
+    if (!scratch_block_parameters.atom_type_embeddings.data ||
+        !scratch_block_parameters.atom_projection.data ||
+        !scratch_block_parameters.structured_gate_weight.data) {
+        throw std::runtime_error(
+            std::string("[") + caller + "] ScratchBlock parameter tensors are not initialized on the registry owner");
+    }
+    return scratch_block_parameters;
+}
+
 void logInferenceMemorySummary(const GRIM::Config::AiConfigSnapshot& model_cfg,
                                size_t max_batch_size,
                                size_t max_seq_len_cache,
@@ -565,11 +578,11 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
         }
 
         //======================================================//
-        //  4) Build optional ScratchBlock reasoning layer (Pattern B)
+        //  4) Build optional ScratchBlock reasoning runtime and registry-owned parameters
         //
         //  HyperparameterGroupings owns the static construction contract;
-        //  startup model assembly supplies only the init stream. TrainingState
-        //  must not allocate or configure this durable model layer.
+        //  startup model assembly supplies only the init stream/runtime shell,
+        //  while ParameterGroupRegistration owns the durable trainable tensors.
         //======================================================//
         const auto scratch_hp = GRIM::HyperParameters::scratchBlockConstructionHP(model_cfg);
         if (scratch_hp.enabled) {
@@ -577,9 +590,18 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
             scratch_block_layer = std::make_unique<GRIM::ScratchBlockLayer>(
                 scratch_hp, init_stream);
 
-            if (!scratch_block_layer->atomTypeEmbeddings().data ||
-                !scratch_block_layer->atomProjection().data) {
-                throw std::runtime_error("[assembleGpuModel] FATAL: ScratchBlockLayer tensors not ready after construction");
+            ModelRegistration::initializeScratchBlockParameterTensors(
+                parameter_registry,
+                scratch_hp,
+                weight_init_seed,
+                init_stream);
+            (void)requireScratchBlockParametersReady(parameter_registry, "Startup::assembleGpuModel");
+            scratch_block_layer->bindParameterTensors(parameter_registry);
+
+            const auto& scratch_block_parameters = requireScratchBlockParametersReady(parameter_registry, "Startup::assembleGpuModel");
+            if (!scratch_block_parameters.atom_type_embeddings.data ||
+                !scratch_block_parameters.atom_projection.data) {
+                throw std::runtime_error("[assembleGpuModel] FATAL: registry ScratchBlock tensors not ready after startup allocation");
             }
             std::cout << "✓ ScratchBlock layer created\n";
         }

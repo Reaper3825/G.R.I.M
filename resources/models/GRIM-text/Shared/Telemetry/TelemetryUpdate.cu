@@ -186,9 +186,9 @@ void populateEBInjectionStreams(
 
     // Stream 26: SB_ATOM_EMBED_RMS
     float atom_embed_rms = 0.0f;
-    auto* sb = gpu_model.scratch_block_layer.get();
-    if (sb) {
-        const auto& ate = sb->atomTypeEmbeddings();
+    auto* scratch_block_parameters = parameter_registry.getScratchBlockParameters();
+    if (scratch_block_parameters) {
+        const auto& ate = scratch_block_parameters->atom_type_embeddings;
         atom_embed_rms = gpuBufferRMS(ate.data, ate.numel(), "scratch_block.atomTypeEmbeddings");
     }
     obs[26] = atom_embed_rms;

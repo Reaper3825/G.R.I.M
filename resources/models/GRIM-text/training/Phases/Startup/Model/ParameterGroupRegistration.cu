@@ -413,14 +413,19 @@ void registerEncoderParameters(Startup::GpuModelState& gpu_model_state,
 }
 
 void registerScratchBlockParameters(Startup::GpuModelState& gpu_model_state,
+                                    ParameterRegistry::StartupParameterRegistry& parameter_registry,
                                     Registrar& registrar,
                                                 const GRIM::Config::AiConfigSnapshot& config) {
     auto* scratch_block = gpu_model_state.scratch_block_layer.get();
+    auto* scratch_block_parameters = parameter_registry.getScratchBlockParameters();
     const auto scratch_hp = scratchBlockConstructionHP(config);
 
     if (!scratch_hp.enabled) {
         if (scratch_block) {
             throw std::runtime_error("[buildParameterGroups] ScratchBlock layer exists while ScratchBlockConstructionHP.enabled=false");
+        }
+        if (scratch_block_parameters) {
+            throw std::runtime_error("[buildParameterGroups] ScratchBlock parameter owner exists while ScratchBlockConstructionHP.enabled=false");
         }
         return;
     }
@@ -428,24 +433,11 @@ void registerScratchBlockParameters(Startup::GpuModelState& gpu_model_state,
     if (!scratch_block) {
         throw std::runtime_error("[buildParameterGroups] ScratchBlockConstructionHP.enabled=true but ScratchBlock layer is NULL");
     }
+    if (!scratch_block_parameters) {
+        throw std::runtime_error("[buildParameterGroups] ScratchBlockConstructionHP.enabled=true but registry ScratchBlock parameter owner is NULL");
+    }
 
-    auto& atom_type_embeddings = scratch_block->atomTypeEmbeddings();
-    registrar.addTensor("scratch_block_atom_type_embeddings",
-                        atom_type_embeddings,
-                        ParamGroupType::SCRATCHBLOCK,
-                        ParamStatsBucket::ENCODER);
-
-    auto& atom_projection = scratch_block->atomProjection();
-    registrar.addTensor("scratch_block_atom_projection",
-                        atom_projection,
-                        ParamGroupType::SCRATCHBLOCK,
-                        ParamStatsBucket::ENCODER);
-
-    auto& structured_gate_weight = scratch_block->structuredGateWeight();
-    registrar.addTensor("scratch_block_structured_gate_weight",
-                        structured_gate_weight,
-                        ParamGroupType::SCRATCHBLOCK,
-                        ParamStatsBucket::ENCODER);
+    ParameterRegistry::registerScratchBlockParameters(*scratch_block_parameters, registrar);
 }
 
 void registerExecutionBlockParameters(Startup::GpuModelState& gpu_model_state,
@@ -890,6 +882,63 @@ void initializeLmHeadParameterTensors(
     emitInfo("[initializeLmHeadParameterTensors] Initialized registry-owned LM-head tensors");
 }
 
+void initializeScratchBlockParameterTensors(
+    ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const GRIM::HyperParameters::ScratchBlockConstructionHP& scratch_hp,
+    std::uint64_t weight_init_seed,
+    cudaStream_t init_stream) {
+    if (!scratch_hp.enabled) {
+        if (parameter_registry.getScratchBlockParameters()) {
+            throw std::runtime_error("initializeScratchBlockParameterTensors: ScratchBlock disabled but registry owner already exists");
+        }
+        return;
+    }
+    if (!init_stream) {
+        throw std::runtime_error("initializeScratchBlockParameterTensors: init_stream is NULL");
+    }
+    if (scratch_hp.d_model <= 0) {
+        throw std::runtime_error("initializeScratchBlockParameterTensors: d_model must be positive, got " +
+                                 std::to_string(scratch_hp.d_model));
+    }
+    if (scratch_hp.atom_embedding_dim <= 0) {
+        throw std::runtime_error("initializeScratchBlockParameterTensors: atom_embedding_dim must be positive, got " +
+                                 std::to_string(scratch_hp.atom_embedding_dim));
+    }
+    if (parameter_registry.getScratchBlockParameters()) {
+        throw std::runtime_error("initializeScratchBlockParameterTensors: registry ScratchBlock tensor owner is already initialized");
+    }
+
+    parameter_registry.scratch_block_parameters = std::make_unique<GRIM::ScratchBlockParameterTensors>();
+    auto& tensors = *parameter_registry.scratch_block_parameters;
+
+    const int num_atom_types = GRIM::Tokenizer::kAtomTypeCount;
+    tensors.atom_type_embeddings = Tensor::zeros(
+        {num_atom_types, scratch_hp.atom_embedding_dim},
+        init_stream,
+        "scratch_block.atom_type_embeddings");
+    tensors.atom_type_embeddings.requires_grad_();
+    tensors.atom_type_embeddings.ensure_grad();
+    Tensor::xavier_uniform_(tensors.atom_type_embeddings, weight_init_seed + 40, init_stream);
+
+    tensors.atom_projection = Tensor::zeros(
+        {scratch_hp.atom_embedding_dim, scratch_hp.d_model},
+        init_stream,
+        "scratch_block.atom_projection");
+    tensors.atom_projection.requires_grad_();
+    tensors.atom_projection.ensure_grad();
+    Tensor::xavier_uniform_(tensors.atom_projection, weight_init_seed + 41, init_stream);
+
+    tensors.structured_gate_weight = Tensor::zeros(
+        {2 * scratch_hp.d_model, scratch_hp.d_model},
+        init_stream,
+        "scratch_block.structured_gate_weight");
+    tensors.structured_gate_weight.requires_grad_();
+    tensors.structured_gate_weight.ensure_grad();
+    Tensor::xavier_uniform_(tensors.structured_gate_weight, weight_init_seed + 42, init_stream);
+
+    emitInfo("[initializeScratchBlockParameterTensors] Initialized registry-owned ScratchBlock tensors");
+}
+
 void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,
                           Startup::GpuModelState& gpu_model_state,
                           ParameterRegistry::StartupParameterRegistry& parameter_registry) {
@@ -903,7 +952,7 @@ void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,
     registerTopLevelParameters(gpu_model_state, parameter_registry, registrar, config);
     registerEncoderParameters(gpu_model_state, parameter_registry, registrar, config);
 
-    registerScratchBlockParameters(gpu_model_state, registrar, config);
+    registerScratchBlockParameters(gpu_model_state, parameter_registry, registrar, config);
     registerExecutionBlockParameters(gpu_model_state, parameter_registry, registrar, config);
     registerMtpParameters(parameter_registry, registrar, config);
 

@@ -229,6 +229,25 @@ def pivot_streams(df):
 def smooth(series, window=20):
     return series.rolling(window, min_periods=1).mean()
 
+
+def plot_raw_and_smooth(ax, x, series, window=20, *, color,
+            raw_label="_nolegend_", smooth_label=None,
+            raw_alpha=0.2, raw_linewidth=0.5,
+            smooth_alpha=1.0, smooth_linewidth=1.5,
+            raw_linestyle="-", smooth_linestyle="-"):
+    ax.plot(x, series,
+        alpha=raw_alpha,
+        linewidth=raw_linewidth,
+        color=color,
+        linestyle=raw_linestyle,
+        label=raw_label)
+    ax.plot(x, smooth(series, window),
+        alpha=smooth_alpha,
+        linewidth=smooth_linewidth,
+        color=color,
+        linestyle=smooth_linestyle,
+        label=smooth_label)
+
 def main():
     # --- find CSV ---
     if len(sys.argv) > 1:
@@ -268,9 +287,13 @@ def main():
     ax = fig.add_subplot(gs[0, 1])
     if loss is not None:
         delta = loss["raw_observation"].diff()
-        ax.plot(loss.index, smooth(delta, 50), linewidth=1, color="tab:red")
+        plot_raw_and_smooth(ax, loss.index, delta, window=50,
+                            color="tab:red",
+                            raw_label="raw Δ loss",
+                            smooth_label="smooth Δ loss",
+                            smooth_linewidth=1)
         ax.axhline(0, color="gray", linewidth=0.5, linestyle="--")
-    ax.set_ylabel("Δ Loss (smoothed)")
+    ax.set_ylabel("Δ Loss")
     ax.set_title("Loss change rate")
     ax.grid(True, alpha=0.3)
 
@@ -280,7 +303,13 @@ def main():
         ax.plot(grad_mean.index, grad_mean["raw_observation"], alpha=0.3, linewidth=0.5, label="mean (raw)")
         ax.plot(grad_mean.index, smooth(grad_mean["raw_observation"]), linewidth=1.5, label="mean (smooth)")
     if grad_max is not None:
-        ax.plot(grad_max.index, smooth(grad_max["raw_observation"]), linewidth=1, linestyle="--", label="max (smooth)")
+        plot_raw_and_smooth(ax, grad_max.index, grad_max["raw_observation"],
+                            color="tab:orange",
+                            raw_label="max (raw)",
+                            smooth_label="max (smooth)",
+                            raw_alpha=0.2,
+                            smooth_linewidth=1,
+                            smooth_linestyle="--")
     ax.set_ylabel("Gradient Norm")
     ax.set_title("Gradient norms")
     ax.legend(fontsize=8)
@@ -314,8 +343,16 @@ def main():
     ax = fig.add_subplot(gs[2, 1])
     if loss is not None:
         ax2 = ax.twinx()
-        ax.plot(loss.index, smooth(loss["p"], 10), linewidth=1, color="tab:orange", label="p (momentum)")
-        ax2.plot(loss.index, smooth(loss["k_out"], 10), linewidth=1, color="tab:purple", label="k (curvature)")
+        plot_raw_and_smooth(ax, loss.index, loss["p"], window=10,
+                            color="tab:orange",
+                            raw_label="p (raw)",
+                            smooth_label="p (momentum)",
+                            smooth_linewidth=1)
+        plot_raw_and_smooth(ax2, loss.index, loss["k_out"], window=10,
+                            color="tab:purple",
+                            raw_label="k (raw)",
+                            smooth_label="k (curvature)",
+                            smooth_linewidth=1)
         ax.set_ylabel("p (momentum)", color="tab:orange")
         ax2.set_ylabel("k (curvature)", color="tab:purple")
         ax.legend(loc="upper left", fontsize=8)
@@ -391,7 +428,12 @@ def main():
                             ("rho_worst_delta", rho_worst, "tab:red"),
                             ("h_rms_growth", h_rms, "tab:purple")]:
         if s is not None:
-            ax.plot(s.index, smooth(s["p"], 10), linewidth=1.2, label=f"{name}", color=color)
+            plot_raw_and_smooth(ax, s.index, s["p"], window=10,
+                                color=color,
+                                raw_label="_nolegend_",
+                                smooth_label=f"{name}",
+                                raw_alpha=0.12,
+                                smooth_linewidth=1.2)
     ax.axhline(0, color="gray", linewidth=0.5, linestyle="--")
     ax.set_ylabel("p (momentum)")
     ax.set_title("Momentum across streams")
@@ -405,7 +447,12 @@ def main():
                             ("grad_norm_mean", grad_mean, "tab:green"),
                             ("h_rms_growth", h_rms, "tab:purple")]:
         if s is not None:
-            ax.plot(s.index, smooth(s["k_out"], 10), linewidth=1.2, label=f"{name}", color=color)
+            plot_raw_and_smooth(ax, s.index, s["k_out"], window=10,
+                                color=color,
+                                raw_label="_nolegend_",
+                                smooth_label=f"{name}",
+                                raw_alpha=0.12,
+                                smooth_linewidth=1.2)
     ax.set_ylabel("k (curvature)")
     ax.set_title("Curvature across streams")
     ax.legend(fontsize=8)
@@ -433,9 +480,17 @@ def main():
     # 3-1b) delta_mu & delta_sigma
     ax = fig3.add_subplot(gs3[0, 1])
     if loss is not None:
-        ax.plot(loss.index, smooth(loss["delta_mu"], 20), linewidth=1.2, label="Δμ", color="tab:blue")
+        plot_raw_and_smooth(ax, loss.index, loss["delta_mu"], window=20,
+                            color="tab:blue",
+                            raw_label="Δμ raw",
+                            smooth_label="Δμ",
+                            smooth_linewidth=1.2)
         ax2 = ax.twinx()
-        ax2.plot(loss.index, smooth(loss["delta_sigma"], 20), linewidth=1.2, label="Δσ", color="tab:red")
+        plot_raw_and_smooth(ax2, loss.index, loss["delta_sigma"], window=20,
+                            color="tab:red",
+                            raw_label="Δσ raw",
+                            smooth_label="Δσ",
+                            smooth_linewidth=1.2)
         ax.set_ylabel("Δμ", color="tab:blue")
         ax2.set_ylabel("Δσ", color="tab:red")
         ax.legend(loc="upper left", fontsize=8)
@@ -446,7 +501,10 @@ def main():
     # 3-2a) v_sigma (sigma velocity)
     ax = fig3.add_subplot(gs3[1, 0])
     if loss is not None:
-        ax.plot(loss.index, smooth(loss["v_sigma"], 20), linewidth=1.2, color="tab:red")
+        plot_raw_and_smooth(ax, loss.index, loss["v_sigma"], window=20,
+                            color="tab:red",
+                            raw_label="v_σ raw",
+                            smooth_label="v_σ")
         ax.axhline(0, color="gray", linewidth=0.5, linestyle="--")
     ax.set_ylabel("v_σ")
     ax.set_title("Sigma velocity (v_sigma)")
@@ -464,9 +522,17 @@ def main():
     # 3-3a) r_out (regime) & ell_out (level)
     ax = fig3.add_subplot(gs3[2, 0])
     if loss is not None:
-        ax.plot(loss.index, smooth(loss["r_out"], 10), linewidth=1.2, label="r (regime)", color="tab:blue")
+        plot_raw_and_smooth(ax, loss.index, loss["r_out"], window=10,
+                            color="tab:blue",
+                            raw_label="r raw",
+                            smooth_label="r (regime)",
+                            smooth_linewidth=1.2)
         ax2 = ax.twinx()
-        ax2.plot(loss.index, smooth(loss["ell_out"], 10), linewidth=1.2, label="ℓ (level)", color="tab:orange")
+        plot_raw_and_smooth(ax2, loss.index, loss["ell_out"], window=10,
+                            color="tab:orange",
+                            raw_label="ℓ raw",
+                            smooth_label="ℓ (level)",
+                            smooth_linewidth=1.2)
         ax.set_ylabel("r (regime)", color="tab:blue")
         ax2.set_ylabel("ℓ (level)", color="tab:orange")
         ax.legend(loc="upper left", fontsize=8)
@@ -477,9 +543,17 @@ def main():
     # 3-3b) mu_ex (excess mean) & c_out (confidence)
     ax = fig3.add_subplot(gs3[2, 1])
     if loss is not None:
-        ax.plot(loss.index, smooth(loss["mu_ex"], 10), linewidth=1.2, label="μ_ex (excess)", color="tab:purple")
+        plot_raw_and_smooth(ax, loss.index, loss["mu_ex"], window=10,
+                            color="tab:purple",
+                            raw_label="μ_ex raw",
+                            smooth_label="μ_ex (excess)",
+                            smooth_linewidth=1.2)
         ax2 = ax.twinx()
-        ax2.plot(loss.index, smooth(loss["c_out"], 10), linewidth=1.2, label="c (confidence)", color="tab:green")
+        plot_raw_and_smooth(ax2, loss.index, loss["c_out"], window=10,
+                            color="tab:green",
+                            raw_label="c raw",
+                            smooth_label="c (confidence)",
+                            smooth_linewidth=1.2)
         ax.set_ylabel("μ_ex", color="tab:purple")
         ax2.set_ylabel("c (confidence)", color="tab:green")
         ax.legend(loc="upper left", fontsize=8)
@@ -628,7 +702,10 @@ def main():
         # 5-3b) Combined: loss + disruption + signal_dominance (normalized)
         ax = fig5.add_subplot(gs5[2, 1])
         if loss is not None:
-            ax.plot(loss.index, smooth(loss["raw_observation"]), linewidth=1.5, color="tab:blue", label="loss (smoothed)")
+            plot_raw_and_smooth(ax, loss.index, loss["raw_observation"],
+                                color="tab:blue",
+                                raw_label="loss (raw)",
+                                smooth_label="loss (smoothed)")
             ax.axhline(ln_v, color="gray", linewidth=1, linestyle=":", alpha=0.5)
         ax.set_ylabel("Loss", color="tab:blue")
         if adam_disrupt is not None and adam_bc2 is not None:
@@ -678,7 +755,14 @@ def main():
             ax.plot(exec_grad_norm.index, exec_grad_norm["raw_observation"], alpha=0.3, linewidth=0.5, color="tab:blue")
             ax.plot(exec_grad_norm.index, smooth(exec_grad_norm["raw_observation"]), linewidth=1.5, color="tab:blue", label="exec grad RMS")
         if grad_mean is not None:
-            ax.plot(grad_mean.index, smooth(grad_mean["raw_observation"]), linewidth=1, linestyle="--", color="tab:gray", alpha=0.6, label="total grad RMS")
+            plot_raw_and_smooth(ax, grad_mean.index, grad_mean["raw_observation"],
+                                color="tab:gray",
+                                raw_label="_nolegend_",
+                                smooth_label="total grad RMS",
+                                raw_alpha=0.12,
+                                smooth_alpha=0.6,
+                                smooth_linewidth=1,
+                                smooth_linestyle="--")
         ax.set_ylabel("Gradient RMS")
         ax.set_title("Exec Block Gradient Norm")
         ax.set_yscale("log")
@@ -702,7 +786,13 @@ def main():
             ax.plot(exec_sel_ent.index, exec_sel_ent["raw_observation"], alpha=0.3, linewidth=0.5, color="tab:purple")
             ax.plot(exec_sel_ent.index, smooth(exec_sel_ent["raw_observation"]), linewidth=1.5, color="tab:purple", label="selection entropy")
         if exec_op_ent is not None:
-            ax.plot(exec_op_ent.index, smooth(exec_op_ent["raw_observation"]), linewidth=1.2, color="tab:orange", linestyle="--", label="op entropy")
+            plot_raw_and_smooth(ax, exec_op_ent.index, exec_op_ent["raw_observation"],
+                                color="tab:orange",
+                                raw_label="_nolegend_",
+                                smooth_label="op entropy",
+                                raw_alpha=0.15,
+                                smooth_linewidth=1.2,
+                                smooth_linestyle="--")
         ax.set_ylabel("Entropy (nats)")
         ax.set_title("Selection Entropy (↓ = sharpening)")
         ax.legend(fontsize=8)
@@ -711,9 +801,19 @@ def main():
         # 6-2b) Op Entropy momentum (p) — is it trending down?
         ax = fig6.add_subplot(gs6[1, 1])
         if exec_sel_ent is not None:
-            ax.plot(exec_sel_ent.index, smooth(exec_sel_ent["p"], 10), linewidth=1.2, color="tab:purple", label="selection entropy p")
+            plot_raw_and_smooth(ax, exec_sel_ent.index, exec_sel_ent["p"], window=10,
+                                color="tab:purple",
+                                raw_label="_nolegend_",
+                                smooth_label="selection entropy p",
+                                raw_alpha=0.15,
+                                smooth_linewidth=1.2)
         if exec_op_ent is not None:
-            ax.plot(exec_op_ent.index, smooth(exec_op_ent["p"], 10), linewidth=1.2, color="tab:orange", label="op entropy p")
+            plot_raw_and_smooth(ax, exec_op_ent.index, exec_op_ent["p"], window=10,
+                                color="tab:orange",
+                                raw_label="_nolegend_",
+                                smooth_label="op entropy p",
+                                raw_alpha=0.15,
+                                smooth_linewidth=1.2)
         ax.axhline(0, color="gray", linewidth=0.5, linestyle="--")
         ax.set_ylabel("p (momentum)")
         ax.set_title("Entropy Momentum (< 0 = sharpening)")
@@ -723,11 +823,17 @@ def main():
         # 6-3a) Div Clamp Rate + Max P Write
         ax = fig6.add_subplot(gs6[2, 0])
         if exec_div_clamp is not None:
-            ax.plot(exec_div_clamp.index, smooth(exec_div_clamp["raw_observation"]), linewidth=1.5, color="tab:red", label="div clamp rate")
+            plot_raw_and_smooth(ax, exec_div_clamp.index, exec_div_clamp["raw_observation"],
+                                color="tab:red",
+                                raw_label="div clamp raw",
+                                smooth_label="div clamp rate")
         ax.set_ylabel("Rate", color="tab:red")
         if exec_max_pw is not None:
             ax2 = ax.twinx()
-            ax2.plot(exec_max_pw.index, smooth(exec_max_pw["raw_observation"]), linewidth=1.5, color="tab:green", label="max p(write)")
+            plot_raw_and_smooth(ax2, exec_max_pw.index, exec_max_pw["raw_observation"],
+                                color="tab:green",
+                                raw_label="max p(write) raw",
+                                smooth_label="max p(write)")
             ax2.set_ylabel("max p(write)", color="tab:green")
             ax2.legend(loc="center right", fontsize=8)
         ax.set_title("Div Clamp Rate & Write Concentration")
@@ -783,9 +889,17 @@ def main():
         # 7-1b) Gate momentum (p values) — trending?
         ax = fig7.add_subplot(gs7[0, 1])
         if eb_inject_gate is not None and "p" in eb_inject_gate.columns:
-            ax.plot(eb_inject_gate.index, smooth(eb_inject_gate["p"], 10), linewidth=1.2, color="tab:blue", label="inject gate p")
+            plot_raw_and_smooth(ax, eb_inject_gate.index, eb_inject_gate["p"], window=10,
+                                color="tab:blue",
+                                raw_label="inject gate p raw",
+                                smooth_label="inject gate p",
+                                smooth_linewidth=1.2)
         if eb_read_gate is not None and "p" in eb_read_gate.columns:
-            ax.plot(eb_read_gate.index, smooth(eb_read_gate["p"], 10), linewidth=1.2, color="tab:red", label="read gate p")
+            plot_raw_and_smooth(ax, eb_read_gate.index, eb_read_gate["p"], window=10,
+                                color="tab:red",
+                                raw_label="read gate p raw",
+                                smooth_label="read gate p",
+                                smooth_linewidth=1.2)
         ax.axhline(0, color="gray", linewidth=0.5, linestyle="--")
         ax.set_ylabel("p (momentum)")
         ax.set_title("Gate Momentum (< 0 = closing gate)")
@@ -828,14 +942,30 @@ def main():
         # 7-3b) Combined: gates overlaid with loss
         ax = fig7.add_subplot(gs7[2, 1])
         if eb_inject_gate is not None:
-            ax.plot(eb_inject_gate.index, smooth(eb_inject_gate["raw_observation"]), linewidth=1.2, color="tab:blue", label="inject gate")
+            plot_raw_and_smooth(ax, eb_inject_gate.index, eb_inject_gate["raw_observation"],
+                                color="tab:blue",
+                                raw_label="_nolegend_",
+                                smooth_label="inject gate",
+                                raw_alpha=0.15,
+                                smooth_linewidth=1.2)
         if eb_read_gate is not None:
-            ax.plot(eb_read_gate.index, smooth(eb_read_gate["raw_observation"]), linewidth=1.2, color="tab:red", label="read gate")
+            plot_raw_and_smooth(ax, eb_read_gate.index, eb_read_gate["raw_observation"],
+                                color="tab:red",
+                                raw_label="_nolegend_",
+                                smooth_label="read gate",
+                                raw_alpha=0.15,
+                                smooth_linewidth=1.2)
         ax.set_ylabel("Gate Value", color="tab:blue")
         ax.set_ylim(-0.05, 1.05)
         if loss is not None:
             ax2 = ax.twinx()
-            ax2.plot(loss.index, smooth(loss["raw_observation"]), linewidth=1, color="tab:gray", alpha=0.5, label="loss (sm20)")
+            plot_raw_and_smooth(ax2, loss.index, loss["raw_observation"],
+                                color="tab:gray",
+                                raw_label="_nolegend_",
+                                smooth_label="loss (sm20)",
+                                raw_alpha=0.12,
+                                smooth_alpha=0.5,
+                                smooth_linewidth=1)
             ax2.set_ylabel("Loss", color="tab:gray")
             ax2.legend(loc="center right", fontsize=8)
         ax.set_title("Gates vs Loss (correlation = causation hypothesis)")
@@ -895,7 +1025,13 @@ def main():
         ax.set_ylabel("Sequence Length", color="tab:green")
         if pbm_eff_bias is not None:
             ax2 = ax.twinx()
-            ax2.plot(pbm_eff_bias.index, smooth(pbm_eff_bias["raw_observation"]), linewidth=1.2, color="tab:red", alpha=0.7, label="eff. bias max")
+            plot_raw_and_smooth(ax2, pbm_eff_bias.index, pbm_eff_bias["raw_observation"],
+                                color="tab:red",
+                                raw_label="_nolegend_",
+                                smooth_label="eff. bias max",
+                                raw_alpha=0.15,
+                                smooth_alpha=0.7,
+                                smooth_linewidth=1.2)
             ax2.set_ylabel("Effective Bias", color="tab:red")
             ax2.legend(loc="center right", fontsize=8)
         ax.set_title("Batch Sequence Length & Effective Bias")
@@ -946,9 +1082,15 @@ def main():
         # 9-2a) h_rms min/max range — collapse/explosion detector
         ax = fig9.add_subplot(gs9[1, 0])
         if rho_raw_hmin is not None:
-            ax.plot(rho_raw_hmin.index, smooth(rho_raw_hmin["raw_observation"]), linewidth=1.5, color="tab:green", label="h_rms min")
+            plot_raw_and_smooth(ax, rho_raw_hmin.index, rho_raw_hmin["raw_observation"],
+                                color="tab:green",
+                                raw_label="_nolegend_",
+                                smooth_label="h_rms min")
         if rho_raw_hmax is not None:
-            ax.plot(rho_raw_hmax.index, smooth(rho_raw_hmax["raw_observation"]), linewidth=1.5, color="tab:red", label="h_rms max")
+            plot_raw_and_smooth(ax, rho_raw_hmax.index, rho_raw_hmax["raw_observation"],
+                                color="tab:red",
+                                raw_label="_nolegend_",
+                                smooth_label="h_rms max")
         if rho_raw_hmin is not None and rho_raw_hmax is not None:
             common = rho_raw_hmin.index.intersection(rho_raw_hmax.index)
             ax.fill_between(common,
@@ -967,9 +1109,20 @@ def main():
             dot_vals = rho_raw_dot.loc[common, "raw_observation"].values
             norm_vals = rho_raw_norm.loc[common, "raw_observation"].values
             ratio = np.where(norm_vals > 1e-12, dot_vals / norm_vals, 0.0)
-            ax.plot(common, smooth(pd.Series(ratio, index=common)), linewidth=1.5, color="tab:purple", label="dot/norm ratio")
+            ratio_series = pd.Series(ratio, index=common)
+            plot_raw_and_smooth(ax, common, ratio_series,
+                                color="tab:purple",
+                                raw_label="_nolegend_",
+                                smooth_label="dot/norm ratio")
         if rho_final is not None:
-            ax.plot(rho_final.index, smooth(rho_final["raw_observation"]), linewidth=1.2, linestyle="--", color="tab:blue", alpha=0.7, label="rho_final")
+            plot_raw_and_smooth(ax, rho_final.index, rho_final["raw_observation"],
+                                color="tab:blue",
+                                raw_label="_nolegend_",
+                                smooth_label="rho_final",
+                                raw_alpha=0.15,
+                                smooth_alpha=0.7,
+                                smooth_linewidth=1.2,
+                                smooth_linestyle="--")
         ax.set_ylabel("Ratio / ρ")
         ax.set_title("Dot/Norm Ratio vs ρ_final (should track)")
         ax.legend(fontsize=8)
@@ -996,13 +1149,20 @@ def main():
         # 9-3b) Spread vs rho_final overlay (denominator collapse → spurious ρ)
         ax = fig9.add_subplot(gs9[2, 1])
         if rho_raw_spread is not None:
-            ax.plot(rho_raw_spread.index, smooth(rho_raw_spread["raw_observation"]),
-                    linewidth=1.5, color="tab:red", label="rms spread")
+            plot_raw_and_smooth(ax, rho_raw_spread.index, rho_raw_spread["raw_observation"],
+                                color="tab:red",
+                                raw_label="_nolegend_",
+                                smooth_label="rms spread")
         ax.set_ylabel("rms spread", color="tab:red")
         if rho_final is not None:
             ax2 = ax.twinx()
-            ax2.plot(rho_final.index, smooth(rho_final["raw_observation"]),
-                     linewidth=1.2, color="tab:blue", alpha=0.7, label="ρ_final")
+            plot_raw_and_smooth(ax2, rho_final.index, rho_final["raw_observation"],
+                                color="tab:blue",
+                                raw_label="_nolegend_",
+                                smooth_label="ρ_final",
+                                raw_alpha=0.15,
+                                smooth_alpha=0.7,
+                                smooth_linewidth=1.2)
             ax2.set_ylabel("ρ_final", color="tab:blue")
             ax2.legend(loc="center right", fontsize=8)
         ax.set_title("rms_spread vs ρ_final (collapse drives spurious ρ)")
@@ -1046,9 +1206,14 @@ def main():
             ax.plot(rho_centered_abs.index, smooth(rho_centered_abs["raw_observation"]),
                     linewidth=1.5, color="tab:green", label="centered avg |dot|")
         if rho_raw_dot is not None:
-            ax.plot(rho_raw_dot.index, smooth(rho_raw_dot["raw_observation"]),
-                    linewidth=1.1, linestyle="--", color="tab:blue", alpha=0.7,
-                    label="raw avg |dot|")
+            plot_raw_and_smooth(ax, rho_raw_dot.index, rho_raw_dot["raw_observation"],
+                    color="tab:blue",
+                    raw_label="_nolegend_",
+                    smooth_label="raw avg |dot|",
+                    raw_alpha=0.12,
+                    smooth_alpha=0.7,
+                    smooth_linewidth=1.1,
+                    smooth_linestyle="--")
         ax.set_ylabel("avg absolute dot")
         ax.set_title("Centered Pairwise Dot After h̃ᵢ = hᵢ − μ")
         ax.legend(fontsize=8, loc="upper left")
@@ -1069,11 +1234,15 @@ def main():
         # 9b-2b) Signed vs centered comparison: separates mean drift from residual alignment.
         ax = fig9b.add_subplot(gs9b[1, 1])
         if rho_raw_signed is not None:
-            ax.plot(rho_raw_signed.index, smooth(rho_raw_signed["raw_observation"]),
-                    linewidth=1.5, color="tab:purple", label="avg signed dot")
+            plot_raw_and_smooth(ax, rho_raw_signed.index, rho_raw_signed["raw_observation"],
+                                color="tab:purple",
+                                raw_label="_nolegend_",
+                                smooth_label="avg signed dot")
         if rho_centered_abs is not None:
-            ax.plot(rho_centered_abs.index, smooth(rho_centered_abs["raw_observation"]),
-                    linewidth=1.5, color="tab:green", label="centered avg |dot|")
+            plot_raw_and_smooth(ax, rho_centered_abs.index, rho_centered_abs["raw_observation"],
+                                color="tab:green",
+                                raw_label="_nolegend_",
+                                smooth_label="centered avg |dot|")
         ax.axhline(0, color="gray", linewidth=0.8, linestyle="--", alpha=0.7)
         ax.set_ylabel("dot diagnostic")
         ax.set_title("Mean-Drift vs Residual Pairwise Alignment")
@@ -1120,7 +1289,10 @@ def main():
                                 ("γ_final", gamma_final, "tab:green")]:
             if s is not None:
                 pct_change = (s["raw_observation"] - 1.0) * 100.0
-                ax.plot(s.index, smooth(pct_change), linewidth=1.5, color=color, label=name)
+                plot_raw_and_smooth(ax, s.index, pct_change,
+                                    color=color,
+                                    raw_label="_nolegend_",
+                                    smooth_label=name)
         ax.axhline(0, color="gray", linewidth=0.8, linestyle="--", alpha=0.5)
         ax.set_ylabel("% Deviation from Init")
         ax.set_title("Gamma Drift from Initialization")
@@ -1133,7 +1305,12 @@ def main():
                                 ("γ₂ pre-FFN", gamma_pre_ffn, "tab:orange"),
                                 ("γ_final", gamma_final, "tab:green")]:
             if s is not None and "p" in s.columns:
-                ax.plot(s.index, smooth(s["p"], 10), linewidth=1.2, color=color, label=f"{name} p")
+                plot_raw_and_smooth(ax, s.index, s["p"], window=10,
+                                    color=color,
+                                    raw_label="_nolegend_",
+                                    smooth_label=f"{name} p",
+                                    raw_alpha=0.15,
+                                    smooth_linewidth=1.2)
         ax.axhline(0, color="gray", linewidth=0.5, linestyle="--")
         ax.set_ylabel("p (momentum)")
         ax.set_title("Gamma Momentum (trending direction)")
@@ -1143,16 +1320,37 @@ def main():
         # 10-2b) Gamma vs loss overlay — causal relationship
         ax = fig10.add_subplot(gs10[1, 1])
         if gamma_pre_attn is not None:
-            ax.plot(gamma_pre_attn.index, smooth(gamma_pre_attn["raw_observation"]), linewidth=1.2, color="tab:blue", label="γ₁ pre-attn")
+            plot_raw_and_smooth(ax, gamma_pre_attn.index, gamma_pre_attn["raw_observation"],
+                                color="tab:blue",
+                                raw_label="_nolegend_",
+                                smooth_label="γ₁ pre-attn",
+                                raw_alpha=0.15,
+                                smooth_linewidth=1.2)
         if gamma_pre_ffn is not None:
-            ax.plot(gamma_pre_ffn.index, smooth(gamma_pre_ffn["raw_observation"]), linewidth=1.2, color="tab:orange", label="γ₂ pre-FFN")
+            plot_raw_and_smooth(ax, gamma_pre_ffn.index, gamma_pre_ffn["raw_observation"],
+                                color="tab:orange",
+                                raw_label="_nolegend_",
+                                smooth_label="γ₂ pre-FFN",
+                                raw_alpha=0.15,
+                                smooth_linewidth=1.2)
         if gamma_final is not None:
-            ax.plot(gamma_final.index, smooth(gamma_final["raw_observation"]), linewidth=1.2, color="tab:green", label="γ_final")
+            plot_raw_and_smooth(ax, gamma_final.index, gamma_final["raw_observation"],
+                                color="tab:green",
+                                raw_label="_nolegend_",
+                                smooth_label="γ_final",
+                                raw_alpha=0.15,
+                                smooth_linewidth=1.2)
         ax.set_ylabel("Gamma RMS", color="tab:blue")
         ax.axhline(1.0, color="gray", linewidth=0.8, linestyle="--", alpha=0.3)
         if loss is not None:
             ax2 = ax.twinx()
-            ax2.plot(loss.index, smooth(loss["raw_observation"]), linewidth=1, color="tab:gray", alpha=0.5, label="loss (sm20)")
+            plot_raw_and_smooth(ax2, loss.index, loss["raw_observation"],
+                                color="tab:gray",
+                                raw_label="_nolegend_",
+                                smooth_label="loss (sm20)",
+                                raw_alpha=0.12,
+                                smooth_alpha=0.5,
+                                smooth_linewidth=1)
             ax2.set_ylabel("Loss", color="tab:gray")
             ax2.legend(loc="center right", fontsize=8)
         ax.set_title("Gamma vs Loss (correlation check)")
@@ -1253,11 +1451,15 @@ def main():
         # 11-3a) h DC component: mean and abs-max
         ax = fig11.add_subplot(gs11[2, 0])
         if hw_h_dc_mean is not None:
-            ax.plot(hw_h_dc_mean.index, smooth(hw_h_dc_mean["raw_observation"]),
-                    linewidth=1.5, color="tab:blue", label="mean_t (1/d)Σ_d h")
+            plot_raw_and_smooth(ax, hw_h_dc_mean.index, hw_h_dc_mean["raw_observation"],
+                                color="tab:blue",
+                                raw_label="_nolegend_",
+                                smooth_label="mean_t (1/d)Σ_d h")
         if hw_h_dc_amax is not None:
-            ax.plot(hw_h_dc_amax.index, smooth(hw_h_dc_amax["raw_observation"]),
-                    linewidth=1.5, color="tab:red", label="max_t |(1/d)Σ_d h|")
+            plot_raw_and_smooth(ax, hw_h_dc_amax.index, hw_h_dc_amax["raw_observation"],
+                                color="tab:red",
+                                raw_label="_nolegend_",
+                                smooth_label="max_t |(1/d)Σ_d h|")
         ax.axhline(0, color="gray", linewidth=0.5, linestyle="--")
         ax.set_ylabel("DC offset")
         ax.set_title("Hidden-State DC Component (column-centering check)")
@@ -1272,11 +1474,11 @@ def main():
             cos_vals = hw_cos_rms["raw_observation"].astype(float).values
             d_f = float(d_model_baseline)
             inflation = np.sqrt(np.maximum(0.0, 1.0 + d_f * (cos_vals * cos_vals)))
-            ax.plot(hw_cos_rms.index, inflation,
-                    alpha=0.3, linewidth=0.5, color="tab:orange")
-            ax.plot(hw_cos_rms.index, smooth(pd.Series(inflation, index=hw_cos_rms.index)),
-                    linewidth=1.5, color="tab:orange",
-                    label="√(1 + d·cos_rms²)")
+            inflation_series = pd.Series(inflation, index=hw_cos_rms.index)
+            plot_raw_and_smooth(ax, hw_cos_rms.index, inflation_series,
+                    color="tab:orange",
+                    raw_label="_nolegend_",
+                    smooth_label="√(1 + d·cos_rms²)")
         ax.axhline(1.0, color="gray", linewidth=0.8, linestyle="--",
                    alpha=0.7, label="no leak (1.0)")
         ax.axhline(2.0, color="tab:red", linewidth=0.8, linestyle="--",
@@ -1380,11 +1582,19 @@ def main():
         # 12-2b) Alignment comparison: h↔W vs unigram direction.
         ax = fig12.add_subplot(gs12[1, 1])
         if hw_cos_rms is not None:
-            ax.plot(hw_cos_rms.index, smooth(hw_cos_rms["raw_observation"]),
-                    linewidth=1.4, color="tab:red", label="RMS cos(h, W_v)")
+            plot_raw_and_smooth(ax, hw_cos_rms.index, hw_cos_rms["raw_observation"],
+                                color="tab:red",
+                                raw_label="_nolegend_",
+                                smooth_label="RMS cos(h, W_v)",
+                                raw_alpha=0.15,
+                                smooth_linewidth=1.4)
         if unigram_abs is not None:
-            ax.plot(unigram_abs.index, smooth(unigram_abs["raw_observation"]),
-                    linewidth=1.4, color="tab:orange", label="mean |cos(h, e_uf)|")
+            plot_raw_and_smooth(ax, unigram_abs.index, unigram_abs["raw_observation"],
+                                color="tab:orange",
+                                raw_label="_nolegend_",
+                                smooth_label="mean |cos(h, e_uf)|",
+                                raw_alpha=0.15,
+                                smooth_linewidth=1.4)
         ax.axhline(cos_random_baseline, color="tab:red", linewidth=0.8, linestyle="--",
                    alpha=0.5, label=f"RMS random={cos_random_baseline:.4f}")
         ax.axhline(unigram_random_abs, color="tab:orange", linewidth=0.8, linestyle=":",

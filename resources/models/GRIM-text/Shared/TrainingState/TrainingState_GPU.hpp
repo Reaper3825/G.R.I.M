@@ -50,7 +50,7 @@ struct TrainingState {
     //   - Embedding: TrainingContext::parameter_registry.getEmbeddingParameters()->token_weights
     //   - LM Head: TrainingContext::parameter_registry.getLmHeadParameters()->weights / bias / final_rms_gamma
     //   - Encoder: Each EncodingLayer self-allocates in constructor
-    //   - ScratchBlock: ScratchBlockLayer self-allocates in constructor
+    //   - ScratchBlock: runtime buffers live on ScratchBlockLayer; trainable tensors are registry-owned
     //
     // Session 7: TrainingTensors deleted — zero weight parameters remain in god object.
     // Weight init seed is passed directly from Phase1 RNG into Startup/Model GPU assembly.

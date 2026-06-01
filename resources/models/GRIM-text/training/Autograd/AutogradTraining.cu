@@ -870,12 +870,22 @@ bool verifyGradientsAreConnectedImpl(
         if (!ctx.scratch_block) {
             AG_WARN("ScratchBlockConstructionHP.enabled=true but ctx.scratch_block is NULL during gradient verification");
             ok = false;
+        } else if (!ctx.parameter_registry) {
+            AG_WARN("ScratchBlockConstructionHP.enabled=true but ctx.parameter_registry is NULL during gradient verification");
+            ok = false;
+        } else {
+        auto* scratch_block_parameters = ctx.parameter_registry->getScratchBlockParameters();
+        if (!scratch_block_parameters) {
+            AG_WARN("ScratchBlockConstructionHP.enabled=true but registry scratch_block_parameters are NULL during gradient verification");
+            ok = false;
         } else {
         auto checkScratch = [&](Tensor& t, const char* name) {
             if (t.data) requireAllocatedFinite(t, "scratch block " + std::string(name));
         };
-        checkScratch(ctx.scratch_block->atomTypeEmbeddings(), "atomTypeEmbeddings");
-        checkScratch(ctx.scratch_block->atomProjection(), "atomProjection");
+        checkScratch(scratch_block_parameters->atom_type_embeddings, "atomTypeEmbeddings");
+        checkScratch(scratch_block_parameters->atom_projection, "atomProjection");
+        checkScratch(scratch_block_parameters->structured_gate_weight, "structuredGateWeight");
+        }
         }
     } else if (ctx.scratch_block) {
         AG_WARN("ctx.scratch_block is non-null while ScratchBlockConstructionHP.enabled=false");
