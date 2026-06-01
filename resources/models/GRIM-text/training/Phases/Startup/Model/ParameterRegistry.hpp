@@ -196,6 +196,20 @@ struct StartupParameterRegistry {
         return execution_block_parameters.get();
     }
 
+    GRIM::ExecutionBlockParameterTensors& requireExecutionBlockParameters(const char* caller) {
+        if (!execution_block_parameters) {
+            throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.execution_block_parameters is NULL");
+        }
+        return *execution_block_parameters;
+    }
+
+    const GRIM::ExecutionBlockParameterTensors& requireExecutionBlockParameters(const char* caller) const {
+        if (!execution_block_parameters) {
+            throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.execution_block_parameters is NULL");
+        }
+        return *execution_block_parameters;
+    }
+
     std::vector<GRIM::FeedForwardParameterTensors>& feedForwardParameterTensors() {
         return feed_forward_parameter_tensors;
     }

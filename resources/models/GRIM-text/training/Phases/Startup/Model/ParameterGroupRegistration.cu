@@ -16,6 +16,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace GRIMText::Training::Startup::ModelRegistration {
@@ -30,6 +31,7 @@ using GRIM::ParameterGroup;
 using GRIM::ParamStatsBucket;
 using GRIM::ParamGroupType;
 using GRIM::Tensor;
+using GRIM::HyperParameters::ExecutionBlockConstructionHP;
 using GRIM::HyperParameters::ParameterGroupPrecision;
 using GRIM::HyperParameters::OptimizerUpdateHP;
 using GRIM::HyperParameters::scratchBlockConstructionHP;
@@ -676,6 +678,56 @@ void validateParameterRegistrationConfig(const GRIM::Config::AiConfigSnapshot& c
     GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_slot_selector"), "parameter_precision_slot_selector", "buildParameterGroups");
 }
 
+void validateExecutionBlockConstructionHP(
+    const ExecutionBlockConstructionHP& hp,
+    const char* caller) {
+    if (!hp.enabled) {
+        return;
+    }
+    if (hp.d_model <= 0) {
+        throw std::runtime_error(std::string(caller) + ": d_model must be positive");
+    }
+    if (hp.atom_embedding_dim <= 0) {
+        throw std::runtime_error(std::string(caller) + ": atom_embedding_dim must be positive");
+    }
+    if (hp.num_ops <= 0) {
+        throw std::runtime_error(std::string(caller) + ": num_ops must be positive");
+    }
+    if (hp.num_slots <= 0) {
+        throw std::runtime_error(std::string(caller) + ": num_slots must be positive");
+    }
+    if (hp.num_exec_steps <= 0) {
+        throw std::runtime_error(std::string(caller) + ": num_exec_steps must be positive");
+    }
+    if (hp.d_key <= 0) {
+        throw std::runtime_error(std::string(caller) + ": d_key must be positive");
+    }
+    if (hp.d_key > 64) {
+        throw std::runtime_error(std::string(caller) + ": d_key must be <= 64");
+    }
+    if (hp.d_type <= 0) {
+        throw std::runtime_error(std::string(caller) + ": d_type must be positive");
+    }
+    if (hp.cross_attn_head_dim <= 0) {
+        throw std::runtime_error(std::string(caller) + ": cross_attn_head_dim must be positive");
+    }
+    if (hp.value_decode_input_dim <= 0) {
+        throw std::runtime_error(std::string(caller) + ": value_decode_input_dim must be positive");
+    }
+    if (hp.value_decode_hidden_dim <= 0) {
+        throw std::runtime_error(std::string(caller) + ": value_decode_hidden_dim must be positive");
+    }
+    if (hp.value_decode_input_dim + 16 > hp.atom_embedding_dim) {
+        throw std::runtime_error(std::string(caller) + ": value_decode_input_dim + 16 must fit within atom_embedding_dim");
+    }
+    if (hp.num_scratch_slots < 0) {
+        throw std::runtime_error(std::string(caller) + ": num_scratch_slots must be non-negative");
+    }
+    if (hp.num_scratch_slots >= hp.num_slots) {
+        throw std::runtime_error(std::string(caller) + ": num_scratch_slots must be < num_slots");
+    }
+}
+
 } // namespace
 
 void initializeFeedForwardParameterTensors(
@@ -937,6 +989,142 @@ void initializeScratchBlockParameterTensors(
     Tensor::xavier_uniform_(tensors.structured_gate_weight, weight_init_seed + 42, init_stream);
 
     emitInfo("[initializeScratchBlockParameterTensors] Initialized registry-owned ScratchBlock tensors");
+}
+
+void initializeExecutionBlockParameterTensors(
+    ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const ExecutionBlockConstructionHP& execution_hp,
+    std::uint64_t weight_init_seed,
+    cudaStream_t init_stream) {
+    if (!execution_hp.enabled) {
+        if (parameter_registry.getExecutionBlockParameters()) {
+            throw std::runtime_error("initializeExecutionBlockParameterTensors: ExecutionBlock disabled but registry owner already exists");
+        }
+        return;
+    }
+    if (!init_stream) {
+        throw std::runtime_error("initializeExecutionBlockParameterTensors: init_stream is NULL");
+    }
+    if (parameter_registry.getExecutionBlockParameters()) {
+        throw std::runtime_error("initializeExecutionBlockParameterTensors: registry ExecutionBlock tensor owner is already initialized");
+    }
+
+    validateExecutionBlockConstructionHP(execution_hp, "initializeExecutionBlockParameterTensors");
+
+    parameter_registry.execution_block_parameters = std::make_unique<GRIM::ExecutionBlockParameterTensors>();
+    auto& params = *parameter_registry.execution_block_parameters;
+
+    const int dm = execution_hp.d_model;
+    const int dk = execution_hp.d_key;
+    const int dt = execution_hp.d_type;
+    const int hd = execution_hp.cross_attn_head_dim;
+    const int nop = execution_hp.num_ops;
+    const int V = execution_hp.num_slots;
+    const int K = execution_hp.num_exec_steps;
+    const int vid = execution_hp.value_decode_input_dim;
+    const int vhd = execution_hp.value_decode_hidden_dim;
+
+    auto make_param = [&](int rows, int cols, std::uint64_t seed, const char* name) -> Tensor {
+        Tensor tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(rows, cols),
+            true,
+            init_stream,
+            name);
+        tensor.requires_grad_();
+        tensor.ensure_grad();
+        Tensor::xavier_uniform_(tensor, seed, init_stream);
+        return std::move(tensor);
+    };
+    auto make_bias = [&](int cols, const char* name) -> Tensor {
+        Tensor tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, cols),
+            true,
+            init_stream,
+            name);
+        tensor.requires_grad_();
+        tensor.ensure_grad();
+        return std::move(tensor);
+    };
+    auto make_scalar = [&](float init_val, const char* name) -> Tensor {
+        Tensor tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, 1),
+            true,
+            init_stream,
+            name);
+        tensor.requires_grad_();
+        tensor.ensure_grad();
+        const cudaError_t copy_err = cudaMemcpyAsync(
+            tensor.data,
+            &init_val,
+            sizeof(float),
+            cudaMemcpyHostToDevice,
+            init_stream);
+        if (copy_err != cudaSuccess) {
+            throw std::runtime_error(std::string("initializeExecutionBlockParameterTensors: cudaMemcpyAsync failed for ") +
+                                     name + ": " + cudaGetErrorString(copy_err));
+        }
+        return std::move(tensor);
+    };
+
+    params.w_decode_1 = make_param(vid, vhd, weight_init_seed, "exec_block.w_decode_1");
+    params.b_decode_1 = make_bias(vhd, "exec_block.b_decode_1");
+    params.w_decode_2 = make_param(vhd, 1, weight_init_seed + 1, "exec_block.w_decode_2");
+    params.w_arg1_select = make_param(3 * dm, dm, weight_init_seed + 2, "exec_block.w_arg1_select");
+    params.w_arg2_select = make_param(3 * dm, dm, weight_init_seed + 3, "exec_block.w_arg2_select");
+    params.W_op_select = make_param(3 * dm, nop, weight_init_seed + 4, "exec_block.W_op_select");
+    params.W_key_proj = make_param(dm, dk, weight_init_seed + 5, "exec_block.W_key_proj");
+    params.W_write_query = make_param(4 * dm, dk, weight_init_seed + 7, "exec_block.W_write_query");
+    params.W_write_key = make_param(dk, dk, weight_init_seed + 8, "exec_block.W_write_key");
+    params.alpha = make_scalar(1.0f, "exec_block.alpha");
+    params.beta = make_scalar(1.0f, "exec_block.beta");
+    params.step_embeddings = make_param(K, dm, weight_init_seed + 9, "exec_block.step_embeddings");
+    params.type_num_embed = make_param(1, dt, weight_init_seed + 10, "exec_block.type_num_embed");
+    params.W_Q_read = make_param(dm, hd, weight_init_seed + 11, "exec_block.W_Q_read");
+    params.W_K_read = make_param(dk, hd, weight_init_seed + 12, "exec_block.W_K_read");
+    params.W_V_read = make_param(dm, hd, weight_init_seed + 13, "exec_block.W_V_read");
+    params.W_O_read = make_param(hd, dm, weight_init_seed + 14, "exec_block.W_O_read");
+    params.W_value_to_emb = make_param(1, dm, weight_init_seed + 15, "exec_block.W_value_to_emb");
+    params.b_value_to_emb = make_bias(dm, "exec_block.b_value_to_emb");
+    params.E_slot = make_param(V, dm, weight_init_seed + 16, "exec_block.E_slot");
+    params.E_op = make_param(nop, dm, weight_init_seed + 17, "exec_block.E_op");
+    params.W_scal = make_param(3, dm, weight_init_seed + 18, "exec_block.W_scal");
+    params.b_scal = make_bias(dm, "exec_block.b_scal");
+    params.W_trace = make_param(K * dm, dm, weight_init_seed + 19, "exec_block.W_trace");
+    params.b_trace = make_bias(dm, "exec_block.b_trace");
+    params.W_reason_gate = make_param(2 * dm, dm, weight_init_seed + 20, "exec_block.W_reason_gate");
+    params.W_trace_gate = make_param(2 * dm, dm, weight_init_seed + 21, "exec_block.W_trace_gate");
+
+    params.w_inject_gate = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(dm, 1),
+        true,
+        init_stream,
+        "exec_block.w_inject_gate");
+    params.w_inject_gate.requires_grad_();
+    params.w_inject_gate.ensure_grad();
+    {
+        std::vector<float> neg_two(static_cast<std::size_t>(dm), -2.0f);
+        const cudaError_t copy_err = cudaMemcpyAsync(
+            params.w_inject_gate.data,
+            neg_two.data(),
+            static_cast<std::size_t>(dm) * sizeof(float),
+            cudaMemcpyHostToDevice,
+            init_stream);
+        if (copy_err != cudaSuccess) {
+            throw std::runtime_error(std::string("initializeExecutionBlockParameterTensors: cudaMemcpyAsync failed for exec_block.w_inject_gate: ") +
+                                     cudaGetErrorString(copy_err));
+        }
+    }
+
+    params.W_gate_read = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(dm, 1),
+        true,
+        init_stream,
+        "exec_block.W_gate_read");
+    params.W_gate_read.requires_grad_();
+    params.W_gate_read.ensure_grad();
+    params.tau = make_scalar(1.0f, "exec_block.tau");
+
+    emitInfo("[initializeExecutionBlockParameterTensors] Initialized registry-owned ExecutionBlock tensors");
 }
 
 void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,

@@ -9,6 +9,7 @@
 namespace GRIM::ExecutionBlockInternal {
 void executeStepCoordinatorImpl(
 	ExecutionBlockLayer& layer,
+	ExecutionBlockParameterTensors& parameters,
 	Tensor& H,
 	ExecutionMemory& memory,
 	const int* atom_positions,

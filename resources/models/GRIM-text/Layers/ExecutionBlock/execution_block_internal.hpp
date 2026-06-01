@@ -73,18 +73,6 @@ struct LayerAccess {
 	static int* execRecordI(ExecutionBlockLayer& layer) { return layer.d_exec_record_i_; }
 	static float* execRecordF(ExecutionBlockLayer& layer) { return layer.d_exec_record_f_; }
 	static float* reinforceBaseline(ExecutionBlockLayer& layer) { return layer.d_reinforce_baseline_; }
-	static ExecutionBlockParameterTensors& parameters(ExecutionBlockLayer& layer) {
-		if (!layer.parameters_) {
-			throw std::runtime_error("ExecutionBlockLayer: registry-owned parameter storage is NULL");
-		}
-		return *layer.parameters_;
-	}
-	static const ExecutionBlockParameterTensors& parameters(const ExecutionBlockLayer& layer) {
-		if (!layer.parameters_) {
-			throw std::runtime_error("ExecutionBlockLayer: registry-owned parameter storage is NULL");
-		}
-		return *layer.parameters_;
-	}
 };
 
 struct StepWorkingSet {

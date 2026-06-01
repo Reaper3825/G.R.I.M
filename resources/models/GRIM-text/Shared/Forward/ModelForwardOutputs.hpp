@@ -98,28 +98,30 @@ private:
         return count;
     }
 
-    static void clearTensorVector(std::vector<Tensor>& tensors) {
+    static void resetTensorVectorPreserveGeometry(std::vector<Tensor>& tensors) {
         for (auto& tensor : tensors) {
             tensor = Tensor();
         }
+    }
+
+    static void clearTensorVector(std::vector<Tensor>& tensors) {
+        resetTensorVectorPreserveGeometry(tensors);
         tensors.clear();
     }
 
-    static void clearExecutionMemoryVector(std::vector<ExecutionMemory>& memories) {
+    static void resetExecutionMemoryVectorPreserveGeometry(std::vector<ExecutionMemory>& memories) {
         for (auto& memory : memories) {
             memory = ExecutionMemory();
         }
-        memories.clear();
     }
 
-    static void clearExecutionOutputVector(std::vector<ExecutionBlockOutput>& outputs) {
+    static void resetExecutionOutputVectorPreserveGeometry(std::vector<ExecutionBlockOutput>& outputs) {
         for (auto& output : outputs) {
             for (auto& step : output.steps) {
                 step = ExecutionBlockStepOutput();
             }
             output.steps.clear();
         }
-        outputs.clear();
     }
 
     static void clearSelectorForwardResultVector(std::vector<SelectorForwardResult>& results) {
@@ -323,6 +325,36 @@ public:
     std::vector<Tensor> selector_slot_feature_inputs;
     std::vector<SelectorForwardResult> selector_fwd_results;
 
+    void ensureExecutionBatchGeometry(size_t batch_size, const char* caller) {
+        if (batch_size == 0) {
+            throw std::runtime_error(std::string(caller) + ": execution batch_size must be > 0");
+        }
+
+        const bool memories_uninitialized = exec_memories.empty();
+        const bool outputs_uninitialized = exec_outputs_per_row.empty();
+        if (memories_uninitialized != outputs_uninitialized) {
+            throw std::runtime_error(std::string(caller) +
+                                     ": execution forward sink geometry is inconsistent (exec_memories size=" +
+                                     std::to_string(exec_memories.size()) +
+                                     ", exec_outputs_per_row size=" +
+                                     std::to_string(exec_outputs_per_row.size()) + ")");
+        }
+
+        if (memories_uninitialized) {
+            exec_memories.resize(batch_size);
+            exec_outputs_per_row.resize(batch_size);
+            return;
+        }
+
+        if (exec_memories.size() != batch_size || exec_outputs_per_row.size() != batch_size) {
+            throw std::runtime_error(std::string(caller) +
+                                     ": execution forward sink batch geometry mismatch expected=" +
+                                     std::to_string(batch_size) +
+                                     " exec_memories=" + std::to_string(exec_memories.size()) +
+                                     " exec_outputs_per_row=" + std::to_string(exec_outputs_per_row.size()));
+        }
+    }
+
     Tensor* liveLmHeadInputOrNull() {
         if (lm_head_input_tensor.data) {
             return &lm_head_input_tensor;
@@ -357,8 +389,8 @@ public:
         logits_tensor = Tensor();
         clearTensorVector(mtp_logits_tensors);
         scratch_atom_embeddings = Tensor();
-        clearExecutionMemoryVector(exec_memories);
-        clearExecutionOutputVector(exec_outputs_per_row);
+        resetExecutionMemoryVectorPreserveGeometry(exec_memories);
+        resetExecutionOutputVectorPreserveGeometry(exec_outputs_per_row);
         clearTensorVector(selector_h_t_inputs);
         clearTensorVector(selector_slot_feature_inputs);
         clearSelectorForwardResultVector(selector_fwd_results);

@@ -149,7 +149,7 @@ void verifyEncoderLayersReady(GRIM::GPUGrimEncoder& encoder,
 
 void initializeExecutionSubsystems(
     std::unique_ptr<GRIM::ExecutionBlockLayer>& execution_block_layer,
-    std::unique_ptr<GRIM::ExecutionBlockParameterTensors>& execution_block_parameters,
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     std::unique_ptr<GRIM::DecodeTimeSlotSelector>& decode_time_slot_selector,
     const GRIM::Config::AiConfigSnapshot& model_cfg,
     uint64_t weight_init_seed,
@@ -160,9 +160,14 @@ void initializeExecutionSubsystems(
     }
 
     const uint64_t execution_seed = weight_init_seed + 20;
-    execution_block_parameters = std::make_unique<GRIM::ExecutionBlockParameterTensors>();
+    GRIMText::Training::Startup::ModelRegistration::initializeExecutionBlockParameterTensors(
+        parameter_registry,
+        execution_hp,
+        execution_seed,
+        init_stream);
     execution_block_layer = std::make_unique<GRIM::ExecutionBlockLayer>(
-        execution_hp, *execution_block_parameters, execution_seed, init_stream);
+        execution_hp,
+        init_stream);
     std::cout << "✓ ExecutionBlock layer created\n";
 
     const auto selector_hp = GRIM::HyperParameters::decodeTimeSelectorConstructionHP(model_cfg);
@@ -610,7 +615,7 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
         //======================================================//
         initializeExecutionSubsystems(
             gpu_model_state.execution_block_layer,
-            parameter_registry.execution_block_parameters,
+            parameter_registry,
             parameter_registry.decode_time_slot_selector,
             model_cfg,
             weight_init_seed,

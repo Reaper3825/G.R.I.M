@@ -2,6 +2,13 @@
 
 ExecutionBlock is a row-level register-machine side channel. Its memory is **not** timestep-aligned: the live `ExecutionMemory` after `executeStep(...)` is the row-final post-execution register state.
 
+Durable trainable execution-block tensors are owned by
+`StartupParameterRegistry::execution_block_parameters` and initialized by
+`ParameterGroupRegistration::initializeExecutionBlockParameterTensors(...)`.
+`ExecutionBlockLayer` is a runtime shell: shared forward passes the
+registry-owned parameter bundle explicitly into execution-block math ops rather
+than storing a borrowed parameter pointer on the layer.
+
 ## Causal forward contract
 
 For autoregressive LM training/inference, row-final execution memory may only be injected/read at the final valid token of that same row:

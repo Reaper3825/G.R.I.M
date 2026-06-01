@@ -396,6 +396,7 @@ void ExecutionMemory::clear(cudaStream_t stream) {
 
 void ExecutionBlockLayer::bootstrapMemoryFromSlotMap(
     ExecutionMemory& M,
+    ExecutionBlockParameterTensors& parameters,
     const float* device_numeric_values,
     const int32_t* device_slot_map,
     int row_tokens,
@@ -404,8 +405,7 @@ void ExecutionBlockLayer::bootstrapMemoryFromSlotMap(
     EXEC_CHECK(device_numeric_values != nullptr, "bootstrapMemoryFromSlotMap: device_numeric_values is null");
     EXEC_CHECK(device_slot_map != nullptr, "bootstrapMemoryFromSlotMap: device_slot_map is null");
     EXEC_CHECK(row_tokens > 0, "bootstrapMemoryFromSlotMap: row_tokens must be positive");
-    validateMemoryOrThrow(M);
-    const auto& params = ExecutionBlockInternal::LayerAccess::parameters(*this);
+    auto& params = parameters;
 
     const int V = hp_.num_slots;
 
@@ -444,59 +444,6 @@ void ExecutionBlockLayer::bootstrapMemoryFromSlotMap(
         M.type_embed.data, M.valid_mask.data,
         params.type_num_embed.data, V, dt);
     CUDA_CHECK_KERNEL();
-}
-
-void ExecutionBlockLayer::prepareForwardRuntime(
-    const Batching::BatchPayload& payload,
-    bool connect_parameter_graph,
-    cudaStream_t stream,
-    std::vector<ExecutionMemory>& exec_memories,
-    std::vector<ExecutionBlockOutput>& exec_outputs_per_row,
-    std::vector<std::vector<ExecutionRecord>>& execution_trace_by_row,
-    std::vector<Tensor>& trace_state_by_row
-) const {
-    validateConfigOrThrow();
-    EXEC_CHECK(stream != nullptr, "prepareForwardRuntime: stream is NULL");
-    EXEC_CHECK(payload.batch_size > 0, "prepareForwardRuntime: payload.batch_size must be positive");
-    if (!payload.execution_active.empty()) {
-        EXEC_CHECK(static_cast<int>(payload.execution_active.size()) == payload.batch_size,
-                   "prepareForwardRuntime: payload.execution_active size must equal payload.batch_size");
-    }
-
-    exec_memories.resize(payload.batch_size);
-    exec_outputs_per_row.resize(payload.batch_size);
-    execution_trace_by_row.resize(payload.batch_size);
-    trace_state_by_row.resize(payload.batch_size);
-
-    for (int b = 0; b < payload.batch_size; ++b) {
-        execution_trace_by_row[static_cast<size_t>(b)].clear();
-        exec_outputs_per_row[static_cast<size_t>(b)].steps.clear();
-
-        const bool row_exec_active = !payload.execution_active.empty()
-            && payload.execution_active[static_cast<size_t>(b)];
-        if (!row_exec_active) {
-            trace_state_by_row[static_cast<size_t>(b)] = Tensor();
-            continue;
-        }
-
-        auto& row_memory = exec_memories[static_cast<size_t>(b)];
-        row_memory.allocate(
-            hp_.num_slots,
-            hp_.atom_embedding_dim,
-            hp_.d_model,
-            hp_.d_key,
-            hp_.d_type,
-            stream);
-        row_memory.clear(stream);
-
-        trace_state_by_row[static_cast<size_t>(b)] = Tensor::zeros({1, hp_.d_model}, stream, "trace_state_row");
-        if (connect_parameter_graph) {
-            trace_state_by_row[static_cast<size_t>(b)].requires_grad_();
-            trace_state_by_row[static_cast<size_t>(b)].ensure_grad();
-        } else {
-            trace_state_by_row[static_cast<size_t>(b)].requires_grad = false;
-        }
-    }
 }
 
 // Device kernel: check if any value slot [S..S+V_val) has valid_mask >= 0.5.
@@ -641,11 +588,12 @@ void materializeSelectedOperands(
 
 void applyHardWriteback(
     ExecutionBlockLayer& layer,
+    ExecutionBlockParameterTensors& parameters,
     ExecutionMemory& memory,
     cudaStream_t stream,
     const StepWorkingSet& work
 ) {
-    const auto& params = LayerAccess::parameters(layer);
+    auto& params = parameters;
     const int V = layer.hp().num_slots;
     const int S = layer.hp().num_scratch_slots;
     const int dm = layer.hp().d_model;
@@ -768,6 +716,7 @@ void finalizeStepOrThrow(
 
 Tensor crossAttentionReadImpl(
     ExecutionBlockLayer& layer,
+    ExecutionBlockParameterTensors& parameters,
     const Tensor& hidden_states,
     ExecutionMemory& memory,
     cudaStream_t stream,
@@ -776,7 +725,7 @@ Tensor crossAttentionReadImpl(
     float* d_gate_accum  // [2] device accumulator: [sum, count]. nullptr = skip.
 ) {
     using namespace autograd;
-    const auto& params = LayerAccess::parameters(layer);
+    auto& params = parameters;
 
     const int dm = layer.hp().d_model;
     const int dk = layer.hp().d_key;

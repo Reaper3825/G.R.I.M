@@ -79,9 +79,13 @@ Public methods:
 - `crossAttentionRead(...)`
 - `computeEntropyLoss(...)`
 - validation helpers
-- tensor accessors for registered parameters
 
 Deleted public APIs such as `encodeState()` and `lastDivClampCount()` are gone.
+
+The math entry points that consume trainable tensors (`executeStep(...)`,
+`bootstrapMemoryFromSlotMap(...)`, and `crossAttentionRead(...)`) now receive
+the registry-owned `ExecutionBlockParameterTensors` bundle explicitly. The
+layer stores HP and runtime scratch only.
 
 ## Row-local execution contract
 
@@ -174,8 +178,10 @@ It does not own the runtime; the caller still passes the actual storage explicit
 `Forward::ExecutionRecord`, and `Forward::ExecStepMetrics` are declared in
 `Shared/Forward/ModelForwardOutputs.hpp` because they are forward-owned Category 1
 sink payloads even though `ExecutionBlockLayer` populates them. Durable
-`ExecutionBlockParameterTensors` do NOT live there; they are layer-owned state
-declared on the execution-block boundary in `execution_block_GPU.hpp`.
+`ExecutionBlockParameterTensors` do NOT live there; they are owned by
+`StartupParameterRegistry`, initialized by
+`ParameterGroupRegistration::initializeExecutionBlockParameterTensors(...)`,
+and passed explicitly into execution-block math entry points.
 
 Current `prepareForwardRuntime(...)` behavior:
 
@@ -246,7 +252,10 @@ Removed or stale documentation about other grad nodes is intentionally gone.
 
 ## Learnable tensors
 
-The layer currently owns these learnable tensor groups:
+The runtime layer no longer owns learnable tensors. These tensor groups are
+durably owned by `StartupParameterRegistry::execution_block_parameters`,
+initialized by `ParameterGroupRegistration`, and consumed explicitly by shared
+forward / autograd call sites:
 
 ### Decode / projection
 

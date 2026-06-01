@@ -1334,6 +1334,7 @@ static void collectStepMetrics(ExecutionBlockLayer& layer,
 
 void executeStepCoordinatorImpl(
     ExecutionBlockLayer& layer,
+    ExecutionBlockParameterTensors& parameters,
     Tensor& H,
     ExecutionMemory& memory,
     const int* atom_positions,
@@ -1348,7 +1349,7 @@ void executeStepCoordinatorImpl(
     Tensor& trace_state,
     const std::vector<ExecutionRecord>& prior_records
 ) {
-    auto& params = LayerAccess::parameters(layer);
+    auto& params = parameters;
     const int dm = layer.hp().d_model;
     const int V = layer.hp().num_slots;
     const int S = layer.hp().num_scratch_slots;
@@ -1756,7 +1757,7 @@ void executeStepCoordinatorImpl(
     CUDA_CHECK_KERNEL();
 
     work.key_new = autograd::matmul(work.result_emb, params.W_key_proj, stream);
-    applyHardWriteback(layer, memory, stream, work);
+    applyHardWriteback(layer, parameters, memory, stream, work);
     copyStepDiagnostics(work, diag_out, V_val, nop, V, dm, stream);
     captureStateAfterWriteAndCheckMutations(layer, memory, diag_out, stream);
     collectStepMetrics(layer, work, diag_out, V_val, nop, V, stream);

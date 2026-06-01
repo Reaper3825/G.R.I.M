@@ -239,6 +239,15 @@ void ModelForwardRequest::validate(const char* caller) const {
     if (!payload) throw std::runtime_error(std::string(caller) + ": payload is NULL");
     if (!bindings) throw std::runtime_error(std::string(caller) + ": bindings is NULL");
     (void)graphPolicyName(graph);
+    const auto execution_hp = HyperParameters::executionBlockConstructionHP(*config);
+    if (execution_hp.enabled) {
+        if (!execution_block) {
+            throw std::runtime_error(std::string(caller) + ": execution_block is NULL while execution_block_enabled=true");
+        }
+        (void)parameter_registry->requireExecutionBlockParameters(caller);
+    } else if (execution_block) {
+        throw std::runtime_error(std::string(caller) + ": execution_block is non-null while execution_block_enabled=false");
+    }
     if (payload->batch_size <= 0) throw std::runtime_error(std::string(caller) + ": BatchPayload.batch_size <= 0");
     if (payload->max_seq_len <= 0) throw std::runtime_error(std::string(caller) + ": BatchPayload.max_seq_len <= 0");
     if (static_cast<int>(payload->seq_lengths.size()) != payload->batch_size) {
@@ -294,6 +303,9 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const int scratch_block_atom_embedding_dim = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "scratch_block_atom_embedding_dim");
     const bool scratch_block_active = scratch_hp.enabled && request.scratch_block != nullptr;
     const bool execution_block_active = execution_hp.enabled && request.execution_block != nullptr;
+    auto* execution_block_parameters = execution_block_active
+        ? &request.parameter_registry->requireExecutionBlockParameters("executeModelForward")
+        : nullptr;
 
     if (scratch_hp.enabled && !request.scratch_block) {
         throw std::runtime_error("ModelForward: ScratchBlockConstructionHP.enabled=true but request.scratch_block is NULL");
@@ -306,9 +318,17 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
         "executeModelForward",
         execution_block_active);
 
+    const auto& payload = *request.payload;
     auto& runtime = runtime_payload;
     ModelForwardOutputs forward_outputs;
-    const auto& payload = *request.payload;
+    if (execution_block_active) {
+        forward_outputs.ensureExecutionBatchGeometry(
+            static_cast<size_t>(payload.batch_size),
+            "executeModelForward");
+        runtime.execution_runtime->ensureBatchGeometry(
+            static_cast<size_t>(payload.batch_size),
+            "executeModelForward");
+    }
     const auto* bindings = request.bindings;
     const auto& embedding_parameters = request.parameter_registry->requireEmbeddingParameters("executeModelForward");
     const auto& lm_head_parameters = request.parameter_registry->requireLmHeadParameters("executeModelForward");
@@ -642,7 +662,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                         payload, b, "ModelForward ExecutionBlock next-layer input readback");
                     const int final_token_offset = b * payload.max_seq_len + row_len - 1;
                     Tensor row_delta = request.execution_block->crossAttentionRead(
-                        read_source, forward_outputs.exec_memories[b],
+                        read_source, forward_outputs.exec_memories[b], *execution_block_parameters,
                         total_tokens, request.stream,
                         final_token_offset, 1,
                         runtime.read_gate_accum_tensor
@@ -676,14 +696,18 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 float T = execution_block_temp_start;
 
                 auto& execution_runtime = *runtime.execution_runtime;
-                request.execution_block->prepareForwardRuntime(
-                    payload,
+                Forward::provisionExecutionForwardRuntime(
+                    payload.execution_active,
+                    payload.batch_size,
+                    execution_hp.num_slots,
+                    execution_hp.atom_embedding_dim,
+                    execution_hp.d_model,
+                    execution_hp.d_key,
+                    execution_hp.d_type,
                     connect_parameter_graph,
                     request.stream,
-                    forward_outputs.exec_memories,
-                    forward_outputs.exec_outputs_per_row,
-                    execution_runtime.execution_trace_by_row,
-                    execution_runtime.trace_state_by_row);
+                    forward_outputs,
+                    execution_runtime);
 
                 for (int b = 0; b < payload.batch_size; ++b) {
                     const bool row_exec_active = !payload.execution_active.empty()
@@ -709,6 +733,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                     }
                     request.execution_block->bootstrapMemoryFromSlotMap(
                         M_b,
+                        *execution_block_parameters,
                         request.bindings->d_numeric_values + tok_off,
                         request.bindings->d_token_to_slot_map + tok_off,
                         row_len, request.stream);
@@ -717,7 +742,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                         ExecutionBlockStepOutput step_diag;
 
                         request.execution_block->executeStep(
-                            layer_output, M_b,
+                            layer_output, M_b, *execution_block_parameters,
                             reinterpret_cast<const int*>(row_atom_view.atom_positions.data),
                             row_atom_view.num_atoms, payload, *request.bindings, b,
                             step, T, request.stream,
@@ -789,7 +814,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     }
 
     materializeForwardMtpLogits(request, payload, forward_outputs);
-
+ 
     if constexpr (GRIM::VerboseLogging::ENABLE_EXPENSIVE_DIAGNOSTICS) {
         constexpr int kSamplePositions = 1024;
         const int sample_size = std::min(kSamplePositions, total_tokens);

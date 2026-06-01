@@ -69,9 +69,7 @@ public:
     ExecutionBlockLayer() = delete;
 
     explicit ExecutionBlockLayer(const HyperParameters::ExecutionBlockConstructionHP& hp,
-                                ExecutionBlockParameterTensors& parameters,
-                                uint64_t seed,
-                                cudaStream_t init_stream);
+                                 cudaStream_t init_stream);
 
     ~ExecutionBlockLayer();
 
@@ -95,6 +93,7 @@ public:
     void executeStep(
         Tensor& H,                          // [total_tokens, d_model] mutated in place
         ExecutionMemory& M,
+        ExecutionBlockParameterTensors& parameters,
         const int* atom_positions,          // row-local [max(1, num_atoms)] positions relative to current row [0, row_tokens)
         int num_atoms,
         const Batching::BatchPayload& payload,
@@ -113,25 +112,12 @@ public:
     //--------------------------------------------------//
     void bootstrapMemoryFromSlotMap(
         ExecutionMemory& M,
+        ExecutionBlockParameterTensors& parameters,
         const float* device_numeric_values,  // [row_tokens]
         const int32_t* device_slot_map,      // [row_tokens]
         int row_tokens,
         cudaStream_t stream
     );
-
-    //--------------------------------------------------//
-    // Forward runtime preparation: reset caller-owned execution state for
-    // one shared-forward execution layer boundary.
-    //--------------------------------------------------//
-    void prepareForwardRuntime(
-        const Batching::BatchPayload& payload,
-        bool connect_parameter_graph,
-        cudaStream_t stream,
-        std::vector<ExecutionMemory>& exec_memories,
-        std::vector<Forward::ExecutionBlockOutput>& exec_outputs_per_row,
-        std::vector<std::vector<Forward::ExecutionRecord>>& execution_trace_by_row,
-        std::vector<Tensor>& trace_state_by_row
-    ) const;
 
     //--------------------------------------------------//
     // Cross-attention read: H = H + g * W_O(R)
@@ -140,6 +126,7 @@ public:
     Tensor crossAttentionRead(
         const Tensor& hidden_states,
         ExecutionMemory& M,
+        ExecutionBlockParameterTensors& parameters,
         int total_tokens,
         cudaStream_t stream,
         int token_offset = 0,
@@ -155,26 +142,6 @@ public:
         float weight,
         cudaStream_t stream
     ) const;
-
-    //--------------------------------------------------//
-    // Validation (hard-fail)
-    //--------------------------------------------------//
-    void validateConfigOrThrow() const;
-    void validateMemoryOrThrow(const ExecutionMemory& M) const;
-    // Forward-declared in this header (see top): namespace Batching { struct BatchDeviceBindings; }
-    void validateExecuteStepInputsOrThrow(
-        const Tensor& H,
-        const int* atom_positions,
-        int num_atoms,
-        const Batching::BatchPayload& payload,
-        const Batching::BatchDeviceBindings& bindings,
-        int batch_row,
-        const ExecutionMemory& M,
-        int step) const;
-    void validateCrossAttentionInputsOrThrow(
-        const Tensor& hidden_states,
-        const ExecutionMemory& M,
-        int total_tokens) const;
 
     const HyperParameters::ExecutionBlockConstructionHP& hp() const { return hp_; }
     float* reinforceBaselineBuffer() { return d_reinforce_baseline_; }
@@ -192,7 +159,6 @@ private:
     int* d_exec_record_i_      = nullptr;  // [3] packed for ExecutionRecord ints
     float* d_exec_record_f_    = nullptr;  // [3] value_before_1, value_before_2, value_after
     float* d_reinforce_baseline_ = nullptr; // [1] EMA of transition_err for REINFORCE variance reduction
-    ExecutionBlockParameterTensors* parameters_ = nullptr;
 };
 
 }  // namespace GRIM

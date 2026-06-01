@@ -29,6 +29,7 @@ void materializeSelectedOperands(
 
 void applyHardWriteback(
 	ExecutionBlockLayer& layer,
+	ExecutionBlockParameterTensors& parameters,
 	ExecutionMemory& memory,
 	cudaStream_t stream,
 	const StepWorkingSet& work);
@@ -47,6 +48,7 @@ void finalizeStepOrThrow(
 
 Tensor crossAttentionReadImpl(
 	ExecutionBlockLayer& layer,
+	ExecutionBlockParameterTensors& parameters,
 	const Tensor& hidden_states,
 	ExecutionMemory& memory,
 	cudaStream_t stream,

@@ -1308,6 +1308,17 @@ extern "C" void flash_attn_bwd_ex(
     // dq_accum zeroing is handled by the preprocessing kernel (Clear_dQaccum=true in
     // flash_bwd_dot_do_o_kernel) and the main kernel's Is_first path. No need to memset here.
 
+    const GRIM::FlashAttentionDiagnostics::BackwardStrideLayout diagnostic_strides{
+        { static_cast<long long>(params.q_batch_stride),  static_cast<long long>(params.q_row_stride),  static_cast<long long>(params.q_head_stride)  },
+        { static_cast<long long>(params.k_batch_stride),  static_cast<long long>(params.k_row_stride),  static_cast<long long>(params.k_head_stride)  },
+        { static_cast<long long>(params.v_batch_stride),  static_cast<long long>(params.v_row_stride),  static_cast<long long>(params.v_head_stride)  },
+        { static_cast<long long>(params.o_batch_stride),  static_cast<long long>(params.o_row_stride),  static_cast<long long>(params.o_head_stride)  },
+        { static_cast<long long>(params.do_batch_stride), static_cast<long long>(params.do_row_stride), static_cast<long long>(params.do_head_stride) },
+        { static_cast<long long>(params.dq_batch_stride), static_cast<long long>(params.dq_row_stride), static_cast<long long>(params.dq_head_stride) },
+        { static_cast<long long>(params.dk_batch_stride), static_cast<long long>(params.dk_row_stride), static_cast<long long>(params.dk_head_stride) },
+        { static_cast<long long>(params.dv_batch_stride), static_cast<long long>(params.dv_row_stride), static_cast<long long>(params.dv_head_stride) },
+    };
+
     GRIM::FlashAttentionDiagnostics::emitBackwardPreKernelDiagnostics({
         dout,
         softmax_lse,
@@ -1315,16 +1326,7 @@ extern "C" void flash_attn_bwd_ex(
         dq,
         dk,
         dv,
-        {
-            { static_cast<long long>(params.q_batch_stride),  static_cast<long long>(params.q_row_stride),  static_cast<long long>(params.q_head_stride)  },
-            { static_cast<long long>(params.k_batch_stride),  static_cast<long long>(params.k_row_stride),  static_cast<long long>(params.k_head_stride)  },
-            { static_cast<long long>(params.v_batch_stride),  static_cast<long long>(params.v_row_stride),  static_cast<long long>(params.v_head_stride)  },
-            { static_cast<long long>(params.o_batch_stride),  static_cast<long long>(params.o_row_stride),  static_cast<long long>(params.o_head_stride)  },
-            { static_cast<long long>(params.do_batch_stride), static_cast<long long>(params.do_row_stride), static_cast<long long>(params.do_head_stride) },
-            { static_cast<long long>(params.dq_batch_stride), static_cast<long long>(params.dq_row_stride), static_cast<long long>(params.dq_head_stride) },
-            { static_cast<long long>(params.dk_batch_stride), static_cast<long long>(params.dk_row_stride), static_cast<long long>(params.dk_head_stride) },
-            { static_cast<long long>(params.dv_batch_stride), static_cast<long long>(params.dv_row_stride), static_cast<long long>(params.dv_head_stride) },
-        },
+        diagnostic_strides,
         batch,
         seqlen,
         n_heads,
@@ -1454,6 +1456,7 @@ extern "C" void flash_attn_bwd_ex(
         dq,
         dk,
         dv,
+        diagnostic_strides,
         batch,
         seqlen,
         n_heads,
