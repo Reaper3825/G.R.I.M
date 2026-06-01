@@ -356,6 +356,7 @@ struct FlashAttentionRuntimeHP {
     int num_heads = 0;
     int num_kv_heads = 0;
     int head_dim = 0;
+    int heads_per_kv_group = 0;
     bool causal = false;
     bool is_bf16 = false;
     bool requires_alibi = false;
@@ -956,6 +957,7 @@ inline FlashAttentionRuntimeHP flashAttentionRuntimeHP(
     view.num_heads = attention_hp.num_heads;
     view.num_kv_heads = attention_hp.num_kv_heads;
     view.head_dim = attention_hp.head_dim;
+    view.heads_per_kv_group = attention_hp.heads_per_kv_group;
     view.causal = attention_hp.causal_mask;
     view.is_bf16 = true;
     view.requires_alibi = true;
@@ -967,12 +969,12 @@ inline TrainingFixedShapeHP trainingFixedShapeHP(
     const GRIM::Config::AiConfigSnapshot& snapshot)
 {
     TrainingFixedShapeHP view;
-    view.batch_size = snapshotEffectiveBatchSize(snapshot, "trainingFixedShapeHP(snapshot)");
-    view.max_seq_len = snapshotEffectiveMaxSeqLen(snapshot, "trainingFixedShapeHP(snapshot)");
+    view.batch_size = snapshotEffectiveBatchSize(snapshot, "trainingFixedShapeHP");
+    view.max_seq_len = snapshotEffectiveMaxSeqLen(snapshot, "trainingFixedShapeHP");
     view.max_tokens_per_batch = computeMaxTokensPerBatch(
         view.batch_size,
         view.max_seq_len,
-        "trainingFixedShapeHP(snapshot)");
+        "trainingFixedShapeHP");
     return view;
 }
 

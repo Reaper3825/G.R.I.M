@@ -311,6 +311,7 @@ if(NOT EXISTS "${ATEN_STUB_DIR}/ATen/cuda/detail/UnpackRaw.cuh")
 endif()
 add_library(grim_flash_attention STATIC 
     ../../Layers/FlashAttention/Flash_Attention_Kernal.cu
+    ../../Layers/FlashAttention/AttentionDiagnostics.cu
 )
 set_target_properties(grim_flash_attention PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON

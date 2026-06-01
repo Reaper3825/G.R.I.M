@@ -27,6 +27,11 @@ and it propagated downstream into `grad_v_fp32`, `SplitQKV.merge grad_V_bhsd`, t
 
 Validation signal after switching GRIM to the seqK-parallel contract: Bridges-2 session `1779067735859356347` (`w008.ib.bridges2.psc.edu`, `2026-05-17 21:28 EDT`) no longer showed the explosion. In `train_latest.err`, representative registered gradient checks stayed around `preclip_registered_global≈4.9e-5..7.0e-5`, `enc_rms_pre≈4.9e-5..7.0e-5`, `clipped=NO`, with top groups at ordinary `~1e-4..6e-4` RMS instead of qkv bias at `5.0966443327488e13` RMS. In the matching `latest_run.log`, 312 FlashAttention backward samples showed `dK`/`dV` at ordinary `~1e-7` RMS and the old `SDPA.apply dv_bf16_post_bwd≈1e10` / qkv-bias `5.0966443327488e13` signatures were absent.
 
+## Diagnostics ownership
+Optional FlashAttention equation tracing and D2H sampling live in `resources/models/GRIM-text/Layers/FlashAttention/AttentionDiagnostics.hpp/.cu`.
+
+`Flash_Attention_Kernal.cu` may call narrow pre/post forward/backward hooks from that helper, but it must not inline host-side attention-score reconstruction, per-head LSE scans, or raw tensor sample conversion logic. Keep the kernel wrapper focused on validation, parameter stamping, kernel launch, and fail-loud CUDA error handling.
+
 ## Softmax scale plumbing
 `autograd::scaled_dot_product_attention(..., scale, ...)` resolves `scale == 0.0f` to the canonical `1 / sqrt(head_dim)` default. Any non-zero scale must be finite and positive, and it must be passed unchanged into both `flash_attn_fwd_ex` and the matching `flash_attn_bwd_ex` call. The wrapper then stamps `params.scale_softmax`, `params.scale_softmax_log2`, and `params.scale_softmax_rp_dropout` from that same resolved scale.
 

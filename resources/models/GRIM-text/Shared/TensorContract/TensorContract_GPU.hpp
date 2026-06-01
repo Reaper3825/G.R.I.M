@@ -1398,7 +1398,7 @@ Tensor residual_add(const Tensor& x, const Tensor& residual,
  * 
  * @param scale Softmax scale for QK^T. 0.0f selects the canonical 1/sqrt(head_dim) default.
  * @param flash_hp Grouped FlashAttention runtime contract. Validates build/runtime head_dim,
- *        causal, BF16 activation, GQA, and ALiBi requirements before launch.
+ *        causal, BF16 activation, grouped-head geometry, and ALiBi requirements before launch.
  * @param attention_dropout_p Attention dropout DROP rate (0.0 = disabled, 0.15 = 15% drop rate).
  *        Converted internally to keep probability for FlashAttention (keep_p = 1.0 - attention_dropout_p).
  * @param dropout_seed Per-batch Philox RNG seed for reproducible dropout masks.

@@ -647,18 +647,16 @@ Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream,
 // For GQA with 4 KV heads, we need to SUM the gradients from grouped Q heads.
 // E.g., Q heads 0,1,2 all use KV head 0, so dK[kv_head=0] = dK[q_head=0] + dK[q_head=1] + dK[q_head=2]
 //
-// ISSUE #73 / balance fix: External FlashAttention library does NOT apply GQA gradient scaling.
-// We sum gradients from heads_per_kv_group Q heads into one KV head. Two choices:
-//   (1) No scale: true backprop gradient = sum → ||dK|| ~ sqrt(heads_per_kv) * per-Q magnitude (K,V get more).
-//   (2) Scale 1/sqrt(heads_per_kv): so ||dK|| = ||dQ|| per head → Q,K,V comparable (was 1/heads_per_kv → Q 1.7x larger).
-// We use (2) so Q, K, V receive comparable gradient magnitude (no structural 1.7x imbalance).
+// heads_per_kv_group is a finalized HyperParameters-derived GQA dimension and
+// must be threaded in explicitly. Do not recompute grouped-head geometry inside
+// the kernel boundary.
 //
 // Input layout:  src [B, S, num_heads, D] bf16 - gradients per query head
-// Output layout: dst [B, num_kv_heads, S, D] fp32 - reduced + scaled gradients per KV head
+// Output layout: dst [B, num_kv_heads, S, D] fp32 - reduced gradients per KV head
 __global__ void kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32(
     const __nv_bfloat16* __restrict__ src,  // [B, S, num_heads, D]
     float* __restrict__ dst,                // [B, num_kv_heads, S, D]
-    int batch, int num_heads, int num_kv_heads, int seq_len, int head_dim
+    int batch, int num_heads, int num_kv_heads, int heads_per_kv_group, int seq_len, int head_dim
 ) {
     // Each thread handles one element in the output [B, num_kv_heads, S, D]
     const size_t total = static_cast<size_t>(batch) * num_kv_heads * seq_len * head_dim;
@@ -674,8 +672,6 @@ __global__ void kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32(
     // ISSUE #85 FIX: The correct GQA gradient is the plain SUM of per-query-head contributions
     // (chain rule: dL/dK = sum over grouped Q heads). The previous 1/sqrt scaling halved the
     // effective K/V learning rate. Upstream FA2 uses at::sum_out without any scaling.
-    const int heads_per_kv_group = num_heads / num_kv_heads;
-
     float sum = 0.0f;
     for (int g = 0; g < heads_per_kv_group; ++g) {
         const int q_head = kv_h * heads_per_kv_group + g;
@@ -737,6 +733,7 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
     int num_heads = 0;
     int num_kv_heads = 0;
     int head_dim = 0;
+    int heads_per_kv_group = 0;
     float softmax_scale = 0.0f;
     bool causal = true;
     bool is_bf16 = false;
@@ -807,6 +804,9 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         if (!saved_k_bf16) throw std::runtime_error("ScaledDotProductAttentionGradFn::apply: saved_k_bf16 is NULL - save() must store K for backward");
         if (!saved_v_bf16) throw std::runtime_error("ScaledDotProductAttentionGradFn::apply: saved_v_bf16 is NULL - save() must store V for backward");
         if (!saved_out_bf16) throw std::runtime_error("ScaledDotProductAttentionGradFn::apply: saved_out_bf16 is NULL - save() must store output for backward");
+        if (heads_per_kv_group <= 0) {
+            throw std::runtime_error("ScaledDotProductAttentionGradFn::apply: heads_per_kv_group must be > 0");
+        }
         
         const size_t q_elems = static_cast<size_t>(batch_size) * seq_len * num_heads * head_dim;
         const size_t kv_elems = static_cast<size_t>(batch_size) * seq_len * num_kv_heads * head_dim;
@@ -900,7 +900,7 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
             // ISSUE #72 FIX: Use GQA reduction kernel to sum gradients from grouped Q heads
             // dk_bf16 is [B, S, num_heads, D], we reduce to [B, num_kv_heads, S, D]
             kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32<<<kv_blocks, block_size, 0, stream>>>(
-                dk_bf16, grad_k_fp32, batch_size, num_heads, num_kv_heads, seq_len, head_dim);
+                dk_bf16, grad_k_fp32, batch_size, num_heads, num_kv_heads, heads_per_kv_group, seq_len, head_dim);
             logGradFlowTensorStats("SDPA.apply grad_k_fp32", grad_k_fp32, kv_elems, stream);
             // Scale = 1.0 (no normalization - Issue #84 fixed root cause)
             accumulate_grad(k_grad, grad_k_fp32, kv_elems, 1.0f, stream, "ScaledDotProductAttentionGradFn::apply k_grad");
@@ -915,7 +915,7 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
             // ISSUE #72 FIX: Use GQA reduction kernel to sum gradients from grouped Q heads
             // dv_bf16 is [B, S, num_heads, D], we reduce to [B, num_kv_heads, S, D]
             kernel_reduce_gqa_grads_BSHD_bf16_to_BHSD_fp32<<<kv_blocks, block_size, 0, stream>>>(
-                dv_bf16, grad_v_fp32, batch_size, num_heads, num_kv_heads, seq_len, head_dim);
+                dv_bf16, grad_v_fp32, batch_size, num_heads, num_kv_heads, heads_per_kv_group, seq_len, head_dim);
             logGradFlowTensorStats("SDPA.apply grad_v_fp32", grad_v_fp32, kv_elems, stream);
             // Scale = 1.0 (no normalization needed)
             accumulate_grad(v_grad, grad_v_fp32, kv_elems, 1.0f, stream, "ScaledDotProductAttentionGradFn::apply v_grad");
@@ -1027,6 +1027,9 @@ Tensor scaled_dot_product_attention(
                                     " does not match FlashAttentionRuntimeHP head_dim=" +
                                     std::to_string(flash_hp.head_dim));
     }
+    if (flash_hp.heads_per_kv_group <= 0) {
+        throw std::invalid_argument("autograd::scaled_dot_product_attention: FlashAttentionRuntimeHP heads_per_kv_group must be > 0");
+    }
     
     // Output shape: same as Q [B, H, S, D]
     auto output_shape = TensorContract::TensorShape::make_BHSD(batch_size, num_heads, seq_len, head_dim);
@@ -1115,6 +1118,7 @@ Tensor scaled_dot_product_attention(
         grad_fn->num_heads = num_heads;
         grad_fn->num_kv_heads = num_kv_heads;
         grad_fn->head_dim = head_dim;
+        grad_fn->heads_per_kv_group = flash_hp.heads_per_kv_group;
         grad_fn->softmax_scale = scale;
         grad_fn->causal = flash_hp.causal;
         grad_fn->is_bf16 = flash_hp.is_bf16;
