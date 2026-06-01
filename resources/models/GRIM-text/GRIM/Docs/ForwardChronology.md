@@ -21,7 +21,7 @@ Related docs:
 For the shared full-sequence graph, the first explicit forward broadcast reached from both training and Phase2 inference is the QKV bias add in encoder self-attention:
 
 - `Layers/FlashAttention/EncoderSelfAttention_GPU.cu`
-- `intermediates.qkv_out = autograd::broadcast_add(intermediates.qkv_out, weights.b_qkv, request.stream);`
+- `qkv_out = autograd::broadcast_add(qkv_out, b_qkv, request.stream);`
 
 The decode-only KV-cache path was deleted; inference no longer has a second local QKV bias-add site.
 
@@ -63,7 +63,7 @@ Training enters at the Phase 2 microbatch boundary and then routes into the shar
 
 8. **First forward broadcast**
    - File: `Layers/FlashAttention/EncoderSelfAttention_GPU.cu`
-   - Call: `autograd::broadcast_add(intermediates.qkv_out, weights.b_qkv, request.stream)`
+   - Call: `autograd::broadcast_add(qkv_out, b_qkv, request.stream)`
 
 ### Training flow chart
 
@@ -122,7 +122,7 @@ This is the inference path that reuses the shared full-sequence graph.
    - Call: `Attention::encoderSelfAttentionForward(...)`
 
 6. **First shared forward broadcast**
-   - Call: `autograd::broadcast_add(intermediates.qkv_out, weights.b_qkv, request.stream)`
+   - Call: `autograd::broadcast_add(qkv_out, b_qkv, request.stream)`
 
 ### Inference flow chart
 
@@ -165,7 +165,7 @@ The chronology above was checked against the current implementation, not just in
 
 - Shared full-sequence path:
    - `Layers/FlashAttention/EncoderSelfAttention_GPU.cu`
-   - `intermediates.qkv_out = autograd::broadcast_add(intermediates.qkv_out, weights.b_qkv, request.stream);`
+   - `qkv_out = autograd::broadcast_add(qkv_out, b_qkv, request.stream);`
 - Decode-local KV path: deleted. There is no second QKV bias-add site for inference.
 
 ### What this means

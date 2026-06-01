@@ -596,7 +596,6 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
                 weight_init_seed,
                 init_stream);
             (void)requireScratchBlockParametersReady(parameter_registry, "Startup::assembleGpuModel");
-            scratch_block_layer->bindParameterTensors(parameter_registry);
 
             const auto& scratch_block_parameters = requireScratchBlockParametersReady(parameter_registry, "Startup::assembleGpuModel");
             if (!scratch_block_parameters.atom_type_embeddings.data ||

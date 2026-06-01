@@ -359,6 +359,7 @@ struct FlashAttentionRuntimeHP {
     bool causal = false;
     bool is_bf16 = false;
     bool requires_alibi = false;
+    bool dropout_enabled = false;
 };
 
 struct FeedForwardLayerConstructionHP {
@@ -948,7 +949,8 @@ inline EncoderSelfAttentionHP encoderSelfAttentionHP(
 }
 
 inline FlashAttentionRuntimeHP flashAttentionRuntimeHP(
-    const EncoderSelfAttentionHP& attention_hp)
+    const EncoderSelfAttentionHP& attention_hp,
+    bool dropout_enabled)
 {
     FlashAttentionRuntimeHP view;
     view.num_heads = attention_hp.num_heads;
@@ -957,6 +959,7 @@ inline FlashAttentionRuntimeHP flashAttentionRuntimeHP(
     view.causal = attention_hp.causal_mask;
     view.is_bf16 = true;
     view.requires_alibi = true;
+    view.dropout_enabled = dropout_enabled;
     return view;
 }
 

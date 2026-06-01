@@ -225,14 +225,14 @@ void ModelForwardRequest::validate(const char* caller) const {
     if (!config) throw std::runtime_error(std::string(caller) + ": config is NULL");
     if (!gpu_encoder) throw std::runtime_error(std::string(caller) + ": gpu_encoder is NULL");
     if (!parameter_registry) throw std::runtime_error(std::string(caller) + ": parameter_registry is NULL");
+    (void)parameter_registry->requireEmbeddingParameters(caller);
+    (void)parameter_registry->requireLmHeadParameters(caller);
     const int num_layers = HyperParameters::snapshotTrainingConfigField<int>(*config, "num_layers");
     if (static_cast<int>(parameter_registry->feedForwardParameterTensors().size()) != num_layers) {
         throw std::runtime_error(std::string(caller) + ": parameter_registry FFN tensor count mismatch. size=" +
                                  std::to_string(parameter_registry->feedForwardParameterTensors().size()) +
                                  " num_layers=" + std::to_string(num_layers));
     }
-    (void)parameter_registry->requireEmbeddingParameters(caller);
-    (void)parameter_registry->requireLmHeadParameters(caller);
     if (!this->pbm) throw std::runtime_error(std::string(caller) + ": pbm is NULL");
     if (!cublas_handle) throw std::runtime_error(std::string(caller) + ": cublas_handle is NULL");
     if (!stream) throw std::runtime_error(std::string(caller) + ": stream is NULL");
@@ -268,18 +268,6 @@ void ModelForwardRequest::validate(const char* caller) const {
     } else if (!mtp_heads.empty()) {
         throw std::runtime_error(std::string(caller) + ": mtp_heads is non-empty while graph.emit_mtp_logits=false");
     }
-
-    const auto scratch_hp = HyperParameters::scratchBlockConstructionHP(*config);
-    const auto* scratch_block_parameters = parameter_registry->getScratchBlockParameters();
-    if (scratch_hp.enabled && !scratch_block) {
-        throw std::runtime_error(std::string(caller) + ": ScratchBlockConstructionHP.enabled=true but scratch_block runtime is NULL");
-    }
-    if (scratch_hp.enabled && !scratch_block_parameters) {
-        throw std::runtime_error(std::string(caller) + ": ScratchBlockConstructionHP.enabled=true but registry scratch_block_parameters is NULL");
-    }
-    if (!scratch_hp.enabled && scratch_block) {
-        throw std::runtime_error(std::string(caller) + ": scratch_block runtime is non-null while ScratchBlockConstructionHP.enabled=false");
-    }
 }
 
 ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
@@ -288,6 +276,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const auto* cfg = request.config;
     const auto scratch_hp = HyperParameters::scratchBlockConstructionHP(*cfg);
     const auto execution_hp = HyperParameters::executionBlockConstructionHP(*cfg);
+    const auto lm_head_hp = HyperParameters::lmHeadLayerConstructionHP(*cfg);
     const bool center_encoder_residuals = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "center_encoder_residuals");
     const bool lm_head_center_hidden_states = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "lm_head_center_hidden_states");
     const int d_model = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "d_model");
@@ -303,15 +292,11 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const int execution_block_num_ops = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "execution_block_num_ops");
     const float execution_block_temp_start = HyperParameters::snapshotTrainingConfigField<float>(*cfg, "execution_block_temp_start");
     const int scratch_block_atom_embedding_dim = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "scratch_block_atom_embedding_dim");
-    const auto* scratch_block_parameters = request.parameter_registry->getScratchBlockParameters();
     const bool scratch_block_active = scratch_hp.enabled && request.scratch_block != nullptr;
     const bool execution_block_active = execution_hp.enabled && request.execution_block != nullptr;
 
     if (scratch_hp.enabled && !request.scratch_block) {
         throw std::runtime_error("ModelForward: ScratchBlockConstructionHP.enabled=true but request.scratch_block is NULL");
-    }
-    if (scratch_hp.enabled && !scratch_block_parameters) {
-        throw std::runtime_error("ModelForward: ScratchBlockConstructionHP.enabled=true but registry scratch_block_parameters is NULL");
     }
     if (!scratch_hp.enabled && request.scratch_block) {
         throw std::runtime_error("ModelForward: request.scratch_block is non-null while ScratchBlockConstructionHP.enabled=false");
@@ -325,6 +310,9 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     ModelForwardOutputs forward_outputs;
     const auto& payload = *request.payload;
     const auto* bindings = request.bindings;
+    const auto& embedding_parameters = request.parameter_registry->requireEmbeddingParameters("executeModelForward");
+    const auto& lm_head_parameters = request.parameter_registry->requireLmHeadParameters("executeModelForward");
+    auto& scratch_parameters = request.parameter_registry->requireScratchBlockParameters("executeModelForward");
     const bool connect_parameter_graph = request.graph.connect_parameter_graph;
     const bool retain_backward_graph = request.graph.retain_backward_graph;
     const bool dropout_enabled = request.graph.enable_dropout;
@@ -347,7 +335,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
         throw std::runtime_error("ModelForward: input token device pointer is NULL");
     }
 
-    const auto& embedding_parameters = request.parameter_registry->requireEmbeddingParameters("executeModelForward");
     Tensor emb_weights_view;
     const Tensor* emb_weights = &embedding_parameters.token_weights;
     if (!connect_parameter_graph) {
@@ -359,7 +346,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     }
 
     if (!emb_weights->shape.is_valid()) {
-        throw std::runtime_error("ModelForward: embedding token_weights.shape is INVALID - ParameterRegistry MUST initialize with correct shape [vocab_size="
+        throw std::runtime_error("ModelForward: embedding token_weights.shape is INVALID - EmbeddingLayer MUST initialize with correct shape [vocab_size="
                                 + std::to_string(payload.vocab_size) + ", d_model=" + std::to_string(d_model) + "]");
     }
 
@@ -379,7 +366,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     MFWD_INFO("Step 1: Token embedding complete, shape=[" << total_tokens << ", " << d_model << "]");
 
     if (scratch_block_active) {
-        MFWD_INFO("Step 1.5: Running ScratchBlock injection...");
+        MFWD_INFO("Step 1.5: Running all-token ScratchBlock vector gate...");
         (void)cudaGetLastError();
 
         if (!bindings->d_numeric_values) {
@@ -398,25 +385,69 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 "into hidden states on arithmetic batches");
         }
 
-        forward_outputs.embedding_tensor = autograd::scratch_block_inject(
-            forward_outputs.embedding_tensor,
+        ScratchBlockProjectionParameterViews scratch_param_views{};
+        const ScratchBlockProjectionParameterViews* scratch_param_view_ptr = nullptr;
+        Tensor scratch_atom_type_embeddings_view;
+        Tensor scratch_atom_projection_view;
+        if (!connect_parameter_graph) {
+            scratch_atom_type_embeddings_view = scratch_parameters.atom_type_embeddings.detach(request.stream);
+            scratch_atom_projection_view = scratch_parameters.atom_projection.detach(request.stream);
+            scratch_param_views.atom_type_embeddings = &scratch_atom_type_embeddings_view;
+            scratch_param_views.atom_projection = &scratch_atom_projection_view;
+            scratch_param_view_ptr = &scratch_param_views;
+        }
+
+        forward_outputs.embedding_structured_state = autograd::scratch_block_project_all_tokens(
             *request.scratch_block,
-            token_ids,
-            bindings->d_numeric_values,
-            bindings->d_atom_mask,
-            bindings->d_atom_flags,
-            bindings->d_token_to_slot_map,
-            total_tokens,
+            scratch_parameters,
+            scratch_hp,
+            payload,
+            *bindings,
             request.stream,
-            exec_first_type_only);
+            exec_first_type_only,
+            connect_parameter_graph,
+            scratch_param_view_ptr);
+
+        forward_outputs.embedding_gate_concat = autograd::concat(
+            forward_outputs.embedding_tensor,
+            forward_outputs.embedding_structured_state,
+            request.stream);
+
+        if (connect_parameter_graph) {
+            forward_outputs.embedding_gate_logits = autograd::matmul(
+                forward_outputs.embedding_gate_concat,
+                scratch_parameters.structured_gate_weight,
+                request.stream);
+        } else {
+            Tensor gate_weight_view = scratch_parameters.structured_gate_weight.detach(request.stream);
+            forward_outputs.embedding_gate_logits = autograd::matmul(
+                forward_outputs.embedding_gate_concat,
+                gate_weight_view,
+                request.stream);
+        }
+
+        forward_outputs.embedding_gate_values = autograd::sigmoid(
+            forward_outputs.embedding_gate_logits,
+            request.stream,
+            forward_outputs.embedding_gate_logits.data);
+
+        forward_outputs.embedding_gate_delta = autograd::elementwise_mul(
+            forward_outputs.embedding_gate_values,
+            forward_outputs.embedding_structured_state,
+            request.stream);
+
+        forward_outputs.embedding_tensor = autograd::add(
+            forward_outputs.embedding_tensor,
+            forward_outputs.embedding_gate_delta,
+            request.stream);
 
         cudaError_t cuda_err = cudaGetLastError();
         if (cuda_err != cudaSuccess) {
-            throw std::runtime_error("ModelForward: ScratchBlock injection CUDA error: " +
+            throw std::runtime_error("ModelForward: ScratchBlock vector gate CUDA error: " +
                                      std::string(cudaGetErrorString(cuda_err)));
         }
 
-        MFWD_INFO("Step 1.5: ScratchBlock injection complete");
+        MFWD_INFO("Step 1.5: ScratchBlock vector gate complete");
     }
 
     if (dropout_enabled && dropout_rate > 0.0f) {
@@ -666,6 +697,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                     const int row_len = requirePayloadRowLength(payload, b, "ModelForward ExecutionBlock bootstrap");
 
                     auto row_atom_view = request.scratch_block->extractRowLocalAtomView(
+                        scratch_hp,
                         tok_off, row_len, request.stream);
 
                     if (!request.bindings || !request.bindings->d_token_to_slot_map
@@ -719,8 +751,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
         forward_outputs.encoder_output_tensor = std::move(encoder_output_tensor);
     }
 
-    const auto& lm_head_hp = HyperParameters::lmHeadLayerConstructionHP(*cfg);
-    const auto& lm_head_parameters = request.parameter_registry->requireLmHeadParameters("executeModelForward");
     LMHeadParameterViews lm_head_parameter_views{};
     const LMHeadParameterViews* lm_head_parameter_view_ptr = nullptr;
     Tensor lm_head_weights_view;
@@ -750,7 +780,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
         forward_outputs,
         lm_head_parameter_view_ptr);
     if (!forward_outputs.logits_tensor.data) {
-        throw std::runtime_error("ModelForward: forwardLmHead returned logits tensor with NULL data");
+        throw std::runtime_error("ModelForward: LMHeadLayer::forward returned logits tensor with NULL data");
     }
 
     const Tensor* live_lm_head_input = forward_outputs.liveLmHeadInputOrNull();

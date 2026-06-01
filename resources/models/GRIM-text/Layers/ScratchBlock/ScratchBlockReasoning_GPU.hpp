@@ -22,26 +22,14 @@
 #include <memory>
 
 #include "../grim_layer_gpu.hpp"
+#include "../../Shared/Batching/BatchDeviceBindings.hpp"
+#include "../../Shared/Batching/BatchPayload.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
 
 namespace GRIM {
-
-//======================================================//
-//  ScratchBlock Configuration
-//======================================================//
-struct ScratchBlockConfig {
-    int d_model = 0;              // Hidden dimension
-    int max_atoms = 0;            // Max atoms per batch
-    int atom_embedding_dim = 0;   // Dimension for atom type embeddings
-    int atom_token_start = 0;     // MUST be set from ATOM_TOKEN_OFFSET during init - Rule 20
-    int atom_token_end = 0;       // MUST be set from UNIGRAM_VOCAB_OFFSET during init - Rule 20
-    bool enabled = true;          // Master toggle
-    float atom_scale = 1.0f;      // Scale factor for atom injection
-    cudaStream_t stream = nullptr;
-};
 
 struct ScratchBlockProjectionParameterViews {
     const Tensor* atom_type_embeddings = nullptr;
@@ -117,8 +105,6 @@ public:
         int num_atoms = 0;
     };
 
-    ScratchBlockLayer();
-    explicit ScratchBlockLayer(const ScratchBlockConfig& config);
     ScratchBlockLayer(const HyperParameters::ScratchBlockConstructionHP& hp,
                       cudaStream_t init_stream);
     ~ScratchBlockLayer();
@@ -132,30 +118,8 @@ public:
     ScratchBlockLayer& operator=(ScratchBlockLayer&&) noexcept;
 
     //--------------------------------------------------//
-    // Configuration
-    //--------------------------------------------------//
-
-    void setConfig(const ScratchBlockConfig& config);
-    const ScratchBlockConfig& config() const noexcept { return config_; }
-
-    void setEnabled(bool enabled);
-    bool isEnabled() const noexcept { return config_.enabled; }
-
-    //--------------------------------------------------//
     // Learnable Parameter Access
     //--------------------------------------------------//
-
-    void bindParameterTensors(ParameterRegistry::StartupParameterRegistry& parameter_registry);
-    bool hasBoundParameters() const noexcept { return parameter_tensors_ != nullptr; }
-    GRIM::ScratchBlockParameterTensors& requireParameterTensors(const char* caller);
-    const GRIM::ScratchBlockParameterTensors& requireParameterTensors(const char* caller) const;
-
-    Tensor& atomTypeEmbeddings()      { return requireParameterTensors("ScratchBlockLayer::atomTypeEmbeddings").atom_type_embeddings; }
-    Tensor& atomProjection()          { return requireParameterTensors("ScratchBlockLayer::atomProjection").atom_projection; }
-    Tensor& structuredGateWeight()    { return requireParameterTensors("ScratchBlockLayer::structuredGateWeight").structured_gate_weight; }
-    const Tensor& atomTypeEmbeddings() const { return requireParameterTensors("ScratchBlockLayer::atomTypeEmbeddings const").atom_type_embeddings; }
-    const Tensor& atomProjection() const { return requireParameterTensors("ScratchBlockLayer::atomProjection const").atom_projection; }
-    const Tensor& structuredGateWeight() const { return requireParameterTensors("ScratchBlockLayer::structuredGateWeight const").structured_gate_weight; }
 
     //--------------------------------------------------//
     // Statistics
@@ -181,7 +145,6 @@ public:
     bool isLoggingEnabled() const noexcept { return logging_enabled_; }
     void setGlobalStep(std::uint64_t step) { global_step_ = step; }
     std::uint64_t globalStep() const noexcept { return global_step_; }
-    const ScratchBlockConfig& getConfig() const noexcept { return config_; }
 
     //--------------------------------------------------//
     // Internal buffer access (for autograd::scratch_block_inject)
@@ -195,31 +158,29 @@ public:
     /// Returned positions are relative to the requested row span [0, row_tokens).
     /// Empty rows still return non-null buffers; num_atoms reports the actual count.
     RowLocalAtomView extractRowLocalAtomView(
+        const HyperParameters::ScratchBlockConstructionHP& hp,
         int token_offset,
         int row_tokens,
         cudaStream_t stream) const;
 
-    /// Run forward CUDA kernels (atom detect, embed lookup, projection+inject).
+    /// Run forward CUDA kernels (atom detect, embed lookup, projection+inject)
+    /// using the explicit grouped ScratchBlock HP and active batch bindings.
     /// Modifies output in-place. Returns device-side atom count via numAtomsBuffer().
     void runForwardKernels(
-        float* output, int total_tokens,
-        const int* token_ids,
-        const float* numeric_values,
-        const uint8_t* atom_mask,
-        const uint32_t* atom_flags,
-        const int32_t* token_to_slot_map,
+        float* output,
+        const GRIM::ScratchBlockParameterTensors& scratch_parameters,
+        const HyperParameters::ScratchBlockConstructionHP& hp,
+        const Batching::BatchPayload& payload,
+        const Batching::BatchDeviceBindings& bindings,
         cudaStream_t stream,
         bool execution_first_type_only = false);
 
-private:    void allocateWeights();
+private:    void allocateWeights(const HyperParameters::ScratchBlockConstructionHP& hp,
+                                 cudaStream_t init_stream);
     void freeWeights();
-    void initializeRuntimeBuffers();
+    void initializeRuntimeBuffers(cudaStream_t init_stream);
 
-    ScratchBlockConfig config_;
     Stats stats_;
-
-    // Registry-owned durable parameters (non-owning borrow).
-    GRIM::ScratchBlockParameterTensors* parameter_tensors_ = nullptr;
 
     // Temporary buffers for forward pass (reused across calls)
     int*   d_atom_positions_  = nullptr;  // [max_atoms]
@@ -232,7 +193,7 @@ private:    void allocateWeights();
 
     // Logging helpers
     void logForward(int num_atoms, float duration_ms);
-    void logWeightInit();
+    void logWeightInit(const HyperParameters::ScratchBlockConstructionHP& hp);
 };
 
 //======================================================//
@@ -248,22 +209,18 @@ namespace autograd {
 /// Backward: grad_input = grad_output (additive identity), plus parameter gradients
 ///
 /// @param input          Embedding tensor [total_tokens, d_model] with grad_fn chain
-/// @param layer          ScratchBlockLayer (owns weights, provides config)
-/// @param token_ids      Device ptr [total_tokens] — for atom detection
-/// @param numeric_values Device ptr [total_tokens] — per-token numeric values
-/// @param atom_mask      Device ptr [total_tokens] — 1 if token is an atom
-/// @param atom_flags     Device ptr [total_tokens] — AtomTable type-specific metadata
-/// @param total_tokens   Number of tokens in batch
+/// @param layer          ScratchBlock runtime shell (owns buffers + parameter accessors)
+/// @param hp             Explicit grouped ScratchBlock construction/view payload
+/// @param payload        Caller-owned active batch payload
+/// @param bindings       Caller-owned device bindings for payload
 /// @param stream         CUDA stream
 Tensor scratch_block_inject(
     Tensor& input,
     ScratchBlockLayer& layer,
-    const int* token_ids,
-    const float* numeric_values,
-    const uint8_t* atom_mask,
-    const uint32_t* atom_flags,
-    const int32_t* token_to_slot_map,
-    int total_tokens,
+    GRIM::ScratchBlockParameterTensors& scratch_parameters,
+    const HyperParameters::ScratchBlockConstructionHP& hp,
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
     cudaStream_t stream,
     bool execution_first_type_only = false);
 
@@ -274,12 +231,10 @@ Tensor scratch_block_inject(
 /// track_grad=true.
 Tensor scratch_block_project_all_tokens(
     ScratchBlockLayer& layer,
-    const int* token_ids,
-    const float* numeric_values,
-    const uint8_t* atom_mask,
-    const uint32_t* atom_flags,
-    const int32_t* token_to_slot_map,
-    int total_tokens,
+    GRIM::ScratchBlockParameterTensors& scratch_parameters,
+    const HyperParameters::ScratchBlockConstructionHP& hp,
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
     cudaStream_t stream,
     bool execution_first_type_only = false,
     bool track_grad = true,

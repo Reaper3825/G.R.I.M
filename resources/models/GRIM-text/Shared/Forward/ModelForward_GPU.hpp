@@ -64,7 +64,7 @@ struct ModelForwardGraphPolicy {
 struct ModelForwardRequest {
     const Config::AiConfigSnapshot* config = nullptr;
     GPUGrimEncoder* gpu_encoder = nullptr;
-    const ::ParameterRegistry::StartupParameterRegistry* parameter_registry = nullptr;
+    ::ParameterRegistry::StartupParameterRegistry* parameter_registry = nullptr;
     const PBM::PBMState* pbm = nullptr;
     cublasHandle_t cublas_handle = nullptr;
     cudaStream_t stream = nullptr;

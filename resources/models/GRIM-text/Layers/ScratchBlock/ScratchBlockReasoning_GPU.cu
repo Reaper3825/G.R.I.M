@@ -38,24 +38,53 @@ constexpr int NUM_ATOM_TYPES   = GRIM::Tokenizer::kAtomTypeCount;
 
 namespace {
 
-ScratchBlockConfig makeScratchBlockConfig(
+void validateScratchBlockBatchInputs(
+    const char* caller,
     const HyperParameters::ScratchBlockConstructionHP& hp,
-    cudaStream_t init_stream)
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
+    cudaStream_t stream)
 {
-    if (hp.enabled && init_stream == nullptr) {
-        throw std::runtime_error("ScratchBlockLayer: init_stream is NULL — startup model assembly must provide a construction stream");
+    if (!hp.enabled) {
+        throw std::runtime_error(std::string(caller) + ": ScratchBlockConstructionHP.enabled=false");
     }
+    payload.validate(caller);
+    if (!bindings.d_input_ids) {
+        throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings.d_input_ids is NULL");
+    }
+    if (!bindings.d_numeric_values) {
+        throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings.d_numeric_values is NULL");
+    }
+    if (!bindings.d_atom_mask) {
+        throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings.d_atom_mask is NULL");
+    }
+    if (!bindings.d_atom_flags) {
+        throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings.d_atom_flags is NULL");
+    }
+    if (!bindings.d_token_to_slot_map) {
+        throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings.d_token_to_slot_map is NULL");
+    }
+    if (!stream) {
+        throw std::runtime_error(std::string(caller) + ": stream is NULL");
+    }
+    if (payload.total_tokens <= 0) {
+        throw std::runtime_error(std::string(caller) + ": payload.total_tokens must be positive");
+    }
+}
 
-    ScratchBlockConfig config;
-    config.d_model = hp.d_model;
-    config.max_atoms = hp.max_atoms;
-    config.atom_embedding_dim = hp.atom_embedding_dim;
-    config.atom_token_start = hp.atom_token_start;
-    config.atom_token_end = hp.atom_token_end;
-    config.enabled = hp.enabled;
-    config.atom_scale = hp.atom_scale;
-    config.stream = init_stream;
-    return config;
+void validateScratchBlockParameterTensors(
+    const GRIM::ScratchBlockParameterTensors& scratch_parameters,
+    const char* caller)
+{
+    if (!scratch_parameters.atom_type_embeddings.data) {
+        throw std::runtime_error(std::string(caller) + ": atom_type_embeddings.data is NULL");
+    }
+    if (!scratch_parameters.atom_projection.data) {
+        throw std::runtime_error(std::string(caller) + ": atom_projection.data is NULL");
+    }
+    if (!scratch_parameters.structured_gate_weight.data) {
+        throw std::runtime_error(std::string(caller) + ": structured_gate_weight.data is NULL");
+    }
 }
 
 } // namespace
@@ -593,26 +622,25 @@ namespace autograd {
 Tensor scratch_block_inject(
     Tensor& input,
     ScratchBlockLayer& layer,
-    const int* token_ids,
-    const float* numeric_values,
-    const uint8_t* atom_mask,
-    const uint32_t* atom_flags,
-    const int32_t* token_to_slot_map,
-    int total_tokens,
+    GRIM::ScratchBlockParameterTensors& scratch_parameters,
+    const HyperParameters::ScratchBlockConstructionHP& hp,
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
     cudaStream_t stream,
     bool execution_first_type_only)
 {
-    const auto& cfg = layer.config();
+    validateScratchBlockBatchInputs(
+        "scratch_block_inject",
+        hp,
+        payload,
+        bindings,
+        stream);
+    validateScratchBlockParameterTensors(scratch_parameters, "scratch_block_inject");
 
     if (!input.data) throw std::runtime_error("scratch_block_inject: input.data is NULL");
-    if (!token_ids)  throw std::runtime_error("scratch_block_inject: token_ids is NULL");
-    if (!stream)     throw std::runtime_error("scratch_block_inject: stream is NULL");
-    if (!numeric_values) throw std::runtime_error("scratch_block_inject: numeric_values is NULL");
-    if (!atom_mask)  throw std::runtime_error("scratch_block_inject: atom_mask is NULL");
-    if (!atom_flags) throw std::runtime_error("scratch_block_inject: atom_flags is NULL");
 
     // Create output tensor (copy of input — injection is additive in-place)
-    const size_t data_bytes = static_cast<size_t>(total_tokens) * cfg.d_model * sizeof(float);
+    const size_t data_bytes = static_cast<size_t>(payload.total_tokens) * hp.d_model * sizeof(float);
     Tensor output;
     cudaMallocOrThrow(reinterpret_cast<void**>(&output.data), data_bytes, "scratch_block_inject_output");
     cudaMemcpyAsync(output.data, input.data, data_bytes, cudaMemcpyDeviceToDevice, stream);
@@ -624,33 +652,36 @@ Tensor scratch_block_inject(
 
     // Run forward kernels on output buffer
     layer.runForwardKernels(
-        output.data, total_tokens,
-        token_ids, numeric_values,
-        atom_mask, atom_flags,
-        token_to_slot_map, stream, execution_first_type_only);
+        output.data,
+        scratch_parameters,
+        hp,
+        payload,
+        bindings,
+        stream,
+        execution_first_type_only);
 
     // Build GradFn for backward pass
     if (input.requires_grad) {
         auto grad_fn = std::make_shared<ScratchBlockGradFn>();
-        grad_fn->atom_embedding_dim = cfg.atom_embedding_dim;
-        grad_fn->d_model = cfg.d_model;
-        grad_fn->max_atoms = cfg.max_atoms;
-        grad_fn->atom_scale = cfg.atom_scale;
+        grad_fn->atom_embedding_dim = hp.atom_embedding_dim;
+        grad_fn->d_model = hp.d_model;
+        grad_fn->max_atoms = hp.max_atoms;
+        grad_fn->atom_scale = hp.atom_scale;
 
         // Capture input chain
         grad_fn->capture_input(input);
 
         // Capture weight gradient pointers (layer outlives GradFn)
         grad_fn->capture_weights(
-            layer.atomProjection(),
-            layer.atomTypeEmbeddings());
+            scratch_parameters.atom_projection,
+            scratch_parameters.atom_type_embeddings);
 
         // Get atom count from device (need sync for host read)
         int num_atoms_host = 0;
         cudaMemcpyAsync(&num_atoms_host, layer.numAtomsBuffer(), sizeof(int),
                         cudaMemcpyDeviceToHost, stream);
         cudaStreamSynchronize(stream);
-        num_atoms_host = std::min(num_atoms_host, cfg.max_atoms);
+        num_atoms_host = std::min(num_atoms_host, hp.max_atoms);
 
         // Extract atom types into device buffer for capture
         int* d_atom_types_temp = nullptr;
@@ -659,7 +690,7 @@ Tensor scratch_block_inject(
             const int blk = 256;
             const int grd = (num_atoms_host + blk - 1) / blk;
             kernelExtractAtomTypes<<<grd, blk, 0, stream>>>(
-                token_ids,
+            bindings.d_input_ids,
                 layer.atomPositionsBuffer(),
                 num_atoms_host,
                 d_atom_types_temp);
@@ -671,7 +702,7 @@ Tensor scratch_block_inject(
             d_atom_types_temp,
             layer.atomEmbeddingsBuffer(),
             num_atoms_host,
-            total_tokens, stream);
+            payload.total_tokens, stream);
 
         // Free temporary atom types buffer (GradFn made its own copy)
         if (d_atom_types_temp) cudaFree(d_atom_types_temp);
@@ -689,24 +720,22 @@ Tensor scratch_block_inject(
 
 Tensor scratch_block_project_all_tokens(
     ScratchBlockLayer& layer,
-    const int* token_ids,
-    const float* numeric_values,
-    const uint8_t* atom_mask,
-    const uint32_t* atom_flags,
-    const int32_t* token_to_slot_map,
-    int total_tokens,
+    GRIM::ScratchBlockParameterTensors& scratch_parameters,
+    const HyperParameters::ScratchBlockConstructionHP& hp,
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
     cudaStream_t stream,
     bool execution_first_type_only,
     bool track_grad,
     const ScratchBlockProjectionParameterViews* parameter_views)
 {
-    const auto& cfg = layer.config();
-    if (!token_ids) throw std::runtime_error("scratch_block_project_all_tokens: token_ids is NULL");
-    if (!numeric_values) throw std::runtime_error("scratch_block_project_all_tokens: numeric_values is NULL");
-    if (!atom_mask) throw std::runtime_error("scratch_block_project_all_tokens: atom_mask is NULL");
-    if (!atom_flags) throw std::runtime_error("scratch_block_project_all_tokens: atom_flags is NULL");
-    if (!stream) throw std::runtime_error("scratch_block_project_all_tokens: stream is NULL");
-    if (total_tokens <= 0) throw std::runtime_error("scratch_block_project_all_tokens: total_tokens must be positive");
+    validateScratchBlockBatchInputs(
+        "scratch_block_project_all_tokens",
+        hp,
+        payload,
+        bindings,
+        stream);
+    validateScratchBlockParameterTensors(scratch_parameters, "scratch_block_project_all_tokens");
     if (track_grad && parameter_views) {
         throw std::runtime_error(
             "scratch_block_project_all_tokens: track_grad=true cannot use explicit read-only parameter views");
@@ -715,18 +744,18 @@ Tensor scratch_block_project_all_tokens(
     const Tensor& atom_type_embeddings =
         (parameter_views && parameter_views->atom_type_embeddings)
             ? *parameter_views->atom_type_embeddings
-            : layer.atomTypeEmbeddings();
+            : scratch_parameters.atom_type_embeddings;
     const Tensor& atom_projection =
         (parameter_views && parameter_views->atom_projection)
             ? *parameter_views->atom_projection
-            : layer.atomProjection();
+            : scratch_parameters.atom_projection;
 
     if (!atom_projection.data || !atom_type_embeddings.data) {
         throw std::runtime_error("scratch_block_project_all_tokens: ScratchBlock weights are not allocated");
     }
 
     Tensor structured_state = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(total_tokens, cfg.d_model),
+        TensorContract::TensorShape::make_BSM(payload.total_tokens, hp.d_model),
         track_grad,
         stream,
         "scratch_structured_state_z");
@@ -734,54 +763,54 @@ Tensor scratch_block_project_all_tokens(
     cudaMemsetAsync(layer.numAtomsBuffer(), 0, sizeof(int), stream);
 
     const int detect_block = 256;
-    const int detect_grid = (total_tokens + detect_block - 1) / detect_block;
+    const int detect_grid = (payload.total_tokens + detect_block - 1) / detect_block;
     kernelDetectAtomTokens<<<detect_grid, detect_block, 0, stream>>>(
-        token_ids, total_tokens,
+        bindings.d_input_ids, payload.total_tokens,
         layer.atomPositionsBuffer(), layer.numAtomsBuffer(),
-        cfg.max_atoms,
-        cfg.atom_token_start, cfg.atom_token_end);
+        hp.max_atoms,
+        hp.atom_token_start, hp.atom_token_end);
 
-    const int atom_blocks = std::min(cfg.max_atoms, total_tokens);
+    const int atom_blocks = std::min(hp.max_atoms, payload.total_tokens);
     if (atom_blocks > 0) {
         const int type_only_flag = execution_first_type_only ? 1 : 0;
-        kernelLookupAtomEmbeddingsWithValue<<<atom_blocks, cfg.atom_embedding_dim, 0, stream>>>(
-            token_ids,
+        kernelLookupAtomEmbeddingsWithValue<<<atom_blocks, hp.atom_embedding_dim, 0, stream>>>(
+            bindings.d_input_ids,
             layer.atomPositionsBuffer(),
             layer.numAtomsBuffer(),
-            cfg.max_atoms,
+            hp.max_atoms,
             atom_type_embeddings.data,
-            numeric_values,
-            atom_flags,
-            atom_mask,
-            token_to_slot_map,
+            bindings.d_numeric_values,
+            bindings.d_atom_flags,
+            bindings.d_atom_mask,
+            bindings.d_token_to_slot_map,
             layer.atomEmbeddingsBuffer(),
-            cfg.atom_embedding_dim,
+            hp.atom_embedding_dim,
             type_only_flag);
 
-        kernelProjectAtomEmbeddingsAllTokens<<<atom_blocks, cfg.d_model, 0, stream>>>(
+        kernelProjectAtomEmbeddingsAllTokens<<<atom_blocks, hp.d_model, 0, stream>>>(
             structured_state.data,
             layer.atomPositionsBuffer(),
             layer.numAtomsBuffer(),
-            cfg.max_atoms,
+            hp.max_atoms,
             layer.atomEmbeddingsBuffer(),
             atom_projection.data,
-            cfg.atom_embedding_dim,
-            cfg.d_model,
-            cfg.atom_scale);
+            hp.atom_embedding_dim,
+            hp.d_model,
+            hp.atom_scale);
     }
 
     if (track_grad && (atom_projection.requires_grad || atom_type_embeddings.requires_grad)) {
         auto grad_fn = std::make_shared<ScratchBlockProjectionGradFn>();
-        grad_fn->atom_embedding_dim = cfg.atom_embedding_dim;
-        grad_fn->d_model = cfg.d_model;
-        grad_fn->max_atoms = cfg.max_atoms;
-        grad_fn->atom_scale = cfg.atom_scale;
-        grad_fn->capture_weights(layer.atomProjection(), layer.atomTypeEmbeddings());
+        grad_fn->atom_embedding_dim = hp.atom_embedding_dim;
+        grad_fn->d_model = hp.d_model;
+        grad_fn->max_atoms = hp.max_atoms;
+        grad_fn->atom_scale = hp.atom_scale;
+        grad_fn->capture_weights(scratch_parameters.atom_projection, scratch_parameters.atom_type_embeddings);
 
         int num_atoms_host = 0;
         cudaMemcpyAsync(&num_atoms_host, layer.numAtomsBuffer(), sizeof(int), cudaMemcpyDeviceToHost, stream);
         cudaStreamSynchronize(stream);
-        num_atoms_host = std::min(num_atoms_host, cfg.max_atoms);
+        num_atoms_host = std::min(num_atoms_host, hp.max_atoms);
 
         int* d_atom_types_temp = nullptr;
         if (num_atoms_host > 0) {
@@ -789,7 +818,7 @@ Tensor scratch_block_project_all_tokens(
             const int blk = 256;
             const int grd = (num_atoms_host + blk - 1) / blk;
             kernelExtractAtomTypes<<<grd, blk, 0, stream>>>(
-                token_ids,
+                bindings.d_input_ids,
                 layer.atomPositionsBuffer(),
                 num_atoms_host,
                 d_atom_types_temp);
@@ -819,24 +848,17 @@ Tensor scratch_block_project_all_tokens(
 //  ScratchBlockLayer Implementation
 //======================================================//
 
-ScratchBlockLayer::ScratchBlockLayer() {
-    config_ = ScratchBlockConfig{};
-}
-
-ScratchBlockLayer::ScratchBlockLayer(const ScratchBlockConfig& config)
-    : config_(config)
-{
-    if (config_.enabled) {
-        allocateWeights();
-        initializeRuntimeBuffers();
-    }
-}
-
 ScratchBlockLayer::ScratchBlockLayer(
     const HyperParameters::ScratchBlockConstructionHP& hp,
     cudaStream_t init_stream)
-    : ScratchBlockLayer(makeScratchBlockConfig(hp, init_stream))
 {
+    if (hp.enabled) {
+        if (!init_stream) {
+            throw std::runtime_error("ScratchBlockLayer: init_stream is NULL — startup model assembly must provide a construction stream");
+        }
+        allocateWeights(hp, init_stream);
+        initializeRuntimeBuffers(init_stream);
+    }
 }
 
 ScratchBlockLayer::~ScratchBlockLayer() {
@@ -844,15 +866,12 @@ ScratchBlockLayer::~ScratchBlockLayer() {
 }
 
 ScratchBlockLayer::ScratchBlockLayer(ScratchBlockLayer&& other) noexcept
-    : config_(other.config_)
-    , stats_(other.stats_)
-    , parameter_tensors_(other.parameter_tensors_)
+    : stats_(other.stats_)
     , d_atom_positions_(other.d_atom_positions_)
     , d_num_atoms_(other.d_num_atoms_)
     , d_atom_embeddings_(other.d_atom_embeddings_)
     , weights_allocated_(other.weights_allocated_)
 {
-    other.parameter_tensors_ = nullptr;
     other.d_atom_positions_ = nullptr;
     other.d_num_atoms_ = nullptr;
     other.d_atom_embeddings_ = nullptr;
@@ -863,15 +882,12 @@ ScratchBlockLayer& ScratchBlockLayer::operator=(ScratchBlockLayer&& other) noexc
     if (this != &other) {
         freeWeights();
 
-        config_ = other.config_;
         stats_ = other.stats_;
-        parameter_tensors_ = other.parameter_tensors_;
         d_atom_positions_ = other.d_atom_positions_;
         d_num_atoms_ = other.d_num_atoms_;
         d_atom_embeddings_ = other.d_atom_embeddings_;
         weights_allocated_ = other.weights_allocated_;
 
-        other.parameter_tensors_ = nullptr;
         other.d_atom_positions_ = nullptr;
         other.d_num_atoms_ = nullptr;
         other.d_atom_embeddings_ = nullptr;
@@ -880,60 +896,16 @@ ScratchBlockLayer& ScratchBlockLayer::operator=(ScratchBlockLayer&& other) noexc
     return *this;
 }
 
-void ScratchBlockLayer::setConfig(const ScratchBlockConfig& config) {
-    bool was_enabled = config_.enabled;
-    config_ = config;
-    if (config_.enabled && !was_enabled && !weights_allocated_) {
-        allocateWeights();
-        initializeRuntimeBuffers();
-    }
-}
-
-void ScratchBlockLayer::setEnabled(bool enabled) {
-    bool was_enabled = config_.enabled;
-    config_.enabled = enabled;
-    if (enabled && !was_enabled && !weights_allocated_) {
-        allocateWeights();
-        initializeRuntimeBuffers();
-    }
-}
-
-void ScratchBlockLayer::bindParameterTensors(ParameterRegistry::StartupParameterRegistry& parameter_registry) {
-    auto& scratch_parameters = parameter_registry.requireScratchBlockParameters("ScratchBlockLayer::bindParameterTensors");
-    if (!scratch_parameters.atom_type_embeddings.data) {
-        throw std::runtime_error("ScratchBlockLayer::bindParameterTensors: registry atom_type_embeddings.data is NULL");
-    }
-    if (!scratch_parameters.atom_projection.data) {
-        throw std::runtime_error("ScratchBlockLayer::bindParameterTensors: registry atom_projection.data is NULL");
-    }
-    if (!scratch_parameters.structured_gate_weight.data) {
-        throw std::runtime_error("ScratchBlockLayer::bindParameterTensors: registry structured_gate_weight.data is NULL");
-    }
-    parameter_tensors_ = &scratch_parameters;
-}
-
-GRIM::ScratchBlockParameterTensors& ScratchBlockLayer::requireParameterTensors(const char* caller) {
-    if (!parameter_tensors_) {
-        throw std::runtime_error(std::string(caller) + ": ScratchBlock registry-owned parameter tensors are not bound");
-    }
-    return *parameter_tensors_;
-}
-
-const GRIM::ScratchBlockParameterTensors& ScratchBlockLayer::requireParameterTensors(const char* caller) const {
-    if (!parameter_tensors_) {
-        throw std::runtime_error(std::string(caller) + ": ScratchBlock registry-owned parameter tensors are not bound");
-    }
-    return *parameter_tensors_;
-}
-
-void ScratchBlockLayer::allocateWeights() {
+void ScratchBlockLayer::allocateWeights(
+    const HyperParameters::ScratchBlockConstructionHP& hp,
+    cudaStream_t init_stream) {
     if (weights_allocated_) return;
-    StreamController::fatalIfDefaultStream(config_.stream, "ScratchBlockLayer::allocateWeights");
+    StreamController::fatalIfDefaultStream(init_stream, "ScratchBlockLayer::allocateWeights");
 
     // Temporary buffers for forward (reused across calls, NOT cached for backward — GradFn owns that)
-    cudaMallocOrThrow(reinterpret_cast<void**>(&d_atom_positions_), config_.max_atoms * sizeof(int), "ScratchBlockLayer_atom_positions");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_atom_positions_), hp.max_atoms * sizeof(int), "ScratchBlockLayer_atom_positions");
     cudaMallocOrThrow(reinterpret_cast<void**>(&d_num_atoms_), sizeof(int), "ScratchBlockLayer_num_atoms");
-    cudaMallocOrThrow(reinterpret_cast<void**>(&d_atom_embeddings_), static_cast<size_t>(config_.max_atoms) * config_.atom_embedding_dim * sizeof(float), "ScratchBlockLayer_atom_embeddings");
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_atom_embeddings_), static_cast<size_t>(hp.max_atoms) * hp.atom_embedding_dim * sizeof(float), "ScratchBlockLayer_atom_embeddings");
 
     weights_allocated_ = true;
 }
@@ -943,18 +915,17 @@ void ScratchBlockLayer::freeWeights() {
     if (d_num_atoms_)       cudaFree(d_num_atoms_);
     if (d_atom_embeddings_) cudaFree(d_atom_embeddings_);
 
-    parameter_tensors_ = nullptr;
     d_atom_positions_ = nullptr;
     d_num_atoms_ = nullptr;
     d_atom_embeddings_ = nullptr;
     weights_allocated_ = false;
 }
 
-void ScratchBlockLayer::initializeRuntimeBuffers() {
+void ScratchBlockLayer::initializeRuntimeBuffers(cudaStream_t init_stream) {
     if (!weights_allocated_) return;
-    StreamController::fatalIfDefaultStream(config_.stream, "ScratchBlockLayer::initializeWeights");
+    StreamController::fatalIfDefaultStream(init_stream, "ScratchBlockLayer::initializeWeights");
 
-    const cudaError_t err = cudaMemsetAsync(d_num_atoms_, 0, sizeof(int), config_.stream);
+    const cudaError_t err = cudaMemsetAsync(d_num_atoms_, 0, sizeof(int), init_stream);
     if (err != cudaSuccess) {
         throw std::runtime_error(std::string("ScratchBlockLayer::initializeRuntimeBuffers: cudaMemsetAsync(d_num_atoms_) failed: ") +
                                  cudaGetErrorString(err));
@@ -962,52 +933,61 @@ void ScratchBlockLayer::initializeRuntimeBuffers() {
 }
 
 void ScratchBlockLayer::runForwardKernels(
-    float* output, int total_tokens,
-    const int* token_ids,
-    const float* numeric_values,
-    const uint8_t* atom_mask,
-    const uint32_t* atom_flags,
-    const int32_t* token_to_slot_map,
+    float* output,
+    const GRIM::ScratchBlockParameterTensors& scratch_parameters,
+    const HyperParameters::ScratchBlockConstructionHP& hp,
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
     cudaStream_t stream,
     bool execution_first_type_only)
 {
-    const auto& scratch_parameters = requireParameterTensors("ScratchBlockLayer::runForwardKernels");
+    validateScratchBlockBatchInputs(
+        "ScratchBlockLayer::runForwardKernels",
+        hp,
+        payload,
+        bindings,
+        stream);
+    validateScratchBlockParameterTensors(scratch_parameters, "ScratchBlockLayer::runForwardKernels");
+    if (!output) {
+        throw std::runtime_error("ScratchBlockLayer::runForwardKernels: output is NULL");
+    }
 
     // Step 1: Detect atom tokens
     cudaMemsetAsync(d_num_atoms_, 0, sizeof(int), stream);
 
     const int detect_block = 256;
-    const int detect_grid = total_tokens > 0 ? (total_tokens + detect_block - 1) / detect_block : 0;
+    const int detect_grid = payload.total_tokens > 0 ? (payload.total_tokens + detect_block - 1) / detect_block : 0;
     if (detect_grid > 0) {
         kernelDetectAtomTokens<<<detect_grid, detect_block, 0, stream>>>(
-            token_ids, total_tokens,
+            bindings.d_input_ids, payload.total_tokens,
             d_atom_positions_, d_num_atoms_,
-            config_.max_atoms,
-            config_.atom_token_start, config_.atom_token_end);
+            hp.max_atoms,
+            hp.atom_token_start, hp.atom_token_end);
     }
 
-    const int atom_blocks = std::min(config_.max_atoms, total_tokens);
+    const int atom_blocks = std::min(hp.max_atoms, payload.total_tokens);
     if (atom_blocks <= 0) return;
 
     // Step 2: Lookup atom embeddings (unified: numeric_values + atom_flags)
     const int type_only_flag = execution_first_type_only ? 1 : 0;
-    kernelLookupAtomEmbeddingsWithValue<<<atom_blocks, config_.atom_embedding_dim, 0, stream>>>(
-        token_ids, d_atom_positions_, d_num_atoms_, config_.max_atoms,
+    kernelLookupAtomEmbeddingsWithValue<<<atom_blocks, hp.atom_embedding_dim, 0, stream>>>(
+        bindings.d_input_ids, d_atom_positions_, d_num_atoms_, hp.max_atoms,
         scratch_parameters.atom_type_embeddings.data,
-        numeric_values,
-        atom_flags,
-        atom_mask,
-        token_to_slot_map,
-        d_atom_embeddings_, config_.atom_embedding_dim, type_only_flag);
+        bindings.d_numeric_values,
+        bindings.d_atom_flags,
+        bindings.d_atom_mask,
+        bindings.d_token_to_slot_map,
+        d_atom_embeddings_, hp.atom_embedding_dim, type_only_flag);
 
     // Step 3: Project and inject atom embeddings (single unified projection)
-    kernelInjectAtomEmbeddings<<<atom_blocks, config_.d_model, 0, stream>>>(
-        output, d_atom_positions_, d_num_atoms_, config_.max_atoms,
+    kernelInjectAtomEmbeddings<<<atom_blocks, hp.d_model, 0, stream>>>(
+        output, d_atom_positions_, d_num_atoms_, hp.max_atoms,
         d_atom_embeddings_, scratch_parameters.atom_projection.data,
-        config_.atom_embedding_dim, config_.d_model, config_.atom_scale);
+        hp.atom_embedding_dim, hp.d_model, hp.atom_scale);
 }
 
 ScratchBlockLayer::RowLocalAtomView ScratchBlockLayer::extractRowLocalAtomView(
+    const HyperParameters::ScratchBlockConstructionHP& hp,
     int token_offset,
     int row_tokens,
     cudaStream_t stream) const
@@ -1019,6 +999,9 @@ ScratchBlockLayer::RowLocalAtomView ScratchBlockLayer::extractRowLocalAtomView(
 
     if (!weights_allocated_ || !d_num_atoms_ || !d_atom_positions_ || !d_atom_embeddings_) {
         throw std::runtime_error("ScratchBlockLayer::extractRowLocalAtomView: ScratchBlock buffers are not allocated");
+    }
+    if (!hp.enabled) {
+        throw std::runtime_error("ScratchBlockLayer::extractRowLocalAtomView: ScratchBlockConstructionHP.enabled=false");
     }
     if (token_offset < 0) {
         throw std::runtime_error("ScratchBlockLayer::extractRowLocalAtomView: token_offset must be non-negative");
@@ -1035,12 +1018,12 @@ ScratchBlockLayer::RowLocalAtomView ScratchBlockLayer::extractRowLocalAtomView(
     if (err != cudaSuccess) throwCuda("cudaMemcpyAsync(num_atoms)", err);
     err = cudaStreamSynchronize(stream);
     if (err != cudaSuccess) throwCuda("cudaStreamSynchronize(num_atoms)", err);
-    num_atoms_host = std::clamp(num_atoms_host, 0, config_.max_atoms);
+    num_atoms_host = std::clamp(num_atoms_host, 0, hp.max_atoms);
 
     RowLocalAtomView view;
     const int alloc_atoms = std::max(1, num_atoms_host);
     view.atom_positions = Tensor::zeros({alloc_atoms}, stream, "scratch_row_atom_positions");
-    view.atom_embeddings = Tensor::zeros({alloc_atoms, config_.atom_embedding_dim}, stream, "scratch_row_atom_embeddings");
+    view.atom_embeddings = Tensor::zeros({alloc_atoms, hp.atom_embedding_dim}, stream, "scratch_row_atom_embeddings");
     view.num_atoms = 0;
 
     int* d_row_num_atoms = nullptr;
@@ -1049,14 +1032,14 @@ ScratchBlockLayer::RowLocalAtomView ScratchBlockLayer::extractRowLocalAtomView(
     if (err != cudaSuccess) throwCuda("cudaMemsetAsync(d_row_num_atoms)", err);
 
     if (num_atoms_host > 0) {
-        const int block_size = std::min(config_.atom_embedding_dim, 256);
+        const int block_size = std::min(hp.atom_embedding_dim, 256);
         kernelExtractRowLocalAtoms<<<num_atoms_host, block_size, 0, stream>>>(
             d_atom_positions_,
             d_atom_embeddings_,
             num_atoms_host,
             token_offset,
             row_tokens,
-            config_.atom_embedding_dim,
+            hp.atom_embedding_dim,
             reinterpret_cast<int*>(view.atom_positions.data),
             view.atom_embeddings.data,
             d_row_num_atoms);
@@ -1092,18 +1075,18 @@ void ScratchBlockLayer::logForward(int num_atoms, float duration_ms) {
     Logging::EmitModuleInfo(kScratchBlockModule, oss.str(), global_step_);
 }
 
-void ScratchBlockLayer::logWeightInit() {
+void ScratchBlockLayer::logWeightInit(const HyperParameters::ScratchBlockConstructionHP& hp) {
     if (!logging_enabled_) return;
 
-    const int atom_emb_size = NUM_ATOM_TYPES * config_.atom_embedding_dim;
-    const int proj_size = config_.atom_embedding_dim * config_.d_model;
-    const int gate_size = 2 * config_.d_model * config_.d_model;
+    const int atom_emb_size = NUM_ATOM_TYPES * hp.atom_embedding_dim;
+    const int proj_size = hp.atom_embedding_dim * hp.d_model;
+    const int gate_size = 2 * hp.d_model * hp.d_model;
     const size_t total_bytes = (atom_emb_size + proj_size + gate_size) * sizeof(float) * 2;
 
     std::ostringstream oss;
     oss << "weights_init: atom_types=" << NUM_ATOM_TYPES
-        << " atom_emb_dim=" << config_.atom_embedding_dim
-        << " d_model=" << config_.d_model
+        << " atom_emb_dim=" << hp.atom_embedding_dim
+        << " d_model=" << hp.d_model
         << " total_params=" << (atom_emb_size + proj_size + gate_size)
         << " memory_mb=" << std::fixed << std::setprecision(2) << (total_bytes / (1024.0 * 1024.0));
     Logging::EmitModuleInfo(kScratchBlockModule, oss.str(), global_step_);

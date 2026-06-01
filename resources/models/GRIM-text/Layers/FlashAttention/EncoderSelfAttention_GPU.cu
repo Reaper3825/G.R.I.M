@@ -16,30 +16,33 @@
 namespace {
     constexpr bool kEnableAttentionStepLogs = true;
 
-    void validateWeights(const GRIM::Attention::EncoderSelfAttentionWeights& weights,
+    void validateWeights(const GRIM::Tensor& W_qkv,
+                         const GRIM::Tensor& b_qkv,
+                         const GRIM::Tensor& W_o,
+                         const GRIM::Tensor& b_o,
                          const GRIM::HyperParameters::EncoderSelfAttentionHP& hp) {
-        if (!weights.W_qkv.data) {
+        if (!W_qkv.data) {
             throw std::runtime_error("encoderSelfAttentionForward: W_qkv.data is NULL");
         }
-        if (!weights.W_o.data) {
+        if (!W_o.data) {
             throw std::runtime_error("encoderSelfAttentionForward: W_o.data is NULL");
         }
-        weights.W_qkv.shape.require("encoderSelfAttentionForward W_qkv");
-        weights.W_o.shape.require("encoderSelfAttentionForward W_o");
-        if (!weights.W_qkv.shape.is_2d_layout()) {
+        W_qkv.shape.require("encoderSelfAttentionForward W_qkv");
+        W_o.shape.require("encoderSelfAttentionForward W_o");
+        if (!W_qkv.shape.is_2d_layout()) {
             throw std::runtime_error("encoderSelfAttentionForward: W_qkv must be a 2D [qkv_dim,d_model] tensor");
         }
-        if (!weights.W_o.shape.is_2d_layout()) {
+        if (!W_o.shape.is_2d_layout()) {
             throw std::runtime_error("encoderSelfAttentionForward: W_o must be a 2D [d_model,d_model] tensor");
         }
-        const auto wqkv_shape = weights.W_qkv.shape.as_2d();
+        const auto wqkv_shape = W_qkv.shape.as_2d();
         if (wqkv_shape.rows != hp.qkv_dim || wqkv_shape.cols != hp.d_model) {
             throw std::runtime_error("encoderSelfAttentionForward: W_qkv shape mismatch. expected=[" +
                                      std::to_string(hp.qkv_dim) + "," + std::to_string(hp.d_model) +
                                      "] got=[" + std::to_string(wqkv_shape.rows) + "," +
                                      std::to_string(wqkv_shape.cols) + "]");
         }
-        const auto wo_shape = weights.W_o.shape.as_2d();
+        const auto wo_shape = W_o.shape.as_2d();
         if (wo_shape.rows != hp.d_model || wo_shape.cols != hp.d_model) {
             throw std::runtime_error("encoderSelfAttentionForward: W_o shape mismatch. expected=[" +
                                      std::to_string(hp.d_model) + "," + std::to_string(hp.d_model) +
@@ -47,21 +50,21 @@ namespace {
                                      std::to_string(wo_shape.cols) + "]");
         }
         if (hp.use_bias) {
-            if (!weights.b_qkv.data) {
+            if (!b_qkv.data) {
                 throw std::runtime_error("encoderSelfAttentionForward: hp.use_bias=true but b_qkv.data is NULL");
             }
-            if (!weights.b_o.data) {
+            if (!b_o.data) {
                 throw std::runtime_error("encoderSelfAttentionForward: hp.use_bias=true but b_o.data is NULL");
             }
-            if (static_cast<int>(weights.b_qkv.numel()) != hp.qkv_dim) {
+            if (static_cast<int>(b_qkv.numel()) != hp.qkv_dim) {
                 throw std::runtime_error("encoderSelfAttentionForward: b_qkv numel mismatch. expected=" +
                                          std::to_string(hp.qkv_dim) + " got=" +
-                                         std::to_string(weights.b_qkv.numel()));
+                                         std::to_string(b_qkv.numel()));
             }
-            if (static_cast<int>(weights.b_o.numel()) != hp.d_model) {
+            if (static_cast<int>(b_o.numel()) != hp.d_model) {
                 throw std::runtime_error("encoderSelfAttentionForward: b_o numel mismatch. expected=" +
                                          std::to_string(hp.d_model) + " got=" +
-                                         std::to_string(weights.b_o.numel()));
+                                         std::to_string(b_o.numel()));
             }
         }
     }
@@ -85,7 +88,7 @@ namespace {
     }
 
     std::uint64_t attentionDropoutSeed(const GRIM::Attention::EncoderSelfAttentionForwardRequest& request) {
-        const float attention_dropout_p = request.dropout_enabled ? request.hp.attention_dropout : 0.0f;
+        const float attention_dropout_p = request.flash_attention.dropout_enabled ? request.hp.attention_dropout : 0.0f;
         if (attention_dropout_p <= 0.0f) {
             return 0;
         }
@@ -98,7 +101,10 @@ namespace GRIM::Attention {
 
 void encoderSelfAttentionForward(
     const Tensor& norm_input,
-    EncoderSelfAttentionWeights weights,
+    const Tensor& W_qkv,
+    const Tensor& b_qkv,
+    const Tensor& W_o,
+    const Tensor& b_o,
     const GRIM::PBM::PBMState& pbm,
     const EncoderSelfAttentionForwardRequest& request,
     Forward::ModelForwardOutputs& forward_outputs) {
@@ -137,7 +143,7 @@ void encoderSelfAttentionForward(
                                  std::to_string(norm_shape.cols) + "]");
     }
 
-    validateWeights(weights, request.hp);
+    validateWeights(W_qkv, b_qkv, W_o, b_o, request.hp);
     validatePBMState(pbm, request.hp);
     autograd::set_autograd_cublas_handle(request.cublas_handle);
 
@@ -150,25 +156,25 @@ void encoderSelfAttentionForward(
 
     if (qkv_debug >= 3) {
         autograd::checkQKVTensorFinite("AutogradQKV:ln1_out", norm_input, request.stream);
-        autograd::checkQKVTensorFinite("AutogradQKV:W_qkv", weights.W_qkv, request.stream);
+        autograd::checkQKVTensorFinite("AutogradQKV:W_qkv", W_qkv, request.stream);
         if (request.hp.use_bias) {
-            autograd::checkQKVTensorFinite("AutogradQKV:b_qkv", weights.b_qkv, request.stream);
+            autograd::checkQKVTensorFinite("AutogradQKV:b_qkv", b_qkv, request.stream);
         }
     }
 
     if constexpr (kEnableAttentionStepLogs) {
         std::fprintf(stderr, "[EncoderSelfAttention] QKV projection...\n");
     }
-    qkv_out = autograd::matmul(norm_input, weights.W_qkv, request.stream, true);
+    qkv_out = autograd::matmul(norm_input, W_qkv, request.stream, true);
     if (qkv_debug > 0) {
         autograd::checkQKVTensorFinite("AutogradQKV:qkv_out_prebias", qkv_out, request.stream);
     }
 
     if (request.hp.use_bias) {
-        qkv_out = autograd::broadcast_add(qkv_out, weights.b_qkv, request.stream);
+        qkv_out = autograd::broadcast_add(qkv_out, b_qkv, request.stream);
     }
     autograd::logQKVProjectionEquation(
-        norm_input, weights.W_qkv, weights.b_qkv, qkv_out,
+        norm_input, W_qkv, b_qkv, qkv_out,
         request.payload, request.hp, request.stream, request.layer_idx);
     if (qkv_debug > 0) {
         autograd::checkQKVTensorFinite("AutogradQKV:qkv_out", qkv_out, request.stream);
@@ -200,7 +206,7 @@ void encoderSelfAttentionForward(
         autograd::checkQKVTensorFinite("AutogradSDPA:V_rope", V_bhsd, request.stream);
     }
 
-    const float attention_dropout_p = request.dropout_enabled ? request.hp.attention_dropout : 0.0f;
+    const float attention_dropout_p = request.flash_attention.dropout_enabled ? request.hp.attention_dropout : 0.0f;
     const std::uint64_t dropout_seed = attentionDropoutSeed(request);
     attn_out_bhsd = autograd::scaled_dot_product_attention(
         Q_bhsd, K_bhsd, V_bhsd,
@@ -216,9 +222,9 @@ void encoderSelfAttentionForward(
     if (!attn_out.data) {
         throw std::runtime_error("encoderSelfAttentionForward: attn_out.data is NULL before output projection matmul");
     }
-    proj_out = autograd::matmul(attn_out, weights.W_o, request.stream, true);
+    proj_out = autograd::matmul(attn_out, W_o, request.stream, true);
     if (request.hp.use_bias) {
-        proj_out = autograd::broadcast_add(proj_out, weights.b_o, request.stream);
+        proj_out = autograd::broadcast_add(proj_out, b_o, request.stream);
     }
 
     if constexpr (kEnableAttentionStepLogs) {

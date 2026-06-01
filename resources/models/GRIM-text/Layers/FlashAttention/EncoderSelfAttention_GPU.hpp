@@ -22,13 +22,6 @@
 
 namespace GRIM::Attention {
 
-struct EncoderSelfAttentionWeights {
-    const Tensor& W_qkv;
-    const Tensor& b_qkv;
-    const Tensor& W_o;
-    const Tensor& b_o;
-};
-
 struct EncoderSelfAttentionForwardRequest {
     const Batching::BatchPayload& payload;
     const HyperParameters::EncoderSelfAttentionHP& hp;
@@ -36,13 +29,15 @@ struct EncoderSelfAttentionForwardRequest {
     cudaStream_t stream = nullptr;
     cublasHandle_t cublas_handle = nullptr;
     std::uint64_t batch_idx = 0;
-    bool dropout_enabled = false;
     int layer_idx = 0;
 };
 
 void encoderSelfAttentionForward(
     const Tensor& norm_input,
-    EncoderSelfAttentionWeights weights,
+    const Tensor& W_qkv,
+    const Tensor& b_qkv,
+    const Tensor& W_o,
+    const Tensor& b_o,
     const PBM::PBMState& pbm,
     const EncoderSelfAttentionForwardRequest& request,
     Forward::ModelForwardOutputs& forward_outputs);

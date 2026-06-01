@@ -33,6 +33,8 @@ PBM follows the same rule for forward-time ownership: Phase1 owns PBM initializa
 ## Dropout HP ownership
 Encoder and FFN dropout rates must come from `HyperParameters_GPU.hpp` → `EncoderLayerConstructionHP` → `FeedForwardLayerConstructionHP`. `EncodingLayer` stores the grouped encoder HP snapshot directly as `hp_`; `FeedForwardLayer` stores its grouped FFN HP snapshot directly as `hp_`. Do not reintroduce layer-local dropout defaults, thin FFN config wrappers, hidden PBM pointer state, or forward-runtime handle fields.
 
+The attention runtime dropout mode bit rides on `HyperparameterGroupings.hpp::FlashAttentionRuntimeHP::dropout_enabled`, sliced explicitly by the caller as `flashAttentionRuntimeHP(attention_hp, dropout_enabled)`. Do not keep a second `dropout_enabled` sidecar on `EncoderSelfAttentionForwardRequest`, and do not infer attention dropout mode from training-vs-inference identity inside the attention facade.
+
 ## FFN parameter ownership
 FFN trainable tensors (`W_gate`, `W1`, `W2`, optional `b2`) are durable registry state owned by `ParameterRegistry::StartupParameterRegistry::feed_forward_parameter_tensors`. `ParameterGroupRegistration::initializeFeedForwardParameterTensors()` allocates and Xavier-initializes one bundle per encoder layer, then shared forward builds per-call `FeedForwardParameterViews` directly from `ModelForwardRequest::parameter_registry`. `GPUGrimEncoder`, `EncodingLayer`, and `FeedForwardLayer` do not borrow or cache FFN parameter views during construction. `FeedForwardLayer` stores HP only and `forward()` requires explicit registry-derived parameter views. Do not add `Tensor` members, borrowed-view fields, or weight accessors back to `Feed_Forward_GPU.hpp`.
 
