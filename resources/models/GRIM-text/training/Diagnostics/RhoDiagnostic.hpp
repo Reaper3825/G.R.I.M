@@ -33,11 +33,20 @@ namespace GRIM::Forward {
 
 namespace GRIM::Diagnostics {
 
+struct RhoDiagnosticRuntime {
+    GRIMText::Training::TrainingContext* training_ctx = nullptr;
+    int batch_idx = -1;
+};
+
 /// Run the RHO_BUILDUP_EQUATION diagnostic once per batch.
 ///
-/// Reads encoder layer outputs from autograd intermediates,
+/// Reads encoder layer outputs from the active shared-forward sink,
 /// computes per-layer ρ and Δρ, writes to telemetry last_obs[5-8],
 /// emits an EQ_LOG entry, and logs top-10 batch tokens.
+///
+/// The intended invocation site is `LMHeadLayer::forward`, via an explicit
+/// caller-authored `RhoDiagnosticRuntime` hook, so the diagnostic stays inside
+/// the active forward/autograd boundary that owns the live LM-head input.
 ///
 /// @param ctx          Full training context (model, tokenizer, logging, telemetry)
 /// @param payload      Current batch (for token frequency analysis)

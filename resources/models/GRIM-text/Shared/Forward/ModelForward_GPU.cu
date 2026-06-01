@@ -231,9 +231,9 @@ void ModelForwardRequest::validate(const char* caller) const {
                                  std::to_string(parameter_registry->feedForwardParameterTensors().size()) +
                                  " num_layers=" + std::to_string(num_layers));
     }
+    (void)parameter_registry->requireEmbeddingParameters(caller);
+    (void)parameter_registry->requireLmHeadParameters(caller);
     if (!this->pbm) throw std::runtime_error(std::string(caller) + ": pbm is NULL");
-    if (!embedding_layer) throw std::runtime_error(std::string(caller) + ": embedding_layer is NULL");
-    if (!lm_head) throw std::runtime_error(std::string(caller) + ": lm_head is NULL");
     if (!cublas_handle) throw std::runtime_error(std::string(caller) + ": cublas_handle is NULL");
     if (!stream) throw std::runtime_error(std::string(caller) + ": stream is NULL");
     if (!payload) throw std::runtime_error(std::string(caller) + ": payload is NULL");
@@ -331,10 +331,11 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
         throw std::runtime_error("ModelForward: input token device pointer is NULL");
     }
 
+    const auto& embedding_parameters = request.parameter_registry->requireEmbeddingParameters("executeModelForward");
     Tensor emb_weights_view;
-    const Tensor* emb_weights = &request.embedding_layer->tokenWeights();
+    const Tensor* emb_weights = &embedding_parameters.token_weights;
     if (!connect_parameter_graph) {
-        emb_weights_view = request.embedding_layer->tokenWeights().detach(request.stream);
+        emb_weights_view = embedding_parameters.token_weights.detach(request.stream);
         emb_weights = &emb_weights_view;
     }
     if (!emb_weights->data) {
@@ -342,7 +343,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     }
 
     if (!emb_weights->shape.is_valid()) {
-        throw std::runtime_error("ModelForward: embedding token_weights.shape is INVALID - EmbeddingLayer MUST initialize with correct shape [vocab_size="
+        throw std::runtime_error("ModelForward: embedding token_weights.shape is INVALID - ParameterRegistry MUST initialize with correct shape [vocab_size="
                                 + std::to_string(payload.vocab_size) + ", d_model=" + std::to_string(d_model) + "]");
     }
 
@@ -748,26 +749,30 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
         forward_outputs.encoder_output_tensor = std::move(encoder_output_tensor);
     }
 
+    const auto& lm_head_hp = HyperParameters::lmHeadLayerConstructionHP(*cfg);
+    const auto& lm_head_parameters = request.parameter_registry->requireLmHeadParameters("executeModelForward");
     LMHeadParameterViews lm_head_parameter_views{};
     const LMHeadParameterViews* lm_head_parameter_view_ptr = nullptr;
     Tensor lm_head_weights_view;
     Tensor lm_head_bias_view;
     Tensor lm_head_gamma_view;
     if (!connect_parameter_graph) {
-        lm_head_weights_view = request.lm_head->weights().detach(request.stream);
+        lm_head_weights_view = lm_head_parameters.weights.detach(request.stream);
         lm_head_parameter_views.weights = &lm_head_weights_view;
-        if (request.lm_head->bias().data) {
-            lm_head_bias_view = request.lm_head->bias().detach(request.stream);
+        if (lm_head_parameters.bias.data) {
+            lm_head_bias_view = lm_head_parameters.bias.detach(request.stream);
             lm_head_parameter_views.bias = &lm_head_bias_view;
         }
-        if (request.lm_head->finalRmsGamma().data) {
-            lm_head_gamma_view = request.lm_head->finalRmsGamma().detach(request.stream);
+        if (lm_head_parameters.final_rms_gamma.data) {
+            lm_head_gamma_view = lm_head_parameters.final_rms_gamma.detach(request.stream);
             lm_head_parameter_views.final_rms_gamma = &lm_head_gamma_view;
         }
         lm_head_parameter_view_ptr = &lm_head_parameter_views;
     }
 
-    request.lm_head->forward(
+    forwardLmHead(
+        lm_head_hp,
+        lm_head_parameters,
         forward_outputs.encoder_output_tensor,
         payload,
         request.stream,
@@ -775,7 +780,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
         forward_outputs,
         lm_head_parameter_view_ptr);
     if (!forward_outputs.logits_tensor.data) {
-        throw std::runtime_error("ModelForward: LMHeadLayer::forward returned logits tensor with NULL data");
+        throw std::runtime_error("ModelForward: forwardLmHead returned logits tensor with NULL data");
     }
 
     const Tensor* live_lm_head_input = forward_outputs.liveLmHeadInputOrNull();
@@ -814,7 +819,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
 
             std::vector<float> h_weights_argmax(d_model);
             cudaMemcpyAsync(h_weights_argmax.data(),
-                            request.lm_head->weights().data + static_cast<size_t>(argmax_token) * d_model,
+                            lm_head_parameters.weights.data + static_cast<size_t>(argmax_token) * d_model,
                             d_model * sizeof(float),
                             cudaMemcpyDeviceToHost, request.stream);
             cudaStreamSynchronize(request.stream);

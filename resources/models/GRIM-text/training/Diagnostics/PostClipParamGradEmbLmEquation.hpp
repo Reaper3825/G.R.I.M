@@ -11,7 +11,6 @@
 #include "../Phases/Startup/Model/ParameterRegistry.hpp"
 
 namespace GRIM::Batching { struct BatchPayload; }
-namespace GRIM { class EmbeddingLayer; }
 namespace GRIMText::Training {
     struct TrainingContext;
     struct TrainingLoopState;
@@ -31,7 +30,6 @@ void runPostClipParamGradEmbLmEquation(
     GRIMText::Training::TrainingContext& ctx,
     GRIMText::Training::TrainingLoopState& state,
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    const GRIM::EmbeddingLayer& embedding_layer,
     const GRIM::Batching::BatchPayload& payload,
     float emb_rms_pre,
     int batch_idx,

@@ -320,8 +320,6 @@ GRIM::GeneratedSequence generateOneSequence(
         request.gpu_encoder = gpu_encoder;
         request.parameter_registry = &parameter_registry;
         request.pbm = &pbm;
-        request.embedding_layer = model.getEmbeddingLayer();
-        request.lm_head = model.getLmHeadLayer();
         request.scratch_block = scratch_hp.enabled ? scratch_block_layer : nullptr;
         request.execution_block = model.getExecutionBlockLayer();
         request.cublas_handle = training_state.cublas_handle.get();

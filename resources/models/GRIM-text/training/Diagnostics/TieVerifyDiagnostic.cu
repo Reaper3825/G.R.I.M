@@ -22,10 +22,10 @@ void runTieVerifyDiagnostic(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     std::size_t batch_idx)
 {
-    auto& embedding_layer = ctx.gpu_model.requireEmbeddingLayer("runTieVerifyDiagnostic");
+    auto& embedding_parameters = parameter_registry.requireEmbeddingParameters("runTieVerifyDiagnostic");
     auto& lm_head_parameters = parameter_registry.requireLmHeadParameters("runTieVerifyDiagnostic");
-    const float* emb_w = embedding_layer.tokenWeights().data;
-    const float* emb_g = embedding_layer.tokenWeights().grad_data();
+    const float* emb_w = embedding_parameters.token_weights.data;
+    const float* emb_g = embedding_parameters.token_weights.grad_data();
     const float* lm_w  = lm_head_parameters.weights.data;
     const float* lm_g  = lm_head_parameters.weights.grad_data();
     const bool cfg_tied = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "tie_embeddings");

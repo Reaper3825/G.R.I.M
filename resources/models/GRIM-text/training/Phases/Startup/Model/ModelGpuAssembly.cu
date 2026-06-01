@@ -217,6 +217,28 @@ void requireWeightsReady(const LayerT* layer,
     }
 }
 
+const GRIM::LMHeadParameterTensors& requireLmHeadParametersReady(
+    const ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const char* caller) {
+    const auto& lm_head_parameters = parameter_registry.requireLmHeadParameters(caller);
+    if (!GRIM::lmHeadWeightsReady(lm_head_parameters)) {
+        throw std::runtime_error(
+            std::string("[") + caller + "] LM-head weights are not initialized on the registry owner");
+    }
+    return lm_head_parameters;
+}
+
+const GRIM::EmbeddingParameterTensors& requireEmbeddingParametersReady(
+    const ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const char* caller) {
+    const auto& embedding_parameters = parameter_registry.requireEmbeddingParameters(caller);
+    if (!embedding_parameters.token_weights.data) {
+        throw std::runtime_error(
+            std::string("[") + caller + "] embedding token weights are not initialized on the registry owner");
+    }
+    return embedding_parameters;
+}
+
 void logInferenceMemorySummary(const GRIM::Config::AiConfigSnapshot& model_cfg,
                                size_t max_batch_size,
                                size_t max_seq_len_cache,
@@ -355,8 +377,8 @@ void initializeInferenceRuntime(const ::GRIM::Config::AiConfigSnapshot& model_cf
     if (!gpu_model_state.gpu_encoder) {
         throw std::runtime_error(std::string("[") + caller + "] GPU encoder not initialized. Caller must complete Startup::assembleGpuModel(...) before inference runtime allocation.");
     }
-    requireWeightsReady(gpu_model_state.embedding_layer.get(), caller, "EmbeddingLayer", "not assembled by Startup::assembleGpuModel().");
-    requireWeightsReady(gpu_model_state.lm_head_layer.get(), caller, "LMHeadLayer", "not assembled by Startup::assembleGpuModel().");
+    (void)requireEmbeddingParametersReady(parameter_registry, caller);
+    (void)requireLmHeadParametersReady(parameter_registry, caller);
 
     const auto execution_hp = GRIM::HyperParameters::executionBlockConstructionHP(model_cfg);
     if (execution_hp.enabled && !gpu_model_state.execution_block_layer) {
@@ -498,53 +520,48 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
         std::cout << "✓ Encoder layers bound registry-owned FFN weights\n";
 
         //======================================================//
-        //  2) Build persistent Embedding layer (Pattern B)
+        //  2) Initialize persistent embedding parameters on the registry
         //
-        //  Self-allocates token weights [vocab_size, d_model]. Position
+        //  Allocates token weights [vocab_size, d_model]. Position
         //  information is injected inside attention via ALiBi/RoPE, so no
         //  separate position-embedding table is allocated (Rule 26).
-        //  Must be created BEFORE LMHeadLayer (LM head aliases embedding for tied config).
+        //  Must be created BEFORE LM-head init (LM head aliases embedding for tied config).
         //======================================================//
         {
             const auto emb_hp = GRIM::HyperParameters::embeddingLayerConstructionHP(model_cfg);
-            auto& embedding_layer = gpu_model_state.embedding_layer;
-            embedding_layer = std::make_unique<GRIM::EmbeddingLayer>(emb_hp, weight_init_seed, init_stream, true);
-
-            if (!embedding_layer->weightsReady()) {
-                throw std::runtime_error("[assembleGpuModel] FATAL: EmbeddingLayer not ready after construction!");
-            }
-            std::cout << "✓ Embedding layer created\n";
+            ModelRegistration::initializeEmbeddingParameterTensors(
+                parameter_registry,
+                emb_hp,
+                weight_init_seed,
+                init_stream,
+                true);
+            (void)requireEmbeddingParametersReady(parameter_registry, "Startup::assembleGpuModel");
+            std::cout << "✓ Embedding parameters created\n";
         }
 
         //======================================================//
-        //  3) Build persistent LM Head layer (Pattern B)
-        //
-        //  Self-allocates weights or aliases embedding for tied config.
-        //  Owns final_rms_gamma. Created AFTER EmbeddingLayer because tied
-        //  weights need embedding token storage.
+        //  3) Initialize persistent LM-head parameter bundle on the registry
         //======================================================//
         {
             const auto lm_hp = GRIM::HyperParameters::lmHeadLayerConstructionHP(model_cfg);
-            auto& embedding_layer = gpu_model_state.embedding_layer;
-            auto& lm_head_layer = gpu_model_state.lm_head_layer;
-            parameter_registry.lm_head_parameters = std::make_unique<GRIM::LMHeadParameterTensors>();
-            auto& lm_head_parameters = *parameter_registry.lm_head_parameters;
+            auto& embedding_parameters = parameter_registry.requireEmbeddingParameters("Startup::assembleGpuModel");
 
             GRIM::Tensor* tied_emb = nullptr;
             if (lm_hp.tie_embeddings) {
-                tied_emb = &embedding_layer->tokenWeights();
+                tied_emb = &embedding_parameters.token_weights;
                 if (!tied_emb->data) {
                     throw std::runtime_error("[assembleGpuModel] FATAL: tied embedding token weights have NULL data");
                 }
             }
 
-            lm_head_layer = std::make_unique<GRIM::LMHeadLayer>(
-                lm_hp, lm_head_parameters, weight_init_seed + 1, init_stream, tied_emb);
-
-            if (!lm_head_layer->weightsReady()) {
-                throw std::runtime_error("[assembleGpuModel] FATAL: LMHeadLayer not ready after construction!");
-            }
-            std::cout << "✓ LM Head layer created\n";
+            ModelRegistration::initializeLmHeadParameterTensors(
+                parameter_registry,
+                lm_hp,
+                weight_init_seed + 1,
+                init_stream,
+                tied_emb);
+            (void)requireLmHeadParametersReady(parameter_registry, "Startup::assembleGpuModel");
+            std::cout << "✓ LM head parameters created\n";
         }
 
         //======================================================//

@@ -214,8 +214,7 @@ void runLogitScaleDiagnostic(
     int batch_idx)
 {
     namespace Internal = ::GRIMText::Training::Internal;
-    auto& embedding_layer = ctx.gpu_model.requireEmbeddingLayer("runLogitScaleDiagnostic");
-    auto& lm_head_layer = ctx.gpu_model.requireLmHeadLayer("runLogitScaleDiagnostic");
+    auto& embedding_parameters = parameter_registry.requireEmbeddingParameters("runLogitScaleDiagnostic");
     auto& lm_head_parameters = parameter_registry.requireLmHeadParameters("runLogitScaleDiagnostic");
     // ========================================================================
     // TRAINING SIGNAL: Logit Statistics (argmax distribution, confidence)
@@ -507,7 +506,7 @@ void runLogitScaleDiagnostic(
                 // Old code used E[||W||] (mean of norms) which underestimates by Jensen's inequality
                 // when ||W|| distribution is skewed.
                 const float* lm_head_weights = lm_head_parameters.weights.data;
-                const float* embedding_weights = embedding_layer.tokenWeights().data;
+                const float* embedding_weights = embedding_parameters.token_weights.data;
                 if (!lm_head_weights) {
                     throw std::runtime_error("runLogitScaleDiagnostic: LM-head weights are NULL");
                 }
@@ -524,7 +523,7 @@ void runLogitScaleDiagnostic(
 
                 float w_rms_mean = 0.0f, w_rms_sq_mean = 0.0f, w_rms_max = 0.0f;
                 int w_rms_max_tok = -1;
-                const auto& lm_head_hp = lm_head_layer.hp();
+                const auto lm_head_hp = GRIM::HyperParameters::lmHeadLayerConstructionHP(ctx.config);
                 const bool use_centered_weights = lm_head_hp.center_hidden_states;
                 const bool use_token_type_gate = GRIM::kEnableLmHeadTokenTypeGateExperiment;
                 // Issue #138 / Apr 2026 follow-up: replace the 500-row host-side
@@ -950,7 +949,7 @@ void runLogitScaleDiagnostic(
             {
                 const bool tie_embeddings =
                     GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "tie_embeddings");
-                const float* embedding_weights = embedding_layer.tokenWeights().data;
+                const float* embedding_weights = embedding_parameters.token_weights.data;
                 validateLmHeadWeightsConsumerBoundaryOrThrow(
                     ctx,
                     lm_head_weights_for_norms,

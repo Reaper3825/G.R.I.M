@@ -12,8 +12,6 @@
 namespace GRIM {
 class GPUGrimEncoder;
 class ScratchBlockLayer;
-class EmbeddingLayer;
-class LMHeadLayer;
 class ExecutionBlockLayer;
 }
 
@@ -22,8 +20,6 @@ namespace GRIMText::Training::Startup {
 struct ForwardTopologyView {
     GRIM::GPUGrimEncoder* gpu_encoder = nullptr;
     GRIM::ScratchBlockLayer* scratch_block = nullptr;
-    GRIM::EmbeddingLayer* embedding_layer = nullptr;
-    GRIM::LMHeadLayer* lm_head_layer = nullptr;
     GRIM::ExecutionBlockLayer* execution_block_layer = nullptr;
 };
 
@@ -43,20 +39,6 @@ struct GpuModelState {
         return *gpu_encoder;
     }
 
-    GRIM::EmbeddingLayer& requireEmbeddingLayer(const char* caller) {
-        if (!embedding_layer) {
-            throw std::runtime_error(std::string(caller) + ": GpuModelState.embedding_layer is NULL");
-        }
-        return *embedding_layer;
-    }
-
-    GRIM::LMHeadLayer& requireLmHeadLayer(const char* caller) {
-        if (!lm_head_layer) {
-            throw std::runtime_error(std::string(caller) + ": GpuModelState.lm_head_layer is NULL");
-        }
-        return *lm_head_layer;
-    }
-
     ForwardTopologyView requireForwardTopology(
         const GRIM::Config::AiConfigSnapshot& config,
         const char* caller) {
@@ -65,8 +47,6 @@ struct GpuModelState {
 
         ForwardTopologyView topology{};
         topology.gpu_encoder = &requireGpuEncoder(caller);
-        topology.embedding_layer = &requireEmbeddingLayer(caller);
-        topology.lm_head_layer = &requireLmHeadLayer(caller);
         topology.scratch_block = scratch_block_layer.get();
         topology.execution_block_layer = execution_block_layer.get();
 
@@ -98,8 +78,6 @@ struct GpuModelState {
 
     std::unique_ptr<GRIM::GPUGrimEncoder> gpu_encoder;
     std::unique_ptr<GRIM::ScratchBlockLayer> scratch_block_layer;
-    std::unique_ptr<GRIM::EmbeddingLayer> embedding_layer;
-    std::unique_ptr<GRIM::LMHeadLayer> lm_head_layer;
     std::unique_ptr<GRIM::ExecutionBlockLayer> execution_block_layer;
 };
 

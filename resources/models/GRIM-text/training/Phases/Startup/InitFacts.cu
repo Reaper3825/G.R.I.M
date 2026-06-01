@@ -105,12 +105,12 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
     }
 
     // ── Collect the live structural facts ────────────────────────────
-    auto& embedding_layer = ctx.gpu_model.requireEmbeddingLayer("verifyAndDumpInitFacts");
+    auto& embedding_parameters = ctx.parameter_registry.requireEmbeddingParameters("verifyAndDumpInitFacts");
     auto& lm_head_parameters = ctx.parameter_registry.requireLmHeadParameters("verifyAndDumpInitFacts");
     const auto& parameter_groups = ctx.parameter_registry.requireParameterGroups("verifyAndDumpInitFacts");
-    const float* emb_w_ptr = embedding_layer.tokenWeights().data;
+    const float* emb_w_ptr = embedding_parameters.token_weights.data;
     const float* lm_w_ptr  = lm_head_parameters.weights.data;
-    const float* emb_g_ptr = embedding_layer.tokenWeights().grad_data();
+    const float* emb_g_ptr = embedding_parameters.token_weights.grad_data();
     const float* lm_g_ptr  = lm_head_parameters.weights.grad_data();
     const bool cfg_tied  = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "tie_embeddings");
     const bool lm_owns   = lm_head_parameters.owns_weights;

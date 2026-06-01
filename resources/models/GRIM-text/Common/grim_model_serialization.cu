@@ -127,8 +127,8 @@ bool saveLanguageModelCheckpoint(
     const int mtp_k = mtp_enabled
         ? HyperParameters::snapshotTrainingConfigField<int>(config, "mtp_k")
         : 0;
-    auto* embedding_layer = model.getEmbeddingLayer();
-    auto* lm_head_layer = model.getLmHeadLayer();
+    auto* embedding_parameters = parameter_registry.getEmbeddingParameters();
+    auto* lm_head_parameters = parameter_registry.getLmHeadParameters();
     auto* scratch_block_layer = model.getScratchBlockLayer();
     auto* execution_block_layer = model.getExecutionBlockLayer();
     auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
@@ -137,15 +137,15 @@ bool saveLanguageModelCheckpoint(
     EmitModuleInfo(ModuleId::Checkpoint, "Request initialized with version " + std::to_string(GRIM_MODEL_VERSION));
 
     EmitModuleInfo(ModuleId::Checkpoint, "Processing embeddings");
-    if (!embedding_layer || !embedding_layer->tokenWeights().data) {
-        EmitModuleError(ModuleId::Checkpoint, "EmbeddingLayer token weights unavailable during save()");
-        std::cerr << "[saveLanguageModelCheckpoint] Error: EmbeddingLayer token weights unavailable" << std::endl;
+    if (!embedding_parameters || !embedding_parameters->token_weights.data) {
+        EmitModuleError(ModuleId::Checkpoint, "registry embedding token weights unavailable during save()");
+        std::cerr << "[saveLanguageModelCheckpoint] Error: registry embedding token weights unavailable" << std::endl;
         return false;
     }
     EmitModuleInfo(ModuleId::Checkpoint, "Embedding source: GPU");
-    EmitModuleInfo(ModuleId::Checkpoint, "Using EmbeddingLayer token weights (vocab=" + std::to_string(vocab_size) + ", d_model=" + std::to_string(d_model_i) + ")");
+    EmitModuleInfo(ModuleId::Checkpoint, "Using registry embedding token weights (vocab=" + std::to_string(vocab_size) + ", d_model=" + std::to_string(d_model_i) + ")");
     assignRead(request.sources.gpu_embedding.token_embeddings,
-               embedding_layer->tokenWeights().data,
+               embedding_parameters->token_weights.data,
                embeddingElementCount(config));
 
     EmitModuleInfo(ModuleId::Checkpoint, "Processing encoder layers (" + std::to_string(num_layers) + " layers)");
@@ -197,14 +197,14 @@ bool saveLanguageModelCheckpoint(
         if (enc->layerScale2().data) assignRead(view.layer_scale2, enc->layerScale2().data, d_model);
     }
 
-    if (!lm_head_layer) throw std::runtime_error("LMHeadLayer is NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
-    EmitModuleInfo(ModuleId::Checkpoint, "Processing LM head (projection=" + std::string(lm_head_layer->weights().data ? "yes" : "no") + ", bias=" + std::string(lm_head_layer->bias().data ? "yes" : "no") + ")");
-    request.sources.lm_head.has_projection = (lm_head_layer->weights().data != nullptr);
-    request.sources.lm_head.projection.ptr = lm_head_layer->weights().data;
-    request.sources.lm_head.projection.count = lm_head_layer->weights().data ? embeddingElementCount(config) : 0;
-    request.sources.lm_head.has_bias = (lm_head_layer->bias().data != nullptr);
-    request.sources.lm_head.bias.ptr = lm_head_layer->bias().data;
-    request.sources.lm_head.bias.count = lm_head_layer->bias().data ? static_cast<std::size_t>(vocab_size) : 0;
+    if (!lm_head_parameters) throw std::runtime_error("LM-head parameters are NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    EmitModuleInfo(ModuleId::Checkpoint, "Processing LM head (projection=" + std::string(lm_head_parameters->weights.data ? "yes" : "no") + ", bias=" + std::string(lm_head_parameters->bias.data ? "yes" : "no") + ")");
+    request.sources.lm_head.has_projection = (lm_head_parameters->weights.data != nullptr);
+    request.sources.lm_head.projection.ptr = lm_head_parameters->weights.data;
+    request.sources.lm_head.projection.count = lm_head_parameters->weights.data ? embeddingElementCount(config) : 0;
+    request.sources.lm_head.has_bias = (lm_head_parameters->bias.data != nullptr);
+    request.sources.lm_head.bias.ptr = lm_head_parameters->bias.data;
+    request.sources.lm_head.bias.count = lm_head_parameters->bias.data ? static_cast<std::size_t>(vocab_size) : 0;
 
     const auto scratch_hp = HyperParameters::scratchBlockConstructionHP(config);
 
@@ -299,9 +299,9 @@ bool saveLanguageModelCheckpoint(
         EmitModuleInfo(ModuleId::Checkpoint, "Processing SlotSelector weights for FlatBuffer serialization");
     }
 
-    // Issue #33: Final RMSNorm gamma (normalizes encoder output before LM head) — owned by LMHeadLayer
-    if (lm_head_layer && lm_head_layer->finalRmsGamma().data) {
-        request.sources.final_rms_gamma.ptr = lm_head_layer->finalRmsGamma().data;
+    // Issue #33: Final RMSNorm gamma (normalizes encoder output before LM head)
+    if (lm_head_parameters && lm_head_parameters->final_rms_gamma.data) {
+        request.sources.final_rms_gamma.ptr = lm_head_parameters->final_rms_gamma.data;
         request.sources.final_rms_gamma.count = static_cast<std::size_t>(d_model_i);
         EmitModuleInfo(ModuleId::Checkpoint, "Processing final_rms_gamma (size=" + 
                    std::to_string(d_model_i) + ")");
@@ -415,8 +415,8 @@ bool loadLanguageModelCheckpoint(
     const int mtp_k = mtp_enabled
         ? HyperParameters::snapshotTrainingConfigField<int>(config, "mtp_k")
         : 0;
-    auto* embedding_layer = model.getEmbeddingLayer();
-    auto* lm_head_layer = model.getLmHeadLayer();
+    auto* embedding_parameters = parameter_registry.getEmbeddingParameters();
+    auto* lm_head_parameters = parameter_registry.getLmHeadParameters();
     auto* scratch_block_layer = model.getScratchBlockLayer();
     auto* execution_block_layer = model.getExecutionBlockLayer();
     auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
@@ -462,16 +462,16 @@ bool loadLanguageModelCheckpoint(
     request.capabilities.requires_execution_block = (execution_block_parameters != nullptr);
     request.capabilities.requires_slot_selector     = (decode_time_slot_selector != nullptr);
     request.capabilities.requires_scratch_block   = scratch_hp.enabled;
-    request.capabilities.requires_final_rms_gamma = (lm_head_layer != nullptr
-                                                      && lm_head_layer->finalRmsGamma().data != nullptr
+    request.capabilities.requires_final_rms_gamma = (lm_head_parameters != nullptr
+                                                      && lm_head_parameters->final_rms_gamma.data != nullptr
                                                       && !freeze_learned_rms_gammas);
 
-    if (!embedding_layer || !embedding_layer->tokenWeights().data) {
-        std::cerr << "[loadLanguageModelCheckpoint] Error: EmbeddingLayer token weights not initialized" << std::endl;
+    if (!embedding_parameters || !embedding_parameters->token_weights.data) {
+        std::cerr << "[loadLanguageModelCheckpoint] Error: registry embedding token weights not initialized" << std::endl;
         return false;
     }
     assignWrite(request.gpu_embedding.token_embeddings,
-                embedding_layer->tokenWeights().data,
+                embedding_parameters->token_weights.data,
                 embeddingElementCount(config));
 
     auto* gpu_encoder = gpu_model_state.gpu_encoder.get();
@@ -513,14 +513,14 @@ bool loadLanguageModelCheckpoint(
         if (enc->layerScale2().data) assignWrite(view.layer_scale2, enc->layerScale2().data, d_model);
     }
 
-    if (lm_head_layer && lm_head_layer->weights().data) {
+    if (lm_head_parameters && lm_head_parameters->weights.data) {
         assignWrite(request.lm_head.projection,
-                    lm_head_layer->weights().data,
+                    lm_head_parameters->weights.data,
                     embeddingElementCount(config));
     }
-    if (lm_head_layer && lm_head_layer->bias().data) {
+    if (lm_head_parameters && lm_head_parameters->bias.data) {
         assignWrite(request.lm_head.bias,
-                    lm_head_layer->bias().data,
+                    lm_head_parameters->bias.data,
                     static_cast<std::size_t>(vocab_size));
     }
     request.lm_head.expect_bias = use_bias;
@@ -585,12 +585,12 @@ bool loadLanguageModelCheckpoint(
         assignWrite(request.slot_selector.null_logit_bias, decode_time_slot_selector->null_logit_bias.data, static_cast<std::size_t>(decode_time_slot_selector->null_logit_bias.numel()));
     }
 
-    // Issue #33: Final RMSNorm gamma destination — owned by LMHeadLayer
+    // Issue #33: Final RMSNorm gamma destination
     // When frozen, γ_final stays at 1.0 — do NOT overwrite from checkpoint.
-    if (lm_head_layer && lm_head_layer->finalRmsGamma().data
+    if (lm_head_parameters && lm_head_parameters->final_rms_gamma.data
         && !freeze_learned_rms_gammas) {
         assignWrite(request.final_rms_gamma,
-                    lm_head_layer->finalRmsGammaMutable_UnfrozenOnly("serialization::load").data,
+                    lm_head_parameters->final_rms_gamma.data,
                     static_cast<std::size_t>(d_model_i));
     }
 
@@ -624,8 +624,8 @@ bool loadLanguageModelCheckpoint(
         }
         {
             std::ostringstream oss;
-            oss << "[load]   layer pointers: embedding=" << (embedding_layer ? "OK" : "NULL")
-                << " lm_head=" << (lm_head_layer ? "OK" : "NULL")
+                oss << "[load]   registry pointers: embedding=" << (embedding_parameters ? "OK" : "NULL")
+                << " lm_head_params=" << (lm_head_parameters ? "OK" : "NULL")
                 << " scratch_block=" << (scratch_block_layer ? "OK" : "NULL")
                 << " exec_block=" << (execution_block_layer ? "OK" : "NULL")
                 << " slot_selector=" << (decode_time_slot_selector ? "OK" : "NULL");

@@ -29,8 +29,6 @@
 
 namespace GRIM {
 
-class EmbeddingLayer;
-class LMHeadLayer;
 class ScratchBlockLayer;
 class ExecutionBlockLayer;
 class GPUGrimEncoder;
@@ -71,8 +69,6 @@ struct ModelForwardRequest {
     cublasHandle_t cublas_handle = nullptr;
     cudaStream_t stream = nullptr;
 
-    EmbeddingLayer* embedding_layer = nullptr;
-    LMHeadLayer* lm_head = nullptr;
     ScratchBlockLayer* scratch_block = nullptr;
     ExecutionBlockLayer* execution_block = nullptr;
     std::vector<MTPHeadForwardView> mtp_heads;

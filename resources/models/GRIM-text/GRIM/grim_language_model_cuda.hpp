@@ -39,8 +39,6 @@
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
 #include "../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"
-#include "../Layers/Embedding/Embedding_GPU.hpp"
-#include "../Layers/LMHead/lm_head_GPU.hpp"
 #include "../Layers/ExecutionBlock/execution_block_GPU.hpp"
 #include "../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
 #include "../Shared/Execution/DecodeTimeNumPolicy.hpp"
@@ -164,14 +162,6 @@ public:
     // HyperParameters::scratchBlockConstructionHP(config_); do not runtime-toggle it.
     ScratchBlockLayer* getScratchBlockLayer() { return gpu_model_state_ ? gpu_model_state_->scratch_block_layer.get() : nullptr; }
     const ScratchBlockLayer* getScratchBlockLayer() const { return gpu_model_state_ ? gpu_model_state_->scratch_block_layer.get() : nullptr; }
-
-    // Embedding layer access (Pattern B: persistent, self-allocating, owns token + pos weights)
-    EmbeddingLayer* getEmbeddingLayer() { return gpu_model_state_ ? gpu_model_state_->embedding_layer.get() : nullptr; }
-    const EmbeddingLayer* getEmbeddingLayer() const { return gpu_model_state_ ? gpu_model_state_->embedding_layer.get() : nullptr; }
-
-    // LM Head layer access (Pattern B: persistent, self-allocating)
-    LMHeadLayer* getLmHeadLayer() { return gpu_model_state_ ? gpu_model_state_->lm_head_layer.get() : nullptr; }
-    const LMHeadLayer* getLmHeadLayer() const { return gpu_model_state_ ? gpu_model_state_->lm_head_layer.get() : nullptr; }
 
     // Execution Block layer access (nullptr when disabled)
     ExecutionBlockLayer* getExecutionBlockLayer() { return gpu_model_state_ ? gpu_model_state_->execution_block_layer.get() : nullptr; }

@@ -13,11 +13,14 @@ using cudaStream_t = CUstream_st*;
 namespace GRIM {
 struct OptimizerState;
 struct FeedForwardParameterTensors;
+struct Tensor;
 namespace Config {
 struct AiConfigSnapshot;
 }
 namespace HyperParameters {
+struct EmbeddingLayerConstructionHP;
 struct EncoderLayerConstructionHP;
+struct LMHeadLayerConstructionHP;
 }
 }
 
@@ -47,6 +50,20 @@ void initializeFeedForwardParameterTensors(
     const GRIM::HyperParameters::EncoderLayerConstructionHP& encoder_hp,
     std::uint64_t weight_init_seed,
     cudaStream_t init_stream);
+
+void initializeEmbeddingParameterTensors(
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const GRIM::HyperParameters::EmbeddingLayerConstructionHP& embedding_hp,
+    std::uint64_t weight_init_seed,
+    cudaStream_t init_stream,
+    bool requires_grad);
+
+void initializeLmHeadParameterTensors(
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const GRIM::HyperParameters::LMHeadLayerConstructionHP& lm_head_hp,
+    std::uint64_t weight_init_seed,
+    cudaStream_t init_stream,
+    GRIM::Tensor* tied_embedding_weights);
 
 void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,
                           GRIMText::Training::Startup::GpuModelState& gpu_model_state,

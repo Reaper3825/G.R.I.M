@@ -20,8 +20,6 @@ void populateCommonContext(
     Forward::ModelForwardOutputs& forward_outputs,
     AutogradLossState& loss_state,
     GPUGrimEncoder* gpu_encoder,
-    EmbeddingLayer* embedding_layer,
-    LMHeadLayer* lm_head,
     ScratchBlockLayer* scratch_block,
     ExecutionBlockLayer* execution_block,
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
@@ -34,8 +32,6 @@ void populateCommonContext(
     ctx.forward_outputs = &forward_outputs;
     ctx.loss_state = &loss_state;
     ctx.gpu_encoder = gpu_encoder;
-    ctx.embedding_layer = embedding_layer;
-    ctx.lm_head = lm_head;
     ctx.scratch_block = scratch_block;
     ctx.execution_block = execution_block;
     ctx.parameter_registry = &parameter_registry;
@@ -76,8 +72,6 @@ AutogradContext initAutogradContext(
     Forward::ModelForwardOutputs& forward_outputs,
     AutogradLossState& loss_state,
     GPUGrimEncoder* gpu_encoder,
-    EmbeddingLayer* embedding_layer,
-    LMHeadLayer* lm_head,
     ScratchBlockLayer* scratch_block,
     ExecutionBlockLayer* execution_block,
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
@@ -92,7 +86,7 @@ AutogradContext initAutogradContext(
     AutogradContext ctx;
     populateCommonContext(
         ctx, config, training_state, forward_outputs, loss_state,
-        gpu_encoder, embedding_layer, lm_head,
+        gpu_encoder,
         scratch_block, execution_block, parameter_registry, cublas_handle, stream,
         batch_idx);
 

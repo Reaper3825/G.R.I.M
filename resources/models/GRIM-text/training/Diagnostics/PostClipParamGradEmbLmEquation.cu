@@ -11,7 +11,6 @@
 #include "PostClipParamGradEmbLmEquation.hpp"
 
 #include "../Phases/Phase2_TrainingLoop.hpp"
-#include "../../Layers/Embedding/Embedding_GPU.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../../Shared/LogRecorder/LogTypes.hpp"
@@ -70,7 +69,7 @@ void cudaCheck(cudaError_t err, const char* where) {
 }
 
 PostClipParamGradEmbLmEquationDiag computePostClipParamGradEmbLmEquation(
-    const GRIM::EmbeddingLayer& embedding_layer,
+    const GRIM::Tensor& embedding_token_weights,
     const GRIM::Tensor& lm_head_weights,
     const GRIM::Batching::BatchPayload& payload,
     int d_model,
@@ -113,7 +112,7 @@ PostClipParamGradEmbLmEquationDiag computePostClipParamGradEmbLmEquation(
             "] stream is NULL — caller MUST provide the active training stream");
     }
 
-    const float* embedding_grad_ptr = embedding_layer.tokenWeights().grad_data();
+    const float* embedding_grad_ptr = embedding_token_weights.grad_data();
     if (!embedding_grad_ptr) {
         throw std::runtime_error(
             std::string("[") + kPostClipParamGradEmbLmEquationOp +
@@ -336,7 +335,6 @@ void runPostClipParamGradEmbLmEquation(
     GRIMText::Training::TrainingContext& ctx,
     GRIMText::Training::TrainingLoopState& state,
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    const GRIM::EmbeddingLayer& embedding_layer,
     const GRIM::Batching::BatchPayload& payload,
     float emb_rms_pre,
     int batch_idx,
@@ -352,11 +350,13 @@ void runPostClipParamGradEmbLmEquation(
     const float prev_emb_rms = state.diagnostics.has_prev_emb_rms
         ? state.diagnostics.prev_emb_rms
         : emb_rms_pre;
+    const GRIM::Tensor& embedding_token_weights =
+        parameter_registry.requireEmbeddingParameters("runPostClipParamGradEmbLmEquation").token_weights;
     const GRIM::Tensor& lm_head_weights =
         parameter_registry.requireLmHeadParameters("runPostClipParamGradEmbLmEquation").weights;
 
     const PostClipParamGradEmbLmEquationDiag diag = computePostClipParamGradEmbLmEquation(
-        embedding_layer,
+        embedding_token_weights,
         lm_head_weights,
         payload,
         GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "d_model"),

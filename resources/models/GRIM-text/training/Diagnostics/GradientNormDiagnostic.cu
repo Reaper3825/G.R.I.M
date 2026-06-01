@@ -207,7 +207,6 @@ void runGradientNormClipDiagnostic(
     const float enc_rms_pre = computeEncoderTelemetryRms(gm, batch_idx);
     const float sb_rms_pre = computeScratchBlockTelemetryRms(gm);
     const auto& groups = ctx.parameter_registry.requireParameterGroups("runGradientNormClipDiagnostic");
-    auto& embedding_layer = ctx.gpu_model.requireEmbeddingLayer("runGradientNormClipDiagnostic");
 
     ctx.logging.logger->log("[GradTrace] POST-CLIP-MEASURE preclip_registered_global=" +
                             formatScalar(preclip_grad_rms, 6) +
@@ -222,7 +221,6 @@ void runGradientNormClipDiagnostic(
         ctx,
         state,
         ctx.parameter_registry,
-        embedding_layer,
         payload,
         emb_rms_pre,
         batch_idx,

@@ -269,20 +269,17 @@ void registerTopLevelParameters(Startup::GpuModelState& gpu_model_state,
                                 ParameterRegistry::StartupParameterRegistry& parameter_registry,
                                 Registrar& registrar,
                                 const GRIM::Config::AiConfigSnapshot& config) {
-    auto& embedding = gpu_model_state.requireEmbeddingLayer("registerTopLevelParameters");
-    gpu_model_state.requireLmHeadLayer("registerTopLevelParameters");
+    (void)gpu_model_state;
+    auto& embedding_parameters = parameter_registry.requireEmbeddingParameters("registerTopLevelParameters");
     auto& lm_head_parameters = parameter_registry.requireLmHeadParameters("registerTopLevelParameters");
-    validateEmbeddingLmHeadAliasing(embedding.tokenWeights(), lm_head_parameters.weights, config);
+    validateEmbeddingLmHeadAliasing(embedding_parameters.token_weights, lm_head_parameters.weights, config);
 
     const bool tie_embeddings = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "tie_embeddings");
     const bool use_bias = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "use_bias");
     const bool freeze_learned_rms_gammas = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "freeze_learned_rms_gammas");
 
     if (!tie_embeddings) {
-        registrar.addTensor("embedding",
-                            embedding.tokenWeights(),
-                            ParamGroupType::EMBEDDING,
-                            ParamStatsBucket::EMBEDDING);
+        ParameterRegistry::registerEmbeddingParameters(embedding_parameters, registrar);
 
         registrar.addTensor("lm_head_weight",
                             lm_head_parameters.weights,
@@ -759,6 +756,138 @@ void initializeFeedForwardParameterTensors(
 
     emitInfo("[initializeFeedForwardParameterTensors] Initialized registry-owned FFN tensors for " +
              std::to_string(encoder_hp.num_layers) + " layers");
+}
+
+void initializeEmbeddingParameterTensors(
+    ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const GRIM::HyperParameters::EmbeddingLayerConstructionHP& embedding_hp,
+    std::uint64_t weight_init_seed,
+    cudaStream_t init_stream,
+    bool requires_grad) {
+    if (!init_stream) {
+        throw std::runtime_error("initializeEmbeddingParameterTensors: init_stream is NULL");
+    }
+    if (embedding_hp.vocab_size <= 0) {
+        throw std::runtime_error("initializeEmbeddingParameterTensors: vocab_size must be positive, got " +
+                                 std::to_string(embedding_hp.vocab_size));
+    }
+    if (embedding_hp.d_model <= 0) {
+        throw std::runtime_error("initializeEmbeddingParameterTensors: d_model must be positive, got " +
+                                 std::to_string(embedding_hp.d_model));
+    }
+    if (parameter_registry.getEmbeddingParameters()) {
+        throw std::runtime_error("initializeEmbeddingParameterTensors: registry embedding tensor owner is already initialized");
+    }
+
+    parameter_registry.embedding_parameters = std::make_unique<GRIM::EmbeddingParameterTensors>();
+    auto& embedding_parameters = *parameter_registry.embedding_parameters;
+    embedding_parameters.token_weights = Tensor::zeros(
+        {embedding_hp.vocab_size, embedding_hp.d_model},
+        init_stream,
+        "embedding.token_weights");
+    if (requires_grad) {
+        embedding_parameters.token_weights.requires_grad_();
+        embedding_parameters.token_weights.ensure_grad();
+    }
+    Tensor::xavier_uniform_(embedding_parameters.token_weights, weight_init_seed, init_stream);
+
+    emitInfo("[initializeEmbeddingParameterTensors] Initialized registry-owned embedding tensor [" +
+             std::to_string(embedding_hp.vocab_size) + ", " +
+             std::to_string(embedding_hp.d_model) + "]");
+}
+
+void initializeLmHeadParameterTensors(
+    ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const GRIM::HyperParameters::LMHeadLayerConstructionHP& lm_head_hp,
+    std::uint64_t weight_init_seed,
+    cudaStream_t init_stream,
+    GRIM::Tensor* tied_embedding_weights) {
+    if (!init_stream) {
+        throw std::runtime_error("initializeLmHeadParameterTensors: init_stream is NULL");
+    }
+    if (lm_head_hp.d_model <= 0) {
+        throw std::runtime_error("initializeLmHeadParameterTensors: d_model must be positive, got " +
+                                 std::to_string(lm_head_hp.d_model));
+    }
+    if (lm_head_hp.vocab_size <= 0) {
+        throw std::runtime_error("initializeLmHeadParameterTensors: vocab_size must be positive, got " +
+                                 std::to_string(lm_head_hp.vocab_size));
+    }
+    if (parameter_registry.getLmHeadParameters()) {
+        throw std::runtime_error("initializeLmHeadParameterTensors: registry LM-head tensor owner is already initialized");
+    }
+    if (lm_head_hp.tie_embeddings != (tied_embedding_weights != nullptr)) {
+        throw std::runtime_error(
+            "initializeLmHeadParameterTensors: tie_embeddings grouping/runtime ownership mismatch. tie_embeddings=" +
+            std::string(lm_head_hp.tie_embeddings ? "true" : "false") +
+            " tied_embedding_weights=" +
+            std::string(tied_embedding_weights ? "non-null" : "NULL"));
+    }
+
+    parameter_registry.lm_head_parameters = std::make_unique<GRIM::LMHeadParameterTensors>();
+    auto& parameter_tensors = *parameter_registry.lm_head_parameters;
+    parameter_tensors.weights = Tensor();
+    parameter_tensors.bias = Tensor();
+    parameter_tensors.final_rms_gamma = Tensor();
+    parameter_tensors.owns_weights = !tied_embedding_weights;
+
+    if (tied_embedding_weights) {
+        if (!tied_embedding_weights->data) {
+            throw std::runtime_error(
+                "initializeLmHeadParameterTensors: tied embedding weights are NULL — embedding MUST be initialized before LM head");
+        }
+        if (!tied_embedding_weights->shape.is_2d_layout()) {
+            throw std::runtime_error(
+                "initializeLmHeadParameterTensors: tied embedding weights must be 2D [vocab_size,d_model]");
+        }
+        const auto& embedding_shape = tied_embedding_weights->shape.as_2d();
+        if (embedding_shape.rows != lm_head_hp.vocab_size || embedding_shape.cols != lm_head_hp.d_model) {
+            throw std::runtime_error(
+                "initializeLmHeadParameterTensors: tied embedding shape mismatch. Expected [" +
+                std::to_string(lm_head_hp.vocab_size) + "," + std::to_string(lm_head_hp.d_model) +
+                "], got [" + std::to_string(embedding_shape.rows) + "," +
+                std::to_string(embedding_shape.cols) + "]");
+        }
+
+        parameter_tensors.weights = Tensor::from_ptr(
+            tied_embedding_weights->data,
+            tied_embedding_weights->shape,
+            false,
+            true,
+            "lm_head.weights_tied");
+        parameter_tensors.weights.share_grad(*tied_embedding_weights);
+        parameter_tensors.weights.owns_data = false;
+        parameter_tensors.weights.requires_grad = true;
+    } else {
+        parameter_tensors.weights = Tensor::zeros(
+            {lm_head_hp.vocab_size, lm_head_hp.d_model},
+            init_stream,
+            "lm_head.weights");
+        parameter_tensors.weights.requires_grad_();
+        parameter_tensors.weights.ensure_grad();
+        Tensor::xavier_uniform_(parameter_tensors.weights, weight_init_seed, init_stream);
+    }
+
+    if (lm_head_hp.use_bias) {
+        parameter_tensors.bias = Tensor::zeros({lm_head_hp.vocab_size}, init_stream, "lm_head.bias");
+        parameter_tensors.bias.requires_grad_();
+        parameter_tensors.bias.ensure_grad();
+    }
+
+    parameter_tensors.final_rms_gamma = Tensor::zeros({lm_head_hp.d_model}, init_stream, "final_rms_gamma");
+    if (!lm_head_hp.freeze_learned_rms_gammas) {
+        parameter_tensors.final_rms_gamma.requires_grad_();
+        parameter_tensors.final_rms_gamma.ensure_grad();
+    }
+
+    std::vector<float> ones(static_cast<std::size_t>(lm_head_hp.d_model), 1.0f);
+    cudaMemcpyAsync(parameter_tensors.final_rms_gamma.data,
+                    ones.data(),
+                    static_cast<std::size_t>(lm_head_hp.d_model) * sizeof(float),
+                    cudaMemcpyHostToDevice,
+                    init_stream);
+
+    emitInfo("[initializeLmHeadParameterTensors] Initialized registry-owned LM-head tensors");
 }
 
 void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,

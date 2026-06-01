@@ -296,7 +296,8 @@ GradientSignalBaselines captureGradientVerificationBaselines(
     };
 
     if (activity.text_loss_active) {
-        captureExpected(ctx.lm_head->weights(), "lm_head weights");
+        auto& lm_head_parameters = ctx.parameter_registry->requireLmHeadParameters("captureGradientSignalBaselines");
+        captureExpected(lm_head_parameters.weights, "lm_head weights");
         if (ctx.gpu_encoder && model_hp.encoder_num_layers > 0) {
             auto* enc0 = ctx.gpu_encoder->getLayer(0);
             if (enc0) {
@@ -588,10 +589,18 @@ BackwardResult executeAutogradBackward(
     // ════════════════════════════════════════════════════════════════════
     {
         cudaStreamSynchronize(ctx.stream);
+        auto& embedding_parameters = ctx.parameter_registry->requireEmbeddingParameters("executeAutogradBackward");
+        auto& lm_head_parameters = ctx.parameter_registry->requireLmHeadParameters("executeAutogradBackward");
+
+        float emb_sample = 0.0f;
+        float* emb_grads = embedding_parameters.token_weights.grad_data();
+        if (emb_grads) {
+            cudaMemcpy(&emb_sample, emb_grads, sizeof(float), cudaMemcpyDeviceToHost);
+        }
 
         // Sample LM head weight gradient (first element)
         float lm_sample = 0.0f;
-        float* lm_grads = ctx.lm_head->weights().grad_data();
+        float* lm_grads = lm_head_parameters.weights.grad_data();
         if (lm_grads) {
             cudaMemcpy(&lm_sample, lm_grads, sizeof(float), cudaMemcpyDeviceToHost);
         }
@@ -622,10 +631,10 @@ BackwardResult executeAutogradBackward(
 
         fprintf(stderr,
             "[GRAD_DIAG] POST-BACKWARD accumulate=%d "
-            "lm_grad[0]=%.10e enc_wqkv_grad[0]=%.10e enc0_rms1_gamma_grad[0]=%.10e "
+            "emb_grad[0]=%.10e lm_grad[0]=%.10e enc_wqkv_grad[0]=%.10e enc0_rms1_gamma_grad[0]=%.10e "
             "lm_ptr=%p\n",
             static_cast<int>(accumulate),
-            lm_sample, enc_sample, rms_sample,
+            emb_sample, lm_sample, enc_sample, rms_sample,
             static_cast<void*>(lm_grads));
     }
 
@@ -737,33 +746,35 @@ bool verifyGradientsAreConnectedImpl(
     // It does NOT copy — gradients are already wired up during initialization.
     // This is a diagnostic check to catch pointer setup bugs before optimizer runs.
     
+    auto& embedding_parameters = ctx.parameter_registry->requireEmbeddingParameters("verifyGradientsAreConnectedImpl");
+
     // ═══════════════════════════════════════════════════════════════════════════
-    // Embedding gradients (may be tied with LM head) — Pattern B: owned by EmbeddingLayer
+    // Embedding gradients (may be tied with LM head) — owned by StartupParameterRegistry
     // ═══════════════════════════════════════════════════════════════════════════
-    // ISSUE #59: Use has_grad() accessor
-    if (ctx.embedding_layer->tokenWeights().data) {
-        requireAllocatedFinite(ctx.embedding_layer->tokenWeights(), "embedding token_weights");
+    if (embedding_parameters.token_weights.data) {
+        requireAllocatedFinite(embedding_parameters.token_weights, "embedding token_weights");
     }
     
     // ═══════════════════════════════════════════════════════════════════════════
     // LM head gradients (Pattern B: owned by persistent LMHeadLayer)
     // May be tied to embedding (same underlying grad Tensor)
     // ═══════════════════════════════════════════════════════════════════════════
-    if (ctx.lm_head->weights().data) {
-        if (!ctx.lm_head->weights().has_grad()) {
+    auto& lm_head_parameters = ctx.parameter_registry->requireLmHeadParameters("verifyGradientsAreConnectedImpl");
+    if (lm_head_parameters.weights.data) {
+        if (!lm_head_parameters.weights.has_grad()) {
             AG_WARN("lm_head weights.grad is NULL - gradients NOT flowing to optimizer!");
             ok = false;
         } else {
             // Check if tied to embedding (same underlying grad Tensor)
-            if (ctx.lm_head->weights().grad_data() == ctx.embedding_layer->tokenWeights().grad_data()) {
-                AG_INFO("LM head gradients TIED to embedding: " << ctx.lm_head->weights().numel() << " elements");
+            if (lm_head_parameters.weights.grad_data() == embedding_parameters.token_weights.grad_data()) {
+                AG_INFO("LM head gradients TIED to embedding: " << lm_head_parameters.weights.numel() << " elements");
             } else {
-                AG_INFO("LM head gradients SEPARATE: " << ctx.lm_head->weights().numel() << " elements at " << ctx.lm_head->weights().grad_data());
+                AG_INFO("LM head gradients SEPARATE: " << lm_head_parameters.weights.numel() << " elements at " << lm_head_parameters.weights.grad_data());
             }
             if (activity.text_loss_active) {
-                requireReceivedGradient(ctx.lm_head->weights(), "lm_head weights");
+                requireReceivedGradient(lm_head_parameters.weights, "lm_head weights");
             } else {
-                requireAllocatedFinite(ctx.lm_head->weights(), "lm_head weights");
+                requireAllocatedFinite(lm_head_parameters.weights, "lm_head weights");
             }
         }
     }
@@ -783,21 +794,21 @@ bool verifyGradientsAreConnectedImpl(
     // When freeze_learned_rms_gammas=true, final_rms_gamma requires_grad=false and
     // we skip the check (no grad is correct, not a bug).
     // ═══════════════════════════════════════════════════════════════════════════
-    if (ctx.lm_head->finalRmsGamma().data
-        && ctx.lm_head->finalRmsGamma().requires_grad
-        && !ctx.lm_head->finalRmsGamma().has_grad()) {
+    if (lm_head_parameters.final_rms_gamma.data
+        && lm_head_parameters.final_rms_gamma.requires_grad
+        && !lm_head_parameters.final_rms_gamma.has_grad()) {
         AG_WARN("final_rms_gamma.grad is NULL - gradients NOT flowing!");
         ok = false;
-    } else if (ctx.lm_head->finalRmsGamma().data && ctx.lm_head->finalRmsGamma().requires_grad) {
-        requireAllocatedFinite(ctx.lm_head->finalRmsGammaMutable_UnfrozenOnly("verifyGradientsAreConnected"),
+    } else if (lm_head_parameters.final_rms_gamma.data && lm_head_parameters.final_rms_gamma.requires_grad) {
+        requireAllocatedFinite(lm_head_parameters.final_rms_gamma,
                                "final_rms_gamma");
     }
 
-    if (ctx.lm_head->bias().data && !ctx.lm_head->bias().has_grad()) {
+    if (lm_head_parameters.bias.data && !lm_head_parameters.bias.has_grad()) {
         AG_WARN("lm_head_bias.grad is NULL - gradients NOT flowing!");
         ok = false;
-    } else if (ctx.lm_head->bias().data) {
-        requireAllocatedFinite(ctx.lm_head->bias(), "lm_head_bias");
+    } else if (lm_head_parameters.bias.data) {
+        requireAllocatedFinite(lm_head_parameters.bias, "lm_head_bias");
     }
 
     if (ctx.gpu_encoder) {

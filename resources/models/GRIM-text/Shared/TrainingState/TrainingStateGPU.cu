@@ -3,7 +3,6 @@
 //  TrainingState implementation details
 //======================================================//
 
-#include "../../Layers/Embedding/Embedding_GPU.hpp"
 #include "TrainingState_GPU.hpp"
 #include "../../training/Autograd/AutogradTraining.hpp"  
 
@@ -18,8 +17,8 @@ namespace GRIM {
 
 //======================================================//
 //  Weight tensor accessors
-//  Session 6: Embedding accessors DELETED — weights now owned by EmbeddingLayer (Pattern B).
-//  Access via LanguageModel::getEmbeddingLayer()->tokenWeights().
+//  Session 6: Embedding accessors DELETED — weights now owned by StartupParameterRegistry.
+//  Access via TrainingContext::parameter_registry.getEmbeddingParameters()->token_weights.
 //======================================================//
 
 TrainingState::TrainingState() = default;

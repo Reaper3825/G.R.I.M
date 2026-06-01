@@ -6,6 +6,7 @@
 //  inventory slices.
 //
 //  Current migrated surface:
+//    - Embedding durable tensor owner
 //    - LM head durable tensor owner
 //    - DecodeTimeSlotSelector durable tensor owner
 //    - DecodeTimeSlotSelector parameter-group inventory
@@ -31,6 +32,10 @@
 #include "../../../../Shared/TensorContract/TensorContract_GPU.hpp"
 
 namespace GRIM {
+
+struct EmbeddingParameterTensors {
+    Tensor token_weights;  // [vocab_size, d_model]
+};
 
 struct DecodeTimeSlotSelector {
     // Required baseline trainable tensors
@@ -90,6 +95,7 @@ struct FeedForwardParameterTensors {
 namespace ParameterRegistry {
 
 struct StartupParameterRegistry {
+    std::unique_ptr<GRIM::EmbeddingParameterTensors> embedding_parameters;
     std::unique_ptr<GRIM::LMHeadParameterTensors> lm_head_parameters;
     std::unique_ptr<GRIM::DecodeTimeSlotSelector> decode_time_slot_selector;
     std::unique_ptr<GRIM::ExecutionBlockParameterTensors> execution_block_parameters;
@@ -100,6 +106,28 @@ struct StartupParameterRegistry {
     // this registry and startup-owned layer topology. Do not mirror this
     // vector on LanguageModel or TrainingContext.
     std::vector<GRIM::ParameterGroup> parameter_groups;
+
+    GRIM::EmbeddingParameterTensors* getEmbeddingParameters() {
+        return embedding_parameters.get();
+    }
+
+    const GRIM::EmbeddingParameterTensors* getEmbeddingParameters() const {
+        return embedding_parameters.get();
+    }
+
+    GRIM::EmbeddingParameterTensors& requireEmbeddingParameters(const char* caller) {
+        if (!embedding_parameters) {
+            throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.embedding_parameters is NULL");
+        }
+        return *embedding_parameters;
+    }
+
+    const GRIM::EmbeddingParameterTensors& requireEmbeddingParameters(const char* caller) const {
+        if (!embedding_parameters) {
+            throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.embedding_parameters is NULL");
+        }
+        return *embedding_parameters;
+    }
 
     GRIM::LMHeadParameterTensors* getLmHeadParameters() {
         return lm_head_parameters.get();
@@ -217,6 +245,15 @@ using FeedForwardTensorParameterSpec =
 using MtpHeadTensorParameterSpec =
     TensorParameterSpec<GRIM::MtpHeadParameterTensors>;
 
+using EmbeddingTensorParameterSpec =
+    TensorParameterSpec<GRIM::EmbeddingParameterTensors>;
+
+inline constexpr std::array<EmbeddingTensorParameterSpec, 1>
+    kEmbeddingTensorParameters = {{
+        {"embedding", &GRIM::EmbeddingParameterTensors::token_weights,
+         GRIM::ParamGroupType::EMBEDDING, GRIM::ParamStatsBucket::EMBEDDING},
+    }};
+
 inline constexpr std::array<DecodeTimeSlotSelectorTensorParameterSpec, 4>
     kDecodeTimeSlotSelectorTensorParameters = {{
         {"selector_W_q_select", &GRIM::DecodeTimeSlotSelector::W_q_select,
@@ -312,6 +349,19 @@ inline constexpr std::array<FeedForwardTensorParameterSpec, 4>
         {"ffn_b2", &GRIM::FeedForwardParameterTensors::b2,
          GRIM::ParamGroupType::FFN, GRIM::ParamStatsBucket::ENCODER},
     }};
+
+template <typename RegistrarT>
+inline void registerEmbeddingParameters(
+    GRIM::EmbeddingParameterTensors& embedding_parameters,
+    RegistrarT& registrar) {
+    for (const auto& spec : kEmbeddingTensorParameters) {
+        registrar.addTensor(spec.name,
+                            embedding_parameters.*(spec.tensor_member),
+                            spec.type,
+                            spec.stats_bucket,
+                            spec.layer);
+    }
+}
 
 template <typename RegistrarT>
 inline void registerDecodeTimeSlotSelectorParameters(

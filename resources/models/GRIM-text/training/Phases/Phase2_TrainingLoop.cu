@@ -615,8 +615,6 @@ GRIM::Forward::ModelForwardRequest buildTrainingForwardRequest(
     request.pbm = &pbm;
     request.cublas_handle = training_state.cublas_handle.get();
     request.stream = stream;
-    request.embedding_layer = forward_topology.embedding_layer;
-    request.lm_head = forward_topology.lm_head_layer;
     request.scratch_block = forward_topology.scratch_block;
     request.execution_block = forward_topology.execution_block_layer;
     request.payload = &payload;
@@ -865,8 +863,6 @@ BatchResult processBatch(
         forward_outputs,
         autograd_loss_state,
         forward_topology.gpu_encoder,
-        forward_topology.embedding_layer,
-        forward_topology.lm_head_layer,
         forward_topology.scratch_block,
         forward_topology.execution_block_layer,
         ctx.parameter_registry,

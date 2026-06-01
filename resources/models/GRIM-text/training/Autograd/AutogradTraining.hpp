@@ -96,11 +96,7 @@ struct AutogradContext {
     cudaStream_t stream = nullptr;
     
     // ═══════════════════════════════════════════════════════════════════════════
-    // REQUIRED COMPONENTS (Pattern B: persistent, self-allocating layers)
-    // ═══════════════════════════════════════════════════════════════════════════
-    EmbeddingLayer* embedding_layer = nullptr;
-    LMHeadLayer* lm_head = nullptr;
-
+    // REQUIRED COMPONENTS (startup-owned durable topology + registry-owned params)
     // ═══════════════════════════════════════════════════════════════════════════
     // OPTIONAL COMPONENTS (nullptr if disabled)
     // ═══════════════════════════════════════════════════════════════════════════
@@ -151,8 +147,8 @@ struct AutogradContext {
         if (!forward_outputs) throw std::runtime_error(std::string(caller) + ": forward_outputs is NULL");
         if (!loss_state) throw std::runtime_error(std::string(caller) + ": loss_state is NULL");
         if (!gpu_encoder) throw std::runtime_error(std::string(caller) + ": gpu_encoder is NULL");
-        if (!embedding_layer) throw std::runtime_error(std::string(caller) + ": embedding_layer is NULL");
-        if (!lm_head) throw std::runtime_error(std::string(caller) + ": lm_head is NULL");
+        if (!parameter_registry) throw std::runtime_error(std::string(caller) + ": parameter_registry is NULL");
+        (void)parameter_registry->requireEmbeddingParameters(caller);
         if (!cublas_handle) throw std::runtime_error(std::string(caller) + ": cublas_handle is NULL");
         if (!payload) throw std::runtime_error(std::string(caller) + ": payload is NULL");
         if (!device_bindings) throw std::runtime_error(std::string(caller) + ": device_bindings is NULL");
@@ -180,8 +176,6 @@ AutogradContext initAutogradContext(
     Forward::ModelForwardOutputs& forward_outputs,
     AutogradLossState& loss_state,
     GPUGrimEncoder* gpu_encoder,
-    EmbeddingLayer* embedding_layer,
-    LMHeadLayer* lm_head,
     ScratchBlockLayer* scratch_block,
     ExecutionBlockLayer* execution_block,
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,

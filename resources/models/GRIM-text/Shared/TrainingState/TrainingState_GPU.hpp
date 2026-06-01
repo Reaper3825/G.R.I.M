@@ -28,11 +28,6 @@
 #include "../Forward/ModelForwardExecutionRuntime.hpp"
 #include "../TensorContract/TensorContract_GPU.hpp"
 
-// Forward declaration for autograd tensor system
-namespace GRIM {
-    class EmbeddingLayer;
-}
-
 namespace GRIM {
 
 struct TrainingState {
@@ -51,8 +46,8 @@ struct TrainingState {
     //======================================================//
     // Rule 20: NO raw float* for gradients - use GRIM::Tensor with autograd
     //
-    // ALL weight tensors are owned by Pattern B layers (self-managing):
-    //   - Embedding: LanguageModel::getEmbeddingLayer()->tokenWeights()
+    // ALL weight tensors are owned by startup-registry or layer boundaries:
+    //   - Embedding: TrainingContext::parameter_registry.getEmbeddingParameters()->token_weights
     //   - LM Head: TrainingContext::parameter_registry.getLmHeadParameters()->weights / bias / final_rms_gamma
     //   - Encoder: Each EncodingLayer self-allocates in constructor
     //   - ScratchBlock: ScratchBlockLayer self-allocates in constructor
