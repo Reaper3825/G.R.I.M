@@ -72,8 +72,6 @@ void executionBlockStep(
     Tensor& H,
     ExecutionMemory& M,
     ExecutionBlockParameterTensors& parameters,
-    const int* atom_positions,
-    int num_atoms,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
     int batch_row,
@@ -89,11 +87,11 @@ void executionBlockStep(
     // validateExecutionPayload(). Only the local call-boundary contract that
     // BatchPayload does not own is checked here.
     EXEC_CHECK_SHAPE2(H, "H (executeStep)", payload.total_tokens, hp.d_model);
-    EXEC_CHECK(atom_positions != nullptr,
-               "executeStep: atom_positions is null - caller MUST provide a row-local atom view");
-    EXEC_CHECK(num_atoms >= 0, "executeStep: num_atoms must be non-negative");
     EXEC_CHECK(bindings.d_token_to_slot_map != nullptr,
                "executeStep: bindings.d_token_to_slot_map is null");
+    EXEC_CHECK(bindings.d_atom_mask != nullptr,
+               "executeStep: bindings.d_atom_mask is null - execution sources atom "
+               "positions directly from the global atom mask");
     EXEC_CHECK(step >= 0 && step < hp.num_exec_steps, "executeStep: step out of range");
     EXEC_CHECK(batch_row >= 0 && batch_row < payload.batch_size,
                "executeStep: batch_row out of range for payload.batch_size");
@@ -103,8 +101,6 @@ void executionBlockStep(
         parameters,
         H,
         M,
-        atom_positions,
-        num_atoms,
         payload,
         bindings,
         batch_row,

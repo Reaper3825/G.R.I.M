@@ -31,7 +31,6 @@ inline constexpr int kStageEntropyArg2 = 22;
 inline constexpr int kStageEntropyOp = 23;
 inline constexpr int kStageWriteCollapse = 24;
 inline constexpr int kStageWriteSlotInvalid = 25;
-inline constexpr int kStageAtomPosInvalid = 30;
 
 inline constexpr int kStageSlotMissing = 31;
 inline constexpr int kStageSlotInvalid = 32;
@@ -55,7 +54,6 @@ inline const char* stageIdToName(int id) {
 		case kStageEntropyOp: return "entropy collapse (p_op)";
 		case kStageWriteCollapse: return "write collapse (max p_write)";
 		case kStageWriteSlotInvalid: return "write slot not in value range [S,V)";
-		case kStageAtomPosInvalid: return "row-local atom position out of range";
 		case kStageSlotMissing: return "missing slot mapping for required state-bearing token";
 		case kStageSlotInvalid: return "invalid slot index";
 		case kStageSlotUninit: return "slot read before initialization";

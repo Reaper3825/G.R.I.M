@@ -97,6 +97,12 @@ struct BatchPayload {
     std::vector<uint32_t> atom_flags;         // [total_tokens] padded with 0 (type-specific metadata from AtomTable)
     std::vector<int32_t> token_to_slot_map;   // [total_tokens] padded with -1 (slot_id for execution; -1 = non-state-bearing)
 
+    // Compact authored atom facts. These are materialized ONCE behind the
+    // payload boundary and uploaded as-is for ScratchBlock consumption.
+    // They are semantic data, not forward-time workspace.
+    std::vector<int> atom_positions;          // [num_atoms] flat token indices into input_ids/numeric_values/atom_flags
+    std::vector<int> atom_types;              // [num_atoms] Tokenizer::AtomType enum values aligned with atom_positions
+
     // NOTE: Device pointers used to live here as `mutable d_token_to_slot_map`
     // and `mutable d_atom_mask`, written by the upload path and read by the
     // forward/loss path. They have moved to `GRIM::Batching::BatchDeviceBindings`
@@ -346,6 +352,41 @@ struct BatchPayload {
                 std::to_string(token_to_slot_map.size()) + " != total_tokens=" +
                 std::to_string(total_tokens));
         }
+        if (static_cast<int>(atom_positions.size()) != static_cast<int>(atom_types.size())) {
+            throw std::runtime_error(
+                std::string(caller) + ": BatchPayload.atom_positions.size()=" +
+                std::to_string(atom_positions.size()) + " != atom_types.size()=" +
+                std::to_string(atom_types.size()));
+        }
+        if (ownsHostInputData()) {
+            int atom_mask_count = 0;
+            for (int idx = 0; idx < total_tokens; ++idx) {
+                if (atom_mask[static_cast<std::size_t>(idx)] != 0) {
+                    ++atom_mask_count;
+                }
+            }
+            if (atom_mask_count != static_cast<int>(atom_positions.size())) {
+                throw std::runtime_error(
+                    std::string(caller) + ": BatchPayload.atom_positions.size()=" +
+                    std::to_string(atom_positions.size()) +
+                    " != atom_mask population=" + std::to_string(atom_mask_count));
+            }
+            for (std::size_t atom_idx = 0; atom_idx < atom_positions.size(); ++atom_idx) {
+                const int token_pos = atom_positions[atom_idx];
+                if (token_pos < 0 || token_pos >= total_tokens) {
+                    throw std::runtime_error(
+                        std::string(caller) + ": BatchPayload.atom_positions[" +
+                        std::to_string(atom_idx) + "]=" + std::to_string(token_pos) +
+                        " out of range [0, " + std::to_string(total_tokens) + ")");
+                }
+                if (atom_mask[static_cast<std::size_t>(token_pos)] == 0) {
+                    throw std::runtime_error(
+                        std::string(caller) + ": BatchPayload.atom_positions[" +
+                        std::to_string(atom_idx) + "] points at non-atom token position " +
+                        std::to_string(token_pos));
+                }
+            }
+        }
         // Teacher steps validation (when populated for arithmetic batches)
         if (!teacher_steps.empty()) {
             if (static_cast<int>(teacher_steps.size()) != batch_size) {
@@ -433,9 +474,13 @@ struct BatchPayload {
     size_t atomMaskBytes()     const { return static_cast<size_t>(total_tokens) * sizeof(uint8_t); }
     size_t atomFlagBytes()     const { return static_cast<size_t>(total_tokens) * sizeof(uint32_t); }
     size_t slotMapBytes()      const { return static_cast<size_t>(total_tokens) * sizeof(int32_t); }
+    size_t atomPositionBytes() const { return atom_positions.size() * sizeof(int); }
+    size_t atomTypeBytes()     const { return atom_types.size() * sizeof(int); }
+    int authoredAtomCount() const { return static_cast<int>(atom_positions.size()); }
     size_t totalTransferBytes() const {
         return inputIdBytes() + targetIdBytes() + numericValueBytes() +
-               atomMaskBytes() + atomFlagBytes() + slotMapBytes();
+               atomMaskBytes() + atomFlagBytes() + slotMapBytes() +
+               atomPositionBytes() + atomTypeBytes();
     }
 };
 

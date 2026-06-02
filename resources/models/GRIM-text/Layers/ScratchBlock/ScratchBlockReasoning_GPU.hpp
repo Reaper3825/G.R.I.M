@@ -3,8 +3,10 @@
 //  Internal Reasoning Layer for GRIM-text
 //
 //  Proper autograd node: forward returns Tensor with
-//  ScratchBlockGradFn attached. GradFn owns all caches
-//  internally. No external cache buffers, no gradient tap.
+//  ScratchBlockGradFn attached. GradFn owns all tape-local
+//  caches internally. Semantic atom data is authored on the
+//  prepared BatchPayload/BatchDeviceBindings boundary, not on
+//  ScratchBlockLayer.
 //
 //  Forward:  output = input + scale * project(atom_emb)
 //  Backward: grad_input = grad_output (additive identity)
@@ -60,7 +62,7 @@ struct ScratchBlockGradFn : public GradFn {
     int max_atoms        = 0;
     float atom_scale     = 0.1f;
 
-    //--- References to layer weights (NOT owned — layer outlives GradFn) ---
+    //--- References to registry-owned trainable tensors (NOT owned — registry outlives GradFn) ---
     float* atom_projection_data         = nullptr;  // [atom_embedding_dim, d_model]
     float* atom_projection_grad         = nullptr;
     float* atom_type_embeddings_grad    = nullptr;  // [NUM_ATOM_TYPES, atom_embedding_dim]
@@ -86,7 +88,7 @@ struct ScratchBlockGradFn : public GradFn {
         const float* atom_embeddings, int num_atoms,
         int total_tokens, cudaStream_t stream);
 
-    /// Capture references to layer weight gradient buffers
+    /// Capture references to registry-owned parameter gradient buffers
     void capture_weights(Tensor& atom_proj, Tensor& atom_type_emb);
 
     void apply_impl(const Tensor& grad_output, cudaStream_t stream) override;
@@ -101,12 +103,6 @@ class ScratchBlockLayer final : public Layer<ScratchBlockLayer, float> {
 public:
     static constexpr LayerType layer_type = LayerType::kUnknown;
 
-    struct RowLocalAtomView {
-        Tensor atom_positions;    // int32 payload in Tensor storage; row-relative [0, row_tokens)
-        Tensor atom_embeddings;   // [max(1, num_atoms), atom_embedding_dim]
-        int num_atoms = 0;
-    };
-
     ScratchBlockLayer(const HyperParameters::ScratchBlockConstructionHP& hp,
                       cudaStream_t init_stream);
     ~ScratchBlockLayer();
@@ -119,29 +115,6 @@ public:
     ScratchBlockLayer(ScratchBlockLayer&&) noexcept;
     ScratchBlockLayer& operator=(ScratchBlockLayer&&) noexcept;
 
-    //--------------------------------------------------//
-    // Learnable Parameter Access
-    //--------------------------------------------------//
-
-    //--------------------------------------------------//
-    // Statistics
-    //--------------------------------------------------//
-
-    struct Stats {
-        size_t total_forward_calls = 0;
-        size_t total_atoms_processed = 0;
-        size_t passthrough_calls = 0;
-        size_t active_calls = 0;
-    };
-
-    const Stats& stats() const noexcept { return stats_; }
-    void resetStats() { stats_ = Stats{}; }
-    void recordForwardCall(int num_atoms) {
-        stats_.total_forward_calls++;
-        stats_.active_calls++;
-        stats_.total_atoms_processed += static_cast<size_t>(num_atoms);
-    }
-
     // Logging control
     void setLoggingEnabled(bool enabled) { logging_enabled_ = enabled; }
     bool isLoggingEnabled() const noexcept { return logging_enabled_; }
@@ -149,25 +122,18 @@ public:
     std::uint64_t globalStep() const noexcept { return global_step_; }
 
     //--------------------------------------------------//
-    // Internal buffer access (for autograd::scratch_block_inject)
+    // Internal scratch access (for autograd::scratch_block_inject)
+    //
+    // This is transient forward staging only. Semantic atom position/type/value
+    // data is authored before Phase2 on BatchPayload/BatchDeviceBindings.
     //--------------------------------------------------//
 
-    int*   atomPositionsBuffer()   { return d_atom_positions_; }
-    int*   numAtomsBuffer()        { return d_num_atoms_; }
-    float* atomEmbeddingsBuffer()  { return d_atom_embeddings_; }
+    float* atomEmbeddingScratchBuffer() { return d_atom_embeddings_; }
 
-    /// Build a row-local atom view from the batch-global ScratchBlock buffers.
-    /// Returned positions are relative to the requested row span [0, row_tokens).
-    /// Empty rows still return non-null buffers; num_atoms reports the actual count.
-    RowLocalAtomView extractRowLocalAtomView(
-        const HyperParameters::ScratchBlockConstructionHP& hp,
-        int token_offset,
-        int row_tokens,
-        cudaStream_t stream) const;
-
-    /// Run forward CUDA kernels (atom detect, embed lookup, projection+inject)
-    /// using the explicit grouped ScratchBlock HP and active batch bindings.
-    /// Modifies output in-place. Returns device-side atom count via numAtomsBuffer().
+    /// Run forward CUDA kernels (embed lookup, projection+inject) using the
+    /// explicit grouped ScratchBlock HP and active batch bindings.
+    /// Modifies output in-place while consuming authored atom positions/types
+    /// from the payload/bindings boundary.
     void runForwardKernels(
         float* output,
         const GRIM::ScratchBlockParameterTensors& scratch_parameters,
@@ -177,25 +143,20 @@ public:
         cudaStream_t stream,
         bool execution_first_type_only = false);
 
-private:    void allocateWeights(const HyperParameters::ScratchBlockConstructionHP& hp,
-                                 cudaStream_t init_stream);
-    void freeWeights();
-    void initializeRuntimeBuffers(cudaStream_t init_stream);
+private:
+    void allocateRuntimeBuffers(const HyperParameters::ScratchBlockConstructionHP& hp,
+                                cudaStream_t init_stream);
+    void releaseRuntimeBuffers();
 
-    Stats stats_;
-
-    // Temporary buffers for forward pass (reused across calls)
-    int*   d_atom_positions_  = nullptr;  // [max_atoms]
-    int*   d_num_atoms_       = nullptr;  // Scalar on device
+    // Temporary forward scratch (reused across calls). Authored compact atom
+    // positions/types live on BatchPayload/BatchDeviceBindings, not here.
     float* d_atom_embeddings_ = nullptr;  // [max_atoms, atom_embedding_dim]
 
-    bool weights_allocated_ = false;
     bool logging_enabled_   = false;
     std::uint64_t global_step_ = 0;
 
     // Logging helpers
     void logForward(int num_atoms, float duration_ms);
-    void logWeightInit(const HyperParameters::ScratchBlockConstructionHP& hp);
 };
 
 //======================================================//
@@ -212,7 +173,7 @@ namespace autograd {
 /// Backward: grad_input = grad_output (additive identity), plus parameter gradients
 ///
 /// @param input          Embedding tensor [total_tokens, d_model] with grad_fn chain
-/// @param layer          ScratchBlock runtime shell (owns buffers + parameter accessors)
+/// @param layer          ScratchBlock runtime shell (owns reusable runtime buffers)
 /// @param hp             Explicit grouped ScratchBlock construction/view payload
 /// @param payload        Caller-owned active batch payload
 /// @param bindings       Caller-owned device bindings for payload
@@ -227,12 +188,9 @@ Tensor scratch_block_inject(
     cudaStream_t stream,
     bool execution_first_type_only = false);
 
-/// Build a full-token structured state tensor z [total_tokens, d_model].
-/// Non-atom/non-structured rows are exactly zero. Atom rows contain
-/// atom_scale * project(atom_embedding) unless execution-first placeholder mode
-/// is active, in which case atom rows are also exactly zero. The returned Tensor
-/// owns a GradFn that accumulates into atom_projection and atom_type_embeddings
-/// when track_grad=true and the forward path depends on those parameters.
+/// Legacy removal target. Build a full-token structured state tensor
+/// z [total_tokens, d_model]. Shared forward must not add new callers while
+/// experiments keep ScratchBlock invocation disabled.
 Tensor scratch_block_project_all_tokens(
     ScratchBlockLayer& layer,
     GRIM::ScratchBlockParameterTensors& scratch_parameters,
@@ -241,7 +199,7 @@ Tensor scratch_block_project_all_tokens(
     const Batching::BatchDeviceBindings& bindings,
     cudaStream_t stream,
     bool execution_first_type_only = false,
-    bool track_grad = true,
+    bool connect_parameter_graph = true,
     const ScratchBlockProjectionParameterViews* parameter_views = nullptr);
 
 }  // namespace autograd

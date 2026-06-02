@@ -129,7 +129,7 @@ bool saveLanguageModelCheckpoint(
         : 0;
     auto* embedding_parameters = parameter_registry.getEmbeddingParameters();
     auto* lm_head_parameters = parameter_registry.getLmHeadParameters();
-    auto* scratch_block_layer = model.getScratchBlockLayer();
+    auto* scratch_block_layer = gpu_model_state.scratch_block_layer.get();
     auto* scratch_block_parameters = parameter_registry.getScratchBlockParameters();
     auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
     auto* decode_time_slot_selector = parameter_registry.getDecodeTimeSlotSelector();
@@ -208,9 +208,8 @@ bool saveLanguageModelCheckpoint(
 
     const auto scratch_hp = HyperParameters::scratchBlockConstructionHP(config);
 
-    // Process ScratchBlock weights (if enabled by authored architecture)
-    // Use the layer's actual tensor sizes so copy count never exceeds allocation.
-    // ScratchBlock allocates with Tokenizer::kAtomTypeCount (single source of truth).
+    // Process ScratchBlock registry-owned tensors (if enabled by authored architecture).
+    // Use the registry tensor shapes directly so copy counts never exceed allocation.
     if (scratch_hp.enabled) {
         if (!scratch_block_layer) {
             throw std::runtime_error("saveLanguageModelCheckpoint: ScratchBlockConstructionHP.enabled=true but scratch_block_layer is NULL");
@@ -417,7 +416,7 @@ bool loadLanguageModelCheckpoint(
         : 0;
     auto* embedding_parameters = parameter_registry.getEmbeddingParameters();
     auto* lm_head_parameters = parameter_registry.getLmHeadParameters();
-    auto* scratch_block_layer = model.getScratchBlockLayer();
+    auto* scratch_block_layer = gpu_model_state.scratch_block_layer.get();
     auto* scratch_block_parameters = parameter_registry.getScratchBlockParameters();
     auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
     auto* decode_time_slot_selector = parameter_registry.getDecodeTimeSlotSelector();
@@ -525,8 +524,8 @@ bool loadLanguageModelCheckpoint(
     }
     request.lm_head.expect_bias = use_bias;
 
-    // Set up ScratchBlock weight destinations (if enabled by authored architecture)
-    // Use the layer's actual tensor sizes so load size matches saved checkpoint (same as save path).
+    // Set up ScratchBlock registry-owned tensor destinations (if enabled by authored architecture).
+    // Use the registry tensor shapes directly so load sizes match the saved checkpoint.
     if (scratch_hp.enabled) {
         Tensor& ate = scratch_block_parameters->atom_type_embeddings;
         Tensor& ap = scratch_block_parameters->atom_projection;

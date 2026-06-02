@@ -579,18 +579,15 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
         }
 
         //======================================================//
-        //  4) Build optional ScratchBlock reasoning runtime and registry-owned parameters
+        //  4) Build optional registry-owned ScratchBlock parameters and runtime shell
         //
         //  HyperparameterGroupings owns the static construction contract;
-        //  startup model assembly supplies only the init stream/runtime shell,
-        //  while ParameterGroupRegistration owns the durable trainable tensors.
+        //  ParameterGroupRegistration owns durable ScratchBlock tensor allocation
+        //  on StartupParameterRegistry; startup model assembly only constructs the
+        //  runtime shell after those registry-owned tensors exist.
         //======================================================//
         const auto scratch_hp = GRIM::HyperParameters::scratchBlockConstructionHP(model_cfg);
         if (scratch_hp.enabled) {
-            auto& scratch_block_layer = gpu_model_state.scratch_block_layer;
-            scratch_block_layer = std::make_unique<GRIM::ScratchBlockLayer>(
-                scratch_hp, init_stream);
-
             ModelRegistration::initializeScratchBlockParameterTensors(
                 parameter_registry,
                 scratch_hp,
@@ -603,7 +600,14 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
                 !scratch_block_parameters.atom_projection.data) {
                 throw std::runtime_error("[assembleGpuModel] FATAL: registry ScratchBlock tensors not ready after startup allocation");
             }
-            std::cout << "✓ ScratchBlock layer created\n";
+
+            auto& scratch_block_layer = gpu_model_state.scratch_block_layer;
+            scratch_block_layer = std::make_unique<GRIM::ScratchBlockLayer>(
+                scratch_hp, init_stream);
+            if (!scratch_block_layer) {
+                throw std::runtime_error("[assembleGpuModel] FATAL: failed to construct ScratchBlock runtime shell after registry parameter allocation");
+            }
+            std::cout << "✓ ScratchBlock registry parameters and runtime shell created\n";
         }
 
         //======================================================//

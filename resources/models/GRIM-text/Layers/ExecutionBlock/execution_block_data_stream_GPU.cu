@@ -1339,8 +1339,6 @@ void executeStepCoordinatorImpl(
     ExecutionBlockParameterTensors& parameters,
     Tensor& H,
     ExecutionMemory& memory,
-    const int* atom_positions,
-    int num_atoms,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
     int batch_row,
@@ -1371,19 +1369,28 @@ void executeStepCoordinatorImpl(
         + static_cast<size_t>(batch_row) * payload.max_seq_len;
     const int row_tokens = payload.seq_lengths[static_cast<size_t>(batch_row)];
 
+    // Row slice of the GLOBAL atom mask (BatchDeviceBindings). This is the
+    // authoritative source of atom positions for this row: atom-slot validation
+    // and ReduceMean atom exclusion both read it directly, with no ScratchBlock
+    // row-local extraction. payload.atom_mask is validated at build time to equal
+    // token_layout.isAtom(token_id), so it matches ScratchBlock's atom detection.
+    if (!bindings.d_atom_mask) {
+        throw std::runtime_error(
+            "executeStepCoordinatorImpl: bindings.d_atom_mask is NULL - execution "
+            "requires global atom annotations to validate atom slots");
+    }
+    const uint8_t* d_atom_mask_row = bindings.d_atom_mask
+        + static_cast<size_t>(batch_row) * payload.max_seq_len;
+
     StepWorkingSet work;
-    prepareMemoryStepOrThrow(hp, diag, memory, atom_positions, d_slot_map_row, num_atoms, row_tokens, diag_out, stream);
+    prepareMemoryStepOrThrow(hp, diag, memory, d_atom_mask_row, d_slot_map_row, row_tokens, diag_out, stream);
     buildValueSlotCandidates(hp, memory, stream, work);
     kernelCheckFinite<<<(V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         work.slot_values.data, V_val, diag.numericErrorFlag(), kStageV1, hp.magnitude_limit);
 
-    // Row-local device atom mask: used by ReduceMean to exclude atom positions
-    // from the decision context, preventing numeric surface leakage into
-    // execution op/arg/write selection. Sourced from BatchDeviceBindings.
-    const uint8_t* d_atom_mask_row = bindings.d_atom_mask
-        ? bindings.d_atom_mask + static_cast<size_t>(batch_row) * payload.max_seq_len
-        : nullptr;
-
+    // Row-local device atom mask (computed above) excludes atom positions from
+    // the decision context, preventing numeric surface leakage into execution
+    // op/arg/write selection.
     work.context = Tensor::zeros({1, dm}, stream, "exec_context");
     work.context.requires_grad = true;
     work.context.is_leaf = false;

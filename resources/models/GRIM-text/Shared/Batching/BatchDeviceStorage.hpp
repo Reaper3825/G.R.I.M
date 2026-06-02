@@ -29,6 +29,8 @@ struct BatchDeviceStorage {
     Tensor atom_mask_tensor;
     Tensor atom_flags_tensor;
     Tensor token_to_slot_map_tensor;
+    Tensor atom_positions_tensor;
+    Tensor atom_types_tensor;
     Tensor mtp_shifted_targets_tensor;
 
     int batch_size_capacity = 0;

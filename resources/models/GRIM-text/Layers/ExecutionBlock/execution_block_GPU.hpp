@@ -136,6 +136,9 @@ private:
 //                  trace_state = autograd::add(trace_state, step_emb)).
 // prior_records:   host-side ExecutionRecord history for this row (read-only).
 //                  Used to build trace_vec = f(encoded history).
+//
+// Atom positions are NOT passed in: the step sources them directly from the
+// global atom mask (bindings.d_atom_mask) for this batch row.
 //--------------------------------------------------//
 void executionBlockStep(
     const HyperParameters::ExecutionBlockConstructionHP& hp,
@@ -143,8 +146,6 @@ void executionBlockStep(
     Tensor& H,                          // [total_tokens, d_model] mutated in place
     ExecutionMemory& M,
     ExecutionBlockParameterTensors& parameters,
-    const int* atom_positions,          // row-local [max(1, num_atoms)] positions relative to current row [0, row_tokens)
-    int num_atoms,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
     int batch_row,

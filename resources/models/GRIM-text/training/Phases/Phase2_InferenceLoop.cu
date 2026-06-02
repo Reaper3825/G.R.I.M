@@ -258,12 +258,19 @@ GRIM::GeneratedSequence generateOneSequence(
     const auto selector_hp = GRIM::HyperParameters::decodeTimeSelectorConstructionHP(config);
     const auto mtp_hp = GRIM::HyperParameters::mtpFeatureHP(config);
     auto* decode_time_slot_selector = parameter_registry.getDecodeTimeSlotSelector();
-    GRIM::ScratchBlockLayer* scratch_block_layer = model.getScratchBlockLayer();
+    auto* scratch_block_layer = gpu_model_state.scratch_block_layer.get();
+    auto* scratch_block_parameters = parameter_registry.getScratchBlockParameters();
     if (scratch_hp.enabled && !scratch_block_layer) {
         throw std::runtime_error("Phase2 payload inference: ScratchBlockConstructionHP.enabled=true but ScratchBlock layer is NULL");
     }
+    if (scratch_hp.enabled && !scratch_block_parameters) {
+        throw std::runtime_error("Phase2 payload inference: ScratchBlockConstructionHP.enabled=true but registry scratch_block_parameters is NULL");
+    }
     if (!scratch_hp.enabled && scratch_block_layer) {
         throw std::runtime_error("Phase2 payload inference: ScratchBlock layer exists while ScratchBlockConstructionHP.enabled=false");
+    }
+    if (!scratch_hp.enabled && scratch_block_parameters) {
+        throw std::runtime_error("Phase2 payload inference: registry scratch_block_parameters exist while ScratchBlockConstructionHP.enabled=false");
     }
 
     const bool selector_active = selector_hp.enabled

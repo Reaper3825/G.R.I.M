@@ -13,8 +13,6 @@ void executeStepCoordinatorImpl(
 	ExecutionBlockParameterTensors& parameters,
 	Tensor& H,
 	ExecutionMemory& memory,
-	const int* atom_positions,
-	int num_atoms,
 	const Batching::BatchPayload& payload,
 	const Batching::BatchDeviceBindings& bindings,
 	int batch_row,

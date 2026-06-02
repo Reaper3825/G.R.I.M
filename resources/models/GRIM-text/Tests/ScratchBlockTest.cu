@@ -68,9 +68,7 @@ bool testLoggingAccessors(std::string& message) {
 bool testDisabledConstructorSkipsRuntimeBuffers(std::string& message) {
     ScratchBlockLayer layer(makeScratchBlockHp(false), nullptr);
 
-    SB_ASSERT_TRUE(layer.atomPositionsBuffer() == nullptr, "Disabled ScratchBlock should not allocate atom positions buffer");
-    SB_ASSERT_TRUE(layer.numAtomsBuffer() == nullptr, "Disabled ScratchBlock should not allocate num-atoms buffer");
-    SB_ASSERT_TRUE(layer.atomEmbeddingsBuffer() == nullptr, "Disabled ScratchBlock should not allocate atom embeddings buffer");
+    SB_ASSERT_TRUE(layer.atomEmbeddingScratchBuffer() == nullptr, "Disabled ScratchBlock should not allocate embedding scratch buffer");
     return true;
 }
 
@@ -81,9 +79,7 @@ bool testEnabledConstructorAllocatesRuntimeBuffers(std::string& message) {
 
     {
         ScratchBlockLayer layer(hp, stream);
-        SB_ASSERT_TRUE(layer.atomPositionsBuffer() != nullptr, "Enabled ScratchBlock should allocate atom positions buffer");
-        SB_ASSERT_TRUE(layer.numAtomsBuffer() != nullptr, "Enabled ScratchBlock should allocate num-atoms buffer");
-        SB_ASSERT_TRUE(layer.atomEmbeddingsBuffer() != nullptr, "Enabled ScratchBlock should allocate atom embeddings buffer");
+        SB_ASSERT_TRUE(layer.atomEmbeddingScratchBuffer() != nullptr, "Enabled ScratchBlock should allocate embedding scratch buffer");
     }
 
     SB_ASSERT_CUDA_SUCCESS(cudaStreamDestroy(stream), "Failed to destroy CUDA stream");
@@ -97,17 +93,11 @@ bool testMoveConstructTransfersRuntimeBuffers(std::string& message) {
 
     {
         ScratchBlockLayer source(hp, stream);
-        int* positions_before = source.atomPositionsBuffer();
-        int* num_atoms_before = source.numAtomsBuffer();
-        float* embeddings_before = source.atomEmbeddingsBuffer();
+        float* embeddings_before = source.atomEmbeddingScratchBuffer();
 
         ScratchBlockLayer moved(std::move(source));
-        SB_ASSERT_TRUE(moved.atomPositionsBuffer() == positions_before, "Move construction should transfer atom positions buffer");
-        SB_ASSERT_TRUE(moved.numAtomsBuffer() == num_atoms_before, "Move construction should transfer num-atoms buffer");
-        SB_ASSERT_TRUE(moved.atomEmbeddingsBuffer() == embeddings_before, "Move construction should transfer atom embeddings buffer");
-        SB_ASSERT_TRUE(source.atomPositionsBuffer() == nullptr, "Moved-from layer should release atom positions buffer");
-        SB_ASSERT_TRUE(source.numAtomsBuffer() == nullptr, "Moved-from layer should release num-atoms buffer");
-        SB_ASSERT_TRUE(source.atomEmbeddingsBuffer() == nullptr, "Moved-from layer should release atom embeddings buffer");
+        SB_ASSERT_TRUE(moved.atomEmbeddingScratchBuffer() == embeddings_before, "Move construction should transfer atom embedding scratch buffer");
+        SB_ASSERT_TRUE(source.atomEmbeddingScratchBuffer() == nullptr, "Moved-from layer should release atom embedding scratch buffer");
     }
 
     SB_ASSERT_CUDA_SUCCESS(cudaStreamDestroy(stream), "Failed to destroy CUDA stream");

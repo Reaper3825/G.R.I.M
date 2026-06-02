@@ -92,6 +92,44 @@ BatchPayload makeInferenceBasePayload(
     return payload;
 }
 
+void materializeAuthoredAtomFacts(
+    BatchPayload& payload,
+    const char* caller)
+{
+    payload.atom_positions.clear();
+    payload.atom_types.clear();
+
+    if (!payload.ownsHostInputData()) {
+        return;
+    }
+
+    payload.atom_positions.reserve(static_cast<std::size_t>(payload.actual_tokens));
+    payload.atom_types.reserve(static_cast<std::size_t>(payload.actual_tokens));
+
+    for (int token_pos = 0; token_pos < payload.total_tokens; ++token_pos) {
+        if (payload.atom_mask[static_cast<std::size_t>(token_pos)] == 0) {
+            continue;
+        }
+
+        const int token_id = payload.input_ids[static_cast<std::size_t>(token_pos)];
+        const auto atom_type = GRIM::Tokenizer::tokenIdToAtomType(token_id);
+        if (atom_type == GRIM::Tokenizer::AtomType::ATOM_NONE) {
+            throw std::runtime_error(
+                std::string(caller) + ": atom_mask marks token position " +
+                std::to_string(token_pos) + " as atom but token_id=" +
+                std::to_string(token_id) + " is not an atom placeholder");
+        }
+        if (payload.atom_entry_ids[static_cast<std::size_t>(token_pos)] == GRIM::Tokenizer::kAtomEntryNone) {
+            throw std::runtime_error(
+                std::string(caller) + ": atom_mask marks token position " +
+                std::to_string(token_pos) + " as atom but atom_entry_ids is kAtomEntryNone");
+        }
+
+        payload.atom_positions.push_back(token_pos);
+        payload.atom_types.push_back(static_cast<int>(atom_type));
+    }
+}
+
 }  // namespace
 
 BatchPayload buildBatchPayload(
@@ -473,6 +511,8 @@ BatchPayload buildBatchPayload(
         }
     }
 
+    materializeAuthoredAtomFacts(payload, "buildBatchPayload");
+
     // ═════════════════════════════════════════════════════════════════════════
     // PHASE 4b: Execution-slot target masking
     //
@@ -690,6 +730,8 @@ BatchPayload buildInferenceBatchPayload(
     }
     payload.seq_atom_tables.resize(1);
     payload.seq_atom_tables[0] = atom_table;
+
+    materializeAuthoredAtomFacts(payload, caller);
 
     payload.validate(caller);
     return payload;

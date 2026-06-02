@@ -15,7 +15,7 @@ Workstream 0 leaves the ExecutionBlock in a much smaller and stricter shape:
 - `execution_block_GPU.hpp` is the only public include.
 - `execution_block_GPU.cu` is a thin public coordinator.
 - private helpers are split into memory-stream and data-stream implementation files.
-- `executeStep(...)` now requires **row-local** atom buffers and a **row-local** slot map.
+- `executeStep(...)` sources atom positions directly from the **global** atom mask (`bindings.d_atom_mask`) row slice, and uses a **row-local** slot map.
 - the layer no longer tolerates:
   - silent execution skip when no value slots were bootstrapped,
   - batch-global atom buffers passed into per-row execution,
@@ -115,9 +115,12 @@ explicitly through `ExecutionBlockDiagnosticsBuffers` where needed.
 The caller must provide:
 
 - `token_offset` and `row_tokens` describing the active valid row span inside `H` (`payload.seq_lengths[b]`, not padded `payload.max_seq_len`),
-- `token_to_slot_map` for that row only,
-- `atom_positions` relative to `[0, row_tokens)`,
-- non-null row-local atom buffers even when `num_atoms == 0`.
+- `token_to_slot_map` for that row only.
+
+Atom positions are NOT passed by the caller: the step derives them directly from the
+global atom mask (`bindings.d_atom_mask`) row slice. `payload.atom_mask` is validated
+at build time to equal `token_layout.isAtom(token_id)`, so it matches ScratchBlock's
+atom detection exactly.
 
 The execution-block boundary fail-loud checks:
 
@@ -125,14 +128,13 @@ The execution-block boundary fail-loud checks:
 - `row_tokens > 0`
 - `token_offset + row_tokens <= total_tokens`
 - `token_to_slot_map != nullptr`
-- `atom_positions != nullptr`
-- every row-local atom position is in `[0, row_tokens)`
-- every slot-bearing atom position maps to an initialized value-slot in `[S, V)`
+- `bindings.d_atom_mask != nullptr`
+- every slot-bearing atom position (where `atom_mask[pos] != 0`) maps to an initialized value-slot in `[S, V)`
 
 Important current nuance:
 
-- the boundary requires row-local atom buffers,
-- validation uses row-local atom positions,
+- atom positions are iterated over the row span via the global mask,
+- validation uses the mask-flagged positions,
 - but the **current step-local math reads operands only from value slots**.
 
 `atom_embeddings` were removed from the `executeStep()` contract (WS6) because the data-stream path does not consume them.
@@ -331,7 +333,7 @@ These concerns are outside the execution-block math boundary now:
 
 Inference now follows the same strict row-local execution contract:
 
-- decode-time ExecutionBlock calls build a ScratchBlock-backed row-local atom view,
+- decode-time ExecutionBlock calls source atom positions from the global atom mask (`bindings.d_atom_mask`),
 - null atom-pointer decode calls are gone,
 - the old last-write `<NUM>` binding fallback is gone,
 - generation masks `<NUM>` until a dedicated decode-time selector exists.

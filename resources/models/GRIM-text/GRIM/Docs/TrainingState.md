@@ -18,7 +18,7 @@ RAII helper modules:
 - `CublasHandleOwner` keeps the raw handle private. Use `outParam()` only at `cublasCreate` sites and `.get()` at every raw `cublasHandle_t` borrow site; do not pass the owner object itself across runtime payload boundaries.
 - `Shared/TrainingState/DeviceAllocation_GPU.{hpp,cu}` owns raw CUDA device allocations used by typed runtime owners, including `GenerationState` KV/decode buffers.
 
-`ScratchBlockPool` was deleted. Batch upload copies `BatchPayload` host vectors directly into the payload-attached `BatchDeviceStorage` owner, and ScratchBlock reasoning owns its own layer buffers.
+`ScratchBlockPool` was deleted. Batch upload copies `BatchPayload` host vectors directly into the payload-attached `BatchDeviceStorage` owner. ScratchBlock's remaining layer-local buffers are transient implementation staging only; they are not semantic data owners.
 
 `ScratchBlockLayer` itself is **not** a TrainingState allocation. It is durable startup-owned model topology on `TrainingContext::gpu_model` (`Startup::GpuModelState`) and is assembled in `GRIMText::Training::Startup::assembleGpuModel(config, training_state, gpu_model_state, parameter_registry, weight_init_seed)` from `HyperParameters::scratchBlockConstructionHP()` plus the explicit startup init stream. The startup runtime allocator must not call `std::make_unique<ScratchBlockLayer>()`, hand-copy `ScratchBlockConfig`, or reset the startup-owned layer pointer.
 

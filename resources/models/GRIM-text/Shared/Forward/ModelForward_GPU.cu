@@ -300,7 +300,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const int execution_block_num_slots = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "execution_block_num_slots");
     const int execution_block_num_ops = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "execution_block_num_ops");
     const float execution_block_temp_start = HyperParameters::snapshotTrainingConfigField<float>(*cfg, "execution_block_temp_start");
-    const int scratch_block_atom_embedding_dim = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "scratch_block_atom_embedding_dim");
     const bool scratch_block_active = scratch_hp.enabled && request.scratch_block != nullptr;
     const bool execution_block_active = execution_hp.enabled && request.execution_block_enabled;
     auto* execution_block_parameters = execution_block_active
@@ -332,7 +331,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const auto* bindings = request.bindings;
     const auto& embedding_parameters = request.parameter_registry->requireEmbeddingParameters("executeModelForward");
     const auto& lm_head_parameters = request.parameter_registry->requireLmHeadParameters("executeModelForward");
-    auto& scratch_parameters = request.parameter_registry->requireScratchBlockParameters("executeModelForward");
     const bool connect_parameter_graph = request.graph.connect_parameter_graph;
     const bool retain_backward_graph = request.graph.retain_backward_graph;
     const bool dropout_enabled = request.graph.enable_dropout;
@@ -387,81 +385,8 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
               << "] scale=" << embedding_scale);
 
     if (scratch_block_active) {
-        MFWD_INFO("Step 1.5: Running all-token ScratchBlock vector gate...");
-        (void)cudaGetLastError();
-
-        if (!bindings->d_numeric_values) {
-            throw std::runtime_error("executeModelForward: ScratchBlock requires BatchDeviceBindings.d_numeric_values");
-        }
-        if (!bindings->d_token_to_slot_map) {
-            throw std::runtime_error("executeModelForward: ScratchBlock requires BatchDeviceBindings.d_token_to_slot_map");
-        }
-
-        const bool exec_first_type_only = execution_hp.enabled;
-
-        ScratchBlockProjectionParameterViews scratch_param_views{};
-        const ScratchBlockProjectionParameterViews* scratch_param_view_ptr = nullptr;
-        Tensor scratch_atom_type_embeddings_view;
-        Tensor scratch_atom_projection_view;
-        if (!connect_parameter_graph) {
-            scratch_atom_type_embeddings_view = scratch_parameters.atom_type_embeddings.detach(request.stream);
-            scratch_atom_projection_view = scratch_parameters.atom_projection.detach(request.stream);
-            scratch_param_views.atom_type_embeddings = &scratch_atom_type_embeddings_view;
-            scratch_param_views.atom_projection = &scratch_atom_projection_view;
-            scratch_param_view_ptr = &scratch_param_views;
-        }
-
-        forward_outputs.embedding_structured_state = autograd::scratch_block_project_all_tokens(
-            *request.scratch_block,
-            scratch_parameters,
-            scratch_hp,
-            payload,
-            *bindings,
-            request.stream,
-            exec_first_type_only,
-            connect_parameter_graph,
-            scratch_param_view_ptr);
-
-        forward_outputs.embedding_gate_concat = autograd::concat(
-            forward_outputs.embedding_tensor,
-            forward_outputs.embedding_structured_state,
-            request.stream);
-
-        if (connect_parameter_graph) {
-            forward_outputs.embedding_gate_logits = autograd::matmul(
-                forward_outputs.embedding_gate_concat,
-                scratch_parameters.structured_gate_weight,
-                request.stream);
-        } else {
-            Tensor gate_weight_view = scratch_parameters.structured_gate_weight.detach(request.stream);
-            forward_outputs.embedding_gate_logits = autograd::matmul(
-                forward_outputs.embedding_gate_concat,
-                gate_weight_view,
-                request.stream);
-        }
-
-        forward_outputs.embedding_gate_values = autograd::sigmoid(
-            forward_outputs.embedding_gate_logits,
-            request.stream,
-            forward_outputs.embedding_gate_logits.data);
-
-        forward_outputs.embedding_gate_delta = autograd::elementwise_mul(
-            forward_outputs.embedding_gate_values,
-            forward_outputs.embedding_structured_state,
-            request.stream);
-
-        forward_outputs.embedding_tensor = autograd::add(
-            forward_outputs.embedding_tensor,
-            forward_outputs.embedding_gate_delta,
-            request.stream);
-
-        cudaError_t cuda_err = cudaGetLastError();
-        if (cuda_err != cudaSuccess) {
-            throw std::runtime_error("ModelForward: ScratchBlock vector gate CUDA error: " +
-                                     std::string(cudaGetErrorString(cuda_err)));
-        }
-
-        MFWD_INFO("Step 1.5: ScratchBlock vector gate complete");
+        MFWD_INFO("Step 1.5: ScratchBlock invocation intentionally disabled during experiments; "
+                  << "shared forward must not synthesize alternate atom containers here");
     }
 
     if (dropout_enabled && dropout_rate > 0.0f) {
@@ -715,10 +640,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                     const int tok_off = b * payload.max_seq_len;
                     const int row_len = requirePayloadRowLength(payload, b, "ModelForward ExecutionBlock bootstrap");
 
-                    auto row_atom_view = request.scratch_block->extractRowLocalAtomView(
-                        scratch_hp,
-                        tok_off, row_len, request.stream);
-
                     if (!request.bindings || !request.bindings->d_token_to_slot_map
                         || !request.bindings->d_numeric_values) {
                         throw std::runtime_error(
@@ -740,8 +661,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                         GRIM::executionBlockStep(
                             execution_hp, execution_runtime.execution_diag,
                             layer_output, M_b, *execution_block_parameters,
-                            reinterpret_cast<const int*>(row_atom_view.atom_positions.data),
-                            row_atom_view.num_atoms, payload, *request.bindings, b,
+                            payload, *request.bindings, b,
                             step, T, request.stream,
                             &step_diag,
                             runtime.execution_runtime->trace_state_by_row[b],

@@ -209,6 +209,14 @@ BatchDeviceBindings uploadBatchToDevice(
     if (!cached_slot_map_ptr) {
         throw std::runtime_error("uploadBatchToDevice: BatchDeviceStorage.token_to_slot_map_tensor.data is NULL");
     }
+    int* cached_atom_positions_ptr = reinterpret_cast<int*>(storage.atom_positions_tensor.data);
+    if (!cached_atom_positions_ptr) {
+        throw std::runtime_error("uploadBatchToDevice: BatchDeviceStorage.atom_positions_tensor.data is NULL");
+    }
+    int* cached_atom_types_ptr = reinterpret_cast<int*>(storage.atom_types_tensor.data);
+    if (!cached_atom_types_ptr) {
+        throw std::runtime_error("uploadBatchToDevice: BatchDeviceStorage.atom_types_tensor.data is NULL");
+    }
 
     const size_t input_ids_bytes   = payload.inputIdBytes();
     const size_t target_ids_bytes  = payload.targetIdBytes();
@@ -219,6 +227,8 @@ BatchDeviceBindings uploadBatchToDevice(
         throw std::runtime_error("uploadBatchToDevice: BatchDeviceStorage.atom_flags_tensor.data is NULL but payload.atom_flags is populated");
     }
     const size_t slot_map_bytes  = payload.slotMapBytes();
+    const size_t atom_position_bytes = payload.atomPositionBytes();
+    const size_t atom_type_bytes = payload.atomTypeBytes();
 
     auto copy_start = std::chrono::high_resolution_clock::now();
 
@@ -253,7 +263,30 @@ BatchDeviceBindings uploadBatchToDevice(
         slot_map_bytes, cudaMemcpyHostToDevice, stream));
     BATCH_UPLOAD_CUDA_CHECK(cudaStreamSynchronize(stream));
 
-    // Round 5: MTP shifted targets. These are Phase1-authored payload arrays;
+    // Round 5: compact authored atom positions/types.
+    if (payload.authoredAtomCount() > payload.total_tokens) {
+        throw std::runtime_error(
+            "uploadBatchToDevice: payload.authoredAtomCount()=" +
+            std::to_string(payload.authoredAtomCount()) +
+            " exceeds payload.total_tokens=" + std::to_string(payload.total_tokens));
+    }
+    if (atom_position_bytes > 0) {
+        BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+            cached_atom_positions_ptr,
+            payload.atom_positions.data(),
+            atom_position_bytes,
+            cudaMemcpyHostToDevice,
+            stream));
+        BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+            cached_atom_types_ptr,
+            payload.atom_types.data(),
+            atom_type_bytes,
+            cudaMemcpyHostToDevice,
+            stream));
+    }
+    BATCH_UPLOAD_CUDA_CHECK(cudaStreamSynchronize(stream));
+
+    // Round 6: MTP shifted targets. These are Phase1-authored payload arrays;
     // upload owns the H2D copy so MTP loss consumes BatchDeviceBindings instead
     // of allocating per-head target buffers inside loss assembly.
     if (cached_mtp_shifted_targets_ptr) {
@@ -289,6 +322,8 @@ BatchDeviceBindings uploadBatchToDevice(
         ? reinterpret_cast<uint32_t*>(storage.atom_flags_tensor.data)
         : nullptr;
     bindings.d_token_to_slot_map = cached_slot_map_ptr;
+    bindings.d_atom_positions   = cached_atom_positions_ptr;
+    bindings.d_atom_types       = cached_atom_types_ptr;
     bindings.d_mtp_shifted_targets = cached_mtp_shifted_targets_ptr;
     return bindings;
 }
@@ -349,6 +384,16 @@ std::shared_ptr<BatchDeviceStorage> createBatchDeviceStorage(
         false,
         stream,
         "batch_token_to_slot_map");
+    storage->atom_positions_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(1, max_tokens),
+        false,
+        stream,
+        "batch_atom_positions");
+    storage->atom_types_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(1, max_tokens),
+        false,
+        stream,
+        "batch_atom_types");
 
     if (workspace_hp.mtp_enabled) {
         if (workspace_hp.mtp_k <= 0) {

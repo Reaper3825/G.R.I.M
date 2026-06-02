@@ -131,7 +131,7 @@ void computeRhoDiagnostic(
     // all C(sample,2) pairs.  This keeps cost O(sample^2 * d_model) per layer
     // instead of O(num_valid^2 * d_model), which would dominate wall-time when
     // num_valid is large (e.g. 3000+ tokens → ~4.5M pairs × 768 dims per layer).
-    static constexpr int MAX_RHO_SAMPLE = 128;
+    static constexpr int MAX_RHO_SAMPLE = 12288;
 
     // Raw components returned alongside ρ and h_rms so we can trace WHY ρ moves.
     struct RhoRaw {

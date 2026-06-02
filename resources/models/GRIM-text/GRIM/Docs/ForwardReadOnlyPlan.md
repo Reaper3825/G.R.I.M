@@ -135,17 +135,16 @@ This violation is now fixed by `Shared/Forward/ModelForwardRuntimePayload.hpp`. 
 
 Current contract: `ModelForwardRequest` carries immutable forward inputs plus a caller-authored `ModelForwardGraphPolicy`, and `executeModelForward(...)` receives `ModelForwardRuntimePayload` directly for the mutable runtime sinks. A read-only graph policy reads model state and writes only caller-authored forward outputs / explicit session runtime state. It must not rediscover mutable runtime owners by reaching through `TrainingState`.
 
-### ScratchBlock still keeps forward workspace and telemetry on the durable layer object
+### ScratchBlock ownership note (the old “workspace” framing is wrong)
 
-`ScratchBlockLayer` still mixes durable parameters with forward-time mutable workspace and telemetry:
+The older plan text treated ScratchBlock atom state as forward workspace parked on the durable layer object. That is not the semantic contract.
 
-- `Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp`
-  - durable forward workspace members: `d_atom_positions_`, `d_num_atoms_`, `d_atom_embeddings_`
-  - forward telemetry mutation: `recordForwardCall(int num_atoms)` increments durable layer stats from the forward path
-- `Layers/ScratchBlock/ScratchBlockReasoning_GPU.cu`
-  - `scratch_block_project_all_tokens(..., track_grad=false, ...)` still reads live `atomTypeEmbeddings()` / `atomProjection()` tensors directly instead of detached / const parameter views
-
-The workspace buffers are Category 3 at best, but they are still parked on a long-lived layer object instead of an explicit runtime/intermediate owner. The telemetry mutation is a separate durable-state write from the forward path.
+- Phase1/prepared-payload data owns token IDs, numeric values, atom masks/flags, slot maps, and any derived atom position/type facts needed by ScratchBlock.
+- Shared forward/autograd must consume that prepared data only; they must not construct a second semantic atom container during forward.
+- `BatchPayload.atom_positions` / `BatchPayload.atom_types` and their `BatchDeviceBindings` device borrows are now the explicit compact atom container boundary. `ScratchBlockLayer` no longer owns atom position/count buffers; only transient embedding scratch remains local.
+- `scratch_block_project_all_tokens()` is a legacy removal-target helper and shared forward must not add new callers.
+- `scratch_block_inject()` may remain compiled, but shared forward is intentionally not invoking ScratchBlock while experiments run.
+- The row-local atom view is already deleted from ExecutionBlock and must not be recreated.
 
 ### ExecutionBlock workspace / baseline ownership (fixed)
 
@@ -226,22 +225,23 @@ Use this section as the implementation queue. The order below is the architectur
 - **Exit signal:**
   - inference-prefill no longer depends on training-owned containers for runtime trace/session writes
 
-### Patch 3 — ScratchBlock read-only + workspace cleanup (`scratchblock-boundary` agent)
+### Patch 3 — ScratchBlock boundary correction (`scratchblock-boundary` agent)
 
 - **Primary files:**
   - `Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp`
   - `Layers/ScratchBlock/ScratchBlockReasoning_GPU.cu`
-- **Violation class:** live-parameter prefill, forward workspace parked on durable layer, forward telemetry mutation
+- **Violation class:** forward-time reconstruction of Phase1-authored atom data, stale “workspace” framing, forward telemetry mutation
 - **Concrete offenders:**
-  - `track_grad=false` projection path reads live `atomTypeEmbeddings()` / `atomProjection()` tensors
-  - layer-owned mutable workspace: `d_atom_positions_`, `d_num_atoms_`, `d_atom_embeddings_`
-  - `recordForwardCall()` mutates durable layer stats from forward helpers
+  - docs or callers treating layer-local ScratchBlock scratch as the semantic owner instead of `BatchPayload.atom_positions` / `atom_types`
+  - any shared-forward path that reconstructs atom containers instead of consuming prepared payload/bindings
+  - any reintroduction of durable layer telemetry mutation from ScratchBlock forward helpers
 - **Required patch:**
-  - route read-only projection through detached / const parameter views
-  - move per-call atom detection / projection workspace to an explicit runtime or forward-intermediate owner
-  - separate forward math from durable telemetry mutation, or make the telemetry sink caller-owned and explicit
+  - keep atom semantics on prepared `BatchPayload` / `BatchDeviceBindings`
+  - treat layer buffers only as transient implementation staging until removed
+  - do not add new callers to `scratch_block_project_all_tokens()`
+  - keep shared forward from invoking ScratchBlock while the experiment boundary is in place
 - **Exit signal:**
-  - ScratchBlock forward math becomes a pure parameter-read + output-write step with no hidden durable layer-state mutation
+  - ScratchBlock is described and implemented as prepared-data consumption, not as a workspace/data-owner boundary
 
 ### Patch 4 — ExecutionBlock workspace / baseline ownership (`execution-runtime` agent) — resolved
 
@@ -517,8 +517,8 @@ Goal: make the read-only forward boundary enforceable at build time, not just by
 | `Layers/FeedForward/Feed_Forward_GPU.hpp` | Keep mutable access narrow; expose const/read-only FFN parameter reads |
 | `Layers/LMHead/lm_head_GPU.cu` | Remove metadata mutation; move `W_eff` out of durable layer state |
 | `Layers/LMHead/lm_head_GPU.hpp` | Remove durable `centered_weights_` ownership and tighten read-only access |
-| `Layers/ScratchBlock/ScratchBlockReasoning_GPU.cu` | Keep `track_grad=false` projection read-only at the boundary; avoid live-parameter ownership assumptions in prefill |
-| `Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp` | Stop mixing durable params with forward workspace; add const/read-only accessors |
+| `Layers/ScratchBlock/ScratchBlockReasoning_GPU.cu` | Keep ScratchBlock dormant in shared forward; do not reconstruct Phase1-authored atom data or add new `scratch_block_project_all_tokens()` callers |
+| `Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp` | Treat layer buffers as transient staging only; they are not semantic atom-data owners |
 | `Layers/ReasoningHead/reasoning_head_GPU.cu` | Remove forward-time parameter flag writes; support read-only consumption if used in shared prefill |
 | `Layers/ReasoningHead/reasoning_head_GPU.hpp` | Expose const/read-only parameter accessors for prefill callers |
 | `GRIM/Docs/InferenceBoundary.md` | Track this plan as the next ownership-tightening step |

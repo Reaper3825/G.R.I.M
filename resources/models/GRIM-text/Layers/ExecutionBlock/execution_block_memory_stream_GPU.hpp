@@ -9,9 +9,8 @@ void prepareMemoryStepOrThrow(
 	const HyperParameters::ExecutionBlockConstructionHP& hp,
 	ExecutionBlockDiagnosticsBuffers& diag,
 	const ExecutionMemory& memory,
-	const int* atom_positions,
+	const uint8_t* atom_mask,
 	const int32_t* token_to_slot_map,
-	int num_atoms,
 	int row_tokens,
 	Forward::ExecutionBlockStepOutput* diag_out,
 	cudaStream_t stream);
