@@ -26,8 +26,6 @@
 #include "../../Shared/MTP/MTPDiagnostics.hpp"
 // MUST include full definitions for types used in AutogradContext
 #include "../../GRIM/grim_language_model_cuda.hpp"
-// ScratchBlock for autograd forward path
-#include "../../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"
 // ExecutionBlock for internal numeric reasoning
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 
@@ -100,7 +98,7 @@ struct AutogradContext {
     // ═══════════════════════════════════════════════════════════════════════════
     // OPTIONAL COMPONENTS (nullptr if disabled)
     // ═══════════════════════════════════════════════════════════════════════════
-    ScratchBlockLayer* scratch_block = nullptr;
+
     bool execution_block_enabled = false;
     ::ParameterRegistry::StartupParameterRegistry* parameter_registry = nullptr;
 
@@ -176,7 +174,6 @@ AutogradContext initAutogradContext(
     Forward::ModelForwardOutputs& forward_outputs,
     AutogradLossState& loss_state,
     GPUGrimEncoder* gpu_encoder,
-    ScratchBlockLayer* scratch_block,
     bool execution_block_enabled,
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     cublasHandle_t cublas_handle,

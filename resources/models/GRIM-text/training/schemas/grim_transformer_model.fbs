@@ -102,16 +102,6 @@ table ReasoningHeadWeights {
   d_total: uint32;
 }
 
-table ScratchBlockWeights {
-  atom_type_embeddings: [float];
-  atom_projection: [float];
-  num_atom_types: uint32;
-  atom_embedding_dim: uint32;
-  d_model: uint32;
-  atom_scale: float;
-  enabled: bool;
-}
-
 /// Decode-time slot selector (pointer-selector baseline, 4 learned tensors).
 table DecodeTimeSlotSelectorWeights {
   w_q_select_data: [float];
@@ -200,7 +190,6 @@ table TransformerModel {
   encoder_layers: [EncoderLayerWeights] (required);
   lm_head: LMHeadWeights (required);
   numeric_head: NumericHeadWeights;
-  scratch_block: ScratchBlockWeights;
   final_rms_gamma: [float];
   loss_weighting: LossWeightingWeights;
   training_metadata: TrainingMetadata;

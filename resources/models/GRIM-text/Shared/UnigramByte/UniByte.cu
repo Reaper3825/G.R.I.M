@@ -68,7 +68,7 @@ bool UniByte::train(const std::vector<std::string>& texts) {
     // during character counting and subword mining so their internal chars
     // (://@.com etc.) don't contaminate the vocabulary.
     //
-    // When scratch block reasoning is disabled, atom detection is bypassed
+    // When atom reasoning is disabled, atom detection is bypassed
     // entirely so vocab mining matches the runtime tokenization path
     // (encode() -> unigram_.encode() with no atom emission).
     //
@@ -80,7 +80,7 @@ bool UniByte::train(const std::vector<std::string>& texts) {
 
     size_t total_atoms = 0;
     size_t total_skipped_unparseable = 0;
-    const bool detect = tokenizer_hp_.enable_scratch_block_reasoning;
+    const bool detect = tokenizer_hp_.enable_atom_reasoning;
     for (const auto& text : texts) {
         std::vector<AtomSpan> spans;
         if (detect) {
@@ -110,7 +110,7 @@ bool UniByte::train(const std::vector<std::string>& texts) {
     std::cout << "[UniByte] Detected " << total_atoms << " atoms across "
               << texts.size() << " texts (will skip during vocab training); "
               << "unparseable spans treated as text: " << total_skipped_unparseable
-              << "; scratch_block_reasoning=" << (detect ? "on" : "off") << std::endl;
+              << "; atom_reasoning=" << (detect ? "on" : "off") << std::endl;
     
     const bool trained = unigram_.trainFromCorpus(texts, all_atom_spans,
                                                   tokenizer_hp_.target_vocab_size,
@@ -146,11 +146,11 @@ void UniByte::requireRuntimeReadyForLastTraining(const char* caller) const {
 }
 
 //--------------------------------------------------//
-// Scratch Block Reasoning Control
+// Atom Reasoning Control
 //--------------------------------------------------//
 
-void UniByte::setScratchBlockReasoning(bool enabled) {
-    tokenizer_hp_.enable_scratch_block_reasoning = enabled;
+void UniByte::setAtomReasoning(bool enabled) {
+    tokenizer_hp_.enable_atom_reasoning = enabled;
 }
 
 //--------------------------------------------------//
@@ -158,23 +158,23 @@ void UniByte::setScratchBlockReasoning(bool enabled) {
 //--------------------------------------------------//
 
 std::vector<int> UniByte::encode(const std::string& text) const {
-    // If scratch block reasoning is disabled, use fast path (normal UnigramByte)
-    if (!tokenizer_hp_.enable_scratch_block_reasoning) {
+    // If atom reasoning is disabled, use fast path (normal UnigramByte)
+    if (!tokenizer_hp_.enable_atom_reasoning) {
         // FAST PATH: No structural detection, no AtomTable, just pure tokenization
         return unigram_.encode(text);
     }
     
-    // SCRATCH BLOCK REASONING PATH: Use AtomTable for structural reasoning
+    // ATOM REASONING PATH: Use AtomTable for structural reasoning
     auto result = tokenizeWithMetadata(text);
     return result.token_ids;
 }
 
 UniByteResult UniByte::tokenizeWithMetadata(const std::string& text) const {
-    // Honor scratch block reasoning toggle: when disabled, skip atom detection
+    // Honor atom reasoning toggle: when disabled, skip atom detection
     // entirely so callers on the metadata path see the same plain unigram
     // tokenization as encode(). Atom side-channels remain zero-filled.
     std::vector<StructuralSpan> structures;
-    if (tokenizer_hp_.enable_scratch_block_reasoning) {
+    if (tokenizer_hp_.enable_atom_reasoning) {
         const Detector::RawTextDetectorOptions detector_options(
             tokenizer_hp_.detect_numbers,
             true,

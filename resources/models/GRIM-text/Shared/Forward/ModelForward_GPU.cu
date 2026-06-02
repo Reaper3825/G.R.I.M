@@ -12,7 +12,6 @@
 #include "../../GRIM/grim_language_model_cuda.hpp"
 #include "../../Layers/Encoding/Encoding_GPU.hpp"
 #include "../../Layers/LMHead/lm_head_GPU.hpp"
-#include "../../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 #include "../../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
 #include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
@@ -284,7 +283,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     request.validate("executeModelForward");
     const auto* cfg = request.config;
     const auto embedding_hp = HyperParameters::embeddingLayerConstructionHP(*cfg);
-    const auto scratch_hp = HyperParameters::scratchBlockConstructionHP(*cfg);
     const auto execution_hp = HyperParameters::executionBlockConstructionHP(*cfg);
     const auto lm_head_hp = HyperParameters::lmHeadLayerConstructionHP(*cfg);
     const bool center_encoder_residuals = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "center_encoder_residuals");
@@ -300,18 +298,10 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const int execution_block_num_slots = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "execution_block_num_slots");
     const int execution_block_num_ops = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "execution_block_num_ops");
     const float execution_block_temp_start = HyperParameters::snapshotTrainingConfigField<float>(*cfg, "execution_block_temp_start");
-    const bool scratch_block_active = scratch_hp.enabled && request.scratch_block != nullptr;
     const bool execution_block_active = execution_hp.enabled && request.execution_block_enabled;
     auto* execution_block_parameters = execution_block_active
         ? &request.parameter_registry->requireExecutionBlockParameters("executeModelForward")
         : nullptr;
-
-    if (scratch_hp.enabled && !request.scratch_block) {
-        throw std::runtime_error("ModelForward: ScratchBlockConstructionHP.enabled=true but request.scratch_block is NULL");
-    }
-    if (!scratch_hp.enabled && request.scratch_block) {
-        throw std::runtime_error("ModelForward: request.scratch_block is non-null while ScratchBlockConstructionHP.enabled=false");
-    }
 
     runtime_payload.validate(
         "executeModelForward",
@@ -383,11 +373,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     forward_outputs.embedding_tensor = std::move(emb_output);
     MFWD_INFO("Step 1: Token embedding complete, shape=[" << total_tokens << ", " << d_model
               << "] scale=" << embedding_scale);
-
-    if (scratch_block_active) {
-        MFWD_INFO("Step 1.5: ScratchBlock invocation intentionally disabled during experiments; "
-                  << "shared forward must not synthesize alternate atom containers here");
-    }
 
     if (dropout_enabled && dropout_rate > 0.0f) {
         const uint64_t emb_dropout_seed = request.batch_idx * 2654435761ULL + 500;
@@ -535,7 +520,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
 
         int exec_layer = -1;
         int exec_K = 0;
-        if (execution_block_active && scratch_block_active) {
+        if (execution_block_active) {
             exec_layer = execution_block_layer;
             if (exec_layer < 0) exec_layer = num_layers - 2;
             if (exec_layer < 0) exec_layer = 0;

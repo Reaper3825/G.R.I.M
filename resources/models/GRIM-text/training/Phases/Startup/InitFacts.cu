@@ -69,7 +69,7 @@ const char* paramGroupTypeName(GRIM::ParamGroupType type) {
         case GRIM::ParamGroupType::ATTENTION: return "ATTENTION";
         case GRIM::ParamGroupType::FFN: return "FFN";
         case GRIM::ParamGroupType::RMSNORM: return "RMSNORM";
-        case GRIM::ParamGroupType::SCRATCHBLOCK: return "SCRATCHBLOCK";
+
         case GRIM::ParamGroupType::MTP: return "MTP";
         case GRIM::ParamGroupType::EXECUTION_BLOCK: return "EXECUTION_BLOCK";
         case GRIM::ParamGroupType::SLOT_SELECTOR: return "SLOT_SELECTOR";
@@ -195,7 +195,7 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
     emitInitFactKeyValue("data_info.actual_vocab_size", fmtUInt64(ctx.data_info.actual_vocab_size));
     emitInitFactKeyValue("architecture.tie_embeddings", boolText(GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "tie_embeddings")));
     emitInitFactKeyValue("architecture.use_bias", boolText(GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "use_bias")));
-    emitInitFactKeyValue("architecture.use_scratch_block", boolText(GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "use_scratch_block")));
+    emitInitFactKeyValue("architecture.use_atom_data", boolText(GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "use_atom_data")));
     emitInitFactKeyValue("architecture.execution_block_enabled", boolText(GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "execution_block_enabled")));
     emitInitFactKeyValue("architecture.mtp_enabled", boolText(GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "mtp_enabled")));
 

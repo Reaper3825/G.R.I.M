@@ -253,36 +253,18 @@ GRIM::GeneratedSequence generateOneSequence(
 
     generation_state.resetSession();
 
-    const auto scratch_hp = GRIM::HyperParameters::scratchBlockConstructionHP(config);
     const auto execution_hp = GRIM::HyperParameters::executionBlockConstructionHP(config);
     const auto selector_hp = GRIM::HyperParameters::decodeTimeSelectorConstructionHP(config);
     const auto mtp_hp = GRIM::HyperParameters::mtpFeatureHP(config);
     auto* decode_time_slot_selector = parameter_registry.getDecodeTimeSlotSelector();
-    auto* scratch_block_layer = gpu_model_state.scratch_block_layer.get();
-    auto* scratch_block_parameters = parameter_registry.getScratchBlockParameters();
-    if (scratch_hp.enabled && !scratch_block_layer) {
-        throw std::runtime_error("Phase2 payload inference: ScratchBlockConstructionHP.enabled=true but ScratchBlock layer is NULL");
-    }
-    if (scratch_hp.enabled && !scratch_block_parameters) {
-        throw std::runtime_error("Phase2 payload inference: ScratchBlockConstructionHP.enabled=true but registry scratch_block_parameters is NULL");
-    }
-    if (!scratch_hp.enabled && scratch_block_layer) {
-        throw std::runtime_error("Phase2 payload inference: ScratchBlock layer exists while ScratchBlockConstructionHP.enabled=false");
-    }
-    if (!scratch_hp.enabled && scratch_block_parameters) {
-        throw std::runtime_error("Phase2 payload inference: registry scratch_block_parameters exist while ScratchBlockConstructionHP.enabled=false");
-    }
 
     const bool selector_active = selector_hp.enabled
         && decode_time_slot_selector != nullptr
         && execution_hp.enabled
-        && scratch_hp.enabled
-        && scratch_block_layer != nullptr
         && generation_state.has_exec_memory;
     if (!selector_active) {
-        const bool scratchblock_generation_active = cfg.enable_scratchblock_reasoning &&
-                                                    scratch_hp.enabled;
-        if (scratchblock_generation_active) {
+        const bool atom_generation_active = execution_hp.enabled;
+        if (atom_generation_active) {
             const int int_tid = GRIM::Tokenizer::atomTypeToTokenId(GRIM::Tokenizer::AtomType::ATOM_INT);
             const int float_tid = GRIM::Tokenizer::atomTypeToTokenId(GRIM::Tokenizer::AtomType::ATOM_FLOAT);
             sampling_cfg.bad_token_ids.push_back(int_tid);
@@ -296,8 +278,7 @@ GRIM::GeneratedSequence generateOneSequence(
 
     GRIM::Sampling::SamplingPipeline pipeline(sampling_cfg);
 
-    const bool scratchblock_active = cfg.enable_scratchblock_reasoning &&
-                                     scratch_hp.enabled;
+    const bool atom_generation_active = execution_hp.enabled;
 
     auto runSharedForwardForCurrentSequence = [&](GRIM::Batching::BatchPayload& active_payload)
         -> std::vector<float> {
@@ -327,7 +308,6 @@ GRIM::GeneratedSequence generateOneSequence(
         request.gpu_encoder = gpu_encoder;
         request.parameter_registry = &parameter_registry;
         request.pbm = &pbm;
-        request.scratch_block = scratch_hp.enabled ? scratch_block_layer : nullptr;
         request.execution_block_enabled = model.executionBlockEnabled();
         request.cublas_handle = training_state.cublas_handle.get();
         request.stream = stream;
@@ -447,14 +427,12 @@ GRIM::GeneratedSequence generateOneSequence(
             if (!generation_state.decode_selector.valid) {
                 std::fprintf(stderr,
                     "[Selector Debug] step=%d selector_enabled=%d selectorLayer=%d "
-                    "exec_block_enabled=%d scratchLayer=%d scratchConfigured=%d has_exec_mem=%d "
+                    "exec_block_enabled=%d has_exec_mem=%d "
                     "decode_selector_valid=%d\n",
                     step,
                     static_cast<int>(selector_hp.enabled),
                     static_cast<int>(decode_time_slot_selector != nullptr),
                     static_cast<int>(execution_hp.enabled),
-                    static_cast<int>(scratch_block_layer != nullptr),
-                    static_cast<int>(scratch_hp.enabled),
                     static_cast<int>(generation_state.has_exec_memory),
                     static_cast<int>(generation_state.decode_selector.valid));
                 throw std::runtime_error(
@@ -483,7 +461,7 @@ GRIM::GeneratedSequence generateOneSequence(
         uint8_t token_atom_mask_val = 0;
         int32_t new_token_slot_id = -1;
 
-        if (scratchblock_active && token_layout.isAtom(sample.token_id)) {
+        if (atom_generation_active && token_layout.isAtom(sample.token_id)) {
             token_atom_mask_val = 1;
             if (GRIM::Tokenizer::isNumericAtom(
                     GRIM::Tokenizer::tokenIdToAtomType(sample.token_id))) {

@@ -143,7 +143,6 @@ const char* OptimizerUpdateTraceMetrics::typeName(int type_idx) {
         case ParamGroupType::ATTENTION: return "attn";
         case ParamGroupType::FFN: return "ffn";
         case ParamGroupType::RMSNORM: return "rmsnorm";
-        case ParamGroupType::SCRATCHBLOCK: return "sb";
         case ParamGroupType::MTP: return "mtp";
         case ParamGroupType::EXECUTION_BLOCK: return "exec";
         case ParamGroupType::SLOT_SELECTOR: return "slot_selector";

@@ -240,19 +240,6 @@ const GRIM::EmbeddingParameterTensors& requireEmbeddingParametersReady(
     return embedding_parameters;
 }
 
-const GRIM::ScratchBlockParameterTensors& requireScratchBlockParametersReady(
-    const ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    const char* caller) {
-    const auto& scratch_block_parameters = parameter_registry.requireScratchBlockParameters(caller);
-    if (!scratch_block_parameters.atom_type_embeddings.data ||
-        !scratch_block_parameters.atom_projection.data ||
-        !scratch_block_parameters.structured_gate_weight.data) {
-        throw std::runtime_error(
-            std::string("[") + caller + "] ScratchBlock parameter tensors are not initialized on the registry owner");
-    }
-    return scratch_block_parameters;
-}
-
 void logInferenceMemorySummary(const GRIM::Config::AiConfigSnapshot& model_cfg,
                                size_t max_batch_size,
                                size_t max_seq_len_cache,
@@ -425,18 +412,6 @@ void initializeInferenceRuntime(const ::GRIM::Config::AiConfigSnapshot& model_cf
     generation_state.resetSession();
     std::cout << "  ✓ Reset Phase2 inference session state" << std::endl;
 
-    const auto scratch_hp = GRIM::HyperParameters::scratchBlockConstructionHP(model_cfg);
-    if (scratch_hp.enabled) {
-        if (!gpu_model_state.scratch_block_layer) {
-            throw std::runtime_error(std::string("[") + caller + "] ScratchBlockConstructionHP.enabled=true but ScratchBlockLayer was not assembled by Startup::assembleGpuModel()");
-        }
-        std::cout << "  ✓ ScratchBlock reasoning layer already assembled by Startup::assembleGpuModel() (d_model="
-                  << scratch_hp.d_model << ", atom_dim=" << scratch_hp.atom_embedding_dim
-                  << ", max_atoms=" << scratch_hp.max_atoms << ")" << std::endl;
-    } else if (gpu_model_state.scratch_block_layer) {
-        throw std::runtime_error(std::string("[") + caller + "] ScratchBlockLayer exists while ScratchBlockConstructionHP.enabled=false");
-    }
-
     training_state.initialized = true;
     logInferenceMemorySummary(model_cfg, max_batch_size, max_seq_len_cache, max_tokens);
 
@@ -576,38 +551,6 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
                 tied_emb);
             (void)requireLmHeadParametersReady(parameter_registry, "Startup::assembleGpuModel");
             std::cout << "✓ LM head parameters created\n";
-        }
-
-        //======================================================//
-        //  4) Build optional registry-owned ScratchBlock parameters and runtime shell
-        //
-        //  HyperparameterGroupings owns the static construction contract;
-        //  ParameterGroupRegistration owns durable ScratchBlock tensor allocation
-        //  on StartupParameterRegistry; startup model assembly only constructs the
-        //  runtime shell after those registry-owned tensors exist.
-        //======================================================//
-        const auto scratch_hp = GRIM::HyperParameters::scratchBlockConstructionHP(model_cfg);
-        if (scratch_hp.enabled) {
-            ModelRegistration::initializeScratchBlockParameterTensors(
-                parameter_registry,
-                scratch_hp,
-                weight_init_seed,
-                init_stream);
-            (void)requireScratchBlockParametersReady(parameter_registry, "Startup::assembleGpuModel");
-
-            const auto& scratch_block_parameters = requireScratchBlockParametersReady(parameter_registry, "Startup::assembleGpuModel");
-            if (!scratch_block_parameters.atom_type_embeddings.data ||
-                !scratch_block_parameters.atom_projection.data) {
-                throw std::runtime_error("[assembleGpuModel] FATAL: registry ScratchBlock tensors not ready after startup allocation");
-            }
-
-            auto& scratch_block_layer = gpu_model_state.scratch_block_layer;
-            scratch_block_layer = std::make_unique<GRIM::ScratchBlockLayer>(
-                scratch_hp, init_stream);
-            if (!scratch_block_layer) {
-                throw std::runtime_error("[assembleGpuModel] FATAL: failed to construct ScratchBlock runtime shell after registry parameter allocation");
-            }
-            std::cout << "✓ ScratchBlock registry parameters and runtime shell created\n";
         }
 
         //======================================================//

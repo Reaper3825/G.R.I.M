@@ -13,7 +13,6 @@
 #include "../../Layers/grim_layer_gpu.hpp"
 #include "../../Layers/Encoding/Encoding_GPU.hpp"
 #include "../../Layers/LMHead/lm_head_GPU.hpp"
-#include "../../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
@@ -638,9 +637,6 @@ BackwardResult executeAutogradBackward(
             static_cast<void*>(lm_grads));
     }
 
-    // ScratchBlock backward is now automatic via ScratchBlockGradFn in the autograd chain.
-    // loss_tensor.backward() → ... → ScratchBlockGradFn::apply() handles parameter gradients.
-    
     // Verify gradients are properly connected before optimizer runs
     AG_INFO("Verifying gradients are connected to optimizer...");
     if (!verifyGradientsAreConnectedImpl(ctx, &gradient_signal_baselines)) {
@@ -863,33 +859,6 @@ bool verifyGradientsAreConnectedImpl(
                 requireReceivedGradient(enc0->attnWqkv(), "layer 0 attnWqkv");
             }
         }
-    }
-
-    const auto scratch_hp = GRIM::HyperParameters::scratchBlockConstructionHP(*ctx.config);
-    if (scratch_hp.enabled) {
-        if (!ctx.scratch_block) {
-            AG_WARN("ScratchBlockConstructionHP.enabled=true but ctx.scratch_block is NULL during gradient verification");
-            ok = false;
-        } else if (!ctx.parameter_registry) {
-            AG_WARN("ScratchBlockConstructionHP.enabled=true but ctx.parameter_registry is NULL during gradient verification");
-            ok = false;
-        } else {
-        auto* scratch_block_parameters = ctx.parameter_registry->getScratchBlockParameters();
-        if (!scratch_block_parameters) {
-            AG_WARN("ScratchBlockConstructionHP.enabled=true but registry scratch_block_parameters are NULL during gradient verification");
-            ok = false;
-        } else {
-        auto checkScratch = [&](Tensor& t, const char* name) {
-            if (t.data) requireAllocatedFinite(t, "scratch block " + std::string(name));
-        };
-        checkScratch(scratch_block_parameters->atom_type_embeddings, "atomTypeEmbeddings");
-        checkScratch(scratch_block_parameters->atom_projection, "atomProjection");
-        checkScratch(scratch_block_parameters->structured_gate_weight, "structuredGateWeight");
-        }
-        }
-    } else if (ctx.scratch_block) {
-        AG_WARN("ctx.scratch_block is non-null while ScratchBlockConstructionHP.enabled=false");
-        ok = false;
     }
 
     if (model_hp.mtp_enabled && model_hp.mtp_k > 0) {

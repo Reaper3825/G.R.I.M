@@ -178,42 +178,6 @@ bool validate_checkpoint_capabilities(
         }
     }
 
-    // ─── ScratchBlock ───
-    if (req.requires_scratch_block) {
-        const auto* fb_sb = model_fb->scratch_block();
-        if (!fb_sb) {
-            Logging::EmitModuleError(kLogModule, "[load] FATAL: ScratchBlock required but missing in checkpoint");
-            return false;
-        }
-        if (!fb_sb->enabled()) {
-            Logging::EmitModuleError(kLogModule, "[load] FATAL: ScratchBlock required but checkpoint has enabled=false");
-            return false;
-        }
-        if (fb_sb->atom_type_embeddings()) {
-            const std::size_t ate_numel = static_cast<std::size_t>(fb_sb->num_atom_types()) *
-                                          static_cast<std::size_t>(fb_sb->atom_embedding_dim());
-            if (static_cast<std::size_t>(fb_sb->atom_type_embeddings()->size()) != ate_numel) {
-                Logging::EmitModuleError(kLogModule,
-                    Msg("[load] FATAL: ScratchBlock atom_type_embeddings size mismatch: checkpoint=",
-                        fb_sb->atom_type_embeddings()->size(), " expected=", ate_numel));
-                return false;
-            }
-            if (!cross_check_view(load_req.scratch_block.atom_type_embeddings, ate_numel,
-                                  "ScratchBlock atom_type_embeddings")) return false;
-        }
-        if (fb_sb->atom_projection()) {
-            const std::size_t ap_expected = static_cast<std::size_t>(fb_sb->atom_embedding_dim()) * d_model;
-            if (static_cast<std::size_t>(fb_sb->atom_projection()->size()) != ap_expected) {
-                Logging::EmitModuleError(kLogModule,
-                    Msg("[load] FATAL: ScratchBlock atom_projection size mismatch: checkpoint=",
-                        fb_sb->atom_projection()->size(), " expected=", ap_expected));
-                return false;
-            }
-            if (!cross_check_view(load_req.scratch_block.atom_projection, ap_expected,
-                                  "ScratchBlock atom_projection")) return false;
-        }
-    }
-
     // ─── ExecutionBlock ───
     if (req.requires_execution_block) {
         const auto* fb_eb = model_fb->execution_block();

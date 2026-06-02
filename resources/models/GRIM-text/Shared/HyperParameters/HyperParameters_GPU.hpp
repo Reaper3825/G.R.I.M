@@ -357,16 +357,13 @@ struct LanguageModelConfig {
     ParameterGroupPrecision parameter_precision_attention = ParameterGroupPrecision::UNSPECIFIED;
     ParameterGroupPrecision parameter_precision_ffn = ParameterGroupPrecision::UNSPECIFIED;
     ParameterGroupPrecision parameter_precision_rmsnorm = ParameterGroupPrecision::UNSPECIFIED;
-    ParameterGroupPrecision parameter_precision_scratchblock = ParameterGroupPrecision::UNSPECIFIED;
     ParameterGroupPrecision parameter_precision_mtp = ParameterGroupPrecision::UNSPECIFIED;
     ParameterGroupPrecision parameter_precision_execution_block = ParameterGroupPrecision::UNSPECIFIED;
     ParameterGroupPrecision parameter_precision_slot_selector = ParameterGroupPrecision::UNSPECIFIED;
 
-    // ScratchBlock reasoning layer config
-    bool use_scratch_block = false;
-    int scratch_block_atom_embedding_dim = 0;
-    int scratch_block_max_atoms = 0;
-    float scratch_block_atom_scale = 0.0f;
+    // Atom-data pipeline config (consumed by ExecutionBlock)
+    bool use_atom_data = false;
+    int atom_embedding_dim = 0;
 
     // ExecutionBlock config — differentiable register machine
     bool execution_block_enabled = false;
@@ -634,7 +631,7 @@ struct LanguageModelConfig {
     int attention_diag_layer = 0;
     int attention_diag_head = 0;
 
-    bool tokenizer_enable_scratch_block_reasoning = false;
+    bool tokenizer_enable_atom_reasoning = false;
     bool tokenizer_detect_numbers = false;
     int tokenizer_target_vocab_size = 0;
     int tokenizer_vocab_size = 0;
@@ -1389,7 +1386,6 @@ inline void validateRootConfigDocument(
     validateParameterGroupPrecision(params.parameter_precision_attention, "parameter_precision_attention", caller);
     validateParameterGroupPrecision(params.parameter_precision_ffn, "parameter_precision_ffn", caller);
     validateParameterGroupPrecision(params.parameter_precision_rmsnorm, "parameter_precision_rmsnorm", caller);
-    validateParameterGroupPrecision(params.parameter_precision_scratchblock, "parameter_precision_scratchblock", caller);
     validateParameterGroupPrecision(params.parameter_precision_mtp, "parameter_precision_mtp", caller);
     validateParameterGroupPrecision(params.parameter_precision_execution_block, "parameter_precision_execution_block", caller);
     validateParameterGroupPrecision(params.parameter_precision_slot_selector, "parameter_precision_slot_selector", caller);
@@ -1439,13 +1435,9 @@ inline void validateRootConfigDocument(
         validationField("execution_block_num_steps", &LanguageModelConfig::execution_block_num_steps)
     }, caller);
 
-    if (params.use_scratch_block || params.execution_block_enabled) {
+    if (params.use_atom_data || params.execution_block_enabled) {
         validatePositiveFields(params, {
-            validationField("scratch_block_atom_embedding_dim", &LanguageModelConfig::scratch_block_atom_embedding_dim),
-            validationField("scratch_block_max_atoms", &LanguageModelConfig::scratch_block_max_atoms)
-        }, caller);
-        validatePositiveFiniteFields(params, {
-            validationField("scratch_block_atom_scale", &LanguageModelConfig::scratch_block_atom_scale)
+            validationField("atom_embedding_dim", &LanguageModelConfig::atom_embedding_dim)
         }, caller);
     }
     if (params.structured_ce_enabled) {
@@ -1467,9 +1459,9 @@ inline void validateRootConfigDocument(
             std::string(caller) + ": selector_enabled=true requires execution_block_enabled=true");
     }
     if (params.execution_block_enabled) {
-        if (!params.use_scratch_block) {
+        if (!params.use_atom_data) {
             throw std::runtime_error(
-                std::string(caller) + ": execution_block_enabled=true requires use_scratch_block=true");
+                std::string(caller) + ": execution_block_enabled=true requires use_atom_data=true");
         }
         validateFieldsAtLeast(params, {
             validationConstantBound("execution_block_layer", &LanguageModelConfig::execution_block_layer, -1, "-1"),
@@ -1506,9 +1498,9 @@ inline void validateRootConfigDocument(
             validationField("execution_block_cross_attn_head_dim", &LanguageModelConfig::execution_block_cross_attn_head_dim),
             validationField("execution_block_cross_attn_topk", &LanguageModelConfig::execution_block_cross_attn_topk)
         }, caller);
-        if (params.execution_block_value_decode_input_dim + 16 > params.scratch_block_atom_embedding_dim) {
+        if (params.execution_block_value_decode_input_dim + 16 > params.atom_embedding_dim) {
             throw std::runtime_error(
-                std::string(caller) + ": execution_block_value_decode_input_dim + 16 must fit scratch_block_atom_embedding_dim");
+                std::string(caller) + ": execution_block_value_decode_input_dim + 16 must fit atom_embedding_dim");
         }
         if (params.execution_block_cross_attn_topk > params.execution_block_num_slots) {
             throw std::runtime_error(
@@ -1750,7 +1742,6 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(parameter_precision_attention);
     GRIM_LOAD_CONFIG_FIELD(parameter_precision_ffn);
     GRIM_LOAD_CONFIG_FIELD(parameter_precision_rmsnorm);
-    GRIM_LOAD_CONFIG_FIELD(parameter_precision_scratchblock);
     GRIM_LOAD_CONFIG_FIELD(parameter_precision_mtp);
     GRIM_LOAD_CONFIG_FIELD(parameter_precision_execution_block);
     GRIM_LOAD_CONFIG_FIELD(parameter_precision_slot_selector);
@@ -1894,10 +1885,8 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(scratch_blocks_enabled);
     GRIM_LOAD_CONFIG_FIELD(scratch_num_blocks);
     GRIM_LOAD_CONFIG_FIELD(scratch_write_combined);
-    GRIM_LOAD_CONFIG_FIELD(use_scratch_block);
-    GRIM_LOAD_CONFIG_FIELD(scratch_block_atom_embedding_dim);
-    GRIM_LOAD_CONFIG_FIELD(scratch_block_max_atoms);
-    GRIM_LOAD_CONFIG_FIELD(scratch_block_atom_scale);
+    GRIM_LOAD_CONFIG_FIELD(use_atom_data);
+    GRIM_LOAD_CONFIG_FIELD(atom_embedding_dim);
     GRIM_LOAD_CONFIG_FIELD(execution_block_enabled);
     GRIM_LOAD_CONFIG_FIELD(execution_block_debug_mode);
     GRIM_LOAD_CONFIG_LEAF("execution_block_step_y_overrides_x", step_y_overrides_x);
@@ -1957,7 +1946,7 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(attention_diag_enabled);
     GRIM_LOAD_CONFIG_FIELD(attention_diag_layer);
     GRIM_LOAD_CONFIG_FIELD(attention_diag_head);
-    GRIM_LOAD_CONFIG_FIELD(tokenizer_enable_scratch_block_reasoning);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_enable_atom_reasoning);
     GRIM_LOAD_CONFIG_FIELD(tokenizer_detect_numbers);
     GRIM_LOAD_CONFIG_FIELD(tokenizer_vocab_size);
     GRIM_LOAD_CONFIG_FIELD(tokenizer_max_vocab_size);
@@ -2220,14 +2209,11 @@ inline void writeFinalizedLanguageModelConfigToSnapshot(
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_attention);
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_ffn);
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_rmsnorm);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_scratchblock);
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_mtp);
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_execution_block);
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_slot_selector);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(use_scratch_block);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(scratch_block_atom_embedding_dim);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(scratch_block_max_atoms);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(scratch_block_atom_scale);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(use_atom_data);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(atom_embedding_dim);
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_layer);
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_num_ops);
@@ -2450,7 +2436,7 @@ inline void writeFinalizedLanguageModelConfigToSnapshot(
     GRIM_WRITE_FINAL_CONFIG_FIELD(attention_diag_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(attention_diag_layer);
     GRIM_WRITE_FINAL_CONFIG_FIELD(attention_diag_head);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_enable_scratch_block_reasoning);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_enable_atom_reasoning);
     GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_detect_numbers);
     GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_target_vocab_size);
     GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_vocab_size);

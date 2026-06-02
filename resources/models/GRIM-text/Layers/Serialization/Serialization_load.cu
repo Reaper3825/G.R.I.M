@@ -323,12 +323,6 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
                 if (!lm) { emitFlatBufferLoadDiag("DIAG: lm_head = NULL (required!)"); }
                 else { flatbuffers::Verifier v(buffer.data(), buffer.size()); Logging::EmitModuleError(kLogModule, Msg("[load] DIAG: lm_head verify=", lm->Verify(v) ? "OK" : "FAIL")); }
             }
-            // Scratch block
-            {
-                const auto* sb = raw_model->scratch_block();
-                if (!sb) { emitFlatBufferLoadDiag("DIAG: scratch_block = NULL"); }
-                else { flatbuffers::Verifier v(buffer.data(), buffer.size()); Logging::EmitModuleError(kLogModule, Msg("[load] DIAG: scratch_block verify=", sb->Verify(v) ? "OK" : "FAIL")); }
-            }
             // Training metadata
             {
                 const auto* tm = raw_model->training_metadata();
@@ -516,24 +510,6 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
         }
     }
 
-    // ─── ScratchBlock (gated by requires_scratch_block) ───
-    if (req.requires_scratch_block) {
-        const auto* fb_sb = model_fb->scratch_block();
-        if (request.scratch_block.atom_type_embeddings.ptr && fb_sb->atom_type_embeddings()) {
-            std::vector<float> sb_ate(fb_sb->atom_type_embeddings()->begin(), fb_sb->atom_type_embeddings()->end());
-            if (!upload_device_vector(sb_ate, request.scratch_block.atom_type_embeddings, "ScratchBlock atom_type_embeddings"))
-                return false;
-        }
-        if (request.scratch_block.atom_projection.ptr && fb_sb->atom_projection()) {
-            std::vector<float> sb_ap(fb_sb->atom_projection()->begin(), fb_sb->atom_projection()->end());
-            if (!upload_device_vector(sb_ap, request.scratch_block.atom_projection, "ScratchBlock atom_projection"))
-                return false;
-        }
-        request.report.scratch_block_loaded = true;
-        Logging::EmitModuleInfo(kLogModule, Msg("[load] ScratchBlock: atom_types=",
-            fb_sb->num_atom_types(), " atom_dim=", fb_sb->atom_embedding_dim()));
-    }
-
     // ─── ExecutionBlock (gated by requires_execution_block) ───
     if (req.requires_execution_block) {
         const auto* fb_eb = model_fb->execution_block();
@@ -615,10 +591,6 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
     }
 
     // ─── Step 7: Final load verification (safety) ───
-    if (req.requires_scratch_block && !request.report.scratch_block_loaded) {
-        Logging::EmitModuleError(kLogModule, "[load] FATAL: ScratchBlock required but not loaded");
-        return false;
-    }
     if (req.requires_execution_block && !request.report.execution_block_loaded) {
         Logging::EmitModuleError(kLogModule, "[load] FATAL: ExecutionBlock required but not loaded");
         return false;

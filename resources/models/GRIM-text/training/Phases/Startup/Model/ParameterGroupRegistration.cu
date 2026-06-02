@@ -34,7 +34,6 @@ using GRIM::Tensor;
 using GRIM::HyperParameters::ExecutionBlockConstructionHP;
 using GRIM::HyperParameters::ParameterGroupPrecision;
 using GRIM::HyperParameters::OptimizerUpdateHP;
-using GRIM::HyperParameters::scratchBlockConstructionHP;
 
 std::string tensorDebugSummary(const Tensor& tensor) {
     std::ostringstream oss;
@@ -56,10 +55,9 @@ size_t paramGroupTypeIndex(ParamGroupType type) {
         case ParamGroupType::ATTENTION:       return 2;
         case ParamGroupType::FFN:             return 3;
         case ParamGroupType::RMSNORM:         return 4;
-        case ParamGroupType::SCRATCHBLOCK:    return 5;
-        case ParamGroupType::MTP:             return 6;
-        case ParamGroupType::EXECUTION_BLOCK: return 7;
-        case ParamGroupType::SLOT_SELECTOR:   return 8;
+        case ParamGroupType::MTP:             return 5;
+        case ParamGroupType::EXECUTION_BLOCK: return 6;
+        case ParamGroupType::SLOT_SELECTOR:   return 7;
         case ParamGroupType::COUNT: break;
     }
     throw std::runtime_error("[buildParameterGroups] invalid ParamGroupType::COUNT in registered group summary");
@@ -72,7 +70,6 @@ const char* paramGroupTypeSummaryName(ParamGroupType type) {
         case ParamGroupType::ATTENTION:       return "attention";
         case ParamGroupType::FFN:             return "ffn";
         case ParamGroupType::RMSNORM:         return "rmsnorm";
-        case ParamGroupType::SCRATCHBLOCK:    return "scratchblock";
         case ParamGroupType::MTP:             return "mtp";
         case ParamGroupType::EXECUTION_BLOCK: return "execution_block";
         case ParamGroupType::SLOT_SELECTOR:   return "slot_selector";
@@ -224,7 +221,6 @@ private:
             case ParamGroupType::ATTENTION:       return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_attention");
             case ParamGroupType::FFN:             return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_ffn");
             case ParamGroupType::RMSNORM:         return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_rmsnorm");
-            case ParamGroupType::SCRATCHBLOCK:    return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_scratchblock");
             case ParamGroupType::MTP:             return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_mtp");
             case ParamGroupType::EXECUTION_BLOCK: return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_execution_block");
             case ParamGroupType::SLOT_SELECTOR:   return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_slot_selector");
@@ -414,34 +410,6 @@ void registerEncoderParameters(Startup::GpuModelState& gpu_model_state,
     }
 }
 
-void registerScratchBlockParameters(Startup::GpuModelState& gpu_model_state,
-                                    ParameterRegistry::StartupParameterRegistry& parameter_registry,
-                                    Registrar& registrar,
-                                                const GRIM::Config::AiConfigSnapshot& config) {
-    auto* scratch_block = gpu_model_state.scratch_block_layer.get();
-    auto* scratch_block_parameters = parameter_registry.getScratchBlockParameters();
-    const auto scratch_hp = scratchBlockConstructionHP(config);
-
-    if (!scratch_hp.enabled) {
-        if (scratch_block) {
-            throw std::runtime_error("[buildParameterGroups] ScratchBlock layer exists while ScratchBlockConstructionHP.enabled=false");
-        }
-        if (scratch_block_parameters) {
-            throw std::runtime_error("[buildParameterGroups] ScratchBlock parameter owner exists while ScratchBlockConstructionHP.enabled=false");
-        }
-        return;
-    }
-
-    if (!scratch_block) {
-        throw std::runtime_error("[buildParameterGroups] ScratchBlockConstructionHP.enabled=true but ScratchBlock layer is NULL");
-    }
-    if (!scratch_block_parameters) {
-        throw std::runtime_error("[buildParameterGroups] ScratchBlockConstructionHP.enabled=true but registry ScratchBlock parameter owner is NULL");
-    }
-
-    ParameterRegistry::registerScratchBlockParameters(*scratch_block_parameters, registrar);
-}
-
 void registerExecutionBlockParameters(Startup::GpuModelState& gpu_model_state,
                                       ParameterRegistry::StartupParameterRegistry& parameter_registry,
                                       Registrar& registrar,
@@ -569,7 +537,7 @@ void validateRegisteredTensorPrecisionMetadata(const std::vector<ParameterGroup>
 void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
     constexpr size_t kParamGroupTypeCount = static_cast<size_t>(ParamGroupType::COUNT);
     constexpr size_t kPrecisionCount = 2;
-    static_assert(kParamGroupTypeCount == 9,
+    static_assert(kParamGroupTypeCount == 8,
                   "Registered group precision summary must list every ParamGroupType");
 
     const std::array<ParamGroupType, kParamGroupTypeCount> group_types = {
@@ -578,7 +546,6 @@ void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
         ParamGroupType::ATTENTION,
         ParamGroupType::FFN,
         ParamGroupType::RMSNORM,
-        ParamGroupType::SCRATCHBLOCK,
         ParamGroupType::MTP,
         ParamGroupType::EXECUTION_BLOCK,
         ParamGroupType::SLOT_SELECTOR
@@ -602,7 +569,6 @@ void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
             case ParamGroupType::ATTENTION: ++attn_count; break;
             case ParamGroupType::FFN: ++ffn_count; break;
             case ParamGroupType::RMSNORM: ++rms_count; break;
-            case ParamGroupType::SCRATCHBLOCK: ++other_count; break;
             case ParamGroupType::MTP: ++other_count; break;
             case ParamGroupType::EXECUTION_BLOCK: ++other_count; break;
             case ParamGroupType::SLOT_SELECTOR: ++other_count; break;
@@ -668,7 +634,6 @@ void validateParameterRegistrationConfig(const GRIM::Config::AiConfigSnapshot& c
     GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_attention"), "parameter_precision_attention", "buildParameterGroups");
     GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_ffn"), "parameter_precision_ffn", "buildParameterGroups");
     GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_rmsnorm"), "parameter_precision_rmsnorm", "buildParameterGroups");
-    GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_scratchblock"), "parameter_precision_scratchblock", "buildParameterGroups");
     GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_mtp"), "parameter_precision_mtp", "buildParameterGroups");
     GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_execution_block"), "parameter_precision_execution_block", "buildParameterGroups");
     GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_slot_selector"), "parameter_precision_slot_selector", "buildParameterGroups");
@@ -930,63 +895,6 @@ void initializeLmHeadParameterTensors(
     emitInfo("[initializeLmHeadParameterTensors] Initialized registry-owned LM-head tensors");
 }
 
-void initializeScratchBlockParameterTensors(
-    ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    const GRIM::HyperParameters::ScratchBlockConstructionHP& scratch_hp,
-    std::uint64_t weight_init_seed,
-    cudaStream_t init_stream) {
-    if (!scratch_hp.enabled) {
-        if (parameter_registry.getScratchBlockParameters()) {
-            throw std::runtime_error("initializeScratchBlockParameterTensors: ScratchBlock disabled but registry owner already exists");
-        }
-        return;
-    }
-    if (!init_stream) {
-        throw std::runtime_error("initializeScratchBlockParameterTensors: init_stream is NULL");
-    }
-    if (scratch_hp.d_model <= 0) {
-        throw std::runtime_error("initializeScratchBlockParameterTensors: d_model must be positive, got " +
-                                 std::to_string(scratch_hp.d_model));
-    }
-    if (scratch_hp.atom_embedding_dim <= 0) {
-        throw std::runtime_error("initializeScratchBlockParameterTensors: atom_embedding_dim must be positive, got " +
-                                 std::to_string(scratch_hp.atom_embedding_dim));
-    }
-    if (parameter_registry.getScratchBlockParameters()) {
-        throw std::runtime_error("initializeScratchBlockParameterTensors: registry ScratchBlock tensor owner is already initialized");
-    }
-
-    parameter_registry.scratch_block_parameters = std::make_unique<GRIM::ScratchBlockParameterTensors>();
-    auto& tensors = *parameter_registry.scratch_block_parameters;
-
-    const int num_atom_types = GRIM::Tokenizer::kAtomTypeCount;
-    tensors.atom_type_embeddings = Tensor::zeros(
-        {num_atom_types, scratch_hp.atom_embedding_dim},
-        init_stream,
-        "scratch_block.atom_type_embeddings");
-    tensors.atom_type_embeddings.requires_grad_();
-    tensors.atom_type_embeddings.ensure_grad();
-    Tensor::xavier_uniform_(tensors.atom_type_embeddings, weight_init_seed + 40, init_stream);
-
-    tensors.atom_projection = Tensor::zeros(
-        {scratch_hp.atom_embedding_dim, scratch_hp.d_model},
-        init_stream,
-        "scratch_block.atom_projection");
-    tensors.atom_projection.requires_grad_();
-    tensors.atom_projection.ensure_grad();
-    Tensor::xavier_uniform_(tensors.atom_projection, weight_init_seed + 41, init_stream);
-
-    tensors.structured_gate_weight = Tensor::zeros(
-        {2 * scratch_hp.d_model, scratch_hp.d_model},
-        init_stream,
-        "scratch_block.structured_gate_weight");
-    tensors.structured_gate_weight.requires_grad_();
-    tensors.structured_gate_weight.ensure_grad();
-    Tensor::xavier_uniform_(tensors.structured_gate_weight, weight_init_seed + 42, init_stream);
-
-    emitInfo("[initializeScratchBlockParameterTensors] Initialized registry-owned ScratchBlock tensors");
-}
-
 void initializeExecutionBlockParameterTensors(
     ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const ExecutionBlockConstructionHP& execution_hp,
@@ -1136,7 +1044,6 @@ void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,
     registerTopLevelParameters(gpu_model_state, parameter_registry, registrar, config);
     registerEncoderParameters(gpu_model_state, parameter_registry, registrar, config);
 
-    registerScratchBlockParameters(gpu_model_state, parameter_registry, registrar, config);
     registerExecutionBlockParameters(gpu_model_state, parameter_registry, registrar, config);
     registerMtpParameters(parameter_registry, registrar, config);
 

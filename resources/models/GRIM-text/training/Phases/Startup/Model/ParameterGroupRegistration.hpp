@@ -22,7 +22,6 @@ struct EmbeddingLayerConstructionHP;
 struct EncoderLayerConstructionHP;
 struct ExecutionBlockConstructionHP;
 struct LMHeadLayerConstructionHP;
-struct ScratchBlockConstructionHP;
 }
 }
 
@@ -66,12 +65,6 @@ void initializeLmHeadParameterTensors(
     std::uint64_t weight_init_seed,
     cudaStream_t init_stream,
     GRIM::Tensor* tied_embedding_weights);
-
-void initializeScratchBlockParameterTensors(
-    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    const GRIM::HyperParameters::ScratchBlockConstructionHP& scratch_hp,
-    std::uint64_t weight_init_seed,
-    cudaStream_t init_stream);
 
 void initializeExecutionBlockParameterTensors(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,

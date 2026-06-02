@@ -92,23 +92,6 @@ struct SerializationLMHeadWriteView {
 	bool expect_bias = false;
 };
 
-struct SerializationScratchBlockReadView {
-	DeviceReadView atom_type_embeddings;
-	DeviceReadView atom_projection;
-	int num_atom_types = 0;
-	int atom_embedding_dim = 0;
-	int d_model = 0;
-	float atom_scale = 1.0f;
-	bool enabled = false;
-};
-
-struct SerializationScratchBlockWriteView {
-	DeviceWriteView atom_type_embeddings;
-	DeviceWriteView atom_projection;
-	int num_atom_types = 0;
-	int atom_embedding_dim = 0;
-};
-
 struct SerializationExecutionBlockReadView {
 	DeviceReadView w_decode_1;
 	DeviceReadView b_decode_1;

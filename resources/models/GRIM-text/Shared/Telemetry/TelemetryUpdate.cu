@@ -184,14 +184,8 @@ void populateEBInjectionStreams(
     // This is populated by the caller after populateEBInjectionStreams
     obs[25] = eb_loss_frac;
 
-    // Stream 26: SB_ATOM_EMBED_RMS
-    float atom_embed_rms = 0.0f;
-    auto* scratch_block_parameters = parameter_registry.getScratchBlockParameters();
-    if (scratch_block_parameters) {
-        const auto& ate = scratch_block_parameters->atom_type_embeddings;
-        atom_embed_rms = gpuBufferRMS(ate.data, ate.numel(), "scratch_block.atomTypeEmbeddings");
-    }
-    obs[26] = atom_embed_rms;
+    // Stream 26: SB_ATOM_EMBED_RMS (ScratchBlock removed — no atom-embedding source remains)
+    obs[26] = 0.0f;
 }
 
 //------------------------------------------------------

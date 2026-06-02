@@ -6,7 +6,7 @@
 //  - Unigram LM for high-quality subword tokenization
 //  - Byte fallback for 100% coverage
 //  - Structural detection for atom injection
-//  - Placeholder system for ScratchBlock integration
+//  - Placeholder system for atom reasoning integration
 //  
 //  Token ID Layout:
 //    [0-3]                    = Special tokens (<unk>, <pad>, <s>, </s>)
@@ -197,19 +197,19 @@ public:
     //--------------------------------------------------//
     
     // Standard encode (returns just token IDs)
-    // Uses scratch block reasoning if enabled, otherwise falls back to normal UnigramByte
+    // Uses atom reasoning if enabled, otherwise falls back to normal UnigramByte
     std::vector<int> encode(const std::string& text) const;
     
     // Full tokenization with metadata (includes atom detection results)
     UniByteResult tokenizeWithMetadata(const std::string& text) const;
     
     //--------------------------------------------------//
-    // Scratch Block Reasoning Control
+    // Atom Reasoning Control
     //--------------------------------------------------//
     
-    // Enable/disable scratch block reasoning at runtime
-    void setScratchBlockReasoning(bool enabled);
-    bool isScratchBlockReasoningEnabled() const { return tokenizer_hp_.enable_scratch_block_reasoning; }
+    // Enable/disable atom reasoning at runtime
+    void setAtomReasoning(bool enabled);
+    bool isAtomReasoningEnabled() const { return tokenizer_hp_.enable_atom_reasoning; }
     
     //--------------------------------------------------//
     // Decoding

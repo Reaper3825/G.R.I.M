@@ -91,7 +91,7 @@ static ::GRIM::HyperParameters::TokenizerHP makeSelfTestTokenizerHP() {
     hp.character_coverage = 0.9995f;
     hp.min_subword_freq = 3;
     hp.enable_parallel_subword_mining = true;
-    hp.enable_scratch_block_reasoning = true;
+    hp.enable_atom_reasoning = true;
     hp.detect_numbers = true;
     hp.enable_byte_fallback = true;
     hp.vocab_score_multiplier = 1.0f;
@@ -1745,8 +1745,8 @@ bool testEdgeCaseLongSequence(std::string& message) {
 bool testEdgeCaseSpecialTokenLiterals(std::string& message) {
     auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
-    // Disable scratch block reasoning to avoid atom detection interfering with special token literals
-    config.enable_scratch_block_reasoning = false;
+    // Disable atom reasoning to avoid atom detection interfering with special token literals
+    config.enable_atom_reasoning = false;
     UniByte tokenizer(config);
     
     // Add vocab pieces for common words — ▁-prefixed for SentencePiece normalization
@@ -1816,7 +1816,7 @@ bool testUnicodeWithStructural(std::string& message) {
     auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
     config.detect_numbers = true;
-    config.enable_scratch_block_reasoning = true;  // Enable atom detection
+    config.enable_atom_reasoning = true;  // Enable atom detection
     UniByte tokenizer(config);
     
     std::string input = "日本の価格は 42.5 円です";

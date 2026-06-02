@@ -38,7 +38,6 @@
 #include <cublas_v2.h>
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
-#include "../Layers/ScratchBlock/ScratchBlockReasoning_GPU.hpp"
 #include "../Layers/ExecutionBlock/execution_block_GPU.hpp"
 #include "../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
 #include "../Shared/Execution/DecodeTimeNumPolicy.hpp"
@@ -158,11 +157,6 @@ public:
     const Config::AiConfigSnapshot& getConfig() const { return config_; }
     
 #ifdef USE_CUDA
-    // ScratchBlock reasoning layer access. Presence is config-gated by
-    // HyperParameters::scratchBlockConstructionHP(config_); do not runtime-toggle it.
-    ScratchBlockLayer* getScratchBlockLayer() { return gpu_model_state_ ? gpu_model_state_->scratch_block_layer.get() : nullptr; }
-    const ScratchBlockLayer* getScratchBlockLayer() const { return gpu_model_state_ ? gpu_model_state_->scratch_block_layer.get() : nullptr; }
-
     // Execution Block presence is config-gated by
     // HyperParameters::executionBlockConstructionHP(config_); there is no
     // runtime layer object — durable execution-block parameters live on the

@@ -116,7 +116,6 @@ std::vector<float> runInferencePrefill(GRIM::LanguageModel* model,
     // and this dead test requires a full rewrite before it can source that owner correctly.
     request.embedding_layer = model->getEmbeddingLayer();
     request.lm_head = model->getLmHeadLayer();
-    request.scratch_block = model->getScratchBlockLayer();
     request.execution_block_enabled = model->executionBlockEnabled();
     request.cublas_handle = training_state->cublas_handle.get();
     request.stream = stream;

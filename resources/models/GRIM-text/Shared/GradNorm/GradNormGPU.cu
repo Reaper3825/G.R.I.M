@@ -56,7 +56,7 @@ namespace {
 
 constexpr int kBlockSize = HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
 constexpr int kMaxBlocksPerGroup = HyperParameters::CUDA_REDUCTION_MAX_BLOCKS;
-constexpr int kExpectedParamGroupTypes = 9;
+constexpr int kExpectedParamGroupTypes = 8;
 
 constexpr bool isPowerOfTwo(int value) {
     return value > 0 && (value & (value - 1)) == 0;
@@ -144,10 +144,6 @@ GradNormStatus accumulateGroupMetrics(
         case GRIM::ParamGroupType::RMSNORM:
             m.rmsnorm_sum_sq += sum_sq;
             m.rmsnorm_count += count;
-            return GradNormStatus::SUCCESS;
-        case GRIM::ParamGroupType::SCRATCHBLOCK:
-            m.scratchblock_sum_sq += sum_sq;
-            m.scratchblock_count += count;
             return GradNormStatus::SUCCESS;
         case GRIM::ParamGroupType::MTP:
             m.mtp_sum_sq += sum_sq;

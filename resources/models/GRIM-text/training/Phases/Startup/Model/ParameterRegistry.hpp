@@ -45,12 +45,6 @@ struct DecodeTimeSlotSelector {
     Tensor null_logit_bias;  // [1, 1] scalar
 };
 
-struct ScratchBlockParameterTensors {
-    Tensor atom_type_embeddings;   // [num_atom_types, atom_embedding_dim]
-    Tensor atom_projection;        // [atom_embedding_dim, d_model]
-    Tensor structured_gate_weight; // [2 * d_model, d_model]
-};
-
 struct ExecutionBlockParameterTensors {
     Tensor w_decode_1;
     Tensor b_decode_1;
@@ -103,7 +97,6 @@ namespace ParameterRegistry {
 struct StartupParameterRegistry {
     std::unique_ptr<GRIM::EmbeddingParameterTensors> embedding_parameters;
     std::unique_ptr<GRIM::LMHeadParameterTensors> lm_head_parameters;
-    std::unique_ptr<GRIM::ScratchBlockParameterTensors> scratch_block_parameters;
     std::unique_ptr<GRIM::DecodeTimeSlotSelector> decode_time_slot_selector;
     std::unique_ptr<GRIM::ExecutionBlockParameterTensors> execution_block_parameters;
     std::vector<GRIM::FeedForwardParameterTensors> feed_forward_parameter_tensors;
@@ -156,28 +149,6 @@ struct StartupParameterRegistry {
             throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.lm_head_parameters is NULL");
         }
         return *lm_head_parameters;
-    }
-
-    GRIM::ScratchBlockParameterTensors* getScratchBlockParameters() {
-        return scratch_block_parameters.get();
-    }
-
-    const GRIM::ScratchBlockParameterTensors* getScratchBlockParameters() const {
-        return scratch_block_parameters.get();
-    }
-
-    GRIM::ScratchBlockParameterTensors& requireScratchBlockParameters(const char* caller) {
-        if (!scratch_block_parameters) {
-            throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.scratch_block_parameters is NULL");
-        }
-        return *scratch_block_parameters;
-    }
-
-    const GRIM::ScratchBlockParameterTensors& requireScratchBlockParameters(const char* caller) const {
-        if (!scratch_block_parameters) {
-            throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.scratch_block_parameters is NULL");
-        }
-        return *scratch_block_parameters;
     }
 
     GRIM::DecodeTimeSlotSelector* getDecodeTimeSlotSelector() {
@@ -279,9 +250,6 @@ struct TensorParameterSpec {
 using DecodeTimeSlotSelectorTensorParameterSpec =
     TensorParameterSpec<GRIM::DecodeTimeSlotSelector>;
 
-using ScratchBlockTensorParameterSpec =
-    TensorParameterSpec<GRIM::ScratchBlockParameterTensors>;
-
 using ExecutionBlockTensorParameterSpec =
     TensorParameterSpec<GRIM::ExecutionBlockParameterTensors>;
 
@@ -310,16 +278,6 @@ inline constexpr std::array<DecodeTimeSlotSelectorTensorParameterSpec, 4>
          GRIM::ParamGroupType::SLOT_SELECTOR, GRIM::ParamStatsBucket::ENCODER},
         {"selector_null_logit_bias", &GRIM::DecodeTimeSlotSelector::null_logit_bias,
          GRIM::ParamGroupType::SLOT_SELECTOR, GRIM::ParamStatsBucket::ENCODER},
-    }};
-
-inline constexpr std::array<ScratchBlockTensorParameterSpec, 3>
-    kScratchBlockTensorParameters = {{
-        {"scratch_block_atom_type_embeddings", &GRIM::ScratchBlockParameterTensors::atom_type_embeddings,
-         GRIM::ParamGroupType::SCRATCHBLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"scratch_block_atom_projection", &GRIM::ScratchBlockParameterTensors::atom_projection,
-         GRIM::ParamGroupType::SCRATCHBLOCK, GRIM::ParamStatsBucket::ENCODER},
-        {"scratch_block_structured_gate_weight", &GRIM::ScratchBlockParameterTensors::structured_gate_weight,
-         GRIM::ParamGroupType::SCRATCHBLOCK, GRIM::ParamStatsBucket::ENCODER},
     }};
 
 inline constexpr std::array<ExecutionBlockTensorParameterSpec, 30>
@@ -426,19 +384,6 @@ inline void registerDecodeTimeSlotSelectorParameters(
     for (const auto& spec : kDecodeTimeSlotSelectorTensorParameters) {
         registrar.addTensor(spec.name,
                             selector.*(spec.tensor_member),
-                            spec.type,
-                            spec.stats_bucket,
-                            spec.layer);
-    }
-}
-
-template <typename RegistrarT>
-inline void registerScratchBlockParameters(
-    GRIM::ScratchBlockParameterTensors& scratch_block_parameters,
-    RegistrarT& registrar) {
-    for (const auto& spec : kScratchBlockTensorParameters) {
-        registrar.addTensor(spec.name,
-                            scratch_block_parameters.*(spec.tensor_member),
                             spec.type,
                             spec.stats_bucket,
                             spec.layer);

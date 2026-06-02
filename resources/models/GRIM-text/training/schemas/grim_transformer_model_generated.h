@@ -8,7 +8,9 @@
 
 // Ensure the included flatbuffers.h is the same version as when this file was
 // generated, otherwise it may not be compatible.
-static_assert(FLATBUFFERS_VERSION_MAJOR == 25,
+static_assert(FLATBUFFERS_VERSION_MAJOR == 25 &&
+              FLATBUFFERS_VERSION_MINOR == 2 &&
+              FLATBUFFERS_VERSION_REVISION == 10,
              "Non-compatible flatbuffers version included");
 
 namespace GRIMTransformer {
@@ -52,10 +54,6 @@ struct NumericHeadWeightsT;
 struct ReasoningHeadWeights;
 struct ReasoningHeadWeightsBuilder;
 struct ReasoningHeadWeightsT;
-
-struct ScratchBlockWeights;
-struct ScratchBlockWeightsBuilder;
-struct ScratchBlockWeightsT;
 
 struct DecodeTimeSlotSelectorWeights;
 struct DecodeTimeSlotSelectorWeightsBuilder;
@@ -141,8 +139,7 @@ struct Matrix FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint32_t cols() const {
     return GetField<uint32_t>(VT_COLS, 0);
   }
-  template <bool B = false>
-  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+  bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffsetRequired(verifier, VT_DATA) &&
            verifier.VerifyVector(data()) &&
@@ -221,8 +218,7 @@ struct Vector FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const ::flatbuffers::Vector<float> *data() const {
     return GetPointer<const ::flatbuffers::Vector<float> *>(VT_DATA);
   }
-  template <bool B = false>
-  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+  bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffsetRequired(verifier, VT_DATA) &&
            verifier.VerifyVector(data()) &&
@@ -290,8 +286,7 @@ struct RMSNormWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   float epsilon() const {
     return GetField<float>(VT_EPSILON, 0.00001f);
   }
-  template <bool B = false>
-  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+  bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffsetRequired(verifier, VT_GAMMA) &&
            verifier.VerifyVector(gamma()) &&
@@ -437,8 +432,7 @@ struct AttentionWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   bool fuse_qkv() const {
     return GetField<uint8_t>(VT_FUSE_QKV, 0) != 0;
   }
-  template <bool B = false>
-  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+  bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffset(verifier, VT_W_QKV_DATA) &&
            verifier.VerifyVector(w_qkv_data()) &&
@@ -674,8 +668,7 @@ struct FFNWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const ::flatbuffers::Vector<float> *w_gate_data() const {
     return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_GATE_DATA);
   }
-  template <bool B = false>
-  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+  bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffsetRequired(verifier, VT_W1_DATA) &&
            verifier.VerifyVector(w1_data()) &&
@@ -840,8 +833,7 @@ struct EncoderLayerWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Tabl
   uint32_t layer_id() const {
     return GetField<uint32_t>(VT_LAYER_ID, 0);
   }
-  template <bool B = false>
-  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+  bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffsetRequired(verifier, VT_ATTENTION) &&
            verifier.VerifyTable(attention()) &&
@@ -999,8 +991,7 @@ struct EmbeddingWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint32_t max_seq_len() const {
     return GetField<uint32_t>(VT_MAX_SEQ_LEN, 0);
   }
-  template <bool B = false>
-  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+  bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffsetRequired(verifier, VT_TOKEN_EMBEDDINGS) &&
            verifier.VerifyVector(token_embeddings()) &&
@@ -1122,8 +1113,7 @@ struct LMHeadWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   bool use_bias() const {
     return GetField<uint8_t>(VT_USE_BIAS, 0) != 0;
   }
-  template <bool B = false>
-  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+  bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffset(verifier, VT_PROJECTION_DATA) &&
            verifier.VerifyVector(projection_data()) &&
@@ -1242,8 +1232,7 @@ struct NumericHeadWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table
   bool use_bias() const {
     return GetField<uint8_t>(VT_USE_BIAS, 0) != 0;
   }
-  template <bool B = false>
-  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+  bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffset(verifier, VT_PROJECTION_DATA) &&
            verifier.VerifyVector(projection_data()) &&
@@ -1356,8 +1345,7 @@ struct ReasoningHeadWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Tab
   uint32_t d_total() const {
     return GetField<uint32_t>(VT_D_TOTAL, 0);
   }
-  template <bool B = false>
-  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+  bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffset(verifier, VT_W_OP_DATA) &&
            verifier.VerifyVector(w_op_data()) &&
@@ -1451,149 +1439,6 @@ inline ::flatbuffers::Offset<ReasoningHeadWeights> CreateReasoningHeadWeightsDir
 
 ::flatbuffers::Offset<ReasoningHeadWeights> CreateReasoningHeadWeights(::flatbuffers::FlatBufferBuilder &_fbb, const ReasoningHeadWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 
-struct ScratchBlockWeightsT : public ::flatbuffers::NativeTable {
-  typedef ScratchBlockWeights TableType;
-  std::vector<float> atom_type_embeddings{};
-  std::vector<float> atom_projection{};
-  uint32_t num_atom_types = 0;
-  uint32_t atom_embedding_dim = 0;
-  uint32_t d_model = 0;
-  float atom_scale = 0.0f;
-  bool enabled = false;
-};
-
-struct ScratchBlockWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef ScratchBlockWeightsT NativeTableType;
-  typedef ScratchBlockWeightsBuilder Builder;
-  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
-    VT_ATOM_TYPE_EMBEDDINGS = 4,
-    VT_ATOM_PROJECTION = 6,
-    VT_NUM_ATOM_TYPES = 8,
-    VT_ATOM_EMBEDDING_DIM = 10,
-    VT_D_MODEL = 12,
-    VT_ATOM_SCALE = 14,
-    VT_ENABLED = 16
-  };
-  const ::flatbuffers::Vector<float> *atom_type_embeddings() const {
-    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_ATOM_TYPE_EMBEDDINGS);
-  }
-  const ::flatbuffers::Vector<float> *atom_projection() const {
-    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_ATOM_PROJECTION);
-  }
-  uint32_t num_atom_types() const {
-    return GetField<uint32_t>(VT_NUM_ATOM_TYPES, 0);
-  }
-  uint32_t atom_embedding_dim() const {
-    return GetField<uint32_t>(VT_ATOM_EMBEDDING_DIM, 0);
-  }
-  uint32_t d_model() const {
-    return GetField<uint32_t>(VT_D_MODEL, 0);
-  }
-  float atom_scale() const {
-    return GetField<float>(VT_ATOM_SCALE, 0.0f);
-  }
-  bool enabled() const {
-    return GetField<uint8_t>(VT_ENABLED, 0) != 0;
-  }
-  template <bool B = false>
-  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
-    return VerifyTableStart(verifier) &&
-           VerifyOffset(verifier, VT_ATOM_TYPE_EMBEDDINGS) &&
-           verifier.VerifyVector(atom_type_embeddings()) &&
-           VerifyOffset(verifier, VT_ATOM_PROJECTION) &&
-           verifier.VerifyVector(atom_projection()) &&
-           VerifyField<uint32_t>(verifier, VT_NUM_ATOM_TYPES, 4) &&
-           VerifyField<uint32_t>(verifier, VT_ATOM_EMBEDDING_DIM, 4) &&
-           VerifyField<uint32_t>(verifier, VT_D_MODEL, 4) &&
-           VerifyField<float>(verifier, VT_ATOM_SCALE, 4) &&
-           VerifyField<uint8_t>(verifier, VT_ENABLED, 1) &&
-           verifier.EndTable();
-  }
-  ScratchBlockWeightsT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  void UnPackTo(ScratchBlockWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
-  static ::flatbuffers::Offset<ScratchBlockWeights> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ScratchBlockWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-};
-
-struct ScratchBlockWeightsBuilder {
-  typedef ScratchBlockWeights Table;
-  ::flatbuffers::FlatBufferBuilder &fbb_;
-  ::flatbuffers::uoffset_t start_;
-  void add_atom_type_embeddings(::flatbuffers::Offset<::flatbuffers::Vector<float>> atom_type_embeddings) {
-    fbb_.AddOffset(ScratchBlockWeights::VT_ATOM_TYPE_EMBEDDINGS, atom_type_embeddings);
-  }
-  void add_atom_projection(::flatbuffers::Offset<::flatbuffers::Vector<float>> atom_projection) {
-    fbb_.AddOffset(ScratchBlockWeights::VT_ATOM_PROJECTION, atom_projection);
-  }
-  void add_num_atom_types(uint32_t num_atom_types) {
-    fbb_.AddElement<uint32_t>(ScratchBlockWeights::VT_NUM_ATOM_TYPES, num_atom_types, 0);
-  }
-  void add_atom_embedding_dim(uint32_t atom_embedding_dim) {
-    fbb_.AddElement<uint32_t>(ScratchBlockWeights::VT_ATOM_EMBEDDING_DIM, atom_embedding_dim, 0);
-  }
-  void add_d_model(uint32_t d_model) {
-    fbb_.AddElement<uint32_t>(ScratchBlockWeights::VT_D_MODEL, d_model, 0);
-  }
-  void add_atom_scale(float atom_scale) {
-    fbb_.AddElement<float>(ScratchBlockWeights::VT_ATOM_SCALE, atom_scale, 0.0f);
-  }
-  void add_enabled(bool enabled) {
-    fbb_.AddElement<uint8_t>(ScratchBlockWeights::VT_ENABLED, static_cast<uint8_t>(enabled), 0);
-  }
-  explicit ScratchBlockWeightsBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
-        : fbb_(_fbb) {
-    start_ = fbb_.StartTable();
-  }
-  ::flatbuffers::Offset<ScratchBlockWeights> Finish() {
-    const auto end = fbb_.EndTable(start_);
-    auto o = ::flatbuffers::Offset<ScratchBlockWeights>(end);
-    return o;
-  }
-};
-
-inline ::flatbuffers::Offset<ScratchBlockWeights> CreateScratchBlockWeights(
-    ::flatbuffers::FlatBufferBuilder &_fbb,
-    ::flatbuffers::Offset<::flatbuffers::Vector<float>> atom_type_embeddings = 0,
-    ::flatbuffers::Offset<::flatbuffers::Vector<float>> atom_projection = 0,
-    uint32_t num_atom_types = 0,
-    uint32_t atom_embedding_dim = 0,
-    uint32_t d_model = 0,
-    float atom_scale = 0.0f,
-    bool enabled = false) {
-  ScratchBlockWeightsBuilder builder_(_fbb);
-  builder_.add_atom_scale(atom_scale);
-  builder_.add_d_model(d_model);
-  builder_.add_atom_embedding_dim(atom_embedding_dim);
-  builder_.add_num_atom_types(num_atom_types);
-  builder_.add_atom_projection(atom_projection);
-  builder_.add_atom_type_embeddings(atom_type_embeddings);
-  builder_.add_enabled(enabled);
-  return builder_.Finish();
-}
-
-inline ::flatbuffers::Offset<ScratchBlockWeights> CreateScratchBlockWeightsDirect(
-    ::flatbuffers::FlatBufferBuilder &_fbb,
-    const std::vector<float> *atom_type_embeddings = nullptr,
-    const std::vector<float> *atom_projection = nullptr,
-    uint32_t num_atom_types = 0,
-    uint32_t atom_embedding_dim = 0,
-    uint32_t d_model = 0,
-    float atom_scale = 0.0f,
-    bool enabled = false) {
-  auto atom_type_embeddings__ = atom_type_embeddings ? _fbb.CreateVector<float>(*atom_type_embeddings) : 0;
-  auto atom_projection__ = atom_projection ? _fbb.CreateVector<float>(*atom_projection) : 0;
-  return GRIMTransformer::CreateScratchBlockWeights(
-      _fbb,
-      atom_type_embeddings__,
-      atom_projection__,
-      num_atom_types,
-      atom_embedding_dim,
-      d_model,
-      atom_scale,
-      enabled);
-}
-
-::flatbuffers::Offset<ScratchBlockWeights> CreateScratchBlockWeights(::flatbuffers::FlatBufferBuilder &_fbb, const ScratchBlockWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
 struct DecodeTimeSlotSelectorWeightsT : public ::flatbuffers::NativeTable {
   typedef DecodeTimeSlotSelectorWeights TableType;
   std::vector<float> w_q_select_data{};
@@ -1624,8 +1469,7 @@ struct DecodeTimeSlotSelectorWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuf
   const ::flatbuffers::Vector<float> *null_logit_bias_data() const {
     return GetPointer<const ::flatbuffers::Vector<float> *>(VT_NULL_LOGIT_BIAS_DATA);
   }
-  template <bool B = false>
-  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+  bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffset(verifier, VT_W_Q_SELECT_DATA) &&
            verifier.VerifyVector(w_q_select_data()) &&
@@ -1863,8 +1707,7 @@ struct ExecutionBlockWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Ta
   const ::flatbuffers::Vector<float> *w_trace_gate_data() const {
     return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_TRACE_GATE_DATA);
   }
-  template <bool B = false>
-  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+  bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffset(verifier, VT_W_DECODE_1_DATA) &&
            verifier.VerifyVector(w_decode_1_data()) &&
@@ -2291,8 +2134,7 @@ struct ModelConfig FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   bool use_bias() const {
     return GetField<uint8_t>(VT_USE_BIAS, 1) != 0;
   }
-  template <bool B = false>
-  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+  bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<uint32_t>(verifier, VT_VOCAB_SIZE, 4) &&
            VerifyField<uint32_t>(verifier, VT_D_MODEL, 4) &&
@@ -2439,8 +2281,7 @@ struct LossWeightingWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Tab
   float log_var_numeric() const {
     return GetField<float>(VT_LOG_VAR_NUMERIC, 0.0f);
   }
-  template <bool B = false>
-  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+  bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<float>(verifier, VT_LOG_VAR_TEXT, 4) &&
            VerifyField<float>(verifier, VT_LOG_VAR_NUMERIC, 4) &&
@@ -2553,8 +2394,7 @@ struct TrainingMetadata FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const ::flatbuffers::String *model_name() const {
     return GetPointer<const ::flatbuffers::String *>(VT_MODEL_NAME);
   }
-  template <bool B = false>
-  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+  bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffset(verifier, VT_OPTIMIZER) &&
            verifier.VerifyString(optimizer()) &&
@@ -2700,7 +2540,6 @@ struct TransformerModelT : public ::flatbuffers::NativeTable {
   std::vector<std::unique_ptr<GRIMTransformer::EncoderLayerWeightsT>> encoder_layers{};
   std::unique_ptr<GRIMTransformer::LMHeadWeightsT> lm_head{};
   std::unique_ptr<GRIMTransformer::NumericHeadWeightsT> numeric_head{};
-  std::unique_ptr<GRIMTransformer::ScratchBlockWeightsT> scratch_block{};
   std::vector<float> final_rms_gamma{};
   std::unique_ptr<GRIMTransformer::LossWeightingWeightsT> loss_weighting{};
   std::unique_ptr<GRIMTransformer::TrainingMetadataT> training_metadata{};
@@ -2727,17 +2566,16 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_ENCODER_LAYERS = 10,
     VT_LM_HEAD = 12,
     VT_NUMERIC_HEAD = 14,
-    VT_SCRATCH_BLOCK = 16,
-    VT_FINAL_RMS_GAMMA = 18,
-    VT_LOSS_WEIGHTING = 20,
-    VT_TRAINING_METADATA = 22,
-    VT_CHECKSUM_CRC32 = 24,
-    VT_CHECKSUM_XXHASH64 = 26,
-    VT_CREATION_TIMESTAMP = 28,
-    VT_LAST_MODIFIED_TIMESTAMP = 30,
-    VT_REASONING_HEAD = 32,
-    VT_EXECUTION_BLOCK = 34,
-    VT_SLOT_SELECTOR = 36
+    VT_FINAL_RMS_GAMMA = 16,
+    VT_LOSS_WEIGHTING = 18,
+    VT_TRAINING_METADATA = 20,
+    VT_CHECKSUM_CRC32 = 22,
+    VT_CHECKSUM_XXHASH64 = 24,
+    VT_CREATION_TIMESTAMP = 26,
+    VT_LAST_MODIFIED_TIMESTAMP = 28,
+    VT_REASONING_HEAD = 30,
+    VT_EXECUTION_BLOCK = 32,
+    VT_SLOT_SELECTOR = 34
   };
   uint32_t version() const {
     return GetField<uint32_t>(VT_VERSION, 0);
@@ -2756,9 +2594,6 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   }
   const GRIMTransformer::NumericHeadWeights *numeric_head() const {
     return GetPointer<const GRIMTransformer::NumericHeadWeights *>(VT_NUMERIC_HEAD);
-  }
-  const GRIMTransformer::ScratchBlockWeights *scratch_block() const {
-    return GetPointer<const GRIMTransformer::ScratchBlockWeights *>(VT_SCRATCH_BLOCK);
   }
   const ::flatbuffers::Vector<float> *final_rms_gamma() const {
     return GetPointer<const ::flatbuffers::Vector<float> *>(VT_FINAL_RMS_GAMMA);
@@ -2790,8 +2625,7 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const GRIMTransformer::DecodeTimeSlotSelectorWeights *slot_selector() const {
     return GetPointer<const GRIMTransformer::DecodeTimeSlotSelectorWeights *>(VT_SLOT_SELECTOR);
   }
-  template <bool B = false>
-  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+  bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<uint32_t>(verifier, VT_VERSION, 4) &&
            VerifyOffsetRequired(verifier, VT_CONFIG) &&
@@ -2805,8 +2639,6 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyTable(lm_head()) &&
            VerifyOffset(verifier, VT_NUMERIC_HEAD) &&
            verifier.VerifyTable(numeric_head()) &&
-           VerifyOffset(verifier, VT_SCRATCH_BLOCK) &&
-           verifier.VerifyTable(scratch_block()) &&
            VerifyOffset(verifier, VT_FINAL_RMS_GAMMA) &&
            verifier.VerifyVector(final_rms_gamma()) &&
            VerifyOffset(verifier, VT_LOSS_WEIGHTING) &&
@@ -2851,9 +2683,6 @@ struct TransformerModelBuilder {
   }
   void add_numeric_head(::flatbuffers::Offset<GRIMTransformer::NumericHeadWeights> numeric_head) {
     fbb_.AddOffset(TransformerModel::VT_NUMERIC_HEAD, numeric_head);
-  }
-  void add_scratch_block(::flatbuffers::Offset<GRIMTransformer::ScratchBlockWeights> scratch_block) {
-    fbb_.AddOffset(TransformerModel::VT_SCRATCH_BLOCK, scratch_block);
   }
   void add_final_rms_gamma(::flatbuffers::Offset<::flatbuffers::Vector<float>> final_rms_gamma) {
     fbb_.AddOffset(TransformerModel::VT_FINAL_RMS_GAMMA, final_rms_gamma);
@@ -2908,7 +2737,6 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(
     ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<GRIMTransformer::EncoderLayerWeights>>> encoder_layers = 0,
     ::flatbuffers::Offset<GRIMTransformer::LMHeadWeights> lm_head = 0,
     ::flatbuffers::Offset<GRIMTransformer::NumericHeadWeights> numeric_head = 0,
-    ::flatbuffers::Offset<GRIMTransformer::ScratchBlockWeights> scratch_block = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> final_rms_gamma = 0,
     ::flatbuffers::Offset<GRIMTransformer::LossWeightingWeights> loss_weighting = 0,
     ::flatbuffers::Offset<GRIMTransformer::TrainingMetadata> training_metadata = 0,
@@ -2930,7 +2758,6 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(
   builder_.add_training_metadata(training_metadata);
   builder_.add_loss_weighting(loss_weighting);
   builder_.add_final_rms_gamma(final_rms_gamma);
-  builder_.add_scratch_block(scratch_block);
   builder_.add_numeric_head(numeric_head);
   builder_.add_lm_head(lm_head);
   builder_.add_encoder_layers(encoder_layers);
@@ -2948,7 +2775,6 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModelDirect(
     const std::vector<::flatbuffers::Offset<GRIMTransformer::EncoderLayerWeights>> *encoder_layers = nullptr,
     ::flatbuffers::Offset<GRIMTransformer::LMHeadWeights> lm_head = 0,
     ::flatbuffers::Offset<GRIMTransformer::NumericHeadWeights> numeric_head = 0,
-    ::flatbuffers::Offset<GRIMTransformer::ScratchBlockWeights> scratch_block = 0,
     const std::vector<float> *final_rms_gamma = nullptr,
     ::flatbuffers::Offset<GRIMTransformer::LossWeightingWeights> loss_weighting = 0,
     ::flatbuffers::Offset<GRIMTransformer::TrainingMetadata> training_metadata = 0,
@@ -2969,7 +2795,6 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModelDirect(
       encoder_layers__,
       lm_head,
       numeric_head,
-      scratch_block,
       final_rms_gamma__,
       loss_weighting,
       training_metadata,
@@ -2998,11 +2823,11 @@ inline void Matrix::UnPackTo(MatrixT *_o, const ::flatbuffers::resolver_function
   { auto _e = cols(); _o->cols = _e; }
 }
 
-inline ::flatbuffers::Offset<Matrix> CreateMatrix(::flatbuffers::FlatBufferBuilder &_fbb, const MatrixT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return Matrix::Pack(_fbb, _o, _rehasher);
+inline ::flatbuffers::Offset<Matrix> Matrix::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const MatrixT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateMatrix(_fbb, _o, _rehasher);
 }
 
-inline ::flatbuffers::Offset<Matrix> Matrix::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const MatrixT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+inline ::flatbuffers::Offset<Matrix> CreateMatrix(::flatbuffers::FlatBufferBuilder &_fbb, const MatrixT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
   (void)_rehasher;
   (void)_o;
   struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const MatrixT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
@@ -3028,11 +2853,11 @@ inline void Vector::UnPackTo(VectorT *_o, const ::flatbuffers::resolver_function
   { auto _e = data(); if (_e) { _o->data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->data[_i] = _e->Get(_i); } } else { _o->data.resize(0); } }
 }
 
-inline ::flatbuffers::Offset<Vector> CreateVector(::flatbuffers::FlatBufferBuilder &_fbb, const VectorT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return Vector::Pack(_fbb, _o, _rehasher);
+inline ::flatbuffers::Offset<Vector> Vector::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const VectorT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateVector(_fbb, _o, _rehasher);
 }
 
-inline ::flatbuffers::Offset<Vector> Vector::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const VectorT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+inline ::flatbuffers::Offset<Vector> CreateVector(::flatbuffers::FlatBufferBuilder &_fbb, const VectorT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
   (void)_rehasher;
   (void)_o;
   struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const VectorT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
@@ -3055,11 +2880,11 @@ inline void RMSNormWeights::UnPackTo(RMSNormWeightsT *_o, const ::flatbuffers::r
   { auto _e = epsilon(); _o->epsilon = _e; }
 }
 
-inline ::flatbuffers::Offset<RMSNormWeights> CreateRMSNormWeights(::flatbuffers::FlatBufferBuilder &_fbb, const RMSNormWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return RMSNormWeights::Pack(_fbb, _o, _rehasher);
+inline ::flatbuffers::Offset<RMSNormWeights> RMSNormWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const RMSNormWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateRMSNormWeights(_fbb, _o, _rehasher);
 }
 
-inline ::flatbuffers::Offset<RMSNormWeights> RMSNormWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const RMSNormWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+inline ::flatbuffers::Offset<RMSNormWeights> CreateRMSNormWeights(::flatbuffers::FlatBufferBuilder &_fbb, const RMSNormWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
   (void)_rehasher;
   (void)_o;
   struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const RMSNormWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
@@ -3098,11 +2923,11 @@ inline void AttentionWeights::UnPackTo(AttentionWeightsT *_o, const ::flatbuffer
   { auto _e = fuse_qkv(); _o->fuse_qkv = _e; }
 }
 
-inline ::flatbuffers::Offset<AttentionWeights> CreateAttentionWeights(::flatbuffers::FlatBufferBuilder &_fbb, const AttentionWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return AttentionWeights::Pack(_fbb, _o, _rehasher);
+inline ::flatbuffers::Offset<AttentionWeights> AttentionWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const AttentionWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateAttentionWeights(_fbb, _o, _rehasher);
 }
 
-inline ::flatbuffers::Offset<AttentionWeights> AttentionWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const AttentionWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+inline ::flatbuffers::Offset<AttentionWeights> CreateAttentionWeights(::flatbuffers::FlatBufferBuilder &_fbb, const AttentionWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
   (void)_rehasher;
   (void)_o;
   struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const AttentionWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
@@ -3160,11 +2985,11 @@ inline void FFNWeights::UnPackTo(FFNWeightsT *_o, const ::flatbuffers::resolver_
   { auto _e = w_gate_data(); if (_e) { _o->w_gate_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_gate_data[_i] = _e->Get(_i); } } else { _o->w_gate_data.resize(0); } }
 }
 
-inline ::flatbuffers::Offset<FFNWeights> CreateFFNWeights(::flatbuffers::FlatBufferBuilder &_fbb, const FFNWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return FFNWeights::Pack(_fbb, _o, _rehasher);
+inline ::flatbuffers::Offset<FFNWeights> FFNWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const FFNWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateFFNWeights(_fbb, _o, _rehasher);
 }
 
-inline ::flatbuffers::Offset<FFNWeights> FFNWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const FFNWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+inline ::flatbuffers::Offset<FFNWeights> CreateFFNWeights(::flatbuffers::FlatBufferBuilder &_fbb, const FFNWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
   (void)_rehasher;
   (void)_o;
   struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const FFNWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
@@ -3231,11 +3056,11 @@ inline void EncoderLayerWeights::UnPackTo(EncoderLayerWeightsT *_o, const ::flat
   { auto _e = layer_id(); _o->layer_id = _e; }
 }
 
-inline ::flatbuffers::Offset<EncoderLayerWeights> CreateEncoderLayerWeights(::flatbuffers::FlatBufferBuilder &_fbb, const EncoderLayerWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return EncoderLayerWeights::Pack(_fbb, _o, _rehasher);
+inline ::flatbuffers::Offset<EncoderLayerWeights> EncoderLayerWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const EncoderLayerWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateEncoderLayerWeights(_fbb, _o, _rehasher);
 }
 
-inline ::flatbuffers::Offset<EncoderLayerWeights> EncoderLayerWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const EncoderLayerWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+inline ::flatbuffers::Offset<EncoderLayerWeights> CreateEncoderLayerWeights(::flatbuffers::FlatBufferBuilder &_fbb, const EncoderLayerWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
   (void)_rehasher;
   (void)_o;
   struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const EncoderLayerWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
@@ -3277,11 +3102,11 @@ inline void EmbeddingWeights::UnPackTo(EmbeddingWeightsT *_o, const ::flatbuffer
   { auto _e = max_seq_len(); _o->max_seq_len = _e; }
 }
 
-inline ::flatbuffers::Offset<EmbeddingWeights> CreateEmbeddingWeights(::flatbuffers::FlatBufferBuilder &_fbb, const EmbeddingWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return EmbeddingWeights::Pack(_fbb, _o, _rehasher);
+inline ::flatbuffers::Offset<EmbeddingWeights> EmbeddingWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const EmbeddingWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateEmbeddingWeights(_fbb, _o, _rehasher);
 }
 
-inline ::flatbuffers::Offset<EmbeddingWeights> EmbeddingWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const EmbeddingWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+inline ::flatbuffers::Offset<EmbeddingWeights> CreateEmbeddingWeights(::flatbuffers::FlatBufferBuilder &_fbb, const EmbeddingWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
   (void)_rehasher;
   (void)_o;
   struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const EmbeddingWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
@@ -3316,11 +3141,11 @@ inline void LMHeadWeights::UnPackTo(LMHeadWeightsT *_o, const ::flatbuffers::res
   { auto _e = use_bias(); _o->use_bias = _e; }
 }
 
-inline ::flatbuffers::Offset<LMHeadWeights> CreateLMHeadWeights(::flatbuffers::FlatBufferBuilder &_fbb, const LMHeadWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return LMHeadWeights::Pack(_fbb, _o, _rehasher);
+inline ::flatbuffers::Offset<LMHeadWeights> LMHeadWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const LMHeadWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateLMHeadWeights(_fbb, _o, _rehasher);
 }
 
-inline ::flatbuffers::Offset<LMHeadWeights> LMHeadWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const LMHeadWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+inline ::flatbuffers::Offset<LMHeadWeights> CreateLMHeadWeights(::flatbuffers::FlatBufferBuilder &_fbb, const LMHeadWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
   (void)_rehasher;
   (void)_o;
   struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const LMHeadWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
@@ -3355,11 +3180,11 @@ inline void NumericHeadWeights::UnPackTo(NumericHeadWeightsT *_o, const ::flatbu
   { auto _e = use_bias(); _o->use_bias = _e; }
 }
 
-inline ::flatbuffers::Offset<NumericHeadWeights> CreateNumericHeadWeights(::flatbuffers::FlatBufferBuilder &_fbb, const NumericHeadWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return NumericHeadWeights::Pack(_fbb, _o, _rehasher);
+inline ::flatbuffers::Offset<NumericHeadWeights> NumericHeadWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const NumericHeadWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateNumericHeadWeights(_fbb, _o, _rehasher);
 }
 
-inline ::flatbuffers::Offset<NumericHeadWeights> NumericHeadWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const NumericHeadWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+inline ::flatbuffers::Offset<NumericHeadWeights> CreateNumericHeadWeights(::flatbuffers::FlatBufferBuilder &_fbb, const NumericHeadWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
   (void)_rehasher;
   (void)_o;
   struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const NumericHeadWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
@@ -3392,11 +3217,11 @@ inline void ReasoningHeadWeights::UnPackTo(ReasoningHeadWeightsT *_o, const ::fl
   { auto _e = d_total(); _o->d_total = _e; }
 }
 
-inline ::flatbuffers::Offset<ReasoningHeadWeights> CreateReasoningHeadWeights(::flatbuffers::FlatBufferBuilder &_fbb, const ReasoningHeadWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return ReasoningHeadWeights::Pack(_fbb, _o, _rehasher);
+inline ::flatbuffers::Offset<ReasoningHeadWeights> ReasoningHeadWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ReasoningHeadWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateReasoningHeadWeights(_fbb, _o, _rehasher);
 }
 
-inline ::flatbuffers::Offset<ReasoningHeadWeights> ReasoningHeadWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ReasoningHeadWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+inline ::flatbuffers::Offset<ReasoningHeadWeights> CreateReasoningHeadWeights(::flatbuffers::FlatBufferBuilder &_fbb, const ReasoningHeadWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
   (void)_rehasher;
   (void)_o;
   struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const ReasoningHeadWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
@@ -3416,50 +3241,6 @@ inline ::flatbuffers::Offset<ReasoningHeadWeights> ReasoningHeadWeights::Pack(::
       _d_total);
 }
 
-inline ScratchBlockWeightsT *ScratchBlockWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
-  auto _o = std::unique_ptr<ScratchBlockWeightsT>(new ScratchBlockWeightsT());
-  UnPackTo(_o.get(), _resolver);
-  return _o.release();
-}
-
-inline void ScratchBlockWeights::UnPackTo(ScratchBlockWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
-  (void)_o;
-  (void)_resolver;
-  { auto _e = atom_type_embeddings(); if (_e) { _o->atom_type_embeddings.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->atom_type_embeddings[_i] = _e->Get(_i); } } else { _o->atom_type_embeddings.resize(0); } }
-  { auto _e = atom_projection(); if (_e) { _o->atom_projection.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->atom_projection[_i] = _e->Get(_i); } } else { _o->atom_projection.resize(0); } }
-  { auto _e = num_atom_types(); _o->num_atom_types = _e; }
-  { auto _e = atom_embedding_dim(); _o->atom_embedding_dim = _e; }
-  { auto _e = d_model(); _o->d_model = _e; }
-  { auto _e = atom_scale(); _o->atom_scale = _e; }
-  { auto _e = enabled(); _o->enabled = _e; }
-}
-
-inline ::flatbuffers::Offset<ScratchBlockWeights> CreateScratchBlockWeights(::flatbuffers::FlatBufferBuilder &_fbb, const ScratchBlockWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return ScratchBlockWeights::Pack(_fbb, _o, _rehasher);
-}
-
-inline ::flatbuffers::Offset<ScratchBlockWeights> ScratchBlockWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ScratchBlockWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  (void)_rehasher;
-  (void)_o;
-  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const ScratchBlockWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
-  auto _atom_type_embeddings = _o->atom_type_embeddings.size() ? _fbb.CreateVector(_o->atom_type_embeddings) : 0;
-  auto _atom_projection = _o->atom_projection.size() ? _fbb.CreateVector(_o->atom_projection) : 0;
-  auto _num_atom_types = _o->num_atom_types;
-  auto _atom_embedding_dim = _o->atom_embedding_dim;
-  auto _d_model = _o->d_model;
-  auto _atom_scale = _o->atom_scale;
-  auto _enabled = _o->enabled;
-  return GRIMTransformer::CreateScratchBlockWeights(
-      _fbb,
-      _atom_type_embeddings,
-      _atom_projection,
-      _num_atom_types,
-      _atom_embedding_dim,
-      _d_model,
-      _atom_scale,
-      _enabled);
-}
-
 inline DecodeTimeSlotSelectorWeightsT *DecodeTimeSlotSelectorWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
   auto _o = std::unique_ptr<DecodeTimeSlotSelectorWeightsT>(new DecodeTimeSlotSelectorWeightsT());
   UnPackTo(_o.get(), _resolver);
@@ -3475,11 +3256,11 @@ inline void DecodeTimeSlotSelectorWeights::UnPackTo(DecodeTimeSlotSelectorWeight
   { auto _e = null_logit_bias_data(); if (_e) { _o->null_logit_bias_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->null_logit_bias_data[_i] = _e->Get(_i); } } else { _o->null_logit_bias_data.resize(0); } }
 }
 
-inline ::flatbuffers::Offset<DecodeTimeSlotSelectorWeights> CreateDecodeTimeSlotSelectorWeights(::flatbuffers::FlatBufferBuilder &_fbb, const DecodeTimeSlotSelectorWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return DecodeTimeSlotSelectorWeights::Pack(_fbb, _o, _rehasher);
+inline ::flatbuffers::Offset<DecodeTimeSlotSelectorWeights> DecodeTimeSlotSelectorWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const DecodeTimeSlotSelectorWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateDecodeTimeSlotSelectorWeights(_fbb, _o, _rehasher);
 }
 
-inline ::flatbuffers::Offset<DecodeTimeSlotSelectorWeights> DecodeTimeSlotSelectorWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const DecodeTimeSlotSelectorWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+inline ::flatbuffers::Offset<DecodeTimeSlotSelectorWeights> CreateDecodeTimeSlotSelectorWeights(::flatbuffers::FlatBufferBuilder &_fbb, const DecodeTimeSlotSelectorWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
   (void)_rehasher;
   (void)_o;
   struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const DecodeTimeSlotSelectorWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
@@ -3536,11 +3317,11 @@ inline void ExecutionBlockWeights::UnPackTo(ExecutionBlockWeightsT *_o, const ::
   { auto _e = w_trace_gate_data(); if (_e) { _o->w_trace_gate_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_trace_gate_data[_i] = _e->Get(_i); } } else { _o->w_trace_gate_data.resize(0); } }
 }
 
-inline ::flatbuffers::Offset<ExecutionBlockWeights> CreateExecutionBlockWeights(::flatbuffers::FlatBufferBuilder &_fbb, const ExecutionBlockWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return ExecutionBlockWeights::Pack(_fbb, _o, _rehasher);
+inline ::flatbuffers::Offset<ExecutionBlockWeights> ExecutionBlockWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ExecutionBlockWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateExecutionBlockWeights(_fbb, _o, _rehasher);
 }
 
-inline ::flatbuffers::Offset<ExecutionBlockWeights> ExecutionBlockWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ExecutionBlockWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+inline ::flatbuffers::Offset<ExecutionBlockWeights> CreateExecutionBlockWeights(::flatbuffers::FlatBufferBuilder &_fbb, const ExecutionBlockWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
   (void)_rehasher;
   (void)_o;
   struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const ExecutionBlockWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
@@ -3635,11 +3416,11 @@ inline void ModelConfig::UnPackTo(ModelConfigT *_o, const ::flatbuffers::resolve
   { auto _e = use_bias(); _o->use_bias = _e; }
 }
 
-inline ::flatbuffers::Offset<ModelConfig> CreateModelConfig(::flatbuffers::FlatBufferBuilder &_fbb, const ModelConfigT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return ModelConfig::Pack(_fbb, _o, _rehasher);
+inline ::flatbuffers::Offset<ModelConfig> ModelConfig::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ModelConfigT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateModelConfig(_fbb, _o, _rehasher);
 }
 
-inline ::flatbuffers::Offset<ModelConfig> ModelConfig::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ModelConfigT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+inline ::flatbuffers::Offset<ModelConfig> CreateModelConfig(::flatbuffers::FlatBufferBuilder &_fbb, const ModelConfigT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
   (void)_rehasher;
   (void)_o;
   struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const ModelConfigT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
@@ -3692,11 +3473,11 @@ inline void LossWeightingWeights::UnPackTo(LossWeightingWeightsT *_o, const ::fl
   { auto _e = log_var_numeric(); _o->log_var_numeric = _e; }
 }
 
-inline ::flatbuffers::Offset<LossWeightingWeights> CreateLossWeightingWeights(::flatbuffers::FlatBufferBuilder &_fbb, const LossWeightingWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return LossWeightingWeights::Pack(_fbb, _o, _rehasher);
+inline ::flatbuffers::Offset<LossWeightingWeights> LossWeightingWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const LossWeightingWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateLossWeightingWeights(_fbb, _o, _rehasher);
 }
 
-inline ::flatbuffers::Offset<LossWeightingWeights> LossWeightingWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const LossWeightingWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+inline ::flatbuffers::Offset<LossWeightingWeights> CreateLossWeightingWeights(::flatbuffers::FlatBufferBuilder &_fbb, const LossWeightingWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
   (void)_rehasher;
   (void)_o;
   struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const LossWeightingWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
@@ -3731,11 +3512,11 @@ inline void TrainingMetadata::UnPackTo(TrainingMetadataT *_o, const ::flatbuffer
   { auto _e = model_name(); if (_e) _o->model_name = _e->str(); }
 }
 
-inline ::flatbuffers::Offset<TrainingMetadata> CreateTrainingMetadata(::flatbuffers::FlatBufferBuilder &_fbb, const TrainingMetadataT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return TrainingMetadata::Pack(_fbb, _o, _rehasher);
+inline ::flatbuffers::Offset<TrainingMetadata> TrainingMetadata::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const TrainingMetadataT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateTrainingMetadata(_fbb, _o, _rehasher);
 }
 
-inline ::flatbuffers::Offset<TrainingMetadata> TrainingMetadata::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const TrainingMetadataT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+inline ::flatbuffers::Offset<TrainingMetadata> CreateTrainingMetadata(::flatbuffers::FlatBufferBuilder &_fbb, const TrainingMetadataT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
   (void)_rehasher;
   (void)_o;
   struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const TrainingMetadataT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
@@ -3773,7 +3554,6 @@ inline TransformerModelT::TransformerModelT(const TransformerModelT &o)
         embeddings((o.embeddings) ? new GRIMTransformer::EmbeddingWeightsT(*o.embeddings) : nullptr),
         lm_head((o.lm_head) ? new GRIMTransformer::LMHeadWeightsT(*o.lm_head) : nullptr),
         numeric_head((o.numeric_head) ? new GRIMTransformer::NumericHeadWeightsT(*o.numeric_head) : nullptr),
-        scratch_block((o.scratch_block) ? new GRIMTransformer::ScratchBlockWeightsT(*o.scratch_block) : nullptr),
         final_rms_gamma(o.final_rms_gamma),
         loss_weighting((o.loss_weighting) ? new GRIMTransformer::LossWeightingWeightsT(*o.loss_weighting) : nullptr),
         training_metadata((o.training_metadata) ? new GRIMTransformer::TrainingMetadataT(*o.training_metadata) : nullptr),
@@ -3795,7 +3575,6 @@ inline TransformerModelT &TransformerModelT::operator=(TransformerModelT o) FLAT
   std::swap(encoder_layers, o.encoder_layers);
   std::swap(lm_head, o.lm_head);
   std::swap(numeric_head, o.numeric_head);
-  std::swap(scratch_block, o.scratch_block);
   std::swap(final_rms_gamma, o.final_rms_gamma);
   std::swap(loss_weighting, o.loss_weighting);
   std::swap(training_metadata, o.training_metadata);
@@ -3824,7 +3603,6 @@ inline void TransformerModel::UnPackTo(TransformerModelT *_o, const ::flatbuffer
   { auto _e = encoder_layers(); if (_e) { _o->encoder_layers.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { if(_o->encoder_layers[_i]) { _e->Get(_i)->UnPackTo(_o->encoder_layers[_i].get(), _resolver); } else { _o->encoder_layers[_i] = std::unique_ptr<GRIMTransformer::EncoderLayerWeightsT>(_e->Get(_i)->UnPack(_resolver)); } } } else { _o->encoder_layers.resize(0); } }
   { auto _e = lm_head(); if (_e) { if(_o->lm_head) { _e->UnPackTo(_o->lm_head.get(), _resolver); } else { _o->lm_head = std::unique_ptr<GRIMTransformer::LMHeadWeightsT>(_e->UnPack(_resolver)); } } else if (_o->lm_head) { _o->lm_head.reset(); } }
   { auto _e = numeric_head(); if (_e) { if(_o->numeric_head) { _e->UnPackTo(_o->numeric_head.get(), _resolver); } else { _o->numeric_head = std::unique_ptr<GRIMTransformer::NumericHeadWeightsT>(_e->UnPack(_resolver)); } } else if (_o->numeric_head) { _o->numeric_head.reset(); } }
-  { auto _e = scratch_block(); if (_e) { if(_o->scratch_block) { _e->UnPackTo(_o->scratch_block.get(), _resolver); } else { _o->scratch_block = std::unique_ptr<GRIMTransformer::ScratchBlockWeightsT>(_e->UnPack(_resolver)); } } else if (_o->scratch_block) { _o->scratch_block.reset(); } }
   { auto _e = final_rms_gamma(); if (_e) { _o->final_rms_gamma.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->final_rms_gamma[_i] = _e->Get(_i); } } else { _o->final_rms_gamma.resize(0); } }
   { auto _e = loss_weighting(); if (_e) { if(_o->loss_weighting) { _e->UnPackTo(_o->loss_weighting.get(), _resolver); } else { _o->loss_weighting = std::unique_ptr<GRIMTransformer::LossWeightingWeightsT>(_e->UnPack(_resolver)); } } else if (_o->loss_weighting) { _o->loss_weighting.reset(); } }
   { auto _e = training_metadata(); if (_e) { if(_o->training_metadata) { _e->UnPackTo(_o->training_metadata.get(), _resolver); } else { _o->training_metadata = std::unique_ptr<GRIMTransformer::TrainingMetadataT>(_e->UnPack(_resolver)); } } else if (_o->training_metadata) { _o->training_metadata.reset(); } }
@@ -3837,11 +3615,11 @@ inline void TransformerModel::UnPackTo(TransformerModelT *_o, const ::flatbuffer
   { auto _e = slot_selector(); if (_e) { if(_o->slot_selector) { _e->UnPackTo(_o->slot_selector.get(), _resolver); } else { _o->slot_selector = std::unique_ptr<GRIMTransformer::DecodeTimeSlotSelectorWeightsT>(_e->UnPack(_resolver)); } } else if (_o->slot_selector) { _o->slot_selector.reset(); } }
 }
 
-inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(::flatbuffers::FlatBufferBuilder &_fbb, const TransformerModelT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
-  return TransformerModel::Pack(_fbb, _o, _rehasher);
+inline ::flatbuffers::Offset<TransformerModel> TransformerModel::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const TransformerModelT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateTransformerModel(_fbb, _o, _rehasher);
 }
 
-inline ::flatbuffers::Offset<TransformerModel> TransformerModel::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const TransformerModelT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(::flatbuffers::FlatBufferBuilder &_fbb, const TransformerModelT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
   (void)_rehasher;
   (void)_o;
   struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const TransformerModelT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
@@ -3851,7 +3629,6 @@ inline ::flatbuffers::Offset<TransformerModel> TransformerModel::Pack(::flatbuff
   auto _encoder_layers = _fbb.CreateVector<::flatbuffers::Offset<GRIMTransformer::EncoderLayerWeights>> (_o->encoder_layers.size(), [](size_t i, _VectorArgs *__va) { return CreateEncoderLayerWeights(*__va->__fbb, __va->__o->encoder_layers[i].get(), __va->__rehasher); }, &_va );
   auto _lm_head = _o->lm_head ? CreateLMHeadWeights(_fbb, _o->lm_head.get(), _rehasher) : 0;
   auto _numeric_head = _o->numeric_head ? CreateNumericHeadWeights(_fbb, _o->numeric_head.get(), _rehasher) : 0;
-  auto _scratch_block = _o->scratch_block ? CreateScratchBlockWeights(_fbb, _o->scratch_block.get(), _rehasher) : 0;
   auto _final_rms_gamma = _o->final_rms_gamma.size() ? _fbb.CreateVector(_o->final_rms_gamma) : 0;
   auto _loss_weighting = _o->loss_weighting ? CreateLossWeightingWeights(_fbb, _o->loss_weighting.get(), _rehasher) : 0;
   auto _training_metadata = _o->training_metadata ? CreateTrainingMetadata(_fbb, _o->training_metadata.get(), _rehasher) : 0;
@@ -3870,7 +3647,6 @@ inline ::flatbuffers::Offset<TransformerModel> TransformerModel::Pack(::flatbuff
       _encoder_layers,
       _lm_head,
       _numeric_head,
-      _scratch_block,
       _final_rms_gamma,
       _loss_weighting,
       _training_metadata,
@@ -3905,16 +3681,14 @@ inline bool SizePrefixedTransformerModelBufferHasIdentifier(const void *buf) {
       buf, TransformerModelIdentifier(), true);
 }
 
-template <bool B = false>
 inline bool VerifyTransformerModelBuffer(
-    ::flatbuffers::VerifierTemplate<B> &verifier) {
-  return verifier.template VerifyBuffer<GRIMTransformer::TransformerModel>(TransformerModelIdentifier());
+    ::flatbuffers::Verifier &verifier) {
+  return verifier.VerifyBuffer<GRIMTransformer::TransformerModel>(TransformerModelIdentifier());
 }
 
-template <bool B = false>
 inline bool VerifySizePrefixedTransformerModelBuffer(
-    ::flatbuffers::VerifierTemplate<B> &verifier) {
-  return verifier.template VerifySizePrefixedBuffer<GRIMTransformer::TransformerModel>(TransformerModelIdentifier());
+    ::flatbuffers::Verifier &verifier) {
+  return verifier.VerifySizePrefixedBuffer<GRIMTransformer::TransformerModel>(TransformerModelIdentifier());
 }
 
 inline const char *TransformerModelExtension() {

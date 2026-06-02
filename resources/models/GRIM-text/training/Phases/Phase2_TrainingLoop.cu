@@ -484,7 +484,6 @@ GRIMText::Training::Startup::ForwardTopologyView validateTrainingForwardInputs(
 {
     payload.validate(caller);
 
-    const auto scratch_hp = GRIM::HyperParameters::scratchBlockConstructionHP(config);
     const auto execution_hp = GRIM::HyperParameters::executionBlockConstructionHP(config);
     GRIM::Execution::validateExecutionPayload(
         payload,
@@ -615,7 +614,6 @@ GRIM::Forward::ModelForwardRequest buildTrainingForwardRequest(
     request.pbm = &pbm;
     request.cublas_handle = training_state.cublas_handle.get();
     request.stream = stream;
-    request.scratch_block = forward_topology.scratch_block;
     request.execution_block_enabled = forward_topology.execution_block_enabled;
     request.payload = &payload;
     request.bindings = &bindings;
@@ -863,7 +861,6 @@ BatchResult processBatch(
         forward_outputs,
         autograd_loss_state,
         forward_topology.gpu_encoder,
-        forward_topology.scratch_block,
         forward_topology.execution_block_enabled,
         ctx.parameter_registry,
         training_state.cublas_handle.get(),

@@ -418,7 +418,6 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Layers/Encoding/Encoding_GPU.cu
     ../../Layers/Encoding/EncoderDiagnostics.cu
     ../../Layers/FlashAttention/EncoderSelfAttention_GPU.cu
-    ../../Layers/ScratchBlock/ScratchBlockReasoning_GPU.cu
     ../../Shared/Sampling/Sampling.cu
     ../../Shared/TensorConversion/TensorConversion.cu
     ${GRIM_TENSORCONTRACT_CU}

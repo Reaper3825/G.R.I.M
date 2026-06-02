@@ -122,15 +122,12 @@ bool saveLanguageModelCheckpoint(
     const int num_kv_heads = HyperParameters::snapshotTrainingConfigField<int>(config, "num_kv_heads");
     const int d_ff_i = HyperParameters::snapshotTrainingConfigField<int>(config, "d_ff");
     const int head_dim = HyperParameters::snapshotTrainingConfigField<int>(config, "head_dim");
-    const float scratch_block_atom_scale = HyperParameters::snapshotTrainingConfigField<float>(config, "scratch_block_atom_scale");
     const bool mtp_enabled = HyperParameters::snapshotTrainingConfigField<bool>(config, "mtp_enabled");
     const int mtp_k = mtp_enabled
         ? HyperParameters::snapshotTrainingConfigField<int>(config, "mtp_k")
         : 0;
     auto* embedding_parameters = parameter_registry.getEmbeddingParameters();
     auto* lm_head_parameters = parameter_registry.getLmHeadParameters();
-    auto* scratch_block_layer = gpu_model_state.scratch_block_layer.get();
-    auto* scratch_block_parameters = parameter_registry.getScratchBlockParameters();
     auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
     auto* decode_time_slot_selector = parameter_registry.getDecodeTimeSlotSelector();
     auto* gpu_encoder_owner = gpu_model_state.gpu_encoder.get();
@@ -205,44 +202,6 @@ bool saveLanguageModelCheckpoint(
     request.sources.lm_head.has_bias = (lm_head_parameters->bias.data != nullptr);
     request.sources.lm_head.bias.ptr = lm_head_parameters->bias.data;
     request.sources.lm_head.bias.count = lm_head_parameters->bias.data ? static_cast<std::size_t>(vocab_size) : 0;
-
-    const auto scratch_hp = HyperParameters::scratchBlockConstructionHP(config);
-
-    // Process ScratchBlock registry-owned tensors (if enabled by authored architecture).
-    // Use the registry tensor shapes directly so copy counts never exceed allocation.
-    if (scratch_hp.enabled) {
-        if (!scratch_block_layer) {
-            throw std::runtime_error("saveLanguageModelCheckpoint: ScratchBlockConstructionHP.enabled=true but scratch_block_layer is NULL");
-        }
-        if (!scratch_block_parameters) {
-            throw std::runtime_error("saveLanguageModelCheckpoint: ScratchBlockConstructionHP.enabled=true but registry scratch_block_parameters is NULL");
-        }
-        const Tensor& ate = scratch_block_parameters->atom_type_embeddings;
-        const Tensor& ap = scratch_block_parameters->atom_projection;
-        
-        request.sources.scratch_block.enabled = true;
-        request.sources.scratch_block.d_model = d_model_i;
-        request.sources.scratch_block.atom_scale = scratch_block_atom_scale;
-        
-        if (ate.data && ate.shape.is_2d_layout()) {
-            const size_t ate_numel = ate.numel();
-            const int num_atom_types = ate.shape.as_2d().rows;
-            const int atom_emb_dim = ate.shape.as_2d().cols;
-            request.sources.scratch_block.atom_type_embeddings.ptr = ate.data;
-            request.sources.scratch_block.atom_type_embeddings.count = ate_numel;
-            request.sources.scratch_block.num_atom_types = num_atom_types;
-            request.sources.scratch_block.atom_embedding_dim = atom_emb_dim;
-        }
-        
-        if (ap.data && ap.shape.is_2d_layout()) {
-            request.sources.scratch_block.atom_projection.ptr = ap.data;
-            request.sources.scratch_block.atom_projection.count = ap.numel();
-        }
-        
-        EmitModuleInfo(ModuleId::Checkpoint, "Processing ScratchBlock (atom_emb=" + 
-                       std::to_string(request.sources.scratch_block.atom_type_embeddings.count) +
-                       ", atom_proj=" + std::to_string(request.sources.scratch_block.atom_projection.count) + ")");
-    }
 
     // ExecutionBlock v2 weights — serialized via FlatBuffer
     if (execution_block_parameters) {
@@ -416,8 +375,6 @@ bool loadLanguageModelCheckpoint(
         : 0;
     auto* embedding_parameters = parameter_registry.getEmbeddingParameters();
     auto* lm_head_parameters = parameter_registry.getLmHeadParameters();
-    auto* scratch_block_layer = gpu_model_state.scratch_block_layer.get();
-    auto* scratch_block_parameters = parameter_registry.getScratchBlockParameters();
     auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
     auto* decode_time_slot_selector = parameter_registry.getDecodeTimeSlotSelector();
 
@@ -437,30 +394,9 @@ bool loadLanguageModelCheckpoint(
         return false;
     }
 
-    const auto scratch_hp = HyperParameters::scratchBlockConstructionHP(config);
-    if (scratch_hp.enabled && !scratch_block_layer) {
-        EmitModuleError(ModuleId::Checkpoint,
-                        "[load] ScratchBlockConstructionHP.enabled=true but scratch_block_layer is NULL.");
-        std::cerr << "[loadLanguageModelCheckpoint] Error: ScratchBlockConstructionHP.enabled=true but scratch_block_layer is NULL" << std::endl;
-        return false;
-    }
-    if (scratch_hp.enabled && !scratch_block_parameters) {
-        EmitModuleError(ModuleId::Checkpoint,
-                        "[load] ScratchBlockConstructionHP.enabled=true but registry scratch_block_parameters is NULL.");
-        std::cerr << "[loadLanguageModelCheckpoint] Error: ScratchBlockConstructionHP.enabled=true but registry scratch_block_parameters is NULL" << std::endl;
-        return false;
-    }
-    if (!scratch_hp.enabled && scratch_block_layer) {
-        EmitModuleError(ModuleId::Checkpoint,
-                        "[load] scratch_block_layer exists while ScratchBlockConstructionHP.enabled=false.");
-        std::cerr << "[loadLanguageModelCheckpoint] Error: scratch_block_layer exists while ScratchBlockConstructionHP.enabled=false" << std::endl;
-        return false;
-    }
-
     // Pattern B: call site is the sole authority for what the model requires.
     request.capabilities.requires_execution_block = (execution_block_parameters != nullptr);
     request.capabilities.requires_slot_selector     = (decode_time_slot_selector != nullptr);
-    request.capabilities.requires_scratch_block   = scratch_hp.enabled;
     request.capabilities.requires_final_rms_gamma = (lm_head_parameters != nullptr
                                                       && lm_head_parameters->final_rms_gamma.data != nullptr
                                                       && !freeze_learned_rms_gammas);
@@ -523,24 +459,6 @@ bool loadLanguageModelCheckpoint(
                     static_cast<std::size_t>(vocab_size));
     }
     request.lm_head.expect_bias = use_bias;
-
-    // Set up ScratchBlock registry-owned tensor destinations (if enabled by authored architecture).
-    // Use the registry tensor shapes directly so load sizes match the saved checkpoint.
-    if (scratch_hp.enabled) {
-        Tensor& ate = scratch_block_parameters->atom_type_embeddings;
-        Tensor& ap = scratch_block_parameters->atom_projection;
-        
-        if (ate.data) {
-            assignWrite(request.scratch_block.atom_type_embeddings, ate.data, ate.numel());
-            if (ate.shape.is_2d_layout()) {
-                request.scratch_block.num_atom_types = ate.shape.as_2d().rows;
-                request.scratch_block.atom_embedding_dim = ate.shape.as_2d().cols;
-            }
-        }
-        if (ap.data) {
-            assignWrite(request.scratch_block.atom_projection, ap.data, ap.numel());
-        }
-    }
 
     // ExecutionBlock v2 weight destinations — loaded via FlatBuffer
     if (execution_block_parameters) {
@@ -617,7 +535,6 @@ bool loadLanguageModelCheckpoint(
             std::ostringstream oss;
             oss << "[load]   capabilities: exec_block=" << request.capabilities.requires_execution_block
                 << " slot_selector=" << request.capabilities.requires_slot_selector
-                << " scratch=" << request.capabilities.requires_scratch_block
                 << " final_rms=" << request.capabilities.requires_final_rms_gamma;
             EmitModuleError(ModuleId::Checkpoint, oss.str());
         }
@@ -625,8 +542,6 @@ bool loadLanguageModelCheckpoint(
             std::ostringstream oss;
                 oss << "[load]   registry pointers: embedding=" << (embedding_parameters ? "OK" : "NULL")
                 << " lm_head_params=" << (lm_head_parameters ? "OK" : "NULL")
-                << " scratch_block=" << (scratch_block_layer ? "OK" : "NULL")
-                << " scratch_block_params=" << (scratch_block_parameters ? "OK" : "NULL")
                 << " exec_block=" << (execution_block_parameters ? "OK" : "NULL")
                 << " slot_selector=" << (decode_time_slot_selector ? "OK" : "NULL");
             EmitModuleError(ModuleId::Checkpoint, oss.str());

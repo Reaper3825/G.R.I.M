@@ -1,6 +1,6 @@
 //======================================================//
 //  AtomTable.hpp
-//  Atom Registry for GRIM Tokenizer/ScratchBlock Bridge
+//  Atom Registry for GRIM Tokenizer Atom Bridge
 //  
 //  The AtomTable stores the actual values of detected
 //  structural atoms. When tokenization detects a number,

@@ -33,13 +33,6 @@ namespace GRIM {
                 stats.lm_head_params += group_size;
                 break;
 
-            case ParamStatsBucket::ENCODER:
-                stats.encoder_params += group_size;
-                if (group.type == ParamGroupType::SCRATCHBLOCK) {
-                    stats.scratchblock_params += group_size;
-                }
-                break;
-
             case ParamStatsBucket::COUNT:
                 throw std::runtime_error(
                     "computeModelStats: parameter group '" + group.name +

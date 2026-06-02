@@ -281,26 +281,6 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         cfg.tie_embeddings,
         cfg.use_bias && lm_head_view.bias.ptr != nullptr);
 
-    flatbuffers::Offset<GRIMTransformer::ScratchBlockWeights> fb_scratch_block = 0;
-    const auto& sb_view = request.sources.scratch_block;
-    if (sb_view.enabled && sb_view.atom_type_embeddings.ptr) {
-        auto sb_atom_emb = download_device_vector(sb_view.atom_type_embeddings, "ScratchBlock atom_type_embeddings");
-        auto sb_atom_proj = download_device_vector(sb_view.atom_projection, "ScratchBlock atom_projection");
-        if (!sb_atom_emb.empty() || sb_view.atom_type_embeddings.count == 0) {
-            fb_scratch_block = GRIMTransformer::CreateScratchBlockWeights(
-                builder,
-                builder.CreateVector(sb_atom_emb),
-                builder.CreateVector(sb_atom_proj),
-                static_cast<uint32_t>(sb_view.num_atom_types),
-                static_cast<uint32_t>(sb_view.atom_embedding_dim),
-                static_cast<uint32_t>(sb_view.d_model),
-                sb_view.atom_scale,
-                sb_view.enabled);
-            Logging::EmitModuleInfo(kLogModule, Msg("[save] ScratchBlock: atom_emb=",
-                sb_atom_emb.size(), " atom_proj=", sb_atom_proj.size()));
-        }
-    }
-
     flatbuffers::Offset<GRIMTransformer::ExecutionBlockWeights> fb_execution_block = 0;
     const auto& eb_view = request.sources.execution_block;
     if (eb_view.enabled && eb_view.w_decode_1.ptr) {
@@ -375,21 +355,25 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         0.0f, 0, 0, 0, 0.0f, 0.0f, 0.0f, 0.0f,
         timestamp, 0, fb_model_name);
 
+    const flatbuffers::Offset<GRIMTransformer::NumericHeadWeights> fb_numeric_head = 0;
+    const flatbuffers::Offset<GRIMTransformer::LossWeightingWeights> fb_loss_weighting = 0;
+    const flatbuffers::Offset<GRIMTransformer::ReasoningHeadWeights> fb_reasoning_head = 0;
+
     auto fb_model = GRIMTransformer::CreateTransformerModel(
         builder,
-        request.model_version,
+        static_cast<uint32_t>(request.model_version),
         fb_config,
         fb_embeddings,
         fb_encoder_layers,
         fb_lm_head,
-        0,  // numeric_head (removed)
-        fb_scratch_block,
+        fb_numeric_head,
         fb_final_rms_gamma,
-        0,
+        fb_loss_weighting,
         fb_metadata,
-        0, 0,
+        static_cast<uint32_t>(0),
+        static_cast<uint64_t>(0),
         timestamp, timestamp,
-        0,
+        fb_reasoning_head,
         fb_execution_block,
         fb_slot_selector);
 
@@ -470,7 +454,6 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
                 }
 
                 verify_component("lm_head", raw->lm_head());
-                verify_component("scratch_block", raw->scratch_block());
                 verify_component("training_metadata", raw->training_metadata());
                 verify_component("execution_block", raw->execution_block());
                 verify_component("slot_selector", raw->slot_selector());

@@ -64,7 +64,7 @@ struct TokenizerHP {
     int subword_mining_workers = 0;
     std::size_t subword_mining_max_bytes = 0;
 
-    bool enable_scratch_block_reasoning = false;
+    bool enable_atom_reasoning = false;
     bool detect_numbers = false;
     bool enable_byte_fallback = false;
 
@@ -382,16 +382,6 @@ struct LMHeadLayerConstructionHP {
     float rms_epsilon = 0.0f;
 };
 
-struct ScratchBlockConstructionHP {
-    bool enabled = false;
-    int d_model = 0;
-    int max_atoms = 0;
-    int atom_embedding_dim = 0;
-    int atom_token_start = ATOM_TOKEN_START;
-    int atom_token_end = ATOM_TOKEN_END;
-    float atom_scale = 0.0f;
-};
-
 struct ExecutionBlockConstructionHP {
     bool enabled = false;
     int layer = -1;
@@ -508,18 +498,11 @@ struct ModelHP {
     bool lm_head_freeze_learned_rms_gammas = false;
     float lm_head_rms_epsilon = 0.0f;
 
-    bool scratch_block_enabled = false;
-    int scratch_block_d_model = 0;
-    int scratch_block_max_atoms = 0;
-    int scratch_block_atom_embedding_dim = 0;
-    int scratch_block_atom_token_start = ATOM_TOKEN_START;
-    int scratch_block_atom_token_end = ATOM_TOKEN_END;
-    float scratch_block_atom_scale = 0.0f;
+    int atom_embedding_dim = 0;
 
     bool execution_block_enabled = false;
     int execution_block_layer = -1;
     int execution_block_d_model = 0;
-    int execution_block_atom_embedding_dim = 0;
     int execution_block_num_ops = 0;
     int execution_block_num_slots = 0;
     int execution_block_num_scratch_slots = 0;
@@ -638,7 +621,7 @@ inline TokenizerHP tokenizerHP(const LanguageModelConfig& config) {
     view.enable_parallel_subword_mining = config.tokenizer_enable_parallel_subword_mining;
     view.subword_mining_workers = config.tokenizer_subword_mining_workers;
     view.subword_mining_max_bytes = config.tokenizer_subword_mining_max_bytes;
-    view.enable_scratch_block_reasoning = config.tokenizer_enable_scratch_block_reasoning;
+    view.enable_atom_reasoning = config.tokenizer_enable_atom_reasoning;
     view.detect_numbers = config.tokenizer_detect_numbers;
     view.enable_byte_fallback = config.tokenizer_enable_byte_fallback;
     view.add_bos = config.tokenizer_add_bos;
@@ -1015,7 +998,7 @@ inline TokenizerHP tokenizerHP(const GRIM::Config::AiConfigSnapshot& snapshot) {
     view.enable_parallel_subword_mining = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_enable_parallel_subword_mining");
     view.subword_mining_workers = snapshotTrainingConfigField<int>(snapshot, "tokenizer_subword_mining_workers");
     view.subword_mining_max_bytes = snapshotTrainingConfigField<std::size_t>(snapshot, "tokenizer_subword_mining_max_bytes");
-    view.enable_scratch_block_reasoning = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_enable_scratch_block_reasoning");
+    view.enable_atom_reasoning = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_enable_atom_reasoning");
     view.detect_numbers = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_detect_numbers");
     view.enable_byte_fallback = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_enable_byte_fallback");
     view.add_bos = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_add_bos");
@@ -1337,18 +1320,11 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.lm_head_freeze_learned_rms_gammas = requireBool("freeze_learned_rms_gammas");
     view.lm_head_rms_epsilon = EPSILON_RMSNORM;
 
-    view.scratch_block_enabled = requireBool("use_scratch_block");
-    view.scratch_block_d_model = d_model;
-    view.scratch_block_max_atoms = requireInt("scratch_block_max_atoms");
-    view.scratch_block_atom_embedding_dim = requireInt("scratch_block_atom_embedding_dim");
-    view.scratch_block_atom_token_start = ATOM_TOKEN_START;
-    view.scratch_block_atom_token_end = ATOM_TOKEN_END;
-    view.scratch_block_atom_scale = requireFloat("scratch_block_atom_scale");
+    view.atom_embedding_dim = requireInt("atom_embedding_dim");
 
     view.execution_block_enabled = requireBool("execution_block_enabled");
     view.execution_block_layer = requireInt("execution_block_layer");
     view.execution_block_d_model = d_model;
-    view.execution_block_atom_embedding_dim = view.scratch_block_atom_embedding_dim;
     view.execution_block_num_ops = requireInt("execution_block_num_ops");
     view.execution_block_num_slots = requireInt("execution_block_num_slots");
     view.execution_block_num_scratch_slots = requireInt("execution_block_num_scratch_slots");
@@ -1483,22 +1459,6 @@ inline LMHeadLayerConstructionHP lmHeadLayerConstructionHP(
     return view;
 }
 
-inline ScratchBlockConstructionHP scratchBlockConstructionHP(
-    const GRIM::Config::AiConfigSnapshot& snapshot)
-{
-    const auto model = modelHP(snapshot);
-
-    ScratchBlockConstructionHP view;
-    view.enabled = model.scratch_block_enabled;
-    view.d_model = model.scratch_block_d_model;
-    view.max_atoms = model.scratch_block_max_atoms;
-    view.atom_embedding_dim = model.scratch_block_atom_embedding_dim;
-    view.atom_token_start = model.scratch_block_atom_token_start;
-    view.atom_token_end = model.scratch_block_atom_token_end;
-    view.atom_scale = model.scratch_block_atom_scale;
-    return view;
-}
-
 inline ExecutionBlockConstructionHP executionBlockConstructionHP(
     const GRIM::Config::AiConfigSnapshot& snapshot)
 {
@@ -1508,7 +1468,7 @@ inline ExecutionBlockConstructionHP executionBlockConstructionHP(
     view.enabled = model.execution_block_enabled;
     view.layer = model.execution_block_layer;
     view.d_model = model.execution_block_d_model;
-    view.atom_embedding_dim = model.execution_block_atom_embedding_dim;
+    view.atom_embedding_dim = model.atom_embedding_dim;
     view.num_ops = model.execution_block_num_ops;
     view.num_slots = model.execution_block_num_slots;
     view.num_scratch_slots = model.execution_block_num_scratch_slots;

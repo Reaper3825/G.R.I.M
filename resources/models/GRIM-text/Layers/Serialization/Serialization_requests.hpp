@@ -15,14 +15,12 @@ struct SerializationConfig {
 struct CheckpointCapabilityRequirements {
 	bool requires_execution_block = false;
 	bool requires_slot_selector = false;
-	bool requires_scratch_block = false;
 	bool requires_final_rms_gamma = false;
 };
 
 struct SerializationLoadReport {
 	bool execution_block_loaded = false;
 	bool slot_selector_loaded = false;
-	bool scratch_block_loaded = false;
 };
 
 struct SerializationSaveSources {
@@ -30,7 +28,6 @@ struct SerializationSaveSources {
 	SerializationGpuEmbeddingReadView gpu_embedding;
 	std::vector<SerializationEncoderLayerReadView> encoder_layers;
 	SerializationLMHeadReadView lm_head;
-	SerializationScratchBlockReadView scratch_block;
 	SerializationExecutionBlockReadView execution_block;
 	SerializationSlotSelectorReadView slot_selector;
 	DeviceReadView final_rms_gamma;
@@ -50,7 +47,6 @@ struct SerializationLoadRequest {
 	SerializationGpuEmbeddingWriteView gpu_embedding;
 	std::vector<SerializationEncoderLayerWriteView> encoder_layers;
 	SerializationLMHeadWriteView lm_head;
-	SerializationScratchBlockWriteView scratch_block;
 	SerializationExecutionBlockWriteView execution_block;
 	SerializationSlotSelectorWriteView slot_selector;
 	DeviceWriteView final_rms_gamma;
