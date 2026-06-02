@@ -80,6 +80,8 @@ TELEMETRY_STREAM_NAMES_BY_INDEX = {
     55: "rho_raw_avg_signed_dot",
     56: "rho_centered_avg_abs_dot",
     57: "rho_mean_vector_rms",
+    58: "rho_atom_only",
+    59: "rho_nonatom_only",
 }
 
 
@@ -367,8 +369,17 @@ def main():
     rho_final = streams.get("rho_final")
     rho_growth = streams.get("rho_growth")
     rho_worst = streams.get("rho_worst_delta")
+    rho_atom_only = streams.get("rho_atom_only")
+    rho_nonatom_only = streams.get("rho_nonatom_only")
     h_rms = streams.get("h_rms_growth")
     tpb = streams.get("tokens_per_batch")
+    rho_plot_streams = [
+        ("rho_final", rho_final, "tab:blue"),
+        ("rho_growth", rho_growth, "tab:orange"),
+        ("rho_worst_delta", rho_worst, "tab:red"),
+        ("rho_atom_only", rho_atom_only, "tab:green"),
+        ("rho_nonatom_only", rho_nonatom_only, "tab:purple"),
+    ]
 
     fig2 = plt.figure(figsize=(16, 14), constrained_layout=True)
     fig2.suptitle("GRIM-text Telemetry — Rho & Hidden State", fontsize=14, fontweight="bold")
@@ -376,9 +387,7 @@ def main():
 
     # 2-1a) Rho streams overlaid
     ax = fig2.add_subplot(gs2[0, 0])
-    for name, s, color in [("rho_final", rho_final, "tab:blue"),
-                            ("rho_growth", rho_growth, "tab:orange"),
-                            ("rho_worst_delta", rho_worst, "tab:red")]:
+    for name, s, color in rho_plot_streams:
         if s is not None:
             ax.plot(s.index, s["raw_observation"], alpha=0.2, linewidth=0.5, color=color)
             ax.plot(s.index, smooth(s["raw_observation"]), linewidth=1.5, label=name, color=color)
@@ -389,9 +398,7 @@ def main():
 
     # 2-1b) Rho running mean (mu) comparison
     ax = fig2.add_subplot(gs2[0, 1])
-    for name, s, color in [("rho_final", rho_final, "tab:blue"),
-                            ("rho_growth", rho_growth, "tab:orange"),
-                            ("rho_worst_delta", rho_worst, "tab:red")]:
+    for name, s, color in rho_plot_streams:
         if s is not None:
             ax.plot(s.index, s["mu"], linewidth=1.2, label=f"{name} μ", color=color)
             sig = s["sigma"].values.astype(float)
@@ -423,10 +430,7 @@ def main():
 
     # 2-3a) Rho momentum (p) across streams
     ax = fig2.add_subplot(gs2[2, 0])
-    for name, s, color in [("rho_final", rho_final, "tab:blue"),
-                            ("rho_growth", rho_growth, "tab:orange"),
-                            ("rho_worst_delta", rho_worst, "tab:red"),
-                            ("h_rms_growth", h_rms, "tab:purple")]:
+    for name, s, color in [*rho_plot_streams, ("h_rms_growth", h_rms, "tab:brown")]:
         if s is not None:
             plot_raw_and_smooth(ax, s.index, s["p"], window=10,
                                 color=color,
@@ -870,7 +874,8 @@ def main():
     sb_atom_rms = streams.get("sb_atom_embed_rms")
 
     has_inject_diag = any(s is not None for s in [eb_inject_gate, eb_read_gate, eb_inject_wnorm,
-                                                   eb_read_wnorm, eb_loss_frac, sb_atom_rms])
+                                                   eb_read_wnorm, eb_loss_frac, sb_atom_rms,
+                                                   rho_atom_only, rho_nonatom_only])
     if has_inject_diag:
         fig7 = plt.figure(figsize=(16, 14), constrained_layout=True)
         fig7.suptitle("GRIM-text Telemetry — EB Injection Diagnostics", fontsize=14, fontweight="bold")
@@ -944,36 +949,44 @@ def main():
         ax.legend(fontsize=8)
         ax.grid(True, alpha=0.3)
 
-        # 7-3b) Combined: gates overlaid with loss
+        # 7-3b) ScratchBlock atom RMS vs atom/non-atom rho split
         ax = fig7.add_subplot(gs7[2, 1])
-        if eb_inject_gate is not None:
-            plot_raw_and_smooth(ax, eb_inject_gate.index, eb_inject_gate["raw_observation"],
-                                color="tab:blue",
-                                raw_label="_nolegend_",
-                                smooth_label="inject gate",
-                                raw_alpha=0.15,
-                                smooth_linewidth=1.2)
-        if eb_read_gate is not None:
-            plot_raw_and_smooth(ax, eb_read_gate.index, eb_read_gate["raw_observation"],
-                                color="tab:red",
-                                raw_label="_nolegend_",
-                                smooth_label="read gate",
-                                raw_alpha=0.15,
-                                smooth_linewidth=1.2)
-        ax.set_ylabel("Gate Value", color="tab:blue")
-        ax.set_ylim(-0.05, 1.05)
-        if loss is not None:
+        if sb_atom_rms is not None:
+            plot_raw_and_smooth(ax, sb_atom_rms.index, sb_atom_rms["raw_observation"],
+                                color="tab:green",
+                                raw_label="sb_atom_embed_rms (raw)",
+                                smooth_label="sb_atom_embed_rms (smooth)",
+                                raw_alpha=0.18,
+                                smooth_linewidth=1.3)
+        ax.set_ylabel("ScratchBlock atom RMS", color="tab:green")
+        if rho_atom_only is not None or rho_nonatom_only is not None or rho_final is not None:
             ax2 = ax.twinx()
-            plot_raw_and_smooth(ax2, loss.index, loss["raw_observation"],
-                                color="tab:gray",
-                                raw_label="_nolegend_",
-                                smooth_label="loss (sm20)",
-                                raw_alpha=0.12,
-                                smooth_alpha=0.5,
-                                smooth_linewidth=1)
-            ax2.set_ylabel("Loss", color="tab:gray")
+            if rho_atom_only is not None:
+                plot_raw_and_smooth(ax2, rho_atom_only.index, rho_atom_only["raw_observation"],
+                                    color="tab:orange",
+                                    raw_label="ρ_atom_only (raw)",
+                                    smooth_label="ρ_atom_only (smooth)",
+                                    raw_alpha=0.14,
+                                    smooth_linewidth=1.3)
+            if rho_nonatom_only is not None:
+                plot_raw_and_smooth(ax2, rho_nonatom_only.index, rho_nonatom_only["raw_observation"],
+                                    color="tab:purple",
+                                    raw_label="ρ_nonatom_only (raw)",
+                                    smooth_label="ρ_nonatom_only (smooth)",
+                                    raw_alpha=0.14,
+                                    smooth_linewidth=1.3)
+            if rho_final is not None:
+                plot_raw_and_smooth(ax2, rho_final.index, rho_final["raw_observation"],
+                                    color="tab:blue",
+                                    raw_label="_nolegend_",
+                                    smooth_label="ρ_final (smooth)",
+                                    raw_alpha=0.08,
+                                    smooth_alpha=0.7,
+                                    smooth_linewidth=1.1,
+                                    smooth_linestyle="--")
+            ax2.set_ylabel("ρ", color="tab:orange")
             ax2.legend(loc="center right", fontsize=8)
-        ax.set_title("Gates vs Loss (correlation = causation hypothesis)")
+        ax.set_title("ScratchBlock Atom RMS vs Atom/Non-Atom ρ Split")
         ax.legend(loc="upper left", fontsize=8)
         ax.grid(True, alpha=0.3)
 
