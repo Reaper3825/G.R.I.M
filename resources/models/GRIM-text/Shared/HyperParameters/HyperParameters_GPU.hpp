@@ -366,7 +366,6 @@ struct LanguageModelConfig {
     int scratch_block_atom_embedding_dim = 0;
     int scratch_block_max_atoms = 0;
     float scratch_block_atom_scale = 0.0f;
-    bool scratch_block_execution_first_type_only = false;
 
     // ExecutionBlock config — differentiable register machine
     bool execution_block_enabled = false;
@@ -1898,7 +1897,6 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(scratch_block_max_atoms);
     GRIM_LOAD_CONFIG_FIELD(scratch_block_atom_scale);
     GRIM_LOAD_CONFIG_FIELD(execution_block_enabled);
-    GRIM_LOAD_CONFIG_LEAF("execution_block_execution_first_type_only", scratch_block_execution_first_type_only);
     GRIM_LOAD_CONFIG_FIELD(execution_block_debug_mode);
     GRIM_LOAD_CONFIG_LEAF("execution_block_step_y_overrides_x", step_y_overrides_x);
     GRIM_LOAD_CONFIG_LEAF("execution_block_structured_ce_enabled", structured_ce_enabled);
@@ -2227,7 +2225,6 @@ inline void writeFinalizedLanguageModelConfigToSnapshot(
     GRIM_WRITE_FINAL_CONFIG_FIELD(scratch_block_atom_embedding_dim);
     GRIM_WRITE_FINAL_CONFIG_FIELD(scratch_block_max_atoms);
     GRIM_WRITE_FINAL_CONFIG_FIELD(scratch_block_atom_scale);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(scratch_block_execution_first_type_only);
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_layer);
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_num_ops);

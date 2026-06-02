@@ -290,7 +290,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const bool lm_head_center_hidden_states = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "lm_head_center_hidden_states");
     const int d_model = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "d_model");
     const auto positional_encoding = HyperParameters::snapshotTrainingConfigField<HyperParameters::PositionalEncodingType>(*cfg, "positional_encoding");
-    const bool scratch_block_execution_first_type_only = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "scratch_block_execution_first_type_only");
     const float dropout_rate = HyperParameters::snapshotTrainingConfigField<float>(*cfg, "dropout_rate");
     const int num_layers = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "num_layers");
     const bool use_bias = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "use_bias");
@@ -396,14 +395,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
             throw std::runtime_error("executeModelForward: ScratchBlock requires BatchDeviceBindings.d_token_to_slot_map");
         }
 
-        const bool exec_first_type_only =
-            execution_hp.enabled && scratch_block_execution_first_type_only;
-        if (execution_hp.enabled && !exec_first_type_only) {
-            throw std::runtime_error(
-                "executeModelForward: execution_block_enabled requires "
-                "scratch_block_execution_first_type_only=true to prevent value leakage "
-                "into hidden states on arithmetic batches");
-        }
+        const bool exec_first_type_only = execution_hp.enabled;
 
         ScratchBlockProjectionParameterViews scratch_param_views{};
         const ScratchBlockProjectionParameterViews* scratch_param_view_ptr = nullptr;

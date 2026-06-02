@@ -454,7 +454,6 @@
             "execution_block_entropy_aux_weight": 0.01,
             "execution_block_entropy_collapse_threshold": 0.01,
             "execution_block_entropy_weight": 0.01,
-            "execution_block_execution_first_type_only": true,
             "execution_block_final_slot_consistency_weight": 0.1,
             "execution_block_inject_gate_temp": 0.5,
             "execution_block_layer": -1,

@@ -160,8 +160,8 @@ struct OptimizerUpdateHP {
 };
 
 struct GradientClippingHP {
-    bool enabled = false;
-    float configured_clip_norm = 0.0f;
+    bool enabled = true;
+    float configured_clip_norm = 1.0f;
     float effective_per_token_limit = EPSILON_GRADIENT_CLIP;
 };
 
@@ -568,7 +568,6 @@ struct ModelHP {
     int mtp_alpha_warmup_steps = 0;
 
     PositionalEncodingType positional_encoding = PositionalEncodingType::UNSPECIFIED;
-    bool scratch_block_execution_first_type_only = false;
     bool structured_ce_enabled = false;
 };
 
@@ -1398,8 +1397,6 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
 
     view.positional_encoding = parsePositionalEncodingFlags(
         requireBool("use_rope"), requireBool("use_alibi"));
-    view.scratch_block_execution_first_type_only =
-        requireBool("execution_block_execution_first_type_only");
     view.structured_ce_enabled = requireBool("execution_block_structured_ce_enabled");
     return view;
 }

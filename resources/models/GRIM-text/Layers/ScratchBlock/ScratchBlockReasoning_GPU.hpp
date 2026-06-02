@@ -58,7 +58,7 @@ struct ScratchBlockGradFn : public GradFn {
     int atom_embedding_dim = 0;
     int d_model          = 0;
     int max_atoms        = 0;
-    float atom_scale     = 1.0f;
+    float atom_scale     = 0.1f;
 
     //--- References to layer weights (NOT owned — layer outlives GradFn) ---
     float* atom_projection_data         = nullptr;  // [atom_embedding_dim, d_model]
