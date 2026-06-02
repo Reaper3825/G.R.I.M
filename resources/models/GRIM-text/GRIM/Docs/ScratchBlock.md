@@ -18,7 +18,8 @@ The current entry points are `autograd::scratch_block_inject()` and `autograd::s
 
 - Forward computes `output = input + atom_scale * project(atom_embedding)` for detected atom positions.
 - Atom embeddings merge learned atom type vectors with numeric value, atom flags, and slot-binding metadata.
+- Execution-first placeholder mode (`scratch_block_execution_first_type_only=true`) is now strict neutral mode: ScratchBlock emits an exact-zero atom embedding/structured state for atom placeholders, and shared embedding lookup now neutralizes atom placeholder token IDs structurally so `<INT>` / `<FLOAT>` never add a separate token-identity signal to encoder input. Numeric truth stays exclusively on execution-memory / slot-map side channels.
 - `ScratchBlockGradFn` owns saved atom activations and backward scratch inside the autograd boundary.
-- Backward propagates identity gradient to the input chain and accumulates gradients into `atom_projection` and `atom_type_embeddings`.
+- Backward propagates identity gradient to the input chain and accumulates gradients into `atom_projection` and `atom_type_embeddings` only when the forward path depends on them. Strict neutral execution-first placeholders intentionally do not backprop into `atom_type_embeddings`.
 
 Do not reintroduce the deleted dropout-gradient tap path or external ScratchBlock pools. Batch upload copies `BatchPayload` host atom/numeric metadata into TrainingState device cache tensors; ScratchBlock reads those per-step device bindings during forward.

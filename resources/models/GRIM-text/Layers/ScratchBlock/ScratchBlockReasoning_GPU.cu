@@ -157,10 +157,10 @@ __global__ void kernelLookupAtomEmbeddingsWithValue(
     int token_id = token_ids[token_pos];
     int atom_type = (token_id - ATOM_TOKEN_START) % NUM_ATOM_TYPES;
 
-    // Execution-first training: type embedding only (no magnitude/sign/text leakage).
+    // Execution-first training: atom placeholders must not leak value OR type
+    // into the residual stream. Emit an exact zero structured vector here.
     if (execution_first_type_only) {
-        float v = atom_type_embeddings[atom_type * atom_embedding_dim + dim_idx];
-        atom_embeddings[atom_idx * atom_embedding_dim + dim_idx] = v;
+        atom_embeddings[atom_idx * atom_embedding_dim + dim_idx] = 0.0f;
         return;
     }
 
@@ -405,6 +405,7 @@ struct ScratchBlockProjectionGradFn : public GradFn {
     float* atom_projection_grad = nullptr;
     float* atom_type_embeddings_grad = nullptr;
     float* d_grad_atom_embeddings = nullptr;
+    bool accumulate_atom_type_gradients = true;
 
     ScratchBlockProjectionGradFn() { op_name = "scratch_block_project_all_tokens"; }
     ~ScratchBlockProjectionGradFn() override { release_saved(); }
@@ -473,12 +474,14 @@ struct ScratchBlockProjectionGradFn : public GradFn {
             d_model,
             atom_scale);
 
-        kernelAccumulateAtomTypeGradients<<<num_atoms_captured, block_size, 0, stream>>>(
-            d_grad_atom_embeddings,
-            cached_atom_types,
-            num_atoms_captured,
-            atom_type_embeddings_grad,
-            atom_embedding_dim);
+        if (accumulate_atom_type_gradients) {
+            kernelAccumulateAtomTypeGradients<<<num_atoms_captured, block_size, 0, stream>>>(
+                d_grad_atom_embeddings,
+                cached_atom_types,
+                num_atoms_captured,
+                atom_type_embeddings_grad,
+                atom_embedding_dim);
+        }
     }
 
     void release_saved() override {
@@ -579,7 +582,7 @@ void ScratchBlockGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stre
             atom_scale);
 
         // Route per-atom gradients back to shared type embeddings
-        if (cached_atom_types && atom_type_embeddings_grad) {
+        if (accumulate_atom_type_gradients && cached_atom_types && atom_type_embeddings_grad) {
             kernelAccumulateAtomTypeGradients<<<num_atoms_captured, block_size, 0, stream>>>(
                 d_grad_atom_embeddings,
                 cached_atom_types,
@@ -667,6 +670,7 @@ Tensor scratch_block_inject(
         grad_fn->d_model = hp.d_model;
         grad_fn->max_atoms = hp.max_atoms;
         grad_fn->atom_scale = hp.atom_scale;
+        grad_fn->accumulate_atom_type_gradients = !execution_first_type_only;
 
         // Capture input chain
         grad_fn->capture_input(input);
@@ -805,6 +809,7 @@ Tensor scratch_block_project_all_tokens(
         grad_fn->d_model = hp.d_model;
         grad_fn->max_atoms = hp.max_atoms;
         grad_fn->atom_scale = hp.atom_scale;
+        grad_fn->accumulate_atom_type_gradients = !execution_first_type_only;
         grad_fn->capture_weights(scratch_parameters.atom_projection, scratch_parameters.atom_type_embeddings);
 
         int num_atoms_host = 0;

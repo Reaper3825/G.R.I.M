@@ -8,7 +8,8 @@
 //
 //  Forward:  output = input + scale * project(atom_emb)
 //  Backward: grad_input = grad_output (additive identity)
-//            + parameter gradients for projection/embeddings
+//            + parameter gradients for projection/embeddings when the
+//              forward path actually depends on them
 //
 //  Author: GRIM Team
 //  Date: December 2025, Rewritten February 2026
@@ -63,6 +64,7 @@ struct ScratchBlockGradFn : public GradFn {
     float* atom_projection_data         = nullptr;  // [atom_embedding_dim, d_model]
     float* atom_projection_grad         = nullptr;
     float* atom_type_embeddings_grad    = nullptr;  // [NUM_ATOM_TYPES, atom_embedding_dim]
+    bool accumulate_atom_type_gradients = true;
 
     //--- Temporary backward scratch (OWNED) ---
     float* d_grad_atom_embeddings = nullptr;  // [max_atoms, atom_embedding_dim]
@@ -205,7 +207,8 @@ namespace autograd {
 /// Returns NEW Tensor with ScratchBlockGradFn attached to autograd graph.
 ///
 /// Forward:  output[t] = input[t] + scale * project(atom_emb[t])
-///   atom_emb includes learned type features plus numeric value and atom flags.
+///   atom_emb includes learned type features plus numeric value and atom flags,
+///   except execution-first placeholder mode where atom_emb is exactly zero.
 /// Backward: grad_input = grad_output (additive identity), plus parameter gradients
 ///
 /// @param input          Embedding tensor [total_tokens, d_model] with grad_fn chain
@@ -226,9 +229,10 @@ Tensor scratch_block_inject(
 
 /// Build a full-token structured state tensor z [total_tokens, d_model].
 /// Non-atom/non-structured rows are exactly zero. Atom rows contain
-/// atom_scale * project(atom_embedding). The returned Tensor owns a GradFn
-/// that accumulates into atom_projection and atom_type_embeddings when
-/// track_grad=true.
+/// atom_scale * project(atom_embedding) unless execution-first placeholder mode
+/// is active, in which case atom rows are also exactly zero. The returned Tensor
+/// owns a GradFn that accumulates into atom_projection and atom_type_embeddings
+/// when track_grad=true and the forward path depends on those parameters.
 Tensor scratch_block_project_all_tokens(
     ScratchBlockLayer& layer,
     GRIM::ScratchBlockParameterTensors& scratch_parameters,

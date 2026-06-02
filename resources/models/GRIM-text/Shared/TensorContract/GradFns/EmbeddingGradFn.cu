@@ -15,6 +15,7 @@
 #include "EmbeddingGradFn.hpp"
 #include "../TensorContract_GPU.hpp"
 #include "../TokenTypeGate.hpp"
+#include "../../HyperParameters/HyperParameters_GPU.hpp"
 #include "../../CudaAllocUtils.hpp"
 
 #include <cuda_runtime.h>
@@ -37,6 +38,12 @@ void trackKernelLaunch(const char* kernel_name, cudaStream_t stream);
 namespace {
 
 constexpr int AUTOGRAD_BLOCK_SIZE = 256;
+
+__device__ __forceinline__ bool isAtomPlaceholderToken(int token_id)
+{
+    return token_id >= GRIM::HyperParameters::ATOM_TOKEN_START &&
+           token_id < GRIM::HyperParameters::ATOM_TOKEN_END;
+}
 
 // Embedding forward: gather from embedding table with optional scaling and a
 // hard token-layout type gate. Inactive dimensions are exactly zero.
@@ -62,6 +69,13 @@ __global__ void kernel_embedding_forward(
     float* output_row = output + static_cast<size_t>(token_idx) * d_model;
 
     if (token_id == GRIM::Tokenizer::PAD_TOKEN_ID) {
+        for (int i = threadIdx.x; i < d_model; i += blockDim.x) {
+            output_row[i] = 0.0f;
+        }
+        return;
+    }
+
+    if (isAtomPlaceholderToken(token_id)) {
         for (int i = threadIdx.x; i < d_model; i += blockDim.x) {
             output_row[i] = 0.0f;
         }
@@ -109,6 +123,10 @@ __global__ void kernel_embedding_backward(
     }
 
     if (token_id == GRIM::Tokenizer::PAD_TOKEN_ID) {
+        return;
+    }
+
+    if (isAtomPlaceholderToken(token_id)) {
         return;
     }
 
@@ -235,7 +253,13 @@ void EmbeddingGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream)
     // to same buffer where LM head grad already lives. Natural ~90% cancellation
     // for frequent tokens acts as frequency-proportional regularization.
     kernel_embedding_backward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-        grad_output.data, bindings.d_input_ids, weight_grad, num_tokens, d_model, vocab_size, embedding_scale);
+        grad_output.data,
+        bindings.d_input_ids,
+        weight_grad,
+        num_tokens,
+        d_model,
+        vocab_size,
+        embedding_scale);
     trackKernelLaunch("kernel_embedding_backward", stream);
     applied = true;
 
@@ -297,7 +321,13 @@ Tensor embedding(const Tensor& weight,
     // Forward: gather from weight table with scaling and fixed hard type gate.
     // Issue #140: Scale is 1.0f in production (AIAYN sqrt(d_model) removed for tied weights)
     kernel_embedding_forward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-        bindings.d_input_ids, weight.data, result.data, num_tokens, d_model, vocab_size, embedding_scale);
+        bindings.d_input_ids,
+        weight.data,
+        result.data,
+        num_tokens,
+        d_model,
+        vocab_size,
+        embedding_scale);
     trackKernelLaunch("kernel_embedding_forward", stream);
 
     // Set up backward - ISSUE #48: capture stable data, not Tensor*
