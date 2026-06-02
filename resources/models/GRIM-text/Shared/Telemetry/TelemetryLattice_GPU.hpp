@@ -222,6 +222,13 @@ enum class MetricStream : int {
     RHO_RAW_AVG_SIGNED_DOT   = 55, // mean dot(h_i,h_j) over sampled valid pairs
     RHO_CENTERED_AVG_ABS_DOT = 56, // mean|dot(h_i-μ,h_j-μ)| over sampled valid pairs
     RHO_MEAN_VECTOR_RMS      = 57, // sqrt(mean_d μ_d²), μ = mean_i h_i
+
+    // ScratchBlock injection isolator — final collected layer, RHO_BUILDUP cadence.
+    // ScratchBlock injects a shared per-type vector into atom-token positions only
+    // (first_type_only mode). If that injection is what drives ρ up, atom-only ρ
+    // spikes while non-atom ρ stays flat. The split pins the cause directly.
+    RHO_ATOM_ONLY    = 58, // avg|cos(h_i,h_j)| over atom-token positions only
+    RHO_NONATOM_ONLY = 59, // avg|cos(h_i,h_j)| over non-atom positions only (baseline)
 };
 
 const char* getMetricStreamName(MetricStream stream);

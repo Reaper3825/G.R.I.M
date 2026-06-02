@@ -362,6 +362,8 @@ const char* getMetricStreamName(MetricStream stream) {
         case MetricStream::RHO_RAW_AVG_SIGNED_DOT: return "rho_raw_avg_signed_dot";
         case MetricStream::RHO_CENTERED_AVG_ABS_DOT: return "rho_centered_avg_abs_dot";
         case MetricStream::RHO_MEAN_VECTOR_RMS: return "rho_mean_vector_rms";
+        case MetricStream::RHO_ATOM_ONLY: return "rho_atom_only";
+        case MetricStream::RHO_NONATOM_ONLY: return "rho_nonatom_only";
         default: return "unknown";
     }
 }

@@ -107,6 +107,24 @@ void computeRhoDiagnostic(
     const int num_valid = static_cast<int>(valid_positions.size());
     if (num_valid < 2) return;
 
+    // Partition valid positions into atom-token vs non-atom-token subsets.
+    // ScratchBlock injects a shared per-type vector into atom positions only
+    // (first_type_only mode). If that injection is what drives ρ up, the
+    // atom-only ρ will spike while non-atom ρ stays flat. Computing both on the
+    // final collected layer isolates the injection's contribution directly.
+    const GRIM::Tokenizer::TokenLayout token_layout = tokenizer.tokenLayout();
+    std::vector<int> atom_positions;
+    std::vector<int> nonatom_positions;
+    atom_positions.reserve(num_valid);
+    nonatom_positions.reserve(num_valid);
+    for (int pos : valid_positions) {
+        if (token_layout.isAtom(payload.input_ids[pos])) {
+            atom_positions.push_back(pos);
+        } else {
+            nonatom_positions.push_back(pos);
+        }
+    }
+
     // Helper: compute avg |cos| from a stratified sample of valid position pairs.
     // Copies the full rectangular buffer once, then indexes only valid rows.
     // Stratified sampling: pick up to MAX_SAMPLE positions uniformly, then exhaust
@@ -128,8 +146,10 @@ void computeRhoDiagnostic(
         float mean_rms;       // rms(μ), μ = mean_i h_i — hidden DC vector magnitude
     };
 
-    auto compute_rho = [&](const float* device_ptr) -> RhoRaw {
+    auto compute_rho = [&](const float* device_ptr, const std::vector<int>& positions) -> RhoRaw {
         if (!device_ptr) return {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+        const int n_pos = static_cast<int>(positions.size());
+        if (n_pos < 2) return {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
 
         const size_t bytes = static_cast<size_t>(rect_positions) * d_model * sizeof(float);
         std::vector<float> h(rect_positions * d_model);
@@ -140,17 +160,17 @@ void computeRhoDiagnostic(
                 " at " + __FILE__ + ":" + std::to_string(__LINE__));
         }
 
-        // Build sample indices: if num_valid <= MAX_RHO_SAMPLE, use all;
+        // Build sample indices: if n_pos <= MAX_RHO_SAMPLE, use all;
         // otherwise pick MAX_RHO_SAMPLE positions via stride-based uniform sampling
         // (deterministic per batch, no RNG dependency).
         std::vector<int> sample_indices;
-        if (num_valid <= MAX_RHO_SAMPLE) {
-            sample_indices.resize(num_valid);
-            for (int i = 0; i < num_valid; ++i) sample_indices[i] = i;
+        if (n_pos <= MAX_RHO_SAMPLE) {
+            sample_indices.resize(n_pos);
+            for (int i = 0; i < n_pos; ++i) sample_indices[i] = i;
         } else {
             sample_indices.reserve(MAX_RHO_SAMPLE);
-            // Stride-based uniform selection: pick every (num_valid / MAX_RHO_SAMPLE)-th position
-            const double stride = static_cast<double>(num_valid) / MAX_RHO_SAMPLE;
+            // Stride-based uniform selection: pick every (n_pos / MAX_RHO_SAMPLE)-th position
+            const double stride = static_cast<double>(n_pos) / MAX_RHO_SAMPLE;
             for (int k = 0; k < MAX_RHO_SAMPLE; ++k) {
                 sample_indices.push_back(static_cast<int>(k * stride));
             }
@@ -160,27 +180,27 @@ void computeRhoDiagnostic(
         // Mean hidden vector for centered pairwise dots:
         //   μ_l = (1/N) Σ_i h_i^l
         //   mean_rms(l) = sqrt((1/d_model) Σ_d μ_{l,d}²)
-        // Use ALL valid positions for μ, not only the sampled pair subset.
+        // Use ALL positions in this subset for μ, not only the sampled pair subset.
         std::vector<double> mean(d_model, 0.0);
-        for (int vi = 0; vi < num_valid; ++vi) {
-            const int row = valid_positions[vi];
+        for (int vi = 0; vi < n_pos; ++vi) {
+            const int row = positions[vi];
             for (int d = 0; d < d_model; ++d) {
                 mean[d] += static_cast<double>(h[row * d_model + d]);
             }
         }
         double mean_sq = 0.0;
         for (int d = 0; d < d_model; ++d) {
-            mean[d] /= static_cast<double>(num_valid);
+            mean[d] /= static_cast<double>(n_pos);
             mean_sq += mean[d] * mean[d];
         }
         const float mean_rms = static_cast<float>(std::sqrt(mean_sq / d_model));
 
-        // Pre-compute row RMS for ALL valid positions (needed for avg_rms),
+        // Pre-compute row RMS for ALL positions in this subset (needed for avg_rms),
         // but pairwise cos only uses sample_indices.
-        std::vector<float> rms_vals(num_valid);
+        std::vector<float> rms_vals(n_pos);
         double rms_sum = 0.0;
-        for (int vi = 0; vi < num_valid; ++vi) {
-            const int row = valid_positions[vi];
+        for (int vi = 0; vi < n_pos; ++vi) {
+            const int row = positions[vi];
             double sq = 0.0;
             for (int d = 0; d < d_model; ++d) {
                 float v = h[row * d_model + d];
@@ -189,7 +209,7 @@ void computeRhoDiagnostic(
             rms_vals[vi] = static_cast<float>(std::sqrt(sq / d_model));
             rms_sum += rms_vals[vi];
         }
-        float avg_rms = static_cast<float>(rms_sum / num_valid);
+        float avg_rms = static_cast<float>(rms_sum / n_pos);
         float rms_min_val = *std::min_element(rms_vals.begin(), rms_vals.end());
         float rms_max_val = *std::max_element(rms_vals.begin(), rms_vals.end());
 
@@ -208,10 +228,10 @@ void computeRhoDiagnostic(
         int n_cos_pairs = 0;
         for (int si = 0; si < n_sample; ++si) {
             const int vi = sample_indices[si];
-            const int ri = valid_positions[vi];
+            const int ri = positions[vi];
             for (int sj = si + 1; sj < n_sample; ++sj) {
                 const int vj = sample_indices[sj];
-                const int rj = valid_positions[vj];
+                const int rj = positions[vj];
                 double dot = 0.0;
                 double centered_dot = 0.0;
                 for (int d = 0; d < d_model; ++d) {
@@ -271,8 +291,10 @@ void computeRhoDiagnostic(
     layer_rhos.reserve(num_layers + 1);  // +1 for embedding
 
     // Embedding (input to layer 0)
+    const float* final_device_ptr = nullptr;
     if (ai.embedding_tensor.data) {
-        auto raw = compute_rho(ai.embedding_tensor.data);
+        auto raw = compute_rho(ai.embedding_tensor.data, valid_positions);
+        final_device_ptr = ai.embedding_tensor.data;
         layer_rhos.push_back({-1, -2, raw.rho, raw.avg_rms, 0.0f,
                               raw.avg_abs_dot, raw.avg_signed_dot, raw.avg_norm_prod,
                               raw.rms_min, raw.rms_max,
@@ -282,7 +304,8 @@ void computeRhoDiagnostic(
     // Each encoder layer output
     for (int l = 0; l < num_layers; ++l) {
         if (ai.encoder_layer_outputs[l].data) {
-            auto raw = compute_rho(ai.encoder_layer_outputs[l].data);
+            auto raw = compute_rho(ai.encoder_layer_outputs[l].data, valid_positions);
+            final_device_ptr = ai.encoder_layer_outputs[l].data;
             float delta = 0.0f;
             int vs_id = -2;
             if (!layer_rhos.empty()) {
@@ -311,7 +334,8 @@ void computeRhoDiagnostic(
                 ") exceeds LM-head input rows (" + std::to_string(live_shape.as_2d().rows) +
                 ") at " + __FILE__ + ":" + std::to_string(__LINE__));
         }
-        auto raw = compute_rho(lm_head_input_tensor->data);
+        auto raw = compute_rho(lm_head_input_tensor->data, valid_positions);
+        final_device_ptr = lm_head_input_tensor->data;
         float delta = 0.0f;
         int vs_id = -2;
         if (!layer_rhos.empty()) {
@@ -453,6 +477,25 @@ void computeRhoDiagnostic(
         ctx.telemetry.last_obs[(int)GRIM::Telemetry::MetricStream::RHO_MEAN_VECTOR_RMS]
             = last_lr.mean_rms;
 
+        // Atom-only vs non-atom-only ρ on the final collected layer.
+        // ScratchBlock injects a shared per-type vector into atom positions only
+        // (first_type_only mode), so if that injection drives ρ up, atom-only ρ
+        // spikes while non-atom ρ stays flat. This split isolates the cause.
+        float rho_atom = 0.0f;
+        float rho_nonatom = 0.0f;
+        if (final_device_ptr) {
+            if (atom_positions.size() >= 2) {
+                rho_atom = compute_rho(final_device_ptr, atom_positions).rho;
+            }
+            if (nonatom_positions.size() >= 2) {
+                rho_nonatom = compute_rho(final_device_ptr, nonatom_positions).rho;
+            }
+        }
+        ctx.telemetry.last_obs[(int)GRIM::Telemetry::MetricStream::RHO_ATOM_ONLY]
+            = rho_atom;
+        ctx.telemetry.last_obs[(int)GRIM::Telemetry::MetricStream::RHO_NONATOM_ONLY]
+            = rho_nonatom;
+
         rho_eq << "  SUMMARY: ρ(" << first_label << ")=" << rho_first
                << " → ρ(" << last_label << ")=" << rho_final
                << " growth=" << std::showpos << rho_growth << std::noshowpos
@@ -474,6 +517,16 @@ void computeRhoDiagnostic(
          rho_eq << "  CENTERED(" << last_label << "): centered_avg_abs_dot="
              << last_lr.centered_avg_abs_dot
              << " mean_rms=" << last_lr.mean_rms << "\n";
+         rho_eq << "  SPLIT(" << last_label << "): ρ_atom=" << rho_atom
+                << " (n=" << atom_positions.size() << ")"
+                << " ρ_nonatom=" << rho_nonatom
+                << " (n=" << nonatom_positions.size() << ")";
+         if (atom_positions.size() >= 2 && nonatom_positions.size() >= 2
+             && rho_atom > rho_nonatom + 0.05f) {
+             rho_eq << "  [SCRATCHBLOCK] atom-only ρ exceeds non-atom ρ — per-type "
+                       "injection is concentrating hidden-state alignment";
+         }
+         rho_eq << "\n";
 
         if (max_delta_layer >= 0 && max_delta > 0.02f) {
             // Find the entry to report what it was measured against

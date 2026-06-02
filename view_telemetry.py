@@ -682,7 +682,12 @@ def main():
         # 5-2b) Disruption in Xavier units
         ax = fig5.add_subplot(gs5[1, 1])
         if adam_disrupt is not None:
-            ax.plot(adam_disrupt.index, adam_disrupt["raw_observation"], linewidth=1.5, color="tab:orange", label="displacement / Xavier scale")
+            plot_raw_and_smooth(ax, adam_disrupt.index, adam_disrupt["raw_observation"],
+                                color="tab:orange",
+                                raw_label="displacement / Xavier scale (raw)",
+                                smooth_label="displacement / Xavier scale (smooth-20)",
+                                raw_alpha=0.22,
+                                smooth_linewidth=1.5)
             ax.axhline(1.0, color="gray", linewidth=0.8, linestyle="--", alpha=0.5, label="1× Xavier")
         ax.set_ylabel("Xavier Embedding Scale Units")
         ax.set_title("Weight Disruption vs Xavier Init Scale")

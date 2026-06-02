@@ -640,7 +640,7 @@
             "telemetry_lattice_epsilon": 1e-07,
             "telemetry_lattice_k_out0": 2.5,
             "telemetry_lattice_num_levels": 8,
-            "telemetry_lattice_num_streams": 58,
+            "telemetry_lattice_num_streams": 60,
             "telemetry_lattice_strict_mode": true,
             "telemetry_loss_threshold_for_grad_check": 0.01,
             "telemetry_max_consecutive_zero_grad_steps": 0,
