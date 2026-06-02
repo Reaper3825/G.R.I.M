@@ -257,6 +257,7 @@ struct LanguageModelConfig {
     int d_ff = 0;
     int max_seq_len = 0;
     float dropout_rate = 0.0f;
+    float embedding_scale = 1.0f;
     float attention_dropout = 0.0f;
     bool tie_embeddings = true;
     PositionalEncodingType positional_encoding = PositionalEncodingType::UNSPECIFIED;
@@ -1732,6 +1733,7 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(max_seq_len);
     GRIM_LOAD_CONFIG_FIELD(tie_embeddings);
     GRIM_LOAD_CONFIG_FIELD(dropout_rate);
+    GRIM_LOAD_CONFIG_FIELD(embedding_scale);
     GRIM_LOAD_CONFIG_FIELD(sliding_window_stride);
     GRIM_LOAD_CONFIG_FIELD(warmup_fraction);
     GRIM_LOAD_CONFIG_FIELD(cosine_decay_enabled);
@@ -2173,6 +2175,7 @@ inline void writeFinalizedLanguageModelConfigToSnapshot(
     GRIM_WRITE_FINAL_CONFIG_FIELD(d_ff);
     GRIM_WRITE_FINAL_CONFIG_FIELD(max_seq_len);
     GRIM_WRITE_FINAL_CONFIG_FIELD(dropout_rate);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(embedding_scale);
     GRIM_WRITE_FINAL_CONFIG_FIELD(attention_dropout);
     GRIM_WRITE_FINAL_CONFIG_FIELD(tie_embeddings);
     GRIM_WRITE_FINAL_CONFIG_FIELD(positional_encoding);

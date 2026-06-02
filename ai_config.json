@@ -438,6 +438,7 @@
             "synchronize_after_kernels": true,
             "d_model": 768,
             "dropout_rate": 0.1,
+            "embedding_scale": 27.712813,
             "embedding_freeze_after_step": 0,
             "embedding_freeze_enabled": false,
             "epochs": 3,

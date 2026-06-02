@@ -1350,7 +1350,7 @@ Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps = 1e-5f,
 
 /**
  * Embedding lookup over the orchestration-owned batch device view.
- * @param embedding_scale Scale factor for embeddings (default 1.0, use sqrt(d_model) for AIAYN-style)
+ * @param embedding_scale Forward embedding output scale. Caller must provide a finite value > 0.
  */
 Tensor embedding(const Tensor& weight,
                  const Batching::BatchPayload& payload,

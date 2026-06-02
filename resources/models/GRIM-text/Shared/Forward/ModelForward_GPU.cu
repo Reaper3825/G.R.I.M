@@ -283,6 +283,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                                         ModelForwardRuntimePayload& runtime_payload) {
     request.validate("executeModelForward");
     const auto* cfg = request.config;
+    const auto embedding_hp = HyperParameters::embeddingLayerConstructionHP(*cfg);
     const auto scratch_hp = HyperParameters::scratchBlockConstructionHP(*cfg);
     const auto execution_hp = HyperParameters::executionBlockConstructionHP(*cfg);
     const auto lm_head_hp = HyperParameters::lmHeadLayerConstructionHP(*cfg);
@@ -369,7 +370,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                                 + std::to_string(payload.vocab_size) + ", d_model=" + std::to_string(d_model) + "]");
     }
 
-    const float embedding_scale = 1.0f;
+    const float embedding_scale = embedding_hp.embedding_scale;
     Tensor emb_output = autograd::embedding(
         *emb_weights,
         payload,
@@ -382,7 +383,8 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
               << " inside attention)");
 
     forward_outputs.embedding_tensor = std::move(emb_output);
-    MFWD_INFO("Step 1: Token embedding complete, shape=[" << total_tokens << ", " << d_model << "]");
+    MFWD_INFO("Step 1: Token embedding complete, shape=[" << total_tokens << ", " << d_model
+              << "] scale=" << embedding_scale);
 
     if (scratch_block_active) {
         MFWD_INFO("Step 1.5: Running all-token ScratchBlock vector gate...");

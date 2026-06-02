@@ -364,6 +364,7 @@ struct FeedForwardLayerConstructionHP {
 struct EmbeddingLayerConstructionHP {
     int vocab_size = 0;
     int d_model = 0;
+    float embedding_scale = 1.0f;
 };
 
 struct LMHeadLayerConstructionHP {
@@ -467,6 +468,7 @@ struct ModelHP {
 
     int embedding_vocab_size = 0;
     int embedding_d_model = 0;
+    float embedding_scale = 1.0f;
 
     int encoder_num_layers = 0;
     int encoder_d_model = 0;
@@ -1295,6 +1297,7 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
 
     view.embedding_vocab_size = vocab_size;
     view.embedding_d_model = d_model;
+    view.embedding_scale = requireFloat("embedding_scale");
 
     view.encoder_num_layers = num_layers;
     view.encoder_d_model = d_model;
@@ -1455,6 +1458,7 @@ inline EmbeddingLayerConstructionHP embeddingLayerConstructionHP(
     EmbeddingLayerConstructionHP view;
     view.vocab_size = model.embedding_vocab_size;
     view.d_model = model.embedding_d_model;
+    view.embedding_scale = model.embedding_scale;
     return view;
 }
 

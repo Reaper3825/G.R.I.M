@@ -51,7 +51,7 @@ struct EmbeddingGradFn : public GradFn {
     const Batching::BatchPayload* payload = nullptr;
     Batching::BatchDeviceBindings bindings{};
     int vocab_size = 0;            ///< RULE 20: stored for OOB bounds checking in backward kernel
-    float embedding_scale = 1.0f;  ///< Issue #140: 1.0f in production (AIAYN sqrt(d_model) removed)
+    float embedding_scale = 1.0f;  ///< Forward-authored output scale captured for backward chain rule.
 
     EmbeddingGradFn();
     ~EmbeddingGradFn() override;

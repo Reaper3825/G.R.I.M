@@ -263,6 +263,7 @@ const char* classifyConfigSection(const std::string& key) {
             "max_cached_seq_len",
             "max_tokens_per_batch",
             "dropout_rate",
+            "embedding_scale",
             "attention_dropout",
             "tie_embeddings",
             "positional_encoding",

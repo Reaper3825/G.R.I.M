@@ -54,7 +54,7 @@ __global__ void kernel_embedding_forward(
     int tokens,
     int d_model,
     int vocab_size,             // RULE 20: Bounds check parameter
-    float embedding_scale       // Scale factor (1.0 for production — Issue #140 removed sqrt(d_model))
+    float embedding_scale       // Forward-authored embedding output scale
 ) {
     const int token_idx = blockIdx.x;
     if (token_idx >= tokens) return;
@@ -319,7 +319,6 @@ Tensor embedding(const Tensor& weight,
     Tensor result = Tensor::empty(output_shape, weight.requires_grad, stream, "embedding_result");
 
     // Forward: gather from weight table with scaling and fixed hard type gate.
-    // Issue #140: Scale is 1.0f in production (AIAYN sqrt(d_model) removed for tied weights)
     kernel_embedding_forward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
         bindings.d_input_ids,
         weight.data,
