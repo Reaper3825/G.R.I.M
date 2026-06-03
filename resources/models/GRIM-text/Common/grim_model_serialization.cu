@@ -167,31 +167,31 @@ bool saveLanguageModelCheckpoint(
         if (layer_idx % 2 == 0) {
             EmitModuleInfo(ModuleId::Checkpoint, "Processing layer " + std::to_string(layer_idx) + "/" + std::to_string(num_layers));
         }
-        auto* enc = gpu_encoder->getLayer(layer_idx);
-        if (!enc) {
+        if (!gpu_encoder->getLayer(layer_idx)) {
             EmitModuleError(ModuleId::Checkpoint, "GPU layer " + std::to_string(layer_idx) + " is null");
             std::cerr << "[saveLanguageModelCheckpoint] Error: GPU layer " << layer_idx << " is null" << std::endl;
             return false;
         }
+        const auto& enc = parameter_registry.requireEncodingLayerParameters(layer_idx, "saveLanguageModelCheckpoint");
         auto& view = request.sources.encoder_layers[layer_idx];
-        assignRead(view.attn_w_qkv, enc->attnWqkv().data, qkv_weight_size);
-        assignRead(view.attn_b_qkv, enc->attnBqkv().data, total_qkv_dim);  // GQA-aware bias size
-        assignRead(view.attn_w_o, enc->attnWo().data, d_model * d_model);
-        assignRead(view.attn_b_o, enc->attnBo().data, d_model);
+        assignRead(view.attn_w_qkv, enc.W_qkv.data, qkv_weight_size);
+        assignRead(view.attn_b_qkv, enc.b_qkv.data, total_qkv_dim);  // GQA-aware bias size
+        assignRead(view.attn_w_o, enc.W_o.data, d_model * d_model);
+        assignRead(view.attn_b_o, enc.b_o.data, d_model);
         const auto& ffn_parameters = parameter_registry.requireFeedForwardParameters(layer_idx, "saveLanguageModelCheckpoint");
         assignRead(view.ffn_w_gate, ffn_parameters.W_gate.data, d_model * d_ff);
         assignRead(view.ffn_w1, ffn_parameters.W1.data, d_model * d_ff);
         assignRead(view.ffn_w2, ffn_parameters.W2.data, d_ff * d_model);
         assignRead(view.ffn_b2, ffn_parameters.b2.data, d_model);
-        assignRead(view.rms1_gamma, enc->rms1Gamma().data, d_model);
-        assignRead(view.rms2_gamma, enc->rms2Gamma().data, d_model);
+        assignRead(view.rms1_gamma, enc.rms1_gamma.data, d_model);
+        assignRead(view.rms2_gamma, enc.rms2_gamma.data, d_model);
         // Issue #148: Sandwich norm gammas REMOVED — not saved to checkpoint
         // Old checkpoints may contain rms_post_attn/rms_post_ffn but they're ignored on load
         // LayerScale (Issue #109) — per-channel gamma vector per sublayer
-        requireLayerScaleVector(enc->layerScale1(), d_model, "layer_scale1", layer_idx);
-        requireLayerScaleVector(enc->layerScale2(), d_model, "layer_scale2", layer_idx);
-        if (enc->layerScale1().data) assignRead(view.layer_scale1, enc->layerScale1().data, d_model);
-        if (enc->layerScale2().data) assignRead(view.layer_scale2, enc->layerScale2().data, d_model);
+        requireLayerScaleVector(enc.layer_scale1, d_model, "layer_scale1", layer_idx);
+        requireLayerScaleVector(enc.layer_scale2, d_model, "layer_scale2", layer_idx);
+        if (enc.layer_scale1.data) assignRead(view.layer_scale1, enc.layer_scale1.data, d_model);
+        if (enc.layer_scale2.data) assignRead(view.layer_scale2, enc.layer_scale2.data, d_model);
     }
 
     if (!lm_head_parameters) throw std::runtime_error("LM-head parameters are NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
@@ -421,31 +421,31 @@ bool loadLanguageModelCheckpoint(
     const std::size_t qkv_weight_size = static_cast<std::size_t>(total_qkv_dim) * d_model;
     
     for (int layer_idx = 0; layer_idx < num_layers; ++layer_idx) {
-        auto* enc = gpu_encoder->getLayer(layer_idx);
-        if (!enc) {
+        if (!gpu_encoder->getLayer(layer_idx)) {
             std::cerr << "[loadLanguageModelCheckpoint] Error: GPU layer " << layer_idx << " is null" << std::endl;
             return false;
         }
+        auto& enc = parameter_registry.requireEncodingLayerParameters(layer_idx, "loadLanguageModelCheckpoint");
         auto& view = request.encoder_layers[layer_idx];
-        assignWrite(view.attn_w_qkv, enc->attnWqkv().data, qkv_weight_size);
-        assignWrite(view.attn_b_qkv, enc->attnBqkv().data, total_qkv_dim);  // GQA-aware bias size
-        assignWrite(view.attn_w_o, enc->attnWo().data, d_model * d_model);
-        assignWrite(view.attn_b_o, enc->attnBo().data, d_model);
+        assignWrite(view.attn_w_qkv, enc.W_qkv.data, qkv_weight_size);
+        assignWrite(view.attn_b_qkv, enc.b_qkv.data, total_qkv_dim);  // GQA-aware bias size
+        assignWrite(view.attn_w_o, enc.W_o.data, d_model * d_model);
+        assignWrite(view.attn_b_o, enc.b_o.data, d_model);
         auto& ffn_parameters = parameter_registry.requireFeedForwardParameters(layer_idx, "loadLanguageModelCheckpoint");
         assignWrite(view.ffn_w_gate, ffn_parameters.W_gate.data, d_model * d_ff);
         assignWrite(view.ffn_w1, ffn_parameters.W1.data, d_model * d_ff);
         assignWrite(view.ffn_w2, ffn_parameters.W2.data, d_ff * d_model);
         assignWrite(view.ffn_b2, ffn_parameters.b2.data, d_model);
         if (!freeze_learned_rms_gammas) {
-            assignWrite(view.rms1_gamma, enc->rms1Gamma().data, d_model);
-            assignWrite(view.rms2_gamma, enc->rms2Gamma().data, d_model);
+            assignWrite(view.rms1_gamma, enc.rms1_gamma.data, d_model);
+            assignWrite(view.rms2_gamma, enc.rms2_gamma.data, d_model);
         }
         // Issue #148: Sandwich norm gammas REMOVED — not loaded from checkpoint
         // LayerScale (Issue #109) — per-channel gamma vector per sublayer
-        requireLayerScaleVector(enc->layerScale1(), d_model, "layer_scale1", layer_idx);
-        requireLayerScaleVector(enc->layerScale2(), d_model, "layer_scale2", layer_idx);
-        if (enc->layerScale1().data) assignWrite(view.layer_scale1, enc->layerScale1().data, d_model);
-        if (enc->layerScale2().data) assignWrite(view.layer_scale2, enc->layerScale2().data, d_model);
+        requireLayerScaleVector(enc.layer_scale1, d_model, "layer_scale1", layer_idx);
+        requireLayerScaleVector(enc.layer_scale2, d_model, "layer_scale2", layer_idx);
+        if (enc.layer_scale1.data) assignWrite(view.layer_scale1, enc.layer_scale1.data, d_model);
+        if (enc.layer_scale2.data) assignWrite(view.layer_scale2, enc.layer_scale2.data, d_model);
     }
 
     if (lm_head_parameters && lm_head_parameters->weights.data) {

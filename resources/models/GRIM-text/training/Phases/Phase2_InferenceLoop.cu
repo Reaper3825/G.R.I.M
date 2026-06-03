@@ -27,7 +27,6 @@ namespace GRIMText::Training {
 namespace {
 
 using GRIM::HyperParameters::GenerationHP;
-using GRIM::HyperParameters::GenerationStreamCallback;
 using GRIM::HyperParameters::MTPFeatureHP;
 using GRIM::HyperParameters::SamplingStrategy;
 
@@ -143,7 +142,7 @@ GRIM::GeneratedSequence generateOneSequence(
     const GRIM::PBM::PBMState& pbm,
     GRIM::Batching::BatchPayload& prompt_payload,
     const GenerationHP& cfg,
-    GenerationStreamCallback* stream_callback)
+    GRIM::HyperParameters::GenerationStreamCallback* stream_callback)
 {
     validatePromptPayload(prompt_payload);
 
@@ -151,7 +150,7 @@ GRIM::GeneratedSequence generateOneSequence(
     const bool use_gpu = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "use_gpu");
     const int max_seq_len = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "max_seq_len");
     const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "vocab_size");
-    const bool execution_block_enabled = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "execution_block_enabled");
+    const auto execution_hp = GRIM::HyperParameters::executionBlockConstructionHP(config);
     const auto& prompt_tokens = prompt_payload.input_ids;
     const auto& prompt_numeric_values = prompt_payload.numeric_values;
     const auto& prompt_atom_mask = prompt_payload.atom_mask;
@@ -238,7 +237,7 @@ GRIM::GeneratedSequence generateOneSequence(
         cfg.bad_words_ids,
         cfg.seed);
 
-    if (execution_block_enabled) {
+    if (execution_hp.enabled) {
         std::vector<int> numeric_mask = cfg.masked_numeric_literal_ids;
         if (numeric_mask.empty()) {
             throw std::runtime_error("Phase2 payload inference: masked_numeric_literal_ids is empty while execution block is enabled");
@@ -253,7 +252,6 @@ GRIM::GeneratedSequence generateOneSequence(
 
     generation_state.resetSession();
 
-    const auto execution_hp = GRIM::HyperParameters::executionBlockConstructionHP(config);
     const auto selector_hp = GRIM::HyperParameters::decodeTimeSelectorConstructionHP(config);
     const auto mtp_hp = GRIM::HyperParameters::mtpFeatureHP(config);
     auto* decode_time_slot_selector = parameter_registry.getDecodeTimeSlotSelector();
@@ -308,7 +306,7 @@ GRIM::GeneratedSequence generateOneSequence(
         request.gpu_encoder = gpu_encoder;
         request.parameter_registry = &parameter_registry;
         request.pbm = &pbm;
-        request.execution_block_enabled = model.executionBlockEnabled();
+        request.execution_block_enabled = execution_hp.enabled;
         request.cublas_handle = training_state.cublas_handle.get();
         request.stream = stream;
         request.payload = &active_payload;

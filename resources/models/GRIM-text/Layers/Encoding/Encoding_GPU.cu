@@ -82,6 +82,51 @@ void validateLayerScaleGamma(const Tensor& gamma, const char* name, int d_model,
     }
 }
 
+void validateEncodingParameterViews(const EncodingLayerParameterViews* views,
+                                    const HyperParameters::EncoderLayerConstructionHP& hp,
+                                    const char* context) {
+    if (!views) {
+        throw std::runtime_error(std::string(context) + ": parameter_views is NULL - caller must pass registry-derived encoder parameter views");
+    }
+    if (!views->rms1_gamma || !views->rms1_gamma->data) {
+        throw std::runtime_error(std::string(context) + ": rms1_gamma parameter tensor is required");
+    }
+    if (!views->rms2_gamma || !views->rms2_gamma->data) {
+        throw std::runtime_error(std::string(context) + ": rms2_gamma parameter tensor is required");
+    }
+    if (!views->W_qkv || !views->W_qkv->data) {
+        throw std::runtime_error(std::string(context) + ": W_qkv parameter tensor is required");
+    }
+    if (!views->W_o || !views->W_o->data) {
+        throw std::runtime_error(std::string(context) + ": W_o parameter tensor is required");
+    }
+    if (hp.use_bias) {
+        if (!views->b_qkv || !views->b_qkv->data) {
+            throw std::runtime_error(std::string(context) + ": hp.use_bias=true requires b_qkv parameter tensor");
+        }
+        if (!views->b_o || !views->b_o->data) {
+            throw std::runtime_error(std::string(context) + ": hp.use_bias=true requires b_o parameter tensor");
+        }
+    } else {
+        if ((views->b_qkv && views->b_qkv->data) || (views->b_o && views->b_o->data)) {
+            throw std::runtime_error(std::string(context) + ": hp.use_bias=false but bias parameter tensors were provided");
+        }
+    }
+    if (hp.use_layer_scale) {
+        if (!views->layer_scale1 || !views->layer_scale1->data) {
+            throw std::runtime_error(std::string(context) + ": hp.use_layer_scale=true requires layer_scale1 parameter tensor");
+        }
+        if (!views->layer_scale2 || !views->layer_scale2->data) {
+            throw std::runtime_error(std::string(context) + ": hp.use_layer_scale=true requires layer_scale2 parameter tensor");
+        }
+    } else {
+        if ((views->layer_scale1 && views->layer_scale1->data) ||
+            (views->layer_scale2 && views->layer_scale2->data)) {
+            throw std::runtime_error(std::string(context) + ": hp.use_layer_scale=false but layer-scale parameter tensors were provided");
+        }
+    }
+}
+
 }  // anonymous namespace
 
 
@@ -89,22 +134,6 @@ void validateLayerScaleGamma(const Tensor& gamma, const char* name, int d_model,
 //======================================================//
 //  Local kernels (not duplicated elsewhere)
 //======================================================//
-
-// NOTE: fillOnesKernel restored for Pattern B allocateWeights() — fills GPU buffer with 1.0f.
-static __global__ void kernel_encoding_fill_ones(float* data, int count) {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < count) {
-        data[idx] = 1.0f;
-    }
-}
-
-static __global__ void kernel_encoding_fill_value(float* data, int count, float value) {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < count) {
-        data[idx] = value;
-    }
-}
-
 
 //======================================================//
 //  RMSNorm Forward/Backward (calls into RMSNorm_Kernel_GPU.cu)
@@ -119,128 +148,32 @@ static __global__ void kernel_encoding_fill_value(float* data, int count, float 
 //======================================================//
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  Self-allocating constructor
-//  Layer allocates and Xavier-inits its own weights.
-//  Optimizer sees them via the existing public accessors (rms1Gamma(), attnWqkv(), etc.)
+//  Compute-layer constructor
+//  Durable encoder tensors are registry-owned. This layer only captures HP
+//  and instantiates the FFN compute sublayer.
 // ═══════════════════════════════════════════════════════════════════════════
- EncodingLayer::EncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp_snapshot,
-                                        uint64_t seed,
-                                        cudaStream_t init_stream)
-     : hp_(hp_snapshot) {
-     validateConstructionSnapshot("EncodingLayer::EncodingLayer");
-    allocateWeights(seed, init_stream);
+EncodingLayer::EncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp_snapshot)
+    : hp_(hp_snapshot) {
+    validateConstructionSnapshot("EncodingLayer::EncodingLayer");
+    initializeComputeLayer();
 }
 
-void EncodingLayer::allocateWeights(uint64_t seed,
-                                    cudaStream_t init_stream) {
+void EncodingLayer::initializeComputeLayer() {
     if (weights_ready_) {
-        throw std::runtime_error("EncodingLayer::allocateWeights: weights already initialized! "
-                                 "Cannot allocate twice.");
+        throw std::runtime_error("EncodingLayer::initializeComputeLayer: compute layer already initialized");
     }
-    if (!init_stream) {
-        throw std::runtime_error("EncodingLayer::allocateWeights: init_stream is NULL");
-    }
-    validateConstructionSnapshot("EncodingLayer::allocateWeights");
+    validateConstructionSnapshot("EncodingLayer::initializeComputeLayer");
     
     const auto& hp = hp_;
-    const float residual_projection_init_gain = hp.residual_projection_init_gain;
-    const int d_model   = hp.d_model;
-    const int qkv_out_dim = hp.qkv_dim;
-    cudaStream_t stream = init_stream;
-    
-    // ── Helper: fill a gamma tensor with 1.0 ──
-    auto fillOnes = [stream](Tensor& t) {
-        const int count = static_cast<int>(t.numel());
-        const int threads = 256;
-        const int blocks = (count + threads - 1) / threads;
-        kernel_encoding_fill_ones<<<blocks, threads, 0, stream>>>(t.data, count);
-        CUDA_CHECK(cudaPeekAtLastError());
-    };
-
-    auto fillValue = [stream](Tensor& t, float value, const char* context) {
-        const int count = static_cast<int>(t.numel());
-        const int threads = 256;
-        const int blocks = (count + threads - 1) / threads;
-        kernel_encoding_fill_value<<<blocks, threads, 0, stream>>>(t.data, count, value);
-        (void)context;
-        CUDA_CHECK(cudaPeekAtLastError());
-    };
-    
-    //==================================================//
-    //  RMSNorm gammas (2x) — initialized to 1.0
-    //==================================================//
-    rms1_gamma_ = Tensor::zeros({d_model}, stream, "enc_rms1_gamma_own");
-    if (!hp.freeze_learned_rms_gammas) {
-        rms1_gamma_.requires_grad_();
-        rms1_gamma_.ensure_grad();
-    }
-    fillOnes(rms1_gamma_);
-    
-    rms2_gamma_ = Tensor::zeros({d_model}, stream, "enc_rms2_gamma_own");
-    if (!hp.freeze_learned_rms_gammas) {
-        rms2_gamma_.requires_grad_();
-        rms2_gamma_.ensure_grad();
-    }
-    fillOnes(rms2_gamma_);
-
-    //==================================================//
-    //  Attention QKV projection [total_qkv_dim, d_model]
-    //==================================================//
-    W_qkv_ = Tensor::zeros({qkv_out_dim, d_model}, stream, "enc_W_qkv_own");
-    W_qkv_.requires_grad_();
-    W_qkv_.ensure_grad();
-    Tensor::xavier_uniform_(W_qkv_, seed + 0, stream);
-
-    if (hp.use_bias) {
-        b_qkv_ = Tensor::zeros({qkv_out_dim}, stream, "enc_b_qkv_own");
-        b_qkv_.requires_grad_();
-        b_qkv_.ensure_grad();
-        // Biases stay at zero init
-    }
-    
-    //==================================================//
-    //  Attention output projection [d_model, d_model]
-    //  Residual projection startup init: Xavier with explicit depth gain
-    //==================================================//
-    W_o_ = Tensor::zeros({d_model, d_model}, stream, "enc_W_o_own");
-    W_o_.requires_grad_();
-    W_o_.ensure_grad();
-    Tensor::xavier_uniform_with_gain_(W_o_, seed + 1, residual_projection_init_gain, stream);
-    
-    if (hp.use_bias) {
-        b_o_ = Tensor::zeros({d_model}, stream, "enc_b_o_own");
-        b_o_.requires_grad_();
-        b_o_.ensure_grad();
-    }
-    
-    //==================================================//
-    //  FFN — compute layer borrows registry-owned tensors
-    //==================================================//
     {
         const HyperParameters::FeedForwardLayerConstructionHP ffn_hp =
             HyperParameters::feedForwardLayerConstructionHP(hp);
         ffn_ = std::make_unique<FeedForwardLayer>(ffn_hp);
     }
     
-    //==================================================//
-    //  LayerScale (Issue #109) — learnable per-channel gamma vectors [1, d_model]
-    //==================================================//
-    if (hp.use_layer_scale) {
-        layer_scale1_ = Tensor::zeros({1, d_model}, stream, "enc_layer_scale1_own");
-        layer_scale1_.requires_grad_();
-        layer_scale1_.ensure_grad();
-        fillValue(layer_scale1_, hp.layer_scale_init, "EncodingLayer::allocateWeights fill LayerScale1");
-        
-        layer_scale2_ = Tensor::zeros({1, d_model}, stream, "enc_layer_scale2_own");
-        layer_scale2_.requires_grad_();
-        layer_scale2_.ensure_grad();
-        fillValue(layer_scale2_, hp.layer_scale_init, "EncodingLayer::allocateWeights fill LayerScale2");
-    }
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-    
     weights_ready_ = true;
-    
-    fprintf(stderr, "[EncodingLayer] Initialized encoder-owned tensors and bound registry-owned FFN tensors\n");
+
+    fprintf(stderr, "[EncodingLayer] Initialized compute layer; durable encoder/FFN tensors are registry-owned\n");
 }
 
 EncodingLayer::~EncodingLayer() {
@@ -250,15 +183,7 @@ EncodingLayer::~EncodingLayer() {
 EncodingLayer::EncodingLayer(EncodingLayer&& other) noexcept
     : hp_(other.hp_)
     , weights_ready_(other.weights_ready_)
-    , rms1_gamma_(std::move(other.rms1_gamma_))
-    , rms2_gamma_(std::move(other.rms2_gamma_))
-    , W_qkv_(std::move(other.W_qkv_))
-    , b_qkv_(std::move(other.b_qkv_))
-    , W_o_(std::move(other.W_o_))
-    , b_o_(std::move(other.b_o_))
     , ffn_(std::move(other.ffn_))
-    , layer_scale1_(std::move(other.layer_scale1_))
-    , layer_scale2_(std::move(other.layer_scale2_))
 {
     other.weights_ready_ = false;
 }
@@ -269,15 +194,7 @@ EncodingLayer& EncodingLayer::operator=(EncodingLayer&& other) noexcept {
         
         hp_ = other.hp_;
         weights_ready_ = other.weights_ready_;
-        rms1_gamma_ = std::move(other.rms1_gamma_);
-        rms2_gamma_ = std::move(other.rms2_gamma_);
-        W_qkv_ = std::move(other.W_qkv_);
-        b_qkv_ = std::move(other.b_qkv_);
-        W_o_ = std::move(other.W_o_);
-        b_o_ = std::move(other.b_o_);
         ffn_ = std::move(other.ffn_);
-        layer_scale1_ = std::move(other.layer_scale1_);
-        layer_scale2_ = std::move(other.layer_scale2_);
         
         other.weights_ready_ = false;
     }
@@ -285,15 +202,6 @@ EncodingLayer& EncodingLayer::operator=(EncodingLayer&& other) noexcept {
 }
 
 void EncodingLayer::freeWeights() {
-    // Tensor handles its own memory cleanup via destructor (owns_data=true).
-    rms1_gamma_ = Tensor();
-    rms2_gamma_ = Tensor();
-    W_qkv_ = Tensor();
-    b_qkv_ = Tensor();
-    W_o_ = Tensor();
-    b_o_ = Tensor();
-    layer_scale1_ = Tensor();
-    layer_scale2_ = Tensor();
     ffn_.reset();
     weights_ready_ = false;
 }
@@ -342,6 +250,7 @@ void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     }
     const size_t layer_slot = static_cast<size_t>(layer_idx);
     forward_outputs.validateLayerIndex(layer_slot, "EncodingLayer::forward");
+    validateEncodingParameterViews(parameter_views, hp_, "EncodingLayer::forward");
     Tensor& ln1_out = forward_outputs.ln1_out_per_layer[layer_slot];
     Tensor& residual1 = forward_outputs.residual1_per_layer[layer_slot];
     Tensor& ln2_out = forward_outputs.ln2_out_per_layer[layer_slot];
@@ -352,20 +261,18 @@ void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     Tensor& output = forward_outputs.output_per_layer[layer_slot];
     const auto& hp = hp_;
     const float residual_scale = 1.0f / std::sqrt(2.0f * static_cast<float>(hp.num_layers));
-    const Tensor& rms1_gamma = (parameter_views && parameter_views->rms1_gamma) ? *parameter_views->rms1_gamma : rms1_gamma_;
-    const Tensor& rms2_gamma = (parameter_views && parameter_views->rms2_gamma) ? *parameter_views->rms2_gamma : rms2_gamma_;
-    const Tensor& W_qkv = (parameter_views && parameter_views->W_qkv) ? *parameter_views->W_qkv : W_qkv_;
-    const Tensor& b_qkv = (parameter_views && parameter_views->b_qkv) ? *parameter_views->b_qkv : b_qkv_;
-    const Tensor& W_o = (parameter_views && parameter_views->W_o) ? *parameter_views->W_o : W_o_;
-    const Tensor& b_o = (parameter_views && parameter_views->b_o) ? *parameter_views->b_o : b_o_;
-    const Tensor& layer_scale1 = (parameter_views && parameter_views->layer_scale1) ? *parameter_views->layer_scale1 : layer_scale1_;
-    const Tensor& layer_scale2 = (parameter_views && parameter_views->layer_scale2) ? *parameter_views->layer_scale2 : layer_scale2_;
-    Tensor& layer_scale1_for_op = (parameter_views && parameter_views->layer_scale1)
-        ? *const_cast<Tensor*>(parameter_views->layer_scale1)
-        : layer_scale1_;
-    Tensor& layer_scale2_for_op = (parameter_views && parameter_views->layer_scale2)
-        ? *const_cast<Tensor*>(parameter_views->layer_scale2)
-        : layer_scale2_;
+    const Tensor& rms1_gamma = *parameter_views->rms1_gamma;
+    const Tensor& rms2_gamma = *parameter_views->rms2_gamma;
+    const Tensor& W_qkv = *parameter_views->W_qkv;
+    const Tensor& W_o = *parameter_views->W_o;
+    const Tensor* b_qkv = parameter_views->b_qkv;
+    const Tensor* b_o = parameter_views->b_o;
+    const Tensor* layer_scale1 = parameter_views->layer_scale1;
+    const Tensor* layer_scale2 = parameter_views->layer_scale2;
+    Tensor empty_b_qkv;
+    Tensor empty_b_o;
+    const Tensor& b_qkv_ref = b_qkv ? *b_qkv : empty_b_qkv;
+    const Tensor& b_o_ref = b_o ? *b_o : empty_b_o;
     
     // Validate input
     if (!input.data) {
@@ -451,9 +358,9 @@ void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     Attention::encoderSelfAttentionForward(
         ln1_out,
         W_qkv,
-        b_qkv,
+        b_qkv_ref,
         W_o,
-        b_o,
+        b_o_ref,
         pos_encoding,
         attention_request,
         forward_outputs);
@@ -484,8 +391,8 @@ void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // Issue #109: LayerScale gating for attention sublayer
     const Tensor* proj_for_residual = &proj_out;
     if (hp.use_layer_scale) {
-        validateLayerScaleGamma(layer_scale1, "layer_scale1_", hp.d_model, "EncodingLayer::forward");
-        scaled_proj = autograd::layer_scale(proj_out, layer_scale1_for_op, stream);
+        validateLayerScaleGamma(*layer_scale1, "layer_scale1_", hp.d_model, "EncodingLayer::forward");
+        scaled_proj = autograd::layer_scale(proj_out, *const_cast<Tensor*>(layer_scale1), stream);
         proj_for_residual = &scaled_proj;
     }
     
@@ -552,9 +459,6 @@ void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // Retained in ModelForwardOutputs.
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 9: FFN...\n");
-    if (!parameter_views) {
-        throw std::runtime_error("EncodingLayer::forward: parameter_views is NULL - caller must pass registry-derived FFN parameter views");
-    }
     ffn_->forward(ln2_out,
                   stream, cublas_handle,
                   forward_outputs,
@@ -588,8 +492,8 @@ void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // Issue #109: LayerScale gating for FFN sublayer
     const Tensor* ffn_for_residual = &ffn_out;
     if (hp.use_layer_scale) {
-        validateLayerScaleGamma(layer_scale2, "layer_scale2_", hp.d_model, "EncodingLayer::forward");
-        scaled_ffn = autograd::layer_scale(ffn_out, layer_scale2_for_op, stream);
+        validateLayerScaleGamma(*layer_scale2, "layer_scale2_", hp.d_model, "EncodingLayer::forward");
+        scaled_ffn = autograd::layer_scale(ffn_out, *const_cast<Tensor*>(layer_scale2), stream);
         ffn_for_residual = &scaled_ffn;
     }
     
@@ -616,8 +520,8 @@ void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
         ffn_out,
         *ffn_for_residual,
         output,
-        hp.use_layer_scale ? &layer_scale1 : nullptr,
-        hp.use_layer_scale ? &layer_scale2 : nullptr,
+        hp.use_layer_scale ? layer_scale1 : nullptr,
+        hp.use_layer_scale ? layer_scale2 : nullptr,
         hp,
         payload,
         stream,

@@ -62,8 +62,8 @@ namespace Autograd {
 //   computeGradientNorm() which is redundant with Phase2's computeGradNorm()
 
 // NOTE: linkEncoderWeightsToTrainingState was removed.
-// Encoder owns its weights internally; optimizer accesses gradients via
-// Tensor& accessors (enc->attnWqkv().grad_data() etc.).
+// Encoder trainable tensors are registry-owned; optimizer and diagnostics access
+// them via StartupParameterRegistry::requireEncodingLayerParameters(...).
 // See Startup/Model/ParameterGroupRegistration.{hpp,cu}.
 
 // Context initialization lives in AutogradContext.cu so this file can focus on
@@ -297,11 +297,9 @@ GradientSignalBaselines captureGradientVerificationBaselines(
     if (activity.text_loss_active) {
         auto& lm_head_parameters = ctx.parameter_registry->requireLmHeadParameters("captureGradientSignalBaselines");
         captureExpected(lm_head_parameters.weights, "lm_head weights");
-        if (ctx.gpu_encoder && model_hp.encoder_num_layers > 0) {
-            auto* enc0 = ctx.gpu_encoder->getLayer(0);
-            if (enc0) {
-                captureExpected(enc0->attnWqkv(), "layer 0 attnWqkv");
-            }
+        if (model_hp.encoder_num_layers > 0) {
+            auto& enc0 = ctx.parameter_registry->requireEncodingLayerParameters(0, "captureGradientSignalBaselines");
+            captureExpected(enc0.W_qkv, "layer 0 attnWqkv");
         }
     }
 
@@ -606,25 +604,21 @@ BackwardResult executeAutogradBackward(
 
         // Sample first encoder layer attnWqkv gradient
         float enc_sample = 0.0f;
-        if (ctx.gpu_encoder && model_hp.encoder_num_layers > 0) {
-            auto* enc0 = ctx.gpu_encoder->getLayer(0);
-            if (enc0) {
-                float* wqkv_grads = enc0->attnWqkv().grad_data();
-                if (wqkv_grads) {
-                    cudaMemcpy(&enc_sample, wqkv_grads, sizeof(float), cudaMemcpyDeviceToHost);
-                }
+        if (model_hp.encoder_num_layers > 0) {
+            auto& enc0 = ctx.parameter_registry->requireEncodingLayerParameters(0, "executeAutogradBackward");
+            float* wqkv_grads = enc0.W_qkv.grad_data();
+            if (wqkv_grads) {
+                cudaMemcpy(&enc_sample, wqkv_grads, sizeof(float), cudaMemcpyDeviceToHost);
             }
         }
 
         // Sample RMSNorm gamma gradient (layer 0)
         float rms_sample = 0.0f;
-        if (ctx.gpu_encoder && model_hp.encoder_num_layers > 0) {
-            auto* enc0 = ctx.gpu_encoder->getLayer(0);
-            if (enc0) {
-                float* rms_grads = enc0->rms1Gamma().grad_data();
-                if (rms_grads) {
-                    cudaMemcpy(&rms_sample, rms_grads, sizeof(float), cudaMemcpyDeviceToHost);
-                }
+        if (model_hp.encoder_num_layers > 0) {
+            auto& enc0 = ctx.parameter_registry->requireEncodingLayerParameters(0, "executeAutogradBackward");
+            float* rms_grads = enc0.rms1_gamma.grad_data();
+            if (rms_grads) {
+                cudaMemcpy(&rms_sample, rms_grads, sizeof(float), cudaMemcpyDeviceToHost);
             }
         }
 
@@ -782,8 +776,8 @@ bool verifyGradientsAreConnectedImpl(
     // non-leaf input_grad buffer and passes that view directly to the upstream
     // logits grad_fn. TrainingState must not mirror or copy logits gradients.
     
-    // NOTE: Encoder gradients are in encoder's internal Tensors, not TrainingState.
-    // The optimizer accesses them via Tensor& accessors (enc->attnWqkv() etc.).
+    // NOTE: Encoder gradients live in registry-owned encoder parameter tensors,
+    // not TrainingState mirrors or EncodingLayer-owned state.
     
     // ═══════════════════════════════════════════════════════════════════════════
     // Final RMSNorm gamma (Pattern B: owned by LMHeadLayer)
@@ -818,46 +812,39 @@ bool verifyGradientsAreConnectedImpl(
                                      " num_layers=" + std::to_string(num_layers));
         }
         for (int layer = 0; layer < num_layers; ++layer) {
-            auto* enc = ctx.gpu_encoder->getLayer(layer);
-            if (!enc) {
-                AG_WARN("encoder layer " << layer << " is NULL during gradient verification");
-                ok = false;
-                continue;
-            }
+            auto& enc = ctx.parameter_registry->requireEncodingLayerParameters(layer, "verifyGradientsAreConnectedImpl");
             auto check = [&](Tensor& t, const char* name) {
                 if (t.data) requireAllocatedFinite(t, "layer " + std::to_string(layer) + " " + std::string(name));
             };
             if (model_hp.encoder_freeze_learned_rms_gammas) {
-                if (enc->rms1Gamma().has_grad()) {
+                if (enc.rms1_gamma.has_grad()) {
                     AG_WARN("layer " << layer << " rms1Gamma has a grad buffer while freeze_learned_rms_gammas=true");
                     ok = false;
                 }
-                if (enc->rms2Gamma().has_grad()) {
+                if (enc.rms2_gamma.has_grad()) {
                     AG_WARN("layer " << layer << " rms2Gamma has a grad buffer while freeze_learned_rms_gammas=true");
                     ok = false;
                 }
             } else {
-                check(enc->rms1Gamma(), "rms1Gamma");
-                check(enc->rms2Gamma(), "rms2Gamma");
+                check(enc.rms1_gamma, "rms1Gamma");
+                check(enc.rms2_gamma, "rms2Gamma");
             }
             // Issue #148: Sandwich norm gammas REMOVED
-            check(enc->attnWqkv(), "attnWqkv");
-            check(enc->attnBqkv(), "attnBqkv");
-            check(enc->attnWo(), "attnWo");
-            check(enc->attnBo(), "attnBo");
+            check(enc.W_qkv, "attnWqkv");
+            check(enc.b_qkv, "attnBqkv");
+            check(enc.W_o, "attnWo");
+            check(enc.b_o, "attnBo");
             auto& ffn_parameters = ctx.parameter_registry->requireFeedForwardParameters(layer, "verifyGradientsAreConnectedImpl");
             check(ffn_parameters.W_gate, "ffnWGate");
             check(ffn_parameters.W1, "ffnW1");
             check(ffn_parameters.W2, "ffnW2");
             check(ffn_parameters.b2, "ffnB2");
-            check(enc->layerScale1(), "layerScale1");
-            check(enc->layerScale2(), "layerScale2");
+            check(enc.layer_scale1, "layerScale1");
+            check(enc.layer_scale2, "layerScale2");
         }
         if (activity.text_loss_active && num_layers > 0) {
-            auto* enc0 = ctx.gpu_encoder->getLayer(0);
-            if (enc0) {
-                requireReceivedGradient(enc0->attnWqkv(), "layer 0 attnWqkv");
-            }
+            auto& enc0 = ctx.parameter_registry->requireEncodingLayerParameters(0, "verifyGradientsAreConnectedImpl");
+            requireReceivedGradient(enc0.W_qkv, "layer 0 attnWqkv");
         }
     }
 

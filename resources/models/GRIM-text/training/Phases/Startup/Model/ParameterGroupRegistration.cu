@@ -326,6 +326,11 @@ void registerEncoderParameters(Startup::GpuModelState& gpu_model_state,
     const bool use_bias = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "use_bias");
     const bool freeze_learned_rms_gammas = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "freeze_learned_rms_gammas");
     const bool use_layer_scale = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "use_layer_scale");
+    if (static_cast<int>(parameter_registry.encodingLayerParameterTensors().size()) != num_layers) {
+        throw std::runtime_error("[buildParameterGroups] encoding_layer_parameter_tensors size must equal config.num_layers. size=" +
+                                 std::to_string(parameter_registry.encodingLayerParameterTensors().size()) +
+                                 " num_layers=" + std::to_string(num_layers));
+    }
     if (static_cast<int>(parameter_registry.feedForwardParameterTensors().size()) != num_layers) {
         throw std::runtime_error("[buildParameterGroups] feed_forward_parameter_tensors size must equal config.num_layers. size=" +
                                  std::to_string(parameter_registry.feedForwardParameterTensors().size()) +
@@ -333,80 +338,36 @@ void registerEncoderParameters(Startup::GpuModelState& gpu_model_state,
     }
 
     for (int layer = 0; layer < num_layers; ++layer) {
-        GRIM::EncodingLayer* enc = gpu_encoder->getLayer(layer);
-        if (!enc) {
+        if (!gpu_encoder->getLayer(layer)) {
             throw std::runtime_error("[buildParameterGroups] Encoder layer " + std::to_string(layer) +
                                      " is NULL - initGPU() did not build the configured topology");
         }
 
         const std::string prefix = "layer" + std::to_string(layer);
-
-        registrar.addTensor(prefix + "_qkv_weight",
-                    enc->attnWqkv(),
-                    ParamGroupType::ATTENTION,
-                    ParamStatsBucket::ENCODER,
-                    layer);
-        registrar.addConfigGatedTensor(prefix + "_qkv_bias",
-                           enc->attnBqkv(),
-                           ParamGroupType::ATTENTION,
-                           ParamStatsBucket::ENCODER,
-                           layer,
-                           use_bias,
-                           "config.use_bias=false");
-        registrar.addTensor(prefix + "_wo_weight",
-                    enc->attnWo(),
-                    ParamGroupType::ATTENTION,
-                    ParamStatsBucket::ENCODER,
-                    layer);
-        registrar.addConfigGatedTensor(prefix + "_wo_bias",
-                           enc->attnBo(),
-                           ParamGroupType::ATTENTION,
-                           ParamStatsBucket::ENCODER,
-                           layer,
-                           use_bias,
-                           "config.use_bias=false");
+        auto& encoding_parameters = parameter_registry.requireEncodingLayerParameters(layer, "registerEncoderParameters");
+        ParameterRegistry::registerEncodingLayerParameters(
+            encoding_parameters,
+            layer,
+            use_bias,
+            freeze_learned_rms_gammas,
+            use_layer_scale,
+            registrar);
 
         auto& ffn_parameters = parameter_registry.requireFeedForwardParameters(layer, "registerEncoderParameters");
         ParameterRegistry::registerFeedForwardParameters(ffn_parameters, layer, use_bias, registrar);
 
         if (freeze_learned_rms_gammas) {
-            if (enc->rms1Gamma().has_grad()) {
+            if (encoding_parameters.rms1_gamma.has_grad()) {
                 throw std::runtime_error("[buildParameterGroups] " + prefix +
                                          "_rms1_gamma is frozen by config but still has a grad buffer: " +
-                                         tensorDebugSummary(enc->rms1Gamma()));
+                                         tensorDebugSummary(encoding_parameters.rms1_gamma));
             }
-            if (enc->rms2Gamma().has_grad()) {
+            if (encoding_parameters.rms2_gamma.has_grad()) {
                 throw std::runtime_error("[buildParameterGroups] " + prefix +
                                          "_rms2_gamma is frozen by config but still has a grad buffer: " +
-                                         tensorDebugSummary(enc->rms2Gamma()));
+                                         tensorDebugSummary(encoding_parameters.rms2_gamma));
             }
-        } else {
-            registrar.addTensor(prefix + "_rms1_gamma",
-                                enc->rms1Gamma(),
-                                ParamGroupType::RMSNORM,
-                                ParamStatsBucket::ENCODER,
-                                layer);
-            registrar.addTensor(prefix + "_rms2_gamma",
-                                enc->rms2Gamma(),
-                                ParamGroupType::RMSNORM,
-                                ParamStatsBucket::ENCODER,
-                                layer);
         }
-
-        registrar.addConfigGatedTensor(prefix + "_layer_scale1",
-                                       enc->layerScale1(),
-                                       ParamGroupType::RMSNORM,
-                                       ParamStatsBucket::ENCODER,
-                                       layer,
-                                       use_layer_scale,
-                                       "config.use_layer_scale=false");
-        registrar.addConfigGatedTensor(prefix + "_layer_scale2",
-                                       enc->layerScale2(),
-                                       ParamGroupType::RMSNORM,
-                                       ParamStatsBucket::ENCODER,
-                                       layer,
-                                                    use_layer_scale,
-                                       "config.use_layer_scale=false");
     }
 }
 
@@ -760,6 +721,140 @@ void initializeFeedForwardParameterTensors(
     }
 
     emitInfo("[initializeFeedForwardParameterTensors] Initialized registry-owned FFN tensors for " +
+             std::to_string(encoder_hp.num_layers) + " layers");
+}
+
+void initializeEncodingLayerParameterTensors(
+    std::vector<GRIM::EncodingLayerParameterTensors>& encoding_layer_parameter_tensors,
+    const GRIM::HyperParameters::EncoderLayerConstructionHP& encoder_hp,
+    std::uint64_t weight_init_seed,
+    cudaStream_t init_stream) {
+    if (!init_stream) {
+        throw std::runtime_error("initializeEncodingLayerParameterTensors: init_stream is NULL");
+    }
+    if (encoder_hp.num_layers <= 0) {
+        throw std::runtime_error("initializeEncodingLayerParameterTensors: encoder_hp.num_layers must be > 0, got " +
+                                 std::to_string(encoder_hp.num_layers));
+    }
+    if (encoder_hp.d_model <= 0) {
+        throw std::runtime_error("initializeEncodingLayerParameterTensors: encoder_hp.d_model must be > 0, got " +
+                                 std::to_string(encoder_hp.d_model));
+    }
+    if (encoder_hp.qkv_dim <= 0) {
+        throw std::runtime_error("initializeEncodingLayerParameterTensors: encoder_hp.qkv_dim must be > 0, got " +
+                                 std::to_string(encoder_hp.qkv_dim));
+    }
+    if (!encoding_layer_parameter_tensors.empty()) {
+        throw std::runtime_error("initializeEncodingLayerParameterTensors: registry encoder tensor vector is already initialized; refusing to allocate twice. size=" +
+                                 std::to_string(encoding_layer_parameter_tensors.size()));
+    }
+
+    const float residual_projection_init_gain = encoder_hp.residual_projection_init_gain;
+    if (!std::isfinite(residual_projection_init_gain) || residual_projection_init_gain <= 0.0f) {
+        throw std::runtime_error("initializeEncodingLayerParameterTensors: residual_projection_init_gain must be positive finite");
+    }
+    if (!std::isfinite(encoder_hp.layer_scale_init)) {
+        throw std::runtime_error("initializeEncodingLayerParameterTensors: layer_scale_init must be finite");
+    }
+
+    encoding_layer_parameter_tensors.resize(static_cast<std::size_t>(encoder_hp.num_layers));
+    std::vector<float> ones(static_cast<std::size_t>(encoder_hp.d_model), 1.0f);
+    std::vector<float> layer_scale_init(static_cast<std::size_t>(encoder_hp.d_model), encoder_hp.layer_scale_init);
+
+    for (int layer = 0; layer < encoder_hp.num_layers; ++layer) {
+        auto& tensors = encoding_layer_parameter_tensors[static_cast<std::size_t>(layer)];
+        const std::uint64_t layer_seed = weight_init_seed + 2 + static_cast<std::uint64_t>(layer) * 10ULL;
+
+        tensors.rms1_gamma = GRIM::Tensor::zeros({encoder_hp.d_model}, init_stream, "enc_rms1_gamma");
+        if (!encoder_hp.freeze_learned_rms_gammas) {
+            tensors.rms1_gamma.requires_grad_();
+            tensors.rms1_gamma.ensure_grad();
+        }
+        cudaError_t copy_err = cudaMemcpyAsync(
+            tensors.rms1_gamma.data,
+            ones.data(),
+            static_cast<std::size_t>(encoder_hp.d_model) * sizeof(float),
+            cudaMemcpyHostToDevice,
+            init_stream);
+        if (copy_err != cudaSuccess) {
+            throw std::runtime_error(std::string("initializeEncodingLayerParameterTensors: cudaMemcpyAsync failed for rms1_gamma: ") +
+                                     cudaGetErrorString(copy_err));
+        }
+
+        tensors.rms2_gamma = GRIM::Tensor::zeros({encoder_hp.d_model}, init_stream, "enc_rms2_gamma");
+        if (!encoder_hp.freeze_learned_rms_gammas) {
+            tensors.rms2_gamma.requires_grad_();
+            tensors.rms2_gamma.ensure_grad();
+        }
+        copy_err = cudaMemcpyAsync(
+            tensors.rms2_gamma.data,
+            ones.data(),
+            static_cast<std::size_t>(encoder_hp.d_model) * sizeof(float),
+            cudaMemcpyHostToDevice,
+            init_stream);
+        if (copy_err != cudaSuccess) {
+            throw std::runtime_error(std::string("initializeEncodingLayerParameterTensors: cudaMemcpyAsync failed for rms2_gamma: ") +
+                                     cudaGetErrorString(copy_err));
+        }
+
+        tensors.W_qkv = GRIM::Tensor::zeros({encoder_hp.qkv_dim, encoder_hp.d_model}, init_stream, "enc_W_qkv");
+        tensors.W_qkv.requires_grad_();
+        tensors.W_qkv.ensure_grad();
+        GRIM::Tensor::xavier_uniform_(tensors.W_qkv, layer_seed + 0, init_stream);
+
+        tensors.W_o = GRIM::Tensor::zeros({encoder_hp.d_model, encoder_hp.d_model}, init_stream, "enc_W_o");
+        tensors.W_o.requires_grad_();
+        tensors.W_o.ensure_grad();
+        GRIM::Tensor::xavier_uniform_with_gain_(tensors.W_o, layer_seed + 1, residual_projection_init_gain, init_stream);
+
+        if (encoder_hp.use_bias) {
+            tensors.b_qkv = GRIM::Tensor::zeros({encoder_hp.qkv_dim}, init_stream, "enc_b_qkv");
+            tensors.b_qkv.requires_grad_();
+            tensors.b_qkv.ensure_grad();
+
+            tensors.b_o = GRIM::Tensor::zeros({encoder_hp.d_model}, init_stream, "enc_b_o");
+            tensors.b_o.requires_grad_();
+            tensors.b_o.ensure_grad();
+        }
+
+        if (encoder_hp.use_layer_scale) {
+            tensors.layer_scale1 = GRIM::Tensor::zeros({1, encoder_hp.d_model}, init_stream, "enc_layer_scale1");
+            tensors.layer_scale1.requires_grad_();
+            tensors.layer_scale1.ensure_grad();
+            copy_err = cudaMemcpyAsync(
+                tensors.layer_scale1.data,
+                layer_scale_init.data(),
+                static_cast<std::size_t>(encoder_hp.d_model) * sizeof(float),
+                cudaMemcpyHostToDevice,
+                init_stream);
+            if (copy_err != cudaSuccess) {
+                throw std::runtime_error(std::string("initializeEncodingLayerParameterTensors: cudaMemcpyAsync failed for layer_scale1: ") +
+                                         cudaGetErrorString(copy_err));
+            }
+
+            tensors.layer_scale2 = GRIM::Tensor::zeros({1, encoder_hp.d_model}, init_stream, "enc_layer_scale2");
+            tensors.layer_scale2.requires_grad_();
+            tensors.layer_scale2.ensure_grad();
+            copy_err = cudaMemcpyAsync(
+                tensors.layer_scale2.data,
+                layer_scale_init.data(),
+                static_cast<std::size_t>(encoder_hp.d_model) * sizeof(float),
+                cudaMemcpyHostToDevice,
+                init_stream);
+            if (copy_err != cudaSuccess) {
+                throw std::runtime_error(std::string("initializeEncodingLayerParameterTensors: cudaMemcpyAsync failed for layer_scale2: ") +
+                                         cudaGetErrorString(copy_err));
+            }
+        }
+    }
+
+    const cudaError_t sync_err = cudaStreamSynchronize(init_stream);
+    if (sync_err != cudaSuccess) {
+        throw std::runtime_error(std::string("initializeEncodingLayerParameterTensors: cudaStreamSynchronize failed: ") +
+                                 cudaGetErrorString(sync_err));
+    }
+
+    emitInfo("[initializeEncodingLayerParameterTensors] Initialized registry-owned encoder tensors for " +
              std::to_string(encoder_hp.num_layers) + " layers");
 }
 

@@ -156,17 +156,6 @@ public:
     // Config access
     const Config::AiConfigSnapshot& getConfig() const { return config_; }
     
-#ifdef USE_CUDA
-    // Execution Block presence is config-gated by
-    // HyperParameters::executionBlockConstructionHP(config_); there is no
-    // runtime layer object — durable execution-block parameters live on the
-    // StartupParameterRegistry.
-    bool executionBlockEnabled() const {
-        return HyperParameters::executionBlockConstructionHP(config_).enabled;
-    }
-
-#endif
-    
 private:
     Config::AiConfigSnapshot config_;
     
@@ -176,8 +165,6 @@ private:
 #endif
     
 };
-
-using StreamCallback = HyperParameters::GenerationStreamCallback;
 
 //======================================================//
 //  GPU Classes (Forward Declarations Only)
@@ -193,9 +180,7 @@ using StreamCallback = HyperParameters::GenerationStreamCallback;
 // forward request.
 class GPUGrimEncoder {
 public:
-    GPUGrimEncoder(const HyperParameters::EncoderLayerConstructionHP& hp,
-                   cudaStream_t init_stream,
-                   uint64_t weight_seed);
+    explicit GPUGrimEncoder(const HyperParameters::EncoderLayerConstructionHP& hp);
 
     EncodingLayer* getLayer(int index);
     const EncodingLayer* getLayer(int index) const;

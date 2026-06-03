@@ -194,26 +194,22 @@ void populateEBInjectionStreams(
 void populateRmsGammaStreams(
     float* obs,
     const GRIM::Config::AiConfigSnapshot& config,
-    const GRIMText::Training::Startup::GpuModelState& gpu_model_state,
     const ::ParameterRegistry::StartupParameterRegistry& parameter_registry) {
-    auto* gpu_encoder = gpu_model_state.gpu_encoder.get();
-    if (!gpu_encoder) {
-        throw std::runtime_error(
-            "Telemetry::populateRmsGammaStreams: gpu_model_state.gpu_encoder is NULL");
-    }
     const int num_layers = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "num_layers");
+    if (static_cast<int>(parameter_registry.encodingLayerParameterTensors().size()) != num_layers) {
+        throw std::runtime_error(
+            "Telemetry::populateRmsGammaStreams: encoder registry tensor count mismatch. size=" +
+            std::to_string(parameter_registry.encodingLayerParameterTensors().size()) +
+            " num_layers=" + std::to_string(num_layers));
+    }
 
     // Mean RMS(γ₁) and RMS(γ₂) across all encoder layers
     float sum_gamma1_rms = 0.0f;
     float sum_gamma2_rms = 0.0f;
     for (int i = 0; i < num_layers; ++i) {
-        auto* layer = gpu_encoder->getLayer(i);
-        if (!layer) {
-            throw std::runtime_error(
-                "Telemetry::populateRmsGammaStreams: encoder layer " + std::to_string(i) + " is NULL");
-        }
-        const auto& g1 = layer->rms1Gamma();
-        const auto& g2 = layer->rms2Gamma();
+        const auto& layer = parameter_registry.requireEncodingLayerParameters(i, "Telemetry::populateRmsGammaStreams");
+        const auto& g1 = layer.rms1_gamma;
+        const auto& g2 = layer.rms2_gamma;
         sum_gamma1_rms += gpuBufferRMS(g1.data, g1.numel(), "encoder_layer.rms1Gamma");
         sum_gamma2_rms += gpuBufferRMS(g2.data, g2.numel(), "encoder_layer.rms2Gamma");
     }
@@ -308,7 +304,7 @@ void updateTelemetryObservations(
     populatePBMStreams(obs, ctx, input.max_seq_len);
 
     // Streams 35-37: RMSNorm learned gamma tracking
-    populateRmsGammaStreams(obs, ctx.config, gpu_model, parameter_registry);
+    populateRmsGammaStreams(obs, ctx.config, parameter_registry);
 
     // Run lattice update
     GRIM::Telemetry::TelemetryError tel_err = ctx.telemetry.lattice->update(obs, input.global_step);

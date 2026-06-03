@@ -8,6 +8,7 @@
 //  Current migrated surface:
 //    - Embedding durable tensor owner
 //    - LM head durable tensor owner
+//    - Encoder durable per-layer parameter tensor owner
 //    - DecodeTimeSlotSelector durable tensor owner
 //    - DecodeTimeSlotSelector parameter-group inventory
 //    - ExecutionBlock durable parameter tensor owner
@@ -83,6 +84,17 @@ struct MtpHeadParameterTensors {
     Tensor bias;    // [vocab_size]
 };
 
+struct EncodingLayerParameterTensors {
+    Tensor rms1_gamma;     // [d_model]
+    Tensor rms2_gamma;     // [d_model]
+    Tensor W_qkv;          // [qkv_dim, d_model]
+    Tensor b_qkv;          // [qkv_dim] when config.use_bias=true
+    Tensor W_o;            // [d_model, d_model]
+    Tensor b_o;            // [d_model] when config.use_bias=true
+    Tensor layer_scale1;   // [1, d_model] when config.use_layer_scale=true
+    Tensor layer_scale2;   // [1, d_model] when config.use_layer_scale=true
+};
+
 struct FeedForwardParameterTensors {
     Tensor W_gate;  // [d_model, d_ff]
     Tensor W1;      // [d_model, d_ff]
@@ -97,6 +109,7 @@ namespace ParameterRegistry {
 struct StartupParameterRegistry {
     std::unique_ptr<GRIM::EmbeddingParameterTensors> embedding_parameters;
     std::unique_ptr<GRIM::LMHeadParameterTensors> lm_head_parameters;
+    std::vector<GRIM::EncodingLayerParameterTensors> encoding_layer_parameter_tensors;
     std::unique_ptr<GRIM::DecodeTimeSlotSelector> decode_time_slot_selector;
     std::unique_ptr<GRIM::ExecutionBlockParameterTensors> execution_block_parameters;
     std::vector<GRIM::FeedForwardParameterTensors> feed_forward_parameter_tensors;
@@ -149,6 +162,32 @@ struct StartupParameterRegistry {
             throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.lm_head_parameters is NULL");
         }
         return *lm_head_parameters;
+    }
+
+    std::vector<GRIM::EncodingLayerParameterTensors>& encodingLayerParameterTensors() {
+        return encoding_layer_parameter_tensors;
+    }
+
+    const std::vector<GRIM::EncodingLayerParameterTensors>& encodingLayerParameterTensors() const {
+        return encoding_layer_parameter_tensors;
+    }
+
+    GRIM::EncodingLayerParameterTensors& requireEncodingLayerParameters(int layer, const char* caller) {
+        if (layer < 0 || layer >= static_cast<int>(encoding_layer_parameter_tensors.size())) {
+            throw std::runtime_error(std::string(caller) + ": missing EncodingLayerParameterTensors for layer " +
+                                     std::to_string(layer) + " registry_size=" +
+                                     std::to_string(encoding_layer_parameter_tensors.size()));
+        }
+        return encoding_layer_parameter_tensors[static_cast<std::size_t>(layer)];
+    }
+
+    const GRIM::EncodingLayerParameterTensors& requireEncodingLayerParameters(int layer, const char* caller) const {
+        if (layer < 0 || layer >= static_cast<int>(encoding_layer_parameter_tensors.size())) {
+            throw std::runtime_error(std::string(caller) + ": missing EncodingLayerParameterTensors for layer " +
+                                     std::to_string(layer) + " registry_size=" +
+                                     std::to_string(encoding_layer_parameter_tensors.size()));
+        }
+        return encoding_layer_parameter_tensors[static_cast<std::size_t>(layer)];
     }
 
     GRIM::DecodeTimeSlotSelector* getDecodeTimeSlotSelector() {
@@ -253,6 +292,9 @@ using DecodeTimeSlotSelectorTensorParameterSpec =
 using ExecutionBlockTensorParameterSpec =
     TensorParameterSpec<GRIM::ExecutionBlockParameterTensors>;
 
+using EncodingLayerTensorParameterSpec =
+    TensorParameterSpec<GRIM::EncodingLayerParameterTensors>;
+
 using FeedForwardTensorParameterSpec =
     TensorParameterSpec<GRIM::FeedForwardParameterTensors>;
 
@@ -344,6 +386,26 @@ inline constexpr std::array<ExecutionBlockTensorParameterSpec, 30>
          GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
     }};
 
+inline constexpr std::array<EncodingLayerTensorParameterSpec, 8>
+    kEncodingLayerTensorParameters = {{
+        {"qkv_weight", &GRIM::EncodingLayerParameterTensors::W_qkv,
+         GRIM::ParamGroupType::ATTENTION, GRIM::ParamStatsBucket::ENCODER},
+        {"qkv_bias", &GRIM::EncodingLayerParameterTensors::b_qkv,
+         GRIM::ParamGroupType::ATTENTION, GRIM::ParamStatsBucket::ENCODER},
+        {"wo_weight", &GRIM::EncodingLayerParameterTensors::W_o,
+         GRIM::ParamGroupType::ATTENTION, GRIM::ParamStatsBucket::ENCODER},
+        {"wo_bias", &GRIM::EncodingLayerParameterTensors::b_o,
+         GRIM::ParamGroupType::ATTENTION, GRIM::ParamStatsBucket::ENCODER},
+        {"rms1_gamma", &GRIM::EncodingLayerParameterTensors::rms1_gamma,
+         GRIM::ParamGroupType::RMSNORM, GRIM::ParamStatsBucket::ENCODER},
+        {"rms2_gamma", &GRIM::EncodingLayerParameterTensors::rms2_gamma,
+         GRIM::ParamGroupType::RMSNORM, GRIM::ParamStatsBucket::ENCODER},
+        {"layer_scale1", &GRIM::EncodingLayerParameterTensors::layer_scale1,
+         GRIM::ParamGroupType::RMSNORM, GRIM::ParamStatsBucket::ENCODER},
+        {"layer_scale2", &GRIM::EncodingLayerParameterTensors::layer_scale2,
+         GRIM::ParamGroupType::RMSNORM, GRIM::ParamStatsBucket::ENCODER},
+    }};
+
 inline constexpr std::array<MtpHeadTensorParameterSpec, 2>
     kMtpHeadTensorParameters = {{
         {"weight", &GRIM::MtpHeadParameterTensors::weight,
@@ -400,6 +462,59 @@ inline void registerExecutionBlockParameters(
                             spec.type,
                             spec.stats_bucket,
                             spec.layer);
+    }
+}
+
+template <typename RegistrarT>
+inline void registerEncodingLayerParameters(
+    GRIM::EncodingLayerParameterTensors& encoding_parameters,
+    int layer_index,
+    bool use_bias,
+    bool freeze_learned_rms_gammas,
+    bool use_layer_scale,
+    RegistrarT& registrar) {
+    if (layer_index < 0) {
+        throw std::runtime_error("registerEncodingLayerParameters: layer_index must be non-negative");
+    }
+
+    const std::string prefix = "layer" + std::to_string(layer_index) + "_";
+    for (const auto& spec : kEncodingLayerTensorParameters) {
+        if (spec.tensor_member == &GRIM::EncodingLayerParameterTensors::b_qkv ||
+            spec.tensor_member == &GRIM::EncodingLayerParameterTensors::b_o) {
+            registrar.addConfigGatedTensor(prefix + spec.name,
+                                           encoding_parameters.*(spec.tensor_member),
+                                           spec.type,
+                                           spec.stats_bucket,
+                                           layer_index,
+                                           use_bias,
+                                           "config.use_bias=false");
+            continue;
+        }
+
+        if (spec.tensor_member == &GRIM::EncodingLayerParameterTensors::layer_scale1 ||
+            spec.tensor_member == &GRIM::EncodingLayerParameterTensors::layer_scale2) {
+            registrar.addConfigGatedTensor(prefix + spec.name,
+                                           encoding_parameters.*(spec.tensor_member),
+                                           spec.type,
+                                           spec.stats_bucket,
+                                           layer_index,
+                                           use_layer_scale,
+                                           "config.use_layer_scale=false");
+            continue;
+        }
+
+        if (spec.tensor_member == &GRIM::EncodingLayerParameterTensors::rms1_gamma ||
+            spec.tensor_member == &GRIM::EncodingLayerParameterTensors::rms2_gamma) {
+            if (freeze_learned_rms_gammas) {
+                continue;
+            }
+        }
+
+        registrar.addTensor(prefix + spec.name,
+                            encoding_parameters.*(spec.tensor_member),
+                            spec.type,
+                            spec.stats_bucket,
+                            layer_index);
     }
 }
 

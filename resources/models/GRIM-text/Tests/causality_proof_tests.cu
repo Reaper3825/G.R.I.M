@@ -73,6 +73,7 @@ std::vector<float> runInferencePrefill(GRIM::LanguageModel* model,
     }
 
     const auto& cfg = model->getConfig();
+    const auto execution_hp = GRIM::HyperParameters::executionBlockConstructionHP(cfg);
     std::vector<uint32_t> atom_flags(tokens.size(), 0);
     std::vector<uint32_t> atom_entry_ids(tokens.size(), GRIM::Tokenizer::kAtomEntryNone);
     std::vector<int32_t> token_to_slot_map(tokens.size(), -1);
@@ -116,7 +117,7 @@ std::vector<float> runInferencePrefill(GRIM::LanguageModel* model,
     // and this dead test requires a full rewrite before it can source that owner correctly.
     request.embedding_layer = model->getEmbeddingLayer();
     request.lm_head = model->getLmHeadLayer();
-    request.execution_block_enabled = model->executionBlockEnabled();
+    request.execution_block_enabled = execution_hp.enabled;
     request.cublas_handle = training_state->cublas_handle.get();
     request.stream = stream;
     request.payload = &payload;

@@ -12,6 +12,7 @@ using cudaStream_t = CUstream_st*;
 
 namespace GRIM {
 struct OptimizerState;
+struct EncodingLayerParameterTensors;
 struct FeedForwardParameterTensors;
 struct Tensor;
 namespace Config {
@@ -48,6 +49,12 @@ namespace GRIMText::Training::Startup::ModelRegistration {
 //   only borrow those tensors after bindOptimizerState().
 void initializeFeedForwardParameterTensors(
     std::vector<GRIM::FeedForwardParameterTensors>& feed_forward_parameter_tensors,
+    const GRIM::HyperParameters::EncoderLayerConstructionHP& encoder_hp,
+    std::uint64_t weight_init_seed,
+    cudaStream_t init_stream);
+
+void initializeEncodingLayerParameterTensors(
+    std::vector<GRIM::EncodingLayerParameterTensors>& encoding_layer_parameter_tensors,
     const GRIM::HyperParameters::EncoderLayerConstructionHP& encoder_hp,
     std::uint64_t weight_init_seed,
     cudaStream_t init_stream);

@@ -85,13 +85,11 @@ public:
     //--------------------------------------------------
     EncodingLayer() = default;
     
-    /// Constructor — encoder owns attention/RMS tensors; FFN tensors are registry-owned
+    /// Compute-layer constructor.
+    /// Durable encoder/FFN parameters are owned by ParameterRegistry::StartupParameterRegistry;
+    /// callers must pass explicit registry-derived views into forward().
     /// @param hp_snapshot Grouped encoder construction HP from HyperparameterGroupings.hpp
-    /// @param seed Base PRNG seed. Offsets: +0 W_qkv, +1 W_o
-    /// @param init_stream CUDA stream for self-allocation during startup/model assembly
-    EncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp_snapshot,
-                  uint64_t seed,
-                  cudaStream_t init_stream);
+    explicit EncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp_snapshot);
     
     ~EncodingLayer();
     
@@ -144,30 +142,13 @@ public:
                         const EncodingLayerParameterViews* parameter_views = nullptr);
     
     //--------------------------------------------------
-    // Weight Management (Pattern B: self-allocated)
+    // Compute-layer readiness
     //--------------------------------------------------
     bool weightsReady() const noexcept { return weights_ready_; }
-    
-    //--------------------------------------------------
-    // Tensor Accessors (use these for ALL access)
-    //--------------------------------------------------
-    
-    // RMSNorm (pre-norm)
-    Tensor& rms1Gamma() { return rms1_gamma_; }
-    Tensor& rms2Gamma() { return rms2_gamma_; }
-    
-    // Issue #148: Sandwich norm accessors REMOVED — post-residual RMSNorm deleted.
-    // Old checkpoints with sandwich norm weights are loaded but weights are ignored.
-    
-    // Attention weights/biases
-    Tensor& attnWqkv() { return W_qkv_; }
-    Tensor& attnBqkv() { return b_qkv_; }
-    Tensor& attnWo() { return W_o_; }
-    Tensor& attnBo() { return b_o_; }
-    
-    // LayerScale (Issue #109)
-    Tensor& layerScale1() { return layer_scale1_; }
-    Tensor& layerScale2() { return layer_scale2_; }
+
+    // Durable encoder trainable tensors are registry-owned. Shared forward,
+    // serialization, telemetry, and autograd diagnostics must read them through
+    // ParameterRegistry::StartupParameterRegistry instead of this compute layer.
     
     //--------------------------------------------------
     // Workspace Budget — DELETED (Rule 20/26)
@@ -182,36 +163,15 @@ private:
     void freeWeights();
     void validateReady(const char* context) const;
     void validateConstructionSnapshot(const char* context) const;
-    
-    /// Self-allocate encoder-owned tensors and create FFN compute sublayer
-    void allocateWeights(uint64_t seed, cudaStream_t init_stream);
+
+    /// Create FFN compute sublayer; durable trainable tensors live on the registry owner.
+    void initializeComputeLayer();
     
     HyperParameters::EncoderLayerConstructionHP hp_{};
-    bool weights_ready_ = false;  // Set by allocateWeights()
-    
-    // RMSNorm weights (Tensor with requires_grad=true)
-    Tensor rms1_gamma_;    // [d_model] - pre-attention norm
-    Tensor rms2_gamma_;    // [d_model] - pre-FFN norm
-    
-    // Issue #148: Sandwich norm weights REMOVED (rms_post_attn_gamma_, rms_post_ffn_gamma_)
-    // Standard pre-norm architecture does not use post-residual normalization.
-    
-    // Attention weights (Tensor with requires_grad=true)
-    // W_qkv layout: [W_q: d_model x d_model][W_k: kv_dim x d_model][W_v: kv_dim x d_model]
-    Tensor W_qkv_;         // [(d_model + 2*kv_dim), d_model]
-    Tensor b_qkv_;         // [qkv_dim] = [d_model + 2*kv_dim]
-    Tensor W_o_;           // [d_model, d_model]
-    Tensor b_o_;           // [d_model]
+    bool weights_ready_ = false;  // Set by initializeComputeLayer()
     
     // FFN compute layer. Durable FFN tensors are supplied through explicit forward views.
     std::unique_ptr<FeedForwardLayer> ffn_;
-    
-    // LayerScale parameters (Issue #109: reduces correlation buildup)
-    // These are learnable per-channel gamma vectors applied before residual addition:
-    //   residual1[t,d] = input[t,d] + layer_scale1[d] * attn_output[t,d]
-    //   residual2[t,d] = residual1[t,d] + layer_scale2[d] * ffn_output[t,d]
-    Tensor layer_scale1_;  // [1, d_model] per-channel gamma for attention
-    Tensor layer_scale2_;  // [1, d_model] per-channel gamma for FFN
 };
 
 } // namespace GRIM

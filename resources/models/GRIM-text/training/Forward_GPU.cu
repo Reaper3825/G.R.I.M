@@ -28,25 +28,18 @@ namespace GRIM {
 struct GPUGrimEncoder::Impl {
     std::vector<std::unique_ptr<EncodingLayer>> gpu_layers_;
 
-    Impl(const HyperParameters::EncoderLayerConstructionHP& hp,
-         cudaStream_t init_stream,
-         uint64_t weight_seed)
+    explicit Impl(const HyperParameters::EncoderLayerConstructionHP& hp)
     {
         for (int i = 0; i < hp.num_layers; ++i) {
-            // Layer owns encoder attention/RMS tensors. FFN tensors are supplied
-            // explicitly at shared-forward time from ParameterRegistry.
-            // Seed offsets per layer for encoder-owned tensors: base + 2 + layer*10
-            const uint64_t layer_seed = weight_seed + 2 + i * 10;
-            gpu_layers_.emplace_back(std::make_unique<EncodingLayer>(
-                hp, layer_seed, init_stream));
+            // EncodingLayer is now a compute shell only. Durable trainable
+            // tensors are registry-owned and passed explicitly at forward time.
+            gpu_layers_.emplace_back(std::make_unique<EncodingLayer>(hp));
         }
     }
 };
 
-GPUGrimEncoder::GPUGrimEncoder(const HyperParameters::EncoderLayerConstructionHP& hp,
-                               cudaStream_t init_stream,
-                               uint64_t weight_seed)
-    : pImpl(new Impl(hp, init_stream, weight_seed))
+GPUGrimEncoder::GPUGrimEncoder(const HyperParameters::EncoderLayerConstructionHP& hp)
+    : pImpl(new Impl(hp))
 {
 }
 

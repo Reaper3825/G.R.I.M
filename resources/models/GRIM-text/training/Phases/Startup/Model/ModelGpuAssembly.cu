@@ -495,18 +495,21 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
         std::cout << "[assembleGpuModel] Encoder startup resources prepared" << std::endl;
         std::cout << "✓ Encoder using explicit init stream; PBM stays on the Phase1 forward boundary\n";
 
+        ModelRegistration::initializeEncodingLayerParameterTensors(
+            parameter_registry.encodingLayerParameterTensors(),
+            encoder_hp,
+            weight_init_seed,
+            init_stream);
+
         ModelRegistration::initializeFeedForwardParameterTensors(
             parameter_registry.feedForwardParameterTensors(),
             encoder_hp,
             weight_init_seed,
             init_stream);
 
-        gpu_model_state.gpu_encoder = std::make_unique<GRIM::GPUGrimEncoder>(
-            encoder_hp,
-            init_stream,
-            weight_init_seed);
+        gpu_model_state.gpu_encoder = std::make_unique<GRIM::GPUGrimEncoder>(encoder_hp);
         verifyEncoderLayersReady(*gpu_model_state.gpu_encoder, init_hp.num_layers, kAssembleGpuModelCaller);
-        std::cout << "✓ Encoder layers bound registry-owned FFN weights\n";
+        std::cout << "✓ Encoder layers bound registry-owned encoder + FFN weights\n";
 
         //======================================================//
         //  2) Initialize persistent embedding parameters on the registry
