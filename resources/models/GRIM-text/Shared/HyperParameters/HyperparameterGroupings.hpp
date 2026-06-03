@@ -1299,7 +1299,7 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.encoder_use_layer_scale = requireBool("use_layer_scale");
     view.encoder_layer_scale_init = requireFloat("layer_scale_init");
     view.encoder_center_encoder_residuals = requireBool("center_encoder_residuals");
-    view.encoder_use_bias = true;
+    view.encoder_use_bias = requireBool("use_bias");
     view.encoder_dropout_rate = dropout_rate;
     view.encoder_attention_dropout = attention_dropout;
     view.encoder_qk_norm_enabled = requireBool("qk_norm_enabled");
@@ -1311,7 +1311,7 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.lm_head_vocab_size = vocab_size;
     view.lm_head_training_batch_size = batch_size;
     view.lm_head_training_rows_per_sequence = max_seq_len;
-    view.lm_head_use_bias = true;
+    view.lm_head_use_bias = requireBool("use_bias");
     view.lm_head_tie_embeddings = requireBool("tie_embeddings");
     view.lm_head_center_hidden_states = requireBool("lm_head_center_hidden_states");
     view.lm_head_project_out_pc1 = requireBool("project_out_pc1");

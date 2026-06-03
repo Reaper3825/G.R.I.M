@@ -12,6 +12,7 @@
 
 #include "Encoding_GPU.hpp"
 #include "EncoderDiagnostics.hpp"
+#include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../FlashAttention/EncoderSelfAttention_GPU.hpp"
 #include "../FeedForward/Feed_Forward_GPU.hpp"
@@ -82,48 +83,57 @@ void validateLayerScaleGamma(const Tensor& gamma, const char* name, int d_model,
     }
 }
 
-void validateEncodingParameterViews(const EncodingLayerParameterViews* views,
-                                    const HyperParameters::EncoderLayerConstructionHP& hp,
-                                    const char* context) {
-    if (!views) {
-        throw std::runtime_error(std::string(context) + ": parameter_views is NULL - caller must pass registry-derived encoder parameter views");
+void validateEncodingParameters(const EncodingLayerParameterTensors* parameters,
+                                const HyperParameters::EncoderLayerConstructionHP& hp,
+                                const char* context) {
+    if (!parameters) {
+        throw std::runtime_error(std::string(context) + ": encoding_parameters is NULL - caller must pass registry-derived encoder parameter tensors");
     }
-    if (!views->rms1_gamma || !views->rms1_gamma->data) {
+    if (!parameters->rms1_gamma.data) {
         throw std::runtime_error(std::string(context) + ": rms1_gamma parameter tensor is required");
     }
-    if (!views->rms2_gamma || !views->rms2_gamma->data) {
+    if (!parameters->rms2_gamma.data) {
         throw std::runtime_error(std::string(context) + ": rms2_gamma parameter tensor is required");
     }
-    if (!views->W_qkv || !views->W_qkv->data) {
+    if (!parameters->W_qkv.data) {
         throw std::runtime_error(std::string(context) + ": W_qkv parameter tensor is required");
     }
-    if (!views->W_o || !views->W_o->data) {
+    if (!parameters->W_o.data) {
         throw std::runtime_error(std::string(context) + ": W_o parameter tensor is required");
     }
     if (hp.use_bias) {
-        if (!views->b_qkv || !views->b_qkv->data) {
+        if (!parameters->b_qkv.data) {
             throw std::runtime_error(std::string(context) + ": hp.use_bias=true requires b_qkv parameter tensor");
         }
-        if (!views->b_o || !views->b_o->data) {
+        if (!parameters->b_o.data) {
             throw std::runtime_error(std::string(context) + ": hp.use_bias=true requires b_o parameter tensor");
         }
     } else {
-        if ((views->b_qkv && views->b_qkv->data) || (views->b_o && views->b_o->data)) {
+        if (parameters->b_qkv.data || parameters->b_o.data) {
             throw std::runtime_error(std::string(context) + ": hp.use_bias=false but bias parameter tensors were provided");
         }
     }
     if (hp.use_layer_scale) {
-        if (!views->layer_scale1 || !views->layer_scale1->data) {
+        if (!parameters->layer_scale1.data) {
             throw std::runtime_error(std::string(context) + ": hp.use_layer_scale=true requires layer_scale1 parameter tensor");
         }
-        if (!views->layer_scale2 || !views->layer_scale2->data) {
+        if (!parameters->layer_scale2.data) {
             throw std::runtime_error(std::string(context) + ": hp.use_layer_scale=true requires layer_scale2 parameter tensor");
         }
     } else {
-        if ((views->layer_scale1 && views->layer_scale1->data) ||
-            (views->layer_scale2 && views->layer_scale2->data)) {
+        if (parameters->layer_scale1.data || parameters->layer_scale2.data) {
             throw std::runtime_error(std::string(context) + ": hp.use_layer_scale=false but layer-scale parameter tensors were provided");
         }
+    }
+}
+
+void validateEncodingConstructionHP(const HyperParameters::EncoderLayerConstructionHP& hp,
+                                    const char* context) {
+    if (hp.d_model <= 0 || hp.num_layers <= 0 || hp.qkv_dim <= 0) {
+        throw std::invalid_argument(std::string(context) +
+            ": invalid encoder construction snapshot d_model=" + std::to_string(hp.d_model) +
+            " num_layers=" + std::to_string(hp.num_layers) +
+            " qkv_dim=" + std::to_string(hp.qkv_dim));
     }
 }
 
@@ -154,76 +164,12 @@ void validateEncodingParameterViews(const EncodingLayerParameterViews* views,
 // ═══════════════════════════════════════════════════════════════════════════
 EncodingLayer::EncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp_snapshot)
     : hp_(hp_snapshot) {
-    validateConstructionSnapshot("EncodingLayer::EncodingLayer");
-    initializeComputeLayer();
-}
-
-void EncodingLayer::initializeComputeLayer() {
-    if (weights_ready_) {
-        throw std::runtime_error("EncodingLayer::initializeComputeLayer: compute layer already initialized");
-    }
-    validateConstructionSnapshot("EncodingLayer::initializeComputeLayer");
-    
-    const auto& hp = hp_;
-    {
-        const HyperParameters::FeedForwardLayerConstructionHP ffn_hp =
-            HyperParameters::feedForwardLayerConstructionHP(hp);
-        ffn_ = std::make_unique<FeedForwardLayer>(ffn_hp);
-    }
-    
-    weights_ready_ = true;
-
-    fprintf(stderr, "[EncodingLayer] Initialized compute layer; durable encoder/FFN tensors are registry-owned\n");
-}
-
-EncodingLayer::~EncodingLayer() {
-    freeWeights();
-}
-
-EncodingLayer::EncodingLayer(EncodingLayer&& other) noexcept
-    : hp_(other.hp_)
-    , weights_ready_(other.weights_ready_)
-    , ffn_(std::move(other.ffn_))
-{
-    other.weights_ready_ = false;
-}
-
-EncodingLayer& EncodingLayer::operator=(EncodingLayer&& other) noexcept {
-    if (this != &other) {
-        freeWeights();
-        
-        hp_ = other.hp_;
-        weights_ready_ = other.weights_ready_;
-        ffn_ = std::move(other.ffn_);
-        
-        other.weights_ready_ = false;
-    }
-    return *this;
-}
-
-void EncodingLayer::freeWeights() {
-    ffn_.reset();
-    weights_ready_ = false;
-}
-
-void EncodingLayer::validateReady(const char* context) const {
-    if (!weights_ready_) {
-        throw std::runtime_error(std::string(context) +
-            ": weights not initialized! Call allocateWeights() first.");
-    }
+    validateEncodingConstructionHP(hp_, "EncodingLayer::EncodingLayer");
+    const HyperParameters::FeedForwardLayerConstructionHP ffn_hp =
+        HyperParameters::feedForwardLayerConstructionHP(hp_);
+    ffn_ = std::make_unique<FeedForwardLayer>(ffn_hp);
     if (!ffn_) {
-        throw std::runtime_error(std::string(context) +
-            ": FFN sublayer not initialized! Call allocateWeights() first.");
-    }
-    validateConstructionSnapshot(context);
-}
-
-void EncodingLayer::validateConstructionSnapshot(const char* context) const {
-    if (hp_.d_model <= 0 || hp_.num_layers <= 0 || hp_.qkv_dim <= 0) {
-        throw std::invalid_argument(std::string(context) +
-            ": invalid encoder construction snapshot d_model=" + std::to_string(hp_.d_model) +
-            " num_layers=" + std::to_string(hp_.num_layers) +
-            " qkv_dim=" + std::to_string(hp_.qkv_dim));
+        throw std::runtime_error("EncodingLayer::EncodingLayer: failed to create FeedForwardLayer compute shell");
     }
 }
 
@@ -236,21 +182,28 @@ void EncodingLayer::validateConstructionSnapshot(const char* context) const {
 //  Forward Pass - Autograd Implementation writing into ModelForwardOutputs
 //======================================================//
 
-void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
-                            const PBM::PBMState& pos_encoding,
-                            cudaStream_t stream, cublasHandle_t cublas_handle,
-                            Forward::ModelForwardOutputs& forward_outputs,
-                            uint64_t batch_idx,
-                            bool dropout_enabled,
-                            int layer_idx,
-                            const EncodingLayerParameterViews* parameter_views) {
-    validateReady("EncodingLayer::forward");
+void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
+                          FeedForwardLayer& ffn_compute,
+                          const Tensor& input,
+                          const BatchPayload& payload,
+                          const PBM::PBMState& pos_encoding,
+                          cudaStream_t stream,
+                          cublasHandle_t cublas_handle,
+                          Forward::ModelForwardOutputs& forward_outputs,
+                          uint64_t batch_idx,
+                          bool dropout_enabled,
+                          int layer_idx,
+                          const EncodingLayerParameterTensors* encoding_parameters,
+                          const FeedForwardParameterTensors* ffn_parameters) {
     if (layer_idx < 0) {
-        throw std::runtime_error("EncodingLayer::forward: layer_idx must be >= 0, got " + std::to_string(layer_idx));
+        throw std::runtime_error("forwardEncodingLayer: layer_idx must be >= 0, got " + std::to_string(layer_idx));
     }
     const size_t layer_slot = static_cast<size_t>(layer_idx);
-    forward_outputs.validateLayerIndex(layer_slot, "EncodingLayer::forward");
-    validateEncodingParameterViews(parameter_views, hp_, "EncodingLayer::forward");
+    forward_outputs.validateLayerIndex(layer_slot, "forwardEncodingLayer");
+    validateEncodingParameters(encoding_parameters, hp, "forwardEncodingLayer");
+    if (!ffn_parameters) {
+        throw std::runtime_error("forwardEncodingLayer: ffn_parameters is NULL - caller must pass registry-derived FFN parameter tensors");
+    }
     Tensor& ln1_out = forward_outputs.ln1_out_per_layer[layer_slot];
     Tensor& residual1 = forward_outputs.residual1_per_layer[layer_slot];
     Tensor& ln2_out = forward_outputs.ln2_out_per_layer[layer_slot];
@@ -259,16 +212,15 @@ void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     Tensor& proj_out = forward_outputs.proj_out_per_layer[layer_slot];
     Tensor& ffn_out = forward_outputs.ffn_out_per_layer[layer_slot];
     Tensor& output = forward_outputs.output_per_layer[layer_slot];
-    const auto& hp = hp_;
     const float residual_scale = 1.0f / std::sqrt(2.0f * static_cast<float>(hp.num_layers));
-    const Tensor& rms1_gamma = *parameter_views->rms1_gamma;
-    const Tensor& rms2_gamma = *parameter_views->rms2_gamma;
-    const Tensor& W_qkv = *parameter_views->W_qkv;
-    const Tensor& W_o = *parameter_views->W_o;
-    const Tensor* b_qkv = parameter_views->b_qkv;
-    const Tensor* b_o = parameter_views->b_o;
-    const Tensor* layer_scale1 = parameter_views->layer_scale1;
-    const Tensor* layer_scale2 = parameter_views->layer_scale2;
+    const Tensor& rms1_gamma = encoding_parameters->rms1_gamma;
+    const Tensor& rms2_gamma = encoding_parameters->rms2_gamma;
+    const Tensor& W_qkv = encoding_parameters->W_qkv;
+    const Tensor& W_o = encoding_parameters->W_o;
+    const Tensor* b_qkv = hp.use_bias ? &encoding_parameters->b_qkv : nullptr;
+    const Tensor* b_o = hp.use_bias ? &encoding_parameters->b_o : nullptr;
+    const Tensor* layer_scale1 = hp.use_layer_scale ? &encoding_parameters->layer_scale1 : nullptr;
+    const Tensor* layer_scale2 = hp.use_layer_scale ? &encoding_parameters->layer_scale2 : nullptr;
     Tensor empty_b_qkv;
     Tensor empty_b_o;
     const Tensor& b_qkv_ref = b_qkv ? *b_qkv : empty_b_qkv;
@@ -276,18 +228,18 @@ void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     
     // Validate input
     if (!input.data) {
-        throw std::runtime_error("EncodingLayer::forward: input.data is NULL");
+        throw std::runtime_error("forwardEncodingLayer: input.data is NULL");
     }
     if (!stream) {
-        throw std::runtime_error("EncodingLayer::forward: stream is NULL");
+        throw std::runtime_error("forwardEncodingLayer: stream is NULL");
     }
     if (!cublas_handle) {
-        throw std::runtime_error("EncodingLayer::forward: cublas_handle is NULL");
+        throw std::runtime_error("forwardEncodingLayer: cublas_handle is NULL");
     }
     CUBLAS_CHECK(cublasSetStream(cublas_handle, stream));
-    input.shape.require("EncodingLayer::forward input");
+    input.shape.require("forwardEncodingLayer input");
     if (!input.shape.is_2d_layout()) {
-        throw std::runtime_error("EncodingLayer::forward: input must be a 2D [total_tokens,d_model] tensor");
+        throw std::runtime_error("forwardEncodingLayer: input must be a 2D [total_tokens,d_model] tensor");
     }
     const auto& input_shape = input.shape.as_2d();
     if constexpr (kEnableEncoderStepLogs) {
@@ -303,25 +255,25 @@ void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     }
     
     if (input_shape.cols != hp.d_model) {
-        throw std::runtime_error("EncodingLayer::forward: input d_model mismatch. "
+        throw std::runtime_error("forwardEncodingLayer: input d_model mismatch. "
                                  "Expected " + std::to_string(hp.d_model) + 
                                  ", got " + std::to_string(input_shape.cols));
     }
     if (input_shape.rows != payload.total_tokens) {
-        throw std::runtime_error("EncodingLayer::forward: input rows (" + std::to_string(input_shape.rows) +
+        throw std::runtime_error("forwardEncodingLayer: input rows (" + std::to_string(input_shape.rows) +
                                  ") != BatchPayload.total_tokens (" + std::to_string(payload.total_tokens) + ")");
     }
     
     if (hp.center_encoder_residuals) {
         if (static_cast<int>(payload.seq_lengths.size()) != payload.batch_size) {
-            throw std::runtime_error("EncodingLayer::forward: payload.seq_lengths size (" +
+            throw std::runtime_error("forwardEncodingLayer: payload.seq_lengths size (" +
                                      std::to_string(payload.seq_lengths.size()) +
                                      ") != payload.batch_size (" + std::to_string(payload.batch_size) + ")");
         }
         for (int b = 0; b < payload.batch_size; ++b) {
             const int row_len = payload.seq_lengths[static_cast<size_t>(b)];
             if (row_len <= 1 || row_len > payload.max_seq_len) {
-                throw std::runtime_error("EncodingLayer::forward: center_encoder_residuals invalid seq_lengths[" +
+                throw std::runtime_error("forwardEncodingLayer: center_encoder_residuals invalid seq_lengths[" +
                                          std::to_string(b) + "]=" + std::to_string(row_len) +
                                          " for payload.max_seq_len=" + std::to_string(payload.max_seq_len));
             }
@@ -391,7 +343,7 @@ void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // Issue #109: LayerScale gating for attention sublayer
     const Tensor* proj_for_residual = &proj_out;
     if (hp.use_layer_scale) {
-        validateLayerScaleGamma(*layer_scale1, "layer_scale1_", hp.d_model, "EncodingLayer::forward");
+        validateLayerScaleGamma(*layer_scale1, "layer_scale1_", hp.d_model, "forwardEncodingLayer");
         scaled_proj = autograd::layer_scale(proj_out, *const_cast<Tensor*>(layer_scale1), stream);
         proj_for_residual = &scaled_proj;
     }
@@ -438,7 +390,7 @@ void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // ========================================================================
     if (hp.center_encoder_residuals) {
         if (payload.max_seq_len <= 1) {
-            throw std::runtime_error("EncodingLayer::forward: center_encoder_residuals requires payload.max_seq_len > 1; single-row column centering would erase the residual stream");
+            throw std::runtime_error("forwardEncodingLayer: center_encoder_residuals requires payload.max_seq_len > 1; single-row column centering would erase the residual stream");
         }
         residual1 = autograd::center_columns_by_causal_prefix_lengths(
             residual1, payload.seq_lengths, payload.batch_size, payload.max_seq_len, stream);
@@ -459,11 +411,11 @@ void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // Retained in ModelForwardOutputs.
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 9: FFN...\n");
-    ffn_->forward(ln2_out,
-                  stream, cublas_handle,
-                  forward_outputs,
-                  dropout_batch_seed, dropout_enabled, layer_idx,
-                  parameter_views->ffn);
+    ffn_compute.forward(ln2_out,
+                        stream, cublas_handle,
+                        forward_outputs,
+                        dropout_batch_seed, dropout_enabled, layer_idx,
+                        *ffn_parameters);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 9: FFN DONE\n");
     
     //--------------------------------------------------
@@ -492,7 +444,7 @@ void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     // Issue #109: LayerScale gating for FFN sublayer
     const Tensor* ffn_for_residual = &ffn_out;
     if (hp.use_layer_scale) {
-        validateLayerScaleGamma(*layer_scale2, "layer_scale2_", hp.d_model, "EncodingLayer::forward");
+        validateLayerScaleGamma(*layer_scale2, "layer_scale2_", hp.d_model, "forwardEncodingLayer");
         scaled_ffn = autograd::layer_scale(ffn_out, *const_cast<Tensor*>(layer_scale2), stream);
         ffn_for_residual = &scaled_ffn;
     }
@@ -530,7 +482,7 @@ void EncodingLayer::forward(const Tensor& input, const BatchPayload& payload,
     });
     }
     if (!output.data) {
-        throw std::runtime_error("EncodingLayer::forward: result.output.data is NULL before return");
+        throw std::runtime_error("forwardEncodingLayer: result.output.data is NULL before return");
     }
 } 
 

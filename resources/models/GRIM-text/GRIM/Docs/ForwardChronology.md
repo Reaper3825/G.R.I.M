@@ -74,7 +74,7 @@ flowchart TD
    C --> D[buildTrainingForwardRequest]
    D --> E[executeModelForward]
    E --> F[initAutogradContext]
-    F --> G[EncodingLayer::forward]
+   F --> G[forwardEncodingLayer]
     G --> H[encoderSelfAttentionForward]
     H --> I[first broadcast: qkv_out plus b_qkv]
 ```
@@ -132,7 +132,7 @@ flowchart TD
    B --> C[generateOneSequence explicit forward payloads]
    C --> D[uploadBatchToDevice]
    D --> E[executeModelForward]
-   E --> F[EncodingLayer::forward]
+   E --> F[forwardEncodingLayer]
    F --> G[encoderSelfAttentionForward]
    G --> H[first shared broadcast: qkv_out plus b_qkv]
    H --> I[LM head logits]
@@ -159,7 +159,7 @@ The chronology above was checked against the current implementation, not just in
    - `training/Phases/Phase2_TrainingLoop.cu` → explicit training forward before autograd loss/backward
    - `training/Phases/Phase2_InferenceLoop.cu` → `generateOneSequence(...)`
 - `Attention::encoderSelfAttentionForward(...)` currently has exactly **one** implementation caller:
-   - `Layers/Encoding/Encoding_GPU.cu` → `EncodingLayer::forward(...)`
+   - `Layers/Encoding/Encoding_GPU.cu` → `forwardEncodingLayer(...)`
 
 ### Verified first-broadcast sites
 

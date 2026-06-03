@@ -14,6 +14,7 @@
 //======================================================//
 
 #include "Feed_Forward_GPU.hpp"
+#include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
 #include "../../Shared/StreamController/StreamController_GPU.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"  // Issue #97: autograd::broadcast_add
 
@@ -50,20 +51,17 @@ void validateFeedForwardHP(const HyperParameters::FeedForwardLayerConstructionHP
     }
 }
 
-void validateFeedForwardParameterViews(const FeedForwardParameterViews& views,
-                                       const HyperParameters::FeedForwardLayerConstructionHP& hp,
-                                       const char* context) {
-    if (!views.W_gate || !views.W1 || !views.W2) {
-        throw std::runtime_error(std::string(context) + ": W_gate/W1/W2 parameter view pointers are required");
-    }
-    if (!views.W_gate->data || !views.W1->data || !views.W2->data) {
+void validateFeedForwardParameters(const FeedForwardParameterTensors& parameters,
+                                   const HyperParameters::FeedForwardLayerConstructionHP& hp,
+                                   const char* context) {
+    if (!parameters.W_gate.data || !parameters.W1.data || !parameters.W2.data) {
         throw std::runtime_error(std::string(context) + ": W_gate/W1/W2 parameter tensors must have allocated data");
     }
     if (hp.use_bias) {
-        if (!views.b2 || !views.b2->data) {
+        if (!parameters.b2.data) {
             throw std::runtime_error(std::string(context) + ": hp.use_bias=true requires allocated b2 parameter tensor");
         }
-    } else if (views.b2 && views.b2->data) {
+    } else if (parameters.b2.data) {
         throw std::runtime_error(std::string(context) + ": hp.use_bias=false but b2 parameter tensor is allocated");
     }
 }
@@ -104,7 +102,7 @@ void FeedForwardLayer::forward(const Tensor& input,
                                uint64_t batch_idx,
                                bool dropout_enabled,
                                int layer_idx,
-                               const FeedForwardParameterViews& parameter_views) {
+                               const FeedForwardParameterTensors& parameter_tensors) {
     if (layer_idx < 0) {
         throw std::runtime_error("FeedForwardLayer::forward: layer_idx must be >= 0, got " + std::to_string(layer_idx));
     }
@@ -115,11 +113,11 @@ void FeedForwardLayer::forward(const Tensor& input,
     Tensor& ffn_linear1_out = forward_outputs.ffn_linear1_out_per_layer[layer_slot];
     Tensor& ffn_swiglu_out = forward_outputs.ffn_swiglu_out_per_layer[layer_slot];
     Tensor& ffn_out = forward_outputs.ffn_out_per_layer[layer_slot];
-    validateFeedForwardParameterViews(parameter_views, hp_, "FeedForwardLayer::forward");
-    const Tensor& W_gate = *parameter_views.W_gate;
-    const Tensor& W1 = *parameter_views.W1;
-    const Tensor& W2 = *parameter_views.W2;
-    const Tensor* b2 = parameter_views.b2;
+    validateFeedForwardParameters(parameter_tensors, hp_, "FeedForwardLayer::forward");
+    const Tensor& W_gate = parameter_tensors.W_gate;
+    const Tensor& W1 = parameter_tensors.W1;
+    const Tensor& W2 = parameter_tensors.W2;
+    const Tensor* b2 = hp_.use_bias ? &parameter_tensors.b2 : nullptr;
 
     // Rule 20: Crash on invalid weights
     if (!W_gate.data || !W1.data || !W2.data) {

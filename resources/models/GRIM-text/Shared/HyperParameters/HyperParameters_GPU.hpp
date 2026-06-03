@@ -1724,6 +1724,7 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(num_kv_heads);
     GRIM_LOAD_CONFIG_FIELD(max_seq_len);
     GRIM_LOAD_CONFIG_FIELD(tie_embeddings);
+    GRIM_LOAD_CONFIG_FIELD(use_bias);
     GRIM_LOAD_CONFIG_FIELD(dropout_rate);
     GRIM_LOAD_CONFIG_FIELD(embedding_scale);
     GRIM_LOAD_CONFIG_FIELD(sliding_window_stride);

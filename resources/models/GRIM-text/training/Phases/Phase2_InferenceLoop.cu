@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <stdexcept>
 #include <vector>
 
@@ -36,6 +37,23 @@ struct InferenceForwardScope {
         forward_outputs.clear();
     }
 };
+
+std::shared_ptr<GRIM::Batching::BatchDeviceStorage> ensureInferenceDeviceStorage(
+    GRIM::Batching::BatchPayload& payload,
+    const GRIM::Config::AiConfigSnapshot& config,
+    cudaStream_t stream,
+    std::shared_ptr<GRIM::Batching::BatchDeviceStorage> shared_storage,
+    const char* caller)
+{
+    if (payload.device_storage) {
+        return payload.device_storage;
+    }
+    if (!shared_storage) {
+        shared_storage = GRIM::Batching::createBatchDeviceStorage(config, stream);
+    }
+    GRIM::Batching::attachBatchDeviceStorage(payload, std::move(shared_storage), caller);
+    return payload.device_storage;
+}
 
 void validateInferenceContext(const TrainingContext& ctx) {
     if (!ctx.model) {
@@ -277,6 +295,7 @@ GRIM::GeneratedSequence generateOneSequence(
     GRIM::Sampling::SamplingPipeline pipeline(sampling_cfg);
 
     const bool atom_generation_active = execution_hp.enabled;
+    std::shared_ptr<GRIM::Batching::BatchDeviceStorage> inference_device_storage;
 
     auto runSharedForwardForCurrentSequence = [&](GRIM::Batching::BatchPayload& active_payload)
         -> std::vector<float> {
@@ -286,6 +305,12 @@ GRIM::GeneratedSequence generateOneSequence(
             throw std::runtime_error("generateOneSequence: training state not initialized");
         }
         cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
+        inference_device_storage = ensureInferenceDeviceStorage(
+            active_payload,
+            config,
+            stream,
+            std::move(inference_device_storage),
+            "generateOneSequence");
         const auto bindings = GRIM::Batching::uploadBatchToDevice(
             model.getConfig(),
             active_payload,

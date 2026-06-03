@@ -135,14 +135,14 @@ void validatePBMConfigOrThrow(const GRIM::Config::AiConfigSnapshot& model_cfg,
     }
 }
 
-void verifyEncoderLayersReady(GRIM::GPUGrimEncoder& encoder,
-                              int num_layers,
-                              const char* caller) {
+void verifyEncoderLayersConstructed(GRIM::GPUGrimEncoder& encoder,
+                                    int num_layers,
+                                    const char* caller) {
     for (int layer = 0; layer < num_layers; ++layer) {
         auto* gpu_layer = encoder.getLayer(layer);
-        if (!gpu_layer || !gpu_layer->weightsReady()) {
+        if (!gpu_layer) {
             throw std::runtime_error(std::string("[") + caller + "] FATAL: Encoder layer " +
-                                     std::to_string(layer) + " not ready after self-allocation!");
+                                     std::to_string(layer) + " is NULL after compute-shell construction!");
         }
     }
 }
@@ -205,17 +205,6 @@ void initializeMtpHeads(std::vector<GRIM::MtpHeadParameterTensors>& mtp_head_par
     }
 
     std::cout << "✓ MTP auxiliary heads created\n";
-}
-
-template <typename LayerT>
-void requireWeightsReady(const LayerT* layer,
-                         const char* caller,
-                         const char* layer_name,
-                         const char* failure_detail) {
-    if (!layer || !layer->weightsReady()) {
-        throw std::runtime_error(
-            std::string("[") + caller + "] " + layer_name + " " + failure_detail);
-    }
 }
 
 const GRIM::LMHeadParameterTensors& requireLmHeadParametersReady(
@@ -508,7 +497,7 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
             init_stream);
 
         gpu_model_state.gpu_encoder = std::make_unique<GRIM::GPUGrimEncoder>(encoder_hp);
-        verifyEncoderLayersReady(*gpu_model_state.gpu_encoder, init_hp.num_layers, kAssembleGpuModelCaller);
+        verifyEncoderLayersConstructed(*gpu_model_state.gpu_encoder, init_hp.num_layers, kAssembleGpuModelCaller);
         std::cout << "✓ Encoder layers bound registry-owned encoder + FFN weights\n";
 
         //======================================================//

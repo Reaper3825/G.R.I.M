@@ -515,6 +515,7 @@
             "pc1_power_iters": 5,
             "project_out_pc1": false,
             "use_layer_scale": false,
+            "use_bias": false,
             "log_interval": 1,
             "log_recorder_default_level": "Trace",
             "log_recorder_enabled": true,

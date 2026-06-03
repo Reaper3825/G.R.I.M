@@ -202,43 +202,39 @@ void materializeForwardMtpLogits(
     }
 }
 
-FeedForwardParameterViews feedForwardViewsFromRegistry(
-    const ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    int layer_idx,
+GRIM::FeedForwardParameterTensors detachFeedForwardParameters(
+    const GRIM::FeedForwardParameterTensors& parameters,
     bool use_bias,
-    const char* caller) {
-    const auto& parameters = parameter_registry.requireFeedForwardParameters(layer_idx, caller);
-    FeedForwardParameterViews views{};
-    views.W_gate = &parameters.W_gate;
-    views.W1 = &parameters.W1;
-    views.W2 = &parameters.W2;
-    if (use_bias) {
-        views.b2 = &parameters.b2;
+    cudaStream_t stream) {
+    GRIM::FeedForwardParameterTensors detached{};
+    detached.W_gate = parameters.W_gate.detach(stream);
+    detached.W1 = parameters.W1.detach(stream);
+    detached.W2 = parameters.W2.detach(stream);
+    if (use_bias && parameters.b2.data) {
+        detached.b2 = parameters.b2.detach(stream);
     }
-    return views;
+    return detached;
 }
 
-EncodingLayerParameterViews encodingLayerViewsFromRegistry(
-    const ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    int layer_idx,
+GRIM::EncodingLayerParameterTensors detachEncodingLayerParameters(
+    const GRIM::EncodingLayerParameterTensors& parameters,
     bool use_bias,
     bool use_layer_scale,
-    const char* caller) {
-    const auto& parameters = parameter_registry.requireEncodingLayerParameters(layer_idx, caller);
-    EncodingLayerParameterViews views{};
-    views.rms1_gamma = &parameters.rms1_gamma;
-    views.rms2_gamma = &parameters.rms2_gamma;
-    views.W_qkv = &parameters.W_qkv;
-    views.W_o = &parameters.W_o;
+    cudaStream_t stream) {
+    GRIM::EncodingLayerParameterTensors detached{};
+    detached.rms1_gamma = parameters.rms1_gamma.detach(stream);
+    detached.rms2_gamma = parameters.rms2_gamma.detach(stream);
+    detached.W_qkv = parameters.W_qkv.detach(stream);
+    detached.W_o = parameters.W_o.detach(stream);
     if (use_bias) {
-        views.b_qkv = &parameters.b_qkv;
-        views.b_o = &parameters.b_o;
+        detached.b_qkv = parameters.b_qkv.detach(stream);
+        detached.b_o = parameters.b_o.detach(stream);
     }
     if (use_layer_scale) {
-        views.layer_scale1 = &parameters.layer_scale1;
-        views.layer_scale2 = &parameters.layer_scale2;
+        detached.layer_scale1 = parameters.layer_scale1.detach(stream);
+        detached.layer_scale2 = parameters.layer_scale2.detach(stream);
     }
-    return views;
+    return detached;
 }
 
 }  // namespace
@@ -447,69 +443,43 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
 
             Tensor& layer_input = (layer_idx == 0) ? forward_outputs.embedding_tensor : running;
 
-            EncodingLayerParameterViews enc_param_views = encodingLayerViewsFromRegistry(
-                *request.parameter_registry,
+            const auto& encoding_parameters = request.parameter_registry->requireEncodingLayerParameters(
                 layer_idx,
-                use_bias,
-                use_layer_scale,
                 "executeModelForward(no_grad)");
-            const EncodingLayerParameterViews* enc_param_view_ptr = nullptr;
-            Tensor rms1_view;
-            Tensor rms2_view;
-            Tensor wqkv_view;
-            Tensor bqkv_view;
-            Tensor wo_view;
-            Tensor bo_view;
-            Tensor layer_scale1_view;
-            Tensor layer_scale2_view;
-            Tensor ffn_w_gate_view;
-            Tensor ffn_w1_view;
-            Tensor ffn_w2_view;
-            Tensor ffn_b2_view;
+            const auto& ffn_parameters = request.parameter_registry->requireFeedForwardParameters(
+                layer_idx,
+                "executeModelForward(no_grad)");
+            const GRIM::EncodingLayerParameterTensors* encoding_parameter_ptr = &encoding_parameters;
+            const GRIM::FeedForwardParameterTensors* ffn_parameter_ptr = &ffn_parameters;
+            GRIM::EncodingLayerParameterTensors detached_encoding_parameters{};
+            GRIM::FeedForwardParameterTensors detached_ffn_parameters{};
             if (!connect_parameter_graph) {
-                rms1_view = enc_param_views.rms1_gamma->detach(request.stream);
-                rms2_view = enc_param_views.rms2_gamma->detach(request.stream);
-                wqkv_view = enc_param_views.W_qkv->detach(request.stream);
-                wo_view = enc_param_views.W_o->detach(request.stream);
-                enc_param_views.rms1_gamma = &rms1_view;
-                enc_param_views.rms2_gamma = &rms2_view;
-                enc_param_views.W_qkv = &wqkv_view;
-                enc_param_views.W_o = &wo_view;
-                if (enc_param_views.b_qkv && enc_param_views.b_qkv->data) {
-                    bqkv_view = enc_param_views.b_qkv->detach(request.stream);
-                    enc_param_views.b_qkv = &bqkv_view;
-                }
-                if (enc_param_views.b_o && enc_param_views.b_o->data) {
-                    bo_view = enc_param_views.b_o->detach(request.stream);
-                    enc_param_views.b_o = &bo_view;
-                }
-                if (use_layer_scale && enc_param_views.layer_scale1 && enc_param_views.layer_scale2) {
-                    layer_scale1_view = enc_param_views.layer_scale1->detach(request.stream);
-                    layer_scale2_view = enc_param_views.layer_scale2->detach(request.stream);
-                    enc_param_views.layer_scale1 = &layer_scale1_view;
-                    enc_param_views.layer_scale2 = &layer_scale2_view;
-                }
-                const FeedForwardParameterViews ffn_parameter_views = feedForwardViewsFromRegistry(
-                    *request.parameter_registry,
-                    layer_idx,
+                detached_encoding_parameters = detachEncodingLayerParameters(
+                    encoding_parameters,
                     use_bias,
-                    "executeModelForward(no_grad)");
-                ffn_w_gate_view = ffn_parameter_views.W_gate->detach(request.stream);
-                ffn_w1_view = ffn_parameter_views.W1->detach(request.stream);
-                ffn_w2_view = ffn_parameter_views.W2->detach(request.stream);
-                enc_param_views.ffn.W_gate = &ffn_w_gate_view;
-                enc_param_views.ffn.W1 = &ffn_w1_view;
-                enc_param_views.ffn.W2 = &ffn_w2_view;
-                if (ffn_parameter_views.b2 && ffn_parameter_views.b2->data) {
-                    ffn_b2_view = ffn_parameter_views.b2->detach(request.stream);
-                    enc_param_views.ffn.b2 = &ffn_b2_view;
-                }
-                enc_param_view_ptr = &enc_param_views;
+                    use_layer_scale,
+                    request.stream);
+                detached_ffn_parameters = detachFeedForwardParameters(
+                    ffn_parameters,
+                    use_bias,
+                    request.stream);
+                encoding_parameter_ptr = &detached_encoding_parameters;
+                ffn_parameter_ptr = &detached_ffn_parameters;
             }
-            enc_layer->forward(
-                layer_input, payload, *request.pbm, request.stream, request.cublas_handle,
+            forwardEncodingLayer(
+                enc_layer->hp(),
+                enc_layer->requireFeedForwardCompute("executeModelForward(no_grad)"),
+                layer_input,
+                payload,
+                *request.pbm,
+                request.stream,
+                request.cublas_handle,
                 forward_outputs,
-                request.batch_idx, false, layer_idx, enc_param_view_ptr);
+                request.batch_idx,
+                false,
+                layer_idx,
+                encoding_parameter_ptr,
+                ffn_parameter_ptr);
             Tensor layer_output_view = viewCommittedTensor(
                 forward_outputs.output_per_layer[static_cast<size_t>(layer_idx)],
                 request.stream,
@@ -573,16 +543,11 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 ? &forward_outputs.embedding_tensor
                 : &forward_outputs.encoder_layer_outputs.back();
             Tensor execution_read_augmented_input;
-            EncodingLayerParameterViews enc_param_views = encodingLayerViewsFromRegistry(
-                *request.parameter_registry,
+            const auto& encoding_parameters = request.parameter_registry->requireEncodingLayerParameters(
                 layer_idx,
-                use_bias,
-                use_layer_scale,
                 "executeModelForward(retained_graph)");
-            enc_param_views.ffn = feedForwardViewsFromRegistry(
-                *request.parameter_registry,
+            const auto& ffn_parameters = request.parameter_registry->requireFeedForwardParameters(
                 layer_idx,
-                use_bias,
                 "executeModelForward(retained_graph)");
 
             if (exec_layer >= 0 && layer_idx > exec_layer
@@ -621,10 +586,20 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 }
             }
 
-            enc_layer->forward(
-                *layer_input, payload, *request.pbm, request.stream, request.cublas_handle,
+            forwardEncodingLayer(
+                enc_layer->hp(),
+                enc_layer->requireFeedForwardCompute("executeModelForward(retained_graph)"),
+                *layer_input,
+                payload,
+                *request.pbm,
+                request.stream,
+                request.cublas_handle,
                 forward_outputs,
-                request.batch_idx, dropout_enabled, layer_idx, &enc_param_views);
+                request.batch_idx,
+                dropout_enabled,
+                layer_idx,
+                &encoding_parameters,
+                &ffn_parameters);
             Tensor layer_output = viewCommittedTensor(
                 forward_outputs.output_per_layer[static_cast<size_t>(layer_idx)],
                 request.stream,

@@ -21,20 +21,13 @@
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 #include <cstddef>
-#include <memory>
 
+#include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
 #include "../../Shared/Forward/ModelForwardOutputs.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
 namespace GRIM {
-
-struct FeedForwardParameterViews {
-    const Tensor* W_gate = nullptr;
-    const Tensor* W1 = nullptr;
-    const Tensor* W2 = nullptr;
-    const Tensor* b2 = nullptr;
-};
 
 //======================================================//
 //  FeedForwardLayer - Autograd Implementation
@@ -91,7 +84,7 @@ public:
              cudaStream_t stream, cublasHandle_t cublas_handle,
              Forward::ModelForwardOutputs& forward_outputs,
              uint64_t batch_idx, bool dropout_enabled, int layer_idx,
-             const FeedForwardParameterViews& parameter_views);
+             const FeedForwardParameterTensors& parameter_tensors);
 
     //--------------------------------------------------
     // NOTE: Backward Pass handled by autograd
