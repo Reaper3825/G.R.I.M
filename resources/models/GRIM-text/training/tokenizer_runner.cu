@@ -379,7 +379,10 @@ static std::vector<ValidationResult> runValidationChecks(
             if (seq.empty()) continue;
             // Filter out special tokens AND atom placeholders
             std::vector<int> content_ids;
-            const GRIM::Tokenizer::TokenLayout layout = tokenizer.tokenLayout();
+            const GRIM::Tokenizer::TokenLayout layout =
+                GRIM::Tokenizer::tokenLayoutFromActualVocabOrThrow(
+                    static_cast<std::uint32_t>(tokenizer.vocabSize()),
+                    "tokenizer_runner: validate corpus round-trip");
             for (int id : seq) {
                 if (GRIM::Tokenizer::isSpecialTokenId(id)) continue;
                 if (layout.isAtom(id)) continue;
@@ -445,7 +448,10 @@ static std::vector<ValidationResult> runValidationChecks(
         r.name = "Corpus token type distribution";
         size_t byte_count = 0, atom_count = 0, unigram_count = 0, special_count = 0;
         size_t total_tokens = 0;
-        const GRIM::Tokenizer::TokenLayout layout = tokenizer.tokenLayout();
+        const GRIM::Tokenizer::TokenLayout layout =
+            GRIM::Tokenizer::tokenLayoutFromActualVocabOrThrow(
+                static_cast<std::uint32_t>(tokenizer.vocabSize()),
+                "tokenizer_runner: validate token distribution");
         for (const auto& seq : corpus.sampled_sequences) {
             for (int id : seq) {
                 total_tokens++;
@@ -913,7 +919,9 @@ int main(int argc, char** argv) {
         // Phase: Build Payload
         //==============================================================
         TokenizerPayload payload;
-        const auto layout = tokenizer.tokenLayout();
+        const auto layout = GRIM::Tokenizer::tokenLayoutFromActualVocabOrThrow(
+            static_cast<std::uint32_t>(tokenizer.vocabSize()),
+            "tokenizer_runner: build payload");
         payload.vocab_size = tokenizer.vocabSize();
         payload.unigram_piece_count = layout.num_unigram;
         payload.byte_token_count = layout.num_bytes;

@@ -16,6 +16,8 @@
 //======================================================//
 
 #include "Unigram.hpp"
+#include "AtomTable.hpp"
+#include "Detectors/DetectorRegistry.hpp"
 #include "TextUtils.hpp"
 #include "Training/UnigramForwardBackward.hpp"
 #include "VocabWriteOp.hpp"
@@ -979,22 +981,65 @@ static void mineSubwordsFromSentence(const std::string& text,
 }
 
 //======================================================//
-//  trainFromCorpus — Delegating Overload
+//  trainFromCorpus — TokenizerHP Detector-Prepass Entrypoint
 //======================================================//
 
 bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
-                                 int target_vocab_size,
-                                 float character_coverage,
-                                 int min_subword_freq,
-                                 bool prune_during_mining,
-                                 bool enable_parallel_subword_mining,
-                                 int subword_mining_workers,
-                                 size_t subword_mining_max_bytes) {
-    std::vector<std::vector<AtomSpan>> empty_spans(texts.size());
-    return trainFromCorpus(texts, empty_spans, target_vocab_size,
-                           character_coverage, min_subword_freq,
-                           prune_during_mining, enable_parallel_subword_mining,
-                           subword_mining_workers, subword_mining_max_bytes);
+                                 const ::GRIM::HyperParameters::TokenizerHP& tokenizer_hp) {
+    Detector::DetectorRegistry detector_registry;
+    if (tokenizer_hp.enable_atom_reasoning) {
+        detector_registry = Detector::makeDefaultRawTextDetectorRegistry();
+        if (detector_registry.empty()) {
+            throw std::runtime_error("UnigramLM::trainFromCorpus: detector registry initialized empty while atom reasoning is enabled");
+        }
+    }
+
+    std::vector<std::vector<AtomSpan>> all_atom_spans;
+    all_atom_spans.reserve(texts.size());
+
+    size_t total_atoms = 0;
+    size_t total_skipped_unparseable = 0;
+    const bool detect = tokenizer_hp.enable_atom_reasoning;
+    for (const auto& text : texts) {
+        std::vector<AtomSpan> spans;
+        if (detect) {
+            const Detector::RawTextDetectorOptions detector_options(
+                tokenizer_hp.detect_numbers,
+                true,
+                true);
+            auto structures = detector_registry.detectStructures(text, detector_options);
+            spans.reserve(structures.size());
+            for (const auto& s : structures) {
+                auto parsed = AtomTable::parseAtom(
+                    s.atom_type, std::string(s.contentView()));
+                if (!parsed.success) {
+                    ++total_skipped_unparseable;
+                    continue;
+                }
+                spans.push_back({s.start, s.end});
+            }
+            total_atoms += spans.size();
+        }
+        all_atom_spans.push_back(std::move(spans));
+    }
+
+    std::cout << "[UnigramLM] Detected " << total_atoms << " atoms across "
+              << texts.size() << " texts (will skip during vocab training); "
+              << "unparseable spans treated as text: " << total_skipped_unparseable
+              << "; atom_reasoning=" << (detect ? "on" : "off") << std::endl;
+
+    const bool trained = trainFromCorpus(texts, all_atom_spans,
+                                         tokenizer_hp.target_vocab_size,
+                                         tokenizer_hp.character_coverage,
+                                         tokenizer_hp.min_subword_freq,
+                                         tokenizer_hp.prune_during_mining,
+                                         tokenizer_hp.enable_parallel_subword_mining,
+                                         tokenizer_hp.subword_mining_workers,
+                                         tokenizer_hp.subword_mining_max_bytes);
+    if (trained) {
+        requireRuntimeReadyForLastTraining("UnigramLM::trainFromCorpus(TokenizerHP)");
+    }
+    return trained;
 }
 
 //======================================================//
@@ -1012,8 +1057,18 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                                  size_t subword_mining_max_bytes) {
     validateTrainFromCorpusParameters(texts, target_vocab_size, character_coverage,
                                       min_subword_freq, subword_mining_workers);
+
+    // An empty atom_spans vector means "no atom spans for any text". Expand it
+    // to a per-text empty list so the rest of the pipeline can index uniformly.
+    std::vector<std::vector<AtomSpan>> expanded_empty_atom_spans;
+    if (atom_spans.empty()) {
+        expanded_empty_atom_spans.resize(texts.size());
+    }
+    const std::vector<std::vector<AtomSpan>>& effective_atom_spans =
+        atom_spans.empty() ? expanded_empty_atom_spans : atom_spans;
+
     const AtomSpanValidationTotals original_atom_totals =
-        validateOriginalAtomSpansBeforeNormalization(texts, atom_spans);
+        validateOriginalAtomSpansBeforeNormalization(texts, effective_atom_spans);
 
     last_training_runtime_report_ = UnigramTrainingRuntimeReport{};
 
@@ -1040,7 +1095,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     norm_texts.reserve(texts.size());
     norm_atom_spans.reserve(texts.size());
     for (size_t i = 0; i < texts.size(); ++i) {
-        auto spans_copy = atom_spans[i];
+        auto spans_copy = effective_atom_spans[i];
         norm_texts.push_back(normalizeWithSpans(texts[i], spans_copy));
         norm_atom_spans.push_back(std::move(spans_copy));
     }

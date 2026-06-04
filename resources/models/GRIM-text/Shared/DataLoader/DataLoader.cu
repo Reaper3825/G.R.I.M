@@ -372,7 +372,7 @@ bool PrepareTrainingDataFromCache(
 		else
 			vocab_corpus.push_back(GRIM::DataLoader::renderCanonicalText(cj));
 	}
-	if (!tokenizer.train(vocab_corpus)) {
+	if (!tokenizer.unigramLM().trainFromCorpus(vocab_corpus, tokenizer_hp)) {
 		throw std::runtime_error("[DataLoader] tokenizer training returned false; refusing to encode GRMT without a finalized tokenizer runtime state");
 	}
 	tokenizer.requireRuntimeReadyForLastTraining("DataLoader::PrepareTrainingDataFromCache");

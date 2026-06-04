@@ -72,7 +72,7 @@ TokenizerBundleManifest loadTokenizerArtifactBundle(
         throw std::runtime_error("[TokenizerArtifactBundle] GRMT file missing: " + grmt_path.string());
     }
 
-    TokenizerVocabFile(vocab_path).readInto(tokenizer.unigramLM());
+    TokenizerVocabFile(vocab_path).readInto(hp, tokenizer.unigramLM());
 
     TokenizerBundleManifest manifest{};
     manifest.grmt_header = loadGrmtHeader(grmt_path);

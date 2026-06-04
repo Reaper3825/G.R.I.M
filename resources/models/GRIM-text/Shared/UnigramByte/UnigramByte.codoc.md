@@ -26,7 +26,7 @@ The public encode/decode surface is intentionally narrow:
 - `ByteEncoder` and `UnigramLM` each expose one `encode` and one `decode`; byte/unigram/atom branching is handled by small primitives inside the orchestrator, not by public overload chains.
 - `UnigramLM::decode()` decodes only byte fallback and learned unigram IDs. It must fail loudly on any token outside that primitive range; only `UniByte::decode(DecodeRequest)` is layout-aware.
 - `UniByte::vocabSize()` is the only public tokenizer vocab-size API. It returns the full token ID space that `DataLoader.cu` writes into `.grmt` headers. Learned subword count is `UnigramLM::pieceCount()` and is never a model/GRMT vocab size.
-- `TokenLayout` is the only token-range classifier. Do not re-add `UniByte` token-type wrappers or token-string wrappers; diagnostics can use `tokenLayout()` and direct `UnigramLM::getPiece(token_id)` lookups.
+- `TokenLayout` is the only token-range classifier. Do not re-add `UniByte` token-type wrappers or token-string wrappers; diagnostics should derive layout with `tokenLayoutFromActualVocabOrThrow(tokenizer.vocabSize(), caller)` and use direct `UnigramLM::getPiece(token_id)` lookups.
 
 ---
 
@@ -180,8 +180,8 @@ flowchart LR
 
 ### Ownership split
 
-- `UniByte::train()` orchestrates the training workflow.
-- `UnigramLM::trainFromCorpus()` is declared in `Unigram.hpp`.
+- Byte-fallback enablement is `TokenizerHP` / `UniByte` ownership. Construct `UnigramLM` with the desired mode and pass `TokenizerHP` into vocab-load helpers; do not reintroduce public `UnigramLM` setter/getter accessors for this config bit.
+- `UnigramLM::trainFromCorpus()` is declared in `Unigram.hpp` and owns the raw-text detector prepass for training. Parseable atom spans are detected there from `TokenizerHP` before delegating to the atom-aware overload; do not recreate a `UniByte::trainFromCorpus()` wrapper.
 - The actual training orchestration lives in `UnigramTrainer.cu`.
 - True Unigram soft-EM math lives in `Training/UnigramForwardBackward.hpp/.cu`; training must use posterior expected counts from forward-backward, not Viterbi hard-EM counts.
 - `UnigramLM::trainFromCorpus()` fails at entry for invalid `target_vocab_size`,

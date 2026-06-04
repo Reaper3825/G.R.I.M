@@ -24,6 +24,9 @@
 #include "TokenLayout.hpp"  // AtomType, token ID constants, layout helpers
 
 namespace GRIM {
+namespace HyperParameters {
+struct TokenizerHP;
+}
 namespace Tokenizer {
 
 //======================================================//
@@ -80,7 +83,7 @@ class UnigramViterbiSession;
 //======================================================//
 class UnigramLM {
 public:
-    UnigramLM();
+    explicit UnigramLM(bool enable_byte_fallback = true);
     ~UnigramLM();
 
     // Disable copy
@@ -95,19 +98,16 @@ public:
     // Vocabulary Management
     //--------------------------------------------------//
 
-    // Train vocabulary from corpus
+    // Train from corpus using tokenizer hyperparameters. UnigramLM owns the
+    // raw-text detector prepass that selects parseable atom spans before
+    // delegating to the atom-aware implementation below.
     bool trainFromCorpus(const std::vector<std::string>& texts,
-                         int target_vocab_size,
-                           float character_coverage = 0.9995f,
-                           int min_subword_freq = 3,
-                           bool prune_during_mining = false,
-                           bool enable_parallel_subword_mining = true,
-                           int subword_mining_workers = 0,
-                           size_t subword_mining_max_bytes = 0);
+                         const ::GRIM::HyperParameters::TokenizerHP& tokenizer_hp);
 
-    // Train with atom-aware spans: atom regions are SKIPPED during
-    // character counting, subword mining, and EM iterations.
-    // atom_spans[i] = list of atom spans for texts[i] (parallel arrays).
+    // Canonical training implementation. atom_spans[i] = list of atom spans for
+    // texts[i] (parallel arrays); atom regions are SKIPPED during character
+    // counting, subword mining, and EM iterations. Pass an empty atom_spans
+    // vector to train with no atom spans at all.
     bool trainFromCorpus(const std::vector<std::string>& texts,
                          const std::vector<std::vector<AtomSpan>>& atom_spans,
                          int target_vocab_size,
@@ -169,13 +169,6 @@ public:
     // SentencePiece-style whitespace normalization (▁ ↔ space)
     static std::string normalizeForTokenization(const std::string& text);
     static std::string denormalizeFromTokenization(const std::string& text);
-    
-    //--------------------------------------------------//
-    // Configuration
-    //--------------------------------------------------//
-    
-    void setByteFallbackEnabled(bool enabled) { enable_byte_fallback_ = enabled; }
-    bool byteFallbackEnabled() const { return enable_byte_fallback_; }
     
     // Build trie from vocabulary (must call after adding pieces, before encoding)
     void buildTrie();

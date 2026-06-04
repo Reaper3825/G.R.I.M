@@ -490,8 +490,7 @@ bool testUnigramTrainShrinkRankingUsesCompressionGain(std::string& message) {
 }
 
 bool testUnigramTrainByteFallbackDisabledAddsCharacterSeeds(std::string& message) {
-    UnigramLM unigram;
-    unigram.setByteFallbackEnabled(false);
+    UnigramLM unigram(false);
 
     std::string repeated;
     for (int i = 0; i < 32; ++i) {
@@ -501,6 +500,7 @@ bool testUnigramTrainByteFallbackDisabledAddsCharacterSeeds(std::string& message
 
     const bool trained = unigram.trainFromCorpus(
         corpus,
+        {},     // atom_spans: none
         100,    // target_vocab_size: enough room for required char seeds and mined pieces
         1.0f,   // character_coverage: byte-fallback-off requires exact char coverage
         3,      // min_subword_freq
@@ -516,8 +516,7 @@ bool testUnigramTrainByteFallbackDisabledAddsCharacterSeeds(std::string& message
 }
 
 bool testUnigramTrainByteFallbackDisabledFailsOnUncoveredCharacterSeed(std::string& message) {
-    UnigramLM unigram;
-    unigram.setByteFallbackEnabled(false);
+    UnigramLM unigram(false);
 
     std::vector<std::string> corpus = {"aaaaaaaaaaaaaaaa uncommon_z"};
     bool threw = false;
@@ -525,6 +524,7 @@ bool testUnigramTrainByteFallbackDisabledFailsOnUncoveredCharacterSeed(std::stri
     try {
         unigram.trainFromCorpus(
             corpus,
+            {},
             100,
             1.0f,
             3,
@@ -586,6 +586,7 @@ bool testUnigramTrainFiltersRepetitionNoise(std::string& message) {
 
     const bool trained = unigram.trainFromCorpus(
         corpus,
+        {},     // atom_spans: none
         600,    // target_vocab_size
         1.0f,   // character_coverage
         3,      // min_subword_freq
@@ -615,6 +616,7 @@ bool testUnigramTrainDedupsRepeatedVariants(std::string& message) {
 
     const bool trained = unigram.trainFromCorpus(
         corpus,
+        {},     // atom_spans: none
         400,    // target_vocab_size
         1.0f,   // character_coverage
         3,      // min_subword_freq
@@ -642,6 +644,7 @@ bool testUnigramTrainPreservesSpieceUnderlineDedupBoundary(std::string& message)
 
     const bool trained = unigram.trainFromCorpus(
         corpus,
+        {},     // atom_spans: none
         5000,   // target_vocab_size; keep candidate vocab above this tiny fixture size
         1.0f,   // character_coverage
         3,      // min_subword_freq
@@ -674,6 +677,7 @@ bool testUnigramTrainStridedMiningKeepsLateDocumentPatterns(std::string& message
 
     const bool trained = unigram.trainFromCorpus(
         corpus,
+        {},     // atom_spans: none
         5000,   // target_vocab_size; avoid pruning this small candidate set
         1.0f,   // character_coverage
         3,      // min_subword_freq
@@ -690,8 +694,7 @@ bool testUnigramTrainStridedMiningKeepsLateDocumentPatterns(std::string& message
 }
 
 bool testUnigramTrainStridedMiningOverlapsBoundaryCandidates(std::string& message) {
-    UnigramLM unigram;
-    unigram.setByteFallbackEnabled(false);
+    UnigramLM unigram(false);
 
     // With subword_mining_max_bytes=160 across ten identical 47-byte normalized
     // documents, each document receives a 16-byte intended sampled span centered
@@ -706,6 +709,7 @@ bool testUnigramTrainStridedMiningOverlapsBoundaryCandidates(std::string& messag
 
     const bool trained = unigram.trainFromCorpus(
         corpus,
+        {},     // atom_spans: none
         5000,   // target_vocab_size; keep candidate vocab above this fixture size
         1.0f,   // character_coverage; no-byte-fallback path requires exact char coverage
         3,      // min_subword_freq
@@ -746,6 +750,7 @@ bool testUnigramTrainEnforcesBytePieceLimit(std::string& message) {
 
     const bool trained = unigram.trainFromCorpus(
         corpus,
+        {},     // atom_spans: none
         300,    // target_vocab_size
         1.0f,   // character_coverage
         3,      // min_subword_freq

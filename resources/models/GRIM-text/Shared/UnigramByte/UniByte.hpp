@@ -176,17 +176,6 @@ public:
     // Initialization
     //--------------------------------------------------//
 
-    // Train from corpus
-    bool train(const std::vector<std::string>& texts);
-    
-    // Train with explicit vocab size
-    void trainFromCorpus(const std::vector<std::string>& corpus, int target_vocab_size) {
-        tokenizer_hp_.target_vocab_size = target_vocab_size;
-        if (!train(corpus)) {
-            throw std::runtime_error("UniByte::trainFromCorpus failed to train tokenizer corpus");
-        }
-    }
-    
     // Initialize GPU resources
     bool initGPU();
     const UnigramTrainingRuntimeReport& lastTrainingRuntimeReport() const;
@@ -204,14 +193,6 @@ public:
     UniByteResult tokenizeWithMetadata(const std::string& text) const;
     
     //--------------------------------------------------//
-    // Atom Reasoning Control
-    //--------------------------------------------------//
-    
-    // Enable/disable atom reasoning at runtime
-    void setAtomReasoning(bool enabled);
-    bool isAtomReasoningEnabled() const { return tokenizer_hp_.enable_atom_reasoning; }
-    
-    //--------------------------------------------------//
     // Decoding
     //--------------------------------------------------//
     
@@ -224,9 +205,6 @@ public:
     
     // Canonical tokenizer vocab size: full token ID space written to GRMT headers.
     int vocabSize() const;
-    
-    // Token layout — runtime-queried from live component sizes
-    TokenLayout tokenLayout() const;
 
     //--------------------------------------------------//
     // Component Access
@@ -245,10 +223,6 @@ private:
     
     bool gpu_initialized_ = false;
     Detector::DetectorRegistry detector_registry_;
-    
-    // Internal encoding with structural awareness
-    UniByteResult encodeInternal(const std::string& text,
-                                  const std::vector<StructuralSpan>& structures) const;
 };
 
 } // namespace Tokenizer

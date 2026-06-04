@@ -235,8 +235,9 @@ void UnigramGpuMemory::release() noexcept {
 //  UnigramLM GPU Ownership Boundary
 //======================================================//
 
-UnigramLM::UnigramLM()
-    : gpu_(std::make_unique<UnigramGpuMemory>())
+UnigramLM::UnigramLM(bool enable_byte_fallback)
+    : enable_byte_fallback_(enable_byte_fallback)
+    , gpu_(std::make_unique<UnigramGpuMemory>())
 {
     // Start with an empty learned vocabulary. Layout special tokens are saved
     // as vocab metadata records, not stored in pieces_ or the trie.

@@ -118,7 +118,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   - 50-100x faster than std::regex for URL/email/number prefixes
   - Detects: http://, https://, www., ftp://, ws://, wss://, file://, @, 0x, 0b
   - DetectorRegistry built eagerly in UniByte constructor; no public UniByte detector API ✅
-  - Detection confirmed BEFORE Viterbi encoding (detectStructures → encodeInternal) ✅
+  - Detection confirmed BEFORE Viterbi encoding (`tokenizeWithMetadata`: detectStructures → Viterbi segmentation) ✅
 
 ---
 

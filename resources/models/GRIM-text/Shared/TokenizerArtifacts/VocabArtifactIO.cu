@@ -86,7 +86,8 @@ std::string readTokenText(std::istream& input, std::uint32_t len, const std::str
 TokenizerVocabFile::TokenizerVocabFile(fs::path path)
     : path_(requireBinaryVocabPath(std::move(path))) {}
 
-void TokenizerVocabFile::readInto(GRIM::Tokenizer::UnigramLM& unigram) const {
+void TokenizerVocabFile::readInto(const GRIM::HyperParameters::TokenizerHP& tokenizer_hp,
+                                  GRIM::Tokenizer::UnigramLM& unigram) const {
     const fs::path bin_path = requireBinaryVocabPath(path_);
     std::ifstream bin_file(bin_path, std::ios::binary);
     if (!bin_file.is_open()) {
@@ -115,8 +116,7 @@ void TokenizerVocabFile::readInto(GRIM::Tokenizer::UnigramLM& unigram) const {
 
     const std::uint32_t saved_token_space_size = readScalar<std::uint32_t>(bin_file, source);
 
-    GRIM::Tokenizer::UnigramLM loaded;
-    loaded.setByteFallbackEnabled(unigram.byteFallbackEnabled());
+    GRIM::Tokenizer::UnigramLM loaded(tokenizer_hp.enable_byte_fallback);
 
     std::uint32_t special_records_seen = 0;
     for (std::uint32_t i = 0; i < serialized_record_count; ++i) {

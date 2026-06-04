@@ -16,7 +16,8 @@ public:
 
     const std::filesystem::path& path() const { return path_; }
 
-    void readInto(GRIM::Tokenizer::UnigramLM& unigram) const;
+    void readInto(const GRIM::HyperParameters::TokenizerHP& tokenizer_hp,
+                  GRIM::Tokenizer::UnigramLM& unigram) const;
     void writeFrom(const GRIM::Tokenizer::UnigramLM& unigram,
                    const GRIM::HyperParameters::TokenizerHP& tokenizer_hp) const;
 

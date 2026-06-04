@@ -110,7 +110,10 @@ std::string summarizeIds(const std::vector<int>& ids, std::size_t max_preview = 
 }
 
 std::string tokenTextForDisplay(const GrimTokenizer& tokenizer, int token_id) {
-    const GRIM::Tokenizer::TokenLayout layout = tokenizer.tokenLayout();
+            const GRIM::Tokenizer::TokenLayout layout =
+                GRIM::Tokenizer::tokenLayoutFromActualVocabOrThrow(
+                    static_cast<std::uint32_t>(tokenizer.vocabSize()),
+                    "tokenizer_self_test: GRMT decode round-trip");
     if (layout.isSpecial(token_id)) {
         return GRIM::Tokenizer::specialTokenText(token_id);
     }
