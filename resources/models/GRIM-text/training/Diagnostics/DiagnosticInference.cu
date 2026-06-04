@@ -19,6 +19,7 @@
 #include "DiagnosticInference.hpp"
 #include "../Phases/Phase2_InferenceLoop.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
+#include "../../Shared/DataLoader/DataLoader.hpp"
 
 #include <iostream>
 #include <sstream>
@@ -87,7 +88,7 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
     }
     state.last_sample_step = optimizer_step;
 
-    if (!ctx.model || !ctx.tokenizer || !ctx.logging.logger) {
+    if (!ctx.model || !ctx.logging.logger) {
         return;
     }
     // Drain deferred CUDA errors from training before launching inference kernels.
@@ -123,8 +124,9 @@ void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
     cfg.seed = static_cast<unsigned int>(optimizer_step);
 
     try {
+        auto tokenizer = LoadInferenceTokenizer(ctx.config, *ctx.logging.logger);
         const auto start = std::chrono::steady_clock::now();
-        auto sample = executePhase2TextInference(ctx, prompt, cfg);
+        auto sample = executePhase2TextInference(ctx, *tokenizer, prompt, cfg);
         const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start).count();
 

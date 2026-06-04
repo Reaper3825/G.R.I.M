@@ -14,7 +14,7 @@
 #include "BatchPayload.hpp"
 #include "Batching_GPU.hpp"
 #include "../../Shared/UnigramByte/TokenLayout.hpp"
-#include "../TokenizerArtifacts/GrmtCorpusIO.hpp"
+#include "../TokenizerArtifacts/GrmtSequence.hpp"
 #include "../Execution/ExecutionPayloadValidation.hpp"
 #include <algorithm>
 #include <cstdio>

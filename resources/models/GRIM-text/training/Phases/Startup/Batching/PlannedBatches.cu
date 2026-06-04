@@ -10,7 +10,7 @@
 #include "../../../../Shared/Batching/EpochBatching.hpp"      // buildEpochBatches
 #include "../../../../Shared/Batching/PackerPolicy.hpp"
 #include "../../../../Shared/Batching/Batching_GPU.hpp"       // buildBatches
-#include "../../../../Shared/UnigramByte/UniByte.hpp"          // GRIM::Tokenizer::TokenLayout
+#include "../../../../Shared/UnigramByte/TokenLayout.hpp"
 
 #include <algorithm>
 #include <numeric>
@@ -23,33 +23,59 @@ namespace GRIMText::Training {
 
 namespace {
 
+int trainingMtpK(const TrainingContext& ctx) {
+    return GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "mtp_enabled")
+        ? GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "mtp_k")
+        : 0;
+}
+
 //======================================================//
 // Per-batch payload builder. Reads ALL static run-invariant inputs (cache
-// geometry, execution-block sizes, vocab size, token layout) from
-// ctx.payload_build_inputs — authored by PayloadBuildInputsReady. This is
-// the single Phase1 entry point for GRIM::Batching::buildBatchPayload.
+// geometry, execution-block sizes, vocab size, token layout) from the
+// Phase1-authored TrainingContext config + SequenceData.vocab_size. This is the single
+// Phase1 entry point for GRIM::Batching::buildBatchPayload.
 //======================================================//
 GRIM::Batching::BatchPayload buildPayloadFromAssignmentImpl(
     const TrainingContext& ctx,
     const GRIM::Batching::BatchAssignment& assignment,
-    const std::vector<TrainingSequence*>& views,
+    const std::vector<GRIM::TokenizerArtifacts::GrmtSequence*>& views,
     int mtp_k)
 {
-    const auto& inputs = ctx.payload_build_inputs;
+    const auto fixed_shape = GRIM::HyperParameters::trainingFixedShapeHP(ctx.config);
+    const int execution_block_num_slots = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "execution_block_num_slots");
+    const int execution_block_num_ops = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "execution_block_num_ops");
+    const int execution_block_num_steps = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "execution_block_num_steps");
+    const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "vocab_size");
+    const std::uint32_t actual_vocab_size = ctx.data.vocab_size;
+    const auto layout = GRIM::Tokenizer::tokenLayoutFromActualVocabOrThrow(
+        actual_vocab_size,
+        "PlannedBatches::buildPayloadFromAssignmentImpl");
 
-    GRIM::Tokenizer::TokenLayout layout;
-    layout.num_special = inputs.token_layout.num_special;
-    layout.num_bytes   = inputs.token_layout.num_bytes;
-    layout.num_atoms   = inputs.token_layout.num_atoms;
-    layout.num_unigram = inputs.token_layout.num_unigram;
+    if (actual_vocab_size == 0) {
+        throw std::runtime_error(
+            "FATAL: PlannedBatches SequenceData.vocab_size is zero");
+    }
+    if (vocab_size != static_cast<int>(actual_vocab_size)) {
+        throw std::runtime_error(
+            "FATAL: PlannedBatches runtime vocab mismatch: actual_vocab_size=" +
+            std::to_string(actual_vocab_size) +
+            " model vocab_size=" + std::to_string(vocab_size));
+    }
+    if (layout.total_vocab() != vocab_size) {
+        throw std::runtime_error(
+            "FATAL: PlannedBatches token_layout.total_vocab=" +
+            std::to_string(layout.total_vocab()) +
+            " != model vocab_size=" + std::to_string(vocab_size));
+    }
 
     return GRIM::Batching::buildBatchPayload(
-        assignment, views, inputs.vocab_size,
+        assignment, views, vocab_size,
         layout,
-        inputs.configured_batch_size, inputs.max_cached_seq,
-        inputs.execution_block_num_slots,
-        inputs.execution_block_num_ops,
-        inputs.execution_block_num_steps,
+        static_cast<std::size_t>(fixed_shape.batch_size),
+        static_cast<std::size_t>(fixed_shape.max_seq_len),
+        execution_block_num_slots,
+        execution_block_num_ops,
+        execution_block_num_steps,
         mtp_k);
 }
 
@@ -95,7 +121,7 @@ GRIM::Batching::BatchPayload buildTrainPayload(
 {
     return buildPayloadFromAssignmentImpl(
         ctx, assignment, ctx.data.train_views,
-        ctx.payload_build_inputs.train_mtp_k);
+    trainingMtpK(ctx));
 }
 
 GRIM::Batching::BatchPayload buildValPayload(
@@ -112,11 +138,13 @@ void PlannedBatchesReady(TrainingContext& ctx) {
             "FATAL: PlannedBatchesReady requires an allocated model — "
             "call ModelAllocated before this step");
     }
-    if (ctx.payload_build_inputs.vocab_size <= 0) {
+    if (ctx.data.vocab_size == 0) {
         throw std::runtime_error(
-            "FATAL: PlannedBatchesReady requires PayloadBuildInputsReady to "
-            "have authored ctx.payload_build_inputs");
+            "FATAL: PlannedBatchesReady requires LoadTrainingData to author ctx.data.vocab_size");
     }
+    (void)GRIM::Tokenizer::tokenLayoutFromActualVocabOrThrow(
+        ctx.data.vocab_size,
+        "PlannedBatchesReady");
     const int fixed_batch_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "batch_size");
     const int fixed_max_seq_len = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "max_seq_len");
     if (fixed_batch_size <= 0 || fixed_max_seq_len <= 0) {

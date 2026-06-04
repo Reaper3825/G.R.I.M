@@ -71,17 +71,13 @@ struct TokenizerHP {
     bool add_bos = false;
     bool add_eos = false;
     bool force_rebuild_vocab = false;
+    bool only_mode = false;
     bool save_text_vocab = false;
     float vocab_score_multiplier = 0.0f;
 
     std::string current_curriculum;
     std::string current_model_training;
     int execution_block_num_steps = 0;
-};
-
-struct TokenizerSubprocessHP {
-    TokenizerHP tokenizer;
-    bool only_mode = false;
 };
 
 struct LearningRateScheduleInputs {
@@ -608,41 +604,6 @@ inline CheckpointLoadHP checkpointLoadHP(
     return view;
 }
 
-inline TokenizerHP tokenizerHP(const LanguageModelConfig& config) {
-    TokenizerHP view;
-    const auto paths = pathsHP(config);
-    view.data_path = paths.data_path;
-    view.vocab_path = paths.vocab_path;
-    view.target_vocab_size = config.tokenizer_target_vocab_size;
-    view.character_coverage = config.tokenizer_character_coverage;
-    view.min_cleaned_text_length = config.tokenizer_min_cleaned_text_length;
-    view.min_subword_freq = config.tokenizer_min_subword_freq;
-    view.prune_during_mining = config.tokenizer_prune_during_mining;
-    view.enable_parallel_subword_mining = config.tokenizer_enable_parallel_subword_mining;
-    view.subword_mining_workers = config.tokenizer_subword_mining_workers;
-    view.subword_mining_max_bytes = config.tokenizer_subword_mining_max_bytes;
-    view.enable_atom_reasoning = config.tokenizer_enable_atom_reasoning;
-    view.detect_numbers = config.tokenizer_detect_numbers;
-    view.enable_byte_fallback = config.tokenizer_enable_byte_fallback;
-    view.add_bos = config.tokenizer_add_bos;
-    view.add_eos = config.tokenizer_add_eos;
-    view.force_rebuild_vocab = config.force_rebuild_vocab;
-    view.save_text_vocab = config.tokenizer_save_text_vocab;
-    view.vocab_score_multiplier = config.tokenizer_vocab_score_multiplier;
-    view.current_curriculum = config.current_curriculum;
-    view.current_model_training = config.current_model_training;
-    view.execution_block_num_steps = config.execution_block_num_steps;
-    return view;
-}
-
-inline TokenizerSubprocessHP tokenizerSubprocessHP(const LanguageModelConfig& config)
-{
-    TokenizerSubprocessHP view;
-    view.tokenizer = tokenizerHP(config);
-    view.only_mode = config.subprocess_tokenizer_only_mode;
-    return view;
-}
-
 inline LearningRateScheduleInputs learningRateScheduleInputs(
     const LanguageModelConfig& hp)
 {
@@ -1004,20 +965,12 @@ inline TokenizerHP tokenizerHP(const GRIM::Config::AiConfigSnapshot& snapshot) {
     view.add_bos = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_add_bos");
     view.add_eos = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_add_eos");
     view.force_rebuild_vocab = snapshotTrainingConfigField<bool>(snapshot, "force_rebuild_vocab");
+    view.only_mode = snapshotTrainingConfigField<bool>(snapshot, "subprocess_tokenizer_only_mode");
     view.save_text_vocab = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_save_text_vocab");
     view.vocab_score_multiplier = snapshotTrainingConfigField<float>(snapshot, "tokenizer_vocab_score_multiplier");
     view.current_curriculum = snapshotTrainingConfigField<std::string>(snapshot, "current_curriculum");
     view.current_model_training = snapshotTrainingConfigField<std::string>(snapshot, "current_model_training");
     view.execution_block_num_steps = snapshotTrainingConfigField<int>(snapshot, "execution_block_num_steps");
-    return view;
-}
-
-inline TokenizerSubprocessHP tokenizerSubprocessHP(
-    const GRIM::Config::AiConfigSnapshot& snapshot)
-{
-    TokenizerSubprocessHP view;
-    view.tokenizer = tokenizerHP(snapshot);
-    view.only_mode = snapshotTrainingConfigField<bool>(snapshot, "subprocess_tokenizer_only_mode");
     return view;
 }
 

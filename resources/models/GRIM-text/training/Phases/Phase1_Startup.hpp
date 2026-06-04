@@ -50,6 +50,7 @@
 #include "../../Shared/Optimizers/OptimizerState_GPU.hpp"
 #include "../../Shared/Optimizers/OptimizerStep.hpp"
 #include "../../Shared/UnigramByte/UniByte.hpp"
+#include "../../Shared/TokenizerArtifacts/GrmtSequence.hpp"
 #include "../../Layers/Encoding/Encoding_GPU.hpp"
 #include "../../Shared/DataLoader/DataLoader.hpp"
 #include "../../Shared/Batching/Batching_GPU.hpp"
@@ -67,26 +68,19 @@
 #include "../training_logger.hpp"
 #include "../training_status_writer.hpp"
 #include "../metrics_collector.hpp"
-#include "../training_data_loader.hpp"
 
 // Extracted startup subsystems
 #include "Startup/Rng.hpp"
 #include "Startup/Logging.hpp"
 #include "Startup/Capacity/MemorySnapshot.hpp"
-#include "Startup/Data/DataInfo.hpp"
 #include "Startup/Model/LayerAssembly.hpp"
 #include "Startup/Model/ParameterRegistry.hpp"
 #include "Startup/Model/ModelAllocationState.hpp"
 #include "Startup/CheckpointLoad.hpp"
 #include "Startup/Epoch/EpochPlan.hpp"
-#include "Startup/Payload/PayloadBuildInputs.hpp"
 #include "Startup/Resume/ResumeState.hpp"
 
 namespace GRIMText::Training {
-
-// Use types from training_data_loader.hpp (global namespace)
-using ::TrainingSequence;
-using ::GRMTDataLoader;
 
 //======================================================//
 //  Data Structures for Training Loop 
@@ -96,10 +90,10 @@ using ::GRMTDataLoader;
  * @brief Sequence data for training
  */
 struct SequenceData {
-    std::vector<TrainingSequence> train_seqs;
-    std::vector<TrainingSequence> val_seqs;
-    std::vector<TrainingSequence*> train_views;
-    std::vector<TrainingSequence*> val_views;
+    std::vector<GRIM::TokenizerArtifacts::GrmtSequence> train_seqs;
+    std::vector<GRIM::TokenizerArtifacts::GrmtSequence> val_seqs;
+    std::vector<GRIM::TokenizerArtifacts::GrmtSequence*> train_views;
+    std::vector<GRIM::TokenizerArtifacts::GrmtSequence*> val_views;
     std::vector<std::uint32_t> train_seq_lengths;
     std::vector<std::uint32_t> val_seq_lengths;
     uint32_t vocab_size = 0;  // Vocab size from training data file
@@ -204,24 +198,16 @@ struct TrainingContext {
     // finalization writes computed/validated leaves back into document;
     // consumers slice immutable grouped views from this snapshot.
     GRIM::Config::AiConfigSnapshot config;
-    // Memory snapshot (evidence only; never authors capacity)
-    MemorySnapshot memory_snapshot;
     // Post-allocation validation evidence (fails loud on mismatch)
     ModelAllocationState model_allocation;
     // Resume metadata (populated after optimizer sidecar restore attempt)
     ResumeState resume_state;
-    // Data summary/reference artifact (SequenceData remains storage owner)
-    DataInfo data_info;
     // Phase1-authored startup/model input seam gathered after tokenizer/data
     // facts and RNG are ready, but before ModelAllocated consumes it. It is
     // not a topology or documentation owner.
     GRIMText::Training::Startup::LayerAssembly layer_assembly;
     // Startup-owned epoch plan facts (LR schedule config, total steps, warmup)
     EpochPlan epoch_plan;
-    // Phase1-authored snapshot of static inputs to GRIM::Batching::buildBatchPayload.
-    // Contract-checks the model ↔ run_capacity cache agreement once at startup so
-    // Phase2's per-batch payload builder never re-reads or re-validates them.
-    PayloadBuildInputs payload_build_inputs;
     // Startup-owned durable PBM buffers. This is the explicit PBM owner;
     // GpuModelState and LanguageModel only borrow PBM state during startup/
     // runtime assembly.
@@ -271,9 +257,8 @@ struct TrainingContext {
      *  index 0 for the authored step count. */
     std::vector<std::vector<int>> epoch_batch_order;
 
-    // Model and tokenizer
+    // Model
     std::unique_ptr<GRIM::LanguageModel> model;
-    std::unique_ptr<GRIM::Tokenizer::UniByte> tokenizer;
     
     // Data
     SequenceData data;
@@ -357,7 +342,7 @@ struct TrainingContext {
         }
         return *generation_state;
     }
-    
+
     // Validation check
     bool is_valid() const {
         return model != nullptr &&
@@ -381,6 +366,7 @@ enum class Phase1Outcome : int {
 struct Phase1Result {
     Phase1Outcome outcome = Phase1Outcome::ready_for_training;
     TrainingContext context;
+    std::unique_ptr<GRIM::Tokenizer::UniByte> inference_tokenizer;
 
     Phase1Result() = default;
     Phase1Result(Phase1Outcome outcome_value, TrainingContext&& context_value)

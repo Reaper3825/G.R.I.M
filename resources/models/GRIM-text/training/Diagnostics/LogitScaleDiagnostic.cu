@@ -233,15 +233,16 @@ void runLogitScaleDiagnostic(
             const int total_tokens = payload.total_tokens;
             const int vocab_size = payload.vocab_size;
             const int d_model = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "d_model");
+            const int config_vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "vocab_size");
             const std::vector<int> lm_valid_positions =
                 buildLmValidPositionsOrThrow(payload, "runLogitScaleDiagnostic");
             const int sample_positions = static_cast<int>(lm_valid_positions.size());
 
-                    if (vocab_size != static_cast<int>(ctx.data_info.actual_vocab_size)) {
+	                if (vocab_size != config_vocab_size) {
                 throw std::runtime_error(
                     "runLogitScaleDiagnostic: payload.vocab_size (" + std::to_string(vocab_size) +
-                        ") != ctx.data_info.actual_vocab_size (" +
-                        std::to_string(ctx.data_info.actual_vocab_size) + ") at " + __FILE__ + ":" +
+	                    ") != config.vocab_size (" +
+	                    std::to_string(config_vocab_size) + ") at " + __FILE__ + ":" +
                     std::to_string(__LINE__));
             }
 

@@ -148,7 +148,7 @@ struct StructuredExecutionRecord {
 // CompiledStructuredExecutionPayload — compiled runtime/supervision payload
 //
 // Derived from StructuredExecutionRecord by the canonical builder.
-// This is what TrainingSequence, GRMT, and BatchPayload carry.
+// This is what GrmtSequence, GRMT, and BatchPayload carry.
 //
 // execution_active is the AUTHORITATIVE activation bit.
 // Non-empty teacher_steps is a supervised-training payload validity

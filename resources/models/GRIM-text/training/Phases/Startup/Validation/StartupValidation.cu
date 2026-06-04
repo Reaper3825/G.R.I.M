@@ -27,20 +27,16 @@ void validateStartupOrThrow(const StartupValidationInputs& inputs) {
 
     require(ctx.logging.logger != nullptr, "logging logger is null");
     require(ctx.logging.status_writer != nullptr, "status writer is null");
-    require(ctx.memory_snapshot.device >= 0, "memory snapshot not captured");
-    require(ctx.memory_snapshot.total_bytes > 0, "memory snapshot total_bytes is zero");
 
     require(fixed_shape.batch_size == GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "batch_size"),
             "trainingFixedShapeHP.batch_size does not match config.batch_size");
     require(fixed_shape.max_seq_len == GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "max_seq_len"),
             "trainingFixedShapeHP.max_seq_len does not match config.max_seq_len");
 
-    require(ctx.data_info.actual_vocab_size >= static_cast<std::uint32_t>(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET),
-            "DataInfo.actual_vocab_size does not include special+byte+atom token ranges");
-    require(ctx.data_info.train_sequence_count == ctx.data.train_seqs.size(),
-            "DataInfo train sequence count does not match SequenceData");
-    require(ctx.data_info.val_sequence_count == ctx.data.val_seqs.size(),
-            "DataInfo val sequence count does not match SequenceData");
+    require(ctx.data.vocab_size >= static_cast<std::uint32_t>(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET),
+            "SequenceData.vocab_size does not include special+byte+atom token ranges");
+    require(static_cast<int>(ctx.data.vocab_size) == GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "vocab_size"),
+            "SequenceData.vocab_size does not match config.vocab_size");
 
     require(ctx.model != nullptr, "model is null");
     require(ctx.model_allocation.model_max_tokens_per_batch == fixed_shape.max_tokens_per_batch,

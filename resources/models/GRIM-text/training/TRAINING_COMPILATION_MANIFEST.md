@@ -62,12 +62,13 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ### 1.3 Training Data Loading
 
-- [x] **Shared/DataLoader/DataLoader.cu + training_data_loader.hpp** ✅ AUDITED
+- [x] **Shared/DataLoader/DataLoader.cu** ✅ AUDITED
   - PrepareTrainingDataFromCache: Reads merged_verified_cache.jsonl → tokenizes → writes single GRMT file
-  - training_data_loader.hpp: GRMTDataLoader reads .grmt binary format for Phase1_Startup
+  - DataLoader.cu private free functions read .grmt rows through GrmtCorpusReader for Phase1_Startup
   - **FIXED**: `catch(...)` now `catch(const std::exception&)` + counts/logs malformed JSONL lines
   - **FIXED**: Hardcoded `character_coverage = 0.9995f` → uses `training.config.tokenizer_character_coverage` from `ai_config.json` via `TokenizerHP`
-  - **FIXED**: Deleted dead `loadBinaryFormat()` from training_data_loader.hpp (~35 lines, never called, Rule 20)
+  - **FIXED**: Deleted dead `loadBinaryFormat()` from the old training data loader header (~35 lines, never called, Rule 20)
+  - **FIXED**: Deleted the dead stateful GRMT wrapper class/header; Phase1 GRMT load is now progress-aware DataLoader.cu free functions over `GrmtCorpusReader`.
   - **FIXED**: Deleted dead `stripBosEosMarkers()` — `stripHtmlTags(<[^>]+>)` already strips `<s>` and `</s>` 
   - **FIXED**: Removed wrong `targets[0] = -1` unconditional masking — BOS→first_token is valid training signal
   - **FIXED (SPAGHETTI)**: Removed 80/10/10 split + chunk_size splitting + validation_data.grmt/test_data.grmt output. DataLoader now writes ALL sequences to single GRMT. Phase1_Startup owns train/val splitting and sliding windows — clear ownership, no data waste.

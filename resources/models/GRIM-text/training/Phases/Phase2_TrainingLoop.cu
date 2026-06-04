@@ -463,7 +463,7 @@ void runOptimizerWindowFromEpoch(
         tel_input.inject_gate_mean       = result.inject_gate_mean;
         tel_input.batch_idx         = batch_idx;
         tel_input.global_step       = ctx.global_step;
-        tel_input.actual_vocab_size = ctx.data_info.actual_vocab_size;
+        tel_input.actual_vocab_size = payload.vocab_size;
         tel_input.d_model           = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "d_model");
 
         GRIM::Telemetry::updateTelemetryObservations(

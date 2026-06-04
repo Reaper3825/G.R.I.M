@@ -7,16 +7,17 @@
 //
 //  Padding ownership: BatchPayload is the SINGLE owner of padded
 //  [batch_size * max_seq_len] layout. This pass produces variable-length
-//  TrainingSequences (length in [1, max_seq_len]) and does NOT pre-pad.
+//  GrmtSequence rows (length in [1, max_seq_len]) and does NOT pre-pad.
 //
 //  Final-target contract: BatchPayload asserts targets.back() == -1
 //  (no autoregressive supervision at the sequence boundary). This pass
 //  always masks the final target before handing the sequence off.
 //======================================================//
 
-#include "../../training_data_loader.hpp"   // TrainingSequence
+#include "../../../Shared/TokenizerArtifacts/GrmtSequence.hpp"  // GRIM::TokenizerArtifacts::GrmtSequence
 #include "../../training_logger.hpp"        // TrainingLogger
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -37,7 +38,7 @@ namespace GRIMText::Training {
 //   add_eos_token  - if true, append EOS when missing
 //   added_bos_out  - out: number of sequences that received a BOS
 //   added_eos_out  - out: number of sequences that received an EOS
-void injectBoundaryTokens(std::vector<TrainingSequence>& sequences,
+void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& sequences,
                           bool add_bos_token,
                           bool add_eos_token,
                           size_t& added_bos_out,
@@ -47,7 +48,7 @@ void injectBoundaryTokens(std::vector<TrainingSequence>& sequences,
 // Defends against stale .grmt caches where the on-disk sequence length
 // no longer matches the active config. applySlidingWindows calls this
 // internally after windowing.
-void filterOverlongSequences(std::vector<TrainingSequence>& sequences,
+void filterOverlongSequences(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& sequences,
                              const std::string& split_name,
                              int max_seq_len,
                              TrainingLogger& logger);
@@ -58,7 +59,7 @@ void filterOverlongSequences(std::vector<TrainingSequence>& sequences,
 // applySlidingWindows calls this internally after windowing so callers
 // never see a sequence that would trigger "valid_tokens=0" downstream.
 // Disabled (no-op) when min_seq_valid_tokens <= 0.
-void filterShortSequences(std::vector<TrainingSequence>& sequences,
+void filterShortSequences(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& sequences,
                           const std::string& split_name,
                           int min_seq_valid_tokens,
                           TrainingLogger& logger);
@@ -83,7 +84,7 @@ void filterShortSequences(std::vector<TrainingSequence>& sequences,
 //   add_bos_token        - if true, prepend BOS (boundary + non-first windows)
 //   add_eos_token        - if true, append EOS at sequence end
 //   logger               - emits per-split summary lines
-void applySlidingWindows(std::vector<TrainingSequence>& sequences,
+void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& sequences,
                          const std::string& split_name,
                          int max_seq_len,
                          int sliding_window_stride,

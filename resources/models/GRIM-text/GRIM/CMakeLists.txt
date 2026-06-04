@@ -71,12 +71,10 @@ set(TRAINING_CU_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Logging.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Capacity/CapacityStem.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Capacity/MemorySnapshot.cu
-    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Data/TrainingData.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Model/ModelAllocationState.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/CheckpointLoad.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Resume/ResumeState.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Epoch/EpochPlan.cu
-    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Payload/PayloadBuildInputs.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Batching/PlannedBatches.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Telemetry/TelemetryInitInputs.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Validation/StartupValidation.cu

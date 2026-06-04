@@ -192,7 +192,7 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
     emitInitFactKeyValue("architecture.head_dim", fmtInt(GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "head_dim")));
     emitInitFactKeyValue("architecture.d_ff", fmtInt(GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "d_ff")));
     emitInitFactKeyValue("architecture.max_seq_len", fmtInt(GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "max_seq_len")));
-    emitInitFactKeyValue("data_info.actual_vocab_size", fmtUInt64(ctx.data_info.actual_vocab_size));
+    emitInitFactKeyValue("startup.actual_vocab_size", fmtUInt64(static_cast<std::uint64_t>(ctx.data.vocab_size)));
     emitInitFactKeyValue("architecture.tie_embeddings", boolText(GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "tie_embeddings")));
     emitInitFactKeyValue("architecture.use_bias", boolText(GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "use_bias")));
     emitInitFactKeyValue("architecture.use_atom_data", boolText(GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "use_atom_data")));

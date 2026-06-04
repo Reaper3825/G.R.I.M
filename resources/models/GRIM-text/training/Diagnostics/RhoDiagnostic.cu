@@ -12,13 +12,14 @@
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/Telemetry/TelemetryLattice_GPU.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
-#include "../../Shared/UnigramByte/UniByte.hpp"
+#include "../../Shared/UnigramByte/TokenLayout.hpp"
 
 #include <vector>
 #include <sstream>
 #include <iomanip>
 #include <cmath>
 #include <algorithm>
+#include <cctype>
 #include <unordered_map>
 #include <utility>
 #include <cuda_runtime.h>
@@ -27,14 +28,29 @@ namespace GRIM::Diagnostics {
 
 namespace {
 
-std::string decodeAggregateTokenForDisplay(const GRIM::Tokenizer::UniByte& tokenizer, int token_id) {
-    const GRIM::Tokenizer::TokenLayout layout = tokenizer.tokenLayout();
+std::string decodeAggregateTokenForDisplay(const GRIM::Tokenizer::TokenLayout& layout, int token_id) {
     if (layout.isAtom(token_id)) {
         return std::string("<") +
                GRIM::Tokenizer::atomTypeName(GRIM::Tokenizer::tokenIdToAtomType(token_id)) +
                ">";
     }
-    return tokenizer.decode(GRIM::Tokenizer::DecodeRequest({token_id}));
+    if (layout.isSpecial(token_id)) {
+        return GRIM::Tokenizer::specialTokenText(token_id);
+    }
+    if (layout.isByte(token_id)) {
+        const unsigned char byte = static_cast<unsigned char>(token_id - GRIM::Tokenizer::BYTE_TOKEN_OFFSET);
+        if (std::isprint(byte) != 0) {
+            return std::string(1, static_cast<char>(byte));
+        }
+        std::ostringstream oss;
+        oss << "\\x" << std::uppercase << std::hex << std::setw(2) << std::setfill('0')
+            << static_cast<int>(byte);
+        return oss.str();
+    }
+    if (layout.isUnigram(token_id)) {
+        return std::string("<UNI:") + std::to_string(GRIM::Tokenizer::indexForTokenId(token_id)) + ">";
+    }
+    return std::string("<INVALID:") + std::to_string(token_id) + ">";
 }
 
 void sanitizeSingleLineTokenDisplay(std::string& decoded) {
@@ -58,12 +74,11 @@ void computeRhoDiagnostic(
     const int d_model = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "d_model");
     const int max_seq_len = payload.max_seq_len;
     const int rect_positions = payload.total_tokens;
+    const auto token_layout = GRIM::Tokenizer::tokenLayoutFromActualVocabOrThrow(
+        static_cast<std::uint32_t>(payload.vocab_size),
+        "computeRhoDiagnostic");
 
     if (num_layers <= 0 || rect_positions < 2) return;
-    if (!ctx.tokenizer) {
-        throw std::runtime_error("RhoDiagnostic requires initialized ctx.tokenizer");
-    }
-    const auto& tokenizer = *ctx.tokenizer;
 
     // ── Geometry invariant guards ──
     // Hidden-state snapshots are laid out using the Phase1-authored payload rectangle:
@@ -112,7 +127,6 @@ void computeRhoDiagnostic(
     // (first_type_only mode). If that injection is what drives ρ up, the
     // atom-only ρ will spike while non-atom ρ stays flat. Computing both on the
     // final collected layer isolates the injection's contribution directly.
-    const GRIM::Tokenizer::TokenLayout token_layout = tokenizer.tokenLayout();
     std::vector<int> atom_positions;
     std::vector<int> nonatom_positions;
     atom_positions.reserve(num_valid);
@@ -566,7 +580,7 @@ void computeRhoDiagnostic(
         for (size_t i = 0; i < top_n; ++i) {
             const int tid = freq_sorted[i].first;
             const int cnt = freq_sorted[i].second;
-            std::string decoded = decodeAggregateTokenForDisplay(tokenizer, tid);
+            std::string decoded = decodeAggregateTokenForDisplay(token_layout, tid);
             sanitizeSingleLineTokenDisplay(decoded);
             rho_eq << " [" << tid << " \"" << decoded << "\" ×" << cnt << "]";
         }

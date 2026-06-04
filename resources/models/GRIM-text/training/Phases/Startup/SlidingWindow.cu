@@ -16,7 +16,7 @@
 
 namespace GRIMText::Training {
 
-void injectBoundaryTokens(std::vector<TrainingSequence>& sequences,
+void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& sequences,
                           bool add_bos_token,
                           bool add_eos_token,
                           size_t& added_bos_out,
@@ -70,7 +70,7 @@ void injectBoundaryTokens(std::vector<TrainingSequence>& sequences,
     }
 }
 
-void applySlidingWindows(std::vector<TrainingSequence>& sequences,
+void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& sequences,
                          const std::string& split_name,
                          int max_seq_len,
                          int sliding_window_stride,
@@ -89,7 +89,7 @@ void applySlidingWindows(std::vector<TrainingSequence>& sequences,
                    std::to_string(added_bos) + " added_eos=" + std::to_string(added_eos));
     }
 
-    std::vector<TrainingSequence> windowed;
+    std::vector<GRIM::TokenizerArtifacts::GrmtSequence> windowed;
     windowed.reserve(sequences.size());
 
     size_t long_seq_count = 0;
@@ -98,7 +98,7 @@ void applySlidingWindows(std::vector<TrainingSequence>& sequences,
 
     // Final-position autoregressive boundary mask. Required by
     // BatchPayload's Rule 20 invariant.
-    auto MaskFinalTarget = [](TrainingSequence& seq) {
+    auto MaskFinalTarget = [](GRIM::TokenizerArtifacts::GrmtSequence& seq) {
         if (!seq.targets.empty()) {
             seq.targets.back() = -1;
         }
@@ -107,7 +107,7 @@ void applySlidingWindows(std::vector<TrainingSequence>& sequences,
     for (const auto& seq : sequences) {
         if (static_cast<int>(seq.token_ids.size()) <= max_seq_len) {
             // Short sequence or exactly max_seq_len — no windowing.
-            TrainingSequence copy = seq;
+            GRIM::TokenizerArtifacts::GrmtSequence copy = seq;
             MaskFinalTarget(copy);
             windowed.push_back(std::move(copy));
             continue;
@@ -139,7 +139,7 @@ void applySlidingWindows(std::vector<TrainingSequence>& sequences,
                 : static_cast<size_t>(max_seq_len - 1);
             size_t end = std::min(seq_len, start + effective_max);
 
-            TrainingSequence window;
+            GRIM::TokenizerArtifacts::GrmtSequence window;
 
             // For non-first windows, prepend BOS token (gated on add_bos_token config)
             if (prepend_bos) {
@@ -268,7 +268,7 @@ void applySlidingWindows(std::vector<TrainingSequence>& sequences,
     filterShortSequences(sequences, split_name, min_seq_valid_tokens, logger);
 }
 
-void filterOverlongSequences(std::vector<TrainingSequence>& sequences,
+void filterOverlongSequences(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& sequences,
                              const std::string& split_name,
                              int max_seq_len,
                              TrainingLogger& logger) {
@@ -277,7 +277,7 @@ void filterOverlongSequences(std::vector<TrainingSequence>& sequences,
     const size_t before = sequences.size();
     sequences.erase(
         std::remove_if(sequences.begin(), sequences.end(),
-            [max_seq_len](const TrainingSequence& seq) {
+            [max_seq_len](const GRIM::TokenizerArtifacts::GrmtSequence& seq) {
                 return static_cast<int>(seq.token_ids.size()) > max_seq_len;
             }),
         sequences.end());
@@ -288,7 +288,7 @@ void filterOverlongSequences(std::vector<TrainingSequence>& sequences,
     }
 }
 
-void filterShortSequences(std::vector<TrainingSequence>& sequences,
+void filterShortSequences(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& sequences,
                           const std::string& split_name,
                           int min_seq_valid_tokens,
                           TrainingLogger& logger) {
@@ -300,7 +300,7 @@ void filterShortSequences(std::vector<TrainingSequence>& sequences,
     const size_t before = sequences.size();
     sequences.erase(
         std::remove_if(sequences.begin(), sequences.end(),
-            [min_seq_valid_tokens](const TrainingSequence& seq) {
+            [min_seq_valid_tokens](const GRIM::TokenizerArtifacts::GrmtSequence& seq) {
                 int valid = 0;
                 for (size_t i = 1; i + 1 < seq.targets.size(); ++i) {
                     if (seq.targets[i] >= 0) valid++;

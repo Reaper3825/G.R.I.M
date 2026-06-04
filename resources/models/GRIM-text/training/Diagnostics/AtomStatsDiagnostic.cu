@@ -21,7 +21,7 @@
 namespace GRIM::Diagnostics {
 
 AtomStats computeAtomStats(const std::vector<std::vector<int>>& batch_inputs,
-                           const GRIM::Tokenizer::UniByte& tokenizer,
+                           const GRIM::Tokenizer::TokenLayout& token_layout,
                            std::vector<int>* per_seq_atoms,
                            std::vector<int>* per_seq_lengths) {
     AtomStats stats{};
@@ -30,11 +30,10 @@ AtomStats computeAtomStats(const std::vector<std::vector<int>>& batch_inputs,
     }
 
     stats.min_atoms = std::numeric_limits<int>::max();
-    const GRIM::Tokenizer::TokenLayout layout = tokenizer.tokenLayout();
     for (const auto& seq : batch_inputs) {
         int atom_count = 0;
         for (int tid : seq) {
-            if (layout.isAtom(tid)) {
+            if (token_layout.isAtom(tid)) {
                 ++atom_count;
             }
         }
@@ -63,9 +62,9 @@ void runAtomStatsDiagnostic(
     int batch_idx)
 {
     if (shouldLogAtomStats(ctx, batch_idx)) {
-        if (!ctx.tokenizer) {
-            throw std::runtime_error("AtomStatsDiagnostic requires initialized ctx.tokenizer");
-        }
+        const auto token_layout = GRIM::Tokenizer::tokenLayoutFromActualVocabOrThrow(
+            static_cast<std::uint32_t>(payload.vocab_size),
+            "runAtomStatsDiagnostic");
         PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] shouldLogAtomStats=true, creating vectors...\n");
         std::vector<int> per_seq_atoms;
         std::vector<int> per_seq_lengths;
@@ -83,7 +82,7 @@ void runAtomStatsDiagnostic(
             offset += payload.max_seq_len; // stride is padded length
         }
         PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] About to call computeAtomStats...\n");
-        const AtomStats stats = computeAtomStats(seq_views, *ctx.tokenizer,
+        const AtomStats stats = computeAtomStats(seq_views, token_layout,
                                                  &per_seq_atoms, &per_seq_lengths);
         PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] computeAtomStats returned\n");
         const double atom_ratio = stats.total_tokens > 0

@@ -198,7 +198,10 @@ std::string chatPromptFromRequest(const json& request) {
     return prompt;
 }
 
-int runInferenceWorker(GRIMText::Training::TrainingContext& ctx, int port) {
+int runInferenceWorker(
+    GRIMText::Training::TrainingContext& ctx,
+    GRIM::Tokenizer::UniByte& tokenizer,
+    int port) {
     httplib::Server svr;
 
     svr.Get("/internal/status", [&](const httplib::Request&, httplib::Response& res) {
@@ -217,6 +220,7 @@ int runInferenceWorker(GRIMText::Training::TrainingContext& ctx, int port) {
             const auto gen_config = generationHPFromRequest(ctx.config, request);
             const auto generated = GRIMText::Training::executePhase2TextInference(
                 ctx,
+                tokenizer,
                 prompt,
                 gen_config);
 
@@ -243,6 +247,7 @@ int runInferenceWorker(GRIMText::Training::TrainingContext& ctx, int port) {
             const auto gen_config = generationHPFromRequest(ctx.config, request);
             const auto generated = GRIMText::Training::executePhase2TextInference(
                 ctx,
+                tokenizer,
                 prompt,
                 gen_config);
 
@@ -378,19 +383,25 @@ int main(int argc, char** argv) {
         }
 
         auto ctx = std::move(phase1.context);
-        
-        if (!ctx.model || !ctx.tokenizer) {
+
+        if (!ctx.model) {
             EmitModuleError(ModuleId::TrainingOrchestrator, 
-                "Phase 1 failed: model or tokenizer not initialized", 0);
+                "Phase 1 failed: model not initialized", 0);
             return 1;
         }
 
         if (phase1.outcome == GRIMText::Training::Phase1Outcome::ready_for_inference) {
+            auto inference_tokenizer = std::move(phase1.inference_tokenizer);
+            if (!inference_tokenizer) {
+                EmitModuleError(ModuleId::TrainingOrchestrator,
+                    "Phase 1 failed: inference tokenizer not initialized", 0);
+                return 1;
+            }
             printPhaseHeader(2, "Inference Loop");
             const int worker_port = requestedInferenceWorkerPort(argc, argv);
             EmitModuleInfo(ModuleId::TrainingOrchestrator,
                 "[Phase 2] Inference context is ready; train_gpu owns request/session generation over Phase1-authored state", 0);
-            return runInferenceWorker(ctx, worker_port);
+            return runInferenceWorker(ctx, *inference_tokenizer, worker_port);
         }
         
         {
@@ -399,7 +410,7 @@ int main(int argc, char** argv) {
             oss << "[Phase 1] ✓ Complete | Model: " << paths_hp.output_model_path
                 << " | Train: " << ctx.data.train_views.size()
                 << " | Val: " << ctx.data.val_views.size()
-                << " | Vocab: " << ctx.data_info.actual_vocab_size;
+                << " | Vocab: " << ctx.data.vocab_size;
             EmitModuleInfo(ModuleId::TrainingOrchestrator, oss.str(), 0);
         }
         

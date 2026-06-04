@@ -7,6 +7,7 @@
 #include "Phase1_Startup.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
+#include "../../Shared/UnigramByte/UniByte.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -28,13 +29,14 @@ struct Phase2TextInferenceResult {
  * @brief Execute Phase 2 inference from a text prompt over Phase1-owned state.
  *
  * This is the only public Phase 2 inference entrypoint. It keeps tokenizer
- * access, BatchPayload construction, payload-level generation, and decoding
- * inside the trainer-owned orchestration process. HTTP/front-end bridge code
- * must send text/options to train_gpu instead of touching TrainingContext,
- * tokenizer artifacts, model config, or Phase1 startup directly.
+ * access explicit at the call boundary instead of storing a runtime tokenizer
+ * on TrainingContext. HTTP/front-end bridge code must send text/options to
+ * train_gpu instead of touching TrainingContext, tokenizer artifacts, model
+ * config, or Phase1 startup directly.
  */
 Phase2TextInferenceResult executePhase2TextInference(
     TrainingContext& ctx,
+     GRIM::Tokenizer::UniByte& tokenizer,
     const std::string& prompt,
     const GRIM::HyperParameters::GenerationHP& generation_hp);
 

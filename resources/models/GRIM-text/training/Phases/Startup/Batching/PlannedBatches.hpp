@@ -26,7 +26,7 @@
 //  - LoadTrainingData (train/val views and sequence lengths populated)
 //  - ModelAllocated (ctx.model is non-null)
 //  - HyperparametersReady (ctx.config has fixed max_seq_len and batch_size)
-//  - PayloadBuildInputsReady (ctx.payload_build_inputs is authored)
+//  - LoadTrainingData authored ctx.data.vocab_size + runtime vocab
 //  - RngReady (ctx.rng.data_seed is set so epoch permutations are deterministic)
 //
 //  Failures are loud (Rule 20): empty schedules, capacity mismatches, and
@@ -42,9 +42,9 @@ struct TrainingContext;
 
 //======================================================//
 // Build a single BatchPayload from a BatchAssignment using the Phase1-authored
-// payload_build_inputs. Routes through GRIM::Batching::buildBatchPayload, the
-// SAME builder that ran in Phase2 before this refactor — just driven from
-// startup so the result is immutable for the run.
+// TrainingContext config + GRMT-authored vocab facts. Routes through
+// GRIM::Batching::buildBatchPayload, the SAME builder that ran in Phase2 before
+// this refactor — just driven from startup so the result is immutable for the run.
 //======================================================//
 GRIM::Batching::BatchPayload buildTrainPayload(
     const TrainingContext& ctx,

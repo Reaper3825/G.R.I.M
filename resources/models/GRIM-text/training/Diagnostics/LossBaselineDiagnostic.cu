@@ -48,11 +48,11 @@ void runLossBaselineAndTokenValidation(
         state.initial_loss = loss;
         state.min_observed_loss = loss;
         // Calculate expected random baseline for reference (ln(vocab_size))
-        const float expected_random_baseline = std::log(static_cast<float>(ctx.data_info.actual_vocab_size));
+        const float expected_random_baseline = std::log(static_cast<float>(payload.vocab_size));
         const bool likely_from_checkpoint = loss < (expected_random_baseline - 1.0f);
         std::string baseline_note = likely_from_checkpoint
             ? "(from checkpoint, expected random=" + formatScalar(expected_random_baseline) + ")"
-            : "(random baseline for vocab=" + std::to_string(ctx.data_info.actual_vocab_size) + ")";
+            : "(random baseline for vocab=" + std::to_string(payload.vocab_size) + ")";
         ctx.logging.logger->log("[LossBaseline] Initial loss=" + formatScalar(state.initial_loss) +
                                 " " + baseline_note);
         return;
@@ -76,7 +76,7 @@ void runLossBaselineAndTokenValidation(
         const int len = payload.seq_lengths[s];
         for (int t = 0; t < len; ++t) {
             if (payload.input_ids[flat_start + t] < 0 ||
-                payload.input_ids[flat_start + t] >= static_cast<int>(ctx.data_info.actual_vocab_size)) {
+                payload.input_ids[flat_start + t] >= payload.vocab_size) {
                 has_invalid_tokens = true;
                 break;
             }
@@ -88,7 +88,7 @@ void runLossBaselineAndTokenValidation(
         for (int t = 0; t < len; ++t) {
             const int tid = payload.target_ids[flat_start + t];
             // targets can be -1 for masked positions, but not other negatives or OOB
-            if (tid < -1 || tid >= static_cast<int>(ctx.data_info.actual_vocab_size)) {
+            if (tid < -1 || tid >= payload.vocab_size) {
                 has_invalid_tokens = true;
                 break;
             }
@@ -99,7 +99,7 @@ void runLossBaselineAndTokenValidation(
     if (has_invalid_tokens) {
         throw std::runtime_error(
             "DATA CORRUPTION: batch " + std::to_string(batch_idx + 1) +
-            " contains token IDs outside vocab range [0, " + std::to_string(ctx.data_info.actual_vocab_size) +
+            " contains token IDs outside vocab range [0, " + std::to_string(payload.vocab_size) +
             ") — fix data pipeline at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
     }
 

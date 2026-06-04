@@ -1,10 +1,10 @@
 //======================================================//
 //  ConceptExecutionSequenceBuilder.hpp
 //  Canonical builder: concept JSON → StructuredExecutionRecord
-//  → compiled payload → TrainingSequence execution fields.
+//  → compiled payload → GrmtSequence execution fields.
 //
 //  This is the ONLY builder that emits execution-active
-//  concept rows into TrainingSequence. The old __SLOTS__
+//  concept rows into GrmtSequence. The old __SLOTS__
 //  tail block, tail-number slot recovery, and the superseded
 //  slot/teacher-step helper paths are deleted.
 //

@@ -14,7 +14,7 @@
 //  in Phase1; this header only exposes the "do the work" entry point.
 //======================================================//
 
-#include "../../training_data_loader.hpp"   // TrainingSequence
+#include "../../../Shared/TokenizerArtifacts/GrmtSequence.hpp"  // GRIM::TokenizerArtifacts::GrmtSequence
 #include "../../training_logger.hpp"        // TrainingLogger
 #include "../../../Shared/TrainingState/TrainingState_GPU.hpp"  // GRIM::TrainingState
 
@@ -42,7 +42,7 @@ namespace GRIMText::Training {
 //   ts          - training state receiving class_weights_tensor
 //   logger      - destination for [CLASS_BALANCED] log lines
 void computeAndUploadClassBalancedWeights(
-    const std::vector<TrainingSequence>& train_seqs,
+    const std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& train_seqs,
     std::uint32_t vocab_size,
     float beta,
     GRIM::TrainingState& ts,

@@ -1,6 +1,11 @@
 #pragma once
 
+#include <memory>
+
 #include "../HyperParameters/HyperparameterGroupings.hpp"
+
+class TrainingLogger;
+namespace GRIM { namespace Tokenizer { class UniByte; } }
 
 namespace GRIM {
 
@@ -16,4 +21,22 @@ namespace GRIM {
 bool PrepareTrainingDataFromCache(const HyperParameters::TokenizerHP& tokenizer_hp);
 
 } // namespace GRIM
+
+namespace GRIMText::Training {
+
+struct TrainingContext;
+struct MemorySnapshot;
+
+void syncRuntimeVocabSizeFromActualOrThrow(
+	GRIM::Config::AiConfigSnapshot& config,
+	std::uint32_t actual_vocab_size,
+	const char* caller);
+
+std::unique_ptr<GRIM::Tokenizer::UniByte> LoadInferenceTokenizer(
+	const GRIM::Config::AiConfigSnapshot& config,
+	::TrainingLogger& logger);
+
+void LoadTrainingData(TrainingContext& ctx, const MemorySnapshot& startup_memory_snapshot);
+
+} // namespace GRIMText::Training
 

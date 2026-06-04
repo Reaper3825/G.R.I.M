@@ -97,7 +97,7 @@ void ResumeStateReady(TrainingContext& ctx) {
     if (loss_config.class_balanced_enabled) {
         computeAndUploadClassBalancedWeights(
             ctx.data.train_seqs,
-            ctx.data_info.actual_vocab_size,
+            ctx.data.vocab_size,
             loss_config.class_balanced_beta,
             ctx.requireTrainingState("ResumeStateReady"),
             *ctx.logging.logger);

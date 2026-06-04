@@ -13,6 +13,7 @@
 #include "../../Shared/Execution/DecodeTimeResolveResult.hpp"
 #include "../../Shared/Sampling/Sampling.hpp"
 #include "../../Shared/UnigramByte/AtomTable.hpp"
+#include "../../Shared/UnigramByte/TokenLayout.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
 #include <algorithm>
@@ -65,8 +66,15 @@ void validateInferenceContext(const TrainingContext& ctx) {
     if (!ctx.generation_state) {
         throw std::runtime_error("Phase2 payload inference: Phase1 context generation_state is NULL");
     }
-    if (!ctx.tokenizer) {
-        throw std::runtime_error("Phase2 payload inference: Phase1 context tokenizer is NULL");
+    const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "vocab_size");
+    const auto layout = GRIM::Tokenizer::tokenLayoutFromActualVocabOrThrow(
+        static_cast<std::uint32_t>(vocab_size),
+        "validateInferenceContext");
+    if (layout.total_vocab() != vocab_size) {
+        throw std::runtime_error(
+            "Phase2 payload inference: actual_vocab_size-derived token layout=" +
+            std::to_string(layout.total_vocab()) +
+            " != config.vocab_size=" + std::to_string(vocab_size));
     }
 }
 
@@ -219,18 +227,9 @@ GRIM::GeneratedSequence generateOneSequence(
     if (vocab_size <= 0) {
         throw std::runtime_error("Phase2 payload inference: invalid vocab_size");
     }
-    const int learned_piece_count = vocab_size - GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET;
-    if (learned_piece_count < 0) {
-        throw std::runtime_error("Phase2 payload inference: vocab_size=" + std::to_string(vocab_size) +
-                                 " is smaller than fixed tokenizer offset=" +
-                                 std::to_string(GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET));
-    }
-
-    GRIM::Tokenizer::TokenLayout token_layout;
-    token_layout.num_special = GRIM::Tokenizer::NUM_SPECIAL_TOKENS;
-    token_layout.num_bytes = GRIM::Tokenizer::BYTE_VOCAB_SIZE;
-    token_layout.num_atoms = GRIM::Tokenizer::ATOM_VOCAB_SIZE;
-    token_layout.num_unigram = learned_piece_count;
+    const auto token_layout = GRIM::Tokenizer::tokenLayoutFromActualVocabOrThrow(
+        static_cast<std::uint32_t>(vocab_size),
+        "generateOneSequence");
     if (cfg.strategy == SamplingStrategy::BEAM_SEARCH) {
         throw std::runtime_error("Phase2 payload inference: BEAM_SEARCH is not supported");
     }
@@ -603,6 +602,7 @@ std::vector<GRIM::GeneratedSequence> generatePayloadSequences(
 
 Phase2TextInferenceResult executePhase2TextInference(
     TrainingContext& ctx,
+    GRIM::Tokenizer::UniByte& tokenizer,
     const std::string& prompt,
     const GRIM::HyperParameters::GenerationHP& generation_hp)
 {
@@ -610,13 +610,18 @@ Phase2TextInferenceResult executePhase2TextInference(
     if (prompt.empty()) {
         throw std::runtime_error("executePhase2TextInference: prompt is empty");
     }
-
-    auto& tokenizer = *ctx.tokenizer;
     const auto& model_config = ctx.config;
     const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(model_config, "vocab_size");
     const int batch_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(model_config, "batch_size");
     const int max_cached_seq_len = GRIM::HyperParameters::snapshotTrainingConfigField<int>(model_config, "max_cached_seq_len");
     const auto execution_hp = GRIM::HyperParameters::executionBlockConstructionHP(model_config);
+
+    if (tokenizer.vocabSize() != vocab_size) {
+        throw std::runtime_error(
+            "executePhase2TextInference: tokenizer.vocabSize()=" +
+            std::to_string(tokenizer.vocabSize()) +
+            " != config.vocab_size=" + std::to_string(vocab_size));
+    }
 
     Phase2TextInferenceResult result;
 

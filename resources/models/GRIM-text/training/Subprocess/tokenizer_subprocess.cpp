@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "../Phases/Phase1_Startup.hpp"
 #include "subprocess_manager.hpp"
 
 namespace fs = std::filesystem;
@@ -33,8 +34,8 @@ std::uint32_t extract_vocab_size(const subprocess_result& env,
 } // namespace
 
 tokenizer_subprocess_result run_tokenizer_subprocess(
-    const tokenizer_subprocess_request& req) {
-    const auto& tokenizer_hp = req.hp.tokenizer;
+    const Training::TrainingContext& ctx) {
+    const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(ctx.config);
     if (tokenizer_hp.vocab_path.empty() || tokenizer_hp.data_path.empty()) {
         throw std::runtime_error(
             "tokenizer_subprocess: TokenizerHP missing vocab_path and/or data_path");
@@ -42,17 +43,11 @@ tokenizer_subprocess_result run_tokenizer_subprocess(
 
     subprocess_request sreq;
     sreq.name = "train_tokenizer";
-    sreq.executable_path = req.executable_path_override.empty()
-        ? resolve_sibling_executable("train_tokenizer")
-        : req.executable_path_override;
+    sreq.executable_path = resolve_sibling_executable("train_tokenizer");
 
-    if (req.status_file_path_override.empty()) {
-        fs::path vocab_dir = fs::absolute(tokenizer_hp.vocab_path).parent_path();
-        sreq.status_file_path =
-            (vocab_dir / ".subprocess" / "tokenizer_status.json").string();
-    } else {
-        sreq.status_file_path = req.status_file_path_override;
-    }
+    fs::path vocab_dir = fs::absolute(tokenizer_hp.vocab_path).parent_path();
+    sreq.status_file_path =
+        (vocab_dir / ".subprocess" / "tokenizer_status.json").string();
 
     sreq.arguments.push_back("--status-file");
     sreq.arguments.push_back(sreq.status_file_path);
@@ -78,7 +73,7 @@ tokenizer_subprocess_result run_tokenizer_subprocess(
     result.training_data_path = tokenizer_hp.data_path;
 
     // Rewrite ok_proceed -> ok_one_off when the config requested a one-off.
-    if (req.hp.only_mode && result.outcome == subprocess_outcome::ok_proceed) {
+    if (tokenizer_hp.only_mode && result.outcome == subprocess_outcome::ok_proceed) {
         result.outcome = subprocess_outcome::ok_one_off;
     }
 

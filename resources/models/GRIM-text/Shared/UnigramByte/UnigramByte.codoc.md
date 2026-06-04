@@ -108,7 +108,7 @@ The live layout comes from `Byte.hpp` and `TokenLayout.hpp`.
 - `Shared/TokenizerArtifacts/GrmtCorpusIO.*` owns GRMT row save/load. Runtime loaders and diagnostics must use its RAII reader/writer instead of open-coded seeks through the row layout.
 - `Shared/TokenizerArtifacts/VocabArtifactIO.*` is the bundle-internal KTMG read/write helper; do not call it as an independent tokenizer artifact path.
 - Text vocab files are human-readable exports only. Binary KTMG is the only vocab load path.
-- Phase 1 startup reads final training vocab size from the validated `.grmt` header and records it as `ctx.data_info.actual_vocab_size`.
+- Phase 1 startup reads final training vocab size from the validated `.grmt` header and stores it on `ctx.data.vocab_size` before syncing `ctx.config.vocab_size`.
 
 ### Masking rule
 
@@ -273,7 +273,8 @@ Use this table as the “who owns what?” map.
 | `UnigramTrainer.hpp/.cu` | unigram training implementation | runtime encode path |
 | `UniByte.hpp/.cu` | composition layer, public API, metadata assembly | low-level detector implementations, training internals, `BOS`/`EOS`/`PAD` layout policy |
 | `TokenizerArtifacts/TokenizerArtifactBundle.hpp/.cu` | `TokenizerHP`-driven vocab+GRMT save/load validation functions | tokenization, vocab training, GRMT row byte layout, tokenizer path payload ownership |
-| `TokenizerArtifacts/GrmtCorpusIO.hpp/.cu` | RAII GRMT row reader/writer, temp-file cleanup, row validation | vocab training/loading, model allocation, train/val splitting |
+| `TokenizerArtifacts/GrmtSequence.hpp` | canonical GRMT row payload type (`GrmtSequence`) with atom/execution side channels | file I/O orchestration, tokenizer cache validation |
+| `TokenizerArtifacts/GrmtCorpusIO.hpp/.cu` | RAII GRMT row reader/writer, temp-file cleanup, row serialization/deserialization | vocab training/loading, model allocation, train/val splitting |
 | `TokenizerArtifacts/VocabArtifactIO.hpp/.cu` | KTMG vocab read/write used by the bundle | public tokenizer load/save API, GRMT row byte layout |
 
 ---

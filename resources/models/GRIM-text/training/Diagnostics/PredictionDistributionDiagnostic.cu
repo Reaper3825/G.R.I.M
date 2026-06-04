@@ -94,7 +94,7 @@ void runPredictionDistributionAndLogitTrace(
                 throw std::runtime_error("runPredictionDistributionAndLogitTrace: live logits tensor is NULL inside active autograd scope");
             }
             const int total_tokens = payload.total_tokens;
-            const int vocab_size = static_cast<int>(ctx.data_info.actual_vocab_size);
+            const int vocab_size = payload.vocab_size;
             const auto& logits_shape = logits_tensor.shape.require("runPredictionDistributionAndLogitTrace logits_tensor");
             if (!logits_shape.is_2d_layout()) {
                 throw std::runtime_error("runPredictionDistributionAndLogitTrace: logits tensor must be a 2D logits buffer");

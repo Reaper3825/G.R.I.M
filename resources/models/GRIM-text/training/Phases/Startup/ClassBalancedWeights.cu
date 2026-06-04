@@ -26,7 +26,7 @@
 namespace GRIMText::Training {
 
 void computeAndUploadClassBalancedWeights(
-    const std::vector<TrainingSequence>& train_seqs,
+    const std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& train_seqs,
     std::uint32_t vocab_size,
     float beta,
     GRIM::TrainingState& ts,

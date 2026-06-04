@@ -37,9 +37,9 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ### 1.3 Training Data Loading
 
-- [] **Shared/DataLoader/DataLoader.cu + training_data_loader.hpp** 
+- [] **Shared/DataLoader/DataLoader.cu** 
   - PrepareTrainingDataFromCache: Reads merged_verified_cache.jsonl → tokenizes → writes single GRMT file
-  - training_data_loader.hpp: GRMTDataLoader reads .grmt binary format for Phase1_Startup
+  - DataLoader.cu private free functions read .grmt rows through GrmtCorpusReader for Phase1_Startup
 
 ---
 

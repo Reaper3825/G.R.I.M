@@ -55,7 +55,7 @@ enum class RawTextFeature : uint8_t {
     WHITESPACE,
     UPPERCASE_RUN
 };
-
+ 
 struct RawTextDetectorOptions {
     bool detect_numbers;
     bool detect_whitespace;

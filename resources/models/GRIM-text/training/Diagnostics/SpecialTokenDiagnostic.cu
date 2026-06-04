@@ -31,7 +31,6 @@ void runSpecialTokenDiagnostic(
     int batch_idx)
 {
     namespace Internal = ::GRIMText::Training::Internal;
-    (void)payload;  // payload not consumed in this block — kept in signature for symmetry
     if (shouldSyncDiagnostics(ctx, batch_idx) && ctx.logging.tape && ctx.logging.tape->accepts(GRIM::Logging::LogLevel::Debug)) {
         auto& embedding_parameters = parameter_registry.requireEmbeddingParameters("runSpecialTokenDiagnostic");
         auto& lm_head_parameters = parameter_registry.requireLmHeadParameters("runSpecialTokenDiagnostic");
@@ -68,7 +67,7 @@ void runSpecialTokenDiagnostic(
                 int content_norm_count = 0;
                 constexpr int CONTENT_SAMPLE_IDS[] = {512, 1000, 5000, 10000, 25000, 40000};
                 for (int cid : CONTENT_SAMPLE_IDS) {
-                    if (cid >= static_cast<int>(ctx.data_info.actual_vocab_size)) continue;
+                    if (cid >= payload.vocab_size) continue;
                     const size_t off = static_cast<size_t>(cid) * d_model;
                     cudaMemcpy(row_buf.data(), weights_ptr + off,
                                d_model * sizeof(float), cudaMemcpyDeviceToHost);

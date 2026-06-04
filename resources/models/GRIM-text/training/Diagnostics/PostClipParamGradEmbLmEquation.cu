@@ -360,7 +360,7 @@ void runPostClipParamGradEmbLmEquation(
         lm_head_weights,
         payload,
         GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "d_model"),
-        static_cast<int>(ctx.data_info.actual_vocab_size),
+        payload.vocab_size,
         GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "tie_embeddings"),
         prev_emb_rms,
         emb_rms_pre,

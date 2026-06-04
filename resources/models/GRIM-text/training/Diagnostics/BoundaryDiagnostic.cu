@@ -53,7 +53,7 @@ void runBoundaryDiagnostic(
             diag << "  max_seq_len=" << config_max_seq_len << "\n";
             diag << "  num_heads=" << config_num_heads << "\n";
             diag << "  num_layers=" << config_num_layers << "\n";
-            diag << "  vocab_size=" << ctx.data_info.actual_vocab_size << "\n";
+            diag << "  vocab_size=" << payload.vocab_size << "\n";
             
             // Position embedding checks (this IS a valid concern)
             diag << "[BOUNDARY_DIAGNOSTIC] POSITION EMBEDDING CHECKS:\n";
@@ -142,8 +142,8 @@ void runBoundaryDiagnostic(
                 }
             }
             diag << "  Token ID range: [" << min_token_id << ", " << max_token_id << "]\n";
-            diag << "  Vocab size: " << ctx.data_info.actual_vocab_size << "\n";
-            if (max_token_id >= static_cast<int>(ctx.data_info.actual_vocab_size)) {
+            diag << "  Vocab size: " << payload.vocab_size << "\n";
+            if (max_token_id >= payload.vocab_size) {
                 diag << "  *** ERROR: Token ID exceeds vocab size! ***\n";
             }
     

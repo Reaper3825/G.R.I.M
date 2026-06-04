@@ -500,8 +500,6 @@ add_executable(train_gpu
     ../Phases/Startup/Capacity/MemorySnapshot.cu
     ../Phases/Startup/Capacity/MemorySnapshot.hpp
     ../Phases/Startup/Data/DataInfo.hpp
-    ../Phases/Startup/Data/TrainingData.cu
-    ../Phases/Startup/Data/TrainingData.hpp
     ../Phases/Startup/Model/LayerAssembly.cu
     ../Phases/Startup/Model/LayerAssembly.hpp
     ../Phases/Startup/Model/ModelAllocationState.cu
@@ -512,8 +510,6 @@ add_executable(train_gpu
     ../Phases/Startup/Resume/ResumeState.hpp
     ../Phases/Startup/Epoch/EpochPlan.cu
     ../Phases/Startup/Epoch/EpochPlan.hpp
-    ../Phases/Startup/Payload/PayloadBuildInputs.cu
-    ../Phases/Startup/Payload/PayloadBuildInputs.hpp
     ../Phases/Startup/Batching/PlannedBatches.cu
     ../Phases/Startup/Batching/PlannedBatches.hpp
     ../Phases/Startup/Telemetry/TelemetryInitInputs.cu
@@ -587,7 +583,6 @@ add_executable(train_gpu
     ../OptimizerCheckpoint.hpp
     ../training_status_writer.hpp
     ../training_logger.hpp
-    ../training_data_loader.hpp
     ../metrics_collector.hpp
     ../TrainingEvents.hpp
     ../../Shared/DataLoader/DataLoader.cu
@@ -829,6 +824,9 @@ target_include_directories(grmt_vocab_metrics_test PRIVATE
 add_executable(train_tokenizer
     ../train_tokenizer.cu
     ../Subprocess/subprocess_status_io.cpp
+    ../Phases/Startup/SlidingWindow.cu
+    ../Phases/ConfigDump.cu
+    ../Phases/DataStatsDump.cu
     ../../Shared/DataLoader/DataLoader.cu
     ../../Shared/DataLoader/ConceptExecutionSequenceBuilder.cu
 )
@@ -850,6 +848,7 @@ target_link_libraries(train_tokenizer PRIVATE
     nlohmann_json::nlohmann_json
     CUDA::cudart
     grim_unigrambyte_tokenizer
+    grim_log_recorder
     Threads::Threads
 )
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")

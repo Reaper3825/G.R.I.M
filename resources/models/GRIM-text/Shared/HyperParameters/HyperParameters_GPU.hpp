@@ -978,6 +978,12 @@ inline void refreshMutableTrainingDerivedValues(LanguageModelConfig& params,
 namespace GRIM {
 namespace HyperParameters {
 
+inline LanguageModelConfig finalizeLanguageModelConfig(
+    const nlohmann::json& document,
+    int argc,
+    char** argv,
+    ModelExecutionMode execution_mode);
+
 inline int computeMaxTokensPerBatch(int batch_size, int max_seq_len, const char* caller) {
     if (batch_size <= 0) {
         throw std::runtime_error(std::string(caller) + ": batch_size must be > 0, got " +
@@ -2151,13 +2157,20 @@ inline ModelExecutionMode snapshotExecutionMode(
     return parseModelExecutionMode(snapshotTrainingConfigField<std::string>(snapshot, "execution_mode"));
 }
 
-inline void writeFinalizedLanguageModelConfigToSnapshot(
-    GRIM::Config::AiConfigSnapshot& snapshot,
-    const LanguageModelConfig& config)
+inline nlohmann::json buildFinalizedTrainingConfigDocument(
+    const nlohmann::json& document,
+    int argc,
+    char** argv,
+    ModelExecutionMode execution_mode)
 {
-    auto& cfg = mutableSnapshotTrainingConfig(snapshot);
+    const LanguageModelConfig config = finalizeLanguageModelConfig(
+        document,
+        argc,
+        argv,
+        execution_mode);
+    nlohmann::json finalized_config = nlohmann::json::object();
 
-#define GRIM_WRITE_FINAL_CONFIG_FIELD(member) cfg[#member] = config.member
+#define GRIM_WRITE_FINAL_CONFIG_FIELD(member) finalized_config[#member] = config.member
     GRIM_WRITE_FINAL_CONFIG_FIELD(d_model);
     GRIM_WRITE_FINAL_CONFIG_FIELD(num_layers);
     GRIM_WRITE_FINAL_CONFIG_FIELD(num_heads);
@@ -2470,13 +2483,24 @@ inline void writeFinalizedLanguageModelConfigToSnapshot(
     GRIM_WRITE_FINAL_CONFIG_FIELD(subprocess_tokenizer_only_mode);
 #undef GRIM_WRITE_FINAL_CONFIG_FIELD
 
-    cfg["execution_mode"] = modelExecutionModeToJsonString(config.execution_mode);
-    cfg["grim_text_training_data"] = config.data_path;
-    cfg["grim_text_vocab"] = config.vocab_path;
-    cfg["grim_text_model"] = config.output_model_path;
-    cfg["grim_text_checkpoints"] = config.checkpoint_dir;
-    cfg["grim_text_logs"] = config.log_dir;
-    cfg["grim_text_training_status"] = config.status_path;
+    finalized_config["execution_mode"] = modelExecutionModeToJsonString(config.execution_mode);
+    finalized_config["grim_text_training_data"] = config.data_path;
+    finalized_config["grim_text_vocab"] = config.vocab_path;
+    finalized_config["grim_text_model"] = config.output_model_path;
+    finalized_config["grim_text_checkpoints"] = config.checkpoint_dir;
+    finalized_config["grim_text_logs"] = config.log_dir;
+    finalized_config["grim_text_training_status"] = config.status_path;
+    return finalized_config;
+}
+
+inline void writeFinalizedTrainingConfigDocumentToSnapshot(
+    GRIM::Config::AiConfigSnapshot& snapshot,
+    const nlohmann::json& finalized_config)
+{
+    auto& cfg = mutableSnapshotTrainingConfig(snapshot);
+    for (const auto& entry : finalized_config.items()) {
+        cfg[entry.key()] = entry.value();
+    }
 }
 
 inline LanguageModelConfig finalizeLanguageModelConfig(
@@ -2605,12 +2629,13 @@ inline GRIM::Config::AiConfigSnapshot finalizeAiConfigSnapshot(
     char** argv,
     ModelExecutionMode execution_mode)
 {
-    const LanguageModelConfig finalized = finalizeLanguageModelConfig(
-        snapshot.document,
-        argc,
-        argv,
-        execution_mode);
-    writeFinalizedLanguageModelConfigToSnapshot(snapshot, finalized);
+    writeFinalizedTrainingConfigDocumentToSnapshot(
+        snapshot,
+        buildFinalizedTrainingConfigDocument(
+            snapshot.document,
+            argc,
+            argv,
+            execution_mode));
     return snapshot;
 }
 

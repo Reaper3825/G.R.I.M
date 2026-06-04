@@ -20,6 +20,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -117,6 +118,40 @@ struct TokenLayout {
 
     int firstContentTokenId() const { return num_special; }
 };
+
+inline TokenLayout tokenLayoutFromActualVocabOrThrow(
+    std::uint32_t actual_vocab_size,
+    const char* caller)
+{
+    if (actual_vocab_size < static_cast<std::uint32_t>(UNIGRAM_VOCAB_OFFSET)) {
+        throw std::runtime_error(std::string(caller) +
+            ": actual_vocab_size must include special+byte+atom ranges (>= " +
+            std::to_string(UNIGRAM_VOCAB_OFFSET) + "), got " +
+            std::to_string(actual_vocab_size));
+    }
+    if (actual_vocab_size > static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
+        throw std::runtime_error(std::string(caller) +
+            ": actual_vocab_size=" + std::to_string(actual_vocab_size) +
+            " exceeds int capacity for TokenLayout");
+    }
+
+    TokenLayout layout;
+    layout.num_special = NUM_SPECIAL_TOKENS;
+    layout.num_bytes = BYTE_VOCAB_SIZE;
+    layout.num_atoms = ATOM_VOCAB_SIZE;
+    layout.num_unigram = static_cast<int>(actual_vocab_size) - UNIGRAM_VOCAB_OFFSET;
+    if (layout.num_unigram < 0) {
+        throw std::runtime_error(std::string(caller) +
+            ": derived num_unigram is negative for actual_vocab_size=" +
+            std::to_string(actual_vocab_size));
+    }
+    if (layout.total_vocab() != static_cast<int>(actual_vocab_size)) {
+        throw std::runtime_error(std::string(caller) +
+            ": TokenLayout total_vocab=" + std::to_string(layout.total_vocab()) +
+            " != actual_vocab_size=" + std::to_string(actual_vocab_size));
+    }
+    return layout;
+}
 
 //======================================================//
 //  Token ID ↔ Index Conversion

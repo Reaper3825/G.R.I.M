@@ -208,7 +208,7 @@ private:
     std::filesystem::path       massDatasetPath_;
     std::string                 activeModelId_;
     std::string                 activeModelName_;
-    std::vector<SequenceHandle> sequences_;
+    std::vector<SequenceHandle> sequences;
     std::vector<std::string>    assignedOrder_;
     std::set<std::string>       assignedSet_;
     std::vector<PhaseMarker>    phaseMarkers_;

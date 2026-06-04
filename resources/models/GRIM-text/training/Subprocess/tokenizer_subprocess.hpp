@@ -16,7 +16,7 @@
 //     tokenizer_subprocess_result.
 //   - vocab_path / training_data_path are NOT carried over IPC — they are
 //     resolved from TokenizerHP so there is exactly one tokenizer source of truth.
-//   - If the grouped snapshot says `only_mode=true` AND the tokenizer reports
+//   - If the tokenizer grouping says `only_mode=true` AND the tokenizer reports
 //     success, the returned outcome is rewritten to ok_one_off so the caller
 //     stops cleanly instead of proceeding into model training.
 //
@@ -29,26 +29,15 @@
 #include <cstdint>
 #include <string>
 
-#include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "subprocess_status.hpp"
 
 namespace GRIMText {
+
+namespace Training {
+struct TrainingContext;
+}
+
 namespace Subprocess {
-
-struct tokenizer_subprocess_request {
-    // Grouped startup snapshot authored once by Phase 1.
-    GRIM::HyperParameters::TokenizerSubprocessHP hp;
-
-    // Optional override of the train_tokenizer executable location. When
-    // empty, the manager resolves it as a sibling of the current process.
-    std::string executable_path_override;
-
-    // Optional override of the status file path. When empty, the manager
-    // writes it next to the tokenizer vocab artifact under
-    //   <vocab_dir>/.subprocess/tokenizer_status.json
-    std::string status_file_path_override;
-
-};
 
 // Tokenizer-specific result. Mirrors the foundational subprocess_result
 // envelope but adds the tokenizer's domain fields. These domain fields do
@@ -77,7 +66,7 @@ struct tokenizer_subprocess_result {
 // A clean run that reported failure via the status file returns a
 // tokenizer_subprocess_result with outcome=error.
 tokenizer_subprocess_result run_tokenizer_subprocess(
-    const tokenizer_subprocess_request& req);
+    const Training::TrainingContext& ctx);
 
 } // namespace Subprocess
 } // namespace GRIMText

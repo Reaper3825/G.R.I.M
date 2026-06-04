@@ -48,12 +48,12 @@ void runLossStatsDiagnostic(
     // ========================================================================
     {
         const int valid_tokens_eq = payload.lm_valid_tokens;
-        const float expected_random_loss = std::log(static_cast<float>(ctx.data_info.actual_vocab_size));
+        const float expected_random_loss = std::log(static_cast<float>(payload.vocab_size));
 
         std::ostringstream eq;
         eq << "[BATCH_LOSS] loss = -sum(log(p_target)) / valid_tokens\n";
-        eq << "  valid_tokens=" << valid_tokens_eq << " vocab_size=" << ctx.data_info.actual_vocab_size << "\n";
-        eq << "  EXPECTED loss (random) = ln(" << ctx.data_info.actual_vocab_size << ") = " << expected_random_loss << "\n";
+        eq << "  valid_tokens=" << valid_tokens_eq << " vocab_size=" << payload.vocab_size << "\n";
+        eq << "  EXPECTED loss (random) = ln(" << payload.vocab_size << ") = " << expected_random_loss << "\n";
         eq << "  ACTUAL loss = " << result.loss << "\n";
         EQ_LOG(ctx.logging.tape.get(), GRIM::Logging::LogGroup::Loss, GRIM::Logging::LogPhase::LOSS_COMPUTATION, -1, "BATCH_LOSS", eq.str().c_str());
     }

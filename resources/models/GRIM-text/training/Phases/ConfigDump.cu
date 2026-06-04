@@ -375,17 +375,6 @@ std::vector<DumpSection> collectSnapshotSections(
     return sections;
 }
 
-GRIM::Config::AiConfigSnapshot makeDumpSnapshot(
-    const GRIM::HyperParameters::LanguageModelConfig& hp)
-{
-    GRIM::Config::AiConfigSnapshot snapshot;
-    snapshot.document = nlohmann::json{
-        {"training", { {"config", nlohmann::json::object()} }}
-    };
-    GRIM::HyperParameters::writeFinalizedLanguageModelConfigToSnapshot(snapshot, hp);
-    return snapshot;
-}
-
 void emitSnapshotDump(
     const GRIM::Config::AiConfigSnapshot& snapshot,
     const GRIM::HyperParameters::DerivedScheduleInfo* derived,
@@ -497,17 +486,6 @@ void emitSnapshotDump(
 }
 
 } // namespace
-
-void dumpAllHyperparameters(
-    const GRIM::HyperParameters::LanguageModelConfig& hp,
-    const GRIM::HyperParameters::DerivedScheduleInfo* derived,
-    const DataStatsSnapshot* data_stats,
-    const ConfigDumpOptions& opts,
-    const ConfigDumpLogFn& log_fn)
-{
-    if (!log_fn) return;
-    emitSnapshotDump(makeDumpSnapshot(hp), derived, data_stats, opts, log_fn);
-}
 
 void dumpAllHyperparameters(
     const GRIM::Config::AiConfigSnapshot& snapshot,

@@ -178,19 +178,24 @@ void ModelAllocated(TrainingContext& ctx) {
     using GRIM::Logging::ModuleId;
 
     const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "vocab_size");
-    if (vocab_size != static_cast<int>(ctx.data_info.actual_vocab_size)) {
+    const auto& layer_assembly = ctx.layer_assembly.requireReady("ModelAllocated");
+    const std::uint32_t actual_vocab_size = layer_assembly.inputs.actual_vocab_size;
+    if (actual_vocab_size == 0) {
+        throw std::runtime_error(
+            "FATAL: layer assembly actual_vocab_size is zero before model initialization");
+    }
+    if (vocab_size != static_cast<int>(actual_vocab_size)) {
         throw std::runtime_error(
             "FATAL: runtime model vocab_size drifted from startup artifact fact: actual_vocab_size=" +
-            std::to_string(ctx.data_info.actual_vocab_size) +
+            std::to_string(actual_vocab_size) +
             " config.vocab_size=" + std::to_string(vocab_size));
     }
 
-    const auto& layer_assembly = ctx.layer_assembly.requireReady("ModelAllocated");
-    if (layer_assembly.inputs.actual_vocab_size != ctx.data_info.actual_vocab_size) {
+    if (ctx.data.vocab_size != 0 && ctx.data.vocab_size != actual_vocab_size) {
         throw std::runtime_error(
-            "FATAL: layer assembly actual_vocab_size drifted from DataInfo.actual_vocab_size (assembly=" +
-            std::to_string(layer_assembly.inputs.actual_vocab_size) +
-            " data_info=" + std::to_string(ctx.data_info.actual_vocab_size) + ")");
+            "FATAL: layer assembly actual_vocab_size drifted from SequenceData.vocab_size (assembly=" +
+            std::to_string(actual_vocab_size) +
+            " sequence_data=" + std::to_string(ctx.data.vocab_size) + ")");
     }
 
     try {

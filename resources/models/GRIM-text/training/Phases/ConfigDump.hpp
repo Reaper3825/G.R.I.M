@@ -1,8 +1,8 @@
 //======================================================//
 //  ConfigDump.hpp
 //  Single-source hyperparameters dump used by Phase1
-//  startup. Emits one log line per LanguageModelConfig root
-//  field via a single internal loop, replacing scattered
+//  startup. Emits one log line per finalized training.config
+//  snapshot field via a single internal loop, replacing scattered
 //  EmitModuleInfo(...) / logger->log(...) calls.
 //======================================================//
 
@@ -42,23 +42,16 @@ struct ConfigDumpOptions {
 //======================================================//
 // Primary API.
 //
-// Iterates every field in LanguageModelConfig (and the
-// DerivedScheduleInfo, when supplied) and emits one log line per field
-// via the supplied callback. MUST be called AFTER startup has finalized the
-// root config and computed DerivedScheduleInfo so the dump reflects the
-// actual authored root plus schedule evidence.
+// Iterates every field in the finalized training.config snapshot (and the
+// DerivedScheduleInfo, when supplied) and emits one log line per field via
+// the supplied callback. MUST be called AFTER startup has finalized/runtime-
+// synced the snapshot and computed DerivedScheduleInfo so the dump reflects
+// the actual authored root plus schedule evidence.
 //
 // If `data_stats` is non-null, dumpDataStats(...) is invoked inside
 // the same banner block so vocab, sequence-count, and startup memory
 // info is shown alongside the hyperparameters.
 //======================================================//
-void dumpAllHyperparameters(
-    const GRIM::HyperParameters::LanguageModelConfig& hp,
-    const GRIM::HyperParameters::DerivedScheduleInfo* derived,
-    const DataStatsSnapshot* data_stats,
-    const ConfigDumpOptions& opts,
-    const ConfigDumpLogFn& log_fn);
-
 void dumpAllHyperparameters(
     const GRIM::Config::AiConfigSnapshot& snapshot,
     const GRIM::HyperParameters::DerivedScheduleInfo* derived,
@@ -67,15 +60,6 @@ void dumpAllHyperparameters(
     const ConfigDumpLogFn& log_fn);
 
 // Convenience overload using ConfigDumpOptions{} defaults.
-inline void dumpAllHyperparameters(
-    const GRIM::HyperParameters::LanguageModelConfig& hp,
-    const GRIM::HyperParameters::DerivedScheduleInfo* derived,
-    const DataStatsSnapshot* data_stats,
-    const ConfigDumpLogFn& log_fn)
-{
-    dumpAllHyperparameters(hp, derived, data_stats, ConfigDumpOptions{}, log_fn);
-}
-
 inline void dumpAllHyperparameters(
     const GRIM::Config::AiConfigSnapshot& snapshot,
     const GRIM::HyperParameters::DerivedScheduleInfo* derived,

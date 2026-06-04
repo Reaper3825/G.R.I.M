@@ -11,8 +11,8 @@
 #include <vector>
 
 #include "../../GRIM/grim_language_model_cuda.hpp"
+#include "../../Shared/UnigramByte/TokenLayout.hpp"
 
-namespace GRIM { namespace Tokenizer { class UniByte; } }
 namespace GRIMText { namespace Training { struct TrainingContext; } }
 
 namespace GRIM::Diagnostics {
@@ -26,7 +26,7 @@ struct AtomStats {
 };
 
 AtomStats computeAtomStats(const std::vector<std::vector<int>>& batch_inputs,
-                           const GRIM::Tokenizer::UniByte& tokenizer,
+                           const GRIM::Tokenizer::TokenLayout& token_layout,
                            std::vector<int>* per_seq_atoms,
                            std::vector<int>* per_seq_lengths);
 
