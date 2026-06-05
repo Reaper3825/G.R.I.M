@@ -971,6 +971,7 @@ inline TokenizerHP tokenizerHP(const GRIM::Config::AiConfigSnapshot& snapshot) {
     view.current_curriculum = snapshotTrainingConfigField<std::string>(snapshot, "current_curriculum");
     view.current_model_training = snapshotTrainingConfigField<std::string>(snapshot, "current_model_training");
     view.execution_block_num_steps = snapshotTrainingConfigField<int>(snapshot, "execution_block_num_steps");
+    view.max_seq_len = snapshotTrainingConfigField<int>(snapshot, "max_seq_len");
     return view;
 }
 
