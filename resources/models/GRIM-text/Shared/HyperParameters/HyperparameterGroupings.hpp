@@ -54,7 +54,7 @@ struct CheckpointLoadHP {
 struct TokenizerHP {
     std::string data_path;
     std::string vocab_path;
-
+    int max_seq_len = 0;
     int target_vocab_size = 0;
     float character_coverage = 0.0f;
     int min_cleaned_text_length = 0;

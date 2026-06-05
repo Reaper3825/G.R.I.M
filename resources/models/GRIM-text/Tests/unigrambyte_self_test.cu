@@ -7,6 +7,7 @@
 
 #include "../Shared/UnigramByte/Byte.hpp"
 #include "../Shared/UnigramByte/Unigram.hpp"
+#include "../Shared/UnigramByte/VocabWriteOp.hpp"
 #include "../Shared/UnigramByte/Training/UnigramForwardBackward.hpp"
 #include "../Shared/UnigramByte/UnigramViterbi.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"
@@ -27,6 +28,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <utility>
 
 namespace GRIM {
 namespace Tokenizer {
@@ -66,6 +68,9 @@ namespace Tokenizer {
 void requireUnigramFinalCleanupLeavesLearnedPiece(size_t piece_count,
                                                   size_t dead_count,
                                                   const char* caller);
+void requireUnigramAcceptedCandidateSetIsScorable(size_t accepted_count,
+                                                  double total_accepted_count,
+                                                  const char* caller);
 void requireUnigramLearnedPosteriorMassNotByteFallbackDominated(
     double expected_learned_piece_tokens,
     double expected_fixed_penalty_byte_fallback_tokens,
@@ -98,21 +103,37 @@ static ::GRIM::HyperParameters::TokenizerHP makeSelfTestTokenizerHP() {
     return hp;
 }
 
+static void appendSelfTestUnigramPiece(UnigramLM& unigram,
+                                       std::string text,
+                                       float score,
+                                       bool is_user_defined) {
+    UnigramPiece piece;
+    piece.text = std::move(text);
+    piece.score = score;
+    piece.is_user_defined = is_user_defined;
+    applyUnigramVocabWriteOp(UnigramVocabWriteRequest{
+        UnigramVocabWriteTarget{unigram.pieces_, unigram.piece_to_id_},
+        std::move(piece),
+        UnigramLM::tokenIdForIndex(unigram.pieceCount()),
+        UnigramVocabWriteMode::AppendOnly,
+        "unigrambyte_self_test fixture append"});
+}
+
 // Helper: add minimal ▁-prefixed vocab to a UniByte tokenizer so UnigramViterbiSession has a valid trie.
 // Without this, Viterbi segmentation crashes (Rule 20: trie_ must not be empty).
 static void addMinimalVocab(UniByte& tok) {
-    tok.unigramLM().writePiece("\xe2\x96\x81" "the",     -1.0f, false);
-    tok.unigramLM().writePiece("\xe2\x96\x81" "is",      -1.1f, false);
-    tok.unigramLM().writePiece("\xe2\x96\x81" "price",   -1.2f, false);
-    tok.unigramLM().writePiece("\xe2\x96\x81" "dollars", -1.3f, false);
-    tok.unigramLM().writePiece("\xe2\x96\x81" "on",      -1.4f, false);
-    tok.unigramLM().writePiece("\xe2\x96\x81" "for",     -1.5f, false);
-    tok.unigramLM().writePiece("\xe2\x96\x81" "more",    -1.6f, false);
-    tok.unigramLM().writePiece("\xe2\x96\x81" "info",    -1.7f, false);
-    tok.unigramLM().writePiece("\xe2\x96\x81" "us",      -1.8f, false);
-    tok.unigramLM().writePiece("\xe2\x96\x81" "at",      -1.9f, false);
-    tok.unigramLM().writePiece("\xe2\x96\x81" "meeting", -2.0f, false);
-    tok.unigramLM().writePiece("\xe2\x96\x81" "Count",   -2.1f, false);
+    appendSelfTestUnigramPiece(tok.unigramLM(), "\xe2\x96\x81" "the",     -1.0f, false);
+    appendSelfTestUnigramPiece(tok.unigramLM(), "\xe2\x96\x81" "is",      -1.1f, false);
+    appendSelfTestUnigramPiece(tok.unigramLM(), "\xe2\x96\x81" "price",   -1.2f, false);
+    appendSelfTestUnigramPiece(tok.unigramLM(), "\xe2\x96\x81" "dollars", -1.3f, false);
+    appendSelfTestUnigramPiece(tok.unigramLM(), "\xe2\x96\x81" "on",      -1.4f, false);
+    appendSelfTestUnigramPiece(tok.unigramLM(), "\xe2\x96\x81" "for",     -1.5f, false);
+    appendSelfTestUnigramPiece(tok.unigramLM(), "\xe2\x96\x81" "more",    -1.6f, false);
+    appendSelfTestUnigramPiece(tok.unigramLM(), "\xe2\x96\x81" "info",    -1.7f, false);
+    appendSelfTestUnigramPiece(tok.unigramLM(), "\xe2\x96\x81" "us",      -1.8f, false);
+    appendSelfTestUnigramPiece(tok.unigramLM(), "\xe2\x96\x81" "at",      -1.9f, false);
+    appendSelfTestUnigramPiece(tok.unigramLM(), "\xe2\x96\x81" "meeting", -2.0f, false);
+    appendSelfTestUnigramPiece(tok.unigramLM(), "\xe2\x96\x81" "Count",   -2.1f, false);
     tok.unigramLM().buildTrie();
 }
 
@@ -202,21 +223,21 @@ bool testByteUTF8(std::string& message) {
 bool testUnigramBuildVocab(std::string& message) {
     UnigramLM unigram;
     
-    // Build a simple vocabulary using the canonical writePiece entrypoint.
+    // Build a simple vocabulary using the canonical VocabWriteOp primitive.
     // Token IDs must start after pre-existing special tokens (unk, pad, bos, eos)
-    unigram.writePiece("hello", -1.0f, false);
-    unigram.writePiece("world", -1.2f, false);
-    unigram.writePiece("he", -2.0f, false);
-    unigram.writePiece("llo", -2.5f, false);
-    unigram.writePiece("wo", -2.3f, false);
-    unigram.writePiece("rld", -2.8f, false);
-    unigram.writePiece("h", -3.0f, false);
-    unigram.writePiece("e", -3.1f, false);
-    unigram.writePiece("l", -3.2f, false);
-    unigram.writePiece("o", -3.3f, false);
-    unigram.writePiece("w", -3.4f, false);
-    unigram.writePiece("r", -3.5f, false);
-    unigram.writePiece("d", -3.6f, false);
+    appendSelfTestUnigramPiece(unigram, "hello", -1.0f, false);
+    appendSelfTestUnigramPiece(unigram, "world", -1.2f, false);
+    appendSelfTestUnigramPiece(unigram, "he", -2.0f, false);
+    appendSelfTestUnigramPiece(unigram, "llo", -2.5f, false);
+    appendSelfTestUnigramPiece(unigram, "wo", -2.3f, false);
+    appendSelfTestUnigramPiece(unigram, "rld", -2.8f, false);
+    appendSelfTestUnigramPiece(unigram, "h", -3.0f, false);
+    appendSelfTestUnigramPiece(unigram, "e", -3.1f, false);
+    appendSelfTestUnigramPiece(unigram, "l", -3.2f, false);
+    appendSelfTestUnigramPiece(unigram, "o", -3.3f, false);
+    appendSelfTestUnigramPiece(unigram, "w", -3.4f, false);
+    appendSelfTestUnigramPiece(unigram, "r", -3.5f, false);
+    appendSelfTestUnigramPiece(unigram, "d", -3.6f, false);
     
         // Only learned pieces are stored in UnigramLM::pieces_; specials are layout metadata.
         ASSERT_EQ(unigram.pieceCount(), 13, "Learned piece count mismatch");
@@ -229,13 +250,13 @@ bool testUnigramEncode(std::string& message) {
     
     // Build vocabulary with log probabilities
     // Start after pre-existing special tokens
-    unigram.writePiece("hello", -1.0f, false);  // Most likely for "hello"
-    unigram.writePiece("he", -2.0f, false);
-    unigram.writePiece("llo", -2.5f, false);
-    unigram.writePiece("h", -3.0f, false);
-    unigram.writePiece("e", -3.1f, false);
-    unigram.writePiece("l", -3.2f, false);
-    unigram.writePiece("o", -3.3f, false);
+    appendSelfTestUnigramPiece(unigram, "hello", -1.0f, false);  // Most likely for "hello"
+    appendSelfTestUnigramPiece(unigram, "he", -2.0f, false);
+    appendSelfTestUnigramPiece(unigram, "llo", -2.5f, false);
+    appendSelfTestUnigramPiece(unigram, "h", -3.0f, false);
+    appendSelfTestUnigramPiece(unigram, "e", -3.1f, false);
+    appendSelfTestUnigramPiece(unigram, "l", -3.2f, false);
+    appendSelfTestUnigramPiece(unigram, "o", -3.3f, false);
     unigram.buildTrie();  // Must build trie before encoding
     
     std::vector<int> tokens = unigram.encode("hello");
@@ -251,12 +272,12 @@ bool testUnigramViterbi(std::string& message) {
     
     // Vocabulary where splitting is better than whole word
     // Start after pre-existing special tokens
-    unigram.writePiece("test", -5.0f, false);    // Whole word is worse
-    unigram.writePiece("te", -1.0f, false);      // Better to split
-    unigram.writePiece("st", -1.0f, false);
-    unigram.writePiece("t", -2.0f, false);
-    unigram.writePiece("e", -2.1f, false);
-    unigram.writePiece("s", -2.2f, false);
+    appendSelfTestUnigramPiece(unigram, "test", -5.0f, false);    // Whole word is worse
+    appendSelfTestUnigramPiece(unigram, "te", -1.0f, false);      // Better to split
+    appendSelfTestUnigramPiece(unigram, "st", -1.0f, false);
+    appendSelfTestUnigramPiece(unigram, "t", -2.0f, false);
+    appendSelfTestUnigramPiece(unigram, "e", -2.1f, false);
+    appendSelfTestUnigramPiece(unigram, "s", -2.2f, false);
     unigram.buildTrie();  // Must build trie before encoding
     
     std::vector<int> tokens = unigram.encode("test");
@@ -274,9 +295,9 @@ bool testUnigramSentencePiecePunctuationPiece(std::string& message) {
     // If a learned ▁-prefixed piece includes punctuation and wins by score,
     // Viterbi must select that piece instead of forcing punctuation to byte fallback.
     const std::string full_piece = "\xe2\x96\x81hello!";
-    unigram.writePiece(full_piece, -1.0f, false);
-    unigram.writePiece("\xe2\x96\x81hello", -10.0f, false);
-    unigram.writePiece("!", -10.0f, false);
+    appendSelfTestUnigramPiece(unigram, full_piece, -1.0f, false);
+    appendSelfTestUnigramPiece(unigram, "\xe2\x96\x81hello", -10.0f, false);
+    appendSelfTestUnigramPiece(unigram, "!", -10.0f, false);
     unigram.buildTrie();
 
     std::vector<int> tokens = unigram.encode("hello!");
@@ -287,32 +308,13 @@ bool testUnigramSentencePiecePunctuationPiece(std::string& message) {
     return true;
 }
 
-bool testUnigramDecode(std::string& message) {
-    UnigramLM unigram;
-    
-    // Start after pre-existing special tokens
-    // Pieces use \xe2\x96\x81 (U+2581 ▁) prefix — SentencePiece whitespace normalization
-    unigram.writePiece("\xe2\x96\x81hello", -1.0f, false);
-    unigram.writePiece("\xe2\x96\x81world", -1.2f, false);
-    unigram.buildTrie();  // Must build trie before encoding
-    
-    // encode() normalizes "hello world" → "▁hello▁world", Viterbi matches ▁-prefixed pieces
-    // decode() denormalizes: "▁hello▁world" → "hello world"
-    std::vector<int> tokens = unigram.encode("hello world");
-    std::string decoded = unigram.decode(tokens);
-    
-        ASSERT_STR_EQ(decoded, "hello world", "Decode mismatch");
-    
-    return true;
-}
-
 bool testUnigramUnknown(std::string& message) {
     UnigramLM unigram;
     
     // Minimal vocab - will need byte fallback for some chars
     // Start after pre-existing special tokens
-    unigram.writePiece("a", -1.0f, false);
-    unigram.writePiece("b", -1.0f, false);
+    appendSelfTestUnigramPiece(unigram, "a", -1.0f, false);
+    appendSelfTestUnigramPiece(unigram, "b", -1.0f, false);
     unigram.buildTrie();  // Must build trie before encoding
     
     // Try to encode something not in vocab
@@ -414,6 +416,52 @@ bool testUnigramTrainFinalCleanupRejectsEmptyLearnedVocab(std::string& message) 
             "testUnigramTrainFinalCleanupRejectsEmptyLearnedVocab survivor");
     } catch (const std::exception& e) {
         message = std::string("Final cleanup guard should allow at least one learned-piece survivor: ") + e.what();
+        return false;
+    }
+
+    return true;
+}
+
+bool testUnigramTrainRejectsEmptyAcceptedCandidateSet(std::string& message) {
+    bool threw = false;
+    std::string error_text;
+    try {
+        requireUnigramAcceptedCandidateSetIsScorable(
+            0,
+            0.0,
+            "testUnigramTrainRejectsEmptyAcceptedCandidateSet empty");
+    } catch (const std::runtime_error& e) {
+        threw = true;
+        error_text = e.what();
+    }
+
+    ASSERT_TRUE(threw, "Initial candidate score normalization must fail when accepted candidate count is zero");
+    ASSERT_TRUE(error_text.find("zero accepted learned pieces") != std::string::npos,
+                "Accepted-candidate guard should identify empty accepted candidate admission as the root cause");
+
+    threw = false;
+    error_text.clear();
+    try {
+        requireUnigramAcceptedCandidateSetIsScorable(
+            1,
+            0.0,
+            "testUnigramTrainRejectsEmptyAcceptedCandidateSet bad-total");
+    } catch (const std::runtime_error& e) {
+        threw = true;
+        error_text = e.what();
+    }
+
+    ASSERT_TRUE(threw, "Initial candidate score normalization must fail when accepted counts do not sum to a positive finite value");
+    ASSERT_TRUE(error_text.find("not scorable") != std::string::npos,
+                "Accepted-candidate guard should identify a non-positive total accepted count");
+
+    try {
+        requireUnigramAcceptedCandidateSetIsScorable(
+            1,
+            3.0,
+            "testUnigramTrainRejectsEmptyAcceptedCandidateSet valid");
+    } catch (const std::exception& e) {
+        message = std::string("Accepted-candidate guard should allow non-empty positive-mass candidate sets: ") + e.what();
         return false;
     }
 
@@ -988,14 +1036,14 @@ bool testUniByteBasicEncode(std::string& message) {
     
     UniByte tokenizer(config);
     
-    // Initialize with a simple vocab via unigramLM
+    // Initialize with a simple vocab via VocabWriteOp-backed fixture appends.
     // Start after pre-existing special tokens
     // Pieces use ▁ (U+2581) prefix — SentencePiece whitespace normalization
-    tokenizer.unigramLM().writePiece("\xe2\x96\x81hello", -1.0f, false);
-    tokenizer.unigramLM().writePiece("\xe2\x96\x81world", -1.2f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81hello", -1.0f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81world", -1.2f, false);
     tokenizer.unigramLM().buildTrie();  // Must build trie before encoding
     
-    std::vector<int> tokens = tokenizer.encode("hello world");
+    std::vector<int> tokens = tokenizer.tokenizeWithMetadata("hello world").token_ids;
     
     ASSERT_TRUE(tokens.size() > 0, "Should produce tokens");
     
@@ -1026,6 +1074,54 @@ bool testUniByteStructuralDetection(std::string& message) {
     
     return true;
 }
+
+    bool testUniByteRejectsUnparseableDetectedAtom(std::string& message) {
+        auto config = makeSelfTestTokenizerHP();
+        config.detect_numbers = true;
+
+        UniByte tokenizer(config);
+
+        bool threw = false;
+        std::string error_text;
+        try {
+            tokenizer.tokenizeWithMetadata("Count 99999999999999999999999999999999999999 now");
+        } catch (const std::exception& e) {
+            threw = true;
+            error_text = e.what();
+        }
+
+        ASSERT_TRUE(threw, "Tokenizer must fail loudly when a detector-emitted atom span is not parseable");
+        ASSERT_TRUE(error_text.find("detector-emitted atom span is not parseable") != std::string::npos,
+                    "Tokenizer error should identify the detector/parseability contract violation");
+        ASSERT_TRUE(error_text.find("upstream detector/data pipeline bug") != std::string::npos,
+                    "Tokenizer error should identify the upstream contract break");
+
+        return true;
+    }
+
+    bool testUnigramTrainRejectsUnparseableDetectedAtom(std::string& message) {
+        auto config = makeSelfTestTokenizerHP();
+        config.detect_numbers = true;
+
+        UnigramLM unigram;
+
+        bool threw = false;
+        std::string error_text;
+        try {
+            unigram.trainFromCorpus({"Count 99999999999999999999999999999999999999 now"}, config);
+        } catch (const std::exception& e) {
+            threw = true;
+            error_text = e.what();
+        }
+
+        ASSERT_TRUE(threw, "Tokenizer training must fail loudly when a detector-emitted atom span is not parseable");
+        ASSERT_TRUE(error_text.find("detector-emitted atom span is not parseable") != std::string::npos,
+                    "Training error should identify the detector/parseability contract violation");
+        ASSERT_TRUE(error_text.find("upstream detector/data pipeline bug") != std::string::npos,
+                    "Training error should identify the upstream contract break");
+
+        return true;
+    }
 
 bool testUniByteRawTextDetectorRegistry(std::string& message) {
     auto config = makeSelfTestTokenizerHP();
@@ -1066,7 +1162,26 @@ bool testUniByteRawTextDetectorRegistry(std::string& message) {
                 "Float detector emitted wrong atom type");
     ASSERT_STR_EQ(spanText(5), "-3.5", "Float span mismatch");
 
-    const auto structures = registry.detectStructures(text, options);
+    std::vector<StructuralSpan> structures;
+    structures.reserve(detections.size());
+    for (const auto& detection : detections) {
+        if (!detection.emitsAtom()) {
+            continue;
+        }
+
+        StructuralSpan span;
+        span.start = detection.start;
+        span.end = detection.end;
+        span.atom_type = detection.atom_type;
+        span.buffer_ptr = text.data();
+        span.offset = static_cast<uint32_t>(detection.start);
+        span.length = static_cast<uint32_t>(detection.end - detection.start);
+        span.content_offset = static_cast<uint32_t>(detection.start);
+        span.content_length = static_cast<uint32_t>(detection.end - detection.start);
+        span.placeholder_id = atomTypeToTokenId(detection.atom_type);
+        structures.push_back(span);
+    }
+
     ASSERT_EQ(structures.size(), static_cast<size_t>(2), "Only atom detections should become structures");
     ASSERT_TRUE(structures[0].atom_type == AtomType::ATOM_INT,
                 "First structure should be integer atom");
@@ -1157,6 +1272,47 @@ bool testUniBytePlaceholderInjection(std::string& message) {
     return true;
 }
 
+    bool testUniBytePreRegistersAtomTableBeforePlaceholderEmission(std::string& message) {
+        auto config = makeSelfTestTokenizerHP();
+        config.target_vocab_size = 50000;
+        config.detect_numbers = true;
+
+        UniByte tokenizer(config);
+
+        const std::string input = "same 42 then 42";
+        auto result = tokenizer.tokenizeWithMetadata(input);
+
+        ASSERT_TRUE(result.atom_table != nullptr,
+                    "tokenizeWithMetadata must create a per-sequence AtomTable before placeholder merge");
+        ASSERT_EQ(result.atoms.size(), static_cast<size_t>(2),
+                  "Repeated-number fixture should yield two structural atom spans");
+        ASSERT_TRUE(result.atoms[0].atom_entry_id != kAtomEntryNone,
+                    "Pre-registered structural spans must carry their AtomTable entry ID");
+        ASSERT_EQ(result.atoms[0].atom_entry_id, result.atoms[1].atom_entry_id,
+                  "Repeated identical atoms should deduplicate to one AtomTable entry before unigram runs");
+        ASSERT_TRUE(result.atom_table->hasAtom(result.atoms[0].atom_entry_id),
+                    "Pre-registered AtomTable entry must exist when placeholder tokens are emitted");
+
+        size_t placeholder_count = 0;
+        for (size_t i = 0; i < result.token_ids.size(); ++i) {
+            const bool token_is_atom = result.token_ids[i] >= static_cast<int>(ATOM_TOKEN_OFFSET) &&
+                                       result.token_ids[i] < static_cast<int>(UNIGRAM_VOCAB_OFFSET);
+            if (!token_is_atom) {
+                continue;
+            }
+            ++placeholder_count;
+            ASSERT_EQ(result.token_atom_mask[i], static_cast<uint8_t>(1),
+                      "Placeholder emission must preserve token_atom_mask for atom tokens");
+            ASSERT_EQ(result.atom_entry_ids[i], result.atoms[0].atom_entry_id,
+                      "Placeholder emission must reuse the pre-registered AtomTable entry ID");
+        }
+
+        ASSERT_EQ(placeholder_count, static_cast<size_t>(2),
+                  "Repeated identical numbers should still emit two placeholder tokens");
+
+        return true;
+    }
+
 bool testUniByteRoundTrip(std::string& message) {
     std::cout << "\n[RoundTrip] === Starting Round-Trip Test ===\n";
     
@@ -1172,13 +1328,13 @@ bool testUniByteRoundTrip(std::string& message) {
     
     // Pieces use ▁ (U+2581) prefix — SentencePiece whitespace normalization
     std::cout << "[RoundTrip] Adding pieces:\n";
-    tokenizer.unigramLM().writePiece("\xe2\x96\x81the", -1.0f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81the", -1.0f, false);
     std::cout << "  '▁the'   -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().pieceCount() - 1) << "\n";
-    tokenizer.unigramLM().writePiece("\xe2\x96\x81quick", -1.5f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81quick", -1.5f, false);
     std::cout << "  '▁quick' -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().pieceCount() - 1) << "\n";
-    tokenizer.unigramLM().writePiece("\xe2\x96\x81" "brown", -1.6f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81" "brown", -1.6f, false);
     std::cout << "  '▁brown' -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().pieceCount() - 1) << "\n";
-    tokenizer.unigramLM().writePiece("\xe2\x96\x81" "fox", -1.7f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81" "fox", -1.7f, false);
     std::cout << "  '▁fox'   -> id=" << UnigramLM::tokenIdForIndex(tokenizer.unigramLM().pieceCount() - 1) << "\n";
     
     std::cout << "[RoundTrip] Final learned piece count = " << tokenizer.unigramLM().pieceCount() << "\n";
@@ -1205,7 +1361,7 @@ bool testUniByteRoundTrip(std::string& message) {
     std::string input = "the quick brown fox";
     std::cout << "[RoundTrip] Input: \"" << input << "\"\n";
     
-    std::vector<int> tokens = tokenizer.encode(input);
+    std::vector<int> tokens = tokenizer.tokenizeWithMetadata(input).token_ids;
     std::cout << "[RoundTrip] Encoded tokens (" << tokens.size() << "): [";
     for (size_t i = 0; i < tokens.size(); ++i) {
         std::cout << tokens[i];
@@ -1584,17 +1740,17 @@ bool testFullPipeline(std::string& message) {
     
     UniByte tokenizer(config);
     
-    // Add vocabulary via unigramLM
+    // Add vocabulary via VocabWriteOp-backed fixture appends.
     // Start after pre-existing special tokens
     // Pieces use \xe2\x96\x81 (U+2581 ▁) prefix — SentencePiece whitespace normalization
-    tokenizer.unigramLM().writePiece("\xe2\x96\x81the", -1.0f, false);
-    tokenizer.unigramLM().writePiece("\xe2\x96\x81is", -1.1f, false);
-    tokenizer.unigramLM().writePiece("\xe2\x96\x81price", -1.5f, false);
-    tokenizer.unigramLM().writePiece("\xe2\x96\x81visit", -1.6f, false);
-    tokenizer.unigramLM().writePiece("\xe2\x96\x81" "for", -1.7f, false);
-    tokenizer.unigramLM().writePiece("\xe2\x96\x81more", -1.8f, false);
-    tokenizer.unigramLM().writePiece("\xe2\x96\x81info", -1.9f, false);
-    tokenizer.unigramLM().writePiece(".", -0.6f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81the", -1.0f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81is", -1.1f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81price", -1.5f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81visit", -1.6f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81" "for", -1.7f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81more", -1.8f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81info", -1.9f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), ".", -0.6f, false);
     
     // Mixed input: numbers become atoms, URLs remain plain text.
     std::string input = "The price is 42.99. Visit https://shop.com for 3 more info.";
@@ -1656,7 +1812,7 @@ bool testBatchProcessing(std::string& message) {
     std::vector<std::vector<int>> all_tokens;
     
     for (const auto& input : inputs) {
-        std::vector<int> tokens = tokenizer.encode(input);
+        std::vector<int> tokens = tokenizer.tokenizeWithMetadata(input).token_ids;
         all_tokens.push_back(std::move(tokens));
     }
     
@@ -1680,7 +1836,7 @@ bool testEdgeCaseEmptyString(std::string& message) {
     UniByte tokenizer(config);
     
     std::string input = "";
-    std::vector<int> tokens = tokenizer.encode(input);
+    std::vector<int> tokens = tokenizer.tokenizeWithMetadata(input).token_ids;
     
     ASSERT_EQ(tokens.size(), 0, "Empty string should produce no tokens");
     
@@ -1696,7 +1852,7 @@ bool testEdgeCaseSingleChar(std::string& message) {
     UniByte tokenizer(config);
     
     std::string input = "a";
-    std::vector<int> tokens = tokenizer.encode(input);
+    std::vector<int> tokens = tokenizer.tokenizeWithMetadata(input).token_ids;
     
     ASSERT_TRUE(tokens.size() >= 1, "Single char should produce at least 1 token");
     
@@ -1713,11 +1869,11 @@ bool testEdgeCaseOnlyWhitespace(std::string& message) {
     
     // After ▁ normalization, spaces become ▁ characters
     // Add ▁ piece to vocab so whitespace-only input has vocab matches
-    tokenizer.unigramLM().writePiece("\xe2\x96\x81", -0.5f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81", -0.5f, false);
     tokenizer.unigramLM().buildTrie();
     
     std::string input = "   ";
-    std::vector<int> tokens = tokenizer.encode(input);
+    std::vector<int> tokens = tokenizer.tokenizeWithMetadata(input).token_ids;
     
     ASSERT_TRUE(tokens.size() >= 1, "Whitespace should produce tokens");
     
@@ -1738,7 +1894,7 @@ bool testEdgeCaseLongSequence(std::string& message) {
         input += "Hello world! ";
     }
     
-    std::vector<int> tokens = tokenizer.encode(input);
+    std::vector<int> tokens = tokenizer.tokenizeWithMetadata(input).token_ids;
     ASSERT_TRUE(tokens.size() > 0, "Long sequence should produce tokens");
     
     std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(tokens));
@@ -1755,23 +1911,23 @@ bool testEdgeCaseSpecialTokenLiterals(std::string& message) {
     UniByte tokenizer(config);
     
     // Add vocab pieces for common words — ▁-prefixed for SentencePiece normalization
-    tokenizer.unigramLM().writePiece("\xe2\x96\x81This", -1.0f, false);
-    tokenizer.unigramLM().writePiece("\xe2\x96\x81is", -1.0f, false);
-    tokenizer.unigramLM().writePiece("\xe2\x96\x81not", -1.0f, false);
-    tokenizer.unigramLM().writePiece("\xe2\x96\x81" "a", -1.0f, false);
-    tokenizer.unigramLM().writePiece("\xe2\x96\x81special", -1.0f, false);
-    tokenizer.unigramLM().writePiece("\xe2\x96\x81token", -1.0f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81This", -1.0f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81is", -1.0f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81not", -1.0f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81" "a", -1.0f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81special", -1.0f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81token", -1.0f, false);
     // Add the literal special token strings as regular vocab pieces
-    tokenizer.unigramLM().writePiece("\xe2\x96\x81<unk>", -2.0f, false);
-    tokenizer.unigramLM().writePiece("\xe2\x96\x81<s>", -2.0f, false);
-    tokenizer.unigramLM().writePiece("\xe2\x96\x81</s>", -2.0f, false);
-    tokenizer.unigramLM().writePiece("\xe2\x96\x81<pad>", -2.0f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81<unk>", -2.0f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81<s>", -2.0f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81</s>", -2.0f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81<pad>", -2.0f, false);
     tokenizer.unigramLM().buildTrie();
     
     // Input contains literal special token strings
     std::string input = "This <unk> is not <s> a </s> special <pad> token";
     
-    std::vector<int> tokens = tokenizer.encode(input);
+    std::vector<int> tokens = tokenizer.tokenizeWithMetadata(input).token_ids;
     ASSERT_TRUE(tokens.size() > 0, "Should produce tokens");
     
     std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(tokens));
@@ -1792,7 +1948,7 @@ bool testUnicodeEmoji(std::string& message) {
     
     std::string input = "Hello 👋 world 🌍!";
     
-    std::vector<int> tokens = tokenizer.encode(input);
+    std::vector<int> tokens = tokenizer.tokenizeWithMetadata(input).token_ids;
     ASSERT_TRUE(tokens.size() > 0, "Emoji input should produce tokens");
     
     std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(tokens));
@@ -1808,7 +1964,7 @@ bool testUnicodeMultiLanguage(std::string& message) {
     
     std::string input = "English 日本語 한국어 العربية";
     
-    std::vector<int> tokens = tokenizer.encode(input);
+    std::vector<int> tokens = tokenizer.tokenizeWithMetadata(input).token_ids;
     ASSERT_TRUE(tokens.size() > 0, "Multi-language should produce tokens");
     
     std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(tokens));
@@ -2082,7 +2238,7 @@ bool testByteFallbackDisabled(std::string& message) {
     // With no vocab and no byte fallback, unknown chars should use UNK
     std::string input = "xyz";
     
-    std::vector<int> tokens = tokenizer.encode(input);
+    std::vector<int> tokens = tokenizer.tokenizeWithMetadata(input).token_ids;
     
     // Should still produce tokens (UNK tokens)
     ASSERT_TRUE(tokens.size() > 0, "Should produce UNK tokens without byte fallback");
@@ -2096,13 +2252,13 @@ bool testMixedVocabAndByteFallback(std::string& message) {
     UniByte tokenizer(config);
     
     // Add partial vocab — ▁-prefixed for SentencePiece whitespace normalization
-    tokenizer.unigramLM().writePiece("\xe2\x96\x81hello", -1.0f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81hello", -1.0f, false);
     tokenizer.unigramLM().buildTrie();
     
     // Input has both vocab word and unknown
     std::string input = "hello xyz hello";
     
-    std::vector<int> tokens = tokenizer.encode(input);
+    std::vector<int> tokens = tokenizer.tokenizeWithMetadata(input).token_ids;
     std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(tokens));
     
     ASSERT_STR_EQ(decoded, input, "Mixed vocab+byte fallback round-trip failed");
@@ -2140,9 +2296,9 @@ bool testVocabTextExportBinaryLoad(std::string& message) {
     
     auto config = makeSelfTestTokenizerHP();
     UniByte original(config);
-    original.unigramLM().writePiece("test", -1.0f, false);
-    original.unigramLM().writePiece("vocab", -1.5f, false);
-    original.unigramLM().writePiece("save", -2.0f, false);
+    appendSelfTestUnigramPiece(original.unigramLM(), "test", -1.0f, false);
+    appendSelfTestUnigramPiece(original.unigramLM(), "vocab", -1.5f, false);
+    appendSelfTestUnigramPiece(original.unigramLM(), "save", -2.0f, false);
     original.unigramLM().buildTrie();
     
     std::string grmt_path = "output/test_vocab_save.grmt";
@@ -2181,9 +2337,9 @@ bool testVocabSaveLoadBinary(std::string& message) {
     
     auto config = makeSelfTestTokenizerHP();
     UniByte original(config);
-    original.unigramLM().writePiece("binary", -1.0f, false);
-    original.unigramLM().writePiece("format", -1.5f, false);
-    original.unigramLM().writePiece("fast", -2.0f, false);
+    appendSelfTestUnigramPiece(original.unigramLM(), "binary", -1.0f, false);
+    appendSelfTestUnigramPiece(original.unigramLM(), "format", -1.5f, false);
+    appendSelfTestUnigramPiece(original.unigramLM(), "fast", -2.0f, false);
     original.unigramLM().buildTrie();
     
     std::string grmt_path = "output/test_vocab_binary.grmt";
@@ -2221,8 +2377,8 @@ bool testGPUUpload(std::string& message) {
     UnigramLM unigram;
     
     // Add vocab — ▁-prefixed for SentencePiece whitespace normalization
-    unigram.writePiece("\xe2\x96\x81gpu", -1.0f, false);
-    unigram.writePiece("\xe2\x96\x81" "decode", -1.5f, false);
+    appendSelfTestUnigramPiece(unigram, "\xe2\x96\x81gpu", -1.0f, false);
+    appendSelfTestUnigramPiece(unigram, "\xe2\x96\x81" "decode", -1.5f, false);
     unigram.buildTrie();
     
     // Init GPU
@@ -2232,10 +2388,11 @@ bool testGPUUpload(std::string& message) {
         return true;  // Skip test if no GPU
     }
     
-    // Encode/decode through the single CPU API after GPU upload.
+    // Encode through the live UnigramLM API after GPU upload.
     std::vector<int> tokens = unigram.encode("gpu decode");
-    std::string result = unigram.decode(tokens);
-    ASSERT_STR_EQ(result, "gpu decode", "Decode mismatch after GPU upload");
+    ASSERT_EQ(tokens.size(), static_cast<size_t>(2), "GPU-uploaded unigram vocab should encode to two learned pieces");
+    ASSERT_EQ(tokens[0], unigram.getPieceId("\xe2\x96\x81" "gpu"), "First token should be the learned ▁gpu piece");
+    ASSERT_EQ(tokens[1], unigram.getPieceId("\xe2\x96\x81" "decode"), "Second token should be the learned ▁decode piece");
     
     return true;
 }
@@ -2585,11 +2742,11 @@ int main(int argc, char** argv) {
     suite.addTest("Unigram.Encode", testUnigramEncode);
     suite.addTest("Unigram.Viterbi", testUnigramViterbi);
     suite.addTest("Unigram.SentencePiecePunctuation", testUnigramSentencePiecePunctuationPiece);
-    suite.addTest("Unigram.Decode", testUnigramDecode);
     suite.addTest("Unigram.Unknown", testUnigramUnknown);
     suite.addTest("Unigram.ForwardBackward.ByteFallbackFixedPenalty", testUnigramForwardBackwardByteFallbackIsFixedPenalty);
     suite.addTest("Unigram.ForwardBackward.ByteFallbackUtf8IsByteLevel", testUnigramForwardBackwardByteFallbackIsByteLevelForUtf8);
     suite.addTest("Unigram.Train.FinalCleanupRejectsEmptyLearnedVocab", testUnigramTrainFinalCleanupRejectsEmptyLearnedVocab);
+    suite.addTest("Unigram.Train.RejectEmptyAcceptedCandidateSet", testUnigramTrainRejectsEmptyAcceptedCandidateSet);
     suite.addTest("Unigram.Train.RejectFallbackDominatedPosteriorMass", testUnigramTrainRejectsFallbackDominatedPosteriorMass);
     suite.addTest("Unigram.Train.ShrinkRankingUsesCompressionGain", testUnigramTrainShrinkRankingUsesCompressionGain);
     suite.addTest("Unigram.Train.ByteFallbackOffAddsCharSeeds", testUnigramTrainByteFallbackDisabledAddsCharacterSeeds);
@@ -2612,12 +2769,15 @@ int main(int argc, char** argv) {
     // Section 4: UniByte Orchestrator Tests
     suite.addTest("UniByte.BasicEncode", testUniByteBasicEncode);
     suite.addTest("UniByte.StructuralDetection", testUniByteStructuralDetection);
+    suite.addTest("UniByte.RejectsUnparseableDetectedAtom", testUniByteRejectsUnparseableDetectedAtom);
+    suite.addTest("Unigram.Train.RejectsUnparseableDetectedAtom", testUnigramTrainRejectsUnparseableDetectedAtom);
     suite.addTest("UniByte.RawTextDetectorRegistry", testUniByteRawTextDetectorRegistry);
     suite.addTest("UniByte.URLPassthrough", testUniByteURLDetection);
     suite.addTest("UniByte.URLPassthrough.CaseInsensitive", testUniByteURLDetectionCaseInsensitive);
     suite.addTest("UniByte.EmailPassthrough", testUniByteEmailDetection);
     suite.addTest("UniByte.DateNumericOnly", testUniByteDateDetection);
     suite.addTest("UniByte.PlaceholderInjection", testUniBytePlaceholderInjection);
+    suite.addTest("UniByte.PreRegistersAtomTableBeforePlaceholderEmission", testUniBytePreRegistersAtomTableBeforePlaceholderEmission);
     suite.addTest("UniByte.RoundTrip", testUniByteRoundTrip);
     
     // Section 5: AtomTable Tests

@@ -27,6 +27,7 @@
 #include "../GRMT/GrmtFormat.hpp"
 #include "../LogRecorder/LogRecorder.hpp"
 #include "../UnigramByte/TokenLayout.hpp"
+#include "../UnigramByte/Unigram.hpp"
 #include "../../Shared/UnigramByte/UniByte.hpp"
 #include "../../Shared/TokenizerArtifacts/GrmtCorpusIO.hpp"
 #include "../../Shared/TokenizerArtifacts/TokenizerArtifactBundle.hpp"
@@ -375,7 +376,7 @@ bool PrepareTrainingDataFromCache(
 	if (!tokenizer.unigramLM().trainFromCorpus(vocab_corpus, tokenizer_hp)) {
 		throw std::runtime_error("[DataLoader] tokenizer training returned false; refusing to encode GRMT without a finalized tokenizer runtime state");
 	}
-	tokenizer.requireRuntimeReadyForLastTraining("DataLoader::PrepareTrainingDataFromCache");
+	tokenizer.unigramLM().requireRuntimeReadyForLastTraining("DataLoader::PrepareTrainingDataFromCache");
 	const auto& tokenizer_runtime_report = tokenizer.lastTrainingRuntimeReport();
 	std::cout << "[DataLoader] Tokenizer runtime finalized for corpus encoding: required_viterbi_workspace_length="
 	          << tokenizer_runtime_report.required_viterbi_workspace_length
@@ -639,22 +640,6 @@ void validateStartupPaths(
 	fs::create_directories(paths_hp.log_dir);
 }
 
-std::unique_ptr<GRIM::Tokenizer::UniByte> initializeTokenizer(
-	const GRIM::HyperParameters::TokenizerHP& tokenizer_hp,
-	::TrainingLogger& logger)
-{
-	logger.log("Loading tokenizer artifact bundle...");
-
-	auto tokenizer = std::make_unique<GRIM::Tokenizer::UniByte>(tokenizer_hp);
-	(void)GRIM::TokenizerArtifacts::loadTokenizerArtifactBundle(tokenizer_hp, *tokenizer);
-	logger.log("Initializing tokenizer CUDA Viterbi runtime...");
-	if (!tokenizer->initGPU()) {
-		throw std::runtime_error("initializeTokenizer: UniByte::initGPU() returned false after artifact load");
-	}
-
-	return tokenizer;
-}
-
 namespace {
 
 using GrmtSequence = GRIM::TokenizerArtifacts::GrmtSequence;
@@ -818,33 +803,17 @@ void logAtomSideChannelDiagnostics(const std::vector<GrmtSequence>& sequences)
 	}
 }
 
-LoadedTrainingCorpus loadValidatedTrainingCorpusOrThrow(
-	const std::string& path,
-	const ProgressCallback& progress)
-{
-	auto corpus = readGrmtCorpusWithProgressOrThrow(path, progress);
-	emitProgress(progress, "[Data] GRMT deserialization complete; validating side channels...");
-	sanitizeNumericSideChannels(corpus.sequences);
-	logAtomSideChannelDiagnostics(corpus.sequences);
-
-	std::ostringstream done_msg;
-	done_msg << "[Data] GRMT validation complete: loaded_sequences=" << corpus.sequences.size()
-	         << " vocab_size=" << corpus.vocab_size;
-	emitProgress(progress, done_msg.str());
-	return corpus;
-}
-
 } // namespace
 
 SequenceData buildPhase1SequenceData(
 	const GRIM::HyperParameters::TokenizerHP& tokenizer_hp,
 	const GRIM::HyperParameters::DataLoadingHP& data_hp,
-	int max_seq_len,
 	::TrainingLogger& logger)
 {
+	const int max_seq_len = tokenizer_hp.max_seq_len;
 	if (max_seq_len <= 0) {
 		throw std::runtime_error(
-			"buildPhase1SequenceData: max_seq_len must be configured before sliding-window data loading (got " +
+			"buildPhase1SequenceData: TokenizerHP.max_seq_len must be configured before sliding-window data loading (got " +
 			std::to_string(max_seq_len) + ")");
 	}
 
@@ -854,7 +823,16 @@ SequenceData buildPhase1SequenceData(
 	auto progress_logger = [&logger](const std::string& message) {
 		logger.log(message);
 	};
-	auto corpus = loadValidatedTrainingCorpusOrThrow(tokenizer_hp.data_path, progress_logger);
+	auto corpus = readGrmtCorpusWithProgressOrThrow(tokenizer_hp.data_path, progress_logger);
+	emitProgress(progress_logger, "[Data] GRMT deserialization complete; validating side channels...");
+	sanitizeNumericSideChannels(corpus.sequences);
+	logAtomSideChannelDiagnostics(corpus.sequences);
+	{
+		std::ostringstream done_msg;
+		done_msg << "[Data] GRMT validation complete: loaded_sequences=" << corpus.sequences.size()
+		         << " vocab_size=" << corpus.vocab_size;
+		emitProgress(progress_logger, done_msg.str());
+	}
 
 	data.vocab_size = corpus.vocab_size;
 	const std::size_t raw_sequence_count = corpus.sequences.size();
@@ -967,7 +945,16 @@ std::unique_ptr<GRIM::Tokenizer::UniByte> LoadInferenceTokenizer(
 	const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(config);
 	const auto paths_hp = GRIM::HyperParameters::pathsHP(config);
 	Internal::validateStartupPaths(tokenizer_hp, paths_hp);
-	return Internal::initializeTokenizer(tokenizer_hp, logger);
+
+	logger.log("Loading tokenizer artifact bundle...");
+	auto tokenizer = std::make_unique<GRIM::Tokenizer::UniByte>(tokenizer_hp);
+	(void)GRIM::TokenizerArtifacts::loadTokenizerArtifactBundle(tokenizer_hp, *tokenizer);
+	logger.log("Initializing tokenizer CUDA Viterbi runtime...");
+	if (!tokenizer->initGPU()) {
+		throw std::runtime_error("LoadInferenceTokenizer: UniByte::initGPU() returned false after artifact load");
+	}
+
+	return tokenizer;
 }
 
 void LoadTrainingData(TrainingContext& ctx, const MemorySnapshot& startup_memory_snapshot) {
@@ -977,7 +964,6 @@ void LoadTrainingData(TrainingContext& ctx, const MemorySnapshot& startup_memory
 	const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(ctx.config);
 	const auto paths_hp = GRIM::HyperParameters::pathsHP(ctx.config);
 	const auto data_hp = GRIM::HyperParameters::dataLoadingHP(ctx.config);
-	const int max_seq_len = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "max_seq_len");
 
  	EmitModuleInfo(ModuleId::Training, "[Phase1] Validating paths...", 0);
  	Internal::validateStartupPaths(tokenizer_hp, paths_hp);
@@ -986,7 +972,6 @@ void LoadTrainingData(TrainingContext& ctx, const MemorySnapshot& startup_memory
 	ctx.data = Internal::buildPhase1SequenceData(
 		tokenizer_hp,
 		data_hp,
-		max_seq_len,
 		*ctx.logging.logger);
 
 	const std::uint32_t actual_vocab_size = requireActualVocabSizeOrThrow(ctx.data);

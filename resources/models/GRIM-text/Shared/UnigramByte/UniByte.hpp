@@ -179,17 +179,13 @@ public:
     // Initialize GPU resources
     bool initGPU();
     const UnigramTrainingRuntimeReport& lastTrainingRuntimeReport() const;
-    void requireRuntimeReadyForLastTraining(const char* caller) const;
 
     //--------------------------------------------------//
     // Encoding
     //--------------------------------------------------//
     
-    // Standard encode (returns just token IDs)
-    // Uses atom reasoning if enabled, otherwise falls back to normal UnigramByte
-    std::vector<int> encode(const std::string& text) const;
-    
-    // Full tokenization with metadata (includes atom detection results)
+    // The single tokenization op. Runs structural/atom detection per config and
+    // returns the full result; callers wanting only token IDs read result.token_ids.
     UniByteResult tokenizeWithMetadata(const std::string& text) const;
     
     //--------------------------------------------------//

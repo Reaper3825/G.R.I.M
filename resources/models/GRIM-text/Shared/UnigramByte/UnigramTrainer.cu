@@ -363,6 +363,27 @@ void requireUnigramFinalCleanupLeavesLearnedPiece(size_t piece_count,
     }
 }
 
+void requireUnigramAcceptedCandidateSetIsScorable(size_t accepted_count,
+                                                  double total_accepted_count,
+                                                  const char* caller) {
+    if (caller == nullptr || caller[0] == '\0') {
+        throw std::runtime_error("requireUnigramAcceptedCandidateSetIsScorable: caller label is empty at " +
+                                 std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    }
+    if (accepted_count == 0) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": candidate admission produced zero accepted learned pieces before initial score normalization; frequency/validity/dedup filters eliminated every candidate");
+    }
+    if (!std::isfinite(total_accepted_count) || total_accepted_count <= 0.0) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": accepted candidate set is not scorable; accepted_count=" +
+                                 std::to_string(accepted_count) +
+                                 ", total_accepted_count=" +
+                                 std::to_string(total_accepted_count) +
+                                 ". Learned candidate counts MUST sum to a positive finite value before initial score normalization");
+    }
+}
+
 void requireUnigramLearnedPosteriorMassNotByteFallbackDominated(
     double expected_learned_piece_tokens,
     double expected_fixed_penalty_byte_fallback_tokens,
@@ -935,7 +956,7 @@ static void mineSubwordsFromSentence(const std::string& text,
 
         const size_t byte_start = char_positions[ci];
         if (byte_start < count_start || byte_start >= count_end) continue;
-        for (size_t char_count = 2; char_count <= max_len && ci + char_count <= num_chars; ++char_count) {
+        for (size_t char_count = 1; char_count <= max_len && ci + char_count <= num_chars; ++char_count) {
             bool crosses_atom = false;
             for (size_t k = ci + 1; k < ci + char_count; ++k) {
                 if (char_in_atom[k]) { crosses_atom = true; break; }
@@ -980,6 +1001,25 @@ static void mineSubwordsFromSentence(const std::string& text,
     mineSubwordsFromSentence(text, max_len, atom_spans, subword_counts, byte_start, byte_end, byte_start, byte_end);
 }
 
+namespace {
+
+[[noreturn]] void throwUnparseableDetectedAtomForTraining(const char* detector_name,
+                                                          AtomType atom_type,
+                                                          size_t start,
+                                                          size_t end,
+                                                          std::string_view atom_text,
+                                                          std::string_view parse_error) {
+    throw std::runtime_error(
+        std::string("UnigramLM::trainFromCorpus: detector-emitted atom span is not parseable; upstream detector/data pipeline bug: detector='") +
+        (detector_name ? std::string(detector_name) : std::string("<unknown>")) +
+        "', atom_type=" + atomTypeName(atom_type) +
+        ", span=[" + std::to_string(start) + ", " + std::to_string(end) +
+        "), text='" + std::string(atom_text) +
+        "', parse_error='" + std::string(parse_error) + "'");
+}
+
+} // namespace
+
 //======================================================//
 //  trainFromCorpus — TokenizerHP Detector-Prepass Entrypoint
 //======================================================//
@@ -998,7 +1038,6 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     all_atom_spans.reserve(texts.size());
 
     size_t total_atoms = 0;
-    size_t total_skipped_unparseable = 0;
     const bool detect = tokenizer_hp.enable_atom_reasoning;
     for (const auto& text : texts) {
         std::vector<AtomSpan> spans;
@@ -1007,16 +1046,26 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                 tokenizer_hp.detect_numbers,
                 true,
                 true);
-            auto structures = detector_registry.detectStructures(text, detector_options);
-            spans.reserve(structures.size());
-            for (const auto& s : structures) {
-                auto parsed = AtomTable::parseAtom(
-                    s.atom_type, std::string(s.contentView()));
-                if (!parsed.success) {
-                    ++total_skipped_unparseable;
+            const auto detections = detector_registry.scan(text, detector_options);
+            spans.reserve(detections.size());
+            for (const auto& detection : detections) {
+                if (!detection.emitsAtom()) {
                     continue;
                 }
-                spans.push_back({s.start, s.end});
+                const std::string_view atom_text(text.data() + detection.start,
+                                                 detection.end - detection.start);
+                auto parsed = AtomTable::parseAtom(
+                    detection.atom_type,
+                    std::string(atom_text));
+                if (!parsed.success) {
+                    throwUnparseableDetectedAtomForTraining(detection.detector_name,
+                                                            detection.atom_type,
+                                                            detection.start,
+                                                            detection.end,
+                                                            atom_text,
+                                                            parsed.error_message);
+                }
+                spans.push_back({detection.start, detection.end});
             }
             total_atoms += spans.size();
         }
@@ -1025,8 +1074,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
 
     std::cout << "[UnigramLM] Detected " << total_atoms << " atoms across "
               << texts.size() << " texts (will skip during vocab training); "
-              << "unparseable spans treated as text: " << total_skipped_unparseable
-              << "; atom_reasoning=" << (detect ? "on" : "off") << std::endl;
+              << "atom_reasoning=" << (detect ? "on" : "off") << std::endl;
 
     const bool trained = trainFromCorpus(texts, all_atom_spans,
                                          tokenizer_hp.target_vocab_size,
@@ -1183,7 +1231,11 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         throw std::runtime_error("UnigramLM::trainFromCorpus: corpus has zero trainable non-atom characters after normalization");
     }
     
-    // Step 2: Build initial vocabulary (all characters meeting coverage)
+    // Step 2: Build the Step-2 character seed set.
+    // In byte-fallback mode this is a transient coverage/bootstrap diagnostic only;
+    // it must not become learned vocab or bias candidate admission/dedup. The
+    // no-byte-fallback path is the only mode that promotes these seeds into
+    // mandatory learned pieces.
     std::vector<std::pair<std::string, int>> sorted_chars(char_counts.begin(), char_counts.end());
     std::sort(sorted_chars.begin(), sorted_chars.end(),
               [](const auto& a, const auto& b) {
@@ -1231,7 +1283,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         if (!uncovered_chars.empty()) {
             std::stringstream ss;
             ss << "UnigramLM::trainFromCorpus: byte fallback is disabled but Step-2 character seeds do not cover "
-               << uncovered_chars.size() << " trainable normalized characters. Set character_coverage=1.0, lower the hard minimum character frequency by changing tokenizer training code, remove invalid characters, or re-enable byte fallback. Missing bytes:";
+               << uncovered_chars.size() << " trainable normalized characters. Set character_coverage=1.0, lower the hard minimum character frequency by changing tokenizer training code, remove invalid characters, or re-enable byte fallback. Missing UTF-8 characters (bytes shown):";
             const size_t preview_count = std::min<size_t>(uncovered_chars.size(), 8);
             for (size_t preview_idx = 0; preview_idx < preview_count; ++preview_idx) {
                 ss << " [";
@@ -1256,7 +1308,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     }
 
     std::cout << "[UnigramLM] Initial char coverage: " << char_seeds.size()
-              << (enable_byte_fallback_ ? " characters (byte-layer covered), coverage: "
+              << (enable_byte_fallback_ ? " characters (Step-2 diagnostic seed set only; NOT learned vocab), coverage: "
                                         : " characters (learned-piece covered; byte fallback disabled), coverage: ")
               << (100.0f * covered / total_chars) << "%";
     if (chars_rejected > 0 || chars_too_rare > 0) {
@@ -1270,7 +1322,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     
     // Diagnostic: show coverage-critical chars
     std::cout << (enable_byte_fallback_
-                  ? "[UnigramLM] Byte-covered chars (NOT in unigram vocab, handled by byte layer):"
+                  ? "[UnigramLM] Step-2 character seeds (diagnostic only; excluded from learned vocab because byte fallback is enabled):"
                   : "[UnigramLM] Learned character seed pieces (byte fallback disabled):") << std::endl;
     for (const auto& [ch, count] : sorted_chars) {
         if (!char_seeds.count(ch)) continue;
@@ -1292,8 +1344,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
             if (i > 0) hex_bytes << " ";
             hex_bytes << std::setw(2) << std::setfill('0') << (int)(unsigned char)ch[i];
         }
-        int byte_id = (int)(unsigned char)ch[0] + BYTE_TOKEN_OFFSET;
-        std::cout << (enable_byte_fallback_ ? "  [byte:" : "  [char-seed-byte:") << byte_id << "] \"" << display_text
+        std::cout << (enable_byte_fallback_ ? "  [char-seed] \"" : "  [required-char-seed] \"") << display_text
                   << "\" (0x" << hex_bytes.str() << ") count=" << std::dec << count << std::endl;
     }
     
@@ -1521,14 +1572,20 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     int structural_dedup_rejected = 0;
 
     std::unordered_set<std::string> dedup_keys_seen;
-    for (const auto& ch : char_seeds) {
-        std::string key = structuralDedupKeyForCandidate(ch);
-        if (!key.empty()) {
-            dedup_keys_seen.insert(key);
+    if (!enable_byte_fallback_) {
+        dedup_keys_seen.reserve(char_seeds.size());
+        for (const auto& ch : char_seeds) {
+            std::string key = structuralDedupKeyForCandidate(ch);
+            if (!key.empty()) {
+                dedup_keys_seen.insert(key);
+            }
         }
+        std::cout << "[UnigramLM] Pre-seeded " << dedup_keys_seen.size()
+                  << " structural dedup keys from required learned character seeds" << std::endl;
+    } else {
+        std::cout << "[UnigramLM] Byte-fallback mode: Step-2 character seeds are diagnostic-only; learned candidate admission and structural dedup start from mined subwords only"
+                  << std::endl;
     }
-    std::cout << "[UnigramLM] Pre-seeded " << dedup_keys_seen.size()
-              << " structural dedup keys from byte-layer chars" << std::endl;
 
     struct AcceptedPiece { std::string text; UnigramSubwordCount count; };
     std::vector<AcceptedPiece> accepted;
@@ -1550,7 +1607,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         const std::string& subword = entry->first;
         const UnigramSubwordCount count = entry->second;
         if (hasPiece(subword)) continue;
-        if (char_seeds.count(subword)) continue;
+        if (!enable_byte_fallback_ && char_seeds.count(subword)) continue;
 
         if (isRepetitionNoise(subword)) {
             repetition_filtered++;
@@ -1580,7 +1637,10 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
 
     double total_accepted_count = 0.0;
     for (const auto& ap : accepted) total_accepted_count += ap.count;
-    if (total_accepted_count < 1.0) total_accepted_count = 1.0;
+    requireUnigramAcceptedCandidateSetIsScorable(
+        accepted.size(),
+        total_accepted_count,
+        "UnigramLM::trainFromCorpus initial candidate score normalization");
 
     for (const auto& ap : accepted) {
         float score = static_cast<float>(std::log(ap.count / total_accepted_count));

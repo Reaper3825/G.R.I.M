@@ -1,5 +1,7 @@
 #include "VocabArtifactIO.hpp"
 
+#include "../UnigramByte/VocabWriteOp.hpp"
+
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -145,7 +147,16 @@ void TokenizerVocabFile::readInto(const GRIM::HyperParameters::TokenizerHP& toke
                 ". Retrain tokenizer; do not patch the vocab header.");
         }
 
-        loaded.writePiece(text, score, false);
+        GRIM::Tokenizer::UnigramPiece piece;
+        piece.text = text;
+        piece.score = score;
+        piece.is_user_defined = false;
+        GRIM::Tokenizer::applyUnigramVocabWriteOp(GRIM::Tokenizer::UnigramVocabWriteRequest{
+            GRIM::Tokenizer::UnigramVocabWriteTarget{loaded.pieces_, loaded.piece_to_id_},
+            std::move(piece),
+            token_id,
+            GRIM::Tokenizer::UnigramVocabWriteMode::AppendOnly,
+            "TokenizerVocabFile::readInto learned-piece append"});
     }
 
     if (special_records_seen != GRIM::Tokenizer::NUM_SPECIAL_TOKENS) {

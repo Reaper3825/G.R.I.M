@@ -20,6 +20,26 @@
 namespace GRIM {
 namespace Tokenizer {
 
+namespace {
+
+[[noreturn]] void throwUnparseableDetectedAtom(const char* caller,
+                                               const char* detector_name,
+                                               AtomType atom_type,
+                                               size_t start,
+                                               size_t end,
+                                               std::string_view atom_text,
+                                               std::string_view parse_error) {
+    throw std::runtime_error(std::string(caller) +
+                             ": detector-emitted atom span is not parseable; upstream detector/data pipeline bug: detector='" +
+                             (detector_name ? std::string(detector_name) : std::string("<unknown>")) +
+                             "', atom_type=" + atomTypeName(atom_type) +
+                             ", span=[" + std::to_string(start) + ", " + std::to_string(end) +
+                             "), text='" + std::string(atom_text) +
+                             "', parse_error='" + std::string(parse_error) + "'");
+}
+
+} // namespace
+
 //======================================================//
 //  UniByte Implementation
 //======================================================//
@@ -72,25 +92,9 @@ const UnigramTrainingRuntimeReport& UniByte::lastTrainingRuntimeReport() const {
     return unigram_.lastTrainingRuntimeReport();
 }
 
-void UniByte::requireRuntimeReadyForLastTraining(const char* caller) const {
-    unigram_.requireRuntimeReadyForLastTraining(caller);
-}
-
 //--------------------------------------------------//
 // Encoding
 //--------------------------------------------------//
-
-std::vector<int> UniByte::encode(const std::string& text) const {
-    // If atom reasoning is disabled, use fast path (normal UnigramByte)
-    if (!tokenizer_hp_.enable_atom_reasoning) {
-        // FAST PATH: No structural detection, no AtomTable, just pure tokenization
-        return unigram_.encode(text);
-    }
-    
-    // ATOM REASONING PATH: Use AtomTable for structural reasoning
-    auto result = tokenizeWithMetadata(text);
-    return result.token_ids;
-}
 
 UniByteResult UniByte::tokenizeWithMetadata(const std::string& text) const {
     UniByteResult result;
@@ -99,20 +103,57 @@ UniByteResult UniByte::tokenizeWithMetadata(const std::string& text) const {
         return result;
     }
 
+    // Initialize atom registry before any unigram segmentation. Detector-emitted
+    // atom spans are finalized into the per-sequence AtomTable first; the later
+    // merge loop only emits placeholders for those pre-registered spans.
+    result.atom_table = std::make_shared<AtomTable>();
+
     // Honor atom reasoning toggle: when disabled, skip atom detection
-    // entirely so callers on the metadata path see the same plain unigram
-    // tokenization as encode(). Atom side-channels remain zero-filled.
+    // entirely so callers still get plain unigram tokenization while
+    // atom side-channels remain zero-filled.
     std::vector<StructuralSpan> structures;
     if (tokenizer_hp_.enable_atom_reasoning) {
         const Detector::RawTextDetectorOptions detector_options(
             tokenizer_hp_.detect_numbers,
             true,
             true);
-        structures = detector_registry_.detectStructures(text, detector_options);
-    }
+        const auto detections = detector_registry_.scan(text, detector_options);
+        structures.reserve(detections.size());
+        for (const auto& detection : detections) {
+            if (!detection.emitsAtom()) {
+                continue;
+            }
 
-    // Initialize atom registry for this encoding pass.
-    result.atom_table = std::make_shared<AtomTable>();
+            const std::string_view atom_text(text.data() + detection.start,
+                                             detection.end - detection.start);
+            const auto parsed = AtomTable::parseAtom(detection.atom_type, std::string(atom_text));
+            if (!parsed.success) {
+                throwUnparseableDetectedAtom("UniByte::tokenizeWithMetadata",
+                                             detection.detector_name,
+                                             detection.atom_type,
+                                             detection.start,
+                                             detection.end,
+                                             atom_text,
+                                             parsed.error_message);
+            }
+
+            StructuralSpan span;
+            span.start = detection.start;
+            span.end = detection.end;
+            span.atom_type = detection.atom_type;
+            span.buffer_ptr = text.data();
+            span.offset = static_cast<uint32_t>(detection.start);
+            span.length = static_cast<uint32_t>(detection.end - detection.start);
+            span.content_offset = static_cast<uint32_t>(detection.start);
+            span.content_length = static_cast<uint32_t>(detection.end - detection.start);
+            span.placeholder_id = atomTypeToTokenId(detection.atom_type);
+            span.atom_entry_id = result.atom_table->registerSpan(span);
+            if (span.atom_entry_id == kAtomEntryNone) {
+                throw std::runtime_error("UniByte::tokenizeWithMetadata: registerSpan returned kAtomEntryNone for detector-emitted atom span");
+            }
+            structures.push_back(span);
+        }
+    }
 
     // Pre-allocate based on heuristic: ~1 token per 3-4 bytes + atoms.
     const size_t estimated_tokens = (text.size() / 3) + structures.size() + 8;
@@ -178,49 +219,26 @@ UniByteResult UniByte::tokenizeWithMetadata(const std::string& text) const {
 
     while (pos < text.size()) {
         if (struct_idx < structures.size() && pos == structures[struct_idx].start) {
-            StructuralSpan span = structures[struct_idx];
+            const StructuralSpan& span = structures[struct_idx];
 
             int atom_token_id = span.placeholder_id;
-            float numeric_value = 0.0f;
-            bool has_parsed = false;
-
-            auto parsed = AtomTable::parseAtom(span.atom_type, std::string(span.contentView()));
-            if (parsed.success) {
-                has_parsed = true;
-
-                if (Tokenizer::isNumericAtom(span.atom_type)) {
-                    if (auto* int_val = std::get_if<AtomInteger>(&parsed.value)) {
-                        numeric_value = static_cast<float>(int_val->value);
-                    } else if (auto* float_val = std::get_if<AtomFloat>(&parsed.value)) {
-                        float numeric = static_cast<float>(float_val->value);
-                        if (std::isfinite(numeric)) {
-                            numeric_value = numeric;
-                        }
-                    }
-                }
+            uint32_t entry_id = span.atom_entry_id;
+            if (entry_id == kAtomEntryNone) {
+                throw std::runtime_error("UniByte::tokenizeWithMetadata: pre-registered atom span is missing atom_entry_id at struct_idx=" +
+                                         std::to_string(struct_idx));
             }
-
-            const bool numeric_atom = Tokenizer::isNumericAtom(span.atom_type);
-            const bool numeric_parse_failed = numeric_atom && !has_parsed;
-            if (numeric_parse_failed) {
-                appendSegmentTokens(span.start, span.end);
-                pos = span.end;
-                struct_idx++;
-                continue;
-            }
-
-            uint32_t entry_id = result.atom_table->registerSpan(span);
 
             const auto entry = result.atom_table->getAtom(entry_id);
-            float packed_numeric = numeric_value;
-            uint32_t packed_flags = 0;
-            if (entry) {
-                packed_numeric = entry->numeric_value;
-                packed_flags = entry->flags;
-                if (Tokenizer::isNumericAtom(span.atom_type) && has_parsed) {
-                    packed_numeric = numeric_value;
-                }
+            if (!entry) {
+                throw std::runtime_error("UniByte::tokenizeWithMetadata: pre-registered atom_entry_id=" +
+                                         std::to_string(entry_id) +
+                                         " has no backing AtomEntry at struct_idx=" +
+                                         std::to_string(struct_idx));
             }
+            float packed_numeric = 0.0f;
+            uint32_t packed_flags = 0;
+            packed_numeric = entry->numeric_value;
+            packed_flags = entry->flags;
 
             result.token_ids.push_back(atom_token_id);
             result.is_byte_fallback.push_back(false);
@@ -328,7 +346,7 @@ std::string UniByte::decode(const DecodeRequest& request) const {
         }
     }
 
-    return UnigramLM::denormalizeFromTokenization(result);
+    return denormalizeSpaces(result);
 }
 
 //--------------------------------------------------//

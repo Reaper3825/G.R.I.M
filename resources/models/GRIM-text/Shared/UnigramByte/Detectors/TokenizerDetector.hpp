@@ -25,6 +25,7 @@ struct StructuralSpan {
     size_t start;           // Start position in text (may include leading whitespace)
     size_t end;             // End position (exclusive)
     AtomType atom_type;     // Type of structure detected
+    uint32_t atom_entry_id = kAtomEntryNone; // Per-sequence AtomTable entry ID once registered
 
     // Zero-copy buffer reference (NO std::string allocation!)
     const char* buffer_ptr; // Pointer to original text buffer
@@ -32,8 +33,8 @@ struct StructuralSpan {
     uint32_t length;        // Length of span (end - start)
 
     // Content bounds (same as offset/length since no widening)
-    uint32_t content_offset; // Offset to atom content
-    uint32_t content_length; // Length of atom content
+    uint32_t content_offset; // Offset to content
+    uint32_t content_length; // Length of content
 
     int placeholder_id;     // Token ID of placeholder
 

@@ -202,7 +202,7 @@ SectionResults runSection1_EncodingDecoding(GrimTokenizer& tokenizer, bool verbo
         test.input = input;
         
         // Encode
-        auto ids = tokenizer.encode(input);
+        auto ids = tokenizer.tokenizeWithMetadata(input).token_ids;
         
         // Decode
         std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(ids));
@@ -259,7 +259,7 @@ SectionResults runSection2_SpacesGrammar(GrimTokenizer& tokenizer, bool verbose)
         TestResult test;
         test.name = "Space token handling";
         // UniByte handles spaces via byte fallback or unigram pieces
-        auto space_ids = tokenizer.encode(" ");
+        auto space_ids = tokenizer.tokenizeWithMetadata(" ").token_ids;
         test.passed = !space_ids.empty();
         test.details = test.passed ? 
             "Space encodes to " + std::to_string(space_ids.size()) + " token(s)" :
@@ -274,7 +274,7 @@ SectionResults runSection2_SpacesGrammar(GrimTokenizer& tokenizer, bool verbose)
         TestResult test;
         test.name = "Multiple spaces normalization";
         test.input = "hello    world";  // 4 spaces
-        auto ids = tokenizer.encode(test.input);
+        auto ids = tokenizer.tokenizeWithMetadata(test.input).token_ids;
         test.output = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(ids));
         // Should normalize to single space or handle gracefully
         test.passed = true;  // Normalization is acceptable behavior
@@ -289,7 +289,7 @@ SectionResults runSection2_SpacesGrammar(GrimTokenizer& tokenizer, bool verbose)
         TestResult test;
         test.name = "Leading/trailing spaces";
         test.input = "  hello  ";
-        auto ids = tokenizer.encode(test.input);
+        auto ids = tokenizer.tokenizeWithMetadata(test.input).token_ids;
         test.output = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(ids));
         test.passed = true;  // Trimming is acceptable
         test.details = "Output: \"" + escapeString(test.output) + "\"";
@@ -311,7 +311,7 @@ SectionResults runSection2_SpacesGrammar(GrimTokenizer& tokenizer, bool verbose)
         TestResult test;
         test.name = "Punctuation: " + desc;
         test.input = input;
-        auto ids = tokenizer.encode(input);
+        auto ids = tokenizer.tokenizeWithMetadata(input).token_ids;
         test.output = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(ids));
         
         // Check all punctuation preserved (ignoring spaces)
@@ -335,7 +335,7 @@ SectionResults runSection2_SpacesGrammar(GrimTokenizer& tokenizer, bool verbose)
         TestResult test;
         test.name = "Case handling";
         test.input = "HeLLo WoRLD";
-        auto ids = tokenizer.encode(test.input);
+        auto ids = tokenizer.tokenizeWithMetadata(test.input).token_ids;
         test.output = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(ids));
         
         // Our tokenizer lowercases, so check for that
@@ -374,7 +374,7 @@ SectionResults runSection3_EdgeCases(GrimTokenizer& tokenizer, bool verbose) {
         TestResult test;
         test.name = "Empty string";
         test.input = "";
-        auto ids = tokenizer.encode(test.input);
+        auto ids = tokenizer.tokenizeWithMetadata(test.input).token_ids;
         test.output = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(ids));
         // Should handle gracefully (maybe just BOS/EOS)
         test.passed = true;
@@ -393,7 +393,7 @@ SectionResults runSection3_EdgeCases(GrimTokenizer& tokenizer, bool verbose) {
                      std::string(100, 'e') + " " + std::string(100, 'f') + " " +
                      std::string(100, 'g') + " " + std::string(100, 'h') + " " +
                      std::string(100, 'i') + " " + std::string(100, 'j');
-        auto ids = tokenizer.encode(test.input);
+        auto ids = tokenizer.tokenizeWithMetadata(test.input).token_ids;
         test.output = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(ids));
         test.passed = (ids.size() > 0);
         test.details = "Encoded to " + std::to_string(ids.size()) + " tokens";
@@ -421,7 +421,7 @@ SectionResults runSection3_EdgeCases(GrimTokenizer& tokenizer, bool verbose) {
         TestResult test;
         test.name = "Unknown character handling";
         test.input = "hello\xFF\xFEworld";  // Invalid UTF-8
-        auto ids = tokenizer.encode(test.input);
+        auto ids = tokenizer.tokenizeWithMetadata(test.input).token_ids;
         test.output = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(ids));
         // Should not crash - UniByte uses byte fallback for unknown chars
         test.passed = true;
@@ -436,7 +436,7 @@ SectionResults runSection3_EdgeCases(GrimTokenizer& tokenizer, bool verbose) {
         TestResult test;
         test.name = "Unicode handling";
         test.input = "café naïve résumé";
-        auto ids = tokenizer.encode(test.input);
+        auto ids = tokenizer.tokenizeWithMetadata(test.input).token_ids;
         test.output = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(ids));
         test.passed = (ids.size() > 0);
         test.details = "Encoded to " + std::to_string(ids.size()) + " tokens";
@@ -450,7 +450,7 @@ SectionResults runSection3_EdgeCases(GrimTokenizer& tokenizer, bool verbose) {
         TestResult test;
         test.name = "Number tokenization";
         test.input = "12345 67890";
-        auto ids = tokenizer.encode(test.input);
+        auto ids = tokenizer.tokenizeWithMetadata(test.input).token_ids;
         test.output = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(ids));
         
         if (verbose) {
@@ -486,7 +486,7 @@ SectionResults runSection3_EdgeCases(GrimTokenizer& tokenizer, bool verbose) {
         TestResult test;
         test.name = "DIAGNOSTIC: Space preservation";
         test.input = "hello how are you";
-        auto ids = tokenizer.encode(test.input);
+        auto ids = tokenizer.tokenizeWithMetadata(test.input).token_ids;
         test.output = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(ids));
         
         int input_spaces = std::count(test.input.begin(), test.input.end(), ' ');

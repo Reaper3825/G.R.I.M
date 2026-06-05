@@ -118,9 +118,11 @@ public:
                            int subword_mining_workers = 0,
                            size_t subword_mining_max_bytes = 0);
     
-    // Canonical public vocab write entrypoint. The actual storage mutation is
-    // performed by VocabWriteOp.hpp so pieces_ and piece_to_id_ stay synchronized.
-    void writePiece(const std::string& text, float score, bool is_user_defined);
+    // Transitional learned-vocab storage while UnigramLM is being split apart.
+    // Mutate these only through VocabWriteOp.hpp targets; direct vector/map writes
+    // recreate the split-vocab bug that token IDs are position-derived to avoid.
+    std::vector<UnigramPiece> pieces_;
+    std::unordered_map<std::string, int> piece_to_id_;
     
     // Compute token_id for piece at given index in pieces_
     static int tokenIdForIndex(int index) { return UNIGRAM_VOCAB_OFFSET + index; }
@@ -135,7 +137,7 @@ public:
     bool hasPiece(const std::string& text) const;
 
     //--------------------------------------------------//
-    // CPU Encoding/Decoding
+    // CPU Encoding
     //--------------------------------------------------//
     
     // Encode text using Viterbi (best segmentation)
@@ -143,9 +145,6 @@ public:
     // prepend_space=false: skip prepend (mid-text segment after atom)
     std::vector<int> encode(const std::string& text, bool prepend_space = true) const;
     
-    // Decode token IDs to text
-    std::string decode(const std::vector<int>& token_ids) const;
-
     //--------------------------------------------------//
     // GPU Encoding/Decoding
     //--------------------------------------------------//
@@ -153,9 +152,6 @@ public:
     // Initialize GPU resources (call before GPU operations)
     bool initGPU();
     bool initGPUForMaxSequenceLength(size_t required_max_sequence_length);
-    bool runtimeReadyForMaxSequenceLength(size_t required_max_sequence_length) const;
-    void requireRuntimeReadyForMaxSequenceLength(size_t required_max_sequence_length,
-                                                const char* caller) const;
     void requireRuntimeReadyForLastTraining(const char* caller) const;
     UnigramRuntimeStateSnapshot runtimeStateSnapshot() const;
     const UnigramTrainingRuntimeReport& lastTrainingRuntimeReport() const;
@@ -166,19 +162,11 @@ public:
     
     int pieceCount() const { return static_cast<int>(pieces_.size()); }
     
-    // SentencePiece-style whitespace normalization (▁ ↔ space)
-    static std::string normalizeForTokenization(const std::string& text);
-    static std::string denormalizeFromTokenization(const std::string& text);
-    
     // Build trie from vocabulary (must call after adding pieces, before encoding)
     void buildTrie();
 
 private:
     friend class UnigramViterbiSession;
-
-    // Vocabulary storage
-    std::vector<UnigramPiece> pieces_;
-    std::unordered_map<std::string, int> piece_to_id_;
     
     bool enable_byte_fallback_ = true;
     

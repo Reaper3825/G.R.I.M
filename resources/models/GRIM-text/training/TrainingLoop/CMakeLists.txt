@@ -718,39 +718,6 @@ target_include_directories(tokenizer_self_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared             # Shared/ folder for TrainingState, etc.
 )
 
-# Tokenizer runner — standalone validation + JSON payload output
-# Launched by train_gpu before training, or from UI for vocab testing
-add_executable(tokenizer_runner
-    ../tokenizer_runner.cu
-)
-
-set_target_properties(tokenizer_runner PROPERTIES
-    CUDA_ARCHITECTURES "${GRIM_CUDA_ARCHITECTURES}"
-    CUDA_RUNTIME_LIBRARY Shared
-)
-
-target_compile_options(tokenizer_runner PRIVATE
-    $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
-)
-
-target_link_libraries(tokenizer_runner PRIVATE
-    nlohmann_json::nlohmann_json
-    CUDA::cudart
-    grim_unigrambyte_tokenizer
-)
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    target_link_libraries(tokenizer_runner PRIVATE stdc++fs)
-endif()
-
-target_include_directories(tokenizer_runner PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../..
-    ${CMAKE_CURRENT_SOURCE_DIR}/../..
-    ${CMAKE_CURRENT_SOURCE_DIR}/..
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../GRIM
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../control
-)
-
 # UnigramByte tokenizer test executable
 add_executable(unigrambyte_self_test
     ../../Tests/unigrambyte_self_test.cu

@@ -9,12 +9,22 @@
 
 `UnigramByte` is a composed tokenizer with four jobs:
 
-1. `UnigramLM` does normal subword tokenization.
-2. `ByteEncoder` guarantees 100% UTF-8 coverage when no unigram piece matches.
-3. `Detectors/DetectorRegistry` scans raw text for numeric atoms and non-token text features.
-4. `AtomTable` stores parsed numeric values so the model can keep a placeholder token and still recover the real value.
+1. `Detectors/DetectorRegistry` scans raw text for numeric atoms and non-token text features.
+2. `AtomTable` stores parsed numeric values so the model can keep a placeholder token and still recover the real value.
+3. `UnigramLM` does learned subword tokenization on the residual non-atom text.
+4. `ByteEncoder` is the final byte-overflow path when the finalized unigram model would otherwise return `UNK` on that residual text.
 
 The top-level class is `UniByte`. Everything else exists to support it.
+
+### Intended order, clearly
+
+The intended tokenizer pipeline is:
+
+1. **Pull atoms out first and fully deal with them.**
+2. **Run the full unigram training/segmentation loop on what remains.**
+3. **Only then overflow uncovered residual bytes into byte fallback tokens.**
+
+So byte fallback is runtime coverage policy, not unigram-training probability mass. If you see fallback threaded through training telemetry or the forward-backward lattice, that is debt from the bolted-on implementation, not the target design.
 
 It does **not** own training sequence layout. `BOS`/`EOS` insertion belongs to `SlidingWindow.cu`; padding and target masking belong to `BatchPayload.cu`. The tokenizer only knows special tokens as reserved layout metadata and writes those records into saved vocab files. `UniByte` intentionally has no batch encode API; corpus batching and window materialization must route through the startup data path.
 
@@ -41,10 +51,10 @@ Read the tokenizer in this order:
 5. `UnigramGpuMemory.hpp` / `UnigramGpuMemory.cu` — durable CUDA buffer ownership for `UnigramLM`
 6. `AtomTable.hpp` / `AtomTable.cu` — parsed numeric atom registry
 7. `Detectors/` — `RawTextDetector` parent class, registry, numeric detectors, and text-feature detectors
-8. `Byte.hpp` / `Byte.cu` — byte fallback
+8. `Byte.hpp` / `Byte.cu` — post-unigram byte overflow / fallback
 9. `TextUtils.hpp` / `TextUtils.cu` — normalization and UTF-8 helpers
 10. `UnigramTrainer.hpp` / `UnigramTrainer.cu` — training pipeline only
-11. `Training/UnigramForwardBackward.hpp` / `Training/UnigramForwardBackward.cu` — training-only true Unigram forward-backward expected-count estimator
+11. `Training/UnigramForwardBackward.hpp` / `Training/UnigramForwardBackward.cu` — training-only true Unigram forward-backward expected-count estimator over learned-piece paths on non-atom residual spans
 
 If you read it in a different order, the code starts to feel like a haunted house.
 
@@ -79,6 +89,7 @@ orchestrator]
 - `TokenLayout.hpp` is the shared foundation.
 - `UniByte` composes the rest; it should not re-implement their logic.
 - `UnigramTrainer.cu` is training-only; inference wrappers live in `Unigram.cu`, Viterbi segmentation lives in `UnigramViterbi.cu`, and soft EM expected-count math lives in `Training/UnigramForwardBackward.*`.
+- The intended split is Phase-2-style: atoms are resolved before unigram, `UnigramTrainer` owns the pure unigram training loop over residual text, and Viterbi + byte overflow are the runtime siblings that consume the finalized tokenizer state.
 - `Detectors/TokenizerDetector.hpp` is the parent interface for detectors that operate on raw text byte offsets only.
 - `Detectors/DetectorRegistry.*` owns detector registration, longest-match scanning, and atom `StructuralSpan` extraction; `UniByte.cu` only consumes registry-owned results.
 
@@ -100,6 +111,8 @@ The live layout comes from `Byte.hpp` and `TokenLayout.hpp`.
 - `UniByte::vocabSize()` = full tokenizer token-space size (`UNIGRAM_VOCAB_OFFSET + pieceCount`). This is the value saved to the `.grmt` header during data preparation.
 - `UnigramLM::pieceCount()` = learned subword count only. It is allowed for diagnostics/layout summaries, not for model embedding allocation.
 - `VocabWriteOp.hpp` is the sole learned-piece write primitive. Call it for append/upsert/compaction; never push into `pieces_` or rebuild `piece_to_id_` by hand.
+- `UnigramLM::writePiece()` is intentionally removed. Do not recreate a public/manual vocab-builder wrapper; call `VocabWriteOp.hpp` directly at trainer/artifact boundaries until the remaining class shell is removed.
+- `pieces_` and `piece_to_id_` are temporarily public only so callers can form `UnigramVocabWriteTarget`; treating that visibility as permission for direct mutation is a Rule 20 split-vocab violation.
 - Config-driven learned-vocab limits come from `GRIM::HyperParameters::TokenizerHP` in `HyperparameterGroupings.hpp`.
 - `vocab.bin` contains a serialized record count for file I/O plus a token-space consistency check. Phase 1 startup does not use `vocab.bin` to choose final model vocab size.
 - `Shared/GRMT/GrmtFormat.hpp` owns `.grmt` magic/header read, validation, and write helpers. Do not duplicate header structs or magic/version checks in loaders, diagnostics, or subprocess tools.
@@ -123,27 +136,29 @@ The live layout comes from `Byte.hpp` and `TokenLayout.hpp`.
 
 ```mermaid
 flowchart LR
-    IN[Input text] --> DET[detectStructures]
+   IN[Input text] --> DET[scan raw detections]
     DET --> REG[registerAtom in AtomTable]
     REG --> INJ[inject NUM placeholders]
     INJ --> NORM[normalizeSpaces]
    NORM --> SEG[UnigramViterbiSession]
     SEG --> FB{piece found?}
     FB -->|yes| TOK[token ids]
-    FB -->|no| BY[Byte fallback]
+   FB -->|no| BY[Byte overflow fallback]
     BY --> TOK
     TOK --> OUT[UniByteResult and metadata]
 ```
 
 ### What actually happens
 
-1. `DetectorRegistry::detectStructures()` finds numeric spans.
+1. `DetectorRegistry::scan()` finds raw detections; `UniByte` filters atom-emitting detections into numeric spans.
 2. Each span is registered in `AtomTable` and gets metadata.
 3. The original text is rewritten with numeric placeholders before unigram segmentation.
 4. Text normalization happens before unigram segmentation.
 5. `UnigramLM::encode()` creates a `UnigramViterbiSession` over the normalized text.
-6. Any miss falls back to raw bytes through `ByteEncoder`.
+6. Any residual byte sequence not covered by the finalized learned-piece segmentation overflows to raw bytes through `ByteEncoder`.
 7. `UniByteResult` is assembled and `validate()` checks that every parallel array matches `token_ids.size()`.
+
+Atoms never reach the byte-overflow step because they were already extracted and handled before unigram segmentation started.
 
 No step injects `BOS`, appends `EOS`, pads, or mutates targets. Those are downstream layout responsibilities.
 
@@ -170,12 +185,14 @@ No step injects `BOS`, appends `EOS`, pads, or mutates targets. Those are downst
 flowchart LR
     CORPUS[Corpus] --> DETECT[detect numeric spans]
     DETECT --> SKIP[skip atom spans during training]
-   SKIP --> CAND[data-selected candidate vocabulary]
-   CAND --> E[forward-backward E-step]
+   SKIP --> RES[residual non-atom text]
+   RES --> CAND[data-selected candidate vocabulary]
+   CAND --> E[pure unigram forward-backward E-step]
     E --> M[M-step recount]
     M --> P[prune low-value pieces]
     P -->|repeat| E
     P --> FINAL[final scores and buildTrie]
+    FINAL --> RUNTIME[Runtime Viterbi plus byte overflow]
 ```
 
 ### Ownership split
@@ -183,7 +200,7 @@ flowchart LR
 - Byte-fallback enablement is `TokenizerHP` / `UniByte` ownership. Construct `UnigramLM` with the desired mode and pass `TokenizerHP` into vocab-load helpers; do not reintroduce public `UnigramLM` setter/getter accessors for this config bit.
 - `UnigramLM::trainFromCorpus()` is declared in `Unigram.hpp` and owns the raw-text detector prepass for training. Parseable atom spans are detected there from `TokenizerHP` before delegating to the atom-aware overload; do not recreate a `UniByte::trainFromCorpus()` wrapper.
 - The actual training orchestration lives in `UnigramTrainer.cu`.
-- True Unigram soft-EM math lives in `Training/UnigramForwardBackward.hpp/.cu`; training must use posterior expected counts from forward-backward, not Viterbi hard-EM counts.
+- True Unigram soft-EM math lives in `Training/UnigramForwardBackward.hpp/.cu`; training must use posterior expected counts from forward-backward over learned-piece paths only, not Viterbi hard-EM counts.
 - `UnigramLM::trainFromCorpus()` fails at entry for invalid `target_vocab_size`,
    `character_coverage`, `min_subword_freq`, or `subword_mining_workers`; do not rely on
    later shrink/EM code to discover malformed hyperparameters.
@@ -191,17 +208,15 @@ flowchart LR
    `normalizeWithSpans()`. Span size mismatches, reversed spans, out-of-bounds spans, and
    overlapping/unsorted spans must fail before any normalization can rewrite offsets.
 - Atom spans are skipped during training so numeric internals do not contaminate vocab statistics.
-- Forward-backward stats separate learned-piece posterior mass from fixed-penalty
-   byte-fallback path usage. The M-step normalizes learned piece probabilities using only
-   learned-piece mass plus learned-piece smoothing. Byte fallback is excluded from that
-   normalizer because `UNKNOWN_SCORE` is an unnormalized per-byte coverage penalty; if byte
-   fallback ever becomes trainable probability mass or UTF-8-character fallback, update the
-   forward/backward lattice, M-step normalizer, production Viterbi scoring/output, token
-   layout, and this doc together.
-- Training enforces byte-fallback dominance only after Phase-A EM convergence and after
-   later shrink/cleanup reconvergence phases. Do not run the guard inside early E-step
-   iterations: sparse initial candidates must get M-step recovery time before fallback
-   dominance is considered diagnostic.
+- Byte fallback is not part of the intended unigram training objective. The forward-backward
+   lattice, posterior expected counts, shrink ranking, and cleanup decisions are supposed to
+   be learned-piece-only decisions over the residual non-atom text. If current code still
+   threads byte fallback through training telemetry or E-step bookkeeping, that is
+   architectural drift to remove, not the target contract.
+- When byte fallback is enabled, Step-2 character seeds are transient bootstrap/coverage
+   diagnostics only. They must not be emitted as learned pieces, must not pre-seed
+   structural dedup, and must not suppress mined one-character candidates from competing
+   normally. Once candidate mining starts, fallback mode should treat those seeds as spent.
 - When byte fallback is disabled, training must insert the Step-2 character seeds as learned
    pieces or fail immediately before EM. The no-fallback path also fails if those seeds do
    not cover every trainable normalized character, or if `target_vocab_size` cannot retain
@@ -227,8 +242,8 @@ flowchart LR
    all survive.
 - Final dead-token cleanup must fail before compaction if the dead set would delete every
    learned piece. Do not rewrite `pieces_` to empty and let Phase-D fail later during
-   forward-backward lattice construction; the root cause is byte fallback owning all
-   posterior mass.
+   forward-backward lattice construction; that indicates the pure-unigram objective/candidate
+   set is broken, not something byte overflow should rescue.
 - Subword mining counts must be `uint64_t`/overflow-checked and exact after global merge.
    Large corpora can exceed signed `int`; never store candidate counts in signed 32-bit
    containers.
@@ -257,7 +272,7 @@ Use this table as the “who owns what?” map.
 | File | Owns | Should not own |
 |---|---|---|
 | `TokenLayout.hpp` | token constants, special-token metadata, `AtomType`, token-id helpers | runtime parsing, CUDA state, sequence/window layout |
-| `Byte.hpp/.cu` | byte token mapping and byte fallback encode/decode | unigram logic, atom parsing |
+| `Byte.hpp/.cu` | byte token mapping and post-unigram byte overflow/fallback encode/decode | unigram training logic, atom parsing |
 | `TextUtils.hpp/.cu` | UTF-8 helpers, SentencePiece-style whitespace normalization | tokenizer orchestration |
 | `Detectors/TokenizerDetector.hpp` | raw-text detector parent class and detection result types | token ID classification, token assembly, atom storage |
 | `Detectors/DetectorRegistry.hpp/.cu` | detector registration, priority ordering, longest-match raw-text scan | tokenizer HP ownership, token IDs |
@@ -267,7 +282,7 @@ Use this table as the “who owns what?” map.
 | `AtomTable.hpp/.cu` | parsed atom storage, dedup, GPU packing, numeric value access | subword segmentation |
 | `Unigram.hpp/.cu` | learned vocab semantics, trie construction, encode/decode wrappers | raw learned-vocab vector/map mutation, Viterbi DP state, artifact file I/O, detection policy, top-level orchestration, training boundary-token injection |
 | `UnigramViterbi.hpp/.cu` | CUDA-backed production Viterbi session, per-segmentation launch/backtrack validation, SentencePiece-style subword path selection, Viterbi CUDA kernels | learned-vocab mutation, durable CUDA buffer lifetime, artifact serialization, detector policy, hard-coded punctuation splitting |
-| `Training/UnigramForwardBackward.hpp/.cu` | training-only log-space forward-backward lattice and posterior expected-count accumulation for true Unigram EM | production encode path, CUDA Viterbi workspace ownership, learned-vocab mutation |
+| `Training/UnigramForwardBackward.hpp/.cu` | training-only log-space forward-backward lattice and posterior expected-count accumulation for true Unigram EM on learned-piece paths over non-atom residual spans | production encode path, CUDA Viterbi workspace ownership, byte-overflow policy, learned-vocab mutation |
 | `VocabWriteOp.hpp` | append/upsert/rewrite of learned unigram pieces plus `piece_to_id` synchronization and token-ID validation | training scoring, Viterbi, artifact serialization, model/GRMT vocab-size authority |
 | `UnigramGpuMemory.hpp/.cu` | `UnigramLM` CUDA buffer lifetime, transactional GPU upload, Viterbi workspace ownership, device pointer cleanup | vocab semantics, Viterbi scoring, token assembly, training |
 | `UnigramTrainer.hpp/.cu` | unigram training implementation | runtime encode path |
@@ -305,8 +320,8 @@ Raw-text detection is registry-driven:
 
 1. `RawTextDetector` is the parent class for detectors that scan source byte offsets.
 2. `DetectorRegistry` owns registered detectors, priority ordering, and longest-match scanning.
-3. `DetectorRegistry::scan()` returns raw detections for numbers, whitespace, uppercase runs, and future source-text features.
-4. `DetectorRegistry::detectStructures()` filters that raw detection stream down to atom-emitting spans before `AtomTable` work.
+3. `DetectorRegistry::scan()` is the single registry traversal API. It returns raw detections for numbers, whitespace, uppercase runs, and future source-text features.
+4. `UniByte` and tokenizer training both consume `DetectorRegistry::scan()` directly and filter atom-emitting detections locally before `AtomTable` / `AtomSpan` work.
 
 Detector purpose is split deliberately:
 - atom-emitting detectors identify raw text that should collapse to one atom token plus side-channel metadata;
@@ -342,9 +357,9 @@ Right now the active emitted atom types are numeric: `ATOM_INT` and `ATOM_FLOAT`
 
 2. **`buildTrie()` and runtime finalization must happen before non-empty encode.**
    Load or train vocab first, build the trie, then upload the trie/workspace. `UnigramLM::initGPU()` is only the default-capacity initializer for generic/server use.
-   Tokenizer training uses CPU log-space forward-backward for EM and must call `UnigramLM::initGPUForMaxSequenceLength(longest_normalized_training_segment)` after the final `buildTrie()` so normalized corpus spans larger than the default workspace still use the reusable CUDA Viterbi buffers at runtime instead of failing at encode time.
+   Tokenizer training uses CPU log-space forward-backward for pure unigram EM and must call `UnigramLM::initGPUForMaxSequenceLength(longest_normalized_training_segment)` after the final `buildTrie()` so normalized corpus spans larger than the default workspace still use the reusable CUDA Viterbi buffers at runtime instead of failing at encode time.
 
-   Training is the production-runtime finalization owner. `UnigramLM::trainFromCorpus()` returns a populated `UnigramTrainingRuntimeReport` only after the uploaded generation matches the live trie and the workspace is large enough for the training corpus envelope. GRMT/DataLoader paths must assert `UniByte::requireRuntimeReadyForLastTraining()` after training, not repair training with generic `initGPU()`.
+   Training is the production-runtime finalization owner. `UnigramLM::trainFromCorpus()` returns a populated `UnigramTrainingRuntimeReport` only after the uploaded generation matches the live trie and the workspace is large enough for the training corpus envelope. GRMT/DataLoader paths must assert `tokenizer.unigramLM().requireRuntimeReadyForLastTraining(...)` after training, not repair training with generic `initGPU()`.
 
    The trie mirrors the current learned-piece set. Rebuild it after load/train mutations only; do not add post-load vocab capping paths.
 
@@ -356,14 +371,14 @@ Right now the active emitted atom types are numeric: `ATOM_INT` and `ATOM_FLOAT`
 
    Punctuation is ordinary normalized text in this SentencePiece-style tokenizer. Do not add hard Viterbi punctuation boundaries. A punctuation mark may be a learned piece by itself, part of a larger learned piece, or a byte fallback only if no selected learned piece covers it.
 
-3. **Byte fallback is the coverage guarantee.**
+3. **Byte fallback is the post-unigram coverage guarantee.**
 
    Byte fallback is deliberately raw byte-level fallback with an unnormalized fixed per-byte penalty, not UTF-8-character fallback and not part of the learned-piece probability distribution.
-   If a piece is not found, tokenization must still succeed.
+   It is the overflow path taken only after atoms are already removed and the finalized learned-piece model has no covering piece for the residual bytes.
 
    With byte fallback enabled, each fallback transition advances exactly one raw byte and emits the raw byte token (`BYTE_TOKEN_OFFSET + byte`), not `UNK_TOKEN_ID`. A multibyte UTF-8 codepoint therefore produces one fallback transition/token per byte if no learned piece covers it. Forward DP stores `d_viterbi_prev_is_fallback[end]` on the selected backpointer, and backtrack marks per-byte fallback metadata from that explicit flag only. Forward-DP candidate fallback edges are not proof that the final segmentation emitted a byte token, and token ID range must not be used as a fallback-selection proxy.
 
-   `UNKNOWN_SCORE` in `TokenLayout.hpp` is the only unnormalized per-byte fallback penalty source. CUDA Viterbi and tokenizer-training forward/backward must use it directly and apply it once per raw fallback byte; do not add caller-provided unknown-score overrides to kernel signatures, launch helpers, or encode APIs. Scores are initialized with `kViterbiUnreachableScore`, but reachability is not inferred from score values: position `0` is reachable by definition, and every other position is reachable only when `viterbi_prev[pos] >= 0`.
+   `UNKNOWN_SCORE` in `TokenLayout.hpp` is the only unnormalized per-byte fallback penalty source. CUDA Viterbi/runtime segmentation must use it directly and apply it once per raw fallback byte; do not add caller-provided unknown-score overrides to kernel signatures, launch helpers, or encode APIs. Scores are initialized with `kViterbiUnreachableScore`, but reachability is not inferred from score values: position `0` is reachable by definition, and every other position is reachable only when `viterbi_prev[pos] >= 0`. If training code consumes `UNKNOWN_SCORE` inside the unigram EM lattice, that is architectural drift.
 
    Exact-score tie-breaking is part of production behavior: learned-piece transition beats fallback transition, longer span beats shorter span, and lower token ID breaks any remaining tie. Keep `shouldReplaceViterbiTransition()` and this invariant in sync.
 
@@ -433,4 +448,4 @@ After tokenizer changes, verify at least:
 
 ## One-line summary
 
-`UniByte` is the orchestrator, `UnigramLM` is the subword engine, `ByteEncoder` is the safety net, `DetectorRegistry` finds raw-text structure/features, and `AtomTable` keeps numeric atom values behind placeholder tokens.
+`UniByte` is the orchestrator: detectors/atoms resolve structure first, `UnigramLM` learns and segments the residual text, and `ByteEncoder` is only the final byte-overflow safety net after unigram coverage runs out.

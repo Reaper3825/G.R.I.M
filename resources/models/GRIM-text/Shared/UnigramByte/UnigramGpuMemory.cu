@@ -301,31 +301,27 @@ bool UnigramLM::initGPUForMaxSequenceLength(size_t required_max_sequence_length)
     return uploadTrieToGPU(workspace_sequence_length);
 }
 
-bool UnigramLM::runtimeReadyForMaxSequenceLength(size_t required_max_sequence_length) const {
-    if (!gpu_) {
-        throw std::runtime_error("UnigramLM::runtimeReadyForMaxSequenceLength: gpu_ is NULL - object was moved from or not constructed");
-    }
-    const size_t workspace_sequence_length = resolveWorkspaceSequenceLength(
-        required_max_sequence_length,
-        "UnigramLM::runtimeReadyForMaxSequenceLength");
-
-    std::lock_guard<std::mutex> lock(gpu_->viterbi_workspace_mutex);
-    return gpu_->initialized &&
-           gpu_->uploaded_trie_generation == trie_generation_ &&
-           gpu_->workspace_max_length >= workspace_sequence_length;
-}
-
-void UnigramLM::requireRuntimeReadyForMaxSequenceLength(size_t required_max_sequence_length,
-                                                       const char* caller) const {
+void UnigramLM::requireRuntimeReadyForLastTraining(const char* caller) const {
     if (caller == nullptr || caller[0] == '\0') {
-        throw std::runtime_error("UnigramLM::requireRuntimeReadyForMaxSequenceLength requires a non-empty caller label");
+        throw std::runtime_error("UnigramLM::requireRuntimeReadyForLastTraining requires a non-empty caller label");
+    }
+    if (last_training_runtime_report_.required_viterbi_workspace_length == 0) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": tokenizer has no training runtime report; trainFromCorpus() must finalize runtime state before corpus encoding");
+    }
+    if (last_training_runtime_report_.finalized_trie_generation != trie_generation_) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": tokenizer training runtime report is stale: report_generation=" +
+                                 std::to_string(last_training_runtime_report_.finalized_trie_generation) +
+                                 ", live_generation=" + std::to_string(trie_generation_));
     }
     if (!gpu_) {
         throw std::runtime_error(std::string(caller) + ": UnigramLM.gpu_ is NULL - object was moved from or not constructed");
     }
+
     const size_t workspace_sequence_length = resolveWorkspaceSequenceLength(
-        required_max_sequence_length,
-        "UnigramLM::requireRuntimeReadyForMaxSequenceLength");
+        last_training_runtime_report_.required_viterbi_workspace_length,
+        "UnigramLM::requireRuntimeReadyForLastTraining");
 
     std::lock_guard<std::mutex> lock(gpu_->viterbi_workspace_mutex);
     if (!gpu_->initialized ||
@@ -339,22 +335,6 @@ void UnigramLM::requireRuntimeReadyForMaxSequenceLength(size_t required_max_sequ
                                  ", workspace_max_length=" + std::to_string(gpu_->workspace_max_length) +
                                  ", required_workspace_length=" + std::to_string(workspace_sequence_length));
     }
-}
-
-void UnigramLM::requireRuntimeReadyForLastTraining(const char* caller) const {
-    if (last_training_runtime_report_.required_viterbi_workspace_length == 0) {
-        throw std::runtime_error(std::string(caller) +
-                                 ": tokenizer has no training runtime report; trainFromCorpus() must finalize runtime state before corpus encoding");
-    }
-    if (last_training_runtime_report_.finalized_trie_generation != trie_generation_) {
-        throw std::runtime_error(std::string(caller) +
-                                 ": tokenizer training runtime report is stale: report_generation=" +
-                                 std::to_string(last_training_runtime_report_.finalized_trie_generation) +
-                                 ", live_generation=" + std::to_string(trie_generation_));
-    }
-    requireRuntimeReadyForMaxSequenceLength(
-        last_training_runtime_report_.required_viterbi_workspace_length,
-        caller);
 }
 
 UnigramRuntimeStateSnapshot UnigramLM::runtimeStateSnapshot() const {

@@ -73,7 +73,7 @@ UnigramByte/
 ├── UnigramTrainer.hpp       [NEW]  ~40 lines   — trainFromCorpus() declaration, training config struct
 ├── UnigramTrainer.cu         [NEW]  ~1300 lines — trainFromCorpus(), subword mining, EM, noise filters, sentence segmentation
 ├── UniByte.hpp              [MOD]  ~340 lines  — public tokenizer API; no public detector methods; raw-text detection is registry-owned
-├── UniByte.cu               [MOD]  ~700 lines  — Orchestration only: detectStructures, encode pipeline, decode, GPU kernels
+├── UniByte.cu               [MOD]  ~700 lines  — Orchestration only: raw detection scan, encode pipeline, decode, GPU kernels
 ```
 
 **Total: 17 files, ~6,770 lines (vs current 10 files, 8,149 lines)**  
@@ -123,7 +123,7 @@ AhoCorasick.hpp ←── TokenLayout.hpp (instead of including Unigram.hpp)
 - `Detectors/NumericDetectors.hpp/.cu` — `IntegerDetector`, `FloatDetector` atom emitters.
 - `Detectors/TextFeatureDetectors.hpp/.cu` — `WhitespaceDetector`, `UppercaseRunDetector` non-atom raw-text feature detectors.
 
-**Delete dead detectors:** Cross-reference `DetectorRegistry::detectStructures()` to confirm which detectors emit atoms. Hex/binary/path/date/time/IP/string/identifier detectors are not active and must not be recreated without direct registry ownership.
+**Delete dead detectors:** Cross-reference `DetectorRegistry::scan()` call sites to confirm which detectors emit atoms. Hex/binary/path/date/time/IP/string/identifier detectors are not active and must not be recreated without direct registry ownership.
 
 ### Step 4: Extract `UnigramTrainer.hpp` / `UnigramTrainer.cu`
 
@@ -220,7 +220,7 @@ TokenLayout.hpp          ←── (standalone: <cstdint>, <string>)
 
 | Code | Location | Evidence |
 |------|----------|----------|
-| `parseURL()` | AtomTable.cu ~120 lines | `ATOM_URL` detection removed from `detectStructures()` |
+| `parseURL()` | AtomTable.cu ~120 lines | `ATOM_URL` detection removed from raw detection consumers |
 | `parseEmail()` | AtomTable.cu ~80 lines | `ATOM_EMAIL` detection removed |
 | `parsePath()` | AtomTable.cu ~60 lines | `ATOM_PATH` detection removed from pipeline |
 | `parseDate()` | AtomTable.cu ~70 lines | `ATOM_DATE` detection removed |

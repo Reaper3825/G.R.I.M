@@ -105,38 +105,6 @@ std::vector<RawTextDetection> DetectorRegistry::scan(
     return detections;
 }
 
-std::vector<StructuralSpan> DetectorRegistry::detectStructures(
-    std::string_view text,
-    const RawTextDetectorOptions& options) const
-{
-    auto makeSpan = [text](size_t start, size_t end, AtomType type) -> StructuralSpan {
-        StructuralSpan span;
-        span.start = start;
-        span.end = end;
-        span.atom_type = type;
-        span.buffer_ptr = text.data();
-        span.offset = static_cast<uint32_t>(start);
-        span.length = static_cast<uint32_t>(end - start);
-        span.content_offset = static_cast<uint32_t>(start);
-        span.content_length = static_cast<uint32_t>(end - start);
-        span.placeholder_id = atomTypeToTokenId(type);
-        return span;
-    };
-
-    std::vector<StructuralSpan> spans;
-    spans.reserve(32);
-
-    const auto detections = scan(text, options);
-    for (const auto& detection : detections) {
-        if (!detection.emitsAtom()) {
-            continue;
-        }
-        spans.push_back(makeSpan(detection.start, detection.end, detection.atom_type));
-    }
-
-    return spans;
-}
-
 DetectorRegistry makeDefaultRawTextDetectorRegistry() {
     DetectorRegistry registry;
     registry.registerDetector(std::make_unique<FloatDetector>());

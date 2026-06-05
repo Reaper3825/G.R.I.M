@@ -8,6 +8,7 @@
 #include "Unigram.hpp"      // For AtomSpan struct definition
 
 #include <algorithm>
+#include <stdexcept>
 
 namespace GRIM {
 namespace Tokenizer {
@@ -153,7 +154,14 @@ std::string denormalizeSpaces(const std::string& text) {
 }
 
 std::string normalizeWithSpans(const std::string& text, std::vector<AtomSpan>& spans) {
-    if (text.empty()) return text;
+    if (text.empty()) {
+        for (const auto& span : spans) {
+            if (span.start > span.end || span.end > text.size()) {
+                throw std::runtime_error("[normalizeWithSpans] Invalid AtomSpan byte range");
+            }
+        }
+        return text;
+    }
 
     // Build orig→norm byte offset mapping
     std::vector<size_t> orig_to_norm(text.size() + 1);
@@ -166,10 +174,12 @@ std::string normalizeWithSpans(const std::string& text, std::vector<AtomSpan>& s
     orig_to_norm[text.size()] = norm_pos;
 
     for (auto& span : spans) {
-        size_t new_start = (span.start <= text.size()) ? orig_to_norm[span.start] : norm_pos;
-        size_t new_end   = (span.end   <= text.size()) ? orig_to_norm[span.end]   : norm_pos;
-        span.start = new_start;
-        span.end   = new_end;
+        if (span.start > span.end || span.end > text.size()) {
+            throw std::runtime_error("[normalizeWithSpans] Invalid AtomSpan byte range");
+        }
+
+        span.start = orig_to_norm[span.start];
+        span.end   = orig_to_norm[span.end];
     }
 
     return normalizeSpaces(text, true);
