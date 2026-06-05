@@ -634,7 +634,6 @@ struct LanguageModelConfig {
     bool tokenizer_enable_atom_reasoning = false;
     bool tokenizer_detect_numbers = false;
     int tokenizer_target_vocab_size = 0;
-    int tokenizer_vocab_size = 0;
     int tokenizer_max_vocab_size = 0;
     int tokenizer_max_length = 0;
     float tokenizer_character_coverage = 0.0f;
@@ -1214,7 +1213,6 @@ inline void deriveComputedLanguageModelConfig(LanguageModelConfig& params) {
     params.execution_block_d_key = head_dim;
     params.execution_block_cross_attn_head_dim = head_dim;
 
-    params.tokenizer_target_vocab_size = params.tokenizer_vocab_size;
     if (params.tokenizer_max_vocab_size > 0 &&
         params.tokenizer_target_vocab_size > params.tokenizer_max_vocab_size) {
         params.tokenizer_target_vocab_size = params.tokenizer_max_vocab_size;
@@ -1955,7 +1953,7 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(attention_diag_head);
     GRIM_LOAD_CONFIG_FIELD(tokenizer_enable_atom_reasoning);
     GRIM_LOAD_CONFIG_FIELD(tokenizer_detect_numbers);
-    GRIM_LOAD_CONFIG_FIELD(tokenizer_vocab_size);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_target_vocab_size);
     GRIM_LOAD_CONFIG_FIELD(tokenizer_max_vocab_size);
     GRIM_LOAD_CONFIG_FIELD(tokenizer_max_length);
     GRIM_LOAD_CONFIG_FIELD(tokenizer_min_cleaned_text_length);
@@ -2112,7 +2110,7 @@ inline float snapshotEffectiveGradClipNorm(
 inline int snapshotTokenizerTargetVocabSize(
     const GRIM::Config::AiConfigSnapshot& snapshot)
 {
-    int target_vocab_size = snapshotTrainingConfigField<int>(snapshot, "tokenizer_vocab_size");
+    int target_vocab_size = snapshotTrainingConfigField<int>(snapshot, "tokenizer_target_vocab_size");
     const int max_vocab_size = snapshotTrainingConfigField<int>(snapshot, "tokenizer_max_vocab_size");
     if (max_vocab_size > 0 && target_vocab_size > max_vocab_size) {
         target_vocab_size = max_vocab_size;
@@ -2453,7 +2451,6 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_enable_atom_reasoning);
     GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_detect_numbers);
     GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_target_vocab_size);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_vocab_size);
     GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_max_vocab_size);
     GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_max_length);
     GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_character_coverage);
