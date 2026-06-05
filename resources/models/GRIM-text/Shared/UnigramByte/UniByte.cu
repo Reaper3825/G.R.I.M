@@ -58,7 +58,6 @@ UniByte::~UniByte() = default;
 
 UniByte::UniByte(UniByte&& other) noexcept
     : tokenizer_hp_(std::move(other.tokenizer_hp_))
-    , byte_encoder_(std::move(other.byte_encoder_))
     , unigram_(std::move(other.unigram_))
     , gpu_initialized_(other.gpu_initialized_)
     , detector_registry_(std::move(other.detector_registry_))
@@ -69,7 +68,6 @@ UniByte::UniByte(UniByte&& other) noexcept
 UniByte& UniByte::operator=(UniByte&& other) noexcept {
     if (this != &other) {
         tokenizer_hp_ = std::move(other.tokenizer_hp_);
-        byte_encoder_ = std::move(other.byte_encoder_);
         unigram_ = std::move(other.unigram_);
         gpu_initialized_ = other.gpu_initialized_;
         detector_registry_ = std::move(other.detector_registry_);

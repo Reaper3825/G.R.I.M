@@ -24,10 +24,39 @@
 #include <stdexcept>
 #include <string>
 
-#include "Byte.hpp"  // For BYTE_TOKEN_OFFSET, BYTE_VOCAB_SIZE, special token IDs
-
 namespace GRIM {
 namespace Tokenizer {
+
+//======================================================//
+//  Reserved + Byte Token Constants
+//======================================================//
+constexpr int NUM_SPECIAL_TOKENS = 4;          // <unk>=0, <pad>=1, <s>=2, </s>=3
+constexpr int SPECIAL_TOKEN_OFFSET = 0;        // Special tokens start at ID 0
+constexpr int BYTE_VOCAB_SIZE = 256;           // 0x00 - 0xFF
+constexpr int BYTE_TOKEN_OFFSET = NUM_SPECIAL_TOKENS;  // Byte tokens start at ID 4
+
+// Absolute special token IDs
+constexpr int UNK_TOKEN_ID = 0;
+constexpr int PAD_TOKEN_ID = 1;
+constexpr int BOS_TOKEN_ID = 2;
+constexpr int EOS_TOKEN_ID = 3;
+
+inline bool isByteTokenId(int token_id) {
+    return token_id >= BYTE_TOKEN_OFFSET && token_id < BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE;
+}
+
+inline int byteToTokenId(uint8_t byte_value) {
+    return static_cast<int>(byte_value) + BYTE_TOKEN_OFFSET;
+}
+
+inline uint8_t tokenIdToByteOrThrow(int token_id, const char* caller) {
+    if (!isByteTokenId(token_id)) {
+        throw std::runtime_error(std::string(caller) + ": token_id=" +
+                                 std::to_string(token_id) +
+                                 " is not a byte token");
+    }
+    return static_cast<uint8_t>(token_id - BYTE_TOKEN_OFFSET);
+}
 
 //======================================================//
 //  Atom Types — distinct tokens per numeric sub-type

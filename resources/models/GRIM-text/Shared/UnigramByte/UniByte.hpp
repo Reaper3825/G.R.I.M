@@ -21,7 +21,6 @@
 #pragma once
 
 #include "AtomTable.hpp"
-#include "Byte.hpp"
 #include "Detectors/DetectorRegistry.hpp"
 #include "TokenLayout.hpp"
 #include "Unigram.hpp"
@@ -205,16 +204,12 @@ public:
     //--------------------------------------------------//
     // Component Access
     //--------------------------------------------------//
-    
-    ByteEncoder& byteEncoder() { return byte_encoder_; }
-    const ByteEncoder& byteEncoder() const { return byte_encoder_; }
-    
+
     UnigramLM& unigramLM() { return unigram_; }
     const UnigramLM& unigramLM() const { return unigram_; }
 
 private:
     ::GRIM::HyperParameters::TokenizerHP tokenizer_hp_;
-    ByteEncoder byte_encoder_;
     UnigramLM unigram_;
     
     bool gpu_initialized_ = false;

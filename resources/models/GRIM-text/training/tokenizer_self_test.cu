@@ -118,7 +118,9 @@ std::string tokenTextForDisplay(const GrimTokenizer& tokenizer, int token_id) {
         return GRIM::Tokenizer::specialTokenText(token_id);
     }
     if (layout.isByte(token_id)) {
-        const uint8_t byte_value = tokenizer.byteEncoder().tokenToByte(token_id);
+        const uint8_t byte_value = GRIM::Tokenizer::tokenIdToByteOrThrow(
+            token_id,
+            "tokenizer_self_test: byte token display");
         return std::string(1, static_cast<char>(byte_value));
     }
     if (layout.isAtom(token_id)) {

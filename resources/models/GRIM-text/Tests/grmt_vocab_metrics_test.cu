@@ -15,7 +15,7 @@
 //======================================================//
 
 #include "grmt_vocab_metrics_test.hpp"
-#include "../Shared/UnigramByte/Byte.hpp"
+#include "../Shared/UnigramByte/TokenLayout.hpp"
 #include "../Shared/UnigramByte/Unigram.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"
 #include "../Shared/GRMT/GrmtFormat.hpp"

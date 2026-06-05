@@ -12,7 +12,7 @@
 1. `Detectors/DetectorRegistry` scans raw text for numeric atoms and non-token text features.
 2. `AtomTable` stores parsed numeric values so the model can keep a placeholder token and still recover the real value.
 3. `UnigramLM` does learned subword tokenization on the residual non-atom text.
-4. `ByteEncoder` is the final byte-overflow path when the finalized unigram model would otherwise return `UNK` on that residual text.
+4. `TokenLayout.hpp` owns the byte-token IDs and conversion helpers used when finalized unigram coverage overflows to raw bytes.
 
 The top-level class is `UniByte`. Everything else exists to support it.
 
@@ -33,7 +33,7 @@ The public encode/decode surface is intentionally narrow:
 - `UniByte::encode(text)` — one high-level ID-only wrapper.
 - `UniByte::tokenizeWithMetadata(text)` — metadata tokenization for atom side channels; not another `encode*` overload.
 - `UniByte::decode(DecodeRequest)` — one high-level decode primitive. ID-only, tokenizer-result atom side-channel, and Phase2 generated numeric side-channel decode all flow through `DecodeRequest`; do not add local append/decode wrappers.
-- `ByteEncoder` and `UnigramLM` each expose one `encode` and one `decode`; byte/unigram/atom branching is handled by small primitives inside the orchestrator, not by public overload chains.
+- Standalone `ByteEncoder` has been removed; byte/unigram/atom branching is handled by small primitives inside the orchestrator plus `TokenLayout.hpp` byte helpers.
 - `UnigramLM::decode()` decodes only byte fallback and learned unigram IDs. It must fail loudly on any token outside that primitive range; only `UniByte::decode(DecodeRequest)` is layout-aware.
 - `UniByte::vocabSize()` is the only public tokenizer vocab-size API. It returns the full token ID space that `DataLoader.cu` writes into `.grmt` headers. Learned subword count is `UnigramLM::pieceCount()` and is never a model/GRMT vocab size.
 - `TokenLayout` is the only token-range classifier. Do not re-add `UniByte` token-type wrappers or token-string wrappers; diagnostics should derive layout with `tokenLayoutFromActualVocabOrThrow(tokenizer.vocabSize(), caller)` and use direct `UnigramLM::getPiece(token_id)` lookups.
@@ -51,7 +51,7 @@ Read the tokenizer in this order:
 5. `UnigramGpuMemory.hpp` / `UnigramGpuMemory.cu` — durable CUDA buffer ownership for `UnigramLM`
 6. `AtomTable.hpp` / `AtomTable.cu` — parsed numeric atom registry
 7. `Detectors/` — `RawTextDetector` parent class, registry, numeric detectors, and text-feature detectors
-8. `Byte.hpp` / `Byte.cu` — post-unigram byte overflow / fallback
+8. `TokenLayout.hpp` — token IDs, special-token metadata, and byte-token helpers
 9. `TextUtils.hpp` / `TextUtils.cu` — normalization and UTF-8 helpers
 10. `UnigramTrainer.hpp` / `UnigramTrainer.cu` — training pipeline only
 11. `Training/UnigramForwardBackward.hpp` / `Training/UnigramForwardBackward.cu` — training-only true Unigram forward-backward expected-count estimator over learned-piece paths on non-atom residual spans
@@ -64,8 +64,9 @@ If you read it in a different order, the code starts to feel like a haunted hous
 
 ```mermaid
 flowchart LR
-    TL[TokenLayout
-shared constants] --> BY[ByteEncoder]
+   TL[TokenLayout
+shared constants] --> UB[UniByte
+orchestrator]
     TL --> AT[AtomTable]
     TL --> UG[UnigramLM]
    UV[UnigramViterbiSession
@@ -75,7 +76,6 @@ CUDA buffer owner] --> UG
    DT[DetectorRegistry
 raw-text scan] --> UB[UniByte
 orchestrator]
-    BY --> UB
     AT --> UB
     UG --> UB
     TU[TextUtils] --> UG
@@ -97,7 +97,7 @@ orchestrator]
 
 ## Token layout
 
-The live layout comes from `Byte.hpp` and `TokenLayout.hpp`.
+The live layout comes from `TokenLayout.hpp`.
 
 | Range | Meaning | Notes |
 |---|---|---|
@@ -155,7 +155,7 @@ flowchart LR
 3. The original text is rewritten with numeric placeholders before unigram segmentation.
 4. Text normalization happens before unigram segmentation.
 5. `UnigramLM::encode()` creates a `UnigramViterbiSession` over the normalized text.
-6. Any residual byte sequence not covered by the finalized learned-piece segmentation overflows to raw bytes through `ByteEncoder`.
+6. Any residual byte sequence not covered by the finalized learned-piece segmentation overflows to raw byte tokens through `TokenLayout.hpp` byte helpers.
 7. `UniByteResult` is assembled and `validate()` checks that every parallel array matches `token_ids.size()`.
 
 Atoms never reach the byte-overflow step because they were already extracted and handled before unigram segmentation started.
@@ -213,14 +213,13 @@ flowchart LR
    be learned-piece-only decisions over the residual non-atom text. If current code still
    threads byte fallback through training telemetry or E-step bookkeeping, that is
    architectural drift to remove, not the target contract.
-- When byte fallback is enabled, Step-2 character seeds are transient bootstrap/coverage
-   diagnostics only. They must not be emitted as learned pieces, must not pre-seed
-   structural dedup, and must not suppress mined one-character candidates from competing
-   normally. Once candidate mining starts, fallback mode should treat those seeds as spent.
-- When byte fallback is disabled, training must insert the Step-2 character seeds as learned
-   pieces or fail immediately before EM. The no-fallback path also fails if those seeds do
-   not cover every trainable normalized character, or if `target_vocab_size` cannot retain
-   the required character seeds.
+- Step-2 character seeds are transient bootstrap/coverage diagnostics only. They must not be
+   emitted as learned pieces, must not pre-seed structural dedup, must not suppress mined
+   one-character candidates from competing normally, and must not receive pruning protection.
+   Once candidate mining starts, training should treat those seeds as spent.
+- Subword mining must admit one-character candidates through the ordinary mined-subword path
+   even when a normalized segment has no atom spans. Character coverage diagnostics are not a
+   second learned-vocab construction path.
 - Vocab-character validation must use `utf8DecodeAt()` for the single-codepoint decode.
    Do not hand-decode multi-byte candidates; continuation-byte checks, overlong rejection,
    surrogate rejection, truncation checks, and max-codepoint validation belong to `TextUtils`.
@@ -271,8 +270,7 @@ Use this table as the “who owns what?” map.
 
 | File | Owns | Should not own |
 |---|---|---|
-| `TokenLayout.hpp` | token constants, special-token metadata, `AtomType`, token-id helpers | runtime parsing, CUDA state, sequence/window layout |
-| `Byte.hpp/.cu` | byte token mapping and post-unigram byte overflow/fallback encode/decode | unigram training logic, atom parsing |
+| `TokenLayout.hpp` | token constants, special-token metadata, `AtomType`, byte-token helpers, token-id helpers | runtime parsing, CUDA state, sequence/window layout |
 | `TextUtils.hpp/.cu` | UTF-8 helpers, SentencePiece-style whitespace normalization | tokenizer orchestration |
 | `Detectors/TokenizerDetector.hpp` | raw-text detector parent class and detection result types | token ID classification, token assembly, atom storage |
 | `Detectors/DetectorRegistry.hpp/.cu` | detector registration, priority ordering, longest-match raw-text scan | tokenizer HP ownership, token IDs |
@@ -424,7 +422,7 @@ Right now the active emitted atom types are numeric: `ATOM_INT` and `ATOM_FLOAT`
 |---|---|
 | Add or change raw-text detection | `Detectors/*`, `UniByte.cu` |
 | Add a new atom type | `TokenLayout.hpp`, `Detectors.*`, `AtomTable.*`, `UniByte.*` |
-| Change token-id ranges | `Byte.hpp`, `TokenLayout.hpp` |
+| Change token-id ranges | `TokenLayout.hpp` |
 | Change training sequence boundaries or target masking | `SlidingWindow.cu`, `BatchPayload.cu` |
 | Change normalization behavior | `TextUtils.cu` |
 | Change unigram segmentation | `Unigram.cu` |
@@ -448,4 +446,4 @@ After tokenizer changes, verify at least:
 
 ## One-line summary
 
-`UniByte` is the orchestrator: detectors/atoms resolve structure first, `UnigramLM` learns and segments the residual text, and `ByteEncoder` is only the final byte-overflow safety net after unigram coverage runs out.
+`UniByte` is the orchestrator: detectors/atoms resolve structure first, `UnigramLM` learns and segments the residual text, and byte overflow is emitted directly through `TokenLayout.hpp` byte-token helpers after unigram coverage runs out.

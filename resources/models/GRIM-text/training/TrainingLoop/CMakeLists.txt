@@ -651,9 +651,8 @@ target_include_directories(train_gpu PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../core
 )
 
-# UnigramByte tokenizer library (Unigram LM + Byte fallback + Atoms)
+# UnigramByte tokenizer library (Unigram LM + TokenLayout byte fallback + Atoms)
 add_library(grim_unigrambyte_tokenizer STATIC
-    ../../Shared/UnigramByte/Byte.cu
     ../../Shared/UnigramByte/Unigram.cu
     ../../Shared/UnigramByte/UnigramViterbi.cu
     ../../Shared/UnigramByte/UnigramGpuMemory.cu
@@ -966,4 +965,4 @@ message(STATUS "  - grmt_vocab_metrics_test: GRMT corpus + vocabulary metrics di
 message(STATUS "  - flash_attention_test: Flash Attention forward/backward test suite")
 message(STATUS "  - gradient_verification_test: Encoder gradient collapse debugging")
 message(STATUS "  - execution_block_test: ExecutionBlock batching, state transitions, and config tests")
-message(STATUS "  - grim_unigrambyte_tokenizer: Unigram LM + Byte fallback + AtomTable")
+message(STATUS "  - grim_unigrambyte_tokenizer: Unigram LM + byte-layout fallback + AtomTable")

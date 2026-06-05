@@ -26,7 +26,7 @@ This means byte fallback is **not** part of the intended unigram EM objective, *
 | `[ATOM_TOKEN_OFFSET, UNIGRAM_VOCAB_OFFSET)` | Atom placeholders |
 | `[UNIGRAM_VOCAB_OFFSET, …)` | Learned unigram pieces |
 
-Use `TokenLayout.hpp` / `Byte.hpp` constants and layout helpers for range checks; do not duplicate numeric offsets in runtime code.
+Use `TokenLayout.hpp` constants and layout helpers for range checks; do not duplicate numeric offsets in runtime code.
 
 ## Vocab-size ownership
 - `UniByte::vocabSize()` is the tokenizer's only public vocab-size API. It means the full token ID space: `UNIGRAM_VOCAB_OFFSET + UnigramLM::pieceCount()`.
@@ -63,7 +63,7 @@ Special-token ownership is deliberately narrow:
 - `UniByte::tokenizeWithMetadata(text)` is the metadata tokenization path for callers that need atom side channels; it is intentionally not another `encode*` overload.
 - `UniByte::decode(DecodeRequest)` is the single high-level decode primitive. `DecodeRequest` may carry ID-only text, tokenizer-produced `UniByteResult` atom side channels, or Phase2-generated numeric side channels; do not add local append/decode wrappers in inference, diagnostics, or server code.
 - Tokenizer artifact-preparation paths train through `UnigramLM::trainFromCorpus(texts, TokenizerHP)`. The raw-text detector prepass and atom-span selection are owned there; do not recreate a `UniByte::trainFromCorpus()` wrapper.
-- `ByteEncoder` and `UnigramLM` each expose exactly one `encode` and one `decode` primitive. Do not add pointer/vector/GPU overload chains back into these classes.
+- Standalone `ByteEncoder` has been removed. Byte-token IDs and conversions live in `TokenLayout.hpp`; do not recreate a wrapper class around raw byte fallback.
 - `UnigramLM::decode()` is a primitive for byte fallback + learned unigram tokens only. It must reject any token outside that primitive range; layout-aware decode belongs to `UniByte::decode(DecodeRequest)`.
 - Token type classification belongs to `TokenLayout`. Do not add `UniByte::isByteToken`, `UniByte::isAtomToken`, `UniByte::isUnigramToken`, or `UniByte::tokenToString` wrappers; callers that need diagnostics should derive a layout with `tokenLayoutFromActualVocabOrThrow(tokenizer.vocabSize(), caller)` and read pieces directly by token ID.
 
@@ -86,8 +86,8 @@ Special-token ownership is deliberately narrow:
 - `UnigramLM::trainFromCorpus()` must fail at entry for invalid `target_vocab_size`, `character_coverage`, `min_subword_freq`, or `subword_mining_workers` so malformed direct calls cannot reach shrink/EM logic.
 - Original atom spans must be validated before logging byte totals or calling `normalizeWithSpans()`. Span size mismatches, reversed spans, out-of-bounds spans, and overlapping/unsorted spans are hard failures before any offset rewrite.
 - Byte fallback must stay outside the unigram EM objective. The training lattice, posterior expected counts, shrink ranking, and dead-token cleanup are intended to be learned-piece-only decisions over the residual non-atom text. If current code surfaces byte-fallback telemetry, dominance guards, or fallback-driven posterior mass inside training, that is bolt-on debt threading through the tokenizer rather than the architectural target.
-- Step-2 character seeds are a transient training bootstrap/coverage diagnostic only when byte fallback is enabled. They must not be emitted as learned pieces, must not pre-seed structural dedup, and must not suppress mined one-character candidates from competing normally. After candidate mining starts, byte-fallback mode should behave as if those seeds never entered the learned-vocab decision path.
-- When byte fallback is disabled, tokenizer training must either insert the Step-2 character seeds as learned pieces or fail immediately before EM. The no-fallback path must also fail if those seeds do not cover every trainable normalized character or if `target_vocab_size` is too small to retain the required character seeds.
+- Step-2 character seeds are a transient training bootstrap/coverage diagnostic only. They must not be emitted as learned pieces, must not pre-seed structural dedup, must not suppress mined one-character candidates from competing normally, and must not receive pruning protection. After candidate mining starts, training must behave as if those seeds never entered the learned-vocab decision path.
+- Subword mining must admit one-character candidates through the ordinary mined-subword path even when a segment has no atom spans. Character coverage diagnostics are not a second vocab-construction path.
 - Vocab-character validation must use `utf8DecodeAt()` for the single-codepoint decode. Do not hand-decode multi-byte candidates; continuation-byte checks, overlong rejection, surrogate rejection, truncation checks, and max-codepoint validation belong to `TextUtils`.
 - Structural dedup keys in tokenizer training are comparison-only. They may trim structural edge whitespace/format codepoints, but must never trim SentencePiece `▁` (U+2581): `▁word` and `word` are distinct because word-initial position is semantic. Accepted candidates must store the original mined subword text, not the edge-trimmed dedup key, so learned pieces keep their exact boundary markers and bytes.
 - Initial candidate score normalization must fail loudly if candidate admission produces zero accepted learned pieces or if accepted candidate counts do not sum to a positive finite value. Do not clamp the denominator to `1.0`; that hides the empty/invalid accepted-candidate root cause instead of surfacing it before initial score assignment.

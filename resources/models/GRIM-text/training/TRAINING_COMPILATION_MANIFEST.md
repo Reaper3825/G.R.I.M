@@ -81,11 +81,10 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ### 1.4 Tokenizer Initialization (UnigramByte Library)
 
-- [x] **Shared/UnigramByte/Byte.cu** ✅ AUDITED
-  - Byte fallback tokenizer (raw UTF-8 bytes 0x00-0xFF)
-  - Provides 100% coverage for unknown characters/emojis
-  - Pattern to check: Verify byte token IDs are [0-255]
-  - Pattern to check: No allocations during tokenization (zero-copy std::string_view)
+- [x] **Shared/UnigramByte/TokenLayout.hpp** ✅ AUDITED
+  - Owns special-token IDs, byte-token ranges, atom offsets, and byte token conversion helpers
+  - Byte fallback emits raw byte tokens through layout math (`BYTE_TOKEN_OFFSET + byte`)
+  - Pattern to check: no standalone `ByteEncoder` wrapper or `Byte.cu` build entry is reintroduced
 
 - [x] **Shared/UnigramByte/Unigram.cu** ✅ AUDITED
   - Unigram Language Model tokenizer (statistical subword segmentation)
@@ -102,9 +101,9 @@ Use this checklist to systematically audit each file in the order it's used duri
   - Pattern to check: Viterbi reads the built trie but never mutates learned vocab storage
 
 - [x] **Shared/UnigramByte/UniByte.cu** ✅ AUDITED
-  - Combined Unigram + Byte fallback (GrimTokenizer alias)
-  - Token layout: [0-255] = bytes, [256-511] = atoms, [512+] = unigram vocab
-  - Pattern to check: Verify ATOM_TOKEN_BASE = 256 offset applied
+  - Combined Unigram + TokenLayout byte fallback (GrimTokenizer alias)
+  - Token layout comes from TokenLayout.hpp: specials, bytes, atoms, then unigram vocab
+  - Pattern to check: Verify atom offsets are derived from `ATOM_TOKEN_OFFSET`, not duplicated constants
   - Encoding: DetectorRegistry::scan() → filter atom-emitting detections → segment → Unigram encode per segment → Byte fallback internal to Unigram
 
 - [x] **Shared/UnigramByte/AtomTable.cu** ✅ AUDITED

@@ -3,7 +3,7 @@
 > **Goal:** Separation of concerns, eliminate overlaps, establish clear data flow.  
 > **Scope:** File-level reorganization only. No algorithm changes, no API changes.  
 > **Rule:** Every file earns its existence by owning exactly one responsibility.
-> **Status note:** Viterbi segmentation now lives in `UnigramViterbi.hpp/.cu` as a per-run RAII session; `Unigram.cu` owns learned-vocab/trie wrappers, not Viterbi DP state.
+> **Status note:** Viterbi segmentation now lives in `UnigramViterbi.hpp/.cu` as a per-run RAII session; `Unigram.cu` owns learned-vocab/trie wrappers, not Viterbi DP state. `Byte.hpp/.cu` were deleted; byte-token constants and conversion helpers now live in `TokenLayout.hpp`.
 
 ---
 
@@ -21,8 +21,6 @@
 | UniByte.hpp | 402 | Declares `Detector::` namespace functions implemented 1,000 lines away in UniByte.cu |
 | AhoCorasick.cu | 540 | Reasonably scoped ✓ |
 | AhoCorasick.hpp | 204 | Reasonably scoped ✓ |
-| Byte.cu | 389 | Clean, single responsibility ✓ — model target for file size |
-| Byte.hpp | 171 | Clean, single responsibility ✓ — model target for file size |
 
 ### Root Causes
 
@@ -37,10 +35,9 @@
 ## Include Dependency Chain (Current)
 
 ```
-Byte.hpp ←── (standalone)
 AhoCorasick.hpp ←── Unigram.hpp (for AtomType enum only)
 AtomTable.hpp ←── Unigram.hpp (for AtomType enum and token layout constants)
-UniByte.hpp ←── Unigram.hpp, AtomTable.hpp, AhoCorasick.hpp, Byte.hpp
+UniByte.hpp ←── Unigram.hpp, AtomTable.hpp, AhoCorasick.hpp, TokenLayout.hpp
 ```
 
 **The problem:** `AhoCorasick.hpp` and `AtomTable.hpp` both include `Unigram.hpp` solely for `AtomType` and token layout constants. This creates a false impression that the atom system and pattern matcher depend on the unigram language model.
@@ -61,8 +58,6 @@ UnigramByte/
 │   ├── DetectorRegistry.hpp/.cu   [NEW] — detector registration + longest-match raw-text scan
 │   ├── NumericDetectors.hpp/.cu   [NEW] — integer/float atom detectors
 │   └── TextFeatureDetectors.hpp/.cu [NEW] — whitespace/uppercase raw-text feature detectors
-├── Byte.hpp                 [KEEP] ~171 lines  — No changes
-├── Byte.cu                  [KEEP] ~389 lines  — No changes
 ├── AhoCorasick.hpp          [MOD]  ~200 lines  — Remove #include "Unigram.hpp", include "TokenLayout.hpp" instead
 ├── AhoCorasick.cu           [KEEP] ~540 lines  — No changes
 ├── AtomTable.hpp            [MOD]  ~480 lines  — Remove #include "Unigram.hpp", include "TokenLayout.hpp" instead
@@ -199,13 +194,12 @@ New `.hpp` files (`TokenLayout.hpp`, `TextUtils.hpp`, `Detectors/*.hpp`, `Unigra
 TokenLayout.hpp          ←── (standalone: <cstdint>, <string>)
    ↑
    ├── TextUtils.hpp     ←── TokenLayout.hpp
-   ├── Byte.hpp          ←── (standalone)
    ├── AhoCorasick.hpp   ←── TokenLayout.hpp
    ├── Unigram.hpp       ←── TokenLayout.hpp
    ├── AtomTable.hpp     ←── TokenLayout.hpp
     ├── Detectors/TokenizerDetector.hpp ←── TokenLayout.hpp
     ├── Detectors/DetectorRegistry.hpp  ←── Detectors/TokenizerDetector.hpp
-    └── UniByte.hpp       ←── Unigram.hpp, AtomTable.hpp, Byte.hpp, Detectors/TokenizerDetector.hpp
+      └── UniByte.hpp       ←── Unigram.hpp, AtomTable.hpp, TokenLayout.hpp, Detectors/TokenizerDetector.hpp
        ↑
        UnigramTrainer.hpp ←── Unigram.hpp, TextUtils.hpp
 ```

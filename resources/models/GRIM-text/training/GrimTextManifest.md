@@ -45,9 +45,8 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 ### 1.4 Tokenizer Initialization (UnigramByte Library)
 
-- [] **Shared/UnigramByte/Byte.cu** 
-  - Byte fallback tokenizer (raw UTF-8 bytes 0x00-0xFF)
-  - Provides 100% coverage for unknown characters/emojis
+- [] **Shared/UnigramByte/TokenLayout.hpp** 
+  - Token IDs, byte fallback ranges, atom offsets, and byte-token conversion helpers
 
 - [] **Shared/UnigramByte/Unigram.cu** 
   - Unigram Language Model tokenizer (statistical subword segmentation)
@@ -55,7 +54,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 
 - [] **Shared/UnigramByte/UniByte.cu** 
-  - Combined Unigram + Byte fallback (GrimTokenizer alias)
+  - Combined Unigram + TokenLayout byte fallback (GrimTokenizer alias)
 
 
 - [] **Shared/UnigramByte/AtomTable.cu** 

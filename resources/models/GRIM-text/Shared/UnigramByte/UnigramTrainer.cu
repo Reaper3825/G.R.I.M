@@ -868,7 +868,7 @@ static void mineSubwordsFromSentence(const std::string& text,
     for (size_t ci = 0; ci < num_chars; ++ci) {
         const size_t byte_start = char_positions[ci];
         if (byte_start < count_start || byte_start >= count_end) continue;
-        for (size_t char_count = 2; char_count <= max_len && ci + char_count <= num_chars; ++char_count) {
+        for (size_t char_count = 1; char_count <= max_len && ci + char_count <= num_chars; ++char_count) {
             const size_t byte_end = char_positions[ci + char_count];
             if (byte_end - byte_start > max_len) break;
 
@@ -1232,10 +1232,11 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     }
     
     // Step 2: Build the Step-2 character seed set.
-    // In byte-fallback mode this is a transient coverage/bootstrap diagnostic only;
-    // it must not become learned vocab or bias candidate admission/dedup. The
-    // no-byte-fallback path is the only mode that promotes these seeds into
-    // mandatory learned pieces.
+    // These seeds are a transient training diagnostic only. They must not become
+    // learned vocab entries, bias candidate admission/dedup, or receive pruning
+    // protection. Single-character learned pieces must enter through ordinary
+    // mined-candidate admission so byte fallback remains a post-unigram overflow
+    // path instead of a seed-policy side effect.
     std::vector<std::pair<std::string, int>> sorted_chars(char_counts.begin(), char_counts.end());
     std::sort(sorted_chars.begin(), sorted_chars.end(),
               [](const auto& a, const auto& b) {
@@ -1271,45 +1272,9 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         char_seeds.insert(ch);
         covered += count;
     }
-    
-    if (!enable_byte_fallback_) {
-        std::vector<std::string> uncovered_chars;
-        uncovered_chars.reserve(char_counts.size());
-        for (const auto& [ch, _] : sorted_chars) {
-            if (!char_seeds.count(ch)) {
-                uncovered_chars.push_back(ch);
-            }
-        }
-        if (!uncovered_chars.empty()) {
-            std::stringstream ss;
-            ss << "UnigramLM::trainFromCorpus: byte fallback is disabled but Step-2 character seeds do not cover "
-               << uncovered_chars.size() << " trainable normalized characters. Set character_coverage=1.0, lower the hard minimum character frequency by changing tokenizer training code, remove invalid characters, or re-enable byte fallback. Missing UTF-8 characters (bytes shown):";
-            const size_t preview_count = std::min<size_t>(uncovered_chars.size(), 8);
-            for (size_t preview_idx = 0; preview_idx < preview_count; ++preview_idx) {
-                ss << " [";
-                const std::string& ch = uncovered_chars[preview_idx];
-                for (size_t byte_idx = 0; byte_idx < ch.size(); ++byte_idx) {
-                    if (byte_idx > 0) ss << ' ';
-                    ss << "0x" << std::hex << std::setw(2) << std::setfill('0')
-                       << static_cast<int>(static_cast<unsigned char>(ch[byte_idx]))
-                       << std::dec << std::setfill(' ');
-                }
-                ss << "]";
-            }
-            throw std::runtime_error(ss.str());
-        }
-        if (static_cast<int>(char_seeds.size()) > target_vocab_size) {
-            throw std::runtime_error("UnigramLM::trainFromCorpus: byte fallback is disabled but target_vocab_size=" +
-                                     std::to_string(target_vocab_size) +
-                                     " is smaller than the required character seed count=" +
-                                     std::to_string(char_seeds.size()) +
-                                     "; caller MUST allocate enough learned vocab slots for exact character coverage");
-        }
-    }
 
     std::cout << "[UnigramLM] Initial char coverage: " << char_seeds.size()
-              << (enable_byte_fallback_ ? " characters (Step-2 diagnostic seed set only; NOT learned vocab), coverage: "
-                                        : " characters (learned-piece covered; byte fallback disabled), coverage: ")
+              << " characters (Step-2 diagnostic seed set only; NOT learned vocab), coverage: "
               << (100.0f * covered / total_chars) << "%";
     if (chars_rejected > 0 || chars_too_rare > 0) {
         std::cout << " (rejected " << chars_rejected << " garbage";
@@ -1321,9 +1286,8 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     std::cout << std::endl;
     
     // Diagnostic: show coverage-critical chars
-    std::cout << (enable_byte_fallback_
-                  ? "[UnigramLM] Step-2 character seeds (diagnostic only; excluded from learned vocab because byte fallback is enabled):"
-                  : "[UnigramLM] Learned character seed pieces (byte fallback disabled):") << std::endl;
+    std::cout << "[UnigramLM] Step-2 character seeds (diagnostic only; mined one-character candidates compete normally):"
+              << std::endl;
     for (const auto& [ch, count] : sorted_chars) {
         if (!char_seeds.count(ch)) continue;
         std::string display_text;
@@ -1344,7 +1308,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
             if (i > 0) hex_bytes << " ";
             hex_bytes << std::setw(2) << std::setfill('0') << (int)(unsigned char)ch[i];
         }
-        std::cout << (enable_byte_fallback_ ? "  [char-seed] \"" : "  [required-char-seed] \"") << display_text
+        std::cout << "  [char-seed] \"" << display_text
                   << "\" (0x" << hex_bytes.str() << ") count=" << std::dec << count << std::endl;
     }
     
@@ -1572,42 +1536,18 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     int structural_dedup_rejected = 0;
 
     std::unordered_set<std::string> dedup_keys_seen;
-    if (!enable_byte_fallback_) {
-        dedup_keys_seen.reserve(char_seeds.size());
-        for (const auto& ch : char_seeds) {
-            std::string key = structuralDedupKeyForCandidate(ch);
-            if (!key.empty()) {
-                dedup_keys_seen.insert(key);
-            }
-        }
-        std::cout << "[UnigramLM] Pre-seeded " << dedup_keys_seen.size()
-                  << " structural dedup keys from required learned character seeds" << std::endl;
-    } else {
-        std::cout << "[UnigramLM] Byte-fallback mode: Step-2 character seeds are diagnostic-only; learned candidate admission and structural dedup start from mined subwords only"
-                  << std::endl;
-    }
+    dedup_keys_seen.reserve(ranked_subwords.size());
+    std::cout << "[UnigramLM] Learned candidate admission and structural dedup start from mined subwords only; Step-2 character seeds do not alter learned-vocab selection"
+              << std::endl;
 
     struct AcceptedPiece { std::string text; UnigramSubwordCount count; };
     std::vector<AcceptedPiece> accepted;
-    accepted.reserve(ranked_subwords.size() + (enable_byte_fallback_ ? 0 : char_seeds.size()));
-
-    std::unordered_set<std::string> no_byte_fallback_required_char_seed_pieces;
-    if (!enable_byte_fallback_) {
-        no_byte_fallback_required_char_seed_pieces.reserve(char_seeds.size());
-        for (const auto& [ch, count] : sorted_chars) {
-            if (!char_seeds.count(ch)) continue;
-            accepted.push_back({ch, static_cast<UnigramSubwordCount>(count)});
-            no_byte_fallback_required_char_seed_pieces.insert(ch);
-        }
-        std::cout << "[UnigramLM] Added " << no_byte_fallback_required_char_seed_pieces.size()
-                  << " required learned character seed candidates because byte fallback is disabled" << std::endl;
-    }
+    accepted.reserve(ranked_subwords.size());
 
     for (const SubwordEntry* entry : ranked_subwords) {
         const std::string& subword = entry->first;
         const UnigramSubwordCount count = entry->second;
         if (hasPiece(subword)) continue;
-        if (!enable_byte_fallback_ && char_seeds.count(subword)) continue;
 
         if (isRepetitionNoise(subword)) {
             repetition_filtered++;
@@ -1880,10 +1820,6 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                 keep_indices.insert(static_cast<int>(i));
                 continue;
             }
-            if (!enable_byte_fallback_ && no_byte_fallback_required_char_seed_pieces.count(pieces_[i].text)) {
-                keep_indices.insert(static_cast<int>(i));
-                continue;
-            }
             int tid = tokenIdForIndex(static_cast<int>(i));
             double count = 0.0;
             auto count_it = phase_a_counts.find(tid);
@@ -1962,7 +1898,6 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         std::unordered_set<int> dead_indices;
         for (size_t i = 0; i < pieces_.size(); ++i) {
             if (pieces_[i].is_user_defined) continue;
-            if (!enable_byte_fallback_ && no_byte_fallback_required_char_seed_pieces.count(pieces_[i].text)) continue;
             int tid = tokenIdForIndex(static_cast<int>(i));
             double count = 0.0;
             auto count_it = phase_a_counts.find(tid);

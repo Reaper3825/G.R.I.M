@@ -5,7 +5,7 @@
 
 #include "unigrambyte_self_test.hpp"
 
-#include "../Shared/UnigramByte/Byte.hpp"
+#include "../Shared/UnigramByte/TokenLayout.hpp"
 #include "../Shared/UnigramByte/Unigram.hpp"
 #include "../Shared/UnigramByte/VocabWriteOp.hpp"
 #include "../Shared/UnigramByte/Training/UnigramForwardBackward.hpp"
@@ -135,85 +135,6 @@ static void addMinimalVocab(UniByte& tok) {
     appendSelfTestUnigramPiece(tok.unigramLM(), "\xe2\x96\x81" "meeting", -2.0f, false);
     appendSelfTestUnigramPiece(tok.unigramLM(), "\xe2\x96\x81" "Count",   -2.1f, false);
     tok.unigramLM().buildTrie();
-}
-
-//======================================================//
-//  Section 1: Byte Fallback Tests
-//======================================================//
-
-bool testByteEncodeBasic(std::string& message) {
-    ByteEncoder byte;
-    
-    std::string input = "Hello";
-    std::vector<int> tokens = byte.encode(input);
-    
-    ASSERT_EQ(tokens.size(), 5, "Token count mismatch");
-    ASSERT_EQ(tokens[0], byte.byteToToken('H'), "First token mismatch");
-    ASSERT_EQ(tokens[1], byte.byteToToken('e'), "Second token mismatch");
-    ASSERT_EQ(tokens[2], byte.byteToToken('l'), "Third token mismatch");
-    ASSERT_EQ(tokens[3], byte.byteToToken('l'), "Fourth token mismatch");
-    ASSERT_EQ(tokens[4], byte.byteToToken('o'), "Fifth token mismatch");
-    
-    return true;
-}
-
-bool testByteDecodeBasic(std::string& message) {
-    ByteEncoder byte;
-    
-    std::vector<int> tokens = {
-        byte.byteToToken('H'),
-        byte.byteToToken('e'),
-        byte.byteToToken('l'),
-        byte.byteToToken('l'),
-        byte.byteToToken('o'),
-    };
-    std::string output = byte.decode(tokens);
-    
-    ASSERT_STR_EQ(output, "Hello", "Decoded string mismatch");
-    
-    return true;
-}
-
-bool testByteRoundTrip(std::string& message) {
-    ByteEncoder byte;
-    
-    // Test various strings including special characters
-    std::vector<std::string> test_cases = {
-        "Hello, World!",
-        "The quick brown fox",
-        "Numbers: 12345",
-        "Special: @#$%^&*()",
-        "Mixed: abc123!@#",
-        "",  // Empty string
-        " ",  // Single space
-        "   ",  // Multiple spaces
-    };
-    
-    for (const auto& input : test_cases) {
-        std::vector<int> tokens = byte.encode(input);
-        std::string output = byte.decode(tokens);
-        
-        ASSERT_STR_EQ(output, input, "Round-trip failed for: " + input);
-    }
-    
-    return true;
-}
-
-bool testByteUTF8(std::string& message) {
-    ByteEncoder byte;
-    
-    // UTF-8 multi-byte sequences
-    std::string input = "Café";  // é is 2 bytes in UTF-8
-    std::vector<int> tokens = byte.encode(input);
-    std::string output = byte.decode(tokens);
-
-    ASSERT_EQ(tokens.size(), input.size(), "Byte fallback must emit one token per raw UTF-8 byte");
-    ASSERT_EQ(tokens[3], byte.byteToToken(static_cast<uint8_t>(0xC3)), "First byte of é should be a separate byte token");
-    ASSERT_EQ(tokens[4], byte.byteToToken(static_cast<uint8_t>(0xA9)), "Second byte of é should be a separate byte token");
-    
-    ASSERT_STR_EQ(output, input, "UTF-8 round-trip failed");
-    
-    return true;
 }
 
 //======================================================//
@@ -2730,12 +2651,6 @@ int main(int argc, char** argv) {
     }
     
     UnigramByteTestSuite suite;
-    
-    // Section 1: Byte Fallback Tests
-    suite.addTest("Byte.Encode.Basic", testByteEncodeBasic);
-    suite.addTest("Byte.Decode.Basic", testByteDecodeBasic);
-    suite.addTest("Byte.RoundTrip", testByteRoundTrip);
-    suite.addTest("Byte.UTF8", testByteUTF8);
     
     // Section 2: Unigram LM Tests
     suite.addTest("Unigram.BuildVocab", testUnigramBuildVocab);
