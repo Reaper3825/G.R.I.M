@@ -33,7 +33,10 @@ struct CenterRowsGradFn : public GradFn {
     void capture_input(Tensor& input, int dim, int rows, cudaStream_t stream,
                        bool token_type_gate = false,
                        bool center_active = true);
-    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override;
+    void apply_impl(const Tensor& grad_output,
+                    cudaStream_t stream,
+                    const Batching::BatchPayload* backward_payload,
+                    const Batching::BatchDeviceBindings* backward_bindings) override;
     void release_saved() override;
 };
 

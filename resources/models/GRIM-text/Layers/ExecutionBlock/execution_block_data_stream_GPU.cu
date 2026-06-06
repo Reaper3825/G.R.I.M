@@ -755,7 +755,10 @@ struct FourOpMixGradFn : public GradFn {
         alloc_grad(p_op_t, grad_p_op, owned_grad_p_op, num_ops);
     }
 
-    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output,
+                    cudaStream_t stream,
+                    const Batching::BatchPayload* backward_payload,
+                    const Batching::BatchDeviceBindings* backward_bindings) override {
         if (applied) return;
         applied = true;
 
@@ -774,7 +777,7 @@ struct FourOpMixGradFn : public GradFn {
             view.shape = v1_shape;
             view.owns_data = false;
             view.stream = stream;
-            v1_grad_fn->apply(view, stream);
+            v1_grad_fn->apply(view, stream, backward_payload, backward_bindings);
         } else {
             if (v1_requires_grad && v1_grad_fn) {
                 Tensor view;
@@ -782,7 +785,7 @@ struct FourOpMixGradFn : public GradFn {
                 view.shape = v1_shape;
                 view.owns_data = false;
                 view.stream = stream;
-                v1_grad_fn->apply(view, stream);
+                v1_grad_fn->apply(view, stream, backward_payload, backward_bindings);
             }
             if (v2_requires_grad && v2_grad_fn) {
                 Tensor view;
@@ -790,7 +793,7 @@ struct FourOpMixGradFn : public GradFn {
                 view.shape = v2_shape;
                 view.owns_data = false;
                 view.stream = stream;
-                v2_grad_fn->apply(view, stream);
+                v2_grad_fn->apply(view, stream, backward_payload, backward_bindings);
             }
         }
 
@@ -800,7 +803,7 @@ struct FourOpMixGradFn : public GradFn {
             view.shape = p_op_shape;
             view.owns_data = false;
             view.stream = stream;
-            p_op_grad_fn->apply(view, stream);
+            p_op_grad_fn->apply(view, stream, backward_payload, backward_bindings);
         }
     }
 
@@ -895,7 +898,10 @@ struct ExecutionBlockInjectGradFn : public GradFn {
         }
     }
 
-    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output,
+                    cudaStream_t stream,
+                    const Batching::BatchPayload* backward_payload,
+                    const Batching::BatchDeviceBindings* backward_bindings) override {
         if (applied) return;
         applied = true;
 
@@ -939,7 +945,7 @@ struct ExecutionBlockInjectGradFn : public GradFn {
             view.shape = result_shape;
             view.owns_data = false;
             view.stream = stream;
-            result_grad_fn->apply(view, stream);
+            result_grad_fn->apply(view, stream, backward_payload, backward_bindings);
         }
 
         if (H_requires_grad && H_grad_fn && mod_grad_buf) {
@@ -948,7 +954,7 @@ struct ExecutionBlockInjectGradFn : public GradFn {
             view.shape = H_shape;
             view.owns_data = false;
             view.stream = stream;
-            H_grad_fn->apply(view, stream);
+            H_grad_fn->apply(view, stream, backward_payload, backward_bindings);
         }
     }
 
@@ -1012,7 +1018,10 @@ struct ReduceMeanGradFn : public GradFn {
         }
     }
 
-    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output,
+                    cudaStream_t stream,
+                    const Batching::BatchPayload* backward_payload,
+                    const Batching::BatchDeviceBindings* backward_bindings) override {
         if (applied) return;
         applied = true;
         if (!H_requires_grad) return;
@@ -1035,7 +1044,7 @@ struct ReduceMeanGradFn : public GradFn {
             view.shape = H_shape;
             view.owns_data = false;
             view.stream = stream;
-            H_grad_fn->apply(view, stream);
+            H_grad_fn->apply(view, stream, backward_payload, backward_bindings);
         }
     }
 
@@ -1098,7 +1107,10 @@ struct RecordEncodeGradFn : public GradFn {
         b_scal_grad_ = b_scal.grad_data();
     }
 
-    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output,
+                    cudaStream_t stream,
+                    const Batching::BatchPayload* backward_payload,
+                    const Batching::BatchDeviceBindings* backward_bindings) override {
         if (applied) return;
         applied = true;
         int total = N_ * d_model_;
@@ -1201,7 +1213,10 @@ struct GatedTraceUpdateGradFn : public GradFn {
         alloc_grad(gate_logits_t, grad_gate_logits, owned_grad_gate_logits, dm);
     }
 
-    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output,
+                    cudaStream_t stream,
+                    const Batching::BatchPayload* backward_payload,
+                    const Batching::BatchDeviceBindings* backward_bindings) override {
         if (applied) return;
         applied = true;
 
@@ -1219,7 +1234,7 @@ struct GatedTraceUpdateGradFn : public GradFn {
             view.shape = old_trace_shape;
             view.owns_data = false;
             view.stream = stream;
-            old_trace_grad_fn->apply(view, stream);
+            old_trace_grad_fn->apply(view, stream, backward_payload, backward_bindings);
         }
         if (candidate_requires_grad && candidate_grad_fn) {
             Tensor view;
@@ -1227,7 +1242,7 @@ struct GatedTraceUpdateGradFn : public GradFn {
             view.shape = candidate_shape;
             view.owns_data = false;
             view.stream = stream;
-            candidate_grad_fn->apply(view, stream);
+            candidate_grad_fn->apply(view, stream, backward_payload, backward_bindings);
         }
         if (gate_logits_requires_grad && gate_logits_grad_fn) {
             Tensor view;
@@ -1235,7 +1250,7 @@ struct GatedTraceUpdateGradFn : public GradFn {
             view.shape = gate_logits_shape;
             view.owns_data = false;
             view.stream = stream;
-            gate_logits_grad_fn->apply(view, stream);
+            gate_logits_grad_fn->apply(view, stream, backward_payload, backward_bindings);
         }
     }
 

@@ -143,7 +143,10 @@ void ElementwiseMulGradFn::set_cache_refs(const float* a_data, const float* b_da
     if (b_requires_grad && a_data) cached_a = a_data;
 }
 
-void ElementwiseMulGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
+void ElementwiseMulGradFn::apply_impl(const Tensor& grad_output,
+                                      cudaStream_t stream,
+                                      const Batching::BatchPayload* backward_payload,
+                                      const Batching::BatchDeviceBindings* backward_bindings) {
     setCurrentGradFnOp("elementwise_mul", this);
     if (applied) return;
     applied = true;
@@ -162,7 +165,7 @@ void ElementwiseMulGradFn::apply_impl(const Tensor& grad_output, cudaStream_t st
             Tensor view;
             view.data = a_grad; view.shape = a_shape;
             view.owns_data = false; view.stream = stream;
-            a_grad_fn->apply(view, stream);
+            a_grad_fn->apply(view, stream, backward_payload, backward_bindings);
         }
     }
 
@@ -178,7 +181,7 @@ void ElementwiseMulGradFn::apply_impl(const Tensor& grad_output, cudaStream_t st
             Tensor view;
             view.data = b_grad; view.shape = b_shape;
             view.owns_data = false; view.stream = stream;
-            b_grad_fn->apply(view, stream);
+            b_grad_fn->apply(view, stream, backward_payload, backward_bindings);
         }
     }
 }

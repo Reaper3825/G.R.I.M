@@ -167,7 +167,10 @@ void DropoutGradFn::save(const std::uint8_t* mask, float dropout_prob, size_t n,
     cudaMemcpyAsync(saved_mask, mask, n * sizeof(std::uint8_t), cudaMemcpyDeviceToDevice, stream);
 }
 
-void DropoutGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
+void DropoutGradFn::apply_impl(const Tensor& grad_output,
+                               cudaStream_t stream,
+                               const Batching::BatchPayload* backward_payload,
+                               const Batching::BatchDeviceBindings* backward_bindings) {
     setCurrentGradFnOp("dropout", this);
 
     if (applied) {
@@ -209,7 +212,7 @@ void DropoutGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
         Tensor view;
         view.data = input_grad; view.shape = input_shape;
         view.owns_data = false; view.stream = stream;
-        input_grad_fn->apply(view, stream);
+        input_grad_fn->apply(view, stream, backward_payload, backward_bindings);
     }
 }
 

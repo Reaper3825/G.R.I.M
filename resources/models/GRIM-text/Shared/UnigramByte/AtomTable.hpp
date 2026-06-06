@@ -139,7 +139,7 @@ struct alignas(64) AtomEntry {
     
     // Initialize to safe defaults
     AtomEntry() 
-        : hash(0), id(0), type(AtomType::ATOM_NONE), 
+        : hash(0), id(0), type(AtomType::ATOM_INT), 
                     category(AtomCategory::NUMERIC), origin(AtomOrigin::USER_INPUT),
           padding1{0, 0}, raw_text_ref(), confidence(1.0f),
           created_at(0), source_start(0), source_end(0),

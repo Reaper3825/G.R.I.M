@@ -112,13 +112,13 @@ void materializeAuthoredAtomFacts(
         }
 
         const int token_id = payload.input_ids[static_cast<std::size_t>(token_pos)];
-        const auto atom_type = GRIM::Tokenizer::tokenIdToAtomType(token_id);
-        if (atom_type == GRIM::Tokenizer::AtomType::ATOM_NONE) {
+        if (!GRIM::Tokenizer::isAtomTokenId(token_id)) {
             throw std::runtime_error(
                 std::string(caller) + ": atom_mask marks token position " +
                 std::to_string(token_pos) + " as atom but token_id=" +
                 std::to_string(token_id) + " is not an atom placeholder");
         }
+        const auto atom_type = GRIM::Tokenizer::tokenIdToAtomType(token_id);
         if (payload.atom_entry_ids[static_cast<std::size_t>(token_pos)] == GRIM::Tokenizer::kAtomEntryNone) {
             throw std::runtime_error(
                 std::string(caller) + ": atom_mask marks token position " +

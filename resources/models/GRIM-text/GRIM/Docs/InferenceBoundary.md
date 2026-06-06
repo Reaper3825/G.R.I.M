@@ -6,7 +6,7 @@ Detailed ownership-tightening work for making the shared forward primitive read-
 
 ## Target ownership boundary
 
-- Training owns `AutogradContext`, loss assembly, backward, optimizer state, and `AutogradStepScope`.
+- Training owns `AutogradContext`, loss assembly, backward, optimizer state, and the Phase2 `processBatch()` step-state clear guard.
 - Phase2 inference owns generation session state and the explicit shared-forward request/runtime payload it authors over caller-authored `BatchPayload` objects, including a `GenerationState::forward_outputs` sink that is separate from training-owned `TrainingState::forward_outputs`.
 - Shared code owns only mode-neutral forward primitives that consume explicit device views and a caller-authored graph policy. It must not branch on training vs inference identity.
 - No inference-only fields may live in `AutogradContext`.

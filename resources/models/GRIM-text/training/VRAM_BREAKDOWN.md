@@ -81,7 +81,7 @@ Device total: 40,441 MB (from log: "Memory: 40441 MB"). Our breakdown accounts f
 
 ## Logits (this config)
 
-There is no durable TrainingState logits cache and no logits pointer on the forward result. Full-batch logits are graph-owned by `TrainingState::forward_outputs.logits_tensor` during the active forward/loss/backward window, then released at `AutogradStepScope` teardown. Inference prefill copies the last-token logits directly from `TrainingState::forward_outputs.logits_tensor` before clearing intermediates.
+There is no durable TrainingState logits cache and no logits pointer on the forward result. Full-batch logits are graph-owned by the active per-batch `forward_outputs.logits_tensor` during the forward/loss/backward window, then released when the Phase2 batch boundary clears that explicit step owner. Inference prefill copies the last-token logits directly from the live forward output tensor before clearing intermediates.
 
 ---
 

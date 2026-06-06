@@ -62,11 +62,10 @@ inline uint8_t tokenIdToByteOrThrow(int token_id, const char* caller) {
 //  Atom Types — distinct tokens per numeric sub-type
 //======================================================//
 enum class AtomType : int {
-    ATOM_NONE  = 0,
-    ATOM_INT   = 1,   // Integer literals: 42, -17, +5
-    ATOM_FLOAT = 2,   // Float literals: 3.14, -2.5e10, .5
+    ATOM_INT   = 0,   // Integer literals: 42, -17, +5
+    ATOM_FLOAT = 1,   // Float literals: 3.14, -2.5e10, .5
     ATOM_ACTIVE_COUNT,
-    ATOM_TYPE_COUNT
+    ATOM_TYPE_COUNT = ATOM_ACTIVE_COUNT
 };
 
 constexpr int kAtomTypeCount = static_cast<int>(AtomType::ATOM_ACTIVE_COUNT);
@@ -187,24 +186,42 @@ inline TokenLayout tokenLayoutFromActualVocabOrThrow(
 //======================================================//
 inline int tokenIdForIndex(int index) { return UNIGRAM_VOCAB_OFFSET + index; }
 inline int indexForTokenId(int token_id) { return token_id - UNIGRAM_VOCAB_OFFSET; }
+inline bool isAtomTokenId(int token_id) {
+    return token_id >= ATOM_TOKEN_OFFSET && token_id < UNIGRAM_VOCAB_OFFSET;
+}
 
 //======================================================//
 //  Atom Token Helpers
 //======================================================//
 inline int atomTypeToTokenId(AtomType type) {
-    return ATOM_TOKEN_OFFSET + static_cast<int>(type);
+    switch (type) {
+        case AtomType::ATOM_INT:
+        case AtomType::ATOM_FLOAT:
+            return ATOM_TOKEN_OFFSET + static_cast<int>(type);
+        default:
+            throw std::runtime_error("atomTypeToTokenId: invalid atom type cannot be mapped into the atom token range");
+    }
 }
 
 inline AtomType tokenIdToAtomType(int token_id) {
-    if (token_id < ATOM_TOKEN_OFFSET || token_id >= UNIGRAM_VOCAB_OFFSET) {
-        return AtomType::ATOM_NONE;
+    if (!isAtomTokenId(token_id)) {
+        throw std::runtime_error("tokenIdToAtomType: token_id=" + std::to_string(token_id) +
+                                 " is outside the atom token range");
     }
-    return static_cast<AtomType>(token_id - ATOM_TOKEN_OFFSET);
+
+    switch (token_id - ATOM_TOKEN_OFFSET) {
+        case static_cast<int>(AtomType::ATOM_INT):
+            return AtomType::ATOM_INT;
+        case static_cast<int>(AtomType::ATOM_FLOAT):
+            return AtomType::ATOM_FLOAT;
+        default:
+            throw std::runtime_error("tokenIdToAtomType: token_id=" + std::to_string(token_id) +
+                                     " does not map to a live atom type");
+    }
 }
 
 inline const char* atomTypeName(AtomType type) {
     switch (type) {
-        case AtomType::ATOM_NONE:  return "NONE";
         case AtomType::ATOM_INT:   return "INT";
         case AtomType::ATOM_FLOAT: return "FLOAT";
         default: return "UNKNOWN";

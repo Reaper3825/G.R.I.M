@@ -133,17 +133,6 @@ public:
     }
     ~LanguageModel() = default;
 
-    // backward() and zeroGrad() DELETED (Rule 26).
-    // Backward: Phase2 runs explicit shared forward, then
-    // GRIM::Autograd::computeAutogradLoss() + executeAutogradBackward().
-    // Zeroing: executeAutogradBackward() zeros registered ParameterGroup gradients
-    // through TensorContract when accumulate=false.
-    // updateWeights(), resetOptimizerMoments(), scaleOptimizerMoments() MOVED to
-    // AdamW_Kernal_GPU.{hpp,cu} as free functions: launchAdamWStep(), resetAdamWMoments(),
-    // scaleAdamWMoments(). AdamW stepping is training infrastructure, not model logic.
-    // computeGradNorm(), scaleGradientsByType(), recordGradientClip() DELETED (Rule 26).
-    // Phase2 calls GradNorm::measureGradientNorms() + launchScaleGradients() directly.
-    
 #ifdef USE_CUDA
     // Startup-owned GPU topology binding. LanguageModel borrows this durable
     // state; it does not own the assembled encoder/layer/MTP objects.

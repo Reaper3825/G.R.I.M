@@ -228,40 +228,10 @@ bool verifyGradientsAreConnected(AutogradContext& ctx);
 
 // computeGradientNorm() DELETED — redundant with Phase2's computeGradNorm()
 
-/**
- * AutogradStepScope — RAII single-owner of autograd step-state clear().
- *
- * Rule 20 ownership taxonomy enforcement: clearing of Category 1 (graph-owned,
- * transient) state MUST happen at exactly one site per autograd step. Wrap the
- * entire step (forward + loss + backward + post-step diagnostics that consume
- * intermediate .data) in this scope. The destructor calls clear() unconditionally
- * — including on early return / exception — so explicit clear() calls in error
- * paths are no longer required and MUST NOT be added back.
- *
- * Lifetime contract: the scope MUST outlive every reader of any field in
- * the active `forward_outputs` / `loss_state` owners.
- * After the scope ends, those fields are reset to default-constructed Tensors
- * — reading them is undefined.
- */
-class AutogradStepScope {
-public:
-        AutogradStepScope(
-                Forward::ModelForwardOutputs& forward_outputs,
-                AutogradLossState& loss_state)
-                : forward_outputs_(forward_outputs),
-                    loss_state_(loss_state) {}
-    ~AutogradStepScope() {
-                forward_outputs_.clear();
-                loss_state_.clear();
-    }
-    AutogradStepScope(const AutogradStepScope&) = delete;
-    AutogradStepScope& operator=(const AutogradStepScope&) = delete;
-    AutogradStepScope(AutogradStepScope&&) = delete;
-    AutogradStepScope& operator=(AutogradStepScope&&) = delete;
-private:
-    Forward::ModelForwardOutputs& forward_outputs_;
-    AutogradLossState& loss_state_;
-};
+// Clearing of the caller-owned `Forward::ModelForwardOutputs` /
+// `AutogradLossState` step owners is Phase2 orchestration-owned at the batch
+// boundary. `AutogradContext` only borrows those explicit owners for the active
+// step; it does not define or own the teardown mechanism.
 
 }  // namespace Autograd
 }  // namespace GRIM

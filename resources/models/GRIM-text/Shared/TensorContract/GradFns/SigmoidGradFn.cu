@@ -122,7 +122,10 @@ void SigmoidGradFn::set_cache_ref(const float* data, std::size_t size) {
     cached_size = size;
 }
 
-void SigmoidGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
+void SigmoidGradFn::apply_impl(const Tensor& grad_output,
+                               cudaStream_t stream,
+                               const Batching::BatchPayload* backward_payload,
+                               const Batching::BatchDeviceBindings* backward_bindings) {
     setCurrentGradFnOp("sigmoid", this);
     if (applied) return;
     applied = true;
@@ -150,7 +153,7 @@ void SigmoidGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
         view.shape = input_shape;
         view.owns_data = false;
         view.stream = stream;
-        input_grad_fn->apply(view, stream);
+        input_grad_fn->apply(view, stream, backward_payload, backward_bindings);
     }
 }
 

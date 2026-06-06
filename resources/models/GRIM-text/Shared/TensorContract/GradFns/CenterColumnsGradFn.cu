@@ -363,7 +363,10 @@ void CenterColumnsGradFn::capture_input(Tensor& input, int cols, int rows, int g
              element_count, (void*)input_grad);
 }
 
-void CenterColumnsGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
+void CenterColumnsGradFn::apply_impl(const Tensor& grad_output,
+                                     cudaStream_t stream,
+                                     const Batching::BatchPayload* backward_payload,
+                                     const Batching::BatchDeviceBindings* backward_bindings) {
     if (applied) return;
     if (!input_requires_grad) return;
     if (!input_grad) throw std::runtime_error("CenterColumnsGradFn::apply: input_grad is NULL - capture_input() must be called first");
@@ -408,7 +411,7 @@ void CenterColumnsGradFn::apply_impl(const Tensor& grad_output, cudaStream_t str
         input_grad_tensor.shape = input_shape;
         input_grad_tensor.owns_data = false;
         input_grad_tensor.stream = stream;
-        input_grad_fn->apply(input_grad_tensor, stream);
+        input_grad_fn->apply(input_grad_tensor, stream, backward_payload, backward_bindings);
     }
 }
 

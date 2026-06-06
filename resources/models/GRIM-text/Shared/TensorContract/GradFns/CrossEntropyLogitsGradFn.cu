@@ -90,7 +90,10 @@ void CrossEntropyLogitsGradFn::capture_input(Tensor& logits, cudaStream_t stream
     }
 }
 
-void CrossEntropyLogitsGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
+void CrossEntropyLogitsGradFn::apply_impl(const Tensor& grad_output,
+                                          cudaStream_t stream,
+                                          const Batching::BatchPayload* backward_payload,
+                                          const Batching::BatchDeviceBindings* backward_bindings) {
     if (applied) return;
     applied = true;
 
@@ -112,7 +115,7 @@ void CrossEntropyLogitsGradFn::apply_impl(const Tensor& grad_output, cudaStream_
         view.shape = input_shape;
         view.owns_data = false;
         view.stream = stream;
-        input_grad_fn->apply(view, stream);
+        input_grad_fn->apply(view, stream, backward_payload, backward_bindings);
     }
 }
 

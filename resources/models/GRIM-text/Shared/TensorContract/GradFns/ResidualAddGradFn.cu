@@ -72,7 +72,10 @@ void ResidualAddGradFn::capture_inputs(Tensor& x, Tensor& r, cudaStream_t stream
     }
 }
 
-void ResidualAddGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
+void ResidualAddGradFn::apply_impl(const Tensor& grad_output,
+                                   cudaStream_t stream,
+                                   const Batching::BatchPayload* backward_payload,
+                                   const Batching::BatchDeviceBindings* backward_bindings) {
     setCurrentGradFnOp("residual_add", this);
 
     if (applied) {
@@ -94,13 +97,13 @@ void ResidualAddGradFn::apply_impl(const Tensor& grad_output, cudaStream_t strea
         Tensor view;
         view.data = input_grad; view.shape = input_shape;
         view.owns_data = false; view.stream = stream;
-        input_grad_fn->apply(view, stream);
+        input_grad_fn->apply(view, stream, backward_payload, backward_bindings);
     }
     if (residual_requires_grad && residual_grad_fn && residual_grad_fn != input_grad_fn) {
         Tensor view;
         view.data = residual_grad; view.shape = residual_shape;
         view.owns_data = false; view.stream = stream;
-        residual_grad_fn->apply(view, stream);
+        residual_grad_fn->apply(view, stream, backward_payload, backward_bindings);
     }
 }
 

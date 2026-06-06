@@ -193,7 +193,10 @@ void LayerScaleGradFn::capture_inputs(Tensor& input, Tensor& scale_param, cudaSt
     }
 }
 
-void LayerScaleGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
+void LayerScaleGradFn::apply_impl(const Tensor& grad_output,
+                                  cudaStream_t stream,
+                                  const Batching::BatchPayload* backward_payload,
+                                  const Batching::BatchDeviceBindings* backward_bindings) {
     setCurrentGradFnOp("layer_scale", this);
     if (applied) {
         AG_TRACE("[LayerScaleGradFn] apply() SKIPPED (already applied)\n");
@@ -240,7 +243,7 @@ void LayerScaleGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream
         input_grad_tensor.shape = input_shape;
         input_grad_tensor.owns_data = false;
         input_grad_tensor.stream = stream;
-        input_grad_fn->apply(input_grad_tensor, stream);
+        input_grad_fn->apply(input_grad_tensor, stream, backward_payload, backward_bindings);
     }
 
     if (scale_grad_fn) {
@@ -252,7 +255,7 @@ void LayerScaleGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream
         scale_grad_tensor.shape = scale_shape;
         scale_grad_tensor.owns_data = false;
         scale_grad_tensor.stream = stream;
-        scale_grad_fn->apply(scale_grad_tensor, stream);
+        scale_grad_fn->apply(scale_grad_tensor, stream, backward_payload, backward_bindings);
     }
 }
 

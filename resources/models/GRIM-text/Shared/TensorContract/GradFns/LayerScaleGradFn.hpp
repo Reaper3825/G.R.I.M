@@ -33,7 +33,10 @@ struct LayerScaleGradFn : public GradFn {
     LayerScaleGradFn();
 
     void capture_inputs(Tensor& input, Tensor& scale_param, cudaStream_t stream);
-    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override;
+    void apply_impl(const Tensor& grad_output,
+                    cudaStream_t stream,
+                    const Batching::BatchPayload* backward_payload,
+                    const Batching::BatchDeviceBindings* backward_bindings) override;
     void release_saved() override;
 };
 

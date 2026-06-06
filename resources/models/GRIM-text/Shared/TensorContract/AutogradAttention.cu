@@ -233,7 +233,11 @@ struct MatMulGradFn : public GradFn {
         }
     }
     
-    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output,
+                    cudaStream_t stream,
+                    const Batching::BatchPayload* backward_payload,
+                    const Batching::BatchDeviceBindings* backward_bindings) override {
+        (void)backward_bindings;
         // RULE 20: Track current operation for error context
         setCurrentGradFnOp("matmul", this);
         
@@ -445,7 +449,7 @@ struct MatMulGradFn : public GradFn {
                     }
                 }
                 
-                a_grad_fn->apply(view, stream);
+                a_grad_fn->apply(view, stream, backward_payload, backward_bindings);
                 // ISSUE #52 FIX: Do NOT call release_saved() here - cudaFree blocks while GPU busy
             }
         }
@@ -454,7 +458,7 @@ struct MatMulGradFn : public GradFn {
                 Tensor view;
                 view.data = grad_b; view.shape = b_shape;
                 view.owns_data = false; view.stream = stream;
-                b_grad_fn->apply(view, stream);
+                b_grad_fn->apply(view, stream, backward_payload, backward_bindings);
                 // ISSUE #52 FIX: Do NOT call release_saved() here - cudaFree blocks while GPU busy
             }
         }
@@ -790,7 +794,12 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         }
     }
     
-    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output,
+                    cudaStream_t stream,
+                    const Batching::BatchPayload* backward_payload,
+                    const Batching::BatchDeviceBindings* backward_bindings) override {
+        (void)backward_payload;
+        (void)backward_bindings;
         // RULE 20: Track current operation for error context
         setCurrentGradFnOp("scaled_dot_product_attention", this);
         
@@ -928,21 +937,21 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
             Tensor q_view;
             q_view.data = q_grad; q_view.shape = q_shape;
             q_view.owns_data = false; q_view.stream = stream;
-            q_grad_fn->apply(q_view, stream);
+            q_grad_fn->apply(q_view, stream, backward_payload, backward_bindings);
             // ISSUE #52 FIX: Do NOT call release_saved() here — cudaFree blocks while GPU busy
         }
         if (k_requires_grad && k_grad_fn) {
             Tensor k_view;
             k_view.data = k_grad; k_view.shape = k_shape;
             k_view.owns_data = false; k_view.stream = stream;
-            k_grad_fn->apply(k_view, stream);
+            k_grad_fn->apply(k_view, stream, backward_payload, backward_bindings);
             // ISSUE #52 FIX: Do NOT call release_saved() here — cudaFree blocks while GPU busy
         }
         if (v_requires_grad && v_grad_fn) {
             Tensor v_view;
             v_view.data = v_grad; v_view.shape = v_shape;
             v_view.owns_data = false; v_view.stream = stream;
-            v_grad_fn->apply(v_view, stream);
+            v_grad_fn->apply(v_view, stream, backward_payload, backward_bindings);
             // ISSUE #52 FIX: Do NOT call release_saved() here — cudaFree blocks while GPU busy
         }
     }
@@ -1248,7 +1257,10 @@ struct ReshapeFromBHSDGradFn : public GradFn {
         }
     }
     
-    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output,
+                    cudaStream_t stream,
+                    const Batching::BatchPayload* backward_payload,
+                    const Batching::BatchDeviceBindings* backward_bindings) override {
         setCurrentGradFnOp("reshape_bhsd_to_flat", this);
         
         if (applied) return;
@@ -1278,7 +1290,7 @@ struct ReshapeFromBHSDGradFn : public GradFn {
             bhsd_grad_tensor.owns_data = false;
             bhsd_grad_tensor.stream = stream;
             
-            input_grad_fn->apply(bhsd_grad_tensor, stream);
+            input_grad_fn->apply(bhsd_grad_tensor, stream, backward_payload, backward_bindings);
             // ISSUE #52 FIX: Do NOT call release_saved() here — cudaFree blocks while GPU busy
         } else {
             throw std::runtime_error("[ReshapeBHSDtoFlat] input_grad_fn is NULL - autograd chain is broken at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
@@ -1432,7 +1444,10 @@ struct SplitAndReshapeQKVGradFn : public GradFn {
     
     SplitAndReshapeQKVGradFn() { op_name = "split_and_reshape_qkv"; }
     
-    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output,
+                    cudaStream_t stream,
+                    const Batching::BatchPayload* backward_payload,
+                    const Batching::BatchDeviceBindings* backward_bindings) override {
         const char* type_str = (output_type == OutputType::Q) ? "Q" : 
                                (output_type == OutputType::K) ? "K" : "V";
         
@@ -1539,7 +1554,7 @@ struct SplitAndReshapeQKVGradFn : public GradFn {
                 qkv_grad_tensor.owns_data = false;
                 qkv_grad_tensor.stream = stream;
                 
-                state.qkv_grad_fn->apply(qkv_grad_tensor, stream);
+                state.qkv_grad_fn->apply(qkv_grad_tensor, stream, backward_payload, backward_bindings);
                 // ISSUE #52 FIX: Do NOT call release_saved() here — cudaFree blocks while GPU busy
             } else {
                 throw std::runtime_error("SplitAndReshapeQKVGradFn::apply: non-leaf qkv_out has NULL upstream grad_fn");
@@ -1716,7 +1731,6 @@ struct RoPEGradFn : public GradFn {
         bool k_requires_grad = false;
         
         // RoPE parameters (captured at forward time)
-        const BatchPayload* payload = nullptr;
         GRIM::HyperParameters::EncoderSelfAttentionHP hp{};
         const float* inv_freq = nullptr;
         int rotary_dim = 0;
@@ -1739,7 +1753,11 @@ struct RoPEGradFn : public GradFn {
 
     RoPEGradFn() { op_name = "rope_rotation"; }
 
-    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output,
+                    cudaStream_t stream,
+                    const Batching::BatchPayload* backward_payload,
+                    const Batching::BatchDeviceBindings* backward_bindings) override {
+        (void)backward_bindings;
         if (!shared) {
             throw std::runtime_error("RoPEGradFn::apply: shared state is NULL - RoPE forward must initialize shared state");
         }
@@ -1759,17 +1777,19 @@ struct RoPEGradFn : public GradFn {
         cudaMallocOrThrow(reinterpret_cast<void**>(&grad_buf), n_elems * sizeof(float), "RoPEGradFn_grad_buf");
         cudaMemcpyAsync(grad_buf, grad_output.data, n_elems * sizeof(float), cudaMemcpyDeviceToDevice, stream);
         owned_grad_buf.reset(grad_buf, [](float* p) { queueForDeferredCleanup(p); });
+
+        if (!backward_payload) {
+            throw std::runtime_error("RoPEGradFn::apply: backward_payload is NULL - orchestration MUST pass the active BatchPayload into backward()");
+        }
+        backward_payload->validate("RoPEGradFn::apply");
         
         if (output_type == OutputType::Q) {
-            if (!state.payload) {
-                throw std::runtime_error("RoPEGradFn::apply: BatchPayload pointer is NULL");
-            }
             // Inverse-rotate dQ only - K gradients handled by K's GradFn
             PBM::launchRoPERotationGQA_backward(
                 grad_buf,         // dQ copy - modified in-place
                 nullptr,          // dK = nullptr, handle separately
                 state.inv_freq,
-                *state.payload,
+                *backward_payload,
                 state.hp,
                 state.rotary_dim,
                 stream,
@@ -1777,15 +1797,12 @@ struct RoPEGradFn : public GradFn {
             );
             AG_TRACE("[RoPEGradFn-Q] Inverse RoPE applied to dQ copy\n");
         } else {
-            if (!state.payload) {
-                throw std::runtime_error("RoPEGradFn::apply: BatchPayload pointer is NULL");
-            }
             // Inverse-rotate dK only - Q gradients handled by Q's GradFn
             PBM::launchRoPERotationGQA_backward(
                 nullptr,          // dQ = nullptr, handle separately
                 grad_buf,         // dK copy - modified in-place
                 state.inv_freq,
-                *state.payload,
+                *backward_payload,
                 state.hp,
                 state.rotary_dim,
                 stream,
@@ -1811,13 +1828,13 @@ struct RoPEGradFn : public GradFn {
         if (output_type == OutputType::Q) {
             if (state.q_requires_grad && state.q_upstream_grad_fn) {
                 AG_TRACE("[RoPEGradFn-Q] Continuing to q_upstream_grad_fn...\n");
-                state.q_upstream_grad_fn->apply(rotated_grad, stream);
+                state.q_upstream_grad_fn->apply(rotated_grad, stream, backward_payload, backward_bindings);
                 // ISSUE #52 FIX: Do NOT call release_saved() here — cudaFree blocks while GPU busy
             }
         } else {
             if (state.k_requires_grad && state.k_upstream_grad_fn) {
                 AG_TRACE("[RoPEGradFn-K] Continuing to k_upstream_grad_fn...\n");
-                state.k_upstream_grad_fn->apply(rotated_grad, stream);
+                state.k_upstream_grad_fn->apply(rotated_grad, stream, backward_payload, backward_bindings);
                 // ISSUE #52 FIX: Do NOT call release_saved() here — cudaFree blocks while GPU busy
             }
         }
@@ -1935,7 +1952,6 @@ std::pair<Tensor, Tensor> rope_rotation(
         shared->k_requires_grad = K.requires_grad;
         
         // Capture RoPE parameters
-        shared->payload = &payload;
         shared->hp = hp;
         shared->inv_freq = inv_freq;
         shared->rotary_dim = rotary_dim;

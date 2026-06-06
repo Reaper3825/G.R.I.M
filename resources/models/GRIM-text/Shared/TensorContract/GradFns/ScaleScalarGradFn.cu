@@ -24,7 +24,10 @@ ScaleScalarGradFn::ScaleScalarGradFn() {
     op_name = "scale_scalar";
 }
 
-void ScaleScalarGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
+void ScaleScalarGradFn::apply_impl(const Tensor& grad_output,
+                                   cudaStream_t stream,
+                                   const Batching::BatchPayload* backward_payload,
+                                   const Batching::BatchDeviceBindings* backward_bindings) {
     if (applied) return;
     applied = true;
     if (!input_grad_fn || !input_grad_fn->op_name) return;
@@ -43,7 +46,7 @@ void ScaleScalarGradFn::apply_impl(const Tensor& grad_output, cudaStream_t strea
     view.shape = input_shape;
     view.owns_data = false;
     view.stream = stream;
-    input_grad_fn->apply(view, stream);
+    input_grad_fn->apply(view, stream, backward_payload, backward_bindings);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

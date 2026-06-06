@@ -30,8 +30,6 @@ namespace autograd {
  *   - weight_grad         : raw device pointer into the weight tensor's grad
  *   - weight_shape        : captured at forward time (used to build the grad view)
  *   - weight_grad_fn      : shared_ptr to upstream grad_fn (for chain continuation)
- *   - payload/bindings    : borrowed orchestration-owned batch geometry/device view
- *
  * Backward kernel (kernel_embedding_backward) does an atomic scatter-add of
  *   grad_output[token_idx, :] * embedding_scale
  * into weight_grad[token_id, :], with bounds-checking on token_id. PAD rows
@@ -45,11 +43,6 @@ struct EmbeddingGradFn : public GradFn {
     ::TensorContract::TensorShape weight_shape;
     std::shared_ptr<GradFn> weight_grad_fn;
 
-    // Borrowed batch view. The lifecycle owner is the orchestration boundary
-    // that produced this forward/backward step; EmbeddingGradFn must not copy
-    // token data into op-owned storage.
-    const Batching::BatchPayload* payload = nullptr;
-    Batching::BatchDeviceBindings bindings{};
     int vocab_size = 0;            ///< RULE 20: stored for OOB bounds checking in backward kernel
     float embedding_scale = 1.0f;  ///< Forward-authored output scale captured for backward chain rule.
 
@@ -59,14 +52,13 @@ struct EmbeddingGradFn : public GradFn {
     /// Capture upstream weight metadata (shape, requires_grad, grad pointer, grad_fn).
     void capture_weight(Tensor& w);
 
-    /// Capture the orchestration-owned batch view needed for backward scatter.
-    void capture_batch_view(const Batching::BatchPayload& payload_,
-                            const Batching::BatchDeviceBindings& bindings_);
-
     /// Backward: scatter-add grad_output rows into weight_grad rows by token_id.
-    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override;
+    void apply_impl(const Tensor& grad_output,
+                    cudaStream_t stream,
+                    const Batching::BatchPayload* backward_payload,
+                    const Batching::BatchDeviceBindings* backward_bindings) override;
 
-    /// Drop borrowed batch refs and upstream chain refs.
+    /// Drop upstream chain refs.
     void release_saved() override;
 };
 

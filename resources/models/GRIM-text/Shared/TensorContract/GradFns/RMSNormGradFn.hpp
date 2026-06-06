@@ -33,7 +33,10 @@ struct RMSNormGradFn : public GradFn {
 
     void capture_inputs(Tensor& x, Tensor& gamma_tensor, cudaStream_t stream);
     void set_cache_copy(const float* external_cache, std::size_t size, int d, float e, cudaStream_t stream);
-    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override;
+    void apply_impl(const Tensor& grad_output,
+                    cudaStream_t stream,
+                    const Batching::BatchPayload* backward_payload,
+                    const Batching::BatchDeviceBindings* backward_bindings) override;
     void release_saved() override;
 };
 

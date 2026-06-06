@@ -24,7 +24,7 @@ namespace Tokenizer {
 struct StructuralSpan {
     size_t start;           // Start position in text (may include leading whitespace)
     size_t end;             // End position (exclusive)
-    AtomType atom_type;     // Type of structure detected
+    AtomType atom_type = AtomType::ATOM_INT; // Meaningful only for placeholder-emitting structures
     uint32_t atom_entry_id = kAtomEntryNone; // Per-sequence AtomTable entry ID once registered
 
     // Zero-copy buffer reference (NO std::string allocation!)
@@ -36,7 +36,7 @@ struct StructuralSpan {
     uint32_t content_offset; // Offset to content
     uint32_t content_length; // Length of content
 
-    int placeholder_id;     // Token ID of placeholder
+    int placeholder_id = -1; // Token ID of placeholder when this structure emits an atom
 
     // Helper: get string_view of full span (may include leading whitespace)
     std::string_view view() const {
@@ -77,16 +77,25 @@ struct RawTextDetection {
 
     RawTextDetection(size_t start_in,
                      size_t end_in,
-                     RawTextFeature feature_in,
                      AtomType atom_type_in,
                      const char* detector_name_in) noexcept
         : start(start_in)
         , end(end_in)
-        , feature(feature_in)
+        , feature(RawTextFeature::ATOM)
         , atom_type(atom_type_in)
         , detector_name(detector_name_in) {}
 
-    bool emitsAtom() const noexcept { return atom_type != AtomType::ATOM_NONE; }
+    RawTextDetection(size_t start_in,
+                     size_t end_in,
+                     RawTextFeature feature_in,
+                     const char* detector_name_in) noexcept
+        : start(start_in)
+        , end(end_in)
+        , feature(feature_in)
+        , atom_type(AtomType::ATOM_INT)
+        , detector_name(detector_name_in) {}
+
+    bool emitsAtom() const noexcept { return feature == RawTextFeature::ATOM; }
     size_t length() const noexcept { return end - start; }
 };
 

@@ -25,7 +25,7 @@ std::optional<RawTextDetection> WhitespaceDetector::detect(std::string_view text
         ++end;
     }
 
-    return RawTextDetection(pos, end, RawTextFeature::WHITESPACE, AtomType::ATOM_NONE, name());
+    return RawTextDetection(pos, end, RawTextFeature::WHITESPACE, name());
 }
 
 std::optional<RawTextDetection> UppercaseRunDetector::detect(std::string_view text,
@@ -40,7 +40,7 @@ std::optional<RawTextDetection> UppercaseRunDetector::detect(std::string_view te
         ++end;
     }
 
-    return RawTextDetection(pos, end, RawTextFeature::UPPERCASE_RUN, AtomType::ATOM_NONE, name());
+    return RawTextDetection(pos, end, RawTextFeature::UPPERCASE_RUN, name());
 }
 
 } // namespace Detector

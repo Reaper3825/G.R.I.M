@@ -28,7 +28,10 @@ struct SoftmaxGradFn : public GradFn {
 
     void capture_input(Tensor& x, cudaStream_t stream);
     void save(const float* softmax_output, int tokens_, int dim_, float inv_temp, cudaStream_t stream);
-    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override;
+    void apply_impl(const Tensor& grad_output,
+                    cudaStream_t stream,
+                    const Batching::BatchPayload* backward_payload,
+                    const Batching::BatchDeviceBindings* backward_bindings) override;
     void release_saved() override;
 };
 

@@ -189,7 +189,10 @@ void LogSoftmaxGradFn::save(const float* log_softmax_output, int tokens, int d, 
     }
 }
 
-void LogSoftmaxGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
+void LogSoftmaxGradFn::apply_impl(const Tensor& grad_output,
+                                  cudaStream_t stream,
+                                  const Batching::BatchPayload* backward_payload,
+                                  const Batching::BatchDeviceBindings* backward_bindings) {
     setCurrentGradFnOp("log_softmax", this);
 
     if (applied) return;
@@ -214,7 +217,7 @@ void LogSoftmaxGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream
         view.shape = input_shape;
         view.owns_data = false;
         view.stream = stream;
-        input_grad_fn->apply(view, stream);
+        input_grad_fn->apply(view, stream, backward_payload, backward_bindings);
     }
 }
 

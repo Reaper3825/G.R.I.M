@@ -102,7 +102,10 @@ void ConcatGradFn::capture_inputs(Tensor& a, Tensor& b, cudaStream_t stream) {
     }
 }
 
-void ConcatGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
+void ConcatGradFn::apply_impl(const Tensor& grad_output,
+                              cudaStream_t stream,
+                              const Batching::BatchPayload* backward_payload,
+                              const Batching::BatchDeviceBindings* backward_bindings) {
     setCurrentGradFnOp("concat", this);
     if (applied) return;
     applied = true;
@@ -116,7 +119,7 @@ void ConcatGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
             Tensor view;
             view.data = grad_a; view.shape = a_shape;
             view.owns_data = false; view.stream = stream;
-            a_grad_fn->apply(view, stream);
+            a_grad_fn->apply(view, stream, backward_payload, backward_bindings);
         }
     }
     if (b_requires_grad && grad_b) {
@@ -126,7 +129,7 @@ void ConcatGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
             Tensor view;
             view.data = grad_b; view.shape = b_shape;
             view.owns_data = false; view.stream = stream;
-            b_grad_fn->apply(view, stream);
+            b_grad_fn->apply(view, stream, backward_payload, backward_bindings);
         }
     }
 }

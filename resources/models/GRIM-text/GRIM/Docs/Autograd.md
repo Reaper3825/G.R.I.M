@@ -45,7 +45,7 @@ Always explicitly `return output;` from any autograd forward function. A missing
 Every concrete `GradFn` constructor must set `op_name` to a non-empty static string before the node is attached to a tensor. TensorContract grad-flow diagnostics fail loud on a missing name so debug logs can attribute backward anomalies to the exact operation instead of emitting anonymous tape nodes.
 
 ## Boundary call sites (single-owner rule)
-- `forward_outputs.clear()` / `loss_state.clear()` — exactly **one** owner (the RAII `AutogradStepScope` for each active training batch; shutdown mirrors only the retained shared-forward sink because `AutogradLossState` is batch-local explicit state).
+- `forward_outputs.clear()` / `loss_state.clear()` — exactly **one** owner (the Phase2 `processBatch()` local step-state clear guard for each active training batch; shutdown mirrors only the retained shared-forward sink because `AutogradLossState` is batch-local explicit state).
 - `flushDeferredCleanup()` — owned by `Tensor::backward()`. No external calls.
 - Tape sealing: once `AutogradLossState::loss_tensor` is read as a host scalar, no further `autograd::add` / tape mutation. Loss-assembly and loss-readout functions must be distinct.
 

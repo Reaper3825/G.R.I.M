@@ -244,7 +244,10 @@ struct L1ScalarLossGradFn : public GradFn {
         }
     }
 
-    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output,
+                    cudaStream_t stream,
+                    const Batching::BatchPayload* backward_payload,
+                    const Batching::BatchDeviceBindings* backward_bindings) override {
         if (applied) return;
         applied = true;
         if (!a_requires_grad_ || !grad_a_) return;
@@ -258,7 +261,7 @@ struct L1ScalarLossGradFn : public GradFn {
             view.shape = a_shape_;
             view.owns_data = false;
             view.stream = stream;
-            a_grad_fn_->apply(view, stream);
+            a_grad_fn_->apply(view, stream, backward_payload, backward_bindings);
         }
     }
 
@@ -301,7 +304,10 @@ struct DivInvalidPenaltyGradFn : public GradFn {
         grad_p_op_ = owned_grad_p_op_.get();
     }
 
-    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output,
+                    cudaStream_t stream,
+                    const Batching::BatchPayload* backward_payload,
+                    const Batching::BatchDeviceBindings* backward_bindings) override {
         if (applied) return;
         applied = true;
 
@@ -315,7 +321,7 @@ struct DivInvalidPenaltyGradFn : public GradFn {
             view.shape = p_op_shape_;
             view.owns_data = false;
             view.stream = stream;
-            p_op_grad_fn_->apply(view, stream);
+            p_op_grad_fn_->apply(view, stream, backward_payload, backward_bindings);
         }
     }
 
@@ -368,7 +374,10 @@ struct DivMagnitudePenaltyGradFn : public GradFn {
         }
     }
 
-    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output,
+                    cudaStream_t stream,
+                    const Batching::BatchPayload* backward_payload,
+                    const Batching::BatchDeviceBindings* backward_bindings) override {
         if (applied) return;
         applied = true;
         if (!v_out_requires_grad_ || !grad_v_out_) return;
@@ -383,7 +392,7 @@ struct DivMagnitudePenaltyGradFn : public GradFn {
             view.shape = v_out_shape_;
             view.owns_data = false;
             view.stream = stream;
-            v_out_grad_fn_->apply(view, stream);
+            v_out_grad_fn_->apply(view, stream, backward_payload, backward_bindings);
         }
     }
 
@@ -474,7 +483,10 @@ struct ArgReinforceLossGradFn : public GradFn {
         alloc_grad(p_arg2_t, grad_p_arg2_, owned_grad_p_arg2_);
     }
 
-    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output,
+                    cudaStream_t stream,
+                    const Batching::BatchPayload* backward_payload,
+                    const Batching::BatchDeviceBindings* backward_bindings) override {
         if (applied) return;
         applied = true;
 
@@ -489,7 +501,7 @@ struct ArgReinforceLossGradFn : public GradFn {
             view.shape = p_arg1_shape_;
             view.owns_data = false;
             view.stream = stream;
-            p_arg1_grad_fn_->apply(view, stream);
+            p_arg1_grad_fn_->apply(view, stream, backward_payload, backward_bindings);
         }
         if (p_arg2_requires_grad_ && p_arg2_grad_fn_) {
             Tensor view;
@@ -497,7 +509,7 @@ struct ArgReinforceLossGradFn : public GradFn {
             view.shape = p_arg2_shape_;
             view.owns_data = false;
             view.stream = stream;
-            p_arg2_grad_fn_->apply(view, stream);
+            p_arg2_grad_fn_->apply(view, stream, backward_payload, backward_bindings);
         }
     }
 
@@ -573,7 +585,10 @@ struct NormalizedEntropyGradFn : public GradFn {
         }
     }
 
-    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
+    void apply_impl(const Tensor& grad_output,
+                    cudaStream_t stream,
+                    const Batching::BatchPayload* backward_payload,
+                    const Batching::BatchDeviceBindings* backward_bindings) override {
         if (applied) return;
         applied = true;
         if (!probs_requires_grad_ || !grad_probs_) return;
@@ -589,7 +604,7 @@ struct NormalizedEntropyGradFn : public GradFn {
             view.shape = probs_shape_;
             view.owns_data = false;
             view.stream = stream;
-            probs_grad_fn_->apply(view, stream);
+            probs_grad_fn_->apply(view, stream, backward_payload, backward_bindings);
         }
     }
 

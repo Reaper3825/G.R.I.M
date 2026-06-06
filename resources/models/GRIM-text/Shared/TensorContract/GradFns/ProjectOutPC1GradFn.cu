@@ -356,7 +356,10 @@ void ProjectOutPC1GradFn::capture_input(Tensor& input, int rows, int cols, int n
     inv_norm_saved = owned_inv_norms.get();
 }
 
-void ProjectOutPC1GradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
+void ProjectOutPC1GradFn::apply_impl(const Tensor& grad_output,
+                                     cudaStream_t stream,
+                                     const Batching::BatchPayload* backward_payload,
+                                     const Batching::BatchDeviceBindings* backward_bindings) {
     if (applied) return;
     if (!input_requires_grad) {
         applied = true;
@@ -456,7 +459,7 @@ void ProjectOutPC1GradFn::apply_impl(const Tensor& grad_output, cudaStream_t str
         input_grad_tensor.shape = input_shape;
         input_grad_tensor.owns_data = false;
         input_grad_tensor.stream = stream;
-        input_grad_fn->apply(input_grad_tensor, stream);
+        input_grad_fn->apply(input_grad_tensor, stream, backward_payload, backward_bindings);
     }
 }
 

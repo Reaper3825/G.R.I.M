@@ -107,7 +107,10 @@ void AddGradFn::capture_single_input(Tensor& a, cudaStream_t stream) {
     }
 }
 
-void AddGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
+void AddGradFn::apply_impl(const Tensor& grad_output,
+                           cudaStream_t stream,
+                           const Batching::BatchPayload* backward_payload,
+                           const Batching::BatchDeviceBindings* backward_bindings) {
     setCurrentGradFnOp("add", this);
 
     // ISSUE #49: Prevent infinite loops when grad_fn is shared by multiple ops
@@ -137,14 +140,14 @@ void AddGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
         Tensor view;
         view.data = grad_output.data; view.shape = a_shape;
         view.owns_data = false; view.stream = stream;
-        a_grad_fn->apply(view, stream);
+        a_grad_fn->apply(view, stream, backward_payload, backward_bindings);
     }
 
     if (b_requires_grad && b_grad_fn && b_grad_fn != a_grad_fn && b_grad_fn->op_name) {
         Tensor view;
         view.data = grad_output.data; view.shape = b_shape;
         view.owns_data = false; view.stream = stream;
-        b_grad_fn->apply(view, stream);
+        b_grad_fn->apply(view, stream, backward_payload, backward_bindings);
     }
 }
 

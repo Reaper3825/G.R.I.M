@@ -169,7 +169,10 @@ void GeluGradFn::set_cache_copy(const float* external_cache, size_t size, cudaSt
     AG_TRACE("[GeluGradFn] Copied cache: %zu floats to %p\n", size, (void*)cached_input);
 }
 
-void GeluGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
+void GeluGradFn::apply_impl(const Tensor& grad_output,
+                            cudaStream_t stream,
+                            const Batching::BatchPayload* backward_payload,
+                            const Batching::BatchDeviceBindings* backward_bindings) {
     setCurrentGradFnOp("gelu", this);
 
     if (applied) return;
@@ -213,7 +216,7 @@ void GeluGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
         Tensor view;
         view.data = input_grad; view.shape = input_shape;
         view.owns_data = false; view.stream = stream;
-        input_grad_fn->apply(view, stream);
+        input_grad_fn->apply(view, stream, backward_payload, backward_bindings);
     }
 }
 

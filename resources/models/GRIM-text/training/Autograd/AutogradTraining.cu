@@ -575,8 +575,14 @@ BackwardResult executeAutogradBackward(
     
     // Call backward on the text loss (single loss path). Accumulation-window
     // normalization is owned later by the optimizer boundary, not by autograd.
-    AG_INFO("Calling loss_tensor.backward(nullptr)...");
-    loss_state.loss_tensor.backward(nullptr);
+    if (!ctx.payload) {
+        throw std::runtime_error("executeAutogradBackward: ctx.payload is NULL - orchestration MUST pass BatchPayload into autograd context");
+    }
+    if (!ctx.device_bindings) {
+        throw std::runtime_error("executeAutogradBackward: ctx.device_bindings is NULL - orchestration MUST pass BatchDeviceBindings into autograd context");
+    }
+    AG_INFO("Calling loss_tensor.backward(nullptr, 1.0f, ctx.payload, ctx.device_bindings)...");
+    loss_state.loss_tensor.backward(nullptr, 1.0f, ctx.payload, ctx.device_bindings);
     AG_INFO("loss_tensor.backward() returned successfully");
 
     // ════════════════════════════════════════════════════════════════════

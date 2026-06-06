@@ -5,7 +5,7 @@
 //  Owns:
 //    - kernel_embedding_forward    (anonymous namespace, this TU)
 //    - kernel_embedding_backward   (anonymous namespace, this TU)
-//    - EmbeddingGradFn methods     (capture_weight, capture_batch_view, apply, release_saved)
+//    - EmbeddingGradFn methods     (capture_weight, apply, release_saved)
 //    - autograd::embedding(...)    (forward op)
 //
 //  Single-file extraction from TensorContract_GPU.cu — same math, same
@@ -186,38 +186,33 @@ void EmbeddingGradFn::capture_weight(Tensor& w) {
     }
 }
 
-void EmbeddingGradFn::capture_batch_view(const Batching::BatchPayload& payload_,
-                                         const Batching::BatchDeviceBindings& bindings_) {
-    payload_.validate("EmbeddingGradFn::capture_batch_view");
-    if (!bindings_.d_input_ids) {
-        throw std::runtime_error("EmbeddingGradFn::capture_batch_view: BatchDeviceBindings.d_input_ids is NULL");
-    }
-    if (payload_.vocab_size != vocab_size) {
-        throw std::runtime_error("EmbeddingGradFn::capture_batch_view: payload.vocab_size=" +
-                                 std::to_string(payload_.vocab_size) + " != embedding vocab_size=" +
-                                 std::to_string(vocab_size));
-    }
-
-    payload = &payload_;
-    bindings = bindings_;
-}
-
-void EmbeddingGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
+void EmbeddingGradFn::apply_impl(const Tensor& grad_output,
+                                 cudaStream_t stream,
+                                 const Batching::BatchPayload* backward_payload,
+                                 const Batching::BatchDeviceBindings* backward_bindings) {
     // RULE 20: Track current operation for error context
     setCurrentGradFnOp("embedding", this);
 
-    if (!payload) {
-        throw std::runtime_error("EmbeddingGradFn::apply: payload is NULL - capture_batch_view() must be called first");
+    if (!backward_payload) {
+        throw std::runtime_error("EmbeddingGradFn::apply: backward_payload is NULL - orchestration MUST pass the active BatchPayload into backward()");
     }
-    payload->validate("EmbeddingGradFn::apply");
-    if (!bindings.d_input_ids) {
-        throw std::runtime_error("EmbeddingGradFn::apply: BatchDeviceBindings.d_input_ids is NULL - orchestration-owned input IDs are required");
+    if (!backward_bindings) {
+        throw std::runtime_error("EmbeddingGradFn::apply: backward_bindings is NULL - orchestration MUST pass the active BatchDeviceBindings into backward()");
+    }
+    backward_payload->validate("EmbeddingGradFn::apply");
+    if (!backward_bindings->d_input_ids) {
+        throw std::runtime_error("EmbeddingGradFn::apply: backward_bindings->d_input_ids is NULL - orchestration-owned input IDs are required");
     }
     if (!weight_shape.is_2d_layout()) {
         throw std::runtime_error("EmbeddingGradFn::apply: captured weight_shape is not 2D");
     }
+    if (backward_payload->vocab_size != vocab_size) {
+        throw std::runtime_error("EmbeddingGradFn::apply: backward_payload->vocab_size=" +
+                                 std::to_string(backward_payload->vocab_size) + " != embedding vocab_size=" +
+                                 std::to_string(vocab_size));
+    }
 
-    const int num_tokens = payload->total_tokens;
+    const int num_tokens = backward_payload->total_tokens;
     const int d_model = weight_shape.as_2d().cols;
 
     AG_TRACE("[EmbeddingGradFn::apply] ENTER - tokens=%d d=%d\n",
@@ -254,7 +249,7 @@ void EmbeddingGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream)
     // for frequent tokens acts as frequency-proportional regularization.
     kernel_embedding_backward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
         grad_output.data,
-        bindings.d_input_ids,
+        backward_bindings->d_input_ids,
         weight_grad,
         num_tokens,
         d_model,
@@ -268,15 +263,13 @@ void EmbeddingGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream)
         Tensor view;
         view.data = weight_grad; view.shape = weight_shape;
         view.owns_data = false; view.stream = stream;
-        weight_grad_fn->apply(view, stream);
+        weight_grad_fn->apply(view, stream, backward_payload, backward_bindings);
         // ISSUE #52 FIX: Do NOT call release_saved() here — cudaFree blocks while GPU busy
     }
 }
 
 void EmbeddingGradFn::release_saved() {
     GradFn::release_saved();
-    payload = nullptr;
-    bindings = Batching::BatchDeviceBindings{};
     weight_grad = nullptr;
     weight_grad_fn.reset();
 }
@@ -334,7 +327,6 @@ Tensor embedding(const Tensor& weight,
         result.is_leaf = false;
         auto grad_fn = std::make_shared<EmbeddingGradFn>();
         grad_fn->capture_weight(const_cast<Tensor&>(weight));
-        grad_fn->capture_batch_view(payload, bindings);
         grad_fn->embedding_scale = embedding_scale;   // Store for backward scaling
         result.grad_fn = grad_fn;
     }

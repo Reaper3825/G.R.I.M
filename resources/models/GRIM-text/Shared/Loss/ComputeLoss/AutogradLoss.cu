@@ -122,8 +122,6 @@ struct NLLLossGradFn : public GradFn {
     float* weight_sum_buffer;
     float* grad_log_probs_buffer;                       // Borrowed from owned_grad_log_probs_buffer while saved
     
-    const Batching::BatchPayload* payload;      // NOT OWNED — stable for autograd step lifetime
-    Batching::BatchDeviceBindings bindings;     // View snapshot — device memory owned by TrainingState
     CrossEntropyTargetSelection target_selection;
     int valid_count;
     
@@ -148,8 +146,6 @@ struct NLLLossGradFn : public GradFn {
         , valid_count_buffer(nullptr)
         , weight_sum_buffer(nullptr)
         , grad_log_probs_buffer(nullptr)
-        , payload(nullptr)
-        , bindings{}
         , target_selection(CrossEntropyTargetSelection::primaryLm())
         , valid_count(0)
         , loss_config{}
@@ -179,8 +175,6 @@ struct NLLLossGradFn : public GradFn {
         }
 
         payload_.validate("NLLLossGradFn::capture_inputs");
-        payload = &payload_;
-        bindings = bindings_;
         target_selection = target_selection_;
         loss_config = loss_config_;
         class_weights = class_weights_;
@@ -221,8 +215,8 @@ struct NLLLossGradFn : public GradFn {
 
         const CrossEntropyForwardResult ce_result = computeCrossEntropyForwardFromLogProbs(
             log_probs.data,
-            *payload,
-            bindings,
+            payload_,
+            bindings_,
             target_selection,
             CrossEntropyForwardWorkspace{
                 loss_sum_buffer,
@@ -247,7 +241,10 @@ struct NLLLossGradFn : public GradFn {
         release_saved();
     }
     
-    __host__ void apply_impl(const Tensor& grad_output, cudaStream_t stream) override {
+    __host__ void apply_impl(const Tensor& grad_output,
+                             cudaStream_t stream,
+                             const Batching::BatchPayload* backward_payload,
+                             const Batching::BatchDeviceBindings* backward_bindings) override {
         auto* log_softmax_grad_fn = dynamic_cast<LogSoftmaxGradFn*>(log_probs_grad_fn.get());
         if (!log_softmax_grad_fn) {
             throw std::runtime_error("[NLLLossGradFn::apply] upstream grad_fn is not LogSoftmaxGradFn — saved log_probs owner is missing");
@@ -260,12 +257,15 @@ struct NLLLossGradFn : public GradFn {
         AG_TRACE("[NLLLossGradFn::apply] ENTER: log_probs_data=%p upstream=%p\n",
                  (void*)log_probs_data, (void*)log_probs_grad_fn.get());
 
-        if (!payload) {
-            throw std::runtime_error("[NLLLossGradFn::apply] payload pointer is NULL — BatchPayload is required for loss backward geometry");
+        if (!backward_payload) {
+            throw std::runtime_error("[NLLLossGradFn::apply] backward_payload is NULL — orchestration MUST pass the active BatchPayload into backward()");
         }
-        payload->validate("NLLLossGradFn::apply");
-        const int num_tokens = payload->total_tokens;
-        const int vocab_size = payload->vocab_size;
+        if (!backward_bindings) {
+            throw std::runtime_error("[NLLLossGradFn::apply] backward_bindings is NULL — orchestration MUST pass the active BatchDeviceBindings into backward()");
+        }
+        backward_payload->validate("NLLLossGradFn::apply");
+        const int num_tokens = backward_payload->total_tokens;
+        const int vocab_size = backward_payload->vocab_size;
         
         // ── Read upstream scalar gradient for chain rule ──
         // Loss is scalar, so grad_output is a single float. Tensor::backward()
@@ -312,8 +312,8 @@ struct NLLLossGradFn : public GradFn {
         // upstream_scalar_grad is folded into the mean-reduction denominator in the CE module.
         computeCrossEntropyBackwardToLogProbs(
             log_probs_data,
-            *payload,
-            bindings,
+            *backward_payload,
+            *backward_bindings,
             target_selection,
             grad_log_probs_buffer,
             valid_count,
@@ -344,7 +344,7 @@ struct NLLLossGradFn : public GradFn {
             // The CE kernels resolve device targets locally from BatchDeviceBindings;
             // diagnostics do not need to cache or copy a raw target pointer.
             const int sample_max = std::min(200, num_tokens);
-            const std::vector<int>& h_targets = hostTargetsForSelection(*payload, target_selection, "NLLLossGradFn::apply");
+            const std::vector<int>& h_targets = hostTargetsForSelection(*backward_payload, target_selection, "NLLLossGradFn::apply");
             
             float mx = 0.0f; double sq = 0.0; int valid_sampled = 0;
             for (int t = 0; t < sample_max; ++t) {
@@ -395,7 +395,7 @@ struct NLLLossGradFn : public GradFn {
             }
             
             AG_TRACE("[NLLLossGradFn::apply] Chaining to LogSoftmaxGradFn\n");
-            log_probs_grad_fn->apply(grad_log_probs_tensor, stream);
+            log_probs_grad_fn->apply(grad_log_probs_tensor, stream, backward_payload, backward_bindings);
             AG_TRACE("[NLLLossGradFn::apply] LogSoftmaxGradFn returned\n");
         } else {
             // Rule 20: upstream grad_fn is REQUIRED for backpropagation
@@ -422,7 +422,6 @@ struct NLLLossGradFn : public GradFn {
         valid_count_buffer = nullptr;
         weight_sum_buffer = nullptr;
         grad_log_probs_buffer = nullptr;
-        payload = nullptr;
         class_weights = nullptr;
     }
 };

@@ -61,7 +61,7 @@ std::optional<RawTextDetection> IntegerDetector::detect(std::string_view text,
 
     // Digits followed by alpha (e.g. "5th", "100ms", "3D") remain integer atoms;
     // the alpha suffix is tokenized separately through the raw-text registry/unigram path.
-    return RawTextDetection(pos, i, RawTextFeature::ATOM, AtomType::ATOM_INT, name());
+    return RawTextDetection(pos, i, AtomType::ATOM_INT, name());
 }
 
 std::optional<RawTextDetection> FloatDetector::detect(std::string_view text,
@@ -119,7 +119,7 @@ std::optional<RawTextDetection> FloatDetector::detect(std::string_view text,
     // Must have dot or exponent to be float (not just integer)
     if (!has_digit || (!has_dot && !has_exp)) return std::nullopt;
 
-    return RawTextDetection(pos, i, RawTextFeature::ATOM, AtomType::ATOM_FLOAT, name());
+    return RawTextDetection(pos, i, AtomType::ATOM_FLOAT, name());
 }
 
 } // namespace Detector

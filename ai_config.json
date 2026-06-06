@@ -552,7 +552,7 @@
             "logging_stderr_enabled": true,
             "logit_update_trace_enabled": false,
             "logit_update_trace_interval": 50,
-            "loss_class_balanced_beta": 0.5,
+            "loss_class_balanced_beta": 0.0,
             "loss_class_balanced_enabled": false,
             "loss_distillation_enabled": false,
             "loss_distillation_lambda": 0.5,

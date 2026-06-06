@@ -120,6 +120,19 @@ struct TapeSkipScope {
     TapeSkipScope& operator=(const TapeSkipScope&) = delete;
 };
 
+struct ProcessBatchStepStateClearScope {
+    GRIM::Forward::ModelForwardOutputs& forward_outputs;
+    GRIM::Autograd::AutogradLossState& loss_state;
+
+    ~ProcessBatchStepStateClearScope() {
+        forward_outputs.clear();
+        loss_state.clear();
+    }
+
+    ProcessBatchStepStateClearScope(const ProcessBatchStepStateClearScope&) = delete;
+    ProcessBatchStepStateClearScope& operator=(const ProcessBatchStepStateClearScope&) = delete;
+};
+
 float accumulationNormalizationScaleForOptimizerWindow(int accum_steps) {
     if (accum_steps <= 0) {
         throw std::runtime_error(
@@ -848,12 +861,12 @@ BatchResult processBatch(
             emit_mtp_logits);
 
     auto forward_outputs = GRIM::Forward::executeModelForward(forward_request, runtime_payload);
-    // Rule 20 ownership taxonomy: AutogradStepScope is the SINGLE owner of
-    // the active forward/loss step-state clear() for this batch. Do NOT add an
-    // explicit clear() anywhere inside this scope.
-    GRIM::Autograd::AutogradStepScope autograd_step_scope(
+    // Rule 20 ownership taxonomy: processBatch owns the single batch-boundary
+    // clear path for the active forward/loss step-state. Do NOT add a second
+    // explicit clear() site inside this function.
+    ProcessBatchStepStateClearScope step_state_clear_scope{
         forward_outputs,
-        autograd_loss_state);
+        autograd_loss_state};
 
     GRIM::Autograd::AutogradContext autograd_ctx = GRIM::Autograd::initAutogradContext(
         &model_config,
@@ -924,7 +937,7 @@ BatchResult processBatch(
     if (!forward_outputs.logits_tensor.data) {
         throw std::runtime_error(
             "processBatch: live logits tensor is NULL after successful explicit shared forward — "
-            "diagnostics must run before AutogradStepScope teardown");
+            "diagnostics must run before processBatch step-state teardown");
     }
     const GRIM::Tensor* live_lm_head_input = forward_outputs.liveLmHeadInputOrNull();
     if (!live_lm_head_input || !live_lm_head_input->data) {
@@ -1051,7 +1064,7 @@ BatchResult processBatch(
         }
     }
 
-    // Rule 20 single-owner clear: AutogradStepScope at processBatch entry owns
+    // Rule 20 single-owner clear: the processBatch-local step-state guard owns
     // the clear; the tape flush below does not touch autograd intermediates.
     if (ctx.logging.tape) {
         ctx.logging.tape->flush();

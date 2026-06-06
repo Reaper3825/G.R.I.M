@@ -53,7 +53,10 @@ void ZeroPadGradFn::capture_input(Tensor& x, cudaStream_t stream, size_t offset_
     }
 }
 
-void ZeroPadGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
+void ZeroPadGradFn::apply_impl(const Tensor& grad_output,
+                               cudaStream_t stream,
+                               const Batching::BatchPayload* backward_payload,
+                               const Batching::BatchDeviceBindings* backward_bindings) {
     setCurrentGradFnOp("zero_pad", this);
     if (applied) return;
     applied = true;
@@ -76,7 +79,7 @@ void ZeroPadGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
         Tensor view;
         view.data = input_grad; view.shape = input_shape;
         view.owns_data = false; view.stream = stream;
-        input_grad_fn->apply(view, stream);
+        input_grad_fn->apply(view, stream, backward_payload, backward_bindings);
     }
 }
 

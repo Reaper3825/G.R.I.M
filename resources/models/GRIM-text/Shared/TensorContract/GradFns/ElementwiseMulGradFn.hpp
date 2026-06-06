@@ -47,7 +47,10 @@ struct ElementwiseMulGradFn : public GradFn {
     void capture_inputs(Tensor& a, Tensor& b, cudaStream_t stream);
     void set_cache_refs(const float* a_data, const float* b_data, std::size_t size);
 
-    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override;
+    void apply_impl(const Tensor& grad_output,
+                    cudaStream_t stream,
+                    const Batching::BatchPayload* backward_payload,
+                    const Batching::BatchDeviceBindings* backward_bindings) override;
     void release_saved() override;
 };
 

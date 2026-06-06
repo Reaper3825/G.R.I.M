@@ -129,7 +129,10 @@ void BroadcastRowMulGradFn::set_cache_refs(const float* scale_data, const float*
     cols = c;
 }
 
-void BroadcastRowMulGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
+void BroadcastRowMulGradFn::apply_impl(const Tensor& grad_output,
+                                       cudaStream_t stream,
+                                       const Batching::BatchPayload* backward_payload,
+                                       const Batching::BatchDeviceBindings* backward_bindings) {
     setCurrentGradFnOp("broadcast_row_mul", this);
     if (applied) return;
     applied = true;
@@ -154,13 +157,13 @@ void BroadcastRowMulGradFn::apply_impl(const Tensor& grad_output, cudaStream_t s
         Tensor view;
         view.data = x_grad; view.shape = x_shape;
         view.owns_data = false; view.stream = stream;
-        x_grad_fn->apply(view, stream);
+        x_grad_fn->apply(view, stream, backward_payload, backward_bindings);
     }
     if (scale_requires_grad && scale_grad_fn) {
         Tensor view;
         view.data = scale_grad; view.shape = scale_shape;
         view.owns_data = false; view.stream = stream;
-        scale_grad_fn->apply(view, stream);
+        scale_grad_fn->apply(view, stream, backward_payload, backward_bindings);
     }
 }
 

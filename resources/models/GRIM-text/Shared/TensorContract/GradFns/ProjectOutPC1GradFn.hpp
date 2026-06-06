@@ -42,7 +42,10 @@ struct ProjectOutPC1GradFn : public GradFn {
     void capture_input(Tensor& input, int rows, int cols, int n_power_iters,
                        float* g_device, float* g_history_device, float* inv_norm_device,
                        cudaStream_t stream);
-    void apply_impl(const Tensor& grad_output, cudaStream_t stream) override;
+    void apply_impl(const Tensor& grad_output,
+                    cudaStream_t stream,
+                    const Batching::BatchPayload* backward_payload,
+                    const Batching::BatchDeviceBindings* backward_bindings) override;
     void release_saved() override;
 };
 

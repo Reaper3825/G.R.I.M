@@ -660,8 +660,13 @@ struct GradFn {
      *
      * @param grad_output Gradient of loss with respect to this operation's output
      * @param stream CUDA stream for async execution
+        * @param backward_payload Caller-owned batch payload for batch-aware GradFns
+        * @param backward_bindings Caller-owned batch device bindings for batch-aware GradFns
      */
-    void apply(const Tensor& grad_output, cudaStream_t stream);
+    void apply(const Tensor& grad_output,
+               cudaStream_t stream,
+               const Batching::BatchPayload* backward_payload = nullptr,
+               const Batching::BatchDeviceBindings* backward_bindings = nullptr);
     
     /**
      * @brief Release saved tensors (called after backward to free memory)
@@ -673,7 +678,10 @@ struct GradFn {
     }
 
 protected:
-    virtual void apply_impl(const Tensor& grad_output, cudaStream_t stream) = 0;
+    virtual void apply_impl(const Tensor& grad_output,
+                            cudaStream_t stream,
+                            const Batching::BatchPayload* backward_payload,
+                            const Batching::BatchDeviceBindings* backward_bindings) = 0;
 };
 
 //======================================================//
@@ -866,9 +874,14 @@ struct Tensor {
      * backward, calling each GradFn::apply().
      * 
      * @param grad_output Initial gradient (nullptr for scalar 1.0)
-     * @param scale       Scalar scale to apply to the initial gradient (default 1.0)
+    * @param scale       Scalar scale to apply to the initial gradient (default 1.0)
+    * @param backward_payload Caller-owned batch payload for batch-aware GradFns.
+    * @param backward_bindings Caller-owned batch device bindings for batch-aware GradFns.
      */
-    void backward(const Tensor* grad_output = nullptr, float scale = 1.0f);
+    void backward(const Tensor* grad_output = nullptr,
+               float scale = 1.0f,
+               const Batching::BatchPayload* backward_payload = nullptr,
+               const Batching::BatchDeviceBindings* backward_bindings = nullptr);
     
     //--------------------------------------------------//
     // Size Queries

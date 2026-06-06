@@ -585,7 +585,7 @@ struct LanguageModelConfig {
     bool loss_distillation_enabled = false;
     float loss_distillation_temperature = 0.0f;
     float loss_distillation_lambda = 0.0f;
-    bool loss_masking_enabled = false;
+    bool loss_masking_enabled = true;
     std::string loss_masking_tag;
     bool loss_entropy_reg_enabled = false;
     float loss_entropy_reg_lambda = 0.0f;

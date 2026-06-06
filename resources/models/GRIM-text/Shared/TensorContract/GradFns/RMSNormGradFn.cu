@@ -235,7 +235,10 @@ void RMSNormGradFn::set_cache_copy(const float* external_cache, size_t size, int
     AG_TRACE("[RMSNormGradFn] Copied cache: %zu floats to %p\n", size, (void*)cached_input);
 }
 
-void RMSNormGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
+void RMSNormGradFn::apply_impl(const Tensor& grad_output,
+                               cudaStream_t stream,
+                               const Batching::BatchPayload* backward_payload,
+                               const Batching::BatchDeviceBindings* backward_bindings) {
     setCurrentGradFnOp("rms_norm", this);
 
     if (applied) {
@@ -278,7 +281,7 @@ void RMSNormGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
         view.shape = input_shape;
         view.owns_data = false;
         view.stream = stream;
-        input_grad_fn->apply(view, stream);
+        input_grad_fn->apply(view, stream, backward_payload, backward_bindings);
     }
 }
 

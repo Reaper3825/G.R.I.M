@@ -124,7 +124,10 @@ void ExpGradFn::save_output(const float* output_data, size_t size) {
     cached_size = size;
 }
 
-void ExpGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
+void ExpGradFn::apply_impl(const Tensor& grad_output,
+                           cudaStream_t stream,
+                           const Batching::BatchPayload* backward_payload,
+                           const Batching::BatchDeviceBindings* backward_bindings) {
     setCurrentGradFnOp("exp", this);
     if (applied) return;
     applied = true;
@@ -150,7 +153,7 @@ void ExpGradFn::apply_impl(const Tensor& grad_output, cudaStream_t stream) {
         Tensor view;
         view.data = input_grad; view.shape = input_shape;
         view.owns_data = false; view.stream = stream;
-        input_grad_fn->apply(view, stream);
+        input_grad_fn->apply(view, stream, backward_payload, backward_bindings);
     }
 }
 

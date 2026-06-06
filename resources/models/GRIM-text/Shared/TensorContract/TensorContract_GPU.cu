@@ -670,9 +670,12 @@ bool debug_check_finite(const TensorView& tensor, cudaStream_t stream) {
 
 namespace GRIM {
 
-void GradFn::apply(const Tensor& grad_output, cudaStream_t stream) {
+void GradFn::apply(const Tensor& grad_output,
+                   cudaStream_t stream,
+                   const Batching::BatchPayload* backward_payload,
+                   const Batching::BatchDeviceBindings* backward_bindings) {
     logTensorContractApplyGradOutputStats(*this, grad_output, stream);
-    apply_impl(grad_output, stream);
+    apply_impl(grad_output, stream, backward_payload, backward_bindings);
 }
 
 //======================================================//
@@ -1304,7 +1307,10 @@ Tensor Tensor::detach(cudaStream_t s) const {
 //  Backward Pass
 //======================================================//
 
-void Tensor::backward(const Tensor* grad_output, float scale) {
+void Tensor::backward(const Tensor* grad_output,
+                      float scale,
+                      const Batching::BatchPayload* backward_payload,
+                      const Batching::BatchDeviceBindings* backward_bindings) {
     if (!requires_grad) {
         throw std::runtime_error("Tensor::backward called on tensor that doesn't require grad");
     }
@@ -1336,7 +1342,7 @@ void Tensor::backward(const Tensor* grad_output, float scale) {
         grad_tensor.shape = shape;
         grad_tensor.owns_data = false;  // grad_tensor is a view
         
-        grad_fn->apply(grad_tensor, stream);
+        grad_fn->apply(grad_tensor, stream, backward_payload, backward_bindings);
         
         // ISSUE #52 FIX: Synchronize stream BEFORE release_saved()!
         // release_saved() triggers destructors which call cudaFree().
