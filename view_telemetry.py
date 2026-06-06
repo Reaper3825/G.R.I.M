@@ -82,6 +82,7 @@ TELEMETRY_STREAM_NAMES_BY_INDEX = {
     57: "rho_mean_vector_rms",
     58: "rho_atom_only",
     59: "rho_nonatom_only",
+    60: "optimizer_iteration",
 }
 
 LEGACY_STREAM_NAME_COMPATIBILITY = {

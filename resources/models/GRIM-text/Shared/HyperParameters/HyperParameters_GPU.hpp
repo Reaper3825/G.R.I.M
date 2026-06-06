@@ -98,7 +98,7 @@ constexpr int CUDA_TILE_DIM_TRANSPOSE = CUDA_WARP_SIZE;  // Tile dim = warp size
 // Hierarchical streaming statistics
 //======================================================//
 constexpr int TELEMETRY_MAX_LEVELS = 8;           // TelemetryLattice temporal levels
-constexpr int TELEMETRY_MAX_STREAMS = 60;         // TelemetryLattice metric streams (0-46 dynamic, 47 logit-scale, 48-54 init invariants, 55-57 rho centered/signed-dot, 58-59 rho atom/non-atom split)
+constexpr int TELEMETRY_MAX_STREAMS = 61;         // TelemetryLattice metric streams (0-46 dynamic, 47 logit-scale, 48-54 init invariants, 55-57 rho centered/signed-dot, 58-59 rho atom/non-atom split, 60 optimizer iteration)
 
 //======================================================//
 // UnigramLM Training Constants
@@ -140,7 +140,7 @@ constexpr float RADAMW_EPSILON = 1e-8f;
 // Formula: Υ_l = UPSILON_BASE * sqrt(L_ref / L)
 // L_ref = reference layer count, L = current layer (1-indexed)
 // Deeper layers get LESS regularization (smaller Υ)
-constexpr float UPSILON_BASE = 0.1f;              // Base upsilon coefficient
+constexpr float UPSILON_BASE = 1.0f;              // Base upsilon coefficient
 constexpr int UPSILON_REFERENCE_LAYERS = 12;      // Reference layer count (L_ref)
 
 //======================================================//

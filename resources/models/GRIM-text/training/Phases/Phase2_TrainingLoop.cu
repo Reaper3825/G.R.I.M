@@ -908,6 +908,16 @@ BatchResult processBatch(
         throw std::runtime_error("Non-finite loss: " + std::to_string(loss_result.loss_value));
     }
 
+    const GRIM::Diagnostics::RhoDiagnosticOptions rho_pre_backward_options{
+        GRIM::Diagnostics::RhoDiagnosticPhase::PostForwardPreBackward,
+        false};
+    GRIM::Diagnostics::computeRhoDiagnostic(
+        ctx,
+        payload,
+        forward_outputs,
+        batch_idx,
+        rho_pre_backward_options);
+
     auto backward_result = GRIM::Autograd::executeAutogradBackward(
         autograd_ctx,
         plan.should_accumulate);
@@ -980,7 +990,15 @@ BatchResult processBatch(
         forward_outputs.logits_tensor,
         *live_lm_head_input,
         batch_idx);
-    GRIM::Diagnostics::computeRhoDiagnostic(ctx, payload, forward_outputs, batch_idx);
+    const GRIM::Diagnostics::RhoDiagnosticOptions rho_post_backward_options{
+        GRIM::Diagnostics::RhoDiagnosticPhase::PostBackward,
+        true};
+    GRIM::Diagnostics::computeRhoDiagnostic(
+        ctx,
+        payload,
+        forward_outputs,
+        batch_idx,
+        rho_post_backward_options);
     snapshotExecutionTelemetry(forward_outputs, payload, result);
     
     if (!std::isfinite(result.loss)) {

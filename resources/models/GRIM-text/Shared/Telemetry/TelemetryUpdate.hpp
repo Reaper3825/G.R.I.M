@@ -34,7 +34,7 @@ namespace GRIM::Telemetry {
 
 //======================================================//
 //  Batch-level telemetry input (all data needed to
-//  populate last_obs[0..30] and run lattice->update())
+//  populate telemetry raw-observation streams and run lattice->update())
 //======================================================//
 
 struct TelemetryBatchInput {
@@ -47,7 +47,7 @@ struct TelemetryBatchInput {
     // Gradient component for EB ratio (stream 15)
     float enc_rms_pre           = 0.0f;
 
-    // Optimizer state (streams 9-13)
+    // Optimizer state (streams 9-13 and optimizer_iteration stream 60)
     int   optimizer_step        = 0;
     bool  should_step           = false;
 
@@ -81,7 +81,7 @@ struct TelemetryBatchInput {
 //  Single-call batch telemetry update
 //======================================================//
 
-/// Populates ctx.telemetry.last_obs[0..30], calls lattice->update(),
+/// Populates ctx.telemetry.last_obs[], calls lattice->update(),
 /// exports CSV, and validates NaN/Inf. Throws on any anomaly (Rule 20).
 ///
 /// @param ctx      Training context (owns telemetry state, logger, model)

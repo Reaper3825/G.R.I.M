@@ -228,6 +228,11 @@ enum class MetricStream : int {
     // non-atom ρ stays flatter. The split pins the cause directly.
     RHO_ATOM_ONLY    = 58, // avg|cos(h_i,h_j)| over atom-token positions only
     RHO_NONATOM_ONLY = 59, // avg|cos(h_i,h_j)| over non-atom positions only (baseline)
+
+    // Optimizer-boundary counter mirrored into telemetry so Adam/RAdamW derived
+    // diagnostics can be aligned against the exact zero-based optimizer step + 1
+    // iteration used by the optimizer kernels.
+    OPTIMIZER_ITERATION = 60, // input.optimizer_step + 1 as consumed by optimizer diagnostics
 };
 
 const char* getMetricStreamName(MetricStream stream);

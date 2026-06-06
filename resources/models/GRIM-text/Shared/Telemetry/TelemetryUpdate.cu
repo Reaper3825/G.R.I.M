@@ -93,7 +93,7 @@ void populateCoreStreams(float* obs, const TelemetryBatchInput& input) {
 }
 
 //------------------------------------------------------
-// Streams 9-13: Adam warmup causation tracking
+// Streams 9-13 plus stream 60: optimizer warmup causation tracking
 //------------------------------------------------------
 void populateAdamCausationStreams(float* obs, const TelemetryBatchInput& input,
                                   float& adam_cumulative_disp) {
@@ -118,6 +118,7 @@ void populateAdamCausationStreams(float* obs, const TelemetryBatchInput& input,
     obs[11] = adam_cumulative_disp;
     obs[12] = disruption_emb;
     obs[13] = inv_bc2;
+    obs[static_cast<int>(MetricStream::OPTIMIZER_ITERATION)] = static_cast<float>(iteration);
 }
 
 //------------------------------------------------------
@@ -283,7 +284,7 @@ void updateTelemetryObservations(
     // Streams 0-4: Core metrics
     populateCoreStreams(obs, input);
 
-    // Streams 9-13: Adam causation
+    // Streams 9-13 plus stream 60: optimizer causation
     populateAdamCausationStreams(obs, input, ctx.telemetry.adam_cumulative_disp);
 
     // Streams 14-20: Execution Block health

@@ -28,6 +28,36 @@ namespace GRIM::Diagnostics {
 
 namespace {
 
+const char* rhoDiagnosticPhaseName(const RhoDiagnosticOptions& options) {
+    switch (options.phase) {
+    case RhoDiagnosticPhase::PostForwardPreBackward:
+        return "post_forward_pre_backward";
+    case RhoDiagnosticPhase::PostBackward:
+        return "post_backward";
+    }
+    throw std::runtime_error("rhoDiagnosticPhaseName: unhandled RhoDiagnosticPhase");
+}
+
+const char* rhoDiagnosticEquationTag(const RhoDiagnosticOptions& options) {
+    switch (options.phase) {
+    case RhoDiagnosticPhase::PostForwardPreBackward:
+        return "RHO_BUILDUP_EQUATION_PRE_BACKWARD";
+    case RhoDiagnosticPhase::PostBackward:
+        return "RHO_BUILDUP_EQUATION";
+    }
+    throw std::runtime_error("rhoDiagnosticEquationTag: unhandled RhoDiagnosticPhase");
+}
+
+const char* rhoDiagnosticPhaseDescription(const RhoDiagnosticOptions& options) {
+    switch (options.phase) {
+    case RhoDiagnosticPhase::PostForwardPreBackward:
+        return "live forward state after loss assembly, before executeAutogradBackward()";
+    case RhoDiagnosticPhase::PostBackward:
+        return "same forward-owned tensors after executeAutogradBackward() returns";
+    }
+    throw std::runtime_error("rhoDiagnosticPhaseDescription: unhandled RhoDiagnosticPhase");
+}
+
 std::string decodeAggregateTokenForDisplay(const GRIM::Tokenizer::TokenLayout& layout, int token_id) {
     if (layout.isAtom(token_id)) {
         return std::string("<") +
@@ -68,8 +98,12 @@ void computeRhoDiagnostic(
     GRIMText::Training::TrainingContext& ctx,
     const GRIM::Batching::BatchPayload& payload,
     const GRIM::Forward::ModelForwardOutputs& ai,
-    int batch_idx)
+    int batch_idx,
+    const RhoDiagnosticOptions& options)
 {
+    const char* equation_tag = rhoDiagnosticEquationTag(options);
+    const char* phase_name = rhoDiagnosticPhaseName(options);
+    const char* phase_description = rhoDiagnosticPhaseDescription(options);
     const int num_layers = static_cast<int>(ai.encoder_layer_outputs.size());
     const int d_model = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "d_model");
     const int max_seq_len = payload.max_seq_len;
@@ -366,8 +400,10 @@ void computeRhoDiagnostic(
     // Build the equation log
     std::ostringstream rho_eq;
     rho_eq << std::fixed << std::setprecision(4);
-    rho_eq << "[RHO_BUILDUP_EQUATION] ρ(l) = avg|cos(h_i^l, h_j^l)|, "
-           << "Δρ = ρ(l) - ρ(prev_collected)\n";
+        rho_eq << "[" << equation_tag << "] phase=" << phase_name
+            << " telemetry_write=" << (options.write_telemetry ? "true" : "false")
+            << "  ρ(l) = avg|cos(h_i^l, h_j^l)|, Δρ = ρ(l) - ρ(prev_collected)\n";
+        rho_eq << "  PHASE: " << phase_description << "\n";
         rho_eq << "  RAW DOT: avg_signed_dot(l)=P^-1 Σ_{i<j}(h_i^l · h_j^l), P=C(n_sample,2)\n";
         rho_eq << "  CENTERED DOT: μ_l=(1/N)Σ_i h_i^l, h̃_i^l=h_i^l-μ_l, "
             << "centered_avg_abs_dot(l)=P^-1 Σ_{i<j}|h̃_i^l · h̃_j^l|, "
@@ -464,33 +500,36 @@ void computeRhoDiagnostic(
         std::string first_label = make_label(first_lr.layer_id);
         std::string last_label  = make_label(last_lr.layer_id);
 
-        // Write rho observations directly into the telemetry observation array
-        // (streams 5-8 persist between diagnostic intervals via last_obs[])
-        ctx.telemetry.last_obs[5] = rho_final;          // RHO_FINAL
-        ctx.telemetry.last_obs[6] = rho_growth;         // RHO_GROWTH
-        ctx.telemetry.last_obs[7] = max_delta;          // RHO_WORST_DELTA
-        ctx.telemetry.last_obs[8] = h_rms_growth_ratio; // H_RMS_GROWTH
-
-        // Raw decomposition of final layer's ρ — trace WHY correlation moves
-        ctx.telemetry.last_obs[31] = last_lr.avg_abs_dot;    // RHO_RAW_AVG_ABS_DOT
-        ctx.telemetry.last_obs[32] = last_lr.avg_norm_prod;  // RHO_RAW_AVG_NORM_PROD
-        ctx.telemetry.last_obs[33] = last_lr.rms_min;        // RHO_RAW_H_RMS_MIN
-        ctx.telemetry.last_obs[34] = last_lr.rms_max;        // RHO_RAW_H_RMS_MAX
-        // Per-position rms bifurcation — the proximate driver of ρ spikes when
-        // a subset of positions is stripped to near-zero (Apr 2026 finding).
-        // ρ = mean(|dot|/(rms_i*rms_j*d)); when rms_min collapses, the per-pair
-        // denominator goes to ~0 and ρ reads as noise/0 ⇒ spuriously high ρ.
-        // Healthy training: spread ≈ 1.0–1.5x.  >2x = early warning.
         const float rms_spread = last_lr.rms_max
                                / std::max(last_lr.rms_min, 1e-8f);
-        ctx.telemetry.last_obs[38] = rms_spread;             // RHO_RAW_RMS_SPREAD
 
-        ctx.telemetry.last_obs[(int)GRIM::Telemetry::MetricStream::RHO_RAW_AVG_SIGNED_DOT]
-            = last_lr.avg_signed_dot;
-        ctx.telemetry.last_obs[(int)GRIM::Telemetry::MetricStream::RHO_CENTERED_AVG_ABS_DOT]
-            = last_lr.centered_avg_abs_dot;
-        ctx.telemetry.last_obs[(int)GRIM::Telemetry::MetricStream::RHO_MEAN_VECTOR_RMS]
-            = last_lr.mean_rms;
+        if (options.write_telemetry) {
+            // Write rho observations directly into the telemetry observation array
+            // (streams 5-8 persist between diagnostic intervals via last_obs[])
+            ctx.telemetry.last_obs[5] = rho_final;          // RHO_FINAL
+            ctx.telemetry.last_obs[6] = rho_growth;         // RHO_GROWTH
+            ctx.telemetry.last_obs[7] = max_delta;          // RHO_WORST_DELTA
+            ctx.telemetry.last_obs[8] = h_rms_growth_ratio; // H_RMS_GROWTH
+
+            // Raw decomposition of final layer's ρ — trace WHY correlation moves
+            ctx.telemetry.last_obs[31] = last_lr.avg_abs_dot;    // RHO_RAW_AVG_ABS_DOT
+            ctx.telemetry.last_obs[32] = last_lr.avg_norm_prod;  // RHO_RAW_AVG_NORM_PROD
+            ctx.telemetry.last_obs[33] = last_lr.rms_min;        // RHO_RAW_H_RMS_MIN
+            ctx.telemetry.last_obs[34] = last_lr.rms_max;        // RHO_RAW_H_RMS_MAX
+            // Per-position rms bifurcation — the proximate driver of ρ spikes when
+            // a subset of positions is stripped to near-zero (Apr 2026 finding).
+            // ρ = mean(|dot|/(rms_i*rms_j*d)); when rms_min collapses, the per-pair
+            // denominator goes to ~0 and ρ reads as noise/0 ⇒ spuriously high ρ.
+            // Healthy training: spread ≈ 1.0–1.5x.  >2x = early warning.
+            ctx.telemetry.last_obs[38] = rms_spread;             // RHO_RAW_RMS_SPREAD
+
+            ctx.telemetry.last_obs[(int)GRIM::Telemetry::MetricStream::RHO_RAW_AVG_SIGNED_DOT]
+                = last_lr.avg_signed_dot;
+            ctx.telemetry.last_obs[(int)GRIM::Telemetry::MetricStream::RHO_CENTERED_AVG_ABS_DOT]
+                = last_lr.centered_avg_abs_dot;
+            ctx.telemetry.last_obs[(int)GRIM::Telemetry::MetricStream::RHO_MEAN_VECTOR_RMS]
+                = last_lr.mean_rms;
+        }
 
         // Atom-only vs non-atom-only ρ on the final collected layer.
         // If the atom-specialized path is concentrating shared structure onto
@@ -589,7 +628,7 @@ void computeRhoDiagnostic(
     }
 
     ctx.logging.logger->log(rho_eq.str());
-    EQ_LOG(ctx.logging.tape.get(), GRIM::Logging::LogGroup::Telemetry, GRIM::Logging::LogPhase::DIAGNOSTICS, -1, "RHO_BUILDUP_EQUATION", rho_eq.str().c_str());
+    EQ_LOG(ctx.logging.tape.get(), GRIM::Logging::LogGroup::Telemetry, GRIM::Logging::LogPhase::DIAGNOSTICS, -1, equation_tag, rho_eq.str().c_str());
 }
 
 } // namespace GRIM::Diagnostics

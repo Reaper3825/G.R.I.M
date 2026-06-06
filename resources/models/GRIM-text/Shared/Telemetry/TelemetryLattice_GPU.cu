@@ -364,6 +364,7 @@ const char* getMetricStreamName(MetricStream stream) {
         case MetricStream::RHO_MEAN_VECTOR_RMS: return "rho_mean_vector_rms";
         case MetricStream::RHO_ATOM_ONLY: return "rho_atom_only";
         case MetricStream::RHO_NONATOM_ONLY: return "rho_nonatom_only";
+        case MetricStream::OPTIMIZER_ITERATION: return "optimizer_iteration";
         default: return "unknown";
     }
 }
