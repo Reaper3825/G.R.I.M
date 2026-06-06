@@ -51,9 +51,11 @@ struct TelemetryBatchInput {
     int   optimizer_step        = 0;
     bool  should_step           = false;
 
-    // Loss breakdown (stream 25)
-    float total_loss_value      = 0.0f;
-    float aux_loss              = 0.0f;
+    // Explicit loss breakdown (streams 25-26 currently consume execution/mtp loss fractions)
+    float text_loss             = 0.0f;
+    float mtp_loss              = 0.0f;
+    float execution_loss        = 0.0f;
+    float selector_loss         = 0.0f;
 
     // Batch geometry (stream 30)
     int   max_seq_len           = 0;

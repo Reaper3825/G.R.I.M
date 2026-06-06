@@ -34,7 +34,8 @@ namespace autograd {
  *   grad_output[token_idx, :] * embedding_scale
  * into weight_grad[token_id, :], with bounds-checking on token_id. PAD rows
  * are hard-skipped so rectangular payload padding never contributes through
- * embedding-backward scatter-add.
+ * embedding-backward scatter-add. Atom placeholder rows remain trainable and
+ * participate in the same gated sparse scatter-add path as other token rows.
  */
 struct EmbeddingGradFn : public GradFn {
     // Captured weight metadata (stable across backward)
@@ -69,7 +70,9 @@ struct EmbeddingGradFn : public GradFn {
  *
  * Forward gathers from a 2D weight table [vocab_size, d_model], applies the
  * same fixed token-layout type gate used by the LM head, and writes a BSM-shaped
- * [num_tokens, d_model] activation. PAD rows are written as exact zeros. If weight.requires_grad, an EmbeddingGradFn
+ * [num_tokens, d_model] activation. PAD rows are written as exact zeros; atom
+ * placeholder rows remain learned inside the ATOM gate subspace. If
+ * weight.requires_grad, an EmbeddingGradFn
  * is attached to the result so that the eventual backward scatter-adds into
  * weight.grad only inside the active type subspace.
  *

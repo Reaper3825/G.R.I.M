@@ -67,6 +67,7 @@ Special-token ownership is deliberately narrow:
 - Standalone `ByteEncoder` has been removed. Byte-token IDs and conversions live in `TokenLayout.hpp`; do not recreate a wrapper class around raw byte fallback.
 - `UnigramLM::decode()` is a primitive for byte fallback + learned unigram tokens only. It must reject any token outside that primitive range; layout-aware decode belongs to `UniByte::decode(DecodeRequest)`.
 - Token type classification belongs to `TokenLayout`. Do not add `UniByte::isByteToken`, `UniByte::isAtomToken`, `UniByte::isUnigramToken`, or `UniByte::tokenToString` wrappers; callers that need diagnostics should derive a layout with `tokenLayoutFromActualVocabOrThrow(tokenizer.vocabSize(), caller)` and read pieces directly by token ID.
+- Atom placeholders are still real model tokens after tokenizer rewrite. `ATOM_INT` / `ATOM_FLOAT` keep learned embedding and LM-head rows inside the token-type gate's ATOM subspace so the model can represent and emit placeholder tokens directly, while the per-instance numeric payload remains in the side channels (`token_numeric_values`, `token_atom_mask`, `atom_entry_ids`, `AtomTable`). Do not zero atom placeholder embedding rows or skip their embedding-backward scatter-add; only `PAD` is a structural zero row in the embedding op.
 
 ## Memory / tokenization boundary
 - `Unigram.hpp` must not expose raw CUDA buffer layout. It forward-declares `UnigramGpuMemory` and stores it as an opaque owner.

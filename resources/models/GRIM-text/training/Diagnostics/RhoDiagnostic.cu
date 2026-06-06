@@ -123,10 +123,11 @@ void computeRhoDiagnostic(
     if (num_valid < 2) return;
 
     // Partition valid positions into atom-token vs non-atom-token subsets.
-    // ScratchBlock injects a shared per-type vector into atom positions only
-    // (first_type_only mode). If that injection is what drives ρ up, the
-    // atom-only ρ will spike while non-atom ρ stays flat. Computing both on the
-    // final collected layer isolates the injection's contribution directly.
+    // The current atom-specialized forward path (historically ScratchBlock,
+    // now execution-block/selector-era placeholder handling) can concentrate
+    // shared structure onto atom positions only. If that path is what drives ρ
+    // up, atom-only ρ spikes while non-atom ρ stays flatter. Computing both on
+    // the final collected layer isolates that contribution directly.
     std::vector<int> atom_positions;
     std::vector<int> nonatom_positions;
     atom_positions.reserve(num_valid);
@@ -492,9 +493,9 @@ void computeRhoDiagnostic(
             = last_lr.mean_rms;
 
         // Atom-only vs non-atom-only ρ on the final collected layer.
-        // ScratchBlock injects a shared per-type vector into atom positions only
-        // (first_type_only mode), so if that injection drives ρ up, atom-only ρ
-        // spikes while non-atom ρ stays flat. This split isolates the cause.
+        // If the atom-specialized path is concentrating shared structure onto
+        // atom positions, atom-only ρ spikes while non-atom ρ stays flatter.
+        // This split isolates that cause.
         float rho_atom = 0.0f;
         float rho_nonatom = 0.0f;
         if (final_device_ptr) {
@@ -537,8 +538,8 @@ void computeRhoDiagnostic(
                 << " (n=" << nonatom_positions.size() << ")";
          if (atom_positions.size() >= 2 && nonatom_positions.size() >= 2
              && rho_atom > rho_nonatom + 0.05f) {
-             rho_eq << "  [SCRATCHBLOCK] atom-only ρ exceeds non-atom ρ — per-type "
-                       "injection is concentrating hidden-state alignment";
+              rho_eq << "  [ATOM-PATH] atom-only ρ exceeds non-atom ρ — atom-specialized "
+                  "processing is concentrating hidden-state alignment";
          }
          rho_eq << "\n";
 

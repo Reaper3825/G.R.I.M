@@ -20,8 +20,7 @@ Workstream 0 leaves the ExecutionBlock in a much smaller and stricter shape:
   - silent execution skip when no value slots were bootstrapped,
   - batch-global atom buffers passed into per-row execution,
   - decode-time `<NUM>` binding via last-write fallback.
-
-Until the explicit decode-time slot selector exists, generation masks `<NUM>` instead of guessing a slot.
+- numeric atom placeholders remain real learned tokens. Decode-time generation may emit them only when selector/runtime state can bind a concrete slot/value; if that state is unavailable, inference masks numeric atom placeholders instead of guessing a slot.
 
 ## File ownership
 
@@ -336,6 +335,6 @@ Inference now follows the same strict row-local execution contract:
 - decode-time ExecutionBlock calls source atom positions from the global atom mask (`bindings.d_atom_mask`),
 - null atom-pointer decode calls are gone,
 - the old last-write `<NUM>` binding fallback is gone,
-- generation masks `<NUM>` until a dedicated decode-time selector exists.
+- generation masks numeric atom placeholders only when decode-time selector/runtime state cannot supply a concrete slot binding.
 
-That masking behavior is temporary in the overall cutover, but it is the **current enforced behavior**.
+That conditional masking behavior is the **current enforced inference behavior**.

@@ -35,6 +35,8 @@ Loss backward already applies `1/N`. Do **not** add another `1/tokens` scaling i
 
 ExecutionBlock auxiliary losses assembled in `AutogradTraining.cu` must be added to `loss_tensor` as one normalized aggregate, not as raw per-step sums. The local execution objective is accumulated over active scalar loss terms — transition loss, division penalties, arg REINFORCE loss, and each structured selection CE decision — then divided by that active term count before a single `autograd::add()` into the main loss.
 
+Loss decomposition at the training boundary is explicit: `LossResult` / `BatchResult` carry `text_loss`, `mtp_loss`, `execution_loss`, and `selector_loss`. Do not recreate a blended `aux_loss` bucket; it hides the real source of non-text loss and corrupts telemetry semantics.
+
 Why: text CE is already averaged over valid tokens. Raw execution sums make rows with more teacher steps exert more loss pressure and make batch composition change the effective execution-loss weight.
 
 Execution entropy is monitoring-only, not added to `loss_tensor`. Its row loop must mirror execution supervision masking: skip inactive rows, skip rows with no unmasked real steps, fail loud if `computeEntropyLoss(...)` returns null data, and average by the number of monitored rows rather than `payload.batch_size`.

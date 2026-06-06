@@ -69,6 +69,10 @@ void runLossStatsDiagnostic(
         loss_stats << "[LossStats] batch=" << (batch_idx + 1)
                    << " loss_mean=" << formatScalar(result.loss, 4)
                    << " loss_sum=" << formatScalar(loss_sum, 4)
+                   << " text_ce=" << formatScalar(result.text_loss, 4)
+                   << " mtp=" << formatScalar(result.mtp_loss, 4)
+                   << " execution=" << formatScalar(result.execution_loss, 4)
+                   << " selector=" << formatScalar(result.selector_loss, 4)
                    << " valid_tokens=" << valid_tokens
                    << " masked_tokens=" << masked_tokens
                    << " total_tokens=" << total_tokens;

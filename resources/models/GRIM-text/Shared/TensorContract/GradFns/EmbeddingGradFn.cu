@@ -39,14 +39,11 @@ namespace {
 
 constexpr int AUTOGRAD_BLOCK_SIZE = 256;
 
-__device__ __forceinline__ bool isAtomPlaceholderToken(int token_id)
-{
-    return token_id >= GRIM::HyperParameters::ATOM_TOKEN_START &&
-           token_id < GRIM::HyperParameters::ATOM_TOKEN_END;
-}
-
 // Embedding forward: gather from embedding table with optional scaling and a
-// hard token-layout type gate. Inactive dimensions are exactly zero.
+// hard token-layout type gate. Inactive dimensions are exactly zero. PAD is a
+// structural zero row; atom placeholder rows remain learned embeddings inside
+// the ATOM gate subspace so the model can represent and emit placeholder
+// tokens directly.
 __global__ void kernel_embedding_forward(
     const int* token_ids,       // [tokens]
     const float* weight,        // [vocab_size, d_model]
@@ -75,13 +72,6 @@ __global__ void kernel_embedding_forward(
         return;
     }
 
-    if (isAtomPlaceholderToken(token_id)) {
-        for (int i = threadIdx.x; i < d_model; i += blockDim.x) {
-            output_row[i] = 0.0f;
-        }
-        return;
-    }
-
     const float* weight_row = weight + static_cast<size_t>(token_id) * d_model;
 
     const auto gate = ::TensorContract::tokenTypeGateRangeForTokenId(token_id, d_model, vocab_size);
@@ -101,7 +91,9 @@ __global__ void kernel_embedding_forward(
 }
 
 // Embedding backward: scatter-add gradients to embedding table only in the
-// active token-layout type subspace.
+// active token-layout type subspace. PAD rows are structural zeros and do not
+// learn; atom placeholder rows do learn through the same gated sparse
+// scatter-add path as other token classes.
 __global__ void kernel_embedding_backward(
     const float* grad_output,   // [tokens, d_model]
     const int* token_ids,       // [tokens]
@@ -123,10 +115,6 @@ __global__ void kernel_embedding_backward(
     }
 
     if (token_id == GRIM::Tokenizer::PAD_TOKEN_ID) {
-        return;
-    }
-
-    if (isAtomPlaceholderToken(token_id)) {
         return;
     }
 

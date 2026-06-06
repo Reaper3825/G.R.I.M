@@ -13,6 +13,7 @@ set(GRIM_TRAINING_FLATBUFFERS_INCLUDE_DIR "${GRIM_TRAINING_MANUAL_DEPS_ROOT}/fla
 set(GRIM_TRAINING_HTTPLIB_INCLUDE_DIR "${GRIM_TRAINING_MANUAL_DEPS_ROOT}/cpp-httplib/include" CACHE PATH "Directory containing httplib.h for TrainingLoop")
 option(GRIM_TRAINING_USE_MANUAL_DEPS "Prefer manually staged header-only deps in resources/models/GRIM-text/training/third_party" ON)
 option(GRIM_TRAINING_ENABLE_VCPKG_FALLBACK "Allow fallback to vendored vcpkg when manual deps are not staged" ON)
+option(GRIM_TRAINING_BUILD_TEST_EXECUTABLES "Build GRIM-text TrainingLoop test executables" OFF)
 
 set(GRIM_TRAINING_MANUAL_DEPS_READY OFF)
 if(GRIM_TRAINING_USE_MANUAL_DEPS)
@@ -312,6 +313,7 @@ endif()
 add_library(grim_flash_attention STATIC 
     ../../Layers/FlashAttention/Flash_Attention_Kernal.cu
     ../../Layers/FlashAttention/AttentionDiagnostics.cu
+    ../../Layers/FlashAttention/AttentionBreadthDiagnostic.cu
 )
 set_target_properties(grim_flash_attention PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
@@ -691,6 +693,7 @@ target_compile_options(grim_unigrambyte_tokenizer PRIVATE
 )
 
 # Tokenizer regression test executable
+if(GRIM_TRAINING_BUILD_TEST_EXECUTABLES)
 add_executable(tokenizer_self_test
     ../tokenizer_self_test.cu
 )
@@ -780,6 +783,7 @@ target_include_directories(grmt_vocab_metrics_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../GRIM
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared
 )
+endif()
 
 # ============================================================================
 # STANDALONE TOKENIZER TRAINING SUBPROCESS
@@ -832,6 +836,7 @@ target_include_directories(train_tokenizer PRIVATE
 )
 
 # Flash Attention test executable
+if(GRIM_TRAINING_BUILD_TEST_EXECUTABLES)
 add_executable(flash_attention_test
     ../../Tests/flash_attention_test.cu
     ../../Shared/TensorConversion/TensorConversion.cu
@@ -954,16 +959,22 @@ target_include_directories(execution_block_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Layers
 )
+endif()
 
 # ============================================================================
 # EMBEDDING AUTOGRAD TEST SUITE
 # Autograd-enabled embedding tests using TensorContract system
 message(STATUS "TrainingLoop configured:")
 message(STATUS "  - train_gpu: GPU-accelerated training with comprehensive logging")
-message(STATUS "  - tokenizer_self_test: deterministic tokenizer regression suite (BPE)")
-message(STATUS "  - unigrambyte_self_test: UnigramByte tokenizer test suite")
-message(STATUS "  - grmt_vocab_metrics_test: GRMT corpus + vocabulary metrics diagnostics")
-message(STATUS "  - flash_attention_test: Flash Attention forward/backward test suite")
-message(STATUS "  - gradient_verification_test: Encoder gradient collapse debugging")
-message(STATUS "  - execution_block_test: ExecutionBlock batching, state transitions, and config tests")
 message(STATUS "  - grim_unigrambyte_tokenizer: Unigram LM + byte-layout fallback + AtomTable")
+message(STATUS "  - train_tokenizer: standalone tokenizer training subprocess")
+if(GRIM_TRAINING_BUILD_TEST_EXECUTABLES)
+    message(STATUS "  - tokenizer_self_test: deterministic tokenizer regression suite (BPE)")
+    message(STATUS "  - unigrambyte_self_test: UnigramByte tokenizer test suite")
+    message(STATUS "  - grmt_vocab_metrics_test: GRMT corpus + vocabulary metrics diagnostics")
+    message(STATUS "  - flash_attention_test: Flash Attention forward/backward test suite")
+    message(STATUS "  - gradient_verification_test: Encoder gradient collapse debugging")
+    message(STATUS "  - execution_block_test: ExecutionBlock batching, state transitions, and config tests")
+else()
+    message(STATUS "  - TrainingLoop test executables: disabled (set -DGRIM_TRAINING_BUILD_TEST_EXECUTABLES=ON to enable)")
+endif()

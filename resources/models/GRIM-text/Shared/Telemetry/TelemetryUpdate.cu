@@ -148,7 +148,7 @@ void populateExecBlockHealthStreams(
 }
 
 //------------------------------------------------------
-// Streams 21-26: EB injection diagnostics
+// Streams 21-26: EB injection diagnostics + explicit loss composition
 //------------------------------------------------------
 void populateEBInjectionStreams(
     float* obs,
@@ -179,12 +179,9 @@ void populateEBInjectionStreams(
     obs[24] = read_w_rms;
 
     // Stream 25: EB_LOSS_FRAC
-    float eb_loss_frac = 0.0f;
-    // Use input values passed through TelemetryBatchInput (not accessible here directly)
-    // This is populated by the caller after populateEBInjectionStreams
-    obs[25] = eb_loss_frac;
+    obs[25] = 0.0f;
 
-    // Stream 26: SB_ATOM_EMBED_RMS (ScratchBlock removed — no atom-embedding source remains)
+    // Stream 26: MTP_LOSS_FRAC
     obs[26] = 0.0f;
 }
 
@@ -295,9 +292,10 @@ void updateTelemetryObservations(
     // Streams 21-26: EB injection diagnostics
     populateEBInjectionStreams(obs, training_state, input, gpu_model, parameter_registry);
 
-    // stream 25: EB_LOSS_FRAC (needs loss values from input)
-    if (input.total_loss_value > 1e-12f) {
-        obs[25] = input.aux_loss / input.total_loss_value;
+    // streams 25-26: explicit non-text loss fractions
+    if (input.loss > 1e-12f) {
+        obs[25] = input.execution_loss / input.loss;
+        obs[26] = input.mtp_loss / input.loss;
     }
 
     // Streams 27-30: PBM diagnostics

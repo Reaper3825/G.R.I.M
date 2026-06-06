@@ -124,6 +124,7 @@ message(STATUS "Found ${NUM_CU_FILES} CUDA source files")
 add_library(grim_server_flash_attention EXCLUDE_FROM_ALL STATIC 
     ${CMAKE_CURRENT_SOURCE_DIR}/../Layers/FlashAttention/Flash_Attention_Kernal.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../Layers/FlashAttention/AttentionDiagnostics.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Layers/FlashAttention/AttentionBreadthDiagnostic.cu
 )
 set_target_properties(grim_server_flash_attention PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON

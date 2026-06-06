@@ -58,7 +58,10 @@ struct BatchAutogradPlan {
 struct BatchResult {
     int batch_idx = 0;
     float loss = 0.0f;
-    float aux_loss = 0.0f;
+    float text_loss = 0.0f;
+    float mtp_loss = 0.0f;
+    float execution_loss = 0.0f;
+    float selector_loss = 0.0f;
     float exec_selection_entropy = 0.0f;
     float exec_op_entropy = 0.0f;
     float exec_div_clamp_rate = 0.0f;

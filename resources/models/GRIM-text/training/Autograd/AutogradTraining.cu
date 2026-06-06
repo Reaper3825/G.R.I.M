@@ -532,8 +532,7 @@ LossResult computeAutogradLoss(
     cudaStreamSynchronize(ctx.stream);
 
     result.loss_value = actual_loss;
-    result.numeric_loss = actual_loss - text_ce_loss - mtp_loss - selector_supervision_loss;
-    result.aux_loss = actual_loss - text_ce_loss;  // MTP + execution/numeric + selector
+    result.execution_loss = actual_loss - text_ce_loss - mtp_loss - selector_supervision_loss;
     result.weight_text = 1.0f;
     
     if (!std::isfinite(result.loss_value)) {
@@ -546,7 +545,7 @@ LossResult computeAutogradLoss(
     
     AG_INFO("Loss computed: total=" << actual_loss << " text_ce=" << text_ce_loss
             << " mtp=" << mtp_loss
-            << " numeric_exec=" << result.numeric_loss
+            << " execution=" << result.execution_loss
             << " exec_ce=" << exec_structured_ce
             << " exec_entropy_monitor=" << exec_entropy_monitor
             << " selector=" << selector_supervision_loss
