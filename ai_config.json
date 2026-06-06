@@ -684,7 +684,7 @@
             "tokenizer_max_length": 2048,
             "tokenizer_max_vocab_size": 10000,
             "tokenizer_min_cleaned_text_length": 20,
-            "tokenizer_min_subword_freq": 7,
+            "tokenizer_min_subword_freq": 2,
             "tokenizer_model_type": "unibytes",
             "tokenizer_pad_token": "<pad>",
             "tokenizer_unk_token": "<unk>",

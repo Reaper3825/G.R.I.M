@@ -15,7 +15,7 @@
 namespace {
 
 bool shouldEmitAttentionBreadthDiagnostics() {
-    if constexpr (!GRIM::VerboseLogging::ENABLE_FA_EQUATION_DIAGNOSTICS) {
+    if constexpr (!GRIM::VerboseLogging::ENABLE_FA_EQUATION_DIAGNOSTICS || true) {
         return false;
     }
     auto* tape = GRIM::Logging::getGlobalTape();
@@ -164,7 +164,7 @@ void emitAttentionBreadthEquation(const std::vector<float>& causal_scores_row,
 
     auto* tape = GRIM::Logging::getGlobalTape();
     if (!tape) {
-        return;
+        throw std::runtime_error("emitAttentionBreadthEquation: global tape is not available");
     }
 
     const LinearStats score_stats = computeLinearStats(causal_scores_row, "emitAttentionBreadthEquation scores");
