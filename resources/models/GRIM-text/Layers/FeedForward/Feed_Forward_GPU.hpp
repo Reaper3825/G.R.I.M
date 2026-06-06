@@ -75,15 +75,13 @@ public:
      * @param input [total_tokens, d_model] - MUST have requires_grad if training
     * @param stream CUDA stream from the caller's forward payload/request
     * @param cublas_handle cuBLAS handle from the caller's forward payload/request
-    * @param batch_idx Current batch index for deterministic dropout masks
-    * @param dropout_enabled Explicit mode gate for dropout; batch_idx never controls mode
     * @param forward_outputs Canonical per-call forward sink
-     * @param layer_idx Encoder layer index (for unique dropout seed per layer)
+         * @param layer_idx Encoder layer index used to address the retained FFN sink slot
      */
     void forward(const Tensor& input,
              cudaStream_t stream, cublasHandle_t cublas_handle,
              Forward::ModelForwardOutputs& forward_outputs,
-             uint64_t batch_idx, bool dropout_enabled, int layer_idx,
+             int layer_idx,
              const FeedForwardParameterTensors& parameter_tensors);
 
     //--------------------------------------------------

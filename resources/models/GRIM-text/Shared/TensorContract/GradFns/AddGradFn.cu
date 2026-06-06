@@ -166,10 +166,7 @@ Tensor add(const Tensor& a, const Tensor& b, cudaStream_t stream) {
     Tensor result = Tensor::empty(a.shape, a.requires_grad || b.requires_grad, stream, "add_result");
 
     // c = a + b — use TensorContract::add for the forward
-    TensorContract::TensorView a_view(const_cast<float*>(a.data), a.shape);
-    TensorContract::TensorView b_view(const_cast<float*>(b.data), b.shape);
-    TensorContract::TensorView r_view(result.data, result.shape);
-    TensorContract::add(a_view, b_view, r_view, stream);
+    TensorContract::add(a, b, result, stream);
 
     if (result.requires_grad) {
         result.is_leaf = false;

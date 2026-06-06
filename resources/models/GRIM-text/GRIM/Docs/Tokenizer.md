@@ -5,6 +5,7 @@ Files: `resources/models/GRIM-text/Shared/UnigramByte/`
 - `Detectors/` — raw-text detector parent class, registry, numeric detectors, whitespace/uppercase feature detectors
 - `Unigram.cu` — learned vocab, trie build, encode/decode wrappers
 - `UnigramViterbi.hpp/.cu` — RAII Viterbi segmentation session and Viterbi CUDA kernels
+- `Training/SubwordMining.hpp/.cu` — training-only subword candidate mining, deterministic byte-proportional sampling, atom-aware count aggregation, and overflow-checked count math
 - `Training/UnigramForwardBackward.hpp/.cu` — training-only true Unigram forward-backward expected-count estimator over learned-piece paths on non-atom residual spans
 - `UnigramGpuMemory.hpp/.cu` — `UnigramLM` CUDA buffer lifetime and GPU upload transactions
 
@@ -87,6 +88,7 @@ Special-token ownership is deliberately narrow:
 - Original atom spans must be validated before logging byte totals or calling `normalizeWithSpans()`. Span size mismatches, reversed spans, out-of-bounds spans, and overlapping/unsorted spans are hard failures before any offset rewrite.
 - Byte fallback must stay outside the unigram EM objective. The training lattice, posterior expected counts, shrink ranking, and dead-token cleanup are intended to be learned-piece-only decisions over the residual non-atom text. If current code surfaces byte-fallback telemetry, dominance guards, or fallback-driven posterior mass inside training, that is bolt-on debt threading through the tokenizer rather than the architectural target.
 - Step-2 character seeds are a transient training bootstrap/coverage diagnostic only. They must not be emitted as learned pieces, must not pre-seed structural dedup, must not suppress mined one-character candidates from competing normally, and must not receive pruning protection. After candidate mining starts, training must behave as if those seeds never entered the learned-vocab decision path.
+- `Training/SubwordMining.hpp/.cu` owns tokenizer-training subword candidate mining. `UnigramTrainer.cu` must call `mineUnigramSubwordsFromTrainingUnits()` exactly once, then consume the returned `UnigramSubwordMiningResult`; it must not rebuild mining spans, worker-local maps, or candidate counters inline.
 - Subword mining must admit one-character candidates through the ordinary mined-subword path even when a segment has no atom spans. Character coverage diagnostics are not a second vocab-construction path.
 - Vocab-character validation must use `utf8DecodeAt()` for the single-codepoint decode. Do not hand-decode multi-byte candidates; continuation-byte checks, overlong rejection, surrogate rejection, truncation checks, and max-codepoint validation belong to `TextUtils`.
 - Structural dedup keys in tokenizer training are comparison-only. They may trim structural edge whitespace/format codepoints, but must never trim SentencePiece `▁` (U+2581): `▁word` and `word` are distinct because word-initial position is semantic. Accepted candidates must store the original mined subword text, not the edge-trimmed dedup key, so learned pieces keep their exact boundary markers and bytes.

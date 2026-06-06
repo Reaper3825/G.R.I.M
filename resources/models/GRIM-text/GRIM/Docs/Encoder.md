@@ -33,6 +33,8 @@ PBM follows the same rule for forward-time ownership: Phase1 owns PBM initializa
 ## Dropout HP ownership
 Encoder and FFN dropout rates must come from `HyperParameters_GPU.hpp` → `EncoderLayerConstructionHP` → `FeedForwardLayerConstructionHP`. `EncodingLayer` stores the grouped encoder HP snapshot directly as `hp_`; `FeedForwardLayer` stores its grouped FFN HP snapshot directly as `hp_`. Do not reintroduce layer-local dropout defaults, thin FFN config wrappers, hidden PBM pointer state, or forward-runtime handle fields.
 
+FFN compute does not apply FFN-local dropout anymore. `FeedForwardLayer::forward()` materializes the SwiGLU path and down projection only; there is no activation-mask dropout on `ffn_swiglu_out`, and `forwardEncodingLayer()` does not apply a second post-FFN branch dropout before the residual add. The live dropout consumers are embedding dropout, post-attention projection dropout, and attention-probability dropout inside FlashAttention.
+
 The attention runtime dropout mode bit rides on `HyperparameterGroupings.hpp::EncoderSelfAttentionHP::dropout_enabled`, sliced explicitly by the caller as `encoderSelfAttentionHP(hp, dropout_enabled)`. Do not keep a second `dropout_enabled` sidecar on `EncoderSelfAttentionForwardRequest`, and do not infer attention dropout mode from training-vs-inference identity inside the attention facade.
 
 ## FFN parameter ownership

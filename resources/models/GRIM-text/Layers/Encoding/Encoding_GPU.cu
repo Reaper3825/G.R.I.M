@@ -141,14 +141,6 @@ void validateEncodingConstructionHP(const HyperParameters::EncoderLayerConstruct
 
 
 
-//======================================================//
-//  Local kernels (not duplicated elsewhere)
-//======================================================//
-
-//======================================================//
-//  RMSNorm Forward/Backward (calls into RMSNorm_Kernel_GPU.cu)
-//======================================================//
-
 // NOTE: RMSNorm forward/backward are declared in RMSNorm_Kernel_GPU.hpp
 // Include that header if needed. The extern declarations below are REMOVED
 // as backward pass is now handled via TensorView-based RMSNormBackwardParams.
@@ -414,22 +406,10 @@ void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
     ffn_compute.forward(ln2_out,
                         stream, cublas_handle,
                         forward_outputs,
-                        dropout_batch_seed, dropout_enabled, layer_idx,
+                        layer_idx,
                         *ffn_parameters);
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 9: FFN DONE\n");
-    
-    //--------------------------------------------------
-    // 9b. Post-FFN sublayer dropout
-    //     Standard transformer: residual = input + dropout(sublayer(norm(input)))
-    //     Dropout applied BEFORE LayerScale and residual add.
-    //--------------------------------------------------
-    if (hp.dropout_rate > 0.0f && dropout_enabled) {
-        const uint64_t ffn_dropout_seed = dropout_batch_seed * 2654435761ULL + 200 + layer_idx;
-        const uint64_t ffn_dropout_mask_stream = 0x0002000000000000ULL + static_cast<uint64_t>(layer_idx);
-        ffn_out = autograd::dropout(ffn_out, hp.dropout_rate,
-                                    ffn_dropout_seed, stream,
-                                    ffn_dropout_mask_stream);
-    }
+
     ffn_out = autograd::mul_scalar(ffn_out, residual_scale, stream);
     
     //--------------------------------------------------
@@ -450,17 +430,10 @@ void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
     }
     
     // ========================================================================
-    // STANDARD PRE-NORM RESIDUAL (Issue #148: Sandwich Norm REMOVED)
-    //
+    // PRE-NORM RESIDUAL 
     // Architecture: output = residual1 + LayerScale(ffn_out)
-    //
-    // No post-residual normalization. Matches standard PyTorch GPT pre-norm.
     // ========================================================================
     output = autograd::add(residual1, *ffn_for_residual, stream);
-    
-    // Issue #155: Post-FFN centering REMOVED from here — moved to AutogradTraining.cu
-    // so it happens AFTER all layer-output modifications (including crossAttentionRead).
-    // Post-attention centering remains here (between sublayers, no external modification).
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 10: Residual2 (pre-norm, no sandwich) DONE - layer COMPLETE\n");
     bool emitLayerResidualDiag = false;
     if (emitLayerResidualDiag){

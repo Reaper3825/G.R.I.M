@@ -292,8 +292,7 @@ void RMSNormGradFn::release_saved() {
     input_grad_fn.reset();
 }
 
-Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps, cudaStream_t stream,
-                const float* input_cache) {
+Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps, cudaStream_t stream) {
     if (stream == nullptr || stream == 0) {
         throw std::runtime_error("autograd::rms_norm: stream is NULL - caller MUST provide valid stream");
     }
@@ -317,9 +316,7 @@ Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps, cudaStream_t st
         result.is_leaf = false;
         auto grad_fn = std::make_shared<RMSNormGradFn>();
         grad_fn->capture_inputs(const_cast<Tensor&>(x), const_cast<Tensor&>(gamma), stream);
-
-        const float* effective_cache = input_cache ? input_cache : x.data;
-        grad_fn->set_cache_copy(effective_cache, static_cast<size_t>(tokens) * d_model, d_model, eps, stream);
+        grad_fn->set_cache_copy(x.data, static_cast<size_t>(tokens) * d_model, d_model, eps, stream);
         result.grad_fn = grad_fn;
     }
 

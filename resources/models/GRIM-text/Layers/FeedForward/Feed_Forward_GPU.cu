@@ -99,8 +99,6 @@ void FeedForwardLayer::forward(const Tensor& input,
                                cudaStream_t stream,
                                cublasHandle_t cublas_handle,
                                Forward::ModelForwardOutputs& forward_outputs,
-                               uint64_t batch_idx,
-                               bool dropout_enabled,
                                int layer_idx,
                                const FeedForwardParameterTensors& parameter_tensors) {
     if (layer_idx < 0) {
@@ -154,15 +152,6 @@ void FeedForwardLayer::forward(const Tensor& input,
     //--------------------------------------------------
     ffn_swiglu_out = autograd::elementwise_mul(
         ffn_silu_out, ffn_linear1_out, stream);
-
-    // Activation dropout: applied after SwiGLU gating, before W2 projection
-    if (hp_.dropout_rate > 0.0f && dropout_enabled) {
-        const uint64_t ffn_act_dropout_seed = batch_idx * 2654435761ULL + 300 + layer_idx;
-        const uint64_t ffn_act_dropout_mask_stream = 0x0003000000000000ULL + static_cast<uint64_t>(layer_idx);
-        ffn_swiglu_out = autograd::dropout(ffn_swiglu_out, hp_.dropout_rate,
-                                           ffn_act_dropout_seed, stream,
-                                           ffn_act_dropout_mask_stream);
-    }
 
     //--------------------------------------------------
     // Down Projection: output = hidden @ W2 + b2

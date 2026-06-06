@@ -470,6 +470,18 @@ GRIM::GeneratedSequence generateOneSequence(
             }
         }
 
+        // Suppress EOS until min_new_tokens is reached. Without this, an
+        // early-sampled EOS is not selected as a stop token (the break below
+        // requires step + 1 >= min_new_tokens), yet it still gets committed to
+        // the sequence as a literal token and fed back as context — producing a
+        // stray "</s>" mid-sequence and a second terminal "</s>" at the real
+        // stop. Masking the EOS logit here matches HuggingFace's
+        // MinNewTokensLengthLogitsProcessor so EOS can never be embedded early.
+        if (step + 1 < cfg.min_new_tokens &&
+            cfg.eos_token_id >= 0 && cfg.eos_token_id < vocab_size) {
+            logits_vec[cfg.eos_token_id] = -1e30f;
+        }
+
         GRIM::Sampling::SampleResult sample = pipeline.selectNextToken(
             logits_vec, sequence.token_ids, vocab_size);
 

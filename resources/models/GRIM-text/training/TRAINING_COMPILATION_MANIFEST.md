@@ -926,17 +926,15 @@ For each encoding layer (Layer 0 → Layer 11):
   - **FIXED**: Encoder attention dropout now comes from `LanguageModelConfig` → `EncoderLayerConstructionHP`/`EncoderSelfAttentionHP`; the old encoder-local config wrapper is deleted.
   - **ADDED**: Encoder sublayer `dropout_rate` travels through `EncoderLayerConstructionHP` and is consumed directly from `EncodingLayer::hp_`.
   - **ADDED**: Post-attention-projection sublayer dropout in `Encoding_GPU.cu` (seed offset: 100+layer_idx)
-  - **ADDED**: Post-FFN sublayer dropout in `Encoding_GPU.cu` (seed offset: 200+layer_idx)
-  - **ADDED**: FFN activation dropout after SwiGLU gating in `Feed_Forward_GPU.cu` (seed offset: 300+layer_idx)
+  - **REMOVED**: Post-FFN sublayer dropout from `Encoding_GPU.cu`; FFN branch now reaches the residual add without a second branch mask.
+  - **REMOVED**: FFN activation dropout from `Feed_Forward_GPU.cu`; SwiGLU activations now flow directly into `W2`.
   - **FIXED**: FFN dropout now comes from `LanguageModelConfig` → `EncoderLayerConstructionHP` → `FeedForwardLayerConstructionHP`; `FeedForwardLayer` stores the grouped HP directly as `hp_` (no `FeedForwardConfig` wrapper)
   - **REMOVED**: Redundant post-encoder-layer dropout from `AutogradTraining.cu` (was double-regularizing with sublayer dropout)
   - **Removed from CMakeLists.txt**: `Shared/Dropout/Dropout_GPU.cu` build reference
   - **Dropout sites (production)**:
     1. Embedding dropout: `ModelForward_GPU.cu` (seed: batch_idx*2654435761+500)
     2. Post-attention-projection: `Encoding_GPU.cu` step 6b (seed: batch_idx-derived seed*2654435761+100+layer)
-    3. FFN activation (post-GELU): `Feed_Forward_GPU.cu` (seed: batch_idx*2654435761+300+layer)
-    4. Post-FFN output: `Encoding_GPU.cu` step 9b (seed: batch_idx-derived seed*2654435761+200+layer)
-    5. Attention dropout (inside FlashAttention): Philox PRNG, separate `attention_dropout` config
+    3. Attention dropout (inside FlashAttention): Philox PRNG, separate `attention_dropout` config
   - All sublayer dropouts are mode-gated explicitly by `dropout_enabled`; `batch_idx` is seed material only and must not decide training/eval mode.
 
 ---

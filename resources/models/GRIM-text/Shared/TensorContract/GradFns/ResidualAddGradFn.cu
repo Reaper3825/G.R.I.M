@@ -120,10 +120,7 @@ Tensor residual_add(const Tensor& x, const Tensor& residual, cudaStream_t stream
     Tensor result = Tensor::empty(x.shape, x.requires_grad || residual.requires_grad, stream, "residual_add_result");
 
     // Forward: y = x + residual
-    TensorContract::TensorView x_view(const_cast<float*>(x.data), x.shape);
-    TensorContract::TensorView r_view(const_cast<float*>(residual.data), residual.shape);
-    TensorContract::TensorView out_view(result.data, result.shape);
-    TensorContract::add(x_view, r_view, out_view, stream);
+    TensorContract::add(x, residual, result, stream);
 
     if (result.requires_grad) {
         result.is_leaf = false;

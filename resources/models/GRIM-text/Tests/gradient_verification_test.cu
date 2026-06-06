@@ -527,7 +527,7 @@ void testRMSNorm() {
         gamma_for_bwd.ensure_grad();
         
         // Forward to build graph
-        Tensor out_for_bwd = autograd::rms_norm(input_for_bwd, gamma_for_bwd, EPSILON, stream, d_input);
+        Tensor out_for_bwd = autograd::rms_norm(input_for_bwd, gamma_for_bwd, EPSILON, stream);
         
         // Create upstream gradient tensor
         Tensor grad_upstream = Tensor::from_ptr(

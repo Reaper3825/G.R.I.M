@@ -418,7 +418,7 @@
             "grim_text_collector_log": "resources/models/GRIM-text/training/logs/collector.log",
             "grim_text_source_config": "DataCollection/source_data.json",
             "grim_text_model_store": "resources/models/model_store",
-            "atom_stats_interval": 0,
+            "atom_stats_interval": 2,
             "atom_stats_max_seqs": 32,
             "attention_diag_enabled": false,
             "attention_diag_head": 0,

@@ -54,7 +54,8 @@ Read the tokenizer in this order:
 8. `TokenLayout.hpp` — token IDs, special-token metadata, and byte-token helpers
 9. `TextUtils.hpp` / `TextUtils.cu` — normalization and UTF-8 helpers
 10. `UnigramTrainer.hpp` / `UnigramTrainer.cu` — training pipeline only
-11. `Training/UnigramForwardBackward.hpp` / `Training/UnigramForwardBackward.cu` — training-only true Unigram forward-backward expected-count estimator over learned-piece paths on non-atom residual spans
+11. `Training/SubwordMining.hpp` / `Training/SubwordMining.cu` — training-only subword candidate mining and atom-aware count aggregation
+12. `Training/UnigramForwardBackward.hpp` / `Training/UnigramForwardBackward.cu` — training-only true Unigram forward-backward expected-count estimator over learned-piece paths on non-atom residual spans
 
 If you read it in a different order, the code starts to feel like a haunted house.
 
@@ -200,6 +201,10 @@ flowchart LR
 - Byte-fallback enablement is `TokenizerHP` / `UniByte` ownership. Construct `UnigramLM` with the desired mode and pass `TokenizerHP` into vocab-load helpers; do not reintroduce public `UnigramLM` setter/getter accessors for this config bit.
 - `UnigramLM::trainFromCorpus()` is declared in `Unigram.hpp` and owns the raw-text detector prepass for training. Parseable atom spans are detected there from `TokenizerHP` before delegating to the atom-aware overload; do not recreate a `UniByte::trainFromCorpus()` wrapper.
 - The actual training orchestration lives in `UnigramTrainer.cu`.
+- Subword mining/count aggregation lives in `Training/SubwordMining.hpp/.cu`. `UnigramTrainer.cu`
+   calls `mineUnigramSubwordsFromTrainingUnits()` once, consumes the returned
+   `UnigramSubwordMiningResult`, and must not rebuild mining spans or worker-local
+   candidate-count maps inline.
 - True Unigram soft-EM math lives in `Training/UnigramForwardBackward.hpp/.cu`; training must use posterior expected counts from forward-backward over learned-piece paths only, not Viterbi hard-EM counts.
 - `UnigramLM::trainFromCorpus()` fails at entry for invalid `target_vocab_size`,
    `character_coverage`, `min_subword_freq`, or `subword_mining_workers`; do not rely on
@@ -280,6 +285,7 @@ Use this table as the “who owns what?” map.
 | `AtomTable.hpp/.cu` | parsed atom storage, dedup, GPU packing, numeric value access | subword segmentation |
 | `Unigram.hpp/.cu` | learned vocab semantics, trie construction, encode/decode wrappers | raw learned-vocab vector/map mutation, Viterbi DP state, artifact file I/O, detection policy, top-level orchestration, training boundary-token injection |
 | `UnigramViterbi.hpp/.cu` | CUDA-backed production Viterbi session, per-segmentation launch/backtrack validation, SentencePiece-style subword path selection, Viterbi CUDA kernels | learned-vocab mutation, durable CUDA buffer lifetime, artifact serialization, detector policy, hard-coded punctuation splitting |
+| `Training/SubwordMining.hpp/.cu` | tokenizer-training subword candidate mining, deterministic byte-proportional sampling, atom-aware count aggregation, validator/noise gates, overflow-checked count math | EM posterior math, learned-vocab mutation, shrink/cleanup ranking, runtime encode path |
 | `Training/UnigramForwardBackward.hpp/.cu` | training-only log-space forward-backward lattice and posterior expected-count accumulation for true Unigram EM on learned-piece paths over non-atom residual spans | production encode path, CUDA Viterbi workspace ownership, byte-overflow policy, learned-vocab mutation |
 | `VocabWriteOp.hpp` | append/upsert/rewrite of learned unigram pieces plus `piece_to_id` synchronization and token-ID validation | training scoring, Viterbi, artifact serialization, model/GRMT vocab-size authority |
 | `UnigramGpuMemory.hpp/.cu` | `UnigramLM` CUDA buffer lifetime, transactional GPU upload, Viterbi workspace ownership, device pointer cleanup | vocab semantics, Viterbi scoring, token assembly, training |
@@ -427,6 +433,7 @@ Right now the active emitted atom types are numeric: `ATOM_INT` and `ATOM_FLOAT`
 | Change normalization behavior | `TextUtils.cu` |
 | Change unigram segmentation | `Unigram.cu` |
 | Change `UnigramLM` CUDA buffer ownership/upload | `UnigramGpuMemory.hpp`, `UnigramGpuMemory.cu` |
+| Change subword mining/counting | `Training/SubwordMining.cu`, `Training/SubwordMining.hpp` |
 | Change vocab training | `UnigramTrainer.cu` |
 | Change encode metadata layout | `UniByte.hpp`, `UniByte.cu` |
 | Change atom GPU packing | `AtomTable.cu` |

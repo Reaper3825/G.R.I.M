@@ -54,8 +54,10 @@ void filterOverlongSequences(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>
                              TrainingLogger& logger);
 
 // Drop sequences with fewer than `min_seq_valid_tokens` non-ignored
-// targets, where "valid" mirrors BatchPayload's masking: position 0
-// (BOS) and the final position (autoregressive boundary) are excluded.
+// targets. "Valid" means the target value is already authored as a real
+// token ID (>= 0) after windowing/boundary logic has run; callers must not
+// assume position 0 is always masked because BOS insertion is config-driven
+// and BOS→first-token supervision is valid when BOS is present.
 // applySlidingWindows calls this internally after windowing so callers
 // never see a sequence that would trigger "valid_tokens=0" downstream.
 // Disabled (no-op) when min_seq_valid_tokens <= 0.

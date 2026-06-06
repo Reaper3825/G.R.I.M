@@ -29,12 +29,15 @@ void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
 
         // Add BOS if missing at start (controlled by config flag add_bos_token)
         if (add_bos_token && seq.token_ids.front() != GRIM::Tokenizer::BOS_TOKEN_ID) {
+            const int old_first_token = seq.token_ids.front();
             seq.token_ids.insert(seq.token_ids.begin(), GRIM::Tokenizer::BOS_TOKEN_ID);
             seq.token_numeric_values.insert(seq.token_numeric_values.begin(), 0.0f);
             seq.token_atom_mask.insert(seq.token_atom_mask.begin(), 0);
             seq.atom_entry_ids.insert(seq.atom_entry_ids.begin(), GRIM::Tokenizer::kAtomEntryNone);
             seq.token_atom_flags.insert(seq.token_atom_flags.begin(), 0);
-            seq.targets.insert(seq.targets.begin(), -1);
+            // BOS predicts the first real token. This is valid LM supervision;
+            // do not mask it away just because the input token is BOS.
+            seq.targets.insert(seq.targets.begin(), old_first_token);
             if (!seq.token_exec_slots.empty())
                 seq.token_exec_slots.insert(seq.token_exec_slots.begin(), static_cast<int32_t>(-1));
             if (!seq.slot_selection_targets.empty())
@@ -144,7 +147,8 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
             // For non-first windows, prepend BOS token (gated on add_bos_token config)
             if (prepend_bos) {
                 window.token_ids.push_back(GRIM::Tokenizer::BOS_TOKEN_ID);
-                window.targets.push_back(-1);  // BOS position masked
+                // BOS predicts the first token of this local window.
+                window.targets.push_back(seq.token_ids[start]);
                 window.token_numeric_values.push_back(0.0f);
                 window.token_atom_mask.push_back(0);
                 window.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
@@ -183,14 +187,6 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
                     seq.slot_selection_targets.begin() + static_cast<ptrdiff_t>(start),
                     seq.slot_selection_targets.begin() + static_cast<ptrdiff_t>(end));
             }
-
-
-            // Mask first position if it's the first window (BOS already there)
-            // For non-first windows, BOS was prepended above with target=-1
-            if (is_first_window && !window.targets.empty()) {
-                window.targets[0] = -1;  // Mask BOS position
-            }
-
             // Issue #143: Mask overlap prefix targets in non-first windows.
             // With stride < max_seq_len, the first (prev_source_end - start)
             // tokens were already trained on in the previous window. Mask them
@@ -205,7 +201,10 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
             if (!is_first_window && prev_source_end > start) {
                 const size_t raw_overlap = prev_source_end - start;
                 const size_t overlap_len = (raw_overlap > 0) ? (raw_overlap - 1) : 0;
-                const size_t bos_offset = prepend_bos ? 1 : 0;  // Skip BOS (already masked)
+                // If we prepended a synthetic BOS for this local window, keep its
+                // BOS→first-token supervision and only mask true overlapped source
+                // positions after it.
+                const size_t bos_offset = prepend_bos ? 1 : 0;
                 for (size_t i = bos_offset; i < bos_offset + overlap_len && i < window.targets.size(); ++i) {
                     window.targets[i] = -1;
                 }
@@ -214,33 +213,11 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
             // Mask last position for window boundary.
             // BatchPayload requires targets.back() == -1 unconditionally;
             // val no longer gets a special-cased "keep the final target"
-            // path because BatchPayload would have masked it anyway.
+            // path because BatchPayload would have masked it anyway. Window
+            // boundaries stay as pure masked truncations; do not synthesize
+            // EOS tokens at non-final window ends.
             if (!window.targets.empty()) {
                 window.targets.back() = -1;
-            }
-
-            // Issue #146: Inject EOS at end of non-final windows.
-            // Without this, ~55% of training windows have NO EOS token,
-            // so the model never learns when to stop generating.
-            // The last position is already target-masked above, so replacing
-            // its token_id with EOS costs nothing — the model sees EOS as
-            // input and the second-to-last position learns to predict EOS.
-            const bool is_final_window = (end == seq_len);
-            if (!is_final_window && !window.token_ids.empty()) {
-                window.token_ids.back() = GRIM::Tokenizer::EOS_TOKEN_ID;
-                window.token_numeric_values.back() = 0.0f;
-                window.token_atom_mask.back() = 0;
-                window.atom_entry_ids.back() = GRIM::Tokenizer::kAtomEntryNone;
-                window.token_atom_flags.back() = 0;
-                if (!window.token_exec_slots.empty())
-                    window.token_exec_slots.back() = static_cast<int32_t>(-1);
-                if (!window.slot_selection_targets.empty())
-                    window.slot_selection_targets.back() =
-                        GRIM::Execution::SlotSelectionTarget{GRIM::Execution::SlotSelectionTargetKind::Ignore, -1};
-                // Second-to-last position learns to predict EOS
-                if (window.targets.size() >= 2) {
-                    window.targets[window.targets.size() - 2] = GRIM::Tokenizer::EOS_TOKEN_ID;
-                }
             }
 
             // Variable-length window — BatchPayload owns padding.
@@ -294,15 +271,16 @@ void filterShortSequences(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
                           TrainingLogger& logger) {
     // HARD FILTER: Remove sequences with too few valid tokens after masking.
     // Prevents "valid_tokens=0" errors during loss computation.
-    // (position 0 is always masked as BOS, final position is masked as boundary —
-    // mirrors the masking in BatchPayload.cu::buildBatchPayload())
+    // Count the targets that are ALREADY authored as valid (>= 0); do not hardcode
+    // positional assumptions like "index 0 is always BOS" because BOS insertion is
+    // config-driven and BOS→first-token is valid supervision.
     if (min_seq_valid_tokens <= 0) return;
     const size_t before = sequences.size();
     sequences.erase(
         std::remove_if(sequences.begin(), sequences.end(),
             [min_seq_valid_tokens](const GRIM::TokenizerArtifacts::GrmtSequence& seq) {
                 int valid = 0;
-                for (size_t i = 1; i + 1 < seq.targets.size(); ++i) {
+                for (size_t i = 0; i < seq.targets.size(); ++i) {
                     if (seq.targets[i] >= 0) valid++;
                 }
                 return valid < min_seq_valid_tokens;

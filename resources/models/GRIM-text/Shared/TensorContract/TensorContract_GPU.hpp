@@ -421,16 +421,7 @@ struct TensorView {
         shape.require(context);
         return *this;
     }
-    
-    // RULE 20: Returns mutable reference, throws if invalid
-    TensorView& require_mut(const char* context) {
-        if (!ptr) {
-            throw std::runtime_error(std::string(context) + ": TensorView has NULL pointer" +
-                                     (name ? std::string(" (name=") + name + ")" : ""));
-        }
-        shape.require(context);
-        return *this;
-    }
+
     
     // Size in bytes (layout-aware)
     size_t size_bytes() const {
@@ -444,46 +435,6 @@ struct TensorView {
     
     // Debug string
     std::string to_string() const;
-};
-
-//======================================================//
-//  TensorBuffer - Owning GPU tensor with automatic cleanup
-//======================================================//
-
-/**
- * TensorBuffer - RAII wrapper for GPU tensor memory
- * 
- * Use this when you need to allocate temporary GPU memory for
- * tensor operations. Memory is automatically freed on destruction.
- */
-class TensorBuffer {
-public:
-    TensorBuffer() = default;
-    ~TensorBuffer();
-    
-    // Non-copyable, movable
-    TensorBuffer(const TensorBuffer&) = delete;
-    TensorBuffer& operator=(const TensorBuffer&) = delete;
-    TensorBuffer(TensorBuffer&& other) noexcept;
-    TensorBuffer& operator=(TensorBuffer&& other) noexcept;
-    
-    // Allocation (TensorShape already contains the layout)
-    bool allocate(TensorShape shape, const char* name = nullptr);
-    void free();
-    
-    // Access
-    TensorView view() const { return view_; }
-    float* ptr() const { return view_.ptr; }
-    bool is_allocated() const { return view_.ptr != nullptr; }
-    Layout layout() const { return view_.layout(); }
-    
-    // Size
-    size_t size_bytes() const { return view_.size_bytes(); }
-    size_t size_elements() const { return view_.size_elements(); }
-    
-private:
-    TensorView view_;
-    bool owns_memory_ = false;
 };
 
 //======================================================//
@@ -528,47 +479,6 @@ void validate_conversion(const TensorView& src, const TensorView& dst, const cha
  * @return true if tensors overlap in memory
  */
 bool tensors_alias(const TensorView& a, const TensorView& b);
-
-//======================================================//
-//  Common Tensor Operations
-//======================================================//
-
-/**
- * Zero a tensor buffer
- * 
- * @param tensor Tensor to zero
- * @param stream CUDA stream
- */
-void zero(TensorView& tensor, cudaStream_t stream = nullptr);
-
-/**
- * Copy tensor data (same layout)
- * 
- * @param src Source tensor
- * @param dst Destination tensor (must have same shape and layout)
- * @param stream CUDA stream
- */
-void copy(const TensorView& src, TensorView& dst, cudaStream_t stream = nullptr);
-
-/**
- * Add two tensors element-wise: dst = a + b
- * 
- * @param a First input tensor
- * @param b Second input tensor
- * @param dst Output tensor (can alias a or b for in-place)
- * @param stream CUDA stream
- */
-void add(const TensorView& a, const TensorView& b, TensorView& dst, cudaStream_t stream = nullptr);
-
-/**
- * Scale tensor by scalar: dst = alpha * src
- * 
- * @param src Input tensor
- * @param alpha Scale factor
- * @param dst Output tensor (can alias src for in-place)
- * @param stream CUDA stream
- */
-void scale(const TensorView& src, float alpha, TensorView& dst, cudaStream_t stream = nullptr);
 
 //======================================================//
 //  Utility Functions
@@ -725,7 +635,6 @@ struct GradFn {
     //--------------------------------------------------//
     
     std::vector<Tensor*> saved_tensors;  ///< Inputs saved for backward (owned copies)
-    std::vector<TensorContract::TensorView> saved_views;  ///< Lightweight views (non-owning)
     
     //--------------------------------------------------//
     // Operation Metadata
@@ -761,7 +670,6 @@ struct GradFn {
         if (released_) return;  // ISSUE #50: Prevent double release
         released_ = true;
         saved_tensors.clear();
-        saved_views.clear();
     }
 
 protected:
@@ -775,7 +683,7 @@ protected:
 /**
  * @brief GPU tensor with automatic differentiation support
  * 
- * This extends TensorBuffer with autograd tracking:
+ * GPU tensor with automatic differentiation support:
  * - data:          GPU memory for tensor values
  * - grad:          GPU memory for accumulated gradients (lazy-allocated)
  * - grad_fn:       Backward function if tensor resulted from an operation
@@ -963,21 +871,6 @@ struct Tensor {
     void backward(const Tensor* grad_output = nullptr, float scale = 1.0f);
     
     //--------------------------------------------------//
-    // View Conversion (for compatibility with existing code)
-    //--------------------------------------------------//
-    
-    /// Get a non-owning view of data
-    TensorContract::TensorView view() const {
-        return TensorContract::TensorView(data, shape, name, compute_precision);
-    }
-    
-    /// Get a non-owning view of gradient data
-    /// Note: Returns mutable view even from const Tensor (gradient is logically separate)
-    TensorContract::TensorView grad_view() const {
-        return TensorContract::TensorView(grad_ ? grad_->data : nullptr, shape, name, TensorContract::PrecisionType::FP32);
-    }
-    
-    //--------------------------------------------------//
     // Size Queries
     //--------------------------------------------------//
     
@@ -1013,16 +906,7 @@ struct Tensor {
         return *this;
     }
     
-    /// RULE 20: Throws if tensor is invalid - returns mutable self for chaining
-    Tensor& require_mut(const char* context) {
-        if (!data) {
-            throw std::runtime_error(std::string(context) + ": Tensor has NULL data pointer" +
-                                     (name ? std::string(" (name=") + name + ")" : ""));
-        }
-        shape.require(context);
-        return *this;
-    }
-    
+
     /// RULE 20: Throws if gradient is not available
     const Tensor& require_grad_present(const char* context) const {
         require(context);
@@ -1089,6 +973,17 @@ inline size_t ParameterGroup::size_bytes() const { return size() * sizeof(float)
 void zeroParameterGradients(std::vector<ParameterGroup>& groups, cudaStream_t stream);
 
 }  // namespace GRIM
+
+namespace TensorContract {
+
+/**
+ * Add two autograd tensors element-wise: dst = a + b.
+ * This overload keeps GradFn forward paths on real Tensor objects instead of
+ * fabricating wrapper objects around Tensor internals.
+ */
+void add(const GRIM::Tensor& a, const GRIM::Tensor& b, GRIM::Tensor& dst, cudaStream_t stream = nullptr);
+
+}  // namespace TensorContract
 
 //======================================================//
 //  Autograd Operations (create computation graph nodes)
@@ -1339,13 +1234,11 @@ Tensor elementwise_mul(const Tensor& a, const Tensor& b, cudaStream_t stream = n
 /**
  * RMSNorm: y = x / rms(x) * (learnable)gamma
  *
- * TAPE-BASED: Uses external cache pointer for backward pass.
- * If input_cache is nullptr, uses tensor data directly (assumes it persists).
- *
- * @param input_cache External cache for input (needed for backward)
+ * TAPE-BASED: `RMSNormGradFn` snapshots the forward input it needs for
+ * backward. Callers must not provide a sidecar backward-staging cache.
  */
-Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps = 1e-5f, 
-                cudaStream_t stream = nullptr, const float* input_cache = nullptr);
+Tensor rms_norm(const Tensor& x, const Tensor& gamma, float eps, 
+                cudaStream_t stream = nullptr);
 
 /**
  * Embedding lookup over the orchestration-owned batch device view.
@@ -1407,7 +1300,7 @@ Tensor scaled_dot_product_attention(
     const Tensor& q, const Tensor& k, const Tensor& v,
     const float* alibi_slopes,
     const ::GRIM::HyperParameters::EncoderSelfAttentionHP& attention_hp,
-    float scale = 0.0f,
+    float scale = 1.0f,
     cudaStream_t stream = nullptr,
     float attention_dropout_p = 0.0f, uint64_t dropout_seed = 0);
 

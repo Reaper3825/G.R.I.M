@@ -490,59 +490,6 @@ std::string TensorView::to_string() const {
 }
 
 //======================================================//
-//  TensorBuffer Implementation
-//======================================================//
-
-TensorBuffer::~TensorBuffer() {
-    free();
-}
-
-TensorBuffer::TensorBuffer(TensorBuffer&& other) noexcept
-    : view_(other.view_), owns_memory_(other.owns_memory_) {
-    other.view_ = TensorView();
-    other.owns_memory_ = false;
-}
-
-TensorBuffer& TensorBuffer::operator=(TensorBuffer&& other) noexcept {
-    if (this != &other) {
-        free();
-        view_ = other.view_;
-        owns_memory_ = other.owns_memory_;
-        other.view_ = TensorView();
-        other.owns_memory_ = false;
-    }
-    return *this;
-}
-
-bool TensorBuffer::allocate(TensorShape shape, const char* name) {
-    free();
-    
-    if (!shape.is_valid()) {
-        return false;
-    }
-    
-    size_t bytes = shape.total_elements() * sizeof(float);
-    float* ptr = nullptr;
-    
-    cudaError_t err = cudaMalloc(&ptr, bytes);
-    if (err != cudaSuccess) {
-        throw std::runtime_error(buildCudaAllocFailureMessage("cudaMalloc", name ? name : "TensorBuffer", bytes, err));
-    }
-    
-    view_ = TensorView(ptr, shape, name);
-    owns_memory_ = true;
-    return true;
-}
-
-void TensorBuffer::free() {
-    if (owns_memory_ && view_.ptr) {
-        cudaFree(view_.ptr);
-    }
-    view_ = TensorView();
-    owns_memory_ = false;
-}
-
-//======================================================//
 //  Validation Functions
 //======================================================//
 
@@ -623,76 +570,32 @@ __global__ void kernel_add(const float* __restrict__ a,
     }
 }
 
-__global__ void kernel_scale(const float* __restrict__ src,
-                             float alpha,
-                             float* __restrict__ dst,
-                             size_t n) {
-    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
-    const size_t idx = block_idx * blockDim.x + threadIdx.x;
-    if (idx < n) {
-        dst[idx] = alpha * src[idx];
-    }
-}
-
 //======================================================//
 //  GQA split/merge kernels live in TensorConversion.cu
 //  (single source of truth for all conversion operations)
 //======================================================
 
 //======================================================//
-//  CUDA Kernels - Basic Operations (for TensorContract API)
-//======================================================//
-
-__global__ void kernel_zero(float* dst, size_t n) {
-    const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
-    const size_t idx = block_idx * blockDim.x + threadIdx.x;
-    if (idx < n) {
-        dst[idx] = 0.0f;
-    }
-}
-
-//======================================================//
 //  Host API Implementation - Basic Operations
 //======================================================//
 
-void zero(TensorView& tensor, cudaStream_t stream) {
-    if (!tensor.is_valid()) {
-        throw ContractViolation("zero: tensor is invalid");
-    }
-    
-    size_t n = tensor.size_elements();
-    kernel_zero<<<gridFor1D(n, BLOCK_SIZE), BLOCK_SIZE, 0, stream>>>(tensor.ptr, n);
-    TC_CUDA_CHECK(cudaGetLastError());
-}
+void add(const GRIM::Tensor& a, const GRIM::Tensor& b, GRIM::Tensor& dst, cudaStream_t stream) {
+    a.require("TensorContract::add: first tensor");
+    b.require("TensorContract::add: second tensor");
+    dst.require("TensorContract::add: output tensor");
 
-void copy(const TensorView& src, TensorView& dst, cudaStream_t stream) {
-    validate_conversion(src, dst, "copy");
-    
-    if (src.layout() != dst.layout()) {
-        throw ContractViolation("copy: layout mismatch (use convert for layout changes)");
+    if (a.numel() != b.numel()) {
+        std::ostringstream oss;
+        oss << "TensorContract::add: tensor size mismatch ("
+            << a.numel() << " vs " << b.numel() << ")";
+        throw ContractViolation(oss.str());
     }
-    
-    TC_CUDA_CHECK(cudaMemcpyAsync(dst.ptr, src.ptr, src.size_bytes(),
-                                   cudaMemcpyDeviceToDevice, stream));
-}
-
-void add(const TensorView& a, const TensorView& b, TensorView& dst, cudaStream_t stream) {
-    validate_binary_op(a, b, "add");
-    
-    if (dst.size_elements() != a.size_elements()) {
-        throw ContractViolation("add: output size mismatch");
+    if (dst.numel() != a.numel()) {
+        throw ContractViolation("TensorContract::add: output size mismatch");
     }
-    
-    size_t n = a.size_elements();
-    kernel_add<<<gridFor1D(n, BLOCK_SIZE), BLOCK_SIZE, 0, stream>>>(a.ptr, b.ptr, dst.ptr, n);
-    TC_CUDA_CHECK(cudaGetLastError());
-}
 
-void scale(const TensorView& src, float alpha, TensorView& dst, cudaStream_t stream) {
-    validate_conversion(src, dst, "scale");
-    
-    size_t n = src.size_elements();
-    kernel_scale<<<gridFor1D(n, BLOCK_SIZE), BLOCK_SIZE, 0, stream>>>(src.ptr, alpha, dst.ptr, n);
+    const size_t n = a.numel();
+    kernel_add<<<gridFor1D(n, BLOCK_SIZE), BLOCK_SIZE, 0, stream>>>(a.data, b.data, dst.data, n);
     TC_CUDA_CHECK(cudaGetLastError());
 }
 
@@ -788,6 +691,9 @@ __global__ void kernel_zero_autograd(float* data, size_t count) {
 
 namespace {
 
+constexpr int AUTOGRAD_BLOCK_SIZE = 256;
+constexpr int kMaxGridBlocks1DFallback = 65534;  // Fallback when device query fails or reports 65535 (some drivers reject exactly 65535)
+
 // Kernel: Xavier uniform initialization (uses curand-free LCG for reproducibility)
 // Issue #107 FIX: Run multiple LCG iterations to decorrelate consecutive elements
 // BUG: Single iteration with state = (seed + idx*A)*A + C is LINEAR in idx,
@@ -808,11 +714,42 @@ __global__ void kernel_xavier_uniform(float* data, size_t count, float scale, ui
     
     // curand_uniform returns (0, 1], transform to (-1, 1) then scale
     const float rnd = curand_uniform(&state) * 2.0f - 1.0f;
+    
     data[idx] = rnd * scale;
 }
 
-constexpr int AUTOGRAD_BLOCK_SIZE = 256;
-constexpr int kMaxGridBlocks1DFallback = 65534;  // Fallback when device query fails or reports 65535 (some drivers reject exactly 65535)
+    __global__ void kernel_reduce_block_sum_fp64(const float* data, size_t count, double* block_sums) {
+        __shared__ double shared[AUTOGRAD_BLOCK_SIZE];
+
+        const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+        const size_t idx = block_idx * blockDim.x + threadIdx.x;
+
+        double local_sum = 0.0;
+        if (idx < count) {
+            local_sum = static_cast<double>(data[idx]);
+        }
+        shared[threadIdx.x] = local_sum;
+        __syncthreads();
+
+        for (unsigned int offset = blockDim.x / 2; offset > 0; offset >>= 1) {
+            if (threadIdx.x < offset) {
+                shared[threadIdx.x] += shared[threadIdx.x + offset];
+            }
+            __syncthreads();
+        }
+
+        if (threadIdx.x == 0) {
+            block_sums[block_idx] = shared[0];
+        }
+    }
+
+    __global__ void kernel_subtract_mean(float* data, size_t count, float mean) {
+        const size_t block_idx = static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x;
+        const size_t idx = block_idx * blockDim.x + threadIdx.x;
+        if (idx < count) {
+            data[idx] -= mean;
+        }
+    }
 
 // Returns the device's max blocks per grid dimension (x). Queried at runtime via cudaDeviceGetAttribute.
 // Cached per process; uses fallback if query fails (e.g. before CUDA init).
@@ -858,6 +795,62 @@ inline dim3 gridForCount(size_t count) {
     // grid.y would exceed 65535: switch to grid.x = ceil(blocks/65535), grid.y = 65535
     int gx = (blocks + kMaxGridDimY - 1) / kMaxGridDimY;
     return dim3(gx, kMaxGridDimY, 1);
+}
+
+float computeExactTensorMeanForInit(const float* data, size_t count, cudaStream_t stream, const char* tensor_name) {
+    if (!data) {
+        throw std::runtime_error(std::string("computeExactTensorMeanForInit: tensor data is NULL for ") +
+                                 (tensor_name ? tensor_name : "unnamed"));
+    }
+    if (stream == nullptr || stream == 0) {
+        throw std::runtime_error(std::string("computeExactTensorMeanForInit: stream is NULL for ") +
+                                 (tensor_name ? tensor_name : "unnamed"));
+    }
+    if (count == 0) {
+        throw std::runtime_error(std::string("computeExactTensorMeanForInit: count is zero for ") +
+                                 (tensor_name ? tensor_name : "unnamed"));
+    }
+
+    const dim3 reduce_grid = gridForCount(count);
+    const size_t block_count = static_cast<size_t>(reduce_grid.x) * static_cast<size_t>(reduce_grid.y);
+    double* d_block_sums = nullptr;
+    cudaMallocOrThrow(reinterpret_cast<void**>(&d_block_sums),
+                      block_count * sizeof(double),
+                      "Tensor::xavier_uniform_with_gain_ block sums");
+    std::shared_ptr<double> block_sums_owner(d_block_sums, [](double* p) { queueForDeferredCleanup(p); });
+
+    kernel_reduce_block_sum_fp64<<<reduce_grid, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(data, count, d_block_sums);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string("computeExactTensorMeanForInit: reduction kernel failed for ") +
+                                 (tensor_name ? tensor_name : "unnamed") + ": " + cudaGetErrorString(err));
+    }
+
+    std::vector<double> h_block_sums(block_count);
+    err = cudaMemcpyAsync(h_block_sums.data(), d_block_sums, block_count * sizeof(double),
+                          cudaMemcpyDeviceToHost, stream);
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string("computeExactTensorMeanForInit: block-sum copy failed for ") +
+                                 (tensor_name ? tensor_name : "unnamed") + ": " + cudaGetErrorString(err));
+    }
+
+    err = cudaStreamSynchronize(stream);
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string("computeExactTensorMeanForInit: stream sync failed for ") +
+                                 (tensor_name ? tensor_name : "unnamed") + ": " + cudaGetErrorString(err));
+    }
+
+    long double total_sum = 0.0;
+    for (double partial : h_block_sums) {
+        total_sum += static_cast<long double>(partial);
+    }
+    const long double mean_ld = total_sum / static_cast<long double>(count);
+    const double mean_double = static_cast<double>(mean_ld);
+    if (!std::isfinite(mean_double)) {
+        throw std::runtime_error(std::string("computeExactTensorMeanForInit: non-finite mean for ") +
+                                 (tensor_name ? tensor_name : "unnamed"));
+    }
+    return static_cast<float>(mean_double);
 }
 
 }  // anonymous namespace
@@ -1135,6 +1128,17 @@ void Tensor::xavier_uniform_with_gain_(Tensor& t, uint64_t seed, float gain, cud
         throw std::runtime_error("Tensor::xavier_uniform_with_gain_: kernel launch failed for " +
                                  std::string(t.name ? t.name : "unnamed") + ": " +
                                  cudaGetErrorString(err));
+    }
+
+    if (count > 1) {
+        const float exact_mean = computeExactTensorMeanForInit(t.data, count, stream, t.name);
+        kernel_subtract_mean<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(t.data, count, exact_mean);
+        err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            throw std::runtime_error("Tensor::xavier_uniform_with_gain_: mean-centering kernel launch failed for " +
+                                     std::string(t.name ? t.name : "unnamed") + ": " +
+                                     cudaGetErrorString(err));
+        }
     }
     
     t.version++;

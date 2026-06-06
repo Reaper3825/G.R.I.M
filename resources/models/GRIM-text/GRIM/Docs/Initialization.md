@@ -5,7 +5,11 @@
 
 `scale = sqrt(6 / (fan_in + fan_out))`
 
-and samples `U(-scale, +scale)` on the provided CUDA stream.
+and samples `U(-scale, +scale)` on the provided CUDA stream. After sampling,
+the initializer computes the realized tensor mean and subtracts it so every
+initialized weight matrix with more than one element has exact sample mean 0.
+This mean-centering pass does not renormalize variance afterward; it only
+removes small residual sample bias from the realized Xavier draw.
 
 ## Residual projection init gain
 Residual projection weights (`W_o` and FFN `W2`) use `Tensor::xavier_uniform_with_gain_()` during startup construction:
