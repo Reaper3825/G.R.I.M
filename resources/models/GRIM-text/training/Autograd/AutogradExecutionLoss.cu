@@ -810,6 +810,7 @@ Tensor makeNormalizedEntropy(Tensor& probs_tensor, cudaStream_t stream) {
 
 ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
     AutogradContext& ctx,
+    const Batching::BatchPayload& payload,
     Forward::ModelForwardOutputs& forward_outputs,
     AutogradLossState& loss_state
 ) {
@@ -817,9 +818,6 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
 
     if (!ctx.config) {
         throw std::runtime_error("addExecutionAuxiliaryLoss: ctx.config is NULL");
-    }
-    if (!ctx.payload) {
-        throw std::runtime_error("addExecutionAuxiliaryLoss: ctx.payload is NULL");
     }
     if (!ctx.execution_block_enabled) {
         throw std::runtime_error("addExecutionAuxiliaryLoss: ctx.execution_block_enabled is false");
@@ -830,7 +828,6 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
 
     const auto model_hp = HyperParameters::modelHP(*ctx.config);
     const auto execution_hp = HyperParameters::executionBlockConstructionHP(*ctx.config);
-    const auto& payload = *ctx.payload;
 
     if (!model_hp.execution_block_enabled || forward_outputs.exec_outputs_per_row.empty()) {
         return summary;

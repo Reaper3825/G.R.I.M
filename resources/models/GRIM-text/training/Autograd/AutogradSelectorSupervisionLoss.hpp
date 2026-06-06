@@ -6,6 +6,9 @@
 #pragma once
 
 namespace GRIM {
+namespace Batching {
+struct BatchPayload;
+}
 namespace Forward {
 struct ModelForwardOutputs;
 }
@@ -18,7 +21,8 @@ struct AutogradLossState;
  * Adds final-state decode-time selector supervision CE into loss_state.loss_tensor.
  *
  * Contract:
- * - Consumes Phase1-authored BatchPayload selector targets from ctx.payload.
+ * - Consumes Phase1-authored BatchPayload selector targets from the explicit
+ *   payload argument.
  * - Mutates only Category 1 autograd state in Forward::ModelForwardOutputs + AutogradLossState.
  * - Owns detached selector input tensors in Forward::ModelForwardOutputs for backward lifetime.
  * - Returns the weighted host scalar contribution added to total loss.
@@ -26,6 +30,7 @@ struct AutogradLossState;
  */
 float addSelectorSupervisionLoss(
     AutogradContext& ctx,
+    const Batching::BatchPayload& payload,
     Forward::ModelForwardOutputs& forward_outputs,
     AutogradLossState& loss_state);
 

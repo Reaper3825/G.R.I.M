@@ -894,6 +894,7 @@ BatchResult processBatch(
 
     auto loss_result = GRIM::Autograd::computeAutogradLoss(
         autograd_ctx,
+        payload,
         loss_config,
         mtp_alpha_effective);
     if (!loss_result.success) {

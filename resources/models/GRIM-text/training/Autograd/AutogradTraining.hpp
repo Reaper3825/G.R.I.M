@@ -199,13 +199,14 @@ AutogradContext initAutogradContext(
  * 
  * @param ctx     Autograd context (must have logits populated by the caller-owned
  *                 shared forward pass, any active MTP logits emitted by that
- *                 shared forward call, and ctx.payload set to a valid
- *                 BatchPayload)
+ *                 shared forward call, and valid device bindings/runtime state)
+ * @param payload Phase1-authored BatchPayload for this explicit loss boundary
  * @param loss_config Caller-derived loss hyperparameter grouping
  * @param mtp_alpha_effective Phase2-derived MTP loss weight for this batch
  */
 LossResult computeAutogradLoss(
     AutogradContext& ctx,
+    const Batching::BatchPayload& payload,
     const HyperParameters::LossConfigHP& loss_config,
     float mtp_alpha_effective
 );
@@ -225,13 +226,6 @@ BackwardResult executeAutogradBackward(
  * (Diagnostic function - does not copy, checks connectivity)
  */
 bool verifyGradientsAreConnected(AutogradContext& ctx);
-
-// computeGradientNorm() DELETED — redundant with Phase2's computeGradNorm()
-
-// Clearing of the caller-owned `Forward::ModelForwardOutputs` /
-// `AutogradLossState` step owners is Phase2 orchestration-owned at the batch
-// boundary. `AutogradContext` only borrows those explicit owners for the active
-// step; it does not define or own the teardown mechanism.
 
 }  // namespace Autograd
 }  // namespace GRIM

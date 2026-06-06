@@ -23,6 +23,7 @@ namespace Autograd {
 
 float addSelectorSupervisionLoss(
     AutogradContext& ctx,
+    const Batching::BatchPayload& payload,
     Forward::ModelForwardOutputs& forward_outputs,
     AutogradLossState& loss_state
 ) {
@@ -44,12 +45,11 @@ float addSelectorSupervisionLoss(
 
     const bool selector_supervision_configured =
         selector_hp.enabled && selector_hp.supervision_weight > 0.0f;
-    const bool selector_targets_supplied =
-        ctx.payload && !ctx.payload->slot_selection_targets.empty();
+    const bool selector_targets_supplied = !payload.slot_selection_targets.empty();
 
     bool selector_targets_request_ce = false;
     if (selector_targets_supplied) {
-        for (const auto& row_targets : ctx.payload->slot_selection_targets) {
+        for (const auto& row_targets : payload.slot_selection_targets) {
             for (const auto& target : row_targets) {
                 if (target.kind != Execution::SlotSelectionTargetKind::Ignore) {
                     selector_targets_request_ce = true;
@@ -70,10 +70,6 @@ float addSelectorSupervisionLoss(
     if (!ctx.model) {
         throw std::runtime_error("addSelectorSupervisionLoss: selector supervision configured but ctx.model is NULL");
     }
-    if (!ctx.payload) {
-        throw std::runtime_error("addSelectorSupervisionLoss: selector supervision configured but ctx.payload is NULL");
-    }
-    const auto& payload = *ctx.payload;
     if (forward_outputs.exec_memories.empty()) {
         throw std::runtime_error("addSelectorSupervisionLoss: selector supervision configured but no ExecutionMemory snapshots exist; materializeTrainingGraphActivations must run ExecutionBlock first");
     }

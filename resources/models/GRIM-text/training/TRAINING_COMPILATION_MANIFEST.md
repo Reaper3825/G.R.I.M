@@ -1044,7 +1044,7 @@ For each encoding layer (Layer 0 → Layer 11):
 
 - [x] **AutogradTraining.cu** ✅ AUDITED & FULLY REFACTORED (2070 lines, 4 major functions)
   - **PRIMARY BACKWARD PATH**: `executeAutogradBackward(ctx)` — handles text loss + numeric loss + learned weighting + ScratchBlock backward
-  - **PRIMARY LOSS PATH**: `computeAutogradLoss(ctx, loss_config, mtp_alpha_effective)` — text CE + auxiliary loss assembly, returns `LossResult`
+  - **PRIMARY LOSS PATH**: `computeAutogradLoss(ctx, payload, loss_config, mtp_alpha_effective)` — text CE + auxiliary loss assembly, returns `LossResult`
   - **PHASE2 TRAINING ORCHESTRATOR**: `Phase2_TrainingLoop.cu::processBatch(...)` — upload + explicit `Forward::executeModelForward(...)` + loss + backward
   - **FIXED (Issue #140)**: Removed √d_model embedding scaling (scale=1.0f) — eliminates 27.7x gradient asymmetry for tied weights
   - **FIXED (Issue #141)**: ScratchBlock backward now uses gradient tap buffer — `atom_projection_` and `atom_type_embeddings_` are trained ✅

@@ -1394,15 +1394,21 @@ inline void validateRootConfigDocument(
     validateParameterGroupPrecision(params.parameter_precision_execution_block, "parameter_precision_execution_block", caller);
     validateParameterGroupPrecision(params.parameter_precision_slot_selector, "parameter_precision_slot_selector", caller);
 
-    validatePositiveFiniteFields(params, {
-        validationField("loss_focal_alpha", &LanguageModelConfig::loss_focal_alpha),
-        validationField("loss_class_balanced_beta", &LanguageModelConfig::loss_class_balanced_beta)
-    }, caller);
     validateNonNegativeFiniteFields(params, {
         validationField("loss_focal_gamma", &LanguageModelConfig::loss_focal_gamma),
         validationField("loss_entropy_reg_lambda", &LanguageModelConfig::loss_entropy_reg_lambda),
         validationField("weight_decay", &LanguageModelConfig::weight_decay)
     }, caller);
+    if (params.loss_focal_enabled) {
+        validatePositiveFiniteFields(params, {
+            validationField("loss_focal_alpha", &LanguageModelConfig::loss_focal_alpha)
+        }, caller);
+    }
+    if (params.loss_class_balanced_enabled) {
+        validatePositiveFiniteFields(params, {
+            validationField("loss_class_balanced_beta", &LanguageModelConfig::loss_class_balanced_beta)
+        }, caller);
+    }
     validateHalfOpenUnitIntervalFields(params, {
         validationField("loss_label_smoothing_epsilon", &LanguageModelConfig::loss_label_smoothing_epsilon)
     }, caller);

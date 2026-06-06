@@ -6,6 +6,9 @@
 #pragma once
 
 namespace GRIM {
+namespace Batching {
+struct BatchPayload;
+}
 namespace Forward {
 struct ModelForwardOutputs;
 }
@@ -35,6 +38,7 @@ struct ExecutionAuxiliaryLossSummary {
  */
 ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
     AutogradContext& ctx,
+    const Batching::BatchPayload& payload,
     Forward::ModelForwardOutputs& forward_outputs,
     AutogradLossState& loss_state);
 

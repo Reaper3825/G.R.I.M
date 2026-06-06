@@ -344,6 +344,29 @@ bool verifyGradientsAreConnectedImpl(
     AutogradContext& ctx,
     const GradientSignalBaselines* baselines
 );
+
+void validateLossBoundaryInputs(
+    const AutogradContext& ctx,
+    const Batching::BatchPayload& payload,
+    const char* caller
+) {
+    if (!ctx.config) throw std::runtime_error(std::string(caller) + ": ctx.config is NULL");
+    if (!ctx.training_state) throw std::runtime_error(std::string(caller) + ": ctx.training_state is NULL");
+    if (!ctx.forward_outputs) throw std::runtime_error(std::string(caller) + ": ctx.forward_outputs is NULL");
+    if (!ctx.loss_state) throw std::runtime_error(std::string(caller) + ": ctx.loss_state is NULL");
+    if (!ctx.gpu_encoder) throw std::runtime_error(std::string(caller) + ": ctx.gpu_encoder is NULL");
+    if (!ctx.parameter_registry) throw std::runtime_error(std::string(caller) + ": ctx.parameter_registry is NULL");
+    if (!ctx.device_bindings) throw std::runtime_error(std::string(caller) + ": ctx.device_bindings is NULL");
+
+    payload.validate(caller);
+
+    if (!ctx.device_bindings->d_input_ids || !ctx.device_bindings->d_target_ids || !ctx.device_bindings->d_token_to_slot_map) {
+        throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings has NULL device pointers");
+    }
+    if (!payload.mtp_shifted_targets.empty() && !ctx.device_bindings->d_mtp_shifted_targets) {
+        throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings.d_mtp_shifted_targets is NULL for MTP payload");
+    }
+}
 }  // namespace
 
 //======================================================================
@@ -352,6 +375,7 @@ bool verifyGradientsAreConnectedImpl(
 
 LossResult computeAutogradLoss(
     AutogradContext& ctx,
+    const Batching::BatchPayload& payload,
     const HyperParameters::LossConfigHP& loss_config,
     float mtp_alpha_effective
 ) {
@@ -359,16 +383,11 @@ LossResult computeAutogradLoss(
     result.success = false;
     
     // RULE 20: Fail loud
-    ctx.validate("computeAutogradLoss");
+    validateLossBoundaryInputs(ctx, payload, "computeAutogradLoss");
     if (!std::isfinite(mtp_alpha_effective) || mtp_alpha_effective < 0.0f) {
         throw std::runtime_error("computeAutogradLoss: mtp_alpha_effective must be finite and >= 0, got " +
                                  std::to_string(mtp_alpha_effective));
     }
-    if (!ctx.payload) {
-        throw std::runtime_error("computeAutogradLoss: ctx.payload is NULL — training path MUST set payload via initAutogradContext(const BatchPayload&, ...)");
-    }
-    const auto& payload = *ctx.payload;
-    payload.validate("computeAutogradLoss");
     
     const auto* cfg = ctx.config;
     const auto model_hp = GRIM::HyperParameters::modelHP(*cfg);
@@ -469,7 +488,11 @@ LossResult computeAutogradLoss(
     // EXECUTION BLOCK LOSS — assembled at the explicit autograd loss boundary
     // from retained forward tensors (logits, v_out, teacher scalar, clamp flag).
     // ═══════════════════════════════════════════════════════════════════════════
-    const ExecutionAuxiliaryLossSummary exec_summary = addExecutionAuxiliaryLoss(ctx, forward_outputs, loss_state);
+    const ExecutionAuxiliaryLossSummary exec_summary = addExecutionAuxiliaryLoss(
+        ctx,
+        payload,
+        forward_outputs,
+        loss_state);
     const float exec_structured_ce = exec_summary.structured_ce;
     const float exec_entropy_monitor = exec_summary.entropy_monitor;
     if (exec_summary.scalar_loss_terms > 0) {
@@ -491,7 +514,11 @@ LossResult computeAutogradLoss(
     // encoder hidden tensor because TensorContract has no parent slice/view op.
     // Weighted by cfg->selector_supervision_weight (0 = disabled).
     // ═══════════════════════════════════════════════════════════════════════════
-    float selector_supervision_loss = addSelectorSupervisionLoss(ctx, forward_outputs, loss_state);
+    float selector_supervision_loss = addSelectorSupervisionLoss(
+        ctx,
+        payload,
+        forward_outputs,
+        loss_state);
     result.selector_loss = selector_supervision_loss;
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -572,15 +599,7 @@ BackwardResult executeAutogradBackward(
     // nonzero pre/post delta for those tensors after backward.
     GradientSignalBaselines gradient_signal_baselines =
         captureGradientVerificationBaselines(ctx, accumulate);
-    
-    // Call backward on the text loss (single loss path). Accumulation-window
-    // normalization is owned later by the optimizer boundary, not by autograd.
-    if (!ctx.payload) {
-        throw std::runtime_error("executeAutogradBackward: ctx.payload is NULL - orchestration MUST pass BatchPayload into autograd context");
-    }
-    if (!ctx.device_bindings) {
-        throw std::runtime_error("executeAutogradBackward: ctx.device_bindings is NULL - orchestration MUST pass BatchDeviceBindings into autograd context");
-    }
+
     AG_INFO("Calling loss_tensor.backward(nullptr, 1.0f, ctx.payload, ctx.device_bindings)...");
     loss_state.loss_tensor.backward(nullptr, 1.0f, ctx.payload, ctx.device_bindings);
     AG_INFO("loss_tensor.backward() returned successfully");
