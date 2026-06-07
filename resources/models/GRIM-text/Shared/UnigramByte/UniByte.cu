@@ -20,26 +20,6 @@
 namespace GRIM {
 namespace Tokenizer {
 
-namespace {
-
-[[noreturn]] void throwUnparseableDetectedAtom(const char* caller,
-                                               const char* detector_name,
-                                               AtomType atom_type,
-                                               size_t start,
-                                               size_t end,
-                                               std::string_view atom_text,
-                                               std::string_view parse_error) {
-    throw std::runtime_error(std::string(caller) +
-                             ": detector-emitted atom span is not parseable; upstream detector/data pipeline bug: detector='" +
-                             (detector_name ? std::string(detector_name) : std::string("<unknown>")) +
-                             "', atom_type=" + atomTypeName(atom_type) +
-                             ", span=[" + std::to_string(start) + ", " + std::to_string(end) +
-                             "), text='" + std::string(atom_text) +
-                             "', parse_error='" + std::string(parse_error) + "'");
-}
-
-} // namespace
-
 //======================================================//
 //  UniByte Implementation
 //======================================================//
@@ -101,57 +81,27 @@ UniByteResult UniByte::tokenizeWithMetadata(const std::string& text) const {
         return result;
     }
 
-    // Initialize atom registry before any unigram segmentation. Detector-emitted
-    // atom spans are finalized into the per-sequence AtomTable first; the later
-    // merge loop only emits placeholders for those pre-registered spans.
-    result.atom_table = std::make_shared<AtomTable>();
-
     // Honor atom reasoning toggle: when disabled, skip atom detection
     // entirely so callers still get plain unigram tokenization while
     // atom side-channels remain zero-filled.
-    std::vector<StructuralSpan> structures;
+    std::vector<Detector::RawTextDetection> detections;
     if (tokenizer_hp_.enable_atom_reasoning) {
         const Detector::RawTextDetectorOptions detector_options(
             tokenizer_hp_.detect_numbers,
             true,
             true);
-        const auto detections = detector_registry_.scan(text, detector_options);
-        structures.reserve(detections.size());
-        for (const auto& detection : detections) {
-            if (!detection.emitsAtom()) {
-                continue;
-            }
-
-            const std::string_view atom_text(text.data() + detection.start,
-                                             detection.end - detection.start);
-            const auto parsed = AtomTable::parseAtom(detection.atom_type, std::string(atom_text));
-            if (!parsed.success) {
-                throwUnparseableDetectedAtom("UniByte::tokenizeWithMetadata",
-                                             detection.detector_name,
-                                             detection.atom_type,
-                                             detection.start,
-                                             detection.end,
-                                             atom_text,
-                                             parsed.error_message);
-            }
-
-            StructuralSpan span;
-            span.start = detection.start;
-            span.end = detection.end;
-            span.atom_type = detection.atom_type;
-            span.buffer_ptr = text.data();
-            span.offset = static_cast<uint32_t>(detection.start);
-            span.length = static_cast<uint32_t>(detection.end - detection.start);
-            span.content_offset = static_cast<uint32_t>(detection.start);
-            span.content_length = static_cast<uint32_t>(detection.end - detection.start);
-            span.placeholder_id = atomTypeToTokenId(detection.atom_type);
-            span.atom_entry_id = result.atom_table->registerSpan(span);
-            if (span.atom_entry_id == kAtomEntryNone) {
-                throw std::runtime_error("UniByte::tokenizeWithMetadata: registerSpan returned kAtomEntryNone for detector-emitted atom span");
-            }
-            structures.push_back(span);
-        }
+        detections = detector_registry_.scan(text, detector_options);
     }
+
+    // Initialize and finalize atom registry before any unigram segmentation.
+    // Detector-emitted atom spans are registered in the per-sequence AtomTable;
+    // the later merge loop only emits placeholders for these finalized spans.
+    AtomTableFromDetectionsResult atom_table_build = createAtomTableFromRawTextDetections(
+        std::string_view(text.data(), text.size()),
+        detections,
+        "UniByte::tokenizeWithMetadata");
+    result.atom_table = std::move(atom_table_build.atom_table);
+    std::vector<StructuralSpan> structures = std::move(atom_table_build.spans);
 
     // Pre-allocate based on heuristic: ~1 token per 3-4 bytes + atoms.
     const size_t estimated_tokens = (text.size() / 3) + structures.size() + 8;

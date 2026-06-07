@@ -174,70 +174,6 @@ void validateDecodeTimeNumPolicyConfig(
 
 void buildDecodeTimeCandidateSet(
     const HyperParameters::DecodeTimeSelectorConstructionHP& hp,
-    const float* d_valid_mask,
-    const float* d_values,
-    const float* d_recent_write,
-    const float* d_usage,
-    Forward::DecodeTimeSelectorRuntime& runtime,
-    int V,
-    int scratch_slots,
-    cudaStream_t stream)
-{
-    validateDecodeTimeNumPolicyConfig(hp);
-    const int max_live_slots = hp.num_slots - hp.scratch_slots;
-    if (!d_valid_mask) throw std::runtime_error("buildDecodeTimeCandidateSet: d_valid_mask is NULL");
-    if (!d_values)     throw std::runtime_error("buildDecodeTimeCandidateSet: d_values is NULL");
-    if (!d_recent_write) throw std::runtime_error("buildDecodeTimeCandidateSet: d_recent_write is NULL");
-    if (!d_usage)      throw std::runtime_error("buildDecodeTimeCandidateSet: d_usage is NULL");
-    if (!stream)       throw std::runtime_error("buildDecodeTimeCandidateSet: stream is NULL");
-    if (V != hp.num_slots) {
-        throw std::runtime_error("buildDecodeTimeCandidateSet: V=" + std::to_string(V) +
-                                 " != hp.num_slots=" + std::to_string(hp.num_slots));
-    }
-    if (scratch_slots != hp.scratch_slots) {
-        throw std::runtime_error("buildDecodeTimeCandidateSet: scratch_slots=" +
-                                 std::to_string(scratch_slots) +
-                                 " != hp.scratch_slots=" + std::to_string(hp.scratch_slots));
-    }
-    if (V - scratch_slots != max_live_slots) {
-        throw std::runtime_error("buildDecodeTimeCandidateSet: value slot capacity=" +
-                                 std::to_string(V - scratch_slots) +
-                                 " != hp value-slot capacity=" + std::to_string(max_live_slots));
-    }
-    runtime.ensureWorkspace(max_live_slots, kSlotFeatureDim, stream);
-    if (!runtime.d_slot_features()) throw std::runtime_error("buildDecodeTimeCandidateSet: runtime d_slot_features is NULL");
-    if (!runtime.d_live_slot_ids()) throw std::runtime_error("buildDecodeTimeCandidateSet: runtime d_live_slot_ids is NULL");
-    if (!runtime.d_num_live_slots()) throw std::runtime_error("buildDecodeTimeCandidateSet: runtime d_num_live_slots is NULL");
-
-    kernelBuildPolicyCandidateSet<<<1, 1, 0, stream>>>(
-        d_valid_mask,
-        d_values,
-        d_recent_write,
-        d_usage,
-        V,
-        scratch_slots,
-        runtime.d_live_slot_ids(),
-        runtime.d_slot_features(),
-        runtime.d_num_live_slots());
-    POLICY_CUDA_CHECK(cudaGetLastError());
-
-    POLICY_CUDA_CHECK(cudaMemcpyAsync(
-        &runtime.num_live_slots,
-        runtime.d_num_live_slots(),
-        sizeof(int),
-        cudaMemcpyDeviceToHost,
-        stream));
-    POLICY_CUDA_CHECK(cudaStreamSynchronize(stream));
-
-    if (runtime.num_live_slots < 0 || runtime.num_live_slots > max_live_slots) {
-        throw std::runtime_error("buildDecodeTimeCandidateSet: GPU candidate count=" +
-                                 std::to_string(runtime.num_live_slots) +
-                                 " out of range [0, " + std::to_string(max_live_slots) + "]");
-    }
-}
-
-void buildDecodeTimeCandidateSet(
-    const HyperParameters::DecodeTimeSelectorConstructionHP& hp,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
     const ExecutionMemory& exec_memory,
@@ -246,6 +182,7 @@ void buildDecodeTimeCandidateSet(
     cudaStream_t stream)
 {
     validateDecodeTimeNumPolicyConfig(hp);
+    const int max_live_slots = hp.num_slots - hp.scratch_slots;
     payload.validate("buildDecodeTimeCandidateSet(payload)");
     if (batch_row < 0 || batch_row >= payload.batch_size) {
         throw std::runtime_error("buildDecodeTimeCandidateSet(payload): batch_row=" +
@@ -265,17 +202,52 @@ void buildDecodeTimeCandidateSet(
     if (!bindings.d_token_to_slot_map) {
         throw std::runtime_error("buildDecodeTimeCandidateSet(payload): bindings.d_token_to_slot_map is NULL");
     }
+    if (!exec_memory.valid_mask.data) {
+        throw std::runtime_error("buildDecodeTimeCandidateSet(payload): exec_memory.valid_mask.data is NULL");
+    }
+    if (!exec_memory.values.data) {
+        throw std::runtime_error("buildDecodeTimeCandidateSet(payload): exec_memory.values.data is NULL");
+    }
+    if (!exec_memory.recent_write_mask.data) {
+        throw std::runtime_error("buildDecodeTimeCandidateSet(payload): exec_memory.recent_write_mask.data is NULL");
+    }
+    if (!exec_memory.usage.data) {
+        throw std::runtime_error("buildDecodeTimeCandidateSet(payload): exec_memory.usage.data is NULL");
+    }
+    if (!stream) {
+        throw std::runtime_error("buildDecodeTimeCandidateSet(payload): stream is NULL");
+    }
 
-    buildDecodeTimeCandidateSet(
-        hp,
+    runtime.ensureWorkspace(max_live_slots, kSlotFeatureDim, stream);
+    if (!runtime.d_slot_features()) throw std::runtime_error("buildDecodeTimeCandidateSet(payload): runtime d_slot_features is NULL");
+    if (!runtime.d_live_slot_ids()) throw std::runtime_error("buildDecodeTimeCandidateSet(payload): runtime d_live_slot_ids is NULL");
+    if (!runtime.d_num_live_slots()) throw std::runtime_error("buildDecodeTimeCandidateSet(payload): runtime d_num_live_slots is NULL");
+
+    kernelBuildPolicyCandidateSet<<<1, 1, 0, stream>>>(
         exec_memory.valid_mask.data,
         exec_memory.values.data,
         exec_memory.recent_write_mask.data,
         exec_memory.usage.data,
-        runtime,
         hp.num_slots,
         hp.scratch_slots,
-        stream);
+        runtime.d_live_slot_ids(),
+        runtime.d_slot_features(),
+        runtime.d_num_live_slots());
+    POLICY_CUDA_CHECK(cudaGetLastError());
+
+    POLICY_CUDA_CHECK(cudaMemcpyAsync(
+        &runtime.num_live_slots,
+        runtime.d_num_live_slots(),
+        sizeof(int),
+        cudaMemcpyDeviceToHost,
+        stream));
+    POLICY_CUDA_CHECK(cudaStreamSynchronize(stream));
+
+    if (runtime.num_live_slots < 0 || runtime.num_live_slots > max_live_slots) {
+        throw std::runtime_error("buildDecodeTimeCandidateSet(payload): GPU candidate count=" +
+                                 std::to_string(runtime.num_live_slots) +
+                                 " out of range [0, " + std::to_string(max_live_slots) + "]");
+    }
 }
 
 GRIM::SlotSelectionResult evaluateDecodeTimeSelectionScores(
@@ -387,7 +359,10 @@ int resolveDecodeTimeTargetIndexForSlot(
 DecodeTimeResolveResult resolveDecodeTimeNumSlotSelectionOrMask(
     const DecodeTimeSlotSelector* selector,
     const HyperParameters::DecodeTimeSelectorConstructionHP& selector_hp,
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
     Forward::DecodeTimeSelectorRuntime& runtime,
+    int batch_row,
     bool selector_enabled,
     bool exec_block_active,
     bool has_exec_memory,
@@ -406,13 +381,11 @@ DecodeTimeResolveResult resolveDecodeTimeNumSlotSelectionOrMask(
 
     buildDecodeTimeCandidateSet(
         selector_hp,
-        exec_memory.valid_mask.data,
-        exec_memory.values.data,
-        exec_memory.recent_write_mask.data,
-        exec_memory.usage.data,
+        payload,
+        bindings,
+        exec_memory,
         runtime,
-        selector_hp.num_slots,
-        selector_hp.scratch_slots,
+        batch_row,
         stream);
 
     if (runtime.num_live_slots > 0) {

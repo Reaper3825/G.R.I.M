@@ -70,34 +70,11 @@ static constexpr int kSlotFeatureDim = 5;
 void validateDecodeTimeNumPolicyConfig(
     const HyperParameters::DecodeTimeSelectorConstructionHP& hp);
 
-// Build live candidate set L from ExecutionMemory fields.
-// All inputs are device pointers to ExecutionMemory tensors.
-//
-//   d_valid_mask:       [V]   float valid bits
-//   d_values:           [V,1] float scalar values
-//   d_recent_write:     [V]   float recent-write one-hot
-//   d_usage:            [V]   float usage scalars
-//   V:                  total slots
-//   scratch_slots:      S — slots [0..S-1] are scratch-only (excluded from L)
-//   stream:             CUDA stream for GPU build + tiny count readback
-//
-// Populates the caller-owned runtime candidate set. Host-side code receives
-// only num_live_slots; compact live slot ids remain device-resident.
-void buildDecodeTimeCandidateSet(
-    const HyperParameters::DecodeTimeSelectorConstructionHP& hp,
-    const float* d_valid_mask,
-    const float* d_values,
-    const float* d_recent_write,
-    const float* d_usage,
-    Forward::DecodeTimeSelectorRuntime& runtime,
-    int V,
-    int scratch_slots,
-    cudaStream_t stream);
-
-// Batch-aware entry point for training/shared-forward consumers.
+// Build the live candidate set L for one active row.
 // BatchPayload owns row runtime semantics, BatchDeviceBindings owns the
-// uploaded GPU addresses for that row, and ExecutionMemory owns final slot
-// state. Candidate feature packing remains GPU-only inside the shared runtime.
+// uploaded GPU addresses for that row, and ExecutionMemory owns the final
+// slot state. Candidate feature packing remains GPU-only inside the caller-
+// owned runtime workspace; host-side code receives only num_live_slots.
 void buildDecodeTimeCandidateSet(
     const HyperParameters::DecodeTimeSelectorConstructionHP& hp,
     const Batching::BatchPayload& payload,
@@ -154,6 +131,9 @@ struct DecodeTimeSlotSelector;
 ///
 /// @param selector       Trainable selector layer (nullable — returns invalid if null)
 /// @param selector_hp    Grouped selector construction/read-view payload
+/// @param payload        Active caller-authored payload for this forward step
+/// @param bindings       Uploaded device bindings for the same payload
+/// @param batch_row      Row whose execution state is being resolved
 /// @param selector_enabled  Config flag controlling selector
 /// @param exec_block_active Whether execution block was active for this sequence
 /// @param has_exec_memory   Whether inference exec memory is populated
@@ -166,7 +146,10 @@ struct DecodeTimeSlotSelector;
 DecodeTimeResolveResult resolveDecodeTimeNumSlotSelectionOrMask(
     const DecodeTimeSlotSelector* selector,
     const HyperParameters::DecodeTimeSelectorConstructionHP& selector_hp,
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
     Forward::DecodeTimeSelectorRuntime& runtime,
+    int batch_row,
     bool selector_enabled,
     bool exec_block_active,
     bool has_exec_memory,

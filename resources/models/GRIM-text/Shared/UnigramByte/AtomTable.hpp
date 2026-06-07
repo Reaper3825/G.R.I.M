@@ -19,6 +19,8 @@
 
 #pragma once
 
+#include "Detectors/StructuralSpan.hpp"
+#include "Detectors/TokenizerDetector.hpp"
 #include "TokenLayout.hpp"  // For AtomType, atomTypeName, isNumericAtom
 
 #include <cuda_runtime.h>
@@ -35,9 +37,6 @@
 
 namespace GRIM {
 namespace Tokenizer {
-
-// Forward declaration (defined in UniByte.hpp)
-struct StructuralSpan;
 
 //======================================================//
 //  Parsed Atom Values
@@ -156,6 +155,18 @@ struct ParseResult {
     AtomValue value;
     std::string error_message;
 };
+
+class AtomTable;
+
+struct AtomTableFromDetectionsResult {
+    std::shared_ptr<AtomTable> atom_table;
+    std::vector<StructuralSpan> spans;
+};
+
+AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
+    std::string_view source_text,
+    const std::vector<Detector::RawTextDetection>& detections,
+    const char* caller);
 
 //======================================================//
 //  Atom Token ID Constants

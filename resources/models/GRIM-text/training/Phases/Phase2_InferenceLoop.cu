@@ -377,7 +377,10 @@ GRIM::GeneratedSequence generateOneSequence(
             generation_state.decode_selector = GRIM::resolveDecodeTimeNumSlotSelectionOrMask(
                 decode_time_slot_selector,
                 selector_hp,
+                active_payload,
+                bindings,
                 generation_state.execution_runtime.decode_time_selector_runtime,
+                0,
                 selector_hp.enabled,
                 execution_hp.enabled,
                 generation_state.has_exec_memory,

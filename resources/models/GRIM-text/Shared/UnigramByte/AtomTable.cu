@@ -4,7 +4,7 @@
 //======================================================//
 
 #include "AtomTable.hpp"
-#include "UniByte.hpp"  // For StructuralSpan
+#include "Detectors/StructuralSpan.hpp"
 
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
@@ -15,11 +15,14 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <iomanip>
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 #include <string_view>
+#include <utility>
 
 // NOTE: NO std::regex - banned for performance reasons
 
@@ -105,6 +108,48 @@ bool atomValuesEquivalent(const AtomValue& a, const AtomValue& b) {
         return av->value == bv.value && av->has_exponent == bv.has_exponent && av->exponent == bv.exponent;
     }
     return false;
+}
+
+void requireAtomTableCreationCaller(const char* caller) {
+    if (caller == nullptr || caller[0] == '\0') {
+        throw std::runtime_error("createAtomTableFromRawTextDetections: caller label is empty at " +
+                                 std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    }
+}
+
+void validateRawTextDetectionForAtomTableCreation(
+    const Detector::RawTextDetection& detection,
+    size_t detection_index,
+    size_t source_size,
+    const char* caller) {
+    if (detection.detector_name == nullptr || detection.detector_name[0] == '\0') {
+        throw std::runtime_error(std::string(caller) +
+                                 ": raw text detection index=" + std::to_string(detection_index) +
+                                 " has empty detector_name");
+    }
+    if (detection.end < detection.start) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": raw text detection index=" + std::to_string(detection_index) +
+                                 " has end < start, start=" + std::to_string(detection.start) +
+                                 ", end=" + std::to_string(detection.end));
+    }
+    if (detection.end > source_size) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": raw text detection index=" + std::to_string(detection_index) +
+                                 " exceeds source text size, end=" + std::to_string(detection.end) +
+                                 ", source_size=" + std::to_string(source_size));
+    }
+    if (detection.emitsAtom() && detection.start == detection.end) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": atom-emitting raw text detection index=" + std::to_string(detection_index) +
+                                 " is empty for detector '" + std::string(detection.detector_name) + "'");
+    }
+    if (detection.start > static_cast<size_t>(std::numeric_limits<uint32_t>::max()) ||
+        detection.length() > static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": raw text detection index=" + std::to_string(detection_index) +
+                                 " exceeds StructuralSpan uint32 offset/length capacity");
+    }
 }
 
 } // namespace
@@ -246,6 +291,65 @@ AtomTable& AtomTable::operator=(AtomTable&& other) noexcept {
         other.gpu_dirty_ = false;
     }
     return *this;
+}
+
+AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
+    std::string_view source_text,
+    const std::vector<Detector::RawTextDetection>& detections,
+    const char* caller) {
+    requireAtomTableCreationCaller(caller);
+
+    AtomTableFromDetectionsResult result;
+    result.atom_table = std::make_shared<AtomTable>();
+    result.spans.reserve(detections.size());
+
+    for (size_t detection_index = 0; detection_index < detections.size(); ++detection_index) {
+        const Detector::RawTextDetection& detection = detections[detection_index];
+        validateRawTextDetectionForAtomTableCreation(
+            detection,
+            detection_index,
+            source_text.size(),
+            caller);
+
+        if (!detection.emitsAtom()) {
+            continue;
+        }
+
+        const size_t detection_length = detection.end - detection.start;
+        StructuralSpan span{};
+        span.start = detection.start;
+        span.end = detection.end;
+        span.atom_type = detection.atom_type;
+        span.buffer_ptr = source_text.data();
+        span.offset = static_cast<uint32_t>(detection.start);
+        span.length = static_cast<uint32_t>(detection_length);
+        span.content_offset = static_cast<uint32_t>(detection.start);
+        span.content_length = static_cast<uint32_t>(detection_length);
+        span.placeholder_id = atomTypeToTokenId(detection.atom_type);
+
+        try {
+            span.atom_entry_id = result.atom_table->registerSpan(span);
+        } catch (const std::exception& e) {
+            const std::string_view atom_text(source_text.data() + detection.start, detection_length);
+            throw std::runtime_error(std::string(caller) +
+                                     ": failed to register detector-emitted atom span; detection_index=" +
+                                     std::to_string(detection_index) +
+                                     ", detector='" + std::string(detection.detector_name) +
+                                     "', atom_type=" + atomTypeName(detection.atom_type) +
+                                     ", span=[" + std::to_string(detection.start) + ", " +
+                                     std::to_string(detection.end) + "), text='" +
+                                     std::string(atom_text) + "', error='" + e.what() + "'");
+        }
+
+        if (span.atom_entry_id == kAtomEntryNone) {
+            throw std::runtime_error(std::string(caller) +
+                                     ": registerSpan returned kAtomEntryNone for detector-emitted atom span at detection_index=" +
+                                     std::to_string(detection_index));
+        }
+        result.spans.push_back(span);
+    }
+
+    return result;
 }
 
 void AtomTable::clear() {
@@ -668,7 +772,7 @@ bool AtomTable::tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id) {
     std::lock_guard<std::mutex> lock(mutex_);
     
     // Use contentView for the atom content text.
-    std::string_view raw_text = span.contentView();
+    std::string_view raw_text(span.buffer_ptr + span.content_offset, span.content_length);
     
     // Compute hash for deduplication
     uint64_t hash = computeHash(span.atom_type, raw_text);

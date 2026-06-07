@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "../TokenLayout.hpp"
+#include "StructuralSpan.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -17,37 +17,6 @@
 
 namespace GRIM {
 namespace Tokenizer {
-
-//======================================================//
-//  Registry-owned structural detection result
-//======================================================//
-struct StructuralSpan {
-    size_t start;           // Start position in text (may include leading whitespace)
-    size_t end;             // End position (exclusive)
-    AtomType atom_type = AtomType::ATOM_INT; // Meaningful only for placeholder-emitting structures
-    uint32_t atom_entry_id = kAtomEntryNone; // Per-sequence AtomTable entry ID once registered
-
-    // Zero-copy buffer reference (NO std::string allocation!)
-    const char* buffer_ptr; // Pointer to original text buffer
-    uint32_t offset;        // Offset in buffer
-    uint32_t length;        // Length of span (end - start)
-
-    // Content bounds (same as offset/length since no widening)
-    uint32_t content_offset; // Offset to content
-    uint32_t content_length; // Length of content
-
-    int placeholder_id = -1; // Token ID of placeholder when this structure emits an atom
-
-    // Helper: get string_view of full span (may include leading whitespace)
-    std::string_view view() const {
-        return std::string_view(buffer_ptr + offset, length);
-    }
-
-    // Helper: get string_view of just the atom content (no whitespace)
-    std::string_view contentView() const {
-        return std::string_view(buffer_ptr + content_offset, content_length);
-    }
-};
 
 namespace Detector {
 

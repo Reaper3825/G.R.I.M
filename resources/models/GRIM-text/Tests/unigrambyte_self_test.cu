@@ -12,6 +12,7 @@
 #include "../Shared/UnigramByte/UnigramViterbi.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"
 #include "../Shared/UnigramByte/AtomTable.hpp"
+#include "../Shared/UnigramByte/Detectors/StructuralSpan.hpp"
 #include "../Shared/UnigramByte/AhoCorasick.hpp"
 #include "../Shared/TokenizerArtifacts/TokenizerArtifactBundle.hpp"
 

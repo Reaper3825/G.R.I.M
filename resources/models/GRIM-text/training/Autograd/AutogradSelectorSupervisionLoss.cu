@@ -21,7 +21,7 @@
 namespace GRIM {
 namespace Autograd {
 
-float addSelectorSupervisionLoss(
+float addSelectorSupervisionLoss( // Selector loss is becoming seperate from ce loss this split is intentional selector loss is going to be loss over atomtable slots of the chosen type
     AutogradContext& ctx,
     const Batching::BatchPayload& payload,
     Forward::ModelForwardOutputs& forward_outputs,

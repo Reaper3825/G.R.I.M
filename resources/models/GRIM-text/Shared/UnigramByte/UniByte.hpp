@@ -22,6 +22,7 @@
 
 #include "AtomTable.hpp"
 #include "Detectors/DetectorRegistry.hpp"
+#include "Detectors/StructuralSpan.hpp"
 #include "TokenLayout.hpp"
 #include "Unigram.hpp"
 #include "../HyperParameters/HyperparameterGroupings.hpp"

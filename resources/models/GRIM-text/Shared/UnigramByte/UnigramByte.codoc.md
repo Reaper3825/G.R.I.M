@@ -305,7 +305,7 @@ Use this table as the “who owns what?” map.
 | `UniByte` | `UniByte.hpp` | top-level tokenizer class |
 | `GRIM::HyperParameters::TokenizerHP` | `HyperparameterGroupings.hpp` | runtime tokenizer HP snapshot stored by `UniByte` |
 | `TokenLayout` | `TokenLayout.hpp` | runtime view of token-region boundaries |
-| `StructuralSpan` | `Detectors/TokenizerDetector.hpp` | registry-owned atom span metadata consumed by tokenization |
+| `StructuralSpan` | `Detectors/StructuralSpan.hpp` | registry-owned atom span metadata consumed by tokenization |
 | `UniByteResult` | `UniByte.hpp` | validated encode result passed downstream |
 | `AtomType` | `TokenLayout.hpp` | shared atom type enum |
 | `AtomSpan` | `Unigram.hpp` | training-only “skip this byte range” marker |

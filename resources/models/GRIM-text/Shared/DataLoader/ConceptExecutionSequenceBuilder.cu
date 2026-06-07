@@ -29,6 +29,7 @@
 #include <unordered_set>
 #include <algorithm>
 
+#include "../UnigramByte/Detectors/StructuralSpan.hpp"
 #include "../UnigramByte/UniByte.hpp"
 
 using json = nlohmann::json;
@@ -141,7 +142,9 @@ compileExecutionPayload(
                 // Verify that the bytes the atom detector found match the bytes
                 // the renderer placed. This proves both coordinate systems refer
                 // to the same string and the offsets are mutually consistent.
-                std::string_view atom_content = span->contentView();
+                std::string_view atom_content(
+                    span->buffer_ptr + span->content_offset,
+                    span->content_length);
                 std::string_view rendered_literal(
                     rendered_text.data() + lit.byte_start,
                     lit.byte_end - lit.byte_start);
