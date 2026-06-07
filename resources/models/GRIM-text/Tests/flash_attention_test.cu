@@ -93,19 +93,21 @@ bool allFinite(const std::vector<float>& v) {
     return true;
 }
 
+float canonicalSoftmaxScale(int head_dim) {
+    if (head_dim <= 0) {
+        throw std::runtime_error("canonicalSoftmaxScale: head_dim must be > 0");
+    }
+    return 1.0f / std::sqrt(static_cast<float>(head_dim));
+}
+
 // Naive attention for comparison (CPU)
 void naiveAttentionForward(
     const float* Q, const float* K, const float* V,
     float* output,
     int batch_size, int num_heads, int seq_len, int head_dim,
     bool causal,
-    float softmax_scale = 0.0f
+    float softmax_scale
 ) {
-    float scale = softmax_scale;
-    if (scale == 0.0f) {
-        scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
-    }
-    
     for (int b = 0; b < batch_size; ++b) {
         for (int h = 0; h < num_heads; ++h) {
             const int head_offset = b * num_heads * seq_len * head_dim + h * seq_len * head_dim;
@@ -127,7 +129,7 @@ void naiveAttentionForward(
                         for (int d = 0; d < head_dim; ++d) {
                             score += Q_head[q * head_dim + d] * K_head[k * head_dim + d];
                         }
-                        scores[k] = score * scale;
+                        scores[k] = score * softmax_scale;
                     }
                     max_score = std::max(max_score, scores[k]);
                 }
@@ -250,7 +252,7 @@ void flashAttnForwardBHSD(const float* q, const float* k, const float* v,
                           int batch, int heads, int kv_heads,
                           int seq, int head_dim,
                           bool causal, cudaStream_t stream,
-                          float softmax_scale = 0.0f) {
+                          float softmax_scale) {
     TensorConversion::convert_BHSD_to_BSHD_bf16(q, scratch.q, batch, heads, seq, head_dim, stream);
     TensorConversion::convert_BHSD_to_BSHD_bf16(k, scratch.k, batch, kv_heads, seq, head_dim, stream);
     TensorConversion::convert_BHSD_to_BSHD_bf16(v, scratch.v, batch, kv_heads, seq, head_dim, stream);
@@ -283,7 +285,8 @@ void flashAttnBackwardBHSD(const float* q, const float* k, const float* v,
                            FlashAttnBackwardScratch& scratch,
                            int batch, int heads, int kv_heads,
                            int seq, int head_dim,
-                           bool causal, cudaStream_t stream) {
+                           bool causal, cudaStream_t stream,
+                           float softmax_scale) {
     TensorConversion::convert_BHSD_to_BSHD_bf16(q, scratch.fwd.q, batch, heads, seq, head_dim, stream);
     TensorConversion::convert_BHSD_to_BSHD_bf16(k, scratch.fwd.k, batch, kv_heads, seq, head_dim, stream);
     TensorConversion::convert_BHSD_to_BSHD_bf16(v, scratch.fwd.v, batch, kv_heads, seq, head_dim, stream);
@@ -307,7 +310,7 @@ void flashAttnBackwardBHSD(const float* q, const float* k, const float* v,
         heads,
         kv_heads,
         head_dim,
-        0.0f,
+        softmax_scale,
         causal,
         true,
         0.0f,
@@ -328,6 +331,7 @@ void flashAttnBackwardBHSD(const float* q, const float* k, const float* v,
 bool GRIM::Test::testFlashForwardBasic(std::string& message) {
     const int batch = 1, heads = 4, seq = 64, dim = 64;
     const size_t total = batch * heads * seq * dim;
+    const float softmax_scale = canonicalSoftmaxScale(dim);
     
     float *d_Q, *d_K, *d_V, *d_out;
     cudaMalloc(&d_Q, total * sizeof(float));
@@ -342,7 +346,7 @@ bool GRIM::Test::testFlashForwardBasic(std::string& message) {
 
     FlashAttnForwardScratch scratch = allocateFlashAttnForwardScratch(batch, heads, heads, seq, dim);
     flashAttnForwardBHSD(d_Q, d_K, d_V, d_out, scratch,
-                         batch, heads, heads, seq, dim, true, nullptr);
+                         batch, heads, heads, seq, dim, true, nullptr, softmax_scale);
     cudaDeviceSynchronize();
     
     auto output = toHost(d_out, total);
@@ -363,6 +367,7 @@ bool GRIM::Test::testFlashForwardBasic(std::string& message) {
 bool GRIM::Test::testFlashForwardCausalMask(std::string& message) {
     const int batch = 1, heads = 1, seq = 32, dim = 64;
     const size_t total = batch * heads * seq * dim;
+    const float softmax_scale = canonicalSoftmaxScale(dim);
     
     float *d_Q, *d_K, *d_V, *d_out;
     cudaMalloc(&d_Q, total * sizeof(float));
@@ -385,7 +390,7 @@ bool GRIM::Test::testFlashForwardCausalMask(std::string& message) {
 
     FlashAttnForwardScratch scratch = allocateFlashAttnForwardScratch(batch, heads, heads, seq, dim);
     flashAttnForwardBHSD(d_Q, d_K, d_V, d_out, scratch,
-                         batch, heads, heads, seq, dim, true, nullptr);
+                         batch, heads, heads, seq, dim, true, nullptr, softmax_scale);
     cudaDeviceSynchronize();
     
     auto output = toHost(d_out, total);
@@ -416,6 +421,7 @@ bool GRIM::Test::testFlashForwardCausalMask(std::string& message) {
 bool GRIM::Test::testFlashForwardVsNaive(std::string& message) {
     const int batch = 1, heads = 2, seq = 32, dim = 64;
     const size_t total = batch * heads * seq * dim;
+    const float softmax_scale = canonicalSoftmaxScale(dim);
     
     float *d_Q, *d_K, *d_V, *d_out;
     cudaMalloc(&d_Q, total * sizeof(float));
@@ -434,7 +440,7 @@ bool GRIM::Test::testFlashForwardVsNaive(std::string& message) {
     // Flash Attention
     FlashAttnForwardScratch scratch = allocateFlashAttnForwardScratch(batch, heads, heads, seq, dim);
     flashAttnForwardBHSD(d_Q, d_K, d_V, d_out, scratch,
-                         batch, heads, heads, seq, dim, true, nullptr);
+                         batch, heads, heads, seq, dim, true, nullptr, softmax_scale);
     cudaDeviceSynchronize();
     
     auto flash_out = toHost(d_out, total);
@@ -442,7 +448,7 @@ bool GRIM::Test::testFlashForwardVsNaive(std::string& message) {
     // Naive attention (CPU)
     std::vector<float> naive_out(total);
     naiveAttentionForward(Q_host.data(), K_host.data(), V_host.data(),
-                          naive_out.data(), batch, heads, seq, dim, true);
+                          naive_out.data(), batch, heads, seq, dim, true, softmax_scale);
     
     freeFlashAttnForwardScratch(scratch);
     cudaFree(d_Q);
@@ -504,6 +510,7 @@ bool GRIM::Test::testFlashForwardCustomScale(std::string& message) {
 bool GRIM::Test::testFlashBackwardGradientFlow(std::string& message) {
     const int batch = 1, heads = 4, seq = 64, dim = 64;
     const size_t total = batch * heads * seq * dim;
+    const float softmax_scale = canonicalSoftmaxScale(dim);
     
     float *d_Q, *d_K, *d_V, *d_out;
     float *d_dO, *d_dQ, *d_dK, *d_dV;
@@ -526,12 +533,12 @@ bool GRIM::Test::testFlashBackwardGradientFlow(std::string& message) {
 
     // Forward
     flashAttnForwardBHSD(d_Q, d_K, d_V, d_out, scratch.fwd,
-                         batch, heads, heads, seq, dim, true, nullptr);
+                         batch, heads, heads, seq, dim, true, nullptr, softmax_scale);
     cudaDeviceSynchronize();
     
     // Backward
     flashAttnBackwardBHSD(d_Q, d_K, d_V, d_dO, d_dQ, d_dK, d_dV, scratch,
-                          batch, heads, heads, seq, dim, true, nullptr);
+                          batch, heads, heads, seq, dim, true, nullptr, softmax_scale);
     cudaDeviceSynchronize();
     
     auto dQ = toHost(d_dQ, total);
@@ -569,6 +576,7 @@ bool GRIM::Test::testFlashBackwardNumericalGradient(std::string& message) {
     const int batch = 1, heads = 1, seq = 16, dim = 64;
     const size_t total = batch * heads * seq * dim;
     const float eps = 1e-3f;
+    const float softmax_scale = canonicalSoftmaxScale(dim);
     
     float *d_Q, *d_K, *d_V, *d_out;
     float *d_dO, *d_dQ, *d_dK, *d_dV;
@@ -595,11 +603,11 @@ bool GRIM::Test::testFlashBackwardNumericalGradient(std::string& message) {
 
     // Analytical backward
     flashAttnForwardBHSD(d_Q, d_K, d_V, d_out, scratch.fwd,
-                         batch, heads, heads, seq, dim, true, nullptr);
+                         batch, heads, heads, seq, dim, true, nullptr, softmax_scale);
     cudaDeviceSynchronize();
     
     flashAttnBackwardBHSD(d_Q, d_K, d_V, d_dO, d_dQ, d_dK, d_dV, scratch,
-                          batch, heads, heads, seq, dim, true, nullptr);
+                          batch, heads, heads, seq, dim, true, nullptr, softmax_scale);
     cudaDeviceSynchronize();
     
     auto analytical_dV = toHost(d_dV, total);
@@ -614,7 +622,7 @@ bool GRIM::Test::testFlashBackwardNumericalGradient(std::string& message) {
         V_plus[idx] += eps;
         cudaMemcpy(d_V, V_plus.data(), total * sizeof(float), cudaMemcpyHostToDevice);
         flashAttnForwardBHSD(d_Q, d_K, d_V, d_out, scratch.fwd,
-                             batch, heads, heads, seq, dim, true, nullptr);
+                             batch, heads, heads, seq, dim, true, nullptr, softmax_scale);
         cudaDeviceSynchronize();
         auto out_plus = toHost(d_out, total);
         float loss_plus = std::accumulate(out_plus.begin(), out_plus.end(), 0.0f);
@@ -624,7 +632,7 @@ bool GRIM::Test::testFlashBackwardNumericalGradient(std::string& message) {
         V_minus[idx] -= eps;
         cudaMemcpy(d_V, V_minus.data(), total * sizeof(float), cudaMemcpyHostToDevice);
         flashAttnForwardBHSD(d_Q, d_K, d_V, d_out, scratch.fwd,
-                             batch, heads, heads, seq, dim, true, nullptr);
+                             batch, heads, heads, seq, dim, true, nullptr, softmax_scale);
         cudaDeviceSynchronize();
         auto out_minus = toHost(d_out, total);
         float loss_minus = std::accumulate(out_minus.begin(), out_minus.end(), 0.0f);
@@ -664,6 +672,7 @@ bool GRIM::Test::testFlashBackwardVsNaive(std::string& message) {
 bool GRIM::Test::testFlashLargeSequence(std::string& message) {
     const int batch = 1, heads = 8, seq = 512, dim = 64;
     const size_t total = batch * heads * seq * dim;
+    const float softmax_scale = canonicalSoftmaxScale(dim);
     
     float *d_Q, *d_K, *d_V, *d_out;
     cudaMalloc(&d_Q, total * sizeof(float));
@@ -682,14 +691,14 @@ bool GRIM::Test::testFlashLargeSequence(std::string& message) {
 
     // Warmup
     flash_attn_fwd_ex(scratch.q, scratch.k, scratch.v, scratch.out, scratch.softmax_lse,
-                      nullptr, batch, seq, heads, heads, dim, 0.0f, true, true, 0.0f, 0, nullptr);
+                      nullptr, batch, seq, heads, heads, dim, softmax_scale, true, true, 0.0f, 0, nullptr);
     cudaDeviceSynchronize();
     
     // Timed run
     auto start = std::chrono::high_resolution_clock::now();
     for (int i = 0; i < 10; ++i) {
         flash_attn_fwd_ex(scratch.q, scratch.k, scratch.v, scratch.out, scratch.softmax_lse,
-                          nullptr, batch, seq, heads, heads, dim, 0.0f, true, true, 0.0f, 0, nullptr);
+                          nullptr, batch, seq, heads, heads, dim, softmax_scale, true, true, 0.0f, 0, nullptr);
     }
     cudaDeviceSynchronize();
     auto end = std::chrono::high_resolution_clock::now();
@@ -714,6 +723,7 @@ bool GRIM::Test::testFlashLargeSequence(std::string& message) {
 bool GRIM::Test::testFlashMultiBatch(std::string& message) {
     const int batch = 4, heads = 8, seq = 128, dim = 64;
     const size_t total = batch * heads * seq * dim;
+    const float softmax_scale = canonicalSoftmaxScale(dim);
     
     float *d_Q, *d_K, *d_V, *d_out;
     cudaMalloc(&d_Q, total * sizeof(float));
@@ -727,7 +737,7 @@ bool GRIM::Test::testFlashMultiBatch(std::string& message) {
 
     FlashAttnForwardScratch scratch = allocateFlashAttnForwardScratch(batch, heads, heads, seq, dim);
     flashAttnForwardBHSD(d_Q, d_K, d_V, d_out, scratch,
-                         batch, heads, heads, seq, dim, true, nullptr);
+                         batch, heads, heads, seq, dim, true, nullptr, softmax_scale);
     cudaDeviceSynchronize();
     
     auto output = toHost(d_out, total);
@@ -756,6 +766,7 @@ bool GRIM::Test::testFlashMultiBatch(std::string& message) {
 bool GRIM::Test::testFlashMultiHead(std::string& message) {
     const int batch = 1, heads = 12, seq = 64, dim = 64;
     const size_t total = batch * heads * seq * dim;
+    const float softmax_scale = canonicalSoftmaxScale(dim);
     
     float *d_Q, *d_K, *d_V, *d_out;
     cudaMalloc(&d_Q, total * sizeof(float));
@@ -769,7 +780,7 @@ bool GRIM::Test::testFlashMultiHead(std::string& message) {
 
     FlashAttnForwardScratch scratch = allocateFlashAttnForwardScratch(batch, heads, heads, seq, dim);
     flashAttnForwardBHSD(d_Q, d_K, d_V, d_out, scratch,
-                         batch, heads, heads, seq, dim, true, nullptr);
+                         batch, heads, heads, seq, dim, true, nullptr, softmax_scale);
     cudaDeviceSynchronize();
     
     auto output = toHost(d_out, total);
@@ -788,6 +799,7 @@ bool GRIM::Test::testFlashMultiHead(std::string& message) {
 bool GRIM::Test::testFlashGradientMagnitude(std::string& message) {
     const int batch = 1, heads = 4, seq = 128, dim = 64;
     const size_t total = batch * heads * seq * dim;
+    const float softmax_scale = canonicalSoftmaxScale(dim);
     
     float *d_Q, *d_K, *d_V, *d_out;
     float *d_dO, *d_dQ, *d_dK, *d_dV;
@@ -809,11 +821,11 @@ bool GRIM::Test::testFlashGradientMagnitude(std::string& message) {
     FlashAttnBackwardScratch scratch = allocateFlashAttnBackwardScratch(batch, heads, heads, seq, dim);
 
     flashAttnForwardBHSD(d_Q, d_K, d_V, d_out, scratch.fwd,
-                         batch, heads, heads, seq, dim, true, nullptr);
+                         batch, heads, heads, seq, dim, true, nullptr, softmax_scale);
     cudaDeviceSynchronize();
     
     flashAttnBackwardBHSD(d_Q, d_K, d_V, d_dO, d_dQ, d_dK, d_dV, scratch,
-                          batch, heads, heads, seq, dim, true, nullptr);
+                          batch, heads, heads, seq, dim, true, nullptr, softmax_scale);
     cudaDeviceSynchronize();
     
     auto dO = toHost(d_dO, total);

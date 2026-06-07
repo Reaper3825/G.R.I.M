@@ -118,7 +118,7 @@ void populateAdamCausationStreams(float* obs, const TelemetryBatchInput& input,
     obs[11] = adam_cumulative_disp;
     obs[12] = disruption_emb;
     obs[13] = inv_bc2;
-    obs[static_cast<int>(MetricStream::OPTIMIZER_ITERATION)] = static_cast<float>(iteration);
+    obs[60] = iteration;
 }
 
 //------------------------------------------------------

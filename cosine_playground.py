@@ -37,7 +37,7 @@ def print_case(name, a, b):
 # =========================
 
 # 1. Same direction
-a = [1, 2, 1]
+a = [1, 2, 3]
 b = [1, 2, 3]
 print_case("Same vector", a, b)
 

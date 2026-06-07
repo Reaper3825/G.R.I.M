@@ -31,7 +31,7 @@ std::size_t flash_attn_dsoftmax_sum_bytes(int batch,
 // K,V:[batch, seqlen, n_kv_heads, head_dim] (FP16 or BF16)
 // O:  [batch, seqlen, n_heads, head_dim]    (FP16 or BF16)
 // LSE:[batch, n_heads, seqlen]              (FP32, dense, no padding)
-// softmax_scale: 0.0f means canonical 1/sqrt(head_dim); otherwise must be finite and > 0.
+// softmax_scale must be finite and > 0 and must match the caller's attention equation.
 void flash_attn_fwd_ex(const void* q,
                        const void* k,
                        const void* v,
@@ -75,13 +75,14 @@ void flash_attn_fwd_kvcache(const void* q,
                             int n_heads,
                             int n_kv_heads,
                             int head_dim,
+                            float softmax_scale,
                             bool causal,
                             bool is_bf16,
                             cudaStream_t stream);
 
 // FlashAttention v2 backward.
 // Requires softmax_lse from the matching forward pass.
-// softmax_scale must match the forward pass. 0.0f means canonical 1/sqrt(head_dim).
+// softmax_scale must match the forward pass and must be finite and > 0.
 void flash_attn_bwd_ex(const void* q,
                        const void* k,
                        const void* v,

@@ -61,7 +61,7 @@ void runTargetDistributionLog(
 
     std::ostringstream target_info;
     target_info << "BATCH_TARGET_DIST batch=" << (batch_idx + 1)
-                << " total_tokens=" << total_tokens_td
+                << " total_target_tokens=" << total_tokens_td
                 << " valid=" << total_valid
                 << " unique=" << target_counts.size()
                 << " top10=[";

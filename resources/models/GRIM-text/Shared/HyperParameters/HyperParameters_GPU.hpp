@@ -85,7 +85,7 @@ constexpr float NEG_INF_ATTENTION = -1e9f;        // Attention masking value
 constexpr float NEG_INF_THRESHOLD = -1e30f;       // Invalid/uninitialized threshold
 constexpr float PROBABILITY_FLOOR = 1e-12f;       // Minimum probability (prevents log(0))
 constexpr float SOFTMAX_CLIP_THRESHOLD = -20.0f;  // exp(x) ≈ 0 for x < this
-constexpr float NORMALIZED_CLAMP = 4.0f;          // Clamp for normalized values
+constexpr float NORMALIZED_CLAMP = 1.0f;          // Clamp for normalized values
 
 //======================================================//
 // Tensor/Matrix Operation Constants
@@ -215,6 +215,20 @@ inline bool isValidFlashAttentionHeadDim(int head_dim) {
     return head_dim == FLASH_ATTN_HEAD_DIM_32 || head_dim == FLASH_ATTN_HEAD_DIM_64;
 }
 
+inline float computeAttentionSoftmaxScale(int head_dim, const char* caller) {
+    if (head_dim <= 0) {
+        throw std::runtime_error(std::string(caller) + ": head_dim must be > 0, got " +
+                                 std::to_string(head_dim));
+    }
+    const float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
+    if (!std::isfinite(scale) || scale <= 0.0f) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": computed attention_softmax_scale must be finite and > 0, got " +
+                                 std::to_string(scale));
+    }
+    return scale;
+}
+
 struct DerivationContext {
     int train_sequence_count = 0;
     int validation_interval = 0;
@@ -259,6 +273,7 @@ struct LanguageModelConfig {
     float dropout_rate = 0.0f;
     float embedding_scale = 1.0f;
     float attention_dropout = 0.0f;
+    float attention_softmax_scale = 0.0f;
     bool tie_embeddings = true;
     PositionalEncodingType positional_encoding = PositionalEncodingType::UNSPECIFIED;
 
@@ -311,6 +326,8 @@ struct LanguageModelConfig {
         kv_dim = computeKVProjectionSize(d_model, num_heads, num_kv_heads);
         qkv_dim = computeQKVProjectionSize(d_model, num_heads, num_kv_heads);
         rotary_dim = head_dim;
+        attention_softmax_scale = computeAttentionSoftmaxScale(
+            head_dim, "LanguageModelConfig::computeDerivedValues");
         is_gqa = num_kv_heads < num_heads;
         populateDerivedPBMTables(*this, "LanguageModelConfig::computeDerivedValues");
         if (d_ff <= 0) {
@@ -1201,6 +1218,8 @@ inline void deriveComputedLanguageModelConfig(LanguageModelConfig& params) {
     params.kv_dim = computeKVProjectionSize(params.d_model, params.num_heads, params.num_kv_heads);
     params.qkv_dim = computeQKVProjectionSize(params.d_model, params.num_heads, params.num_kv_heads);
     params.rotary_dim = head_dim;
+    params.attention_softmax_scale = computeAttentionSoftmaxScale(
+        head_dim, "deriveComputedLanguageModelConfig");
     params.is_gqa = params.num_kv_heads < params.num_heads;
     populateDerivedPBMTables(params, "deriveComputedLanguageModelConfig");
     if (params.num_layers <= 0) {
@@ -1309,6 +1328,14 @@ inline void validateRootConfigDocument(
                                  " does not match d_model+2*kv_dim=" +
                                  std::to_string(expected_qkv_dim));
     }
+    const float expected_attention_softmax_scale =
+        computeAttentionSoftmaxScale(params.head_dim, caller);
+    if (std::abs(params.attention_softmax_scale - expected_attention_softmax_scale) > 1e-8f) {
+        throw std::runtime_error(std::string(caller) + ": attention_softmax_scale=" +
+                                 std::to_string(params.attention_softmax_scale) +
+                                 " does not match 1/sqrt(head_dim)=" +
+                                 std::to_string(expected_attention_softmax_scale));
+    }
     const bool expected_is_gqa = params.num_kv_heads < params.num_heads;
     if (params.is_gqa != expected_is_gqa) {
         throw std::runtime_error(std::string(caller) + ": is_gqa=" +
@@ -1319,6 +1346,7 @@ inline void validateRootConfigDocument(
     validatePositiveFiniteFields(params, {
         validationField("residual_projection_init_gain", &LanguageModelConfig::residual_projection_init_gain),
         validationField("rms_epsilon", &LanguageModelConfig::rms_epsilon),
+        validationField("attention_softmax_scale", &LanguageModelConfig::attention_softmax_scale),
         validationField("rope_theta", &LanguageModelConfig::rope_theta),
         validationField("rope_scaling", &LanguageModelConfig::rope_scaling)
     }, caller);

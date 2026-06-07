@@ -863,6 +863,14 @@ BatchResult processBatch(
             emit_mtp_logits);
 
     auto forward_outputs = GRIM::Forward::executeModelForward(forward_request, runtime_payload);
+    {
+        std::ostringstream oss;
+        oss << "EXPLICIT_TRAINING_FORWARD_COMPLETE batch=" << (batch_idx + 1)
+            << " total_tokens=" << payload.total_tokens
+            << " max_seq_len=" << payload.max_seq_len
+            << " accumulate=" << (plan.should_accumulate ? "true" : "false");
+        EmitModuleInfo(ModuleId::ForwardPass, oss.str(), ctx.global_step);
+    }
     // Rule 20 ownership taxonomy: processBatch owns the single batch-boundary
     // clear path for the active forward/loss step-state. Do NOT add a second
     // explicit clear() site inside this function.
@@ -925,6 +933,14 @@ BatchResult processBatch(
         throw std::runtime_error(
             "[executeAutogradBackward] FAILED batch=" + std::to_string(batch_idx + 1) +
             ": " + backward_result.error_message);
+    }
+    {
+        std::ostringstream oss;
+        oss << "EXPLICIT_TRAINING_BACKWARD_COMPLETE batch=" << (batch_idx + 1)
+            << " total_tokens=" << payload.total_tokens
+            << " max_seq_len=" << payload.max_seq_len
+            << " accumulate=" << (plan.should_accumulate ? "true" : "false");
+        EmitModuleInfo(ModuleId::BackwardPass, oss.str(), ctx.global_step);
     }
 
     result.loss = loss_result.loss_value;

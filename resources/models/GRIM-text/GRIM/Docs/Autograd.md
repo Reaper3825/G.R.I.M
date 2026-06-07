@@ -85,7 +85,7 @@ Execution loss assembly indexes execution diagnostics by payload row. When execu
 ## QKV attention boundary
 Autograd attention owns the QKV tape boundary. `autograd::split_and_reshape_qkv()` creates the `SplitAndReshapeQKVGradFn` and delegates only raw layout movement to `TensorConversion::split_qkv_gqa()` / `merge_qkv_grads_gqa()`. Encoder code must not call TensorConversion QKV split/merge directly.
 
-QKV projection is `autograd::matmul(ln1_out, W_qkv, transpose_b=true)` and must remain a normal TensorContract tape operation. Do not recreate `Layers/Attention/QKV_Projector.{hpp,cu}`; that stale wrapper no longer projected QKV and its remaining BHSD→BSM reshape was folded into `autograd::reshape_bhsd_to_flat()`.
+QKV projection is `autograd::matmul(ln1_out, W_qkv, transpose_b=true)` and must remain a normal TensorContract tape operation. Do not recreate `Layers/Attention/QKV_Projector.{hpp,cu}`; that stale wrapper no longer projected QKV and its remaining BHSD→BSM step was folded into the autograd wrapper `autograd::reshape_bhsd_to_flat()`, which calls `TensorConversion::convert_BHSD_to_BSM()` for the raw geometry and owns only the backward/tape bridge.
 
 QKV-specific diagnostics live in `Shared/TensorContract/AutogradQKVDiagnostics.hpp/.cu`, next to `AutogradAttention.cu`. Keep `[QKV_EQUATION]`, `QKV_PROJECTION_EQUATION`, and `GRIM_DEBUG_QKV` NaN/Inf scans there so diagnostics observe the autograd path instead of creating an encoder-local parallel path.
 

@@ -89,6 +89,321 @@ LEGACY_STREAM_NAME_COMPATIBILITY = {
     26: {"sb_atom_embed_rms", "mtp_loss_frac"},
 }
 
+TELEMETRY_IDENTIFIER_COLUMNS = {"stream_idx", "stream_name", "level", "stride"}
+TELEMETRY_ZERO_REFERENCE_FIELDS = {
+    "p",
+    "delta_mu",
+    "delta_sigma",
+    "delta_bar",
+    "delta_raw",
+    "delta_bar_raw",
+    "outlier_raw",
+    "hw_cos_signed_mean",
+    "hw_hbar_wbar_cos",
+    "hw_h_dc_mean",
+    "unigram_dir_cos_signed_mean",
+    "rho_raw_avg_signed_dot",
+}
+TELEMETRY_UNIT_INTERVAL_FIELDS = {
+    "r_out",
+    "ell_out",
+    "exec_active_ratio",
+    "eb_inject_gate",
+    "eb_read_gate_mean",
+    "eb_loss_frac",
+    "mtp_loss_frac",
+    "init_tie_cfg",
+    "init_tie_ptrs_same",
+    "init_tie_grads_same",
+    "init_lm_owns_weights",
+}
+TELEMETRY_FIELD_LABELS = {
+    "raw_observation": "raw_observation",
+    "mu": "mu (running mean)",
+    "m2": "m2",
+    "sigma": "sigma",
+    "sigma_tilde": "sigma_tilde (normalized volatility)",
+    "mu_a": "mu_a (anchor mean)",
+    "sigma_a": "sigma_a (anchor std)",
+    "delta_mu": "delta_mu (mean drift vs anchor)",
+    "delta_sigma": "delta_sigma (volatility drift vs anchor)",
+    "v_sigma": "v_sigma (meta-volatility)",
+    "sigma_prev": "sigma_prev",
+    "sigma_jump": "sigma_jump",
+    "delta_bar": "delta_bar (directional trend)",
+    "p": "p (directional bias)",
+    "mu_prev": "mu_prev",
+    "delta_raw": "delta_raw",
+    "delta_bar_raw": "delta_bar_raw",
+    "r_out": "r_out (outlier frequency)",
+    "ell_out": "ell_out (outlier persistence)",
+    "mu_ex": "mu_ex (excess severity)",
+    "outlier_raw": "outlier_raw (raw cutoff gap)",
+    "k_out": "k_out (adaptive threshold multiplier)",
+    "c_out": "c_out (adaptive cutoff)",
+    "step_count": "step_count",
+}
+
+
+def output_root(path):
+    return os.path.splitext(path)[0]
+
+
+def atlas_output_dir(path):
+    return output_root(path) + "_atlas"
+
+
+def ensure_output_dir(path):
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def save_figure(fig, path, *, close=False):
+    fig.savefig(path, dpi=150)
+    print(f"Saved: {path}")
+    if close:
+        plt.close(fig)
+
+
+def sanitize_filename_component(value):
+    cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in str(value))
+    while "__" in cleaned:
+        cleaned = cleaned.replace("__", "_")
+    cleaned = cleaned.strip("_")
+    return cleaned or "stream"
+
+
+def chunked(items, size):
+    for start in range(0, len(items), size):
+        yield items[start:start + size]
+
+
+def pretty_field_name(field):
+    return TELEMETRY_FIELD_LABELS.get(field, field)
+
+
+def ordered_fields(columns):
+    prioritized = [field for field in TELEMETRY_FIELD_LABELS if field in columns]
+    remainder = sorted(field for field in columns if field not in TELEMETRY_FIELD_LABELS)
+    return [*prioritized, *remainder]
+
+
+def numeric_series(series):
+    values = pd.to_numeric(series, errors="coerce")
+    return values.replace([np.inf, -np.inf], np.nan)
+
+
+def looks_booleanish(series):
+    values = numeric_series(series).dropna()
+    if values.empty:
+        return False
+    rounded = np.round(values)
+    return np.all(np.abs(values - rounded) < 1e-6) and set(rounded.astype(int).tolist()).issubset({0, 1})
+
+
+def should_use_log_scale(series):
+    values = numeric_series(series).dropna()
+    if values.empty or (values <= 0).any():
+        return False
+    minimum = float(values.min())
+    maximum = float(values.max())
+    if minimum <= 0 or maximum <= 0:
+        return False
+    return (maximum / minimum) >= 1000.0
+
+
+def plottable_numeric_columns(df):
+    return [
+        column for column in df.columns
+        if column not in TELEMETRY_IDENTIFIER_COLUMNS and pd.api.types.is_numeric_dtype(df[column])
+    ]
+
+
+def stream_sort_key(item):
+    name, stream_df = item
+    if "stream_idx" in stream_df.columns:
+        indices = numeric_series(stream_df["stream_idx"]).dropna()
+        if not indices.empty:
+            return (0, int(indices.iloc[0]), name)
+    return (1, name, name)
+
+
+def sorted_stream_items(streams):
+    return sorted(streams.items(), key=stream_sort_key)
+
+
+def stream_display_name(name, stream_df):
+    if "stream_idx" in stream_df.columns:
+        indices = numeric_series(stream_df["stream_idx"]).dropna()
+        if not indices.empty:
+            return f"#{int(indices.iloc[0]):02d} {name}"
+    return name
+
+
+def stream_output_name(name, stream_df, fallback_index):
+    if "stream_idx" in stream_df.columns:
+        indices = numeric_series(stream_df["stream_idx"]).dropna()
+        if not indices.empty:
+            return f"{int(indices.iloc[0]):02d}_{sanitize_filename_component(name)}"
+    return f"{fallback_index:02d}_{sanitize_filename_component(name)}"
+
+
+def stream_color(stream_df, fallback_index):
+    cmap = plt.get_cmap("tab20")
+    if "stream_idx" in stream_df.columns:
+        indices = numeric_series(stream_df["stream_idx"]).dropna()
+        if not indices.empty:
+            return cmap(int(indices.iloc[0]) % 20)
+    return cmap(fallback_index % 20)
+
+
+def plot_field_panel(ax, stream_df, field, *, color):
+    x = stream_df.index
+    series = numeric_series(stream_df[field])
+    finite_values = series.dropna()
+
+    if finite_values.empty:
+        ax.text(0.5, 0.5, "no finite data", transform=ax.transAxes,
+                ha="center", va="center", fontsize=9)
+        ax.set_title(pretty_field_name(field), fontsize=9)
+        ax.grid(True, alpha=0.2)
+        return
+
+    if field == "raw_observation":
+        plot_raw_and_smooth(ax, x, series,
+                            color=color,
+                            raw_label="raw_observation",
+                            smooth_label="raw_observation sm20",
+                            raw_alpha=0.22,
+                            smooth_linewidth=1.5)
+        if "mu" in stream_df.columns:
+            ax.plot(x, numeric_series(stream_df["mu"]), linewidth=1.0,
+                    linestyle="--", color="tab:orange", label="mu")
+        if "mu_a" in stream_df.columns:
+            ax.plot(x, numeric_series(stream_df["mu_a"]), linewidth=1.0,
+                    linestyle=":", color="tab:green", label="mu_a")
+        if "c_out" in stream_df.columns:
+            ax.plot(x, numeric_series(stream_df["c_out"]), linewidth=0.9,
+                    linestyle="-.", color="tab:red", label="c_out")
+        if "mu" in stream_df.columns and "sigma" in stream_df.columns:
+            mu = numeric_series(stream_df["mu"])
+            sigma = numeric_series(stream_df["sigma"])
+            ax.fill_between(x, (mu - sigma).to_numpy(), (mu + sigma).to_numpy(),
+                            alpha=0.10, color=color)
+        ax.legend(fontsize=6, ncol=2)
+    elif looks_booleanish(series):
+        ax.step(x, series, where="post", linewidth=1.4, color=color)
+        ax.set_ylim(-0.05, 1.05)
+    else:
+        ax.plot(x, series, alpha=0.22, linewidth=0.55, color=color)
+        if finite_values.nunique() > 1:
+            ax.plot(x, smooth(series), linewidth=1.35, color=color)
+        else:
+            ax.plot(x, series, linewidth=1.35, color=color)
+
+    if field in TELEMETRY_ZERO_REFERENCE_FIELDS:
+        ax.axhline(0, color="gray", linewidth=0.6, linestyle="--", alpha=0.7)
+    if field in TELEMETRY_UNIT_INTERVAL_FIELDS and not looks_booleanish(series):
+        ax.set_ylim(-0.05, 1.05)
+    if should_use_log_scale(series):
+        ax.set_yscale("log")
+
+    ax.set_title(pretty_field_name(field), fontsize=9)
+    ax.grid(True, alpha=0.3)
+
+
+def plot_raw_stream_panel(ax, name, stream_df, *, color):
+    x = stream_df.index
+    raw = numeric_series(stream_df["raw_observation"])
+    plot_raw_and_smooth(ax, x, raw,
+                        color=color,
+                        raw_label="raw_observation",
+                        smooth_label="raw_observation sm20",
+                        raw_alpha=0.22,
+                        smooth_linewidth=1.5)
+
+    if "mu" in stream_df.columns:
+        ax.plot(x, numeric_series(stream_df["mu"]), linewidth=1.0,
+                linestyle="--", color="tab:orange", label="mu")
+    if "mu_a" in stream_df.columns:
+        ax.plot(x, numeric_series(stream_df["mu_a"]), linewidth=1.0,
+                linestyle=":", color="tab:green", label="mu_a")
+    if "c_out" in stream_df.columns:
+        ax.plot(x, numeric_series(stream_df["c_out"]), linewidth=0.9,
+                linestyle="-.", color="tab:red", label="c_out")
+    if "mu" in stream_df.columns and "sigma" in stream_df.columns:
+        mu = numeric_series(stream_df["mu"])
+        sigma = numeric_series(stream_df["sigma"])
+        ax.fill_between(x, (mu - sigma).to_numpy(), (mu + sigma).to_numpy(),
+                        alpha=0.10, color=color)
+    if should_use_log_scale(raw):
+        ax.set_yscale("log")
+
+    ax.set_title(stream_display_name(name, stream_df), fontsize=10)
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=6, ncol=2)
+
+
+def generate_raw_stream_atlas(path, streams):
+    output_dir = ensure_output_dir(atlas_output_dir(path))
+    stream_items = sorted_stream_items(streams)
+    per_page = 12
+    cols = 3
+    rows = 4
+
+    for page_index, stream_chunk in enumerate(chunked(stream_items, per_page), start=1):
+        fig, axes = plt.subplots(rows, cols, figsize=(18, 16), constrained_layout=True)
+        fig.suptitle("Telemetry raw_observation atlas", fontsize=14, fontweight="bold")
+        axes = np.atleast_1d(axes).ravel()
+
+        for local_index, ((name, stream_df), ax) in enumerate(zip(stream_chunk, axes)):
+            color = stream_color(stream_df, local_index)
+            plot_raw_stream_panel(ax, name, stream_df, color=color)
+            if ax.get_subplotspec().is_last_row():
+                ax.set_xlabel("global_step")
+
+        for ax in axes[len(stream_chunk):]:
+            ax.axis("off")
+
+        save_figure(fig, os.path.join(output_dir, f"raw_streams_page_{page_index:02d}.png"), close=True)
+
+    return output_dir
+
+
+def generate_stream_detail_pages(path, streams):
+    output_dir = ensure_output_dir(atlas_output_dir(path))
+
+    for stream_number, (name, stream_df) in enumerate(sorted_stream_items(streams), start=1):
+        fields = ordered_fields(plottable_numeric_columns(stream_df))
+        if not fields:
+            continue
+
+        cols = 4
+        rows = math.ceil(len(fields) / cols)
+        fig, axes = plt.subplots(rows, cols,
+                                 figsize=(18, max(8, rows * 3.0)),
+                                 constrained_layout=True)
+        axes = np.atleast_1d(axes).ravel()
+        color = stream_color(stream_df, stream_number - 1)
+        fig.suptitle(
+            f"{stream_display_name(name, stream_df)} — all numeric telemetry fields",
+            fontsize=14,
+            fontweight="bold",
+        )
+
+        for ax, field in zip(axes, fields):
+            plot_field_panel(ax, stream_df, field, color=color)
+            if ax.get_subplotspec().is_last_row():
+                ax.set_xlabel("global_step")
+
+        for ax in axes[len(fields):]:
+            ax.axis("off")
+
+        file_name = f"stream_detail_{stream_output_name(name, stream_df, stream_number)}.png"
+        save_figure(fig, os.path.join(output_dir, file_name), close=True)
+
+    return output_dir
+
 
 def d_model_for_baseline():
     raw_value = os.environ.get("GRIM_TEXT_D_MODEL", "768")
@@ -127,11 +442,10 @@ def find_default_telemetry_csv():
         return None
 
     unique_csvs = list({os.path.realpath(path): path for path in csvs}.values())
-    for path in sorted(unique_csvs, key=os.path.getmtime, reverse=True):
-        if telemetry_csv_looks_valid(path):
-            return path
-
-    return None
+    return next(
+        (path for path in sorted(unique_csvs, key=os.path.getmtime, reverse=True) if telemetry_csv_looks_valid(path)),
+        None,
+    )
 
 
 def telemetry_csv_looks_valid(path):
@@ -162,8 +476,7 @@ def canonicalize_telemetry_columns(df):
     if rename_map:
         df = df.rename(columns=rename_map)
 
-    missing = sorted(REQUIRED_TELEMETRY_COLUMNS.difference(df.columns))
-    if missing:
+    if missing := sorted(REQUIRED_TELEMETRY_COLUMNS.difference(df.columns)):
         raise KeyError(
             "Telemetry CSV is missing required columns: "
             + ", ".join(missing)
@@ -243,7 +556,7 @@ def pivot_streams(df):
     """Pivot so each stream becomes a column keyed by global_step."""
     streams = {}
     for name in df["stream_name"].unique():
-        sub = df[df["stream_name"] == name].sort_values("global_step")
+        sub = df[df["stream_name"] == name].sort_values(by="global_step")
         streams[name] = sub.set_index("global_step")
     return streams
 
@@ -304,7 +617,7 @@ def main():
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
 
-    # 1b) Loss rate-of-change (delta_mu from lattice)
+    # 1b) Loss delta from consecutive raw observations
     ax = fig.add_subplot(gs[0, 1])
     if loss is not None:
         delta = loss["raw_observation"].diff()
@@ -315,7 +628,7 @@ def main():
                             smooth_linewidth=1)
         ax.axhline(0, color="gray", linewidth=0.5, linestyle="--")
     ax.set_ylabel("Δ Loss")
-    ax.set_title("Loss change rate")
+    ax.set_title("Raw loss delta (x_t - x_{t-1})")
     ax.grid(True, alpha=0.3)
 
     # 2a) Gradient norms
@@ -360,25 +673,25 @@ def main():
     ax.set_xscale("log")
     ax.grid(True, alpha=0.3)
 
-    # 3b) TelemetryLattice anomaly score (p) and curvature (k_out)
+    # 3b) TelemetryLattice directional bias (p) and adaptive threshold (k_out)
     ax = fig.add_subplot(gs[2, 1])
     if loss is not None:
         ax2 = ax.twinx()
         plot_raw_and_smooth(ax, loss.index, loss["p"], window=10,
                             color="tab:orange",
                             raw_label="p (raw)",
-                            smooth_label="p (momentum)",
+                            smooth_label="p (directional bias)",
                             smooth_linewidth=1)
         plot_raw_and_smooth(ax2, loss.index, loss["k_out"], window=10,
                             color="tab:purple",
-                            raw_label="k (raw)",
-                            smooth_label="k (curvature)",
+                            raw_label="k_out (raw)",
+                            smooth_label="k_out (adaptive threshold)",
                             smooth_linewidth=1)
-        ax.set_ylabel("p (momentum)", color="tab:orange")
-        ax2.set_ylabel("k (curvature)", color="tab:purple")
+        ax.set_ylabel("p (directional bias)", color="tab:orange")
+        ax2.set_ylabel("k_out (adaptive threshold)", color="tab:purple")
         ax.legend(loc="upper left", fontsize=8)
         ax2.legend(loc="upper right", fontsize=8)
-    ax.set_title("Lattice signals: momentum & curvature")
+    ax.set_title("Lattice signals: directional bias & adaptive threshold")
     ax.grid(True, alpha=0.3)
 
     fig.savefig(os.path.splitext(path)[0] + "_patterns.png", dpi=150)
@@ -447,7 +760,7 @@ def main():
     ax.set_title("Tokens per batch")
     ax.grid(True, alpha=0.3)
 
-    # 2-3a) Rho momentum (p) across streams
+    # 2-3a) Rho directional bias (p) across streams
     ax = fig2.add_subplot(gs2[2, 0])
     for name, s, color in [*rho_plot_streams, ("h_rms_growth", h_rms, "tab:brown")]:
         if s is not None:
@@ -458,12 +771,12 @@ def main():
                                 raw_alpha=0.12,
                                 smooth_linewidth=1.2)
     ax.axhline(0, color="gray", linewidth=0.5, linestyle="--")
-    ax.set_ylabel("p (momentum)")
-    ax.set_title("Momentum across streams")
+    ax.set_ylabel("p (directional bias)")
+    ax.set_title("Directional bias across streams")
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
 
-    # 2-3b) Curvature (k_out) across streams
+    # 2-3b) Adaptive threshold (k_out) across streams
     ax = fig2.add_subplot(gs2[2, 1])
     for name, s, color in [("loss", loss, "tab:blue"),
                             ("rho_final", rho_final, "tab:orange"),
@@ -476,8 +789,8 @@ def main():
                                 smooth_label=f"{name}",
                                 raw_alpha=0.12,
                                 smooth_linewidth=1.2)
-    ax.set_ylabel("k (curvature)")
-    ax.set_title("Curvature across streams")
+    ax.set_ylabel("k_out (adaptive threshold)")
+    ax.set_title("Adaptive threshold across streams")
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
 
@@ -493,8 +806,8 @@ def main():
     ax = fig3.add_subplot(gs3[0, 0])
     if loss is not None:
         ax.plot(loss.index, loss["sigma"], linewidth=1.2, label="σ", color="tab:blue")
-        ax.plot(loss.index, loss["sigma_tilde"], linewidth=1.2, label="σ̃ (adapted)", color="tab:orange")
-        ax.plot(loss.index, loss["sigma_a"], linewidth=1, linestyle="--", label="σ_a", color="tab:green")
+        ax.plot(loss.index, loss["sigma_tilde"], linewidth=1.2, label="σ̃ (normalized)", color="tab:orange")
+        ax.plot(loss.index, loss["sigma_a"], linewidth=1, linestyle="--", label="σ_a (anchor)", color="tab:green")
     ax.set_ylabel("σ values")
     ax.set_title("Volatility: σ, σ̃, σ_a")
     ax.legend(fontsize=8)
@@ -521,7 +834,7 @@ def main():
     ax.set_title("Rate of change: Δμ, Δσ")
     ax.grid(True, alpha=0.3)
 
-    # 3-2a) v_sigma (sigma velocity)
+    # 3-2a) v_sigma (meta-volatility)
     ax = fig3.add_subplot(gs3[1, 0])
     if loss is not None:
         plot_raw_and_smooth(ax, loss.index, loss["v_sigma"], window=20,
@@ -530,65 +843,65 @@ def main():
                             smooth_label="v_σ")
         ax.axhline(0, color="gray", linewidth=0.5, linestyle="--")
     ax.set_ylabel("v_σ")
-    ax.set_title("Sigma velocity (v_sigma)")
+    ax.set_title("Meta-volatility (v_sigma)")
     ax.grid(True, alpha=0.3)
 
-    # 3-2b) delta_bar (smoothed delta)
+    # 3-2b) delta_bar (normalized trend EMA)
     ax = fig3.add_subplot(gs3[1, 1])
     if loss is not None:
         ax.plot(loss.index, loss["delta_bar"], linewidth=1.2, color="tab:cyan")
         ax.axhline(0, color="gray", linewidth=0.5, linestyle="--")
     ax.set_ylabel("δ̄")
-    ax.set_title("Smoothed delta (delta_bar)")
+    ax.set_title("Normalized trend EMA (delta_bar)")
     ax.grid(True, alpha=0.3)
 
-    # 3-3a) r_out (regime) & ell_out (level)
+    # 3-3a) r_out (outlier frequency) & ell_out (outlier persistence)
     ax = fig3.add_subplot(gs3[2, 0])
     if loss is not None:
         plot_raw_and_smooth(ax, loss.index, loss["r_out"], window=10,
                             color="tab:blue",
                             raw_label="r raw",
-                            smooth_label="r (regime)",
+                            smooth_label="r_out (outlier freq)",
                             smooth_linewidth=1.2)
         ax2 = ax.twinx()
         plot_raw_and_smooth(ax2, loss.index, loss["ell_out"], window=10,
                             color="tab:orange",
                             raw_label="ℓ raw",
-                            smooth_label="ℓ (level)",
+                            smooth_label="ell_out (persistence)",
                             smooth_linewidth=1.2)
-        ax.set_ylabel("r (regime)", color="tab:blue")
-        ax2.set_ylabel("ℓ (level)", color="tab:orange")
+        ax.set_ylabel("r_out (outlier freq)", color="tab:blue")
+        ax2.set_ylabel("ell_out (persistence)", color="tab:orange")
         ax.legend(loc="upper left", fontsize=8)
         ax2.legend(loc="upper right", fontsize=8)
-    ax.set_title("Lattice outputs: regime & level")
+    ax.set_title("Lattice outputs: outlier frequency & persistence")
     ax.grid(True, alpha=0.3)
 
-    # 3-3b) mu_ex (excess mean) & c_out (confidence)
+    # 3-3b) mu_ex (excess severity) & c_out (adaptive cutoff)
     ax = fig3.add_subplot(gs3[2, 1])
     if loss is not None:
         plot_raw_and_smooth(ax, loss.index, loss["mu_ex"], window=10,
                             color="tab:purple",
                             raw_label="μ_ex raw",
-                            smooth_label="μ_ex (excess)",
+                            smooth_label="mu_ex (excess severity)",
                             smooth_linewidth=1.2)
         ax2 = ax.twinx()
         plot_raw_and_smooth(ax2, loss.index, loss["c_out"], window=10,
                             color="tab:green",
-                            raw_label="c raw",
-                            smooth_label="c (confidence)",
+                            raw_label="c_out raw",
+                            smooth_label="c_out (adaptive cutoff)",
                             smooth_linewidth=1.2)
         ax.set_ylabel("μ_ex", color="tab:purple")
-        ax2.set_ylabel("c (confidence)", color="tab:green")
+        ax2.set_ylabel("c_out (adaptive cutoff)", color="tab:green")
         ax.legend(loc="upper left", fontsize=8)
         ax2.legend(loc="upper right", fontsize=8)
-    ax.set_title("Lattice outputs: excess mean & confidence")
+    ax.set_title("Lattice outputs: excess severity & adaptive cutoff")
     ax.grid(True, alpha=0.3)
 
-    # 3-4a) mu_a (adapted mean) vs mu (running mean)
+    # 3-4a) mu_a (anchor mean) vs mu (running mean)
     ax = fig3.add_subplot(gs3[3, 0])
     if loss is not None:
         ax.plot(loss.index, loss["mu"], linewidth=1.2, label="μ (running)", color="tab:blue")
-        ax.plot(loss.index, loss["mu_a"], linewidth=1.2, label="μ_a (adapted)", color="tab:orange")
+        ax.plot(loss.index, loss["mu_a"], linewidth=1.2, label="μ_a (anchor)", color="tab:orange")
         ax.plot(loss.index, loss["mu_prev"], linewidth=0.8, linestyle="--", label="μ_prev", color="tab:gray")
     ax.set_ylabel("Mean estimates")
     ax.set_title("Mean tracking: μ, μ_a, μ_prev")
@@ -621,8 +934,8 @@ def main():
         if len(levels) == 1:
             axes = [axes]
         for i, lvl in enumerate(levels):
-            sub = df_all[(df_all["level"] == lvl) & (df_all["stream_name"] == "loss")]
-            sub = sub.sort_values("global_step")
+            sub = df_all[(df_all["level"] == lvl) & (df_all["stream_name"] == "loss")].copy()
+            sub = sub.iloc[np.argsort(sub["global_step"].to_numpy())]
             stride = sub["stride"].iloc[0] if len(sub) > 0 else "?"
             axes[i].plot(sub["global_step"], sub["mu"], linewidth=1.2, label="μ")
             if "sigma" in sub.columns:
@@ -843,8 +1156,8 @@ def main():
                                 raw_alpha=0.15,
                                 smooth_linewidth=1.2)
         ax.axhline(0, color="gray", linewidth=0.5, linestyle="--")
-        ax.set_ylabel("p (momentum)")
-        ax.set_title("Entropy Momentum (< 0 = sharpening)")
+        ax.set_ylabel("p (directional bias)")
+        ax.set_title("Entropy directional bias (< 0 = sharpening)")
         ax.legend(fontsize=8)
         ax.grid(True, alpha=0.3)
 
@@ -932,8 +1245,8 @@ def main():
                                 smooth_label="read gate p",
                                 smooth_linewidth=1.2)
         ax.axhline(0, color="gray", linewidth=0.5, linestyle="--")
-        ax.set_ylabel("p (momentum)")
-        ax.set_title("Gate Momentum (< 0 = closing gate)")
+        ax.set_ylabel("p (directional bias)")
+        ax.set_title("Gate directional bias (< 0 = closing gate)")
         ax.legend(fontsize=8)
         ax.grid(True, alpha=0.3)
 
@@ -1375,8 +1688,8 @@ def main():
                                     raw_alpha=0.15,
                                     smooth_linewidth=1.2)
         ax.axhline(0, color="gray", linewidth=0.5, linestyle="--")
-        ax.set_ylabel("p (momentum)")
-        ax.set_title("Gamma Momentum (trending direction)")
+        ax.set_ylabel("p (directional bias)")
+        ax.set_title("Gamma directional bias (trending direction)")
         ax.legend(fontsize=8)
         ax.grid(True, alpha=0.3)
 
@@ -1694,6 +2007,10 @@ def main():
         print(f"Saved: {os.path.splitext(path)[0]}_unigram_lm_init.png")
     else:
         print("Unigram/LM-head/init figure skipped: no streams in CSV")
+
+    atlas_dir = generate_raw_stream_atlas(path, streams)
+    generate_stream_detail_pages(path, streams)
+    print(f"Saved comprehensive telemetry atlas under: {atlas_dir}")
 
     plt.show()
 

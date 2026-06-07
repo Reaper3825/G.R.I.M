@@ -18,6 +18,7 @@
 #include "AttentionDiagnostics.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
+#include "../../Shared/VerboseLogging.hpp"
 
 using GRIM::CudaAlloc::cudaMallocOrThrow;
 
@@ -297,15 +298,12 @@ inline size_t dsoftmax_sum_bytes(int batch, int seqlen, int n_heads) {
     return static_cast<size_t>(batch) * n_heads * seqlen_rounded * sizeof(float);
 }
 
-inline float resolve_softmax_scale(float requested_scale, int head_dim, const char* caller) {
+inline float require_softmax_scale(float requested_scale, int head_dim, const char* caller) {
     if (head_dim <= 0) {
         throw std::runtime_error(std::string(caller) + ": head_dim must be > 0, got " + std::to_string(head_dim));
     }
-    if (requested_scale == 0.0f) {
-        return 1.0f / std::sqrt(static_cast<float>(head_dim));
-    }
     if (!std::isfinite(requested_scale) || requested_scale <= 0.0f) {
-        throw std::runtime_error(std::string(caller) + ": softmax_scale must be finite and > 0 when explicitly provided, got " + std::to_string(requested_scale));
+        throw std::runtime_error(std::string(caller) + ": softmax_scale must be finite and > 0, got " + std::to_string(requested_scale));
     }
     return requested_scale;
 }
@@ -573,7 +571,7 @@ void init_fwd_params_contiguous(Flash_fwd_params& params,
     params.rotary_dim = 0;
     params.total_q = batch * seqlen;
 
-    const float scale = resolve_softmax_scale(softmax_scale, head_dim, "init_fwd_params_contiguous");
+    const float scale = require_softmax_scale(softmax_scale, head_dim, "init_fwd_params_contiguous");
     params.scale_softmax = scale;
     params.scale_softmax_log2 = scale * kLog2e;
     params.softcap = 0.0f;
@@ -643,6 +641,7 @@ void init_fwd_params_kvcache(Flash_fwd_params& params,
                              const float* alibi_slopes,
                              int batch, int seqlen_q, int seqlen_k,
                              int n_heads, int n_kv_heads, int head_dim,
+                             float softmax_scale,
                              bool is_bf16, bool is_causal) {
     params = {};
     params.is_bf16 = is_bf16;
@@ -682,7 +681,7 @@ void init_fwd_params_kvcache(Flash_fwd_params& params,
     params.rotary_dim = 0;
     params.total_q = batch * seqlen_q;
 
-    const float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
+    const float scale = require_softmax_scale(softmax_scale, head_dim, "init_fwd_params_kvcache");
     params.scale_softmax = scale;
     params.scale_softmax_log2 = scale * kLog2e;
     params.softcap = 0.0f;
@@ -1040,6 +1039,7 @@ extern "C" void flash_attn_fwd_kvcache(
     int n_heads,
     int n_kv_heads,
     int head_dim,
+    float softmax_scale,
     bool causal,
     bool is_bf16,
     cudaStream_t stream)
@@ -1087,7 +1087,7 @@ extern "C" void flash_attn_fwd_kvcache(
     grim_flash::Flash_fwd_params params;
     grim_flash::detail::init_fwd_params_kvcache(
         params, q, k_cache, v_cache, out, softmax_lse, alibi_slopes,
-        batch, seqlen_q, seqlen_k, n_heads, n_kv_heads, head_dim,
+        batch, seqlen_q, seqlen_k, n_heads, n_kv_heads, head_dim, softmax_scale,
         is_bf16, causal);
 
     // --- Kernel dispatch (same template dispatch as flash_attn_fwd_ex) ---
@@ -1215,9 +1215,11 @@ extern "C" void flash_attn_bwd_ex(
                  "head_dim=%d, softmax_scale=%f, causal=%s, is_bf16=%s)",
                  q, k, v, out, dout, softmax_lse, dq, dk, dv,
                  batch, seqlen, n_heads, n_kv_heads, head_dim,
-                 grim_flash::detail::resolve_softmax_scale(softmax_scale, head_dim, "flash_attn_bwd_ex"),
+                 grim_flash::detail::require_softmax_scale(softmax_scale, head_dim, "flash_attn_bwd_ex"),
                  causal ? "true" : "false", is_bf16 ? "true" : "false");
-        FlashAttentionLog::info(input_msg);
+        if constexpr (GRIM::VerboseLogging::ENABLE_BACKWARD_FLASH_ATTN_LOGS) {
+            FlashAttentionLog::info(input_msg);
+        }
     }
     if (!dq_accum || !dsoftmax_sum) {
         FlashAttentionLog::error("[FlashAttention] FATAL: flash_attn_bwd dq_accum and dsoftmax_sum workspace required");
@@ -1289,7 +1291,9 @@ extern "C" void flash_attn_bwd_ex(
                  params.d_rounded,
                  params.total_q,
                  params.unpadded_lse ? "true" : "false");
-        FlashAttentionLog::info(shape_msg);
+        if constexpr (GRIM::VerboseLogging::ENABLE_BACKWARD_FLASH_ATTN_LOGS) {
+            FlashAttentionLog::info(shape_msg);
+        }
     }
     if (params.dk_accum_ptr != nullptr || params.dv_accum_ptr != nullptr) {
         FlashAttentionLog::error("[FlashAttention] FATAL: flash_attn_bwd dk_accum_ptr/dv_accum_ptr must be null for non-split kernels");
@@ -1303,7 +1307,9 @@ extern "C" void flash_attn_bwd_ex(
         snprintf(ws_msg, sizeof(ws_msg),
                  "[FlashAttention] bwd workspace bytes: dq_accum=%zu dsoftmax_sum=%zu",
                  dq_bytes, dsoftmax_bytes);
-        FlashAttentionLog::info(ws_msg);
+        if constexpr (GRIM::VerboseLogging::ENABLE_BACKWARD_FLASH_ATTN_LOGS) {
+            FlashAttentionLog::info(ws_msg);
+        }
     }
     // dq_accum zeroing is handled by the preprocessing kernel (Clear_dQaccum=true in
     // flash_bwd_dot_do_o_kernel) and the main kernel's Is_first path. No need to memset here.
@@ -1336,7 +1342,9 @@ extern "C" void flash_attn_bwd_ex(
         stream,
     });
 
-    FlashAttentionLog::info("[FlashAttention] flash_attn_bwd_ex launching kernels");
+    if constexpr (GRIM::VerboseLogging::ENABLE_BACKWARD_FLASH_ATTN_LOGS) {
+        FlashAttentionLog::info("[FlashAttention] flash_attn_bwd_ex launching kernels");
+    }
 #if defined(GRIM_FLASHATTN_HDIM64_ONLY)
 #if defined(GRIM_FLASHATTN_CAUSAL_ONLY)
 #if defined(GRIM_FLASHATTN_BF16_ONLY)
@@ -1442,12 +1450,18 @@ extern "C" void flash_attn_bwd_ex(
 #endif
     }
 #endif
-    FlashAttentionLog::info("[FlashAttention] flash_attn_bwd_ex kernel launch complete, checking CUDA status");
+    if constexpr (GRIM::VerboseLogging::ENABLE_BACKWARD_FLASH_ATTN_LOGS) {
+        FlashAttentionLog::info("[FlashAttention] flash_attn_bwd_ex kernel launch complete, checking CUDA status");
+    }
     grim_flash::detail::check_cuda(cudaGetLastError(), "flash_attn_bwd_ex launch");
-    FlashAttentionLog::info("[FlashAttention] flash_attn_bwd_ex synchronizing stream for error check");
+    if constexpr (GRIM::VerboseLogging::ENABLE_BACKWARD_FLASH_ATTN_LOGS) {
+        FlashAttentionLog::info("[FlashAttention] flash_attn_bwd_ex synchronizing stream for error check");
+    }
     grim_flash::detail::check_cuda(cudaStreamSynchronize(stream), "flash_attn_bwd_ex sync");
     if (rng_state_buf_bwd) { cudaFree(rng_state_buf_bwd); rng_state_buf_bwd = nullptr; }
-    FlashAttentionLog::info("[FlashAttention] flash_attn_bwd_ex stream synchronized");
+    if constexpr (GRIM::VerboseLogging::ENABLE_BACKWARD_FLASH_ATTN_LOGS) {
+        FlashAttentionLog::info("[FlashAttention] flash_attn_bwd_ex stream synchronized");
+    }
 
     GRIM::FlashAttentionDiagnostics::emitBackwardPostKernelDiagnostics({
         dout,

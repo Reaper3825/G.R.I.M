@@ -207,11 +207,36 @@ void encoderSelfAttentionForward(
     }
 
     const float attention_dropout_p = request.hp.dropout_enabled ? request.hp.attention_dropout : 0.0f;
+    const float attention_softmax_scale = request.hp.attention_softmax_scale;
+    if (!std::isfinite(attention_softmax_scale) || attention_softmax_scale <= 0.0f) {
+        throw std::runtime_error("encoderSelfAttentionForward: attention_softmax_scale must be finite and > 0");
+    }
     const std::uint64_t dropout_seed = attentionDropoutSeed(request);
     attn_out_bhsd = autograd::scaled_dot_product_attention(
         Q_bhsd, K_bhsd, V_bhsd,
-        pbm.alibi_slopes, request.hp, 0.0f, request.stream,
+        pbm.alibi_slopes, request.hp, attention_softmax_scale, request.stream,
         attention_dropout_p, dropout_seed);
+    attn_out_bhsd.shape.require("encoderSelfAttentionForward attn_out_bhsd");
+    if (attn_out_bhsd.shape.layout != TensorContract::Layout::BHSD) {
+        throw std::runtime_error("encoderSelfAttentionForward: scaled_dot_product_attention must return BHSD. FlashAttention scratch/output buffers are BSHD internally, but SDPA must convert them back before reshape_bhsd_to_flat");
+    }
+    {
+        const auto attn_shape = attn_out_bhsd.shape.as_4d();
+        if (attn_shape.batch != request.payload.batch_size ||
+            attn_shape.heads != request.hp.num_heads ||
+            attn_shape.seq != request.payload.max_seq_len ||
+            attn_shape.head_dim != request.hp.head_dim) {
+            throw std::runtime_error("encoderSelfAttentionForward: attn_out_bhsd shape mismatch before flatten. expected=[" +
+                                     std::to_string(request.payload.batch_size) + "," +
+                                     std::to_string(request.hp.num_heads) + "," +
+                                     std::to_string(request.payload.max_seq_len) + "," +
+                                     std::to_string(request.hp.head_dim) + "] got=[" +
+                                     std::to_string(attn_shape.batch) + "," +
+                                     std::to_string(attn_shape.heads) + "," +
+                                     std::to_string(attn_shape.seq) + "," +
+                                     std::to_string(attn_shape.head_dim) + "]");
+        }
+    }
     if (qkv_debug > 0) {
         autograd::checkQKVTensorFinite("AutogradSDPA:attn_out_bhsd", attn_out_bhsd, request.stream);
     }

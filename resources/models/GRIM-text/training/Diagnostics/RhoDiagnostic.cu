@@ -188,17 +188,20 @@ void computeRhoDiagnostic(
         float avg_rms;        // mean(rms(h[t]))
         float avg_abs_dot;    // mean|dot(h_i, h_j)|  — numerator signal
         float avg_signed_dot; // mean dot(h_i, h_j)  — signed common-mode signal
+        float raw_dot_sum;    // Σ dot(h_i, h_j) over sampled pairs (non-averaged)
         float avg_norm_prod;  // mean(‖h_i‖·‖h_j‖·d) — denominator
         float rms_min;        // min per-position rms  — collapse detector
         float rms_max;        // max per-position rms  — explosion detector
         float centered_avg_abs_dot; // mean|dot(h_i - μ, h_j - μ)| — mean-removed alignment
         float mean_rms;       // rms(μ), μ = mean_i h_i — hidden DC vector magnitude
+        float mean_avg;       // avg(μ_d), μ = mean_i h_i — raw signed mean component
+        float mu_scale_ratio; // mean_rms / |mean_avg| — scale gap between vector μ and scalar μ_avg
     };
 
     auto compute_rho = [&](const float* device_ptr, const std::vector<int>& positions) -> RhoRaw {
-        if (!device_ptr) return {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+        if (!device_ptr) return {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
         const int n_pos = static_cast<int>(positions.size());
-        if (n_pos < 2) return {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+        if (n_pos < 2) return {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
 
         const size_t bytes = static_cast<size_t>(rect_positions) * d_model * sizeof(float);
         std::vector<float> h(rect_positions * d_model);
@@ -238,11 +241,15 @@ void computeRhoDiagnostic(
             }
         }
         double mean_sq = 0.0;
+        double mean_sum = 0.0;
         for (int d = 0; d < d_model; ++d) {
             mean[d] /= static_cast<double>(n_pos);
             mean_sq += mean[d] * mean[d];
+            mean_sum += mean[d];
         }
         const float mean_rms = static_cast<float>(std::sqrt(mean_sq / d_model));
+        const float mean_avg = static_cast<float>(mean_sum / d_model);
+        const float mu_scale_ratio = mean_rms / std::max(std::abs(mean_avg), 1e-8f);
 
         // Pre-compute row RMS for ALL positions in this subset (needed for avg_rms),
         // but pairwise cos only uses sample_indices.
@@ -308,16 +315,18 @@ void computeRhoDiagnostic(
         }
         float avg_abs_dot = 0.0f;
         float avg_signed_dot = 0.0f;
+        float raw_dot_sum = 0.0f;
         float centered_avg_abs_dot = 0.0f;
         float avg_norm_prod = 0.0f;
         if (n_pairs > 0) {
             avg_abs_dot = static_cast<float>(dot_acc / n_pairs);
             avg_signed_dot = static_cast<float>(signed_dot_acc / n_pairs);
+            raw_dot_sum = static_cast<float>(signed_dot_acc);
             centered_avg_abs_dot = static_cast<float>(centered_dot_acc / n_pairs);
             avg_norm_prod = static_cast<float>(norm_prod_acc / n_pairs);
         }
-        return {rho, avg_rms, avg_abs_dot, avg_signed_dot, avg_norm_prod,
-                rms_min_val, rms_max_val, centered_avg_abs_dot, mean_rms};
+        return {rho, avg_rms, avg_abs_dot, avg_signed_dot, raw_dot_sum, avg_norm_prod,
+            rms_min_val, rms_max_val, centered_avg_abs_dot, mean_rms, mean_avg, mu_scale_ratio};
     };
 
     // Collect ρ for each layer + embedding.
@@ -330,11 +339,14 @@ void computeRhoDiagnostic(
         float delta_rho;      // ρ(this) - ρ(delta_vs_id)
         float avg_abs_dot;    // raw numerator: mean|dot(h_i, h_j)|
         float avg_signed_dot; // signed numerator: mean dot(h_i, h_j)
+        float raw_dot_sum;    // Σ dot(h_i, h_j) across sampled pairs
         float avg_norm_prod;  // raw denominator: mean(‖h_i‖·‖h_j‖·d)
         float rms_min;        // min per-position rms
         float rms_max;        // max per-position rms
         float centered_avg_abs_dot; // mean-centered pairwise numerator
         float mean_rms;       // rms of mean hidden vector μ
+        float mean_avg;       // avg component of mean hidden vector μ
+        float mu_scale_ratio; // mean_rms / |mean_avg| scale difference
     };
     std::vector<LayerRho> layer_rhos;
     layer_rhos.reserve(num_layers + 1);  // +1 for embedding
@@ -345,9 +357,9 @@ void computeRhoDiagnostic(
         auto raw = compute_rho(ai.embedding_tensor.data, valid_positions);
         final_device_ptr = ai.embedding_tensor.data;
         layer_rhos.push_back({-1, -2, raw.rho, raw.avg_rms, 0.0f,
-                              raw.avg_abs_dot, raw.avg_signed_dot, raw.avg_norm_prod,
+                              raw.avg_abs_dot, raw.avg_signed_dot, raw.raw_dot_sum, raw.avg_norm_prod,
                               raw.rms_min, raw.rms_max,
-                              raw.centered_avg_abs_dot, raw.mean_rms});
+                              raw.centered_avg_abs_dot, raw.mean_rms, raw.mean_avg, raw.mu_scale_ratio});
     }
 
     // Each encoder layer output
@@ -362,9 +374,9 @@ void computeRhoDiagnostic(
                 vs_id = layer_rhos.back().layer_id;
             }
             layer_rhos.push_back({l, vs_id, raw.rho, raw.avg_rms, delta,
-                                  raw.avg_abs_dot, raw.avg_signed_dot, raw.avg_norm_prod,
+                                  raw.avg_abs_dot, raw.avg_signed_dot, raw.raw_dot_sum, raw.avg_norm_prod,
                                   raw.rms_min, raw.rms_max,
-                                  raw.centered_avg_abs_dot, raw.mean_rms});
+                                  raw.centered_avg_abs_dot, raw.mean_rms, raw.mean_avg, raw.mu_scale_ratio});
         }
     }
 
@@ -392,9 +404,9 @@ void computeRhoDiagnostic(
             vs_id = layer_rhos.back().layer_id;
         }
         layer_rhos.push_back({num_layers, vs_id, raw.rho, raw.avg_rms, delta,
-                              raw.avg_abs_dot, raw.avg_signed_dot, raw.avg_norm_prod,
+                              raw.avg_abs_dot, raw.avg_signed_dot, raw.raw_dot_sum, raw.avg_norm_prod,
                               raw.rms_min, raw.rms_max,
-                              raw.centered_avg_abs_dot, raw.mean_rms});
+                              raw.centered_avg_abs_dot, raw.mean_rms, raw.mean_avg, raw.mu_scale_ratio});
     }
 
     // Build the equation log
@@ -404,16 +416,20 @@ void computeRhoDiagnostic(
             << " telemetry_write=" << (options.write_telemetry ? "true" : "false")
             << "  ρ(l) = avg|cos(h_i^l, h_j^l)|, Δρ = ρ(l) - ρ(prev_collected)\n";
         rho_eq << "  PHASE: " << phase_description << "\n";
-        rho_eq << "  RAW DOT: avg_signed_dot(l)=P^-1 Σ_{i<j}(h_i^l · h_j^l), P=C(n_sample,2)\n";
+         rho_eq << "  RAW DOT: avg_abs_dot(l)=P^-1 Σ_{i<j}|h_i^l · h_j^l|, "
+             << "avg_signed_dot(l)=P^-1 Σ_{i<j}(h_i^l · h_j^l), "
+             << "raw_dot_sum(l)=Σ_{i<j}(h_i^l · h_j^l), P=C(n_sample,2)\n";
         rho_eq << "  CENTERED DOT: μ_l=(1/N)Σ_i h_i^l, h̃_i^l=h_i^l-μ_l, "
             << "centered_avg_abs_dot(l)=P^-1 Σ_{i<j}|h̃_i^l · h̃_j^l|, "
-            << "mean_rms(l)=sqrt((1/d_model)Σ_d μ_{l,d}²)\n";
+            << "mean_rms(l)=sqrt((1/d_model)Σ_d μ_{l,d}²), "
+            << "mu_avg(l)=(1/d_model)Σ_d μ_{l,d}, "
+            << "mu_scale_ratio(l)=mean_rms(l)/|mu_avg(l)|\n";
     rho_eq << "  ARCH: h^l = h^{l-1} + LS*Attn(RMSNorm(h^{l-1})) "
            << "+ LS*FFN(RMSNorm(...))\n";
 
     // Compact per-layer table
-        rho_eq << "  LAYER  ρ(l)    Δρ(vs)    h_rms_avg  avg_signed_dot  centered_avg_abs_dot  mean_rms  interpretation\n";
-        rho_eq << "  ─────  ──────  ────────  ─────────  ──────────────  ────────────────────  ────────  ──────────────\n";
+        rho_eq << "  LAYER  ρ(l)    Δρ(vs)    h_rms_avg  avg_abs_dot  avg_signed_dot  raw_dot_sum   centered_avg_abs_dot  mean_rms  mu_avg    mu_scale  interpretation\n";
+        rho_eq << "  ─────  ──────  ────────  ─────────  ───────────  ──────────────  ────────────  ────────────────────  ────────  ────────  ────────  ──────────────\n";
 
     float max_delta = 0.0f;
     int max_delta_layer = -1;  // real layer index from layer_id, not vector position
@@ -454,9 +470,13 @@ void computeRhoDiagnostic(
         }
 
         rho_eq << std::setw(9) << lr.rms << "  "
+             << std::setw(11) << lr.avg_abs_dot << "  "
                << std::setw(14) << lr.avg_signed_dot << "  "
+                             << std::setw(12) << lr.raw_dot_sum << "  "
                << std::setw(20) << lr.centered_avg_abs_dot << "  "
-               << std::setw(8) << lr.mean_rms << "  ";
+             << std::setw(8) << lr.mean_rms << "  "
+             << std::setw(8) << lr.mean_avg << "  "
+             << std::setw(8) << lr.mu_scale_ratio << "  ";
 
         // Interpretation
         const bool is_encoder = (lr.layer_id >= 0 && lr.layer_id < num_layers);
@@ -555,8 +575,9 @@ void computeRhoDiagnostic(
                << " growth=" << std::showpos << rho_growth << std::noshowpos
                << " h_rms_growth=" << h_rms_growth_ratio
                << "x\n";
-        rho_eq << "  RAW(" << last_label << "): |dot|=" << last_lr.avg_abs_dot
+        rho_eq << "  RAW(" << last_label << "): avg_abs_dot=" << last_lr.avg_abs_dot
                              << " signed_dot=" << last_lr.avg_signed_dot
+             << " raw_dot_sum=" << last_lr.raw_dot_sum
                << " denom=" << last_lr.avg_norm_prod
                << " rms[min..max]=[" << last_lr.rms_min
                << ".." << last_lr.rms_max
@@ -570,7 +591,9 @@ void computeRhoDiagnostic(
          rho_eq << "\n";
          rho_eq << "  CENTERED(" << last_label << "): centered_avg_abs_dot="
              << last_lr.centered_avg_abs_dot
-             << " mean_rms=" << last_lr.mean_rms << "\n";
+             << " mean_rms=" << last_lr.mean_rms
+             << " mu_avg=" << last_lr.mean_avg
+             << " mu_scale_ratio=" << last_lr.mu_scale_ratio << "\n";
          rho_eq << "  SPLIT(" << last_label << "): ρ_atom=" << rho_atom
                 << " (n=" << atom_positions.size() << ")"
                 << " ρ_nonatom=" << rho_nonatom

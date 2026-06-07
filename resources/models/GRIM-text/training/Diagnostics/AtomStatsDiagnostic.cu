@@ -17,40 +17,67 @@
 #include <iomanip>
 #include <limits>
 #include <sstream>
+#include <stdexcept>
 
 namespace GRIM::Diagnostics {
 
-AtomStats computeAtomStats(const std::vector<std::vector<int>>& batch_inputs,
+AtomStats computeAtomStats(const GRIM::Batching::BatchPayload& payload,
                            const GRIM::Tokenizer::TokenLayout& token_layout,
                            std::vector<int>* per_seq_atoms,
                            std::vector<int>* per_seq_lengths) {
     AtomStats stats{};
-    if (batch_inputs.empty()) {
+    if (payload.batch_size == 0) {
         return stats;
     }
 
+    if (payload.max_seq_len <= 0) {
+        throw std::runtime_error(
+            "computeAtomStats: payload.max_seq_len must be > 0");
+    }
+    if (static_cast<int>(payload.seq_lengths.size()) != payload.batch_size) {
+        throw std::runtime_error(
+            "computeAtomStats: payload.seq_lengths.size() != payload.batch_size");
+    }
+    const int required_tokens = payload.batch_size * payload.max_seq_len;
+    if (static_cast<int>(payload.input_ids.size()) < required_tokens) {
+        throw std::runtime_error(
+            "computeAtomStats: payload.input_ids is smaller than batch_size * max_seq_len");
+    }
+
     stats.min_atoms = std::numeric_limits<int>::max();
-    for (const auto& seq : batch_inputs) {
+    int offset = 0;
+    for (int row = 0; row < payload.batch_size; ++row) {
+        const int seq_len = payload.seq_lengths[row];
+        if (seq_len < 0 || seq_len > payload.max_seq_len) {
+            throw std::runtime_error(
+                "computeAtomStats: payload.seq_lengths[row] out of valid range");
+        }
+
         int atom_count = 0;
-        for (int tid : seq) {
+        for (int col = 0; col < seq_len; ++col) {
+            const int tid = payload.input_ids[offset + col];
             if (token_layout.isAtom(tid)) {
                 ++atom_count;
             }
         }
+
         if (per_seq_atoms) {
             per_seq_atoms->push_back(atom_count);
         }
         if (per_seq_lengths) {
-            per_seq_lengths->push_back(static_cast<int>(seq.size()));
+            per_seq_lengths->push_back(seq_len);
         }
+
         stats.total_atoms += atom_count;
-        stats.total_tokens += static_cast<int>(seq.size());
+        stats.total_tokens += seq_len;
         stats.min_atoms = std::min(stats.min_atoms, atom_count);
         stats.max_atoms = std::max(stats.max_atoms, atom_count);
+
+        offset += payload.max_seq_len;
     }
 
     stats.avg_atoms = static_cast<double>(stats.total_atoms) /
-                      static_cast<double>(batch_inputs.size());
+                      static_cast<double>(payload.batch_size);
     return stats;
 }
 
@@ -71,18 +98,8 @@ void runAtomStatsDiagnostic(
         per_seq_atoms.reserve(payload.batch_size);
         per_seq_lengths.reserve(payload.batch_size);
 
-        // Reconstruct per-sequence views from flat payload for atom detection
-        std::vector<std::vector<int>> seq_views;
-        seq_views.reserve(payload.batch_size);
-        int offset = 0;
-        for (int i = 0; i < payload.batch_size; ++i) {
-            const int len = payload.seq_lengths[i];
-            seq_views.emplace_back(payload.input_ids.begin() + offset,
-                                   payload.input_ids.begin() + offset + len);
-            offset += payload.max_seq_len; // stride is padded length
-        }
         PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] About to call computeAtomStats...\n");
-        const AtomStats stats = computeAtomStats(seq_views, token_layout,
+        const AtomStats stats = computeAtomStats(payload, token_layout,
                                                  &per_seq_atoms, &per_seq_lengths);
         PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] computeAtomStats returned\n");
         const double atom_ratio = stats.total_tokens > 0

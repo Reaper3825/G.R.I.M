@@ -32,13 +32,15 @@ Optional FlashAttention equation tracing and D2H sampling live in `resources/mod
 
 `Flash_Attention_Kernal.cu` may call narrow pre/post forward/backward hooks from that helper, but it must not inline host-side attention-score reconstruction, per-head LSE scans, or raw tensor sample conversion logic. Keep the kernel wrapper focused on validation, parameter stamping, kernel launch, and fail-loud CUDA error handling.
 
-## Softmax scale plumbing
-`autograd::scaled_dot_product_attention(..., scale, ...)` resolves `scale == 0.0f` to the canonical `1 / sqrt(head_dim)` default. Any non-zero scale must be finite and positive, and it must be passed unchanged into both `flash_attn_fwd_ex` and the matching `flash_attn_bwd_ex` call. The wrapper then stamps `params.scale_softmax`, `params.scale_softmax_log2`, and `params.scale_softmax_rp_dropout` from that same resolved scale.
+Backward wrapper info logs are compile-time gated by `GRIM::VerboseLogging::ENABLE_BACKWARD_FLASH_ATTN_LOGS` and remain off in production; the stride/equation diagnostics stay behind `ENABLE_FA_EQUATION_DIAGNOSTICS`.
 
-Do not reintroduce a local `1 / sqrt(head_dim)` inside the contiguous forward/backward param initialization path; that silently changes the caller's attention equation and desynchronizes backward from the saved forward LSE.
+## Softmax scale plumbing
+`HyperParameters_GPU.hpp` owns the attention softmax scale as a derived field on `LanguageModelConfig`: `attention_softmax_scale = 1 / sqrt(head_dim)`. `EncoderSelfAttention_GPU.cu` extracts that already-computed value before SDPA runs and passes it explicitly into `autograd::scaled_dot_product_attention(..., scale, ...)`, which then forwards the same value unchanged into both `flash_attn_fwd_ex` and the matching `flash_attn_bwd_ex` call. FlashAttention itself operates on BSHD bf16 buffers, but `scaled_dot_product_attention()` converts the forward output back to FP32 BHSD before returning it to encoder/autograd code. The wrapper stamps `params.scale_softmax`, `params.scale_softmax_log2`, and `params.scale_softmax_rp_dropout` from that same explicit scale.
+
+Do not reintroduce a sentinel `scale == 0.0f` path or a local `1 / sqrt(head_dim)` inside SDPA or the contiguous forward/backward param initialization path; that silently changes the caller's attention equation and desynchronizes backward from the saved forward LSE.
 
 ## KV-cache forward dispatch
-`flash_attn_fwd_kvcache()` is inference-only, but its kernel dispatch must still mirror `flash_attn_fwd_ex`: respect the caller's `head_dim`, `causal`, and `is_bf16` flags, then fail loud when compile-time gates such as `GRIM_FLASHATTN_HDIM64_ONLY`, `GRIM_FLASHATTN_CAUSAL_ONLY`, or `GRIM_FLASHATTN_BF16_ONLY` make a requested mode unavailable. Do not hardcode `run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, true>` in this path.
+`flash_attn_fwd_kvcache()` is inference-only, but its kernel dispatch must still mirror `flash_attn_fwd_ex`: respect the caller's `head_dim`, explicit `softmax_scale`, `causal`, and `is_bf16` flags, then fail loud when compile-time gates such as `GRIM_FLASHATTN_HDIM64_ONLY`, `GRIM_FLASHATTN_CAUSAL_ONLY`, or `GRIM_FLASHATTN_BF16_ONLY` make a requested mode unavailable. Do not hardcode `run_flash_attn_fwd_hdim64<cutlass::bfloat16_t, true>` in this path.
 
 ## Issue #84 — `dot_do_o` preprocessing
 `flash_bwd_dot_do_o_kernel` MUST run **before** the seqK-parallel main backward kernel. Without it, `dsoftmax_sum` is garbage for most m_blocks → dQ/dK explosion.

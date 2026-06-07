@@ -651,10 +651,10 @@ void emitForwardPostKernelDiagnostics(const ForwardDiagnosticRequest& request) {
 }
 
 void emitBackwardPreKernelDiagnostics(const BackwardDiagnosticRequest& request) {
-    logBackwardStrideLayout(request.strides);
     if (!shouldEmitAttentionDiagnostics()) {
         return;
     }
+    logBackwardStrideLayout(request.strides);
     requireCudaSuccess(cudaStreamSynchronize(request.stream), "emitBackwardPreKernelDiagnostics: sync");
 
     const int call_count = g_bwd_call_count.fetch_add(1, std::memory_order_relaxed) + 1;

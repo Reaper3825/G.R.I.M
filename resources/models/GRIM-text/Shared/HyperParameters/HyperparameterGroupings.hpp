@@ -310,6 +310,7 @@ struct EncoderLayerConstructionHP {
     int num_kv_heads = 0;
     int head_dim = 0;
     int rotary_dim = 0;
+    float attention_softmax_scale = 0.0f;
     int heads_per_kv_group = 0;
     int kv_dim = 0;
     int qkv_dim = 0;
@@ -336,6 +337,7 @@ struct EncoderSelfAttentionHP {
     int num_kv_heads = 0;
     int head_dim = 0;
     int rotary_dim = 0;
+    float attention_softmax_scale = 0.0f;
     int heads_per_kv_group = 0;
     int kv_dim = 0;
     int qkv_dim = 0;
@@ -462,6 +464,7 @@ struct ModelHP {
     int encoder_num_kv_heads = 0;
     int encoder_head_dim = 0;
     int encoder_rotary_dim = 0;
+    float encoder_attention_softmax_scale = 0.0f;
     int encoder_heads_per_kv_group = 0;
     int encoder_kv_dim = 0;
     int encoder_qkv_dim = 0;
@@ -872,6 +875,7 @@ inline EncoderSelfAttentionHP encoderSelfAttentionHP(
     view.num_kv_heads = encoder_hp.num_kv_heads;
     view.head_dim = encoder_hp.head_dim;
     view.rotary_dim = encoder_hp.rotary_dim;
+    view.attention_softmax_scale = encoder_hp.attention_softmax_scale;
     view.heads_per_kv_group = encoder_hp.heads_per_kv_group;
     view.kv_dim = encoder_hp.kv_dim;
     view.qkv_dim = encoder_hp.qkv_dim;
@@ -1217,6 +1221,8 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     const int kv_dim = computeKVProjectionSize(d_model, num_heads, num_kv_heads);
     const int qkv_dim = computeQKVProjectionSize(d_model, num_heads, num_kv_heads);
     const int rotary_dim = head_dim;
+    const float attention_softmax_scale = computeAttentionSoftmaxScale(
+        head_dim, "modelHP(snapshot)");
     const int d_ff = d_model * D_FF_MULTIPLIER;
     const int min_seq_len_for_flash = max_seq_len / 4;
     const float dropout_rate = requireFloat("dropout_rate");
@@ -1242,6 +1248,7 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.encoder_num_kv_heads = num_kv_heads;
     view.encoder_head_dim = head_dim;
     view.encoder_rotary_dim = rotary_dim;
+    view.encoder_attention_softmax_scale = attention_softmax_scale;
     view.encoder_heads_per_kv_group = heads_per_kv_group;
     view.encoder_kv_dim = kv_dim;
     view.encoder_qkv_dim = qkv_dim;
@@ -1359,6 +1366,7 @@ inline EncoderLayerConstructionHP encoderLayerConstructionHP(
     view.num_kv_heads = model.encoder_num_kv_heads;
     view.head_dim = model.encoder_head_dim;
     view.rotary_dim = model.encoder_rotary_dim;
+    view.attention_softmax_scale = model.encoder_attention_softmax_scale;
     view.heads_per_kv_group = model.encoder_heads_per_kv_group;
     view.kv_dim = model.encoder_kv_dim;
     view.qkv_dim = model.encoder_qkv_dim;

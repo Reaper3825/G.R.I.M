@@ -25,7 +25,7 @@ struct AtomStats {
     double avg_atoms = 0.0;
 };
 
-AtomStats computeAtomStats(const std::vector<std::vector<int>>& batch_inputs,
+AtomStats computeAtomStats(const GRIM::Batching::BatchPayload& payload,
                            const GRIM::Tokenizer::TokenLayout& token_layout,
                            std::vector<int>* per_seq_atoms,
                            std::vector<int>* per_seq_lengths);

@@ -1045,13 +1045,9 @@ Tensor scaled_dot_product_attention(
     bool requires_grad = q.requires_grad || k.requires_grad || v.requires_grad;
     Tensor result = Tensor::zeros(output_shape, requires_grad, stream, "sdpa_result");
     
-    // Compute default scale if not provided. Non-zero caller scale is part of the
-    // attention equation and must be forwarded into both FlashAttention passes.
-    if (scale == 0.0f) {
-        scale = 1.0f / sqrtf(static_cast<float>(head_dim));
-    }
     if (!std::isfinite(scale) || scale <= 0.0f) {
-        throw std::invalid_argument("autograd::scaled_dot_product_attention: scale must be finite and > 0 after default resolution");
+        throw std::invalid_argument(
+            "autograd::scaled_dot_product_attention: scale must be finite and > 0");
     }
     
     // Allocate bf16 buffers for FlashAttention
@@ -1184,7 +1180,7 @@ Tensor scaled_dot_product_attention(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ReshapeFromBHSDGradFn - ISSUE #62 FIX: Autograd-tracked BHSD->flat reshape
+// ReshapeFromBHSDGradFn - ISSUE #62 FIX: Autograd-tracked BHSD->flat adapter
 //
 // ROOT CAUSE OF W_o/QKV GRADIENT BUG:
 // Encoding_GPU.cu step 5 used Tensor::empty() + raw BHSD->BSM conversion
@@ -1192,38 +1188,18 @@ Tensor scaled_dot_product_attention(
 // When W_o matmul backward called input_grad_fn->apply(), it got nullptr
 // because attn_out.grad_fn was never set.
 //
-// FIX: This operation takes attn_out_bhsd with its grad_fn and produces
-// attn_out (flat) that has THIS GradFn. When W_o backward calls
-// input_grad_fn->apply(), it calls THIS apply() which:
+// OWNERSHIP BOUNDARY:
+// - TensorConversion owns the raw geometry kernels (`convert_BHSD_to_BSM`
+//   and the inverse index mapping used below).
+// - TensorContract/autograd owns the TAPE NODE that bridges attention output
+//   into the output projection matmul.
+//
+// FIX: This wrapper takes attn_out_bhsd with its grad_fn and produces attn_out
+// (flat) that has THIS GradFn. When W_o backward calls input_grad_fn->apply(),
+// it calls THIS apply() which:
 // 1. Reshapes the gradient from flat [tokens, d_model] to BHSD [B, H, S, D]
 // 2. Continues chain to input's grad_fn (ScaledDotProductAttentionGradFn)
 // ═══════════════════════════════════════════════════════════════════════════
-
-// CUDA kernel to reshape gradient from [B*S, H*D] flat to [B, H, S, D] BHSD.
-// This is the inverse of TensorConversion::convert_BHSD_to_BSM.
-__global__ void kernel_reshape_flat_to_BHSD(
-    const float* __restrict__ flat_grad,   // [B*S, H*D] row-major
-    float* __restrict__ bhsd_grad,          // [B, H, S, D] row-major
-    int batch_size, int seq_len, int num_heads, int head_dim
-) {
-    const int total = batch_size * num_heads * seq_len * head_dim;
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= total) return;
-    
-    // Decode BHSD position
-    const int d = idx % head_dim;
-    const int s = (idx / head_dim) % seq_len;
-    const int h = (idx / (head_dim * seq_len)) % num_heads;
-    const int b = idx / (head_dim * seq_len * num_heads);
-    
-    // Source: flat[b * seq_len + s, h * head_dim + d]
-    const int flat_row = b * seq_len + s;
-    const int flat_col = h * head_dim + d;
-    const int d_model = num_heads * head_dim;
-    const int flat_idx = flat_row * d_model + flat_col;
-    
-    bhsd_grad[idx] = flat_grad[flat_idx];
-}
 
 struct ReshapeFromBHSDGradFn : public GradFn {
     // Input tensor info
@@ -1271,16 +1247,22 @@ struct ReshapeFromBHSDGradFn : public GradFn {
         }
         
         // Reshape gradient from flat [tokens, d_model] to BHSD [B, H, S, D]
+        // via TensorConversion's single source of truth geometry kernel.
         const int total_elems = batch_size * num_heads * seq_len * head_dim;
-        const int block_size = 256;
-        const int num_blocks = (total_elems + block_size - 1) / block_size;
         
         // Allocate temporary buffer for reshaped gradient
         float* bhsd_grad = nullptr;
         cudaMallocOrThrow(reinterpret_cast<void**>(&bhsd_grad), total_elems * sizeof(float), "ReshapeBHSDGradFn_bhsd_grad");
         
-        kernel_reshape_flat_to_BHSD<<<num_blocks, block_size, 0, stream>>>(
-            grad_output.data, bhsd_grad, batch_size, seq_len, num_heads, head_dim);
+        TensorConversion::convert_BSM_to_BHSD(
+            grad_output.data, bhsd_grad, batch_size, seq_len, num_heads, head_dim, stream);
+        {
+            cudaError_t err = cudaGetLastError();
+            if (err != cudaSuccess) {
+                throw std::runtime_error("ReshapeFromBHSDGradFn::apply: convert_BSM_to_BHSD launch failed: " +
+                                         std::string(cudaGetErrorString(err)));
+            }
+        }
         
         // Continue chain to attention backward
         if (input_grad_fn) {
@@ -1307,10 +1289,15 @@ struct ReshapeFromBHSDGradFn : public GradFn {
 };
 
 /**
- * Reshape BHSD tensor to flat [tokens, d_model] with autograd tracking.
+ * Autograd wrapper over TensorConversion's BHSD->BSM geometry kernel.
  * 
  * ISSUE #62 FIX: This replaces Tensor::empty() + raw BHSD->BSM conversion
  * that broke the autograd chain (output had no grad_fn).
+ *
+ * This function does NOT create a second geometry owner. TensorConversion still
+ * owns the raw BHSD->BSM movement; this wrapper exists because the attention
+ * boundary needs a GradFn that can invert that flattening in backward and then
+ * continue into `ScaledDotProductAttentionGradFn`.
  */
 Tensor reshape_bhsd_to_flat(
     Tensor& bhsd_input,
@@ -1337,7 +1324,7 @@ Tensor reshape_bhsd_to_flat(
     // Allocate output tensor in flat layout
     Tensor result = Tensor::empty(TensorContract::TensorShape::make_BSM(tokens, d_model), bhsd_input.requires_grad, stream, "reshape_bhsd_to_flat_result");
     
-    // TensorContract owns the autograd wrapper; TensorConversion owns raw layout movement.
+    // TensorContract owns the autograd wrapper; TensorConversion owns raw geometry movement.
     // Do not route this through Layers/Attention/QKV_Projector (deleted stale wrapper).
     TensorConversion::convert_BHSD_to_BSM(
         bhsd_input.data, result.data, batch_size, num_heads, seq_len, head_dim, stream);

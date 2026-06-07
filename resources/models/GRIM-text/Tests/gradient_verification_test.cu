@@ -309,6 +309,7 @@ void testFlashAttentionBackward() {
         d_K, d_k_bf16, BATCH_SIZE, NUM_HEADS, SEQ_LEN, HEAD_DIM, stream);
     TensorConversion::convert_BHSD_to_BSHD_bf16(
         d_V, d_v_bf16, BATCH_SIZE, NUM_HEADS, SEQ_LEN, HEAD_DIM, stream);
+    const float softmax_scale = 1.0f / std::sqrt(static_cast<float>(HEAD_DIM));
 
     flash_attn_fwd_ex(
         d_q_bf16,
@@ -322,7 +323,7 @@ void testFlashAttentionBackward() {
         NUM_HEADS,
         NUM_HEADS,
         HEAD_DIM,
-        0.0f,
+        softmax_scale,
         true,
         true,
         0.0f,
@@ -358,7 +359,7 @@ void testFlashAttentionBackward() {
         NUM_HEADS,
         NUM_HEADS,
         HEAD_DIM,
-        0.0f,
+        softmax_scale,
         true,
         true,
         0.0f,

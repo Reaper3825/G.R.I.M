@@ -1300,10 +1300,11 @@ Tensor residual_add(const Tensor& x, const Tensor& residual,
 
 /**
  * Scaled dot-product attention with optional mask and ALiBi
+ * Returns FP32 BHSD even though FlashAttention runs on internal BSHD bf16 buffers.
  * 
- * @param scale Softmax scale for QK^T. 0.0f selects the canonical 1/sqrt(head_dim) default.
  * @param attention_hp Grouped encoder-attention contract. Validates build/runtime head_dim,
  *        causal mask, grouped-head geometry, and ALiBi requirements before launch.
+ * @param scale Explicit precomputed softmax scale from the hyperparameter/config boundary.
  * @param attention_dropout_p Attention dropout DROP rate (0.0 = disabled, 0.15 = 15% drop rate).
  *        Converted internally to keep probability for FlashAttention (keep_p = 1.0 - attention_dropout_p).
  * @param dropout_seed Per-batch Philox RNG seed for reproducible dropout masks.
@@ -1313,7 +1314,7 @@ Tensor scaled_dot_product_attention(
     const Tensor& q, const Tensor& k, const Tensor& v,
     const float* alibi_slopes,
     const ::GRIM::HyperParameters::EncoderSelfAttentionHP& attention_hp,
-    float scale = 1.0f,
+    float scale,
     cudaStream_t stream = nullptr,
     float attention_dropout_p = 0.0f, uint64_t dropout_seed = 0);
 
@@ -1337,11 +1338,15 @@ std::tuple<Tensor, Tensor, Tensor> split_and_reshape_qkv(
     cudaStream_t stream = nullptr);
 
 /**
- * Reshape attention output from BHSD to flat layout with autograd tracking.
+ * Autograd wrapper over TensorConversion's BHSD->BSM geometry kernel.
  * 
  * ISSUE #62 FIX: This replaces Tensor::empty() + raw BHSD->BSM conversion
  * that broke the autograd chain (output had no grad_fn, causing W_o and 
  * downstream gradients to not flow through attention backward).
+ * The caller must pass the post-SDPA FP32 BHSD tensor, not the internal
+ * FlashAttention BSHD scratch/output buffer.
+ * TensorConversion still owns the actual layout change; this wrapper exists so
+ * backward can invert the flattening and continue the autograd chain into SDPA.
  * 
  * @param bhsd_input   Input tensor [B, H, S, D] from attention output
  * @param payload      BatchPayload source of truth for batch/sequence geometry
