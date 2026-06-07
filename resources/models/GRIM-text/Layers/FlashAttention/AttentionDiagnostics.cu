@@ -36,7 +36,7 @@ bool shouldEmitAttentionDiagnostics() {
         return false;
     }
     auto* tape = GRIM::Logging::getGlobalTape();
-    return tape && tape->accepts(GRIM::Logging::LogLevel::Debug);
+    return tape && tape->accepts(GRIM::Logging::LogLevel::Debug, GRIM::Logging::LogGroup::Attention);
 }
 
 void requireCudaSuccess(cudaError_t err, const char* context) {
@@ -550,6 +550,18 @@ void emitForwardPreKernelDiagnostics(const ForwardDiagnosticRequest& request) {
     const float expected_lse_mean = static_cast<float>(expected_lse_sum / static_cast<double>(expected_lse.size()));
     const float expected_score_magnitude = q_rms_mean * k_rms_mean * request.head_dim * request.softmax_scale;
     const float default_scale = 1.0f / std::sqrt(static_cast<float>(request.head_dim));
+
+    const int breadth_query_index = sample_tokens - 1;
+    std::vector<float> breadth_scores(static_cast<size_t>(breadth_query_index) + 1ULL, 0.0f);
+    for (int ki = 0; ki <= breadth_query_index; ++ki) {
+        breadth_scores[static_cast<size_t>(ki)] =
+            scores_sample[static_cast<size_t>(breadth_query_index) * static_cast<size_t>(sample_tokens) + static_cast<size_t>(ki)];
+    }
+    emitAttentionBreadthEquation(breadth_scores,
+                                 expected_lse[static_cast<size_t>(breadth_query_index)],
+                                 breadth_query_index,
+                                 -1,
+                                 0);
 
     std::fprintf(stderr, "\n[ATTN_SCORE_EQUATION] FLASH_ATTENTION_FWD: score = (Q @ K^T) / sqrt(head_dim) + alibi_bias\n");
     std::fprintf(stderr,

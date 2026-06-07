@@ -547,7 +547,9 @@
             },
             "logging_default_level": "ATTN:Warning",
             "logging_equation_csv_enabled": true,
-            "logging_group_overrides": {},
+            "logging_group_overrides": {
+                "ATTN": "Debug"
+            },
             "logging_initial_capacity": 2048,
             "logging_stderr_enabled": true,
             "logit_update_trace_enabled": false,
