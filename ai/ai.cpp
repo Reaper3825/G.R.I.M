@@ -21,6 +21,8 @@
 #include "location.hpp"  // ✅ For location context
 #include "helpers/grim_input.hpp"  // ✅ For parseInput
 #include "grim_backend.hpp"  // ✅ Native GRIM model backend (external reference)
+#include "grim_text_server_manager.hpp"
+#include "../MMO/Backends/GrimNativeBackend.hpp"
 #include "../MMO/Backends/OllamaBackend.hpp"
 #include <cpr/cpr.h>
 #include <fstream>
@@ -125,13 +127,7 @@ void clearConversationHistory() {
 // =========================================================
 // callOllamaDirect — bypass orchestrator for Ollama backend
 // =========================================================
-static std::string callOllamaDirect(const std::string& prompt) {
-    std::string url   = aiConfig.value("ollama_url", "http://127.0.0.1:11434");
-    std::string model = aiConfig.value("default_model", "llama3.1:8b");
-
-    GRIM::MMO::OllamaBackend backend(url, "ollama-direct", model);
-
-    // Build conversation history from SessionContextManager
+static std::vector<GRIM::MMO::HistoryEntry> buildDirectHistory() {
     auto& scm = GRIM::MMO::SessionContextManager::instance();
     auto messages = scm.getMessages(kDefaultSessionId);
 
@@ -140,6 +136,76 @@ static std::string callOllamaDirect(const std::string& prompt) {
     for (const auto& msg : messages) {
         history.push_back({msg.role, msg.content});
     }
+
+    return history;
+}
+
+static bool isGrimTextModelName(const std::string& model_name) {
+    std::string normalized = model_name;
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return normalized == "grim-text"
+        || normalized == "grim_text"
+        || normalized == "grim-text-router";
+}
+
+static std::string formatMMORouteState() {
+    bool mmo_config_enabled = false;
+    if (aiConfig.contains("mmo") && aiConfig["mmo"].is_object()) {
+        mmo_config_enabled = aiConfig["mmo"].value("enabled", false);
+    }
+
+    bool mmo_registry_enabled = GRIM::MMO::ModelRegistry::instance().isEnabled();
+    return "mmo_config_enabled=" + std::string(mmo_config_enabled ? "true" : "false")
+        + ", mmo_registry_enabled=" + std::string(mmo_registry_enabled ? "true" : "false")
+        + ", orchestrator=" + std::string(g_orchestrator ? "ready" : "null");
+}
+
+static int resolveGrimTextRequestTimeoutMs() {
+    constexpr int kDefaultGrimTextTimeoutMs = 600000;
+
+    if (!aiConfig.contains("grim_text_timeout_ms")) {
+        return kDefaultGrimTextTimeoutMs;
+    }
+
+    const int timeout_ms = aiConfig.value("grim_text_timeout_ms", kDefaultGrimTextTimeoutMs);
+    if (timeout_ms <= 0) {
+        throw std::runtime_error("ai_config grim_text_timeout_ms must be > 0");
+    }
+
+    return timeout_ms;
+}
+
+static void ensureGrimTextServerReady(const std::string& server_url) {
+    auto& server_manager = GRIM::GRIMTextServerManager::getInstance();
+    server_manager.setServerURL(server_url);
+
+    if (server_manager.checkHealth(2000)) {
+        LOG_DEBUG("AI", "GRIM-text server already healthy at " + server_url);
+        return;
+    }
+
+    LOG_DEBUG("AI", "Active model targets GRIM-text; starting GRIM-text server at " + server_url);
+    if (!GRIM::startGRIMTextServer()) {
+        throw std::runtime_error(
+            "GRIM-text server is required for active model '"
+            + aiConfig.value("default_model", std::string("grim-text"))
+            + "' but startup failed");
+    }
+
+    if (!server_manager.checkHealth(2000)) {
+        throw std::runtime_error(
+            "GRIM-text server startup completed but health check still failed at " + server_url);
+    }
+}
+
+static std::string callOllamaDirect(const std::string& prompt) {
+    std::string url   = aiConfig.value("ollama_url", "http://127.0.0.1:11434");
+    std::string model = aiConfig.value("default_model", "llama3.1:8b");
+
+    GRIM::MMO::OllamaBackend backend(url, "ollama-direct", model);
+
+    std::vector<GRIM::MMO::HistoryEntry> history = buildDirectHistory();
 
     GRIM::MMO::GenerationOptions opts;
     opts.timeout_ms = 60000;
@@ -153,15 +219,55 @@ static std::string callOllamaDirect(const std::string& prompt) {
     return "[AI] Backend call failed: " + gen.error;
 }
 
+static std::string callGrimTextDirect(const std::string& prompt) {
+    std::string url = aiConfig.value("grim_text_url", "http://127.0.0.1:11435");
+    ensureGrimTextServerReady(url);
+
+    GRIM::MMO::GrimNativeBackend backend(url, "grim-text-direct");
+    std::vector<GRIM::MMO::HistoryEntry> history = buildDirectHistory();
+
+    GRIM::MMO::GenerationOptions opts;
+    opts.timeout_ms = resolveGrimTextRequestTimeoutMs();
+
+    GRIM::MMO::GenerationResult gen = backend.generateWithHistory(prompt, history, opts);
+    if (gen.success) {
+        return gen.text;
+    }
+
+    LOG_ERROR("AI", "GRIM-text direct call failed: " + gen.error);
+    return "[AI] Backend call failed: " + gen.error;
+}
+
+static std::string callActiveModelDirect(const std::string& prompt) {
+    std::string active_model = aiConfig.value("default_model", "llama3.1:8b");
+    LOG_DEBUG("AI", "Direct model path hit: active_model=" + active_model + ", " + formatMMORouteState());
+    if (isGrimTextModelName(active_model)) {
+        return callGrimTextDirect(prompt);
+    }
+    return callOllamaDirect(prompt);
+}
+
 std::future<std::string> callAIAsync(const std::string& prompt) {
     return std::async(std::launch::async, [prompt]() -> std::string {
         // Check aiConfig["backend"] to decide routing
         std::string backend = aiConfig.value("backend", "auto");
 
+
+
+        if (backend == "grim_native") {
+        LOG_DEBUG("AI", "backend=grim_native direct dispatch selected; " + formatMMORouteState());
+        return callGrimTextDirect(prompt);
+        }
+
+
+
         // Direct Ollama path — no orchestrator needed
         if (backend == "ollama") {
-            return callOllamaDirect(prompt);
+            LOG_DEBUG("AI", "backend=ollama direct dispatch selected; " + formatMMORouteState());
+            return callActiveModelDirect(prompt);
         }
+
+
 
         // All other backends route through MMO orchestrator
         if (!g_orchestrator) {
@@ -172,7 +278,7 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
 
         auto& registry = GRIM::MMO::ModelRegistry::instance();
         if (!registry.isEnabled()) {
-            LOG_DEBUG("AI", "MMO toggled off — falling back to Ollama direct");
+            LOG_DEBUG("AI", "MMO toggled off — falling back to direct model dispatch; " + formatMMORouteState());
             return callOllamaDirect(prompt);
         }
 
@@ -343,12 +449,13 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
         LOG_DEBUG("AI", "[TRACE] ai_interpret future.get() returned (" + std::to_string(reply.size()) + " chars)");
 
         // --- Early validation of reply ---
-        if (reply.empty() || reply.rfind("[AI] Backend call failed", 0) == 0) {
-            LOG_ERROR("AI", "Backend returned error or empty response: " + reply);
-            result.message = "[AI] Could not interpret input.";
-            result.voice = "Sorry, I couldn't interpret that.";
-            return result;
-        }
+        if (reply.empty())  {
+            LOG_ERROR("AI", "Backend returned empty response: " + reply);
+
+        result.message = "[AI] Could not interpret input.";
+        result.voice = "Sorry, I couldn't interpret that.";
+        return result;
+    }
 
         // --- Extract JSON from response (Mistral sometimes adds extra text) ---
         auto& trainingParser = GRIM::MMO::ToolTrainingParser::instance();

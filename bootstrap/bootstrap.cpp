@@ -448,9 +448,9 @@ static void bootstrapMMOLayer() {
         GRIM::MMO::OrchestratorConfig orchCfg;
         if (aiConfig.contains("mmo") && aiConfig["mmo"].contains("orchestrator")) {
             auto& oc = aiConfig["mmo"]["orchestrator"];
-            orchCfg.route_timeout_ms            = oc.value("route_timeout_ms", 10000);
-            orchCfg.generate_timeout_ms         = oc.value("generate_timeout_ms", 30000);
-            orchCfg.synthesize_timeout_ms       = oc.value("synthesize_timeout_ms", 10000);
+            orchCfg.route_timeout_ms            = oc.value("route_timeout_ms", 600000);
+            orchCfg.generate_timeout_ms         = oc.value("generate_timeout_ms", 600000);
+            orchCfg.synthesize_timeout_ms       = oc.value("synthesize_timeout_ms", 600000);
             orchCfg.max_submodels_per_request   = oc.value("max_submodels_per_request", 1);
             orchCfg.correction_output_path      = oc.value("correction_output_path", "correction_tuples.jsonl");
         }

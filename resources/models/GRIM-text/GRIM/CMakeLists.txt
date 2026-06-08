@@ -200,6 +200,48 @@ set_target_properties(grim_text_server PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_CURRENT_SOURCE_DIR}/../training/build/Debug"
 )
 
+if(WIN32)
+    set(GRIM_SERVER_BROTLI_DLL_SOURCE_DIR "")
+    foreach(_prefix IN LISTS CMAKE_PREFIX_PATH)
+        if(EXISTS "${_prefix}/bin/brotlienc.dll")
+            set(GRIM_SERVER_BROTLI_DLL_SOURCE_DIR "${_prefix}/bin")
+            break()
+        endif()
+    endforeach()
+
+    if(NOT GRIM_SERVER_BROTLI_DLL_SOURCE_DIR)
+        if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../../../vcpkg_installed/x64-windows/bin/brotlienc.dll")
+            set(GRIM_SERVER_BROTLI_DLL_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../vcpkg_installed/x64-windows/bin")
+        elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../../../external/vcpkg/installed/x64-windows/bin/brotlienc.dll")
+            set(GRIM_SERVER_BROTLI_DLL_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../external/vcpkg/installed/x64-windows/bin")
+        endif()
+    endif()
+
+    if(GRIM_SERVER_BROTLI_DLL_SOURCE_DIR)
+        set(GRIM_SERVER_BROTLI_DLLS)
+        foreach(_dll IN ITEMS brotlicommon.dll brotlidec.dll brotlienc.dll)
+            if(EXISTS "${GRIM_SERVER_BROTLI_DLL_SOURCE_DIR}/${_dll}")
+                list(APPEND GRIM_SERVER_BROTLI_DLLS "${GRIM_SERVER_BROTLI_DLL_SOURCE_DIR}/${_dll}")
+            else()
+                message(WARNING "Expected Brotli runtime DLL missing at configure time: ${GRIM_SERVER_BROTLI_DLL_SOURCE_DIR}/${_dll}")
+            endif()
+        endforeach()
+
+        if(GRIM_SERVER_BROTLI_DLLS)
+            add_custom_command(TARGET grim_text_server POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different ${GRIM_SERVER_BROTLI_DLLS} $<TARGET_FILE_DIR:grim_text_server>
+                COMMAND_EXPAND_LISTS
+                COMMENT "Deploying Brotli runtime DLLs for grim_text_server"
+            )
+            message(STATUS "GRIM text server runtime DLL source: ${GRIM_SERVER_BROTLI_DLL_SOURCE_DIR}")
+        else()
+            message(WARNING "No Brotli runtime DLLs were found to deploy for grim_text_server")
+        endif()
+    else()
+        message(WARNING "Could not locate brotlienc.dll in CMAKE_PREFIX_PATH or known vcpkg bin directories; grim_text_server may fail with STATUS_DLL_NOT_FOUND")
+    endif()
+endif()
+
 message(STATUS "GRIM Text Server configured:")
 message(STATUS "  - grim_text_server: Ollama-compatible HTTP bridge to train_gpu inference worker")
 message(STATUS "  - Output: training/build/Release/grim_text_server.exe")

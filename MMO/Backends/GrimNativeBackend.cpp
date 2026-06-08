@@ -12,6 +12,12 @@
 
 namespace GRIM::MMO {
 
+namespace {
+
+constexpr int kDefaultGrimTextTimeoutMs = 600000;
+
+} // namespace
+
 // =========================================================
 // Constructor
 // =========================================================
@@ -90,7 +96,7 @@ GenerationResult GrimNativeBackend::generateWithHistory(
     if (options.top_p > 0.0f)      body["top_p"]        = options.top_p;
     if (options.top_k > 0)         body["top_k"]        = options.top_k;
 
-    int timeout = options.timeout_ms > 0 ? options.timeout_ms : 30000;
+    int timeout = options.timeout_ms > 0 ? options.timeout_ms : kDefaultGrimTextTimeoutMs;
     std::string endpoint = url_ + "/api/chat";
 
     LOG_DEBUG("MMO_GRIM_NATIVE", "[TRACE] POST " + endpoint + " (timeout=" + std::to_string(timeout) + "ms)");
@@ -151,7 +157,7 @@ GenerationResult GrimNativeBackend::generateEnvelope(
 
     GenerationResult result;
 
-    int timeout = options.timeout_ms > 0 ? options.timeout_ms : 30000;
+    int timeout = options.timeout_ms > 0 ? options.timeout_ms : kDefaultGrimTextTimeoutMs;
     std::string endpoint = url_ + options.mmo_endpoint;
 
     LOG_DEBUG("MMO_GRIM_NATIVE", "POST " + endpoint + " (envelope)");

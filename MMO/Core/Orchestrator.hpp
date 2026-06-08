@@ -41,9 +41,9 @@ namespace GRIM::MMO {
 // Orchestrator configuration (from ai_config.json → mmo.orchestrator)
 // =========================================================
 struct OrchestratorConfig {
-    int  route_timeout_ms           = 10000;
-    int  generate_timeout_ms        = 30000;
-    int  synthesize_timeout_ms      = 10000;
+    int  route_timeout_ms           = 600000;
+    int  generate_timeout_ms        = 600000;
+    int  synthesize_timeout_ms      = 600000;
     int  max_submodels_per_request  = 1;    // v1: single sub-model
     std::string correction_output_path = "correction_tuples.jsonl";
 };

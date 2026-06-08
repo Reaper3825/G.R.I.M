@@ -11,6 +11,8 @@
 #include <filesystem>
 #include <thread>
 #include <chrono>
+#include <sstream>
+#include <iomanip>
 
 #ifdef _WIN32
 #include "core/grim_platform.h"
@@ -18,6 +20,32 @@
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
+
+#ifdef _WIN32
+namespace {
+
+constexpr DWORD kStatusDllNotFound = 0xC0000135u;
+
+std::string formatWindowsStatusCode(DWORD code) {
+    std::ostringstream oss;
+    oss << "0x" << std::uppercase << std::hex << std::setw(8) << std::setfill('0') << code;
+    return oss.str();
+}
+
+void logServerTerminationDiagnosis(DWORD exitCode, const fs::path& serverExe) {
+    if (exitCode != kStatusDllNotFound) {
+        return;
+    }
+
+    LOG_ERROR("GRIMTextServer",
+        "Windows loader status " + formatWindowsStatusCode(exitCode) +
+        " (STATUS_DLL_NOT_FOUND): missing runtime dependency while loading " + serverExe.string());
+    LOG_ERROR("GRIMTextServer",
+        "Install/repair Microsoft Visual C++ Redistributable (x64), verify CUDA runtime DLLs are on PATH, then inspect grim_text_server.exe dependencies.");
+}
+
+} // namespace
+#endif
 
 namespace GRIM {
 
@@ -104,12 +132,7 @@ bool GRIMTextServerManager::start() {
         return fs::path(getGrimRootDir()) / path;
     };
 
-    const json& grimTextPaths = aiConfig.at("paths").at("grim_text");
-    
-    // Resolve absolute paths
     fs::path serverExe = resolveFromGrimRoot(serverPath_);
-    fs::path vocabPath = resolveFromGrimRoot(grimTextPaths.at("vocab").get<std::string>());
-    fs::path modelPath = resolveFromGrimRoot(grimTextPaths.at("model").get<std::string>());
     
     if (!fs::exists(serverExe)) {
         LOG_ERROR("GRIMTextServer", "Server executable not found: " + serverExe.string());
@@ -117,20 +140,7 @@ bool GRIMTextServerManager::start() {
         return false;
     }
     
-    if (!fs::exists(vocabPath)) {
-        LOG_ERROR("GRIMTextServer", "Vocabulary file not found: " + vocabPath.string());
-        return false;
-    }
-    
-    if (!fs::exists(modelPath)) {
-        LOG_ERROR("GRIMTextServer", "Model file not found: " + modelPath.string());
-        LOG_ERROR("GRIMTextServer", "Train the model first or merge checkpoints");
-        return false;
-    }
-    
     LOG_DEBUG("GRIMTextServer", "Server path: " + serverExe.string());
-    LOG_DEBUG("GRIMTextServer", "Vocab path: " + vocabPath.string());
-    LOG_DEBUG("GRIMTextServer", "Model path: " + modelPath.string());
     
 #ifdef _WIN32
     // Setup startup info
@@ -142,10 +152,8 @@ bool GRIMTextServerManager::start() {
     
     ZeroMemory(&processInfo_, sizeof(processInfo_));
     
-    // Build command line with arguments: grim_text_server.exe vocab_path model_path port
-    std::string cmdLine = "\"" + serverExe.string() + "\" \"" + 
-                         vocabPath.string() + "\" \"" + 
-                         modelPath.string() + "\" 11435";
+    // The server now reads config internally; no CLI arguments are required.
+    std::string cmdLine = "\"" + serverExe.string() + "\"";
     
     std::vector<char> mutableCmd(cmdLine.begin(), cmdLine.end());
     mutableCmd.push_back('\0');
@@ -193,7 +201,10 @@ bool GRIMTextServerManager::start() {
         // Check if process crashed
         DWORD exitCode = 0;
         if (GetExitCodeProcess(hProcess_, &exitCode) && exitCode != STILL_ACTIVE) {
-            LOG_ERROR("GRIMTextServer", "Server process terminated unexpectedly (exit code: " + std::to_string(exitCode) + ")");
+            LOG_ERROR("GRIMTextServer",
+                "Server process terminated unexpectedly (exit code: " + std::to_string(exitCode) +
+                ", status: " + formatWindowsStatusCode(exitCode) + ")");
+            logServerTerminationDiagnosis(exitCode, serverExe);
             running_ = false;
             return false;
         }

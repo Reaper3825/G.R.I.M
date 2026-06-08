@@ -16,7 +16,7 @@ static constexpr float kContentTopY = 68.0f;
 UISettingsMenu::UISettingsMenu()
     : UIPanel("Settings", true), hasChanges(false), isRefreshing(false), needsWidgetRefresh(false)
 {
-    position = { 200, 200 };
+    position = { 200, 250 };
     size = { 620, 700 };
     setVisible(false);
     setBackground(UITheme::Colors::PanelBg);

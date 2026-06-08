@@ -20,6 +20,78 @@
 namespace GRIM {
 namespace Tokenizer {
 
+namespace {
+
+std::string formatHexByte(unsigned char byte) {
+    static constexpr char kHexDigits[] = "0123456789ABCDEF";
+    std::string result = "0x";
+    result.push_back(kHexDigits[(byte >> 4) & 0x0F]);
+    result.push_back(kHexDigits[byte & 0x0F]);
+    return result;
+}
+
+std::string summarizeByteRun(const std::string& byte_run) {
+    constexpr size_t kMaxPreviewBytes = 16;
+    std::string summary;
+    const size_t preview_count = std::min(byte_run.size(), kMaxPreviewBytes);
+    for (size_t i = 0; i < preview_count; ++i) {
+        if (!summary.empty()) {
+            summary.push_back(' ');
+        }
+        summary += formatHexByte(static_cast<unsigned char>(byte_run[i]));
+    }
+    if (byte_run.size() > preview_count) {
+        summary += " ...";
+    }
+    return summary;
+}
+
+std::string formatTokenPrefix(const int* token_ids, size_t token_count) {
+    std::string result = "[";
+    for (size_t i = 0; i < token_count; ++i) {
+        if (i != 0) {
+            result += ", ";
+        }
+        result += std::to_string(token_ids[i]);
+    }
+    result.push_back(']');
+    return result;
+}
+
+void appendValidatedUtf8ByteRun(std::string& result,
+                                const std::string& byte_run,
+                                const int* token_ids,
+                                size_t token_start_index) {
+    if (byte_run.empty()) {
+        return;
+    }
+
+    size_t byte_offset = 0;
+    while (byte_offset < byte_run.size()) {
+        uint32_t codepoint = 0;
+        size_t codepoint_len = 0;
+        if (!utf8DecodeAt(byte_run, byte_offset, &codepoint, &codepoint_len)) {
+            const unsigned char bad_byte = static_cast<unsigned char>(byte_run[byte_offset]);
+            throw std::runtime_error(
+                "UniByte::decode: byte-token run starting at token index=" +
+                std::to_string(token_start_index) +
+                " after prior_token_count=" + std::to_string(token_start_index) +
+                " prior_token_ids=" + formatTokenPrefix(token_ids, token_start_index) +
+                " produced invalid UTF-8 at run byte offset=" +
+                std::to_string(byte_offset) +
+                " (token_id=" + std::to_string(token_ids[token_start_index + byte_offset]) +
+                ", byte=" + formatHexByte(bad_byte) +
+                ", run_bytes=[" + summarizeByteRun(byte_run) + "])"
+            );
+        }
+        byte_offset += codepoint_len;
+    }
+
+    result += byte_run;
+}
+
+} // namespace
+
 //======================================================//
 //  UniByte Implementation
 //======================================================//
@@ -228,17 +300,33 @@ std::string UniByte::decode(const DecodeRequest& request) const {
     }
 
     std::string result;
+    std::string pending_byte_run;
+    size_t pending_byte_run_start = 0;
     const TokenLayout layout = tokenLayoutFromActualVocabOrThrow(
         static_cast<std::uint32_t>(vocabSize()),
         "UniByte::decode");
+    auto flushPendingByteRun = [&]() {
+        appendValidatedUtf8ByteRun(result,
+                                   pending_byte_run,
+                                   request.token_ids,
+                                   pending_byte_run_start);
+        pending_byte_run.clear();
+    };
     for (size_t i = 0; i < request.token_count; ++i) {
         const int tid = request.token_ids[i];
+        if (layout.isByte(tid)) {
+            if (pending_byte_run.empty()) {
+                pending_byte_run_start = i;
+            }
+            pending_byte_run.push_back(static_cast<char>(tid - BYTE_TOKEN_OFFSET));
+            continue;
+        }
+
+        flushPendingByteRun();
         if (layout.isSpecial(tid)) {
             if (tid != PAD_TOKEN_ID) {
                 result += specialTokenText(tid);
             }
-        } else if (layout.isByte(tid)) {
-            result.push_back(static_cast<char>(tid - BYTE_TOKEN_OFFSET));
         } else if (layout.isAtom(tid)) {
             bool decoded_atom = false;
             if (request.atom_entry_ids && request.atom_table) {
@@ -275,6 +363,8 @@ std::string UniByte::decode(const DecodeRequest& request) const {
                                      " is outside all known token ranges");
         }
     }
+
+    flushPendingByteRun();
 
     return denormalizeSpaces(result);
 }

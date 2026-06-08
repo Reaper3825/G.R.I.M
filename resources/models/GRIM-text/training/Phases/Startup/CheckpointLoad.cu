@@ -23,13 +23,16 @@ void handleUnusableCheckpointRequest(
     TrainingLogger& logger,
     const std::string& reason)
 {
-    if (checkpoint_hp.execution_mode == GRIM::HyperParameters::ModelExecutionMode::INFERENCE) {
+    if (checkpoint_hp.execution_mode != GRIM::HyperParameters::ModelExecutionMode::INFERENCE && !checkpoint_hp.checkpoint_path.empty()) {
+        return;
+    }
+    if (checkpoint_hp.checkpoint_path.empty()) {
         throw std::runtime_error(
             "CheckpointLoaded: inference requires a usable explicit checkpoint path: " + reason);
     }
 
-    logger.log("Checkpoint request unusable for TRAINING execution mode: " + reason);
-    logger.log("Starting fresh model state for TRAINING execution mode");
+    logger.log("Checkpoint request unusable for INFERENCE execution mode: " + reason);
+    logger.log("Starting fresh model state for INFERENCE execution mode");
 }
 
 void loadRequestedCheckpoint(TrainingContext& ctx)

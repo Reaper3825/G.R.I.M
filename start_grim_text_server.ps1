@@ -6,10 +6,7 @@ Write-Host "  GRIM-text Server Launcher" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-$serverExe = "resources\models\GRIM-text\training\build_vs_cuda\Release\grim_text_server.exe"
-$vocabPath = "resources\models\GRIM-text\training\models\vocab.bin"
-$modelPath = "resources\models\GRIM-text\checkpoints\checkpoint_epoch_5.bin"
-$port = 11435
+$serverExe = "resources\models\GRIM-text\training\build\Release\grim_text_server.exe"
 
 # Check if server executable exists
 if (-not (Test-Path $serverExe)) {
@@ -23,29 +20,13 @@ if (-not (Test-Path $serverExe)) {
     exit 1
 }
 
-# Check if vocab file exists
-if (-not (Test-Path $vocabPath)) {
-    Write-Host "[WARNING] Vocab file not found: $vocabPath" -ForegroundColor Yellow
-    Write-Host "Server may fail to start without vocabulary" -ForegroundColor Yellow
-    Write-Host ""
-}
-
-# Check if model file exists
-if (-not (Test-Path $modelPath)) {
-    Write-Host "[WARNING] Model file not found: $modelPath" -ForegroundColor Yellow
-    Write-Host "Server will start but may use random weights" -ForegroundColor Yellow
-    Write-Host ""
-}
-
 Write-Host "[INFO] Starting GRIM-text server..." -ForegroundColor Green
 Write-Host "[INFO] Server: $serverExe" -ForegroundColor Gray
-Write-Host "[INFO] Vocab: $vocabPath" -ForegroundColor Gray
-Write-Host "[INFO] Model: $modelPath" -ForegroundColor Gray
-Write-Host "[INFO] Port: $port" -ForegroundColor Gray
-Write-Host "[INFO] URL: http://127.0.0.1:$port" -ForegroundColor Gray
+Write-Host "[INFO] Server reads config internally; no CLI args are required." -ForegroundColor Gray
+Write-Host "[INFO] URL: http://127.0.0.1:11435" -ForegroundColor Gray
 Write-Host ""
 Write-Host "Press Ctrl+C to stop the server" -ForegroundColor Yellow
 Write-Host ""
 
 # Start server
-& $serverExe $vocabPath $modelPath $port
+& $serverExe

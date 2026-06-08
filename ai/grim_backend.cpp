@@ -16,6 +16,25 @@ using json = nlohmann::json;
 // External config
 extern nlohmann::json aiConfig;
 
+namespace {
+
+int resolveGrimTextRequestTimeoutMs() {
+    constexpr int kDefaultGrimTextTimeoutMs = 600000;
+
+    if (!aiConfig.contains("grim_text_timeout_ms")) {
+        return kDefaultGrimTextTimeoutMs;
+    }
+
+    const int timeout_ms = aiConfig.value("grim_text_timeout_ms", kDefaultGrimTextTimeoutMs);
+    if (timeout_ms <= 0) {
+        throw std::runtime_error("ai_config grim_text_timeout_ms must be > 0");
+    }
+
+    return timeout_ms;
+}
+
+} // namespace
+
 namespace GRIM {
 
 std::unique_ptr<GRIMBackend> g_grimBackend;
@@ -75,6 +94,7 @@ std::string GRIMBackend::generate(const std::string& prompt, int max_tokens) {
         // ✅ NEW: Retry logic for transient failures
         const int maxRetries = 3;
         int retryDelayMs = 1000;
+        const int timeoutMs = resolveGrimTextRequestTimeoutMs();
         
         for (int attempt = 1; attempt <= maxRetries; ++attempt) {
             // Call GRIM-text HTTP server
@@ -82,7 +102,7 @@ std::string GRIMBackend::generate(const std::string& prompt, int max_tokens) {
                 cpr::Url{server_url + "/api/generate"},
                 cpr::Header{{"Content-Type", "application/json"}},
                 cpr::Body{request.dump()},
-                cpr::Timeout{30000}  // 30 second timeout
+                cpr::Timeout{timeoutMs}
             );
             
             if (resp.status_code == 200) {
@@ -153,6 +173,8 @@ std::string GRIMBackend::generateWithHistory(
             {"temperature", 0.8f},
             {"stream", false}
         };
+
+        const int timeoutMs = resolveGrimTextRequestTimeoutMs();
         
         LOG_DEBUG("GRIM", "Calling GRIM-text chat endpoint with " + std::to_string(messages.size()) + " messages");
         
@@ -160,7 +182,7 @@ std::string GRIMBackend::generateWithHistory(
             cpr::Url{server_url + "/api/chat"},
             cpr::Header{{"Content-Type", "application/json"}},
             cpr::Body{request.dump()},
-            cpr::Timeout{30000}
+            cpr::Timeout{timeoutMs}
         );
         
         if (resp.status_code == 200) {
