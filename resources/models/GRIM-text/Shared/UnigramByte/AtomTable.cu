@@ -548,7 +548,7 @@ AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
             caller);
     }
 
-    const bool dump_atom_entry_breakdown = false;
+    const bool dump_atom_entry_breakdown = true;
     if (dump_atom_entry_breakdown) {
         dumpAtomTableCreationBreakdown(result, caller);
     }
