@@ -19,6 +19,7 @@
 #include <iomanip>
 #include <iostream>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -117,6 +118,13 @@ void requireAtomTableCreationCaller(const char* caller) {
     }
 }
 
+void requireAtomTablePayloadApplyCaller(const char* caller) {
+    if (caller == nullptr || caller[0] == '\0') {
+        throw std::runtime_error("applyAtomTokenizationPayloadToTokenSideChannels: caller label is empty at " +
+                                 std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    }
+}
+
 void validateRawTextDetectionForAtomTableCreation(
     const Detector::RawTextDetection& detection,
     size_t detection_index,
@@ -149,6 +157,176 @@ void validateRawTextDetectionForAtomTableCreation(
         throw std::runtime_error(std::string(caller) +
                                  ": raw text detection index=" + std::to_string(detection_index) +
                                  " exceeds StructuralSpan uint32 offset/length capacity");
+    }
+}
+
+void appendArgNumberFromSpan(
+    std::string_view source_text,
+    const StructuralSpan& span,
+    const AtomEntry& entry,
+    ArgNumberPopulationPayload& payload,
+    const char* caller) {
+    if (!isNumericAtom(span.atom_type)) {
+        ++payload.skipped_atoms;
+        return;
+    }
+    if (span.content_length == 0) {
+        ++payload.malformed_numbers;
+        return;
+    }
+    if (span.content_offset > source_text.size() ||
+        static_cast<size_t>(span.content_length) > source_text.size() - span.content_offset) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": atom content span is outside source text, atom_entry_id=" +
+                                 std::to_string(span.atom_entry_id) +
+                                 ", content_offset=" + std::to_string(span.content_offset) +
+                                 ", content_length=" + std::to_string(span.content_length) +
+                                 ", source_size=" + std::to_string(source_text.size()));
+    }
+    if (span.content_length > static_cast<uint32_t>(std::numeric_limits<int16_t>::max()) + 1U) {
+        ++payload.malformed_numbers;
+        return;
+    }
+
+    ArgNumber number{};
+    number.number_atom_id = span.atom_entry_id;
+    number.raw_span.offset = span.offset;
+    number.raw_span.length = span.length;
+    number.content_span.offset = span.content_offset;
+    number.content_span.length = span.content_length;
+    number.base = 10;
+    number.confidence = entry.confidence;
+    number.digits.reserve(span.content_length);
+
+    for (uint32_t index_left = 0; index_left < span.content_length; ++index_left) {
+        const unsigned char c = static_cast<unsigned char>(source_text[span.content_offset + index_left]);
+        if (c < static_cast<unsigned char>('0') || c > static_cast<unsigned char>('9')) {
+            ++payload.malformed_numbers;
+            return;
+        }
+
+        const uint32_t index_right = span.content_length - 1U - index_left;
+        DigitBinding binding{};
+        binding.digit = static_cast<uint8_t>(c - static_cast<unsigned char>('0'));
+        binding.index_left = static_cast<uint16_t>(index_left);
+        binding.index_right = static_cast<uint16_t>(index_right);
+        binding.pow10 = static_cast<int16_t>(index_right);
+        binding.digit_span.offset = span.content_offset + index_left;
+        binding.digit_span.length = 1;
+        number.digits.push_back(binding);
+    }
+
+    payload.total_digits += static_cast<uint32_t>(number.digits.size());
+    payload.numbers.push_back(std::move(number));
+    payload.total_numbers = static_cast<uint32_t>(payload.numbers.size());
+}
+
+const ArgNumber* findArgNumberByAtomId(
+    const ArgNumberPopulationPayload& payload,
+    uint32_t atom_entry_id) {
+    for (const ArgNumber& number : payload.numbers) {
+        if (number.number_atom_id == atom_entry_id) {
+            return &number;
+        }
+    }
+    return nullptr;
+}
+
+void dumpAtomTableCreationBreakdown(
+    const AtomTableFromDetectionsResult& result,
+    const char* caller) {
+    if (!result.atom_table) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": dumpAtomTableCreationBreakdown requires a valid atom_table");
+    }
+
+    std::cerr << "[ATOMTABLE_ENTRY_BREAKDOWN_DUMP] caller=" << caller
+              << " total_atom_tokens=" << result.atom_tokens.size()
+              << " total_numbers=" << result.arg_number_payload.total_numbers
+              << " total_digits=" << result.arg_number_payload.total_digits
+              << " skipped_atoms=" << result.arg_number_payload.skipped_atoms
+              << " malformed_numbers=" << result.arg_number_payload.malformed_numbers
+              << "\n";
+
+    for (size_t atom_index = 0; atom_index < result.atom_tokens.size(); ++atom_index) {
+        const AtomTokenizationPayload& atom_payload = result.atom_tokens[atom_index];
+        const std::optional<AtomEntry> entry = result.atom_table->getAtom(atom_payload.atom_entry_id);
+        if (!entry.has_value()) {
+            throw std::runtime_error(std::string(caller) +
+                                     ": dumpAtomTableCreationBreakdown could not reload atom entry id=" +
+                                     std::to_string(atom_payload.atom_entry_id));
+        }
+
+        const std::string_view raw_text = result.atom_table->getString(entry->raw_text_ref);
+        const std::optional<NumericPayload> numeric_payload = result.atom_table->getNumericValue(entry->id);
+        const ArgNumber* arg_number = findArgNumberByAtomId(result.arg_number_payload, entry->id);
+
+        std::cerr << "  [ATOM_ENTRY] atom_index=" << atom_index
+                  << " atom_entry_id=" << entry->id
+                  << " token_id=" << atom_payload.token_id
+                  << " atom_type=" << atomTypeName(entry->type)
+                  << " category=" << atomCategoryName(entry->category)
+                  << " origin=" << atomOriginName(entry->origin)
+                  << " confidence=" << entry->confidence
+                  << " created_at=" << entry->created_at
+                  << " hash=0x" << std::hex << entry->hash << std::dec
+                  << "\n";
+
+        std::cerr << "    raw_text='" << std::string(raw_text) << "'"
+                  << " raw_text_ref={offset=" << entry->raw_text_ref.offset
+                  << ", length=" << entry->raw_text_ref.length << "}"
+                  << " source_span=[" << entry->source_start << ", " << entry->source_end << ")"
+                  << " numeric_value=" << entry->numeric_value
+                  << " flags=" << entry->flags
+                  << "\n";
+
+        std::cerr << "    token_payload: atom_mask=" << static_cast<int>(atom_payload.token_atom_mask)
+                  << " is_byte_fallback=" << (atom_payload.is_byte_fallback ? "true" : "false")
+                  << " token_numeric_value=" << atom_payload.token_numeric_value
+                  << " token_atom_flags=" << atom_payload.token_atom_flags
+                  << " span={offset=" << atom_payload.span.offset
+                  << ", length=" << atom_payload.span.length
+                  << ", content_offset=" << atom_payload.span.content_offset
+                  << ", content_length=" << atom_payload.span.content_length
+                  << ", placeholder_id=" << atom_payload.span.placeholder_id
+                  << "}"
+                  << "\n";
+
+        if (numeric_payload.has_value()) {
+            std::cerr << "    numeric_payload: kind=" << static_cast<int>(numeric_payload->kind)
+                      << " float_value=" << numeric_payload->float_value
+                      << " int_value=" << numeric_payload->int_value
+                      << "\n";
+        } else {
+            std::cerr << "    numeric_payload: <none>\n";
+        }
+
+        if (arg_number == nullptr) {
+            std::cerr << "    arg_number: <none>\n";
+            continue;
+        }
+
+        std::cerr << "    arg_number: raw_span={offset=" << arg_number->raw_span.offset
+                  << ", length=" << arg_number->raw_span.length
+                  << "} content_span={offset=" << arg_number->content_span.offset
+                  << ", length=" << arg_number->content_span.length
+                  << "} base=" << static_cast<int>(arg_number->base)
+                  << " confidence=" << arg_number->confidence
+                  << " digit_count=" << arg_number->digits.size()
+                  << "\n";
+
+        for (size_t digit_index = 0; digit_index < arg_number->digits.size(); ++digit_index) {
+            const DigitBinding& digit = arg_number->digits[digit_index];
+            std::cerr << "      [DIGIT_BINDING] digit_index=" << digit_index
+                      << " digit=" << static_cast<int>(digit.digit)
+                      << " pow10=" << digit.pow10
+                      << " index_left=" << digit.index_left
+                      << " index_right=" << digit.index_right
+                      << " digit_span={offset=" << digit.digit_span.offset
+                      << ", length=" << digit.digit_span.length
+                      << "}"
+                      << "\n";
+        }
     }
 }
 
@@ -301,7 +479,7 @@ AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
 
     AtomTableFromDetectionsResult result;
     result.atom_table = std::make_shared<AtomTable>();
-    result.spans.reserve(detections.size());
+    result.atom_tokens.reserve(detections.size());
 
     for (size_t detection_index = 0; detection_index < detections.size(); ++detection_index) {
         const Detector::RawTextDetection& detection = detections[detection_index];
@@ -346,10 +524,147 @@ AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
                                      ": registerSpan returned kAtomEntryNone for detector-emitted atom span at detection_index=" +
                                      std::to_string(detection_index));
         }
-        result.spans.push_back(span);
+
+        const std::optional<AtomEntry> entry = result.atom_table->getAtom(span.atom_entry_id);
+        if (!entry.has_value()) {
+            throw std::runtime_error(std::string(caller) +
+                                     ": registered atom_entry_id is not retrievable, atom_entry_id=" +
+                                     std::to_string(span.atom_entry_id));
+        }
+        AtomTokenizationPayload payload{};
+        payload.span = span;
+        payload.token_id = span.placeholder_id;
+        payload.is_byte_fallback = false;
+        payload.token_numeric_value = entry->numeric_value;
+        payload.token_atom_flags = entry->flags;
+        payload.token_atom_mask = 1;
+        payload.atom_entry_id = span.atom_entry_id;
+        result.atom_tokens.push_back(payload);
+        appendArgNumberFromSpan(
+            source_text,
+            span,
+            *entry,
+            result.arg_number_payload,
+            caller);
+    }
+
+    const bool dump_atom_entry_breakdown = false;
+    if (dump_atom_entry_breakdown) {
+        dumpAtomTableCreationBreakdown(result, caller);
     }
 
     return result;
+}
+
+static void applyAtomTokenizationPayloadToTokenSideChannelsInternal(
+    const AtomTableFromDetectionsResult& atom_table_build,
+    const std::vector<uint32_t>& atom_token_indices,
+    const std::vector<int>& token_ids,
+    const std::vector<float>& token_numeric_values,
+    const std::vector<uint8_t>& token_atom_mask,
+    const std::vector<uint32_t>& token_atom_flags,
+    std::vector<uint32_t>& atom_entry_ids,
+    const char* caller) {
+    requireAtomTablePayloadApplyCaller(caller);
+
+    const size_t token_count = token_ids.size();
+    if (token_numeric_values.size() != token_count) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": token_numeric_values.size()=" + std::to_string(token_numeric_values.size()) +
+                                 " != token_ids.size()=" + std::to_string(token_count));
+    }
+    if (token_atom_mask.size() != token_count) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": token_atom_mask.size()=" + std::to_string(token_atom_mask.size()) +
+                                 " != token_ids.size()=" + std::to_string(token_count));
+    }
+    if (token_atom_flags.size() != token_count) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": token_atom_flags.size()=" + std::to_string(token_atom_flags.size()) +
+                                 " != token_ids.size()=" + std::to_string(token_count));
+    }
+    if (atom_entry_ids.size() != token_count) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": atom_entry_ids.size()=" + std::to_string(atom_entry_ids.size()) +
+                                 " != token_ids.size()=" + std::to_string(token_count));
+    }
+    if (atom_table_build.atom_tokens.size() != atom_token_indices.size()) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": atom token payload count mismatch: atom_tokens=" +
+                                 std::to_string(atom_table_build.atom_tokens.size()) +
+                                 ", atom_token_indices=" + std::to_string(atom_token_indices.size()));
+    }
+
+    for (std::size_t atom_index = 0; atom_index < atom_table_build.atom_tokens.size(); ++atom_index) {
+        const uint32_t token_index_u32 = atom_token_indices[atom_index];
+        const size_t token_index = static_cast<size_t>(token_index_u32);
+        if (token_index >= token_count) {
+            throw std::runtime_error(std::string(caller) +
+                                     ": atom token index out of range at atom_index=" +
+                                     std::to_string(atom_index) +
+                                     ", token_index=" + std::to_string(token_index) +
+                                     ", token_count=" + std::to_string(token_count));
+        }
+
+        const AtomTokenizationPayload& atom_payload = atom_table_build.atom_tokens[atom_index];
+        if (token_ids[token_index] != atom_payload.token_id) {
+            throw std::runtime_error(std::string(caller) +
+                                     ": atom token_id mismatch at token_index=" + std::to_string(token_index) +
+                                     ": stored=" + std::to_string(token_ids[token_index]) +
+                                     ", payload=" + std::to_string(atom_payload.token_id));
+        }
+        if (token_atom_mask[token_index] != atom_payload.token_atom_mask) {
+            throw std::runtime_error(std::string(caller) +
+                                     ": atom mask mismatch at token_index=" + std::to_string(token_index) +
+                                     ": stored=" + std::to_string(static_cast<int>(token_atom_mask[token_index])) +
+                                     ", payload=" + std::to_string(static_cast<int>(atom_payload.token_atom_mask)));
+        }
+        if (token_atom_flags[token_index] != atom_payload.token_atom_flags) {
+            throw std::runtime_error(std::string(caller) +
+                                     ": atom flags mismatch at token_index=" + std::to_string(token_index) +
+                                     ": stored=" + std::to_string(token_atom_flags[token_index]) +
+                                     ", payload=" + std::to_string(atom_payload.token_atom_flags));
+        }
+        if (token_numeric_values[token_index] != atom_payload.token_numeric_value) {
+            throw std::runtime_error(std::string(caller) +
+                                     ": atom numeric payload mismatch at token_index=" + std::to_string(token_index) +
+                                     ": stored=" + std::to_string(token_numeric_values[token_index]) +
+                                     ", payload=" + std::to_string(atom_payload.token_numeric_value));
+        }
+        if (atom_payload.atom_entry_id == kAtomEntryNone) {
+            throw std::runtime_error(std::string(caller) +
+                                     ": atom payload carries kAtomEntryNone at atom_index=" +
+                                     std::to_string(atom_index));
+        }
+
+        atom_entry_ids[token_index] = atom_payload.atom_entry_id;
+    }
+}
+
+std::shared_ptr<AtomTable> createAtomTableFromRawTextDetectionsForTokenSideChannels(
+    std::string_view source_text,
+    const std::vector<Detector::RawTextDetection>& detections,
+    const std::vector<uint32_t>& atom_token_indices,
+    const std::vector<int>& token_ids,
+    const std::vector<float>& token_numeric_values,
+    const std::vector<uint8_t>& token_atom_mask,
+    const std::vector<uint32_t>& token_atom_flags,
+    std::vector<uint32_t>& atom_entry_ids,
+    const char* caller) {
+    AtomTableFromDetectionsResult atom_table_build = createAtomTableFromRawTextDetections(
+        source_text,
+        detections,
+        caller);
+    applyAtomTokenizationPayloadToTokenSideChannelsInternal(
+        atom_table_build,
+        atom_token_indices,
+        token_ids,
+        token_numeric_values,
+        token_atom_mask,
+        token_atom_flags,
+        atom_entry_ids,
+        caller);
+    return std::move(atom_table_build.atom_table);
 }
 
 void AtomTable::clear() {

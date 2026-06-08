@@ -138,8 +138,8 @@ The live layout comes from `TokenLayout.hpp`.
 ```mermaid
 flowchart LR
    IN[Input text] --> DET[scan raw detections]
-    DET --> REG[registerAtom in AtomTable]
-    REG --> INJ[inject NUM placeholders]
+   DET --> REG[create AtomTable payload]
+   REG --> INJ[inject atom payload placeholders]
     INJ --> NORM[normalizeSpaces]
    NORM --> SEG[UnigramViterbiSession]
     SEG --> FB{piece found?}
@@ -151,13 +151,16 @@ flowchart LR
 
 ### What actually happens
 
-1. `DetectorRegistry::scan()` finds raw detections; `UniByte` filters atom-emitting detections into numeric spans.
-2. Each span is registered in `AtomTable` and gets metadata.
-3. The original text is rewritten with numeric placeholders before unigram segmentation.
-4. Text normalization happens before unigram segmentation.
-5. `UnigramLM::encode()` creates a `UnigramViterbiSession` over the normalized text.
-6. Any residual byte sequence not covered by the finalized learned-piece segmentation overflows to raw byte tokens through `TokenLayout.hpp` byte helpers.
-7. `UniByteResult` is assembled and `validate()` checks that every parallel array matches `token_ids.size()`.
+1. `DetectorRegistry::scan()` finds raw detections; `UniByte` passes them to `createAtomTableFromRawTextDetections()`.
+2. `createAtomTableFromRawTextDetections()` allocates the per-sequence `AtomTable`, registers each atom-emitting detection exactly once, and returns `AtomTokenizationPayload` records.
+3. Each atom payload carries the finalized `StructuralSpan`, placeholder token ID, `atom_entry_id`, packed numeric value, atom flags, and atom mask used by the merge step.
+4. The original text is segmented around atom spans; non-atom gaps go through unigram segmentation, while atom gaps emit the returned atom payload directly.
+5. Text normalization happens before unigram segmentation of each non-atom gap.
+6. `UnigramLM::encode()` creates a `UnigramViterbiSession` over the normalized gap text.
+7. Any residual byte sequence not covered by the finalized learned-piece segmentation overflows to raw byte tokens through `TokenLayout.hpp` byte helpers.
+8. `UniByteResult` is assembled and `validate()` checks that every parallel array matches `token_ids.size()`.
+
+Persisted GRMT reconstruction uses `createAtomTableFromRawTextDetectionsForTokenSideChannels()` so AtomTable owns the payload validation and `atom_entry_ids` materialization instead of duplicating that policy in row I/O.
 
 Atoms never reach the byte-overflow step because they were already extracted and handled before unigram segmentation started.
 

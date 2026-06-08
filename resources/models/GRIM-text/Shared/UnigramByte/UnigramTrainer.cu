@@ -341,25 +341,6 @@ static size_t maxTrainingSegmentLengthForTrainingUnits(
     return max_segment_length;
 }
 
-namespace {
-
-[[noreturn]] void throwUnparseableDetectedAtomForTraining(const char* detector_name,
-                                                          AtomType atom_type,
-                                                          size_t start,
-                                                          size_t end,
-                                                          std::string_view atom_text,
-                                                          std::string_view parse_error) {
-    throw std::runtime_error(
-        std::string("UnigramLM::trainFromCorpus: detector-emitted atom span is not parseable; upstream detector/data pipeline bug: detector='") +
-        (detector_name ? std::string(detector_name) : std::string("<unknown>")) +
-        "', atom_type=" + atomTypeName(atom_type) +
-        ", span=[" + std::to_string(start) + ", " + std::to_string(end) +
-        "), text='" + std::string(atom_text) +
-        "', parse_error='" + std::string(parse_error) + "'");
-}
-
-} // namespace
-
 //======================================================//
 //  trainFromCorpus — TokenizerHP Detector-Prepass Entrypoint
 //======================================================//
@@ -387,25 +368,13 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                 true,
                 true);
             const auto detections = detector_registry.scan(text, detector_options);
-            spans.reserve(detections.size());
-            for (const auto& detection : detections) {
-                if (!detection.emitsAtom()) {
-                    continue;
-                }
-                const std::string_view atom_text(text.data() + detection.start,
-                                                 detection.end - detection.start);
-                auto parsed = AtomTable::parseAtom(
-                    detection.atom_type,
-                    std::string(atom_text));
-                if (!parsed.success) {
-                    throwUnparseableDetectedAtomForTraining(detection.detector_name,
-                                                            detection.atom_type,
-                                                            detection.start,
-                                                            detection.end,
-                                                            atom_text,
-                                                            parsed.error_message);
-                }
-                spans.push_back({detection.start, detection.end});
+            const AtomTableFromDetectionsResult atom_table_build = createAtomTableFromRawTextDetections(
+                std::string_view(text.data(), text.size()),
+                detections,
+                "UnigramLM::trainFromCorpus");
+            spans.reserve(atom_table_build.atom_tokens.size());
+            for (const AtomTokenizationPayload& atom_payload : atom_table_build.atom_tokens) {
+                spans.push_back({atom_payload.span.start, atom_payload.span.end});
             }
             total_atoms += spans.size();
         }

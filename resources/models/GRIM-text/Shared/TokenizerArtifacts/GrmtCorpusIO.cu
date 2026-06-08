@@ -10,6 +10,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
+#include <utility>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -366,8 +367,14 @@ bool GrmtCorpusReader::readNext(GrmtSequence& out_sequence) {
         }
     }
 
-    seq.atom_table = std::make_shared<GRIM::Tokenizer::AtomTable>();
     seq.atom_entry_ids.assign(seq_len, GRIM::Tokenizer::kAtomEntryNone);
+
+    std::string reconstructed_atom_source;
+    std::vector<GRIM::Tokenizer::Detector::RawTextDetection> atom_detections;
+    std::vector<std::uint32_t> detection_token_indices;
+    atom_detections.reserve(seq_len);
+    detection_token_indices.reserve(seq_len);
+
     for (std::uint32_t j = 0; j < seq_len; ++j) {
         if (atom_text[j].empty()) {
             continue;
@@ -380,8 +387,23 @@ bool GrmtCorpusReader::readNext(GrmtSequence& out_sequence) {
                                      " token_id=" + std::to_string(token_id));
         }
         const auto type = GRIM::Tokenizer::tokenIdToAtomType(token_id);
-        seq.atom_entry_ids[j] = seq.atom_table->registerAtom(type, atom_text[j]);
+        const size_t start = reconstructed_atom_source.size();
+        reconstructed_atom_source += atom_text[j];
+        const size_t end = reconstructed_atom_source.size();
+        atom_detections.emplace_back(start, end, type, "GRMT");
+        detection_token_indices.push_back(j);
     }
+
+    seq.atom_table = GRIM::Tokenizer::createAtomTableFromRawTextDetectionsForTokenSideChannels(
+        std::string_view(reconstructed_atom_source.data(), reconstructed_atom_source.size()),
+        atom_detections,
+        detection_token_indices,
+        seq.token_ids,
+        seq.token_numeric_values,
+        seq.token_atom_mask,
+        seq.token_atom_flags,
+        seq.atom_entry_ids,
+        source.c_str());
 
     const std::uint8_t exec_active = readScalar<std::uint8_t>(file_, source);
     seq.execution_active = (exec_active != 0);

@@ -13,6 +13,10 @@
 namespace GRIM {
 namespace Tokenizer {
 
+struct ArgData {
+    
+};
+
 struct StructuralSpan {
     size_t start;           // Start position in text (may include leading whitespace)
     size_t end;             // End position (exclusive)

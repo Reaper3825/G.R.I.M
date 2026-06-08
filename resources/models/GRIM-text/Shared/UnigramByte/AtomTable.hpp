@@ -158,14 +158,70 @@ struct ParseResult {
 
 class AtomTable;
 
+struct AtomTokenizationPayload {
+    StructuralSpan span;
+    int token_id = -1;
+    bool is_byte_fallback = false;
+    float token_numeric_value = 0.0f;
+    uint32_t token_atom_flags = 0;
+    uint8_t token_atom_mask = 0;
+    uint32_t atom_entry_id = kAtomEntryNone;
+};
+
+struct TextSpan32 {
+    uint32_t offset = 0;
+    uint32_t length = 0;
+};
+
+struct DigitBinding {
+    uint8_t digit = 0;
+    int16_t pow10 = 0;
+    uint16_t index_left = 0;
+    uint16_t index_right = 0;
+    TextSpan32 digit_span;
+};
+
+struct AtomNumber {
+    uint32_t number_atom_id = kAtomEntryNone;
+    TextSpan32 raw_span;
+    TextSpan32 content_span;
+    std::vector<DigitBinding> digits;
+    uint8_t base = 10;
+    float confidence = 0.0f;
+};
+
+using ArgNumber = AtomNumber;
+
+struct AtomNumberPopulationPayload {
+    std::vector<ArgNumber> numbers;
+    uint32_t total_numbers = 0;
+    uint32_t total_digits = 0;
+    uint32_t skipped_atoms = 0;
+    uint32_t malformed_numbers = 0;
+};
+
+using ArgNumberPopulationPayload = AtomNumberPopulationPayload;
+
 struct AtomTableFromDetectionsResult {
     std::shared_ptr<AtomTable> atom_table;
-    std::vector<StructuralSpan> spans;
+    std::vector<AtomTokenizationPayload> atom_tokens;
+    ArgNumberPopulationPayload arg_number_payload;
 };
 
 AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
     std::string_view source_text,
     const std::vector<Detector::RawTextDetection>& detections,
+    const char* caller);
+
+std::shared_ptr<AtomTable> createAtomTableFromRawTextDetectionsForTokenSideChannels(
+    std::string_view source_text,
+    const std::vector<Detector::RawTextDetection>& detections,
+    const std::vector<uint32_t>& atom_token_indices,
+    const std::vector<int>& token_ids,
+    const std::vector<float>& token_numeric_values,
+    const std::vector<uint8_t>& token_atom_mask,
+    const std::vector<uint32_t>& token_atom_flags,
+    std::vector<uint32_t>& atom_entry_ids,
     const char* caller);
 
 //======================================================//
@@ -303,7 +359,10 @@ public:
         uint8_t* d_numeric_kind;          // [num_atoms] - NumericPayloadKind
         uint32_t* d_flags;                // [num_atoms] - type-specific flags
         uint32_t* d_types;                // [num_atoms] - atom types
+        uint8_t Digit;                    // Placeholder atom metadata field; population wired later
+        uint16_t pow10;                   // Placeholder atom metadata field; population wired later
         size_t num_atoms;
+        
         
         GPUAtomData() 
             : d_numeric_values(nullptr)
@@ -312,6 +371,8 @@ public:
             , d_numeric_kind(nullptr)
             , d_flags(nullptr)
             , d_types(nullptr)
+            , Digit(0)
+            , pow10(0)
             , num_atoms(0) {}
     };
     

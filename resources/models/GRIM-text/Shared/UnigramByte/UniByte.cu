@@ -101,17 +101,17 @@ UniByteResult UniByte::tokenizeWithMetadata(const std::string& text) const {
         detections,
         "UniByte::tokenizeWithMetadata");
     result.atom_table = std::move(atom_table_build.atom_table);
-    std::vector<StructuralSpan> structures = std::move(atom_table_build.spans);
+    std::vector<AtomTokenizationPayload> atom_tokens = std::move(atom_table_build.atom_tokens);
 
     // Pre-allocate based on heuristic: ~1 token per 3-4 bytes + atoms.
-    const size_t estimated_tokens = (text.size() / 3) + structures.size() + 8;
+    const size_t estimated_tokens = (text.size() / 3) + atom_tokens.size() + 8;
     result.token_ids.reserve(estimated_tokens);
     result.is_byte_fallback.reserve(estimated_tokens);
     result.token_numeric_values.reserve(estimated_tokens);
     result.token_atom_flags.reserve(estimated_tokens);
     result.atom_entry_ids.reserve(estimated_tokens);
     result.token_atom_mask.reserve(estimated_tokens);
-    result.atoms.reserve(structures.size());
+    result.atoms.reserve(atom_tokens.size());
 
     auto appendNonAtomSideChannels = [&]() {
         result.token_atom_mask.push_back(0);
@@ -166,34 +166,16 @@ UniByteResult UniByte::tokenizeWithMetadata(const std::string& text) const {
     };
 
     while (pos < text.size()) {
-        if (struct_idx < structures.size() && pos == structures[struct_idx].start) {
-            const StructuralSpan& span = structures[struct_idx];
+        if (struct_idx < atom_tokens.size() && pos == atom_tokens[struct_idx].span.start) {
+            const AtomTokenizationPayload& atom_payload = atom_tokens[struct_idx];
+            const StructuralSpan& span = atom_payload.span;
 
-            int atom_token_id = span.placeholder_id;
-            uint32_t entry_id = span.atom_entry_id;
-            if (entry_id == kAtomEntryNone) {
-                throw std::runtime_error("UniByte::tokenizeWithMetadata: pre-registered atom span is missing atom_entry_id at struct_idx=" +
-                                         std::to_string(struct_idx));
-            }
-
-            const auto entry = result.atom_table->getAtom(entry_id);
-            if (!entry) {
-                throw std::runtime_error("UniByte::tokenizeWithMetadata: pre-registered atom_entry_id=" +
-                                         std::to_string(entry_id) +
-                                         " has no backing AtomEntry at struct_idx=" +
-                                         std::to_string(struct_idx));
-            }
-            float packed_numeric = 0.0f;
-            uint32_t packed_flags = 0;
-            packed_numeric = entry->numeric_value;
-            packed_flags = entry->flags;
-
-            result.token_ids.push_back(atom_token_id);
-            result.is_byte_fallback.push_back(false);
-            result.token_numeric_values.push_back(packed_numeric);
-            result.token_atom_flags.push_back(packed_flags);
-            result.atom_entry_ids.push_back(entry_id);
-            result.token_atom_mask.push_back(1);
+            result.token_ids.push_back(atom_payload.token_id);
+            result.is_byte_fallback.push_back(atom_payload.is_byte_fallback);
+            result.token_numeric_values.push_back(atom_payload.token_numeric_value);
+            result.token_atom_flags.push_back(atom_payload.token_atom_flags);
+            result.atom_entry_ids.push_back(atom_payload.atom_entry_id);
+            result.token_atom_mask.push_back(atom_payload.token_atom_mask);
 
             result.atoms.push_back(span);
             result.atom_tokens++;
@@ -204,8 +186,8 @@ UniByteResult UniByte::tokenizeWithMetadata(const std::string& text) const {
         }
 
         size_t segment_end = text.size();
-        if (struct_idx < structures.size()) {
-            segment_end = structures[struct_idx].start;
+        if (struct_idx < atom_tokens.size()) {
+            segment_end = atom_tokens[struct_idx].span.start;
         }
 
         appendSegmentTokens(pos, segment_end);
