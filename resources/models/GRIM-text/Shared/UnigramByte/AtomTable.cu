@@ -1446,7 +1446,7 @@ uint32_t AtomTable::findExisting(AtomType type, uint64_t hash, std::string_view 
     return UINT32_MAX;  // Hash collision but different content
 }
 
---------------//
+
 
 //--------------------------------------------------//
 // Registration
