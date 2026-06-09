@@ -185,8 +185,22 @@ struct AtomNumber {
     uint32_t number_atom_id = kAtomEntryNone;
     TextSpan32 raw_span;
     TextSpan32 content_span;
+    TextSpan32 mantissa_span;
+    TextSpan32 sign_span;
+    TextSpan32 decimal_point_span;
+    TextSpan32 exponent_marker_span;
+    TextSpan32 exponent_sign_span;
+    TextSpan32 exponent_digits_span;
     std::vector<DigitBinding> digits;
     uint8_t base = 10;
+    uint8_t has_sign = 0;
+    uint8_t sign_negative = 0;
+    uint8_t has_decimal_point = 0;
+    uint8_t has_exponent = 0;
+    uint8_t exponent_negative = 0;
+    uint16_t integer_digit_count = 0;
+    uint16_t fractional_digit_count = 0;
+    int32_t exponent_value = 0;
     float confidence = 0.0f;
 };
 

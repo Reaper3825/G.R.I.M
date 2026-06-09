@@ -1,6 +1,6 @@
 #include "AttentionDiagnostics.hpp"
 
-#include "../../Shared/LogRecorder/BatchLogTape.hpp"
+#include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/VerboseLogging.hpp"
 
 #include <algorithm>
@@ -15,10 +15,14 @@
 namespace {
 
 bool shouldEmitAttentionBreadthDiagnostics() {
+    if (!GRIM::Logging::LogsInitialized()) {
+        return false;
+    }
+    if (!GRIM::Logging::IsLayerLoggingEnabled(GRIM::LayerType::kAttention)) {
+        return false;
+    }
     auto* tape = GRIM::Logging::getGlobalTape();
-    return tape &&
-           tape->accepts(GRIM::Logging::LogLevel::Info, GRIM::Logging::LogGroup::Attention) &&
-           !tape->skipThisPass();
+    return !tape || !tape->skipThisPass();
 }
 
 struct LinearStats {
@@ -133,15 +137,14 @@ AttentionBreadthStats computeAttentionBreadthStats(const std::vector<float>& cau
 std::string interpretBreadth(const AttentionBreadthStats& stats, size_t prefix_len) {
     std::ostringstream interpretation;
     if (stats.normalized_entropy > 0.90f && stats.alpha_max < 0.20f) {
-        interpretation << "[ANOMALY] broad prefix-averaging risk: attention is close to uniform over "
-                       << stats.effective_support << " of " << prefix_len
-                       << " positions; this can reduce token distinctness";
+        interpretation << "[ANOMALY] broad_prefix_avg_risk"
+                       << " support=" << stats.effective_support << '/' << prefix_len;
     } else if (stats.normalized_entropy > 0.75f && stats.uniform_fraction > 0.50f) {
-        interpretation << "[WARNING] broad attention row: over half of the causal prefix participates meaningfully";
+        interpretation << "[WARNING] broad_attention_row";
     } else if (stats.alpha_max > 0.85f) {
-        interpretation << "sharp / selective row";
+        interpretation << "sharp_selective_row";
     } else {
-        interpretation << "moderate breadth";
+        interpretation << "moderate_breadth";
     }
     return interpretation.str();
 }
@@ -160,48 +163,46 @@ void emitAttentionBreadthDiagnostic(const std::vector<float>& causal_scores_row,
     }
 
     auto* tape = GRIM::Logging::getGlobalTape();
-    if (!tape) {
-          throw std::runtime_error("emitAttentionBreadthDiagnostic: global tape is not available");
-    }
 
-     const LinearStats score_stats = computeLinearStats(causal_scores_row, "emitAttentionBreadthDiagnostic scores");
+    const LinearStats score_stats = computeLinearStats(causal_scores_row, "emitAttentionBreadthDiagnostic scores");
     const AttentionBreadthStats breadth_stats = computeAttentionBreadthStats(causal_scores_row, lse_value);
 
-     std::ostringstream log_line;
-     log_line << std::fixed << std::setprecision(6);
-     log_line << "alpha=exp(score-lse)"
-                 << " layer=" << layer_idx
-                 << " head=" << head_idx
-                 << " query_index=" << query_index
-                 << " prefix_len=" << causal_scores_row.size()
-                 << " lse=" << lse_value
-                 << " score[min=" << score_stats.min_val
-                 << " max=" << score_stats.max_val
-                 << " rms=" << score_stats.rms << ']'
-                 << " alpha[sum=" << breadth_stats.alpha_sum
-                 << " min=" << breadth_stats.alpha_min
-                 << " max=" << breadth_stats.alpha_max << ']'
-                 << " breadth[entropy=" << breadth_stats.entropy
-                 << " normalized_entropy=" << breadth_stats.normalized_entropy
-                 << " effective_support=" << breadth_stats.effective_support << '/' << causal_scores_row.size()
-                 << " participation_ratio=" << breadth_stats.participation_ratio
-                 << " uniform_fraction=" << breadth_stats.uniform_fraction << ']'
-                 << " source_center[mean_source_index=" << breadth_stats.mean_source_index
-                 << " normalized_mean_source_index=" << breadth_stats.normalized_mean_source_index << ']'
-                 << " interpretation=\"" << interpretBreadth(breadth_stats, causal_scores_row.size()) << "\"";
+    const std::uint64_t global_step = tape ? static_cast<std::uint64_t>(tape->currentStep()) : 0ULL;
 
-     GRIM::Logging::LogEntry entry{};
-     entry.level = GRIM::Logging::LogLevel::Info;
-     entry.group = GRIM::Logging::LogGroup::Attention;
-     entry.phase = GRIM::Logging::LogPhase::FLASH_ATTENTION_FWD;
-     entry.layer_idx = static_cast<int16_t>(layer_idx);
-     entry.global_step = tape->currentStep();
-     entry.batch_idx = tape->currentBatch();
-     entry.setTag("ATTN_BREADTH");
-     entry.setMessageView(log_line.str());
-     entry.primary = breadth_stats.normalized_entropy;
-     entry.secondary = breadth_stats.uniform_fraction;
-     tape->record(entry);
+    std::ostringstream log_line;
+    log_line << std::fixed << std::setprecision(3);
+    log_line << "q=" << query_index
+             << " h=" << head_idx
+             << " nH=" << breadth_stats.normalized_entropy
+             << " uf=" << breadth_stats.uniform_fraction
+             << " es=" << breadth_stats.effective_support
+             << '/' << causal_scores_row.size()
+             << " amax=" << breadth_stats.alpha_max
+             << " srms=" << score_stats.rms;
+
+    const std::string interpretation = interpretBreadth(breadth_stats, causal_scores_row.size());
+    if (!interpretation.empty()) {
+        log_line << ' ';
+        if (interpretation.rfind("[ANOMALY] ", 0) == 0) {
+            log_line << "ANOM=" << interpretation.substr(10);
+        } else if (interpretation.rfind("[WARNING] ", 0) == 0) {
+            log_line << "WARN=" << interpretation.substr(10);
+        } else {
+            log_line << interpretation;
+        }
+    }
+
+    const bool recorded = GRIM::Logging::RecordLayerLogHost(
+        GRIM::LayerType::kAttention,
+        layer_idx,
+        global_step,
+        breadth_stats.normalized_entropy,
+        breadth_stats.uniform_fraction,
+        "ATTN_BREADTH",
+        log_line.str());
+    if (!recorded) {
+        throw std::runtime_error("emitAttentionBreadthDiagnostic: RecordLayerLogHost returned false");
+    }
 }
 
 }  // namespace GRIM::FlashAttentionDiagnostics

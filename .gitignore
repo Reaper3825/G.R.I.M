@@ -82,6 +82,10 @@ Makefile
 # ==============================
 *.log
 *.tmp
+*.safetensors
+/logs/*.err
+/logs/*.out
+/tmp_deb/
 
 # ==============================
 # Test outputs

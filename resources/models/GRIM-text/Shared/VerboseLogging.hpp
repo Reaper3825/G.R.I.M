@@ -37,7 +37,7 @@ constexpr bool ENABLE_GPU_ALLOCATION_LOGS = false;     ///< [GPU_ALLOC] allocati
 // FlashAttention equation diagnostics — 5 sync D2H copies per layer × 12 layers = 60 pipeline
 // drains per batch PLUS O(seqlen²) host-side attention score computation. These were critical
 // during Issue #76/#84 debugging but are catastrophic for training throughput.
-constexpr bool ENABLE_FA_EQUATION_DIAGNOSTICS = true;  ///< [FA-FWD-*], [ATTN_SCORE_EQUATION], and the recorder-backed [ATTN_BREADTH]
+constexpr bool ENABLE_FA_EQUATION_DIAGNOSTICS = true;  ///< [FA-FWD-*], [ATTN_SCORE_EQUATION], plus the layer-recorder [ATTN_BREADTH]
 
 // QKV projection equation diagnostics — extremely spammy per-layer/per-batch tape entries.
 // Keep off unless actively debugging the QKV projection path.

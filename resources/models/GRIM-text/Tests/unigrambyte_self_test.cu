@@ -12,6 +12,7 @@
 #include "../Shared/UnigramByte/UnigramViterbi.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"
 #include "../Shared/UnigramByte/AtomTable.hpp"
+#include "../Shared/UnigramByte/Detectors/DetectorRegistry.hpp"
 #include "../Shared/UnigramByte/Detectors/StructuralSpan.hpp"
 #include "../Shared/UnigramByte/AhoCorasick.hpp"
 #include "../Shared/TokenizerArtifacts/TokenizerArtifactBundle.hpp"
@@ -1044,6 +1045,125 @@ bool testUniByteStructuralDetection(std::string& message) {
 
         return true;
     }
+
+bool testAtomTableRejectsBadNumericDetectionWithContext(std::string& message) {
+    const std::string text = "arg_number";
+    std::vector<Detector::RawTextDetection> detections;
+    detections.emplace_back(0, text.size(), AtomType::ATOM_INT, "bad_numeric_fixture");
+
+    bool threw = false;
+    std::string error_text;
+    try {
+        (void)createAtomTableFromRawTextDetections(
+            std::string_view(text.data(), text.size()),
+            detections,
+            "testAtomTableRejectsBadNumericDetectionWithContext");
+    } catch (const std::exception& e) {
+        threw = true;
+        error_text = e.what();
+    }
+
+    ASSERT_TRUE(threw, "Detector-emitted alphabetic ATOM_INT span must fail loudly");
+    ASSERT_TRUE(error_text.find("detector-emitted atom span is not parseable") != std::string::npos,
+                "Error must identify the numeric detector contract violation");
+    ASSERT_TRUE(error_text.find("detector='bad_numeric_fixture'") != std::string::npos,
+                "Error must include detector name");
+    ASSERT_TRUE(error_text.find("span=[0, 10)") != std::string::npos,
+                "Error must include byte offsets");
+    ASSERT_TRUE(error_text.find("raw_text='arg_number'") != std::string::npos,
+                "Error must include raw text");
+    ASSERT_TRUE(error_text.find("must not fall back to text") != std::string::npos,
+                "Error must forbid text fallback for detector-emitted numeric spans");
+
+    return true;
+}
+
+bool testAtomTableArgNumberSupportsSignedDecimalExponent(std::string& message) {
+    const std::string text = "-4 +4 .75 75.0 1e6 -1.5e-4";
+    Detector::DetectorRegistry registry = Detector::makeDefaultRawTextDetectorRegistry();
+    const Detector::RawTextDetectorOptions options(true, true, true);
+    const auto detections = registry.scan(text, options);
+
+    const AtomTableFromDetectionsResult result = createAtomTableFromRawTextDetections(
+        std::string_view(text.data(), text.size()),
+        detections,
+        "testAtomTableArgNumberSupportsSignedDecimalExponent");
+
+    ASSERT_EQ(result.atom_tokens.size(), static_cast<size_t>(6),
+              "Expected six numeric atom tokens");
+    ASSERT_EQ(static_cast<int>(result.arg_number_payload.malformed_numbers), 0,
+              "arg_number population must not silently mark detector-approved numerics malformed");
+    ASSERT_EQ(static_cast<int>(result.arg_number_payload.total_numbers), 6,
+              "Every numeric atom should receive arg_number payload");
+    ASSERT_EQ(static_cast<int>(result.arg_number_payload.total_digits), 10,
+              "Mantissa digit binding count mismatch");
+
+    const ArgNumber& minus_four = result.arg_number_payload.numbers[0];
+    ASSERT_EQ(static_cast<int>(minus_four.has_sign), 1, "-4 should record a sign");
+    ASSERT_EQ(static_cast<int>(minus_four.sign_negative), 1, "-4 should record a negative sign");
+    ASSERT_EQ(static_cast<int>(minus_four.digits[0].digit), 4, "-4 digit mismatch");
+    ASSERT_EQ(static_cast<int>(minus_four.digits[0].pow10), 0, "-4 digit pow10 mismatch");
+
+    const ArgNumber& plus_four = result.arg_number_payload.numbers[1];
+    ASSERT_EQ(static_cast<int>(plus_four.has_sign), 1, "+4 should record a sign");
+    ASSERT_EQ(static_cast<int>(plus_four.sign_negative), 0, "+4 should record a positive sign");
+    ASSERT_EQ(static_cast<int>(plus_four.digits[0].digit), 4, "+4 digit mismatch");
+
+    const ArgNumber& dot_seventy_five = result.arg_number_payload.numbers[2];
+    ASSERT_EQ(static_cast<int>(dot_seventy_five.has_decimal_point), 1,
+              ".75 should record decimal metadata");
+    ASSERT_EQ(static_cast<int>(dot_seventy_five.integer_digit_count), 0,
+              ".75 should have zero integer mantissa digits");
+    ASSERT_EQ(static_cast<int>(dot_seventy_five.fractional_digit_count), 2,
+              ".75 should have two fractional mantissa digits");
+    ASSERT_EQ(static_cast<int>(dot_seventy_five.digits[0].digit), 7,
+              ".75 first digit mismatch");
+    ASSERT_EQ(static_cast<int>(dot_seventy_five.digits[0].pow10), -1,
+              ".75 first digit pow10 mismatch");
+    ASSERT_EQ(static_cast<int>(dot_seventy_five.digits[1].digit), 5,
+              ".75 second digit mismatch");
+    ASSERT_EQ(static_cast<int>(dot_seventy_five.digits[1].pow10), -2,
+              ".75 second digit pow10 mismatch");
+
+    const ArgNumber& seventy_five_point_zero = result.arg_number_payload.numbers[3];
+    ASSERT_EQ(static_cast<int>(seventy_five_point_zero.digits.size()), 3,
+              "75.0 should bind all mantissa digits");
+    ASSERT_EQ(static_cast<int>(seventy_five_point_zero.digits[0].pow10), 1,
+              "75.0 hundreds/tens place pow10 mismatch");
+    ASSERT_EQ(static_cast<int>(seventy_five_point_zero.digits[1].pow10), 0,
+              "75.0 ones place pow10 mismatch");
+    ASSERT_EQ(static_cast<int>(seventy_five_point_zero.digits[2].pow10), -1,
+              "75.0 fractional digit pow10 mismatch");
+
+    const ArgNumber& one_e_six = result.arg_number_payload.numbers[4];
+    ASSERT_EQ(static_cast<int>(one_e_six.has_exponent), 1, "1e6 should record exponent metadata");
+    ASSERT_EQ(one_e_six.exponent_value, 6, "1e6 exponent value mismatch");
+    ASSERT_EQ(static_cast<int>(one_e_six.digits[0].pow10), 6, "1e6 mantissa pow10 mismatch");
+
+    const ArgNumber& signed_scientific = result.arg_number_payload.numbers[5];
+    ASSERT_EQ(static_cast<int>(signed_scientific.has_sign), 1,
+              "-1.5e-4 should record mantissa sign");
+    ASSERT_EQ(static_cast<int>(signed_scientific.sign_negative), 1,
+              "-1.5e-4 should record negative mantissa sign");
+    ASSERT_EQ(static_cast<int>(signed_scientific.has_decimal_point), 1,
+              "-1.5e-4 should record decimal point");
+    ASSERT_EQ(static_cast<int>(signed_scientific.has_exponent), 1,
+              "-1.5e-4 should record exponent metadata");
+    ASSERT_EQ(static_cast<int>(signed_scientific.exponent_negative), 1,
+              "-1.5e-4 should record negative exponent sign");
+    ASSERT_EQ(signed_scientific.exponent_value, -4,
+              "-1.5e-4 exponent value mismatch");
+    ASSERT_EQ(static_cast<int>(signed_scientific.digits[0].digit), 1,
+              "-1.5e-4 first mantissa digit mismatch");
+    ASSERT_EQ(static_cast<int>(signed_scientific.digits[0].pow10), -4,
+              "-1.5e-4 first mantissa pow10 mismatch");
+    ASSERT_EQ(static_cast<int>(signed_scientific.digits[1].digit), 5,
+              "-1.5e-4 second mantissa digit mismatch");
+    ASSERT_EQ(static_cast<int>(signed_scientific.digits[1].pow10), -5,
+              "-1.5e-4 second mantissa pow10 mismatch");
+
+    return true;
+}
 
 bool testUniByteRawTextDetectorRegistry(std::string& message) {
     auto config = makeSelfTestTokenizerHP();
@@ -2748,6 +2868,8 @@ int main(int argc, char** argv) {
     suite.addTest("UniByte.StructuralDetection", testUniByteStructuralDetection);
     suite.addTest("UniByte.RejectsUnparseableDetectedAtom", testUniByteRejectsUnparseableDetectedAtom);
     suite.addTest("Unigram.Train.RejectsUnparseableDetectedAtom", testUnigramTrainRejectsUnparseableDetectedAtom);
+    suite.addTest("AtomTable.RejectsBadNumericDetectionWithContext", testAtomTableRejectsBadNumericDetectionWithContext);
+    suite.addTest("AtomTable.ArgNumberSupportsSignedDecimalExponent", testAtomTableArgNumberSupportsSignedDecimalExponent);
     suite.addTest("UniByte.RawTextDetectorRegistry", testUniByteRawTextDetectorRegistry);
     suite.addTest("UniByte.URLPassthrough", testUniByteURLDetection);
     suite.addTest("UniByte.URLPassthrough.CaseInsensitive", testUniByteURLDetectionCaseInsensitive);

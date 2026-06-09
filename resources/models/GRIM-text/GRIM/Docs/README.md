@@ -24,6 +24,7 @@ Per-feature documentation. Load only the feature(s) relevant to the current task
 | [ExecutionBlock.md](ExecutionBlock.md) | Row-final execution memory and causal readback contract |
 | [PositionEncoding.md](PositionEncoding.md) | ALiBi & RoPE NTK |
 | [Tokenizer.md](Tokenizer.md) | Unigram+byte fallback, AtomTable, sliding window |
+| [AtomTableEntryLogAudit.md](AtomTableEntryLogAudit.md) | Audit of AtomTable entry failures from tokenizer log, including fail-loud requirements for sign and `arg_number` handling |
 | [Initialization.md](Initialization.md) | Xavier/Philox, residual projection init gain, embedding scale |
 | [Diagnostics.md](Diagnostics.md) | RMSNorm formula, CUDA events, LibTorch baselines |
 | [Config.md](Config.md) | ai_config.json conventions, fail-loud defaults |

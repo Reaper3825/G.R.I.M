@@ -160,19 +160,80 @@ void validateRawTextDetectionForAtomTableCreation(
     }
 }
 
+struct PendingMantissaDigit {
+    uint32_t offset = 0;
+    uint8_t digit = 0;
+    uint32_t mantissa_index = 0;
+};
+
+uint16_t requireUint16ForArgNumber(
+    uint32_t value,
+    const std::string& field_name,
+    const char* caller) {
+    if (value > static_cast<uint32_t>(std::numeric_limits<uint16_t>::max())) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": arg_number " + field_name +
+                                 " exceeds uint16 capacity, value=" + std::to_string(value));
+    }
+    return static_cast<uint16_t>(value);
+}
+
+int16_t requireInt16Pow10ForArgNumber(
+    int32_t value,
+    const std::string& raw_text,
+    const char* caller) {
+    if (value < static_cast<int32_t>(std::numeric_limits<int16_t>::min()) ||
+        value > static_cast<int32_t>(std::numeric_limits<int16_t>::max())) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": arg_number pow10 exceeds int16 capacity for numeric atom text='" +
+                                 raw_text + "', pow10=" + std::to_string(value));
+    }
+    return static_cast<int16_t>(value);
+}
+
+[[noreturn]] void throwDetectorNumericAtomContractFailure(
+    const char* caller,
+    const Detector::RawTextDetection& detection,
+    size_t detection_index,
+    AtomType atom_type,
+    std::string_view atom_text,
+    const std::string& reason) {
+    throw std::runtime_error(std::string(caller) +
+                             ": detector-emitted atom span is not parseable; detection_index=" +
+                             std::to_string(detection_index) +
+                             ", detector='" + std::string(detection.detector_name) +
+                             "', atom_type=" + atomTypeName(atom_type) +
+                             ", span=[" + std::to_string(detection.start) + ", " +
+                             std::to_string(detection.end) + "), raw_text='" +
+                             std::string(atom_text) + "', reason='" + reason +
+                             "'; upstream detector/data pipeline bug: detector-emitted numeric spans must not fall back to text");
+}
+
 void appendArgNumberFromSpan(
     std::string_view source_text,
     const StructuralSpan& span,
     const AtomEntry& entry,
+    const Detector::RawTextDetection& detection,
+    size_t detection_index,
     ArgNumberPopulationPayload& payload,
     const char* caller) {
     if (!isNumericAtom(span.atom_type)) {
         ++payload.skipped_atoms;
         return;
     }
+    auto fail = [&](const std::string& reason) -> void {
+        const std::string_view atom_text(source_text.data() + detection.start, detection.end - detection.start);
+        throwDetectorNumericAtomContractFailure(
+            caller,
+            detection,
+            detection_index,
+            span.atom_type,
+            atom_text,
+            "failed to populate required arg_number side channel: " + reason);
+    };
+
     if (span.content_length == 0) {
-        ++payload.malformed_numbers;
-        return;
+        fail("empty numeric atom content span");
     }
     if (span.content_offset > source_text.size() ||
         static_cast<size_t>(span.content_length) > source_text.size() - span.content_offset) {
@@ -183,10 +244,10 @@ void appendArgNumberFromSpan(
                                  ", content_length=" + std::to_string(span.content_length) +
                                  ", source_size=" + std::to_string(source_text.size()));
     }
-    if (span.content_length > static_cast<uint32_t>(std::numeric_limits<int16_t>::max()) + 1U) {
-        ++payload.malformed_numbers;
-        return;
-    }
+
+    const uint32_t content_begin = span.content_offset;
+    const uint32_t content_end = span.content_offset + span.content_length;
+    const std::string atom_text(source_text.data() + content_begin, span.content_length);
 
     ArgNumber number{};
     number.number_atom_id = span.atom_entry_id;
@@ -196,24 +257,136 @@ void appendArgNumberFromSpan(
     number.content_span.length = span.content_length;
     number.base = 10;
     number.confidence = entry.confidence;
-    number.digits.reserve(span.content_length);
 
-    for (uint32_t index_left = 0; index_left < span.content_length; ++index_left) {
-        const unsigned char c = static_cast<unsigned char>(source_text[span.content_offset + index_left]);
-        if (c < static_cast<unsigned char>('0') || c > static_cast<unsigned char>('9')) {
-            ++payload.malformed_numbers;
-            return;
+    uint32_t pos = content_begin;
+    if (pos < content_end && (source_text[pos] == '+' || source_text[pos] == '-')) {
+        number.has_sign = 1;
+        number.sign_negative = source_text[pos] == '-' ? 1 : 0;
+        number.sign_span.offset = pos;
+        number.sign_span.length = 1;
+        ++pos;
+    }
+
+    std::vector<PendingMantissaDigit> mantissa_digits;
+    mantissa_digits.reserve(span.content_length);
+    uint32_t integer_digit_count = 0;
+    uint32_t fractional_digit_count = 0;
+    uint32_t first_mantissa_offset = 0;
+    uint32_t last_mantissa_offset = 0;
+    bool saw_mantissa_digit = false;
+    bool saw_decimal_point = false;
+
+    while (pos < content_end) {
+        const unsigned char c = static_cast<unsigned char>(source_text[pos]);
+        if (c >= static_cast<unsigned char>('0') && c <= static_cast<unsigned char>('9')) {
+            if (!saw_mantissa_digit) {
+                first_mantissa_offset = pos;
+            }
+            saw_mantissa_digit = true;
+            last_mantissa_offset = pos;
+
+            PendingMantissaDigit pending{};
+            pending.offset = pos;
+            pending.digit = static_cast<uint8_t>(c - static_cast<unsigned char>('0'));
+            pending.mantissa_index = static_cast<uint32_t>(mantissa_digits.size());
+            mantissa_digits.push_back(pending);
+
+            if (saw_decimal_point) {
+                ++fractional_digit_count;
+            } else {
+                ++integer_digit_count;
+            }
+            ++pos;
+            continue;
         }
 
-        const uint32_t index_right = span.content_length - 1U - index_left;
+        if (c == static_cast<unsigned char>('.') && !saw_decimal_point) {
+            saw_decimal_point = true;
+            number.has_decimal_point = 1;
+            number.decimal_point_span.offset = pos;
+            number.decimal_point_span.length = 1;
+            ++pos;
+            continue;
+        }
+
+        break;
+    }
+
+    if (!saw_mantissa_digit) {
+        fail("numeric atom has no mantissa digits");
+    }
+
+    number.mantissa_span.offset = first_mantissa_offset;
+    number.mantissa_span.length = last_mantissa_offset - first_mantissa_offset + 1U;
+
+    int32_t exponent_value = 0;
+    if (pos < content_end && (source_text[pos] == 'e' || source_text[pos] == 'E')) {
+        number.has_exponent = 1;
+        number.exponent_marker_span.offset = pos;
+        number.exponent_marker_span.length = 1;
+        ++pos;
+
+        if (pos < content_end && (source_text[pos] == '+' || source_text[pos] == '-')) {
+            number.exponent_negative = source_text[pos] == '-' ? 1 : 0;
+            number.exponent_sign_span.offset = pos;
+            number.exponent_sign_span.length = 1;
+            ++pos;
+        }
+
+        const uint32_t exponent_digits_begin = pos;
+        int64_t exponent_abs = 0;
+        uint32_t exponent_digit_count = 0;
+        while (pos < content_end) {
+            const unsigned char c = static_cast<unsigned char>(source_text[pos]);
+            if (c < static_cast<unsigned char>('0') || c > static_cast<unsigned char>('9')) {
+                break;
+            }
+            exponent_abs = exponent_abs * 10 + static_cast<int64_t>(c - static_cast<unsigned char>('0'));
+            if (exponent_abs > static_cast<int64_t>(std::numeric_limits<int16_t>::max())) {
+                fail("exponent magnitude exceeds arg_number pow10 capacity");
+            }
+            ++exponent_digit_count;
+            ++pos;
+        }
+        if (exponent_digit_count == 0) {
+            fail("exponent marker has no exponent digits");
+        }
+        number.exponent_digits_span.offset = exponent_digits_begin;
+        number.exponent_digits_span.length = exponent_digit_count;
+        exponent_value = static_cast<int32_t>(exponent_abs);
+        if (number.exponent_negative) {
+            exponent_value = -exponent_value;
+        }
+        number.exponent_value = exponent_value;
+    }
+
+    if (pos != content_end) {
+        fail("unexpected non-numeric byte inside detector-emitted numeric atom at relative_offset=" +
+             std::to_string(pos - content_begin));
+    }
+
+    number.integer_digit_count = requireUint16ForArgNumber(integer_digit_count, "integer_digit_count", caller);
+    number.fractional_digit_count = requireUint16ForArgNumber(fractional_digit_count, "fractional_digit_count", caller);
+    number.digits.reserve(mantissa_digits.size());
+
+    for (const PendingMantissaDigit& pending : mantissa_digits) {
+        const uint32_t index_left = pending.mantissa_index;
+        const uint32_t index_right = static_cast<uint32_t>(mantissa_digits.size() - 1U) - index_left;
+        const int32_t pow10 = static_cast<int32_t>(integer_digit_count) - 1 -
+                              static_cast<int32_t>(index_left) + exponent_value;
+
         DigitBinding binding{};
-        binding.digit = static_cast<uint8_t>(c - static_cast<unsigned char>('0'));
-        binding.index_left = static_cast<uint16_t>(index_left);
-        binding.index_right = static_cast<uint16_t>(index_right);
-        binding.pow10 = static_cast<int16_t>(index_right);
-        binding.digit_span.offset = span.content_offset + index_left;
+        binding.digit = pending.digit;
+        binding.index_left = requireUint16ForArgNumber(index_left, "digit.index_left", caller);
+        binding.index_right = requireUint16ForArgNumber(index_right, "digit.index_right", caller);
+        binding.pow10 = requireInt16Pow10ForArgNumber(pow10, atom_text, caller);
+        binding.digit_span.offset = pending.offset;
         binding.digit_span.length = 1;
         number.digits.push_back(binding);
+    }
+
+    if (number.digits.empty()) {
+        fail("numeric atom produced zero digit bindings");
     }
 
     payload.total_digits += static_cast<uint32_t>(number.digits.size());
@@ -310,7 +483,27 @@ void dumpAtomTableCreationBreakdown(
                   << ", length=" << arg_number->raw_span.length
                   << "} content_span={offset=" << arg_number->content_span.offset
                   << ", length=" << arg_number->content_span.length
+                  << "} mantissa_span={offset=" << arg_number->mantissa_span.offset
+                  << ", length=" << arg_number->mantissa_span.length
                   << "} base=" << static_cast<int>(arg_number->base)
+                  << " has_sign=" << static_cast<int>(arg_number->has_sign)
+                  << " sign_negative=" << static_cast<int>(arg_number->sign_negative)
+                  << " sign_span={offset=" << arg_number->sign_span.offset
+                  << ", length=" << arg_number->sign_span.length
+                  << "} has_decimal_point=" << static_cast<int>(arg_number->has_decimal_point)
+                  << " decimal_point_span={offset=" << arg_number->decimal_point_span.offset
+                  << ", length=" << arg_number->decimal_point_span.length
+                  << "} has_exponent=" << static_cast<int>(arg_number->has_exponent)
+                  << " exponent_negative=" << static_cast<int>(arg_number->exponent_negative)
+                  << " exponent_value=" << arg_number->exponent_value
+                  << " exponent_marker_span={offset=" << arg_number->exponent_marker_span.offset
+                  << ", length=" << arg_number->exponent_marker_span.length
+                  << "} exponent_sign_span={offset=" << arg_number->exponent_sign_span.offset
+                  << ", length=" << arg_number->exponent_sign_span.length
+                  << "} exponent_digits_span={offset=" << arg_number->exponent_digits_span.offset
+                  << ", length=" << arg_number->exponent_digits_span.length
+                  << "} integer_digit_count=" << arg_number->integer_digit_count
+                  << " fractional_digit_count=" << arg_number->fractional_digit_count
                   << " confidence=" << arg_number->confidence
                   << " digit_count=" << arg_number->digits.size()
                   << "\n";
@@ -505,12 +698,23 @@ AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
         span.content_length = static_cast<uint32_t>(detection_length);
         span.placeholder_id = atomTypeToTokenId(detection.atom_type);
 
+        const std::string_view atom_text(source_text.data() + detection.start, detection_length);
+        const ParseResult parse_check = AtomTable::parseAtom(detection.atom_type, std::string(atom_text));
+        if (!parse_check.success) {
+            throwDetectorNumericAtomContractFailure(
+                caller,
+                detection,
+                detection_index,
+                detection.atom_type,
+                atom_text,
+                parse_check.error_message);
+        }
+
         try {
             span.atom_entry_id = result.atom_table->registerSpan(span);
         } catch (const std::exception& e) {
-            const std::string_view atom_text(source_text.data() + detection.start, detection_length);
             throw std::runtime_error(std::string(caller) +
-                                     ": failed to register detector-emitted atom span; detection_index=" +
+                                     ": failed to register detector-emitted atom span after parse precheck; detection_index=" +
                                      std::to_string(detection_index) +
                                      ", detector='" + std::string(detection.detector_name) +
                                      "', atom_type=" + atomTypeName(detection.atom_type) +
@@ -544,6 +748,8 @@ AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
             source_text,
             span,
             *entry,
+            detection,
+            detection_index,
             result.arg_number_payload,
             caller);
     }
