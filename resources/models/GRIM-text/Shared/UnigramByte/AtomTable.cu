@@ -20,6 +20,7 @@
 #include <iostream>
 #include <fstream>
 #include <limits>
+#include <locale>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -663,6 +664,7 @@ AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
     result.atom_table = std::make_shared<AtomTable>();
     result.atom_tokens.reserve(detections.size());
 
+    size_t previous_detection_end = 0;
     for (size_t detection_index = 0; detection_index < detections.size(); ++detection_index) {
         const Detector::RawTextDetection& detection = detections[detection_index];
         validateRawTextDetectionForAtomTableCreation(
@@ -670,6 +672,21 @@ AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
             detection_index,
             source_text.size(),
             caller);
+
+        // Detections MUST be sorted and non-overlapping (DetectorRegistry::scan
+        // guarantees this by construction). The UniByte merge loop walks atom
+        // spans monotonically; an unsorted or overlapping span would move the
+        // cursor backwards and duplicate or loop over source bytes. Fail loud.
+        if (detection.start < previous_detection_end) {
+            throw std::runtime_error(std::string(caller) +
+                                     ": raw text detection index=" + std::to_string(detection_index) +
+                                     " (detector='" + std::string(detection.detector_name) +
+                                     "') starts at " + std::to_string(detection.start) +
+                                     " before previous detection end=" +
+                                     std::to_string(previous_detection_end) +
+                                     "; detections must be sorted and non-overlapping");
+        }
+        previous_detection_end = detection.end;
 
         if (!detection.emitsAtom()) {
             continue;
@@ -1487,20 +1504,20 @@ ParseResult AtomTable::parseFloat(std::string_view text) {
         return result;
     }
 
-    // std::stod for the VALUE only (shape is already validated above);
-    // from_chars for double is not reliably available on every toolchain we
-    // build with. Cold path: runs once per unique atom, dedup hits skip it.
-    try {
-        const std::string text_str(text);
-        size_t consumed = 0;
-        atom.value = std::stod(text_str, &consumed);
-        if (consumed != text_str.size()) {
-            result.error_message = "Invalid float format";
+    // Value parse (shape is already validated above) goes through a stream
+    // imbued with the classic "C" locale. std::stod honors the process-global
+    // LC_NUMERIC, so under e.g. a comma-decimal locale "3.14" mis-parses and
+    // tokenization becomes environment-dependent. from_chars for double is not
+    // reliably available on every toolchain we build with. Cold path: runs
+    // once per unique atom, dedup hits skip it.
+    {
+        std::istringstream value_stream{std::string(text)};
+        value_stream.imbue(std::locale::classic());
+        value_stream >> atom.value;
+        if (value_stream.fail() || !value_stream.eof()) {
+            result.error_message = "Float value parse failed (or out of range)";
             return result;
         }
-    } catch (const std::exception& e) {
-        result.error_message = e.what();
-        return result;
     }
 
     if (!std::isfinite(atom.value)) {

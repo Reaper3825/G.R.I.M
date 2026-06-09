@@ -5,16 +5,32 @@
 
 #include "NumericDetectors.hpp"
 
-#include <cctype>
-
 namespace GRIM {
 namespace Tokenizer {
 namespace Detector {
 
 namespace {
 
+// Locale-independent ASCII digit check. std::isdigit consults the process
+// locale and can classify bytes >= 128 differently across environments,
+// which makes tokenization nondeterministic. Tokenization must be a pure
+// function of the input bytes.
 bool isDigit(char c) {
-    return std::isdigit(static_cast<unsigned char>(c)) != 0;
+    return c >= '0' && c <= '9';
+}
+
+// A '+'/'-' at pos is a numeric sign only when it is NOT in operator/suffix
+// context. When the preceding byte is an ASCII alphanumeric, '.', ')' or ']',
+// the byte is arithmetic or a range/connector ("5-3", "x-1", "f(x)-2",
+// "a[i]-1"), and binding it to the following number would silently rewrite
+// subtraction as a negative literal.
+bool signIsOperatorContext(std::string_view text, size_t pos) {
+    if (pos == 0) return false;
+    const char prev = text[pos - 1];
+    const bool prev_alnum = (prev >= '0' && prev <= '9') ||
+                            (prev >= 'a' && prev <= 'z') ||
+                            (prev >= 'A' && prev <= 'Z');
+    return prev_alnum || prev == '.' || prev == ')' || prev == ']';
 }
 
 } // namespace
@@ -25,8 +41,12 @@ std::optional<RawTextDetection> IntegerDetector::detect(std::string_view text,
 
     size_t i = pos;
 
-    // Optional sign
+    // Optional sign — but never bind an operator to the number ("5-3" must
+    // stay [5][-][3], not [5][-3]).
     if (text[i] == '+' || text[i] == '-') {
+        if (signIsOperatorContext(text, i)) {
+            return std::nullopt;
+        }
         if (i + 1 >= text.size() || !isDigit(text[i + 1])) {
             return std::nullopt;
         }
@@ -41,8 +61,12 @@ std::optional<RawTextDetection> IntegerDetector::detect(std::string_view text,
         ++i;
     }
 
-    // Reject if followed by '.' (could be float like 5.3)
-    if (i < text.size() && text[i] == '.') {
+    // Defer to FloatDetector only when '.' actually starts a fraction
+    // ('.' followed by a digit, e.g. "5.3"). A bare trailing dot ("42.")
+    // is sentence punctuation: claim the digits and leave the '.' as text.
+    // Without the digit check, "42." is rejected by BOTH detectors and the
+    // number silently degrades to unigram pieces.
+    if (i + 1 < text.size() && text[i] == '.' && isDigit(text[i + 1])) {
         return std::nullopt;
     }
 
@@ -73,8 +97,12 @@ std::optional<RawTextDetection> FloatDetector::detect(std::string_view text,
     bool has_exp = false;
     bool has_digit = false;
 
-    // Optional sign
+    // Optional sign — but never bind an operator to the number ("1.5-2" must
+    // stay [1.5][-][2], not [1.5][-2]).
     if (text[i] == '+' || text[i] == '-') {
+        if (signIsOperatorContext(text, i)) {
+            return std::nullopt;
+        }
         ++i;
     }
 
@@ -84,8 +112,11 @@ std::optional<RawTextDetection> FloatDetector::detect(std::string_view text,
         ++i;
     }
 
-    // Decimal point
-    if (i < text.size() && text[i] == '.') {
+    // Decimal point counts only when at least one fractional digit follows.
+    // A bare trailing dot ("The answer is 42.") is sentence punctuation —
+    // consuming it would swallow the period into the atom and reclassify the
+    // integer as a float. IntegerDetector claims the digits in that case.
+    if (i + 1 < text.size() && text[i] == '.' && isDigit(text[i + 1])) {
         has_dot = true;
         ++i;
 

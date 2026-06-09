@@ -150,6 +150,10 @@ UniByteResult UniByte::tokenizeWithMetadata(const std::string& text) const {
     UniByteResult result;
 
     if (text.empty()) {
+        // Keep the contract uniform: every result carries an allocated (possibly
+        // empty) per-sequence AtomTable, never a null pointer.
+        result.atom_table = std::make_shared<AtomTable>();
+        result.validate("UniByte::tokenizeWithMetadata");
         return result;
     }
 

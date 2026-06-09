@@ -15,6 +15,8 @@
 #include <cmath>
 #include <cstdio>
 #include <iostream>
+#include <stdexcept>
+#include <string>
 
 namespace GRIM {
 
@@ -59,6 +61,16 @@ void UnigramLM::buildTrie() {
     
     for (size_t i = 0; i < pieces_.size(); ++i) {
         const auto& piece = pieces_[i];
+        if (piece.text.empty()) {
+            throw std::runtime_error("UnigramLM::buildTrie: piece index=" + std::to_string(i) +
+                                     " has empty text; an empty piece would assign a token to the trie root");
+        }
+        if (piece.text.size() > static_cast<size_t>(MAX_PIECE_LENGTH)) {
+            throw std::runtime_error("UnigramLM::buildTrie: piece index=" + std::to_string(i) +
+                                     " length=" + std::to_string(piece.text.size()) +
+                                     " exceeds MAX_PIECE_LENGTH=" + std::to_string(MAX_PIECE_LENGTH) +
+                                     "; the Viterbi kernel caps walks at MAX_PIECE_LENGTH so this piece could never be matched (silent dead vocab)");
+        }
         int node = 0;
         
         for (unsigned char c : piece.text) {
@@ -69,6 +81,12 @@ void UnigramLM::buildTrie() {
             node = trie_[node].children[c];
         }
         
+        if (trie_[node].token_id >= 0) {
+            throw std::runtime_error("UnigramLM::buildTrie: duplicate piece text '" + piece.text +
+                                     "' at index=" + std::to_string(i) +
+                                     "; would silently overwrite token_id=" + std::to_string(trie_[node].token_id) +
+                                     " and desynchronize Viterbi output from piece_to_id_");
+        }
         // Token ID is ALWAYS position-derived. No stored field.
         trie_[node].token_id = tokenIdForIndex(static_cast<int>(i));
         trie_[node].score = piece.score;

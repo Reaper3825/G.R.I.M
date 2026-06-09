@@ -448,7 +448,10 @@ inline std::string formatNumericValue(float value) {
     double v = static_cast<double>(value);
     double rounded = std::round(v);
     constexpr double kEpsilon = 1e-6;
-    if (std::fabs(v - rounded) < kEpsilon && std::fabs(v) < 1e15) {
+    // Never snap a tiny non-zero value to "0": |v| < epsilon would otherwise
+    // round to zero and silently erase the value (e.g. 5e-7 -> "0").
+    if (std::fabs(v - rounded) < kEpsilon && std::fabs(v) < 1e15 &&
+        (rounded != 0.0 || v == 0.0)) {
         char buf[32];
         std::snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(rounded));
         return std::string(buf);

@@ -33,10 +33,12 @@ void DetectorRegistry::registerDetector(std::unique_ptr<RawTextDetector> detecto
     }
 
     detectors_.push_back(std::move(detector));
-    std::sort(detectors_.begin(), detectors_.end(),
-              [](const auto& a, const auto& b) {
-                  return a->priority() > b->priority();
-              });
+    // stable_sort: detectors with equal priority keep registration order, so
+    // scan() tie-breaking is fully deterministic across builds and platforms.
+    std::stable_sort(detectors_.begin(), detectors_.end(),
+                     [](const auto& a, const auto& b) {
+                         return a->priority() > b->priority();
+                     });
 }
 
 std::vector<RawTextDetection> DetectorRegistry::scan(
