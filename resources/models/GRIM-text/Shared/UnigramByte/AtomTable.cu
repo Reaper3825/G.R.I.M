@@ -1446,123 +1446,11 @@ uint32_t AtomTable::findExisting(AtomType type, uint64_t hash, std::string_view 
     return UINT32_MAX;  // Hash collision but different content
 }
 
-//--------------------------------------------------//
-// Helper Functions
-//--------------------------------------------------//
+--------------//
 
 //--------------------------------------------------//
 // Registration
 //--------------------------------------------------//
-
-uint32_t AtomTable::registerAtom(AtomType type, 
-                                  std::string_view raw_text,
-                                  size_t source_start,
-                                  size_t source_end) {
-    // Parse the atom (parseAtom still needs std::string for now)
-    std::string raw_text_str(raw_text);
-    auto result = parseAtom(type, raw_text_str);
-    
-    AtomValue parsed;
-    if (result.success) {
-        parsed = result.value;
-    } else {
-        return UINT32_MAX;
-    }
-    
-    return registerAtom(type, raw_text, parsed, source_start, source_end);
-}
-
-uint32_t AtomTable::registerAtom(AtomType type,
-                                  std::string_view raw_text,
-                                  const AtomValue& parsed_value,
-                                  size_t source_start,
-                                  size_t source_end) {
-    if (!atomValueMatchesType(type, parsed_value)) {
-        return UINT32_MAX;
-    }
-
-    std::string raw_text_str(raw_text);
-    ParseResult raw_parse = parseAtom(type, raw_text_str);
-    if (!raw_parse.success || !atomValuesEquivalent(parsed_value, raw_parse.value)) {
-        return UINT32_MAX;
-    }
-
-    std::lock_guard<std::mutex> lock(mutex_);
-    TextSpan32 raw_span{static_cast<uint32_t>(source_start), static_cast<uint32_t>(raw_text.size())};
-    TextSpan32 content_span = raw_span;
-    
-    // Compute hash for deduplication
-    uint64_t hash = computeHash(type, raw_text);
-    
-    // Check if this atom already exists
-    uint32_t existing_id = findExisting(type, hash, raw_text);
-    if (existing_id != UINT32_MAX) {
-        const uint32_t existing_idx = existing_id - ATOM_TOKEN_BASE;
-        if (existing_idx >= entries_.size()) {
-            throw std::runtime_error("AtomTable::registerAtom dedup returned out-of-range id=" +
-                                     std::to_string(existing_id));
-        }
-        ensureAtomEntryHasArgNumber(
-            entries_[existing_idx],
-            raw_text,
-            raw_span,
-            content_span,
-            "AtomTable::registerAtom");
-        return existing_id;  // Return existing ID (deduplication hit!)
-    }
-    
-    // New atom - allocate entry
-    // Entry IDs start at ATOM_TOKEN_BASE (side-channel index, not model token vocab)
-    AtomEntry entry{};
-    entry.id = ATOM_TOKEN_BASE + next_id_;
-    next_id_++;
-    
-    entry.type = type;
-    entry.hash = hash;
-    entry.source_start = static_cast<uint32_t>(source_start);
-    entry.source_end = static_cast<uint32_t>(source_end);
-    
-    // Initialize metadata
-    entry.origin = AtomOrigin::USER_INPUT;
-    entry.category = getCategoryForType(type);
-    entry.confidence = 1.0f;
-    entry.created_at = getCurrentTimestamp();
-    
-    // Intern raw text into string pool
-    entry.raw_text_ref = internString(raw_text);
-    
-    // Pack numeric value (no string copying for GPU)
-    double numeric_float_value = 0.0;
-    int64_t numeric_int_value = 0;
-    uint8_t numeric_kind = static_cast<uint8_t>(NumericPayloadKind::NONE);
-    packNumericValue(entry, parsed_value, numeric_float_value, numeric_int_value, numeric_kind);
-    ensureAtomEntryHasArgNumber(entry, raw_text, raw_span, content_span, "AtomTable::registerAtom");
-    
-    // Index for fast lookup
-    uint32_t new_id = entry.id;
-    entries_.push_back(std::move(entry));
-    numeric_float_values_.push_back(numeric_float_value);
-    numeric_int_values_.push_back(numeric_int_value);
-    numeric_kinds_.push_back(numeric_kind);
-    hash_to_ids_[hash].push_back(new_id);
-    type_index_[type].push_back(new_id);
-    
-    // Mark for GPU upload
-    pending_gpu_upload_.push_back(new_id);
-    gpu_dirty_ = true;
-    
-    return new_id;
-}
-
-// Convenience overload: AtomValue first, then raw_text (used by tests)
-uint32_t AtomTable::registerAtom(AtomType type,
-                                  const AtomValue& parsed_value,
-                                  std::string_view raw_text,
-                                  size_t source_start,
-                                  size_t source_end) {
-    // Delegate to the existing implementation with swapped parameters
-    return registerAtom(type, raw_text, parsed_value, source_start, source_end);
-}
 
 bool AtomTable::tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id) {
     // Zero-copy: pass buffer pointer + length directly to string pool!
@@ -1594,7 +1482,7 @@ bool AtomTable::tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id) {
         return true;
     }
     
-    // New atom - allocate entry
+
     
     // Parse the atom (still needs std::string temporarily)
     std::string raw_text_str(raw_text);

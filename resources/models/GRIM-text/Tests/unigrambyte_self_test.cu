@@ -139,6 +139,32 @@ static void addMinimalVocab(UniByte& tok) {
     tok.unigramLM().buildTrie();
 }
 
+static uint32_t registerSelfTestAtom(AtomTable& table,
+                                     AtomType type,
+                                     std::string_view raw_text,
+                                     size_t source_start = 0,
+                                     size_t source_end = std::numeric_limits<size_t>::max()) {
+    const size_t resolved_source_end =
+        source_end == std::numeric_limits<size_t>::max() ? source_start + raw_text.size() : source_end;
+
+    StructuralSpan span{};
+    span.start = source_start;
+    span.end = resolved_source_end;
+    span.atom_type = type;
+    span.buffer_ptr = raw_text.data();
+    span.offset = static_cast<uint32_t>(source_start);
+    span.length = static_cast<uint32_t>(raw_text.size());
+    span.content_offset = span.offset;
+    span.content_length = span.length;
+    span.placeholder_id = atomTypeToTokenId(type);
+
+    try {
+        return table.registerSpan(span);
+    } catch (const std::exception&) {
+        return UINT32_MAX;
+    }
+}
+
 //======================================================//
 //  Section 2: Unigram LM Tests
 //======================================================//
@@ -1468,7 +1494,7 @@ bool testUniByteRoundTrip(std::string& message) {
 bool testAtomTableRegisterInteger(std::string& message) {
     AtomTable table;
     
-    uint32_t id = table.registerAtom(AtomType::ATOM_INT, "12345", 0, 5);
+    uint32_t id = registerSelfTestAtom(table, AtomType::ATOM_INT, "12345", 0, 5);
     
     auto entry = table.getAtom(id);
     ASSERT_TRUE(entry, "Failed to retrieve atom");
@@ -1487,13 +1513,13 @@ bool testAtomTableRegisterInteger(std::string& message) {
     ASSERT_EQ(numeric->int_value, static_cast<int64_t>(12345), "Exact integer value mismatch");
     ASSERT_NEAR(numeric->float_value, 12345.0, 0.01, "Integer float side-channel mismatch");
 
-    uint32_t large_id = table.registerAtom(AtomType::ATOM_INT, "9007199254740993", 0, 16);
+    uint32_t large_id = registerSelfTestAtom(table, AtomType::ATOM_INT, "9007199254740993", 0, 16);
     auto large_numeric = table.getNumericValue(large_id);
     ASSERT_TRUE(large_numeric, "Large integer numeric payload missing");
     ASSERT_EQ(large_numeric->int_value, static_cast<int64_t>(9007199254740993LL),
               "Public numeric getter must not round integer atoms through float");
 
-    uint32_t padded_id = table.registerAtom(AtomType::ATOM_INT, "001", 0, 3);
+    uint32_t padded_id = registerSelfTestAtom(table, AtomType::ATOM_INT, "001", 0, 3);
     auto padded_entry = table.getAtom(padded_id);
     ASSERT_TRUE(padded_entry, "Failed to retrieve padded integer atom");
     ASSERT_STR_EQ(table.atomToString(*padded_entry), "001",
@@ -1501,11 +1527,11 @@ bool testAtomTableRegisterInteger(std::string& message) {
     ASSERT_EQ(padded_entry->reserved_zero, static_cast<uint64_t>(0),
               "AtomTable reserved padding must stay zero, not become canonical parsed text");
 
-    ASSERT_EQ(table.registerAtom(AtomType::ATOM_INT, " 42", 0, 3), UINT32_MAX,
+    ASSERT_EQ(registerSelfTestAtom(table, AtomType::ATOM_INT, " 42", 0, 3), UINT32_MAX,
               "Leading whitespace in numeric atom text must be rejected");
-    ASSERT_EQ(table.registerAtom(AtomType::ATOM_INT, "42 ", 0, 3), UINT32_MAX,
+    ASSERT_EQ(registerSelfTestAtom(table, AtomType::ATOM_INT, "42 ", 0, 3), UINT32_MAX,
               "Trailing whitespace in numeric atom text must be rejected");
-    ASSERT_EQ(table.registerAtom(AtomType::ATOM_INT, "4 2", 0, 3), UINT32_MAX,
+    ASSERT_EQ(registerSelfTestAtom(table, AtomType::ATOM_INT, "4 2", 0, 3), UINT32_MAX,
               "Internal whitespace in numeric atom text must be rejected");
     
     return true;
@@ -1514,7 +1540,7 @@ bool testAtomTableRegisterInteger(std::string& message) {
 bool testAtomTableRegisterFloat(std::string& message) {
     AtomTable table;
     
-    uint32_t id = table.registerAtom(AtomType::ATOM_FLOAT, "3.14159", 0, 7);
+    uint32_t id = registerSelfTestAtom(table, AtomType::ATOM_FLOAT, "3.14159", 0, 7);
     
     auto entry = table.getAtom(id);
     ASSERT_TRUE(entry, "Failed to retrieve atom");
@@ -1525,13 +1551,9 @@ bool testAtomTableRegisterFloat(std::string& message) {
               "Float numeric kind mismatch");
     ASSERT_NEAR(numeric->float_value, 3.14159, 0.0001, "Float value mismatch");
 
-    ASSERT_EQ(table.registerAtom(AtomType::ATOM_FLOAT, " 3.14159", 0, 8), UINT32_MAX,
+    ASSERT_EQ(registerSelfTestAtom(table, AtomType::ATOM_FLOAT, " 3.14159", 0, 8), UINT32_MAX,
               "Leading whitespace in float atom text must be rejected");
 
-    AtomFloat wrong_float{2.0, false, 0};
-    ASSERT_EQ(table.registerAtom(AtomType::ATOM_FLOAT, AtomValue(wrong_float), "3.14159"), UINT32_MAX,
-              "Pre-parsed float payload must match raw atom text");
-    
     return true;
 }
 
@@ -1539,7 +1561,7 @@ bool testAtomTableRegisterHex(std::string& message) {
     // Hex atoms no longer supported — verify a plain integer still works.
     AtomTable table;
     
-    uint32_t id = table.registerAtom(AtomType::ATOM_INT, "255", 0, 3);
+    uint32_t id = registerSelfTestAtom(table, AtomType::ATOM_INT, "255", 0, 3);
     
     auto entry = table.getAtom(id);
     ASSERT_TRUE(entry, "Failed to retrieve atom");
@@ -1555,7 +1577,7 @@ bool testAtomTableRegisterBinary(std::string& message) {
     // Binary atoms no longer supported — verify a plain integer still works.
     AtomTable table;
     
-    uint32_t id = table.registerAtom(AtomType::ATOM_INT, "10", 0, 2);
+    uint32_t id = registerSelfTestAtom(table, AtomType::ATOM_INT, "10", 0, 2);
     
     auto entry = table.getAtom(id);
     ASSERT_TRUE(entry, "Failed to retrieve atom");
@@ -1570,9 +1592,9 @@ bool testAtomTableRegisterBinary(std::string& message) {
 bool testAtomTableRegisterURL(std::string& message) {
     AtomTable table;
     
-    uint32_t id = table.registerAtom(AtomType::ATOM_INT, 
-                                      "https://example.com:8080/path?query=1#fragment", 
-                                      0, 45);
+    uint32_t id = registerSelfTestAtom(table, AtomType::ATOM_INT,
+                                       "https://example.com:8080/path?query=1#fragment",
+                                       0, 45);
     ASSERT_EQ(id, UINT32_MAX, "Invalid integer text must not register as ATOM_INT");
     ASSERT_EQ(table.size(), static_cast<size_t>(0), "Rejected URL should not mutate table");
     
@@ -1582,7 +1604,7 @@ bool testAtomTableRegisterURL(std::string& message) {
 bool testAtomTableRegisterEmail(std::string& message) {
     AtomTable table;
     
-    uint32_t id = table.registerAtom(AtomType::ATOM_INT, "user@domain.com", 0, 15);
+    uint32_t id = registerSelfTestAtom(table, AtomType::ATOM_INT, "user@domain.com", 0, 15);
     ASSERT_EQ(id, UINT32_MAX, "Invalid integer text must not register as ATOM_INT");
     ASSERT_EQ(table.size(), static_cast<size_t>(0), "Rejected email should not mutate table");
     
@@ -1592,7 +1614,7 @@ bool testAtomTableRegisterEmail(std::string& message) {
 bool testAtomTableRegisterDate(std::string& message) {
     AtomTable table;
     
-    uint32_t id = table.registerAtom(AtomType::ATOM_INT, "2024-12-25", 0, 10);
+    uint32_t id = registerSelfTestAtom(table, AtomType::ATOM_INT, "2024-12-25", 0, 10);
     ASSERT_EQ(id, UINT32_MAX, "Invalid integer text must not register as ATOM_INT");
     ASSERT_EQ(table.size(), static_cast<size_t>(0), "Rejected date should not mutate table");
     
@@ -1602,7 +1624,7 @@ bool testAtomTableRegisterDate(std::string& message) {
 bool testAtomTableRegisterTime(std::string& message) {
     AtomTable table;
     
-    uint32_t id = table.registerAtom(AtomType::ATOM_INT, "14:30:00", 0, 8);
+    uint32_t id = registerSelfTestAtom(table, AtomType::ATOM_INT, "14:30:00", 0, 8);
     ASSERT_EQ(id, UINT32_MAX, "Invalid integer text must not register as ATOM_INT");
     ASSERT_EQ(table.size(), static_cast<size_t>(0), "Rejected time should not mutate table");
     
@@ -1612,7 +1634,7 @@ bool testAtomTableRegisterTime(std::string& message) {
 bool testAtomTableRegisterIP(std::string& message) {
     AtomTable table;
     
-    uint32_t id = table.registerAtom(AtomType::ATOM_INT, "192.168.1.1", 0, 11);
+    uint32_t id = registerSelfTestAtom(table, AtomType::ATOM_INT, "192.168.1.1", 0, 11);
     ASSERT_EQ(id, UINT32_MAX, "Invalid integer text must not register as ATOM_INT");
     ASSERT_EQ(table.size(), static_cast<size_t>(0), "Rejected IP should not mutate table");
     
@@ -1622,7 +1644,7 @@ bool testAtomTableRegisterIP(std::string& message) {
 bool testAtomTableRegisterPath(std::string& message) {
     AtomTable table;
     
-    uint32_t id = table.registerAtom(AtomType::ATOM_INT, "/usr/local/bin/test", 0, 19);
+    uint32_t id = registerSelfTestAtom(table, AtomType::ATOM_INT, "/usr/local/bin/test", 0, 19);
     ASSERT_EQ(id, UINT32_MAX, "Invalid integer text must not register as ATOM_INT");
     ASSERT_EQ(table.size(), static_cast<size_t>(0), "Rejected path should not mutate table");
     
@@ -1632,7 +1654,7 @@ bool testAtomTableRegisterPath(std::string& message) {
 bool testAtomTableRegisterString(std::string& message) {
     AtomTable table;
     
-    uint32_t id = table.registerAtom(AtomType::ATOM_INT, "\"hello\\nworld\"", 0, 14);
+    uint32_t id = registerSelfTestAtom(table, AtomType::ATOM_INT, "\"hello\\nworld\"", 0, 14);
     ASSERT_EQ(id, UINT32_MAX, "Invalid integer text must not register as ATOM_INT");
     ASSERT_EQ(table.size(), static_cast<size_t>(0), "Rejected string should not mutate table");
     
@@ -1643,13 +1665,13 @@ bool testAtomTableRegisterIdentifier(std::string& message) {
     AtomTable table;
     
     // Test various naming conventions
-    ASSERT_EQ(table.registerAtom(AtomType::ATOM_INT, "camelCase", 0, 9), UINT32_MAX,
+    ASSERT_EQ(registerSelfTestAtom(table, AtomType::ATOM_INT, "camelCase", 0, 9), UINT32_MAX,
               "Invalid identifier must not register as ATOM_INT");
-    ASSERT_EQ(table.registerAtom(AtomType::ATOM_INT, "PascalCase", 0, 10), UINT32_MAX,
+    ASSERT_EQ(registerSelfTestAtom(table, AtomType::ATOM_INT, "PascalCase", 0, 10), UINT32_MAX,
               "Invalid identifier must not register as ATOM_INT");
-    ASSERT_EQ(table.registerAtom(AtomType::ATOM_INT, "snake_case", 0, 10), UINT32_MAX,
+    ASSERT_EQ(registerSelfTestAtom(table, AtomType::ATOM_INT, "snake_case", 0, 10), UINT32_MAX,
               "Invalid identifier must not register as ATOM_INT");
-    ASSERT_EQ(table.registerAtom(AtomType::ATOM_INT, "SCREAMING_SNAKE", 0, 15), UINT32_MAX,
+    ASSERT_EQ(registerSelfTestAtom(table, AtomType::ATOM_INT, "SCREAMING_SNAKE", 0, 15), UINT32_MAX,
               "Invalid identifier must not register as ATOM_INT");
     ASSERT_EQ(table.size(), static_cast<size_t>(0), "Rejected identifiers should not mutate table");
     
@@ -1660,10 +1682,10 @@ bool testAtomTableLookupByType(std::string& message) {
     AtomTable table;
     
     // Register multiple atoms of different types
-    table.registerAtom(AtomType::ATOM_INT, "100", 0, 3);
-    table.registerAtom(AtomType::ATOM_INT, "200", 0, 3);
-    table.registerAtom(AtomType::ATOM_FLOAT, "3.14", 0, 4);
-    table.registerAtom(AtomType::ATOM_INT, "300", 0, 3);
+    registerSelfTestAtom(table, AtomType::ATOM_INT, "100", 0, 3);
+    registerSelfTestAtom(table, AtomType::ATOM_INT, "200", 0, 3);
+    registerSelfTestAtom(table, AtomType::ATOM_FLOAT, "3.14", 0, 4);
+    registerSelfTestAtom(table, AtomType::ATOM_INT, "300", 0, 3);
     
     auto integers = table.getAtomsByType(AtomType::ATOM_INT);
     ASSERT_EQ(integers.size(), 3, "Should find 3 integers");
@@ -1678,9 +1700,9 @@ bool testAtomTableGPUUpload(std::string& message) {
     AtomTable table;
     
     // Register some atoms
-    table.registerAtom(AtomType::ATOM_INT, "42", 0, 2);
-    table.registerAtom(AtomType::ATOM_FLOAT, "3.14", 0, 4);
-    table.registerAtom(AtomType::ATOM_INT, "9007199254740993", 0, 16);
+    registerSelfTestAtom(table, AtomType::ATOM_INT, "42", 0, 2);
+    registerSelfTestAtom(table, AtomType::ATOM_FLOAT, "3.14", 0, 4);
+    registerSelfTestAtom(table, AtomType::ATOM_INT, "9007199254740993", 0, 16);
     
     bool success = table.uploadToGPU();
     const AtomTable::GPUAtomData* gpu_data = table.getGPUBuffer();
@@ -1704,7 +1726,7 @@ bool testAtomTableGPUUpload(std::string& message) {
               "GPU exact integer payload must not round through float");
 
     AtomTable internal_table;
-    internal_table.registerAtom(AtomType::ATOM_INT, "7", 0, 1);
+    registerSelfTestAtom(internal_table, AtomType::ATOM_INT, "7", 0, 1);
     ASSERT_TRUE(internal_table.uploadToGPU(), "Internal GPU upload failed");
     float* first_internal_numeric = internal_table.getGPUBuffer()->d_numeric_values;
     ASSERT_TRUE(first_internal_numeric != nullptr, "Internal upload did not allocate numeric values");
@@ -1718,9 +1740,9 @@ bool testAtomTableGPUUpload(std::string& message) {
 bool testAtomTableClear(std::string& message) {
     AtomTable table;
     
-    table.registerAtom(AtomType::ATOM_INT, "1", 0, 1);
-    table.registerAtom(AtomType::ATOM_INT, "2", 0, 1);
-    table.registerAtom(AtomType::ATOM_INT, "3", 0, 1);
+    registerSelfTestAtom(table, AtomType::ATOM_INT, "1", 0, 1);
+    registerSelfTestAtom(table, AtomType::ATOM_INT, "2", 0, 1);
+    registerSelfTestAtom(table, AtomType::ATOM_INT, "3", 0, 1);
     
     ASSERT_EQ(table.size(), 3, "Should have 3 atoms before clear");
     
@@ -1735,7 +1757,7 @@ bool testAtomTableMetadata(std::string& message) {
     AtomTable table;
     
     // Register an atom
-    uint32_t id = table.registerAtom(AtomType::ATOM_INT, "42", 0, 2);
+    uint32_t id = registerSelfTestAtom(table, AtomType::ATOM_INT, "42", 0, 2);
     
     auto entry = table.getAtom(id);
     ASSERT_TRUE(entry, "Failed to retrieve atom");
@@ -1768,8 +1790,8 @@ bool testAtomTableHashDeduplication(std::string& message) {
     AtomTable table;
     
     // Register same atom twice
-    uint32_t id1 = table.registerAtom(AtomType::ATOM_INT, "100", 0, 3);
-    uint32_t id2 = table.registerAtom(AtomType::ATOM_INT, "100", 0, 3);
+    uint32_t id1 = registerSelfTestAtom(table, AtomType::ATOM_INT, "100", 0, 3);
+    uint32_t id2 = registerSelfTestAtom(table, AtomType::ATOM_INT, "100", 0, 3);
     
     auto entry1 = table.getAtom(id1);
     auto entry2 = table.getAtom(id2);
@@ -1781,7 +1803,7 @@ bool testAtomTableHashDeduplication(std::string& message) {
     ASSERT_TRUE(entry2->arg_number.has_value(), "Reloaded deduped numeric atom copy should carry arg_number metadata");
     
     // Different atom should have different hash
-    uint32_t id3 = table.registerAtom(AtomType::ATOM_INT, "200", 0, 3);
+    uint32_t id3 = registerSelfTestAtom(table, AtomType::ATOM_INT, "200", 0, 3);
     auto entry3 = table.getAtom(id3);
     
     ASSERT_TRUE(entry3, "Different atom should exist");
@@ -1792,7 +1814,7 @@ bool testAtomTableHashDeduplication(std::string& message) {
 
 bool testAtomTableArgNumberSerializesOnEntry(std::string& message) {
     AtomTable table;
-    const uint32_t id = table.registerAtom(AtomType::ATOM_FLOAT, "-1.5e-4", 12, 19);
+    const uint32_t id = registerSelfTestAtom(table, AtomType::ATOM_FLOAT, "-1.5e-4", 12, 19);
     ASSERT_TRUE(id != UINT32_MAX, "Failed to register numeric atom for arg_number serialization test");
 
     const auto entry = table.getAtom(id);

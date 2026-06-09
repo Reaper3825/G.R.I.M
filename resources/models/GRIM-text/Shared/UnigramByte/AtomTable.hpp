@@ -257,28 +257,7 @@ public:
     //--------------------------------------------------//
     // Registration
     //--------------------------------------------------//
-    
-    // Register a new atom from a detected span
-    // Returns the atom ID (for lookup later)
-    uint32_t registerAtom(AtomType type, 
-                          std::string_view raw_text,
-                          size_t source_start = 0,
-                          size_t source_end = 0);
-    
-    // Register with pre-parsed value
-    uint32_t registerAtom(AtomType type,
-                          std::string_view raw_text,
-                          const AtomValue& parsed_value,
-                          size_t source_start = 0,
-                          size_t source_end = 0);
-    
-    // Convenience: Register with AtomValue and raw text (tests use this form)
-    uint32_t registerAtom(AtomType type,
-                          const AtomValue& parsed_value,
-                          std::string_view raw_text,
-                          size_t source_start = 0,
-                          size_t source_end = 0);
-    
+
     // Register from StructuralSpan
     // Register from StructuralSpan (zero-copy!)
     uint32_t registerSpan(const StructuralSpan& span);
