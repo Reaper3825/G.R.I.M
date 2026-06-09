@@ -557,11 +557,11 @@ void emitForwardPreKernelDiagnostics(const ForwardDiagnosticRequest& request) {
         breadth_scores[static_cast<size_t>(ki)] =
             scores_sample[static_cast<size_t>(breadth_query_index) * static_cast<size_t>(sample_tokens) + static_cast<size_t>(ki)];
     }
-    emitAttentionBreadthEquation(breadth_scores,
-                                 expected_lse[static_cast<size_t>(breadth_query_index)],
-                                 breadth_query_index,
-                                 -1,
-                                 0);
+    emitAttentionBreadthDiagnostic(breadth_scores,
+                                   expected_lse[static_cast<size_t>(breadth_query_index)],
+                                   breadth_query_index,
+                                   -1,
+                                   0);
 
     std::fprintf(stderr, "\n[ATTN_SCORE_EQUATION] FLASH_ATTENTION_FWD: score = (Q @ K^T) / sqrt(head_dim) + alibi_bias\n");
     std::fprintf(stderr,

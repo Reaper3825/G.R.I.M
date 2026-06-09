@@ -15,12 +15,9 @@
 namespace {
 
 bool shouldEmitAttentionBreadthDiagnostics() {
-    if constexpr (!GRIM::VerboseLogging::ENABLE_FA_EQUATION_DIAGNOSTICS || true) {
-        return false;
-    }
     auto* tape = GRIM::Logging::getGlobalTape();
     return tape &&
-           tape->accepts(GRIM::Logging::LogLevel::Debug, GRIM::Logging::LogGroup::Attention) &&
+           tape->accepts(GRIM::Logging::LogLevel::Info, GRIM::Logging::LogGroup::Attention) &&
            !tape->skipThisPass();
 }
 
@@ -153,50 +150,58 @@ std::string interpretBreadth(const AttentionBreadthStats& stats, size_t prefix_l
 
 namespace GRIM::FlashAttentionDiagnostics {
 
-void emitAttentionBreadthEquation(const std::vector<float>& causal_scores_row,
-                                  float lse_value,
-                                  int query_index,
-                                  int layer_idx,
-                                  int head_idx) {
+void emitAttentionBreadthDiagnostic(const std::vector<float>& causal_scores_row,
+                                                float lse_value,
+                                                int query_index,
+                                                int layer_idx,
+                                                int head_idx) {
     if (!shouldEmitAttentionBreadthDiagnostics()) {
         return;
     }
 
     auto* tape = GRIM::Logging::getGlobalTape();
     if (!tape) {
-        throw std::runtime_error("emitAttentionBreadthEquation: global tape is not available");
+          throw std::runtime_error("emitAttentionBreadthDiagnostic: global tape is not available");
     }
 
-    const LinearStats score_stats = computeLinearStats(causal_scores_row, "emitAttentionBreadthEquation scores");
+     const LinearStats score_stats = computeLinearStats(causal_scores_row, "emitAttentionBreadthDiagnostic scores");
     const AttentionBreadthStats breadth_stats = computeAttentionBreadthStats(causal_scores_row, lse_value);
 
-    std::ostringstream eq;
-    eq << std::fixed << std::setprecision(6);
-    eq << "[ATTN_BREADTH_EQUATION] alpha(t,u) = exp(score(t,u) - lse(t))\n";
-    eq << "  INPUT (causal_scores_row): shape=[" << causal_scores_row.size() << "] min="
-       << score_stats.min_val << " max=" << score_stats.max_val << " rms=" << score_stats.rms << "\n";
-    eq << "  PARAMETERS: layer=" << layer_idx
-       << " head=" << head_idx
-       << " query_index=" << query_index
-       << " lse=" << lse_value << "\n";
-    eq << "  ACTUAL alpha: sum=" << breadth_stats.alpha_sum
-       << " min=" << breadth_stats.alpha_min
-       << " max=" << breadth_stats.alpha_max << "\n";
-    eq << "  ACTUAL breadth: entropy=" << breadth_stats.entropy
-       << " normalized_entropy=" << breadth_stats.normalized_entropy
-       << " effective_support=" << breadth_stats.effective_support << "/" << causal_scores_row.size()
-       << " participation_ratio=" << breadth_stats.participation_ratio
-       << " uniform_fraction=" << breadth_stats.uniform_fraction << "\n";
-    eq << "  SOURCE CENTER: mean_source_index=" << breadth_stats.mean_source_index
-       << " normalized_mean_source_index=" << breadth_stats.normalized_mean_source_index << "\n";
-    eq << "  INTERPRETATION: " << interpretBreadth(breadth_stats, causal_scores_row.size()) << "\n";
+     std::ostringstream log_line;
+     log_line << std::fixed << std::setprecision(6);
+     log_line << "alpha=exp(score-lse)"
+                 << " layer=" << layer_idx
+                 << " head=" << head_idx
+                 << " query_index=" << query_index
+                 << " prefix_len=" << causal_scores_row.size()
+                 << " lse=" << lse_value
+                 << " score[min=" << score_stats.min_val
+                 << " max=" << score_stats.max_val
+                 << " rms=" << score_stats.rms << ']'
+                 << " alpha[sum=" << breadth_stats.alpha_sum
+                 << " min=" << breadth_stats.alpha_min
+                 << " max=" << breadth_stats.alpha_max << ']'
+                 << " breadth[entropy=" << breadth_stats.entropy
+                 << " normalized_entropy=" << breadth_stats.normalized_entropy
+                 << " effective_support=" << breadth_stats.effective_support << '/' << causal_scores_row.size()
+                 << " participation_ratio=" << breadth_stats.participation_ratio
+                 << " uniform_fraction=" << breadth_stats.uniform_fraction << ']'
+                 << " source_center[mean_source_index=" << breadth_stats.mean_source_index
+                 << " normalized_mean_source_index=" << breadth_stats.normalized_mean_source_index << ']'
+                 << " interpretation=\"" << interpretBreadth(breadth_stats, causal_scores_row.size()) << "\"";
 
-    EQ_LOG(tape,
-           GRIM::Logging::LogGroup::Attention,
-           GRIM::Logging::LogPhase::FLASH_ATTENTION_FWD,
-           layer_idx,
-           "ATTN_BREADTH_EQUATION",
-           eq.str().c_str());
+     GRIM::Logging::LogEntry entry{};
+     entry.level = GRIM::Logging::LogLevel::Info;
+     entry.group = GRIM::Logging::LogGroup::Attention;
+     entry.phase = GRIM::Logging::LogPhase::FLASH_ATTENTION_FWD;
+     entry.layer_idx = static_cast<int16_t>(layer_idx);
+     entry.global_step = tape->currentStep();
+     entry.batch_idx = tape->currentBatch();
+     entry.setTag("ATTN_BREADTH");
+     entry.setMessageView(log_line.str());
+     entry.primary = breadth_stats.normalized_entropy;
+     entry.secondary = breadth_stats.uniform_fraction;
+     tape->record(entry);
 }
 
 }  // namespace GRIM::FlashAttentionDiagnostics

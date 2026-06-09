@@ -61,11 +61,11 @@ void emitForwardPreKernelDiagnostics(const ForwardDiagnosticRequest& request);
 void emitForwardPostKernelDiagnostics(const ForwardDiagnosticRequest& request);
 void emitBackwardPreKernelDiagnostics(const BackwardDiagnosticRequest& request);
 void emitBackwardPostKernelDiagnostics(const BackwardDiagnosticRequest& request);
-void emitAttentionBreadthEquation(const std::vector<float>& causal_scores_row,
-                                  float lse_value,
-                                  int query_index,
-                                  int layer_idx,
-                                  int head_idx);
+void emitAttentionBreadthDiagnostic(const std::vector<float>& causal_scores_row,
+                                    float lse_value,
+                                    int query_index,
+                                    int layer_idx,
+                                    int head_idx);
 
 }  // namespace GRIM::FlashAttentionDiagnostics
 

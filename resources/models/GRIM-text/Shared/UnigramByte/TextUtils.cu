@@ -13,6 +13,26 @@
 namespace GRIM {
 namespace Tokenizer {
 
+namespace {
+
+size_t spieceRewriteSourceLength(const std::string& text, size_t pos) {
+    if (pos >= text.size()) {
+        throw std::runtime_error("spieceRewriteSourceLength: pos is outside text");
+    }
+    if (text[pos] == '\r') {
+        if (pos + 1 < text.size() && text[pos + 1] == '\n') {
+            return 2;
+        }
+        return 1;
+    }
+    if (text[pos] == ' ' || text[pos] == '\t' || text[pos] == '\n') {
+        return 1;
+    }
+    return 0;
+}
+
+} // namespace
+
 //======================================================//
 //  SentencePiece ▁ Marker (definition)
 //======================================================//
@@ -108,22 +128,31 @@ bool isStructuralEdgeWhitespace(uint32_t cp) {
 std::string normalizeSpaces(const std::string& text, bool prepend_space) {
     if (text.empty()) return text;
 
-    size_t space_count = 0;
-    for (char c : text) {
-        if (c == ' ') ++space_count;
+    size_t rewrite_count = 0;
+    for (size_t i = 0; i < text.size(); ) {
+        const size_t rewrite_source_len = spieceRewriteSourceLength(text, i);
+        if (rewrite_source_len != 0) {
+            ++rewrite_count;
+            i += rewrite_source_len;
+        } else {
+            ++i;
+        }
     }
 
     std::string result;
-    result.reserve(text.size() + (prepend_space ? SPIECE_UNDERLINE_LEN : 0) + space_count * 2);
+    result.reserve(text.size() + (prepend_space ? SPIECE_UNDERLINE_LEN : 0) + rewrite_count * 2);
     if (prepend_space) {
         result.append(SPIECE_UNDERLINE, SPIECE_UNDERLINE_LEN);
     }
 
-    for (char c : text) {
-        if (c == ' ') {
+    for (size_t i = 0; i < text.size(); ) {
+        const size_t rewrite_source_len = spieceRewriteSourceLength(text, i);
+        if (rewrite_source_len != 0) {
             result.append(SPIECE_UNDERLINE, SPIECE_UNDERLINE_LEN);
+            i += rewrite_source_len;
         } else {
-            result.push_back(c);
+            result.push_back(text[i]);
+            ++i;
         }
     }
     return result;
@@ -146,7 +175,9 @@ std::string denormalizeSpaces(const std::string& text) {
         }
     }
 
-    // Strip leading space (from the prepended ▁)
+    // Strip leading space (from the prepended ▁). All source ASCII spacing bytes
+    // are intentionally rewritten through the same ▁ marker, so decode returns
+    // plain spaces rather than reconstructing tabs/newlines/carriage returns.
     if (!result.empty() && result[0] == ' ') {
         result.erase(0, 1);
     }
@@ -167,9 +198,19 @@ std::string normalizeWithSpans(const std::string& text, std::vector<AtomSpan>& s
     std::vector<size_t> orig_to_norm(text.size() + 1);
     size_t norm_pos = SPIECE_UNDERLINE_LEN; // 3-byte prepend
 
-    for (size_t i = 0; i < text.size(); ++i) {
+    for (size_t i = 0; i < text.size(); ) {
         orig_to_norm[i] = norm_pos;
-        norm_pos += (text[i] == ' ') ? SPIECE_UNDERLINE_LEN : 1;
+        const size_t rewrite_source_len = spieceRewriteSourceLength(text, i);
+        if (rewrite_source_len != 0) {
+            if (rewrite_source_len == 2) {
+                orig_to_norm[i + 1] = norm_pos;
+            }
+            norm_pos += SPIECE_UNDERLINE_LEN;
+            i += rewrite_source_len;
+        } else {
+            ++norm_pos;
+            ++i;
+        }
     }
     orig_to_norm[text.size()] = norm_pos;
 

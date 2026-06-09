@@ -54,15 +54,15 @@ bool isStructuralEdgeWhitespace(uint32_t cp);
 
 //======================================================//
 //  SentencePiece-style Whitespace Normalization
-//  Replaces spaces with ▁ (U+2581) and prepends ▁ at start.
+//  Rewrites ASCII spacing bytes (' ', '\t', '\n', '\r') to ▁ (U+2581) and prepends ▁ at start.
 //======================================================//
 
-// "Hello World" → "▁Hello▁World"
+// "Hello\nWorld" → "▁Hello▁World"
 // prepend_space=true: prepend ▁ at start (first segment / full text)
-// prepend_space=false: only replace spaces (mid-text segment after atom)
+// prepend_space=false: only rewrite spacing bytes (mid-text segment after atom)
 std::string normalizeSpaces(const std::string& text, bool prepend_space = true);
 
-// "▁Hello▁World" → "Hello World"
+// "▁Hello▁World" → "Hello World"; the exact source spacing kind is intentionally rewritten.
 std::string denormalizeSpaces(const std::string& text);
 
 // Normalize and adjust atom span byte offsets to match expansion.

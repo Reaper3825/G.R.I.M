@@ -34,12 +34,12 @@ Use CUDA events (`cudaEventRecord` / `cudaEventElapsedTime`) — not `cudaStream
 ## QKV finite scans
 `GRIM_DEBUG_QKV` enables full-tensor finite checks around encoder QKV / SDPA boundaries. Clean tensors are silent; any NaN/Inf emits a `[QKV_NONFINITE] FATAL ...` module error with counts and first offending index/value, then throws immediately. Do not log `nan=0 inf=0` summaries — they hide the real anomaly signal.
 
-## Attention breadth equation diagnostic
-`Layers/FlashAttention/AttentionBreadthDiagnostic.cu` owns `[ATTN_BREADTH_EQUATION]`. The standalone hook consumes a **full causal score row** `score[t,0..t]` plus the matching exact `lse(t)` and reconstructs
+## Attention breadth diagnostic
+`Layers/FlashAttention/AttentionBreadthDiagnostic.cu` owns the batch-tape log entry tagged `[ATTN_BREADTH]` in `training_<session>.log`. It is regular LogRecorder output, not EquationSink output. The standalone hook consumes a **full causal score row** `score[t,0..t]` plus the matching exact `lse(t)` and reconstructs
 $$
 \alpha_{t,u} = \exp(\mathrm{score}_{t,u} - \mathrm{lse}_t)
 $$
-before reporting entropy, normalized entropy, effective support $\exp(H)$, participation ratio $1 / \sum_u \alpha_{t,u}^2$, and `alpha_max`. This diagnostic is specifically for the “is attention behaving like broad prefix averaging / reducing token distinctness?” question. Do **not** feed sampled or truncated rows into it — a partial row undercounts mass and invalidates the breadth measurement.
+before reporting entropy, normalized entropy, effective support $\exp(H)$, participation ratio $1 / \sum_u \alpha_{t,u}^2$, and `alpha_max`. The emitted entry is a single structured recorder line with `normalized_entropy` and `uniform_fraction` also copied into the entry scalars. This diagnostic is specifically for the “is attention behaving like broad prefix averaging / reducing token distinctness?” question. Do **not** feed sampled or truncated rows into it — a partial row undercounts mass and invalidates the breadth measurement.
 
 ## Gradient norm diagnostics
 `runGradientNormClipDiagnostic()` consumes the `ClipResult` produced by `GRIM::GradClip::clipGradientNorms()`. It does **not** launch grad-norm kernels or allocate GradNorm scratch. The only grad-norm measurement in the hot loop is the clipping-owned measurement on the optimizer-step boundary; diagnostics and gradient-dependent telemetry may read that measured result but must not create a second measurement path. The delegated `[POSTCLIP_PARAM_GRAD_EMB_LM_EQUATION]` path is the explicit gated exception that may synchronize the clipping stream for host-side parameter-gradient inspection.

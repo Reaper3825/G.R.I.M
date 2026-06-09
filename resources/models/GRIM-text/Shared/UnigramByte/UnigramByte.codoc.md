@@ -372,6 +372,8 @@ Right now the active emitted atom types are numeric: `ATOM_INT` and `ATOM_FLOAT`
 
    Production CUDA Viterbi walks the uploaded forward trie from each reachable start position (`text[pos]`, then `text[pos + 1]`, ...). The GPU upload is not a reverse trie; reverse-scanning candidate pieces breaks normal tokens like `ab`.
 
+   ASCII spacing bytes are rewritten by `TextUtils::normalizeSpaces()` before unigram segmentation: `' '`, `\t`, `\n`, `\r`, and CRLF all become the shared SentencePiece `▁` marker, with CRLF collapsed to one marker. This is an intentional rewrite, not a detector decision. Decode maps the marker back to plain space, so the tokenizer no longer preserves the exact source kind for tabs/newlines/carriage returns.
+
    GPU trie uploads are generation-checked. If `buildTrie()` or score mutation advances the live trie generation, CUDA Viterbi must fail loudly until the runtime finalization path refreshes the uploaded generation.
 
    `UnigramGpuMemory` is the tokenizer runtime-state owner, not upload scratch. Runtime upload uses a file-local RAII transaction that owns partial CUDA allocations until commit under the Viterbi workspace mutex. Do not reintroduce `UnigramGpuMemory` move assignment for upload staging.

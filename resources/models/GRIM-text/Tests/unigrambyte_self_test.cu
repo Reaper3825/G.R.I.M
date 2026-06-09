@@ -1805,6 +1805,40 @@ bool testEdgeCaseOnlyWhitespace(std::string& message) {
     return true;
 }
 
+bool testEdgeCaseAsciiSpacingRewriteToSpiece(std::string& message) {
+    auto config = makeSelfTestTokenizerHP();
+    config.enable_byte_fallback = true;
+    UniByte tokenizer(config);
+
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81", -0.5f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81hello", -1.0f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81world", -1.0f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81tab", -1.0f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81crlf", -1.0f, false);
+    tokenizer.unigramLM().buildTrie();
+
+    const std::string input = "hello\nworld\ttab\r\ncrlf";
+    auto result = tokenizer.tokenizeWithMetadata(input);
+    std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(result));
+
+    ASSERT_STR_EQ(decoded, "hello world tab crlf",
+                  "ASCII newline/tab bytes should rewrite through the shared ▁ marker and decode as spaces");
+
+    for (size_t token_index = 0; token_index < result.token_ids.size(); ++token_index) {
+        if (result.is_byte_fallback[token_index]) {
+            const int token_id = result.token_ids[token_index];
+            ASSERT_FALSE(token_id == byteToTokenId(static_cast<uint8_t>('\n')),
+                         "Newline must not survive normalization as a byte fallback token");
+            ASSERT_FALSE(token_id == byteToTokenId(static_cast<uint8_t>('\r')),
+                         "Carriage return must not survive normalization as a byte fallback token");
+            ASSERT_FALSE(token_id == byteToTokenId(static_cast<uint8_t>('\t')),
+                         "Tab must not survive normalization as a byte fallback token");
+        }
+    }
+
+    return true;
+}
+
 bool testEdgeCaseLongSequence(std::string& message) {
     auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
@@ -2751,6 +2785,7 @@ int main(int argc, char** argv) {
     suite.addTest("EdgeCase.EmptyString", testEdgeCaseEmptyString);
     suite.addTest("EdgeCase.SingleChar", testEdgeCaseSingleChar);
     suite.addTest("EdgeCase.OnlyWhitespace", testEdgeCaseOnlyWhitespace);
+    suite.addTest("EdgeCase.AsciiSpacingRewriteToSpiece", testEdgeCaseAsciiSpacingRewriteToSpiece);
     suite.addTest("EdgeCase.LongSequence", testEdgeCaseLongSequence);
     suite.addTest("EdgeCase.SpecialTokenLiterals", testEdgeCaseSpecialTokenLiterals);
     

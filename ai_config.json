@@ -27,8 +27,7 @@
         "max_huggingface_pdfs_total": 10000,
         "max_new_entries_per_run": 100000
     },
-    "default_model": "grim-text",
-    "grim_text_timeout_ms": 600000,
+    "default_model": "llama3.1:8b",
     "device_comm": {
         "heartbeat_timeout_sec": 30,
         "max_chunk_size_bytes": 65536,
@@ -37,11 +36,12 @@
         "storage_root": "~/.grim/shared_storage/",
         "transfer_timeout_sec": 300
     },
+    "grim_text_timeout_ms": 600000,
     "grim_text_url": "http://127.0.0.1:11435",
     "localai_url": "http://127.0.0.1:8080/v1",
     "max_tokens": 32,
     "mmo": {
-        "enabled": true,
+        "enabled": false,
         "mode": "shadow",
         "model_loader": {
             "hot_ttl_cap_ms": 300000,

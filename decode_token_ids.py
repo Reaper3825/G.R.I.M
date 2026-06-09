@@ -2,35 +2,38 @@
 """
 Decode token IDs from training_data.grmt using the current KTMG vocab.bin.
 
-Token ID Layout (GrimTokenizer):
+Token ID Layout (current UniByte tokenizer):
   [0-3]       = Special tokens: <unk>=0, <pad>=1, <s>=2, </s>=3
   [4-259]     = Byte fallback (byte value = token_id - 4)
-    [260-262]   = Atom placeholders: <ATOM_NONE>, <INT>, <FLOAT>
-    [263+]      = Unigram vocabulary pieces (from vocab.bin)
+  [260-261]   = Atom placeholders: <INT>, <FLOAT>
+  [262+]      = Unigram vocabulary pieces (from vocab.bin)
 
 Current vocab.bin format is KTMG v4. The saved record count is the number of
 serialized records (4 special-token metadata records + learned unigram pieces),
 not the full token-space size. The token-space size is stored separately in the
 header and must equal special + bytes + atoms + learned pieces.
 
-Current training_data.grmt format is GRMT v12. Rows include atom side-channel
-text and execution metadata after the token arrays, so this script reads/skips
-the full row to keep the stream synchronized.
+Current training_data.grmt format is GRMT v12. Rows persist atom side channels
+(numeric payloads, atom masks/flags, and per-token atom text) plus execution
+metadata after the token arrays, so this script reads the full row and decodes
+atoms the same way the current tokenizer does: prefer persisted raw atom text,
+otherwise fall back to numeric payload formatting, otherwise show the atom-type
+placeholder.
 
 Usage:
     python decode_token_ids.py
     python decode_token_ids.py --seq 0 5          # Sequences 0 through 4
     python decode_token_ids.py --ids 277 512 36   # Decode specific token IDs
-    python decode_token_ids.py --search hello      # Find sequences containing text
-    python decode_token_ids.py --raw               # Show raw token IDs alongside text
-    python decode_token_ids.py --stats             # Vocabulary and data statistics
+    python decode_token_ids.py --search hello     # Find sequences containing text
+    python decode_token_ids.py --raw              # Show raw token IDs alongside text
+    python decode_token_ids.py --stats            # Vocabulary and data statistics
 """
 
-import struct
 import argparse
-import sys
-from pathlib import Path
+import struct
 from collections import Counter
+from dataclasses import dataclass
+from pathlib import Path
 
 # ── Paths (repo-relative defaults) ───────────────────────────────────────────
 
@@ -41,25 +44,37 @@ GRMT_FILE = REPO_ROOT / "resources/models/GRIM-text/training/data/training_data.
 # ── Token layout constants ────────────────────────────────────────────────────
 
 NUM_SPECIAL_TOKENS = 4
-BYTE_TOKEN_OFFSET  = NUM_SPECIAL_TOKENS   # 4
-BYTE_VOCAB_SIZE    = 256
-ATOM_TOKEN_START   = BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE  # 260
+SPECIAL_TOKEN_OFFSET = 0
+BYTE_TOKEN_OFFSET = NUM_SPECIAL_TOKENS  # 4
+BYTE_VOCAB_SIZE = 256
+ATOM_TOKEN_OFFSET = BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE  # 260
 
 SPECIAL_NAMES = {0: "<unk>", 1: "<pad>", 2: "<s>", 3: "</s>"}
 
 ATOM_TYPE_LABELS = {
-    0:  "<ATOM_NONE>",
-    1:  "<INT>",
-    2:  "<FLOAT>",
+    0: "<INT>",
+    1: "<FLOAT>",
 }
-NUM_ATOM_TYPES = 3  # AtomType::ATOM_ACTIVE_COUNT: NONE, INT, FLOAT
+NUM_ATOM_TYPES = len(ATOM_TYPE_LABELS)  # AtomType::ATOM_ACTIVE_COUNT: INT, FLOAT
 
-ATOM_TOKEN_END        = ATOM_TOKEN_START + NUM_ATOM_TYPES  # 263
-UNIGRAM_TOKEN_START   = ATOM_TOKEN_END                     # 263
-KTMG_VOCAB_VERSION    = 4
+ATOM_TOKEN_END = ATOM_TOKEN_OFFSET + NUM_ATOM_TYPES  # 262
+UNIGRAM_TOKEN_START = ATOM_TOKEN_END                 # 262
+KTMG_VOCAB_VERSION = 4
 KTMG_MAX_PIECE_LENGTH = 32
-GRMT_MAGIC            = 0x474D5254
-GRMT_FORMAT_VERSION   = 12
+GRMT_MAGIC = 0x474D5254
+GRMT_FORMAT_VERSION = 12
+PAD_TOKEN_ID = 1
+
+
+@dataclass(frozen=True)
+class GrmtSequenceRecord:
+    index: int
+    token_ids: list[int]
+    token_numeric_values: list[float]
+    token_atom_mask: list[int]
+    token_atom_flags: list[int]
+    atom_texts: list[str]
+    execution_active: bool
 
 
 # ── Binary helpers ───────────────────────────────────────────────────────────
@@ -91,19 +106,102 @@ def read_f32(f, source: str) -> float:
     return struct.unpack("<f", read_exact(f, 4, source))[0]
 
 
-def read_i32_array(f, count: int, source: str) -> list:
+def read_i32_array(f, count: int, source: str) -> list[int]:
     if count == 0:
         return []
     return list(struct.unpack(f"<{count}i", read_exact(f, 4 * count, source)))
+
+
+def read_u32_array(f, count: int, source: str) -> list[int]:
+    if count == 0:
+        return []
+    return list(struct.unpack(f"<{count}I", read_exact(f, 4 * count, source)))
+
+
+def read_f32_array(f, count: int, source: str) -> list[float]:
+    if count == 0:
+        return []
+    return list(struct.unpack(f"<{count}f", read_exact(f, 4 * count, source)))
 
 
 def skip_exact(f, size: int, source: str):
     read_exact(f, size, source)
 
 
+# ── Token layout helpers ─────────────────────────────────────────────────────
+
+def is_special_token_id(token_id: int) -> bool:
+    return SPECIAL_TOKEN_OFFSET <= token_id < SPECIAL_TOKEN_OFFSET + NUM_SPECIAL_TOKENS
+
+
+def is_byte_token_id(token_id: int) -> bool:
+    return BYTE_TOKEN_OFFSET <= token_id < ATOM_TOKEN_OFFSET
+
+
+def is_atom_token_id(token_id: int) -> bool:
+    return ATOM_TOKEN_OFFSET <= token_id < ATOM_TOKEN_END
+
+
+def atom_type_label_for_token_id(token_id: int) -> str:
+    if not is_atom_token_id(token_id):
+        raise ValueError(f"token_id={token_id} is outside the atom token range")
+
+    label = ATOM_TYPE_LABELS.get(token_id - ATOM_TOKEN_OFFSET)
+    if label is None:
+        raise ValueError(f"token_id={token_id} does not map to a live atom type")
+    return label
+
+
+def format_numeric_value(value: float) -> str:
+    rounded = round(value)
+    if abs(value - rounded) < 1e-6 and abs(value) < 1e15:
+        return str(int(rounded))
+    return f"{value:.9g}"
+
+
+def format_hex_byte(byte_value: int) -> str:
+    return f"0x{byte_value:02X}"
+
+
+def summarize_byte_run(byte_values: bytes, max_preview_bytes: int = 16) -> str:
+    preview = byte_values[:max_preview_bytes]
+    summary = " ".join(format_hex_byte(byte_value) for byte_value in preview)
+    if len(byte_values) > max_preview_bytes:
+        summary += " ..."
+    return summary
+
+
+def format_token_prefix(token_ids: list[int], token_count: int) -> str:
+    return "[" + ", ".join(str(token_id) for token_id in token_ids[:token_count]) + "]"
+
+
+def append_validated_utf8_byte_run(
+    output_parts: list[str],
+    byte_values: bytes,
+    token_ids: list[int],
+    token_start_index: int,
+):
+    if not byte_values:
+        return
+
+    try:
+        output_parts.append(byte_values.decode("utf-8", errors="strict"))
+    except UnicodeDecodeError as exc:
+        bad_byte = byte_values[exc.start]
+        bad_token_index = token_start_index + exc.start
+        raise ValueError(
+            "decode_sequence: byte-token run starting at token index="
+            f"{token_start_index} after prior_token_count={token_start_index} "
+            f"prior_token_ids={format_token_prefix(token_ids, token_start_index)} "
+            f"produced invalid UTF-8 at run byte offset={exc.start} "
+            f"(token_id={token_ids[bad_token_index]}, byte={format_hex_byte(bad_byte)}, "
+            f"run_bytes=[{summarize_byte_run(byte_values)}])"
+        ) from exc
+
+
 # ── vocab.bin loader (KTMG v4 format) ────────────────────────────────────────
 
-def load_vocab_bin(path: Path) -> dict:
+def load_vocab_bin(path: Path) -> dict[int, str]:
     # sourcery skip: extract-method
     """
     Load vocab.bin and build a complete token_id -> text mapping.
@@ -115,21 +213,18 @@ def load_vocab_bin(path: Path) -> dict:
 
     id_to_text = dict(SPECIAL_NAMES)
 
-    # 2) Byte fallback tokens — emit the raw byte (matching C++ decode behavior).
-    #    The C++ tokenizer does: result.push_back(static_cast<char>(tid - BYTE_TOKEN_OFFSET))
-    #    so every byte token maps to its literal byte value.
-    for b in range(BYTE_VOCAB_SIZE):
-        tid = BYTE_TOKEN_OFFSET + b
-        id_to_text[tid] = bytes([b]).decode("latin-1")  # 1:1 byte→char mapping
+    # Byte fallback tokens mirror UniByte::decode: token_id - BYTE_TOKEN_OFFSET
+    # yields the raw byte value.
+    for byte_value in range(BYTE_VOCAB_SIZE):
+        token_id = BYTE_TOKEN_OFFSET + byte_value
+        id_to_text[token_id] = bytes([byte_value]).decode("latin-1")
 
-    # 3) Atom placeholder tokens
-    for i in range(NUM_ATOM_TYPES):
-        tid = ATOM_TOKEN_START + i
-        id_to_text[tid] = ATOM_TYPE_LABELS.get(i, f"<ATOM{i}>")
+    # Atom placeholder tokens come from TokenLayout.hpp.
+    for atom_index in range(NUM_ATOM_TYPES):
+        token_id = ATOM_TOKEN_OFFSET + atom_index
+        id_to_text[token_id] = ATOM_TYPE_LABELS.get(atom_index, f"<ATOM{atom_index}>")
 
-    # 4) Special-token metadata + unigram pieces from vocab.bin.
-    #    KTMG v4 persists special-token records plus learned pieces. It does
-    #    NOT persist byte/atom records; those remain fixed by TokenLayout.hpp.
+    # Special-token metadata + learned unigram pieces from vocab.bin.
     with open(path, "rb") as f:
         source = str(path)
         magic = read_exact(f, 4, source)
@@ -235,7 +330,7 @@ def read_grmt_header(path: Path) -> dict:
 
 
 def iter_grmt_sequences(path: Path):
-    """Yield (index, token_id_list, atom_text_list) for each sequence in the GRMT file.
+    """Yield decoded GRMT rows using the current persisted row layout.
 
     GRMT v12 per-sequence layout (must read ALL fields to stay in sync):
       uint32         seq_len
@@ -267,10 +362,10 @@ def iter_grmt_sequences(path: Path):
 
             tokens = read_i32_array(f, seq_len, row_source)
 
-            skip_exact(f, 4 * seq_len, row_source)       # targets (int32)
-            skip_exact(f, 4 * seq_len, row_source)       # token_numeric_values (float32)
-            skip_exact(f, 1 * seq_len, row_source)       # token_atom_mask (uint8)
-            skip_exact(f, 4 * seq_len, row_source)       # token_atom_flags (uint32)
+            skip_exact(f, 4 * seq_len, row_source)                # targets (int32)
+            token_numeric_values = read_f32_array(f, seq_len, row_source)
+            token_atom_mask = list(read_exact(f, seq_len, row_source))
+            token_atom_flags = read_u32_array(f, seq_len, row_source)
 
             atom_texts = []
             for token_index in range(seq_len):
@@ -282,78 +377,156 @@ def iter_grmt_sequences(path: Path):
                 atom_texts.append(atom_text)
 
                 token_id = tokens[token_index]
-                if atom_text and not (ATOM_TOKEN_START <= token_id < ATOM_TOKEN_END):
+                token_is_atom = is_atom_token_id(token_id)
+
+                if atom_text and not token_is_atom:
                     raise ValueError(
                         f"GRMT atom text exists for non-atom token in {row_source} "
                         f"index={token_index} token_id={token_id}"
                     )
+                if token_atom_mask[token_index] != 0 and not token_is_atom:
+                    raise ValueError(
+                        f"GRMT token_atom_mask is set for non-atom token in {row_source} "
+                        f"index={token_index} token_id={token_id} mask={token_atom_mask[token_index]}"
+                    )
+                if token_is_atom and token_atom_mask[token_index] == 0:
+                    raise ValueError(
+                        f"GRMT atom token has token_atom_mask=0 in {row_source} "
+                        f"index={token_index} token_id={token_id}"
+                    )
 
-            _execution_active = read_u8(f, row_source)
-            skip_exact(f, 4 * seq_len, row_source)       # token_exec_slots (int32)
+            execution_active = (read_u8(f, row_source) != 0)
+            skip_exact(f, 4 * seq_len, row_source)                # token_exec_slots (int32)
 
             cbb_count = read_u32(f, row_source)
-            skip_exact(f, 12 * cbb_count, row_source)    # CompiledBootstrapBinding
+            skip_exact(f, 12 * cbb_count, row_source)             # CompiledBootstrapBinding
 
             teacher_step_count = read_u32(f, row_source)
-            skip_exact(f, 20 * teacher_step_count, row_source)  # TeacherStep
+            skip_exact(f, 20 * teacher_step_count, row_source)    # TeacherStep
 
             slot_selection_target_count = read_u32(f, row_source)
             for _ in range(slot_selection_target_count):
-                skip_exact(f, 1, row_source)             # SlotSelectionTargetKind uint8
-                skip_exact(f, 4, row_source)             # slot_id int32
+                skip_exact(f, 1, row_source)                      # SlotSelectionTargetKind uint8
+                skip_exact(f, 4, row_source)                      # slot_id int32
 
-            yield idx, tokens, atom_texts
+            yield GrmtSequenceRecord(
+                index=idx,
+                token_ids=tokens,
+                token_numeric_values=token_numeric_values,
+                token_atom_mask=token_atom_mask,
+                token_atom_flags=token_atom_flags,
+                atom_texts=atom_texts,
+                execution_active=execution_active,
+            )
 
 
 # ── Decode helpers ────────────────────────────────────────────────────────────
 
-def decode_token(tid: int, vocab: dict) -> str:
+def decode_token(tid: int, vocab: dict[int, str]) -> str:
     """Decode a single token ID to its text representation."""
     return vocab.get(tid, f"<UNK:{tid}>")
 
 
-def decode_sequence(tokens: list, vocab: dict, atom_texts: list | None = None) -> str:
+def decode_atom_token(
+    token_index: int,
+    token_id: int,
+    vocab: dict[int, str],
+    atom_texts: list[str] | None = None,
+    token_numeric_values: list[float] | None = None,
+    token_atom_mask: list[int] | None = None,
+) -> str:
+    atom_text = ""
+    if atom_texts is not None:
+        atom_text = atom_texts[token_index]
+    if atom_text:
+        return atom_text
+
+    if token_atom_mask is not None and token_atom_mask[token_index] != 0:
+        if token_numeric_values is None:
+            raise ValueError(
+                f"decode_atom_token: token_atom_mask is set at token index {token_index}, "
+                "but token_numeric_values is missing"
+            )
+        return format_numeric_value(token_numeric_values[token_index])
+
+    return decode_token(token_id, vocab)
+
+
+def decode_sequence(
+    tokens: list[int],
+    vocab: dict[int, str],
+    atom_texts: list[str] | None = None,
+    token_numeric_values: list[float] | None = None,
+    token_atom_mask: list[int] | None = None,
+) -> str:
     """Decode a full sequence of token IDs to readable text.
-    
-    Merges consecutive byte-fallback tokens into actual UTF-8 characters
-    instead of showing <BYTE 0xNN> tags.
+
+    Mirrors UniByte::decode semantics:
+    - contiguous byte tokens are buffered as a raw byte run and must be valid UTF-8
+    - PAD is skipped
+    - atom tokens prefer persisted atom text, then numeric payload formatting,
+      then the placeholder token text (<INT>/<FLOAT>)
     """
-    # Two-pass: first collect raw pieces, merging byte runs into UTF-8
-    output_parts = []
+    token_count = len(tokens)
+    if atom_texts is not None and len(atom_texts) != token_count:
+        raise ValueError(
+            f"decode_sequence: atom_texts length={len(atom_texts)} != token_count={token_count}"
+        )
+    if token_numeric_values is not None and len(token_numeric_values) != token_count:
+        raise ValueError(
+            f"decode_sequence: token_numeric_values length={len(token_numeric_values)} != token_count={token_count}"
+        )
+    if token_atom_mask is not None and len(token_atom_mask) != token_count:
+        raise ValueError(
+            f"decode_sequence: token_atom_mask length={len(token_atom_mask)} != token_count={token_count}"
+        )
+
+    output_parts: list[str] = []
     byte_buffer = bytearray()
-    
+    pending_byte_run_start = 0
+
     def flush_bytes():
         nonlocal byte_buffer
         if byte_buffer:
-            # Decode accumulated bytes as UTF-8
-            output_parts.append(byte_buffer.decode("utf-8", errors="replace"))
+            append_validated_utf8_byte_run(
+                output_parts,
+                bytes(byte_buffer),
+                tokens,
+                pending_byte_run_start,
+            )
             byte_buffer = bytearray()
-    
+
     for token_index, tid in enumerate(tokens):
-        # Check if this is a byte-fallback token (IDs 4-259)
-        if BYTE_TOKEN_OFFSET <= tid < ATOM_TOKEN_START:
-            byte_val = tid - BYTE_TOKEN_OFFSET
-            if byte_val >= 0x80:  # Non-ASCII byte → accumulate for UTF-8
-                byte_buffer.append(byte_val)
-                continue
-            else:
-                flush_bytes()
-                output_parts.append(chr(byte_val))
-                continue
-        
+        if is_byte_token_id(tid):
+            if not byte_buffer:
+                pending_byte_run_start = token_index
+            byte_buffer.append(tid - BYTE_TOKEN_OFFSET)
+            continue
+
         flush_bytes()
-        if ATOM_TOKEN_START <= tid < ATOM_TOKEN_END:
-            atom_text = ""
-            if atom_texts is not None and token_index < len(atom_texts):
-                atom_text = atom_texts[token_index]
-            output_parts.append(atom_text or vocab[tid])
+        if is_special_token_id(tid):
+            if tid != PAD_TOKEN_ID:
+                output_parts.append(SPECIAL_NAMES[tid])
+            continue
+
+        if is_atom_token_id(tid):
+            output_parts.append(
+                decode_atom_token(
+                    token_index,
+                    tid,
+                    vocab,
+                    atom_texts=atom_texts,
+                    token_numeric_values=token_numeric_values,
+                    token_atom_mask=token_atom_mask,
+                )
+            )
             continue
 
         if tid in vocab:
             output_parts.append(vocab[tid])
         else:
             output_parts.append(f"<UNK:{tid}>")
-    
+
     flush_bytes()
     text = "".join(output_parts)
     text = text.replace("\u2581", " ")  # ▁ (Unigram space marker) → space
@@ -362,16 +535,18 @@ def decode_sequence(tokens: list, vocab: dict, atom_texts: list | None = None) -
 
 def token_type_label(tid: int) -> str:
     """Return which region a token ID belongs to."""
-    if tid < NUM_SPECIAL_TOKENS:
+    if is_special_token_id(tid):
         return "SPECIAL"
-    elif BYTE_TOKEN_OFFSET <= tid < ATOM_TOKEN_START:
+    if is_byte_token_id(tid):
         return "BYTE"
-    elif ATOM_TOKEN_START <= tid < ATOM_TOKEN_END:
+    if is_atom_token_id(tid):
         return "ATOM"
-    return "UNIGRAM"
+    if tid >= UNIGRAM_TOKEN_START:
+        return "UNIGRAM"
+    return "INVALID"
 
 
-def validate_grmt_vocab_pair(header: dict, vocab: dict, grmt: Path):
+def validate_grmt_vocab_pair(header: dict, vocab: dict[int, str], grmt: Path):
     """Fail loudly if the GRMT header and loaded vocab disagree on token-space size."""
     if header["vocab_size"] != len(vocab):
         raise ValueError(
@@ -383,7 +558,7 @@ def validate_grmt_vocab_pair(header: dict, vocab: dict, grmt: Path):
 
 def parse_cli_token_ids(raw_values: list[str]) -> list[int]:
     """Parse --ids values, accepting either whitespace- or comma-separated integers."""
-    parsed_ids = []
+    parsed_ids: list[int] = []
 
     for raw_value in raw_values:
         for piece in raw_value.split(","):
@@ -403,7 +578,7 @@ def parse_cli_token_ids(raw_values: list[str]) -> list[int]:
 
 # ── CLI actions ───────────────────────────────────────────────────────────────
 
-def cmd_decode_ids(args, vocab):
+def cmd_decode_ids(args, vocab: dict[int, str]):
     """Decode a list of token IDs from the command line."""
     for tid in args.ids:
         text = decode_token(tid, vocab)
@@ -438,7 +613,7 @@ def wrap_text(text: str, width: int = 100) -> str:
     return "\n".join(lines)
 
 
-def cmd_decode_sequences(args, vocab):
+def cmd_decode_sequences(args, vocab: dict[int, str]):
     """Decode sequences from training_data.grmt."""
     grmt = Path(args.grmt)
     if not grmt.exists():
@@ -448,31 +623,54 @@ def cmd_decode_sequences(args, vocab):
     validate_grmt_vocab_pair(header, vocab, grmt)
     total = header["num_sequences"]
     start = args.seq[0] if args.seq else 0
-    end   = args.seq[1] if args.seq and len(args.seq) > 1 else start + 10
-    end   = min(end, total)
+    end = args.seq[1] if args.seq and len(args.seq) > 1 else start + 10
+    end = min(end, total)
 
-    # Default: show first 500 chars per sequence unless --full
     max_chars = None if args.full else 500
 
     print(f"GRMT: {total} sequences, vocab_size={header['vocab_size']}")
     print(f"Showing sequences [{start}, {end}):\n")
 
-    for idx, tokens, atom_texts in iter_grmt_sequences(grmt):
-        if idx < start:
+    for record in iter_grmt_sequences(grmt):
+        if record.index < start:
             continue
-        if idx >= end:
+        if record.index >= end:
             break
 
-        text = decode_sequence(tokens, vocab, atom_texts)
+        text = decode_sequence(
+            record.token_ids,
+            vocab,
+            atom_texts=record.atom_texts,
+            token_numeric_values=record.token_numeric_values,
+            token_atom_mask=record.token_atom_mask,
+        )
 
         print(f"{'═' * 80}")
-        print(f"  Sequence {idx}  |  {len(tokens)} tokens  |  {len(text)} chars")
+        exec_tag = "exec-active" if record.execution_active else "exec-inactive"
+        print(f"  Sequence {record.index}  |  {len(record.token_ids)} tokens  |  {len(text)} chars  |  {exec_tag}")
         print(f"{'═' * 80}")
         if args.raw:
-            for i, tid in enumerate(tokens):
-                piece = atom_texts[i] if ATOM_TOKEN_START <= tid < ATOM_TOKEN_END and atom_texts[i] else decode_token(tid, vocab)
+            for i, tid in enumerate(record.token_ids):
+                if is_atom_token_id(tid):
+                    piece = decode_atom_token(
+                        i,
+                        tid,
+                        vocab,
+                        atom_texts=record.atom_texts,
+                        token_numeric_values=record.token_numeric_values,
+                        token_atom_mask=record.token_atom_mask,
+                    )
+                    atom_extra = (
+                        f"  atom_mask={record.token_atom_mask[i]}"
+                        f" atom_flags={record.token_atom_flags[i]}"
+                        f" numeric={format_numeric_value(record.token_numeric_values[i])}"
+                    )
+                else:
+                    piece = decode_token(tid, vocab)
+                    atom_extra = ""
+
                 region = token_type_label(tid)
-                print(f"  [{i:>4d}] {tid:>6d} {region:>7s}  {piece!r}")
+                print(f"  [{i:>4d}] {tid:>6d} {region:>7s}  {piece!r}{atom_extra}")
             print()
 
         display = text
@@ -488,7 +686,7 @@ def cmd_decode_sequences(args, vocab):
         print()
 
 
-def cmd_search(args, vocab):
+def cmd_search(args, vocab: dict[int, str]):
     """Search sequences for a substring."""
     grmt = Path(args.grmt)
     if not grmt.exists():
@@ -501,11 +699,17 @@ def cmd_search(args, vocab):
     found = 0
     limit = args.limit
 
-    for idx, tokens, atom_texts in iter_grmt_sequences(grmt):
-        text = decode_sequence(tokens, vocab, atom_texts)
+    for record in iter_grmt_sequences(grmt):
+        text = decode_sequence(
+            record.token_ids,
+            vocab,
+            atom_texts=record.atom_texts,
+            token_numeric_values=record.token_numeric_values,
+            token_atom_mask=record.token_atom_mask,
+        )
         if query in text.lower():
             print(f"{'═' * 80}")
-            print(f"  Sequence {idx}  |  {len(tokens)} tokens  |  {len(text)} chars")
+            print(f"  Sequence {record.index}  |  {len(record.token_ids)} tokens  |  {len(text)} chars")
             print(f"{'═' * 80}")
             print(wrap_text(text.strip()))
             print()
@@ -520,7 +724,7 @@ def cmd_search(args, vocab):
         print(f"Found {found} matching sequence(s).")
 
 
-def cmd_stats(args, vocab):
+def cmd_stats(args, vocab: dict[int, str]):
     """Print vocab and GRMT statistics."""
     grmt = Path(args.grmt)
     if not grmt.exists():
@@ -531,13 +735,13 @@ def cmd_stats(args, vocab):
 
     print("═══ Vocabulary ═══")
     n_special = NUM_SPECIAL_TOKENS
-    n_byte    = BYTE_VOCAB_SIZE
-    n_atom    = NUM_ATOM_TYPES
+    n_byte = BYTE_VOCAB_SIZE
+    n_atom = NUM_ATOM_TYPES
     n_unigram = len(vocab) - UNIGRAM_TOKEN_START
     print(f"  Total entries : {len(vocab)}")
-    print(f"  Special       : {n_special}  (IDs 0-{NUM_SPECIAL_TOKENS-1})")
-    print(f"  Byte fallback : {n_byte}  (IDs {BYTE_TOKEN_OFFSET}-{ATOM_TOKEN_START-1})")
-    print(f"  Atom slots    : {n_atom}  (IDs {ATOM_TOKEN_START}-{ATOM_TOKEN_END-1})")
+    print(f"  Special       : {n_special}  (IDs 0-{NUM_SPECIAL_TOKENS - 1})")
+    print(f"  Byte fallback : {n_byte}  (IDs {BYTE_TOKEN_OFFSET}-{ATOM_TOKEN_OFFSET - 1})")
+    print(f"  Atom slots    : {n_atom}  (IDs {ATOM_TOKEN_OFFSET}-{ATOM_TOKEN_END - 1})")
     print(f"  Unigram pieces: {n_unigram}  (IDs {UNIGRAM_TOKEN_START}+)")
     print()
 
@@ -548,16 +752,20 @@ def cmd_stats(args, vocab):
     print(f"  Vocab size  : {header['vocab_size']}")
     print()
 
-    # Scan sequences for statistics
     token_counter = Counter()
     total_tokens = 0
     seq_lengths = []
     unknown_ids = set()
+    execution_active_count = 0
+    atom_token_count = 0
 
-    for idx, tokens, _atom_texts in iter_grmt_sequences(grmt):
-        seq_lengths.append(len(tokens))
-        total_tokens += len(tokens)
-        for tid in tokens:
+    for record in iter_grmt_sequences(grmt):
+        seq_lengths.append(len(record.token_ids))
+        total_tokens += len(record.token_ids)
+        if record.execution_active:
+            execution_active_count += 1
+        atom_token_count += sum(1 for tid in record.token_ids if is_atom_token_id(tid))
+        for tid in record.token_ids:
             token_counter[tid] += 1
             if tid not in vocab:
                 unknown_ids.add(tid)
@@ -565,8 +773,10 @@ def cmd_stats(args, vocab):
     print("═══ Sequence Statistics ═══")
     print(f"  Total tokens   : {total_tokens:,}")
     print(f"  Total sequences: {len(seq_lengths):,}")
+    print(f"  Exec-active seq: {execution_active_count:,}")
+    print(f"  Atom tokens    : {atom_token_count:,}")
     if seq_lengths:
-        print(f"  Avg seq length : {sum(seq_lengths)/len(seq_lengths):.1f}")
+        print(f"  Avg seq length : {sum(seq_lengths) / len(seq_lengths):.1f}")
         print(f"  Min seq length : {min(seq_lengths)}")
         print(f"  Max seq length : {max(seq_lengths)}")
     print()
@@ -577,7 +787,6 @@ def cmd_stats(args, vocab):
         print("  ✓ All token IDs map to known vocab entries")
     print()
 
-    # Top 20 tokens
     print("═══ Top 20 Most Frequent Tokens ═══")
     for tid, count in token_counter.most_common(20):
         text = decode_token(tid, vocab)
@@ -613,7 +822,6 @@ def main():
 
     args = parser.parse_args()
 
-    # Load vocabulary
     vocab_path = Path(args.vocab)
     print(f"Loading vocab: {vocab_path}")
     vocab = load_vocab_bin(vocab_path)
