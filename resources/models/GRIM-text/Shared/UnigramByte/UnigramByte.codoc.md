@@ -10,7 +10,7 @@
 `UnigramByte` is a composed tokenizer with four jobs:
 
 1. `Detectors/DetectorRegistry` scans raw text for numeric atoms and non-token text features.
-2. `AtomTable` stores parsed numeric values so the model can keep a placeholder token and still recover the real value.
+2. `AtomTable` stores parsed numeric values and per-entry numeric decomposition metadata (`AtomEntry::arg_number`) so the model can keep a placeholder token and still recover the real value.
 3. `UnigramLM` does learned subword tokenization on the residual non-atom text.
 4. `TokenLayout.hpp` owns the byte-token IDs and conversion helpers used when finalized unigram coverage overflows to raw bytes.
 
@@ -152,7 +152,7 @@ flowchart LR
 ### What actually happens
 
 1. `DetectorRegistry::scan()` finds raw detections; `UniByte` passes them to `createAtomTableFromRawTextDetections()`.
-2. `createAtomTableFromRawTextDetections()` allocates the per-sequence `AtomTable`, registers each atom-emitting detection exactly once, and returns `AtomTokenizationPayload` records.
+2. `createAtomTableFromRawTextDetections()` allocates the per-sequence `AtomTable`, registers each atom-emitting detection exactly once, and stores numeric `arg_number` / `DigitBinding` metadata on the deduped `AtomEntry` itself before returning `AtomTokenizationPayload` records.
 3. Each atom payload carries the finalized `StructuralSpan`, placeholder token ID, `atom_entry_id`, packed numeric value, atom flags, and atom mask used by the merge step.
 4. The original text is segmented around atom spans; non-atom gaps go through unigram segmentation, while atom gaps emit the returned atom payload directly.
 5. Text normalization happens before unigram segmentation of each non-atom gap.
@@ -161,6 +161,8 @@ flowchart LR
 8. `UniByteResult` is assembled and `validate()` checks that every parallel array matches `token_ids.size()`.
 
 Persisted GRMT reconstruction uses `createAtomTableFromRawTextDetectionsForTokenSideChannels()` so AtomTable owns the payload validation and `atom_entry_ids` materialization instead of duplicating that policy in row I/O.
+
+`ArgNumberPopulationPayload` is now summary-only diagnostics. The durable numeric decomposition lives on `AtomEntry::arg_number`, which means deduped atom entries also dedupe their digit bindings and AtomTable save/load persists them with the entry.
 
 Atoms never reach the byte-overflow step because they were already extracted and handled before unigram segmentation started.
 

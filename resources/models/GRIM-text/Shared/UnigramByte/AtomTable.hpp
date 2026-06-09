@@ -109,65 +109,6 @@ struct StringRef {
     StringRef(uint32_t off, uint32_t len) : offset(off), length(len) {}
 };
 
-//======================================================//
-//  Atom Entry - 64-Byte Cache-Aligned Record
-//  Fits exactly in one cache line for maximum performance
-//======================================================//
-struct alignas(64) AtomEntry {
-    // --- Hot data (first 32 bytes) ---
-    uint64_t hash;            // FNV-1a hash for deduplication (8 bytes)
-    uint32_t id;              // Unique ID (4 bytes)
-    AtomType type;            // Atom type (4 bytes)
-    AtomCategory category;    // Category (1 byte)
-    AtomOrigin origin;        // Origin (1 byte)
-    uint8_t padding1[2];      // Alignment padding (2 bytes)
-    
-    StringRef raw_text_ref;   // Reference to string pool (8 bytes)
-    float confidence;         // Model confidence (4 bytes)
-    
-    // --- Warm data (second 32 bytes) ---
-    uint64_t created_at;      // Timestamp (8 bytes)
-    uint32_t source_start;    // Position in original text (4 bytes)
-    uint32_t source_end;      // End position (4 bytes)
-    
-    // GPU-packed numeric value and flags
-    float numeric_value;      // For numeric types (4 bytes)
-    uint32_t flags;           // Type-specific flags (4 bytes)
-    
-    uint64_t reserved_zero;   // Reserved padding; must remain zero (8 bytes)
-    
-    // Initialize to safe defaults
-    AtomEntry() 
-        : hash(0), id(0), type(AtomType::ATOM_INT), 
-                    category(AtomCategory::NUMERIC), origin(AtomOrigin::USER_INPUT),
-          padding1{0, 0}, raw_text_ref(), confidence(1.0f),
-          created_at(0), source_start(0), source_end(0),
-          numeric_value(0.0f), flags(0), reserved_zero(0) {}
-};
-
-static_assert(sizeof(AtomEntry) == 64, "AtomEntry must be exactly 64 bytes");
-
-//======================================================//
-//  Atom Parsing Result
-//======================================================//
-struct ParseResult {
-    bool success;
-    AtomValue value;
-    std::string error_message;
-};
-
-class AtomTable;
-
-struct AtomTokenizationPayload {
-    StructuralSpan span;
-    int token_id = -1;
-    bool is_byte_fallback = false;
-    float token_numeric_value = 0.0f;
-    uint32_t token_atom_flags = 0;
-    uint8_t token_atom_mask = 0;
-    uint32_t atom_entry_id = kAtomEntryNone;
-};
-
 struct TextSpan32 {
     uint32_t offset = 0;
     uint32_t length = 0;
@@ -207,7 +148,6 @@ struct AtomNumber {
 using ArgNumber = AtomNumber;
 
 struct AtomNumberPopulationPayload {
-    std::vector<ArgNumber> numbers;
     uint32_t total_numbers = 0;
     uint32_t total_digits = 0;
     uint32_t skipped_atoms = 0;
@@ -215,6 +155,63 @@ struct AtomNumberPopulationPayload {
 };
 
 using ArgNumberPopulationPayload = AtomNumberPopulationPayload;
+
+//======================================================//
+//  Atom Entry - durable atom record plus numeric decomposition metadata
+//======================================================//
+struct alignas(64) AtomEntry {
+    // --- Hot data ---
+    uint64_t hash;            // FNV-1a hash for deduplication
+    uint32_t id;              // Unique ID
+    AtomType type;            // Atom type
+    AtomCategory category;    // Category
+    AtomOrigin origin;        // Origin
+    uint8_t padding1[2];      // Alignment padding
+
+    StringRef raw_text_ref;   // Reference to string pool
+    float confidence;         // Model confidence
+
+    // --- Durable metadata ---
+    uint64_t created_at;      // Timestamp
+    uint32_t source_start;    // Position in original text
+    uint32_t source_end;      // End position
+
+    // GPU-packed numeric value and flags
+    float numeric_value;      // For numeric types
+    uint32_t flags;           // Type-specific flags
+
+    uint64_t reserved_zero;   // Reserved legacy field; must remain zero
+    std::optional<ArgNumber> arg_number;  // Deduped and serialized numeric decomposition
+
+    // Initialize to safe defaults
+    AtomEntry()
+        : hash(0), id(0), type(AtomType::ATOM_INT),
+          category(AtomCategory::NUMERIC), origin(AtomOrigin::USER_INPUT),
+          padding1{0, 0}, raw_text_ref(), confidence(1.0f),
+          created_at(0), source_start(0), source_end(0),
+          numeric_value(0.0f), flags(0), reserved_zero(0), arg_number(std::nullopt) {}
+};
+
+//======================================================//
+//  Atom Parsing Result
+//======================================================//
+struct ParseResult {
+    bool success;
+    AtomValue value;
+    std::string error_message;
+};
+
+class AtomTable;
+
+struct AtomTokenizationPayload {
+    StructuralSpan span;
+    int token_id = -1;
+    bool is_byte_fallback = false;
+    float token_numeric_value = 0.0f;
+    uint32_t token_atom_flags = 0;
+    uint8_t token_atom_mask = 0;
+    uint32_t atom_entry_id = kAtomEntryNone;
+};
 
 struct AtomTableFromDetectionsResult {
     std::shared_ptr<AtomTable> atom_table;
@@ -335,8 +332,7 @@ public:
     static size_t atomValueSerialize(AtomType type, const AtomValue& value, char* out, size_t max);
     
     // String version (allocates - prefer atomValueSerialize for performance)
-    static std::string atomValueToString(AtomType type, const AtomValue& value);
-    
+
     // Get exact numeric value by atom ID. This reads durable exact side channels,
     // never AtomEntry::numeric_value (legacy packed float).
     std::optional<NumericPayload> getNumericValue(uint32_t id) const;

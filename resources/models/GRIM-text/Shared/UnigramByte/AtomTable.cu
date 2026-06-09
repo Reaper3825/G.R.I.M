@@ -65,6 +65,147 @@ std::string escapeForTsv(std::string_view value) {
     return out;
 }
 
+template <typename T>
+void writeBinary(std::ostream& stream, const T& value) {
+    stream.write(reinterpret_cast<const char*>(&value), sizeof(T));
+}
+
+template <typename T>
+bool readBinary(std::istream& stream, T& value) {
+    stream.read(reinterpret_cast<char*>(&value), sizeof(T));
+    return stream.good();
+}
+
+void writeTextSpan32(std::ostream& stream, const TextSpan32& span) {
+    writeBinary(stream, span.offset);
+    writeBinary(stream, span.length);
+}
+
+bool readTextSpan32(std::istream& stream, TextSpan32& span) {
+    return readBinary(stream, span.offset) && readBinary(stream, span.length);
+}
+
+void writeDigitBinding(std::ostream& stream, const DigitBinding& digit) {
+    writeBinary(stream, digit.digit);
+    writeBinary(stream, digit.pow10);
+    writeBinary(stream, digit.index_left);
+    writeBinary(stream, digit.index_right);
+    writeTextSpan32(stream, digit.digit_span);
+}
+
+bool readDigitBinding(std::istream& stream, DigitBinding& digit) {
+    return readBinary(stream, digit.digit) &&
+           readBinary(stream, digit.pow10) &&
+           readBinary(stream, digit.index_left) &&
+           readBinary(stream, digit.index_right) &&
+           readTextSpan32(stream, digit.digit_span);
+}
+
+void writeArgNumber(std::ostream& stream, const ArgNumber& number) {
+    writeTextSpan32(stream, number.raw_span);
+    writeTextSpan32(stream, number.content_span);
+    writeTextSpan32(stream, number.mantissa_span);
+    writeTextSpan32(stream, number.sign_span);
+    writeTextSpan32(stream, number.decimal_point_span);
+    writeTextSpan32(stream, number.exponent_marker_span);
+    writeTextSpan32(stream, number.exponent_sign_span);
+    writeTextSpan32(stream, number.exponent_digits_span);
+    writeBinary(stream, number.base);
+    writeBinary(stream, number.has_sign);
+    writeBinary(stream, number.sign_negative);
+    writeBinary(stream, number.has_decimal_point);
+    writeBinary(stream, number.has_exponent);
+    writeBinary(stream, number.exponent_negative);
+    writeBinary(stream, number.integer_digit_count);
+    writeBinary(stream, number.fractional_digit_count);
+    writeBinary(stream, number.exponent_value);
+    writeBinary(stream, number.confidence);
+
+    const uint32_t digit_count = static_cast<uint32_t>(number.digits.size());
+    writeBinary(stream, digit_count);
+    for (const DigitBinding& digit : number.digits) {
+        writeDigitBinding(stream, digit);
+    }
+}
+
+bool readArgNumber(std::istream& stream, uint32_t atom_entry_id, ArgNumber& number) {
+    number = ArgNumber{};
+    number.number_atom_id = atom_entry_id;
+
+    if (!readTextSpan32(stream, number.raw_span) ||
+        !readTextSpan32(stream, number.content_span) ||
+        !readTextSpan32(stream, number.mantissa_span) ||
+        !readTextSpan32(stream, number.sign_span) ||
+        !readTextSpan32(stream, number.decimal_point_span) ||
+        !readTextSpan32(stream, number.exponent_marker_span) ||
+        !readTextSpan32(stream, number.exponent_sign_span) ||
+        !readTextSpan32(stream, number.exponent_digits_span) ||
+        !readBinary(stream, number.base) ||
+        !readBinary(stream, number.has_sign) ||
+        !readBinary(stream, number.sign_negative) ||
+        !readBinary(stream, number.has_decimal_point) ||
+        !readBinary(stream, number.has_exponent) ||
+        !readBinary(stream, number.exponent_negative) ||
+        !readBinary(stream, number.integer_digit_count) ||
+        !readBinary(stream, number.fractional_digit_count) ||
+        !readBinary(stream, number.exponent_value) ||
+        !readBinary(stream, number.confidence)) {
+        return false;
+    }
+
+    uint32_t digit_count = 0;
+    if (!readBinary(stream, digit_count)) {
+        return false;
+    }
+    number.digits.resize(digit_count);
+    for (uint32_t i = 0; i < digit_count; ++i) {
+        if (!readDigitBinding(stream, number.digits[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string formatArgNumberForText(const std::optional<ArgNumber>& number) {
+    if (!number.has_value()) {
+        return "<none>";
+    }
+
+    std::ostringstream oss;
+    oss << "raw={offset=" << number->raw_span.offset
+        << ",length=" << number->raw_span.length
+        << "};content={offset=" << number->content_span.offset
+        << ",length=" << number->content_span.length
+        << "};mantissa={offset=" << number->mantissa_span.offset
+        << ",length=" << number->mantissa_span.length
+        << "};base=" << static_cast<int>(number->base)
+        << ";has_sign=" << static_cast<int>(number->has_sign)
+        << ";sign_negative=" << static_cast<int>(number->sign_negative)
+        << ";has_decimal_point=" << static_cast<int>(number->has_decimal_point)
+        << ";has_exponent=" << static_cast<int>(number->has_exponent)
+        << ";exponent_negative=" << static_cast<int>(number->exponent_negative)
+        << ";exponent_value=" << number->exponent_value
+        << ";integer_digit_count=" << number->integer_digit_count
+        << ";fractional_digit_count=" << number->fractional_digit_count
+        << ";confidence=" << number->confidence
+        << ";digits=[";
+    for (size_t i = 0; i < number->digits.size(); ++i) {
+        if (i != 0) {
+            oss << ',';
+        }
+        const DigitBinding& digit = number->digits[i];
+        oss << "{digit=" << static_cast<int>(digit.digit)
+            << ",pow10=" << digit.pow10
+            << ",index_left=" << digit.index_left
+            << ",index_right=" << digit.index_right
+            << ",span={offset=" << digit.digit_span.offset
+            << ",length=" << digit.digit_span.length
+            << "}}";
+    }
+    oss << "]";
+    return oss.str();
+}
+
 bool stringRefInBounds(const StringRef& ref, size_t pool_size) {
     if (ref.offset > pool_size) {
         return false;
@@ -209,66 +350,83 @@ int16_t requireInt16Pow10ForArgNumber(
                              "'; upstream detector/data pipeline bug: detector-emitted numeric spans must not fall back to text");
 }
 
-void appendArgNumberFromSpan(
-    std::string_view source_text,
-    const StructuralSpan& span,
-    const AtomEntry& entry,
-    const Detector::RawTextDetection& detection,
-    size_t detection_index,
-    ArgNumberPopulationPayload& payload,
-    const char* caller) {
-    if (!isNumericAtom(span.atom_type)) {
-        ++payload.skipped_atoms;
-        return;
+[[noreturn]] void throwArgNumberPopulationFailure(
+    const char* caller,
+    AtomType atom_type,
+    uint32_t atom_entry_id,
+    const TextSpan32& raw_span,
+    std::string_view atom_text,
+    const std::string& reason) {
+    throw std::runtime_error(std::string(caller) +
+                             ": failed to populate arg_number for numeric atom entry id=" +
+                             std::to_string(atom_entry_id) +
+                             ", atom_type=" + atomTypeName(atom_type) +
+                             ", raw_span={offset=" + std::to_string(raw_span.offset) +
+                             ", length=" + std::to_string(raw_span.length) +
+                             "}, raw_text='" + std::string(atom_text) +
+                             "', reason='" + reason + "'");
+}
+
+ArgNumber buildArgNumberFromContentText(
+    std::string_view content_text,
+    const TextSpan32& raw_span,
+    const TextSpan32& content_span,
+    uint32_t atom_entry_id,
+    float confidence,
+    AtomType atom_type,
+    const char* caller,
+    const Detector::RawTextDetection* detection,
+    size_t detection_index) {
+    if (!isNumericAtom(atom_type)) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": buildArgNumberFromContentText requires numeric atom type, got " +
+                                 atomTypeName(atom_type));
     }
     auto fail = [&](const std::string& reason) -> void {
-        const std::string_view atom_text(source_text.data() + detection.start, detection.end - detection.start);
-        throwDetectorNumericAtomContractFailure(
-            caller,
-            detection,
-            detection_index,
-            span.atom_type,
-            atom_text,
-            "failed to populate required arg_number side channel: " + reason);
+        if (detection != nullptr) {
+            throwDetectorNumericAtomContractFailure(
+                caller,
+                *detection,
+                detection_index,
+                atom_type,
+                content_text,
+                "failed to populate required atom entry arg_number metadata: " + reason);
+        }
+        throwArgNumberPopulationFailure(caller, atom_type, atom_entry_id, raw_span, content_text, reason);
     };
 
-    if (span.content_length == 0) {
+    if (content_text.size() != static_cast<size_t>(content_span.length)) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": arg_number content_text size mismatch for atom_entry_id=" +
+                                 std::to_string(atom_entry_id) +
+                                 ", content_text.size()=" + std::to_string(content_text.size()) +
+                                 ", content_span.length=" + std::to_string(content_span.length));
+    }
+    if (content_span.length == 0) {
         fail("empty numeric atom content span");
     }
-    if (span.content_offset > source_text.size() ||
-        static_cast<size_t>(span.content_length) > source_text.size() - span.content_offset) {
-        throw std::runtime_error(std::string(caller) +
-                                 ": atom content span is outside source text, atom_entry_id=" +
-                                 std::to_string(span.atom_entry_id) +
-                                 ", content_offset=" + std::to_string(span.content_offset) +
-                                 ", content_length=" + std::to_string(span.content_length) +
-                                 ", source_size=" + std::to_string(source_text.size()));
-    }
 
-    const uint32_t content_begin = span.content_offset;
-    const uint32_t content_end = span.content_offset + span.content_length;
-    const std::string atom_text(source_text.data() + content_begin, span.content_length);
+    const uint32_t content_end = content_span.length;
+    const std::string atom_text(content_text.data(), content_text.size());
 
     ArgNumber number{};
-    number.number_atom_id = span.atom_entry_id;
-    number.raw_span.offset = span.offset;
-    number.raw_span.length = span.length;
-    number.content_span.offset = span.content_offset;
-    number.content_span.length = span.content_length;
+    number.number_atom_id = atom_entry_id;
+    number.raw_span = raw_span;
+    number.content_span = content_span;
     number.base = 10;
-    number.confidence = entry.confidence;
+    number.confidence = confidence;
 
-    uint32_t pos = content_begin;
-    if (pos < content_end && (source_text[pos] == '+' || source_text[pos] == '-')) {
+    uint32_t pos = 0;
+    if (pos < content_end && (content_text[pos] == '+' || content_text[pos] == '-')) {
         number.has_sign = 1;
-        number.sign_negative = source_text[pos] == '-' ? 1 : 0;
-        number.sign_span.offset = pos;
+        number.sign_negative = content_text[pos] == '-' ? 1 : 0;
+        number.sign_span.offset = content_span.offset + pos;
         number.sign_span.length = 1;
         ++pos;
     }
 
     std::vector<PendingMantissaDigit> mantissa_digits;
-    mantissa_digits.reserve(span.content_length);
+    mantissa_digits.reserve(content_span.length);
     uint32_t integer_digit_count = 0;
     uint32_t fractional_digit_count = 0;
     uint32_t first_mantissa_offset = 0;
@@ -277,16 +435,17 @@ void appendArgNumberFromSpan(
     bool saw_decimal_point = false;
 
     while (pos < content_end) {
-        const unsigned char c = static_cast<unsigned char>(source_text[pos]);
+        const unsigned char c = static_cast<unsigned char>(content_text[pos]);
         if (c >= static_cast<unsigned char>('0') && c <= static_cast<unsigned char>('9')) {
+            const uint32_t absolute_offset = content_span.offset + pos;
             if (!saw_mantissa_digit) {
-                first_mantissa_offset = pos;
+                first_mantissa_offset = absolute_offset;
             }
             saw_mantissa_digit = true;
-            last_mantissa_offset = pos;
+            last_mantissa_offset = absolute_offset;
 
             PendingMantissaDigit pending{};
-            pending.offset = pos;
+            pending.offset = absolute_offset;
             pending.digit = static_cast<uint8_t>(c - static_cast<unsigned char>('0'));
             pending.mantissa_index = static_cast<uint32_t>(mantissa_digits.size());
             mantissa_digits.push_back(pending);
@@ -303,7 +462,7 @@ void appendArgNumberFromSpan(
         if (c == static_cast<unsigned char>('.') && !saw_decimal_point) {
             saw_decimal_point = true;
             number.has_decimal_point = 1;
-            number.decimal_point_span.offset = pos;
+            number.decimal_point_span.offset = content_span.offset + pos;
             number.decimal_point_span.length = 1;
             ++pos;
             continue;
@@ -320,15 +479,15 @@ void appendArgNumberFromSpan(
     number.mantissa_span.length = last_mantissa_offset - first_mantissa_offset + 1U;
 
     int32_t exponent_value = 0;
-    if (pos < content_end && (source_text[pos] == 'e' || source_text[pos] == 'E')) {
+    if (pos < content_end && (content_text[pos] == 'e' || content_text[pos] == 'E')) {
         number.has_exponent = 1;
-        number.exponent_marker_span.offset = pos;
+        number.exponent_marker_span.offset = content_span.offset + pos;
         number.exponent_marker_span.length = 1;
         ++pos;
 
-        if (pos < content_end && (source_text[pos] == '+' || source_text[pos] == '-')) {
-            number.exponent_negative = source_text[pos] == '-' ? 1 : 0;
-            number.exponent_sign_span.offset = pos;
+        if (pos < content_end && (content_text[pos] == '+' || content_text[pos] == '-')) {
+            number.exponent_negative = content_text[pos] == '-' ? 1 : 0;
+            number.exponent_sign_span.offset = content_span.offset + pos;
             number.exponent_sign_span.length = 1;
             ++pos;
         }
@@ -337,7 +496,7 @@ void appendArgNumberFromSpan(
         int64_t exponent_abs = 0;
         uint32_t exponent_digit_count = 0;
         while (pos < content_end) {
-            const unsigned char c = static_cast<unsigned char>(source_text[pos]);
+            const unsigned char c = static_cast<unsigned char>(content_text[pos]);
             if (c < static_cast<unsigned char>('0') || c > static_cast<unsigned char>('9')) {
                 break;
             }
@@ -351,7 +510,7 @@ void appendArgNumberFromSpan(
         if (exponent_digit_count == 0) {
             fail("exponent marker has no exponent digits");
         }
-        number.exponent_digits_span.offset = exponent_digits_begin;
+        number.exponent_digits_span.offset = content_span.offset + exponent_digits_begin;
         number.exponent_digits_span.length = exponent_digit_count;
         exponent_value = static_cast<int32_t>(exponent_abs);
         if (number.exponent_negative) {
@@ -361,8 +520,7 @@ void appendArgNumberFromSpan(
     }
 
     if (pos != content_end) {
-        fail("unexpected non-numeric byte inside detector-emitted numeric atom at relative_offset=" +
-             std::to_string(pos - content_begin));
+        fail("unexpected non-numeric byte inside numeric atom at relative_offset=" + std::to_string(pos));
     }
 
     number.integer_digit_count = requireUint16ForArgNumber(integer_digit_count, "integer_digit_count", caller);
@@ -389,20 +547,56 @@ void appendArgNumberFromSpan(
         fail("numeric atom produced zero digit bindings");
     }
 
-    payload.total_digits += static_cast<uint32_t>(number.digits.size());
-    payload.numbers.push_back(std::move(number));
-    payload.total_numbers = static_cast<uint32_t>(payload.numbers.size());
+    return number;
 }
 
-const ArgNumber* findArgNumberByAtomId(
-    const ArgNumberPopulationPayload& payload,
-    uint32_t atom_entry_id) {
-    for (const ArgNumber& number : payload.numbers) {
-        if (number.number_atom_id == atom_entry_id) {
-            return &number;
-        }
+void ensureAtomEntryHasArgNumber(
+    AtomEntry& entry,
+    std::string_view content_text,
+    const TextSpan32& raw_span,
+    const TextSpan32& content_span,
+    const char* caller,
+    const Detector::RawTextDetection* detection = nullptr,
+    size_t detection_index = 0) {
+    if (!isNumericAtom(entry.type)) {
+        return;
     }
-    return nullptr;
+    if (entry.arg_number.has_value()) {
+        if (entry.arg_number->number_atom_id != entry.id) {
+            throw std::runtime_error(std::string(caller) +
+                                     ": arg_number.number_atom_id mismatch for atom entry id=" +
+                                     std::to_string(entry.id) +
+                                     ", stored=" + std::to_string(entry.arg_number->number_atom_id));
+        }
+        return;
+    }
+    entry.arg_number = buildArgNumberFromContentText(
+        content_text,
+        raw_span,
+        content_span,
+        entry.id,
+        entry.confidence,
+        entry.type,
+        caller,
+        detection,
+        detection_index);
+}
+
+void recordAtomEntryArgNumberSummary(
+    const AtomEntry& entry,
+    ArgNumberPopulationPayload& payload,
+    const char* caller) {
+    if (!isNumericAtom(entry.type)) {
+        ++payload.skipped_atoms;
+        return;
+    }
+    if (!entry.arg_number.has_value()) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": numeric atom entry id=" + std::to_string(entry.id) +
+                                 " is missing required arg_number metadata");
+    }
+    ++payload.total_numbers;
+    payload.total_digits += static_cast<uint32_t>(entry.arg_number->digits.size());
 }
 
 void dumpAtomTableCreationBreakdown(
@@ -432,7 +626,7 @@ void dumpAtomTableCreationBreakdown(
 
         const std::string_view raw_text = result.atom_table->getString(entry->raw_text_ref);
         const std::optional<NumericPayload> numeric_payload = result.atom_table->getNumericValue(entry->id);
-        const ArgNumber* arg_number = findArgNumberByAtomId(result.arg_number_payload, entry->id);
+    const std::optional<ArgNumber>& arg_number = entry->arg_number;
 
         std::cerr << "  [ATOM_ENTRY] atom_index=" << atom_index
                   << " atom_entry_id=" << entry->id
@@ -474,42 +668,43 @@ void dumpAtomTableCreationBreakdown(
             std::cerr << "    numeric_payload: <none>\n";
         }
 
-        if (arg_number == nullptr) {
+        if (!arg_number.has_value()) {
             std::cerr << "    arg_number: <none>\n";
             continue;
         }
 
-        std::cerr << "    arg_number: raw_span={offset=" << arg_number->raw_span.offset
-                  << ", length=" << arg_number->raw_span.length
-                  << "} content_span={offset=" << arg_number->content_span.offset
-                  << ", length=" << arg_number->content_span.length
-                  << "} mantissa_span={offset=" << arg_number->mantissa_span.offset
-                  << ", length=" << arg_number->mantissa_span.length
-                  << "} base=" << static_cast<int>(arg_number->base)
-                  << " has_sign=" << static_cast<int>(arg_number->has_sign)
-                  << " sign_negative=" << static_cast<int>(arg_number->sign_negative)
-                  << " sign_span={offset=" << arg_number->sign_span.offset
-                  << ", length=" << arg_number->sign_span.length
-                  << "} has_decimal_point=" << static_cast<int>(arg_number->has_decimal_point)
-                  << " decimal_point_span={offset=" << arg_number->decimal_point_span.offset
-                  << ", length=" << arg_number->decimal_point_span.length
-                  << "} has_exponent=" << static_cast<int>(arg_number->has_exponent)
-                  << " exponent_negative=" << static_cast<int>(arg_number->exponent_negative)
-                  << " exponent_value=" << arg_number->exponent_value
-                  << " exponent_marker_span={offset=" << arg_number->exponent_marker_span.offset
-                  << ", length=" << arg_number->exponent_marker_span.length
-                  << "} exponent_sign_span={offset=" << arg_number->exponent_sign_span.offset
-                  << ", length=" << arg_number->exponent_sign_span.length
-                  << "} exponent_digits_span={offset=" << arg_number->exponent_digits_span.offset
-                  << ", length=" << arg_number->exponent_digits_span.length
-                  << "} integer_digit_count=" << arg_number->integer_digit_count
-                  << " fractional_digit_count=" << arg_number->fractional_digit_count
-                  << " confidence=" << arg_number->confidence
-                  << " digit_count=" << arg_number->digits.size()
+        const ArgNumber& number = *arg_number;
+        std::cerr << "    arg_number: raw_span={offset=" << number.raw_span.offset
+                  << ", length=" << number.raw_span.length
+                  << "} content_span={offset=" << number.content_span.offset
+                  << ", length=" << number.content_span.length
+                  << "} mantissa_span={offset=" << number.mantissa_span.offset
+                  << ", length=" << number.mantissa_span.length
+                  << "} base=" << static_cast<int>(number.base)
+                  << " has_sign=" << static_cast<int>(number.has_sign)
+                  << " sign_negative=" << static_cast<int>(number.sign_negative)
+                  << " sign_span={offset=" << number.sign_span.offset
+                  << ", length=" << number.sign_span.length
+                  << "} has_decimal_point=" << static_cast<int>(number.has_decimal_point)
+                  << " decimal_point_span={offset=" << number.decimal_point_span.offset
+                  << ", length=" << number.decimal_point_span.length
+                  << "} has_exponent=" << static_cast<int>(number.has_exponent)
+                  << " exponent_negative=" << static_cast<int>(number.exponent_negative)
+                  << " exponent_value=" << number.exponent_value
+                  << " exponent_marker_span={offset=" << number.exponent_marker_span.offset
+                  << ", length=" << number.exponent_marker_span.length
+                  << "} exponent_sign_span={offset=" << number.exponent_sign_span.offset
+                  << ", length=" << number.exponent_sign_span.length
+                  << "} exponent_digits_span={offset=" << number.exponent_digits_span.offset
+                  << ", length=" << number.exponent_digits_span.length
+                  << "} integer_digit_count=" << number.integer_digit_count
+                  << " fractional_digit_count=" << number.fractional_digit_count
+                  << " confidence=" << number.confidence
+                  << " digit_count=" << number.digits.size()
                   << "\n";
 
-        for (size_t digit_index = 0; digit_index < arg_number->digits.size(); ++digit_index) {
-            const DigitBinding& digit = arg_number->digits[digit_index];
+        for (size_t digit_index = 0; digit_index < number.digits.size(); ++digit_index) {
+            const DigitBinding& digit = number.digits[digit_index];
             std::cerr << "      [DIGIT_BINDING] digit_index=" << digit_index
                       << " digit=" << static_cast<int>(digit.digit)
                       << " pow10=" << digit.pow10
@@ -744,14 +939,7 @@ AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
         payload.token_atom_mask = 1;
         payload.atom_entry_id = span.atom_entry_id;
         result.atom_tokens.push_back(payload);
-        appendArgNumberFromSpan(
-            source_text,
-            span,
-            *entry,
-            detection,
-            detection_index,
-            result.arg_number_payload,
-            caller);
+        recordAtomEntryArgNumberSummary(*entry, result.arg_number_payload, caller);
     }
 
     const bool dump_atom_entry_breakdown = true;
@@ -908,18 +1096,40 @@ bool AtomTable::saveToFile(const std::string& path) const {
     }
 
     const char magic[4] = {'A', 'T', 'M', 'B'};
-    const uint32_t version = 1;
+    const uint32_t version = 2;
     const uint32_t entry_count = static_cast<uint32_t>(entries_.size());
     const uint32_t pool_size = static_cast<uint32_t>(string_pool_.size());
 
     file.write(magic, sizeof(magic));
-    file.write(reinterpret_cast<const char*>(&version), sizeof(version));
-    file.write(reinterpret_cast<const char*>(&entry_count), sizeof(entry_count));
-    file.write(reinterpret_cast<const char*>(&pool_size), sizeof(pool_size));
+    writeBinary(file, version);
+    writeBinary(file, entry_count);
+    writeBinary(file, pool_size);
 
-    if (entry_count > 0) {
-        file.write(reinterpret_cast<const char*>(entries_.data()),
-                   entry_count * sizeof(AtomEntry));
+    for (const AtomEntry& entry : entries_) {
+        const uint32_t type_value = static_cast<uint32_t>(entry.type);
+        const uint8_t category_value = static_cast<uint8_t>(entry.category);
+        const uint8_t origin_value = static_cast<uint8_t>(entry.origin);
+        const uint8_t has_arg_number = entry.arg_number.has_value() ? 1 : 0;
+
+        writeBinary(file, entry.hash);
+        writeBinary(file, entry.id);
+        writeBinary(file, type_value);
+        writeBinary(file, category_value);
+        writeBinary(file, origin_value);
+        file.write(reinterpret_cast<const char*>(entry.padding1), sizeof(entry.padding1));
+        writeBinary(file, entry.raw_text_ref.offset);
+        writeBinary(file, entry.raw_text_ref.length);
+        writeBinary(file, entry.confidence);
+        writeBinary(file, entry.created_at);
+        writeBinary(file, entry.source_start);
+        writeBinary(file, entry.source_end);
+        writeBinary(file, entry.numeric_value);
+        writeBinary(file, entry.flags);
+        writeBinary(file, entry.reserved_zero);
+        writeBinary(file, has_arg_number);
+        if (entry.arg_number.has_value()) {
+            writeArgNumber(file, *entry.arg_number);
+        }
     }
     if (pool_size > 0) {
         file.write(reinterpret_cast<const char*>(string_pool_.data()),
@@ -949,7 +1159,8 @@ bool AtomTable::saveToTextFile(const std::string& path) const {
          << "created_at\t"
          << "source_start\t"
          << "source_end\t"
-         << "hash"
+         << "hash\t"
+         << "arg_number"
          << "\n";
 
     for (const auto& entry : entries_) {
@@ -970,7 +1181,8 @@ bool AtomTable::saveToTextFile(const std::string& path) const {
              << entry.created_at << "\t"
              << entry.source_start << "\t"
              << entry.source_end << "\t"
-             << hash_stream.str()
+             << hash_stream.str() << "\t"
+             << escapeForTsv(formatArgNumberForText(entry.arg_number))
              << "\n";
     }
 
@@ -993,11 +1205,13 @@ bool AtomTable::loadFromFile(const std::string& path) {
     uint32_t version = 0;
     uint32_t entry_count = 0;
     uint32_t pool_size = 0;
-    file.read(reinterpret_cast<char*>(&version), sizeof(version));
-    file.read(reinterpret_cast<char*>(&entry_count), sizeof(entry_count));
-    file.read(reinterpret_cast<char*>(&pool_size), sizeof(pool_size));
+    if (!readBinary(file, version) ||
+        !readBinary(file, entry_count) ||
+        !readBinary(file, pool_size)) {
+        return false;
+    }
 
-    if (!file.good() || version != 1) {
+    if (!file.good() || version != 2) {
         return false;
     }
     // Sanity check: reject obviously corrupt files (> 10M entries)
@@ -1005,12 +1219,51 @@ bool AtomTable::loadFromFile(const std::string& path) {
         return false;
     }
 
-    std::vector<AtomEntry> entries(entry_count);
+    std::vector<AtomEntry> entries;
+    entries.reserve(entry_count);
     std::vector<char> pool(pool_size);
 
-    if (entry_count > 0) {
-        file.read(reinterpret_cast<char*>(entries.data()),
-                  entry_count * sizeof(AtomEntry));
+    for (uint32_t i = 0; i < entry_count; ++i) {
+        AtomEntry entry{};
+        uint32_t type_value = 0;
+        uint8_t category_value = 0;
+        uint8_t origin_value = 0;
+        uint8_t has_arg_number = 0;
+
+        if (!readBinary(file, entry.hash) ||
+            !readBinary(file, entry.id) ||
+            !readBinary(file, type_value) ||
+            !readBinary(file, category_value) ||
+            !readBinary(file, origin_value)) {
+            return false;
+        }
+        file.read(reinterpret_cast<char*>(entry.padding1), sizeof(entry.padding1));
+        if (!file.good() ||
+            !readBinary(file, entry.raw_text_ref.offset) ||
+            !readBinary(file, entry.raw_text_ref.length) ||
+            !readBinary(file, entry.confidence) ||
+            !readBinary(file, entry.created_at) ||
+            !readBinary(file, entry.source_start) ||
+            !readBinary(file, entry.source_end) ||
+            !readBinary(file, entry.numeric_value) ||
+            !readBinary(file, entry.flags) ||
+            !readBinary(file, entry.reserved_zero) ||
+            !readBinary(file, has_arg_number)) {
+            return false;
+        }
+
+        entry.type = static_cast<AtomType>(type_value);
+        entry.category = static_cast<AtomCategory>(category_value);
+        entry.origin = static_cast<AtomOrigin>(origin_value);
+        if (has_arg_number != 0) {
+            ArgNumber number{};
+            if (!readArgNumber(file, entry.id, number)) {
+                return false;
+            }
+            entry.arg_number = std::move(number);
+        }
+
+        entries.push_back(std::move(entry));
     }
     if (pool_size > 0) {
         file.read(reinterpret_cast<char*>(pool.data()),
@@ -1039,6 +1292,15 @@ bool AtomTable::loadFromFile(const std::string& path) {
             return false;
         }
         if (entry.reserved_zero != 0) {
+            return false;
+        }
+        if (!entry.arg_number.has_value()) {
+            return false;
+        }
+        if (entry.arg_number->number_atom_id != entry.id) {
+            return false;
+        }
+        if (entry.arg_number->digits.empty()) {
             return false;
         }
     }
@@ -1226,6 +1488,8 @@ uint32_t AtomTable::registerAtom(AtomType type,
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
+    TextSpan32 raw_span{static_cast<uint32_t>(source_start), static_cast<uint32_t>(raw_text.size())};
+    TextSpan32 content_span = raw_span;
     
     // Compute hash for deduplication
     uint64_t hash = computeHash(type, raw_text);
@@ -1233,6 +1497,17 @@ uint32_t AtomTable::registerAtom(AtomType type,
     // Check if this atom already exists
     uint32_t existing_id = findExisting(type, hash, raw_text);
     if (existing_id != UINT32_MAX) {
+        const uint32_t existing_idx = existing_id - ATOM_TOKEN_BASE;
+        if (existing_idx >= entries_.size()) {
+            throw std::runtime_error("AtomTable::registerAtom dedup returned out-of-range id=" +
+                                     std::to_string(existing_id));
+        }
+        ensureAtomEntryHasArgNumber(
+            entries_[existing_idx],
+            raw_text,
+            raw_span,
+            content_span,
+            "AtomTable::registerAtom");
         return existing_id;  // Return existing ID (deduplication hit!)
     }
     
@@ -1261,6 +1536,7 @@ uint32_t AtomTable::registerAtom(AtomType type,
     int64_t numeric_int_value = 0;
     uint8_t numeric_kind = static_cast<uint8_t>(NumericPayloadKind::NONE);
     packNumericValue(entry, parsed_value, numeric_float_value, numeric_int_value, numeric_kind);
+    ensureAtomEntryHasArgNumber(entry, raw_text, raw_span, content_span, "AtomTable::registerAtom");
     
     // Index for fast lookup
     uint32_t new_id = entry.id;
@@ -1294,6 +1570,8 @@ bool AtomTable::tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id) {
     
     // Use contentView for the atom content text.
     std::string_view raw_text(span.buffer_ptr + span.content_offset, span.content_length);
+    const TextSpan32 raw_span{span.offset, span.length};
+    const TextSpan32 content_span{span.content_offset, span.content_length};
     
     // Compute hash for deduplication
     uint64_t hash = computeHash(span.atom_type, raw_text);
@@ -1301,6 +1579,17 @@ bool AtomTable::tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id) {
     // Check if this atom already exists
     uint32_t existing_id = findExisting(span.atom_type, hash, raw_text);
     if (existing_id != UINT32_MAX) {
+        const uint32_t existing_idx = existing_id - ATOM_TOKEN_BASE;
+        if (existing_idx >= entries_.size()) {
+            throw std::runtime_error("AtomTable::tryRegisterSpan dedup returned out-of-range id=" +
+                                     std::to_string(existing_id));
+        }
+        ensureAtomEntryHasArgNumber(
+            entries_[existing_idx],
+            raw_text,
+            raw_span,
+            content_span,
+            "AtomTable::tryRegisterSpan");
         out_id = existing_id;  // Return existing ID (deduplication hit!)
         return true;
     }
@@ -1341,6 +1630,7 @@ bool AtomTable::tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id) {
     int64_t numeric_int_value = 0;
     uint8_t numeric_kind = static_cast<uint8_t>(NumericPayloadKind::NONE);
     packNumericValue(entry, parsed, numeric_float_value, numeric_int_value, numeric_kind);
+    ensureAtomEntryHasArgNumber(entry, raw_text, raw_span, content_span, "AtomTable::tryRegisterSpan");
     
     // Index for fast lookup
     uint32_t new_id = entry.id;
@@ -1592,37 +1882,7 @@ size_t AtomTable::atomValueSerialize(AtomType type, const AtomValue& value, char
     return (written < max) ? written : 0;  // Return 0 if truncated
 }
 
-std::string AtomTable::atomValueToString(AtomType type, const AtomValue& value) {
-    (void)type;
-    std::ostringstream oss;
-    
-    std::visit([&](auto&& arg) {
-        using T = std::decay_t<decltype(arg)>;
-        
-        if constexpr (std::is_same_v<T, AtomInteger>) {
-            if (arg.base == 16) {
-                oss << "0x" << std::hex << arg.value;
-            } else if (arg.base == 2) {
-                oss << "0b";
-                // Convert to binary string
-                int64_t v = arg.value;
-                std::string bin;
-                do {
-                    bin = (char)('0' + (v & 1)) + bin;
-                    v >>= 1;
-                } while (v > 0);
-                oss << bin;
-            } else {
-                oss << arg.value;
-            }
-        }
-        else if constexpr (std::is_same_v<T, AtomFloat>) {
-            oss << arg.value;
-        }
-    }, value);
-    
-    return oss.str();
-}
+
 
 std::optional<NumericPayload> AtomTable::getNumericValue(uint32_t id) const {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -1726,6 +1986,9 @@ void AtomTable::setConfidence(uint32_t id, float confidence) {
     uint32_t idx = id - ATOM_TOKEN_BASE;
     if (idx < entries_.size()) {
         entries_[idx].confidence = std::clamp(confidence, 0.0f, 1.0f);
+        if (entries_[idx].arg_number.has_value()) {
+            entries_[idx].arg_number->confidence = entries_[idx].confidence;
+        }
     }
 }
 

@@ -1098,18 +1098,27 @@ bool testAtomTableArgNumberSupportsSignedDecimalExponent(std::string& message) {
     ASSERT_EQ(static_cast<int>(result.arg_number_payload.total_digits), 10,
               "Mantissa digit binding count mismatch");
 
-    const ArgNumber& minus_four = result.arg_number_payload.numbers[0];
+    const auto minus_four_entry = result.atom_table->getAtom(result.atom_tokens[0].atom_entry_id);
+    ASSERT_TRUE(minus_four_entry.has_value(), "-4 atom entry missing");
+    ASSERT_TRUE(minus_four_entry->arg_number.has_value(), "-4 arg_number metadata missing");
+    const ArgNumber& minus_four = *minus_four_entry->arg_number;
     ASSERT_EQ(static_cast<int>(minus_four.has_sign), 1, "-4 should record a sign");
     ASSERT_EQ(static_cast<int>(minus_four.sign_negative), 1, "-4 should record a negative sign");
     ASSERT_EQ(static_cast<int>(minus_four.digits[0].digit), 4, "-4 digit mismatch");
     ASSERT_EQ(static_cast<int>(minus_four.digits[0].pow10), 0, "-4 digit pow10 mismatch");
 
-    const ArgNumber& plus_four = result.arg_number_payload.numbers[1];
+    const auto plus_four_entry = result.atom_table->getAtom(result.atom_tokens[1].atom_entry_id);
+    ASSERT_TRUE(plus_four_entry.has_value(), "+4 atom entry missing");
+    ASSERT_TRUE(plus_four_entry->arg_number.has_value(), "+4 arg_number metadata missing");
+    const ArgNumber& plus_four = *plus_four_entry->arg_number;
     ASSERT_EQ(static_cast<int>(plus_four.has_sign), 1, "+4 should record a sign");
     ASSERT_EQ(static_cast<int>(plus_four.sign_negative), 0, "+4 should record a positive sign");
     ASSERT_EQ(static_cast<int>(plus_four.digits[0].digit), 4, "+4 digit mismatch");
 
-    const ArgNumber& dot_seventy_five = result.arg_number_payload.numbers[2];
+    const auto dot_seventy_five_entry = result.atom_table->getAtom(result.atom_tokens[2].atom_entry_id);
+    ASSERT_TRUE(dot_seventy_five_entry.has_value(), ".75 atom entry missing");
+    ASSERT_TRUE(dot_seventy_five_entry->arg_number.has_value(), ".75 arg_number metadata missing");
+    const ArgNumber& dot_seventy_five = *dot_seventy_five_entry->arg_number;
     ASSERT_EQ(static_cast<int>(dot_seventy_five.has_decimal_point), 1,
               ".75 should record decimal metadata");
     ASSERT_EQ(static_cast<int>(dot_seventy_five.integer_digit_count), 0,
@@ -1125,7 +1134,10 @@ bool testAtomTableArgNumberSupportsSignedDecimalExponent(std::string& message) {
     ASSERT_EQ(static_cast<int>(dot_seventy_five.digits[1].pow10), -2,
               ".75 second digit pow10 mismatch");
 
-    const ArgNumber& seventy_five_point_zero = result.arg_number_payload.numbers[3];
+    const auto seventy_five_point_zero_entry = result.atom_table->getAtom(result.atom_tokens[3].atom_entry_id);
+    ASSERT_TRUE(seventy_five_point_zero_entry.has_value(), "75.0 atom entry missing");
+    ASSERT_TRUE(seventy_five_point_zero_entry->arg_number.has_value(), "75.0 arg_number metadata missing");
+    const ArgNumber& seventy_five_point_zero = *seventy_five_point_zero_entry->arg_number;
     ASSERT_EQ(static_cast<int>(seventy_five_point_zero.digits.size()), 3,
               "75.0 should bind all mantissa digits");
     ASSERT_EQ(static_cast<int>(seventy_five_point_zero.digits[0].pow10), 1,
@@ -1135,12 +1147,18 @@ bool testAtomTableArgNumberSupportsSignedDecimalExponent(std::string& message) {
     ASSERT_EQ(static_cast<int>(seventy_five_point_zero.digits[2].pow10), -1,
               "75.0 fractional digit pow10 mismatch");
 
-    const ArgNumber& one_e_six = result.arg_number_payload.numbers[4];
+    const auto one_e_six_entry = result.atom_table->getAtom(result.atom_tokens[4].atom_entry_id);
+    ASSERT_TRUE(one_e_six_entry.has_value(), "1e6 atom entry missing");
+    ASSERT_TRUE(one_e_six_entry->arg_number.has_value(), "1e6 arg_number metadata missing");
+    const ArgNumber& one_e_six = *one_e_six_entry->arg_number;
     ASSERT_EQ(static_cast<int>(one_e_six.has_exponent), 1, "1e6 should record exponent metadata");
     ASSERT_EQ(one_e_six.exponent_value, 6, "1e6 exponent value mismatch");
     ASSERT_EQ(static_cast<int>(one_e_six.digits[0].pow10), 6, "1e6 mantissa pow10 mismatch");
 
-    const ArgNumber& signed_scientific = result.arg_number_payload.numbers[5];
+    const auto signed_scientific_entry = result.atom_table->getAtom(result.atom_tokens[5].atom_entry_id);
+    ASSERT_TRUE(signed_scientific_entry.has_value(), "-1.5e-4 atom entry missing");
+    ASSERT_TRUE(signed_scientific_entry->arg_number.has_value(), "-1.5e-4 arg_number metadata missing");
+    const ArgNumber& signed_scientific = *signed_scientific_entry->arg_number;
     ASSERT_EQ(static_cast<int>(signed_scientific.has_sign), 1,
               "-1.5e-4 should record mantissa sign");
     ASSERT_EQ(static_cast<int>(signed_scientific.sign_negative), 1,
@@ -1757,7 +1775,10 @@ bool testAtomTableHashDeduplication(std::string& message) {
     auto entry2 = table.getAtom(id2);
     
     ASSERT_TRUE(entry1 && entry2, "Both atoms should exist");
+    ASSERT_EQ(id1, id2, "Registering the same numeric atom should dedupe to one atom entry id");
     ASSERT_EQ(entry1->hash, entry2->hash, "Identical atoms should have same hash");
+    ASSERT_TRUE(entry1->arg_number.has_value(), "Deduped numeric atom should retain arg_number metadata");
+    ASSERT_TRUE(entry2->arg_number.has_value(), "Reloaded deduped numeric atom copy should carry arg_number metadata");
     
     // Different atom should have different hash
     uint32_t id3 = table.registerAtom(AtomType::ATOM_INT, "200", 0, 3);
@@ -1766,6 +1787,53 @@ bool testAtomTableHashDeduplication(std::string& message) {
     ASSERT_TRUE(entry3, "Different atom should exist");
     ASSERT_TRUE(entry1->hash != entry3->hash, "Different atoms should have different hashes");
     
+    return true;
+}
+
+bool testAtomTableArgNumberSerializesOnEntry(std::string& message) {
+    AtomTable table;
+    const uint32_t id = table.registerAtom(AtomType::ATOM_FLOAT, "-1.5e-4", 12, 19);
+    ASSERT_TRUE(id != UINT32_MAX, "Failed to register numeric atom for arg_number serialization test");
+
+    const auto entry = table.getAtom(id);
+    ASSERT_TRUE(entry.has_value(), "Original atom entry missing before serialization");
+    ASSERT_TRUE(entry->arg_number.has_value(), "Original atom entry missing arg_number metadata");
+
+    std::filesystem::create_directories("output");
+    const std::filesystem::path binary_path = std::filesystem::path("output") / "atomtable_arg_number_entry.bin";
+    const std::filesystem::path text_path = std::filesystem::path("output") / "atomtable_arg_number_entry.tsv";
+
+    ASSERT_TRUE(table.saveToFile(binary_path.string()), "AtomTable binary save should persist entry-owned arg_number metadata");
+    ASSERT_TRUE(table.saveToTextFile(text_path.string()), "AtomTable text save should include entry-owned arg_number metadata");
+
+    AtomTable loaded;
+    ASSERT_TRUE(loaded.loadFromFile(binary_path.string()), "AtomTable binary load should restore entry-owned arg_number metadata");
+
+    const auto loaded_entry = loaded.getAtom(id);
+    ASSERT_TRUE(loaded_entry.has_value(), "Loaded atom entry missing after serialization round-trip");
+    ASSERT_TRUE(loaded_entry->arg_number.has_value(), "Loaded atom entry missing arg_number metadata after serialization round-trip");
+
+    const ArgNumber& loaded_number = *loaded_entry->arg_number;
+    ASSERT_EQ(static_cast<int>(loaded_number.has_sign), 1, "Loaded arg_number should preserve mantissa sign metadata");
+    ASSERT_EQ(static_cast<int>(loaded_number.has_decimal_point), 1, "Loaded arg_number should preserve decimal-point metadata");
+    ASSERT_EQ(static_cast<int>(loaded_number.has_exponent), 1, "Loaded arg_number should preserve exponent metadata");
+    ASSERT_EQ(loaded_number.exponent_value, -4, "Loaded arg_number exponent mismatch");
+    ASSERT_EQ(static_cast<int>(loaded_number.digits.size()), 2, "Loaded arg_number digit count mismatch");
+    ASSERT_EQ(static_cast<int>(loaded_number.digits[0].pow10), -4, "Loaded arg_number first digit pow10 mismatch");
+    ASSERT_EQ(static_cast<int>(loaded_number.digits[1].pow10), -5, "Loaded arg_number second digit pow10 mismatch");
+
+    std::ifstream text_dump(text_path);
+    ASSERT_TRUE(text_dump.is_open(), "Serialized AtomTable text dump missing");
+    std::stringstream text_buffer;
+    text_buffer << text_dump.rdbuf();
+    const std::string text_dump_contents = text_buffer.str();
+    ASSERT_TRUE(text_dump_contents.find("arg_number") != std::string::npos,
+                "Text dump header should include arg_number column");
+    ASSERT_TRUE(text_dump_contents.find("pow10=-4") != std::string::npos,
+                "Text dump should serialize digit binding pow10 metadata");
+
+    std::filesystem::remove(binary_path);
+    std::filesystem::remove(text_path);
     return true;
 }
 
@@ -2897,6 +2965,7 @@ int main(int argc, char** argv) {
     suite.addTest("AtomTable.Clear", testAtomTableClear);
     suite.addTest("AtomTable.Metadata", testAtomTableMetadata);
     suite.addTest("AtomTable.HashDeduplication", testAtomTableHashDeduplication);
+    suite.addTest("AtomTable.ArgNumberSerializesOnEntry", testAtomTableArgNumberSerializesOnEntry);
     
     // Section 6: Integration Tests
     suite.addTest("Integration.FullPipeline", testFullPipeline);
