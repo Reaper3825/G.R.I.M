@@ -31,6 +31,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 #include <unordered_map>
@@ -283,8 +284,7 @@ public:
     // Get atom count
     size_t size() const { return entries_.size(); }
     
-    // Check if ID exists
-    bool hasAtom(uint32_t id) const;
+
 
     //--------------------------------------------------//
     // Parsing
@@ -292,11 +292,11 @@ public:
     
     // Parse a raw text span into an AtomValue
     // This is the main parsing entry point
-    static ParseResult parseAtom(AtomType type, const std::string& text);
+    static ParseResult parseAtom(AtomType type, std::string_view text);
     
-    // Type-specific parsing functions
-    static ParseResult parseInteger(const std::string& text);
-    static ParseResult parseFloat(const std::string& text);
+    // Type-specific parsing functions (strict grammar; no whitespace, no allocation)
+    static ParseResult parseInteger(std::string_view text);
+    static ParseResult parseFloat(std::string_view text);
 
 
     //--------------------------------------------------//
@@ -305,12 +305,6 @@ public:
     
     // Convert atom back to string representation (needs string pool access)
     std::string atomToString(const AtomEntry& entry) const;
-    
-    // Serialize atom value directly to buffer (zero-copy!)
-    // Returns number of bytes written
-    static size_t atomValueSerialize(AtomType type, const AtomValue& value, char* out, size_t max);
-    
-    // String version (allocates - prefer atomValueSerialize for performance)
 
     // Get exact numeric value by atom ID. This reads durable exact side channels,
     // never AtomEntry::numeric_value (legacy packed float).
@@ -427,6 +421,9 @@ private:
     // Deduplication: check if atom already exists
     // Returns existing ID if found, or UINT32_MAX if not
     uint32_t findExisting(AtomType type, uint64_t hash, std::string_view raw_text);
+    
+    // Locked id -> entry resolution. Throws on any invalid or corrupt id.
+    AtomEntry& entryForIdLocked(uint32_t id, const char* caller);
     
     // Pack numeric value for GPU (no string copying)
     void packNumericValue(AtomEntry& entry,

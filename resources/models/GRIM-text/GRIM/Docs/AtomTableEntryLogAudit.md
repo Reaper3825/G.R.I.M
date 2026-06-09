@@ -27,7 +27,7 @@
 
 Issues **1**, **2**, and **3** are implemented in the tokenizer code path:
 
-* `createAtomTableFromRawTextDetections()` now pre-validates detector-emitted `ATOM_INT` / `ATOM_FLOAT` spans through `AtomTable::parseAtom()` and throws with detector name, raw text, byte offsets, atom type, and parse reason before any text fallback can occur.
+* `createAtomTableFromRawTextDetections()` enforces the detector contract for `ATOM_INT` / `ATOM_FLOAT` spans via `AtomTable::tryRegisterSpan()`, which parses each unique span exactly once on the registration hot path. If registration fails, the boundary re-parses only to recover the exact reason and throws with detector name, raw text, byte offsets, atom type, and parse reason before any text fallback can occur. (The earlier separate parse precheck was folded into registration; behavior and error context are unchanged.)
 * `arg_number` population now handles signs, decimals, leading-dot floats, and scientific notation by recording mantissa digit bindings plus sign, decimal, and exponent metadata.
 * `malformed_numbers` is no longer used as a quiet continuation path for detector-emitted numeric atoms. If a numeric atom cannot populate the required side channel, the AtomTable creation boundary throws.
 

@@ -1,9 +1,6 @@
+//DEAD MARKED FOR REMOVAL
 //======================================================//
 //  grim_language_model_cuda.hpp
-//  CUDA-safe declarations for LanguageModel
-//  NO IMPLEMENTATIONS - declarations only
-//  NO .cpp includes - CUDA compilation safe
-//          ONLY SOURCE OF TRUTH
 //======================================================//
 
 #pragma once
@@ -84,33 +81,6 @@ class EncodingLayer;
 
 // GPUGrimEncoder is defined later in this file but used by LanguageModel class
 class GPUGrimEncoder;
-
-//======================================================//
-//  Configuration ownership
-//
-//  All model hyperparameters live in HyperParameters_GPU.hpp:
-//    - AiConfigSnapshot         (finalized ai_config.json document)
-//    - SamplingStrategy
-//    - ModelExecutionMode       (TRAINING vs INFERENCE)
-//  Generation callsites consume GenerationHP grouped views derived from
-//  AiConfigSnapshot, never a second config owner.
-//
-//  This header MUST NOT redeclare any of those fields. The encoder
-//  consumes grouped construction views derived from AiConfigSnapshot.
-//  Borrowed startup resources are passed explicitly by startup GPU model assembly and have
-//  no place in a config object or per-forward request.
-//======================================================//
-
-// OptimizerStep (AdamW/RAdamW step counter) lives in
-// Shared/Optimizers/OptimizerStep.hpp — it is step bookkeeping, not model state.
-// Consumers should include that header directly.
-
-//======================================================//
-//  Parameter Group for Training
-//  (Defined in TensorContract_GPU.hpp - included above)
-//======================================================//
-// ParamGroupType and ParameterGroup are now part of the
-// unified autograd system in TensorContract_GPU.hpp
 
 //======================================================//
 //  LanguageModel Class Declaration

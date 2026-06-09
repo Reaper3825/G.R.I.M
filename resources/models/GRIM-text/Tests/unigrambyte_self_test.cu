@@ -1376,8 +1376,6 @@ bool testUniBytePlaceholderInjection(std::string& message) {
                     "Pre-registered structural spans must carry their AtomTable entry ID");
         ASSERT_EQ(result.atoms[0].atom_entry_id, result.atoms[1].atom_entry_id,
                   "Repeated identical atoms should deduplicate to one AtomTable entry before unigram runs");
-        ASSERT_TRUE(result.atom_table->hasAtom(result.atoms[0].atom_entry_id),
-                    "Pre-registered AtomTable entry must exist when placeholder tokens are emitted");
 
         size_t placeholder_count = 0;
         for (size_t i = 0; i < result.token_ids.size(); ++i) {

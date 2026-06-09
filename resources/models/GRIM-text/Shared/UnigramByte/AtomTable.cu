@@ -10,7 +10,7 @@
 #include <device_launch_parameters.h>
 
 #include <algorithm>
-#include <cctype>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -85,85 +85,81 @@ bool readTextSpan32(std::istream& stream, TextSpan32& span) {
     return readBinary(stream, span.offset) && readBinary(stream, span.length);
 }
 
-void writeDigitBinding(std::ostream& stream, const DigitBinding& digit) {
-    writeBinary(stream, digit.digit);
-    writeBinary(stream, digit.pow10);
-    writeBinary(stream, digit.index_left);
-    writeBinary(stream, digit.index_right);
-    writeTextSpan32(stream, digit.digit_span);
+// Single field-order traversal for ArgNumber binary I/O. Write and read share
+// this definition so the on-disk layout (binary format version 2) cannot
+// desynchronize between the save and load paths.
+template <bool kWrite, typename Stream>
+bool transferDigitBinding(Stream& stream, DigitBinding& digit) {
+    auto io = [&](auto& field) {
+        if constexpr (kWrite) {
+            writeBinary(stream, field);
+            return true;
+        } else {
+            return readBinary(stream, field);
+        }
+    };
+    return io(digit.digit) && io(digit.pow10) && io(digit.index_left) &&
+           io(digit.index_right) && io(digit.digit_span.offset) && io(digit.digit_span.length);
 }
 
-bool readDigitBinding(std::istream& stream, DigitBinding& digit) {
-    return readBinary(stream, digit.digit) &&
-           readBinary(stream, digit.pow10) &&
-           readBinary(stream, digit.index_left) &&
-           readBinary(stream, digit.index_right) &&
-           readTextSpan32(stream, digit.digit_span);
+template <bool kWrite, typename Stream>
+bool transferArgNumber(Stream& stream, ArgNumber& number) {
+    auto io = [&](auto& field) {
+        if constexpr (kWrite) {
+            writeBinary(stream, field);
+            return true;
+        } else {
+            return readBinary(stream, field);
+        }
+    };
+    auto ioSpan = [&](TextSpan32& span) { return io(span.offset) && io(span.length); };
+
+    if (!(ioSpan(number.raw_span) &&
+          ioSpan(number.content_span) &&
+          ioSpan(number.mantissa_span) &&
+          ioSpan(number.sign_span) &&
+          ioSpan(number.decimal_point_span) &&
+          ioSpan(number.exponent_marker_span) &&
+          ioSpan(number.exponent_sign_span) &&
+          ioSpan(number.exponent_digits_span) &&
+          io(number.base) &&
+          io(number.has_sign) &&
+          io(number.sign_negative) &&
+          io(number.has_decimal_point) &&
+          io(number.has_exponent) &&
+          io(number.exponent_negative) &&
+          io(number.integer_digit_count) &&
+          io(number.fractional_digit_count) &&
+          io(number.exponent_value) &&
+          io(number.confidence))) {
+        return false;
+    }
+
+    uint32_t digit_count = static_cast<uint32_t>(number.digits.size());
+    if (!io(digit_count)) {
+        return false;
+    }
+    if constexpr (!kWrite) {
+        number.digits.resize(digit_count);
+    }
+    for (uint32_t i = 0; i < digit_count; ++i) {
+        if (!transferDigitBinding<kWrite>(stream, number.digits[i])) {
+            return false;
+        }
+    }
+    return true;
 }
 
 void writeArgNumber(std::ostream& stream, const ArgNumber& number) {
-    writeTextSpan32(stream, number.raw_span);
-    writeTextSpan32(stream, number.content_span);
-    writeTextSpan32(stream, number.mantissa_span);
-    writeTextSpan32(stream, number.sign_span);
-    writeTextSpan32(stream, number.decimal_point_span);
-    writeTextSpan32(stream, number.exponent_marker_span);
-    writeTextSpan32(stream, number.exponent_sign_span);
-    writeTextSpan32(stream, number.exponent_digits_span);
-    writeBinary(stream, number.base);
-    writeBinary(stream, number.has_sign);
-    writeBinary(stream, number.sign_negative);
-    writeBinary(stream, number.has_decimal_point);
-    writeBinary(stream, number.has_exponent);
-    writeBinary(stream, number.exponent_negative);
-    writeBinary(stream, number.integer_digit_count);
-    writeBinary(stream, number.fractional_digit_count);
-    writeBinary(stream, number.exponent_value);
-    writeBinary(stream, number.confidence);
-
-    const uint32_t digit_count = static_cast<uint32_t>(number.digits.size());
-    writeBinary(stream, digit_count);
-    for (const DigitBinding& digit : number.digits) {
-        writeDigitBinding(stream, digit);
-    }
+    // transferArgNumber takes a mutable reference so write/read share one
+    // traversal; the kWrite=true instantiation never mutates the fields.
+    transferArgNumber<true>(stream, const_cast<ArgNumber&>(number));
 }
 
 bool readArgNumber(std::istream& stream, uint32_t atom_entry_id, ArgNumber& number) {
     number = ArgNumber{};
     number.number_atom_id = atom_entry_id;
-
-    if (!readTextSpan32(stream, number.raw_span) ||
-        !readTextSpan32(stream, number.content_span) ||
-        !readTextSpan32(stream, number.mantissa_span) ||
-        !readTextSpan32(stream, number.sign_span) ||
-        !readTextSpan32(stream, number.decimal_point_span) ||
-        !readTextSpan32(stream, number.exponent_marker_span) ||
-        !readTextSpan32(stream, number.exponent_sign_span) ||
-        !readTextSpan32(stream, number.exponent_digits_span) ||
-        !readBinary(stream, number.base) ||
-        !readBinary(stream, number.has_sign) ||
-        !readBinary(stream, number.sign_negative) ||
-        !readBinary(stream, number.has_decimal_point) ||
-        !readBinary(stream, number.has_exponent) ||
-        !readBinary(stream, number.exponent_negative) ||
-        !readBinary(stream, number.integer_digit_count) ||
-        !readBinary(stream, number.fractional_digit_count) ||
-        !readBinary(stream, number.exponent_value) ||
-        !readBinary(stream, number.confidence)) {
-        return false;
-    }
-
-    uint32_t digit_count = 0;
-    if (!readBinary(stream, digit_count)) {
-        return false;
-    }
-    number.digits.resize(digit_count);
-    for (uint32_t i = 0; i < digit_count; ++i) {
-        if (!readDigitBinding(stream, number.digits[i])) {
-            return false;
-        }
-    }
-    return true;
+    return transferArgNumber<false>(stream, number);
 }
 
 std::string formatArgNumberForText(const std::optional<ArgNumber>& number) {
@@ -218,50 +214,9 @@ bool atomTypeIsPersistable(AtomType type) {
     return type == AtomType::ATOM_INT || type == AtomType::ATOM_FLOAT;
 }
 
-bool containsWhitespace(std::string_view text) {
-    for (unsigned char c : text) {
-        if (std::isspace(c)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool atomValueMatchesType(AtomType type, const AtomValue& value) {
-    if (type == AtomType::ATOM_INT) {
-        return std::holds_alternative<AtomInteger>(value);
-    }
-    if (type == AtomType::ATOM_FLOAT) {
-        return std::holds_alternative<AtomFloat>(value);
-    }
-    return false;
-}
-
-bool atomValuesEquivalent(const AtomValue& a, const AtomValue& b) {
-    if (a.index() != b.index()) {
-        return false;
-    }
-    if (const auto* av = std::get_if<AtomInteger>(&a)) {
-        const auto& bv = std::get<AtomInteger>(b);
-        return av->value == bv.value && av->base == bv.base && av->has_sign == bv.has_sign;
-    }
-    if (const auto* av = std::get_if<AtomFloat>(&a)) {
-        const auto& bv = std::get<AtomFloat>(b);
-        return av->value == bv.value && av->has_exponent == bv.has_exponent && av->exponent == bv.exponent;
-    }
-    return false;
-}
-
-void requireAtomTableCreationCaller(const char* caller) {
+void requireCallerLabel(const char* caller, const char* boundary) {
     if (caller == nullptr || caller[0] == '\0') {
-        throw std::runtime_error("createAtomTableFromRawTextDetections: caller label is empty at " +
-                                 std::string(__FILE__) + ":" + std::to_string(__LINE__));
-    }
-}
-
-void requireAtomTablePayloadApplyCaller(const char* caller) {
-    if (caller == nullptr || caller[0] == '\0') {
-        throw std::runtime_error("applyAtomTokenizationPayloadToTokenSideChannels: caller label is empty at " +
+        throw std::runtime_error(std::string(boundary) + ": caller label is empty at " +
                                  std::string(__FILE__) + ":" + std::to_string(__LINE__));
     }
 }
@@ -300,12 +255,6 @@ void validateRawTextDetectionForAtomTableCreation(
                                  " exceeds StructuralSpan uint32 offset/length capacity");
     }
 }
-
-struct PendingMantissaDigit {
-    uint32_t offset = 0;
-    uint8_t digit = 0;
-    uint32_t mantissa_index = 0;
-};
 
 uint16_t requireUint16ForArgNumber(
     uint32_t value,
@@ -425,30 +374,21 @@ ArgNumber buildArgNumberFromContentText(
         ++pos;
     }
 
-    std::vector<PendingMantissaDigit> mantissa_digits;
-    mantissa_digits.reserve(content_span.length);
+    number.digits.reserve(content_span.length);
     uint32_t integer_digit_count = 0;
     uint32_t fractional_digit_count = 0;
-    uint32_t first_mantissa_offset = 0;
-    uint32_t last_mantissa_offset = 0;
-    bool saw_mantissa_digit = false;
     bool saw_decimal_point = false;
 
     while (pos < content_end) {
-        const unsigned char c = static_cast<unsigned char>(content_text[pos]);
-        if (c >= static_cast<unsigned char>('0') && c <= static_cast<unsigned char>('9')) {
-            const uint32_t absolute_offset = content_span.offset + pos;
-            if (!saw_mantissa_digit) {
-                first_mantissa_offset = absolute_offset;
-            }
-            saw_mantissa_digit = true;
-            last_mantissa_offset = absolute_offset;
-
-            PendingMantissaDigit pending{};
-            pending.offset = absolute_offset;
-            pending.digit = static_cast<uint8_t>(c - static_cast<unsigned char>('0'));
-            pending.mantissa_index = static_cast<uint32_t>(mantissa_digits.size());
-            mantissa_digits.push_back(pending);
+        const char c = content_text[pos];
+        if (c >= '0' && c <= '9') {
+            DigitBinding binding{};
+            binding.digit = static_cast<uint8_t>(c - '0');
+            binding.index_left = requireUint16ForArgNumber(
+                static_cast<uint32_t>(number.digits.size()), "digit.index_left", caller);
+            binding.digit_span.offset = content_span.offset + pos;
+            binding.digit_span.length = 1;
+            number.digits.push_back(binding);
 
             if (saw_decimal_point) {
                 ++fractional_digit_count;
@@ -459,7 +399,7 @@ ArgNumber buildArgNumberFromContentText(
             continue;
         }
 
-        if (c == static_cast<unsigned char>('.') && !saw_decimal_point) {
+        if (c == '.' && !saw_decimal_point) {
             saw_decimal_point = true;
             number.has_decimal_point = 1;
             number.decimal_point_span.offset = content_span.offset + pos;
@@ -471,12 +411,13 @@ ArgNumber buildArgNumberFromContentText(
         break;
     }
 
-    if (!saw_mantissa_digit) {
+    if (number.digits.empty()) {
         fail("numeric atom has no mantissa digits");
     }
 
-    number.mantissa_span.offset = first_mantissa_offset;
-    number.mantissa_span.length = last_mantissa_offset - first_mantissa_offset + 1U;
+    number.mantissa_span.offset = number.digits.front().digit_span.offset;
+    number.mantissa_span.length =
+        number.digits.back().digit_span.offset - number.digits.front().digit_span.offset + 1U;
 
     int32_t exponent_value = 0;
     if (pos < content_end && (content_text[pos] == 'e' || content_text[pos] == 'E')) {
@@ -525,26 +466,16 @@ ArgNumber buildArgNumberFromContentText(
 
     number.integer_digit_count = requireUint16ForArgNumber(integer_digit_count, "integer_digit_count", caller);
     number.fractional_digit_count = requireUint16ForArgNumber(fractional_digit_count, "fractional_digit_count", caller);
-    number.digits.reserve(mantissa_digits.size());
 
-    for (const PendingMantissaDigit& pending : mantissa_digits) {
-        const uint32_t index_left = pending.mantissa_index;
-        const uint32_t index_right = static_cast<uint32_t>(mantissa_digits.size() - 1U) - index_left;
+    // Finalize positional bindings now that mantissa width and exponent are known.
+    // pow10 is the digit's place value: digit * 10^pow10 contributes to the number.
+    const uint32_t digit_total = static_cast<uint32_t>(number.digits.size());
+    for (uint32_t i = 0; i < digit_total; ++i) {
+        DigitBinding& binding = number.digits[i];
+        binding.index_right = requireUint16ForArgNumber(digit_total - 1U - i, "digit.index_right", caller);
         const int32_t pow10 = static_cast<int32_t>(integer_digit_count) - 1 -
-                              static_cast<int32_t>(index_left) + exponent_value;
-
-        DigitBinding binding{};
-        binding.digit = pending.digit;
-        binding.index_left = requireUint16ForArgNumber(index_left, "digit.index_left", caller);
-        binding.index_right = requireUint16ForArgNumber(index_right, "digit.index_right", caller);
+                              static_cast<int32_t>(i) + exponent_value;
         binding.pow10 = requireInt16Pow10ForArgNumber(pow10, atom_text, caller);
-        binding.digit_span.offset = pending.offset;
-        binding.digit_span.length = 1;
-        number.digits.push_back(binding);
-    }
-
-    if (number.digits.empty()) {
-        fail("numeric atom produced zero digit bindings");
     }
 
     return number;
@@ -597,130 +528,6 @@ void recordAtomEntryArgNumberSummary(
     }
     ++payload.total_numbers;
     payload.total_digits += static_cast<uint32_t>(entry.arg_number->digits.size());
-}
-
-void dumpAtomTableCreationBreakdown(
-    const AtomTableFromDetectionsResult& result,
-    const char* caller) {
-    if (!result.atom_table) {
-        throw std::runtime_error(std::string(caller) +
-                                 ": dumpAtomTableCreationBreakdown requires a valid atom_table");
-    }
-
-    std::cerr << "[ATOMTABLE_ENTRY_BREAKDOWN_DUMP] caller=" << caller
-              << " total_atom_tokens=" << result.atom_tokens.size()
-              << " total_numbers=" << result.arg_number_payload.total_numbers
-              << " total_digits=" << result.arg_number_payload.total_digits
-              << " skipped_atoms=" << result.arg_number_payload.skipped_atoms
-              << " malformed_numbers=" << result.arg_number_payload.malformed_numbers
-              << "\n";
-
-    for (size_t atom_index = 0; atom_index < result.atom_tokens.size(); ++atom_index) {
-        const AtomTokenizationPayload& atom_payload = result.atom_tokens[atom_index];
-        const std::optional<AtomEntry> entry = result.atom_table->getAtom(atom_payload.atom_entry_id);
-        if (!entry.has_value()) {
-            throw std::runtime_error(std::string(caller) +
-                                     ": dumpAtomTableCreationBreakdown could not reload atom entry id=" +
-                                     std::to_string(atom_payload.atom_entry_id));
-        }
-
-        const std::string_view raw_text = result.atom_table->getString(entry->raw_text_ref);
-        const std::optional<NumericPayload> numeric_payload = result.atom_table->getNumericValue(entry->id);
-        const std::optional<ArgNumber>& arg_number = entry->arg_number;
-
-        std::cerr << "  [ATOM_ENTRY] atom_index=" << atom_index
-                  << " atom_entry_id=" << entry->id
-                  << " token_id=" << atom_payload.token_id
-                  << " atom_type=" << atomTypeName(entry->type)
-                  << " category=" << atomCategoryName(entry->category)
-                  << " origin=" << atomOriginName(entry->origin)
-                  << " confidence=" << entry->confidence
-                  << " created_at=" << entry->created_at
-                  << " hash=0x" << std::hex << entry->hash << std::dec
-                  << "\n";
-
-        std::cerr << "    raw_text='" << std::string(raw_text) << "'"
-                  << " raw_text_ref={offset=" << entry->raw_text_ref.offset
-                  << ", length=" << entry->raw_text_ref.length << "}"
-                  << " source_span=[" << entry->source_start << ", " << entry->source_end << ")"
-                  << " numeric_value=" << entry->numeric_value
-                  << " flags=" << entry->flags
-                  << "\n";
-
-        std::cerr << "    token_payload: atom_mask=" << static_cast<int>(atom_payload.token_atom_mask)
-                  << " is_byte_fallback=" << (atom_payload.is_byte_fallback ? "true" : "false")
-                  << " token_numeric_value=" << atom_payload.token_numeric_value
-                  << " token_atom_flags=" << atom_payload.token_atom_flags
-                  << " span={offset=" << atom_payload.span.offset
-                  << ", length=" << atom_payload.span.length
-                  << ", content_offset=" << atom_payload.span.content_offset
-                  << ", content_length=" << atom_payload.span.content_length
-                  << ", placeholder_id=" << atom_payload.span.placeholder_id
-                  << "}"
-                  << "\n";
-
-        if (numeric_payload.has_value()) {
-            std::cerr << "    numeric_payload: kind=" << static_cast<int>(numeric_payload->kind)
-                      << " float_value=" << numeric_payload->float_value
-                      << " int_value=" << numeric_payload->int_value
-                      << "\n";
-        } else {
-            std::cerr << "    numeric_payload: <none>\n";
-        }
-
-        if (!arg_number.has_value()) {
-            throw std::runtime_error(std::string(caller) +
-                                     ": dumpAtomTableCreationBreakdown found atom entry id=" +
-                                     std::to_string(entry->id) +
-                                     " without required arg_number metadata; atom_index=" +
-                                     std::to_string(atom_index) +
-                                     ", atom_type=" + atomTypeName(entry->type) +
-                                     ", raw_text='" + std::string(raw_text) + "'");
-        }
-
-        const ArgNumber& number = *arg_number;
-        std::cerr << "    arg_number: raw_span={offset=" << number.raw_span.offset
-                  << ", length=" << number.raw_span.length
-                  << "} content_span={offset=" << number.content_span.offset
-                  << ", length=" << number.content_span.length
-                  << "} mantissa_span={offset=" << number.mantissa_span.offset
-                  << ", length=" << number.mantissa_span.length
-                  << "} base=" << static_cast<int>(number.base)
-                  << " has_sign=" << static_cast<int>(number.has_sign)
-                  << " sign_negative=" << static_cast<int>(number.sign_negative)
-                  << " sign_span={offset=" << number.sign_span.offset
-                  << ", length=" << number.sign_span.length
-                  << "} has_decimal_point=" << static_cast<int>(number.has_decimal_point)
-                  << " decimal_point_span={offset=" << number.decimal_point_span.offset
-                  << ", length=" << number.decimal_point_span.length
-                  << "} has_exponent=" << static_cast<int>(number.has_exponent)
-                  << " exponent_negative=" << static_cast<int>(number.exponent_negative)
-                  << " exponent_value=" << number.exponent_value
-                  << " exponent_marker_span={offset=" << number.exponent_marker_span.offset
-                  << ", length=" << number.exponent_marker_span.length
-                  << "} exponent_sign_span={offset=" << number.exponent_sign_span.offset
-                  << ", length=" << number.exponent_sign_span.length
-                  << "} exponent_digits_span={offset=" << number.exponent_digits_span.offset
-                  << ", length=" << number.exponent_digits_span.length
-                  << "} integer_digit_count=" << number.integer_digit_count
-                  << " fractional_digit_count=" << number.fractional_digit_count
-                  << " confidence=" << number.confidence
-                  << " digit_count=" << number.digits.size()
-                  << "\n";
-
-        for (size_t digit_index = 0; digit_index < number.digits.size(); ++digit_index) {
-            const DigitBinding& digit = number.digits[digit_index];
-            std::cerr << "      [DIGIT_BINDING] digit_index=" << digit_index
-                      << " digit=" << static_cast<int>(digit.digit)
-                      << " pow10=" << digit.pow10
-                      << " index_left=" << digit.index_left
-                      << " index_right=" << digit.index_right
-                      << " digit_span={offset=" << digit.digit_span.offset
-                      << ", length=" << digit.digit_span.length
-                      << "}"
-                      << "\n";
-        }
-    }
 }
 
 } // namespace
@@ -816,26 +623,8 @@ AtomTable::~AtomTable() {
     freeGPUData(gpu_data_);
 }
 
-AtomTable::AtomTable(AtomTable&& other) noexcept
-    : entries_(std::move(other.entries_))
-    , numeric_float_values_(std::move(other.numeric_float_values_))
-    , numeric_int_values_(std::move(other.numeric_int_values_))
-    , numeric_kinds_(std::move(other.numeric_kinds_))
-    , string_pool_(std::move(other.string_pool_))
-    , hash_to_ids_(std::move(other.hash_to_ids_))
-    , type_index_(std::move(other.type_index_))
-    , next_id_(other.next_id_)
-    , dedup_hits_(other.dedup_hits_)
-    , total_queries_(other.total_queries_)
-    , pending_gpu_upload_(std::move(other.pending_gpu_upload_))
-    , gpu_dirty_(other.gpu_dirty_)
-    , gpu_data_(other.gpu_data_)
-{
-    other.gpu_data_ = GPUAtomData{};
-    other.next_id_ = 0;
-    other.dedup_hits_ = 0;
-    other.total_queries_ = 0;
-    other.gpu_dirty_ = false;
+AtomTable::AtomTable(AtomTable&& other) noexcept : AtomTable() {
+    *this = std::move(other);
 }
 
 AtomTable& AtomTable::operator=(AtomTable&& other) noexcept {
@@ -868,7 +657,7 @@ AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
     std::string_view source_text,
     const std::vector<Detector::RawTextDetection>& detections,
     const char* caller) {
-    requireAtomTableCreationCaller(caller);
+    requireCallerLabel(caller, "createAtomTableFromRawTextDetections");
 
     AtomTableFromDetectionsResult result;
     result.atom_table = std::make_shared<AtomTable>();
@@ -899,8 +688,25 @@ AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
         span.placeholder_id = atomTypeToTokenId(detection.atom_type);
 
         const std::string_view atom_text(source_text.data() + detection.start, detection_length);
-        const ParseResult parse_check = AtomTable::parseAtom(detection.atom_type, std::string(atom_text));
-        if (!parse_check.success) {
+
+        bool registered = false;
+        try {
+            registered = result.atom_table->tryRegisterSpan(span, span.atom_entry_id);
+        } catch (const std::exception& e) {
+            throw std::runtime_error(std::string(caller) +
+                                     ": failed to register detector-emitted atom span; detection_index=" +
+                                     std::to_string(detection_index) +
+                                     ", detector='" + std::string(detection.detector_name) +
+                                     "', atom_type=" + atomTypeName(detection.atom_type) +
+                                     ", span=[" + std::to_string(detection.start) + ", " +
+                                     std::to_string(detection.end) + "), text='" +
+                                     std::string(atom_text) + "', error='" + e.what() + "'");
+        }
+        if (!registered) {
+            // Cold path: tryRegisterSpan only returns false when the span text
+            // does not parse. Re-parse purely to recover the precise reason for
+            // the detector-contract error; the hot path parses exactly once.
+            const ParseResult parse_check = AtomTable::parseAtom(detection.atom_type, atom_text);
             throwDetectorNumericAtomContractFailure(
                 caller,
                 detection,
@@ -908,19 +714,6 @@ AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
                 detection.atom_type,
                 atom_text,
                 parse_check.error_message);
-        }
-
-        try {
-            span.atom_entry_id = result.atom_table->registerSpan(span);
-        } catch (const std::exception& e) {
-            throw std::runtime_error(std::string(caller) +
-                                     ": failed to register detector-emitted atom span after parse precheck; detection_index=" +
-                                     std::to_string(detection_index) +
-                                     ", detector='" + std::string(detection.detector_name) +
-                                     "', atom_type=" + atomTypeName(detection.atom_type) +
-                                     ", span=[" + std::to_string(detection.start) + ", " +
-                                     std::to_string(detection.end) + "), text='" +
-                                     std::string(atom_text) + "', error='" + e.what() + "'");
         }
 
         if (span.atom_entry_id == kAtomEntryNone) {
@@ -947,11 +740,6 @@ AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
         recordAtomEntryArgNumberSummary(*entry, result.arg_number_payload, caller);
     }
 
-    const bool dump_atom_entry_breakdown = true;
-    if (dump_atom_entry_breakdown) {
-        dumpAtomTableCreationBreakdown(result, caller);
-    }
-
     return result;
 }
 
@@ -964,29 +752,20 @@ static void applyAtomTokenizationPayloadToTokenSideChannelsInternal(
     const std::vector<uint32_t>& token_atom_flags,
     std::vector<uint32_t>& atom_entry_ids,
     const char* caller) {
-    requireAtomTablePayloadApplyCaller(caller);
+    requireCallerLabel(caller, "applyAtomTokenizationPayloadToTokenSideChannels");
 
     const size_t token_count = token_ids.size();
-    if (token_numeric_values.size() != token_count) {
-        throw std::runtime_error(std::string(caller) +
-                                 ": token_numeric_values.size()=" + std::to_string(token_numeric_values.size()) +
-                                 " != token_ids.size()=" + std::to_string(token_count));
-    }
-    if (token_atom_mask.size() != token_count) {
-        throw std::runtime_error(std::string(caller) +
-                                 ": token_atom_mask.size()=" + std::to_string(token_atom_mask.size()) +
-                                 " != token_ids.size()=" + std::to_string(token_count));
-    }
-    if (token_atom_flags.size() != token_count) {
-        throw std::runtime_error(std::string(caller) +
-                                 ": token_atom_flags.size()=" + std::to_string(token_atom_flags.size()) +
-                                 " != token_ids.size()=" + std::to_string(token_count));
-    }
-    if (atom_entry_ids.size() != token_count) {
-        throw std::runtime_error(std::string(caller) +
-                                 ": atom_entry_ids.size()=" + std::to_string(atom_entry_ids.size()) +
-                                 " != token_ids.size()=" + std::to_string(token_count));
-    }
+    auto requireTokenAlignedSize = [&](size_t actual, const char* name) {
+        if (actual != token_count) {
+            throw std::runtime_error(std::string(caller) + ": " + name + ".size()=" +
+                                     std::to_string(actual) +
+                                     " != token_ids.size()=" + std::to_string(token_count));
+        }
+    };
+    requireTokenAlignedSize(token_numeric_values.size(), "token_numeric_values");
+    requireTokenAlignedSize(token_atom_mask.size(), "token_atom_mask");
+    requireTokenAlignedSize(token_atom_flags.size(), "token_atom_flags");
+    requireTokenAlignedSize(atom_entry_ids.size(), "atom_entry_ids");
     if (atom_table_build.atom_tokens.size() != atom_token_indices.size()) {
         throw std::runtime_error(std::string(caller) +
                                  ": atom token payload count mismatch: atom_tokens=" +
@@ -1278,48 +1057,29 @@ bool AtomTable::loadFromFile(const std::string& path) {
         return false;
     }
 
-    for (uint32_t i = 0; i < entry_count; ++i) {
-        AtomEntry& entry = entries[i];
-        if (entry.id < ATOM_TOKEN_BASE || entry.id >= ATOM_TOKEN_MAX) {
-            return false;
-        }
-        if (!atomTypeIsPersistable(entry.type)) {
-            return false;
-        }
-        const uint32_t expected_idx = entry.id - ATOM_TOKEN_BASE;
-        if (expected_idx != i) {
-            return false;
-        }
-        if (!stringRefInBounds(entry.raw_text_ref, pool.size())) {
-            return false;
-        }
-        if (entry.category != AtomCategory::NUMERIC && entry.category != AtomCategory::SYSTEM) {
-            return false;
-        }
-        if (entry.reserved_zero != 0) {
-            return false;
-        }
-        if (!entry.arg_number.has_value()) {
-            return false;
-        }
-        if (entry.arg_number->number_atom_id != entry.id) {
-            return false;
-        }
-        if (entry.arg_number->digits.empty()) {
-            return false;
-        }
-    }
-
+    // Single pass: validate every persisted entry, then re-derive its numeric
+    // payload from the raw text (payloads are not persisted; parse is the
+    // single source of truth on load).
     std::vector<double> numeric_float_values(entry_count, 0.0);
     std::vector<int64_t> numeric_int_values(entry_count, 0);
     std::vector<uint8_t> numeric_kinds(entry_count, static_cast<uint8_t>(NumericPayloadKind::NONE));
     for (uint32_t i = 0; i < entry_count; ++i) {
         AtomEntry& entry = entries[i];
-        std::string raw_text;
-        if (entry.raw_text_ref.length > 0) {
-            raw_text.assign(pool.data() + entry.raw_text_ref.offset, entry.raw_text_ref.length);
+        if (entry.id < ATOM_TOKEN_BASE || entry.id >= ATOM_TOKEN_MAX ||
+            entry.id - ATOM_TOKEN_BASE != i ||
+            !atomTypeIsPersistable(entry.type) ||
+            !stringRefInBounds(entry.raw_text_ref, pool.size()) ||
+            entry.raw_text_ref.length == 0 ||
+            (entry.category != AtomCategory::NUMERIC && entry.category != AtomCategory::SYSTEM) ||
+            entry.reserved_zero != 0 ||
+            !entry.arg_number.has_value() ||
+            entry.arg_number->number_atom_id != entry.id ||
+            entry.arg_number->digits.empty()) {
+            return false;
         }
-        ParseResult result = parseAtom(entry.type, raw_text);
+
+        const std::string_view raw_text(pool.data() + entry.raw_text_ref.offset, entry.raw_text_ref.length);
+        const ParseResult result = parseAtom(entry.type, raw_text);
         if (!result.success) {
             return false;
         }
@@ -1432,17 +1192,13 @@ uint32_t AtomTable::findExisting(AtomType type, uint64_t hash, std::string_view 
     }
 
     for (uint32_t token_id : it->second) {
-        if (token_id < ATOM_TOKEN_BASE) {
-            continue;
+        if (token_id < ATOM_TOKEN_BASE || token_id - ATOM_TOKEN_BASE >= entries_.size()) {
+            throw std::runtime_error("AtomTable::findExisting hash bucket contains corrupt token id=" +
+                                     std::to_string(token_id) + ", entries=" +
+                                     std::to_string(entries_.size()));
         }
-        const uint32_t entry_idx = token_id - ATOM_TOKEN_BASE;
-        if (entry_idx >= entries_.size()) {
-            continue;
-        }
-
-        const AtomEntry& existing = entries_[entry_idx];
-        std::string_view existing_text = getString(existing.raw_text_ref);
-        if (existing.type == type && existing_text == raw_text) {
+        const AtomEntry& existing = entries_[token_id - ATOM_TOKEN_BASE];
+        if (existing.type == type && getString(existing.raw_text_ref) == raw_text) {
             dedup_hits_++;
             return token_id;  // Return the token ID (ATOM_TOKEN_BASE+), not the array index
         }
@@ -1487,19 +1243,13 @@ bool AtomTable::tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id) {
         return true;
     }
     
-
-    
-    // Parse the atom (still needs std::string temporarily)
-    std::string raw_text_str(raw_text);
-    auto result = parseAtom(span.atom_type, raw_text_str);
-    
-    AtomValue parsed;
-    if (result.success) {
-        parsed = result.value;
-    } else {
+    // Parse once; this is the only parse on the new-atom path.
+    const ParseResult result = parseAtom(span.atom_type, raw_text);
+    if (!result.success) {
         out_id = UINT32_MAX;
         return false;
     }
+    const AtomValue& parsed = result.value;
     
     AtomEntry entry{};
     entry.id = ATOM_TOKEN_BASE + next_id_;
@@ -1564,61 +1314,46 @@ std::optional<AtomEntry> AtomTable::getAtom(uint32_t id) const {
         return std::nullopt;  // Not a valid atom token
     }
     
-    uint32_t idx = id - ATOM_TOKEN_BASE;
+    const uint32_t idx = id - ATOM_TOKEN_BASE;
     if (idx >= entries_.size()) {
         return std::nullopt;
     }
     
-    // Verify the entry actually has this ID (sanity check)
     const AtomEntry& entry = entries_[idx];
-    if (entry.id == id) {
-        return entry;
+    if (entry.id != id) {
+        throw std::runtime_error("AtomTable::getAtom id/index mismatch for atom id=" +
+                                 std::to_string(id) + ", entry.id=" + std::to_string(entry.id) +
+                                 "; entries_ indexing is corrupt");
     }
-    
-    // Fallback: Linear search (shouldn't happen with proper indexing)
-    for (const auto& e : entries_) {
-        if (e.id == id) {
-            return e;
-        }
-    }
-    return std::nullopt;
+    return entry;
 }
 
 std::vector<AtomEntry> AtomTable::getAtomsByType(AtomType type) const {
     std::lock_guard<std::mutex> lock(mutex_);
     
     std::vector<AtomEntry> result;
-    
     auto it = type_index_.find(type);
-    if (it != type_index_.end()) {
-        result.reserve(it->second.size());
-        for (uint32_t token_id : it->second) {
-            // Convert token ID to array index
-            if (token_id >= ATOM_TOKEN_BASE) {
-                uint32_t idx = token_id - ATOM_TOKEN_BASE;
-                if (idx < entries_.size()) {
-                    result.push_back(entries_[idx]);
-                }
-            }
-        }
+    if (it == type_index_.end()) {
+        return result;
     }
-    
+    result.reserve(it->second.size());
+    for (uint32_t token_id : it->second) {
+        if (token_id < ATOM_TOKEN_BASE || token_id - ATOM_TOKEN_BASE >= entries_.size()) {
+            throw std::runtime_error("AtomTable::getAtomsByType type index contains corrupt token id=" +
+                                     std::to_string(token_id) + ", entries=" +
+                                     std::to_string(entries_.size()));
+        }
+        result.push_back(entries_[token_id - ATOM_TOKEN_BASE]);
+    }
     return result;
 }
 
-bool AtomTable::hasAtom(uint32_t id) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    // Convert token ID to array index and check bounds
-    if (id < ATOM_TOKEN_BASE) return false;
-    uint32_t idx = id - ATOM_TOKEN_BASE;
-    return idx < entries_.size();
-}
 
 //--------------------------------------------------//
 // Main Parse Entry Point
 //--------------------------------------------------//
 
-ParseResult AtomTable::parseAtom(AtomType type, const std::string& text) {
+ParseResult AtomTable::parseAtom(AtomType type, std::string_view text) {
     if (type == AtomType::ATOM_INT) {
         return parseInteger(text);
     }
@@ -1637,7 +1372,7 @@ ParseResult AtomTable::parseAtom(AtomType type, const std::string& text) {
 // Integer Parsing
 //--------------------------------------------------//
 
-ParseResult AtomTable::parseInteger(const std::string& text) {
+ParseResult AtomTable::parseInteger(std::string_view text) {
     ParseResult result;
     result.success = false;
     
@@ -1645,30 +1380,36 @@ ParseResult AtomTable::parseInteger(const std::string& text) {
         result.error_message = "Empty input";
         return result;
     }
-    if (containsWhitespace(text)) {
-        result.error_message = "Whitespace inside numeric atom text";
-        return result;
-    }
-    
-    try {
-        AtomInteger atom;
-        atom.base = 10;
-        atom.has_sign = (text[0] == '+' || text[0] == '-');
-        
-        size_t pos = 0;
-        atom.value = std::stoll(text, &pos, 10);
-        
-        if (pos != text.size()) {
+
+    AtomInteger atom;
+    atom.base = 10;
+    atom.has_sign = (text[0] == '+' || text[0] == '-');
+
+    // std::from_chars enforces the strict grammar directly: no whitespace, no
+    // locale, no allocation, no partial-consumption surprises. It accepts a
+    // leading '-' but not '+', so skip an explicit '+' (a digit must follow).
+    size_t begin = 0;
+    if (text[0] == '+') {
+        begin = 1;
+        if (text.size() == 1 || text[1] < '0' || text[1] > '9') {
             result.error_message = "Invalid integer format";
             return result;
         }
-        
-        result.success = true;
-        result.value = atom;
-    } catch (const std::exception& e) {
-        result.error_message = e.what();
     }
-    
+
+    const char* last = text.data() + text.size();
+    const std::from_chars_result parsed = std::from_chars(text.data() + begin, last, atom.value, 10);
+    if (parsed.ec == std::errc::result_out_of_range) {
+        result.error_message = "Integer out of range";
+        return result;
+    }
+    if (parsed.ec != std::errc() || parsed.ptr != last) {
+        result.error_message = "Invalid integer format";
+        return result;
+    }
+
+    result.success = true;
+    result.value = atom;
     return result;
 }
 
@@ -1676,7 +1417,7 @@ ParseResult AtomTable::parseInteger(const std::string& text) {
 // Float Parsing
 //--------------------------------------------------//
 
-ParseResult AtomTable::parseFloat(const std::string& text) {
+ParseResult AtomTable::parseFloat(std::string_view text) {
     ParseResult result;
     result.success = false;
     
@@ -1684,44 +1425,91 @@ ParseResult AtomTable::parseFloat(const std::string& text) {
         result.error_message = "Empty input";
         return result;
     }
-    if (containsWhitespace(text)) {
-        result.error_message = "Whitespace inside numeric atom text";
+
+    // Strict shape scan: [+-]? digits [. digits]? ([eE] [+-]? digits)? with at
+    // least one mantissa digit. Rejects whitespace, hex floats, inf/nan
+    // spellings, and trailing junk in one pass, and recovers the exponent
+    // without a second scan or substring allocation.
+    size_t pos = 0;
+    if (text[pos] == '+' || text[pos] == '-') {
+        ++pos;
+    }
+    size_t mantissa_digits = 0;
+    while (pos < text.size() && text[pos] >= '0' && text[pos] <= '9') {
+        ++pos;
+        ++mantissa_digits;
+    }
+    if (pos < text.size() && text[pos] == '.') {
+        ++pos;
+        while (pos < text.size() && text[pos] >= '0' && text[pos] <= '9') {
+            ++pos;
+            ++mantissa_digits;
+        }
+    }
+    if (mantissa_digits == 0) {
+        result.error_message = "Invalid float format";
         return result;
     }
-    
-    try {
-        AtomFloat atom;
-        size_t pos = 0;
-        atom.value = std::stod(text, &pos);
-        
-        if (pos != text.size()) {
+
+    AtomFloat atom;
+    atom.has_exponent = false;
+    atom.exponent = 0;
+    if (pos < text.size() && (text[pos] == 'e' || text[pos] == 'E')) {
+        atom.has_exponent = true;
+        ++pos;
+        bool exponent_negative = false;
+        if (pos < text.size() && (text[pos] == '+' || text[pos] == '-')) {
+            exponent_negative = (text[pos] == '-');
+            ++pos;
+        }
+        size_t exponent_digit_count = 0;
+        int64_t exponent_value = 0;
+        while (pos < text.size() && text[pos] >= '0' && text[pos] <= '9') {
+            exponent_value = exponent_value * 10 + (text[pos] - '0');
+            if (exponent_value > static_cast<int64_t>(std::numeric_limits<int>::max())) {
+                result.error_message = "Float exponent out of range";
+                return result;
+            }
+            ++pos;
+            ++exponent_digit_count;
+        }
+        if (exponent_digit_count == 0) {
             result.error_message = "Invalid float format";
             return result;
         }
+        if (exponent_negative) {
+            exponent_value = -exponent_value;
+        }
+        atom.exponent = static_cast<int>(exponent_value);
+    }
+    if (pos != text.size()) {
+        result.error_message = "Invalid float format";
+        return result;
+    }
 
-        if (!std::isfinite(atom.value)) {
-            result.error_message = "Non-finite float";
+    // std::stod for the VALUE only (shape is already validated above);
+    // from_chars for double is not reliably available on every toolchain we
+    // build with. Cold path: runs once per unique atom, dedup hits skip it.
+    try {
+        const std::string text_str(text);
+        size_t consumed = 0;
+        atom.value = std::stod(text_str, &consumed);
+        if (consumed != text_str.size()) {
+            result.error_message = "Invalid float format";
             return result;
         }
-        
-        // Check for exponent
-        atom.has_exponent = (text.find('e') != std::string::npos || 
-                            text.find('E') != std::string::npos);
-        atom.exponent = 0;
-        
-        if (atom.has_exponent) {
-            size_t e_pos = text.find_first_of("eE");
-            if (e_pos != std::string::npos && e_pos + 1 < text.size()) {
-                atom.exponent = std::stoi(text.substr(e_pos + 1));
-            }
-        }
-        
-        result.success = true;
-        result.value = atom;
     } catch (const std::exception& e) {
         result.error_message = e.what();
+        return result;
     }
-    
+
+    if (!std::isfinite(atom.value)) {
+        result.error_message = "Non-finite float";
+        return result;
+    }
+
+    result.success = true;
+    result.value = atom;
     return result;
 }
 
@@ -1734,48 +1522,6 @@ std::string AtomTable::atomToString(const AtomEntry& entry) const {
     // not tokenizer storage or decode.
     return std::string(getString(entry.raw_text_ref));
 }
-
-// Serialize atom value directly to buffer (ZERO HEAP ALLOCATION!)
-size_t AtomTable::atomValueSerialize(AtomType type, const AtomValue& value, char* out, size_t max) {
-    (void)type;
-    if (!out || max == 0) return 0;
-    
-    size_t written = 0;
-    
-    std::visit([&](auto&& arg) {
-        using T = std::decay_t<decltype(arg)>;
-        
-        if constexpr (std::is_same_v<T, AtomInteger>) {
-            if (arg.base == 16) {
-                written = snprintf(out, max, "0x%llx", (long long)arg.value);
-            } else if (arg.base == 2) {
-                // Binary
-                written = snprintf(out, max, "0b");
-                if (written < max) {
-                    int64_t v = arg.value;
-                    char temp[65];
-                    int pos = 0;
-                    do {
-                        temp[pos++] = '0' + (v & 1);
-                        v >>= 1;
-                    } while (v > 0 && pos < 64);
-                    for (int i = pos - 1; i >= 0 && written < max; --i) {
-                        out[written++] = temp[i];
-                    }
-                }
-            } else {
-                written = snprintf(out, max, "%lld", (long long)arg.value);
-            }
-        }
-        else if constexpr (std::is_same_v<T, AtomFloat>) {
-            written = snprintf(out, max, "%g", arg.value);
-        }
-    }, value);
-    
-    return (written < max) ? written : 0;  // Return 0 if truncated
-}
-
-
 
 std::optional<NumericPayload> AtomTable::getNumericValue(uint32_t id) const {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -1864,34 +1610,37 @@ uint64_t AtomTable::getCurrentTimestamp() {
     return static_cast<uint64_t>(micros.count());
 }
 
+AtomEntry& AtomTable::entryForIdLocked(uint32_t id, const char* caller) {
+    if (id < ATOM_TOKEN_BASE || id - ATOM_TOKEN_BASE >= entries_.size()) {
+        throw std::runtime_error(std::string(caller) + ": invalid atom id=" + std::to_string(id) +
+                                 ", entries=" + std::to_string(entries_.size()));
+    }
+    AtomEntry& entry = entries_[id - ATOM_TOKEN_BASE];
+    if (entry.id != id) {
+        throw std::runtime_error(std::string(caller) + ": id/index mismatch for atom id=" +
+                                 std::to_string(id) + ", entry.id=" + std::to_string(entry.id) +
+                                 "; entries_ indexing is corrupt");
+    }
+    return entry;
+}
+
 void AtomTable::setOrigin(uint32_t id, AtomOrigin origin) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (id < ATOM_TOKEN_BASE) return;
-    uint32_t idx = id - ATOM_TOKEN_BASE;
-    if (idx < entries_.size()) {
-        entries_[idx].origin = origin;
-    }
+    entryForIdLocked(id, "AtomTable::setOrigin").origin = origin;
 }
 
 void AtomTable::setConfidence(uint32_t id, float confidence) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (id < ATOM_TOKEN_BASE) return;
-    uint32_t idx = id - ATOM_TOKEN_BASE;
-    if (idx < entries_.size()) {
-        entries_[idx].confidence = std::clamp(confidence, 0.0f, 1.0f);
-        if (entries_[idx].arg_number.has_value()) {
-            entries_[idx].arg_number->confidence = entries_[idx].confidence;
-        }
+    AtomEntry& entry = entryForIdLocked(id, "AtomTable::setConfidence");
+    entry.confidence = std::clamp(confidence, 0.0f, 1.0f);
+    if (entry.arg_number.has_value()) {
+        entry.arg_number->confidence = entry.confidence;
     }
 }
 
 void AtomTable::setCategory(uint32_t id, AtomCategory category) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (id < ATOM_TOKEN_BASE) return;
-    uint32_t idx = id - ATOM_TOKEN_BASE;
-    if (idx < entries_.size()) {
-        entries_[idx].category = category;
-    }
+    entryForIdLocked(id, "AtomTable::setCategory").category = category;
 }
 
 //--------------------------------------------------//
@@ -1955,79 +1704,45 @@ bool AtomTable::uploadToGPU(cudaStream_t stream) {
         numeric_kinds_.size() != num_atoms) {
         throw std::runtime_error("AtomTable::uploadToGPU numeric side-channel size mismatch");
     }
-    
-    cudaError_t err;
-    GPUAtomData temp{};
-    
-    // Allocate device memory (numeric values, types, flags only - no aux buffer)
-    err = cudaMalloc(&temp.d_numeric_values, num_atoms * sizeof(float));
-    if (err != cudaSuccess) return false;
-    
-    err = cudaMalloc(&temp.d_numeric_float_values, num_atoms * sizeof(double));
-    if (err != cudaSuccess) {
-        freeGPUData(temp);
-        return false;
-    }
-    
-    err = cudaMalloc(&temp.d_numeric_int_values, num_atoms * sizeof(int64_t));
-    if (err != cudaSuccess) {
-        freeGPUData(temp);
-        return false;
-    }
 
-    err = cudaMalloc(&temp.d_numeric_kind, num_atoms * sizeof(uint8_t));
-    if (err != cudaSuccess) {
-        freeGPUData(temp);
-        return false;
-    }
-
-    err = cudaMalloc(&temp.d_flags, num_atoms * sizeof(uint32_t));
-    if (err != cudaSuccess) {
-        freeGPUData(temp);
-        return false;
-    }
-    
-    err = cudaMalloc(&temp.d_types, num_atoms * sizeof(uint32_t));
-    if (err != cudaSuccess) {
-        freeGPUData(temp);
-        return false;
-    }
-    
-    // Pack data into host arrays (cache-aligned for transfer efficiency)
+    // Pack legacy packed-float / flags / types into host arrays for transfer.
     std::vector<float> h_numeric(num_atoms);
     std::vector<uint32_t> h_flags(num_atoms);
     std::vector<uint32_t> h_types(num_atoms);
-    
     for (size_t i = 0; i < num_atoms; ++i) {
         const AtomEntry& entry = entries_[i];
         h_numeric[i] = entry.numeric_value;
         h_flags[i] = entry.flags;
         h_types[i] = static_cast<uint32_t>(entry.type);
     }
-    
-    // Batch upload to GPU. The stream is synchronized before returning because
-    // these host vectors are local transaction buffers.
-    const cudaError_t e1 = cudaMemcpyAsync(temp.d_numeric_values, h_numeric.data(),
-                                           num_atoms * sizeof(float), cudaMemcpyHostToDevice, stream);
-    const cudaError_t e2 = cudaMemcpyAsync(temp.d_numeric_float_values, numeric_float_values_.data(),
-                                           num_atoms * sizeof(double), cudaMemcpyHostToDevice, stream);
-    const cudaError_t e3 = cudaMemcpyAsync(temp.d_numeric_int_values, numeric_int_values_.data(),
-                                           num_atoms * sizeof(int64_t), cudaMemcpyHostToDevice, stream);
-    const cudaError_t e4 = cudaMemcpyAsync(temp.d_numeric_kind, numeric_kinds_.data(),
-                                           num_atoms * sizeof(uint8_t), cudaMemcpyHostToDevice, stream);
-    const cudaError_t e5 = cudaMemcpyAsync(temp.d_flags, h_flags.data(),
-                                           num_atoms * sizeof(uint32_t), cudaMemcpyHostToDevice, stream);
-    const cudaError_t e6 = cudaMemcpyAsync(temp.d_types, h_types.data(),
-                                           num_atoms * sizeof(uint32_t), cudaMemcpyHostToDevice, stream);
 
-    if (e1 != cudaSuccess || e2 != cudaSuccess || e3 != cudaSuccess ||
-        e4 != cudaSuccess || e5 != cudaSuccess || e6 != cudaSuccess) {
-        freeGPUData(temp);
-        return false;
+    // Transactional upload: allocate and copy into a fresh temporary, then
+    // synchronize the stream before swapping it in (the host vectors above are
+    // local transaction buffers, so the copies must complete before returning).
+    GPUAtomData temp{};
+    struct TransferSpec {
+        void** device_ptr;
+        const void* host_src;
+        size_t bytes;
+    };
+    const TransferSpec transfers[] = {
+        {reinterpret_cast<void**>(&temp.d_numeric_values), h_numeric.data(), num_atoms * sizeof(float)},
+        {reinterpret_cast<void**>(&temp.d_numeric_float_values), numeric_float_values_.data(), num_atoms * sizeof(double)},
+        {reinterpret_cast<void**>(&temp.d_numeric_int_values), numeric_int_values_.data(), num_atoms * sizeof(int64_t)},
+        {reinterpret_cast<void**>(&temp.d_numeric_kind), numeric_kinds_.data(), num_atoms * sizeof(uint8_t)},
+        {reinterpret_cast<void**>(&temp.d_flags), h_flags.data(), num_atoms * sizeof(uint32_t)},
+        {reinterpret_cast<void**>(&temp.d_types), h_types.data(), num_atoms * sizeof(uint32_t)},
+    };
+    for (const TransferSpec& transfer : transfers) {
+        if (cudaMalloc(transfer.device_ptr, transfer.bytes) != cudaSuccess ||
+            cudaMemcpyAsync(*transfer.device_ptr, transfer.host_src, transfer.bytes,
+                            cudaMemcpyHostToDevice, stream) != cudaSuccess) {
+            freeGPUData(temp);
+            return false;
+        }
     }
 
-    const cudaError_t sync_err = cudaStreamSynchronize(stream);
-    if (sync_err != cudaSuccess) {
+    if (cudaStreamSynchronize(stream) != cudaSuccess) {
         freeGPUData(temp);
         return false;
     }
