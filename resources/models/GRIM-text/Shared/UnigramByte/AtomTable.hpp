@@ -275,7 +275,7 @@ public:
     std::optional<AtomEntry> getAtom(uint32_t id) const;
     
     // Alias for getAtom (for API consistency)
-    std::optional<AtomEntry> getAtomEntry(uint32_t id) const { return getAtom(id); }
+
     
     // Get all atoms of a specific type
     std::vector<AtomEntry> getAtomsByType(AtomType type) const;

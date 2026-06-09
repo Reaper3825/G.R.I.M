@@ -626,7 +626,7 @@ void dumpAtomTableCreationBreakdown(
 
         const std::string_view raw_text = result.atom_table->getString(entry->raw_text_ref);
         const std::optional<NumericPayload> numeric_payload = result.atom_table->getNumericValue(entry->id);
-    const std::optional<ArgNumber>& arg_number = entry->arg_number;
+        const std::optional<ArgNumber>& arg_number = entry->arg_number;
 
         std::cerr << "  [ATOM_ENTRY] atom_index=" << atom_index
                   << " atom_entry_id=" << entry->id
@@ -669,8 +669,13 @@ void dumpAtomTableCreationBreakdown(
         }
 
         if (!arg_number.has_value()) {
-            std::cerr << "    arg_number: <none>\n";
-            continue;
+            throw std::runtime_error(std::string(caller) +
+                                     ": dumpAtomTableCreationBreakdown found atom entry id=" +
+                                     std::to_string(entry->id) +
+                                     " without required arg_number metadata; atom_index=" +
+                                     std::to_string(atom_index) +
+                                     ", atom_type=" + atomTypeName(entry->type) +
+                                     ", raw_text='" + std::string(raw_text) + "'");
         }
 
         const ArgNumber& number = *arg_number;
