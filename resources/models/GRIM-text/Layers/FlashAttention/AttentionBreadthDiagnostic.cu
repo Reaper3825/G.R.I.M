@@ -21,8 +21,7 @@ bool shouldEmitAttentionBreadthDiagnostics() {
     if (!GRIM::Logging::IsLayerLoggingEnabled(GRIM::LayerType::kAttention)) {
         return false;
     }
-    auto* tape = GRIM::Logging::getGlobalTape();
-    return !tape || !tape->skipThisPass();
+    return true;
 }
 
 struct LinearStats {
@@ -162,12 +161,8 @@ void emitAttentionBreadthDiagnostic(const std::vector<float>& causal_scores_row,
         return;
     }
 
-    auto* tape = GRIM::Logging::getGlobalTape();
-
     const LinearStats score_stats = computeLinearStats(causal_scores_row, "emitAttentionBreadthDiagnostic scores");
     const AttentionBreadthStats breadth_stats = computeAttentionBreadthStats(causal_scores_row, lse_value);
-
-    const std::uint64_t global_step = tape ? static_cast<std::uint64_t>(tape->currentStep()) : 0ULL;
 
     std::ostringstream log_line;
     log_line << std::fixed << std::setprecision(3);
@@ -195,7 +190,7 @@ void emitAttentionBreadthDiagnostic(const std::vector<float>& causal_scores_row,
     const bool recorded = GRIM::Logging::RecordLayerLogHost(
         GRIM::LayerType::kAttention,
         layer_idx,
-        global_step,
+        0ULL,
         breadth_stats.normalized_entropy,
         breadth_stats.uniform_fraction,
         "ATTN_BREADTH",
