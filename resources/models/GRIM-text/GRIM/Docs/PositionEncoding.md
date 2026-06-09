@@ -21,7 +21,7 @@ Phase1 seals PBM readiness before Phase2 shared forward begins. The shared forwa
 
 ## ALiBi
 - Slopes are capped via the authored `training.config.alibi_max_bias` value. A negative value such as `-10.0` ensures `exp(-10) ≈ 4.5e-5` (computable) instead of `exp(-256) ≈ 0` (underflow → gradient explosion). A value of `0.0` disables the cap and is still explicitly authored.
-- FlashAttention expects **negative** slopes (library uses `+= slope * col_idx`).
+- **Sign convention (Dao FA2 kernel contract): slopes are POSITIVE magnitudes.** The vendored `alibi.h` applies `score += slope * col_idx` for causal attention, which equals the standard ALiBi penalty `-slope * (row - col)` up to a per-row constant that softmax cancels — but only when `slope > 0`. Passing negative slopes **inverts** the bias: the earliest keys (col 0) get the highest relative score in every head, so early tokens are systematically over-attended in both forward and backward (the bwd kernel recomputes the same scores for gradients). `computeDerivedPBMAlibiSlopes` emits positive magnitudes; `requirePBMComputedTables` fails loud on non-positive slopes (catches stale `pbm_alibi_slopes` snapshots/checkpoints from before the sign fix). The "penalty is negative" framing lives only in `alibi_max_bias ≤ 0`.
 - Always match `max_seq_len` to actual context length — mismatched slopes cause weak attention at distance.
 
 ## RoPE NTK scaling

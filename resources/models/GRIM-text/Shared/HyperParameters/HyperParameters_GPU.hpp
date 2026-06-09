@@ -1064,10 +1064,21 @@ inline std::vector<float> computeDerivedPBMAlibiSlopes(
         ? (max_bias_magnitude / static_cast<float>(params.max_seq_len))
         : 0.0f;
 
+    // SIGN CONVENTION (Dao FA2 kernel contract): slopes MUST be POSITIVE magnitudes.
+    // The vendored flash-attention alibi.h applies, for causal attention:
+    //     score(row, col) += slope * col_idx
+    // which (up to a per-row constant that softmax cancels) equals the standard
+    // ALiBi penalty  -slope * (row - col)  ONLY when slope > 0.
+    // Passing NEGATIVE slopes inverts the bias: the most DISTANT keys (col 0,
+    // i.e. the earliest tokens) receive the highest relative score in every head,
+    // so early tokens get systematically over-attended in forward AND backward
+    // (flash_bwd_kernel.h recomputes the same biased scores for gradients).
+    // The "penalty is negative" framing lives in alibi_max_bias (<= 0) only;
+    // the slope table handed to the kernel is positive.
     if (params.num_heads == 1) {
-        float slope = -m_max;
+        float slope = m_max;
         if (max_slope_magnitude > 0.0f && m_max > max_slope_magnitude) {
-            slope = -max_slope_magnitude;
+            slope = max_slope_magnitude;
         }
         slopes[0] = slope;
         return slopes;
@@ -1082,7 +1093,7 @@ inline std::vector<float> computeDerivedPBMAlibiSlopes(
         if (max_slope_magnitude > 0.0f && slope_magnitude > max_slope_magnitude) {
             slope_magnitude = max_slope_magnitude;
         }
-        slopes[static_cast<size_t>(h)] = -slope_magnitude;
+        slopes[static_cast<size_t>(h)] = slope_magnitude;
     }
 
     return slopes;

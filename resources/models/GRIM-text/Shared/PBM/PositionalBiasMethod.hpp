@@ -15,6 +15,7 @@
 #pragma once
 
 #include <cuda_runtime.h>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
@@ -139,6 +140,21 @@ inline void requirePBMComputedTables(const PBMConstructionHP& hp, const char* ca
         throw std::runtime_error(std::string(caller) + ": PBM alibi_slopes view is invalid for num_heads=" +
                                  std::to_string(hp.num_heads) + " (size=" +
                                  std::to_string(hp.alibi_slopes.size) + ")");
+    }
+
+    // Dao FA2 kernel contract: ALiBi slopes are POSITIVE magnitudes
+    // (alibi.h applies `score += slope * col_idx` for causal — a negative slope
+    // inverts the locality bias toward the earliest tokens). Negative slopes here
+    // mean a stale config snapshot / checkpoint from before the sign fix.
+    for (size_t h = 0; h < hp.alibi_slopes.size; ++h) {
+        const float slope = hp.alibi_slopes.data[h];
+        if (!std::isfinite(slope) || slope <= 0.0f) {
+            throw std::runtime_error(std::string(caller) + ": PBM alibi_slopes[" + std::to_string(h) +
+                                     "]=" + std::to_string(slope) +
+                                     " must be a positive finite magnitude (FA2 kernel sign convention)." 
+                                     " Negative slopes invert ALiBi and over-attend early tokens —" 
+                                     " regenerate pbm_alibi_slopes (stale snapshot/checkpoint?)");
+        }
     }
 
     const size_t expected_rope_size = static_cast<size_t>(hp.rotary_dim / 2);
