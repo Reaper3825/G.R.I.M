@@ -13,11 +13,13 @@ struct SerializationConfig {
 };
 
 struct CheckpointCapabilityRequirements {
+	bool requires_number_encoder = false;
 	bool requires_execution_block = false;
 	bool requires_final_rms_gamma = false;
 };
 
 struct SerializationLoadReport {
+	bool number_encoder_loaded = false;
 	bool execution_block_loaded = false;
 };
 
@@ -26,6 +28,7 @@ struct SerializationSaveSources {
 	SerializationGpuEmbeddingReadView gpu_embedding;
 	std::vector<SerializationEncoderLayerReadView> encoder_layers;
 	SerializationLMHeadReadView lm_head;
+	SerializationNumberEncoderReadView number_encoder;
 	SerializationExecutionBlockReadView execution_block;
 	DeviceReadView final_rms_gamma;
 };
@@ -44,6 +47,7 @@ struct SerializationLoadRequest {
 	SerializationGpuEmbeddingWriteView gpu_embedding;
 	std::vector<SerializationEncoderLayerWriteView> encoder_layers;
 	SerializationLMHeadWriteView lm_head;
+	SerializationNumberEncoderWriteView number_encoder;
 	SerializationExecutionBlockWriteView execution_block;
 	DeviceWriteView final_rms_gamma;
 };

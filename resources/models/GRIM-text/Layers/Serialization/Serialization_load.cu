@@ -510,6 +510,29 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
         }
     }
 
+    // ─── NumberEncoder (gated by requires_number_encoder) ───
+    if (req.requires_number_encoder) {
+        const auto* fb_ne = model_fb->number_encoder();
+        auto ul = [&](const flatbuffers::Vector<float>* src, const DeviceWriteView& dst, const char* name) -> bool {
+            if (!src) return false;
+            std::vector<float> buf(src->begin(), src->end());
+            return upload_device_vector(buf, dst, name);
+        };
+        const auto& ne = request.number_encoder;
+        bool ne_ok = true;
+        ne_ok = ne_ok && ul(fb_ne->digit_emb_data(), ne.digit_emb, "NE digit_emb");
+        ne_ok = ne_ok && ul(fb_ne->pow10_emb_data(), ne.pow10_emb, "NE pow10_emb");
+        ne_ok = ne_ok && ul(fb_ne->w_c1_data(), ne.W_c1, "NE W_c1");
+        ne_ok = ne_ok && ul(fb_ne->b_c1_data(), ne.b_c1, "NE b_c1");
+        ne_ok = ne_ok && ul(fb_ne->w_c2_data(), ne.W_c2, "NE W_c2");
+        ne_ok = ne_ok && ul(fb_ne->w_g1_data(), ne.W_g1, "NE W_g1");
+        ne_ok = ne_ok && ul(fb_ne->b_g1_data(), ne.b_g1, "NE b_g1");
+        ne_ok = ne_ok && ul(fb_ne->w_g2_data(), ne.W_g2, "NE W_g2");
+        if (!ne_ok) return false;
+        request.report.number_encoder_loaded = true;
+        Logging::EmitModuleInfo(kLogModule, "[load] NumberEncoder weights loaded");
+    }
+
     // ─── ExecutionBlock (gated by requires_execution_block) ───
     if (req.requires_execution_block) {
         const auto* fb_eb = model_fb->execution_block();
@@ -568,6 +591,10 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
     }
 
     // ─── Step 7: Final load verification (safety) ───
+    if (req.requires_number_encoder && !request.report.number_encoder_loaded) {
+        Logging::EmitModuleError(kLogModule, "[load] FATAL: NumberEncoder required but not loaded");
+        return false;
+    }
     if (req.requires_execution_block && !request.report.execution_block_loaded) {
         Logging::EmitModuleError(kLogModule, "[load] FATAL: ExecutionBlock required but not loaded");
         return false;

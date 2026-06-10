@@ -59,6 +59,10 @@ struct ExecutionBlockWeights;
 struct ExecutionBlockWeightsBuilder;
 struct ExecutionBlockWeightsT;
 
+struct NumberEncoderWeights;
+struct NumberEncoderWeightsBuilder;
+struct NumberEncoderWeightsT;
+
 struct ModelConfig;
 struct ModelConfigBuilder;
 struct ModelConfigT;
@@ -74,37 +78,6 @@ struct TrainingMetadataT;
 struct TransformerModel;
 struct TransformerModelBuilder;
 struct TransformerModelT;
-
-bool operator==(const MatrixT &lhs, const MatrixT &rhs);
-bool operator!=(const MatrixT &lhs, const MatrixT &rhs);
-bool operator==(const VectorT &lhs, const VectorT &rhs);
-bool operator!=(const VectorT &lhs, const VectorT &rhs);
-bool operator==(const RMSNormWeightsT &lhs, const RMSNormWeightsT &rhs);
-bool operator!=(const RMSNormWeightsT &lhs, const RMSNormWeightsT &rhs);
-bool operator==(const AttentionWeightsT &lhs, const AttentionWeightsT &rhs);
-bool operator!=(const AttentionWeightsT &lhs, const AttentionWeightsT &rhs);
-bool operator==(const FFNWeightsT &lhs, const FFNWeightsT &rhs);
-bool operator!=(const FFNWeightsT &lhs, const FFNWeightsT &rhs);
-bool operator==(const EncoderLayerWeightsT &lhs, const EncoderLayerWeightsT &rhs);
-bool operator!=(const EncoderLayerWeightsT &lhs, const EncoderLayerWeightsT &rhs);
-bool operator==(const EmbeddingWeightsT &lhs, const EmbeddingWeightsT &rhs);
-bool operator!=(const EmbeddingWeightsT &lhs, const EmbeddingWeightsT &rhs);
-bool operator==(const LMHeadWeightsT &lhs, const LMHeadWeightsT &rhs);
-bool operator!=(const LMHeadWeightsT &lhs, const LMHeadWeightsT &rhs);
-bool operator==(const NumericHeadWeightsT &lhs, const NumericHeadWeightsT &rhs);
-bool operator!=(const NumericHeadWeightsT &lhs, const NumericHeadWeightsT &rhs);
-bool operator==(const ReasoningHeadWeightsT &lhs, const ReasoningHeadWeightsT &rhs);
-bool operator!=(const ReasoningHeadWeightsT &lhs, const ReasoningHeadWeightsT &rhs);
-bool operator==(const ExecutionBlockWeightsT &lhs, const ExecutionBlockWeightsT &rhs);
-bool operator!=(const ExecutionBlockWeightsT &lhs, const ExecutionBlockWeightsT &rhs);
-bool operator==(const ModelConfigT &lhs, const ModelConfigT &rhs);
-bool operator!=(const ModelConfigT &lhs, const ModelConfigT &rhs);
-bool operator==(const LossWeightingWeightsT &lhs, const LossWeightingWeightsT &rhs);
-bool operator!=(const LossWeightingWeightsT &lhs, const LossWeightingWeightsT &rhs);
-bool operator==(const TrainingMetadataT &lhs, const TrainingMetadataT &rhs);
-bool operator!=(const TrainingMetadataT &lhs, const TrainingMetadataT &rhs);
-bool operator==(const TransformerModelT &lhs, const TransformerModelT &rhs);
-bool operator!=(const TransformerModelT &lhs, const TransformerModelT &rhs);
 
 enum PositionalEncodingType : uint8_t {
   PositionalEncodingType_NONE = 0,
@@ -1964,6 +1937,173 @@ inline ::flatbuffers::Offset<ExecutionBlockWeights> CreateExecutionBlockWeightsD
 
 ::flatbuffers::Offset<ExecutionBlockWeights> CreateExecutionBlockWeights(::flatbuffers::FlatBufferBuilder &_fbb, const ExecutionBlockWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 
+struct NumberEncoderWeightsT : public ::flatbuffers::NativeTable {
+  typedef NumberEncoderWeights TableType;
+  std::vector<float> digit_emb_data{};
+  std::vector<float> pow10_emb_data{};
+  std::vector<float> w_c1_data{};
+  std::vector<float> b_c1_data{};
+  std::vector<float> w_c2_data{};
+  std::vector<float> w_g1_data{};
+  std::vector<float> b_g1_data{};
+  std::vector<float> w_g2_data{};
+};
+
+struct NumberEncoderWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef NumberEncoderWeightsT NativeTableType;
+  typedef NumberEncoderWeightsBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_DIGIT_EMB_DATA = 4,
+    VT_POW10_EMB_DATA = 6,
+    VT_W_C1_DATA = 8,
+    VT_B_C1_DATA = 10,
+    VT_W_C2_DATA = 12,
+    VT_W_G1_DATA = 14,
+    VT_B_G1_DATA = 16,
+    VT_W_G2_DATA = 18
+  };
+  const ::flatbuffers::Vector<float> *digit_emb_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_DIGIT_EMB_DATA);
+  }
+  const ::flatbuffers::Vector<float> *pow10_emb_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_POW10_EMB_DATA);
+  }
+  const ::flatbuffers::Vector<float> *w_c1_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_C1_DATA);
+  }
+  const ::flatbuffers::Vector<float> *b_c1_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_B_C1_DATA);
+  }
+  const ::flatbuffers::Vector<float> *w_c2_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_C2_DATA);
+  }
+  const ::flatbuffers::Vector<float> *w_g1_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_G1_DATA);
+  }
+  const ::flatbuffers::Vector<float> *b_g1_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_B_G1_DATA);
+  }
+  const ::flatbuffers::Vector<float> *w_g2_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_G2_DATA);
+  }
+  bool Verify(::flatbuffers::Verifier &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_DIGIT_EMB_DATA) &&
+           verifier.VerifyVector(digit_emb_data()) &&
+           VerifyOffset(verifier, VT_POW10_EMB_DATA) &&
+           verifier.VerifyVector(pow10_emb_data()) &&
+           VerifyOffset(verifier, VT_W_C1_DATA) &&
+           verifier.VerifyVector(w_c1_data()) &&
+           VerifyOffset(verifier, VT_B_C1_DATA) &&
+           verifier.VerifyVector(b_c1_data()) &&
+           VerifyOffset(verifier, VT_W_C2_DATA) &&
+           verifier.VerifyVector(w_c2_data()) &&
+           VerifyOffset(verifier, VT_W_G1_DATA) &&
+           verifier.VerifyVector(w_g1_data()) &&
+           VerifyOffset(verifier, VT_B_G1_DATA) &&
+           verifier.VerifyVector(b_g1_data()) &&
+           VerifyOffset(verifier, VT_W_G2_DATA) &&
+           verifier.VerifyVector(w_g2_data()) &&
+           verifier.EndTable();
+  }
+  NumberEncoderWeightsT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  void UnPackTo(NumberEncoderWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  static ::flatbuffers::Offset<NumberEncoderWeights> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const NumberEncoderWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+};
+
+struct NumberEncoderWeightsBuilder {
+  typedef NumberEncoderWeights Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_digit_emb_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> digit_emb_data) {
+    fbb_.AddOffset(NumberEncoderWeights::VT_DIGIT_EMB_DATA, digit_emb_data);
+  }
+  void add_pow10_emb_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> pow10_emb_data) {
+    fbb_.AddOffset(NumberEncoderWeights::VT_POW10_EMB_DATA, pow10_emb_data);
+  }
+  void add_w_c1_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> w_c1_data) {
+    fbb_.AddOffset(NumberEncoderWeights::VT_W_C1_DATA, w_c1_data);
+  }
+  void add_b_c1_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> b_c1_data) {
+    fbb_.AddOffset(NumberEncoderWeights::VT_B_C1_DATA, b_c1_data);
+  }
+  void add_w_c2_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> w_c2_data) {
+    fbb_.AddOffset(NumberEncoderWeights::VT_W_C2_DATA, w_c2_data);
+  }
+  void add_w_g1_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> w_g1_data) {
+    fbb_.AddOffset(NumberEncoderWeights::VT_W_G1_DATA, w_g1_data);
+  }
+  void add_b_g1_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> b_g1_data) {
+    fbb_.AddOffset(NumberEncoderWeights::VT_B_G1_DATA, b_g1_data);
+  }
+  void add_w_g2_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> w_g2_data) {
+    fbb_.AddOffset(NumberEncoderWeights::VT_W_G2_DATA, w_g2_data);
+  }
+  explicit NumberEncoderWeightsBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<NumberEncoderWeights> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<NumberEncoderWeights>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<NumberEncoderWeights> CreateNumberEncoderWeights(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> digit_emb_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> pow10_emb_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_c1_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> b_c1_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_c2_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_g1_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> b_g1_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_g2_data = 0) {
+  NumberEncoderWeightsBuilder builder_(_fbb);
+  builder_.add_w_g2_data(w_g2_data);
+  builder_.add_b_g1_data(b_g1_data);
+  builder_.add_w_g1_data(w_g1_data);
+  builder_.add_w_c2_data(w_c2_data);
+  builder_.add_b_c1_data(b_c1_data);
+  builder_.add_w_c1_data(w_c1_data);
+  builder_.add_pow10_emb_data(pow10_emb_data);
+  builder_.add_digit_emb_data(digit_emb_data);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<NumberEncoderWeights> CreateNumberEncoderWeightsDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const std::vector<float> *digit_emb_data = nullptr,
+    const std::vector<float> *pow10_emb_data = nullptr,
+    const std::vector<float> *w_c1_data = nullptr,
+    const std::vector<float> *b_c1_data = nullptr,
+    const std::vector<float> *w_c2_data = nullptr,
+    const std::vector<float> *w_g1_data = nullptr,
+    const std::vector<float> *b_g1_data = nullptr,
+    const std::vector<float> *w_g2_data = nullptr) {
+  auto digit_emb_data__ = digit_emb_data ? _fbb.CreateVector<float>(*digit_emb_data) : 0;
+  auto pow10_emb_data__ = pow10_emb_data ? _fbb.CreateVector<float>(*pow10_emb_data) : 0;
+  auto w_c1_data__ = w_c1_data ? _fbb.CreateVector<float>(*w_c1_data) : 0;
+  auto b_c1_data__ = b_c1_data ? _fbb.CreateVector<float>(*b_c1_data) : 0;
+  auto w_c2_data__ = w_c2_data ? _fbb.CreateVector<float>(*w_c2_data) : 0;
+  auto w_g1_data__ = w_g1_data ? _fbb.CreateVector<float>(*w_g1_data) : 0;
+  auto b_g1_data__ = b_g1_data ? _fbb.CreateVector<float>(*b_g1_data) : 0;
+  auto w_g2_data__ = w_g2_data ? _fbb.CreateVector<float>(*w_g2_data) : 0;
+  return GRIMTransformer::CreateNumberEncoderWeights(
+      _fbb,
+      digit_emb_data__,
+      pow10_emb_data__,
+      w_c1_data__,
+      b_c1_data__,
+      w_c2_data__,
+      w_g1_data__,
+      b_g1_data__,
+      w_g2_data__);
+}
+
+::flatbuffers::Offset<NumberEncoderWeights> CreateNumberEncoderWeights(::flatbuffers::FlatBufferBuilder &_fbb, const NumberEncoderWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+
 struct ModelConfigT : public ::flatbuffers::NativeTable {
   typedef ModelConfig TableType;
   uint32_t vocab_size = 0;
@@ -2468,6 +2608,7 @@ struct TransformerModelT : public ::flatbuffers::NativeTable {
   uint64_t last_modified_timestamp = 0;
   std::unique_ptr<GRIMTransformer::ReasoningHeadWeightsT> reasoning_head{};
   std::unique_ptr<GRIMTransformer::ExecutionBlockWeightsT> execution_block{};
+  std::unique_ptr<GRIMTransformer::NumberEncoderWeightsT> number_encoder{};
   TransformerModelT() = default;
   TransformerModelT(const TransformerModelT &o);
   TransformerModelT(TransformerModelT&&) FLATBUFFERS_NOEXCEPT = default;
@@ -2492,7 +2633,8 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_CREATION_TIMESTAMP = 26,
     VT_LAST_MODIFIED_TIMESTAMP = 28,
     VT_REASONING_HEAD = 30,
-    VT_EXECUTION_BLOCK = 32
+    VT_EXECUTION_BLOCK = 32,
+    VT_NUMBER_ENCODER = 34
   };
   uint32_t version() const {
     return GetField<uint32_t>(VT_VERSION, 0);
@@ -2539,6 +2681,9 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const GRIMTransformer::ExecutionBlockWeights *execution_block() const {
     return GetPointer<const GRIMTransformer::ExecutionBlockWeights *>(VT_EXECUTION_BLOCK);
   }
+  const GRIMTransformer::NumberEncoderWeights *number_encoder() const {
+    return GetPointer<const GRIMTransformer::NumberEncoderWeights *>(VT_NUMBER_ENCODER);
+  }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<uint32_t>(verifier, VT_VERSION, 4) &&
@@ -2567,6 +2712,8 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyTable(reasoning_head()) &&
            VerifyOffset(verifier, VT_EXECUTION_BLOCK) &&
            verifier.VerifyTable(execution_block()) &&
+           VerifyOffset(verifier, VT_NUMBER_ENCODER) &&
+           verifier.VerifyTable(number_encoder()) &&
            verifier.EndTable();
   }
   TransformerModelT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
@@ -2623,6 +2770,9 @@ struct TransformerModelBuilder {
   void add_execution_block(::flatbuffers::Offset<GRIMTransformer::ExecutionBlockWeights> execution_block) {
     fbb_.AddOffset(TransformerModel::VT_EXECUTION_BLOCK, execution_block);
   }
+  void add_number_encoder(::flatbuffers::Offset<GRIMTransformer::NumberEncoderWeights> number_encoder) {
+    fbb_.AddOffset(TransformerModel::VT_NUMBER_ENCODER, number_encoder);
+  }
   explicit TransformerModelBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -2654,11 +2804,13 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(
     uint64_t creation_timestamp = 0,
     uint64_t last_modified_timestamp = 0,
     ::flatbuffers::Offset<GRIMTransformer::ReasoningHeadWeights> reasoning_head = 0,
-    ::flatbuffers::Offset<GRIMTransformer::ExecutionBlockWeights> execution_block = 0) {
+    ::flatbuffers::Offset<GRIMTransformer::ExecutionBlockWeights> execution_block = 0,
+    ::flatbuffers::Offset<GRIMTransformer::NumberEncoderWeights> number_encoder = 0) {
   TransformerModelBuilder builder_(_fbb);
   builder_.add_last_modified_timestamp(last_modified_timestamp);
   builder_.add_creation_timestamp(creation_timestamp);
   builder_.add_checksum_xxhash64(checksum_xxhash64);
+  builder_.add_number_encoder(number_encoder);
   builder_.add_execution_block(execution_block);
   builder_.add_reasoning_head(reasoning_head);
   builder_.add_checksum_crc32(checksum_crc32);
@@ -2690,7 +2842,8 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModelDirect(
     uint64_t creation_timestamp = 0,
     uint64_t last_modified_timestamp = 0,
     ::flatbuffers::Offset<GRIMTransformer::ReasoningHeadWeights> reasoning_head = 0,
-    ::flatbuffers::Offset<GRIMTransformer::ExecutionBlockWeights> execution_block = 0) {
+    ::flatbuffers::Offset<GRIMTransformer::ExecutionBlockWeights> execution_block = 0,
+    ::flatbuffers::Offset<GRIMTransformer::NumberEncoderWeights> number_encoder = 0) {
   auto encoder_layers__ = encoder_layers ? _fbb.CreateVector<::flatbuffers::Offset<GRIMTransformer::EncoderLayerWeights>>(*encoder_layers) : 0;
   auto final_rms_gamma__ = final_rms_gamma ? _fbb.CreateVector<float>(*final_rms_gamma) : 0;
   return GRIMTransformer::CreateTransformerModel(
@@ -2709,23 +2862,11 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModelDirect(
       creation_timestamp,
       last_modified_timestamp,
       reasoning_head,
-      execution_block);
+      execution_block,
+      number_encoder);
 }
 
 ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(::flatbuffers::FlatBufferBuilder &_fbb, const TransformerModelT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
-
-
-inline bool operator==(const MatrixT &lhs, const MatrixT &rhs) {
-  return
-      (lhs.data == rhs.data) &&
-      (lhs.rows == rhs.rows) &&
-      (lhs.cols == rhs.cols);
-}
-
-inline bool operator!=(const MatrixT &lhs, const MatrixT &rhs) {
-    return !(lhs == rhs);
-}
-
 
 inline MatrixT *Matrix::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
   auto _o = std::unique_ptr<MatrixT>(new MatrixT());
@@ -2759,17 +2900,6 @@ inline ::flatbuffers::Offset<Matrix> CreateMatrix(::flatbuffers::FlatBufferBuild
       _cols);
 }
 
-
-inline bool operator==(const VectorT &lhs, const VectorT &rhs) {
-  return
-      (lhs.data == rhs.data);
-}
-
-inline bool operator!=(const VectorT &lhs, const VectorT &rhs) {
-    return !(lhs == rhs);
-}
-
-
 inline VectorT *Vector::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
   auto _o = std::unique_ptr<VectorT>(new VectorT());
   UnPackTo(_o.get(), _resolver);
@@ -2795,18 +2925,6 @@ inline ::flatbuffers::Offset<Vector> CreateVector(::flatbuffers::FlatBufferBuild
       _fbb,
       _data);
 }
-
-
-inline bool operator==(const RMSNormWeightsT &lhs, const RMSNormWeightsT &rhs) {
-  return
-      (lhs.gamma == rhs.gamma) &&
-      (lhs.epsilon == rhs.epsilon);
-}
-
-inline bool operator!=(const RMSNormWeightsT &lhs, const RMSNormWeightsT &rhs) {
-    return !(lhs == rhs);
-}
-
 
 inline RMSNormWeightsT *RMSNormWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
   auto _o = std::unique_ptr<RMSNormWeightsT>(new RMSNormWeightsT());
@@ -2836,32 +2954,6 @@ inline ::flatbuffers::Offset<RMSNormWeights> CreateRMSNormWeights(::flatbuffers:
       _gamma,
       _epsilon);
 }
-
-
-inline bool operator==(const AttentionWeightsT &lhs, const AttentionWeightsT &rhs) {
-  return
-      (lhs.w_qkv_data == rhs.w_qkv_data) &&
-      (lhs.b_qkv_data == rhs.b_qkv_data) &&
-      (lhs.w_q_data == rhs.w_q_data) &&
-      (lhs.b_q_data == rhs.b_q_data) &&
-      (lhs.w_k_data == rhs.w_k_data) &&
-      (lhs.b_k_data == rhs.b_k_data) &&
-      (lhs.w_v_data == rhs.w_v_data) &&
-      (lhs.b_v_data == rhs.b_v_data) &&
-      (lhs.w_o_data == rhs.w_o_data) &&
-      (lhs.b_o_data == rhs.b_o_data) &&
-      (lhs.alpha_q == rhs.alpha_q) &&
-      (lhs.alpha_k == rhs.alpha_k) &&
-      (lhs.d_model == rhs.d_model) &&
-      (lhs.num_heads == rhs.num_heads) &&
-      (lhs.num_kv_heads == rhs.num_kv_heads) &&
-      (lhs.fuse_qkv == rhs.fuse_qkv);
-}
-
-inline bool operator!=(const AttentionWeightsT &lhs, const AttentionWeightsT &rhs) {
-    return !(lhs == rhs);
-}
-
 
 inline AttentionWeightsT *AttentionWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
   auto _o = std::unique_ptr<AttentionWeightsT>(new AttentionWeightsT());
@@ -2934,23 +3026,6 @@ inline ::flatbuffers::Offset<AttentionWeights> CreateAttentionWeights(::flatbuff
       _fuse_qkv);
 }
 
-
-inline bool operator==(const FFNWeightsT &lhs, const FFNWeightsT &rhs) {
-  return
-      (lhs.w1_data == rhs.w1_data) &&
-      (lhs.b1_data == rhs.b1_data) &&
-      (lhs.w2_data == rhs.w2_data) &&
-      (lhs.b2_data == rhs.b2_data) &&
-      (lhs.d_model == rhs.d_model) &&
-      (lhs.d_ff == rhs.d_ff) &&
-      (lhs.w_gate_data == rhs.w_gate_data);
-}
-
-inline bool operator!=(const FFNWeightsT &lhs, const FFNWeightsT &rhs) {
-    return !(lhs == rhs);
-}
-
-
 inline FFNWeightsT *FFNWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
   auto _o = std::unique_ptr<FFNWeightsT>(new FFNWeightsT());
   UnPackTo(_o.get(), _resolver);
@@ -2994,25 +3069,6 @@ inline ::flatbuffers::Offset<FFNWeights> CreateFFNWeights(::flatbuffers::FlatBuf
       _d_ff,
       _w_gate_data);
 }
-
-
-inline bool operator==(const EncoderLayerWeightsT &lhs, const EncoderLayerWeightsT &rhs) {
-  return
-      ((lhs.attention == rhs.attention) || (lhs.attention && rhs.attention && *lhs.attention == *rhs.attention)) &&
-      ((lhs.ffn == rhs.ffn) || (lhs.ffn && rhs.ffn && *lhs.ffn == *rhs.ffn)) &&
-      ((lhs.rms1 == rhs.rms1) || (lhs.rms1 && rhs.rms1 && *lhs.rms1 == *rhs.rms1)) &&
-      ((lhs.rms2 == rhs.rms2) || (lhs.rms2 && rhs.rms2 && *lhs.rms2 == *rhs.rms2)) &&
-      (lhs.layer_scale1 == rhs.layer_scale1) &&
-      (lhs.layer_scale2 == rhs.layer_scale2) &&
-      ((lhs.rms_post_attn == rhs.rms_post_attn) || (lhs.rms_post_attn && rhs.rms_post_attn && *lhs.rms_post_attn == *rhs.rms_post_attn)) &&
-      ((lhs.rms_post_ffn == rhs.rms_post_ffn) || (lhs.rms_post_ffn && rhs.rms_post_ffn && *lhs.rms_post_ffn == *rhs.rms_post_ffn)) &&
-      (lhs.layer_id == rhs.layer_id);
-}
-
-inline bool operator!=(const EncoderLayerWeightsT &lhs, const EncoderLayerWeightsT &rhs) {
-    return !(lhs == rhs);
-}
-
 
 inline EncoderLayerWeightsT::EncoderLayerWeightsT(const EncoderLayerWeightsT &o)
       : attention((o.attention) ? new GRIMTransformer::AttentionWeightsT(*o.attention) : nullptr),
@@ -3089,21 +3145,6 @@ inline ::flatbuffers::Offset<EncoderLayerWeights> CreateEncoderLayerWeights(::fl
       _layer_id);
 }
 
-
-inline bool operator==(const EmbeddingWeightsT &lhs, const EmbeddingWeightsT &rhs) {
-  return
-      (lhs.token_embeddings == rhs.token_embeddings) &&
-      (lhs.positional_encodings == rhs.positional_encodings) &&
-      (lhs.vocab_size == rhs.vocab_size) &&
-      (lhs.d_model == rhs.d_model) &&
-      (lhs.max_seq_len == rhs.max_seq_len);
-}
-
-inline bool operator!=(const EmbeddingWeightsT &lhs, const EmbeddingWeightsT &rhs) {
-    return !(lhs == rhs);
-}
-
-
 inline EmbeddingWeightsT *EmbeddingWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
   auto _o = std::unique_ptr<EmbeddingWeightsT>(new EmbeddingWeightsT());
   UnPackTo(_o.get(), _resolver);
@@ -3141,22 +3182,6 @@ inline ::flatbuffers::Offset<EmbeddingWeights> CreateEmbeddingWeights(::flatbuff
       _d_model,
       _max_seq_len);
 }
-
-
-inline bool operator==(const LMHeadWeightsT &lhs, const LMHeadWeightsT &rhs) {
-  return
-      (lhs.projection_data == rhs.projection_data) &&
-      (lhs.bias_data == rhs.bias_data) &&
-      (lhs.d_model == rhs.d_model) &&
-      (lhs.vocab_size == rhs.vocab_size) &&
-      (lhs.tie_embeddings == rhs.tie_embeddings) &&
-      (lhs.use_bias == rhs.use_bias);
-}
-
-inline bool operator!=(const LMHeadWeightsT &lhs, const LMHeadWeightsT &rhs) {
-    return !(lhs == rhs);
-}
-
 
 inline LMHeadWeightsT *LMHeadWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
   auto _o = std::unique_ptr<LMHeadWeightsT>(new LMHeadWeightsT());
@@ -3199,20 +3224,6 @@ inline ::flatbuffers::Offset<LMHeadWeights> CreateLMHeadWeights(::flatbuffers::F
       _use_bias);
 }
 
-
-inline bool operator==(const NumericHeadWeightsT &lhs, const NumericHeadWeightsT &rhs) {
-  return
-      (lhs.projection_data == rhs.projection_data) &&
-      (lhs.bias_data == rhs.bias_data) &&
-      (lhs.d_model == rhs.d_model) &&
-      (lhs.use_bias == rhs.use_bias);
-}
-
-inline bool operator!=(const NumericHeadWeightsT &lhs, const NumericHeadWeightsT &rhs) {
-    return !(lhs == rhs);
-}
-
-
 inline NumericHeadWeightsT *NumericHeadWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
   auto _o = std::unique_ptr<NumericHeadWeightsT>(new NumericHeadWeightsT());
   UnPackTo(_o.get(), _resolver);
@@ -3247,22 +3258,6 @@ inline ::flatbuffers::Offset<NumericHeadWeights> CreateNumericHeadWeights(::flat
       _d_model,
       _use_bias);
 }
-
-
-inline bool operator==(const ReasoningHeadWeightsT &lhs, const ReasoningHeadWeightsT &rhs) {
-  return
-      (lhs.w_op_data == rhs.w_op_data) &&
-      (lhs.b_op_data == rhs.b_op_data) &&
-      (lhs.w_arg1_data == rhs.w_arg1_data) &&
-      (lhs.w_arg2_data == rhs.w_arg2_data) &&
-      (lhs.num_ops == rhs.num_ops) &&
-      (lhs.d_total == rhs.d_total);
-}
-
-inline bool operator!=(const ReasoningHeadWeightsT &lhs, const ReasoningHeadWeightsT &rhs) {
-    return !(lhs == rhs);
-}
-
 
 inline ReasoningHeadWeightsT *ReasoningHeadWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
   auto _o = std::unique_ptr<ReasoningHeadWeightsT>(new ReasoningHeadWeightsT());
@@ -3304,46 +3299,6 @@ inline ::flatbuffers::Offset<ReasoningHeadWeights> CreateReasoningHeadWeights(::
       _num_ops,
       _d_total);
 }
-
-
-inline bool operator==(const ExecutionBlockWeightsT &lhs, const ExecutionBlockWeightsT &rhs) {
-  return
-      (lhs.w_decode_1_data == rhs.w_decode_1_data) &&
-      (lhs.b_decode_1_data == rhs.b_decode_1_data) &&
-      (lhs.w_decode_2_data == rhs.w_decode_2_data) &&
-      (lhs.w_arg1_select_data == rhs.w_arg1_select_data) &&
-      (lhs.w_arg2_select_data == rhs.w_arg2_select_data) &&
-      (lhs.w_op_select_data == rhs.w_op_select_data) &&
-      (lhs.w_key_proj_data == rhs.w_key_proj_data) &&
-      (lhs.w_write_query_data == rhs.w_write_query_data) &&
-      (lhs.w_write_key_data == rhs.w_write_key_data) &&
-      (lhs.alpha_data == rhs.alpha_data) &&
-      (lhs.beta_data == rhs.beta_data) &&
-      (lhs.step_embeddings_data == rhs.step_embeddings_data) &&
-      (lhs.type_num_embed_data == rhs.type_num_embed_data) &&
-      (lhs.w_value_to_emb_data == rhs.w_value_to_emb_data) &&
-      (lhs.b_value_to_emb_data == rhs.b_value_to_emb_data) &&
-      (lhs.w_inject_gate_data == rhs.w_inject_gate_data) &&
-      (lhs.w_q_read_data == rhs.w_q_read_data) &&
-      (lhs.w_k_read_data == rhs.w_k_read_data) &&
-      (lhs.w_v_read_data == rhs.w_v_read_data) &&
-      (lhs.w_o_read_data == rhs.w_o_read_data) &&
-      (lhs.w_gate_read_data == rhs.w_gate_read_data) &&
-      (lhs.tau_data == rhs.tau_data) &&
-      (lhs.e_slot_data == rhs.e_slot_data) &&
-      (lhs.e_op_data == rhs.e_op_data) &&
-      (lhs.w_scal_data == rhs.w_scal_data) &&
-      (lhs.b_scal_data == rhs.b_scal_data) &&
-      (lhs.w_trace_data == rhs.w_trace_data) &&
-      (lhs.b_trace_data == rhs.b_trace_data) &&
-      (lhs.w_reason_gate_data == rhs.w_reason_gate_data) &&
-      (lhs.w_trace_gate_data == rhs.w_trace_gate_data);
-}
-
-inline bool operator!=(const ExecutionBlockWeightsT &lhs, const ExecutionBlockWeightsT &rhs) {
-    return !(lhs == rhs);
-}
-
 
 inline ExecutionBlockWeightsT *ExecutionBlockWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
   auto _o = std::unique_ptr<ExecutionBlockWeightsT>(new ExecutionBlockWeightsT());
@@ -3458,31 +3413,52 @@ inline ::flatbuffers::Offset<ExecutionBlockWeights> CreateExecutionBlockWeights(
       _w_trace_gate_data);
 }
 
-
-inline bool operator==(const ModelConfigT &lhs, const ModelConfigT &rhs) {
-  return
-      (lhs.vocab_size == rhs.vocab_size) &&
-      (lhs.d_model == rhs.d_model) &&
-      (lhs.num_layers == rhs.num_layers) &&
-      (lhs.num_heads == rhs.num_heads) &&
-      (lhs.num_kv_heads == rhs.num_kv_heads) &&
-      (lhs.d_ff == rhs.d_ff) &&
-      (lhs.max_seq_len == rhs.max_seq_len) &&
-      (lhs.dropout_rate == rhs.dropout_rate) &&
-      (lhs.attention_dropout == rhs.attention_dropout) &&
-      (lhs.positional_encoding == rhs.positional_encoding) &&
-      (lhs.use_alibi == rhs.use_alibi) &&
-      (lhs.causal_mask == rhs.causal_mask) &&
-      (lhs.use_pre_norm == rhs.use_pre_norm) &&
-      (lhs.fuse_qkv == rhs.fuse_qkv) &&
-      (lhs.tie_embeddings == rhs.tie_embeddings) &&
-      (lhs.use_bias == rhs.use_bias);
+inline NumberEncoderWeightsT *NumberEncoderWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
+  auto _o = std::unique_ptr<NumberEncoderWeightsT>(new NumberEncoderWeightsT());
+  UnPackTo(_o.get(), _resolver);
+  return _o.release();
 }
 
-inline bool operator!=(const ModelConfigT &lhs, const ModelConfigT &rhs) {
-    return !(lhs == rhs);
+inline void NumberEncoderWeights::UnPackTo(NumberEncoderWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
+  (void)_o;
+  (void)_resolver;
+  { auto _e = digit_emb_data(); if (_e) { _o->digit_emb_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->digit_emb_data[_i] = _e->Get(_i); } } else { _o->digit_emb_data.resize(0); } }
+  { auto _e = pow10_emb_data(); if (_e) { _o->pow10_emb_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->pow10_emb_data[_i] = _e->Get(_i); } } else { _o->pow10_emb_data.resize(0); } }
+  { auto _e = w_c1_data(); if (_e) { _o->w_c1_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_c1_data[_i] = _e->Get(_i); } } else { _o->w_c1_data.resize(0); } }
+  { auto _e = b_c1_data(); if (_e) { _o->b_c1_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->b_c1_data[_i] = _e->Get(_i); } } else { _o->b_c1_data.resize(0); } }
+  { auto _e = w_c2_data(); if (_e) { _o->w_c2_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_c2_data[_i] = _e->Get(_i); } } else { _o->w_c2_data.resize(0); } }
+  { auto _e = w_g1_data(); if (_e) { _o->w_g1_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_g1_data[_i] = _e->Get(_i); } } else { _o->w_g1_data.resize(0); } }
+  { auto _e = b_g1_data(); if (_e) { _o->b_g1_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->b_g1_data[_i] = _e->Get(_i); } } else { _o->b_g1_data.resize(0); } }
+  { auto _e = w_g2_data(); if (_e) { _o->w_g2_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_g2_data[_i] = _e->Get(_i); } } else { _o->w_g2_data.resize(0); } }
 }
 
+inline ::flatbuffers::Offset<NumberEncoderWeights> NumberEncoderWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const NumberEncoderWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateNumberEncoderWeights(_fbb, _o, _rehasher);
+}
+
+inline ::flatbuffers::Offset<NumberEncoderWeights> CreateNumberEncoderWeights(::flatbuffers::FlatBufferBuilder &_fbb, const NumberEncoderWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  (void)_rehasher;
+  (void)_o;
+  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const NumberEncoderWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
+  auto _digit_emb_data = _o->digit_emb_data.size() ? _fbb.CreateVector(_o->digit_emb_data) : 0;
+  auto _pow10_emb_data = _o->pow10_emb_data.size() ? _fbb.CreateVector(_o->pow10_emb_data) : 0;
+  auto _w_c1_data = _o->w_c1_data.size() ? _fbb.CreateVector(_o->w_c1_data) : 0;
+  auto _b_c1_data = _o->b_c1_data.size() ? _fbb.CreateVector(_o->b_c1_data) : 0;
+  auto _w_c2_data = _o->w_c2_data.size() ? _fbb.CreateVector(_o->w_c2_data) : 0;
+  auto _w_g1_data = _o->w_g1_data.size() ? _fbb.CreateVector(_o->w_g1_data) : 0;
+  auto _b_g1_data = _o->b_g1_data.size() ? _fbb.CreateVector(_o->b_g1_data) : 0;
+  auto _w_g2_data = _o->w_g2_data.size() ? _fbb.CreateVector(_o->w_g2_data) : 0;
+  return GRIMTransformer::CreateNumberEncoderWeights(
+      _fbb,
+      _digit_emb_data,
+      _pow10_emb_data,
+      _w_c1_data,
+      _b_c1_data,
+      _w_c2_data,
+      _w_g1_data,
+      _b_g1_data,
+      _w_g2_data);
+}
 
 inline ModelConfigT *ModelConfig::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
   auto _o = std::unique_ptr<ModelConfigT>(new ModelConfigT());
@@ -3555,18 +3531,6 @@ inline ::flatbuffers::Offset<ModelConfig> CreateModelConfig(::flatbuffers::FlatB
       _use_bias);
 }
 
-
-inline bool operator==(const LossWeightingWeightsT &lhs, const LossWeightingWeightsT &rhs) {
-  return
-      (lhs.log_var_text == rhs.log_var_text) &&
-      (lhs.log_var_numeric == rhs.log_var_numeric);
-}
-
-inline bool operator!=(const LossWeightingWeightsT &lhs, const LossWeightingWeightsT &rhs) {
-    return !(lhs == rhs);
-}
-
-
 inline LossWeightingWeightsT *LossWeightingWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
   auto _o = std::unique_ptr<LossWeightingWeightsT>(new LossWeightingWeightsT());
   UnPackTo(_o.get(), _resolver);
@@ -3595,28 +3559,6 @@ inline ::flatbuffers::Offset<LossWeightingWeights> CreateLossWeightingWeights(::
       _log_var_text,
       _log_var_numeric);
 }
-
-
-inline bool operator==(const TrainingMetadataT &lhs, const TrainingMetadataT &rhs) {
-  return
-      (lhs.optimizer == rhs.optimizer) &&
-      (lhs.learning_rate == rhs.learning_rate) &&
-      (lhs.batch_size == rhs.batch_size) &&
-      (lhs.num_epochs == rhs.num_epochs) &&
-      (lhs.training_steps == rhs.training_steps) &&
-      (lhs.final_train_loss == rhs.final_train_loss) &&
-      (lhs.final_val_loss == rhs.final_val_loss) &&
-      (lhs.best_val_loss == rhs.best_val_loss) &&
-      (lhs.gradient_norm == rhs.gradient_norm) &&
-      (lhs.timestamp == rhs.timestamp) &&
-      (lhs.training_duration_seconds == rhs.training_duration_seconds) &&
-      (lhs.model_name == rhs.model_name);
-}
-
-inline bool operator!=(const TrainingMetadataT &lhs, const TrainingMetadataT &rhs) {
-    return !(lhs == rhs);
-}
-
 
 inline TrainingMetadataT *TrainingMetadata::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
   auto _o = std::unique_ptr<TrainingMetadataT>(new TrainingMetadataT());
@@ -3677,31 +3619,6 @@ inline ::flatbuffers::Offset<TrainingMetadata> CreateTrainingMetadata(::flatbuff
       _model_name);
 }
 
-
-inline bool operator==(const TransformerModelT &lhs, const TransformerModelT &rhs) {
-  return
-      (lhs.version == rhs.version) &&
-      ((lhs.config == rhs.config) || (lhs.config && rhs.config && *lhs.config == *rhs.config)) &&
-      ((lhs.embeddings == rhs.embeddings) || (lhs.embeddings && rhs.embeddings && *lhs.embeddings == *rhs.embeddings)) &&
-      (lhs.encoder_layers.size() == rhs.encoder_layers.size() && std::equal(lhs.encoder_layers.cbegin(), lhs.encoder_layers.cend(), rhs.encoder_layers.cbegin(), [](std::unique_ptr<GRIMTransformer::EncoderLayerWeightsT> const &a, std::unique_ptr<GRIMTransformer::EncoderLayerWeightsT> const &b) { return (a == b) || (a && b && *a == *b); })) &&
-      ((lhs.lm_head == rhs.lm_head) || (lhs.lm_head && rhs.lm_head && *lhs.lm_head == *rhs.lm_head)) &&
-      ((lhs.numeric_head == rhs.numeric_head) || (lhs.numeric_head && rhs.numeric_head && *lhs.numeric_head == *rhs.numeric_head)) &&
-      (lhs.final_rms_gamma == rhs.final_rms_gamma) &&
-      ((lhs.loss_weighting == rhs.loss_weighting) || (lhs.loss_weighting && rhs.loss_weighting && *lhs.loss_weighting == *rhs.loss_weighting)) &&
-      ((lhs.training_metadata == rhs.training_metadata) || (lhs.training_metadata && rhs.training_metadata && *lhs.training_metadata == *rhs.training_metadata)) &&
-      (lhs.checksum_crc32 == rhs.checksum_crc32) &&
-      (lhs.checksum_xxhash64 == rhs.checksum_xxhash64) &&
-      (lhs.creation_timestamp == rhs.creation_timestamp) &&
-      (lhs.last_modified_timestamp == rhs.last_modified_timestamp) &&
-      ((lhs.reasoning_head == rhs.reasoning_head) || (lhs.reasoning_head && rhs.reasoning_head && *lhs.reasoning_head == *rhs.reasoning_head)) &&
-      ((lhs.execution_block == rhs.execution_block) || (lhs.execution_block && rhs.execution_block && *lhs.execution_block == *rhs.execution_block));
-}
-
-inline bool operator!=(const TransformerModelT &lhs, const TransformerModelT &rhs) {
-    return !(lhs == rhs);
-}
-
-
 inline TransformerModelT::TransformerModelT(const TransformerModelT &o)
       : version(o.version),
         config((o.config) ? new GRIMTransformer::ModelConfigT(*o.config) : nullptr),
@@ -3716,7 +3633,8 @@ inline TransformerModelT::TransformerModelT(const TransformerModelT &o)
         creation_timestamp(o.creation_timestamp),
         last_modified_timestamp(o.last_modified_timestamp),
         reasoning_head((o.reasoning_head) ? new GRIMTransformer::ReasoningHeadWeightsT(*o.reasoning_head) : nullptr),
-        execution_block((o.execution_block) ? new GRIMTransformer::ExecutionBlockWeightsT(*o.execution_block) : nullptr) {
+        execution_block((o.execution_block) ? new GRIMTransformer::ExecutionBlockWeightsT(*o.execution_block) : nullptr),
+        number_encoder((o.number_encoder) ? new GRIMTransformer::NumberEncoderWeightsT(*o.number_encoder) : nullptr) {
   encoder_layers.reserve(o.encoder_layers.size());
   for (const auto &encoder_layers_ : o.encoder_layers) { encoder_layers.emplace_back((encoder_layers_) ? new GRIMTransformer::EncoderLayerWeightsT(*encoder_layers_) : nullptr); }
 }
@@ -3737,6 +3655,7 @@ inline TransformerModelT &TransformerModelT::operator=(TransformerModelT o) FLAT
   std::swap(last_modified_timestamp, o.last_modified_timestamp);
   std::swap(reasoning_head, o.reasoning_head);
   std::swap(execution_block, o.execution_block);
+  std::swap(number_encoder, o.number_encoder);
   return *this;
 }
 
@@ -3764,6 +3683,7 @@ inline void TransformerModel::UnPackTo(TransformerModelT *_o, const ::flatbuffer
   { auto _e = last_modified_timestamp(); _o->last_modified_timestamp = _e; }
   { auto _e = reasoning_head(); if (_e) { if(_o->reasoning_head) { _e->UnPackTo(_o->reasoning_head.get(), _resolver); } else { _o->reasoning_head = std::unique_ptr<GRIMTransformer::ReasoningHeadWeightsT>(_e->UnPack(_resolver)); } } else if (_o->reasoning_head) { _o->reasoning_head.reset(); } }
   { auto _e = execution_block(); if (_e) { if(_o->execution_block) { _e->UnPackTo(_o->execution_block.get(), _resolver); } else { _o->execution_block = std::unique_ptr<GRIMTransformer::ExecutionBlockWeightsT>(_e->UnPack(_resolver)); } } else if (_o->execution_block) { _o->execution_block.reset(); } }
+  { auto _e = number_encoder(); if (_e) { if(_o->number_encoder) { _e->UnPackTo(_o->number_encoder.get(), _resolver); } else { _o->number_encoder = std::unique_ptr<GRIMTransformer::NumberEncoderWeightsT>(_e->UnPack(_resolver)); } } else if (_o->number_encoder) { _o->number_encoder.reset(); } }
 }
 
 inline ::flatbuffers::Offset<TransformerModel> TransformerModel::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const TransformerModelT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
@@ -3789,6 +3709,7 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(::flatbuff
   auto _last_modified_timestamp = _o->last_modified_timestamp;
   auto _reasoning_head = _o->reasoning_head ? CreateReasoningHeadWeights(_fbb, _o->reasoning_head.get(), _rehasher) : 0;
   auto _execution_block = _o->execution_block ? CreateExecutionBlockWeights(_fbb, _o->execution_block.get(), _rehasher) : 0;
+  auto _number_encoder = _o->number_encoder ? CreateNumberEncoderWeights(_fbb, _o->number_encoder.get(), _rehasher) : 0;
   return GRIMTransformer::CreateTransformerModel(
       _fbb,
       _version,
@@ -3805,7 +3726,8 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(::flatbuff
       _creation_timestamp,
       _last_modified_timestamp,
       _reasoning_head,
-      _execution_block);
+      _execution_block,
+      _number_encoder);
 }
 
 inline const GRIMTransformer::TransformerModel *GetTransformerModel(const void *buf) {

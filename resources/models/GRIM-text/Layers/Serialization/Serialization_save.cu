@@ -281,6 +281,23 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         cfg.tie_embeddings,
         cfg.use_bias && lm_head_view.bias.ptr != nullptr);
 
+    flatbuffers::Offset<GRIMTransformer::NumberEncoderWeights> fb_number_encoder = 0;
+    const auto& ne_view = request.sources.number_encoder;
+    if (ne_view.enabled && ne_view.digit_emb.ptr) {
+        auto dl = [&](const DeviceReadView& v, const char* n) { return download_device_vector(v, n); };
+        fb_number_encoder = GRIMTransformer::CreateNumberEncoderWeights(
+            builder,
+            builder.CreateVector(dl(ne_view.digit_emb, "NE digit_emb")),
+            builder.CreateVector(dl(ne_view.pow10_emb, "NE pow10_emb")),
+            builder.CreateVector(dl(ne_view.W_c1, "NE W_c1")),
+            builder.CreateVector(dl(ne_view.b_c1, "NE b_c1")),
+            builder.CreateVector(dl(ne_view.W_c2, "NE W_c2")),
+            builder.CreateVector(dl(ne_view.W_g1, "NE W_g1")),
+            builder.CreateVector(dl(ne_view.b_g1, "NE b_g1")),
+            builder.CreateVector(dl(ne_view.W_g2, "NE W_g2")));
+        Logging::EmitModuleInfo(kLogModule, "[save] NumberEncoder weights serialized");
+    }
+
     flatbuffers::Offset<GRIMTransformer::ExecutionBlockWeights> fb_execution_block = 0;
     const auto& eb_view = request.sources.execution_block;
     if (eb_view.enabled && eb_view.w_decode_1.ptr) {
@@ -360,7 +377,8 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         static_cast<uint64_t>(0),
         timestamp, timestamp,
         fb_reasoning_head,
-        fb_execution_block);
+        fb_execution_block,
+        fb_number_encoder);
 
     builder.Finish(fb_model, "GRMT");
 
@@ -440,6 +458,7 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
 
                 verify_component("lm_head", raw->lm_head());
                 verify_component("training_metadata", raw->training_metadata());
+                verify_component("number_encoder", raw->number_encoder());
                 verify_component("execution_block", raw->execution_block());
 
                 // Vector fields

@@ -159,4 +159,27 @@ struct SerializationExecutionBlockWriteView {
 	DeviceWriteView W_trace_gate;
 };
 
+struct SerializationNumberEncoderReadView {
+	DeviceReadView digit_emb;
+	DeviceReadView pow10_emb;
+	DeviceReadView W_c1;
+	DeviceReadView b_c1;
+	DeviceReadView W_c2;
+	DeviceReadView W_g1;
+	DeviceReadView b_g1;
+	DeviceReadView W_g2;
+	bool enabled = false;
+};
+
+struct SerializationNumberEncoderWriteView {
+	DeviceWriteView digit_emb;
+	DeviceWriteView pow10_emb;
+	DeviceWriteView W_c1;
+	DeviceWriteView b_c1;
+	DeviceWriteView W_c2;
+	DeviceWriteView W_g1;
+	DeviceWriteView b_g1;
+	DeviceWriteView W_g2;
+};
+
 } // namespace GRIM

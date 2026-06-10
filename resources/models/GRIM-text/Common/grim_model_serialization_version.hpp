@@ -19,7 +19,8 @@ namespace GRIM {
 //   v10: Current GRIM-text checkpoint contract before per-channel LayerScale
 //   v11: LayerScale weights are per-channel gamma vectors [d_model], not one scalar
 //   v12: Removed ScratchBlock text-feature projection from the checkpoint schema
-inline constexpr std::uint32_t GRIM_MODEL_VERSION = 12;
+//   v13: Added NumberEncoder checkpoint weights
+inline constexpr std::uint32_t GRIM_MODEL_VERSION = 13;
 
 // GRMT training tensor stream may advance without bumping checkpoint MODEL_VERSION.
 // v10: After per-token atom length-prefixed strings, append int32 token_exec_slots[len]

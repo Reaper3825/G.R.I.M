@@ -178,6 +178,43 @@ bool validate_checkpoint_capabilities(
         }
     }
 
+    // ─── NumberEncoder ───
+    if (req.requires_number_encoder) {
+        const auto* fb_ne = model_fb->number_encoder();
+        if (!fb_ne) {
+            Logging::EmitModuleError(kLogModule, "[load] FATAL: NumberEncoder required but missing in checkpoint");
+            return false;
+        }
+        auto ne_field = [&](const flatbuffers::Vector<float>* src, const DeviceWriteView& dst, const char* name) -> bool {
+            if (!src) {
+                Logging::EmitModuleError(kLogModule, Msg("[load] FATAL: missing required NumberEncoder field: ", name));
+                return false;
+            }
+            if (!dst.ptr) {
+                Logging::EmitModuleError(kLogModule, Msg("[load] FATAL: null model destination for NumberEncoder field: ", name));
+                return false;
+            }
+            if (static_cast<std::size_t>(src->size()) != dst.count) {
+                Logging::EmitModuleError(kLogModule,
+                    Msg("[load] FATAL: NumberEncoder field ", name, " size mismatch: checkpoint=",
+                        src->size(), " model_numel=", dst.count));
+                return false;
+            }
+            return true;
+        };
+        const auto& ne = load_req.number_encoder;
+        ok = true;
+        ok = ok && ne_field(fb_ne->digit_emb_data(), ne.digit_emb, "digit_emb");
+        ok = ok && ne_field(fb_ne->pow10_emb_data(), ne.pow10_emb, "pow10_emb");
+        ok = ok && ne_field(fb_ne->w_c1_data(), ne.W_c1, "W_c1");
+        ok = ok && ne_field(fb_ne->b_c1_data(), ne.b_c1, "b_c1");
+        ok = ok && ne_field(fb_ne->w_c2_data(), ne.W_c2, "W_c2");
+        ok = ok && ne_field(fb_ne->w_g1_data(), ne.W_g1, "W_g1");
+        ok = ok && ne_field(fb_ne->b_g1_data(), ne.b_g1, "b_g1");
+        ok = ok && ne_field(fb_ne->w_g2_data(), ne.W_g2, "W_g2");
+        if (!ok) return false;
+    }
+
     // ─── ExecutionBlock ───
     if (req.requires_execution_block) {
         const auto* fb_eb = model_fb->execution_block();

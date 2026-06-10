@@ -136,6 +136,17 @@ table ExecutionBlockWeights {
   w_trace_gate_data: [float];
 }
 
+table NumberEncoderWeights {
+  digit_emb_data: [float];
+  pow10_emb_data: [float];
+  w_c1_data: [float];
+  b_c1_data: [float];
+  w_c2_data: [float];
+  w_g1_data: [float];
+  b_g1_data: [float];
+  w_g2_data: [float];
+}
+
 table ModelConfig {
   vocab_size: uint32;
   d_model: uint32;
@@ -191,6 +202,7 @@ table TransformerModel {
   last_modified_timestamp: uint64;
   reasoning_head: ReasoningHeadWeights;
   execution_block: ExecutionBlockWeights;
+  number_encoder: NumberEncoderWeights;
 }
 
 root_type TransformerModel;

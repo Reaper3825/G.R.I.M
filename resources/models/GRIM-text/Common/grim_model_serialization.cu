@@ -128,19 +128,9 @@ bool saveLanguageModelCheckpoint(
         : 0;
     auto* embedding_parameters = parameter_registry.getEmbeddingParameters();
     auto* lm_head_parameters = parameter_registry.getLmHeadParameters();
+    auto* number_encoder_parameters = parameter_registry.getNumberEncoderParameters();
     auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
     auto* gpu_encoder_owner = gpu_model_state.gpu_encoder.get();
-
-    // TRANSITIONAL (docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md, Workstream 2):
-    // NumberEncoder weights have no FlatBuffer table yet. Refuse to write a
-    // checkpoint that would silently drop trainable parameters — a resumed run
-    // would train from re-randomized numeric-meaning weights without warning.
-    if (parameter_registry.getNumberEncoderParameters()) {
-        throw std::runtime_error(
-            "saveLanguageModelCheckpoint: NumberEncoder parameters exist but checkpoint "
-            "serialization for them is not implemented (FlatBuffer schema bump pending). "
-            "Disable number_encoder_enabled or add the schema table before checkpointing.");
-    }
     EmitModuleInfo(ModuleId::Checkpoint, "Request initialized with version " + std::to_string(GRIM_MODEL_VERSION));
 
     EmitModuleInfo(ModuleId::Checkpoint, "Processing embeddings");
@@ -212,6 +202,23 @@ bool saveLanguageModelCheckpoint(
     request.sources.lm_head.has_bias = (lm_head_parameters->bias.data != nullptr);
     request.sources.lm_head.bias.ptr = lm_head_parameters->bias.data;
     request.sources.lm_head.bias.count = lm_head_parameters->bias.data ? static_cast<std::size_t>(vocab_size) : 0;
+
+    if (number_encoder_parameters) {
+        auto assignReadTensor = [](DeviceReadView& v, const Tensor& t) {
+            v.ptr = t.data;
+            v.count = static_cast<std::size_t>(t.numel());
+        };
+        request.sources.number_encoder.enabled = true;
+        assignReadTensor(request.sources.number_encoder.digit_emb, number_encoder_parameters->digit_emb);
+        assignReadTensor(request.sources.number_encoder.pow10_emb, number_encoder_parameters->pow10_emb);
+        assignReadTensor(request.sources.number_encoder.W_c1, number_encoder_parameters->W_c1);
+        assignReadTensor(request.sources.number_encoder.b_c1, number_encoder_parameters->b_c1);
+        assignReadTensor(request.sources.number_encoder.W_c2, number_encoder_parameters->W_c2);
+        assignReadTensor(request.sources.number_encoder.W_g1, number_encoder_parameters->W_g1);
+        assignReadTensor(request.sources.number_encoder.b_g1, number_encoder_parameters->b_g1);
+        assignReadTensor(request.sources.number_encoder.W_g2, number_encoder_parameters->W_g2);
+        EmitModuleInfo(ModuleId::Checkpoint, "Processing NumberEncoder weights for FlatBuffer serialization");
+    }
 
     // ExecutionBlock v2 weights — serialized via FlatBuffer
     if (execution_block_parameters) {
@@ -371,18 +378,8 @@ bool loadLanguageModelCheckpoint(
         : 0;
     auto* embedding_parameters = parameter_registry.getEmbeddingParameters();
     auto* lm_head_parameters = parameter_registry.getLmHeadParameters();
+    auto* number_encoder_parameters = parameter_registry.getNumberEncoderParameters();
     auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
-
-    // TRANSITIONAL (docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md, Workstream 2):
-    // NumberEncoder weights have no FlatBuffer table yet, so no checkpoint can
-    // contain them. Loading into a model that allocated NumberEncoder tensors
-    // would silently leave them at init values — fail loud instead.
-    if (parameter_registry.getNumberEncoderParameters()) {
-        throw std::runtime_error(
-            "loadLanguageModelCheckpoint: NumberEncoder parameters exist but checkpoint "
-            "serialization for them is not implemented (FlatBuffer schema bump pending). "
-            "Disable number_encoder_enabled or add the schema table before resuming.");
-    }
 
     if (!training_state.initialized) {
         EmitModuleError(ModuleId::Checkpoint,
@@ -401,6 +398,7 @@ bool loadLanguageModelCheckpoint(
     }
 
     // Pattern B: call site is the sole authority for what the model requires.
+    request.capabilities.requires_number_encoder = (number_encoder_parameters != nullptr);
     request.capabilities.requires_execution_block = (execution_block_parameters != nullptr);
     request.capabilities.requires_final_rms_gamma = (lm_head_parameters != nullptr
                                                       && lm_head_parameters->final_rms_gamma.data != nullptr
@@ -464,6 +462,33 @@ bool loadLanguageModelCheckpoint(
                     static_cast<std::size_t>(vocab_size));
     }
     request.lm_head.expect_bias = use_bias;
+
+    if (number_encoder_parameters) {
+        assignWrite(request.number_encoder.digit_emb,
+                    number_encoder_parameters->digit_emb.data,
+                    static_cast<std::size_t>(number_encoder_parameters->digit_emb.numel()));
+        assignWrite(request.number_encoder.pow10_emb,
+                    number_encoder_parameters->pow10_emb.data,
+                    static_cast<std::size_t>(number_encoder_parameters->pow10_emb.numel()));
+        assignWrite(request.number_encoder.W_c1,
+                    number_encoder_parameters->W_c1.data,
+                    static_cast<std::size_t>(number_encoder_parameters->W_c1.numel()));
+        assignWrite(request.number_encoder.b_c1,
+                    number_encoder_parameters->b_c1.data,
+                    static_cast<std::size_t>(number_encoder_parameters->b_c1.numel()));
+        assignWrite(request.number_encoder.W_c2,
+                    number_encoder_parameters->W_c2.data,
+                    static_cast<std::size_t>(number_encoder_parameters->W_c2.numel()));
+        assignWrite(request.number_encoder.W_g1,
+                    number_encoder_parameters->W_g1.data,
+                    static_cast<std::size_t>(number_encoder_parameters->W_g1.numel()));
+        assignWrite(request.number_encoder.b_g1,
+                    number_encoder_parameters->b_g1.data,
+                    static_cast<std::size_t>(number_encoder_parameters->b_g1.numel()));
+        assignWrite(request.number_encoder.W_g2,
+                    number_encoder_parameters->W_g2.data,
+                    static_cast<std::size_t>(number_encoder_parameters->W_g2.numel()));
+    }
 
     // ExecutionBlock v2 weight destinations — loaded via FlatBuffer
     if (execution_block_parameters) {
@@ -530,7 +555,8 @@ bool loadLanguageModelCheckpoint(
         }
         {
             std::ostringstream oss;
-            oss << "[load]   capabilities: exec_block=" << request.capabilities.requires_execution_block
+            oss << "[load]   capabilities: number_encoder=" << request.capabilities.requires_number_encoder
+                << " exec_block=" << request.capabilities.requires_execution_block
                 << " final_rms=" << request.capabilities.requires_final_rms_gamma;
             EmitModuleError(ModuleId::Checkpoint, oss.str());
         }
@@ -538,6 +564,7 @@ bool loadLanguageModelCheckpoint(
             std::ostringstream oss;
                 oss << "[load]   registry pointers: embedding=" << (embedding_parameters ? "OK" : "NULL")
                 << " lm_head_params=" << (lm_head_parameters ? "OK" : "NULL")
+                << " number_encoder=" << (number_encoder_parameters ? "OK" : "NULL")
                 << " exec_block=" << (execution_block_parameters ? "OK" : "NULL");
             EmitModuleError(ModuleId::Checkpoint, oss.str());
         }
@@ -545,6 +572,8 @@ bool loadLanguageModelCheckpoint(
             std::ostringstream oss;
             oss << "[load]   GPU destinations: token_emb=" << (request.gpu_embedding.token_embeddings.ptr ? "set" : "NULL")
                 << "(" << request.gpu_embedding.token_embeddings.count << ")"
+                << " ne_digit_emb=" << (request.number_encoder.digit_emb.ptr ? "set" : "NULL")
+                << "(" << request.number_encoder.digit_emb.count << ")"
                 << " final_rms_gamma=" << (request.final_rms_gamma.ptr ? "set" : "SKIP(frozen)")
                 << " lm_proj=" << (request.lm_head.projection.ptr ? "set" : "NULL")
                 << "(" << request.lm_head.projection.count << ")"
