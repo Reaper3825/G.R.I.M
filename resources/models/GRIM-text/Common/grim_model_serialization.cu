@@ -129,7 +129,6 @@ bool saveLanguageModelCheckpoint(
     auto* embedding_parameters = parameter_registry.getEmbeddingParameters();
     auto* lm_head_parameters = parameter_registry.getLmHeadParameters();
     auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
-    auto* decode_time_slot_selector = parameter_registry.getDecodeTimeSlotSelector();
     auto* gpu_encoder_owner = gpu_model_state.gpu_encoder.get();
     EmitModuleInfo(ModuleId::Checkpoint, "Request initialized with version " + std::to_string(GRIM_MODEL_VERSION));
 
@@ -241,20 +240,6 @@ bool saveLanguageModelCheckpoint(
         assignRead(request.sources.execution_block.W_reason_gate, execution_block_parameters->W_reason_gate);
         assignRead(request.sources.execution_block.W_trace_gate, execution_block_parameters->W_trace_gate);
         EmitModuleInfo(ModuleId::Checkpoint, "Processing ExecutionBlock v2 weights for FlatBuffer serialization");
-    }
-
-    // DecodeTimeSlotSelector weights — serialized via FlatBuffer
-    if (decode_time_slot_selector) {
-        auto assignRead = [](DeviceReadView& v, const Tensor& t) {
-            v.ptr = t.data;
-            v.count = static_cast<std::size_t>(t.numel());
-        };
-        request.sources.slot_selector.enabled = true;
-        assignRead(request.sources.slot_selector.w_q_select, decode_time_slot_selector->W_q_select);
-        assignRead(request.sources.slot_selector.w_k_select, decode_time_slot_selector->W_k_select);
-        assignRead(request.sources.slot_selector.null_key_select, decode_time_slot_selector->null_key_select);
-        assignRead(request.sources.slot_selector.null_logit_bias, decode_time_slot_selector->null_logit_bias);
-        EmitModuleInfo(ModuleId::Checkpoint, "Processing SlotSelector weights for FlatBuffer serialization");
     }
 
     // Issue #33: Final RMSNorm gamma (normalizes encoder output before LM head)
@@ -376,7 +361,6 @@ bool loadLanguageModelCheckpoint(
     auto* embedding_parameters = parameter_registry.getEmbeddingParameters();
     auto* lm_head_parameters = parameter_registry.getLmHeadParameters();
     auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
-    auto* decode_time_slot_selector = parameter_registry.getDecodeTimeSlotSelector();
 
     if (!training_state.initialized) {
         EmitModuleError(ModuleId::Checkpoint,
@@ -396,7 +380,6 @@ bool loadLanguageModelCheckpoint(
 
     // Pattern B: call site is the sole authority for what the model requires.
     request.capabilities.requires_execution_block = (execution_block_parameters != nullptr);
-    request.capabilities.requires_slot_selector     = (decode_time_slot_selector != nullptr);
     request.capabilities.requires_final_rms_gamma = (lm_head_parameters != nullptr
                                                       && lm_head_parameters->final_rms_gamma.data != nullptr
                                                       && !freeze_learned_rms_gammas);
@@ -494,14 +477,6 @@ bool loadLanguageModelCheckpoint(
         assignWrite(request.execution_block.W_trace_gate, execution_block_parameters->W_trace_gate.data, static_cast<std::size_t>(execution_block_parameters->W_trace_gate.numel()));
     }
 
-    // DecodeTimeSlotSelector weight destinations — loaded via FlatBuffer
-    if (decode_time_slot_selector) {
-        assignWrite(request.slot_selector.w_q_select, decode_time_slot_selector->W_q_select.data, static_cast<std::size_t>(decode_time_slot_selector->W_q_select.numel()));
-        assignWrite(request.slot_selector.w_k_select, decode_time_slot_selector->W_k_select.data, static_cast<std::size_t>(decode_time_slot_selector->W_k_select.numel()));
-        assignWrite(request.slot_selector.null_key_select, decode_time_slot_selector->null_key_select.data, static_cast<std::size_t>(decode_time_slot_selector->null_key_select.numel()));
-        assignWrite(request.slot_selector.null_logit_bias, decode_time_slot_selector->null_logit_bias.data, static_cast<std::size_t>(decode_time_slot_selector->null_logit_bias.numel()));
-    }
-
     // Issue #33: Final RMSNorm gamma destination
     // When frozen, γ_final stays at 1.0 — do NOT overwrite from checkpoint.
     if (lm_head_parameters && lm_head_parameters->final_rms_gamma.data
@@ -534,7 +509,6 @@ bool loadLanguageModelCheckpoint(
         {
             std::ostringstream oss;
             oss << "[load]   capabilities: exec_block=" << request.capabilities.requires_execution_block
-                << " slot_selector=" << request.capabilities.requires_slot_selector
                 << " final_rms=" << request.capabilities.requires_final_rms_gamma;
             EmitModuleError(ModuleId::Checkpoint, oss.str());
         }
@@ -542,8 +516,7 @@ bool loadLanguageModelCheckpoint(
             std::ostringstream oss;
                 oss << "[load]   registry pointers: embedding=" << (embedding_parameters ? "OK" : "NULL")
                 << " lm_head_params=" << (lm_head_parameters ? "OK" : "NULL")
-                << " exec_block=" << (execution_block_parameters ? "OK" : "NULL")
-                << " slot_selector=" << (decode_time_slot_selector ? "OK" : "NULL");
+                << " exec_block=" << (execution_block_parameters ? "OK" : "NULL");
             EmitModuleError(ModuleId::Checkpoint, oss.str());
         }
         {

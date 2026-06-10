@@ -13,7 +13,6 @@
 #include "../../Layers/Encoding/Encoding_GPU.hpp"
 #include "../../Layers/LMHead/lm_head_GPU.hpp"
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
-#include "../../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
 #include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
 #include "../TensorContract/TensorContract_GPU.hpp"
 #include "ModelForwardOutputs.hpp"

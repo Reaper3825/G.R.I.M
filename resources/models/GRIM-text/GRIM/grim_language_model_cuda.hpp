@@ -36,8 +36,6 @@
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
 #include "../Layers/ExecutionBlock/execution_block_GPU.hpp"
-#include "../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
-#include "../Shared/Execution/DecodeTimeNumPolicy.hpp"
 #include "../Shared/GPUBuffer/GPUBuffer.hpp"
 #include "../Shared/PBM/PositionalBiasMethod.hpp"
 #include "../Shared/TrainingState/TrainingState_GPU.hpp"

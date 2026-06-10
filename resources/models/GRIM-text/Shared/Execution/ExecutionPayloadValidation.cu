@@ -55,13 +55,6 @@ void validateExecutionPayload(
             std::to_string(payload.teacher_steps.size()) +
             " != batch_size=" + std::to_string(B));
     }
-    if (!payload.slot_selection_targets.empty() &&
-        static_cast<int>(payload.slot_selection_targets.size()) != B) {
-        throw std::runtime_error(
-            tag + ": slot_selection_targets.size()=" +
-            std::to_string(payload.slot_selection_targets.size()) +
-            " != batch_size=" + std::to_string(B));
-    }
 
     // If none of the execution arrays are populated, nothing to validate.
     if (payload.execution_active.empty()) {
@@ -88,9 +81,6 @@ void validateExecutionPayload(
         const auto& ts = payload.teacher_steps.empty()
             ? std::vector<Batching::TeacherStep>{}
             : payload.teacher_steps[b];
-        const auto& sst = payload.slot_selection_targets.empty()
-            ? std::vector<SlotSelectionTarget>{}
-            : payload.slot_selection_targets[b];
 
         if (!active) {
             // ─────────────────────────────────────────────────────────────────
@@ -253,43 +243,6 @@ void validateExecutionPayload(
             if (bound_positions.empty()) {
                 throw std::runtime_error(row_tag(
                     "execution_active=true but zero slot-bearing token positions"));
-            }
-
-            // ── Selector supervision targets ──
-
-            for (size_t i = 0; i < sst.size(); ++i) {
-                const auto& target = sst[i];
-                switch (target.kind) {
-                    case SlotSelectionTargetKind::Slot:
-                        if (target.slot_id < 0 || target.slot_id >= num_slots) {
-                            throw std::runtime_error(row_tag(
-                                "slot_selection_targets[" + std::to_string(i) +
-                                "].slot_id=" + std::to_string(target.slot_id) +
-                                " out of range [0, " + std::to_string(num_slots) + ")"));
-                        }
-                        break;
-                    case SlotSelectionTargetKind::Null:
-                        // Legal: explicit null selection
-                        break;
-                    case SlotSelectionTargetKind::Ignore:
-                        // Legal: excluded from selector loss
-                        break;
-                    default:
-                        throw std::runtime_error(row_tag(
-                            "slot_selection_targets[" + std::to_string(i) +
-                            "].kind=" + std::to_string(static_cast<int>(target.kind)) +
-                            " is not a legal SlotSelectionTargetKind"));
-                }
-            }
-
-            // Dense selector supervision length must equal row's post-Phase1
-            // decode-position length (== seq_len after Phase1 processing).
-            // When slot_selection_targets is populated for this row, validate length.
-            if (!sst.empty() && static_cast<int>(sst.size()) != seq_len) {
-                throw std::runtime_error(row_tag(
-                    "slot_selection_targets.size()=" + std::to_string(sst.size()) +
-                    " != seq_len=" + std::to_string(seq_len) +
-                    " (dense selector supervision must match post-Phase1 decode-position length)"));
             }
         }
     }

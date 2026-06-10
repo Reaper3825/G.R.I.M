@@ -76,18 +76,6 @@ struct ExecutionBlockOutput {
     std::vector<ExecutionBlockStepOutput> steps;
 };
 
-// Decode-time selector forward result: autograd-tracked score tensor plus
-// keep-alive intermediates whose .data pointers are captured by upstream
-// MatMulGradFn nodes. This payload is Category 1 graph-owned forward state.
-struct SelectorForwardResult {
-    Tensor scores;           // [1, 1+num_live_slots] — logits over { NULL } ∪ L
-    int num_live_slots = 0;
-
-    // These intermediates MUST stay alive until backward() completes.
-    Tensor q;                // [1, d_selector]
-    Tensor slot_keys;        // [num_live, d_selector] (empty if no slots)
-};
-
 struct ModelForwardOutputs {
 private:
     static int countGradFns(const std::vector<Tensor>& tensors) {
@@ -122,13 +110,6 @@ private:
             }
             output.steps.clear();
         }
-    }
-
-    static void clearSelectorForwardResultVector(std::vector<SelectorForwardResult>& results) {
-        for (auto& result : results) {
-            result = SelectorForwardResult();
-        }
-        results.clear();
     }
 
     void requireConsistentLayerStorage(const char* caller) const {
@@ -317,14 +298,6 @@ public:
     std::vector<ExecutionMemory> exec_memories;
     std::vector<ExecutionBlockOutput> exec_outputs_per_row;
 
-    // Selector keep-alive state. Shared forward does not populate these
-    // directly; training-time selector supervision appends detached inputs and
-    // selector forward results here so MatMulGradFn-captured buffers survive
-    // until backward completes.
-    std::vector<Tensor> selector_h_t_inputs;
-    std::vector<Tensor> selector_slot_feature_inputs;
-    std::vector<SelectorForwardResult> selector_fwd_results;
-
     void ensureExecutionBatchGeometry(size_t batch_size, const char* caller) {
         if (batch_size == 0) {
             throw std::runtime_error(std::string(caller) + ": execution batch_size must be > 0");
@@ -391,9 +364,6 @@ public:
         scratch_atom_embeddings = Tensor();
         resetExecutionMemoryVectorPreserveGeometry(exec_memories);
         resetExecutionOutputVectorPreserveGeometry(exec_outputs_per_row);
-        clearTensorVector(selector_h_t_inputs);
-        clearTensorVector(selector_slot_feature_inputs);
-        clearSelectorForwardResultVector(selector_fwd_results);
     }
 
     bool hasLogits() const { return logits_tensor.data != nullptr; }

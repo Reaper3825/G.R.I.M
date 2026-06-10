@@ -40,9 +40,6 @@ void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
             seq.targets.insert(seq.targets.begin(), old_first_token);
             if (!seq.token_exec_slots.empty())
                 seq.token_exec_slots.insert(seq.token_exec_slots.begin(), static_cast<int32_t>(-1));
-            if (!seq.slot_selection_targets.empty())
-                seq.slot_selection_targets.insert(seq.slot_selection_targets.begin(),
-                    GRIM::Execution::SlotSelectionTarget{GRIM::Execution::SlotSelectionTargetKind::Ignore, -1});
             // BOS insertion shifted all existing token positions right by 1.
             // Remap compiled_bootstrap_bindings token_pos to match.
             for (auto& b : seq.compiled_bootstrap_bindings)
@@ -65,9 +62,6 @@ void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
             seq.targets.push_back(-1);  // EOS position itself: nothing follows
             if (!seq.token_exec_slots.empty())
                 seq.token_exec_slots.push_back(static_cast<int32_t>(-1));
-            if (!seq.slot_selection_targets.empty())
-                seq.slot_selection_targets.push_back(
-                    GRIM::Execution::SlotSelectionTarget{GRIM::Execution::SlotSelectionTargetKind::Ignore, -1});
             added_eos_out++;
         }
     }
@@ -155,9 +149,6 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
                 window.token_atom_flags.push_back(0);
                 if (!seq.token_exec_slots.empty())
                     window.token_exec_slots.push_back(static_cast<int32_t>(-1));
-                if (!seq.slot_selection_targets.empty())
-                    window.slot_selection_targets.push_back(
-                        GRIM::Execution::SlotSelectionTarget{GRIM::Execution::SlotSelectionTargetKind::Ignore, -1});
                 bos_prepended++;
             }
 
@@ -181,11 +172,6 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
                 window.token_exec_slots.insert(window.token_exec_slots.end(),
                     seq.token_exec_slots.begin() + static_cast<ptrdiff_t>(start),
                     seq.token_exec_slots.begin() + static_cast<ptrdiff_t>(end));
-            }
-            if (!seq.slot_selection_targets.empty()) {
-                window.slot_selection_targets.insert(window.slot_selection_targets.end(),
-                    seq.slot_selection_targets.begin() + static_cast<ptrdiff_t>(start),
-                    seq.slot_selection_targets.begin() + static_cast<ptrdiff_t>(end));
             }
             // Issue #143: Mask overlap prefix targets in non-first windows.
             // With stride < max_seq_len, the first (prev_source_end - start)

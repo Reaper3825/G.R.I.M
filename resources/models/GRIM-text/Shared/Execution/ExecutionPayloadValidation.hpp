@@ -26,7 +26,7 @@ namespace Execution {
 //     - Execution-active rows: execution_active==true, bootstrap bindings
 //       non-empty and injective in token_pos and slot_id, teacher steps
 //       present with valid slot IDs, token_exec_slots consistent with
-//       bootstrap bindings, slot_selection_targets legal
+//       bootstrap bindings legal
 //
 //   Batch-level:
 //     - Dimension arrays match batch_size

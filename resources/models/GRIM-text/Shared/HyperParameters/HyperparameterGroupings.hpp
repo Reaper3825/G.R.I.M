@@ -417,17 +417,6 @@ struct ExecutionBlockConstructionHP {
     float arg_reinforce_baseline_decay = 0.0f;
 };
 
-struct DecodeTimeSelectorConstructionHP {
-    bool enabled = false;
-    int d_model = 0;
-    int d_selector = 0;
-    int d_slot_features = 0;
-    int num_slots = 0;
-    int scratch_slots = 0;
-    float selection_margin = 0.0f;
-    float supervision_weight = 0.0f;
-};
-
 struct MTPConstructionHP {
     bool enabled = false;
     int k = 0;
@@ -534,15 +523,6 @@ struct ModelHP {
     float execution_block_arg_reinforce_baseline_decay = 0.0f;
     float execution_block_entropy_aux_weight = 0.0f;
     float execution_block_structured_ce_weight = 0.0f;
-
-    bool decode_time_selector_enabled = false;
-    int decode_time_selector_d_model = 0;
-    int decode_time_selector_d_selector = 0;
-    int decode_time_selector_d_slot_features = 0;
-    int decode_time_selector_num_slots = 0;
-    int decode_time_selector_scratch_slots = 0;
-    float decode_time_selector_selection_margin = 0.0f;
-    float decode_time_selector_supervision_weight = 0.0f;
 
     bool mtp_enabled = false;
     int mtp_k = 0;
@@ -1308,15 +1288,6 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.execution_block_entropy_aux_weight = requireFloat("execution_block_entropy_aux_weight");
     view.execution_block_structured_ce_weight = requireFloat("execution_block_structured_ce_weight");
 
-    view.decode_time_selector_enabled = requireBool("selector_enabled");
-    view.decode_time_selector_d_model = d_model;
-    view.decode_time_selector_d_selector = requireInt("selector_d_selector");
-    view.decode_time_selector_d_slot_features = requireInt("selector_d_slot_features");
-    view.decode_time_selector_num_slots = view.execution_block_num_slots;
-    view.decode_time_selector_scratch_slots = view.execution_block_num_scratch_slots;
-    view.decode_time_selector_selection_margin = requireFloat("selector_selection_margin");
-    view.decode_time_selector_supervision_weight = requireFloat("selector_supervision_weight");
-
     view.mtp_enabled = requireBool("mtp_enabled");
     view.mtp_k = requireInt("mtp_k");
     view.mtp_vocab_size = vocab_size;
@@ -1450,23 +1421,6 @@ inline ExecutionBlockConstructionHP executionBlockConstructionHP(
     view.div_magnitude_penalty_weight = model.execution_block_div_magnitude_penalty_weight;
     view.arg_reinforce_weight = model.execution_block_arg_reinforce_weight;
     view.arg_reinforce_baseline_decay = model.execution_block_arg_reinforce_baseline_decay;
-    return view;
-}
-
-inline DecodeTimeSelectorConstructionHP decodeTimeSelectorConstructionHP(
-    const GRIM::Config::AiConfigSnapshot& snapshot)
-{
-    const auto model = modelHP(snapshot);
-
-    DecodeTimeSelectorConstructionHP view;
-    view.enabled = model.decode_time_selector_enabled;
-    view.d_model = model.decode_time_selector_d_model;
-    view.d_selector = model.decode_time_selector_d_selector;
-    view.d_slot_features = model.decode_time_selector_d_slot_features;
-    view.num_slots = model.decode_time_selector_num_slots;
-    view.scratch_slots = model.decode_time_selector_scratch_slots;
-    view.selection_margin = model.decode_time_selector_selection_margin;
-    view.supervision_weight = model.decode_time_selector_supervision_weight;
     return view;
 }
 

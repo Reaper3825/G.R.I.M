@@ -63,29 +63,6 @@ struct CompiledBootstrapBinding {
 };
 
 // =============================================================================
-// SlotSelectionTarget — per-decode-position selector supervision
-//
-// Dense decode-position aligned. Each supervised decode position carries
-// exactly one of: legal slot id / NULL / IGNORE.
-//
-// IGNORE excludes that position from selector loss and must NOT be
-// conflated with NULL.
-//
-// NULL means the correct selector outcome is explicit null selection.
-// IGNORE means this decode position does not participate in selector loss.
-// =============================================================================
-enum class SlotSelectionTargetKind : uint8_t {
-    Slot,       // Correct target is a specific legal slot id
-    Null,       // Correct target is explicit null selection
-    Ignore      // Position excluded from selector loss
-};
-
-struct SlotSelectionTarget {
-    SlotSelectionTargetKind kind;
-    int32_t slot_id;    // Valid only when kind == Slot
-};
-
-// =============================================================================
 // BootstrapLiteralBinding — builder-side semantic binding
 //
 // Each binding identifies a semantic literal in the canonical structured
@@ -138,10 +115,6 @@ struct StructuredExecutionRecord {
     // Fixed before tokenization, does not change during execution.
     // D_row ⊆ [S, V) where S,V are configured slot range bounds.
     std::vector<int32_t> slot_domain;
-
-    // Slot selection targets for supervised decode-time slot reference resolution.
-    // Dense, token-position aligned. Populated at builder time.
-    std::vector<SlotSelectionTarget> slot_selection_targets;
 };
 
 // =============================================================================
@@ -174,9 +147,6 @@ struct CompiledStructuredExecutionPayload {
 
     // Execution supervision projection
     std::vector<TeacherStep> teacher_steps;
-
-    // Dense selector supervision (decode-position aligned)
-    std::vector<SlotSelectionTarget> slot_selection_targets;
 };
 
 // =============================================================================
@@ -185,7 +155,6 @@ struct CompiledStructuredExecutionPayload {
 // D_row^{runtime} = { b.slot_id | b ∈ compiled_bootstrap_bindings }
 //                   ∪ { step.arg1_slot, step.arg2_slot, step.write_slot | step ∈ teacher_steps }
 //
-// Selector supervision targets do NOT add slot-domain membership.
 // Configured slot ranges [S, V) remain outer bounds only.
 // =============================================================================
 #ifdef __CUDACC__

@@ -159,7 +159,7 @@ CurriculumTabLayout computeCurriculumTabLayout(const PanelRect& content) {
 UIDataHubPanel::UIDataHubPanel()
     : UIPanel("DataHub", true)
 {
-    position = {200, 100};
+    position = {200, 500};
     size     = {1400, 750};
     setVisible(false);
     setBackground(UITheme::Colors::PanelBg);

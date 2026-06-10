@@ -1,0 +1,251 @@
+
+The important design sentence
+
+The model should not learn:
+
+pow10 = label 1
+
+It should learn:
+
+pow10 = 1 means this digit contributes in the tens place.
+pow10 = 0 means this digit contributes in the ones place.
+pow10 = -1 means this digit contributes in the tenths place.
+
+Encode pow10 as the digit's base-10 place basis, pair it with the digit before pooling, and train auxiliary losses that reconstruct both the written digit-place structure and the global numeric magnitude.
+The strongest version is:
+
+NumberEncoder(arg_number):
+    for each digit:
+        encode (digit, pow10) as a contribution slot
+    pool contribution slots
+    add global mantissa/exponent embedding
+    keep surface identity separate
+
+That gives you both:
+
+numeric meaning  = value/magnitude/place structure
+surface identity = exact written atom form
+
+token_id + atom metadata side channel -> transformer -> LM loss + numeric metadata loss
+x_t = token_embedding[token_id]
+x_t = token_embedding[<INT>/<FLOAT>] + number_embedding(arg_number)
+number_embedding(arg_number)
+
+two concepts, not one
+numeric meaning  = value/magnitude/place structure
+surface identity = exact written form / atom identity
+Normal LM head:
+h_t -> predict next token_id
+Still predicts:
+<INT>
+<FLOAT>
+Head A — next-token atom metadata prediction
+At position t, if target t+1 is an atom:
+h_t -> predict ArgNumber metadata of token t+1
+
+token_ids + atom_entry_ids
+  -> embeddings + NumberEncoder
+  -> transformer
+  -> LM head + numeric heads
+  -> losses
+
+
+Backward:
+
+
+Normal language-model loss
+
+Same as usual:
+L_lm = cross_entropy(lm_logits[t], target_token_id[t])
+Gradient path:
+L_lm
+  -> LM head
+  -> h_t
+  -> transformer
+  -> token embeddings
+This teaches normal text prediction.
+
+Next-atom metadata loss:
+At position t, if the target token t+1 is an atom
+h_t should predict the metadata of atom at t+1
+
+The atom head predicts:
+digit meaning = digit_value × 10^pow10
+number meaning = sign × Σ(digit_value_i × 10^pow10_i)
+Each digit gets a pow10 pair ie (digit, pow10)
+slot_i = DigitPlaceEncoder(
+    digit_i,
+    pow10_i,
+    sign,
+    atom_type
+)
+Conceptually:
+
+slot_i contains:
+- digit identity: 0-9
+- place identity: 10^-k ... 10^0 ... 10^k
+- contribution meaning: digit_i × 10^pow10_i
+
+So the model sees:
+
+4 at pow10=1  -> tens-place 4
+4 at pow10=0  -> ones-place 4
+4 at pow10=-1 -> tenths-place 4
+
+Those need to be different internally.
+The encoder should know both “place” and “contribution”
+
+For each digit slot, encode something like:
+
+slot_i =
+    digit_emb[digit_i]
+  + pow10_emb[pow10_i]
+  + MLP([
+        digit_i / 9,
+        pow10_i / max_pow10,
+        is_zero_digit,
+        sign,
+        atom_type
+    ])
+
+But the real teaching signal comes from the losses, not just the embedding.
+
+The key is this:
+
+pow10_emb[p] alone says: "this is place p"
+MLP(digit, pow10) says: "this digit contributes at this place"
+
+So 4@10^1 and 4@10^0 share digit identity, but differ in value contribution.
+
+Surface identity stays separate
+
+This is where you avoid collapsing different written forms into the same thing.
+
+These all have related numeric value, but different surface identity:
+
+42
+042
+42.0
++42
+4.2e1
+
+So keep:
+
+numeric meaning:
+    digits, pow10, mantissa, exponent, value structure
+
+surface identity:
+    exact written form / atom_entry_id / formatting flags
+
+Meaning-side says:
+
+42 == 42.0 == 4.2e1
+
+Surface-side says:
+
+"42" != "42.0" != "4.2e1"
+
+That distinction matters for prediction.
+Losses need to force pow10 to mean place value
+
+The metadata prediction loss you wrote is good, but by itself it mostly teaches the model to reproduce labels.
+
+You need extra losses that make pow10 semantically meaningful.
+
+Loss 1: next-atom metadata prediction
+
+Already planned:
+
+h_t -> predict metadata of atom t+1
+
+For target 42:
+
+sign = positive
+digit_count = 2
+digit[0] = 4
+pow10[0] = 1
+digit[1] = 2
+pow10[1] = 0
+
+This teaches structure.
+
+Loss 2: value reconstruction loss
+
+From the predicted digit/pow10 structure, reconstruct the numeric value representation.
+
+Target:
+
+sign
+mantissa
+exponent
+approx_value_bucket
+
+Not raw full value.
+
+Example:
+
+42 -> sign=+, mantissa≈4.2, exponent=1
+420 -> sign=+, mantissa≈4.2, exponent=2
+4.2 -> sign=+, mantissa≈4.2, exponent=0
+
+This forces the model to understand that changing pow10 changes magnitude.
+
+
+DO NOT ENCODE THIS:
+digit_embedding[digit] + pow10_embedding[pow10]
+
+Loss 3: digit-place contribution loss
+
+For each digit slot, predict its place contribution class.
+
+Example for 42:
+
+4 at pow10=1 -> contributes to tens
+2 at pow10=0 -> contributes to ones
+
+Targets could be:
+
+contribution_exponent = pow10
+contribution_digit = digit
+contribution_nonzero = digit != 0
+
+Or more directly:
+
+slot_value_bucket = digit × 10^pow10
+
+But bucket it/log-scale it. Do not use giant raw values.
+
+Loss 4: contrastive numeric loss
+
+This is the hard one, but it is what makes the model stop treating numbers as arbitrary IDs.
+
+Teach relationships like:
+
+42 is closer to 43 than to 420
+42 is closer to 40 than to 4000
+4.2 is numerically related to 42, but not identical in scale
+
+So embeddings should satisfy something like:
+
+distance(embed(42), embed(43)) < distance(embed(42), embed(420))
+
+This directly teaches magnitude geometry.
+
+digit_count = 2
+digit[0] = 4
+pow10[0] = 1
+digit[1] = 2
+pow10[1] = 0
+
+But:
+
+losses -/-> AtomTable
+losses -/-> ArgNumber metadata
+losses -/-> atom_entry_id values
+
+For backward, the rule is:
+Gradients train the model to represent/predict numeric structure. Gradients do not mutate the AtomTable or atom entries or atom metadata provided from text.
+The AtomTable itself stays fixed during the training step.
+
+
+

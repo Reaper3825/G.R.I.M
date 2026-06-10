@@ -145,7 +145,6 @@ const char* OptimizerUpdateTraceMetrics::typeName(int type_idx) {
         case ParamGroupType::RMSNORM: return "rmsnorm";
         case ParamGroupType::MTP: return "mtp";
         case ParamGroupType::EXECUTION_BLOCK: return "exec";
-        case ParamGroupType::SLOT_SELECTOR: return "slot_selector";
         case ParamGroupType::COUNT: return "?";
     }
     return "?";

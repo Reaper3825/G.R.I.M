@@ -468,7 +468,6 @@ void runOptimizerWindowFromEpoch(
         tel_input.text_loss         = result.text_loss;
         tel_input.mtp_loss          = result.mtp_loss;
         tel_input.execution_loss    = result.execution_loss;
-        tel_input.selector_loss     = result.selector_loss;
         tel_input.max_seq_len       = payload.max_seq_len;
         tel_input.exec_selection_entropy = result.exec_selection_entropy;
         tel_input.exec_op_entropy        = result.exec_op_entropy;
@@ -947,7 +946,6 @@ BatchResult processBatch(
     result.text_loss = loss_result.text_loss;
     result.mtp_loss = loss_result.mtp_loss;
     result.execution_loss = loss_result.execution_loss;
-    result.selector_loss = loss_result.selector_loss;
     result.mtp_diagnostics = std::move(loss_result.mtp_diagnostics);
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] explicit forward + autograd loss/backward returned, loss=%f success=%d\n", 
                         result.loss, static_cast<int>(loss_result.success));

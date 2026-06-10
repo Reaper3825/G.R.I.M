@@ -139,13 +139,11 @@ struct BatchPayload {
     // token_to_slot_map (above) is the runtime binding projection.
     // teacher_steps (above) is the supervision projection.
     // compiled_bootstrap_bindings is the compiled provenance.
-    // slot_selection_targets is per-row dense selector supervision.
     //
     // Runtime D_row is reconstructed from compiled_bootstrap_bindings ∪ teacher_steps.
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════
     std::vector<bool> execution_active;    // [batch_size] — authoritative per-row activation
     std::vector<std::vector<GRIM::Execution::CompiledBootstrapBinding>> compiled_bootstrap_bindings;  // [batch_size]
-    std::vector<std::vector<GRIM::Execution::SlotSelectionTarget>> slot_selection_targets;  // [batch_size]
 
     // ═══════════════════════════════════════════════════════════════════════════
     // ATOM TABLE SIDE CHANNEL (host-only, NOT transferred to GPU)
@@ -421,14 +419,6 @@ struct BatchPayload {
                 throw std::runtime_error(
                     std::string(caller) + ": BatchPayload.compiled_bootstrap_bindings.size()=" +
                     std::to_string(compiled_bootstrap_bindings.size()) + " != batch_size=" +
-                    std::to_string(batch_size));
-            }
-        }
-        if (!slot_selection_targets.empty()) {
-            if (static_cast<int>(slot_selection_targets.size()) != batch_size) {
-                throw std::runtime_error(
-                    std::string(caller) + ": BatchPayload.slot_selection_targets.size()=" +
-                    std::to_string(slot_selection_targets.size()) + " != batch_size=" +
                     std::to_string(batch_size));
             }
         }

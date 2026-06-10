@@ -6,7 +6,6 @@
 #include "AutogradTraining.hpp"
 #include "AutogradExecutionLoss.hpp"
 #include "AutogradMtpAuxiliaryLoss.hpp"
-#include "AutogradSelectorSupervisionLoss.hpp"
 
 // MUST include full definition of GPUGrimEncoder for method calls
 #include "../../GRIM/grim_language_model_cuda.hpp"
@@ -21,7 +20,6 @@
 #include "../../Shared/UnigramByte/Unigram.hpp"
 #include "../../Shared/Execution/ExecutionPayloadValidation.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
-#include "../../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.hpp"
 
 #include <iostream>
 #include <cmath>
@@ -102,7 +100,6 @@ struct GradientSignalExpectation {
 
 struct GradientVerificationActivity {
     bool text_loss_active = false;
-    bool selector_loss_active = false;
     bool exec_op_loss_active = false;
     bool exec_arg_loss_active = false;
     bool exec_write_selection_ce_active = false;
@@ -260,8 +257,6 @@ GradientDeltaProbe probeGradientDelta(
 GradientVerificationActivity detectGradientVerificationActivity(AutogradContext& ctx) {
     GradientVerificationActivity activity{};
     activity.text_loss_active = ctx.payload && ctx.payload->lm_valid_tokens > 0;
-    activity.selector_loss_active = ctx.forward_outputs
-        && !ctx.forward_outputs->selector_fwd_results.empty();
     if (ctx.loss_state) {
         const auto& loss_state = *ctx.loss_state;
         // These flags are set only by computeAutogradLoss() when an execution
@@ -320,18 +315,6 @@ GradientSignalBaselines captureGradientVerificationBaselines(
         }
         if (activity.exec_write_selection_ce_active) {
             captureExpected(execution_block_parameters->W_write_query, "exec block W_write_query");
-        }
-    }
-
-    if (model_hp.decode_time_selector_enabled && activity.selector_loss_active) {
-        if (!ctx.parameter_registry) {
-            throw std::runtime_error("captureGradientSignalBaselines: selector loss is active but ctx.parameter_registry is NULL");
-        }
-        auto* selector = ctx.parameter_registry->getDecodeTimeSlotSelector();
-        if (selector) {
-            captureExpected(selector->W_q_select, "selector W_q_select");
-            captureExpected(selector->W_k_select, "selector W_k_select");
-            captureExpected(selector->null_logit_bias, "selector null_logit_bias");
         }
     }
 
@@ -503,28 +486,9 @@ LossResult computeAutogradLoss(
     result.entropy_monitor = exec_entropy_monitor;
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // SELECTOR SUPERVISION LOSS — autograd CE through TensorContract
-    // Selector supervision is FINAL-STATE selector-only supervision: each row may
-    // provide at most one non-Ignore target, and it MUST be attached to the last
-    // decode position because the available ExecutionMemory is the row's final
-    // post-execution state. Per-token non-Ignore targets would require a
-    // timestep-aligned ExecutionMemory snapshot and are rejected loudly.
-    // The hidden input is copied into an owned detached Tensor. Gradients train
-    // DecodeTimeSlotSelector parameters only; they do not slice back into the
-    // encoder hidden tensor because TensorContract has no parent slice/view op.
-    // Weighted by cfg->selector_supervision_weight (0 = disabled).
-    // ═══════════════════════════════════════════════════════════════════════════
-    float selector_supervision_loss = addSelectorSupervisionLoss(
-        ctx,
-        payload,
-        forward_outputs,
-        loss_state);
-    result.selector_loss = selector_supervision_loss;
-
-    // ═══════════════════════════════════════════════════════════════════════════
     // GROUND-TRUTH LOSS: Read the ACTUAL tensor that backward will differentiate.
     // This is the single source of truth — no manual reconstruction from stale
-    // host-side scalars. text_loss was snapshot before exec/selector additions.
+    // host-side scalars. text_loss was snapshot before exec additions.
     // ═══════════════════════════════════════════════════════════════════════════
     float actual_loss = 0.0f;
     cudaMemcpyAsync(&actual_loss, loss_state.loss_tensor.data, sizeof(float),
@@ -532,15 +496,14 @@ LossResult computeAutogradLoss(
     cudaStreamSynchronize(ctx.stream);
 
     result.loss_value = actual_loss;
-    result.execution_loss = actual_loss - text_ce_loss - mtp_loss - selector_supervision_loss;
+    result.execution_loss = actual_loss - text_ce_loss - mtp_loss;
     result.weight_text = 1.0f;
     
     if (!std::isfinite(result.loss_value)) {
         throw std::runtime_error("computeAutogradLoss: combined loss is non-finite (actual_tensor=" 
             + std::to_string(actual_loss) + " text_ce=" + std::to_string(text_ce_loss)
             + " mtp=" + std::to_string(mtp_loss)
-            + " exec_ce=" + std::to_string(exec_structured_ce)
-            + " selector=" + std::to_string(selector_supervision_loss) + ")");
+            + " exec_ce=" + std::to_string(exec_structured_ce) + ")");
     }
     
     AG_INFO("Loss computed: total=" << actual_loss << " text_ce=" << text_ce_loss
@@ -548,7 +511,6 @@ LossResult computeAutogradLoss(
             << " execution=" << result.execution_loss
             << " exec_ce=" << exec_structured_ce
             << " exec_entropy_monitor=" << exec_entropy_monitor
-            << " selector=" << selector_supervision_loss
             << " lm_valid=" << lm_valid_tokens);
     
     result.success = true;
@@ -949,28 +911,6 @@ bool verifyGradientsAreConnectedImpl(
         }
         if (activity.exec_write_selection_ce_active) {
             requireReceivedGradient(eb.W_write_query, "exec block W_write_query");
-        }
-    }
-
-    // DecodeTimeSlotSelector parameters
-    if (model_hp.decode_time_selector_enabled) {
-        if (!ctx.parameter_registry) {
-            throw std::runtime_error("verifyGradientsAreConnectedImpl: decode_time_selector_enabled but ctx.parameter_registry is NULL");
-        }
-        auto* selector = ctx.parameter_registry->getDecodeTimeSlotSelector();
-        if (selector) {
-            auto checkSel = [&](Tensor& t, const char* name) {
-                if (t.data) requireAllocatedFinite(t, "selector " + std::string(name));
-            };
-            checkSel(selector->W_q_select, "W_q_select");
-            checkSel(selector->W_k_select, "W_k_select");
-            checkSel(selector->null_key_select, "null_key_select");
-            checkSel(selector->null_logit_bias, "null_logit_bias");
-            if (activity.selector_loss_active) {
-                requireReceivedGradient(selector->W_q_select, "selector W_q_select");
-                requireReceivedGradient(selector->W_k_select, "selector W_k_select");
-                requireReceivedGradient(selector->null_logit_bias, "selector null_logit_bias");
-            }
         }
     }
     

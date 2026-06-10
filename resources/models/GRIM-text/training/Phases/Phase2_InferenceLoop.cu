@@ -9,8 +9,6 @@
 #include "Shared/Forward/GeneratedSequence.hpp"
 #include "../../Shared/Forward/ModelForwardRuntimePayload.hpp"
 #include "../../Shared/Forward/ModelForward_GPU.hpp"
-#include "../../Shared/Execution/DecodeTimeNumPolicy.hpp"
-#include "../../Shared/Execution/DecodeTimeResolveResult.hpp"
 #include "../../Shared/Sampling/Sampling.hpp"
 #include "../../Shared/UnigramByte/AtomTable.hpp"
 #include "../../Shared/UnigramByte/TokenLayout.hpp"
@@ -269,26 +267,22 @@ GRIM::GeneratedSequence generateOneSequence(
 
     generation_state.resetSession();
 
-    const auto selector_hp = GRIM::HyperParameters::decodeTimeSelectorConstructionHP(config);
     const auto mtp_hp = GRIM::HyperParameters::mtpFeatureHP(config);
-    auto* decode_time_slot_selector = parameter_registry.getDecodeTimeSlotSelector();
 
-    const bool selector_active = selector_hp.enabled
-        && decode_time_slot_selector != nullptr
-        && execution_hp.enabled
-        && generation_state.has_exec_memory;
-    if (!selector_active) {
-        const bool atom_generation_active = execution_hp.enabled;
-        if (atom_generation_active) {
-            const int int_tid = GRIM::Tokenizer::atomTypeToTokenId(GRIM::Tokenizer::AtomType::ATOM_INT);
-            const int float_tid = GRIM::Tokenizer::atomTypeToTokenId(GRIM::Tokenizer::AtomType::ATOM_FLOAT);
-            sampling_cfg.bad_token_ids.push_back(int_tid);
-            sampling_cfg.bad_token_ids.push_back(float_tid);
-            std::sort(sampling_cfg.bad_token_ids.begin(), sampling_cfg.bad_token_ids.end());
-            sampling_cfg.bad_token_ids.erase(
-                std::unique(sampling_cfg.bad_token_ids.begin(), sampling_cfg.bad_token_ids.end()),
-                sampling_cfg.bad_token_ids.end());
-        }
+    // The execution-entangled decode-time slot selector was deleted
+    // (docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md, Workstream 1). Until the
+    // numeric-meaning selector lands, numeric atom placeholders are NEVER
+    // sampleable while the execution block is enabled: there is no owner that
+    // can bind a value to a generated <INT>/<FLOAT> slot.
+    if (execution_hp.enabled) {
+        const int int_tid = GRIM::Tokenizer::atomTypeToTokenId(GRIM::Tokenizer::AtomType::ATOM_INT);
+        const int float_tid = GRIM::Tokenizer::atomTypeToTokenId(GRIM::Tokenizer::AtomType::ATOM_FLOAT);
+        sampling_cfg.bad_token_ids.push_back(int_tid);
+        sampling_cfg.bad_token_ids.push_back(float_tid);
+        std::sort(sampling_cfg.bad_token_ids.begin(), sampling_cfg.bad_token_ids.end());
+        sampling_cfg.bad_token_ids.erase(
+            std::unique(sampling_cfg.bad_token_ids.begin(), sampling_cfg.bad_token_ids.end()),
+            sampling_cfg.bad_token_ids.end());
     }
 
     GRIM::Sampling::SamplingPipeline pipeline(sampling_cfg);
@@ -349,47 +343,6 @@ GRIM::GeneratedSequence generateOneSequence(
         auto forward_outputs = GRIM::Forward::executeModelForward(request, runtime_payload);
         InferenceForwardScope inference_forward_scope{forward_outputs};
 
-        generation_state.decode_selector.reset();
-        if (selector_active) {
-            const GRIM::Tensor* live_lm_head_input = forward_outputs.liveLmHeadInputOrNull();
-            if (!live_lm_head_input || !live_lm_head_input->data) {
-                throw std::runtime_error(
-                    "generateOneSequence: selector_active but live LM-head input tensor is NULL after shared forward");
-            }
-            const auto& live_shape = live_lm_head_input->shape.require(
-                "generateOneSequence selector live_lm_head_input").as_2d();
-            if (live_shape.rows < active_payload.total_tokens) {
-                throw std::runtime_error(
-                    "generateOneSequence: selector live_lm_head_input rows=" +
-                    std::to_string(live_shape.rows) + " < payload.total_tokens=" +
-                    std::to_string(active_payload.total_tokens));
-            }
-            if (live_shape.cols != selector_hp.d_model) {
-                throw std::runtime_error(
-                    "generateOneSequence: selector live_lm_head_input cols=" +
-                    std::to_string(live_shape.cols) + " != selector_hp.d_model=" +
-                    std::to_string(selector_hp.d_model));
-            }
-
-            const float* d_last_hidden_state = live_lm_head_input->data +
-                static_cast<size_t>(active_payload.total_tokens - 1) *
-                static_cast<size_t>(selector_hp.d_model);
-            generation_state.decode_selector = GRIM::resolveDecodeTimeNumSlotSelectionOrMask(
-                decode_time_slot_selector,
-                selector_hp,
-                active_payload,
-                bindings,
-                generation_state.execution_runtime.decode_time_selector_runtime,
-                0,
-                selector_hp.enabled,
-                execution_hp.enabled,
-                generation_state.has_exec_memory,
-                generation_state.exec_memory,
-                d_last_hidden_state,
-                stream,
-                training_state.cublas_handle.get());
-        }
-
         const auto& live_logits = forward_outputs.logits_tensor;
         if (!live_logits.data) {
             throw std::runtime_error(
@@ -448,31 +401,6 @@ GRIM::GeneratedSequence generateOneSequence(
             break;
         }
 
-        if (selector_active) {
-            if (!generation_state.decode_selector.valid) {
-                std::fprintf(stderr,
-                    "[Selector Debug] step=%d selector_enabled=%d selectorLayer=%d "
-                    "exec_block_enabled=%d has_exec_mem=%d "
-                    "decode_selector_valid=%d\n",
-                    step,
-                    static_cast<int>(selector_hp.enabled),
-                    static_cast<int>(decode_time_slot_selector != nullptr),
-                    static_cast<int>(execution_hp.enabled),
-                    static_cast<int>(generation_state.has_exec_memory),
-                    static_cast<int>(generation_state.decode_selector.valid));
-                throw std::runtime_error(
-                    "Phase2 payload inference: selector_active but decode_selector_valid is false at step " +
-                    std::to_string(step));
-            }
-            const int int_tid = GRIM::Tokenizer::atomTypeToTokenId(GRIM::Tokenizer::AtomType::ATOM_INT);
-            const int float_tid = GRIM::Tokenizer::atomTypeToTokenId(GRIM::Tokenizer::AtomType::ATOM_FLOAT);
-            if (static_cast<int>(generation_state.decode_selector.status)
-                != static_cast<int>(GRIM::SlotSelectionStatus::Selected)) {
-                logits_vec[int_tid] = -1e30f;
-                logits_vec[float_tid] = -1e30f;
-            }
-        }
-
         // Suppress EOS until min_new_tokens is reached. Without this, an
         // early-sampled EOS is not selected as a stop token (the break below
         // requires step + 1 >= min_new_tokens), yet it still gets committed to
@@ -502,15 +430,14 @@ GRIM::GeneratedSequence generateOneSequence(
             token_atom_mask_val = 1;
             if (GRIM::Tokenizer::isNumericAtom(
                     GRIM::Tokenizer::tokenIdToAtomType(sample.token_id))) {
-                if (!selector_active || !generation_state.decode_selector.valid
-                          || static_cast<int>(generation_state.decode_selector.status)
-                              != static_cast<int>(GRIM::SlotSelectionStatus::Selected)) {
-                    throw std::runtime_error(
-                        "Phase2 payload inference: sampled numeric atom but selector did not resolve a slot "
-                        "(status=" + std::to_string(static_cast<int>(generation_state.decode_selector.status)) + ")");
-                }
-                new_token_slot_id = generation_state.decode_selector.selected_slot;
-                token_numeric_value = generation_state.decode_selector.selected_value;
+                // Numeric placeholder token ids are in sampling_cfg.bad_token_ids
+                // while execution is enabled — sampling one is a pipeline bug,
+                // not a recoverable state. No selector exists to bind a value.
+                throw std::runtime_error(
+                    "Phase2 payload inference: sampled numeric atom token_id=" +
+                    std::to_string(sample.token_id) +
+                    " but numeric placeholders are masked while execution is enabled "
+                    "(decode-time slot selector was removed; numeric-meaning selector not yet wired)");
             }
         }
 

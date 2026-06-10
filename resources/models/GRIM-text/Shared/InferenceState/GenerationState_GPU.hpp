@@ -14,7 +14,6 @@
 #include <vector>
 
 #include "../../Shared/Forward/ModelForwardExecutionRuntime.hpp"
-#include "../../Shared/Execution/DecodeTimeResolveResult.hpp"
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 
 namespace GRIM {
@@ -29,13 +28,9 @@ struct GenerationState {
     // Training forward traces remain TrainingState-owned; these are session state.
     Forward::ModelForwardExecutionRuntime execution_runtime;
 
-    // Decode-time <NUM> selector result consumed by sampling.
-    DecodeTimeResolveResult decode_selector;
-
     void resetSession() {
         has_exec_memory = false;
         execution_runtime.clear();
-        decode_selector.reset();
     }
 };
 

@@ -17,7 +17,6 @@
 #include "ParameterGroupRegistration.hpp"
 #include "../../../../GRIM/grim_language_model_cuda.hpp"
 #include "../../../../Layers/Encoding/Encoding_GPU.hpp"
-#include "../../../../Shared/Execution/DecodeTimeNumPolicy.hpp"
 #include "../../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../../../Shared/PBM/PBMStateOwner.hpp"
 #include "../../../../Shared/StreamController/StreamController_GPU.hpp"
@@ -149,7 +148,6 @@ void verifyEncoderLayersConstructed(GRIM::GPUGrimEncoder& encoder,
 
 void initializeExecutionSubsystems(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    std::unique_ptr<GRIM::DecodeTimeSlotSelector>& decode_time_slot_selector,
     const GRIM::Config::AiConfigSnapshot& model_cfg,
     uint64_t weight_init_seed,
     cudaStream_t init_stream) {
@@ -165,17 +163,6 @@ void initializeExecutionSubsystems(
         execution_seed,
         init_stream);
     std::cout << "✓ ExecutionBlock parameters created\n";
-
-    const auto selector_hp = GRIM::HyperParameters::decodeTimeSelectorConstructionHP(model_cfg);
-    if (!selector_hp.enabled) {
-        return;
-    }
-
-    const uint64_t selector_seed = weight_init_seed + 30;
-    decode_time_slot_selector = std::make_unique<GRIM::DecodeTimeSlotSelector>(
-        GRIM::createDecodeTimeSlotSelector(selector_hp, selector_seed, init_stream));
-    GRIM::validateDecodeTimeNumPolicyConfig(selector_hp);
-    std::cout << "✓ DecodeTimeSlotSelector created\n";
 }
 
 void initializeMtpHeads(std::vector<GRIM::MtpHeadParameterTensors>& mtp_head_parameter_tensors,
@@ -375,11 +362,6 @@ void initializeInferenceRuntime(const ::GRIM::Config::AiConfigSnapshot& model_cf
         throw std::runtime_error(std::string("[") + caller + "] ExecutionBlock parameters not assembled by Startup::assembleGpuModel() while execution_block is enabled.");
     }
 
-    const auto selector_hp = GRIM::HyperParameters::decodeTimeSelectorConstructionHP(model_cfg);
-    if (selector_hp.enabled && !parameter_registry.getDecodeTimeSlotSelector()) {
-        throw std::runtime_error(std::string("[") + caller + "] DecodeTimeSlotSelector not assembled by Startup::assembleGpuModel() while selector is enabled.");
-    }
-
     const auto mtp_hp = GRIM::HyperParameters::mtpConstructionHP(model_cfg);
     if (mtp_hp.enabled && static_cast<int>(parameter_registry.mtpHeadParameterTensors().size()) != mtp_hp.k) {
         throw std::runtime_error(std::string("[") + caller + "] MTP heads were not assembled by Startup::assembleGpuModel() while mtp is enabled.");
@@ -550,7 +532,6 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
         //======================================================//
         initializeExecutionSubsystems(
             parameter_registry,
-            parameter_registry.decode_time_slot_selector,
             model_cfg,
             weight_init_seed,
             init_stream);

@@ -102,14 +102,6 @@ table ReasoningHeadWeights {
   d_total: uint32;
 }
 
-/// Decode-time slot selector (pointer-selector baseline, 4 learned tensors).
-table DecodeTimeSlotSelectorWeights {
-  w_q_select_data: [float];
-  w_k_select_data: [float];
-  null_key_select_data: [float];
-  null_logit_bias_data: [float];
-}
-
 /// Execution block v2 (softmax selections, 4 ops, linear value embedding, inject path).
 table ExecutionBlockWeights {
   w_decode_1_data: [float];
@@ -199,7 +191,6 @@ table TransformerModel {
   last_modified_timestamp: uint64;
   reasoning_head: ReasoningHeadWeights;
   execution_block: ExecutionBlockWeights;
-  slot_selector: DecodeTimeSlotSelectorWeights;
 }
 
 root_type TransformerModel;

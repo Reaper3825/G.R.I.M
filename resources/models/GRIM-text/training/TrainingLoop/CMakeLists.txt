@@ -401,7 +401,6 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../Autograd/AutogradContext.cu
     ../Autograd/AutogradExecutionLoss.cu
     ../Autograd/AutogradMtpAuxiliaryLoss.cu
-    ../Autograd/AutogradSelectorSupervisionLoss.cu
     ../Autograd/AutogradTraining.cu
     ../../Layers/HardcodedStates/HardcodedStates_GPU.cu
     ../../Layers/Embedding/Embedding_GPU.cu
@@ -409,8 +408,6 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Layers/ExecutionBlock/execution_block_GPU.cu
     ../../Layers/ExecutionBlock/execution_block_memory_stream_GPU.cu
     ../../Layers/ExecutionBlock/execution_block_data_stream_GPU.cu
-    ../../Layers/DecodeTimeSlotSelector/decode_time_slot_selector_GPU.cu
-    ../../Shared/Execution/DecodeTimeNumPolicy.cu
     ../../Layers/Quantization/Quantization_GPU.cu
     ../../Shared/Batching/Batching_GPU.cu
     ../../Shared/Batching/BatchDeviceUpload.cu

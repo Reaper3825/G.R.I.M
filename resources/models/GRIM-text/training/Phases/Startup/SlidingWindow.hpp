@@ -26,7 +26,7 @@ namespace GRIMText::Training {
 // Ensure each sequence starts with BOS and ends with EOS (when enabled).
 // Mutates each sequence in place across every parallel side-channel
 // (token_ids / targets / numeric_values / atom_mask / atom_entry_ids /
-// atom_flags / exec_slots / slot_selection_targets) and
+// atom_flags / exec_slots) and
 // re-maps compiled_bootstrap_bindings token_pos for the BOS shift.
 //
 // Called by applySlidingWindows before any windowing happens, so all

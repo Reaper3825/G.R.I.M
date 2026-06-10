@@ -87,7 +87,6 @@ BatchPayload makeInferenceBasePayload(
     payload.compiled_bootstrap_bindings.resize(1);
     payload.teacher_steps.resize(1);
     payload.teacher_step_mask.resize(1);
-    payload.slot_selection_targets.resize(1);
 
     return payload;
 }
@@ -184,7 +183,6 @@ BatchPayload buildBatchPayload(
         bool execution_active;
         const std::vector<GRIM::Execution::CompiledBootstrapBinding>* compiled_bootstrap_bindings;
         const std::vector<GRIM::Execution::TeacherStep>* teacher_steps;
-        const std::vector<GRIM::Execution::SlotSelectionTarget>* slot_selection_targets;
     };
 
     std::vector<RawSeq> raw;
@@ -322,8 +320,7 @@ BatchPayload buildBatchPayload(
             seq_len,
             seq->execution_active,
             &seq->compiled_bootstrap_bindings,
-            &seq->teacher_steps,
-            &seq->slot_selection_targets
+            &seq->teacher_steps
         });
 
         payload.seq_lengths[b] = seq_len;
@@ -404,7 +401,6 @@ BatchPayload buildBatchPayload(
     payload.compiled_bootstrap_bindings.resize(payload.batch_size);
     payload.teacher_steps.resize(payload.batch_size);
     payload.teacher_step_mask.resize(payload.batch_size);
-    payload.slot_selection_targets.resize(payload.batch_size);
 
     payload.valid_tokens = 0;
 
@@ -505,9 +501,6 @@ BatchPayload buildBatchPayload(
             for (int k = 0; k < std::min(real_count, execution_num_steps); ++k) {
                 payload.teacher_step_mask[b][k] = 1;
             }
-        }
-        if (r.slot_selection_targets && !r.slot_selection_targets->empty()) {
-            payload.slot_selection_targets[b] = *r.slot_selection_targets;
         }
     }
 

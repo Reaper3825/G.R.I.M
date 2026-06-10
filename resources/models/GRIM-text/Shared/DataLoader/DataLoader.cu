@@ -490,7 +490,6 @@ bool PrepareTrainingDataFromCache(
 				seq->token_exec_slots = std::move(built.payload.token_exec_slots);
 				seq->compiled_bootstrap_bindings = std::move(built.payload.compiled_bootstrap_bindings);
 				seq->teacher_steps = std::move(built.payload.teacher_steps);
-				seq->slot_selection_targets = std::move(built.payload.slot_selection_targets);
 			}
 			all_tokens.push_back(std::move(*seq));
 		} catch (const std::exception& e) {

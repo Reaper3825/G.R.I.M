@@ -55,7 +55,6 @@ struct TelemetryBatchInput {
     float text_loss             = 0.0f;
     float mtp_loss              = 0.0f;
     float execution_loss        = 0.0f;
-    float selector_loss         = 0.0f;
 
     // Batch geometry (stream 30)
     int   max_seq_len           = 0;

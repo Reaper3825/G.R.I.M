@@ -376,7 +376,6 @@ struct LanguageModelConfig {
     ParameterGroupPrecision parameter_precision_rmsnorm = ParameterGroupPrecision::UNSPECIFIED;
     ParameterGroupPrecision parameter_precision_mtp = ParameterGroupPrecision::UNSPECIFIED;
     ParameterGroupPrecision parameter_precision_execution_block = ParameterGroupPrecision::UNSPECIFIED;
-    ParameterGroupPrecision parameter_precision_slot_selector = ParameterGroupPrecision::UNSPECIFIED;
 
     // Atom-data pipeline config (consumed by ExecutionBlock)
     bool use_atom_data = false;
@@ -422,13 +421,6 @@ struct LanguageModelConfig {
 
     bool  structured_ce_enabled = false;
     float structured_ce_weight  = 0.0f;
-
-    // Decode-time slot selector config
-    bool  selector_enabled = false;
-    int   decode_time_slot_feature_dim = 0;
-    int   selector_d_selector = 0;
-    float selector_selection_margin = 0.0f;
-    float selector_supervision_weight = 0.0f;
 
     // Execution-first structured CE loss config (Step X / Y multipliers)
     float step_x_multiplier = 0.0f;
@@ -1431,7 +1423,6 @@ inline void validateRootConfigDocument(
     validateParameterGroupPrecision(params.parameter_precision_rmsnorm, "parameter_precision_rmsnorm", caller);
     validateParameterGroupPrecision(params.parameter_precision_mtp, "parameter_precision_mtp", caller);
     validateParameterGroupPrecision(params.parameter_precision_execution_block, "parameter_precision_execution_block", caller);
-    validateParameterGroupPrecision(params.parameter_precision_slot_selector, "parameter_precision_slot_selector", caller);
 
     validateNonNegativeFiniteFields(params, {
         validationField("loss_focal_gamma", &LanguageModelConfig::loss_focal_gamma),
@@ -1503,10 +1494,6 @@ inline void validateRootConfigDocument(
     validatePositiveFiniteFields(params, {
         validationField("execution_block_value_match_epsilon", &LanguageModelConfig::value_match_epsilon)
     }, caller);
-    if (params.selector_enabled && !params.execution_block_enabled) {
-        throw std::runtime_error(
-            std::string(caller) + ": selector_enabled=true requires execution_block_enabled=true");
-    }
     if (params.execution_block_enabled) {
         if (!params.use_atom_data) {
             throw std::runtime_error(
@@ -1583,16 +1570,6 @@ inline void validateRootConfigDocument(
             validationField("execution_block_entropy_collapse_threshold", &LanguageModelConfig::execution_block_entropy_collapse_threshold),
             validationField("execution_block_write_collapse_threshold", &LanguageModelConfig::execution_block_write_collapse_threshold),
             validationField("execution_block_arg_reinforce_baseline_decay", &LanguageModelConfig::arg_reinforce_baseline_decay)
-        }, caller);
-    }
-    if (params.selector_enabled) {
-        validatePositiveFields(params, {
-            validationField("selector_d_slot_features", &LanguageModelConfig::decode_time_slot_feature_dim),
-            validationField("selector_d_selector", &LanguageModelConfig::selector_d_selector)
-        }, caller);
-        validateNonNegativeFiniteFields(params, {
-            validationField("selector_selection_margin", &LanguageModelConfig::selector_selection_margin),
-            validationField("selector_supervision_weight", &LanguageModelConfig::selector_supervision_weight)
         }, caller);
     }
     if (params.mtp_enabled) {
@@ -1794,7 +1771,6 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(parameter_precision_rmsnorm);
     GRIM_LOAD_CONFIG_FIELD(parameter_precision_mtp);
     GRIM_LOAD_CONFIG_FIELD(parameter_precision_execution_block);
-    GRIM_LOAD_CONFIG_FIELD(parameter_precision_slot_selector);
 
     params.positional_encoding = parsePositionalEncodingFlags(
         config.at("use_rope").get<bool>(),
@@ -1941,7 +1917,6 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(execution_block_debug_mode);
     GRIM_LOAD_CONFIG_LEAF("execution_block_step_y_overrides_x", step_y_overrides_x);
     GRIM_LOAD_CONFIG_LEAF("execution_block_structured_ce_enabled", structured_ce_enabled);
-    GRIM_LOAD_CONFIG_FIELD(selector_enabled);
     GRIM_LOAD_CONFIG_FIELD(execution_block_layer);
     GRIM_LOAD_CONFIG_FIELD(execution_block_num_ops);
     GRIM_LOAD_CONFIG_FIELD(execution_block_num_slots);
@@ -1954,8 +1929,6 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(execution_block_result_slot_mode);
     GRIM_LOAD_CONFIG_FIELD(execution_block_result_slot_index);
     GRIM_LOAD_CONFIG_FIELD(execution_block_temp_schedule);
-    GRIM_LOAD_CONFIG_LEAF("selector_d_slot_features", decode_time_slot_feature_dim);
-    GRIM_LOAD_CONFIG_FIELD(selector_d_selector);
     GRIM_LOAD_CONFIG_FIELD(execution_block_usage_decay);
     GRIM_LOAD_CONFIG_FIELD(execution_block_inject_gate_temp);
     GRIM_LOAD_CONFIG_FIELD(execution_block_entropy_collapse_threshold);
@@ -1977,8 +1950,6 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_LEAF("execution_block_arg_reinforce_weight", arg_reinforce_weight);
     GRIM_LOAD_CONFIG_LEAF("execution_block_arg_reinforce_baseline_decay", arg_reinforce_baseline_decay);
     GRIM_LOAD_CONFIG_LEAF("execution_block_structured_ce_weight", structured_ce_weight);
-    GRIM_LOAD_CONFIG_FIELD(selector_selection_margin);
-    GRIM_LOAD_CONFIG_FIELD(selector_supervision_weight);
     GRIM_LOAD_CONFIG_FIELD(single_stream_mode);
     GRIM_LOAD_CONFIG_FIELD(disable_async_frees);
     GRIM_LOAD_CONFIG_FIELD(synchronize_after_kernels);
@@ -2268,7 +2239,6 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_rmsnorm);
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_mtp);
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_execution_block);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_slot_selector);
     GRIM_WRITE_FINAL_CONFIG_FIELD(use_atom_data);
     GRIM_WRITE_FINAL_CONFIG_FIELD(atom_embedding_dim);
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_enabled);
@@ -2305,11 +2275,6 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(arg_reinforce_baseline_decay);
     GRIM_WRITE_FINAL_CONFIG_FIELD(structured_ce_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(structured_ce_weight);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(selector_enabled);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(decode_time_slot_feature_dim);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(selector_d_selector);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(selector_selection_margin);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(selector_supervision_weight);
     GRIM_WRITE_FINAL_CONFIG_FIELD(step_x_multiplier);
     GRIM_WRITE_FINAL_CONFIG_FIELD(step_y_multiplier);
     GRIM_WRITE_FINAL_CONFIG_FIELD(step_y_overrides_x);

@@ -126,21 +126,6 @@ struct SerializationExecutionBlockReadView {
 	bool enabled = false;
 };
 
-struct SerializationSlotSelectorReadView {
-	DeviceReadView w_q_select;
-	DeviceReadView w_k_select;
-	DeviceReadView null_key_select;
-	DeviceReadView null_logit_bias;
-	bool enabled = false;
-};
-
-struct SerializationSlotSelectorWriteView {
-	DeviceWriteView w_q_select;
-	DeviceWriteView w_k_select;
-	DeviceWriteView null_key_select;
-	DeviceWriteView null_logit_bias;
-};
-
 struct SerializationExecutionBlockWriteView {
 	DeviceWriteView w_decode_1;
 	DeviceWriteView b_decode_1;

@@ -553,8 +553,7 @@ enum class ParamGroupType : uint8_t {
     RMSNORM = 4,        ///< RMSNorm gamma parameters
     MTP = 5,            ///< Multi-token prediction auxiliary heads (weight + bias per head)
     EXECUTION_BLOCK = 6,///< Execution block weights (decode MLP, arg/op/slot select, cross-attn)
-    SLOT_SELECTOR = 7,  ///< Decode-time slot selector (W_q, W_k, null_key, null_bias)
-    COUNT = 8           ///< Number of parameter group types
+    COUNT = 7           ///< Number of parameter group types
 };
 
 enum class ParamStatsBucket : uint8_t {

@@ -23,7 +23,6 @@ struct GrmtSequence {
     bool execution_active = false;
     std::vector<GRIM::Execution::CompiledBootstrapBinding> compiled_bootstrap_bindings;
     std::vector<GRIM::Execution::TeacherStep> teacher_steps;
-    std::vector<GRIM::Execution::SlotSelectionTarget> slot_selection_targets;
 
     bool hasAnyValidTarget() const;
     void validateForWrite(const std::string& source) const;

@@ -277,14 +277,6 @@ void GrmtCorpusWriter::writeSequence(const GrmtSequence& sequence) {
                    static_cast<std::size_t>(ts_count) * sizeof(GRIM::Execution::TeacherStep), sink);
     }
 
-    const std::uint32_t sst_count = static_cast<std::uint32_t>(sequence.slot_selection_targets.size());
-    writeScalar(file_, sst_count, sink);
-    for (std::uint32_t si = 0; si < sst_count; ++si) {
-        const std::uint8_t kind = static_cast<std::uint8_t>(sequence.slot_selection_targets[si].kind);
-        writeScalar(file_, kind, sink);
-        writeScalar(file_, sequence.slot_selection_targets[si].slot_id, sink);
-    }
-
     ++written_sequences_;
 }
 
@@ -427,17 +419,6 @@ bool GrmtCorpusReader::readNext(GrmtSequence& out_sequence) {
         seq.teacher_steps.resize(ts_count);
         readExact(file_, seq.teacher_steps.data(),
                   static_cast<std::size_t>(ts_count) * sizeof(GRIM::Execution::TeacherStep), source);
-    }
-
-    const std::uint32_t sst_count = readScalar<std::uint32_t>(file_, source);
-    if (sst_count > 0) {
-        seq.slot_selection_targets.resize(sst_count);
-        for (std::uint32_t si = 0; si < sst_count; ++si) {
-            const std::uint8_t kind = readScalar<std::uint8_t>(file_, source);
-            seq.slot_selection_targets[si].kind =
-                static_cast<GRIM::Execution::SlotSelectionTargetKind>(kind);
-            seq.slot_selection_targets[si].slot_id = readScalar<std::int32_t>(file_, source);
-        }
     }
 
     out_sequence = std::move(seq);

@@ -204,15 +204,6 @@ compileExecutionPayload(
         payload.teacher_steps.push_back(ts);
     }
 
-    // ── Slot selection targets: IGNORE for all token positions ──
-    // Dense, decode-position aligned. For concept rows in this cutover,
-    // the builder does not yet have per-position selector supervision data.
-    payload.slot_selection_targets.resize(seq_len);
-    for (int t = 0; t < seq_len; ++t) {
-        payload.slot_selection_targets[t].kind = Execution::SlotSelectionTargetKind::Ignore;
-        payload.slot_selection_targets[t].slot_id = -1;
-    }
-
     return payload;
 }
 

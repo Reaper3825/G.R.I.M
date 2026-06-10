@@ -57,7 +57,6 @@ size_t paramGroupTypeIndex(ParamGroupType type) {
         case ParamGroupType::RMSNORM:         return 4;
         case ParamGroupType::MTP:             return 5;
         case ParamGroupType::EXECUTION_BLOCK: return 6;
-        case ParamGroupType::SLOT_SELECTOR:   return 7;
         case ParamGroupType::COUNT: break;
     }
     throw std::runtime_error("[buildParameterGroups] invalid ParamGroupType::COUNT in registered group summary");
@@ -72,7 +71,6 @@ const char* paramGroupTypeSummaryName(ParamGroupType type) {
         case ParamGroupType::RMSNORM:         return "rmsnorm";
         case ParamGroupType::MTP:             return "mtp";
         case ParamGroupType::EXECUTION_BLOCK: return "execution_block";
-        case ParamGroupType::SLOT_SELECTOR:   return "slot_selector";
         case ParamGroupType::COUNT: break;
     }
     throw std::runtime_error("[buildParameterGroups] invalid ParamGroupType::COUNT in registered group summary");
@@ -223,7 +221,6 @@ private:
             case ParamGroupType::RMSNORM:         return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_rmsnorm");
             case ParamGroupType::MTP:             return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_mtp");
             case ParamGroupType::EXECUTION_BLOCK: return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_execution_block");
-            case ParamGroupType::SLOT_SELECTOR:   return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_slot_selector");
             case ParamGroupType::COUNT: break;
         }
         throw std::runtime_error("[buildParameterGroups] invalid ParamGroupType::COUNT for parameter precision lookup");
@@ -377,16 +374,11 @@ void registerExecutionBlockParameters(Startup::GpuModelState& gpu_model_state,
                                       const GRIM::Config::AiConfigSnapshot& config) {
     (void)gpu_model_state;
     auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
-    auto* slot_selector = parameter_registry.getDecodeTimeSlotSelector();
     const auto execution_hp = GRIM::HyperParameters::executionBlockConstructionHP(config);
-    const auto selector_hp = GRIM::HyperParameters::decodeTimeSelectorConstructionHP(config);
 
     if (!execution_hp.enabled) {
         if (execution_block_parameters) {
             throw std::runtime_error("[buildParameterGroups] ExecutionBlock parameter owner exists while config.execution_block_enabled=false");
-        }
-        if (selector_hp.enabled || slot_selector) {
-            throw std::runtime_error("[buildParameterGroups] Slot selector requires config.execution_block_enabled=true");
         }
         return;
     }
@@ -396,16 +388,6 @@ void registerExecutionBlockParameters(Startup::GpuModelState& gpu_model_state,
         "ExecutionBlockParameterTensors",
         "registerExecutionBlockParameters");
     ParameterRegistry::registerExecutionBlockParameters(execution_block_tensor_owner, registrar);
-
-    if (!selector_hp.enabled) {
-        if (slot_selector) {
-            throw std::runtime_error("[buildParameterGroups] DecodeTimeSlotSelector exists while config.selector_enabled=false");
-        }
-        return;
-    }
-
-    auto& selector = requireLayer(slot_selector, "DecodeTimeSlotSelector", "registerExecutionBlockParameters");
-    ParameterRegistry::registerDecodeTimeSlotSelectorParameters(selector, registrar);
 }
 
 void registerMtpParameters(ParameterRegistry::StartupParameterRegistry& parameter_registry,
@@ -498,7 +480,7 @@ void validateRegisteredTensorPrecisionMetadata(const std::vector<ParameterGroup>
 void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
     constexpr size_t kParamGroupTypeCount = static_cast<size_t>(ParamGroupType::COUNT);
     constexpr size_t kPrecisionCount = 2;
-    static_assert(kParamGroupTypeCount == 8,
+    static_assert(kParamGroupTypeCount == 7,
                   "Registered group precision summary must list every ParamGroupType");
 
     const std::array<ParamGroupType, kParamGroupTypeCount> group_types = {
@@ -508,8 +490,7 @@ void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
         ParamGroupType::FFN,
         ParamGroupType::RMSNORM,
         ParamGroupType::MTP,
-        ParamGroupType::EXECUTION_BLOCK,
-        ParamGroupType::SLOT_SELECTOR
+        ParamGroupType::EXECUTION_BLOCK
     };
     const std::array<ParameterGroupPrecision, kPrecisionCount> precisions = {
         ParameterGroupPrecision::FP32,
@@ -532,7 +513,6 @@ void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
             case ParamGroupType::RMSNORM: ++rms_count; break;
             case ParamGroupType::MTP: ++other_count; break;
             case ParamGroupType::EXECUTION_BLOCK: ++other_count; break;
-            case ParamGroupType::SLOT_SELECTOR: ++other_count; break;
             case ParamGroupType::COUNT:
                 throw std::runtime_error("[buildParameterGroups] group " + group.name +
                                          " has invalid ParamGroupType::COUNT");
@@ -597,7 +577,6 @@ void validateParameterRegistrationConfig(const GRIM::Config::AiConfigSnapshot& c
     GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_rmsnorm"), "parameter_precision_rmsnorm", "buildParameterGroups");
     GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_mtp"), "parameter_precision_mtp", "buildParameterGroups");
     GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_execution_block"), "parameter_precision_execution_block", "buildParameterGroups");
-    GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_slot_selector"), "parameter_precision_slot_selector", "buildParameterGroups");
 }
 
 void validateExecutionBlockConstructionHP(

@@ -52,7 +52,6 @@ struct LossResult {
     float text_loss = 0.0f;          // Pure next-token CE, before MTP/exec/selector additions
     float mtp_loss = 0.0f;           // Sum of weighted MTP auxiliary contributions
     float execution_loss = 0.0f;     // Execution-block auxiliary contribution (transition/structured CE/div/REINFORCE)
-    float selector_loss = 0.0f;      // Decode-time selector supervision loss (host scalar)
     float entropy_monitor = 0.0f;    // Execution entropy monitoring scalar; not added to loss_tensor
     float weight_text = 1.0f;
     int valid_tokens = 0;

@@ -558,29 +558,6 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
         Logging::EmitModuleInfo(kLogModule, "[load] ExecutionBlock v2 weights loaded");
     }
 
-    // ─── DecodeTimeSlotSelector (gated by requires_slot_selector) ───
-    if (req.requires_slot_selector) {
-        const auto* fb_ss = model_fb->slot_selector();
-        if (!fb_ss) {
-            Logging::EmitModuleError(kLogModule, "[load] FATAL: SlotSelector required but missing in checkpoint");
-            return false;
-        }
-        auto ul = [&](const flatbuffers::Vector<float>* src, const DeviceWriteView& dst, const char* name) -> bool {
-            if (!src) return true;  // Field absent in checkpoint — skip
-            std::vector<float> buf(src->begin(), src->end());
-            return upload_device_vector(buf, dst, name);
-        };
-        const auto& ss = request.slot_selector;
-        bool ss_ok = true;
-        ss_ok = ss_ok && ul(fb_ss->w_q_select_data(), ss.w_q_select, "SS w_q_select");
-        ss_ok = ss_ok && ul(fb_ss->w_k_select_data(), ss.w_k_select, "SS w_k_select");
-        ss_ok = ss_ok && ul(fb_ss->null_key_select_data(), ss.null_key_select, "SS null_key_select");
-        ss_ok = ss_ok && ul(fb_ss->null_logit_bias_data(), ss.null_logit_bias, "SS null_logit_bias");
-        if (!ss_ok) return false;
-        request.report.slot_selector_loaded = true;
-        Logging::EmitModuleInfo(kLogModule, "[load] SlotSelector weights loaded");
-    }
-
     // ─── final_rms_gamma (gated by requires_final_rms_gamma) ───
     if (req.requires_final_rms_gamma) {
         const auto* fb_frg = model_fb->final_rms_gamma();
@@ -593,10 +570,6 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
     // ─── Step 7: Final load verification (safety) ───
     if (req.requires_execution_block && !request.report.execution_block_loaded) {
         Logging::EmitModuleError(kLogModule, "[load] FATAL: ExecutionBlock required but not loaded");
-        return false;
-    }
-    if (req.requires_slot_selector && !request.report.slot_selector_loaded) {
-        Logging::EmitModuleError(kLogModule, "[load] FATAL: SlotSelector required but not loaded");
         return false;
     }
 

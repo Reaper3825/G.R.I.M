@@ -31,10 +31,11 @@ inline constexpr std::uint32_t GRIM_MODEL_VERSION = 12;
 //      CompiledBootstrapBinding[count]  (binding_id, token_pos, slot_id — 12 bytes each)
 //      uint32 teacher_step_count
 //      TeacherStep[count]               (op_id, arg1_slot, arg2_slot, write_slot, expected_value — 20 bytes each)
-//      uint32 slot_selection_target_count
-//      SlotSelectionTarget[count]       (uint8 kind + int32 slot_id — 5 bytes each, serialized field-by-field)
 // v12: Removed the per-token text feature side-channel from the GRMT stream. Atom metadata is
 //      token_numeric_values + token_atom_mask + token_atom_flags + atom strings.
-inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 12;
+// v13: Removed the slot_selection_target stream (uint32 count + per-entry kind/slot_id). The
+//      execution-entangled decode-time slot selector was deleted; numeric-meaning selector
+//      supervision will arrive as a new channel (see docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md).
+inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 13;
 
 } // namespace GRIM

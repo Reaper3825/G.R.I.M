@@ -223,9 +223,6 @@ const char* classifyConfigSection(const std::string& key) {
         })) {
         return "ExecutionBlock";
     }
-    if (startsWith(key, "selector_") || key == "decode_time_slot_feature_dim") {
-        return "Decode-time selector";
-    }
     if (startsWith(key, "mtp_")) {
         return "Multi-token prediction";
     }

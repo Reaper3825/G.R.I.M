@@ -480,7 +480,7 @@ def analyze_log(log_path: Path, max_lines: int | None = None) -> dict[str, Any]:
 					"optimizer_step": parsed_fields.get("optimizer_step", current_optimizer_step),
 					"iteration": parsed_fields.get("iteration"),
 				}
-				for key in ("emb", "lm", "attn", "ffn", "rmsnorm", "sb", "exec", "slot_selector"):
+				for key in ("emb", "lm", "attn", "ffn", "rmsnorm", "sb", "exec"):
 					if key in parsed_fields:
 						row[key] = parsed_fields[key]
 				optimizer_component_rows.append(row)

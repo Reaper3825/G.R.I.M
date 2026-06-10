@@ -9,8 +9,6 @@
 //    - Embedding durable tensor owner
 //    - LM head durable tensor owner
 //    - Encoder durable per-layer parameter tensor owner
-//    - DecodeTimeSlotSelector durable tensor owner
-//    - DecodeTimeSlotSelector parameter-group inventory
 //    - ExecutionBlock durable parameter tensor owner
 //    - ExecutionBlock parameter-group inventory
 //    - FeedForward durable per-layer parameter tensor owner
@@ -36,14 +34,6 @@ namespace GRIM {
 
 struct EmbeddingParameterTensors {
     Tensor token_weights;  // [vocab_size, d_model]
-};
-
-struct DecodeTimeSlotSelector {
-    // Required baseline trainable tensors
-    Tensor W_q_select;       // [d_model, d_selector]
-    Tensor W_k_select;       // [d_slot_features, d_selector]
-    Tensor null_key_select;  // [1, d_selector]
-    Tensor null_logit_bias;  // [1, 1] scalar
 };
 
 struct ExecutionBlockParameterTensors {
@@ -110,7 +100,6 @@ struct StartupParameterRegistry {
     std::unique_ptr<GRIM::EmbeddingParameterTensors> embedding_parameters;
     std::unique_ptr<GRIM::LMHeadParameterTensors> lm_head_parameters;
     std::vector<GRIM::EncodingLayerParameterTensors> encoding_layer_parameter_tensors;
-    std::unique_ptr<GRIM::DecodeTimeSlotSelector> decode_time_slot_selector;
     std::unique_ptr<GRIM::ExecutionBlockParameterTensors> execution_block_parameters;
     std::vector<GRIM::FeedForwardParameterTensors> feed_forward_parameter_tensors;
     std::vector<GRIM::MtpHeadParameterTensors> mtp_head_parameter_tensors;
@@ -188,14 +177,6 @@ struct StartupParameterRegistry {
                                      std::to_string(encoding_layer_parameter_tensors.size()));
         }
         return encoding_layer_parameter_tensors[static_cast<std::size_t>(layer)];
-    }
-
-    GRIM::DecodeTimeSlotSelector* getDecodeTimeSlotSelector() {
-        return decode_time_slot_selector.get();
-    }
-
-    const GRIM::DecodeTimeSlotSelector* getDecodeTimeSlotSelector() const {
-        return decode_time_slot_selector.get();
     }
 
     GRIM::ExecutionBlockParameterTensors* getExecutionBlockParameters() {
@@ -286,9 +267,6 @@ struct TensorParameterSpec {
     int layer = -1;
 };
 
-using DecodeTimeSlotSelectorTensorParameterSpec =
-    TensorParameterSpec<GRIM::DecodeTimeSlotSelector>;
-
 using ExecutionBlockTensorParameterSpec =
     TensorParameterSpec<GRIM::ExecutionBlockParameterTensors>;
 
@@ -308,18 +286,6 @@ inline constexpr std::array<EmbeddingTensorParameterSpec, 1>
     kEmbeddingTensorParameters = {{
         {"embedding", &GRIM::EmbeddingParameterTensors::token_weights,
          GRIM::ParamGroupType::EMBEDDING, GRIM::ParamStatsBucket::EMBEDDING},
-    }};
-
-inline constexpr std::array<DecodeTimeSlotSelectorTensorParameterSpec, 4>
-    kDecodeTimeSlotSelectorTensorParameters = {{
-        {"selector_W_q_select", &GRIM::DecodeTimeSlotSelector::W_q_select,
-         GRIM::ParamGroupType::SLOT_SELECTOR, GRIM::ParamStatsBucket::ENCODER},
-        {"selector_W_k_select", &GRIM::DecodeTimeSlotSelector::W_k_select,
-         GRIM::ParamGroupType::SLOT_SELECTOR, GRIM::ParamStatsBucket::ENCODER},
-        {"selector_null_key_select", &GRIM::DecodeTimeSlotSelector::null_key_select,
-         GRIM::ParamGroupType::SLOT_SELECTOR, GRIM::ParamStatsBucket::ENCODER},
-        {"selector_null_logit_bias", &GRIM::DecodeTimeSlotSelector::null_logit_bias,
-         GRIM::ParamGroupType::SLOT_SELECTOR, GRIM::ParamStatsBucket::ENCODER},
     }};
 
 inline constexpr std::array<ExecutionBlockTensorParameterSpec, 30>
@@ -433,19 +399,6 @@ inline void registerEmbeddingParameters(
     for (const auto& spec : kEmbeddingTensorParameters) {
         registrar.addTensor(spec.name,
                             embedding_parameters.*(spec.tensor_member),
-                            spec.type,
-                            spec.stats_bucket,
-                            spec.layer);
-    }
-}
-
-template <typename RegistrarT>
-inline void registerDecodeTimeSlotSelectorParameters(
-    GRIM::DecodeTimeSlotSelector& selector,
-    RegistrarT& registrar) {
-    for (const auto& spec : kDecodeTimeSlotSelectorTensorParameters) {
-        registrar.addTensor(spec.name,
-                            selector.*(spec.tensor_member),
                             spec.type,
                             spec.stats_bucket,
                             spec.layer);
