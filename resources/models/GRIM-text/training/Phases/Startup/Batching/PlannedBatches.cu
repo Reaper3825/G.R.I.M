@@ -45,6 +45,9 @@ GRIM::Batching::BatchPayload buildPayloadFromAssignmentImpl(
     const int execution_block_num_slots = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "execution_block_num_slots");
     const int execution_block_num_ops = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "execution_block_num_ops");
     const int execution_block_num_steps = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "execution_block_num_steps");
+    const auto number_encoder_hp = GRIM::HyperParameters::numberEncoderConstructionHP(ctx.config);
+    const int number_encoder_digit_slots = number_encoder_hp.enabled ? number_encoder_hp.max_digit_slots : 0;
+    const int number_encoder_max_abs_pow10 = number_encoder_hp.max_abs_pow10;
     const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "vocab_size");
     const std::uint32_t actual_vocab_size = ctx.data.vocab_size;
     const auto layout = GRIM::Tokenizer::tokenLayoutFromActualVocabOrThrow(
@@ -76,7 +79,9 @@ GRIM::Batching::BatchPayload buildPayloadFromAssignmentImpl(
         execution_block_num_slots,
         execution_block_num_ops,
         execution_block_num_steps,
-        mtp_k);
+        mtp_k,
+        number_encoder_digit_slots,
+        number_encoder_max_abs_pow10);
 }
 
 //======================================================//

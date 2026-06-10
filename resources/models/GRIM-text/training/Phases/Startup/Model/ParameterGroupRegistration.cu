@@ -5,6 +5,7 @@
 
 #include "../../../../GRIM/grim_language_model_cuda.hpp"
 #include "../../../../Layers/Encoding/Encoding_GPU.hpp"
+#include "../../../../Shared/Batching/BatchPayload.hpp"
 #include "../../../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../../../Shared/LogRecorder/LogRecorder.hpp"
@@ -57,6 +58,7 @@ size_t paramGroupTypeIndex(ParamGroupType type) {
         case ParamGroupType::RMSNORM:         return 4;
         case ParamGroupType::MTP:             return 5;
         case ParamGroupType::EXECUTION_BLOCK: return 6;
+        case ParamGroupType::NUMBER_ENCODER:  return 7;
         case ParamGroupType::COUNT: break;
     }
     throw std::runtime_error("[buildParameterGroups] invalid ParamGroupType::COUNT in registered group summary");
@@ -71,6 +73,7 @@ const char* paramGroupTypeSummaryName(ParamGroupType type) {
         case ParamGroupType::RMSNORM:         return "rmsnorm";
         case ParamGroupType::MTP:             return "mtp";
         case ParamGroupType::EXECUTION_BLOCK: return "execution_block";
+        case ParamGroupType::NUMBER_ENCODER:  return "number_encoder";
         case ParamGroupType::COUNT: break;
     }
     throw std::runtime_error("[buildParameterGroups] invalid ParamGroupType::COUNT in registered group summary");
@@ -221,6 +224,7 @@ private:
             case ParamGroupType::RMSNORM:         return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_rmsnorm");
             case ParamGroupType::MTP:             return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_mtp");
             case ParamGroupType::EXECUTION_BLOCK: return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_execution_block");
+            case ParamGroupType::NUMBER_ENCODER:  return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_number_encoder");
             case ParamGroupType::COUNT: break;
         }
         throw std::runtime_error("[buildParameterGroups] invalid ParamGroupType::COUNT for parameter precision lookup");
@@ -390,6 +394,26 @@ void registerExecutionBlockParameters(Startup::GpuModelState& gpu_model_state,
     ParameterRegistry::registerExecutionBlockParameters(execution_block_tensor_owner, registrar);
 }
 
+void registerNumberEncoderParameters(ParameterRegistry::StartupParameterRegistry& parameter_registry,
+                                     Registrar& registrar,
+                                     const GRIM::Config::AiConfigSnapshot& config) {
+    auto* number_encoder_parameters = parameter_registry.getNumberEncoderParameters();
+    const auto number_encoder_hp = GRIM::HyperParameters::numberEncoderConstructionHP(config);
+
+    if (!number_encoder_hp.enabled) {
+        if (number_encoder_parameters) {
+            throw std::runtime_error("[buildParameterGroups] NumberEncoder parameter owner exists while config.number_encoder_enabled=false");
+        }
+        return;
+    }
+
+    auto& number_encoder_tensor_owner = requireLayer(
+        number_encoder_parameters,
+        "NumberEncoderParameterTensors",
+        "registerNumberEncoderParameters");
+    ParameterRegistry::registerNumberEncoderParameters(number_encoder_tensor_owner, registrar);
+}
+
 void registerMtpParameters(ParameterRegistry::StartupParameterRegistry& parameter_registry,
                            Registrar& registrar,
                            const GRIM::Config::AiConfigSnapshot& config) {
@@ -480,7 +504,7 @@ void validateRegisteredTensorPrecisionMetadata(const std::vector<ParameterGroup>
 void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
     constexpr size_t kParamGroupTypeCount = static_cast<size_t>(ParamGroupType::COUNT);
     constexpr size_t kPrecisionCount = 2;
-    static_assert(kParamGroupTypeCount == 7,
+    static_assert(kParamGroupTypeCount == 8,
                   "Registered group precision summary must list every ParamGroupType");
 
     const std::array<ParamGroupType, kParamGroupTypeCount> group_types = {
@@ -490,7 +514,8 @@ void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
         ParamGroupType::FFN,
         ParamGroupType::RMSNORM,
         ParamGroupType::MTP,
-        ParamGroupType::EXECUTION_BLOCK
+        ParamGroupType::EXECUTION_BLOCK,
+        ParamGroupType::NUMBER_ENCODER
     };
     const std::array<ParameterGroupPrecision, kPrecisionCount> precisions = {
         ParameterGroupPrecision::FP32,
@@ -513,6 +538,7 @@ void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
             case ParamGroupType::RMSNORM: ++rms_count; break;
             case ParamGroupType::MTP: ++other_count; break;
             case ParamGroupType::EXECUTION_BLOCK: ++other_count; break;
+            case ParamGroupType::NUMBER_ENCODER: ++other_count; break;
             case ParamGroupType::COUNT:
                 throw std::runtime_error("[buildParameterGroups] group " + group.name +
                                          " has invalid ParamGroupType::COUNT");
@@ -1105,6 +1131,81 @@ void initializeExecutionBlockParameterTensors(
     emitInfo("[initializeExecutionBlockParameterTensors] Initialized registry-owned ExecutionBlock tensors");
 }
 
+void initializeNumberEncoderParameterTensors(
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const GRIM::HyperParameters::NumberEncoderConstructionHP& number_encoder_hp,
+    std::uint64_t weight_init_seed,
+    cudaStream_t init_stream) {
+    if (!number_encoder_hp.enabled) {
+        if (parameter_registry.getNumberEncoderParameters()) {
+            throw std::runtime_error("initializeNumberEncoderParameterTensors: NumberEncoder disabled but registry owner already exists");
+        }
+        return;
+    }
+    if (!init_stream) {
+        throw std::runtime_error("initializeNumberEncoderParameterTensors: init_stream is NULL");
+    }
+    if (parameter_registry.getNumberEncoderParameters()) {
+        throw std::runtime_error("initializeNumberEncoderParameterTensors: registry NumberEncoder tensor owner is already initialized");
+    }
+    if (number_encoder_hp.d_model <= 0) {
+        throw std::runtime_error("initializeNumberEncoderParameterTensors: d_model must be > 0, got " +
+                                 std::to_string(number_encoder_hp.d_model));
+    }
+    if (number_encoder_hp.d_hidden <= 0) {
+        throw std::runtime_error("initializeNumberEncoderParameterTensors: d_hidden must be > 0, got " +
+                                 std::to_string(number_encoder_hp.d_hidden));
+    }
+    if (number_encoder_hp.max_digit_slots <= 0) {
+        throw std::runtime_error("initializeNumberEncoderParameterTensors: max_digit_slots must be > 0, got " +
+                                 std::to_string(number_encoder_hp.max_digit_slots));
+    }
+    if (number_encoder_hp.pow10_buckets != 2 * number_encoder_hp.max_abs_pow10 + 1 ||
+        number_encoder_hp.pow10_buckets <= 0) {
+        throw std::runtime_error("initializeNumberEncoderParameterTensors: pow10_buckets=" +
+                                 std::to_string(number_encoder_hp.pow10_buckets) +
+                                 " does not match 2 * max_abs_pow10 + 1 (max_abs_pow10=" +
+                                 std::to_string(number_encoder_hp.max_abs_pow10) + ")");
+    }
+
+    const int d_model = number_encoder_hp.d_model;
+    const int d_hidden = number_encoder_hp.d_hidden;
+
+    auto params = std::make_unique<GRIM::NumberEncoderParameterTensors>();
+    auto make_xavier = [&](int rows, int cols, std::uint64_t seed, const char* name) -> GRIM::Tensor {
+        GRIM::Tensor t = GRIM::Tensor::zeros({rows, cols}, init_stream, name);
+        t.requires_grad_();
+        t.ensure_grad();
+        GRIM::Tensor::xavier_uniform_(t, seed, init_stream);
+        return t;
+    };
+
+    params->digit_emb = make_xavier(10, d_model, weight_init_seed, "number_encoder.digit_emb");
+    params->pow10_emb = make_xavier(number_encoder_hp.pow10_buckets, d_model, weight_init_seed + 1, "number_encoder.pow10_emb");
+    params->W_c1 = make_xavier(GRIM::Batching::BatchPayload::kNumberSlotFeatureDim, d_hidden, weight_init_seed + 2, "number_encoder.W_c1");
+    params->b_c1 = GRIM::Tensor::zeros({1, d_hidden}, init_stream, "number_encoder.b_c1");
+    params->b_c1.requires_grad_();
+    params->b_c1.ensure_grad();
+    params->W_c2 = make_xavier(d_hidden, d_model, weight_init_seed + 3, "number_encoder.W_c2");
+    params->W_g1 = make_xavier(GRIM::Batching::BatchPayload::kNumberGlobalFeatureDim, d_hidden, weight_init_seed + 4, "number_encoder.W_g1");
+    params->b_g1 = GRIM::Tensor::zeros({1, d_hidden}, init_stream, "number_encoder.b_g1");
+    params->b_g1.requires_grad_();
+    params->b_g1.ensure_grad();
+    params->W_g2 = make_xavier(d_hidden, d_model, weight_init_seed + 5, "number_encoder.W_g2");
+
+    const cudaError_t sync_err = cudaStreamSynchronize(init_stream);
+    if (sync_err != cudaSuccess) {
+        throw std::runtime_error(std::string("initializeNumberEncoderParameterTensors: cudaStreamSynchronize failed: ") +
+                                 cudaGetErrorString(sync_err));
+    }
+
+    parameter_registry.number_encoder_parameters = std::move(params);
+    emitInfo("[initializeNumberEncoderParameterTensors] Initialized registry-owned NumberEncoder tensors (d_model=" +
+             std::to_string(d_model) + ", d_hidden=" + std::to_string(d_hidden) +
+             ", pow10_buckets=" + std::to_string(number_encoder_hp.pow10_buckets) +
+             ", max_digit_slots=" + std::to_string(number_encoder_hp.max_digit_slots) + ")");
+}
+
 void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,
                           Startup::GpuModelState& gpu_model_state,
                           ParameterRegistry::StartupParameterRegistry& parameter_registry) {
@@ -1118,6 +1219,7 @@ void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,
     registerTopLevelParameters(gpu_model_state, parameter_registry, registrar, config);
     registerEncoderParameters(gpu_model_state, parameter_registry, registrar, config);
 
+    registerNumberEncoderParameters(parameter_registry, registrar, config);
     registerExecutionBlockParameters(gpu_model_state, parameter_registry, registrar, config);
     registerMtpParameters(parameter_registry, registrar, config);
 

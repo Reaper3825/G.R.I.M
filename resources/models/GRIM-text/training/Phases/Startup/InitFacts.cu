@@ -72,6 +72,7 @@ const char* paramGroupTypeName(GRIM::ParamGroupType type) {
 
         case GRIM::ParamGroupType::MTP: return "MTP";
         case GRIM::ParamGroupType::EXECUTION_BLOCK: return "EXECUTION_BLOCK";
+        case GRIM::ParamGroupType::NUMBER_ENCODER: return "NUMBER_ENCODER";
         case GRIM::ParamGroupType::COUNT: break;
     }
     throw std::runtime_error("paramGroupTypeName: invalid ParamGroupType::COUNT");

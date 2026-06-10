@@ -130,6 +130,17 @@ bool saveLanguageModelCheckpoint(
     auto* lm_head_parameters = parameter_registry.getLmHeadParameters();
     auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
     auto* gpu_encoder_owner = gpu_model_state.gpu_encoder.get();
+
+    // TRANSITIONAL (docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md, Workstream 2):
+    // NumberEncoder weights have no FlatBuffer table yet. Refuse to write a
+    // checkpoint that would silently drop trainable parameters — a resumed run
+    // would train from re-randomized numeric-meaning weights without warning.
+    if (parameter_registry.getNumberEncoderParameters()) {
+        throw std::runtime_error(
+            "saveLanguageModelCheckpoint: NumberEncoder parameters exist but checkpoint "
+            "serialization for them is not implemented (FlatBuffer schema bump pending). "
+            "Disable number_encoder_enabled or add the schema table before checkpointing.");
+    }
     EmitModuleInfo(ModuleId::Checkpoint, "Request initialized with version " + std::to_string(GRIM_MODEL_VERSION));
 
     EmitModuleInfo(ModuleId::Checkpoint, "Processing embeddings");
@@ -361,6 +372,17 @@ bool loadLanguageModelCheckpoint(
     auto* embedding_parameters = parameter_registry.getEmbeddingParameters();
     auto* lm_head_parameters = parameter_registry.getLmHeadParameters();
     auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
+
+    // TRANSITIONAL (docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md, Workstream 2):
+    // NumberEncoder weights have no FlatBuffer table yet, so no checkpoint can
+    // contain them. Loading into a model that allocated NumberEncoder tensors
+    // would silently leave them at init values — fail loud instead.
+    if (parameter_registry.getNumberEncoderParameters()) {
+        throw std::runtime_error(
+            "loadLanguageModelCheckpoint: NumberEncoder parameters exist but checkpoint "
+            "serialization for them is not implemented (FlatBuffer schema bump pending). "
+            "Disable number_encoder_enabled or add the schema table before resuming.");
+    }
 
     if (!training_state.initialized) {
         EmitModuleError(ModuleId::Checkpoint,

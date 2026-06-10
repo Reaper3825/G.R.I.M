@@ -422,6 +422,13 @@ struct LanguageModelConfig {
     bool  structured_ce_enabled = false;
     float structured_ce_weight  = 0.0f;
 
+    // NumberEncoder (numeric-meaning input path) config.
+    // Digit-place contribution encoding per docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md.
+    bool  number_encoder_enabled = false;
+    int   number_encoder_max_digit_slots = 0;
+    int   number_encoder_d_hidden = 0;
+    int   number_encoder_max_abs_pow10 = 0;
+
     // Execution-first structured CE loss config (Step X / Y multipliers)
     float step_x_multiplier = 0.0f;
     float step_y_multiplier = 0.0f;
@@ -1572,6 +1579,24 @@ inline void validateRootConfigDocument(
             validationField("execution_block_arg_reinforce_baseline_decay", &LanguageModelConfig::arg_reinforce_baseline_decay)
         }, caller);
     }
+    if (params.number_encoder_enabled) {
+        if (!params.use_atom_data) {
+            throw std::runtime_error(
+                std::string(caller) + ": number_encoder_enabled=true requires use_atom_data=true");
+        }
+        validatePositiveFields(params, {
+            validationField("number_encoder_max_digit_slots", &LanguageModelConfig::number_encoder_max_digit_slots),
+            validationField("number_encoder_d_hidden", &LanguageModelConfig::number_encoder_d_hidden),
+            validationField("number_encoder_max_abs_pow10", &LanguageModelConfig::number_encoder_max_abs_pow10)
+        }, caller);
+        // arg_number stores pow10 as int16; the bucket table must stay inside that range.
+        if (params.number_encoder_max_abs_pow10 > 32766) {
+            throw std::runtime_error(
+                std::string(caller) + ": number_encoder_max_abs_pow10=" +
+                std::to_string(params.number_encoder_max_abs_pow10) +
+                " exceeds the int16 pow10 capacity of arg_number digit bindings");
+        }
+    }
     if (params.mtp_enabled) {
         validatePositiveFields(params, {
             validationField("mtp_k", &LanguageModelConfig::mtp_k)
@@ -1950,6 +1975,10 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_LEAF("execution_block_arg_reinforce_weight", arg_reinforce_weight);
     GRIM_LOAD_CONFIG_LEAF("execution_block_arg_reinforce_baseline_decay", arg_reinforce_baseline_decay);
     GRIM_LOAD_CONFIG_LEAF("execution_block_structured_ce_weight", structured_ce_weight);
+    GRIM_LOAD_CONFIG_FIELD(number_encoder_enabled);
+    GRIM_LOAD_CONFIG_FIELD(number_encoder_max_digit_slots);
+    GRIM_LOAD_CONFIG_FIELD(number_encoder_d_hidden);
+    GRIM_LOAD_CONFIG_FIELD(number_encoder_max_abs_pow10);
     GRIM_LOAD_CONFIG_FIELD(single_stream_mode);
     GRIM_LOAD_CONFIG_FIELD(disable_async_frees);
     GRIM_LOAD_CONFIG_FIELD(synchronize_after_kernels);
@@ -2275,6 +2304,10 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(arg_reinforce_baseline_decay);
     GRIM_WRITE_FINAL_CONFIG_FIELD(structured_ce_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(structured_ce_weight);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(number_encoder_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(number_encoder_max_digit_slots);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(number_encoder_d_hidden);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(number_encoder_max_abs_pow10);
     GRIM_WRITE_FINAL_CONFIG_FIELD(step_x_multiplier);
     GRIM_WRITE_FINAL_CONFIG_FIELD(step_y_multiplier);
     GRIM_WRITE_FINAL_CONFIG_FIELD(step_y_overrides_x);

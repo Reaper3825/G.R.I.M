@@ -9,6 +9,8 @@
 //    - Embedding durable tensor owner
 //    - LM head durable tensor owner
 //    - Encoder durable per-layer parameter tensor owner
+//    - NumberEncoder durable tensor owner
+//    - NumberEncoder parameter-group inventory
 //    - ExecutionBlock durable parameter tensor owner
 //    - ExecutionBlock parameter-group inventory
 //    - FeedForward durable per-layer parameter tensor owner
@@ -34,6 +36,23 @@ namespace GRIM {
 
 struct EmbeddingParameterTensors {
     Tensor token_weights;  // [vocab_size, d_model]
+};
+
+// NumberEncoder — numeric-meaning input path (digit-place contribution slots).
+// Selection-side representation per docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md.
+//   slot_i = digit_emb[digit] + pow10_emb[pow10_bucket] + W_c2 @ tanh(W_c1 @ slot_feat + b_c1)
+//   number_embedding = mean_over_real_slots(slot_i) + W_g2 @ tanh(W_g1 @ global_feat + b_g1)
+// Feature widths are the payload-owned contract
+// (BatchPayload::kNumberSlotFeatureDim / kNumberGlobalFeatureDim).
+struct NumberEncoderParameterTensors {
+    Tensor digit_emb;   // [10, d_model] digit identity embedding
+    Tensor pow10_emb;   // [pow10_buckets, d_model] place identity embedding
+    Tensor W_c1;        // [BatchPayload::kNumberSlotFeatureDim, d_hidden] contribution MLP in
+    Tensor b_c1;        // [1, d_hidden] contribution MLP bias
+    Tensor W_c2;        // [d_hidden, d_model] contribution MLP out
+    Tensor W_g1;        // [BatchPayload::kNumberGlobalFeatureDim, d_hidden] global mantissa/exponent MLP in
+    Tensor b_g1;        // [1, d_hidden] global MLP bias
+    Tensor W_g2;        // [d_hidden, d_model] global MLP out
 };
 
 struct ExecutionBlockParameterTensors {
@@ -100,6 +119,7 @@ struct StartupParameterRegistry {
     std::unique_ptr<GRIM::EmbeddingParameterTensors> embedding_parameters;
     std::unique_ptr<GRIM::LMHeadParameterTensors> lm_head_parameters;
     std::vector<GRIM::EncodingLayerParameterTensors> encoding_layer_parameter_tensors;
+    std::unique_ptr<GRIM::NumberEncoderParameterTensors> number_encoder_parameters;
     std::unique_ptr<GRIM::ExecutionBlockParameterTensors> execution_block_parameters;
     std::vector<GRIM::FeedForwardParameterTensors> feed_forward_parameter_tensors;
     std::vector<GRIM::MtpHeadParameterTensors> mtp_head_parameter_tensors;
@@ -187,6 +207,28 @@ struct StartupParameterRegistry {
         return execution_block_parameters.get();
     }
 
+    GRIM::NumberEncoderParameterTensors* getNumberEncoderParameters() {
+        return number_encoder_parameters.get();
+    }
+
+    const GRIM::NumberEncoderParameterTensors* getNumberEncoderParameters() const {
+        return number_encoder_parameters.get();
+    }
+
+    GRIM::NumberEncoderParameterTensors& requireNumberEncoderParameters(const char* caller) {
+        if (!number_encoder_parameters) {
+            throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.number_encoder_parameters is NULL");
+        }
+        return *number_encoder_parameters;
+    }
+
+    const GRIM::NumberEncoderParameterTensors& requireNumberEncoderParameters(const char* caller) const {
+        if (!number_encoder_parameters) {
+            throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.number_encoder_parameters is NULL");
+        }
+        return *number_encoder_parameters;
+    }
+
     GRIM::ExecutionBlockParameterTensors& requireExecutionBlockParameters(const char* caller) {
         if (!execution_block_parameters) {
             throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.execution_block_parameters is NULL");
@@ -270,6 +312,9 @@ struct TensorParameterSpec {
 using ExecutionBlockTensorParameterSpec =
     TensorParameterSpec<GRIM::ExecutionBlockParameterTensors>;
 
+using NumberEncoderTensorParameterSpec =
+    TensorParameterSpec<GRIM::NumberEncoderParameterTensors>;
+
 using EncodingLayerTensorParameterSpec =
     TensorParameterSpec<GRIM::EncodingLayerParameterTensors>;
 
@@ -286,6 +331,26 @@ inline constexpr std::array<EmbeddingTensorParameterSpec, 1>
     kEmbeddingTensorParameters = {{
         {"embedding", &GRIM::EmbeddingParameterTensors::token_weights,
          GRIM::ParamGroupType::EMBEDDING, GRIM::ParamStatsBucket::EMBEDDING},
+    }};
+
+inline constexpr std::array<NumberEncoderTensorParameterSpec, 8>
+    kNumberEncoderTensorParameters = {{
+        {"number_encoder_digit_emb", &GRIM::NumberEncoderParameterTensors::digit_emb,
+         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
+        {"number_encoder_pow10_emb", &GRIM::NumberEncoderParameterTensors::pow10_emb,
+         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
+        {"number_encoder_W_c1", &GRIM::NumberEncoderParameterTensors::W_c1,
+         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
+        {"number_encoder_b_c1", &GRIM::NumberEncoderParameterTensors::b_c1,
+         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
+        {"number_encoder_W_c2", &GRIM::NumberEncoderParameterTensors::W_c2,
+         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
+        {"number_encoder_W_g1", &GRIM::NumberEncoderParameterTensors::W_g1,
+         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
+        {"number_encoder_b_g1", &GRIM::NumberEncoderParameterTensors::b_g1,
+         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
+        {"number_encoder_W_g2", &GRIM::NumberEncoderParameterTensors::W_g2,
+         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
     }};
 
 inline constexpr std::array<ExecutionBlockTensorParameterSpec, 30>
@@ -412,6 +477,19 @@ inline void registerExecutionBlockParameters(
     for (const auto& spec : kExecutionBlockTensorParameters) {
         registrar.addTensor(spec.name,
                             execution_block_parameters.*(spec.tensor_member),
+                            spec.type,
+                            spec.stats_bucket,
+                            spec.layer);
+    }
+}
+
+template <typename RegistrarT>
+inline void registerNumberEncoderParameters(
+    GRIM::NumberEncoderParameterTensors& number_encoder_parameters,
+    RegistrarT& registrar) {
+    for (const auto& spec : kNumberEncoderTensorParameters) {
+        registrar.addTensor(spec.name,
+                            number_encoder_parameters.*(spec.tensor_member),
                             spec.type,
                             spec.stats_bucket,
                             spec.layer);

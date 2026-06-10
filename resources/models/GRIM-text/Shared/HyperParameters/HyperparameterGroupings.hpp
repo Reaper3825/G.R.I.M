@@ -417,6 +417,19 @@ struct ExecutionBlockConstructionHP {
     float arg_reinforce_baseline_decay = 0.0f;
 };
 
+// NumberEncoder construction view — numeric-meaning input path.
+// Encodes (digit, pow10) contribution slots plus a global mantissa/exponent
+// feature head per docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md. Selection-side
+// representation; execution consumes downstream results only.
+struct NumberEncoderConstructionHP {
+    bool enabled = false;
+    int d_model = 0;
+    int d_hidden = 0;          // contribution-MLP hidden width
+    int max_digit_slots = 0;   // fixed digit-slot capacity per numeric atom
+    int max_abs_pow10 = 0;     // place-exponent range; buckets span [-max, +max]
+    int pow10_buckets = 0;     // derived: 2 * max_abs_pow10 + 1
+};
+
 struct MTPConstructionHP {
     bool enabled = false;
     int k = 0;
@@ -523,6 +536,12 @@ struct ModelHP {
     float execution_block_arg_reinforce_baseline_decay = 0.0f;
     float execution_block_entropy_aux_weight = 0.0f;
     float execution_block_structured_ce_weight = 0.0f;
+
+    bool number_encoder_enabled = false;
+    int number_encoder_d_model = 0;
+    int number_encoder_d_hidden = 0;
+    int number_encoder_max_digit_slots = 0;
+    int number_encoder_max_abs_pow10 = 0;
 
     bool mtp_enabled = false;
     int mtp_k = 0;
@@ -1295,6 +1314,12 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.mtp_alpha = requireFloat("mtp_alpha");
     view.mtp_alpha_warmup_steps = 0;
 
+    view.number_encoder_enabled = requireBool("number_encoder_enabled");
+    view.number_encoder_d_model = d_model;
+    view.number_encoder_d_hidden = requireInt("number_encoder_d_hidden");
+    view.number_encoder_max_digit_slots = requireInt("number_encoder_max_digit_slots");
+    view.number_encoder_max_abs_pow10 = requireInt("number_encoder_max_abs_pow10");
+
     view.positional_encoding = parsePositionalEncodingFlags(
         requireBool("use_rope"), requireBool("use_alibi"));
     view.structured_ce_enabled = requireBool("execution_block_structured_ce_enabled");
@@ -1435,6 +1460,21 @@ inline MTPConstructionHP mtpConstructionHP(const GRIM::Config::AiConfigSnapshot&
     view.d_model = model.mtp_d_model;
     view.alpha = model.mtp_alpha;
     view.alpha_warmup_steps = model.mtp_alpha_warmup_steps;
+    return view;
+}
+
+inline NumberEncoderConstructionHP numberEncoderConstructionHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    const auto model = modelHP(snapshot);
+
+    NumberEncoderConstructionHP view;
+    view.enabled = model.number_encoder_enabled;
+    view.d_model = model.number_encoder_d_model;
+    view.d_hidden = model.number_encoder_d_hidden;
+    view.max_digit_slots = model.number_encoder_max_digit_slots;
+    view.max_abs_pow10 = model.number_encoder_max_abs_pow10;
+    view.pow10_buckets = 2 * model.number_encoder_max_abs_pow10 + 1;
     return view;
 }
 

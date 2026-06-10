@@ -302,6 +302,58 @@ BatchDeviceBindings uploadBatchToDevice(
         BATCH_UPLOAD_CUDA_CHECK(cudaStreamSynchronize(stream));
     }
 
+    // Round 7: NumberEncoder digit-place channels (compact, atom-aligned).
+    int* cached_atom_digit_values_ptr = nullptr;
+    int* cached_atom_digit_pow10_ptr = nullptr;
+    float* cached_atom_digit_mask_ptr = nullptr;
+    float* cached_atom_digit_slot_features_ptr = nullptr;
+    float* cached_atom_global_features_ptr = nullptr;
+    if (payload.number_encoder_digit_slots > 0) {
+        if (storage.number_encoder_digit_slots_capacity != payload.number_encoder_digit_slots) {
+            throw std::runtime_error(
+                "uploadBatchToDevice: payload.number_encoder_digit_slots=" +
+                std::to_string(payload.number_encoder_digit_slots) +
+                " != BatchDeviceStorage.number_encoder_digit_slots_capacity=" +
+                std::to_string(storage.number_encoder_digit_slots_capacity));
+        }
+        cached_atom_digit_values_ptr = reinterpret_cast<int*>(storage.atom_digit_values_tensor.data);
+        cached_atom_digit_pow10_ptr = reinterpret_cast<int*>(storage.atom_digit_pow10_index_tensor.data);
+        cached_atom_digit_mask_ptr = storage.atom_digit_mask_tensor.data;
+        cached_atom_digit_slot_features_ptr = storage.atom_digit_slot_features_tensor.data;
+        cached_atom_global_features_ptr = storage.atom_global_features_tensor.data;
+        if (!cached_atom_digit_values_ptr || !cached_atom_digit_pow10_ptr ||
+            !cached_atom_digit_mask_ptr || !cached_atom_digit_slot_features_ptr ||
+            !cached_atom_global_features_ptr) {
+            throw std::runtime_error(
+                "uploadBatchToDevice: NumberEncoder storage tensors are NULL while "
+                "payload.number_encoder_digit_slots > 0 — createBatchDeviceStorage must "
+                "allocate them when number_encoder_enabled=true");
+        }
+        if (!payload.atom_digit_values.empty()) {
+            BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+                cached_atom_digit_values_ptr, payload.atom_digit_values.data(),
+                payload.atom_digit_values.size() * sizeof(int),
+                cudaMemcpyHostToDevice, stream));
+            BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+                cached_atom_digit_pow10_ptr, payload.atom_digit_pow10_index.data(),
+                payload.atom_digit_pow10_index.size() * sizeof(int),
+                cudaMemcpyHostToDevice, stream));
+            BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+                cached_atom_digit_mask_ptr, payload.atom_digit_mask.data(),
+                payload.atom_digit_mask.size() * sizeof(float),
+                cudaMemcpyHostToDevice, stream));
+            BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+                cached_atom_digit_slot_features_ptr, payload.atom_digit_slot_features.data(),
+                payload.atom_digit_slot_features.size() * sizeof(float),
+                cudaMemcpyHostToDevice, stream));
+            BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+                cached_atom_global_features_ptr, payload.atom_global_features.data(),
+                payload.atom_global_features.size() * sizeof(float),
+                cudaMemcpyHostToDevice, stream));
+        }
+        BATCH_UPLOAD_CUDA_CHECK(cudaStreamSynchronize(stream));
+    }
+
     auto copy_end = std::chrono::high_resolution_clock::now();
     auto copy_ms = std::chrono::duration<double, std::milli>(copy_end - copy_start).count();
     if constexpr (VerboseLogging::ENABLE_VOCAB_TIMING_LOGS) {
@@ -325,6 +377,11 @@ BatchDeviceBindings uploadBatchToDevice(
     bindings.d_atom_positions   = cached_atom_positions_ptr;
     bindings.d_atom_types       = cached_atom_types_ptr;
     bindings.d_mtp_shifted_targets = cached_mtp_shifted_targets_ptr;
+    bindings.d_atom_digit_values        = cached_atom_digit_values_ptr;
+    bindings.d_atom_digit_pow10_index   = cached_atom_digit_pow10_ptr;
+    bindings.d_atom_digit_mask          = cached_atom_digit_mask_ptr;
+    bindings.d_atom_digit_slot_features = cached_atom_digit_slot_features_ptr;
+    bindings.d_atom_global_features     = cached_atom_global_features_ptr;
     return bindings;
 }
 
@@ -405,6 +462,42 @@ std::shared_ptr<BatchDeviceStorage> createBatchDeviceStorage(
             false,
             stream,
             "batch_mtp_shifted_targets");
+    }
+
+    const auto number_encoder_hp = HyperParameters::numberEncoderConstructionHP(config);
+    if (number_encoder_hp.enabled) {
+        if (number_encoder_hp.max_digit_slots <= 0) {
+            throw std::runtime_error(
+                "createBatchDeviceStorage: number_encoder_enabled=true but max_digit_slots <= 0");
+        }
+        const int digit_slots = number_encoder_hp.max_digit_slots;
+        const int slot_capacity = max_tokens * digit_slots;
+        storage->number_encoder_digit_slots_capacity = digit_slots;
+        storage->atom_digit_values_tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, slot_capacity),
+            false,
+            stream,
+            "batch_atom_digit_values");
+        storage->atom_digit_pow10_index_tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, slot_capacity),
+            false,
+            stream,
+            "batch_atom_digit_pow10_index");
+        storage->atom_digit_mask_tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, slot_capacity),
+            false,
+            stream,
+            "batch_atom_digit_mask");
+        storage->atom_digit_slot_features_tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, slot_capacity * BatchPayload::kNumberSlotFeatureDim),
+            false,
+            stream,
+            "batch_atom_digit_slot_features");
+        storage->atom_global_features_tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, max_tokens * BatchPayload::kNumberGlobalFeatureDim),
+            false,
+            stream,
+            "batch_atom_global_features");
     }
 
     return storage;

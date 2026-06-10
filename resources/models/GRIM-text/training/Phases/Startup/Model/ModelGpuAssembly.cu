@@ -362,6 +362,11 @@ void initializeInferenceRuntime(const ::GRIM::Config::AiConfigSnapshot& model_cf
         throw std::runtime_error(std::string("[") + caller + "] ExecutionBlock parameters not assembled by Startup::assembleGpuModel() while execution_block is enabled.");
     }
 
+    const auto number_encoder_hp = GRIM::HyperParameters::numberEncoderConstructionHP(model_cfg);
+    if (number_encoder_hp.enabled && !parameter_registry.getNumberEncoderParameters()) {
+        throw std::runtime_error(std::string("[") + caller + "] NumberEncoder parameters not assembled by Startup::assembleGpuModel() while number_encoder is enabled.");
+    }
+
     const auto mtp_hp = GRIM::HyperParameters::mtpConstructionHP(model_cfg);
     if (mtp_hp.enabled && static_cast<int>(parameter_registry.mtpHeadParameterTensors().size()) != mtp_hp.k) {
         throw std::runtime_error(std::string("[") + caller + "] MTP heads were not assembled by Startup::assembleGpuModel() while mtp is enabled.");
@@ -530,6 +535,18 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
         //======================================================//
         //  5) Build optional model heads/subsystems
         //======================================================//
+        {
+            const auto number_encoder_hp = GRIM::HyperParameters::numberEncoderConstructionHP(model_cfg);
+            if (number_encoder_hp.enabled) {
+                GRIMText::Training::Startup::ModelRegistration::initializeNumberEncoderParameterTensors(
+                    parameter_registry,
+                    number_encoder_hp,
+                    weight_init_seed + 40,
+                    init_stream);
+                std::cout << "✓ NumberEncoder parameters created\n";
+            }
+        }
+
         initializeExecutionSubsystems(
             parameter_registry,
             model_cfg,

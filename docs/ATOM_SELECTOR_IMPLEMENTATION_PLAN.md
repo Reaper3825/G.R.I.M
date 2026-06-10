@@ -1,6 +1,11 @@
 # Atom Selector Implementation and Decoupling Plan
 
-> **Status:** Plan
+> **Status:** In progress — W0 (boundary lock) and W1 (rip-out) are DONE; W2 (numeric meaning encoding input path) is DONE; W3 (supervision heads) and W4 (decode bridge) are pending.
+>
+> **W1 done:** the execution-entangled decode-time slot selector is deleted end-to-end (`Layers/DecodeTimeSlotSelector/`, `Shared/Execution/DecodeTimeNumPolicy.{hpp,cu}`, `DecodeTimeResolveResult.hpp`, `AutogradSelectorSupervisionLoss.{hpp,cu}`, registry owner, `selector_*` config leaves, `slot_selection_targets` GRMT channel → GRMT v13, checkpoint `slot_selector` table, `GenerationState::decode_selector`). While execution is enabled, Phase2 inference masks `<INT>`/`<FLOAT>` placeholders unconditionally and fails loud if one is sampled.
+>
+> **W2 done (input path):** `NumberEncoderParameterTensors` (digit_emb, pow10_emb, contribution MLP, global mantissa/exponent MLP) registered as `ParamGroupType::NUMBER_ENCODER` through Phase-1 startup; `number_encoder_*` config leaves through the HyperParameters boundary with `numberEncoderConstructionHP()`; `BatchPayload` digit-place channels (current-token arg_number only, mask-padded, fail-loud) uploaded via `BatchDeviceBindings::d_atom_digit_*`; `autograd::number_encode()` + `NumberEncoderGradFn` fused into shared forward via `residual_add`. Checkpoint save/load fails loud while NumberEncoder weights have no FlatBuffer table (transitional guard).
+>
 > **Scope:** Numeric meaning representation, atom selector refactor, and selector/execution decoupling  
 > **Non-goal:** Redesigning execution behavior itself  
 > **Compatibility target:** DO NOT PRESERVE BACKWARDS COMPATIBILITY. This is a breaking refactor that will change the selector contract and execution behavior. The goal is to establish a clean, future-proof architecture for numeric meaning representation and selection, not to maintain compatibility with the current selector implementation. EXECUTION BEHAVIOR WILL CHANGE. The input PRIMARILY WILL NOT. The current selector logic will be ripped out and replaced with a new architecture that learns numeric meaning. The execution plumbing will remain materially the same, but it will consume the new selector output instead of the old logic. This is a clean-slate refactor, not a compatibility-preserving rewrite.

@@ -15,6 +15,7 @@
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 #include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
 #include "../TensorContract/TensorContract_GPU.hpp"
+#include "../TensorContract/GradFns/NumberEncoderGradFn.hpp"
 #include "ModelForwardOutputs.hpp"
 #include "../HyperParameters/HyperparameterGroupings.hpp"
 #include "../VerboseLogging.hpp"
@@ -396,6 +397,67 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     forward_outputs.embedding_tensor = std::move(emb_output);
     MFWD_INFO("Step 1: Token embedding complete, shape=[" << total_tokens << ", " << d_model
               << "] scale=" << embedding_scale);
+
+    // ─── Step 1n: NumberEncoder numeric-meaning fusion ──────────────────────
+    // x_t = token_embedding[<INT>/<FLOAT>] + number_embedding(arg_number).
+    // Selection-side input path (docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md):
+    // digit-place contribution slots are pooled per numeric atom and added at
+    // that atom's token position; all non-atom rows receive exact zero. The
+    // channels are CURRENT-token metadata only — next-token atom metadata is
+    // supervision and never enters this input boundary.
+    const auto number_encoder_hp = HyperParameters::numberEncoderConstructionHP(*cfg);
+    std::vector<Tensor> number_encoder_detached_params;  // keep-alive across the call window
+    Tensor number_encoder_out;                           // keep-alive across the call window
+    if (number_encoder_hp.enabled) {
+        if (payload.number_encoder_digit_slots != number_encoder_hp.max_digit_slots) {
+            throw std::runtime_error(
+                "ModelForward: payload.number_encoder_digit_slots=" +
+                std::to_string(payload.number_encoder_digit_slots) +
+                " != config max_digit_slots=" +
+                std::to_string(number_encoder_hp.max_digit_slots) +
+                " — payload was built against a different NumberEncoder config");
+        }
+        if (payload.authoredAtomCount() > 0) {
+            auto& number_encoder_parameters =
+                request.parameter_registry->requireNumberEncoderParameters("executeModelForward");
+            autograd::NumberEncoderForwardParams ne_params{};
+            if (connect_parameter_graph) {
+                ne_params.digit_emb = &number_encoder_parameters.digit_emb;
+                ne_params.pow10_emb = &number_encoder_parameters.pow10_emb;
+                ne_params.W_c1 = &number_encoder_parameters.W_c1;
+                ne_params.b_c1 = &number_encoder_parameters.b_c1;
+                ne_params.W_c2 = &number_encoder_parameters.W_c2;
+                ne_params.W_g1 = &number_encoder_parameters.W_g1;
+                ne_params.b_g1 = &number_encoder_parameters.b_g1;
+                ne_params.W_g2 = &number_encoder_parameters.W_g2;
+            } else {
+                number_encoder_detached_params.reserve(8);
+                number_encoder_detached_params.push_back(number_encoder_parameters.digit_emb.detach(request.stream));
+                number_encoder_detached_params.push_back(number_encoder_parameters.pow10_emb.detach(request.stream));
+                number_encoder_detached_params.push_back(number_encoder_parameters.W_c1.detach(request.stream));
+                number_encoder_detached_params.push_back(number_encoder_parameters.b_c1.detach(request.stream));
+                number_encoder_detached_params.push_back(number_encoder_parameters.W_c2.detach(request.stream));
+                number_encoder_detached_params.push_back(number_encoder_parameters.W_g1.detach(request.stream));
+                number_encoder_detached_params.push_back(number_encoder_parameters.b_g1.detach(request.stream));
+                number_encoder_detached_params.push_back(number_encoder_parameters.W_g2.detach(request.stream));
+                ne_params.digit_emb = &number_encoder_detached_params[0];
+                ne_params.pow10_emb = &number_encoder_detached_params[1];
+                ne_params.W_c1 = &number_encoder_detached_params[2];
+                ne_params.b_c1 = &number_encoder_detached_params[3];
+                ne_params.W_c2 = &number_encoder_detached_params[4];
+                ne_params.W_g1 = &number_encoder_detached_params[5];
+                ne_params.b_g1 = &number_encoder_detached_params[6];
+                ne_params.W_g2 = &number_encoder_detached_params[7];
+            }
+            number_encoder_out = autograd::number_encode(
+                ne_params, number_encoder_hp, payload, *bindings, request.stream);
+            forward_outputs.embedding_tensor = autograd::residual_add(
+                forward_outputs.embedding_tensor, number_encoder_out, request.stream);
+            MFWD_INFO("Step 1n: NumberEncoder fused into " << payload.authoredAtomCount()
+                      << " numeric atom positions (digit_slots=" << number_encoder_hp.max_digit_slots
+                      << ", d_hidden=" << number_encoder_hp.d_hidden << ")");
+        }
+    }
 
     if (dropout_enabled && dropout_rate > 0.0f) {
         const uint64_t emb_dropout_seed = request.batch_idx * 2654435761ULL + 500;

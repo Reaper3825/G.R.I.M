@@ -268,6 +268,7 @@ GRIM::GeneratedSequence generateOneSequence(
     generation_state.resetSession();
 
     const auto mtp_hp = GRIM::HyperParameters::mtpFeatureHP(config);
+    const auto number_encoder_hp = GRIM::HyperParameters::numberEncoderConstructionHP(config);
 
     // The execution-entangled decode-time slot selector was deleted
     // (docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md, Workstream 1). Until the
@@ -482,7 +483,9 @@ GRIM::GeneratedSequence generateOneSequence(
             vocab_size,
             /*batch_capacity=*/1,
             static_cast<size_t>(max_seq_len),
-            execution_hp.num_slots);
+            execution_hp.num_slots,
+            number_encoder_hp.enabled ? number_encoder_hp.max_digit_slots : 0,
+            number_encoder_hp.max_abs_pow10);
 
         logits_vec = runSharedForwardForCurrentSequence(step_payload);
         if (logits_vec.empty()) {
@@ -603,6 +606,7 @@ Phase2TextInferenceResult executePhase2TextInference(
     result.prompt_token_count = tokens.size();
 
     const std::vector<int32_t> prompt_token_to_slot_map;
+    const auto number_encoder_hp = GRIM::HyperParameters::numberEncoderConstructionHP(model_config);
     auto prompt_payload = GRIM::Batching::buildInferenceBatchPayload(
         tokens,
         numeric_values,
@@ -614,7 +618,9 @@ Phase2TextInferenceResult executePhase2TextInference(
         vocab_size,
         static_cast<size_t>(batch_size),
         static_cast<size_t>(max_cached_seq_len),
-        execution_hp.num_slots);
+        execution_hp.num_slots,
+        number_encoder_hp.enabled ? number_encoder_hp.max_digit_slots : 0,
+        number_encoder_hp.max_abs_pow10);
 
     const auto start_generation = std::chrono::high_resolution_clock::now();
     auto generated = generatePayloadSequences(ctx, prompt_payload, generation_hp, nullptr);

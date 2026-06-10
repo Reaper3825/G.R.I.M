@@ -154,6 +154,33 @@ struct BatchPayload {
     std::vector<std::shared_ptr<const GRIM::Tokenizer::AtomTable>> seq_atom_tables;  // [batch_size]
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // NUMBER ENCODER DIGIT-PLACE CHANNELS (compact, aligned with atom_positions)
+    //
+    // Materialized ONCE during payload build from each atom's CURRENT-token
+    // arg_number metadata (docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md). These are
+    // input-side features for token t only — target-side (t+1) metadata is
+    // supervision and is NEVER materialized into this input channel (hard
+    // anti-leakage rule). Padding digit slots have atom_digit_mask == 0 and
+    // MUST contribute exactly zero in any consumer (forward pool or loss).
+    //
+    // Layout (A = authoredAtomCount(), S = number_encoder_digit_slots):
+    //   atom_digit_values        [A * S]   digit identity 0..9, pad 0
+    //   atom_digit_pow10_index   [A * S]   pow10 bucket index 0..2*max_abs_pow10, pad 0
+    //   atom_digit_mask          [A * S]   1.0 real slot / 0.0 pad slot
+    //   atom_digit_slot_features [A * S * kNumberSlotFeatureDim]
+    //   atom_global_features     [A * kNumberGlobalFeatureDim]
+    // Empty (and S == 0) when the NumberEncoder is disabled.
+    // ═══════════════════════════════════════════════════════════════════════════
+    static constexpr int kNumberSlotFeatureDim = 5;    // [digit/9, pow10_norm, is_zero_digit, sign, is_float_atom]
+    static constexpr int kNumberGlobalFeatureDim = 6;  // [sign, exp_norm, int_digits_norm, frac_digits_norm, has_decimal, is_float_atom]
+    int number_encoder_digit_slots = 0;                // realized per-atom slot capacity (0 = disabled)
+    std::vector<int> atom_digit_values;
+    std::vector<int> atom_digit_pow10_index;
+    std::vector<float> atom_digit_mask;
+    std::vector<float> atom_digit_slot_features;
+    std::vector<float> atom_global_features;
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // MTP (Multi-Token Prediction) SHIFTED TARGETS
     //
     // Computed ONCE during buildBatchPayload() when mtp_k > 0.
@@ -385,6 +412,42 @@ struct BatchPayload {
                 }
             }
         }
+        // NumberEncoder digit-place channel geometry (compact, atom-aligned)
+        if (number_encoder_digit_slots < 0) {
+            throw std::runtime_error(
+                std::string(caller) + ": BatchPayload.number_encoder_digit_slots=" +
+                std::to_string(number_encoder_digit_slots) + " is negative");
+        }
+        if (number_encoder_digit_slots == 0) {
+            if (!atom_digit_values.empty() || !atom_digit_pow10_index.empty() ||
+                !atom_digit_mask.empty() || !atom_digit_slot_features.empty() ||
+                !atom_global_features.empty()) {
+                throw std::runtime_error(
+                    std::string(caller) + ": BatchPayload number-encoder channels are populated "
+                    "while number_encoder_digit_slots=0");
+            }
+        } else {
+            const std::size_t atoms = atom_positions.size();
+            const std::size_t slots = static_cast<std::size_t>(number_encoder_digit_slots);
+            auto requireChannelSize = [&](std::size_t actual, std::size_t expected, const char* name) {
+                if (actual != expected) {
+                    throw std::runtime_error(
+                        std::string(caller) + ": BatchPayload." + name + ".size()=" +
+                        std::to_string(actual) + " != expected=" + std::to_string(expected) +
+                        " (atoms=" + std::to_string(atoms) +
+                        ", digit_slots=" + std::to_string(slots) + ")");
+                }
+            };
+            requireChannelSize(atom_digit_values.size(), atoms * slots, "atom_digit_values");
+            requireChannelSize(atom_digit_pow10_index.size(), atoms * slots, "atom_digit_pow10_index");
+            requireChannelSize(atom_digit_mask.size(), atoms * slots, "atom_digit_mask");
+            requireChannelSize(atom_digit_slot_features.size(),
+                               atoms * slots * static_cast<std::size_t>(kNumberSlotFeatureDim),
+                               "atom_digit_slot_features");
+            requireChannelSize(atom_global_features.size(),
+                               atoms * static_cast<std::size_t>(kNumberGlobalFeatureDim),
+                               "atom_global_features");
+        }
         // Teacher steps validation (when populated for arithmetic batches)
         if (!teacher_steps.empty()) {
             if (static_cast<int>(teacher_steps.size()) != batch_size) {
@@ -498,6 +561,8 @@ struct BatchPayload {
  * @param execution_num_slots  ExecutionBlock slot count (from config)
  * @param execution_num_ops    ExecutionBlock op count (from config)
  * @param execution_num_steps  ExecutionBlock step count (from config)
+ * @param number_encoder_digit_slots   NumberEncoder per-atom digit slot capacity (0 = disabled)
+ * @param number_encoder_max_abs_pow10 NumberEncoder pow10 bucket half-range (required when slots > 0)
  * @return Complete BatchPayload ready for downstream consumption
  */
 BatchPayload buildBatchPayload(
@@ -510,7 +575,9 @@ BatchPayload buildBatchPayload(
     int execution_num_slots,
     int execution_num_ops,
     int execution_num_steps,
-    int mtp_k);
+    int mtp_k,
+    int number_encoder_digit_slots,
+    int number_encoder_max_abs_pow10);
 
 /**
  * Build a validated single-row inference prefill payload from tokenizer-authored
@@ -529,7 +596,9 @@ BatchPayload buildInferenceBatchPayload(
     int vocab_size,
     size_t batch_capacity,
     size_t max_cached_seq_len,
-    int execution_num_slots);
+    int execution_num_slots,
+    int number_encoder_digit_slots,
+    int number_encoder_max_abs_pow10);
 
 /** Build a single-token inference decode geometry payload. */
 BatchPayload buildInferenceDecodePayload(int vocab_size);
