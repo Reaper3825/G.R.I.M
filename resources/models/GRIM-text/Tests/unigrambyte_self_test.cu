@@ -1083,6 +1083,7 @@ bool testAtomTableRejectsBadNumericDetectionWithContext(std::string& message) {
         (void)createAtomTableFromRawTextDetections(
             std::string_view(text.data(), text.size()),
             detections,
+            0,
             "testAtomTableRejectsBadNumericDetectionWithContext");
     } catch (const std::exception& e) {
         threw = true;
@@ -1113,6 +1114,7 @@ bool testAtomTableArgNumberSupportsSignedDecimalExponent(std::string& message) {
     const AtomTableFromDetectionsResult result = createAtomTableFromRawTextDetections(
         std::string_view(text.data(), text.size()),
         detections,
+        0,
         "testAtomTableArgNumberSupportsSignedDecimalExponent");
 
     ASSERT_EQ(result.atom_tokens.size(), static_cast<size_t>(6),
@@ -1264,6 +1266,36 @@ bool testAtomTableNumberEncoderValidationRejectsDigitOverflow(std::string& messa
         message = std::string("NumberEncoder validation should allow a matching slot/pow10 configuration: ") + e.what();
         return false;
     }
+
+    return true;
+}
+
+bool testAtomTokenizationRejectsMantissaDigitSlotOverflow(std::string& message) {
+    const std::string text = "value 12345678901234567";
+    Detector::DetectorRegistry registry = Detector::makeDefaultRawTextDetectorRegistry();
+    const Detector::RawTextDetectorOptions options(true, true, true);
+    const auto detections = registry.scan(text, options);
+
+    bool threw = false;
+    std::string error_text;
+    try {
+        (void)createAtomTableFromRawTextDetections(
+            std::string_view(text.data(), text.size()),
+            detections,
+            16,
+            "testAtomTokenizationRejectsMantissaDigitSlotOverflow");
+    } catch (const std::runtime_error& e) {
+        threw = true;
+        error_text = e.what();
+    }
+
+    ASSERT_TRUE(threw, "Tokenization-time atom creation must fail when mantissa digit count exceeds configured max slots");
+    ASSERT_TRUE(error_text.find("max_mantissa_digit_slots=16") != std::string::npos,
+                "Overflow error must include configured max_mantissa_digit_slots");
+    ASSERT_TRUE(error_text.find("raw_text='12345678901234567'") != std::string::npos,
+                "Overflow error must include offending numeric raw_text");
+    ASSERT_TRUE(error_text.find("mantissa_digit_sequence='12345678901234567'") != std::string::npos,
+                "Overflow error must include offending mantissa digit sequence");
 
     return true;
 }
@@ -3018,6 +3050,7 @@ int main(int argc, char** argv) {
     suite.addTest("AtomTable.RejectsBadNumericDetectionWithContext", testAtomTableRejectsBadNumericDetectionWithContext);
     suite.addTest("AtomTable.ArgNumberSupportsSignedDecimalExponent", testAtomTableArgNumberSupportsSignedDecimalExponent);
     suite.addTest("AtomTable.NumberEncoderValidationRejectsDigitOverflow", testAtomTableNumberEncoderValidationRejectsDigitOverflow);
+    suite.addTest("AtomTable.TokenizationRejectsMantissaDigitSlotOverflow", testAtomTokenizationRejectsMantissaDigitSlotOverflow);
     suite.addTest("UniByte.RawTextDetectorRegistry", testUniByteRawTextDetectorRegistry);
     suite.addTest("UniByte.URLPassthrough", testUniByteURLDetection);
     suite.addTest("UniByte.URLPassthrough.CaseInsensitive", testUniByteURLDetectionCaseInsensitive);

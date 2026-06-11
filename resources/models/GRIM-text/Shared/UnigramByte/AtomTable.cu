@@ -531,6 +531,47 @@ void recordAtomEntryArgNumberSummary(
     payload.total_digits += static_cast<uint32_t>(entry.arg_number->digits.size());
 }
 
+std::string mantissaDigitSequence(const ArgNumber& number) {
+    std::string seq;
+    seq.reserve(number.digits.size());
+    for (const DigitBinding& digit : number.digits) {
+        seq.push_back(static_cast<char>('0' + digit.digit));
+    }
+    return seq;
+}
+
+void validateTokenizationMantissaDigitSlotsOrThrow(
+    const AtomEntry& entry,
+    std::string_view atom_text,
+    size_t detection_index,
+    int max_mantissa_digit_slots,
+    const char* caller) {
+    if (max_mantissa_digit_slots <= 0 || !isNumericAtom(entry.type)) {
+        return;
+    }
+    if (!entry.arg_number.has_value()) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": detection_index=" + std::to_string(detection_index) +
+                                 " numeric atom is missing arg_number metadata while validating max_mantissa_digit_slots=" +
+                                 std::to_string(max_mantissa_digit_slots));
+    }
+
+    const std::size_t digit_count = entry.arg_number->digits.size();
+    if (digit_count <= static_cast<std::size_t>(max_mantissa_digit_slots)) {
+        return;
+    }
+
+    throw std::runtime_error(std::string(caller) +
+                             ": detection_index=" + std::to_string(detection_index) +
+                             ", atom_entry_id=" + std::to_string(entry.id) +
+                             ", atom_type=" + atomTypeName(entry.type) +
+                             ", raw_text='" + std::string(atom_text) +
+                             "', mantissa_digit_sequence='" + mantissaDigitSequence(*entry.arg_number) +
+                             "', mantissa_digit_count=" + std::to_string(digit_count) +
+                             " exceeds max_mantissa_digit_slots=" +
+                             std::to_string(max_mantissa_digit_slots));
+}
+
 } // namespace
 
 void validateNumberEncoderAtomMetadataOrThrow(
@@ -723,6 +764,7 @@ AtomTable& AtomTable::operator=(AtomTable&& other) noexcept {
 AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
     std::string_view source_text,
     const std::vector<Detector::RawTextDetection>& detections,
+    int max_mantissa_digit_slots,
     const char* caller) {
     requireCallerLabel(caller, "createAtomTableFromRawTextDetections");
 
@@ -811,6 +853,12 @@ AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
                                      ": registered atom_entry_id is not retrievable, atom_entry_id=" +
                                      std::to_string(span.atom_entry_id));
         }
+        validateTokenizationMantissaDigitSlotsOrThrow(
+            *entry,
+            atom_text,
+            detection_index,
+            max_mantissa_digit_slots,
+            caller);
         AtomTokenizationPayload payload{};
         payload.span = span;
         payload.token_id = span.placeholder_id;
@@ -911,10 +959,12 @@ std::shared_ptr<AtomTable> createAtomTableFromRawTextDetectionsForTokenSideChann
     const std::vector<uint8_t>& token_atom_mask,
     const std::vector<uint32_t>& token_atom_flags,
     std::vector<uint32_t>& atom_entry_ids,
+    int max_mantissa_digit_slots,
     const char* caller) {
     AtomTableFromDetectionsResult atom_table_build = createAtomTableFromRawTextDetections(
         source_text,
         detections,
+        max_mantissa_digit_slots,
         caller);
     applyAtomTokenizationPayloadToTokenSideChannelsInternal(
         atom_table_build,

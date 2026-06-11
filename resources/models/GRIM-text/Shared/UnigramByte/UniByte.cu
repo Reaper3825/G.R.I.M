@@ -175,6 +175,7 @@ UniByteResult UniByte::tokenizeWithMetadata(const std::string& text) const {
     AtomTableFromDetectionsResult atom_table_build = createAtomTableFromRawTextDetections(
         std::string_view(text.data(), text.size()),
         detections,
+        tokenizer_hp_.number_encoder_max_digit_slots,
         "UniByte::tokenizeWithMetadata");
     result.atom_table = std::move(atom_table_build.atom_table);
     std::vector<AtomTokenizationPayload> atom_tokens = std::move(atom_table_build.atom_tokens);

@@ -223,6 +223,7 @@ struct AtomTableFromDetectionsResult {
 AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
     std::string_view source_text,
     const std::vector<Detector::RawTextDetection>& detections,
+    int max_mantissa_digit_slots,
     const char* caller);
 
 std::shared_ptr<AtomTable> createAtomTableFromRawTextDetectionsForTokenSideChannels(
@@ -234,6 +235,7 @@ std::shared_ptr<AtomTable> createAtomTableFromRawTextDetectionsForTokenSideChann
     const std::vector<uint8_t>& token_atom_mask,
     const std::vector<uint32_t>& token_atom_flags,
     std::vector<uint32_t>& atom_entry_ids,
+    int max_mantissa_digit_slots,
     const char* caller);
 
 void validateNumberEncoderAtomMetadataOrThrow(
@@ -266,7 +268,6 @@ public:
     // Registration
     //--------------------------------------------------//
 
-    // Register from StructuralSpan
     // Register from StructuralSpan (zero-copy!)
     uint32_t registerSpan(const StructuralSpan& span);
 
