@@ -531,6 +531,8 @@ void recordAtomEntryArgNumberSummary(
     payload.total_digits += static_cast<uint32_t>(entry.arg_number->digits.size());
 }
 
+} // namespace
+
 void validateNumberEncoderAtomMetadataOrThrow(
     const AtomEntry& entry,
     uint32_t atom_entry_id,
@@ -596,8 +598,6 @@ void validateNumberEncoderAtomMetadataOrThrow(
         }
     }
 }
-
-} // namespace
 
 //======================================================//
 //  CUDA Kernels
