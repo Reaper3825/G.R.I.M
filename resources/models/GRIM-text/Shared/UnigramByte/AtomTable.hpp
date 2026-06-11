@@ -236,6 +236,13 @@ std::shared_ptr<AtomTable> createAtomTableFromRawTextDetectionsForTokenSideChann
     std::vector<uint32_t>& atom_entry_ids,
     const char* caller);
 
+void validateNumberEncoderAtomMetadataOrThrow(
+    const AtomEntry& entry,
+    uint32_t atom_entry_id,
+    int number_encoder_digit_slots,
+    int number_encoder_max_abs_pow10,
+    const char* caller);
+
 //======================================================//
 //  Atom Token ID Constants
 //======================================================//

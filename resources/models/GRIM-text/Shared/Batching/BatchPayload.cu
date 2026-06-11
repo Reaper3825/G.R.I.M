@@ -214,31 +214,17 @@ void materializeNumberEncoderChannels(
                 std::string(caller) + ": number-encoder atom_entry_id=" + std::to_string(entry_id) +
                 " at token_pos=" + std::to_string(token_pos) + " is not retrievable from its AtomTable");
         }
-        if (!GRIM::Tokenizer::isNumericAtom(entry->type)) {
-            throw std::runtime_error(
-                std::string(caller) + ": number-encoder atom_entry_id=" + std::to_string(entry_id) +
-                " at token_pos=" + std::to_string(token_pos) + " is not a numeric atom type");
-        }
-        if (!entry->arg_number.has_value()) {
-            throw std::runtime_error(
-                std::string(caller) + ": numeric atom_entry_id=" + std::to_string(entry_id) +
-                " at token_pos=" + std::to_string(token_pos) +
-                " is missing required arg_number metadata");
-        }
+        std::ostringstream atom_context;
+        atom_context << caller << ": token_pos=" << token_pos;
+        GRIM::Tokenizer::validateNumberEncoderAtomMetadataOrThrow(
+            *entry,
+            entry_id,
+            digit_slots,
+            max_abs_pow10,
+            atom_context.str().c_str());
+
         const GRIM::Tokenizer::ArgNumber& number = *entry->arg_number;
         const std::size_t digit_count = number.digits.size();
-        if (digit_count == 0) {
-            throw std::runtime_error(
-                std::string(caller) + ": numeric atom_entry_id=" + std::to_string(entry_id) +
-                " has zero mantissa digit bindings");
-        }
-        if (digit_count > slots) {
-            throw std::runtime_error(
-                std::string(caller) + ": numeric atom_entry_id=" + std::to_string(entry_id) +
-                " has " + std::to_string(digit_count) +
-                " mantissa digits exceeding number_encoder_max_digit_slots=" +
-                std::to_string(digit_slots) + " — refusing to silently truncate digit structure");
-        }
 
         const float sign = number.sign_negative ? -1.0f : 1.0f;
         const bool is_float_atom = entry->type == GRIM::Tokenizer::AtomType::ATOM_FLOAT;
@@ -247,20 +233,7 @@ void materializeNumberEncoderChannels(
         const std::size_t slot_base = atom_idx * slots;
         for (std::size_t i = 0; i < digit_count; ++i) {
             const auto& binding = number.digits[i];
-            if (binding.digit > 9) {
-                throw std::runtime_error(
-                    std::string(caller) + ": numeric atom_entry_id=" + std::to_string(entry_id) +
-                    " digit[" + std::to_string(i) + "]=" + std::to_string(binding.digit) +
-                    " is not a base-10 digit");
-            }
             const int pow10 = static_cast<int>(binding.pow10);
-            if (pow10 < -max_abs_pow10 || pow10 > max_abs_pow10) {
-                throw std::runtime_error(
-                    std::string(caller) + ": numeric atom_entry_id=" + std::to_string(entry_id) +
-                    " digit[" + std::to_string(i) + "] pow10=" + std::to_string(pow10) +
-                    " outside configured number_encoder_max_abs_pow10=±" +
-                    std::to_string(max_abs_pow10));
-            }
             const std::size_t slot = slot_base + i;
             payload.atom_digit_values[slot] = static_cast<int>(binding.digit);
             payload.atom_digit_pow10_index[slot] = pow10 + max_abs_pow10;  // bucket [0, 2*max]

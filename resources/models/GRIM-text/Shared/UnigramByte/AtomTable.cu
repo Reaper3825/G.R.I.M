@@ -531,6 +531,72 @@ void recordAtomEntryArgNumberSummary(
     payload.total_digits += static_cast<uint32_t>(entry.arg_number->digits.size());
 }
 
+void validateNumberEncoderAtomMetadataOrThrow(
+    const AtomEntry& entry,
+    uint32_t atom_entry_id,
+    int number_encoder_digit_slots,
+    int number_encoder_max_abs_pow10,
+    const char* caller) {
+    requireCallerLabel(caller, "validateNumberEncoderAtomMetadataOrThrow");
+
+    if (number_encoder_digit_slots <= 0) {
+        return;
+    }
+    if (number_encoder_max_abs_pow10 <= 0) {
+        throw std::runtime_error(
+            std::string(caller) + ": number_encoder digit_slots=" +
+            std::to_string(number_encoder_digit_slots) +
+            " but max_abs_pow10=" + std::to_string(number_encoder_max_abs_pow10) +
+            " is not positive");
+    }
+    if (!isNumericAtom(entry.type)) {
+        throw std::runtime_error(
+            std::string(caller) + ": number-encoder atom_entry_id=" +
+            std::to_string(atom_entry_id) + " is not a numeric atom type");
+    }
+    if (!entry.arg_number.has_value()) {
+        throw std::runtime_error(
+            std::string(caller) + ": numeric atom_entry_id=" +
+            std::to_string(atom_entry_id) +
+            " is missing required arg_number metadata");
+    }
+
+    const ArgNumber& number = *entry.arg_number;
+    const std::size_t digit_count = number.digits.size();
+    if (digit_count == 0) {
+        throw std::runtime_error(
+            std::string(caller) + ": numeric atom_entry_id=" +
+            std::to_string(atom_entry_id) + " has zero mantissa digit bindings");
+    }
+    if (digit_count > static_cast<std::size_t>(number_encoder_digit_slots)) {
+        throw std::runtime_error(
+            std::string(caller) + ": numeric atom_entry_id=" +
+            std::to_string(atom_entry_id) + " has " + std::to_string(digit_count) +
+            " mantissa digits exceeding number_encoder_max_digit_slots=" +
+            std::to_string(number_encoder_digit_slots) +
+            " — refusing to silently truncate digit structure");
+    }
+
+    for (std::size_t i = 0; i < digit_count; ++i) {
+        const DigitBinding& binding = number.digits[i];
+        if (binding.digit > 9) {
+            throw std::runtime_error(
+                std::string(caller) + ": numeric atom_entry_id=" +
+                std::to_string(atom_entry_id) + " digit[" + std::to_string(i) +
+                "]=" + std::to_string(binding.digit) + " is not a base-10 digit");
+        }
+        const int pow10 = static_cast<int>(binding.pow10);
+        if (pow10 < -number_encoder_max_abs_pow10 || pow10 > number_encoder_max_abs_pow10) {
+            throw std::runtime_error(
+                std::string(caller) + ": numeric atom_entry_id=" +
+                std::to_string(atom_entry_id) + " digit[" + std::to_string(i) +
+                "] pow10=" + std::to_string(pow10) +
+                " outside configured number_encoder_max_abs_pow10=±" +
+                std::to_string(number_encoder_max_abs_pow10));
+        }
+    }
+}
+
 } // namespace
 
 //======================================================//

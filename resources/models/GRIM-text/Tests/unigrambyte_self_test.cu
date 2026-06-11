@@ -1209,6 +1209,65 @@ bool testAtomTableArgNumberSupportsSignedDecimalExponent(std::string& message) {
     return true;
 }
 
+bool testAtomTableNumberEncoderValidationRejectsDigitOverflow(std::string& message) {
+    AtomTable table;
+    const uint32_t id = registerSelfTestAtom(table, AtomType::ATOM_INT, "12345678901234567", 0, 17);
+    ASSERT_TRUE(id != UINT32_MAX, "Failed to register 17-digit integer atom for NumberEncoder validation test");
+
+    const auto entry = table.getAtom(id);
+    ASSERT_TRUE(entry.has_value(), "Registered 17-digit integer atom is not retrievable");
+
+    bool threw = false;
+    std::string error_text;
+    try {
+        validateNumberEncoderAtomMetadataOrThrow(
+            *entry,
+            id,
+            16,
+            16,
+            "testAtomTableNumberEncoderValidationRejectsDigitOverflow overflow");
+    } catch (const std::runtime_error& e) {
+        threw = true;
+        error_text = e.what();
+    }
+
+    ASSERT_TRUE(threw, "NumberEncoder validation must fail when mantissa digits exceed configured slots");
+    ASSERT_TRUE(error_text.find("mantissa digits exceeding number_encoder_max_digit_slots=16") != std::string::npos,
+                "Overflow error must name number_encoder_max_digit_slots as the violated config");
+
+    threw = false;
+    error_text.clear();
+    try {
+        validateNumberEncoderAtomMetadataOrThrow(
+            *entry,
+            id,
+            17,
+            8,
+            "testAtomTableNumberEncoderValidationRejectsDigitOverflow pow10");
+    } catch (const std::runtime_error& e) {
+        threw = true;
+        error_text = e.what();
+    }
+
+    ASSERT_TRUE(threw, "NumberEncoder validation must fail when digit pow10 exceeds configured range");
+    ASSERT_TRUE(error_text.find("outside configured number_encoder_max_abs_pow10=±8") != std::string::npos,
+                "Pow10 error must name number_encoder_max_abs_pow10 as the violated config");
+
+    try {
+        validateNumberEncoderAtomMetadataOrThrow(
+            *entry,
+            id,
+            17,
+            16,
+            "testAtomTableNumberEncoderValidationRejectsDigitOverflow valid");
+    } catch (const std::exception& e) {
+        message = std::string("NumberEncoder validation should allow a matching slot/pow10 configuration: ") + e.what();
+        return false;
+    }
+
+    return true;
+}
+
 bool testUniByteRawTextDetectorRegistry(std::string& message) {
     auto config = makeSelfTestTokenizerHP();
     config.detect_numbers = true;
@@ -2022,7 +2081,7 @@ bool testEdgeCaseAsciiSpacingRewriteToSpiece(std::string& message) {
     appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81hello", -1.0f, false);
     appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81world", -1.0f, false);
     appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81tab", -1.0f, false);
-    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81crlf", -1.0f, false);
+    appendSelfTestUnigramPiece(tokenizer.unigramLM(), "\xe2\x96\x81" "crlf", -1.0f, false);
     tokenizer.unigramLM().buildTrie();
 
     const std::string input = "hello\nworld\ttab\r\ncrlf";
@@ -2958,6 +3017,7 @@ int main(int argc, char** argv) {
     suite.addTest("Unigram.Train.RejectsUnparseableDetectedAtom", testUnigramTrainRejectsUnparseableDetectedAtom);
     suite.addTest("AtomTable.RejectsBadNumericDetectionWithContext", testAtomTableRejectsBadNumericDetectionWithContext);
     suite.addTest("AtomTable.ArgNumberSupportsSignedDecimalExponent", testAtomTableArgNumberSupportsSignedDecimalExponent);
+    suite.addTest("AtomTable.NumberEncoderValidationRejectsDigitOverflow", testAtomTableNumberEncoderValidationRejectsDigitOverflow);
     suite.addTest("UniByte.RawTextDetectorRegistry", testUniByteRawTextDetectorRegistry);
     suite.addTest("UniByte.URLPassthrough", testUniByteURLDetection);
     suite.addTest("UniByte.URLPassthrough.CaseInsensitive", testUniByteURLDetectionCaseInsensitive);
