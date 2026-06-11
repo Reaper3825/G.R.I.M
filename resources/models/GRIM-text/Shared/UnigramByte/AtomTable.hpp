@@ -27,6 +27,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <iosfwd>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -146,16 +147,12 @@ struct AtomNumber {
     float confidence = 0.0f;
 };
 
-using ArgNumber = AtomNumber;
-
 struct AtomNumberPopulationPayload {
     uint32_t total_numbers = 0;
     uint32_t total_digits = 0;
     uint32_t skipped_atoms = 0;
     uint32_t malformed_numbers = 0;
 };
-
-using ArgNumberPopulationPayload = AtomNumberPopulationPayload;
 
 //======================================================//
 //  Atom Entry - durable atom record plus numeric decomposition metadata
@@ -182,7 +179,7 @@ struct alignas(64) AtomEntry {
     uint32_t flags;           // Type-specific flags
 
     uint64_t reserved_zero;   // Reserved legacy field; must remain zero
-    std::optional<ArgNumber> arg_number;  // Deduped and serialized numeric decomposition
+    std::optional<AtomNumber> arg_number;  // Deduped and serialized numeric decomposition
 
     // Initialize to safe defaults
     AtomEntry()
@@ -217,32 +214,13 @@ struct AtomTokenizationPayload {
 struct AtomTableFromDetectionsResult {
     std::shared_ptr<AtomTable> atom_table;
     std::vector<AtomTokenizationPayload> atom_tokens;
-    ArgNumberPopulationPayload arg_number_payload;
+    AtomNumberPopulationPayload arg_number_payload;
 };
 
 AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
     std::string_view source_text,
     const std::vector<Detector::RawTextDetection>& detections,
     int max_mantissa_digit_slots,
-    const char* caller);
-
-std::shared_ptr<AtomTable> createAtomTableFromRawTextDetectionsForTokenSideChannels(
-    std::string_view source_text,
-    const std::vector<Detector::RawTextDetection>& detections,
-    const std::vector<uint32_t>& atom_token_indices,
-    const std::vector<int>& token_ids,
-    const std::vector<float>& token_numeric_values,
-    const std::vector<uint8_t>& token_atom_mask,
-    const std::vector<uint32_t>& token_atom_flags,
-    std::vector<uint32_t>& atom_entry_ids,
-    int max_mantissa_digit_slots,
-    const char* caller);
-
-void validateNumberEncoderAtomMetadataOrThrow(
-    const AtomEntry& entry,
-    uint32_t atom_entry_id,
-    int number_encoder_digit_slots,
-    int number_encoder_max_abs_pow10,
     const char* caller);
 
 //======================================================//
@@ -382,9 +360,9 @@ public:
     
     void clear();
     void reserve(size_t count);
-    bool saveToFile(const std::string& path) const;
     bool saveToTextFile(const std::string& path) const;
-    bool loadFromFile(const std::string& path);
+    void serializeToStreamOrThrow(std::ostream& stream, const char* sink) const;
+    void deserializeFromStreamOrThrow(std::istream& stream, const char* source);
     static bool computeFileHash(const std::string& path, uint64_t& out_hash);
     
     //--------------------------------------------------//

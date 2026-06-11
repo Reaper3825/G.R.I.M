@@ -37,6 +37,10 @@ inline constexpr std::uint32_t GRIM_MODEL_VERSION = 13;
 // v13: Removed the slot_selection_target stream (uint32 count + per-entry kind/slot_id). The
 //      execution-entangled decode-time slot selector was deleted; numeric-meaning selector
 //      supervision will arrive as a new channel (see docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md).
-inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 13;
+// v14: Replaced per-token atom-text reconstruction with direct per-sequence AtomTable persistence:
+//      uint32 atom_entry_ids[len]
+//      uint8  has_atom_table
+//      AtomTable binary payload (entries + exact numeric payload arrays + string pool)
+inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 14;
 
 } // namespace GRIM

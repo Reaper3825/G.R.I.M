@@ -160,9 +160,7 @@ flowchart LR
 7. Any residual byte sequence not covered by the finalized learned-piece segmentation overflows to raw byte tokens through `TokenLayout.hpp` byte helpers.
 8. `UniByteResult` is assembled and `validate()` checks that every parallel array matches `token_ids.size()`.
 
-Persisted GRMT reconstruction uses `createAtomTableFromRawTextDetectionsForTokenSideChannels()` so AtomTable owns the payload validation and `atom_entry_ids` materialization instead of duplicating that policy in row I/O.
-
-`ArgNumberPopulationPayload` is now summary-only diagnostics. The durable numeric decomposition lives on `AtomEntry::arg_number`, which means deduped atom entries also dedupe their digit bindings and AtomTable save/load persists them with the entry.
+`AtomNumberPopulationPayload` is now summary-only diagnostics. The durable numeric decomposition lives on `AtomEntry::arg_number`, which means deduped atom entries also dedupe their digit bindings and AtomTable save/load persists them with the entry.
 
 Atoms never reach the byte-overflow step because they were already extracted and handled before unigram segmentation started.
 

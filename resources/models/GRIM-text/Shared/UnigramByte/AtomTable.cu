@@ -33,6 +33,8 @@ namespace Tokenizer {
 
 namespace {
 
+constexpr char kAtomTableStreamMagic[4] = {'A', 'T', 'M', 'B'};
+
 const char* atomCategoryName(AtomCategory category) {
     switch (category) {
         case AtomCategory::NUMERIC: return "NUMERIC";
@@ -77,6 +79,32 @@ bool readBinary(std::istream& stream, T& value) {
     return stream.good();
 }
 
+void writeExactOrThrow(std::ostream& stream,
+                       const void* data,
+                       std::size_t bytes,
+                       const char* sink,
+                       const char* field) {
+    stream.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(bytes));
+    if (!stream) {
+        throw std::runtime_error(std::string("AtomTable::serializeToStreamOrThrow failed writing ") +
+                                 field + " to " + sink + " (bytes=" +
+                                 std::to_string(bytes) + ")");
+    }
+}
+
+void readExactOrThrow(std::istream& stream,
+                      void* data,
+                      std::size_t bytes,
+                      const char* source,
+                      const char* field) {
+    stream.read(reinterpret_cast<char*>(data), static_cast<std::streamsize>(bytes));
+    if (!stream) {
+        throw std::runtime_error(std::string("AtomTable::deserializeFromStreamOrThrow failed reading ") +
+                                 field + " from " + source + " (bytes=" +
+                                 std::to_string(bytes) + ")");
+    }
+}
+
 void writeTextSpan32(std::ostream& stream, const TextSpan32& span) {
     writeBinary(stream, span.offset);
     writeBinary(stream, span.length);
@@ -86,9 +114,9 @@ bool readTextSpan32(std::istream& stream, TextSpan32& span) {
     return readBinary(stream, span.offset) && readBinary(stream, span.length);
 }
 
-// Single field-order traversal for ArgNumber binary I/O. Write and read share
-// this definition so the on-disk layout (binary format version 2) cannot
-// desynchronize between the save and load paths.
+// Single field-order traversal for AtomNumber binary I/O. Write and read share
+// this definition so the on-disk layout cannot desynchronize between the save
+// and load paths.
 template <bool kWrite, typename Stream>
 bool transferDigitBinding(Stream& stream, DigitBinding& digit) {
     auto io = [&](auto& field) {
@@ -104,7 +132,7 @@ bool transferDigitBinding(Stream& stream, DigitBinding& digit) {
 }
 
 template <bool kWrite, typename Stream>
-bool transferArgNumber(Stream& stream, ArgNumber& number) {
+bool transferArgNumber(Stream& stream, AtomNumber& number) {
     auto io = [&](auto& field) {
         if constexpr (kWrite) {
             writeBinary(stream, field);
@@ -151,19 +179,19 @@ bool transferArgNumber(Stream& stream, ArgNumber& number) {
     return true;
 }
 
-void writeArgNumber(std::ostream& stream, const ArgNumber& number) {
+void writeArgNumber(std::ostream& stream, const AtomNumber& number) {
     // transferArgNumber takes a mutable reference so write/read share one
     // traversal; the kWrite=true instantiation never mutates the fields.
-    transferArgNumber<true>(stream, const_cast<ArgNumber&>(number));
+    transferArgNumber<true>(stream, const_cast<AtomNumber&>(number));
 }
 
-bool readArgNumber(std::istream& stream, uint32_t atom_entry_id, ArgNumber& number) {
-    number = ArgNumber{};
+bool readArgNumber(std::istream& stream, uint32_t atom_entry_id, AtomNumber& number) {
+    number = AtomNumber{};
     number.number_atom_id = atom_entry_id;
     return transferArgNumber<false>(stream, number);
 }
 
-std::string formatArgNumberForText(const std::optional<ArgNumber>& number) {
+std::string formatArgNumberForText(const std::optional<AtomNumber>& number) {
     if (!number.has_value()) {
         return "<none>";
     }
@@ -317,7 +345,7 @@ int16_t requireInt16Pow10ForArgNumber(
                              "', reason='" + reason + "'");
 }
 
-ArgNumber buildArgNumberFromContentText(
+AtomNumber buildArgNumberFromContentText(
     std::string_view content_text,
     const TextSpan32& raw_span,
     const TextSpan32& content_span,
@@ -359,7 +387,7 @@ ArgNumber buildArgNumberFromContentText(
     const uint32_t content_end = content_span.length;
     const std::string atom_text(content_text.data(), content_text.size());
 
-    ArgNumber number{};
+    AtomNumber number{};
     number.number_atom_id = atom_entry_id;
     number.raw_span = raw_span;
     number.content_span = content_span;
@@ -516,7 +544,7 @@ void ensureAtomEntryHasArgNumber(
 
 void recordAtomEntryArgNumberSummary(
     const AtomEntry& entry,
-    ArgNumberPopulationPayload& payload,
+    AtomNumberPopulationPayload& payload,
     const char* caller) {
     if (!isNumericAtom(entry.type)) {
         ++payload.skipped_atoms;
@@ -531,7 +559,7 @@ void recordAtomEntryArgNumberSummary(
     payload.total_digits += static_cast<uint32_t>(entry.arg_number->digits.size());
 }
 
-std::string mantissaDigitSequence(const ArgNumber& number) {
+std::string mantissaDigitSequence(const AtomNumber& number) {
     std::string seq;
     seq.reserve(number.digits.size());
     for (const DigitBinding& digit : number.digits) {
@@ -574,98 +602,9 @@ void validateTokenizationMantissaDigitSlotsOrThrow(
 
 } // namespace
 
-void validateNumberEncoderAtomMetadataOrThrow(
-    const AtomEntry& entry,
-    uint32_t atom_entry_id,
-    int number_encoder_digit_slots,
-    int number_encoder_max_abs_pow10,
-    const char* caller) {
-    requireCallerLabel(caller, "validateNumberEncoderAtomMetadataOrThrow");
-
-    if (number_encoder_digit_slots <= 0) {
-        return;
-    }
-    if (number_encoder_max_abs_pow10 <= 0) {
-        throw std::runtime_error(
-            std::string(caller) + ": number_encoder digit_slots=" +
-            std::to_string(number_encoder_digit_slots) +
-            " but max_abs_pow10=" + std::to_string(number_encoder_max_abs_pow10) +
-            " is not positive");
-    }
-    if (!isNumericAtom(entry.type)) {
-        throw std::runtime_error(
-            std::string(caller) + ": number-encoder atom_entry_id=" +
-            std::to_string(atom_entry_id) + " is not a numeric atom type");
-    }
-    if (!entry.arg_number.has_value()) {
-        throw std::runtime_error(
-            std::string(caller) + ": numeric atom_entry_id=" +
-            std::to_string(atom_entry_id) +
-            " is missing required arg_number metadata");
-    }
-
-    const ArgNumber& number = *entry.arg_number;
-    const std::size_t digit_count = number.digits.size();
-    if (digit_count == 0) {
-        throw std::runtime_error(
-            std::string(caller) + ": numeric atom_entry_id=" +
-            std::to_string(atom_entry_id) + " has zero mantissa digit bindings");
-    }
-    if (digit_count > static_cast<std::size_t>(number_encoder_digit_slots)) {
-        throw std::runtime_error(
-            std::string(caller) + ": numeric atom_entry_id=" +
-            std::to_string(atom_entry_id) + " has " + std::to_string(digit_count) +
-            " mantissa digits exceeding number_encoder_max_digit_slots=" +
-            std::to_string(number_encoder_digit_slots) +
-            " — refusing to silently truncate digit structure");
-    }
-
-    for (std::size_t i = 0; i < digit_count; ++i) {
-        const DigitBinding& binding = number.digits[i];
-        if (binding.digit > 9) {
-            throw std::runtime_error(
-                std::string(caller) + ": numeric atom_entry_id=" +
-                std::to_string(atom_entry_id) + " digit[" + std::to_string(i) +
-                "]=" + std::to_string(binding.digit) + " is not a base-10 digit");
-        }
-        const int pow10 = static_cast<int>(binding.pow10);
-        if (pow10 < -number_encoder_max_abs_pow10 || pow10 > number_encoder_max_abs_pow10) {
-            throw std::runtime_error(
-                std::string(caller) + ": numeric atom_entry_id=" +
-                std::to_string(atom_entry_id) + " digit[" + std::to_string(i) +
-                "] pow10=" + std::to_string(pow10) +
-                " outside configured number_encoder_max_abs_pow10=±" +
-                std::to_string(number_encoder_max_abs_pow10));
-        }
-    }
-}
-
 //======================================================//
 //  CUDA Kernels
 //======================================================//
-
-// Kernel: Unpack atom numeric values for computation
-__global__ void kernelUnpackAtomNumerics(
-    const double* __restrict__ numeric_float_values,
-    const int64_t* __restrict__ numeric_int_values,
-    const uint8_t* __restrict__ numeric_kind,
-    const uint32_t* __restrict__ types,
-    size_t num_atoms,
-    float* __restrict__ output_floats,
-    int64_t* __restrict__ output_ints,
-    bool* __restrict__ is_integer
-) {
-    const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= num_atoms) return;
-    
-    (void)types;
-    const uint8_t kind = numeric_kind[idx];
-    const bool is_int = (kind == static_cast<uint8_t>(NumericPayloadKind::INTEGER));
-    
-    is_integer[idx] = is_int;
-    output_floats[idx] = static_cast<float>(numeric_float_values[idx]);
-    output_ints[idx] = numeric_int_values[idx];
-}
 
 // Kernel: Pack atom data for embedding lookup
 __global__ void kernelPackAtomEmbeddings(
@@ -874,110 +813,6 @@ AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
     return result;
 }
 
-static void applyAtomTokenizationPayloadToTokenSideChannelsInternal(
-    const AtomTableFromDetectionsResult& atom_table_build,
-    const std::vector<uint32_t>& atom_token_indices,
-    const std::vector<int>& token_ids,
-    const std::vector<float>& token_numeric_values,
-    const std::vector<uint8_t>& token_atom_mask,
-    const std::vector<uint32_t>& token_atom_flags,
-    std::vector<uint32_t>& atom_entry_ids,
-    const char* caller) {
-    requireCallerLabel(caller, "applyAtomTokenizationPayloadToTokenSideChannels");
-
-    const size_t token_count = token_ids.size();
-    auto requireTokenAlignedSize = [&](size_t actual, const char* name) {
-        if (actual != token_count) {
-            throw std::runtime_error(std::string(caller) + ": " + name + ".size()=" +
-                                     std::to_string(actual) +
-                                     " != token_ids.size()=" + std::to_string(token_count));
-        }
-    };
-    requireTokenAlignedSize(token_numeric_values.size(), "token_numeric_values");
-    requireTokenAlignedSize(token_atom_mask.size(), "token_atom_mask");
-    requireTokenAlignedSize(token_atom_flags.size(), "token_atom_flags");
-    requireTokenAlignedSize(atom_entry_ids.size(), "atom_entry_ids");
-    if (atom_table_build.atom_tokens.size() != atom_token_indices.size()) {
-        throw std::runtime_error(std::string(caller) +
-                                 ": atom token payload count mismatch: atom_tokens=" +
-                                 std::to_string(atom_table_build.atom_tokens.size()) +
-                                 ", atom_token_indices=" + std::to_string(atom_token_indices.size()));
-    }
-
-    for (std::size_t atom_index = 0; atom_index < atom_table_build.atom_tokens.size(); ++atom_index) {
-        const uint32_t token_index_u32 = atom_token_indices[atom_index];
-        const size_t token_index = static_cast<size_t>(token_index_u32);
-        if (token_index >= token_count) {
-            throw std::runtime_error(std::string(caller) +
-                                     ": atom token index out of range at atom_index=" +
-                                     std::to_string(atom_index) +
-                                     ", token_index=" + std::to_string(token_index) +
-                                     ", token_count=" + std::to_string(token_count));
-        }
-
-        const AtomTokenizationPayload& atom_payload = atom_table_build.atom_tokens[atom_index];
-        if (token_ids[token_index] != atom_payload.token_id) {
-            throw std::runtime_error(std::string(caller) +
-                                     ": atom token_id mismatch at token_index=" + std::to_string(token_index) +
-                                     ": stored=" + std::to_string(token_ids[token_index]) +
-                                     ", payload=" + std::to_string(atom_payload.token_id));
-        }
-        if (token_atom_mask[token_index] != atom_payload.token_atom_mask) {
-            throw std::runtime_error(std::string(caller) +
-                                     ": atom mask mismatch at token_index=" + std::to_string(token_index) +
-                                     ": stored=" + std::to_string(static_cast<int>(token_atom_mask[token_index])) +
-                                     ", payload=" + std::to_string(static_cast<int>(atom_payload.token_atom_mask)));
-        }
-        if (token_atom_flags[token_index] != atom_payload.token_atom_flags) {
-            throw std::runtime_error(std::string(caller) +
-                                     ": atom flags mismatch at token_index=" + std::to_string(token_index) +
-                                     ": stored=" + std::to_string(token_atom_flags[token_index]) +
-                                     ", payload=" + std::to_string(atom_payload.token_atom_flags));
-        }
-        if (token_numeric_values[token_index] != atom_payload.token_numeric_value) {
-            throw std::runtime_error(std::string(caller) +
-                                     ": atom numeric payload mismatch at token_index=" + std::to_string(token_index) +
-                                     ": stored=" + std::to_string(token_numeric_values[token_index]) +
-                                     ", payload=" + std::to_string(atom_payload.token_numeric_value));
-        }
-        if (atom_payload.atom_entry_id == kAtomEntryNone) {
-            throw std::runtime_error(std::string(caller) +
-                                     ": atom payload carries kAtomEntryNone at atom_index=" +
-                                     std::to_string(atom_index));
-        }
-
-        atom_entry_ids[token_index] = atom_payload.atom_entry_id;
-    }
-}
-
-std::shared_ptr<AtomTable> createAtomTableFromRawTextDetectionsForTokenSideChannels(
-    std::string_view source_text,
-    const std::vector<Detector::RawTextDetection>& detections,
-    const std::vector<uint32_t>& atom_token_indices,
-    const std::vector<int>& token_ids,
-    const std::vector<float>& token_numeric_values,
-    const std::vector<uint8_t>& token_atom_mask,
-    const std::vector<uint32_t>& token_atom_flags,
-    std::vector<uint32_t>& atom_entry_ids,
-    int max_mantissa_digit_slots,
-    const char* caller) {
-    AtomTableFromDetectionsResult atom_table_build = createAtomTableFromRawTextDetections(
-        source_text,
-        detections,
-        max_mantissa_digit_slots,
-        caller);
-    applyAtomTokenizationPayloadToTokenSideChannelsInternal(
-        atom_table_build,
-        atom_token_indices,
-        token_ids,
-        token_numeric_values,
-        token_atom_mask,
-        token_atom_flags,
-        atom_entry_ids,
-        caller);
-    return std::move(atom_table_build.atom_table);
-}
-
 void AtomTable::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     freeGPUData(gpu_data_);
@@ -1002,58 +837,6 @@ void AtomTable::reserve(size_t count) {
     numeric_int_values_.reserve(count);
     numeric_kinds_.reserve(count);
     hash_to_ids_.reserve(count);
-}
-
-bool AtomTable::saveToFile(const std::string& path) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-
-    std::ofstream file(path, std::ios::binary);
-    if (!file.is_open()) {
-        return false;
-    }
-
-    const char magic[4] = {'A', 'T', 'M', 'B'};
-    const uint32_t version = 2;
-    const uint32_t entry_count = static_cast<uint32_t>(entries_.size());
-    const uint32_t pool_size = static_cast<uint32_t>(string_pool_.size());
-
-    file.write(magic, sizeof(magic));
-    writeBinary(file, version);
-    writeBinary(file, entry_count);
-    writeBinary(file, pool_size);
-
-    for (const AtomEntry& entry : entries_) {
-        const uint32_t type_value = static_cast<uint32_t>(entry.type);
-        const uint8_t category_value = static_cast<uint8_t>(entry.category);
-        const uint8_t origin_value = static_cast<uint8_t>(entry.origin);
-        const uint8_t has_arg_number = entry.arg_number.has_value() ? 1 : 0;
-
-        writeBinary(file, entry.hash);
-        writeBinary(file, entry.id);
-        writeBinary(file, type_value);
-        writeBinary(file, category_value);
-        writeBinary(file, origin_value);
-        file.write(reinterpret_cast<const char*>(entry.padding1), sizeof(entry.padding1));
-        writeBinary(file, entry.raw_text_ref.offset);
-        writeBinary(file, entry.raw_text_ref.length);
-        writeBinary(file, entry.confidence);
-        writeBinary(file, entry.created_at);
-        writeBinary(file, entry.source_start);
-        writeBinary(file, entry.source_end);
-        writeBinary(file, entry.numeric_value);
-        writeBinary(file, entry.flags);
-        writeBinary(file, entry.reserved_zero);
-        writeBinary(file, has_arg_number);
-        if (entry.arg_number.has_value()) {
-            writeArgNumber(file, *entry.arg_number);
-        }
-    }
-    if (pool_size > 0) {
-        file.write(reinterpret_cast<const char*>(string_pool_.data()),
-                   pool_size * sizeof(char));
-    }
-
-    return file.good();
 }
 
 bool AtomTable::saveToTextFile(const std::string& path) const {
@@ -1106,40 +889,104 @@ bool AtomTable::saveToTextFile(const std::string& path) const {
     return file.good();
 }
 
-bool AtomTable::loadFromFile(const std::string& path) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file.is_open()) {
-        return false;
+void AtomTable::serializeToStreamOrThrow(std::ostream& stream, const char* sink) const {
+    requireCallerLabel(sink, "AtomTable::serializeToStreamOrThrow");
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (numeric_float_values_.size() != entries_.size() ||
+        numeric_int_values_.size() != entries_.size() ||
+        numeric_kinds_.size() != entries_.size()) {
+        throw std::runtime_error(std::string("AtomTable::serializeToStreamOrThrow: exact numeric payload sizes do not match entry count for ") +
+                                 sink + " (entries=" + std::to_string(entries_.size()) +
+                                 ", float_payloads=" + std::to_string(numeric_float_values_.size()) +
+                                 ", int_payloads=" + std::to_string(numeric_int_values_.size()) +
+                                 ", kinds=" + std::to_string(numeric_kinds_.size()) + ")");
     }
 
-    char magic[4] = {0};
-    file.read(magic, sizeof(magic));
-    if (file.gcount() != sizeof(magic) ||
-        magic[0] != 'A' || magic[1] != 'T' || magic[2] != 'M' || magic[3] != 'B') {
-        return false;
+    writeExactOrThrow(stream, kAtomTableStreamMagic, sizeof(kAtomTableStreamMagic), sink, "magic");
+
+    const uint32_t entry_count = static_cast<uint32_t>(entries_.size());
+    const uint32_t pool_size = static_cast<uint32_t>(string_pool_.size());
+    writeExactOrThrow(stream, &entry_count, sizeof(entry_count), sink, "entry_count");
+    writeExactOrThrow(stream, &pool_size, sizeof(pool_size), sink, "pool_size");
+
+    for (const AtomEntry& entry : entries_) {
+        const uint32_t type_value = static_cast<uint32_t>(entry.type);
+        const uint8_t category_value = static_cast<uint8_t>(entry.category);
+        const uint8_t origin_value = static_cast<uint8_t>(entry.origin);
+        const uint8_t has_arg_number = entry.arg_number.has_value() ? 1 : 0;
+
+        writeExactOrThrow(stream, &entry.hash, sizeof(entry.hash), sink, "entry.hash");
+        writeExactOrThrow(stream, &entry.id, sizeof(entry.id), sink, "entry.id");
+        writeExactOrThrow(stream, &type_value, sizeof(type_value), sink, "entry.type");
+        writeExactOrThrow(stream, &category_value, sizeof(category_value), sink, "entry.category");
+        writeExactOrThrow(stream, &origin_value, sizeof(origin_value), sink, "entry.origin");
+        writeExactOrThrow(stream, entry.padding1, sizeof(entry.padding1), sink, "entry.padding1");
+        writeExactOrThrow(stream, &entry.raw_text_ref.offset, sizeof(entry.raw_text_ref.offset), sink, "entry.raw_text_ref.offset");
+        writeExactOrThrow(stream, &entry.raw_text_ref.length, sizeof(entry.raw_text_ref.length), sink, "entry.raw_text_ref.length");
+        writeExactOrThrow(stream, &entry.confidence, sizeof(entry.confidence), sink, "entry.confidence");
+        writeExactOrThrow(stream, &entry.created_at, sizeof(entry.created_at), sink, "entry.created_at");
+        writeExactOrThrow(stream, &entry.source_start, sizeof(entry.source_start), sink, "entry.source_start");
+        writeExactOrThrow(stream, &entry.source_end, sizeof(entry.source_end), sink, "entry.source_end");
+        writeExactOrThrow(stream, &entry.numeric_value, sizeof(entry.numeric_value), sink, "entry.numeric_value");
+        writeExactOrThrow(stream, &entry.flags, sizeof(entry.flags), sink, "entry.flags");
+        writeExactOrThrow(stream, &entry.reserved_zero, sizeof(entry.reserved_zero), sink, "entry.reserved_zero");
+        writeExactOrThrow(stream, &has_arg_number, sizeof(has_arg_number), sink, "entry.has_arg_number");
+        if (entry.arg_number.has_value()) {
+            AtomNumber arg_number = *entry.arg_number;
+            if (!transferArgNumber<true>(stream, arg_number) || !stream) {
+                throw std::runtime_error(std::string("AtomTable::serializeToStreamOrThrow failed writing arg_number to ") + sink);
+            }
+        }
     }
 
-    uint32_t version = 0;
+    if (entry_count > 0) {
+        writeExactOrThrow(stream,
+                          numeric_float_values_.data(),
+                          static_cast<std::size_t>(entry_count) * sizeof(double),
+                          sink,
+                          "numeric_float_values");
+        writeExactOrThrow(stream,
+                          numeric_int_values_.data(),
+                          static_cast<std::size_t>(entry_count) * sizeof(int64_t),
+                          sink,
+                          "numeric_int_values");
+        writeExactOrThrow(stream,
+                          numeric_kinds_.data(),
+                          static_cast<std::size_t>(entry_count) * sizeof(uint8_t),
+                          sink,
+                          "numeric_kinds");
+    }
+    if (pool_size > 0) {
+        writeExactOrThrow(stream,
+                          string_pool_.data(),
+                          static_cast<std::size_t>(pool_size),
+                          sink,
+                          "string_pool");
+    }
+}
+
+void AtomTable::deserializeFromStreamOrThrow(std::istream& stream, const char* source) {
+    requireCallerLabel(source, "AtomTable::deserializeFromStreamOrThrow");
+
+    char magic[4] = {0, 0, 0, 0};
+    readExactOrThrow(stream, magic, sizeof(magic), source, "magic");
+    if (std::memcmp(magic, kAtomTableStreamMagic, sizeof(magic)) != 0) {
+        throw std::runtime_error(std::string("AtomTable::deserializeFromStreamOrThrow: invalid magic in ") +
+                                 source + " (expected 'ATMB')");
+    }
+
     uint32_t entry_count = 0;
     uint32_t pool_size = 0;
-    if (!readBinary(file, version) ||
-        !readBinary(file, entry_count) ||
-        !readBinary(file, pool_size)) {
-        return false;
-    }
-
-    if (!file.good() || version != 2) {
-        return false;
-    }
-    // Sanity check: reject obviously corrupt files (> 10M entries)
+    readExactOrThrow(stream, &entry_count, sizeof(entry_count), source, "entry_count");
+    readExactOrThrow(stream, &pool_size, sizeof(pool_size), source, "pool_size");
     if (entry_count > 10000000) {
-        return false;
+        throw std::runtime_error(std::string("AtomTable::deserializeFromStreamOrThrow: implausible entry_count in ") +
+                                 source + ": " + std::to_string(entry_count));
     }
 
     std::vector<AtomEntry> entries;
     entries.reserve(entry_count);
-    std::vector<char> pool(pool_size);
-
     for (uint32_t i = 0; i < entry_count; ++i) {
         AtomEntry entry{};
         uint32_t type_value = 0;
@@ -1147,58 +994,71 @@ bool AtomTable::loadFromFile(const std::string& path) {
         uint8_t origin_value = 0;
         uint8_t has_arg_number = 0;
 
-        if (!readBinary(file, entry.hash) ||
-            !readBinary(file, entry.id) ||
-            !readBinary(file, type_value) ||
-            !readBinary(file, category_value) ||
-            !readBinary(file, origin_value)) {
-            return false;
-        }
-        file.read(reinterpret_cast<char*>(entry.padding1), sizeof(entry.padding1));
-        if (!file.good() ||
-            !readBinary(file, entry.raw_text_ref.offset) ||
-            !readBinary(file, entry.raw_text_ref.length) ||
-            !readBinary(file, entry.confidence) ||
-            !readBinary(file, entry.created_at) ||
-            !readBinary(file, entry.source_start) ||
-            !readBinary(file, entry.source_end) ||
-            !readBinary(file, entry.numeric_value) ||
-            !readBinary(file, entry.flags) ||
-            !readBinary(file, entry.reserved_zero) ||
-            !readBinary(file, has_arg_number)) {
-            return false;
-        }
+        readExactOrThrow(stream, &entry.hash, sizeof(entry.hash), source, "entry.hash");
+        readExactOrThrow(stream, &entry.id, sizeof(entry.id), source, "entry.id");
+        readExactOrThrow(stream, &type_value, sizeof(type_value), source, "entry.type");
+        readExactOrThrow(stream, &category_value, sizeof(category_value), source, "entry.category");
+        readExactOrThrow(stream, &origin_value, sizeof(origin_value), source, "entry.origin");
+        readExactOrThrow(stream, entry.padding1, sizeof(entry.padding1), source, "entry.padding1");
+        readExactOrThrow(stream, &entry.raw_text_ref.offset, sizeof(entry.raw_text_ref.offset), source, "entry.raw_text_ref.offset");
+        readExactOrThrow(stream, &entry.raw_text_ref.length, sizeof(entry.raw_text_ref.length), source, "entry.raw_text_ref.length");
+        readExactOrThrow(stream, &entry.confidence, sizeof(entry.confidence), source, "entry.confidence");
+        readExactOrThrow(stream, &entry.created_at, sizeof(entry.created_at), source, "entry.created_at");
+        readExactOrThrow(stream, &entry.source_start, sizeof(entry.source_start), source, "entry.source_start");
+        readExactOrThrow(stream, &entry.source_end, sizeof(entry.source_end), source, "entry.source_end");
+        readExactOrThrow(stream, &entry.numeric_value, sizeof(entry.numeric_value), source, "entry.numeric_value");
+        readExactOrThrow(stream, &entry.flags, sizeof(entry.flags), source, "entry.flags");
+        readExactOrThrow(stream, &entry.reserved_zero, sizeof(entry.reserved_zero), source, "entry.reserved_zero");
+        readExactOrThrow(stream, &has_arg_number, sizeof(has_arg_number), source, "entry.has_arg_number");
 
         entry.type = static_cast<AtomType>(type_value);
         entry.category = static_cast<AtomCategory>(category_value);
         entry.origin = static_cast<AtomOrigin>(origin_value);
         if (has_arg_number != 0) {
-            ArgNumber number{};
-            if (!readArgNumber(file, entry.id, number)) {
-                return false;
+            AtomNumber arg_number{};
+            if (!readArgNumber(stream, entry.id, arg_number)) {
+                throw std::runtime_error(std::string("AtomTable::deserializeFromStreamOrThrow failed reading arg_number from ") + source);
             }
-            entry.arg_number = std::move(number);
+            entry.arg_number = std::move(arg_number);
         }
 
         entries.push_back(std::move(entry));
     }
-    if (pool_size > 0) {
-        file.read(reinterpret_cast<char*>(pool.data()),
-                  pool_size * sizeof(char));
-    }
-    if (!file.good()) {
-        return false;
-    }
 
-    // Single pass: validate every persisted entry, then re-derive its numeric
-    // payload from the raw text (payloads are not persisted; parse is the
-    // single source of truth on load).
     std::vector<double> numeric_float_values(entry_count, 0.0);
     std::vector<int64_t> numeric_int_values(entry_count, 0);
     std::vector<uint8_t> numeric_kinds(entry_count, static_cast<uint8_t>(NumericPayloadKind::NONE));
+    if (entry_count > 0) {
+        readExactOrThrow(stream,
+                         numeric_float_values.data(),
+                         static_cast<std::size_t>(entry_count) * sizeof(double),
+                         source,
+                         "numeric_float_values");
+        readExactOrThrow(stream,
+                         numeric_int_values.data(),
+                         static_cast<std::size_t>(entry_count) * sizeof(int64_t),
+                         source,
+                         "numeric_int_values");
+        readExactOrThrow(stream,
+                         numeric_kinds.data(),
+                         static_cast<std::size_t>(entry_count) * sizeof(uint8_t),
+                         source,
+                         "numeric_kinds");
+    }
+
+    std::vector<char> pool(pool_size);
+    if (pool_size > 0) {
+        readExactOrThrow(stream,
+                         pool.data(),
+                         static_cast<std::size_t>(pool_size),
+                         source,
+                         "string_pool");
+    }
+
     for (uint32_t i = 0; i < entry_count; ++i) {
-        AtomEntry& entry = entries[i];
-        if (entry.id < ATOM_TOKEN_BASE || entry.id >= ATOM_TOKEN_MAX ||
+        const AtomEntry& entry = entries[i];
+        if (entry.id < ATOM_TOKEN_BASE ||
+            entry.id >= ATOM_TOKEN_MAX ||
             entry.id - ATOM_TOKEN_BASE != i ||
             !atomTypeIsPersistable(entry.type) ||
             !stringRefInBounds(entry.raw_text_ref, pool.size()) ||
@@ -1208,15 +1068,16 @@ bool AtomTable::loadFromFile(const std::string& path) {
             !entry.arg_number.has_value() ||
             entry.arg_number->number_atom_id != entry.id ||
             entry.arg_number->digits.empty()) {
-            return false;
+            throw std::runtime_error(std::string("AtomTable::deserializeFromStreamOrThrow: persisted entry validation failed at index=") +
+                                     std::to_string(i) + " in " + source);
         }
-
-        const std::string_view raw_text(pool.data() + entry.raw_text_ref.offset, entry.raw_text_ref.length);
-        const ParseResult result = parseAtom(entry.type, raw_text);
-        if (!result.success) {
-            return false;
+        const uint8_t expected_kind = entry.type == AtomType::ATOM_INT
+            ? static_cast<uint8_t>(NumericPayloadKind::INTEGER)
+            : static_cast<uint8_t>(NumericPayloadKind::FLOAT);
+        if (numeric_kinds[i] != expected_kind) {
+            throw std::runtime_error(std::string("AtomTable::deserializeFromStreamOrThrow: numeric kind mismatch for entry id=") +
+                                     std::to_string(entry.id) + " in " + source);
         }
-        packNumericValue(entry, result.value, numeric_float_values[i], numeric_int_values[i], numeric_kinds[i]);
     }
 
     {
@@ -1245,8 +1106,6 @@ bool AtomTable::loadFromFile(const std::string& path) {
         next_id_ = static_cast<uint32_t>(entries_.size());
         gpu_dirty_ = !entries_.empty();
     }
-
-    return true;
 }
 
 bool AtomTable::computeFileHash(const std::string& path, uint64_t& out_hash) {

@@ -1129,7 +1129,7 @@ bool testAtomTableArgNumberSupportsSignedDecimalExponent(std::string& message) {
     const auto minus_four_entry = result.atom_table->getAtom(result.atom_tokens[0].atom_entry_id);
     ASSERT_TRUE(minus_four_entry.has_value(), "-4 atom entry missing");
     ASSERT_TRUE(minus_four_entry->arg_number.has_value(), "-4 arg_number metadata missing");
-    const ArgNumber& minus_four = *minus_four_entry->arg_number;
+    const AtomNumber& minus_four = *minus_four_entry->arg_number;
     ASSERT_EQ(static_cast<int>(minus_four.has_sign), 1, "-4 should record a sign");
     ASSERT_EQ(static_cast<int>(minus_four.sign_negative), 1, "-4 should record a negative sign");
     ASSERT_EQ(static_cast<int>(minus_four.digits[0].digit), 4, "-4 digit mismatch");
@@ -1138,7 +1138,7 @@ bool testAtomTableArgNumberSupportsSignedDecimalExponent(std::string& message) {
     const auto plus_four_entry = result.atom_table->getAtom(result.atom_tokens[1].atom_entry_id);
     ASSERT_TRUE(plus_four_entry.has_value(), "+4 atom entry missing");
     ASSERT_TRUE(plus_four_entry->arg_number.has_value(), "+4 arg_number metadata missing");
-    const ArgNumber& plus_four = *plus_four_entry->arg_number;
+    const AtomNumber& plus_four = *plus_four_entry->arg_number;
     ASSERT_EQ(static_cast<int>(plus_four.has_sign), 1, "+4 should record a sign");
     ASSERT_EQ(static_cast<int>(plus_four.sign_negative), 0, "+4 should record a positive sign");
     ASSERT_EQ(static_cast<int>(plus_four.digits[0].digit), 4, "+4 digit mismatch");
@@ -1146,7 +1146,7 @@ bool testAtomTableArgNumberSupportsSignedDecimalExponent(std::string& message) {
     const auto dot_seventy_five_entry = result.atom_table->getAtom(result.atom_tokens[2].atom_entry_id);
     ASSERT_TRUE(dot_seventy_five_entry.has_value(), ".75 atom entry missing");
     ASSERT_TRUE(dot_seventy_five_entry->arg_number.has_value(), ".75 arg_number metadata missing");
-    const ArgNumber& dot_seventy_five = *dot_seventy_five_entry->arg_number;
+    const AtomNumber& dot_seventy_five = *dot_seventy_five_entry->arg_number;
     ASSERT_EQ(static_cast<int>(dot_seventy_five.has_decimal_point), 1,
               ".75 should record decimal metadata");
     ASSERT_EQ(static_cast<int>(dot_seventy_five.integer_digit_count), 0,
@@ -1165,7 +1165,7 @@ bool testAtomTableArgNumberSupportsSignedDecimalExponent(std::string& message) {
     const auto seventy_five_point_zero_entry = result.atom_table->getAtom(result.atom_tokens[3].atom_entry_id);
     ASSERT_TRUE(seventy_five_point_zero_entry.has_value(), "75.0 atom entry missing");
     ASSERT_TRUE(seventy_five_point_zero_entry->arg_number.has_value(), "75.0 arg_number metadata missing");
-    const ArgNumber& seventy_five_point_zero = *seventy_five_point_zero_entry->arg_number;
+    const AtomNumber& seventy_five_point_zero = *seventy_five_point_zero_entry->arg_number;
     ASSERT_EQ(static_cast<int>(seventy_five_point_zero.digits.size()), 3,
               "75.0 should bind all mantissa digits");
     ASSERT_EQ(static_cast<int>(seventy_five_point_zero.digits[0].pow10), 1,
@@ -1178,7 +1178,7 @@ bool testAtomTableArgNumberSupportsSignedDecimalExponent(std::string& message) {
     const auto one_e_six_entry = result.atom_table->getAtom(result.atom_tokens[4].atom_entry_id);
     ASSERT_TRUE(one_e_six_entry.has_value(), "1e6 atom entry missing");
     ASSERT_TRUE(one_e_six_entry->arg_number.has_value(), "1e6 arg_number metadata missing");
-    const ArgNumber& one_e_six = *one_e_six_entry->arg_number;
+    const AtomNumber& one_e_six = *one_e_six_entry->arg_number;
     ASSERT_EQ(static_cast<int>(one_e_six.has_exponent), 1, "1e6 should record exponent metadata");
     ASSERT_EQ(one_e_six.exponent_value, 6, "1e6 exponent value mismatch");
     ASSERT_EQ(static_cast<int>(one_e_six.digits[0].pow10), 6, "1e6 mantissa pow10 mismatch");
@@ -1186,7 +1186,7 @@ bool testAtomTableArgNumberSupportsSignedDecimalExponent(std::string& message) {
     const auto signed_scientific_entry = result.atom_table->getAtom(result.atom_tokens[5].atom_entry_id);
     ASSERT_TRUE(signed_scientific_entry.has_value(), "-1.5e-4 atom entry missing");
     ASSERT_TRUE(signed_scientific_entry->arg_number.has_value(), "-1.5e-4 arg_number metadata missing");
-    const ArgNumber& signed_scientific = *signed_scientific_entry->arg_number;
+    const AtomNumber& signed_scientific = *signed_scientific_entry->arg_number;
     ASSERT_EQ(static_cast<int>(signed_scientific.has_sign), 1,
               "-1.5e-4 should record mantissa sign");
     ASSERT_EQ(static_cast<int>(signed_scientific.sign_negative), 1,
@@ -1207,65 +1207,6 @@ bool testAtomTableArgNumberSupportsSignedDecimalExponent(std::string& message) {
               "-1.5e-4 second mantissa digit mismatch");
     ASSERT_EQ(static_cast<int>(signed_scientific.digits[1].pow10), -5,
               "-1.5e-4 second mantissa pow10 mismatch");
-
-    return true;
-}
-
-bool testAtomTableNumberEncoderValidationRejectsDigitOverflow(std::string& message) {
-    AtomTable table;
-    const uint32_t id = registerSelfTestAtom(table, AtomType::ATOM_INT, "12345678901234567", 0, 17);
-    ASSERT_TRUE(id != UINT32_MAX, "Failed to register 17-digit integer atom for NumberEncoder validation test");
-
-    const auto entry = table.getAtom(id);
-    ASSERT_TRUE(entry.has_value(), "Registered 17-digit integer atom is not retrievable");
-
-    bool threw = false;
-    std::string error_text;
-    try {
-        validateNumberEncoderAtomMetadataOrThrow(
-            *entry,
-            id,
-            16,
-            16,
-            "testAtomTableNumberEncoderValidationRejectsDigitOverflow overflow");
-    } catch (const std::runtime_error& e) {
-        threw = true;
-        error_text = e.what();
-    }
-
-    ASSERT_TRUE(threw, "NumberEncoder validation must fail when mantissa digits exceed configured slots");
-    ASSERT_TRUE(error_text.find("mantissa digits exceeding number_encoder_max_digit_slots=16") != std::string::npos,
-                "Overflow error must name number_encoder_max_digit_slots as the violated config");
-
-    threw = false;
-    error_text.clear();
-    try {
-        validateNumberEncoderAtomMetadataOrThrow(
-            *entry,
-            id,
-            17,
-            8,
-            "testAtomTableNumberEncoderValidationRejectsDigitOverflow pow10");
-    } catch (const std::runtime_error& e) {
-        threw = true;
-        error_text = e.what();
-    }
-
-    ASSERT_TRUE(threw, "NumberEncoder validation must fail when digit pow10 exceeds configured range");
-    ASSERT_TRUE(error_text.find("outside configured number_encoder_max_abs_pow10=±8") != std::string::npos,
-                "Pow10 error must name number_encoder_max_abs_pow10 as the violated config");
-
-    try {
-        validateNumberEncoderAtomMetadataOrThrow(
-            *entry,
-            id,
-            17,
-            16,
-            "testAtomTableNumberEncoderValidationRejectsDigitOverflow valid");
-    } catch (const std::exception& e) {
-        message = std::string("NumberEncoder validation should allow a matching slot/pow10 configuration: ") + e.what();
-        return false;
-    }
 
     return true;
 }
@@ -1911,20 +1852,20 @@ bool testAtomTableArgNumberSerializesOnEntry(std::string& message) {
     ASSERT_TRUE(entry->arg_number.has_value(), "Original atom entry missing arg_number metadata");
 
     std::filesystem::create_directories("output");
-    const std::filesystem::path binary_path = std::filesystem::path("output") / "atomtable_arg_number_entry.bin";
     const std::filesystem::path text_path = std::filesystem::path("output") / "atomtable_arg_number_entry.tsv";
 
-    ASSERT_TRUE(table.saveToFile(binary_path.string()), "AtomTable binary save should persist entry-owned arg_number metadata");
+    std::stringstream binary_stream;
+    table.serializeToStreamOrThrow(binary_stream, "testAtomTableArgNumberSerializesOnEntry binary_stream");
     ASSERT_TRUE(table.saveToTextFile(text_path.string()), "AtomTable text save should include entry-owned arg_number metadata");
 
     AtomTable loaded;
-    ASSERT_TRUE(loaded.loadFromFile(binary_path.string()), "AtomTable binary load should restore entry-owned arg_number metadata");
+    loaded.deserializeFromStreamOrThrow(binary_stream, "testAtomTableArgNumberSerializesOnEntry binary_stream");
 
     const auto loaded_entry = loaded.getAtom(id);
     ASSERT_TRUE(loaded_entry.has_value(), "Loaded atom entry missing after serialization round-trip");
     ASSERT_TRUE(loaded_entry->arg_number.has_value(), "Loaded atom entry missing arg_number metadata after serialization round-trip");
 
-    const ArgNumber& loaded_number = *loaded_entry->arg_number;
+    const AtomNumber& loaded_number = *loaded_entry->arg_number;
     ASSERT_EQ(static_cast<int>(loaded_number.has_sign), 1, "Loaded arg_number should preserve mantissa sign metadata");
     ASSERT_EQ(static_cast<int>(loaded_number.has_decimal_point), 1, "Loaded arg_number should preserve decimal-point metadata");
     ASSERT_EQ(static_cast<int>(loaded_number.has_exponent), 1, "Loaded arg_number should preserve exponent metadata");
@@ -1943,7 +1884,6 @@ bool testAtomTableArgNumberSerializesOnEntry(std::string& message) {
     ASSERT_TRUE(text_dump_contents.find("pow10=-4") != std::string::npos,
                 "Text dump should serialize digit binding pow10 metadata");
 
-    std::filesystem::remove(binary_path);
     std::filesystem::remove(text_path);
     return true;
 }
@@ -3049,7 +2989,6 @@ int main(int argc, char** argv) {
     suite.addTest("Unigram.Train.RejectsUnparseableDetectedAtom", testUnigramTrainRejectsUnparseableDetectedAtom);
     suite.addTest("AtomTable.RejectsBadNumericDetectionWithContext", testAtomTableRejectsBadNumericDetectionWithContext);
     suite.addTest("AtomTable.ArgNumberSupportsSignedDecimalExponent", testAtomTableArgNumberSupportsSignedDecimalExponent);
-    suite.addTest("AtomTable.NumberEncoderValidationRejectsDigitOverflow", testAtomTableNumberEncoderValidationRejectsDigitOverflow);
     suite.addTest("AtomTable.TokenizationRejectsMantissaDigitSlotOverflow", testAtomTokenizationRejectsMantissaDigitSlotOverflow);
     suite.addTest("UniByte.RawTextDetectorRegistry", testUniByteRawTextDetectorRegistry);
     suite.addTest("UniByte.URLPassthrough", testUniByteURLDetection);

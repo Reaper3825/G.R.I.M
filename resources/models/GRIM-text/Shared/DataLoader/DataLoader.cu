@@ -729,15 +729,60 @@ NumberEncoderValidationStats validateNumberEncoderSequenceCompatibilityOrThrow(
 				" is not retrievable from its AtomTable");
 		}
 
-		std::ostringstream caller;
-		caller << "LoadTrainingData: sequence_index=" << seq_idx
-		       << " token_pos=" << token_pos;
-		GRIM::Tokenizer::validateNumberEncoderAtomMetadataOrThrow(
-			*entry,
-			entry_id,
-			number_encoder_hp.max_digit_slots,
-			number_encoder_hp.max_abs_pow10,
-			caller.str().c_str());
+		if (!GRIM::Tokenizer::isNumericAtom(entry->type)) {
+			throw std::runtime_error(
+				"LoadTrainingData: sequence_index=" + std::to_string(seq_idx) +
+				" token_pos=" + std::to_string(token_pos) +
+				" atom_entry_id=" + std::to_string(entry_id) +
+				" is not a numeric atom type");
+		}
+		if (!entry->arg_number.has_value()) {
+			throw std::runtime_error(
+				"LoadTrainingData: sequence_index=" + std::to_string(seq_idx) +
+				" token_pos=" + std::to_string(token_pos) +
+				" atom_entry_id=" + std::to_string(entry_id) +
+				" is missing required arg_number metadata");
+		}
+
+		const GRIM::Tokenizer::AtomNumber& number = *entry->arg_number;
+		const std::size_t digit_count = number.digits.size();
+		if (digit_count == 0) {
+			throw std::runtime_error(
+				"LoadTrainingData: sequence_index=" + std::to_string(seq_idx) +
+				" token_pos=" + std::to_string(token_pos) +
+				" atom_entry_id=" + std::to_string(entry_id) +
+				" has zero mantissa digit bindings");
+		}
+		if (digit_count > static_cast<std::size_t>(number_encoder_hp.max_digit_slots)) {
+			throw std::runtime_error(
+				"LoadTrainingData: sequence_index=" + std::to_string(seq_idx) +
+				" token_pos=" + std::to_string(token_pos) +
+				" atom_entry_id=" + std::to_string(entry_id) +
+				" has " + std::to_string(digit_count) +
+				" mantissa digits exceeding number_encoder_max_digit_slots=" +
+				std::to_string(number_encoder_hp.max_digit_slots));
+		}
+		for (std::size_t i = 0; i < digit_count; ++i) {
+			const GRIM::Tokenizer::DigitBinding& binding = number.digits[i];
+			if (binding.digit > 9) {
+				throw std::runtime_error(
+					"LoadTrainingData: sequence_index=" + std::to_string(seq_idx) +
+					" token_pos=" + std::to_string(token_pos) +
+					" atom_entry_id=" + std::to_string(entry_id) +
+					" digit[" + std::to_string(i) + "]=" + std::to_string(binding.digit) +
+					" is not a base-10 digit");
+			}
+			const int pow10 = static_cast<int>(binding.pow10);
+			if (pow10 < -number_encoder_hp.max_abs_pow10 || pow10 > number_encoder_hp.max_abs_pow10) {
+				throw std::runtime_error(
+					"LoadTrainingData: sequence_index=" + std::to_string(seq_idx) +
+					" token_pos=" + std::to_string(token_pos) +
+					" atom_entry_id=" + std::to_string(entry_id) +
+					" digit[" + std::to_string(i) + "] pow10=" + std::to_string(pow10) +
+					" outside configured number_encoder_max_abs_pow10=±" +
+					std::to_string(number_encoder_hp.max_abs_pow10));
+			}
+		}
 	}
 
 	return stats;
