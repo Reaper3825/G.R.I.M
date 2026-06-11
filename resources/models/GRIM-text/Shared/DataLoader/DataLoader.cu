@@ -755,7 +755,7 @@ LoadedTrainingCorpus readGrmtCorpusWithProgressOrThrow(
 	const GRIM::HyperParameters::NumberEncoderConstructionHP& number_encoder_hp,
 	const ProgressCallback& progress)
 {
-	GRIM::TokenizerArtifacts::GrmtCorpusReader reader(path, number_encoder_hp.max_digit_slots);
+	GRIM::TokenizerArtifacts::GrmtCorpusReader reader(path);
 	const GRIM::GRMT::Header header = reader.header();
 
 	std::ostringstream header_msg;

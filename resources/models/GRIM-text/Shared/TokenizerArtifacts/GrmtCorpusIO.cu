@@ -309,10 +309,8 @@ GrmtSaveReport GrmtCorpusWriter::commit(std::size_t dropped_empty_sequences,
     return report;
 }
 
-GrmtCorpusReader::GrmtCorpusReader(const fs::path& path,
-                                   int max_mantissa_digit_slots)
+GrmtCorpusReader::GrmtCorpusReader(const fs::path& path)
     : path_(path)
-    , max_mantissa_digit_slots_(max_mantissa_digit_slots)
 {
     pathString(path_);
     file_.open(path_, std::ios::binary);
@@ -397,7 +395,7 @@ bool GrmtCorpusReader::readNext(GrmtSequence& out_sequence) {
         seq.token_atom_mask,
         seq.token_atom_flags,
         seq.atom_entry_ids,
-        max_mantissa_digit_slots_,
+        0,
         source.c_str());
 
     const std::uint8_t exec_active = readScalar<std::uint8_t>(file_, source);
@@ -498,9 +496,8 @@ GrmtSaveReport saveGrmtCorpus(
     return writer.commit(dropped_empty, dropped_targetless);
 }
 
-GrmtCorpus loadGrmtCorpus(const fs::path& path,
-                          int max_mantissa_digit_slots) {
-    GrmtCorpusReader reader(path, max_mantissa_digit_slots);
+GrmtCorpus loadGrmtCorpus(const fs::path& path) {
+    GrmtCorpusReader reader(path);
     return reader.readAll();
 }
 

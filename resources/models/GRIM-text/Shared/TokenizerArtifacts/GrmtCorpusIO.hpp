@@ -52,8 +52,7 @@ private:
 
 class GrmtCorpusReader {
 public:
-    explicit GrmtCorpusReader(const std::filesystem::path& path,
-                              int max_mantissa_digit_slots = 0);
+    explicit GrmtCorpusReader(const std::filesystem::path& path);
     ~GrmtCorpusReader();
 
     GrmtCorpusReader(const GrmtCorpusReader&) = delete;
@@ -72,7 +71,6 @@ private:
     std::ifstream file_;
     GRIM::GRMT::Header header_{};
     std::uint32_t sequences_read_ = 0;
-    int max_mantissa_digit_slots_ = 0;
 };
 
 GRIM::GRMT::Header loadGrmtHeader(const std::filesystem::path& path);
@@ -82,7 +80,6 @@ GrmtSaveReport saveGrmtCorpus(
     const std::vector<GrmtSequence>& sequences,
     std::uint32_t vocab_size);
 
-GrmtCorpus loadGrmtCorpus(const std::filesystem::path& path,
-                          int max_mantissa_digit_slots = 0);
+GrmtCorpus loadGrmtCorpus(const std::filesystem::path& path);
 
 } // namespace GRIM::TokenizerArtifacts
