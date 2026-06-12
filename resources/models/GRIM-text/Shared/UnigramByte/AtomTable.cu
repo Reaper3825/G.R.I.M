@@ -754,6 +754,40 @@ void validateTokenizationMantissaDigitSlotsOrThrow(
                              std::to_string(max_mantissa_digit_slots));
 }
 
+void validateTokenizationPow10RangeOrThrow(
+    const AtomEntry& entry,
+    std::string_view atom_text,
+    size_t detection_index,
+    int max_abs_pow10,
+    const char* caller) {
+    if (max_abs_pow10 <= 0 || !isNumericAtom(entry.type)) {
+        return;
+    }
+    if (!entry.arg_number.has_value()) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": detection_index=" + std::to_string(detection_index) +
+                                 " numeric atom is missing arg_number metadata while validating max_abs_pow10=" +
+                                 std::to_string(max_abs_pow10));
+    }
+
+    const AtomNumber& number = *entry.arg_number;
+    for (std::size_t i = 0; i < number.digits.size(); ++i) {
+        const int pow10 = static_cast<int>(number.digits[i].pow10);
+        if (pow10 >= -max_abs_pow10 && pow10 <= max_abs_pow10) {
+            continue;
+        }
+        throw std::runtime_error(std::string(caller) +
+                                 ": detection_index=" + std::to_string(detection_index) +
+                                 ", atom_entry_id=" + std::to_string(entry.id) +
+                                 ", atom_type=" + atomTypeName(entry.type) +
+                                 ", raw_text='" + std::string(atom_text) +
+                                 "', mantissa_digit_sequence='" + mantissaDigitSequence(number) +
+                                 "', exponent_value=" + std::to_string(number.exponent_value) +
+                                 ", digit[" + std::to_string(i) + "] pow10=" + std::to_string(pow10) +
+                                 " outside max_abs_pow10=±" + std::to_string(max_abs_pow10));
+    }
+}
+
 } // namespace
 
 //======================================================//
@@ -858,7 +892,8 @@ AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
     std::string_view source_text,
     const std::vector<Detector::RawTextDetection>& detections,
     int max_mantissa_digit_slots,
-    const char* caller) {
+    const char* caller,
+    int max_abs_pow10) {
     requireCallerLabel(caller, "createAtomTableFromRawTextDetections");
 
     AtomTableFromDetectionsResult result;
@@ -951,6 +986,12 @@ AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
             atom_text,
             detection_index,
             max_mantissa_digit_slots,
+            caller);
+        validateTokenizationPow10RangeOrThrow(
+            *entry,
+            atom_text,
+            detection_index,
+            max_abs_pow10,
             caller);
         AtomTokenizationPayload payload{};
         payload.span = span;

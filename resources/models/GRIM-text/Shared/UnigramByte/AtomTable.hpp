@@ -221,7 +221,8 @@ AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
     std::string_view source_text,
     const std::vector<Detector::RawTextDetection>& detections,
     int max_mantissa_digit_slots,
-    const char* caller);
+    const char* caller,
+    int max_abs_pow10 = 0);
 
 //======================================================//
 //  Atom Token ID Constants

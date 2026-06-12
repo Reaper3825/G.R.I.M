@@ -12,12 +12,12 @@ namespace UITheme {
     // ====================================================
     namespace Colors {
         // --- Glass Backgrounds (frost = blur distortion shows through; not just tint) ---
-        constexpr uint32_t PanelBg         = 0xB81C1A28;  // 72% opacity so blur is visible
-        constexpr uint32_t ScrollboxBg     = 0xA0181624;  // 63% opacity, recessed
-        constexpr uint32_t WidgetBg        = 0xB0201E30;  // 69% opacity, slight purple
-        constexpr uint32_t WidgetBgHover   = 0x90302E44;  // 56% opacity, lifted
-        constexpr uint32_t WidgetBgActive  = 0xA8403E58;  // 66% opacity, pressed
-        constexpr uint32_t WidgetBgDisabled= 0x40181828;  // 25% opacity, faded
+        constexpr uint32_t PanelBg         = 0xE01C1A28;  // 88% opacity, keeps glass readable
+        constexpr uint32_t ScrollboxBg     = 0xD0181624;  // 82% opacity, recessed
+        constexpr uint32_t WidgetBg        = 0xD8201E30;  // 85% opacity, slight purple
+        constexpr uint32_t WidgetBgHover   = 0xE0302E44;  // 88% opacity, lifted
+        constexpr uint32_t WidgetBgActive  = 0xE8403E58;  // 91% opacity, pressed
+        constexpr uint32_t WidgetBgDisabled= 0x70181828;  // 44% opacity, faded but legible
         constexpr uint32_t Background      = 0xFF0A0A12;  // Deep base (opaque, blue-black)
         constexpr uint32_t SliderTrack     = 0x60141420;  // Recessed track
         constexpr uint32_t SliderFill      = 0xFF7B6EF6;  // Filled portion (violet accent)
@@ -36,13 +36,13 @@ namespace UITheme {
         constexpr uint32_t ScrollThumbDrag     = 0x3CFFFFFF;  // Dragging thumb
 
         // --- Card & Content Area ---
-        constexpr uint32_t ContentAreaBg   = 0xB0141420;  // 69% opacity, recessed
-        constexpr uint32_t CardSurface     = 0xD01E1C2C;  // 82% opacity, card surface
-        constexpr uint32_t TableHeaderBg   = 0x70201E30;  // Table/list header row
-        constexpr uint32_t RowEven         = 0x50141420;  // Alternating row (even)
-        constexpr uint32_t RowOdd          = 0x581A1828;  // Alternating row (odd)
-        constexpr uint32_t RowHover        = 0x78282640;  // Hovered row
-        constexpr uint32_t RowSelected     = 0x90302E50;  // Selected row
+        constexpr uint32_t ContentAreaBg   = 0xD8141420;  // 85% opacity, recessed
+        constexpr uint32_t CardSurface     = 0xE41E1C2C;  // 89% opacity, card surface
+        constexpr uint32_t TableHeaderBg   = 0xB8201E30;  // Table/list header row
+        constexpr uint32_t RowEven         = 0x8C141420;  // Alternating row (even)
+        constexpr uint32_t RowOdd          = 0x941A1828;  // Alternating row (odd)
+        constexpr uint32_t RowHover        = 0xB0282640;  // Hovered row
+        constexpr uint32_t RowSelected     = 0xC8302E50;  // Selected row
         constexpr uint32_t DividerLine     = 0x18FFFFFF;  // Section dividers within cards
         constexpr uint32_t PanelShadow     = 0x60000008;  // Drop shadow behind panels
 
@@ -61,10 +61,10 @@ namespace UITheme {
 
         // --- Text (cool off-white for glass contrast) ---
         constexpr uint32_t TextPrimary     = 0xFFEEEEF4;  // Cool soft white
-        constexpr uint32_t TextSecondary   = 0xFF8888A0;  // Cool gray
-        constexpr uint32_t TextMuted       = 0xFF9090A8;  // Dimmed body text
-        constexpr uint32_t TextLight       = 0xFFCCCCD8;  // Light gray body text
-        constexpr uint32_t TextLabel       = 0xFFAAAABB;  // Field labels
+        constexpr uint32_t TextSecondary   = 0xFFB4B4C8;  // Cooler gray with better contrast
+        constexpr uint32_t TextMuted       = 0xFFC0C0D0;  // Muted body text, still readable
+        constexpr uint32_t TextLight       = 0xFFE0E0EC;  // Light gray body text
+        constexpr uint32_t TextLabel       = 0xFFD2D2DE;  // Field labels
         constexpr uint32_t TextDisabled    = 0xFF484860;  // Muted
         constexpr uint32_t TextValue       = 0xFFA090FF;  // Light lavender
         constexpr uint32_t TextLink        = 0xFF9080FF;  // Link/domain text

@@ -9,7 +9,7 @@
     "blur": {
         "enabled": true,
         "intensity": 1,
-        "opacity": 0.5
+        "opacity": 0.25
     },
     "conversation_history_size": 10,
     "data_collection": {

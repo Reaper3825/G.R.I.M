@@ -381,7 +381,17 @@ void OverlayRenderer::drawGlassPanel(const Vec2& pos, const Vec2& size, float ra
     }
 
     uint8_t ba = (bgColor >> 24) & 0xFF;
-    uint32_t glassTint = (bgColor & 0x00FFFFFF) | ((uint32_t)(ba * 40 / 100) << 24);
+    float tintStrength = 0.78f;
+    if (useDesktopCapture) {
+        // When Windows blur opacity is lowered, compensate with a stronger tint
+        // so panels stay readable instead of dissolving into the captured desktop.
+        tintStrength += (1.0f - blurOpacity) * 0.28f;
+    } else if (!blurEnabled) {
+        tintStrength = 0.90f;
+    }
+    int tintAlpha = static_cast<int>(std::round(static_cast<float>(ba) * tintStrength));
+    tintAlpha = std::clamp(std::max(tintAlpha, 110), 0, 235);
+    uint32_t glassTint = (bgColor & 0x00FFFFFF) | (static_cast<uint32_t>(tintAlpha) << 24);
     drawRoundedRect(pos, size, glassTint, radius);
 
     if (useDesktopCapture && activeGlassCache) {

@@ -71,6 +71,7 @@ struct TokenizerHP {
     bool add_bos = false;
     bool add_eos = false;
     int number_encoder_max_digit_slots = 0;
+    int number_encoder_max_abs_pow10 = 0;
     bool force_rebuild_vocab = false;
     bool only_mode = false;
     bool save_text_vocab = false;
@@ -958,6 +959,7 @@ inline TokenizerHP tokenizerHP(const GRIM::Config::AiConfigSnapshot& snapshot) {
     view.add_bos = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_add_bos");
     view.add_eos = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_add_eos");
     view.number_encoder_max_digit_slots = snapshotTrainingConfigField<int>(snapshot, "number_encoder_max_digit_slots");
+    view.number_encoder_max_abs_pow10 = snapshotTrainingConfigField<int>(snapshot, "number_encoder_max_abs_pow10");
     view.force_rebuild_vocab = snapshotTrainingConfigField<bool>(snapshot, "force_rebuild_vocab");
     view.only_mode = snapshotTrainingConfigField<bool>(snapshot, "subprocess_tokenizer_only_mode");
     view.save_text_vocab = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_save_text_vocab");
