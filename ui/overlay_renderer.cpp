@@ -37,6 +37,7 @@ void OverlayRenderer::init(HWND hwnd, int width, int height)
     // Windows does not use DWM blur for the transparent overlay; per-panel glass
     // is produced by the software desktop capture path in overlay_renderer_glass.cpp.
     m_usePlatformBlur = false;
+    m_lastBlurStyleGeneration = 0;
 
     LOG_DEBUG("OverlayRenderer", "Initialized overlay renderer (" +
              std::to_string(width) + "x" + std::to_string(height) + ")");
@@ -57,6 +58,7 @@ void OverlayRenderer::init(HWND hwnd, int width, int height)
 
     // macOS uses NSVisualEffectView masking as the native panel backdrop owner.
     m_usePlatformBlur = true;
+    m_lastBlurStyleGeneration = 0;
 
     LOG_DEBUG("OverlayRenderer", "Initialized overlay renderer (" +
              std::to_string(width) + "x" + std::to_string(height) + ")");
@@ -74,6 +76,7 @@ void OverlayRenderer::init(int width, int height, void* pixelBuffer)
 #else
     m_usePlatformBlur = false;
 #endif
+    m_lastBlurStyleGeneration = 0;
 
     if (pixelBuffer) {
         m_pixels = pixelBuffer;
@@ -128,6 +131,7 @@ void OverlayRenderer::shutdown()
     m_fontAtlas.clear();
     m_fontLoaded = false;
     m_glassCache.clear();
+    m_lastBlurStyleGeneration = 0;
 }
 
 // ---------------------------------------------------------------

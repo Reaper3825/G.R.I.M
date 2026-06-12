@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <filesystem>
+#include <system_error>
 #include <nlohmann/json_fwd.hpp>
 #include "console_history.hpp"
 #include "timer.hpp"
@@ -61,7 +62,8 @@ enum class PathResolutionMode {
 };
 
 std::string getSafeResourcePath(const std::string& target, PathResolutionMode mode = PathResolutionMode::Relative);
-std::vector<std::string> listFiles(const std::string& folderPath);
+std::vector<std::filesystem::path> listFiles(const std::filesystem::path& folderPath);
+std::vector<std::filesystem::path> listFiles(const std::filesystem::path& folderPath, std::error_code& ec);
 // ====================================================
 // Global logging helper (system-level, not user history)
 // ====================================================

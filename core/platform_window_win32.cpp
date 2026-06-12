@@ -3,7 +3,16 @@
 
 #include "platform_window.hpp"
 #include "grim_platform.h"
+#include <algorithm>
+#include <atomic>
 #include <windows.h>
+
+namespace {
+std::atomic<bool> s_overlayBlurEnabled{true};
+std::atomic<float> s_overlayBlurOpacity{0.99f};
+std::atomic<int> s_overlayBlurIntensity{2};
+std::atomic<unsigned int> s_overlayBlurGeneration{0};
+}
 
 namespace PlatformWindow {
 
@@ -77,9 +86,22 @@ void setOverlayBlurStyle(void* overlayWindowHandle,
                           int intensity)
 {
     (void)overlayWindowHandle;
-    (void)enabled;
-    (void)opacity;
-    (void)intensity;
+    s_overlayBlurEnabled.store(enabled, std::memory_order_release);
+    s_overlayBlurOpacity.store(std::clamp(opacity, 0.0f, 1.0f), std::memory_order_release);
+    s_overlayBlurIntensity.store(std::clamp(intensity, 0, 5), std::memory_order_release);
+    s_overlayBlurGeneration.fetch_add(1, std::memory_order_acq_rel);
+}
+
+OverlayBlurStyle getOverlayBlurStyle(void* overlayWindowHandle)
+{
+    (void)overlayWindowHandle;
+
+    OverlayBlurStyle style;
+    style.enabled = s_overlayBlurEnabled.load(std::memory_order_acquire);
+    style.opacity = s_overlayBlurOpacity.load(std::memory_order_acquire);
+    style.intensity = s_overlayBlurIntensity.load(std::memory_order_acquire);
+    style.generation = s_overlayBlurGeneration.load(std::memory_order_acquire);
+    return style;
 }
 
 void setOverlayClickThrough(void* overlayWindowHandle, bool clickThrough) {

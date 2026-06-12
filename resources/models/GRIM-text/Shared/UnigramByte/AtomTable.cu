@@ -243,6 +243,93 @@ bool atomTypeIsPersistable(AtomType type) {
     return type == AtomType::ATOM_INT || type == AtomType::ATOM_FLOAT;
 }
 
+[[noreturn]] void throwPersistedEntryValidationFailure(
+    const char* boundary,
+    uint32_t index,
+    const char* field,
+    const std::string& detail,
+    const char* location_label) {
+    throw std::runtime_error(
+        std::string(boundary) + ": persisted entry validation failed at index=" +
+        std::to_string(index) + " field=" + field + " detail=" + detail +
+        " in " + location_label);
+}
+
+void validatePersistedAtomEntryOrThrow(
+    const AtomEntry& entry,
+    uint32_t index,
+    size_t pool_size,
+    const char* boundary,
+    const char* location_label) {
+    auto failValidation = [&](const char* field, const std::string& detail) {
+        throwPersistedEntryValidationFailure(boundary, index, field, detail, location_label);
+    };
+
+    if (entry.id < ATOM_TOKEN_BASE) {
+        failValidation("entry.id", "id below ATOM_TOKEN_BASE (" + std::to_string(entry.id) +
+                                       " < " + std::to_string(ATOM_TOKEN_BASE) + ")");
+    }
+    if (entry.id >= ATOM_TOKEN_MAX) {
+        failValidation("entry.id", "id at or above ATOM_TOKEN_MAX (" + std::to_string(entry.id) +
+                                       " >= " + std::to_string(ATOM_TOKEN_MAX) + ")");
+    }
+    if (entry.id - ATOM_TOKEN_BASE != index) {
+        failValidation("entry.id", "expected id " + std::to_string(ATOM_TOKEN_BASE + index) +
+                                       " but found " + std::to_string(entry.id));
+    }
+    if (!atomTypeIsPersistable(entry.type)) {
+        failValidation("entry.type", std::string("non-persistable type ") + atomTypeName(entry.type));
+    }
+    if (!stringRefInBounds(entry.raw_text_ref, pool_size)) {
+        failValidation("entry.raw_text_ref",
+                       "out of bounds (offset=" + std::to_string(entry.raw_text_ref.offset) +
+                       ", length=" + std::to_string(entry.raw_text_ref.length) +
+                       ", pool_size=" + std::to_string(pool_size) + ")");
+    }
+    if (entry.raw_text_ref.length == 0) {
+        failValidation("entry.raw_text_ref.length", "raw text length is zero");
+    }
+    if (entry.category != AtomCategory::NUMERIC && entry.category != AtomCategory::SYSTEM) {
+        failValidation("entry.category", std::string("unexpected category ") +
+                                             atomCategoryName(entry.category));
+    }
+    if (entry.reserved_zero != 0) {
+        failValidation("entry.reserved_zero", "expected 0 but found " +
+                                              std::to_string(entry.reserved_zero));
+    }
+    if (!entry.arg_number.has_value()) {
+        failValidation("entry.arg_number", "missing required arg_number payload");
+    }
+    if (entry.arg_number->number_atom_id != entry.id) {
+        failValidation("entry.arg_number.number_atom_id",
+                       "expected " + std::to_string(entry.id) +
+                       " but found " + std::to_string(entry.arg_number->number_atom_id));
+    }
+    if (entry.arg_number->digits.empty()) {
+        failValidation("entry.arg_number.digits", "digit binding list is empty");
+    }
+}
+
+void validatePersistedNumericKindOrThrow(
+    const AtomEntry& entry,
+    uint8_t numeric_kind,
+    uint32_t index,
+    const char* boundary,
+    const char* location_label) {
+    const uint8_t expected_kind = entry.type == AtomType::ATOM_INT
+        ? static_cast<uint8_t>(NumericPayloadKind::INTEGER)
+        : static_cast<uint8_t>(NumericPayloadKind::FLOAT);
+    if (numeric_kind != expected_kind) {
+        throw std::runtime_error(std::string(boundary) +
+                                 ": numeric kind mismatch for entry id=" +
+                                 std::to_string(entry.id) +
+                                 " at index=" + std::to_string(index) +
+                                 " expected=" + std::to_string(expected_kind) +
+                                 " actual=" + std::to_string(numeric_kind) +
+                                 " in " + location_label);
+    }
+}
+
 void requireCallerLabel(const char* caller, const char* boundary) {
     if (caller == nullptr || caller[0] == '\0') {
         throw std::runtime_error(std::string(boundary) + ": caller label is empty at " +
@@ -910,7 +997,19 @@ void AtomTable::serializeToStreamOrThrow(std::ostream& stream, const char* sink)
     writeExactOrThrow(stream, &entry_count, sizeof(entry_count), sink, "entry_count");
     writeExactOrThrow(stream, &pool_size, sizeof(pool_size), sink, "pool_size");
 
-    for (const AtomEntry& entry : entries_) {
+    for (uint32_t i = 0; i < entry_count; ++i) {
+        const AtomEntry& entry = entries_[i];
+        validatePersistedAtomEntryOrThrow(entry,
+                                          i,
+                                          string_pool_.size(),
+                                          "AtomTable::serializeToStreamOrThrow",
+                                          sink);
+        validatePersistedNumericKindOrThrow(entry,
+                                            numeric_kinds_[i],
+                                            i,
+                                            "AtomTable::serializeToStreamOrThrow",
+                                            sink);
+
         const uint32_t type_value = static_cast<uint32_t>(entry.type);
         const uint8_t category_value = static_cast<uint8_t>(entry.category);
         const uint8_t origin_value = static_cast<uint8_t>(entry.origin);
@@ -1057,27 +1156,16 @@ void AtomTable::deserializeFromStreamOrThrow(std::istream& stream, const char* s
 
     for (uint32_t i = 0; i < entry_count; ++i) {
         const AtomEntry& entry = entries[i];
-        if (entry.id < ATOM_TOKEN_BASE ||
-            entry.id >= ATOM_TOKEN_MAX ||
-            entry.id - ATOM_TOKEN_BASE != i ||
-            !atomTypeIsPersistable(entry.type) ||
-            !stringRefInBounds(entry.raw_text_ref, pool.size()) ||
-            entry.raw_text_ref.length == 0 ||
-            (entry.category != AtomCategory::NUMERIC && entry.category != AtomCategory::SYSTEM) ||
-            entry.reserved_zero != 0 ||
-            !entry.arg_number.has_value() ||
-            entry.arg_number->number_atom_id != entry.id ||
-            entry.arg_number->digits.empty()) {
-            throw std::runtime_error(std::string("AtomTable::deserializeFromStreamOrThrow: persisted entry validation failed at index=") +
-                                     std::to_string(i) + " in " + source);
-        }
-        const uint8_t expected_kind = entry.type == AtomType::ATOM_INT
-            ? static_cast<uint8_t>(NumericPayloadKind::INTEGER)
-            : static_cast<uint8_t>(NumericPayloadKind::FLOAT);
-        if (numeric_kinds[i] != expected_kind) {
-            throw std::runtime_error(std::string("AtomTable::deserializeFromStreamOrThrow: numeric kind mismatch for entry id=") +
-                                     std::to_string(entry.id) + " in " + source);
-        }
+        validatePersistedAtomEntryOrThrow(entry,
+                                          i,
+                                          pool.size(),
+                                          "AtomTable::deserializeFromStreamOrThrow",
+                                          source);
+        validatePersistedNumericKindOrThrow(entry,
+                                            numeric_kinds[i],
+                                            i,
+                                            "AtomTable::deserializeFromStreamOrThrow",
+                                            source);
     }
 
     {

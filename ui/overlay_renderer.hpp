@@ -79,6 +79,7 @@ private:
     // When enabled, native OS-backed panel blur owns the backdrop.
     // Windows keeps this false and uses software desktop capture per panel.
     bool m_usePlatformBlur = false;
+    unsigned int m_lastBlurStyleGeneration = 0;
 
     // Animated grain seed (changes per frame) for glass noise.
     uint32_t m_grainSeed = 0xA53C9E17u;

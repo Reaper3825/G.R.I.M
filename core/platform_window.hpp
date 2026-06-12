@@ -10,6 +10,13 @@
 
 namespace PlatformWindow {
 
+struct OverlayBlurStyle {
+    bool enabled = true;
+    float opacity = 0.99f;
+    int intensity = 2;
+    unsigned int generation = 0;
+};
+
 // Optional callback for injecting typed text (used on macOS; Windows uses WM_CHAR).
 // Set before pumpEvents runs. Signature: void(const std::string&).
 void setTextInputCallback(std::function<void(const std::string&)> callback);
@@ -50,6 +57,9 @@ void setOverlayBlurStyle(void* overlayWindowHandle,
                           bool enabled,
                           float opacity,
                           int intensity);
+
+// Read the current runtime blur style for the overlay window.
+OverlayBlurStyle getOverlayBlurStyle(void* overlayWindowHandle);
 
 // Toggle click-through on the overlay window.
 // When clickThrough is true, all mouse events pass to windows behind the overlay.

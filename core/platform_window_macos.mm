@@ -14,10 +14,12 @@
 #include "platform_window.hpp"
 #include "platform_input.hpp"
 #include "logger.hpp"
+#include <algorithm>
 #include <string>
 #include <functional>
 #include <vector>
 #include <cstring>
+#include <atomic>
 #import <Carbon/Carbon.h>
 
 // =============================================================================
@@ -115,6 +117,10 @@ static const NSInteger kOverlayHostTag = 0x4752494D; // 'GRIM' for viewWithTag
 static std::function<void(const std::string&)> s_textInputCallback;
 static id              s_globalKeyMonitor = nil;
 static id              s_globalFlagsMonitor = nil;
+static std::atomic<bool> s_overlayBlurEnabled{true};
+static std::atomic<float> s_overlayBlurOpacity{0.99f};
+static std::atomic<int> s_overlayBlurIntensity{2};
+static std::atomic<unsigned int> s_overlayBlurGeneration{0};
 
 static void stopScreenCapture();
 
@@ -547,14 +553,19 @@ void setOverlayBlurStyle(void* overlayWindowHandle,
 {
     if (!overlayWindowHandle) return;
 
+    const float clampedOpacity = std::max(0.0f, std::min(1.0f, opacity));
+    const int clampedIntensity = std::max(0, std::min(intensity, 5));
+    s_overlayBlurEnabled.store(enabled, std::memory_order_release);
+    s_overlayBlurOpacity.store(clampedOpacity, std::memory_order_release);
+    s_overlayBlurIntensity.store(clampedIntensity, std::memory_order_release);
+    s_overlayBlurGeneration.fetch_add(1, std::memory_order_acq_rel);
+
     @autoreleasepool {
         NSWindow* window = (__bridge NSWindow*)overlayWindowHandle;
         if (!window) return;
 
         NSView* containerView = [window contentView];
         if (!containerView) return;
-
-        intensity = std::max(0, std::min(intensity, 5));
 
         // Collect existing blur views.
         NSMutableArray<NSVisualEffectView*>* existing = [NSMutableArray array];
@@ -564,7 +575,7 @@ void setOverlayBlurStyle(void* overlayWindowHandle,
         }
 
         int currentCount = (int)existing.count;
-        int desired = enabled ? intensity : 0;
+        int desired = enabled ? clampedIntensity : 0;
 
         // Remove excess blur views.
         while (currentCount > desired) {
@@ -586,11 +597,22 @@ void setOverlayBlurStyle(void* overlayWindowHandle,
         }
 
         // Update opacity on all blur views.
-        float clampedOpacity = std::max(0.0f, std::min(1.0f, opacity));
         for (NSVisualEffectView* v in existing) {
             v.alphaValue = clampedOpacity;
         }
     }
+}
+
+OverlayBlurStyle getOverlayBlurStyle(void* overlayWindowHandle)
+{
+    (void)overlayWindowHandle;
+
+    OverlayBlurStyle style;
+    style.enabled = s_overlayBlurEnabled.load(std::memory_order_acquire);
+    style.opacity = s_overlayBlurOpacity.load(std::memory_order_acquire);
+    style.intensity = s_overlayBlurIntensity.load(std::memory_order_acquire);
+    style.generation = s_overlayBlurGeneration.load(std::memory_order_acquire);
+    return style;
 }
 
 void setOverlayClickThrough(void* overlayWindowHandle, bool clickThrough) {

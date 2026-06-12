@@ -3,9 +3,9 @@
 //
 //  Five tabs: Home | Sources | HuggingFace | Structurer | Curriculum
 //
-//  Each tab is a widget group.  setView() hides the
-//  current group and shows the next.  No sub-panel
-//  subclasses or per-tab files.
+//  Each tab is a widget group. setView() hides the
+//  current group and shows the next. Implementation
+//  is split across ui/data_hub/*.cpp for sanity.
 //
 //  UI owns layout + events only.  All logic lives in
 //  PipelineOrchestrator, HuggingFaceWebhook,
@@ -206,6 +206,7 @@ private:
     // ── Directory collection state ──────────────────────
 
     struct DirFileEntry {
+        std::string path;
         std::string filename;
         bool        collect     = true;
         bool        deleteAfter = false;

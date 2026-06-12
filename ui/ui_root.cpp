@@ -23,8 +23,8 @@ void UIRoot::init(HWND hwnd, uint32_t width, uint32_t height)
     // Initialize the overlay renderer
     m_renderer.init(hwnd, width, height);
 
-#if defined(__APPLE__)
-    // Apply saved blur settings from config.
+    // Apply saved blur settings from config on startup so every platform starts
+    // with the same runtime glass state before the settings menu is opened.
     {
         bool blurEnabled = true;
         float blurOpacity = 0.99f;
@@ -36,7 +36,6 @@ void UIRoot::init(HWND hwnd, uint32_t width, uint32_t height)
         }
         PlatformWindow::setOverlayBlurStyle(hwnd, blurEnabled, blurOpacity, blurIntensity);
     }
-#endif
 
     LOG_PHASE("UIRoot initialized (overlay renderer)", true);
 }

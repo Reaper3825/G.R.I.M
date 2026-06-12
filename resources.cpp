@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cstdlib>
+#include <system_error>
 
 #if defined(_WIN32)
     #include <windows.h>  // GetModuleFileNameA
@@ -123,12 +124,42 @@ std::string getResourcePath() {
 
 namespace fs = std::filesystem;
 
-std::vector<std::string> listFiles(const std::string& folderPath) {
-    std::vector<std::string> files;
+std::vector<std::filesystem::path> listFiles(const std::filesystem::path& folderPath) {
+    std::error_code ec;
+    return listFiles(folderPath, ec);
+}
 
-    for (const auto& entry : std::filesystem::directory_iterator(folderPath)) {
-        if (entry.is_regular_file()) {
-            files.push_back(entry.path().string());
+std::vector<std::filesystem::path> listFiles(const std::filesystem::path& folderPath, std::error_code& ec) {
+    std::vector<std::filesystem::path> files;
+    ec.clear();
+
+    const bool exists = fs::exists(folderPath, ec);
+    if (ec) {
+        return files;
+    }
+    if (!exists) {
+        ec = std::make_error_code(std::errc::no_such_file_or_directory);
+        return files;
+    }
+
+    const bool isDirectory = fs::is_directory(folderPath, ec);
+    if (ec) {
+        return files;
+    }
+    if (!isDirectory) {
+        ec = std::make_error_code(std::errc::not_a_directory);
+        return files;
+    }
+
+    for (fs::directory_iterator it(folderPath, fs::directory_options::skip_permission_denied, ec), end;
+         it != end && !ec;
+         it.increment(ec)) {
+        if (it->is_regular_file(ec)) {
+            files.push_back(it->path());
+        }
+        if (ec) {
+            files.clear();
+            return files;
         }
     }
 

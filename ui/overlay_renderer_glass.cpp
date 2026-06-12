@@ -4,6 +4,13 @@
 #include <cmath>
 #include <cstring>
 
+namespace {
+float clamp01(float value)
+{
+    return std::max(0.0f, std::min(1.0f, value));
+}
+}
+
 void OverlayRenderer::ensureGlassMask(PanelGlassCache& cache, int width, int height, float radius)
 {
     const size_t needed = static_cast<size_t>(width) * static_cast<size_t>(height);
@@ -190,13 +197,26 @@ void OverlayRenderer::drawGlassPanel(const Vec2& pos, const Vec2& size, float ra
     expandDirtyRect(rx - 1, ry - 1, rw + (int)shadowOffset + 2, rh + (int)shadowOffset + 2);
 
     bool haveOverlayHandle = false;
+    void* overlayHandle = nullptr;
 #if defined(__APPLE__)
     haveOverlayHandle = (m_nativeWindow != nullptr);
+    overlayHandle = m_nativeWindow;
 #elif defined(_WIN32)
     haveOverlayHandle = (m_hwnd != nullptr);
+    overlayHandle = (void*)m_hwnd;
 #endif
 
-    const bool useDesktopCapture = haveOverlayHandle && !m_usePlatformBlur;
+    const PlatformWindow::OverlayBlurStyle blurStyle = PlatformWindow::getOverlayBlurStyle(overlayHandle);
+    if (blurStyle.generation != m_lastBlurStyleGeneration) {
+        m_glassCache.clear();
+        m_transientGlassCache = PanelGlassCache{};
+        m_lastBlurStyleGeneration = blurStyle.generation;
+    }
+
+    const bool blurEnabled = blurStyle.enabled;
+    const float blurOpacity = clamp01(blurStyle.opacity);
+    const int blurIntensity = std::clamp(blurStyle.intensity, 0, 5);
+    const bool useDesktopCapture = haveOverlayHandle && !m_usePlatformBlur && blurEnabled && blurIntensity > 0;
     PanelGlassCache* activeGlassCache = nullptr;
     if (!useDesktopCapture && rw > 0 && rh > 0) {
         ensureGlassMask(m_transientGlassCache, std::max(1, rw), std::max(1, rh), radius);
@@ -229,7 +249,9 @@ void OverlayRenderer::drawGlassPanel(const Vec2& pos, const Vec2& size, float ra
 
         PanelGlassCache& shapeCache = (panelId != 0) ? m_glassCache[panelId] : m_transientGlassCache;
         ensureGlassMask(shapeCache, capW, capH, radius);
-        ensureGlassDistortionOffsets(shapeCache, capW, capH, blurRadius);
+        const float distortionScale = 0.60f + 0.20f * static_cast<float>(blurIntensity);
+        const int effectiveBlurRadius = std::max(8, static_cast<int>(std::round(static_cast<float>(blurRadius) * distortionScale)));
+        ensureGlassDistortionOffsets(shapeCache, capW, capH, effectiveBlurRadius);
         activeGlassCache = &shapeCache;
 
         if (!shouldRefreshGlass && hasCachedPanel && panelId != 0) {
@@ -286,10 +308,41 @@ void OverlayRenderer::drawGlassPanel(const Vec2& pos, const Vec2& size, float ra
                     }
                 }
 
-                int frostRadius = (int)std::round(blurRadius / 2.5f);
-                frostRadius = std::clamp(frostRadius, 8, 32);
+                int frostRadius = static_cast<int>(std::round(static_cast<float>(blurRadius) / 8.0f))
+                                + std::max(0, blurIntensity - 1) * 5;
+                frostRadius = std::clamp(frostRadius, 8, 36);
                 blurRegion(rx, ry, capW, capH, frostRadius);
                 blurRegion(rx, ry, capW, capH, frostRadius);
+
+                if (blurOpacity < 0.999f) {
+                    std::lock_guard<std::mutex> lock(m_renderMutex);
+                    if (m_pixels) {
+                        uint32_t* pixels = static_cast<uint32_t*>(m_pixels);
+                        const int srcX1 = std::max(0, rx);
+                        const int srcY1 = std::max(0, ry);
+                        const int srcX2 = std::min(m_width, rx + capW);
+                        const int srcY2 = std::min(m_height, ry + capH);
+                        for (int y = srcY1; y < srcY2; ++y) {
+                            const int localY = y - ry;
+                            for (int x = srcX1; x < srcX2; ++x) {
+                                const int localX = x - rx;
+                                const size_t localIndex = static_cast<size_t>(localY) * static_cast<size_t>(capW) +
+                                                          static_cast<size_t>(localX);
+                                if (shapeCache.roundedMask[localIndex] == 0)
+                                    continue;
+
+                                const int dstIndex = y * m_width + x;
+                                uint32_t c = pixels[dstIndex];
+                                uint8_t a = static_cast<uint8_t>(std::round(((c >> 24) & 0xFF) * blurOpacity));
+                                uint8_t r = static_cast<uint8_t>(std::round(((c >> 16) & 0xFF) * blurOpacity));
+                                uint8_t g = static_cast<uint8_t>(std::round(((c >> 8) & 0xFF) * blurOpacity));
+                                uint8_t b = static_cast<uint8_t>(std::round((c & 0xFF) * blurOpacity));
+                                pixels[dstIndex] = (uint32_t(a) << 24) | (uint32_t(r) << 16) |
+                                                   (uint32_t(g) << 8) | uint32_t(b);
+                            }
+                        }
+                    }
+                }
 
                 if (panelId != 0) {
                     auto& cache = m_glassCache[panelId];

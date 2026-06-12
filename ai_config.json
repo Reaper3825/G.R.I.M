@@ -9,7 +9,7 @@
     "blur": {
         "enabled": true,
         "intensity": 1,
-        "opacity": 1.0
+        "opacity": 0.5
     },
     "conversation_history_size": 10,
     "data_collection": {
@@ -401,7 +401,7 @@
     },
     "personality": {
         "custom_prompt": "You are GRIM. Be brief and direct. Give concise answers without unnecessary elaboration. Keep responses under 2 sentences when possible.",
-        "use_custom_prompt": true
+        "use_custom_prompt": false
     },
     "silence_threshold": 0.02,
     "silence_timeout_ms": 4000,
