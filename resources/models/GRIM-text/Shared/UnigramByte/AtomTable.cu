@@ -243,6 +243,10 @@ bool atomTypeIsPersistable(AtomType type) {
     return type == AtomType::ATOM_INT || type == AtomType::ATOM_FLOAT;
 }
 
+bool atomEntryIdInRange(uint32_t id, size_t entry_count) {
+    return id != kAtomEntryNone && static_cast<size_t>(id) < entry_count;
+}
+
 [[noreturn]] void throwPersistedEntryValidationFailure(
     const char* boundary,
     uint32_t index,
@@ -265,16 +269,11 @@ void validatePersistedAtomEntryOrThrow(
         throwPersistedEntryValidationFailure(boundary, index, field, detail, location_label);
     };
 
-    if (entry.id < ATOM_TOKEN_BASE) {
-        failValidation("entry.id", "id below ATOM_TOKEN_BASE (" + std::to_string(entry.id) +
-                                       " < " + std::to_string(ATOM_TOKEN_BASE) + ")");
+    if (entry.id == kAtomEntryNone) {
+        failValidation("entry.id", "id must not be kAtomEntryNone");
     }
-    if (entry.id >= ATOM_TOKEN_MAX) {
-        failValidation("entry.id", "id at or above ATOM_TOKEN_MAX (" + std::to_string(entry.id) +
-                                       " >= " + std::to_string(ATOM_TOKEN_MAX) + ")");
-    }
-    if (entry.id - ATOM_TOKEN_BASE != index) {
-        failValidation("entry.id", "expected id " + std::to_string(ATOM_TOKEN_BASE + index) +
+    if (entry.id != index) {
+        failValidation("entry.id", "expected contiguous atom entry id " + std::to_string(index) +
                                        " but found " + std::to_string(entry.id));
     }
     if (!atomTypeIsPersistable(entry.type)) {
@@ -1271,16 +1270,16 @@ uint32_t AtomTable::findExisting(AtomType type, uint64_t hash, std::string_view 
         return UINT32_MAX;  // Not found
     }
 
-    for (uint32_t token_id : it->second) {
-        if (token_id < ATOM_TOKEN_BASE || token_id - ATOM_TOKEN_BASE >= entries_.size()) {
-            throw std::runtime_error("AtomTable::findExisting hash bucket contains corrupt token id=" +
-                                     std::to_string(token_id) + ", entries=" +
+    for (uint32_t entry_id : it->second) {
+        if (!atomEntryIdInRange(entry_id, entries_.size())) {
+            throw std::runtime_error("AtomTable::findExisting hash bucket contains corrupt atom entry id=" +
+                                     std::to_string(entry_id) + ", entries=" +
                                      std::to_string(entries_.size()));
         }
-        const AtomEntry& existing = entries_[token_id - ATOM_TOKEN_BASE];
+        const AtomEntry& existing = entries_[entry_id];
         if (existing.type == type && getString(existing.raw_text_ref) == raw_text) {
             dedup_hits_++;
-            return token_id;  // Return the token ID (ATOM_TOKEN_BASE+), not the array index
+            return entry_id;
         }
     }
     
@@ -1308,13 +1307,12 @@ bool AtomTable::tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id) {
     // Check if this atom already exists
     uint32_t existing_id = findExisting(span.atom_type, hash, raw_text);
     if (existing_id != UINT32_MAX) {
-        const uint32_t existing_idx = existing_id - ATOM_TOKEN_BASE;
-        if (existing_idx >= entries_.size()) {
+        if (!atomEntryIdInRange(existing_id, entries_.size())) {
             throw std::runtime_error("AtomTable::tryRegisterSpan dedup returned out-of-range id=" +
                                      std::to_string(existing_id));
         }
         ensureAtomEntryHasArgNumber(
-            entries_[existing_idx],
+            entries_[existing_id],
             raw_text,
             raw_span,
             content_span,
@@ -1332,7 +1330,7 @@ bool AtomTable::tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id) {
     const AtomValue& parsed = result.value;
     
     AtomEntry entry{};
-    entry.id = ATOM_TOKEN_BASE + next_id_;
+    entry.id = next_id_;
     next_id_++;
     entry.type = span.atom_type;
     entry.hash = hash;
@@ -1389,17 +1387,11 @@ uint32_t AtomTable::registerSpan(const StructuralSpan& span) {
 std::optional<AtomEntry> AtomTable::getAtom(uint32_t id) const {
     std::lock_guard<std::mutex> lock(mutex_);
     
-    // Token IDs are offset by ATOM_TOKEN_BASE, convert to array index
-    if (id < ATOM_TOKEN_BASE) {
-        return std::nullopt;  // Not a valid atom token
-    }
-    
-    const uint32_t idx = id - ATOM_TOKEN_BASE;
-    if (idx >= entries_.size()) {
+    if (!atomEntryIdInRange(id, entries_.size())) {
         return std::nullopt;
     }
     
-    const AtomEntry& entry = entries_[idx];
+    const AtomEntry& entry = entries_[id];
     if (entry.id != id) {
         throw std::runtime_error("AtomTable::getAtom id/index mismatch for atom id=" +
                                  std::to_string(id) + ", entry.id=" + std::to_string(entry.id) +
@@ -1417,13 +1409,13 @@ std::vector<AtomEntry> AtomTable::getAtomsByType(AtomType type) const {
         return result;
     }
     result.reserve(it->second.size());
-    for (uint32_t token_id : it->second) {
-        if (token_id < ATOM_TOKEN_BASE || token_id - ATOM_TOKEN_BASE >= entries_.size()) {
-            throw std::runtime_error("AtomTable::getAtomsByType type index contains corrupt token id=" +
-                                     std::to_string(token_id) + ", entries=" +
+    for (uint32_t entry_id : it->second) {
+        if (!atomEntryIdInRange(entry_id, entries_.size())) {
+            throw std::runtime_error("AtomTable::getAtomsByType type index contains corrupt atom entry id=" +
+                                     std::to_string(entry_id) + ", entries=" +
                                      std::to_string(entries_.size()));
         }
-        result.push_back(entries_[token_id - ATOM_TOKEN_BASE]);
+        result.push_back(entries_[entry_id]);
     }
     return result;
 }
@@ -1606,13 +1598,10 @@ std::string AtomTable::atomToString(const AtomEntry& entry) const {
 std::optional<NumericPayload> AtomTable::getNumericValue(uint32_t id) const {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    if (id < ATOM_TOKEN_BASE) {
+    if (!atomEntryIdInRange(id, entries_.size())) {
         return std::nullopt;
     }
-    const uint32_t idx = id - ATOM_TOKEN_BASE;
-    if (idx >= entries_.size()) {
-        return std::nullopt;
-    }
+    const uint32_t idx = id;
     if (idx >= numeric_float_values_.size() ||
         idx >= numeric_int_values_.size() ||
         idx >= numeric_kinds_.size()) {
@@ -1691,11 +1680,11 @@ uint64_t AtomTable::getCurrentTimestamp() {
 }
 
 AtomEntry& AtomTable::entryForIdLocked(uint32_t id, const char* caller) {
-    if (id < ATOM_TOKEN_BASE || id - ATOM_TOKEN_BASE >= entries_.size()) {
+    if (!atomEntryIdInRange(id, entries_.size())) {
         throw std::runtime_error(std::string(caller) + ": invalid atom id=" + std::to_string(id) +
                                  ", entries=" + std::to_string(entries_.size()));
     }
-    AtomEntry& entry = entries_[id - ATOM_TOKEN_BASE];
+    AtomEntry& entry = entries_[id];
     if (entry.id != id) {
         throw std::runtime_error(std::string(caller) + ": id/index mismatch for atom id=" +
                                  std::to_string(id) + ", entry.id=" + std::to_string(entry.id) +
