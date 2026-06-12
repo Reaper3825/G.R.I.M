@@ -247,6 +247,74 @@ bool atomEntryIdInRange(uint32_t id, size_t entry_count) {
     return id != kAtomEntryNone && static_cast<size_t>(id) < entry_count;
 }
 
+constexpr uint64_t kFnvOffset = 14695981039346656037ULL;
+constexpr uint64_t kFnvPrime = 1099511628211ULL;
+
+void hashBytes(uint64_t& hash, const void* data, size_t size) {
+    const auto* bytes = static_cast<const uint8_t*>(data);
+    for (size_t i = 0; i < size; ++i) {
+        hash ^= static_cast<uint64_t>(bytes[i]);
+        hash *= kFnvPrime;
+    }
+}
+
+template <typename T>
+void hashValue(uint64_t& hash, const T& value) {
+    hashBytes(hash, &value, sizeof(value));
+}
+
+void hashStringView(uint64_t& hash, std::string_view value) {
+    hashBytes(hash, value.data(), value.size());
+}
+
+void hashArgNumberForDedup(uint64_t& hash, const AtomNumber& number) {
+    hashValue(hash, number.base);
+    hashValue(hash, number.has_sign);
+    hashValue(hash, number.sign_negative);
+    hashValue(hash, number.has_decimal_point);
+    hashValue(hash, number.has_exponent);
+    hashValue(hash, number.exponent_negative);
+    hashValue(hash, number.integer_digit_count);
+    hashValue(hash, number.fractional_digit_count);
+    hashValue(hash, number.exponent_value);
+    const uint32_t digit_count = static_cast<uint32_t>(number.digits.size());
+    hashValue(hash, digit_count);
+    for (const DigitBinding& digit : number.digits) {
+        hashValue(hash, digit.digit);
+        hashValue(hash, digit.pow10);
+        hashValue(hash, digit.index_left);
+        hashValue(hash, digit.index_right);
+        hashValue(hash, digit.digit_span.length);
+    }
+}
+
+bool argNumbersEqualForDedup(const AtomNumber& lhs, const AtomNumber& rhs) {
+    if (lhs.base != rhs.base ||
+        lhs.has_sign != rhs.has_sign ||
+        lhs.sign_negative != rhs.sign_negative ||
+        lhs.has_decimal_point != rhs.has_decimal_point ||
+        lhs.has_exponent != rhs.has_exponent ||
+        lhs.exponent_negative != rhs.exponent_negative ||
+        lhs.integer_digit_count != rhs.integer_digit_count ||
+        lhs.fractional_digit_count != rhs.fractional_digit_count ||
+        lhs.exponent_value != rhs.exponent_value ||
+        lhs.digits.size() != rhs.digits.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < lhs.digits.size(); ++i) {
+        const DigitBinding& lhs_digit = lhs.digits[i];
+        const DigitBinding& rhs_digit = rhs.digits[i];
+        if (lhs_digit.digit != rhs_digit.digit ||
+            lhs_digit.pow10 != rhs_digit.pow10 ||
+            lhs_digit.index_left != rhs_digit.index_left ||
+            lhs_digit.index_right != rhs_digit.index_right ||
+            lhs_digit.digit_span.length != rhs_digit.digit_span.length) {
+            return false;
+        }
+    }
+    return true;
+}
+
 [[noreturn]] void throwPersistedEntryValidationFailure(
     const char* boundary,
     uint32_t index,
@@ -1184,7 +1252,9 @@ void AtomTable::deserializeFromStreamOrThrow(std::istream& stream, const char* s
 
         hash_to_ids_.reserve(entries_.size());
         pending_gpu_upload_.reserve(entries_.size());
-        for (const auto& entry : entries_) {
+        for (size_t i = 0; i < entries_.size(); ++i) {
+            AtomEntry& entry = entries_[i];
+            entry.hash = computeHash(entry);
             hash_to_ids_[entry.hash].push_back(entry.id);
             type_index_[entry.type].push_back(entry.id);
             pending_gpu_upload_.push_back(entry.id);
@@ -1262,7 +1332,12 @@ size_t AtomTable::getDeduplicationHitRate() const {
 // Deduplication
 //--------------------------------------------------//
 
-uint32_t AtomTable::findExisting(AtomType type, uint64_t hash, std::string_view raw_text) {
+uint32_t AtomTable::findExisting(uint64_t hash,
+                                 const AtomEntry& candidate,
+                                 std::string_view candidate_raw_text,
+                                 double numeric_float_value,
+                                 int64_t numeric_int_value,
+                                 uint8_t numeric_kind) {
     total_queries_++;
     
     auto it = hash_to_ids_.find(hash);
@@ -1277,7 +1352,18 @@ uint32_t AtomTable::findExisting(AtomType type, uint64_t hash, std::string_view 
                                      std::to_string(entries_.size()));
         }
         const AtomEntry& existing = entries_[entry_id];
-        if (existing.type == type && getString(existing.raw_text_ref) == raw_text) {
+        const std::string_view existing_raw_text = getString(existing.raw_text_ref);
+        if (existing.type == candidate.type &&
+            existing.numeric_value == candidate.numeric_value &&
+            existing.flags == candidate.flags &&
+            existing.reserved_zero == candidate.reserved_zero &&
+            existing_raw_text == candidate_raw_text &&
+            numeric_kinds_[entry_id] == numeric_kind &&
+            numeric_float_values_[entry_id] == numeric_float_value &&
+            numeric_int_values_[entry_id] == numeric_int_value &&
+            existing.arg_number.has_value() == candidate.arg_number.has_value() &&
+            (!existing.arg_number.has_value() ||
+             argNumbersEqualForDedup(*existing.arg_number, *candidate.arg_number))) {
             dedup_hits_++;
             return entry_id;
         }
@@ -1301,26 +1387,6 @@ bool AtomTable::tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id) {
     const TextSpan32 raw_span{span.offset, span.length};
     const TextSpan32 content_span{span.content_offset, span.content_length};
     
-    // Compute hash for deduplication
-    uint64_t hash = computeHash(span.atom_type, raw_text);
-    
-    // Check if this atom already exists
-    uint32_t existing_id = findExisting(span.atom_type, hash, raw_text);
-    if (existing_id != UINT32_MAX) {
-        if (!atomEntryIdInRange(existing_id, entries_.size())) {
-            throw std::runtime_error("AtomTable::tryRegisterSpan dedup returned out-of-range id=" +
-                                     std::to_string(existing_id));
-        }
-        ensureAtomEntryHasArgNumber(
-            entries_[existing_id],
-            raw_text,
-            raw_span,
-            content_span,
-            "AtomTable::tryRegisterSpan");
-        out_id = existing_id;  // Return existing ID (deduplication hit!)
-        return true;
-    }
-    
     // Parse once; this is the only parse on the new-atom path.
     const ParseResult result = parseAtom(span.atom_type, raw_text);
     if (!result.success) {
@@ -1331,9 +1397,7 @@ bool AtomTable::tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id) {
     
     AtomEntry entry{};
     entry.id = next_id_;
-    next_id_++;
     entry.type = span.atom_type;
-    entry.hash = hash;
     entry.source_start = static_cast<uint32_t>(span.start);
     entry.source_end = static_cast<uint32_t>(span.end);
     
@@ -1343,15 +1407,37 @@ bool AtomTable::tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id) {
     entry.confidence = 1.0f;
     entry.created_at = getCurrentTimestamp();
     
-    // Intern the atom content
-    entry.raw_text_ref = internString(span.buffer_ptr + span.content_offset, span.content_length);
-    
     // Pack numeric value
     double numeric_float_value = 0.0;
     int64_t numeric_int_value = 0;
     uint8_t numeric_kind = static_cast<uint8_t>(NumericPayloadKind::NONE);
     packNumericValue(entry, parsed, numeric_float_value, numeric_int_value, numeric_kind);
     ensureAtomEntryHasArgNumber(entry, raw_text, raw_span, content_span, "AtomTable::tryRegisterSpan");
+
+    const uint64_t hash = computeHash(entry,
+                                      raw_text,
+                                      numeric_float_value,
+                                      numeric_int_value,
+                                      numeric_kind);
+
+    uint32_t existing_id = findExisting(hash,
+                                        entry,
+                                        raw_text,
+                                        numeric_float_value,
+                                        numeric_int_value,
+                                        numeric_kind);
+    if (existing_id != UINT32_MAX) {
+        if (!atomEntryIdInRange(existing_id, entries_.size())) {
+            throw std::runtime_error("AtomTable::tryRegisterSpan dedup returned out-of-range id=" +
+                                     std::to_string(existing_id));
+        }
+        out_id = existing_id;  // Return existing ID (deduplication hit!)
+        return true;
+    }
+
+    entry.hash = hash;
+    entry.raw_text_ref = internString(span.buffer_ptr + span.content_offset, span.content_length);
+    next_id_++;
     
     // Index for fast lookup
     uint32_t new_id = entry.id;
@@ -1651,24 +1737,40 @@ AtomCategory AtomTable::getCategoryForType(AtomType type) {
 }
 
 uint64_t AtomTable::computeHash(const AtomEntry& entry) const {
+    if (!atomEntryIdInRange(entry.id, entries_.size()) ||
+        static_cast<size_t>(entry.id) >= numeric_float_values_.size() ||
+        static_cast<size_t>(entry.id) >= numeric_int_values_.size() ||
+        static_cast<size_t>(entry.id) >= numeric_kinds_.size()) {
+        throw std::runtime_error("AtomTable::computeHash cannot resolve numeric side channels for atom entry id=" +
+                                 std::to_string(entry.id));
+    }
     std::string_view raw_text = getString(entry.raw_text_ref);
-    return computeHash(entry.type, raw_text);
+    return computeHash(entry,
+                       raw_text,
+                       numeric_float_values_[entry.id],
+                       numeric_int_values_[entry.id],
+                       numeric_kinds_[entry.id]);
 }
 
-uint64_t AtomTable::computeHash(AtomType type, std::string_view raw_text) {
-    // Simple FNV-1a hash
-    uint64_t hash = 14695981039346656037ULL;
-    
-    // Hash the type
-    hash ^= static_cast<uint64_t>(type);
-    hash *= 1099511628211ULL;
-    
-    // Hash the raw text
-    for (char c : raw_text) {
-        hash ^= static_cast<uint64_t>(static_cast<uint8_t>(c));
-        hash *= 1099511628211ULL;
+uint64_t AtomTable::computeHash(const AtomEntry& entry,
+                                std::string_view raw_text,
+                                double numeric_float_value,
+                                int64_t numeric_int_value,
+                                uint8_t numeric_kind) const {
+    uint64_t hash = kFnvOffset;
+    hashValue(hash, static_cast<int>(entry.type));
+    hashStringView(hash, raw_text);
+    hashValue(hash, entry.numeric_value);
+    hashValue(hash, entry.flags);
+    hashValue(hash, entry.reserved_zero);
+    hashValue(hash, numeric_kind);
+    hashValue(hash, numeric_float_value);
+    hashValue(hash, numeric_int_value);
+    const uint8_t has_arg_number = entry.arg_number.has_value() ? 1 : 0;
+    hashValue(hash, has_arg_number);
+    if (entry.arg_number.has_value()) {
+        hashArgNumberForDedup(hash, *entry.arg_number);
     }
-    
     return hash;
 }
 

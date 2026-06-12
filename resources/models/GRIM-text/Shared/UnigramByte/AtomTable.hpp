@@ -304,9 +304,13 @@ public:
     // Compute category from type
     static AtomCategory getCategoryForType(AtomType type);
     
-    // Compute hash for deduplication
+    // Compute hash for deduplication from the normalized persisted entry payload.
     uint64_t computeHash(const AtomEntry& entry) const;
-    static uint64_t computeHash(AtomType type, std::string_view raw_text);
+    uint64_t computeHash(const AtomEntry& entry,
+                         std::string_view raw_text,
+                         double numeric_float_value,
+                         int64_t numeric_int_value,
+                         uint8_t numeric_kind) const;
     
     // Get current timestamp (microseconds since epoch)
     static uint64_t getCurrentTimestamp();
@@ -406,7 +410,12 @@ private:
     
     // Deduplication: check if atom already exists
     // Returns existing ID if found, or UINT32_MAX if not
-    uint32_t findExisting(AtomType type, uint64_t hash, std::string_view raw_text);
+    uint32_t findExisting(uint64_t hash,
+                          const AtomEntry& candidate,
+                          std::string_view candidate_raw_text,
+                          double numeric_float_value,
+                          int64_t numeric_int_value,
+                          uint8_t numeric_kind);
     
     // Locked id -> entry resolution. Throws on any invalid or corrupt id.
     AtomEntry& entryForIdLocked(uint32_t id, const char* caller);
