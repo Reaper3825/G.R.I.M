@@ -11,6 +11,7 @@
 #include "../../GRIM/grim_language_model_cuda.hpp"
 #include "../../Layers/grim_layer_gpu.hpp"
 #include "../../Layers/Encoding/Encoding_GPU.hpp"
+#include "../../Layers/Encoding/AblationFlags.hpp"
 #include "../../Layers/LMHead/lm_head_GPU.hpp"
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
@@ -829,8 +830,19 @@ bool verifyGradientsAreConnectedImpl(
             check(enc.layer_scale2, "layerScale2");
         }
         if (activity.text_loss_active && num_layers > 0) {
+            // Ablation-aware encoder signal check (AblationFlags.hpp):
+            // a sublayer zeroed by kZeroAttnResidual / kZeroFfnResidual
+            // legitimately receives ZERO gradient, so requiring it to receive
+            // signal would be a false positive. Verify the live sublayer instead
+            // so we still catch genuine backward-wiring breakage; if BOTH paths
+            // are ablated there is no encoder gradient path to validate.
             auto& enc0 = ctx.parameter_registry->requireEncodingLayerParameters(0, "verifyGradientsAreConnectedImpl");
-            requireReceivedGradient(enc0.W_qkv, "layer 0 attnWqkv");
+            if (!GRIM::Ablation::kZeroAttnResidual) {
+                requireReceivedGradient(enc0.W_qkv, "layer 0 attnWqkv");
+            } else if (!GRIM::Ablation::kZeroFfnResidual) {
+                auto& ffn0 = ctx.parameter_registry->requireFeedForwardParameters(0, "verifyGradientsAreConnectedImpl");
+                requireReceivedGradient(ffn0.W2, "layer 0 ffnW2 (attn ablated)");
+            }
         }
     }
 
