@@ -12,6 +12,7 @@
 
 #include "Encoding_GPU.hpp"
 #include "EncoderDiagnostics.hpp"
+#include "AblationFlags.hpp"
 #include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../FlashAttention/EncoderSelfAttention_GPU.hpp"
@@ -339,6 +340,15 @@ void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
         scaled_proj = autograd::layer_scale(proj_out, *const_cast<Tensor*>(layer_scale1), stream);
         proj_for_residual = &scaled_proj;
     }
+
+    // Experimental ablation (AblationFlags.hpp): zero attention's contribution
+    // to the residual while keeping the autograd graph intact. The chosen
+    // branch tensor is multiplied by 0 so residual1 == input (+ centering),
+    // and attention parameters receive zero gradient (sublayer frozen).
+    if (GRIM::Ablation::kZeroAttnResidual) {
+        Tensor& attn_branch = hp.use_layer_scale ? scaled_proj : proj_out;
+        attn_branch = autograd::mul_scalar(attn_branch, 0.0f, stream);
+    }
     
     // ========================================================================
     // STANDARD PRE-NORM RESIDUAL (Issue #148: Sandwich Norm REMOVED)
@@ -427,6 +437,15 @@ void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
         validateLayerScaleGamma(*layer_scale2, "layer_scale2_", hp.d_model, "forwardEncodingLayer");
         scaled_ffn = autograd::layer_scale(ffn_out, *const_cast<Tensor*>(layer_scale2), stream);
         ffn_for_residual = &scaled_ffn;
+    }
+
+    // Experimental ablation (AblationFlags.hpp): zero FFN's contribution to the
+    // residual while keeping the autograd graph intact. The chosen branch tensor
+    // is multiplied by 0 so output == residual1, and FFN parameters receive zero
+    // gradient (sublayer frozen).
+    if (GRIM::Ablation::kZeroFfnResidual) {
+        Tensor& ffn_branch = hp.use_layer_scale ? scaled_ffn : ffn_out;
+        ffn_branch = autograd::mul_scalar(ffn_branch, 0.0f, stream);
     }
     
     // ========================================================================

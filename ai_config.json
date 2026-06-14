@@ -475,7 +475,7 @@
             "execution_block_value_decode_input_dim": 24,
             "execution_block_value_match_epsilon": 0.0001,
             "execution_block_write_collapse_threshold": 0.98,
-            "force_rebuild_vocab": true,
+            "force_rebuild_vocab": false,
             "freeze_learned_rms_gammas": true,
             "generation_do_sample": true,
             "generation_enable_scratchblock_reasoning": true,
