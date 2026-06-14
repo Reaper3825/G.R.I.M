@@ -210,30 +210,6 @@ void requireUnigramLearnedPosteriorMassNotByteFallbackDominated(
     }
 }
 
-double scoreUnigramShrinkCandidateForPosteriorCompression(const std::string& piece_text,
-                                                          double posterior_expected_count,
-                                                          const char* caller) {
-    if (caller == nullptr || caller[0] == '\0') {
-        throw std::runtime_error("scoreUnigramShrinkCandidateForPosteriorCompression: caller label is empty at " +
-                                 std::string(__FILE__) + ":" + std::to_string(__LINE__));
-    }
-    if (piece_text.empty()) {
-        throw std::runtime_error(std::string(caller) +
-                                 ": shrink candidate piece text is empty - learned pieces MUST contain at least one byte");
-    }
-    if (!std::isfinite(posterior_expected_count) || posterior_expected_count < 0.0) {
-        throw std::runtime_error(std::string(caller) +
-                                 ": posterior_expected_count must be finite and non-negative, got " +
-                                 std::to_string(posterior_expected_count));
-    }
-
-    const double byte_span = static_cast<double>(piece_text.size());
-    const double compression_gain_per_use = std::max(0.0, byte_span - 1.0);
-    const double expected_compression_gain = posterior_expected_count * compression_gain_per_use;
-
-    return posterior_expected_count + expected_compression_gain;
-}
-
 struct AtomSpanValidationTotals {
     size_t span_count = 0;
     size_t byte_count = 0;
@@ -722,21 +698,22 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                   << " candidates (structural edge-trim dedup only; ▁ preserved)" << std::endl;
     }
     std::cout << "[UnigramLM] Added " << added << " data-selected subwords (min_freq=" << MIN_SUBWORD_FREQ
-              << ", final_cap=" << target_vocab_size << "), total candidate vocab: " << pieces_.size() << std::endl;
+              << "; data-driven vocab, no target cap), total candidate vocab: " << pieces_.size() << std::endl;
     if (pieces_.empty()) {
         throw std::runtime_error("UnigramLM::trainFromCorpus: no learned subword candidates survived frequency/validity filters; lower min_subword_freq or provide more corpus text");
     }
     
-    // Step 5: Soft EM + single-pass posterior/compression shrink
+    // Step 5: Soft EM + data-driven dead-token cleanup
     //
-    // Starting with the full data-selected candidate vocab, we:
+    // Vocab size is data-driven; there is no target-size cap. Starting with the
+    // full data-selected candidate vocab, we:
     //   1. Run true Unigram forward-backward EM to convergence (Phase-A)
-    //   2. Rank tokens by posterior expected mass plus expected compression gain
-    //   3. Perform one direct shrink to the final target vocab size (Phase-B)
-    //   4. Re-converge EM once on the shrunk vocabulary
+    //   2. Drop only dead pieces with zero posterior expected count (Phase-C)
+    //   3. Re-converge EM once if any dead pieces were removed (Phase-D)
     //
-    // This preserves the posterior/compression-based selection signal while
-    // avoiding repeated shrink/reconverge rounds.
+    // The corpus alone decides the surviving learned-vocab size through the
+    // admission filters (tokenizer_min_subword_freq, validity, repetition,
+    // structural dedup) plus zero-posterior cleanup.
     constexpr int    EM_MAX_ITERATIONS     = 50;
     constexpr double EM_CONVERGENCE_THRESH = 0.0001;
     constexpr double SMOOTHING             = 0.1;
@@ -879,115 +856,16 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                                    last_e_step.log_likelihood};
     };
 
-    // ---- Phase A: initial EM to convergence on full candidate vocab ----
-    std::cout << "[UnigramLM] Phase-A: forward-backward EM on data-selected candidate vocab (" << pieces_.size()
-              << " pieces, final_cap=" << target_vocab_size << ")" << std::endl;
+    // ---- Phase A: EM to convergence on the data-selected candidate vocab ----
+    // Vocab size is data-driven. The candidate set is decided by the admission
+    // filters (tokenizer_min_subword_freq, validity, repetition, structural dedup);
+    // EM assigns scores; Phase-C drops dead (zero-posterior) pieces. There is no
+    // target-size cap: the final learned-vocab size is whatever the corpus supports.
+    std::cout << "[UnigramLM] Phase-A: forward-backward EM on data-selected candidate vocab ("
+              << pieces_.size() << " pieces; data-driven size, no target cap)" << std::endl;
     EMConvergenceResult phase_a_result = runEMToConvergence("Phase-A");
     requireConvergedPhaseNotFallbackDominated(phase_a_result, "Phase-A");
     std::unordered_map<int, double> phase_a_counts = std::move(phase_a_result.learned_token_counts);
-
-    // ---- Phase B: one-pass shrink to target vocab size ----
-    // Rank by posterior expected mass plus expected compression gain. This keeps
-    // the soft E-step occupancy evidence while preventing frequent tiny fragments
-    // from automatically outranking less frequent pieces that save more bytes.
-    // Do not multiply by |score| here: that overprotects rare low-probability
-    // pieces even when the forward-backward posterior says they are barely used.
-    bool performed_phase_b_shrink = false;
-    if (static_cast<int>(pieces_.size()) > target_vocab_size) {
-        const int current_size = static_cast<int>(pieces_.size());
-        int user_defined_count = 0;
-        for (const auto& piece : pieces_) {
-            if (piece.is_user_defined) {
-                ++user_defined_count;
-            }
-        }
-
-        // Directly keep the final target size, while always preserving all
-        // protected user-defined pieces.
-        const int keep_count = std::max(target_vocab_size, user_defined_count);
-
-        struct TokenValue {
-            int index;
-            double value;
-        };
-        std::vector<TokenValue> token_values;
-        token_values.reserve(pieces_.size());
-        std::unordered_set<int> keep_indices;
-        keep_indices.reserve(static_cast<size_t>(keep_count));
-
-        for (size_t i = 0; i < pieces_.size(); ++i) {
-            if (pieces_[i].is_user_defined) {
-                keep_indices.insert(static_cast<int>(i));
-                continue;
-            }
-            const int tid = tokenIdForIndex(static_cast<int>(i));
-            double count = 0.0;
-            auto count_it = phase_a_counts.find(tid);
-            if (count_it != phase_a_counts.end()) {
-                count = count_it->second;
-            }
-            const double value = scoreUnigramShrinkCandidateForPosteriorCompression(
-                pieces_[i].text,
-                count,
-                "UnigramLM::trainFromCorpus Phase-B shrink ranking");
-            token_values.push_back({static_cast<int>(i), value});
-        }
-
-        std::sort(token_values.begin(), token_values.end(),
-                  [](const TokenValue& a, const TokenValue& b) {
-                      if (a.value != b.value) return a.value > b.value;
-                      return a.index < b.index;
-                  });
-
-        const int fill_slots = std::max(0, keep_count - static_cast<int>(keep_indices.size()));
-        for (int k = 0; k < fill_slots && k < static_cast<int>(token_values.size()); ++k) {
-            keep_indices.insert(token_values[k].index);
-        }
-
-        const int removed = current_size - static_cast<int>(keep_indices.size());
-        if (removed == 0 && current_size > target_vocab_size) {
-            if (token_values.empty()) {
-                std::cout << "[UnigramLM] Phase-B single-pass shrink stopped at " << current_size
-                          << " pieces: target_vocab_size=" << target_vocab_size
-                          << " cannot be reached without pruning " << user_defined_count
-                          << " protected user-defined pieces" << std::endl;
-            } else {
-                throw std::runtime_error("UnigramLM::trainFromCorpus Phase-B single-pass shrink made no progress despite " +
-                                         std::to_string(token_values.size()) +
-                                         " prunable pieces; keep_count=" + std::to_string(keep_count) +
-                                         ", current_size=" + std::to_string(current_size));
-            }
-        }
-
-        if (removed > 0) {
-            std::cout << "[UnigramLM] Phase-B single-pass shrink: " << current_size
-                      << " -> " << keep_indices.size()
-                      << " tokens (removed " << removed
-                      << ", protected_user_defined=" << user_defined_count << ")" << std::endl;
-
-            std::vector<UnigramPiece> surviving;
-            surviving.reserve(keep_indices.size());
-            for (size_t i = 0; i < pieces_.size(); ++i) {
-                if (keep_indices.count(static_cast<int>(i))) {
-                    surviving.push_back(std::move(pieces_[i]));
-                }
-            }
-            rewriteUnigramVocab(
-                UnigramVocabWriteTarget{pieces_, piece_to_id_},
-                std::move(surviving),
-                "UnigramLM::trainFromCorpus Phase-B single-pass shrink compaction");
-
-            EMConvergenceResult phase_b_result = runEMToConvergence("Phase-B");
-            requireConvergedPhaseNotFallbackDominated(phase_b_result, "Phase-B");
-            phase_a_counts = std::move(phase_b_result.learned_token_counts);
-            performed_phase_b_shrink = true;
-        }
-    }
-
-    if (performed_phase_b_shrink) {
-        std::cout << "[UnigramLM] Phase-B single-pass shrink complete. Final vocab: "
-                  << pieces_.size() << " pieces" << std::endl;
-    }
 
     // ---- Phase C: final dead-token cleanup ----
     // Remove any tokens that still have zero posterior expected count after convergence
@@ -1029,7 +907,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                 std::move(surviving),
                 "UnigramLM::trainFromCorpus final dead-token cleanup");
         } else {
-            std::cout << "[UnigramLM] No dead tokens after shrinking — vocab is clean" << std::endl;
+            std::cout << "[UnigramLM] No dead tokens after EM convergence — vocab is clean" << std::endl;
         }
     }
 

@@ -78,9 +78,6 @@ void requireUnigramLearnedPosteriorMassNotByteFallbackDominated(
     double expected_fixed_penalty_byte_fallback_tokens,
     const char* phase_label,
     const char* caller);
-double scoreUnigramShrinkCandidateForPosteriorCompression(const std::string& piece_text,
-                                                          double posterior_expected_count,
-                                                          const char* caller);
 uint64_t addUnigramSubwordCountsForTraining(uint64_t current,
                                             uint64_t delta,
                                             const char* caller);
@@ -452,36 +449,6 @@ bool testUnigramTrainRejectsFallbackDominatedPosteriorMass(std::string& message)
         message = std::string("Converged-phase guard should allow balanced or no-fallback posterior mass: ") + e.what();
         return false;
     }
-
-    return true;
-}
-
-bool testUnigramTrainShrinkRankingUsesCompressionGain(std::string& message) {
-    const double frequent_tiny_fragment_score = scoreUnigramShrinkCandidateForPosteriorCompression(
-        "a",
-        10.0,
-        "testUnigramTrainShrinkRankingUsesCompressionGain tiny");
-    const double less_frequent_high_compression_score = scoreUnigramShrinkCandidateForPosteriorCompression(
-        "abcdefghij",
-        9.2,
-        "testUnigramTrainShrinkRankingUsesCompressionGain high-compression");
-
-    ASSERT_TRUE(less_frequent_high_compression_score > frequent_tiny_fragment_score,
-                "Shrink ranking should let compression gain beat a slightly more frequent tiny fragment");
-    ASSERT_NEAR(scoreUnigramShrinkCandidateForPosteriorCompression(
-                    "abcdefghij",
-                    0.0,
-                    "testUnigramTrainShrinkRankingUsesCompressionGain zero-count"),
-                0.0,
-                1.0e-12,
-                "Zero-posterior pieces must not survive only because they are long");
-    ASSERT_NEAR(scoreUnigramShrinkCandidateForPosteriorCompression(
-                    "abcdefghij",
-                    0.01,
-                    "testUnigramTrainShrinkRankingUsesCompressionGain rare-long"),
-                0.10,
-                1.0e-12,
-                "Rare long pieces should receive expected compression gain, not a near-free normalized ratio bonus");
 
     return true;
 }
@@ -2964,7 +2931,6 @@ int main(int argc, char** argv) {
     suite.addTest("Unigram.Train.FinalCleanupRejectsEmptyLearnedVocab", testUnigramTrainFinalCleanupRejectsEmptyLearnedVocab);
     suite.addTest("Unigram.Train.RejectEmptyAcceptedCandidateSet", testUnigramTrainRejectsEmptyAcceptedCandidateSet);
     suite.addTest("Unigram.Train.RejectFallbackDominatedPosteriorMass", testUnigramTrainRejectsFallbackDominatedPosteriorMass);
-    suite.addTest("Unigram.Train.ShrinkRankingUsesCompressionGain", testUnigramTrainShrinkRankingUsesCompressionGain);
     suite.addTest("Unigram.Train.ByteFallbackOffAddsCharSeeds", testUnigramTrainByteFallbackDisabledAddsCharacterSeeds);
     suite.addTest("Unigram.Train.ByteFallbackOffFailsUncoveredChars", testUnigramTrainByteFallbackDisabledFailsOnUncoveredCharacterSeed);
     suite.addTest("Unigram.Train.SubwordCountsUseUint64", testUnigramTrainSubwordCountsUseUint64);
