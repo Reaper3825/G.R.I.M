@@ -294,8 +294,16 @@ GradientSignalBaselines captureGradientVerificationBaselines(
         auto& lm_head_parameters = ctx.parameter_registry->requireLmHeadParameters("captureGradientSignalBaselines");
         captureExpected(lm_head_parameters.weights, "lm_head weights");
         if (model_hp.encoder_num_layers > 0) {
-            auto& enc0 = ctx.parameter_registry->requireEncodingLayerParameters(0, "captureGradientSignalBaselines");
-            captureExpected(enc0.W_qkv, "layer 0 attnWqkv");
+            // Ablation-aware (AblationFlags.hpp): snapshot the baseline for the
+            // LIVE sublayer so the accumulation-delta check has a matching entry.
+            // Labels MUST match verifyGradientsAreConnectedImpl exactly.
+            if (!GRIM::Ablation::kZeroAttnResidual) {
+                auto& enc0 = ctx.parameter_registry->requireEncodingLayerParameters(0, "captureGradientSignalBaselines");
+                captureExpected(enc0.W_qkv, "layer 0 attnWqkv");
+            } else if (!GRIM::Ablation::kZeroFfnResidual) {
+                auto& ffn0 = ctx.parameter_registry->requireFeedForwardParameters(0, "captureGradientSignalBaselines");
+                captureExpected(ffn0.W2, "layer 0 ffnW2 (attn ablated)");
+            }
         }
     }
 
