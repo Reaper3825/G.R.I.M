@@ -690,14 +690,18 @@ UnigramSubwordMiningResult mineUnigramSubwordsFromTrainingUnits(
         result.total_training_bytes += sent.size();
     }
 
-    result.max_mining_bytes = static_cast<size_t>(HyperParameters::UNIGRAM_MAX_SUBWORD_BYTES);
-    if (request.configured_max_mining_bytes > 0) {
-        result.max_mining_bytes = request.configured_max_mining_bytes;
+    result.max_mining_bytes = request.configured_max_mining_bytes;
+    if (result.max_mining_bytes == 0) {
+        result.max_mining_bytes = result.total_training_bytes;
     }
     result.used_sampling = result.total_training_bytes > result.max_mining_bytes;
 
-    std::cout << request.log_prefix << " Subword mining byte cap: "
-              << (result.max_mining_bytes / (1024 * 1024)) << " MB" << std::endl;
+    if (request.configured_max_mining_bytes == 0) {
+        std::cout << request.log_prefix << " Subword mining byte cap: uncapped (full corpus)" << std::endl;
+    } else {
+        std::cout << request.log_prefix << " Subword mining byte cap: "
+                  << (result.max_mining_bytes / (1024 * 1024)) << " MB" << std::endl;
+    }
 
     const SubwordMiningPlan mining_plan = buildSubwordMiningPlan(
         request.training_units,
