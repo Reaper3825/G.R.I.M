@@ -25,6 +25,7 @@
 #include "HyperParameters/HyperparameterGroupings.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -208,6 +209,212 @@ void requireUnigramLearnedPosteriorMassNotByteFallbackDominated(
                                  std::to_string(learned_to_fallback_ratio) +
                                  ", required_ratio>=1.0. Training MUST fail instead of treating fallback-dominated evidence as a learned-piece distribution");
     }
+}
+
+//======================================================//
+//  Likelihood-loss pruning (SentencePiece-style)
+//
+//  Gold-standard Unigram-LM vocabulary reduction. After EM has fit the
+//  piece probabilities, each learned piece is scored by its contribution
+//  to corpus likelihood: how much log-probability is lost per use if the
+//  piece is removed and its surface is re-encoded by the next-best
+//  combination of OTHER learned pieces. The lowest-contribution pieces
+//  (dead prefix fragments like "traditio"/"recogn" sit at ~0) are dropped
+//  toward target_vocab_size.
+//
+//  Coverage is always preserved. A piece is protected from pruning when:
+//    - it is user-defined / special, OR
+//    - it is a single Unicode codepoint (single-char coverage comes from
+//      single-char UNIGRAM pieces, never from byte fallback), OR
+//    - its surface has no alternative learned-piece segmentation at all
+//      (removing it would force byte fallback).
+//  Byte fallback (the fixed UNKNOWN_SCORE path) is never a protected vocab
+//  entry; it stays the unnormalized last-resort coverage path only.
+//======================================================//
+
+static bool isSingleCodepointPiece(const std::string& text) {
+    if (text.empty()) return false;
+    uint32_t cp = 0;
+    size_t len = 0;
+    if (!utf8DecodeAt(text, 0, &cp, &len)) return false;
+    return len == text.size();
+}
+
+namespace {
+struct LikelihoodLossTrieNode {
+    std::array<int, 256> children;
+    int piece_index = -1;
+    double score = 0.0;
+    LikelihoodLossTrieNode() { children.fill(-1); }
+};
+}  // namespace
+
+// Best total log-probability of segmenting `surface` using OTHER learned
+// pieces only — i.e., excluding the single whole-surface piece. Returns
+// -inf when no alternative learned-piece segmentation exists; such pieces
+// are irreplaceable coverage and must never be pruned.
+static double bestAlternativeSegmentationScore(
+    const std::vector<LikelihoodLossTrieNode>& trie,
+    const std::string& surface) {
+    const size_t n = surface.size();
+    const double neg_inf = -std::numeric_limits<double>::infinity();
+    std::vector<double> best(n + 1, neg_inf);
+    best[0] = 0.0;
+    for (size_t start = 0; start < n; ++start) {
+        if (best[start] == neg_inf) continue;
+        int node = 0;
+        const size_t max_end = std::min(n, start + static_cast<size_t>(MAX_PIECE_LENGTH));
+        for (size_t end = start + 1; end <= max_end; ++end) {
+            const unsigned char byte = static_cast<unsigned char>(surface[end - 1]);
+            const int child = trie[static_cast<size_t>(node)].children[byte];
+            if (child < 0) break;
+            node = child;
+            const LikelihoodLossTrieNode& cur = trie[static_cast<size_t>(node)];
+            if (cur.piece_index < 0) continue;
+            if (start == 0 && end == n) continue;  // exclude the whole-surface piece itself
+            const double candidate = best[start] + cur.score;
+            if (candidate > best[end]) best[end] = candidate;
+        }
+    }
+    return best[n];
+}
+
+struct UnigramLikelihoodLossPruneResult {
+    std::vector<UnigramPiece> survivors;
+    int removed = 0;
+    int protected_count = 0;
+    int irreplaceable_no_alt = 0;
+};
+
+// Select the highest-likelihood-contribution pieces toward a target size,
+// always retaining protected (single-codepoint / user-defined / no-alt)
+// pieces. Survivors are moved out of `pieces` in original order so token
+// IDs stay position-derived after rewriteUnigramVocab().
+static UnigramLikelihoodLossPruneResult selectUnigramSurvivorsByLikelihoodLoss(
+    std::vector<UnigramPiece>& pieces,
+    const std::vector<double>& freq_by_index,
+    int target_vocab_size,
+    double shrink_factor,
+    int worker_count,
+    const char* caller) {
+    if (caller == nullptr || caller[0] == '\0') {
+        throw std::runtime_error("selectUnigramSurvivorsByLikelihoodLoss: caller label is empty");
+    }
+    const size_t n = pieces.size();
+    if (freq_by_index.size() != n) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": freq_by_index size=" + std::to_string(freq_by_index.size()) +
+                                 " != pieces size=" + std::to_string(n));
+    }
+    if (!(shrink_factor > 0.0 && shrink_factor < 1.0)) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": shrink_factor must be in (0,1), got " + std::to_string(shrink_factor));
+    }
+
+    std::vector<LikelihoodLossTrieNode> trie;
+    trie.reserve(n + 1);
+    trie.emplace_back();
+    for (size_t i = 0; i < n; ++i) {
+        int node = 0;
+        for (unsigned char byte : pieces[i].text) {
+            int child = trie[static_cast<size_t>(node)].children[byte];
+            if (child < 0) {
+                child = static_cast<int>(trie.size());
+                trie[static_cast<size_t>(node)].children[byte] = child;
+                trie.emplace_back();
+            }
+            node = child;
+        }
+        trie[static_cast<size_t>(node)].piece_index = static_cast<int>(i);
+        trie[static_cast<size_t>(node)].score = static_cast<double>(pieces[i].score);
+    }
+
+    std::vector<char> is_protected(n, 0);
+    std::vector<double> loss(n, 0.0);
+    std::atomic<int> irreplaceable{0};
+
+    auto compute_range = [&](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i) {
+            if (pieces[i].is_user_defined || isSingleCodepointPiece(pieces[i].text)) {
+                is_protected[i] = 1;
+                continue;
+            }
+            const double alt = bestAlternativeSegmentationScore(trie, pieces[i].text);
+            if (!std::isfinite(alt)) {
+                is_protected[i] = 1;
+                irreplaceable.fetch_add(1, std::memory_order_relaxed);
+                continue;
+            }
+            const double keep_logprob = static_cast<double>(pieces[i].score);
+            loss[i] = freq_by_index[i] * (keep_logprob - alt);
+        }
+    };
+
+    int workers = worker_count > 0 ? worker_count : static_cast<int>(std::thread::hardware_concurrency());
+    if (workers < 1) workers = 1;
+    if (static_cast<size_t>(workers) > n) workers = static_cast<int>(std::max<size_t>(1, n));
+    if (workers == 1) {
+        compute_range(0, n);
+    } else {
+        std::vector<std::thread> pool;
+        const size_t chunk = (n + static_cast<size_t>(workers) - 1) / static_cast<size_t>(workers);
+        for (int w = 0; w < workers; ++w) {
+            const size_t begin = static_cast<size_t>(w) * chunk;
+            if (begin >= n) break;
+            const size_t end = std::min(n, begin + chunk);
+            pool.emplace_back(compute_range, begin, end);
+        }
+        for (auto& t : pool) t.join();
+    }
+
+    int protected_count = 0;
+    std::vector<int> prunable;
+    prunable.reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+        if (is_protected[i]) {
+            ++protected_count;
+        } else {
+            prunable.push_back(static_cast<int>(i));
+        }
+    }
+
+    const int desired = std::max(target_vocab_size,
+                                 static_cast<int>(std::floor(shrink_factor * static_cast<double>(n))));
+    int keep_prunable = desired - protected_count;
+    if (keep_prunable < 0) keep_prunable = 0;
+    if (keep_prunable > static_cast<int>(prunable.size())) {
+        keep_prunable = static_cast<int>(prunable.size());
+    }
+
+    // Highest likelihood contribution = most valuable = kept first.
+    std::sort(prunable.begin(), prunable.end(), [&](int a, int b) {
+        if (loss[static_cast<size_t>(a)] != loss[static_cast<size_t>(b)]) {
+            return loss[static_cast<size_t>(a)] > loss[static_cast<size_t>(b)];
+        }
+        return a < b;
+    });
+
+    std::vector<char> keep(n, 0);
+    for (size_t i = 0; i < n; ++i) {
+        if (is_protected[i]) keep[i] = 1;
+    }
+    for (int k = 0; k < keep_prunable; ++k) {
+        keep[static_cast<size_t>(prunable[static_cast<size_t>(k)])] = 1;
+    }
+
+    UnigramLikelihoodLossPruneResult result;
+    result.protected_count = protected_count;
+    result.irreplaceable_no_alt = irreplaceable.load();
+    result.survivors.reserve(static_cast<size_t>(protected_count) + static_cast<size_t>(keep_prunable));
+    int kept = 0;
+    for (size_t i = 0; i < n; ++i) {
+        if (keep[i]) {
+            result.survivors.push_back(std::move(pieces[i]));
+            ++kept;
+        }
+    }
+    result.removed = static_cast<int>(n) - kept;
+    return result;
 }
 
 struct AtomSpanValidationTotals {
@@ -703,20 +910,27 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         throw std::runtime_error("UnigramLM::trainFromCorpus: no learned subword candidates survived frequency/validity filters; lower min_subword_freq or provide more corpus text");
     }
     
-    // Step 5: Soft EM + data-driven dead-token cleanup
+    // Step 5: Soft EM + likelihood-loss prune-to-target (SentencePiece-style)
     //
-    // Vocab size is data-driven; there is no target-size cap. Starting with the
-    // full data-selected candidate vocab, we:
-    //   1. Run true Unigram forward-backward EM to convergence (Phase-A)
-    //   2. Drop only dead pieces with zero posterior expected count (Phase-C)
-    //   3. Re-converge EM once if any dead pieces were removed (Phase-D)
+    // Starting from the full data-selected candidate vocab, we:
+    //   1. Run true Unigram forward-backward EM to convergence (Phase-A).
+    //   2. Iteratively prune the lowest-likelihood-contribution pieces toward
+    //      target_vocab_size, re-fitting with a few EM sub-iterations each
+    //      round, always protecting single-codepoint / user-defined / no-alt
+    //      coverage pieces (Prune rounds).
+    //   3. Re-converge EM on the final vocab (Final).
     //
-    // The corpus alone decides the surviving learned-vocab size through the
-    // admission filters (tokenizer_min_subword_freq, validity, repetition,
-    // structural dedup) plus zero-posterior cleanup.
+    // Raw frequency cannot separate a real word from its dead prefixes
+    // (they share the same substring count); only the EM likelihood signal
+    // can, which is why pruning is posterior/likelihood-driven, not a
+    // frequency cap. Single-char coverage is provided by single-char unigram
+    // pieces; byte fallback is never a protected vocab entry.
     constexpr int    EM_MAX_ITERATIONS     = 50;
     constexpr double EM_CONVERGENCE_THRESH = 0.0001;
     constexpr double SMOOTHING             = 0.1;
+    // SentencePiece-style EM + likelihood-loss prune-to-target controls.
+    constexpr double PRUNE_SHRINK_FACTOR   = 0.75;  // max fraction kept per prune round
+    constexpr int    PRUNE_SUB_ITERATIONS  = 2;     // EM re-fit iterations after each prune round
 
     struct EStepResult {
         std::unordered_map<int, double> learned_token_counts;
@@ -856,68 +1070,72 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
                                    last_e_step.log_likelihood};
     };
 
-    // ---- Phase A: EM to convergence on the data-selected candidate vocab ----
-    // Vocab size is data-driven. The candidate set is decided by the admission
-    // filters (tokenizer_min_subword_freq, validity, repetition, structural dedup);
-    // EM assigns scores; Phase-C drops dead (zero-posterior) pieces. There is no
-    // target-size cap: the final learned-vocab size is whatever the corpus supports.
+    // ---- Phase A: EM to convergence on the full data-selected candidate vocab ----
     std::cout << "[UnigramLM] Phase-A: forward-backward EM on data-selected candidate vocab ("
-              << pieces_.size() << " pieces; data-driven size, no target cap)" << std::endl;
-    EMConvergenceResult phase_a_result = runEMToConvergence("Phase-A");
-    requireConvergedPhaseNotFallbackDominated(phase_a_result, "Phase-A");
-    std::unordered_map<int, double> phase_a_counts = std::move(phase_a_result.learned_token_counts);
+              << pieces_.size() << " pieces; pruning toward target_vocab_size=" << target_vocab_size
+              << ")" << std::endl;
+    EMConvergenceResult em_result = runEMToConvergence("Phase-A");
+    requireConvergedPhaseNotFallbackDominated(em_result, "Phase-A");
 
-    // ---- Phase C: final dead-token cleanup ----
-    // Remove any tokens that still have zero posterior expected count after convergence
-    int pruned = 0;
-    {
-        std::unordered_set<int> dead_indices;
-        for (size_t i = 0; i < pieces_.size(); ++i) {
-            if (pieces_[i].is_user_defined) continue;
-            int tid = tokenIdForIndex(static_cast<int>(i));
-            double count = 0.0;
-            auto count_it = phase_a_counts.find(tid);
-            if (count_it != phase_a_counts.end()) {
-                count = count_it->second;
-            }
-            if (count == 0.0) {
-                dead_indices.insert(static_cast<int>(i));
+    // ---- Prune rounds: drop lowest-likelihood-contribution pieces toward target ----
+    // Each round computes per-piece likelihood loss from the current EM
+    // posterior, prunes toward max(target, shrink*current) while protecting
+    // single-codepoint / user-defined / no-alternative coverage pieces, then
+    // re-fits scores with a few EM sub-iterations.
+    int prune_round = 0;
+    while (static_cast<int>(pieces_.size()) > target_vocab_size) {
+        std::vector<double> freq_by_index(pieces_.size(), 0.0);
+        for (const auto& token_count : em_result.learned_token_counts) {
+            const int idx = indexForTokenId(token_count.first);
+            if (idx >= 0 && idx < static_cast<int>(freq_by_index.size())) {
+                freq_by_index[static_cast<size_t>(idx)] = token_count.second;
             }
         }
 
-        if (!dead_indices.empty()) {
-            requireUnigramFinalCleanupLeavesLearnedPiece(
-                pieces_.size(),
-                dead_indices.size(),
-                "UnigramLM::trainFromCorpus final dead-token cleanup");
+        const int before = static_cast<int>(pieces_.size());
+        UnigramLikelihoodLossPruneResult prune = selectUnigramSurvivorsByLikelihoodLoss(
+            pieces_,
+            freq_by_index,
+            target_vocab_size,
+            PRUNE_SHRINK_FACTOR,
+            subword_mining_workers,
+            "UnigramLM::trainFromCorpus likelihood-loss prune");
 
-            std::cout << "[UnigramLM] Final cleanup: pruning " << dead_indices.size()
-                      << " dead tokens (posterior expected count == 0)" << std::endl;
-
-            std::vector<UnigramPiece> surviving;
-            surviving.reserve(pieces_.size() - dead_indices.size());
-            for (size_t i = 0; i < pieces_.size(); ++i) {
-                if (!dead_indices.count(static_cast<int>(i))) {
-                    surviving.push_back(std::move(pieces_[i]));
-                }
-            }
-            pruned = static_cast<int>(dead_indices.size());
-            rewriteUnigramVocab(
-                UnigramVocabWriteTarget{pieces_, piece_to_id_},
-                std::move(surviving),
-                "UnigramLM::trainFromCorpus final dead-token cleanup");
-        } else {
-            std::cout << "[UnigramLM] No dead tokens after EM convergence — vocab is clean" << std::endl;
+        if (prune.removed <= 0) {
+            std::cout << "[UnigramLM] Likelihood-loss prune: no further prunable pieces (protected="
+                      << prune.protected_count << ", irreplaceable_no_alt=" << prune.irreplaceable_no_alt
+                      << "); stopping at " << before << " pieces, above target_vocab_size="
+                      << target_vocab_size << " (coverage pieces cannot be pruned)" << std::endl;
+            break;
         }
+
+        rewriteUnigramVocab(
+            UnigramVocabWriteTarget{pieces_, piece_to_id_},
+            std::move(prune.survivors),
+            "UnigramLM::trainFromCorpus likelihood-loss prune compaction");
+        ++prune_round;
+        std::cout << "[UnigramLM] Likelihood-loss prune round " << prune_round << ": "
+                  << before << " -> " << pieces_.size() << " pieces (removed " << prune.removed
+                  << ", protected=" << prune.protected_count
+                  << ", irreplaceable_no_alt=" << prune.irreplaceable_no_alt << ")" << std::endl;
+
+        // Re-fit scores on the smaller vocab before the next loss estimate.
+        EStepResult sub_e_step;
+        for (int sub_iter = 0; sub_iter < PRUNE_SUB_ITERATIONS; ++sub_iter) {
+            sub_e_step = runEStep();
+            runMStep(sub_e_step.learned_token_counts, sub_e_step.expected_learned_piece_tokens);
+        }
+        em_result.learned_token_counts = std::move(sub_e_step.learned_token_counts);
+        em_result.expected_learned_piece_tokens = sub_e_step.expected_learned_piece_tokens;
+        em_result.expected_fixed_penalty_byte_fallback_tokens =
+            sub_e_step.expected_fixed_penalty_byte_fallback_tokens;
     }
 
-    // ---- Phase D: final reconvergence after cleanup ----
-    if (pruned > 0) {
-        std::cout << "[UnigramLM] Reconverging after pruning " << pruned
-                  << " dead tokens (vocab now " << pieces_.size() << ")" << std::endl;
-        EMConvergenceResult phase_d_result = runEMToConvergence("Phase-D");
-        requireConvergedPhaseNotFallbackDominated(phase_d_result, "Phase-D");
-    }
+    // ---- Final: re-converge EM on the pruned vocab ----
+    std::cout << "[UnigramLM] Final: re-converging EM after " << prune_round
+              << " prune round(s) (vocab now " << pieces_.size() << " pieces)" << std::endl;
+    EMConvergenceResult final_result = runEMToConvergence("Final");
+    requireConvergedPhaseNotFallbackDominated(final_result, "Final");
 
     // Final trie build with converged scores
     buildTrie();
