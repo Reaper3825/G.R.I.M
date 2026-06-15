@@ -1044,11 +1044,13 @@ inline std::vector<float> computeDerivedPBMAlibiSlopes(
         throw std::runtime_error(std::string(caller) + ": alibi_slope_exponent must be non-zero");
     }
 
-    const float base_m_max = target_bias / static_cast<float>(d_min);
-    const float base_m_min = target_bias / static_cast<float>(d_max);
-    const float max_bias_scale = static_cast<float>(d_min) / static_cast<float>(d_max);
-    const float m_max = base_m_max * max_bias_scale;
-    const float m_min = base_m_min * max_bias_scale;
+    // Strongest head reaches `target_bias` of ALiBi penalty at distance d_min;
+    // weakest head reaches it at d_max. The earlier `d_min/d_max` rescale that
+    // multiplied both bounds crushed every slope ~30x below standard ALiBi,
+    // turning low-slope heads into near-uniform causal mean-pools (the shared
+    // direction that drove the L1 rho collapse) — removed.
+    const float m_max = target_bias / static_cast<float>(d_min);
+    const float m_min = target_bias / static_cast<float>(d_max);
     if (!(m_min <= m_max)) {
         throw std::runtime_error(std::string(caller) + ": computed ALiBi slope range is inverted");
     }
