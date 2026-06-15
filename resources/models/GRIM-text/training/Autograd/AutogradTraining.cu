@@ -480,11 +480,18 @@ LossResult computeAutogradLoss(
     // EXECUTION BLOCK LOSS — assembled at the explicit autograd loss boundary
     // from retained forward tensors (logits, v_out, teacher scalar, clamp flag).
     // ═══════════════════════════════════════════════════════════════════════════
-    const ExecutionAuxiliaryLossSummary exec_summary = addExecutionAuxiliaryLoss(
-        ctx,
-        payload,
-        forward_outputs,
-        loss_state);
+    // Only assemble the execution auxiliary loss when the execution block is
+    // actually active on both the context and the model HP. When execution is
+    // disabled, there is no execution loss to add — skip the call entirely
+    // instead of letting addExecutionAuxiliaryLoss() throw on the disabled ctx.
+    ExecutionAuxiliaryLossSummary exec_summary{};
+    if (ctx.execution_block_enabled && model_hp.execution_block_enabled) {
+        exec_summary = addExecutionAuxiliaryLoss(
+            ctx,
+            payload,
+            forward_outputs,
+            loss_state);
+    }
     const float exec_structured_ce = exec_summary.structured_ce;
     const float exec_entropy_monitor = exec_summary.entropy_monitor;
     if (exec_summary.scalar_loss_terms > 0) {
