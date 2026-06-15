@@ -29,6 +29,6 @@ inline constexpr bool kZeroAttnResidual = false;
 
 // When true, FFN sublayer contributes 0 to the residual:
 //   output = residual1
-inline constexpr bool kZeroFfnResidual = false;
+inline constexpr bool kZeroFfnResidual = true;
 
 } } // namespace GRIM::Ablation

@@ -672,7 +672,7 @@
             "tokenizer_add_eos": true,
             "tokenizer_bos_token": "<s>",
             "tokenizer_character_coverage": 0.9995,
-            "tokenizer_detect_numbers": true,
+            "tokenizer_detect_numbers": false,
             "tokenizer_enable_atom_reasoning": true,
             "tokenizer_enable_byte_fallback": true,
             "tokenizer_enable_lowercasing": false,
