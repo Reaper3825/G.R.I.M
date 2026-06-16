@@ -296,8 +296,8 @@ GradientSignalBaselines captureGradientVerificationBaselines(
         if (model_hp.encoder_num_layers > 0) {
             // Ablation-aware (AblationFlags.hpp): snapshot the baseline for the
             // LIVE sublayer so the accumulation-delta check has a matching entry.
-            // Labels MUST match verifyGradientsAreConnectedImpl exactly.
-            if (!GRIM::Ablation::kZeroAttnResidual) {
+            // Labels and branch conditions MUST match verifyGradientsAreConnectedImpl exactly.
+            if (GRIM::Ablation::kAttnDeliversParamGradient) {
                 auto& enc0 = ctx.parameter_registry->requireEncodingLayerParameters(0, "captureGradientSignalBaselines");
                 captureExpected(enc0.W_qkv, "layer 0 attnWqkv");
             } else if (!GRIM::Ablation::kZeroFfnResidual) {
@@ -846,13 +846,14 @@ bool verifyGradientsAreConnectedImpl(
         }
         if (activity.text_loss_active && num_layers > 0) {
             // Ablation-aware encoder signal check (AblationFlags.hpp):
-            // a sublayer zeroed by kZeroAttnResidual / kZeroFfnResidual
+            // a sublayer zeroed by kZeroAttnResidual / kZeroFfnResidual or by a
+            // fine-grained attention probe (kZeroAttnV / kZeroAttnOProj)
             // legitimately receives ZERO gradient, so requiring it to receive
             // signal would be a false positive. Verify the live sublayer instead
             // so we still catch genuine backward-wiring breakage; if BOTH paths
             // are ablated there is no encoder gradient path to validate.
             auto& enc0 = ctx.parameter_registry->requireEncodingLayerParameters(0, "verifyGradientsAreConnectedImpl");
-            if (!GRIM::Ablation::kZeroAttnResidual) {
+            if (GRIM::Ablation::kAttnDeliversParamGradient) {
                 requireReceivedGradient(enc0.W_qkv, "layer 0 attnWqkv");
             } else if (!GRIM::Ablation::kZeroFfnResidual) {
                 auto& ffn0 = ctx.parameter_registry->requireFeedForwardParameters(0, "verifyGradientsAreConnectedImpl");

@@ -67,4 +67,17 @@ inline constexpr bool kZeroAttnOProj = false;
 // Q-producing params frozen. ALiBi bias itself is NOT zeroed here.
 inline constexpr bool kZeroAttnQKScores = false;
 
+// Derived: does the attention branch still deliver a gradient signal to its
+// own QKV projection (W_qkv)? Used by the backward gradient-connectivity
+// verifier to decide whether to require W_qkv signal or fall back to the FFN
+// path. Any ablation that forces attn_out (or its residual contribution) to
+// zero also zeroes W_qkv's gradient:
+//   - kZeroAttnResidual : whole attention contribution zeroed at the residual.
+//   - kZeroAttnV        : attn_out = softmax · 0 = 0  -> no Q/K/V gradient.
+//   - kZeroAttnOProj    : proj_out = 0               -> no attn_out gradient.
+// kZeroAttnQKScores is intentionally NOT included: zeroing Q still leaves a
+// live value path (attn_out = softmax(ALiBi) · V), so W_qkv keeps signal.
+inline constexpr bool kAttnDeliversParamGradient =
+    !kZeroAttnResidual && !kZeroAttnV && !kZeroAttnOProj;
+
 } } // namespace GRIM::Ablation
