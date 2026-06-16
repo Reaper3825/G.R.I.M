@@ -48,6 +48,12 @@
 //        QKᵀ content score + RoPE only, with no distance penalty. Complements
 //        kZeroAttnQKScores: that keeps ALiBi and drops content; this keeps
 //        content and drops ALiBi. Q/K/V projections still train normally.
+//    - kZeroRope       = true -> skip the RoPE rotation of Q/K entirely, so
+//        Q/K reach attention unrotated (no rotary positional encoding). The
+//        autograd graph stays connected (Q/K flow from split_and_reshape_qkv
+//        straight into SDPA), so W_qkv still receives full gradient. Combine
+//        with kZeroAlibiBias to remove ALL positional information and measure
+//        whether positional encoding drives the shared-direction buildup.
 //======================================================//
 
 namespace GRIM { namespace Ablation {
@@ -78,7 +84,13 @@ inline constexpr bool kZeroAttnQKScores = false;
 // by passing a NULL slope pointer (kernel runs its no-alibi path for both
 // forward and backward). Attention routes on QKᵀ content + RoPE only; no
 // distance penalty. Q/K/V projections still receive normal gradients.
-inline constexpr bool kZeroAlibiBias = true;
+inline constexpr bool kZeroAlibiBias = false;
+
+// When true, skip the RoPE rotation so Q/K reach attention unrotated (no
+// rotary positional encoding). Graph stays connected (Q/K flow from
+// split_and_reshape_qkv into SDPA), so W_qkv keeps full gradient. Combine
+// with kZeroAlibiBias to strip ALL positional information.
+inline constexpr bool kZeroRope = true;
 
 // Derived: does the attention branch still deliver a gradient signal to its
 // own QKV projection (W_qkv)? Used by the backward gradient-connectivity

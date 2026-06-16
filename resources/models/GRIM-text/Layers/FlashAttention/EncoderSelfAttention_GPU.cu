@@ -194,13 +194,19 @@ void encoderSelfAttentionForward(
         autograd::checkQKVTensorFinite("AutogradQKV:V_bhsd", V_bhsd, request.stream);
     }
 
-    auto [Q_rot, K_rot] = autograd::rope_rotation(
-        Q_bhsd, K_bhsd,
-        pbm.rope_inv_freq,
-        request.payload, request.hp,
-        request.hp.rotary_dim, request.stream);
-    Q_bhsd = std::move(Q_rot);
-    K_bhsd = std::move(K_rot);
+    // Experimental ablation (AblationFlags.hpp): kZeroRope skips the RoPE
+    // rotation so Q/K reach attention unrotated (no rotary positional encoding).
+    // Q/K stay as the split_and_reshape_qkv outputs, so the autograd graph
+    // remains connected and W_qkv still receives full gradient.
+    if constexpr (!GRIM::Ablation::kZeroRope) {
+        auto [Q_rot, K_rot] = autograd::rope_rotation(
+            Q_bhsd, K_bhsd,
+            pbm.rope_inv_freq,
+            request.payload, request.hp,
+            request.hp.rotary_dim, request.stream);
+        Q_bhsd = std::move(Q_rot);
+        K_bhsd = std::move(K_rot);
+    }
     if (qkv_debug > 0) {
         autograd::checkQKVTensorFinite("AutogradSDPA:Q_rope", Q_bhsd, request.stream);
         autograd::checkQKVTensorFinite("AutogradSDPA:K_rope", K_bhsd, request.stream);
