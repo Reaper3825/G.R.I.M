@@ -5,6 +5,7 @@
 
 #include "EncoderSelfAttention_GPU.hpp"
 
+#include "../Encoding/AblationFlags.hpp"
 #include "../../Shared/TensorContract/AutogradQKVDiagnostics.hpp"
 
 #include <algorithm>
@@ -206,6 +207,22 @@ void encoderSelfAttentionForward(
         autograd::checkQKVTensorFinite("AutogradSDPA:V_rope", V_bhsd, request.stream);
     }
 
+    // Experimental ablation (AblationFlags.hpp): fine-grained attention probes.
+    // Each zeroes a specific internal signal while keeping tensor shapes and the
+    // autograd graph intact (zeroed tensor's producers receive zero gradient).
+    // These only matter when kZeroAttnResidual=false (attention still feeds the
+    // residual); otherwise the whole branch is zeroed downstream in encoding.
+    if constexpr (GRIM::Ablation::kZeroAttnQKScores) {
+        // Zero Q (post-RoPE) so the QKᵀ content score is 0; attention weights
+        // then come from the ALiBi positional bias only (content-independent).
+        Q_bhsd = autograd::mul_scalar(Q_bhsd, 0.0f, request.stream);
+    }
+    if constexpr (GRIM::Ablation::kZeroAttnV) {
+        // Zero the value vectors so the softmax-weighted sum is of zeros and
+        // attn_out == 0, while QK/softmax routing is still computed.
+        V_bhsd = autograd::mul_scalar(V_bhsd, 0.0f, request.stream);
+    }
+
     const float attention_dropout_p = request.hp.dropout_enabled ? request.hp.attention_dropout : 0.0f;
     const float attention_softmax_scale = request.hp.attention_softmax_scale;
     if (!std::isfinite(attention_softmax_scale) || attention_softmax_scale <= 0.0f) {
@@ -250,6 +267,13 @@ void encoderSelfAttentionForward(
     proj_out = autograd::matmul(attn_out, W_o, request.stream, true);
     if (request.hp.use_bias) {
         proj_out = autograd::broadcast_add(proj_out, b_o, request.stream);
+    }
+
+    // Experimental ablation (AblationFlags.hpp): zero the attention OUTPUT
+    // PROJECTION. attn_out is still produced from V, but its projection into the
+    // residual is suppressed (proj_out == 0) and W_o/b_o receive zero gradient.
+    if constexpr (GRIM::Ablation::kZeroAttnOProj) {
+        proj_out = autograd::mul_scalar(proj_out, 0.0f, request.stream);
     }
 
     if constexpr (kEnableAttentionStepLogs) {

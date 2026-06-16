@@ -19,16 +19,52 @@
 //    - kZeroAttnResidual = true  -> embedding + FFN-only stack
 //    - kZeroFfnResidual  = true  -> embedding + attention-only stack
 //  Run each in isolation and re-check the RHO_BUILDUP depth profile.
+//
+//  FINE-GRAINED ATTENTION PROBES (sub-attention ablations):
+//  These only take effect when kZeroAttnResidual = false (i.e. the
+//  attention branch still feeds the residual). They zero a specific
+//  internal attention signal to isolate WHICH part of attention drives
+//  the shared-direction buildup, while leaving every tensor shape and
+//  the autograd graph intact (the zeroed tensor's producers receive
+//  zero gradient and are frozen):
+//    - kZeroAttnV       = true -> value vectors zeroed before SDPA.
+//        QK scores + softmax still compute, but the weighted sum is of
+//        zeros, so attn_out == 0. Isolates whether the value content
+//        (vs the attention routing) carries the collapse direction.
+//    - kZeroAttnOProj   = true -> output projection (W_o · attn_out)
+//        zeroed AFTER the matmul. attn_out is still produced from V, but
+//        its projection into the residual is suppressed and W_o/b_o are
+//        frozen. Isolates the O-projection's contribution specifically.
+//    - kZeroAttnQKScores = true -> Q zeroed after RoPE, so the content
+//        score QKᵀ collapses to 0 and softmax is driven by the ALiBi
+//        positional bias ONLY (content-independent positional pooling).
+//        Isolates content-based routing from positional averaging.
+//        NOTE: this zeroes the QKᵀ CONTENT term only; the ALiBi bias is
+//        added inside the FlashAttention kernel and is NOT removed here.
 //======================================================//
 
 namespace GRIM { namespace Ablation {
 
 // When true, attention sublayer contributes 0 to the residual:
 //   residual1 = input  (+ optional centering)
-inline constexpr bool kZeroAttnResidual = true;
+inline constexpr bool kZeroAttnResidual = false;
 
 // When true, FFN sublayer contributes 0 to the residual:
 //   output = residual1
-inline constexpr bool kZeroFfnResidual = true;
+inline constexpr bool kZeroFfnResidual = false;
+
+// When true, zero the attention VALUE vectors before SDPA.
+// Effect: attn_out == 0 (softmax-weighted sum of zeros), QK/softmax
+// still computed, V-producing params frozen.
+inline constexpr bool kZeroAttnV = false;
+
+// When true, zero the attention OUTPUT PROJECTION after W_o · attn_out.
+// Effect: proj_out == 0; attn_out still computed from V; W_o/b_o frozen.
+inline constexpr bool kZeroAttnOProj = false;
+
+// When true, zero Q (after RoPE) so the QKᵀ CONTENT score is 0.
+// Effect: attention weights come from the ALiBi positional bias only;
+// Q-producing params frozen. ALiBi bias itself is NOT zeroed here.
+inline constexpr bool kZeroAttnQKScores = false;
 
 } } // namespace GRIM::Ablation

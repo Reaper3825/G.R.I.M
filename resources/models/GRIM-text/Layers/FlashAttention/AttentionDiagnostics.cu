@@ -670,17 +670,24 @@ void emitBackwardPreKernelDiagnostics(const BackwardDiagnosticRequest& request) 
     requireCudaSuccess(cudaStreamSynchronize(request.stream), "emitBackwardPreKernelDiagnostics: sync");
 
     const int call_count = g_bwd_call_count.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (request.alibi_slopes) {
-        float alibi0 = 0.0f;
-        requireCudaSuccess(cudaMemcpy(&alibi0, request.alibi_slopes, sizeof(float), cudaMemcpyDeviceToHost),
-                           "emitBackwardPreKernelDiagnostics: copy alibi slope");
-        char slope_msg[256];
-        std::snprintf(slope_msg,
-                      sizeof(slope_msg),
-                      "[FlashAttention] flash_attn_bwd_ex called with alibi_slopes[0]=%f (n_heads=%d, n_kv_heads=%d)",
-                      alibi0,
-                      request.n_heads,
-                      request.n_kv_heads);
+    if (request.alibi_slopes && request.n_heads > 0) {
+        const std::vector<float> h_slopes =
+            copyAlibiSlopesOrZeros(request.alibi_slopes,
+                                   request.n_heads,
+                                   "emitBackwardPreKernelDiagnostics: copy alibi slopes");
+        std::string slope_msg =
+            "[FlashAttention] flash_attn_bwd_ex called with alibi_slopes[0.." +
+            std::to_string(request.n_heads - 1) + "]=[";
+        for (int h = 0; h < request.n_heads; ++h) {
+            char slope_buf[32];
+            std::snprintf(slope_buf, sizeof(slope_buf), "%.6f", h_slopes[static_cast<size_t>(h)]);
+            slope_msg += slope_buf;
+            if (h < request.n_heads - 1) {
+                slope_msg += ",";
+            }
+        }
+        slope_msg += "] (n_heads=" + std::to_string(request.n_heads) +
+                     ", n_kv_heads=" + std::to_string(request.n_kv_heads) + ")";
         FlashAttentionDiagLog::info(slope_msg);
     }
 
