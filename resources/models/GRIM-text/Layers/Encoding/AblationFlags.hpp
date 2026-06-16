@@ -47,11 +47,11 @@ namespace GRIM { namespace Ablation {
 
 // When true, attention sublayer contributes 0 to the residual:
 //   residual1 = input  (+ optional centering)
-inline constexpr bool kZeroAttnResidual = false;
+inline constexpr bool kZeroAttnResidual = true;
 
 // When true, FFN sublayer contributes 0 to the residual:
 //   output = residual1
-inline constexpr bool kZeroFfnResidual = false;
+inline constexpr bool kZeroFfnResidual = true;
 
 // When true, zero the attention VALUE vectors before SDPA.
 // Effect: attn_out == 0 (softmax-weighted sum of zeros), QK/softmax
@@ -65,7 +65,7 @@ inline constexpr bool kZeroAttnOProj = false;
 // When true, zero Q (after RoPE) so the QKᵀ CONTENT score is 0.
 // Effect: attention weights come from the ALiBi positional bias only;
 // Q-producing params frozen. ALiBi bias itself is NOT zeroed here.
-inline constexpr bool kZeroAttnQKScores = true;
+inline constexpr bool kZeroAttnQKScores = false;
 
 // Derived: does the attention branch still deliver a gradient signal to its
 // own QKV projection (W_qkv)? Used by the backward gradient-connectivity
