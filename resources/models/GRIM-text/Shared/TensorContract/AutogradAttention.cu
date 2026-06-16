@@ -12,6 +12,7 @@
 #include "GradientAccumulation.hpp"
 #include "../TensorConversion/TensorConversion.hpp"
 #include "../../Layers/FlashAttention/Flash_Attention_Kernal.hpp"
+#include "../../Layers/Encoding/AblationFlags.hpp"
 #include "../PBM/PositionalBiasMethod.hpp"
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
@@ -1078,6 +1079,13 @@ Tensor scaled_dot_product_attention(
     TensorConversion::convert_BHSD_to_BSHD_bf16(
         v.data, v_bf16, batch_size, num_kv_heads, seq_len, head_dim, stream);
     
+    // Ablation (AblationFlags.hpp): kZeroAlibiBias disables the ALiBi positional
+    // bias by handing the kernel a NULL slope pointer. The vendored Dao kernel's
+    // ALIBI_SWITCH(alibi_slopes_ptr != nullptr) then selects the no-bias path for
+    // both forward and backward, so the saved grad_fn pointer must match.
+    const float* effective_alibi_slopes =
+        GRIM::Ablation::kZeroAlibiBias ? nullptr : alibi_slopes;
+
     // Forward pass with FlashAttention. The resolved scale is passed explicitly;
     // ignoring it silently changes the attention equation.
     flash_attn_fwd_ex(
@@ -1086,7 +1094,7 @@ Tensor scaled_dot_product_attention(
         v_bf16,      // V  [B, S, Hkv, D] bf16
         out_bf16,    // O  [B, S, H, D] bf16
         softmax_lse, // LSE [B, H, S] fp32
-        alibi_slopes, // ALiBi slopes [num_heads]
+        effective_alibi_slopes, // ALiBi slopes [num_heads] (NULL when kZeroAlibiBias)
         batch_size,
         seq_len,
         num_heads,
@@ -1127,7 +1135,7 @@ Tensor scaled_dot_product_attention(
         grad_fn->softmax_scale = scale;
         grad_fn->causal = attention_hp.causal_mask;
         grad_fn->is_bf16 = true;
-        grad_fn->alibi_slopes = alibi_slopes;  // Save for backward pass (not owned)
+        grad_fn->alibi_slopes = effective_alibi_slopes;  // Save for backward pass (not owned); NULL when kZeroAlibiBias
         grad_fn->attention_dropout_p = attention_dropout_p;  // Same dropout for backward mask reproduction
         grad_fn->dropout_seed = dropout_seed;                // Same seed reproduces identical Philox mask
         

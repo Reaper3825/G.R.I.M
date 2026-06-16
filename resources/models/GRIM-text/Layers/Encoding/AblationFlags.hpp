@@ -41,17 +41,24 @@
 //        Isolates content-based routing from positional averaging.
 //        NOTE: this zeroes the QKᵀ CONTENT term only; the ALiBi bias is
 //        added inside the FlashAttention kernel and is NOT removed here.
+//    - kZeroAlibiBias  = true -> disable the ALiBi positional bias inside
+//        the vendored Dao FlashAttention kernel by passing a NULL slope
+//        pointer (the kernel's HasAlibi switch then selects the no-bias
+//        path for BOTH forward and backward). Attention then routes on the
+//        QKᵀ content score + RoPE only, with no distance penalty. Complements
+//        kZeroAttnQKScores: that keeps ALiBi and drops content; this keeps
+//        content and drops ALiBi. Q/K/V projections still train normally.
 //======================================================//
 
 namespace GRIM { namespace Ablation {
 
 // When true, attention sublayer contributes 0 to the residual:
 //   residual1 = input  (+ optional centering)
-inline constexpr bool kZeroAttnResidual = true;
+inline constexpr bool kZeroAttnResidual = false;
 
 // When true, FFN sublayer contributes 0 to the residual:
 //   output = residual1
-inline constexpr bool kZeroFfnResidual = true;
+inline constexpr bool kZeroFfnResidual = false;
 
 // When true, zero the attention VALUE vectors before SDPA.
 // Effect: attn_out == 0 (softmax-weighted sum of zeros), QK/softmax
@@ -66,6 +73,12 @@ inline constexpr bool kZeroAttnOProj = false;
 // Effect: attention weights come from the ALiBi positional bias only;
 // Q-producing params frozen. ALiBi bias itself is NOT zeroed here.
 inline constexpr bool kZeroAttnQKScores = false;
+
+// When true, disable the ALiBi positional bias in the FlashAttention kernel
+// by passing a NULL slope pointer (kernel runs its no-alibi path for both
+// forward and backward). Attention routes on QKᵀ content + RoPE only; no
+// distance penalty. Q/K/V projections still receive normal gradients.
+inline constexpr bool kZeroAlibiBias = true;
 
 // Derived: does the attention branch still deliver a gradient signal to its
 // own QKV projection (W_qkv)? Used by the backward gradient-connectivity
