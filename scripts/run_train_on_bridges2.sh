@@ -82,7 +82,13 @@ ACCOUNT="${GRIM_BRIDGES2_ACCOUNT:-cis210058p}"
 PARTITION="${PARTITION:-GPU-shared}"
 GPU_TYPE="${GPU_TYPE:-h100-80}"
 BRIDGES2_MAKE_JOBS="${GRIM_BRIDGES2_MAKE_JOBS:-100}"
-BRIDGES2_TIME_LIMIT="${GRIM_BRIDGES2_TIME_LIMIT:-UNLIMITED}"
+BRIDGES2_TIME_LIMIT_EXPLICIT=false
+if [[ -n "${GRIM_BRIDGES2_TIME_LIMIT:-}" ]]; then
+  BRIDGES2_TIME_LIMIT="$GRIM_BRIDGES2_TIME_LIMIT"
+  BRIDGES2_TIME_LIMIT_EXPLICIT=true
+else
+  BRIDGES2_TIME_LIMIT="UNLIMITED"
+fi
 DO_BUILD=false
 USE_SBATCH=false
 DO_INCREMENTAL=false
@@ -153,6 +159,7 @@ while [[ $# -gt 0 ]]; do
     --time)
       [[ $# -lt 2 ]] && { echo "ERROR: --time requires a time argument (e.g. 1:00:00)"; exit 1; }
       BRIDGES2_TIME_LIMIT="$2"
+      BRIDGES2_TIME_LIMIT_EXPLICIT=true
       shift 2
       ;;
     *)                echo "Unknown option: $1"; exit 1 ;;
@@ -250,6 +257,14 @@ BRIDGES2_SSH_OPTS="-S $BRIDGES2_CTRL -o ControlMaster=no"
 
 remote_quote() {
   printf '%q' "$1"
+}
+
+print_bridges2_time_limit() {
+  if [[ "$BRIDGES2_TIME_LIMIT_EXPLICIT" == true ]]; then
+    echo "[Bridges-2] SLURM time limit: $BRIDGES2_TIME_LIMIT (set via --time or GRIM_BRIDGES2_TIME_LIMIT)"
+  else
+    echo "[Bridges-2] SLURM time limit: UNLIMITED (default; override with --time T or GRIM_BRIDGES2_TIME_LIMIT)"
+  fi
 }
 
 cancel_remote_activity() {
@@ -1252,6 +1267,7 @@ if [[ "$USE_SBATCH" == true ]]; then
   ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "mkdir -p $BRIDGES2_DIR/scripts $BRIDGES2_DIR/logs"
   ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cat > $BRIDGES2_DIR/scripts/train_bridges2.sbatch" < "$SBATCH_PATH"
   echo "Submitting batch job (partition=$PARTITION, gpu=$GPU_TYPE)..."
+  print_bridges2_time_limit
   SBATCH_EXPORT="ALL,GRIM_BRIDGES2_DIR=$BRIDGES2_DIR"
   SUBMIT_OUT=$(ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && sbatch --export=$SBATCH_EXPORT --output=$BRIDGES2_DIR/logs/train_%j.out --error=$BRIDGES2_DIR/logs/train_%j.err $SLURM_MAIL_ARGS -p $PARTITION $SLURM_ACCOUNT_ARGS --gpus=$GPU_TYPE:1 -t $BRIDGES2_TIME_LIMIT scripts/train_bridges2.sbatch")
   echo "$SUBMIT_OUT"
@@ -1303,6 +1319,7 @@ else
   # Normal: srun train_gpu (load cuda module + set LD_LIBRARY_PATH so compute node finds libcudart)
   BRIDGES2_RUN_WRAPPER="bash -c 'source /etc/profile.d/modules.sh 2>/dev/null || true; module load cuda 2>/dev/null || true; export GRIM_PROJECT_DIR=\"$BRIDGES2_DIR\"; source \"$BRIDGES2_DIR/scripts/ensure_cuda12_for_training.sh\" 2>/dev/null || true; export PATH=\"\${GRIM_CUDA_ROOT:-}/bin:\$PATH\"; export LD_LIBRARY_PATH=\"\${GRIM_CUDA_ROOT:-}/lib64:\$LD_LIBRARY_PATH\"; cd \"$BRIDGES2_DIR\" && exec \"$REMOTE_EXE\"'"
   echo "Running train_gpu on Bridges-2 (partition=$PARTITION, gpu=$GPU_TYPE)..."
+  print_bridges2_time_limit
   SRUN_ARGS="-p $PARTITION $SLURM_ACCOUNT_ARGS --gres=gpu:$GPU_TYPE:1 -t $BRIDGES2_TIME_LIMIT --pty"
   if [[ -t 0 ]]; then
     ssh -t $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && srun $SRUN_ARGS $BRIDGES2_RUN_WRAPPER"

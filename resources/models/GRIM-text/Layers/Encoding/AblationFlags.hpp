@@ -60,12 +60,12 @@ inline constexpr bool kZeroAttnV = false;
 
 // When true, zero the attention OUTPUT PROJECTION after W_o · attn_out.
 // Effect: proj_out == 0; attn_out still computed from V; W_o/b_o frozen.
-inline constexpr bool kZeroAttnOProj = true;
+inline constexpr bool kZeroAttnOProj = false;
 
 // When true, zero Q (after RoPE) so the QKᵀ CONTENT score is 0.
 // Effect: attention weights come from the ALiBi positional bias only;
 // Q-producing params frozen. ALiBi bias itself is NOT zeroed here.
-inline constexpr bool kZeroAttnQKScores = false;
+inline constexpr bool kZeroAttnQKScores = true;
 
 // Derived: does the attention branch still deliver a gradient signal to its
 // own QKV projection (W_qkv)? Used by the backward gradient-connectivity
