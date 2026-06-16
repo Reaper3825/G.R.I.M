@@ -52,6 +52,9 @@
 #                    Permit vcpkg to download helper tools when Bridges-2 system cmake/ninja is missing or when the
 #                    cluster cmake is older than the pinned helper requirement. Compatible system tools still win.
 #   --jobs N         make -j N for train_gpu (default 100; override with GRIM_BRIDGES2_MAKE_JOBS).
+#   --time T         SLURM wall-clock time limit for train_gpu (--sbatch and interactive srun).
+#                    Format: HH:MM:SS or D-HH:MM:SS or UNLIMITED (default: UNLIMITED).
+#                    Examples: --time 1:00:00  --time 0:30:00  --time 2-12:00:00
 #   --TD             Run grmt_vocab_metrics_test instead of full training (no GPU needed, uses RM-shared).
 #   --UT             Run unigrambyte_self_test instead of full training (needs GPU for GPU decode test).
 #   --TT             Run train_tokenizer: full tokenizer training on entire corpus (vocab.bin + .grmt).
@@ -79,6 +82,7 @@ ACCOUNT="${GRIM_BRIDGES2_ACCOUNT:-cis210058p}"
 PARTITION="${PARTITION:-GPU-shared}"
 GPU_TYPE="${GPU_TYPE:-h100-80}"
 BRIDGES2_MAKE_JOBS="${GRIM_BRIDGES2_MAKE_JOBS:-100}"
+BRIDGES2_TIME_LIMIT="${GRIM_BRIDGES2_TIME_LIMIT:-UNLIMITED}"
 DO_BUILD=false
 USE_SBATCH=false
 DO_INCREMENTAL=false
@@ -144,6 +148,11 @@ while [[ $# -gt 0 ]]; do
       [[ $# -lt 2 ]] && { echo "ERROR: --jobs requires a positive integer"; exit 1; }
       [[ "$2" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: --jobs must be a positive integer"; exit 1; }
       BRIDGES2_MAKE_JOBS="$2"
+      shift 2
+      ;;
+    --time)
+      [[ $# -lt 2 ]] && { echo "ERROR: --time requires a time argument (e.g. 1:00:00)"; exit 1; }
+      BRIDGES2_TIME_LIMIT="$2"
       shift 2
       ;;
     *)                echo "Unknown option: $1"; exit 1 ;;
@@ -1244,7 +1253,7 @@ if [[ "$USE_SBATCH" == true ]]; then
   ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cat > $BRIDGES2_DIR/scripts/train_bridges2.sbatch" < "$SBATCH_PATH"
   echo "Submitting batch job (partition=$PARTITION, gpu=$GPU_TYPE)..."
   SBATCH_EXPORT="ALL,GRIM_BRIDGES2_DIR=$BRIDGES2_DIR"
-  SUBMIT_OUT=$(ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && sbatch --export=$SBATCH_EXPORT --output=$BRIDGES2_DIR/logs/train_%j.out --error=$BRIDGES2_DIR/logs/train_%j.err $SLURM_MAIL_ARGS -p $PARTITION $SLURM_ACCOUNT_ARGS --gpus=$GPU_TYPE:1 -t 24:00:00 scripts/train_bridges2.sbatch")
+  SUBMIT_OUT=$(ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && sbatch --export=$SBATCH_EXPORT --output=$BRIDGES2_DIR/logs/train_%j.out --error=$BRIDGES2_DIR/logs/train_%j.err $SLURM_MAIL_ARGS -p $PARTITION $SLURM_ACCOUNT_ARGS --gpus=$GPU_TYPE:1 -t $BRIDGES2_TIME_LIMIT scripts/train_bridges2.sbatch")
   echo "$SUBMIT_OUT"
   exit 0
 fi
@@ -1294,7 +1303,7 @@ else
   # Normal: srun train_gpu (load cuda module + set LD_LIBRARY_PATH so compute node finds libcudart)
   BRIDGES2_RUN_WRAPPER="bash -c 'source /etc/profile.d/modules.sh 2>/dev/null || true; module load cuda 2>/dev/null || true; export GRIM_PROJECT_DIR=\"$BRIDGES2_DIR\"; source \"$BRIDGES2_DIR/scripts/ensure_cuda12_for_training.sh\" 2>/dev/null || true; export PATH=\"\${GRIM_CUDA_ROOT:-}/bin:\$PATH\"; export LD_LIBRARY_PATH=\"\${GRIM_CUDA_ROOT:-}/lib64:\$LD_LIBRARY_PATH\"; cd \"$BRIDGES2_DIR\" && exec \"$REMOTE_EXE\"'"
   echo "Running train_gpu on Bridges-2 (partition=$PARTITION, gpu=$GPU_TYPE)..."
-  SRUN_ARGS="-p $PARTITION $SLURM_ACCOUNT_ARGS --gres=gpu:$GPU_TYPE:1 -t 24:00:00 --pty"
+  SRUN_ARGS="-p $PARTITION $SLURM_ACCOUNT_ARGS --gres=gpu:$GPU_TYPE:1 -t $BRIDGES2_TIME_LIMIT --pty"
   if [[ -t 0 ]]; then
     ssh -t $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && srun $SRUN_ARGS $BRIDGES2_RUN_WRAPPER"
   else
