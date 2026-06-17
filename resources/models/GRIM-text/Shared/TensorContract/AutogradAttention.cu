@@ -1086,6 +1086,15 @@ Tensor scaled_dot_product_attention(
     const float* effective_alibi_slopes =
         GRIM::Ablation::kZeroAlibiBias ? nullptr : alibi_slopes;
 
+    // Ablation (AblationFlags.hpp): kDisableCausalMask drops the causal mask so
+    // the kernel runs full (bidirectional) self-attention. This requires a build
+    // with -DGRIM_ABLATE_DISABLE_CAUSAL_MASK=ON, which drops GRIM_FLASHATTN_CAUSAL_ONLY
+    // (compiling the non-causal kernel templates and removing the runtime guard)
+    // and defines the macro that flips the constexpr in lockstep. The forward and
+    // saved-for-backward causal flags must match.
+    const bool effective_causal =
+        attention_hp.causal_mask && !GRIM::Ablation::kDisableCausalMask;
+
     // Forward pass with FlashAttention. The resolved scale is passed explicitly;
     // ignoring it silently changes the attention equation.
     flash_attn_fwd_ex(
@@ -1101,7 +1110,7 @@ Tensor scaled_dot_product_attention(
         num_kv_heads,
         head_dim,
         scale,
-        attention_hp.causal_mask,
+        effective_causal,
         true,
         attention_dropout_p, // Attention dropout rate (0.0 = disabled)
         dropout_seed,        // Per-step Philox seed for reproducible masks
@@ -1133,7 +1142,7 @@ Tensor scaled_dot_product_attention(
         grad_fn->head_dim = head_dim;
         grad_fn->heads_per_kv_group = attention_hp.heads_per_kv_group;
         grad_fn->softmax_scale = scale;
-        grad_fn->causal = attention_hp.causal_mask;
+        grad_fn->causal = effective_causal;
         grad_fn->is_bf16 = true;
         grad_fn->alibi_slopes = effective_alibi_slopes;  // Save for backward pass (not owned); NULL when kZeroAlibiBias
         grad_fn->attention_dropout_p = attention_dropout_p;  // Same dropout for backward mask reproduction

@@ -15,6 +15,20 @@ option(GRIM_TRAINING_USE_MANUAL_DEPS "Prefer manually staged header-only deps in
 option(GRIM_TRAINING_ENABLE_VCPKG_FALLBACK "Allow fallback to vendored vcpkg when manual deps are not staged" ON)
 option(GRIM_TRAINING_BUILD_TEST_EXECUTABLES "Build GRIM-text TrainingLoop test executables" OFF)
 
+# Ablation: disable the causal mask (full bidirectional self-attention).
+# DEFAULT IS ON (causal mask disabled) for the current collapse investigation.
+# This is NOT a header-only toggle: the causal-mask behavior is baked into which
+# FlashAttention kernel templates compile. When ON, this drops GRIM_FLASHATTN_CAUSAL_ONLY
+# (so the non-causal kernels are compiled) AND defines GRIM_ABLATE_DISABLE_CAUSAL_MASK
+# directory-wide so Ablation::kDisableCausalMask is true in lockstep.
+# To restore the causal (autoregressive) mask, configure with
+# -DGRIM_ABLATE_DISABLE_CAUSAL_MASK=OFF (re-adds CAUSAL_ONLY, flag back to false).
+option(GRIM_ABLATE_DISABLE_CAUSAL_MASK "Ablation: build non-causal FlashAttention and disable the causal mask (AblationFlags::kDisableCausalMask)" ON)
+if(GRIM_ABLATE_DISABLE_CAUSAL_MASK)
+    add_compile_definitions(GRIM_ABLATE_DISABLE_CAUSAL_MASK)
+    message(WARNING "[GRIM] Causal-mask ablation ENABLED: building NON-causal FlashAttention kernels (GRIM_FLASHATTN_CAUSAL_ONLY dropped). Do NOT ship this binary for production training.")
+endif()
+
 set(GRIM_TRAINING_MANUAL_DEPS_READY OFF)
 if(GRIM_TRAINING_USE_MANUAL_DEPS)
     if(EXISTS "${GRIM_TRAINING_NLOHMANN_JSON_INCLUDE_DIR}/nlohmann/json.hpp"
@@ -328,7 +342,9 @@ target_compile_options(grim_flash_attention PRIVATE
 target_compile_definitions(grim_flash_attention PRIVATE
     GRIM_FLASHATTN_BF16_ONLY
     GRIM_FLASHATTN_HDIM64_ONLY
-    GRIM_FLASHATTN_CAUSAL_ONLY
+    # Causal-only unless the causal-mask ablation is enabled (then the non-causal
+    # kernel templates must be compiled in so a non-causal call is valid).
+    $<$<NOT:$<BOOL:${GRIM_ABLATE_DISABLE_CAUSAL_MASK}>>:GRIM_FLASHATTN_CAUSAL_ONLY>
     FLASHATTENTION_DISABLE_UNEVEN_K
 )
 target_include_directories(grim_flash_attention PRIVATE

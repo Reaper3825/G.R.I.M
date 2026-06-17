@@ -54,6 +54,21 @@
 //        straight into SDPA), so W_qkv still receives full gradient. Combine
 //        with kZeroAlibiBias to remove ALL positional information and measure
 //        whether positional encoding drives the shared-direction buildup.
+//    - kDisableCausalMask = true -> drop the causal mask so every query attends
+//        to ALL keys (full bidirectional self-attention) instead of only past
+//        positions. Isolates whether the autoregressive mask (e.g. the BOS
+//        attention-sink / early-token over-attention) drives the shared
+//        direction. The autograd graph and all attention gradients are intact;
+//        only the kernel's masking mode changes.
+//        IMPORTANT: this flag CANNOT be toggled from the header alone. The
+//        causal-mask behavior is baked into which FlashAttention kernel
+//        templates compile, so it is controlled by the CMake option
+//        GRIM_ABLATE_DISABLE_CAUSAL_MASK. That option (ON) drops CAUSAL_ONLY
+//        (compiling the non-causal kernels) AND defines the macro below so this
+//        flag flips to true in lockstep with the build.
+//        CURRENT DEFAULT: the option defaults to ON, so the causal mask is
+//        DISABLED by default for the collapse investigation. Restore the causal
+//        (autoregressive) mask by configuring -DGRIM_ABLATE_DISABLE_CAUSAL_MASK=OFF.
 //======================================================//
 
 namespace GRIM { namespace Ablation {
@@ -90,7 +105,20 @@ inline constexpr bool kZeroAlibiBias = false;
 // rotary positional encoding). Graph stays connected (Q/K flow from
 // split_and_reshape_qkv into SDPA), so W_qkv keeps full gradient. Combine
 // with kZeroAlibiBias to strip ALL positional information.
-inline constexpr bool kZeroRope = true;
+inline constexpr bool kZeroRope = false;
+
+// When true, disable the causal mask so attention is fully bidirectional (every
+// query sees every key) instead of autoregressive. Driven by the CMake option
+// GRIM_ABLATE_DISABLE_CAUSAL_MASK so the constexpr cannot drift from the kernel
+// build: that option both compiles the non-causal FlashAttention kernels (drops
+// GRIM_FLASHATTN_CAUSAL_ONLY) and defines the macro below. Flipping this header
+// alone has NO effect (and would throw at runtime in a causal-only build).
+// The option DEFAULTS TO ON, so this is true (causal mask disabled) by default.
+#if defined(GRIM_ABLATE_DISABLE_CAUSAL_MASK)
+inline constexpr bool kDisableCausalMask = true;
+#else
+inline constexpr bool kDisableCausalMask = false;
+#endif
 
 // Derived: does the attention branch still deliver a gradient signal to its
 // own QKV projection (W_qkv)? Used by the backward gradient-connectivity

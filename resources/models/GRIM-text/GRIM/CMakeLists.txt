@@ -21,6 +21,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Disable Windows min/max macros
 add_compile_definitions(NOMINMAX)
 
+# Ablation: disable the causal mask (full bidirectional self-attention). Mirrors
+# the TrainingLoop option. DEFAULT IS ON (causal mask disabled). ON drops
+# GRIM_FLASHATTN_CAUSAL_ONLY (compiling the non-causal kernels) and defines
+# GRIM_ABLATE_DISABLE_CAUSAL_MASK so Ablation::kDisableCausalMask is true in
+# lockstep. To restore the causal mask, configure with -DGRIM_ABLATE_DISABLE_CAUSAL_MASK=OFF.
+option(GRIM_ABLATE_DISABLE_CAUSAL_MASK "Ablation: build non-causal FlashAttention and disable the causal mask (AblationFlags::kDisableCausalMask)" ON)
+if(GRIM_ABLATE_DISABLE_CAUSAL_MASK)
+    add_compile_definitions(GRIM_ABLATE_DISABLE_CAUSAL_MASK)
+    message(WARNING "[GRIM] Causal-mask ablation ENABLED: building NON-causal FlashAttention kernels (GRIM_FLASHATTN_CAUSAL_ONLY dropped). Do NOT ship this binary for production.")
+endif()
+
 # Find required packages
 find_package(CUDAToolkit REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
@@ -136,7 +147,9 @@ target_compile_options(grim_server_flash_attention PRIVATE
 target_compile_definitions(grim_server_flash_attention PRIVATE
     GRIM_FLASHATTN_BF16_ONLY
     GRIM_FLASHATTN_HDIM64_ONLY
-    GRIM_FLASHATTN_CAUSAL_ONLY
+    # Causal-only unless the causal-mask ablation is enabled (then the non-causal
+    # kernel templates must be compiled in so a non-causal call is valid).
+    $<$<NOT:$<BOOL:${GRIM_ABLATE_DISABLE_CAUSAL_MASK}>>:GRIM_FLASHATTN_CAUSAL_ONLY>
     FLASHATTENTION_DISABLE_UNEVEN_K
 )
 target_include_directories(grim_server_flash_attention PRIVATE ${GRIM_INCLUDE_DIRS})
