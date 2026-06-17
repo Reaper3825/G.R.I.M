@@ -29,13 +29,24 @@
 #include <string>
 #include <vector>
 
-#include "../../../../Layers/LMHead/lm_head_GPU.hpp"
 #include "../../../../Shared/TensorContract/TensorContract_GPU.hpp"
 
 namespace GRIM {
 
 struct EmbeddingParameterTensors {
     Tensor token_weights;  // [vocab_size, d_model]
+};
+
+// LM head durable tensor owner. Registry-owned like every other parameter
+// tensor bundle; LM-head forward/view helpers in Layers/LMHead borrow these.
+//   weights         [vocab_size, d_model] (tied to embedding when owns_weights=false)
+//   bias            [vocab_size] when config.use_bias=true
+//   final_rms_gamma [d_model] pre-LM-head normalization gain
+struct LMHeadParameterTensors {
+    Tensor weights;
+    Tensor bias;
+    Tensor final_rms_gamma;
+    bool owns_weights = true;
 };
 
 // NumberEncoder — numeric-meaning input path (digit-place contribution slots).

@@ -28,21 +28,9 @@
 #include "../../Shared/Forward/ModelForwardOutputs.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
+#include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
 
 namespace GRIM {
-
-struct LMHeadParameterViews {
-    const Tensor* weights = nullptr;
-    const Tensor* bias = nullptr;
-    const Tensor* final_rms_gamma = nullptr;
-};
-
-struct LMHeadParameterTensors {
-    Tensor weights;
-    Tensor bias;
-    Tensor final_rms_gamma;
-    bool owns_weights = true;
-};
 
 // Local experiment toggle only. Keep this LM-head-local until we decide
 // whether token-layout gating should become an authored config field.
@@ -88,8 +76,7 @@ void forwardLmHead(
     const Batching::BatchPayload& payload,
     cudaStream_t stream,
     cublasHandle_t cublas_handle,
-    Forward::ModelForwardOutputs& forward_outputs,
-    const LMHeadParameterViews* parameter_views = nullptr);
+    Forward::ModelForwardOutputs& forward_outputs);
 
 } // namespace GRIM
 

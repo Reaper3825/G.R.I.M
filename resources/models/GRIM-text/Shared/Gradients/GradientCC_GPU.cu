@@ -23,6 +23,7 @@
 namespace {
 
 constexpr int kBlockSize = GRIM::HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
+constexpr float EPSILON_SAFE_DIV = 1e-6f;
 
 
 __global__ void scaleGradientsKernel(

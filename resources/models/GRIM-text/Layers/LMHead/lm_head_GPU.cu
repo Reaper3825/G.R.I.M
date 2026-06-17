@@ -42,22 +42,16 @@ void forwardLmHead(
     const Batching::BatchPayload& payload,
     cudaStream_t stream,
     cublasHandle_t cublas_handle,
-    Forward::ModelForwardOutputs& forward_outputs,
-    const LMHeadParameterViews* parameter_views) {
+    Forward::ModelForwardOutputs& forward_outputs) {
     forward_outputs.lm_head_input_tensor = Tensor();
     forward_outputs.logits_tensor = Tensor();
-    const Tensor& lm_weights =
-        (parameter_views && parameter_views->weights) ? *parameter_views->weights : parameter_tensors.weights;
-    const Tensor& lm_bias =
-        (parameter_views && parameter_views->bias) ? *parameter_views->bias : parameter_tensors.bias;
-    const Tensor& lm_final_rms_gamma =
-        (parameter_views && parameter_views->final_rms_gamma)
-            ? *parameter_views->final_rms_gamma
-            : parameter_tensors.final_rms_gamma;
+    const Tensor& lm_weights = parameter_tensors.weights;
+    const Tensor& lm_bias = parameter_tensors.bias;
+    const Tensor& lm_final_rms_gamma = parameter_tensors.final_rms_gamma;
 
     // Rule 20: Crash on invalid state
     if (!lm_weights.data) {
-        throw std::runtime_error("forwardLmHead: selected weights view is not initialized");
+        throw std::runtime_error("forwardLmHead: weights tensor is not initialized");
     }
     if (!stream) {
         throw std::runtime_error("forwardLmHead: stream is NULL");

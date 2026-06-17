@@ -237,6 +237,21 @@ GRIM::EncodingLayerParameterTensors detachEncodingLayerParameters(
     return detached;
 }
 
+GRIM::LMHeadParameterTensors detachLmHeadParameters(
+    const GRIM::LMHeadParameterTensors& parameters,
+    cudaStream_t stream) {
+    GRIM::LMHeadParameterTensors detached{};
+    detached.owns_weights = false;
+    detached.weights = parameters.weights.detach(stream);
+    if (parameters.bias.data) {
+        detached.bias = parameters.bias.detach(stream);
+    }
+    if (parameters.final_rms_gamma.data) {
+        detached.final_rms_gamma = parameters.final_rms_gamma.detach(stream);
+    }
+    return detached;
+}
+
 }  // namespace
 
 void ModelForwardRequest::validate(const char* caller) const {
@@ -752,34 +767,21 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
         forward_outputs.encoder_output_tensor = std::move(encoder_output_tensor);
     }
 
-    LMHeadParameterViews lm_head_parameter_views{};
-    const LMHeadParameterViews* lm_head_parameter_view_ptr = nullptr;
-    Tensor lm_head_weights_view;
-    Tensor lm_head_bias_view;
-    Tensor lm_head_gamma_view;
+    const GRIM::LMHeadParameterTensors* lm_head_parameter_ptr = &lm_head_parameters;
+    GRIM::LMHeadParameterTensors detached_lm_head_parameters{};
     if (!connect_parameter_graph) {
-        lm_head_weights_view = lm_head_parameters.weights.detach(request.stream);
-        lm_head_parameter_views.weights = &lm_head_weights_view;
-        if (lm_head_parameters.bias.data) {
-            lm_head_bias_view = lm_head_parameters.bias.detach(request.stream);
-            lm_head_parameter_views.bias = &lm_head_bias_view;
-        }
-        if (lm_head_parameters.final_rms_gamma.data) {
-            lm_head_gamma_view = lm_head_parameters.final_rms_gamma.detach(request.stream);
-            lm_head_parameter_views.final_rms_gamma = &lm_head_gamma_view;
-        }
-        lm_head_parameter_view_ptr = &lm_head_parameter_views;
+        detached_lm_head_parameters = detachLmHeadParameters(lm_head_parameters, request.stream);
+        lm_head_parameter_ptr = &detached_lm_head_parameters;
     }
 
     forwardLmHead(
         lm_head_hp,
-        lm_head_parameters,
+        *lm_head_parameter_ptr,
         forward_outputs.encoder_output_tensor,
         payload,
         request.stream,
         request.cublas_handle,
-        forward_outputs,
-        lm_head_parameter_view_ptr);
+        forward_outputs);
     if (!forward_outputs.logits_tensor.data) {
         throw std::runtime_error("ModelForward: LMHeadLayer::forward returned logits tensor with NULL data");
     }
