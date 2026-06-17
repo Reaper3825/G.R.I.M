@@ -11,7 +11,7 @@
  * ===============
  * allocateGradNormScratch()   — one-time GPU + pinned-host buffer allocation
  * measureGradientNorms()      — launch kernel + D2H + sync + CPU finalize
- * freeGradNormScratch()       — release all memory
+ * GradNormScratch destructor  — releases all GPU + pinned-host memory (RAII)
  * 
  * FINALIZATION:
  * =============
@@ -317,6 +317,10 @@ GradNormStatus measureGradientNormsFinalize(
     m = GradMetrics{};  // Zero everything
 
     for (size_t g = 0; g < num_groups; ++g) {
+        if (!groups[g].grads() || groups[g].size() == 0) {
+            continue;
+        }
+
         float sq = scratch->h_partial_sums[g];
         size_t sz = groups[g].size();
 
@@ -376,10 +380,5 @@ GradNormStatus measureGradientNorms(
     return measureGradientNormsFinalize(groups, num_groups, scratch);
 }
 
-void freeGradNormScratch(GradNormScratch*& scratch) {
-    if (!scratch) return;
-    delete scratch;
-    scratch = nullptr;
-}
 
 } // namespace GRIM::GradNorm

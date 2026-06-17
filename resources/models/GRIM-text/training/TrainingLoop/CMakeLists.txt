@@ -23,7 +23,7 @@ option(GRIM_TRAINING_BUILD_TEST_EXECUTABLES "Build GRIM-text TrainingLoop test e
 # directory-wide so Ablation::kDisableCausalMask is true in lockstep.
 # To restore the causal (autoregressive) mask, configure with
 # -DGRIM_ABLATE_DISABLE_CAUSAL_MASK=OFF (re-adds CAUSAL_ONLY, flag back to false).
-option(GRIM_ABLATE_DISABLE_CAUSAL_MASK "Ablation: build non-causal FlashAttention and disable the causal mask (AblationFlags::kDisableCausalMask)" ON)
+option(GRIM_ABLATE_DISABLE_CAUSAL_MASK "Ablation: build non-causal FlashAttention and disable the causal mask (AblationFlags::kDisableCausalMask)" OFF)
 if(GRIM_ABLATE_DISABLE_CAUSAL_MASK)
     add_compile_definitions(GRIM_ABLATE_DISABLE_CAUSAL_MASK)
     message(WARNING "[GRIM] Causal-mask ablation ENABLED: building NON-causal FlashAttention kernels (GRIM_FLASHATTN_CAUSAL_ONLY dropped). Do NOT ship this binary for production training.")
@@ -547,8 +547,6 @@ add_executable(train_gpu
     ../Phases/Phase2_TrainingLoop.hpp
     ../Phases/Phase2_InferenceLoop.cu
     ../Phases/Phase2_InferenceLoop.hpp
-    ../Diagnostics/TrainingDiagnostics.cu
-    ../Diagnostics/TrainingDiagnostics.hpp
     ../Diagnostics/DiagnosticInference.cu
     ../Diagnostics/DiagnosticInference.hpp
     ../Diagnostics/RhoDiagnostic.cu

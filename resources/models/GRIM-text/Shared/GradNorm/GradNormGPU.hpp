@@ -10,7 +10,7 @@
  *   allocateGradNormScratch()  — one-time setup
  *   measureGradientNorms()     — launches GPU sum-of-squares kernel, D2H copy,
  *                                 syncs stream, finalizes metrics on CPU
- *   freeGradNormScratch()      — release GPU memory
+ *   ~GradNormScratch()         — RAII destructor releases all GPU + pinned memory
  *
  * After measureGradientNorms() returns, scratch->h_metrics is immediately valid.
  * No external sync required (sync happens internally).
@@ -169,10 +169,5 @@ GradNormStatus measureGradientNorms(
     cudaStream_t stream
 );
 
-/**
- * Free all GPU + pinned-host memory owned by the scratch struct.
- * Sets the pointer to nullptr.
- */
-void freeGradNormScratch(GradNormScratch*& scratch);
 
 } // namespace GRIM::GradNorm

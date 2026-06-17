@@ -82,7 +82,6 @@ inline EpochPlan finalizeEpochPlanOrThrow(
         static_cast<int>(warmup_fraction * plan.estimated_total_steps));
     auto& cfg = ::GRIM::HyperParameters::mutableSnapshotTrainingConfig(config);
     cfg.at("warmup_steps") = warmup_steps;
-    cfg.at("mtp_alpha_warmup_steps") = warmup_steps;
     cfg.at("telemetry_warmup_steps") = warmup_steps;
     cfg.at("execution_block_gate_warmup_steps") = warmup_steps;
 

@@ -26,7 +26,7 @@ add_compile_definitions(NOMINMAX)
 # GRIM_FLASHATTN_CAUSAL_ONLY (compiling the non-causal kernels) and defines
 # GRIM_ABLATE_DISABLE_CAUSAL_MASK so Ablation::kDisableCausalMask is true in
 # lockstep. To restore the causal mask, configure with -DGRIM_ABLATE_DISABLE_CAUSAL_MASK=OFF.
-option(GRIM_ABLATE_DISABLE_CAUSAL_MASK "Ablation: build non-causal FlashAttention and disable the causal mask (AblationFlags::kDisableCausalMask)" ON)
+option(GRIM_ABLATE_DISABLE_CAUSAL_MASK "Ablation: build non-causal FlashAttention and disable the causal mask (AblationFlags::kDisableCausalMask)" OFF)
 if(GRIM_ABLATE_DISABLE_CAUSAL_MASK)
     add_compile_definitions(GRIM_ABLATE_DISABLE_CAUSAL_MASK)
     message(WARNING "[GRIM] Causal-mask ablation ENABLED: building NON-causal FlashAttention kernels (GRIM_FLASHATTN_CAUSAL_ONLY dropped). Do NOT ship this binary for production.")

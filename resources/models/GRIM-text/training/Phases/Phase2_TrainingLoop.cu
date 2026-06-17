@@ -133,53 +133,7 @@ struct ProcessBatchStepStateClearScope {
     ProcessBatchStepStateClearScope& operator=(const ProcessBatchStepStateClearScope&) = delete;
 };
 
-float accumulationNormalizationScaleForOptimizerWindow(int accum_steps) {
-    if (accum_steps <= 0) {
-        throw std::runtime_error(
-            "accumulationNormalizationScaleForOptimizerWindow: accum_steps must be > 0, got " +
-            std::to_string(accum_steps));
-    }
-    return 1.0f / static_cast<float>(accum_steps);
-}
 
-void scaleRegisteredParameterGradientsForOptimizerWindow(
-    std::vector<GRIM::ParameterGroup>& groups,
-    float accumulation_scale,
-    cudaStream_t stream)
-{
-    if (groups.empty()) {
-        throw std::runtime_error(
-            "scaleRegisteredParameterGradientsForOptimizerWindow: parameter groups are empty");
-    }
-    if (!stream) {
-        throw std::runtime_error(
-            "scaleRegisteredParameterGradientsForOptimizerWindow: stream is NULL");
-    }
-    if (!std::isfinite(accumulation_scale) || accumulation_scale <= 0.0f) {
-        throw std::runtime_error(
-            "scaleRegisteredParameterGradientsForOptimizerWindow: accumulation_scale must be finite and > 0, got " +
-            std::to_string(accumulation_scale));
-    }
-    if (accumulation_scale == 1.0f) {
-        return;
-    }
-
-    for (auto& group : groups) {
-        if (!group.grads() || group.size() == 0) {
-            continue;
-        }
-        if (group.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
-            throw std::runtime_error(
-                "scaleRegisteredParameterGradientsForOptimizerWindow: group '" + group.name +
-                "' exceeds launchScaleGradients int element limit with size=" + std::to_string(group.size()));
-        }
-        launchScaleGradients(
-            group.grads(),
-            static_cast<int>(group.size()),
-            accumulation_scale,
-            stream);
-    }
-}
 
 int validatedAccumulationSteps(const TrainingContext& ctx) {
     const auto schedule_hp =
@@ -294,34 +248,19 @@ float scheduledLearningRateForOptimizerStep(
 }
 
 float mtpAlphaEffectiveForBatch(
-    const ::GRIM::Config::AiConfigSnapshot& cfg,
-    int global_step)
+    const ::GRIM::Config::AiConfigSnapshot& cfg)
 {
     const bool mtp_enabled = ::GRIM::HyperParameters::snapshotTrainingConfigField<bool>(cfg, "mtp_enabled");
     const int mtp_k = ::GRIM::HyperParameters::snapshotTrainingConfigField<int>(cfg, "mtp_k");
     if (!mtp_enabled || mtp_k <= 0) {
         return 0.0f;
     }
-    if (global_step < 0) {
-        throw std::runtime_error("mtpAlphaEffectiveForBatch: global_step must be >= 0, got " +
-                                 std::to_string(global_step));
-    }
-    const int mtp_alpha_warmup_steps =
-        ::GRIM::HyperParameters::snapshotTrainingConfigField<int>(cfg, "mtp_alpha_warmup_steps");
-    if (mtp_alpha_warmup_steps <= 0) {
-        throw std::runtime_error("mtpAlphaEffectiveForBatch: mtp_alpha_warmup_steps must be > 0, got " +
-                                 std::to_string(mtp_alpha_warmup_steps));
-    }
     const float mtp_alpha = ::GRIM::HyperParameters::snapshotTrainingConfigField<float>(cfg, "mtp_alpha");
-    const float progress = std::min(
-        1.0f,
-        static_cast<float>(global_step) / static_cast<float>(mtp_alpha_warmup_steps));
-    const float alpha = mtp_alpha * progress;
-    if (!std::isfinite(alpha) || alpha < 0.0f) {
-        throw std::runtime_error("mtpAlphaEffectiveForBatch: derived alpha must be finite and >= 0, got " +
-                                 std::to_string(alpha));
+    if (!std::isfinite(mtp_alpha) || mtp_alpha < 0.0f) {
+        throw std::runtime_error("mtpAlphaEffectiveForBatch: mtp_alpha must be finite and >= 0, got " +
+                                 std::to_string(mtp_alpha));
     }
-    return alpha;
+    return mtp_alpha;
 }
 
 void runOptimizerWindowFromEpoch(
@@ -346,12 +285,9 @@ void runOptimizerWindowFromEpoch(
     // Issue #135: gradient clipping is DEFERRED to post-accumulation. Clipping
     // ONCE on the averaged gradients matches PyTorch; the old per-slot clipping
     // crushed text gradients M×.
-    const auto clipping_hp = ::GRIM::HyperParameters::gradientClippingHP(
-        ctx.config);
-    const auto optimizer_update_hp = ::GRIM::HyperParameters::optimizerUpdateHP(
-        ctx.config);
-    const float effective_per_token_limit = clipping_hp.effective_per_token_limit;
-    const bool clipping_enabled = clipping_hp.enabled;
+    const auto clipping_hp = ::GRIM::HyperParameters::gradientClippingHP(ctx.config);
+    const auto schedule_hp = ::GRIM::HyperParameters::trainingScheduleHP(ctx.config);
+    const auto optimizer_update_hp = ::GRIM::HyperParameters::optimizerUpdateHP(ctx.config);
 
     GRIM::Diagnostics::WeightSample pre_sample{};
     if (sync_diag) {
@@ -360,34 +296,18 @@ void runOptimizerWindowFromEpoch(
     }
 
     cudaStream_t clip_stream = training_state.stream_ctrl.getPrimaryStream();
-    const float accumulation_scale =
-        accumulationNormalizationScaleForOptimizerWindow(accum_steps);
 
-    // Accumulation normalization happens exactly once at the optimizer window
-    // boundary, after the full microbatch window has completed and before any
-    // clipping/update logic consumes the registered parameter gradients.
-    scaleRegisteredParameterGradientsForOptimizerWindow(
-        parameter_groups,
-        accumulation_scale,
-        clip_stream);
+    const auto clip = GRIM::GradClip::clipGradientNorms(
+        parameter_groups.data(), parameter_groups.size(),
+        ctx.optimizer.optimizer_state.grad_norm_scratch, clipping_hp, schedule_hp, clip_stream);
 
-    // Global clipping on post-accumulation normalized gradients.
-    // Norm measurement, global aggregation, and clipping all happen inside
-    // GradientCC against the registered ParameterGroup tensors.
-    if (clipping_enabled) {
-        GRIM::GradClip::ClipConfig clip_cfg;
-        clip_cfg.max_rms = effective_per_token_limit;
+    result.grad_rms = clip.global_rms_post;
+    result.grad_rms_valid = true;
+    result.gradient_clipped = clip.any_clipped();
+    clip_metrics = clip;
+    has_clip_metrics = true;
 
-        const auto clip = GRIM::GradClip::clipGradientNorms(
-            parameter_groups.data(), parameter_groups.size(),
-            training_state.grad_norm_scratch, clip_cfg, clip_stream);
-
-        result.grad_rms = clip.global_rms_post;
-        result.grad_rms_valid = true;
-        result.gradient_clipped = clip.any_clipped();
-        clip_metrics = clip;
-        has_clip_metrics = true;
-
+    if (clipping_hp.enabled) {
         GRIM::Diagnostics::runGradientNormClipDiagnostic(ctx, state, payload, clip, batch_idx, clip_stream);
     }
 
@@ -838,7 +758,7 @@ BatchResult processBatch(
 
     GRIM::Forward::ModelForwardRuntimePayload runtime_payload =
         buildTrainingForwardRuntimePayload(training_state);
-    const float mtp_alpha_effective = mtpAlphaEffectiveForBatch(ctx.config, ctx.global_step);
+    const float mtp_alpha_effective = mtpAlphaEffectiveForBatch(ctx.config);
     const bool mtp_enabled =
         GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "mtp_enabled");
     const int mtp_k = mtp_enabled

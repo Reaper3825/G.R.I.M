@@ -24,7 +24,6 @@
 #include "CublasHandleOwner_GPU.hpp"
 #include "../TeacherLogits/TeacherLogits_GPU.hpp"
 #include "../StreamController/StreamController_GPU.hpp"
-#include "../GradNorm/GradNormGPU.hpp"
 #include "../Forward/ModelForwardExecutionRuntime.hpp"
 #include "../TensorContract/TensorContract_GPU.hpp"
 
@@ -88,7 +87,6 @@ struct TrainingState {
     //  STREAM & GRADIENT MANAGEMENT
     //======================================================//
     StreamController stream_ctrl;
-    std::unique_ptr<GradNorm::GradNormScratch> grad_norm_scratch;  // Owned by TrainingState; allocated/validated by GradClip
     CublasHandleOwner cublas_handle;
 
     bool initialized = false;

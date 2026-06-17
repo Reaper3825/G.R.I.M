@@ -15,10 +15,12 @@
 
 #pragma once
 
-#include "TrainingDiagnostics.hpp"      // WeightSample, formatWeightSample
 #include "../Phases/Startup/Model/ParameterRegistry.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
+#include "../../Shared/TensorContract/TensorContract_GPU.hpp"
+#include "../../Shared/TrainingState/TrainingState_GPU.hpp"
 
+#include <string>
 #include <vector>
 
 namespace GRIMText { namespace Training {
@@ -27,6 +29,22 @@ namespace GRIMText { namespace Training {
 } }
 
 namespace GRIM::Diagnostics {
+
+//======================================================//
+//  WeightSample — small LM-head weight snapshot for pre/post optimizer delta
+//======================================================//
+
+constexpr int kWeightSampleSize = 10;
+
+struct WeightSample {
+    bool valid = false;
+    float values[kWeightSampleSize] = {0.0f};
+    float rms = 0.0f;
+};
+
+WeightSample sampleWeightStats(const GRIM::Tensor& lm_head_weights, const GRIM::TrainingState& ts, bool sync_for_host = false);
+std::string formatWeightSample(const WeightSample& sample);
+float computeUpdateRms(const WeightSample& before, const WeightSample& after);
 
 void runPostOptimizerWeightTrace(
     GRIMText::Training::TrainingContext& ctx,

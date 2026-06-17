@@ -24,25 +24,6 @@ namespace {
 
 constexpr int kBlockSize = GRIM::HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
 
-__global__ void clampGradientsKernel(
-	float* __restrict__ gradients,
-	int n,
-	float min_val,
-	float max_val)
-{
-	const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-	if (idx >= n) {
-		return;
-	}
-
-	const float val = gradients[idx];
-
-	if (!isfinite(val) || val < min_val) {
-		gradients[idx] = min_val;
-	} else if (val > max_val) {
-		gradients[idx] = max_val;
-	}
-}
 
 __global__ void scaleGradientsKernel(
 	float* __restrict__ gradients,
@@ -107,10 +88,9 @@ float rmsOrThrow(double sum_sq, uint64_t count, const char* label) {
 
 float encoderTelemetryRms(const GRIM::GradNorm::GradMetrics& gm) {
 	const double sum_sq = gm.attention_sum_sq + gm.ffn_sum_sq + gm.rmsnorm_sum_sq +
-		gm.scratchblock_sum_sq + gm.execution_block_sum_sq;
+		gm.execution_block_sum_sq + gm.number_encoder_sum_sq;
 	const uint64_t count = gm.attention_count + gm.ffn_count +
-		gm.rmsnorm_count + gm.scratchblock_count +
-		gm.execution_block_count;
+		gm.rmsnorm_count + gm.execution_block_count + gm.number_encoder_count;
 	if (count == 0) {
 		return std::numeric_limits<float>::quiet_NaN();
 	}
@@ -145,34 +125,6 @@ void recordTopGroup(
 	}
 }
 
-} // namespace
-
-void launchClampGradients(
-	float* gradients,
-	int n,
-	float min_val,
-	float max_val,
-	cudaStream_t stream)
-{
-	if (!validatePointers(gradients, n)) {
-		return;
-	}
-
-	if (min_val > max_val) {
-		fprintf(stderr, "GradientCC: min_val (%.3f) > max_val (%.3f)\n", min_val, max_val);
-		return;
-	}
-
-	clampGradientsKernel<<<computeGrid(n), kBlockSize, 0, stream>>>(
-		gradients, n, min_val, max_val);
-
-	const cudaError_t err = cudaGetLastError();
-	if (err != cudaSuccess) {
-		fprintf(stderr, "GradientCC: launchClampGradients failed - %s\n",
-				cudaGetErrorString(err));
-	}
-}
-
 void launchScaleGradients(
 	float* gradients,
 	int n,
@@ -193,10 +145,7 @@ void launchScaleGradients(
 	}
 }
 
-//======================================================//
-//  Layer 2: Registry-level gradient clipping
-//  Operates on ParameterGroup tensors via GradNorm + scale
-//======================================================//
+} // namespace
 
 namespace GRIM::GradClip {
 
@@ -204,19 +153,38 @@ ClipResult clipGradientNorms(
     ParameterGroup* groups,
     size_t num_groups,
 	std::unique_ptr<GradNorm::GradNormScratch>& scratch,
-    const ClipConfig& config,
+    const HyperParameters::GradientClippingHP& clipping_hp,
+    const HyperParameters::TrainingScheduleHP& schedule_hp,
     cudaStream_t stream
 ) {
     if (!groups || num_groups == 0) {
         throw std::runtime_error("[GradClip] clipGradientNorms called with null/empty parameter groups");
     }
-    if (config.max_rms <= 0.0f) {
-        throw std::runtime_error("[GradClip] max_rms must be > 0, got " + std::to_string(config.max_rms));
+    const float accumulation_scale = schedule_hp.accumulation_normalization_scale;
+    if (!std::isfinite(accumulation_scale) || accumulation_scale <= 0.0f) {
+        throw std::runtime_error("[GradClip] accumulation_normalization_scale must be finite and > 0, got " +
+                                 std::to_string(accumulation_scale));
+    }
+    if (clipping_hp.enabled &&
+        (!std::isfinite(clipping_hp.effective_per_token_limit) ||
+         clipping_hp.effective_per_token_limit <= 0.0f)) {
+        throw std::runtime_error("[GradClip] invalid effective_per_token_limit: " +
+                                 std::to_string(clipping_hp.effective_per_token_limit));
+    }
+
+    // Step 1: Apply accumulation normalization (1/accum_steps) before norm measurement.
+    if (accumulation_scale != 1.0f) {
+        for (size_t i = 0; i < num_groups; ++i) {
+            if (!groups[i].grads() || groups[i].size() == 0) continue;
+            launchScaleGradients(groups[i].grads(),
+                                 static_cast<int>(groups[i].size()),
+                                 accumulation_scale, stream);
+        }
     }
 
 	ensureGradNormScratchForClip(scratch, num_groups, stream);
 
-    // Step 1: Measure gradient norms through the tensor registry
+    // Step 2: Measure gradient norms through the tensor registry
 	auto status = GradNorm::measureGradientNorms(groups, num_groups, scratch.get(), stream);
     if (status != GradNorm::GradNormStatus::SUCCESS) {
         throw std::runtime_error("[GradClip] measureGradientNorms failed: " +
@@ -238,7 +206,7 @@ ClipResult clipGradientNorms(
 								 " first_inf_group=" + std::to_string(measured_metrics.first_inf_group));
 	}
 
-    // Step 2: Aggregate all finite per-group sums into one global RMS. Use the
+    // Step 3: Aggregate all finite per-group sums into one global RMS. Use the
     // per-group scratch directly so every registered group type participates.
 	double global_sum_sq = 0.0;
 	uint64_t global_count = 0;
@@ -258,18 +226,19 @@ ClipResult clipGradientNorms(
 	result.measured_group_count = num_groups;
     result.global_rms_pre = global_rms;
 	result.encoder_rms_pre = encoderTelemetryRms(measured_metrics);
-	result.scratchblock_rms_pre = (measured_metrics.scratchblock_count > 0)
-		? static_cast<float>(std::sqrt(measured_metrics.scratchblock_sum_sq / static_cast<double>(measured_metrics.scratchblock_count)))
-		: std::numeric_limits<float>::quiet_NaN();
+	result.scratchblock_rms_pre = std::numeric_limits<float>::quiet_NaN();
 	result.metrics = measured_metrics;
 	for (size_t i = 0; i < num_groups; ++i) {
 		if (!groups[i].grads() || groups[i].size() == 0) continue;
 		recordTopGroup(result, i, groups[i], scratch->h_partial_sums[i]);
 	}
 
-    // Step 3: Clip all registered gradients with one global coefficient
-    if (global_rms > config.max_rms) {
-        const float coef = config.max_rms / (global_rms + 1e-8f);
+    // Step 4: Clip all registered gradients with one global coefficient.
+    // Skipped when clipping is disabled.
+    const float max_rms = clipping_hp.effective_per_token_limit;
+    float coef = 1.0f;
+    if (clipping_hp.enabled && global_rms > max_rms) {
+        coef = max_rms / (global_rms + EPSILON_SAFE_DIV);
         for (size_t i = 0; i < num_groups; ++i) {
             if (!groups[i].grads() || groups[i].size() == 0) continue;
             launchScaleGradients(groups[i].grads(),
@@ -279,8 +248,8 @@ ClipResult clipGradientNorms(
         result.clipped = true;
     }
 
-    // Step 4: Compute post-clip RMS
-    result.global_rms_post = result.clipped ? config.max_rms : global_rms;
+    // Step 5: True post-clip RMS (exact, not clamped to threshold).
+    result.global_rms_post = global_rms * coef;
 
     return result;
 }

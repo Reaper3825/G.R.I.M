@@ -189,6 +189,7 @@ struct AutoStopHP {
 struct TrainingScheduleHP {
     int epochs = 0;
     int gradient_accumulation_steps = 0;
+    float accumulation_normalization_scale = 1.0f;
     bool single_batch_overfit_enabled = false;
     int single_batch_overfit_max_steps = 0;
     bool shuffle_train_enabled = false;
@@ -438,7 +439,6 @@ struct MTPConstructionHP {
     int vocab_size = 0;
     int d_model = 0;
     float alpha = 0.0f;
-    int alpha_warmup_steps = 0;
 };
 
 struct MTPFeatureHP {
@@ -550,7 +550,6 @@ struct ModelHP {
     int mtp_vocab_size = 0;
     int mtp_d_model = 0;
     float mtp_alpha = 0.0f;
-    int mtp_alpha_warmup_steps = 0;
 
     PositionalEncodingType positional_encoding = PositionalEncodingType::UNSPECIFIED;
     bool structured_ce_enabled = false;
@@ -716,6 +715,9 @@ inline TrainingScheduleHP trainingScheduleHP(
     TrainingScheduleHP view;
     view.epochs = hp.epochs;
     view.gradient_accumulation_steps = hp.gradient_accumulation_steps;
+    view.accumulation_normalization_scale = (hp.gradient_accumulation_steps > 0)
+        ? 1.0f / static_cast<float>(hp.gradient_accumulation_steps)
+        : 1.0f;
     view.single_batch_overfit_enabled = hp.single_batch_overfit_enabled;
     view.single_batch_overfit_max_steps = hp.single_batch_overfit_max_steps;
     view.shuffle_train_enabled = hp.shuffle_train_enabled;
@@ -1072,6 +1074,9 @@ inline TrainingScheduleHP trainingScheduleHP(
     TrainingScheduleHP view;
     view.epochs = snapshotTrainingConfigField<int>(snapshot, "epochs");
     view.gradient_accumulation_steps = snapshotTrainingConfigField<int>(snapshot, "gradient_accumulation_steps");
+    view.accumulation_normalization_scale = (view.gradient_accumulation_steps > 0)
+        ? 1.0f / static_cast<float>(view.gradient_accumulation_steps)
+        : 1.0f;
     view.single_batch_overfit_enabled = snapshotTrainingConfigField<bool>(snapshot, "single_batch_overfit_enabled");
     view.single_batch_overfit_max_steps = snapshotTrainingConfigField<int>(snapshot, "single_batch_overfit_max_steps");
     view.shuffle_train_enabled = snapshotTrainingConfigField<bool>(snapshot, "shuffle_train_enabled");
@@ -1316,7 +1321,6 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.mtp_vocab_size = vocab_size;
     view.mtp_d_model = d_model;
     view.mtp_alpha = requireFloat("mtp_alpha");
-    view.mtp_alpha_warmup_steps = 0;
 
     view.number_encoder_enabled = requireBool("number_encoder_enabled");
     view.number_encoder_d_model = d_model;
@@ -1463,7 +1467,6 @@ inline MTPConstructionHP mtpConstructionHP(const GRIM::Config::AiConfigSnapshot&
     view.vocab_size = model.mtp_vocab_size;
     view.d_model = model.mtp_d_model;
     view.alpha = model.mtp_alpha;
-    view.alpha_warmup_steps = model.mtp_alpha_warmup_steps;
     return view;
 }
 

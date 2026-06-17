@@ -478,7 +478,6 @@ struct LanguageModelConfig {
     bool mtp_enabled = false;
     int mtp_k = 0;
     float mtp_alpha = 0.0f;
-    int mtp_alpha_warmup_steps = 0;
 
     // Training run selectors — which model and curriculum to use
     std::string current_model_training;
@@ -2350,7 +2349,6 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(mtp_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(mtp_k);
     GRIM_WRITE_FINAL_CONFIG_FIELD(mtp_alpha);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(mtp_alpha_warmup_steps);
     GRIM_WRITE_FINAL_CONFIG_FIELD(current_model_training);
     GRIM_WRITE_FINAL_CONFIG_FIELD(current_curriculum);
     GRIM_WRITE_FINAL_CONFIG_FIELD(log_recorder_enabled);
