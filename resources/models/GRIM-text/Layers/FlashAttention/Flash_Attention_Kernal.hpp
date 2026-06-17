@@ -80,6 +80,51 @@ void flash_attn_fwd_kvcache(const void* q,
                             bool is_bf16,
                             cudaStream_t stream);
 
+// FlashAttention v2 forward with KV cache AND fused rotary (inference-only).
+//
+// This is the decode/prefill primitive that uses FlashAttention's own
+// (vendored) RoPE: Q and the new K token are rotated INSIDE the attention
+// kernel, and the rotated K / raw V are appended to the cache in-place. It
+// matches GRIM's training-time interleaved RoPE (GPT-J pairing), so the cos/sin
+// tables MUST be built with PBM::launchBuildRotaryCosSinTables from the same
+// rope_inv_freq used in training.
+//
+// q       : [batch, seqlen_q,      n_heads,    head_dim]  new queries, UNROTATED
+// knew    : [batch, seqlen_q,      n_kv_heads, head_dim]  new keys,    UNROTATED
+// vnew    : [batch, seqlen_q,      n_kv_heads, head_dim]  new values
+// k_cache : [batch, cache_max_seq, n_kv_heads, head_dim]  capacity buffer (in/out)
+// v_cache : [batch, cache_max_seq, n_kv_heads, head_dim]  capacity buffer (in/out)
+// out     : [batch, seqlen_q,      n_heads,    head_dim]  (element dtype)
+// softmax_lse : [batch, n_heads, seqlen_q]                (FP32)
+// rotary_cos/sin : [cache_max_seq, rotary_dim/2]          (element dtype)
+// cache_seqlens  : device int[batch] = per-batch cache fill BEFORE this call.
+//
+// Decode: seqlen_q=1, cache_seqlens[b]=tokens already cached.
+// Prefill: seqlen_q=prompt_len, cache_seqlens[b]=0.
+// The caller must increment cache_seqlens by seqlen_q after the call returns.
+void flash_attn_fwd_kvcache_rotary(const void* q,
+                                   const void* knew,
+                                   const void* vnew,
+                                   void* k_cache,
+                                   void* v_cache,
+                                   void* out,
+                                   void* softmax_lse,
+                                   const void* rotary_cos,
+                                   const void* rotary_sin,
+                                   const int* cache_seqlens,
+                                   const float* alibi_slopes,
+                                   int batch,
+                                   int seqlen_q,
+                                   int cache_max_seq,
+                                   int n_heads,
+                                   int n_kv_heads,
+                                   int head_dim,
+                                   int rotary_dim,
+                                   float softmax_scale,
+                                   bool causal,
+                                   bool is_bf16,
+                                   cudaStream_t stream);
+
 // FlashAttention v2 backward.
 // Requires softmax_lse from the matching forward pass.
 // softmax_scale must match the forward pass and must be finite and > 0.

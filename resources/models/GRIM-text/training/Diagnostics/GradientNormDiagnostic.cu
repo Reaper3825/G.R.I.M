@@ -104,11 +104,11 @@ void validateClipResultOrThrow(const GRIM::GradClip::ClipResult& clip, int batch
                                  " post=" + std::to_string(clip.global_rms_post));
     }
 
-    const float equality_tolerance = EPSILON_GRADIENT_CLIP * std::max(
+    const float equality_tolerance = GRIM::HyperParameters::EPSILON_GRADIENT_CLIP * std::max(
         1.0f, std::max(clip.global_rms_pre, clip.global_rms_post));
     const float required_decrease = std::max(
-        EPSILON_GRADIENT_CLIP * EPSILON_GRADIENT_CLIP,
-        EPSILON_GRADIENT_CLIP * clip.global_rms_pre);
+        GRIM::HyperParameters::EPSILON_GRADIENT_CLIP * GRIM::HyperParameters::EPSILON_GRADIENT_CLIP,
+        GRIM::HyperParameters::EPSILON_GRADIENT_CLIP * clip.global_rms_pre);
     if (clip.global_rms_post > clip.global_rms_pre + equality_tolerance) {
         throw std::runtime_error("[FATAL] ClipResult post RMS exceeds pre RMS at batch " +
                                  std::to_string(batch_idx + 1) +

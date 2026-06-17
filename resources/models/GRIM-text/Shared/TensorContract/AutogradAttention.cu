@@ -425,9 +425,6 @@ struct MatMulGradFn : public GradFn {
                           transpose_b,
                           stream);
 
-        // Issue #142: applyLmHeadGradCorrections removed.
-        // Centering backward is handled by CenterRowsGradFn/CenterColumnsGradFn
-        // inside the autograd chain (Issues #125/#132).
 
         // CONTINUE AUTOGRAD CHAIN (Recursive) - ISSUE #48 FIX: Use stored grad_fn pointers
         if (a_requires_grad && a_grad_fn) {

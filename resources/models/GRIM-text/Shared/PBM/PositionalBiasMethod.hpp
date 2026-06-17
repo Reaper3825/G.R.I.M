@@ -115,6 +115,26 @@ void launchRoPERotationGQA_backward(
 );
 
 // ═══════════════════════════════════════════════════════════════════════════
+//  RoPE cos/sin table builder (FlashAttention-v2 fused-rotary decode path)
+//
+//  Builds the cos/sin lookup tables that FlashAttention's KV-cache kernel
+//  consumes for fused rotary, from the SAME rope_inv_freq used in training.
+//  Element dtype matches the attention tensors (bf16/fp16). Layout is
+//  [seqlen, rotary_dim/2] row-major, with table[pos, j] = cos|sin(pos * inv_freq[j]).
+//  The interleaved (GPT-J) pairing matches GRIM's training RoPE, so the fused
+//  decode rotation is numerically identical to the trained model.
+// ═══════════════════════════════════════════════════════════════════════════
+void launchBuildRotaryCosSinTables(
+    const float* inv_freq,              // Device: [rotary_dim/2]
+    void* cos_out,                      // Device: [seqlen, rotary_dim/2] in element dtype
+    void* sin_out,                      // Device: [seqlen, rotary_dim/2] in element dtype
+    int seqlen,
+    int rotary_dim,
+    bool is_bf16,
+    cudaStream_t stream = nullptr
+);
+
+// ═══════════════════════════════════════════════════════════════════════════
 //  Memory Helpers
 // ═══════════════════════════════════════════════════════════════════════════
 

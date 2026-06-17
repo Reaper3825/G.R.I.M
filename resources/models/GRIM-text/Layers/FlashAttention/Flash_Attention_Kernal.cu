@@ -321,6 +321,31 @@ __global__ void flash_fwd_kernel(const FLASH_PARAMS_NS::Flash_fwd_params params)
 #endif
 }
 
+// Split-KV forward kernel wrapper (inference KV-cache decode path).
+//
+// This is the ONLY FlashAttention kernel that contains the fused-rotary
+// Append_KV code path (vendored rotary.h copy_rotary_interleaved /
+// copy_rotary_contiguous). GRIM's training forward uses the non-split
+// compute_attn kernel above and never touches rotary; the decode primitive
+// (flash_attn_fwd_kvcache_rotary) routes here so the new K token is rotated and
+// appended to the cache inside the kernel and Q is rotated on load.
+//
+// GRIM only ever launches this with Split=false (num_splits==1): the epilogue
+// then writes the final output straight to o_ptr/softmax_lse_ptr, so no split
+// accumulation workspace and no combine kernel are required.
+template<typename Kernel_traits, bool Is_causal, bool Is_local, bool Has_alibi,
+         bool Is_even_MN, bool Is_even_K, bool Is_softcap, bool Split, bool Append_KV>
+__global__ void flash_fwd_splitkv_kernel(const FLASH_PARAMS_NS::Flash_fwd_params params) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+    FLASH_UPSTREAM_NS::compute_attn_splitkv<Kernel_traits, Is_causal, Is_local, Has_alibi,
+                       Is_even_MN, Is_even_K, Is_softcap, Split, Append_KV>(params);
+#else
+    if (threadIdx.x == 0) {
+        printf("FATAL: FlashAttention requires SM80+.\n");
+    }
+#endif
+}
+
 template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Is_local, bool Has_alibi,
          bool Is_even_MN, bool Is_even_K, bool Is_softcap>
 __global__ void flash_bwd_dq_dk_dv_loop_seqk_parallel_kernel(const FLASH_PARAMS_NS::Flash_bwd_params params) {
@@ -491,6 +516,61 @@ void run_flash_bwd(Flash_bwd_params& params, cudaStream_t stream) {
     }
     kernel_dq<<<grid_preprocess, Kernel_traits::kNThreads, Kernel_traits::kSmemdQSize, stream>>>(params, 1);
     check_cuda(cudaGetLastError(), "flash_bwd_convert_dq_kernel launch");
+}
+
+// Split-KV forward launcher, fixed to num_splits==1 (Split=false).
+//
+// Mirrors the vendored run_flash_splitkv_fwd template-arg selection but drops
+// the >1 split branch (no combine kernel / no oaccum workspace) and the
+// disabled feature dims (local attention, softcap). Append_KV is switched on
+// the presence of knew_ptr so the same launcher serves prefill (empty cache)
+// and decode (incremental append) — both with fused rotary when rotary_dim>0.
+template<typename Kernel_traits, bool Is_causal>
+void run_flash_splitkv_fwd_no_split(Flash_fwd_params& params, cudaStream_t stream) {
+    static_assert(!Kernel_traits::Is_Q_in_regs, "SplitKV does not support Is_Q_in_regs");
+    static_assert(!Kernel_traits::Share_Q_K_smem, "SplitKV does not support Share_Q_K_smem");
+    constexpr size_t smem_size = Kernel_traits::kSmemSize;
+    const int num_m_block = (params.seqlen_q + Kernel_traits::kBlockM - 1) / Kernel_traits::kBlockM;
+    // num_splits == 1: grid is (m_blocks, batch, heads).
+    dim3 grid(num_m_block, params.b, params.h);
+    const bool is_even_MN = params.cu_seqlens_q == nullptr && params.cu_seqlens_k == nullptr &&
+                            (params.seqlen_k % Kernel_traits::kBlockN == 0) &&
+                            (params.seqlen_q % Kernel_traits::kBlockM == 0);
+    const bool is_even_K = params.d == Kernel_traits::kHeadDim;
+    BOOL_SWITCH(is_even_MN, IsEvenMNConst, [&] {
+        EVENK_SWITCH(is_even_K, IsEvenKConst, [&] {
+            BOOL_SWITCH(params.knew_ptr != nullptr, Append_KV, [&] {
+                ALIBI_SWITCH(params.alibi_slopes_ptr != nullptr, HasAlibi, [&] {
+                    auto kernel = &flash_fwd_splitkv_kernel<
+                        Kernel_traits,
+                        Is_causal,
+                        /*Is_local=*/false,
+                        HasAlibi,
+                        IsEvenMNConst && !Append_KV && IsEvenKConst && !HasAlibi && Kernel_traits::kHeadDim <= 128,
+                        IsEvenKConst && !HasAlibi,
+                        /*Is_softcap=*/false,
+                        /*Split=*/false,
+                        Append_KV>;
+                    if (smem_size >= 48 * 1024) {
+                        check_cuda(cudaFuncSetAttribute(kernel,
+                                                        cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                                        smem_size),
+                                   "cudaFuncSetAttribute(splitkv)");
+                    }
+                    kernel<<<grid, Kernel_traits::kNThreads, smem_size, stream>>>(params);
+                    check_cuda(cudaGetLastError(), "flash_fwd_splitkv_kernel launch");
+                });
+            });
+        });
+    });
+}
+
+template<typename T, int Headdim, bool Is_causal>
+void run_kvcache_rotary_dispatch(Flash_fwd_params& params, cudaStream_t stream) {
+    // Same block-size heuristic as the vendored run_mha_fwd_splitkv_dispatch.
+    constexpr int kBlockM = 64;
+    constexpr int kBlockN = Headdim <= 64 ? 256 : (Headdim <= 128 ? 128 : 64);
+    run_flash_splitkv_fwd_no_split<Flash_fwd_kernel_traits<Headdim, kBlockM, kBlockN, 4, false, false, T>, Is_causal>(params, stream);
 }
 
 template<typename T, bool Is_causal>
@@ -724,6 +804,127 @@ void init_fwd_params_kvcache(Flash_fwd_params& params,
     params.is_causal = is_causal;
     params.is_seqlens_k_cumulative = false;
     params.is_rotary_interleaved = false;
+
+    params.num_splits = 1;
+    params.alibi_slopes_ptr = const_cast<float*>(alibi_slopes);
+    params.alibi_slopes_batch_stride = 0;
+    params.unpadded_lse = false;
+    params.seqlenq_ngroups_swapped = false;
+}
+
+// KV-cache + fused-rotary variant (inference decode/prefill via split-KV kernel).
+//
+// Contract (upstream FA2 mha_fwd_kvcache, non-paged, non-cumulative cu_seqlens_k):
+//   q     : [batch, seqlen_q, n_heads,    head_dim]  new query tokens, UNROTATED
+//   knew  : [batch, seqlen_q, n_kv_heads, head_dim]  new key tokens,   UNROTATED
+//   vnew  : [batch, seqlen_q, n_kv_heads, head_dim]  new value tokens
+//   k/v_cache : [batch, cache_max_seq, n_kv_heads, head_dim]  capacity buffers;
+//               positions [0, fill) already hold rotated K / raw V from prior steps.
+//   cache_seqlens : device int[batch] = per-batch current fill level (seqlen_k_cache).
+//   rotary_cos/sin: [cache_max_seq, rotary_dim/2] in element dtype (see PBM builder).
+//
+// The kernel rotates Q at absolute position = fill (+causal offset), rotates and
+// appends knew into k_cache at [fill, fill+seqlen_q), copies vnew into v_cache,
+// then attends Q over the whole cache. params.seqlen_k is the CAPACITY because
+// n_block_max is clamped by ceil(seqlen_k/kBlockN); the fill comes via cu_seqlens_k.
+void init_fwd_params_kvcache_rotary(Flash_fwd_params& params,
+                                    const void* q, const void* knew, const void* vnew,
+                                    void* k_cache, void* v_cache,
+                                    void* out, void* softmax_lse,
+                                    const void* rotary_cos, const void* rotary_sin,
+                                    const int* cache_seqlens,
+                                    const float* alibi_slopes,
+                                    int batch, int seqlen_q, int cache_max_seq,
+                                    int n_heads, int n_kv_heads, int head_dim, int rotary_dim,
+                                    float softmax_scale, bool is_bf16, bool is_causal) {
+    params = {};
+    params.is_bf16 = is_bf16;
+    params.q_ptr = const_cast<void*>(q);
+    params.k_ptr = k_cache;
+    params.v_ptr = v_cache;
+    params.o_ptr = out;
+    params.softmax_lse_ptr = softmax_lse;
+
+    params.q_head_stride = head_dim;
+    params.k_head_stride = head_dim;
+    params.v_head_stride = head_dim;
+    params.o_head_stride = head_dim;
+
+    params.q_row_stride = n_heads * head_dim;
+    params.k_row_stride = n_kv_heads * head_dim;
+    params.v_row_stride = n_kv_heads * head_dim;
+    params.o_row_stride = n_heads * head_dim;
+
+    // Q/O batch stride spans seqlen_q; K/V cache batch stride spans the full
+    // capacity (cache_max_seq), since the cache buffer holds every position.
+    params.q_batch_stride = static_cast<int64_t>(seqlen_q) * params.q_row_stride;
+    params.k_batch_stride = static_cast<int64_t>(cache_max_seq) * params.k_row_stride;
+    params.v_batch_stride = static_cast<int64_t>(cache_max_seq) * params.v_row_stride;
+    params.o_batch_stride = static_cast<int64_t>(seqlen_q) * params.o_row_stride;
+
+    params.b = batch;
+    params.h = n_heads;
+    params.h_k = n_kv_heads;
+    params.h_h_k_ratio = n_heads / n_kv_heads;
+    params.seqlen_q = seqlen_q;
+    // CAPACITY, not fill (see header note); fill arrives via cu_seqlens_k.
+    params.seqlen_k = cache_max_seq;
+    params.seqlen_knew = seqlen_q;
+    params.d = head_dim;
+    params.seqlen_q_rounded = round_multiple(seqlen_q, 128);
+    params.seqlen_k_rounded = round_multiple(cache_max_seq, 128);
+    params.d_rounded = round_multiple(head_dim, head_dim <= 128 ? 32 : 64);
+    params.rotary_dim = rotary_dim;
+    params.total_q = batch * seqlen_q;
+
+    const float scale = require_softmax_scale(softmax_scale, head_dim, "init_fwd_params_kvcache_rotary");
+    params.scale_softmax = scale;
+    params.scale_softmax_log2 = scale * kLog2e;
+    params.softcap = 0.0f;
+
+    params.p_ptr = nullptr;
+    params.oaccum_ptr = nullptr;
+    params.softmax_lseaccum_ptr = nullptr;
+    params.cu_seqlens_q = nullptr;
+    // Non-cumulative: cu_seqlens_k[b] stores the per-batch cache fill level.
+    params.cu_seqlens_k = const_cast<int*>(cache_seqlens);
+    params.leftpad_k = nullptr;
+    params.seqused_k = nullptr;
+    params.blockmask = nullptr;
+
+    // New tokens the kernel appends into the cache (rotary applied to K-new).
+    params.knew_ptr = const_cast<void*>(knew);
+    params.vnew_ptr = const_cast<void*>(vnew);
+    params.knew_batch_stride = static_cast<int64_t>(seqlen_q) * params.k_row_stride;
+    params.vnew_batch_stride = static_cast<int64_t>(seqlen_q) * params.v_row_stride;
+    params.knew_row_stride = params.k_row_stride;
+    params.vnew_row_stride = params.v_row_stride;
+    params.knew_head_stride = head_dim;
+    params.vnew_head_stride = head_dim;
+
+    params.rotary_cos_ptr = const_cast<void*>(rotary_cos);
+    params.rotary_sin_ptr = const_cast<void*>(rotary_sin);
+    params.cache_batch_idx = nullptr;
+    params.block_table = nullptr;
+    params.block_table_batch_stride = 0;
+    params.page_block_size = 0;
+
+    // Inference: no dropout.
+    params.p_dropout = 1.0f;
+    params.p_dropout_in_uint8_t = 255;
+    params.rp_dropout = 1.0f;
+    params.scale_softmax_rp_dropout = scale;
+    params.philox_args = {0ull, 0ull};
+    params.rng_state = nullptr;
+
+    params.window_size_left = -1;
+    params.window_size_right = is_causal ? 0 : -1;
+    params.is_causal = is_causal;
+    // cu_seqlens_k stores absolute fill lengths, not cumulative offsets.
+    params.is_seqlens_k_cumulative = false;
+    // GRIM training RoPE is GPT-J interleaved (pairs 2i, 2i+1) — match it so the
+    // fused decode rotation is numerically identical to the trained model.
+    params.is_rotary_interleaved = true;
 
     params.num_splits = 1;
     params.alibi_slopes_ptr = const_cast<float*>(alibi_slopes);
@@ -1176,6 +1377,121 @@ extern "C" void flash_attn_fwd_kvcache(
                                  " n_heads=" + std::to_string(n_heads) +
                                  " n_kv_heads=" + std::to_string(n_kv_heads) +
                                  " head_dim=" + std::to_string(head_dim) + ")");
+    }
+}
+
+extern "C" void flash_attn_fwd_kvcache_rotary(
+    const void* q,
+    const void* knew,
+    const void* vnew,
+    void* k_cache,
+    void* v_cache,
+    void* out,
+    void* softmax_lse,
+    const void* rotary_cos,
+    const void* rotary_sin,
+    const int* cache_seqlens,
+    const float* alibi_slopes,
+    int batch,
+    int seqlen_q,
+    int cache_max_seq,
+    int n_heads,
+    int n_kv_heads,
+    int head_dim,
+    int rotary_dim,
+    float softmax_scale,
+    bool causal,
+    bool is_bf16,
+    cudaStream_t stream)
+{
+    // --- Validation (Rule 20: crash on bad input) ---
+    if (!q) throw std::runtime_error("flash_attn_fwd_kvcache_rotary: q is NULL");
+    if (!knew) throw std::runtime_error("flash_attn_fwd_kvcache_rotary: knew is NULL");
+    if (!vnew) throw std::runtime_error("flash_attn_fwd_kvcache_rotary: vnew is NULL");
+    if (!k_cache) throw std::runtime_error("flash_attn_fwd_kvcache_rotary: k_cache is NULL");
+    if (!v_cache) throw std::runtime_error("flash_attn_fwd_kvcache_rotary: v_cache is NULL");
+    if (!out) throw std::runtime_error("flash_attn_fwd_kvcache_rotary: out is NULL");
+    if (!softmax_lse) throw std::runtime_error("flash_attn_fwd_kvcache_rotary: softmax_lse is NULL");
+    if (!rotary_cos) throw std::runtime_error("flash_attn_fwd_kvcache_rotary: rotary_cos is NULL");
+    if (!rotary_sin) throw std::runtime_error("flash_attn_fwd_kvcache_rotary: rotary_sin is NULL");
+    if (!cache_seqlens) throw std::runtime_error("flash_attn_fwd_kvcache_rotary: cache_seqlens is NULL");
+#if defined(GRIM_FLASHATTN_HDIM64_ONLY)
+    if (head_dim != 64) {
+        throw std::runtime_error("flash_attn_fwd_kvcache_rotary: head_dim must be 64 (GRIM_FLASHATTN_HDIM64_ONLY), got " + std::to_string(head_dim));
+    }
+#else
+    if (head_dim != 32 && head_dim != 64) {
+        throw std::runtime_error("flash_attn_fwd_kvcache_rotary: head_dim must be 32 or 64, got " + std::to_string(head_dim));
+    }
+#endif
+    if (n_heads <= 0 || n_kv_heads <= 0 || n_heads % n_kv_heads != 0) {
+        throw std::runtime_error("flash_attn_fwd_kvcache_rotary: invalid head configuration n_heads=" + std::to_string(n_heads) +
+                                 " n_kv_heads=" + std::to_string(n_kv_heads));
+    }
+#if defined(GRIM_FLASHATTN_CAUSAL_ONLY)
+    if (!causal) {
+        throw std::runtime_error("flash_attn_fwd_kvcache_rotary: non-causal disabled (GRIM_FLASHATTN_CAUSAL_ONLY)");
+    }
+#endif
+#if defined(GRIM_FLASHATTN_BF16_ONLY)
+    if (!is_bf16) {
+        throw std::runtime_error("flash_attn_fwd_kvcache_rotary: FP16 disabled (GRIM_FLASHATTN_BF16_ONLY)");
+    }
+#endif
+    if (batch <= 0)
+        throw std::runtime_error("flash_attn_fwd_kvcache_rotary: batch must be > 0, got " + std::to_string(batch));
+    if (seqlen_q <= 0)
+        throw std::runtime_error("flash_attn_fwd_kvcache_rotary: seqlen_q must be > 0, got " + std::to_string(seqlen_q));
+    if (cache_max_seq < seqlen_q)
+        throw std::runtime_error("flash_attn_fwd_kvcache_rotary: cache_max_seq (" + std::to_string(cache_max_seq) +
+                                 ") < seqlen_q (" + std::to_string(seqlen_q) + ")");
+    if (rotary_dim <= 0 || (rotary_dim & 1) != 0 || rotary_dim > head_dim)
+        throw std::runtime_error("flash_attn_fwd_kvcache_rotary: invalid rotary_dim=" + std::to_string(rotary_dim) +
+                                 " for head_dim=" + std::to_string(head_dim));
+
+    // --- Init params ---
+    grim_flash::Flash_fwd_params params;
+    grim_flash::detail::init_fwd_params_kvcache_rotary(
+        params, q, knew, vnew, k_cache, v_cache, out, softmax_lse,
+        rotary_cos, rotary_sin, cache_seqlens, alibi_slopes,
+        batch, seqlen_q, cache_max_seq, n_heads, n_kv_heads, head_dim, rotary_dim,
+        softmax_scale, is_bf16, causal);
+
+    // --- Kernel dispatch (split-KV kernel, num_splits==1, fused rotary) ---
+#if defined(GRIM_FLASHATTN_HDIM64_ONLY)
+    grim_flash::detail::run_kvcache_rotary_dispatch<cutlass::bfloat16_t, 64, true>(params, stream);
+#else
+    if (causal) {
+        if (head_dim == 32) {
+            if (is_bf16) grim_flash::detail::run_kvcache_rotary_dispatch<cutlass::bfloat16_t, 32, true>(params, stream);
+            else         grim_flash::detail::run_kvcache_rotary_dispatch<cutlass::half_t, 32, true>(params, stream);
+        } else {
+            if (is_bf16) grim_flash::detail::run_kvcache_rotary_dispatch<cutlass::bfloat16_t, 64, true>(params, stream);
+            else         grim_flash::detail::run_kvcache_rotary_dispatch<cutlass::half_t, 64, true>(params, stream);
+        }
+    } else {
+        if (head_dim == 32) {
+            if (is_bf16) grim_flash::detail::run_kvcache_rotary_dispatch<cutlass::bfloat16_t, 32, false>(params, stream);
+            else         grim_flash::detail::run_kvcache_rotary_dispatch<cutlass::half_t, 32, false>(params, stream);
+        } else {
+            if (is_bf16) grim_flash::detail::run_kvcache_rotary_dispatch<cutlass::bfloat16_t, 64, false>(params, stream);
+            else         grim_flash::detail::run_kvcache_rotary_dispatch<cutlass::half_t, 64, false>(params, stream);
+        }
+    }
+#endif
+
+    // --- Error check (Rule 20: crash on failure) ---
+    cudaError_t err = cudaStreamSynchronize(stream);
+    if (err != cudaSuccess) {
+        throw std::runtime_error("flash_attn_fwd_kvcache_rotary: kernel failed: " +
+                                 std::string(cudaGetErrorString(err)) +
+                                 " (batch=" + std::to_string(batch) +
+                                 " seqlen_q=" + std::to_string(seqlen_q) +
+                                 " cache_max_seq=" + std::to_string(cache_max_seq) +
+                                 " n_heads=" + std::to_string(n_heads) +
+                                 " n_kv_heads=" + std::to_string(n_kv_heads) +
+                                 " head_dim=" + std::to_string(head_dim) +
+                                 " rotary_dim=" + std::to_string(rotary_dim) + ")");
     }
 }
 

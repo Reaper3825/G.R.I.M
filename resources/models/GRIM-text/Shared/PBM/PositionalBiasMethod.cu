@@ -12,6 +12,8 @@
 #include "PositionalBiasMethod.hpp"
 
 #include <cuda_runtime.h>
+#include <cuda_bf16.h>
+#include <cuda_fp16.h>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
@@ -520,6 +522,85 @@ void launchRoPERotationGQA_backward(
             throw std::runtime_error(std::string(kTag) +
                 " grad_K backward kernel launch error: " + cudaGetErrorString(err));
         }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  RoPE cos/sin table builder (FlashAttention-v2 fused-rotary decode path)
+//
+//  FA2's KV-cache kernel applies RoPE from precomputed cos/sin tables rather
+//  than inv_freq. Each (pos, j) element is cos/sin(pos * inv_freq[j]); this is
+//  exactly the angle ropeRotationGQAKernel uses (theta = pos * inv_freq[pair]),
+//  and the interleaved (2j, 2j+1) pairing matches FA2's copy_rotary_interleaved,
+//  so the fused decode rotation is numerically identical to training RoPE.
+// ═══════════════════════════════════════════════════════════════════════════
+template<typename ElemT>
+__global__ void buildRotaryCosSinTablesKernel(
+    const float* __restrict__ inv_freq,
+    ElemT* __restrict__ cos_out,
+    ElemT* __restrict__ sin_out,
+    int seqlen,
+    int num_pairs
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int total = seqlen * num_pairs;
+    if (idx >= total) return;
+
+    const int pos = idx / num_pairs;
+    const int j = idx - pos * num_pairs;
+    const float theta = static_cast<float>(pos) * inv_freq[j];
+    cos_out[idx] = static_cast<ElemT>(cosf(theta));
+    sin_out[idx] = static_cast<ElemT>(sinf(theta));
+}
+
+void launchBuildRotaryCosSinTables(
+    const float* inv_freq,
+    void* cos_out,
+    void* sin_out,
+    int seqlen,
+    int rotary_dim,
+    bool is_bf16,
+    cudaStream_t stream
+) {
+    // Rule 20: crash loud on invalid inputs.
+    if (!inv_freq) {
+        throw std::runtime_error(std::string(kTag) + " launchBuildRotaryCosSinTables: inv_freq is null");
+    }
+    if (!cos_out || !sin_out) {
+        throw std::runtime_error(std::string(kTag) + " launchBuildRotaryCosSinTables: cos_out/sin_out is null");
+    }
+    if (seqlen <= 0) {
+        throw std::runtime_error(std::string(kTag) + " launchBuildRotaryCosSinTables: seqlen must be > 0, got " +
+                                 std::to_string(seqlen));
+    }
+    if (rotary_dim <= 0 || (rotary_dim & 1) != 0) {
+        throw std::runtime_error(std::string(kTag) + " launchBuildRotaryCosSinTables: rotary_dim must be positive and even, got " +
+                                 std::to_string(rotary_dim));
+    }
+
+    const int num_pairs = rotary_dim / 2;
+    const int total = seqlen * num_pairs;
+    const int threads = 256;
+    const int blocks = (total + threads - 1) / threads;
+
+    if (is_bf16) {
+        buildRotaryCosSinTablesKernel<__nv_bfloat16><<<blocks, threads, 0, stream>>>(
+            inv_freq,
+            reinterpret_cast<__nv_bfloat16*>(cos_out),
+            reinterpret_cast<__nv_bfloat16*>(sin_out),
+            seqlen, num_pairs);
+    } else {
+        buildRotaryCosSinTablesKernel<half><<<blocks, threads, 0, stream>>>(
+            inv_freq,
+            reinterpret_cast<half*>(cos_out),
+            reinterpret_cast<half*>(sin_out),
+            seqlen, num_pairs);
+    }
+
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string(kTag) +
+            " launchBuildRotaryCosSinTables launch error: " + cudaGetErrorString(err));
     }
 }
 
