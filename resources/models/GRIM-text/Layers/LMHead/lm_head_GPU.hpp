@@ -42,25 +42,8 @@ namespace GRIM {
 inline constexpr bool kEnableLmHeadTokenTypeGateExperiment = false;
 
 //======================================================//
-//  LM-head free functions over registry-owned tensors
+//  LM-head free function over registry-owned tensors
 //======================================================//
-
-inline Tensor& requireMutableFinalRmsGamma(
-    LMHeadParameterTensors& parameter_tensors,
-    const HyperParameters::LMHeadLayerConstructionHP& hp,
-    const char* caller) {
-    if (hp.freeze_learned_rms_gammas) {
-        throw std::runtime_error(
-            std::string("[FROZEN-GAMMA-LEAK] mutable access to final_rms_gamma while "
-                        "freeze_learned_rms_gammas=true. caller=") +
-            (caller ? caller : "<unknown>"));
-    }
-    return parameter_tensors.final_rms_gamma;
-}
-
-inline bool lmHeadWeightsReady(const LMHeadParameterTensors& parameter_tensors) {
-    return parameter_tensors.weights.data != nullptr;
-}
 
 /// LM head forward with autograd tracking:
 ///   0. Optional: RMSNorm(input, final_rms_gamma_frozen_or_trained_) — pre-LM-head normalization

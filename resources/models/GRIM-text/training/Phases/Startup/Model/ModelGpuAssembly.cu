@@ -198,7 +198,7 @@ const GRIM::LMHeadParameterTensors& requireLmHeadParametersReady(
     const ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const char* caller) {
     const auto& lm_head_parameters = parameter_registry.requireLmHeadParameters(caller);
-    if (!GRIM::lmHeadWeightsReady(lm_head_parameters)) {
+    if (!lm_head_parameters.weights.data) {
         throw std::runtime_error(
             std::string("[") + caller + "] LM-head weights are not initialized on the registry owner");
     }
