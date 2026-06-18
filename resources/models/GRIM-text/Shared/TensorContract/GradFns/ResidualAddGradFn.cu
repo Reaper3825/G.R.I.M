@@ -47,8 +47,8 @@ void ResidualAddGradFn::capture_inputs(Tensor& x, Tensor& r, cudaStream_t stream
     element_count = x.numel();
 
     if (input_requires_grad) {
-        x.ensure_grad();
         if (x.is_leaf) {
+            x.ensure_grad();
             input_grad = x.grad_data();
         } else {
             const size_t x_numel = x.numel();
@@ -60,8 +60,8 @@ void ResidualAddGradFn::capture_inputs(Tensor& x, Tensor& r, cudaStream_t stream
         }
     }
     if (residual_requires_grad) {
-        r.ensure_grad();
         if (r.is_leaf) {
+            r.ensure_grad();
             residual_grad = r.grad_data();
         } else {
             const size_t r_numel = r.numel();

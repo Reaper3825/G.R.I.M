@@ -132,8 +132,8 @@ void BiasAddGradFn::capture_inputs(Tensor& input, Tensor& bias,
     register_input(input.grad_fn);
 
     if (input_requires_grad) {
-        input.ensure_grad();
         if (input.is_leaf) {
+            input.ensure_grad();
             grad_input = input.grad_data();
             AG_TRACE("[BiasAddGradFn] Using persistent grad_input buffer (leaf): %p\n", (void*)grad_input);
         } else {
@@ -150,8 +150,8 @@ void BiasAddGradFn::capture_inputs(Tensor& input, Tensor& bias,
     }
 
     if (bias_requires_grad) {
-        bias.ensure_grad();
         if (bias.is_leaf) {
+            bias.ensure_grad();
             grad_bias = bias.grad_data();
             AG_TRACE("[BiasAddGradFn] Using persistent grad_bias buffer (leaf): %p\n", (void*)grad_bias);
         } else {

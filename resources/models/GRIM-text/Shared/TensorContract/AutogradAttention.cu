@@ -135,11 +135,9 @@ struct MatMulGradFn : public GradFn {
         // - Leaf tensors (weights): persist in TrainingState, use their grad buffer directly
         // - Non-leaf tensors (activations): temporary, need owned buffer
         if (a_requires_grad) {
-            a.ensure_grad();  // Ensure tensor has grad buffer
-            
             if (a.is_leaf) {
-                // Leaf tensor (weight): persists, safe to use directly
-                grad_a = a.grad_data();  // ISSUE #59: Use accessor
+                a.ensure_grad();
+                grad_a = a.grad_data();
                 AG_TRACE("[MatMulGradFn] Using persistent grad_a buffer (leaf): %p\n", (void*)grad_a);
             } else {
                 // Non-leaf tensor (activation): temporary, allocate owned buffer
@@ -160,11 +158,9 @@ struct MatMulGradFn : public GradFn {
             }
         }
         if (b_requires_grad) {
-            b.ensure_grad();  // Ensure tensor has grad buffer
-            
             if (b.is_leaf) {
-                // Leaf tensor (weight): persists, safe to use directly
-                grad_b = b.grad_data();  // ISSUE #59: Use accessor
+                b.ensure_grad();
+                grad_b = b.grad_data();
                 AG_TRACE("[MatMulGradFn] Using persistent grad_b buffer (leaf): %p\n", (void*)grad_b);
                 
 
@@ -705,12 +701,19 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
     float* q_grad = nullptr;
     float* k_grad = nullptr;
     float* v_grad = nullptr;
-    // Own the Tensor::grad_ shared_ptrs behind q_grad/k_grad/v_grad.
-    // This lets attention internals be scoped locally without leaving SDPA
-    // backward with dangling raw pointers into destroyed non-leaf Tensor grads.
-    std::shared_ptr<Tensor> q_grad_owner;
-    std::shared_ptr<Tensor> k_grad_owner;
-    std::shared_ptr<Tensor> v_grad_owner;
+    // Q/K/V are non-leaf activations (outputs of split_and_reshape_qkv / rope_rotation),
+    // so dQ/dK/dV are carried in GradFn-owned scratch buffers — the same Issue #55/#56
+    // ownership model every other node uses (MatMulGradFn, AddGradFn, …). We must NOT
+    // repurpose the input activation tensors' grad_ buffers as backward scratch: a
+    // non-leaf's grad_ is transient, is never zeroed by the leaf zero_grad sweep, and
+    // is not part of the gradient carrier contract. The leaf branch (unused in this
+    // pipeline) falls back to the persistent grad buffer like the other nodes.
+    bool q_is_leaf = false;
+    bool k_is_leaf = false;
+    bool v_is_leaf = false;
+    std::shared_ptr<float> owned_q_grad;  // dQ scratch (non-leaf carrier)
+    std::shared_ptr<float> owned_k_grad;  // dK scratch (non-leaf carrier)
+    std::shared_ptr<float> owned_v_grad;  // dV scratch (non-leaf carrier)
     TensorContract::TensorShape q_shape, k_shape, v_shape;
     std::shared_ptr<GradFn> q_grad_fn;
     std::shared_ptr<GradFn> k_grad_fn;
@@ -771,30 +774,17 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         register_input(k.grad_fn);
         register_input(v.grad_fn);
         
-        if (q_requires_grad) {
-            q.ensure_grad();
-            q_grad_owner = q.grad_;
-            if (!q_grad_owner || !q_grad_owner->data) {
-                throw std::runtime_error("ScaledDotProductAttentionGradFn::capture_inputs: Q grad owner is NULL after ensure_grad");
-            }
-            q_grad = q_grad_owner->data;
-        }
-        if (k_requires_grad) {
-            k.ensure_grad();
-            k_grad_owner = k.grad_;
-            if (!k_grad_owner || !k_grad_owner->data) {
-                throw std::runtime_error("ScaledDotProductAttentionGradFn::capture_inputs: K grad owner is NULL after ensure_grad");
-            }
-            k_grad = k_grad_owner->data;
-        }
-        if (v_requires_grad) {
-            v.ensure_grad();
-            v_grad_owner = v.grad_;
-            if (!v_grad_owner || !v_grad_owner->data) {
-                throw std::runtime_error("ScaledDotProductAttentionGradFn::capture_inputs: V grad owner is NULL after ensure_grad");
-            }
-            v_grad = v_grad_owner->data;
-        }
+        q_is_leaf = q.is_leaf;
+        k_is_leaf = k.is_leaf;
+        v_is_leaf = v.is_leaf;
+
+        // Leaf inputs (weights) own a persistent grad buffer — accumulate into it
+        // directly, exactly like AddGradFn/MatMulGradFn. Non-leaf activations (the
+        // real path here) get a GradFn-owned scratch carrier allocated in apply()
+        // once dimensions are known; we never call alloc_grad() on a transient.
+        if (q_requires_grad && q_is_leaf) { q.ensure_grad(); q_grad = q.grad_data(); }
+        if (k_requires_grad && k_is_leaf) { k.ensure_grad(); k_grad = k.grad_data(); }
+        if (v_requires_grad && v_is_leaf) { v.ensure_grad(); v_grad = v.grad_data(); }
     }
     
     void apply_impl(const Tensor& grad_output,
@@ -889,8 +879,17 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         // DISABLED Issue #83 normalization - use scale=1.0 for all gradients.
         // =========================================================================
         
-        // Convert gradients back to FP32 BHSD and accumulate WITHOUT normalization
-        if (q_requires_grad && q_grad) {
+        // Convert gradients back to FP32 BHSD and accumulate WITHOUT normalization.
+        // Non-leaf inputs receive a freshly zeroed GradFn-owned carrier here (Issue
+        // #55/#56 model); leaf inputs accumulate into their persistent grad buffer.
+        if (q_requires_grad) {
+            if (!q_is_leaf && !owned_q_grad) {
+                float* buf = nullptr;
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buf), q_elems * sizeof(float), "sdpa_owned_q_grad");
+                cudaMemsetAsync(buf, 0, q_elems * sizeof(float), stream);
+                owned_q_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
+                q_grad = buf;
+            }
             float* grad_q_fp32 = nullptr;
             cudaMallocOrThrow(reinterpret_cast<void**>(&grad_q_fp32), q_elems * sizeof(float), "sdpa_grad_q_fp32");
             cudaMemsetAsync(grad_q_fp32, 0, q_elems * sizeof(float), stream);
@@ -905,7 +904,14 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
             cudaFreeAsync(grad_q_fp32, stream);
         }
         
-        if (k_requires_grad && k_grad) {
+        if (k_requires_grad) {
+            if (!k_is_leaf && !owned_k_grad) {
+                float* buf = nullptr;
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buf), kv_elems * sizeof(float), "sdpa_owned_k_grad");
+                cudaMemsetAsync(buf, 0, kv_elems * sizeof(float), stream);
+                owned_k_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
+                k_grad = buf;
+            }
             float* grad_k_fp32 = nullptr;
             cudaMallocOrThrow(reinterpret_cast<void**>(&grad_k_fp32), kv_elems * sizeof(float), "sdpa_grad_k_fp32");
             cudaMemsetAsync(grad_k_fp32, 0, kv_elems * sizeof(float), stream);
@@ -920,7 +926,14 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
             cudaFreeAsync(grad_k_fp32, stream);
         }
         
-        if (v_requires_grad && v_grad) {
+        if (v_requires_grad) {
+            if (!v_is_leaf && !owned_v_grad) {
+                float* buf = nullptr;
+                cudaMallocOrThrow(reinterpret_cast<void**>(&buf), kv_elems * sizeof(float), "sdpa_owned_v_grad");
+                cudaMemsetAsync(buf, 0, kv_elems * sizeof(float), stream);
+                owned_v_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
+                v_grad = buf;
+            }
             float* grad_v_fp32 = nullptr;
             cudaMallocOrThrow(reinterpret_cast<void**>(&grad_v_fp32), kv_elems * sizeof(float), "sdpa_grad_v_fp32");
             cudaMemsetAsync(grad_v_fp32, 0, kv_elems * sizeof(float), stream);
@@ -973,9 +986,9 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         if (dv_bf16) { cudaFree(dv_bf16); dv_bf16 = nullptr; }
         if (dout_bf16) { cudaFree(dout_bf16); dout_bf16 = nullptr; }
         q_grad = nullptr; k_grad = nullptr; v_grad = nullptr;
-        q_grad_owner.reset();
-        k_grad_owner.reset();
-        v_grad_owner.reset();
+        owned_q_grad.reset();
+        owned_k_grad.reset();
+        owned_v_grad.reset();
         q_grad_fn.reset();
         k_grad_fn.reset();
         v_grad_fn.reset();
@@ -1248,7 +1261,7 @@ struct ReshapeFromBHSDGradFn : public GradFn {
         register_input(bhsd_input.grad_fn);
         
         if (input_requires_grad) {
-            bhsd_input.ensure_grad();
+            bhsd_input.alloc_grad();
             input_grad = bhsd_input.grad_data();
         }
     }

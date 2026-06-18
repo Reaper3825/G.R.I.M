@@ -699,23 +699,23 @@ void initializeFeedForwardParameterTensors(
 
         tensors.W_gate = GRIM::Tensor::zeros({ffn_hp.d_model, ffn_hp.d_ff}, init_stream, "ffn_w_gate");
         tensors.W_gate.requires_grad_();
-        tensors.W_gate.ensure_grad();
+        tensors.W_gate.alloc_grad();
         GRIM::Tensor::xavier_uniform_(tensors.W_gate, ffn_seed, init_stream);
 
         tensors.W1 = GRIM::Tensor::zeros({ffn_hp.d_model, ffn_hp.d_ff}, init_stream, "ffn_w1");
         tensors.W1.requires_grad_();
-        tensors.W1.ensure_grad();
+        tensors.W1.alloc_grad();
         GRIM::Tensor::xavier_uniform_(tensors.W1, ffn_seed + 1, init_stream);
 
         tensors.W2 = GRIM::Tensor::zeros({ffn_hp.d_ff, ffn_hp.d_model}, init_stream, "ffn_w2");
         tensors.W2.requires_grad_();
-        tensors.W2.ensure_grad();
+        tensors.W2.alloc_grad();
         GRIM::Tensor::xavier_uniform_with_gain_(tensors.W2, ffn_seed + 2, residual_projection_init_gain, init_stream);
 
         if (ffn_hp.use_bias) {
             tensors.b2 = GRIM::Tensor::zeros({1, ffn_hp.d_model}, init_stream, "ffn_b2");
             tensors.b2.requires_grad_();
-            tensors.b2.ensure_grad();
+            tensors.b2.alloc_grad();
         }
     }
 
@@ -773,7 +773,7 @@ void initializeEncodingLayerParameterTensors(
         tensors.rms1_gamma = GRIM::Tensor::zeros({encoder_hp.d_model}, init_stream, "enc_rms1_gamma");
         if (!encoder_hp.freeze_learned_rms_gammas) {
             tensors.rms1_gamma.requires_grad_();
-            tensors.rms1_gamma.ensure_grad();
+            tensors.rms1_gamma.alloc_grad();
         }
         cudaError_t copy_err = cudaMemcpyAsync(
             tensors.rms1_gamma.data,
@@ -789,7 +789,7 @@ void initializeEncodingLayerParameterTensors(
         tensors.rms2_gamma = GRIM::Tensor::zeros({encoder_hp.d_model}, init_stream, "enc_rms2_gamma");
         if (!encoder_hp.freeze_learned_rms_gammas) {
             tensors.rms2_gamma.requires_grad_();
-            tensors.rms2_gamma.ensure_grad();
+            tensors.rms2_gamma.alloc_grad();
         }
         copy_err = cudaMemcpyAsync(
             tensors.rms2_gamma.data,
@@ -804,28 +804,28 @@ void initializeEncodingLayerParameterTensors(
 
         tensors.W_qkv = GRIM::Tensor::zeros({encoder_hp.qkv_dim, encoder_hp.d_model}, init_stream, "enc_W_qkv");
         tensors.W_qkv.requires_grad_();
-        tensors.W_qkv.ensure_grad();
+        tensors.W_qkv.alloc_grad();
         GRIM::Tensor::xavier_uniform_(tensors.W_qkv, layer_seed + 0, init_stream);
 
         tensors.W_o = GRIM::Tensor::zeros({encoder_hp.d_model, encoder_hp.d_model}, init_stream, "enc_W_o");
         tensors.W_o.requires_grad_();
-        tensors.W_o.ensure_grad();
+        tensors.W_o.alloc_grad();
         GRIM::Tensor::xavier_uniform_with_gain_(tensors.W_o, layer_seed + 1, residual_projection_init_gain, init_stream);
 
         if (encoder_hp.use_bias) {
             tensors.b_qkv = GRIM::Tensor::zeros({encoder_hp.qkv_dim}, init_stream, "enc_b_qkv");
             tensors.b_qkv.requires_grad_();
-            tensors.b_qkv.ensure_grad();
+            tensors.b_qkv.alloc_grad();
 
             tensors.b_o = GRIM::Tensor::zeros({encoder_hp.d_model}, init_stream, "enc_b_o");
             tensors.b_o.requires_grad_();
-            tensors.b_o.ensure_grad();
+            tensors.b_o.alloc_grad();
         }
 
         if (encoder_hp.use_layer_scale) {
             tensors.layer_scale1 = GRIM::Tensor::zeros({1, encoder_hp.d_model}, init_stream, "enc_layer_scale1");
             tensors.layer_scale1.requires_grad_();
-            tensors.layer_scale1.ensure_grad();
+            tensors.layer_scale1.alloc_grad();
             copy_err = cudaMemcpyAsync(
                 tensors.layer_scale1.data,
                 layer_scale_init.data(),
@@ -839,7 +839,7 @@ void initializeEncodingLayerParameterTensors(
 
             tensors.layer_scale2 = GRIM::Tensor::zeros({1, encoder_hp.d_model}, init_stream, "enc_layer_scale2");
             tensors.layer_scale2.requires_grad_();
-            tensors.layer_scale2.ensure_grad();
+            tensors.layer_scale2.alloc_grad();
             copy_err = cudaMemcpyAsync(
                 tensors.layer_scale2.data,
                 layer_scale_init.data(),
@@ -892,7 +892,7 @@ void initializeEmbeddingParameterTensors(
         "embedding.token_weights");
     if (requires_grad) {
         embedding_parameters.token_weights.requires_grad_();
-        embedding_parameters.token_weights.ensure_grad();
+        embedding_parameters.token_weights.alloc_grad();
     }
     Tensor::xavier_uniform_(embedding_parameters.token_weights, weight_init_seed, init_stream);
 
@@ -969,20 +969,20 @@ void initializeLmHeadParameterTensors(
             init_stream,
             "lm_head.weights");
         parameter_tensors.weights.requires_grad_();
-        parameter_tensors.weights.ensure_grad();
+        parameter_tensors.weights.alloc_grad();
         Tensor::xavier_uniform_(parameter_tensors.weights, weight_init_seed, init_stream);
     }
 
     if (lm_head_hp.use_bias) {
         parameter_tensors.bias = Tensor::zeros({lm_head_hp.vocab_size}, init_stream, "lm_head.bias");
         parameter_tensors.bias.requires_grad_();
-        parameter_tensors.bias.ensure_grad();
+        parameter_tensors.bias.alloc_grad();
     }
 
     parameter_tensors.final_rms_gamma = Tensor::zeros({lm_head_hp.d_model}, init_stream, "final_rms_gamma");
     if (!lm_head_hp.freeze_learned_rms_gammas) {
         parameter_tensors.final_rms_gamma.requires_grad_();
-        parameter_tensors.final_rms_gamma.ensure_grad();
+        parameter_tensors.final_rms_gamma.alloc_grad();
     }
 
     std::vector<float> ones(static_cast<std::size_t>(lm_head_hp.d_model), 1.0f);
@@ -1035,7 +1035,7 @@ void initializeExecutionBlockParameterTensors(
             init_stream,
             name);
         tensor.requires_grad_();
-        tensor.ensure_grad();
+        tensor.alloc_grad();
         Tensor::xavier_uniform_(tensor, seed, init_stream);
         return std::move(tensor);
     };
@@ -1046,7 +1046,7 @@ void initializeExecutionBlockParameterTensors(
             init_stream,
             name);
         tensor.requires_grad_();
-        tensor.ensure_grad();
+        tensor.alloc_grad();
         return std::move(tensor);
     };
     auto make_scalar = [&](float init_val, const char* name) -> Tensor {
@@ -1056,7 +1056,7 @@ void initializeExecutionBlockParameterTensors(
             init_stream,
             name);
         tensor.requires_grad_();
-        tensor.ensure_grad();
+        tensor.alloc_grad();
         const cudaError_t copy_err = cudaMemcpyAsync(
             tensor.data,
             &init_val,
@@ -1104,7 +1104,7 @@ void initializeExecutionBlockParameterTensors(
         init_stream,
         "exec_block.w_inject_gate");
     params.w_inject_gate.requires_grad_();
-    params.w_inject_gate.ensure_grad();
+    params.w_inject_gate.alloc_grad();
     {
         std::vector<float> neg_two(static_cast<std::size_t>(dm), -2.0f);
         const cudaError_t copy_err = cudaMemcpyAsync(
@@ -1125,7 +1125,7 @@ void initializeExecutionBlockParameterTensors(
         init_stream,
         "exec_block.W_gate_read");
     params.W_gate_read.requires_grad_();
-    params.W_gate_read.ensure_grad();
+    params.W_gate_read.alloc_grad();
     params.tau = make_scalar(1.0f, "exec_block.tau");
 
     emitInfo("[initializeExecutionBlockParameterTensors] Initialized registry-owned ExecutionBlock tensors");
@@ -1175,7 +1175,7 @@ void initializeNumberEncoderParameterTensors(
     auto make_xavier = [&](int rows, int cols, std::uint64_t seed, const char* name) -> GRIM::Tensor {
         GRIM::Tensor t = GRIM::Tensor::zeros({rows, cols}, init_stream, name);
         t.requires_grad_();
-        t.ensure_grad();
+        t.alloc_grad();
         GRIM::Tensor::xavier_uniform_(t, seed, init_stream);
         return t;
     };
@@ -1185,12 +1185,12 @@ void initializeNumberEncoderParameterTensors(
     params->W_c1 = make_xavier(GRIM::Batching::BatchPayload::kNumberSlotFeatureDim, d_hidden, weight_init_seed + 2, "number_encoder.W_c1");
     params->b_c1 = GRIM::Tensor::zeros({1, d_hidden}, init_stream, "number_encoder.b_c1");
     params->b_c1.requires_grad_();
-    params->b_c1.ensure_grad();
+    params->b_c1.alloc_grad();
     params->W_c2 = make_xavier(d_hidden, d_model, weight_init_seed + 3, "number_encoder.W_c2");
     params->W_g1 = make_xavier(GRIM::Batching::BatchPayload::kNumberGlobalFeatureDim, d_hidden, weight_init_seed + 4, "number_encoder.W_g1");
     params->b_g1 = GRIM::Tensor::zeros({1, d_hidden}, init_stream, "number_encoder.b_g1");
     params->b_g1.requires_grad_();
-    params->b_g1.ensure_grad();
+    params->b_g1.alloc_grad();
     params->W_g2 = make_xavier(d_hidden, d_model, weight_init_seed + 5, "number_encoder.W_g2");
 
     const cudaError_t sync_err = cudaStreamSynchronize(init_stream);

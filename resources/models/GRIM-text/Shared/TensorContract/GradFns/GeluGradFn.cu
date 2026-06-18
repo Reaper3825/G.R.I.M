@@ -136,9 +136,9 @@ void GeluGradFn::capture_input(Tensor& x, cudaStream_t stream) {
     register_input(x.grad_fn);
 
     if (input_requires_grad) {
-        x.ensure_grad();
         if (x.is_leaf) {
-            input_grad = x.grad_data();  // ISSUE #59: Use accessor
+            x.ensure_grad();
+            input_grad = x.grad_data();
         } else {
             const size_t x_numel = x.numel();
             float* buffer = nullptr;

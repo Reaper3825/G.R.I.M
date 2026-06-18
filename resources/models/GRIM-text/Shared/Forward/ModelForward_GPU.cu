@@ -495,8 +495,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     forward_outputs.clearRetainedLayerOutputs();
     forward_outputs.embedding_tensor.is_leaf = false;
 
-    float* encoder_output = nullptr;
-
     if (!retain_backward_graph) {
         Tensor running;
         forward_outputs.reserveLayerOutputs(num_layers);
@@ -583,7 +581,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 std::string(cudaGetErrorString(enc_sync)) + " (illegal access usually means a kernel wrote/read out of bounds)");
         }
 
-        encoder_output = running.data;
         forward_outputs.encoder_output_tensor = std::move(running);
         forward_outputs.encoder_output_tensor.requires_grad = false;
         forward_outputs.encoder_output_tensor.grad_fn.reset();
@@ -750,21 +747,16 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
         }
 
         MFWD_INFO("Step 2: All " << num_layers << " encoder layers complete");
-        encoder_output = forward_outputs.encoder_layer_outputs.back().data;
-    }
-
-    if (retain_backward_graph) {
-        const bool lmhead_track_grad = true;
-        Tensor encoder_output_tensor = Tensor::from_ptr(
-            encoder_output,
+        Tensor& last = forward_outputs.encoder_layer_outputs.back();
+        forward_outputs.encoder_output_tensor = Tensor::from_ptr(
+            last.data,
             TensorContract::TensorShape::make_BSM(total_tokens, d_model),
             false,
-            lmhead_track_grad,
+            true,
             "encoder_output_for_lmhead");
-        encoder_output_tensor.is_leaf = false;
-        encoder_output_tensor.stream = request.stream;
-        encoder_output_tensor.grad_fn = forward_outputs.encoder_layer_outputs.back().grad_fn;
-        forward_outputs.encoder_output_tensor = std::move(encoder_output_tensor);
+        forward_outputs.encoder_output_tensor.is_leaf = false;
+        forward_outputs.encoder_output_tensor.stream = request.stream;
+        forward_outputs.encoder_output_tensor.grad_fn = last.grad_fn;
     }
 
     const GRIM::LMHeadParameterTensors* lm_head_parameter_ptr = &lm_head_parameters;

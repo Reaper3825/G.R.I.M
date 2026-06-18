@@ -232,8 +232,8 @@ struct L1ScalarLossGradFn : public GradFn {
         CUDA_CHECK(cudaMemcpyAsync(saved_a_, a_tensor.data, sizeof(float), cudaMemcpyDeviceToDevice, stream));
 
         if (a_requires_grad_) {
-            a_tensor.ensure_grad();
             if (a_tensor.is_leaf) {
+                a_tensor.ensure_grad();
                 grad_a_ = a_tensor.grad_data();
             } else {
                 float* buf = nullptr;
@@ -364,8 +364,8 @@ struct DivMagnitudePenaltyGradFn : public GradFn {
         cudaMemcpyAsync(saved_v_out_, v_out_t.data, sizeof(float), cudaMemcpyDeviceToDevice, stream);
 
         if (v_out_requires_grad_) {
-            v_out_t.ensure_grad();
             if (v_out_t.is_leaf) {
+                v_out_t.ensure_grad();
                 grad_v_out_ = v_out_t.grad_data();
             } else {
                 float* buf = nullptr;
@@ -471,10 +471,10 @@ struct ArgReinforceLossGradFn : public GradFn {
         register_input(p_arg1_t.grad_fn);
         register_input(p_arg2_t.grad_fn);
 
-        auto alloc_grad = [&](Tensor& t, float*& grad_ptr, std::shared_ptr<float>& owned_grad) {
+        auto setup_grad_buf = [&](Tensor& t, float*& grad_ptr, std::shared_ptr<float>& owned_grad) {
             if (!t.requires_grad) return;
-            t.ensure_grad();
             if (t.is_leaf) {
+                t.ensure_grad();
                 grad_ptr = t.grad_data();
             } else {
                 float* buf = nullptr;
@@ -484,8 +484,8 @@ struct ArgReinforceLossGradFn : public GradFn {
                 grad_ptr = owned_grad.get();
             }
         };
-        alloc_grad(p_arg1_t, grad_p_arg1_, owned_grad_p_arg1_);
-        alloc_grad(p_arg2_t, grad_p_arg2_, owned_grad_p_arg2_);
+        setup_grad_buf(p_arg1_t, grad_p_arg1_, owned_grad_p_arg1_);
+        setup_grad_buf(p_arg2_t, grad_p_arg2_, owned_grad_p_arg2_);
     }
 
     void apply_impl(const Tensor& grad_output,
@@ -579,8 +579,8 @@ struct NormalizedEntropyGradFn : public GradFn {
             return;
         }
 
-        probs_tensor.ensure_grad();
         if (probs_tensor.is_leaf) {
+            probs_tensor.ensure_grad();
             grad_probs_ = probs_tensor.grad_data();
         } else {
             float* buf = nullptr;

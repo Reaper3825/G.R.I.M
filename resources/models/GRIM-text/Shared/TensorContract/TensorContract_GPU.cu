@@ -1194,37 +1194,30 @@ void Tensor::xavier_uniform_with_gain_(Tensor& t, uint64_t seed, float gain, cud
 //  Gradient Management
 //======================================================
 
-void Tensor::ensure_grad() {
+void Tensor::alloc_grad() {
     if (!requires_grad) {
-        return;  // No gradient tracking needed
+        return;
     }
-    
     if (grad_ != nullptr && grad_->data != nullptr) {
-        return;  // Already allocated
+        return;  // Already allocated — idempotent
+    }
+    if (stream == nullptr) {
+        throw std::runtime_error(std::string("[alloc_grad] stream is NULL on tensor '") +
+                                 (name ? name : "unnamed") +
+                                 "' — caller MUST set .stream before alloc_grad()");
     }
 
-    // RULE 20: Stream must be valid. Tensor::zeros() rejects stream==0, so we
-    // avoid it here — but still validate. from_ptr() callers that set
-    // requires_grad=true MUST also set .stream before ensure_grad() runs.
-    if (stream == nullptr) {
-        throw std::runtime_error(std::string("ensure_grad: stream is NULL on tensor '") +
-                                 (name ? name : "unnamed") +
-                                 "' - caller MUST set .stream before ensure_grad()");
-    }
-    
     const size_t count = shape.total_elements();
     const size_t bytes = count * sizeof(float);
-    
+
     float* ptr = nullptr;
-    cudaMallocOrThrow(reinterpret_cast<void**>(&ptr), bytes, name ? name : "ensure_grad");
-    
+    cudaMallocOrThrow(reinterpret_cast<void**>(&ptr), bytes, name ? name : "alloc_grad");
     cudaMemsetAsync(ptr, 0, bytes, stream);
-    
+
     TENSOR_LOG_LIFECYCLE(alloc_counter,
         "[Tensor::alloc] #A%d cudaMalloc data=%p bytes=%zu name=%s\n",
         (void*)ptr, bytes, name ? name : "unnamed");
-    
-    // Wrap in a Tensor shared_ptr for proper RAII ownership
+
     auto grad_tensor = std::make_shared<Tensor>();
     grad_tensor->data = ptr;
     grad_tensor->shape = shape;
@@ -1236,7 +1229,20 @@ void Tensor::ensure_grad() {
     grad_tensor->device_id = device_id;
     grad_tensor->name = name;
     grad_ = grad_tensor;
-} 
+}
+
+void Tensor::ensure_grad() {
+    if (!requires_grad) {
+        throw std::runtime_error(std::string("[ensure_grad] tensor '") +
+                                 (name ? name : "unnamed") +
+                                 "' does not require_grad — check requires_grad before calling ensure_grad()");
+    }
+    if (grad_ == nullptr || grad_->data == nullptr) {
+        throw std::runtime_error(std::string("[ensure_grad] tensor '") +
+                                 (name ? name : "unnamed") +
+                                 "' grad buffer not allocated — call alloc_grad() at initialization, not lazily during backward");
+    }
+}
 
 void Tensor::zero_grad(cudaStream_t exec_stream) {
     if (!grad_ || !grad_->data) {
@@ -1361,7 +1367,7 @@ void Tensor::backward(const Tensor* grad_output,
     // Initialize gradient if this is the starting point (loss tensor)
     if (grad_output == nullptr) {
         // Default: scalar initial gradient
-        ensure_grad();
+        alloc_grad();
         const size_t count = shape.total_elements();
         
         // For scalar loss, set grad to the provided root scale (typically 1.0).

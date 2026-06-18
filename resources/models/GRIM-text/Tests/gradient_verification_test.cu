@@ -520,12 +520,12 @@ void testRMSNorm() {
         Tensor input_for_bwd = Tensor::from_ptr(
             d_input, TensorContract::TensorShape::make_BSM(TOTAL_TOKENS, D_MODEL), false, true);  // requires_grad=true
         input_for_bwd.stream = stream;
-        input_for_bwd.ensure_grad();  // Allocate gradient buffer
+        input_for_bwd.alloc_grad();  // Allocate gradient buffer
         
         Tensor gamma_for_bwd = Tensor::from_ptr(
             d_gamma, TensorContract::TensorShape::make_BSM(1, D_MODEL), false, true);  // requires_grad=true
         gamma_for_bwd.stream = stream;
-        gamma_for_bwd.ensure_grad();
+        gamma_for_bwd.alloc_grad();
         
         // Forward to build graph
         Tensor out_for_bwd = autograd::rms_norm(input_for_bwd, gamma_for_bwd, EPSILON, stream);
@@ -631,7 +631,7 @@ bool testFanInAccumulation() {
         Tensor base = Tensor::from_ptr(
             d_base, TensorContract::TensorShape::make_BSM(N, 1), false, true);  // leaf, requires_grad
         base.stream = stream;
-        base.ensure_grad();   // fresh zeroed grad accumulator for this run
+        base.alloc_grad();   // fresh zeroed grad accumulator for this run
 
         // Shared trunk + N independent consumers summed into one root.
         Tensor trunk = autograd::exp(base, stream);

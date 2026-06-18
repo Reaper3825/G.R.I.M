@@ -181,14 +181,14 @@ void initializeMtpHeads(std::vector<GRIM::MtpHeadParameterTensors>& mtp_head_par
 
         head.weight = GRIM::Tensor::zeros({mtp_hp.vocab_size, mtp_hp.d_model}, init_stream, weight_name.c_str());
         head.weight.requires_grad_();
-        head.weight.ensure_grad();
+        head.weight.alloc_grad();
 
         const uint64_t mtp_seed = weight_init_seed + 3 + static_cast<uint64_t>(k);
         GRIM::Tensor::xavier_uniform_(head.weight, mtp_seed, init_stream);
 
         head.bias = GRIM::Tensor::zeros({mtp_hp.vocab_size}, init_stream, bias_name.c_str());
         head.bias.requires_grad_();
-        head.bias.ensure_grad();
+        head.bias.alloc_grad();
     }
 
     std::cout << "✓ MTP auxiliary heads created\n";

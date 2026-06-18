@@ -48,8 +48,8 @@ void AddGradFn::capture_inputs(Tensor& a, Tensor& b, cudaStream_t stream) {
     // Leaf tensors (weights) persist, safe to use their grad buffer directly
     // Non-leaf tensors (activations) are temporary, need owned buffer
     if (a_requires_grad) {
-        a.ensure_grad();
         if (a.is_leaf) {
+            a.ensure_grad();
             grad_a = a.grad_data();
             AG_TRACE("[AddGradFn] Using persistent grad_a buffer (leaf): %p\n", (void*)grad_a);
         } else {
@@ -65,8 +65,8 @@ void AddGradFn::capture_inputs(Tensor& a, Tensor& b, cudaStream_t stream) {
         }
     }
     if (b_requires_grad) {
-        b.ensure_grad();
         if (b.is_leaf) {
+            b.ensure_grad();
             grad_b = b.grad_data();
             AG_TRACE("[AddGradFn] Using persistent grad_b buffer (leaf): %p\n", (void*)grad_b);
         } else {
@@ -94,8 +94,8 @@ void AddGradFn::capture_single_input(Tensor& a, cudaStream_t stream) {
     element_count = a.numel();
 
     if (a_requires_grad) {
-        a.ensure_grad();
         if (a.is_leaf) {
+            a.ensure_grad();
             grad_a = a.grad_data();
         } else {
             const size_t a_numel = a.numel();

@@ -145,8 +145,8 @@ void LayerScaleGradFn::capture_inputs(Tensor& input, Tensor& scale_param, cudaSt
     cols = input_dims.cols;
 
     if (input.requires_grad) {
-        input.ensure_grad();
         if (input.is_leaf) {
+            input.ensure_grad();
             input_grad = input.grad_data();
         } else {
             float* buffer = nullptr;

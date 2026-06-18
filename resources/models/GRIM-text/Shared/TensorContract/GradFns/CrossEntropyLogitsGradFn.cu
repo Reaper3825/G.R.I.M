@@ -76,8 +76,8 @@ void CrossEntropyLogitsGradFn::capture_input(Tensor& logits, cudaStream_t stream
     input_is_leaf = logits.is_leaf;
 
     if (logits.requires_grad) {
-        logits.ensure_grad();
         if (logits.is_leaf) {
+            logits.ensure_grad();
             grad_logits = logits.grad_data();
         } else {
             float* buf = nullptr;

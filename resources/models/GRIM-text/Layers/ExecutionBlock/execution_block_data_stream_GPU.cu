@@ -739,10 +739,10 @@ struct FourOpMixGradFn : public GradFn {
         register_input(v2_t.grad_fn);
         register_input(p_op_t.grad_fn);
 
-        auto alloc_grad = [&](Tensor& t, float*& gp, std::shared_ptr<float>& owned, size_t n) {
+        auto setup_grad_buf = [&](Tensor& t, float*& gp, std::shared_ptr<float>& owned, size_t n) {
             if (!t.requires_grad) return;
-            t.ensure_grad();
             if (t.is_leaf) {
+                t.ensure_grad();
                 gp = t.grad_data();
             } else {
                 float* buf = nullptr;
@@ -753,9 +753,9 @@ struct FourOpMixGradFn : public GradFn {
             }
         };
 
-        alloc_grad(v1_t, grad_v1, owned_grad_v1, 1);
-        alloc_grad(v2_t, grad_v2, owned_grad_v2, 1);
-        alloc_grad(p_op_t, grad_p_op, owned_grad_p_op, num_ops);
+        setup_grad_buf(v1_t, grad_v1, owned_grad_v1, 1);
+        setup_grad_buf(v2_t, grad_v2, owned_grad_v2, 1);
+        setup_grad_buf(p_op_t, grad_p_op, owned_grad_p_op, num_ops);
     }
 
     void apply_impl(const Tensor& grad_output,
@@ -890,8 +890,8 @@ struct ExecutionBlockInjectGradFn : public GradFn {
         register_input(result_t.grad_fn);
 
         if (result_requires_grad) {
-            result_t.ensure_grad();
             if (result_t.is_leaf) {
+                result_t.ensure_grad();
                 grad_result_emb = result_t.grad_data();
             } else {
                 float* buf = nullptr;
@@ -1014,8 +1014,8 @@ struct ReduceMeanGradFn : public GradFn {
         H_is_leaf_ = H.is_leaf;
 
         if (H_requires_grad) {
-            H.ensure_grad();
             if (H.is_leaf) {
+                H.ensure_grad();
                 grad_H_buf = H.grad_data();
             } else {
                 size_t total = static_cast<size_t>(total_tokens) * d_model;
@@ -1203,10 +1203,10 @@ struct GatedTraceUpdateGradFn : public GradFn {
         register_input(candidate_t.grad_fn);
         register_input(gate_logits_t.grad_fn);
 
-        auto alloc_grad = [&](Tensor& t, float*& gp, std::shared_ptr<float>& owned, size_t n) {
+        auto setup_grad_buf = [&](Tensor& t, float*& gp, std::shared_ptr<float>& owned, size_t n) {
             if (!t.requires_grad) return;
-            t.ensure_grad();
             if (t.is_leaf) {
+                t.ensure_grad();
                 gp = t.grad_data();
             } else {
                 float* buf = nullptr;
@@ -1217,9 +1217,9 @@ struct GatedTraceUpdateGradFn : public GradFn {
             }
         };
 
-        alloc_grad(old_trace_t, grad_old_trace, owned_grad_old_trace, dm);
-        alloc_grad(candidate_t, grad_candidate, owned_grad_candidate, dm);
-        alloc_grad(gate_logits_t, grad_gate_logits, owned_grad_gate_logits, dm);
+        setup_grad_buf(old_trace_t, grad_old_trace, owned_grad_old_trace, dm);
+        setup_grad_buf(candidate_t, grad_candidate, owned_grad_candidate, dm);
+        setup_grad_buf(gate_logits_t, grad_gate_logits, owned_grad_gate_logits, dm);
     }
 
     void apply_impl(const Tensor& grad_output,

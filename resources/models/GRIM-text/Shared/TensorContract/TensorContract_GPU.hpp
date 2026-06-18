@@ -917,7 +917,13 @@ struct Tensor {
         return *this;
     }
     
-    /// Lazy-allocate gradient Tensor (zeros it)
+    /// Explicitly allocate and zero the gradient buffer. Call once at
+    /// parameter initialization time. Idempotent — no-op if already allocated.
+    void alloc_grad();
+
+    /// Verify the gradient buffer is already allocated. Throws if it is not.
+    /// Call during backward (capture_inputs) to assert that startup called
+    /// alloc_grad(). Never silently allocates — Rule 20.
     void ensure_grad();
     
     /// Get gradient Tensor pointer (nullptr if not allocated)

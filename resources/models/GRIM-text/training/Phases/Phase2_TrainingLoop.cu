@@ -492,9 +492,7 @@ std::vector<GRIM::Forward::MTPHeadForwardView> buildConnectedForwardMtpHeadViews
         view.stream = stream;
         view.grad_fn = parameter.grad_fn;
         if (parameter.requires_grad && parameter.is_leaf) {
-            if (!parameter.grad()) {
-                parameter.ensure_grad();
-            }
+            parameter.ensure_grad();  // throws if startup missed alloc_grad()
             view.share_grad(parameter);
         }
         return view;

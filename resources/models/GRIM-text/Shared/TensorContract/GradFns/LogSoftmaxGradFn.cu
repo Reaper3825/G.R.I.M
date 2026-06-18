@@ -159,8 +159,8 @@ void LogSoftmaxGradFn::capture_input(Tensor& x, cudaStream_t stream) {
     register_input(x.grad_fn);
 
     if (input_requires_grad) {
-        x.ensure_grad();
         if (x.is_leaf) {
+            x.ensure_grad();
             input_grad = x.grad_data();
             owns_input_grad = false;
         } else {

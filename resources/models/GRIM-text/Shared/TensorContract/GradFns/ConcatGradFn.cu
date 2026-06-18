@@ -77,8 +77,8 @@ void ConcatGradFn::capture_inputs(Tensor& a, Tensor& b, cudaStream_t stream) {
     register_input(b.grad_fn);
 
     if (a_requires_grad) {
-        a.ensure_grad();
         if (a.is_leaf) {
+            a.ensure_grad();
             grad_a = a.grad_data();
         } else {
             const size_t n = a.numel();
@@ -90,8 +90,8 @@ void ConcatGradFn::capture_inputs(Tensor& a, Tensor& b, cudaStream_t stream) {
         }
     }
     if (b_requires_grad) {
-        b.ensure_grad();
         if (b.is_leaf) {
+            b.ensure_grad();
             grad_b = b.grad_data();
         } else {
             const size_t n = b.numel();

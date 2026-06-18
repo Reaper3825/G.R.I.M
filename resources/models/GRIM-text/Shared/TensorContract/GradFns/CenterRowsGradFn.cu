@@ -155,16 +155,10 @@ void CenterRowsGradFn::capture_input(Tensor& input, int dim, int rows, cudaStrea
     input_grad_fn = input.grad_fn;
     register_input(input.grad_fn);
 
-    input.ensure_grad();
-
     input_is_leaf = input.is_leaf;
     if (input_is_leaf) {
+        input.ensure_grad();
         leaf_grad_buf = input.grad_data();
-        if (!leaf_grad_buf) {
-            throw std::runtime_error(
-                "CenterRowsGradFn::capture_input: leaf input has requires_grad but "
-                "grad_data() is NULL after ensure_grad() at " __FILE__);
-        }
     }
 
     float* buf = nullptr;
