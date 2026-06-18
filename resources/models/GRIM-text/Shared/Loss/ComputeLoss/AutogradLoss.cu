@@ -102,9 +102,9 @@ __host__ const std::vector<int>& hostTargetsForSelection(
  *   New: uses SAME log_probs from forward pass (saved), exact forward/backward consistency
  *
  * Gradient chain:
- *   1. computeCrossEntropyBackwardToLogProbs() computes ∂L/∂(log_p_v) = -q_v * inv_N  (+ focal/entropy terms)
+ *   1. computeCrossEntropyBackwardToLogProbs() computes ∂L/∂(log_p_v) = upstream_grad * (-q_v / N)  (+ focal/entropy terms)
  *   2. LogSoftmaxGradFn computes ∂(log_p)/∂(logits) = δ_{ij} - p_j  (softmax Jacobian)
- *   3. Composition:  grad_logits[j] = (p_j - q_j) / N  ← standard CE gradient ✓
+ *   3. Composition:  grad_logits[j] = upstream_grad * (p_j - q_j) / N  ← standard CE gradient ✓
  *
  * Memory management:
  *   - LogSoftmaxGradFn owns the saved log_probs buffer used by both NLL backward and log_softmax backward
@@ -113,41 +113,27 @@ __host__ const std::vector<int>& hostTargetsForSelection(
  */
 struct NLLLossGradFn : public GradFn {
     // Saved forward data
-    std::shared_ptr<float> owned_loss_sum_buffer;       // OWNED GPU scalar: forward reduction sum [1]
-    std::shared_ptr<int> owned_valid_count_buffer;      // OWNED GPU scalar: forward valid-token count [1]
-    std::shared_ptr<float> owned_weight_sum_buffer;     // OWNED GPU scalar: forward class-weight sum [1]
     std::shared_ptr<float> owned_grad_log_probs_buffer; // OWNED GPU buffer: backward output [num_tokens * vocab_size]
-    float* loss_sum_buffer;
-    int* valid_count_buffer;
-    float* weight_sum_buffer;
     float* grad_log_probs_buffer;                       // Borrowed from owned_grad_log_probs_buffer while saved
-    
+
     CrossEntropyTargetSelection target_selection;
-    int valid_count;
-    
+
     // Loss configuration (durable grouping snapshot from HyperparameterGroupings.hpp)
     HyperParameters::LossConfigHP loss_config;
-    
+
     // Class-balanced loss: per-token weight = 1/freq(target)^β
     const float* class_weights;     // NOT OWNED — points to TrainingState::class_weights_tensor.data
-    float weight_sum;               // Sum of per-token class weights for this batch
+    float weight_sum;               // Forward-computed sum of class weights over valid tokens (class_balanced only)
     float mean_loss;                // Forward scalar computed during capture_inputs()
-    
+
     // Upstream gradient chain
     std::shared_ptr<GradFn> log_probs_grad_fn;
     TensorContract::TensorShape grad_shape;
-    
+
     __host__ NLLLossGradFn()
-        : owned_loss_sum_buffer(nullptr)
-        , owned_valid_count_buffer(nullptr)
-        , owned_weight_sum_buffer(nullptr)
-        , owned_grad_log_probs_buffer(nullptr)
-        , loss_sum_buffer(nullptr)
-        , valid_count_buffer(nullptr)
-        , weight_sum_buffer(nullptr)
+        : owned_grad_log_probs_buffer(nullptr)
         , grad_log_probs_buffer(nullptr)
         , target_selection(CrossEntropyTargetSelection::primaryLm())
-        , valid_count(0)
         , loss_config{}
         , class_weights(nullptr)
         , weight_sum(0.0f)
@@ -195,24 +181,20 @@ struct NLLLossGradFn : public GradFn {
             }
         }
 
-        if (!loss_sum_buffer) {
-            float* loss_sum = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&loss_sum), sizeof(float), "NLLLossGradFn_loss_sum");
-            owned_loss_sum_buffer.reset(loss_sum, [](float* p) { queueForDeferredCleanup(p); });
-            loss_sum_buffer = owned_loss_sum_buffer.get();
-        }
-        if (!valid_count_buffer) {
-            int* count = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&count), sizeof(int), "NLLLossGradFn_valid_count");
-            owned_valid_count_buffer.reset(count, [](int* p) { queueForDeferredCleanup(p); });
-            valid_count_buffer = owned_valid_count_buffer.get();
-        }
-        if (!weight_sum_buffer) {
-            float* weight_sum_ptr = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&weight_sum_ptr), sizeof(float), "NLLLossGradFn_weight_sum");
-            owned_weight_sum_buffer.reset(weight_sum_ptr, [](float* p) { queueForDeferredCleanup(p); });
-            weight_sum_buffer = owned_weight_sum_buffer.get();
-        }
+        // CE forward scalar reduction scratch: allocated locally, used immediately, released on scope exit.
+        // These device scalars are forward-only scratch — valid_count is BatchPayload-authored state
+        // and must not be stored on the GradFn; weight_sum is forward-computed and stored as a host scalar.
+        float* loss_sum_local = nullptr;
+        cudaMallocOrThrow(reinterpret_cast<void**>(&loss_sum_local), sizeof(float), "NLLLossGradFn_fwd_loss_sum");
+        std::shared_ptr<float> owned_loss_sum(loss_sum_local, [](float* p) { queueForDeferredCleanup(p); });
+
+        int* valid_count_local = nullptr;
+        cudaMallocOrThrow(reinterpret_cast<void**>(&valid_count_local), sizeof(int), "NLLLossGradFn_fwd_valid_count");
+        std::shared_ptr<int> owned_valid_count(valid_count_local, [](int* p) { queueForDeferredCleanup(p); });
+
+        float* weight_sum_local = nullptr;
+        cudaMallocOrThrow(reinterpret_cast<void**>(&weight_sum_local), sizeof(float), "NLLLossGradFn_fwd_weight_sum");
+        std::shared_ptr<float> owned_weight_sum(weight_sum_local, [](float* p) { queueForDeferredCleanup(p); });
 
         const CrossEntropyForwardResult ce_result = computeCrossEntropyForwardFromLogProbs(
             log_probs.data,
@@ -220,9 +202,9 @@ struct NLLLossGradFn : public GradFn {
             bindings_,
             target_selection,
             CrossEntropyForwardWorkspace{
-                loss_sum_buffer,
-                valid_count_buffer,
-                weight_sum_buffer,
+                loss_sum_local,
+                valid_count_local,
+                weight_sum_local,
                 sizeof(float),
                 sizeof(int),
                 sizeof(float),
@@ -234,8 +216,9 @@ struct NLLLossGradFn : public GradFn {
         );
 
         mean_loss = ce_result.mean_loss;
-        valid_count = ce_result.valid_count;
         weight_sum = ce_result.weight_sum;
+        // ce_result.valid_count is not stored — it equals the BatchPayload-authored valid token count
+        // and is read directly from backward_payload in apply_impl.
     }
     
     __host__ ~NLLLossGradFn() {
@@ -267,6 +250,15 @@ struct NLLLossGradFn : public GradFn {
         backward_payload->validate("NLLLossGradFn::apply");
         const int num_tokens = backward_payload->total_tokens;
         const int vocab_size = backward_payload->vocab_size;
+
+        // valid_count is BatchPayload-authored state — read directly rather than storing a copy on the GradFn.
+        const int valid_count = (target_selection.source == CrossEntropyTargetSource::PrimaryLm)
+            ? backward_payload->lm_valid_tokens
+            : backward_payload->mtp_valid_counts[*target_selection.mtp_head_idx];
+        if (valid_count <= 0) {
+            throw std::runtime_error("[NLLLossGradFn::apply] valid_count=" + std::to_string(valid_count)
+                + " from backward_payload — BatchPayload must have positive valid token count");
+        }
         
         // ── Read upstream scalar gradient for chain rule ──
         // Loss is scalar, so grad_output is a single float. Tensor::backward()
@@ -414,14 +406,10 @@ struct NLLLossGradFn : public GradFn {
         // Match TensorContract GradFn lifecycle: graph-owned GPU buffers are
         // released at the tape boundary, and their deleters queue CUDA cleanup
         // rather than calling cudaFree directly from a GradFn destructor.
+        // CE forward scalar scratch (loss_sum, valid_count, weight_sum device buffers) was
+        // local to capture_inputs and is already released — only backward scratch remains here.
         log_probs_grad_fn.reset();
-        owned_loss_sum_buffer.reset();
-        owned_valid_count_buffer.reset();
-        owned_weight_sum_buffer.reset();
         owned_grad_log_probs_buffer.reset();
-        loss_sum_buffer = nullptr;
-        valid_count_buffer = nullptr;
-        weight_sum_buffer = nullptr;
         grad_log_probs_buffer = nullptr;
         class_weights = nullptr;
     }
@@ -499,9 +487,12 @@ __host__ Tensor unifiedLossFromTargetSelection(
         stream
     );
     const float mean_loss = grad_fn->mean_loss;
-    const int h_valid_count = grad_fn->valid_count;
     const float h_weight_sum = grad_fn->weight_sum;
-    
+    // valid_count is BatchPayload-authored — read directly from payload, not via GradFn.
+    const int h_valid_count = (target_selection.source == CrossEntropyTargetSource::PrimaryLm)
+        ? payload.lm_valid_tokens
+        : payload.mtp_valid_counts[*target_selection.mtp_head_idx];
+
     AG_TRACE("[%s] valid_count=%d mean_loss=%.6f\n",
              caller, h_valid_count, mean_loss);
     if (effective_class_weights) {

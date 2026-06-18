@@ -4,12 +4,15 @@
 //  Iterative worklist (topological-sort-with-fan-in) backward engine.
 //
 //  Replaces the legacy DFS-recursive, first-wins ("applied" guard) traversal.
-//  The engine orchestrates over the two existing backbones rather than
-//  reinventing buffer ownership:
+//  The engine is a pure scheduler: it owns NO gradient memory and allocates
+//  nothing. It orchestrates over the two existing backbones:
 //    - Leaf parameter gradients accumulate into StartupParameterRegistry-owned
 //      grad_ buffers, terminally, inside each node's backward math.
-//    - Non-leaf (interior / staged-activation) output gradients accumulate into
-//      a per-node engine-owned accumulator keyed by the producing GradFn.
+//    - Non-leaf (interior / staged-activation) output gradients already live in
+//      the consuming GradFn's own input-grad buffer (deferred-freed by that
+//      node). The engine simply borrows the first contribution's buffer and, on
+//      true fan-in, sums later contributions into it in place — no copies, no
+//      per-node engine accumulator.
 //
 //  Each node fires exactly once, after every consumer has contributed its
 //  share of that node's output gradient (true fan-in). This fixes the silent
@@ -77,7 +80,7 @@ private:
     struct NodeState {
         int in_degree = 0;     ///< expected contributions (from discovery)
         int remaining = 0;     ///< countdown of pending contributions
-        float* accum = nullptr;///< owned device accumulator for this node's output gradient
+        float* accum = nullptr;///< BORROWED grad buffer (owned by the producing GradFn / registry), never freed here
         std::size_t count = 0; ///< element count of accum
         TensorContract::TensorShape shape;  ///< shape of this node's output gradient
         bool queued = false;   ///< already pushed to the ready-queue
@@ -86,9 +89,6 @@ private:
 
     NodeState& stateFor(GradFn* node);
     void discover(GradFn* root);
-    float* ensureAccumulator(NodeState& st,
-                             const TensorContract::TensorShape& shape,
-                             std::size_t count);
 
     cudaStream_t stream_;
     const Batching::BatchPayload* payload_;
@@ -96,7 +96,6 @@ private:
 
     std::unordered_map<GradFn*, NodeState> nodes_;
     std::deque<GradFn*> ready_;
-    std::vector<float*> owned_buffers_;  ///< freed via deferred cleanup at end of backward
 };
 
 }  // namespace autograd

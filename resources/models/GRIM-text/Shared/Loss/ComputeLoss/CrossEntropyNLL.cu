@@ -449,7 +449,7 @@ __global__ void kernelCrossEntropyNLLBackward(
     float* __restrict__ grad_log_probs,     // [num_tokens, vocab_size] — OUTPUT
     int total_tokens,
     int vocab_size,
-    float inv_valid_count,  // 1/N or 1/W (weight_sum) when class_balanced
+    float grad_output_inv_norm,  // grad_output_scale / N, or grad_output_scale / W when class_balanced
     HyperParameters::LossConfigHP loss_config,
     const float* __restrict__ class_weights     // [vocab_size] per-class weights (nullable = all 1.0)
 ) {
@@ -517,6 +517,16 @@ __global__ void kernelCrossEntropyNLLBackward(
     __syncthreads();
     const float sum_log_off = s_sum_log_off;
 
+    // cw depends only on target, not on v — hoist out of the vocab loop.
+    float cw = 1.0f;
+    if (class_weights != nullptr) {
+        cw = class_weights[target];
+        if (!isfinite(cw) || cw <= 0.0f) {
+            trapInvalidCrossEntropyInput();
+            return;
+        }
+    }
+
     for (int v = threadIdx.x; v < vocab_size; v += blockDim.x) {
         float q_v = q_off;
         if (v == target) {
@@ -551,16 +561,7 @@ __global__ void kernelCrossEntropyNLLBackward(
             }
         }
 
-        // Apply mean reduction with class-balanced weighting and upstream grad scaling.
-        float cw = 1.0f;
-        if (class_weights != nullptr) {
-            cw = class_weights[target];
-            if (!isfinite(cw) || cw <= 0.0f) {
-                trapInvalidCrossEntropyInput();
-                return;
-            }
-        }
-        grad_row[v] = grad_v * cw * inv_valid_count;
+        grad_row[v] = grad_v * cw * grad_output_inv_norm;
     }
 }
 
@@ -633,14 +634,14 @@ void launchCrossEntropyNLLBackward(
         }
         normalization = weight_sum;
     }
-    const float inv_valid_count = grad_output_scale / normalization;
+    const float grad_output_inv_norm = grad_output_scale / normalization;
 
     const int block_size = 256;
     kernelCrossEntropyNLLBackward<<<payload.total_tokens, block_size, 0, stream>>>(
         log_probs, targets, grad_log_probs,
         payload.total_tokens,
         payload.vocab_size,
-        inv_valid_count,
+        grad_output_inv_norm,
         config,
         d_class_weights
     );

@@ -6,7 +6,6 @@
 
 #include "AutogradEngine.hpp"
 #include "GradientAccumulation.hpp"
-#include "../CudaAllocUtils.hpp"
 
 #include <cuda_runtime.h>
 
@@ -21,8 +20,6 @@ void logTensorContractApplyGradOutputStats(const GRIM::GradFn& grad_fn,
                                            cudaStream_t stream);
 
 namespace GRIM {
-
-using CudaAlloc::cudaMallocOrThrow;
 
 namespace autograd {
 
@@ -61,27 +58,6 @@ AutogradEngine::~AutogradEngine() {
 
 AutogradEngine::NodeState& AutogradEngine::stateFor(GradFn* node) {
     return nodes_[node];
-}
-
-float* AutogradEngine::ensureAccumulator(NodeState& st,
-                                         const TensorContract::TensorShape& shape,
-                                         std::size_t count) {
-    if (st.accum == nullptr) {
-        if (count == 0) {
-            throw std::runtime_error("[AutogradEngine] zero-length gradient accumulator requested");
-        }
-        float* buffer = nullptr;
-        cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), count * sizeof(float), "AutogradEngine_accum");
-        cudaMemsetAsync(buffer, 0, count * sizeof(float), stream_);
-        st.accum = buffer;
-        st.count = count;
-        st.shape = shape;
-        owned_buffers_.push_back(buffer);
-    } else if (st.count != count) {
-        throw std::runtime_error("[AutogradEngine] gradient accumulator size mismatch: have " +
-                                 std::to_string(st.count) + " got " + std::to_string(count));
-    }
-    return st.accum;
 }
 
 void AutogradEngine::discover(GradFn* root) {
@@ -129,8 +105,23 @@ void AutogradEngine::contribute(GradFn* producer, const Tensor& grad_view) {
 
     NodeState& st = it->second;
     const std::size_t count = grad_view.numel();
-    float* dst = ensureAccumulator(st, grad_view.shape, count);
-    accumulate_grad(dst, grad_view.data, count, 1.0f, stream_, "AutogradEngine::contribute");
+    if (st.accum == nullptr) {
+        // First contribution: borrow the consuming node's gradient buffer
+        // directly. That buffer is owned (and deferred-freed) by the producing
+        // GradFn, so the scheduler allocates nothing. Single-consumer nodes —
+        // the common case — therefore never trigger an accumulation kernel.
+        st.accum = grad_view.data;
+        st.count = count;
+        st.shape = grad_view.shape;
+    } else {
+        if (st.count != count) {
+            throw std::runtime_error("[AutogradEngine] gradient contribution size mismatch: have " +
+                                     std::to_string(st.count) + " got " + std::to_string(count));
+        }
+        // True fan-in: sum this consumer's share into the borrowed buffer in
+        // place. Serialized on stream_, so ordering with the first write holds.
+        accumulate_grad(st.accum, grad_view.data, count, 1.0f, stream_, "AutogradEngine::contribute");
+    }
 
     if (st.remaining <= 0) {
         throw std::runtime_error(std::string("[AutogradEngine] node '") + nodeName(producer) +
@@ -157,16 +148,18 @@ void AutogradEngine::run(GradFn* root,
     try {
         discover(root);
 
-        // Seed the root accumulator with the loss gradient. The root has no
-        // consumers (in_degree 0), so it is immediately ready.
+        // Seed the root with the loss gradient by borrowing the caller's loss
+        // grad buffer directly (the loss tensor's registry/lazy grad_). The root
+        // has no consumers (in_degree 0), so it is never written to and is
+        // immediately ready — the scheduler allocates nothing here either.
         NodeState& root_state = nodes_[root];
         if (root_state.in_degree != 0) {
             throw std::runtime_error(std::string("[AutogradEngine] root node '") + nodeName(root) +
                                      "' has incoming edges - it must be the graph sink (loss)");
         }
-        const std::size_t seed_count = seed_shape.total_elements();
-        float* seed_dst = ensureAccumulator(root_state, seed_shape, seed_count);
-        accumulate_grad(seed_dst, seed_grad, seed_count, 1.0f, stream_, "AutogradEngine::seed");
+        root_state.accum = const_cast<float*>(seed_grad);
+        root_state.count = seed_shape.total_elements();
+        root_state.shape = seed_shape;
         root_state.queued = true;
         ready_.push_back(root);
 
@@ -209,12 +202,9 @@ void AutogradEngine::run(GradFn* root,
     }
     t_active_engine = nullptr;
 
-    // Accumulators are no longer needed; free them through the deferred-cleanup
-    // queue so the cudaFree happens after Tensor::backward's stream sync.
-    for (float* buffer : owned_buffers_) {
-        queueForDeferredCleanup(buffer);
-    }
-    owned_buffers_.clear();
+    // No engine-owned buffers to release: every accumulator is a borrowed
+    // pointer into a consuming GradFn's buffer (or the caller's seed buffer),
+    // each freed by its own owner's deferred-cleanup path.
 }
 
 }  // namespace autograd
