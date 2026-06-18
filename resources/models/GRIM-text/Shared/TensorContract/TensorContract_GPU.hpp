@@ -614,6 +614,29 @@ struct ParameterGroup {
 //  GradFn - Backward Function Node (Computation Graph)
 //======================================================//
 
+// Forward declaration: the iterative worklist engine drives backward by
+// calling GradFn::run_backward() once per node after every consumer's
+// gradient contribution has been accumulated (topological fan-in).
+namespace autograd { class AutogradEngine; }
+
+//======================================================//
+//  Backward dispatch: iterative AutogradEngine vs legacy DFS recursion
+//======================================================//
+
+/**
+ * Whether Tensor::backward() drives the graph with the iterative worklist
+ * AutogradEngine (true, default) or the legacy first-wins DFS recursion
+ * (false). The engine fixes silent fan-in gradient loss (MTP collapse) by
+ * accumulating every consumer's contribution before firing a node once.
+ *
+ * Default is engine. Override at startup with the GRIM_AUTOGRAD_ENGINE env var
+ * ("0"/"false"/"off" forces legacy) or programmatically via
+ * setUseEngineBackward(). The legacy path is retained for the fan-in
+ * regression test and A/B numeric parity checks.
+ */
+bool useEngineBackward();
+void setUseEngineBackward(bool enabled);
+
 /**
  * @brief Base class for backward computation nodes
  * 
@@ -642,9 +665,57 @@ struct GradFn {
     
     const char* op_name = nullptr;  ///< Operation name ("matmul", "gelu", "add", etc.)
     int call_id = 0;                ///< Unique call ID for deterministic replay
-    bool applied = false;           ///< ISSUE #49: Prevent infinite loops when grad_fn is shared
+    bool applied = false;           ///< ISSUE #49: Legacy DFS recursion guard (unused by AutogradEngine)
     bool released_ = false;         ///< ISSUE #50: Prevent double release_saved calls
-    
+
+    //--------------------------------------------------//
+    // Engine Topology (AutogradEngine worklist contract)
+    //--------------------------------------------------//
+
+    /**
+     * Number of logically-distinct output gradients this node consumes. Almost
+     * every node has a single output; multi-output producers (e.g. the QKV
+     * split) are modelled as separate single-output GradFn instances that share
+     * coordination state, so this stays 1 in the common case.
+     */
+    int num_outputs = 1;
+
+    /**
+     * Upstream producer nodes this GradFn will hand gradient to during backward
+     * — the single source of truth for the engine's in-degree counting. Built
+     * incrementally at forward-capture time via register_input(); a leaf input
+     * (no grad_fn) contributes no edge because its gradient terminates in the
+     * registry-owned grad_ buffer. Deduped so it matches the exact number of
+     * upstream contributions run_backward() makes.
+     */
+    std::vector<GradFn*> engine_inputs_;
+
+    /**
+     * Record an upstream producer edge. Null (leaf) producers are ignored;
+     * duplicates collapse to one edge so contribute-count == edge-count.
+     */
+    void register_input(const std::shared_ptr<GradFn>& producer) {
+        GradFn* p = producer.get();
+        if (p == nullptr) {
+            return;
+        }
+        for (GradFn* existing : engine_inputs_) {
+            if (existing == p) {
+                return;
+            }
+        }
+        engine_inputs_.push_back(p);
+    }
+
+    /**
+     * Topology accessor used by AutogradEngine::discover() to count in-degree.
+     * The default reports register_input() edges; bespoke multi-output nodes
+     * may override to report a hand-rolled edge set.
+     */
+    virtual void collect_input_edges(std::vector<GradFn*>& out) const {
+        out = engine_inputs_;
+    }
+
     //--------------------------------------------------//
     // Virtual Interface
     //--------------------------------------------------//
@@ -667,7 +738,26 @@ struct GradFn {
                cudaStream_t stream,
                const Batching::BatchPayload* backward_payload = nullptr,
                const Batching::BatchDeviceBindings* backward_bindings = nullptr);
-    
+
+    /**
+     * @brief Engine execution entry point.
+     *
+     * Called by AutogradEngine exactly once per node, after all consumer
+     * contributions for this node's output have been summed into the engine's
+     * accumulator (grad_output is a view over that accumulator). Computes the
+     * local input gradients — accumulating leaf gradients into registry-owned
+     * grad_ buffers — and propagates to upstream producers via apply(), which
+     * the active engine intercepts as contribute() calls. Reuses the existing
+     * apply_impl() body so the per-operator backward math is the single source
+     * of truth for both the engine and the legacy recursive path.
+     */
+    void run_backward(const Tensor& grad_output,
+                      cudaStream_t stream,
+                      const Batching::BatchPayload* backward_payload = nullptr,
+                      const Batching::BatchDeviceBindings* backward_bindings = nullptr) {
+        apply_impl(grad_output, stream, backward_payload, backward_bindings);
+    }
+
     /**
      * @brief Release saved tensors (called after backward to free memory)
      */
@@ -737,6 +827,7 @@ struct Tensor {
     bool requires_grad = false;         ///< Track in compute graph?
     bool is_leaf = true;                ///< Created by user (not from operation)?
     bool retain_grad = false;           ///< Keep grad even if non-leaf?
+    int grad_output_slot = 0;           ///< Output slot of grad_fn that produced this tensor (multi-output producers)
     
     //--------------------------------------------------//
     // Execution Context

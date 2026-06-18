@@ -180,6 +180,7 @@ struct NLLLossGradFn : public GradFn {
         class_weights = class_weights_;
         grad_shape = log_probs.shape;
         log_probs_grad_fn = log_probs.grad_fn;
+        register_input(log_probs.grad_fn);
 
         if (log_probs.requires_grad) {
             if (!log_probs_grad_fn) {

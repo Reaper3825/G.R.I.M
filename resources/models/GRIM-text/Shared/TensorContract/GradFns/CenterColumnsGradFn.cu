@@ -342,6 +342,7 @@ void CenterColumnsGradFn::capture_input(Tensor& input, int cols, int rows, int g
         sequence_lengths = *sequence_lengths_;
     }
     input_grad_fn = input.grad_fn;
+    register_input(input.grad_fn);
 
     input.ensure_grad();
     input_is_leaf = input.is_leaf;

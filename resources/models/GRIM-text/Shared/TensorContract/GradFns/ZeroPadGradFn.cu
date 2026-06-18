@@ -36,6 +36,7 @@ void ZeroPadGradFn::capture_input(Tensor& x, cudaStream_t stream, size_t offset_
     input_requires_grad = x.requires_grad;
     input_shape = x.shape;
     input_grad_fn = x.grad_fn;
+    register_input(x.grad_fn);
     input_count = x.numel();
     offset_elements = offset_elems;
 

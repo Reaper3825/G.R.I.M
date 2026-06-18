@@ -575,6 +575,129 @@ void testRMSNorm() {
 }
 
 //==============================================================================
+// Test: Fan-in gradient accumulation (MTP collapse regression)
+//
+// Topology mirrors Multi-Token Prediction: a single non-leaf trunk feeds N
+// independent consumers whose outputs are summed into one root. The trunk's
+// upstream (a leaf "embedding") must receive the SUM of all N paths.
+//
+//   base (leaf, requires_grad)
+//     └─ trunk = exp(base)            <- shared node, in-degree N
+//         ├─ h_0 = mul_scalar(trunk, c_0)
+//         ├─ ...
+//         └─ h_{N-1} = mul_scalar(trunk, c_{N-1})
+//   total = h_0 + h_1 + ... + h_{N-1} ; total.backward(ones)
+//
+// Truth:  base.grad[i] = (sum_k c_k) * exp(base[i])
+// Legacy DFS recursion (first-wins `applied` guard) collapses the trunk to a
+// SINGLE consumer, so base.grad is wrong (one c_k term). The worklist engine
+// accumulates all N contributions and matches truth.
+//==============================================================================
+
+bool testFanInAccumulation() {
+    printf("\n");
+    printf("################################################################\n");
+    printf("#  TEST: Fan-in accumulation (MTP collapse regression)        #\n");
+    printf("################################################################\n");
+
+    cudaStream_t stream;
+    CUDA_CHECK(cudaStreamCreate(&stream));
+
+    constexpr int N = 16;            // trunk element count
+    constexpr int NUM_CONSUMERS = 4; // 1 main head + 3 MTP heads
+    const float c[NUM_CONSUMERS] = {1.0f, 2.0f, 3.0f, 4.0f};
+    float c_sum = 0.0f;
+    for (int k = 0; k < NUM_CONSUMERS; ++k) c_sum += c[k];
+
+    std::vector<float> h_base(N);
+    for (int i = 0; i < N; ++i) h_base[i] = 0.1f * ((i % 7) - 3);  // [-0.3, 0.3]
+
+    std::vector<float> h_ones(N, 1.0f);
+
+    float* d_base = nullptr;
+    float* d_ones = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_base, N * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_ones, N * sizeof(float)));
+    CUDA_CHECK(cudaMemcpy(d_base, h_base.data(), N * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_ones, h_ones.data(), N * sizeof(float), cudaMemcpyHostToDevice));
+
+    // CPU ground truth: (sum_k c_k) * exp(base[i])
+    std::vector<float> truth(N);
+    for (int i = 0; i < N; ++i) truth[i] = c_sum * expf(h_base[i]);
+
+    auto runBackward = [&](bool use_engine) -> std::vector<float> {
+        GRIM::setUseEngineBackward(use_engine);
+
+        Tensor base = Tensor::from_ptr(
+            d_base, TensorContract::TensorShape::make_BSM(N, 1), false, true);  // leaf, requires_grad
+        base.stream = stream;
+        base.ensure_grad();   // fresh zeroed grad accumulator for this run
+
+        // Shared trunk + N independent consumers summed into one root.
+        Tensor trunk = autograd::exp(base, stream);
+        Tensor total = autograd::mul_scalar(trunk, c[0], stream);
+        for (int k = 1; k < NUM_CONSUMERS; ++k) {
+            Tensor head = autograd::mul_scalar(trunk, c[k], stream);
+            total = autograd::add(total, head, stream);
+        }
+
+        Tensor seed = Tensor::from_ptr(
+            d_ones, TensorContract::TensorShape::make_BSM(N, 1), false, false);
+        seed.stream = stream;
+
+        total.backward(&seed);
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+
+        std::vector<float> grad(N);
+        CUDA_CHECK(cudaMemcpy(grad.data(), base.grad_data(), N * sizeof(float), cudaMemcpyDeviceToHost));
+        return grad;
+    };
+
+    auto maxRelErr = [&](const std::vector<float>& a, const std::vector<float>& b) -> float {
+        float worst = 0.0f;
+        for (int i = 0; i < N; ++i) {
+            float diff = fabsf(a[i] - b[i]);
+            float denom = fabsf(b[i]) > 1e-6f ? fabsf(b[i]) : 1.0f;
+            worst = std::max(worst, diff / denom);
+        }
+        return worst;
+    };
+
+    std::vector<float> legacy_grad = runBackward(false);
+    std::vector<float> engine_grad = runBackward(true);
+
+    const float legacy_err = maxRelErr(legacy_grad, truth);
+    const float engine_err = maxRelErr(engine_grad, truth);
+
+    printf("\n  sum(c_k) = %.1f, consumers = %d, trunk elems = %d\n", c_sum, NUM_CONSUMERS, N);
+    printf("  %-8s %12s %12s %12s\n", "idx", "truth", "engine", "legacy");
+    for (int i = 0; i < std::min(N, 8); ++i) {
+        printf("  %-8d %12.6f %12.6f %12.6f\n", i, truth[i], engine_grad[i], legacy_grad[i]);
+    }
+    printf("\n  engine max rel err: %.6e\n", engine_err);
+    printf("  legacy max rel err: %.6e\n", legacy_err);
+
+    const float tol = 1e-4f;
+    const bool engine_ok = engine_err < tol;
+    // The legacy recursion MUST collapse (be wrong) for this to be a real
+    // regression guard. If a future refactor makes legacy correct too, this
+    // surfaces it rather than silently passing.
+    const bool legacy_collapsed = legacy_err > tol;
+
+    bool pass = engine_ok && legacy_collapsed;
+    printf("\n  [%s] engine matches truth: %s\n", engine_ok ? "PASS" : "FAIL", engine_ok ? "yes" : "NO");
+    printf("  [%s] legacy collapses (demonstrates bug): %s\n",
+           legacy_collapsed ? "PASS" : "WARN", legacy_collapsed ? "yes" : "no");
+    printf("  >>> Fan-in test: %s <<<\n", pass ? "PASS" : "FAIL");
+
+    GRIM::setUseEngineBackward(true);  // restore default
+    cudaFree(d_base);
+    cudaFree(d_ones);
+    cudaStreamDestroy(stream);
+    return pass;
+}
+
+//==============================================================================
 // Main
 //==============================================================================
 
@@ -606,11 +729,14 @@ int main() {
     testFlashAttentionBackward();  // PRIME SUSPECT: softmax Jacobian
     testFFNBackward();             // Second suspect: GELU derivative chain
     testRMSNorm();                 // Baseline (probably fine)
-    
+
+    // Autograd worklist engine: fan-in accumulation must not collapse.
+    const bool fanin_ok = testFanInAccumulation();
+
     printf("\n");
     printf("****************************************************************\n");
     printf("*                    TEST COMPLETE                             *\n");
     printf("****************************************************************\n");
-    
-    return 0;
+
+    return fanin_ok ? 0 : 1;
 }

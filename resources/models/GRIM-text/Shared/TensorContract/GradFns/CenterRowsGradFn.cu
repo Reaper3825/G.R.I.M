@@ -153,6 +153,7 @@ void CenterRowsGradFn::capture_input(Tensor& input, int dim, int rows, cudaStrea
     use_token_type_gate = token_type_gate;
     center_active_subspace = center_active;
     input_grad_fn = input.grad_fn;
+    register_input(input.grad_fn);
 
     input.ensure_grad();
 

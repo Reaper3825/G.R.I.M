@@ -187,6 +187,7 @@ void RMSNormGradFn::capture_inputs(Tensor& x, Tensor& gamma_tensor, cudaStream_t
     input_shape = x.shape;
 
     input_grad_fn = x.grad_fn;
+    register_input(x.grad_fn);
     gamma_data = gamma_tensor.data;
 
     if (input_requires_grad) {

@@ -108,6 +108,8 @@ void ElementwiseMulGradFn::capture_inputs(Tensor& a, Tensor& b, cudaStream_t str
     b_shape = b.shape;
     a_grad_fn = a.grad_fn;
     b_grad_fn = b.grad_fn;
+    register_input(a.grad_fn);
+    register_input(b.grad_fn);
 
     if (a_requires_grad) {
         if (a.is_leaf) {
@@ -135,12 +137,10 @@ void ElementwiseMulGradFn::capture_inputs(Tensor& a, Tensor& b, cudaStream_t str
             b_grad = owned_b_grad.get();
         }
     }
-}
 
-void ElementwiseMulGradFn::set_cache_refs(const float* a_data, const float* b_data, size_t size) {
-    cached_size = size;
-    if (a_requires_grad && b_data) cached_b = b_data;
-    if (b_requires_grad && a_data) cached_a = a_data;
+    cached_size = a.numel();
+    if (a_requires_grad) cached_b = b.data;
+    if (b_requires_grad) cached_a = a.data;
 }
 
 void ElementwiseMulGradFn::apply_impl(const Tensor& grad_output,
@@ -217,7 +217,6 @@ Tensor elementwise_mul(const Tensor& a, const Tensor& b, cudaStream_t stream) {
         result.is_leaf = false;
         auto grad_fn = std::make_shared<ElementwiseMulGradFn>();
         grad_fn->capture_inputs(const_cast<Tensor&>(a), const_cast<Tensor&>(b), stream);
-        grad_fn->set_cache_refs(a.data, b.data, count);
         result.grad_fn = grad_fn;
     }
 

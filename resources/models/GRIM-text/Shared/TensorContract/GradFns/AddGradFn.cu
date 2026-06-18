@@ -39,6 +39,8 @@ void AddGradFn::capture_inputs(Tensor& a, Tensor& b, cudaStream_t stream) {
 
     a_grad_fn = a.grad_fn;
     b_grad_fn = b.grad_fn;
+    register_input(a.grad_fn);
+    register_input(b.grad_fn);
 
     element_count = a.numel();
 
@@ -87,6 +89,7 @@ void AddGradFn::capture_single_input(Tensor& a, cudaStream_t stream) {
     a_shape = a.shape;
 
     a_grad_fn = a.grad_fn;
+    register_input(a.grad_fn);
 
     element_count = a.numel();
 

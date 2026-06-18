@@ -129,6 +129,7 @@ void BiasAddGradFn::capture_inputs(Tensor& input, Tensor& bias,
     features = static_cast<size_t>(num_features);
 
     input_grad_fn = input.grad_fn;
+    register_input(input.grad_fn);
 
     if (input_requires_grad) {
         input.ensure_grad();

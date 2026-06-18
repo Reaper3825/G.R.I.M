@@ -225,6 +225,7 @@ struct L1ScalarLossGradFn : public GradFn {
         a_requires_grad_ = a_tensor.requires_grad;
         a_shape_ = a_tensor.shape;
         a_grad_fn_ = a_tensor.grad_fn;
+        register_input(a_tensor.grad_fn);
         saved_b_ = target_value;
 
         cudaMallocOrThrow(reinterpret_cast<void**>(&saved_a_), sizeof(float), "autograd_exec_saved_a");
@@ -296,6 +297,7 @@ struct DivInvalidPenaltyGradFn : public GradFn {
         p_op_requires_grad_ = p_op_t.requires_grad;
         p_op_shape_ = p_op_t.shape;
         p_op_grad_fn_ = p_op_t.grad_fn;
+        register_input(p_op_t.grad_fn);
 
         float* buf = nullptr;
         cudaMallocOrThrow(reinterpret_cast<void**>(&buf), static_cast<size_t>(num_ops_) * sizeof(float), "autograd_exec_div_penalty_grad_p_op");
@@ -356,6 +358,7 @@ struct DivMagnitudePenaltyGradFn : public GradFn {
         v_out_requires_grad_ = v_out_t.requires_grad;
         v_out_shape_ = v_out_t.shape;
         v_out_grad_fn_ = v_out_t.grad_fn;
+        register_input(v_out_t.grad_fn);
 
         cudaMallocOrThrow(reinterpret_cast<void**>(&saved_v_out_), sizeof(float), "autograd_exec_div_mag_saved_vout");
         cudaMemcpyAsync(saved_v_out_, v_out_t.data, sizeof(float), cudaMemcpyDeviceToDevice, stream);
@@ -465,6 +468,8 @@ struct ArgReinforceLossGradFn : public GradFn {
         p_arg2_shape_ = p_arg2_t.shape;
         p_arg1_grad_fn_ = p_arg1_t.grad_fn;
         p_arg2_grad_fn_ = p_arg2_t.grad_fn;
+        register_input(p_arg1_t.grad_fn);
+        register_input(p_arg2_t.grad_fn);
 
         auto alloc_grad = [&](Tensor& t, float*& grad_ptr, std::shared_ptr<float>& owned_grad) {
             if (!t.requires_grad) return;
@@ -560,6 +565,7 @@ struct NormalizedEntropyGradFn : public GradFn {
         probs_requires_grad_ = probs_tensor.requires_grad;
         probs_shape_ = probs_tensor.shape;
         probs_grad_fn_ = probs_tensor.grad_fn;
+        register_input(probs_tensor.grad_fn);
 
         cudaMallocOrThrow(reinterpret_cast<void**>(&saved_probs_), static_cast<size_t>(num_classes_) * sizeof(float), "autograd_exec_entropy_saved_probs");
         CUDA_CHECK(cudaMemcpyAsync(

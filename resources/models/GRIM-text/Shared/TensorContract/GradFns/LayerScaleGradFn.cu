@@ -137,6 +137,8 @@ void LayerScaleGradFn::capture_inputs(Tensor& input, Tensor& scale_param, cudaSt
     element_count = input.numel();
     input_grad_fn = input.grad_fn;
     scale_grad_fn = scale_param.grad_fn;
+    register_input(input.grad_fn);
+    register_input(scale_param.grad_fn);
 
     const auto input_dims = input.shape.as_2d();
     rows = input_dims.rows;

@@ -73,6 +73,8 @@ void ConcatGradFn::capture_inputs(Tensor& a, Tensor& b, cudaStream_t stream) {
     b_shape = b.shape;
     a_grad_fn = a.grad_fn;
     b_grad_fn = b.grad_fn;
+    register_input(a.grad_fn);
+    register_input(b.grad_fn);
 
     if (a_requires_grad) {
         a.ensure_grad();

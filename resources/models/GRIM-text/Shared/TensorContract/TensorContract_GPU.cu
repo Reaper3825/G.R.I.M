@@ -4,6 +4,7 @@
 //======================================================//
 #include "TensorContract_GPU.hpp"
 #include "GradientAccumulation.hpp"
+#include "AutogradEngine.hpp"
 #include "HyperParameters/HyperParameters_GPU.hpp"
 #include "../Batching/BatchPayload.hpp"  // BatchPayload for batch geometry in autograd ops
 #include "../VerboseLogging.hpp"
@@ -24,6 +25,7 @@
 #include <cfloat>
 #include <cstdint>
 #include <cassert>
+#include <cstring>
 #include <algorithm>
 #include <cstdlib>
 #include <limits>
@@ -670,10 +672,51 @@ bool debug_check_finite(const TensorView& tensor, cudaStream_t stream) {
 
 namespace GRIM {
 
+//======================================================//
+//  Backward dispatch flag (iterative engine vs legacy DFS)
+//======================================================//
+namespace {
+bool resolveDefaultEngineBackward() {
+    // Default: iterative worklist engine. GRIM_AUTOGRAD_ENGINE=0/false/off
+    // forces the legacy recursive path (used by the fan-in regression test
+    // and for numeric A/B parity during migration).
+    const char* env = std::getenv("GRIM_AUTOGRAD_ENGINE");
+    if (env == nullptr) {
+        return true;
+    }
+    if (std::strcmp(env, "0") == 0 || std::strcmp(env, "false") == 0 ||
+        std::strcmp(env, "off") == 0 || std::strcmp(env, "OFF") == 0) {
+        return false;
+    }
+    return true;
+}
+bool g_use_engine_backward = resolveDefaultEngineBackward();
+}  // namespace
+
+bool useEngineBackward() {
+    return g_use_engine_backward;
+}
+
+void setUseEngineBackward(bool enabled) {
+    g_use_engine_backward = enabled;
+}
+
 void GradFn::apply(const Tensor& grad_output,
                    cudaStream_t stream,
                    const Batching::BatchPayload* backward_payload,
                    const Batching::BatchDeviceBindings* backward_bindings) {
+    // Worklist engine active: a downstream node is handing us our share of this
+    // node's output gradient. Route to the engine, which accumulates the
+    // contribution and fires run_backward() once all consumers have reported.
+    // This replaces the recursive descent below and fixes silent fan-in loss.
+    if (autograd::AutogradEngine* engine = autograd::AutogradEngine::active()) {
+        engine->contribute(this, grad_output);
+        return;
+    }
+
+    // Legacy first-wins DFS recursion (retained for A/B parity + regression
+    // test). Each node propagates immediately and the `applied` guard drops
+    // every consumer after the first.
     logTensorContractApplyGradOutputStats(*this, grad_output, stream);
     apply_impl(grad_output, stream, backward_payload, backward_bindings);
 }
@@ -1336,13 +1379,21 @@ void Tensor::backward(const Tensor* grad_output,
     
     // Traverse backward through computation graph
     if (grad_fn != nullptr) {
-        // Execute backward function - create a view of our gradient
-        Tensor grad_tensor;
-        grad_tensor.data = grad_data();
-        grad_tensor.shape = shape;
-        grad_tensor.owns_data = false;  // grad_tensor is a view
-        
-        grad_fn->apply(grad_tensor, stream, backward_payload, backward_bindings);
+        if (useEngineBackward()) {
+            // Iterative worklist engine: discovers the graph, accumulates every
+            // consumer's contribution per node (true fan-in), and fires each
+            // node once in topological order. Fixes silent MTP gradient loss.
+            autograd::AutogradEngine engine(stream, backward_payload, backward_bindings);
+            engine.run(grad_fn.get(), grad_data(), shape);
+        } else {
+            // Legacy first-wins DFS recursion.
+            Tensor grad_tensor;
+            grad_tensor.data = grad_data();
+            grad_tensor.shape = shape;
+            grad_tensor.owns_data = false;  // grad_tensor is a view
+
+            grad_fn->apply(grad_tensor, stream, backward_payload, backward_bindings);
+        }
         
         // ISSUE #52 FIX: Synchronize stream BEFORE release_saved()!
         // release_saved() triggers destructors which call cudaFree().

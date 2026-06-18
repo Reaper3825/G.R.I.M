@@ -167,6 +167,7 @@ void EmbeddingGradFn::capture_weight(Tensor& w) {
 
     // Copy shared_ptr to captured grad_fn
     weight_grad_fn = w.grad_fn;
+    register_input(w.grad_fn);
 
     if (weight_requires_grad) {
         w.ensure_grad();

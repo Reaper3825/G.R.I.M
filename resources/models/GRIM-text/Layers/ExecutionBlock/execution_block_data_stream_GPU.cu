@@ -735,6 +735,9 @@ struct FourOpMixGradFn : public GradFn {
         v1_grad_fn = v1_t.grad_fn;
         v2_grad_fn = v2_t.grad_fn;
         p_op_grad_fn = p_op_t.grad_fn;
+        register_input(v1_t.grad_fn);
+        register_input(v2_t.grad_fn);
+        register_input(p_op_t.grad_fn);
 
         auto alloc_grad = [&](Tensor& t, float*& gp, std::shared_ptr<float>& owned, size_t n) {
             if (!t.requires_grad) return;
@@ -883,6 +886,8 @@ struct ExecutionBlockInjectGradFn : public GradFn {
         result_shape = result_t.shape;
         H_grad_fn = H_t.grad_fn;
         result_grad_fn = result_t.grad_fn;
+        register_input(H_t.grad_fn);
+        register_input(result_t.grad_fn);
 
         if (result_requires_grad) {
             result_t.ensure_grad();
@@ -1005,6 +1010,7 @@ struct ReduceMeanGradFn : public GradFn {
         H_requires_grad = H.requires_grad;
         H_shape = H.shape;
         H_grad_fn = H.grad_fn;
+        register_input(H.grad_fn);
         H_is_leaf_ = H.is_leaf;
 
         if (H_requires_grad) {
@@ -1193,6 +1199,9 @@ struct GatedTraceUpdateGradFn : public GradFn {
         old_trace_grad_fn = old_trace_t.grad_fn;
         candidate_grad_fn = candidate_t.grad_fn;
         gate_logits_grad_fn = gate_logits_t.grad_fn;
+        register_input(old_trace_t.grad_fn);
+        register_input(candidate_t.grad_fn);
+        register_input(gate_logits_t.grad_fn);
 
         auto alloc_grad = [&](Tensor& t, float*& gp, std::shared_ptr<float>& owned, size_t n) {
             if (!t.requires_grad) return;

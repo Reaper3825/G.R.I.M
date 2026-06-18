@@ -70,6 +70,7 @@ CrossEntropyLogitsGradFn::~CrossEntropyLogitsGradFn() {
 
 void CrossEntropyLogitsGradFn::capture_input(Tensor& logits, cudaStream_t stream) {
     input_grad_fn = logits.grad_fn;
+    register_input(logits.grad_fn);
     input_shape = logits.shape;
     C = logits.shape.as_2d().cols;
     input_is_leaf = logits.is_leaf;

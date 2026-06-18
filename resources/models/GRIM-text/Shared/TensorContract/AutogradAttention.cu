@@ -128,6 +128,8 @@ struct MatMulGradFn : public GradFn {
         // Copy shared_ptrs to captured grad_fns
         a_grad_fn = a.grad_fn;
         b_grad_fn = b.grad_fn;
+        register_input(a.grad_fn);
+        register_input(b.grad_fn);
         
         // ISSUE #55 FIX: Handle grad buffer ownership based on tensor type
         // - Leaf tensors (weights): persist in TrainingState, use their grad buffer directly
@@ -765,6 +767,9 @@ struct ScaledDotProductAttentionGradFn : public GradFn {
         q_grad_fn = q.grad_fn;
         k_grad_fn = k.grad_fn;
         v_grad_fn = v.grad_fn;
+        register_input(q.grad_fn);
+        register_input(k.grad_fn);
+        register_input(v.grad_fn);
         
         if (q_requires_grad) {
             q.ensure_grad();
@@ -1240,6 +1245,7 @@ struct ReshapeFromBHSDGradFn : public GradFn {
         
         // Copy shared_ptr to captured grad_fn
         input_grad_fn = bhsd_input.grad_fn;
+        register_input(bhsd_input.grad_fn);
         
         if (input_requires_grad) {
             bhsd_input.ensure_grad();
@@ -1444,6 +1450,19 @@ struct SplitAndReshapeQKVGradFn : public GradFn {
     std::shared_ptr<SharedState> shared;
     
     SplitAndReshapeQKVGradFn() { op_name = "split_and_reshape_qkv"; }
+
+    // Engine topology: the three Q/K/V instances share one upstream (qkv_out).
+    // The merge that calls qkv_grad_fn->apply() fires exactly once (on whichever
+    // instance runs third), so exactly ONE instance must report the edge for the
+    // in-degree count to match. We designate the Q instance. When qkv_out is a
+    // leaf, the merge accumulates terminally into its registry grad buffer and
+    // there is no upstream edge.
+    void collect_input_edges(std::vector<GradFn*>& out) const override {
+        out.clear();
+        if (output_type == OutputType::Q && shared && shared->qkv_grad_fn) {
+            out.push_back(shared->qkv_grad_fn.get());
+        }
+    }
     
     void apply_impl(const Tensor& grad_output,
                     cudaStream_t stream,
@@ -1753,6 +1772,24 @@ struct RoPEGradFn : public GradFn {
     std::shared_ptr<float> owned_grad_buf;
 
     RoPEGradFn() { op_name = "rope_rotation"; }
+
+    // Engine topology: Q and K are independent 1-in/1-out instances (the atomic
+    // apply_count is vestigial). Each reports only its own upstream edge.
+    void collect_input_edges(std::vector<GradFn*>& out) const override {
+        out.clear();
+        if (!shared) {
+            return;
+        }
+        if (output_type == OutputType::Q) {
+            if (shared->q_requires_grad && shared->q_upstream_grad_fn) {
+                out.push_back(shared->q_upstream_grad_fn.get());
+            }
+        } else {
+            if (shared->k_requires_grad && shared->k_upstream_grad_fn) {
+                out.push_back(shared->k_upstream_grad_fn.get());
+            }
+        }
+    }
 
     void apply_impl(const Tensor& grad_output,
                     cudaStream_t stream,

@@ -41,6 +41,8 @@ void ResidualAddGradFn::capture_inputs(Tensor& x, Tensor& r, cudaStream_t stream
 
     input_grad_fn = x.grad_fn;
     residual_grad_fn = r.grad_fn;
+    register_input(x.grad_fn);
+    register_input(r.grad_fn);
 
     element_count = x.numel();
 

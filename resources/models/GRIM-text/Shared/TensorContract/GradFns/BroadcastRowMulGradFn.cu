@@ -91,6 +91,8 @@ void BroadcastRowMulGradFn::capture_inputs(Tensor& s, Tensor& x, cudaStream_t st
     x_shape = x.shape;
     scale_grad_fn = s.grad_fn;
     x_grad_fn = x.grad_fn;
+    register_input(s.grad_fn);
+    register_input(x.grad_fn);
 
     if (scale_requires_grad) {
         if (s.is_leaf) {

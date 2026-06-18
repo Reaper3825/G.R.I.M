@@ -77,6 +77,7 @@ Tensor scale_scalar(const Tensor& t, float scale, cudaStream_t stream) {
     if (t.requires_grad && t.grad_fn) {
         auto grad_fn = std::make_shared<ScaleScalarGradFn>();
         grad_fn->input_grad_fn = t.grad_fn;
+        grad_fn->register_input(t.grad_fn);
         grad_fn->input_shape = t.shape;
         grad_fn->scale = scale;
         result.grad_fn = grad_fn;

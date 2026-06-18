@@ -326,6 +326,7 @@ void ProjectOutPC1GradFn::capture_input(Tensor& input, int rows, int cols, int n
     }
 
     input_grad_fn = input.grad_fn;
+    register_input(input.grad_fn);
 
     float* input_copy = nullptr;
     cudaMallocOrThrow(reinterpret_cast<void**>(&input_copy), element_count * sizeof(float), "ProjectOutPC1GradFn_input_data");
