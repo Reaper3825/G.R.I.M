@@ -29,15 +29,24 @@ namespace GRIMText::Training {
 
 namespace {
 
-// Initialize the dedicated LM-head bias to the empirical unigram log-marginal,
+// Initialize the output-head biases to the empirical unigram log-marginal,
 // bias[v] = log p(v), estimated from the training targets. This houses the
-// unigram prior in a dedicated parameter so neither attention nor the FFN is
+// unigram prior in dedicated parameters so neither attention nor the FFN is
 // rewarded for injecting it as a shared residual common-mode direction (the
-// driver of the rho/representation-collapse buildup). The bias tensor is
-// allocated by initializeLmHeadParameterTensors when lm_head_unigram_bias=true;
-// here we only fill its values. Accessed via the ParameterRegistry API rather
-// than any TrainingContext-side handle.
-void populateUnigramLmHeadBias(TrainingContext& ctx) {
+// driver of the rho/representation-collapse buildup).
+//
+// Applies to BOTH the main LM head AND every MTP auxiliary head: the MTP losses
+// backpropagate into the SAME shared trunk, so a zero-init MTP bias would
+// re-create the identical collapse incentive (scaled by mtp_alpha). Each MTP
+// head k predicts the token at shift k+1, whose marginal equals the overall
+// unigram p(v) up to edge truncation, so the same log p(v) vector is reused for
+// every head.
+//
+// The bias tensors are allocated during model assembly (LM head when
+// lm_head_unigram_bias=true; MTP heads always carry a bias); here we only fill
+// values, accessed via the ParameterRegistry API rather than a TrainingContext
+// handle. Fresh-init only — on resume the trained biases are kept.
+void populateUnigramOutputBiases(TrainingContext& ctx) {
     const bool enabled = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(
         ctx.config, "lm_head_unigram_bias");
     if (!enabled) {
@@ -98,21 +107,45 @@ void populateUnigramLmHeadBias(TrainingContext& ctx) {
         }
     }
 
+    int mtp_heads_written = 0;
 #ifdef USE_CUDA
     cudaStream_t stream =
-        ctx.requireTrainingState("populateUnigramLmHeadBias").stream_ctrl.getPrimaryStream();
+        ctx.requireTrainingState("populateUnigramOutputBiases").stream_ctrl.getPrimaryStream();
     const std::size_t bytes = static_cast<std::size_t>(vocab_size) * sizeof(float);
-    cudaError_t copy_err = cudaMemcpyAsync(
-        lm_head.bias.data, h_bias.data(), bytes, cudaMemcpyHostToDevice, stream);
-    if (copy_err != cudaSuccess) {
-        throw std::runtime_error(
-            std::string("populateUnigramLmHeadBias: cudaMemcpyAsync(bias H2D) failed: ") +
-            cudaGetErrorString(copy_err));
+
+    // Upload the same log p(v) vector to a device bias tensor [vocab_size].
+    auto upload_bias = [&](const GRIM::Tensor& bias, const char* who) {
+        cudaError_t copy_err = cudaMemcpyAsync(
+            bias.data, h_bias.data(), bytes, cudaMemcpyHostToDevice, stream);
+        if (copy_err != cudaSuccess) {
+            throw std::runtime_error(
+                std::string("populateUnigramOutputBiases: cudaMemcpyAsync(") + who +
+                " bias H2D) failed: " + cudaGetErrorString(copy_err));
+        }
+    };
+
+    upload_bias(lm_head.bias, "lm_head");
+
+    // Mirror the prior into every MTP auxiliary head; they share the trunk and
+    // would otherwise re-introduce the collapse incentive from a zero-init bias.
+    for (auto& mtp_head : ctx.parameter_registry.mtpHeadParameterTensors()) {
+        if (!mtp_head.bias.data) {
+            continue;
+        }
+        if (mtp_head.bias.numel() != static_cast<std::size_t>(vocab_size)) {
+            throw std::runtime_error(
+                "populateUnigramOutputBiases: MTP head bias size " +
+                std::to_string(mtp_head.bias.numel()) + " != vocab_size " +
+                std::to_string(vocab_size));
+        }
+        upload_bias(mtp_head.bias, "mtp_head");
+        ++mtp_heads_written;
     }
+
     cudaError_t sync_err = cudaStreamSynchronize(stream);
     if (sync_err != cudaSuccess) {
         throw std::runtime_error(
-            std::string("populateUnigramLmHeadBias: cudaStreamSynchronize failed: ") +
+            std::string("populateUnigramOutputBiases: cudaStreamSynchronize failed: ") +
             cudaGetErrorString(sync_err));
     }
 #endif
@@ -121,7 +154,8 @@ void populateUnigramLmHeadBias(TrainingContext& ctx) {
         GRIM::Logging::ModuleId::Training,
         "[Phase1] lm_head_unigram_bias: initialized bias = log p(v) | vocab=" +
             std::to_string(vocab_size) + " seen_tokens=" + std::to_string(seen_tokens) +
-            " total_targets=" + std::to_string(static_cast<long long>(total)),
+            " total_targets=" + std::to_string(static_cast<long long>(total)) +
+            " mtp_heads=" + std::to_string(mtp_heads_written),
         0);
 }
 
@@ -266,7 +300,7 @@ Phase1Result executePhase1(GRIM::Config::AiConfigSnapshot config) {
     }
     ModelAllocated(ctx);
     CheckpointLoaded(ctx);
-    populateUnigramLmHeadBias(ctx);
+    populateUnigramOutputBiases(ctx);
     ResumeStateReady(ctx);
     TelemetryReady(ctx);
     PlannedBatchesReady(ctx);
