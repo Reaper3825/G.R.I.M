@@ -27,6 +27,7 @@ Per-feature documentation. Load only the feature(s) relevant to the current task
 | [AtomTableEntryLogAudit.md](AtomTableEntryLogAudit.md) | Audit of AtomTable entry failures from tokenizer log, including fail-loud requirements for sign and `arg_number` handling |
 | [Initialization.md](Initialization.md) | Xavier/Philox, residual projection init gain, embedding scale |
 | [Diagnostics.md](Diagnostics.md) | RMSNorm formula, CUDA events, LibTorch baselines |
+| [ModeCollapseAblationInvestigation.md](ModeCollapseAblationInvestigation.md) | rho-buildup ablation probes, kZeroAttnV vs kZeroAttnResidual, FlashAttention backward gradient-leak hypothesis |
 | [Config.md](Config.md) | ai_config.json conventions, fail-loud defaults |
 | [CppCudaFootguns.md](CppCudaFootguns.md) | General language/runtime traps |
 | [DeletedCode.md](DeletedCode.md) | Removed subsystems and marked-for-removal class targets — do not recreate or deepen dependencies |
