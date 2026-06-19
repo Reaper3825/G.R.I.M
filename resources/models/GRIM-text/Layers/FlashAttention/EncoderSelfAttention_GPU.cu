@@ -14,6 +14,8 @@
 #include <string>
 #include <utility>
 
+#include <cuda_runtime.h>
+
 namespace {
     constexpr bool kEnableAttentionStepLogs = true;
 
@@ -262,6 +264,42 @@ void encoderSelfAttentionForward(
     }
     if (qkv_debug > 0) {
         autograd::checkQKVTensorFinite("AutogradSDPA:attn_out_bhsd", attn_out_bhsd, request.stream);
+    }
+
+    // Experimental ablation (AblationFlags.hpp): when kZeroAttnV zeroes V before
+    // SDPA, attn_out MUST be bit-exact zero (IEEE 754: finite * 0 == 0). If the
+    // FlashAttention kernel emits any non-zero output for an all-zero V, the
+    // kernel itself is injecting signal into the residual (e.g. uninitialized
+    // output tiles, masked/padded positions, or a GQA broadcast path that never
+    // reads the zeroed V). This spot-checks the first elements of attn_out and
+    // screams loudly so the kernel can be ruled in/out as the collapse driver.
+    if constexpr (GRIM::Ablation::kZeroAttnV) {
+        float zero_v_attn_out_sample[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        const cudaError_t copy_err = cudaMemcpy(
+            zero_v_attn_out_sample, attn_out_bhsd.data,
+            sizeof(zero_v_attn_out_sample), cudaMemcpyDeviceToHost);
+        if (copy_err != cudaSuccess) {
+            throw std::runtime_error(
+                std::string("encoderSelfAttentionForward: kZeroAttnV verification cudaMemcpy failed: ") +
+                cudaGetErrorString(copy_err));
+        }
+        const bool zero_v_attn_out_is_zero =
+            zero_v_attn_out_sample[0] == 0.0f && zero_v_attn_out_sample[1] == 0.0f &&
+            zero_v_attn_out_sample[2] == 0.0f && zero_v_attn_out_sample[3] == 0.0f;
+        if (!zero_v_attn_out_is_zero) {
+            std::fprintf(stderr,
+                "[ABLATION][kZeroAttnV] layer=%d FAIL: V was zeroed before SDPA but attn_out is NON-ZERO "
+                "[%.6e %.6e %.6e %.6e] -> FlashAttention kernel is emitting signal for an all-zero V "
+                "(kernel is a collapse-direction source, NOT the linear-algebra path)\n",
+                request.layer_idx,
+                zero_v_attn_out_sample[0], zero_v_attn_out_sample[1],
+                zero_v_attn_out_sample[2], zero_v_attn_out_sample[3]);
+        } else {
+            std::fprintf(stderr,
+                "[ABLATION][kZeroAttnV] layer=%d OK: attn_out is exact-zero for zeroed V "
+                "(FlashAttention kernel ruled out as a zero-V signal source)\n",
+                request.layer_idx);
+        }
     }
 
     attn_out = autograd::reshape_bhsd_to_flat(
