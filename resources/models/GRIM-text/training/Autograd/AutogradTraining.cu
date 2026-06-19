@@ -860,6 +860,54 @@ bool verifyGradientsAreConnectedImpl(
                 requireReceivedGradient(ffn0.W2, "layer 0 ffnW2 (attn ablated)");
             }
         }
+
+        // ════════════════════════════════════════════════════════════════════
+        // ABLATION GRADIENT-LEAK PROBE (AblationFlags.hpp)
+        //
+        // kZeroAttnV and kZeroAttnResidual both force attn_out == 0 in the
+        // forward pass, so the residual stream is provably identical between
+        // them. Pure autograd math then says the attention parameters (W_qkv,
+        // W_o) MUST receive EXACTLY ZERO gradient in both configs.
+        //
+        // The two configs differ ONLY in the backward pass: kZeroAttnResidual
+        // kills the gradient at the residual add (FlashAttention backward sees
+        // dO == 0), while kZeroAttnV leaves the FlashAttention forward AND
+        // backward fully live (real Q/K/softmax + extreme ALiBi bias, nonzero
+        // dO). If the attention backward LEAKS a nonzero dQ/dK under that ALiBi
+        // regime, W_qkv receives signal it should not, trains the trunk, and
+        // becomes a collapse driver that exists ONLY in kZeroAttnV.
+        //
+        // This probe reports the per-layer W_qkv / W_o gradient RMS so the leak
+        // is a logged NUMBER, not an argument: rms == 0 / nonzero=no => clean
+        // (configs provably identical); rms > 0 / nonzero=yes => BACKWARD LEAK.
+        // ════════════════════════════════════════════════════════════════════
+        if constexpr (GRIM::Ablation::kZeroAttnV || GRIM::Ablation::kZeroAttnResidual) {
+            const char* ablation_tag =
+                GRIM::Ablation::kZeroAttnV ? "kZeroAttnV" : "kZeroAttnResidual";
+            for (int layer = 0; layer < num_layers; ++layer) {
+                auto& enc_probe = ctx.parameter_registry->requireEncodingLayerParameters(
+                    layer, "verifyGradientsAreConnectedImpl");
+                auto probe_attn_param = [&](Tensor& t, const char* param_name) {
+                    if (!t.data || !t.has_grad()) {
+                        AG_INFO("[ABLATION-GRADLEAK][" << ablation_tag << "] layer=" << layer
+                                << " " << param_name << ".grad NOT ALLOCATED (expected for a frozen sublayer)");
+                        return;
+                    }
+                    GradientSignalProbe probe = probeGradientSignal(t, ctx.stream);
+                    const bool leaked = probe.nonzero && probe.rms != 0.0f;
+                    AG_INFO("[ABLATION-GRADLEAK][" << ablation_tag << "] layer=" << layer
+                            << " " << param_name << ".grad rms=" << probe.rms
+                            << " nonzero=" << (probe.nonzero ? "yes" : "no")
+                            << " finite=" << (probe.finite ? "yes" : "no")
+                            << " checked=" << probe.checked
+                            << " -> " << (leaked
+                                ? "LEAK (attention backward delivered signal that math says must be ZERO -> collapse-driver candidate)"
+                                : "clean-zero (no backward leak)"));
+                };
+                probe_attn_param(enc_probe.W_qkv, "attnWqkv");
+                probe_attn_param(enc_probe.W_o, "attnWo");
+            }
+        }
     }
 
     if (model_hp.mtp_enabled && model_hp.mtp_k > 0) {
