@@ -273,7 +273,11 @@ void forwardLmHead(
     //   grad_logits passes through to input
     //   grad_bias = sum(grad_logits, dim=0)
     // ════════════════════════════════════════════════════════════════════
-    if (hp.use_bias && lm_bias.data) {
+    // Apply the bias whenever the bias tensor exists. The tensor is allocated by
+    // initializeLmHeadParameterTensors when EITHER use_bias OR the dedicated
+    // unigram bias is enabled, so gating on data presence (rather than use_bias)
+    // lets the log p(v) unigram bias take effect with use_bias=false.
+    if (lm_bias.data) {
         forward_outputs.logits_tensor = autograd::broadcast_add(forward_outputs.logits_tensor, lm_bias, stream);
     }
 }

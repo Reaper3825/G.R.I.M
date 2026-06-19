@@ -263,15 +263,13 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         return false;
     }
 
-    if (cfg.use_bias) {
-        if (lm_head_view.has_bias && lm_head_view.bias.ptr) {
-            auto lm_bias = download_device_vector(lm_head_view.bias, "LM head bias");
-            if (lm_bias.empty() && lm_head_view.bias.count > 0) return false;
-            fb_lm_bias = builder.CreateVector(lm_bias);
-        } else {
-            Logging::EmitModuleError(kLogModule, "[save] LM head bias missing (use_bias=true)");
-            return false;
-        }
+    // Save the LM-head bias whenever it is present on the model. Presence-driven
+    // so it covers both use_bias and the dedicated unigram bias without threading
+    // an extra config flag into the serialization view.
+    if (lm_head_view.has_bias && lm_head_view.bias.ptr) {
+        auto lm_bias = download_device_vector(lm_head_view.bias, "LM head bias");
+        if (lm_bias.empty() && lm_head_view.bias.count > 0) return false;
+        fb_lm_bias = builder.CreateVector(lm_bias);
     }
 
     auto fb_lm_head = GRIMTransformer::CreateLMHeadWeights(
@@ -279,7 +277,7 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         static_cast<uint32_t>(cfg.d_model),
         static_cast<uint32_t>(cfg.vocab_size),
         cfg.tie_embeddings,
-        cfg.use_bias && lm_head_view.bias.ptr != nullptr);
+        lm_head_view.has_bias && lm_head_view.bias.ptr != nullptr);
 
     flatbuffers::Offset<GRIMTransformer::NumberEncoderWeights> fb_number_encoder = 0;
     const auto& ne_view = request.sources.number_encoder;

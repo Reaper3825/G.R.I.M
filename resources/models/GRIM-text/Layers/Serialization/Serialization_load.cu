@@ -500,12 +500,14 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
             return false;
         }
 
-        if (cfg.use_bias && request.lm_head.bias.ptr && fb_lm_head->bias_data()) {
+        // Presence-driven: load the bias whenever the model allocated a bias
+        // destination (covers use_bias and the dedicated unigram bias).
+        if (request.lm_head.bias.ptr && fb_lm_head->bias_data()) {
             std::vector<float> lm_bias_host(fb_lm_head->bias_data()->begin(), fb_lm_head->bias_data()->end());
             if (!upload_device_vector(lm_bias_host, request.lm_head.bias, "LM head bias"))
                 return false;
-        } else if (cfg.use_bias) {
-            Logging::EmitModuleError(kLogModule, "[load] LM head bias missing (use_bias=true)");
+        } else if (request.lm_head.expect_bias) {
+            Logging::EmitModuleError(kLogModule, "[load] LM head bias missing (model allocated a bias destination)");
             return false;
         }
     }

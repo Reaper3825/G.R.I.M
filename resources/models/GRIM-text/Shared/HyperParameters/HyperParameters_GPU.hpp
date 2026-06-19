@@ -349,6 +349,12 @@ struct LanguageModelConfig {
     bool use_simd = true;
     int num_threads = 4;
     bool use_bias = true;
+    // Dedicated LM-head output bias initialized to log p(v) (unigram marginal),
+    // decoupled from use_bias so it can be enabled WITHOUT the attention/FFN
+    // biases (b_o/b2), which are themselves shared-direction injectors. Houses
+    // the unigram marginal outside the residual stream to prevent the
+    // common-mode (rho) buildup that drives representation collapse.
+    bool lm_head_unigram_bias = false;
     bool qk_norm_enabled = false;  // QK-Norm: RMSNorm applied to Q and K before attention scoring
 
     // LayerScale - per-channel learnable residual scaling vectors [1, d_model]
@@ -1777,6 +1783,7 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(max_seq_len);
     GRIM_LOAD_CONFIG_FIELD(tie_embeddings);
     GRIM_LOAD_CONFIG_FIELD(use_bias);
+    GRIM_LOAD_CONFIG_FIELD(lm_head_unigram_bias);
     GRIM_LOAD_CONFIG_FIELD(dropout_rate);
     GRIM_LOAD_CONFIG_FIELD(embedding_scale);
     GRIM_LOAD_CONFIG_FIELD(sliding_window_stride);
@@ -2252,6 +2259,7 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(use_pre_norm);
     GRIM_WRITE_FINAL_CONFIG_FIELD(fuse_qkv);
     GRIM_WRITE_FINAL_CONFIG_FIELD(use_bias);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(lm_head_unigram_bias);
     GRIM_WRITE_FINAL_CONFIG_FIELD(qk_norm_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(use_layer_scale);
     GRIM_WRITE_FINAL_CONFIG_FIELD(layer_scale_init);

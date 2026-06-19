@@ -275,6 +275,10 @@ void registerTopLevelParameters(Startup::GpuModelState& gpu_model_state,
 
     const bool tie_embeddings = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "tie_embeddings");
     const bool use_bias = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "use_bias");
+    const bool lm_head_unigram_bias = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "lm_head_unigram_bias");
+    // The LM-head bias tensor exists (and must be registered for optimizer
+    // updates) when EITHER use_bias or the dedicated unigram bias is enabled.
+    const bool lm_head_bias_present = use_bias || lm_head_unigram_bias;
     const bool freeze_learned_rms_gammas = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "freeze_learned_rms_gammas");
 
     if (!tie_embeddings) {
@@ -296,8 +300,8 @@ void registerTopLevelParameters(Startup::GpuModelState& gpu_model_state,
                                    ParamGroupType::LM_HEAD,
                                    ParamStatsBucket::LM_HEAD,
                                    -1,
-                                   use_bias,
-                                   "config.use_bias=false");
+                                   lm_head_bias_present,
+                                   "config.use_bias=false && config.lm_head_unigram_bias=false");
 
     const Tensor& final_gamma = lm_head_parameters.final_rms_gamma;
     if (freeze_learned_rms_gammas) {
@@ -973,7 +977,14 @@ void initializeLmHeadParameterTensors(
         Tensor::xavier_uniform_(parameter_tensors.weights, weight_init_seed, init_stream);
     }
 
-    if (lm_head_hp.use_bias) {
+    // Allocate the LM-head bias when EITHER the global use_bias is set OR the
+    // dedicated unigram-bias is enabled. The unigram path keeps the bias active
+    // without the attention/FFN biases (which use_bias also gates) so the
+    // unigram marginal can live in a dedicated parameter rather than a shared
+    // residual common-mode direction. Allocated to zeros here; the unigram path
+    // overwrites with log p(v) once the training token marginal is known
+    // (see initializeUnigramLmHeadBias, called from Phase1 startup).
+    if (lm_head_hp.use_bias || lm_head_hp.unigram_bias) {
         parameter_tensors.bias = Tensor::zeros({lm_head_hp.vocab_size}, init_stream, "lm_head.bias");
         parameter_tensors.bias.requires_grad_();
         parameter_tensors.bias.alloc_grad();

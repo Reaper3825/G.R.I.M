@@ -374,6 +374,7 @@ struct LMHeadLayerConstructionHP {
     int training_batch_size = 0;
     int training_rows_per_sequence = 0;
     bool use_bias = false;
+    bool unigram_bias = false;
     bool tie_embeddings = false;
     bool center_hidden_states = false;
     bool project_out_pc1 = false;
@@ -493,6 +494,7 @@ struct ModelHP {
     int lm_head_training_batch_size = 0;
     int lm_head_training_rows_per_sequence = 0;
     bool lm_head_use_bias = false;
+    bool lm_head_unigram_bias = false;
     bool lm_head_tie_embeddings = false;
     bool lm_head_center_hidden_states = false;
     bool lm_head_project_out_pc1 = false;
@@ -1270,6 +1272,7 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.lm_head_training_batch_size = batch_size;
     view.lm_head_training_rows_per_sequence = max_seq_len;
     view.lm_head_use_bias = requireBool("use_bias");
+    view.lm_head_unigram_bias = requireBool("lm_head_unigram_bias");
     view.lm_head_tie_embeddings = requireBool("tie_embeddings");
     view.lm_head_center_hidden_states = requireBool("lm_head_center_hidden_states");
     view.lm_head_project_out_pc1 = requireBool("project_out_pc1");
@@ -1404,6 +1407,7 @@ inline LMHeadLayerConstructionHP lmHeadLayerConstructionHP(
     view.training_batch_size = model.lm_head_training_batch_size;
     view.training_rows_per_sequence = model.lm_head_training_rows_per_sequence;
     view.use_bias = model.lm_head_use_bias;
+    view.unigram_bias = model.lm_head_unigram_bias;
     view.tie_embeddings = model.lm_head_tie_embeddings;
     view.center_hidden_states = model.lm_head_center_hidden_states;
     view.project_out_pc1 = model.lm_head_project_out_pc1;

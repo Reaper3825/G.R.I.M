@@ -461,7 +461,10 @@ bool loadLanguageModelCheckpoint(
                     lm_head_parameters->bias.data,
                     static_cast<std::size_t>(vocab_size));
     }
-    request.lm_head.expect_bias = use_bias;
+    // Presence-driven: expect a bias on restore whenever the model allocated one
+    // (covers use_bias AND the dedicated unigram bias), so resume never silently
+    // drops a trained log p(v) bias.
+    request.lm_head.expect_bias = (lm_head_parameters && lm_head_parameters->bias.data != nullptr);
 
     if (number_encoder_parameters) {
         assignWrite(request.number_encoder.digit_emb,

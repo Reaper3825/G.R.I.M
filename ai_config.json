@@ -513,6 +513,7 @@
             "learning_rate": 0.0006,
             "lm_head_center_hidden_states": false,
             "lm_head_centering_enabled": false,
+            "lm_head_unigram_bias": true,
             "log_interval": 1,
             "log_recorder_default_level": "Trace",
             "log_recorder_enabled": true,

@@ -79,7 +79,7 @@ inline constexpr bool kZeroAttnResidual = false;
 
 // When true, FFN sublayer contributes 0 to the residual:
 //   output = residual1
-inline constexpr bool kZeroFfnResidual = true;
+inline constexpr bool kZeroFfnResidual = false;
 
 // When true, zero the attention VALUE vectors before SDPA.
 // Effect: attn_out == 0 (softmax-weighted sum of zeros), QK/softmax
