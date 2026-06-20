@@ -135,20 +135,24 @@ void AddGradFn::apply_impl(const Tensor& grad_output,
         accumulate_grad(grad_b, grad_output.data, count, 1.0f, stream, "AddGradFn::apply grad_b");
     }
 
-    // CONTINUE AUTOGRAD CHAIN using stored grad_fn pointers
-    // For c = a + b: dc/da = 1, dc/db = 1, so upstream receives grad_output unchanged.
-    // grad_a/grad_b are local accumulators (leaf buffers or owned intermediates) —
-    // the chain must propagate the raw flowing gradient, not the accumulated buffer.
+    // CONTINUE AUTOGRAD CHAIN using stored grad_fn pointers.
+    // For c = a + b: dc/da = 1, dc/db = 1. We propagate the per-input grad
+    // buffers (grad_a/grad_b), NOT the shared grad_output pointer: the worklist
+    // AutogradEngine borrows the first contributed pointer as a producer's
+    // accumulator and sums later fan-in contributions into it in place. Handing
+    // the same grad_output.data to both edges would alias the two producers'
+    // accumulators, so one producer's fan-in would corrupt the other's gradient.
+    // grad_a/grad_b are distinct owned buffers (non-leaf) holding the same value.
     if (a_requires_grad && a_grad_fn && a_grad_fn->op_name) {
         Tensor view;
-        view.data = grad_output.data; view.shape = a_shape;
+        view.data = grad_a; view.shape = a_shape;
         view.owns_data = false; view.stream = stream;
         a_grad_fn->apply(view, stream, backward_payload, backward_bindings);
     }
 
     if (b_requires_grad && b_grad_fn && b_grad_fn != a_grad_fn && b_grad_fn->op_name) {
         Tensor view;
-        view.data = grad_output.data; view.shape = b_shape;
+        view.data = grad_b; view.shape = b_shape;
         view.owns_data = false; view.stream = stream;
         b_grad_fn->apply(view, stream, backward_payload, backward_bindings);
     }

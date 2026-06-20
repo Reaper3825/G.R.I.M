@@ -53,7 +53,7 @@
 #                    cluster cmake is older than the pinned helper requirement. Compatible system tools still win.
 #   --jobs N         make -j N for train_gpu (default 100; override with GRIM_BRIDGES2_MAKE_JOBS).
 #   --time T         SLURM wall-clock time limit for train_gpu (--sbatch and interactive srun).
-#                    Format: HH:MM:SS or D-HH:MM:SS or UNLIMITED (default: UNLIMITED).
+#                    Format: HH:MM:SS or D-HH:MM:SS. Default: omitted (SLURM uses partition maximum).
 #                    Examples: --time 1:00:00  --time 0:30:00  --time 2-12:00:00
 #   --TD             Run grmt_vocab_metrics_test instead of full training (no GPU needed, uses RM-shared).
 #   --UT             Run unigrambyte_self_test instead of full training (needs GPU for GPU decode test).
@@ -87,7 +87,7 @@ if [[ -n "${GRIM_BRIDGES2_TIME_LIMIT:-}" ]]; then
   BRIDGES2_TIME_LIMIT="$GRIM_BRIDGES2_TIME_LIMIT"
   BRIDGES2_TIME_LIMIT_EXPLICIT=true
 else
-  BRIDGES2_TIME_LIMIT="UNLIMITED"
+  BRIDGES2_TIME_LIMIT=""
 fi
 DO_BUILD=false
 USE_SBATCH=false
@@ -241,6 +241,8 @@ fi
 SLURM_ACCOUNT_ARGS="-A $ACCOUNT"
 GRIM_SLURM_MAIL="${GRIM_SLURM_MAIL:-}"
 [[ -n "$GRIM_SLURM_MAIL" ]] && SLURM_MAIL_ARGS="--mail-type=BEGIN,END,FAIL --mail-user=$GRIM_SLURM_MAIL" || SLURM_MAIL_ARGS=""
+# Omit -t entirely when no explicit limit is set so SLURM uses the partition maximum.
+[[ "$BRIDGES2_TIME_LIMIT_EXPLICIT" == true ]] && SLURM_TIME_ARGS="-t $BRIDGES2_TIME_LIMIT" || SLURM_TIME_ARGS=""
 
 # One long-lived SSH using a script-unique socket in /tmp (avoids ~/.ssh permission issues)
 BRIDGES2_CTRL="/tmp/cm-grim-$$"
@@ -263,7 +265,7 @@ print_bridges2_time_limit() {
   if [[ "$BRIDGES2_TIME_LIMIT_EXPLICIT" == true ]]; then
     echo "[Bridges-2] SLURM time limit: $BRIDGES2_TIME_LIMIT (set via --time or GRIM_BRIDGES2_TIME_LIMIT)"
   else
-    echo "[Bridges-2] SLURM time limit: UNLIMITED (default; override with --time T or GRIM_BRIDGES2_TIME_LIMIT)"
+    echo "[Bridges-2] SLURM time limit: partition max (no -t flag; override with --time T or GRIM_BRIDGES2_TIME_LIMIT)"
   fi
 }
 
@@ -1269,7 +1271,7 @@ if [[ "$USE_SBATCH" == true ]]; then
   echo "Submitting batch job (partition=$PARTITION, gpu=$GPU_TYPE)..."
   print_bridges2_time_limit
   SBATCH_EXPORT="ALL,GRIM_BRIDGES2_DIR=$BRIDGES2_DIR"
-  SUBMIT_OUT=$(ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && sbatch --export=$SBATCH_EXPORT --output=$BRIDGES2_DIR/logs/train_%j.out --error=$BRIDGES2_DIR/logs/train_%j.err $SLURM_MAIL_ARGS -p $PARTITION $SLURM_ACCOUNT_ARGS --gpus=$GPU_TYPE:1 -t $BRIDGES2_TIME_LIMIT scripts/train_bridges2.sbatch")
+  SUBMIT_OUT=$(ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && sbatch --export=$SBATCH_EXPORT --output=$BRIDGES2_DIR/logs/train_%j.out --error=$BRIDGES2_DIR/logs/train_%j.err $SLURM_MAIL_ARGS -p $PARTITION $SLURM_ACCOUNT_ARGS --gpus=$GPU_TYPE:1 $SLURM_TIME_ARGS scripts/train_bridges2.sbatch")
   echo "$SUBMIT_OUT"
   exit 0
 fi
@@ -1320,7 +1322,7 @@ else
   BRIDGES2_RUN_WRAPPER="bash -c 'source /etc/profile.d/modules.sh 2>/dev/null || true; module load cuda 2>/dev/null || true; export GRIM_PROJECT_DIR=\"$BRIDGES2_DIR\"; source \"$BRIDGES2_DIR/scripts/ensure_cuda12_for_training.sh\" 2>/dev/null || true; export PATH=\"\${GRIM_CUDA_ROOT:-}/bin:\$PATH\"; export LD_LIBRARY_PATH=\"\${GRIM_CUDA_ROOT:-}/lib64:\$LD_LIBRARY_PATH\"; cd \"$BRIDGES2_DIR\" && exec \"$REMOTE_EXE\"'"
   echo "Running train_gpu on Bridges-2 (partition=$PARTITION, gpu=$GPU_TYPE)..."
   print_bridges2_time_limit
-  SRUN_ARGS="-p $PARTITION $SLURM_ACCOUNT_ARGS --gres=gpu:$GPU_TYPE:1 -t $BRIDGES2_TIME_LIMIT --pty"
+  SRUN_ARGS="-p $PARTITION $SLURM_ACCOUNT_ARGS --gres=gpu:$GPU_TYPE:1 $SLURM_TIME_ARGS --pty"
   if [[ -t 0 ]]; then
     ssh -t $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && srun $SRUN_ARGS $BRIDGES2_RUN_WRAPPER"
   else

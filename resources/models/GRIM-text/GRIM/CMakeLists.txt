@@ -30,6 +30,9 @@ option(GRIM_ABLATE_DISABLE_CAUSAL_MASK "Ablation: build non-causal FlashAttentio
 if(GRIM_ABLATE_DISABLE_CAUSAL_MASK)
     add_compile_definitions(GRIM_ABLATE_DISABLE_CAUSAL_MASK)
     message(WARNING "[GRIM] Causal-mask ablation ENABLED: building NON-causal FlashAttention kernels (GRIM_FLASHATTN_CAUSAL_ONLY dropped). Do NOT ship this binary for production.")
+    message(STATUS  "[GRIM] Compiled causal mask = DISABLED (bidirectional self-attention; kDisableCausalMask=true). effective_causal = causal_mask && !kDisableCausalMask resolves to FALSE regardless of the runtime `causal_mask` HP.")
+else()
+    message(STATUS  "[GRIM] Compiled causal mask = ENABLED (autoregressive; kDisableCausalMask=false, GRIM_FLASHATTN_CAUSAL_ONLY defined).")
 endif()
 
 # Find required packages
