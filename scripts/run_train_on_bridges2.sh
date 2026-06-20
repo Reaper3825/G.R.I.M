@@ -1038,6 +1038,14 @@ else
   fi
 fi
 
+# --clean ALWAYS forces a full build-dir wipe, independent of FAS/Cutlass gating
+# above (the SKIP_FAS=1 default path otherwise clears BRIDGES2_CLEAN and silently
+# ignores --clean). This removes CMakeCache.txt so cmake reconfigures from source
+# defaults instead of reusing stale cached options.
+if [[ "$DO_CLEAN_BUILD" == true ]]; then
+  BRIDGES2_CLEAN="rm -rf $BRIDGES2_DIR/$BUILD_DIR && "
+fi
+
 # CUDA arch: sm_90 for H100, sm_80 for V100
 if [[ "$GPU_TYPE" == "h100-80" ]]; then
   BRIDGES2_CUDA_ARCH="export GRIM_CUDA_ARCH=90; "

@@ -31,7 +31,7 @@
 # Do not run this .sbatch file with ./ on a laptop — it only runs on a compute node
 # after sbatch (SLURM_JOB_ID will be set).
 #
-w# Canonical config: train_gpu loads ai_config.json from the repo root. Do not pass a config override.
+# Canonical config: train_gpu loads ai_config.json from the repo root. Do not pass a config override.
 
 set -e
 if [[ -z "${SLURM_JOB_ID:-}" ]]; then

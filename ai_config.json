@@ -703,7 +703,7 @@
             "tokenizer_unk_token": "<unk>",
             "tokenizer_vocab_score_multiplier": 1.0,
             "use_alibi": true,
-            "use_atom_data": false,
+            "use_atom_data": true,
             "use_bias": false,
             "use_depth_aware_upsilon": false,
             "use_flash_attention": true,

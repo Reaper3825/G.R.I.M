@@ -123,8 +123,18 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
         if (!g.tensor) {
             throw std::runtime_error("verifyAndDumpInitFacts: parameter group '" + g.name + "' has NULL tensor");
         }
-        if (g.tensor->data == emb_w_ptr) ++emb_groups;
-        if (g.tensor->data == lm_w_ptr)  ++lm_groups;
+        const bool refs_emb = (g.tensor->data == emb_w_ptr);
+        const bool refs_lm  = (g.tensor->data == lm_w_ptr);
+        if (ptrs_same) {
+            // Tied: embedding and lm-head alias one buffer. The registrar adds a
+            // single shared group on the lm-head side, so attribute it to
+            // lm_groups only — counting it on both sides would falsely look like
+            // a double-step of the shared buffer.
+            if (refs_lm) ++lm_groups;
+        } else {
+            if (refs_emb) ++emb_groups;
+            if (refs_lm)  ++lm_groups;
+        }
     }
     const int total_groups = static_cast<int>(parameter_groups.size());
 
@@ -147,14 +157,15 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
             "(emb=" + fmtPtr(emb_g_ptr) + " lm=" + fmtPtr(lm_g_ptr) + ") — "
             "tied weights would receive only one side's gradient");
     }
-    if (cfg_tied && emb_groups > 0) {
-        // When tied, only the lm-head side should appear in the optimizer's
-        // group list; an extra embedding-side group would double-step the
-        // shared buffer per AdamW pass.
+    if (cfg_tied && lm_groups != 1) {
+        // When tied, exactly one optimizer group must reference the shared
+        // embedding/lm-head buffer: zero means the tied weights never update,
+        // more than one means AdamW would double-step the shared buffer per pass.
         throw std::runtime_error(
-            "tie_embeddings=true but optimizer has " + std::to_string(emb_groups) +
-            " parameter group(s) referencing the embedding buffer in addition to " +
-            std::to_string(lm_groups) + " lm-head group(s) — tied buffer would be double-stepped");
+            "tie_embeddings=true expects exactly one optimizer group referencing the shared "
+            "embedding/lm-head buffer but found " + std::to_string(lm_groups) +
+            " — tied buffer would be " +
+            std::string(lm_groups == 0 ? "left unoptimized" : "double-stepped"));
     }
 
     // ── Telemetry stream slots (constant for run) ────────────────────
