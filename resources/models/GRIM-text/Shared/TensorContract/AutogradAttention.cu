@@ -31,6 +31,78 @@
 void trackCublasCall(const char* op_name, cublasHandle_t handle, cudaStream_t stream, cublasStatus_t status);
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Attention off-by-one (softmax1 / zero-value sink) epilogue
+//
+// Converts the standard-softmax FlashAttention result into softmax-off-by-one
+// (Miller 2023, "Attention Is Off By One") WITHOUT touching the vendored kernel.
+// softmax1(s)_i = exp(s_i) / (1 + Σ_j exp(s_j)) adds a phantom logit at 0 with a
+// ZERO value vector — a free "attend to nothing" slot. A head that wants to no-op
+// parks its mass there and emits ~0 instead of mean-pooling prior tokens, which is
+// the residual-stream common-mode (rho) injector at the first attention layer.
+//
+// Exact post-process of the standard output O_std and per-row logsumexp lse:
+//     O_obo   = O_std · σ(lse)            (σ = logistic sigmoid)
+//     lse_obo = softplus(lse) = log(1 + e^{lse})
+// because the softmax1 denominator 1 + Σe^{s_j} = 1 + e^{lse}, so every weight
+// scales by e^{lse}/(1 + e^{lse}) = σ(lse) and the saved logsumexp becomes
+// log(1 + e^{lse}). Feeding (O_obo, lse_obo) to the UNCHANGED FlashAttention
+// backward yields exact softmax1 gradients: the phantom slot's value is zero, so
+// it contributes no dP term and the Jacobian form P_i(δ_ij − P_j) is unchanged
+// (P is recomputed from lse_obo).
+//
+// out layout: [B, S, H, D] (BSHD). lse layout: [B, H, S]. Grid is laid out
+// b-major→h→s, so blockIdx.x indexes lse directly.
+// ═══════════════════════════════════════════════════════════════════════════
+namespace {
+
+__global__ void kernelAttentionOffByOneEpilogue(
+    __nv_bfloat16* __restrict__ out_bshd,   // [B, S, H, D] — scaled in place
+    float* __restrict__ lse_bhs,            // [B, H, S]    — softplus'd in place
+    int seq_len, int num_heads, int head_dim) {
+    const int bid = blockIdx.x;             // == (b*H + h)*S + s  == lse index
+    const int s = bid % seq_len;
+    const int h = (bid / seq_len) % num_heads;
+    const int b = bid / (seq_len * num_heads);
+
+    const float lse = lse_bhs[bid];
+    // Numerically stable sigmoid: σ(lse) = O_obo / O_std scale factor.
+    const float sig = (lse >= 0.0f)
+        ? 1.0f / (1.0f + __expf(-lse))
+        : __expf(lse) / (1.0f + __expf(lse));
+    const size_t base =
+        ((static_cast<size_t>(b) * seq_len + s) * num_heads + h) * head_dim;
+    for (int d = threadIdx.x; d < head_dim; d += blockDim.x) {
+        const float o = __bfloat162float(out_bshd[base + d]);
+        out_bshd[base + d] = __float2bfloat16(o * sig);
+    }
+    // Numerically stable softplus: lse_obo = log(1 + e^{lse}).
+    if (threadIdx.x == 0) {
+        lse_bhs[bid] = fmaxf(lse, 0.0f) + log1pf(__expf(-fabsf(lse)));
+    }
+}
+
+void launchAttentionOffByOneEpilogue(
+    __nv_bfloat16* out_bshd, float* lse_bhs,
+    int batch_size, int seq_len, int num_heads, int head_dim,
+    cudaStream_t stream) {
+    const int blocks = batch_size * num_heads * seq_len;
+    if (blocks <= 0) {
+        return;
+    }
+    const int threads = head_dim < 256 ? head_dim : 256;
+    kernelAttentionOffByOneEpilogue<<<blocks, threads, 0, stream>>>(
+        out_bshd, lse_bhs, seq_len, num_heads, head_dim);
+    const cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        throw std::runtime_error(
+            std::string("launchAttentionOffByOneEpilogue: kernel launch failed: ") +
+            cudaGetErrorString(err));
+    }
+}
+
+}  // namespace
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Open GRIM::autograd namespace — all functions below are in this namespace
 // (matching TensorContract_GPU.cu structure)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1132,6 +1204,16 @@ Tensor scaled_dot_product_attention(
         stream
     );
     
+    // Attention off-by-one (softmax1 / zero-value sink): guarded exact post-process
+    // of the standard FlashAttention result. Applied in place to out_bf16 + softmax_lse
+    // BEFORE the BHSD convert and BEFORE the GradFn captures these buffers, so the
+    // forward output AND the unchanged FlashAttention backward both operate on the
+    // softmax1 result (the phantom zero-value slot contributes no gradient term).
+    if (attention_hp.attention_off_by_one) {
+        launchAttentionOffByOneEpilogue(
+            out_bf16, softmax_lse, batch_size, seq_len, num_heads, head_dim, stream);
+    }
+
     // Convert BF16 BSHD -> FP32 BHSD for output
     TensorConversion::convert_BSHD_bf16_to_BHSD(
         out_bf16, result.data, batch_size, seq_len, num_heads, head_dim, stream);

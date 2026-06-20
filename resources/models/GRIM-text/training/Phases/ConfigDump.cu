@@ -239,8 +239,8 @@ const char* classifyConfigSection(const std::string& key) {
         })) {
         return "LM head centering";
     }
-    if (isOneOf(key, {"use_layer_scale", "layer_scale_init", "qk_norm_enabled"})) {
-        return "LayerScale / QK-norm";
+    if (isOneOf(key, {"use_layer_scale", "layer_scale_init", "qk_norm_enabled", "attention_off_by_one"})) {
+        return "LayerScale / QK-norm / attn off-by-one";
     }
     if (startsWith(key, "hardcoded_hidden_") || startsWith(key, "hardcoded_log_")) {
         return "Hardcoded hidden states diag";

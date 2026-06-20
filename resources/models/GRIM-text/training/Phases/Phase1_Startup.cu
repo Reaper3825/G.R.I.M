@@ -159,6 +159,40 @@ void populateUnigramOutputBiases(TrainingContext& ctx) {
         0);
 }
 
+// Off-by-one attention (softmax1 / zero-value sink) is a softmax-denominator
+// modification applied as an exact post-process to the FlashAttention result
+// (see Shared/TensorContract/AutogradAttention.cu). It carries NO learnable
+// parameter, so nothing is allocated or filled here — the Phase1 boundary only
+// validates compatibility and records the effective state (fail-loud, observable
+// at startup). A future LEARNABLE per-head sink logit would register its tensor
+// through the ParameterRegistry at model assembly and be initialized in this same
+// boundary, alongside populateUnigramOutputBiases().
+void validateAttentionOffByOne(TrainingContext& ctx) {
+    const bool enabled = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(
+        ctx.config, "attention_off_by_one");
+    if (!enabled) {
+        return;
+    }
+    // The softmax1 epilogue post-processes the FlashAttention log-sum-exp; a
+    // non-flash attention path would silently ignore the flag, so refuse that
+    // combination loudly rather than train a model that only half-honors config.
+    const bool use_flash = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(
+        ctx.config, "use_flash_attention");
+    if (!use_flash) {
+        throw std::runtime_error(
+            "[Phase1] attention_off_by_one=true requires use_flash_attention=true — "
+            "the softmax1 (off-by-one) epilogue post-processes the FlashAttention "
+            "log-sum-exp; there is no non-flash off-by-one attention path.");
+    }
+    GRIM::Logging::EmitModuleInfo(
+        GRIM::Logging::ModuleId::Training,
+        "[Phase1] attention_off_by_one=true: FlashAttention softmax1 (zero-value "
+        "sink) epilogue ACTIVE — queries may attend to nothing; parameterless "
+        "(no ParameterRegistry tensor). Inference/decode path must enable the same "
+        "epilogue for parity before serving a model trained with this flag.",
+        0);
+}
+
 } // namespace
 
 Phase1Result executePhase1(GRIM::Config::AiConfigSnapshot config) {
@@ -301,6 +335,7 @@ Phase1Result executePhase1(GRIM::Config::AiConfigSnapshot config) {
     ModelAllocated(ctx);
     CheckpointLoaded(ctx);
     populateUnigramOutputBiases(ctx);
+    validateAttentionOffByOne(ctx);
     ResumeStateReady(ctx);
     TelemetryReady(ctx);
     PlannedBatchesReady(ctx);

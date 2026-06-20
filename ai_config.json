@@ -601,6 +601,7 @@
             "prediction_comparison_max_positions": 8,
             "prediction_comparison_top_k": 5,
             "project_out_pc1": false,
+            "attention_off_by_one": false,
             "qk_norm_enabled": false,
             "rope_base_seq_len": 1024,
             "rope_scaling": 1.0,

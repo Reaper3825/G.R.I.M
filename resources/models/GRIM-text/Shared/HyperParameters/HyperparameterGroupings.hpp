@@ -329,6 +329,7 @@ struct EncoderLayerConstructionHP {
     float dropout_rate = 0.0f;
     float attention_dropout = 0.0f;
     bool qk_norm_enabled = false;
+    bool attention_off_by_one = false;
     float residual_projection_init_gain = 0.0f;
     bool is_gqa = false;
     bool freeze_learned_rms_gammas = false;
@@ -351,6 +352,7 @@ struct EncoderSelfAttentionHP {
     float attention_dropout = 0.0f;
     bool dropout_enabled = false;
     bool qk_norm_enabled = false;
+    bool attention_off_by_one = false;
     bool is_gqa = false;
 };
 
@@ -485,6 +487,7 @@ struct ModelHP {
     float encoder_dropout_rate = 0.0f;
     float encoder_attention_dropout = 0.0f;
     bool encoder_qk_norm_enabled = false;
+    bool encoder_attention_off_by_one = false;
     float encoder_residual_projection_init_gain = 0.0f;
     bool encoder_is_gqa = false;
     bool encoder_freeze_learned_rms_gammas = false;
@@ -880,6 +883,7 @@ inline EncoderSelfAttentionHP encoderSelfAttentionHP(
     view.attention_dropout = encoder_hp.attention_dropout;
     view.dropout_enabled = dropout_enabled;
     view.qk_norm_enabled = encoder_hp.qk_norm_enabled;
+    view.attention_off_by_one = encoder_hp.attention_off_by_one;
     view.is_gqa = encoder_hp.is_gqa;
     return view;
 }
@@ -1263,6 +1267,7 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.encoder_dropout_rate = dropout_rate;
     view.encoder_attention_dropout = attention_dropout;
     view.encoder_qk_norm_enabled = requireBool("qk_norm_enabled");
+    view.encoder_attention_off_by_one = requireBool("attention_off_by_one");
     view.encoder_residual_projection_init_gain = residual_projection_init_gain;
     view.encoder_is_gqa = is_gqa;
     view.encoder_freeze_learned_rms_gammas = requireBool("freeze_learned_rms_gammas");
@@ -1378,6 +1383,7 @@ inline EncoderLayerConstructionHP encoderLayerConstructionHP(
     view.dropout_rate = model.encoder_dropout_rate;
     view.attention_dropout = model.encoder_attention_dropout;
     view.qk_norm_enabled = model.encoder_qk_norm_enabled;
+    view.attention_off_by_one = model.encoder_attention_off_by_one;
     view.residual_projection_init_gain = model.encoder_residual_projection_init_gain;
     view.is_gqa = model.encoder_is_gqa;
     view.freeze_learned_rms_gammas = model.encoder_freeze_learned_rms_gammas;

@@ -356,6 +356,13 @@ struct LanguageModelConfig {
     // common-mode (rho) buildup that drives representation collapse.
     bool lm_head_unigram_bias = false;
     bool qk_norm_enabled = false;  // QK-Norm: RMSNorm applied to Q and K before attention scoring
+    // Off-by-one attention (softmax1 / zero-value sink, Miller 2023): denominator
+    // gains a phantom logit at 0 with a ZERO value vector, so a head may attend to
+    // "nothing" and emit ~0 instead of mean-pooling prior tokens. Removes the
+    // softmax-sum-to-1 forcing that injects the shared residual common-mode (rho)
+    // direction at the first attention layer. Parameterless: applied as an exact
+    // post-process of the FlashAttention result, no learnable tensor.
+    bool attention_off_by_one = false;
 
     // LayerScale - per-channel learnable residual scaling vectors [1, d_model]
     bool use_layer_scale = false;
@@ -1911,6 +1918,7 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(use_layer_scale);
     GRIM_LOAD_CONFIG_FIELD(layer_scale_init);
     GRIM_LOAD_CONFIG_FIELD(qk_norm_enabled);
+    GRIM_LOAD_CONFIG_FIELD(attention_off_by_one);
     if (config.at("hardcoded_hidden_states_enabled").get<bool>()) {
         params.hardcoded_hidden_pattern = config.at("hardcoded_hidden_states_pattern").get<HardcodedPattern>();
     }
@@ -2261,6 +2269,7 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(use_bias);
     GRIM_WRITE_FINAL_CONFIG_FIELD(lm_head_unigram_bias);
     GRIM_WRITE_FINAL_CONFIG_FIELD(qk_norm_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(attention_off_by_one);
     GRIM_WRITE_FINAL_CONFIG_FIELD(use_layer_scale);
     GRIM_WRITE_FINAL_CONFIG_FIELD(layer_scale_init);
     GRIM_WRITE_FINAL_CONFIG_FIELD(data_path);
