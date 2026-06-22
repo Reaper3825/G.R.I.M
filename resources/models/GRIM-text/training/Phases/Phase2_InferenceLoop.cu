@@ -9,6 +9,7 @@
 #include "Shared/Forward/GeneratedSequence.hpp"
 #include "../../Shared/Forward/ModelForwardRuntimePayload.hpp"
 #include "../../Shared/Forward/ModelForward_GPU.hpp"
+#include "../../Shared/InferenceState/KvCacheState_GPU.hpp"
 #include "../../Shared/Sampling/Sampling.hpp"
 #include "../../Shared/UnigramByte/AtomTable.hpp"
 #include "../../Shared/UnigramByte/TokenLayout.hpp"
@@ -289,49 +290,98 @@ GRIM::GeneratedSequence generateOneSequence(
     GRIM::Sampling::SamplingPipeline pipeline(sampling_cfg);
 
     const bool atom_generation_active = execution_hp.enabled;
+    // ── KV-cache session setup ───────────────────────────────────────────────
+    // Decode runs incrementally: prefill the prompt once (q_len=prompt_len), then
+    // decode one token (or K+1 for MTP speculative verification) at a time, reusing
+    // the per-layer K/V cache. This replaces the previous O(n^2) full-recompute.
+    if (!training_state.initialized) {
+        throw std::runtime_error("generateOneSequence: training state not initialized");
+    }
+    cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
+    auto* gpu_encoder = gpu_model_state.gpu_encoder.get();
+    if (!gpu_encoder) {
+        throw std::runtime_error("Phase2::generateOneSequence: gpu_model_state.gpu_encoder is NULL");
+    }
+    if (execution_hp.enabled) {
+        // The cached decode path does not yet thread persistent ExecutionMemory
+        // through the cache (config has the execution block disabled for inference).
+        throw std::runtime_error(
+            "Phase2::generateOneSequence: KV-cache decode does not support the execution block; "
+            "disable it for inference");
+    }
+
+    const int num_layers = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "num_layers");
+    const int num_heads = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "num_heads");
+    const int num_kv_heads = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "num_kv_heads");
+    const int d_model = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "d_model");
+    const int rotary_dim = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "rotary_dim");
+    const int max_cached_seq_len = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "max_cached_seq_len");
+    if (num_heads <= 0 || d_model % num_heads != 0) {
+        throw std::runtime_error("generateOneSequence: invalid num_heads/d_model for head_dim derivation");
+    }
+    const int head_dim = d_model / num_heads;
+
+    GRIM::KvCacheState& kv_cache = generation_state.kv_cache;
+    kv_cache.ensureAllocated(num_layers, num_heads, num_kv_heads, head_dim, rotary_dim,
+                             max_cached_seq_len, pbm.rope_inv_freq, stream);
+    kv_cache.beginSession(stream);
+
+    // MTP self-speculative decode is enabled whenever the model has trained MTP
+    // heads. It is EXACT (output-identical to plain decode): every committed token
+    // is selectNextToken(verify_logits, context); the MTP drafts only decide
+    // whether a verify row can be reused. draft_k == 0 collapses to plain decode.
+    const bool use_mtp = mtp_hp.enabled && mtp_hp.k > 0;
+    const int draft_k = use_mtp ? mtp_hp.k : 0;
+
     std::shared_ptr<GRIM::Batching::BatchDeviceStorage> inference_device_storage;
 
-    auto runSharedForwardForCurrentSequence = [&](GRIM::Batching::BatchPayload& active_payload)
-        -> std::vector<float> {
-        validateInferenceForwardPayload(model, active_payload, "generateOneSequence");
-
-        if (!training_state.initialized) {
-            throw std::runtime_error("generateOneSequence: training state not initialized");
+    // Host copy of the last n_tail primary-logit rows of one cached forward, plus
+    // (optionally) the matching MTP-head rows. Rows are ordered oldest..newest.
+    struct TailLogits {
+        int n_rows = 0;
+        int vocab = 0;
+        std::vector<float> primary;            // [n_rows * vocab]
+        std::vector<std::vector<float>> mtp;   // mtp[k] = [n_rows * vocab], k = 0..K-1
+        const float* primaryRow(int i) const {
+            return primary.data() + static_cast<size_t>(i) * static_cast<size_t>(vocab);
         }
-        cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
+        const float* mtpRow(int k, int i) const {
+            return mtp[static_cast<size_t>(k)].data() + static_cast<size_t>(i) * static_cast<size_t>(vocab);
+        }
+    };
+
+    // Run one cached forward over `active_payload` (q_len rows). The shared forward
+    // appends this window's K/V to every layer's cache and advances cache_seqlens
+    // by q_len. Returns the last n_tail rows of the primary logits (+ MTP heads).
+    auto runCachedForward = [&](GRIM::Batching::BatchPayload& active_payload,
+                                int n_tail, bool want_mtp) -> TailLogits {
+        validateInferenceForwardPayload(model, active_payload, "generateOneSequence");
+        const int q_len = active_payload.total_tokens;
+        if (n_tail <= 0 || n_tail > q_len) {
+            throw std::runtime_error("generateOneSequence: invalid n_tail=" + std::to_string(n_tail) +
+                                     " for q_len=" + std::to_string(q_len));
+        }
         inference_device_storage = ensureInferenceDeviceStorage(
-            active_payload,
-            config,
-            stream,
-            std::move(inference_device_storage),
-            "generateOneSequence");
-        const auto bindings = GRIM::Batching::uploadBatchToDevice(
-            model.getConfig(),
-            active_payload,
-            stream);
+            active_payload, config, stream, std::move(inference_device_storage), "generateOneSequence");
+        const auto bindings = GRIM::Batching::uploadBatchToDevice(model.getConfig(), active_payload, stream);
 
         GRIM::Forward::ModelForwardRuntimePayload runtime_payload{};
         runtime_payload.execution_runtime = &generation_state.execution_runtime;
         runtime_payload.read_gate_accum_tensor = nullptr;
-
-        auto* gpu_encoder = gpu_model_state.gpu_encoder.get();
-        if (!gpu_encoder) {
-            throw std::runtime_error(
-                "Phase2::generateOneSequence: gpu_model_state.gpu_encoder is NULL");
-        }
 
         GRIM::Forward::ModelForwardRequest request{};
         request.config = &config;
         request.gpu_encoder = gpu_encoder;
         request.parameter_registry = &parameter_registry;
         request.pbm = &pbm;
-        request.execution_block_enabled = execution_hp.enabled;
+        request.execution_block_enabled = execution_hp.enabled;  // false on this path
         request.cublas_handle = training_state.cublas_handle.get();
         request.stream = stream;
         request.payload = &active_payload;
         request.bindings = &bindings;
         request.batch_idx = 0;
-        const bool emit_mtp_logits = mtp_hp.enabled && mtp_hp.k > 0;
+        request.kv_cache = &kv_cache;
+        const bool emit_mtp_logits = want_mtp && use_mtp;
         if (emit_mtp_logits) {
             request.mtp_heads = buildDetachedForwardMtpHeadViews(parameter_registry, mtp_hp, stream);
         }
@@ -346,163 +396,227 @@ GRIM::GeneratedSequence generateOneSequence(
 
         const auto& live_logits = forward_outputs.logits_tensor;
         if (!live_logits.data) {
-            throw std::runtime_error(
-            "generateOneSequence: live logits tensor is NULL after shared forward");
+            throw std::runtime_error("generateOneSequence: live logits tensor is NULL after cached forward");
         }
-        if (emit_mtp_logits && forward_outputs.mtp_logits_tensors.size()
-                != static_cast<size_t>(mtp_hp.k)) {
-            throw std::runtime_error(
-            "generateOneSequence: live mtp_logits_tensors.size()=" +
-            std::to_string(forward_outputs.mtp_logits_tensors.size()) +
-                " != mtp_hp.k=" + std::to_string(mtp_hp.k) +
-                " after shared forward");
-        }
-
         const size_t expected_logits =
-            static_cast<size_t>(active_payload.total_tokens) * static_cast<size_t>(vocab_size);
+            static_cast<size_t>(q_len) * static_cast<size_t>(vocab_size);
         if (static_cast<size_t>(live_logits.numel()) < expected_logits) {
-            throw std::runtime_error(
-                "generateOneSequence: live logits numel=" +
-                std::to_string(live_logits.numel()) +
-                " < payload.total_tokens * config.vocab_size=" + std::to_string(expected_logits));
+            throw std::runtime_error("generateOneSequence: live logits numel=" +
+                std::to_string(live_logits.numel()) + " < q_len*vocab=" + std::to_string(expected_logits));
+        }
+        if (emit_mtp_logits && forward_outputs.mtp_logits_tensors.size() != static_cast<size_t>(mtp_hp.k)) {
+            throw std::runtime_error("generateOneSequence: mtp_logits_tensors.size()=" +
+                std::to_string(forward_outputs.mtp_logits_tensors.size()) + " != mtp_k=" +
+                std::to_string(mtp_hp.k) + " after cached forward");
         }
 
-        std::vector<float> logits(static_cast<size_t>(vocab_size));
-        const size_t last_token_offset =
-            static_cast<size_t>(active_payload.total_tokens - 1) * static_cast<size_t>(vocab_size);
+        TailLogits tail;
+        tail.n_rows = n_tail;
+        tail.vocab = vocab_size;
+        const size_t row_bytes = static_cast<size_t>(vocab_size) * sizeof(float);
+        const size_t tail_off = static_cast<size_t>(q_len - n_tail) * static_cast<size_t>(vocab_size);
+        tail.primary.resize(static_cast<size_t>(n_tail) * static_cast<size_t>(vocab_size));
         cudaError_t copy_err = cudaMemcpyAsync(
-            logits.data(),
-            live_logits.data + last_token_offset,
-            static_cast<size_t>(vocab_size) * sizeof(float),
-            cudaMemcpyDeviceToHost,
-            stream);
+            tail.primary.data(), live_logits.data + tail_off,
+            static_cast<size_t>(n_tail) * row_bytes, cudaMemcpyDeviceToHost, stream);
         if (copy_err != cudaSuccess) {
-            throw std::runtime_error("generateOneSequence: cudaMemcpyAsync logits failed: " +
+            throw std::runtime_error("generateOneSequence: cudaMemcpyAsync primary logits failed: " +
                                      std::string(cudaGetErrorString(copy_err)));
         }
-
+        if (emit_mtp_logits) {
+            tail.mtp.resize(static_cast<size_t>(mtp_hp.k));
+            for (int k = 0; k < mtp_hp.k; ++k) {
+                const auto& head_logits = forward_outputs.mtp_logits_tensors[static_cast<size_t>(k)];
+                if (!head_logits.data || static_cast<size_t>(head_logits.numel()) < expected_logits) {
+                    throw std::runtime_error("generateOneSequence: MTP head " + std::to_string(k) +
+                                             " logits invalid after cached forward");
+                }
+                tail.mtp[static_cast<size_t>(k)].resize(static_cast<size_t>(n_tail) * static_cast<size_t>(vocab_size));
+                cudaError_t mcopy = cudaMemcpyAsync(
+                    tail.mtp[static_cast<size_t>(k)].data(), head_logits.data + tail_off,
+                    static_cast<size_t>(n_tail) * row_bytes, cudaMemcpyDeviceToHost, stream);
+                if (mcopy != cudaSuccess) {
+                    throw std::runtime_error("generateOneSequence: cudaMemcpyAsync MTP logits failed: " +
+                                             std::string(cudaGetErrorString(mcopy)));
+                }
+            }
+        }
         cudaError_t sync_err = cudaStreamSynchronize(stream);
         if (sync_err != cudaSuccess) {
             throw std::runtime_error("generateOneSequence: cudaStreamSynchronize failed: " +
                                      std::string(cudaGetErrorString(sync_err)));
         }
-
-        return logits;
+        return tail;
     };
 
-    std::vector<float> logits_vec = runSharedForwardForCurrentSequence(prompt_payload);
-    if (logits_vec.empty()) {
-        throw std::runtime_error("Phase2 payload inference: shared forward returned empty first-token logits");
-    }
-
-    for (int step = 0; step < cfg.max_new_tokens; ++step) {
-        const int current_len = static_cast<int>(sequence.token_ids.size());
-        if (current_len >= max_seq_len) {
-            sequence.finished = true;
-            break;
-        }
-
-        // Suppress EOS until min_new_tokens is reached. Without this, an
-        // early-sampled EOS is not selected as a stop token (the break below
-        // requires step + 1 >= min_new_tokens), yet it still gets committed to
-        // the sequence as a literal token and fed back as context — producing a
-        // stray "</s>" mid-sequence and a second terminal "</s>" at the real
-        // stop. Masking the EOS logit here matches HuggingFace's
-        // MinNewTokensLengthLogitsProcessor so EOS can never be embedded early.
-        if (step + 1 < cfg.min_new_tokens &&
-            cfg.eos_token_id >= 0 && cfg.eos_token_id < vocab_size) {
-            logits_vec[cfg.eos_token_id] = -1e30f;
-        }
-
-        GRIM::Sampling::SampleResult sample = pipeline.selectNextToken(
-            logits_vec, sequence.token_ids, vocab_size);
-
-        if (sample.token_id < 0 || sample.token_id >= vocab_size) {
-            throw std::runtime_error("Phase2 payload inference: sampled token out of range (token_id=" +
-                                     std::to_string(sample.token_id) + ", vocab=" +
-                                     std::to_string(vocab_size) + ")");
-        }
-
-        float token_numeric_value = 0.0f;
-        uint8_t token_atom_mask_val = 0;
-        int32_t new_token_slot_id = -1;
-
-        if (atom_generation_active && token_layout.isAtom(sample.token_id)) {
-            token_atom_mask_val = 1;
-            if (GRIM::Tokenizer::isNumericAtom(
-                    GRIM::Tokenizer::tokenIdToAtomType(sample.token_id))) {
-                // Numeric placeholder token ids are in sampling_cfg.bad_token_ids
-                // while execution is enabled — sampling one is a pipeline bug,
-                // not a recoverable state. No selector exists to bind a value.
-                throw std::runtime_error(
-                    "Phase2 payload inference: sampled numeric atom token_id=" +
-                    std::to_string(sample.token_id) +
-                    " but numeric placeholders are masked while execution is enabled "
-                    "(decode-time slot selector was removed; numeric-meaning selector not yet wired)");
-            }
-        }
-
-        if (sample.token_id == cfg.eos_token_id &&
-            step + 1 >= cfg.min_new_tokens) {
-            sequence.token_ids.push_back(sample.token_id);
-            sequence.token_scores.push_back(sample.log_probability);
-            sequence.token_numeric_values.push_back(0.0f);
-            sequence.token_atom_mask.push_back(0);
-            sequence.token_to_slot_map.push_back(-1);
-            sequence.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
-            sequence.score += sample.log_probability;
-            sequence.finished = true;
-            if (stream_callback) {
-                (*stream_callback)(sample.token_id, sample.probability);
-            }
-            break;
-        }
-
-        std::vector<int> next_token_ids = sequence.token_ids;
-        std::vector<float> next_numeric_values = sequence.token_numeric_values;
-        std::vector<uint8_t> next_atom_mask = sequence.token_atom_mask;
-        std::vector<uint32_t> next_atom_flags = sequence_atom_flags;
-        std::vector<int32_t> next_token_to_slot_map = sequence.token_to_slot_map;
-        std::vector<uint32_t> next_atom_entry_ids = sequence.atom_entry_ids;
-
-        next_token_ids.push_back(sample.token_id);
-        next_numeric_values.push_back(token_numeric_value);
-        next_atom_mask.push_back(token_atom_mask_val);
-        next_atom_flags.push_back(0);
-        next_token_to_slot_map.push_back(new_token_slot_id);
-        next_atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
-
-        GRIM::Batching::BatchPayload step_payload = GRIM::Batching::buildInferenceBatchPayload(
-            next_token_ids,
-            next_numeric_values,
-            next_atom_mask,
-            next_atom_flags,
-            prompt_atom_table,
-            next_atom_entry_ids,
-            next_token_to_slot_map,
-            vocab_size,
-            /*batch_capacity=*/1,
-            static_cast<size_t>(max_seq_len),
+    // Build a decode/verification payload over `feed_tokens`. Generated tokens are
+    // plain text (no atoms); execution and number-encoder are disabled on this path.
+    auto buildDecodePayload = [&](const std::vector<int>& feed_tokens) -> GRIM::Batching::BatchPayload {
+        const int q = static_cast<int>(feed_tokens.size());
+        std::vector<float> numeric(static_cast<size_t>(q), 0.0f);
+        std::vector<uint8_t> amask(static_cast<size_t>(q), 0);
+        std::vector<uint32_t> aflags(static_cast<size_t>(q), 0);
+        std::vector<uint32_t> aentry(static_cast<size_t>(q), GRIM::Tokenizer::kAtomEntryNone);
+        const std::vector<int32_t> slotmap;  // empty -> no execution-active row
+        return GRIM::Batching::buildInferenceBatchPayload(
+            feed_tokens, numeric, amask, aflags, prompt_atom_table, aentry, slotmap,
+            vocab_size, /*batch_capacity=*/1, static_cast<size_t>(q),
             execution_hp.num_slots,
             number_encoder_hp.enabled ? number_encoder_hp.max_digit_slots : 0,
             number_encoder_hp.max_abs_pow10);
+    };
 
-        logits_vec = runSharedForwardForCurrentSequence(step_payload);
-        if (logits_vec.empty()) {
-            throw std::runtime_error("Phase2 payload inference: shared forward returned empty logits");
-        }
+    const int prompt_len = static_cast<int>(prompt_tokens.size());
+    auto committedNewTokens = [&]() -> int {
+        return static_cast<int>(sequence.token_ids.size()) - prompt_len;
+    };
 
-        sequence.token_ids.push_back(sample.token_id);
-        sequence.token_scores.push_back(sample.log_probability);
-        sequence.token_numeric_values.push_back(token_numeric_value);
-        sequence.token_atom_mask.push_back(token_atom_mask_val);
-        sequence.token_to_slot_map.push_back(new_token_slot_id);
+    // Commit one generated token to the output sequence (plain text; exec off).
+    auto commitToken = [&](const GRIM::Sampling::SampleResult& s) {
+        sequence.token_ids.push_back(s.token_id);
+        sequence.token_scores.push_back(s.log_probability);
+        sequence.token_numeric_values.push_back(0.0f);
+        sequence.token_atom_mask.push_back(0);
+        sequence.token_to_slot_map.push_back(-1);
         sequence.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
         sequence_atom_flags.push_back(0);
-        sequence.score += sample.log_probability;
-
+        sequence.score += s.log_probability;
         if (stream_callback) {
-            (*stream_callback)(sample.token_id, sample.probability);
+            (*stream_callback)(s.token_id, s.probability);
+        }
+    };
+
+    // Select the next token from a primary-logit row using the SAME pipeline +
+    // pre-min_new_tokens EOS mask as the full-recompute decoder, so speculative
+    // and substrate decode are output-identical.
+    auto selectFrom = [&](const float* logit_row, int committed_new_tokens) -> GRIM::Sampling::SampleResult {
+        std::vector<float> row(logit_row, logit_row + vocab_size);
+        if (committed_new_tokens + 1 < cfg.min_new_tokens &&
+            cfg.eos_token_id >= 0 && cfg.eos_token_id < vocab_size) {
+            row[static_cast<size_t>(cfg.eos_token_id)] = -1e30f;
+        }
+        GRIM::Sampling::SampleResult s = pipeline.selectNextToken(row, sequence.token_ids, vocab_size);
+        if (s.token_id < 0 || s.token_id >= vocab_size) {
+            throw std::runtime_error("Phase2 payload inference: sampled token out of range (token_id=" +
+                                     std::to_string(s.token_id) + ", vocab=" + std::to_string(vocab_size) + ")");
+        }
+        if (atom_generation_active && token_layout.isAtom(s.token_id) &&
+            GRIM::Tokenizer::isNumericAtom(GRIM::Tokenizer::tokenIdToAtomType(s.token_id))) {
+            // Numeric atom ids are masked while execution is enabled; sampling one
+            // is a pipeline bug (no decode-time slot selector exists).
+            throw std::runtime_error("Phase2 payload inference: sampled numeric atom token_id=" +
+                std::to_string(s.token_id) + " but numeric placeholders are masked while execution is enabled");
+        }
+        return s;
+    };
+
+    // ── Prefill: populate the cache from the prompt; read the last position. ──
+    TailLogits prefill = runCachedForward(prompt_payload, /*n_tail=*/1, /*want_mtp=*/use_mtp);
+
+    // MTP drafts for the tokens AFTER `pending`, taken from the MTP heads at a
+    // chosen verify row. Head i (0-indexed) at a row predicts (that position)+i+2,
+    // i.e. (next pending)+i+1 — exactly the i-th draft slot.
+    std::vector<int> drafts;
+    auto refreshDrafts = [&](const TailLogits& t, int row) {
+        drafts.clear();
+        if (draft_k == 0) {
+            return;
+        }
+        for (int k = 0; k < draft_k; ++k) {
+            const float* mr = t.mtpRow(k, row);
+            int best = 0;
+            float bestv = mr[0];
+            for (int v = 1; v < vocab_size; ++v) {
+                if (mr[v] > bestv) { bestv = mr[v]; best = v; }
+            }
+            drafts.push_back(best);
+        }
+    };
+
+    bool finished = false;
+
+    // First generated token ("pending"), sampled from the prompt's last position.
+    // Its K/V is appended by the next cached forward as window position 0.
+    {
+        GRIM::Sampling::SampleResult first = selectFrom(prefill.primaryRow(0), committedNewTokens());
+        commitToken(first);
+        if (first.token_id == cfg.eos_token_id && committedNewTokens() >= cfg.min_new_tokens) {
+            finished = true;
+        }
+    }
+    if (use_mtp && !finished) {
+        refreshDrafts(prefill, 0);
+    }
+
+    // ── Decode loop: feed [pending (+ K drafts)], verify, accept, repeat. ─────
+    while (!finished) {
+        if (committedNewTokens() >= cfg.max_new_tokens) {
+            break;
+        }
+        if (static_cast<int>(sequence.token_ids.size()) >= max_seq_len) {
+            break;
+        }
+
+        const int pending = sequence.token_ids.back();
+        const int cache_base = kv_cache.currentSeqlen();   // == sequence length - 1
+
+        // Bound drafts by remaining cache capacity and the remaining emit budget.
+        const int max_emit = std::min(cfg.max_new_tokens - committedNewTokens(),
+                                      max_seq_len - static_cast<int>(sequence.token_ids.size()));
+        int k_eff = draft_k;
+        k_eff = std::min(k_eff, kv_cache.remainingCapacity() - 1);
+        k_eff = std::min(k_eff, max_emit - 1);
+        if (k_eff < 0) {
+            k_eff = 0;
+        }
+
+        std::vector<int> feed;
+        feed.reserve(static_cast<size_t>(1 + k_eff));
+        feed.push_back(pending);
+        for (int i = 0; i < k_eff; ++i) {
+            feed.push_back(drafts[static_cast<size_t>(i)]);
+        }
+
+        GRIM::Batching::BatchPayload verify_payload = buildDecodePayload(feed);
+        TailLogits tail = runCachedForward(verify_payload, /*n_tail=*/(1 + k_eff), /*want_mtp=*/use_mtp);
+
+        // Verify row j predicts the token after feed[j]. Commit
+        // chosen_j = selectNextToken(row j, context); continue only while the draft
+        // matched the model's own choice (so the next row's context is correct).
+        int stop_j = k_eff;
+        for (int j = 0; j <= k_eff; ++j) {
+            GRIM::Sampling::SampleResult chosen = selectFrom(tail.primaryRow(j), committedNewTokens());
+            commitToken(chosen);
+
+            if (chosen.token_id == cfg.eos_token_id && committedNewTokens() >= cfg.min_new_tokens) {
+                finished = true; stop_j = j; break;
+            }
+            if (committedNewTokens() >= cfg.max_new_tokens) {
+                finished = true; stop_j = j; break;
+            }
+            if (static_cast<int>(sequence.token_ids.size()) >= max_seq_len) {
+                finished = true; stop_j = j; break;
+            }
+
+            if (j < k_eff && chosen.token_id == feed[static_cast<size_t>(j + 1)]) {
+                continue;  // draft j+1 matched -> reuse verify row j+1 (correct context)
+            }
+            stop_j = j; break;  // rejected draft j+1, or window exhausted
+        }
+
+        // The verify forward appended k_eff+1 tokens (cache_base -> cache_base+k_eff+1).
+        // Keep K/V for feed[0..stop_j] (== committed tokens at positions
+        // cache_base..cache_base+stop_j); the last committed token (next pending) is
+        // not cached yet. Roll back so its K/V is computed on the next forward.
+        kv_cache.setSeqlen(cache_base + stop_j + 1, stream);
+
+        if (finished) {
+            break;
+        }
+
+        // Next drafts: MTP heads at window position stop_j (correct context).
+        if (use_mtp) {
+            refreshDrafts(tail, stop_j);
         }
     }
 

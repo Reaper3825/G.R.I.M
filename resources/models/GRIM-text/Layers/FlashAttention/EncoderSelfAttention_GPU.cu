@@ -6,7 +6,10 @@
 #include "EncoderSelfAttention_GPU.hpp"
 
 #include "../Encoding/AblationFlags.hpp"
+#include "Flash_Attention_Kernal.hpp"
 #include "../../Shared/TensorContract/AutogradQKVDiagnostics.hpp"
+#include "../../Shared/TensorContract/AttentionEpilogue.hpp"
+#include "../../Shared/TensorConversion/TensorConversion.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -15,6 +18,7 @@
 #include <utility>
 
 #include <cuda_runtime.h>
+#include <cuda_bf16.h>
 
 namespace {
     constexpr bool kEnableAttentionStepLogs = true;
@@ -322,6 +326,161 @@ void encoderSelfAttentionForward(
 
     if constexpr (kEnableAttentionStepLogs) {
         std::fprintf(stderr, "[EncoderSelfAttention] DONE layer=%d\n", request.layer_idx);
+    }
+}
+
+void encoderSelfAttentionForwardCached(
+    const Tensor& norm_input,
+    const Tensor& W_qkv,
+    const Tensor& b_qkv,
+    const Tensor& W_o,
+    const Tensor& b_o,
+    const GRIM::PBM::PBMState& pbm,
+    const EncoderSelfAttentionForwardRequest& request,
+    const KvCacheLayerView& cache,
+    Forward::ModelForwardOutputs& forward_outputs) {
+    if (request.layer_idx < 0) {
+        throw std::runtime_error("encoderSelfAttentionForwardCached: layer_idx must be >= 0, got " +
+                                 std::to_string(request.layer_idx));
+    }
+    const size_t layer_slot = static_cast<size_t>(request.layer_idx);
+    forward_outputs.validateLayerIndex(layer_slot, "encoderSelfAttentionForwardCached");
+    Tensor& qkv_out = forward_outputs.qkv_out_per_layer[layer_slot];
+    Tensor& Q_bhsd = forward_outputs.Q_bhsd_per_layer[layer_slot];
+    Tensor& K_bhsd = forward_outputs.K_bhsd_per_layer[layer_slot];
+    Tensor& V_bhsd = forward_outputs.V_bhsd_per_layer[layer_slot];
+    Tensor& attn_out_bhsd = forward_outputs.attn_out_bhsd_per_layer[layer_slot];
+    Tensor& attn_out = forward_outputs.attn_out_per_layer[layer_slot];
+    Tensor& proj_out = forward_outputs.proj_out_per_layer[layer_slot];
+
+    if (!request.stream) {
+        throw std::runtime_error("encoderSelfAttentionForwardCached: stream is NULL");
+    }
+    if (!request.cublas_handle) {
+        throw std::runtime_error("encoderSelfAttentionForwardCached: cublas_handle is NULL");
+    }
+    if (!norm_input.data) {
+        throw std::runtime_error("encoderSelfAttentionForwardCached: norm_input.data is NULL");
+    }
+    norm_input.shape.require("encoderSelfAttentionForwardCached norm_input");
+    if (!norm_input.shape.is_2d_layout()) {
+        throw std::runtime_error("encoderSelfAttentionForwardCached: norm_input must be a 2D [q_len,d_model] tensor");
+    }
+    const auto norm_shape = norm_input.shape.as_2d();
+    const int q_len = request.payload.total_tokens;  // batch_size == 1 for inference
+    if (norm_shape.rows != q_len || norm_shape.cols != request.hp.d_model) {
+        throw std::runtime_error("encoderSelfAttentionForwardCached: norm_input shape mismatch. expected=[" +
+                                 std::to_string(q_len) + "," + std::to_string(request.hp.d_model) +
+                                 "] got=[" + std::to_string(norm_shape.rows) + "," +
+                                 std::to_string(norm_shape.cols) + "]");
+    }
+    if (request.payload.batch_size != 1) {
+        throw std::runtime_error("encoderSelfAttentionForwardCached: KV-cache decode requires batch_size == 1");
+    }
+    if (!cache.valid()) {
+        throw std::runtime_error("encoderSelfAttentionForwardCached: KvCacheLayerView is incomplete");
+    }
+    if (q_len <= 0 || q_len > cache.cache_max_seq) {
+        throw std::runtime_error("encoderSelfAttentionForwardCached: q_len=" + std::to_string(q_len) +
+                                 " out of range for cache_max_seq=" + std::to_string(cache.cache_max_seq));
+    }
+
+    validateWeights(W_qkv, b_qkv, W_o, b_o, request.hp);
+    validatePBMState(pbm, request.hp);
+    autograd::set_autograd_cublas_handle(request.cublas_handle);
+
+    const int n_heads = request.hp.num_heads;
+    const int n_kv_heads = request.hp.num_kv_heads;
+    const int head_dim = request.hp.head_dim;
+    const int rotary_dim = request.hp.rotary_dim;
+    const float scale = request.hp.attention_softmax_scale;
+    if (!std::isfinite(scale) || scale <= 0.0f) {
+        throw std::runtime_error("encoderSelfAttentionForwardCached: attention_softmax_scale must be finite and > 0");
+    }
+    if (rotary_dim != cache.rotary_dim) {
+        throw std::runtime_error("encoderSelfAttentionForwardCached: hp.rotary_dim=" +
+                                 std::to_string(rotary_dim) + " != cache.rotary_dim=" +
+                                 std::to_string(cache.rotary_dim));
+    }
+
+    // 1. QKV projection (identical to the training-time facade).
+    qkv_out = autograd::matmul(norm_input, W_qkv, request.stream, true);
+    if (request.hp.use_bias) {
+        qkv_out = autograd::broadcast_add(qkv_out, b_qkv, request.stream);
+    }
+
+    // 2. Split into Q/K/V (BHSD, FP32). NOTE: no autograd::rope_rotation here —
+    //    the kvcache kernel applies the identical interleaved RoPE on load.
+    auto [Q_tmp, K_tmp, V_tmp] = autograd::split_and_reshape_qkv(
+        qkv_out, request.payload, request.hp, request.stream);
+    Q_bhsd = std::move(Q_tmp);
+    K_bhsd = std::move(K_tmp);
+    V_bhsd = std::move(V_tmp);
+
+    // 3. Convert Q/Knew/Vnew FP32 BHSD -> BF16 BSHD (UNROTATED) into shared scratch.
+    ::TensorConversion::convert_BHSD_to_BSHD_bf16(
+        Q_bhsd.data, cache.scratch_q, 1, n_heads, q_len, head_dim, request.stream);
+    ::TensorConversion::convert_BHSD_to_BSHD_bf16(
+        K_bhsd.data, cache.scratch_knew, 1, n_kv_heads, q_len, head_dim, request.stream);
+    ::TensorConversion::convert_BHSD_to_BSHD_bf16(
+        V_bhsd.data, cache.scratch_vnew, 1, n_kv_heads, q_len, head_dim, request.stream);
+
+    // Sentinel-fill LSE so a missing kernel write surfaces as NaN downstream.
+    cudaMemsetAsync(cache.scratch_lse, 0xFF,
+                    static_cast<size_t>(n_heads) * q_len * sizeof(float), request.stream);
+
+    // 4. Fused-rotary KV-cache attention. cache.cache_seqlens holds the fill BEFORE
+    //    this call; the kernel rotates Q + the new K, appends rotated K / raw V to
+    //    the per-layer cache in place, and attends over [0, cache_seqlens + q_len).
+    const float* effective_alibi_slopes =
+        GRIM::Ablation::kZeroAlibiBias ? nullptr : pbm.alibi_slopes;
+    flash_attn_fwd_kvcache_rotary(
+        cache.scratch_q,
+        cache.scratch_knew,
+        cache.scratch_vnew,
+        cache.k_cache,
+        cache.v_cache,
+        cache.scratch_out,
+        cache.scratch_lse,
+        cache.rotary_cos,
+        cache.rotary_sin,
+        cache.cache_seqlens,
+        effective_alibi_slopes,
+        /*batch=*/1,
+        /*seqlen_q=*/q_len,
+        /*cache_max_seq=*/cache.cache_max_seq,
+        n_heads,
+        n_kv_heads,
+        head_dim,
+        rotary_dim,
+        scale,
+        /*causal=*/true,
+        /*is_bf16=*/true,
+        request.stream);
+
+    // 5. Off-by-one (softmax1) epilogue — MUST match the training SDPA path when
+    //    attention_off_by_one is enabled, or decode diverges from the trained model.
+    if (request.hp.attention_off_by_one) {
+        ::GRIM::autograd::launchAttentionOffByOneEpilogue(
+            cache.scratch_out, cache.scratch_lse, 1, q_len, n_heads, head_dim, request.stream);
+    }
+
+    // 6. Convert attention output BF16 BSHD -> FP32 BHSD into the forward sink slot.
+    attn_out_bhsd = Tensor::empty(
+        TensorContract::TensorShape::make_BHSD(1, n_heads, q_len, head_dim),
+        false, request.stream, "cached_attn_out_bhsd");
+    ::TensorConversion::convert_BSHD_bf16_to_BHSD(
+        cache.scratch_out, attn_out_bhsd.data, 1, q_len, n_heads, head_dim, request.stream);
+
+    // 7. Flatten BHSD -> [q_len, d_model] and project (identical to training facade).
+    attn_out = autograd::reshape_bhsd_to_flat(
+        attn_out_bhsd, request.payload, request.hp, request.stream);
+    if (!attn_out.data) {
+        throw std::runtime_error("encoderSelfAttentionForwardCached: attn_out.data is NULL before output projection");
+    }
+    proj_out = autograd::matmul(attn_out, W_o, request.stream, true);
+    if (request.hp.use_bias) {
+        proj_out = autograd::broadcast_add(proj_out, b_o, request.stream);
     }
 }
 

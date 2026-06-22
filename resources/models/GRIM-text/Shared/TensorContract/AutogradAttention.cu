@@ -5,6 +5,7 @@
 //            SplitAndReshapeQKV, RoPE rotation
 //======================================================//
 #include "TensorContract_GPU.hpp"
+#include "AttentionEpilogue.hpp"
 #include "AutogradQKVDiagnostics.hpp"
 #include "LMHeadGemmDiagnostics.hpp"
 #include "../Batching/BatchPayload.hpp"
@@ -81,6 +82,29 @@ __global__ void kernelAttentionOffByOneEpilogue(
     }
 }
 
+// launchAttentionOffByOneEpilogue() is defined below in GRIM::autograd (it has a
+// header declaration in TensorContract_GPU.hpp) so the inference KV-cache decode
+// path can reapply the exact same softmax1 post-process. The kernel above stays
+// in this anonymous namespace; the launcher reaches it by unqualified TU lookup.
+
+}  // namespace
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Open GRIM::autograd namespace — all functions below are in this namespace
+// (matching TensorContract_GPU.cu structure)
+// ═══════════════════════════════════════════════════════════════════════════
+namespace GRIM {
+
+using CudaAlloc::cudaMallocOrThrow;
+
+namespace autograd {
+
+using Batching::BatchPayload;
+
+// Attention off-by-one (softmax1) epilogue launcher. Exposed via
+// TensorContract_GPU.hpp so both the training SDPA path and the inference
+// KV-cache decode facade apply the identical post-process. Reaches the kernel in
+// the anonymous namespace above by unqualified translation-unit lookup.
 void launchAttentionOffByOneEpilogue(
     __nv_bfloat16* out_bshd, float* lse_bhs,
     int batch_size, int seq_len, int num_heads, int head_dim,
@@ -99,20 +123,6 @@ void launchAttentionOffByOneEpilogue(
             cudaGetErrorString(err));
     }
 }
-
-}  // namespace
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Open GRIM::autograd namespace — all functions below are in this namespace
-// (matching TensorContract_GPU.cu structure)
-// ═══════════════════════════════════════════════════════════════════════════
-namespace GRIM {
-
-using CudaAlloc::cudaMallocOrThrow;
-
-namespace autograd {
-
-using Batching::BatchPayload;
 
 inline void throwIfCudaFailed(cudaError_t err, const char* context) {
     if (err != cudaSuccess) {

@@ -14,6 +14,7 @@
 #include "../../Layers/LMHead/lm_head_GPU.hpp"
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 #include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
+#include "../InferenceState/KvCacheState_GPU.hpp"
 #include "../TensorContract/TensorContract_GPU.hpp"
 #include "../TensorContract/GradFns/NumberEncoderGradFn.hpp"
 #include "ModelForwardOutputs.hpp"
@@ -315,6 +316,35 @@ void ModelForwardRequest::validate(const char* caller) const {
     } else if (!mtp_heads.empty()) {
         throw std::runtime_error(std::string(caller) + ": mtp_heads is non-empty while graph.emit_mtp_logits=false");
     }
+    if (kv_cache) {
+        if (graph.connect_parameter_graph || graph.retain_backward_graph) {
+            throw std::runtime_error(std::string(caller) + ": kv_cache requires a read-only graph policy (connect_parameter_graph == retain_backward_graph == false)");
+        }
+        if (graph.enable_dropout) {
+            throw std::runtime_error(std::string(caller) + ": kv_cache decode is read-only and cannot run with dropout");
+        }
+        if (payload->batch_size != 1) {
+            throw std::runtime_error(std::string(caller) + ": kv_cache decode requires payload.batch_size == 1");
+        }
+        if (execution_block_enabled) {
+            throw std::runtime_error(std::string(caller) + ": kv_cache decode does not yet support the execution block; disable it for inference");
+        }
+        if (!kv_cache->allocated) {
+            throw std::runtime_error(std::string(caller) + ": kv_cache is not allocated (call ensureAllocated/beginSession before the forward)");
+        }
+        const int num_layers = HyperParameters::snapshotTrainingConfigField<int>(*config, "num_layers");
+        if (kv_cache->num_layers != num_layers) {
+            throw std::runtime_error(std::string(caller) + ": kv_cache.num_layers=" +
+                                     std::to_string(kv_cache->num_layers) + " != config.num_layers=" +
+                                     std::to_string(num_layers));
+        }
+        if (kv_cache->host_seqlen + payload->total_tokens > kv_cache->cache_max_seq) {
+            throw std::runtime_error(std::string(caller) + ": kv_cache overflow: current fill=" +
+                                     std::to_string(kv_cache->host_seqlen) + " + q_len=" +
+                                     std::to_string(payload->total_tokens) + " > cache_max_seq=" +
+                                     std::to_string(kv_cache->cache_max_seq));
+        }
+    }
 }
 
 ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
@@ -540,6 +570,15 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 encoding_parameter_ptr = &detached_encoding_parameters;
                 ffn_parameter_ptr = &detached_ffn_parameters;
             }
+            // Inference KV-cache path: every layer reads/appends its own cache at
+            // the SAME cache_seqlens offset (the fill before this forward). The
+            // counter is advanced once, after the layer loop.
+            KvCacheLayerView cache_view{};
+            const KvCacheLayerView* cache_view_ptr = nullptr;
+            if (request.kv_cache) {
+                cache_view = request.kv_cache->layerView(layer_idx);
+                cache_view_ptr = &cache_view;
+            }
             forwardEncodingLayer(
                 enc_layer->hp(),
                 enc_layer->requireFeedForwardCompute("executeModelForward(no_grad)"),
@@ -553,7 +592,8 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 false,
                 layer_idx,
                 encoding_parameter_ptr,
-                ffn_parameter_ptr);
+                ffn_parameter_ptr,
+                cache_view_ptr);
             Tensor layer_output_view = viewCommittedTensor(
                 forward_outputs.output_per_layer[static_cast<size_t>(layer_idx)],
                 request.stream,
@@ -579,6 +619,13 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
         if (enc_sync != cudaSuccess) {
             throw std::runtime_error("ModelForward(no_grad): CUDA error after encoder layers: " +
                 std::string(cudaGetErrorString(enc_sync)) + " (illegal access usually means a kernel wrote/read out of bounds)");
+        }
+
+        // KV-cache path: all layers have appended q_len tokens at the prior fill
+        // offset. Advance the shared cache_seqlens exactly once so the next forward
+        // (decode step or speculative verification) attends over the new prefix.
+        if (request.kv_cache) {
+            request.kv_cache->advance(total_tokens, request.stream);
         }
 
         forward_outputs.encoder_output_tensor = std::move(running);

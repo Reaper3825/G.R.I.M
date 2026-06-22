@@ -30,6 +30,7 @@
 namespace GRIM {
 
 class GPUGrimEncoder;
+struct KvCacheState;
 
 } // namespace GRIM
 
@@ -74,6 +75,13 @@ struct ModelForwardRequest {
     const Batching::BatchDeviceBindings* bindings = nullptr;
     uint64_t batch_idx = 0;
     ModelForwardGraphPolicy graph{};
+
+    // Inference-only: when non-null, the encoder attention sublayers run the
+    // KV-cache decode/prefill path over this session cache instead of full
+    // self-attention. Requires a read-only graph policy (connect_parameter_graph
+    // == retain_backward_graph == false), batch_size == 1, dropout disabled, and
+    // the execution block disabled. Training callers leave this null.
+    KvCacheState* kv_cache = nullptr;
 
     void validate(const char* caller) const;
 };

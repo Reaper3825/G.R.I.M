@@ -168,6 +168,11 @@ private:
                 bool dropout_enabled = false,
                 int layer_idx = 0,
                 const EncodingLayerParameterTensors* encoding_parameters = nullptr,
-                const FeedForwardParameterTensors* ffn_parameters = nullptr);
+                const FeedForwardParameterTensors* ffn_parameters = nullptr,
+                // Inference-only: when non-null, the attention sublayer runs the
+                // KV-cache decode/prefill path (encoderSelfAttentionForwardCached)
+                // over this layer's cache view instead of full self-attention.
+                // Read-only path: requires dropout_enabled == false.
+                const KvCacheLayerView* kv_cache_view = nullptr);
 
 } // namespace GRIM

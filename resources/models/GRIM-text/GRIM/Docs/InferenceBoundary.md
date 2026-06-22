@@ -36,7 +36,7 @@ Status: implemented.
 - [x] Extract the training/eval full-forward math from `AutogradTraining.cu` into `Shared/Forward/ModelForward_GPU.cu`.
 - [x] Route training and inference through the same shared forward primitive; Phase2 training now calls `Forward::executeModelForward(...)` explicitly and autograd owns only loss/backward.
 - [x] Route inference prefill through the shared primitive with `ModelForwardGraphPolicy{false,false,false,false}`: read-only parameter graph, no backward retention, no dropout, and optional forward extras requested explicitly.
-- [x] Delete per-layer K/V preservation for inference; Phase2 inference uses the shared full-context graph rather than a separate KV-cache decode graph.
+- [x] Delete per-layer K/V preservation for inference; Phase2 inference uses the shared full-context graph rather than a separate KV-cache decode graph. **(Superseded — see "Phase 5" below: a session-scoped KV cache + MTP speculative decode now replaces the O(n²) full-context recompute. The shared forward primitive is still the single entry; the cache is attached via an optional `ModelForwardRequest::kv_cache` pointer, so there is still no separate decode graph file.)**
 - [x] Delete the temporary `InferenceForward_GPU.{hpp,cu}` primitive.
 - [x] Keep loss/backward code in `training/Autograd`.
 
@@ -96,3 +96,58 @@ Exit criteria:
 - `grim_text_server` does not compile or link `training/Autograd/AutogradTraining.cu`.
 - `grim_text_server` does not compile or link Phase1/Phase2/training/model CUDA objects; it links only HTTP/JSON/process-bridge dependencies.
 - Any accidental server dependency on training loss/backward fails at build time.
+
+## Phase 5 — Session KV cache + MTP speculative decode
+
+Status: implemented (pending GPU-box verification).
+
+Replaces the O(n²) full-context recompute decode with a proper incremental
+decoder, without changing the public entry/exit
+(`executePhase2TextInference(...) -> Phase2TextInferenceResult`) or adding a
+separate decode graph file.
+
+- `GenerationState` owns a session-scoped `KvCacheState`
+  ([Shared/InferenceState/KvCacheState_GPU.hpp](../../Shared/InferenceState/KvCacheState_GPU.hpp)):
+  per-layer bf16 K/V capacity buffers `[1, max_cached_seq_len, n_kv_heads, head_dim]`,
+  a device `cache_seqlens` + host mirror, and fused-rotary cos/sin tables built
+  once from `pbm.rope_inv_freq` via `PBM::launchBuildRotaryCosSinTables`.
+- `ModelForwardRequest` gains an optional `kv_cache` pointer. When set, the
+  shared forward's read-only (no_grad) branch routes each layer's attention
+  through `encoderSelfAttentionForwardCached` (fused-rotary
+  `flash_attn_fwd_kvcache_rotary` + the SAME `attention_off_by_one` epilogue as
+  training), and advances `cache_seqlens` by `q_len` once after the layer loop.
+  Training/eval callers leave `kv_cache` null and are unaffected.
+- Phase2 `generateOneSequence` prefills the prompt (`q_len = prompt_len`), then
+  decodes one token at a time (`q_len = 1`), or `q_len = K+1` for MTP
+  speculative verification.
+- MTP self-speculative decode (default ON when the model has MTP heads) is
+  **exact / output-identical** to plain decode: each committed token is
+  `SamplingPipeline::selectNextToken(verify_row, context)`; the MTP-head argmax
+  drafts only decide whether the next verify row's context is already correct and
+  can be reused. On a mismatch the cache rolls back to the accepted prefix. With
+  `K=0` the loop is plain KV-cached decode.
+
+Known limitations (tracked under "other missing pieces"): no HTTP token
+streaming; no stop-sequences; numeric-atom generation and execution-block decode
+are unsupported on the cached path (the forward throws if the execution block is
+enabled); single-sequence only (batch_size == 1); the cache is rebuilt per
+request (no cross-request prefix reuse).
+
+### Verification (run on an SM80+ GPU box)
+
+Build the `train_gpu` target (e.g. `training/build/Release/train_gpu.exe`), then:
+
+1. **Prefill parity** — compare last-token logits of the new prefill-with-cache
+   against the previous full-forward over the same prompt; expect a match within
+   bf16 tolerance (~1e-2 rtol). This gates RoPE + ALiBi + off-by-one parity
+   between the fused-rotary kernel and the training SDPA path.
+2. **Decode equivalence** — greedy KV-cached decode must produce the identical
+   token sequence as the previous full-recompute decode for several prompts.
+3. **MTP exactness** — with MTP on, the output sequence must equal plain
+   KV-cached decode (it is exact by construction); log the per-step acceptance
+   rate to confirm speculation is engaging.
+4. **Server smoke** — launch `grim_text_server`, `POST /api/generate`, confirm
+   the response + stats and that decode latency scales ~linearly (not
+   quadratically) with generated length.
+5. **Watch** — cache capacity at `max_seq_len`, `cache_seqlens` rollback,
+   GQA mapping (`n_kv_heads`), host/device `cache_seqlens` sync.

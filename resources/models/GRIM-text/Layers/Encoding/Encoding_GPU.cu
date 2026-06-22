@@ -187,9 +187,13 @@ void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
                           bool dropout_enabled,
                           int layer_idx,
                           const EncodingLayerParameterTensors* encoding_parameters,
-                          const FeedForwardParameterTensors* ffn_parameters) {
+                          const FeedForwardParameterTensors* ffn_parameters,
+                          const KvCacheLayerView* kv_cache_view) {
     if (layer_idx < 0) {
         throw std::runtime_error("forwardEncodingLayer: layer_idx must be >= 0, got " + std::to_string(layer_idx));
+    }
+    if (kv_cache_view && dropout_enabled) {
+        throw std::runtime_error("forwardEncodingLayer: KV-cache decode path is read-only and cannot run with dropout_enabled=true");
     }
     const size_t layer_slot = static_cast<size_t>(layer_idx);
     forward_outputs.validateLayerIndex(layer_slot, "forwardEncodingLayer");
@@ -300,15 +304,31 @@ void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
         dropout_batch_seed,
         layer_idx
     };
-    Attention::encoderSelfAttentionForward(
-        ln1_out,
-        W_qkv,
-        b_qkv_ref,
-        W_o,
-        b_o_ref,
-        pos_encoding,
-        attention_request,
-        forward_outputs);
+    if (kv_cache_view) {
+        // Inference KV-cache decode/prefill: fused-rotary attention over the
+        // per-layer cache. cache_seqlens is advanced once per forward by the
+        // shared forward primitive, AFTER all layers.
+        Attention::encoderSelfAttentionForwardCached(
+            ln1_out,
+            W_qkv,
+            b_qkv_ref,
+            W_o,
+            b_o_ref,
+            pos_encoding,
+            attention_request,
+            *kv_cache_view,
+            forward_outputs);
+    } else {
+        Attention::encoderSelfAttentionForward(
+            ln1_out,
+            W_qkv,
+            b_qkv_ref,
+            W_o,
+            b_o_ref,
+            pos_encoding,
+            attention_request,
+            forward_outputs);
+    }
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 2: Attention facade DONE\n");
     
     //--------------------------------------------------

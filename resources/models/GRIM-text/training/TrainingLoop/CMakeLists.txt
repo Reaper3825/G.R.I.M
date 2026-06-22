@@ -417,6 +417,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../Phases/Startup/Model/ParameterGroupRegistration.hpp
     ../../Shared/Gradients/GradStatsCollector.cu
     ../../Shared/Forward/ModelForward_GPU.cu
+    ../../Shared/InferenceState/KvCacheState_GPU.cu
     ../Autograd/AutogradContext.cu
     ../Autograd/AutogradExecutionLoss.cu
     ../Autograd/AutogradMtpAuxiliaryLoss.cu

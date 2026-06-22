@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "../../Shared/Forward/ModelForwardExecutionRuntime.hpp"
+#include "../../Shared/InferenceState/KvCacheState_GPU.hpp"
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 
 namespace GRIM {
@@ -28,9 +29,15 @@ struct GenerationState {
     // Training forward traces remain TrainingState-owned; these are session state.
     Forward::ModelForwardExecutionRuntime execution_runtime;
 
+    // Session-scoped KV cache for autoregressive decode. Buffers are allocated
+    // lazily on first prefill and reused across decode steps; resetSession()
+    // re-zeroes the fill counter (host side) while keeping the buffers.
+    KvCacheState kv_cache;
+
     void resetSession() {
         has_exec_memory = false;
         execution_runtime.clear();
+        kv_cache.resetSession();
     }
 };
 
