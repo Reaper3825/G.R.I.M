@@ -99,6 +99,31 @@ void OverlayRenderer::rebuildAtlas()
 
     if (m_fontFileData.empty()) return;
 
+    // Validate the font BEFORE handing it to the packer. stbtt_PackFontRanges
+    // does only minimal validation and will happily dereference garbage tables
+    // on a malformed/unsupported font, which manifests as an access violation
+    // (0xC0000005) that takes down the whole process. stbtt_InitFont performs
+    // the real table validation, so bail cleanly if it rejects the font.
+    {
+        const unsigned char* fdata = m_fontFileData.data();
+        int numFonts = stbtt_GetNumberOfFonts(fdata);
+        int fontOffset = stbtt_GetFontOffsetForIndex(fdata, 0);
+        LOG_DEBUG("OverlayRenderer", "rebuildAtlas: fontBytes=" +
+                  std::to_string(m_fontFileData.size()) +
+                  " numFonts=" + std::to_string(numFonts) +
+                  " offset0=" + std::to_string(fontOffset) +
+                  " fontSize=" + std::to_string(m_fontSize));
+        if (fontOffset < 0) {
+            LOG_ERROR("OverlayRenderer", "rebuildAtlas: invalid font offset — font unusable");
+            return;
+        }
+        stbtt_fontinfo probe;
+        if (!stbtt_InitFont(&probe, fdata, fontOffset)) {
+            LOG_ERROR("OverlayRenderer", "rebuildAtlas: stbtt_InitFont rejected font — skipping atlas build");
+            return;
+        }
+    }
+
     struct PackRange {
         int firstCodepoint;
         int count;
@@ -127,8 +152,13 @@ void OverlayRenderer::rebuildAtlas()
         m_fontAtlas.resize(m_atlasWidth * m_atlasHeight);
         std::fill(m_fontAtlas.begin(), m_fontAtlas.end(), 0);
 
+        LOG_DEBUG("OverlayRenderer", "rebuildAtlas: trying atlas " +
+                  std::to_string(m_atlasWidth) + "x" + std::to_string(m_atlasHeight) +
+                  " totalChars=" + std::to_string(totalChars));
+
         stbtt_pack_context pc;
         if (!stbtt_PackBegin(&pc, m_fontAtlas.data(), m_atlasWidth, m_atlasHeight, 0, 1, nullptr)) {
+            LOG_DEBUG("OverlayRenderer", "rebuildAtlas: PackBegin failed at this size, growing");
             continue;
         }
         stbtt_PackSetOversampling(&pc, 1, 1);
@@ -153,8 +183,12 @@ void OverlayRenderer::rebuildAtlas()
                 if (!ranges[i].isIconFont) textRanges.push_back(stbRanges[i]);
             }
             if (!textRanges.empty()) {
+                LOG_DEBUG("OverlayRenderer", "rebuildAtlas: packing " +
+                          std::to_string(textRanges.size()) + " text range(s)");
                 int ret = stbtt_PackFontRanges(&pc, m_fontFileData.data(), 0,
                                                textRanges.data(), (int)textRanges.size());
+                LOG_DEBUG("OverlayRenderer", "rebuildAtlas: text PackFontRanges ret=" +
+                          std::to_string(ret));
                 if (ret == 0) allOk = false;
             }
         }

@@ -11,7 +11,7 @@ UIToggle::UIToggle(const std::string& lbl, bool initialState,
 {
     // Defensive check: ensure label was copied correctly
     if (label.empty()) {
-        LOG_ERROR("UIToggle", "WARNING: UIToggle constructed with empty label");
+      
     } else {
         LOG_DEBUG("UIToggle", "Constructed: " + label);
     }

@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cstdlib>
+#include <cctype>
 #include <system_error>
 
 #if defined(_WIN32)
@@ -207,17 +208,62 @@ std::string findAnyFontInResources(int argc, char** argv, ConsoleHistory* histor
         return {};
     }
 
-    // Recursively search for any .ttf or .otf font file
+    // Recursively search for a usable text font. We deliberately DO NOT grab
+    // the first .ttf/.otf in directory order: math/symbol fonts (e.g.
+    // DejaVuMathTeXGyre.ttf) crash stb_truetype's glyph packer with an access
+    // violation, and styled cuts (bold/italic) render poorly as the base UI
+    // font. Score every candidate and pick the best upright text font.
+    auto scoreFontName = [](std::string name) -> int {
+        for (auto& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        // Hard reject: not text fonts / known to break the packer.
+        if (name.find("math")     != std::string::npos ||
+            name.find("symbol")   != std::string::npos ||
+            name.find("emoji")    != std::string::npos ||
+            name.find("dingbat")  != std::string::npos ||
+            name.find("webding")  != std::string::npos ||
+            name.find("wingding") != std::string::npos) {
+            return -1;
+        }
+        int score = 100;
+        if (name.find("sans") != std::string::npos) score += 20;  // prefer proportional sans for UI
+        if (name.find("bold") != std::string::npos) score -= 8;
+        if (name.find("italic") != std::string::npos ||
+            name.find("oblique") != std::string::npos) score -= 8;
+        if (name.find("condensed") != std::string::npos) score -= 4;
+        if (name.find("light") != std::string::npos) score -= 4;
+        if (name.find("mono") != std::string::npos) score -= 2;
+        if (name.find("serif") != std::string::npos) score -= 2;
+        return score;
+    };
+
     try {
+        std::string bestPath;
+        int bestScore = -1;
+        std::string fallbackPath;  // any font at all, preserves old behavior as last resort
+
         for (auto& p : fs::recursive_directory_iterator(resDir, fs::directory_options::skip_permission_denied)) {
             if (p.is_regular_file()) {
                 auto ext = p.path().extension().string();
                 if (ext == ".ttf" || ext == ".otf") {
-                    LOG_PHASE("Font search", true);
-                    LOG_DEBUG("Resources", "Found font: " + p.path().string());
-                    return p.path().string();
+                    if (fallbackPath.empty()) fallbackPath = p.path().string();
+                    int score = scoreFontName(p.path().filename().string());
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestPath = p.path().string();
+                    }
                 }
             }
+        }
+
+        if (bestScore >= 0 && !bestPath.empty()) {
+            LOG_PHASE("Font search", true);
+            LOG_DEBUG("Resources", "Found font: " + bestPath);
+            return bestPath;
+        }
+        if (!fallbackPath.empty()) {
+            LOG_PHASE("Font search", true);
+            LOG_DEBUG("Resources", "No preferred text font found; using fallback (may render poorly): " + fallbackPath);
+            return fallbackPath;
         }
     } catch (...) {}
 

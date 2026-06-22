@@ -359,7 +359,7 @@ void UISettingsMenu::createWidgets() {
         saveButton = std::make_shared<UIButton>("Save & Close", [this]() { doSaveAndClose(); });
         cancelButton = std::make_shared<UIButton>("Cancel", [this]() { doCancel(); });
         
-        LOG_DEBUG("UISettingsMenu", "Widgets created successfully for tab " + std::to_string(static_cast<int>(activeTab_)));
+    
     }
     catch (const std::exception& e) {
         LOG_ERROR("UISettingsMenu", std::string("createWidgets() exception: ") + e.what());

@@ -27,7 +27,7 @@
         "max_huggingface_pdfs_total": 10000,
         "max_new_entries_per_run": 100000
     },
-    "default_model": "llama3.1:8b",
+    "default_model": "grim-text",
     "device_comm": {
         "heartbeat_timeout_sec": 30,
         "max_chunk_size_bytes": 65536,
@@ -400,8 +400,8 @@
         }
     },
     "personality": {
-        "custom_prompt": "You are GRIM. Be brief and direct. Give concise answers without unnecessary elaboration. Keep responses under 2 sentences when possible.",
-        "use_custom_prompt": false
+        "custom_prompt": "\n",
+        "use_custom_prompt": true
     },
     "silence_threshold": 0.02,
     "silence_timeout_ms": 4000,
@@ -416,6 +416,7 @@
             "attention_diag_enabled": false,
             "attention_diag_head": 0,
             "attention_diag_layer": -1,
+            "attention_off_by_one": true,
             "auto_stop_enabled": true,
             "auto_stop_high_loss_patience": 12,
             "auto_stop_high_loss_threshold": 6.0,
@@ -546,9 +547,7 @@
             },
             "logging_default_level": "ATTN:Warning",
             "logging_equation_csv_enabled": true,
-            "logging_group_overrides": {
-
-            },
+            "logging_group_overrides": {},
             "logging_initial_capacity": 2048,
             "logging_stderr_enabled": true,
             "logit_update_trace_enabled": false,
@@ -602,7 +601,6 @@
             "prediction_comparison_max_positions": 8,
             "prediction_comparison_top_k": 5,
             "project_out_pc1": false,
-            "attention_off_by_one": true,
             "qk_norm_enabled": false,
             "rope_base_seq_len": 1024,
             "rope_scaling": 1.0,

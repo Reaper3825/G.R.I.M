@@ -15,6 +15,7 @@ void OverlayRenderer::drawRect(const Vec2& pos, const Vec2& size, uint32_t color
     uint8_t g = (color >> 8) & 0xFF;
     uint8_t b = color & 0xFF;
 
+    // Premultiply so we can src-over composite in premultiplied space.
     r = (uint8_t)((r * a) / 255);
     g = (uint8_t)((g * a) / 255);
     b = (uint8_t)((b * a) / 255);
@@ -28,10 +29,30 @@ void OverlayRenderer::drawRect(const Vec2& pos, const Vec2& size, uint32_t color
 
     uint32_t* pixels = static_cast<uint32_t*>(m_pixels);
 
+    const uint8_t invA = 255 - a;
     for (int y = y1; y < y2; ++y) {
         for (int x = x1; x < x2; ++x) {
             int idx = y * m_width + x;
-            pixels[idx] = (a << 24) | (r << 16) | (g << 8) | b;
+            // Opaque fills overwrite; translucent fills must blend over the
+            // existing pixels (e.g. frosted-glass backdrop) instead of
+            // replacing them — otherwise low-alpha fills punch holes that
+            // read as fully transparent on the layered overlay.
+            if (a == 255) {
+                pixels[idx] = (a << 24) | (r << 16) | (g << 8) | b;
+            } else {
+                uint32_t dst = pixels[idx];
+                uint8_t da = (dst >> 24) & 0xFF;
+                uint8_t dr = (dst >> 16) & 0xFF;
+                uint8_t dg = (dst >> 8) & 0xFF;
+                uint8_t db = dst & 0xFF;
+
+                uint8_t outA = a + (uint8_t)((da * invA) / 255);
+                uint8_t outR = r + (uint8_t)((dr * invA) / 255);
+                uint8_t outG = g + (uint8_t)((dg * invA) / 255);
+                uint8_t outB = b + (uint8_t)((db * invA) / 255);
+
+                pixels[idx] = (outA << 24) | (outR << 16) | (outG << 8) | outB;
+            }
         }
     }
 }
@@ -295,6 +316,7 @@ void OverlayRenderer::drawLine(const Vec2& start, const Vec2& end, uint32_t colo
     b = (uint8_t)((b * a) / 255);
 
     uint32_t premultColor = (a << 24) | (r << 16) | (g << 8) | b;
+    const uint8_t invA = 255 - a;
 
     ClipRect clip = activeClip();
 
@@ -324,7 +346,20 @@ void OverlayRenderer::drawLine(const Vec2& start, const Vec2& end, uint32_t colo
 
                     if (xx >= clip.x1 && xx < clip.x2 && yy >= clip.y1 && yy < clip.y2) {
                         int idx = yy * m_width + xx;
-                        pixels[idx] = premultColor;
+                        if (a == 255) {
+                            pixels[idx] = premultColor;
+                        } else {
+                            uint32_t dstp = pixels[idx];
+                            uint8_t da = (dstp >> 24) & 0xFF;
+                            uint8_t dr = (dstp >> 16) & 0xFF;
+                            uint8_t dg = (dstp >> 8) & 0xFF;
+                            uint8_t db = dstp & 0xFF;
+                            uint8_t outA = a + (uint8_t)((da * invA) / 255);
+                            uint8_t outR = r + (uint8_t)((dr * invA) / 255);
+                            uint8_t outG = g + (uint8_t)((dg * invA) / 255);
+                            uint8_t outB = b + (uint8_t)((db * invA) / 255);
+                            pixels[idx] = (outA << 24) | (outR << 16) | (outG << 8) | outB;
+                        }
                     }
                 }
             }

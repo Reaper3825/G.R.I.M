@@ -300,7 +300,7 @@ int main(int argc, char* argv[])
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - tStart).count();
             if (elapsed > kWaitTimeoutMs) {
-                LOG_ERROR("Main", "TTS not ready after 1d0s - continuing without voice");
+                LOG_ERROR("Main", "TTS not ready after 10s - continuing without voice");
                 break;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
