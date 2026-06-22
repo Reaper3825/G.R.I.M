@@ -128,19 +128,37 @@ bool validate_checkpoint_capabilities(
             Logging::EmitModuleError(kLogModule, Msg("[load] FATAL: encoder layer ", i, " missing sub-tables"));
             return false;
         }
+        // Biases are presence-driven: a checkpoint only carries attn/ffn biases
+        // when the model allocated bias tensors (use_bias). When the model has no
+        // bias destination (ptr==null) the checkpoint stores an empty vector, so
+        // requiring a full-size bias here would wrongly reject every bias-less
+        // checkpoint. Mirror the LM-head/layer-scale presence-driven contract.
+        const bool has_layer_view = i < static_cast<int>(load_req.encoder_layers.size());
+        const auto* lv = has_layer_view ? &load_req.encoder_layers[i] : nullptr;
+        const bool model_has_attn_bias = lv && (lv->attn_b_qkv.ptr || lv->attn_b_o.ptr);
+        const bool model_has_ffn_bias = lv && lv->ffn_b2.ptr;
+
         const auto* fa = fl->attention();
         if (!check_fb_vec_size(fa->w_qkv_data(), qkv_weight_size, "attn.W_qkv") ||
-            !check_fb_vec_size(fa->b_qkv_data(), total_qkv_dim, "attn.b_qkv") ||
-            !check_fb_vec_size(fa->w_o_data(), d_model * d_model, "attn.W_o") ||
-            !check_fb_vec_size(fa->b_o_data(), d_model, "attn.b_o")) {
+            !check_fb_vec_size(fa->w_o_data(), d_model * d_model, "attn.W_o")) {
             Logging::EmitModuleError(kLogModule, Msg("[load] FATAL: attention size error in layer ", i));
+            return false;
+        }
+        if (model_has_attn_bias &&
+            (!check_fb_vec_size(fa->b_qkv_data(), total_qkv_dim, "attn.b_qkv") ||
+             !check_fb_vec_size(fa->b_o_data(), d_model, "attn.b_o"))) {
+            Logging::EmitModuleError(kLogModule, Msg("[load] FATAL: attention bias size error in layer ", i));
             return false;
         }
         const auto* ff = fl->ffn();
         if (!check_fb_vec_size(ff->w1_data(), d_model * d_ff, "ffn.W1") ||
-            !check_fb_vec_size(ff->w2_data(), d_ff * d_model, "ffn.W2") ||
-            !check_fb_vec_size(ff->b2_data(), d_model, "ffn.b2")) {
+            !check_fb_vec_size(ff->w2_data(), d_ff * d_model, "ffn.W2")) {
             Logging::EmitModuleError(kLogModule, Msg("[load] FATAL: FFN size error in layer ", i));
+            return false;
+        }
+        if (model_has_ffn_bias &&
+            !check_fb_vec_size(ff->b2_data(), d_model, "ffn.b2")) {
+            Logging::EmitModuleError(kLogModule, Msg("[load] FATAL: FFN bias size error in layer ", i));
             return false;
         }
         if (!check_fb_vec_size(fl->rms1()->gamma(), d_model, "rms1.gamma") ||

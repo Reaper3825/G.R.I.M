@@ -445,9 +445,13 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
 
         const auto* fb_attn = fb_layer->attention();
         std::vector<float> h_W_qkv(fb_attn->w_qkv_data()->begin(), fb_attn->w_qkv_data()->end());
-        std::vector<float> h_b_qkv(fb_attn->b_qkv_data()->begin(), fb_attn->b_qkv_data()->end());
+        std::vector<float> h_b_qkv;
+        if (fb_attn->b_qkv_data())
+            h_b_qkv.assign(fb_attn->b_qkv_data()->begin(), fb_attn->b_qkv_data()->end());
         std::vector<float> h_W_o(fb_attn->w_o_data()->begin(), fb_attn->w_o_data()->end());
-        std::vector<float> h_b_o(fb_attn->b_o_data()->begin(), fb_attn->b_o_data()->end());
+        std::vector<float> h_b_o;
+        if (fb_attn->b_o_data())
+            h_b_o.assign(fb_attn->b_o_data()->begin(), fb_attn->b_o_data()->end());
         if (!upload_device_vector(h_W_qkv, layer_view.attn_w_qkv, "attn.W_qkv") ||
             !upload_device_vector(h_b_qkv, layer_view.attn_b_qkv, "attn.b_qkv") ||
             !upload_device_vector(h_W_o, layer_view.attn_w_o, "attn.W_o") ||
@@ -460,7 +464,9 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
             h_W_gate.assign(fb_ffn->w_gate_data()->begin(), fb_ffn->w_gate_data()->end());
         std::vector<float> h_W1(fb_ffn->w1_data()->begin(), fb_ffn->w1_data()->end());
         std::vector<float> h_W2(fb_ffn->w2_data()->begin(), fb_ffn->w2_data()->end());
-        std::vector<float> h_b2(fb_ffn->b2_data()->begin(), fb_ffn->b2_data()->end());
+        std::vector<float> h_b2;
+        if (fb_ffn->b2_data())
+            h_b2.assign(fb_ffn->b2_data()->begin(), fb_ffn->b2_data()->end());
         if ((!h_W_gate.empty() && !upload_device_vector(h_W_gate, layer_view.ffn_w_gate, "ffn.W_gate")) ||
             !upload_device_vector(h_W1, layer_view.ffn_w1, "ffn.W1") ||
             !upload_device_vector(h_W2, layer_view.ffn_w2, "ffn.W2") ||
