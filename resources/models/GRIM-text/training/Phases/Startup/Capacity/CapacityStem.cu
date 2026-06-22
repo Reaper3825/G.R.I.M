@@ -20,4 +20,3 @@ void HyperparametersReady(TrainingContext& ctx) {
 }
 
 } // namespace GRIMText::Training
-

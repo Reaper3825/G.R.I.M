@@ -7,10 +7,14 @@
 #include "../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../../Shared/LogRecorder/LogRecorder.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <system_error>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -19,16 +23,165 @@ namespace GRIMText::Training {
 namespace {
 
 void handleUnusableCheckpointRequest(
-    const GRIM::HyperParameters::CheckpointLoadHP& checkpoint_hp,
+    GRIM::HyperParameters::ModelExecutionMode execution_mode,
+    bool had_explicit_path,
     TrainingLogger& logger,
     const std::string& reason)
 {
-    if (checkpoint_hp.execution_mode != GRIM::HyperParameters::ModelExecutionMode::INFERENCE && !checkpoint_hp.checkpoint_path.empty()) {
+    if (execution_mode != GRIM::HyperParameters::ModelExecutionMode::INFERENCE && had_explicit_path) {
         return;
     }
 
     logger.log("Checkpoint request unusable for INFERENCE execution mode: " + reason);
     logger.log("Starting fresh model state for INFERENCE execution mode");
+}
+
+std::string trimmed(std::string value) {
+    const auto not_space = [](unsigned char c) { return !std::isspace(c); };
+    value.erase(value.begin(), std::find_if(value.begin(), value.end(), not_space));
+    value.erase(std::find_if(value.rbegin(), value.rend(), not_space).base(), value.end());
+    return value;
+}
+
+// Read training.config.grim_text_checkpoint_select tolerantly — the key is
+// optional, so a missing or non-string value yields an empty selection.
+std::string checkpointSelectField(const GRIM::Config::AiConfigSnapshot& snapshot) {
+    const auto& cfg = GRIM::HyperParameters::snapshotTrainingConfig(snapshot);
+    if (!cfg.contains("grim_text_checkpoint_select")) {
+        return std::string();
+    }
+    const auto& value = cfg.at("grim_text_checkpoint_select");
+    if (!value.is_string()) {
+        return std::string();
+    }
+    return trimmed(value.get<std::string>());
+}
+
+// Parse a trailing integer from a filename stem (e.g. "checkpoint_epoch_3" -> 3).
+// Returns -1 when the stem has no trailing digits.
+long long trailingEpochNumber(const std::string& stem) {
+    std::size_t end = stem.size();
+    std::size_t begin = end;
+    while (begin > 0 && std::isdigit(static_cast<unsigned char>(stem[begin - 1]))) {
+        --begin;
+    }
+    if (begin == end) {
+        return -1;
+    }
+    try {
+        return std::stoll(stem.substr(begin));
+    } catch (const std::exception&) {
+        return -1;
+    }
+}
+
+// Ordered list of usable checkpoints in checkpoint_dir, "latest" first.
+// Ranking: most recent modification time, then highest parsed epoch number.
+// Partial atomic-write artifacts (e.g. "*.bin.transfer.497") and the ".mtp"
+// side-cars are skipped by requiring a ".bin" extension.
+std::vector<std::string> rankedCheckpoints(const std::string& checkpoint_dir) {
+    std::vector<std::string> result;
+    if (checkpoint_dir.empty()) {
+        return result;
+    }
+    std::error_code ec;
+    if (!fs::is_directory(checkpoint_dir, ec)) {
+        return result;
+    }
+
+    struct Candidate {
+        std::string path;
+        fs::file_time_type write_time;
+        long long epoch;
+    };
+    std::vector<Candidate> candidates;
+    for (const auto& entry : fs::directory_iterator(checkpoint_dir, ec)) {
+        if (ec) {
+            break;
+        }
+        if (!entry.is_regular_file(ec) || ec) {
+            ec.clear();
+            continue;
+        }
+        const auto& path = entry.path();
+        if (path.extension() != ".bin") {
+            continue;
+        }
+        const auto size = fs::file_size(path, ec);
+        if (ec || size == 0) {
+            ec.clear();
+            continue;
+        }
+        const auto write_time = fs::last_write_time(path, ec);
+        if (ec) {
+            ec.clear();
+            continue;
+        }
+        candidates.push_back({path.string(), write_time, trailingEpochNumber(path.stem().string())});
+    }
+
+    std::sort(candidates.begin(), candidates.end(),
+              [](const Candidate& a, const Candidate& b) {
+                  if (a.write_time != b.write_time) {
+                      return a.write_time > b.write_time;
+                  }
+                  if (a.epoch != b.epoch) {
+                      return a.epoch > b.epoch;
+                  }
+                  return a.path > b.path;
+              });
+
+    result.reserve(candidates.size());
+    for (auto& c : candidates) {
+        result.push_back(std::move(c.path));
+    }
+    return result;
+}
+
+// Resolve the ordered set of checkpoint candidates to attempt, honoring
+// training.config.grim_text_checkpoint_select:
+//   - ""/"default"    → the configured grim_text_model path (legacy behavior)
+//   - "latest"        → every *.bin in the checkpoint dir, newest first
+//   - "<name>.bin"    → that file inside the checkpoint dir
+//   - "<path>/<name>" → an explicit (possibly relative) path
+std::vector<std::string> resolveCheckpointCandidates(
+    const GRIM::Config::AiConfigSnapshot& snapshot,
+    const std::string& requested_path,
+    TrainingLogger& logger)
+{
+    const std::string select = checkpointSelectField(snapshot);
+
+    if (select.empty() || select == "default") {
+        if (requested_path.empty()) {
+            return {};
+        }
+        return {requested_path};
+    }
+
+    const auto paths_hp = GRIM::HyperParameters::pathsHP(snapshot);
+
+    if (select == "latest") {
+        auto candidates = rankedCheckpoints(paths_hp.checkpoint_dir);
+        if (candidates.empty()) {
+            logger.log("Checkpoint select=\"latest\": no usable checkpoint found in " +
+                       paths_hp.checkpoint_dir);
+        } else {
+            logger.log("Checkpoint select=\"latest\": newest candidate is " + candidates.front());
+        }
+        return candidates;
+    }
+
+    // Specific selection: a bare filename resolves against the checkpoint dir,
+    // anything with a separator is treated as an explicit path.
+    const fs::path select_path(select);
+    std::string resolved;
+    if (select_path.has_parent_path() || select_path.is_absolute()) {
+        resolved = GRIM::HyperParameters::resolveMappedPath(select);
+    } else {
+        resolved = (fs::path(paths_hp.checkpoint_dir) / select_path).string();
+    }
+    logger.log("Checkpoint select=\"" + select + "\": resolved to " + resolved);
+    return {resolved};
 }
 
 void loadRequestedCheckpoint(TrainingContext& ctx)
@@ -43,46 +196,55 @@ void loadRequestedCheckpoint(TrainingContext& ctx)
     auto& logger = *ctx.logging.logger;
     ctx.loaded_checkpoint_path.clear();
 
-    const auto checkpoint_hp = GRIM::HyperParameters::checkpointLoadHP(
-        ctx.config,
-        ctx.requested_checkpoint_path,
-        GRIM::HyperParameters::snapshotExecutionMode(ctx.config));
+    const auto execution_mode = GRIM::HyperParameters::snapshotExecutionMode(ctx.config);
+    const bool had_explicit_path = !ctx.requested_checkpoint_path.empty();
 
-    if (checkpoint_hp.checkpoint_path.empty()) {
+    const std::vector<std::string> candidates =
+        resolveCheckpointCandidates(ctx.config, ctx.requested_checkpoint_path, logger);
+
+    if (candidates.empty()) {
         handleUnusableCheckpointRequest(
-            checkpoint_hp,
+            execution_mode,
+            had_explicit_path,
             logger,
-            "no explicit checkpoint path was provided");
+            "no checkpoint path was provided or discovered");
         return;
     }
 
-    const fs::path checkpoint_path(checkpoint_hp.checkpoint_path);
-    if (!fs::exists(checkpoint_path)) {
-        handleUnusableCheckpointRequest(
-            checkpoint_hp,
-            logger,
-            "requested checkpoint does not exist: " + checkpoint_hp.checkpoint_path);
-        return;
-    }
-    if (!fs::is_regular_file(checkpoint_path)) {
-        handleUnusableCheckpointRequest(
-            checkpoint_hp,
-            logger,
-            "requested checkpoint is not a regular file: " + checkpoint_hp.checkpoint_path);
+    std::string last_reason;
+    for (const auto& candidate : candidates) {
+        const fs::path checkpoint_path(candidate);
+        if (!fs::exists(checkpoint_path)) {
+            last_reason = "requested checkpoint does not exist: " + candidate;
+            logger.log(last_reason);
+            continue;
+        }
+        if (!fs::is_regular_file(checkpoint_path)) {
+            last_reason = "requested checkpoint is not a regular file: " + candidate;
+            logger.log(last_reason);
+            continue;
+        }
+
+        logger.log("Loading requested checkpoint: " + candidate);
+        if (!GRIM::loadLanguageModelCheckpoint(*ctx.model, ctx.requireTrainingState("CheckpointLoaded"), ctx.gpu_model, ctx.parameter_registry, candidate)) {
+            last_reason = "loadLanguageModelCheckpoint() failed for requested checkpoint: " + candidate;
+            logger.log(last_reason);
+            if (candidates.size() > 1) {
+                logger.log("Trying next checkpoint candidate...");
+            }
+            continue;
+        }
+
+        logger.log("✓ Loaded weights from checkpoint: " + candidate);
+        ctx.loaded_checkpoint_path = candidate;
         return;
     }
 
-    logger.log("Loading requested checkpoint: " + checkpoint_hp.checkpoint_path);
-    if (!GRIM::loadLanguageModelCheckpoint(*ctx.model, ctx.requireTrainingState("CheckpointLoaded"), ctx.gpu_model, ctx.parameter_registry, checkpoint_hp.checkpoint_path)) {
-        handleUnusableCheckpointRequest(
-            checkpoint_hp,
-            logger,
-            "loadLanguageModelCheckpoint() failed for requested checkpoint: " + checkpoint_hp.checkpoint_path);
-        return;
-    }
-
-    logger.log("✓ Loaded weights from checkpoint: " + checkpoint_hp.checkpoint_path);
-    ctx.loaded_checkpoint_path = checkpoint_hp.checkpoint_path;
+    handleUnusableCheckpointRequest(
+        execution_mode,
+        had_explicit_path,
+        logger,
+        last_reason.empty() ? "no usable checkpoint candidate" : last_reason);
 }
 
 void runSaveTestIfRequested(TrainingContext& ctx)
