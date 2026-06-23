@@ -331,7 +331,14 @@ GRIM::GeneratedSequence generateOneSequence(
     // is selectNextToken(verify_logits, context); the MTP drafts only decide
     // whether a verify row can be reused. draft_k == 0 collapses to plain decode.
     const bool use_mtp = mtp_hp.enabled && mtp_hp.k > 0;
-    const int draft_k = use_mtp ? mtp_hp.k : 0;
+    // Arg/option selector decode bridge: when enabled, a generated numeric-atom
+    // placeholder (<INT>/<FLOAT>) is bound to the candidate atom-entry the trained
+    // selector picks from this row's pool (prompt atoms). MTP speculation is
+    // disabled while the selector is active so each step has exactly one
+    // selector-logit row to resolve (selector + speculation is a future combo).
+    const bool use_selector =
+        GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "selector_enabled");
+    const int draft_k = (use_mtp && !use_selector) ? mtp_hp.k : 0;
 
     std::shared_ptr<GRIM::Batching::BatchDeviceStorage> inference_device_storage;
 
@@ -342,11 +349,16 @@ GRIM::GeneratedSequence generateOneSequence(
         int vocab = 0;
         std::vector<float> primary;            // [n_rows * vocab]
         std::vector<std::vector<float>> mtp;   // mtp[k] = [n_rows * vocab], k = 0..K-1
+        int num_pool_atoms = 0;                // candidate count for the selector rows
+        std::vector<float> selector;           // [n_rows * num_pool_atoms] (empty if no selector)
         const float* primaryRow(int i) const {
             return primary.data() + static_cast<size_t>(i) * static_cast<size_t>(vocab);
         }
         const float* mtpRow(int k, int i) const {
             return mtp[static_cast<size_t>(k)].data() + static_cast<size_t>(i) * static_cast<size_t>(vocab);
+        }
+        const float* selectorRow(int i) const {
+            return selector.data() + static_cast<size_t>(i) * static_cast<size_t>(num_pool_atoms);
         }
     };
 
@@ -354,7 +366,7 @@ GRIM::GeneratedSequence generateOneSequence(
     // appends this window's K/V to every layer's cache and advances cache_seqlens
     // by q_len. Returns the last n_tail rows of the primary logits (+ MTP heads).
     auto runCachedForward = [&](GRIM::Batching::BatchPayload& active_payload,
-                                int n_tail, bool want_mtp) -> TailLogits {
+                                int n_tail, bool want_mtp, bool want_selector) -> TailLogits {
         validateInferenceForwardPayload(model, active_payload, "generateOneSequence");
         const int q_len = active_payload.total_tokens;
         if (n_tail <= 0 || n_tail > q_len) {
@@ -382,6 +394,7 @@ GRIM::GeneratedSequence generateOneSequence(
         request.batch_idx = 0;
         request.kv_cache = &kv_cache;
         const bool emit_mtp_logits = want_mtp && use_mtp;
+        const bool emit_selector_logits = want_selector && use_selector;
         if (emit_mtp_logits) {
             request.mtp_heads = buildDetachedForwardMtpHeadViews(parameter_registry, mtp_hp, stream);
         }
@@ -389,7 +402,8 @@ GRIM::GeneratedSequence generateOneSequence(
             /*connect_parameter_graph=*/false,
             /*retain_backward_graph=*/false,
             /*enable_dropout=*/false,
-            /*emit_mtp_logits=*/emit_mtp_logits};
+            /*emit_mtp_logits=*/emit_mtp_logits,
+            /*emit_selector_logits=*/emit_selector_logits};
 
         auto forward_outputs = GRIM::Forward::executeModelForward(request, runtime_payload);
         InferenceForwardScope inference_forward_scope{forward_outputs};
@@ -441,6 +455,19 @@ GRIM::GeneratedSequence generateOneSequence(
                 }
             }
         }
+        if (emit_selector_logits && forward_outputs.selector_logits.data && bindings.num_pool_atoms > 0) {
+            tail.num_pool_atoms = bindings.num_pool_atoms;
+            const size_t sel_w = static_cast<size_t>(bindings.num_pool_atoms);
+            const size_t sel_tail_off = static_cast<size_t>(q_len - n_tail) * sel_w;
+            tail.selector.resize(static_cast<size_t>(n_tail) * sel_w);
+            cudaError_t scopy = cudaMemcpyAsync(
+                tail.selector.data(), forward_outputs.selector_logits.data + sel_tail_off,
+                static_cast<size_t>(n_tail) * sel_w * sizeof(float), cudaMemcpyDeviceToHost, stream);
+            if (scopy != cudaSuccess) {
+                throw std::runtime_error("generateOneSequence: cudaMemcpyAsync selector logits failed: " +
+                                         std::string(cudaGetErrorString(scopy)));
+            }
+        }
         cudaError_t sync_err = cudaStreamSynchronize(stream);
         if (sync_err != cudaSuccess) {
             throw std::runtime_error("generateOneSequence: cudaStreamSynchronize failed: " +
@@ -471,19 +498,48 @@ GRIM::GeneratedSequence generateOneSequence(
         return static_cast<int>(sequence.token_ids.size()) - prompt_len;
     };
 
-    // Commit one generated token to the output sequence (plain text; exec off).
-    auto commitToken = [&](const GRIM::Sampling::SampleResult& s) {
+    // Commit one generated token to the output sequence with explicit atom binding.
+    auto commitToken = [&](const GRIM::Sampling::SampleResult& s,
+                           float numeric_value, uint8_t atom_mask, uint32_t atom_entry_id) {
         sequence.token_ids.push_back(s.token_id);
         sequence.token_scores.push_back(s.log_probability);
-        sequence.token_numeric_values.push_back(0.0f);
-        sequence.token_atom_mask.push_back(0);
+        sequence.token_numeric_values.push_back(numeric_value);
+        sequence.token_atom_mask.push_back(atom_mask);
         sequence.token_to_slot_map.push_back(-1);
-        sequence.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
+        sequence.atom_entry_ids.push_back(atom_entry_id);
         sequence_atom_flags.push_back(0);
         sequence.score += s.log_probability;
         if (stream_callback) {
             (*stream_callback)(s.token_id, s.probability);
         }
+    };
+
+    // Commit a sampled token, binding the arg/option selector's choice when the
+    // token is a numeric-atom placeholder and the selector is active. The selector
+    // picks the highest-scoring candidate entry in this row's pool; its exact value
+    // and entry id are bound so decode() round-trips the chosen number. Non-atoms,
+    // and numeric atoms with no candidate pool, commit as plain text (numeric 0).
+    auto commitSampled = [&](const GRIM::Sampling::SampleResult& s, const TailLogits& tail, int row) {
+        const bool is_numeric_atom = token_layout.isAtom(s.token_id) &&
+            GRIM::Tokenizer::isNumericAtom(GRIM::Tokenizer::tokenIdToAtomType(s.token_id));
+        if (use_selector && is_numeric_atom && tail.num_pool_atoms > 0 &&
+            !tail.selector.empty() && prompt_atom_table) {
+            const float* sel_row = tail.selectorRow(row);
+            int best = 0;
+            float best_score = sel_row[0];
+            for (int e = 1; e < tail.num_pool_atoms; ++e) {
+                if (sel_row[e] > best_score) { best_score = sel_row[e]; best = e; }
+            }
+            // batch_size == 1 for inference: row_atom_offset[0] == 0, so the
+            // batch-global pool index equals the prompt table's row-local entry id.
+            const uint32_t entry_id = static_cast<uint32_t>(best);
+            const auto entry = prompt_atom_table->getAtom(entry_id);
+            if (entry.has_value()) {
+                commitToken(s, entry->numeric_value, /*atom_mask=*/1, entry_id);
+                return;
+            }
+        }
+        commitToken(s, 0.0f, /*atom_mask=*/0, GRIM::Tokenizer::kAtomEntryNone);
     };
 
     // Select the next token from a primary-logit row using the SAME pipeline +
@@ -511,7 +567,8 @@ GRIM::GeneratedSequence generateOneSequence(
     };
 
     // ── Prefill: populate the cache from the prompt; read the last position. ──
-    TailLogits prefill = runCachedForward(prompt_payload, /*n_tail=*/1, /*want_mtp=*/use_mtp);
+    TailLogits prefill = runCachedForward(prompt_payload, /*n_tail=*/1, /*want_mtp=*/use_mtp,
+                                          /*want_selector=*/use_selector);
 
     // MTP drafts for the tokens AFTER `pending`, taken from the MTP heads at a
     // chosen verify row. Head i (0-indexed) at a row predicts (that position)+i+2,
@@ -539,7 +596,7 @@ GRIM::GeneratedSequence generateOneSequence(
     // Its K/V is appended by the next cached forward as window position 0.
     {
         GRIM::Sampling::SampleResult first = selectFrom(prefill.primaryRow(0), committedNewTokens());
-        commitToken(first);
+        commitSampled(first, prefill, 0);
         if (first.token_id == cfg.eos_token_id && committedNewTokens() >= cfg.min_new_tokens) {
             finished = true;
         }
@@ -578,7 +635,8 @@ GRIM::GeneratedSequence generateOneSequence(
         }
 
         GRIM::Batching::BatchPayload verify_payload = buildDecodePayload(feed);
-        TailLogits tail = runCachedForward(verify_payload, /*n_tail=*/(1 + k_eff), /*want_mtp=*/use_mtp);
+        TailLogits tail = runCachedForward(verify_payload, /*n_tail=*/(1 + k_eff), /*want_mtp=*/use_mtp,
+                                           /*want_selector=*/use_selector);
 
         // Verify row j predicts the token after feed[j]. Commit
         // chosen_j = selectNextToken(row j, context); continue only while the draft
@@ -586,7 +644,7 @@ GRIM::GeneratedSequence generateOneSequence(
         int stop_j = k_eff;
         for (int j = 0; j <= k_eff; ++j) {
             GRIM::Sampling::SampleResult chosen = selectFrom(tail.primaryRow(j), committedNewTokens());
-            commitToken(chosen);
+            commitSampled(chosen, tail, j);
 
             if (chosen.token_id == cfg.eos_token_id && committedNewTokens() >= cfg.min_new_tokens) {
                 finished = true; stop_j = j; break;

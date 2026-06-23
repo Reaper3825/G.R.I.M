@@ -58,6 +58,10 @@ struct ModelForwardGraphPolicy {
     bool retain_backward_graph = false;
     bool enable_dropout = false;
     bool emit_mtp_logits = false;
+    // Arg/option selector head: when true, the forward encodes candidate atom-entry
+    // keys and emits ModelForwardOutputs::selector_logits [total_tokens, num_pool_atoms].
+    // Requires the NumberEncoder + selector to be enabled and a non-empty pool.
+    bool emit_selector_logits = false;
 };
 
 struct ModelForwardRequest {

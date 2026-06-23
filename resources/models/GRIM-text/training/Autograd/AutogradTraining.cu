@@ -17,6 +17,7 @@
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
+#include "../../Shared/TensorContract/GradFns/ArgSelectorCeGradFn.hpp"
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../../Shared/UnigramByte/Unigram.hpp"
 #include "../../Shared/Execution/ExecutionPayloadValidation.hpp"
@@ -455,6 +456,46 @@ LossResult computeAutogradLoss(
             mtp_alpha_effective,
             text_ce_loss
         );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 3. Arg/option selector auxiliary loss: L_total += α_sel * CE(select_logits, target_entry)
+    //
+    // Trains the selector to pick the correct candidate atom-entry ("option") at
+    // each position. Execution-INDEPENDENT: targets are the next atom's entry
+    // (data-derived). No-op unless selector_enabled and the forward emitted
+    // selector_logits with a non-empty candidate pool + supervised targets.
+    // ═══════════════════════════════════════════════════════════════════════════
+    const bool selector_enabled =
+        GRIM::HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "selector_enabled");
+    if (selector_enabled && forward_outputs.selector_logits.data &&
+        ctx.device_bindings->num_pool_atoms > 0 && ctx.device_bindings->d_arg_select_targets &&
+        payload.arg_select_valid_count > 0) {
+        const float selector_alpha =
+            GRIM::HyperParameters::snapshotTrainingConfigField<float>(*cfg, "selector_alpha");
+        if (selector_alpha > 0.0f) {
+            Tensor selector_loss_tensor = autograd::argSelectorLoss(
+                forward_outputs.selector_logits,
+                ctx.device_bindings->d_arg_select_targets,
+                total_tokens,
+                ctx.device_bindings->num_pool_atoms,
+                payload.arg_select_valid_count,
+                ctx.stream);
+
+            float selector_loss = 0.0f;
+            cudaMemcpyAsync(&selector_loss, selector_loss_tensor.data, sizeof(float),
+                            cudaMemcpyDeviceToHost, ctx.stream);
+            cudaStreamSynchronize(ctx.stream);
+            if (!std::isfinite(selector_loss)) {
+                throw std::runtime_error("computeAutogradLoss: selector loss is non-finite (" +
+                                         std::to_string(selector_loss) + ")");
+            }
+            AG_INFO("Selector CE: loss=" << selector_loss << " valid=" << payload.arg_select_valid_count
+                    << " candidates=" << ctx.device_bindings->num_pool_atoms << " alpha=" << selector_alpha);
+
+            Tensor scaled_selector = autograd::scale_scalar(selector_loss_tensor, selector_alpha, ctx.stream);
+            loss_state.loss_tensor = autograd::add(loss_state.loss_tensor, scaled_selector, ctx.stream);
+        }
     }
 
     float text_plus_mtp_loss = 0.0f;

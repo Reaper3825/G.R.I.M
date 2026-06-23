@@ -12,6 +12,7 @@
 #include "../../GRIM/grim_language_model_cuda.hpp"
 #include "../../Layers/Encoding/Encoding_GPU.hpp"
 #include "../../Layers/LMHead/lm_head_GPU.hpp"
+#include "../../Layers/ArgSelector/ArgSelector_GPU.hpp"
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 #include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
 #include "../InferenceState/KvCacheState_GPU.hpp"
@@ -203,6 +204,80 @@ void materializeForwardMtpLogits(
     }
 }
 
+// Arg/option selector head: encode candidate atom-entry keys (detached, from the
+// NumberEncoder) and score the live LM-head hidden state against this row's
+// candidate window. Emits ModelForwardOutputs::selector_logits [total_tokens,
+// num_pool_atoms]. W_q carries gradient only when the parameter graph is
+// connected (training); keys are always detached (NumberEncoder trains via the
+// input-side fusion). No-op when the pool is empty for this batch.
+void materializeForwardSelectorLogits(
+    const ModelForwardRequest& request,
+    const Batching::BatchPayload& payload,
+    ModelForwardOutputs& forward_outputs) {
+    forward_outputs.selector_logits = Tensor();
+    if (!request.graph.emit_selector_logits) {
+        return;
+    }
+
+    const int num_pool_atoms = request.bindings->num_pool_atoms;
+    if (num_pool_atoms <= 0) {
+        return;  // No candidate entries in this batch — nothing to select among.
+    }
+
+    const auto number_encoder_hp = HyperParameters::numberEncoderConstructionHP(*request.config);
+    if (!number_encoder_hp.enabled) {
+        throw std::runtime_error("executeModelForward: graph.emit_selector_logits=true requires the NumberEncoder to be enabled (candidate keys are NumberEncoder-derived)");
+    }
+    if (!request.bindings->d_pool_digit_values || !request.bindings->d_pool_digit_pow10_index ||
+        !request.bindings->d_pool_digit_mask || !request.bindings->d_pool_digit_slot_features ||
+        !request.bindings->d_pool_global_features || !request.bindings->d_row_atom_offset) {
+        throw std::runtime_error("executeModelForward: selector requested but candidate-pool device bindings are NULL");
+    }
+
+    Tensor* sel_input = forward_outputs.liveLmHeadInputOrNull();
+    if (!sel_input || !sel_input->data) {
+        throw std::runtime_error("executeModelForward: live LM-head input is NULL before selector materialization");
+    }
+
+    auto& ne = request.parameter_registry->requireNumberEncoderParameters("executeModelForward(selector)");
+    autograd::NumberEncoderForwardParams ne_params{};
+    ne_params.digit_emb = &ne.digit_emb;
+    ne_params.pow10_emb = &ne.pow10_emb;
+    ne_params.W_c1 = &ne.W_c1;
+    ne_params.b_c1 = &ne.b_c1;
+    ne_params.W_c2 = &ne.W_c2;
+    ne_params.W_g1 = &ne.W_g1;
+    ne_params.b_g1 = &ne.b_g1;
+    ne_params.W_g2 = &ne.W_g2;
+
+    Tensor keys = autograd::encodeAtomEntryPoolKeys(
+        ne_params, number_encoder_hp,
+        request.bindings->d_pool_digit_values,
+        request.bindings->d_pool_digit_pow10_index,
+        request.bindings->d_pool_digit_mask,
+        request.bindings->d_pool_digit_slot_features,
+        request.bindings->d_pool_global_features,
+        num_pool_atoms, request.stream);
+
+    auto& sel = request.parameter_registry->requireSelectorParameters("executeModelForward(selector)");
+    // Connected (training): score against the registered W_q leaf so gradient
+    // accumulates into the optimizer-visible buffer. Read-only (inference): a
+    // detached copy so no graph edges are retained.
+    Tensor W_q_detached;
+    const Tensor* W_q_ptr = &sel.W_q;
+    if (!request.graph.connect_parameter_graph) {
+        W_q_detached = sel.W_q.detach(request.stream);
+        W_q_ptr = &W_q_detached;
+    }
+
+    const int d_model = HyperParameters::snapshotTrainingConfigField<int>(*request.config, "d_model");
+    const float selector_scale = 1.0f / std::sqrt(static_cast<float>(d_model));
+
+    forward_outputs.selector_logits = ArgSelector::argSelectorForward(
+        *sel_input, *W_q_ptr, keys, payload,
+        request.bindings->d_row_atom_offset, num_pool_atoms, selector_scale, request.stream);
+}
+
 GRIM::FeedForwardParameterTensors detachFeedForwardParameters(
     const GRIM::FeedForwardParameterTensors& parameters,
     bool use_bias,
@@ -315,6 +390,17 @@ void ModelForwardRequest::validate(const char* caller) const {
         }
     } else if (!mtp_heads.empty()) {
         throw std::runtime_error(std::string(caller) + ": mtp_heads is non-empty while graph.emit_mtp_logits=false");
+    }
+    if (graph.emit_selector_logits) {
+        const bool selector_enabled = HyperParameters::snapshotTrainingConfigField<bool>(*config, "selector_enabled");
+        if (!selector_enabled) {
+            throw std::runtime_error(std::string(caller) + ": graph.emit_selector_logits=true while config.selector_enabled=false");
+        }
+        const bool number_encoder_enabled = HyperParameters::snapshotTrainingConfigField<bool>(*config, "number_encoder_enabled");
+        if (!number_encoder_enabled) {
+            throw std::runtime_error(std::string(caller) + ": graph.emit_selector_logits=true requires number_encoder_enabled=true (selector keys are NumberEncoder-derived)");
+        }
+        (void)parameter_registry->requireSelectorParameters(caller);
     }
     if (kv_cache) {
         if (graph.connect_parameter_graph || graph.retain_backward_graph) {
@@ -831,7 +917,8 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     }
 
     materializeForwardMtpLogits(request, payload, forward_outputs);
- 
+    materializeForwardSelectorLogits(request, payload, forward_outputs);
+
     if constexpr (GRIM::VerboseLogging::ENABLE_EXPENSIVE_DIAGNOSTICS) {
         constexpr int kSamplePositions = 1024;
         const int sample_size = std::min(kSamplePositions, total_tokens);

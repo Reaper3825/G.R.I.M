@@ -354,6 +354,69 @@ BatchDeviceBindings uploadBatchToDevice(
         BATCH_UPLOAD_CUDA_CHECK(cudaStreamSynchronize(stream));
     }
 
+    // Candidate atom-entry pool (arg/option selector). row_atom_offset is uploaded
+    // whenever the pool storage exists (NumberEncoder enabled), even for batches
+    // with zero atoms (empty windows); values/types only when the pool is non-empty.
+    float* cached_pool_values_ptr = nullptr;
+    int*   cached_pool_types_ptr = nullptr;
+    int*   cached_row_atom_offset_ptr = nullptr;
+    int*   cached_pool_digit_values_ptr = nullptr;
+    int*   cached_pool_digit_pow10_ptr = nullptr;
+    float* cached_pool_digit_mask_ptr = nullptr;
+    float* cached_pool_digit_slot_features_ptr = nullptr;
+    float* cached_pool_global_features_ptr = nullptr;
+    int*   cached_arg_select_targets_ptr = nullptr;
+    if (storage.pool_numeric_values_tensor.data && !payload.row_atom_offset.empty()) {
+        cached_pool_values_ptr = storage.pool_numeric_values_tensor.data;
+        cached_pool_types_ptr = reinterpret_cast<int*>(storage.pool_atom_types_tensor.data);
+        cached_row_atom_offset_ptr = reinterpret_cast<int*>(storage.row_atom_offset_tensor.data);
+        BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+            cached_row_atom_offset_ptr, payload.row_atom_offset.data(),
+            payload.row_atom_offset.size() * sizeof(int),
+            cudaMemcpyHostToDevice, stream));
+        if (storage.arg_select_targets_tensor.data && !payload.arg_select_targets.empty()) {
+            cached_arg_select_targets_ptr = reinterpret_cast<int*>(storage.arg_select_targets_tensor.data);
+            BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+                cached_arg_select_targets_ptr, payload.arg_select_targets.data(),
+                payload.arg_select_targets.size() * sizeof(int),
+                cudaMemcpyHostToDevice, stream));
+        }
+        if (payload.num_pool_atoms > 0) {
+            BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+                cached_pool_values_ptr, payload.pool_numeric_values.data(),
+                payload.pool_numeric_values.size() * sizeof(float),
+                cudaMemcpyHostToDevice, stream));
+            BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+                cached_pool_types_ptr, payload.pool_atom_types.data(),
+                payload.pool_atom_types.size() * sizeof(int),
+                cudaMemcpyHostToDevice, stream));
+            // Per-entry NumberEncoder feature channels (selector key encoding).
+            if (!payload.pool_digit_values.empty() && storage.pool_digit_values_tensor.data) {
+                cached_pool_digit_values_ptr = reinterpret_cast<int*>(storage.pool_digit_values_tensor.data);
+                cached_pool_digit_pow10_ptr = reinterpret_cast<int*>(storage.pool_digit_pow10_index_tensor.data);
+                cached_pool_digit_mask_ptr = storage.pool_digit_mask_tensor.data;
+                cached_pool_digit_slot_features_ptr = storage.pool_digit_slot_features_tensor.data;
+                cached_pool_global_features_ptr = storage.pool_global_features_tensor.data;
+                BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+                    cached_pool_digit_values_ptr, payload.pool_digit_values.data(),
+                    payload.pool_digit_values.size() * sizeof(int), cudaMemcpyHostToDevice, stream));
+                BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+                    cached_pool_digit_pow10_ptr, payload.pool_digit_pow10_index.data(),
+                    payload.pool_digit_pow10_index.size() * sizeof(int), cudaMemcpyHostToDevice, stream));
+                BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+                    cached_pool_digit_mask_ptr, payload.pool_digit_mask.data(),
+                    payload.pool_digit_mask.size() * sizeof(float), cudaMemcpyHostToDevice, stream));
+                BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+                    cached_pool_digit_slot_features_ptr, payload.pool_digit_slot_features.data(),
+                    payload.pool_digit_slot_features.size() * sizeof(float), cudaMemcpyHostToDevice, stream));
+                BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+                    cached_pool_global_features_ptr, payload.pool_global_features.data(),
+                    payload.pool_global_features.size() * sizeof(float), cudaMemcpyHostToDevice, stream));
+            }
+        }
+        BATCH_UPLOAD_CUDA_CHECK(cudaStreamSynchronize(stream));
+    }
+
     auto copy_end = std::chrono::high_resolution_clock::now();
     auto copy_ms = std::chrono::duration<double, std::milli>(copy_end - copy_start).count();
     if constexpr (VerboseLogging::ENABLE_VOCAB_TIMING_LOGS) {
@@ -382,6 +445,16 @@ BatchDeviceBindings uploadBatchToDevice(
     bindings.d_atom_digit_mask          = cached_atom_digit_mask_ptr;
     bindings.d_atom_digit_slot_features = cached_atom_digit_slot_features_ptr;
     bindings.d_atom_global_features     = cached_atom_global_features_ptr;
+    bindings.d_pool_numeric_values = (payload.num_pool_atoms > 0) ? cached_pool_values_ptr : nullptr;
+    bindings.d_pool_atom_types     = (payload.num_pool_atoms > 0) ? cached_pool_types_ptr : nullptr;
+    bindings.d_row_atom_offset     = cached_row_atom_offset_ptr;
+    bindings.num_pool_atoms        = payload.num_pool_atoms;
+    bindings.d_pool_digit_values        = cached_pool_digit_values_ptr;
+    bindings.d_pool_digit_pow10_index   = cached_pool_digit_pow10_ptr;
+    bindings.d_pool_digit_mask          = cached_pool_digit_mask_ptr;
+    bindings.d_pool_digit_slot_features = cached_pool_digit_slot_features_ptr;
+    bindings.d_pool_global_features     = cached_pool_global_features_ptr;
+    bindings.d_arg_select_targets       = cached_arg_select_targets_ptr;
     return bindings;
 }
 
@@ -498,6 +571,42 @@ std::shared_ptr<BatchDeviceStorage> createBatchDeviceStorage(
             false,
             stream,
             "batch_atom_global_features");
+
+        // Candidate atom-entry pool (arg/option selector). Pool capacity is
+        // max_tokens (every token could be an atom); row_atom_offset is batch+1.
+        storage->pool_numeric_values_tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, max_tokens),
+            false,
+            stream,
+            "batch_pool_numeric_values");
+        storage->pool_atom_types_tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, max_tokens),
+            false,
+            stream,
+            "batch_pool_atom_types");
+        storage->row_atom_offset_tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, storage->batch_size_capacity + 1),
+            false,
+            stream,
+            "batch_row_atom_offset");
+        storage->pool_digit_values_tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, slot_capacity),
+            false, stream, "batch_pool_digit_values");
+        storage->pool_digit_pow10_index_tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, slot_capacity),
+            false, stream, "batch_pool_digit_pow10_index");
+        storage->pool_digit_mask_tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, slot_capacity),
+            false, stream, "batch_pool_digit_mask");
+        storage->pool_digit_slot_features_tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, slot_capacity * BatchPayload::kNumberSlotFeatureDim),
+            false, stream, "batch_pool_digit_slot_features");
+        storage->pool_global_features_tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, max_tokens * BatchPayload::kNumberGlobalFeatureDim),
+            false, stream, "batch_pool_global_features");
+        storage->arg_select_targets_tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, max_tokens),
+            false, stream, "batch_arg_select_targets");
     }
 
     return storage;

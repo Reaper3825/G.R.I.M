@@ -66,6 +66,14 @@ struct NumberEncoderParameterTensors {
     Tensor W_g2;        // [d_hidden, d_model] global MLP out
 };
 
+// Arg/option selector head parameters (execution-INDEPENDENT). A single query
+// projection W_q maps encoder hidden states into the candidate-key space; the
+// selector scores W_q·h_t against the NumberEncoder-derived candidate keys.
+// Registered under ParamGroupType::ARG_SELECTOR (docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md).
+struct SelectorParameterTensors {
+    Tensor W_q;   // [d_model, d_model] query projection
+};
+
 struct ExecutionBlockParameterTensors {
     Tensor w_decode_1;
     Tensor b_decode_1;
@@ -131,6 +139,7 @@ struct StartupParameterRegistry {
     std::unique_ptr<GRIM::LMHeadParameterTensors> lm_head_parameters;
     std::vector<GRIM::EncodingLayerParameterTensors> encoding_layer_parameter_tensors;
     std::unique_ptr<GRIM::NumberEncoderParameterTensors> number_encoder_parameters;
+    std::unique_ptr<GRIM::SelectorParameterTensors> selector_parameters;
     std::unique_ptr<GRIM::ExecutionBlockParameterTensors> execution_block_parameters;
     std::vector<GRIM::FeedForwardParameterTensors> feed_forward_parameter_tensors;
     std::vector<GRIM::MtpHeadParameterTensors> mtp_head_parameter_tensors;
@@ -240,6 +249,23 @@ struct StartupParameterRegistry {
         return *number_encoder_parameters;
     }
 
+    GRIM::SelectorParameterTensors* getSelectorParameters() { return selector_parameters.get(); }
+    const GRIM::SelectorParameterTensors* getSelectorParameters() const { return selector_parameters.get(); }
+
+    GRIM::SelectorParameterTensors& requireSelectorParameters(const char* caller) {
+        if (!selector_parameters) {
+            throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.selector_parameters is NULL");
+        }
+        return *selector_parameters;
+    }
+
+    const GRIM::SelectorParameterTensors& requireSelectorParameters(const char* caller) const {
+        if (!selector_parameters) {
+            throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.selector_parameters is NULL");
+        }
+        return *selector_parameters;
+    }
+
     GRIM::ExecutionBlockParameterTensors& requireExecutionBlockParameters(const char* caller) {
         if (!execution_block_parameters) {
             throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.execution_block_parameters is NULL");
@@ -326,6 +352,9 @@ using ExecutionBlockTensorParameterSpec =
 using NumberEncoderTensorParameterSpec =
     TensorParameterSpec<GRIM::NumberEncoderParameterTensors>;
 
+using SelectorTensorParameterSpec =
+    TensorParameterSpec<GRIM::SelectorParameterTensors>;
+
 using EncodingLayerTensorParameterSpec =
     TensorParameterSpec<GRIM::EncodingLayerParameterTensors>;
 
@@ -362,6 +391,12 @@ inline constexpr std::array<NumberEncoderTensorParameterSpec, 8>
          GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
         {"number_encoder_W_g2", &GRIM::NumberEncoderParameterTensors::W_g2,
          GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
+    }};
+
+inline constexpr std::array<SelectorTensorParameterSpec, 1>
+    kSelectorTensorParameters = {{
+        {"selector_W_q", &GRIM::SelectorParameterTensors::W_q,
+         GRIM::ParamGroupType::ARG_SELECTOR, GRIM::ParamStatsBucket::ENCODER},
     }};
 
 inline constexpr std::array<ExecutionBlockTensorParameterSpec, 30>
@@ -501,6 +536,19 @@ inline void registerNumberEncoderParameters(
     for (const auto& spec : kNumberEncoderTensorParameters) {
         registrar.addTensor(spec.name,
                             number_encoder_parameters.*(spec.tensor_member),
+                            spec.type,
+                            spec.stats_bucket,
+                            spec.layer);
+    }
+}
+
+template <typename RegistrarT>
+inline void registerSelectorParameters(
+    GRIM::SelectorParameterTensors& selector_parameters,
+    RegistrarT& registrar) {
+    for (const auto& spec : kSelectorTensorParameters) {
+        registrar.addTensor(spec.name,
+                            selector_parameters.*(spec.tensor_member),
                             spec.type,
                             spec.stats_bucket,
                             spec.layer);

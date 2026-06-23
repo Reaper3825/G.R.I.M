@@ -233,6 +233,31 @@ bool validate_checkpoint_capabilities(
         if (!ok) return false;
     }
 
+    // ─── Arg/option selector ───
+    if (req.requires_arg_selector) {
+        const auto* fb_sel = model_fb->arg_selector();
+        if (!fb_sel) {
+            Logging::EmitModuleError(kLogModule, "[load] FATAL: ArgSelector required but missing in checkpoint");
+            return false;
+        }
+        const auto& sel = load_req.arg_selector;
+        const auto* w_q_src = fb_sel->w_q_data();
+        if (!w_q_src) {
+            Logging::EmitModuleError(kLogModule, "[load] FATAL: missing required ArgSelector field: W_q");
+            return false;
+        }
+        if (!sel.W_q.ptr) {
+            Logging::EmitModuleError(kLogModule, "[load] FATAL: null model destination for ArgSelector field: W_q");
+            return false;
+        }
+        if (static_cast<std::size_t>(w_q_src->size()) != sel.W_q.count) {
+            Logging::EmitModuleError(kLogModule,
+                Msg("[load] FATAL: ArgSelector field W_q size mismatch: checkpoint=",
+                    w_q_src->size(), " model_numel=", sel.W_q.count));
+            return false;
+        }
+    }
+
     // ─── ExecutionBlock ───
     if (req.requires_execution_block) {
         const auto* fb_eb = model_fb->execution_block();

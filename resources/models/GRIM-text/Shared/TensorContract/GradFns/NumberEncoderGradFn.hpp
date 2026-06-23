@@ -127,5 +127,27 @@ Tensor number_encode(const NumberEncoderForwardParams& params,
                      const Batching::BatchDeviceBindings& bindings,
                      cudaStream_t stream);
 
+/**
+ * encodeAtomEntryPoolKeys — dense per-entry selector key encoding (forward-only).
+ *
+ * Encodes every candidate atom-entry in the batch pool into a [num_pool_atoms,
+ * d_model] key tensor using the SAME NumberEncoder weights/math as number_encode,
+ * so a number's selector key matches its input representation. The result is
+ * DETACHED (requires_grad=false, no grad_fn): the NumberEncoder trains from the
+ * input-side fusion; the arg/option selector consumes these keys as a fixed
+ * per-step candidate representation. Feature channels come from the candidate-pool
+ * bindings (BatchDeviceBindings::d_pool_digit_*).
+ */
+Tensor encodeAtomEntryPoolKeys(
+    const NumberEncoderForwardParams& params,
+    const HyperParameters::NumberEncoderConstructionHP& hp,
+    const int* d_pool_digit_values,
+    const int* d_pool_digit_pow10_index,
+    const float* d_pool_digit_mask,
+    const float* d_pool_digit_slot_features,
+    const float* d_pool_global_features,
+    int num_pool_atoms,
+    cudaStream_t stream);
+
 }  // namespace autograd
 }  // namespace GRIM

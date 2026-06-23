@@ -86,6 +86,13 @@ void initializeNumberEncoderParameterTensors(
     std::uint64_t weight_init_seed,
     cudaStream_t init_stream);
 
+void initializeSelectorParameterTensors(
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    bool selector_enabled,
+    int d_model,
+    std::uint64_t weight_init_seed,
+    cudaStream_t init_stream);
+
 void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,
                           GRIMText::Training::Startup::GpuModelState& gpu_model_state,
                           ::ParameterRegistry::StartupParameterRegistry& parameter_registry);

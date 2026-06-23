@@ -144,6 +144,81 @@ void materializeAuthoredAtomFacts(
 //   - digit pow10 outside the configured ±max_abs_pow10 bucket range -> throw
 // Padding digit slots are mask=0 and contribute exactly zero downstream.
 // =============================================================================
+// Shared per-entry NumberEncoder feature fill. Used by BOTH the per-token input
+// channels (materializeNumberEncoderChannels) and the candidate-pool key channels
+// (materializeAtomEntryPool), so a candidate entry's selector key is encoded from
+// the IDENTICAL features as the same number seen on the input side. Validates the
+// numeric atom and writes digit/pow10/slot/global features at flat index `idx`
+// (idx = per-token atom index or per-pool entry index). `err_context` is the
+// caller-built message prefix used in all fail-loud throws.
+void fillNumberEncoderEntryFeatures(
+    const GRIM::Tokenizer::AtomEntry& entry,
+    std::size_t idx,
+    int digit_slots,
+    int max_abs_pow10,
+    std::vector<int>& digit_values,
+    std::vector<int>& pow10_index,
+    std::vector<float>& digit_mask,
+    std::vector<float>& slot_features,
+    std::vector<float>& global_features,
+    const std::string& err_context)
+{
+    if (!GRIM::Tokenizer::isNumericAtom(entry.type)) {
+        throw std::runtime_error(err_context + " is not a numeric atom type");
+    }
+    if (!entry.arg_number.has_value()) {
+        throw std::runtime_error(err_context + " is missing required arg_number metadata");
+    }
+    const GRIM::Tokenizer::AtomNumber& number = *entry.arg_number;
+    const std::size_t slots = static_cast<std::size_t>(digit_slots);
+    const std::size_t digit_count = number.digits.size();
+    if (digit_count == 0) {
+        throw std::runtime_error(err_context + " has zero mantissa digit bindings");
+    }
+    if (digit_count > slots) {
+        throw std::runtime_error(err_context + " has " + std::to_string(digit_count) +
+            " mantissa digits exceeding number_encoder_max_digit_slots=" + std::to_string(digit_slots));
+    }
+    const float pow10_norm_scale = 1.0f / static_cast<float>(max_abs_pow10);
+    const float digit_count_norm_scale = 1.0f / static_cast<float>(digit_slots);
+    const float sign = number.sign_negative ? -1.0f : 1.0f;
+    const bool is_float_atom = entry.type == GRIM::Tokenizer::AtomType::ATOM_FLOAT;
+    const float is_float = is_float_atom ? 1.0f : 0.0f;
+    const std::size_t slot_base = idx * slots;
+    for (std::size_t i = 0; i < digit_count; ++i) {
+        const auto& binding = number.digits[i];
+        if (binding.digit > 9) {
+            throw std::runtime_error(err_context + " digit[" + std::to_string(i) + "]=" +
+                std::to_string(binding.digit) + " is not a base-10 digit");
+        }
+        const int pow10 = static_cast<int>(binding.pow10);
+        if (pow10 < -max_abs_pow10 || pow10 > max_abs_pow10) {
+            throw std::runtime_error(err_context + " digit[" + std::to_string(i) + "] pow10=" +
+                std::to_string(pow10) + " outside configured number_encoder_max_abs_pow10=±" +
+                std::to_string(max_abs_pow10));
+        }
+        const std::size_t slot = slot_base + i;
+        digit_values[slot] = static_cast<int>(binding.digit);
+        pow10_index[slot] = pow10 + max_abs_pow10;  // bucket [0, 2*max]
+        digit_mask[slot] = 1.0f;
+        float* feat = slot_features.data() +
+                      slot * static_cast<std::size_t>(BatchPayload::kNumberSlotFeatureDim);
+        feat[0] = static_cast<float>(binding.digit) / 9.0f;
+        feat[1] = static_cast<float>(pow10) * pow10_norm_scale;
+        feat[2] = binding.digit == 0 ? 1.0f : 0.0f;
+        feat[3] = sign;
+        feat[4] = is_float;
+    }
+    float* gfeat = global_features.data() +
+                   idx * static_cast<std::size_t>(BatchPayload::kNumberGlobalFeatureDim);
+    gfeat[0] = sign;
+    gfeat[1] = static_cast<float>(number.exponent_value) * pow10_norm_scale;
+    gfeat[2] = static_cast<float>(number.integer_digit_count) * digit_count_norm_scale;
+    gfeat[3] = static_cast<float>(number.fractional_digit_count) * digit_count_norm_scale;
+    gfeat[4] = number.has_decimal_point ? 1.0f : 0.0f;
+    gfeat[5] = is_float;
+}
+
 void materializeNumberEncoderChannels(
     BatchPayload& payload,
     int digit_slots,
@@ -182,9 +257,6 @@ void materializeNumberEncoderChannels(
     payload.atom_global_features.assign(
         atoms * static_cast<std::size_t>(BatchPayload::kNumberGlobalFeatureDim), 0.0f);
 
-    const float pow10_norm_scale = 1.0f / static_cast<float>(max_abs_pow10);
-    const float digit_count_norm_scale = 1.0f / static_cast<float>(digit_slots);
-
     for (std::size_t atom_idx = 0; atom_idx < atoms; ++atom_idx) {
         const int token_pos = payload.atom_positions[atom_idx];
         const int row = token_pos / payload.max_seq_len;
@@ -214,81 +286,198 @@ void materializeNumberEncoderChannels(
                 std::string(caller) + ": number-encoder atom_entry_id=" + std::to_string(entry_id) +
                 " at token_pos=" + std::to_string(token_pos) + " is not retrievable from its AtomTable");
         }
-        if (!GRIM::Tokenizer::isNumericAtom(entry->type)) {
-            throw std::runtime_error(
-                std::string(caller) + ": number-encoder atom_entry_id=" +
-                std::to_string(entry_id) + " at token_pos=" + std::to_string(token_pos) +
-                " is not a numeric atom type");
-        }
-        if (!entry->arg_number.has_value()) {
-            throw std::runtime_error(
-                std::string(caller) + ": number-encoder atom_entry_id=" +
-                std::to_string(entry_id) + " at token_pos=" + std::to_string(token_pos) +
-                " is missing required arg_number metadata");
-        }
+        fillNumberEncoderEntryFeatures(
+            *entry, atom_idx, digit_slots, max_abs_pow10,
+            payload.atom_digit_values, payload.atom_digit_pow10_index,
+            payload.atom_digit_mask, payload.atom_digit_slot_features,
+            payload.atom_global_features,
+            std::string(caller) + ": number-encoder atom_entry_id=" +
+            std::to_string(entry_id) + " at token_pos=" + std::to_string(token_pos));
+    }
+}
 
-        const GRIM::Tokenizer::AtomNumber& number = *entry->arg_number;
-        const std::size_t digit_count = number.digits.size();
-        if (digit_count == 0) {
-            throw std::runtime_error(
-                std::string(caller) + ": number-encoder atom_entry_id=" +
-                std::to_string(entry_id) + " at token_pos=" + std::to_string(token_pos) +
-                " has zero mantissa digit bindings");
-        }
-        if (digit_count > slots) {
-            throw std::runtime_error(
-                std::string(caller) + ": number-encoder atom_entry_id=" +
-                std::to_string(entry_id) + " at token_pos=" + std::to_string(token_pos) +
-                " has " + std::to_string(digit_count) +
-                " mantissa digits exceeding number_encoder_max_digit_slots=" +
-                std::to_string(digit_slots));
-        }
+// =============================================================================
+// materializeAtomEntryPool — candidate "menu" for the arg/option selector.
+//
+// Merges every batch row's AtomTable entries into one batch-global pool with
+// per-row windows (row_atom_offset), so the device selector can score candidate
+// options. Execution-INDEPENDENT: the pool is built purely from authored
+// AtomTable data, never from ExecutionMemory (GRIM/Docs/DeletedCode.md).
+//
+// Gated on number_encoder_digit_slots > 0 (the selector requires the
+// NumberEncoder), so when the NumberEncoder is disabled this is a no-op and there
+// is ZERO behavior change to existing training. Must be called AFTER
+// materializeNumberEncoderChannels (which sets number_encoder_digit_slots) and
+// after atom side-channels / seq_atom_tables are assembled.
+//
+// Each row r enumerates its entries in id order 0..size-1, so a token's batch-
+// global pool index is row_atom_offset[row] + <row-local atom_entry_id>. A
+// fail-loud agreement check confirms the exact pool agrees with the legacy float
+// lane (numeric_values) and the token's atom type before any consumer relies on
+// it (transitional, per docs/ATOM_PLACEHOLDER_SELECTOR_INFERENCE_PLAN.md Phase 1).
+// =============================================================================
+void materializeAtomEntryPool(
+    BatchPayload& payload,
+    int max_abs_pow10,
+    const char* caller)
+{
+    payload.num_pool_atoms = 0;
+    payload.row_atom_offset.clear();
+    payload.pool_numeric_values.clear();
+    payload.pool_atom_types.clear();
+    payload.pool_digit_values.clear();
+    payload.pool_digit_pow10_index.clear();
+    payload.pool_digit_mask.clear();
+    payload.pool_digit_slot_features.clear();
+    payload.pool_global_features.clear();
+    payload.arg_select_targets.clear();
+    payload.arg_select_valid_count = 0;
 
-        const float sign = number.sign_negative ? -1.0f : 1.0f;
-        const bool is_float_atom = entry->type == GRIM::Tokenizer::AtomType::ATOM_FLOAT;
-        const float is_float = is_float_atom ? 1.0f : 0.0f;
+    const int digit_slots = payload.number_encoder_digit_slots;
+    if (digit_slots <= 0) {
+        return;  // Selector/NumberEncoder disabled — pool stays empty (no-op).
+    }
+    if (max_abs_pow10 <= 0) {
+        throw std::runtime_error(
+            std::string(caller) + ": atom-entry pool requires max_abs_pow10 > 0 when number_encoder is enabled");
+    }
+    if (!payload.ownsHostInputData()) {
+        throw std::runtime_error(
+            std::string(caller) + ": atom-entry pool requested for a payload mode (" +
+            payload.modeName() + ") that owns no host input data");
+    }
+    if (static_cast<int>(payload.seq_atom_tables.size()) != payload.batch_size) {
+        throw std::runtime_error(
+            std::string(caller) + ": seq_atom_tables.size()=" +
+            std::to_string(payload.seq_atom_tables.size()) + " != batch_size=" +
+            std::to_string(payload.batch_size) + " while building the atom-entry pool");
+    }
 
-        const std::size_t slot_base = atom_idx * slots;
-        for (std::size_t i = 0; i < digit_count; ++i) {
-            const auto& binding = number.digits[i];
-            if (binding.digit > 9) {
+    // Pass 1: per-row windows + total entry count.
+    payload.row_atom_offset.assign(static_cast<std::size_t>(payload.batch_size) + 1, 0);
+    for (int row = 0; row < payload.batch_size; ++row) {
+        const auto& atom_table = payload.seq_atom_tables[static_cast<std::size_t>(row)];
+        const int row_entries = atom_table ? static_cast<int>(atom_table->size()) : 0;
+        payload.row_atom_offset[static_cast<std::size_t>(row) + 1] =
+            payload.row_atom_offset[static_cast<std::size_t>(row)] + row_entries;
+    }
+    const int total_entries = payload.row_atom_offset.back();
+    payload.num_pool_atoms = total_entries;
+
+    const std::size_t E = static_cast<std::size_t>(total_entries);
+    const std::size_t S = static_cast<std::size_t>(digit_slots);
+    payload.pool_numeric_values.assign(E, 0.0f);
+    payload.pool_atom_types.assign(E, 0);
+    payload.pool_digit_values.assign(E * S, 0);
+    payload.pool_digit_pow10_index.assign(E * S, 0);
+    payload.pool_digit_mask.assign(E * S, 0.0f);
+    payload.pool_digit_slot_features.assign(
+        E * S * static_cast<std::size_t>(BatchPayload::kNumberSlotFeatureDim), 0.0f);
+    payload.pool_global_features.assign(
+        E * static_cast<std::size_t>(BatchPayload::kNumberGlobalFeatureDim), 0.0f);
+
+    // Pass 2: per-entry value/type + selector-key features (numeric entries only;
+    // non-numeric entries keep zero features / mask). Keys are encoded from the
+    // SAME features as the input side via the shared helper.
+    for (int row = 0; row < payload.batch_size; ++row) {
+        const auto& atom_table = payload.seq_atom_tables[static_cast<std::size_t>(row)];
+        const int row_entries = atom_table ? static_cast<int>(atom_table->size()) : 0;
+        const int base = payload.row_atom_offset[static_cast<std::size_t>(row)];
+        for (uint32_t entry_id = 0; entry_id < static_cast<uint32_t>(row_entries); ++entry_id) {
+            const auto entry = atom_table->getAtom(entry_id);
+            if (!entry.has_value()) {
                 throw std::runtime_error(
-                    std::string(caller) + ": number-encoder atom_entry_id=" +
-                    std::to_string(entry_id) + " at token_pos=" + std::to_string(token_pos) +
-                    " digit[" + std::to_string(i) + "]=" +
-                    std::to_string(binding.digit) + " is not a base-10 digit");
+                    std::string(caller) + ": atom-entry pool row " + std::to_string(row) +
+                    " entry id " + std::to_string(entry_id) +
+                    " not retrievable (entry ids must be contiguous 0..size-1)");
             }
-            const int pow10 = static_cast<int>(binding.pow10);
-            if (pow10 < -max_abs_pow10 || pow10 > max_abs_pow10) {
-                throw std::runtime_error(
-                    std::string(caller) + ": number-encoder atom_entry_id=" +
-                    std::to_string(entry_id) + " at token_pos=" + std::to_string(token_pos) +
-                    " digit[" + std::to_string(i) + "] pow10=" + std::to_string(pow10) +
-                    " outside configured number_encoder_max_abs_pow10=±" +
-                    std::to_string(max_abs_pow10));
+            const std::size_t pool_idx = static_cast<std::size_t>(base) + entry_id;
+            payload.pool_numeric_values[pool_idx] = entry->numeric_value;
+            payload.pool_atom_types[pool_idx] = static_cast<int>(entry->type);
+            if (GRIM::Tokenizer::isNumericAtom(entry->type)) {
+                fillNumberEncoderEntryFeatures(
+                    *entry, pool_idx, digit_slots, max_abs_pow10,
+                    payload.pool_digit_values, payload.pool_digit_pow10_index,
+                    payload.pool_digit_mask, payload.pool_digit_slot_features,
+                    payload.pool_global_features,
+                    std::string(caller) + ": atom-entry pool row " + std::to_string(row) +
+                    " entry " + std::to_string(entry_id));
             }
-            const std::size_t slot = slot_base + i;
-            payload.atom_digit_values[slot] = static_cast<int>(binding.digit);
-            payload.atom_digit_pow10_index[slot] = pow10 + max_abs_pow10;  // bucket [0, 2*max]
-            payload.atom_digit_mask[slot] = 1.0f;
-
-            float* feat = payload.atom_digit_slot_features.data() +
-                          slot * static_cast<std::size_t>(BatchPayload::kNumberSlotFeatureDim);
-            feat[0] = static_cast<float>(binding.digit) / 9.0f;
-            feat[1] = static_cast<float>(pow10) * pow10_norm_scale;
-            feat[2] = binding.digit == 0 ? 1.0f : 0.0f;
-            feat[3] = sign;
-            feat[4] = is_float;
         }
+    }
 
-        float* gfeat = payload.atom_global_features.data() +
-                       atom_idx * static_cast<std::size_t>(BatchPayload::kNumberGlobalFeatureDim);
-        gfeat[0] = sign;
-        gfeat[1] = static_cast<float>(number.exponent_value) * pow10_norm_scale;
-        gfeat[2] = static_cast<float>(number.integer_digit_count) * digit_count_norm_scale;
-        gfeat[3] = static_cast<float>(number.fractional_digit_count) * digit_count_norm_scale;
-        gfeat[4] = number.has_decimal_point ? 1.0f : 0.0f;
-        gfeat[5] = is_float;
+    // Fail-loud agreement: every atom token's batch-global pool index must resolve
+    // to the same value (float-exact, same source) and atom type.
+    for (int token_pos = 0; token_pos < payload.total_tokens; ++token_pos) {
+        if (payload.atom_mask[static_cast<std::size_t>(token_pos)] == 0) {
+            continue;
+        }
+        const int row = token_pos / payload.max_seq_len;
+        if (row < 0 || row >= payload.batch_size) {
+            throw std::runtime_error(
+                std::string(caller) + ": atom token_pos=" + std::to_string(token_pos) +
+                " resolves to row " + std::to_string(row) + " out of range");
+        }
+        const uint32_t entry_id = payload.atom_entry_ids[static_cast<std::size_t>(token_pos)];
+        const int pool_index = payload.row_atom_offset[static_cast<std::size_t>(row)] +
+                               static_cast<int>(entry_id);
+        if (entry_id == GRIM::Tokenizer::kAtomEntryNone ||
+            pool_index < payload.row_atom_offset[static_cast<std::size_t>(row)] ||
+            pool_index >= payload.row_atom_offset[static_cast<std::size_t>(row) + 1]) {
+            throw std::runtime_error(
+                std::string(caller) + ": atom token_pos=" + std::to_string(token_pos) +
+                " entry_id=" + std::to_string(entry_id) +
+                " falls outside row " + std::to_string(row) + " pool window [" +
+                std::to_string(payload.row_atom_offset[static_cast<std::size_t>(row)]) + ", " +
+                std::to_string(payload.row_atom_offset[static_cast<std::size_t>(row) + 1]) + ")");
+        }
+        if (payload.pool_numeric_values[static_cast<std::size_t>(pool_index)] !=
+            payload.numeric_values[static_cast<std::size_t>(token_pos)]) {
+            throw std::runtime_error(
+                std::string(caller) + ": atom-entry pool value disagreement at token_pos=" +
+                std::to_string(token_pos) + " (pool=" +
+                std::to_string(payload.pool_numeric_values[static_cast<std::size_t>(pool_index)]) +
+                " vs numeric_values=" +
+                std::to_string(payload.numeric_values[static_cast<std::size_t>(token_pos)]) + ")");
+        }
+        const int token_type = static_cast<int>(
+            GRIM::Tokenizer::tokenIdToAtomType(payload.input_ids[static_cast<std::size_t>(token_pos)]));
+        if (payload.pool_atom_types[static_cast<std::size_t>(pool_index)] != token_type) {
+            throw std::runtime_error(
+                std::string(caller) + ": atom-entry pool type disagreement at token_pos=" +
+                std::to_string(token_pos));
+        }
+    }
+
+    // ── Arg/option selector supervision: next-atom-entry targets. ───────────────
+    // At position t, the target is the batch-global pool index of token t+1's atom
+    // entry (when t+1 is an atom in the same row): "select the option that the next
+    // token turns out to be." Supervision only — never fed back as input at t.
+    payload.arg_select_targets.assign(static_cast<std::size_t>(payload.total_tokens), -1);
+    payload.arg_select_valid_count = 0;
+    for (int token_pos = 0; token_pos + 1 < payload.total_tokens; ++token_pos) {
+        const int next = token_pos + 1;
+        const int row = token_pos / payload.max_seq_len;
+        if (next / payload.max_seq_len != row) {
+            continue;  // next token belongs to a different batch row
+        }
+        if (payload.atom_mask[static_cast<std::size_t>(next)] == 0) {
+            continue;  // next token is not a selectable atom
+        }
+        const uint32_t local = payload.atom_entry_ids[static_cast<std::size_t>(next)];
+        if (local == GRIM::Tokenizer::kAtomEntryNone) {
+            continue;
+        }
+        const int global_idx =
+            payload.row_atom_offset[static_cast<std::size_t>(row)] + static_cast<int>(local);
+        if (global_idx < payload.row_atom_offset[static_cast<std::size_t>(row)] ||
+            global_idx >= payload.row_atom_offset[static_cast<std::size_t>(row) + 1]) {
+            throw std::runtime_error(
+                std::string(caller) + ": arg-select target for token_pos=" +
+                std::to_string(token_pos) + " resolves outside row " + std::to_string(row) + " window");
+        }
+        payload.arg_select_targets[static_cast<std::size_t>(token_pos)] = global_idx;
+        ++payload.arg_select_valid_count;
     }
 }
 
@@ -672,6 +861,7 @@ BatchPayload buildBatchPayload(
     materializeAuthoredAtomFacts(payload, "buildBatchPayload");
     materializeNumberEncoderChannels(
         payload, number_encoder_digit_slots, number_encoder_max_abs_pow10, "buildBatchPayload");
+    materializeAtomEntryPool(payload, number_encoder_max_abs_pow10, "buildBatchPayload");
 
     // ═════════════════════════════════════════════════════════════════════════
     // PHASE 4b: Execution-slot target masking
@@ -896,6 +1086,7 @@ BatchPayload buildInferenceBatchPayload(
     materializeAuthoredAtomFacts(payload, caller);
     materializeNumberEncoderChannels(
         payload, number_encoder_digit_slots, number_encoder_max_abs_pow10, caller);
+    materializeAtomEntryPool(payload, number_encoder_max_abs_pow10, caller);
 
     payload.validate(caller);
     return payload;

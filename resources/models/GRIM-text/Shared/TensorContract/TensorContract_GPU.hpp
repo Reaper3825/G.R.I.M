@@ -554,7 +554,8 @@ enum class ParamGroupType : uint8_t {
     MTP = 5,            ///< Multi-token prediction auxiliary heads (weight + bias per head)
     EXECUTION_BLOCK = 6,///< Execution block weights (decode MLP, arg/op/slot select, cross-attn)
     NUMBER_ENCODER = 7, ///< NumberEncoder digit-place numeric-meaning weights (digit/pow10 emb, contribution + global MLPs)
-    COUNT = 8           ///< Number of parameter group types
+    ARG_SELECTOR = 8,   ///< Arg/option selector head (query projection over candidate atom-entry keys); execution-independent
+    COUNT = 9           ///< Number of parameter group types
 };
 
 enum class ParamStatsBucket : uint8_t {

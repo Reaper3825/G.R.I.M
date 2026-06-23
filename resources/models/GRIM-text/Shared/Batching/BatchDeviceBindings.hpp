@@ -68,6 +68,28 @@ struct BatchDeviceBindings {
     float*    d_atom_digit_mask          = nullptr; // [atoms * digit_slots]
     float*    d_atom_digit_slot_features = nullptr; // [atoms * digit_slots * kNumberSlotFeatureDim]
     float*    d_atom_global_features     = nullptr; // [atoms * kNumberGlobalFeatureDim]
+
+    // Candidate atom-entry pool (arg/option selector). Batch-global "menu" of
+    // options the selector scores; row r's window is
+    // [d_row_atom_offset[r], d_row_atom_offset[r+1]). Nullable when the
+    // NumberEncoder/selector is disabled (num_pool_atoms == 0).
+    float*    d_pool_numeric_values = nullptr; // [num_pool_atoms]
+    int*      d_pool_atom_types     = nullptr; // [num_pool_atoms]
+    int*      d_row_atom_offset     = nullptr; // [batch_size + 1]
+    int       num_pool_atoms        = 0;
+
+    // Per-entry NumberEncoder feature channels for selector key encoding (compact,
+    // indexed by pool entry; E = num_pool_atoms, S = number_encoder_digit_slots).
+    // Nullable when the NumberEncoder/selector is disabled.
+    int*      d_pool_digit_values        = nullptr; // [E * S]
+    int*      d_pool_digit_pow10_index   = nullptr; // [E * S]
+    float*    d_pool_digit_mask          = nullptr; // [E * S]
+    float*    d_pool_digit_slot_features = nullptr; // [E * S * kNumberSlotFeatureDim]
+    float*    d_pool_global_features     = nullptr; // [E * kNumberGlobalFeatureDim]
+
+    // Arg/option selector supervision: per-token batch-global target pool index
+    // (or -1). Nullable when the selector/NumberEncoder is disabled.
+    int*      d_arg_select_targets = nullptr; // [total_tokens]
 };
 
 }  // namespace Batching

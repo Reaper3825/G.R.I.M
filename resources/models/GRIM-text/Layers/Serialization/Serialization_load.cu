@@ -541,6 +541,23 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
         Logging::EmitModuleInfo(kLogModule, "[load] NumberEncoder weights loaded");
     }
 
+    // ─── Arg/option selector (gated by requires_arg_selector) ───
+    if (req.requires_arg_selector) {
+        const auto* fb_sel = model_fb->arg_selector();
+        auto ul = [&](const flatbuffers::Vector<float>* src, const DeviceWriteView& dst, const char* name) -> bool {
+            if (!src) return false;
+            std::vector<float> buf(src->begin(), src->end());
+            return upload_device_vector(buf, dst, name);
+        };
+        const auto& sel = request.arg_selector;
+        if (!fb_sel || !ul(fb_sel->w_q_data(), sel.W_q, "SEL W_q")) {
+            Logging::EmitModuleError(kLogModule, "[load] FATAL: arg_selector required but missing/invalid in checkpoint");
+            return false;
+        }
+        request.report.arg_selector_loaded = true;
+        Logging::EmitModuleInfo(kLogModule, "[load] ArgSelector weights loaded");
+    }
+
     // ─── ExecutionBlock (gated by requires_execution_block) ───
     if (req.requires_execution_block) {
         const auto* fb_eb = model_fb->execution_block();
@@ -601,6 +618,10 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
     // ─── Step 7: Final load verification (safety) ───
     if (req.requires_number_encoder && !request.report.number_encoder_loaded) {
         Logging::EmitModuleError(kLogModule, "[load] FATAL: NumberEncoder required but not loaded");
+        return false;
+    }
+    if (req.requires_arg_selector && !request.report.arg_selector_loaded) {
+        Logging::EmitModuleError(kLogModule, "[load] FATAL: ArgSelector required but not loaded");
         return false;
     }
     if (req.requires_execution_block && !request.report.execution_block_loaded) {

@@ -59,6 +59,7 @@ size_t paramGroupTypeIndex(ParamGroupType type) {
         case ParamGroupType::MTP:             return 5;
         case ParamGroupType::EXECUTION_BLOCK: return 6;
         case ParamGroupType::NUMBER_ENCODER:  return 7;
+        case ParamGroupType::ARG_SELECTOR:    return 8;
         case ParamGroupType::COUNT: break;
     }
     throw std::runtime_error("[buildParameterGroups] invalid ParamGroupType::COUNT in registered group summary");
@@ -74,6 +75,7 @@ const char* paramGroupTypeSummaryName(ParamGroupType type) {
         case ParamGroupType::MTP:             return "mtp";
         case ParamGroupType::EXECUTION_BLOCK: return "execution_block";
         case ParamGroupType::NUMBER_ENCODER:  return "number_encoder";
+        case ParamGroupType::ARG_SELECTOR:    return "arg_selector";
         case ParamGroupType::COUNT: break;
     }
     throw std::runtime_error("[buildParameterGroups] invalid ParamGroupType::COUNT in registered group summary");
@@ -225,6 +227,7 @@ private:
             case ParamGroupType::MTP:             return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_mtp");
             case ParamGroupType::EXECUTION_BLOCK: return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_execution_block");
             case ParamGroupType::NUMBER_ENCODER:  return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_number_encoder");
+            case ParamGroupType::ARG_SELECTOR:    return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_arg_selector");
             case ParamGroupType::COUNT: break;
         }
         throw std::runtime_error("[buildParameterGroups] invalid ParamGroupType::COUNT for parameter precision lookup");
@@ -418,6 +421,26 @@ void registerNumberEncoderParameters(ParameterRegistry::StartupParameterRegistry
     ParameterRegistry::registerNumberEncoderParameters(number_encoder_tensor_owner, registrar);
 }
 
+void registerSelectorParameters(ParameterRegistry::StartupParameterRegistry& parameter_registry,
+                                Registrar& registrar,
+                                const GRIM::Config::AiConfigSnapshot& config) {
+    auto* selector_parameters = parameter_registry.getSelectorParameters();
+    const bool selector_enabled =
+        GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "selector_enabled");
+    if (!selector_enabled) {
+        if (selector_parameters) {
+            throw std::runtime_error("[buildParameterGroups] Selector parameter owner exists while config.selector_enabled=false");
+        }
+        return;
+    }
+
+    auto& selector_tensor_owner = requireLayer(
+        selector_parameters,
+        "SelectorParameterTensors",
+        "registerSelectorParameters");
+    ParameterRegistry::registerSelectorParameters(selector_tensor_owner, registrar);
+}
+
 void registerMtpParameters(ParameterRegistry::StartupParameterRegistry& parameter_registry,
                            Registrar& registrar,
                            const GRIM::Config::AiConfigSnapshot& config) {
@@ -508,7 +531,7 @@ void validateRegisteredTensorPrecisionMetadata(const std::vector<ParameterGroup>
 void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
     constexpr size_t kParamGroupTypeCount = static_cast<size_t>(ParamGroupType::COUNT);
     constexpr size_t kPrecisionCount = 2;
-    static_assert(kParamGroupTypeCount == 8,
+    static_assert(kParamGroupTypeCount == 9,
                   "Registered group precision summary must list every ParamGroupType");
 
     const std::array<ParamGroupType, kParamGroupTypeCount> group_types = {
@@ -519,7 +542,8 @@ void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
         ParamGroupType::RMSNORM,
         ParamGroupType::MTP,
         ParamGroupType::EXECUTION_BLOCK,
-        ParamGroupType::NUMBER_ENCODER
+        ParamGroupType::NUMBER_ENCODER,
+        ParamGroupType::ARG_SELECTOR
     };
     const std::array<ParameterGroupPrecision, kPrecisionCount> precisions = {
         ParameterGroupPrecision::FP32,
@@ -543,6 +567,7 @@ void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
             case ParamGroupType::MTP: ++other_count; break;
             case ParamGroupType::EXECUTION_BLOCK: ++other_count; break;
             case ParamGroupType::NUMBER_ENCODER: ++other_count; break;
+            case ParamGroupType::ARG_SELECTOR: ++other_count; break;
             case ParamGroupType::COUNT:
                 throw std::runtime_error("[buildParameterGroups] group " + group.name +
                                          " has invalid ParamGroupType::COUNT");
@@ -607,6 +632,7 @@ void validateParameterRegistrationConfig(const GRIM::Config::AiConfigSnapshot& c
     GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_rmsnorm"), "parameter_precision_rmsnorm", "buildParameterGroups");
     GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_mtp"), "parameter_precision_mtp", "buildParameterGroups");
     GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_execution_block"), "parameter_precision_execution_block", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_arg_selector"), "parameter_precision_arg_selector", "buildParameterGroups");
 }
 
 void validateExecutionBlockConstructionHP(
@@ -1217,6 +1243,47 @@ void initializeNumberEncoderParameterTensors(
              ", max_digit_slots=" + std::to_string(number_encoder_hp.max_digit_slots) + ")");
 }
 
+void initializeSelectorParameterTensors(
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    bool selector_enabled,
+    int d_model,
+    std::uint64_t weight_init_seed,
+    cudaStream_t init_stream) {
+    if (!selector_enabled) {
+        if (parameter_registry.getSelectorParameters()) {
+            throw std::runtime_error("initializeSelectorParameterTensors: selector disabled but registry owner already exists");
+        }
+        return;
+    }
+    if (!init_stream) {
+        throw std::runtime_error("initializeSelectorParameterTensors: init_stream is NULL");
+    }
+    if (parameter_registry.getSelectorParameters()) {
+        throw std::runtime_error("initializeSelectorParameterTensors: registry selector tensor owner is already initialized");
+    }
+    if (d_model <= 0) {
+        throw std::runtime_error("initializeSelectorParameterTensors: d_model must be > 0, got " +
+                                 std::to_string(d_model));
+    }
+
+    auto params = std::make_unique<GRIM::SelectorParameterTensors>();
+    GRIM::Tensor w_q = GRIM::Tensor::zeros({d_model, d_model}, init_stream, "selector.W_q");
+    w_q.requires_grad_();
+    w_q.alloc_grad();
+    GRIM::Tensor::xavier_uniform_(w_q, weight_init_seed, init_stream);
+    params->W_q = std::move(w_q);
+
+    const cudaError_t sync_err = cudaStreamSynchronize(init_stream);
+    if (sync_err != cudaSuccess) {
+        throw std::runtime_error(std::string("initializeSelectorParameterTensors: cudaStreamSynchronize failed: ") +
+                                 cudaGetErrorString(sync_err));
+    }
+
+    parameter_registry.selector_parameters = std::move(params);
+    emitInfo("[initializeSelectorParameterTensors] Initialized registry-owned selector W_q (d_model=" +
+             std::to_string(d_model) + ")");
+}
+
 void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,
                           Startup::GpuModelState& gpu_model_state,
                           ParameterRegistry::StartupParameterRegistry& parameter_registry) {
@@ -1233,6 +1300,7 @@ void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,
     registerNumberEncoderParameters(parameter_registry, registrar, config);
     registerExecutionBlockParameters(gpu_model_state, parameter_registry, registrar, config);
     registerMtpParameters(parameter_registry, registrar, config);
+    registerSelectorParameters(parameter_registry, registrar, config);
 
     validateRegisteredTensorPrecisionMetadata(rebuilt_groups);
     clearOptimizerBindings(rebuilt_groups);

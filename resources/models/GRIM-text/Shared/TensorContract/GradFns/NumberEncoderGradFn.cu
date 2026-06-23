@@ -176,6 +176,69 @@ __global__ void kernel_number_encoder_output(
     }
 }
 
+// Forward (selector keys): dense per-ENTRY numeric-meaning encoding for the
+// arg/option selector candidate pool. Identical math to kernel_number_encoder_output
+// but writes keys[e, :] densely (one row per pool entry) instead of scattering to a
+// token position, and does NOT trap on zero real slots (non-numeric pool entries
+// have all-zero digit masks and simply receive the global-only contribution).
+__global__ void kernel_number_encoder_keys_dense(
+    const int* __restrict__ digit_values,       // [E*S]
+    const int* __restrict__ pow10_index,        // [E*S]
+    const float* __restrict__ slot_mask,        // [E*S]
+    const float* __restrict__ slot_hidden,      // [E*S, H]
+    const float* __restrict__ global_hidden,    // [E, H]
+    const float* __restrict__ digit_emb,        // [10, M]
+    const float* __restrict__ pow10_emb,        // [P, M]
+    const float* __restrict__ W_c2,             // [H, M]
+    const float* __restrict__ W_g2,             // [H, M]
+    float* __restrict__ keys,                   // [E, M] pre-zeroed
+    int num_entries,
+    int digit_slots,
+    int d_hidden,
+    int d_model,
+    int pow10_buckets)
+{
+    const int e = blockIdx.x;
+    if (e >= num_entries) return;
+
+    int real_slots = 0;
+    for (int i = 0; i < digit_slots; ++i) {
+        if (slot_mask[e * digit_slots + i] != 0.0f) ++real_slots;
+    }
+    const float inv_n = real_slots > 0 ? 1.0f / static_cast<float>(real_slots) : 0.0f;
+
+    float* out_row = keys + static_cast<size_t>(e) * d_model;
+    const float* g_hidden = global_hidden + static_cast<size_t>(e) * d_hidden;
+
+    for (int m = threadIdx.x; m < d_model; m += blockDim.x) {
+        float pooled = 0.0f;
+        for (int i = 0; i < digit_slots; ++i) {
+            const int slot = e * digit_slots + i;
+            if (slot_mask[slot] == 0.0f) continue;
+            const int dv = digit_values[slot];
+            const int pi = pow10_index[slot];
+            if (dv < 0 || dv > 9 || pi < 0 || pi >= pow10_buckets) {
+                printf("FATAL: OOB digit channel (digit=%d pow10_idx=%d buckets=%d) at entry=%d slot=%d in kernel_number_encoder_keys_dense\n",
+                       dv, pi, pow10_buckets, e, i);
+                __trap();
+            }
+            float slot_val = digit_emb[dv * d_model + m] + pow10_emb[pi * d_model + m];
+            const float* s_hidden = slot_hidden + static_cast<size_t>(slot) * d_hidden;
+            for (int h = 0; h < d_hidden; ++h) {
+                slot_val += W_c2[h * d_model + m] * s_hidden[h];
+            }
+            pooled += slot_val;
+        }
+        pooled *= inv_n;
+
+        float global_val = 0.0f;
+        for (int h = 0; h < d_hidden; ++h) {
+            global_val += W_g2[h * d_model + m] * g_hidden[h];
+        }
+        out_row[m] = pooled + global_val;
+    }
+}
+
 // Backward: digit / pow10 embedding gradients.
 //   grad_digit_emb[dv, m] += grad_out[pos, m] / n_a   (real slots only)
 //   grad_pow10_emb[pi, m] += grad_out[pos, m] / n_a
@@ -628,6 +691,88 @@ Tensor number_encode(const NumberEncoderForwardParams& params,
     }
 
     return result;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// encodeAtomEntryPoolKeys — dense per-entry selector keys (forward-only/detached)
+//
+// Encodes every candidate atom-entry in the batch pool into a d_model key vector
+// using the SAME NumberEncoder weights and math as the input-side fusion, so a
+// number's selector key matches its input representation. Keys are DETACHED: the
+// NumberEncoder trains from the input-side path; the selector consumes keys as a
+// fixed (per-step) candidate representation and learns to query them via W_q.
+// ═══════════════════════════════════════════════════════════════════════════
+Tensor encodeAtomEntryPoolKeys(
+    const NumberEncoderForwardParams& params,
+    const HyperParameters::NumberEncoderConstructionHP& hp,
+    const int* d_pool_digit_values,
+    const int* d_pool_digit_pow10_index,
+    const float* d_pool_digit_mask,
+    const float* d_pool_digit_slot_features,
+    const float* d_pool_global_features,
+    int num_pool_atoms,
+    cudaStream_t stream) {
+    if (!hp.enabled) {
+        throw std::runtime_error("encodeAtomEntryPoolKeys: called while hp.enabled=false");
+    }
+    if (num_pool_atoms <= 0) {
+        throw std::runtime_error("encodeAtomEntryPoolKeys: num_pool_atoms must be > 0");
+    }
+    if (!stream) {
+        throw std::runtime_error("encodeAtomEntryPoolKeys: stream is NULL");
+    }
+    if (!d_pool_digit_values || !d_pool_digit_pow10_index || !d_pool_digit_mask ||
+        !d_pool_digit_slot_features || !d_pool_global_features) {
+        throw std::runtime_error("encodeAtomEntryPoolKeys: candidate-pool feature channels are NULL "
+                                 "(uploadBatchToDevice must populate them when the selector is enabled)");
+    }
+    if (hp.pow10_buckets != 2 * hp.max_abs_pow10 + 1 || hp.pow10_buckets <= 0) {
+        throw std::runtime_error("encodeAtomEntryPoolKeys: hp.pow10_buckets inconsistent with max_abs_pow10");
+    }
+
+    const int d_model = hp.d_model;
+    const int d_hidden = hp.d_hidden;
+    const int digit_slots = hp.max_digit_slots;
+    const int total_slots = num_pool_atoms * digit_slots;
+
+    const Tensor& digit_emb = requireParam(params.digit_emb, 10, d_model, "digit_emb");
+    const Tensor& pow10_emb = requireParam(params.pow10_emb, hp.pow10_buckets, d_model, "pow10_emb");
+    const Tensor& W_c1 = requireParam(params.W_c1, kSlotFeatDim, d_hidden, "W_c1");
+    const Tensor& b_c1 = requireParam(params.b_c1, 1, d_hidden, "b_c1");
+    const Tensor& W_c2 = requireParam(params.W_c2, d_hidden, d_model, "W_c2");
+    const Tensor& W_g1 = requireParam(params.W_g1, kGlobalFeatDim, d_hidden, "W_g1");
+    const Tensor& b_g1 = requireParam(params.b_g1, 1, d_hidden, "b_g1");
+    const Tensor& W_g2 = requireParam(params.W_g2, d_hidden, d_model, "W_g2");
+
+    Tensor slot_hidden = Tensor::empty(
+        ::TensorContract::TensorShape::make_BSM(total_slots, d_hidden),
+        false, stream, "selector_pool_slot_hidden");
+    Tensor global_hidden = Tensor::empty(
+        ::TensorContract::TensorShape::make_BSM(num_pool_atoms, d_hidden),
+        false, stream, "selector_pool_global_hidden");
+    // Detached keys: requires_grad=false, no grad_fn attached.
+    Tensor keys = Tensor::zeros(
+        ::TensorContract::TensorShape::make_BSM(num_pool_atoms, d_model),
+        false, stream, "selector_pool_keys");
+
+    kernel_number_encoder_slot_hidden<<<total_slots, NUMBER_ENCODER_BLOCK_SIZE, 0, stream>>>(
+        d_pool_digit_slot_features, d_pool_digit_mask, W_c1.data, b_c1.data,
+        slot_hidden.data, total_slots, d_hidden);
+    trackKernelLaunch("kernel_number_encoder_slot_hidden(pool)", stream);
+
+    kernel_number_encoder_global_hidden<<<num_pool_atoms, NUMBER_ENCODER_BLOCK_SIZE, 0, stream>>>(
+        d_pool_global_features, W_g1.data, b_g1.data, global_hidden.data,
+        num_pool_atoms, d_hidden);
+    trackKernelLaunch("kernel_number_encoder_global_hidden(pool)", stream);
+
+    kernel_number_encoder_keys_dense<<<num_pool_atoms, NUMBER_ENCODER_BLOCK_SIZE, 0, stream>>>(
+        d_pool_digit_values, d_pool_digit_pow10_index, d_pool_digit_mask,
+        slot_hidden.data, global_hidden.data, digit_emb.data, pow10_emb.data,
+        W_c2.data, W_g2.data, keys.data,
+        num_pool_atoms, digit_slots, d_hidden, d_model, hp.pow10_buckets);
+    trackKernelLaunch("kernel_number_encoder_keys_dense", stream);
+
+    return keys;
 }
 
 }  // namespace autograd

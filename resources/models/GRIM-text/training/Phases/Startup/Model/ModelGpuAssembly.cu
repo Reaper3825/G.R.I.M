@@ -545,6 +545,20 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
                     init_stream);
                 std::cout << "✓ NumberEncoder parameters created\n";
             }
+
+            const bool selector_enabled =
+                GRIM::HyperParameters::snapshotTrainingConfigField<bool>(model_cfg, "selector_enabled");
+            if (selector_enabled) {
+                const int selector_d_model =
+                    GRIM::HyperParameters::snapshotTrainingConfigField<int>(model_cfg, "d_model");
+                GRIMText::Training::Startup::ModelRegistration::initializeSelectorParameterTensors(
+                    parameter_registry,
+                    selector_enabled,
+                    selector_d_model,
+                    weight_init_seed + 50,
+                    init_stream);
+                std::cout << "✓ Arg/option selector parameters created\n";
+            }
         }
 
         initializeExecutionSubsystems(

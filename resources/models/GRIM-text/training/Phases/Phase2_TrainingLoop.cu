@@ -537,7 +537,8 @@ GRIM::Forward::ModelForwardRequest buildTrainingForwardRequest(
     const GRIM::Batching::BatchPayload& payload,
     const GRIM::Batching::BatchDeviceBindings& bindings,
     uint64_t batch_idx,
-    bool emit_mtp_logits)
+    bool emit_mtp_logits,
+    bool emit_selector_logits)
 {
     GRIM::Forward::ModelForwardRequest request{};
     request.config = &config;
@@ -560,7 +561,8 @@ GRIM::Forward::ModelForwardRequest buildTrainingForwardRequest(
         /*connect_parameter_graph=*/true,
         /*retain_backward_graph=*/true,
         /*enable_dropout=*/true,
-        /*emit_mtp_logits=*/emit_mtp_logits};
+        /*emit_mtp_logits=*/emit_mtp_logits,
+        /*emit_selector_logits=*/emit_selector_logits};
     return request;
 }
 
@@ -765,6 +767,8 @@ BatchResult processBatch(
     const bool emit_mtp_logits = mtp_enabled
         && mtp_k > 0
         && mtp_alpha_effective > 0.0f;
+    const bool emit_selector_logits =
+        GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "selector_enabled");
     GRIM::Forward::ModelForwardRequest forward_request =
         buildTrainingForwardRequest(
             ctx.parameter_registry,
@@ -777,7 +781,8 @@ BatchResult processBatch(
             payload,
             train_bindings,
             plan.batch_idx,
-            emit_mtp_logits);
+            emit_mtp_logits,
+            emit_selector_logits);
 
     auto forward_outputs = GRIM::Forward::executeModelForward(forward_request, runtime_payload);
     {

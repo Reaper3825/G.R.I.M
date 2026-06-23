@@ -181,6 +181,47 @@ struct BatchPayload {
     std::vector<float> atom_global_features;
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // CANDIDATE ATOM-ENTRY POOL (arg/option selector — docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md)
+    //
+    // The "menu" of options the selector chooses among: every row's AtomTable
+    // entries, merged into ONE batch-global pool so the device selector can score
+    // candidates. Execution-INDEPENDENT (data only; never derived from
+    // ExecutionMemory — see GRIM/Docs/DeletedCode.md). Row r's candidate window is
+    // [row_atom_offset[r], row_atom_offset[r+1]); a token's own entry maps to the
+    // batch-global pool index row_atom_offset[row] + <row-local atom_entry_id>.
+    //
+    // Materialized in the same pass as the NumberEncoder channels and gated on the
+    // same condition (number_encoder_digit_slots > 0): when the NumberEncoder is
+    // disabled the pool stays empty and there is ZERO behavior change.
+    // (Per-entry digit/pow10 feature channels for selector key encoding are added
+    // alongside the selector head — they reuse the per-token layout above, indexed
+    // by pool entry.)
+    // ═══════════════════════════════════════════════════════════════════════════
+    int num_pool_atoms = 0;
+    std::vector<int> row_atom_offset;          // [batch_size + 1] prefix offsets into the pool
+    std::vector<float> pool_numeric_values;    // [E] float view (matching / agreement assert)
+    std::vector<int> pool_atom_types;          // [E] Tokenizer::AtomType enum values
+
+    // Arg/option selector supervision (execution-independent). For each position t
+    // whose NEXT token is an atom in the same row, the target is the batch-global
+    // pool index of that next atom's entry (row_atom_offset[row] + atom_entry_ids[t+1])
+    // — i.e. "which option should be selected at t". -1 = unsupervised (next token
+    // is not a selectable atom). This is supervision only; token t+1's metadata is
+    // never an input at t. Populated alongside the pool (number_encoder_digit_slots > 0).
+    std::vector<int> arg_select_targets;       // [total_tokens] batch-global pool index or -1
+    int arg_select_valid_count = 0;            // number of supervised (>= 0) targets
+    // Per-entry NumberEncoder feature channels for selector key encoding. Same
+    // layout + derivation as the per-token atom_digit_* channels above (via the
+    // shared fillNumberEncoderEntryFeatures helper), but indexed by pool entry
+    // (E = num_pool_atoms, S = number_encoder_digit_slots). Populated only when
+    // number_encoder_digit_slots > 0.
+    std::vector<int> pool_digit_values;        // [E * S]
+    std::vector<int> pool_digit_pow10_index;   // [E * S]
+    std::vector<float> pool_digit_mask;        // [E * S]
+    std::vector<float> pool_digit_slot_features;   // [E * S * kNumberSlotFeatureDim]
+    std::vector<float> pool_global_features;       // [E * kNumberGlobalFeatureDim]
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // MTP (Multi-Token Prediction) SHIFTED TARGETS
     //
     // Computed ONCE during buildBatchPayload() when mtp_k > 0.

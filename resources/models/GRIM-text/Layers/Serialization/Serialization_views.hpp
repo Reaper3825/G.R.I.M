@@ -182,4 +182,13 @@ struct SerializationNumberEncoderWriteView {
 	DeviceWriteView W_g2;
 };
 
+struct SerializationArgSelectorReadView {
+	DeviceReadView W_q;
+	bool enabled = false;
+};
+
+struct SerializationArgSelectorWriteView {
+	DeviceWriteView W_q;
+};
+
 } // namespace GRIM

@@ -296,6 +296,15 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         Logging::EmitModuleInfo(kLogModule, "[save] NumberEncoder weights serialized");
     }
 
+    flatbuffers::Offset<GRIMTransformer::ArgSelectorWeights> fb_arg_selector = 0;
+    const auto& sel_view = request.sources.arg_selector;
+    if (sel_view.enabled && sel_view.W_q.ptr) {
+        fb_arg_selector = GRIMTransformer::CreateArgSelectorWeights(
+            builder,
+            builder.CreateVector(download_device_vector(sel_view.W_q, "SEL W_q")));
+        Logging::EmitModuleInfo(kLogModule, "[save] ArgSelector weights serialized");
+    }
+
     flatbuffers::Offset<GRIMTransformer::ExecutionBlockWeights> fb_execution_block = 0;
     const auto& eb_view = request.sources.execution_block;
     if (eb_view.enabled && eb_view.w_decode_1.ptr) {
@@ -376,7 +385,8 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         timestamp, timestamp,
         fb_reasoning_head,
         fb_execution_block,
-        fb_number_encoder);
+        fb_number_encoder,
+        fb_arg_selector);
 
     builder.Finish(fb_model, "GRMT");
 
@@ -457,6 +467,7 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
                 verify_component("lm_head", raw->lm_head());
                 verify_component("training_metadata", raw->training_metadata());
                 verify_component("number_encoder", raw->number_encoder());
+                verify_component("arg_selector", raw->arg_selector());
                 verify_component("execution_block", raw->execution_block());
 
                 // Vector fields

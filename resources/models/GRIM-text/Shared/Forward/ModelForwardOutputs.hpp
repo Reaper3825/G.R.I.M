@@ -292,6 +292,10 @@ public:
     Tensor lm_head_input_tensor;
     Tensor logits_tensor;
     std::vector<Tensor> mtp_logits_tensors;
+    // Arg/option selector head: [total_tokens, num_pool_atoms] selection logits over
+    // the candidate atom-entry pool (out-of-row-window candidates masked to -inf).
+    // Empty unless the forward graph policy requested emit_selector_logits.
+    Tensor selector_logits;
 
     // Optional reasoning / execution forward-owned state.
     Tensor scratch_atom_embeddings;
@@ -361,6 +365,7 @@ public:
         lm_head_input_tensor = Tensor();
         logits_tensor = Tensor();
         clearTensorVector(mtp_logits_tensors);
+        selector_logits = Tensor();
         scratch_atom_embeddings = Tensor();
         resetExecutionMemoryVectorPreserveGeometry(exec_memories);
         resetExecutionOutputVectorPreserveGeometry(exec_outputs_per_row);

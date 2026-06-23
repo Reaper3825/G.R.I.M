@@ -147,6 +147,10 @@ table NumberEncoderWeights {
   w_g2_data: [float];
 }
 
+table ArgSelectorWeights {
+  w_q_data: [float];
+}
+
 table ModelConfig {
   vocab_size: uint32;
   d_model: uint32;
@@ -203,6 +207,7 @@ table TransformerModel {
   reasoning_head: ReasoningHeadWeights;
   execution_block: ExecutionBlockWeights;
   number_encoder: NumberEncoderWeights;
+  arg_selector: ArgSelectorWeights;
 }
 
 root_type TransformerModel;
