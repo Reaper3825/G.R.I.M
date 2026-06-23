@@ -63,6 +63,10 @@ struct NumberEncoderWeights;
 struct NumberEncoderWeightsBuilder;
 struct NumberEncoderWeightsT;
 
+struct ArgSelectorWeights;
+struct ArgSelectorWeightsBuilder;
+struct ArgSelectorWeightsT;
+
 struct ModelConfig;
 struct ModelConfigBuilder;
 struct ModelConfigT;
@@ -2104,6 +2108,68 @@ inline ::flatbuffers::Offset<NumberEncoderWeights> CreateNumberEncoderWeightsDir
 
 ::flatbuffers::Offset<NumberEncoderWeights> CreateNumberEncoderWeights(::flatbuffers::FlatBufferBuilder &_fbb, const NumberEncoderWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 
+struct ArgSelectorWeightsT : public ::flatbuffers::NativeTable {
+  typedef ArgSelectorWeights TableType;
+  std::vector<float> w_q_data{};
+};
+
+struct ArgSelectorWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef ArgSelectorWeightsT NativeTableType;
+  typedef ArgSelectorWeightsBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_W_Q_DATA = 4
+  };
+  const ::flatbuffers::Vector<float> *w_q_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_Q_DATA);
+  }
+  bool Verify(::flatbuffers::Verifier &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_W_Q_DATA) &&
+           verifier.VerifyVector(w_q_data()) &&
+           verifier.EndTable();
+  }
+  ArgSelectorWeightsT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  void UnPackTo(ArgSelectorWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  static ::flatbuffers::Offset<ArgSelectorWeights> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ArgSelectorWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+};
+
+struct ArgSelectorWeightsBuilder {
+  typedef ArgSelectorWeights Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_w_q_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> w_q_data) {
+    fbb_.AddOffset(ArgSelectorWeights::VT_W_Q_DATA, w_q_data);
+  }
+  explicit ArgSelectorWeightsBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<ArgSelectorWeights> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<ArgSelectorWeights>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<ArgSelectorWeights> CreateArgSelectorWeights(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_q_data = 0) {
+  ArgSelectorWeightsBuilder builder_(_fbb);
+  builder_.add_w_q_data(w_q_data);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<ArgSelectorWeights> CreateArgSelectorWeightsDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const std::vector<float> *w_q_data = nullptr) {
+  auto w_q_data__ = w_q_data ? _fbb.CreateVector<float>(*w_q_data) : 0;
+  return GRIMTransformer::CreateArgSelectorWeights(
+      _fbb,
+      w_q_data__);
+}
+
+::flatbuffers::Offset<ArgSelectorWeights> CreateArgSelectorWeights(::flatbuffers::FlatBufferBuilder &_fbb, const ArgSelectorWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+
 struct ModelConfigT : public ::flatbuffers::NativeTable {
   typedef ModelConfig TableType;
   uint32_t vocab_size = 0;
@@ -2609,6 +2675,7 @@ struct TransformerModelT : public ::flatbuffers::NativeTable {
   std::unique_ptr<GRIMTransformer::ReasoningHeadWeightsT> reasoning_head{};
   std::unique_ptr<GRIMTransformer::ExecutionBlockWeightsT> execution_block{};
   std::unique_ptr<GRIMTransformer::NumberEncoderWeightsT> number_encoder{};
+  std::unique_ptr<GRIMTransformer::ArgSelectorWeightsT> arg_selector{};
   TransformerModelT() = default;
   TransformerModelT(const TransformerModelT &o);
   TransformerModelT(TransformerModelT&&) FLATBUFFERS_NOEXCEPT = default;
@@ -2634,7 +2701,8 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_LAST_MODIFIED_TIMESTAMP = 28,
     VT_REASONING_HEAD = 30,
     VT_EXECUTION_BLOCK = 32,
-    VT_NUMBER_ENCODER = 34
+    VT_NUMBER_ENCODER = 34,
+    VT_ARG_SELECTOR = 36
   };
   uint32_t version() const {
     return GetField<uint32_t>(VT_VERSION, 0);
@@ -2684,6 +2752,9 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const GRIMTransformer::NumberEncoderWeights *number_encoder() const {
     return GetPointer<const GRIMTransformer::NumberEncoderWeights *>(VT_NUMBER_ENCODER);
   }
+  const GRIMTransformer::ArgSelectorWeights *arg_selector() const {
+    return GetPointer<const GRIMTransformer::ArgSelectorWeights *>(VT_ARG_SELECTOR);
+  }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<uint32_t>(verifier, VT_VERSION, 4) &&
@@ -2714,6 +2785,8 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyTable(execution_block()) &&
            VerifyOffset(verifier, VT_NUMBER_ENCODER) &&
            verifier.VerifyTable(number_encoder()) &&
+           VerifyOffset(verifier, VT_ARG_SELECTOR) &&
+           verifier.VerifyTable(arg_selector()) &&
            verifier.EndTable();
   }
   TransformerModelT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
@@ -2773,6 +2846,9 @@ struct TransformerModelBuilder {
   void add_number_encoder(::flatbuffers::Offset<GRIMTransformer::NumberEncoderWeights> number_encoder) {
     fbb_.AddOffset(TransformerModel::VT_NUMBER_ENCODER, number_encoder);
   }
+  void add_arg_selector(::flatbuffers::Offset<GRIMTransformer::ArgSelectorWeights> arg_selector) {
+    fbb_.AddOffset(TransformerModel::VT_ARG_SELECTOR, arg_selector);
+  }
   explicit TransformerModelBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -2805,11 +2881,13 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(
     uint64_t last_modified_timestamp = 0,
     ::flatbuffers::Offset<GRIMTransformer::ReasoningHeadWeights> reasoning_head = 0,
     ::flatbuffers::Offset<GRIMTransformer::ExecutionBlockWeights> execution_block = 0,
-    ::flatbuffers::Offset<GRIMTransformer::NumberEncoderWeights> number_encoder = 0) {
+    ::flatbuffers::Offset<GRIMTransformer::NumberEncoderWeights> number_encoder = 0,
+    ::flatbuffers::Offset<GRIMTransformer::ArgSelectorWeights> arg_selector = 0) {
   TransformerModelBuilder builder_(_fbb);
   builder_.add_last_modified_timestamp(last_modified_timestamp);
   builder_.add_creation_timestamp(creation_timestamp);
   builder_.add_checksum_xxhash64(checksum_xxhash64);
+  builder_.add_arg_selector(arg_selector);
   builder_.add_number_encoder(number_encoder);
   builder_.add_execution_block(execution_block);
   builder_.add_reasoning_head(reasoning_head);
@@ -2843,7 +2921,8 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModelDirect(
     uint64_t last_modified_timestamp = 0,
     ::flatbuffers::Offset<GRIMTransformer::ReasoningHeadWeights> reasoning_head = 0,
     ::flatbuffers::Offset<GRIMTransformer::ExecutionBlockWeights> execution_block = 0,
-    ::flatbuffers::Offset<GRIMTransformer::NumberEncoderWeights> number_encoder = 0) {
+    ::flatbuffers::Offset<GRIMTransformer::NumberEncoderWeights> number_encoder = 0,
+    ::flatbuffers::Offset<GRIMTransformer::ArgSelectorWeights> arg_selector = 0) {
   auto encoder_layers__ = encoder_layers ? _fbb.CreateVector<::flatbuffers::Offset<GRIMTransformer::EncoderLayerWeights>>(*encoder_layers) : 0;
   auto final_rms_gamma__ = final_rms_gamma ? _fbb.CreateVector<float>(*final_rms_gamma) : 0;
   return GRIMTransformer::CreateTransformerModel(
@@ -2863,7 +2942,8 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModelDirect(
       last_modified_timestamp,
       reasoning_head,
       execution_block,
-      number_encoder);
+      number_encoder,
+      arg_selector);
 }
 
 ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(::flatbuffers::FlatBufferBuilder &_fbb, const TransformerModelT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
@@ -3460,6 +3540,32 @@ inline ::flatbuffers::Offset<NumberEncoderWeights> CreateNumberEncoderWeights(::
       _w_g2_data);
 }
 
+inline ArgSelectorWeightsT *ArgSelectorWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
+  auto _o = std::unique_ptr<ArgSelectorWeightsT>(new ArgSelectorWeightsT());
+  UnPackTo(_o.get(), _resolver);
+  return _o.release();
+}
+
+inline void ArgSelectorWeights::UnPackTo(ArgSelectorWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
+  (void)_o;
+  (void)_resolver;
+  { auto _e = w_q_data(); if (_e) { _o->w_q_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_q_data[_i] = _e->Get(_i); } } else { _o->w_q_data.resize(0); } }
+}
+
+inline ::flatbuffers::Offset<ArgSelectorWeights> ArgSelectorWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ArgSelectorWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateArgSelectorWeights(_fbb, _o, _rehasher);
+}
+
+inline ::flatbuffers::Offset<ArgSelectorWeights> CreateArgSelectorWeights(::flatbuffers::FlatBufferBuilder &_fbb, const ArgSelectorWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  (void)_rehasher;
+  (void)_o;
+  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const ArgSelectorWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
+  auto _w_q_data = _o->w_q_data.size() ? _fbb.CreateVector(_o->w_q_data) : 0;
+  return GRIMTransformer::CreateArgSelectorWeights(
+      _fbb,
+      _w_q_data);
+}
+
 inline ModelConfigT *ModelConfig::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
   auto _o = std::unique_ptr<ModelConfigT>(new ModelConfigT());
   UnPackTo(_o.get(), _resolver);
@@ -3634,7 +3740,8 @@ inline TransformerModelT::TransformerModelT(const TransformerModelT &o)
         last_modified_timestamp(o.last_modified_timestamp),
         reasoning_head((o.reasoning_head) ? new GRIMTransformer::ReasoningHeadWeightsT(*o.reasoning_head) : nullptr),
         execution_block((o.execution_block) ? new GRIMTransformer::ExecutionBlockWeightsT(*o.execution_block) : nullptr),
-        number_encoder((o.number_encoder) ? new GRIMTransformer::NumberEncoderWeightsT(*o.number_encoder) : nullptr) {
+        number_encoder((o.number_encoder) ? new GRIMTransformer::NumberEncoderWeightsT(*o.number_encoder) : nullptr),
+        arg_selector((o.arg_selector) ? new GRIMTransformer::ArgSelectorWeightsT(*o.arg_selector) : nullptr) {
   encoder_layers.reserve(o.encoder_layers.size());
   for (const auto &encoder_layers_ : o.encoder_layers) { encoder_layers.emplace_back((encoder_layers_) ? new GRIMTransformer::EncoderLayerWeightsT(*encoder_layers_) : nullptr); }
 }
@@ -3656,6 +3763,7 @@ inline TransformerModelT &TransformerModelT::operator=(TransformerModelT o) FLAT
   std::swap(reasoning_head, o.reasoning_head);
   std::swap(execution_block, o.execution_block);
   std::swap(number_encoder, o.number_encoder);
+  std::swap(arg_selector, o.arg_selector);
   return *this;
 }
 
@@ -3684,6 +3792,7 @@ inline void TransformerModel::UnPackTo(TransformerModelT *_o, const ::flatbuffer
   { auto _e = reasoning_head(); if (_e) { if(_o->reasoning_head) { _e->UnPackTo(_o->reasoning_head.get(), _resolver); } else { _o->reasoning_head = std::unique_ptr<GRIMTransformer::ReasoningHeadWeightsT>(_e->UnPack(_resolver)); } } else if (_o->reasoning_head) { _o->reasoning_head.reset(); } }
   { auto _e = execution_block(); if (_e) { if(_o->execution_block) { _e->UnPackTo(_o->execution_block.get(), _resolver); } else { _o->execution_block = std::unique_ptr<GRIMTransformer::ExecutionBlockWeightsT>(_e->UnPack(_resolver)); } } else if (_o->execution_block) { _o->execution_block.reset(); } }
   { auto _e = number_encoder(); if (_e) { if(_o->number_encoder) { _e->UnPackTo(_o->number_encoder.get(), _resolver); } else { _o->number_encoder = std::unique_ptr<GRIMTransformer::NumberEncoderWeightsT>(_e->UnPack(_resolver)); } } else if (_o->number_encoder) { _o->number_encoder.reset(); } }
+  { auto _e = arg_selector(); if (_e) { if(_o->arg_selector) { _e->UnPackTo(_o->arg_selector.get(), _resolver); } else { _o->arg_selector = std::unique_ptr<GRIMTransformer::ArgSelectorWeightsT>(_e->UnPack(_resolver)); } } else if (_o->arg_selector) { _o->arg_selector.reset(); } }
 }
 
 inline ::flatbuffers::Offset<TransformerModel> TransformerModel::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const TransformerModelT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
@@ -3710,6 +3819,7 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(::flatbuff
   auto _reasoning_head = _o->reasoning_head ? CreateReasoningHeadWeights(_fbb, _o->reasoning_head.get(), _rehasher) : 0;
   auto _execution_block = _o->execution_block ? CreateExecutionBlockWeights(_fbb, _o->execution_block.get(), _rehasher) : 0;
   auto _number_encoder = _o->number_encoder ? CreateNumberEncoderWeights(_fbb, _o->number_encoder.get(), _rehasher) : 0;
+  auto _arg_selector = _o->arg_selector ? CreateArgSelectorWeights(_fbb, _o->arg_selector.get(), _rehasher) : 0;
   return GRIMTransformer::CreateTransformerModel(
       _fbb,
       _version,
@@ -3727,7 +3837,8 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(::flatbuff
       _last_modified_timestamp,
       _reasoning_head,
       _execution_block,
-      _number_encoder);
+      _number_encoder,
+      _arg_selector);
 }
 
 inline const GRIMTransformer::TransformerModel *GetTransformerModel(const void *buf) {
