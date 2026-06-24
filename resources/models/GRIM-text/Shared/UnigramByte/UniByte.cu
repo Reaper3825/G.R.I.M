@@ -58,10 +58,14 @@ std::string formatTokenPrefix(const int* token_ids, size_t token_count) {
     return result;
 }
 
+// U+FFFD REPLACEMENT CHARACTER encoded as UTF-8.
+constexpr char kUtf8ReplacementChar[] = "\xEF\xBF\xBD";
+
 void appendValidatedUtf8ByteRun(std::string& result,
                                 const std::string& byte_run,
                                 const int* token_ids,
-                                size_t token_start_index) {
+                                size_t token_start_index,
+                                bool lenient_invalid_utf8) {
     if (byte_run.empty()) {
         return;
     }
@@ -71,6 +75,13 @@ void appendValidatedUtf8ByteRun(std::string& result,
         uint32_t codepoint = 0;
         size_t codepoint_len = 0;
         if (!utf8DecodeAt(byte_run, byte_offset, &codepoint, &codepoint_len)) {
+            if (lenient_invalid_utf8) {
+                // Emit one replacement char and advance a single byte so the
+                // rest of the run still gets a chance to decode.
+                result += kUtf8ReplacementChar;
+                byte_offset += 1;
+                continue;
+            }
             const unsigned char bad_byte = static_cast<unsigned char>(byte_run[byte_offset]);
             throw std::runtime_error(
                 "UniByte::decode: byte-token run starting at token index=" +
@@ -84,10 +95,9 @@ void appendValidatedUtf8ByteRun(std::string& result,
                 ", run_bytes=[" + summarizeByteRun(byte_run) + "])"
             );
         }
+        result.append(byte_run, byte_offset, codepoint_len);
         byte_offset += codepoint_len;
     }
-
-    result += byte_run;
 }
 
 } // namespace
@@ -315,7 +325,8 @@ std::string UniByte::decode(const DecodeRequest& request) const {
         appendValidatedUtf8ByteRun(result,
                                    pending_byte_run,
                                    request.token_ids,
-                                   pending_byte_run_start);
+                                   pending_byte_run_start,
+                                   request.lenient_invalid_utf8);
         pending_byte_run.clear();
     };
     for (size_t i = 0; i < request.token_count; ++i) {

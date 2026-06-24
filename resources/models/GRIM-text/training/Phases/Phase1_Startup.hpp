@@ -307,7 +307,17 @@ struct TrainingContext {
     std::string auto_stop_reason;
     int auto_stop_epoch = 0;
     float auto_stop_metric = 0.0f;
-    
+
+    // Resource high-water marks
+    /** Peak device-wide GPU memory used (= total - free via cudaMemGetInfo),
+     *  tracked as a high-water mark across the whole run. Sampled cheaply each
+     *  batch in Phase2 (the startup "memory.gpu.used" snapshot is pre-allocation
+     *  and is NOT this). Logged at epoch end and reported in the Phase3 summary.
+     *  0 until the first sample. */
+    std::uint64_t peak_gpu_used_bytes = 0;
+    /** Device total bytes captured alongside the peak sample (for % reporting). */
+    std::uint64_t gpu_total_bytes = 0;
+
     // Move-only semantics (std::unique_ptr cannot be copied)
     // Use compiler-generated move to avoid breaking GPU resource pointers
     TrainingContext() = default;

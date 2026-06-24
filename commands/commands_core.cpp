@@ -17,6 +17,7 @@
 #include "ai/ai.hpp"
 #include "ai/intent_gate.hpp"
 #include "ai/fast_classifier.hpp"
+#include "settings/intervention_gate.hpp"
 #include "memory/unified_memory.hpp"
 #include "memory/memory_buffer_rotation.hpp"
 #include "Reward_Learning/grim_rl.hpp"
@@ -235,13 +236,38 @@ void handleCommand(const std::string& line)
     ensureCorePluginsRegistered();
 
     // ====================================================
+    // Master intervention switch — when off, hand the raw line straight to the
+    // model as a plain conversational turn (intent_systems.master_enabled).
+    //   Uses ai_process (model → text reply), NOT ai_interpret: the interpreter
+    //   is itself scaffolding (JSON tool-calling prompt + tool list + policy
+    //   gate). This path is the zero-intervention baseline for the model.
+    // ====================================================
+    if (!Settings::interventionsMasterEnabled()) {
+        LOG_DEBUG("HandleCommand", "Interventions master-disabled — raw conversational passthrough to model");
+        history.push("> " + line, Colors::Default.toUInt());
+        CommandResult result = ai_process(line);
+
+        std::string finalText = ResponseManager::get(result.message);
+        history.push(finalText, (result.color.a << 24) | (result.color.b << 16) |
+                    (result.color.g << 8) | result.color.r);
+
+        if (!result.voice.empty()) {
+            Voice::speak(result.voice, result.category.empty() ? "routine" : result.category);
+        }
+
+        LOG_TRACE("HandleCommand", "END (master-disabled raw model route)");
+        return;
+    }
+
+    // ====================================================
     // Intent Classification — metadata tagging + local-only routing
     //   When MMO is enabled the classifier is metadata-only:
     //   utterance_priors flow via NlpAnnotation → RouterMetadata
     //   and the ROUTER decides banter / question / command routing.
     //   When MMO is disabled, fall back to local banter/question paths.
     // ====================================================
-    if (!GRIM::MMO::ModelRegistry::instance().isEnabled())
+    if (Settings::interventionEnabled("intent_gate") &&
+        !GRIM::MMO::ModelRegistry::instance().isEnabled())
     try {
         auto& scm = GRIM::MMO::SessionContextManager::instance();
         GRIM::ContextSnapshot ctx = scm.legacySnapshot(kDefaultSession);
@@ -290,7 +316,8 @@ void handleCommand(const std::string& line)
         }
         
         // If classified as Command, clean up banter words before parsing
-        if (intentResult.type == GRIM::IntentType::Command) {
+        if (intentResult.type == GRIM::IntentType::Command &&
+            Settings::interventionEnabled("banter_stripping")) {
             // Strip common banter prefixes/suffixes for cleaner parsing
             std::string cleaned = line;
             std::string lowerCleaned = line;
@@ -341,7 +368,7 @@ void handleCommand(const std::string& line)
     // Multi-command detection and processing
     // ====================================================
     auto commands = GRIMInput::splitCommands(line);
-    if (commands.size() > 1)
+    if (Settings::interventionEnabled("multi_command") && commands.size() > 1)
     {
         LOG_DEBUG("HandleCommand", "Detected " + std::to_string(commands.size()) + " commands in voice input");
         for (size_t i = 0; i < commands.size(); ++i)
@@ -456,18 +483,21 @@ void handleCommand(const std::string& line)
     history.push("> " + line, Colors::Default.toUInt());
     CommandResult result;
 
-    if (auto suggestion = GRIM::RewardLearning::suggestPreDispatchCommand(
-            line,
-            cmdRaw,
-            arg,
-            longTermMemory,
-            GRIM::MMO::SessionContextManager::instance().legacySnapshot(kDefaultSession).currentMood))
+    if (Settings::interventionEnabled("reward_learning"))
     {
-        cmdRaw = *suggestion;
+        if (auto suggestion = GRIM::RewardLearning::suggestPreDispatchCommand(
+                line,
+                cmdRaw,
+                arg,
+                longTermMemory,
+                GRIM::MMO::SessionContextManager::instance().legacySnapshot(kDefaultSession).currentMood))
+        {
+            cmdRaw = *suggestion;
+        }
     }
 
     // --- Dispatch ---
-    if (commandMap.find(cmdRaw) != commandMap.end())
+    if (Settings::interventionEnabled("commands") && commandMap.find(cmdRaw) != commandMap.end())
     {
         LOG_DEBUG("HandleCommand", "Found command in map: \"" + cmdRaw + "\"");
         result = dispatchCommand(cmdRaw, arg);
@@ -475,9 +505,9 @@ void handleCommand(const std::string& line)
     else
     {
         LOG_DEBUG("HandleCommand", "Command \"" + cmdRaw + "\" NOT in map, trying NLP...");
-        
+
         std::string normalizedLine = GRIMInput::normalizeLine(line);
-        Intent intent = g_nlp.parse(normalizedLine);
+        Intent intent = Settings::interventionEnabled("nlp") ? g_nlp.parse(normalizedLine) : Intent{};
         g_lastIntent = intent;
 
         std::string cmd = intent.matched ? intent.name : GRIMInput::normalizeCommand(cmdRaw);
@@ -529,7 +559,7 @@ void handleCommand(const std::string& line)
         }
 
         LOG_DEBUG("HandleCommand", "After normalization: cmd=\"" + cmd + "\"");
-        if (commandMap.find(cmd) != commandMap.end())
+        if (Settings::interventionEnabled("commands") && commandMap.find(cmd) != commandMap.end())
         {
             LOG_DEBUG("HandleCommand", "Found normalized command in map: \"" + cmd + "\"");
             result = dispatchCommand(cmd, arg);

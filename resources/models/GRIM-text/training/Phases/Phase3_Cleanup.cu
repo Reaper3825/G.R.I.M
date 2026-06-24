@@ -120,10 +120,19 @@ TrainingSummary computeTrainingSummary(const TrainingContext& ctx) {
     summary.auto_stop_reason = ctx.auto_stop_reason;
     summary.auto_stop_epoch = ctx.auto_stop_epoch;
     
-    auto [gpu_used, gpu_total] = getGPUMemoryStats();
-    (void)gpu_total;
-    summary.peak_gpu_memory_mb = gpu_used;
-    
+    // Peak GPU memory: prefer the high-water mark tracked across the run (Phase2
+    // samples it each batch). getGPUMemoryStats() here is a cleanup-time snapshot
+    // taken AFTER most buffers were freed, so it understates the true peak — only
+    // fall back to it if nothing was sampled (e.g. a run that never trained).
+    if (ctx.peak_gpu_used_bytes > 0) {
+        summary.peak_gpu_memory_mb = static_cast<float>(
+            static_cast<double>(ctx.peak_gpu_used_bytes) / (1024.0 * 1024.0));
+    } else {
+        auto [gpu_used, gpu_total] = getGPUMemoryStats();
+        (void)gpu_total;
+        summary.peak_gpu_memory_mb = gpu_used;
+    }
+
     if (summary.total_steps > 0 && summary.total_duration_seconds > 0) {
         summary.avg_batch_time_ms = static_cast<float>(
             (summary.total_duration_seconds * 1000.0) / summary.total_steps);
@@ -295,6 +304,29 @@ void finalizeEpochOutcome(
 
     ctx.logging.logger->log("[Epoch " + std::to_string(epoch_idx + 1) + "] " +
                             Internal::formatMetric("avg_loss", result.avg_loss));
+
+    // Peak GPU memory high-water mark across the run so far (sampled each batch
+    // in Phase2). Unlike the startup "memory.gpu.used" snapshot, this reflects
+    // the real training footprint (params + grads + activations + optimizer state).
+    if (ctx.peak_gpu_used_bytes > 0) {
+        const double mib = static_cast<double>(ctx.peak_gpu_used_bytes) / (1024.0 * 1024.0);
+        const double gib = mib / 1024.0;
+        std::ostringstream peak_line;
+        peak_line << "[Epoch " << (epoch_idx + 1) << "] peak_gpu_used = "
+                  << ctx.peak_gpu_used_bytes << " B ("
+                  << std::fixed << std::setprecision(2) << mib << " MiB, "
+                  << std::setprecision(3) << gib << " GiB";
+        if (ctx.gpu_total_bytes > 0) {
+            const double total_gib =
+                static_cast<double>(ctx.gpu_total_bytes) / (1024.0 * 1024.0 * 1024.0);
+            const double pct = 100.0 * static_cast<double>(ctx.peak_gpu_used_bytes) /
+                               static_cast<double>(ctx.gpu_total_bytes);
+            peak_line << ", " << std::setprecision(1) << pct << "% of "
+                      << std::setprecision(2) << total_gib << " GiB total";
+        }
+        peak_line << ")";
+        ctx.logging.logger->log(peak_line.str());
+    }
 
     GRIM::Telemetry::logTelemetrySummary(ctx);
 

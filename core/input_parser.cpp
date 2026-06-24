@@ -2,6 +2,7 @@
 #include "input_parser.hpp"
 #include "commands_core.hpp"     // for CommandResult / CommandFunc / commandMap
 #include "synonyms.hpp"
+#include "settings/intervention_gate.hpp"
 #include "logger.hpp"
 #include "ui/ui_root.hpp"        // ✅ NEW: For checking UI visibility
 #include "popup_ui/popup_ui.hpp" // ✅ NEW: For checking popup visibility
@@ -352,6 +353,11 @@ namespace GRIMInput
         std::transform(out.begin(), out.end(), out.begin(),
             [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
+        // Intent system gate — when synonyms are disabled, skip synonym +
+        // fuzzy rewriting and pass the lowercased command through verbatim.
+        if (!Settings::interventionEnabled("synonyms"))
+            return out;
+
         out = normalizeWord(out);   // synonym normalization
         out = fuzzyMatch(out);      // fuzzy correction
         return out;
@@ -391,6 +397,11 @@ namespace GRIMInput
     // ====================================================
     std::string normalizeLine(const std::string& line)
     {
+        // Intent system gate — when synonyms are disabled, return the line
+        // unchanged (no per-token synonym rewriting).
+        if (!Settings::interventionEnabled("synonyms"))
+            return line;
+
         std::istringstream iss(line);
         std::ostringstream oss;
         std::string token;

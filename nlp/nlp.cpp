@@ -4,6 +4,7 @@
 #include "error_manager.hpp"
 #include "resources.hpp"
 #include "console_history.hpp"
+#include "settings/intervention_gate.hpp"
 
 NLP g_nlp;
 
@@ -29,10 +30,17 @@ Intent NLP::parse(const std::string& text) {
 Intent NLP::parseWithContext(const std::string& text, const std::string& previousCommand) {
     Intent intent;
     intent.matched = false;
-    
+
+    // Intent system gate — when NLP is disabled, never match so all callers
+    // (intent gate boost, command fallback, annotate) fall through to the model.
+    if (!Settings::interventionEnabled("nlp")) {
+        return intent;
+    }
+
     stats.totalParses++;
     
     // ? NEW: Try NATIVE grammar parser first (pure C++, no Python!)
+    if (Settings::interventionEnabled("grammar"))
     try {
       auto grammarResult = GRIM::g_grammarParser.parse(text);
      

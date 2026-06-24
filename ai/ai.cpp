@@ -12,6 +12,7 @@
 #include "memory/context_snapshot.hpp"
 #include "memory/atomic_writer.hpp"
 #include "resources.hpp"
+#include "settings/intervention_gate.hpp"
 #include "commands/commands_core.hpp"
 #include "error_manager.hpp"
 #include "logger.hpp"
@@ -285,7 +286,15 @@ std::future<std::string> callAIAsync(const std::string& prompt) {
         // Produce NlpAnnotation for structured routing
         auto& scm = GRIM::MMO::SessionContextManager::instance();
         GRIM::MMO::ContextSnapshotV2 snapshot = scm.snapshot("default");
-        GRIM::NlpAnnotation annotation = GRIM::annotate(prompt, snapshot);
+        GRIM::NlpAnnotation annotation;
+        if (Settings::interventionEnabled("nlp_annotation")) {
+            annotation = GRIM::annotate(prompt, snapshot);
+        } else {
+            // Intent system gate — skip NLP annotation; hand the router a bare
+            // payload so the model drives routing without local enrichment.
+            annotation.raw_text = prompt;
+            annotation.normalized_text = prompt;
+        }
 
         // Build router metadata envelope
         auto& toolReg = GRIM::MMO::ToolRegistry::instance();
@@ -327,8 +336,9 @@ CommandResult ai_process(const std::string& input) {
 
     for (int attempt = 1; attempt <= maxRetries; ++attempt) {
         try {
-            std::string prefix = GRIM::PersonalityManager::generatePrefix();
-            
+            std::string prefix = Settings::interventionEnabled("personality")
+                ? GRIM::PersonalityManager::generatePrefix() : "";
+
             // ✅ NEW: Add location context for location-aware conversations
             std::string locationContext = "";
             std::string lowerInput = input;
@@ -404,8 +414,9 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
         scmHistory.trimHistory(kDefaultSessionId, max_hist);
 
         // --- Build context prompt with strict JSON formatting ---
-        std::string personalityPrefix = GRIM::PersonalityManager::generatePrefix();
-        
+        std::string personalityPrefix = Settings::interventionEnabled("personality")
+            ? GRIM::PersonalityManager::generatePrefix() : "";
+
         // ✅ NEW: Add location context for location-aware queries
         std::string locationContext = "";
         if (g_location.lat != 0.0 || g_location.lon != 0.0) {
@@ -544,7 +555,15 @@ CommandResult ai_interpret(const std::string& input, bool allowCommands)
                 // Produce NlpAnnotation for confidence signals
                 auto& scmPolicy = GRIM::MMO::SessionContextManager::instance();
                 GRIM::MMO::ContextSnapshotV2 policySnapshot = scmPolicy.snapshot("default");
-                GRIM::NlpAnnotation policyAnn = GRIM::annotate(input, policySnapshot);
+                GRIM::NlpAnnotation policyAnn;
+                if (Settings::interventionEnabled("nlp_annotation")) {
+                    policyAnn = GRIM::annotate(input, policySnapshot);
+                } else {
+                    // Intent system gate — skip annotation; policy confidences
+                    // fall to defaults so the model's proposal stands on its own.
+                    policyAnn.raw_text = input;
+                    policyAnn.normalized_text = input;
+                }
 
                 GRIM::MMO::ActionProposal proposal;
                 proposal.tool_id            = cmd;

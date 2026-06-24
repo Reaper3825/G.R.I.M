@@ -39,7 +39,9 @@ UISettingsMenu::UISettingsMenu()
     tabPreferencesBtn_->setSize(55.0f, 26.0f);
     tabMemoryBtn_ = std::make_shared<UIButton>("Memory", [this]() { setTab(SettingsTab::Memory); });
     tabMemoryBtn_->setSize(68.0f, 26.0f);
-    
+    tabIntentsBtn_ = std::make_shared<UIButton>("Intents", [this]() { setTab(SettingsTab::Intents); });
+    tabIntentsBtn_->setSize(68.0f, 26.0f);
+
     loadConfig();
 }
 
@@ -351,6 +353,7 @@ void UISettingsMenu::createWidgets() {
             case SettingsTab::UIGraphics:  createUIGraphicsWidgets();  break;
             case SettingsTab::Preferences: createPreferencesWidgets(); break;
             case SettingsTab::Memory:      createMemoryWidgets();      break;
+            case SettingsTab::Intents:     createIntentsWidgets();     break;
         }
         
         scrollBox->setChildSpacing(5.0f);
@@ -1246,6 +1249,55 @@ void UISettingsMenu::createMemoryWidgets() {
     scrollBox->addChild(pdfsTotalSlider);
 }
 
+// =========================================================
+// Intents Tab — per-system enable flags for GRIM's intent
+//   interventions (intent_systems.* in ai_config.json). Each toggle guards a
+//   pre-model stage so the native grim-text model can be tested with and
+//   without the local scaffolding. Master off = raw input straight to model.
+// =========================================================
+void UISettingsMenu::createIntentsWidgets() {
+    float widgetWidth = scrollBox->getSize().x - 30;
+    float widgetHeight = 45.0f;
+
+    // Ensure the intent_systems object exists before binding toggles
+    if (!pendingConfig.contains("intent_systems") || !pendingConfig["intent_systems"].is_object())
+        pendingConfig["intent_systems"] = nlohmann::json::object();
+
+    auto addIntentToggle = [this, widgetWidth, widgetHeight](
+        const std::string& label, const std::string& key, bool defaultVal)
+    {
+        bool enabled = pendingConfig["intent_systems"].value(key, defaultVal);
+        auto toggle = std::make_shared<UIToggle>(
+            label, enabled,
+            [this, key](bool val) {
+                if (!pendingConfig.contains("intent_systems") || !pendingConfig["intent_systems"].is_object())
+                    pendingConfig["intent_systems"] = nlohmann::json::object();
+                pendingConfig["intent_systems"][key] = val;
+                hasChanges = true;
+            }
+        );
+        toggle->setSize(widgetWidth, widgetHeight);
+        scrollBox->addChild(toggle);
+    };
+
+    // Master switch — when off, all interventions bypass (raw input → model)
+    addIntentToggle("Master (all interventions):", "master_enabled", true);
+
+    // Big subsystems
+    addIntentToggle("Intent Gate (classifier):", "intent_gate", true);
+    addIntentToggle("NLP (rule parser):", "nlp", true);
+    addIntentToggle("Grammar parser:", "grammar", true);
+    addIntentToggle("Commands (local dispatch):", "commands", true);
+    addIntentToggle("Reward Learning (pre-dispatch):", "reward_learning", true);
+
+    // Fine-grained interventions
+    addIntentToggle("Multi-Command split:", "multi_command", true);
+    addIntentToggle("Synonyms / fuzzy rewrite:", "synonyms", true);
+    addIntentToggle("Banter stripping:", "banter_stripping", true);
+    addIntentToggle("Personality prefix:", "personality", true);
+    addIntentToggle("NLP Annotation (router):", "nlp_annotation", true);
+}
+
 void UISettingsMenu::update(const InputState& input, float dt) {
     UIPanel::update(input, dt);
     
@@ -1262,8 +1314,8 @@ void UISettingsMenu::update(const InputState& input, float dt) {
     
     // Position and update tab buttons
     float tabX = position.x + 10.0f;
-    float tabW = (size.x - 20.0f) / 7.0f;  // 7 tabs
-    
+    float tabW = (size.x - 20.0f) / 8.0f;  // 8 tabs
+
     tabGeneralBtn_->setPosition(tabX, position.y + kTabBarY);
     tabGeneralBtn_->setSize(tabW - 2, 28);
     tabVoiceBtn_->setPosition(tabX + tabW, position.y + kTabBarY);
@@ -1278,7 +1330,9 @@ void UISettingsMenu::update(const InputState& input, float dt) {
     tabPreferencesBtn_->setSize(tabW - 2, 28);
     tabMemoryBtn_->setPosition(tabX + tabW * 6, position.y + kTabBarY);
     tabMemoryBtn_->setSize(tabW - 2, 28);
-    
+    tabIntentsBtn_->setPosition(tabX + tabW * 7, position.y + kTabBarY);
+    tabIntentsBtn_->setSize(tabW - 2, 28);
+
     tabGeneralBtn_->update(input, dt);
     tabVoiceBtn_->update(input, dt);
     tabAudioBtn_->update(input, dt);
@@ -1286,6 +1340,7 @@ void UISettingsMenu::update(const InputState& input, float dt) {
     tabUIGraphicsBtn_->update(input, dt);
     tabPreferencesBtn_->update(input, dt);
     tabMemoryBtn_->update(input, dt);
+    tabIntentsBtn_->update(input, dt);
     
     // Update scroll box position below tab bar
     scrollBox->setPosition(position.x + 10, position.y + kContentTopY);
@@ -1323,10 +1378,11 @@ bool UISettingsMenu::drawOverlay(OverlayRenderer& renderer)
     tabUIGraphicsBtn_->drawOverlay(renderer, position);
     tabPreferencesBtn_->drawOverlay(renderer, position);
     tabMemoryBtn_->drawOverlay(renderer, position);
-    
+    tabIntentsBtn_->drawOverlay(renderer, position);
+
     // Active tab indicator (2px underline)
     float tabX = position.x + 10.0f;
-    float tabW = (size.x - 20.0f) / 7.0f;
+    float tabW = (size.x - 20.0f) / 8.0f;
     int tabIdx = static_cast<int>(activeTab_);
     float indicatorX = tabX + tabW * tabIdx;
     renderer.drawRect({indicatorX, position.y + kTabBarY + 28.0f}, {tabW - 2, 2.0f}, Colors::Primary);

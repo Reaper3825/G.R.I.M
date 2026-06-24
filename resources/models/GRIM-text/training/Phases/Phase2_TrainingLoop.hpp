@@ -80,10 +80,11 @@ struct BatchResult {
 };
 
 /**
- * @brief Epoch metric historically serialized as validation.
+ * @brief Result of the end-of-epoch validation pass.
  *
- * There is no second validation/eval autograd loop. This metric is derived
- * from the training batches already executed in the epoch.
+ * Measured by runValidation() over the Phase1-authored ctx.val_payloads with a
+ * forward-only, dropout-disabled eval pass (no backward, no optimizer step).
+ * Drives best-checkpoint selection and auto-stop in finalizeEpochOutcome.
  */
 struct ValidationResult {
     float loss = 0.0f;
@@ -201,6 +202,21 @@ BatchResult processBatch(
     int batch_idx,
     int epoch_idx,
     const BatchAutogradPlan& plan);
+
+/**
+ * @brief Run end-of-epoch validation over the held-out ctx.val_payloads.
+ *
+ * Forward-only, dropout-disabled eval pass (no backward, no optimizer step):
+ * computeAutogradLoss() reads the loss tensor value but no gradients are
+ * written, so validation never perturbs training gradients or weights. Iterates
+ * the Phase1-authored ctx.val_payloads (val_sequence_count from the startup
+ * dump). Returns +inf loss when no validation data is configured so that
+ * best-checkpoint and auto-stop tracking ignore it.
+ *
+ * @param ctx Training context
+ * @return ValidationResult Held-out validation metrics
+ */
+ValidationResult runValidation(TrainingContext& ctx);
 
 //======================================================//
 //  Internal Helper Functions

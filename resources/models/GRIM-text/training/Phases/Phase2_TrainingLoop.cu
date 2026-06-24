@@ -133,7 +133,28 @@ struct ProcessBatchStepStateClearScope {
     ProcessBatchStepStateClearScope& operator=(const ProcessBatchStepStateClearScope&) = delete;
 };
 
-
+// Update the run-level peak GPU-memory high-water mark.
+//
+// cudaMemGetInfo is a non-synchronizing driver query (~microseconds): it reports
+// device-wide used = total - free without stalling the async kernel pipeline, so
+// sampling it a couple of times per batch is negligible next to a forward+backward
+// step. We track device-wide usage so the number is directly comparable to the
+// startup "memory.gpu.used" line. Observability only — a failed query must never
+// take down a training step, so on error we drain and skip this sample.
+void updatePeakGpuMemory(TrainingContext& ctx) {
+    size_t free_bytes = 0;
+    size_t total_bytes = 0;
+    const cudaError_t err = cudaMemGetInfo(&free_bytes, &total_bytes);
+    if (err != cudaSuccess) {
+        (void)cudaGetLastError();  // don't let it masquerade as a later kernel fault
+        return;
+    }
+    const std::uint64_t used = static_cast<std::uint64_t>(total_bytes - free_bytes);
+    if (used > ctx.peak_gpu_used_bytes) {
+        ctx.peak_gpu_used_bytes = used;
+    }
+    ctx.gpu_total_bytes = static_cast<std::uint64_t>(total_bytes);
+}
 
 int validatedAccumulationSteps(const TrainingContext& ctx) {
     const auto schedule_hp =
@@ -793,6 +814,10 @@ BatchResult processBatch(
             << " accumulate=" << (plan.should_accumulate ? "true" : "false");
         EmitModuleInfo(ModuleId::ForwardPass, oss.str(), ctx.global_step);
     }
+    // Peak-memory sample: with all forward activations live alongside the
+    // persistent params / grad buffers / optimizer state, this brackets the high
+    // end of the step (backward then frees activations as it fills grads).
+    updatePeakGpuMemory(ctx);
     // Rule 20 ownership taxonomy: processBatch owns the single batch-boundary
     // clear path for the active forward/loss step-state. Do NOT add a second
     // explicit clear() site inside this function.
@@ -864,6 +889,10 @@ BatchResult processBatch(
             << " accumulate=" << (plan.should_accumulate ? "true" : "false");
         EmitModuleInfo(ModuleId::BackwardPass, oss.str(), ctx.global_step);
     }
+    // Peak-memory sample: captures any backward-only transient (reduction
+    // scratch, etc.) the post-forward sample missed. The high-water mark keeps
+    // whichever bracket is larger.
+    updatePeakGpuMemory(ctx);
 
     result.loss = loss_result.loss_value;
     result.text_loss = loss_result.text_loss;
@@ -1035,6 +1064,235 @@ BatchResult processBatch(
 }
 
 //======================================================//
+//  End-of-Epoch Validation
+//======================================================//
+//
+//  Forward-only evaluation over the Phase1-authored ctx.val_payloads
+//  (val_sequence_count in the startup dump). This mirrors the processBatch
+//  forward + loss path with three deliberate differences:
+//
+//    1. Read-only ModelForwardGraphPolicy — dropout DISABLED, no autograd edges
+//       connected to durable parameters, no backward graph retained (identical
+//       to the inference forward in Phase2_InferenceLoop.cu).
+//    2. NO executeAutogradBackward(): computeAutogradLoss() only reads the loss
+//       tensor value via a D2H copy; only backward writes parameter gradients.
+//       So validation can never corrupt accumulated training gradients or the
+//       model weights, and runs no optimizer step.
+//    3. No training diagnostics / tape entries / equation-CSV rows.
+//
+//  Phase2 NEVER builds val batches here — PlannedBatchesReady authored
+//  ctx.val_payloads at startup (Rule 20: fixed batch membership, no per-step
+//  batch creation in the hot loop). result.validation feeds best-checkpoint
+//  selection and auto-stop in finalizeEpochOutcome, so it must be the TRUE
+//  held-out metric rather than the training loss.
+
+ValidationResult runValidation(TrainingContext& ctx) {
+    ValidationResult result;
+
+    const int total_val_batches = static_cast<int>(ctx.val_payloads.size());
+    if (total_val_batches == 0) {
+        // No validation data configured. +inf so best-val tracking ignores it
+        // (saveBestCheckpoint compares with `<`; auto-stop skips non-finite).
+        result.loss = std::numeric_limits<float>::infinity();
+        result.perplexity = std::numeric_limits<float>::infinity();
+        result.sequences_processed = 0;
+        ctx.logging.logger->log(
+            "[Val] No validation payloads (val_sequence_count=0) — skipping end-of-epoch validation");
+        return result;
+    }
+
+    ctx.logging.logger->log("[Val] Running end-of-epoch validation over " +
+                            std::to_string(total_val_batches) +
+                            " Phase1-authored val payloads");
+
+    // PRE-VALIDATION SAFETY: drain any deferred CUDA error so it does not
+    // surface as an SEH exception deep inside the eval forward.
+    {
+        cudaError_t sync_err = cudaDeviceSynchronize();
+        if (sync_err != cudaSuccess) {
+            ctx.logging.logger->log("[Val] WARNING: cudaDeviceSynchronize before validation returned: " +
+                std::string(cudaGetErrorString(sync_err)));
+        }
+        cudaError_t deferred_err = cudaGetLastError();
+        if (deferred_err != cudaSuccess) {
+            ctx.logging.logger->log("[Val] WARNING: cleared deferred CUDA error before validation: " +
+                std::string(cudaGetErrorString(deferred_err)));
+        }
+    }
+
+    auto& model = *ctx.model;
+    auto& training_state = ctx.requireTrainingState("runValidation");
+    cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
+    const auto loss_config = GRIM::HyperParameters::lossConfigHP(ctx.config);
+    const auto& model_config = ctx.config;
+
+    // Match the training loss composition so the val number is comparable to the
+    // per-batch training loss (text CE + optional MTP/selector/execution terms).
+    const float mtp_alpha_effective = mtpAlphaEffectiveForBatch(ctx.config);
+    const bool mtp_enabled =
+        GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "mtp_enabled");
+    const int mtp_k = mtp_enabled
+        ? GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "mtp_k")
+        : 0;
+    const bool emit_mtp_logits = mtp_enabled && mtp_k > 0 && mtp_alpha_effective > 0.0f;
+    const bool emit_selector_logits =
+        GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "selector_enabled");
+
+    // Validation must not record training-tape entries or equation-CSV rows.
+    TapeSkipScope tape_skip_scope(/*skip=*/true);
+
+    // Accumulate in double precision: 8k+ sequences across many batches.
+    double val_loss_weighted = 0.0;
+    int val_sequences_processed = 0;
+    const auto val_start_time = std::chrono::steady_clock::now();
+
+    for (int val_idx = 0; val_idx < total_val_batches; ++val_idx) {
+        GRIM::Batching::BatchPayload& val_payload = ctx.val_payloads[val_idx];
+
+        if (val_idx % 50 == 0) {
+            ctx.logging.logger->log("[Val] batch " + std::to_string(val_idx + 1) + "/" +
+                std::to_string(total_val_batches) +
+                " (seqs=" + std::to_string(val_sequences_processed) + ")");
+        }
+
+        if (val_payload.batch_size == 0) {
+            // Rule 20: PlannedBatches validates payloads at startup, so an empty
+            // payload here means a startup invariant regressed.
+            throw std::runtime_error(
+                "[Val] empty payload at batch " + std::to_string(val_idx + 1) + "/" +
+                std::to_string(total_val_batches) +
+                " — Phase1 PlannedBatches authored an empty val payload");
+        }
+
+        // Sync slice: upload the host-only payload to device once per val batch,
+        // then reuse the bindings across the eval forward + loss.
+        const auto val_bindings = GRIM::Batching::uploadBatchToDevice(
+            ctx.config, val_payload, stream);
+
+        const auto forward_topology = validateTrainingForwardInputs(
+            ctx.config, ctx.gpu_model, val_payload, "runValidation");
+
+        // read_gate_accum_tensor is reused TrainingState workspace; reset it
+        // exactly like processBatch so the execution-block read path is clean.
+        if (training_state.read_gate_accum_tensor.data) {
+            CUDA_CHECK(cudaMemsetAsync(
+                training_state.read_gate_accum_tensor.data, 0, 2 * sizeof(float), stream));
+        }
+
+        GRIM::Forward::ModelForwardRuntimePayload runtime_payload =
+            buildTrainingForwardRuntimePayload(training_state);
+
+        GRIM::Forward::ModelForwardRequest forward_request{};
+        forward_request.config = &model_config;
+        forward_request.gpu_encoder = forward_topology.gpu_encoder;
+        forward_request.parameter_registry = &ctx.parameter_registry;
+        forward_request.pbm = &ctx.pbm_owner.state();
+        forward_request.cublas_handle = training_state.cublas_handle.get();
+        forward_request.stream = stream;
+        forward_request.execution_block_enabled = forward_topology.execution_block_enabled;
+        forward_request.payload = &val_payload;
+        forward_request.bindings = &val_bindings;
+        forward_request.batch_idx = static_cast<uint64_t>(val_idx);
+        if (emit_mtp_logits) {
+            // Forward-only: connect_parameter_graph=false below means these views'
+            // shared grads are never written (no backward). Safe to reuse the
+            // training-side builder; the grad aliasing is inert during eval.
+            forward_request.mtp_heads = buildConnectedForwardMtpHeadViews(
+                ctx.parameter_registry, mtp_k, stream);
+        }
+        // Eval policy: read-only forward (no autograd edges, no retained backward
+        // graph) with dropout DISABLED — identical to the inference forward.
+        // The text-CE, MTP, and selector loss terms read only explicitly-emitted
+        // output tensors (logits / mtp_logits / selector_logits), so they are
+        // valid under this read-only policy. NOTE: if execution_block_enabled is
+        // ever turned on, the execution auxiliary loss reads retained execution
+        // forward tensors — revisit retain_backward_graph here before relying on
+        // a validation execution-loss term.
+        forward_request.graph = GRIM::Forward::ModelForwardGraphPolicy{
+            /*connect_parameter_graph=*/false,
+            /*retain_backward_graph=*/false,
+            /*enable_dropout=*/false,
+            /*emit_mtp_logits=*/emit_mtp_logits,
+            /*emit_selector_logits=*/emit_selector_logits};
+
+        auto forward_outputs = GRIM::Forward::executeModelForward(forward_request, runtime_payload);
+
+        GRIM::Autograd::AutogradLossState autograd_loss_state;
+        // Rule 20 single-owner clear for this val step's forward/loss state.
+        ProcessBatchStepStateClearScope step_state_clear_scope{
+            forward_outputs, autograd_loss_state};
+
+        GRIM::Autograd::AutogradContext autograd_ctx = GRIM::Autograd::initAutogradContext(
+            &model_config,
+            &training_state,
+            forward_outputs,
+            autograd_loss_state,
+            forward_topology.gpu_encoder,
+            forward_topology.execution_block_enabled,
+            ctx.parameter_registry,
+            training_state.cublas_handle.get(),
+            stream,
+            val_payload,
+            val_bindings,
+            static_cast<uint64_t>(val_idx));
+
+        configureAutogradLossInputs(
+            autograd_ctx, model, training_state, val_payload, loss_config,
+            /*skip_equation_logging=*/true);
+
+        const auto loss_result = GRIM::Autograd::computeAutogradLoss(
+            autograd_ctx, val_payload, loss_config, mtp_alpha_effective);
+        if (!loss_result.success) {
+            throw std::runtime_error(
+                "[Val] computeAutogradLoss FAILED at batch " + std::to_string(val_idx + 1) +
+                ": " + loss_result.error_message);
+        }
+        // Deliberately NO executeAutogradBackward() and NO optimizer step:
+        // gradients and weights are left untouched by validation.
+
+        if (!std::isfinite(loss_result.loss_value)) {
+            throw std::runtime_error(
+                "[Val] non-finite loss at batch " + std::to_string(val_idx + 1) +
+                " (loss=" + std::to_string(loss_result.loss_value) +
+                ") — fix the model/data, do not skip");
+        }
+
+        cudaError_t batch_err = cudaGetLastError();
+        if (batch_err != cudaSuccess) {
+            throw std::runtime_error(
+                "[Val] CUDA error after batch " + std::to_string(val_idx + 1) +
+                ": " + std::string(cudaGetErrorString(batch_err)));
+        }
+
+        val_loss_weighted += static_cast<double>(loss_result.loss_value) *
+                             static_cast<double>(val_payload.batch_size);
+        val_sequences_processed += val_payload.batch_size;
+    }
+
+    const auto val_duration = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - val_start_time);
+
+    result.sequences_processed = val_sequences_processed;
+    result.loss = (val_sequences_processed > 0)
+        ? static_cast<float>(val_loss_weighted / static_cast<double>(val_sequences_processed))
+        : std::numeric_limits<float>::infinity();
+    result.perplexity = (std::isfinite(result.loss) && result.loss < 50.0f)
+        ? std::exp(result.loss)
+        : std::numeric_limits<float>::infinity();
+
+    ctx.logging.logger->log("[Val] " + Internal::formatMetric("loss", result.loss) + " " +
+                            Internal::formatMetric("ppl", result.perplexity, 3) +
+                            " seqs=" + std::to_string(val_sequences_processed) +
+                            " time=" + std::to_string(val_duration.count()) + "s");
+    EmitModuleInfo(ModuleId::Validation,
+        "Validation complete: loss=" + Internal::formatScalar(result.loss) +
+        " ppl=" + Internal::formatScalar(result.perplexity, 3) +
+        " seqs=" + std::to_string(val_sequences_processed), ctx.global_step);
+
+    return result;
+}
+
+//======================================================//
 //  Epoch Implementation
 //======================================================//
 
@@ -1097,7 +1355,6 @@ EpochResult runEpoch(
     auto& training_state = ctx.requireTrainingState("runEpoch");
     auto& parameter_groups = parameter_registry.requireParameterGroups("runEpoch");
     float epoch_loss = 0.0f;
-    int epoch_sequences_processed = 0;
 
     // Process batches: ctx.epoch_batch_order[epoch_idx] dictates which
     // Phase1-authored payload is active each step. The hard invariant from
@@ -1161,7 +1418,6 @@ EpochResult runEpoch(
         }
 
         epoch_loss += batch_result.loss;
-        epoch_sequences_processed += payload.batch_size;
         result.batches_processed++;
         result.best_batch_loss = std::min(result.best_batch_loss, batch_result.loss);
         result.worst_batch_loss = std::max(result.worst_batch_loss, batch_result.loss);
@@ -1180,16 +1436,12 @@ EpochResult runEpoch(
         throw std::runtime_error("FATAL: epoch completed with 0 processed batches");
     }
     
-    // No second validation/eval loop. The epoch metric is derived from the
-    // training batches already executed by the explicit shared-forward +
-    // autograd loss/backward path; every op and feature is verified in that
-    // single path.
-    result.validation.loss = epoch_loss / result.batches_processed;
-    result.validation.sequences_processed = epoch_sequences_processed;
-    result.validation.perplexity =
-        (std::isfinite(result.validation.loss) && result.validation.loss < 50.0f)
-            ? std::exp(result.validation.loss)
-            : std::numeric_limits<float>::infinity();
+    // End-of-epoch validation over the held-out ctx.val_payloads: forward-only,
+    // dropout disabled, no backward/optimizer (see runValidation). result.validation
+    // drives best-checkpoint selection and auto-stop in finalizeEpochOutcome, so it
+    // MUST be the true held-out metric — not the training loss. The training-loss
+    // average is still surfaced separately as result.avg_loss.
+    result.validation = runValidation(ctx);
     finalizeEpochOutcome(ctx, state, result, epoch_idx, epoch_loss, epoch_start);
     
     return result;

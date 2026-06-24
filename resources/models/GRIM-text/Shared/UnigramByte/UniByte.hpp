@@ -119,6 +119,11 @@ struct DecodeRequest {
     size_t token_atom_mask_count = 0;
     const AtomTable* atom_table = nullptr;
 
+    // When true, invalid UTF-8 in byte-fallback runs is replaced with the
+    // Unicode replacement character (U+FFFD) instead of throwing. Use for
+    // inspecting raw/partial model output; strict validation stays the default.
+    bool lenient_invalid_utf8 = true;
+
     explicit DecodeRequest(const std::vector<int>& ids)
         : token_ids(ids.data()), token_count(ids.size()) {}
 
