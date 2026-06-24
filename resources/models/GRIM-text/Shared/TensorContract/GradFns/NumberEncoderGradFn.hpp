@@ -107,6 +107,56 @@ struct NumberEncoderGradFn : public GradFn {
 };
 
 /**
+ * ArgSelectorKeysGradFn — backward node for encodeAtomEntryPoolKeys.
+ *
+ * Propagates the arg/option-selector loss from the candidate KEY tensor back
+ * into the eight NumberEncoder parameters, so the selection objective TEACHES
+ * the numeric-meaning encoder which candidate entries must be distinguishable.
+ * This gradient SUMS (atomicAdd) with the input-side number_encode gradient
+ * into the same registry leaf grad buffers — the NumberEncoder learns from both
+ * the LM fusion path and the selection path.
+ *
+ * Structurally identical to NumberEncoderGradFn, except:
+ *   - grad_output is the dense per-entry key grad [num_pool_atoms, d_model]
+ *     (one row per candidate entry, NOT scattered to token positions);
+ *   - the digit/slot/global channels are re-read from the candidate-POOL
+ *     bindings (BatchDeviceBindings::d_pool_*), not the per-token d_atom_*;
+ *   - the shared NumberEncoder backward kernels run in DENSE mode
+ *     (atom_positions = nullptr ⇒ grad row index == entry index).
+ */
+struct ArgSelectorKeysGradFn : public GradFn {
+    float* digit_emb_grad = nullptr;
+    float* pow10_emb_grad = nullptr;
+    float* W_c1_grad = nullptr;
+    float* b_c1_grad = nullptr;
+    float* W_c2_grad = nullptr;
+    float* W_g1_grad = nullptr;
+    float* b_g1_grad = nullptr;
+    float* W_g2_grad = nullptr;
+
+    const float* W_c2_data = nullptr;
+    const float* W_g2_data = nullptr;
+
+    Tensor slot_hidden;    // [num_atoms * digit_slots, d_hidden] post-tanh
+    Tensor global_hidden;  // [num_atoms, d_hidden] post-tanh
+
+    int num_atoms = 0;     // E = num_pool_atoms captured at forward
+    int digit_slots = 0;
+    int d_hidden = 0;
+    int d_model = 0;
+    int pow10_buckets = 0;
+
+    ArgSelectorKeysGradFn();
+    ~ArgSelectorKeysGradFn() override;
+
+    void apply_impl(const Tensor& grad_output,
+                    cudaStream_t stream,
+                    const Batching::BatchPayload* backward_payload,
+                    const Batching::BatchDeviceBindings* backward_bindings) override;
+    void release_saved() override;
+};
+
+/**
  * NumberEncoder forward op.
  *
  * Consumes the authored digit-place channels for the active payload
@@ -128,15 +178,18 @@ Tensor number_encode(const NumberEncoderForwardParams& params,
                      cudaStream_t stream);
 
 /**
- * encodeAtomEntryPoolKeys — dense per-entry selector key encoding (forward-only).
+ * encodeAtomEntryPoolKeys — dense per-entry selector key encoding.
  *
  * Encodes every candidate atom-entry in the batch pool into a [num_pool_atoms,
  * d_model] key tensor using the SAME NumberEncoder weights/math as number_encode,
- * so a number's selector key matches its input representation. The result is
- * DETACHED (requires_grad=false, no grad_fn): the NumberEncoder trains from the
- * input-side fusion; the arg/option selector consumes these keys as a fixed
- * per-step candidate representation. Feature channels come from the candidate-pool
- * bindings (BatchDeviceBindings::d_pool_digit_*).
+ * so a number's selector key matches its input representation. Feature channels
+ * come from the candidate-pool bindings (BatchDeviceBindings::d_pool_digit_*).
+ *
+ * GRADIENT: when any NumberEncoder parameter requires grad (training), the result
+ * is CONNECTED via an ArgSelectorKeysGradFn, so the selection loss flows through
+ * the keys into the NumberEncoder parameters — the selector teaches the encoder
+ * which entries to keep distinguishable. Pass DETACHED parameter views (inference)
+ * to get a forward-only, requires_grad=false key tensor instead.
  */
 Tensor encodeAtomEntryPoolKeys(
     const NumberEncoderForwardParams& params,

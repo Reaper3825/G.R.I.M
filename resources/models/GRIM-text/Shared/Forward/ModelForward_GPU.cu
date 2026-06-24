@@ -240,15 +240,33 @@ void materializeForwardSelectorLogits(
     }
 
     auto& ne = request.parameter_registry->requireNumberEncoderParameters("executeModelForward(selector)");
+    // Connected (training): encode keys against the registered NumberEncoder
+    // leaves so the selection loss accumulates gradient into them — the selector
+    // teaches the encoder which candidate entries to keep distinguishable.
+    // Read-only (inference): detached copies so the keys are forward-only and no
+    // graph edges are retained (mirrors the W_q detach below).
+    GRIM::NumberEncoderParameterTensors ne_detached{};
+    const GRIM::NumberEncoderParameterTensors* ne_src = &ne;
+    if (!request.graph.connect_parameter_graph) {
+        ne_detached.digit_emb = ne.digit_emb.detach(request.stream);
+        ne_detached.pow10_emb = ne.pow10_emb.detach(request.stream);
+        ne_detached.W_c1 = ne.W_c1.detach(request.stream);
+        ne_detached.b_c1 = ne.b_c1.detach(request.stream);
+        ne_detached.W_c2 = ne.W_c2.detach(request.stream);
+        ne_detached.W_g1 = ne.W_g1.detach(request.stream);
+        ne_detached.b_g1 = ne.b_g1.detach(request.stream);
+        ne_detached.W_g2 = ne.W_g2.detach(request.stream);
+        ne_src = &ne_detached;
+    }
     autograd::NumberEncoderForwardParams ne_params{};
-    ne_params.digit_emb = &ne.digit_emb;
-    ne_params.pow10_emb = &ne.pow10_emb;
-    ne_params.W_c1 = &ne.W_c1;
-    ne_params.b_c1 = &ne.b_c1;
-    ne_params.W_c2 = &ne.W_c2;
-    ne_params.W_g1 = &ne.W_g1;
-    ne_params.b_g1 = &ne.b_g1;
-    ne_params.W_g2 = &ne.W_g2;
+    ne_params.digit_emb = &ne_src->digit_emb;
+    ne_params.pow10_emb = &ne_src->pow10_emb;
+    ne_params.W_c1 = &ne_src->W_c1;
+    ne_params.b_c1 = &ne_src->b_c1;
+    ne_params.W_c2 = &ne_src->W_c2;
+    ne_params.W_g1 = &ne_src->W_g1;
+    ne_params.b_g1 = &ne_src->b_g1;
+    ne_params.W_g2 = &ne_src->W_g2;
 
     Tensor keys = autograd::encodeAtomEntryPoolKeys(
         ne_params, number_encoder_hp,

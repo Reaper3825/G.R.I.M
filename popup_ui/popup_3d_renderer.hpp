@@ -10,12 +10,17 @@
 // Forward declarations (opaque bgfx internals in .cpp)
 struct PopupMeshGPU;
 struct PopupShaderState;
+struct PopupClipEngine;
 
 struct Popup3DRenderer
 {
     // Opaque modules (created during init)
-    PopupMeshGPU*      mesh     = nullptr;
+    PopupMeshGPU*      mesh     = nullptr;   // static base mesh (from .obj)
     PopupShaderState*  shaders  = nullptr;
+
+    // Animation: optional baked geometry playback + preset clip engine
+    PopupMeshGPU*      dynamicMesh = nullptr; // created when a mesh-cache preset is loaded
+    PopupClipEngine*   anim        = nullptr; // preset/clip engine (owns presets + caches)
 
     // Albedo texture (BGFX_INVALID_HANDLE = no texture, use normal-based coloring)
     bgfx::TextureHandle albedoTex = BGFX_INVALID_HANDLE;
@@ -78,3 +83,19 @@ void popup3DRendererLoadPackedMap(Popup3DRenderer& r, const char* imagePath);
 
 // Check if any readback slots are still pending (for drain-then-destroy).
 bool popup3DRendererHasPending(const Popup3DRenderer& r);
+
+// -----------------------------------------------------------
+// Animation presets (load-in / fade-out / baked geometry clips)
+// -----------------------------------------------------------
+// Initialize the preset clip engine. Loads built-in presets, then overrides
+// from `presetsJsonPath` if it exists, preloading any referenced .gmc mesh
+// caches from `popup3dDir`. If any preset references baked geometry, a dynamic
+// mesh buffer is created sized to the largest cached frame.
+// Must be called after popup3DRendererInit().
+void popup3DRendererInitAnim(Popup3DRenderer& r,
+                             const std::string& presetsJsonPath,
+                             const std::string& popup3dDir,
+                             uint32_t defaultColorABGR = 0xFF804020);
+
+// Request playback of a named preset (thread-safe; callable from the UI thread).
+void popup3DRendererTriggerPreset(Popup3DRenderer& r, const char* presetName);

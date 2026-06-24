@@ -35,6 +35,10 @@ static std::atomic<bool> g_popupVisible{ false };
 static std::atomic<bool> g_pendingPopup{ false };
 static std::atomic<int> g_idleTimerMs{ 0 };
 
+// Animation preset requests (consumed by the popup loop)
+static std::atomic<bool> g_showRequested{ false };  // play "load_in"
+static std::atomic<bool> g_hideRequested{ false };  // play "fade_out", then hide
+
 
 static std::chrono::steady_clock::time_point g_idleStart = std::chrono::steady_clock::now();
 static std::chrono::steady_clock::time_point g_frameStart = std::chrono::steady_clock::now();
@@ -113,9 +117,20 @@ void runPopupUI(int width, int height)
             g_popup3DInput.height    = static_cast<uint32_t>(height);
             g_popup3DInput.visible   = true;
 
+            // Load animation presets (built-ins + optional JSON overrides) and
+            // any baked geometry-node mesh caches they reference.
+            {
+                std::string popup3dDir = std::string(GRIM_ROOT_DIR) + "/resources/popup_3d";
+                std::string presetsJson = popup3dDir + "/anim_presets.json";
+                popup3DRendererInitAnim(g_popup3D, presetsJson, popup3dDir);
+            }
+
             // Register pre-frame callback so main thread renders the cube
             WindowManager::registerPreFrameCallback(popup3DPreFrameCallback);
             g_popup3DInitialized = true;
+
+            // Play the load-in preset on first appearance.
+            g_showRequested = true;
 
             // Show window now that 3D renderer is ready
             ShowWindow(g_hwnd, SW_SHOW);
@@ -226,6 +241,44 @@ void runPopupUI(int width, int height)
         }
 
         // ---------------------------------------------------
+        // Animation preset triggers (load_in / fade_out)
+        // ---------------------------------------------------
+        {
+            static bool sFadingOut = false;
+            static std::chrono::steady_clock::time_point sFadeStart;
+            constexpr float kFadeOutSec = 0.30f;  // must match the "fade_out" preset duration
+
+            // Show: cancel any fade and play load-in.
+            if (g_showRequested.exchange(false))
+            {
+                sFadingOut = false;
+                if (g_popup3DInitialized.load())
+                    popup3DRendererTriggerPreset(g_popup3D, "load_in");
+            }
+
+            // Hide: play fade-out, then actually hide the window once it completes.
+            if (g_hideRequested.load())
+            {
+                if (!sFadingOut)
+                {
+                    sFadingOut = true;
+                    sFadeStart = now;
+                    if (g_popup3DInitialized.load())
+                        popup3DRendererTriggerPreset(g_popup3D, "fade_out");
+                }
+                else if (std::chrono::duration<float>(now - sFadeStart).count() >= kFadeOutSec)
+                {
+                    if (g_hwnd) ShowWindow(g_hwnd, SW_HIDE);
+                    g_popupVisible = false;
+                    g_popup3DInput.visible = false;  // stop offscreen submission
+                    WindowManager::setVisibility("popup", false);
+                    sFadingOut = false;
+                    g_hideRequested = false;
+                }
+            }
+        }
+
+        // ---------------------------------------------------
         // Animation logic - voice-reactive (OPTIMIZED)
         // Use actual window dimensions!
         // ---------------------------------------------------
@@ -252,11 +305,14 @@ void runPopupUI(int width, int height)
             // Voice pulse: up to 8% scale boost when speaking
             float voiceScale = 1.0f + g_anim.pulse * 0.08f;
             float finalScale = breatheScale * voiceScale;
+            // Note: the load_in / fade_out presets layer their own scale + alpha
+            // multiplicatively on top of these (evaluated render-side), so we keep
+            // the per-frame baseline here to just the voice/breathe reaction.
             g_popup3DInput.transform.scale[0] = finalScale;
             g_popup3DInput.transform.scale[1] = finalScale;
             g_popup3DInput.transform.scale[2] = finalScale;
 
-            g_popup3DInput.alphaMul    = g_anim.alpha;
+            g_popup3DInput.alphaMul    = 1.0f;  // alpha is driven by the active preset clip
             g_popup3DInput.emissiveMul = g_anim.voiceIntensity * 0.5f;
             g_popup3DInput.visible     = g_popupVisible.load();
 
@@ -306,6 +362,8 @@ void showPopup()
         ShowWindow(g_hwnd, SW_SHOW);
         SetForegroundWindow(g_hwnd);
         g_popupVisible = true;
+        g_hideRequested = false;  // cancel any in-flight fade-out
+        g_showRequested = true;   // play the load-in preset
         LOG_PHASE("PopupUI shown", true);
         WindowManager::setVisibility("popup", true);
     }
@@ -315,9 +373,10 @@ void hidePopup()
 {
     if (g_hwnd)
     {
-        ShowWindow(g_hwnd, SW_HIDE);
-        g_popupVisible = false;
-        WindowManager::setVisibility("popup", false);
+        // Request a fade-out; the popup loop plays the "fade_out" preset and
+        // performs the actual SW_HIDE once the clip finishes. The window keeps
+        // rendering during the fade.
+        g_hideRequested = true;
     }
 }
 

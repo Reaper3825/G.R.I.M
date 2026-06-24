@@ -244,7 +244,7 @@ __global__ void kernel_number_encoder_keys_dense(
 //   grad_pow10_emb[pi, m] += grad_out[pos, m] / n_a
 __global__ void kernel_number_encoder_backward_emb(
     const float* __restrict__ grad_output,    // [total_tokens, M]
-    const int* __restrict__ atom_positions,   // [A]
+    const int* __restrict__ atom_positions,   // [A]; null ⇒ dense (token_pos = atom)
     const int* __restrict__ digit_values,     // [A*S]
     const int* __restrict__ pow10_index,      // [A*S]
     const float* __restrict__ slot_mask,      // [A*S]
@@ -266,7 +266,7 @@ __global__ void kernel_number_encoder_backward_emb(
     }
     const float inv_n = 1.0f / static_cast<float>(real_slots);
 
-    const int token_pos = atom_positions[atom];
+    const int token_pos = atom_positions ? atom_positions[atom] : atom;
     const float* grad_row = grad_output + static_cast<size_t>(token_pos) * d_model;
 
     const int dv = digit_values[slot];
@@ -292,7 +292,7 @@ __global__ void kernel_number_encoder_backward_emb(
 //   grad_W_c1[f, h] += slot_feat[f] * dhid[h]
 __global__ void kernel_number_encoder_backward_slot(
     const float* __restrict__ grad_output,    // [total_tokens, M]
-    const int* __restrict__ atom_positions,   // [A]
+    const int* __restrict__ atom_positions,   // [A]; null ⇒ dense (token_pos = atom)
     const float* __restrict__ slot_mask,      // [A*S]
     const float* __restrict__ slot_features,  // [A*S, F]
     const float* __restrict__ slot_hidden,    // [A*S, H]
@@ -316,7 +316,7 @@ __global__ void kernel_number_encoder_backward_slot(
     }
     const float inv_n = 1.0f / static_cast<float>(real_slots);
 
-    const int token_pos = atom_positions[atom];
+    const int token_pos = atom_positions ? atom_positions[atom] : atom;
     const float* grad_row = grad_output + static_cast<size_t>(token_pos) * d_model;
     const float* s_hidden = slot_hidden + static_cast<size_t>(slot) * d_hidden;
     const float* feat = slot_features + static_cast<size_t>(slot) * kSlotFeatDim;
@@ -344,7 +344,7 @@ __global__ void kernel_number_encoder_backward_slot(
 // global head adds directly into the atom's output row).
 __global__ void kernel_number_encoder_backward_global(
     const float* __restrict__ grad_output,      // [total_tokens, M]
-    const int* __restrict__ atom_positions,     // [A]
+    const int* __restrict__ atom_positions,     // [A]; null ⇒ dense (token_pos = atom)
     const float* __restrict__ global_features,  // [A, G]
     const float* __restrict__ global_hidden,    // [A, H]
     const float* __restrict__ W_g2,             // [H, M]
@@ -358,7 +358,7 @@ __global__ void kernel_number_encoder_backward_global(
     const int atom = blockIdx.x;
     if (atom >= num_atoms) return;
 
-    const int token_pos = atom_positions[atom];
+    const int token_pos = atom_positions ? atom_positions[atom] : atom;
     const float* grad_row = grad_output + static_cast<size_t>(token_pos) * d_model;
     const float* g_hidden = global_hidden + static_cast<size_t>(atom) * d_hidden;
     const float* feat = global_features + static_cast<size_t>(atom) * kGlobalFeatDim;
@@ -509,6 +509,143 @@ void NumberEncoderGradFn::apply_impl(const Tensor& grad_output,
 }
 
 void NumberEncoderGradFn::release_saved() {
+    if (released_) return;
+    GradFn::release_saved();
+    slot_hidden = Tensor();
+    global_hidden = Tensor();
+    digit_emb_grad = nullptr;
+    pow10_emb_grad = nullptr;
+    W_c1_grad = nullptr;
+    b_c1_grad = nullptr;
+    W_c2_grad = nullptr;
+    W_g1_grad = nullptr;
+    b_g1_grad = nullptr;
+    W_g2_grad = nullptr;
+    W_c2_data = nullptr;
+    W_g2_data = nullptr;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ArgSelectorKeysGradFn — method bodies
+//
+// Reuses the NumberEncoder backward kernels in DENSE mode (atom_positions =
+// nullptr) over the candidate-POOL channels, so the arg/option-selection loss
+// trains the eight NumberEncoder parameters. Grads accumulate (atomicAdd) into
+// the SAME registry leaf grad buffers as the input-side number_encode backward.
+// ═══════════════════════════════════════════════════════════════════════════
+
+ArgSelectorKeysGradFn::ArgSelectorKeysGradFn() {
+    op_name = "arg_selector_keys";
+}
+
+ArgSelectorKeysGradFn::~ArgSelectorKeysGradFn() {
+    release_saved();
+}
+
+void ArgSelectorKeysGradFn::apply_impl(const Tensor& grad_output,
+                                       cudaStream_t stream,
+                                       const Batching::BatchPayload* /*backward_payload*/,
+                                       const Batching::BatchDeviceBindings* backward_bindings) {
+    setCurrentGradFnOp("arg_selector_keys", this);
+
+    if (applied) {
+        return;
+    }
+    applied = true;
+
+    if (!backward_bindings) {
+        throw std::runtime_error("ArgSelectorKeysGradFn::apply: backward_bindings is NULL - orchestration MUST pass the active BatchDeviceBindings into backward()");
+    }
+    if (!grad_output.data) {
+        throw std::runtime_error("ArgSelectorKeysGradFn::apply: grad_output.data is NULL");
+    }
+    if (num_atoms <= 0) {
+        throw std::runtime_error("ArgSelectorKeysGradFn::apply: captured num_atoms <= 0");
+    }
+    if (backward_bindings->num_pool_atoms != num_atoms) {
+        throw std::runtime_error("ArgSelectorKeysGradFn::apply: backward bindings num_pool_atoms=" +
+                                 std::to_string(backward_bindings->num_pool_atoms) +
+                                 " != captured num_atoms=" + std::to_string(num_atoms));
+    }
+    const size_t expected_count = static_cast<size_t>(num_atoms) * static_cast<size_t>(d_model);
+    if (grad_output.numel() != expected_count) {
+        throw std::runtime_error("ArgSelectorKeysGradFn::apply: grad_output element count mismatch. expected=" +
+                                 std::to_string(expected_count) + " got=" +
+                                 std::to_string(grad_output.numel()));
+    }
+    if (!backward_bindings->d_pool_digit_values ||
+        !backward_bindings->d_pool_digit_pow10_index ||
+        !backward_bindings->d_pool_digit_mask ||
+        !backward_bindings->d_pool_digit_slot_features ||
+        !backward_bindings->d_pool_global_features) {
+        throw std::runtime_error("ArgSelectorKeysGradFn::apply: candidate-pool device channels are NULL on backward bindings");
+    }
+    if (!slot_hidden.data || !global_hidden.data) {
+        throw std::runtime_error("ArgSelectorKeysGradFn::apply: saved hidden activations were released before backward");
+    }
+    if (!W_c2_data || !W_g2_data) {
+        throw std::runtime_error("ArgSelectorKeysGradFn::apply: captured W_c2/W_g2 weight pointers are NULL");
+    }
+
+    const int total_slots = num_atoms * digit_slots;
+
+    // DENSE mode: atom_positions = nullptr ⇒ each backward kernel indexes
+    // grad_output by entry directly (grad_output is [num_pool_atoms, d_model]).
+    if (digit_emb_grad || pow10_emb_grad) {
+        kernel_number_encoder_backward_emb<<<total_slots, NUMBER_ENCODER_BLOCK_SIZE, 0, stream>>>(
+            grad_output.data,
+            nullptr,
+            backward_bindings->d_pool_digit_values,
+            backward_bindings->d_pool_digit_pow10_index,
+            backward_bindings->d_pool_digit_mask,
+            digit_emb_grad,
+            pow10_emb_grad,
+            num_atoms,
+            digit_slots,
+            d_model,
+            pow10_buckets);
+        trackKernelLaunch("kernel_number_encoder_backward_emb(pool)", stream);
+    }
+
+    if (W_c2_grad || W_c1_grad || b_c1_grad) {
+        kernel_number_encoder_backward_slot<<<total_slots, NUMBER_ENCODER_BLOCK_SIZE, 0, stream>>>(
+            grad_output.data,
+            nullptr,
+            backward_bindings->d_pool_digit_mask,
+            backward_bindings->d_pool_digit_slot_features,
+            slot_hidden.data,
+            W_c2_data,
+            W_c2_grad,
+            W_c1_grad,
+            b_c1_grad,
+            num_atoms,
+            digit_slots,
+            d_hidden,
+            d_model);
+        trackKernelLaunch("kernel_number_encoder_backward_slot(pool)", stream);
+    }
+
+    if (W_g2_grad || W_g1_grad || b_g1_grad) {
+        kernel_number_encoder_backward_global<<<num_atoms, NUMBER_ENCODER_BLOCK_SIZE, 0, stream>>>(
+            grad_output.data,
+            nullptr,
+            backward_bindings->d_pool_global_features,
+            global_hidden.data,
+            W_g2_data,
+            W_g2_grad,
+            W_g1_grad,
+            b_g1_grad,
+            num_atoms,
+            d_hidden,
+            d_model);
+        trackKernelLaunch("kernel_number_encoder_backward_global(pool)", stream);
+    }
+
+    // No upstream chain: the pool feature channels are immutable batch data and
+    // the parameters are registered leaves (grads accumulated above).
+}
+
+void ArgSelectorKeysGradFn::release_saved() {
     if (released_) return;
     GradFn::release_saved();
     slot_hidden = Tensor();
@@ -744,16 +881,24 @@ Tensor encodeAtomEntryPoolKeys(
     const Tensor& b_g1 = requireParam(params.b_g1, 1, d_hidden, "b_g1");
     const Tensor& W_g2 = requireParam(params.W_g2, d_hidden, d_model, "W_g2");
 
+    const bool any_requires_grad =
+        digit_emb.requires_grad || pow10_emb.requires_grad ||
+        W_c1.requires_grad || b_c1.requires_grad || W_c2.requires_grad ||
+        W_g1.requires_grad || b_g1.requires_grad || W_g2.requires_grad;
+
+    // Saved activations: owned by the GradFn when training, locals otherwise.
     Tensor slot_hidden = Tensor::empty(
         ::TensorContract::TensorShape::make_BSM(total_slots, d_hidden),
         false, stream, "selector_pool_slot_hidden");
     Tensor global_hidden = Tensor::empty(
         ::TensorContract::TensorShape::make_BSM(num_pool_atoms, d_hidden),
         false, stream, "selector_pool_global_hidden");
-    // Detached keys: requires_grad=false, no grad_fn attached.
+    // Connected when any NumberEncoder parameter requires grad (training): the
+    // selection loss flows through these keys into the encoder. Detached
+    // (requires_grad=false) when the caller passes detached params (inference).
     Tensor keys = Tensor::zeros(
         ::TensorContract::TensorShape::make_BSM(num_pool_atoms, d_model),
-        false, stream, "selector_pool_keys");
+        any_requires_grad, stream, "selector_pool_keys");
 
     kernel_number_encoder_slot_hidden<<<total_slots, NUMBER_ENCODER_BLOCK_SIZE, 0, stream>>>(
         d_pool_digit_slot_features, d_pool_digit_mask, W_c1.data, b_c1.data,
@@ -771,6 +916,37 @@ Tensor encodeAtomEntryPoolKeys(
         W_c2.data, W_g2.data, keys.data,
         num_pool_atoms, digit_slots, d_hidden, d_model, hp.pow10_buckets);
     trackKernelLaunch("kernel_number_encoder_keys_dense", stream);
+
+    if (any_requires_grad) {
+        keys.is_leaf = false;
+        auto grad_fn = std::make_shared<ArgSelectorKeysGradFn>();
+        grad_fn->num_atoms = num_pool_atoms;
+        grad_fn->digit_slots = digit_slots;
+        grad_fn->d_hidden = d_hidden;
+        grad_fn->d_model = d_model;
+        grad_fn->pow10_buckets = hp.pow10_buckets;
+        grad_fn->slot_hidden = std::move(slot_hidden);
+        grad_fn->global_hidden = std::move(global_hidden);
+        grad_fn->W_c2_data = W_c2.data;
+        grad_fn->W_g2_data = W_g2.data;
+
+        auto captureGrad = [](const Tensor& t) -> float* {
+            if (!t.requires_grad) return nullptr;
+            auto& mutable_t = const_cast<Tensor&>(t);
+            mutable_t.ensure_grad();
+            return mutable_t.grad_data();
+        };
+        grad_fn->digit_emb_grad = captureGrad(digit_emb);
+        grad_fn->pow10_emb_grad = captureGrad(pow10_emb);
+        grad_fn->W_c1_grad = captureGrad(W_c1);
+        grad_fn->b_c1_grad = captureGrad(b_c1);
+        grad_fn->W_c2_grad = captureGrad(W_c2);
+        grad_fn->W_g1_grad = captureGrad(W_g1);
+        grad_fn->b_g1_grad = captureGrad(b_g1);
+        grad_fn->W_g2_grad = captureGrad(W_g2);
+
+        keys.grad_fn = grad_fn;
+    }
 
     return keys;
 }

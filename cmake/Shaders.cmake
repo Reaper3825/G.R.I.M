@@ -21,6 +21,14 @@ set(GRIM_SHADER_OUTPUT_DIR "${CMAKE_BINARY_DIR}/generated/shaders")
 find_program(BGFX_SHADERC
     NAMES shaderc
     HINTS
+        # Actual layout produced by bgfx.cmake on Windows (MSVC multi-config):
+        #   external/bgfx.cmake/build/cmake/bgfx/<Config>/shaderc.exe
+        "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/bgfx/Release"
+        "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/bgfx/Debug"
+        "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/bgfx"
+        "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build-release/cmake/bgfx/Release"
+        "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build-tools/cmake/bgfx/Debug"
+        # Legacy / single-config layouts:
         "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/cmake/bgfx"
         "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/cmake/bgfx/Release"
         "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/cmake/bgfx/Debug"
@@ -45,22 +53,25 @@ endif()
 message(STATUS "[GRIM] Found shaderc: ${BGFX_SHADERC}")
 
 # ---- Platform / profiles ----
+# NOTE: "wgsl" (WebGPU) is intentionally omitted — this bgfx build's
+# embedded_shader.h has no WGSL backend, so the symbol is never referenced,
+# and shaderc here lacks the tint toolchain to emit it (it would fail the build).
 if(APPLE AND NOT IOS)
     set(_SHADERC_PLATFORM "osx")
-    set(_SHADERC_VS_PROFILES  "120" "300_es" "spirv" "metal" "wgsl")
-    set(_SHADERC_FS_PROFILES  "120" "300_es" "spirv" "metal" "wgsl")
+    set(_SHADERC_VS_PROFILES  "120" "300_es" "spirv" "metal")
+    set(_SHADERC_FS_PROFILES  "120" "300_es" "spirv" "metal")
 elseif(IOS)
     set(_SHADERC_PLATFORM "ios")
     set(_SHADERC_VS_PROFILES  "300_es" "spirv" "metal")
     set(_SHADERC_FS_PROFILES  "300_es" "spirv" "metal")
 elseif(WIN32)
     set(_SHADERC_PLATFORM "windows")
-    set(_SHADERC_VS_PROFILES  "120" "300_es" "spirv" "s_4_0" "s_5_0" "wgsl")
-    set(_SHADERC_FS_PROFILES  "120" "300_es" "spirv" "s_4_0" "s_5_0" "wgsl")
+    set(_SHADERC_VS_PROFILES  "120" "300_es" "spirv" "s_4_0" "s_5_0")
+    set(_SHADERC_FS_PROFILES  "120" "300_es" "spirv" "s_4_0" "s_5_0")
 elseif(UNIX)
     set(_SHADERC_PLATFORM "linux")
-    set(_SHADERC_VS_PROFILES  "120" "300_es" "spirv" "wgsl")
-    set(_SHADERC_FS_PROFILES  "120" "300_es" "spirv" "wgsl")
+    set(_SHADERC_VS_PROFILES  "120" "300_es" "spirv")
+    set(_SHADERC_FS_PROFILES  "120" "300_es" "spirv")
 endif()
 
 # Map profile names to the extension suffixes that embedded_shader.h expects

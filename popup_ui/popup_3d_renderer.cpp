@@ -2,12 +2,14 @@
 #include "popup_3d_mesh.hpp"
 #include "popup_3d_shaders.hpp"
 #include "popup_3d_mailbox.hpp"
+#include "popup_anim_presets.hpp"
 #include <bgfx/bgfx.h>
 #include <bx/math.h>
 #include <stdexcept>
 #include <string>
 #include <cstring>
 #include <cmath>
+#include <chrono>
 
 #include <stb/stb_image.h>
 #include "logger.hpp"
@@ -17,6 +19,14 @@
 // ===========================================================
 
 static constexpr bgfx::ViewId kPopupViewId = 31;
+
+// Monotonic seconds since first call — drives preset clip playback timing.
+static double popupNowSeconds()
+{
+    static const auto s_start = std::chrono::steady_clock::now();
+    auto dt = std::chrono::steady_clock::now() - s_start;
+    return std::chrono::duration<double>(dt).count();
+}
 
 // Offscreen framebuffer state (per readback slot)
 struct SlotGPU
@@ -231,12 +241,32 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
         return;  // all slots busy, skip this frame
     }
 
+    // ---- Evaluate active animation preset (render thread) ----
+    // Preset output is layered multiplicatively on top of the per-frame input,
+    // and may select a baked geometry frame to draw instead of the static mesh.
+    PopupRenderInput eff = input;
+    const PopupMeshFrame* clipFrame = nullptr;
+    if (r.anim)
+    {
+        PopupClipEval ev;
+        if (popupClipEngineEvaluate(r.anim, popupNowSeconds(), ev) && ev.active)
+        {
+            eff.alphaMul          *= ev.alphaMul;
+            eff.transform.scale[0] *= ev.scaleMul;
+            eff.transform.scale[1] *= ev.scaleMul;
+            eff.transform.scale[2] *= ev.scaleMul;
+            eff.emissiveMul        += ev.emissiveAdd;
+            eff.transform.rotation[1] += ev.spinY;
+            clipFrame = ev.frame;
+        }
+    }
+
     // ---- Build model matrix ----
     float mtxModel[16];
     bx::mtxSRT(mtxModel,
-               input.transform.scale[0], input.transform.scale[1], input.transform.scale[2],
-               input.transform.rotation[0], input.transform.rotation[1], input.transform.rotation[2],
-               input.transform.position[0], input.transform.position[1], input.transform.position[2]);
+               eff.transform.scale[0], eff.transform.scale[1], eff.transform.scale[2],
+               eff.transform.rotation[0], eff.transform.rotation[1], eff.transform.rotation[2],
+               eff.transform.position[0], eff.transform.position[1], eff.transform.position[2]);
 
     // ---- Build view matrix ----
     float mtxView[16];
@@ -273,16 +303,28 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
     // ---- Set transform ----
     bgfx::setTransform(mtxModel);
 
-    // ---- Bind mesh ----
-    popupMeshBind(r.mesh);
+    // ---- Bind mesh (baked geometry frame if a clip is active, else static) ----
+    if (clipFrame && r.dynamicMesh && !clipFrame->vertices.empty() && !clipFrame->indices.empty())
+    {
+        popupMeshUpdate(r.dynamicMesh,
+                        clipFrame->vertices.data(),
+                        static_cast<uint32_t>(clipFrame->vertices.size()),
+                        clipFrame->indices.data(),
+                        static_cast<uint32_t>(clipFrame->indices.size()));
+        popupMeshBind(r.dynamicMesh);
+    }
+    else
+    {
+        popupMeshBind(r.mesh);
+    }
 
     // ---- Set uniforms for popup model shader ----
     {
         // Light direction (normalized)
         float lightDir[4] = {
-            input.light.direction[0],
-            input.light.direction[1],
-            input.light.direction[2],
+            eff.light.direction[0],
+            eff.light.direction[1],
+            eff.light.direction[2],
             0.0f
         };
         // Normalize
@@ -290,13 +332,13 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
         if (len > 1e-8f) { lightDir[0] /= len; lightDir[1] /= len; lightDir[2] /= len; }
         bgfx::setUniform(popupShadersGetUniform(r.shaders, PopupShaderUniform::LightDir), lightDir);
 
-        float lightParams[4] = { input.light.intensity, input.light.ambient, 0.0f, 0.0f };
+        float lightParams[4] = { eff.light.intensity, eff.light.ambient, 0.0f, 0.0f };
         bgfx::setUniform(popupShadersGetUniform(r.shaders, PopupShaderUniform::LightParams), lightParams);
 
-        float alpha[4] = { input.alphaMul, 0.0f, 0.0f, 0.0f };
+        float alpha[4] = { eff.alphaMul, 0.0f, 0.0f, 0.0f };
         bgfx::setUniform(popupShadersGetUniform(r.shaders, PopupShaderUniform::Alpha), alpha);
 
-        float emissive[4] = { input.emissiveMul, 0.0f, 0.0f, 0.0f };
+        float emissive[4] = { eff.emissiveMul, 0.0f, 0.0f, 0.0f };
         bgfx::setUniform(popupShadersGetUniform(r.shaders, PopupShaderUniform::Emissive), emissive);
 
         // Always bind all 3 texture slots — Metal returns (0,0,0,0) for unbound samplers
@@ -323,7 +365,7 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
     bgfx::ProgramHandle prog = popupShadersGetProgram(r.shaders);
     if (shouldLog)
         LOG_DEBUG("Popup3D", "submit: slot=" + std::to_string(idleSlot) +
-                 " alpha=" + std::to_string(input.alphaMul) +
+                 " alpha=" + std::to_string(eff.alphaMul) +
                  " prog=" + std::to_string(prog.idx) +
                  " fb=" + std::to_string(s_slotGPU[idleSlot].fb.idx) +
                  " frame#" + std::to_string(sSubmitCount));
@@ -385,6 +427,50 @@ void popup3DRendererResize(Popup3DRenderer& r, uint32_t width, uint32_t height)
 }
 
 // -------------------------------------------------------
+// Animation presets
+// -------------------------------------------------------
+void popup3DRendererInitAnim(Popup3DRenderer& r,
+                             const std::string& presetsJsonPath,
+                             const std::string& popup3dDir,
+                             uint32_t defaultColorABGR)
+{
+    if (!r.initialized)
+        throw std::runtime_error("popup3DRendererInitAnim: renderer not initialized");
+
+    if (!r.anim)
+        r.anim = popupClipEngineCreate();
+
+    // Built-in presets first, then JSON overrides (if present).
+    popupClipEngineLoadDefaults(r.anim);
+    popupClipEngineLoadJson(r.anim, presetsJsonPath, popup3dDir, defaultColorABGR);
+
+    // If any preset uses baked geometry, allocate a dynamic mesh sized to the
+    // largest cached frame.
+    if (popupClipEngineHasGeometry(r.anim))
+    {
+        uint32_t maxV = 0, maxI = 0;
+        popupClipEngineMaxBuffer(r.anim, &maxV, &maxI);
+        if (maxV > 0 && maxI > 0 && !r.dynamicMesh)
+        {
+            try { r.dynamicMesh = popupMeshCreateDynamic(maxV, maxI); }
+            catch (const std::exception& e)
+            {
+                LOG_ERROR("Popup3D", std::string("Dynamic mesh alloc failed: ") + e.what());
+            }
+        }
+    }
+
+    LOG_DEBUG("Popup3D", "Anim engine ready (geometry=" +
+              std::string(popupClipEngineHasGeometry(r.anim) ? "yes" : "no") + ")");
+}
+
+void popup3DRendererTriggerPreset(Popup3DRenderer& r, const char* presetName)
+{
+    if (r.anim)
+        popupClipEngineTrigger(r.anim, presetName);
+}
+
+// -------------------------------------------------------
 // Shutdown
 // -------------------------------------------------------
 void popup3DRendererShutdown(Popup3DRenderer& r)
@@ -398,8 +484,10 @@ void popup3DRendererShutdown(Popup3DRenderer& r)
     if (bgfx::isValid(r.normalTex)) { bgfx::destroy(r.normalTex); r.normalTex = BGFX_INVALID_HANDLE; }
     if (bgfx::isValid(r.packedTex)) { bgfx::destroy(r.packedTex); r.packedTex = BGFX_INVALID_HANDLE; }
     if (bgfx::isValid(s_whiteFallback)) { bgfx::destroy(s_whiteFallback); s_whiteFallback = BGFX_INVALID_HANDLE; }
-    if (r.shaders) { popupShadersDestroy(r.shaders); r.shaders = nullptr; }
-    if (r.mesh)    { popupMeshDestroy(r.mesh);        r.mesh    = nullptr; }
+    if (r.shaders)     { popupShadersDestroy(r.shaders);   r.shaders     = nullptr; }
+    if (r.mesh)        { popupMeshDestroy(r.mesh);          r.mesh        = nullptr; }
+    if (r.dynamicMesh) { popupMeshDestroy(r.dynamicMesh);   r.dynamicMesh = nullptr; }
+    if (r.anim)        { popupClipEngineDestroy(r.anim);    r.anim        = nullptr; }
 
     r.initialized = false;
 }

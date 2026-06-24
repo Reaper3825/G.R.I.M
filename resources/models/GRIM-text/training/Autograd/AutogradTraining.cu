@@ -468,18 +468,22 @@ LossResult computeAutogradLoss(
     // ═══════════════════════════════════════════════════════════════════════════
     const bool selector_enabled =
         GRIM::HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "selector_enabled");
-    if (selector_enabled && forward_outputs.selector_logits.data &&
-        ctx.device_bindings->num_pool_atoms > 0 && ctx.device_bindings->d_arg_select_targets &&
-        payload.arg_select_valid_count > 0) {
+    if (selector_enabled) {
+        const int sel_candidates = ctx.device_bindings->num_pool_atoms;
+        const int sel_valid = payload.arg_select_valid_count;
         const float selector_alpha =
             GRIM::HyperParameters::snapshotTrainingConfigField<float>(*cfg, "selector_alpha");
-        if (selector_alpha > 0.0f) {
+        const bool sel_can_fire =
+            forward_outputs.selector_logits.data && sel_candidates > 0 &&
+            ctx.device_bindings->d_arg_select_targets && sel_valid > 0;
+
+        if (sel_can_fire && selector_alpha > 0.0f) {
             Tensor selector_loss_tensor = autograd::argSelectorLoss(
                 forward_outputs.selector_logits,
                 ctx.device_bindings->d_arg_select_targets,
                 total_tokens,
-                ctx.device_bindings->num_pool_atoms,
-                payload.arg_select_valid_count,
+                sel_candidates,
+                sel_valid,
                 ctx.stream);
 
             float selector_loss = 0.0f;
@@ -490,11 +494,24 @@ LossResult computeAutogradLoss(
                 throw std::runtime_error("computeAutogradLoss: selector loss is non-finite (" +
                                          std::to_string(selector_loss) + ")");
             }
-            AG_INFO("Selector CE: loss=" << selector_loss << " valid=" << payload.arg_select_valid_count
-                    << " candidates=" << ctx.device_bindings->num_pool_atoms << " alpha=" << selector_alpha);
+            // Always-on supervision telemetry: confirms the selector is actually
+            // trained this step (loss flows into W_q AND the NumberEncoder keys).
+            std::cerr << "[SELECTOR] CE=" << selector_loss
+                      << " valid=" << sel_valid
+                      << " candidates=" << sel_candidates
+                      << " alpha=" << selector_alpha << std::endl;
 
             Tensor scaled_selector = autograd::scale_scalar(selector_loss_tensor, selector_alpha, ctx.stream);
             loss_state.loss_tensor = autograd::add(loss_state.loss_tensor, scaled_selector, ctx.stream);
+        } else {
+            // Always-on: the selector is enabled but contributed NOTHING this
+            // step. Most commonly the batch has no supervised next-atom target
+            // (valid=0) — i.e. the curriculum lacks multi-candidate option rows.
+            std::cerr << "[SELECTOR] skipped (no supervised candidates this step):"
+                      << " logits=" << (forward_outputs.selector_logits.data ? 1 : 0)
+                      << " candidates=" << sel_candidates
+                      << " valid=" << sel_valid
+                      << " alpha=" << selector_alpha << std::endl;
         }
     }
 

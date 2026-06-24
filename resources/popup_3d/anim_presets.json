@@ -1,0 +1,33 @@
+{
+  "_comment": "GRIM popup sprite animation presets. Edit freely; the engine reloads this on startup. 'easing' is one of: linear, easeInCubic, easeOutCubic, easeInOutCubic, easeOutBack, easeInBack. 'meshCache' optionally points to a baked geometry-node clip (.gmc) in this folder, produced by tools/blender/bake_popup_mesh_cache.py.",
+  "presets": [
+    {
+      "name": "load_in",
+      "duration": 0.45,
+      "loop": false,
+      "holdLastValue": true,
+      "alpha":    { "from": 0.0, "to": 1.0, "easing": "easeOutCubic" },
+      "scale":    { "from": 0.8, "to": 1.0, "easing": "easeOutBack" },
+      "emissive": { "from": 0.5, "to": 0.0, "easing": "easeOutCubic" },
+      "spinTurns": 0.0,
+      "meshCache": ""
+    },
+    {
+      "name": "fade_out",
+      "duration": 0.30,
+      "loop": false,
+      "holdLastValue": true,
+      "alpha": { "from": 1.0, "to": 0.0, "easing": "easeInOutCubic" },
+      "scale": { "from": 1.0, "to": 0.92, "easing": "easeInCubic" },
+      "spinTurns": 0.0,
+      "meshCache": ""
+    },
+    {
+      "name": "idle_spin",
+      "duration": 6.0,
+      "loop": true,
+      "spinTurns": 1.0,
+      "meshCache": ""
+    }
+  ]
+}

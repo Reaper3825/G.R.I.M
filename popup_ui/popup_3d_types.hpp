@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <vector>
+#include <string>
 #include <mutex>
 #include <atomic>
 
@@ -86,6 +87,37 @@ struct PopupObjectDefinition
     std::vector<uint16_t> indices;
     PopupTransform defaultTransform;
     PopupLightParams defaultLight;
+};
+
+// ===========================================================
+// Baked geometry-node animation (mesh cache)
+// ===========================================================
+// One baked frame of a procedural-geometry animation. Topology may vary
+// frame-to-frame (Blender geometry nodes can change vertex/face count), so
+// each frame carries its own vertex + index arrays.
+struct PopupMeshFrame
+{
+    std::vector<PopupVertex> vertices;
+    std::vector<uint16_t>    indices;
+};
+
+// A baked clip: an ordered sequence of mesh frames played at `fps`.
+// `maxVertices` / `maxIndices` are the per-frame maxima across the clip and
+// size the dynamic GPU buffers used for playback.
+struct PopupMeshCache
+{
+    float    fps         = 30.0f;
+    uint32_t maxVertices = 0;
+    uint32_t maxIndices  = 0;
+    std::vector<PopupMeshFrame> frames;
+
+    bool empty() const { return frames.empty(); }
+    float durationSec() const
+    {
+        return (fps > 0.0f && !frames.empty())
+                   ? static_cast<float>(frames.size()) / fps
+                   : 0.0f;
+    }
 };
 
 // A completed frame ready for presentation

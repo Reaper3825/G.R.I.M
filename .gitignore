@@ -22,6 +22,9 @@ scripts/README_ANVIL_RUN.md
 *.lo
 *.o
 *.obj
+# Wavefront model assets are NOT compiled object files — keep them tracked
+!resources/popup_3d/grim_popup.obj
+!resources/popup_3d/*.obj
 
 # ==============================
 # Precompiled Headers
