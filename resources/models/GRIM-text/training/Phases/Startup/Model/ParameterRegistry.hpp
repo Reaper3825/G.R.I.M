@@ -532,8 +532,23 @@ inline void registerExecutionBlockParameters(
 template <typename RegistrarT>
 inline void registerNumberEncoderParameters(
     GRIM::NumberEncoderParameterTensors& number_encoder_parameters,
-    RegistrarT& registrar) {
+    RegistrarT& registrar,
+    bool use_bias) {
     for (const auto& spec : kNumberEncoderTensorParameters) {
+        // Hidden-layer biases are config-gated by use_bias (mirrors attention/FFN).
+        // When disabled the tensor is unallocated; addConfigGatedTensor enforces
+        // that contract and registers nothing.
+        if (spec.tensor_member == &GRIM::NumberEncoderParameterTensors::b_c1 ||
+            spec.tensor_member == &GRIM::NumberEncoderParameterTensors::b_g1) {
+            registrar.addConfigGatedTensor(spec.name,
+                                           number_encoder_parameters.*(spec.tensor_member),
+                                           spec.type,
+                                           spec.stats_bucket,
+                                           spec.layer,
+                                           use_bias,
+                                           "config.use_bias=false");
+            continue;
+        }
         registrar.addTensor(spec.name,
                             number_encoder_parameters.*(spec.tensor_member),
                             spec.type,

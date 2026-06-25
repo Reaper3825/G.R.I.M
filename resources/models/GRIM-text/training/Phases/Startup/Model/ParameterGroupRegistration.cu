@@ -418,7 +418,7 @@ void registerNumberEncoderParameters(ParameterRegistry::StartupParameterRegistry
         number_encoder_parameters,
         "NumberEncoderParameterTensors",
         "registerNumberEncoderParameters");
-    ParameterRegistry::registerNumberEncoderParameters(number_encoder_tensor_owner, registrar);
+    ParameterRegistry::registerNumberEncoderParameters(number_encoder_tensor_owner, registrar, number_encoder_hp.use_bias);
 }
 
 void registerSelectorParameters(ParameterRegistry::StartupParameterRegistry& parameter_registry,
@@ -1220,14 +1220,22 @@ void initializeNumberEncoderParameterTensors(
     params->digit_emb = make_xavier(10, d_model, weight_init_seed, "number_encoder.digit_emb");
     params->pow10_emb = make_xavier(number_encoder_hp.pow10_buckets, d_model, weight_init_seed + 1, "number_encoder.pow10_emb");
     params->W_c1 = make_xavier(GRIM::Batching::BatchPayload::kNumberSlotFeatureDim, d_hidden, weight_init_seed + 2, "number_encoder.W_c1");
-    params->b_c1 = GRIM::Tensor::zeros({1, d_hidden}, init_stream, "number_encoder.b_c1");
-    params->b_c1.requires_grad_();
-    params->b_c1.alloc_grad();
+    // Hidden-layer biases (b_c1/b_g1) are gated by the global use_bias, mirroring
+    // attention/FFN. When disabled they are left unallocated so the only learnable
+    // common-mode (DC) sinks in a bias-free backbone do not dominate the gradient
+    // signal; the forward kernels treat a null bias pointer as zero.
+    if (number_encoder_hp.use_bias) {
+        params->b_c1 = GRIM::Tensor::zeros({1, d_hidden}, init_stream, "number_encoder.b_c1");
+        params->b_c1.requires_grad_();
+        params->b_c1.alloc_grad();
+    }
     params->W_c2 = make_xavier(d_hidden, d_model, weight_init_seed + 3, "number_encoder.W_c2");
     params->W_g1 = make_xavier(GRIM::Batching::BatchPayload::kNumberGlobalFeatureDim, d_hidden, weight_init_seed + 4, "number_encoder.W_g1");
-    params->b_g1 = GRIM::Tensor::zeros({1, d_hidden}, init_stream, "number_encoder.b_g1");
-    params->b_g1.requires_grad_();
-    params->b_g1.alloc_grad();
+    if (number_encoder_hp.use_bias) {
+        params->b_g1 = GRIM::Tensor::zeros({1, d_hidden}, init_stream, "number_encoder.b_g1");
+        params->b_g1.requires_grad_();
+        params->b_g1.alloc_grad();
+    }
     params->W_g2 = make_xavier(d_hidden, d_model, weight_init_seed + 5, "number_encoder.W_g2");
 
     const cudaError_t sync_err = cudaStreamSynchronize(init_stream);

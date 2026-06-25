@@ -63,7 +63,7 @@ __global__ void kernel_number_encoder_slot_hidden(
 
     const float* feat = slot_features + static_cast<size_t>(slot) * kSlotFeatDim;
     for (int h = threadIdx.x; h < d_hidden; h += blockDim.x) {
-        float acc = b_c1[h];
+        float acc = b_c1 ? b_c1[h] : 0.0f;  // bias optional (gated by use_bias)
         #pragma unroll
         for (int f = 0; f < kSlotFeatDim; ++f) {
             acc += W_c1[f * d_hidden + h] * feat[f];
@@ -88,7 +88,7 @@ __global__ void kernel_number_encoder_global_hidden(
     const float* feat = global_features + static_cast<size_t>(atom) * kGlobalFeatDim;
     float* hidden_row = global_hidden + static_cast<size_t>(atom) * d_hidden;
     for (int h = threadIdx.x; h < d_hidden; h += blockDim.x) {
-        float acc = b_g1[h];
+        float acc = b_g1 ? b_g1[h] : 0.0f;  // bias optional (gated by use_bias)
         #pragma unroll
         for (int f = 0; f < kGlobalFeatDim; ++f) {
             acc += W_g1[f * d_hidden + h] * feat[f];
@@ -688,6 +688,18 @@ const Tensor& requireParam(const Tensor* t, int expected_rows, int expected_cols
     return *t;
 }
 
+// Optional parameter (e.g. the use_bias-gated hidden biases). When the tensor is
+// absent/unallocated, returns the provided default-empty tensor so callers can keep
+// using a reference: its .data is NULL (kernels treat that as a zero bias) and its
+// requires_grad is false (no grad captured). Shape is still validated when present.
+const Tensor& optionalParam(const Tensor* t, const Tensor& absent,
+                            int expected_rows, int expected_cols, const char* name) {
+    if (!t || !t->data) {
+        return absent;
+    }
+    return requireParam(t, expected_rows, expected_cols, name);
+}
+
 }  // namespace
 
 Tensor number_encode(const NumberEncoderForwardParams& params,
@@ -732,13 +744,14 @@ Tensor number_encode(const NumberEncoderForwardParams& params,
     const int digit_slots = hp.max_digit_slots;
     const int total_slots = num_atoms * digit_slots;
 
+    const Tensor empty_bias;  // default-empty fallback for use_bias-gated biases
     const Tensor& digit_emb = requireParam(params.digit_emb, 10, d_model, "digit_emb");
     const Tensor& pow10_emb = requireParam(params.pow10_emb, hp.pow10_buckets, d_model, "pow10_emb");
     const Tensor& W_c1 = requireParam(params.W_c1, kSlotFeatDim, d_hidden, "W_c1");
-    const Tensor& b_c1 = requireParam(params.b_c1, 1, d_hidden, "b_c1");
+    const Tensor& b_c1 = optionalParam(params.b_c1, empty_bias, 1, d_hidden, "b_c1");
     const Tensor& W_c2 = requireParam(params.W_c2, d_hidden, d_model, "W_c2");
     const Tensor& W_g1 = requireParam(params.W_g1, kGlobalFeatDim, d_hidden, "W_g1");
-    const Tensor& b_g1 = requireParam(params.b_g1, 1, d_hidden, "b_g1");
+    const Tensor& b_g1 = optionalParam(params.b_g1, empty_bias, 1, d_hidden, "b_g1");
     const Tensor& W_g2 = requireParam(params.W_g2, d_hidden, d_model, "W_g2");
 
     const bool any_requires_grad =
@@ -872,13 +885,14 @@ Tensor encodeAtomEntryPoolKeys(
     const int digit_slots = hp.max_digit_slots;
     const int total_slots = num_pool_atoms * digit_slots;
 
+    const Tensor empty_bias;  // default-empty fallback for use_bias-gated biases
     const Tensor& digit_emb = requireParam(params.digit_emb, 10, d_model, "digit_emb");
     const Tensor& pow10_emb = requireParam(params.pow10_emb, hp.pow10_buckets, d_model, "pow10_emb");
     const Tensor& W_c1 = requireParam(params.W_c1, kSlotFeatDim, d_hidden, "W_c1");
-    const Tensor& b_c1 = requireParam(params.b_c1, 1, d_hidden, "b_c1");
+    const Tensor& b_c1 = optionalParam(params.b_c1, empty_bias, 1, d_hidden, "b_c1");
     const Tensor& W_c2 = requireParam(params.W_c2, d_hidden, d_model, "W_c2");
     const Tensor& W_g1 = requireParam(params.W_g1, kGlobalFeatDim, d_hidden, "W_g1");
-    const Tensor& b_g1 = requireParam(params.b_g1, 1, d_hidden, "b_g1");
+    const Tensor& b_g1 = optionalParam(params.b_g1, empty_bias, 1, d_hidden, "b_g1");
     const Tensor& W_g2 = requireParam(params.W_g2, d_hidden, d_model, "W_g2");
 
     const bool any_requires_grad =

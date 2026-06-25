@@ -526,15 +526,32 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
             std::vector<float> buf(src->begin(), src->end());
             return upload_device_vector(buf, dst, name);
         };
+        // Optional loader for use_bias-gated hidden biases. Tolerates the four
+        // combinations of {checkpoint has bias} × {model allocated a bias dest}:
+        // both present → load; both absent → skip; model wants a bias the
+        // checkpoint lacks → fail; checkpoint has a bias the model dropped
+        // (e.g. resuming a pre-gate checkpoint with use_bias=false) → skip.
+        auto ul_opt = [&](const flatbuffers::Vector<float>* src, const DeviceWriteView& dst, const char* name) -> bool {
+            const bool have_src = (src != nullptr);
+            const bool have_dst = (dst.ptr != nullptr);
+            if (have_src && have_dst) return ul(src, dst, name);
+            if (!have_src && !have_dst) return true;
+            if (!have_src && have_dst) {
+                Logging::EmitModuleError(kLogModule, Msg("[load] NumberEncoder bias destination present but missing in checkpoint: ", name));
+                return false;
+            }
+            Logging::EmitModuleInfo(kLogModule, Msg("[load] skipping NumberEncoder bias absent in model (use_bias gated off): ", name));
+            return true;
+        };
         const auto& ne = request.number_encoder;
         bool ne_ok = true;
         ne_ok = ne_ok && ul(fb_ne->digit_emb_data(), ne.digit_emb, "NE digit_emb");
         ne_ok = ne_ok && ul(fb_ne->pow10_emb_data(), ne.pow10_emb, "NE pow10_emb");
         ne_ok = ne_ok && ul(fb_ne->w_c1_data(), ne.W_c1, "NE W_c1");
-        ne_ok = ne_ok && ul(fb_ne->b_c1_data(), ne.b_c1, "NE b_c1");
+        ne_ok = ne_ok && ul_opt(fb_ne->b_c1_data(), ne.b_c1, "NE b_c1");
         ne_ok = ne_ok && ul(fb_ne->w_c2_data(), ne.W_c2, "NE W_c2");
         ne_ok = ne_ok && ul(fb_ne->w_g1_data(), ne.W_g1, "NE W_g1");
-        ne_ok = ne_ok && ul(fb_ne->b_g1_data(), ne.b_g1, "NE b_g1");
+        ne_ok = ne_ok && ul_opt(fb_ne->b_g1_data(), ne.b_g1, "NE b_g1");
         ne_ok = ne_ok && ul(fb_ne->w_g2_data(), ne.W_g2, "NE W_g2");
         if (!ne_ok) return false;
         request.report.number_encoder_loaded = true;

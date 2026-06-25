@@ -220,15 +220,29 @@ bool validate_checkpoint_capabilities(
             }
             return true;
         };
+        // use_bias-gated hidden biases are optional: absent on both sides is valid;
+        // present-in-checkpoint-only (model dropped the bias) is skipped; a missing
+        // checkpoint field for a bias the model expects is fatal.
+        auto ne_field_opt = [&](const flatbuffers::Vector<float>* src, const DeviceWriteView& dst, const char* name) -> bool {
+            const bool have_src = (src != nullptr);
+            const bool have_dst = (dst.ptr != nullptr);
+            if (have_src && have_dst) return ne_field(src, dst, name);
+            if (!have_src && !have_dst) return true;
+            if (!have_src && have_dst) {
+                Logging::EmitModuleError(kLogModule, Msg("[load] FATAL: NumberEncoder bias destination present but missing in checkpoint: ", name));
+                return false;
+            }
+            return true;  // checkpoint has bias the model dropped (use_bias gated off): skip
+        };
         const auto& ne = load_req.number_encoder;
         ok = true;
         ok = ok && ne_field(fb_ne->digit_emb_data(), ne.digit_emb, "digit_emb");
         ok = ok && ne_field(fb_ne->pow10_emb_data(), ne.pow10_emb, "pow10_emb");
         ok = ok && ne_field(fb_ne->w_c1_data(), ne.W_c1, "W_c1");
-        ok = ok && ne_field(fb_ne->b_c1_data(), ne.b_c1, "b_c1");
+        ok = ok && ne_field_opt(fb_ne->b_c1_data(), ne.b_c1, "b_c1");
         ok = ok && ne_field(fb_ne->w_c2_data(), ne.W_c2, "W_c2");
         ok = ok && ne_field(fb_ne->w_g1_data(), ne.W_g1, "W_g1");
-        ok = ok && ne_field(fb_ne->b_g1_data(), ne.b_g1, "b_g1");
+        ok = ok && ne_field_opt(fb_ne->b_g1_data(), ne.b_g1, "b_g1");
         ok = ok && ne_field(fb_ne->w_g2_data(), ne.W_g2, "W_g2");
         if (!ok) return false;
     }

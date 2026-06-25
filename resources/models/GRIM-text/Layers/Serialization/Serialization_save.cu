@@ -283,17 +283,25 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
     const auto& ne_view = request.sources.number_encoder;
     if (ne_view.enabled && ne_view.digit_emb.ptr) {
         auto dl = [&](const DeviceReadView& v, const char* n) { return download_device_vector(v, n); };
+        // Hidden biases (b_c1/b_g1) are use_bias-gated: when absent the source view
+        // has a null ptr, so emit a null (0) offset to leave the FlatBuffer field
+        // unset rather than writing a spurious empty vector.
+        using FloatVecOffset = flatbuffers::Offset<flatbuffers::Vector<float>>;
+        FloatVecOffset b_c1_off = ne_view.b_c1.ptr ? builder.CreateVector(dl(ne_view.b_c1, "NE b_c1")) : 0;
+        FloatVecOffset b_g1_off = ne_view.b_g1.ptr ? builder.CreateVector(dl(ne_view.b_g1, "NE b_g1")) : 0;
         fb_number_encoder = GRIMTransformer::CreateNumberEncoderWeights(
             builder,
             builder.CreateVector(dl(ne_view.digit_emb, "NE digit_emb")),
             builder.CreateVector(dl(ne_view.pow10_emb, "NE pow10_emb")),
             builder.CreateVector(dl(ne_view.W_c1, "NE W_c1")),
-            builder.CreateVector(dl(ne_view.b_c1, "NE b_c1")),
+            b_c1_off,
             builder.CreateVector(dl(ne_view.W_c2, "NE W_c2")),
             builder.CreateVector(dl(ne_view.W_g1, "NE W_g1")),
-            builder.CreateVector(dl(ne_view.b_g1, "NE b_g1")),
+            b_g1_off,
             builder.CreateVector(dl(ne_view.W_g2, "NE W_g2")));
-        Logging::EmitModuleInfo(kLogModule, "[save] NumberEncoder weights serialized");
+        Logging::EmitModuleInfo(kLogModule, ne_view.b_c1.ptr
+            ? "[save] NumberEncoder weights serialized (with hidden biases)"
+            : "[save] NumberEncoder weights serialized (biases gated off)");
     }
 
     flatbuffers::Offset<GRIMTransformer::ArgSelectorWeights> fb_arg_selector = 0;
