@@ -1493,7 +1493,7 @@ inline NumberEncoderConstructionHP numberEncoderConstructionHP(
     view.max_digit_slots = model.number_encoder_max_digit_slots;
     view.max_abs_pow10 = model.number_encoder_max_abs_pow10;
     view.pow10_buckets = 2 * model.number_encoder_max_abs_pow10 + 1;
-    view.use_bias = model.use_bias;
+    view.use_bias = model.encoder_use_bias;
     return view;
 }
 
