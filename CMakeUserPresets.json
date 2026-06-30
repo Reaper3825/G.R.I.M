@@ -1,0 +1,41 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "release-local",
+      "inherits": "release",
+      "displayName": "Release (local VS Build Tools)",
+      "cacheVariables": {
+        "CMAKE_GENERATOR_INSTANCE": "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools",
+        "GRIM_USE_CUDA": "OFF",
+        "GGML_CUDA": "OFF"
+      }
+    },
+    {
+      "name": "debug-local",
+      "inherits": "debug",
+      "displayName": "Debug (local VS Build Tools)",
+      "cacheVariables": {
+        "CMAKE_GENERATOR_INSTANCE": "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools",
+        "GRIM_USE_CUDA": "OFF",
+        "GGML_CUDA": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "release-local",
+      "configurePreset": "release-local",
+      "configuration": "Release",
+      "jobs": 0,
+      "inheritConfigureEnvironment": true
+    },
+    {
+      "name": "debug-local",
+      "configurePreset": "debug-local",
+      "configuration": "Debug",
+      "jobs": 0,
+      "inheritConfigureEnvironment": true
+    }
+  ]
+}

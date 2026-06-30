@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-NetTCPConnection -LocalPort 11435 -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-Process -Name \"grim_text_server\" -ErrorAction SilentlyContinue)"
+    ]
+  }
+}

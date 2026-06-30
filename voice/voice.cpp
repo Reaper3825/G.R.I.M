@@ -268,12 +268,15 @@ std::string runVoiceDemo(nlohmann::json& aiConfig, nlohmann::json& longTermMemor
     Pa_CloseStream(stream);
     Pa_Terminate();
     LOG_DEBUG("Voice", "Stream stopped");
-    
-    // ✅ Keep popup alive during transcription processing
-    notifyPopupActivity();
 
     std::string transcript;
     if (!rollingBuffer.empty()) {
+        // Keep the popup alive during transcription — but ONLY when we actually
+        // captured speech. On a no-speech timeout the idle timer is already
+        // fading the popup out, and re-showing here would replay load_in on top
+        // of that fade_out.
+        notifyPopupActivity();
+
         whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
         
         // ═══════════════════════════════════════════════════════════

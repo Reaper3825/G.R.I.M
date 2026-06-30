@@ -303,8 +303,15 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
     // ---- Set transform ----
     bgfx::setTransform(mtxModel);
 
+    // ---- Decide what to draw ----
+    const bool haveClip = clipFrame && r.dynamicMesh &&
+                          !clipFrame->vertices.empty() && !clipFrame->indices.empty();
+    // DEBUG: with hideRestingModel set, only draw while a clip supplies geometry;
+    // otherwise the view is just cleared (transparent), hiding the static .obj.
+    const bool drawModel = haveClip || !r.hideRestingModel;
+
     // ---- Bind mesh (baked geometry frame if a clip is active, else static) ----
-    if (clipFrame && r.dynamicMesh && !clipFrame->vertices.empty() && !clipFrame->indices.empty())
+    if (haveClip)
     {
         popupMeshUpdate(r.dynamicMesh,
                         clipFrame->vertices.data(),
@@ -313,7 +320,7 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
                         static_cast<uint32_t>(clipFrame->indices.size()));
         popupMeshBind(r.dynamicMesh);
     }
-    else
+    else if (drawModel)
     {
         popupMeshBind(r.mesh);
     }
@@ -361,15 +368,19 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
         ;
     bgfx::setState(state);
 
-    // ---- Submit ----
+    // ---- Submit (or just clear the view when nothing should draw) ----
     bgfx::ProgramHandle prog = popupShadersGetProgram(r.shaders);
     if (shouldLog)
         LOG_DEBUG("Popup3D", "submit: slot=" + std::to_string(idleSlot) +
                  " alpha=" + std::to_string(eff.alphaMul) +
                  " prog=" + std::to_string(prog.idx) +
                  " fb=" + std::to_string(s_slotGPU[idleSlot].fb.idx) +
+                 " draw=" + std::to_string(drawModel ? 1 : 0) +
                  " frame#" + std::to_string(sSubmitCount));
-    bgfx::submit(kPopupViewId, prog);
+    if (drawModel)
+        bgfx::submit(kPopupViewId, prog);
+    else
+        bgfx::touch(kPopupViewId);  // process the view so it clears transparent
 
     // ---- Blit RT → readback texture, then queue readback ----
     // Activate the blit view so bgfx processes the blit command.
@@ -468,6 +479,11 @@ void popup3DRendererTriggerPreset(Popup3DRenderer& r, const char* presetName)
 {
     if (r.anim)
         popupClipEngineTrigger(r.anim, presetName);
+}
+
+void popup3DRendererSetHideResting(Popup3DRenderer& r, bool hide)
+{
+    r.hideRestingModel = hide;
 }
 
 // -------------------------------------------------------

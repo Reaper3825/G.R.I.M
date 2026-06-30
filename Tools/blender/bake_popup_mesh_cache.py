@@ -40,10 +40,19 @@ import bmesh
 import struct
 import sys
 import argparse
+from mathutils import Matrix
 
 MAGIC = b"GRIMMC01"
 FLAG_HAS_NORMALS = 1 << 0
 FLAG_HAS_UV = 1 << 1
+
+# Z-up (Blender) -> Y-up, matching Blender's default OBJ export (forward -Z, up Y),
+# i.e. (x, y, z) -> (x, z, -y). This keeps a baked clip aligned with grim_popup.obj.
+AXIS_YUP = Matrix(((1, 0, 0, 0),
+                   (0, 0, 1, 0),
+                   (0, -1, 0, 0),
+                   (0, 0, 0, 1)))
+AXIS_RAW = Matrix.Identity(4)
 
 
 def _parse_args(argv):
@@ -58,11 +67,19 @@ def _parse_args(argv):
     p.add_argument("--fps", type=float, default=None, help="Playback fps (default: scene fps)")
     p.add_argument("--out", required=True, help="Output .gmc path")
     p.add_argument("--no-uv", action="store_true", help="Do not export UVs")
+    p.add_argument("--axis", choices=["yup", "raw"], default="yup",
+                   help="Coordinate conversion: 'yup' (default, matches grim_popup.obj) "
+                        "or 'raw' (keep Blender Z-up local coords)")
     return p.parse_args(argv)
 
 
-def _evaluate_mesh(obj, depsgraph):
-    """Return a triangulated bmesh of the object's evaluated (modifier+geo-node) mesh."""
+def _evaluate_mesh(obj, depsgraph, axis_mtx):
+    """Return triangulated (verts, normals, uvs, indices) for the object's
+    evaluated (modifier + geometry-node) mesh, transformed into engine space.
+
+    Vertices are baked in WORLD space (so object transforms are included, like
+    Blender's OBJ exporter) and then run through `axis_mtx` for the up-axis swap.
+    """
     eval_obj = obj.evaluated_get(depsgraph)
     mesh = eval_obj.to_mesh()
 
@@ -71,9 +88,19 @@ def _evaluate_mesh(obj, depsgraph):
     bmesh.ops.triangulate(bm, faces=bm.faces[:])
     bm.normal_update()
 
-    # Snapshot data we need before freeing.
-    verts = [(v.co.x, v.co.y, v.co.z) for v in bm.verts]
-    normals = [(v.normal.x, v.normal.y, v.normal.z) for v in bm.verts]
+    world = eval_obj.matrix_world.copy()
+    pos_mtx = axis_mtx @ world
+    # Normal matrix = inverse-transpose of the 3x3, then axis swap.
+    nrm_mtx = (axis_mtx.to_3x3() @ world.to_3x3().inverted_safe().transposed())
+
+    verts = []
+    normals = []
+    for v in bm.verts:
+        p = pos_mtx @ v.co
+        verts.append((p.x, p.y, p.z))
+        n = (nrm_mtx @ v.normal)
+        n.normalize()
+        normals.append((n.x, n.y, n.z))
 
     # UVs: per-loop in Blender; collapse to per-vertex (last loop wins).
     uvs = [(0.0, 0.0)] * len(bm.verts)
@@ -93,7 +120,7 @@ def _evaluate_mesh(obj, depsgraph):
     return verts, normals, uvs, indices
 
 
-def bake(object_name, out_path, start=None, end=None, fps=None, export_uv=True):
+def bake(object_name, out_path, start=None, end=None, fps=None, export_uv=True, axis="yup"):
     scene = bpy.context.scene
     obj = bpy.data.objects.get(object_name)
     if obj is None:
@@ -102,6 +129,8 @@ def bake(object_name, out_path, start=None, end=None, fps=None, export_uv=True):
     start = scene.frame_start if start is None else start
     end = scene.frame_end if end is None else end
     fps = (scene.render.fps / scene.render.fps_base) if fps is None else fps
+
+    axis_mtx = AXIS_YUP if axis == "yup" else AXIS_RAW
 
     flags = FLAG_HAS_NORMALS | (FLAG_HAS_UV if export_uv else 0)
 
@@ -112,7 +141,7 @@ def bake(object_name, out_path, start=None, end=None, fps=None, export_uv=True):
     for f in range(start, end + 1):
         scene.frame_set(f)
         depsgraph = bpy.context.evaluated_depsgraph_get()
-        verts, normals, uvs, indices = _evaluate_mesh(obj, depsgraph)
+        verts, normals, uvs, indices = _evaluate_mesh(obj, depsgraph, axis_mtx)
 
         if len(verts) > 65535:
             raise RuntimeError(
@@ -150,7 +179,7 @@ def bake(object_name, out_path, start=None, end=None, fps=None, export_uv=True):
 
 def main():
     args = _parse_args(sys.argv)
-    bake(args.object, args.out, args.start, args.end, args.fps, not args.no_uv)
+    bake(args.object, args.out, args.start, args.end, args.fps, not args.no_uv, args.axis)
 
 
 if __name__ == "__main__":

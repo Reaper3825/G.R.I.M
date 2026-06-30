@@ -106,12 +106,25 @@ PopupMeshCache loadPopupMeshCache(const std::string& gmcPath, uint32_t defaultCo
         uint32_t vertCount  = readPOD<uint32_t>(file, gmcPath, "vertCount");
         uint32_t indexCount = readPOD<uint32_t>(file, gmcPath, "indexCount");
 
-        if (vertCount == 0 || indexCount == 0)
-            throw std::runtime_error("Mesh cache loader: empty frame " +
-                                     std::to_string(f) + " in " + gmcPath);
         if (vertCount > 65535)
             throw std::runtime_error("Mesh cache loader: frame " + std::to_string(f) +
                                      " exceeds uint16 vertex limit (65535) in " + gmcPath);
+
+        // Empty frames are valid (e.g. the start of a build-from-nothing "load in"
+        // animation). Consume any payload that is present and store an empty frame;
+        // the renderer simply draws nothing for it.
+        PopupMeshFrame frame;
+        if (vertCount == 0)
+        {
+            // No vertex payload; still consume indices if the exporter wrote any.
+            if (indexCount > 0)
+            {
+                std::vector<uint16_t> skip(indexCount);
+                readBytes(file, skip.data(), skip.size() * sizeof(uint16_t), gmcPath, "indices");
+            }
+            cache.frames.push_back(std::move(frame));
+            continue;
+        }
 
         posBuf.resize(static_cast<size_t>(vertCount) * 3);
         readBytes(file, posBuf.data(), posBuf.size() * sizeof(float), gmcPath, "positions");
@@ -127,7 +140,6 @@ PopupMeshCache loadPopupMeshCache(const std::string& gmcPath, uint32_t defaultCo
             readBytes(file, uvBuf.data(), uvBuf.size() * sizeof(float), gmcPath, "uvs");
         }
 
-        PopupMeshFrame frame;
         frame.vertices.resize(vertCount);
         for (uint32_t v = 0; v < vertCount; ++v)
         {

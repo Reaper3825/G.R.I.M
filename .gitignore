@@ -10,6 +10,15 @@ scripts/README_ANVIL_RUN.md
 # Local API keys / secrets (never commit)
 ai_config.local.json
 
+# SSH keys / credentials (never commit)
+is210058p
+is210058p.pub
+id_ed25519
+id_ed25519.pub
+id_rsa
+id_rsa.pub
+*.pem
+
 # Anvil SSH/sbatch scripts (local only - never commit)
 scripts/run_train_on_anvil.sh
 scripts/train_anvil.sbatch

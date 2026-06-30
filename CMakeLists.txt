@@ -75,7 +75,8 @@ project(GRIM LANGUAGES CXX C)
 # Enable CUDA support for libraries that use GPU (ONNX Runtime, Whisper, etc.)
 # Note: CUDA is not available on macOS - only enable on Windows/Linux
 # We don't compile .cu files in main GRIM build anymore (GRIM-text is separate)
-if(NOT APPLE)
+# Skip when GRIM_USE_CUDA=OFF (e.g. no CUDA toolkit / VS CUDA integration on this machine).
+if(NOT APPLE AND (NOT DEFINED GRIM_USE_CUDA OR GRIM_USE_CUDA))
   enable_language(CUDA OPTIONAL)
 endif()
 

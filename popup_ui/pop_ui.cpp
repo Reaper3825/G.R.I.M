@@ -125,12 +125,17 @@ void runPopupUI(int width, int height)
                 popup3DRendererInitAnim(g_popup3D, presetsJson, popup3dDir);
             }
 
+
+
+            // Start the load-in clip BEFORE the first submit so the resting
+            // (static .obj) model is never rendered first. Begin fully
+            // transparent so frame 0 of the clip is the first thing shown.
+            g_popup3DInput.alphaMul = 0.0f;
+            popup3DRendererTriggerPreset(g_popup3D, "load_in");
+
             // Register pre-frame callback so main thread renders the cube
             WindowManager::registerPreFrameCallback(popup3DPreFrameCallback);
             g_popup3DInitialized = true;
-
-            // Play the load-in preset on first appearance.
-            g_showRequested = true;
 
             // Show window now that 3D renderer is ready
             ShowWindow(g_hwnd, SW_SHOW);
@@ -246,7 +251,7 @@ void runPopupUI(int width, int height)
         {
             static bool sFadingOut = false;
             static std::chrono::steady_clock::time_point sFadeStart;
-            constexpr float kFadeOutSec = 0.30f;  // must match the "fade_out" preset duration
+            constexpr float kFadeOutSec = 1.0f;  // must match the "fade_out" preset/clip duration
 
             // Show: cancel any fade and play load-in.
             if (g_showRequested.exchange(false))

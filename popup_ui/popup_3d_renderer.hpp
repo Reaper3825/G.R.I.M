@@ -22,6 +22,10 @@ struct Popup3DRenderer
     PopupMeshGPU*      dynamicMesh = nullptr; // created when a mesh-cache preset is loaded
     PopupClipEngine*   anim        = nullptr; // preset/clip engine (owns presets + caches)
 
+    // DEBUG: when true, the static resting (.obj) model is NOT drawn — only frames
+    // supplied by an active baked clip render; otherwise the target stays transparent.
+    bool               hideRestingModel = false;
+
     // Albedo texture (BGFX_INVALID_HANDLE = no texture, use normal-based coloring)
     bgfx::TextureHandle albedoTex = BGFX_INVALID_HANDLE;
 
@@ -99,3 +103,6 @@ void popup3DRendererInitAnim(Popup3DRenderer& r,
 
 // Request playback of a named preset (thread-safe; callable from the UI thread).
 void popup3DRendererTriggerPreset(Popup3DRenderer& r, const char* presetName);
+
+// DEBUG: hide the static resting (.obj) model so only baked clip frames are drawn.
+void popup3DRendererSetHideResting(Popup3DRenderer& r, bool hide);

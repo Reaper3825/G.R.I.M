@@ -244,6 +244,25 @@ GRIM_SLURM_MAIL="${GRIM_SLURM_MAIL:-}"
 # Omit -t entirely when no explicit limit is set so SLURM uses the partition maximum.
 [[ "$BRIDGES2_TIME_LIMIT_EXPLICIT" == true ]] && SLURM_TIME_ARGS="-t $BRIDGES2_TIME_LIMIT" || SLURM_TIME_ARGS=""
 
+if [[ "$DO_PULL_LOGS" == true ]]; then
+  echo "[Bridges-2] Pulling latest logs from $BRIDGES2_SSH:$REMOTE_TRAINING_LOGS"
+  mkdir -p "$TRAINING_LOGS_DIR_EXPANDED"
+  set +e
+  ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new "$BRIDGES2_SSH" "cd \"$REMOTE_TRAINING_LOGS\" 2>/dev/null && files=\$(find . -maxdepth 1 -type f \\( -name '*_tape.log' -o -name 'training_*.log' -o -name 'telemetry_*.csv' -o -name 'train_*.out' -o -name 'train_*.err' \\) -printf '%T@ %P\n' | sort -nr | head -20 | cut -d' ' -f2-); if [ -z \"\$files\" ]; then echo '__GRIM_NO_LOGS__' >&2; exit 3; fi; printf '%s\n' \"\$files\" | tar -czf - -T -" \
+    | tar -xzf - -C "$TRAINING_LOGS_DIR_EXPANDED"
+  status=${PIPESTATUS[0]}
+  set -e
+  if [[ "$status" -eq 3 ]]; then
+    echo "[Bridges-2] No matching logs found under $REMOTE_TRAINING_LOGS"
+    exit 0
+  elif [[ "$status" -ne 0 ]]; then
+    echo "[Bridges-2] Log pull failed (ssh exit $status)." >&2
+    exit "$status"
+  fi
+  echo "[Bridges-2] Logs copied to $TRAINING_LOGS_DIR_EXPANDED"
+  exit 0
+fi
+
 # One long-lived SSH using a script-unique socket in /tmp (avoids ~/.ssh permission issues)
 BRIDGES2_CTRL="/tmp/cm-grim-$$"
 if ! ssh -f -N -M -S "$BRIDGES2_CTRL" -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "$BRIDGES2_SSH"; then

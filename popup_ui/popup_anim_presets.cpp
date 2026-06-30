@@ -259,6 +259,17 @@ bool popupClipEngineEvaluate(PopupClipEngine* engine, double nowSeconds, PopupCl
         engine->lastToken = tok;
         engine->curIdx    = engine->requestIdx.load(std::memory_order_relaxed);
         engine->startTime = nowSeconds;
+
+        if (engine->curIdx >= 0 && engine->curIdx < static_cast<int>(engine->presets.size()))
+        {
+            const PopupAnimPreset& sp = engine->presets[engine->curIdx];
+            if (!sp.meshCache.empty())
+                LOG_DEBUG("Popup3D", "Playing preset '" + sp.name +
+                          "' using mesh cache: " + sp.meshCache);
+            else
+                LOG_DEBUG("Popup3D", "Playing preset '" + sp.name +
+                          "' (tween only, no mesh cache)");
+        }
     }
 
     if (engine->curIdx < 0 || engine->curIdx >= static_cast<int>(engine->presets.size()))
@@ -295,6 +306,11 @@ bool popupClipEngineEvaluate(PopupClipEngine* engine, double nowSeconds, PopupCl
     out.frame       = nullptr;
 
     // Geometry frame selection.
+    //
+    // The whole baked clip is spread evenly across the preset's 'duration', so
+    // 'duration' is the single source of truth for playback speed and the mesh
+    // stays in lockstep with the alpha/scale/emissive tweens. The baked fps only
+    // determines how many frames exist (smoothness), not how fast they play.
     if (!p.meshCache.empty())
     {
         auto it = engine->caches.find(p.meshCache);
@@ -302,19 +318,23 @@ bool popupClipEngineEvaluate(PopupClipEngine* engine, double nowSeconds, PopupCl
         {
             const PopupMeshCache& cache = it->second;
             const int frameCount = static_cast<int>(cache.frames.size());
-            const double frameF  = elapsed * static_cast<double>(cache.fps);
 
             int fi;
             if (p.loop)
             {
-                long long m = static_cast<long long>(std::floor(frameF)) % frameCount;
+                // Map the looping phase [0,1) across every frame so one full clip
+                // plays per 'duration' seconds.
+                float phase = spinPhase - std::floor(spinPhase);
+                long long m = static_cast<long long>(std::floor(phase * frameCount)) % frameCount;
                 if (m < 0) m += frameCount;
                 fi = static_cast<int>(m);
             }
             else
             {
-                fi = (frameF >= frameCount) ? (frameCount - 1)
-                                            : static_cast<int>(frameF);
+                // nt sweeps 0->1 over 'duration'; spread frames across it and
+                // hold the last frame once finished.
+                fi = static_cast<int>(std::floor(nt * frameCount));
+                if (fi >= frameCount) fi = frameCount - 1;
                 if (fi < 0) fi = 0;
             }
             out.frame = &cache.frames[fi];
