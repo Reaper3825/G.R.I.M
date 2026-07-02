@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "PowerShell(Get-NetTCPConnection -LocalPort 11435 -ErrorAction SilentlyContinue)",
-      "PowerShell(Get-Process -Name \"grim_text_server\" -ErrorAction SilentlyContinue)"
+      "PowerShell(Get-Process -Name \"grim_text_server\" -ErrorAction SilentlyContinue)",
+      "Bash(awk 'NR>=6620 && NR<=6665 && \\(/ANCHOR|s=[0-9]|ρ\\\\\\(emb\\\\\\)|SUMMARY|Layer alignment|13:4|13:5|14:|15:/\\){print NR\": \"$0}' 'D:\\\\G.R.I.M\\\\resources\\\\models\\\\GRIM-text\\\\training\\\\logs\\\\training_1782409436690516977.log')",
+      "Bash(awk 'NR==1||NR%15==0{print NR\": \"$0}')"
     ]
   }
 }

@@ -466,6 +466,10 @@ LossResult computeAutogradLoss(
     // (data-derived). No-op unless selector_enabled and the forward emitted
     // selector_logits with a non-empty candidate pool + supervised targets.
     // ═══════════════════════════════════════════════════════════════════════════
+    // Scaled selector contribution actually added to loss_tensor (0 when the
+    // selector is disabled or fires no supervised candidates this step). Reported
+    // as its own channel so it no longer leaks into the execution_loss residual.
+    float selector_loss_scaled = 0.0f;
     const bool selector_enabled =
         GRIM::HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "selector_enabled");
     if (selector_enabled) {
@@ -501,6 +505,7 @@ LossResult computeAutogradLoss(
                       << " candidates=" << sel_candidates
                       << " alpha=" << selector_alpha << std::endl;
 
+            selector_loss_scaled = selector_alpha * selector_loss;
             Tensor scaled_selector = autograd::scale_scalar(selector_loss_tensor, selector_alpha, ctx.stream);
             loss_state.loss_tensor = autograd::add(loss_state.loss_tensor, scaled_selector, ctx.stream);
         } else {
@@ -570,7 +575,10 @@ LossResult computeAutogradLoss(
     cudaStreamSynchronize(ctx.stream);
 
     result.loss_value = actual_loss;
-    result.execution_loss = actual_loss - text_ce_loss - mtp_loss;
+    result.selector_loss = selector_loss_scaled;
+    // Selector has its own reported channel now — subtract it so execution_loss is a
+    // true execution-block-only residual (reads 0.0 when the block is disabled).
+    result.execution_loss = actual_loss - text_ce_loss - mtp_loss - selector_loss_scaled;
     result.weight_text = 1.0f;
     
     if (!std::isfinite(result.loss_value)) {
@@ -582,6 +590,7 @@ LossResult computeAutogradLoss(
     
     AG_INFO("Loss computed: total=" << actual_loss << " text_ce=" << text_ce_loss
             << " mtp=" << mtp_loss
+            << " selector=" << result.selector_loss
             << " execution=" << result.execution_loss
             << " exec_ce=" << exec_structured_ce
             << " exec_entropy_monitor=" << exec_entropy_monitor

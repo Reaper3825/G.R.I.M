@@ -893,6 +893,42 @@ void runLogitScaleDiagnostic(
                     trend_state.ema_top1_frac = trend_alpha * top1_frac + (1.0f - trend_alpha) * trend_state.ema_top1_frac;
                 }
                 
+                // --- Forward-faithfulness guard (reconstruction residual) ---
+                // Recompute one live logit directly as h_t0 · W_v0 from the SAME
+                // host copies used above and diff it against the logit the forward
+                // pass wrote. A ~0 residual proves the logit = h·W identity holds
+                // exactly, so the actual/expected>>1 gap is entirely the
+                // isotropic-null gap (real h↔W anisotropy) and NOT a mis-measured
+                // actual or expected term. Only exact when no LM-head weight
+                // transform (centering / type-gate) is active.
+                float recon_residual = std::numeric_limits<float>::quiet_NaN();
+                float recon_logit    = 0.0f;
+                float live_logit     = 0.0f;
+                const bool recon_exact = (!use_centered_weights && !use_token_type_gate);
+                const int  recon_t0 = lm_valid_positions.front();
+                const int  recon_v0 = (w_rms_max_tok >= 0 && w_rms_max_tok < vocab_size) ? w_rms_max_tok : 0;
+                if (recon_exact) {
+                    std::vector<float> recon_w_row(d_model);
+                    cudaError_t recon_copy_err = cudaMemcpy(
+                        recon_w_row.data(),
+                        lm_head_weights + static_cast<size_t>(recon_v0) * d_model,
+                        d_model * sizeof(float), cudaMemcpyDeviceToHost);
+                    if (recon_copy_err != cudaSuccess) {
+                        throw std::runtime_error(
+                            std::string("[LOGIT_RECON] cudaMemcpy W row failed: ") +
+                            cudaGetErrorString(recon_copy_err) + " tok=" + std::to_string(recon_v0) +
+                            " at " + __FILE__ + ":" + std::to_string(__LINE__));
+                    }
+                    double dot = 0.0;
+                    const float* h_row = &h_sample[static_cast<size_t>(recon_t0) * d_model];
+                    for (int d = 0; d < d_model; ++d) {
+                        dot += static_cast<double>(h_row[d]) * static_cast<double>(recon_w_row[d]);
+                    }
+                    recon_logit    = static_cast<float>(dot);
+                    live_logit     = logit_sample[static_cast<size_t>(recon_t0) * vocab_size + recon_v0];
+                    recon_residual = std::abs(recon_logit - live_logit);
+                }
+
                 std::ostringstream scale_eq;
                 scale_eq << std::fixed << std::setprecision(6);
                 scale_eq << "[LOGIT_SCALE_EQUATION] logit[v] = h · W[v]^T, logit_range = max - min\n";
@@ -924,6 +960,31 @@ void runLogitScaleDiagnostic(
                 scale_eq << "                      = " << expected_logit_std << "\n";
                 scale_eq << "  ACTUAL logit_std = " << logit_std
                          << " ratio(actual/expected)=" << logit_std_ratio << "\n";
+                // Decompose WHERE the actual/expected gap comes from. The isotropic
+                // 'expected' is a floor; ratio>1 is driven by h↔W correlation.
+                // predicted_ratio = sqrt(1 + d·cos²_hW) should track the measured
+                // ratio — if it does, the gap is fully explained by real anisotropy.
+                scale_eq << "  DRIVER h↔W: cos_hW_rms=" << hw_cos_rms
+                         << " predicted_ratio=sqrt(1+d·cos²)="
+                         << std::sqrt(1.0f + static_cast<float>(d_model) * hw_cos_rms * hw_cos_rms)
+                         << " signed_mean=" << hw_cos_signed_mean
+                         << " abs_max=" << hw_cos_abs_max << "\n";
+                scale_eq << "  DRIVER DC/common-mode: hbar_wbar_cos=" << hw_hbar_wbar_cos
+                         << " h_dc_mean=" << hw_h_dc_mean
+                         << " h_dc_abs_max=" << hw_h_dc_abs_max << "\n";
+                scale_eq << "  DRIVER unigram-freq-dir: cos_abs_mean=" << unigram_dir_cos_abs_mean
+                         << " cos_signed_mean=" << unigram_dir_cos_signed_mean << "\n";
+                if (recon_exact) {
+                    scale_eq << "  RECON CHECK: logit[t=" << recon_t0 << ",v=" << recon_v0
+                             << "] live=" << live_logit << " h·W=" << recon_logit
+                             << " residual=" << recon_residual
+                             << (recon_residual <= 0.01f * (std::abs(live_logit) + 1.0f)
+                                     ? "  [identity holds -> gap is real anisotropy]"
+                                     : "  [MISMATCH -> forward applies a transform/scale]")
+                             << "\n";
+                } else {
+                    scale_eq << "  RECON CHECK: skipped (LM-head weight transform active)\n";
+                }
                 scale_eq << "  TREND (EMA α=" << trend_alpha << ")"
                          << " logit_std_delta=" << (logit_std - trend_state.ema_logit_std)
                          << " max_logit_delta=" << (logit_max - trend_state.ema_logit_max)

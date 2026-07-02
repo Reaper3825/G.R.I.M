@@ -1,6 +1,6 @@
 //======================================================//
 //  LRSchedule.hpp
-//  Deterministic learning rate schedule (warmup + cosine decay)
+//  Deterministic learning rate schedule (warmup + hold + cosine decay)
 //
 //  Exposed struct — the full LR curve is queryable at any step
 //  without training loop state. Usable for:
@@ -40,10 +40,19 @@ struct LRScheduleResult {
     bool in_decay = false;
 };
 
-/// Deterministic LR schedule: linear warmup → constant → cosine decay.
+/// Deterministic LR schedule: linear warmup → hold → cosine decay.
 /// Pure function of step — no mutable state.
+///
+/// The hold phase is implicit: it is the region after warmup and before decay,
+/// identified only as "not warmup and not decay" (in_warmup == in_decay == false).
+/// There is no dedicated hold/plateau config — decay simply starts at a proportion
+/// of the total run (kDecayStartFraction) rather than immediately at warmup end.
 class LRSchedule {
 public:
+    /// Proportion of total_steps at which cosine decay begins (single-cosine path).
+    /// Steps in [warmup_steps, decay_start) form the implicit hold phase.
+    static constexpr float kDecayStartFraction = 0.5f;
+
     /// Construct from config. Throws if base_lr <= 0.
     explicit LRSchedule(const LRScheduleConfig& config)
         : config_(config)
@@ -78,9 +87,8 @@ public:
             return r;
         }
 
-        r.in_decay = true;
-
         if (config_.warm_restarts && config_.steps_per_epoch > 0) {
+            r.in_decay = true;
             // ── Cosine annealing with warm restarts (per-epoch) ──
             // First epoch: cosine decay occupies (steps_per_epoch - warmup_steps)
             // Subsequent epochs: full cosine cycle over steps_per_epoch
@@ -99,9 +107,23 @@ public:
                                    static_cast<float>(config_.steps_per_epoch);
             }
         } else {
-            // ── Single cosine decay over entire training run ──
-            const int decay_steps = config_.total_steps - config_.warmup_steps;
-            const int current_decay_step = step - config_.warmup_steps;
+            // ── Single cosine decay over the tail of the run ──
+            // Decay does not begin at warmup end. It begins at a proportion of the
+            // total run (kDecayStartFraction). Everything between warmup end and that
+            // point is an implicit hold phase — it is neither warmup nor decay
+            // (in_warmup == false, in_decay == false), and LR stays at base_lr.
+            const int decay_start_step = std::max(
+                config_.warmup_steps,
+                static_cast<int>(kDecayStartFraction * static_cast<float>(config_.total_steps)));
+
+            if (step < decay_start_step) {
+                r.lr = config_.base_lr;
+                return r;
+            }
+
+            r.in_decay = true;
+            const int decay_steps = config_.total_steps - decay_start_step;
+            const int current_decay_step = step - decay_start_step;
             r.decay_progress = static_cast<float>(current_decay_step) /
                                static_cast<float>(std::max(1, decay_steps));
         }

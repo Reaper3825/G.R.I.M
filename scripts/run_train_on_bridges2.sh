@@ -5,7 +5,7 @@
 # Prerequisites:
 #   - SSH: ssh uwadkins@bridges2.psc.edu (or add to ~/.ssh/config as Host bridges2)
 #   - Allocation: Set GRIM_BRIDGES2_ACCOUNT to your ACCESS allocation ID (e.g. abc1234p)
-#   - Path: Set GRIM_BRIDGES2_DIR to your repo path, e.g. /ocean/projects/<alloc_id>/<username>/G.R.I.M (default: cis210058p/uwadkins)
+#   - Path: Set GRIM_BRIDGES2_DIR to your repo path, e.g. /ocean/projects/<alloc_id>/<username>/G.R.I.M (default: cis250124p/uwadkins)
 #   - Remote git: Each run still git fetch + reset on Bridges-2 unless GRIM_BRIDGES2_SKIP_PULL is set (unrelated to MCS/CBS/FAS).
 #   - Data: By default does NOT push merged_verified_cache.jsonl, concept_blocks.jsonl, or curriculum_registry.json,
 #     and does NOT run the flash-attention submodule step on --build. Opt in with --sync-all or
@@ -77,8 +77,8 @@ LOCAL_VOCAB_TXT_PATH="$TRAINING_DATA_DIR/vocab.txt"
 LOCAL_GRMT_PATH="$TRAINING_DATA_DIR/training_data.grmt"
 
 # Bridges-2 path: /ocean/projects/<alloc_id>/<username>/G.R.I.M (override with GRIM_BRIDGES2_DIR)
-BRIDGES2_DIR="${GRIM_BRIDGES2_DIR:-/ocean/projects/cis210058p/uwadkins/G.R.I.M}"
-ACCOUNT="${GRIM_BRIDGES2_ACCOUNT:-cis210058p}"
+BRIDGES2_DIR="${GRIM_BRIDGES2_DIR:-/ocean/projects/cis250124p/uwadkins/G.R.I.M}"
+ACCOUNT="${GRIM_BRIDGES2_ACCOUNT:-cis250124p}"
 PARTITION="${PARTITION:-GPU-shared}"
 GPU_TYPE="${GPU_TYPE:-h100-80}"
 BRIDGES2_MAKE_JOBS="${GRIM_BRIDGES2_MAKE_JOBS:-100}"
@@ -203,12 +203,12 @@ echo "[Bridges-2] training assets: MCS=$_assets_mcs  CBS=$_assets_cbs  CRS=$_ass
 # Validate (path/account have defaults; override with env if needed)
 if [[ -z "$BRIDGES2_DIR" ]]; then
   echo "ERROR: Set GRIM_BRIDGES2_DIR to your Bridges-2 repo path."
-  echo "  Example: export GRIM_BRIDGES2_DIR=/ocean/projects/cis210058p/uwadkins/G.R.I.M"
+  echo "  Example: export GRIM_BRIDGES2_DIR=/ocean/projects/cis250124p/uwadkins/G.R.I.M"
   echo "  Your dir is under the allocation: /ocean/projects/<alloc_id>/<username>/"
   exit 1
 fi
 if [[ -z "$ACCOUNT" ]]; then
-  echo "ERROR: Set GRIM_BRIDGES2_ACCOUNT to your ACCESS allocation ID (e.g. cis210058p)."
+  echo "ERROR: Set GRIM_BRIDGES2_ACCOUNT to your ACCESS allocation ID (e.g. cis250124p)."
   echo "  Find it in your ACCESS allocation summary."
   exit 1
 fi
@@ -263,18 +263,70 @@ if [[ "$DO_PULL_LOGS" == true ]]; then
   exit 0
 fi
 
-# One long-lived SSH using a script-unique socket in /tmp (avoids ~/.ssh permission issues)
-BRIDGES2_CTRL="/tmp/cm-grim-$$"
-if ! ssh -f -N -M -S "$BRIDGES2_CTRL" -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "$BRIDGES2_SSH"; then
-  echo "SSH to Bridges-2 failed. Try: ssh bridges2"
-  exit 1
+# How a job submission authenticates to Bridges-2. SSH connection multiplexing (one login
+# reused for many commands) is NOT supported on Windows — neither MSYS/Git Bash ssh (its
+# backgrounded master dies after auth) nor native ssh.exe (ControlMaster is unimplemented:
+# "getsockname failed: Not a socket"). So instead of trying to make six connections feel
+# like one, the common --sbatch path runs everything (sync + build + config + submit) in a
+# SINGLE ssh command — exactly one password prompt, on every platform.
+#   single-shot - one ssh command does it all (default for plain --sbatch).
+#   posix       - backgrounded `ssh -f -N -M` master reused by each command (Linux/macOS/WSL,
+#                 used for the multi-call paths: --sync/--pull/interactive).
+#   nomux       - each command connects on its own (Windows multi-call paths; one password
+#                 per command — register your key with PSC for passwordless runs).
+# Overrides: GRIM_BRIDGES2_SINGLE_SHOT=0 disables single-shot batching;
+#            GRIM_BRIDGES2_MUX_MODE=posix|nomux forces a multi-call strategy.
+
+# Single-shot eligibility: a plain batch submit with no opt-in asset transfers and no
+# helper-tool seeding (those add streaming connections that can't fold into one call).
+SINGLE_SHOT=false
+if [[ "$USE_SBATCH" == true && "$DO_TD" != true && "$DO_UT" != true && "$DO_TT" != true \
+      && "$SKIP_MCS" == "1" && "$SKIP_CBS" == "1" && "$SKIP_CRS" == "1" \
+      && "${GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS:-0}" != "1" ]]; then
+  SINGLE_SHOT=true
 fi
+case "${GRIM_BRIDGES2_SINGLE_SHOT:-}" in
+  0|false|no|off) SINGLE_SHOT=false ;;
+esac
+
+BRIDGES2_MUX_MODE=posix
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*) BRIDGES2_MUX_MODE=nomux ;;
+esac
+case "${GRIM_BRIDGES2_NO_MUX:-}" in
+  1|true|yes|on) BRIDGES2_MUX_MODE=nomux ;;
+esac
+case "${GRIM_BRIDGES2_MUX_MODE:-}" in
+  posix|nomux) BRIDGES2_MUX_MODE="$GRIM_BRIDGES2_MUX_MODE" ;;
+esac
+
+BRIDGES2_COMMON_SSH_OPTS="-o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=60 -o ServerAliveCountMax=30"
 REMOTE_SNAPSHOT_PATHS=()
-trap 'cleanup_bridges2_session' EXIT
-trap 'handle_bridges2_signal INT' INT
-trap 'handle_bridges2_signal TERM' TERM
-trap 'handle_bridges2_signal HUP' HUP
-BRIDGES2_SSH_OPTS="-S $BRIDGES2_CTRL -o ControlMaster=no"
+
+if [[ "$SINGLE_SHOT" == true ]]; then
+  # The whole submission is one ssh command (assembled in the --sbatch block), so no master
+  # is needed and there is a single password prompt. Identical behavior on Windows and Linux.
+  BRIDGES2_CTRL=""
+  BRIDGES2_SSH_OPTS="$BRIDGES2_COMMON_SSH_OPTS"
+  echo "[Bridges-2] single-connection submit: sync + build + config + sbatch run over one SSH login (one password)."
+elif [[ "$BRIDGES2_MUX_MODE" == "nomux" ]]; then
+  # No multiplexing available on this platform; each command authenticates on its own.
+  BRIDGES2_CTRL=""
+  BRIDGES2_SSH_OPTS="$BRIDGES2_COMMON_SSH_OPTS"
+  echo "[Bridges-2] multi-command run without SSH multiplexing; each remote command authenticates separately."
+  echo "            Register your key with PSC (https://grants.psc.edu) for passwordless runs."
+else
+  # One long-lived SSH using a script-unique socket in /tmp (avoids ~/.ssh permission issues)
+  BRIDGES2_CTRL="/tmp/cm-grim-$$"
+  if ! ssh -f -N -M -S "$BRIDGES2_CTRL" -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "$BRIDGES2_SSH"; then
+    echo "SSH to Bridges-2 failed. Try: ssh bridges2"
+    exit 1
+  fi
+  BRIDGES2_SSH_OPTS="-S $BRIDGES2_CTRL -o ControlMaster=no"
+fi
+
+BRIDGES2_RSYNC_RSH="ssh $BRIDGES2_SSH_OPTS"
+bridges2_rsync() { rsync "$@"; }
 
 remote_quote() {
   printf '%q' "$1"
@@ -417,10 +469,20 @@ cleanup_bridges2_session() {
     fi
   done
 
-  ssh -S "$BRIDGES2_CTRL" -O exit "$BRIDGES2_SSH" 2>/dev/null
-  rm -f "$BRIDGES2_CTRL"
+  if [[ -n "$BRIDGES2_CTRL" ]]; then
+    ssh -S "$BRIDGES2_CTRL" -O exit "$BRIDGES2_SSH" 2>/dev/null
+    rm -f "$BRIDGES2_CTRL"
+  fi
   return "$exit_code"
 }
+
+# Register traps only now that their handler functions are defined. (Registering earlier
+# meant an early failure — e.g. the connection setup above — fired the EXIT trap before
+# cleanup_bridges2_session existed, printing "cleanup_bridges2_session: command not found".)
+trap 'cleanup_bridges2_session' EXIT
+trap 'handle_bridges2_signal INT' INT
+trap 'handle_bridges2_signal TERM' TERM
+trap 'handle_bridges2_signal HUP' HUP
 
 verify_remote_size() {
   local label="$1"
@@ -656,7 +718,7 @@ transfer_training_file() {
     if command -v rsync >/dev/null 2>&1; then
       if remote_has_command rsync; then
         echo "  method: rsync --compress --partial --progress"
-        if rsync -a --compress --partial --progress -e "ssh $BRIDGES2_SSH_OPTS" "$local_path" "$BRIDGES2_SSH:$remote_path"; then
+        if bridges2_rsync -a --compress --partial --progress -e "$BRIDGES2_RSYNC_RSH" "$local_path" "$BRIDGES2_SSH:$remote_path"; then
           verify_remote_size "$label" "$remote_path" "$size_bytes"
           echo "  -> $remote_path"
           return 0
@@ -872,7 +934,7 @@ download_training_file() {
     if command -v rsync >/dev/null 2>&1; then
       if remote_has_command rsync; then
         echo "  method: rsync --compress --partial --progress"
-        if rsync -a --compress --partial --progress -e "ssh $BRIDGES2_SSH_OPTS" "$BRIDGES2_SSH:$remote_path" "$local_path"; then
+        if bridges2_rsync -a --compress --partial --progress -e "$BRIDGES2_RSYNC_RSH" "$BRIDGES2_SSH:$remote_path" "$local_path"; then
           verify_local_size "$label" "$local_path" "$size_bytes"
           echo "  -> $local_path"
           return 0
@@ -968,11 +1030,16 @@ fi
 
 # Sync repo
 BRIDGES2_SYNCED=false
+BRIDGES2_SYNC_REMOTE_CMD="cd $BRIDGES2_DIR && git fetch origin && git reset --hard origin/\$(git rev-parse --abbrev-ref HEAD)"
 if [[ -z "${GRIM_BRIDGES2_SKIP_PULL:-}" ]]; then
-  echo "Syncing Bridges-2 repo..."
-  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && git fetch origin && git reset --hard origin/\$(git rev-parse --abbrev-ref HEAD)"
-  echo "  Done."
-  BRIDGES2_SYNCED=true
+  if [[ "$SINGLE_SHOT" == true ]]; then
+    BRIDGES2_SYNCED=true   # the git sync runs inside the single combined ssh at submit time
+  else
+    echo "Syncing Bridges-2 repo..."
+    ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "$BRIDGES2_SYNC_REMOTE_CMD"
+    echo "  Done."
+    BRIDGES2_SYNCED=true
+  fi
 fi
 
 if [[ "$DO_BUILD" == true ]] && [[ "$BRIDGES2_SYNCED" == true ]] && [[ "$DO_CLEAN_BUILD" != true ]]; then
@@ -991,7 +1058,10 @@ BRIDGES2_ENSURE_CUDA12="export GRIM_PROJECT_DIR=\$BRIDGES2_DIR; source \"\$BRIDG
 # If GRIM_VCPKG_ROOT is set, use that checkout instead.
 BRIDGES2_VCPKG="${GRIM_VCPKG_ROOT:-$BRIDGES2_DIR/external/vcpkg}"
 VCPKG_TOOLCHAIN="$BRIDGES2_VCPKG/scripts/buildsystems/vcpkg.cmake"
-BRIDGES2_VCPKG_DOWNLOADS="${GRIM_BRIDGES2_VCPKG_DOWNLOADS:-$BRIDGES2_VCPKG/downloads}"
+# Keep downloads outside the submodule path. On fresh remote clones, creating
+# external/vcpkg/downloads before `git submodule update` makes external/vcpkg a
+# non-git directory and prevents the submodule checkout from initializing.
+BRIDGES2_VCPKG_DOWNLOADS="${GRIM_BRIDGES2_VCPKG_DOWNLOADS:-$BRIDGES2_DIR/.grim_vcpkg_downloads}"
 LOCAL_VCPKG_DOWNLOADS="${GRIM_LOCAL_VCPKG_DOWNLOADS:-$REPO_ROOT/external/vcpkg/downloads}"
 # Keep this helper CMake metadata aligned with external/vcpkg/scripts/vcpkg-tools.json. Override only when you are
 # intentionally testing a different pinned helper archive.
@@ -1036,6 +1106,11 @@ BRIDGES2_REMOTE_VALIDATE_CMAKE_ARCHIVE_FUNC='grim_validate_cmake_archive() {
 }'
 BRIDGES2_VCPKG_TOOL_POLICY="$BRIDGES2_REMOTE_SHA512_FUNC; $BRIDGES2_REMOTE_VALIDATE_CMAKE_ARCHIVE_FUNC; grim_required_cmake_version=\"$BRIDGES2_VCPKG_CMAKE_VERSION\"; grim_expected_cmake_sha512=\"$BRIDGES2_VCPKG_CMAKE_SHA512\"; grim_system_cmake_version=\"\"; grim_has_compatible_cmake=0; grim_need_helper_downloads=0; if command -v cmake >/dev/null 2>&1; then grim_system_cmake_version=\$(cmake --version | awk 'NR==1 {print \$3}'); fi; if [ -n \"\$grim_system_cmake_version\" ] && [ \"\$(printf '%s\\n%s\\n' \"$BRIDGES2_VCPKG_CMAKE_VERSION\" \"\$grim_system_cmake_version\" | sort -V | head -n1)\" = \"$BRIDGES2_VCPKG_CMAKE_VERSION\" ]; then grim_has_compatible_cmake=1; fi; command -v ninja >/dev/null 2>&1 || grim_need_helper_downloads=1; [ \"\$grim_has_compatible_cmake\" = \"1\" ] || grim_need_helper_downloads=1; if [ \"\$grim_need_helper_downloads\" = \"0\" ]; then echo '  vcpkg helper tools: using Bridges-2 system cmake+ninja'; echo \"    system cmake: \$grim_system_cmake_version (required >= $BRIDGES2_VCPKG_CMAKE_VERSION)\"; export VCPKG_FORCE_SYSTEM_BINARIES=1; elif [ \"${GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS:-0}\" = \"1\" ]; then if [ -z \"\$grim_system_cmake_version\" ]; then echo '  vcpkg helper tools: system cmake missing; allowing helper-tool downloads'; elif [ \"\$grim_has_compatible_cmake\" != \"1\" ]; then echo \"  vcpkg helper tools: system cmake \$grim_system_cmake_version is older than required $BRIDGES2_VCPKG_CMAKE_VERSION; allowing helper-tool downloads\"; else echo '  vcpkg helper tools: system cmake is fine; helper-tool downloads remain enabled because ninja is missing'; fi; if [ \"\$grim_has_compatible_cmake\" != \"1\" ]; then grim_cmake_archive=\"$BRIDGES2_VCPKG_CMAKE_ARCHIVE\"; grim_cmake_url=\"$BRIDGES2_VCPKG_CMAKE_URL\"; grim_cmake_cache_path=\"$BRIDGES2_VCPKG_DOWNLOADS/\$grim_cmake_archive\"; if grim_validate_cmake_archive \"\$grim_cmake_cache_path\" \"\$grim_expected_cmake_sha512\"; then echo \"  vcpkg helper tools: using cached \$grim_cmake_archive from $BRIDGES2_VCPKG_DOWNLOADS\"; else echo \"  vcpkg helper tools: prefetching \$grim_cmake_archive into $BRIDGES2_VCPKG_DOWNLOADS\"; grim_tmp_download=\"\$grim_cmake_cache_path.partial\"; rm -f \"\$grim_tmp_download\"; if command -v aria2c >/dev/null 2>&1; then aria2c --allow-overwrite=true --auto-file-renaming=false --continue=true --dir=\"$BRIDGES2_VCPKG_DOWNLOADS\" --out=\"\$grim_cmake_archive.partial\" -x 8 -s 8 -k 1M \"\$grim_cmake_url\"; mv -f \"\$grim_tmp_download\" \"\$grim_cmake_cache_path\"; elif command -v wget >/dev/null 2>&1; then wget -O \"\$grim_tmp_download\" \"\$grim_cmake_url\"; mv -f \"\$grim_tmp_download\" \"\$grim_cmake_cache_path\"; elif command -v curl >/dev/null 2>&1; then curl -L --fail --retry 5 --continue-at - --output \"\$grim_tmp_download\" \"\$grim_cmake_url\"; mv -f \"\$grim_tmp_download\" \"\$grim_cmake_cache_path\"; else echo 'ERROR: helper downloads are enabled but aria2c, wget, and curl are all unavailable for CMake prefetch.' >&2; exit 1; fi; if ! grim_validate_cmake_archive \"\$grim_cmake_cache_path\" \"\$grim_expected_cmake_sha512\"; then echo \"ERROR: cached helper archive \$grim_cmake_archive still failed SHA512 validation after download.\" >&2; echo '  Remove the bad archive from the Bridges-2 downloads cache and rerun if this persists.' >&2; exit 1; fi; fi; fi; unset VCPKG_FORCE_SYSTEM_BINARIES; else if [ -z \"\$grim_system_cmake_version\" ]; then echo 'ERROR: Bridges-2 system cmake is missing and GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS is not enabled.' >&2; elif ! command -v ninja >/dev/null 2>&1; then echo 'ERROR: Bridges-2 system ninja is missing and GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS is not enabled.' >&2; else echo \"ERROR: Bridges-2 system cmake \$grim_system_cmake_version is older than required $BRIDGES2_VCPKG_CMAKE_VERSION and helper downloads are disabled.\" >&2; fi; echo '  Load the cluster cmake/ninja modules or re-run with --allow-vcpkg-tool-downloads.' >&2; exit 1; fi"
 BRIDGES2_VCPKG_ENV="mkdir -p \"$BRIDGES2_VCPKG_DOWNLOADS\"; export VCPKG_ROOT=\"$BRIDGES2_VCPKG\"; export VCPKG_DOWNLOADS=\"$BRIDGES2_VCPKG_DOWNLOADS\"; unset Z_VCPKG_ROOT_DIR; unset _VCPKG_ROOT_DIR"
+if [[ -n "${GRIM_VCPKG_ROOT:-}" ]]; then
+  BRIDGES2_VCPKG_PLACEHOLDER_REPAIR="true"
+else
+  BRIDGES2_VCPKG_PLACEHOLDER_REPAIR="if [ -d \"$BRIDGES2_VCPKG\" ] && ! git -C \"$BRIDGES2_VCPKG\" rev-parse --show-toplevel >/dev/null 2>&1; then echo \"  vcpkg checkout repair: removing non-git placeholder at $BRIDGES2_VCPKG\"; mkdir -p \"$BRIDGES2_VCPKG_DOWNLOADS\"; if [ -d \"$BRIDGES2_VCPKG/downloads\" ]; then cp -a \"$BRIDGES2_VCPKG/downloads/.\" \"$BRIDGES2_VCPKG_DOWNLOADS/\" 2>/dev/null || true; fi; rm -rf \"$BRIDGES2_VCPKG\"; fi"
+fi
 if [[ -n "${GRIM_VCPKG_ROOT:-}" ]]; then
   BRIDGES2_VCPKG_ENSURE="(set -e; $BRIDGES2_VCPKG_ENV; if [ ! -f \"$VCPKG_TOOLCHAIN\" ]; then echo \"ERROR: GRIM_VCPKG_ROOT does not contain vcpkg toolchain: $VCPKG_TOOLCHAIN\" >&2; exit 1; fi; if [ ! -x \"$BRIDGES2_VCPKG/vcpkg\" ]; then (cd \"$BRIDGES2_VCPKG\" && ./bootstrap-vcpkg.sh -disableMetrics); fi; touch \"$BRIDGES2_VCPKG/.vcpkg-root\")"
 else
@@ -1206,7 +1281,7 @@ case "$BRIDGES2_CMAKE_PRESET" in
 esac
 BRIDGES2_BUILD_TOOL_DETECT="grim_resolved_preset=\"$BRIDGES2_CMAKE_PRESET\"; grim_cmake_make_program=\"\"; grim_cmake_generator=\"\"; if command -v ninja >/dev/null 2>&1; then grim_cmake_make_program=\$(command -v ninja); grim_cmake_generator='Ninja'; echo \"  CMake generator backend: Ninja (\$grim_cmake_make_program)\"; elif command -v ninja-build >/dev/null 2>&1; then grim_cmake_make_program=\$(command -v ninja-build); grim_cmake_generator='Ninja'; echo \"  CMake generator backend: Ninja via ninja-build (\$grim_cmake_make_program)\"; elif command -v make >/dev/null 2>&1; then grim_cmake_make_program=\$(command -v make); grim_cmake_generator='Unix Makefiles'; if [ -n \"$BRIDGES2_CMAKE_FALLBACK_PRESET\" ]; then grim_resolved_preset=\"$BRIDGES2_CMAKE_FALLBACK_PRESET\"; fi; echo \"  CMake generator backend: Unix Makefiles fallback (\$grim_cmake_make_program)\"; elif command -v gmake >/dev/null 2>&1; then grim_cmake_make_program=\$(command -v gmake); grim_cmake_generator='Unix Makefiles'; if [ -n \"$BRIDGES2_CMAKE_FALLBACK_PRESET\" ]; then grim_resolved_preset=\"$BRIDGES2_CMAKE_FALLBACK_PRESET\"; fi; echo \"  CMake generator backend: Unix Makefiles fallback via gmake (\$grim_cmake_make_program)\"; else echo \"ERROR: no compatible CMake generator backend found on Bridges-2 (need ninja, ninja-build, make, or gmake on PATH).\" >&2; exit 1; fi; export GRIM_BRIDGES2_RESOLVED_PRESET=\"\$grim_resolved_preset\"; export GRIM_BRIDGES2_CMAKE_GENERATOR=\"\$grim_cmake_generator\"; export GRIM_BRIDGES2_CMAKE_MAKE_PROGRAM=\"\$grim_cmake_make_program\""
 BRIDGES2_DEP_MODE_LABEL="TrainingLoop vcpkg manifest"
-BRIDGES2_DEP_BOOTSTRAP="$BRIDGES2_VCPKG_ENSURE && $BRIDGES2_VCPKG_LOCK_SWEEP && $BRIDGES2_MANIFEST_ASSERT"
+BRIDGES2_DEP_BOOTSTRAP="$BRIDGES2_VCPKG_ENSURE && echo \"  vcpkg checkout: baseline/toolchain checks complete; sweeping for stale locks...\" && $BRIDGES2_VCPKG_LOCK_SWEEP && $BRIDGES2_MANIFEST_ASSERT"
 BRIDGES2_DEP_PRECONFIG="$BRIDGES2_VCPKG_TOOL_POLICY && $BRIDGES2_VCPKG_ENV && $BRIDGES2_VCPKG_MANIFEST_POLICY"
 BRIDGES2_CMAKE_DEP_ARGS="-DCMAKE_TOOLCHAIN_FILE=\"$VCPKG_TOOLCHAIN\" -DVCPKG_MANIFEST_DIR=\"$BRIDGES2_DIR/$TRAINING_DIR\" -DVCPKG_INSTALLED_DIR=\"$BRIDGES2_TRAINING_VCPKG_INSTALLED\" -DVCPKG_TARGET_TRIPLET=x64-linux -DVCPKG_MANIFEST_INSTALL=\$cmake_manifest_install -DGRIM_TRAINING_USE_MANUAL_DEPS=OFF -DGRIM_TRAINING_ENABLE_VCPKG_FALLBACK=ON"
 BRIDGES2_PREP_BUILD="grim_need_configure=0; if [ -f \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" ]; then cached_toolchain=\$(grep '^CMAKE_TOOLCHAIN_FILE:FILEPATH=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); cached_installed=\$(grep '^VCPKG_INSTALLED_DIR:PATH=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); cached_manual=\$(grep '^GRIM_TRAINING_USE_MANUAL_DEPS:BOOL=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); if [ -n \"\$cached_toolchain\" ] && [ \"\$cached_toolchain\" != \"$VCPKG_TOOLCHAIN\" ]; then echo \"  stale CMake toolchain cache: \$cached_toolchain -> $VCPKG_TOOLCHAIN\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure with the pinned vcpkg cache\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; grim_need_configure=1; elif [ -n \"\$cached_installed\" ] && [ \"\$cached_installed\" != \"$BRIDGES2_TRAINING_VCPKG_INSTALLED\" ]; then echo \"  stale TrainingLoop vcpkg installed cache: \$cached_installed -> $BRIDGES2_TRAINING_VCPKG_INSTALLED\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure the manifest install root\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; grim_need_configure=1; elif [ -n \"\$cached_manual\" ] && [ \"\$cached_manual\" != \"OFF\" ]; then echo \"  stale TrainingLoop dependency mode cache: manual deps -> OFF\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure for manifest-mode vcpkg\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; grim_need_configure=1; fi; else grim_need_configure=1; fi"
@@ -1231,6 +1306,40 @@ elif [[ "$DO_TT" == true ]]; then
   BUILD_TARGET="train_tokenizer"
 fi
 
+# Keep only lightweight orchestration on the login node. The actual build
+# (vcpkg lock checks, CMake configure, and compiler/linker work) runs inside
+# a Slurm allocation so a sick login node cannot stall the build pipeline.
+BRIDGES2_BUILD_PARTITION="${GRIM_BRIDGES2_BUILD_PARTITION:-$PARTITION}"
+BRIDGES2_BUILD_CPUS="${GRIM_BRIDGES2_BUILD_CPUS:-8}"
+BRIDGES2_BUILD_TIME_LIMIT="${GRIM_BRIDGES2_BUILD_TIME_LIMIT:-1:00:00}"
+if [[ -n "${GRIM_BRIDGES2_BUILD_USE_GPU:-}" ]]; then
+  case "${GRIM_BRIDGES2_BUILD_USE_GPU,,}" in
+    1|true|yes|on) BRIDGES2_BUILD_USE_GPU=1 ;;
+    0|false|no|off) BRIDGES2_BUILD_USE_GPU=0 ;;
+    *) echo "ERROR: GRIM_BRIDGES2_BUILD_USE_GPU must be 0/1, true/false, yes/no, or on/off."; exit 1 ;;
+  esac
+elif [[ "$BRIDGES2_BUILD_PARTITION" == GPU* ]]; then
+  BRIDGES2_BUILD_USE_GPU=1
+else
+  BRIDGES2_BUILD_USE_GPU=0
+fi
+[[ "$BRIDGES2_BUILD_CPUS" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: GRIM_BRIDGES2_BUILD_CPUS must be a positive integer (got: $BRIDGES2_BUILD_CPUS)"; exit 1; }
+BRIDGES2_BUILD_GPU_ARGS=""
+if [[ "$BRIDGES2_BUILD_USE_GPU" == "1" ]]; then
+  BRIDGES2_BUILD_GPU_ARGS="--gres=gpu:$GPU_TYPE:1"
+fi
+BRIDGES2_BUILD_SRUN_ARGS="-p $BRIDGES2_BUILD_PARTITION $SLURM_ACCOUNT_ARGS --ntasks=1 --cpus-per-task=$BRIDGES2_BUILD_CPUS $BRIDGES2_BUILD_GPU_ARGS -t $BRIDGES2_BUILD_TIME_LIMIT"
+
+# Single remote command for the build, used both by the staged path below and by the
+# single-shot combined submission.
+BRIDGES2_REMOTE_BUILD_SCRIPT="$BRIDGES2_REMOTE_STATE_DIR/run_train_on_bridges2.build.$BRIDGES2_RUN_ID.sh"
+BRIDGES2_REMOTE_BUILD_SCRIPT_Q="$(remote_quote "$BRIDGES2_REMOTE_BUILD_SCRIPT")"
+BRIDGES2_REMOTE_STATE_DIR_Q="$(remote_quote "$BRIDGES2_REMOTE_STATE_DIR")"
+BRIDGES2_DIR_Q="$(remote_quote "$BRIDGES2_DIR")"
+BRIDGES2_BUILD_INNER_REMOTE_CMD="BRIDGES2_DIR=$BRIDGES2_DIR; $BRIDGES2_CUDA_ARCH cd \$BRIDGES2_DIR && $BRIDGES2_VCPKG_PLACEHOLDER_REPAIR && $BRIDGES2_REMOTE_BUILD_STATE_SETUP && $BRIDGES2_SUBMODULE && $BRIDGES2_DEP_BOOTSTRAP && $BRIDGES2_PREP_BUILD && cd \$BRIDGES2_DIR/$TRAINING_DIR/TrainingLoop && ${BRIDGES2_CLEAN}$BRIDGES2_MODULES && $BRIDGES2_ENSURE_CUDA12 && $BRIDGES2_BUILD_TOOL_DETECT && $BRIDGES2_PRECONFIGURE_BUILD && $BRIDGES2_DEP_PRECONFIG && echo \"  CMake profile: \$GRIM_BRIDGES2_RESOLVED_PRESET via \$GRIM_BRIDGES2_CMAKE_GENERATOR\" && $BRIDGES2_CONFIGURE_STEP && cmake --build \"$BRIDGES2_DIR/$BUILD_DIR\" --target $BUILD_TARGET -j $BRIDGES2_MAKE_JOBS"
+BRIDGES2_BUILD_SCRIPT_B64="$(printf '%s\n' 'set -e' "$BRIDGES2_BUILD_INNER_REMOTE_CMD" | base64 | tr -d '\n')"
+BRIDGES2_BUILD_REMOTE_CMD="mkdir -p $BRIDGES2_REMOTE_STATE_DIR_Q && printf %s '$BRIDGES2_BUILD_SCRIPT_B64' | base64 -d > $BRIDGES2_REMOTE_BUILD_SCRIPT_Q && chmod 700 $BRIDGES2_REMOTE_BUILD_SCRIPT_Q && cd $BRIDGES2_DIR_Q && echo \"  Slurm build allocation: srun $BRIDGES2_BUILD_SRUN_ARGS\" && srun $BRIDGES2_BUILD_SRUN_ARGS bash $BRIDGES2_REMOTE_BUILD_SCRIPT_Q; grim_build_rc=\$?; rm -f $BRIDGES2_REMOTE_BUILD_SCRIPT_Q; exit \$grim_build_rc"
+
 if [[ "$DO_BUILD" == true ]]; then
   if [[ "${GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS:-0}" == "1" ]]; then
     echo "Seeding Bridges-2 helper-tool cache from local downloads when available..."
@@ -1245,11 +1354,16 @@ if [[ "$DO_BUILD" == true ]]; then
   echo "  vcpkg installed dir: $BRIDGES2_TRAINING_VCPKG_INSTALLED"
   echo "  vcpkg downloads cache: $BRIDGES2_VCPKG_DOWNLOADS"
   echo "  CMake preset: $BRIDGES2_CMAKE_PRESET (auto-falls back to -make when Ninja is unavailable)"
-  ACTIVE_REMOTE_STATE_FILE="$BRIDGES2_BUILD_STATE_FILE"
-  ACTIVE_REMOTE_LABEL="build"
-  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "BRIDGES2_DIR=$BRIDGES2_DIR; $BRIDGES2_CUDA_ARCH cd \$BRIDGES2_DIR && $BRIDGES2_REMOTE_BUILD_STATE_SETUP && $BRIDGES2_SUBMODULE && $BRIDGES2_DEP_BOOTSTRAP && $BRIDGES2_PREP_BUILD && cd \$BRIDGES2_DIR/$TRAINING_DIR/TrainingLoop && ${BRIDGES2_CLEAN}$BRIDGES2_MODULES && $BRIDGES2_ENSURE_CUDA12 && $BRIDGES2_BUILD_TOOL_DETECT && $BRIDGES2_PRECONFIGURE_BUILD && $BRIDGES2_DEP_PRECONFIG && echo \"  CMake profile: \$GRIM_BRIDGES2_RESOLVED_PRESET via \$GRIM_BRIDGES2_CMAKE_GENERATOR\" && $BRIDGES2_CONFIGURE_STEP && cmake --build \"$BRIDGES2_DIR/$BUILD_DIR\" --target $BUILD_TARGET -j $BRIDGES2_MAKE_JOBS"
-  ACTIVE_REMOTE_STATE_FILE=""
-  ACTIVE_REMOTE_LABEL=""
+  echo "  build execution: Slurm srun on partition=$BRIDGES2_BUILD_PARTITION, cpus=$BRIDGES2_BUILD_CPUS, gpu=$([[ "$BRIDGES2_BUILD_USE_GPU" == "1" ]] && echo "$GPU_TYPE:1" || echo none), time=$BRIDGES2_BUILD_TIME_LIMIT"
+  if [[ "$SINGLE_SHOT" == true ]]; then
+    echo "  (build is launched with srun inside the single combined SSH command at submit time)"
+  else
+    ACTIVE_REMOTE_STATE_FILE="$BRIDGES2_BUILD_STATE_FILE"
+    ACTIVE_REMOTE_LABEL="build"
+    ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "$BRIDGES2_BUILD_REMOTE_CMD"
+    ACTIVE_REMOTE_STATE_FILE=""
+    ACTIVE_REMOTE_LABEL=""
+  fi
 fi
 
 : # Transfer data
@@ -1282,8 +1396,10 @@ if [[ ! -f "$REPO_ROOT/ai_config.json" ]]; then
   echo "  scripts/run_train_on_bridges2.sh requires the repo-root ai_config.json so train_gpu can load it canonically." >&2
   exit 1
 fi
-echo "Transferring ai_config.json..."
-ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cat > $BRIDGES2_DIR/ai_config.json" < "$REPO_ROOT/ai_config.json"
+if [[ "$SINGLE_SHOT" != true ]]; then
+  echo "Transferring ai_config.json..."
+  ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cat > $BRIDGES2_DIR/ai_config.json" < "$REPO_ROOT/ai_config.json"
+fi
 
 # Batch job
 if [[ "$USE_SBATCH" == true ]]; then
@@ -1293,12 +1409,54 @@ if [[ "$USE_SBATCH" == true ]]; then
     echo "  Create it with: #SBATCH -p $PARTITION, #SBATCH -A $ACCOUNT, #SBATCH --gpus=$GPU_TYPE:1"
     exit 1
   fi
+  SBATCH_EXPORT="ALL,GRIM_BRIDGES2_DIR=$BRIDGES2_DIR"
+  BRIDGES2_SUBMIT_REMOTE_CMD="cd $BRIDGES2_DIR && sbatch --export=$SBATCH_EXPORT --output=$BRIDGES2_DIR/logs/train_%j.out --error=$BRIDGES2_DIR/logs/train_%j.err $SLURM_MAIL_ARGS -p $PARTITION $SLURM_ACCOUNT_ARGS --gpus=$GPU_TYPE:1 $SLURM_TIME_ARGS scripts/train_bridges2.sbatch"
+
+  if [[ "$SINGLE_SHOT" == true ]]; then
+    # Everything in ONE ssh command => a single password prompt. The two local files
+    # (ai_config.json + the .sbatch) are embedded as base64 and decoded remotely, since a
+    # single ssh invocation can only stream one stdin.
+    AICONFIG_B64=$(base64 < "$REPO_ROOT/ai_config.json" | tr -d '\n')
+    SBATCH_B64=$(base64 < "$SBATCH_PATH" | tr -d '\n')
+
+    single_shot_parts=()
+    if [[ -z "${GRIM_BRIDGES2_SKIP_PULL:-}" ]]; then
+      single_shot_parts+=("$BRIDGES2_SYNC_REMOTE_CMD")
+    fi
+    if [[ "$DO_BUILD" == true ]]; then
+      single_shot_parts+=("$BRIDGES2_BUILD_REMOTE_CMD")
+    fi
+    single_shot_parts+=("printf %s '$AICONFIG_B64' | base64 -d > $BRIDGES2_DIR/ai_config.json")
+    single_shot_parts+=("mkdir -p $BRIDGES2_DIR/scripts $BRIDGES2_DIR/logs")
+    single_shot_parts+=("printf %s '$SBATCH_B64' | base64 -d > $BRIDGES2_DIR/scripts/train_bridges2.sbatch")
+    single_shot_parts+=("$BRIDGES2_SUBMIT_REMOTE_CMD")
+
+    BRIDGES2_COMBINED_REMOTE_CMD=""
+    for _grim_part in "${single_shot_parts[@]}"; do
+      if [[ -z "$BRIDGES2_COMBINED_REMOTE_CMD" ]]; then
+        BRIDGES2_COMBINED_REMOTE_CMD="$_grim_part"
+      else
+        BRIDGES2_COMBINED_REMOTE_CMD="$BRIDGES2_COMBINED_REMOTE_CMD && $_grim_part"
+      fi
+    done
+
+    echo "Submitting batch job over a single SSH connection (partition=$PARTITION, gpu=$GPU_TYPE)..."
+    print_bridges2_time_limit
+    if [[ "$DO_BUILD" == true ]]; then
+      ACTIVE_REMOTE_STATE_FILE="$BRIDGES2_BUILD_STATE_FILE"
+      ACTIVE_REMOTE_LABEL="build+submit"
+    fi
+    ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "$BRIDGES2_COMBINED_REMOTE_CMD"
+    ACTIVE_REMOTE_STATE_FILE=""
+    ACTIVE_REMOTE_LABEL=""
+    exit 0
+  fi
+
   ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "mkdir -p $BRIDGES2_DIR/scripts $BRIDGES2_DIR/logs"
   ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cat > $BRIDGES2_DIR/scripts/train_bridges2.sbatch" < "$SBATCH_PATH"
   echo "Submitting batch job (partition=$PARTITION, gpu=$GPU_TYPE)..."
   print_bridges2_time_limit
-  SBATCH_EXPORT="ALL,GRIM_BRIDGES2_DIR=$BRIDGES2_DIR"
-  SUBMIT_OUT=$(ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && sbatch --export=$SBATCH_EXPORT --output=$BRIDGES2_DIR/logs/train_%j.out --error=$BRIDGES2_DIR/logs/train_%j.err $SLURM_MAIL_ARGS -p $PARTITION $SLURM_ACCOUNT_ARGS --gpus=$GPU_TYPE:1 $SLURM_TIME_ARGS scripts/train_bridges2.sbatch")
+  SUBMIT_OUT=$(ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "$BRIDGES2_SUBMIT_REMOTE_CMD")
   echo "$SUBMIT_OUT"
   exit 0
 fi
