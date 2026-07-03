@@ -22,6 +22,7 @@ namespace HyperParameters {
 struct EmbeddingLayerConstructionHP;
 struct EncoderLayerConstructionHP;
 struct ExecutionBlockConstructionHP;
+struct LatentTrajectoryPresetHP;
 struct LMHeadLayerConstructionHP;
 struct NumberEncoderConstructionHP;
 }
@@ -90,6 +91,12 @@ void initializeSelectorParameterTensors(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     bool selector_enabled,
     int d_model,
+    std::uint64_t weight_init_seed,
+    cudaStream_t init_stream);
+
+void initializeLatentTrajectoryPresetParameterTensors(
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const GRIM::HyperParameters::LatentTrajectoryPresetHP& latent_preset_hp,
     std::uint64_t weight_init_seed,
     cudaStream_t init_stream);
 

@@ -372,6 +372,11 @@ void initializeInferenceRuntime(const ::GRIM::Config::AiConfigSnapshot& model_cf
         throw std::runtime_error(std::string("[") + caller + "] MTP heads were not assembled by Startup::assembleGpuModel() while mtp is enabled.");
     }
 
+    const auto latent_preset_hp = GRIM::HyperParameters::latentTrajectoryPresetHP(model_cfg);
+    if (latent_preset_hp.enabled && !parameter_registry.getLatentTrajectoryPresetParameters()) {
+        throw std::runtime_error(std::string("[") + caller + "] LatentTrajectoryPreset owner was not assembled by Startup::assembleGpuModel() while latent_trajectory_preset is enabled.");
+    }
+
     cublasSetStream(training_state.cublas_handle.get(), primary_stream);
     std::cout << "  ✓ Using pre-initialized StreamController and cuBLAS handle" << std::endl;
 
@@ -571,6 +576,12 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
             parameter_registry.mtpHeadParameterTensors(),
             GRIM::HyperParameters::mtpConstructionHP(model_cfg),
             weight_init_seed,
+            init_stream);
+
+        ModelRegistration::initializeLatentTrajectoryPresetParameterTensors(
+            parameter_registry,
+            GRIM::HyperParameters::latentTrajectoryPresetHP(model_cfg),
+            weight_init_seed + 60,
             init_stream);
 
         std::cout << "✓ GPU model layer assembly complete\n";

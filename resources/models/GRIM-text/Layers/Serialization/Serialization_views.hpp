@@ -21,6 +21,11 @@ struct SerializationModelConfigView {
 	bool tie_embeddings = false;
 	bool use_gpu = false;
 	bool use_bias = false;
+	bool latent_trajectory_preset_enabled = false;
+	int latent_trajectory_preset_mtp_k = 0;
+	int latent_trajectory_preset_fuse_dim = 0;
+	int latent_trajectory_preset_dim = 0;
+	int latent_trajectory_preset_gate_dim = 0;
 
 	int head_dim() const { return (num_heads > 0) ? (d_model / num_heads) : 0; }
 	int kv_dim()   const { return num_kv_heads * head_dim(); }
@@ -157,6 +162,41 @@ struct SerializationExecutionBlockWriteView {
 	DeviceWriteView b_trace;
 	DeviceWriteView W_reason_gate;
 	DeviceWriteView W_trace_gate;
+};
+
+struct SerializationLatentTrajectoryPresetReadView {
+	DeviceReadView W_hidden_traj;
+	DeviceReadView b_hidden_traj;
+	DeviceReadView W_fuse;
+	DeviceReadView b_fuse;
+	DeviceReadView W_down;
+	DeviceReadView b_down;
+	DeviceReadView W_up;
+	DeviceReadView b_up;
+	DeviceReadView W_gate;
+	DeviceReadView b_gate;
+	DeviceReadView W_target;
+	DeviceReadView b_target;
+	DeviceReadView fuse_norm_gamma;
+	DeviceReadView preset_norm_gamma;
+	bool enabled = false;
+};
+
+struct SerializationLatentTrajectoryPresetWriteView {
+	DeviceWriteView W_hidden_traj;
+	DeviceWriteView b_hidden_traj;
+	DeviceWriteView W_fuse;
+	DeviceWriteView b_fuse;
+	DeviceWriteView W_down;
+	DeviceWriteView b_down;
+	DeviceWriteView W_up;
+	DeviceWriteView b_up;
+	DeviceWriteView W_gate;
+	DeviceWriteView b_gate;
+	DeviceWriteView W_target;
+	DeviceWriteView b_target;
+	DeviceWriteView fuse_norm_gamma;
+	DeviceWriteView preset_norm_gamma;
 };
 
 struct SerializationNumberEncoderReadView {

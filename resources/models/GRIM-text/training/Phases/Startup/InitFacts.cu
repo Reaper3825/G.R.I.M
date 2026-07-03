@@ -74,6 +74,7 @@ const char* paramGroupTypeName(GRIM::ParamGroupType type) {
         case GRIM::ParamGroupType::EXECUTION_BLOCK: return "EXECUTION_BLOCK";
         case GRIM::ParamGroupType::NUMBER_ENCODER: return "NUMBER_ENCODER";
         case GRIM::ParamGroupType::ARG_SELECTOR: return "ARG_SELECTOR";
+        case GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET: return "LATENT_TRAJECTORY_PRESET";
         case GRIM::ParamGroupType::COUNT: break;
     }
     throw std::runtime_error("paramGroupTypeName: invalid ParamGroupType::COUNT");

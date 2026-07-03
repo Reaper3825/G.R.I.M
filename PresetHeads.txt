@@ -1,0 +1,280 @@
+Latent Trajectory Presets / Self-Organizing Latent Attractor Memory:
+
+1. Config fields
+LatentTrajectoryPresetConfig 
+    bool enabled;
+
+    int d_model;          // 2304
+    int mtp_k;            // number of MTP heads, ex: 4 or 8
+    int vocab_size;
+
+    int fuse_dim;         // usually d_model
+    int preset_dim;       // bottleneck dim, ex: 256 / 384 / 512 / 576
+    int gate_dim;         // usually d_model or preset_dim
+
+    float preset_scale;   // residual scale
+    float gate_bias_init; // negative, ex: -3.0 so gate starts near off
+
+    bool use_token_mean;
+    bool use_mtp_logits;
+    bool use_mtp_hidden;
+    bool use_entropy;
+    bool use_delta_target;
+    bool use_consistency_loss;
+    bool use_diversity_loss;
+    bool use_gate_sparsity_loss;
+
+    float lambda_traj;
+    float lambda_delta;
+    float lambda_consistency;
+    float lambda_diversity;
+    float lambda_gate;
+
+
+first values:
+preset_dim = d_model / 4;   // 576 if d_model = 2304
+preset_scale = 0.1f;
+gate_bias_init = -3.0f;
+lambda_traj = 0.05f;
+lambda_delta = 0.025f;
+lambda_gate = 0.001f;
+lambda_diversity = 0.001f;
+
+---------------------------------------------------
+
+2. Trainable parameter fields
+
+These are the actual learned weights to be registered and grouped by the ParameterGroupRegistration.
+accessed only through ParameterRegistery:
+
+    // Shared hidden-trajectory projection: h[t] -> predicted future hidden trajectory
+    Tensor W_hidden_traj; // [d_model, mtp_k * d_model]
+    Tensor b_hidden_traj; // [mtp_k * d_model]
+
+    // Fuse MTP future predictions into one trajectory vector
+    Tensor W_fuse;      // [mtp_k * d_model, fuse_dim]
+    Tensor b_fuse;      // [fuse_dim]
+
+    // Compress into latent preset bottleneck
+    Tensor W_down;      // [fuse_dim, preset_dim]
+    Tensor b_down;      // [preset_dim]
+
+    // Expand preset back to model space
+    Tensor W_up;        // [preset_dim, d_model]
+    Tensor b_up;        // [d_model]
+
+    // Gate decides whether preset should affect hidden state
+    Tensor W_gate;      // [d_model + fuse_dim, d_model] or [d_model + fuse_dim, 1]
+    Tensor b_gate;      // [d_model] or [1]
+
+    //projection for trajectory target
+    Tensor W_target;    // [d_model, preset_dim]
+    Tensor b_target;    // [preset_dim]
+
+    // Norms
+    RMSNorm fuse_norm;
+    RMSNorm preset_norm;
+---------------------------------------------------
+Gate choice
+Scalar gate:
+Cheaper and safer:
+gate[t] = scalar;
+Shape:
+gate: [B, T, 1]
+
+---------------------------------------------------
+
+Vector gate:
+
+More powerful but riskier:
+
+gate[t][d] = per-channel control;
+
+Shape:
+
+gate: [B, T, d_model]
+
+For first test, use scalar gate.
+
+---------------------------------------------------
+
+3. Runtime activation fields
+
+These exist during forward pass.
+
+LatentTrajectoryPresetActivations
+    Tensor mtp_hidden;       // [B, T, K, d_model]
+    Tensor mtp_logits;       // [B, T, K, vocab_size] optional
+
+    Tensor future_fused;     // [B, T, fuse_dim]
+    Tensor future_entropy;   // [B, T, K] optional
+
+    Tensor preset_z;         // [B, T, preset_dim]
+    Tensor preset_vec;       // [B, T, d_model]
+
+    Tensor gate_pre;         // [B, T, 1] or [B, T, d_model]
+    Tensor gate;             // [B, T, 1] or [B, T, d_model]
+
+    Tensor preset_injected;  // [B, T, d_model]
+    Tensor h_enhanced;       // [B, T, d_model]
+
+
+Core path:
+
+future_fused = Fuse(mtp_hidden[t][1...K]);
+
+preset_z = DownProject(future_fused);
+
+preset_vec = UpProject(preset_z);
+
+gate = sigmoid(Gate(h[t], future_fused));
+
+h_enhanced = h[t] + preset_scale * gate * preset_vec;
+
+---------------------------------------------------
+
+4. Target fields
+These are the learning targets.
+
+
+    Tensor future_hidden_mean;   // [B, T, d_model]
+    Tensor future_hidden_delta;  // [B, T, d_model]
+    Tensor future_token_mean;    // [B, T, d_model] optional
+
+    Tensor target_z;             // [B, T, preset_dim]
+    Tensor target_delta_z;       // [B, T, preset_dim]
+
+    Tensor valid_mask;           // [B, T]
+
+
+first target:
+future_hidden_mean[t] = mean(stopgrad(h[t+1 ... t+K]));
+Then:
+target_z = TargetProject(future_hidden_mean);
+Loss:
+L_traj = MSE(preset_z, stopgrad(target_z));
+Delta target:
+future_hidden_delta[t] = future_hidden_mean[t] - h[t];
+Loss:
+L_delta = MSE(preset_vec, stopgrad(future_hidden_delta));
+
+5. Loss fields
+LatentTrajectoryPresetLosses
+    float loss_traj;        // preset predicts future trajectory
+    float loss_delta;       // preset predicts direction of movement
+    float loss_gate;        // keeps gate sparse
+    float loss_diversity;   // prevents preset collapse
+    float loss_consistency; // similar futures -> similar presets
+
+    float loss_total;
+Total:
+loss_total =
+    loss_lm
+  + loss_mtp
+  + lambda_traj * loss_traj
+  + lambda_delta * loss_delta
+  + lambda_gate * loss_gate
+  + lambda_diversity * loss_diversity
+  + lambda_consistency * loss_consistency;
+
+---------------------------------------------------
+
+6. Gate loss fields
+
+Needed so the preset path does'nt become always-on noise.
+
+loss_gate = mean(gate);
+
+Better version:
+
+loss_gate = mean(abs(gate));
+
+Expected behavior:
+
+early training: gate_mean near 0.02 - 0.10
+later useful:   gate_mean can rise if it helps
+bad:            gate_mean instantly jumps > 0.
+
+---------------------------------------------------
+
+7. Diversity / anti-collapse fields
+
+The danger is:
+
+every token gets same preset vector
+
+Telemetry:
+
+LatentPresetDiagnostics
+    float gate_mean;
+    float gate_max;
+    float gate_min;
+
+    float preset_rms;
+    float preset_mean;
+    float preset_var;
+
+    float preset_cosine_mean;
+    float preset_cosine_max;
+
+    float z_rms;
+    float z_var;
+
+    float injection_rms;
+    float h_rms;
+    float injection_to_hidden_ratio;
+
+    float traj_loss;
+    float delta_loss;
+
+Bad signs:
+
+preset_cosine_mean -> 0.9+
+preset_var -> near 0
+gate_mean -> 1.0
+injection_to_hidden_ratio too high
+
+Good signs:
+
+preset_cosine_mean moderate
+preset_var alive
+gate_mean low but nonzero
+MTP loss improves when enabled
+
+---------------------------------------------------
+
+
+8. First implementation path
+
+Do it in this order:
+
+1. Add MTP hidden output buffer
+2. Fuse MTP hidden states
+3. Down-project into preset_z
+4. Up-project into preset_vec
+5. Add scalar gate
+6. Inject into hidden state with tiny scale
+7. Add future-hidden trajectory target
+8. Add gate sparsity loss
+9. Add diagnostics
+10. Only then test whether it improves LM/MTP loss
+10. The important design choice
+
+idea, the “internal codebook” is not a field like this:
+
+Tensor codebook[num_codes][dim];
+
+Instead it emerges inside these fields:
+
+W_fuse
+W_down
+W_up
+W_gate
+preset_z
+preset_vec
+
+The reusable presets are the repeated latent attractor patterns inside:
+
+preset_z
+
+So preset_z is the important thing to log, visualize, and protect from collapse.

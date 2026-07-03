@@ -6,11 +6,13 @@
 #
 # Usage:
 #   ./scripts/sync_models_bridges2.sh collect [--dry-run] [--skip-checkpoints] [--pull-vocab] [--pull-grmt] [--subpath REL]
+#   ./scripts/sync_models_bridges2.sh pull-logs [--dry-run] [--subpath REL]
 #   ./scripts/sync_models_bridges2.sh delete [--dry-run] [--yes] [--subpath REL]
 #   ./scripts/sync_models_bridges2.sh both   [--dry-run] [--yes] [--pull-vocab] [--pull-grmt] [--subpath REL]
 #
 # Modes:
 #   collect — rsync FROM Bridges-2 → local repo (pull checkpoints off ocean storage)
+#   pull-logs — rsync training logs FROM Bridges-2 → local repo
 #   delete  — remove the same path ON Bridges-2 only (frees /ocean quota; does not delete local)
 #   both    — collect then delete remote (safe order: copy first, then remove from cluster)
 #
@@ -19,6 +21,7 @@
 #   GRIM_BRIDGES2_SSH          SSH host or user@host (default: bridges2, else uwadkins@bridges2.psc.edu)
 #   GRIM_BRIDGES2_ACCOUNT      Shown in help text only (for documentation)
 #   GRIM_BRIDGES2_SYNC_RELATIVE  Path under repo to sync (default: resources/models/GRIM-text/checkpoints)
+#   GRIM_BRIDGES2_SSH_MUX      SSH ControlMaster use: auto, on, off (default: auto; pull-logs defaults off)
 #
 # Examples:
 #   ./scripts/sync_models_bridges2.sh collect
@@ -26,6 +29,7 @@
 #   ./scripts/sync_models_bridges2.sh collect --skip-checkpoints --pull-vocab
 #   ./scripts/sync_models_bridges2.sh collect --pull-vocab --pull-grmt
 #   ./scripts/sync_models_bridges2.sh collect --dry-run
+#   ./scripts/sync_models_bridges2.sh pull-logs
 #   ./scripts/sync_models_bridges2.sh delete --yes
 #   ./scripts/sync_models_bridges2.sh both --yes --pull-vocab --pull-grmt
 #   GRIM_BRIDGES2_SYNC_RELATIVE=resources/models/GRIM-text/training/logs ./scripts/sync_models_bridges2.sh collect
@@ -34,13 +38,16 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+DEFAULT_CHECKPOINTS_REL="resources/models/GRIM-text/checkpoints"
+TRAINING_LOGS_REL="resources/models/GRIM-text/training/logs"
+
 BRIDGES2_DIR="${GRIM_BRIDGES2_DIR:-/ocean/projects/cis210058p/uwadkins/G.R.I.M}"
 BRIDGES2_SSH="${GRIM_BRIDGES2_SSH:-bridges2}"
 if [[ "$BRIDGES2_SSH" == "bridges2" ]] && ! grep -q "Host bridges2" ~/.ssh/config 2>/dev/null; then
   BRIDGES2_SSH="uwadkins@bridges2.psc.edu"
 fi
 
-SYNC_REL="${GRIM_BRIDGES2_SYNC_RELATIVE:-resources/models/GRIM-text/checkpoints}"
+SYNC_REL="${GRIM_BRIDGES2_SYNC_RELATIVE:-$DEFAULT_CHECKPOINTS_REL}"
 
 MODE=""
 DRY_RUN=false
@@ -52,6 +59,7 @@ SUBPATH=""
 REMOTE_RSYNC_CMD=""
 TRANSFER_METHOD="${GRIM_BRIDGES2_TRANSFER_METHOD:-auto}"
 GZIP_LEVEL="${GRIM_BRIDGES2_GZIP_LEVEL:-1}"
+SSH_MUX="${GRIM_BRIDGES2_SSH_MUX:-auto}"
 
 log_progress() {
   local pct="$1"
@@ -88,6 +96,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help) usage 0 ;;
     collect|delete|both) MODE="$1"; shift ;;
+    pull-logs) MODE="$1"; SYNC_REL="$TRAINING_LOGS_REL"; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
     --yes|-y) SKIP_CONFIRM=true; shift ;;
     --skip-checkpoints) SKIP_CHECKPOINTS=true; shift ;;
@@ -107,11 +116,16 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$MODE" ]]; then
-  echo "ERROR: specify mode: collect | delete | both"
+  echo "ERROR: specify mode: collect | pull-logs | delete | both"
   usage 1
 fi
 
 if [[ "$MODE" == "delete" && ( "$PULL_VOCAB" == true || "$PULL_GRMT" == true ) ]]; then
+  echo "ERROR: --pull-vocab/--pull-grmt require collect or both mode"
+  exit 1
+fi
+
+if [[ "$MODE" == "pull-logs" && ( "$PULL_VOCAB" == true || "$PULL_GRMT" == true ) ]]; then
   echo "ERROR: --pull-vocab/--pull-grmt require collect or both mode"
   exit 1
 fi
@@ -131,6 +145,14 @@ case "$TRANSFER_METHOD" in
   *) echo "ERROR: GRIM_BRIDGES2_TRANSFER_METHOD must be auto, rsync, zstd, gzip, or raw (got: $TRANSFER_METHOD)"; exit 1 ;;
 esac
 [[ "$GZIP_LEVEL" =~ ^[1-9]$ ]] || { echo "ERROR: GRIM_BRIDGES2_GZIP_LEVEL must be 1..9 (got: $GZIP_LEVEL)"; exit 1; }
+case "$SSH_MUX" in
+  auto|on|off) ;;
+  *) echo "ERROR: GRIM_BRIDGES2_SSH_MUX must be auto, on, or off (got: $SSH_MUX)"; exit 1 ;;
+esac
+
+if [[ "$MODE" == "pull-logs" && -z "${GRIM_BRIDGES2_SSH_MUX+x}" ]]; then
+  SSH_MUX="off"
+fi
 
 REMOTE_BASE="$BRIDGES2_DIR/$SYNC_REL"
 LOCAL_BASE="$REPO_ROOT/$SYNC_REL"
@@ -158,9 +180,23 @@ fi
 [[ "$DRY_RUN" == true ]] && RSYNC_OPTS+=(--dry-run)
 
 ssh_master() {
+  if [[ "$SSH_MUX" == "off" ]]; then
+    log_progress 10 "Using direct SSH sessions to $BRIDGES2_SSH (ControlMaster disabled)"
+    BRIDGES2_SSH_OPTS=(-o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new)
+    # rsync -e must be one shell-invokable command string
+    RSYNC_SSH_CMD="ssh ${BRIDGES2_SSH_OPTS[*]}"
+    return 0
+  fi
+
   log_progress 10 "Opening SSH control connection to $BRIDGES2_SSH"
   BRIDGES2_CTRL="/tmp/cm-grim-sync-$$"
   if ! ssh -f -N -M -S "$BRIDGES2_CTRL" -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new "$BRIDGES2_SSH"; then
+    if [[ "$SSH_MUX" == "auto" ]]; then
+      log_progress 10 "SSH ControlMaster unavailable; falling back to direct SSH sessions"
+      BRIDGES2_SSH_OPTS=(-o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new)
+      RSYNC_SSH_CMD="ssh ${BRIDGES2_SSH_OPTS[*]}"
+      return 0
+    fi
     echo "ERROR: SSH to Bridges-2 failed (try: ssh $BRIDGES2_SSH)"
     exit 1
   fi
@@ -445,6 +481,31 @@ do_collect() {
   log_progress 100 "Collect completed"
 }
 
+do_pull_logs() {
+  log_progress 25 "Pull logs start"
+  echo "[pull-logs] Remote: $BRIDGES2_SSH:$REMOTE_BASE"
+  echo "[pull-logs] Local:  $LOCAL_BASE"
+  mkdir -p "$LOCAL_BASE"
+
+  if ! remote_exists; then
+    echo "WARNING: Remote logs path does not exist; skipping log pull."
+    return 0
+  fi
+
+  if detect_remote_rsync; then
+    log_progress 40 "Syncing training logs via rsync"
+    rsync "${RSYNC_OPTS[@]}" --rsync-path "$REMOTE_RSYNC_CMD" -e "$RSYNC_SSH_CMD" \
+      "$BRIDGES2_SSH:$REMOTE_BASE/" "$LOCAL_BASE/"
+    log_progress 75 "Logs rsync transfer completed"
+  elif [[ "$DRY_RUN" == true ]]; then
+    echo "[dry-run] Would stream logs via tar from $REMOTE_BASE to $LOCAL_BASE"
+  else
+    collect_via_tar
+  fi
+
+  log_progress 100 "Pull logs completed"
+}
+
 do_delete() {
   log_progress 25 "Delete start"
   echo "[delete] Remote only: $BRIDGES2_SSH:$REMOTE_BASE"
@@ -475,6 +536,7 @@ log_progress 15 "Mode selected: $MODE"
 
 case "$MODE" in
   collect) do_collect ;;
+  pull-logs) do_pull_logs ;;
   delete)  do_delete ;;
   both)
     do_collect

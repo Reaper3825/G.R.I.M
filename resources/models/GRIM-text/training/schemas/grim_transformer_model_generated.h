@@ -59,6 +59,10 @@ struct ExecutionBlockWeights;
 struct ExecutionBlockWeightsBuilder;
 struct ExecutionBlockWeightsT;
 
+struct LatentTrajectoryPresetWeights;
+struct LatentTrajectoryPresetWeightsBuilder;
+struct LatentTrajectoryPresetWeightsT;
+
 struct NumberEncoderWeights;
 struct NumberEncoderWeightsBuilder;
 struct NumberEncoderWeightsT;
@@ -1941,6 +1945,342 @@ inline ::flatbuffers::Offset<ExecutionBlockWeights> CreateExecutionBlockWeightsD
 
 ::flatbuffers::Offset<ExecutionBlockWeights> CreateExecutionBlockWeights(::flatbuffers::FlatBufferBuilder &_fbb, const ExecutionBlockWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 
+struct LatentTrajectoryPresetWeightsT : public ::flatbuffers::NativeTable {
+  typedef LatentTrajectoryPresetWeights TableType;
+  std::vector<float> w_fuse_data{};
+  std::vector<float> b_fuse_data{};
+  std::vector<float> w_down_data{};
+  std::vector<float> b_down_data{};
+  std::vector<float> w_up_data{};
+  std::vector<float> b_up_data{};
+  std::vector<float> w_gate_data{};
+  std::vector<float> b_gate_data{};
+  std::vector<float> w_target_data{};
+  std::vector<float> b_target_data{};
+  std::vector<float> fuse_norm_gamma_data{};
+  std::vector<float> preset_norm_gamma_data{};
+  uint32_t d_model = 0;
+  uint32_t mtp_k = 0;
+  uint32_t fuse_dim = 0;
+  uint32_t preset_dim = 0;
+  uint32_t gate_dim = 0;
+  std::vector<float> w_hidden_traj_data{};
+  std::vector<float> b_hidden_traj_data{};
+};
+
+struct LatentTrajectoryPresetWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef LatentTrajectoryPresetWeightsT NativeTableType;
+  typedef LatentTrajectoryPresetWeightsBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_W_FUSE_DATA = 4,
+    VT_B_FUSE_DATA = 6,
+    VT_W_DOWN_DATA = 8,
+    VT_B_DOWN_DATA = 10,
+    VT_W_UP_DATA = 12,
+    VT_B_UP_DATA = 14,
+    VT_W_GATE_DATA = 16,
+    VT_B_GATE_DATA = 18,
+    VT_W_TARGET_DATA = 20,
+    VT_B_TARGET_DATA = 22,
+    VT_FUSE_NORM_GAMMA_DATA = 24,
+    VT_PRESET_NORM_GAMMA_DATA = 26,
+    VT_D_MODEL = 28,
+    VT_MTP_K = 30,
+    VT_FUSE_DIM = 32,
+    VT_PRESET_DIM = 34,
+    VT_GATE_DIM = 36,
+    VT_W_HIDDEN_TRAJ_DATA = 38,
+    VT_B_HIDDEN_TRAJ_DATA = 40
+  };
+  const ::flatbuffers::Vector<float> *w_fuse_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_FUSE_DATA);
+  }
+  const ::flatbuffers::Vector<float> *b_fuse_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_B_FUSE_DATA);
+  }
+  const ::flatbuffers::Vector<float> *w_down_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_DOWN_DATA);
+  }
+  const ::flatbuffers::Vector<float> *b_down_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_B_DOWN_DATA);
+  }
+  const ::flatbuffers::Vector<float> *w_up_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_UP_DATA);
+  }
+  const ::flatbuffers::Vector<float> *b_up_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_B_UP_DATA);
+  }
+  const ::flatbuffers::Vector<float> *w_gate_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_GATE_DATA);
+  }
+  const ::flatbuffers::Vector<float> *b_gate_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_B_GATE_DATA);
+  }
+  const ::flatbuffers::Vector<float> *w_target_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_TARGET_DATA);
+  }
+  const ::flatbuffers::Vector<float> *b_target_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_B_TARGET_DATA);
+  }
+  const ::flatbuffers::Vector<float> *fuse_norm_gamma_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_FUSE_NORM_GAMMA_DATA);
+  }
+  const ::flatbuffers::Vector<float> *preset_norm_gamma_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_PRESET_NORM_GAMMA_DATA);
+  }
+  uint32_t d_model() const {
+    return GetField<uint32_t>(VT_D_MODEL, 0);
+  }
+  uint32_t mtp_k() const {
+    return GetField<uint32_t>(VT_MTP_K, 0);
+  }
+  uint32_t fuse_dim() const {
+    return GetField<uint32_t>(VT_FUSE_DIM, 0);
+  }
+  uint32_t preset_dim() const {
+    return GetField<uint32_t>(VT_PRESET_DIM, 0);
+  }
+  uint32_t gate_dim() const {
+    return GetField<uint32_t>(VT_GATE_DIM, 0);
+  }
+  const ::flatbuffers::Vector<float> *w_hidden_traj_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_HIDDEN_TRAJ_DATA);
+  }
+  const ::flatbuffers::Vector<float> *b_hidden_traj_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_B_HIDDEN_TRAJ_DATA);
+  }
+  bool Verify(::flatbuffers::Verifier &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffsetRequired(verifier, VT_W_FUSE_DATA) &&
+           verifier.VerifyVector(w_fuse_data()) &&
+           VerifyOffsetRequired(verifier, VT_B_FUSE_DATA) &&
+           verifier.VerifyVector(b_fuse_data()) &&
+           VerifyOffsetRequired(verifier, VT_W_DOWN_DATA) &&
+           verifier.VerifyVector(w_down_data()) &&
+           VerifyOffsetRequired(verifier, VT_B_DOWN_DATA) &&
+           verifier.VerifyVector(b_down_data()) &&
+           VerifyOffsetRequired(verifier, VT_W_UP_DATA) &&
+           verifier.VerifyVector(w_up_data()) &&
+           VerifyOffsetRequired(verifier, VT_B_UP_DATA) &&
+           verifier.VerifyVector(b_up_data()) &&
+           VerifyOffsetRequired(verifier, VT_W_GATE_DATA) &&
+           verifier.VerifyVector(w_gate_data()) &&
+           VerifyOffsetRequired(verifier, VT_B_GATE_DATA) &&
+           verifier.VerifyVector(b_gate_data()) &&
+           VerifyOffsetRequired(verifier, VT_W_TARGET_DATA) &&
+           verifier.VerifyVector(w_target_data()) &&
+           VerifyOffsetRequired(verifier, VT_B_TARGET_DATA) &&
+           verifier.VerifyVector(b_target_data()) &&
+           VerifyOffsetRequired(verifier, VT_FUSE_NORM_GAMMA_DATA) &&
+           verifier.VerifyVector(fuse_norm_gamma_data()) &&
+           VerifyOffsetRequired(verifier, VT_PRESET_NORM_GAMMA_DATA) &&
+           verifier.VerifyVector(preset_norm_gamma_data()) &&
+           VerifyField<uint32_t>(verifier, VT_D_MODEL, 4) &&
+           VerifyField<uint32_t>(verifier, VT_MTP_K, 4) &&
+           VerifyField<uint32_t>(verifier, VT_FUSE_DIM, 4) &&
+           VerifyField<uint32_t>(verifier, VT_PRESET_DIM, 4) &&
+           VerifyField<uint32_t>(verifier, VT_GATE_DIM, 4) &&
+           VerifyOffsetRequired(verifier, VT_W_HIDDEN_TRAJ_DATA) &&
+           verifier.VerifyVector(w_hidden_traj_data()) &&
+           VerifyOffsetRequired(verifier, VT_B_HIDDEN_TRAJ_DATA) &&
+           verifier.VerifyVector(b_hidden_traj_data()) &&
+           verifier.EndTable();
+  }
+  LatentTrajectoryPresetWeightsT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  void UnPackTo(LatentTrajectoryPresetWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  static ::flatbuffers::Offset<LatentTrajectoryPresetWeights> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const LatentTrajectoryPresetWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+};
+
+struct LatentTrajectoryPresetWeightsBuilder {
+  typedef LatentTrajectoryPresetWeights Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_w_fuse_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> w_fuse_data) {
+    fbb_.AddOffset(LatentTrajectoryPresetWeights::VT_W_FUSE_DATA, w_fuse_data);
+  }
+  void add_b_fuse_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> b_fuse_data) {
+    fbb_.AddOffset(LatentTrajectoryPresetWeights::VT_B_FUSE_DATA, b_fuse_data);
+  }
+  void add_w_down_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> w_down_data) {
+    fbb_.AddOffset(LatentTrajectoryPresetWeights::VT_W_DOWN_DATA, w_down_data);
+  }
+  void add_b_down_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> b_down_data) {
+    fbb_.AddOffset(LatentTrajectoryPresetWeights::VT_B_DOWN_DATA, b_down_data);
+  }
+  void add_w_up_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> w_up_data) {
+    fbb_.AddOffset(LatentTrajectoryPresetWeights::VT_W_UP_DATA, w_up_data);
+  }
+  void add_b_up_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> b_up_data) {
+    fbb_.AddOffset(LatentTrajectoryPresetWeights::VT_B_UP_DATA, b_up_data);
+  }
+  void add_w_gate_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> w_gate_data) {
+    fbb_.AddOffset(LatentTrajectoryPresetWeights::VT_W_GATE_DATA, w_gate_data);
+  }
+  void add_b_gate_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> b_gate_data) {
+    fbb_.AddOffset(LatentTrajectoryPresetWeights::VT_B_GATE_DATA, b_gate_data);
+  }
+  void add_w_target_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> w_target_data) {
+    fbb_.AddOffset(LatentTrajectoryPresetWeights::VT_W_TARGET_DATA, w_target_data);
+  }
+  void add_b_target_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> b_target_data) {
+    fbb_.AddOffset(LatentTrajectoryPresetWeights::VT_B_TARGET_DATA, b_target_data);
+  }
+  void add_fuse_norm_gamma_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> fuse_norm_gamma_data) {
+    fbb_.AddOffset(LatentTrajectoryPresetWeights::VT_FUSE_NORM_GAMMA_DATA, fuse_norm_gamma_data);
+  }
+  void add_preset_norm_gamma_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> preset_norm_gamma_data) {
+    fbb_.AddOffset(LatentTrajectoryPresetWeights::VT_PRESET_NORM_GAMMA_DATA, preset_norm_gamma_data);
+  }
+  void add_d_model(uint32_t d_model) {
+    fbb_.AddElement<uint32_t>(LatentTrajectoryPresetWeights::VT_D_MODEL, d_model, 0);
+  }
+  void add_mtp_k(uint32_t mtp_k) {
+    fbb_.AddElement<uint32_t>(LatentTrajectoryPresetWeights::VT_MTP_K, mtp_k, 0);
+  }
+  void add_fuse_dim(uint32_t fuse_dim) {
+    fbb_.AddElement<uint32_t>(LatentTrajectoryPresetWeights::VT_FUSE_DIM, fuse_dim, 0);
+  }
+  void add_preset_dim(uint32_t preset_dim) {
+    fbb_.AddElement<uint32_t>(LatentTrajectoryPresetWeights::VT_PRESET_DIM, preset_dim, 0);
+  }
+  void add_gate_dim(uint32_t gate_dim) {
+    fbb_.AddElement<uint32_t>(LatentTrajectoryPresetWeights::VT_GATE_DIM, gate_dim, 0);
+  }
+  void add_w_hidden_traj_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> w_hidden_traj_data) {
+    fbb_.AddOffset(LatentTrajectoryPresetWeights::VT_W_HIDDEN_TRAJ_DATA, w_hidden_traj_data);
+  }
+  void add_b_hidden_traj_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> b_hidden_traj_data) {
+    fbb_.AddOffset(LatentTrajectoryPresetWeights::VT_B_HIDDEN_TRAJ_DATA, b_hidden_traj_data);
+  }
+  explicit LatentTrajectoryPresetWeightsBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<LatentTrajectoryPresetWeights> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<LatentTrajectoryPresetWeights>(end);
+    fbb_.Required(o, LatentTrajectoryPresetWeights::VT_W_FUSE_DATA);
+    fbb_.Required(o, LatentTrajectoryPresetWeights::VT_B_FUSE_DATA);
+    fbb_.Required(o, LatentTrajectoryPresetWeights::VT_W_DOWN_DATA);
+    fbb_.Required(o, LatentTrajectoryPresetWeights::VT_B_DOWN_DATA);
+    fbb_.Required(o, LatentTrajectoryPresetWeights::VT_W_UP_DATA);
+    fbb_.Required(o, LatentTrajectoryPresetWeights::VT_B_UP_DATA);
+    fbb_.Required(o, LatentTrajectoryPresetWeights::VT_W_GATE_DATA);
+    fbb_.Required(o, LatentTrajectoryPresetWeights::VT_B_GATE_DATA);
+    fbb_.Required(o, LatentTrajectoryPresetWeights::VT_W_TARGET_DATA);
+    fbb_.Required(o, LatentTrajectoryPresetWeights::VT_B_TARGET_DATA);
+    fbb_.Required(o, LatentTrajectoryPresetWeights::VT_FUSE_NORM_GAMMA_DATA);
+    fbb_.Required(o, LatentTrajectoryPresetWeights::VT_PRESET_NORM_GAMMA_DATA);
+    fbb_.Required(o, LatentTrajectoryPresetWeights::VT_W_HIDDEN_TRAJ_DATA);
+    fbb_.Required(o, LatentTrajectoryPresetWeights::VT_B_HIDDEN_TRAJ_DATA);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<LatentTrajectoryPresetWeights> CreateLatentTrajectoryPresetWeights(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_fuse_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> b_fuse_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_down_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> b_down_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_up_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> b_up_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_gate_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> b_gate_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_target_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> b_target_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> fuse_norm_gamma_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> preset_norm_gamma_data = 0,
+    uint32_t d_model = 0,
+    uint32_t mtp_k = 0,
+    uint32_t fuse_dim = 0,
+    uint32_t preset_dim = 0,
+    uint32_t gate_dim = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_hidden_traj_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> b_hidden_traj_data = 0) {
+  LatentTrajectoryPresetWeightsBuilder builder_(_fbb);
+  builder_.add_b_hidden_traj_data(b_hidden_traj_data);
+  builder_.add_w_hidden_traj_data(w_hidden_traj_data);
+  builder_.add_gate_dim(gate_dim);
+  builder_.add_preset_dim(preset_dim);
+  builder_.add_fuse_dim(fuse_dim);
+  builder_.add_mtp_k(mtp_k);
+  builder_.add_d_model(d_model);
+  builder_.add_preset_norm_gamma_data(preset_norm_gamma_data);
+  builder_.add_fuse_norm_gamma_data(fuse_norm_gamma_data);
+  builder_.add_b_target_data(b_target_data);
+  builder_.add_w_target_data(w_target_data);
+  builder_.add_b_gate_data(b_gate_data);
+  builder_.add_w_gate_data(w_gate_data);
+  builder_.add_b_up_data(b_up_data);
+  builder_.add_w_up_data(w_up_data);
+  builder_.add_b_down_data(b_down_data);
+  builder_.add_w_down_data(w_down_data);
+  builder_.add_b_fuse_data(b_fuse_data);
+  builder_.add_w_fuse_data(w_fuse_data);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<LatentTrajectoryPresetWeights> CreateLatentTrajectoryPresetWeightsDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const std::vector<float> *w_fuse_data = nullptr,
+    const std::vector<float> *b_fuse_data = nullptr,
+    const std::vector<float> *w_down_data = nullptr,
+    const std::vector<float> *b_down_data = nullptr,
+    const std::vector<float> *w_up_data = nullptr,
+    const std::vector<float> *b_up_data = nullptr,
+    const std::vector<float> *w_gate_data = nullptr,
+    const std::vector<float> *b_gate_data = nullptr,
+    const std::vector<float> *w_target_data = nullptr,
+    const std::vector<float> *b_target_data = nullptr,
+    const std::vector<float> *fuse_norm_gamma_data = nullptr,
+    const std::vector<float> *preset_norm_gamma_data = nullptr,
+    uint32_t d_model = 0,
+    uint32_t mtp_k = 0,
+    uint32_t fuse_dim = 0,
+    uint32_t preset_dim = 0,
+    uint32_t gate_dim = 0,
+    const std::vector<float> *w_hidden_traj_data = nullptr,
+    const std::vector<float> *b_hidden_traj_data = nullptr) {
+  auto w_fuse_data__ = w_fuse_data ? _fbb.CreateVector<float>(*w_fuse_data) : 0;
+  auto b_fuse_data__ = b_fuse_data ? _fbb.CreateVector<float>(*b_fuse_data) : 0;
+  auto w_down_data__ = w_down_data ? _fbb.CreateVector<float>(*w_down_data) : 0;
+  auto b_down_data__ = b_down_data ? _fbb.CreateVector<float>(*b_down_data) : 0;
+  auto w_up_data__ = w_up_data ? _fbb.CreateVector<float>(*w_up_data) : 0;
+  auto b_up_data__ = b_up_data ? _fbb.CreateVector<float>(*b_up_data) : 0;
+  auto w_gate_data__ = w_gate_data ? _fbb.CreateVector<float>(*w_gate_data) : 0;
+  auto b_gate_data__ = b_gate_data ? _fbb.CreateVector<float>(*b_gate_data) : 0;
+  auto w_target_data__ = w_target_data ? _fbb.CreateVector<float>(*w_target_data) : 0;
+  auto b_target_data__ = b_target_data ? _fbb.CreateVector<float>(*b_target_data) : 0;
+  auto fuse_norm_gamma_data__ = fuse_norm_gamma_data ? _fbb.CreateVector<float>(*fuse_norm_gamma_data) : 0;
+  auto preset_norm_gamma_data__ = preset_norm_gamma_data ? _fbb.CreateVector<float>(*preset_norm_gamma_data) : 0;
+  auto w_hidden_traj_data__ = w_hidden_traj_data ? _fbb.CreateVector<float>(*w_hidden_traj_data) : 0;
+  auto b_hidden_traj_data__ = b_hidden_traj_data ? _fbb.CreateVector<float>(*b_hidden_traj_data) : 0;
+  return GRIMTransformer::CreateLatentTrajectoryPresetWeights(
+      _fbb,
+      w_fuse_data__,
+      b_fuse_data__,
+      w_down_data__,
+      b_down_data__,
+      w_up_data__,
+      b_up_data__,
+      w_gate_data__,
+      b_gate_data__,
+      w_target_data__,
+      b_target_data__,
+      fuse_norm_gamma_data__,
+      preset_norm_gamma_data__,
+      d_model,
+      mtp_k,
+      fuse_dim,
+      preset_dim,
+      gate_dim,
+      w_hidden_traj_data__,
+      b_hidden_traj_data__);
+}
+
+::flatbuffers::Offset<LatentTrajectoryPresetWeights> CreateLatentTrajectoryPresetWeights(::flatbuffers::FlatBufferBuilder &_fbb, const LatentTrajectoryPresetWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+
 struct NumberEncoderWeightsT : public ::flatbuffers::NativeTable {
   typedef NumberEncoderWeights TableType;
   std::vector<float> digit_emb_data{};
@@ -2676,6 +3016,7 @@ struct TransformerModelT : public ::flatbuffers::NativeTable {
   std::unique_ptr<GRIMTransformer::ExecutionBlockWeightsT> execution_block{};
   std::unique_ptr<GRIMTransformer::NumberEncoderWeightsT> number_encoder{};
   std::unique_ptr<GRIMTransformer::ArgSelectorWeightsT> arg_selector{};
+  std::unique_ptr<GRIMTransformer::LatentTrajectoryPresetWeightsT> latent_trajectory_preset{};
   TransformerModelT() = default;
   TransformerModelT(const TransformerModelT &o);
   TransformerModelT(TransformerModelT&&) FLATBUFFERS_NOEXCEPT = default;
@@ -2702,7 +3043,8 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_REASONING_HEAD = 30,
     VT_EXECUTION_BLOCK = 32,
     VT_NUMBER_ENCODER = 34,
-    VT_ARG_SELECTOR = 36
+    VT_ARG_SELECTOR = 36,
+    VT_LATENT_TRAJECTORY_PRESET = 38
   };
   uint32_t version() const {
     return GetField<uint32_t>(VT_VERSION, 0);
@@ -2755,6 +3097,9 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const GRIMTransformer::ArgSelectorWeights *arg_selector() const {
     return GetPointer<const GRIMTransformer::ArgSelectorWeights *>(VT_ARG_SELECTOR);
   }
+  const GRIMTransformer::LatentTrajectoryPresetWeights *latent_trajectory_preset() const {
+    return GetPointer<const GRIMTransformer::LatentTrajectoryPresetWeights *>(VT_LATENT_TRAJECTORY_PRESET);
+  }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<uint32_t>(verifier, VT_VERSION, 4) &&
@@ -2787,6 +3132,8 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyTable(number_encoder()) &&
            VerifyOffset(verifier, VT_ARG_SELECTOR) &&
            verifier.VerifyTable(arg_selector()) &&
+           VerifyOffset(verifier, VT_LATENT_TRAJECTORY_PRESET) &&
+           verifier.VerifyTable(latent_trajectory_preset()) &&
            verifier.EndTable();
   }
   TransformerModelT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
@@ -2849,6 +3196,9 @@ struct TransformerModelBuilder {
   void add_arg_selector(::flatbuffers::Offset<GRIMTransformer::ArgSelectorWeights> arg_selector) {
     fbb_.AddOffset(TransformerModel::VT_ARG_SELECTOR, arg_selector);
   }
+  void add_latent_trajectory_preset(::flatbuffers::Offset<GRIMTransformer::LatentTrajectoryPresetWeights> latent_trajectory_preset) {
+    fbb_.AddOffset(TransformerModel::VT_LATENT_TRAJECTORY_PRESET, latent_trajectory_preset);
+  }
   explicit TransformerModelBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -2882,11 +3232,13 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(
     ::flatbuffers::Offset<GRIMTransformer::ReasoningHeadWeights> reasoning_head = 0,
     ::flatbuffers::Offset<GRIMTransformer::ExecutionBlockWeights> execution_block = 0,
     ::flatbuffers::Offset<GRIMTransformer::NumberEncoderWeights> number_encoder = 0,
-    ::flatbuffers::Offset<GRIMTransformer::ArgSelectorWeights> arg_selector = 0) {
+    ::flatbuffers::Offset<GRIMTransformer::ArgSelectorWeights> arg_selector = 0,
+    ::flatbuffers::Offset<GRIMTransformer::LatentTrajectoryPresetWeights> latent_trajectory_preset = 0) {
   TransformerModelBuilder builder_(_fbb);
   builder_.add_last_modified_timestamp(last_modified_timestamp);
   builder_.add_creation_timestamp(creation_timestamp);
   builder_.add_checksum_xxhash64(checksum_xxhash64);
+  builder_.add_latent_trajectory_preset(latent_trajectory_preset);
   builder_.add_arg_selector(arg_selector);
   builder_.add_number_encoder(number_encoder);
   builder_.add_execution_block(execution_block);
@@ -2922,7 +3274,8 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModelDirect(
     ::flatbuffers::Offset<GRIMTransformer::ReasoningHeadWeights> reasoning_head = 0,
     ::flatbuffers::Offset<GRIMTransformer::ExecutionBlockWeights> execution_block = 0,
     ::flatbuffers::Offset<GRIMTransformer::NumberEncoderWeights> number_encoder = 0,
-    ::flatbuffers::Offset<GRIMTransformer::ArgSelectorWeights> arg_selector = 0) {
+    ::flatbuffers::Offset<GRIMTransformer::ArgSelectorWeights> arg_selector = 0,
+    ::flatbuffers::Offset<GRIMTransformer::LatentTrajectoryPresetWeights> latent_trajectory_preset = 0) {
   auto encoder_layers__ = encoder_layers ? _fbb.CreateVector<::flatbuffers::Offset<GRIMTransformer::EncoderLayerWeights>>(*encoder_layers) : 0;
   auto final_rms_gamma__ = final_rms_gamma ? _fbb.CreateVector<float>(*final_rms_gamma) : 0;
   return GRIMTransformer::CreateTransformerModel(
@@ -2943,7 +3296,8 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModelDirect(
       reasoning_head,
       execution_block,
       number_encoder,
-      arg_selector);
+      arg_selector,
+      latent_trajectory_preset);
 }
 
 ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(::flatbuffers::FlatBufferBuilder &_fbb, const TransformerModelT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
@@ -3493,6 +3847,86 @@ inline ::flatbuffers::Offset<ExecutionBlockWeights> CreateExecutionBlockWeights(
       _w_trace_gate_data);
 }
 
+inline LatentTrajectoryPresetWeightsT *LatentTrajectoryPresetWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
+  auto _o = std::unique_ptr<LatentTrajectoryPresetWeightsT>(new LatentTrajectoryPresetWeightsT());
+  UnPackTo(_o.get(), _resolver);
+  return _o.release();
+}
+
+inline void LatentTrajectoryPresetWeights::UnPackTo(LatentTrajectoryPresetWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
+  (void)_o;
+  (void)_resolver;
+  { auto _e = w_fuse_data(); if (_e) { _o->w_fuse_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_fuse_data[_i] = _e->Get(_i); } } else { _o->w_fuse_data.resize(0); } }
+  { auto _e = b_fuse_data(); if (_e) { _o->b_fuse_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->b_fuse_data[_i] = _e->Get(_i); } } else { _o->b_fuse_data.resize(0); } }
+  { auto _e = w_down_data(); if (_e) { _o->w_down_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_down_data[_i] = _e->Get(_i); } } else { _o->w_down_data.resize(0); } }
+  { auto _e = b_down_data(); if (_e) { _o->b_down_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->b_down_data[_i] = _e->Get(_i); } } else { _o->b_down_data.resize(0); } }
+  { auto _e = w_up_data(); if (_e) { _o->w_up_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_up_data[_i] = _e->Get(_i); } } else { _o->w_up_data.resize(0); } }
+  { auto _e = b_up_data(); if (_e) { _o->b_up_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->b_up_data[_i] = _e->Get(_i); } } else { _o->b_up_data.resize(0); } }
+  { auto _e = w_gate_data(); if (_e) { _o->w_gate_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_gate_data[_i] = _e->Get(_i); } } else { _o->w_gate_data.resize(0); } }
+  { auto _e = b_gate_data(); if (_e) { _o->b_gate_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->b_gate_data[_i] = _e->Get(_i); } } else { _o->b_gate_data.resize(0); } }
+  { auto _e = w_target_data(); if (_e) { _o->w_target_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_target_data[_i] = _e->Get(_i); } } else { _o->w_target_data.resize(0); } }
+  { auto _e = b_target_data(); if (_e) { _o->b_target_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->b_target_data[_i] = _e->Get(_i); } } else { _o->b_target_data.resize(0); } }
+  { auto _e = fuse_norm_gamma_data(); if (_e) { _o->fuse_norm_gamma_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->fuse_norm_gamma_data[_i] = _e->Get(_i); } } else { _o->fuse_norm_gamma_data.resize(0); } }
+  { auto _e = preset_norm_gamma_data(); if (_e) { _o->preset_norm_gamma_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->preset_norm_gamma_data[_i] = _e->Get(_i); } } else { _o->preset_norm_gamma_data.resize(0); } }
+  { auto _e = d_model(); _o->d_model = _e; }
+  { auto _e = mtp_k(); _o->mtp_k = _e; }
+  { auto _e = fuse_dim(); _o->fuse_dim = _e; }
+  { auto _e = preset_dim(); _o->preset_dim = _e; }
+  { auto _e = gate_dim(); _o->gate_dim = _e; }
+  { auto _e = w_hidden_traj_data(); if (_e) { _o->w_hidden_traj_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_hidden_traj_data[_i] = _e->Get(_i); } } else { _o->w_hidden_traj_data.resize(0); } }
+  { auto _e = b_hidden_traj_data(); if (_e) { _o->b_hidden_traj_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->b_hidden_traj_data[_i] = _e->Get(_i); } } else { _o->b_hidden_traj_data.resize(0); } }
+}
+
+inline ::flatbuffers::Offset<LatentTrajectoryPresetWeights> LatentTrajectoryPresetWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const LatentTrajectoryPresetWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateLatentTrajectoryPresetWeights(_fbb, _o, _rehasher);
+}
+
+inline ::flatbuffers::Offset<LatentTrajectoryPresetWeights> CreateLatentTrajectoryPresetWeights(::flatbuffers::FlatBufferBuilder &_fbb, const LatentTrajectoryPresetWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  (void)_rehasher;
+  (void)_o;
+  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const LatentTrajectoryPresetWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
+  auto _w_fuse_data = _fbb.CreateVector(_o->w_fuse_data);
+  auto _b_fuse_data = _fbb.CreateVector(_o->b_fuse_data);
+  auto _w_down_data = _fbb.CreateVector(_o->w_down_data);
+  auto _b_down_data = _fbb.CreateVector(_o->b_down_data);
+  auto _w_up_data = _fbb.CreateVector(_o->w_up_data);
+  auto _b_up_data = _fbb.CreateVector(_o->b_up_data);
+  auto _w_gate_data = _fbb.CreateVector(_o->w_gate_data);
+  auto _b_gate_data = _fbb.CreateVector(_o->b_gate_data);
+  auto _w_target_data = _fbb.CreateVector(_o->w_target_data);
+  auto _b_target_data = _fbb.CreateVector(_o->b_target_data);
+  auto _fuse_norm_gamma_data = _fbb.CreateVector(_o->fuse_norm_gamma_data);
+  auto _preset_norm_gamma_data = _fbb.CreateVector(_o->preset_norm_gamma_data);
+  auto _d_model = _o->d_model;
+  auto _mtp_k = _o->mtp_k;
+  auto _fuse_dim = _o->fuse_dim;
+  auto _preset_dim = _o->preset_dim;
+  auto _gate_dim = _o->gate_dim;
+  auto _w_hidden_traj_data = _fbb.CreateVector(_o->w_hidden_traj_data);
+  auto _b_hidden_traj_data = _fbb.CreateVector(_o->b_hidden_traj_data);
+  return GRIMTransformer::CreateLatentTrajectoryPresetWeights(
+      _fbb,
+      _w_fuse_data,
+      _b_fuse_data,
+      _w_down_data,
+      _b_down_data,
+      _w_up_data,
+      _b_up_data,
+      _w_gate_data,
+      _b_gate_data,
+      _w_target_data,
+      _b_target_data,
+      _fuse_norm_gamma_data,
+      _preset_norm_gamma_data,
+      _d_model,
+      _mtp_k,
+      _fuse_dim,
+      _preset_dim,
+      _gate_dim,
+      _w_hidden_traj_data,
+      _b_hidden_traj_data);
+}
+
 inline NumberEncoderWeightsT *NumberEncoderWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
   auto _o = std::unique_ptr<NumberEncoderWeightsT>(new NumberEncoderWeightsT());
   UnPackTo(_o.get(), _resolver);
@@ -3741,7 +4175,8 @@ inline TransformerModelT::TransformerModelT(const TransformerModelT &o)
         reasoning_head((o.reasoning_head) ? new GRIMTransformer::ReasoningHeadWeightsT(*o.reasoning_head) : nullptr),
         execution_block((o.execution_block) ? new GRIMTransformer::ExecutionBlockWeightsT(*o.execution_block) : nullptr),
         number_encoder((o.number_encoder) ? new GRIMTransformer::NumberEncoderWeightsT(*o.number_encoder) : nullptr),
-        arg_selector((o.arg_selector) ? new GRIMTransformer::ArgSelectorWeightsT(*o.arg_selector) : nullptr) {
+        arg_selector((o.arg_selector) ? new GRIMTransformer::ArgSelectorWeightsT(*o.arg_selector) : nullptr),
+        latent_trajectory_preset((o.latent_trajectory_preset) ? new GRIMTransformer::LatentTrajectoryPresetWeightsT(*o.latent_trajectory_preset) : nullptr) {
   encoder_layers.reserve(o.encoder_layers.size());
   for (const auto &encoder_layers_ : o.encoder_layers) { encoder_layers.emplace_back((encoder_layers_) ? new GRIMTransformer::EncoderLayerWeightsT(*encoder_layers_) : nullptr); }
 }
@@ -3764,6 +4199,7 @@ inline TransformerModelT &TransformerModelT::operator=(TransformerModelT o) FLAT
   std::swap(execution_block, o.execution_block);
   std::swap(number_encoder, o.number_encoder);
   std::swap(arg_selector, o.arg_selector);
+  std::swap(latent_trajectory_preset, o.latent_trajectory_preset);
   return *this;
 }
 
@@ -3793,6 +4229,7 @@ inline void TransformerModel::UnPackTo(TransformerModelT *_o, const ::flatbuffer
   { auto _e = execution_block(); if (_e) { if(_o->execution_block) { _e->UnPackTo(_o->execution_block.get(), _resolver); } else { _o->execution_block = std::unique_ptr<GRIMTransformer::ExecutionBlockWeightsT>(_e->UnPack(_resolver)); } } else if (_o->execution_block) { _o->execution_block.reset(); } }
   { auto _e = number_encoder(); if (_e) { if(_o->number_encoder) { _e->UnPackTo(_o->number_encoder.get(), _resolver); } else { _o->number_encoder = std::unique_ptr<GRIMTransformer::NumberEncoderWeightsT>(_e->UnPack(_resolver)); } } else if (_o->number_encoder) { _o->number_encoder.reset(); } }
   { auto _e = arg_selector(); if (_e) { if(_o->arg_selector) { _e->UnPackTo(_o->arg_selector.get(), _resolver); } else { _o->arg_selector = std::unique_ptr<GRIMTransformer::ArgSelectorWeightsT>(_e->UnPack(_resolver)); } } else if (_o->arg_selector) { _o->arg_selector.reset(); } }
+  { auto _e = latent_trajectory_preset(); if (_e) { if(_o->latent_trajectory_preset) { _e->UnPackTo(_o->latent_trajectory_preset.get(), _resolver); } else { _o->latent_trajectory_preset = std::unique_ptr<GRIMTransformer::LatentTrajectoryPresetWeightsT>(_e->UnPack(_resolver)); } } else if (_o->latent_trajectory_preset) { _o->latent_trajectory_preset.reset(); } }
 }
 
 inline ::flatbuffers::Offset<TransformerModel> TransformerModel::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const TransformerModelT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
@@ -3820,6 +4257,7 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(::flatbuff
   auto _execution_block = _o->execution_block ? CreateExecutionBlockWeights(_fbb, _o->execution_block.get(), _rehasher) : 0;
   auto _number_encoder = _o->number_encoder ? CreateNumberEncoderWeights(_fbb, _o->number_encoder.get(), _rehasher) : 0;
   auto _arg_selector = _o->arg_selector ? CreateArgSelectorWeights(_fbb, _o->arg_selector.get(), _rehasher) : 0;
+  auto _latent_trajectory_preset = _o->latent_trajectory_preset ? CreateLatentTrajectoryPresetWeights(_fbb, _o->latent_trajectory_preset.get(), _rehasher) : 0;
   return GRIMTransformer::CreateTransformerModel(
       _fbb,
       _version,
@@ -3838,7 +4276,8 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(::flatbuff
       _reasoning_head,
       _execution_block,
       _number_encoder,
-      _arg_selector);
+      _arg_selector,
+      _latent_trajectory_preset);
 }
 
 inline const GRIMTransformer::TransformerModel *GetTransformerModel(const void *buf) {

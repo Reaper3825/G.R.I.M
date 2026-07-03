@@ -555,7 +555,8 @@ enum class ParamGroupType : uint8_t {
     EXECUTION_BLOCK = 6,///< Execution block weights (decode MLP, arg/op/slot select, cross-attn)
     NUMBER_ENCODER = 7, ///< NumberEncoder digit-place numeric-meaning weights (digit/pow10 emb, contribution + global MLPs)
     ARG_SELECTOR = 8,   ///< Arg/option selector head (query projection over candidate atom-entry keys); execution-independent
-    COUNT = 9           ///< Number of parameter group types
+    LATENT_TRAJECTORY_PRESET = 9, ///< Latent trajectory preset / self-organizing attractor-memory weights
+    COUNT = 10          ///< Number of parameter group types
 };
 
 enum class ParamStatsBucket : uint8_t {

@@ -346,6 +346,194 @@ GRIM::LMHeadParameterTensors detachLmHeadParameters(
     return detached;
 }
 
+GRIM::LatentTrajectoryPresetParameterTensors detachLatentTrajectoryPresetParameters(
+    const GRIM::LatentTrajectoryPresetParameterTensors& parameters,
+    cudaStream_t stream) {
+    GRIM::LatentTrajectoryPresetParameterTensors detached{};
+    detached.W_hidden_traj = parameters.W_hidden_traj.detach(stream);
+    detached.b_hidden_traj = parameters.b_hidden_traj.detach(stream);
+    detached.W_fuse = parameters.W_fuse.detach(stream);
+    detached.b_fuse = parameters.b_fuse.detach(stream);
+    detached.W_down = parameters.W_down.detach(stream);
+    detached.b_down = parameters.b_down.detach(stream);
+    detached.W_up = parameters.W_up.detach(stream);
+    detached.b_up = parameters.b_up.detach(stream);
+    detached.W_gate = parameters.W_gate.detach(stream);
+    detached.b_gate = parameters.b_gate.detach(stream);
+    detached.W_target = parameters.W_target.detach(stream);
+    detached.b_target = parameters.b_target.detach(stream);
+    detached.fuse_norm_gamma = parameters.fuse_norm_gamma.detach(stream);
+    detached.preset_norm_gamma = parameters.preset_norm_gamma.detach(stream);
+    return detached;
+}
+
+void clearLatentTrajectoryPresetOutputs(ModelForwardOutputs& forward_outputs) {
+    forward_outputs.latent_preset_mtp_hidden = Tensor();
+    forward_outputs.latent_preset_future_fused = Tensor();
+    forward_outputs.latent_preset_future_entropy = Tensor();
+    forward_outputs.latent_preset_z = Tensor();
+    forward_outputs.latent_preset_vec = Tensor();
+    forward_outputs.latent_preset_gate_pre = Tensor();
+    forward_outputs.latent_preset_gate = Tensor();
+    forward_outputs.latent_preset_injected = Tensor();
+    forward_outputs.latent_preset_h_enhanced = Tensor();
+}
+
+void materializeLatentTrajectoryPresetActivations(
+    const ModelForwardRequest& request,
+    const Batching::BatchPayload& payload,
+    const HyperParameters::LatentTrajectoryPresetHP& latent_preset_hp,
+    ModelForwardOutputs& forward_outputs) {
+    clearLatentTrajectoryPresetOutputs(forward_outputs);
+    if (!latent_preset_hp.enabled) {
+        return;
+    }
+    if (request.kv_cache) {
+        throw std::runtime_error("executeModelForward: LatentTrajectoryPreset is not wired for KV-cache inference yet");
+    }
+
+    Tensor& hidden = forward_outputs.encoder_output_tensor;
+    const auto& hidden_shape = requireTensor2DShape(
+        hidden,
+        "executeModelForward(latent_preset)",
+        "latent preset hidden input");
+    if (hidden_shape.rows != payload.total_tokens || hidden_shape.cols != latent_preset_hp.d_model) {
+        throw std::runtime_error("executeModelForward(latent_preset): hidden shape=[" +
+            std::to_string(hidden_shape.rows) + "," + std::to_string(hidden_shape.cols) +
+            "] expected=[" + std::to_string(payload.total_tokens) + "," +
+            std::to_string(latent_preset_hp.d_model) + "]");
+    }
+
+    const auto* latent_parameters =
+        request.parameter_registry->getLatentTrajectoryPresetParameters();
+    if (!latent_parameters) {
+        throw std::runtime_error("executeModelForward: latent_trajectory_preset_enabled=true but registry owner is NULL");
+    }
+
+    GRIM::LatentTrajectoryPresetParameterTensors detached_parameters{};
+    const GRIM::LatentTrajectoryPresetParameterTensors* params = latent_parameters;
+    if (!request.graph.connect_parameter_graph) {
+        detached_parameters = detachLatentTrajectoryPresetParameters(*latent_parameters, request.stream);
+        params = &detached_parameters;
+    }
+
+    auto requireTensorElements = [](const Tensor& tensor,
+                                    std::size_t expected,
+                                    const char* label) {
+        tensor.require(label);
+        if (tensor.numel() != expected) {
+            throw std::runtime_error(std::string("executeModelForward(latent_preset): ") +
+                                     label + " numel=" + std::to_string(tensor.numel()) +
+                                     " expected=" + std::to_string(expected));
+        }
+    };
+
+    const std::size_t trajectory_dim =
+        static_cast<std::size_t>(latent_preset_hp.mtp_k) *
+        static_cast<std::size_t>(latent_preset_hp.d_model);
+    requireTensorElements(params->W_hidden_traj,
+                          static_cast<std::size_t>(latent_preset_hp.d_model) * trajectory_dim,
+                          "latent_preset.W_hidden_traj");
+    requireTensorElements(params->b_hidden_traj,
+                          trajectory_dim,
+                          "latent_preset.b_hidden_traj");
+    requireTensorElements(params->W_fuse,
+                          trajectory_dim *
+                              static_cast<std::size_t>(latent_preset_hp.fuse_dim),
+                          "latent_preset.W_fuse");
+    requireTensorElements(params->W_down,
+                          static_cast<std::size_t>(latent_preset_hp.fuse_dim) *
+                              static_cast<std::size_t>(latent_preset_hp.preset_dim),
+                          "latent_preset.W_down");
+    requireTensorElements(params->W_up,
+                          static_cast<std::size_t>(latent_preset_hp.preset_dim) *
+                              static_cast<std::size_t>(latent_preset_hp.d_model),
+                          "latent_preset.W_up");
+    requireTensorElements(params->W_gate,
+                          static_cast<std::size_t>(latent_preset_hp.d_model + latent_preset_hp.fuse_dim),
+                          "latent_preset.W_gate");
+    requireTensorElements(params->b_gate, 1, "latent_preset.b_gate");
+
+    // Shared hidden-trajectory projection: h[t] -> [mtp_k * d_model] predicted
+    // future hidden trajectory. A single learned head predicts all K slots as
+    // one coordinated trajectory; causal because it only reads h[t].
+    forward_outputs.latent_preset_mtp_hidden = autograd::matmul(
+        hidden,
+        params->W_hidden_traj,
+        request.stream);
+    forward_outputs.latent_preset_mtp_hidden = autograd::broadcast_add(
+        forward_outputs.latent_preset_mtp_hidden,
+        params->b_hidden_traj,
+        request.stream);
+
+    forward_outputs.latent_preset_future_fused = autograd::matmul(
+        forward_outputs.latent_preset_mtp_hidden,
+        params->W_fuse,
+        request.stream);
+    forward_outputs.latent_preset_future_fused = autograd::broadcast_add(
+        forward_outputs.latent_preset_future_fused,
+        params->b_fuse,
+        request.stream);
+    forward_outputs.latent_preset_future_fused = autograd::rms_norm(
+        forward_outputs.latent_preset_future_fused,
+        params->fuse_norm_gamma,
+        1.0e-5f,
+        request.stream);
+
+    forward_outputs.latent_preset_z = autograd::matmul(
+        forward_outputs.latent_preset_future_fused,
+        params->W_down,
+        request.stream);
+    forward_outputs.latent_preset_z = autograd::broadcast_add(
+        forward_outputs.latent_preset_z,
+        params->b_down,
+        request.stream);
+    forward_outputs.latent_preset_z = autograd::rms_norm(
+        forward_outputs.latent_preset_z,
+        params->preset_norm_gamma,
+        1.0e-5f,
+        request.stream);
+
+    forward_outputs.latent_preset_vec = autograd::matmul(
+        forward_outputs.latent_preset_z,
+        params->W_up,
+        request.stream);
+    forward_outputs.latent_preset_vec = autograd::broadcast_add(
+        forward_outputs.latent_preset_vec,
+        params->b_up,
+        request.stream);
+
+    Tensor gate_input = autograd::concat(
+        hidden,
+        forward_outputs.latent_preset_future_fused,
+        request.stream);
+    forward_outputs.latent_preset_gate_pre = autograd::matmul(
+        gate_input,
+        params->W_gate,
+        request.stream);
+    forward_outputs.latent_preset_gate_pre = autograd::broadcast_add(
+        forward_outputs.latent_preset_gate_pre,
+        params->b_gate,
+        request.stream);
+    forward_outputs.latent_preset_gate = autograd::sigmoid(
+        forward_outputs.latent_preset_gate_pre,
+        request.stream,
+        forward_outputs.latent_preset_gate_pre.data);
+
+    Tensor gated_preset = autograd::broadcast_row_mul(
+        forward_outputs.latent_preset_gate,
+        forward_outputs.latent_preset_vec,
+        request.stream);
+    forward_outputs.latent_preset_injected = autograd::mul_scalar(
+        gated_preset,
+        latent_preset_hp.preset_scale,
+        request.stream);
+    forward_outputs.latent_preset_h_enhanced = autograd::add(
+        hidden,
+        forward_outputs.latent_preset_injected,
+        request.stream);
+}
+
 }  // namespace
 
 void ModelForwardRequest::validate(const char* caller) const {
@@ -458,6 +646,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const auto embedding_hp = HyperParameters::embeddingLayerConstructionHP(*cfg);
     const auto execution_hp = HyperParameters::executionBlockConstructionHP(*cfg);
     const auto lm_head_hp = HyperParameters::lmHeadLayerConstructionHP(*cfg);
+    const auto latent_preset_hp = HyperParameters::latentTrajectoryPresetHP(*cfg);
     const bool center_encoder_residuals = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "center_encoder_residuals");
     const bool lm_head_center_hidden_states = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "lm_head_center_hidden_states");
     const int d_model = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "d_model");
@@ -917,10 +1106,19 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
         lm_head_parameter_ptr = &detached_lm_head_parameters;
     }
 
+    materializeLatentTrajectoryPresetActivations(
+        request,
+        payload,
+        latent_preset_hp,
+        forward_outputs);
+    const Tensor& lm_hidden_input = forward_outputs.latent_preset_h_enhanced.data
+        ? forward_outputs.latent_preset_h_enhanced
+        : forward_outputs.encoder_output_tensor;
+
     forwardLmHead(
         lm_head_hp,
         *lm_head_parameter_ptr,
-        forward_outputs.encoder_output_tensor,
+        lm_hidden_input,
         payload,
         request.stream,
         request.cublas_handle,

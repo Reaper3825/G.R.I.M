@@ -898,6 +898,10 @@ BatchResult processBatch(
     result.text_loss = loss_result.text_loss;
     result.mtp_loss = loss_result.mtp_loss;
     result.selector_loss = loss_result.selector_loss;
+    result.latent_preset_loss = loss_result.latent_preset_loss;
+    result.latent_preset_traj_loss = loss_result.latent_preset_traj_loss;
+    result.latent_preset_delta_loss = loss_result.latent_preset_delta_loss;
+    result.latent_preset_gate_loss = loss_result.latent_preset_gate_loss;
     result.execution_loss = loss_result.execution_loss;
     result.mtp_diagnostics = std::move(loss_result.mtp_diagnostics);
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] explicit forward + autograd loss/backward returned, loss=%f success=%d\n", 

@@ -52,6 +52,10 @@ struct LossResult {
     float text_loss = 0.0f;          // Pure next-token CE, before MTP/exec/selector additions
     float mtp_loss = 0.0f;           // Sum of weighted MTP auxiliary contributions
     float selector_loss = 0.0f;      // Scaled arg/option selector CE (α_sel * CE); own channel, no longer folded into execution_loss
+    float latent_preset_loss = 0.0f; // Scaled latent trajectory preset auxiliary contribution
+    float latent_preset_traj_loss = 0.0f;   // Raw MSE(preset_z, stopgrad(target_z))
+    float latent_preset_delta_loss = 0.0f;  // Raw MSE(preset_vec, stopgrad(future_hidden_delta))
+    float latent_preset_gate_loss = 0.0f;   // Raw mean gate sparsity term
     float execution_loss = 0.0f;     // Execution-block auxiliary contribution ONLY (transition/structured CE/div/REINFORCE); 0.0 when the block is disabled
     float entropy_monitor = 0.0f;    // Execution entropy monitoring scalar; not added to loss_tensor
     float weight_text = 1.0f;

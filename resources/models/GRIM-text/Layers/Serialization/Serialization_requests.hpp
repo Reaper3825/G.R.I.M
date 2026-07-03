@@ -17,12 +17,14 @@ struct CheckpointCapabilityRequirements {
 	bool requires_execution_block = false;
 	bool requires_final_rms_gamma = false;
 	bool requires_arg_selector = false;
+	bool requires_latent_trajectory_preset = false;
 };
 
 struct SerializationLoadReport {
 	bool number_encoder_loaded = false;
 	bool execution_block_loaded = false;
 	bool arg_selector_loaded = false;
+	bool latent_trajectory_preset_loaded = false;
 };
 
 struct SerializationSaveSources {
@@ -33,6 +35,7 @@ struct SerializationSaveSources {
 	SerializationNumberEncoderReadView number_encoder;
 	SerializationExecutionBlockReadView execution_block;
 	SerializationArgSelectorReadView arg_selector;
+	SerializationLatentTrajectoryPresetReadView latent_trajectory_preset;
 	DeviceReadView final_rms_gamma;
 };
 
@@ -53,6 +56,7 @@ struct SerializationLoadRequest {
 	SerializationNumberEncoderWriteView number_encoder;
 	SerializationExecutionBlockWriteView execution_block;
 	SerializationArgSelectorWriteView arg_selector;
+	SerializationLatentTrajectoryPresetWriteView latent_trajectory_preset;
 	DeviceWriteView final_rms_gamma;
 };
 

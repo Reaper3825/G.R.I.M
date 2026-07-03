@@ -147,6 +147,7 @@ const char* OptimizerUpdateTraceMetrics::typeName(int type_idx) {
         case ParamGroupType::EXECUTION_BLOCK: return "exec";
         case ParamGroupType::NUMBER_ENCODER: return "number_encoder";
         case ParamGroupType::ARG_SELECTOR: return "arg_selector";
+        case ParamGroupType::LATENT_TRAJECTORY_PRESET: return "latent_preset";
         case ParamGroupType::COUNT: return "?";
     }
     return "?";

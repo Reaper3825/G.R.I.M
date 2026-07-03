@@ -352,6 +352,97 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         Logging::EmitModuleInfo(kLogModule, "[save] ExecutionBlock v2 weights serialized");
     }
 
+    flatbuffers::Offset<GRIMTransformer::LatentTrajectoryPresetWeights> fb_latent_trajectory_preset = 0;
+    const auto& ltp_view = request.sources.latent_trajectory_preset;
+    if (cfg.latent_trajectory_preset_enabled != ltp_view.enabled) {
+        Logging::EmitModuleError(kLogModule,
+            Msg("[save] FATAL: LatentTrajectoryPreset config/view mismatch: config_enabled=",
+                cfg.latent_trajectory_preset_enabled, " view_enabled=", ltp_view.enabled));
+        return false;
+    }
+    if (ltp_view.enabled) {
+        if (cfg.latent_trajectory_preset_mtp_k <= 0 ||
+            cfg.latent_trajectory_preset_fuse_dim <= 0 ||
+            cfg.latent_trajectory_preset_dim <= 0 ||
+            cfg.latent_trajectory_preset_gate_dim <= 0) {
+            Logging::EmitModuleError(kLogModule,
+                Msg("[save] FATAL: LatentTrajectoryPreset enabled with invalid derived dims: mtp_k=",
+                    cfg.latent_trajectory_preset_mtp_k,
+                    " fuse_dim=", cfg.latent_trajectory_preset_fuse_dim,
+                    " preset_dim=", cfg.latent_trajectory_preset_dim,
+                    " gate_dim=", cfg.latent_trajectory_preset_gate_dim));
+            return false;
+        }
+        using FloatVecOffset = flatbuffers::Offset<flatbuffers::Vector<float>>;
+        auto create_required_vector = [&](const DeviceReadView& v,
+                                          const char* label,
+                                          FloatVecOffset& out) -> bool {
+            if (!v.ptr || v.count == 0) {
+                Logging::EmitModuleError(kLogModule,
+                    Msg("[save] FATAL: missing LatentTrajectoryPreset source tensor: ", label));
+                return false;
+            }
+            auto data = download_device_vector(v, label);
+            if (data.empty()) return false;
+            out = builder.CreateVector(data);
+            return true;
+        };
+
+        FloatVecOffset W_hidden_traj = 0;
+        FloatVecOffset b_hidden_traj = 0;
+        FloatVecOffset W_fuse = 0;
+        FloatVecOffset b_fuse = 0;
+        FloatVecOffset W_down = 0;
+        FloatVecOffset b_down = 0;
+        FloatVecOffset W_up = 0;
+        FloatVecOffset b_up = 0;
+        FloatVecOffset W_gate = 0;
+        FloatVecOffset b_gate = 0;
+        FloatVecOffset W_target = 0;
+        FloatVecOffset b_target = 0;
+        FloatVecOffset fuse_norm_gamma = 0;
+        FloatVecOffset preset_norm_gamma = 0;
+        if (!create_required_vector(ltp_view.W_hidden_traj, "LTP W_hidden_traj", W_hidden_traj) ||
+            !create_required_vector(ltp_view.b_hidden_traj, "LTP b_hidden_traj", b_hidden_traj) ||
+            !create_required_vector(ltp_view.W_fuse, "LTP W_fuse", W_fuse) ||
+            !create_required_vector(ltp_view.b_fuse, "LTP b_fuse", b_fuse) ||
+            !create_required_vector(ltp_view.W_down, "LTP W_down", W_down) ||
+            !create_required_vector(ltp_view.b_down, "LTP b_down", b_down) ||
+            !create_required_vector(ltp_view.W_up, "LTP W_up", W_up) ||
+            !create_required_vector(ltp_view.b_up, "LTP b_up", b_up) ||
+            !create_required_vector(ltp_view.W_gate, "LTP W_gate", W_gate) ||
+            !create_required_vector(ltp_view.b_gate, "LTP b_gate", b_gate) ||
+            !create_required_vector(ltp_view.W_target, "LTP W_target", W_target) ||
+            !create_required_vector(ltp_view.b_target, "LTP b_target", b_target) ||
+            !create_required_vector(ltp_view.fuse_norm_gamma, "LTP fuse_norm_gamma", fuse_norm_gamma) ||
+            !create_required_vector(ltp_view.preset_norm_gamma, "LTP preset_norm_gamma", preset_norm_gamma)) {
+            return false;
+        }
+
+        fb_latent_trajectory_preset = GRIMTransformer::CreateLatentTrajectoryPresetWeights(
+            builder,
+            W_fuse,
+            b_fuse,
+            W_down,
+            b_down,
+            W_up,
+            b_up,
+            W_gate,
+            b_gate,
+            W_target,
+            b_target,
+            fuse_norm_gamma,
+            preset_norm_gamma,
+            static_cast<uint32_t>(cfg.d_model),
+            static_cast<uint32_t>(cfg.latent_trajectory_preset_mtp_k),
+            static_cast<uint32_t>(cfg.latent_trajectory_preset_fuse_dim),
+            static_cast<uint32_t>(cfg.latent_trajectory_preset_dim),
+            static_cast<uint32_t>(cfg.latent_trajectory_preset_gate_dim),
+            W_hidden_traj,
+            b_hidden_traj);
+        Logging::EmitModuleInfo(kLogModule, "[save] LatentTrajectoryPreset weights serialized");
+    }
+
     flatbuffers::Offset<flatbuffers::Vector<float>> fb_final_rms_gamma = 0;
     const auto& final_rms_view = request.sources.final_rms_gamma;
     if (final_rms_view.ptr && final_rms_view.count > 0) {
@@ -394,7 +485,8 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         fb_reasoning_head,
         fb_execution_block,
         fb_number_encoder,
-        fb_arg_selector);
+        fb_arg_selector,
+        fb_latent_trajectory_preset);
 
     builder.Finish(fb_model, "GRMT");
 
@@ -477,6 +569,7 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
                 verify_component("number_encoder", raw->number_encoder());
                 verify_component("arg_selector", raw->arg_selector());
                 verify_component("execution_block", raw->execution_block());
+                verify_component("latent_trajectory_preset", raw->latent_trajectory_preset());
 
                 // Vector fields
                 if (raw->final_rms_gamma()) {

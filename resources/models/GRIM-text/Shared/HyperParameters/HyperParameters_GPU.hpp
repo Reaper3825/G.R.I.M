@@ -229,6 +229,34 @@ inline float computeAttentionSoftmaxScale(int head_dim, const char* caller) {
     return scale;
 }
 
+inline int computeLatentTrajectoryPresetFuseDim(int d_model, const char* caller) {
+    if (d_model <= 0) {
+        throw std::runtime_error(std::string(caller) + ": d_model must be > 0 for latent trajectory preset, got " +
+                                 std::to_string(d_model));
+    }
+    return d_model;
+}
+
+inline int computeLatentTrajectoryPresetDim(int d_model, const char* caller) {
+    if (d_model <= 0) {
+        throw std::runtime_error(std::string(caller) + ": d_model must be > 0 for latent trajectory preset, got " +
+                                 std::to_string(d_model));
+    }
+    if ((d_model % 4) != 0) {
+        throw std::runtime_error(std::string(caller) + ": d_model=" + std::to_string(d_model) +
+                                 " must be divisible by 4 to derive latent_trajectory_preset_dim");
+    }
+    return d_model / 4;
+}
+
+inline int computeLatentTrajectoryPresetGateDim(int d_model, const char* caller) {
+    if (d_model <= 0) {
+        throw std::runtime_error(std::string(caller) + ": d_model must be > 0 for latent trajectory preset, got " +
+                                 std::to_string(d_model));
+    }
+    return d_model;
+}
+
 struct DerivationContext {
     int train_sequence_count = 0;
     int validation_interval = 0;
@@ -389,6 +417,7 @@ struct LanguageModelConfig {
     ParameterGroupPrecision parameter_precision_rmsnorm = ParameterGroupPrecision::UNSPECIFIED;
     ParameterGroupPrecision parameter_precision_mtp = ParameterGroupPrecision::UNSPECIFIED;
     ParameterGroupPrecision parameter_precision_execution_block = ParameterGroupPrecision::UNSPECIFIED;
+    ParameterGroupPrecision parameter_precision_latent_trajectory_preset = ParameterGroupPrecision::UNSPECIFIED;
 
     // Atom-data pipeline config (consumed by ExecutionBlock)
     bool use_atom_data = false;
@@ -491,6 +520,24 @@ struct LanguageModelConfig {
     bool mtp_enabled = false;
     int mtp_k = 0;
     float mtp_alpha = 0.0f;
+
+    // Latent trajectory presets / self-organizing latent attractor memory.
+    bool latent_trajectory_preset_enabled = false;
+    float latent_trajectory_preset_scale = 0.0f;
+    float latent_trajectory_preset_gate_bias_init = 0.0f;
+    bool latent_trajectory_preset_use_token_mean = false;
+    bool latent_trajectory_preset_use_mtp_logits = false;
+    bool latent_trajectory_preset_use_mtp_hidden = false;
+    bool latent_trajectory_preset_use_entropy = false;
+    bool latent_trajectory_preset_use_delta_target = false;
+    bool latent_trajectory_preset_use_consistency_loss = false;
+    bool latent_trajectory_preset_use_diversity_loss = false;
+    bool latent_trajectory_preset_use_gate_sparsity_loss = false;
+    float latent_trajectory_preset_lambda_traj = 0.0f;
+    float latent_trajectory_preset_lambda_delta = 0.0f;
+    float latent_trajectory_preset_lambda_consistency = 0.0f;
+    float latent_trajectory_preset_lambda_diversity = 0.0f;
+    float latent_trajectory_preset_lambda_gate = 0.0f;
 
     // Training run selectors — which model and curriculum to use
     std::string current_model_training;
@@ -1444,6 +1491,7 @@ inline void validateRootConfigDocument(
     validateParameterGroupPrecision(params.parameter_precision_rmsnorm, "parameter_precision_rmsnorm", caller);
     validateParameterGroupPrecision(params.parameter_precision_mtp, "parameter_precision_mtp", caller);
     validateParameterGroupPrecision(params.parameter_precision_execution_block, "parameter_precision_execution_block", caller);
+    validateParameterGroupPrecision(params.parameter_precision_latent_trajectory_preset, "parameter_precision_latent_trajectory_preset", caller);
 
     validateNonNegativeFiniteFields(params, {
         validationField("loss_focal_gamma", &LanguageModelConfig::loss_focal_gamma),
@@ -1617,6 +1665,31 @@ inline void validateRootConfigDocument(
         }, caller);
         validatePositiveFiniteFields(params, {
             validationField("mtp_alpha", &LanguageModelConfig::mtp_alpha)
+        }, caller);
+    }
+    if (params.latent_trajectory_preset_enabled) {
+        if (!params.mtp_enabled || params.mtp_k <= 0) {
+            throw std::runtime_error(std::string(caller) +
+                ": latent_trajectory_preset_enabled=true requires mtp_enabled=true and mtp_k > 0");
+        }
+        (void)computeLatentTrajectoryPresetFuseDim(params.d_model, caller);
+        (void)computeLatentTrajectoryPresetDim(params.d_model, caller);
+        (void)computeLatentTrajectoryPresetGateDim(params.d_model, caller);
+        validatePositiveFiniteFields(params, {
+            validationField("latent_trajectory_preset_scale", &LanguageModelConfig::latent_trajectory_preset_scale)
+        }, caller);
+        if (!std::isfinite(params.latent_trajectory_preset_gate_bias_init) ||
+            params.latent_trajectory_preset_gate_bias_init > 0.0f) {
+            throw std::runtime_error(std::string(caller) +
+                ": latent_trajectory_preset_gate_bias_init must be finite and <= 0, got " +
+                std::to_string(params.latent_trajectory_preset_gate_bias_init));
+        }
+        validateNonNegativeFiniteFields(params, {
+            validationField("latent_trajectory_preset_lambda_traj", &LanguageModelConfig::latent_trajectory_preset_lambda_traj),
+            validationField("latent_trajectory_preset_lambda_delta", &LanguageModelConfig::latent_trajectory_preset_lambda_delta),
+            validationField("latent_trajectory_preset_lambda_consistency", &LanguageModelConfig::latent_trajectory_preset_lambda_consistency),
+            validationField("latent_trajectory_preset_lambda_diversity", &LanguageModelConfig::latent_trajectory_preset_lambda_diversity),
+            validationField("latent_trajectory_preset_lambda_gate", &LanguageModelConfig::latent_trajectory_preset_lambda_gate)
         }, caller);
     }
     if (params.generation_strategy == SamplingStrategy::UNSPECIFIED) {
@@ -1811,6 +1884,7 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(parameter_precision_rmsnorm);
     GRIM_LOAD_CONFIG_FIELD(parameter_precision_mtp);
     GRIM_LOAD_CONFIG_FIELD(parameter_precision_execution_block);
+    GRIM_LOAD_CONFIG_FIELD(parameter_precision_latent_trajectory_preset);
 
     params.positional_encoding = parsePositionalEncodingFlags(
         config.at("use_rope").get<bool>(),
@@ -2002,6 +2076,22 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(mtp_log_ratio_monitor);
     GRIM_LOAD_CONFIG_FIELD(mtp_k);
     GRIM_LOAD_CONFIG_FIELD(mtp_alpha);
+    GRIM_LOAD_CONFIG_FIELD(latent_trajectory_preset_enabled);
+    GRIM_LOAD_CONFIG_FIELD(latent_trajectory_preset_scale);
+    GRIM_LOAD_CONFIG_FIELD(latent_trajectory_preset_gate_bias_init);
+    GRIM_LOAD_CONFIG_FIELD(latent_trajectory_preset_use_token_mean);
+    GRIM_LOAD_CONFIG_FIELD(latent_trajectory_preset_use_mtp_logits);
+    GRIM_LOAD_CONFIG_FIELD(latent_trajectory_preset_use_mtp_hidden);
+    GRIM_LOAD_CONFIG_FIELD(latent_trajectory_preset_use_entropy);
+    GRIM_LOAD_CONFIG_FIELD(latent_trajectory_preset_use_delta_target);
+    GRIM_LOAD_CONFIG_FIELD(latent_trajectory_preset_use_consistency_loss);
+    GRIM_LOAD_CONFIG_FIELD(latent_trajectory_preset_use_diversity_loss);
+    GRIM_LOAD_CONFIG_FIELD(latent_trajectory_preset_use_gate_sparsity_loss);
+    GRIM_LOAD_CONFIG_FIELD(latent_trajectory_preset_lambda_traj);
+    GRIM_LOAD_CONFIG_FIELD(latent_trajectory_preset_lambda_delta);
+    GRIM_LOAD_CONFIG_FIELD(latent_trajectory_preset_lambda_consistency);
+    GRIM_LOAD_CONFIG_FIELD(latent_trajectory_preset_lambda_diversity);
+    GRIM_LOAD_CONFIG_FIELD(latent_trajectory_preset_lambda_gate);
     GRIM_LOAD_CONFIG_FIELD(prediction_comparison_enabled);
     GRIM_LOAD_CONFIG_FIELD(prediction_comparison_interval);
     GRIM_LOAD_CONFIG_FIELD(prediction_comparison_top_k);
@@ -2286,6 +2376,7 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_rmsnorm);
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_mtp);
     GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_execution_block);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(parameter_precision_latent_trajectory_preset);
     GRIM_WRITE_FINAL_CONFIG_FIELD(use_atom_data);
     GRIM_WRITE_FINAL_CONFIG_FIELD(atom_embedding_dim);
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_enabled);
@@ -2366,6 +2457,22 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(mtp_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(mtp_k);
     GRIM_WRITE_FINAL_CONFIG_FIELD(mtp_alpha);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(latent_trajectory_preset_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(latent_trajectory_preset_scale);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(latent_trajectory_preset_gate_bias_init);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(latent_trajectory_preset_use_token_mean);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(latent_trajectory_preset_use_mtp_logits);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(latent_trajectory_preset_use_mtp_hidden);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(latent_trajectory_preset_use_entropy);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(latent_trajectory_preset_use_delta_target);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(latent_trajectory_preset_use_consistency_loss);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(latent_trajectory_preset_use_diversity_loss);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(latent_trajectory_preset_use_gate_sparsity_loss);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(latent_trajectory_preset_lambda_traj);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(latent_trajectory_preset_lambda_delta);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(latent_trajectory_preset_lambda_consistency);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(latent_trajectory_preset_lambda_diversity);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(latent_trajectory_preset_lambda_gate);
     GRIM_WRITE_FINAL_CONFIG_FIELD(current_model_training);
     GRIM_WRITE_FINAL_CONFIG_FIELD(current_curriculum);
     GRIM_WRITE_FINAL_CONFIG_FIELD(log_recorder_enabled);

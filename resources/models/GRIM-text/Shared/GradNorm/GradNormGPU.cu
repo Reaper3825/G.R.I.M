@@ -56,14 +56,14 @@ namespace {
 
 constexpr int kBlockSize = HyperParameters::CUDA_BLOCK_SIZE_STANDARD;
 constexpr int kMaxBlocksPerGroup = HyperParameters::CUDA_REDUCTION_MAX_BLOCKS;
-constexpr int kExpectedParamGroupTypes = 9;
+constexpr int kExpectedParamGroupTypes = 10;
 
 constexpr bool isPowerOfTwo(int value) {
     return value > 0 && (value & (value - 1)) == 0;
 }
 
 static_assert(static_cast<int>(GRIM::ParamGroupType::COUNT) == kExpectedParamGroupTypes,
-              "GradNorm metrics assume exactly 8 ParamGroupType entries");
+              "GradNorm metrics assume exactly 10 ParamGroupType entries");
 static_assert(kBlockSize >= 64, "GradNorm reduction requires kBlockSize >= 64");
 static_assert(isPowerOfTwo(kBlockSize), "GradNorm reduction requires power-of-two kBlockSize");
 
@@ -160,6 +160,10 @@ GradNormStatus accumulateGroupMetrics(
         case GRIM::ParamGroupType::ARG_SELECTOR:
             m.arg_selector_sum_sq += sum_sq;
             m.arg_selector_count += count;
+            return GradNormStatus::SUCCESS;
+        case GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET:
+            m.latent_trajectory_preset_sum_sq += sum_sq;
+            m.latent_trajectory_preset_count += count;
             return GradNormStatus::SUCCESS;
         case GRIM::ParamGroupType::COUNT:
             return GradNormStatus::INVALID_PARAM;

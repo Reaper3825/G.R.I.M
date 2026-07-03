@@ -292,6 +292,15 @@ public:
     Tensor lm_head_input_tensor;
     Tensor logits_tensor;
     std::vector<Tensor> mtp_logits_tensors;
+    Tensor latent_preset_mtp_hidden;        // [total_tokens, mtp_k * d_model] predicted hidden trajectory (shared hidden-trajectory projection of h[t])
+    Tensor latent_preset_future_fused;      // [total_tokens, fuse_dim]
+    Tensor latent_preset_future_entropy;    // [total_tokens, mtp_k] optional
+    Tensor latent_preset_z;                 // [total_tokens, preset_dim]
+    Tensor latent_preset_vec;               // [total_tokens, d_model]
+    Tensor latent_preset_gate_pre;          // [total_tokens, 1] scalar gate logits
+    Tensor latent_preset_gate;              // [total_tokens, 1] scalar gate values
+    Tensor latent_preset_injected;          // [total_tokens, d_model]
+    Tensor latent_preset_h_enhanced;        // [total_tokens, d_model]
     // Arg/option selector head: [total_tokens, num_pool_atoms] selection logits over
     // the candidate atom-entry pool (out-of-row-window candidates masked to -inf).
     // Empty unless the forward graph policy requested emit_selector_logits.
@@ -336,6 +345,9 @@ public:
         if (lm_head_input_tensor.data) {
             return &lm_head_input_tensor;
         }
+        if (latent_preset_h_enhanced.data) {
+            return &latent_preset_h_enhanced;
+        }
         if (encoder_output_tensor.data) {
             return &encoder_output_tensor;
         }
@@ -345,6 +357,9 @@ public:
     const Tensor* liveLmHeadInputOrNull() const {
         if (lm_head_input_tensor.data) {
             return &lm_head_input_tensor;
+        }
+        if (latent_preset_h_enhanced.data) {
+            return &latent_preset_h_enhanced;
         }
         if (encoder_output_tensor.data) {
             return &encoder_output_tensor;
@@ -365,6 +380,15 @@ public:
         lm_head_input_tensor = Tensor();
         logits_tensor = Tensor();
         clearTensorVector(mtp_logits_tensors);
+        latent_preset_mtp_hidden = Tensor();
+        latent_preset_future_fused = Tensor();
+        latent_preset_future_entropy = Tensor();
+        latent_preset_z = Tensor();
+        latent_preset_vec = Tensor();
+        latent_preset_gate_pre = Tensor();
+        latent_preset_gate = Tensor();
+        latent_preset_injected = Tensor();
+        latent_preset_h_enhanced = Tensor();
         selector_logits = Tensor();
         scratch_atom_embeddings = Tensor();
         resetExecutionMemoryVectorPreserveGeometry(exec_memories);

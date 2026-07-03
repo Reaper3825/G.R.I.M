@@ -53,7 +53,8 @@
 #                    cluster cmake is older than the pinned helper requirement. Compatible system tools still win.
 #   --jobs N         make -j N for train_gpu (default 100; override with GRIM_BRIDGES2_MAKE_JOBS).
 #   --time T         SLURM wall-clock time limit for train_gpu (--sbatch and interactive srun).
-#                    Format: HH:MM:SS or D-HH:MM:SS. Default: omitted (SLURM uses partition maximum).
+#                    Format: HH:MM:SS or D-HH:MM:SS. Default: 2-00:00:00
+#                    (GPU-shared's QOS max; avoids the partition's 1-hour default).
 #                    Examples: --time 1:00:00  --time 0:30:00  --time 2-12:00:00
 #   --TD             Run grmt_vocab_metrics_test instead of full training (no GPU needed, uses RM-shared).
 #   --UT             Run unigrambyte_self_test instead of full training (needs GPU for GPU decode test).
@@ -87,7 +88,7 @@ if [[ -n "${GRIM_BRIDGES2_TIME_LIMIT:-}" ]]; then
   BRIDGES2_TIME_LIMIT="$GRIM_BRIDGES2_TIME_LIMIT"
   BRIDGES2_TIME_LIMIT_EXPLICIT=true
 else
-  BRIDGES2_TIME_LIMIT=""
+  BRIDGES2_TIME_LIMIT="2-00:00:00"
 fi
 DO_BUILD=false
 USE_SBATCH=false
@@ -241,16 +242,58 @@ fi
 SLURM_ACCOUNT_ARGS="-A $ACCOUNT"
 GRIM_SLURM_MAIL="${GRIM_SLURM_MAIL:-}"
 [[ -n "$GRIM_SLURM_MAIL" ]] && SLURM_MAIL_ARGS="--mail-type=BEGIN,END,FAIL --mail-user=$GRIM_SLURM_MAIL" || SLURM_MAIL_ARGS=""
-# Omit -t entirely when no explicit limit is set so SLURM uses the partition maximum.
-[[ "$BRIDGES2_TIME_LIMIT_EXPLICIT" == true ]] && SLURM_TIME_ARGS="-t $BRIDGES2_TIME_LIMIT" || SLURM_TIME_ARGS=""
+# Always pass a time so Bridges-2 does not apply GPU-shared's 1-hour DefaultTime.
+SLURM_TIME_ARGS="-t $BRIDGES2_TIME_LIMIT"
 
 if [[ "$DO_PULL_LOGS" == true ]]; then
   echo "[Bridges-2] Pulling latest logs from $BRIDGES2_SSH:$REMOTE_TRAINING_LOGS"
   mkdir -p "$TRAINING_LOGS_DIR_EXPANDED"
+  REMOTE_TRAINING_LOGS_Q="$(printf '%q' "$REMOTE_TRAINING_LOGS")"
   set +e
-  ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new "$BRIDGES2_SSH" "cd \"$REMOTE_TRAINING_LOGS\" 2>/dev/null && files=\$(find . -maxdepth 1 -type f \\( -name '*_tape.log' -o -name 'training_*.log' -o -name 'telemetry_*.csv' -o -name 'train_*.out' -o -name 'train_*.err' \\) -printf '%T@ %P\n' | sort -nr | head -20 | cut -d' ' -f2-); if [ -z \"\$files\" ]; then echo '__GRIM_NO_LOGS__' >&2; exit 3; fi; printf '%s\n' \"\$files\" | tar -czf - -T -" \
-    | tar -xzf - -C "$TRAINING_LOGS_DIR_EXPANDED"
-  status=${PIPESTATUS[0]}
+  ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new "$BRIDGES2_SSH" "REMOTE_TRAINING_LOGS=$REMOTE_TRAINING_LOGS_Q bash -s" <<'EOF' | tar -xzf - -C "$TRAINING_LOGS_DIR_EXPANDED"
+set -e
+logs_dir="$REMOTE_TRAINING_LOGS"
+cleanup_snapshot() {
+  if [ -n "${snapshot_dir:-}" ]; then
+    rm -rf "$snapshot_dir"
+  fi
+}
+trap cleanup_snapshot EXIT
+
+if ! cd "$logs_dir" 2>/dev/null; then
+  echo "__GRIM_NO_LOGS__" >&2
+  exit 3
+fi
+snapshot_dir=$(mktemp -d "$logs_dir/.grim_log_pull_snapshot.XXXXXX")
+
+files=$(find . -maxdepth 1 -type f \( -name '*_tape.log' -o -name 'training_*.log' -o -name 'telemetry_*.csv' -o -name 'train_*.out' -o -name 'train_*.err' \) -printf '%T@ %P\n' | sort -nr | head -20 | cut -d' ' -f2-)
+if [ -z "$files" ]; then
+  echo "__GRIM_NO_LOGS__" >&2
+  exit 3
+fi
+
+copied=0
+while IFS= read -r file; do
+  [ -n "$file" ] || continue
+  if cp -p -- "$file" "$snapshot_dir/$file" 2>/dev/null; then
+    copied=1
+  else
+    echo "WARNING: skipped log that could not be snapshotted: $file" >&2
+  fi
+done <<FILES
+$files
+FILES
+
+if [ "$copied" -eq 0 ]; then
+  echo "__GRIM_NO_LOGS__" >&2
+  exit 3
+fi
+
+find "$snapshot_dir" -maxdepth 1 -type f -printf '%P\n' | tar -czf - -C "$snapshot_dir" -T -
+EOF
+  pipe_status=("${PIPESTATUS[@]}")
+  status=${pipe_status[0]}
+  extract_status=${pipe_status[1]}
   set -e
   if [[ "$status" -eq 3 ]]; then
     echo "[Bridges-2] No matching logs found under $REMOTE_TRAINING_LOGS"
@@ -258,6 +301,9 @@ if [[ "$DO_PULL_LOGS" == true ]]; then
   elif [[ "$status" -ne 0 ]]; then
     echo "[Bridges-2] Log pull failed (ssh exit $status)." >&2
     exit "$status"
+  elif [[ "$extract_status" -ne 0 ]]; then
+    echo "[Bridges-2] Log pull failed (local tar exit $extract_status)." >&2
+    exit "$extract_status"
   fi
   echo "[Bridges-2] Logs copied to $TRAINING_LOGS_DIR_EXPANDED"
   exit 0
@@ -336,7 +382,7 @@ print_bridges2_time_limit() {
   if [[ "$BRIDGES2_TIME_LIMIT_EXPLICIT" == true ]]; then
     echo "[Bridges-2] SLURM time limit: $BRIDGES2_TIME_LIMIT (set via --time or GRIM_BRIDGES2_TIME_LIMIT)"
   else
-    echo "[Bridges-2] SLURM time limit: partition max (no -t flag; override with --time T or GRIM_BRIDGES2_TIME_LIMIT)"
+    echo "[Bridges-2] SLURM time limit: $BRIDGES2_TIME_LIMIT (GPU-shared QOS max; override with --time T or GRIM_BRIDGES2_TIME_LIMIT)"
   fi
 }
 
@@ -1109,12 +1155,12 @@ BRIDGES2_VCPKG_ENV="mkdir -p \"$BRIDGES2_VCPKG_DOWNLOADS\"; export VCPKG_ROOT=\"
 if [[ -n "${GRIM_VCPKG_ROOT:-}" ]]; then
   BRIDGES2_VCPKG_PLACEHOLDER_REPAIR="true"
 else
-  BRIDGES2_VCPKG_PLACEHOLDER_REPAIR="if [ -d \"$BRIDGES2_VCPKG\" ] && ! git -C \"$BRIDGES2_VCPKG\" rev-parse --show-toplevel >/dev/null 2>&1; then echo \"  vcpkg checkout repair: removing non-git placeholder at $BRIDGES2_VCPKG\"; mkdir -p \"$BRIDGES2_VCPKG_DOWNLOADS\"; if [ -d \"$BRIDGES2_VCPKG/downloads\" ]; then cp -a \"$BRIDGES2_VCPKG/downloads/.\" \"$BRIDGES2_VCPKG_DOWNLOADS/\" 2>/dev/null || true; fi; rm -rf \"$BRIDGES2_VCPKG\"; fi"
+  BRIDGES2_VCPKG_PLACEHOLDER_REPAIR="if [ -d \"$BRIDGES2_VCPKG\" ]; then VCPKG_TOP=\$(git -C \"$BRIDGES2_VCPKG\" rev-parse --show-toplevel 2>/dev/null || true); if [ \"\$VCPKG_TOP\" != \"$BRIDGES2_VCPKG\" ]; then echo \"  vcpkg checkout repair: removing non-submodule placeholder at $BRIDGES2_VCPKG (git top: \${VCPKG_TOP:-none})\"; mkdir -p \"$BRIDGES2_VCPKG_DOWNLOADS\"; if [ -d \"$BRIDGES2_VCPKG/downloads\" ]; then cp -a \"$BRIDGES2_VCPKG/downloads/.\" \"$BRIDGES2_VCPKG_DOWNLOADS/\" 2>/dev/null || true; fi; rm -rf \"$BRIDGES2_VCPKG\"; fi; fi"
 fi
 if [[ -n "${GRIM_VCPKG_ROOT:-}" ]]; then
   BRIDGES2_VCPKG_ENSURE="(set -e; $BRIDGES2_VCPKG_ENV; if [ ! -f \"$VCPKG_TOOLCHAIN\" ]; then echo \"ERROR: GRIM_VCPKG_ROOT does not contain vcpkg toolchain: $VCPKG_TOOLCHAIN\" >&2; exit 1; fi; if [ ! -x \"$BRIDGES2_VCPKG/vcpkg\" ]; then (cd \"$BRIDGES2_VCPKG\" && ./bootstrap-vcpkg.sh -disableMetrics); fi; touch \"$BRIDGES2_VCPKG/.vcpkg-root\")"
 else
-  BRIDGES2_VCPKG_ENSURE="(set -e; cd \"$BRIDGES2_DIR\"; $BRIDGES2_VCPKG_ENV; VCPKG_PIN=\$(git ls-tree HEAD external/vcpkg | awk '{print \$3}'); if [ -z \"\$VCPKG_PIN\" ]; then echo \"ERROR: external/vcpkg gitlink not found in repo HEAD\" >&2; exit 1; fi; if ! git -C \"$BRIDGES2_VCPKG\" rev-parse --show-toplevel >/dev/null 2>&1; then echo \"Initializing external/vcpkg to match local repo layout...\"; git submodule update --init external/vcpkg; fi; VCPKG_TOP=\$(git -C \"$BRIDGES2_VCPKG\" rev-parse --show-toplevel 2>/dev/null || true); if [ \"\$VCPKG_TOP\" != \"$BRIDGES2_VCPKG\" ]; then echo \"ERROR: $BRIDGES2_VCPKG exists but is not a vcpkg git checkout; remove it or set GRIM_VCPKG_ROOT\" >&2; exit 1; fi; if ! git -C \"$BRIDGES2_VCPKG\" cat-file -e \"\$VCPKG_PIN^{commit}\" 2>/dev/null; then git -C \"$BRIDGES2_VCPKG\" fetch --depth 1 origin \"\$VCPKG_PIN\" || git -C \"$BRIDGES2_VCPKG\" fetch origin \"\$VCPKG_PIN\"; fi; VCPKG_HEAD=\$(git -C \"$BRIDGES2_VCPKG\" rev-parse HEAD 2>/dev/null || true); if [ \"\$VCPKG_HEAD\" != \"\$VCPKG_PIN\" ]; then echo \"  vcpkg checkout status: aligning \$VCPKG_HEAD -> \$VCPKG_PIN\"; git -c advice.detachedHead=false -C \"$BRIDGES2_VCPKG\" checkout -f \"\$VCPKG_PIN\"; elif ! git -C \"$BRIDGES2_VCPKG\" diff --quiet --ignore-submodules HEAD -- || ! git -C \"$BRIDGES2_VCPKG\" diff --cached --quiet --ignore-submodules HEAD --; then echo \"  vcpkg checkout status: dirty pinned worktree; resetting to \$VCPKG_PIN\"; git -c advice.detachedHead=false -C \"$BRIDGES2_VCPKG\" checkout -f \"\$VCPKG_PIN\"; else echo \"  vcpkg checkout status: already pinned at \$VCPKG_PIN\"; fi; VCPKG_BASELINE=\$(grep -o '\"builtin-baseline\"[[:space:]]*:[[:space:]]*\"[^\"]*\"' \"$BRIDGES2_DIR/$TRAINING_DIR/vcpkg.json\" | head -n 1 | sed -E 's/.*\"([^\"]*)\"$/\1/'); if [ -z \"\$VCPKG_BASELINE\" ]; then echo \"ERROR: builtin-baseline missing from $BRIDGES2_DIR/$TRAINING_DIR/vcpkg.json\" >&2; exit 1; fi; if ! git -C \"$BRIDGES2_VCPKG\" cat-file -e \"\$VCPKG_BASELINE^{commit}\" 2>/dev/null; then git -C \"$BRIDGES2_VCPKG\" fetch --depth 1 origin \"\$VCPKG_BASELINE\" || git -C \"$BRIDGES2_VCPKG\" fetch origin \"\$VCPKG_BASELINE\"; fi; if ! git -C \"$BRIDGES2_VCPKG\" cat-file -e \"\$VCPKG_BASELINE:versions/baseline.json\" 2>/dev/null; then git -C \"$BRIDGES2_VCPKG\" fetch origin \"\$VCPKG_BASELINE\" || true; fi; if ! git -C \"$BRIDGES2_VCPKG\" cat-file -e \"\$VCPKG_BASELINE:versions/baseline.json\" 2>/dev/null; then echo \"ERROR: vcpkg builtin-baseline \$VCPKG_BASELINE is unavailable in $BRIDGES2_VCPKG; remove the checkout or fetch the missing history.\" >&2; exit 1; fi; if [ ! -f \"$VCPKG_TOOLCHAIN\" ]; then echo \"ERROR: pinned vcpkg toolchain not found: $VCPKG_TOOLCHAIN\" >&2; exit 1; fi; if [ ! -x \"$BRIDGES2_VCPKG/vcpkg\" ]; then (cd \"$BRIDGES2_VCPKG\" && ./bootstrap-vcpkg.sh -disableMetrics); fi; touch \"$BRIDGES2_VCPKG/.vcpkg-root\")"
+  BRIDGES2_VCPKG_ENSURE="(set -e; cd \"$BRIDGES2_DIR\"; $BRIDGES2_VCPKG_ENV; VCPKG_PIN=\$(git ls-tree HEAD external/vcpkg | awk '{print \$3}'); if [ -z \"\$VCPKG_PIN\" ]; then echo \"ERROR: external/vcpkg gitlink not found in repo HEAD\" >&2; exit 1; fi; VCPKG_TOP=\$(git -C \"$BRIDGES2_VCPKG\" rev-parse --show-toplevel 2>/dev/null || true); if [ \"\$VCPKG_TOP\" != \"$BRIDGES2_VCPKG\" ]; then echo \"Initializing external/vcpkg to match local repo layout...\"; rm -rf \"$BRIDGES2_VCPKG\"; git submodule update --init external/vcpkg; fi; VCPKG_TOP=\$(git -C \"$BRIDGES2_VCPKG\" rev-parse --show-toplevel 2>/dev/null || true); if [ \"\$VCPKG_TOP\" != \"$BRIDGES2_VCPKG\" ]; then echo \"ERROR: $BRIDGES2_VCPKG exists but is not a vcpkg git checkout (git top: \${VCPKG_TOP:-none}); remove it or set GRIM_VCPKG_ROOT\" >&2; exit 1; fi; if ! git -C \"$BRIDGES2_VCPKG\" cat-file -e \"\$VCPKG_PIN^{commit}\" 2>/dev/null; then git -C \"$BRIDGES2_VCPKG\" fetch --depth 1 origin \"\$VCPKG_PIN\" || git -C \"$BRIDGES2_VCPKG\" fetch origin \"\$VCPKG_PIN\"; fi; VCPKG_HEAD=\$(git -C \"$BRIDGES2_VCPKG\" rev-parse HEAD 2>/dev/null || true); if [ \"\$VCPKG_HEAD\" != \"\$VCPKG_PIN\" ]; then echo \"  vcpkg checkout status: aligning \$VCPKG_HEAD -> \$VCPKG_PIN\"; git -c advice.detachedHead=false -C \"$BRIDGES2_VCPKG\" checkout -f \"\$VCPKG_PIN\"; elif ! git -C \"$BRIDGES2_VCPKG\" diff --quiet --ignore-submodules HEAD -- || ! git -C \"$BRIDGES2_VCPKG\" diff --cached --quiet --ignore-submodules HEAD --; then echo \"  vcpkg checkout status: dirty pinned worktree; resetting to \$VCPKG_PIN\"; git -c advice.detachedHead=false -C \"$BRIDGES2_VCPKG\" checkout -f \"\$VCPKG_PIN\"; else echo \"  vcpkg checkout status: already pinned at \$VCPKG_PIN\"; fi; VCPKG_BASELINE=\$(grep -o '\"builtin-baseline\"[[:space:]]*:[[:space:]]*\"[^\"]*\"' \"$BRIDGES2_DIR/$TRAINING_DIR/vcpkg.json\" | head -n 1 | sed -E 's/.*\"([^\"]*)\"$/\1/'); if [ -z \"\$VCPKG_BASELINE\" ]; then echo \"ERROR: builtin-baseline missing from $BRIDGES2_DIR/$TRAINING_DIR/vcpkg.json\" >&2; exit 1; fi; if ! git -C \"$BRIDGES2_VCPKG\" cat-file -e \"\$VCPKG_BASELINE^{commit}\" 2>/dev/null; then git -C \"$BRIDGES2_VCPKG\" fetch --depth 1 origin \"\$VCPKG_BASELINE\" || git -C \"$BRIDGES2_VCPKG\" fetch origin \"\$VCPKG_BASELINE\"; fi; if ! git -C \"$BRIDGES2_VCPKG\" cat-file -e \"\$VCPKG_BASELINE:versions/baseline.json\" 2>/dev/null; then git -C \"$BRIDGES2_VCPKG\" fetch origin \"\$VCPKG_BASELINE\" || true; fi; if ! git -C \"$BRIDGES2_VCPKG\" cat-file -e \"\$VCPKG_BASELINE:versions/baseline.json\" 2>/dev/null; then echo \"ERROR: vcpkg builtin-baseline \$VCPKG_BASELINE is unavailable in $BRIDGES2_VCPKG; remove the checkout or fetch the missing history.\" >&2; exit 1; fi; if [ ! -f \"$VCPKG_TOOLCHAIN\" ]; then echo \"ERROR: pinned vcpkg toolchain not found: $VCPKG_TOOLCHAIN\" >&2; exit 1; fi; if [ ! -x \"$BRIDGES2_VCPKG/vcpkg\" ]; then (cd \"$BRIDGES2_VCPKG\" && ./bootstrap-vcpkg.sh -disableMetrics); fi; touch \"$BRIDGES2_VCPKG/.vcpkg-root\")"
 fi
 BRIDGES2_MANIFEST_ASSERT="if [ ! -f \"$BRIDGES2_DIR/$TRAINING_DIR/vcpkg.json\" ]; then echo \"ERROR: expected TrainingLoop manifest at $BRIDGES2_DIR/$TRAINING_DIR/vcpkg.json after repo sync\" >&2; exit 1; fi"
 
@@ -1285,7 +1331,7 @@ BRIDGES2_DEP_BOOTSTRAP="$BRIDGES2_VCPKG_ENSURE && echo \"  vcpkg checkout: basel
 BRIDGES2_DEP_PRECONFIG="$BRIDGES2_VCPKG_TOOL_POLICY && $BRIDGES2_VCPKG_ENV && $BRIDGES2_VCPKG_MANIFEST_POLICY"
 BRIDGES2_CMAKE_DEP_ARGS="-DCMAKE_TOOLCHAIN_FILE=\"$VCPKG_TOOLCHAIN\" -DVCPKG_MANIFEST_DIR=\"$BRIDGES2_DIR/$TRAINING_DIR\" -DVCPKG_INSTALLED_DIR=\"$BRIDGES2_TRAINING_VCPKG_INSTALLED\" -DVCPKG_TARGET_TRIPLET=x64-linux -DVCPKG_MANIFEST_INSTALL=\$cmake_manifest_install -DGRIM_TRAINING_USE_MANUAL_DEPS=OFF -DGRIM_TRAINING_ENABLE_VCPKG_FALLBACK=ON"
 BRIDGES2_PREP_BUILD="grim_need_configure=0; if [ -f \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" ]; then cached_toolchain=\$(grep '^CMAKE_TOOLCHAIN_FILE:FILEPATH=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); cached_installed=\$(grep '^VCPKG_INSTALLED_DIR:PATH=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); cached_manual=\$(grep '^GRIM_TRAINING_USE_MANUAL_DEPS:BOOL=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); if [ -n \"\$cached_toolchain\" ] && [ \"\$cached_toolchain\" != \"$VCPKG_TOOLCHAIN\" ]; then echo \"  stale CMake toolchain cache: \$cached_toolchain -> $VCPKG_TOOLCHAIN\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure with the pinned vcpkg cache\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; grim_need_configure=1; elif [ -n \"\$cached_installed\" ] && [ \"\$cached_installed\" != \"$BRIDGES2_TRAINING_VCPKG_INSTALLED\" ]; then echo \"  stale TrainingLoop vcpkg installed cache: \$cached_installed -> $BRIDGES2_TRAINING_VCPKG_INSTALLED\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure the manifest install root\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; grim_need_configure=1; elif [ -n \"\$cached_manual\" ] && [ \"\$cached_manual\" != \"OFF\" ]; then echo \"  stale TrainingLoop dependency mode cache: manual deps -> OFF\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure for manifest-mode vcpkg\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; grim_need_configure=1; fi; else grim_need_configure=1; fi"
-BRIDGES2_PRECONFIGURE_BUILD="{ if [ -f \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" ]; then cached_generator=\$(grep '^CMAKE_GENERATOR:INTERNAL=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); cached_make_program=\$(grep '^CMAKE_MAKE_PROGRAM:FILEPATH=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); if [ -n \"\$cached_generator\" ] && [ \"\$cached_generator\" != \"\$GRIM_BRIDGES2_CMAKE_GENERATOR\" ]; then echo \"  stale CMake generator cache: \$cached_generator -> \$GRIM_BRIDGES2_CMAKE_GENERATOR\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure with the current generator backend\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; grim_need_configure=1; elif [ -n \"\$cached_make_program\" ] && [ \"\$cached_make_program\" != \"\$GRIM_BRIDGES2_CMAKE_MAKE_PROGRAM\" ]; then echo \"  stale CMake make-program cache: \$cached_make_program -> \$GRIM_BRIDGES2_CMAKE_MAKE_PROGRAM\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure with the current generator executable\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; grim_need_configure=1; fi; fi; if [ ! -f \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" ]; then grim_need_configure=1; fi; }"
+BRIDGES2_PRECONFIGURE_BUILD="{ if [ -f \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" ]; then cached_generator=\$(grep '^CMAKE_GENERATOR:INTERNAL=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); cached_make_program=\$(grep '^CMAKE_MAKE_PROGRAM:FILEPATH=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); if [ -n \"\$cached_generator\" ] && [ \"\$cached_generator\" != \"\$GRIM_BRIDGES2_CMAKE_GENERATOR\" ]; then echo \"  stale CMake generator cache: \$cached_generator -> \$GRIM_BRIDGES2_CMAKE_GENERATOR\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure with the current generator backend\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; grim_need_configure=1; elif [ -n \"\$cached_make_program\" ] && [ \"\$cached_make_program\" != \"\$GRIM_BRIDGES2_CMAKE_MAKE_PROGRAM\" ]; then echo \"  stale CMake make-program cache: \$cached_make_program -> \$GRIM_BRIDGES2_CMAKE_MAKE_PROGRAM\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure with the current generator executable\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; grim_need_configure=1; elif [ \"\$GRIM_BRIDGES2_CMAKE_GENERATOR\" = \"Unix Makefiles\" ] && [ ! -f \"$BRIDGES2_DIR/$BUILD_DIR/Makefile\" ]; then echo \"  incomplete CMake build tree: missing Makefile for Unix Makefiles generator\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can finish a clean configure\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; grim_need_configure=1; elif [ \"\$GRIM_BRIDGES2_CMAKE_GENERATOR\" = \"Ninja\" ] && [ ! -f \"$BRIDGES2_DIR/$BUILD_DIR/build.ninja\" ]; then echo \"  incomplete CMake build tree: missing build.ninja for Ninja generator\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can finish a clean configure\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; grim_need_configure=1; fi; fi; if [ ! -f \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" ]; then grim_need_configure=1; fi; }"
 BRIDGES2_CONFIGURE_STEP="{ if [ \"\${cmake_manifest_install}\" = \"ON\" ] || [ \"\${grim_need_configure:-1}\" = \"1\" ]; then echo \"  CMake configure: running for $BRIDGES2_DIR/$BUILD_DIR\"; cmake -S . -B \"$BRIDGES2_DIR/$BUILD_DIR\" -G \"\$GRIM_BRIDGES2_CMAKE_GENERATOR\" -DCMAKE_MAKE_PROGRAM=\"\$GRIM_BRIDGES2_CMAKE_MAKE_PROGRAM\" -DCMAKE_BUILD_TYPE=Release -DCUDAToolkit_ROOT=\$GRIM_CUDA_ROOT $BRIDGES2_CMAKE_DEP_ARGS; else echo \"  CMake configure: reusing existing build tree $BRIDGES2_DIR/$BUILD_DIR\"; fi; }"
 
 # --build
@@ -1311,7 +1357,7 @@ fi
 # a Slurm allocation so a sick login node cannot stall the build pipeline.
 BRIDGES2_BUILD_PARTITION="${GRIM_BRIDGES2_BUILD_PARTITION:-$PARTITION}"
 BRIDGES2_BUILD_CPUS="${GRIM_BRIDGES2_BUILD_CPUS:-8}"
-BRIDGES2_BUILD_TIME_LIMIT="${GRIM_BRIDGES2_BUILD_TIME_LIMIT:-1:00:00}"
+BRIDGES2_BUILD_TIME_LIMIT="${GRIM_BRIDGES2_BUILD_TIME_LIMIT:-$BRIDGES2_TIME_LIMIT}"
 if [[ -n "${GRIM_BRIDGES2_BUILD_USE_GPU:-}" ]]; then
   case "${GRIM_BRIDGES2_BUILD_USE_GPU,,}" in
     1|true|yes|on) BRIDGES2_BUILD_USE_GPU=1 ;;
@@ -1328,7 +1374,9 @@ BRIDGES2_BUILD_GPU_ARGS=""
 if [[ "$BRIDGES2_BUILD_USE_GPU" == "1" ]]; then
   BRIDGES2_BUILD_GPU_ARGS="--gres=gpu:$GPU_TYPE:1"
 fi
-BRIDGES2_BUILD_SRUN_ARGS="-p $BRIDGES2_BUILD_PARTITION $SLURM_ACCOUNT_ARGS --ntasks=1 --cpus-per-task=$BRIDGES2_BUILD_CPUS $BRIDGES2_BUILD_GPU_ARGS -t $BRIDGES2_BUILD_TIME_LIMIT"
+BRIDGES2_BUILD_TIME_ARGS="-t $BRIDGES2_BUILD_TIME_LIMIT"
+BRIDGES2_BUILD_TIME_LABEL="$BRIDGES2_BUILD_TIME_LIMIT"
+BRIDGES2_BUILD_SRUN_ARGS="-p $BRIDGES2_BUILD_PARTITION $SLURM_ACCOUNT_ARGS --ntasks=1 --cpus-per-task=$BRIDGES2_BUILD_CPUS $BRIDGES2_BUILD_GPU_ARGS $BRIDGES2_BUILD_TIME_ARGS"
 
 # Single remote command for the build, used both by the staged path below and by the
 # single-shot combined submission.
@@ -1354,7 +1402,7 @@ if [[ "$DO_BUILD" == true ]]; then
   echo "  vcpkg installed dir: $BRIDGES2_TRAINING_VCPKG_INSTALLED"
   echo "  vcpkg downloads cache: $BRIDGES2_VCPKG_DOWNLOADS"
   echo "  CMake preset: $BRIDGES2_CMAKE_PRESET (auto-falls back to -make when Ninja is unavailable)"
-  echo "  build execution: Slurm srun on partition=$BRIDGES2_BUILD_PARTITION, cpus=$BRIDGES2_BUILD_CPUS, gpu=$([[ "$BRIDGES2_BUILD_USE_GPU" == "1" ]] && echo "$GPU_TYPE:1" || echo none), time=$BRIDGES2_BUILD_TIME_LIMIT"
+  echo "  build execution: Slurm srun on partition=$BRIDGES2_BUILD_PARTITION, cpus=$BRIDGES2_BUILD_CPUS, gpu=$([[ "$BRIDGES2_BUILD_USE_GPU" == "1" ]] && echo "$GPU_TYPE:1" || echo none), time=$BRIDGES2_BUILD_TIME_LABEL"
   if [[ "$SINGLE_SHOT" == true ]]; then
     echo "  (build is launched with srun inside the single combined SSH command at submit time)"
   else
@@ -1485,7 +1533,7 @@ elif [[ "$DO_TT" == true ]]; then
   if [[ "$TT_FORCE" == true ]]; then
     echo "  Mode: FORCE REBUILD"
   fi
-  TT_SRUN_ARGS="-p $PARTITION $SLURM_ACCOUNT_ARGS --gres=gpu:$GPU_TYPE:1 -t 2:00:00 --pty"
+  TT_SRUN_ARGS="-p $PARTITION $SLURM_ACCOUNT_ARGS --gres=gpu:$GPU_TYPE:1 $SLURM_TIME_ARGS --pty"
   if [[ -t 0 ]]; then
     ssh -t $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && srun $TT_SRUN_ARGS $TT_RUN_WRAPPER"
   else

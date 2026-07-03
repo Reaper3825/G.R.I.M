@@ -45,6 +45,12 @@ SerializationModelConfigView makeConfigView(const Config::AiConfigSnapshot& cfg)
     view.tie_embeddings = HyperParameters::snapshotTrainingConfigField<bool>(cfg, "tie_embeddings");
     view.use_gpu = HyperParameters::snapshotTrainingConfigField<bool>(cfg, "use_gpu");
     view.use_bias = HyperParameters::snapshotTrainingConfigField<bool>(cfg, "use_bias");
+    const auto latent_preset = HyperParameters::latentTrajectoryPresetHP(cfg);
+    view.latent_trajectory_preset_enabled = latent_preset.enabled;
+    view.latent_trajectory_preset_mtp_k = latent_preset.mtp_k;
+    view.latent_trajectory_preset_fuse_dim = latent_preset.fuse_dim;
+    view.latent_trajectory_preset_dim = latent_preset.preset_dim;
+    view.latent_trajectory_preset_gate_dim = latent_preset.gate_dim;
     return view;
 }
 
@@ -131,7 +137,15 @@ bool saveLanguageModelCheckpoint(
     auto* number_encoder_parameters = parameter_registry.getNumberEncoderParameters();
     auto* selector_parameters = parameter_registry.getSelectorParameters();
     auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
+    auto* latent_preset_parameters = parameter_registry.getLatentTrajectoryPresetParameters();
     auto* gpu_encoder_owner = gpu_model_state.gpu_encoder.get();
+    if (request.sources.config.latent_trajectory_preset_enabled != (latent_preset_parameters != nullptr)) {
+        EmitModuleError(ModuleId::Checkpoint,
+                        "LatentTrajectoryPreset config/registry mismatch during save(): config_enabled=" +
+                        std::to_string(request.sources.config.latent_trajectory_preset_enabled) +
+                        " owner_present=" + std::to_string(latent_preset_parameters != nullptr));
+        return false;
+    }
     EmitModuleInfo(ModuleId::Checkpoint, "Request initialized with version " + std::to_string(GRIM_MODEL_VERSION));
 
     EmitModuleInfo(ModuleId::Checkpoint, "Processing embeddings");
@@ -271,6 +285,29 @@ bool saveLanguageModelCheckpoint(
         EmitModuleInfo(ModuleId::Checkpoint, "Processing ExecutionBlock v2 weights for FlatBuffer serialization");
     }
 
+    if (latent_preset_parameters) {
+        auto assignReadTensor = [](DeviceReadView& v, const Tensor& t) {
+            v.ptr = t.data;
+            v.count = static_cast<std::size_t>(t.numel());
+        };
+        request.sources.latent_trajectory_preset.enabled = true;
+        assignReadTensor(request.sources.latent_trajectory_preset.W_hidden_traj, latent_preset_parameters->W_hidden_traj);
+        assignReadTensor(request.sources.latent_trajectory_preset.b_hidden_traj, latent_preset_parameters->b_hidden_traj);
+        assignReadTensor(request.sources.latent_trajectory_preset.W_fuse, latent_preset_parameters->W_fuse);
+        assignReadTensor(request.sources.latent_trajectory_preset.b_fuse, latent_preset_parameters->b_fuse);
+        assignReadTensor(request.sources.latent_trajectory_preset.W_down, latent_preset_parameters->W_down);
+        assignReadTensor(request.sources.latent_trajectory_preset.b_down, latent_preset_parameters->b_down);
+        assignReadTensor(request.sources.latent_trajectory_preset.W_up, latent_preset_parameters->W_up);
+        assignReadTensor(request.sources.latent_trajectory_preset.b_up, latent_preset_parameters->b_up);
+        assignReadTensor(request.sources.latent_trajectory_preset.W_gate, latent_preset_parameters->W_gate);
+        assignReadTensor(request.sources.latent_trajectory_preset.b_gate, latent_preset_parameters->b_gate);
+        assignReadTensor(request.sources.latent_trajectory_preset.W_target, latent_preset_parameters->W_target);
+        assignReadTensor(request.sources.latent_trajectory_preset.b_target, latent_preset_parameters->b_target);
+        assignReadTensor(request.sources.latent_trajectory_preset.fuse_norm_gamma, latent_preset_parameters->fuse_norm_gamma);
+        assignReadTensor(request.sources.latent_trajectory_preset.preset_norm_gamma, latent_preset_parameters->preset_norm_gamma);
+        EmitModuleInfo(ModuleId::Checkpoint, "Processing LatentTrajectoryPreset weights for FlatBuffer serialization");
+    }
+
     // Issue #33: Final RMSNorm gamma (normalizes encoder output before LM head)
     if (lm_head_parameters && lm_head_parameters->final_rms_gamma.data) {
         request.sources.final_rms_gamma.ptr = lm_head_parameters->final_rms_gamma.data;
@@ -392,6 +429,14 @@ bool loadLanguageModelCheckpoint(
     auto* number_encoder_parameters = parameter_registry.getNumberEncoderParameters();
     auto* selector_parameters = parameter_registry.getSelectorParameters();
     auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
+    auto* latent_preset_parameters = parameter_registry.getLatentTrajectoryPresetParameters();
+    if (request.config.latent_trajectory_preset_enabled != (latent_preset_parameters != nullptr)) {
+        EmitModuleError(ModuleId::Checkpoint,
+                        "[load] LatentTrajectoryPreset config/registry mismatch: config_enabled=" +
+                        std::to_string(request.config.latent_trajectory_preset_enabled) +
+                        " owner_present=" + std::to_string(latent_preset_parameters != nullptr));
+        return false;
+    }
 
     if (!training_state.initialized) {
         EmitModuleError(ModuleId::Checkpoint,
@@ -413,6 +458,7 @@ bool loadLanguageModelCheckpoint(
     request.capabilities.requires_number_encoder = (number_encoder_parameters != nullptr);
     request.capabilities.requires_arg_selector = (selector_parameters != nullptr);
     request.capabilities.requires_execution_block = (execution_block_parameters != nullptr);
+    request.capabilities.requires_latent_trajectory_preset = (latent_preset_parameters != nullptr);
     request.capabilities.requires_final_rms_gamma = (lm_head_parameters != nullptr
                                                       && lm_head_parameters->final_rms_gamma.data != nullptr
                                                       && !freeze_learned_rms_gammas);
@@ -546,6 +592,51 @@ bool loadLanguageModelCheckpoint(
         assignWrite(request.execution_block.W_trace_gate, execution_block_parameters->W_trace_gate.data, static_cast<std::size_t>(execution_block_parameters->W_trace_gate.numel()));
     }
 
+    if (latent_preset_parameters) {
+        assignWrite(request.latent_trajectory_preset.W_hidden_traj,
+                    latent_preset_parameters->W_hidden_traj.data,
+                    static_cast<std::size_t>(latent_preset_parameters->W_hidden_traj.numel()));
+        assignWrite(request.latent_trajectory_preset.b_hidden_traj,
+                    latent_preset_parameters->b_hidden_traj.data,
+                    static_cast<std::size_t>(latent_preset_parameters->b_hidden_traj.numel()));
+        assignWrite(request.latent_trajectory_preset.W_fuse,
+                    latent_preset_parameters->W_fuse.data,
+                    static_cast<std::size_t>(latent_preset_parameters->W_fuse.numel()));
+        assignWrite(request.latent_trajectory_preset.b_fuse,
+                    latent_preset_parameters->b_fuse.data,
+                    static_cast<std::size_t>(latent_preset_parameters->b_fuse.numel()));
+        assignWrite(request.latent_trajectory_preset.W_down,
+                    latent_preset_parameters->W_down.data,
+                    static_cast<std::size_t>(latent_preset_parameters->W_down.numel()));
+        assignWrite(request.latent_trajectory_preset.b_down,
+                    latent_preset_parameters->b_down.data,
+                    static_cast<std::size_t>(latent_preset_parameters->b_down.numel()));
+        assignWrite(request.latent_trajectory_preset.W_up,
+                    latent_preset_parameters->W_up.data,
+                    static_cast<std::size_t>(latent_preset_parameters->W_up.numel()));
+        assignWrite(request.latent_trajectory_preset.b_up,
+                    latent_preset_parameters->b_up.data,
+                    static_cast<std::size_t>(latent_preset_parameters->b_up.numel()));
+        assignWrite(request.latent_trajectory_preset.W_gate,
+                    latent_preset_parameters->W_gate.data,
+                    static_cast<std::size_t>(latent_preset_parameters->W_gate.numel()));
+        assignWrite(request.latent_trajectory_preset.b_gate,
+                    latent_preset_parameters->b_gate.data,
+                    static_cast<std::size_t>(latent_preset_parameters->b_gate.numel()));
+        assignWrite(request.latent_trajectory_preset.W_target,
+                    latent_preset_parameters->W_target.data,
+                    static_cast<std::size_t>(latent_preset_parameters->W_target.numel()));
+        assignWrite(request.latent_trajectory_preset.b_target,
+                    latent_preset_parameters->b_target.data,
+                    static_cast<std::size_t>(latent_preset_parameters->b_target.numel()));
+        assignWrite(request.latent_trajectory_preset.fuse_norm_gamma,
+                    latent_preset_parameters->fuse_norm_gamma.data,
+                    static_cast<std::size_t>(latent_preset_parameters->fuse_norm_gamma.numel()));
+        assignWrite(request.latent_trajectory_preset.preset_norm_gamma,
+                    latent_preset_parameters->preset_norm_gamma.data,
+                    static_cast<std::size_t>(latent_preset_parameters->preset_norm_gamma.numel()));
+    }
+
     // Issue #33: Final RMSNorm gamma destination
     // When frozen, γ_final stays at 1.0 — do NOT overwrite from checkpoint.
     if (lm_head_parameters && lm_head_parameters->final_rms_gamma.data
@@ -579,6 +670,7 @@ bool loadLanguageModelCheckpoint(
             std::ostringstream oss;
             oss << "[load]   capabilities: number_encoder=" << request.capabilities.requires_number_encoder
                 << " exec_block=" << request.capabilities.requires_execution_block
+                << " latent_preset=" << request.capabilities.requires_latent_trajectory_preset
                 << " final_rms=" << request.capabilities.requires_final_rms_gamma;
             EmitModuleError(ModuleId::Checkpoint, oss.str());
         }
@@ -587,7 +679,8 @@ bool loadLanguageModelCheckpoint(
                 oss << "[load]   registry pointers: embedding=" << (embedding_parameters ? "OK" : "NULL")
                 << " lm_head_params=" << (lm_head_parameters ? "OK" : "NULL")
                 << " number_encoder=" << (number_encoder_parameters ? "OK" : "NULL")
-                << " exec_block=" << (execution_block_parameters ? "OK" : "NULL");
+                << " exec_block=" << (execution_block_parameters ? "OK" : "NULL")
+                << " latent_preset=" << (latent_preset_parameters ? "OK" : "NULL");
             EmitModuleError(ModuleId::Checkpoint, oss.str());
         }
         {
@@ -597,6 +690,8 @@ bool loadLanguageModelCheckpoint(
                 << " ne_digit_emb=" << (request.number_encoder.digit_emb.ptr ? "set" : "NULL")
                 << "(" << request.number_encoder.digit_emb.count << ")"
                 << " final_rms_gamma=" << (request.final_rms_gamma.ptr ? "set" : "SKIP(frozen)")
+                << " ltp_W_fuse=" << (request.latent_trajectory_preset.W_fuse.ptr ? "set" : "NULL")
+                << "(" << request.latent_trajectory_preset.W_fuse.count << ")"
                 << " lm_proj=" << (request.lm_head.projection.ptr ? "set" : "NULL")
                 << "(" << request.lm_head.projection.count << ")"
                 << " lm_bias=" << (request.lm_head.bias.ptr ? "set" : "NULL")

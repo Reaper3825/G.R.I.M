@@ -454,6 +454,35 @@ struct MTPDiagnosticHP {
     bool log_ratio_monitor = false;
 };
 
+struct LatentTrajectoryPresetHP {
+    bool enabled = false;
+
+    int d_model = 0;
+    int mtp_k = 0;
+    int vocab_size = 0;
+    int fuse_dim = 0;
+    int preset_dim = 0;
+    int gate_dim = 0;
+
+    float preset_scale = 0.0f;
+    float gate_bias_init = 0.0f;
+
+    bool use_token_mean = false;
+    bool use_mtp_logits = false;
+    bool use_mtp_hidden = false;
+    bool use_entropy = false;
+    bool use_delta_target = false;
+    bool use_consistency_loss = false;
+    bool use_diversity_loss = false;
+    bool use_gate_sparsity_loss = false;
+
+    float lambda_traj = 0.0f;
+    float lambda_delta = 0.0f;
+    float lambda_consistency = 0.0f;
+    float lambda_diversity = 0.0f;
+    float lambda_gate = 0.0f;
+};
+
 // Unified model-side config payload for future Phase2 handoff -> Phase2 training.
 // Immutable read view rooted on AiConfigSnapshot (raw document owner) and
 // assembled from training.config authored leaves plus explicit derived formulas.
@@ -556,6 +585,29 @@ struct ModelHP {
     int mtp_vocab_size = 0;
     int mtp_d_model = 0;
     float mtp_alpha = 0.0f;
+
+    bool latent_trajectory_preset_enabled = false;
+    int latent_trajectory_preset_d_model = 0;
+    int latent_trajectory_preset_mtp_k = 0;
+    int latent_trajectory_preset_vocab_size = 0;
+    int latent_trajectory_preset_fuse_dim = 0;
+    int latent_trajectory_preset_dim = 0;
+    int latent_trajectory_preset_gate_dim = 0;
+    float latent_trajectory_preset_scale = 0.0f;
+    float latent_trajectory_preset_gate_bias_init = 0.0f;
+    bool latent_trajectory_preset_use_token_mean = false;
+    bool latent_trajectory_preset_use_mtp_logits = false;
+    bool latent_trajectory_preset_use_mtp_hidden = false;
+    bool latent_trajectory_preset_use_entropy = false;
+    bool latent_trajectory_preset_use_delta_target = false;
+    bool latent_trajectory_preset_use_consistency_loss = false;
+    bool latent_trajectory_preset_use_diversity_loss = false;
+    bool latent_trajectory_preset_use_gate_sparsity_loss = false;
+    float latent_trajectory_preset_lambda_traj = 0.0f;
+    float latent_trajectory_preset_lambda_delta = 0.0f;
+    float latent_trajectory_preset_lambda_consistency = 0.0f;
+    float latent_trajectory_preset_lambda_diversity = 0.0f;
+    float latent_trajectory_preset_lambda_gate = 0.0f;
 
     PositionalEncodingType positional_encoding = PositionalEncodingType::UNSPECIFIED;
     bool structured_ce_enabled = false;
@@ -1331,6 +1383,35 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.mtp_d_model = d_model;
     view.mtp_alpha = requireFloat("mtp_alpha");
 
+    view.latent_trajectory_preset_enabled = requireBool("latent_trajectory_preset_enabled");
+    view.latent_trajectory_preset_d_model = d_model;
+    view.latent_trajectory_preset_mtp_k = view.mtp_k;
+    view.latent_trajectory_preset_vocab_size = vocab_size;
+    view.latent_trajectory_preset_fuse_dim = view.latent_trajectory_preset_enabled
+        ? computeLatentTrajectoryPresetFuseDim(d_model, "modelHP(snapshot)")
+        : 0;
+    view.latent_trajectory_preset_dim = view.latent_trajectory_preset_enabled
+        ? computeLatentTrajectoryPresetDim(d_model, "modelHP(snapshot)")
+        : 0;
+    view.latent_trajectory_preset_gate_dim = view.latent_trajectory_preset_enabled
+        ? computeLatentTrajectoryPresetGateDim(d_model, "modelHP(snapshot)")
+        : 0;
+    view.latent_trajectory_preset_scale = requireFloat("latent_trajectory_preset_scale");
+    view.latent_trajectory_preset_gate_bias_init = requireFloat("latent_trajectory_preset_gate_bias_init");
+    view.latent_trajectory_preset_use_token_mean = requireBool("latent_trajectory_preset_use_token_mean");
+    view.latent_trajectory_preset_use_mtp_logits = requireBool("latent_trajectory_preset_use_mtp_logits");
+    view.latent_trajectory_preset_use_mtp_hidden = requireBool("latent_trajectory_preset_use_mtp_hidden");
+    view.latent_trajectory_preset_use_entropy = requireBool("latent_trajectory_preset_use_entropy");
+    view.latent_trajectory_preset_use_delta_target = requireBool("latent_trajectory_preset_use_delta_target");
+    view.latent_trajectory_preset_use_consistency_loss = requireBool("latent_trajectory_preset_use_consistency_loss");
+    view.latent_trajectory_preset_use_diversity_loss = requireBool("latent_trajectory_preset_use_diversity_loss");
+    view.latent_trajectory_preset_use_gate_sparsity_loss = requireBool("latent_trajectory_preset_use_gate_sparsity_loss");
+    view.latent_trajectory_preset_lambda_traj = requireFloat("latent_trajectory_preset_lambda_traj");
+    view.latent_trajectory_preset_lambda_delta = requireFloat("latent_trajectory_preset_lambda_delta");
+    view.latent_trajectory_preset_lambda_consistency = requireFloat("latent_trajectory_preset_lambda_consistency");
+    view.latent_trajectory_preset_lambda_diversity = requireFloat("latent_trajectory_preset_lambda_diversity");
+    view.latent_trajectory_preset_lambda_gate = requireFloat("latent_trajectory_preset_lambda_gate");
+
     view.number_encoder_enabled = requireBool("number_encoder_enabled");
     view.number_encoder_d_model = d_model;
     view.number_encoder_d_hidden = requireInt("number_encoder_d_hidden");
@@ -1504,6 +1585,37 @@ inline MTPFeatureHP mtpFeatureHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     MTPFeatureHP view;
     view.enabled = model.mtp_enabled;
     view.k = model.mtp_k;
+    return view;
+}
+
+inline LatentTrajectoryPresetHP latentTrajectoryPresetHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    const auto model = modelHP(snapshot);
+
+    LatentTrajectoryPresetHP view;
+    view.enabled = model.latent_trajectory_preset_enabled;
+    view.d_model = model.latent_trajectory_preset_d_model;
+    view.mtp_k = model.latent_trajectory_preset_mtp_k;
+    view.vocab_size = model.latent_trajectory_preset_vocab_size;
+    view.fuse_dim = model.latent_trajectory_preset_fuse_dim;
+    view.preset_dim = model.latent_trajectory_preset_dim;
+    view.gate_dim = model.latent_trajectory_preset_gate_dim;
+    view.preset_scale = model.latent_trajectory_preset_scale;
+    view.gate_bias_init = model.latent_trajectory_preset_gate_bias_init;
+    view.use_token_mean = model.latent_trajectory_preset_use_token_mean;
+    view.use_mtp_logits = model.latent_trajectory_preset_use_mtp_logits;
+    view.use_mtp_hidden = model.latent_trajectory_preset_use_mtp_hidden;
+    view.use_entropy = model.latent_trajectory_preset_use_entropy;
+    view.use_delta_target = model.latent_trajectory_preset_use_delta_target;
+    view.use_consistency_loss = model.latent_trajectory_preset_use_consistency_loss;
+    view.use_diversity_loss = model.latent_trajectory_preset_use_diversity_loss;
+    view.use_gate_sparsity_loss = model.latent_trajectory_preset_use_gate_sparsity_loss;
+    view.lambda_traj = model.latent_trajectory_preset_lambda_traj;
+    view.lambda_delta = model.latent_trajectory_preset_lambda_delta;
+    view.lambda_consistency = model.latent_trajectory_preset_lambda_consistency;
+    view.lambda_diversity = model.latent_trajectory_preset_lambda_diversity;
+    view.lambda_gate = model.latent_trajectory_preset_lambda_gate;
     return view;
 }
 

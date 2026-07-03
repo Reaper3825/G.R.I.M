@@ -73,6 +73,7 @@ struct alignas(64) GradMetrics {
     double execution_block_sum_sq = 0.0;
     double number_encoder_sum_sq = 0.0;
     double arg_selector_sum_sq = 0.0;
+    double latent_trajectory_preset_sum_sq = 0.0;
 
     // Per-type element counts (for RMS computation)
     uint64_t embedding_count = 0;
@@ -85,6 +86,7 @@ struct alignas(64) GradMetrics {
     uint64_t execution_block_count = 0;
     uint64_t number_encoder_count = 0;
     uint64_t arg_selector_count = 0;
+    uint64_t latent_trajectory_preset_count = 0;
 
     uint32_t has_nan = 0;
     uint32_t has_inf = 0;
