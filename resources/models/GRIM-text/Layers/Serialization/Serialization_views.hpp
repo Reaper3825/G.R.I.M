@@ -87,14 +87,26 @@ struct SerializationEncoderLayerWriteView {
 struct SerializationLMHeadReadView {
 	DeviceReadView projection;
 	DeviceReadView bias;
+	// Head-side residual SwiGLU adapter (config.lm_head_mlp_enabled).
+	// Presence-driven like the bias: populated only when the model allocated
+	// the adapter tensors. mlp_d_ff is derived from the live W_gate shape.
+	DeviceReadView mlp_w_gate;
+	DeviceReadView mlp_w_up;
+	DeviceReadView mlp_w_down;
 	bool has_projection = false;
 	bool has_bias = false;
+	bool has_mlp = false;
+	int mlp_d_ff = 0;
 };
 
 struct SerializationLMHeadWriteView {
 	DeviceWriteView projection;
 	DeviceWriteView bias;
+	DeviceWriteView mlp_w_gate;
+	DeviceWriteView mlp_w_up;
+	DeviceWriteView mlp_w_down;
 	bool expect_bias = false;
+	bool expect_mlp = false;
 };
 
 struct SerializationExecutionBlockReadView {

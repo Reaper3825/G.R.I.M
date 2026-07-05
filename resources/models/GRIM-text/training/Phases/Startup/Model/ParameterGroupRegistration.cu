@@ -310,6 +310,30 @@ void registerTopLevelParameters(Startup::GpuModelState& gpu_model_state,
                                    lm_head_bias_present,
                                    "config.use_bias=false && config.lm_head_unigram_bias=false");
 
+    // Head-side residual SwiGLU adapter (config.lm_head_mlp_enabled).
+    const bool lm_head_mlp_enabled = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "lm_head_mlp_enabled");
+    registrar.addConfigGatedTensor("lm_head_mlp_w_gate",
+                                   lm_head_parameters.mlp_W_gate,
+                                   ParamGroupType::LM_HEAD,
+                                   ParamStatsBucket::LM_HEAD,
+                                   -1,
+                                   lm_head_mlp_enabled,
+                                   "config.lm_head_mlp_enabled=false");
+    registrar.addConfigGatedTensor("lm_head_mlp_w_up",
+                                   lm_head_parameters.mlp_W_up,
+                                   ParamGroupType::LM_HEAD,
+                                   ParamStatsBucket::LM_HEAD,
+                                   -1,
+                                   lm_head_mlp_enabled,
+                                   "config.lm_head_mlp_enabled=false");
+    registrar.addConfigGatedTensor("lm_head_mlp_w_down",
+                                   lm_head_parameters.mlp_W_down,
+                                   ParamGroupType::LM_HEAD,
+                                   ParamStatsBucket::LM_HEAD,
+                                   -1,
+                                   lm_head_mlp_enabled,
+                                   "config.lm_head_mlp_enabled=false");
+
     const Tensor& final_gamma = lm_head_parameters.final_rms_gamma;
     if (freeze_learned_rms_gammas) {
         if (final_gamma.has_grad()) {
@@ -987,11 +1011,19 @@ void initializeLmHeadParameterTensors(
             std::string(tied_embedding_weights ? "non-null" : "NULL"));
     }
 
+    if (lm_head_hp.mlp_enabled && lm_head_hp.mlp_d_ff <= 0) {
+        throw std::runtime_error("initializeLmHeadParameterTensors: lm_head_mlp_enabled=true requires lm_head_mlp_d_ff > 0, got " +
+                                 std::to_string(lm_head_hp.mlp_d_ff));
+    }
+
     parameter_registry.lm_head_parameters = std::make_unique<GRIM::LMHeadParameterTensors>();
     auto& parameter_tensors = *parameter_registry.lm_head_parameters;
     parameter_tensors.weights = Tensor();
     parameter_tensors.bias = Tensor();
     parameter_tensors.final_rms_gamma = Tensor();
+    parameter_tensors.mlp_W_gate = Tensor();
+    parameter_tensors.mlp_W_up = Tensor();
+    parameter_tensors.mlp_W_down = Tensor();
     parameter_tensors.owns_weights = !tied_embedding_weights;
 
     if (tied_embedding_weights) {
@@ -1057,7 +1089,38 @@ void initializeLmHeadParameterTensors(
                     cudaMemcpyHostToDevice,
                     init_stream);
 
-    emitInfo("[initializeLmHeadParameterTensors] Initialized registry-owned LM-head tensors");
+    // Head-side residual SwiGLU adapter (capacity expansion, config-gated):
+    //   u = z + mlp_alpha * (SiLU(z @ W_gate) ⊙ (z @ W_up)) @ W_down
+    // W_down is deliberately ZERO-initialized so the head is exactly the
+    // existing linear head at step 0 (adapter branch contributes nothing);
+    // W_down's own gradient is nonzero from the first backward, so the branch
+    // opens gradually instead of perturbing logit scale at init.
+    if (lm_head_hp.mlp_enabled) {
+        const std::uint64_t mlp_seed = weight_init_seed + 100;
+
+        parameter_tensors.mlp_W_gate = Tensor::zeros(
+            {lm_head_hp.d_model, lm_head_hp.mlp_d_ff}, init_stream, "lm_head.mlp_W_gate");
+        parameter_tensors.mlp_W_gate.requires_grad_();
+        parameter_tensors.mlp_W_gate.alloc_grad();
+        Tensor::xavier_uniform_(parameter_tensors.mlp_W_gate, mlp_seed, init_stream);
+
+        parameter_tensors.mlp_W_up = Tensor::zeros(
+            {lm_head_hp.d_model, lm_head_hp.mlp_d_ff}, init_stream, "lm_head.mlp_W_up");
+        parameter_tensors.mlp_W_up.requires_grad_();
+        parameter_tensors.mlp_W_up.alloc_grad();
+        Tensor::xavier_uniform_(parameter_tensors.mlp_W_up, mlp_seed + 1, init_stream);
+
+        parameter_tensors.mlp_W_down = Tensor::zeros(
+            {lm_head_hp.mlp_d_ff, lm_head_hp.d_model}, init_stream, "lm_head.mlp_W_down");
+        parameter_tensors.mlp_W_down.requires_grad_();
+        parameter_tensors.mlp_W_down.alloc_grad();
+    }
+
+    emitInfo("[initializeLmHeadParameterTensors] Initialized registry-owned LM-head tensors" +
+             std::string(lm_head_hp.mlp_enabled
+                 ? " (+ residual SwiGLU adapter [" + std::to_string(lm_head_hp.d_model) + "x" +
+                   std::to_string(lm_head_hp.mlp_d_ff) + "], alpha=" + std::to_string(lm_head_hp.mlp_alpha) + ")"
+                 : ""));
 }
 
 void initializeExecutionBlockParameterTensors(

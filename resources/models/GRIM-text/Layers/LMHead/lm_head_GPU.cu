@@ -4,26 +4,35 @@
 //  LM head tensors live on a startup-owned registry bundle.
 //
 //  Borrows: weights [vocab_size, d_model] (or aliased from embedding),
-//           bias [vocab_size] (optional), final_rms_gamma [d_model].
+//           bias [vocab_size] (optional), final_rms_gamma [d_model],
+//           mlp_W_gate/mlp_W_up/mlp_W_down (optional residual SwiGLU adapter).
 //
-//  Forward: RMSNorm → optional centering → optional PC1 projection → logits = input @ W^T → bias
+//  Forward: RMSNorm → optional residual SwiGLU adapter → optional centering
+//           → optional PC1 projection → logits = input @ W^T → bias
 //
 //  ISSUE #56 pattern: The LM head writes any materialized LM-input tensor plus
 //  logits into the canonical shared-forward sink owned by the active caller.
 //
 //  PyTorch equivalent:
 //    class LMHead(nn.Module):
-//        def __init__(self, d_model, vocab_size, bias=True):
+//        def __init__(self, d_model, vocab_size, mlp_d_ff, alpha, bias=True):
 //            self.norm = nn.RMSNorm(d_model)
+//            self.gate = nn.Linear(d_model, mlp_d_ff, bias=False)
+//            self.up   = nn.Linear(d_model, mlp_d_ff, bias=False)
+//            self.down = nn.Linear(mlp_d_ff, d_model, bias=False)
+//            self.alpha = alpha
 //            self.proj = nn.Linear(d_model, vocab_size, bias=bias)
 //        def forward(self, x):
-//            return self.proj(self.norm(x))
+//            z = self.norm(x)
+//            u = z + self.alpha * self.down(F.silu(self.gate(z)) * self.up(z))
+//            return self.proj(u)
 //======================================================//
 
 #include "lm_head_GPU.hpp"
 #include "../../Shared/TensorContract/LMHeadGemmDiagnostics.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 
+#include <cmath>
 #include <stdexcept>
 #include <cstdio>
 #include <string>
@@ -44,6 +53,11 @@ void forwardLmHead(
     cublasHandle_t cublas_handle,
     Forward::ModelForwardOutputs& forward_outputs) {
     forward_outputs.lm_head_input_tensor = Tensor();
+    forward_outputs.lm_head_mlp_gate_out = Tensor();
+    forward_outputs.lm_head_mlp_silu_out = Tensor();
+    forward_outputs.lm_head_mlp_up_out = Tensor();
+    forward_outputs.lm_head_mlp_swiglu_out = Tensor();
+    forward_outputs.lm_head_mlp_residual_out = Tensor();
     forward_outputs.logits_tensor = Tensor();
     const Tensor& lm_weights = parameter_tensors.weights;
     const Tensor& lm_bias = parameter_tensors.bias;
@@ -118,6 +132,65 @@ void forwardLmHead(
     }
 
     // ════════════════════════════════════════════════════════════════════
+    // STEP 0.5: Optional head-side residual SwiGLU adapter (capacity expansion)
+    //
+    //   z    = current_input (RMSNorm output when gamma exists)
+    //   gate = SiLU(z @ mlp_W_gate)          [total_tokens, mlp_d_ff]
+    //   up   = z @ mlp_W_up                  [total_tokens, mlp_d_ff]
+    //   mlp  = (gate ⊙ up) @ mlp_W_down      [total_tokens, d_model]
+    //   u    = z + mlp_alpha * mlp           [total_tokens, d_model]
+    //
+    // The gate/silu/up/swiglu intermediates are retained on the forward sink
+    // because SiluGradFn and ElementwiseMulGradFn hold non-owning pointers into
+    // their input buffers (same contract as the encoder FFN retained tensors).
+    // u composes BEFORE the optional centering / PC1 chain below, so those
+    // interventions (when enabled) operate on the adapter-enriched state.
+    // ════════════════════════════════════════════════════════════════════
+
+    if (hp.mlp_enabled) {
+        const Tensor& mlp_W_gate = parameter_tensors.mlp_W_gate;
+        const Tensor& mlp_W_up = parameter_tensors.mlp_W_up;
+        const Tensor& mlp_W_down = parameter_tensors.mlp_W_down;
+        if (!mlp_W_gate.data || !mlp_W_up.data || !mlp_W_down.data) {
+            throw std::runtime_error("forwardLmHead: lm_head_mlp_enabled=true but adapter tensors are not initialized (mlp_W_gate/mlp_W_up/mlp_W_down)");
+        }
+        if (!mlp_W_gate.shape.is_2d_layout() || !mlp_W_up.shape.is_2d_layout() || !mlp_W_down.shape.is_2d_layout()) {
+            throw std::runtime_error("forwardLmHead: LM-head adapter weights must be 2D");
+        }
+        const auto gate_shape = mlp_W_gate.shape.as_2d();
+        const auto up_shape = mlp_W_up.shape.as_2d();
+        const auto down_shape = mlp_W_down.shape.as_2d();
+        if (gate_shape.rows != d_model || up_shape.rows != d_model ||
+            gate_shape.cols != down_shape.rows || up_shape.cols != down_shape.rows ||
+            down_shape.cols != d_model) {
+            throw std::runtime_error(
+                "forwardLmHead: LM-head adapter shape mismatch. W_gate=[" +
+                std::to_string(gate_shape.rows) + "," + std::to_string(gate_shape.cols) +
+                "] W_up=[" + std::to_string(up_shape.rows) + "," + std::to_string(up_shape.cols) +
+                "] W_down=[" + std::to_string(down_shape.rows) + "," + std::to_string(down_shape.cols) +
+                "] expected [d_model,mlp_d_ff]/[d_model,mlp_d_ff]/[mlp_d_ff,d_model] with d_model=" +
+                std::to_string(d_model));
+        }
+        if (!std::isfinite(hp.mlp_alpha) || hp.mlp_alpha <= 0.0f) {
+            throw std::runtime_error("forwardLmHead: lm_head_mlp_alpha must be positive finite, got " +
+                                     std::to_string(hp.mlp_alpha));
+        }
+
+        forward_outputs.lm_head_mlp_gate_out = autograd::matmul(*current_input, mlp_W_gate, stream);
+        forward_outputs.lm_head_mlp_silu_out = autograd::silu(
+            forward_outputs.lm_head_mlp_gate_out, stream,
+            forward_outputs.lm_head_mlp_gate_out.data);
+        forward_outputs.lm_head_mlp_up_out = autograd::matmul(*current_input, mlp_W_up, stream);
+        forward_outputs.lm_head_mlp_swiglu_out = autograd::elementwise_mul(
+            forward_outputs.lm_head_mlp_silu_out, forward_outputs.lm_head_mlp_up_out, stream);
+
+        Tensor mlp_down = autograd::matmul(forward_outputs.lm_head_mlp_swiglu_out, mlp_W_down, stream);
+        Tensor mlp_scaled = autograd::mul_scalar(mlp_down, hp.mlp_alpha, stream);
+        forward_outputs.lm_head_mlp_residual_out = autograd::add(*current_input, mlp_scaled, stream);
+        current_input = &forward_outputs.lm_head_mlp_residual_out;
+    }
+
+    // ════════════════════════════════════════════════════════════════════
     // STEP 1: Optional hidden-state geometry projection chain
     //
     //   Column centering h: Σ_t h[t,d] = 0 for each feature d   (Issue #125)
@@ -176,6 +249,10 @@ void forwardLmHead(
             forward_outputs.lm_head_input_tensor = std::move(normalized);
             matmul_input = &forward_outputs.lm_head_input_tensor;
         }
+        // When the adapter ran (hp.mlp_enabled), current_input already points at
+        // forward_outputs.lm_head_mlp_residual_out, which the sink retains;
+        // matmul_input == current_input needs no re-materialization here and
+        // liveLmHeadInputOrNull() resolves the residual as the live LM input.
     }
 
     // ════════════════════════════════════════════════════════════════════

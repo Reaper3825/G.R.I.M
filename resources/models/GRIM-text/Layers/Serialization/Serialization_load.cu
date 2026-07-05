@@ -521,6 +521,37 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
             Logging::EmitModuleError(kLogModule, "[load] LM head bias missing (model allocated a bias destination)");
             return false;
         }
+
+        // Head-side residual SwiGLU adapter (config.lm_head_mlp_enabled).
+        // Same presence-driven contract as the bias: a model that allocated the
+        // adapter must find it in the checkpoint (never silently re-initialize
+        // trained adapter weights); a checkpoint carrying an adapter the model
+        // dropped is skipped with a notice.
+        const bool ckpt_has_mlp = fb_lm_head->mlp_enabled()
+                               && fb_lm_head->mlp_w_gate_data()
+                               && fb_lm_head->mlp_w_up_data()
+                               && fb_lm_head->mlp_w_down_data();
+        if (request.lm_head.expect_mlp) {
+            if (!ckpt_has_mlp) {
+                Logging::EmitModuleError(kLogModule,
+                    "[load] LM head residual SwiGLU adapter missing in checkpoint "
+                    "(model allocated adapter destinations — lm_head_mlp_enabled)");
+                return false;
+            }
+            std::vector<float> mlp_gate_host(fb_lm_head->mlp_w_gate_data()->begin(), fb_lm_head->mlp_w_gate_data()->end());
+            if (!upload_device_vector(mlp_gate_host, request.lm_head.mlp_w_gate, "LM head mlp_W_gate"))
+                return false;
+            std::vector<float> mlp_up_host(fb_lm_head->mlp_w_up_data()->begin(), fb_lm_head->mlp_w_up_data()->end());
+            if (!upload_device_vector(mlp_up_host, request.lm_head.mlp_w_up, "LM head mlp_W_up"))
+                return false;
+            std::vector<float> mlp_down_host(fb_lm_head->mlp_w_down_data()->begin(), fb_lm_head->mlp_w_down_data()->end());
+            if (!upload_device_vector(mlp_down_host, request.lm_head.mlp_w_down, "LM head mlp_W_down"))
+                return false;
+        } else if (ckpt_has_mlp) {
+            Logging::EmitModuleInfo(kLogModule,
+                "[load] Checkpoint carries an LM-head SwiGLU adapter but lm_head_mlp_enabled "
+                "is off — adapter weights skipped");
+        }
     }
 
     // ─── NumberEncoder (gated by requires_number_encoder) ───

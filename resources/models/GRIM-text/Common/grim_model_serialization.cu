@@ -218,6 +218,27 @@ bool saveLanguageModelCheckpoint(
     request.sources.lm_head.bias.ptr = lm_head_parameters->bias.data;
     request.sources.lm_head.bias.count = lm_head_parameters->bias.data ? static_cast<std::size_t>(vocab_size) : 0;
 
+    // Head-side residual SwiGLU adapter (config.lm_head_mlp_enabled).
+    // Presence-driven like the bias: save whenever the model allocated the
+    // adapter tensors. mlp_d_ff comes from the live W_gate shape so the saved
+    // dimension always matches the serialized element counts.
+    const bool lm_head_has_mlp = lm_head_parameters->mlp_W_gate.data
+                              && lm_head_parameters->mlp_W_up.data
+                              && lm_head_parameters->mlp_W_down.data;
+    request.sources.lm_head.has_mlp = lm_head_has_mlp;
+    if (lm_head_has_mlp) {
+        request.sources.lm_head.mlp_d_ff =
+            lm_head_parameters->mlp_W_gate.shape.as_2d().cols;
+        request.sources.lm_head.mlp_w_gate.ptr = lm_head_parameters->mlp_W_gate.data;
+        request.sources.lm_head.mlp_w_gate.count = static_cast<std::size_t>(lm_head_parameters->mlp_W_gate.numel());
+        request.sources.lm_head.mlp_w_up.ptr = lm_head_parameters->mlp_W_up.data;
+        request.sources.lm_head.mlp_w_up.count = static_cast<std::size_t>(lm_head_parameters->mlp_W_up.numel());
+        request.sources.lm_head.mlp_w_down.ptr = lm_head_parameters->mlp_W_down.data;
+        request.sources.lm_head.mlp_w_down.count = static_cast<std::size_t>(lm_head_parameters->mlp_W_down.numel());
+        EmitModuleInfo(ModuleId::Checkpoint, "Processing LM head residual SwiGLU adapter (mlp_d_ff=" +
+                       std::to_string(request.sources.lm_head.mlp_d_ff) + ")");
+    }
+
     if (number_encoder_parameters) {
         auto assignReadTensor = [](DeviceReadView& v, const Tensor& t) {
             v.ptr = t.data;
@@ -525,6 +546,30 @@ bool loadLanguageModelCheckpoint(
     // drops a trained log p(v) bias.
     request.lm_head.expect_bias = (lm_head_parameters && lm_head_parameters->bias.data != nullptr);
 
+    // Head-side residual SwiGLU adapter destinations. Same presence-driven
+    // contract: when the model allocated the adapter, the checkpoint must
+    // provide it, so resume never silently re-initializes trained adapter
+    // weights back to the zero-W_down identity state.
+    if (lm_head_parameters && lm_head_parameters->mlp_W_gate.data) {
+        assignWrite(request.lm_head.mlp_w_gate,
+                    lm_head_parameters->mlp_W_gate.data,
+                    static_cast<std::size_t>(lm_head_parameters->mlp_W_gate.numel()));
+    }
+    if (lm_head_parameters && lm_head_parameters->mlp_W_up.data) {
+        assignWrite(request.lm_head.mlp_w_up,
+                    lm_head_parameters->mlp_W_up.data,
+                    static_cast<std::size_t>(lm_head_parameters->mlp_W_up.numel()));
+    }
+    if (lm_head_parameters && lm_head_parameters->mlp_W_down.data) {
+        assignWrite(request.lm_head.mlp_w_down,
+                    lm_head_parameters->mlp_W_down.data,
+                    static_cast<std::size_t>(lm_head_parameters->mlp_W_down.numel()));
+    }
+    request.lm_head.expect_mlp = (lm_head_parameters
+                                  && lm_head_parameters->mlp_W_gate.data != nullptr
+                                  && lm_head_parameters->mlp_W_up.data != nullptr
+                                  && lm_head_parameters->mlp_W_down.data != nullptr);
+
     if (number_encoder_parameters) {
         assignWrite(request.number_encoder.digit_emb,
                     number_encoder_parameters->digit_emb.data,
@@ -695,7 +740,9 @@ bool loadLanguageModelCheckpoint(
                 << " lm_proj=" << (request.lm_head.projection.ptr ? "set" : "NULL")
                 << "(" << request.lm_head.projection.count << ")"
                 << " lm_bias=" << (request.lm_head.bias.ptr ? "set" : "NULL")
-                << "(" << request.lm_head.bias.count << ")";
+                << "(" << request.lm_head.bias.count << ")"
+                << " lm_mlp=" << (request.lm_head.expect_mlp ? "set" : "NULL")
+                << "(" << request.lm_head.mlp_w_gate.count << ")";
             EmitModuleError(ModuleId::Checkpoint, oss.str());
         }
         {

@@ -44,10 +44,21 @@ struct EmbeddingParameterTensors {
 //   weights         [vocab_size, d_model] (tied to embedding when owns_weights=false)
 //   bias            [vocab_size] when config.use_bias=true
 //   final_rms_gamma [d_model] pre-LM-head normalization gain
+//
+// Head-side residual SwiGLU adapter (config.lm_head_mlp_enabled):
+//   u = z + alpha * ( SiLU(z @ mlp_W_gate) ⊙ (z @ mlp_W_up) ) @ mlp_W_down
+// where z = RMSNorm(encoder_output). alpha is the authored config scalar
+// lm_head_mlp_alpha (carried on LMHeadLayerConstructionHP, not a tensor).
+//   mlp_W_gate [d_model, lm_head_mlp_d_ff]
+//   mlp_W_up   [d_model, lm_head_mlp_d_ff]
+//   mlp_W_down [lm_head_mlp_d_ff, d_model]
 struct LMHeadParameterTensors {
     Tensor weights;
     Tensor bias;
     Tensor final_rms_gamma;
+    Tensor mlp_W_gate;
+    Tensor mlp_W_up;
+    Tensor mlp_W_down;
     bool owns_weights = true;
 };
 

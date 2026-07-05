@@ -414,6 +414,39 @@ bool validate_checkpoint_capabilities(
         if (!cross_check_view(load_req.final_rms_gamma, d_model, "final_rms_gamma")) return false;
     }
 
+    // ─── LM-head residual SwiGLU adapter (presence-driven, lm_head_mlp_enabled) ───
+    // When the model allocated adapter destinations the checkpoint must carry the
+    // adapter with matching dimensions; a checkpoint-only adapter (model dropped
+    // it) is legal and skipped at load time.
+    if (load_req.lm_head.expect_mlp) {
+        const auto* fb_lm = model_fb->lm_head();
+        if (!fb_lm || !fb_lm->mlp_enabled()) {
+            Logging::EmitModuleError(kLogModule,
+                "[load] FATAL: LM-head SwiGLU adapter required (lm_head_mlp_enabled) "
+                "but missing in checkpoint");
+            return false;
+        }
+        const std::size_t mlp_d_ff = static_cast<std::size_t>(fb_lm->mlp_d_ff());
+        if (mlp_d_ff == 0) {
+            Logging::EmitModuleError(kLogModule,
+                "[load] FATAL: LM-head SwiGLU adapter mlp_d_ff=0 in checkpoint");
+            return false;
+        }
+        // Gate/up are [d_model, mlp_d_ff] and down is [mlp_d_ff, d_model]:
+        // all three share the same element count.
+        const std::size_t mlp_weight_numel = d_model * mlp_d_ff;
+        if (!check_fb_vec_size(fb_lm->mlp_w_gate_data(), mlp_weight_numel, "lm_head.mlp_W_gate") ||
+            !check_fb_vec_size(fb_lm->mlp_w_up_data(), mlp_weight_numel, "lm_head.mlp_W_up") ||
+            !check_fb_vec_size(fb_lm->mlp_w_down_data(), mlp_weight_numel, "lm_head.mlp_W_down")) {
+            return false;
+        }
+        if (!cross_check_view(load_req.lm_head.mlp_w_gate, mlp_weight_numel, "lm_head.mlp_W_gate") ||
+            !cross_check_view(load_req.lm_head.mlp_w_up, mlp_weight_numel, "lm_head.mlp_W_up") ||
+            !cross_check_view(load_req.lm_head.mlp_w_down, mlp_weight_numel, "lm_head.mlp_W_down")) {
+            return false;
+        }
+    }
+
     return true;
 }
 

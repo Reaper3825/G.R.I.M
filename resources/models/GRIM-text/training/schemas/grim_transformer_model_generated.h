@@ -1090,6 +1090,11 @@ struct LMHeadWeightsT : public ::flatbuffers::NativeTable {
   uint32_t vocab_size = 0;
   bool tie_embeddings = false;
   bool use_bias = false;
+  std::vector<float> mlp_w_gate_data{};
+  std::vector<float> mlp_w_up_data{};
+  std::vector<float> mlp_w_down_data{};
+  uint32_t mlp_d_ff = 0;
+  bool mlp_enabled = false;
 };
 
 struct LMHeadWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -1101,7 +1106,12 @@ struct LMHeadWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_D_MODEL = 8,
     VT_VOCAB_SIZE = 10,
     VT_TIE_EMBEDDINGS = 12,
-    VT_USE_BIAS = 14
+    VT_USE_BIAS = 14,
+    VT_MLP_W_GATE_DATA = 16,
+    VT_MLP_W_UP_DATA = 18,
+    VT_MLP_W_DOWN_DATA = 20,
+    VT_MLP_D_FF = 22,
+    VT_MLP_ENABLED = 24
   };
   const ::flatbuffers::Vector<float> *projection_data() const {
     return GetPointer<const ::flatbuffers::Vector<float> *>(VT_PROJECTION_DATA);
@@ -1121,6 +1131,21 @@ struct LMHeadWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   bool use_bias() const {
     return GetField<uint8_t>(VT_USE_BIAS, 0) != 0;
   }
+  const ::flatbuffers::Vector<float> *mlp_w_gate_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_MLP_W_GATE_DATA);
+  }
+  const ::flatbuffers::Vector<float> *mlp_w_up_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_MLP_W_UP_DATA);
+  }
+  const ::flatbuffers::Vector<float> *mlp_w_down_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_MLP_W_DOWN_DATA);
+  }
+  uint32_t mlp_d_ff() const {
+    return GetField<uint32_t>(VT_MLP_D_FF, 0);
+  }
+  bool mlp_enabled() const {
+    return GetField<uint8_t>(VT_MLP_ENABLED, 0) != 0;
+  }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffset(verifier, VT_PROJECTION_DATA) &&
@@ -1131,6 +1156,14 @@ struct LMHeadWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint32_t>(verifier, VT_VOCAB_SIZE, 4) &&
            VerifyField<uint8_t>(verifier, VT_TIE_EMBEDDINGS, 1) &&
            VerifyField<uint8_t>(verifier, VT_USE_BIAS, 1) &&
+           VerifyOffset(verifier, VT_MLP_W_GATE_DATA) &&
+           verifier.VerifyVector(mlp_w_gate_data()) &&
+           VerifyOffset(verifier, VT_MLP_W_UP_DATA) &&
+           verifier.VerifyVector(mlp_w_up_data()) &&
+           VerifyOffset(verifier, VT_MLP_W_DOWN_DATA) &&
+           verifier.VerifyVector(mlp_w_down_data()) &&
+           VerifyField<uint32_t>(verifier, VT_MLP_D_FF, 4) &&
+           VerifyField<uint8_t>(verifier, VT_MLP_ENABLED, 1) &&
            verifier.EndTable();
   }
   LMHeadWeightsT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
@@ -1160,6 +1193,21 @@ struct LMHeadWeightsBuilder {
   void add_use_bias(bool use_bias) {
     fbb_.AddElement<uint8_t>(LMHeadWeights::VT_USE_BIAS, static_cast<uint8_t>(use_bias), 0);
   }
+  void add_mlp_w_gate_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> mlp_w_gate_data) {
+    fbb_.AddOffset(LMHeadWeights::VT_MLP_W_GATE_DATA, mlp_w_gate_data);
+  }
+  void add_mlp_w_up_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> mlp_w_up_data) {
+    fbb_.AddOffset(LMHeadWeights::VT_MLP_W_UP_DATA, mlp_w_up_data);
+  }
+  void add_mlp_w_down_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> mlp_w_down_data) {
+    fbb_.AddOffset(LMHeadWeights::VT_MLP_W_DOWN_DATA, mlp_w_down_data);
+  }
+  void add_mlp_d_ff(uint32_t mlp_d_ff) {
+    fbb_.AddElement<uint32_t>(LMHeadWeights::VT_MLP_D_FF, mlp_d_ff, 0);
+  }
+  void add_mlp_enabled(bool mlp_enabled) {
+    fbb_.AddElement<uint8_t>(LMHeadWeights::VT_MLP_ENABLED, static_cast<uint8_t>(mlp_enabled), 0);
+  }
   explicit LMHeadWeightsBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -1178,12 +1226,22 @@ inline ::flatbuffers::Offset<LMHeadWeights> CreateLMHeadWeights(
     uint32_t d_model = 0,
     uint32_t vocab_size = 0,
     bool tie_embeddings = false,
-    bool use_bias = false) {
+    bool use_bias = false,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> mlp_w_gate_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> mlp_w_up_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> mlp_w_down_data = 0,
+    uint32_t mlp_d_ff = 0,
+    bool mlp_enabled = false) {
   LMHeadWeightsBuilder builder_(_fbb);
+  builder_.add_mlp_d_ff(mlp_d_ff);
+  builder_.add_mlp_w_down_data(mlp_w_down_data);
+  builder_.add_mlp_w_up_data(mlp_w_up_data);
+  builder_.add_mlp_w_gate_data(mlp_w_gate_data);
   builder_.add_vocab_size(vocab_size);
   builder_.add_d_model(d_model);
   builder_.add_bias_data(bias_data);
   builder_.add_projection_data(projection_data);
+  builder_.add_mlp_enabled(mlp_enabled);
   builder_.add_use_bias(use_bias);
   builder_.add_tie_embeddings(tie_embeddings);
   return builder_.Finish();
@@ -1196,9 +1254,17 @@ inline ::flatbuffers::Offset<LMHeadWeights> CreateLMHeadWeightsDirect(
     uint32_t d_model = 0,
     uint32_t vocab_size = 0,
     bool tie_embeddings = false,
-    bool use_bias = false) {
+    bool use_bias = false,
+    const std::vector<float> *mlp_w_gate_data = nullptr,
+    const std::vector<float> *mlp_w_up_data = nullptr,
+    const std::vector<float> *mlp_w_down_data = nullptr,
+    uint32_t mlp_d_ff = 0,
+    bool mlp_enabled = false) {
   auto projection_data__ = projection_data ? _fbb.CreateVector<float>(*projection_data) : 0;
   auto bias_data__ = bias_data ? _fbb.CreateVector<float>(*bias_data) : 0;
+  auto mlp_w_gate_data__ = mlp_w_gate_data ? _fbb.CreateVector<float>(*mlp_w_gate_data) : 0;
+  auto mlp_w_up_data__ = mlp_w_up_data ? _fbb.CreateVector<float>(*mlp_w_up_data) : 0;
+  auto mlp_w_down_data__ = mlp_w_down_data ? _fbb.CreateVector<float>(*mlp_w_down_data) : 0;
   return GRIMTransformer::CreateLMHeadWeights(
       _fbb,
       projection_data__,
@@ -1206,7 +1272,12 @@ inline ::flatbuffers::Offset<LMHeadWeights> CreateLMHeadWeightsDirect(
       d_model,
       vocab_size,
       tie_embeddings,
-      use_bias);
+      use_bias,
+      mlp_w_gate_data__,
+      mlp_w_up_data__,
+      mlp_w_down_data__,
+      mlp_d_ff,
+      mlp_enabled);
 }
 
 ::flatbuffers::Offset<LMHeadWeights> CreateLMHeadWeights(::flatbuffers::FlatBufferBuilder &_fbb, const LMHeadWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
@@ -3632,6 +3703,11 @@ inline void LMHeadWeights::UnPackTo(LMHeadWeightsT *_o, const ::flatbuffers::res
   { auto _e = vocab_size(); _o->vocab_size = _e; }
   { auto _e = tie_embeddings(); _o->tie_embeddings = _e; }
   { auto _e = use_bias(); _o->use_bias = _e; }
+  { auto _e = mlp_w_gate_data(); if (_e) { _o->mlp_w_gate_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->mlp_w_gate_data[_i] = _e->Get(_i); } } else { _o->mlp_w_gate_data.resize(0); } }
+  { auto _e = mlp_w_up_data(); if (_e) { _o->mlp_w_up_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->mlp_w_up_data[_i] = _e->Get(_i); } } else { _o->mlp_w_up_data.resize(0); } }
+  { auto _e = mlp_w_down_data(); if (_e) { _o->mlp_w_down_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->mlp_w_down_data[_i] = _e->Get(_i); } } else { _o->mlp_w_down_data.resize(0); } }
+  { auto _e = mlp_d_ff(); _o->mlp_d_ff = _e; }
+  { auto _e = mlp_enabled(); _o->mlp_enabled = _e; }
 }
 
 inline ::flatbuffers::Offset<LMHeadWeights> LMHeadWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const LMHeadWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
@@ -3648,6 +3724,11 @@ inline ::flatbuffers::Offset<LMHeadWeights> CreateLMHeadWeights(::flatbuffers::F
   auto _vocab_size = _o->vocab_size;
   auto _tie_embeddings = _o->tie_embeddings;
   auto _use_bias = _o->use_bias;
+  auto _mlp_w_gate_data = _o->mlp_w_gate_data.size() ? _fbb.CreateVector(_o->mlp_w_gate_data) : 0;
+  auto _mlp_w_up_data = _o->mlp_w_up_data.size() ? _fbb.CreateVector(_o->mlp_w_up_data) : 0;
+  auto _mlp_w_down_data = _o->mlp_w_down_data.size() ? _fbb.CreateVector(_o->mlp_w_down_data) : 0;
+  auto _mlp_d_ff = _o->mlp_d_ff;
+  auto _mlp_enabled = _o->mlp_enabled;
   return GRIMTransformer::CreateLMHeadWeights(
       _fbb,
       _projection_data,
@@ -3655,7 +3736,12 @@ inline ::flatbuffers::Offset<LMHeadWeights> CreateLMHeadWeights(::flatbuffers::F
       _d_model,
       _vocab_size,
       _tie_embeddings,
-      _use_bias);
+      _use_bias,
+      _mlp_w_gate_data,
+      _mlp_w_up_data,
+      _mlp_w_down_data,
+      _mlp_d_ff,
+      _mlp_enabled);
 }
 
 inline NumericHeadWeightsT *NumericHeadWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {

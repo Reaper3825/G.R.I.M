@@ -290,6 +290,15 @@ public:
     std::vector<Tensor> encoder_layer_outputs;
     Tensor encoder_output_tensor;
     Tensor lm_head_input_tensor;
+    // LM-head residual SwiGLU adapter (config.lm_head_mlp_enabled) retained
+    // intermediates. gate/silu/up must survive until backward: SiluGradFn and
+    // ElementwiseMulGradFn hold non-owning pointers into their input buffers
+    // (same contract as the encoder FFN per-layer retained tensors).
+    Tensor lm_head_mlp_gate_out;      // [total_tokens, mlp_d_ff] z @ W_gate (SiLU backward cache)
+    Tensor lm_head_mlp_silu_out;      // [total_tokens, mlp_d_ff] SiLU(gate_out)
+    Tensor lm_head_mlp_up_out;        // [total_tokens, mlp_d_ff] z @ W_up
+    Tensor lm_head_mlp_swiglu_out;    // [total_tokens, mlp_d_ff] silu ⊙ up
+    Tensor lm_head_mlp_residual_out;  // [total_tokens, d_model] u = z + alpha * (swiglu @ W_down)
     Tensor logits_tensor;
     std::vector<Tensor> mtp_logits_tensors;
     Tensor latent_preset_mtp_hidden;        // [total_tokens, mtp_k * d_model] predicted hidden trajectory (shared hidden-trajectory projection of h[t])
@@ -345,6 +354,9 @@ public:
         if (lm_head_input_tensor.data) {
             return &lm_head_input_tensor;
         }
+        if (lm_head_mlp_residual_out.data) {
+            return &lm_head_mlp_residual_out;
+        }
         if (latent_preset_h_enhanced.data) {
             return &latent_preset_h_enhanced;
         }
@@ -357,6 +369,9 @@ public:
     const Tensor* liveLmHeadInputOrNull() const {
         if (lm_head_input_tensor.data) {
             return &lm_head_input_tensor;
+        }
+        if (lm_head_mlp_residual_out.data) {
+            return &lm_head_mlp_residual_out;
         }
         if (latent_preset_h_enhanced.data) {
             return &latent_preset_h_enhanced;
@@ -378,6 +393,11 @@ public:
         clearTensorVector(encoder_layer_outputs);
         encoder_output_tensor = Tensor();
         lm_head_input_tensor = Tensor();
+        lm_head_mlp_gate_out = Tensor();
+        lm_head_mlp_silu_out = Tensor();
+        lm_head_mlp_up_out = Tensor();
+        lm_head_mlp_swiglu_out = Tensor();
+        lm_head_mlp_residual_out = Tensor();
         logits_tensor = Tensor();
         clearTensorVector(mtp_logits_tensors);
         latent_preset_mtp_hidden = Tensor();

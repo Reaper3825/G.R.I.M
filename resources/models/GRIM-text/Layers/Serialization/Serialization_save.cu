@@ -272,12 +272,41 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         fb_lm_bias = builder.CreateVector(lm_bias);
     }
 
+    // Head-side residual SwiGLU adapter — presence-driven like the bias.
+    flatbuffers::Offset<flatbuffers::Vector<float>> fb_lm_mlp_gate = 0;
+    flatbuffers::Offset<flatbuffers::Vector<float>> fb_lm_mlp_up = 0;
+    flatbuffers::Offset<flatbuffers::Vector<float>> fb_lm_mlp_down = 0;
+    const bool save_lm_mlp = lm_head_view.has_mlp
+                          && lm_head_view.mlp_w_gate.ptr
+                          && lm_head_view.mlp_w_up.ptr
+                          && lm_head_view.mlp_w_down.ptr;
+    if (save_lm_mlp) {
+        auto mlp_gate = download_device_vector(lm_head_view.mlp_w_gate, "LM head mlp_W_gate");
+        if (mlp_gate.empty() && lm_head_view.mlp_w_gate.count > 0) return false;
+        fb_lm_mlp_gate = builder.CreateVector(mlp_gate);
+
+        auto mlp_up = download_device_vector(lm_head_view.mlp_w_up, "LM head mlp_W_up");
+        if (mlp_up.empty() && lm_head_view.mlp_w_up.count > 0) return false;
+        fb_lm_mlp_up = builder.CreateVector(mlp_up);
+
+        auto mlp_down = download_device_vector(lm_head_view.mlp_w_down, "LM head mlp_W_down");
+        if (mlp_down.empty() && lm_head_view.mlp_w_down.count > 0) return false;
+        fb_lm_mlp_down = builder.CreateVector(mlp_down);
+        Logging::EmitModuleInfo(kLogModule, Msg("[save] LM head residual SwiGLU adapter serialized (mlp_d_ff=",
+            lm_head_view.mlp_d_ff, ")"));
+    }
+
     auto fb_lm_head = GRIMTransformer::CreateLMHeadWeights(
         builder, fb_lm_proj, fb_lm_bias,
         static_cast<uint32_t>(cfg.d_model),
         static_cast<uint32_t>(cfg.vocab_size),
         cfg.tie_embeddings,
-        lm_head_view.has_bias && lm_head_view.bias.ptr != nullptr);
+        lm_head_view.has_bias && lm_head_view.bias.ptr != nullptr,
+        fb_lm_mlp_gate,
+        fb_lm_mlp_up,
+        fb_lm_mlp_down,
+        static_cast<uint32_t>(save_lm_mlp ? lm_head_view.mlp_d_ff : 0),
+        save_lm_mlp);
 
     flatbuffers::Offset<GRIMTransformer::NumberEncoderWeights> fb_number_encoder = 0;
     const auto& ne_view = request.sources.number_encoder;

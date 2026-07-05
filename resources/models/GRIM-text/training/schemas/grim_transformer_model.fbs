@@ -84,6 +84,14 @@ table LMHeadWeights {
   vocab_size: uint32;
   tie_embeddings: bool;
   use_bias: bool;
+  // Head-side residual SwiGLU adapter (config.lm_head_mlp_enabled):
+  //   u = z + alpha * (SiLU(z @ W_gate) ⊙ (z @ W_up)) @ W_down
+  // Appended after existing fields so pre-adapter checkpoints remain readable.
+  mlp_w_gate_data: [float];   // [d_model * mlp_d_ff]
+  mlp_w_up_data: [float];     // [d_model * mlp_d_ff]
+  mlp_w_down_data: [float];   // [mlp_d_ff * d_model]
+  mlp_d_ff: uint32;
+  mlp_enabled: bool;
 }
 
 table NumericHeadWeights {

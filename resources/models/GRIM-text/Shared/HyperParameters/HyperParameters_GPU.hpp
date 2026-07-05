@@ -487,6 +487,12 @@ struct LanguageModelConfig {
     bool center_logits = false;
     bool center_encoder_residuals = false;
 
+    // LM-head residual SwiGLU adapter (head capacity expansion):
+    //   u = z + lm_head_mlp_alpha * SwiGLU_MLP(z), z = RMSNorm(encoder_output)
+    bool lm_head_mlp_enabled = false;
+    int  lm_head_mlp_d_ff = 0;
+    float lm_head_mlp_alpha = 0.0f;
+
     HardcodedPattern hardcoded_hidden_pattern = HardcodedPattern::DISABLED;
     int hardcoded_log_every_n_batches = 0;
 
@@ -1484,6 +1490,14 @@ inline void validateRootConfigDocument(
             validationField("pc1_power_iters", &LanguageModelConfig::pc1_power_iters)
         }, caller);
     }
+    if (params.lm_head_mlp_enabled) {
+        validatePositiveFields(params, {
+            validationField("lm_head_mlp_d_ff", &LanguageModelConfig::lm_head_mlp_d_ff)
+        }, caller);
+        validatePositiveFiniteFields(params, {
+            validationField("lm_head_mlp_alpha", &LanguageModelConfig::lm_head_mlp_alpha)
+        }, caller);
+    }
     validateParameterGroupPrecision(params.parameter_precision_embedding, "parameter_precision_embedding", caller);
     validateParameterGroupPrecision(params.parameter_precision_lm_head, "parameter_precision_lm_head", caller);
     validateParameterGroupPrecision(params.parameter_precision_attention, "parameter_precision_attention", caller);
@@ -1984,6 +1998,9 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(loss_masking_tag);
     GRIM_LOAD_CONFIG_FIELD(lm_head_centering_enabled);
     GRIM_LOAD_CONFIG_FIELD(lm_head_center_hidden_states);
+    GRIM_LOAD_CONFIG_FIELD(lm_head_mlp_enabled);
+    GRIM_LOAD_CONFIG_FIELD(lm_head_mlp_d_ff);
+    GRIM_LOAD_CONFIG_FIELD(lm_head_mlp_alpha);
     GRIM_LOAD_CONFIG_FIELD(freeze_learned_rms_gammas);
     GRIM_LOAD_CONFIG_FIELD(center_logits);
     GRIM_LOAD_CONFIG_FIELD(center_encoder_residuals);
@@ -2424,6 +2441,9 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(value_match_epsilon);
     GRIM_WRITE_FINAL_CONFIG_FIELD(final_slot_consistency_weight);
     GRIM_WRITE_FINAL_CONFIG_FIELD(lm_head_center_hidden_states);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(lm_head_mlp_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(lm_head_mlp_d_ff);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(lm_head_mlp_alpha);
     GRIM_WRITE_FINAL_CONFIG_FIELD(freeze_learned_rms_gammas);
     GRIM_WRITE_FINAL_CONFIG_FIELD(project_out_pc1);
     GRIM_WRITE_FINAL_CONFIG_FIELD(pc1_power_iters);

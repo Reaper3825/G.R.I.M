@@ -384,6 +384,10 @@ struct LMHeadLayerConstructionHP {
     bool center_logits = false;
     bool freeze_learned_rms_gammas = false;
     float rms_epsilon = 0.0f;
+    // Head-side residual SwiGLU adapter: u = z + mlp_alpha * SwiGLU_MLP(z)
+    bool mlp_enabled = false;
+    int mlp_d_ff = 0;
+    float mlp_alpha = 0.0f;
 };
 
 struct ExecutionBlockConstructionHP {
@@ -535,6 +539,9 @@ struct ModelHP {
     bool lm_head_center_logits = false;
     bool lm_head_freeze_learned_rms_gammas = false;
     float lm_head_rms_epsilon = 0.0f;
+    bool lm_head_mlp_enabled = false;
+    int lm_head_mlp_d_ff = 0;
+    float lm_head_mlp_alpha = 0.0f;
 
     int atom_embedding_dim = 0;
 
@@ -1338,6 +1345,9 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.lm_head_center_logits = requireBool("center_logits");
     view.lm_head_freeze_learned_rms_gammas = requireBool("freeze_learned_rms_gammas");
     view.lm_head_rms_epsilon = EPSILON_RMSNORM;
+    view.lm_head_mlp_enabled = requireBool("lm_head_mlp_enabled");
+    view.lm_head_mlp_d_ff = requireInt("lm_head_mlp_d_ff");
+    view.lm_head_mlp_alpha = requireFloat("lm_head_mlp_alpha");
 
     view.atom_embedding_dim = requireInt("atom_embedding_dim");
 
@@ -1503,6 +1513,9 @@ inline LMHeadLayerConstructionHP lmHeadLayerConstructionHP(
     view.center_logits = model.lm_head_center_logits;
     view.freeze_learned_rms_gammas = model.lm_head_freeze_learned_rms_gammas;
     view.rms_epsilon = model.lm_head_rms_epsilon;
+    view.mlp_enabled = model.lm_head_mlp_enabled;
+    view.mlp_d_ff = model.lm_head_mlp_d_ff;
+    view.mlp_alpha = model.lm_head_mlp_alpha;
     return view;
 }
 

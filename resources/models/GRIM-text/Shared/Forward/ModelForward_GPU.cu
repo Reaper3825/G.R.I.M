@@ -343,6 +343,15 @@ GRIM::LMHeadParameterTensors detachLmHeadParameters(
     if (parameters.final_rms_gamma.data) {
         detached.final_rms_gamma = parameters.final_rms_gamma.detach(stream);
     }
+    if (parameters.mlp_W_gate.data) {
+        detached.mlp_W_gate = parameters.mlp_W_gate.detach(stream);
+    }
+    if (parameters.mlp_W_up.data) {
+        detached.mlp_W_up = parameters.mlp_W_up.detach(stream);
+    }
+    if (parameters.mlp_W_down.data) {
+        detached.mlp_W_down = parameters.mlp_W_down.detach(stream);
+    }
     return detached;
 }
 
