@@ -572,7 +572,9 @@ GRIM::Forward::ModelForwardRequest buildTrainingForwardRequest(
     request.payload = &payload;
     request.bindings = &bindings;
     request.batch_idx = batch_idx;
-    if (emit_mtp_logits) {
+    // Latent-trajectory MTP mode has no standalone head parameters: MTP logits
+    // come from latent_preset_mtp_hidden slices through the shared LM head.
+    if (emit_mtp_logits && !GRIM::HyperParameters::mtpUsesLatentTrajectoryLogits(config)) {
         request.mtp_heads = buildConnectedForwardMtpHeadViews(
             parameter_registry,
             mtp_k,
@@ -1198,10 +1200,11 @@ ValidationResult runValidation(TrainingContext& ctx) {
         forward_request.payload = &val_payload;
         forward_request.bindings = &val_bindings;
         forward_request.batch_idx = static_cast<uint64_t>(val_idx);
-        if (emit_mtp_logits) {
+        if (emit_mtp_logits && !GRIM::HyperParameters::mtpUsesLatentTrajectoryLogits(ctx.config)) {
             // Forward-only: connect_parameter_graph=false below means these views'
             // shared grads are never written (no backward). Safe to reuse the
             // training-side builder; the grad aliasing is inert during eval.
+            // (Latent-trajectory MTP mode provides no standalone head views.)
             forward_request.mtp_heads = buildConnectedForwardMtpHeadViews(
                 ctx.parameter_registry, mtp_k, stream);
         }

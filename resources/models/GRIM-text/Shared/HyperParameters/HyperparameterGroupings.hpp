@@ -1640,6 +1640,20 @@ inline MTPDiagnosticHP mtpDiagnosticHP(
     return view;
 }
 
+// True when MTP supervision consumes the latent-trajectory predicted future
+// hidden states (latent_preset_mtp_hidden slice k) projected through the
+// SHARED LM head, instead of standalone per-horizon MTP head parameters.
+// In this mode the standalone MTP heads are never assembled, registered,
+// initialized, or serialized — the MTP CE gradient flows through
+// W_hidden_traj into the trunk, coupling the trajectory objective to
+// token-space future prediction.
+inline bool mtpUsesLatentTrajectoryLogits(const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    const auto mtp = mtpFeatureHP(snapshot);
+    const auto latent = latentTrajectoryPresetHP(snapshot);
+    return mtp.enabled && mtp.k > 0 && latent.enabled && latent.use_mtp_logits;
+}
+
 inline GenerationHP generationHP(const LanguageModelConfig& cfg)
 {
     GenerationHP view;

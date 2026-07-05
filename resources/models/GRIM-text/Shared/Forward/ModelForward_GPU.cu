@@ -128,6 +128,9 @@ Tensor viewCommittedTensor(const Tensor& owned,
 void materializeForwardMtpLogits(
     const ModelForwardRequest& request,
     const Batching::BatchPayload& payload,
+    const HyperParameters::LMHeadLayerConstructionHP& lm_head_hp,
+    const GRIM::LMHeadParameterTensors& lm_head_parameters,
+    const HyperParameters::LatentTrajectoryPresetHP& latent_preset_hp,
     ModelForwardOutputs& forward_outputs) {
     forward_outputs.mtp_logits_tensors.clear();
     if (!request.graph.emit_mtp_logits) {
@@ -139,6 +142,79 @@ void materializeForwardMtpLogits(
     if (!mtp_enabled || mtp_k <= 0) {
         throw std::runtime_error("executeModelForward: graph.emit_mtp_logits=true but config MTP is disabled");
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Latent-trajectory MTP logits (latent_trajectory_preset_use_mtp_logits):
+    // head k logits = LM-head projection of the k-th predicted future hidden
+    // state, latent_preset_mtp_hidden[:, k*d_model : (k+1)*d_model].
+    //
+    // Uses the SHARED LM head (final RMSNorm gamma, W_lm^T, bias) instead of
+    // standalone per-horizon MTP heads, so the MTP CE gradient flows back
+    // through W_hidden_traj into the trunk — coupling the latent trajectory
+    // objective to token-space future prediction. The head-side SwiGLU
+    // adapter / centering / PC1 interventions are intentionally NOT applied
+    // to the predicted-future slices; they are trunk-state interventions.
+    // ═══════════════════════════════════════════════════════════════════════
+    if (latent_preset_hp.enabled && latent_preset_hp.use_mtp_logits) {
+        if (!request.mtp_heads.empty()) {
+            throw std::runtime_error("executeModelForward: request.mtp_heads must be empty when "
+                "latent_trajectory_preset_use_mtp_logits=true (MTP logits use the shared LM head)");
+        }
+        Tensor& trajectory = forward_outputs.latent_preset_mtp_hidden;
+        if (!trajectory.data) {
+            throw std::runtime_error("executeModelForward: latent_preset_mtp_hidden is NULL — "
+                "latent trajectory activations must be materialized before MTP logits");
+        }
+        const int d_model = latent_preset_hp.d_model;
+        const auto& traj_shape = requireTensor2DShape(trajectory, "executeModelForward", "latent_preset_mtp_hidden");
+        if (traj_shape.rows != payload.total_tokens ||
+            traj_shape.cols != mtp_k * d_model) {
+            throw std::runtime_error("executeModelForward: latent_preset_mtp_hidden shape=[" +
+                std::to_string(traj_shape.rows) + "," + std::to_string(traj_shape.cols) +
+                "] expected=[" + std::to_string(payload.total_tokens) + "," +
+                std::to_string(mtp_k * d_model) + "]");
+        }
+        if (!lm_head_parameters.weights.data) {
+            throw std::runtime_error("executeModelForward: LM head weights are NULL for latent MTP logits");
+        }
+
+        forward_outputs.mtp_logits_tensors.reserve(static_cast<size_t>(mtp_k));
+        for (int k = 0; k < mtp_k; ++k) {
+            Tensor future_hidden_k = autograd::slice_columns(
+                trajectory,
+                k * d_model,
+                d_model,
+                request.stream);
+            // Mirror the main head's pre-projection normalization so the
+            // predicted future hidden states are scored in the same geometry
+            // as live hidden states.
+            if (lm_head_parameters.final_rms_gamma.data) {
+                future_hidden_k = autograd::rms_norm(
+                    future_hidden_k,
+                    lm_head_parameters.final_rms_gamma,
+                    lm_head_hp.rms_epsilon,
+                    request.stream);
+            }
+            Tensor logits_k = autograd::matmul(
+                future_hidden_k,
+                lm_head_parameters.weights,
+                request.stream,
+                true);  // transpose_b: logits = h_future @ W_lm^T
+            if (lm_head_parameters.bias.data) {
+                logits_k = autograd::broadcast_add(logits_k, lm_head_parameters.bias, request.stream);
+            }
+            const auto& logits_shape = requireTensor2DShape(logits_k, "executeModelForward", "latent MTP head logits");
+            if (logits_shape.rows != payload.total_tokens || logits_shape.cols != payload.vocab_size) {
+                throw std::runtime_error("executeModelForward: latent MTP head " + std::to_string(k) +
+                    " logits shape=[" + std::to_string(logits_shape.rows) + "," + std::to_string(logits_shape.cols) +
+                    "] does not match payload [total_tokens=" + std::to_string(payload.total_tokens) +
+                    ", vocab_size=" + std::to_string(payload.vocab_size) + "]");
+            }
+            forward_outputs.mtp_logits_tensors.push_back(std::move(logits_k));
+        }
+        return;
+    }
+
     if (static_cast<int>(request.mtp_heads.size()) != mtp_k) {
         throw std::runtime_error("executeModelForward: request.mtp_heads.size()=" +
             std::to_string(request.mtp_heads.size()) + " != config.mtp_k=" + std::to_string(mtp_k));
@@ -598,7 +674,14 @@ void ModelForwardRequest::validate(const char* caller) const {
         if (!mtp_enabled || mtp_k <= 0) {
             throw std::runtime_error(std::string(caller) + ": graph.emit_mtp_logits=true while config MTP is disabled");
         }
-        if (static_cast<int>(mtp_heads.size()) != mtp_k) {
+        if (HyperParameters::mtpUsesLatentTrajectoryLogits(*config)) {
+            // Latent-trajectory MTP mode: logits come from the shared LM head,
+            // standalone MTP head views must not be provided.
+            if (!mtp_heads.empty()) {
+                throw std::runtime_error(std::string(caller) + ": mtp_heads must be empty when "
+                    "latent_trajectory_preset_use_mtp_logits=true (MTP logits use the shared LM head)");
+            }
+        } else if (static_cast<int>(mtp_heads.size()) != mtp_k) {
             throw std::runtime_error(std::string(caller) + ": mtp_heads.size()=" +
                                      std::to_string(mtp_heads.size()) + " != config.mtp_k=" +
                                      std::to_string(mtp_k));
@@ -1141,7 +1224,13 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
         throw std::runtime_error("ModelForward: LM-head input snapshot is NULL after LMHeadLayer::forward");
     }
 
-    materializeForwardMtpLogits(request, payload, forward_outputs);
+    materializeForwardMtpLogits(
+        request,
+        payload,
+        lm_head_hp,
+        *lm_head_parameter_ptr,
+        latent_preset_hp,
+        forward_outputs);
     materializeForwardSelectorLogits(request, payload, forward_outputs);
 
     if constexpr (GRIM::VerboseLogging::ENABLE_EXPENSIVE_DIAGNOSTICS) {

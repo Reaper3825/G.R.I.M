@@ -1508,6 +1508,15 @@ Tensor softmax(const Tensor& x, float temperature = 1.0f, cudaStream_t stream = 
 Tensor concat(const Tensor& a, const Tensor& b, cudaStream_t stream = nullptr);
 
 /**
+ * Slice a contiguous block of columns from a 2D tensor.
+ * Input:  x [N, D], slice window [col_offset, col_offset + out_cols)
+ * Output: [N, out_cols]
+ * Backward scatters the gradient back into the sliced columns (zero elsewhere).
+ * Creates SliceColumnsGradFn if input requires_grad
+ */
+Tensor slice_columns(const Tensor& x, int col_offset, int out_cols, cudaStream_t stream = nullptr);
+
+/**
  * Cross-entropy loss from logits (stable log-sum-exp formulation).
  * Input:  logits [1, num_classes] — raw scores (NOT probabilities)
  * Target: single integer class index in [0, num_classes)

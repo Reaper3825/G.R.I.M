@@ -129,7 +129,9 @@ bool saveLanguageModelCheckpoint(
     const int d_ff_i = HyperParameters::snapshotTrainingConfigField<int>(config, "d_ff");
     const int head_dim = HyperParameters::snapshotTrainingConfigField<int>(config, "head_dim");
     const bool mtp_enabled = HyperParameters::snapshotTrainingConfigField<bool>(config, "mtp_enabled");
-    const int mtp_k = mtp_enabled
+    // Latent-trajectory MTP mode has no standalone MTP head tensors, so no
+    // ".mtp" sidecar is written (the shared LM head lives in the checkpoint).
+    const int mtp_k = (mtp_enabled && !HyperParameters::mtpUsesLatentTrajectoryLogits(config))
         ? HyperParameters::snapshotTrainingConfigField<int>(config, "mtp_k")
         : 0;
     auto* embedding_parameters = parameter_registry.getEmbeddingParameters();
@@ -442,7 +444,9 @@ bool loadLanguageModelCheckpoint(
     const bool use_gpu = HyperParameters::snapshotTrainingConfigField<bool>(config, "use_gpu");
     const bool tie_embeddings = HyperParameters::snapshotTrainingConfigField<bool>(config, "tie_embeddings");
     const bool mtp_enabled = HyperParameters::snapshotTrainingConfigField<bool>(config, "mtp_enabled");
-    const int mtp_k = mtp_enabled
+    // Latent-trajectory MTP mode has no standalone MTP head tensors, so no
+    // ".mtp" sidecar is read (the shared LM head lives in the checkpoint).
+    const int mtp_k = (mtp_enabled && !HyperParameters::mtpUsesLatentTrajectoryLogits(config))
         ? HyperParameters::snapshotTrainingConfigField<int>(config, "mtp_k")
         : 0;
     auto* embedding_parameters = parameter_registry.getEmbeddingParameters();
