@@ -804,6 +804,15 @@ BatchResult processBatch(
             " — scheduler produced batch_size=0; fix the upstream filter");
     }
 
+    // Peak-memory sample BEFORE this batch's forward graph is allocated. The
+    // previous batch's forward_outputs/loss_state were already cleared at that
+    // batch's processBatch scope exit, so device_used here is the persistent
+    // static floor: params + grads + optimizer state + CUDA context +
+    // cuBLAS/FlashAttention workspace + durable TrainingState buffers. Compared
+    // against the post_forward / post_backward samples this attributes the
+    // per-step retained forward graph vs. the static baseline.
+    updatePeakGpuMemory(ctx, batch_idx, "pre_forward");
+
     // beginBatch() must run EVERY BatchPayload pass to clear previous entries;
     // otherwise accumulation slots 1+ inherit stale entries.
     GRIM::GradStats::beginBatch();
