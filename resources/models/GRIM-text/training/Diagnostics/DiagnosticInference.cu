@@ -36,8 +36,6 @@
 namespace GRIMText::Training {
 namespace {
 
-constexpr int kDefaultInferenceDiagnosticInterval = 10;
-
 //------------------------------------------------------
 //  Environment helpers (self-contained, no Phase2 deps)
 //------------------------------------------------------
@@ -72,18 +70,19 @@ std::string trimSampleText(const std::string& text, std::size_t max_chars) {
 //  logDiagnosticSample — public entry point
 //======================================================//
 
-void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state) {
-    const auto runtime_hp =
-        GRIM::HyperParameters::trainingRuntimeControlHP(ctx.config);
-    const int default_interval = std::max(runtime_hp.log_interval,
-                                          kDefaultInferenceDiagnosticInterval);
-    const int interval = readEnvInt("GRIM_SAMPLE_INTERVAL", default_interval);
-    if (interval <= 0) {
+void logDiagnosticSample(TrainingContext& ctx,
+                         TrainingLoopState& state,
+                         bool inference_diagnostic_enabled,
+                         int inference_diagnostic_interval) {
+    if (!inference_diagnostic_enabled) {
         return;
+    }
+    if (inference_diagnostic_interval <= 0) {
+        throw std::runtime_error("logDiagnosticSample: inference_diagnostic_interval must be > 0 when inference_diagnostic_enabled=true");
     }
 
     const int optimizer_step = ctx.optimizer.optimizer_step.step;
-    if (optimizer_step <= 0 || optimizer_step % interval != 0 || optimizer_step == state.last_sample_step) {
+    if (optimizer_step <= 0 || optimizer_step % inference_diagnostic_interval != 0 || optimizer_step == state.last_sample_step) {
         return;
     }
     state.last_sample_step = optimizer_step;

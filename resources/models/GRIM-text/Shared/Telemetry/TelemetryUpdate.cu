@@ -352,7 +352,11 @@ void logIntervalTelemetry(
         GRIM::Diagnostics::runMtpDiagnostic(ctx, batch_result);
     }
 
-    GRIMText::Training::logDiagnosticSample(ctx, state);
+    GRIMText::Training::logDiagnosticSample(
+        ctx,
+        state,
+        runtime_hp.inference_diagnostic_enabled,
+        runtime_hp.inference_diagnostic_interval);
 }
 
 //======================================================//

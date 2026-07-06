@@ -593,6 +593,8 @@ struct LanguageModelConfig {
     int log_interval = 0;
     int atom_stats_interval = 0;
     int atom_stats_max_seqs = 0;
+    bool inference_diagnostic_enabled = false;
+    int inference_diagnostic_interval = 0;
     int validation_interval = 0;
     int checkpoint_interval = 0;
 
@@ -1887,6 +1889,8 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(log_interval);
     GRIM_LOAD_CONFIG_FIELD(atom_stats_interval);
     GRIM_LOAD_CONFIG_FIELD(atom_stats_max_seqs);
+    GRIM_LOAD_CONFIG_FIELD(inference_diagnostic_enabled);
+    GRIM_LOAD_CONFIG_FIELD(inference_diagnostic_interval);
     GRIM_LOAD_CONFIG_FIELD(validation_interval);
     GRIM_LOAD_CONFIG_FIELD(checkpoint_interval);
     GRIM_LOAD_CONFIG_FIELD(use_gpu);
@@ -2536,6 +2540,8 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(log_interval);
     GRIM_WRITE_FINAL_CONFIG_FIELD(atom_stats_interval);
     GRIM_WRITE_FINAL_CONFIG_FIELD(atom_stats_max_seqs);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(inference_diagnostic_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(inference_diagnostic_interval);
     GRIM_WRITE_FINAL_CONFIG_FIELD(validation_interval);
     GRIM_WRITE_FINAL_CONFIG_FIELD(checkpoint_interval);
     GRIM_WRITE_FINAL_CONFIG_FIELD(soft_restart_enabled);

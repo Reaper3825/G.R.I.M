@@ -524,6 +524,8 @@
             "hardcoded_hidden_states_enabled": false,
             "hardcoded_hidden_states_pattern": "disabled",
             "hardcoded_log_every_n_batches": 1,
+            "inference_diagnostic_enabled": false,
+            "inference_diagnostic_interval": 10,
             "latent_trajectory_preset_enabled": true,
             "latent_trajectory_preset_gate_bias_init": -3.0,
             "latent_trajectory_preset_lambda_consistency": 0.0,

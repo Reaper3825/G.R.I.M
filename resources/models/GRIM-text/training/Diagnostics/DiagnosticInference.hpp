@@ -32,6 +32,9 @@ namespace GRIMText::Training {
 /// SAFETY: This function does NOT modify any model weight tensors,
 /// gradient buffers, or optimizer state. Inference paths use no training
 /// backward pass and keep generation state separate from optimizer state.
-void logDiagnosticSample(TrainingContext& ctx, TrainingLoopState& state);
+void logDiagnosticSample(TrainingContext& ctx,
+                         TrainingLoopState& state,
+                         bool inference_diagnostic_enabled,
+                         int inference_diagnostic_interval);
 
 }  // namespace GRIMText::Training

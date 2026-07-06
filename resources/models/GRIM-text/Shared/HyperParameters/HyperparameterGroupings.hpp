@@ -207,6 +207,8 @@ struct TrainingRuntimeControlHP {
     int log_interval = 0;
     int atom_stats_interval = 0;
     int atom_stats_max_seqs = 0;
+    bool inference_diagnostic_enabled = false;
+    int inference_diagnostic_interval = 0;
     int validation_interval = 0;
     int checkpoint_interval = 0;
     bool logit_update_trace_enabled = false;
@@ -808,6 +810,8 @@ inline TrainingRuntimeControlHP trainingRuntimeControlHP(
     view.log_interval = hp.log_interval;
     view.atom_stats_interval = hp.atom_stats_interval;
     view.atom_stats_max_seqs = hp.atom_stats_max_seqs;
+    view.inference_diagnostic_enabled = hp.inference_diagnostic_enabled;
+    view.inference_diagnostic_interval = hp.inference_diagnostic_interval;
     view.validation_interval = hp.validation_interval;
     view.checkpoint_interval = hp.checkpoint_interval;
     view.logit_update_trace_enabled = hp.logit_update_trace_enabled;
@@ -1168,6 +1172,8 @@ inline TrainingRuntimeControlHP trainingRuntimeControlHP(
     view.log_interval = snapshotTrainingConfigField<int>(snapshot, "log_interval");
     view.atom_stats_interval = snapshotTrainingConfigField<int>(snapshot, "atom_stats_interval");
     view.atom_stats_max_seqs = snapshotTrainingConfigField<int>(snapshot, "atom_stats_max_seqs");
+    view.inference_diagnostic_enabled = snapshotTrainingConfigField<bool>(snapshot, "inference_diagnostic_enabled");
+    view.inference_diagnostic_interval = snapshotTrainingConfigField<int>(snapshot, "inference_diagnostic_interval");
     view.validation_interval = snapshotTrainingConfigField<int>(snapshot, "validation_interval");
     view.checkpoint_interval = snapshotTrainingConfigField<int>(snapshot, "checkpoint_interval");
     view.logit_update_trace_enabled = snapshotTrainingConfigField<bool>(snapshot, "logit_update_trace_enabled");
