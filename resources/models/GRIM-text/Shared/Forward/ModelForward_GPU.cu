@@ -212,6 +212,9 @@ void materializeForwardMtpLogits(
             }
             forward_outputs.mtp_logits_tensors.push_back(std::move(logits_k));
         }
+        if (!latent_preset_hp.use_mtp_hidden) {
+            forward_outputs.latent_preset_mtp_hidden = Tensor();
+        }
         return;
     }
 

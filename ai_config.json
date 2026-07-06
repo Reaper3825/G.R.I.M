@@ -537,7 +537,7 @@
             "latent_trajectory_preset_use_diversity_loss": true,
             "latent_trajectory_preset_use_entropy": true,
             "latent_trajectory_preset_use_gate_sparsity_loss": true,
-            "latent_trajectory_preset_use_mtp_hidden": true,
+            "latent_trajectory_preset_use_mtp_hidden": false,
             "latent_trajectory_preset_use_mtp_logits": true,
             "latent_trajectory_preset_use_token_mean": true,
             "layer_scale_init": 1.0,
