@@ -134,27 +134,111 @@ struct ProcessBatchStepStateClearScope {
     ProcessBatchStepStateClearScope& operator=(const ProcessBatchStepStateClearScope&) = delete;
 };
 
-// Update the run-level peak GPU-memory high-water mark.
-//
-// cudaMemGetInfo is a non-synchronizing driver query (~microseconds): it reports
-// device-wide used = total - free without stalling the async kernel pipeline, so
-// sampling it a couple of times per batch is negligible next to a forward+backward
-// step. We track device-wide usage so the number is directly comparable to the
-// startup "memory.gpu.used" line. Observability only — a failed query must never
-// take down a training step, so on error we drain and skip this sample.
-void updatePeakGpuMemory(TrainingContext& ctx) {
+// Device-wide usage plus stream-ordered (cudaMallocAsync/cudaFreeAsync) default
+// memory-pool accounting. All queries here are non-synchronizing driver calls.
+struct GpuMemoryBreakdown {
+    std::uint64_t device_used = 0;
+    std::uint64_t device_total = 0;
+    std::uint64_t pool_reserved_current = 0;  // bytes the async pool holds from the OS
+    std::uint64_t pool_reserved_high = 0;
+    std::uint64_t pool_used_current = 0;       // bytes currently handed out by the pool
+    std::uint64_t pool_used_high = 0;
+    bool pool_ok = false;
+};
+
+bool queryGpuMemoryBreakdown(GpuMemoryBreakdown& out) {
     size_t free_bytes = 0;
     size_t total_bytes = 0;
-    const cudaError_t err = cudaMemGetInfo(&free_bytes, &total_bytes);
-    if (err != cudaSuccess) {
+    if (cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess) {
         (void)cudaGetLastError();  // don't let it masquerade as a later kernel fault
+        return false;
+    }
+    out.device_total = static_cast<std::uint64_t>(total_bytes);
+    out.device_used = static_cast<std::uint64_t>(total_bytes - free_bytes);
+
+    int device = 0;
+    cudaMemPool_t pool = nullptr;
+    if (cudaGetDevice(&device) == cudaSuccess &&
+        cudaDeviceGetDefaultMemPool(&pool, device) == cudaSuccess && pool != nullptr) {
+        unsigned long long value = 0;
+        auto readAttr = [&](cudaMemPoolAttr attr, std::uint64_t& dst) {
+            value = 0;
+            if (cudaMemPoolGetAttribute(pool, attr, &value) == cudaSuccess) {
+                dst = static_cast<std::uint64_t>(value);
+            }
+        };
+        readAttr(cudaMemPoolAttrReservedMemCurrent, out.pool_reserved_current);
+        readAttr(cudaMemPoolAttrReservedMemHigh, out.pool_reserved_high);
+        readAttr(cudaMemPoolAttrUsedMemCurrent, out.pool_used_current);
+        readAttr(cudaMemPoolAttrUsedMemHigh, out.pool_used_high);
+        out.pool_ok = true;
+    } else {
+        (void)cudaGetLastError();
+    }
+    return true;
+}
+
+int gpuMemoryLogInterval() {
+    if (const char* raw = std::getenv("GRIM_GPU_MEM_INTERVAL")) {
+        const int parsed = std::atoi(raw);
+        if (parsed > 0) {
+            return parsed;
+        }
+    }
+    return 50;  // default: emit a breakdown line every 50 batches (plus the first)
+}
+
+// Update the run-level peak GPU-memory high-water mark AND, at a modest interval,
+// emit an informative [GPU_MEM] breakdown that splits device-used into async-pool
+// reserved vs. non-pool bytes. This is the measurement that turns the previously
+// "unaccounted" VRAM gap (VRAM_BREAKDOWN.md) into a tracked number: pool retention
+// / fragmentation (async_pool_retained) vs. real working set (non_pool_used).
+//
+// cudaMemGetInfo and the pool-attribute queries are non-synchronizing driver calls
+// (~microseconds), so sampling twice per batch is negligible next to forward+backward.
+// Observability only — a failed query must never take down a training step.
+void updatePeakGpuMemory(TrainingContext& ctx, int batch_idx, const char* phase) {
+    GpuMemoryBreakdown mem;
+    if (!queryGpuMemoryBreakdown(mem)) {
         return;
     }
-    const std::uint64_t used = static_cast<std::uint64_t>(total_bytes - free_bytes);
-    if (used > ctx.peak_gpu_used_bytes) {
-        ctx.peak_gpu_used_bytes = used;
+    if (mem.device_used > ctx.peak_gpu_used_bytes) {
+        ctx.peak_gpu_used_bytes = mem.device_used;
     }
-    ctx.gpu_total_bytes = static_cast<std::uint64_t>(total_bytes);
+    ctx.gpu_total_bytes = mem.device_total;
+
+    const int interval = gpuMemoryLogInterval();
+    const bool should_log = (batch_idx == 0) || (((batch_idx + 1) % interval) == 0);
+    if (!should_log || !ctx.logging.logger) {
+        return;
+    }
+
+    constexpr double kMiB = 1024.0 * 1024.0;
+    const double total_for_pct = static_cast<double>(mem.device_total > 0 ? mem.device_total : 1);
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(1)
+        << "[GPU_MEM] batch=" << (batch_idx + 1)
+        << " phase=" << (phase ? phase : "unknown")
+        << " device_used=" << (mem.device_used / kMiB) << "MiB"
+        << " device_total=" << (mem.device_total / kMiB) << "MiB"
+        << " device_used_pct=" << (100.0 * static_cast<double>(mem.device_used) / total_for_pct)
+        << " peak_used=" << (ctx.peak_gpu_used_bytes / kMiB) << "MiB";
+    if (mem.pool_ok) {
+        const std::uint64_t non_pool = (mem.device_used > mem.pool_reserved_current)
+            ? (mem.device_used - mem.pool_reserved_current)
+            : 0;
+        const std::uint64_t pool_retained = (mem.pool_reserved_current > mem.pool_used_current)
+            ? (mem.pool_reserved_current - mem.pool_used_current)
+            : 0;
+        oss << " async_pool_reserved=" << (mem.pool_reserved_current / kMiB) << "MiB"
+            << " async_pool_reserved_high=" << (mem.pool_reserved_high / kMiB) << "MiB"
+            << " async_pool_in_use=" << (mem.pool_used_current / kMiB) << "MiB"
+            << " async_pool_retained=" << (pool_retained / kMiB) << "MiB"
+            << " non_pool_used=" << (non_pool / kMiB) << "MiB";
+    } else {
+        oss << " async_pool=unavailable";
+    }
+    ctx.logging.logger->log(oss.str());
 }
 
 int validatedAccumulationSteps(const TrainingContext& ctx) {
@@ -820,7 +904,7 @@ BatchResult processBatch(
     // Peak-memory sample: with all forward activations live alongside the
     // persistent params / grad buffers / optimizer state, this brackets the high
     // end of the step (backward then frees activations as it fills grads).
-    updatePeakGpuMemory(ctx);
+    updatePeakGpuMemory(ctx, batch_idx, "post_forward");
     // Rule 20 ownership taxonomy: processBatch owns the single batch-boundary
     // clear path for the active forward/loss step-state. Do NOT add a second
     // explicit clear() site inside this function.
@@ -897,7 +981,7 @@ BatchResult processBatch(
     // Peak-memory sample: captures any backward-only transient (reduction
     // scratch, etc.) the post-forward sample missed. The high-water mark keeps
     // whichever bracket is larger.
-    updatePeakGpuMemory(ctx);
+    updatePeakGpuMemory(ctx, batch_idx, "post_backward");
 
     result.loss = loss_result.loss_value;
     result.text_loss = loss_result.text_loss;
