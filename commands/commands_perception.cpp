@@ -1,7 +1,6 @@
 #include "commands_perception.hpp"
 #include "perception/perception.hpp"
 #include "perception/perception_context.hpp"
-#include "response_manager.hpp"
 #include "error_manager.hpp"
 #include "logger.hpp"
 #include <sstream>

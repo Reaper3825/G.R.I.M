@@ -1,5 +1,4 @@
 #include "commands_memory.hpp"
-#include "response_manager.hpp"
 #include "error_manager.hpp"
 #include "memory/unified_memory.hpp"
 #include "memory/memory_buffer_rotation.hpp"

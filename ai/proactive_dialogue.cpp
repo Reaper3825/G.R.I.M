@@ -1,5 +1,4 @@
 #include "proactive_dialogue.hpp"
-#include "response_manager.hpp"
 #include "voice/voice_speak.hpp"
 #include "../MMO/Core/SessionContextManager.hpp"
 #include "memory/unified_memory.hpp"
@@ -94,9 +93,8 @@ void checkAfterCommand(const std::string& input, const CommandResult& result) {
 
     if (!proactiveText.empty()) {
         LOG_DEBUG("Dialogue", "Triggered proactive follow-up (" + PersonalityManager::moodToString(personality.mood) + "): " + proactiveText);
-        std::string resp = ResponseManager::get(proactiveText);
-        history.push(resp, 0xFFFFFF00);
-        Voice::speak(resp, "proactive");
+        history.push(proactiveText, 0xFFFFFF00);
+        Voice::speak(proactiveText, "proactive");
     }
 }
 

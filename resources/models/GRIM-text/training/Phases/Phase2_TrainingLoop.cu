@@ -19,6 +19,7 @@
 #include "../../Shared/Batching/BatchDeviceUpload.hpp"
 #include "../../Shared/Forward/ModelForwardRuntimePayload.hpp"
 #include "../../Shared/Forward/ModelForward_GPU.hpp"
+#include "../../Shared/VerboseLogging.hpp"
 #include "../../Shared/Execution/ExecutionPayloadValidation.hpp"
 #include "../Autograd/AutogradTraining.hpp"
 #include "../../Shared/Optimizers/OptimizerUpdate_GPU.hpp"  // launchOptimizerUpdate
@@ -865,15 +866,17 @@ BatchResult processBatch(
         throw std::runtime_error("Non-finite loss: " + std::to_string(loss_result.loss_value));
     }
 
-    const GRIM::Diagnostics::RhoDiagnosticOptions rho_pre_backward_options{
-        GRIM::Diagnostics::RhoDiagnosticPhase::PostForwardPreBackward,
-        false};
-    GRIM::Diagnostics::computeRhoDiagnostic(
-        ctx,
-        payload,
-        forward_outputs,
-        batch_idx,
-        rho_pre_backward_options);
+    if constexpr (GRIM::VerboseLogging::ENABLE_RHO_BUILDUP_DIAGNOSTICS) {
+        const GRIM::Diagnostics::RhoDiagnosticOptions rho_pre_backward_options{
+            GRIM::Diagnostics::RhoDiagnosticPhase::PostForwardPreBackward,
+            false};
+        GRIM::Diagnostics::computeRhoDiagnostic(
+            ctx,
+            payload,
+            forward_outputs,
+            batch_idx,
+            rho_pre_backward_options);
+    }
 
     auto backward_result = GRIM::Autograd::executeAutogradBackward(
         autograd_ctx,
@@ -928,12 +931,6 @@ BatchResult processBatch(
             "processBatch: live logits tensor is NULL after successful explicit shared forward — "
             "diagnostics must run before processBatch step-state teardown");
     }
-    const GRIM::Tensor* live_lm_head_input = forward_outputs.liveLmHeadInputOrNull();
-    if (!live_lm_head_input || !live_lm_head_input->data) {
-        throw std::runtime_error(
-            "processBatch: live LM-head input tensor is NULL after successful explicit shared forward");
-    }
-
     // Log model predictions (what it predicts vs targets) - uses ForwardPass module for filtering
     // (extracted to Diagnostics/PredictionDistributionDiagnostic.cu)
     GRIM::Diagnostics::runPredictionDistributionAndLogitTrace(
@@ -956,22 +953,31 @@ BatchResult processBatch(
     // TRAINING SIGNAL: Logit Statistics (argmax distribution, confidence)
     // (extracted to Diagnostics/LogitScaleDiagnostic.cu)
     // ========================================================================
-    GRIM::Diagnostics::runLogitScaleDiagnostic(
-        ctx,
-        ctx.parameter_registry,
-        payload,
-        forward_outputs.logits_tensor,
-        *live_lm_head_input,
-        batch_idx);
-    const GRIM::Diagnostics::RhoDiagnosticOptions rho_post_backward_options{
-        GRIM::Diagnostics::RhoDiagnosticPhase::PostBackward,
-        true};
-    GRIM::Diagnostics::computeRhoDiagnostic(
-        ctx,
-        payload,
-        forward_outputs,
-        batch_idx,
-        rho_post_backward_options);
+    if constexpr (GRIM::VerboseLogging::ENABLE_LOGIT_SCALE_DIAGNOSTICS) {
+        const GRIM::Tensor* live_lm_head_input = forward_outputs.liveLmHeadInputOrNull();
+        if (!live_lm_head_input || !live_lm_head_input->data) {
+            throw std::runtime_error(
+                "processBatch: live LM-head input tensor is NULL after successful explicit shared forward");
+        }
+        GRIM::Diagnostics::runLogitScaleDiagnostic(
+            ctx,
+            ctx.parameter_registry,
+            payload,
+            forward_outputs.logits_tensor,
+            *live_lm_head_input,
+            batch_idx);
+    }
+    if constexpr (GRIM::VerboseLogging::ENABLE_RHO_BUILDUP_DIAGNOSTICS) {
+        const GRIM::Diagnostics::RhoDiagnosticOptions rho_post_backward_options{
+            GRIM::Diagnostics::RhoDiagnosticPhase::PostBackward,
+            true};
+        GRIM::Diagnostics::computeRhoDiagnostic(
+            ctx,
+            payload,
+            forward_outputs,
+            batch_idx,
+            rho_post_backward_options);
+    }
     snapshotExecutionTelemetry(forward_outputs, payload, result);
     
     if (!std::isfinite(result.loss)) {

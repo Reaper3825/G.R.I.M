@@ -29,6 +29,8 @@ constexpr bool ENABLE_LOSS_BACKWARD_SAMPLING = false;  ///< NLLLossGradFn diagno
 
 // Expensive diagnostics (D2H copies for analysis - disable for production training)
 constexpr bool ENABLE_EXPENSIVE_DIAGNOSTICS = false;   ///< Rule 21 argmax analysis, embedding cosine, etc.
+constexpr bool ENABLE_RHO_BUILDUP_DIAGNOSTICS = false; ///< [RHO_BUILDUP_EQUATION*] hidden-state correlation diagnostics
+constexpr bool ENABLE_LOGIT_SCALE_DIAGNOSTICS = false; ///< [LOGIT_SCALE_EQUATION] full-logits/hidden-state scale diagnostics
 
 // GPU allocation diagnostics - OFF by default. When enabled, logs allocation requests
 // with requested size and current free/total VRAM to pinpoint OOM sources.
@@ -37,7 +39,7 @@ constexpr bool ENABLE_GPU_ALLOCATION_LOGS = false;     ///< [GPU_ALLOC] allocati
 // FlashAttention equation diagnostics — 5 sync D2H copies per layer × 12 layers = 60 pipeline
 // drains per batch PLUS O(seqlen²) host-side attention score computation. These were critical
 // during Issue #76/#84 debugging but are catastrophic for training throughput.
-constexpr bool ENABLE_FA_EQUATION_DIAGNOSTICS = true;  ///< [FA-FWD-*], [ATTN_SCORE_EQUATION], plus the layer-recorder [ATTN_BREADTH]
+constexpr bool ENABLE_FA_EQUATION_DIAGNOSTICS = false;  ///< [FA-FWD-*], [ATTN_SCORE_EQUATION], plus the layer-recorder [ATTN_BREADTH]
 
 // QKV projection equation diagnostics — extremely spammy per-layer/per-batch tape entries.
 // Keep off unless actively debugging the QKV projection path.
@@ -45,7 +47,7 @@ constexpr bool ENABLE_QKV_PROJECTION_EQUATION_LOGS = false;  ///< [QKV_PROJECTIO
 
 // LM-head GEMM equation diagnostics — targeted at the hidden-state alignment / Issue #132
 // investigation path. Gated again by BatchLogTape Debug level and skipThisPass().
-constexpr bool ENABLE_GEMM_EQUATION_LOGS = true;  ///< [LM_HEAD_GEMM_EQUATION], [LM_HEAD_GEMM_BACKWARD_EQUATION]
+constexpr bool ENABLE_GEMM_EQUATION_LOGS = false;  ///< [LM_HEAD_GEMM_EQUATION], [LM_HEAD_GEMM_BACKWARD_EQUATION]
 
 } // namespace VerboseLogging
 } // namespace GRIM

@@ -103,7 +103,6 @@ set(GRIM_SOURCES
     synonyms.cpp
     aliases.cpp
     console_history.cpp
-    response_manager.cpp
     error_manager.cpp
     logger.cpp
     location.cpp
@@ -144,7 +143,6 @@ set(GRIM_HEADERS
     synonyms.hpp
     resources.hpp
     timer.hpp
-    response_manager.hpp
     error_manager.hpp
     logger.hpp
     location.hpp

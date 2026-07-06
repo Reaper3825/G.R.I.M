@@ -7,7 +7,6 @@
 #include "../MMO/Core/CorrectionTuple.hpp"
 #include "ai/ai_rl.hpp"
 #include "helpers/grim_input.hpp"
-#include "response_manager.hpp"
 #include "console_history.hpp"
 #include "voice/voice_speak.hpp"
 #include "helpers/color.hpp"

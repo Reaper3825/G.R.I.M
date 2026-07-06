@@ -1455,13 +1455,13 @@ void Tensor::backward(const Tensor* grad_output,
             }
         }
         
-        // ISSUE #53 FIX: Flush deferred cleanup queue AFTER stream sync
-        // The deleters queued pointers instead of calling cudaFree directly
-        // to avoid blocking. Now that the stream is synced, it's safe to free.
-        flushDeferredCleanup();
-        
-        // Release saved tensors after backward
+        // Release saved tensors after backward. Shared owners may queue their
+        // device buffers for deferred cleanup, so flush after release_saved().
         grad_fn->release_saved();
+
+        // ISSUE #53 FIX: Flush deferred cleanup AFTER release_saved() has queued
+        // the current graph's saved buffers and after the compute stream is done.
+        flushDeferredCleanup();
     }
 
 }

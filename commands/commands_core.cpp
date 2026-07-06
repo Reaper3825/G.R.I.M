@@ -7,7 +7,6 @@
 #include "../MMO/Core/SessionContextManager.hpp"
 #include "../MMO/Core/ModelRegistry.hpp"
 #include "../MMO/UI/EmotionPresentationController.hpp"
-#include "response_manager.hpp"
 #include "console_history.hpp"
 #include "voice/voice_speak.hpp"
 #include "nlp/nlp.hpp"
@@ -174,8 +173,7 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg)
             GRIM::CommandExecution::storeLearnedCommand(cmd, inferred, 0.75f);
             CHECK_HEAP();
             
-            std::string resp = ResponseManager::get(
-                "Got it — I've learned that \"" + cmd + "\" means \"" + inferred + "\".");
+            std::string resp = "Got it — I've learned that \"" + cmd + "\" means \"" + inferred + "\".";
             history.push(resp, Colors::Green.toUInt());
             Voice::speak(resp, "learned");
 
@@ -205,9 +203,8 @@ CommandResult dispatchCommand(const std::string& cmd, const std::string& arg)
                 ? "Did you mean \"" + GRIMInput::normalizeCommand(cmd) + "\" or something else?"
                 : "I didn't quite catch that. Can you rephrase?";
 
-            std::string resp = ResponseManager::get(clarification);
-            history.push(resp, Colors::Cyan.toUInt());
-            Voice::speak(resp, "clarify");
+            history.push(clarification, Colors::Cyan.toUInt());
+            Voice::speak(clarification, "clarify");
             
             lastAsked = cmd;
             LOG_DEBUG("Dispatch", "Clarifying question issued: " + clarification);
@@ -247,7 +244,7 @@ void handleCommand(const std::string& line)
         history.push("> " + line, Colors::Default.toUInt());
         CommandResult result = ai_process(line);
 
-        std::string finalText = ResponseManager::get(result.message);
+        std::string finalText = result.message;
         history.push(finalText, (result.color.a << 24) | (result.color.b << 16) |
                     (result.color.g << 8) | result.color.r);
 
@@ -284,7 +281,7 @@ void handleCommand(const std::string& line)
             history.push("> " + line, Colors::Default.toUInt());
             CommandResult result = ai_process(line); // AI handles casual conversation
             
-            std::string finalText = ResponseManager::get(result.message);
+            std::string finalText = result.message;
             history.push(finalText, (result.color.a << 24) | (result.color.b << 16) | 
                         (result.color.g << 8) | result.color.r);
             
@@ -303,7 +300,7 @@ void handleCommand(const std::string& line)
             history.push("> " + line, Colors::Default.toUInt());
             CommandResult result = cmdQuestion(line); // Question handler searches memories and external sources
             
-            std::string finalText = ResponseManager::get(result.message);
+            std::string finalText = result.message;
             history.push(finalText, (result.color.a << 24) | (result.color.b << 16) | 
                         (result.color.g << 8) | result.color.r);
             
@@ -579,7 +576,7 @@ void handleCommand(const std::string& line)
     }
 
     // Output result
-    std::string finalText = ResponseManager::get(result.message);
+    std::string finalText = result.message;
 
     // Inject EPC text_prefix for conversational/banter responses
     if (result.category == "conversation" || result.category == "banter" ||

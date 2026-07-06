@@ -1,5 +1,4 @@
 #include "commands_timers.hpp"
-#include "response_manager.hpp"
 #include "error_manager.hpp"
 #include "resources.hpp"   // globals: timers, history
 #include <sstream>

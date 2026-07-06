@@ -24,7 +24,6 @@
 // GRIM project includes
 // ---------------------------------------------------------
 #include "commands_voice.hpp"
-#include "response_manager.hpp"
 #include "error_manager.hpp"
 #include "voice/voice.hpp"
 #include "voice/voice_stream.hpp"

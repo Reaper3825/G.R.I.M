@@ -1,6 +1,5 @@
 #include "commands_question.hpp"
 #include "../MMO/Core/ToolRegistry.hpp"
-#include "response_manager.hpp"
 #include "logger.hpp"
 #include "memory/unified_memory.hpp" 
 #include "ai/ai.hpp" 
