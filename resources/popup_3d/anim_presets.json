@@ -1,8 +1,9 @@
 {
-  "_comment": "GRIM popup sprite animation presets. Edit freely; the engine reloads this on startup. 'easing' is one of: linear, easeInCubic, easeOutCubic, easeInOutCubic, easeOutBack, easeInBack. 'meshCache' optionally points to a baked geometry-node clip (.gmc) in this folder, produced by tools/blender/bake_popup_mesh_cache.py.",
+  "_comment": "GRIM popup sprite animation presets. Edit freely; the engine reloads this on startup. 'type' is 'oneShot' (play once, return to idle) or 'blendPose' (persistent pose blended in via blendAlpha until stopped). 'easing' is one of: linear, easeInCubic, easeOutCubic, easeInOutCubic, easeOutBack, easeInBack. 'meshCache' optionally points to a baked geometry-node clip (.gmc) in this folder, produced by tools/blender/bake_popup_mesh_cache.py. Blend poses support 'blendIn'/'blendOut' seconds, 'pingPong' looping, and additive 'posX'/'posY'/'posZ' offsets for movement/presence.",
   "presets": [
     {
       "name": "load_in",
+      "type": "oneShot",
       "duration": 1.0,
       "loop": false,
       "holdLastValue": true,
@@ -13,6 +14,7 @@
     },
     {
       "name": "fade_out",
+      "type": "oneShot",
       "duration": 1.0,
       "loop": false,
       "holdLastValue": true,
@@ -22,10 +24,33 @@
     },
     {
       "name": "idle_spin",
+      "type": "oneShot",
       "duration": 6.0,
       "loop": true,
       "spinTurns": 1.0,
       "meshCache": ""
+    },
+    {
+      "name": "presence_idle",
+      "type": "blendPose",
+      "duration": 4.0,
+      "loop": true,
+      "pingPong": true,
+      "blendIn": 0.4,
+      "blendOut": 0.5,
+      "scale": { "from": 0.99, "to": 1.01, "easing": "easeInOutCubic" },
+      "posY":  { "from": -0.02, "to": 0.02, "easing": "easeInOutCubic" }
+    },
+    {
+      "name": "speech_pulse",
+      "type": "blendPose",
+      "duration": 0.5,
+      "loop": true,
+      "pingPong": true,
+      "blendIn": 0.15,
+      "blendOut": 0.3,
+      "scale":    { "from": 1.0, "to": 1.06, "easing": "easeInOutCubic" },
+      "emissive": { "from": 0.0, "to": 0.4,  "easing": "easeInOutCubic" }
     }
   ]
 }

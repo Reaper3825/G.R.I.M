@@ -101,8 +101,14 @@ void popup3DRendererInitAnim(Popup3DRenderer& r,
                              const std::string& popup3dDir,
                              uint32_t defaultColorABGR = 0xFF804020);
 
-// Request playback of a named preset (thread-safe; callable from the UI thread).
+// Request playback of a named OneShot preset (thread-safe; callable from the UI thread).
 void popup3DRendererTriggerPreset(Popup3DRenderer& r, const char* presetName);
+
+// Start (or replace) the persistent blend-pose track (presence / speech / movement).
+void popup3DRendererStartPose(Popup3DRenderer& r, const char* presetName);
+
+// Blend the active pose out and return to idle.
+void popup3DRendererStopPose(Popup3DRenderer& r);
 
 // DEBUG: hide the static resting (.obj) model so only baked clip frames are drawn.
 void popup3DRendererSetHideResting(Popup3DRenderer& r, bool hide);

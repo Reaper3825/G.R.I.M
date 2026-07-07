@@ -257,6 +257,9 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
             eff.transform.scale[2] *= ev.scaleMul;
             eff.emissiveMul        += ev.emissiveAdd;
             eff.transform.rotation[1] += ev.spinY;
+            eff.transform.position[0] += ev.posOffset[0];
+            eff.transform.position[1] += ev.posOffset[1];
+            eff.transform.position[2] += ev.posOffset[2];
             clipFrame = ev.frame;
         }
     }
@@ -479,6 +482,18 @@ void popup3DRendererTriggerPreset(Popup3DRenderer& r, const char* presetName)
 {
     if (r.anim)
         popupClipEngineTrigger(r.anim, presetName);
+}
+
+void popup3DRendererStartPose(Popup3DRenderer& r, const char* presetName)
+{
+    if (r.anim)
+        popupClipEngineStartPose(r.anim, presetName);
+}
+
+void popup3DRendererStopPose(Popup3DRenderer& r)
+{
+    if (r.anim)
+        popupClipEngineStopPose(r.anim);
 }
 
 void popup3DRendererSetHideResting(Popup3DRenderer& r, bool hide)

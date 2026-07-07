@@ -24,6 +24,18 @@ enum class PopupEasing : uint8_t
     EaseInBack
 };
 
+// Playback semantics of a preset.
+//   OneShot   — plays once (or holds its end state) and returns to idle.
+//               Used for load_in / fade_out style transitions.
+//   BlendPose — a persistent pose that stays running with a blend alpha that
+//               ramps in on start and ramps out on stop (or natural end).
+//               Used for presence idle, speech pulse, and movement body-language.
+enum class PopupAnimType : uint8_t
+{
+    OneShot,
+    BlendPose
+};
+
 // A scalar A->B tween over the normalized clip time [0,1].
 struct PopupTween
 {
@@ -47,6 +59,15 @@ struct PopupAnimPreset
     float       spinTurns = 0.0f;  // full Y revolutions across the clip (additive)
 
     std::string meshCache;  // optional .gmc filename (relative to popup_3d dir); "" = none
+
+    // ---- Blend-pose extension (persistent presence / speech / movement) ----
+    PopupAnimType type = PopupAnimType::OneShot;  // OneShot = play & return to idle; BlendPose = persistent
+    float       blendInSec  = 0.25f;  // pose: ramp blendAlpha 0 -> 1 on start
+    float       blendOutSec = 0.35f;  // pose: ramp blendAlpha 1 -> 0 on stop / natural end
+    bool        pingPong    = false;  // looping pose: 0->1->0 triangle instead of a sawtooth
+    PopupTween  posX;                 // additive position offset (pose sway / presence / movement)
+    PopupTween  posY;
+    PopupTween  posZ;
 };
 
 // Output of evaluating the active preset for the current time.
@@ -57,6 +78,8 @@ struct PopupClipEval
     float scaleMul    = 1.0f;    // multiply onto input scale
     float emissiveAdd = 0.0f;    // add to input emissive
     float spinY       = 0.0f;    // additive Y rotation (radians)
+    float posOffset[3] = { 0.0f, 0.0f, 0.0f };  // additive world position (pose movement/sway)
+    float poseBlend   = 0.0f;    // current pose blend alpha [0,1] (diagnostic)
 
     // Non-null when a baked mesh-cache frame should be drawn this frame.
     const PopupMeshFrame* frame = nullptr;
@@ -81,9 +104,16 @@ bool popupClipEngineLoadJson(PopupClipEngine* engine,
                              const std::string& popup3dDir,
                              uint32_t defaultColorABGR);
 
-// Request playback of a preset by name (thread-safe; safe to call from the UI thread).
-// No-op if the name is unknown.
+// Request playback of a OneShot preset by name (thread-safe; safe to call from the UI thread).
+// No-op if the name is unknown or the preset is a BlendPose (use StartPose for those).
 void popupClipEngineTrigger(PopupClipEngine* engine, const char* presetName);
+
+// Start (or replace) the persistent blend-pose track (thread-safe). Only BlendPose
+// presets are accepted; the pose blends in over blendInSec and stays until stopped.
+void popupClipEngineStartPose(PopupClipEngine* engine, const char* presetName);
+
+// Request the active blend-pose to ramp out over blendOutSec and return to idle.
+void popupClipEngineStopPose(PopupClipEngine* engine);
 
 // Evaluate the active preset at `nowSeconds` (steady-clock seconds).
 // Returns true if a preset is active and `out` was filled.

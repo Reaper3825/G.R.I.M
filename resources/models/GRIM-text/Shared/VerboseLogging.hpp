@@ -32,9 +32,10 @@ constexpr bool ENABLE_EXPENSIVE_DIAGNOSTICS = false;   ///< Rule 21 argmax analy
 constexpr bool ENABLE_RHO_BUILDUP_DIAGNOSTICS = false; ///< [RHO_BUILDUP_EQUATION*] hidden-state correlation diagnostics
 constexpr bool ENABLE_LOGIT_SCALE_DIAGNOSTICS = false; ///< [LOGIT_SCALE_EQUATION] full-logits/hidden-state scale diagnostics
 
-// GPU allocation diagnostics - OFF by default. When enabled, logs allocation requests
-// with requested size and current free/total VRAM to pinpoint OOM sources.
-constexpr bool ENABLE_GPU_ALLOCATION_LOGS = false;     ///< [GPU_ALLOC] allocation request diagnostics
+// GPU allocation diagnostics - OFF by default. When enabled, logs every allocation
+// request with requested size and current free/total VRAM to pinpoint OOM sources.
+constexpr bool ENABLE_GPU_ALLOCATION_LOGS = false;     ///< [GPU_ALLOC] per-request allocation diagnostics
+constexpr bool ENABLE_GPU_ALLOCATION_LEDGER = true;    ///< [GPU_ALLOC_LEDGER] scoped aggregate allocation diagnostics
 
 // FlashAttention equation diagnostics — 5 sync D2H copies per layer × 12 layers = 60 pipeline
 // drains per batch PLUS O(seqlen²) host-side attention score computation. These were critical

@@ -39,6 +39,11 @@ static std::atomic<int> g_idleTimerMs{ 0 };
 static std::atomic<bool> g_showRequested{ false };  // play "load_in"
 static std::atomic<bool> g_hideRequested{ false };  // play "fade_out", then hide
 
+// Blend-pose controller intent (the render thread owns the actual pose track;
+// these track which persistent pose the controller currently wants running).
+static bool g_poseActive       = false;   // a presence/speech pose is requested
+static bool g_posePrevSpeaking = false;   // last speaking state we switched pose on
+
 
 static std::chrono::steady_clock::time_point g_idleStart = std::chrono::steady_clock::now();
 static std::chrono::steady_clock::time_point g_frameStart = std::chrono::steady_clock::now();
@@ -253,15 +258,20 @@ void runPopupUI(int width, int height)
             static std::chrono::steady_clock::time_point sFadeStart;
             constexpr float kFadeOutSec = 1.0f;  // must match the "fade_out" preset/clip duration
 
-            // Show: cancel any fade and play load-in.
+            // Show: cancel any fade and play load-in, then start the presence pose.
             if (g_showRequested.exchange(false))
             {
                 sFadingOut = false;
                 if (g_popup3DInitialized.load())
+                {
                     popup3DRendererTriggerPreset(g_popup3D, "load_in");
+                    popup3DRendererStartPose(g_popup3D, "presence_idle");
+                    g_poseActive       = true;
+                    g_posePrevSpeaking = false;
+                }
             }
 
-            // Hide: play fade-out, then actually hide the window once it completes.
+            // Hide: blend the pose out, play fade-out, then hide once it completes.
             if (g_hideRequested.load())
             {
                 if (!sFadingOut)
@@ -269,7 +279,11 @@ void runPopupUI(int width, int height)
                     sFadingOut = true;
                     sFadeStart = now;
                     if (g_popup3DInitialized.load())
+                    {
+                        popup3DRendererStopPose(g_popup3D);
+                        g_poseActive = false;
                         popup3DRendererTriggerPreset(g_popup3D, "fade_out");
+                    }
                 }
                 else if (std::chrono::duration<float>(now - sFadeStart).count() >= kFadeOutSec)
                 {
@@ -295,7 +309,22 @@ void runPopupUI(int width, int height)
         
         // Update voice-reactive animation (pulse, breathe, scale)
         updateVoiceAnim(g_anim, isSpeaking, dt);
-        
+
+        // ---------------------------------------------------
+        // Blend-pose track (anim-type aware): while the popup is present it runs
+        // a persistent pose. Speaking swaps presence_idle <-> speech_pulse; the
+        // render-thread blendAlpha cross-fades between them (no hard cut).
+        // ---------------------------------------------------
+        if (g_poseActive && g_popup3DInitialized.load())
+        {
+            if (isSpeaking != g_posePrevSpeaking)
+            {
+                popup3DRendererStartPose(g_popup3D,
+                                         isSpeaking ? "speech_pulse" : "presence_idle");
+                g_posePrevSpeaking = isSpeaking;
+            }
+        }
+
         // Apply animation to window visuals at 60 FPS
         if (g_popupVisible && g_hwnd)
         {

@@ -19,6 +19,7 @@
 #include "../../Shared/Batching/BatchDeviceUpload.hpp"
 #include "../../Shared/Forward/ModelForwardRuntimePayload.hpp"
 #include "../../Shared/Forward/ModelForward_GPU.hpp"
+#include "../../Shared/CudaAllocUtils.hpp"
 #include "../../Shared/VerboseLogging.hpp"
 #include "../../Shared/Execution/ExecutionPayloadValidation.hpp"
 #include "../Autograd/AutogradTraining.hpp"
@@ -901,7 +902,14 @@ BatchResult processBatch(
             emit_mtp_logits,
             emit_selector_logits);
 
+    GRIM::CudaAlloc::Ledger::beginScope(
+        ("ForwardAllocationSizes batch=" + std::to_string(batch_idx + 1)).c_str());
     auto forward_outputs = GRIM::Forward::executeModelForward(forward_request, runtime_payload);
+    if (ctx.logging.logger) {
+        ctx.logging.logger->log(GRIM::CudaAlloc::Ledger::endScopeSummary(80));
+    } else {
+        GRIM::CudaAlloc::Ledger::endScopeSummary(0);
+    }
     {
         std::ostringstream oss;
         oss << "EXPLICIT_TRAINING_FORWARD_COMPLETE batch=" << (batch_idx + 1)
