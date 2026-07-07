@@ -13,6 +13,7 @@
 
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <sstream>
@@ -48,6 +49,58 @@ std::string tensorDebugSummary(const Tensor& tensor) {
 
 void emitInfo(const std::string& message) {
     GRIM::Logging::EmitModuleInfo(kRegistrationModule, message);
+}
+
+void validateOutputUnigramPrior(const OutputUnigramPriorView& prior,
+                                int expected_vocab_size,
+                                const char* caller) {
+    if (!prior.log_bias) {
+        throw std::runtime_error(std::string(caller) + ": output unigram prior log_bias is NULL");
+    }
+    if (expected_vocab_size <= 0) {
+        throw std::runtime_error(std::string(caller) + ": expected_vocab_size must be positive, got " +
+                                 std::to_string(expected_vocab_size));
+    }
+    if (prior.vocab_size != static_cast<std::uint32_t>(expected_vocab_size)) {
+        throw std::runtime_error(std::string(caller) + ": output unigram prior vocab_size=" +
+                                 std::to_string(prior.vocab_size) + " != expected_vocab_size=" +
+                                 std::to_string(expected_vocab_size));
+    }
+    if (prior.size != static_cast<std::size_t>(expected_vocab_size)) {
+        throw std::runtime_error(std::string(caller) + ": output unigram prior size=" +
+                                 std::to_string(prior.size) + " != expected_vocab_size=" +
+                                 std::to_string(expected_vocab_size));
+    }
+    if (prior.total_targets == 0) {
+        throw std::runtime_error(std::string(caller) + ": output unigram prior total_targets is zero");
+    }
+}
+
+void uploadOutputUnigramPriorToBias(Tensor& bias,
+                                    const OutputUnigramPriorView& prior,
+                                    int expected_vocab_size,
+                                    cudaStream_t stream,
+                                    const char* caller,
+                                    const char* tensor_name) {
+    validateOutputUnigramPrior(prior, expected_vocab_size, caller);
+    if (!bias.data) {
+        throw std::runtime_error(std::string(caller) + ": " + tensor_name + " bias tensor data is NULL");
+    }
+    if (bias.numel() != static_cast<std::size_t>(expected_vocab_size)) {
+        throw std::runtime_error(std::string(caller) + ": " + tensor_name + " bias numel=" +
+                                 std::to_string(bias.numel()) + " != expected_vocab_size=" +
+                                 std::to_string(expected_vocab_size));
+    }
+    const cudaError_t copy_err = cudaMemcpyAsync(
+        bias.data,
+        prior.log_bias,
+        static_cast<std::size_t>(expected_vocab_size) * sizeof(float),
+        cudaMemcpyHostToDevice,
+        stream);
+    if (copy_err != cudaSuccess) {
+        throw std::runtime_error(std::string(caller) + ": cudaMemcpyAsync(" + tensor_name +
+                                 " output unigram prior H2D) failed: " + cudaGetErrorString(copy_err));
+    }
 }
 
 size_t paramGroupTypeIndex(ParamGroupType type) {
@@ -999,7 +1052,8 @@ void initializeLmHeadParameterTensors(
     const GRIM::HyperParameters::LMHeadLayerConstructionHP& lm_head_hp,
     std::uint64_t weight_init_seed,
     cudaStream_t init_stream,
-    GRIM::Tensor* tied_embedding_weights) {
+    GRIM::Tensor* tied_embedding_weights,
+    const OutputUnigramPriorView* output_unigram_prior) {
     if (!init_stream) {
         throw std::runtime_error("initializeLmHeadParameterTensors: init_stream is NULL");
     }
@@ -1078,13 +1132,29 @@ void initializeLmHeadParameterTensors(
     // dedicated unigram-bias is enabled. The unigram path keeps the bias active
     // without the attention/FFN biases (which use_bias also gates) so the
     // unigram marginal can live in a dedicated parameter rather than a shared
-    // residual common-mode direction. Allocated to zeros here; the unigram path
-    // overwrites with log p(v) once the training token marginal is known
-    // (see initializeUnigramLmHeadBias, called from Phase1 startup).
+    // residual common-mode direction.
     if (lm_head_hp.use_bias || lm_head_hp.unigram_bias) {
         parameter_tensors.bias = Tensor::zeros({lm_head_hp.vocab_size}, init_stream, "lm_head.bias");
         parameter_tensors.bias.requires_grad_();
         parameter_tensors.bias.alloc_grad();
+        if (output_unigram_prior) {
+            if (!lm_head_hp.unigram_bias) {
+                throw std::runtime_error(
+                    "initializeLmHeadParameterTensors: output unigram prior was provided while lm_head_unigram_bias=false");
+            }
+            uploadOutputUnigramPriorToBias(
+                parameter_tensors.bias,
+                *output_unigram_prior,
+                lm_head_hp.vocab_size,
+                init_stream,
+                "initializeLmHeadParameterTensors",
+                "lm_head");
+            const cudaError_t sync_err = cudaStreamSynchronize(init_stream);
+            if (sync_err != cudaSuccess) {
+                throw std::runtime_error(std::string("initializeLmHeadParameterTensors: cudaStreamSynchronize failed after output unigram prior upload: ") +
+                                         cudaGetErrorString(sync_err));
+            }
+        }
     }
 
     parameter_tensors.final_rms_gamma = Tensor::zeros({lm_head_hp.d_model}, init_stream, "final_rms_gamma");
@@ -1131,7 +1201,79 @@ void initializeLmHeadParameterTensors(
              std::string(lm_head_hp.mlp_enabled
                  ? " (+ residual SwiGLU adapter [" + std::to_string(lm_head_hp.d_model) + "x" +
                    std::to_string(lm_head_hp.mlp_d_ff) + "], alpha=" + std::to_string(lm_head_hp.mlp_alpha) + ")"
-                 : ""));
+                 : "") +
+             std::string(output_unigram_prior ? " with output unigram bias prior" : ""));
+}
+
+void initializeMtpHeadParameterTensors(
+    std::vector<GRIM::MtpHeadParameterTensors>& mtp_head_parameter_tensors,
+    const GRIM::HyperParameters::MTPConstructionHP& mtp_hp,
+    std::uint64_t weight_init_seed,
+    cudaStream_t init_stream,
+    const OutputUnigramPriorView* output_unigram_prior) {
+    if (!mtp_hp.enabled) {
+        return;
+    }
+    if (!init_stream) {
+        throw std::runtime_error("initializeMtpHeadParameterTensors: init_stream is NULL");
+    }
+    if (mtp_hp.k <= 0) {
+        throw std::runtime_error("initializeMtpHeadParameterTensors: mtp_enabled=true requires mtp_k > 0");
+    }
+    if (mtp_hp.vocab_size <= 0) {
+        throw std::runtime_error("initializeMtpHeadParameterTensors: vocab_size must be positive, got " +
+                                 std::to_string(mtp_hp.vocab_size));
+    }
+    if (mtp_hp.d_model <= 0) {
+        throw std::runtime_error("initializeMtpHeadParameterTensors: d_model must be positive, got " +
+                                 std::to_string(mtp_hp.d_model));
+    }
+    if (!mtp_head_parameter_tensors.empty()) {
+        throw std::runtime_error("initializeMtpHeadParameterTensors: MTP head tensor owner vector is already initialized");
+    }
+
+    if (output_unigram_prior) {
+        validateOutputUnigramPrior(*output_unigram_prior, mtp_hp.vocab_size, "initializeMtpHeadParameterTensors");
+    }
+
+    mtp_head_parameter_tensors.resize(static_cast<std::size_t>(mtp_hp.k));
+    for (int k = 0; k < mtp_hp.k; ++k) {
+        auto& head = mtp_head_parameter_tensors[static_cast<std::size_t>(k)];
+        const std::string weight_name = "mtp_head_" + std::to_string(k) + ".weight";
+        const std::string bias_name = "mtp_head_" + std::to_string(k) + ".bias";
+
+        head.weight = Tensor::zeros({mtp_hp.vocab_size, mtp_hp.d_model}, init_stream, weight_name.c_str());
+        head.weight.requires_grad_();
+        head.weight.alloc_grad();
+
+        const std::uint64_t mtp_seed = weight_init_seed + 3 + static_cast<std::uint64_t>(k);
+        Tensor::xavier_uniform_(head.weight, mtp_seed, init_stream);
+
+        head.bias = Tensor::zeros({mtp_hp.vocab_size}, init_stream, bias_name.c_str());
+        head.bias.requires_grad_();
+        head.bias.alloc_grad();
+        if (output_unigram_prior) {
+            uploadOutputUnigramPriorToBias(
+                head.bias,
+                *output_unigram_prior,
+                mtp_hp.vocab_size,
+                init_stream,
+                "initializeMtpHeadParameterTensors",
+                bias_name.c_str());
+        }
+    }
+
+    if (output_unigram_prior) {
+        const cudaError_t sync_err = cudaStreamSynchronize(init_stream);
+        if (sync_err != cudaSuccess) {
+            throw std::runtime_error(std::string("initializeMtpHeadParameterTensors: cudaStreamSynchronize failed after output unigram prior uploads: ") +
+                                     cudaGetErrorString(sync_err));
+        }
+    }
+
+    emitInfo("[initializeMtpHeadParameterTensors] Initialized registry-owned MTP auxiliary heads=" +
+             std::to_string(mtp_hp.k) +
+             std::string(output_unigram_prior ? " with output unigram bias prior" : ""));
 }
 
 void initializeExecutionBlockParameterTensors(

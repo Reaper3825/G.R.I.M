@@ -13,151 +13,14 @@
 #include "Startup/Validation/Phase2Handoff.hpp"
 #include "../Subprocess/tokenizer_subprocess.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
-#include "../../Shared/TrainingState/TrainingState_GPU.hpp"  // GRIM::TrainingState (stream access)
 
-#include <cmath>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
-#include <vector>
-
-#ifdef USE_CUDA
-#include <cuda_runtime.h>
-#endif
 
 namespace GRIMText::Training {
 
 namespace {
-
-// Initialize the output-head biases to the empirical unigram log-marginal,
-// bias[v] = log p(v), estimated from the training targets. This houses the
-// unigram prior in dedicated parameters so neither attention nor the FFN is
-// rewarded for injecting it as a shared residual common-mode direction (the
-// driver of the rho/representation-collapse buildup).
-//
-// Applies to BOTH the main LM head AND every MTP auxiliary head: the MTP losses
-// backpropagate into the SAME shared trunk, so a zero-init MTP bias would
-// re-create the identical collapse incentive (scaled by mtp_alpha). Each MTP
-// head k predicts the token at shift k+1, whose marginal equals the overall
-// unigram p(v) up to edge truncation, so the same log p(v) vector is reused for
-// every head.
-//
-// The bias tensors are allocated during model assembly (LM head when
-// lm_head_unigram_bias=true; MTP heads always carry a bias); here we only fill
-// values, accessed via the ParameterRegistry API rather than a TrainingContext
-// handle. Fresh-init only — on resume the trained biases are kept.
-void populateUnigramOutputBiases(TrainingContext& ctx) {
-    const bool enabled = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(
-        ctx.config, "lm_head_unigram_bias");
-    if (!enabled) {
-        return;
-    }
-
-    // On resume the trained bias is restored from the checkpoint (serialization
-    // is presence-driven), so it must not be overwritten with the prior.
-    if (!ctx.loaded_checkpoint_path.empty()) {
-        GRIM::Logging::EmitModuleInfo(
-            GRIM::Logging::ModuleId::Training,
-            "[Phase1] lm_head_unigram_bias: resumed from checkpoint — keeping restored bias",
-            0);
-        return;
-    }
-
-    auto& lm_head = ctx.parameter_registry.requireLmHeadParameters("populateUnigramLmHeadBias");
-    if (!lm_head.bias.data) {
-        throw std::runtime_error(
-            "populateUnigramLmHeadBias: lm_head_unigram_bias=true but lm_head.bias is NULL — "
-            "initializeLmHeadParameterTensors must allocate the bias when the flag is set");
-    }
-
-    const int vocab_size = static_cast<int>(ctx.data.vocab_size);
-    if (vocab_size <= 0) {
-        throw std::runtime_error(
-            "populateUnigramLmHeadBias: invalid vocab_size=" + std::to_string(vocab_size));
-    }
-
-    // Empirical unigram marginal over training targets (what the LM head
-    // predicts), with Laplace add-one smoothing so unseen tokens get a finite
-    // floor instead of log(0) = -inf.
-    std::vector<double> counts(static_cast<std::size_t>(vocab_size), 0.0);
-    double total = 0.0;
-    for (const auto& seq : ctx.data.train_seqs) {
-        for (int tgt : seq.targets) {
-            if (tgt >= 0 && tgt < vocab_size) {
-                counts[static_cast<std::size_t>(tgt)] += 1.0;
-                total += 1.0;
-            }
-        }
-    }
-    if (total <= 0.0) {
-        throw std::runtime_error(
-            "populateUnigramLmHeadBias: no valid training targets to estimate p(v)");
-    }
-
-    constexpr double kSmoothing = 1.0;  // Laplace add-one
-    const double denom = total + kSmoothing * static_cast<double>(vocab_size);
-    std::vector<float> h_bias(static_cast<std::size_t>(vocab_size));
-    int seen_tokens = 0;
-    for (int v = 0; v < vocab_size; ++v) {
-        const double count_v = counts[static_cast<std::size_t>(v)];
-        const double p_v = (count_v + kSmoothing) / denom;
-        h_bias[static_cast<std::size_t>(v)] = static_cast<float>(std::log(p_v));
-        if (count_v > 0.0) {
-            ++seen_tokens;
-        }
-    }
-
-    int mtp_heads_written = 0;
-#ifdef USE_CUDA
-    cudaStream_t stream =
-        ctx.requireTrainingState("populateUnigramOutputBiases").stream_ctrl.getPrimaryStream();
-    const std::size_t bytes = static_cast<std::size_t>(vocab_size) * sizeof(float);
-
-    // Upload the same log p(v) vector to a device bias tensor [vocab_size].
-    auto upload_bias = [&](const GRIM::Tensor& bias, const char* who) {
-        cudaError_t copy_err = cudaMemcpyAsync(
-            bias.data, h_bias.data(), bytes, cudaMemcpyHostToDevice, stream);
-        if (copy_err != cudaSuccess) {
-            throw std::runtime_error(
-                std::string("populateUnigramOutputBiases: cudaMemcpyAsync(") + who +
-                " bias H2D) failed: " + cudaGetErrorString(copy_err));
-        }
-    };
-
-    upload_bias(lm_head.bias, "lm_head");
-
-    // Mirror the prior into every MTP auxiliary head; they share the trunk and
-    // would otherwise re-introduce the collapse incentive from a zero-init bias.
-    for (auto& mtp_head : ctx.parameter_registry.mtpHeadParameterTensors()) {
-        if (!mtp_head.bias.data) {
-            continue;
-        }
-        if (mtp_head.bias.numel() != static_cast<std::size_t>(vocab_size)) {
-            throw std::runtime_error(
-                "populateUnigramOutputBiases: MTP head bias size " +
-                std::to_string(mtp_head.bias.numel()) + " != vocab_size " +
-                std::to_string(vocab_size));
-        }
-        upload_bias(mtp_head.bias, "mtp_head");
-        ++mtp_heads_written;
-    }
-
-    cudaError_t sync_err = cudaStreamSynchronize(stream);
-    if (sync_err != cudaSuccess) {
-        throw std::runtime_error(
-            std::string("populateUnigramOutputBiases: cudaStreamSynchronize failed: ") +
-            cudaGetErrorString(sync_err));
-    }
-#endif
-
-    GRIM::Logging::EmitModuleInfo(
-        GRIM::Logging::ModuleId::Training,
-        "[Phase1] lm_head_unigram_bias: initialized bias = log p(v) | vocab=" +
-            std::to_string(vocab_size) + " seen_tokens=" + std::to_string(seen_tokens) +
-            " total_targets=" + std::to_string(static_cast<long long>(total)) +
-            " mtp_heads=" + std::to_string(mtp_heads_written),
-        0);
-}
 
 // Off-by-one attention (softmax1 / zero-value sink) is a softmax-denominator
 // modification applied as an exact post-process to the FlashAttention result
@@ -166,7 +29,7 @@ void populateUnigramOutputBiases(TrainingContext& ctx) {
 // validates compatibility and records the effective state (fail-loud, observable
 // at startup). A future LEARNABLE per-head sink logit would register its tensor
 // through the ParameterRegistry at model assembly and be initialized in this same
-// boundary, alongside populateUnigramOutputBiases().
+// boundary, alongside the other registration-owned output-head parameters.
 void validateAttentionOffByOne(TrainingContext& ctx) {
     const bool enabled = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(
         ctx.config, "attention_off_by_one");
@@ -334,7 +197,6 @@ Phase1Result executePhase1(GRIM::Config::AiConfigSnapshot config) {
     }
     ModelAllocated(ctx);
     CheckpointLoaded(ctx);
-    populateUnigramOutputBiases(ctx);
     validateAttentionOffByOne(ctx);
     ResumeStateReady(ctx);
     TelemetryReady(ctx);

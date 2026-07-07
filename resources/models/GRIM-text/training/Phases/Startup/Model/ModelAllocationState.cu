@@ -28,6 +28,7 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
     Startup::GpuModelState& gpu_model_state,
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const Startup::LayerAssembly& layer_assembly,
+    const GRIMText::Training::Startup::ModelRegistration::OutputUnigramPriorView* output_unigram_prior,
     TrainingLogger& logger)
 {
     const auto& assembly = layer_assembly.requireReady("ModelAllocationState::initializeModel");
@@ -101,7 +102,8 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
         pbm_owner,
         gpu_model_state,
         parameter_registry,
-        weight_init_seed);
+        weight_init_seed,
+        output_unigram_prior);
     logger.log("✓ GPU model layers fully assembled");
 
     logger.log("Registering trainable parameter groups...");
@@ -198,6 +200,26 @@ void ModelAllocated(TrainingContext& ctx) {
             " sequence_data=" + std::to_string(ctx.data.vocab_size) + ")");
     }
 
+    GRIMText::Training::Startup::ModelRegistration::OutputUnigramPriorView output_unigram_prior{};
+    const auto execution_mode = GRIM::HyperParameters::snapshotExecutionMode(ctx.config);
+    const bool unigram_bias_enabled = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(
+        ctx.config,
+        "lm_head_unigram_bias");
+    const bool pass_output_unigram_prior =
+        execution_mode == GRIM::HyperParameters::ModelExecutionMode::TRAINING && unigram_bias_enabled;
+    if (pass_output_unigram_prior) {
+        const auto& prior = ctx.data.output_unigram_prior;
+        if (prior.log_bias.empty()) {
+            throw std::runtime_error(
+                "ModelAllocated: lm_head_unigram_bias=true but LoadTrainingData did not author output_unigram_prior.log_bias");
+        }
+        output_unigram_prior.log_bias = prior.log_bias.data();
+        output_unigram_prior.size = prior.log_bias.size();
+        output_unigram_prior.vocab_size = prior.vocab_size;
+        output_unigram_prior.seen_tokens = prior.seen_tokens;
+        output_unigram_prior.total_targets = prior.total_targets;
+    }
+
     try {
         if (!ctx.training_state) {
             throw std::runtime_error("FATAL: TrainingState owner is NULL before model initialization");
@@ -213,10 +235,15 @@ void ModelAllocated(TrainingContext& ctx) {
             ctx.gpu_model,
             ctx.parameter_registry,
             layer_assembly,
+            pass_output_unigram_prior ? &output_unigram_prior : nullptr,
             *ctx.logging.logger);
     } catch (const std::exception& e) {
         EmitModuleError(ModuleId::Training, std::string("FATAL: Model initialization failed: ") + e.what(), 0);
         throw;
+    }
+
+    if (pass_output_unigram_prior) {
+        ctx.data.output_unigram_prior = {};
     }
 
     ctx.model_allocation = captureAndValidateModelAllocationOrThrow(ctx);

@@ -165,35 +165,6 @@ void initializeExecutionSubsystems(
     std::cout << "✓ ExecutionBlock parameters created\n";
 }
 
-void initializeMtpHeads(std::vector<GRIM::MtpHeadParameterTensors>& mtp_head_parameter_tensors,
-                        const GRIM::HyperParameters::MTPConstructionHP& mtp_hp,
-                        uint64_t weight_init_seed,
-                        cudaStream_t init_stream) {
-    if (!mtp_hp.enabled) {
-        return;
-    }
-
-    mtp_head_parameter_tensors.resize(static_cast<size_t>(mtp_hp.k));
-    for (int k = 0; k < mtp_hp.k; ++k) {
-        auto& head = mtp_head_parameter_tensors[static_cast<size_t>(k)];
-        const std::string weight_name = "mtp_head_" + std::to_string(k) + ".weight";
-        const std::string bias_name = "mtp_head_" + std::to_string(k) + ".bias";
-
-        head.weight = GRIM::Tensor::zeros({mtp_hp.vocab_size, mtp_hp.d_model}, init_stream, weight_name.c_str());
-        head.weight.requires_grad_();
-        head.weight.alloc_grad();
-
-        const uint64_t mtp_seed = weight_init_seed + 3 + static_cast<uint64_t>(k);
-        GRIM::Tensor::xavier_uniform_(head.weight, mtp_seed, init_stream);
-
-        head.bias = GRIM::Tensor::zeros({mtp_hp.vocab_size}, init_stream, bias_name.c_str());
-        head.bias.requires_grad_();
-        head.bias.alloc_grad();
-    }
-
-    std::cout << "✓ MTP auxiliary heads created\n";
-}
-
 const GRIM::LMHeadParameterTensors& requireLmHeadParametersReady(
     const ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const char* caller) {
@@ -444,7 +415,8 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
                       const ::GRIM::PBM::PBMStateOwner& pbm_owner,
                       GpuModelState& gpu_model_state,
                       ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
-                      uint64_t weight_init_seed) {
+                      uint64_t weight_init_seed,
+                      const ModelRegistration::OutputUnigramPriorView* output_unigram_prior) {
     const auto init_hp = GRIM::HyperParameters::gpuModelInitializationHP(model_cfg);
 
     std::cout << "[assembleGpuModel] Verifying grouped GPU initialization config..." << std::endl;
@@ -536,7 +508,8 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
                 lm_hp,
                 weight_init_seed + 1,
                 init_stream,
-                tied_emb);
+                tied_emb,
+                output_unigram_prior);
             (void)requireLmHeadParametersReady(parameter_registry, "Startup::assembleGpuModel");
             std::cout << "✓ LM head parameters created\n";
         }
@@ -582,11 +555,13 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
             // standalone per-horizon MTP head parameters are never assembled.
             std::cout << "✓ MTP auxiliary heads SKIPPED (latent_trajectory_preset_use_mtp_logits=true — shared LM head)\n";
         } else {
-            initializeMtpHeads(
+            ModelRegistration::initializeMtpHeadParameterTensors(
                 parameter_registry.mtpHeadParameterTensors(),
                 GRIM::HyperParameters::mtpConstructionHP(model_cfg),
                 weight_init_seed,
-                init_stream);
+                init_stream,
+                output_unigram_prior);
+            std::cout << "✓ MTP auxiliary heads created\n";
         }
 
         ModelRegistration::initializeLatentTrajectoryPresetParameterTensors(

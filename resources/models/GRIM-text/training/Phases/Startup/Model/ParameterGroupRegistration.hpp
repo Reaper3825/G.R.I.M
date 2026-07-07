@@ -14,6 +14,7 @@ namespace GRIM {
 struct OptimizerState;
 struct EncodingLayerParameterTensors;
 struct FeedForwardParameterTensors;
+struct MtpHeadParameterTensors;
 struct Tensor;
 namespace Config {
 struct AiConfigSnapshot;
@@ -24,6 +25,7 @@ struct EncoderLayerConstructionHP;
 struct ExecutionBlockConstructionHP;
 struct LatentTrajectoryPresetHP;
 struct LMHeadLayerConstructionHP;
+struct MTPConstructionHP;
 struct NumberEncoderConstructionHP;
 }
 }
@@ -49,6 +51,14 @@ namespace GRIMText::Training::Startup::ModelRegistration {
 //   metadata, and binds externally owned optimizer moment tensors.
 // - OptimizerState owns Adam/RAdam moment tensor storage; ParameterGroup entries
 //   only borrow those tensors after bindOptimizerState().
+struct OutputUnigramPriorView {
+    const float* log_bias = nullptr;
+    std::size_t size = 0;
+    std::uint32_t vocab_size = 0;
+    std::uint32_t seen_tokens = 0;
+    std::uint64_t total_targets = 0;
+};
+
 void initializeFeedForwardParameterTensors(
     std::vector<GRIM::FeedForwardParameterTensors>& feed_forward_parameter_tensors,
     const GRIM::HyperParameters::EncoderLayerConstructionHP& encoder_hp,
@@ -73,7 +83,15 @@ void initializeLmHeadParameterTensors(
     const GRIM::HyperParameters::LMHeadLayerConstructionHP& lm_head_hp,
     std::uint64_t weight_init_seed,
     cudaStream_t init_stream,
-    GRIM::Tensor* tied_embedding_weights);
+    GRIM::Tensor* tied_embedding_weights,
+    const OutputUnigramPriorView* output_unigram_prior);
+
+void initializeMtpHeadParameterTensors(
+    std::vector<GRIM::MtpHeadParameterTensors>& mtp_head_parameter_tensors,
+    const GRIM::HyperParameters::MTPConstructionHP& mtp_hp,
+    std::uint64_t weight_init_seed,
+    cudaStream_t init_stream,
+    const OutputUnigramPriorView* output_unigram_prior);
 
 void initializeExecutionBlockParameterTensors(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,

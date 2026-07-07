@@ -96,6 +96,12 @@ struct SequenceData {
     std::vector<GRIM::TokenizerArtifacts::GrmtSequence*> val_views;
     std::vector<std::uint32_t> train_seq_lengths;
     std::vector<std::uint32_t> val_seq_lengths;
+    struct OutputUnigramPrior {
+        std::vector<float> log_bias;
+        std::uint32_t vocab_size = 0;
+        std::uint32_t seen_tokens = 0;
+        std::uint64_t total_targets = 0;
+    } output_unigram_prior;
     uint32_t vocab_size = 0;  // Vocab size from training data file
 };
 
