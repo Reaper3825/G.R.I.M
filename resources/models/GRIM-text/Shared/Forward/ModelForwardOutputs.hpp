@@ -15,6 +15,7 @@
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -416,6 +417,100 @@ public:
     }
 
     bool hasLogits() const { return logits_tensor.data != nullptr; }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FORWARD-OUTPUT SIZE REPORT (diagnostic)
+    // Emits one line per live retained tensor with element count and byte size,
+    // plus a total. Only tensors with allocated device storage are listed.
+    // ═══════════════════════════════════════════════════════════════════════════
+    std::string describeRetainedSizes(const std::string& tag) const {
+        std::ostringstream body;
+        body << std::fixed;
+        body.precision(2);
+
+        size_t total_bytes = 0;
+        size_t live_tensors = 0;
+
+        auto mib = [](size_t bytes) {
+            return static_cast<double>(bytes) / (1024.0 * 1024.0);
+        };
+
+        auto reportTensor = [&](const std::string& name, const Tensor& t) {
+            if (!t.data) return;
+            const size_t bytes = t.size_bytes();
+            total_bytes += bytes;
+            ++live_tensors;
+            body << "\n  " << name
+                 << " numel=" << t.numel()
+                 << " bytes=" << bytes
+                 << " MiB=" << mib(bytes);
+        };
+
+        auto reportVector = [&](const std::string& name, const std::vector<Tensor>& v) {
+            for (size_t i = 0; i < v.size(); ++i) {
+                reportTensor(name + "[" + std::to_string(i) + "]", v[i]);
+            }
+        };
+
+        // Per-layer retained tensors
+        reportVector("ln1_out_per_layer", ln1_out_per_layer);
+        reportVector("ln2_out_per_layer", ln2_out_per_layer);
+        reportVector("qkv_out_per_layer", qkv_out_per_layer);
+        reportVector("Q_bhsd_per_layer", Q_bhsd_per_layer);
+        reportVector("K_bhsd_per_layer", K_bhsd_per_layer);
+        reportVector("V_bhsd_per_layer", V_bhsd_per_layer);
+        reportVector("attn_out_bhsd_per_layer", attn_out_bhsd_per_layer);
+        reportVector("attn_out_per_layer", attn_out_per_layer);
+        reportVector("proj_out_per_layer", proj_out_per_layer);
+        reportVector("scaled_proj_per_layer", scaled_proj_per_layer);
+        reportVector("residual1_per_layer", residual1_per_layer);
+        reportVector("ffn_out_per_layer", ffn_out_per_layer);
+        reportVector("scaled_ffn_per_layer", scaled_ffn_per_layer);
+        reportVector("output_per_layer", output_per_layer);
+        reportVector("ffn_gate_out_per_layer", ffn_gate_out_per_layer);
+        reportVector("ffn_silu_out_per_layer", ffn_silu_out_per_layer);
+        reportVector("ffn_linear1_out_per_layer", ffn_linear1_out_per_layer);
+        reportVector("ffn_swiglu_out_per_layer", ffn_swiglu_out_per_layer);
+
+        // Cross-layer live tensors
+        reportTensor("embedding_tensor", embedding_tensor);
+        reportTensor("embedding_structured_state", embedding_structured_state);
+        reportTensor("embedding_gate_concat", embedding_gate_concat);
+        reportTensor("embedding_gate_logits", embedding_gate_logits);
+        reportTensor("embedding_gate_values", embedding_gate_values);
+        reportTensor("embedding_gate_delta", embedding_gate_delta);
+        reportVector("encoder_layer_outputs", encoder_layer_outputs);
+        reportTensor("encoder_output_tensor", encoder_output_tensor);
+        reportTensor("lm_head_input_tensor", lm_head_input_tensor);
+        reportTensor("lm_head_mlp_gate_out", lm_head_mlp_gate_out);
+        reportTensor("lm_head_mlp_silu_out", lm_head_mlp_silu_out);
+        reportTensor("lm_head_mlp_up_out", lm_head_mlp_up_out);
+        reportTensor("lm_head_mlp_swiglu_out", lm_head_mlp_swiglu_out);
+        reportTensor("lm_head_mlp_residual_out", lm_head_mlp_residual_out);
+        reportTensor("logits_tensor", logits_tensor);
+        reportVector("mtp_logits_tensors", mtp_logits_tensors);
+        reportTensor("latent_preset_mtp_hidden", latent_preset_mtp_hidden);
+        reportTensor("latent_preset_future_fused", latent_preset_future_fused);
+        reportTensor("latent_preset_future_entropy", latent_preset_future_entropy);
+        reportTensor("latent_preset_z", latent_preset_z);
+        reportTensor("latent_preset_vec", latent_preset_vec);
+        reportTensor("latent_preset_gate_pre", latent_preset_gate_pre);
+        reportTensor("latent_preset_gate", latent_preset_gate);
+        reportTensor("latent_preset_injected", latent_preset_injected);
+        reportTensor("latent_preset_h_enhanced", latent_preset_h_enhanced);
+        reportTensor("selector_logits", selector_logits);
+        reportTensor("scratch_atom_embeddings", scratch_atom_embeddings);
+
+        std::ostringstream out;
+        out << std::fixed;
+        out.precision(2);
+        out << "[ForwardOutputSizes] " << tag
+            << " live_tensors=" << live_tensors
+            << " total_bytes=" << total_bytes
+            << " total_MiB=" << mib(total_bytes)
+            << body.str();
+        return out.str();
+    }
 };
 
 }  // namespace Forward

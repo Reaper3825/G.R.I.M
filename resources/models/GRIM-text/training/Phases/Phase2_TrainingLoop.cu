@@ -914,6 +914,11 @@ BatchResult processBatch(
     // persistent params / grad buffers / optimizer state, this brackets the high
     // end of the step (backward then frees activations as it fills grads).
     updatePeakGpuMemory(ctx, batch_idx, "post_forward");
+    // Per-tensor forward-output size breakdown: lists every live retained
+    // ModelForwardOutputs tensor with element/byte size plus the total. Attributes
+    // the post_forward memory jump to individual forward products.
+    ctx.logging.logger->log(
+        forward_outputs.describeRetainedSizes("batch=" + std::to_string(batch_idx + 1)));
     // Rule 20 ownership taxonomy: processBatch owns the single batch-boundary
     // clear path for the active forward/loss step-state. Do NOT add a second
     // explicit clear() site inside this function.
