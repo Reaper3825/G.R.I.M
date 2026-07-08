@@ -36,14 +36,15 @@
 #include <cmath>
 #include <filesystem>
 #include <functional>
-#include <glm/geometric.hpp>
 #include <iomanip>
 #include <memory>
+#include <optional>
 #include <queue>
 #include <stdexcept>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #ifndef GRIM_ROOT_DIR
@@ -58,24 +59,8 @@ namespace {
     constexpr int32_t kCesiumRequestsPerCachePrune = 512;
     constexpr int64_t kCesiumTileCacheBytes = 512LL * 1024LL * 1024LL;
     constexpr int64_t kCesiumRasterSubTileCacheBytes = 64LL * 1024LL * 1024LL;
-    constexpr double kHorizontalFovRadians = 1.0471975511965976;
-    constexpr double kVerticalFovRadians = 0.7853981633974483;
-    constexpr double kDefaultOrbitPitchRadians = 1.25;
-    constexpr double kMinOrbitPitchRadians = 0.18;
-    constexpr double kMaxOrbitPitchRadians = 1.48;
-    constexpr double kMinOrbitDistanceMeters = 500.0;
-    constexpr double kMaxOrbitDistanceMultiplier = 5.0;
-    constexpr double kOrbitRadiansPerPixel = 0.0045;
-    constexpr double kFineOrbitRadiansPerPixel = 0.0015;
-    constexpr double kWheelZoomStep = 0.12;
-    constexpr double kDragZoomStep = 0.01;
-
-    struct CameraBasis {
-        glm::dvec3 target{0.0, 0.0, 0.0};
-        glm::dvec3 east{1.0, 0.0, 0.0};
-        glm::dvec3 north{0.0, 1.0, 0.0};
-        glm::dvec3 up{0.0, 0.0, 1.0};
-    };
+    constexpr double kDragZoomWheelStepsPerPixel = 0.08333333333333333;
+    constexpr double kRadiansToDegrees = 57.29577951308232;
 
     std::string formatEcef(const glm::dvec3& ecef)
     {
@@ -85,38 +70,14 @@ namespace {
         return stream.str();
     }
 
-    double defaultOrbitDistanceMeters(const glm::dvec3& homeEcef)
+    std::string formatCartographic(const CesiumGeospatial::Cartographic& cartographic)
     {
-        const double homeRadius = glm::length(homeEcef);
-        if (homeRadius <= 0.0)
-            throw std::runtime_error("GeoSpatialRuntime camera home ECEF radius is invalid");
-
-        return homeRadius * 0.35;
-    }
-
-    CameraBasis makeCameraBasis(const glm::dvec3& homeEcef, double targetEastMeters, double targetNorthMeters)
-    {
-        CameraBasis basis;
-        basis.up = glm::normalize(homeEcef);
-
-        const glm::dvec3 worldZ{0.0, 0.0, 1.0};
-        basis.east = glm::cross(worldZ, basis.up);
-        if (glm::length(basis.east) < 1.0e-8)
-            basis.east = glm::dvec3{1.0, 0.0, 0.0};
-        else
-            basis.east = glm::normalize(basis.east);
-
-        basis.north = glm::normalize(glm::cross(basis.up, basis.east));
-        basis.target = homeEcef + basis.east * targetEastMeters + basis.north * targetNorthMeters;
-
-        basis.up = glm::normalize(basis.target);
-        basis.east = glm::cross(worldZ, basis.up);
-        if (glm::length(basis.east) < 1.0e-8)
-            basis.east = glm::dvec3{1.0, 0.0, 0.0};
-        else
-            basis.east = glm::normalize(basis.east);
-        basis.north = glm::normalize(glm::cross(basis.up, basis.east));
-        return basis;
+        std::ostringstream stream;
+        stream << std::fixed << std::setprecision(5)
+               << "lon=" << (cartographic.longitude * kRadiansToDegrees)
+               << " lat=" << (cartographic.latitude * kRadiansToDegrees)
+               << " h=" << std::setprecision(1) << cartographic.height << "m";
+        return stream.str();
     }
 
     std::filesystem::path cesiumCacheDatabasePath()
@@ -263,52 +224,16 @@ namespace {
         return externals;
     }
 
-    Cesium3DTilesSelection::ViewState makeHomeViewState(const glm::dvec3& homeEcef,
-                                                        double targetEastMeters,
-                                                        double targetNorthMeters,
-                                                        double yawRadians,
-                                                        double pitchRadians,
-                                                        double distanceMeters,
-                                                        int viewportWidth,
-                                                        int viewportHeight)
+    Cesium3DTilesSelection::ViewState makeCameraViewState(const UICameraFrame& cameraFrame)
     {
-        if (distanceMeters <= 0.0)
-            throw std::runtime_error("GeoSpatialRuntime camera distance must be positive");
-
-        const CameraBasis basis = makeCameraBasis(homeEcef, targetEastMeters, targetNorthMeters);
-        const glm::dvec3 tangentDirection = glm::normalize(std::cos(yawRadians) * basis.north +
-                                                           std::sin(yawRadians) * basis.east);
-        const glm::dvec3 cameraOffsetDirection = glm::normalize(std::cos(pitchRadians) * tangentDirection +
-                                                                std::sin(pitchRadians) * basis.up);
-        const glm::dvec3 cameraPosition = basis.target + cameraOffsetDirection * distanceMeters;
-        const glm::dvec3 direction = glm::normalize(basis.target - cameraPosition);
-        glm::dvec3 right = glm::cross(direction, basis.up);
-        if (glm::length(right) < 1.0e-8)
-            right = basis.east;
-        else
-            right = glm::normalize(right);
-        const glm::dvec3 up = glm::normalize(glm::cross(right, direction));
-
-        const double width = viewportWidth > 0 ? static_cast<double>(viewportWidth) : 1280.0;
-        const double height = viewportHeight > 0 ? static_cast<double>(viewportHeight) : 720.0;
         return Cesium3DTilesSelection::ViewState(
-            cameraPosition,
-            direction,
-            up,
-            glm::dvec2(width, height),
-            kHorizontalFovRadians,
-            kVerticalFovRadians,
+            cameraFrame.positionEcef,
+            cameraFrame.directionEcef,
+            cameraFrame.upEcef,
+            glm::dvec2(cameraFrame.frustum.viewportWidth, cameraFrame.frustum.viewportHeight),
+            cameraFrame.frustum.horizontalFovRadians,
+            cameraFrame.frustum.verticalFovRadians,
             CesiumGeospatial::Ellipsoid::WGS84);
-    }
-
-    int viewportMouseButtonIndex(PlatformWindow::ViewportMouseButton button)
-    {
-        switch (button) {
-            case PlatformWindow::ViewportMouseButton::Left: return 0;
-            case PlatformWindow::ViewportMouseButton::Right: return 1;
-            case PlatformWindow::ViewportMouseButton::Middle: return 2;
-            default: return -1;
-        }
     }
 }
 
@@ -369,15 +294,7 @@ struct GeoSpatialRuntime::CesiumRuntimeContext final {
         }
     }
 
-    void updateFrame(const glm::dvec3& homeEcef,
-                     float dtSeconds,
-                     double targetEastMeters,
-                     double targetNorthMeters,
-                     double yawRadians,
-                     double pitchRadians,
-                     double distanceMeters,
-                     int viewportWidth,
-                     int viewportHeight)
+    void updateFrame(const UICameraFrame& cameraFrame, float dtSeconds)
     {
         auto mainThreadScope = asyncSystem.enterMainThread();
         asyncSystem.dispatchMainThreadTasks();
@@ -389,14 +306,7 @@ struct GeoSpatialRuntime::CesiumRuntimeContext final {
         }
 
         viewStates.clear();
-    viewStates.push_back(makeHomeViewState(homeEcef,
-                           targetEastMeters,
-                           targetNorthMeters,
-                           yawRadians,
-                           pitchRadians,
-                           distanceMeters,
-                           viewportWidth,
-                           viewportHeight));
+        viewStates.push_back(makeCameraViewState(cameraFrame));
         const Cesium3DTilesSelection::ViewUpdateResult& updateResult =
             tileset->updateViewGroup(tileset->getDefaultViewGroup(), viewStates, dtSeconds);
         renderAdapter->setFrameSelection(updateResult.tilesToRenderThisFrame,
@@ -478,8 +388,7 @@ void GeoSpatialRuntime::requestInitializeCesium()
         -75.59777,
         40.03883,
         24000000.0);
-    homeEcef_ = CesiumGeospatial::Ellipsoid::WGS84.cartographicToCartesian(home);
-    resetCameraLocked();
+    camera_.setHomeCartographic(home);
     cesium_ = std::make_unique<CesiumRuntimeContext>();
     cesium_->renderAdapter->setViewportAttachment(viewportAttachment_);
     cesium_->createOrReloadTileset();
@@ -517,8 +426,7 @@ void GeoSpatialRuntime::requestRecenterHome()
         return;
     }
 
-    orbitTargetEastMeters_ = 0.0;
-    orbitTargetNorthMeters_ = 0.0;
+    camera_.recenterHome();
     refreshCameraStatusLocked();
     snapshot_.cesium_status = "Camera recentered to WGS84 home";
 }
@@ -623,26 +531,21 @@ void GeoSpatialRuntime::tick(float dtSeconds)
             }
         }
 
-        cesium_->updateFrame(homeEcef_,
-                             dtSeconds,
-                             orbitTargetEastMeters_,
-                             orbitTargetNorthMeters_,
-                             orbitYawRadians_,
-                             orbitPitchRadians_,
-                             orbitDistanceMeters_,
-                             viewportWidth,
-                             viewportHeight);
+        camera_.setViewportSize(viewportWidth, viewportHeight);
+        cesium_->updateFrame(camera_.frame(), dtSeconds);
         updateProviderStatusLocked();
     }
 }
 
 void GeoSpatialRuntime::refreshCameraStatusLocked()
 {
+    const UICameraFrame cameraFrame = camera_.frame();
     std::ostringstream stream;
-    stream << "Orbit target " << formatEcef(homeEcef_)
-           << " yaw=" << std::fixed << std::setprecision(1) << (orbitYawRadians_ * 57.29577951308232)
-           << " pitch=" << (orbitPitchRadians_ * 57.29577951308232)
-           << " distance=" << std::setprecision(0) << orbitDistanceMeters_ << "m";
+    stream << "Orbit target " << formatEcef(cameraFrame.targetEcef)
+           << " yaw=" << std::fixed << std::setprecision(1) << (cameraFrame.yawRadians * kRadiansToDegrees)
+           << " pitch=" << (cameraFrame.pitchRadians * kRadiansToDegrees)
+           << " distance=" << std::setprecision(0) << cameraFrame.orbitDistanceMeters << "m"
+           << " altitude=" << cameraFrame.altitudeMeters << "m";
     snapshot_.camera_mode = stream.str();
 }
 
@@ -688,13 +591,13 @@ void GeoSpatialRuntime::handleViewportInput(const PlatformWindow::ViewportInputE
             viewportDragPixels_ += std::abs(deltaX) + std::abs(deltaY);
 
             if (viewportDraggingMiddle_ || (viewportDraggingLeft_ && event.modifiers.shift)) {
-                panCameraLocked(deltaX, deltaY, event.modifiers.ctrl);
+                camera_.panByPixels(deltaX, deltaY, event.modifiers.ctrl);
                 snapshot_.cesium_status = "Camera pan";
             } else if (viewportDraggingRight_) {
-                zoomCameraLocked(-deltaY * kDragZoomStep / kWheelZoomStep);
+                camera_.zoomBySteps(-deltaY * kDragZoomWheelStepsPerPixel);
                 snapshot_.cesium_status = "Camera zoom";
             } else if (viewportDraggingLeft_) {
-                orbitCameraLocked(deltaX, deltaY, event.modifiers.ctrl);
+                camera_.orbitByPixels(deltaX, deltaY, event.modifiers.ctrl);
                 snapshot_.cesium_status = "Camera orbit";
             }
             break;
@@ -710,8 +613,11 @@ void GeoSpatialRuntime::handleViewportInput(const PlatformWindow::ViewportInputE
                 viewportDraggingMiddle_ = false;
 
             if (wasLeftDragging && viewportDragPixels_ < 4.0 && !event.modifiers.shift) {
-                snapshot_.cesium_status = "Pick requested at viewport pixel (" +
-                    std::to_string(event.x) + ", " + std::to_string(event.y) + ")";
+                const std::optional<CesiumGeospatial::Cartographic> picked =
+                    camera_.pickWgs84Cartographic(event.x, event.y);
+                snapshot_.cesium_status = picked
+                    ? "Picked WGS84 " + formatCartographic(*picked)
+                    : "Pick ray missed WGS84 at viewport pixel (" + std::to_string(event.x) + ", " + std::to_string(event.y) + ")";
             }
             break;
         }
@@ -719,7 +625,7 @@ void GeoSpatialRuntime::handleViewportInput(const PlatformWindow::ViewportInputE
         case PlatformWindow::ViewportInputEventType::MouseWheel:
             viewportLastX_ = event.x;
             viewportLastY_ = event.y;
-            zoomCameraLocked(static_cast<double>(event.wheelDelta) / 120.0);
+            camera_.zoomBySteps(static_cast<double>(event.wheelDelta) / 120.0);
             snapshot_.cesium_status = "Camera wheel zoom";
             break;
 
@@ -730,10 +636,10 @@ void GeoSpatialRuntime::handleViewportInput(const PlatformWindow::ViewportInputE
             }
 #ifdef _WIN32
             else if (event.keyCode == VK_OEM_PLUS || event.keyCode == VK_ADD) {
-                zoomCameraLocked(1.0);
+                camera_.zoomBySteps(1.0);
                 snapshot_.cesium_status = "Camera keyboard zoom in";
             } else if (event.keyCode == VK_OEM_MINUS || event.keyCode == VK_SUBTRACT) {
-                zoomCameraLocked(-1.0);
+                camera_.zoomBySteps(-1.0);
                 snapshot_.cesium_status = "Camera keyboard zoom out";
             }
 #endif
@@ -760,79 +666,46 @@ void GeoSpatialRuntime::applyViewportKeyboardLocked(float dtSeconds)
     const bool shift = PlatformInput::isKeyDown(static_cast<int>(PlatformInput::Key::Shift));
     const bool ctrl = PlatformInput::isKeyDown(static_cast<int>(PlatformInput::Key::Control));
     const double rotateStep = 1.5 * static_cast<double>(dtSeconds);
-    const double panStep = orbitDistanceMeters_ * 0.35 * static_cast<double>(dtSeconds);
+    const double panStep = camera_.orbitDistanceMeters() * 0.35 * static_cast<double>(dtSeconds);
 
     auto isDown = [](int keyCode) { return PlatformInput::isKeyDown(keyCode); };
 
     if (shift) {
         if (isDown(static_cast<int>(PlatformInput::Key::Left)))
-            orbitTargetEastMeters_ -= panStep;
+            camera_.panByMeters(-panStep, 0.0);
         if (isDown(static_cast<int>(PlatformInput::Key::Right)))
-            orbitTargetEastMeters_ += panStep;
+            camera_.panByMeters(panStep, 0.0);
         if (isDown(static_cast<int>(PlatformInput::Key::Up)))
-            orbitTargetNorthMeters_ += panStep;
+            camera_.panByMeters(0.0, panStep);
         if (isDown(static_cast<int>(PlatformInput::Key::Down)))
-            orbitTargetNorthMeters_ -= panStep;
+            camera_.panByMeters(0.0, -panStep);
     } else {
         if (isDown(static_cast<int>(PlatformInput::Key::Left)) || isDown('A'))
-            orbitYawRadians_ -= rotateStep;
+            camera_.orbitByRadians(-rotateStep, 0.0);
         if (isDown(static_cast<int>(PlatformInput::Key::Right)) || isDown('D'))
-            orbitYawRadians_ += rotateStep;
+            camera_.orbitByRadians(rotateStep, 0.0);
         if (isDown(static_cast<int>(PlatformInput::Key::Up)) || isDown('W'))
-            orbitPitchRadians_ += rotateStep;
+            camera_.orbitByRadians(0.0, rotateStep);
         if (isDown(static_cast<int>(PlatformInput::Key::Down)) || isDown('S'))
-            orbitPitchRadians_ -= rotateStep;
+            camera_.orbitByRadians(0.0, -rotateStep);
     }
 
     if (isDown('Q'))
-        zoomCameraLocked(-static_cast<double>(dtSeconds) * 8.0);
+        camera_.zoomBySteps(-static_cast<double>(dtSeconds) * 8.0);
     if (isDown('E'))
-        zoomCameraLocked(static_cast<double>(dtSeconds) * 8.0);
+        camera_.zoomBySteps(static_cast<double>(dtSeconds) * 8.0);
     if (ctrl)
-        clampCameraLocked();
+        camera_.clampOrbit();
 
-    clampCameraLocked();
+    camera_.clampOrbit();
     refreshCameraStatusLocked();
 }
 
 void GeoSpatialRuntime::resetCameraLocked()
 {
-    orbitYawRadians_ = 0.0;
-    orbitPitchRadians_ = kDefaultOrbitPitchRadians;
-    orbitDistanceMeters_ = defaultOrbitDistanceMeters(homeEcef_);
-    orbitTargetEastMeters_ = 0.0;
-    orbitTargetNorthMeters_ = 0.0;
+    camera_.resetOrbit();
     viewportDragPixels_ = 0.0;
-    clampCameraLocked();
     refreshCameraStatusLocked();
-}
-
-void GeoSpatialRuntime::clampCameraLocked()
-{
-    const double maxDistance = defaultOrbitDistanceMeters(homeEcef_) * kMaxOrbitDistanceMultiplier;
-    orbitPitchRadians_ = std::clamp(orbitPitchRadians_, kMinOrbitPitchRadians, kMaxOrbitPitchRadians);
-    orbitDistanceMeters_ = std::clamp(orbitDistanceMeters_, kMinOrbitDistanceMeters, maxDistance);
-}
-
-void GeoSpatialRuntime::orbitCameraLocked(double deltaX, double deltaY, bool fineControl)
-{
-    const double scale = fineControl ? kFineOrbitRadiansPerPixel : kOrbitRadiansPerPixel;
-    orbitYawRadians_ -= deltaX * scale;
-    orbitPitchRadians_ -= deltaY * scale;
-    clampCameraLocked();
-}
-
-void GeoSpatialRuntime::panCameraLocked(double deltaX, double deltaY, bool fineControl)
-{
-    const double scale = orbitDistanceMeters_ * (fineControl ? 0.0002 : 0.0008);
-    orbitTargetEastMeters_ -= deltaX * scale;
-    orbitTargetNorthMeters_ += deltaY * scale;
-}
-
-void GeoSpatialRuntime::zoomCameraLocked(double wheelSteps)
-{
-    orbitDistanceMeters_ *= std::exp(-wheelSteps * kWheelZoomStep);
-    clampCameraLocked();
 }
 
 } // namespace GRIM::GeoSpatial
