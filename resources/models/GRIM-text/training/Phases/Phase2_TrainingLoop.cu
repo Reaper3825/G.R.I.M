@@ -189,6 +189,18 @@ int gpuMemoryLogInterval() {
     return 50;  // default: emit a breakdown line every 50 batches (plus the first)
 }
 
+bool shouldEmitGpuMemoryDiagnostics(const TrainingContext& ctx, int batch_idx) {
+    if constexpr (!GRIM::VerboseLogging::ENABLE_GPU_MEMORY_DIAGNOSTICS) {
+        return false;
+    } else {
+        if (!ctx.logging.logger) {
+            return false;
+        }
+        const int interval = gpuMemoryLogInterval();
+        return (batch_idx == 0) || (((batch_idx + 1) % interval) == 0);
+    }
+}
+
 // Update the run-level peak GPU-memory high-water mark AND, at a modest interval,
 // emit an informative [GPU_MEM] breakdown that splits device-used into async-pool
 // reserved vs. non-pool bytes. This is the measurement that turns the previously
@@ -208,13 +220,7 @@ void updatePeakGpuMemory(TrainingContext& ctx, int batch_idx, const char* phase)
     }
     ctx.gpu_total_bytes = mem.device_total;
 
-    if constexpr (!GRIM::VerboseLogging::ENABLE_GPU_MEMORY_DIAGNOSTICS) {
-        return;
-    }
-
-    const int interval = gpuMemoryLogInterval();
-    const bool should_log = (batch_idx == 0) || (((batch_idx + 1) % interval) == 0);
-    if (!should_log || !ctx.logging.logger) {
+    if (!shouldEmitGpuMemoryDiagnostics(ctx, batch_idx)) {
         return;
     }
 
@@ -935,11 +941,9 @@ BatchResult processBatch(
     // Per-tensor forward-output size breakdown: lists every live retained
     // ModelForwardOutputs tensor with element/byte size plus the total. Attributes
     // the post_forward memory jump to individual forward products.
-    if constexpr (GRIM::VerboseLogging::ENABLE_GPU_MEMORY_DIAGNOSTICS) {
-        if (ctx.logging.logger) {
-            ctx.logging.logger->log(
-                forward_outputs.describeRetainedSizes("batch=" + std::to_string(batch_idx + 1)));
-        }
+    if (shouldEmitGpuMemoryDiagnostics(ctx, batch_idx)) {
+        ctx.logging.logger->log(
+            forward_outputs.describeRetainedSizes("batch=" + std::to_string(batch_idx + 1)));
     }
     // Rule 20 ownership taxonomy: processBatch owns the single batch-boundary
     // clear path for the active forward/loss step-state. Do NOT add a second
@@ -1606,8 +1610,8 @@ bool executePhase2(TrainingContext& ctx) {
 
     const int accum_steps = validatedAccumulationSteps(ctx);
     const int num_epochs = schedule_hp.epochs;
-    auto& parameter_registry = ctx.parameter_registry;
     if (num_epochs <= 0) {
+    auto& parameter_registry = ctx.parameter_registry;
         throw std::runtime_error("FATAL: epochs must be > 0 in Phase2");
     }
     if (static_cast<int>(ctx.epoch_batch_order.size()) != num_epochs) {
