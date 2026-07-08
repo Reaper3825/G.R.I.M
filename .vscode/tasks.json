@@ -133,6 +133,30 @@
 			"isBackground": false,
 			"problemMatcher": [],
 			"group": "build"
+		},
+		{
+			"label": "vcpkg: reinstall cesium-native picosha2 fix",
+			"type": "shell",
+			"command": "D:\\G.R.I.M\\external\\vcpkg\\vcpkg.exe",
+			"args": [
+				"install",
+				"--x-manifest-root=D:\\G.R.I.M"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "vcpkg: reinstall cesium-native escaped picosha2 fix",
+			"type": "shell",
+			"command": "D:\\G.R.I.M\\external\\vcpkg\\vcpkg.exe",
+			"args": [
+				"install",
+				"--x-manifest-root=D:\\G.R.I.M"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
 		}
 	]
 }

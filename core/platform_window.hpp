@@ -11,6 +11,44 @@
 
 namespace PlatformWindow {
 
+enum class ViewportInputEventType {
+    MouseMove,
+    MouseDown,
+    MouseUp,
+    MouseWheel,
+    KeyDown,
+    KeyUp,
+    FocusLost
+};
+
+enum class ViewportMouseButton {
+    None,
+    Left,
+    Right,
+    Middle,
+    X1,
+    X2
+};
+
+struct ViewportInputModifiers {
+    bool ctrl = false;
+    bool shift = false;
+    bool alt = false;
+};
+
+struct ViewportInputEvent {
+    ViewportInputEventType type = ViewportInputEventType::MouseMove;
+    ViewportMouseButton button = ViewportMouseButton::None;
+    int x = 0;
+    int y = 0;
+    int wheelDelta = 0;
+    int keyCode = 0;
+    bool repeat = false;
+    ViewportInputModifiers modifiers{};
+};
+
+using ViewportInputCallback = std::function<void(const ViewportInputEvent&)>;
+
 struct OverlayBlurStyle {
     bool enabled = true;
     float opacity = 0.99f;
@@ -35,6 +73,7 @@ void setWindowVisible(void* handle, bool visible);
 void* createViewportWindow(void* overlayWindowHandle, const char* debugName);
 void destroyViewportWindow(void* viewportWindowHandle);
 void setViewportWindowVisible(void* viewportWindowHandle, bool visible);
+void setViewportInputCallback(void* viewportWindowHandle, ViewportInputCallback callback);
 void setViewportWindowBounds(void* viewportWindowHandle,
                              void* overlayWindowHandle,
                              int x,

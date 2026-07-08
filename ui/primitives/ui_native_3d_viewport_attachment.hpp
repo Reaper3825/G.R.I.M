@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ui_3d_viewport.hpp"
+#include "core/platform_window.hpp"
 
 #include <bgfx/bgfx.h>
 #include <string>
@@ -12,6 +13,7 @@ public:
 
     void onViewportGeometryChanged(const UI3DViewportGeometry& geometry) override;
     void onViewportDetached() override;
+    void setInputCallback(PlatformWindow::ViewportInputCallback callback);
 
     void* nativeHandle() const { return viewportWindowHandle_; }
     bgfx::FrameBufferHandle frameBufferHandle() const { return frameBuffer_; }
@@ -33,4 +35,5 @@ private:
     uint16_t frameBufferHeight_ = 0;
     std::string debugName_;
     UI3DViewportGeometry lastGeometry_{};
+    PlatformWindow::ViewportInputCallback inputCallback_;
 };

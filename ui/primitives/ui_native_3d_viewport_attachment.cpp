@@ -55,8 +55,16 @@ void UINative3DViewportAttachment::onViewportDetached()
     if (!viewportWindowHandle_)
         return;
 
+    PlatformWindow::setViewportInputCallback(viewportWindowHandle_, {});
     PlatformWindow::destroyViewportWindow(viewportWindowHandle_);
     viewportWindowHandle_ = nullptr;
+}
+
+void UINative3DViewportAttachment::setInputCallback(PlatformWindow::ViewportInputCallback callback)
+{
+    inputCallback_ = std::move(callback);
+    if (viewportWindowHandle_)
+        PlatformWindow::setViewportInputCallback(viewportWindowHandle_, inputCallback_);
 }
 
 void UINative3DViewportAttachment::ensureWindow()
@@ -67,6 +75,9 @@ void UINative3DViewportAttachment::ensureWindow()
     viewportWindowHandle_ = PlatformWindow::createViewportWindow(overlayWindowHandle_, debugName_.c_str());
     if (!viewportWindowHandle_)
         throw std::runtime_error("UINative3DViewportAttachment failed to create viewport window for '" + debugName_ + "'");
+
+    if (inputCallback_)
+        PlatformWindow::setViewportInputCallback(viewportWindowHandle_, inputCallback_);
 }
 
 void UINative3DViewportAttachment::hideWindow()

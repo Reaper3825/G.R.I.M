@@ -44,6 +44,11 @@ vcpkg_cmake_configure(
 
 vcpkg_cmake_install()
 vcpkg_cmake_config_fixup(PACKAGE_NAME cesium-native CONFIG_PATH share/cesium-native/cmake)
+vcpkg_replace_string(
+    "${CURRENT_PACKAGES_DIR}/share/cesium-native/cesium-nativeTargets.cmake"
+    [=[;\$<LINK_ONLY:picosha2::picosha2>]=]
+    ""
+)
 vcpkg_fixup_pkgconfig()
 
 file(REMOVE_RECURSE

@@ -510,6 +510,7 @@ int main(int argc, char* argv[])
                                                    geoSpatialViewportAttachment,
                                                    0x153A4AFF);
     geoSpatialRuntime->setViewportReady(true);
+    geoSpatialRuntime->setViewportAttachment(geoSpatialViewportAttachment);
     geoSpatialPanel->setController(geoSpatialRuntime.get());
     geoSpatialPanel->setViewportAttachment(geoSpatialViewportAttachment);
     // Stage 1: hand the device server to the physical environment subsystem so the
