@@ -35,7 +35,8 @@ constexpr bool ENABLE_LOGIT_SCALE_DIAGNOSTICS = false; ///< [LOGIT_SCALE_EQUATIO
 // GPU allocation diagnostics - OFF by default. When enabled, logs every allocation
 // request with requested size and current free/total VRAM to pinpoint OOM sources.
 constexpr bool ENABLE_GPU_ALLOCATION_LOGS = false;     ///< [GPU_ALLOC] per-request allocation diagnostics
-constexpr bool ENABLE_GPU_ALLOCATION_LEDGER = true;    ///< [GPU_ALLOC_LEDGER] scoped aggregate allocation diagnostics
+constexpr bool ENABLE_GPU_MEMORY_DIAGNOSTICS = false;  ///< [GPU_MEM], [ForwardAllocationSizes], [ForwardOutputSizes]
+constexpr bool ENABLE_GPU_ALLOCATION_LEDGER = false;   ///< [GPU_ALLOC_LEDGER] scoped aggregate allocation diagnostics
 
 // FlashAttention equation diagnostics — 5 sync D2H copies per layer × 12 layers = 60 pipeline
 // drains per batch PLUS O(seqlen²) host-side attention score computation. These were critical

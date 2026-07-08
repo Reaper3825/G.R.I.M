@@ -435,7 +435,7 @@
             "auto_stop_high_loss_threshold": 6.0,
             "auto_stop_plateau_min_delta": 0.004,
             "auto_stop_plateau_patience": 18,
-            "batch_size": 12,
+            "batch_size": 8,
             "batch_strategy": "RANDOM",
             "center_encoder_residuals": false,
             "center_logits": false,

@@ -12,6 +12,7 @@ Per-feature documentation. Load only the feature(s) relevant to the current task
 | [TrainingState.md](TrainingState.md) | Centralized GPU resource ownership |
 | [GraphStateOwnership.md](GraphStateOwnership.md) | Single-graph phase ownership: upload, forward, loss, backward, optimizer |
 | [ForwardChronology.md](ForwardChronology.md) | Chronological training/inference paths from batch entry to first forward broadcast |
+| [ForwardMemoryAllocationAnalysis.md](ForwardMemoryAllocationAnalysis.md) | Analysis report for batch-size-12 and batch-size-1 forward allocation, retained output, and GPU memory samples |
 | [InferenceBoundary.md](InferenceBoundary.md) | Inference/training forward split TODO |
 | [ForwardReadOnlyPlan.md](ForwardReadOnlyPlan.md) | Plan to make shared forward read-only over durable parameter state |
 | [Autograd.md](Autograd.md) | TensorContract, GradFn, intermediates lifetime |
