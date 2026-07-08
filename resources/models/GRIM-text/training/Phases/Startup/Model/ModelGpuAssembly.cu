@@ -339,11 +339,7 @@ void initializeInferenceRuntime(const ::GRIM::Config::AiConfigSnapshot& model_cf
     }
 
     const auto mtp_hp = GRIM::HyperParameters::mtpConstructionHP(model_cfg);
-    if (GRIM::HyperParameters::mtpUsesLatentTrajectoryLogits(model_cfg)) {
-        if (!parameter_registry.mtpHeadParameterTensors().empty()) {
-            throw std::runtime_error(std::string("[") + caller + "] standalone MTP heads were assembled while latent_trajectory_preset_use_mtp_logits=true (MTP logits use the shared LM head).");
-        }
-    } else if (mtp_hp.enabled && static_cast<int>(parameter_registry.mtpHeadParameterTensors().size()) != mtp_hp.k) {
+    if (mtp_hp.enabled && static_cast<int>(parameter_registry.mtpHeadParameterTensors().size()) != mtp_hp.k) {
         throw std::runtime_error(std::string("[") + caller + "] MTP heads were not assembled by Startup::assembleGpuModel() while mtp is enabled.");
     }
 
@@ -549,20 +545,13 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
             weight_init_seed,
             init_stream);
 
-        if (GRIM::HyperParameters::mtpUsesLatentTrajectoryLogits(model_cfg)) {
-            // Latent-trajectory MTP mode: logits come from
-            // latent_preset_mtp_hidden slices through the SHARED LM head, so
-            // standalone per-horizon MTP head parameters are never assembled.
-            std::cout << "✓ MTP auxiliary heads SKIPPED (latent_trajectory_preset_use_mtp_logits=true — shared LM head)\n";
-        } else {
-            ModelRegistration::initializeMtpHeadParameterTensors(
-                parameter_registry.mtpHeadParameterTensors(),
-                GRIM::HyperParameters::mtpConstructionHP(model_cfg),
-                weight_init_seed,
-                init_stream,
-                output_unigram_prior);
-            std::cout << "✓ MTP auxiliary heads created\n";
-        }
+        ModelRegistration::initializeMtpHeadParameterTensors(
+            parameter_registry.mtpHeadParameterTensors(),
+            GRIM::HyperParameters::mtpConstructionHP(model_cfg),
+            weight_init_seed,
+            init_stream,
+            output_unigram_prior);
+        std::cout << "✓ MTP auxiliary heads created\n";
 
         ModelRegistration::initializeLatentTrajectoryPresetParameterTensors(
             parameter_registry,

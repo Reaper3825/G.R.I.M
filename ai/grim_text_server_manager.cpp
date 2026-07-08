@@ -132,6 +132,7 @@ bool GRIMTextServerManager::start() {
         return fs::path(getGrimRootDir()) / path;
     };
 
+    fs::path grimRoot = fs::path(getGrimRootDir());
     fs::path serverExe = resolveFromGrimRoot(serverPath_);
     
     if (!fs::exists(serverExe)) {
@@ -141,6 +142,7 @@ bool GRIMTextServerManager::start() {
     }
     
     LOG_DEBUG("GRIMTextServer", "Server path: " + serverExe.string());
+    LOG_DEBUG("GRIMTextServer", "Working directory: " + grimRoot.string());
     
 #ifdef _WIN32
     // Setup startup info
@@ -168,7 +170,7 @@ bool GRIMTextServerManager::start() {
         FALSE,
         CREATE_NO_WINDOW,  // Don't create new console - inherit parent's process group
         nullptr,
-        serverExe.parent_path().string().c_str(),
+        grimRoot.string().c_str(),
         &si,
         &processInfo_
     );

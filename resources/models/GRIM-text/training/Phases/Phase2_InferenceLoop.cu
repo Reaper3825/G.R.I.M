@@ -327,14 +327,10 @@ GRIM::GeneratedSequence generateOneSequence(
     kv_cache.beginSession(stream);
 
     // MTP self-speculative decode is enabled whenever the model has trained MTP
-    // heads. It is EXACT (output-identical to plain decode): every committed token
-    // is selectNextToken(verify_logits, context); the MTP drafts only decide
+    // predictors. It is EXACT (output-identical to plain decode): every committed
+    // token is selectNextToken(verify_logits, context); the MTP drafts only decide
     // whether a verify row can be reused. draft_k == 0 collapses to plain decode.
-    // Latent-trajectory MTP mode has no standalone MTP head parameters and the
-    // latent preset path is not wired for KV-cache decode, so self-speculative
-    // MTP drafting is unavailable; decode falls back to plain (exact) decoding.
-    const bool mtp_uses_latent_logits = GRIM::HyperParameters::mtpUsesLatentTrajectoryLogits(config);
-    const bool use_mtp = mtp_hp.enabled && mtp_hp.k > 0 && !mtp_uses_latent_logits;
+    const bool use_mtp = mtp_hp.enabled && mtp_hp.k > 0;
     // Arg/option selector decode bridge: when enabled, a generated numeric-atom
     // placeholder (<INT>/<FLOAT>) is bound to the candidate atom-entry the trained
     // selector picks from this row's pool (prompt atoms). MTP speculation is

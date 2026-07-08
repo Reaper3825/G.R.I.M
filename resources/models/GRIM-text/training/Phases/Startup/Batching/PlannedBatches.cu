@@ -92,9 +92,32 @@ GRIM::Batching::BatchPayload buildPayloadFromAssignmentImpl(
 void validatePlannedPayloadOrThrow(
     const GRIM::Batching::BatchPayload& payload,
     const char* split,
-    int batch_idx)
+    int batch_idx,
+    int expected_mtp_k)
 {
     payload.validate("PlannedBatches");
+
+    if (expected_mtp_k < 0) {
+        std::ostringstream oss;
+        oss << "FATAL: PlannedBatches " << split << " batch " << batch_idx
+            << " expected_mtp_k=" << expected_mtp_k
+            << " (must be >= 0)";
+        throw std::runtime_error(oss.str());
+    }
+    if (static_cast<int>(payload.mtp_shifted_targets.size()) != expected_mtp_k) {
+        std::ostringstream oss;
+        oss << "FATAL: PlannedBatches " << split << " batch " << batch_idx
+            << " has mtp_shifted_targets.size()=" << payload.mtp_shifted_targets.size()
+            << " != configured mtp_k=" << expected_mtp_k;
+        throw std::runtime_error(oss.str());
+    }
+    if (static_cast<int>(payload.mtp_valid_counts.size()) != expected_mtp_k) {
+        std::ostringstream oss;
+        oss << "FATAL: PlannedBatches " << split << " batch " << batch_idx
+            << " has mtp_valid_counts.size()=" << payload.mtp_valid_counts.size()
+            << " != configured mtp_k=" << expected_mtp_k;
+        throw std::runtime_error(oss.str());
+    }
 
     if (!payload.device_storage) {
         std::ostringstream oss;
@@ -134,7 +157,8 @@ GRIM::Batching::BatchPayload buildValPayload(
     const GRIM::Batching::BatchAssignment& assignment)
 {
     return buildPayloadFromAssignmentImpl(
-        ctx, assignment, ctx.data.val_views, /*mtp_k=*/0);
+        ctx, assignment, ctx.data.val_views,
+        trainingMtpK(ctx));
 }
 
 void PlannedBatchesReady(TrainingContext& ctx) {
@@ -208,6 +232,7 @@ void PlannedBatchesReady(TrainingContext& ctx) {
     auto shared_device_storage = GRIM::Batching::createBatchDeviceStorage(
         ctx.config,
         ctx.requireTrainingState("PlannedBatchesReady").stream_ctrl.getPrimaryStream());
+    const int mtp_k = trainingMtpK(ctx);
 
     //======================================================//
     // Train payloads: materialize a host BatchPayload per assignment.
@@ -223,7 +248,7 @@ void PlannedBatchesReady(TrainingContext& ctx) {
             payload,
             shared_device_storage,
             "PlannedBatchesReady(train)");
-        validatePlannedPayloadOrThrow(payload, "train", i);
+        validatePlannedPayloadOrThrow(payload, "train", i, mtp_k);
         ctx.train_payloads.push_back(std::move(payload));
     }
     log("[PlannedBatches] Built " + std::to_string(ctx.train_payloads.size()) +
@@ -262,7 +287,7 @@ void PlannedBatchesReady(TrainingContext& ctx) {
                 payload,
                 shared_device_storage,
                 "PlannedBatchesReady(val)");
-            validatePlannedPayloadOrThrow(payload, "val", i);
+            validatePlannedPayloadOrThrow(payload, "val", i, mtp_k);
             ctx.val_payloads.push_back(std::move(payload));
         }
         log("[PlannedBatches] Built " + std::to_string(ctx.val_payloads.size()) +

@@ -533,18 +533,6 @@ void registerMtpParameters(ParameterRegistry::StartupParameterRegistry& paramete
         }
         return;
     }
-    if (GRIM::HyperParameters::mtpUsesLatentTrajectoryLogits(config)) {
-        // Latent-trajectory MTP mode: MTP logits are the shared LM head applied
-        // to latent_preset_mtp_hidden slices — there are no standalone MTP head
-        // parameters to register (their gradients flow into LM_HEAD and
-        // LATENT_TRAJECTORY_PRESET groups instead).
-        if (!mtp_heads.empty()) {
-            throw std::runtime_error("[buildParameterGroups] standalone MTP heads exist while "
-                                     "latent_trajectory_preset_use_mtp_logits=true (MTP logits use the shared LM head)");
-        }
-        return;
-    }
-
     if (mtp_hp.k <= 0) {
         throw std::runtime_error("[buildParameterGroups] config.mtp_enabled=true but config.mtp_k <= 0");
     }

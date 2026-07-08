@@ -120,12 +120,18 @@ separate decode graph file.
 - Phase2 `generateOneSequence` prefills the prompt (`q_len = prompt_len`), then
   decodes one token at a time (`q_len = 1`), or `q_len = K+1` for MTP
   speculative verification.
-- MTP self-speculative decode (default ON when the model has MTP heads) is
+- MTP self-speculative decode (default ON when MTP is enabled) is
   **exact / output-identical** to plain decode: each committed token is
-  `SamplingPipeline::selectNextToken(verify_row, context)`; the MTP-head argmax
+  `SamplingPipeline::selectNextToken(verify_row, context)`; the MTP argmax
   drafts only decide whether the next verify row's context is already correct and
   can be reused. On a mismatch the cache rolls back to the accepted prefix. With
   `K=0` the loop is plain KV-cached decode.
+- LatentTrajectoryPreset runs on the cached path: it is a strictly row-local
+  post-encoder transform over the active window's `[q_len, d_model]` hidden
+  states, so no latent history cache exists. In latent-trajectory MTP mode
+  (`latent_trajectory_preset_use_mtp_logits=true`) MTP draft logits come from
+  `latent_preset_mtp_hidden` slices projected through the registered per-horizon
+  MTP heads; speculation uses the same verify/rollback loop.
 
 Known limitations (tracked under "other missing pieces"): no HTTP token
 streaming; no stop-sequences; numeric-atom generation and execution-block decode

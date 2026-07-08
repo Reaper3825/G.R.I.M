@@ -1691,11 +1691,7 @@ bool verifyGradientsAreConnectedImpl(
         }
     }
 
-    // Latent-trajectory MTP mode has no standalone MTP parameter groups: the
-    // MTP CE gradient lands in LM_HEAD and LATENT_TRAJECTORY_PRESET groups.
-    const bool mtp_uses_latent_logits = model_hp.latent_trajectory_preset_enabled &&
-                                        model_hp.latent_trajectory_preset_use_mtp_logits;
-    if (model_hp.mtp_enabled && model_hp.mtp_k > 0 && !mtp_uses_latent_logits) {
+    if (model_hp.mtp_enabled && model_hp.mtp_k > 0) {
         if (!ctx.parameter_registry) {
             AG_WARN("ctx.parameter_registry is NULL during MTP gradient verification while MTP is enabled");
             ok = false;
