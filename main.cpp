@@ -32,6 +32,7 @@
 #include "ui/primitives/ui_native_3d_viewport_attachment.hpp"
 #include "ui/primitives/ui_native_3d_viewport_clear_pass.hpp"
 #include "ui/ui_surface_renderer_bridge.hpp"
+#include "geospatial/geospatial_runtime.hpp"
 #include "control/devices/server/device_comm_server.hpp"
 #include "resources.hpp"
 #include "nlp/nlp.hpp"
@@ -502,11 +503,14 @@ int main(int argc, char* argv[])
     auto dataHubPanel = std::make_shared<UIDataHubPanel>();
     auto storagePanel = std::make_shared<UIStoragePanel>();
     auto geoSpatialPanel = std::make_shared<UIGeoSpatialPanel>();
+    auto geoSpatialRuntime = std::make_shared<GRIM::GeoSpatial::GeoSpatialRuntime>();
     auto geoSpatialViewportAttachment = std::make_shared<UINative3DViewportAttachment>(
         UIRoot::get().getHWND(), "GeoSpatialViewport");
     UINative3DViewportClearPass::registerClearPass("GeoSpatialViewportClear",
                                                    geoSpatialViewportAttachment,
                                                    0x153A4AFF);
+    geoSpatialRuntime->setViewportReady(true);
+    geoSpatialPanel->setController(geoSpatialRuntime.get());
     geoSpatialPanel->setViewportAttachment(geoSpatialViewportAttachment);
     // Stage 1: hand the device server to the physical environment subsystem so the
     // camera directory can include hub-registered devices that advertise "camera".
@@ -645,6 +649,8 @@ int main(int argc, char* argv[])
         // advanced. Order: projector first so router sees the freshest scene.
         GRIM::Perception::Physical::TickPhysicalWorldStateContextProjector();
         GRIM::Perception::Physical::TickPhysicalWorldStateMemoryWriter();
+
+        geoSpatialRuntime->tick(0.016f);
 
         UIRoot::get().update(input, 0.016f);
 

@@ -587,65 +587,8 @@ GRIM::Forward::ModelForwardRuntimePayload buildTrainingForwardRuntimePayload(
     return runtime_payload;
 }
 
-std::vector<GRIM::Forward::MTPHeadForwardView> buildConnectedForwardMtpHeadViews(
-    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    int mtp_k,
-    cudaStream_t stream)
-{
-    auto buildConnectedParameterView = [stream](GRIM::Tensor& parameter, const char* name) -> GRIM::Tensor {
-        if (!parameter.data) {
-            throw std::runtime_error(std::string("buildForwardMtpHeadViews: parameter data is NULL for ") + name);
-        }
-
-        GRIM::Tensor view = GRIM::Tensor::from_ptr(
-            parameter.data,
-            parameter.shape,
-            false,
-            parameter.requires_grad,
-            name);
-        view.compute_precision = parameter.compute_precision;
-        view.is_leaf = parameter.is_leaf;
-        view.retain_grad = parameter.retain_grad;
-        view.stream = stream;
-        view.grad_fn = parameter.grad_fn;
-        if (parameter.requires_grad && parameter.is_leaf) {
-            parameter.ensure_grad();  // throws if startup missed alloc_grad()
-            view.share_grad(parameter);
-        }
-        return view;
-    };
-
-    std::vector<GRIM::Forward::MTPHeadForwardView> views;
-    if (mtp_k <= 0) {
-        return views;
-    }
-
-    views.reserve(static_cast<size_t>(mtp_k));
-    auto& mtp_head_parameter_tensors = parameter_registry.mtpHeadParameterTensors();
-    for (int k = 0; k < mtp_k; ++k) {
-        if (k < 0 || k >= static_cast<int>(mtp_head_parameter_tensors.size())) {
-            throw std::runtime_error(
-                "buildForwardMtpHeadViews: parameter_registry is missing MTP head " + std::to_string(k));
-        }
-        auto* head = &mtp_head_parameter_tensors[static_cast<std::size_t>(k)];
-        if (!head->weight.data || !head->bias.data) {
-            throw std::runtime_error(
-                "buildForwardMtpHeadViews: MTP head " + std::to_string(k) +
-                " has NULL weight or bias tensor");
-        }
-
-        GRIM::Forward::MTPHeadForwardView view{};
-        view.weight = buildConnectedParameterView(head->weight, "mtp_head_weight_view");
-        view.bias = buildConnectedParameterView(head->bias, "mtp_head_bias_view");
-        views.push_back(std::move(view));
-    }
-
-    return views;
-}
-
 GRIM::Forward::ModelForwardRequest buildTrainingForwardRequest(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    int mtp_k,
     const GRIM::PBM::PBMState& pbm,
     const GRIM::Config::AiConfigSnapshot& config,
     const GRIMText::Training::Startup::ForwardTopologyView& forward_topology,
@@ -668,12 +611,6 @@ GRIM::Forward::ModelForwardRequest buildTrainingForwardRequest(
     request.payload = &payload;
     request.bindings = &bindings;
     request.batch_idx = batch_idx;
-    if (emit_mtp_logits) {
-        request.mtp_heads = buildConnectedForwardMtpHeadViews(
-            parameter_registry,
-            mtp_k,
-            stream);
-    }
     request.graph = GRIM::Forward::ModelForwardGraphPolicy{
         /*connect_parameter_graph=*/true,
         /*retain_backward_graph=*/true,
@@ -898,7 +835,6 @@ BatchResult processBatch(
     GRIM::Forward::ModelForwardRequest forward_request =
         buildTrainingForwardRequest(
             ctx.parameter_registry,
-            mtp_k,
             ctx.pbm_owner.state(),
             model_config,
             forward_topology,
@@ -1328,13 +1264,6 @@ ValidationResult runValidation(TrainingContext& ctx) {
         forward_request.payload = &val_payload;
         forward_request.bindings = &val_bindings;
         forward_request.batch_idx = static_cast<uint64_t>(val_idx);
-        if (emit_mtp_logits) {
-            // Forward-only: connect_parameter_graph=false below means these views'
-            // shared grads are never written (no backward). Safe to reuse the
-            // training-side builder; the grad aliasing is inert during eval.
-            forward_request.mtp_heads = buildConnectedForwardMtpHeadViews(
-                ctx.parameter_registry, mtp_k, stream);
-        }
         // Eval policy: read-only forward (no autograd edges, no retained backward
         // graph) with dropout DISABLED — identical to the inference forward.
         // The text-CE, MTP, and selector loss terms read only explicitly-emitted

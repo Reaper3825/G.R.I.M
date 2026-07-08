@@ -31,6 +31,7 @@
     "cpp-httplib",
     "gumbo",
     "ffmpeg",
+    "cesium-native",
     "simdjson",
     "poppler"
   ]

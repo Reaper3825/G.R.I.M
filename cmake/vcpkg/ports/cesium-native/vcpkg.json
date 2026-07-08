@@ -1,0 +1,47 @@
+{
+  "name": "cesium-native",
+  "version": "0.62.0",
+  "description": "Cesium Native geospatial runtime libraries for 3D Tiles, glTF, terrain, raster overlays, and globe math.",
+  "homepage": "https://github.com/CesiumGS/cesium-native",
+  "license": "Apache-2.0",
+  "dependencies": [
+    "ada-url",
+    "asmjit",
+    "asyncplusplus",
+    "blend2d",
+    "cpp-httplib",
+    "curl",
+    "doctest",
+    "draco",
+    "earcut-hpp",
+    "expected-lite",
+    "glm",
+    "ktx",
+    "libjpeg-turbo",
+    "libmorton",
+    "libwebp",
+    "meshoptimizer",
+    "modp-base64",
+    "ms-gsl",
+    "openssl",
+    "picosha2",
+    "rapidjson",
+    "s2geometry",
+    "spdlog",
+    "spz",
+    "sqlite3",
+    "stb",
+    "tinyxml2",
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    },
+    "zlib",
+    "zlib-ng",
+    "zstd"
+  ]
+}

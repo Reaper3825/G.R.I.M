@@ -42,11 +42,6 @@ namespace GRIM {
 
 namespace Forward {
 
-struct MTPHeadForwardView {
-    Tensor weight;
-    Tensor bias;
-};
-
 struct ModelForwardGraphPolicy {
     // Caller-authored graph policy. This is deliberately not a training-vs-inference
     // mode enum: orchestration chooses whether this forward call may connect
@@ -73,7 +68,6 @@ struct ModelForwardRequest {
     cudaStream_t stream = nullptr;
 
     bool execution_block_enabled = false;
-    std::vector<MTPHeadForwardView> mtp_heads;
 
     const Batching::BatchPayload* payload = nullptr;
     const Batching::BatchDeviceBindings* bindings = nullptr;

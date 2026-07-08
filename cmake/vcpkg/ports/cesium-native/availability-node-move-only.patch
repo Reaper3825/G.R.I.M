@@ -1,0 +1,34 @@
+diff --git a/CesiumGeometry/include/CesiumGeometry/Availability.h b/CesiumGeometry/include/CesiumGeometry/Availability.h
+index 0f7f0d5..a520801 100644
+--- a/CesiumGeometry/include/CesiumGeometry/Availability.h
++++ b/CesiumGeometry/include/CesiumGeometry/Availability.h
+@@ -111,6 +111,11 @@ struct CESIUMGEOMETRY_API AvailabilityNode {
+    */
+   AvailabilityNode() noexcept;
+ 
++  AvailabilityNode(const AvailabilityNode&) = delete;
++  AvailabilityNode& operator=(const AvailabilityNode&) = delete;
++  AvailabilityNode(AvailabilityNode&&) noexcept = default;
++  AvailabilityNode& operator=(AvailabilityNode&&) noexcept = default;
++
+   /**
+    * @brief Sets the loaded subtree for this availability node.
+    *
+    * @param subtree_ The loaded subtree to set for this node.
+diff --git a/CesiumGeometry/include/CesiumGeometry/QuadtreeRectangleAvailability.h b/CesiumGeometry/include/CesiumGeometry/QuadtreeRectangleAvailability.h
+index 93fbef2..ed090d9 100644
+--- a/CesiumGeometry/include/CesiumGeometry/QuadtreeRectangleAvailability.h
++++ b/CesiumGeometry/include/CesiumGeometry/QuadtreeRectangleAvailability.h
+@@ -27,6 +27,11 @@ public:
+   QuadtreeRectangleAvailability(
+       const QuadtreeTilingScheme& tilingScheme,
+       uint32_t maximumLevel) noexcept;
++  QuadtreeRectangleAvailability(const QuadtreeRectangleAvailability&) = delete;
++  QuadtreeRectangleAvailability& operator=(const QuadtreeRectangleAvailability&) = delete;
++  QuadtreeRectangleAvailability(QuadtreeRectangleAvailability&&) noexcept = default;
++  QuadtreeRectangleAvailability& operator=(QuadtreeRectangleAvailability&&) noexcept = default;
++
+ 
+   /**
+    * @brief Adds the specified range to the set of available tiles.
+   *

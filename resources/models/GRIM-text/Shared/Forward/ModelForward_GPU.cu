@@ -125,6 +125,81 @@ Tensor viewCommittedTensor(const Tensor& owned,
     return view;
 }
 
+struct MTPHeadForwardView {
+    Tensor weight;
+    Tensor bias;
+};
+
+Tensor buildMtpHeadParameterView(
+    Tensor& parameter,
+    bool connect_parameter_graph,
+    cudaStream_t stream,
+    const char* name)
+{
+    if (!parameter.data) {
+        throw std::runtime_error(std::string("executeModelForward: MTP parameter data is NULL for ") + name);
+    }
+    if (!connect_parameter_graph) {
+        return parameter.detach(stream);
+    }
+
+    Tensor view = Tensor::from_ptr(
+        parameter.data,
+        parameter.shape,
+        false,
+        parameter.requires_grad,
+        name);
+    view.compute_precision = parameter.compute_precision;
+    view.is_leaf = parameter.is_leaf;
+    view.retain_grad = parameter.retain_grad;
+    view.stream = stream;
+    view.grad_fn = parameter.grad_fn;
+    if (parameter.requires_grad && parameter.is_leaf) {
+        parameter.ensure_grad();
+        view.share_grad(parameter);
+    }
+    return view;
+}
+
+std::vector<MTPHeadForwardView> buildMtpHeadForwardViews(
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    int mtp_k,
+    bool connect_parameter_graph,
+    cudaStream_t stream)
+{
+    std::vector<MTPHeadForwardView> views;
+    if (mtp_k <= 0) {
+        return views;
+    }
+
+    auto& mtp_head_parameter_tensors = parameter_registry.mtpHeadParameterTensors();
+    if (static_cast<int>(mtp_head_parameter_tensors.size()) != mtp_k) {
+        throw std::runtime_error(
+            "executeModelForward: parameter_registry MTP head count=" +
+            std::to_string(mtp_head_parameter_tensors.size()) +
+            " != config.mtp_k=" + std::to_string(mtp_k));
+    }
+
+    views.reserve(static_cast<size_t>(mtp_k));
+    for (int k = 0; k < mtp_k; ++k) {
+        auto& head = mtp_head_parameter_tensors[static_cast<std::size_t>(k)];
+        if (!head.weight.data || !head.bias.data) {
+            throw std::runtime_error(
+                "executeModelForward: MTP head " + std::to_string(k) +
+                " has NULL weight or bias tensor");
+        }
+
+        MTPHeadForwardView view{};
+        view.weight = buildMtpHeadParameterView(
+            head.weight, connect_parameter_graph, stream, "mtp_head_weight_view");
+        view.bias = buildMtpHeadParameterView(
+            head.bias, connect_parameter_graph, stream, "mtp_head_bias_view");
+        views.push_back(std::move(view));
+    }
+
+    return views;
+}
+
 void materializeForwardMtpLogits(
     const ModelForwardRequest& request,
     const Batching::BatchPayload& payload,
@@ -142,6 +217,11 @@ void materializeForwardMtpLogits(
     if (!mtp_enabled || mtp_k <= 0) {
         throw std::runtime_error("executeModelForward: graph.emit_mtp_logits=true but config MTP is disabled");
     }
+    auto mtp_heads = buildMtpHeadForwardViews(
+        *request.parameter_registry,
+        mtp_k,
+        request.graph.connect_parameter_graph,
+        request.stream);
 
     // ═══════════════════════════════════════════════════════════════════════
     // Latent-trajectory MTP logits (latent_trajectory_preset_use_mtp_logits):
@@ -154,11 +234,6 @@ void materializeForwardMtpLogits(
     // W_hidden_traj into the trunk.
     // ═══════════════════════════════════════════════════════════════════════
     if (latent_preset_hp.enabled && latent_preset_hp.use_mtp_logits) {
-        if (static_cast<int>(request.mtp_heads.size()) != mtp_k) {
-            throw std::runtime_error("executeModelForward: request.mtp_heads.size()=" +
-                std::to_string(request.mtp_heads.size()) + " != config.mtp_k=" + std::to_string(mtp_k) +
-                " while latent_trajectory_preset_use_mtp_logits=true");
-        }
         Tensor& trajectory = forward_outputs.latent_preset_mtp_hidden;
         if (!trajectory.data) {
             throw std::runtime_error("executeModelForward: latent_preset_mtp_hidden is NULL — "
@@ -179,7 +254,7 @@ void materializeForwardMtpLogits(
 
         forward_outputs.mtp_logits_tensors.reserve(static_cast<size_t>(mtp_k));
         for (int k = 0; k < mtp_k; ++k) {
-            const auto& head = request.mtp_heads[static_cast<size_t>(k)];
+            const auto& head = mtp_heads[static_cast<size_t>(k)];
             if (!head.weight.data || !head.bias.data) {
                 throw std::runtime_error("executeModelForward: latent MTP head " + std::to_string(k) +
                     " weight or bias tensor is NULL");
@@ -243,11 +318,6 @@ void materializeForwardMtpLogits(
         return;
     }
 
-    if (static_cast<int>(request.mtp_heads.size()) != mtp_k) {
-        throw std::runtime_error("executeModelForward: request.mtp_heads.size()=" +
-            std::to_string(request.mtp_heads.size()) + " != config.mtp_k=" + std::to_string(mtp_k));
-    }
-
     Tensor* mtp_input = forward_outputs.liveLmHeadInputOrNull();
     if (!mtp_input || !mtp_input->data) {
         throw std::runtime_error("executeModelForward: live LM-head input snapshot is NULL before MTP logits materialization");
@@ -262,7 +332,7 @@ void materializeForwardMtpLogits(
 
     forward_outputs.mtp_logits_tensors.reserve(static_cast<size_t>(mtp_k));
     for (int k = 0; k < mtp_k; ++k) {
-        const auto& head = request.mtp_heads[static_cast<size_t>(k)];
+        const auto& head = mtp_heads[static_cast<size_t>(k)];
         if (!head.weight.data || !head.bias.data) {
             throw std::runtime_error("executeModelForward: MTP head " + std::to_string(k) +
                 " weight or bias tensor is NULL");
@@ -705,13 +775,12 @@ void ModelForwardRequest::validate(const char* caller) const {
         if (!mtp_enabled || mtp_k <= 0) {
             throw std::runtime_error(std::string(caller) + ": graph.emit_mtp_logits=true while config MTP is disabled");
         }
+        const auto& mtp_heads = parameter_registry->mtpHeadParameterTensors();
         if (static_cast<int>(mtp_heads.size()) != mtp_k) {
-            throw std::runtime_error(std::string(caller) + ": mtp_heads.size()=" +
+            throw std::runtime_error(std::string(caller) + ": parameter_registry MTP head count=" +
                                      std::to_string(mtp_heads.size()) + " != config.mtp_k=" +
                                      std::to_string(mtp_k));
         }
-    } else if (!mtp_heads.empty()) {
-        throw std::runtime_error(std::string(caller) + ": mtp_heads is non-empty while graph.emit_mtp_logits=false");
     }
     if (graph.emit_selector_logits) {
         const bool selector_enabled = HyperParameters::snapshotTrainingConfigField<bool>(*config, "selector_enabled");

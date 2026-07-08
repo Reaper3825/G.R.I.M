@@ -125,39 +125,6 @@ void validateInferenceForwardPayload(
     }
 }
 
-std::vector<GRIM::Forward::MTPHeadForwardView> buildDetachedForwardMtpHeadViews(
-    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    const MTPFeatureHP& mtp_hp,
-    cudaStream_t stream)
-{
-    std::vector<GRIM::Forward::MTPHeadForwardView> views;
-    if (!mtp_hp.enabled || mtp_hp.k <= 0) {
-        return views;
-    }
-
-    views.reserve(static_cast<size_t>(mtp_hp.k));
-    auto& mtp_head_parameter_tensors = parameter_registry.mtpHeadParameterTensors();
-    for (int k = 0; k < mtp_hp.k; ++k) {
-        if (k < 0 || k >= static_cast<int>(mtp_head_parameter_tensors.size())) {
-            throw std::runtime_error(
-                "Phase2 payload inference: parameter_registry is missing MTP head " + std::to_string(k));
-        }
-        auto* head = &mtp_head_parameter_tensors[static_cast<std::size_t>(k)];
-        if (!head->weight.data || !head->bias.data) {
-            throw std::runtime_error(
-                "Phase2 payload inference: MTP head " + std::to_string(k) +
-                " has NULL weight or bias tensor");
-        }
-
-        GRIM::Forward::MTPHeadForwardView view{};
-        view.weight = head->weight.detach(stream);
-        view.bias = head->bias.detach(stream);
-        views.push_back(std::move(view));
-    }
-
-    return views;
-}
-
 GRIM::GeneratedSequence generateOneSequence(
     GRIM::LanguageModel& model,
     GRIM::TrainingState& training_state,
@@ -395,9 +362,6 @@ GRIM::GeneratedSequence generateOneSequence(
         request.kv_cache = &kv_cache;
         const bool emit_mtp_logits = want_mtp && use_mtp;
         const bool emit_selector_logits = want_selector && use_selector;
-        if (emit_mtp_logits) {
-            request.mtp_heads = buildDetachedForwardMtpHeadViews(parameter_registry, mtp_hp, stream);
-        }
         request.graph = GRIM::Forward::ModelForwardGraphPolicy{
             /*connect_parameter_graph=*/false,
             /*retain_backward_graph=*/false,

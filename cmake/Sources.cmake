@@ -49,6 +49,8 @@ file(GLOB NET_SOURCES "net/*.cpp")
 file(GLOB NET_HEADERS "net/*.hpp")
 file(GLOB EXTERNAL_COLLECTOR_SOURCES "external_collector/*.cpp")
 file(GLOB EXTERNAL_COLLECTOR_HEADERS "external_collector/*.hpp")
+file(GLOB_RECURSE GEOSPATIAL_SOURCES "geospatial/*.cpp")
+file(GLOB_RECURSE GEOSPATIAL_HEADERS "geospatial/*.hpp")
 file(GLOB_RECURSE PERCEPTION_SOURCES "perception/*.cpp")
 file(GLOB_RECURSE PERCEPTION_HEADERS "perception/*.hpp")
 # Platform split for perception/physical/PhysicalNicScan_*: keep only the host OS impl
@@ -122,6 +124,7 @@ set(GRIM_SOURCES
     ${input_SOURCES}
     ${NET_SOURCES}
     ${EXTERNAL_COLLECTOR_SOURCES}
+    ${GEOSPATIAL_SOURCES}
     ${PERCEPTION_SOURCES}
     ${VISION_SOURCES}
     ${REWARD_LEARNING_SOURCES}
@@ -162,6 +165,7 @@ set(GRIM_HEADERS
     ${input_HEADERS}
     ${NET_HEADERS}
     ${EXTERNAL_COLLECTOR_HEADERS}
+    ${GEOSPATIAL_HEADERS}
     ${PERCEPTION_HEADERS}
     ${VISION_HEADERS}
     ${REWARD_LEARNING_HEADERS}

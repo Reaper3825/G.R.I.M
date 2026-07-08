@@ -208,6 +208,21 @@ grim_copy_dlls("${_dll_dir_vcpkg}"
     poppler-cpp.dll
 )
 
+# =========================================================
+# Cesium Native (geospatial runtime; rendered through bgfx adapters)
+# =========================================================
+find_package(cesium-native CONFIG REQUIRED)
+target_link_libraries(GRIM PRIVATE
+    Cesium3DTilesSelection
+    CesiumRasterOverlays
+    CesiumIonClient
+    CesiumClientCommon
+    CesiumCurl
+    CesiumGeospatial
+    CesiumGltf
+)
+target_compile_definitions(GRIM PRIVATE GRIM_HAS_CESIUM_NATIVE=1)
+
 # --- Ensure runtime finds our DLL first ---
 set_target_properties(GRIM PROPERTIES
     VS_DEBUGGER_ENVIRONMENT "PATH=${DEPS_BIN_DIR};%PATH%"
