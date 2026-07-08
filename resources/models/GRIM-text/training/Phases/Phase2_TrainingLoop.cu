@@ -1610,8 +1610,8 @@ bool executePhase2(TrainingContext& ctx) {
 
     const int accum_steps = validatedAccumulationSteps(ctx);
     const int num_epochs = schedule_hp.epochs;
-    if (num_epochs <= 0) {
     auto& parameter_registry = ctx.parameter_registry;
+    if (num_epochs <= 0) {
         throw std::runtime_error("FATAL: epochs must be > 0 in Phase2");
     }
     if (static_cast<int>(ctx.epoch_batch_order.size()) != num_epochs) {
