@@ -54,8 +54,9 @@ static std::chrono::steady_clock::time_point g_frameStart = std::chrono::steady_
 static Popup3DRenderer g_popup3D;
 static PopupRenderInput g_popup3DInput;
 static std::atomic<bool> g_popup3DInitialized{ false };
+static constexpr const char* kPopup3DRenderPassName = "popup_3d";
 
-static void popup3DPreFrameCallback(uint32_t bgfxFrame)
+static void popup3DRenderPass(uint32_t bgfxFrame)
 {
     if (!g_popup3DInitialized.load())
         return;
@@ -138,8 +139,7 @@ void runPopupUI(int width, int height)
             g_popup3DInput.alphaMul = 0.0f;
             popup3DRendererTriggerPreset(g_popup3D, "load_in");
 
-            // Register pre-frame callback so main thread renders the cube
-            WindowManager::registerPreFrameCallback(popup3DPreFrameCallback);
+            WindowManager::registerRenderPass(kPopup3DRenderPassName, popup3DRenderPass);
             g_popup3DInitialized = true;
 
             // Show window now that 3D renderer is ready
@@ -377,9 +377,9 @@ void runPopupUI(int width, int height)
     // Shutdown 3D renderer before exiting
     if (g_popup3DInitialized.load())
     {
-        WindowManager::registerPreFrameCallback(nullptr);
-        popup3DRendererShutdown(g_popup3D);
         g_popup3DInitialized = false;
+        WindowManager::unregisterRenderPass(kPopup3DRenderPassName);
+        popup3DRendererShutdown(g_popup3D);
     }
 
     LOG_PHASE("Popup UI Thread Exited", true);

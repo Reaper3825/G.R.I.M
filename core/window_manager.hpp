@@ -43,13 +43,51 @@ public:
     static HWND getOverlayHWND();
     static GRIMWindow* ensureOverlay(int w, int h);
 
-    // Pre-frame render callback (called before bgfx::frame())
-    using PreFrameCallback = void(*)(uint32_t bgfxFrame);
-    static void registerPreFrameCallback(PreFrameCallback cb);
-    static bool hasPreFrameCallback();
+    enum class ViewIdRange
+    {
+        DefaultKeepalive,
+        PanelViewport,
+        UiCompositorTools,
+        Popup3D,
+        SubsystemReserved
+    };
+
+    struct ViewIdBlock
+    {
+        bgfx::ViewId first = 0;
+        uint16_t count = 0;
+
+        bgfx::ViewId at(uint16_t offset) const;
+    };
+
+    static bgfx::ViewId defaultViewId();
+    static ViewIdBlock reserveViewIds(const std::string& owner, ViewIdRange range, uint16_t count);
+    static void releaseViewIds(const std::string& owner);
+
+    using RenderPassCallback = void(*)(uint32_t bgfxFrame);
+    static void registerRenderPass(const std::string& name, RenderPassCallback callback, bool enabled = true);
+    static void unregisterRenderPass(const std::string& name);
+    static void setRenderPassEnabled(const std::string& name, bool enabled);
+    static bool hasEnabledRenderPasses();
 
 private:
+    struct RenderPass
+    {
+        std::string name;
+        RenderPassCallback callback = nullptr;
+        bool enabled = true;
+    };
+
+    struct ViewIdReservation
+    {
+        std::string owner;
+        ViewIdRange range = ViewIdRange::SubsystemReserved;
+        ViewIdBlock block;
+    };
+
     static inline std::vector<std::unique_ptr<GRIMWindow>> s_windows;
+    static inline std::vector<RenderPass> s_renderPasses;
+    static inline std::vector<ViewIdReservation> s_viewIdReservations;
     static inline bool s_bgfxInitialized = false;
     static inline std::mutex s_mutex;
     static inline HWND s_primaryWindow = nullptr;
@@ -61,6 +99,5 @@ private:
     static inline uint32_t s_pendingPlatformWidth = 0;
     static inline uint32_t s_pendingPlatformHeight = 0;
     static inline std::atomic<bool> s_mainLoopStop{ false };
-    static inline PreFrameCallback s_preFrameCallback;
 };
 

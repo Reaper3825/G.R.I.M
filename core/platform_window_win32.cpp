@@ -12,6 +12,38 @@ std::atomic<bool> s_overlayBlurEnabled{true};
 std::atomic<float> s_overlayBlurOpacity{0.99f};
 std::atomic<int> s_overlayBlurIntensity{2};
 std::atomic<unsigned int> s_overlayBlurGeneration{0};
+
+LRESULT CALLBACK ViewportWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg) {
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_CLOSE:
+        ShowWindow(hwnd, SW_HIDE);
+        return 0;
+    case WM_DESTROY:
+        return 0;
+    default:
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
+}
+
+bool ensureViewportClassRegistered()
+{
+    HINSTANCE hInstance = GetModuleHandleW(nullptr);
+    WNDCLASSEXW wc{};
+    wc.cbSize = sizeof(WNDCLASSEXW);
+    wc.lpfnWndProc = ViewportWndProc;
+    wc.hInstance = hInstance;
+    wc.lpszClassName = L"GRIMViewportWindowClass";
+    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wc.hbrBackground = reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+
+    if (RegisterClassExW(&wc))
+        return true;
+
+    return GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+}
 }
 
 namespace PlatformWindow {
@@ -36,6 +68,99 @@ void destroyBGFXInitWindow(void* handle) {
 void setWindowVisible(void* handle, bool visible) {
     if (handle && IsWindow(static_cast<HWND>(handle)))
         ShowWindow(static_cast<HWND>(handle), visible ? SW_SHOW : SW_HIDE);
+}
+
+void* createViewportWindow(void* overlayWindowHandle, const char* debugName)
+{
+    (void)overlayWindowHandle;
+
+    if (!ensureViewportClassRegistered())
+        return nullptr;
+
+    std::wstring title = L"GRIM Viewport";
+    if (debugName && debugName[0] != '\0') {
+        std::string name(debugName);
+        title.assign(name.begin(), name.end());
+    }
+
+    HWND hwnd = CreateWindowExW(
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+        L"GRIMViewportWindowClass",
+        title.c_str(),
+        WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+        0, 0, 1, 1,
+        nullptr,
+        nullptr,
+        GetModuleHandleW(nullptr),
+        nullptr
+    );
+
+    if (!hwnd)
+        return nullptr;
+
+    ShowWindow(hwnd, SW_HIDE);
+    return hwnd;
+}
+
+void destroyViewportWindow(void* viewportWindowHandle)
+{
+    HWND hwnd = static_cast<HWND>(viewportWindowHandle);
+    if (hwnd && IsWindow(hwnd))
+        DestroyWindow(hwnd);
+}
+
+void setViewportWindowVisible(void* viewportWindowHandle, bool visible)
+{
+    HWND hwnd = static_cast<HWND>(viewportWindowHandle);
+    if (!hwnd || !IsWindow(hwnd))
+        return;
+
+    ShowWindow(hwnd, visible ? SW_SHOWNOACTIVATE : SW_HIDE);
+}
+
+void setViewportWindowBounds(void* viewportWindowHandle,
+                             void* overlayWindowHandle,
+                             int x,
+                             int y,
+                             int width,
+                             int height)
+{
+    HWND hwnd = static_cast<HWND>(viewportWindowHandle);
+    HWND overlay = static_cast<HWND>(overlayWindowHandle);
+    if (!hwnd || !IsWindow(hwnd))
+        return;
+    if (width <= 0 || height <= 0) {
+        ShowWindow(hwnd, SW_HIDE);
+        return;
+    }
+
+    int screenX = x;
+    int screenY = y;
+    if (overlay && IsWindow(overlay)) {
+        RECT overlayRect{};
+        if (GetWindowRect(overlay, &overlayRect)) {
+            screenX = overlayRect.left + x;
+            screenY = overlayRect.top + y;
+        }
+    }
+
+    SetWindowPos(hwnd,
+                 HWND_TOPMOST,
+                 screenX,
+                 screenY,
+                 width,
+                 height,
+                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
+
+    if (overlay && IsWindow(overlay)) {
+        SetWindowPos(overlay,
+                     HWND_TOPMOST,
+                     0,
+                     0,
+                     0,
+                     0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    }
 }
 
 void getVirtualScreenRect(int& x, int& y, int& width, int& height) {

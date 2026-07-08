@@ -102,7 +102,8 @@ void UIRoot::update(const InputState& input, float dt)
         Vec2 pos = panel->getPosition();
         Vec2 size = panel->getSize();
         bool isOver = (input.mousePos.x >= pos.x && input.mousePos.x <= pos.x + size.x &&
-                      input.mousePos.y >= pos.y && input.mousePos.y <= pos.y + size.y);
+                  input.mousePos.y >= pos.y && input.mousePos.y <= pos.y + size.y &&
+                  !panel->shouldPassThroughAt(input.mousePos.x, input.mousePos.y));
         
         // If a panel is dragging, only update that panel (the topmost one)
         // Otherwise, only update topmost panel under cursor
@@ -399,6 +400,8 @@ bool UIRoot::shouldReceiveInputAt(float x, float y) const
         if (x >= pos.x && x <= pos.x + size.x &&
             y >= pos.y && y <= pos.y + size.y)
         {
+            if (panel->shouldPassThroughAt(x, y))
+                continue;
             return true; // Mouse is over a visible panel
         }
     }
@@ -436,6 +439,7 @@ void UIRoot::updateHitTestCache()
 {
     auto panels = snapshotPanels();
     int count = 0;
+    int passThroughCount = 0;
     bool dragging = false;
 
     for (const auto& panel : panels)
@@ -449,14 +453,39 @@ void UIRoot::updateHitTestCache()
             m_cachedRects[count] = {pos.x, pos.y, size.x, size.y};
             ++count;
         }
+
+        std::vector<PanelRect> passThroughRects;
+        panel->collectPassThroughRects(passThroughRects);
+        for (const PanelRect& rect : passThroughRects) {
+            if (passThroughCount >= kMaxCachedPassThroughRects)
+                break;
+
+            m_cachedPassThroughRects[passThroughCount] = {
+                rect.origin.x,
+                rect.origin.y,
+                rect.size.x,
+                rect.size.y
+            };
+            ++passThroughCount;
+        }
     }
 
+    m_cachedPassThroughRectCount.store(passThroughCount, std::memory_order_release);
     m_cachedRectCount.store(count, std::memory_order_release);
     m_cachedDragging.store(dragging, std::memory_order_release);
 }
 
 bool UIRoot::shouldReceiveInputAtCached(float x, float y) const
 {
+    int passThroughCount = m_cachedPassThroughRectCount.load(std::memory_order_acquire);
+    for (int i = 0; i < passThroughCount; ++i)
+    {
+        const auto& r = m_cachedPassThroughRects[i];
+        if (x >= r.x && x <= r.x + r.w &&
+            y >= r.y && y <= r.y + r.h)
+            return false;
+    }
+
     int count = m_cachedRectCount.load(std::memory_order_acquire);
     for (int i = 0; i < count; ++i)
     {

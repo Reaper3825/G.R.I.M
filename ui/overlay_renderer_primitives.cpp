@@ -57,6 +57,32 @@ void OverlayRenderer::drawRect(const Vec2& pos, const Vec2& size, uint32_t color
     }
 }
 
+void OverlayRenderer::clearRect(const Vec2& pos, const Vec2& size)
+{
+    if (size.x <= 0.0f || size.y <= 0.0f)
+        return;
+
+    expandDirtyRect((int)pos.x, (int)pos.y, (int)size.x, (int)size.y);
+    std::lock_guard<std::mutex> lock(m_renderMutex);
+
+    if (!m_pixels)
+        return;
+
+    ClipRect clip = activeClip();
+
+    int x1 = std::max(clip.x1, (int)pos.x);
+    int y1 = std::max(clip.y1, (int)pos.y);
+    int x2 = std::min(clip.x2, (int)(pos.x + size.x));
+    int y2 = std::min(clip.y2, (int)(pos.y + size.y));
+
+    uint32_t* pixels = static_cast<uint32_t*>(m_pixels);
+    for (int y = y1; y < y2; ++y) {
+        std::fill(pixels + y * m_width + x1,
+                  pixels + y * m_width + x2,
+                  0x00000000u);
+    }
+}
+
 void OverlayRenderer::drawRoundedRect(const Vec2& pos, const Vec2& size, uint32_t color, float radius)
 {
     expandDirtyRect((int)pos.x - 1, (int)pos.y - 1, (int)size.x + 2, (int)size.y + 2);

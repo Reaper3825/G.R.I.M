@@ -28,6 +28,7 @@ public:
     void drawBackdrop(int width, int height);
 
     void drawRect(const Vec2& pos, const Vec2& size, uint32_t color);
+    void clearRect(const Vec2& pos, const Vec2& size);
     void drawRoundedRect(const Vec2& pos, const Vec2& size, uint32_t color, float radius);
     void drawRoundedBorder(const Vec2& pos, const Vec2& size, uint32_t color, float radius, float thickness = 1.0f);
     void drawGlassPanel(const Vec2& pos, const Vec2& size, float radius,

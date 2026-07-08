@@ -3,6 +3,7 @@
 #include "popup_3d_shaders.hpp"
 #include "popup_3d_mailbox.hpp"
 #include "popup_anim_presets.hpp"
+#include "core/window_manager.hpp"
 #include <bgfx/bgfx.h>
 #include <bx/math.h>
 #include <stdexcept>
@@ -17,8 +18,7 @@
 // ===========================================================
 // Popup 3D Renderer — offscreen render + async readback
 // ===========================================================
-
-static constexpr bgfx::ViewId kPopupViewId = 31;
+static constexpr const char* kPopup3DViewOwner = "popup_3d";
 
 // Monotonic seconds since first call — drives preset clip playback timing.
 static double popupNowSeconds()
@@ -45,7 +45,6 @@ static bgfx::TextureHandle s_whiteFallback = BGFX_INVALID_HANDLE;
 // -------------------------------------------------------
 // Slot GPU resource management
 // -------------------------------------------------------
-static constexpr bgfx::ViewId kPopupBlitViewId = 32;
 
 static void createSlotGPU(SlotGPU& sg, uint32_t w, uint32_t h)
 {
@@ -122,6 +121,11 @@ void popup3DRendererInit(Popup3DRenderer& r,
         throw std::runtime_error("Popup3DRenderer: width/height must be > 0");
 
     validateCaps();
+
+    WindowManager::ViewIdBlock viewIds = WindowManager::reserveViewIds(
+        kPopup3DViewOwner, WindowManager::ViewIdRange::Popup3D, 2);
+    r.renderViewId = viewIds.at(0);
+    r.blitViewId = viewIds.at(1);
 
     // Create mesh
     r.mesh = popupMeshCreate(objDef.vertices.data(),
@@ -293,15 +297,15 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
     }
 
     // ---- Setup view ----
-    bgfx::setViewFrameBuffer(kPopupViewId, s_slotGPU[idleSlot].fb);
-    bgfx::setViewRect(kPopupViewId, 0, 0,
+    bgfx::setViewFrameBuffer(r.renderViewId, s_slotGPU[idleSlot].fb);
+    bgfx::setViewRect(r.renderViewId, 0, 0,
                        static_cast<uint16_t>(r.renderWidth),
                        static_cast<uint16_t>(r.renderHeight));
-    bgfx::setViewClear(kPopupViewId,
+    bgfx::setViewClear(r.renderViewId,
                         BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH,
                         0x00000000,  // transparent BGRA
                         1.0f, 0);
-    bgfx::setViewTransform(kPopupViewId, mtxView, mtxProj);
+    bgfx::setViewTransform(r.renderViewId, mtxView, mtxProj);
 
     // ---- Set transform ----
     bgfx::setTransform(mtxModel);
@@ -381,19 +385,19 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
                  " draw=" + std::to_string(drawModel ? 1 : 0) +
                  " frame#" + std::to_string(sSubmitCount));
     if (drawModel)
-        bgfx::submit(kPopupViewId, prog);
+        bgfx::submit(r.renderViewId, prog);
     else
-        bgfx::touch(kPopupViewId);  // process the view so it clears transparent
+        bgfx::touch(r.renderViewId);  // process the view so it clears transparent
 
     // ---- Blit RT → readback texture, then queue readback ----
     // Activate the blit view so bgfx processes the blit command.
-    bgfx::setViewRect(kPopupBlitViewId, 0, 0,
+    bgfx::setViewRect(r.blitViewId, 0, 0,
                        static_cast<uint16_t>(r.renderWidth),
                        static_cast<uint16_t>(r.renderHeight));
-    bgfx::touch(kPopupBlitViewId);
+    bgfx::touch(r.blitViewId);
 
     auto& slot = r.slots[idleSlot];
-    bgfx::blit(kPopupBlitViewId,
+    bgfx::blit(r.blitViewId,
                s_slotGPU[idleSlot].readbackTex, 0, 0,
                s_slotGPU[idleSlot].colorTex,    0, 0,
                static_cast<uint16_t>(r.renderWidth),
@@ -520,6 +524,9 @@ void popup3DRendererShutdown(Popup3DRenderer& r)
     if (r.dynamicMesh) { popupMeshDestroy(r.dynamicMesh);   r.dynamicMesh = nullptr; }
     if (r.anim)        { popupClipEngineDestroy(r.anim);    r.anim        = nullptr; }
 
+    WindowManager::releaseViewIds(kPopup3DViewOwner);
+    r.renderViewId = 0;
+    r.blitViewId = 0;
     r.initialized = false;
 }
 

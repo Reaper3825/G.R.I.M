@@ -47,6 +47,9 @@ struct Popup3DRenderer
     uint32_t renderWidth  = 0;
     uint32_t renderHeight = 0;
 
+    bgfx::ViewId renderViewId = 0;
+    bgfx::ViewId blitViewId = 0;
+
     // Generation counter for readback
     uint64_t nextGeneration = 1;
 

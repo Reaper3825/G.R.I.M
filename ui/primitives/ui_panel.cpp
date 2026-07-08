@@ -216,6 +216,13 @@ PanelRect UIPanel::getContentRect() const {
     };
 }
 
+bool UIPanel::shouldPassThroughAt(float, float) const {
+    return false;
+}
+
+void UIPanel::collectPassThroughRects(std::vector<PanelRect>&) const {
+}
+
 bool UIPanel::drawOverlay(OverlayRenderer& renderer) {
     using namespace UITheme;
     if (!isVisible()) return false;

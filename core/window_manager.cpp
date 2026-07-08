@@ -2,6 +2,7 @@
 #include "logger.hpp"
 #include "ui/ui_root.hpp"
 #include "platform_window.hpp"
+#include <stdexcept>
 
 #ifdef _WIN32
 #include "popup_ui/popup_window.hpp"
@@ -20,6 +21,52 @@ namespace
     constexpr uint32_t kDefaultClearColor = 0x121212FF;
     constexpr uint32_t kFallbackWidth = 1920;
     constexpr uint32_t kFallbackHeight = 1080;
+
+    struct ViewIdRangeSpec
+    {
+        WindowManager::ViewIdRange range;
+        bgfx::ViewId first;
+        bgfx::ViewId last;
+        const char* name;
+    };
+
+    constexpr bgfx::ViewId kLastReservedViewId = 255;
+
+    constexpr ViewIdRangeSpec kViewIdRanges[] = {
+        { WindowManager::ViewIdRange::DefaultKeepalive, 0, 0, "default_keepalive_clear" },
+        { WindowManager::ViewIdRange::PanelViewport, 1, 15, "panel_viewports" },
+        { WindowManager::ViewIdRange::UiCompositorTools, 16, 30, "ui_compositor_tools" },
+        { WindowManager::ViewIdRange::Popup3D, 31, 32, "popup_3d" },
+        { WindowManager::ViewIdRange::SubsystemReserved, 33, kLastReservedViewId, "subsystem_reserved" }
+    };
+
+    const ViewIdRangeSpec& viewIdRangeSpec(WindowManager::ViewIdRange range)
+    {
+        for (const ViewIdRangeSpec& spec : kViewIdRanges)
+        {
+            if (spec.range == range)
+                return spec;
+        }
+
+        throw std::runtime_error("WindowManager view ID range is not registered");
+    }
+
+    uint32_t lastViewIdInBlock(const WindowManager::ViewIdBlock& block)
+    {
+        if (block.count == 0)
+            throw std::runtime_error("WindowManager view ID block has zero count");
+
+        return static_cast<uint32_t>(block.first) + static_cast<uint32_t>(block.count) - 1u;
+    }
+
+    bool viewIdBlocksOverlap(const WindowManager::ViewIdBlock& a, const WindowManager::ViewIdBlock& b)
+    {
+        const uint32_t aFirst = static_cast<uint32_t>(a.first);
+        const uint32_t bFirst = static_cast<uint32_t>(b.first);
+        const uint32_t aLast = lastViewIdInBlock(a);
+        const uint32_t bLast = lastViewIdInBlock(b);
+        return aFirst <= bLast && bFirst <= aLast;
+    }
 }
 
 #ifdef _WIN32
@@ -152,6 +199,8 @@ void WindowManager::shutdown()
         s_pendingPlatformWindow = nullptr;
         s_pendingPlatformWidth = 0;
         s_pendingPlatformHeight = 0;
+        s_renderPasses.clear();
+        s_viewIdReservations.clear();
 
         for (auto& w : s_windows)
         {
@@ -474,6 +523,89 @@ void WindowManager::endFrame()
         bgfx::frame();
 }
 
+bgfx::ViewId WindowManager::ViewIdBlock::at(uint16_t offset) const
+{
+    if (offset >= count)
+        throw std::runtime_error("WindowManager::ViewIdBlock offset is outside the reserved block");
+
+    return static_cast<bgfx::ViewId>(static_cast<uint32_t>(first) + static_cast<uint32_t>(offset));
+}
+
+bgfx::ViewId WindowManager::defaultViewId()
+{
+    const ViewIdRangeSpec& spec = viewIdRangeSpec(ViewIdRange::DefaultKeepalive);
+    return spec.first;
+}
+
+WindowManager::ViewIdBlock WindowManager::reserveViewIds(const std::string& owner, ViewIdRange range, uint16_t count)
+{
+    if (owner.empty())
+        throw std::runtime_error("WindowManager::reserveViewIds requires a non-empty owner");
+    if (count == 0)
+        throw std::runtime_error("WindowManager::reserveViewIds requires at least one view ID");
+    if (range == ViewIdRange::DefaultKeepalive)
+        throw std::runtime_error("WindowManager::reserveViewIds cannot allocate the default keepalive view; use defaultViewId()");
+
+    const ViewIdRangeSpec& spec = viewIdRangeSpec(range);
+    const uint32_t rangeFirst = static_cast<uint32_t>(spec.first);
+    const uint32_t rangeLast = static_cast<uint32_t>(spec.last);
+    const uint32_t requestedCount = static_cast<uint32_t>(count);
+    const uint32_t rangeCapacity = rangeLast - rangeFirst + 1u;
+    if (requestedCount > rangeCapacity)
+        throw std::runtime_error("WindowManager::reserveViewIds request for '" + owner + "' exceeds range '" + spec.name + "'");
+
+    std::lock_guard<std::mutex> lock(s_mutex);
+    for (const ViewIdReservation& reservation : s_viewIdReservations)
+    {
+        if (reservation.owner == owner)
+        {
+            if (reservation.range != range || reservation.block.count != count)
+                throw std::runtime_error("WindowManager::reserveViewIds owner '" + owner + "' already has a different reservation");
+
+            return reservation.block;
+        }
+    }
+
+    const uint32_t lastStart = rangeLast - requestedCount + 1u;
+    for (uint32_t first = rangeFirst; first <= lastStart; ++first)
+    {
+        ViewIdBlock candidate{ static_cast<bgfx::ViewId>(first), count };
+        bool overlaps = false;
+        for (const ViewIdReservation& reservation : s_viewIdReservations)
+        {
+            if (viewIdBlocksOverlap(candidate, reservation.block))
+            {
+                overlaps = true;
+                break;
+            }
+        }
+
+        if (!overlaps)
+        {
+            s_viewIdReservations.push_back(ViewIdReservation{ owner, range, candidate });
+            return candidate;
+        }
+    }
+
+    throw std::runtime_error("WindowManager::reserveViewIds found no available IDs in range '" + std::string(spec.name) + "' for '" + owner + "'");
+}
+
+void WindowManager::releaseViewIds(const std::string& owner)
+{
+    if (owner.empty())
+        throw std::runtime_error("WindowManager::releaseViewIds requires a non-empty owner");
+
+    std::lock_guard<std::mutex> lock(s_mutex);
+    for (auto it = s_viewIdReservations.begin(); it != s_viewIdReservations.end(); ++it)
+    {
+        if (it->owner == owner)
+        {
+            s_viewIdReservations.erase(it);
+            return;
+        }
+    }
+}
+
 void WindowManager::registerWindow(std::unique_ptr<GRIMWindow> win)
 {
     if (!win)
@@ -642,12 +774,31 @@ void WindowManager::renderFrame()
     if (!s_bgfxInitialized)
         return;
 
+    HWND primary = nullptr;
+    uint32_t targetWidth = 0;
+    uint32_t targetHeight = 0;
+    std::vector<RenderPassCallback> enabledPasses;
+
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        primary = s_primaryWindow;
+        targetWidth = s_backbufferWidth;
+        targetHeight = s_backbufferHeight;
+
+        enabledPasses.reserve(s_renderPasses.size());
+        for (const RenderPass& pass : s_renderPasses)
+        {
+            if (pass.enabled)
+                enabledPasses.push_back(pass.callback);
+        }
+    }
+
     // BGFX is initialized but renders to a hidden 1x1 window — no visible
     // output. Throttle to every 30th call (~2 fps) to keep bgfx alive
     // without burning GPU submit cycles every frame.
-    // Skip throttling when a pre-frame callback is registered (e.g. popup 3D).
+    // Skip throttling when an enabled render pass is registered (e.g. popup 3D).
     static int s_frameSkipCounter = 0;
-    if (!s_preFrameCallback)
+    if (enabledPasses.empty())
     {
         if (++s_frameSkipCounter < 30)
             return;
@@ -658,23 +809,12 @@ void WindowManager::renderFrame()
         s_frameSkipCounter = 0;
     }
 
-    HWND primary = nullptr;
-    uint32_t targetWidth = 0;
-    uint32_t targetHeight = 0;
-
-    {
-        std::lock_guard<std::mutex> lock(s_mutex);
-        primary = s_primaryWindow;
-        targetWidth = s_backbufferWidth;
-        targetHeight = s_backbufferHeight;
-    }
-
     if (!primary)
         return;
 
     std::lock_guard<std::mutex> gpuLock(g_gpuMutex);
 
-    const uint16_t viewId = 0;
+    const bgfx::ViewId viewId = defaultViewId();
     bgfx::setViewClear(viewId, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, kDefaultClearColor, 1.0f, 0);
 
     if (targetWidth == 0 || targetHeight == 0)
@@ -686,22 +826,78 @@ void WindowManager::renderFrame()
     bgfx::setViewRect(viewId, 0, 0, targetWidth, targetHeight);
     bgfx::touch(viewId);
 
-    // Run pre-frame callback (e.g. popup 3D rendering) before bgfx::frame()
     static uint32_t s_lastBgfxFrame = 0;
-    if (s_preFrameCallback)
-        s_preFrameCallback(s_lastBgfxFrame);
+    for (RenderPassCallback pass : enabledPasses)
+        pass(s_lastBgfxFrame);
 
     s_lastBgfxFrame = bgfx::frame();
 }
 
-void WindowManager::registerPreFrameCallback(PreFrameCallback cb)
+void WindowManager::registerRenderPass(const std::string& name, RenderPassCallback callback, bool enabled)
 {
-    s_preFrameCallback = cb;
+    if (name.empty())
+        throw std::runtime_error("WindowManager::registerRenderPass requires a non-empty pass name");
+    if (!callback)
+        throw std::runtime_error("WindowManager::registerRenderPass requires a valid callback for pass '" + name + "'");
+
+    std::lock_guard<std::mutex> lock(s_mutex);
+    for (RenderPass& pass : s_renderPasses)
+    {
+        if (pass.name == name)
+        {
+            pass.callback = callback;
+            pass.enabled = enabled;
+            return;
+        }
+    }
+
+    s_renderPasses.push_back(RenderPass{ name, callback, enabled });
 }
 
-bool WindowManager::hasPreFrameCallback()
+void WindowManager::unregisterRenderPass(const std::string& name)
 {
-    return s_preFrameCallback != nullptr;
+    if (name.empty())
+        throw std::runtime_error("WindowManager::unregisterRenderPass requires a non-empty pass name");
+
+    std::lock_guard<std::mutex> lock(s_mutex);
+    for (auto it = s_renderPasses.begin(); it != s_renderPasses.end(); ++it)
+    {
+        if (it->name == name)
+        {
+            s_renderPasses.erase(it);
+            return;
+        }
+    }
+}
+
+void WindowManager::setRenderPassEnabled(const std::string& name, bool enabled)
+{
+    if (name.empty())
+        throw std::runtime_error("WindowManager::setRenderPassEnabled requires a non-empty pass name");
+
+    std::lock_guard<std::mutex> lock(s_mutex);
+    for (RenderPass& pass : s_renderPasses)
+    {
+        if (pass.name == name)
+        {
+            pass.enabled = enabled;
+            return;
+        }
+    }
+
+    throw std::runtime_error("WindowManager::setRenderPassEnabled could not find pass '" + name + "'");
+}
+
+bool WindowManager::hasEnabledRenderPasses()
+{
+    std::lock_guard<std::mutex> lock(s_mutex);
+    for (const RenderPass& pass : s_renderPasses)
+    {
+        if (pass.enabled)
+            return true;
+    }
+
+    return false;
 }
 
 void WindowManager::requestMainLoopStop()

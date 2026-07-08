@@ -2,6 +2,7 @@
 
 #include <string>
 #include <functional>
+#include <cstdint>
 
 // =============================================================================
 // Platform window/display abstraction for BGFX init and main loop
@@ -28,6 +29,18 @@ void* createBGFXInitWindow();
 void destroyBGFXInitWindow(void* handle);
 
 void setWindowVisible(void* handle, bool visible);
+
+// Native viewport windows are positioned from overlay-window local pixels.
+// They sit below CPU overlay cutouts and can later receive bgfx native-window framebuffers.
+void* createViewportWindow(void* overlayWindowHandle, const char* debugName);
+void destroyViewportWindow(void* viewportWindowHandle);
+void setViewportWindowVisible(void* viewportWindowHandle, bool visible);
+void setViewportWindowBounds(void* viewportWindowHandle,
+                             void* overlayWindowHandle,
+                             int x,
+                             int y,
+                             int width,
+                             int height);
 
 // Virtual screen bounds (all displays). Used for overlay size.
 void getVirtualScreenRect(int& x, int& y, int& width, int& height);

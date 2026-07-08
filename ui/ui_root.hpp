@@ -108,8 +108,11 @@ private:
     // read lock-free from WM_NCHITTEST (called per mouse message).
     struct CachedRect { float x, y, w, h; };
     static constexpr int kMaxCachedPanels = 32;
+    static constexpr int kMaxCachedPassThroughRects = 32;
     CachedRect m_cachedRects[kMaxCachedPanels]{};
+    CachedRect m_cachedPassThroughRects[kMaxCachedPassThroughRects]{};
     std::atomic<int> m_cachedRectCount{0};
+    std::atomic<int> m_cachedPassThroughRectCount{0};
     std::atomic<bool> m_cachedDragging{false};
     void updateHitTestCache();
 };

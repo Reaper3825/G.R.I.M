@@ -56,6 +56,8 @@ public:
     
     // The drawable region inside the panel, below the title bar and inside borders.
     PanelRect getContentRect() const;
+    virtual bool shouldPassThroughAt(float x, float y) const;
+    virtual void collectPassThroughRects(std::vector<PanelRect>& rects) const;
 
     void setBackground(uint32_t color) { bgColor = color; }
     void setBorder(uint32_t color) { borderColor = color; }

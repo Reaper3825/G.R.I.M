@@ -314,6 +314,35 @@ void setWindowVisible(void* handle, bool visible) {
     }
 }
 
+void* createViewportWindow(void* overlayWindowHandle, const char* debugName) {
+    (void)overlayWindowHandle;
+    (void)debugName;
+    return nullptr;
+}
+
+void destroyViewportWindow(void* viewportWindowHandle) {
+    (void)viewportWindowHandle;
+}
+
+void setViewportWindowVisible(void* viewportWindowHandle, bool visible) {
+    (void)viewportWindowHandle;
+    (void)visible;
+}
+
+void setViewportWindowBounds(void* viewportWindowHandle,
+                             void* overlayWindowHandle,
+                             int x,
+                             int y,
+                             int width,
+                             int height) {
+    (void)viewportWindowHandle;
+    (void)overlayWindowHandle;
+    (void)x;
+    (void)y;
+    (void)width;
+    (void)height;
+}
+
 void getVirtualScreenRect(int& x, int& y, int& width, int& height) {
     @autoreleasepool {
         NSRect unionRect = NSZeroRect;

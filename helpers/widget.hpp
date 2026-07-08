@@ -35,7 +35,7 @@ public:
     virtual void drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos);
 
     bool isVisible() const { return visible; }
-    void setVisible(bool v) { visible = v; }
+    virtual void setVisible(bool v) { visible = v; }
 
     Vec2 getPosition() const { return position; }
     void setPosition(float x, float y);

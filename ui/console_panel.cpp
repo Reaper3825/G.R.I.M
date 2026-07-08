@@ -60,6 +60,15 @@ ConsolePanel::ConsolePanel()
           } else {
               LOG_DEBUG("ConsolePanel", "Physical Environment panel not found");
           }
+      })),
+      geoSpatialButton(std::make_shared<UIButton>(" GeoSpatial ", []() {
+          auto geoSpatialPanel = UIRoot::get().getPanel("GeoSpatial");
+          if (geoSpatialPanel) {
+              geoSpatialPanel->setVisible(true);
+              LOG_DEBUG("ConsolePanel", "Opened GeoSpatial panel via button");
+          } else {
+              LOG_DEBUG("ConsolePanel", "GeoSpatial panel not found");
+          }
       }))
 {
     position = { 100, 300 };
@@ -99,12 +108,14 @@ ConsolePanel::ConsolePanel()
     if (trainingButton) trainingButton->setSize(btnW, btnH);
     if (storageButton)  storageButton->setSize(btnW, btnH);
     if (cameraButton)   cameraButton->setSize(btnW, btnH);
+    if (geoSpatialButton) geoSpatialButton->setSize(120.0f, btnH);
     
     toolbarBox = std::make_shared<UIHBox>(LayoutDirection::Horizontal, 8.0f);
     toolbarBox->addWidget(DCButton);
     toolbarBox->addWidget(trainingButton);
     toolbarBox->addWidget(storageButton);
     toolbarBox->addWidget(cameraButton);
+    toolbarBox->addWidget(geoSpatialButton);
     toolbarBox->addWidget(settingsButton);
     toolbarBox->layout();
     

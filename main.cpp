@@ -28,6 +28,9 @@
 #include "ui/ui_training_panel.hpp"
 #include "ui/ui_data_hub.hpp"
 #include "ui/ui_storage_panel.hpp"
+#include "ui/ui_geospatial_panel.hpp"
+#include "ui/primitives/ui_native_3d_viewport_attachment.hpp"
+#include "ui/primitives/ui_native_3d_viewport_clear_pass.hpp"
 #include "ui/ui_surface_renderer_bridge.hpp"
 #include "control/devices/server/device_comm_server.hpp"
 #include "resources.hpp"
@@ -498,6 +501,13 @@ int main(int argc, char* argv[])
     auto trainingPanel = std::make_shared<UITrainingPanel>();
     auto dataHubPanel = std::make_shared<UIDataHubPanel>();
     auto storagePanel = std::make_shared<UIStoragePanel>();
+    auto geoSpatialPanel = std::make_shared<UIGeoSpatialPanel>();
+    auto geoSpatialViewportAttachment = std::make_shared<UINative3DViewportAttachment>(
+        UIRoot::get().getHWND(), "GeoSpatialViewport");
+    UINative3DViewportClearPass::registerClearPass("GeoSpatialViewportClear",
+                                                   geoSpatialViewportAttachment,
+                                                   0x153A4AFF);
+    geoSpatialPanel->setViewportAttachment(geoSpatialViewportAttachment);
     // Stage 1: hand the device server to the physical environment subsystem so the
     // camera directory can include hub-registered devices that advertise "camera".
     // MUST be registered BEFORE constructing the panel so its initial directory
@@ -522,6 +532,7 @@ int main(int argc, char* argv[])
     trainingPanel->setVisible(false);
     dataHubPanel->setVisible(false);
     storagePanel->setVisible(false);
+    geoSpatialPanel->setVisible(false);
     physicalEnvPanel->setVisible(false);
 
     UIRoot::get().addPanel(consolePanel);
@@ -529,6 +540,7 @@ int main(int argc, char* argv[])
     UIRoot::get().addPanel(trainingPanel);
     UIRoot::get().addPanel(dataHubPanel);
     UIRoot::get().addPanel(storagePanel);
+    UIRoot::get().addPanel(geoSpatialPanel);
     UIRoot::get().addPanel(physicalEnvPanel);
 
 #if defined(__APPLE__)
