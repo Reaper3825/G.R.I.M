@@ -37,6 +37,8 @@ UISettingsMenu::UISettingsMenu()
     tabUIGraphicsBtn_->setSize(40.0f, 26.0f);
     tabPreferencesBtn_ = std::make_shared<UIButton>("Prefs", [this]() { setTab(SettingsTab::Preferences); });
     tabPreferencesBtn_->setSize(55.0f, 26.0f);
+    tabGeoSpatialBtn_ = std::make_shared<UIButton>("Geo", [this]() { setTab(SettingsTab::GeoSpatial); });
+    tabGeoSpatialBtn_->setSize(48.0f, 26.0f);
     tabMemoryBtn_ = std::make_shared<UIButton>("Memory", [this]() { setTab(SettingsTab::Memory); });
     tabMemoryBtn_->setSize(68.0f, 26.0f);
     tabIntentsBtn_ = std::make_shared<UIButton>("Intents", [this]() { setTab(SettingsTab::Intents); });
@@ -352,6 +354,7 @@ void UISettingsMenu::createWidgets() {
             case SettingsTab::Vision:      createVisionWidgets();      break;
             case SettingsTab::UIGraphics:  createUIGraphicsWidgets();  break;
             case SettingsTab::Preferences: createPreferencesWidgets(); break;
+            case SettingsTab::GeoSpatial:  createGeoSpatialWidgets();  break;
             case SettingsTab::Memory:      createMemoryWidgets();      break;
             case SettingsTab::Intents:     createIntentsWidgets();     break;
         }
@@ -1108,6 +1111,225 @@ void UISettingsMenu::createPreferencesWidgets() {
 }
 
 // =========================================================
+// GeoSpatial Tab — Cesium Native globe runtime defaults
+// =========================================================
+void UISettingsMenu::createGeoSpatialWidgets() {
+    float widgetWidth = scrollBox->getSize().x - 30;
+    float widgetHeight = 45.0f;
+
+    if (!pendingConfig.contains("geospatial") || !pendingConfig["geospatial"].is_object())
+        pendingConfig["geospatial"] = nlohmann::json::object();
+    auto& geospatial = pendingConfig["geospatial"];
+    if (!geospatial.contains("home") || !geospatial["home"].is_object())
+        geospatial["home"] = nlohmann::json::object();
+    if (!geospatial.contains("terrain") || !geospatial["terrain"].is_object())
+        geospatial["terrain"] = nlohmann::json::object();
+    if (!geospatial.contains("imagery") || !geospatial["imagery"].is_object())
+        geospatial["imagery"] = nlohmann::json::object();
+    if (!geospatial["imagery"].contains("url_template") || !geospatial["imagery"]["url_template"].is_object())
+        geospatial["imagery"]["url_template"] = nlohmann::json::object();
+    if (!geospatial.contains("cache") || !geospatial["cache"].is_object())
+        geospatial["cache"] = nlohmann::json::object();
+    if (!geospatial.contains("loading") || !geospatial["loading"].is_object())
+        geospatial["loading"] = nlohmann::json::object();
+    if (!geospatial.contains("camera") || !geospatial["camera"].is_object())
+        geospatial["camera"] = nlohmann::json::object();
+
+    auto& home = geospatial["home"];
+    auto& terrain = geospatial["terrain"];
+    auto& imagery = geospatial["imagery"];
+    auto& urlTemplate = imagery["url_template"];
+    auto& cache = geospatial["cache"];
+    auto& loading = geospatial["loading"];
+    auto& camera = geospatial["camera"];
+
+    auto addNumberSlider = [&](const std::string& label,
+                               nlohmann::json& object,
+                               const std::string& key,
+                               float minValue,
+                               float maxValue,
+                               float defaultValue,
+                               float step) {
+        float value = object.value(key, defaultValue);
+        auto slider = std::make_shared<UISlider>(
+            label, minValue, maxValue, value,
+            [this, &object, key](float val) {
+                object[key] = val;
+                hasChanges = true;
+            }, step
+        );
+        slider->setSize(widgetWidth, widgetHeight);
+        scrollBox->addChild(slider);
+    };
+
+    auto addIntegerSlider = [&](const std::string& label,
+                                nlohmann::json& object,
+                                const std::string& key,
+                                float minValue,
+                                float maxValue,
+                                int defaultValue,
+                                float step) {
+        int value = object.value(key, defaultValue);
+        auto slider = std::make_shared<UISlider>(
+            label, minValue, maxValue, static_cast<float>(value),
+            [this, &object, key](float val) {
+                object[key] = static_cast<int>(val);
+                hasChanges = true;
+            }, step
+        );
+        slider->setSize(widgetWidth, widgetHeight);
+        scrollBox->addChild(slider);
+    };
+
+    auto addToggle = [&](const std::string& label,
+                         nlohmann::json& object,
+                         const std::string& key,
+                         bool defaultValue) {
+        bool value = object.value(key, defaultValue);
+        auto toggle = std::make_shared<UIToggle>(
+            label, value,
+            [this, &object, key](bool val) {
+                object[key] = val;
+                hasChanges = true;
+            }
+        );
+        toggle->setSize(widgetWidth, widgetHeight);
+        scrollBox->addChild(toggle);
+    };
+
+    std::vector<std::string> terrainProviders = {"ellipsoid"};
+    auto terrainDropdown = std::make_shared<UIDropdown>(
+        "Terrain Provider:", terrainProviders, 0,
+        [this, &terrain](int, const std::string& val) {
+            terrain["provider"] = val;
+            hasChanges = true;
+        }
+    );
+    terrainDropdown->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(terrainDropdown);
+
+    bool terrainEnabled = terrain.value("enabled_on_start", true);
+    auto terrainToggle = std::make_shared<UIToggle>(
+        "Terrain on Start:", terrainEnabled,
+        [this, &terrain](bool val) {
+            terrain["enabled_on_start"] = val;
+            hasChanges = true;
+        }
+    );
+    terrainToggle->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(terrainToggle);
+
+    std::vector<std::string> imageryProviders = {"url_template", "debug_colorize", "none"};
+    std::string imageryProvider = imagery.value("provider", "url_template");
+    int imageryProviderIndex = 0;
+    for (size_t i = 0; i < imageryProviders.size(); ++i) {
+        if (imageryProviders[i] == imageryProvider) {
+            imageryProviderIndex = static_cast<int>(i);
+            break;
+        }
+    }
+    auto imageryDropdown = std::make_shared<UIDropdown>(
+        "Imagery Provider:", imageryProviders, imageryProviderIndex,
+        [this, &imagery](int, const std::string& val) {
+            imagery["provider"] = val;
+            hasChanges = true;
+        }
+    );
+    imageryDropdown->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(imageryDropdown);
+
+    bool imageryEnabled = imagery.value("enabled_on_start", false);
+    auto imageryToggle = std::make_shared<UIToggle>(
+        "Imagery on Start:", imageryEnabled,
+        [this, &imagery](bool val) {
+            imagery["enabled_on_start"] = val;
+            hasChanges = true;
+        }
+    );
+    imageryToggle->setSize(widgetWidth, widgetHeight);
+    scrollBox->addChild(imageryToggle);
+
+    std::string imageryUrl = urlTemplate.value(
+        "url",
+        "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/2026-07-07/GoogleMapsCompatible_Level9/{z}/{reverseY}/{x}.jpg");
+    auto imageryUrlArea = std::make_shared<UITextArea>(
+        "Imagery URL:", imageryUrl,
+        [this, &urlTemplate](const std::string& val) {
+            urlTemplate["url"] = val;
+            hasChanges = true;
+        }
+    );
+    imageryUrlArea->setSize(widgetWidth, 78.0f);
+    scrollBox->addChild(imageryUrlArea);
+
+    std::string imageryCredit = urlTemplate.value("credit", "Source: NASA GIBS VIIRS SNPP Corrected Reflectance True Color");
+    auto imageryCreditArea = std::make_shared<UITextArea>(
+        "Imagery Credit:", imageryCredit,
+        [this, &urlTemplate](const std::string& val) {
+            urlTemplate["credit"] = val;
+            hasChanges = true;
+        }
+    );
+    imageryCreditArea->setSize(widgetWidth, 62.0f);
+    scrollBox->addChild(imageryCreditArea);
+
+    addIntegerSlider("Imagery Min LOD:", urlTemplate, "minimum_level", 0.0f, 10.0f, 2, 1.0f);
+    addIntegerSlider("Imagery Max LOD:", urlTemplate, "maximum_level", 1.0f, 24.0f, 9, 1.0f);
+    addIntegerSlider("Imagery Tile W:", urlTemplate, "tile_width", 128.0f, 1024.0f, 256, 128.0f);
+    addIntegerSlider("Imagery Tile H:", urlTemplate, "tile_height", 128.0f, 1024.0f, 256, 128.0f);
+
+    addNumberSlider("Home Longitude:", home, "longitude_degrees", -180.0f, 180.0f, -75.59777f, 0.0001f);
+    addNumberSlider("Home Latitude:", home, "latitude_degrees", -90.0f, 90.0f, 40.03883f, 0.0001f);
+    addNumberSlider("Initial Orbit (m):", home, "height_meters", 500.0f, 50000000.0f, 24000000.0f, 1000.0f);
+
+    addNumberSlider("Horizontal FOV:", camera, "horizontal_fov_degrees", 20.0f, 120.0f, 60.0f, 1.0f);
+    addNumberSlider("Vertical FOV:", camera, "vertical_fov_degrees", 15.0f, 100.0f, 45.0f, 1.0f);
+    addNumberSlider("Near Plane (m):", camera, "near_plane_meters", 0.1f, 1000.0f, 1.0f, 0.1f);
+    addNumberSlider("Far Plane (m):", camera, "far_plane_meters", 1000000.0f, 1000000000.0f, 1000000000.0f, 1000000.0f);
+    addNumberSlider("Min Zoom (m):", camera, "min_distance_meters", 50.0f, 100000.0f, 500.0f, 50.0f);
+    addNumberSlider("Max Zoom (m):", camera, "max_distance_meters", 1000000.0f, 50000000.0f, 25000000.0f, 100000.0f);
+
+    addIntegerSlider("Worker Threads:", loading, "worker_threads", 1.0f, 16.0f, 4, 1.0f);
+    addIntegerSlider("Tile Loads:", loading, "maximum_simultaneous_tile_loads", 1.0f, 96.0f, 24, 1.0f);
+    addIntegerSlider("Raster Loads:", loading, "maximum_simultaneous_raster_loads", 1.0f, 48.0f, 12, 1.0f);
+    addNumberSlider("Max Screen Error:", loading, "maximum_screen_space_error", 1.0f, 32.0f, 16.0f, 0.5f);
+    addNumberSlider("Culled Screen Error:", loading, "culled_screen_space_error", 4.0f, 128.0f, 64.0f, 1.0f);
+    addNumberSlider("Raster Screen Error:", loading, "maximum_raster_screen_space_error", 0.25f, 4.0f, 0.75f, 0.25f);
+    addIntegerSlider("Descendant Limit:", loading, "loading_descendant_limit", 0.0f, 256.0f, 20, 1.0f);
+    addToggle("Forbid Tile Holes:", loading, "forbid_holes", false);
+    addNumberSlider("Main Load Budget:", loading, "main_thread_loading_time_limit_seconds", 0.5f, 20.0f, 4.0f, 0.5f);
+    addNumberSlider("Tile Unload Budget:", loading, "tile_cache_unload_time_limit_seconds", 0.1f, 10.0f, 1.0f, 0.1f);
+    addIntegerSlider("Raster Texture Max:", loading, "maximum_raster_texture_size", 256.0f, 4096.0f, 2048, 256.0f);
+
+    addIntegerSlider("Asset Cache Items:", cache, "asset_cache_items", 512.0f, 65536.0f, 8192, 512.0f);
+    addIntegerSlider("Cache Prune Every:", cache, "requests_per_prune", 16.0f, 4096.0f, 512, 16.0f);
+    addIntegerSlider("Tile Cache MB:", cache, "tile_cache_mb", 64.0f, 8192.0f, 512, 64.0f);
+    addIntegerSlider("Raster Cache MB:", cache, "raster_subtile_cache_mb", 16.0f, 2048.0f, 64, 16.0f);
+
+    std::string cachePath = cache.value("database_path", "cache/geospatial/cesium_asset_cache.sqlite");
+    auto cachePathArea = std::make_shared<UITextArea>(
+        "Cache DB:", cachePath,
+        [this, &cache](const std::string& val) {
+            cache["database_path"] = val;
+            hasChanges = true;
+        }
+    );
+    cachePathArea->setSize(widgetWidth, 62.0f);
+    scrollBox->addChild(cachePathArea);
+
+    std::string userAgent = loading.value("user_agent", "GRIM Cesium Native Runtime/1.0");
+    auto userAgentArea = std::make_shared<UITextArea>(
+        "User Agent:", userAgent,
+        [this, &loading](const std::string& val) {
+            loading["user_agent"] = val;
+            hasChanges = true;
+        }
+    );
+    userAgentArea->setSize(widgetWidth, 62.0f);
+    scrollBox->addChild(userAgentArea);
+}
+
+// =========================================================
 // Memory Tab — data collection, cache management
 // =========================================================
 void UISettingsMenu::createMemoryWidgets() {
@@ -1314,7 +1536,7 @@ void UISettingsMenu::update(const InputState& input, float dt) {
     
     // Position and update tab buttons
     float tabX = position.x + 10.0f;
-    float tabW = (size.x - 20.0f) / 8.0f;  // 8 tabs
+    float tabW = (size.x - 20.0f) / 9.0f;  // 9 tabs
 
     tabGeneralBtn_->setPosition(tabX, position.y + kTabBarY);
     tabGeneralBtn_->setSize(tabW - 2, 28);
@@ -1328,9 +1550,11 @@ void UISettingsMenu::update(const InputState& input, float dt) {
     tabUIGraphicsBtn_->setSize(tabW - 2, 28);
     tabPreferencesBtn_->setPosition(tabX + tabW * 5, position.y + kTabBarY);
     tabPreferencesBtn_->setSize(tabW - 2, 28);
-    tabMemoryBtn_->setPosition(tabX + tabW * 6, position.y + kTabBarY);
+    tabGeoSpatialBtn_->setPosition(tabX + tabW * 6, position.y + kTabBarY);
+    tabGeoSpatialBtn_->setSize(tabW - 2, 28);
+    tabMemoryBtn_->setPosition(tabX + tabW * 7, position.y + kTabBarY);
     tabMemoryBtn_->setSize(tabW - 2, 28);
-    tabIntentsBtn_->setPosition(tabX + tabW * 7, position.y + kTabBarY);
+    tabIntentsBtn_->setPosition(tabX + tabW * 8, position.y + kTabBarY);
     tabIntentsBtn_->setSize(tabW - 2, 28);
 
     tabGeneralBtn_->update(input, dt);
@@ -1339,6 +1563,7 @@ void UISettingsMenu::update(const InputState& input, float dt) {
     tabVisionBtn_->update(input, dt);
     tabUIGraphicsBtn_->update(input, dt);
     tabPreferencesBtn_->update(input, dt);
+    tabGeoSpatialBtn_->update(input, dt);
     tabMemoryBtn_->update(input, dt);
     tabIntentsBtn_->update(input, dt);
     
@@ -1377,12 +1602,13 @@ bool UISettingsMenu::drawOverlay(OverlayRenderer& renderer)
     tabVisionBtn_->drawOverlay(renderer, position);
     tabUIGraphicsBtn_->drawOverlay(renderer, position);
     tabPreferencesBtn_->drawOverlay(renderer, position);
+    tabGeoSpatialBtn_->drawOverlay(renderer, position);
     tabMemoryBtn_->drawOverlay(renderer, position);
     tabIntentsBtn_->drawOverlay(renderer, position);
 
     // Active tab indicator (2px underline)
     float tabX = position.x + 10.0f;
-    float tabW = (size.x - 20.0f) / 8.0f;
+    float tabW = (size.x - 20.0f) / 9.0f;
     int tabIdx = static_cast<int>(activeTab_);
     float indicatorX = tabX + tabW * tabIdx;
     renderer.drawRect({indicatorX, position.y + kTabBarY + 28.0f}, {tabW - 2, 2.0f}, Colors::Primary);

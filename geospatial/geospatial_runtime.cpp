@@ -6,6 +6,7 @@
 
 #include "cesium_bgfx_render_adapter.hpp"
 #include "core/platform_input.hpp"
+#include "logger.hpp"
 #include "ui/primitives/ui_native_3d_viewport_attachment.hpp"
 
 #include <Cesium3DTilesSelection/EllipsoidTilesetLoader.h>
@@ -27,7 +28,10 @@
 #include <CesiumGeospatial/Ellipsoid.h>
 #include <CesiumRasterOverlays/DebugColorizeTilesRasterOverlay.h>
 #include <CesiumRasterOverlays/RasterOverlayLoadFailureDetails.h>
+#include <CesiumRasterOverlays/UrlTemplateRasterOverlay.h>
 #include <CesiumUtility/CreditSystem.h>
+
+#include <nlohmann/json.hpp>
 
 #include <spdlog/spdlog.h>
 
@@ -37,6 +41,7 @@
 #include <filesystem>
 #include <functional>
 #include <iomanip>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -51,16 +56,130 @@
 #error GRIM_ROOT_DIR must be defined by the build system
 #endif
 
+extern nlohmann::json aiConfig;
+
 namespace GRIM::GeoSpatial {
 
 namespace {
-    constexpr int32_t kCesiumWorkerThreads = 4;
-    constexpr uint64_t kCesiumAssetCacheItems = 8192;
-    constexpr int32_t kCesiumRequestsPerCachePrune = 512;
-    constexpr int64_t kCesiumTileCacheBytes = 512LL * 1024LL * 1024LL;
-    constexpr int64_t kCesiumRasterSubTileCacheBytes = 64LL * 1024LL * 1024LL;
     constexpr double kDragZoomWheelStepsPerPixel = 0.08333333333333333;
     constexpr double kRadiansToDegrees = 57.29577951308232;
+    constexpr double kDegreesToRadians = 0.017453292519943295;
+
+    struct GeoSpatialRuntimeConfig {
+        CesiumGeospatial::Cartographic home{0.0, 0.0, 0.0};
+        double initialOrbitDistanceMeters = 0.0;
+        UICameraFrustum frustum;
+        UICameraZoomLimits zoomLimits;
+        std::filesystem::path cacheDatabasePath;
+        std::string terrainProvider;
+        std::string imageryProvider;
+        std::string imageryUrlTemplate;
+        std::string imageryCredit;
+        std::string userAgent;
+        uint32_t imageryMinimumLevel = 0;
+        uint32_t imageryMaximumLevel = 0;
+        uint32_t imageryTileWidth = 0;
+        uint32_t imageryTileHeight = 0;
+        std::vector<CesiumAsync::IAssetAccessor::THeader> imageryHeaders;
+        int32_t workerThreads = 0;
+        uint64_t assetCacheItems = 0;
+        int32_t requestsPerCachePrune = 0;
+        int64_t tileCacheBytes = 0;
+        int64_t rasterSubTileCacheBytes = 0;
+        int32_t maximumSimultaneousTileLoads = 0;
+        int32_t maximumSimultaneousRasterLoads = 0;
+        double maximumScreenSpaceError = 0.0;
+        double culledScreenSpaceError = 0.0;
+        double maximumRasterScreenSpaceError = 0.0;
+        uint32_t loadingDescendantLimit = 0;
+        bool forbidHoles = false;
+        double mainThreadLoadingTimeLimitSeconds = 0.0;
+        double tileCacheUnloadTimeLimitSeconds = 0.0;
+        int32_t maximumRasterTextureSize = 0;
+        bool terrainEnabledOnStart = false;
+        bool imageryEnabledOnStart = false;
+    };
+
+    const nlohmann::json& requireObject(const nlohmann::json& object, const char* key)
+    {
+        if (!object.contains(key) || !object.at(key).is_object())
+            throw std::runtime_error(std::string("GeoSpatial config requires object geospatial.") + key);
+        return object.at(key);
+    }
+
+    std::string requireString(const nlohmann::json& object, const char* key, const char* path)
+    {
+        if (!object.contains(key) || !object.at(key).is_string())
+            throw std::runtime_error(std::string("GeoSpatial config requires string ") + path + "." + key);
+        std::string value = object.at(key).get<std::string>();
+        if (value.empty())
+            throw std::runtime_error(std::string("GeoSpatial config requires non-empty string ") + path + "." + key);
+        return value;
+    }
+
+    bool requireBool(const nlohmann::json& object, const char* key, const char* path)
+    {
+        if (!object.contains(key) || !object.at(key).is_boolean())
+            throw std::runtime_error(std::string("GeoSpatial config requires boolean ") + path + "." + key);
+        return object.at(key).get<bool>();
+    }
+
+    int64_t requireInteger(const nlohmann::json& object, const char* key, const char* path)
+    {
+        if (!object.contains(key) || !object.at(key).is_number_integer())
+            throw std::runtime_error(std::string("GeoSpatial config requires integer ") + path + "." + key);
+        return object.at(key).get<int64_t>();
+    }
+
+    double requireNumber(const nlohmann::json& object, const char* key, const char* path)
+    {
+        if (!object.contains(key) || !object.at(key).is_number())
+            throw std::runtime_error(std::string("GeoSpatial config requires number ") + path + "." + key);
+        return object.at(key).get<double>();
+    }
+
+    int32_t requirePositiveInt32(const nlohmann::json& object, const char* key, const char* path)
+    {
+        const int64_t value = requireInteger(object, key, path);
+        if (value <= 0 || value > static_cast<int64_t>(std::numeric_limits<int32_t>::max()))
+            throw std::runtime_error(std::string("GeoSpatial config integer out of range ") + path + "." + key);
+        return static_cast<int32_t>(value);
+    }
+
+    int64_t requirePositiveMegabytesAsBytes(const nlohmann::json& object, const char* key, const char* path)
+    {
+        const int64_t value = requireInteger(object, key, path);
+        if (value <= 0 || value > 32768)
+            throw std::runtime_error(std::string("GeoSpatial config megabytes out of range ") + path + "." + key);
+        return value * 1024LL * 1024LL;
+    }
+
+    uint32_t requireUInt32(const nlohmann::json& object, const char* key, const char* path)
+    {
+        const int64_t value = requireInteger(object, key, path);
+        if (value < 0 || value > static_cast<int64_t>(std::numeric_limits<uint32_t>::max()))
+            throw std::runtime_error(std::string("GeoSpatial config unsigned integer out of range ") + path + "." + key);
+        return static_cast<uint32_t>(value);
+    }
+
+    std::vector<CesiumAsync::IAssetAccessor::THeader> readHeaders(const nlohmann::json& object, const char* key, const char* path)
+    {
+        std::vector<CesiumAsync::IAssetAccessor::THeader> headers;
+        if (!object.contains(key))
+            return headers;
+        if (!object.at(key).is_object())
+            throw std::runtime_error(std::string("GeoSpatial config requires object ") + path + "." + key);
+
+        for (const auto& [headerName, headerValue] : object.at(key).items()) {
+            if (!headerValue.is_string())
+                throw std::runtime_error(std::string("GeoSpatial config imagery header must be string: ") + headerName);
+            const std::string value = headerValue.get<std::string>();
+            if (headerName.empty() || value.empty())
+                throw std::runtime_error("GeoSpatial config imagery headers require non-empty names and values");
+            headers.emplace_back(headerName, value);
+        }
+        return headers;
+    }
 
     std::string formatEcef(const glm::dvec3& ecef)
     {
@@ -80,11 +199,117 @@ namespace {
         return stream.str();
     }
 
-    std::filesystem::path cesiumCacheDatabasePath()
+    std::filesystem::path resolveConfigPath(const std::string& value)
     {
-        std::filesystem::path cacheDirectory = std::filesystem::path(GRIM_ROOT_DIR) / "cache" / "geospatial";
-        std::filesystem::create_directories(cacheDirectory);
-        return cacheDirectory / "cesium_asset_cache.sqlite";
+        std::filesystem::path path(value);
+        if (path.is_relative())
+            path = std::filesystem::path(GRIM_ROOT_DIR) / path;
+
+        if (!path.has_filename())
+            throw std::runtime_error("GeoSpatial config cache.database_path must include a file name");
+
+        std::filesystem::create_directories(path.parent_path());
+        return path;
+    }
+
+    GeoSpatialRuntimeConfig loadGeospatialRuntimeConfig()
+    {
+        if (!aiConfig.contains("geospatial") || !aiConfig.at("geospatial").is_object())
+            throw std::runtime_error("GeoSpatial config requires top-level geospatial object in ai_config.json");
+
+        const nlohmann::json& root = aiConfig.at("geospatial");
+        const nlohmann::json& home = requireObject(root, "home");
+        const nlohmann::json& terrain = requireObject(root, "terrain");
+        const nlohmann::json& imagery = requireObject(root, "imagery");
+        const nlohmann::json& cache = requireObject(root, "cache");
+        const nlohmann::json& loading = requireObject(root, "loading");
+        const nlohmann::json& camera = requireObject(root, "camera");
+
+        const double longitude = requireNumber(home, "longitude_degrees", "geospatial.home");
+        const double latitude = requireNumber(home, "latitude_degrees", "geospatial.home");
+        const double height = requireNumber(home, "height_meters", "geospatial.home");
+        if (longitude < -180.0 || longitude > 180.0)
+            throw std::runtime_error("GeoSpatial config longitude_degrees must be within [-180, 180]");
+        if (latitude < -90.0 || latitude > 90.0)
+            throw std::runtime_error("GeoSpatial config latitude_degrees must be within [-90, 90]");
+        if (height <= 0.0)
+            throw std::runtime_error("GeoSpatial config height_meters must be positive because it is the initial orbit distance");
+
+        GeoSpatialRuntimeConfig config;
+        config.home = CesiumGeospatial::Cartographic::fromDegrees(longitude, latitude, 0.0);
+        config.initialOrbitDistanceMeters = height;
+        config.terrainEnabledOnStart = requireBool(terrain, "enabled_on_start", "geospatial.terrain");
+        config.terrainProvider = requireString(terrain, "provider", "geospatial.terrain");
+        if (config.terrainProvider != "ellipsoid")
+            throw std::runtime_error("GeoSpatial config terrain.provider must be 'ellipsoid' until a terrain adapter is implemented");
+
+        config.imageryEnabledOnStart = requireBool(imagery, "enabled_on_start", "geospatial.imagery");
+        config.imageryProvider = requireString(imagery, "provider", "geospatial.imagery");
+        if (config.imageryProvider != "debug_colorize" && config.imageryProvider != "url_template" && config.imageryProvider != "none")
+            throw std::runtime_error("GeoSpatial config imagery.provider must be 'debug_colorize', 'url_template', or 'none'");
+        if (config.imageryEnabledOnStart && config.imageryProvider == "none")
+            throw std::runtime_error("GeoSpatial config cannot enable imagery_on_start with imagery.provider='none'");
+        if (config.imageryEnabledOnStart && !config.terrainEnabledOnStart)
+            throw std::runtime_error("GeoSpatial config cannot enable imagery without terrain tileset on start");
+
+        if (config.imageryProvider == "url_template") {
+            const nlohmann::json& urlTemplate = requireObject(imagery, "url_template");
+            config.imageryUrlTemplate = requireString(urlTemplate, "url", "geospatial.imagery.url_template");
+            config.imageryCredit = requireString(urlTemplate, "credit", "geospatial.imagery.url_template");
+            config.imageryMinimumLevel = requireUInt32(urlTemplate, "minimum_level", "geospatial.imagery.url_template");
+            config.imageryMaximumLevel = requireUInt32(urlTemplate, "maximum_level", "geospatial.imagery.url_template");
+            config.imageryTileWidth = requireUInt32(urlTemplate, "tile_width", "geospatial.imagery.url_template");
+            config.imageryTileHeight = requireUInt32(urlTemplate, "tile_height", "geospatial.imagery.url_template");
+            config.imageryHeaders = readHeaders(urlTemplate, "headers", "geospatial.imagery.url_template");
+            if (config.imageryMaximumLevel < config.imageryMinimumLevel)
+                throw std::runtime_error("GeoSpatial config imagery url_template maximum_level must be >= minimum_level");
+            if (config.imageryTileWidth == 0 || config.imageryTileHeight == 0)
+                throw std::runtime_error("GeoSpatial config imagery url_template tile dimensions must be positive");
+        }
+
+        config.cacheDatabasePath = resolveConfigPath(requireString(cache, "database_path", "geospatial.cache"));
+        config.assetCacheItems = static_cast<uint64_t>(requirePositiveInt32(cache, "asset_cache_items", "geospatial.cache"));
+        config.requestsPerCachePrune = requirePositiveInt32(cache, "requests_per_prune", "geospatial.cache");
+        config.tileCacheBytes = requirePositiveMegabytesAsBytes(cache, "tile_cache_mb", "geospatial.cache");
+        config.rasterSubTileCacheBytes = requirePositiveMegabytesAsBytes(cache, "raster_subtile_cache_mb", "geospatial.cache");
+
+        config.workerThreads = requirePositiveInt32(loading, "worker_threads", "geospatial.loading");
+        config.maximumSimultaneousTileLoads = requirePositiveInt32(loading, "maximum_simultaneous_tile_loads", "geospatial.loading");
+        config.maximumSimultaneousRasterLoads = requirePositiveInt32(loading, "maximum_simultaneous_raster_loads", "geospatial.loading");
+        config.maximumScreenSpaceError = requireNumber(loading, "maximum_screen_space_error", "geospatial.loading");
+        config.culledScreenSpaceError = requireNumber(loading, "culled_screen_space_error", "geospatial.loading");
+        config.maximumRasterScreenSpaceError = requireNumber(loading, "maximum_raster_screen_space_error", "geospatial.loading");
+        config.loadingDescendantLimit = requireUInt32(loading, "loading_descendant_limit", "geospatial.loading");
+        config.forbidHoles = requireBool(loading, "forbid_holes", "geospatial.loading");
+        config.mainThreadLoadingTimeLimitSeconds = requireNumber(loading, "main_thread_loading_time_limit_seconds", "geospatial.loading");
+        config.tileCacheUnloadTimeLimitSeconds = requireNumber(loading, "tile_cache_unload_time_limit_seconds", "geospatial.loading");
+        config.maximumRasterTextureSize = requirePositiveInt32(loading, "maximum_raster_texture_size", "geospatial.loading");
+        config.userAgent = requireString(loading, "user_agent", "geospatial.loading");
+        if (config.maximumScreenSpaceError <= 0.0)
+            throw std::runtime_error("GeoSpatial config maximum_screen_space_error must be positive");
+        if (config.culledScreenSpaceError <= 0.0)
+            throw std::runtime_error("GeoSpatial config culled_screen_space_error must be positive");
+        if (config.maximumRasterScreenSpaceError <= 0.0)
+            throw std::runtime_error("GeoSpatial config maximum_raster_screen_space_error must be positive");
+        if (config.mainThreadLoadingTimeLimitSeconds <= 0.0)
+            throw std::runtime_error("GeoSpatial config main_thread_loading_time_limit_seconds must be positive");
+        if (config.tileCacheUnloadTimeLimitSeconds <= 0.0)
+            throw std::runtime_error("GeoSpatial config tile_cache_unload_time_limit_seconds must be positive");
+
+        config.frustum.horizontalFovRadians = requireNumber(camera, "horizontal_fov_degrees", "geospatial.camera") * kDegreesToRadians;
+        config.frustum.verticalFovRadians = requireNumber(camera, "vertical_fov_degrees", "geospatial.camera") * kDegreesToRadians;
+        config.frustum.nearPlaneMeters = requireNumber(camera, "near_plane_meters", "geospatial.camera");
+        config.frustum.farPlaneMeters = requireNumber(camera, "far_plane_meters", "geospatial.camera");
+        config.zoomLimits.minDistanceMeters = requireNumber(camera, "min_distance_meters", "geospatial.camera");
+        config.zoomLimits.maxDistanceMeters = requireNumber(camera, "max_distance_meters", "geospatial.camera");
+        if (config.frustum.horizontalFovRadians <= 0.0 || config.frustum.verticalFovRadians <= 0.0)
+            throw std::runtime_error("GeoSpatial config camera FOV values must be positive");
+        if (config.initialOrbitDistanceMeters < config.zoomLimits.minDistanceMeters ||
+            config.initialOrbitDistanceMeters > config.zoomLimits.maxDistanceMeters) {
+            throw std::runtime_error("GeoSpatial config home.height_meters initial orbit distance must be inside camera min/max distance");
+        }
+
+        return config;
     }
 
     std::string responseStatusSuffix(const CesiumAsync::IAssetRequest* request)
@@ -165,15 +390,19 @@ namespace {
         bool stopping_ = false;
     };
 
-    Cesium3DTilesSelection::TilesetOptions makeTilesetOptions()
+    Cesium3DTilesSelection::TilesetOptions makeTilesetOptions(const GeoSpatialRuntimeConfig& config)
     {
         Cesium3DTilesSelection::TilesetOptions options;
-        options.maximumCachedBytes = kCesiumTileCacheBytes;
-        options.maximumSimultaneousTileLoads = 24;
-        options.mainThreadLoadingTimeLimit = 4.0;
-        options.tileCacheUnloadTimeLimit = 1.0;
+        options.maximumScreenSpaceError = config.maximumScreenSpaceError;
+        options.culledScreenSpaceError = config.culledScreenSpaceError;
+        options.loadingDescendantLimit = config.loadingDescendantLimit;
+        options.forbidHoles = config.forbidHoles;
+        options.maximumCachedBytes = config.tileCacheBytes;
+        options.maximumSimultaneousTileLoads = config.maximumSimultaneousTileLoads;
+        options.mainThreadLoadingTimeLimit = config.mainThreadLoadingTimeLimitSeconds;
+        options.tileCacheUnloadTimeLimit = config.tileCacheUnloadTimeLimitSeconds;
         options.enableOcclusionCulling = false;
-        options.credit = std::string("Cesium Native ellipsoid terrain");
+        options.credit = std::string("Cesium Native ") + config.terrainProvider + " terrain";
         options.loadErrorCallback = [](const Cesium3DTilesSelection::TilesetLoadFailureDetails& details) {
             throw std::runtime_error("Cesium tileset load failed: " + details.message +
                                      " status=" + std::to_string(details.statusCode));
@@ -181,12 +410,13 @@ namespace {
         return options;
     }
 
-    CesiumRasterOverlays::RasterOverlayOptions makeRasterOverlayOptions()
+    CesiumRasterOverlays::RasterOverlayOptions makeRasterOverlayOptions(const GeoSpatialRuntimeConfig& config)
     {
         CesiumRasterOverlays::RasterOverlayOptions options;
-        options.maximumSimultaneousTileLoads = 12;
-        options.subTileCacheBytes = kCesiumRasterSubTileCacheBytes;
-        options.maximumTextureSize = 1024;
+        options.maximumSimultaneousTileLoads = config.maximumSimultaneousRasterLoads;
+        options.subTileCacheBytes = config.rasterSubTileCacheBytes;
+        options.maximumTextureSize = config.maximumRasterTextureSize;
+        options.maximumScreenSpaceError = config.maximumRasterScreenSpaceError;
         options.loadErrorCallback = [](const CesiumRasterOverlays::RasterOverlayLoadFailureDetails& details) {
             throw std::runtime_error("Cesium raster overlay load failed: " + details.message +
                                      responseStatusSuffix(details.pRequest.get()));
@@ -194,10 +424,21 @@ namespace {
         return options;
     }
 
-    CesiumCurl::CurlAssetAccessorOptions makeCurlOptions()
+    CesiumRasterOverlays::UrlTemplateRasterOverlayOptions makeUrlTemplateImageryOptions(const GeoSpatialRuntimeConfig& config)
+    {
+        CesiumRasterOverlays::UrlTemplateRasterOverlayOptions options;
+        options.credit = config.imageryCredit;
+        options.minimumLevel = config.imageryMinimumLevel;
+        options.maximumLevel = config.imageryMaximumLevel;
+        options.tileWidth = config.imageryTileWidth;
+        options.tileHeight = config.imageryTileHeight;
+        return options;
+    }
+
+    CesiumCurl::CurlAssetAccessorOptions makeCurlOptions(const GeoSpatialRuntimeConfig& config)
     {
         CesiumCurl::CurlAssetAccessorOptions options;
-        options.userAgent = "GRIM Cesium Native Runtime/1.0";
+        options.userAgent = config.userAgent;
         return options;
     }
 
@@ -238,24 +479,25 @@ namespace {
 }
 
 struct GeoSpatialRuntime::CesiumRuntimeContext final {
-    CesiumRuntimeContext()
-        : taskProcessor(std::make_shared<QueuedTaskProcessor>(kCesiumWorkerThreads)),
+    explicit CesiumRuntimeContext(GeoSpatialRuntimeConfig runtimeConfig)
+        : config(std::move(runtimeConfig)),
+          taskProcessor(std::make_shared<QueuedTaskProcessor>(config.workerThreads)),
           asyncSystem(taskProcessor),
           creditSystem(std::make_shared<CesiumUtility::CreditSystem>()),
-          networkAssetAccessor(std::make_shared<CesiumCurl::CurlAssetAccessor>(makeCurlOptions())),
+          networkAssetAccessor(std::make_shared<CesiumCurl::CurlAssetAccessor>(makeCurlOptions(config))),
           cacheDatabase(std::make_shared<CesiumAsync::SqliteCache>(
               spdlog::default_logger(),
-              cesiumCacheDatabasePath().string(),
-              kCesiumAssetCacheItems)),
+              config.cacheDatabasePath.string(),
+              config.assetCacheItems)),
           assetAccessor(std::make_shared<CesiumAsync::CachingAssetAccessor>(
               spdlog::default_logger(),
               networkAssetAccessor,
               cacheDatabase,
-              kCesiumRequestsPerCachePrune)),
+              config.requestsPerCachePrune)),
           renderAdapter(std::make_shared<CesiumBgfxRenderAdapter>("GeoSpatialCesiumRender")),
           externals(makeTilesetExternals(asyncSystem, assetAccessor, creditSystem, renderAdapter)),
-          tilesetOptions(makeTilesetOptions()),
-          rasterOverlayOptions(makeRasterOverlayOptions())
+          tilesetOptions(makeTilesetOptions(config)),
+          rasterOverlayOptions(makeRasterOverlayOptions(config))
     {
     }
 
@@ -267,6 +509,9 @@ struct GeoSpatialRuntime::CesiumRuntimeContext final {
 
     void createOrReloadTileset()
     {
+        if (config.terrainProvider != "ellipsoid")
+            throw std::runtime_error("GeoSpatialRuntime cannot create unsupported terrain provider '" + config.terrainProvider + "'");
+
         imageryOverlay.reset();
         tileset = Cesium3DTilesSelection::EllipsoidTilesetLoader::createTileset(externals, tilesetOptions);
         if (!tileset)
@@ -278,17 +523,25 @@ struct GeoSpatialRuntime::CesiumRuntimeContext final {
 
     void setImageryProviderEnabled(bool enabled)
     {
+        if (enabled && config.imageryProvider == "none")
+            throw std::runtime_error("GeoSpatialRuntime cannot enable imagery when configured provider is 'none'");
+        if (enabled && config.imageryProvider != "debug_colorize" && config.imageryProvider != "url_template")
+            throw std::runtime_error("GeoSpatialRuntime cannot enable unsupported imagery provider '" + config.imageryProvider + "'");
+
         imageryProviderEnabled = enabled;
 
         if (!tileset)
             return;
 
         if (enabled) {
+            LOG_DEBUG("GeoSpatialRuntime", "Imagery: attaching provider=" + config.imageryProvider);
             attachImageryProvider();
+            LOG_DEBUG("GeoSpatialRuntime", "Imagery: provider attached");
             return;
         }
 
         if (imageryOverlay) {
+            LOG_DEBUG("GeoSpatialRuntime", "Imagery: removing provider");
             tileset->getOverlays().remove(imageryOverlay);
             imageryOverlay.reset();
         }
@@ -296,27 +549,46 @@ struct GeoSpatialRuntime::CesiumRuntimeContext final {
 
     void updateFrame(const UICameraFrame& cameraFrame, float dtSeconds)
     {
+        const bool logFirstFrame = !firstUpdateFrameLogged;
+        if (logFirstFrame)
+            LOG_DEBUG("GeoSpatialRuntime", "Cesium updateFrame: enter main thread scope");
         auto mainThreadScope = asyncSystem.enterMainThread();
+        if (logFirstFrame)
+            LOG_DEBUG("GeoSpatialRuntime", "Cesium updateFrame: dispatch main thread tasks");
         asyncSystem.dispatchMainThreadTasks();
+        if (logFirstFrame)
+            LOG_DEBUG("GeoSpatialRuntime", "Cesium updateFrame: tick asset accessor");
         assetAccessor->tick();
 
         if (!tileset) {
+            if (logFirstFrame)
+                LOG_DEBUG("GeoSpatialRuntime", "Cesium updateFrame: no tileset loaded");
             renderAdapter->setFrameSelection({}, glm::dmat4(1.0), glm::dmat4(1.0));
+            firstUpdateFrameLogged = true;
             return;
         }
 
         viewStates.clear();
         viewStates.push_back(makeCameraViewState(cameraFrame));
+        if (logFirstFrame)
+            LOG_DEBUG("GeoSpatialRuntime", "Cesium updateFrame: update view group");
         const Cesium3DTilesSelection::ViewUpdateResult& updateResult =
             tileset->updateViewGroup(tileset->getDefaultViewGroup(), viewStates, dtSeconds);
+        if (logFirstFrame)
+            LOG_DEBUG("GeoSpatialRuntime", "Cesium updateFrame: set frame selection");
         renderAdapter->setFrameSelection(updateResult.tilesToRenderThisFrame,
-                                         viewStates.front().getViewMatrix(),
-                                         viewStates.front().getProjectionMatrix());
+                                         cameraFrame.view,
+                                         cameraFrame.projection);
+        if (logFirstFrame)
+            LOG_DEBUG("GeoSpatialRuntime", "Cesium updateFrame: load tiles");
         tileset->loadTiles();
+        if (logFirstFrame)
+            LOG_DEBUG("GeoSpatialRuntime", "Cesium updateFrame: load tiles complete");
 
         loadedTileCount = tileset->getNumberOfTilesLoaded();
         loadProgress = tileset->computeLoadProgress();
         loadedBytes = tileset->getTotalDataBytes();
+        firstUpdateFrameLogged = true;
     }
 
     std::string tilesetStatus() const
@@ -331,6 +603,41 @@ struct GeoSpatialRuntime::CesiumRuntimeContext final {
         return stream.str();
     }
 
+    std::string imageryProviderStatus() const
+    {
+        if (!imageryProviderEnabled)
+            return "Imagery provider disabled";
+        if (config.imageryProvider == "url_template")
+            return "URL template imagery provider enabled: " + config.imageryCredit;
+        if (config.imageryProvider == "debug_colorize")
+            return "Debug colorized imagery provider enabled";
+        if (config.imageryProvider == "none")
+            return "No imagery provider configured";
+        throw std::runtime_error("GeoSpatialRuntime has unsupported imagery provider '" + config.imageryProvider + "'");
+    }
+
+    void applyImageryConfig(const GeoSpatialRuntimeConfig& runtimeConfig)
+    {
+        if (imageryOverlay && tileset) {
+            tileset->getOverlays().remove(imageryOverlay);
+            imageryOverlay.reset();
+        }
+
+        config.imageryProvider = runtimeConfig.imageryProvider;
+        config.imageryUrlTemplate = runtimeConfig.imageryUrlTemplate;
+        config.imageryCredit = runtimeConfig.imageryCredit;
+        config.imageryMinimumLevel = runtimeConfig.imageryMinimumLevel;
+        config.imageryMaximumLevel = runtimeConfig.imageryMaximumLevel;
+        config.imageryTileWidth = runtimeConfig.imageryTileWidth;
+        config.imageryTileHeight = runtimeConfig.imageryTileHeight;
+        config.imageryHeaders = runtimeConfig.imageryHeaders;
+        rasterOverlayOptions = makeRasterOverlayOptions(runtimeConfig);
+
+        if (imageryProviderEnabled && tileset)
+            attachImageryProvider();
+    }
+
+    GeoSpatialRuntimeConfig config;
     std::shared_ptr<QueuedTaskProcessor> taskProcessor;
     CesiumAsync::AsyncSystem asyncSystem;
     std::shared_ptr<CesiumUtility::CreditSystem> creditSystem;
@@ -348,6 +655,7 @@ struct GeoSpatialRuntime::CesiumRuntimeContext final {
     float loadProgress = 0.0f;
     int64_t loadedBytes = 0;
     bool imageryProviderEnabled = false;
+    bool firstUpdateFrameLogged = false;
 
 private:
     void attachImageryProvider()
@@ -358,10 +666,25 @@ private:
         if (imageryOverlay)
             return;
 
-        imageryOverlay = new CesiumRasterOverlays::DebugColorizeTilesRasterOverlay(
-            "GRIM debug imagery provider",
-            rasterOverlayOptions);
+        if (config.imageryProvider == "debug_colorize") {
+            LOG_DEBUG("GeoSpatialRuntime", "Imagery: create DebugColorizeTilesRasterOverlay");
+            imageryOverlay = new CesiumRasterOverlays::DebugColorizeTilesRasterOverlay(
+                "GRIM debug imagery provider",
+                rasterOverlayOptions);
+        } else if (config.imageryProvider == "url_template") {
+            LOG_DEBUG("GeoSpatialRuntime", "Imagery: create UrlTemplateRasterOverlay url=" + config.imageryUrlTemplate);
+            imageryOverlay = new CesiumRasterOverlays::UrlTemplateRasterOverlay(
+                "GRIM URL template satellite imagery",
+                config.imageryUrlTemplate,
+                config.imageryHeaders,
+                makeUrlTemplateImageryOptions(config),
+                rasterOverlayOptions);
+        } else {
+            throw std::runtime_error("GeoSpatialRuntime cannot attach unsupported imagery provider '" + config.imageryProvider + "'");
+        }
+        LOG_DEBUG("GeoSpatialRuntime", "Imagery: adding overlay to tileset");
         tileset->getOverlays().add(imageryOverlay);
+        LOG_DEBUG("GeoSpatialRuntime", "Imagery: overlay added to tileset");
     }
 };
 
@@ -384,22 +707,34 @@ void GeoSpatialRuntime::requestInitializeCesium()
 {
     std::lock_guard lock(mutex_);
 
-    const CesiumGeospatial::Cartographic home = CesiumGeospatial::Cartographic::fromDegrees(
-        -75.59777,
-        40.03883,
-        24000000.0);
-    camera_.setHomeCartographic(home);
-    cesium_ = std::make_unique<CesiumRuntimeContext>();
+    LOG_DEBUG("GeoSpatialRuntime", "Init Cesium: loading geospatial runtime config");
+    const GeoSpatialRuntimeConfig config = loadGeospatialRuntimeConfig();
+    LOG_DEBUG("GeoSpatialRuntime", "Init Cesium: config loaded provider=" + config.imageryProvider +
+                                       " terrain=" + config.terrainProvider);
+    camera_.setHomeCartographic(config.home);
+    camera_.setFrustum(config.frustum);
+    camera_.setZoomLimits(config.zoomLimits);
+    camera_.setOrbitDistanceMeters(config.initialOrbitDistanceMeters);
+
+    LOG_DEBUG("GeoSpatialRuntime", "Init Cesium: constructing runtime context");
+    cesium_ = std::make_unique<CesiumRuntimeContext>(config);
+    LOG_DEBUG("GeoSpatialRuntime", "Init Cesium: attaching viewport; imagery starts disabled for first-frame stability");
     cesium_->renderAdapter->setViewportAttachment(viewportAttachment_);
-    cesium_->createOrReloadTileset();
+    cesium_->setImageryProviderEnabled(false);
+    if (config.terrainEnabledOnStart) {
+        LOG_DEBUG("GeoSpatialRuntime", "Init Cesium: creating ellipsoid tileset");
+        cesium_->createOrReloadTileset();
+    }
 
     initialized_ = true;
+    firstFrameLogged_ = false;
     snapshot_.cesium_ready = true;
-    snapshot_.terrain_enabled = true;
+    snapshot_.terrain_enabled = config.terrainEnabledOnStart;
     snapshot_.imagery_enabled = false;
     snapshot_.cesium_status = "Cesium Native runtime owner initialized";
     updateProviderStatusLocked();
     refreshCameraStatusLocked();
+    LOG_DEBUG("GeoSpatialRuntime", "Init Cesium: complete");
 }
 
 void GeoSpatialRuntime::requestReloadTileset()
@@ -413,9 +748,23 @@ void GeoSpatialRuntime::requestReloadTileset()
     if (!cesium_)
         throw std::runtime_error("GeoSpatialRuntime initialized without CesiumRuntimeContext");
 
-    cesium_->createOrReloadTileset();
+    const GeoSpatialRuntimeConfig config = loadGeospatialRuntimeConfig();
+    camera_.setHomeCartographic(config.home);
+    camera_.setFrustum(config.frustum);
+    camera_.setZoomLimits(config.zoomLimits);
+    camera_.setOrbitDistanceMeters(config.initialOrbitDistanceMeters);
+
+    cesium_ = std::make_unique<CesiumRuntimeContext>(config);
+    cesium_->renderAdapter->setViewportAttachment(viewportAttachment_);
+    cesium_->setImageryProviderEnabled(false);
+    if (config.terrainEnabledOnStart)
+        cesium_->createOrReloadTileset();
+
+    firstFrameLogged_ = false;
+    snapshot_.terrain_enabled = config.terrainEnabledOnStart;
+    snapshot_.imagery_enabled = false;
     updateProviderStatusLocked();
-    snapshot_.cesium_status = "Cesium tileset lifecycle reloaded";
+    snapshot_.cesium_status = "Cesium runtime config reloaded from ai_config.json";
 }
 
 void GeoSpatialRuntime::requestRecenterHome()
@@ -476,9 +825,13 @@ void GeoSpatialRuntime::requestToggleImagery()
     if (!cesium_)
         throw std::runtime_error("GeoSpatialRuntime initialized without CesiumRuntimeContext");
 
-    snapshot_.imagery_enabled = !snapshot_.imagery_enabled;
-    cesium_->setImageryProviderEnabled(snapshot_.imagery_enabled);
-    snapshot_.cesium_status = snapshot_.imagery_enabled ? "Debug imagery provider enabled" : "Imagery provider disabled";
+    const bool nextEnabled = !snapshot_.imagery_enabled;
+    if (nextEnabled)
+        cesium_->applyImageryConfig(loadGeospatialRuntimeConfig());
+
+    snapshot_.imagery_enabled = nextEnabled;
+    cesium_->setImageryProviderEnabled(nextEnabled);
+    snapshot_.cesium_status = cesium_->imageryProviderStatus();
     updateProviderStatusLocked();
 }
 
@@ -532,7 +885,17 @@ void GeoSpatialRuntime::tick(float dtSeconds)
         }
 
         camera_.setViewportSize(viewportWidth, viewportHeight);
+        if (!firstFrameLogged_) {
+            LOG_DEBUG("GeoSpatialRuntime", "First Cesium tick: begin updateFrame terrain=" +
+                                           std::to_string(snapshot_.terrain_enabled) +
+                                           " imagery=" + std::to_string(snapshot_.imagery_enabled) +
+                                           " viewport=" + std::to_string(viewportWidth) + "x" + std::to_string(viewportHeight));
+        }
         cesium_->updateFrame(camera_.frame(), dtSeconds);
+        if (!firstFrameLogged_) {
+            LOG_DEBUG("GeoSpatialRuntime", "First Cesium tick: updateFrame complete");
+            firstFrameLogged_ = true;
+        }
         updateProviderStatusLocked();
     }
 }
@@ -703,7 +1066,11 @@ void GeoSpatialRuntime::applyViewportKeyboardLocked(float dtSeconds)
 
 void GeoSpatialRuntime::resetCameraLocked()
 {
+    const UICameraZoomLimits zoomLimits = camera_.zoomLimits();
     camera_.resetOrbit();
+    camera_.setZoomLimits(zoomLimits);
+    if (cesium_)
+        camera_.setOrbitDistanceMeters(cesium_->config.initialOrbitDistanceMeters);
     viewportDragPixels_ = 0.0;
     refreshCameraStatusLocked();
 }

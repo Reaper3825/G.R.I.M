@@ -11,15 +11,18 @@
 #include <stdexcept>
 
 namespace {
-    constexpr double kDefaultOrbitPitchRadians = 1.25;
-    constexpr double kMinOrbitPitchRadians = 0.18;
-    constexpr double kMaxOrbitPitchRadians = 1.48;
+    constexpr double kMinOrbitPitchRadians = -1.42;
+    constexpr double kMaxOrbitPitchRadians = 1.42;
     constexpr double kDefaultMinOrbitDistanceMeters = 500.0;
     constexpr double kMaxOrbitDistanceMultiplier = 5.0;
     constexpr double kOrbitRadiansPerPixel = 0.0045;
     constexpr double kFineOrbitRadiansPerPixel = 0.0015;
     constexpr double kWheelZoomStep = 0.12;
     constexpr double kRadiansEpsilon = 1.0e-8;
+    constexpr double kPoleViewThreshold = 0.98;
+    constexpr double kDynamicNearPlaneAltitudeFraction = 0.02;
+    constexpr double kDynamicNearPlaneMaxAltitudeFraction = 0.5;
+    constexpr double kDynamicFarPlaneHorizonMargin = 1.25;
 
     const CesiumGeospatial::Ellipsoid& wgs84()
     {
@@ -32,6 +35,26 @@ namespace {
         if (length <= 0.0)
             throw std::runtime_error(description);
         return value / length;
+    }
+
+    UICameraFrustum frustumForCameraRadius(const UICameraFrustum& source, double cameraRadius)
+    {
+        const double ellipsoidRadius = wgs84().getMaximumRadius();
+        if (cameraRadius <= ellipsoidRadius)
+            throw std::runtime_error("UICamera camera radius must be outside the WGS84 ellipsoid");
+
+        UICameraFrustum result = source;
+        const double altitudeMeters = cameraRadius - ellipsoidRadius;
+        const double dynamicNear = std::clamp(
+            altitudeMeters * kDynamicNearPlaneAltitudeFraction,
+            source.nearPlaneMeters,
+            altitudeMeters * kDynamicNearPlaneMaxAltitudeFraction);
+        const double horizonDistance = std::sqrt(std::max(cameraRadius * cameraRadius - ellipsoidRadius * ellipsoidRadius, 0.0));
+        const double dynamicFar = std::min(source.farPlaneMeters, horizonDistance * kDynamicFarPlaneHorizonMargin);
+
+        result.nearPlaneMeters = dynamicNear;
+        result.farPlaneMeters = std::max(dynamicFar, result.nearPlaneMeters + 1.0);
+        return result;
     }
 }
 
@@ -94,8 +117,9 @@ void UICamera::setZoomLimits(const UICameraZoomLimits& limits)
 
 void UICamera::resetOrbit()
 {
-    yawRadians_ = 0.0;
-    pitchRadians_ = kDefaultOrbitPitchRadians;
+    const CesiumGeospatial::Cartographic home = homeCartographic();
+    yawRadians_ = home.longitude;
+    pitchRadians_ = home.latitude;
     orbitDistanceMeters_ = defaultOrbitDistanceMeters();
     orbitTargetEastMeters_ = 0.0;
     orbitTargetNorthMeters_ = 0.0;
@@ -112,6 +136,15 @@ void UICamera::recenterHome()
     clampOrbit();
 }
 
+void UICamera::setOrbitDistanceMeters(double distanceMeters)
+{
+    if (distanceMeters <= 0.0)
+        throw std::runtime_error("UICamera orbit distance must be positive");
+
+    orbitDistanceMeters_ = distanceMeters;
+    clampOrbit();
+}
+
 void UICamera::orbitByRadians(double yawDeltaRadians, double pitchDeltaRadians)
 {
     yawRadians_ += yawDeltaRadians;
@@ -121,8 +154,7 @@ void UICamera::orbitByRadians(double yawDeltaRadians, double pitchDeltaRadians)
 
 void UICamera::panByMeters(double eastMeters, double northMeters)
 {
-    orbitTargetEastMeters_ += eastMeters;
-    orbitTargetNorthMeters_ += northMeters;
+    orbitByRadians(eastMeters / std::max(orbitDistanceMeters_, 1.0), northMeters / std::max(orbitDistanceMeters_, 1.0));
 }
 
 void UICamera::orbitByPixels(double deltaX, double deltaY, bool fineControl)
@@ -157,35 +189,49 @@ UICameraFrame UICamera::frame() const
     if (orbitDistanceMeters_ <= 0.0)
         throw std::runtime_error("UICamera orbit distance must be positive before frame evaluation");
 
-    const Basis basis = targetBasis();
-    const glm::dvec3 tangentDirection = normalizeOrThrow(
-        std::cos(yawRadians_) * basis.north + std::sin(yawRadians_) * basis.east,
-        "UICamera tangent direction is degenerate");
-    const glm::dvec3 cameraOffsetDirection = normalizeOrThrow(
-        std::cos(pitchRadians_) * tangentDirection + std::sin(pitchRadians_) * basis.up,
-        "UICamera offset direction is degenerate");
-    const glm::dvec3 cameraPosition = basis.target + cameraOffsetDirection * orbitDistanceMeters_;
-    const glm::dvec3 direction = normalizeOrThrow(basis.target - cameraPosition, "UICamera direction is degenerate");
+    const double cameraRadius = wgs84().getMaximumRadius() + orbitDistanceMeters_;
+    const double cosPitch = std::cos(pitchRadians_);
+    const glm::dvec3 radialDirection = normalizeOrThrow(
+        glm::dvec3(
+            cosPitch * std::cos(yawRadians_),
+            cosPitch * std::sin(yawRadians_),
+            std::sin(pitchRadians_)),
+        "UICamera turntable radial direction is degenerate");
+    const glm::dvec3 globeCenter{0.0, 0.0, 0.0};
+    const glm::dvec3 cameraPosition = radialDirection * cameraRadius;
+    const glm::dvec3 direction = normalizeOrThrow(globeCenter - cameraPosition, "UICamera direction is degenerate");
 
-    glm::dvec3 right = glm::cross(direction, basis.up);
+    glm::dvec3 referenceUp{0.0, 0.0, 1.0};
+    if (std::abs(glm::dot(direction, referenceUp)) > kPoleViewThreshold) {
+        referenceUp = normalizeOrThrow(
+            glm::dvec3(-std::sin(yawRadians_), std::cos(yawRadians_), 0.0),
+            "UICamera pole reference up is degenerate");
+    }
+
+    glm::dvec3 right = glm::cross(direction, referenceUp);
     if (glm::length(right) < kRadiansEpsilon)
-        right = basis.east;
+        right = glm::dvec3{1.0, 0.0, 0.0};
     else
         right = glm::normalize(right);
     const glm::dvec3 up = glm::normalize(glm::cross(right, direction));
 
-    const double aspect = static_cast<double>(frustum_.viewportWidth) / static_cast<double>(frustum_.viewportHeight);
+    const std::optional<glm::dvec3> targetSurface = wgs84().scaleToGeodeticSurface(cameraPosition);
+    if (!targetSurface)
+        throw std::runtime_error("UICamera turntable camera position cannot be projected to WGS84");
+
+    const UICameraFrustum frameFrustum = frustumForCameraRadius(frustum_, cameraRadius);
+    const double aspect = static_cast<double>(frameFrustum.viewportWidth) / static_cast<double>(frameFrustum.viewportHeight);
     UICameraFrame result;
-    result.targetEcef = basis.target;
+    result.targetEcef = *targetSurface;
     result.positionEcef = cameraPosition;
     result.directionEcef = direction;
     result.upEcef = up;
     result.rightEcef = right;
-    result.targetCartographic = ecefToCartographicOrThrow(basis.target);
+    result.targetCartographic = ecefToCartographicOrThrow(*targetSurface);
     result.cameraCartographic = ecefToCartographicOrThrow(cameraPosition);
-    result.frustum = frustum_;
-    result.view = glm::lookAt(cameraPosition, basis.target, up);
-    result.projection = glm::perspective(frustum_.verticalFovRadians, aspect, frustum_.nearPlaneMeters, frustum_.farPlaneMeters);
+    result.frustum = frameFrustum;
+    result.view = glm::lookAt(cameraPosition, globeCenter, up);
+    result.projection = glm::perspective(frameFrustum.verticalFovRadians, aspect, frameFrustum.nearPlaneMeters, frameFrustum.farPlaneMeters);
     result.yawRadians = yawRadians_;
     result.pitchRadians = pitchRadians_;
     result.orbitDistanceMeters = orbitDistanceMeters_;

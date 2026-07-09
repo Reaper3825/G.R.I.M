@@ -1,11 +1,12 @@
 #include "cesium_bgfx_render_adapter.hpp"
+#include "cesium_bgfx_shaders.hpp"
 
 #ifdef OPAQUE
 #undef OPAQUE
 #endif
 
 #include "core/window_manager.hpp"
-#include "popup_ui/popup_3d_shaders.hpp"
+#include "logger.hpp"
 #include "ui/primitives/ui_native_3d_viewport_attachment.hpp"
 
 #include <Cesium3DTilesSelection/TileContent.h>
@@ -24,8 +25,11 @@
 #include <CesiumGltf/TextureInfo.h>
 #include <CesiumImage/ImageAsset.h>
 
+#include <glm/gtc/matrix_inverse.hpp>
+
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -43,8 +47,7 @@ namespace {
     constexpr uint64_t kOpaqueState = BGFX_STATE_WRITE_RGB |
                                       BGFX_STATE_WRITE_A |
                                       BGFX_STATE_WRITE_Z |
-                                      BGFX_STATE_DEPTH_TEST_LESS |
-                                      BGFX_STATE_CULL_CW;
+                                      BGFX_STATE_DEPTH_TEST_LEQUAL;
     constexpr uint64_t kAlphaState = kOpaqueState |
                                      BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA,
                                                            BGFX_STATE_BLEND_INV_SRC_ALPHA);
@@ -108,7 +111,15 @@ namespace {
 
     struct RasterAttachment {
         int32_t overlayTextureCoordinateID = -1;
-        RasterTextureResources* resources = nullptr;
+        uintptr_t resourceID = 0;
+        bgfx::TextureHandle textureHandle = BGFX_INVALID_HANDLE;
+        glm::dvec2 translation{0.0, 0.0};
+        glm::dvec2 scale{1.0, 1.0};
+    };
+
+    struct RenderMaterial {
+        bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
+        std::array<float, 4> baseColorFactor{1.0f, 1.0f, 1.0f, 1.0f};
         glm::dvec2 translation{0.0, 0.0};
         glm::dvec2 scale{1.0, 1.0};
     };
@@ -116,6 +127,7 @@ namespace {
     struct TileGpuResources {
         std::vector<GpuPrimitive> primitives;
         std::vector<GpuTexture> textures;
+        mutable std::mutex rasterAttachmentsMutex;
         std::vector<RasterAttachment> rasterAttachments;
     };
 
@@ -124,8 +136,16 @@ namespace {
     bool g_renderPassRegistered = false;
     bgfx::VertexLayout g_vertexLayout;
     bool g_vertexLayoutInitialized = false;
-    PopupShaderState* g_shaderState = nullptr;
+    CesiumShaderState* g_shaderState = nullptr;
     bgfx::TextureHandle g_whiteTexture = BGFX_INVALID_HANDLE;
+    bool g_rasterTextureRenderingEnabled = true;
+    bool g_loggedRasterTextureSuppressed = false;
+    bool g_loggedRasterTextureSampled = false;
+    bool g_loggedRenderedRasterAttachments = false;
+    bool g_loggedCesiumOverlayUv = false;
+    bool g_loggedGeneratedSphericalUv = false;
+    std::mutex g_tileResourcesRegistryMutex;
+    std::vector<TileGpuResources*> g_tileResourcesRegistry;
 
     bgfx::VertexLayout& vertexLayout()
     {
@@ -167,11 +187,45 @@ namespace {
         if (!resources)
             return;
 
+        {
+            std::lock_guard registryLock(g_tileResourcesRegistryMutex);
+            auto registryIt = std::remove(g_tileResourcesRegistry.begin(), g_tileResourcesRegistry.end(), resources);
+            g_tileResourcesRegistry.erase(registryIt, g_tileResourcesRegistry.end());
+        }
+
         for (GpuPrimitive& primitive : resources->primitives)
             destroyGpuPrimitive(primitive);
         for (GpuTexture& texture : resources->textures)
             destroyTexture(texture);
         delete resources;
+    }
+
+    void registerTileResources(TileGpuResources* resources)
+    {
+        if (!resources)
+            throw std::runtime_error("CesiumBgfxRenderAdapter registry received NULL tile resources");
+
+        std::lock_guard registryLock(g_tileResourcesRegistryMutex);
+        g_tileResourcesRegistry.push_back(resources);
+    }
+
+    void purgeRasterResourceAttachments(uintptr_t resourceID) noexcept
+    {
+        if (resourceID == 0)
+            return;
+
+        std::lock_guard registryLock(g_tileResourcesRegistryMutex);
+        for (TileGpuResources* tileResources : g_tileResourcesRegistry) {
+            if (!tileResources)
+                continue;
+
+            std::lock_guard attachmentsLock(tileResources->rasterAttachmentsMutex);
+            auto attachmentIt = std::remove_if(tileResources->rasterAttachments.begin(), tileResources->rasterAttachments.end(),
+                [&](const RasterAttachment& attachment) {
+                    return attachment.resourceID == resourceID;
+                });
+            tileResources->rasterAttachments.erase(attachmentIt, tileResources->rasterAttachments.end());
+        }
     }
 
     void destroyRasterResources(RasterTextureResources* resources) noexcept
@@ -188,7 +242,7 @@ namespace {
         vertexLayout();
 
         if (!g_shaderState)
-            g_shaderState = popupShadersCreate();
+            g_shaderState = cesiumShadersCreate();
 
         if (!bgfx::isValid(g_whiteTexture)) {
             const uint32_t white = 0xFFFFFFFFu;
@@ -212,7 +266,7 @@ namespace {
             g_whiteTexture = BGFX_INVALID_HANDLE;
         }
         if (g_shaderState) {
-            popupShadersDestroy(g_shaderState);
+            cesiumShadersDestroy(g_shaderState);
             g_shaderState = nullptr;
         }
     }
@@ -289,6 +343,25 @@ namespace {
     {
         const float* values = reinterpret_cast<const float*>(base + index * stride);
         return {values[0], values[1]};
+    }
+
+    std::array<float, 2> sphericalUvFromWorldPosition(const glm::dmat4& transform,
+                                                      const std::array<float, 3>& position)
+    {
+        constexpr double pi = 3.1415926535897932384626433832795;
+        const glm::dvec4 worldPosition = transform * glm::dvec4(position[0], position[1], position[2], 1.0);
+        const double radius = std::sqrt(worldPosition.x * worldPosition.x +
+                                        worldPosition.y * worldPosition.y +
+                                        worldPosition.z * worldPosition.z);
+        if (radius <= 0.0)
+            throw std::runtime_error("Cesium spherical UV generation received a zero-radius vertex");
+
+        const double longitude = std::atan2(worldPosition.y, worldPosition.x);
+        const double latitude = std::asin(std::clamp(worldPosition.z / radius, -1.0, 1.0));
+        return {
+            static_cast<float>((longitude + pi) / (2.0 * pi)),
+            static_cast<float>(0.5 - latitude / pi)
+        };
     }
 
     uint32_t readIndexValue(const std::byte* base, int64_t stride, int64_t index, int32_t componentType)
@@ -406,7 +479,8 @@ namespace {
         requireFloatAccessor(positionAccessor, CesiumGltf::Accessor::Type::VEC3, "POSITION");
 
         const std::optional<int32_t> normalIndex = findAttribute(primitive, "NORMAL");
-        const std::optional<int32_t> texcoordIndex = findAttribute(primitive, "TEXCOORD_0");
+        const std::optional<int32_t> cesiumOverlayIndex = findAttribute(primitive, "_CESIUMOVERLAY_0");
+        const std::optional<int32_t> texcoordIndex = cesiumOverlayIndex ? cesiumOverlayIndex : findAttribute(primitive, "TEXCOORD_0");
         const CesiumGltf::Accessor* normalAccessor = nullptr;
         const CesiumGltf::Accessor* texcoordAccessor = nullptr;
         if (normalIndex) {
@@ -414,15 +488,22 @@ namespace {
             requireFloatAccessor(*normalAccessor, CesiumGltf::Accessor::Type::VEC3, "NORMAL");
         }
         if (texcoordIndex) {
-            texcoordAccessor = &checkedAccessor(model, *texcoordIndex, "TEXCOORD_0");
-            requireFloatAccessor(*texcoordAccessor, CesiumGltf::Accessor::Type::VEC2, "TEXCOORD_0");
+            texcoordAccessor = &checkedAccessor(model, *texcoordIndex, cesiumOverlayIndex ? "_CESIUMOVERLAY_0" : "TEXCOORD_0");
+            requireFloatAccessor(*texcoordAccessor, CesiumGltf::Accessor::Type::VEC2, cesiumOverlayIndex ? "_CESIUMOVERLAY_0" : "TEXCOORD_0");
+            if (cesiumOverlayIndex && !g_loggedCesiumOverlayUv) {
+                LOG_DEBUG("CesiumBgfxRenderAdapter", "Using Cesium raster overlay UV attribute _CESIUMOVERLAY_0");
+                g_loggedCesiumOverlayUv = true;
+            }
+        } else if (!g_loggedGeneratedSphericalUv) {
+            LOG_DEBUG("CesiumBgfxRenderAdapter", "Generating spherical UVs for Cesium primitive without _CESIUMOVERLAY_0 or TEXCOORD_0");
+            g_loggedGeneratedSphericalUv = true;
         }
 
         const std::byte* positionBase = accessorBase(model, positionAccessor, "POSITION");
         const int64_t positionStride = positionAccessor.computeByteStride(model);
         const std::byte* normalBase = normalAccessor ? accessorBase(model, *normalAccessor, "NORMAL") : nullptr;
         const int64_t normalStride = normalAccessor ? normalAccessor->computeByteStride(model) : 0;
-        const std::byte* texcoordBase = texcoordAccessor ? accessorBase(model, *texcoordAccessor, "TEXCOORD_0") : nullptr;
+        const std::byte* texcoordBase = texcoordAccessor ? accessorBase(model, *texcoordAccessor, cesiumOverlayIndex ? "_CESIUMOVERLAY_0" : "TEXCOORD_0") : nullptr;
         const int64_t texcoordStride = texcoordAccessor ? texcoordAccessor->computeByteStride(model) : 0;
 
         CpuPrimitive result;
@@ -433,7 +514,7 @@ namespace {
             const std::array<float, 3> normal = normalBase ? readVec3Float(normalBase, normalStride, i)
                                                           : std::array<float, 3>{0.0f, 0.0f, 1.0f};
             const std::array<float, 2> texcoord = texcoordBase ? readVec2Float(texcoordBase, texcoordStride, i)
-                                                               : std::array<float, 2>{0.0f, 0.0f};
+                                                               : sphericalUvFromWorldPosition(transform, position);
 
             CesiumBgfxVertex& vertex = result.vertices[static_cast<size_t>(i)];
             vertex.px = position[0];
@@ -514,6 +595,19 @@ namespace {
         return handle;
     }
 
+    bgfx::VertexBufferHandle createVertexBuffer(const std::vector<CesiumBgfxVertex>& vertices)
+    {
+        if (vertices.empty())
+            return BGFX_INVALID_HANDLE;
+
+        const bgfx::Memory* vertexMemory = bgfx::copy(vertices.data(),
+                                                      static_cast<uint32_t>(vertices.size() * sizeof(CesiumBgfxVertex)));
+        bgfx::VertexBufferHandle vertexBuffer = bgfx::createVertexBuffer(vertexMemory, vertexLayout());
+        if (!bgfx::isValid(vertexBuffer))
+            throw std::runtime_error("CesiumBgfxRenderAdapter failed to create vertex buffer");
+        return vertexBuffer;
+    }
+
     TileGpuResources* createGpuResources(LoadTileResources* loadResources)
     {
         if (!loadResources)
@@ -543,11 +637,7 @@ namespace {
                 primitive.doubleSided = cpuPrimitive.doubleSided;
                 primitive.translucent = cpuPrimitive.translucent;
 
-                const bgfx::Memory* vertexMemory = bgfx::copy(cpuPrimitive.vertices.data(),
-                                                              static_cast<uint32_t>(cpuPrimitive.vertices.size() * sizeof(CesiumBgfxVertex)));
-                primitive.vertexBuffer = bgfx::createVertexBuffer(vertexMemory, vertexLayout());
-                if (!bgfx::isValid(primitive.vertexBuffer))
-                    throw std::runtime_error("CesiumBgfxRenderAdapter failed to create vertex buffer");
+                primitive.vertexBuffer = createVertexBuffer(cpuPrimitive.vertices);
 
                 const bgfx::Memory* indexMemory = bgfx::copy(cpuPrimitive.indices.data(),
                                                              static_cast<uint32_t>(cpuPrimitive.indices.size() * sizeof(uint32_t)));
@@ -562,6 +652,7 @@ namespace {
             throw;
         }
 
+        registerTileResources(resources);
         return resources;
     }
 
@@ -573,19 +664,62 @@ namespace {
         }
     }
 
-    bgfx::TextureHandle textureForPrimitive(const TileGpuResources& resources, const GpuPrimitive& primitive)
+    glm::dmat4 projectionForBgfx(const glm::dmat4& projection)
     {
-        if (!resources.rasterAttachments.empty() && resources.rasterAttachments.front().resources &&
-            bgfx::isValid(resources.rasterAttachments.front().resources->texture.handle)) {
-            return resources.rasterAttachments.front().resources->texture.handle;
+        if (bgfx::getCaps()->homogeneousDepth)
+            return projection;
+
+        glm::dmat4 converted = projection;
+        for (int column = 0; column < 4; ++column)
+            converted[column][2] = projection[column][2] * 0.5 + projection[column][3] * 0.5;
+        return converted;
+    }
+
+    RenderMaterial materialForPrimitive(const TileGpuResources& resources, const GpuPrimitive& primitive)
+    {
+        RenderMaterial material;
+        material.baseColorFactor = primitive.baseColorFactor;
+
+        if (g_rasterTextureRenderingEnabled) {
+            {
+                std::lock_guard lock(resources.rasterAttachmentsMutex);
+                for (auto attachmentIt = resources.rasterAttachments.rbegin(); attachmentIt != resources.rasterAttachments.rend(); ++attachmentIt) {
+                    if (bgfx::isValid(attachmentIt->textureHandle)) {
+                        if (!g_loggedRasterTextureSampled) {
+                            LOG_DEBUG("CesiumBgfxRenderAdapter", "Raster texture selected for render sampling handle=" +
+                                                              std::to_string(attachmentIt->textureHandle.idx));
+                            g_loggedRasterTextureSampled = true;
+                        }
+                        material.texture = attachmentIt->textureHandle;
+                        material.translation = attachmentIt->translation;
+                        material.scale = attachmentIt->scale;
+                        return material;
+                    }
+                }
+            }
+
+        } else {
+            std::lock_guard lock(resources.rasterAttachmentsMutex);
+            if (!resources.rasterAttachments.empty() && !g_loggedRasterTextureSuppressed) {
+                LOG_DEBUG("CesiumBgfxRenderAdapter", "Raster texture attached but render sampling is disabled for crash isolation");
+                g_loggedRasterTextureSuppressed = true;
+            }
         }
 
         if (primitive.baseColorTexture >= 0 && static_cast<size_t>(primitive.baseColorTexture) < resources.textures.size() &&
             bgfx::isValid(resources.textures[static_cast<size_t>(primitive.baseColorTexture)].handle)) {
-            return resources.textures[static_cast<size_t>(primitive.baseColorTexture)].handle;
+            material.texture = resources.textures[static_cast<size_t>(primitive.baseColorTexture)].handle;
+            return material;
         }
 
-        return g_whiteTexture;
+        material.texture = g_whiteTexture;
+        return material;
+    }
+
+    size_t rasterAttachmentCount(const TileGpuResources& resources)
+    {
+        std::lock_guard lock(resources.rasterAttachmentsMutex);
+        return resources.rasterAttachments.size();
     }
 
     TileGpuResources* tileResources(const Cesium3DTilesSelection::Tile& tile)
@@ -657,12 +791,17 @@ void CesiumBgfxRenderAdapter::free(Cesium3DTilesSelection::Tile&, void* pLoadThr
 
 void* CesiumBgfxRenderAdapter::prepareRasterInLoadThread(CesiumImage::ImageAsset& image, const std::any&)
 {
+    LOG_DEBUG("CesiumBgfxRenderAdapter", "prepareRasterInLoadThread image=" + std::to_string(image.width) +
+                                          "x" + std::to_string(image.height) +
+                                          " channels=" + std::to_string(image.channels));
     return new CpuImage(makeCpuImage(image));
 }
 
 void* CesiumBgfxRenderAdapter::prepareRasterInMainThread(CesiumRasterOverlays::RasterOverlayTile&, void* pLoadThreadResult)
 {
     std::unique_ptr<CpuImage> image(static_cast<CpuImage*>(pLoadThreadResult));
+    LOG_DEBUG("CesiumBgfxRenderAdapter", "prepareRasterInMainThread upload image=" + std::to_string(image->width) +
+                                          "x" + std::to_string(image->height));
     auto* resources = new RasterTextureResources();
     try {
         ensureGpuGlobals();
@@ -677,7 +816,12 @@ void* CesiumBgfxRenderAdapter::prepareRasterInMainThread(CesiumRasterOverlays::R
 void CesiumBgfxRenderAdapter::freeRaster(const CesiumRasterOverlays::RasterOverlayTile&, void* pLoadThreadResult, void* pMainThreadResult) noexcept
 {
     delete static_cast<CpuImage*>(pLoadThreadResult);
-    destroyRasterResources(static_cast<RasterTextureResources*>(pMainThreadResult));
+    auto* resources = static_cast<RasterTextureResources*>(pMainThreadResult);
+    if (resources) {
+        LOG_DEBUG("CesiumBgfxRenderAdapter", "freeRaster handle=" + std::to_string(resources->texture.handle.idx));
+        purgeRasterResourceAttachments(reinterpret_cast<uintptr_t>(resources));
+    }
+    destroyRasterResources(resources);
 }
 
 void CesiumBgfxRenderAdapter::attachRasterInMainThread(const Cesium3DTilesSelection::Tile& tile,
@@ -695,12 +839,22 @@ void CesiumBgfxRenderAdapter::attachRasterInMainThread(const Cesium3DTilesSelect
     if (!rasterResources)
         throw std::runtime_error("CesiumBgfxRenderAdapter attachRaster received NULL raster resources");
 
-    resources->rasterAttachments.push_back(RasterAttachment{
-        overlayTextureCoordinateID,
-        rasterResources,
-        translation,
-        scale
-    });
+    LOG_DEBUG("CesiumBgfxRenderAdapter", "attachRasterInMainThread overlayTexCoord=" +
+                                          std::to_string(overlayTextureCoordinateID) +
+                                          " translation=" + std::to_string(translation.x) + "," + std::to_string(translation.y) +
+                                          " scale=" + std::to_string(scale.x) + "," + std::to_string(scale.y) +
+                                          " handle=" + std::to_string(rasterResources->texture.handle.idx));
+
+    {
+        std::lock_guard lock(resources->rasterAttachmentsMutex);
+        resources->rasterAttachments.push_back(RasterAttachment{
+            overlayTextureCoordinateID,
+            reinterpret_cast<uintptr_t>(rasterResources),
+            rasterResources->texture.handle,
+            translation,
+            scale
+        });
+    }
 }
 
 void CesiumBgfxRenderAdapter::detachRasterInMainThread(const Cesium3DTilesSelection::Tile& tile,
@@ -713,10 +867,12 @@ void CesiumBgfxRenderAdapter::detachRasterInMainThread(const Cesium3DTilesSelect
         return;
 
     auto* rasterResources = static_cast<RasterTextureResources*>(pMainThreadRendererResources);
+    const uintptr_t resourceID = reinterpret_cast<uintptr_t>(rasterResources);
+    std::lock_guard lock(resources->rasterAttachmentsMutex);
     auto it = std::remove_if(resources->rasterAttachments.begin(), resources->rasterAttachments.end(),
         [&](const RasterAttachment& attachment) {
             return attachment.overlayTextureCoordinateID == overlayTextureCoordinateID &&
-                   attachment.resources == rasterResources;
+                   attachment.resourceID == resourceID;
         });
     resources->rasterAttachments.erase(it, resources->rasterAttachments.end());
 }
@@ -760,17 +916,18 @@ void CesiumBgfxRenderAdapter::render(uint32_t)
 
     float viewMatrix[16];
     float projectionMatrix[16];
-    matrixToFloatColumnMajor(view, viewMatrix);
-    matrixToFloatColumnMajor(projection, projectionMatrix);
+    matrixToFloatColumnMajor(glm::dmat4(1.0), viewMatrix);
+    matrixToFloatColumnMajor(projectionForBgfx(projection), projectionMatrix);
+    const float cameraPos[4] = {0.0f, 0.0f, 0.0f, 1.0f};
 
     bgfx::setViewFrameBuffer(viewId_, attachment->frameBufferHandle());
     bgfx::setViewRect(viewId_, 0, 0, attachment->frameBufferWidth(), attachment->frameBufferHeight());
     bgfx::setViewTransform(viewId_, viewMatrix, projectionMatrix);
 
     const float lightDir[4] = {0.35f, 0.55f, 0.75f, 0.0f};
-    const float lightParams[4] = {1.2f, 0.35f, 0.0f, 0.0f};
-    const float alpha[4] = {1.0f, 0.0f, 0.0f, 0.0f};
-    const float emissive[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    const float lightParams[4] = {0.95f, 0.22f, 0.0f, 0.0f};
+    const float colorParams[4] = {1.08f, 1.18f, 1.04f, 0.0f};
+    const float surfaceParams[4] = {0.12f, 0.72f, 0.035f, 0.035f};
 
     bool submitted = false;
     for (const Cesium3DTilesSelection::Tile::ConstPointer& tilePointer : tiles) {
@@ -781,30 +938,49 @@ void CesiumBgfxRenderAdapter::render(uint32_t)
         if (!resources)
             continue;
 
+        const size_t attachments = rasterAttachmentCount(*resources);
+        if (attachments > 0 && !g_loggedRenderedRasterAttachments) {
+            LOG_DEBUG("CesiumBgfxRenderAdapter", "Rendering tile with raster attachments count=" + std::to_string(attachments));
+            g_loggedRenderedRasterAttachments = true;
+        }
+
         for (const GpuPrimitive& primitive : resources->primitives) {
             if (!bgfx::isValid(primitive.vertexBuffer) || !bgfx::isValid(primitive.indexBuffer))
                 continue;
 
             float modelMatrix[16];
-            matrixToFloatColumnMajor(primitive.transform, modelMatrix);
+            matrixToFloatColumnMajor(view * primitive.transform, modelMatrix);
             bgfx::setTransform(modelMatrix);
             bgfx::setVertexBuffer(0, primitive.vertexBuffer, 0, primitive.vertexCount);
             bgfx::setIndexBuffer(primitive.indexBuffer, 0, primitive.indexCount);
-            bgfx::setUniform(popupShadersGetUniform(g_shaderState, PopupShaderUniform::LightDir), lightDir);
-            bgfx::setUniform(popupShadersGetUniform(g_shaderState, PopupShaderUniform::LightParams), lightParams);
-            bgfx::setUniform(popupShadersGetUniform(g_shaderState, PopupShaderUniform::Alpha), alpha);
-            bgfx::setUniform(popupShadersGetUniform(g_shaderState, PopupShaderUniform::Emissive), emissive);
+            const RenderMaterial material = materialForPrimitive(*resources, primitive);
+            const float baseColorFactor[4] = {
+                material.baseColorFactor[0],
+                material.baseColorFactor[1],
+                material.baseColorFactor[2],
+                material.baseColorFactor[3]
+            };
+            const float overlayTransform[4] = {
+                static_cast<float>(material.translation.x),
+                static_cast<float>(material.translation.y),
+                static_cast<float>(material.scale.x),
+                static_cast<float>(material.scale.y)
+            };
 
-            const bgfx::TextureHandle texture = textureForPrimitive(*resources, primitive);
-            bgfx::setTexture(0, popupShadersGetUniform(g_shaderState, PopupShaderUniform::AlbedoSampler), texture);
-            bgfx::setTexture(1, popupShadersGetUniform(g_shaderState, PopupShaderUniform::NormalSampler), g_whiteTexture);
-            bgfx::setTexture(2, popupShadersGetUniform(g_shaderState, PopupShaderUniform::PackedSampler), g_whiteTexture);
+            bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::LightDir), lightDir);
+            bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::LightParams), lightParams);
+            bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::BaseColorFactor), baseColorFactor);
+            bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::OverlayTransform), overlayTransform);
+            bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::CameraPos), cameraPos);
+            bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::ColorParams), colorParams);
+            bgfx::setUniform(cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::SurfaceParams), surfaceParams);
+            bgfx::setTexture(0, cesiumShadersGetUniform(g_shaderState, CesiumShaderUniform::ImagerySampler), material.texture);
 
             uint64_t state = primitive.translucent ? kAlphaState : kOpaqueState;
             if (primitive.doubleSided)
                 state &= ~(BGFX_STATE_CULL_CW | BGFX_STATE_CULL_CCW);
             bgfx::setState(state);
-            bgfx::submit(viewId_, popupShadersGetProgram(g_shaderState));
+            bgfx::submit(viewId_, cesiumShadersGetProgram(g_shaderState));
             submitted = true;
         }
     }

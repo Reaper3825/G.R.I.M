@@ -21,8 +21,9 @@ enum class SettingsTab : uint8_t {
     Vision      = 3,
     UIGraphics  = 4,
     Preferences = 5,
-    Memory      = 6,
-    Intents     = 7
+    GeoSpatial  = 6,
+    Memory      = 7,
+    Intents     = 8
 };
 
 class UISettingsMenu : public UIPanel {
@@ -48,6 +49,7 @@ private:
     void createVisionWidgets();
     void createUIGraphicsWidgets();
     void createPreferencesWidgets();
+    void createGeoSpatialWidgets();
     void createMemoryWidgets();
     void createIntentsWidgets();
 
@@ -73,6 +75,7 @@ private:
     std::shared_ptr<UIButton> tabVisionBtn_;
     std::shared_ptr<UIButton> tabUIGraphicsBtn_;
     std::shared_ptr<UIButton> tabPreferencesBtn_;
+    std::shared_ptr<UIButton> tabGeoSpatialBtn_;
     std::shared_ptr<UIButton> tabMemoryBtn_;
     std::shared_ptr<UIButton> tabIntentsBtn_;
 

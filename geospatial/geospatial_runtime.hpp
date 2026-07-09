@@ -51,6 +51,7 @@ private:
     bool viewportDraggingLeft_ = false;
     bool viewportDraggingRight_ = false;
     bool viewportDraggingMiddle_ = false;
+    bool firstFrameLogged_ = false;
     bool initialized_ = false;
 };
 

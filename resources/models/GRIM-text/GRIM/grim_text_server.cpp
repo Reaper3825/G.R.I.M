@@ -128,6 +128,29 @@ public:
 
     void start(const std::filesystem::path& train_gpu_path, int worker_port) {
 #ifdef _WIN32
+        if (process_info_.hProcess || job_handle_) {
+            throw std::runtime_error("grim_text_server: train_gpu worker process is already started");
+        }
+
+        HANDLE job_handle = CreateJobObjectW(nullptr, nullptr);
+        if (!job_handle) {
+            throw std::runtime_error("grim_text_server: CreateJobObjectW failed for train_gpu worker "
+                                     "(GetLastError=" + std::to_string(GetLastError()) + ")");
+        }
+
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION job_info{};
+        job_info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if (!SetInformationJobObject(
+                job_handle,
+                JobObjectExtendedLimitInformation,
+                &job_info,
+                sizeof(job_info))) {
+            const DWORD error = GetLastError();
+            CloseHandle(job_handle);
+            throw std::runtime_error("grim_text_server: SetInformationJobObject failed for train_gpu worker "
+                                     "(GetLastError=" + std::to_string(error) + ")");
+        }
+
         STARTUPINFOW startup_info{};
         startup_info.cb = sizeof(startup_info);
         PROCESS_INFORMATION process_info{};
@@ -144,18 +167,43 @@ public:
             nullptr,
             nullptr,
             FALSE,
-            0,
+            CREATE_SUSPENDED,
             nullptr,
             nullptr,
             &startup_info,
             &process_info);
 
         if (!created) {
+            const DWORD error = GetLastError();
+            CloseHandle(job_handle);
             throw std::runtime_error("grim_text_server: CreateProcessW failed for " + train_gpu_path.string() +
-                                     " (GetLastError=" + std::to_string(GetLastError()) + ")");
+                                     " (GetLastError=" + std::to_string(error) + ")");
+        }
+
+        if (!AssignProcessToJobObject(job_handle, process_info.hProcess)) {
+            const DWORD error = GetLastError();
+            TerminateProcess(process_info.hProcess, 1);
+            WaitForSingleObject(process_info.hProcess, 5000);
+            CloseHandle(process_info.hThread);
+            CloseHandle(process_info.hProcess);
+            CloseHandle(job_handle);
+            throw std::runtime_error("grim_text_server: AssignProcessToJobObject failed for train_gpu worker "
+                                     "(GetLastError=" + std::to_string(error) + ")");
+        }
+
+        if (ResumeThread(process_info.hThread) == static_cast<DWORD>(-1)) {
+            const DWORD error = GetLastError();
+            TerminateProcess(process_info.hProcess, 1);
+            WaitForSingleObject(process_info.hProcess, 5000);
+            CloseHandle(process_info.hThread);
+            CloseHandle(process_info.hProcess);
+            CloseHandle(job_handle);
+            throw std::runtime_error("grim_text_server: ResumeThread failed for train_gpu worker "
+                                     "(GetLastError=" + std::to_string(error) + ")");
         }
 
         process_info_ = process_info;
+        job_handle_ = job_handle;
 #else
         const pid_t pid = fork();
         if (pid < 0) {
@@ -206,6 +254,10 @@ public:
             CloseHandle(process_info_.hThread);
             process_info_.hThread = nullptr;
         }
+        if (job_handle_) {
+            CloseHandle(job_handle_);
+            job_handle_ = nullptr;
+        }
 #else
         if (child_pid_ > 0) {
             if (isRunning()) {
@@ -220,6 +272,7 @@ public:
 private:
 #ifdef _WIN32
     PROCESS_INFORMATION process_info_{};
+    HANDLE job_handle_ = nullptr;
 #else
     pid_t child_pid_ = -1;
 #endif

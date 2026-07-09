@@ -63,6 +63,7 @@ public:
 
     void resetOrbit();
     void recenterHome();
+    void setOrbitDistanceMeters(double distanceMeters);
     void orbitByRadians(double yawDeltaRadians, double pitchDeltaRadians);
     void panByMeters(double eastMeters, double northMeters);
     void orbitByPixels(double deltaX, double deltaY, bool fineControl);

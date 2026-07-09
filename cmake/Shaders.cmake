@@ -185,11 +185,27 @@ grim_compile_shader(
     VARYING_DEF "${GRIM_SHADER_DIR}/varying_popup_model.def.sc"
 )
 
+grim_compile_shader(
+    NAME vs_cesium_terrain
+    TYPE VERTEX
+    SOURCE "${GRIM_SHADER_DIR}/vs_cesium_terrain.sc"
+    VARYING_DEF "${GRIM_SHADER_DIR}/varying_cesium_terrain.def.sc"
+)
+
+grim_compile_shader(
+    NAME fs_cesium_terrain
+    TYPE FRAGMENT
+    SOURCE "${GRIM_SHADER_DIR}/fs_cesium_terrain.sc"
+    VARYING_DEF "${GRIM_SHADER_DIR}/varying_cesium_terrain.def.sc"
+)
+
 # ---- Custom target so GRIM depends on shader compilation ----
 add_custom_target(grim_shaders ALL
     DEPENDS
         ${GRIM_SHADER_OUTPUTS_vs_popup_model}
         ${GRIM_SHADER_OUTPUTS_fs_popup_model}
+        ${GRIM_SHADER_OUTPUTS_vs_cesium_terrain}
+        ${GRIM_SHADER_OUTPUTS_fs_cesium_terrain}
 )
 
 # Make the generated headers includable

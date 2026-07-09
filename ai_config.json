@@ -36,6 +36,59 @@
         "storage_root": "~/.grim/shared_storage/",
         "transfer_timeout_sec": 300
     },
+    "geospatial": {
+        "cache": {
+            "asset_cache_items": 8192,
+            "database_path": "cache/geospatial/cesium_asset_cache.sqlite",
+            "raster_subtile_cache_mb": 64,
+            "requests_per_prune": 512,
+            "tile_cache_mb": 512
+        },
+        "camera": {
+            "far_plane_meters": 1000000000.0,
+            "horizontal_fov_degrees": 60.0,
+            "max_distance_meters": 25000000.0,
+            "min_distance_meters": 500.0,
+            "near_plane_meters": 1.0,
+            "vertical_fov_degrees": 45.0
+        },
+        "home": {
+            "height_meters": 24000000.0,
+            "latitude_degrees": 40.03883,
+            "longitude_degrees": -75.59777
+        },
+        "imagery": {
+            "enabled_on_start": false,
+            "provider": "url_template",
+            "url_template": {
+                "credit": "Source: NASA GIBS VIIRS SNPP Corrected Reflectance True Color",
+                "headers": {},
+                "maximum_level": 9,
+                "minimum_level": 2,
+                "tile_height": 256,
+                "tile_width": 256,
+                "url": "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/2026-07-07/GoogleMapsCompatible_Level9/{z}/{reverseY}/{x}.jpg"
+            }
+        },
+        "loading": {
+            "culled_screen_space_error": 64.0,
+            "forbid_holes": true,
+            "loading_descendant_limit": 20,
+            "main_thread_loading_time_limit_seconds": 4.0,
+            "maximum_raster_screen_space_error": 0.75,
+            "maximum_raster_texture_size": 2048,
+            "maximum_screen_space_error": 16.0,
+            "maximum_simultaneous_raster_loads": 12,
+            "maximum_simultaneous_tile_loads": 24,
+            "tile_cache_unload_time_limit_seconds": 1.0,
+            "user_agent": "GRIM Cesium Native Runtime/1.0",
+            "worker_threads": 4
+        },
+        "terrain": {
+            "enabled_on_start": true,
+            "provider": "ellipsoid"
+        }
+    },
     "grim_text_timeout_ms": 600000,
     "grim_text_url": "http://127.0.0.1:11435",
     "intent_systems": {
@@ -593,7 +646,7 @@
             "loss_distillation_temperature": 1.0,
             "loss_entropy_reg_enabled": false,
             "loss_entropy_reg_lambda": 0.0,
-            "loss_focal_alpha": 1.0,
+            "loss_focal_alpha": 0.7,
             "loss_focal_enabled": true,
             "loss_focal_gamma": 0.75,
             "loss_label_smoothing_enabled": false,
@@ -604,7 +657,7 @@
             "loss_preference_enabled": false,
             "max_seq_len": 1024,
             "mtp_alpha": 0.5,
-            "mtp_enabled": true,
+            "mtp_enabled": false,
             "mtp_k": 4,
             "mtp_log_ratio_monitor": true,
             "num_heads": 12,
