@@ -786,8 +786,12 @@ LatentPresetLossSummary addLatentPresetAuxiliaryLoss(
 
     auto& latent_params = ctx.parameter_registry->requireLatentTrajectoryPresetParameters(
         "addLatentPresetAuxiliaryLoss");
-    if (!latent_params.W_target.data || !latent_params.b_target.data) {
-        throw std::runtime_error("addLatentPresetAuxiliaryLoss: W_target/b_target are missing");
+    if (!latent_params.W_target.data) {
+        throw std::runtime_error("addLatentPresetAuxiliaryLoss: W_target is missing");
+    }
+    if (latent_hp.target_bias_enabled != static_cast<bool>(latent_params.b_target.data)) {
+        throw std::runtime_error(
+            "addLatentPresetAuxiliaryLoss: b_target allocation does not match target_bias_enabled");
     }
 
     int* d_seq_lengths = nullptr;
@@ -864,9 +868,11 @@ LatentPresetLossSummary addLatentPresetAuxiliaryLoss(
     }
 
     Tensor W_target_detached = latent_params.W_target.detach(ctx.stream);
-    Tensor b_target_detached = latent_params.b_target.detach(ctx.stream);
     Tensor target_z = autograd::matmul(future_mean, W_target_detached, ctx.stream);
-    target_z = autograd::broadcast_add(target_z, b_target_detached, ctx.stream);
+    if (latent_hp.target_bias_enabled) {
+        Tensor b_target_detached = latent_params.b_target.detach(ctx.stream);
+        target_z = autograd::broadcast_add(target_z, b_target_detached, ctx.stream);
+    }
 
     if (summary.target_valid_count > 0 && latent_hp.lambda_traj > 0.0f) {
         kernel_ltp_sum_z_loss<<<latentPresetGridForCount(static_cast<size_t>(payload.total_tokens) * latent_hp.preset_dim),

@@ -164,6 +164,7 @@ Tensor buildMtpHeadParameterView(
 std::vector<MTPHeadForwardView> buildMtpHeadForwardViews(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     int mtp_k,
+    bool bias_enabled,
     bool connect_parameter_graph,
     cudaStream_t stream)
 {
@@ -183,17 +184,23 @@ std::vector<MTPHeadForwardView> buildMtpHeadForwardViews(
     views.reserve(static_cast<size_t>(mtp_k));
     for (int k = 0; k < mtp_k; ++k) {
         auto& head = mtp_head_parameter_tensors[static_cast<std::size_t>(k)];
-        if (!head.weight.data || !head.bias.data) {
+        if (!head.weight.data) {
             throw std::runtime_error(
                 "executeModelForward: MTP head " + std::to_string(k) +
-                " has NULL weight or bias tensor");
+            " has NULL weight tensor");
+        }
+        if (bias_enabled != static_cast<bool>(head.bias.data)) {
+            throw std::runtime_error(
+            "executeModelForward: MTP head bias allocation does not match mtp_bias_enabled");
         }
 
         MTPHeadForwardView view{};
         view.weight = buildMtpHeadParameterView(
             head.weight, connect_parameter_graph, stream, "mtp_head_weight_view");
-        view.bias = buildMtpHeadParameterView(
-            head.bias, connect_parameter_graph, stream, "mtp_head_bias_view");
+        if (bias_enabled) {
+            view.bias = buildMtpHeadParameterView(
+                head.bias, connect_parameter_graph, stream, "mtp_head_bias_view");
+        }
         views.push_back(std::move(view));
     }
 
@@ -214,12 +221,14 @@ void materializeForwardMtpLogits(
 
     const bool mtp_enabled = HyperParameters::snapshotTrainingConfigField<bool>(*request.config, "mtp_enabled");
     const int mtp_k = HyperParameters::snapshotTrainingConfigField<int>(*request.config, "mtp_k");
+    const bool mtp_bias_enabled = HyperParameters::snapshotTrainingConfigField<bool>(*request.config, "mtp_bias_enabled");
     if (!mtp_enabled || mtp_k <= 0) {
         throw std::runtime_error("executeModelForward: graph.emit_mtp_logits=true but config MTP is disabled");
     }
     auto mtp_heads = buildMtpHeadForwardViews(
         *request.parameter_registry,
         mtp_k,
+        mtp_bias_enabled,
         request.graph.connect_parameter_graph,
         request.stream);
 
@@ -255,9 +264,9 @@ void materializeForwardMtpLogits(
         forward_outputs.mtp_logits_tensors.reserve(static_cast<size_t>(mtp_k));
         for (int k = 0; k < mtp_k; ++k) {
             const auto& head = mtp_heads[static_cast<size_t>(k)];
-            if (!head.weight.data || !head.bias.data) {
+            if (!head.weight.data) {
                 throw std::runtime_error("executeModelForward: latent MTP head " + std::to_string(k) +
-                    " weight or bias tensor is NULL");
+                    " weight tensor is NULL");
             }
 
             Tensor future_hidden_k = autograd::slice_columns(
@@ -276,7 +285,6 @@ void materializeForwardMtpLogits(
                     request.stream);
             }
             const auto& weight_shape = requireTensor2DShape(head.weight, "executeModelForward", "latent MTP head weight");
-            const auto& bias_shape = requireTensor2DShape(head.bias, "executeModelForward", "latent MTP head bias");
             if (weight_shape.rows != payload.vocab_size) {
                 throw std::runtime_error("executeModelForward: latent MTP head " + std::to_string(k) +
                     " weight rows=" + std::to_string(weight_shape.rows) +
@@ -287,22 +295,21 @@ void materializeForwardMtpLogits(
                     " weight cols=" + std::to_string(weight_shape.cols) +
                     " != d_model=" + std::to_string(d_model));
             }
-            if (head.bias.numel() != static_cast<size_t>(payload.vocab_size)) {
-                throw std::runtime_error("executeModelForward: latent MTP head " + std::to_string(k) +
-                    " bias elements=" + std::to_string(head.bias.numel()) +
-                    " != payload.vocab_size=" + std::to_string(payload.vocab_size));
-            }
-            if (bias_shape.cols != payload.vocab_size && bias_shape.rows != payload.vocab_size) {
-                throw std::runtime_error("executeModelForward: latent MTP head " + std::to_string(k) +
-                    " bias shape=[" + std::to_string(bias_shape.rows) + "," + std::to_string(bias_shape.cols) +
-                    "] cannot represent vocab_size=" + std::to_string(payload.vocab_size));
+            if (mtp_bias_enabled) {
+                const auto& bias_shape = requireTensor2DShape(head.bias, "executeModelForward", "latent MTP head bias");
+                if (head.bias.numel() != static_cast<size_t>(payload.vocab_size) ||
+                    (bias_shape.cols != payload.vocab_size && bias_shape.rows != payload.vocab_size)) {
+                    throw std::runtime_error("executeModelForward: latent MTP head bias shape mismatch");
+                }
             }
             Tensor logits_k = autograd::matmul(
                 future_hidden_k,
                 head.weight,
                 request.stream,
                 true);
-            logits_k = autograd::broadcast_add(logits_k, head.bias, request.stream);
+            if (mtp_bias_enabled) {
+                logits_k = autograd::broadcast_add(logits_k, head.bias, request.stream);
+            }
             const auto& logits_shape = requireTensor2DShape(logits_k, "executeModelForward", "latent MTP head logits");
             if (logits_shape.rows != payload.total_tokens || logits_shape.cols != payload.vocab_size) {
                 throw std::runtime_error("executeModelForward: latent MTP head " + std::to_string(k) +
@@ -333,13 +340,12 @@ void materializeForwardMtpLogits(
     forward_outputs.mtp_logits_tensors.reserve(static_cast<size_t>(mtp_k));
     for (int k = 0; k < mtp_k; ++k) {
         const auto& head = mtp_heads[static_cast<size_t>(k)];
-        if (!head.weight.data || !head.bias.data) {
+        if (!head.weight.data) {
             throw std::runtime_error("executeModelForward: MTP head " + std::to_string(k) +
-                " weight or bias tensor is NULL");
+                " weight tensor is NULL");
         }
 
         const auto& weight_shape = requireTensor2DShape(head.weight, "executeModelForward", "MTP head weight");
-        const auto& bias_shape = requireTensor2DShape(head.bias, "executeModelForward", "MTP head bias");
         if (weight_shape.rows != payload.vocab_size) {
             throw std::runtime_error("executeModelForward: MTP head " + std::to_string(k) +
                 " weight rows=" + std::to_string(weight_shape.rows) +
@@ -350,15 +356,12 @@ void materializeForwardMtpLogits(
                 " weight cols=" + std::to_string(weight_shape.cols) +
                 " != mtp_input cols=" + std::to_string(input_shape.cols));
         }
-        if (head.bias.numel() != static_cast<size_t>(payload.vocab_size)) {
-            throw std::runtime_error("executeModelForward: MTP head " + std::to_string(k) +
-                " bias elements=" + std::to_string(head.bias.numel()) +
-                " != payload.vocab_size=" + std::to_string(payload.vocab_size));
-        }
-        if (bias_shape.cols != payload.vocab_size && bias_shape.rows != payload.vocab_size) {
-            throw std::runtime_error("executeModelForward: MTP head " + std::to_string(k) +
-                " bias shape=[" + std::to_string(bias_shape.rows) + "," + std::to_string(bias_shape.cols) +
-                "] cannot represent vocab_size=" + std::to_string(payload.vocab_size));
+        if (mtp_bias_enabled) {
+            const auto& bias_shape = requireTensor2DShape(head.bias, "executeModelForward", "MTP head bias");
+            if (head.bias.numel() != static_cast<size_t>(payload.vocab_size) ||
+                (bias_shape.cols != payload.vocab_size && bias_shape.rows != payload.vocab_size)) {
+                throw std::runtime_error("executeModelForward: MTP head bias shape mismatch");
+            }
         }
 
         Tensor logits_k = autograd::matmul(
@@ -366,7 +369,9 @@ void materializeForwardMtpLogits(
             head.weight,
             request.stream,
             true);
-        logits_k = autograd::broadcast_add(logits_k, head.bias, request.stream);
+        if (mtp_bias_enabled) {
+            logits_k = autograd::broadcast_add(logits_k, head.bias, request.stream);
+        }
         const auto& logits_shape = requireTensor2DShape(logits_k, "executeModelForward", "MTP head logits");
         if (logits_shape.rows != payload.total_tokens || logits_shape.cols != payload.vocab_size) {
             throw std::runtime_error("executeModelForward: MTP head " + std::to_string(k) +
@@ -472,13 +477,13 @@ void materializeForwardSelectorLogits(
 
 GRIM::FeedForwardParameterTensors detachFeedForwardParameters(
     const GRIM::FeedForwardParameterTensors& parameters,
-    bool use_bias,
+    bool output_bias_enabled,
     cudaStream_t stream) {
     GRIM::FeedForwardParameterTensors detached{};
     detached.W_gate = parameters.W_gate.detach(stream);
     detached.W1 = parameters.W1.detach(stream);
     detached.W2 = parameters.W2.detach(stream);
-    if (use_bias && parameters.b2.data) {
+    if (output_bias_enabled) {
         detached.b2 = parameters.b2.detach(stream);
     }
     return detached;
@@ -486,7 +491,8 @@ GRIM::FeedForwardParameterTensors detachFeedForwardParameters(
 
 GRIM::EncodingLayerParameterTensors detachEncodingLayerParameters(
     const GRIM::EncodingLayerParameterTensors& parameters,
-    bool use_bias,
+    bool qkv_bias_enabled,
+    bool output_bias_enabled,
     bool use_layer_scale,
     cudaStream_t stream) {
     GRIM::EncodingLayerParameterTensors detached{};
@@ -494,8 +500,10 @@ GRIM::EncodingLayerParameterTensors detachEncodingLayerParameters(
     detached.rms2_gamma = parameters.rms2_gamma.detach(stream);
     detached.W_qkv = parameters.W_qkv.detach(stream);
     detached.W_o = parameters.W_o.detach(stream);
-    if (use_bias) {
+    if (qkv_bias_enabled) {
         detached.b_qkv = parameters.b_qkv.detach(stream);
+    }
+    if (output_bias_enabled) {
         detached.b_o = parameters.b_o.detach(stream);
     }
     if (use_layer_scale) {
@@ -531,20 +539,33 @@ GRIM::LMHeadParameterTensors detachLmHeadParameters(
 
 GRIM::LatentTrajectoryPresetParameterTensors detachLatentTrajectoryPresetParameters(
     const GRIM::LatentTrajectoryPresetParameterTensors& parameters,
+    const HyperParameters::LatentTrajectoryPresetHP& hp,
     cudaStream_t stream) {
     GRIM::LatentTrajectoryPresetParameterTensors detached{};
     detached.W_hidden_traj = parameters.W_hidden_traj.detach(stream);
-    detached.b_hidden_traj = parameters.b_hidden_traj.detach(stream);
+    if (hp.hidden_bias_enabled) {
+        detached.b_hidden_traj = parameters.b_hidden_traj.detach(stream);
+    }
     detached.W_fuse = parameters.W_fuse.detach(stream);
-    detached.b_fuse = parameters.b_fuse.detach(stream);
+    if (hp.fuse_bias_enabled) {
+        detached.b_fuse = parameters.b_fuse.detach(stream);
+    }
     detached.W_down = parameters.W_down.detach(stream);
-    detached.b_down = parameters.b_down.detach(stream);
+    if (hp.down_bias_enabled) {
+        detached.b_down = parameters.b_down.detach(stream);
+    }
     detached.W_up = parameters.W_up.detach(stream);
-    detached.b_up = parameters.b_up.detach(stream);
+    if (hp.up_bias_enabled) {
+        detached.b_up = parameters.b_up.detach(stream);
+    }
     detached.W_gate = parameters.W_gate.detach(stream);
-    detached.b_gate = parameters.b_gate.detach(stream);
+    if (hp.gate_bias_enabled) {
+        detached.b_gate = parameters.b_gate.detach(stream);
+    }
     detached.W_target = parameters.W_target.detach(stream);
-    detached.b_target = parameters.b_target.detach(stream);
+    if (hp.target_bias_enabled) {
+        detached.b_target = parameters.b_target.detach(stream);
+    }
     detached.fuse_norm_gamma = parameters.fuse_norm_gamma.detach(stream);
     detached.preset_norm_gamma = parameters.preset_norm_gamma.detach(stream);
     return detached;
@@ -599,7 +620,10 @@ void materializeLatentTrajectoryPresetActivations(
     GRIM::LatentTrajectoryPresetParameterTensors detached_parameters{};
     const GRIM::LatentTrajectoryPresetParameterTensors* params = latent_parameters;
     if (!request.graph.connect_parameter_graph) {
-        detached_parameters = detachLatentTrajectoryPresetParameters(*latent_parameters, request.stream);
+        detached_parameters = detachLatentTrajectoryPresetParameters(
+            *latent_parameters,
+            latent_preset_hp,
+            request.stream);
         params = &detached_parameters;
     }
 
@@ -620,9 +644,6 @@ void materializeLatentTrajectoryPresetActivations(
     requireTensorElements(params->W_hidden_traj,
                           static_cast<std::size_t>(latent_preset_hp.d_model) * trajectory_dim,
                           "latent_preset.W_hidden_traj");
-    requireTensorElements(params->b_hidden_traj,
-                          trajectory_dim,
-                          "latent_preset.b_hidden_traj");
     requireTensorElements(params->W_fuse,
                           trajectory_dim *
                               static_cast<std::size_t>(latent_preset_hp.fuse_dim),
@@ -638,7 +659,22 @@ void materializeLatentTrajectoryPresetActivations(
     requireTensorElements(params->W_gate,
                           static_cast<std::size_t>(latent_preset_hp.d_model + latent_preset_hp.fuse_dim),
                           "latent_preset.W_gate");
-    requireTensorElements(params->b_gate, 1, "latent_preset.b_gate");
+    const auto validateOptionalBias = [&](const Tensor& tensor,
+                                          bool enabled,
+                                          std::size_t expected,
+                                          const char* label) {
+        if (enabled) {
+            requireTensorElements(tensor, expected, label);
+        } else if (tensor.data) {
+            throw std::runtime_error(std::string("executeModelForward(latent_preset): ") +
+                                     label + " is allocated while its bias gate is false");
+        }
+    };
+    validateOptionalBias(params->b_hidden_traj, latent_preset_hp.hidden_bias_enabled, trajectory_dim, "latent_preset.b_hidden_traj");
+    validateOptionalBias(params->b_fuse, latent_preset_hp.fuse_bias_enabled, static_cast<std::size_t>(latent_preset_hp.fuse_dim), "latent_preset.b_fuse");
+    validateOptionalBias(params->b_down, latent_preset_hp.down_bias_enabled, static_cast<std::size_t>(latent_preset_hp.preset_dim), "latent_preset.b_down");
+    validateOptionalBias(params->b_up, latent_preset_hp.up_bias_enabled, static_cast<std::size_t>(latent_preset_hp.d_model), "latent_preset.b_up");
+    validateOptionalBias(params->b_gate, latent_preset_hp.gate_bias_enabled, 1, "latent_preset.b_gate");
 
     // Shared hidden-trajectory projection: h[t] -> [mtp_k * d_model] predicted
     // future hidden trajectory. A single learned head predicts all K slots as
@@ -647,19 +683,23 @@ void materializeLatentTrajectoryPresetActivations(
         hidden,
         params->W_hidden_traj,
         request.stream);
-    forward_outputs.latent_preset_mtp_hidden = autograd::broadcast_add(
-        forward_outputs.latent_preset_mtp_hidden,
-        params->b_hidden_traj,
-        request.stream);
+    if (latent_preset_hp.hidden_bias_enabled) {
+        forward_outputs.latent_preset_mtp_hidden = autograd::broadcast_add(
+            forward_outputs.latent_preset_mtp_hidden,
+            params->b_hidden_traj,
+            request.stream);
+    }
 
     forward_outputs.latent_preset_future_fused = autograd::matmul(
         forward_outputs.latent_preset_mtp_hidden,
         params->W_fuse,
         request.stream);
-    forward_outputs.latent_preset_future_fused = autograd::broadcast_add(
-        forward_outputs.latent_preset_future_fused,
-        params->b_fuse,
-        request.stream);
+    if (latent_preset_hp.fuse_bias_enabled) {
+        forward_outputs.latent_preset_future_fused = autograd::broadcast_add(
+            forward_outputs.latent_preset_future_fused,
+            params->b_fuse,
+            request.stream);
+    }
     forward_outputs.latent_preset_future_fused = autograd::rms_norm(
         forward_outputs.latent_preset_future_fused,
         params->fuse_norm_gamma,
@@ -670,10 +710,12 @@ void materializeLatentTrajectoryPresetActivations(
         forward_outputs.latent_preset_future_fused,
         params->W_down,
         request.stream);
-    forward_outputs.latent_preset_z = autograd::broadcast_add(
-        forward_outputs.latent_preset_z,
-        params->b_down,
-        request.stream);
+    if (latent_preset_hp.down_bias_enabled) {
+        forward_outputs.latent_preset_z = autograd::broadcast_add(
+            forward_outputs.latent_preset_z,
+            params->b_down,
+            request.stream);
+    }
     forward_outputs.latent_preset_z = autograd::rms_norm(
         forward_outputs.latent_preset_z,
         params->preset_norm_gamma,
@@ -684,10 +726,12 @@ void materializeLatentTrajectoryPresetActivations(
         forward_outputs.latent_preset_z,
         params->W_up,
         request.stream);
-    forward_outputs.latent_preset_vec = autograd::broadcast_add(
-        forward_outputs.latent_preset_vec,
-        params->b_up,
-        request.stream);
+    if (latent_preset_hp.up_bias_enabled) {
+        forward_outputs.latent_preset_vec = autograd::broadcast_add(
+            forward_outputs.latent_preset_vec,
+            params->b_up,
+            request.stream);
+    }
 
     Tensor gate_input = autograd::concat(
         hidden,
@@ -697,10 +741,12 @@ void materializeLatentTrajectoryPresetActivations(
         gate_input,
         params->W_gate,
         request.stream);
-    forward_outputs.latent_preset_gate_pre = autograd::broadcast_add(
-        forward_outputs.latent_preset_gate_pre,
-        params->b_gate,
-        request.stream);
+    if (latent_preset_hp.gate_bias_enabled) {
+        forward_outputs.latent_preset_gate_pre = autograd::broadcast_add(
+            forward_outputs.latent_preset_gate_pre,
+            params->b_gate,
+            request.stream);
+    }
     forward_outputs.latent_preset_gate = autograd::sigmoid(
         forward_outputs.latent_preset_gate_pre,
         request.stream,
@@ -829,6 +875,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     request.validate("executeModelForward");
     const auto* cfg = request.config;
     const auto embedding_hp = HyperParameters::embeddingLayerConstructionHP(*cfg);
+    const auto encoder_hp = HyperParameters::encoderLayerConstructionHP(*cfg);
     const auto execution_hp = HyperParameters::executionBlockConstructionHP(*cfg);
     const auto lm_head_hp = HyperParameters::lmHeadLayerConstructionHP(*cfg);
     const auto latent_preset_hp = HyperParameters::latentTrajectoryPresetHP(*cfg);
@@ -838,7 +885,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const auto positional_encoding = HyperParameters::snapshotTrainingConfigField<HyperParameters::PositionalEncodingType>(*cfg, "positional_encoding");
     const float dropout_rate = HyperParameters::snapshotTrainingConfigField<float>(*cfg, "dropout_rate");
     const int num_layers = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "num_layers");
-    const bool use_bias = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "use_bias");
     const bool use_layer_scale = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "use_layer_scale");
     const int execution_block_layer = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "execution_block_layer");
     const int execution_block_num_steps = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "execution_block_num_steps");
@@ -1038,12 +1084,13 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
             if (!connect_parameter_graph) {
                 detached_encoding_parameters = detachEncodingLayerParameters(
                     encoding_parameters,
-                    use_bias,
+                    encoder_hp.attention_qkv_bias_enabled,
+                    encoder_hp.attention_output_bias_enabled,
                     use_layer_scale,
                     request.stream);
                 detached_ffn_parameters = detachFeedForwardParameters(
                     ffn_parameters,
-                    use_bias,
+                    encoder_hp.ffn_output_bias_enabled,
                     request.stream);
                 encoding_parameter_ptr = &detached_encoding_parameters;
                 ffn_parameter_ptr = &detached_ffn_parameters;

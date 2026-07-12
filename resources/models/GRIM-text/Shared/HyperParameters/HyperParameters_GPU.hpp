@@ -98,7 +98,7 @@ constexpr int CUDA_TILE_DIM_TRANSPOSE = CUDA_WARP_SIZE;  // Tile dim = warp size
 // Hierarchical streaming statistics
 //======================================================//
 constexpr int TELEMETRY_MAX_LEVELS = 8;           // TelemetryLattice temporal levels
-constexpr int TELEMETRY_MAX_STREAMS = 61;         // TelemetryLattice metric streams (0-46 dynamic, 47 logit-scale, 48-54 init invariants, 55-57 rho centered/signed-dot, 58-59 rho atom/non-atom split, 60 optimizer iteration)
+constexpr int TELEMETRY_MAX_STREAMS = 69;         // TelemetryLattice metric streams (0-60 existing diagnostics, 61-68 raw loss components)
 
 //======================================================//
 // UnigramLM Training Constants
@@ -2221,6 +2221,43 @@ inline T snapshotTrainingConfigField(
     const char* name)
 {
     return snapshotTrainingConfig(snapshot).at(name).get<T>();
+}
+
+inline void validateRootBiasConfig(
+    const GRIM::Config::AiConfigSnapshot& snapshot,
+    const char* caller)
+{
+    const bool use_bias = snapshotTrainingConfigField<bool>(snapshot, "use_bias");
+    const auto require_global = [&](const char* child_name) {
+        if (snapshotTrainingConfigField<bool>(snapshot, child_name) && !use_bias) {
+            throw std::runtime_error(std::string(caller) + ": " + child_name +
+                                     "=true requires use_bias=true");
+        }
+    };
+
+    require_global("attention_qkv_bias_enabled");
+    require_global("attention_output_bias_enabled");
+    require_global("ffn_output_bias_enabled");
+    require_global("number_encoder_contribution_bias_enabled");
+    require_global("number_encoder_global_bias_enabled");
+    require_global("lm_head_bias_enabled");
+    require_global("mtp_bias_enabled");
+    require_global("execution_block_decode_bias_enabled");
+    require_global("execution_block_value_embedding_bias_enabled");
+    require_global("execution_block_scalar_bias_enabled");
+    require_global("execution_block_trace_bias_enabled");
+    require_global("latent_trajectory_hidden_bias_enabled");
+    require_global("latent_trajectory_fuse_bias_enabled");
+    require_global("latent_trajectory_down_bias_enabled");
+    require_global("latent_trajectory_up_bias_enabled");
+    require_global("latent_trajectory_gate_bias_enabled");
+    require_global("latent_trajectory_target_bias_enabled");
+
+    if (snapshotTrainingConfigField<bool>(snapshot, "lm_head_unigram_bias") &&
+        !snapshotTrainingConfigField<bool>(snapshot, "lm_head_bias_enabled")) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": lm_head_unigram_bias=true requires lm_head_bias_enabled=true");
+    }
 }
 
 inline int snapshotEffectiveBatchSize(

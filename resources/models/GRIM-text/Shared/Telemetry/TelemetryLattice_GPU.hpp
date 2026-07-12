@@ -233,6 +233,17 @@ enum class MetricStream : int {
     // diagnostics can be aligned against the exact zero-based optimizer step + 1
     // iteration used by the optimizer kernels.
     OPTIMIZER_ITERATION = 60, // input.optimizer_step + 1 as consumed by optimizer diagnostics
+
+    // Raw loss decomposition from the completed BatchResult. These remain in
+    // objective units so they can be graphed directly beside stream 0 (LOSS).
+    TEXT_LOSS                = 61,
+    MTP_LOSS                 = 62,
+    SELECTOR_LOSS            = 63,
+    LATENT_PRESET_LOSS       = 64,
+    LATENT_PRESET_TRAJ_LOSS  = 65,
+    LATENT_PRESET_DELTA_LOSS = 66,
+    LATENT_PRESET_GATE_LOSS  = 67,
+    EXECUTION_LOSS           = 68,
 };
 
 const char* getMetricStreamName(MetricStream stream);

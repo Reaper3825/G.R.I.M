@@ -17,8 +17,6 @@ namespace {
     constexpr float kControlGap = 8.0f;
     constexpr float kSidePanelW = 360.0f;
     constexpr float kFieldH = 26.0f;
-    constexpr float kOutlinerRowH = 24.0f;
-    constexpr float kOutlinerH = 150.0f;
 
     std::string formatCoordinate(double value, int precision)
     {
@@ -80,17 +78,29 @@ UIGeoSpatialPanel::UIGeoSpatialPanel()
     home_btn_->setSize(80.0f, kButtonH);
     reset_camera_btn_->setSize(125.0f, kButtonH);
 
+    lod_override_toggle_ = std::make_shared<UIToggle>("LOD Override", false, [this](bool enabled) {
+        if (controller_)
+            controller_->requestSetLodOverrideEnabled(enabled);
+    });
+    lod_level_slider_ = std::make_shared<UISlider>("LOD Target", 0.0f, 20.0f, 6.0f, [this](float level) {
+        if (controller_)
+            controller_->requestSetLodOverrideLevel(static_cast<int>(std::lround(level)));
+    }, 1.0f);
+
+    group_dropdown_ = std::make_shared<UIDropdown>("Group", std::vector<std::string>{"<new group>"}, 0,
+        [this](int index, const std::string& item) {
+            if (index == 0) clearGroupEditor();
+            else selectGroup(item);
+        });
+    group_id_input_ = std::make_shared<UIInputBox>(&group_id_buffer_);
+    group_id_input_->setPlaceholder("unique-group-id");
     group_name_input_ = std::make_shared<UIInputBox>(&group_name_buffer_);
     group_name_input_->setPlaceholder("Group name");
     group_color_input_ = std::make_shared<UIInputBox>(&group_color_buffer_);
     group_color_input_->setPlaceholder("#RRGGBB");
 
-    new_group_btn_ = std::make_shared<UIButton>("Add Group", [this]() {
-        clearGroupEditor();
-        clearPointEditor();
-        editor_status_ = "Enter the new group properties, then choose Create Group.";
-    });
-    save_group_btn_ = std::make_shared<UIButton>("Create Group", [this]() {
+    new_group_btn_ = std::make_shared<UIButton>("New", [this]() { clearGroupEditor(); });
+    save_group_btn_ = std::make_shared<UIButton>("Apply", [this]() {
         if (!controller_) return;
         const bool creating = selected_group_id_.empty();
         const size_t previousCount = snapshot_.groups.size();
@@ -99,33 +109,51 @@ UIGeoSpatialPanel::UIGeoSpatialPanel()
         if (creating && snapshot_.groups.size() == previousCount + 1)
             selectGroup(snapshot_.groups.back().id);
     });
-    remove_group_btn_ = std::make_shared<UIButton>("Delete Group", [this]() {
+    toggle_group_btn_ = std::make_shared<UIButton>("Hide", [this]() {
+        if (controller_ && !selected_group_id_.empty())
+            controller_->requestToggleGroupVisibility(selected_group_id_);
+    });
+    remove_group_btn_ = std::make_shared<UIButton>("Delete + Objects", [this]() {
         if (controller_ && !selected_group_id_.empty())
             controller_->requestRemoveGroup(selected_group_id_);
         clearGroupEditor();
         clearPointEditor();
     });
 
-    point_group_dropdown_ = std::make_shared<UIDropdown>(
-        "Group", std::vector<std::string>{"No groups available"}, 0,
-        [this](int, const std::string&) {
-            if (!selected_point_id_.empty() || !selected_area_id_.empty())
-                saveGeometryDraft();
+    point_dropdown_ = std::make_shared<UIDropdown>("Object", std::vector<std::string>{"<new object>"}, 0,
+        [this](int index, const std::string& item) {
+            if (index == 0) clearPointEditor();
+            else if (findPoint(item)) selectPoint(item);
+            else if (findArea(item)) selectArea(item);
+            else throw std::runtime_error("GeoSpatial object dropdown selected an unknown entity");
         });
+    point_group_dropdown_ = std::make_shared<UIDropdown>("In group", std::vector<std::string>{"<create group>"}, 0,
+        [](int, const std::string&) {});
     geometry_dropdown_ = std::make_shared<UIDropdown>(
         "Geometry", std::vector<std::string>{"Point", "Cube Area", "Sphere Area"}, 0,
         [this](int index, const std::string&) {
+            GRIM::GeoSpatial::GeoSpatialGeometryKind requestedKind;
             if (index == 0)
-                draft_geometry_kind_ = GRIM::GeoSpatial::GeoSpatialGeometryKind::Point;
+                requestedKind = GRIM::GeoSpatial::GeoSpatialGeometryKind::Point;
             else if (index == 1)
-                draft_geometry_kind_ = GRIM::GeoSpatial::GeoSpatialGeometryKind::CubeArea;
+                requestedKind = GRIM::GeoSpatial::GeoSpatialGeometryKind::CubeArea;
             else if (index == 2)
-                draft_geometry_kind_ = GRIM::GeoSpatial::GeoSpatialGeometryKind::SphereArea;
+                requestedKind = GRIM::GeoSpatial::GeoSpatialGeometryKind::SphereArea;
             else
                 throw std::runtime_error("GeoSpatial geometry dropdown returned an invalid index");
-            if (!selected_point_id_.empty() || !selected_area_id_.empty())
-                saveGeometryDraft();
+
+            if (!selected_point_id_.empty() || !selected_area_id_.empty()) {
+                const int currentIndex = draft_geometry_kind_ == GRIM::GeoSpatial::GeoSpatialGeometryKind::Point
+                    ? 0
+                    : (draft_geometry_kind_ == GRIM::GeoSpatial::GeoSpatialGeometryKind::CubeArea ? 1 : 2);
+                geometry_dropdown_->setSelectedIndex(currentIndex);
+                editor_status_ = "Create a new object to choose a different geometry type.";
+                return;
+            }
+            draft_geometry_kind_ = requestedKind;
         });
+    point_id_input_ = std::make_shared<UIInputBox>(&point_id_buffer_);
+    point_id_input_->setPlaceholder("unique-point-id");
     point_name_input_ = std::make_shared<UIInputBox>(&point_name_buffer_);
     point_name_input_->setPlaceholder("Point name");
     point_color_input_ = std::make_shared<UIInputBox>(&point_color_buffer_);
@@ -141,24 +169,6 @@ UIGeoSpatialPanel::UIGeoSpatialPanel()
     area_opacity_input_ = std::make_shared<UIInputBox>(&area_opacity_buffer_);
     area_opacity_input_->setPlaceholder("0.05 to 0.95");
 
-    auto commitSelectedGeometry = [this](const std::string&) {
-        if (!selected_point_id_.empty() || !selected_area_id_.empty())
-            saveGeometryDraft();
-    };
-    for (const std::shared_ptr<UIInputBox>& input : {
-             point_name_input_, point_color_input_, longitude_input_, latitude_input_, height_input_,
-             area_size_input_, area_opacity_input_}) {
-        input->OnTextSubmitted.Bind(commitSelectedGeometry);
-    }
-    auto commitSelectedGroup = [this](const std::string&) {
-        if (controller_ && !selected_group_id_.empty() && selected_point_id_.empty() && selected_area_id_.empty()) {
-            controller_->requestUpsertGroup(selected_group_id_, group_name_buffer_, group_color_buffer_);
-            refreshSnapshot();
-        }
-    };
-    group_name_input_->OnTextSubmitted.Bind(commitSelectedGroup);
-    group_color_input_->OnTextSubmitted.Bind(commitSelectedGroup);
-
     use_pick_btn_ = std::make_shared<UIButton>("Use Last Pick", [this]() {
         if (!snapshot_.picked_location_valid) {
             editor_status_ = "Click the globe once to pick a WGS84 location.";
@@ -171,31 +181,16 @@ UIGeoSpatialPanel::UIGeoSpatialPanel()
         latitude_input_->setText(latitude_buffer_);
         height_input_->setText(height_buffer_);
         editor_status_ = "Copied the last globe pick into the geometry draft.";
-        if (!selected_point_id_.empty() || !selected_area_id_.empty())
-            saveGeometryDraft();
     });
-    new_point_btn_ = std::make_shared<UIButton>("Add Point", [this]() {
-        if (selected_group_id_.empty()) {
-            editor_status_ = "Select a group in the outliner before adding a point.";
-            return;
-        }
-        clearPointEditor();
-        draft_geometry_kind_ = GRIM::GeoSpatial::GeoSpatialGeometryKind::Point;
-        geometry_dropdown_->setSelectedIndex(0);
-        editor_status_ = "The new point will be added to the selected group.";
+    new_point_btn_ = std::make_shared<UIButton>("New", [this]() { clearPointEditor(); });
+    save_point_btn_ = std::make_shared<UIButton>("Apply", [this]() { savePointDraft(); });
+    toggle_point_btn_ = std::make_shared<UIButton>("Hide", [this]() {
+        if (controller_ && !selected_area_id_.empty())
+            controller_->requestToggleAreaVisibility(selected_area_id_);
+        else if (controller_ && !selected_point_id_.empty())
+            controller_->requestTogglePointVisibility(selected_point_id_);
     });
-    new_area_btn_ = std::make_shared<UIButton>("Add Area", [this]() {
-        if (selected_group_id_.empty()) {
-            editor_status_ = "Select a group in the outliner before adding an area.";
-            return;
-        }
-        clearPointEditor();
-        draft_geometry_kind_ = GRIM::GeoSpatial::GeoSpatialGeometryKind::CubeArea;
-        geometry_dropdown_->setSelectedIndex(1);
-        editor_status_ = "Configure the cube or sphere area in the selected group.";
-    });
-    save_point_btn_ = std::make_shared<UIButton>("Create Point", [this]() { saveGeometryDraft(); });
-    remove_point_btn_ = std::make_shared<UIButton>("Delete Object", [this]() {
+    remove_point_btn_ = std::make_shared<UIButton>("Delete", [this]() {
         if (controller_ && !selected_area_id_.empty())
             controller_->requestRemoveArea(selected_area_id_);
         else if (controller_ && !selected_point_id_.empty())
@@ -207,19 +202,13 @@ UIGeoSpatialPanel::UIGeoSpatialPanel()
     });
 
     const std::vector<std::shared_ptr<UIButton>> editorButtons = {
-        new_group_btn_, save_group_btn_, remove_group_btn_, use_pick_btn_,
-        new_point_btn_, new_area_btn_, save_point_btn_, remove_point_btn_, save_catalog_btn_
+        new_group_btn_, save_group_btn_, toggle_group_btn_, remove_group_btn_, use_pick_btn_,
+        new_point_btn_, save_point_btn_, toggle_point_btn_, remove_point_btn_, save_catalog_btn_
     };
     for (const std::shared_ptr<UIButton>& button : editorButtons)
         button->setSize(74.0f, kButtonH);
-    new_group_btn_->setSize(104.0f, kButtonH);
-    save_group_btn_->setSize(126.0f, kButtonH);
-    remove_group_btn_->setSize(336.0f, kButtonH);
+    remove_group_btn_->setSize(118.0f, kButtonH);
     use_pick_btn_->setSize(112.0f, kButtonH);
-    new_point_btn_->setSize(92.0f, kButtonH);
-    new_area_btn_->setSize(92.0f, kButtonH);
-    save_point_btn_->setSize(112.0f, kButtonH);
-    remove_point_btn_->setSize(112.0f, kButtonH);
     save_catalog_btn_->setSize(100.0f, kButtonH);
 }
 
@@ -268,23 +257,26 @@ void UIGeoSpatialPanel::update(const InputState& input, float dt)
     if (!parentVisible)
         return;
 
-    updateOutliner(input);
-
     if (init_btn_) init_btn_->update(input, dt);
     if (reload_btn_) reload_btn_->update(input, dt);
     if (home_btn_) home_btn_->update(input, dt);
     if (reset_camera_btn_) reset_camera_btn_->update(input, dt);
 
-    std::vector<std::shared_ptr<Widget>> editorWidgets = {
-        group_name_input_, group_color_input_,
-        new_group_btn_, save_group_btn_, remove_group_btn_,
-        point_group_dropdown_, geometry_dropdown_, point_name_input_, point_color_input_,
-        longitude_input_, latitude_input_, height_input_, area_size_input_, area_opacity_input_,
-        use_pick_btn_, new_point_btn_, new_area_btn_,
-        remove_point_btn_, save_catalog_btn_
+    updateLayerOutliner(input);
+
+    if (show_layer_outliner_) {
+        lod_override_toggle_->update(input, dt);
+        lod_level_slider_->update(input, dt);
+        return;
+    }
+
+    const std::vector<std::shared_ptr<Widget>> editorWidgets = {
+        group_dropdown_, group_id_input_, group_name_input_, group_color_input_,
+        new_group_btn_, save_group_btn_, toggle_group_btn_, remove_group_btn_,
+        point_dropdown_, point_group_dropdown_, geometry_dropdown_, point_id_input_, point_name_input_, point_color_input_,
+        longitude_input_, latitude_input_, height_input_, area_size_input_, area_opacity_input_, use_pick_btn_,
+        new_point_btn_, save_point_btn_, toggle_point_btn_, remove_point_btn_, save_catalog_btn_
     };
-    if (selected_point_id_.empty() && selected_area_id_.empty())
-        editorWidgets.push_back(save_point_btn_);
     for (const std::shared_ptr<Widget>& widget : editorWidgets)
         if (widget) widget->update(input, dt);
 }
@@ -310,7 +302,7 @@ bool UIGeoSpatialPanel::drawOverlay(OverlayRenderer& renderer)
                       "Cesium Native Viewport",
                       UITheme::Colors::TextHeader);
     renderer.drawText({position.x + kPad, headerY + 20.0f},
-                      "Click the globe to capture a WGS84 anchor for points and areas.",
+                      "Click the globe to capture a WGS84 location for the geometry editor.",
                       UITheme::Colors::TextSecondary);
 
     renderer.drawRoundedBorder({position.x + kPad - 1.0f, viewportY - 1.0f},
@@ -355,61 +347,74 @@ bool UIGeoSpatialPanel::drawOverlay(OverlayRenderer& renderer)
     renderer.drawText({sideX + 12.0f, viewportY + 10.0f}, "Scene Outliner", UITheme::Colors::TextHeader);
     const uint32_t layerTabColor = show_layer_outliner_ ? UITheme::Colors::TextPrimary : UITheme::Colors::TextMuted;
     const uint32_t objectTabColor = show_layer_outliner_ ? UITheme::Colors::TextMuted : UITheme::Colors::TextPrimary;
-    renderer.drawText({sideX + 12.0f, viewportY + 29.0f}, "Layers", layerTabColor);
-    renderer.drawText({sideX + 92.0f, viewportY + 29.0f}, "Objects", objectTabColor);
-    const float tabUnderlineX = show_layer_outliner_ ? sideX + 12.0f : sideX + 92.0f;
-    renderer.drawRect({tabUnderlineX, viewportY + 46.0f}, {52.0f, 2.0f}, UITheme::Colors::Primary);
-    drawOutliner(renderer);
+    renderer.drawText({sideX + 12.0f, viewportY + 34.0f}, "Layers", layerTabColor);
+    renderer.drawText({sideX + 92.0f, viewportY + 34.0f}, "Objects", objectTabColor);
+    renderer.drawRect({show_layer_outliner_ ? sideX + 12.0f : sideX + 92.0f, viewportY + 53.0f},
+                      {52.0f, 2.0f}, UITheme::Colors::Primary);
 
-    auto drawFieldLabel = [&](float y, const char* label) {
-        renderer.drawText({sideX + 12.0f, y + 5.0f}, label, UITheme::Colors::TextLabel);
+    if (show_layer_outliner_) {
+        lod_override_toggle_->drawOverlay(renderer, position);
+        lod_level_slider_->drawOverlay(renderer, position);
+        const std::string observedLevel = snapshot_.observed_lod_level >= 0
+            ? std::to_string(snapshot_.observed_lod_level)
+            : "loading";
+        renderer.drawText({sideX + 12.0f, layer_outliner_position_.y - 22.0f},
+                          "Observed LOD: " + observedLevel,
+                          snapshot_.lod_override_enabled ? UITheme::Colors::Info : UITheme::Colors::TextSecondary);
+        drawLayerOutliner(renderer);
+    } else {
+        renderer.drawText({sideX + 12.0f, viewportY + 66.0f}, "Groups & Geometry", UITheme::Colors::TextHeader);
+
+        auto drawFieldLabel = [&](float y, const char* label) {
+            renderer.drawText({sideX + 12.0f, y + 5.0f}, label, UITheme::Colors::TextLabel);
+        };
+        drawFieldLabel(group_id_input_->getPosition().y, "ID");
+        drawFieldLabel(group_name_input_->getPosition().y, "Name");
+        drawFieldLabel(group_color_input_->getPosition().y, "Color");
+        renderer.drawRoundedRect({sideX + kSidePanelW - 32.0f, group_color_input_->getPosition().y + 4.0f},
+                                 {18.0f, 18.0f}, previewColor(group_color_buffer_), 4.0f);
+        renderer.drawLine({sideX + 12.0f, point_dropdown_->getPosition().y - 8.0f},
+                          {sideX + kSidePanelW - 12.0f, point_dropdown_->getPosition().y - 8.0f},
+                          UITheme::Colors::DividerLine);
+        drawFieldLabel(point_id_input_->getPosition().y, "ID");
+        drawFieldLabel(point_name_input_->getPosition().y, "Name");
+        drawFieldLabel(point_color_input_->getPosition().y, "Color");
+        drawFieldLabel(longitude_input_->getPosition().y, "Longitude");
+        drawFieldLabel(latitude_input_->getPosition().y, "Latitude");
+        drawFieldLabel(height_input_->getPosition().y, "Height m");
+        drawFieldLabel(area_size_input_->getPosition().y, "Area size m");
+        drawFieldLabel(area_opacity_input_->getPosition().y, "Area alpha");
+        renderer.drawRoundedRect({sideX + kSidePanelW - 32.0f, point_color_input_->getPosition().y + 4.0f},
+                                 {18.0f, 18.0f}, previewColor(point_color_buffer_), 4.0f);
+
+    const std::vector<std::shared_ptr<Widget>> editorWidgets = {
+        group_dropdown_, group_id_input_, group_name_input_, group_color_input_,
+        new_group_btn_, save_group_btn_, toggle_group_btn_, remove_group_btn_,
+        point_dropdown_, point_group_dropdown_, geometry_dropdown_, point_id_input_, point_name_input_, point_color_input_,
+        longitude_input_, latitude_input_, height_input_, area_size_input_, area_opacity_input_, use_pick_btn_,
+        new_point_btn_, save_point_btn_, toggle_point_btn_, remove_point_btn_, save_catalog_btn_
     };
-    renderer.drawText({sideX + 12.0f, group_name_input_->getPosition().y - 20.0f},
-                      selected_group_id_.empty() ? "New Group Properties" : "Selected Group Properties",
-                      UITheme::Colors::TextHeader);
-    drawFieldLabel(group_name_input_->getPosition().y, "Name");
-    drawFieldLabel(group_color_input_->getPosition().y, "Color");
-    renderer.drawRoundedRect({sideX + kSidePanelW - 32.0f, group_color_input_->getPosition().y + 4.0f},
-                             {18.0f, 18.0f}, previewColor(group_color_buffer_), 4.0f);
-    renderer.drawText({sideX + 12.0f, point_group_dropdown_->getPosition().y - 20.0f},
-                      (selected_point_id_.empty() && selected_area_id_.empty())
-                          ? "New Geometry Properties" : "Selected Geometry Properties",
-                      UITheme::Colors::TextHeader);
-    drawFieldLabel(point_name_input_->getPosition().y, "Name");
-    drawFieldLabel(point_color_input_->getPosition().y, "Color");
-    drawFieldLabel(longitude_input_->getPosition().y, "Longitude");
-    drawFieldLabel(latitude_input_->getPosition().y, "Latitude");
-    drawFieldLabel(height_input_->getPosition().y, "Height m");
-    drawFieldLabel(area_size_input_->getPosition().y, "Area size m");
-    drawFieldLabel(area_opacity_input_->getPosition().y, "Area alpha");
-    renderer.drawRoundedRect({sideX + kSidePanelW - 32.0f, point_color_input_->getPosition().y + 4.0f},
-                             {18.0f, 18.0f}, previewColor(point_color_buffer_), 4.0f);
+        for (const std::shared_ptr<Widget>& widget : editorWidgets)
+            if (widget) widget->drawOverlay(renderer, position);
 
-    std::vector<std::shared_ptr<Widget>> editorWidgets = {
-        group_name_input_, group_color_input_,
-        new_group_btn_, save_group_btn_, remove_group_btn_,
-        point_group_dropdown_, geometry_dropdown_, point_name_input_, point_color_input_,
-        longitude_input_, latitude_input_, height_input_, area_size_input_, area_opacity_input_,
-        use_pick_btn_, new_point_btn_, new_area_btn_,
-        remove_point_btn_, save_catalog_btn_
-    };
-    if (selected_point_id_.empty() && selected_area_id_.empty())
-        editorWidgets.push_back(save_point_btn_);
-    for (const std::shared_ptr<Widget>& widget : editorWidgets)
-        if (widget) widget->drawOverlay(renderer, position);
-    point_group_dropdown_->drawExpandedList(renderer, position);
-    geometry_dropdown_->drawExpandedList(renderer, position);
-
-    const float catalogStatusY = save_catalog_btn_->getPosition().y + kButtonH + 8.0f;
-    renderer.drawText({sideX + 12.0f, catalogStatusY}, snapshot_.point_catalog_status,
-                      snapshot_.point_catalog_dirty ? UITheme::Colors::Warning : UITheme::Colors::TextSecondary);
-    if (!editor_status_.empty())
-        renderer.drawText({sideX + 12.0f, catalogStatusY + 18.0f}, editor_status_, UITheme::Colors::Info);
+        const float catalogStatusY = save_catalog_btn_->getPosition().y + kButtonH + 8.0f;
+        renderer.drawText({sideX + 12.0f, catalogStatusY}, snapshot_.point_catalog_status,
+                          snapshot_.point_catalog_dirty ? UITheme::Colors::Warning : UITheme::Colors::TextSecondary);
+        if (!editor_status_.empty())
+            renderer.drawText({sideX + 12.0f, catalogStatusY + 18.0f}, editor_status_, UITheme::Colors::Info);
+    }
 
     if (init_btn_) init_btn_->drawOverlay(renderer, position);
     if (reload_btn_) reload_btn_->drawOverlay(renderer, position);
     if (home_btn_) home_btn_->drawOverlay(renderer, position);
     if (reset_camera_btn_) reset_camera_btn_->drawOverlay(renderer, position);
+
+    if (!show_layer_outliner_) {
+        if (group_dropdown_) group_dropdown_->drawExpandedList(renderer, position);
+        if (point_group_dropdown_) point_group_dropdown_->drawExpandedList(renderer, position);
+        if (geometry_dropdown_) geometry_dropdown_->drawExpandedList(renderer, position);
+        if (point_dropdown_) point_dropdown_->drawExpandedList(renderer, position);
+    }
 
     renderer.popClipRect();
     return true;
@@ -473,21 +478,30 @@ void UIGeoSpatialPanel::layoutControls()
     const float fieldX = sideX + 96.0f;
     const float fieldW = kSidePanelW - 110.0f;
     const float viewportY = position.y + titleBarHeight + kPad + 44.0f;
-    outliner_position_ = {sideX + 12.0f, viewportY + 50.0f};
-    outliner_size_ = {kSidePanelW - 24.0f, kOutlinerH};
-    float y = outliner_position_.y + outliner_size_.y + 30.0f;
-    for (const std::shared_ptr<UIInputBox>& input : {group_name_input_, group_color_input_}) {
+    lod_override_toggle_->setPosition(sideX + 12.0f, viewportY + 62.0f);
+    lod_override_toggle_->setSize(kSidePanelW - 24.0f, 40.0f);
+    lod_level_slider_->setPosition(sideX + 12.0f, viewportY + 102.0f);
+    lod_level_slider_->setSize(kSidePanelW - 24.0f, 48.0f);
+    layer_outliner_position_ = {sideX + 12.0f, viewportY + 178.0f};
+    layer_outliner_size_ = {kSidePanelW - 24.0f, size.y - (layer_outliner_position_.y - position.y) - kPad};
+    float y = viewportY + 92.0f;
+    group_dropdown_->setPosition(sideX + 12.0f, y);
+    group_dropdown_->setSize(kSidePanelW - 24.0f, 34.0f);
+    y += 38.0f;
+    for (const std::shared_ptr<UIInputBox>& input : {group_id_input_, group_name_input_, group_color_input_}) {
         input->setPosition(fieldX, y);
         input->setSize(fieldW - (input == group_color_input_ ? 28.0f : 0.0f), kFieldH);
         y += 30.0f;
     }
     new_group_btn_->setPosition(sideX + 12.0f, y);
-    save_group_btn_->setPosition(sideX + 122.0f, y);
-    y += 34.0f;
-    remove_group_btn_->setPosition(sideX + 12.0f, y);
+    save_group_btn_->setPosition(sideX + 92.0f, y);
+    toggle_group_btn_->setPosition(sideX + 172.0f, y);
+    remove_group_btn_->setPosition(sideX + 252.0f, y);
     y += 44.0f;
 
-    y += 20.0f;
+    point_dropdown_->setPosition(sideX + 12.0f, y);
+    point_dropdown_->setSize(kSidePanelW - 24.0f, 34.0f);
+    y += 38.0f;
     point_group_dropdown_->setPosition(sideX + 12.0f, y);
     point_group_dropdown_->setSize(kSidePanelW - 24.0f, 34.0f);
     y += 38.0f;
@@ -495,7 +509,7 @@ void UIGeoSpatialPanel::layoutControls()
     geometry_dropdown_->setSize(kSidePanelW - 24.0f, 34.0f);
     y += 38.0f;
     for (const std::shared_ptr<UIInputBox>& input : {
-             point_name_input_, point_color_input_, longitude_input_, latitude_input_, height_input_}) {
+             point_id_input_, point_name_input_, point_color_input_, longitude_input_, latitude_input_, height_input_}) {
         input->setPosition(fieldX, y);
         input->setSize(fieldW - (input == point_color_input_ ? 28.0f : 0.0f), kFieldH);
         y += 30.0f;
@@ -508,35 +522,170 @@ void UIGeoSpatialPanel::layoutControls()
     use_pick_btn_->setPosition(sideX + 12.0f, y);
     y += 34.0f;
     new_point_btn_->setPosition(sideX + 12.0f, y);
-    new_area_btn_->setPosition(sideX + 110.0f, y);
-    y += 34.0f;
-    save_point_btn_->setPosition(sideX + 12.0f, y);
-    remove_point_btn_->setPosition(sideX + 130.0f, y);
+    save_point_btn_->setPosition(sideX + 92.0f, y);
+    toggle_point_btn_->setPosition(sideX + 172.0f, y);
+    remove_point_btn_->setPosition(sideX + 252.0f, y);
     y += 38.0f;
     save_catalog_btn_->setPosition(sideX + 12.0f, y);
 }
 
-void UIGeoSpatialPanel::syncEditors()
+void UIGeoSpatialPanel::updateLayerOutliner(const InputState& input)
 {
-    std::vector<std::string> nextPointGroupOptions;
-    nextPointGroupOptions.reserve(snapshot_.groups.size());
-    for (const GRIM::GeoSpatial::GeoSpatialGroupDefinition& group : snapshot_.groups)
-        nextPointGroupOptions.push_back(group.name);
-    if (nextPointGroupOptions.empty())
-        nextPointGroupOptions.push_back("No groups available");
-    if (point_group_options_ != nextPointGroupOptions) {
-        point_group_options_ = std::move(nextPointGroupOptions);
-        point_group_dropdown_->setItems(point_group_options_);
+    const float tabY = layer_outliner_position_.y - 144.0f;
+    if (input.mousePressed[0] && input.mousePos.y >= tabY && input.mousePos.y <= tabY + 24.0f) {
+        if (input.mousePos.x >= layer_outliner_position_.x &&
+            input.mousePos.x <= layer_outliner_position_.x + 68.0f) {
+            show_layer_outliner_ = true;
+            return;
+        }
+        if (input.mousePos.x >= layer_outliner_position_.x + 80.0f &&
+            input.mousePos.x <= layer_outliner_position_.x + 154.0f) {
+            show_layer_outliner_ = false;
+            return;
+        }
     }
 
+    if (!show_layer_outliner_ || !controller_)
+        return;
+
+    constexpr float rowHeight = 58.0f;
+    constexpr float checkboxSize = 18.0f;
+    const float rowStartY = layer_outliner_position_.y + 24.0f;
+    const float checkboxX = layer_outliner_position_.x + 10.0f;
+    const float opacityBarX = layer_outliner_position_.x + 38.0f;
+    const float opacityBarWidth = layer_outliner_size_.x - 50.0f;
+
+    for (size_t index = 0; index < snapshot_.layers.size(); ++index) {
+        const GRIM::GeoSpatial::GeoSpatialLayerSnapshot& layer = snapshot_.layers[index];
+        const float rowY = rowStartY + static_cast<float>(index) * rowHeight;
+        if (rowY + rowHeight > layer_outliner_position_.y + layer_outliner_size_.y)
+            return;
+
+        const float checkboxY = rowY + 7.0f;
+        if (input.mousePressed[0] &&
+            input.mousePos.x >= checkboxX && input.mousePos.x <= checkboxX + checkboxSize &&
+            input.mousePos.y >= checkboxY && input.mousePos.y <= checkboxY + checkboxSize) {
+            controller_->requestSetLayerVisibility(layer.id, !layer.visible);
+            return;
+        }
+
+        if (layer.id == "terrain")
+            continue;
+
+        const float opacityBarY = rowY + 36.0f;
+        if (input.mouseDown[0] &&
+            input.mousePos.x >= opacityBarX && input.mousePos.x <= opacityBarX + opacityBarWidth &&
+            input.mousePos.y >= opacityBarY - 4.0f && input.mousePos.y <= opacityBarY + 12.0f) {
+            const float opacity = std::clamp((input.mousePos.x - opacityBarX) / opacityBarWidth, 0.0f, 1.0f);
+            if (std::abs(opacity - layer.opacity) >= 0.005f)
+                controller_->requestSetLayerOpacity(layer.id, opacity);
+            return;
+        }
+    }
+}
+
+void UIGeoSpatialPanel::drawLayerOutliner(OverlayRenderer& renderer) const
+{
+    renderer.drawRoundedRect(layer_outliner_position_, layer_outliner_size_,
+                             UITheme::Colors::ScrollboxBg, UITheme::Sizes::SmallRadius);
+    renderer.drawRoundedBorder(layer_outliner_position_, layer_outliner_size_,
+                               UITheme::Colors::BorderSubtle, UITheme::Sizes::SmallRadius);
+    renderer.drawText({layer_outliner_position_.x + 10.0f, layer_outliner_position_.y + 5.0f},
+                      "Visibility", UITheme::Colors::TextMuted);
+    renderer.drawText({layer_outliner_position_.x + layer_outliner_size_.x - 64.0f,
+                       layer_outliner_position_.y + 5.0f},
+                      "Opacity", UITheme::Colors::TextMuted);
+
+    if (snapshot_.layers.empty()) {
+        renderer.drawText({layer_outliner_position_.x + 10.0f, layer_outliner_position_.y + 32.0f},
+                          "Initialize Cesium to load map layers.", UITheme::Colors::TextMuted);
+        return;
+    }
+
+    constexpr float rowHeight = 58.0f;
+    constexpr float checkboxSize = 18.0f;
+    const float rowStartY = layer_outliner_position_.y + 24.0f;
+    const float checkboxX = layer_outliner_position_.x + 10.0f;
+    const float opacityBarX = layer_outliner_position_.x + 38.0f;
+    const float opacityBarWidth = layer_outliner_size_.x - 50.0f;
+
+    for (size_t index = 0; index < snapshot_.layers.size(); ++index) {
+        const GRIM::GeoSpatial::GeoSpatialLayerSnapshot& layer = snapshot_.layers[index];
+        const float rowY = rowStartY + static_cast<float>(index) * rowHeight;
+        if (rowY + rowHeight > layer_outliner_position_.y + layer_outliner_size_.y)
+            break;
+
+        renderer.drawRect({layer_outliner_position_.x + 1.0f, rowY},
+                          {layer_outliner_size_.x - 2.0f, rowHeight},
+                          index % 2 == 0 ? UITheme::Colors::RowEven : UITheme::Colors::RowOdd);
+
+        const Vec2 checkboxPosition{checkboxX, rowY + 7.0f};
+        renderer.drawRoundedRect(checkboxPosition, {checkboxSize, checkboxSize},
+                                 UITheme::Colors::Background, 3.0f);
+        renderer.drawRoundedBorder(checkboxPosition, {checkboxSize, checkboxSize},
+                                   layer.visible ? UITheme::Colors::Primary : UITheme::Colors::BorderSubtle, 3.0f);
+        if (layer.visible) {
+            renderer.drawRoundedRect({checkboxPosition.x + 3.0f, checkboxPosition.y + 3.0f},
+                                     {checkboxSize - 6.0f, checkboxSize - 6.0f},
+                                     UITheme::Colors::Primary, 2.0f);
+        }
+
+        renderer.drawText({layer_outliner_position_.x + 38.0f, rowY + 7.0f}, layer.name,
+                          layer.visible ? UITheme::Colors::TextPrimary : UITheme::Colors::TextDisabled);
+        const int opacityPercent = static_cast<int>(layer.opacity * 100.0f + 0.5f);
+        renderer.drawText({layer_outliner_position_.x + layer_outliner_size_.x - 50.0f, rowY + 7.0f},
+                          std::to_string(opacityPercent) + "%", UITheme::Colors::TextSecondary);
+
+        const float opacityBarY = rowY + 36.0f;
+        renderer.drawRoundedRect({opacityBarX, opacityBarY}, {opacityBarWidth, 8.0f},
+                                 UITheme::Colors::SliderTrack, 4.0f);
+        renderer.drawRoundedRect({opacityBarX, opacityBarY}, {opacityBarWidth * layer.opacity, 8.0f},
+                                 layer.id == "terrain" ? UITheme::Colors::TextDisabled : UITheme::Colors::Primary, 4.0f);
+    }
+}
+
+void UIGeoSpatialPanel::syncEditors()
+{
+    lod_override_toggle_->setState(snapshot_.lod_override_enabled);
+    lod_level_slider_->setValue(static_cast<float>(snapshot_.lod_override_level));
+
+    std::vector<std::string> nextGroupOptions{"<new group>"};
+    std::vector<std::string> nextPointGroupOptions;
+    std::vector<std::string> nextPointOptions{"<new object>"};
+    for (const GRIM::GeoSpatial::GeoSpatialGroupDefinition& group : snapshot_.groups) {
+        nextGroupOptions.push_back(group.id);
+        nextPointGroupOptions.push_back(group.id);
+        for (const GRIM::GeoSpatial::GeoSpatialPointDefinition& point : group.points)
+            nextPointOptions.push_back(point.id);
+        for (const GRIM::GeoSpatial::GeoSpatialAreaDefinition& area : group.areas)
+            nextPointOptions.push_back(area.id);
+    }
+    if (nextPointGroupOptions.empty())
+        nextPointGroupOptions.push_back("<create group>");
+
+    if (group_options_ != nextGroupOptions) {
+        group_options_ = nextGroupOptions;
+        group_dropdown_->setItems(group_options_);
+    }
+    if (point_group_options_ != nextPointGroupOptions) {
+        point_group_options_ = nextPointGroupOptions;
+        point_group_dropdown_->setItems(point_group_options_);
+    }
+    if (point_options_ != nextPointOptions) {
+        point_options_ = nextPointOptions;
+        point_dropdown_->setItems(point_options_);
+    }
+
+    auto groupOption = std::find(group_options_.begin(), group_options_.end(), selected_group_id_);
+    group_dropdown_->setSelectedIndex(groupOption == group_options_.end() ? 0 : static_cast<int>(groupOption - group_options_.begin()));
+    auto pointOption = std::find(point_options_.begin(), point_options_.end(), selected_point_id_);
+    point_dropdown_->setSelectedIndex(pointOption == point_options_.end() ? 0 : static_cast<int>(pointOption - point_options_.begin()));
+
     const GRIM::GeoSpatial::GeoSpatialGroupDefinition* group = findGroup(selected_group_id_);
-    save_group_btn_->setText(group ? "Update Group" : "Create Group");
-    remove_group_btn_->setText(group
-        ? "Delete Group and Its " + std::to_string(group->points.size() + group->areas.size()) + " Object(s)"
-        : "Delete Group (select a group first)");
-    const bool areaDraft = draft_geometry_kind_ != GRIM::GeoSpatial::GeoSpatialGeometryKind::Point;
-    save_point_btn_->setText(areaDraft ? "Create Area" : "Create Point");
-    remove_point_btn_->setText(!selected_area_id_.empty() ? "Delete Area" : "Delete Point");
+    toggle_group_btn_->setText(group && group->visible ? "Hide" : "Show");
+    const GRIM::GeoSpatial::GeoSpatialPointDefinition* point = findPoint(selected_point_id_);
+    const GRIM::GeoSpatial::GeoSpatialAreaDefinition* area = findArea(selected_area_id_);
+    toggle_point_btn_->setText((point && point->visible) || (area && area->visible) ? "Hide" : "Show");
 }
 
 void UIGeoSpatialPanel::selectGroup(const std::string& id)
@@ -544,49 +693,52 @@ void UIGeoSpatialPanel::selectGroup(const std::string& id)
     const GRIM::GeoSpatial::GeoSpatialGroupDefinition* group = findGroup(id);
     if (!group) return;
     selected_group_id_ = group->id;
+    group_id_buffer_ = group->id;
     group_name_buffer_ = group->name;
     group_color_buffer_ = group->color;
+    group_id_input_->setText(group_id_buffer_);
     group_name_input_->setText(group_name_buffer_);
     group_color_input_->setText(group_color_buffer_);
+    auto option = std::find(point_group_options_.begin(), point_group_options_.end(), group->id);
+    if (option != point_group_options_.end())
+        point_group_dropdown_->setSelectedIndex(static_cast<int>(option - point_group_options_.begin()));
 }
 
 void UIGeoSpatialPanel::selectPoint(const std::string& id)
 {
     const GRIM::GeoSpatial::GeoSpatialPointDefinition* point = findPoint(id);
     if (!point) return;
-    selected_group_id_ = point->group_id;
-    selectGroup(point->group_id);
     selected_point_id_ = point->id;
     selected_area_id_.clear();
     draft_geometry_kind_ = GRIM::GeoSpatial::GeoSpatialGeometryKind::Point;
     geometry_dropdown_->setSelectedIndex(0);
+    point_id_buffer_ = point->id;
     point_name_buffer_ = point->name;
     point_color_buffer_ = point->color;
     longitude_buffer_ = formatCoordinate(point->longitude_degrees, 6);
     latitude_buffer_ = formatCoordinate(point->latitude_degrees, 6);
     height_buffer_ = formatCoordinate(point->height_meters, 1);
+    point_id_input_->setText(point_id_buffer_);
     point_name_input_->setText(point_name_buffer_);
     point_color_input_->setText(point_color_buffer_);
     longitude_input_->setText(longitude_buffer_);
     latitude_input_->setText(latitude_buffer_);
     height_input_->setText(height_buffer_);
-    auto group = std::find_if(snapshot_.groups.begin(), snapshot_.groups.end(),
-        [&](const GRIM::GeoSpatial::GeoSpatialGroupDefinition& candidate) { return candidate.id == point->group_id; });
-    if (group != snapshot_.groups.end())
-        point_group_dropdown_->setSelectedIndex(static_cast<int>(group - snapshot_.groups.begin()));
+    auto option = std::find(point_group_options_.begin(), point_group_options_.end(), point->group_id);
+    if (option != point_group_options_.end())
+        point_group_dropdown_->setSelectedIndex(static_cast<int>(option - point_group_options_.begin()));
 }
 
 void UIGeoSpatialPanel::selectArea(const std::string& id)
 {
     const GRIM::GeoSpatial::GeoSpatialAreaDefinition* area = findArea(id);
     if (!area) return;
-    selected_group_id_ = area->group_id;
-    selectGroup(area->group_id);
     selected_point_id_.clear();
     selected_area_id_ = area->id;
     draft_geometry_kind_ = area->geometry_kind;
     geometry_dropdown_->setSelectedIndex(
         area->geometry_kind == GRIM::GeoSpatial::GeoSpatialGeometryKind::CubeArea ? 1 : 2);
+    point_id_buffer_ = area->id;
     point_name_buffer_ = area->name;
     point_color_buffer_ = area->color;
     longitude_buffer_ = formatCoordinate(area->longitude_degrees, 6);
@@ -594,6 +746,7 @@ void UIGeoSpatialPanel::selectArea(const std::string& id)
     height_buffer_ = formatCoordinate(area->height_meters, 1);
     area_size_buffer_ = formatCoordinate(area->size_meters, 1);
     area_opacity_buffer_ = formatCoordinate(area->opacity, 2);
+    point_id_input_->setText(point_id_buffer_);
     point_name_input_->setText(point_name_buffer_);
     point_color_input_->setText(point_color_buffer_);
     longitude_input_->setText(longitude_buffer_);
@@ -601,19 +754,21 @@ void UIGeoSpatialPanel::selectArea(const std::string& id)
     height_input_->setText(height_buffer_);
     area_size_input_->setText(area_size_buffer_);
     area_opacity_input_->setText(area_opacity_buffer_);
-    auto group = std::find_if(snapshot_.groups.begin(), snapshot_.groups.end(),
-        [&](const GRIM::GeoSpatial::GeoSpatialGroupDefinition& candidate) { return candidate.id == area->group_id; });
-    if (group != snapshot_.groups.end())
-        point_group_dropdown_->setSelectedIndex(static_cast<int>(group - snapshot_.groups.begin()));
+    auto option = std::find(point_group_options_.begin(), point_group_options_.end(), area->group_id);
+    if (option != point_group_options_.end())
+        point_group_dropdown_->setSelectedIndex(static_cast<int>(option - point_group_options_.begin()));
 }
 
 void UIGeoSpatialPanel::clearGroupEditor()
 {
     selected_group_id_.clear();
+    group_id_buffer_.clear();
     group_name_buffer_.clear();
     group_color_buffer_ = "#4FC3F7";
+    group_id_input_->clear();
     group_name_input_->clear();
     group_color_input_->setText(group_color_buffer_);
+    group_dropdown_->setSelectedIndex(0);
 }
 
 void UIGeoSpatialPanel::clearPointEditor()
@@ -621,7 +776,7 @@ void UIGeoSpatialPanel::clearPointEditor()
     selected_point_id_.clear();
     selected_area_id_.clear();
     draft_geometry_kind_ = GRIM::GeoSpatial::GeoSpatialGeometryKind::Point;
-    geometry_dropdown_->setSelectedIndex(0);
+    point_id_buffer_.clear();
     point_name_buffer_.clear();
     point_color_buffer_ = findGroup(selected_group_id_) ? findGroup(selected_group_id_)->color : "#FFFFFF";
     longitude_buffer_ = "0.000000";
@@ -629,6 +784,7 @@ void UIGeoSpatialPanel::clearPointEditor()
     height_buffer_ = "0.0";
     area_size_buffer_ = "1000.0";
     area_opacity_buffer_ = "0.35";
+    point_id_input_->clear();
     point_name_input_->clear();
     point_color_input_->setText(point_color_buffer_);
     longitude_input_->setText(longitude_buffer_);
@@ -636,34 +792,24 @@ void UIGeoSpatialPanel::clearPointEditor()
     height_input_->setText(height_buffer_);
     area_size_input_->setText(area_size_buffer_);
     area_opacity_input_->setText(area_opacity_buffer_);
-    auto group = std::find_if(snapshot_.groups.begin(), snapshot_.groups.end(),
-        [&](const GRIM::GeoSpatial::GeoSpatialGroupDefinition& candidate) { return candidate.id == selected_group_id_; });
-    if (group != snapshot_.groups.end())
-        point_group_dropdown_->setSelectedIndex(static_cast<int>(group - snapshot_.groups.begin()));
+    geometry_dropdown_->setSelectedIndex(0);
+    point_dropdown_->setSelectedIndex(0);
 }
 
-void UIGeoSpatialPanel::saveGeometryDraft()
+void UIGeoSpatialPanel::savePointDraft()
 {
     try {
         if (!controller_)
             throw std::runtime_error("GeoSpatial controller is not attached");
         if (snapshot_.groups.empty())
             throw std::runtime_error("Create a group before adding geometry");
-        const int groupIndex = point_group_dropdown_->getSelectedIndex();
-        if (groupIndex < 0 || groupIndex >= static_cast<int>(snapshot_.groups.size()))
-            throw std::runtime_error("Choose a group for the geometry");
-        const std::string groupId = snapshot_.groups[static_cast<size_t>(groupIndex)].id;
+        const std::string groupId = point_group_dropdown_->getSelectedItem();
         const double longitude = parseCoordinate(longitude_buffer_, "Longitude");
         const double latitude = parseCoordinate(latitude_buffer_, "Latitude");
         const double height = parseCoordinate(height_buffer_, "Height");
         const bool creating = selected_point_id_.empty() && selected_area_id_.empty();
-        size_t previousCount = 0;
-        for (const GRIM::GeoSpatial::GeoSpatialGroupDefinition& group : snapshot_.groups)
-            previousCount += group.points.size() + group.areas.size();
 
         if (draft_geometry_kind_ == GRIM::GeoSpatial::GeoSpatialGeometryKind::Point) {
-            if (!selected_area_id_.empty())
-                throw std::runtime_error("Area geometry cannot be changed into a point; create a new point");
             GRIM::GeoSpatial::GeoSpatialPointDefinition point;
             point.name = point_name_buffer_;
             point.group_id = groupId;
@@ -673,8 +819,6 @@ void UIGeoSpatialPanel::saveGeometryDraft()
             point.height_meters = height;
             controller_->requestUpsertPoint(selected_point_id_, point);
         } else {
-            if (!selected_point_id_.empty())
-                throw std::runtime_error("Point geometry cannot be changed into an area; create a new area");
             GRIM::GeoSpatial::GeoSpatialAreaDefinition area;
             area.name = point_name_buffer_;
             area.group_id = groupId;
@@ -684,22 +828,25 @@ void UIGeoSpatialPanel::saveGeometryDraft()
             area.height_meters = height;
             area.geometry_kind = draft_geometry_kind_;
             area.size_meters = parseCoordinate(area_size_buffer_, "Area size");
-            area.opacity = static_cast<float>(parseCoordinate(area_opacity_buffer_, "Area alpha"));
+            area.opacity = static_cast<float>(parseCoordinate(area_opacity_buffer_, "Area opacity"));
             controller_->requestUpsertArea(selected_area_id_, area);
         }
+
+        const std::string previousPointId = selected_point_id_;
+        const std::string previousAreaId = selected_area_id_;
         refreshSnapshot();
         if (creating) {
-            size_t nextCount = 0;
-            for (const GRIM::GeoSpatial::GeoSpatialGroupDefinition& group : snapshot_.groups)
-                nextCount += group.points.size() + group.areas.size();
-            if (nextCount == previousCount + 1) {
-                const GRIM::GeoSpatial::GeoSpatialGroupDefinition& targetGroup =
-                    snapshot_.groups[static_cast<size_t>(groupIndex)];
-                if (draft_geometry_kind_ == GRIM::GeoSpatial::GeoSpatialGeometryKind::Point && !targetGroup.points.empty())
-                    selectPoint(targetGroup.points.back().id);
-                else if (draft_geometry_kind_ != GRIM::GeoSpatial::GeoSpatialGeometryKind::Point && !targetGroup.areas.empty())
-                    selectArea(targetGroup.areas.back().id);
-            }
+            const GRIM::GeoSpatial::GeoSpatialGroupDefinition* targetGroup = findGroup(groupId);
+            if (!targetGroup)
+                throw std::runtime_error("Geometry group disappeared after save");
+            if (draft_geometry_kind_ == GRIM::GeoSpatial::GeoSpatialGeometryKind::Point && !targetGroup->points.empty())
+                selectPoint(targetGroup->points.back().id);
+            else if (draft_geometry_kind_ != GRIM::GeoSpatial::GeoSpatialGeometryKind::Point && !targetGroup->areas.empty())
+                selectArea(targetGroup->areas.back().id);
+        } else if (!previousPointId.empty()) {
+            selectPoint(previousPointId);
+        } else if (!previousAreaId.empty()) {
+            selectArea(previousAreaId);
         }
         editor_status_.clear();
     } catch (const std::exception& error) {
@@ -734,192 +881,4 @@ const GRIM::GeoSpatial::GeoSpatialAreaDefinition* UIGeoSpatialPanel::findArea(co
             return &*area;
     }
     return nullptr;
-}
-
-void UIGeoSpatialPanel::updateOutliner(const InputState& input)
-{
-    const bool clicked = input.mousePressed[0];
-    const bool dragging = input.mouseDown[0];
-    if (!clicked && !dragging)
-        return;
-
-    const float tabTop = outliner_position_.y - 24.0f;
-    if (clicked && input.mousePos.y >= tabTop && input.mousePos.y < outliner_position_.y &&
-        input.mousePos.x >= outliner_position_.x && input.mousePos.x < outliner_position_.x + 160.0f) {
-        show_layer_outliner_ = input.mousePos.x < outliner_position_.x + 80.0f;
-        return;
-    }
-
-    if (input.mousePos.x < outliner_position_.x ||
-        input.mousePos.x > outliner_position_.x + outliner_size_.x ||
-        input.mousePos.y < outliner_position_.y || input.mousePos.y > outliner_position_.y + outliner_size_.y) {
-        return;
-    }
-
-    float rowY = outliner_position_.y;
-    if (show_layer_outliner_) {
-        const float checkboxX = outliner_position_.x + 8.0f;
-        const float opacityX = outliner_position_.x + outliner_size_.x - 92.0f;
-        constexpr float opacityWidth = 54.0f;
-        constexpr float checkboxSize = 16.0f;
-        for (const GRIM::GeoSpatial::GeoSpatialLayerSnapshot& layer : snapshot_.layers) {
-            if (rowY + kOutlinerRowH > outliner_position_.y + outliner_size_.y)
-                return;
-            if (input.mousePos.y >= rowY && input.mousePos.y < rowY + kOutlinerRowH) {
-                if (clicked && input.mousePos.x >= checkboxX && input.mousePos.x <= checkboxX + checkboxSize) {
-                    if (controller_)
-                        controller_->requestSetLayerVisibility(layer.id, !layer.visible);
-                    return;
-                }
-                if (dragging && layer.id != "terrain" &&
-                    input.mousePos.x >= opacityX && input.mousePos.x <= opacityX + opacityWidth) {
-                    const float opacity = std::clamp((input.mousePos.x - opacityX) / opacityWidth, 0.0f, 1.0f);
-                    if (controller_)
-                        controller_->requestSetLayerOpacity(layer.id, opacity);
-                    return;
-                }
-            }
-            rowY += kOutlinerRowH;
-        }
-        return;
-    }
-
-    if (!clicked)
-        return;
-
-    const float eyeX = outliner_position_.x + outliner_size_.x - 30.0f;
-    for (const GRIM::GeoSpatial::GeoSpatialGroupDefinition& group : snapshot_.groups) {
-        if (input.mousePos.y >= rowY && input.mousePos.y < rowY + kOutlinerRowH) {
-            if (input.mousePos.x >= eyeX) {
-                if (controller_) controller_->requestToggleGroupVisibility(group.id);
-            } else {
-                selectGroup(group.id);
-                clearPointEditor();
-            }
-            return;
-        }
-        rowY += kOutlinerRowH;
-        for (const GRIM::GeoSpatial::GeoSpatialPointDefinition& point : group.points) {
-            if (rowY + kOutlinerRowH > outliner_position_.y + outliner_size_.y)
-                return;
-            if (input.mousePos.y >= rowY && input.mousePos.y < rowY + kOutlinerRowH) {
-                if (input.mousePos.x >= eyeX) {
-                    if (controller_) controller_->requestTogglePointVisibility(point.id);
-                } else {
-                    selectPoint(point.id);
-                }
-                return;
-            }
-            rowY += kOutlinerRowH;
-        }
-        for (const GRIM::GeoSpatial::GeoSpatialAreaDefinition& area : group.areas) {
-            if (rowY + kOutlinerRowH > outliner_position_.y + outliner_size_.y)
-                return;
-            if (input.mousePos.y >= rowY && input.mousePos.y < rowY + kOutlinerRowH) {
-                if (input.mousePos.x >= eyeX) {
-                    if (controller_) controller_->requestToggleAreaVisibility(area.id);
-                } else {
-                    selectArea(area.id);
-                }
-                return;
-            }
-            rowY += kOutlinerRowH;
-        }
-    }
-}
-
-void UIGeoSpatialPanel::drawOutliner(OverlayRenderer& renderer) const
-{
-    renderer.drawRoundedRect(outliner_position_, outliner_size_, UITheme::Colors::ScrollboxBg, UITheme::Sizes::SmallRadius);
-    renderer.drawRoundedBorder(outliner_position_, outliner_size_, UITheme::Colors::BorderSubtle, UITheme::Sizes::SmallRadius);
-
-    float rowY = outliner_position_.y;
-    const float eyeX = outliner_position_.x + outliner_size_.x - 25.0f;
-    if (show_layer_outliner_) {
-        if (snapshot_.layers.empty()) {
-            renderer.drawText({outliner_position_.x + 10.0f, rowY + 5.0f},
-                              "Initialize Cesium to load layers.", UITheme::Colors::TextMuted);
-            return;
-        }
-
-        constexpr float checkboxSize = 16.0f;
-        const float opacityX = outliner_position_.x + outliner_size_.x - 92.0f;
-        constexpr float opacityWidth = 54.0f;
-        for (size_t index = 0; index < snapshot_.layers.size(); ++index) {
-            if (rowY + kOutlinerRowH > outliner_position_.y + outliner_size_.y)
-                break;
-            const GRIM::GeoSpatial::GeoSpatialLayerSnapshot& layer = snapshot_.layers[index];
-            renderer.drawRect({outliner_position_.x + 1.0f, rowY}, {outliner_size_.x - 2.0f, kOutlinerRowH},
-                              index % 2 == 0 ? UITheme::Colors::RowEven : UITheme::Colors::RowOdd);
-            const Vec2 checkboxPosition{outliner_position_.x + 8.0f, rowY + 4.0f};
-            renderer.drawRoundedRect(checkboxPosition, {checkboxSize, checkboxSize},
-                                     UITheme::Colors::Background, 3.0f);
-            renderer.drawRoundedBorder(checkboxPosition, {checkboxSize, checkboxSize},
-                                       layer.visible ? UITheme::Colors::Primary : UITheme::Colors::BorderSubtle, 3.0f);
-            if (layer.visible) {
-                renderer.drawRoundedRect({checkboxPosition.x + 3.0f, checkboxPosition.y + 3.0f},
-                                         {checkboxSize - 6.0f, checkboxSize - 6.0f},
-                                         UITheme::Colors::Primary, 2.0f);
-            }
-            renderer.drawText({outliner_position_.x + 34.0f, rowY + 4.0f}, layer.name,
-                              layer.visible ? UITheme::Colors::TextPrimary : UITheme::Colors::TextDisabled);
-            if (layer.id != "terrain") {
-                renderer.drawRoundedRect({opacityX, rowY + 9.0f}, {opacityWidth, 6.0f},
-                                         UITheme::Colors::SliderTrack, 3.0f);
-                renderer.drawRoundedRect({opacityX, rowY + 9.0f}, {opacityWidth * layer.opacity, 6.0f},
-                                         layer.visible ? UITheme::Colors::Primary : UITheme::Colors::TextDisabled, 3.0f);
-                renderer.drawText({opacityX + opacityWidth + 5.0f, rowY + 4.0f},
-                                  std::to_string(static_cast<int>(std::round(layer.opacity * 100.0f))) + "%",
-                                  UITheme::Colors::TextMuted);
-            }
-            rowY += kOutlinerRowH;
-        }
-        return;
-    }
-
-    if (snapshot_.groups.empty()) {
-        renderer.drawText({outliner_position_.x + 10.0f, rowY + 5.0f},
-                          "No groups. Choose Add Group below.", UITheme::Colors::TextMuted);
-        return;
-    }
-
-    for (const GRIM::GeoSpatial::GeoSpatialGroupDefinition& group : snapshot_.groups) {
-        if (rowY + kOutlinerRowH > outliner_position_.y + outliner_size_.y)
-            break;
-        const bool groupSelected = selected_point_id_.empty() && selected_area_id_.empty() && selected_group_id_ == group.id;
-        renderer.drawRect({outliner_position_.x + 1.0f, rowY}, {outliner_size_.x - 2.0f, kOutlinerRowH},
-                          groupSelected ? UITheme::Colors::RowSelected : UITheme::Colors::RowEven);
-        renderer.drawText({outliner_position_.x + 8.0f, rowY + 4.0f}, ICON_FA_FOLDER_OPEN, previewColor(group.color));
-        renderer.drawText({outliner_position_.x + 31.0f, rowY + 4.0f}, group.name, UITheme::Colors::TextPrimary);
-        renderer.drawText({eyeX, rowY + 4.0f}, group.visible ? ICON_FA_EYE : ICON_FA_EYE_SLASH,
-                          group.visible ? UITheme::Colors::TextPrimary : UITheme::Colors::TextDisabled);
-        rowY += kOutlinerRowH;
-
-        for (const GRIM::GeoSpatial::GeoSpatialPointDefinition& point : group.points) {
-            if (rowY + kOutlinerRowH > outliner_position_.y + outliner_size_.y)
-                return;
-            const bool pointSelected = selected_point_id_ == point.id;
-            renderer.drawRect({outliner_position_.x + 1.0f, rowY}, {outliner_size_.x - 2.0f, kOutlinerRowH},
-                              pointSelected ? UITheme::Colors::RowSelected : UITheme::Colors::RowOdd);
-            renderer.drawText({outliner_position_.x + 27.0f, rowY + 4.0f}, ICON_FA_CIRCLE, previewColor(point.color));
-            renderer.drawText({outliner_position_.x + 50.0f, rowY + 4.0f}, point.name, UITheme::Colors::TextSecondary);
-            renderer.drawText({eyeX, rowY + 4.0f}, point.visible ? ICON_FA_EYE : ICON_FA_EYE_SLASH,
-                              point.visible ? UITheme::Colors::TextPrimary : UITheme::Colors::TextDisabled);
-            rowY += kOutlinerRowH;
-        }
-        for (const GRIM::GeoSpatial::GeoSpatialAreaDefinition& area : group.areas) {
-            if (rowY + kOutlinerRowH > outliner_position_.y + outliner_size_.y)
-                return;
-            const bool areaSelected = selected_area_id_ == area.id;
-            renderer.drawRect({outliner_position_.x + 1.0f, rowY}, {outliner_size_.x - 2.0f, kOutlinerRowH},
-                              areaSelected ? UITheme::Colors::RowSelected : UITheme::Colors::RowOdd);
-            const char* icon = area.geometry_kind == GRIM::GeoSpatial::GeoSpatialGeometryKind::CubeArea
-                ? ICON_FA_CUBE : ICON_FA_CIRCLE;
-            renderer.drawText({outliner_position_.x + 27.0f, rowY + 4.0f}, icon, previewColor(area.color));
-            renderer.drawText({outliner_position_.x + 50.0f, rowY + 4.0f}, area.name, UITheme::Colors::TextSecondary);
-            renderer.drawText({eyeX, rowY + 4.0f}, area.visible ? ICON_FA_EYE : ICON_FA_EYE_SLASH,
-                              area.visible ? UITheme::Colors::TextPrimary : UITheme::Colors::TextDisabled);
-            rowY += kOutlinerRowH;
-        }
-    }
 }

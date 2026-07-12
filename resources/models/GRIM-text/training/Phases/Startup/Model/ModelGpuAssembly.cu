@@ -413,6 +413,7 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
                       ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
                       uint64_t weight_init_seed,
                       const ModelRegistration::OutputUnigramPriorView* output_unigram_prior) {
+    GRIM::HyperParameters::validateRootBiasConfig(model_cfg, "Startup::assembleGpuModel");
     const auto init_hp = GRIM::HyperParameters::gpuModelInitializationHP(model_cfg);
 
     std::cout << "[assembleGpuModel] Verifying grouped GPU initialization config..." << std::endl;

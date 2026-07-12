@@ -327,7 +327,9 @@ struct EncoderLayerConstructionHP {
     bool use_layer_scale = false;
     float layer_scale_init = 0.0f;
     bool center_encoder_residuals = false;
-    bool use_bias = false;
+    bool attention_qkv_bias_enabled = false;
+    bool attention_output_bias_enabled = false;
+    bool ffn_output_bias_enabled = false;
     float dropout_rate = 0.0f;
     float attention_dropout = 0.0f;
     bool qk_norm_enabled = false;
@@ -350,7 +352,8 @@ struct EncoderSelfAttentionHP {
     bool causal_mask = false;
     bool use_flash_attention = false;
     int min_seq_len_for_flash = 0;
-    bool use_bias = false;
+    bool qkv_bias_enabled = false;
+    bool output_bias_enabled = false;
     float attention_dropout = 0.0f;
     bool dropout_enabled = false;
     bool qk_norm_enabled = false;
@@ -361,7 +364,7 @@ struct EncoderSelfAttentionHP {
 struct FeedForwardLayerConstructionHP {
     int d_model = 0;
     int d_ff = 0;
-    bool use_bias = false;
+    bool output_bias_enabled = false;
     float dropout_rate = 0.0f;
     float residual_projection_init_gain = 0.0f;
 };
@@ -377,7 +380,7 @@ struct LMHeadLayerConstructionHP {
     int vocab_size = 0;
     int training_batch_size = 0;
     int training_rows_per_sequence = 0;
-    bool use_bias = false;
+    bool bias_enabled = false;
     bool unigram_bias = false;
     bool tie_embeddings = false;
     bool center_hidden_states = false;
@@ -394,6 +397,10 @@ struct LMHeadLayerConstructionHP {
 
 struct ExecutionBlockConstructionHP {
     bool enabled = false;
+    bool decode_bias_enabled = false;
+    bool value_embedding_bias_enabled = false;
+    bool scalar_bias_enabled = false;
+    bool trace_bias_enabled = false;
     int layer = -1;
     int d_model = 0;
     int atom_embedding_dim = 0;
@@ -440,11 +447,13 @@ struct NumberEncoderConstructionHP {
     int max_digit_slots = 0;   // fixed digit-slot capacity per numeric atom
     int max_abs_pow10 = 0;     // place-exponent range; buckets span [-max, +max]
     int pow10_buckets = 0;     // derived: 2 * max_abs_pow10 + 1
-    bool use_bias = true;      // gates the contribution/global MLP hidden biases (b_c1/b_g1)
+    bool contribution_bias_enabled = false;
+    bool global_bias_enabled = false;
 };
 
 struct MTPConstructionHP {
     bool enabled = false;
+    bool bias_enabled = false;
     int k = 0;
     int vocab_size = 0;
     int d_model = 0;
@@ -462,6 +471,12 @@ struct MTPDiagnosticHP {
 
 struct LatentTrajectoryPresetHP {
     bool enabled = false;
+    bool hidden_bias_enabled = false;
+    bool fuse_bias_enabled = false;
+    bool down_bias_enabled = false;
+    bool up_bias_enabled = false;
+    bool gate_bias_enabled = false;
+    bool target_bias_enabled = false;
 
     int d_model = 0;
     int mtp_k = 0;
@@ -920,7 +935,7 @@ inline FeedForwardLayerConstructionHP feedForwardLayerConstructionHP(
     FeedForwardLayerConstructionHP view;
     view.d_model = encoder_hp.d_model;
     view.d_ff = encoder_hp.d_ff;
-    view.use_bias = encoder_hp.use_bias;
+    view.output_bias_enabled = encoder_hp.ffn_output_bias_enabled;
     view.dropout_rate = encoder_hp.dropout_rate;
     view.residual_projection_init_gain = encoder_hp.residual_projection_init_gain;
     return view;
@@ -943,7 +958,8 @@ inline EncoderSelfAttentionHP encoderSelfAttentionHP(
     view.causal_mask = encoder_hp.causal_mask;
     view.use_flash_attention = encoder_hp.use_flash_attention;
     view.min_seq_len_for_flash = encoder_hp.min_seq_len_for_flash;
-    view.use_bias = encoder_hp.use_bias;
+    view.qkv_bias_enabled = encoder_hp.attention_qkv_bias_enabled;
+    view.output_bias_enabled = encoder_hp.attention_output_bias_enabled;
     view.attention_dropout = encoder_hp.attention_dropout;
     view.dropout_enabled = dropout_enabled;
     view.qk_norm_enabled = encoder_hp.qk_norm_enabled;
@@ -1477,7 +1493,9 @@ inline EncoderLayerConstructionHP encoderLayerConstructionHP(
     view.use_layer_scale = model.encoder_use_layer_scale;
     view.layer_scale_init = model.encoder_layer_scale_init;
     view.center_encoder_residuals = model.encoder_center_encoder_residuals;
-    view.use_bias = model.encoder_use_bias;
+    view.attention_qkv_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "attention_qkv_bias_enabled");
+    view.attention_output_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "attention_output_bias_enabled");
+    view.ffn_output_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "ffn_output_bias_enabled");
     view.dropout_rate = model.encoder_dropout_rate;
     view.attention_dropout = model.encoder_attention_dropout;
     view.qk_norm_enabled = model.encoder_qk_norm_enabled;
@@ -1510,7 +1528,7 @@ inline LMHeadLayerConstructionHP lmHeadLayerConstructionHP(
     view.vocab_size = model.lm_head_vocab_size;
     view.training_batch_size = model.lm_head_training_batch_size;
     view.training_rows_per_sequence = model.lm_head_training_rows_per_sequence;
-    view.use_bias = model.lm_head_use_bias;
+    view.bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "lm_head_bias_enabled");
     view.unigram_bias = model.lm_head_unigram_bias;
     view.tie_embeddings = model.lm_head_tie_embeddings;
     view.center_hidden_states = model.lm_head_center_hidden_states;
@@ -1532,6 +1550,10 @@ inline ExecutionBlockConstructionHP executionBlockConstructionHP(
 
     ExecutionBlockConstructionHP view;
     view.enabled = model.execution_block_enabled;
+    view.decode_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "execution_block_decode_bias_enabled");
+    view.value_embedding_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "execution_block_value_embedding_bias_enabled");
+    view.scalar_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "execution_block_scalar_bias_enabled");
+    view.trace_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "execution_block_trace_bias_enabled");
     view.layer = model.execution_block_layer;
     view.d_model = model.execution_block_d_model;
     view.atom_embedding_dim = model.atom_embedding_dim;
@@ -1574,6 +1596,7 @@ inline MTPConstructionHP mtpConstructionHP(const GRIM::Config::AiConfigSnapshot&
 
     MTPConstructionHP view;
     view.enabled = model.mtp_enabled;
+    view.bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "mtp_bias_enabled");
     view.k = model.mtp_k;
     view.vocab_size = model.mtp_vocab_size;
     view.d_model = model.mtp_d_model;
@@ -1593,7 +1616,8 @@ inline NumberEncoderConstructionHP numberEncoderConstructionHP(
     view.max_digit_slots = model.number_encoder_max_digit_slots;
     view.max_abs_pow10 = model.number_encoder_max_abs_pow10;
     view.pow10_buckets = 2 * model.number_encoder_max_abs_pow10 + 1;
-    view.use_bias = model.encoder_use_bias;
+    view.contribution_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "number_encoder_contribution_bias_enabled");
+    view.global_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "number_encoder_global_bias_enabled");
     return view;
 }
 
@@ -1614,6 +1638,12 @@ inline LatentTrajectoryPresetHP latentTrajectoryPresetHP(
 
     LatentTrajectoryPresetHP view;
     view.enabled = model.latent_trajectory_preset_enabled;
+    view.hidden_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "latent_trajectory_hidden_bias_enabled");
+    view.fuse_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "latent_trajectory_fuse_bias_enabled");
+    view.down_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "latent_trajectory_down_bias_enabled");
+    view.up_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "latent_trajectory_up_bias_enabled");
+    view.gate_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "latent_trajectory_gate_bias_enabled");
+    view.target_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "latent_trajectory_target_bias_enabled");
     view.d_model = model.latent_trajectory_preset_d_model;
     view.mtp_k = model.latent_trajectory_preset_mtp_k;
     view.vocab_size = model.latent_trajectory_preset_vocab_size;

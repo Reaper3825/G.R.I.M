@@ -57,12 +57,12 @@ void validateFeedForwardParameters(const FeedForwardParameterTensors& parameters
     if (!parameters.W_gate.data || !parameters.W1.data || !parameters.W2.data) {
         throw std::runtime_error(std::string(context) + ": W_gate/W1/W2 parameter tensors must have allocated data");
     }
-    if (hp.use_bias) {
+    if (hp.output_bias_enabled) {
         if (!parameters.b2.data) {
-            throw std::runtime_error(std::string(context) + ": hp.use_bias=true requires allocated b2 parameter tensor");
+            throw std::runtime_error(std::string(context) + ": output_bias_enabled=true requires allocated b2 parameter tensor");
         }
     } else if (parameters.b2.data) {
-        throw std::runtime_error(std::string(context) + ": hp.use_bias=false but b2 parameter tensor is allocated");
+        throw std::runtime_error(std::string(context) + ": output_bias_enabled=false but b2 parameter tensor is allocated");
     }
 }
 
@@ -115,7 +115,7 @@ void FeedForwardLayer::forward(const Tensor& input,
     const Tensor& W_gate = parameter_tensors.W_gate;
     const Tensor& W1 = parameter_tensors.W1;
     const Tensor& W2 = parameter_tensors.W2;
-    const Tensor* b2 = hp_.use_bias ? &parameter_tensors.b2 : nullptr;
+    const Tensor* b2 = hp_.output_bias_enabled ? &parameter_tensors.b2 : nullptr;
 
     // Rule 20: Crash on invalid weights
     if (!W_gate.data || !W1.data || !W2.data) {
@@ -161,7 +161,7 @@ void FeedForwardLayer::forward(const Tensor& input,
     }
     ffn_out = autograd::matmul(ffn_swiglu_out, W2, stream);
     
-    if (hp_.use_bias) {
+    if (hp_.output_bias_enabled) {
         ffn_out = autograd::broadcast_add(ffn_out, *b2, stream);
     }
 }

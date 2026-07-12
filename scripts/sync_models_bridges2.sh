@@ -17,7 +17,7 @@
 #   both    — collect then delete remote (safe order: copy first, then remove from cluster)
 #
 # Environment (same family as run_train_on_bridges2.sh):
-#   GRIM_BRIDGES2_DIR          Remote repo root (default: /ocean/projects/cis210058p/uwadkins/G.R.I.M)
+#   GRIM_BRIDGES2_DIR          Remote repo root (default: /ocean/projects/cis250124p/uwadkins/G.R.I.M)
 #   GRIM_BRIDGES2_SSH          SSH host or user@host (default: bridges2, else uwadkins@bridges2.psc.edu)
 #   GRIM_BRIDGES2_ACCOUNT      Shown in help text only (for documentation)
 #   GRIM_BRIDGES2_SYNC_RELATIVE  Path under repo to sync (default: resources/models/GRIM-text/checkpoints)
@@ -41,7 +41,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEFAULT_CHECKPOINTS_REL="resources/models/GRIM-text/checkpoints"
 TRAINING_LOGS_REL="resources/models/GRIM-text/training/logs"
 
-BRIDGES2_DIR="${GRIM_BRIDGES2_DIR:-/ocean/projects/cis210058p/uwadkins/G.R.I.M}"
+BRIDGES2_DIR="${GRIM_BRIDGES2_DIR:-/ocean/projects/cis250124p/uwadkins/G.R.I.M}"
 BRIDGES2_SSH="${GRIM_BRIDGES2_SSH:-bridges2}"
 if [[ "$BRIDGES2_SSH" == "bridges2" ]] && ! grep -q "Host bridges2" ~/.ssh/config 2>/dev/null; then
   BRIDGES2_SSH="uwadkins@bridges2.psc.edu"

@@ -504,6 +504,11 @@ void runOptimizerWindowFromEpoch(
         tel_input.should_step       = true;
         tel_input.text_loss         = result.text_loss;
         tel_input.mtp_loss          = result.mtp_loss;
+        tel_input.selector_loss     = result.selector_loss;
+        tel_input.latent_preset_loss = result.latent_preset_loss;
+        tel_input.latent_preset_traj_loss = result.latent_preset_traj_loss;
+        tel_input.latent_preset_delta_loss = result.latent_preset_delta_loss;
+        tel_input.latent_preset_gate_loss = result.latent_preset_gate_loss;
         tel_input.execution_loss    = result.execution_loss;
         tel_input.max_seq_len       = payload.max_seq_len;
         tel_input.exec_selection_entropy = result.exec_selection_entropy;

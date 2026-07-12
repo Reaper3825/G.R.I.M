@@ -544,8 +544,8 @@ void logQKVProjectionEquation(const Tensor& ln1_out,
     if (!qkv_out.data) {
         throw std::runtime_error("logQKVProjectionEquation: qkv_out.data is NULL");
     }
-    if (hp.use_bias && !b_qkv.data) {
-        throw std::runtime_error("logQKVProjectionEquation: hp.use_bias=true but b_qkv.data is NULL");
+    if (hp.qkv_bias_enabled && !b_qkv.data) {
+        throw std::runtime_error("logQKVProjectionEquation: qkv_bias_enabled=true but b_qkv.data is NULL");
     }
     ln1_out.shape.require("logQKVProjectionEquation ln1_out");
     W_qkv.shape.require("logQKVProjectionEquation W_qkv");

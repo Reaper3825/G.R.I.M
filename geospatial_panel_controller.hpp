@@ -22,6 +22,9 @@ struct GeoSpatialPanelSnapshot {
     bool viewport_ready = false;
     bool terrain_enabled = false;
     bool imagery_enabled = false;
+    bool lod_override_enabled = false;
+    int lod_override_level = 6;
+    int observed_lod_level = -1;
     std::vector<GeoSpatialLayerSnapshot> layers;
     bool point_catalog_dirty = false;
     std::string point_catalog_status = "Point catalog not loaded";
@@ -43,6 +46,8 @@ public:
     virtual void requestResetCamera() = 0;
     virtual void requestSetLayerVisibility(const std::string& id, bool visible) = 0;
     virtual void requestSetLayerOpacity(const std::string& id, float opacity) = 0;
+    virtual void requestSetLodOverrideEnabled(bool enabled) = 0;
+    virtual void requestSetLodOverrideLevel(int level) = 0;
     virtual void requestUpsertGroup(const std::string& originalId,
                                     const std::string& name,
                                     const std::string& color) = 0;

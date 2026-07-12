@@ -607,8 +607,32 @@ inline void registerEmbeddingParameters(
 template <typename RegistrarT>
 inline void registerExecutionBlockParameters(
     GRIM::ExecutionBlockParameterTensors& execution_block_parameters,
+    const GRIM::HyperParameters::ExecutionBlockConstructionHP& hp,
     RegistrarT& registrar) {
     for (const auto& spec : kExecutionBlockTensorParameters) {
+        bool enabled = true;
+        if (spec.tensor_member == &GRIM::ExecutionBlockParameterTensors::b_decode_1) {
+            enabled = hp.decode_bias_enabled;
+        } else if (spec.tensor_member == &GRIM::ExecutionBlockParameterTensors::b_value_to_emb) {
+            enabled = hp.value_embedding_bias_enabled;
+        } else if (spec.tensor_member == &GRIM::ExecutionBlockParameterTensors::b_scal) {
+            enabled = hp.scalar_bias_enabled;
+        } else if (spec.tensor_member == &GRIM::ExecutionBlockParameterTensors::b_trace) {
+            enabled = hp.trace_bias_enabled;
+        }
+        if (!enabled || spec.tensor_member == &GRIM::ExecutionBlockParameterTensors::b_decode_1 ||
+            spec.tensor_member == &GRIM::ExecutionBlockParameterTensors::b_value_to_emb ||
+            spec.tensor_member == &GRIM::ExecutionBlockParameterTensors::b_scal ||
+            spec.tensor_member == &GRIM::ExecutionBlockParameterTensors::b_trace) {
+            registrar.addConfigGatedTensor(spec.name,
+                                           execution_block_parameters.*(spec.tensor_member),
+                                           spec.type,
+                                           spec.stats_bucket,
+                                           spec.layer,
+                                           enabled,
+                                           "corresponding execution-block bias gate is false");
+            continue;
+        }
         registrar.addTensor(spec.name,
                             execution_block_parameters.*(spec.tensor_member),
                             spec.type,
@@ -621,20 +645,21 @@ template <typename RegistrarT>
 inline void registerNumberEncoderParameters(
     GRIM::NumberEncoderParameterTensors& number_encoder_parameters,
     RegistrarT& registrar,
-    bool use_bias) {
+    bool contribution_bias_enabled,
+    bool global_bias_enabled) {
     for (const auto& spec : kNumberEncoderTensorParameters) {
-        // Hidden-layer biases are config-gated by use_bias (mirrors attention/FFN).
-        // When disabled the tensor is unallocated; addConfigGatedTensor enforces
-        // that contract and registers nothing.
         if (spec.tensor_member == &GRIM::NumberEncoderParameterTensors::b_c1 ||
             spec.tensor_member == &GRIM::NumberEncoderParameterTensors::b_g1) {
+            const bool enabled = spec.tensor_member == &GRIM::NumberEncoderParameterTensors::b_c1
+                ? contribution_bias_enabled
+                : global_bias_enabled;
             registrar.addConfigGatedTensor(spec.name,
                                            number_encoder_parameters.*(spec.tensor_member),
                                            spec.type,
                                            spec.stats_bucket,
                                            spec.layer,
-                                           use_bias,
-                                           "config.use_bias=false");
+                                           enabled,
+                                           "corresponding number-encoder bias gate is false");
             continue;
         }
         registrar.addTensor(spec.name,
@@ -662,7 +687,8 @@ template <typename RegistrarT>
 inline void registerEncodingLayerParameters(
     GRIM::EncodingLayerParameterTensors& encoding_parameters,
     int layer_index,
-    bool use_bias,
+    bool qkv_bias_enabled,
+    bool output_bias_enabled,
     bool freeze_learned_rms_gammas,
     bool use_layer_scale,
     RegistrarT& registrar) {
@@ -674,13 +700,16 @@ inline void registerEncodingLayerParameters(
     for (const auto& spec : kEncodingLayerTensorParameters) {
         if (spec.tensor_member == &GRIM::EncodingLayerParameterTensors::b_qkv ||
             spec.tensor_member == &GRIM::EncodingLayerParameterTensors::b_o) {
+            const bool enabled = spec.tensor_member == &GRIM::EncodingLayerParameterTensors::b_qkv
+                ? qkv_bias_enabled
+                : output_bias_enabled;
             registrar.addConfigGatedTensor(prefix + spec.name,
                                            encoding_parameters.*(spec.tensor_member),
                                            spec.type,
                                            spec.stats_bucket,
                                            layer_index,
-                                           use_bias,
-                                           "config.use_bias=false");
+                                           enabled,
+                                           "corresponding attention bias gate is false");
             continue;
         }
 
@@ -715,6 +744,7 @@ template <typename RegistrarT>
 inline void registerMtpHeadParameters(
     GRIM::MtpHeadParameterTensors& mtp_head_parameters,
     int head_index,
+    bool bias_enabled,
     RegistrarT& registrar) {
     if (head_index < 0) {
         throw std::runtime_error("registerMtpHeadParameters: head_index must be non-negative");
@@ -722,6 +752,16 @@ inline void registerMtpHeadParameters(
 
     const std::string prefix = "mtp_head_" + std::to_string(head_index) + "_";
     for (const auto& spec : kMtpHeadTensorParameters) {
+        if (spec.tensor_member == &GRIM::MtpHeadParameterTensors::bias) {
+            registrar.addConfigGatedTensor(prefix + spec.name,
+                                           mtp_head_parameters.*(spec.tensor_member),
+                                           spec.type,
+                                           spec.stats_bucket,
+                                           spec.layer,
+                                           bias_enabled,
+                                           "config.mtp_bias_enabled=false");
+            continue;
+        }
         registrar.addTensor(prefix + spec.name,
                             mtp_head_parameters.*(spec.tensor_member),
                             spec.type,
@@ -733,8 +773,40 @@ inline void registerMtpHeadParameters(
 template <typename RegistrarT>
 inline void registerLatentTrajectoryPresetParameters(
     GRIM::LatentTrajectoryPresetParameterTensors& latent_preset_parameters,
+    const GRIM::HyperParameters::LatentTrajectoryPresetHP& hp,
     RegistrarT& registrar) {
     for (const auto& spec : kLatentTrajectoryPresetTensorParameters) {
+        bool enabled = true;
+        if (spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_hidden_traj) {
+            enabled = hp.hidden_bias_enabled;
+        } else if (spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_fuse) {
+            enabled = hp.fuse_bias_enabled;
+        } else if (spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_down) {
+            enabled = hp.down_bias_enabled;
+        } else if (spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_up) {
+            enabled = hp.up_bias_enabled;
+        } else if (spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_gate) {
+            enabled = hp.gate_bias_enabled;
+        } else if (spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_target) {
+            enabled = hp.target_bias_enabled;
+        }
+        const bool is_bias =
+            spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_hidden_traj ||
+            spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_fuse ||
+            spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_down ||
+            spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_up ||
+            spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_gate ||
+            spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_target;
+        if (is_bias) {
+            registrar.addConfigGatedTensor(spec.name,
+                                           latent_preset_parameters.*(spec.tensor_member),
+                                           spec.type,
+                                           spec.stats_bucket,
+                                           spec.layer,
+                                           enabled,
+                                           "corresponding latent-trajectory bias gate is false");
+            continue;
+        }
         registrar.addTensor(spec.name,
                             latent_preset_parameters.*(spec.tensor_member),
                             spec.type,
@@ -747,7 +819,7 @@ template <typename RegistrarT>
 inline void registerFeedForwardParameters(
     GRIM::FeedForwardParameterTensors& feed_forward_parameters,
     int layer_index,
-    bool use_bias,
+    bool output_bias_enabled,
     RegistrarT& registrar) {
     if (layer_index < 0) {
         throw std::runtime_error("registerFeedForwardParameters: layer_index must be non-negative");
@@ -761,8 +833,8 @@ inline void registerFeedForwardParameters(
                                            spec.type,
                                            spec.stats_bucket,
                                            layer_index,
-                                           use_bias,
-                                           "config.use_bias=false");
+                                           output_bias_enabled,
+                                           "config.ffn_output_bias_enabled=false");
             continue;
         }
 

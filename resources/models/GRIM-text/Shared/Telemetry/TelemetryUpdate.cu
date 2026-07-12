@@ -93,6 +93,20 @@ void populateCoreStreams(float* obs, const TelemetryBatchInput& input) {
 }
 
 //------------------------------------------------------
+// Streams 61-68: Raw loss decomposition
+//------------------------------------------------------
+void populateLossComponentStreams(float* obs, const TelemetryBatchInput& input) {
+    obs[61] = input.text_loss;
+    obs[62] = input.mtp_loss;
+    obs[63] = input.selector_loss;
+    obs[64] = input.latent_preset_loss;
+    obs[65] = input.latent_preset_traj_loss;
+    obs[66] = input.latent_preset_delta_loss;
+    obs[67] = input.latent_preset_gate_loss;
+    obs[68] = input.execution_loss;
+}
+
+//------------------------------------------------------
 // Streams 9-13 plus stream 60: optimizer warmup causation tracking
 //------------------------------------------------------
 void populateAdamCausationStreams(float* obs, const TelemetryBatchInput& input,
@@ -283,6 +297,9 @@ void updateTelemetryObservations(
 
     // Streams 0-4: Core metrics
     populateCoreStreams(obs, input);
+
+    // Streams 61-68: Raw loss decomposition
+    populateLossComponentStreams(obs, input);
 
     // Streams 9-13 plus stream 60: optimizer causation
     populateAdamCausationStreams(obs, input, ctx.telemetry.adam_cumulative_disp);

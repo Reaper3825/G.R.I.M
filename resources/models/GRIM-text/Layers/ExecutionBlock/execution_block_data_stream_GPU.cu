@@ -440,7 +440,7 @@ __global__ void kernelEncodeRecords(
     int i = idx / d_model;
     int j = idx % d_model;
 
-    float val = b_scal[j];
+    float val = b_scal ? b_scal[j] : 0.0f;
     int s1 = slot1_ids[i];
     if (s1 >= 0 && s1 < num_slots) val += E_slot[s1 * d_model + j];
     int s2 = slot2_ids[i];
@@ -482,7 +482,7 @@ __global__ void kernelEncodeRecordsBackward(
         atomicAdd(&E_op_grad[op * d_model + j], g);
     for (int k = 0; k < 3; ++k)
         atomicAdd(&W_scal_grad[k * d_model + j], scalars[i * 3 + k] * g);
-    atomicAdd(&b_scal_grad[j], g);
+    if (b_scal_grad) atomicAdd(&b_scal_grad[j], g);
 }
 
 __global__ void kernelAddVectors(
@@ -1110,7 +1110,7 @@ struct RecordEncodeGradFn : public GradFn {
         E_slot_grad_ = E_slot.grad_data();
         E_op_grad_ = E_op.grad_data();
         W_scal_grad_ = W_scal.grad_data();
-        b_scal_grad_ = b_scal.grad_data();
+        b_scal_grad_ = b_scal.data ? b_scal.grad_data() : nullptr;
     }
 
     void apply_impl(const Tensor& grad_output,
@@ -1499,7 +1499,9 @@ void executeStepCoordinatorImpl(
         flattened.is_leaf = false;
 
         work.trace_vec = autograd::matmul(flattened, params.W_trace, stream);
-        work.trace_vec = autograd::add(work.trace_vec, params.b_trace, stream);
+        if (hp.trace_bias_enabled) {
+            work.trace_vec = autograd::add(work.trace_vec, params.b_trace, stream);
+        }
 
         cudaFreeAsync(d_slot1, stream);
         cudaFreeAsync(d_slot2, stream);
@@ -1677,13 +1679,17 @@ void executeStepCoordinatorImpl(
     cudaMemcpyAsync(decode_input.data, work.atom_new.data + 16, vid * sizeof(float), cudaMemcpyDeviceToDevice, stream);
 
     auto decode_h = autograd::matmul(decode_input, params.w_decode_1, stream);
-    decode_h = autograd::add(decode_h, params.b_decode_1, stream);
+    if (hp.decode_bias_enabled) {
+        decode_h = autograd::add(decode_h, params.b_decode_1, stream);
+    }
 
     auto decode_act = autograd::silu(decode_h, stream, decode_h.data);
 
     work.v_decoded = autograd::matmul(decode_act, params.w_decode_2, stream);
     work.result_emb = autograd::matmul(work.v_decoded, params.W_value_to_emb, stream);
-    work.result_emb = autograd::add(work.result_emb, params.b_value_to_emb, stream);
+    if (hp.value_embedding_bias_enabled) {
+        work.result_emb = autograd::add(work.result_emb, params.b_value_to_emb, stream);
+    }
     kernelCheckFinite<<<(dm + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         work.result_emb.data, dm, diag.numericErrorFlag(), kStageResultEmb, hp.magnitude_limit);
 

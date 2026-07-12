@@ -19,7 +19,7 @@ Computes:
   - Fertility: tokens per whitespace-delimited word in decoded text
 
 Environment (Bridges-2; same defaults as run_train_on_bridges2.sh):
-  - GRIM_BRIDGES2_DIR: remote repo root (default: /ocean/projects/cis210058p/uwadkins/G.R.I.M)
+    - GRIM_BRIDGES2_DIR: remote repo root (default: /ocean/projects/cis250124p/uwadkins/G.R.I.M)
   - GRIM_BRIDGES2_SSH: ssh host or Host alias (default: bridges2, else uwadkins@bridges2.psc.edu)
   - GRIM_REPO_ROOT: local repo root (default: parent of ``scripts/``)
   - GRIM_REMOTE_PYTHON: interpreter on Bridges-2 for ``--ssh-run`` (default: python3)
@@ -42,7 +42,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional
 
-DEFAULT_REMOTE_ROOT = "/ocean/projects/cis210058p/uwadkins/G.R.I.M"
+DEFAULT_REMOTE_ROOT = "/ocean/projects/cis250124p/uwadkins/G.R.I.M"
 REMOTE_DATA_SUFFIX = "resources/models/GRIM-text/training/data"
 
 # Token layout (must match decode_token_ids.py / C++ UniByte)
@@ -113,7 +113,7 @@ def ssh_run_on_bridges2(
     ssh_host: str,
     remote_root: str,
     slurm_partition: str = "RM-shared",
-    slurm_account: str = "cis210058p",
+    slurm_account: str = "cis250124p",
 ) -> None:
     """
     One SSH session: stream this file to the remote with ``cat > /tmp/…py``, then dispatch
@@ -354,9 +354,9 @@ def main() -> None:
     p.add_argument(
         "--account",
         type=str,
-        default="cis210058p",
+        default="cis250124p",
         metavar="ACCT",
-        help="SLURM account for --ssh-run (default: cis210058p)",
+        help="SLURM account for --ssh-run (default: cis250124p)",
     )
     args = p.parse_args()
 

@@ -83,6 +83,14 @@ TELEMETRY_STREAM_NAMES_BY_INDEX = {
     58: "rho_atom_only",
     59: "rho_nonatom_only",
     60: "optimizer_iteration",
+    61: "text_loss",
+    62: "mtp_loss",
+    63: "selector_loss",
+    64: "latent_preset_loss",
+    65: "latent_preset_traj_loss",
+    66: "latent_preset_delta_loss",
+    67: "latent_preset_gate_loss",
+    68: "execution_loss",
 }
 
 LEGACY_STREAM_NAME_COMPATIBILITY = {
@@ -2007,6 +2015,64 @@ def main():
         print(f"Saved: {os.path.splitext(path)[0]}_unigram_lm_init.png")
     else:
         print("Unigram/LM-head/init figure skipped: no streams in CSV")
+
+    # --- Figure 13: Raw loss decomposition ---
+    primary_loss_streams = [
+        ("total", loss, "tab:blue"),
+        ("text", streams.get("text_loss"), "tab:green"),
+        ("MTP", streams.get("mtp_loss"), "tab:orange"),
+        ("selector", streams.get("selector_loss"), "tab:red"),
+    ]
+    auxiliary_loss_streams = [
+        ("latent preset", streams.get("latent_preset_loss"), "tab:blue"),
+        ("latent trajectory", streams.get("latent_preset_traj_loss"), "tab:orange"),
+        ("latent delta", streams.get("latent_preset_delta_loss"), "tab:green"),
+        ("latent gate", streams.get("latent_preset_gate_loss"), "tab:red"),
+        ("execution", streams.get("execution_loss"), "tab:purple"),
+    ]
+    has_loss_components = any(
+        stream is not None
+        for _, stream, _ in [*primary_loss_streams[1:], *auxiliary_loss_streams]
+    )
+    if has_loss_components:
+        fig13, axes13 = plt.subplots(2, 1, figsize=(16, 10), sharex=True, constrained_layout=True)
+        fig13.suptitle("GRIM-text Telemetry - Raw Loss Decomposition", fontsize=14, fontweight="bold")
+
+        for label, stream, color in primary_loss_streams:
+            if stream is not None:
+                plot_raw_and_smooth(
+                    axes13[0], stream.index, stream["raw_observation"],
+                    color=color,
+                    raw_label="_nolegend_",
+                    smooth_label=label,
+                    raw_alpha=0.12,
+                    smooth_linewidth=1.4,
+                )
+        axes13[0].set_ylabel("Loss")
+        axes13[0].set_title("Primary Objectives")
+        axes13[0].legend(fontsize=8)
+        axes13[0].grid(True, alpha=0.3)
+
+        for label, stream, color in auxiliary_loss_streams:
+            if stream is not None:
+                plot_raw_and_smooth(
+                    axes13[1], stream.index, stream["raw_observation"],
+                    color=color,
+                    raw_label="_nolegend_",
+                    smooth_label=label,
+                    raw_alpha=0.12,
+                    smooth_linewidth=1.4,
+                )
+        axes13[1].set_xlabel("global_step")
+        axes13[1].set_ylabel("Loss")
+        axes13[1].set_title("Latent and Execution Objectives")
+        axes13[1].legend(fontsize=8)
+        axes13[1].grid(True, alpha=0.3)
+
+        loss_components_path = os.path.splitext(path)[0] + "_loss_components.png"
+        save_figure(fig13, loss_components_path)
+    else:
+        print("Loss component figure skipped: no raw component streams in CSV")
 
     atlas_dir = generate_raw_stream_atlas(path, streams)
     generate_stream_detail_pages(path, streams)

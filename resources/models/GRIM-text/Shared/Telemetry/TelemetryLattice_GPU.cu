@@ -365,6 +365,14 @@ const char* getMetricStreamName(MetricStream stream) {
         case MetricStream::RHO_ATOM_ONLY: return "rho_atom_only";
         case MetricStream::RHO_NONATOM_ONLY: return "rho_nonatom_only";
         case MetricStream::OPTIMIZER_ITERATION: return "optimizer_iteration";
+        case MetricStream::TEXT_LOSS: return "text_loss";
+        case MetricStream::MTP_LOSS: return "mtp_loss";
+        case MetricStream::SELECTOR_LOSS: return "selector_loss";
+        case MetricStream::LATENT_PRESET_LOSS: return "latent_preset_loss";
+        case MetricStream::LATENT_PRESET_TRAJ_LOSS: return "latent_preset_traj_loss";
+        case MetricStream::LATENT_PRESET_DELTA_LOSS: return "latent_preset_delta_loss";
+        case MetricStream::LATENT_PRESET_GATE_LOSS: return "latent_preset_gate_loss";
+        case MetricStream::EXECUTION_LOSS: return "execution_loss";
         default: return "unknown";
     }
 }

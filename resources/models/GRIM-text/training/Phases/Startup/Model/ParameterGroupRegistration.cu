@@ -334,11 +334,7 @@ void registerTopLevelParameters(Startup::GpuModelState& gpu_model_state,
     validateEmbeddingLmHeadAliasing(embedding_parameters.token_weights, lm_head_parameters.weights, config);
 
     const bool tie_embeddings = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "tie_embeddings");
-    const bool use_bias = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "use_bias");
-    const bool lm_head_unigram_bias = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "lm_head_unigram_bias");
-    // The LM-head bias tensor exists (and must be registered for optimizer
-    // updates) when EITHER use_bias or the dedicated unigram bias is enabled.
-    const bool lm_head_bias_present = use_bias || lm_head_unigram_bias;
+    const bool lm_head_bias_enabled = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "lm_head_bias_enabled");
     const bool freeze_learned_rms_gammas = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "freeze_learned_rms_gammas");
 
     if (!tie_embeddings) {
@@ -360,8 +356,8 @@ void registerTopLevelParameters(Startup::GpuModelState& gpu_model_state,
                                    ParamGroupType::LM_HEAD,
                                    ParamStatsBucket::LM_HEAD,
                                    -1,
-                                   lm_head_bias_present,
-                                   "config.use_bias=false && config.lm_head_unigram_bias=false");
+                                   lm_head_bias_enabled,
+                                   "config.lm_head_bias_enabled=false");
 
     // Head-side residual SwiGLU adapter (config.lm_head_mlp_enabled).
     const bool lm_head_mlp_enabled = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "lm_head_mlp_enabled");
@@ -412,7 +408,7 @@ void registerEncoderParameters(Startup::GpuModelState& gpu_model_state,
             "Startup::assembleGpuModel(config, training_state, gpu_model_state, parameter_registry, weight_init_seed) must complete before parameter registration");
     }
     const int num_layers = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "num_layers");
-    const bool use_bias = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "use_bias");
+    const auto encoder_hp = GRIM::HyperParameters::encoderLayerConstructionHP(config);
     const bool freeze_learned_rms_gammas = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "freeze_learned_rms_gammas");
     const bool use_layer_scale = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "use_layer_scale");
     if (static_cast<int>(parameter_registry.encodingLayerParameterTensors().size()) != num_layers) {
@@ -437,13 +433,18 @@ void registerEncoderParameters(Startup::GpuModelState& gpu_model_state,
         ParameterRegistry::registerEncodingLayerParameters(
             encoding_parameters,
             layer,
-            use_bias,
+            encoder_hp.attention_qkv_bias_enabled,
+            encoder_hp.attention_output_bias_enabled,
             freeze_learned_rms_gammas,
             use_layer_scale,
             registrar);
 
         auto& ffn_parameters = parameter_registry.requireFeedForwardParameters(layer, "registerEncoderParameters");
-        ParameterRegistry::registerFeedForwardParameters(ffn_parameters, layer, use_bias, registrar);
+        ParameterRegistry::registerFeedForwardParameters(
+            ffn_parameters,
+            layer,
+            encoder_hp.ffn_output_bias_enabled,
+            registrar);
 
         if (freeze_learned_rms_gammas) {
             if (encoding_parameters.rms1_gamma.has_grad()) {
@@ -479,7 +480,7 @@ void registerExecutionBlockParameters(Startup::GpuModelState& gpu_model_state,
         execution_block_parameters,
         "ExecutionBlockParameterTensors",
         "registerExecutionBlockParameters");
-    ParameterRegistry::registerExecutionBlockParameters(execution_block_tensor_owner, registrar);
+    ParameterRegistry::registerExecutionBlockParameters(execution_block_tensor_owner, execution_hp, registrar);
 }
 
 void registerNumberEncoderParameters(ParameterRegistry::StartupParameterRegistry& parameter_registry,
@@ -499,7 +500,11 @@ void registerNumberEncoderParameters(ParameterRegistry::StartupParameterRegistry
         number_encoder_parameters,
         "NumberEncoderParameterTensors",
         "registerNumberEncoderParameters");
-    ParameterRegistry::registerNumberEncoderParameters(number_encoder_tensor_owner, registrar, number_encoder_hp.use_bias);
+    ParameterRegistry::registerNumberEncoderParameters(
+        number_encoder_tensor_owner,
+        registrar,
+        number_encoder_hp.contribution_bias_enabled,
+        number_encoder_hp.global_bias_enabled);
 }
 
 void registerSelectorParameters(ParameterRegistry::StartupParameterRegistry& parameter_registry,
@@ -543,7 +548,7 @@ void registerMtpParameters(ParameterRegistry::StartupParameterRegistry& paramete
                                      " for configured mtp_k=" + std::to_string(mtp_hp.k));
         }
         auto& mtp_head_parameters = mtp_heads[static_cast<std::size_t>(k)];
-        ParameterRegistry::registerMtpHeadParameters(mtp_head_parameters, k, registrar);
+        ParameterRegistry::registerMtpHeadParameters(mtp_head_parameters, k, mtp_hp.bias_enabled, registrar);
     }
 
     if (static_cast<int>(mtp_heads.size()) > mtp_hp.k) {
@@ -569,7 +574,7 @@ void registerLatentTrajectoryPresetParameters(ParameterRegistry::StartupParamete
         latent_preset_parameters,
         "LatentTrajectoryPresetParameterTensors",
         "registerLatentTrajectoryPresetParameters");
-    ParameterRegistry::registerLatentTrajectoryPresetParameters(*latent_preset_parameters, registrar);
+    ParameterRegistry::registerLatentTrajectoryPresetParameters(*latent_preset_parameters, latent_preset_hp, registrar);
 }
 
 void clearOptimizerBindings(std::vector<ParameterGroup>& groups) {
@@ -846,7 +851,7 @@ void initializeFeedForwardParameterTensors(
         tensors.W2.alloc_grad();
         GRIM::Tensor::xavier_uniform_with_gain_(tensors.W2, ffn_seed + 2, residual_projection_init_gain, init_stream);
 
-        if (ffn_hp.use_bias) {
+        if (ffn_hp.output_bias_enabled) {
             tensors.b2 = GRIM::Tensor::zeros({1, ffn_hp.d_model}, init_stream, "ffn_b2");
             tensors.b2.requires_grad_();
             tensors.b2.alloc_grad();
@@ -946,11 +951,13 @@ void initializeEncodingLayerParameterTensors(
         tensors.W_o.alloc_grad();
         GRIM::Tensor::xavier_uniform_with_gain_(tensors.W_o, layer_seed + 1, residual_projection_init_gain, init_stream);
 
-        if (encoder_hp.use_bias) {
+        if (encoder_hp.attention_qkv_bias_enabled) {
             tensors.b_qkv = GRIM::Tensor::zeros({encoder_hp.qkv_dim}, init_stream, "enc_b_qkv");
             tensors.b_qkv.requires_grad_();
             tensors.b_qkv.alloc_grad();
+        }
 
+        if (encoder_hp.attention_output_bias_enabled) {
             tensors.b_o = GRIM::Tensor::zeros({encoder_hp.d_model}, init_stream, "enc_b_o");
             tensors.b_o.requires_grad_();
             tensors.b_o.alloc_grad();
@@ -1116,12 +1123,7 @@ void initializeLmHeadParameterTensors(
         Tensor::xavier_uniform_(parameter_tensors.weights, weight_init_seed, init_stream);
     }
 
-    // Allocate the LM-head bias when EITHER the global use_bias is set OR the
-    // dedicated unigram-bias is enabled. The unigram path keeps the bias active
-    // without the attention/FFN biases (which use_bias also gates) so the
-    // unigram marginal can live in a dedicated parameter rather than a shared
-    // residual common-mode direction.
-    if (lm_head_hp.use_bias || lm_head_hp.unigram_bias) {
+    if (lm_head_hp.bias_enabled) {
         parameter_tensors.bias = Tensor::zeros({lm_head_hp.vocab_size}, init_stream, "lm_head.bias");
         parameter_tensors.bias.requires_grad_();
         parameter_tensors.bias.alloc_grad();
@@ -1143,6 +1145,9 @@ void initializeLmHeadParameterTensors(
                                          cudaGetErrorString(sync_err));
             }
         }
+    } else if (output_unigram_prior) {
+        throw std::runtime_error(
+            "initializeLmHeadParameterTensors: output unigram prior requires lm_head_bias_enabled=true");
     }
 
     parameter_tensors.final_rms_gamma = Tensor::zeros({lm_head_hp.d_model}, init_stream, "final_rms_gamma");
@@ -1221,6 +1226,10 @@ void initializeMtpHeadParameterTensors(
     }
 
     if (output_unigram_prior) {
+        if (!mtp_hp.bias_enabled) {
+            throw std::runtime_error(
+                "initializeMtpHeadParameterTensors: output unigram prior requires mtp_bias_enabled=true");
+        }
         validateOutputUnigramPrior(*output_unigram_prior, mtp_hp.vocab_size, "initializeMtpHeadParameterTensors");
     }
 
@@ -1237,10 +1246,12 @@ void initializeMtpHeadParameterTensors(
         const std::uint64_t mtp_seed = weight_init_seed + 3 + static_cast<std::uint64_t>(k);
         Tensor::xavier_uniform_(head.weight, mtp_seed, init_stream);
 
-        head.bias = Tensor::zeros({mtp_hp.vocab_size}, init_stream, bias_name.c_str());
-        head.bias.requires_grad_();
-        head.bias.alloc_grad();
-        if (output_unigram_prior) {
+        if (mtp_hp.bias_enabled) {
+            head.bias = Tensor::zeros({mtp_hp.vocab_size}, init_stream, bias_name.c_str());
+            head.bias.requires_grad_();
+            head.bias.alloc_grad();
+        }
+        if (output_unigram_prior && mtp_hp.bias_enabled) {
             uploadOutputUnigramPriorToBias(
                 head.bias,
                 *output_unigram_prior,
@@ -1340,7 +1351,9 @@ void initializeExecutionBlockParameterTensors(
     };
 
     params.w_decode_1 = make_param(vid, vhd, weight_init_seed, "exec_block.w_decode_1");
-    params.b_decode_1 = make_bias(vhd, "exec_block.b_decode_1");
+    if (execution_hp.decode_bias_enabled) {
+        params.b_decode_1 = make_bias(vhd, "exec_block.b_decode_1");
+    }
     params.w_decode_2 = make_param(vhd, 1, weight_init_seed + 1, "exec_block.w_decode_2");
     params.w_arg1_select = make_param(3 * dm, dm, weight_init_seed + 2, "exec_block.w_arg1_select");
     params.w_arg2_select = make_param(3 * dm, dm, weight_init_seed + 3, "exec_block.w_arg2_select");
@@ -1357,13 +1370,19 @@ void initializeExecutionBlockParameterTensors(
     params.W_V_read = make_param(dm, hd, weight_init_seed + 13, "exec_block.W_V_read");
     params.W_O_read = make_param(hd, dm, weight_init_seed + 14, "exec_block.W_O_read");
     params.W_value_to_emb = make_param(1, dm, weight_init_seed + 15, "exec_block.W_value_to_emb");
-    params.b_value_to_emb = make_bias(dm, "exec_block.b_value_to_emb");
+    if (execution_hp.value_embedding_bias_enabled) {
+        params.b_value_to_emb = make_bias(dm, "exec_block.b_value_to_emb");
+    }
     params.E_slot = make_param(V, dm, weight_init_seed + 16, "exec_block.E_slot");
     params.E_op = make_param(nop, dm, weight_init_seed + 17, "exec_block.E_op");
     params.W_scal = make_param(3, dm, weight_init_seed + 18, "exec_block.W_scal");
-    params.b_scal = make_bias(dm, "exec_block.b_scal");
+    if (execution_hp.scalar_bias_enabled) {
+        params.b_scal = make_bias(dm, "exec_block.b_scal");
+    }
     params.W_trace = make_param(K * dm, dm, weight_init_seed + 19, "exec_block.W_trace");
-    params.b_trace = make_bias(dm, "exec_block.b_trace");
+    if (execution_hp.trace_bias_enabled) {
+        params.b_trace = make_bias(dm, "exec_block.b_trace");
+    }
     params.W_reason_gate = make_param(2 * dm, dm, weight_init_seed + 20, "exec_block.W_reason_gate");
     params.W_trace_gate = make_param(2 * dm, dm, weight_init_seed + 21, "exec_block.W_trace_gate");
 
@@ -1452,18 +1471,14 @@ void initializeNumberEncoderParameterTensors(
     params->digit_emb = make_xavier(10, d_model, weight_init_seed, "number_encoder.digit_emb");
     params->pow10_emb = make_xavier(number_encoder_hp.pow10_buckets, d_model, weight_init_seed + 1, "number_encoder.pow10_emb");
     params->W_c1 = make_xavier(GRIM::Batching::BatchPayload::kNumberSlotFeatureDim, d_hidden, weight_init_seed + 2, "number_encoder.W_c1");
-    // Hidden-layer biases (b_c1/b_g1) are gated by the global use_bias, mirroring
-    // attention/FFN. When disabled they are left unallocated so the only learnable
-    // common-mode (DC) sinks in a bias-free backbone do not dominate the gradient
-    // signal; the forward kernels treat a null bias pointer as zero.
-    if (number_encoder_hp.use_bias) {
+    if (number_encoder_hp.contribution_bias_enabled) {
         params->b_c1 = GRIM::Tensor::zeros({1, d_hidden}, init_stream, "number_encoder.b_c1");
         params->b_c1.requires_grad_();
         params->b_c1.alloc_grad();
     }
     params->W_c2 = make_xavier(d_hidden, d_model, weight_init_seed + 3, "number_encoder.W_c2");
     params->W_g1 = make_xavier(GRIM::Batching::BatchPayload::kNumberGlobalFeatureDim, d_hidden, weight_init_seed + 4, "number_encoder.W_g1");
-    if (number_encoder_hp.use_bias) {
+    if (number_encoder_hp.global_bias_enabled) {
         params->b_g1 = GRIM::Tensor::zeros({1, d_hidden}, init_stream, "number_encoder.b_g1");
         params->b_g1.requires_grad_();
         params->b_g1.alloc_grad();
@@ -1618,17 +1633,29 @@ void initializeLatentTrajectoryPresetParameterTensors(
     };
 
     params->W_hidden_traj = make_xavier(d_model, fused_input_dim, weight_init_seed + 5, "latent_preset.W_hidden_traj");
-    params->b_hidden_traj = make_bias(fused_input_dim, "latent_preset.b_hidden_traj");
+    if (latent_preset_hp.hidden_bias_enabled) {
+        params->b_hidden_traj = make_bias(fused_input_dim, "latent_preset.b_hidden_traj");
+    }
     params->W_fuse = make_xavier(fused_input_dim, fuse_dim, weight_init_seed + 0, "latent_preset.W_fuse");
-    params->b_fuse = make_bias(fuse_dim, "latent_preset.b_fuse");
+    if (latent_preset_hp.fuse_bias_enabled) {
+        params->b_fuse = make_bias(fuse_dim, "latent_preset.b_fuse");
+    }
     params->W_down = make_xavier(fuse_dim, preset_dim, weight_init_seed + 1, "latent_preset.W_down");
-    params->b_down = make_bias(preset_dim, "latent_preset.b_down");
+    if (latent_preset_hp.down_bias_enabled) {
+        params->b_down = make_bias(preset_dim, "latent_preset.b_down");
+    }
     params->W_up = make_xavier(preset_dim, d_model, weight_init_seed + 2, "latent_preset.W_up");
-    params->b_up = make_bias(d_model, "latent_preset.b_up");
+    if (latent_preset_hp.up_bias_enabled) {
+        params->b_up = make_bias(d_model, "latent_preset.b_up");
+    }
     params->W_gate = make_xavier(d_model + fuse_dim, scalar_gate_dim, weight_init_seed + 3, "latent_preset.W_gate");
-    params->b_gate = make_scalar_bias(latent_preset_hp.gate_bias_init, "latent_preset.b_gate");
+    if (latent_preset_hp.gate_bias_enabled) {
+        params->b_gate = make_scalar_bias(latent_preset_hp.gate_bias_init, "latent_preset.b_gate");
+    }
     params->W_target = make_xavier(d_model, preset_dim, weight_init_seed + 4, "latent_preset.W_target");
-    params->b_target = make_bias(preset_dim, "latent_preset.b_target");
+    if (latent_preset_hp.target_bias_enabled) {
+        params->b_target = make_bias(preset_dim, "latent_preset.b_target");
+    }
     params->fuse_norm_gamma = make_norm_gamma(fuse_dim, "latent_preset.fuse_norm_gamma");
     params->preset_norm_gamma = make_norm_gamma(preset_dim, "latent_preset.preset_norm_gamma");
 

@@ -115,6 +115,7 @@ namespace {
         int32_t rasterOverlayTextureCoordinateID = -1;
         bool requiresRasterOverlay = false;
         bool generatedTextureCoordinates = false;
+        bool hasNonFiniteOverlayTextureCoordinates = false;
         std::array<float, 4> baseColorFactor{1.0f, 1.0f, 1.0f, 1.0f};
         bool doubleSided = false;
         bool translucent = false;
@@ -186,6 +187,7 @@ namespace {
     bool g_loggedCesiumOverlayUv = false;
     bool g_loggedCesiumOverlayUvRange = false;
     bool g_loggedGeneratedSphericalUv = false;
+    bool g_loggedNonFiniteOverlayUvRepair = false;
     std::mutex g_tileResourcesRegistryMutex;
     std::vector<TileGpuResources*> g_tileResourcesRegistry;
 
@@ -622,6 +624,7 @@ namespace {
         size_t vertices = 0;
         size_t polarVertices = 0;
         size_t polarRepaired = 0;
+        size_t nonFiniteOverlayRepaired = 0;
         float minU = std::numeric_limits<float>::max();
         float maxU = std::numeric_limits<float>::lowest();
         float minV = std::numeric_limits<float>::max();
@@ -684,8 +687,20 @@ namespace {
                 else if (longitude > rectangle.maximumX && longitude - twoPi >= rectangle.minimumX - unwrapEpsilon)
                     longitude -= twoPi;
 
-                vertex.u = static_cast<float>((longitude + pi) / twoPi);
-                vertex.v = static_cast<float>(0.5 - cartographic->latitude / pi);
+                if (regenerateAllUvs) {
+                    vertex.u = static_cast<float>((longitude + pi) / twoPi);
+                    vertex.v = static_cast<float>(0.5 - cartographic->latitude / pi);
+                } else if (!std::isfinite(vertex.u) || !std::isfinite(vertex.v)) {
+                    const double rectangleWidth = rectangle.maximumX - rectangle.minimumX;
+                    const double rectangleHeight = rectangle.maximumY - rectangle.minimumY;
+                    if (rectangleWidth <= 0.0 || rectangleHeight <= 0.0)
+                        throw std::runtime_error("Cesium overlay UV regeneration received an invalid tile rectangle");
+                    vertex.u = static_cast<float>(std::clamp(
+                        (longitude - rectangle.minimumX) / rectangleWidth, 0.0, 1.0));
+                    vertex.v = static_cast<float>(std::clamp(
+                        (cartographic->latitude - rectangle.minimumY) / rectangleHeight, 0.0, 1.0));
+                    ++stats.nonFiniteOverlayRepaired;
+                }
             }
 
             std::vector<float> polarUSum(vertexCount, 0.0f);
@@ -718,7 +733,10 @@ namespace {
                 stats.maxU = std::max(stats.maxU, primitive.vertices[i].u);
                 stats.minV = std::min(stats.minV, primitive.vertices[i].v);
                 stats.maxV = std::max(stats.maxV, primitive.vertices[i].v);
+                if (!std::isfinite(primitive.vertices[i].u) || !std::isfinite(primitive.vertices[i].v))
+                    throw std::runtime_error("Cesium tile-aware overlay UV regeneration produced non-finite values");
             }
+            primitive.hasNonFiniteOverlayTextureCoordinates = false;
         }
         return stats;
     }
@@ -982,10 +1000,6 @@ namespace {
             result.rasterOverlayTextureCoordinateID = cesiumOverlayAttribute->textureCoordinateID;
         result.vertices.resize(static_cast<size_t>(positionAccessor.count));
         const glm::dmat3 worldToLocalRotation = glm::inverse(glm::dmat3(transform));
-        float minU = std::numeric_limits<float>::max();
-        float minV = std::numeric_limits<float>::max();
-        float maxU = std::numeric_limits<float>::lowest();
-        float maxV = std::numeric_limits<float>::lowest();
         for (int64_t i = 0; i < positionAccessor.count; ++i) {
             const std::array<float, 3> position = readVec3Float(positionBase, positionStride, i);
             const std::array<float, 3> normal = normalBase ? readVec3Float(normalBase, normalStride, i)
@@ -993,12 +1007,10 @@ namespace {
             const std::array<float, 2> texcoord = texcoordBase && !(cesiumOverlayAttribute && kDebugRasterOverlayUsesSphericalTextureCoordinates)
                 ? readVec2Float(texcoordBase, texcoordStride, i)
                 : sphericalUvFromWorldPosition(transform, position);
-            if (!std::isfinite(texcoord[0]) || !std::isfinite(texcoord[1]))
-                throw std::runtime_error("Cesium glTF texture coordinate contains non-finite values");
-            minU = std::min(minU, texcoord[0]);
-            minV = std::min(minV, texcoord[1]);
-            maxU = std::max(maxU, texcoord[0]);
-            maxV = std::max(maxV, texcoord[1]);
+            const bool finiteTexcoord = std::isfinite(texcoord[0]) && std::isfinite(texcoord[1]);
+            if (!finiteTexcoord && !cesiumOverlayAttribute)
+                throw std::runtime_error(std::string("Cesium glTF ") + texcoordSemantic + " contains non-finite values");
+            result.hasNonFiniteOverlayTextureCoordinates |= !finiteTexcoord;
 
             CesiumBgfxVertex& vertex = result.vertices[static_cast<size_t>(i)];
             vertex.px = position[0];
@@ -1009,12 +1021,6 @@ namespace {
             vertex.nz = normal[2];
             vertex.u = texcoord[0];
             vertex.v = texcoord[1];
-        }
-        if (cesiumOverlayAttribute && !g_loggedCesiumOverlayUvRange) {
-            LOG_DEBUG("CesiumBgfxRenderAdapter", "Cesium raster overlay UV range before clamp u=[" +
-                                                  std::to_string(minU) + "," + std::to_string(maxU) +
-                                                  "] v=[" + std::to_string(minV) + "," + std::to_string(maxV) + "]");
-            g_loggedCesiumOverlayUvRange = true;
         }
 
         if (primitive.indices >= 0) {
@@ -1031,6 +1037,25 @@ namespace {
             result.indices.resize(result.vertices.size());
             for (uint32_t i = 0; i < result.indices.size(); ++i)
                 result.indices[i] = i;
+        }
+
+        float minU = std::numeric_limits<float>::max();
+        float minV = std::numeric_limits<float>::max();
+        float maxU = std::numeric_limits<float>::lowest();
+        float maxV = std::numeric_limits<float>::lowest();
+        for (const CesiumBgfxVertex& vertex : result.vertices) {
+            if (!std::isfinite(vertex.u) || !std::isfinite(vertex.v))
+                continue;
+            minU = std::min(minU, vertex.u);
+            minV = std::min(minV, vertex.v);
+            maxU = std::max(maxU, vertex.u);
+            maxV = std::max(maxV, vertex.v);
+        }
+        if (cesiumOverlayAttribute && !g_loggedCesiumOverlayUvRange) {
+            LOG_DEBUG("CesiumBgfxRenderAdapter", "Cesium raster overlay UV range before clamp u=[" +
+                                                  std::to_string(minU) + "," + std::to_string(maxU) +
+                                                  "] v=[" + std::to_string(minV) + "," + std::to_string(maxV) + "]");
+            g_loggedCesiumOverlayUvRange = true;
         }
 
         if (primitive.material >= 0) {
@@ -1352,6 +1377,12 @@ void* CesiumBgfxRenderAdapter::prepareInMainThread(Cesium3DTilesSelection::Tile&
     const std::optional<CesiumGeometry::Rectangle> rectangle = tileRectangle(tile);
     if (rectangle) {
         const GeneratedUvStats stats = regenerateGeneratedTextureCoordinates(*loadResources, *rectangle);
+        if (stats.nonFiniteOverlayRepaired > 0 && !g_loggedNonFiniteOverlayUvRepair) {
+            LOG_DEBUG("CesiumBgfxRenderAdapter",
+                      "Reconstructed " + std::to_string(stats.nonFiniteOverlayRepaired) +
+                          " non-finite overlay UV vertices from tile cartographic bounds");
+            g_loggedNonFiniteOverlayUvRepair = true;
+        }
         // Verification for the pole-smear fix: polarRepaired must equal
         // polar on any tile touching a pole, and the u range must be a clean
         // sub-interval of [0,1] matching the tile's longitude span. Logged
@@ -1365,9 +1396,14 @@ void* CesiumBgfxRenderAdapter::prepareInMainThread(Cesium3DTilesSelection::Tile&
                       " verts=" + std::to_string(stats.vertices) +
                       " polar=" + std::to_string(stats.polarVertices) +
                       " repaired=" + std::to_string(stats.polarRepaired) +
+                      " overlayRepaired=" + std::to_string(stats.nonFiniteOverlayRepaired) +
                       " u=[" + std::to_string(stats.minU) + "," + std::to_string(stats.maxU) + "]" +
                       " v=[" + std::to_string(stats.minV) + "," + std::to_string(stats.maxV) + "]");
         }
+    }
+    for (const CpuPrimitive& primitive : loadResources->primitives) {
+        if (primitive.hasNonFiniteOverlayTextureCoordinates)
+            throw std::runtime_error("Cesium tile has non-finite overlay UVs but no usable cartographic bounds");
     }
     return createGpuResources(loadResources.get());
 }

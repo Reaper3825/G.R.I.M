@@ -24,6 +24,8 @@ public:
     void requestResetCamera() override;
     void requestSetLayerVisibility(const std::string& id, bool visible) override;
     void requestSetLayerOpacity(const std::string& id, float opacity) override;
+    void requestSetLodOverrideEnabled(bool enabled) override;
+    void requestSetLodOverrideLevel(int level) override;
     void requestUpsertGroup(const std::string& originalId,
                             const std::string& name,
                             const std::string& color) override;

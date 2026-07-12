@@ -63,7 +63,7 @@ __global__ void kernelBootstrapSlotEmbeddings(
     const float val = values[slot];
     extern __shared__ float smem[];
     for (int d = threadIdx.x; d < d_model; d += blockDim.x) {
-        float emb_d = val * W_val2emb[d] + b_val2emb[d];
+        float emb_d = val * W_val2emb[d] + (b_val2emb ? b_val2emb[d] : 0.0f);
         state_embeds[static_cast<size_t>(slot) * d_model + d] = emb_d;
         smem[d] = emb_d;
     }

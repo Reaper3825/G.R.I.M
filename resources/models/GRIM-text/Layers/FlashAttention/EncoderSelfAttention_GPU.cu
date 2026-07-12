@@ -56,23 +56,29 @@ namespace {
                                      "] got=[" + std::to_string(wo_shape.rows) + "," +
                                      std::to_string(wo_shape.cols) + "]");
         }
-        if (hp.use_bias) {
+        if (hp.qkv_bias_enabled) {
             if (!b_qkv.data) {
-                throw std::runtime_error("encoderSelfAttentionForward: hp.use_bias=true but b_qkv.data is NULL");
-            }
-            if (!b_o.data) {
-                throw std::runtime_error("encoderSelfAttentionForward: hp.use_bias=true but b_o.data is NULL");
+                throw std::runtime_error("encoderSelfAttentionForward: qkv_bias_enabled=true but b_qkv.data is NULL");
             }
             if (static_cast<int>(b_qkv.numel()) != hp.qkv_dim) {
                 throw std::runtime_error("encoderSelfAttentionForward: b_qkv numel mismatch. expected=" +
                                          std::to_string(hp.qkv_dim) + " got=" +
                                          std::to_string(b_qkv.numel()));
             }
+        } else if (b_qkv.data) {
+            throw std::runtime_error("encoderSelfAttentionForward: qkv_bias_enabled=false but b_qkv is allocated");
+        }
+        if (hp.output_bias_enabled) {
+            if (!b_o.data) {
+                throw std::runtime_error("encoderSelfAttentionForward: output_bias_enabled=true but b_o.data is NULL");
+            }
             if (static_cast<int>(b_o.numel()) != hp.d_model) {
                 throw std::runtime_error("encoderSelfAttentionForward: b_o numel mismatch. expected=" +
                                          std::to_string(hp.d_model) + " got=" +
                                          std::to_string(b_o.numel()));
             }
+        } else if (b_o.data) {
+            throw std::runtime_error("encoderSelfAttentionForward: output_bias_enabled=false but b_o is allocated");
         }
     }
 
@@ -164,7 +170,7 @@ void encoderSelfAttentionForward(
     if (qkv_debug >= 3) {
         autograd::checkQKVTensorFinite("AutogradQKV:ln1_out", norm_input, request.stream);
         autograd::checkQKVTensorFinite("AutogradQKV:W_qkv", W_qkv, request.stream);
-        if (request.hp.use_bias) {
+        if (request.hp.qkv_bias_enabled) {
             autograd::checkQKVTensorFinite("AutogradQKV:b_qkv", b_qkv, request.stream);
         }
     }
@@ -177,7 +183,7 @@ void encoderSelfAttentionForward(
         autograd::checkQKVTensorFinite("AutogradQKV:qkv_out_prebias", qkv_out, request.stream);
     }
 
-    if (request.hp.use_bias) {
+    if (request.hp.qkv_bias_enabled) {
         qkv_out = autograd::broadcast_add(qkv_out, b_qkv, request.stream);
     }
     autograd::logQKVProjectionEquation(
@@ -313,7 +319,7 @@ void encoderSelfAttentionForward(
         throw std::runtime_error("encoderSelfAttentionForward: attn_out.data is NULL before output projection matmul");
     }
     proj_out = autograd::matmul(attn_out, W_o, request.stream, true);
-    if (request.hp.use_bias) {
+    if (request.hp.output_bias_enabled) {
         proj_out = autograd::broadcast_add(proj_out, b_o, request.stream);
     }
 
@@ -405,7 +411,7 @@ void encoderSelfAttentionForwardCached(
 
     // 1. QKV projection (identical to the training-time facade).
     qkv_out = autograd::matmul(norm_input, W_qkv, request.stream, true);
-    if (request.hp.use_bias) {
+    if (request.hp.qkv_bias_enabled) {
         qkv_out = autograd::broadcast_add(qkv_out, b_qkv, request.stream);
     }
 
@@ -479,7 +485,7 @@ void encoderSelfAttentionForwardCached(
         throw std::runtime_error("encoderSelfAttentionForwardCached: attn_out.data is NULL before output projection");
     }
     proj_out = autograd::matmul(attn_out, W_o, request.stream, true);
-    if (request.hp.use_bias) {
+    if (request.hp.output_bias_enabled) {
         proj_out = autograd::broadcast_add(proj_out, b_o, request.stream);
     }
 }

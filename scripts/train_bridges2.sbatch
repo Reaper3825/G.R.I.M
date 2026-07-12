@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=grim-train
 #SBATCH --partition=GPU-shared
-#SBATCH --account=cis210058p
+#SBATCH --account=cis250124p
 #SBATCH --gpus=h100-80:1
 #SBATCH --time=24:00:00
 #SBATCH --nodes=1
@@ -45,7 +45,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
   exit 1
 fi
 
-GRIM_ROOT="${GRIM_BRIDGES2_DIR:-/ocean/projects/cis210058p/uwadkins/G.R.I.M}"
+GRIM_ROOT="${GRIM_BRIDGES2_DIR:-/ocean/projects/cis250124p/uwadkins/G.R.I.M}"
 cd "$GRIM_ROOT" || {
   echo "ERROR: cannot cd to GRIM_ROOT=$GRIM_ROOT (set GRIM_BRIDGES2_DIR if your clone lives elsewhere)." >&2
   exit 1

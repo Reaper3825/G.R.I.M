@@ -102,17 +102,13 @@ void validateEncodingParameters(const EncodingLayerParameterTensors* parameters,
     if (!parameters->W_o.data) {
         throw std::runtime_error(std::string(context) + ": W_o parameter tensor is required");
     }
-    if (hp.use_bias) {
-        if (!parameters->b_qkv.data) {
-            throw std::runtime_error(std::string(context) + ": hp.use_bias=true requires b_qkv parameter tensor");
-        }
-        if (!parameters->b_o.data) {
-            throw std::runtime_error(std::string(context) + ": hp.use_bias=true requires b_o parameter tensor");
-        }
-    } else {
-        if (parameters->b_qkv.data || parameters->b_o.data) {
-            throw std::runtime_error(std::string(context) + ": hp.use_bias=false but bias parameter tensors were provided");
-        }
+    if (hp.attention_qkv_bias_enabled != static_cast<bool>(parameters->b_qkv.data)) {
+        throw std::runtime_error(std::string(context) +
+                                 ": attention_qkv_bias_enabled does not match b_qkv allocation");
+    }
+    if (hp.attention_output_bias_enabled != static_cast<bool>(parameters->b_o.data)) {
+        throw std::runtime_error(std::string(context) +
+                                 ": attention_output_bias_enabled does not match b_o allocation");
     }
     if (hp.use_layer_scale) {
         if (!parameters->layer_scale1.data) {
@@ -214,8 +210,8 @@ void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
     const Tensor& rms2_gamma = encoding_parameters->rms2_gamma;
     const Tensor& W_qkv = encoding_parameters->W_qkv;
     const Tensor& W_o = encoding_parameters->W_o;
-    const Tensor* b_qkv = hp.use_bias ? &encoding_parameters->b_qkv : nullptr;
-    const Tensor* b_o = hp.use_bias ? &encoding_parameters->b_o : nullptr;
+    const Tensor* b_qkv = hp.attention_qkv_bias_enabled ? &encoding_parameters->b_qkv : nullptr;
+    const Tensor* b_o = hp.attention_output_bias_enabled ? &encoding_parameters->b_o : nullptr;
     const Tensor* layer_scale1 = hp.use_layer_scale ? &encoding_parameters->layer_scale1 : nullptr;
     const Tensor* layer_scale2 = hp.use_layer_scale ? &encoding_parameters->layer_scale2 : nullptr;
     Tensor empty_b_qkv;

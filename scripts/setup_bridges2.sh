@@ -5,7 +5,7 @@
 #
 # Usage:
 #   ./scripts/setup_bridges2.sh
-#   BRIDGES2_USER=uwadkins ACCESS_ALLOC=cis210058p ./scripts/setup_bridges2.sh
+#   BRIDGES2_USER=uwadkins ACCESS_ALLOC=cis250124p ./scripts/setup_bridges2.sh
 #   ./scripts/setup_bridges2.sh --generate-key
 #   ./scripts/setup_bridges2.sh --install-key
 # ============================================================
@@ -15,7 +15,7 @@ set -euo pipefail
 HOST_ALIAS="${BRIDGES2_HOST_ALIAS:-bridges2}"
 HOST_NAME="${BRIDGES2_HOST_NAME:-bridges2.psc.edu}"
 BRIDGES2_USER="${BRIDGES2_USER:-}"
-ACCESS_ALLOC="${ACCESS_ALLOC:-cis210058p}"
+ACCESS_ALLOC="${ACCESS_ALLOC:-cis250124p}"
 IDENTITY_FILE="${BRIDGES2_IDENTITY_FILE:-$HOME/.ssh/id_ed25519}"
 SSH_CONFIG="${SSH_CONFIG:-$HOME/.ssh/config}"
 GENERATE_KEY=false

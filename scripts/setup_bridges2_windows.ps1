@@ -8,7 +8,7 @@ param(
     [string]$HostAlias = "bridges2",
     [string]$HostName = "bridges2.psc.edu",
     [string]$Bridges2User = "",
-    [string]$AccessAllocation = "cis210058p",
+    [string]$AccessAllocation = "cis250124p",
     [string]$IdentityFile = "~/.ssh/id_ed25519",
     [string]$RemoteRepoDir = "",
     [switch]$GenerateKeyIfMissing,

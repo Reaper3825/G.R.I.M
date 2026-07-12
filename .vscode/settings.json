@@ -21,7 +21,6 @@
   "[json]": {
     "editor.defaultFormatter": "esbenp.prettier-vscode"
   },
-
   "cmake.sourceDirectory": "${workspaceFolder}",
   "cmake.configurePreset": "release-local",
   "cmake.buildPreset": "release-local",

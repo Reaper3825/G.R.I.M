@@ -450,6 +450,7 @@ namespace {
         options.enableOcclusionCulling = false;
         options.enableLodTransitionPeriod = true;
         options.lodTransitionLength = static_cast<float>(config.lodTransitionLengthSeconds);
+        options.kickDescendantsWhileFadingIn = false;
         options.credit = std::string("Cesium Native ") + config.terrainProvider + " terrain";
         options.loadErrorCallback = [](const Cesium3DTilesSelection::TilesetLoadFailureDetails& details) {
             // Never throw from inside Cesium callbacks: individual tile/network
@@ -567,6 +568,8 @@ struct GeoSpatialRuntime::CesiumRuntimeContext final {
         if (config.terrainProvider != "cesium_ion")
             throw std::runtime_error("GeoSpatialRuntime cannot create unsupported terrain provider '" + config.terrainProvider + "'");
 
+        observedLodLevel = -1;
+        lodOverrideScreenSpaceError = tilesetOptions.maximumScreenSpaceError;
         for (RasterLayerState& layer : rasterLayers)
             layer.overlay.reset();
         std::vector<float> activeOpacities;
@@ -632,6 +635,26 @@ struct GeoSpatialRuntime::CesiumRuntimeContext final {
         updateAdapterOpacities();
     }
 
+    void setLodOverrideEnabled(bool enabled)
+    {
+        lodOverrideEnabled = enabled;
+        if (!tileset)
+            return;
+        if (enabled) {
+            lodOverrideScreenSpaceError = tileset->getOptions().maximumScreenSpaceError;
+        } else {
+            lodOverrideScreenSpaceError = tilesetOptions.maximumScreenSpaceError;
+            tileset->getOptions().maximumScreenSpaceError = tilesetOptions.maximumScreenSpaceError;
+        }
+    }
+
+    void setLodOverrideLevel(int level)
+    {
+        if (level < 0 || level > 20)
+            throw std::runtime_error("GeoSpatialRuntime LOD override level must be within [0, 20]");
+        lodOverrideLevel = level;
+    }
+
     std::vector<GeoSpatialLayerSnapshot> layerSnapshots(bool terrainVisible) const
     {
         std::vector<GeoSpatialLayerSnapshot> result;
@@ -675,6 +698,37 @@ struct GeoSpatialRuntime::CesiumRuntimeContext final {
             LOG_DEBUG("GeoSpatialRuntime", "Cesium updateFrame: update view group");
         const Cesium3DTilesSelection::ViewUpdateResult& updateResult =
             tileset->updateViewGroup(tileset->getDefaultViewGroup(), viewStates, dtSeconds);
+        std::vector<int> selectedLevels;
+        selectedLevels.reserve(updateResult.tilesToRenderThisFrame.size());
+        for (const Cesium3DTilesSelection::Tile::ConstPointer& tile : updateResult.tilesToRenderThisFrame) {
+            if (!tile)
+                continue;
+            const auto* quadtreeID = std::get_if<CesiumGeometry::QuadtreeTileID>(&tile->getTileID());
+            if (quadtreeID)
+                selectedLevels.push_back(static_cast<int>(quadtreeID->level));
+        }
+        if (selectedLevels.empty()) {
+            observedLodLevel = -1;
+            observedLodMinimum = -1;
+            observedLodMaximum = -1;
+        } else {
+            const size_t middle = selectedLevels.size() / 2;
+            std::nth_element(selectedLevels.begin(), selectedLevels.begin() + middle, selectedLevels.end());
+            observedLodLevel = selectedLevels[middle];
+            const auto [minimumLevel, maximumLevel] = std::minmax_element(selectedLevels.begin(), selectedLevels.end());
+            observedLodMinimum = *minimumLevel;
+            observedLodMaximum = *maximumLevel;
+        }
+        if (lodOverrideEnabled && observedLodLevel >= 0 && observedLodLevel != lodOverrideLevel) {
+            const int levelDelta = observedLodLevel - lodOverrideLevel;
+            lodOverrideScreenSpaceError = std::clamp(
+                lodOverrideScreenSpaceError * std::pow(2.0, static_cast<double>(levelDelta)),
+                0.01,
+                1048576.0);
+            tileset->getOptions().maximumScreenSpaceError = lodOverrideScreenSpaceError;
+        } else if (!lodOverrideEnabled) {
+            tileset->getOptions().maximumScreenSpaceError = tilesetOptions.maximumScreenSpaceError;
+        }
         {
             static uint32_t s_cameraDiagFrame = 0;
             if ((s_cameraDiagFrame++ % 90u) == 0) {
@@ -688,7 +742,12 @@ struct GeoSpatialRuntime::CesiumRuntimeContext final {
                           " camera=" + formatCartographic(cameraFrame.cameraCartographic) +
                           " yaw=" + std::to_string(cameraFrame.yawRadians) +
                           " pitch=" + std::to_string(cameraFrame.pitchRadians) +
-                          " dist=" + std::to_string(cameraFrame.orbitDistanceMeters));
+                          " dist=" + std::to_string(cameraFrame.orbitDistanceMeters) +
+                          " lodObserved=" + std::to_string(observedLodMinimum) + "/" +
+                              std::to_string(observedLodLevel) + "/" + std::to_string(observedLodMaximum) +
+                          " lodTarget=" + std::to_string(lodOverrideLevel) +
+                          " lodOverride=" + std::to_string(lodOverrideEnabled) +
+                          " sse=" + std::to_string(tileset->getOptions().maximumScreenSpaceError));
             }
         }
         if (logFirstFrame)
@@ -740,6 +799,12 @@ struct GeoSpatialRuntime::CesiumRuntimeContext final {
     int32_t loadedTileCount = 0;
     float loadProgress = 0.0f;
     int64_t loadedBytes = 0;
+    bool lodOverrideEnabled = false;
+    int lodOverrideLevel = 6;
+    int observedLodLevel = -1;
+    int observedLodMinimum = -1;
+    int observedLodMaximum = -1;
+    double lodOverrideScreenSpaceError = 2.0;
     bool firstUpdateFrameLogged = false;
 
 private:
@@ -967,6 +1032,42 @@ void GeoSpatialRuntime::requestSetLayerOpacity(const std::string& id, float opac
     }
 }
 
+void GeoSpatialRuntime::requestSetLodOverrideEnabled(bool enabled)
+{
+    std::lock_guard lock(mutex_);
+    try {
+        if (!initialized_) {
+            setNotInitializedStatusLocked("change LOD override");
+            return;
+        }
+        if (!cesium_)
+            throw std::runtime_error("GeoSpatialRuntime initialized without CesiumRuntimeContext");
+        cesium_->setLodOverrideEnabled(enabled);
+        snapshot_.lod_override_enabled = enabled;
+        snapshot_.cesium_status = enabled ? "LOD override enabled" : "Automatic LOD selection enabled";
+    } catch (const std::exception& error) {
+        setActionFailedStatusLocked("Set LOD override", error);
+    }
+}
+
+void GeoSpatialRuntime::requestSetLodOverrideLevel(int level)
+{
+    std::lock_guard lock(mutex_);
+    try {
+        if (!initialized_) {
+            setNotInitializedStatusLocked("change LOD level");
+            return;
+        }
+        if (!cesium_)
+            throw std::runtime_error("GeoSpatialRuntime initialized without CesiumRuntimeContext");
+        cesium_->setLodOverrideLevel(level);
+        snapshot_.lod_override_level = level;
+        snapshot_.cesium_status = "LOD override target set to level " + std::to_string(level);
+    } catch (const std::exception& error) {
+        setActionFailedStatusLocked("Set LOD level", error);
+    }
+}
+
 void GeoSpatialRuntime::requestSavePointCatalog()
 {
     std::lock_guard lock(mutex_);
@@ -1079,6 +1180,9 @@ void GeoSpatialRuntime::updateProviderStatusLocked()
     snapshot_.active_tileset = cesium_->tilesetStatus();
     snapshot_.imagery_enabled = cesium_->anyRasterLayerVisible();
     snapshot_.layers = cesium_->layerSnapshots(snapshot_.terrain_enabled);
+    snapshot_.lod_override_enabled = cesium_->lodOverrideEnabled;
+    snapshot_.lod_override_level = cesium_->lodOverrideLevel;
+    snapshot_.observed_lod_level = cesium_->observedLodLevel;
 }
 
 void GeoSpatialRuntime::handleViewportInput(const PlatformWindow::ViewportInputEvent& event)
