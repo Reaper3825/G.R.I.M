@@ -375,14 +375,17 @@ void UIInputBox::update(const InputState& input, float dt) {
     // -------------------------------------------------------
     if (Key::wasPressed(KeyCode::Enter)) {
         std::string submittedText = buffer;
-        buffer.clear();
-        cursorPos = 0;
-        clearSelection();
-        if (externalBind) externalBind->clear();
+        if (externalBind) *externalBind = submittedText;
 
         setFocused(false);
         g_activeInputBox = nullptr;
         submitTextInput(submittedText);
+        if (clearOnSubmit) {
+            buffer.clear();
+            if (externalBind) externalBind->clear();
+        }
+        cursorPos = static_cast<int>(buffer.length());
+        clearSelection();
         return;
     }
 

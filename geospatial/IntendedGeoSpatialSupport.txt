@@ -1,0 +1,12 @@
+Geospatial Viewport intented feature use 
+
+Using Cesium for accurate planetary coordinates and measurements the intention of this feature is:
+
+Use Cases:
+- Device Location Viewing
+- Runtime User Creatable viewing groups
+- Model learned POI
+- User set POIs
+
+Next steps: 
+UI support apart from soul viewing purposes we need a side panel for a tool bar and data

@@ -387,26 +387,7 @@ void UIRoot::bringToFront(const std::string& name)
 
 bool UIRoot::shouldReceiveInputAt(float x, float y) const
 {
-    // Check if position is over any visible panel
-    auto panels = snapshotPanels();
-    for (const auto& panel : panels)
-    {
-        if (!panel || !panel->isVisible())
-            continue;
-            
-        Vec2 pos = panel->getPosition();
-        Vec2 size = panel->getSize();
-        
-        if (x >= pos.x && x <= pos.x + size.x &&
-            y >= pos.y && y <= pos.y + size.y)
-        {
-            if (panel->shouldPassThroughAt(x, y))
-                continue;
-            return true; // Mouse is over a visible panel
-        }
-    }
-    
-    return false; // Mouse is not over any UI, pass through
+    return shouldReceiveInputAtCached(x, y);
 }
 
 bool UIRoot::hasVisiblePanels() const

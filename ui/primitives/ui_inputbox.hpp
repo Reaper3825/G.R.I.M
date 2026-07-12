@@ -17,6 +17,7 @@ public:
     const std::string& getText() const { return buffer; }
     void setText(const std::string& text);
     void clear();
+    void setClearOnSubmit(bool clear) { clearOnSubmit = clear; }
     
     bool wantsFocus() const override { return true; }
 
@@ -33,6 +34,7 @@ private:
     std::string buffer;
     std::string placeholder;
     std::string* externalBind = nullptr;
+    bool clearOnSubmit = false;
 
     int cursorPos = 0;   // byte offset into buffer
     int selStart = 0;    // selection anchor

@@ -1126,8 +1126,8 @@ void UISettingsMenu::createGeoSpatialWidgets() {
         geospatial["terrain"] = nlohmann::json::object();
     if (!geospatial.contains("imagery") || !geospatial["imagery"].is_object())
         geospatial["imagery"] = nlohmann::json::object();
-    if (!geospatial["imagery"].contains("url_template") || !geospatial["imagery"]["url_template"].is_object())
-        geospatial["imagery"]["url_template"] = nlohmann::json::object();
+    if (!geospatial["imagery"].contains("layers") || !geospatial["imagery"]["layers"].is_array())
+        throw std::runtime_error("GeoSpatial settings require geospatial.imagery.layers array");
     if (!geospatial.contains("cache") || !geospatial["cache"].is_object())
         geospatial["cache"] = nlohmann::json::object();
     if (!geospatial.contains("loading") || !geospatial["loading"].is_object())
@@ -1138,7 +1138,6 @@ void UISettingsMenu::createGeoSpatialWidgets() {
     auto& home = geospatial["home"];
     auto& terrain = geospatial["terrain"];
     auto& imagery = geospatial["imagery"];
-    auto& urlTemplate = imagery["url_template"];
     auto& cache = geospatial["cache"];
     auto& loading = geospatial["loading"];
     auto& camera = geospatial["camera"];
@@ -1197,17 +1196,6 @@ void UISettingsMenu::createGeoSpatialWidgets() {
         scrollBox->addChild(toggle);
     };
 
-    std::vector<std::string> terrainProviders = {"ellipsoid"};
-    auto terrainDropdown = std::make_shared<UIDropdown>(
-        "Terrain Provider:", terrainProviders, 0,
-        [this, &terrain](int, const std::string& val) {
-            terrain["provider"] = val;
-            hasChanges = true;
-        }
-    );
-    terrainDropdown->setSize(widgetWidth, widgetHeight);
-    scrollBox->addChild(terrainDropdown);
-
     bool terrainEnabled = terrain.value("enabled_on_start", true);
     auto terrainToggle = std::make_shared<UIToggle>(
         "Terrain on Start:", terrainEnabled,
@@ -1219,64 +1207,35 @@ void UISettingsMenu::createGeoSpatialWidgets() {
     terrainToggle->setSize(widgetWidth, widgetHeight);
     scrollBox->addChild(terrainToggle);
 
-    std::vector<std::string> imageryProviders = {"url_template", "debug_colorize", "none"};
-    std::string imageryProvider = imagery.value("provider", "url_template");
-    int imageryProviderIndex = 0;
-    for (size_t i = 0; i < imageryProviders.size(); ++i) {
-        if (imageryProviders[i] == imageryProvider) {
-            imageryProviderIndex = static_cast<int>(i);
-            break;
+    for (size_t index = 0; index < imagery["layers"].size(); ++index) {
+        nlohmann::json& layer = imagery["layers"][index];
+        if (!layer.is_object() || !layer.contains("name") || !layer["name"].is_string() ||
+            !layer.contains("visible_on_start") || !layer["visible_on_start"].is_boolean() ||
+            !layer.contains("opacity") || !layer["opacity"].is_number()) {
+            throw std::runtime_error("GeoSpatial settings require name, visible_on_start, and opacity for every imagery layer");
         }
+        const std::string label = layer["name"].get<std::string>() + " on Start:";
+        auto layerToggle = std::make_shared<UIToggle>(
+            label, layer["visible_on_start"].get<bool>(),
+            [this, index](bool value) {
+                pendingConfig["geospatial"]["imagery"]["layers"].at(index)["visible_on_start"] = value;
+                hasChanges = true;
+            }
+        );
+        layerToggle->setSize(widgetWidth, widgetHeight);
+        scrollBox->addChild(layerToggle);
+
+        auto opacitySlider = std::make_shared<UISlider>(
+            layer["name"].get<std::string>() + " Opacity:", 0.0f, 1.0f,
+            layer["opacity"].get<float>(),
+            [this, index](float value) {
+                pendingConfig["geospatial"]["imagery"]["layers"].at(index)["opacity"] = value;
+                hasChanges = true;
+            }, 0.05f
+        );
+        opacitySlider->setSize(widgetWidth, widgetHeight);
+        scrollBox->addChild(opacitySlider);
     }
-    auto imageryDropdown = std::make_shared<UIDropdown>(
-        "Imagery Provider:", imageryProviders, imageryProviderIndex,
-        [this, &imagery](int, const std::string& val) {
-            imagery["provider"] = val;
-            hasChanges = true;
-        }
-    );
-    imageryDropdown->setSize(widgetWidth, widgetHeight);
-    scrollBox->addChild(imageryDropdown);
-
-    bool imageryEnabled = imagery.value("enabled_on_start", false);
-    auto imageryToggle = std::make_shared<UIToggle>(
-        "Imagery on Start:", imageryEnabled,
-        [this, &imagery](bool val) {
-            imagery["enabled_on_start"] = val;
-            hasChanges = true;
-        }
-    );
-    imageryToggle->setSize(widgetWidth, widgetHeight);
-    scrollBox->addChild(imageryToggle);
-
-    std::string imageryUrl = urlTemplate.value(
-        "url",
-        "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/2026-07-07/GoogleMapsCompatible_Level9/{z}/{reverseY}/{x}.jpg");
-    auto imageryUrlArea = std::make_shared<UITextArea>(
-        "Imagery URL:", imageryUrl,
-        [this, &urlTemplate](const std::string& val) {
-            urlTemplate["url"] = val;
-            hasChanges = true;
-        }
-    );
-    imageryUrlArea->setSize(widgetWidth, 78.0f);
-    scrollBox->addChild(imageryUrlArea);
-
-    std::string imageryCredit = urlTemplate.value("credit", "Source: NASA GIBS VIIRS SNPP Corrected Reflectance True Color");
-    auto imageryCreditArea = std::make_shared<UITextArea>(
-        "Imagery Credit:", imageryCredit,
-        [this, &urlTemplate](const std::string& val) {
-            urlTemplate["credit"] = val;
-            hasChanges = true;
-        }
-    );
-    imageryCreditArea->setSize(widgetWidth, 62.0f);
-    scrollBox->addChild(imageryCreditArea);
-
-    addIntegerSlider("Imagery Min LOD:", urlTemplate, "minimum_level", 0.0f, 10.0f, 2, 1.0f);
-    addIntegerSlider("Imagery Max LOD:", urlTemplate, "maximum_level", 1.0f, 24.0f, 9, 1.0f);
-    addIntegerSlider("Imagery Tile W:", urlTemplate, "tile_width", 128.0f, 1024.0f, 256, 128.0f);
-    addIntegerSlider("Imagery Tile H:", urlTemplate, "tile_height", 128.0f, 1024.0f, 256, 128.0f);
 
     addNumberSlider("Home Longitude:", home, "longitude_degrees", -180.0f, 180.0f, -75.59777f, 0.0001f);
     addNumberSlider("Home Latitude:", home, "latitude_degrees", -90.0f, 90.0f, 40.03883f, 0.0001f);
@@ -1294,16 +1253,19 @@ void UISettingsMenu::createGeoSpatialWidgets() {
     addIntegerSlider("Raster Loads:", loading, "maximum_simultaneous_raster_loads", 1.0f, 48.0f, 12, 1.0f);
     addNumberSlider("Max Screen Error:", loading, "maximum_screen_space_error", 1.0f, 32.0f, 16.0f, 0.5f);
     addNumberSlider("Culled Screen Error:", loading, "culled_screen_space_error", 4.0f, 128.0f, 64.0f, 1.0f);
+    addNumberSlider("LOD Sensitivity:", loading, "lod_sensitivity_multiplier", 0.1f, 4.0f, 1.0f, 0.1f);
+    addNumberSlider("LOD Fade (s):", loading, "lod_transition_length_seconds", 0.05f, 2.0f, 0.2f, 0.05f);
+    addToggle("Favor Center Tiles:", loading, "favor_center_tiles", true);
     addNumberSlider("Raster Screen Error:", loading, "maximum_raster_screen_space_error", 0.25f, 4.0f, 0.75f, 0.25f);
     addIntegerSlider("Descendant Limit:", loading, "loading_descendant_limit", 0.0f, 256.0f, 20, 1.0f);
     addToggle("Forbid Tile Holes:", loading, "forbid_holes", false);
-    addNumberSlider("Main Load Budget:", loading, "main_thread_loading_time_limit_seconds", 0.5f, 20.0f, 4.0f, 0.5f);
-    addNumberSlider("Tile Unload Budget:", loading, "tile_cache_unload_time_limit_seconds", 0.1f, 10.0f, 1.0f, 0.1f);
+    addNumberSlider("Main Load Budget (ms):", loading, "main_thread_loading_time_limit_milliseconds", 0.0f, 32.0f, 16.0f, 0.5f);
+    addNumberSlider("Tile Unload Budget (ms):", loading, "tile_cache_unload_time_limit_milliseconds", 0.0f, 32.0f, 0.0f, 0.5f);
     addIntegerSlider("Raster Texture Max:", loading, "maximum_raster_texture_size", 256.0f, 4096.0f, 2048, 256.0f);
 
     addIntegerSlider("Asset Cache Items:", cache, "asset_cache_items", 512.0f, 65536.0f, 8192, 512.0f);
     addIntegerSlider("Cache Prune Every:", cache, "requests_per_prune", 16.0f, 4096.0f, 512, 16.0f);
-    addIntegerSlider("Tile Cache MB:", cache, "tile_cache_mb", 64.0f, 8192.0f, 512, 64.0f);
+    addIntegerSlider("Tile Cache MB:", cache, "tile_cache_mb", 64.0f, 8192.0f, 128, 64.0f);
     addIntegerSlider("Raster Cache MB:", cache, "raster_subtile_cache_mb", 16.0f, 2048.0f, 64, 16.0f);
 
     std::string cachePath = cache.value("database_path", "cache/geospatial/cesium_asset_cache.sqlite");

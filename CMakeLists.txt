@@ -214,7 +214,13 @@ if(APPLE)
 endif()
 
 if (MSVC)
+  target_compile_options(GRIM PRIVATE /Zi)
     target_link_options(GRIM PRIVATE /SUBSYSTEM:CONSOLE)
+  target_link_options(GRIM PRIVATE /DEBUG)
+endif()
+
+if(WIN32)
+  target_link_libraries(GRIM PRIVATE Dbghelp)
 endif()
 
 include(${CMAKE_SOURCE_DIR}/cmake/Dependencies.cmake)
@@ -261,12 +267,9 @@ else()
 endif()
 
 # =========================================================
-# Whisper / BX / BIMG / BGFX link directories
+# Whisper linkage
 # =========================================================
-# Link directories for whisper, bx, bimg, bgfx are added in cmake/Config.cmake
-# (only existing paths are added to avoid ld "search path not found" warnings).
-# order: bx → bimg → bgfx
-target_link_libraries(GRIM PRIVATE bx bimg bgfx)
+# Graphics libraries are linked once in cmake/Config.cmake.
 target_link_libraries(GRIM PRIVATE whisper)
 
 # macOS frameworks for platform window layer + Metal BGFX backend

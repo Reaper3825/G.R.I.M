@@ -1076,7 +1076,45 @@ fi
 
 # Sync repo
 BRIDGES2_SYNCED=false
-BRIDGES2_SYNC_REMOTE_CMD="cd $BRIDGES2_DIR && git fetch origin && git reset --hard origin/\$(git rev-parse --abbrev-ref HEAD)"
+BRIDGES2_GIT_LOCK_SWEEP="grim_git_lock=\"$BRIDGES2_DIR/.git/index.lock\";
+if [ -e \"\$grim_git_lock\" ]; then
+  grim_git_holder_pids=\"\";
+  if command -v lsof >/dev/null 2>&1; then
+    grim_git_holder_pids=\$(lsof -t \"\$grim_git_lock\" 2>/dev/null | sort -u | tr '\\n' ' ');
+  elif command -v fuser >/dev/null 2>&1; then
+    grim_git_holder_pids=\$(fuser \"\$grim_git_lock\" 2>/dev/null | tr ' ' '\\n' | sed '/^\$/d' | sort -u | tr '\\n' ' ');
+  fi;
+  grim_repo_git_pids=\"\";
+  for grim_proc_path in /proc/[0-9]*; do
+    [ -d \"\$grim_proc_path\" ] || continue;
+    grim_proc_cwd=\$(readlink \"\$grim_proc_path/cwd\" 2>/dev/null || true);
+    case \"\$grim_proc_cwd\" in
+      \"$BRIDGES2_DIR\"|\"$BRIDGES2_DIR\"/*) ;;
+      *) continue ;;
+    esac;
+    grim_proc_comm=\$(cat \"\$grim_proc_path/comm\" 2>/dev/null || true);
+    case \"\$grim_proc_comm\" in
+      git|git-*) grim_repo_git_pids=\"\$grim_repo_git_pids \${grim_proc_path##*/}\" ;;
+    esac;
+  done;
+  if [ -n \"\$grim_git_holder_pids\" ] || [ -n \"\$grim_repo_git_pids\" ]; then
+    echo \"ERROR: Git index lock is active: \$grim_git_lock\" >&2;
+    [ -n \"\$grim_git_holder_pids\" ] && echo \"  lock holder pids:\$grim_git_holder_pids\" >&2;
+    for grim_git_pid in \$grim_repo_git_pids; do
+      ps -p \"\$grim_git_pid\" -o pid=,ppid=,etime=,stat=,args= >&2 || true;
+    done;
+    echo '  Wait for the listed process to finish or terminate it explicitly, then rerun.' >&2;
+    exit 1;
+  fi;
+  echo \"  Git lock sweep: removing stale \$grim_git_lock\";
+  stat -c '    owner=%U group=%G size=%s modified=%y' \"\$grim_git_lock\" 2>/dev/null || true;
+  rm -f -- \"\$grim_git_lock\";
+  if [ -e \"\$grim_git_lock\" ]; then
+    echo \"ERROR: failed to remove stale Git index lock: \$grim_git_lock\" >&2;
+    exit 1;
+  fi;
+fi"
+BRIDGES2_SYNC_REMOTE_CMD="cd $BRIDGES2_DIR && $BRIDGES2_GIT_LOCK_SWEEP && git fetch origin && git reset --hard origin/\$(git rev-parse --abbrev-ref HEAD)"
 if [[ -z "${GRIM_BRIDGES2_SKIP_PULL:-}" ]]; then
   if [[ "$SINGLE_SHOT" == true ]]; then
     BRIDGES2_SYNCED=true   # the git sync runs inside the single combined ssh at submit time

@@ -15,6 +15,7 @@
 #include "core/window_manager.hpp"
 #include "core/plugin_manager.hpp"
 #include "core/input_parser.hpp"
+#include "core/crash_dump.hpp"
 #include "core/platform_input.hpp"
 #include "core/platform_clipboard.hpp"
 #include "core/platform_window.hpp"  
@@ -216,6 +217,7 @@ int main(int argc, char* argv[])
 {
     GRIM::CerrSuppressor cerrFilter;
     initLogger("grim.log");
+    GRIM::InstallCrashDumpHandler();
     LOG_PHASE("Initializing G.R.I.M", true);
 
     // ======================================================

@@ -69,7 +69,7 @@ public:
     void orbitByPixels(double deltaX, double deltaY, bool fineControl);
     void panByPixels(double deltaX, double deltaY, bool fineControl);
     void zoomBySteps(double wheelSteps);
-    void clampOrbit();
+    void clampOrbitDistance();
 
     UICameraFrame frame() const;
     UICameraRay rayFromViewportPixel(double pixelX, double pixelY) const;

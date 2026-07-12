@@ -11,8 +11,6 @@
 #include <stdexcept>
 
 namespace {
-    constexpr double kMinOrbitPitchRadians = -1.42;
-    constexpr double kMaxOrbitPitchRadians = 1.42;
     constexpr double kDefaultMinOrbitDistanceMeters = 500.0;
     constexpr double kMaxOrbitDistanceMultiplier = 5.0;
     constexpr double kOrbitRadiansPerPixel = 0.0045;
@@ -112,7 +110,7 @@ void UICamera::setZoomLimits(const UICameraZoomLimits& limits)
         throw std::runtime_error("UICamera maximum zoom distance must be greater than minimum distance");
 
     zoomLimits_ = limits;
-    clampOrbit();
+    clampOrbitDistance();
 }
 
 void UICamera::resetOrbit()
@@ -126,14 +124,14 @@ void UICamera::resetOrbit()
 
     zoomLimits_.minDistanceMeters = kDefaultMinOrbitDistanceMeters;
     zoomLimits_.maxDistanceMeters = orbitDistanceMeters_ * kMaxOrbitDistanceMultiplier;
-    clampOrbit();
+    clampOrbitDistance();
 }
 
 void UICamera::recenterHome()
 {
     orbitTargetEastMeters_ = 0.0;
     orbitTargetNorthMeters_ = 0.0;
-    clampOrbit();
+    clampOrbitDistance();
 }
 
 void UICamera::setOrbitDistanceMeters(double distanceMeters)
@@ -142,14 +140,13 @@ void UICamera::setOrbitDistanceMeters(double distanceMeters)
         throw std::runtime_error("UICamera orbit distance must be positive");
 
     orbitDistanceMeters_ = distanceMeters;
-    clampOrbit();
+    clampOrbitDistance();
 }
 
 void UICamera::orbitByRadians(double yawDeltaRadians, double pitchDeltaRadians)
 {
     yawRadians_ += yawDeltaRadians;
     pitchRadians_ += pitchDeltaRadians;
-    clampOrbit();
 }
 
 void UICamera::panByMeters(double eastMeters, double northMeters)
@@ -172,12 +169,11 @@ void UICamera::panByPixels(double deltaX, double deltaY, bool fineControl)
 void UICamera::zoomBySteps(double wheelSteps)
 {
     orbitDistanceMeters_ *= std::exp(-wheelSteps * kWheelZoomStep);
-    clampOrbit();
+    clampOrbitDistance();
 }
 
-void UICamera::clampOrbit()
+void UICamera::clampOrbitDistance()
 {
-    pitchRadians_ = std::clamp(pitchRadians_, kMinOrbitPitchRadians, kMaxOrbitPitchRadians);
     orbitDistanceMeters_ = std::clamp(
         orbitDistanceMeters_,
         zoomLimits_.minDistanceMeters,
@@ -219,8 +215,13 @@ UICameraFrame UICamera::frame() const
     if (!targetSurface)
         throw std::runtime_error("UICamera turntable camera position cannot be projected to WGS84");
 
-    const UICameraFrustum frameFrustum = frustumForCameraRadius(frustum_, cameraRadius);
+    UICameraFrustum frameFrustum = frustumForCameraRadius(frustum_, cameraRadius);
     const double aspect = static_cast<double>(frameFrustum.viewportWidth) / static_cast<double>(frameFrustum.viewportHeight);
+    // The rendered projection is vertical FOV x viewport aspect, so derive the
+    // horizontal FOV from those instead of trusting the configured value.
+    // Cesium's screen-space-error math and our pick rays both use this
+    // frustum; a mismatched pair skews LOD selection and picking.
+    frameFrustum.horizontalFovRadians = 2.0 * std::atan(std::tan(frameFrustum.verticalFovRadians * 0.5) * aspect);
     UICameraFrame result;
     result.targetEcef = *targetSurface;
     result.positionEcef = cameraPosition;

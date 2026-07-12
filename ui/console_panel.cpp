@@ -78,6 +78,7 @@ ConsolePanel::ConsolePanel()
     // Initialize console input box
     consoleInput = std::make_shared<UIInputBox>(&inputBuffer);
     consoleInput->setPlaceholder("Type command...");
+    consoleInput->setClearOnSubmit(true);
     consoleInput->setVisible(true);
     
     // ✅ Bind the OnTextSubmitted delegate to handle command execution

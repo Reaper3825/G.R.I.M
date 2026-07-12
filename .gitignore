@@ -8,6 +8,7 @@ scripts/train_anvil.sbatch
 scripts/README_ANVIL_RUN.md
 
 # Local API keys / secrets (never commit)
+ai_config.json
 ai_config.local.json
 
 # SSH keys / credentials (never commit)
@@ -233,3 +234,10 @@ data/*
 scripts/run_train_on_bridges2.sh
 scripts/train_bridges2.sbatch
 scripts/run_train_on_anvil.sh
+.dmp
+*.dmp*
+
+# Geospatial runtime cache databases (too large for GitHub)
+cache/geospatial/*.sqlite
+cache/geospatial/*.sqlite-shm
+cache/geospatial/*.sqlite-wal

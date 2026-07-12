@@ -208,6 +208,9 @@ if(CMAKE_CONFIGURATION_TYPES)
         "${CMAKE_SOURCE_DIR}/deps/lib/$<CONFIG>"
         "${CMAKE_SOURCE_DIR}/deps/lib"
         "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build/src/$<CONFIG>"
+        "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build-capacity/cmake/bgfx/$<CONFIG>"
+        "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build-capacity/cmake/bimg/$<CONFIG>"
+        "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build-capacity/cmake/bx/$<CONFIG>"
         "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/bgfx/$<CONFIG>"
         "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/bimg/$<CONFIG>"
         "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/bx/$<CONFIG>"
@@ -227,6 +230,9 @@ else()
         "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build/src/${CMAKE_BUILD_TYPE}"
         "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build/src"
         "${CMAKE_SOURCE_DIR}/external/whisper.cpp/build/ggml/src"
+        "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build-capacity/cmake/bgfx/${CMAKE_BUILD_TYPE}"
+        "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build-capacity/cmake/bimg/${CMAKE_BUILD_TYPE}"
+        "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build-capacity/cmake/bx/${CMAKE_BUILD_TYPE}"
         "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/bgfx/${CMAKE_BUILD_TYPE}"
         "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/bimg/${CMAKE_BUILD_TYPE}"
         "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build/cmake/bx/${CMAKE_BUILD_TYPE}"
@@ -250,6 +256,16 @@ foreach(_dir ${_flat_link_dirs})
     endif()
 endforeach()
 
+if(WIN32)
+    set(GRIM_BGFX_LIBRARIES
+        "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build-capacity/cmake/bgfx/$<CONFIG>/bgfx.lib"
+        "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build-capacity/cmake/bimg/$<CONFIG>/bimg.lib"
+        "${CMAKE_SOURCE_DIR}/external/bgfx.cmake/build-capacity/cmake/bx/$<CONFIG>/bx.lib"
+    )
+else()
+    set(GRIM_BGFX_LIBRARIES bgfx bimg bx)
+endif()
+
 target_link_libraries(GRIM PRIVATE
 
 
@@ -262,7 +278,7 @@ target_link_libraries(GRIM PRIVATE
     cpr
 
     # Graphics backend
-    bgfx bimg bx
+    ${GRIM_BGFX_LIBRARIES}
 
     ${GRIM_PERCEPTION_LIBS}
 )

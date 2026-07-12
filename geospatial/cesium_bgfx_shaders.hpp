@@ -11,6 +11,7 @@ enum class CesiumShaderUniform {
     LightParams,
     BaseColorFactor,
     OverlayTransform,
+    TextureParams,
     CameraPos,
     ColorParams,
     SurfaceParams,

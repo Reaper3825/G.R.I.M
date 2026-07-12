@@ -33,6 +33,7 @@ struct CesiumShaderState {
     bgfx::UniformHandle u_lightParams = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle u_baseColorFactor = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle u_overlayTransform = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle u_textureParams = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle u_cameraPos = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle u_colorParams = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle u_surfaceParams = BGFX_INVALID_HANDLE;
@@ -70,6 +71,7 @@ CesiumShaderState* cesiumShadersCreate()
     state->u_lightParams = bgfx::createUniform("u_lightParams", bgfx::UniformType::Vec4);
     state->u_baseColorFactor = bgfx::createUniform("u_baseColorFactor", bgfx::UniformType::Vec4);
     state->u_overlayTransform = bgfx::createUniform("u_overlayTransform", bgfx::UniformType::Vec4);
+    state->u_textureParams = bgfx::createUniform("u_textureParams", bgfx::UniformType::Vec4);
     state->u_cameraPos = bgfx::createUniform("u_cameraPos", bgfx::UniformType::Vec4);
     state->u_colorParams = bgfx::createUniform("u_colorParams", bgfx::UniformType::Vec4);
     state->u_surfaceParams = bgfx::createUniform("u_surfaceParams", bgfx::UniformType::Vec4);
@@ -93,6 +95,8 @@ void cesiumShadersDestroy(CesiumShaderState* shaders)
         bgfx::destroy(shaders->u_baseColorFactor);
     if (bgfx::isValid(shaders->u_overlayTransform))
         bgfx::destroy(shaders->u_overlayTransform);
+    if (bgfx::isValid(shaders->u_textureParams))
+        bgfx::destroy(shaders->u_textureParams);
     if (bgfx::isValid(shaders->u_cameraPos))
         bgfx::destroy(shaders->u_cameraPos);
     if (bgfx::isValid(shaders->u_colorParams))
@@ -124,6 +128,8 @@ bgfx::UniformHandle cesiumShadersGetUniform(const CesiumShaderState* shaders, Ce
             return shaders->u_baseColorFactor;
         case CesiumShaderUniform::OverlayTransform:
             return shaders->u_overlayTransform;
+        case CesiumShaderUniform::TextureParams:
+            return shaders->u_textureParams;
         case CesiumShaderUniform::CameraPos:
             return shaders->u_cameraPos;
         case CesiumShaderUniform::ColorParams:
