@@ -994,7 +994,7 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
             bool have_p_op_live = false;
             bool have_p_write_live = false;
 
-            auto ensureTransitionLossRaw = [&]() -> Tensor& {
+            auto ensureTransitionLossRaw = [&]() {
                 if (!have_transition_loss_raw) {
                     if (!teacher_row) {
                         throw std::runtime_error(
@@ -1016,47 +1016,42 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
                     transition_loss_raw = makeTransitionLoss(sout.v_out_tensor, expected_target_value, ctx.stream);
                     have_transition_loss_raw = true;
                 }
-                return transition_loss_raw;
             };
 
-            auto ensurePArg1Live = [&]() -> Tensor& {
+            auto ensurePArg1Live = [&]() {
                 if (!have_p_arg1_live) {
                     requirePositiveTemperature(sout.selection_temperature, b, k);
                     requireTensor(sout.arg1_logits_tensor, "arg1_logits_tensor", b, k);
                     p_arg1_live = autograd::softmax(sout.arg1_logits_tensor, sout.selection_temperature, ctx.stream);
                     have_p_arg1_live = true;
                 }
-                return p_arg1_live;
             };
 
-            auto ensurePArg2Live = [&]() -> Tensor& {
+            auto ensurePArg2Live = [&]() {
                 if (!have_p_arg2_live) {
                     requirePositiveTemperature(sout.selection_temperature, b, k);
                     requireTensor(sout.arg2_logits_tensor, "arg2_logits_tensor", b, k);
                     p_arg2_live = autograd::softmax(sout.arg2_logits_tensor, sout.selection_temperature, ctx.stream);
                     have_p_arg2_live = true;
                 }
-                return p_arg2_live;
             };
 
-            auto ensurePOpLive = [&]() -> Tensor& {
+            auto ensurePOpLive = [&]() {
                 if (!have_p_op_live) {
                     requirePositiveTemperature(sout.selection_temperature, b, k);
                     requireTensor(sout.op_logits_tensor, "op_logits_tensor", b, k);
                     p_op_live = autograd::softmax(sout.op_logits_tensor, sout.selection_temperature, ctx.stream);
                     have_p_op_live = true;
                 }
-                return p_op_live;
             };
 
-            auto ensurePWriteLive = [&]() -> Tensor& {
+            auto ensurePWriteLive = [&]() {
                 if (!have_p_write_live) {
                     requirePositiveTemperature(sout.selection_temperature, b, k);
                     requireTensor(sout.write_logits_tensor, "write_logits_tensor", b, k);
                     p_write_live = autograd::softmax(sout.write_logits_tensor, sout.selection_temperature, ctx.stream);
                     have_p_write_live = true;
                 }
-                return p_write_live;
             };
 
             auto addRowEntropyTerm = [&](Tensor& probs, const char* name) {
@@ -1105,7 +1100,8 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
             }
 
             if (model_hp.execution_block_causal_w1_transition > 0.0f) {
-                Tensor& transition_loss = ensureTransitionLossRaw();
+                ensureTransitionLossRaw();
+                Tensor& transition_loss = transition_loss_raw;
                 Tensor scaled = autograd::scale_scalar(
                     transition_loss,
                     model_hp.execution_block_causal_w1_transition,
@@ -1114,7 +1110,8 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
             }
 
             if (execution_hp.div_invalid_penalty_weight > 0.0f && sout.div_was_clamped) {
-                Tensor& p_op = ensurePOpLive();
+                ensurePOpLive();
+                Tensor& p_op = p_op_live;
                 Tensor penalty = makeDivInvalidPenalty(
                     p_op,
                     sout.div_was_clamped,
@@ -1151,9 +1148,12 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
                     ? execution_hp.arg_reinforce_weight
                     : 0.0f;
                 if (effective_weight > 0.0f) {
-                    Tensor& p_arg1 = ensurePArg1Live();
-                    Tensor& p_arg2 = ensurePArg2Live();
-                    Tensor& transition_loss = ensureTransitionLossRaw();
+                    ensurePArg1Live();
+                    ensurePArg2Live();
+                    ensureTransitionLossRaw();
+                    Tensor& p_arg1 = p_arg1_live;
+                    Tensor& p_arg2 = p_arg2_live;
+                    Tensor& transition_loss = transition_loss_raw;
                     Tensor reinforce = makeArgReinforceLoss(
                         p_arg1,
                         p_arg2,
@@ -1170,10 +1170,14 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
             }
 
             if (model_hp.execution_block_entropy_aux_weight > 0.0f) {
-                addRowEntropyTerm(ensurePArg1Live(), "entropy_arg1");
-                addRowEntropyTerm(ensurePArg2Live(), "entropy_arg2");
-                addRowEntropyTerm(ensurePOpLive(), "entropy_op");
-                addRowEntropyTerm(ensurePWriteLive(), "entropy_write");
+                ensurePArg1Live();
+                ensurePArg2Live();
+                ensurePOpLive();
+                ensurePWriteLive();
+                addRowEntropyTerm(p_arg1_live, "entropy_arg1");
+                addRowEntropyTerm(p_arg2_live, "entropy_arg2");
+                addRowEntropyTerm(p_op_live, "entropy_op");
+                addRowEntropyTerm(p_write_live, "entropy_write");
             }
         }
 

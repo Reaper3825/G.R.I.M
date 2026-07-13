@@ -731,7 +731,6 @@ Tensor crossAttentionReadImpl(
     auto& params = parameters;
 
     const int dm = hp.d_model;
-    const int dk = hp.d_key;
     const int hd = hp.cross_attn_head_dim;
     const int V = hp.num_slots;
     const int nv = V;

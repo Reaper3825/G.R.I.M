@@ -884,14 +884,14 @@ void materializeLatentTrajectoryPresetActivations(
             std::to_string(latent_preset_hp.d_model) + "]");
     }
 
-    const auto* latent_parameters =
+    auto* latent_parameters =
         request.parameter_registry->getLatentTrajectoryPresetParameters();
     if (!latent_parameters) {
         throw std::runtime_error("executeModelForward: latent_trajectory_preset_enabled=true but registry owner is NULL");
     }
 
     GRIM::LatentTrajectoryPresetParameterTensors detached_parameters{};
-    const GRIM::LatentTrajectoryPresetParameterTensors* params = latent_parameters;
+    GRIM::LatentTrajectoryPresetParameterTensors* params = latent_parameters;
     if (!request.graph.connect_parameter_graph) {
         detached_parameters = detachLatentTrajectoryPresetParameters(
             *latent_parameters,
