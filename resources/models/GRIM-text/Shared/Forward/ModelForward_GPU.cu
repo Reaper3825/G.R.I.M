@@ -16,6 +16,7 @@
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 #include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
 #include "../InferenceState/KvCacheState_GPU.hpp"
+#include "../CudaAllocUtils.hpp"
 #include "../TensorContract/TensorContract_GPU.hpp"
 #include "../TensorContract/GradFns/NumberEncoderGradFn.hpp"
 #include "ModelForwardOutputs.hpp"
@@ -23,6 +24,7 @@
 #include "../VerboseLogging.hpp"
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -71,7 +73,7 @@ __global__ void kernel_quantize_preset_codebook(
     }
     __syncthreads();
 
-    float best_distance = CUDART_INF_F;
+    float best_distance = FLT_MAX;
     int best_code = 0;
     for (int code = threadIdx.x; code < codebook_size; code += blockDim.x) {
         float distance = 0.0f;
@@ -175,7 +177,7 @@ struct PresetCodebookQuantizeGradFn final : public GradFn {
             return;
         }
         float* buffer = nullptr;
-        CudaAlloc::cudaMallocOrThrow(
+        ::GRIM::CudaAlloc::cudaMallocOrThrow(
             reinterpret_cast<void**>(&buffer), tensor.numel() * sizeof(float), label);
         checkPresetCodebookCuda(
             cudaMemsetAsync(buffer, 0, tensor.numel() * sizeof(float), stream),
@@ -259,7 +261,7 @@ Tensor quantizePresetCodebook(Tensor& proposals,
         stream,
         "latent_preset_quantized");
     int* raw_indices = nullptr;
-    CudaAlloc::cudaMallocOrThrow(
+    ::GRIM::CudaAlloc::cudaMallocOrThrow(
         reinterpret_cast<void**>(&raw_indices),
         static_cast<size_t>(proposal_shape.rows) * sizeof(int),
         "latent_preset_code_indices");

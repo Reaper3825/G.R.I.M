@@ -115,6 +115,9 @@ struct StepWorkingSet {
 #define EXEC_CHECK_SHAPE1(tensor, name, expected_n) \
 	EXEC_CHECK_SHAPE2(tensor, name, 1, expected_n)
 
+#ifdef CUDA_CHECK
+#undef CUDA_CHECK
+#endif
 #define CUDA_CHECK(call) \
 	do { \
 		cudaError_t err__ = (call); \
