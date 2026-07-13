@@ -302,10 +302,12 @@ public:
     Tensor lm_head_mlp_residual_out;  // [total_tokens, d_model] u = z + alpha * (swiglu @ W_down)
     Tensor logits_tensor;
     std::vector<Tensor> mtp_logits_tensors;
-    Tensor latent_preset_mtp_hidden;        // [total_tokens, mtp_k * d_model] predicted hidden trajectory (shared hidden-trajectory projection of h[t])
+    Tensor latent_preset_encoder_slots;     // [total_tokens, mtp_k * d_model] continuous proposal features before preset fusion
+    Tensor latent_preset_mtp_hidden;        // [total_tokens, mtp_k * d_model] positional slots decoded from the selected codebook preset
     Tensor latent_preset_future_fused;      // [total_tokens, fuse_dim]
     Tensor latent_preset_future_entropy;    // [total_tokens, mtp_k] optional
     Tensor latent_preset_z;                 // [total_tokens, preset_dim]
+    Tensor latent_preset_quantized;         // [total_tokens, preset_dim] selected reusable atomic preset (straight-through VQ)
     Tensor latent_preset_vec;               // [total_tokens, d_model]
     Tensor latent_preset_gate_pre;          // [total_tokens, 1] scalar gate logits
     Tensor latent_preset_gate;              // [total_tokens, 1] scalar gate values
@@ -401,10 +403,12 @@ public:
         lm_head_mlp_residual_out = Tensor();
         logits_tensor = Tensor();
         clearTensorVector(mtp_logits_tensors);
+        latent_preset_encoder_slots = Tensor();
         latent_preset_mtp_hidden = Tensor();
         latent_preset_future_fused = Tensor();
         latent_preset_future_entropy = Tensor();
         latent_preset_z = Tensor();
+        latent_preset_quantized = Tensor();
         latent_preset_vec = Tensor();
         latent_preset_gate_pre = Tensor();
         latent_preset_gate = Tensor();
@@ -489,10 +493,12 @@ public:
         reportTensor("lm_head_mlp_residual_out", lm_head_mlp_residual_out);
         reportTensor("logits_tensor", logits_tensor);
         reportVector("mtp_logits_tensors", mtp_logits_tensors);
+        reportTensor("latent_preset_encoder_slots", latent_preset_encoder_slots);
         reportTensor("latent_preset_mtp_hidden", latent_preset_mtp_hidden);
         reportTensor("latent_preset_future_fused", latent_preset_future_fused);
         reportTensor("latent_preset_future_entropy", latent_preset_future_entropy);
         reportTensor("latent_preset_z", latent_preset_z);
+        reportTensor("latent_preset_quantized", latent_preset_quantized);
         reportTensor("latent_preset_vec", latent_preset_vec);
         reportTensor("latent_preset_gate_pre", latent_preset_gate_pre);
         reportTensor("latent_preset_gate", latent_preset_gate);

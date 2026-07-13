@@ -128,7 +128,9 @@ separate decode graph file.
   `K=0` the loop is plain KV-cached decode.
 - LatentTrajectoryPreset runs on the cached path: it is a strictly row-local
   post-encoder transform over the active window's `[q_len, d_model]` hidden
-  states, so no latent history cache exists. In latent-trajectory MTP mode
+  states, so no latent history cache exists. Each row selects one learned
+  atomic preset from the codebook; all positional MTP slots are decoded from
+  that selected preset, with no continuous bypass. In discrete-preset MTP mode
   (`latent_trajectory_preset_use_mtp_logits=true`) MTP draft logits come from
   `latent_preset_mtp_hidden` slices projected through the registered per-horizon
   MTP heads; speculation uses the same verify/rollback loop.

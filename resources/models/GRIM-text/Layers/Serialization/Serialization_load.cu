@@ -683,11 +683,19 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
         ltp_ok = ltp_ok && ul(fb_ltp->b_up_data(), ltp.b_up, "LTP b_up");
         ltp_ok = ltp_ok && ul(fb_ltp->w_gate_data(), ltp.W_gate, "LTP W_gate");
         ltp_ok = ltp_ok && ul(fb_ltp->b_gate_data(), ltp.b_gate, "LTP b_gate");
-        ltp_ok = ltp_ok && ul(fb_ltp->w_target_data(), ltp.W_target, "LTP W_target");
-        ltp_ok = ltp_ok && ul(fb_ltp->b_target_data(), ltp.b_target, "LTP b_target");
         ltp_ok = ltp_ok && ul(fb_ltp->fuse_norm_gamma_data(), ltp.fuse_norm_gamma, "LTP fuse_norm_gamma");
         ltp_ok = ltp_ok && ul(fb_ltp->preset_norm_gamma_data(), ltp.preset_norm_gamma, "LTP preset_norm_gamma");
         if (!ltp_ok) return false;
+        if (fb_ltp->codebook_data()) {
+            if (!ul(fb_ltp->codebook_data(), ltp.codebook, "LTP codebook") ||
+                !ul(fb_ltp->w_slots_data(), ltp.W_slots, "LTP W_slots")) {
+                return false;
+            }
+            Logging::EmitModuleInfo(kLogModule, "[load] LatentTrajectoryPreset codebook and slot decoder loaded");
+        } else {
+            Logging::EmitModuleInfo(kLogModule,
+                "[load] LatentTrajectoryPreset codebook absent; fresh initialization retained");
+        }
         request.report.latent_trajectory_preset_loaded = true;
         Logging::EmitModuleInfo(kLogModule, "[load] LatentTrajectoryPreset weights loaded");
     }

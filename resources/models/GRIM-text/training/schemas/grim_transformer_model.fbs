@@ -153,8 +153,9 @@ table LatentTrajectoryPresetWeights {
   b_up_data: [float] (required);
   w_gate_data: [float] (required);
   b_gate_data: [float] (required);
-  w_target_data: [float] (required);
-  b_target_data: [float] (required);
+  // Legacy projected-target tensors. Retained for field-id compatibility only.
+  w_target_data: [float];
+  b_target_data: [float];
   fuse_norm_gamma_data: [float] (required);
   preset_norm_gamma_data: [float] (required);
   d_model: uint32;
@@ -165,6 +166,11 @@ table LatentTrajectoryPresetWeights {
   // Appended fields: shared hidden-trajectory projection (keep at end for id stability).
   w_hidden_traj_data: [float] (required);
   b_hidden_traj_data: [float] (required);
+  // Optional for backward compatibility: old checkpoints leave the freshly
+  // initialized codebook and slot decoder intact on resume.
+  codebook_data: [float];
+  w_slots_data: [float];
+  codebook_size: uint32;
 }
 
 table NumberEncoderWeights {

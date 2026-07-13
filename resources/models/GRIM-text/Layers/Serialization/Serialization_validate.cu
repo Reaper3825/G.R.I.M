@@ -334,13 +334,15 @@ bool validate_checkpoint_capabilities(
         if (cfg.latent_trajectory_preset_mtp_k <= 0 ||
             cfg.latent_trajectory_preset_fuse_dim <= 0 ||
             cfg.latent_trajectory_preset_dim <= 0 ||
-            cfg.latent_trajectory_preset_gate_dim <= 0) {
+            cfg.latent_trajectory_preset_gate_dim <= 0 ||
+            cfg.latent_trajectory_preset_codebook_size <= 0) {
             Logging::EmitModuleError(kLogModule,
                 Msg("[load] FATAL: LatentTrajectoryPreset required but config view has invalid derived dims: mtp_k=",
                     cfg.latent_trajectory_preset_mtp_k,
                     " fuse_dim=", cfg.latent_trajectory_preset_fuse_dim,
                     " preset_dim=", cfg.latent_trajectory_preset_dim,
-                    " gate_dim=", cfg.latent_trajectory_preset_gate_dim));
+                    " gate_dim=", cfg.latent_trajectory_preset_gate_dim,
+                    " codebook_size=", cfg.latent_trajectory_preset_codebook_size));
             return false;
         }
         if (static_cast<int>(fb_ltp->d_model()) != cfg.d_model ||
@@ -391,11 +393,32 @@ bool validate_checkpoint_capabilities(
         ok = ok && ltp_field(fb_ltp->b_up_data(), ltp.b_up, "b_up");
         ok = ok && ltp_field(fb_ltp->w_gate_data(), ltp.W_gate, "W_gate");
         ok = ok && ltp_field(fb_ltp->b_gate_data(), ltp.b_gate, "b_gate");
-        ok = ok && ltp_field(fb_ltp->w_target_data(), ltp.W_target, "W_target");
-        ok = ok && ltp_field(fb_ltp->b_target_data(), ltp.b_target, "b_target");
         ok = ok && ltp_field(fb_ltp->fuse_norm_gamma_data(), ltp.fuse_norm_gamma, "fuse_norm_gamma");
         ok = ok && ltp_field(fb_ltp->preset_norm_gamma_data(), ltp.preset_norm_gamma, "preset_norm_gamma");
         if (!ok) return false;
+
+        const bool has_codebook = fb_ltp->codebook_data() != nullptr;
+        const bool has_slot_decoder = fb_ltp->w_slots_data() != nullptr;
+        if (has_codebook != has_slot_decoder) {
+            Logging::EmitModuleError(kLogModule,
+                "[load] FATAL: checkpoint contains only one of LatentTrajectoryPreset codebook/W_slots");
+            return false;
+        }
+        if (has_codebook) {
+            if (static_cast<int>(fb_ltp->codebook_size()) != cfg.latent_trajectory_preset_codebook_size) {
+                Logging::EmitModuleError(kLogModule,
+                    Msg("[load] FATAL: LatentTrajectoryPreset codebook size mismatch: checkpoint=",
+                        fb_ltp->codebook_size(), " model=", cfg.latent_trajectory_preset_codebook_size));
+                return false;
+            }
+            if (!ltp_field(fb_ltp->codebook_data(), ltp.codebook, "codebook") ||
+                !ltp_field(fb_ltp->w_slots_data(), ltp.W_slots, "W_slots")) {
+                return false;
+            }
+        } else {
+            Logging::EmitModuleInfo(kLogModule,
+                "[load] Legacy LatentTrajectoryPreset checkpoint has no codebook; retaining fresh codebook/W_slots initialization");
+        }
     }
 
     // ─── final_rms_gamma ───

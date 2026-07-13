@@ -51,6 +51,7 @@ SerializationModelConfigView makeConfigView(const Config::AiConfigSnapshot& cfg)
     view.latent_trajectory_preset_fuse_dim = latent_preset.fuse_dim;
     view.latent_trajectory_preset_dim = latent_preset.preset_dim;
     view.latent_trajectory_preset_gate_dim = latent_preset.gate_dim;
+    view.latent_trajectory_preset_codebook_size = latent_preset.codebook_size;
     return view;
 }
 
@@ -322,10 +323,10 @@ bool saveLanguageModelCheckpoint(
         assignReadTensor(request.sources.latent_trajectory_preset.b_up, latent_preset_parameters->b_up);
         assignReadTensor(request.sources.latent_trajectory_preset.W_gate, latent_preset_parameters->W_gate);
         assignReadTensor(request.sources.latent_trajectory_preset.b_gate, latent_preset_parameters->b_gate);
-        assignReadTensor(request.sources.latent_trajectory_preset.W_target, latent_preset_parameters->W_target);
-        assignReadTensor(request.sources.latent_trajectory_preset.b_target, latent_preset_parameters->b_target);
         assignReadTensor(request.sources.latent_trajectory_preset.fuse_norm_gamma, latent_preset_parameters->fuse_norm_gamma);
         assignReadTensor(request.sources.latent_trajectory_preset.preset_norm_gamma, latent_preset_parameters->preset_norm_gamma);
+        assignReadTensor(request.sources.latent_trajectory_preset.codebook, latent_preset_parameters->codebook);
+        assignReadTensor(request.sources.latent_trajectory_preset.W_slots, latent_preset_parameters->W_slots);
         EmitModuleInfo(ModuleId::Checkpoint, "Processing LatentTrajectoryPreset weights for FlatBuffer serialization");
     }
 
@@ -668,18 +669,18 @@ bool loadLanguageModelCheckpoint(
         assignWrite(request.latent_trajectory_preset.b_gate,
                     latent_preset_parameters->b_gate.data,
                     static_cast<std::size_t>(latent_preset_parameters->b_gate.numel()));
-        assignWrite(request.latent_trajectory_preset.W_target,
-                    latent_preset_parameters->W_target.data,
-                    static_cast<std::size_t>(latent_preset_parameters->W_target.numel()));
-        assignWrite(request.latent_trajectory_preset.b_target,
-                    latent_preset_parameters->b_target.data,
-                    static_cast<std::size_t>(latent_preset_parameters->b_target.numel()));
         assignWrite(request.latent_trajectory_preset.fuse_norm_gamma,
                     latent_preset_parameters->fuse_norm_gamma.data,
                     static_cast<std::size_t>(latent_preset_parameters->fuse_norm_gamma.numel()));
         assignWrite(request.latent_trajectory_preset.preset_norm_gamma,
                     latent_preset_parameters->preset_norm_gamma.data,
                     static_cast<std::size_t>(latent_preset_parameters->preset_norm_gamma.numel()));
+        assignWrite(request.latent_trajectory_preset.codebook,
+                    latent_preset_parameters->codebook.data,
+                    static_cast<std::size_t>(latent_preset_parameters->codebook.numel()));
+        assignWrite(request.latent_trajectory_preset.W_slots,
+                    latent_preset_parameters->W_slots.data,
+                    static_cast<std::size_t>(latent_preset_parameters->W_slots.numel()));
     }
 
     // Issue #33: Final RMSNorm gamma destination

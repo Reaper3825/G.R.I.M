@@ -385,14 +385,12 @@ void checkLatentPresetCuda(cudaError_t err, const char* call) {
     }
 }
 
-__global__ void kernel_ltp_masks_and_counts(
+__global__ void kernel_ltp_gate_mask_and_count(
     const int* __restrict__ seq_lengths,
-    uint8_t* __restrict__ target_valid,
     uint8_t* __restrict__ gate_valid,
-    int* __restrict__ counts,
+    int* __restrict__ gate_count,
     int total_tokens,
-    int max_seq_len,
-    int mtp_k)
+    int max_seq_len)
 {
     const int row = static_cast<int>(latentPresetFlatThreadIndex());
     if (row >= total_tokens) return;
@@ -401,85 +399,11 @@ __global__ void kernel_ltp_masks_and_counts(
     const int t = row - b * max_seq_len;
     const int seq_len = seq_lengths[b];
     const bool gate_ok = (t < seq_len);
-    const bool target_ok = (t + 1 < seq_len && mtp_k > 0);
 
     gate_valid[row] = gate_ok ? 1 : 0;
-    target_valid[row] = target_ok ? 1 : 0;
     if (gate_ok) {
-        atomicAdd(counts + 1, 1);
+        atomicAdd(gate_count, 1);
     }
-    if (target_ok) {
-        atomicAdd(counts, 1);
-    }
-}
-
-__global__ void kernel_ltp_future_hidden_mean(
-    const float* __restrict__ hidden,
-    const int* __restrict__ seq_lengths,
-    const uint8_t* __restrict__ target_valid,
-    float* __restrict__ future_mean,
-    int total_tokens,
-    int max_seq_len,
-    int d_model,
-    int mtp_k)
-{
-    const size_t idx = latentPresetFlatThreadIndex();
-    const size_t total = static_cast<size_t>(total_tokens) * static_cast<size_t>(d_model);
-    if (idx >= total) return;
-
-    const int row = static_cast<int>(idx / static_cast<size_t>(d_model));
-    const int d = static_cast<int>(idx - static_cast<size_t>(row) * static_cast<size_t>(d_model));
-    if (!target_valid[row]) {
-        future_mean[idx] = 0.0f;
-        return;
-    }
-
-    const int b = row / max_seq_len;
-    const int t = row - b * max_seq_len;
-    const int seq_len = seq_lengths[b];
-    const int available_future = seq_len - t - 1;
-    const int future_count = (mtp_k < available_future) ? mtp_k : available_future;
-    float sum = 0.0f;
-    for (int s = 1; s <= future_count; ++s) {
-        sum += hidden[static_cast<size_t>(row + s) * static_cast<size_t>(d_model) + d];
-    }
-    future_mean[idx] = sum / static_cast<float>(future_count);
-}
-
-__global__ void kernel_ltp_sum_z_loss(
-    const float* __restrict__ preset_z,
-    const float* __restrict__ target_z,
-    const uint8_t* __restrict__ target_valid,
-    float* __restrict__ sums,
-    int total_tokens,
-    int preset_dim)
-{
-    const size_t idx = latentPresetFlatThreadIndex();
-    const size_t total = static_cast<size_t>(total_tokens) * static_cast<size_t>(preset_dim);
-    if (idx >= total) return;
-    const int row = static_cast<int>(idx / static_cast<size_t>(preset_dim));
-    if (!target_valid[row]) return;
-    const float diff = preset_z[idx] - target_z[idx];
-    atomicAdd(sums, diff * diff);
-}
-
-__global__ void kernel_ltp_sum_delta_loss(
-    const float* __restrict__ preset_vec,
-    const float* __restrict__ future_mean,
-    const float* __restrict__ hidden,
-    const uint8_t* __restrict__ target_valid,
-    float* __restrict__ sums,
-    int total_tokens,
-    int d_model)
-{
-    const size_t idx = latentPresetFlatThreadIndex();
-    const size_t total = static_cast<size_t>(total_tokens) * static_cast<size_t>(d_model);
-    if (idx >= total) return;
-    const int row = static_cast<int>(idx / static_cast<size_t>(d_model));
-    if (!target_valid[row]) return;
-    const float target_delta = future_mean[idx] - hidden[idx];
-    const float diff = preset_vec[idx] - target_delta;
-    atomicAdd(sums + 1, diff * diff);
 }
 
 __global__ void kernel_ltp_sum_gate_loss(
@@ -490,43 +414,7 @@ __global__ void kernel_ltp_sum_gate_loss(
 {
     const int row = static_cast<int>(latentPresetFlatThreadIndex());
     if (row >= total_tokens || !gate_valid[row]) return;
-    atomicAdd(sums + 2, fabsf(gate[row]));
-}
-
-__global__ void kernel_ltp_grad_z(
-    const float* __restrict__ preset_z,
-    const float* __restrict__ target_z,
-    const uint8_t* __restrict__ target_valid,
-    float* __restrict__ grad_z,
-    float scale,
-    int total_tokens,
-    int preset_dim)
-{
-    const size_t idx = latentPresetFlatThreadIndex();
-    const size_t total = static_cast<size_t>(total_tokens) * static_cast<size_t>(preset_dim);
-    if (idx >= total) return;
-    const int row = static_cast<int>(idx / static_cast<size_t>(preset_dim));
-    if (!target_valid[row]) return;
-    grad_z[idx] += scale * (preset_z[idx] - target_z[idx]);
-}
-
-__global__ void kernel_ltp_grad_vec(
-    const float* __restrict__ preset_vec,
-    const float* __restrict__ future_mean,
-    const float* __restrict__ hidden,
-    const uint8_t* __restrict__ target_valid,
-    float* __restrict__ grad_vec,
-    float scale,
-    int total_tokens,
-    int d_model)
-{
-    const size_t idx = latentPresetFlatThreadIndex();
-    const size_t total = static_cast<size_t>(total_tokens) * static_cast<size_t>(d_model);
-    if (idx >= total) return;
-    const int row = static_cast<int>(idx / static_cast<size_t>(d_model));
-    if (!target_valid[row]) return;
-    const float target_delta = future_mean[idx] - hidden[idx];
-    grad_vec[idx] += scale * (preset_vec[idx] - target_delta);
+    atomicAdd(sums, fabsf(gate[row]));
 }
 
 __global__ void kernel_ltp_grad_gate(
@@ -548,41 +436,19 @@ struct LatentPresetLossSummary {
     float traj_loss = 0.0f;
     float delta_loss = 0.0f;
     float gate_loss = 0.0f;
-    int target_valid_count = 0;
     int gate_valid_count = 0;
 };
 
 struct LatentPresetLossGradFn : public GradFn {
-    bool z_requires_grad = false;
-    bool vec_requires_grad = false;
     bool gate_requires_grad = false;
-    TensorContract::TensorShape z_shape;
-    TensorContract::TensorShape vec_shape;
     TensorContract::TensorShape gate_shape;
-    std::shared_ptr<GradFn> z_grad_fn;
-    std::shared_ptr<GradFn> vec_grad_fn;
     std::shared_ptr<GradFn> gate_grad_fn;
-    float* grad_z = nullptr;
-    float* grad_vec = nullptr;
     float* grad_gate = nullptr;
-    std::shared_ptr<float> owned_grad_z;
-    std::shared_ptr<float> owned_grad_vec;
     std::shared_ptr<float> owned_grad_gate;
-    const float* preset_z_data = nullptr;
-    const float* preset_vec_data = nullptr;
     const float* gate_data = nullptr;
-    const float* hidden_data = nullptr;
-    Tensor future_mean;
-    Tensor target_z;
-    std::shared_ptr<uint8_t> target_valid;
     std::shared_ptr<uint8_t> gate_valid;
     int total_tokens = 0;
-    int d_model = 0;
-    int preset_dim = 0;
-    int target_valid_count = 0;
     int gate_valid_count = 0;
-    float lambda_traj = 0.0f;
-    float lambda_delta = 0.0f;
     float lambda_gate = 0.0f;
 
     LatentPresetLossGradFn() {
@@ -647,55 +513,6 @@ protected:
         // throws (edge-count != contribute-count). Capture already gated on
         // activity (lambda > 0 AND valid count > 0), so every captured buffer
         // here unconditionally runs its kernel and propagates upstream.
-        if (z_requires_grad && grad_z) {
-            const float scale = root_grad * lambda_traj * 2.0f /
-                (static_cast<float>(target_valid_count) * static_cast<float>(preset_dim));
-            kernel_ltp_grad_z<<<latentPresetGridForCount(static_cast<size_t>(total_tokens) * preset_dim),
-                                kLatentPresetBlockSize, 0, stream>>>(
-                preset_z_data,
-                target_z.data,
-                target_valid.get(),
-                grad_z,
-                scale,
-                total_tokens,
-                preset_dim);
-            checkLatentPresetCuda(cudaGetLastError(), "kernel_ltp_grad_z");
-
-            if (z_grad_fn) {
-                Tensor view;
-                view.data = grad_z;
-                view.shape = z_shape;
-                view.owns_data = false;
-                view.stream = stream;
-                z_grad_fn->apply(view, stream, backward_payload, backward_bindings);
-            }
-        }
-
-        if (vec_requires_grad && grad_vec) {
-            const float scale = root_grad * lambda_delta * 2.0f /
-                (static_cast<float>(target_valid_count) * static_cast<float>(d_model));
-            kernel_ltp_grad_vec<<<latentPresetGridForCount(static_cast<size_t>(total_tokens) * d_model),
-                                  kLatentPresetBlockSize, 0, stream>>>(
-                preset_vec_data,
-                future_mean.data,
-                hidden_data,
-                target_valid.get(),
-                grad_vec,
-                scale,
-                total_tokens,
-                d_model);
-            checkLatentPresetCuda(cudaGetLastError(), "kernel_ltp_grad_vec");
-
-            if (vec_grad_fn) {
-                Tensor view;
-                view.data = grad_vec;
-                view.shape = vec_shape;
-                view.owns_data = false;
-                view.stream = stream;
-                vec_grad_fn->apply(view, stream, backward_payload, backward_bindings);
-            }
-        }
-
         if (gate_requires_grad && grad_gate) {
             const float scale = root_grad * lambda_gate / static_cast<float>(gate_valid_count);
             kernel_ltp_grad_gate<<<latentPresetGridForCount(total_tokens), kLatentPresetBlockSize, 0, stream>>>(
@@ -720,19 +537,10 @@ protected:
 public:
     void release_saved() override {
         GradFn::release_saved();
-        z_grad_fn.reset();
-        vec_grad_fn.reset();
         gate_grad_fn.reset();
-        owned_grad_z.reset();
-        owned_grad_vec.reset();
         owned_grad_gate.reset();
-        grad_z = nullptr;
-        grad_vec = nullptr;
         grad_gate = nullptr;
-        target_valid.reset();
         gate_valid.reset();
-        future_mean = Tensor();
-        target_z = Tensor();
     }
 };
 
@@ -750,72 +558,42 @@ LatentPresetLossSummary addLatentPresetAuxiliaryLoss(
     if (!loss_state.loss_tensor.data) {
         throw std::runtime_error("addLatentPresetAuxiliaryLoss: loss_tensor is NULL");
     }
-    if (!forward_outputs.latent_preset_z.data ||
-        !forward_outputs.latent_preset_vec.data ||
-        !forward_outputs.latent_preset_gate.data ||
-        !forward_outputs.encoder_output_tensor.data) {
+    if (!forward_outputs.latent_preset_gate.data) {
         throw std::runtime_error("addLatentPresetAuxiliaryLoss: latent preset forward tensors are missing");
     }
-    if (latent_hp.lambda_traj <= 0.0f &&
-        (!latent_hp.use_delta_target || latent_hp.lambda_delta <= 0.0f) &&
-        (!latent_hp.use_gate_sparsity_loss || latent_hp.lambda_gate <= 0.0f)) {
+    if (!latent_hp.use_gate_sparsity_loss || latent_hp.lambda_gate <= 0.0f) {
         return summary;
     }
 
-    const auto& z_shape = forward_outputs.latent_preset_z.shape.require("latent preset z");
-    const auto& vec_shape = forward_outputs.latent_preset_vec.shape.require("latent preset vec");
     const auto& gate_shape = forward_outputs.latent_preset_gate.shape.require("latent preset gate");
-    const auto& hidden_shape = forward_outputs.encoder_output_tensor.shape.require("latent preset hidden");
-    if (!z_shape.is_2d_layout() || !vec_shape.is_2d_layout() ||
-        !gate_shape.is_2d_layout() || !hidden_shape.is_2d_layout()) {
+    if (!gate_shape.is_2d_layout()) {
         throw std::runtime_error("addLatentPresetAuxiliaryLoss: expected 2D latent preset tensors");
     }
-    const auto z_dims = z_shape.as_2d();
-    const auto vec_dims = vec_shape.as_2d();
     const auto gate_dims = gate_shape.as_2d();
-    const auto hidden_dims = hidden_shape.as_2d();
-    if (z_dims.rows != payload.total_tokens || z_dims.cols != latent_hp.preset_dim ||
-        vec_dims.rows != payload.total_tokens || vec_dims.cols != latent_hp.d_model ||
-        gate_dims.rows != payload.total_tokens || gate_dims.cols != 1 ||
-        hidden_dims.rows != payload.total_tokens || hidden_dims.cols != latent_hp.d_model) {
+    if (gate_dims.rows != payload.total_tokens || gate_dims.cols != 1) {
         throw std::runtime_error("addLatentPresetAuxiliaryLoss: latent tensor shape mismatch");
     }
     if (static_cast<int>(payload.seq_lengths.size()) != payload.batch_size) {
         throw std::runtime_error("addLatentPresetAuxiliaryLoss: payload.seq_lengths size mismatch");
     }
 
-    auto& latent_params = ctx.parameter_registry->requireLatentTrajectoryPresetParameters(
-        "addLatentPresetAuxiliaryLoss");
-    if (!latent_params.W_target.data) {
-        throw std::runtime_error("addLatentPresetAuxiliaryLoss: W_target is missing");
-    }
-    if (latent_hp.target_bias_enabled != static_cast<bool>(latent_params.b_target.data)) {
-        throw std::runtime_error(
-            "addLatentPresetAuxiliaryLoss: b_target allocation does not match target_bias_enabled");
-    }
-
     int* d_seq_lengths = nullptr;
-    int* d_counts = nullptr;
-    uint8_t* raw_target_valid = nullptr;
+    int* d_gate_count = nullptr;
     uint8_t* raw_gate_valid = nullptr;
-    float* d_sums = nullptr;
+    float* d_sum = nullptr;
     CudaAlloc::cudaMallocOrThrow(reinterpret_cast<void**>(&d_seq_lengths),
                                  payload.seq_lengths.size() * sizeof(int),
                                  "latent_preset_seq_lengths");
-    CudaAlloc::cudaMallocOrThrow(reinterpret_cast<void**>(&d_counts),
-                                 2 * sizeof(int),
-                                 "latent_preset_counts");
-    CudaAlloc::cudaMallocOrThrow(reinterpret_cast<void**>(&raw_target_valid),
-                                 static_cast<size_t>(payload.total_tokens) * sizeof(uint8_t),
-                                 "latent_preset_target_valid");
+    CudaAlloc::cudaMallocOrThrow(reinterpret_cast<void**>(&d_gate_count),
+                                 sizeof(int),
+                                 "latent_preset_gate_count");
     CudaAlloc::cudaMallocOrThrow(reinterpret_cast<void**>(&raw_gate_valid),
                                  static_cast<size_t>(payload.total_tokens) * sizeof(uint8_t),
                                  "latent_preset_gate_valid");
-    CudaAlloc::cudaMallocOrThrow(reinterpret_cast<void**>(&d_sums),
-                                 3 * sizeof(float),
-                                 "latent_preset_loss_sums");
+    CudaAlloc::cudaMallocOrThrow(reinterpret_cast<void**>(&d_sum),
+                                 sizeof(float),
+                                 "latent_preset_gate_loss_sum");
 
-    std::shared_ptr<uint8_t> target_valid(raw_target_valid, [](uint8_t* p) { queueForDeferredCleanup(p); });
     std::shared_ptr<uint8_t> gate_valid(raw_gate_valid, [](uint8_t* p) { queueForDeferredCleanup(p); });
 
     checkLatentPresetCuda(cudaMemcpyAsync(d_seq_lengths,
@@ -824,110 +602,45 @@ LatentPresetLossSummary addLatentPresetAuxiliaryLoss(
                                           cudaMemcpyHostToDevice,
                                           ctx.stream),
                           "cudaMemcpyAsync(seq_lengths)");
-    checkLatentPresetCuda(cudaMemsetAsync(d_counts, 0, 2 * sizeof(int), ctx.stream),
-                          "cudaMemsetAsync(counts)");
-    checkLatentPresetCuda(cudaMemsetAsync(d_sums, 0, 3 * sizeof(float), ctx.stream),
-                          "cudaMemsetAsync(loss sums)");
+    checkLatentPresetCuda(cudaMemsetAsync(d_gate_count, 0, sizeof(int), ctx.stream),
+                          "cudaMemsetAsync(gate count)");
+    checkLatentPresetCuda(cudaMemsetAsync(d_sum, 0, sizeof(float), ctx.stream),
+                          "cudaMemsetAsync(gate loss sum)");
 
-    kernel_ltp_masks_and_counts<<<latentPresetGridForCount(payload.total_tokens),
-                                  kLatentPresetBlockSize, 0, ctx.stream>>>(
+    kernel_ltp_gate_mask_and_count<<<latentPresetGridForCount(payload.total_tokens),
+                                     kLatentPresetBlockSize, 0, ctx.stream>>>(
         d_seq_lengths,
-        target_valid.get(),
         gate_valid.get(),
-        d_counts,
+        d_gate_count,
         payload.total_tokens,
-        payload.max_seq_len,
-        latent_hp.mtp_k);
-    checkLatentPresetCuda(cudaGetLastError(), "kernel_ltp_masks_and_counts");
+        payload.max_seq_len);
+    checkLatentPresetCuda(cudaGetLastError(), "kernel_ltp_gate_mask_and_count");
 
-    int h_counts[2] = {0, 0};
-    checkLatentPresetCuda(cudaMemcpyAsync(h_counts, d_counts, 2 * sizeof(int),
+    checkLatentPresetCuda(cudaMemcpyAsync(&summary.gate_valid_count, d_gate_count, sizeof(int),
                                           cudaMemcpyDeviceToHost, ctx.stream),
-                          "cudaMemcpyAsync(counts host)");
-    checkLatentPresetCuda(cudaStreamSynchronize(ctx.stream), "cudaStreamSynchronize(counts)");
-    summary.target_valid_count = h_counts[0];
-    summary.gate_valid_count = h_counts[1];
+                          "cudaMemcpyAsync(gate count host)");
+    checkLatentPresetCuda(cudaStreamSynchronize(ctx.stream), "cudaStreamSynchronize(gate count)");
 
-    Tensor future_mean = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(payload.total_tokens, latent_hp.d_model),
-        false,
-        ctx.stream,
-        "latent_preset_future_hidden_mean");
-    if (summary.target_valid_count > 0) {
-        kernel_ltp_future_hidden_mean<<<latentPresetGridForCount(static_cast<size_t>(payload.total_tokens) * latent_hp.d_model),
-                                        kLatentPresetBlockSize, 0, ctx.stream>>>(
-            forward_outputs.encoder_output_tensor.data,
-            d_seq_lengths,
-            target_valid.get(),
-            future_mean.data,
-            payload.total_tokens,
-            payload.max_seq_len,
-            latent_hp.d_model,
-            latent_hp.mtp_k);
-        checkLatentPresetCuda(cudaGetLastError(), "kernel_ltp_future_hidden_mean");
-    }
-
-    Tensor W_target_detached = latent_params.W_target.detach(ctx.stream);
-    Tensor target_z = autograd::matmul(future_mean, W_target_detached, ctx.stream);
-    if (latent_hp.target_bias_enabled) {
-        Tensor b_target_detached = latent_params.b_target.detach(ctx.stream);
-        target_z = autograd::broadcast_add(target_z, b_target_detached, ctx.stream);
-    }
-
-    if (summary.target_valid_count > 0 && latent_hp.lambda_traj > 0.0f) {
-        kernel_ltp_sum_z_loss<<<latentPresetGridForCount(static_cast<size_t>(payload.total_tokens) * latent_hp.preset_dim),
-                                kLatentPresetBlockSize, 0, ctx.stream>>>(
-            forward_outputs.latent_preset_z.data,
-            target_z.data,
-            target_valid.get(),
-            d_sums,
-            payload.total_tokens,
-            latent_hp.preset_dim);
-        checkLatentPresetCuda(cudaGetLastError(), "kernel_ltp_sum_z_loss");
-    }
-    if (summary.target_valid_count > 0 && latent_hp.use_delta_target && latent_hp.lambda_delta > 0.0f) {
-        kernel_ltp_sum_delta_loss<<<latentPresetGridForCount(static_cast<size_t>(payload.total_tokens) * latent_hp.d_model),
-                                    kLatentPresetBlockSize, 0, ctx.stream>>>(
-            forward_outputs.latent_preset_vec.data,
-            future_mean.data,
-            forward_outputs.encoder_output_tensor.data,
-            target_valid.get(),
-            d_sums,
-            payload.total_tokens,
-            latent_hp.d_model);
-        checkLatentPresetCuda(cudaGetLastError(), "kernel_ltp_sum_delta_loss");
-    }
     if (summary.gate_valid_count > 0 && latent_hp.use_gate_sparsity_loss && latent_hp.lambda_gate > 0.0f) {
         kernel_ltp_sum_gate_loss<<<latentPresetGridForCount(payload.total_tokens),
                                    kLatentPresetBlockSize, 0, ctx.stream>>>(
             forward_outputs.latent_preset_gate.data,
             gate_valid.get(),
-            d_sums,
+            d_sum,
             payload.total_tokens);
         checkLatentPresetCuda(cudaGetLastError(), "kernel_ltp_sum_gate_loss");
     }
 
-    float h_sums[3] = {0.0f, 0.0f, 0.0f};
-    checkLatentPresetCuda(cudaMemcpyAsync(h_sums, d_sums, 3 * sizeof(float),
+    float h_sum = 0.0f;
+    checkLatentPresetCuda(cudaMemcpyAsync(&h_sum, d_sum, sizeof(float),
                                           cudaMemcpyDeviceToHost, ctx.stream),
-                          "cudaMemcpyAsync(loss sums host)");
-    checkLatentPresetCuda(cudaStreamSynchronize(ctx.stream), "cudaStreamSynchronize(loss sums)");
+                          "cudaMemcpyAsync(gate loss sum host)");
+    checkLatentPresetCuda(cudaStreamSynchronize(ctx.stream), "cudaStreamSynchronize(gate loss sum)");
 
-    if (summary.target_valid_count > 0) {
-        summary.traj_loss = h_sums[0] /
-            (static_cast<float>(summary.target_valid_count) * static_cast<float>(latent_hp.preset_dim));
-        if (latent_hp.use_delta_target) {
-            summary.delta_loss = h_sums[1] /
-                (static_cast<float>(summary.target_valid_count) * static_cast<float>(latent_hp.d_model));
-        }
-    }
     if (summary.gate_valid_count > 0 && latent_hp.use_gate_sparsity_loss) {
-        summary.gate_loss = h_sums[2] / static_cast<float>(summary.gate_valid_count);
+        summary.gate_loss = h_sum / static_cast<float>(summary.gate_valid_count);
     }
-    summary.weighted_loss =
-        latent_hp.lambda_traj * summary.traj_loss +
-        (latent_hp.use_delta_target ? latent_hp.lambda_delta * summary.delta_loss : 0.0f) +
-        (latent_hp.use_gate_sparsity_loss ? latent_hp.lambda_gate * summary.gate_loss : 0.0f);
+    summary.weighted_loss = latent_hp.lambda_gate * summary.gate_loss;
 
     if (!std::isfinite(summary.weighted_loss) ||
         !std::isfinite(summary.traj_loss) ||
@@ -948,21 +661,12 @@ LatentPresetLossSummary addLatentPresetAuxiliaryLoss(
     // lambda is positive AND at least one position is valid this batch. These
     // must exactly match the branches taken inside apply_impl (engine
     // edge-count == contribute-count invariant).
-    const bool traj_active =
-        latent_hp.lambda_traj > 0.0f &&
-        summary.target_valid_count > 0 &&
-        forward_outputs.latent_preset_z.requires_grad;
-    const bool delta_active =
-        latent_hp.use_delta_target &&
-        latent_hp.lambda_delta > 0.0f &&
-        summary.target_valid_count > 0 &&
-        forward_outputs.latent_preset_vec.requires_grad;
     const bool gate_active =
         latent_hp.use_gate_sparsity_loss &&
         latent_hp.lambda_gate > 0.0f &&
         summary.gate_valid_count > 0 &&
         forward_outputs.latent_preset_gate.requires_grad;
-    const bool requires_grad = traj_active || delta_active || gate_active;
+    const bool requires_grad = gate_active;
 
     summary.loss_tensor.data = d_loss;
     summary.loss_tensor.owns_data = true;
@@ -974,24 +678,6 @@ LatentPresetLossSummary addLatentPresetAuxiliaryLoss(
 
     if (requires_grad) {
         auto grad_fn = std::make_shared<LatentPresetLossGradFn>();
-        grad_fn->captureInput(forward_outputs.latent_preset_z,
-                              traj_active,
-                              grad_fn->z_requires_grad,
-                              grad_fn->z_shape,
-                              grad_fn->z_grad_fn,
-                              grad_fn->grad_z,
-                              grad_fn->owned_grad_z,
-                              "LatentPresetLossGradFn_grad_z",
-                              ctx.stream);
-        grad_fn->captureInput(forward_outputs.latent_preset_vec,
-                              delta_active,
-                              grad_fn->vec_requires_grad,
-                              grad_fn->vec_shape,
-                              grad_fn->vec_grad_fn,
-                              grad_fn->grad_vec,
-                              grad_fn->owned_grad_vec,
-                              "LatentPresetLossGradFn_grad_vec",
-                              ctx.stream);
         grad_fn->captureInput(forward_outputs.latent_preset_gate,
                               gate_active,
                               grad_fn->gate_requires_grad,
@@ -1001,21 +687,10 @@ LatentPresetLossSummary addLatentPresetAuxiliaryLoss(
                               grad_fn->owned_grad_gate,
                               "LatentPresetLossGradFn_grad_gate",
                               ctx.stream);
-        grad_fn->preset_z_data = forward_outputs.latent_preset_z.data;
-        grad_fn->preset_vec_data = forward_outputs.latent_preset_vec.data;
         grad_fn->gate_data = forward_outputs.latent_preset_gate.data;
-        grad_fn->hidden_data = forward_outputs.encoder_output_tensor.data;
-        grad_fn->future_mean = std::move(future_mean);
-        grad_fn->target_z = std::move(target_z);
-        grad_fn->target_valid = target_valid;
         grad_fn->gate_valid = gate_valid;
         grad_fn->total_tokens = payload.total_tokens;
-        grad_fn->d_model = latent_hp.d_model;
-        grad_fn->preset_dim = latent_hp.preset_dim;
-        grad_fn->target_valid_count = summary.target_valid_count;
         grad_fn->gate_valid_count = summary.gate_valid_count;
-        grad_fn->lambda_traj = latent_hp.lambda_traj;
-        grad_fn->lambda_delta = latent_hp.use_delta_target ? latent_hp.lambda_delta : 0.0f;
         grad_fn->lambda_gate = latent_hp.use_gate_sparsity_loss ? latent_hp.lambda_gate : 0.0f;
         summary.loss_tensor.grad_fn = grad_fn;
     }
@@ -1023,8 +698,8 @@ LatentPresetLossSummary addLatentPresetAuxiliaryLoss(
     loss_state.loss_tensor = autograd::add(loss_state.loss_tensor, summary.loss_tensor, ctx.stream);
 
     cudaFree(d_seq_lengths);
-    cudaFree(d_counts);
-    cudaFree(d_sums);
+    cudaFree(d_gate_count);
+    cudaFree(d_sum);
     return summary;
 }
 
@@ -1211,14 +886,12 @@ LossResult computeAutogradLoss(
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // 4. Latent trajectory preset auxiliary losses:
-    //    L += λ_traj*MSE(preset_z, stopgrad(target_z))
-    //       + λ_delta*MSE(preset_vec, stopgrad(future_hidden_delta))
-    //       + λ_gate*mean(abs(gate))
+    // 4. Latent preset auxiliary loss:
+    //    L += λ_gate*mean(abs(gate))
     //
-    // Targets are built from retained final encoder hidden states with no
-    // gradient path back through the future rows. The preset path still receives
-    // the regular LM/MTP gradients through h_enhanced.
+    // All future-mean targets have been removed. The preset path still receives
+    // regular LM/MTP gradients through the straight-through codebook and
+    // h_enhanced. The trajectory telemetry channel remains reserved.
     // ═══════════════════════════════════════════════════════════════════════════
     float latent_preset_loss = 0.0f;
     LatentPresetLossSummary latent_preset_summary{};

@@ -2037,6 +2037,9 @@ struct LatentTrajectoryPresetWeightsT : public ::flatbuffers::NativeTable {
   uint32_t gate_dim = 0;
   std::vector<float> w_hidden_traj_data{};
   std::vector<float> b_hidden_traj_data{};
+  std::vector<float> codebook_data{};
+  std::vector<float> w_slots_data{};
+  uint32_t codebook_size = 0;
 };
 
 struct LatentTrajectoryPresetWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -2061,7 +2064,10 @@ struct LatentTrajectoryPresetWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuf
     VT_PRESET_DIM = 34,
     VT_GATE_DIM = 36,
     VT_W_HIDDEN_TRAJ_DATA = 38,
-    VT_B_HIDDEN_TRAJ_DATA = 40
+    VT_B_HIDDEN_TRAJ_DATA = 40,
+    VT_CODEBOOK_DATA = 42,
+    VT_W_SLOTS_DATA = 44,
+    VT_CODEBOOK_SIZE = 46
   };
   const ::flatbuffers::Vector<float> *w_fuse_data() const {
     return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_FUSE_DATA);
@@ -2120,6 +2126,15 @@ struct LatentTrajectoryPresetWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuf
   const ::flatbuffers::Vector<float> *b_hidden_traj_data() const {
     return GetPointer<const ::flatbuffers::Vector<float> *>(VT_B_HIDDEN_TRAJ_DATA);
   }
+  const ::flatbuffers::Vector<float> *codebook_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_CODEBOOK_DATA);
+  }
+  const ::flatbuffers::Vector<float> *w_slots_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_SLOTS_DATA);
+  }
+  uint32_t codebook_size() const {
+    return GetField<uint32_t>(VT_CODEBOOK_SIZE, 0);
+  }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffsetRequired(verifier, VT_W_FUSE_DATA) &&
@@ -2138,9 +2153,9 @@ struct LatentTrajectoryPresetWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuf
            verifier.VerifyVector(w_gate_data()) &&
            VerifyOffsetRequired(verifier, VT_B_GATE_DATA) &&
            verifier.VerifyVector(b_gate_data()) &&
-           VerifyOffsetRequired(verifier, VT_W_TARGET_DATA) &&
+           VerifyOffset(verifier, VT_W_TARGET_DATA) &&
            verifier.VerifyVector(w_target_data()) &&
-           VerifyOffsetRequired(verifier, VT_B_TARGET_DATA) &&
+           VerifyOffset(verifier, VT_B_TARGET_DATA) &&
            verifier.VerifyVector(b_target_data()) &&
            VerifyOffsetRequired(verifier, VT_FUSE_NORM_GAMMA_DATA) &&
            verifier.VerifyVector(fuse_norm_gamma_data()) &&
@@ -2155,6 +2170,11 @@ struct LatentTrajectoryPresetWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuf
            verifier.VerifyVector(w_hidden_traj_data()) &&
            VerifyOffsetRequired(verifier, VT_B_HIDDEN_TRAJ_DATA) &&
            verifier.VerifyVector(b_hidden_traj_data()) &&
+           VerifyOffset(verifier, VT_CODEBOOK_DATA) &&
+           verifier.VerifyVector(codebook_data()) &&
+           VerifyOffset(verifier, VT_W_SLOTS_DATA) &&
+           verifier.VerifyVector(w_slots_data()) &&
+           VerifyField<uint32_t>(verifier, VT_CODEBOOK_SIZE, 4) &&
            verifier.EndTable();
   }
   LatentTrajectoryPresetWeightsT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
@@ -2223,6 +2243,15 @@ struct LatentTrajectoryPresetWeightsBuilder {
   void add_b_hidden_traj_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> b_hidden_traj_data) {
     fbb_.AddOffset(LatentTrajectoryPresetWeights::VT_B_HIDDEN_TRAJ_DATA, b_hidden_traj_data);
   }
+  void add_codebook_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> codebook_data) {
+    fbb_.AddOffset(LatentTrajectoryPresetWeights::VT_CODEBOOK_DATA, codebook_data);
+  }
+  void add_w_slots_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> w_slots_data) {
+    fbb_.AddOffset(LatentTrajectoryPresetWeights::VT_W_SLOTS_DATA, w_slots_data);
+  }
+  void add_codebook_size(uint32_t codebook_size) {
+    fbb_.AddElement<uint32_t>(LatentTrajectoryPresetWeights::VT_CODEBOOK_SIZE, codebook_size, 0);
+  }
   explicit LatentTrajectoryPresetWeightsBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -2238,8 +2267,6 @@ struct LatentTrajectoryPresetWeightsBuilder {
     fbb_.Required(o, LatentTrajectoryPresetWeights::VT_B_UP_DATA);
     fbb_.Required(o, LatentTrajectoryPresetWeights::VT_W_GATE_DATA);
     fbb_.Required(o, LatentTrajectoryPresetWeights::VT_B_GATE_DATA);
-    fbb_.Required(o, LatentTrajectoryPresetWeights::VT_W_TARGET_DATA);
-    fbb_.Required(o, LatentTrajectoryPresetWeights::VT_B_TARGET_DATA);
     fbb_.Required(o, LatentTrajectoryPresetWeights::VT_FUSE_NORM_GAMMA_DATA);
     fbb_.Required(o, LatentTrajectoryPresetWeights::VT_PRESET_NORM_GAMMA_DATA);
     fbb_.Required(o, LatentTrajectoryPresetWeights::VT_W_HIDDEN_TRAJ_DATA);
@@ -2268,8 +2295,14 @@ inline ::flatbuffers::Offset<LatentTrajectoryPresetWeights> CreateLatentTrajecto
     uint32_t preset_dim = 0,
     uint32_t gate_dim = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_hidden_traj_data = 0,
-    ::flatbuffers::Offset<::flatbuffers::Vector<float>> b_hidden_traj_data = 0) {
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> b_hidden_traj_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> codebook_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_slots_data = 0,
+    uint32_t codebook_size = 0) {
   LatentTrajectoryPresetWeightsBuilder builder_(_fbb);
+  builder_.add_codebook_size(codebook_size);
+  builder_.add_w_slots_data(w_slots_data);
+  builder_.add_codebook_data(codebook_data);
   builder_.add_b_hidden_traj_data(b_hidden_traj_data);
   builder_.add_w_hidden_traj_data(w_hidden_traj_data);
   builder_.add_gate_dim(gate_dim);
@@ -2312,7 +2345,10 @@ inline ::flatbuffers::Offset<LatentTrajectoryPresetWeights> CreateLatentTrajecto
     uint32_t preset_dim = 0,
     uint32_t gate_dim = 0,
     const std::vector<float> *w_hidden_traj_data = nullptr,
-    const std::vector<float> *b_hidden_traj_data = nullptr) {
+    const std::vector<float> *b_hidden_traj_data = nullptr,
+    const std::vector<float> *codebook_data = nullptr,
+    const std::vector<float> *w_slots_data = nullptr,
+    uint32_t codebook_size = 0) {
   auto w_fuse_data__ = w_fuse_data ? _fbb.CreateVector<float>(*w_fuse_data) : 0;
   auto b_fuse_data__ = b_fuse_data ? _fbb.CreateVector<float>(*b_fuse_data) : 0;
   auto w_down_data__ = w_down_data ? _fbb.CreateVector<float>(*w_down_data) : 0;
@@ -2327,6 +2363,8 @@ inline ::flatbuffers::Offset<LatentTrajectoryPresetWeights> CreateLatentTrajecto
   auto preset_norm_gamma_data__ = preset_norm_gamma_data ? _fbb.CreateVector<float>(*preset_norm_gamma_data) : 0;
   auto w_hidden_traj_data__ = w_hidden_traj_data ? _fbb.CreateVector<float>(*w_hidden_traj_data) : 0;
   auto b_hidden_traj_data__ = b_hidden_traj_data ? _fbb.CreateVector<float>(*b_hidden_traj_data) : 0;
+  auto codebook_data__ = codebook_data ? _fbb.CreateVector<float>(*codebook_data) : 0;
+  auto w_slots_data__ = w_slots_data ? _fbb.CreateVector<float>(*w_slots_data) : 0;
   return GRIMTransformer::CreateLatentTrajectoryPresetWeights(
       _fbb,
       w_fuse_data__,
@@ -2347,7 +2385,10 @@ inline ::flatbuffers::Offset<LatentTrajectoryPresetWeights> CreateLatentTrajecto
       preset_dim,
       gate_dim,
       w_hidden_traj_data__,
-      b_hidden_traj_data__);
+      b_hidden_traj_data__,
+      codebook_data__,
+      w_slots_data__,
+      codebook_size);
 }
 
 ::flatbuffers::Offset<LatentTrajectoryPresetWeights> CreateLatentTrajectoryPresetWeights(::flatbuffers::FlatBufferBuilder &_fbb, const LatentTrajectoryPresetWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
@@ -3961,6 +4002,9 @@ inline void LatentTrajectoryPresetWeights::UnPackTo(LatentTrajectoryPresetWeight
   { auto _e = gate_dim(); _o->gate_dim = _e; }
   { auto _e = w_hidden_traj_data(); if (_e) { _o->w_hidden_traj_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_hidden_traj_data[_i] = _e->Get(_i); } } else { _o->w_hidden_traj_data.resize(0); } }
   { auto _e = b_hidden_traj_data(); if (_e) { _o->b_hidden_traj_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->b_hidden_traj_data[_i] = _e->Get(_i); } } else { _o->b_hidden_traj_data.resize(0); } }
+  { auto _e = codebook_data(); if (_e) { _o->codebook_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->codebook_data[_i] = _e->Get(_i); } } else { _o->codebook_data.resize(0); } }
+  { auto _e = w_slots_data(); if (_e) { _o->w_slots_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_slots_data[_i] = _e->Get(_i); } } else { _o->w_slots_data.resize(0); } }
+  { auto _e = codebook_size(); _o->codebook_size = _e; }
 }
 
 inline ::flatbuffers::Offset<LatentTrajectoryPresetWeights> LatentTrajectoryPresetWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const LatentTrajectoryPresetWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
@@ -3979,8 +4023,8 @@ inline ::flatbuffers::Offset<LatentTrajectoryPresetWeights> CreateLatentTrajecto
   auto _b_up_data = _fbb.CreateVector(_o->b_up_data);
   auto _w_gate_data = _fbb.CreateVector(_o->w_gate_data);
   auto _b_gate_data = _fbb.CreateVector(_o->b_gate_data);
-  auto _w_target_data = _fbb.CreateVector(_o->w_target_data);
-  auto _b_target_data = _fbb.CreateVector(_o->b_target_data);
+  auto _w_target_data = _o->w_target_data.size() ? _fbb.CreateVector(_o->w_target_data) : 0;
+  auto _b_target_data = _o->b_target_data.size() ? _fbb.CreateVector(_o->b_target_data) : 0;
   auto _fuse_norm_gamma_data = _fbb.CreateVector(_o->fuse_norm_gamma_data);
   auto _preset_norm_gamma_data = _fbb.CreateVector(_o->preset_norm_gamma_data);
   auto _d_model = _o->d_model;
@@ -3990,6 +4034,9 @@ inline ::flatbuffers::Offset<LatentTrajectoryPresetWeights> CreateLatentTrajecto
   auto _gate_dim = _o->gate_dim;
   auto _w_hidden_traj_data = _fbb.CreateVector(_o->w_hidden_traj_data);
   auto _b_hidden_traj_data = _fbb.CreateVector(_o->b_hidden_traj_data);
+  auto _codebook_data = _o->codebook_data.size() ? _fbb.CreateVector(_o->codebook_data) : 0;
+  auto _w_slots_data = _o->w_slots_data.size() ? _fbb.CreateVector(_o->w_slots_data) : 0;
+  auto _codebook_size = _o->codebook_size;
   return GRIMTransformer::CreateLatentTrajectoryPresetWeights(
       _fbb,
       _w_fuse_data,
@@ -4010,7 +4057,10 @@ inline ::flatbuffers::Offset<LatentTrajectoryPresetWeights> CreateLatentTrajecto
       _preset_dim,
       _gate_dim,
       _w_hidden_traj_data,
-      _b_hidden_traj_data);
+      _b_hidden_traj_data,
+      _codebook_data,
+      _w_slots_data,
+      _codebook_size);
 }
 
 inline NumberEncoderWeightsT *NumberEncoderWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {

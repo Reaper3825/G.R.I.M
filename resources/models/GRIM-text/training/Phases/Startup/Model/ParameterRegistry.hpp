@@ -132,12 +132,12 @@ struct LatentTrajectoryPresetParameterTensors {
     Tensor b_fuse;            // [1, fuse_dim]
     Tensor W_down;            // [fuse_dim, preset_dim]
     Tensor b_down;            // [1, preset_dim]
+    Tensor codebook;          // [codebook_size, preset_dim] reusable atomic token-group presets
+    Tensor W_slots;           // [preset_dim, mtp_k * d_model] decode one preset into positional MTP slots
     Tensor W_up;              // [preset_dim, d_model]
     Tensor b_up;              // [1, d_model]
     Tensor W_gate;            // [d_model + fuse_dim, 1] scalar gate for first implementation
     Tensor b_gate;            // [1, 1], initialized from gate_bias_init
-    Tensor W_target;          // [d_model, preset_dim]
-    Tensor b_target;          // [1, preset_dim]
     Tensor fuse_norm_gamma;   // [fuse_dim]
     Tensor preset_norm_gamma; // [preset_dim]
 };
@@ -561,6 +561,10 @@ inline constexpr std::array<LatentTrajectoryPresetTensorParameterSpec, 14>
          GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET, GRIM::ParamStatsBucket::ENCODER},
         {"latent_preset_b_down", &GRIM::LatentTrajectoryPresetParameterTensors::b_down,
          GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET, GRIM::ParamStatsBucket::ENCODER},
+        {"latent_preset_codebook", &GRIM::LatentTrajectoryPresetParameterTensors::codebook,
+         GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET, GRIM::ParamStatsBucket::ENCODER},
+        {"latent_preset_W_slots", &GRIM::LatentTrajectoryPresetParameterTensors::W_slots,
+         GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET, GRIM::ParamStatsBucket::ENCODER},
         {"latent_preset_W_up", &GRIM::LatentTrajectoryPresetParameterTensors::W_up,
          GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET, GRIM::ParamStatsBucket::ENCODER},
         {"latent_preset_b_up", &GRIM::LatentTrajectoryPresetParameterTensors::b_up,
@@ -568,10 +572,6 @@ inline constexpr std::array<LatentTrajectoryPresetTensorParameterSpec, 14>
         {"latent_preset_W_gate", &GRIM::LatentTrajectoryPresetParameterTensors::W_gate,
          GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET, GRIM::ParamStatsBucket::ENCODER},
         {"latent_preset_b_gate", &GRIM::LatentTrajectoryPresetParameterTensors::b_gate,
-         GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET, GRIM::ParamStatsBucket::ENCODER},
-        {"latent_preset_W_target", &GRIM::LatentTrajectoryPresetParameterTensors::W_target,
-         GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET, GRIM::ParamStatsBucket::ENCODER},
-        {"latent_preset_b_target", &GRIM::LatentTrajectoryPresetParameterTensors::b_target,
          GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET, GRIM::ParamStatsBucket::ENCODER},
         {"latent_preset_fuse_norm_gamma", &GRIM::LatentTrajectoryPresetParameterTensors::fuse_norm_gamma,
          GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET, GRIM::ParamStatsBucket::ENCODER},
@@ -787,16 +787,13 @@ inline void registerLatentTrajectoryPresetParameters(
             enabled = hp.up_bias_enabled;
         } else if (spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_gate) {
             enabled = hp.gate_bias_enabled;
-        } else if (spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_target) {
-            enabled = hp.target_bias_enabled;
         }
         const bool is_bias =
             spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_hidden_traj ||
             spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_fuse ||
             spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_down ||
             spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_up ||
-            spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_gate ||
-            spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_target;
+            spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_gate;
         if (is_bias) {
             registrar.addConfigGatedTensor(spec.name,
                                            latent_preset_parameters.*(spec.tensor_member),

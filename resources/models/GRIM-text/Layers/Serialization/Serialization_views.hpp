@@ -26,6 +26,7 @@ struct SerializationModelConfigView {
 	int latent_trajectory_preset_fuse_dim = 0;
 	int latent_trajectory_preset_dim = 0;
 	int latent_trajectory_preset_gate_dim = 0;
+	int latent_trajectory_preset_codebook_size = 0;
 
 	int head_dim() const { return (num_heads > 0) ? (d_model / num_heads) : 0; }
 	int kv_dim()   const { return num_kv_heads * head_dim(); }
@@ -187,10 +188,10 @@ struct SerializationLatentTrajectoryPresetReadView {
 	DeviceReadView b_up;
 	DeviceReadView W_gate;
 	DeviceReadView b_gate;
-	DeviceReadView W_target;
-	DeviceReadView b_target;
 	DeviceReadView fuse_norm_gamma;
 	DeviceReadView preset_norm_gamma;
+	DeviceReadView codebook;
+	DeviceReadView W_slots;
 	bool enabled = false;
 };
 
@@ -205,10 +206,10 @@ struct SerializationLatentTrajectoryPresetWriteView {
 	DeviceWriteView b_up;
 	DeviceWriteView W_gate;
 	DeviceWriteView b_gate;
-	DeviceWriteView W_target;
-	DeviceWriteView b_target;
 	DeviceWriteView fuse_norm_gamma;
 	DeviceWriteView preset_norm_gamma;
+	DeviceWriteView codebook;
+	DeviceWriteView W_slots;
 };
 
 struct SerializationNumberEncoderReadView {

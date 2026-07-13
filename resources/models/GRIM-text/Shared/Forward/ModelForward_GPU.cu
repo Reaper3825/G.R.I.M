@@ -40,6 +40,278 @@ namespace Forward {
 
 namespace {
 
+const TensorContract::Shape2D& requireTensor2DShape(
+    const Tensor& tensor,
+    const char* caller,
+    const char* label);
+
+constexpr int kPresetCodebookBlockSize = 256;
+
+void checkPresetCodebookCuda(cudaError_t err, const char* context) {
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string(context) + ": " + cudaGetErrorString(err));
+    }
+}
+
+__global__ void kernel_quantize_preset_codebook(
+    const float* __restrict__ proposals,
+    const float* __restrict__ codebook,
+    float* __restrict__ quantized,
+    int* __restrict__ selected_codes,
+    int rows,
+    int codebook_size,
+    int preset_dim) {
+    const int row = blockIdx.x;
+    if (row >= rows) return;
+
+    extern __shared__ float shared_proposal[];
+    const float* proposal = proposals + static_cast<size_t>(row) * preset_dim;
+    for (int d = threadIdx.x; d < preset_dim; d += blockDim.x) {
+        shared_proposal[d] = proposal[d];
+    }
+    __syncthreads();
+
+    float best_distance = CUDART_INF_F;
+    int best_code = 0;
+    for (int code = threadIdx.x; code < codebook_size; code += blockDim.x) {
+        float distance = 0.0f;
+        const float* entry = codebook + static_cast<size_t>(code) * preset_dim;
+        for (int d = 0; d < preset_dim; ++d) {
+            const float diff = shared_proposal[d] - entry[d];
+            distance = fmaf(diff, diff, distance);
+        }
+        if (distance < best_distance || (distance == best_distance && code < best_code)) {
+            best_distance = distance;
+            best_code = code;
+        }
+    }
+
+    __shared__ float shared_distance[kPresetCodebookBlockSize];
+    __shared__ int shared_code[kPresetCodebookBlockSize];
+    shared_distance[threadIdx.x] = best_distance;
+    shared_code[threadIdx.x] = best_code;
+    __syncthreads();
+
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            const float other_distance = shared_distance[threadIdx.x + stride];
+            const int other_code = shared_code[threadIdx.x + stride];
+            if (other_distance < shared_distance[threadIdx.x] ||
+                (other_distance == shared_distance[threadIdx.x] &&
+                 other_code < shared_code[threadIdx.x])) {
+                shared_distance[threadIdx.x] = other_distance;
+                shared_code[threadIdx.x] = other_code;
+            }
+        }
+        __syncthreads();
+    }
+
+    const int selected = shared_code[0];
+    if (threadIdx.x == 0) {
+        selected_codes[row] = selected;
+    }
+    for (int d = threadIdx.x; d < preset_dim; d += blockDim.x) {
+        quantized[static_cast<size_t>(row) * preset_dim + d] =
+            codebook[static_cast<size_t>(selected) * preset_dim + d];
+    }
+}
+
+__global__ void kernel_quantize_preset_codebook_backward(
+    const float* __restrict__ grad_output,
+    const int* __restrict__ selected_codes,
+    float* __restrict__ grad_proposals,
+    float* __restrict__ grad_codebook,
+    int rows,
+    int preset_dim) {
+    const size_t idx =
+        (static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t total = static_cast<size_t>(rows) * preset_dim;
+    if (idx >= total) return;
+    const int row = static_cast<int>(idx / static_cast<size_t>(preset_dim));
+    const int d = static_cast<int>(idx - static_cast<size_t>(row) * preset_dim);
+    const float grad = grad_output[idx];
+    if (grad_proposals) {
+        atomicAdd(grad_proposals + idx, grad);  // straight-through estimator
+    }
+    if (grad_codebook) {
+        const int code = selected_codes[row];
+        atomicAdd(grad_codebook + static_cast<size_t>(code) * preset_dim + d, grad);
+    }
+}
+
+struct PresetCodebookQuantizeGradFn final : public GradFn {
+    bool proposals_require_grad = false;
+    bool codebook_requires_grad = false;
+    float* grad_proposals = nullptr;
+    float* grad_codebook = nullptr;
+    std::shared_ptr<float> owned_grad_proposals;
+    std::shared_ptr<float> owned_grad_codebook;
+    std::shared_ptr<int> selected_codes;
+    TensorContract::TensorShape proposals_shape;
+    TensorContract::TensorShape codebook_shape;
+    std::shared_ptr<GradFn> proposals_grad_fn;
+    std::shared_ptr<GradFn> codebook_grad_fn;
+    int rows = 0;
+    int preset_dim = 0;
+
+    PresetCodebookQuantizeGradFn() { op_name = "preset_codebook_quantize"; }
+
+    void captureTensor(Tensor& tensor,
+                       bool& requires_grad,
+                       float*& grad,
+                       std::shared_ptr<float>& owned_grad,
+                       TensorContract::TensorShape& shape,
+                       std::shared_ptr<GradFn>& upstream,
+                       const char* label,
+                       cudaStream_t stream) {
+        requires_grad = tensor.requires_grad;
+        shape = tensor.shape;
+        if (!requires_grad) return;
+        upstream = tensor.grad_fn;
+        register_input(tensor.grad_fn);
+        if (tensor.is_leaf) {
+            tensor.ensure_grad();
+            grad = tensor.grad_data();
+            return;
+        }
+        float* buffer = nullptr;
+        CudaAlloc::cudaMallocOrThrow(
+            reinterpret_cast<void**>(&buffer), tensor.numel() * sizeof(float), label);
+        checkPresetCodebookCuda(
+            cudaMemsetAsync(buffer, 0, tensor.numel() * sizeof(float), stream),
+            "PresetCodebookQuantizeGradFn: zero gradient buffer failed");
+        owned_grad.reset(buffer, [](float* p) { queueForDeferredCleanup(p); });
+        grad = owned_grad.get();
+    }
+
+    void apply_impl(const Tensor& grad_output,
+                    cudaStream_t stream,
+                    const Batching::BatchPayload* backward_payload,
+                    const Batching::BatchDeviceBindings* backward_bindings) override {
+        setCurrentGradFnOp("preset_codebook_quantize", this);
+        if (applied) return;
+        applied = true;
+        if (!grad_output.data || grad_output.numel() != static_cast<size_t>(rows) * preset_dim) {
+            throw std::runtime_error("PresetCodebookQuantizeGradFn: invalid output gradient");
+        }
+
+        const size_t total = static_cast<size_t>(rows) * preset_dim;
+        constexpr int block = 256;
+        const int blocks = static_cast<int>((total + block - 1) / block);
+        const int gx = std::min(blocks, 65535);
+        const int gy = (blocks + gx - 1) / gx;
+        kernel_quantize_preset_codebook_backward<<<dim3(gx, gy, 1), block, 0, stream>>>(
+            grad_output.data,
+            selected_codes.get(),
+            proposals_require_grad ? grad_proposals : nullptr,
+            codebook_requires_grad ? grad_codebook : nullptr,
+            rows,
+            preset_dim);
+        checkPresetCodebookCuda(
+            cudaGetLastError(),
+            "PresetCodebookQuantizeGradFn: backward kernel launch failed");
+
+        if (proposals_require_grad && proposals_grad_fn) {
+            Tensor view;
+            view.data = grad_proposals;
+            view.shape = proposals_shape;
+            view.owns_data = false;
+            view.stream = stream;
+            proposals_grad_fn->apply(view, stream, backward_payload, backward_bindings);
+        }
+        if (codebook_requires_grad && codebook_grad_fn) {
+            Tensor view;
+            view.data = grad_codebook;
+            view.shape = codebook_shape;
+            view.owns_data = false;
+            view.stream = stream;
+            codebook_grad_fn->apply(view, stream, backward_payload, backward_bindings);
+        }
+    }
+
+    void release_saved() override {
+        GradFn::release_saved();
+        proposals_grad_fn.reset();
+        codebook_grad_fn.reset();
+        owned_grad_proposals.reset();
+        owned_grad_codebook.reset();
+        selected_codes.reset();
+        grad_proposals = nullptr;
+        grad_codebook = nullptr;
+    }
+};
+
+Tensor quantizePresetCodebook(Tensor& proposals,
+                              Tensor& codebook,
+                              cudaStream_t stream) {
+    const auto& proposal_shape = requireTensor2DShape(
+        proposals, "quantizePresetCodebook", "preset proposals");
+    const auto& codebook_shape = requireTensor2DShape(
+        codebook, "quantizePresetCodebook", "preset codebook");
+    if (proposal_shape.cols != codebook_shape.cols || codebook_shape.rows <= 0) {
+        throw std::runtime_error("quantizePresetCodebook: incompatible proposal/codebook shapes");
+    }
+
+    const bool needs_grad = proposals.requires_grad || codebook.requires_grad;
+    Tensor result = Tensor::empty(
+        TensorContract::TensorShape::make_BSM(proposal_shape.rows, proposal_shape.cols),
+        needs_grad,
+        stream,
+        "latent_preset_quantized");
+    int* raw_indices = nullptr;
+    CudaAlloc::cudaMallocOrThrow(
+        reinterpret_cast<void**>(&raw_indices),
+        static_cast<size_t>(proposal_shape.rows) * sizeof(int),
+        "latent_preset_code_indices");
+    std::shared_ptr<int> index_owner(raw_indices, [](int* p) { queueForDeferredCleanup(p); });
+
+    const size_t proposal_shared_bytes =
+        static_cast<size_t>(proposal_shape.cols) * sizeof(float);
+    kernel_quantize_preset_codebook<<<
+        proposal_shape.rows,
+        kPresetCodebookBlockSize,
+        proposal_shared_bytes,
+        stream>>>(
+        proposals.data,
+        codebook.data,
+        result.data,
+        raw_indices,
+        proposal_shape.rows,
+        codebook_shape.rows,
+        proposal_shape.cols);
+    checkPresetCodebookCuda(
+        cudaGetLastError(),
+        "quantizePresetCodebook: forward kernel launch failed");
+
+    if (needs_grad) {
+        result.is_leaf = false;
+        auto grad_fn = std::make_shared<PresetCodebookQuantizeGradFn>();
+        grad_fn->captureTensor(
+            proposals,
+            grad_fn->proposals_require_grad,
+            grad_fn->grad_proposals,
+            grad_fn->owned_grad_proposals,
+            grad_fn->proposals_shape,
+            grad_fn->proposals_grad_fn,
+            "PresetCodebookQuantizeGradFn_proposals",
+            stream);
+        grad_fn->captureTensor(
+            codebook,
+            grad_fn->codebook_requires_grad,
+            grad_fn->grad_codebook,
+            grad_fn->owned_grad_codebook,
+            grad_fn->codebook_shape,
+            grad_fn->codebook_grad_fn,
+            "PresetCodebookQuantizeGradFn_codebook",
+            stream);
+        grad_fn->selected_codes = std::move(index_owner);
+        grad_fn->rows = proposal_shape.rows;
+        grad_fn->preset_dim = proposal_shape.cols;
+        result.grad_fn = grad_fn;
+    }
+    return result;
+}
+
 const char* graphPolicyName(const ModelForwardGraphPolicy& graph) {
     if (graph.connect_parameter_graph && graph.retain_backward_graph) {
         return graph.emit_mtp_logits ? "autograd_connected+mtp" : "autograd_connected";
@@ -233,23 +505,22 @@ void materializeForwardMtpLogits(
         request.stream);
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Latent-trajectory MTP logits (latent_trajectory_preset_use_mtp_logits):
-    // head k logits = MTP head k projection of the k-th predicted future
-    // hidden state, latent_preset_mtp_hidden[:, k*d_model : (k+1)*d_model].
+    // Discrete-preset MTP logits (latent_trajectory_preset_use_mtp_logits):
+    // head k logits = MTP head k projection of positional slot k decoded from
+    // the selected atomic preset.
     //
-    // The latent trajectory feature supplies the future-hidden representation;
-    // the MTP heads remain the token-space prediction owners. This keeps one
-    // MTP parameter path while still coupling future-token CE through
-    // W_hidden_traj into the trunk.
+    // The codebook is the mandatory bottleneck; the MTP heads remain the
+    // token-space prediction owners. Future-token CE therefore teaches the
+    // selected preset what belongs at each position in its token grouping.
     // ═══════════════════════════════════════════════════════════════════════
     if (latent_preset_hp.enabled && latent_preset_hp.use_mtp_logits) {
-        Tensor& trajectory = forward_outputs.latent_preset_mtp_hidden;
-        if (!trajectory.data) {
+        Tensor& decoded_slots = forward_outputs.latent_preset_mtp_hidden;
+        if (!decoded_slots.data) {
             throw std::runtime_error("executeModelForward: latent_preset_mtp_hidden is NULL — "
-                "latent trajectory activations must be materialized before MTP logits");
+                "decoded preset slots must be materialized before MTP logits");
         }
         const int d_model = latent_preset_hp.d_model;
-        const auto& traj_shape = requireTensor2DShape(trajectory, "executeModelForward", "latent_preset_mtp_hidden");
+        const auto& traj_shape = requireTensor2DShape(decoded_slots, "executeModelForward", "latent_preset_mtp_hidden");
         if (traj_shape.rows != payload.total_tokens ||
             traj_shape.cols != mtp_k * d_model) {
             throw std::runtime_error("executeModelForward: latent_preset_mtp_hidden shape=[" +
@@ -269,17 +540,17 @@ void materializeForwardMtpLogits(
                     " weight tensor is NULL");
             }
 
-            Tensor future_hidden_k = autograd::slice_columns(
-                trajectory,
+            Tensor slot_hidden_k = autograd::slice_columns(
+                decoded_slots,
                 k * d_model,
                 d_model,
                 request.stream);
             // Mirror the main head's pre-projection normalization so the
-            // predicted future hidden states are scored in the same geometry
+            // decoded positional slots are scored in the same geometry
             // as live hidden states.
             if (lm_head_parameters.final_rms_gamma.data) {
-                future_hidden_k = autograd::rms_norm(
-                    future_hidden_k,
+                slot_hidden_k = autograd::rms_norm(
+                    slot_hidden_k,
                     lm_head_parameters.final_rms_gamma,
                     lm_head_hp.rms_epsilon,
                     request.stream);
@@ -303,7 +574,7 @@ void materializeForwardMtpLogits(
                 }
             }
             Tensor logits_k = autograd::matmul(
-                future_hidden_k,
+                slot_hidden_k,
                 head.weight,
                 request.stream,
                 true);
@@ -554,6 +825,8 @@ GRIM::LatentTrajectoryPresetParameterTensors detachLatentTrajectoryPresetParamet
     if (hp.down_bias_enabled) {
         detached.b_down = parameters.b_down.detach(stream);
     }
+    detached.codebook = parameters.codebook.detach(stream);
+    detached.W_slots = parameters.W_slots.detach(stream);
     detached.W_up = parameters.W_up.detach(stream);
     if (hp.up_bias_enabled) {
         detached.b_up = parameters.b_up.detach(stream);
@@ -562,20 +835,18 @@ GRIM::LatentTrajectoryPresetParameterTensors detachLatentTrajectoryPresetParamet
     if (hp.gate_bias_enabled) {
         detached.b_gate = parameters.b_gate.detach(stream);
     }
-    detached.W_target = parameters.W_target.detach(stream);
-    if (hp.target_bias_enabled) {
-        detached.b_target = parameters.b_target.detach(stream);
-    }
     detached.fuse_norm_gamma = parameters.fuse_norm_gamma.detach(stream);
     detached.preset_norm_gamma = parameters.preset_norm_gamma.detach(stream);
     return detached;
 }
 
 void clearLatentTrajectoryPresetOutputs(ModelForwardOutputs& forward_outputs) {
+    forward_outputs.latent_preset_encoder_slots = Tensor();
     forward_outputs.latent_preset_mtp_hidden = Tensor();
     forward_outputs.latent_preset_future_fused = Tensor();
     forward_outputs.latent_preset_future_entropy = Tensor();
     forward_outputs.latent_preset_z = Tensor();
+    forward_outputs.latent_preset_quantized = Tensor();
     forward_outputs.latent_preset_vec = Tensor();
     forward_outputs.latent_preset_gate_pre = Tensor();
     forward_outputs.latent_preset_gate = Tensor();
@@ -652,6 +923,13 @@ void materializeLatentTrajectoryPresetActivations(
                           static_cast<std::size_t>(latent_preset_hp.fuse_dim) *
                               static_cast<std::size_t>(latent_preset_hp.preset_dim),
                           "latent_preset.W_down");
+    requireTensorElements(params->codebook,
+                          static_cast<std::size_t>(latent_preset_hp.codebook_size) *
+                              static_cast<std::size_t>(latent_preset_hp.preset_dim),
+                          "latent_preset.codebook");
+    requireTensorElements(params->W_slots,
+                          static_cast<std::size_t>(latent_preset_hp.preset_dim) * trajectory_dim,
+                          "latent_preset.W_slots");
     requireTensorElements(params->W_up,
                           static_cast<std::size_t>(latent_preset_hp.preset_dim) *
                               static_cast<std::size_t>(latent_preset_hp.d_model),
@@ -676,22 +954,22 @@ void materializeLatentTrajectoryPresetActivations(
     validateOptionalBias(params->b_up, latent_preset_hp.up_bias_enabled, static_cast<std::size_t>(latent_preset_hp.d_model), "latent_preset.b_up");
     validateOptionalBias(params->b_gate, latent_preset_hp.gate_bias_enabled, 1, "latent_preset.b_gate");
 
-    // Shared hidden-trajectory projection: h[t] -> [mtp_k * d_model] predicted
-    // future hidden trajectory. A single learned head predicts all K slots as
-    // one coordinated trajectory; causal because it only reads h[t].
-    forward_outputs.latent_preset_mtp_hidden = autograd::matmul(
+    // Continuous preset encoder: h[t] -> K coordinated slot features. These
+    // are fused into one proposal solely to select an atomic codebook entry;
+    // they cannot reach the MTP heads without passing through that entry.
+    forward_outputs.latent_preset_encoder_slots = autograd::matmul(
         hidden,
         params->W_hidden_traj,
         request.stream);
     if (latent_preset_hp.hidden_bias_enabled) {
-        forward_outputs.latent_preset_mtp_hidden = autograd::broadcast_add(
-            forward_outputs.latent_preset_mtp_hidden,
+        forward_outputs.latent_preset_encoder_slots = autograd::broadcast_add(
+            forward_outputs.latent_preset_encoder_slots,
             params->b_hidden_traj,
             request.stream);
     }
 
     forward_outputs.latent_preset_future_fused = autograd::matmul(
-        forward_outputs.latent_preset_mtp_hidden,
+        forward_outputs.latent_preset_encoder_slots,
         params->W_fuse,
         request.stream);
     if (latent_preset_hp.fuse_bias_enabled) {
@@ -722,8 +1000,20 @@ void materializeLatentTrajectoryPresetActivations(
         1.0e-5f,
         request.stream);
 
-    forward_outputs.latent_preset_vec = autograd::matmul(
+    // The discrete preset is the mandatory content bottleneck. Both positional
+    // MTP slots and the main-head residual value decode from the selected entry;
+    // the continuous branch only controls whether that value is injected.
+    forward_outputs.latent_preset_quantized = quantizePresetCodebook(
         forward_outputs.latent_preset_z,
+        params->codebook,
+        request.stream);
+    forward_outputs.latent_preset_mtp_hidden = autograd::matmul(
+        forward_outputs.latent_preset_quantized,
+        params->W_slots,
+        request.stream);
+
+    forward_outputs.latent_preset_vec = autograd::matmul(
+        forward_outputs.latent_preset_quantized,
         params->W_up,
         request.stream);
     if (latent_preset_hp.up_bias_enabled) {

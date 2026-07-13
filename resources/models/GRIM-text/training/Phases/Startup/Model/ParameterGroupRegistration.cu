@@ -530,7 +530,7 @@ void registerSelectorParameters(ParameterRegistry::StartupParameterRegistry& par
 void registerMtpParameters(ParameterRegistry::StartupParameterRegistry& parameter_registry,
                            Registrar& registrar,
                            const GRIM::Config::AiConfigSnapshot& config) {
-    const auto mtp_hp = GRIM::HyperParameters::mtpFeatureHP(config);
+    const auto mtp_hp = GRIM::HyperParameters::mtpConstructionHP(config);
     auto& mtp_heads = parameter_registry.mtpHeadParameterTensors();
     if (!mtp_hp.enabled) {
         if (!mtp_heads.empty()) {
@@ -1559,7 +1559,8 @@ void initializeLatentTrajectoryPresetParameterTensors(
     }
     if (latent_preset_hp.d_model <= 0 || latent_preset_hp.mtp_k <= 0 ||
         latent_preset_hp.fuse_dim <= 0 || latent_preset_hp.preset_dim <= 0 ||
-        latent_preset_hp.gate_dim <= 0 || latent_preset_hp.vocab_size <= 0) {
+        latent_preset_hp.gate_dim <= 0 || latent_preset_hp.vocab_size <= 0 ||
+        latent_preset_hp.codebook_size <= 0) {
         throw std::runtime_error(
             "initializeLatentTrajectoryPresetParameterTensors: invalid latent preset geometry d_model=" +
             std::to_string(latent_preset_hp.d_model) +
@@ -1567,7 +1568,8 @@ void initializeLatentTrajectoryPresetParameterTensors(
             " vocab_size=" + std::to_string(latent_preset_hp.vocab_size) +
             " fuse_dim=" + std::to_string(latent_preset_hp.fuse_dim) +
             " preset_dim=" + std::to_string(latent_preset_hp.preset_dim) +
-            " gate_dim=" + std::to_string(latent_preset_hp.gate_dim));
+            " gate_dim=" + std::to_string(latent_preset_hp.gate_dim) +
+            " codebook_size=" + std::to_string(latent_preset_hp.codebook_size));
     }
     if (latent_preset_hp.gate_dim != latent_preset_hp.d_model) {
         throw std::runtime_error(
@@ -1644,6 +1646,16 @@ void initializeLatentTrajectoryPresetParameterTensors(
     if (latent_preset_hp.down_bias_enabled) {
         params->b_down = make_bias(preset_dim, "latent_preset.b_down");
     }
+    params->codebook = GRIM::Tensor::zeros(
+        {latent_preset_hp.codebook_size, preset_dim}, init_stream, "latent_preset.codebook");
+    params->codebook.requires_grad_();
+    params->codebook.alloc_grad();
+    const float codebook_gain = std::sqrt(
+        static_cast<float>(latent_preset_hp.codebook_size + preset_dim) / 2.0f);
+    GRIM::Tensor::xavier_uniform_with_gain_(
+        params->codebook, weight_init_seed + 6, codebook_gain, init_stream);
+    params->W_slots = make_xavier(
+        preset_dim, fused_input_dim, weight_init_seed + 4, "latent_preset.W_slots");
     params->W_up = make_xavier(preset_dim, d_model, weight_init_seed + 2, "latent_preset.W_up");
     if (latent_preset_hp.up_bias_enabled) {
         params->b_up = make_bias(d_model, "latent_preset.b_up");
@@ -1651,10 +1663,6 @@ void initializeLatentTrajectoryPresetParameterTensors(
     params->W_gate = make_xavier(d_model + fuse_dim, scalar_gate_dim, weight_init_seed + 3, "latent_preset.W_gate");
     if (latent_preset_hp.gate_bias_enabled) {
         params->b_gate = make_scalar_bias(latent_preset_hp.gate_bias_init, "latent_preset.b_gate");
-    }
-    params->W_target = make_xavier(d_model, preset_dim, weight_init_seed + 4, "latent_preset.W_target");
-    if (latent_preset_hp.target_bias_enabled) {
-        params->b_target = make_bias(preset_dim, "latent_preset.b_target");
     }
     params->fuse_norm_gamma = make_norm_gamma(fuse_dim, "latent_preset.fuse_norm_gamma");
     params->preset_norm_gamma = make_norm_gamma(preset_dim, "latent_preset.preset_norm_gamma");
@@ -1671,7 +1679,8 @@ void initializeLatentTrajectoryPresetParameterTensors(
              " mtp_k=" + std::to_string(latent_preset_hp.mtp_k) +
              " fuse_dim=" + std::to_string(latent_preset_hp.fuse_dim) +
              " preset_dim=" + std::to_string(latent_preset_hp.preset_dim) +
-             " gate_dim=" + std::to_string(latent_preset_hp.gate_dim));
+             " gate_dim=" + std::to_string(latent_preset_hp.gate_dim) +
+             " codebook_size=" + std::to_string(latent_preset_hp.codebook_size));
 }
 
 void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,

@@ -393,13 +393,15 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         if (cfg.latent_trajectory_preset_mtp_k <= 0 ||
             cfg.latent_trajectory_preset_fuse_dim <= 0 ||
             cfg.latent_trajectory_preset_dim <= 0 ||
-            cfg.latent_trajectory_preset_gate_dim <= 0) {
+            cfg.latent_trajectory_preset_gate_dim <= 0 ||
+            cfg.latent_trajectory_preset_codebook_size <= 0) {
             Logging::EmitModuleError(kLogModule,
                 Msg("[save] FATAL: LatentTrajectoryPreset enabled with invalid derived dims: mtp_k=",
                     cfg.latent_trajectory_preset_mtp_k,
                     " fuse_dim=", cfg.latent_trajectory_preset_fuse_dim,
                     " preset_dim=", cfg.latent_trajectory_preset_dim,
-                    " gate_dim=", cfg.latent_trajectory_preset_gate_dim));
+                    " gate_dim=", cfg.latent_trajectory_preset_gate_dim,
+                    " codebook_size=", cfg.latent_trajectory_preset_codebook_size));
             return false;
         }
         using FloatVecOffset = flatbuffers::Offset<flatbuffers::Vector<float>>;
@@ -427,10 +429,10 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         FloatVecOffset b_up = 0;
         FloatVecOffset W_gate = 0;
         FloatVecOffset b_gate = 0;
-        FloatVecOffset W_target = 0;
-        FloatVecOffset b_target = 0;
         FloatVecOffset fuse_norm_gamma = 0;
         FloatVecOffset preset_norm_gamma = 0;
+        FloatVecOffset codebook = 0;
+        FloatVecOffset W_slots = 0;
         if (!create_required_vector(ltp_view.W_hidden_traj, "LTP W_hidden_traj", W_hidden_traj) ||
             !create_required_vector(ltp_view.b_hidden_traj, "LTP b_hidden_traj", b_hidden_traj) ||
             !create_required_vector(ltp_view.W_fuse, "LTP W_fuse", W_fuse) ||
@@ -441,10 +443,10 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
             !create_required_vector(ltp_view.b_up, "LTP b_up", b_up) ||
             !create_required_vector(ltp_view.W_gate, "LTP W_gate", W_gate) ||
             !create_required_vector(ltp_view.b_gate, "LTP b_gate", b_gate) ||
-            !create_required_vector(ltp_view.W_target, "LTP W_target", W_target) ||
-            !create_required_vector(ltp_view.b_target, "LTP b_target", b_target) ||
             !create_required_vector(ltp_view.fuse_norm_gamma, "LTP fuse_norm_gamma", fuse_norm_gamma) ||
-            !create_required_vector(ltp_view.preset_norm_gamma, "LTP preset_norm_gamma", preset_norm_gamma)) {
+            !create_required_vector(ltp_view.preset_norm_gamma, "LTP preset_norm_gamma", preset_norm_gamma) ||
+            !create_required_vector(ltp_view.codebook, "LTP codebook", codebook) ||
+            !create_required_vector(ltp_view.W_slots, "LTP W_slots", W_slots)) {
             return false;
         }
 
@@ -458,8 +460,8 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
             b_up,
             W_gate,
             b_gate,
-            W_target,
-            b_target,
+            0,  // legacy W_target field: projected target path removed
+            0,  // legacy b_target field: projected target path removed
             fuse_norm_gamma,
             preset_norm_gamma,
             static_cast<uint32_t>(cfg.d_model),
@@ -468,7 +470,10 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
             static_cast<uint32_t>(cfg.latent_trajectory_preset_dim),
             static_cast<uint32_t>(cfg.latent_trajectory_preset_gate_dim),
             W_hidden_traj,
-            b_hidden_traj);
+            b_hidden_traj,
+            codebook,
+            W_slots,
+            static_cast<uint32_t>(cfg.latent_trajectory_preset_codebook_size));
         Logging::EmitModuleInfo(kLogModule, "[save] LatentTrajectoryPreset weights serialized");
     }
 
