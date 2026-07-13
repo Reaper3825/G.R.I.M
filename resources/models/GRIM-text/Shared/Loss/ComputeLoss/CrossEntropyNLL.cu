@@ -73,39 +73,13 @@ void validateCrossEntropyPayloadGeometry(
     }
 }
 
-int requireMtpHeadIndex(
-    const Batching::BatchPayload& payload,
-    const CrossEntropyTargetSelection& target_selection,
-    const char* caller
-) {
-    if (!target_selection.mtp_head_idx.has_value()) {
-        throw std::runtime_error(std::string("[") + caller + "] MTP shifted-target selection is missing mtp_head_idx");
-    }
-
-    const int mtp_head_idx = *target_selection.mtp_head_idx;
-    if (mtp_head_idx < 0 ||
-        mtp_head_idx >= static_cast<int>(payload.mtp_shifted_targets.size())) {
-        throw std::runtime_error(std::string("[") + caller + "] mtp_head_idx=" +
-            std::to_string(mtp_head_idx) +
-            " out of range for BatchPayload.mtp_shifted_targets.size()=" +
-            std::to_string(payload.mtp_shifted_targets.size()));
-    }
-    return mtp_head_idx;
-}
-
 const char* targetSelectionName(
     const CrossEntropyTargetSelection& target_selection,
     const char* caller
 ) {
     switch (target_selection.source) {
         case CrossEntropyTargetSource::PrimaryLm:
-            if (target_selection.mtp_head_idx.has_value()) {
-                throw std::runtime_error(std::string("[") + caller + "] primary LM target selection must not carry an MTP head index");
-            }
             return "primary_lm_targets";
-
-        case CrossEntropyTargetSource::MtpShiftedHead:
-            return "mtp_shifted_targets";
     }
 
     throw std::runtime_error(std::string("[") + caller + "] CrossEntropyTargetSelection.source contains an unknown value");
@@ -118,25 +92,11 @@ int expectedValidCountForSelection(
 ) {
     switch (target_selection.source) {
         case CrossEntropyTargetSource::PrimaryLm:
-            if (target_selection.mtp_head_idx.has_value()) {
-                throw std::runtime_error(std::string("[") + caller + "] primary LM target selection must not carry an MTP head index");
-            }
             if (payload.lm_valid_tokens <= 0) {
                 throw std::runtime_error(std::string("[") + caller + "] BatchPayload.lm_valid_tokens=" +
                     std::to_string(payload.lm_valid_tokens) + " — primary loss requires a positive BatchPayload-authored valid count");
             }
             return payload.lm_valid_tokens;
-
-        case CrossEntropyTargetSource::MtpShiftedHead: {
-            const int mtp_head_idx = requireMtpHeadIndex(payload, target_selection, caller);
-            if (payload.mtp_valid_counts[mtp_head_idx] <= 0) {
-                throw std::runtime_error(std::string("[") + caller + "] BatchPayload.mtp_valid_counts[" +
-                    std::to_string(mtp_head_idx) + "]=" +
-                    std::to_string(payload.mtp_valid_counts[mtp_head_idx]) +
-                    " — caller must skip zero-valid MTP heads before loss assembly");
-            }
-            return payload.mtp_valid_counts[mtp_head_idx];
-        }
     }
 
     throw std::runtime_error(std::string("[") + caller + "] CrossEntropyTargetSelection.source contains an unknown value");
@@ -152,21 +112,10 @@ const int* resolveDeviceTargetsForSelection(
 
     switch (target_selection.source) {
         case CrossEntropyTargetSource::PrimaryLm:
-            if (target_selection.mtp_head_idx.has_value()) {
-                throw std::runtime_error(std::string("[") + caller + "] primary LM target selection must not carry an MTP head index");
-            }
             if (!bindings.d_target_ids) {
                 throw std::runtime_error(std::string("[") + caller + "] BatchDeviceBindings.d_target_ids is NULL — caller MUST upload BatchPayload before primary loss");
             }
             return bindings.d_target_ids;
-
-        case CrossEntropyTargetSource::MtpShiftedHead: {
-            const int mtp_head_idx = requireMtpHeadIndex(payload, target_selection, caller);
-            if (!bindings.d_mtp_shifted_targets) {
-                throw std::runtime_error(std::string("[") + caller + "] BatchDeviceBindings.d_mtp_shifted_targets is NULL — caller MUST upload BatchPayload before MTP loss");
-            }
-            return bindings.d_mtp_shifted_targets + static_cast<size_t>(mtp_head_idx) * payload.total_tokens;
-        }
     }
 
     throw std::runtime_error(std::string("[") + caller + "] CrossEntropyTargetSelection.source contains an unknown value");
@@ -179,13 +128,7 @@ const std::vector<int>& hostTargetsForSelection(
 ) {
     switch (target_selection.source) {
         case CrossEntropyTargetSource::PrimaryLm:
-            if (target_selection.mtp_head_idx.has_value()) {
-                throw std::runtime_error(std::string("[") + caller + "] primary LM target selection must not carry an MTP head index");
-            }
             return payload.target_ids;
-
-        case CrossEntropyTargetSource::MtpShiftedHead:
-            return payload.mtp_shifted_targets[requireMtpHeadIndex(payload, target_selection, caller)];
     }
 
     throw std::runtime_error(std::string("[") + caller + "] CrossEntropyTargetSelection.source contains an unknown value");

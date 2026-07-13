@@ -49,7 +49,7 @@ void encoderSelfAttentionForward(
 // query attends over the full cached prefix. Read-only over durable parameters
 // (no grad_fn). The caller advances cache.cache_seqlens once per forward, AFTER
 // all layers (see executeModelForward). Used for both prefill (seqlen_q=prompt_len,
-// cache fill 0) and decode (seqlen_q=1 or K+1 for MTP verification).
+// cache fill 0) and single-token decode (seqlen_q=1).
 void encoderSelfAttentionForwardCached(
     const Tensor& norm_input,
     const Tensor& W_qkv,

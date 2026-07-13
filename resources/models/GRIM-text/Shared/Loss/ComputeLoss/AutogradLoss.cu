@@ -44,36 +44,12 @@ __host__ const std::vector<int>& hostTargetsForSelection(
 ) {
     switch (target_selection.source) {
         case CrossEntropyTargetSource::PrimaryLm:
-            if (target_selection.mtp_head_idx.has_value()) {
-                throw std::runtime_error(std::string("[") + caller + "] primary LM target selection must not carry an MTP head index");
-            }
             if (static_cast<int>(payload.target_ids.size()) != payload.total_tokens) {
                 throw std::runtime_error(std::string("[") + caller + "] BatchPayload.target_ids.size()=" +
                     std::to_string(payload.target_ids.size()) + " != total_tokens=" +
                     std::to_string(payload.total_tokens));
             }
             return payload.target_ids;
-
-        case CrossEntropyTargetSource::MtpShiftedHead: {
-            if (!target_selection.mtp_head_idx.has_value()) {
-                throw std::runtime_error(std::string("[") + caller + "] MTP shifted-target selection is missing mtp_head_idx");
-            }
-            const int mtp_head_idx = *target_selection.mtp_head_idx;
-            if (mtp_head_idx < 0 ||
-                mtp_head_idx >= static_cast<int>(payload.mtp_shifted_targets.size())) {
-                throw std::runtime_error(std::string("[") + caller + "] mtp_head_idx=" +
-                    std::to_string(mtp_head_idx) +
-                    " out of range for BatchPayload.mtp_shifted_targets.size()=" +
-                    std::to_string(payload.mtp_shifted_targets.size()));
-            }
-            if (static_cast<int>(payload.mtp_shifted_targets[mtp_head_idx].size()) != payload.total_tokens) {
-                throw std::runtime_error(std::string("[") + caller + "] BatchPayload.mtp_shifted_targets[" +
-                    std::to_string(mtp_head_idx) + "].size()=" +
-                    std::to_string(payload.mtp_shifted_targets[mtp_head_idx].size()) +
-                    " != total_tokens=" + std::to_string(payload.total_tokens));
-            }
-            return payload.mtp_shifted_targets[mtp_head_idx];
-                }
     }
 
     throw std::runtime_error(std::string("[") + caller + "] CrossEntropyTargetSelection.source contains an unknown value");
@@ -252,9 +228,7 @@ struct NLLLossGradFn : public GradFn {
         const int vocab_size = backward_payload->vocab_size;
 
         // valid_count is BatchPayload-authored state — read directly rather than storing a copy on the GradFn.
-        const int valid_count = (target_selection.source == CrossEntropyTargetSource::PrimaryLm)
-            ? backward_payload->lm_valid_tokens
-            : backward_payload->mtp_valid_counts[*target_selection.mtp_head_idx];
+        const int valid_count = backward_payload->lm_valid_tokens;
         if (valid_count <= 0) {
             throw std::runtime_error("[NLLLossGradFn::apply] valid_count=" + std::to_string(valid_count)
                 + " from backward_payload — BatchPayload must have positive valid token count");
@@ -489,9 +463,7 @@ __host__ Tensor unifiedLossFromTargetSelection(
     const float mean_loss = grad_fn->mean_loss;
     const float h_weight_sum = grad_fn->weight_sum;
     // valid_count is BatchPayload-authored — read directly from payload, not via GradFn.
-    const int h_valid_count = (target_selection.source == CrossEntropyTargetSource::PrimaryLm)
-        ? payload.lm_valid_tokens
-        : payload.mtp_valid_counts[*target_selection.mtp_head_idx];
+    const int h_valid_count = payload.lm_valid_tokens;
 
     AG_TRACE("[%s] valid_count=%d mean_loss=%.6f\n",
              caller, h_valid_count, mean_loss);
@@ -555,40 +527,5 @@ __host__ Tensor unified_loss(
     );
 }
 
-__host__ Tensor unified_loss_for_mtp_head(
-    Tensor& logits,
-    const Batching::BatchPayload& payload,
-    const Batching::BatchDeviceBindings& bindings,
-    int head_idx,
-    const HyperParameters::LossConfigHP& config,
-    const float* d_class_weights,
-    cudaStream_t stream
-) {
-    payload.validate("unified_loss_for_mtp_head");
-    if (head_idx < 0 || head_idx >= static_cast<int>(payload.mtp_shifted_targets.size())) {
-        throw std::runtime_error("[unified_loss_for_mtp_head] head_idx=" + std::to_string(head_idx) +
-            " out of range for payload.mtp_shifted_targets.size()=" +
-            std::to_string(payload.mtp_shifted_targets.size()));
-    }
-    if (!bindings.d_mtp_shifted_targets) {
-        throw std::runtime_error("[unified_loss_for_mtp_head] BatchDeviceBindings.d_mtp_shifted_targets is NULL");
-    }
-    if (payload.mtp_valid_counts[head_idx] <= 0) {
-        throw std::runtime_error("[unified_loss_for_mtp_head] payload.mtp_valid_counts[" +
-            std::to_string(head_idx) + "]=" + std::to_string(payload.mtp_valid_counts[head_idx]) +
-            " — caller must skip zero-valid MTP heads before loss assembly");
-    }
-
-    return unifiedLossFromTargetSelection(
-        logits,
-        payload,
-        bindings,
-        CrossEntropyTargetSelection::mtpShiftedHead(head_idx),
-        config,
-        d_class_weights,
-        stream,
-        "unified_loss_for_mtp_head"
-    );
-}
 }  // namespace autograd
 }  // namespace GRIM

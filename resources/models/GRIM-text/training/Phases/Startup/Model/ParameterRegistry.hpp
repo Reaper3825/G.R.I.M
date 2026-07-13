@@ -15,10 +15,6 @@
 //    - ExecutionBlock parameter-group inventory
 //    - FeedForward durable per-layer parameter tensor owner
 //    - FeedForward parameter-group inventory
-//    - MTP auxiliary-head parameter tensor owner
-//    - MTP auxiliary-head parameter-group inventory
-//    - Latent trajectory preset parameter tensor owner
-//    - Latent trajectory preset parameter-group inventory
 //    - Durable ParameterGroup inventory owner
 //
 //  Registration/validation/transaction ownership stays
@@ -120,28 +116,6 @@ struct ExecutionBlockParameterTensors {
     Tensor W_trace_gate;
 };
 
-struct MtpHeadParameterTensors {
-    Tensor weight;  // [vocab_size, d_model]
-    Tensor bias;    // [vocab_size]
-};
-
-struct LatentTrajectoryPresetParameterTensors {
-    Tensor W_hidden_traj;     // [d_model, mtp_k * d_model] shared hidden-trajectory projection
-    Tensor b_hidden_traj;     // [1, mtp_k * d_model]
-    Tensor W_fuse;            // [mtp_k * d_model, fuse_dim]
-    Tensor b_fuse;            // [1, fuse_dim]
-    Tensor W_down;            // [fuse_dim, preset_dim]
-    Tensor b_down;            // [1, preset_dim]
-    Tensor codebook;          // [codebook_size, preset_dim] reusable atomic token-group presets
-    Tensor W_slots;           // [preset_dim, mtp_k * d_model] decode one preset into positional MTP slots
-    Tensor W_up;              // [preset_dim, d_model]
-    Tensor b_up;              // [1, d_model]
-    Tensor W_gate;            // [d_model + fuse_dim, 1] scalar gate for first implementation
-    Tensor b_gate;            // [1, 1], initialized from gate_bias_init
-    Tensor fuse_norm_gamma;   // [fuse_dim]
-    Tensor preset_norm_gamma; // [preset_dim]
-};
-
 struct EncodingLayerParameterTensors {
     Tensor rms1_gamma;     // [d_model]
     Tensor rms2_gamma;     // [d_model]
@@ -171,9 +145,7 @@ struct StartupParameterRegistry {
     std::unique_ptr<GRIM::NumberEncoderParameterTensors> number_encoder_parameters;
     std::unique_ptr<GRIM::SelectorParameterTensors> selector_parameters;
     std::unique_ptr<GRIM::ExecutionBlockParameterTensors> execution_block_parameters;
-    std::unique_ptr<GRIM::LatentTrajectoryPresetParameterTensors> latent_trajectory_preset_parameters;
     std::vector<GRIM::FeedForwardParameterTensors> feed_forward_parameter_tensors;
-    std::vector<GRIM::MtpHeadParameterTensors> mtp_head_parameter_tensors;
     // Single durable optimizer/autograd parameter inventory owner.
     // ParameterGroup entries are non-owning views into the tensor owners in
     // this registry and startup-owned layer topology. Do not mirror this
@@ -337,36 +309,6 @@ struct StartupParameterRegistry {
         return feed_forward_parameter_tensors[static_cast<std::size_t>(layer)];
     }
 
-    std::vector<GRIM::MtpHeadParameterTensors>& mtpHeadParameterTensors() {
-        return mtp_head_parameter_tensors;
-    }
-
-    const std::vector<GRIM::MtpHeadParameterTensors>& mtpHeadParameterTensors() const {
-        return mtp_head_parameter_tensors;
-    }
-
-    GRIM::LatentTrajectoryPresetParameterTensors* getLatentTrajectoryPresetParameters() {
-        return latent_trajectory_preset_parameters.get();
-    }
-
-    const GRIM::LatentTrajectoryPresetParameterTensors* getLatentTrajectoryPresetParameters() const {
-        return latent_trajectory_preset_parameters.get();
-    }
-
-    GRIM::LatentTrajectoryPresetParameterTensors& requireLatentTrajectoryPresetParameters(const char* caller) {
-        if (!latent_trajectory_preset_parameters) {
-            throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.latent_trajectory_preset_parameters is NULL");
-        }
-        return *latent_trajectory_preset_parameters;
-    }
-
-    const GRIM::LatentTrajectoryPresetParameterTensors& requireLatentTrajectoryPresetParameters(const char* caller) const {
-        if (!latent_trajectory_preset_parameters) {
-            throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.latent_trajectory_preset_parameters is NULL");
-        }
-        return *latent_trajectory_preset_parameters;
-    }
-
     std::vector<GRIM::ParameterGroup>& parameterGroups() {
         return parameter_groups;
     }
@@ -413,12 +355,6 @@ using EncodingLayerTensorParameterSpec =
 
 using FeedForwardTensorParameterSpec =
     TensorParameterSpec<GRIM::FeedForwardParameterTensors>;
-
-using MtpHeadTensorParameterSpec =
-    TensorParameterSpec<GRIM::MtpHeadParameterTensors>;
-
-using LatentTrajectoryPresetTensorParameterSpec =
-    TensorParameterSpec<GRIM::LatentTrajectoryPresetParameterTensors>;
 
 using EmbeddingTensorParameterSpec =
     TensorParameterSpec<GRIM::EmbeddingParameterTensors>;
@@ -537,46 +473,6 @@ inline constexpr std::array<EncodingLayerTensorParameterSpec, 8>
          GRIM::ParamGroupType::RMSNORM, GRIM::ParamStatsBucket::ENCODER},
         {"layer_scale2", &GRIM::EncodingLayerParameterTensors::layer_scale2,
          GRIM::ParamGroupType::RMSNORM, GRIM::ParamStatsBucket::ENCODER},
-    }};
-
-inline constexpr std::array<MtpHeadTensorParameterSpec, 2>
-    kMtpHeadTensorParameters = {{
-        {"weight", &GRIM::MtpHeadParameterTensors::weight,
-         GRIM::ParamGroupType::MTP, GRIM::ParamStatsBucket::ENCODER},
-        {"bias", &GRIM::MtpHeadParameterTensors::bias,
-         GRIM::ParamGroupType::MTP, GRIM::ParamStatsBucket::ENCODER},
-    }};
-
-inline constexpr std::array<LatentTrajectoryPresetTensorParameterSpec, 14>
-    kLatentTrajectoryPresetTensorParameters = {{
-        {"latent_preset_W_hidden_traj", &GRIM::LatentTrajectoryPresetParameterTensors::W_hidden_traj,
-         GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET, GRIM::ParamStatsBucket::ENCODER},
-        {"latent_preset_b_hidden_traj", &GRIM::LatentTrajectoryPresetParameterTensors::b_hidden_traj,
-         GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET, GRIM::ParamStatsBucket::ENCODER},
-        {"latent_preset_W_fuse", &GRIM::LatentTrajectoryPresetParameterTensors::W_fuse,
-         GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET, GRIM::ParamStatsBucket::ENCODER},
-        {"latent_preset_b_fuse", &GRIM::LatentTrajectoryPresetParameterTensors::b_fuse,
-         GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET, GRIM::ParamStatsBucket::ENCODER},
-        {"latent_preset_W_down", &GRIM::LatentTrajectoryPresetParameterTensors::W_down,
-         GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET, GRIM::ParamStatsBucket::ENCODER},
-        {"latent_preset_b_down", &GRIM::LatentTrajectoryPresetParameterTensors::b_down,
-         GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET, GRIM::ParamStatsBucket::ENCODER},
-        {"latent_preset_codebook", &GRIM::LatentTrajectoryPresetParameterTensors::codebook,
-         GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET, GRIM::ParamStatsBucket::ENCODER},
-        {"latent_preset_W_slots", &GRIM::LatentTrajectoryPresetParameterTensors::W_slots,
-         GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET, GRIM::ParamStatsBucket::ENCODER},
-        {"latent_preset_W_up", &GRIM::LatentTrajectoryPresetParameterTensors::W_up,
-         GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET, GRIM::ParamStatsBucket::ENCODER},
-        {"latent_preset_b_up", &GRIM::LatentTrajectoryPresetParameterTensors::b_up,
-         GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET, GRIM::ParamStatsBucket::ENCODER},
-        {"latent_preset_W_gate", &GRIM::LatentTrajectoryPresetParameterTensors::W_gate,
-         GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET, GRIM::ParamStatsBucket::ENCODER},
-        {"latent_preset_b_gate", &GRIM::LatentTrajectoryPresetParameterTensors::b_gate,
-         GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET, GRIM::ParamStatsBucket::ENCODER},
-        {"latent_preset_fuse_norm_gamma", &GRIM::LatentTrajectoryPresetParameterTensors::fuse_norm_gamma,
-         GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET, GRIM::ParamStatsBucket::ENCODER},
-        {"latent_preset_preset_norm_gamma", &GRIM::LatentTrajectoryPresetParameterTensors::preset_norm_gamma,
-         GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET, GRIM::ParamStatsBucket::ENCODER},
     }};
 
 inline constexpr std::array<FeedForwardTensorParameterSpec, 4>
@@ -737,78 +633,6 @@ inline void registerEncodingLayerParameters(
                             spec.type,
                             spec.stats_bucket,
                             layer_index);
-    }
-}
-
-template <typename RegistrarT>
-inline void registerMtpHeadParameters(
-    GRIM::MtpHeadParameterTensors& mtp_head_parameters,
-    int head_index,
-    bool bias_enabled,
-    RegistrarT& registrar) {
-    if (head_index < 0) {
-        throw std::runtime_error("registerMtpHeadParameters: head_index must be non-negative");
-    }
-
-    const std::string prefix = "mtp_head_" + std::to_string(head_index) + "_";
-    for (const auto& spec : kMtpHeadTensorParameters) {
-        if (spec.tensor_member == &GRIM::MtpHeadParameterTensors::bias) {
-            registrar.addConfigGatedTensor(prefix + spec.name,
-                                           mtp_head_parameters.*(spec.tensor_member),
-                                           spec.type,
-                                           spec.stats_bucket,
-                                           spec.layer,
-                                           bias_enabled,
-                                           "config.mtp_bias_enabled=false");
-            continue;
-        }
-        registrar.addTensor(prefix + spec.name,
-                            mtp_head_parameters.*(spec.tensor_member),
-                            spec.type,
-                            spec.stats_bucket,
-                            spec.layer);
-    }
-}
-
-template <typename RegistrarT>
-inline void registerLatentTrajectoryPresetParameters(
-    GRIM::LatentTrajectoryPresetParameterTensors& latent_preset_parameters,
-    const GRIM::HyperParameters::LatentTrajectoryPresetHP& hp,
-    RegistrarT& registrar) {
-    for (const auto& spec : kLatentTrajectoryPresetTensorParameters) {
-        bool enabled = true;
-        if (spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_hidden_traj) {
-            enabled = hp.hidden_bias_enabled;
-        } else if (spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_fuse) {
-            enabled = hp.fuse_bias_enabled;
-        } else if (spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_down) {
-            enabled = hp.down_bias_enabled;
-        } else if (spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_up) {
-            enabled = hp.up_bias_enabled;
-        } else if (spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_gate) {
-            enabled = hp.gate_bias_enabled;
-        }
-        const bool is_bias =
-            spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_hidden_traj ||
-            spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_fuse ||
-            spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_down ||
-            spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_up ||
-            spec.tensor_member == &GRIM::LatentTrajectoryPresetParameterTensors::b_gate;
-        if (is_bias) {
-            registrar.addConfigGatedTensor(spec.name,
-                                           latent_preset_parameters.*(spec.tensor_member),
-                                           spec.type,
-                                           spec.stats_bucket,
-                                           spec.layer,
-                                           enabled,
-                                           "corresponding latent-trajectory bias gate is false");
-            continue;
-        }
-        registrar.addTensor(spec.name,
-                            latent_preset_parameters.*(spec.tensor_member),
-                            spec.type,
-                            spec.stats_bucket,
-                            spec.layer);
     }
 }
 

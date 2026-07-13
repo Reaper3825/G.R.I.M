@@ -103,7 +103,7 @@ public:
 
 #ifdef USE_CUDA
     // Startup-owned GPU topology binding. LanguageModel borrows this durable
-    // state; it does not own the assembled encoder/layer/MTP objects.
+    // state; it does not own the assembled encoder/layer objects.
     void bindGpuModelState(GRIMText::Training::Startup::GpuModelState& gpu_model_state) noexcept {
         gpu_model_state_ = &gpu_model_state;
     }

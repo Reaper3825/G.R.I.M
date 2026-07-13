@@ -2,9 +2,7 @@
 //  SliceColumnsGradFn.cu
 //  CUDA kernels and autograd node for contiguous column slicing.
 //
-//  Introduced for the latent-trajectory MTP path: the shared
-//  hidden-trajectory projection emits [T, K*d_model] and each MTP
-//  horizon k consumes the [T, d_model] block at column offset k*d_model.
+//  Supports contiguous feature partitioning without copying.
 //======================================================//
 
 #include "SliceColumnsGradFn.hpp"

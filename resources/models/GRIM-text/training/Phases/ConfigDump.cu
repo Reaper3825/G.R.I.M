@@ -223,9 +223,6 @@ const char* classifyConfigSection(const std::string& key) {
         })) {
         return "ExecutionBlock";
     }
-    if (startsWith(key, "mtp_")) {
-        return "Multi-token prediction";
-    }
     if (isOneOf(key, {"single_stream_mode", "disable_async_frees", "synchronize_after_kernels"})) {
         return "CUDA execution mode";
     }

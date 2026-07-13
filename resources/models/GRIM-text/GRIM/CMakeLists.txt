@@ -99,7 +99,6 @@ set(TRAINING_CU_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Subprocess/tokenizer_subprocess.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Model/ModelGpuAssembly.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Autograd/AutogradExecutionLoss.cu
-    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Autograd/AutogradMtpAuxiliaryLoss.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Autograd/AutogradTraining.cu
 )
 

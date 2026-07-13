@@ -281,8 +281,6 @@ struct TrainingFixedShapeHP {
 struct TrainingStateWorkspaceHP {
     int batch_size = 0;
     int max_tokens_per_batch = 0;
-    bool mtp_enabled = false;
-    int mtp_k = 0;
 };
 
 struct GpuModelInitializationHP {
@@ -451,50 +449,6 @@ struct NumberEncoderConstructionHP {
     bool global_bias_enabled = false;
 };
 
-struct MTPConstructionHP {
-    bool enabled = false;
-    bool bias_enabled = false;
-    int k = 0;
-    int vocab_size = 0;
-    int d_model = 0;
-    float alpha = 0.0f;
-};
-
-struct MTPFeatureHP {
-    bool enabled = false;
-    int k = 0;
-};
-
-struct MTPDiagnosticHP {
-    bool log_ratio_monitor = false;
-};
-
-struct LatentTrajectoryPresetHP {
-    bool enabled = false;
-    bool hidden_bias_enabled = false;
-    bool fuse_bias_enabled = false;
-    bool down_bias_enabled = false;
-    bool up_bias_enabled = false;
-    bool gate_bias_enabled = false;
-
-    int d_model = 0;
-    int mtp_k = 0;
-    int vocab_size = 0;
-    int fuse_dim = 0;
-    int preset_dim = 0;
-    int gate_dim = 0;
-    int codebook_size = 0;
-
-    float preset_scale = 0.0f;
-    float gate_bias_init = 0.0f;
-
-    bool use_mtp_logits = false;
-    bool use_mtp_hidden = false;
-    bool use_gate_sparsity_loss = false;
-
-    float lambda_gate = 0.0f;
-};
-
 // Unified model-side config payload for future Phase2 handoff -> Phase2 training.
 // Immutable read view rooted on AiConfigSnapshot (raw document owner) and
 // assembled from training.config authored leaves plus explicit derived formulas.
@@ -595,27 +549,6 @@ struct ModelHP {
     int number_encoder_max_digit_slots = 0;
     int number_encoder_max_abs_pow10 = 0;
 
-    bool mtp_enabled = false;
-    int mtp_k = 0;
-    int mtp_vocab_size = 0;
-    int mtp_d_model = 0;
-    float mtp_alpha = 0.0f;
-
-    bool latent_trajectory_preset_enabled = false;
-    int latent_trajectory_preset_d_model = 0;
-    int latent_trajectory_preset_mtp_k = 0;
-    int latent_trajectory_preset_vocab_size = 0;
-    int latent_trajectory_preset_fuse_dim = 0;
-    int latent_trajectory_preset_dim = 0;
-    int latent_trajectory_preset_gate_dim = 0;
-    int latent_trajectory_preset_codebook_size = 0;
-    float latent_trajectory_preset_scale = 0.0f;
-    float latent_trajectory_preset_gate_bias_init = 0.0f;
-    bool latent_trajectory_preset_use_mtp_logits = false;
-    bool latent_trajectory_preset_use_mtp_hidden = false;
-    bool latent_trajectory_preset_use_gate_sparsity_loss = false;
-    float latent_trajectory_preset_lambda_gate = 0.0f;
-
     PositionalEncodingType positional_encoding = PositionalEncodingType::UNSPECIFIED;
     bool structured_ce_enabled = false;
 };
@@ -636,8 +569,6 @@ inline TrainingStateWorkspaceHP trainingStateWorkspaceHP(
     TrainingStateWorkspaceHP view;
     view.batch_size = config.batch_size;
     view.max_tokens_per_batch = config.max_tokens_per_batch;
-    view.mtp_enabled = config.mtp_enabled;
-    view.mtp_k = config.mtp_k;
     return view;
 }
 
@@ -972,8 +903,6 @@ inline TrainingStateWorkspaceHP trainingStateWorkspaceHP(
     TrainingStateWorkspaceHP view;
     view.batch_size = fixed_shape.batch_size;
     view.max_tokens_per_batch = fixed_shape.max_tokens_per_batch;
-    view.mtp_enabled = snapshotTrainingConfigField<bool>(snapshot, "mtp_enabled");
-    view.mtp_k = snapshotTrainingConfigField<int>(snapshot, "mtp_k");
     return view;
 }
 
@@ -1392,33 +1321,6 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.execution_block_entropy_aux_weight = requireFloat("execution_block_entropy_aux_weight");
     view.execution_block_structured_ce_weight = requireFloat("execution_block_structured_ce_weight");
 
-    view.mtp_enabled = requireBool("mtp_enabled");
-    view.mtp_k = requireInt("mtp_k");
-    view.mtp_vocab_size = vocab_size;
-    view.mtp_d_model = d_model;
-    view.mtp_alpha = requireFloat("mtp_alpha");
-
-    view.latent_trajectory_preset_enabled = requireBool("latent_trajectory_preset_enabled");
-    view.latent_trajectory_preset_d_model = d_model;
-    view.latent_trajectory_preset_mtp_k = view.mtp_k;
-    view.latent_trajectory_preset_vocab_size = vocab_size;
-    view.latent_trajectory_preset_fuse_dim = view.latent_trajectory_preset_enabled
-        ? computeLatentTrajectoryPresetFuseDim(d_model, "modelHP(snapshot)")
-        : 0;
-    view.latent_trajectory_preset_dim = view.latent_trajectory_preset_enabled
-        ? computeLatentTrajectoryPresetDim(d_model, "modelHP(snapshot)")
-        : 0;
-    view.latent_trajectory_preset_gate_dim = view.latent_trajectory_preset_enabled
-        ? computeLatentTrajectoryPresetGateDim(d_model, "modelHP(snapshot)")
-        : 0;
-    view.latent_trajectory_preset_codebook_size = requireInt("latent_trajectory_preset_codebook_size");
-    view.latent_trajectory_preset_scale = requireFloat("latent_trajectory_preset_scale");
-    view.latent_trajectory_preset_gate_bias_init = requireFloat("latent_trajectory_preset_gate_bias_init");
-    view.latent_trajectory_preset_use_mtp_logits = requireBool("latent_trajectory_preset_use_mtp_logits");
-    view.latent_trajectory_preset_use_mtp_hidden = requireBool("latent_trajectory_preset_use_mtp_hidden");
-    view.latent_trajectory_preset_use_gate_sparsity_loss = requireBool("latent_trajectory_preset_use_gate_sparsity_loss");
-    view.latent_trajectory_preset_lambda_gate = requireFloat("latent_trajectory_preset_lambda_gate");
-
     view.number_encoder_enabled = requireBool("number_encoder_enabled");
     view.number_encoder_d_model = d_model;
     view.number_encoder_d_hidden = requireInt("number_encoder_d_hidden");
@@ -1565,20 +1467,6 @@ inline ExecutionBlockConstructionHP executionBlockConstructionHP(
     return view;
 }
 
-inline MTPConstructionHP mtpConstructionHP(const GRIM::Config::AiConfigSnapshot& snapshot)
-{
-    const auto model = modelHP(snapshot);
-
-    MTPConstructionHP view;
-    view.enabled = model.mtp_enabled;
-    view.bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "mtp_bias_enabled");
-    view.k = model.mtp_k;
-    view.vocab_size = model.mtp_vocab_size;
-    view.d_model = model.mtp_d_model;
-    view.alpha = model.mtp_alpha;
-    return view;
-}
-
 inline NumberEncoderConstructionHP numberEncoderConstructionHP(
     const GRIM::Config::AiConfigSnapshot& snapshot)
 {
@@ -1594,63 +1482,6 @@ inline NumberEncoderConstructionHP numberEncoderConstructionHP(
     view.contribution_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "number_encoder_contribution_bias_enabled");
     view.global_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "number_encoder_global_bias_enabled");
     return view;
-}
-
-inline MTPFeatureHP mtpFeatureHP(const GRIM::Config::AiConfigSnapshot& snapshot)
-{
-    const auto model = modelHP(snapshot);
-
-    MTPFeatureHP view;
-    view.enabled = model.mtp_enabled;
-    view.k = model.mtp_k;
-    return view;
-}
-
-inline LatentTrajectoryPresetHP latentTrajectoryPresetHP(
-    const GRIM::Config::AiConfigSnapshot& snapshot)
-{
-    const auto model = modelHP(snapshot);
-
-    LatentTrajectoryPresetHP view;
-    view.enabled = model.latent_trajectory_preset_enabled;
-    view.hidden_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "latent_trajectory_hidden_bias_enabled");
-    view.fuse_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "latent_trajectory_fuse_bias_enabled");
-    view.down_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "latent_trajectory_down_bias_enabled");
-    view.up_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "latent_trajectory_up_bias_enabled");
-    view.gate_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "latent_trajectory_gate_bias_enabled");
-    view.d_model = model.latent_trajectory_preset_d_model;
-    view.mtp_k = model.latent_trajectory_preset_mtp_k;
-    view.vocab_size = model.latent_trajectory_preset_vocab_size;
-    view.fuse_dim = model.latent_trajectory_preset_fuse_dim;
-    view.preset_dim = model.latent_trajectory_preset_dim;
-    view.gate_dim = model.latent_trajectory_preset_gate_dim;
-    view.codebook_size = model.latent_trajectory_preset_codebook_size;
-    view.preset_scale = model.latent_trajectory_preset_scale;
-    view.gate_bias_init = model.latent_trajectory_preset_gate_bias_init;
-    view.use_mtp_logits = model.latent_trajectory_preset_use_mtp_logits;
-    view.use_mtp_hidden = model.latent_trajectory_preset_use_mtp_hidden;
-    view.use_gate_sparsity_loss = model.latent_trajectory_preset_use_gate_sparsity_loss;
-    view.lambda_gate = model.latent_trajectory_preset_lambda_gate;
-    return view;
-}
-
-inline MTPDiagnosticHP mtpDiagnosticHP(
-    const GRIM::Config::AiConfigSnapshot& snapshot)
-{
-    MTPDiagnosticHP view;
-    view.log_ratio_monitor = snapshotTrainingConfigField<bool>(snapshot, "mtp_log_ratio_monitor");
-    return view;
-}
-
-// True when MTP supervision consumes latent-trajectory predicted future hidden
-// states (latent_preset_mtp_hidden slice k). The MTP heads remain assembled,
-// registered, initialized, and serialized; the latent feature changes the head
-// input, not the ownership of token-space MTP prediction parameters.
-inline bool mtpUsesLatentTrajectoryLogits(const GRIM::Config::AiConfigSnapshot& snapshot)
-{
-    const auto mtp = mtpFeatureHP(snapshot);
-    const auto latent = latentTrajectoryPresetHP(snapshot);
-    return mtp.enabled && mtp.k > 0 && latent.enabled && latent.use_mtp_logits;
 }
 
 inline GenerationHP generationHP(const LanguageModelConfig& cfg)

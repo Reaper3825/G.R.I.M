@@ -110,11 +110,9 @@ size_t paramGroupTypeIndex(ParamGroupType type) {
         case ParamGroupType::ATTENTION:       return 2;
         case ParamGroupType::FFN:             return 3;
         case ParamGroupType::RMSNORM:         return 4;
-        case ParamGroupType::MTP:             return 5;
-        case ParamGroupType::EXECUTION_BLOCK: return 6;
-        case ParamGroupType::NUMBER_ENCODER:  return 7;
-        case ParamGroupType::ARG_SELECTOR:    return 8;
-        case ParamGroupType::LATENT_TRAJECTORY_PRESET: return 9;
+        case ParamGroupType::EXECUTION_BLOCK: return 5;
+        case ParamGroupType::NUMBER_ENCODER:  return 6;
+        case ParamGroupType::ARG_SELECTOR:    return 7;
         case ParamGroupType::COUNT: break;
     }
     throw std::runtime_error("[buildParameterGroups] invalid ParamGroupType::COUNT in registered group summary");
@@ -127,11 +125,9 @@ const char* paramGroupTypeSummaryName(ParamGroupType type) {
         case ParamGroupType::ATTENTION:       return "attention";
         case ParamGroupType::FFN:             return "ffn";
         case ParamGroupType::RMSNORM:         return "rmsnorm";
-        case ParamGroupType::MTP:             return "mtp";
         case ParamGroupType::EXECUTION_BLOCK: return "execution_block";
         case ParamGroupType::NUMBER_ENCODER:  return "number_encoder";
         case ParamGroupType::ARG_SELECTOR:    return "arg_selector";
-        case ParamGroupType::LATENT_TRAJECTORY_PRESET: return "latent_trajectory_preset";
         case ParamGroupType::COUNT: break;
     }
     throw std::runtime_error("[buildParameterGroups] invalid ParamGroupType::COUNT in registered group summary");
@@ -280,11 +276,9 @@ private:
             case ParamGroupType::ATTENTION:       return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_attention");
             case ParamGroupType::FFN:             return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_ffn");
             case ParamGroupType::RMSNORM:         return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_rmsnorm");
-            case ParamGroupType::MTP:             return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_mtp");
             case ParamGroupType::EXECUTION_BLOCK: return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_execution_block");
             case ParamGroupType::NUMBER_ENCODER:  return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_number_encoder");
             case ParamGroupType::ARG_SELECTOR:    return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_arg_selector");
-            case ParamGroupType::LATENT_TRAJECTORY_PRESET: return GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config_, "parameter_precision_latent_trajectory_preset");
             case ParamGroupType::COUNT: break;
         }
         throw std::runtime_error("[buildParameterGroups] invalid ParamGroupType::COUNT for parameter precision lookup");
@@ -527,56 +521,6 @@ void registerSelectorParameters(ParameterRegistry::StartupParameterRegistry& par
     ParameterRegistry::registerSelectorParameters(selector_tensor_owner, registrar);
 }
 
-void registerMtpParameters(ParameterRegistry::StartupParameterRegistry& parameter_registry,
-                           Registrar& registrar,
-                           const GRIM::Config::AiConfigSnapshot& config) {
-    const auto mtp_hp = GRIM::HyperParameters::mtpConstructionHP(config);
-    auto& mtp_heads = parameter_registry.mtpHeadParameterTensors();
-    if (!mtp_hp.enabled) {
-        if (!mtp_heads.empty()) {
-            throw std::runtime_error("[buildParameterGroups] MTP heads exist while config.mtp_enabled=false");
-        }
-        return;
-    }
-    if (mtp_hp.k <= 0) {
-        throw std::runtime_error("[buildParameterGroups] config.mtp_enabled=true but config.mtp_k <= 0");
-    }
-
-    for (int k = 0; k < mtp_hp.k; ++k) {
-        if (k < 0 || k >= static_cast<int>(mtp_heads.size())) {
-            throw std::runtime_error("[buildParameterGroups] Missing MTP head " + std::to_string(k) +
-                                     " for configured mtp_k=" + std::to_string(mtp_hp.k));
-        }
-        auto& mtp_head_parameters = mtp_heads[static_cast<std::size_t>(k)];
-        ParameterRegistry::registerMtpHeadParameters(mtp_head_parameters, k, mtp_hp.bias_enabled, registrar);
-    }
-
-    if (static_cast<int>(mtp_heads.size()) > mtp_hp.k) {
-        throw std::runtime_error("[buildParameterGroups] MTP head vector contains more entries than config.mtp_k");
-    }
-}
-
-void registerLatentTrajectoryPresetParameters(ParameterRegistry::StartupParameterRegistry& parameter_registry,
-                                             Registrar& registrar,
-                                             const GRIM::Config::AiConfigSnapshot& config) {
-    (void)registrar;
-    const auto latent_preset_hp = GRIM::HyperParameters::latentTrajectoryPresetHP(config);
-    auto* latent_preset_parameters = parameter_registry.getLatentTrajectoryPresetParameters();
-
-    if (!latent_preset_hp.enabled) {
-        if (latent_preset_parameters) {
-            throw std::runtime_error("[buildParameterGroups] LatentTrajectoryPreset parameter owner exists while config.latent_trajectory_preset_enabled=false");
-        }
-        return;
-    }
-
-    (void)requireLayer(
-        latent_preset_parameters,
-        "LatentTrajectoryPresetParameterTensors",
-        "registerLatentTrajectoryPresetParameters");
-    ParameterRegistry::registerLatentTrajectoryPresetParameters(*latent_preset_parameters, latent_preset_hp, registrar);
-}
-
 void clearOptimizerBindings(std::vector<ParameterGroup>& groups) {
     for (auto& group : groups) {
         group.m_tensor = nullptr;
@@ -637,7 +581,7 @@ void validateRegisteredTensorPrecisionMetadata(const std::vector<ParameterGroup>
 void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
     constexpr size_t kParamGroupTypeCount = static_cast<size_t>(ParamGroupType::COUNT);
     constexpr size_t kPrecisionCount = 2;
-    static_assert(kParamGroupTypeCount == 10,
+    static_assert(kParamGroupTypeCount == 8,
                   "Registered group precision summary must list every ParamGroupType");
 
     const std::array<ParamGroupType, kParamGroupTypeCount> group_types = {
@@ -646,11 +590,9 @@ void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
         ParamGroupType::ATTENTION,
         ParamGroupType::FFN,
         ParamGroupType::RMSNORM,
-        ParamGroupType::MTP,
         ParamGroupType::EXECUTION_BLOCK,
         ParamGroupType::NUMBER_ENCODER,
-        ParamGroupType::ARG_SELECTOR,
-        ParamGroupType::LATENT_TRAJECTORY_PRESET
+        ParamGroupType::ARG_SELECTOR
     };
     const std::array<ParameterGroupPrecision, kPrecisionCount> precisions = {
         ParameterGroupPrecision::FP32,
@@ -671,11 +613,9 @@ void emitGroupSummary(const std::vector<ParameterGroup>& groups) {
             case ParamGroupType::ATTENTION: ++attn_count; break;
             case ParamGroupType::FFN: ++ffn_count; break;
             case ParamGroupType::RMSNORM: ++rms_count; break;
-            case ParamGroupType::MTP: ++other_count; break;
             case ParamGroupType::EXECUTION_BLOCK: ++other_count; break;
             case ParamGroupType::NUMBER_ENCODER: ++other_count; break;
             case ParamGroupType::ARG_SELECTOR: ++other_count; break;
-            case ParamGroupType::LATENT_TRAJECTORY_PRESET: ++other_count; break;
             case ParamGroupType::COUNT:
                 throw std::runtime_error("[buildParameterGroups] group " + group.name +
                                          " has invalid ParamGroupType::COUNT");
@@ -741,7 +681,6 @@ void validateParameterRegistrationConfig(const GRIM::Config::AiConfigSnapshot& c
     GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_mtp"), "parameter_precision_mtp", "buildParameterGroups");
     GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_execution_block"), "parameter_precision_execution_block", "buildParameterGroups");
     GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_arg_selector"), "parameter_precision_arg_selector", "buildParameterGroups");
-    GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_latent_trajectory_preset"), "parameter_precision_latent_trajectory_preset", "buildParameterGroups");
 }
 
 void validateExecutionBlockConstructionHP(
@@ -1198,83 +1137,6 @@ void initializeLmHeadParameterTensors(
              std::string(output_unigram_prior ? " with output unigram bias prior" : ""));
 }
 
-void initializeMtpHeadParameterTensors(
-    std::vector<GRIM::MtpHeadParameterTensors>& mtp_head_parameter_tensors,
-    const GRIM::HyperParameters::MTPConstructionHP& mtp_hp,
-    std::uint64_t weight_init_seed,
-    cudaStream_t init_stream,
-    const OutputUnigramPriorView* output_unigram_prior) {
-    if (!mtp_hp.enabled) {
-        return;
-    }
-    if (!init_stream) {
-        throw std::runtime_error("initializeMtpHeadParameterTensors: init_stream is NULL");
-    }
-    if (mtp_hp.k <= 0) {
-        throw std::runtime_error("initializeMtpHeadParameterTensors: mtp_enabled=true requires mtp_k > 0");
-    }
-    if (mtp_hp.vocab_size <= 0) {
-        throw std::runtime_error("initializeMtpHeadParameterTensors: vocab_size must be positive, got " +
-                                 std::to_string(mtp_hp.vocab_size));
-    }
-    if (mtp_hp.d_model <= 0) {
-        throw std::runtime_error("initializeMtpHeadParameterTensors: d_model must be positive, got " +
-                                 std::to_string(mtp_hp.d_model));
-    }
-    if (!mtp_head_parameter_tensors.empty()) {
-        throw std::runtime_error("initializeMtpHeadParameterTensors: MTP head tensor owner vector is already initialized");
-    }
-
-    if (output_unigram_prior) {
-        if (!mtp_hp.bias_enabled) {
-            throw std::runtime_error(
-                "initializeMtpHeadParameterTensors: output unigram prior requires mtp_bias_enabled=true");
-        }
-        validateOutputUnigramPrior(*output_unigram_prior, mtp_hp.vocab_size, "initializeMtpHeadParameterTensors");
-    }
-
-    mtp_head_parameter_tensors.resize(static_cast<std::size_t>(mtp_hp.k));
-    for (int k = 0; k < mtp_hp.k; ++k) {
-        auto& head = mtp_head_parameter_tensors[static_cast<std::size_t>(k)];
-        const std::string weight_name = "mtp_head_" + std::to_string(k) + ".weight";
-        const std::string bias_name = "mtp_head_" + std::to_string(k) + ".bias";
-
-        head.weight = Tensor::zeros({mtp_hp.vocab_size, mtp_hp.d_model}, init_stream, weight_name.c_str());
-        head.weight.requires_grad_();
-        head.weight.alloc_grad();
-
-        const std::uint64_t mtp_seed = weight_init_seed + 3 + static_cast<std::uint64_t>(k);
-        Tensor::xavier_uniform_(head.weight, mtp_seed, init_stream);
-
-        if (mtp_hp.bias_enabled) {
-            head.bias = Tensor::zeros({mtp_hp.vocab_size}, init_stream, bias_name.c_str());
-            head.bias.requires_grad_();
-            head.bias.alloc_grad();
-        }
-        if (output_unigram_prior && mtp_hp.bias_enabled) {
-            uploadOutputUnigramPriorToBias(
-                head.bias,
-                *output_unigram_prior,
-                mtp_hp.vocab_size,
-                init_stream,
-                "initializeMtpHeadParameterTensors",
-                bias_name.c_str());
-        }
-    }
-
-    if (output_unigram_prior) {
-        const cudaError_t sync_err = cudaStreamSynchronize(init_stream);
-        if (sync_err != cudaSuccess) {
-            throw std::runtime_error(std::string("initializeMtpHeadParameterTensors: cudaStreamSynchronize failed after output unigram prior uploads: ") +
-                                     cudaGetErrorString(sync_err));
-        }
-    }
-
-    emitInfo("[initializeMtpHeadParameterTensors] Initialized registry-owned MTP auxiliary heads=" +
-             std::to_string(mtp_hp.k) +
-             std::string(output_unigram_prior ? " with output unigram bias prior" : ""));
-}
-
 void initializeExecutionBlockParameterTensors(
     ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const ExecutionBlockConstructionHP& execution_hp,
@@ -1539,150 +1401,6 @@ void initializeSelectorParameterTensors(
              std::to_string(d_model) + ")");
 }
 
-void initializeLatentTrajectoryPresetParameterTensors(
-    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    const GRIM::HyperParameters::LatentTrajectoryPresetHP& latent_preset_hp,
-    std::uint64_t weight_init_seed,
-    cudaStream_t init_stream) {
-    auto* existing = parameter_registry.getLatentTrajectoryPresetParameters();
-    if (!latent_preset_hp.enabled) {
-        if (existing) {
-            throw std::runtime_error("initializeLatentTrajectoryPresetParameterTensors: owner exists while latent preset is disabled");
-        }
-        return;
-    }
-    if (!init_stream) {
-        throw std::runtime_error("initializeLatentTrajectoryPresetParameterTensors: init_stream is NULL");
-    }
-    if (existing) {
-        throw std::runtime_error("initializeLatentTrajectoryPresetParameterTensors: owner already exists");
-    }
-    if (latent_preset_hp.d_model <= 0 || latent_preset_hp.mtp_k <= 0 ||
-        latent_preset_hp.fuse_dim <= 0 || latent_preset_hp.preset_dim <= 0 ||
-        latent_preset_hp.gate_dim <= 0 || latent_preset_hp.vocab_size <= 0 ||
-        latent_preset_hp.codebook_size <= 0) {
-        throw std::runtime_error(
-            "initializeLatentTrajectoryPresetParameterTensors: invalid latent preset geometry d_model=" +
-            std::to_string(latent_preset_hp.d_model) +
-            " mtp_k=" + std::to_string(latent_preset_hp.mtp_k) +
-            " vocab_size=" + std::to_string(latent_preset_hp.vocab_size) +
-            " fuse_dim=" + std::to_string(latent_preset_hp.fuse_dim) +
-            " preset_dim=" + std::to_string(latent_preset_hp.preset_dim) +
-            " gate_dim=" + std::to_string(latent_preset_hp.gate_dim) +
-            " codebook_size=" + std::to_string(latent_preset_hp.codebook_size));
-    }
-    if (latent_preset_hp.gate_dim != latent_preset_hp.d_model) {
-        throw std::runtime_error(
-            "initializeLatentTrajectoryPresetParameterTensors: first implementation expects scalar gate with gate_dim == d_model, got gate_dim=" +
-            std::to_string(latent_preset_hp.gate_dim) +
-            " d_model=" + std::to_string(latent_preset_hp.d_model));
-    }
-    if (!std::isfinite(latent_preset_hp.gate_bias_init)) {
-        throw std::runtime_error("initializeLatentTrajectoryPresetParameterTensors: gate_bias_init must be finite");
-    }
-
-    auto params = std::make_unique<GRIM::LatentTrajectoryPresetParameterTensors>();
-    const int d_model = latent_preset_hp.d_model;
-    const int mtp_k = latent_preset_hp.mtp_k;
-    const int fuse_dim = latent_preset_hp.fuse_dim;
-    const int preset_dim = latent_preset_hp.preset_dim;
-    const int fused_input_dim = mtp_k * d_model;
-    const int scalar_gate_dim = 1;
-
-    auto make_xavier = [&](int rows, int cols, std::uint64_t seed, const char* name) -> GRIM::Tensor {
-        GRIM::Tensor tensor = GRIM::Tensor::zeros({rows, cols}, init_stream, name);
-        tensor.requires_grad_();
-        tensor.alloc_grad();
-        GRIM::Tensor::xavier_uniform_(tensor, seed, init_stream);
-        return tensor;
-    };
-    auto make_bias = [&](int cols, const char* name) -> GRIM::Tensor {
-        GRIM::Tensor tensor = GRIM::Tensor::zeros({1, cols}, init_stream, name);
-        tensor.requires_grad_();
-        tensor.alloc_grad();
-        return tensor;
-    };
-    auto make_scalar_bias = [&](float init_val, const char* name) -> GRIM::Tensor {
-        GRIM::Tensor tensor = make_bias(1, name);
-        const cudaError_t copy_err = cudaMemcpyAsync(
-            tensor.data,
-            &init_val,
-            sizeof(float),
-            cudaMemcpyHostToDevice,
-            init_stream);
-        if (copy_err != cudaSuccess) {
-            throw std::runtime_error(std::string("initializeLatentTrajectoryPresetParameterTensors: cudaMemcpyAsync failed for ") +
-                                     name + ": " + cudaGetErrorString(copy_err));
-        }
-        return tensor;
-    };
-    auto make_norm_gamma = [&](int dim, const char* name) -> GRIM::Tensor {
-        GRIM::Tensor tensor = GRIM::Tensor::zeros({dim}, init_stream, name);
-        tensor.requires_grad_();
-        tensor.alloc_grad();
-        std::vector<float> ones(static_cast<std::size_t>(dim), 1.0f);
-        const cudaError_t copy_err = cudaMemcpyAsync(
-            tensor.data,
-            ones.data(),
-            static_cast<std::size_t>(dim) * sizeof(float),
-            cudaMemcpyHostToDevice,
-            init_stream);
-        if (copy_err != cudaSuccess) {
-            throw std::runtime_error(std::string("initializeLatentTrajectoryPresetParameterTensors: cudaMemcpyAsync failed for ") +
-                                     name + ": " + cudaGetErrorString(copy_err));
-        }
-        return tensor;
-    };
-
-    params->W_hidden_traj = make_xavier(d_model, fused_input_dim, weight_init_seed + 5, "latent_preset.W_hidden_traj");
-    if (latent_preset_hp.hidden_bias_enabled) {
-        params->b_hidden_traj = make_bias(fused_input_dim, "latent_preset.b_hidden_traj");
-    }
-    params->W_fuse = make_xavier(fused_input_dim, fuse_dim, weight_init_seed + 0, "latent_preset.W_fuse");
-    if (latent_preset_hp.fuse_bias_enabled) {
-        params->b_fuse = make_bias(fuse_dim, "latent_preset.b_fuse");
-    }
-    params->W_down = make_xavier(fuse_dim, preset_dim, weight_init_seed + 1, "latent_preset.W_down");
-    if (latent_preset_hp.down_bias_enabled) {
-        params->b_down = make_bias(preset_dim, "latent_preset.b_down");
-    }
-    params->codebook = GRIM::Tensor::zeros(
-        {latent_preset_hp.codebook_size, preset_dim}, init_stream, "latent_preset.codebook");
-    params->codebook.requires_grad_();
-    params->codebook.alloc_grad();
-    const float codebook_gain = std::sqrt(
-        static_cast<float>(latent_preset_hp.codebook_size + preset_dim) / 2.0f);
-    GRIM::Tensor::xavier_uniform_with_gain_(
-        params->codebook, weight_init_seed + 6, codebook_gain, init_stream);
-    params->W_slots = make_xavier(
-        preset_dim, fused_input_dim, weight_init_seed + 4, "latent_preset.W_slots");
-    params->W_up = make_xavier(preset_dim, d_model, weight_init_seed + 2, "latent_preset.W_up");
-    if (latent_preset_hp.up_bias_enabled) {
-        params->b_up = make_bias(d_model, "latent_preset.b_up");
-    }
-    params->W_gate = make_xavier(d_model + fuse_dim, scalar_gate_dim, weight_init_seed + 3, "latent_preset.W_gate");
-    if (latent_preset_hp.gate_bias_enabled) {
-        params->b_gate = make_scalar_bias(latent_preset_hp.gate_bias_init, "latent_preset.b_gate");
-    }
-    params->fuse_norm_gamma = make_norm_gamma(fuse_dim, "latent_preset.fuse_norm_gamma");
-    params->preset_norm_gamma = make_norm_gamma(preset_dim, "latent_preset.preset_norm_gamma");
-
-    const cudaError_t sync_err = cudaStreamSynchronize(init_stream);
-    if (sync_err != cudaSuccess) {
-        throw std::runtime_error(std::string("initializeLatentTrajectoryPresetParameterTensors: cudaStreamSynchronize failed: ") +
-                                 cudaGetErrorString(sync_err));
-    }
-
-    parameter_registry.latent_trajectory_preset_parameters = std::move(params);
-    emitInfo("[initializeLatentTrajectoryPresetParameterTensors] Initialized latent trajectory preset tensors"
-             " d_model=" + std::to_string(latent_preset_hp.d_model) +
-             " mtp_k=" + std::to_string(latent_preset_hp.mtp_k) +
-             " fuse_dim=" + std::to_string(latent_preset_hp.fuse_dim) +
-             " preset_dim=" + std::to_string(latent_preset_hp.preset_dim) +
-             " gate_dim=" + std::to_string(latent_preset_hp.gate_dim) +
-             " codebook_size=" + std::to_string(latent_preset_hp.codebook_size));
-}
-
 void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,
                           Startup::GpuModelState& gpu_model_state,
                           ParameterRegistry::StartupParameterRegistry& parameter_registry) {
@@ -1698,8 +1416,6 @@ void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,
 
     registerNumberEncoderParameters(parameter_registry, registrar, config);
     registerExecutionBlockParameters(gpu_model_state, parameter_registry, registrar, config);
-    registerMtpParameters(parameter_registry, registrar, config);
-    registerLatentTrajectoryPresetParameters(parameter_registry, registrar, config);
     registerSelectorParameters(parameter_registry, registrar, config);
 
     validateRegisteredTensorPrecisionMetadata(rebuilt_groups);

@@ -50,12 +50,6 @@ void validateDeviceBindingsForPayload(
             std::string(caller) + ": BatchDeviceBindings has NULL device pointers - "
             "caller must invoke Batching::uploadBatchToDevice(config, training_state, payload) before initializing autograd context");
     }
-    if (!payload.mtp_shifted_targets.empty()) {
-        if (!bindings.d_mtp_shifted_targets) {
-            throw std::runtime_error(
-                std::string(caller) + ": BatchDeviceBindings.d_mtp_shifted_targets is NULL for MTP payload");
-        }
-    }
 }
 
 } // namespace

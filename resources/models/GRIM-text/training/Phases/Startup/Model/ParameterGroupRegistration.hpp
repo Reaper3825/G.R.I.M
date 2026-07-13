@@ -14,7 +14,6 @@ namespace GRIM {
 struct OptimizerState;
 struct EncodingLayerParameterTensors;
 struct FeedForwardParameterTensors;
-struct MtpHeadParameterTensors;
 struct Tensor;
 namespace Config {
 struct AiConfigSnapshot;
@@ -23,9 +22,7 @@ namespace HyperParameters {
 struct EmbeddingLayerConstructionHP;
 struct EncoderLayerConstructionHP;
 struct ExecutionBlockConstructionHP;
-struct LatentTrajectoryPresetHP;
 struct LMHeadLayerConstructionHP;
-struct MTPConstructionHP;
 struct NumberEncoderConstructionHP;
 }
 }
@@ -86,13 +83,6 @@ void initializeLmHeadParameterTensors(
     GRIM::Tensor* tied_embedding_weights,
     const OutputUnigramPriorView* output_unigram_prior);
 
-void initializeMtpHeadParameterTensors(
-    std::vector<GRIM::MtpHeadParameterTensors>& mtp_head_parameter_tensors,
-    const GRIM::HyperParameters::MTPConstructionHP& mtp_hp,
-    std::uint64_t weight_init_seed,
-    cudaStream_t init_stream,
-    const OutputUnigramPriorView* output_unigram_prior);
-
 void initializeExecutionBlockParameterTensors(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const GRIM::HyperParameters::ExecutionBlockConstructionHP& execution_hp,
@@ -109,12 +99,6 @@ void initializeSelectorParameterTensors(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     bool selector_enabled,
     int d_model,
-    std::uint64_t weight_init_seed,
-    cudaStream_t init_stream);
-
-void initializeLatentTrajectoryPresetParameterTensors(
-    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    const GRIM::HyperParameters::LatentTrajectoryPresetHP& latent_preset_hp,
     std::uint64_t weight_init_seed,
     cudaStream_t init_stream);
 

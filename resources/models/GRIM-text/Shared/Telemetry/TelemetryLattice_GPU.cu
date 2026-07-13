@@ -330,7 +330,7 @@ const char* getMetricStreamName(MetricStream stream) {
         case MetricStream::EB_INJECT_WEIGHT_NORM: return "eb_inject_weight_norm";
         case MetricStream::EB_READ_WEIGHT_NORM: return "eb_read_weight_norm";
         case MetricStream::EB_LOSS_FRAC: return "eb_loss_frac";
-        case MetricStream::MTP_LOSS_FRAC: return "mtp_loss_frac";
+        case MetricStream::RESERVED_26: return "reserved_26";
         case MetricStream::PBM_ALIBI_SLOPE_RMS: return "pbm_alibi_slope_rms";
         case MetricStream::PBM_ALIBI_EFF_BIAS_MAX: return "pbm_alibi_eff_bias_max";
         case MetricStream::PBM_ROPE_INV_FREQ_RMS: return "pbm_rope_inv_freq_rms";
@@ -366,12 +366,12 @@ const char* getMetricStreamName(MetricStream stream) {
         case MetricStream::RHO_NONATOM_ONLY: return "rho_nonatom_only";
         case MetricStream::OPTIMIZER_ITERATION: return "optimizer_iteration";
         case MetricStream::TEXT_LOSS: return "text_loss";
-        case MetricStream::MTP_LOSS: return "mtp_loss";
+        case MetricStream::RESERVED_62: return "reserved_62";
         case MetricStream::SELECTOR_LOSS: return "selector_loss";
-        case MetricStream::LATENT_PRESET_LOSS: return "latent_preset_loss";
-        case MetricStream::LATENT_PRESET_TRAJ_LOSS: return "latent_preset_traj_loss";
-        case MetricStream::LATENT_PRESET_DELTA_LOSS: return "latent_preset_delta_loss";
-        case MetricStream::LATENT_PRESET_GATE_LOSS: return "latent_preset_gate_loss";
+        case MetricStream::RESERVED_64: return "reserved_64";
+        case MetricStream::RESERVED_65: return "reserved_65";
+        case MetricStream::RESERVED_66: return "reserved_66";
+        case MetricStream::RESERVED_67: return "reserved_67";
         case MetricStream::EXECUTION_LOSS: return "execution_loss";
         default: return "unknown";
     }

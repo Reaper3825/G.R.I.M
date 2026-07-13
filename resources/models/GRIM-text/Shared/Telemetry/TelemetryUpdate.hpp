@@ -51,14 +51,9 @@ struct TelemetryBatchInput {
     int   optimizer_step        = 0;
     bool  should_step           = false;
 
-    // Explicit loss breakdown (fractions in streams 25-26, raw components in 61-68)
+    // Explicit loss breakdown
     float text_loss             = 0.0f;
-    float mtp_loss              = 0.0f;
     float selector_loss         = 0.0f;
-    float latent_preset_loss    = 0.0f;
-    float latent_preset_traj_loss = 0.0f;
-    float latent_preset_delta_loss = 0.0f;
-    float latent_preset_gate_loss = 0.0f;
     float execution_loss        = 0.0f;
 
     // Batch geometry (stream 30)
@@ -103,7 +98,7 @@ void updateTelemetryObservations(
     const GRIM::GradNorm::GradMetrics& gm);
 
 /// Emits log-interval telemetry/monitoring derived from the latest batch:
-/// step loss/lr and MTP per-head telemetry.
+/// step loss/lr and model-health telemetry.
 void logIntervalTelemetry(
     GRIMText::Training::TrainingContext& ctx,
     GRIMText::Training::TrainingLoopState& state,

@@ -1388,7 +1388,7 @@ void Tensor::backward(const Tensor* grad_output,
         if (useEngineBackward()) {
             // Iterative worklist engine: discovers the graph, accumulates every
             // consumer's contribution per node (true fan-in), and fires each
-            // node once in topological order. Fixes silent MTP gradient loss.
+            // node once in topological order. Fixes silent fan-in gradient loss.
             autograd::AutogradEngine engine(stream, backward_payload, backward_bindings);
             engine.run(grad_fn.get(), grad_data(), shape);
         } else {

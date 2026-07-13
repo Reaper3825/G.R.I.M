@@ -5,7 +5,7 @@
 //  Forward:  result[0] = scale * t[0]   (t is scalar [1])
 //  Backward: grad_t[0] = scale * grad_result[0]
 //
-//  Used for loss weighting (e.g. MTP alpha/K). No CUDA kernel — the math
+//  Used for loss weighting. No CUDA kernel — the math
 //  is one float multiply, done host-side via cudaMemcpyAsync round-trip.
 //
 //  Owns:

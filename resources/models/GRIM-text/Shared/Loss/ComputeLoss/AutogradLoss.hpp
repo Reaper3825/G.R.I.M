@@ -59,32 +59,8 @@ Tensor unified_loss(
     cudaStream_t stream
 );
 
-/**
- * Compute unified loss for one MTP auxiliary head.
- *
- * The shifted targets are Phase1-authored in BatchPayload and uploaded by
- * Batching::uploadBatchToDevice() into BatchDeviceBindings. The loss path
- * must not allocate or upload target buffers during loss assembly.
- */
-Tensor unified_loss_for_mtp_head(
-    Tensor& logits,
-    const Batching::BatchPayload& payload,
-    const Batching::BatchDeviceBindings& bindings,
-    int head_idx,
-    const HyperParameters::LossConfigHP& config,
-    const float* d_class_weights,
-    cudaStream_t stream
-);
-
 // Cross-entropy / NLL implementation details live in CrossEntropyNLL.hpp/.cu.
-// AutogradLoss.hpp exposes payload/bindings entry points for primary CE and MTP.
-
-/**
- * MTP accuracy kernel lives in Shared/MTP/MTP_GPU.hpp. Autograd MTP loss
- * assembly lives in training/Autograd/AutogradMtpAuxiliaryLoss.* so the shared
- * kernel module does not own model, LM-head, TrainingState, or AutogradContext
- * boundaries.
- */
+// AutogradLoss.hpp exposes the payload/bindings entry point for primary CE.
 
 // Issue #142: cross_entropy_loss() DELETED (Rule 26: dead code).
 // Was a thin wrapper calling the loss path with hardcoded plain CE config.

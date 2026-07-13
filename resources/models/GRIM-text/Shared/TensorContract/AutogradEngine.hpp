@@ -15,9 +15,8 @@
 //      per-node engine accumulator.
 //
 //  Each node fires exactly once, after every consumer has contributed its
-//  share of that node's output gradient (true fan-in). This fixes the silent
-//  gradient loss when a node has more than one consumer (MTP collapse: the LM
-//  head and all K MTP heads share the encoder-output trunk).
+//  share of that node's output gradient (true fan-in). This fixes silent
+//  gradient loss when a node has more than one consumer.
 //
 //  Topology comes solely from GradFn::collect_input_edges(); the engine
 //  asserts contribute-count == edge-count per node so an under-reported edge

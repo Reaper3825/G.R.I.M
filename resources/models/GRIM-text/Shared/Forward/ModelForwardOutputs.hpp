@@ -301,18 +301,6 @@ public:
     Tensor lm_head_mlp_swiglu_out;    // [total_tokens, mlp_d_ff] silu ⊙ up
     Tensor lm_head_mlp_residual_out;  // [total_tokens, d_model] u = z + alpha * (swiglu @ W_down)
     Tensor logits_tensor;
-    std::vector<Tensor> mtp_logits_tensors;
-    Tensor latent_preset_encoder_slots;     // [total_tokens, mtp_k * d_model] continuous proposal features before preset fusion
-    Tensor latent_preset_mtp_hidden;        // [total_tokens, mtp_k * d_model] positional slots decoded from the selected codebook preset
-    Tensor latent_preset_future_fused;      // [total_tokens, fuse_dim]
-    Tensor latent_preset_future_entropy;    // [total_tokens, mtp_k] optional
-    Tensor latent_preset_z;                 // [total_tokens, preset_dim]
-    Tensor latent_preset_quantized;         // [total_tokens, preset_dim] selected reusable atomic preset (straight-through VQ)
-    Tensor latent_preset_vec;               // [total_tokens, d_model]
-    Tensor latent_preset_gate_pre;          // [total_tokens, 1] scalar gate logits
-    Tensor latent_preset_gate;              // [total_tokens, 1] scalar gate values
-    Tensor latent_preset_injected;          // [total_tokens, d_model]
-    Tensor latent_preset_h_enhanced;        // [total_tokens, d_model]
     // Arg/option selector head: [total_tokens, num_pool_atoms] selection logits over
     // the candidate atom-entry pool (out-of-row-window candidates masked to -inf).
     // Empty unless the forward graph policy requested emit_selector_logits.
@@ -360,9 +348,6 @@ public:
         if (lm_head_mlp_residual_out.data) {
             return &lm_head_mlp_residual_out;
         }
-        if (latent_preset_h_enhanced.data) {
-            return &latent_preset_h_enhanced;
-        }
         if (encoder_output_tensor.data) {
             return &encoder_output_tensor;
         }
@@ -375,9 +360,6 @@ public:
         }
         if (lm_head_mlp_residual_out.data) {
             return &lm_head_mlp_residual_out;
-        }
-        if (latent_preset_h_enhanced.data) {
-            return &latent_preset_h_enhanced;
         }
         if (encoder_output_tensor.data) {
             return &encoder_output_tensor;
@@ -402,18 +384,6 @@ public:
         lm_head_mlp_swiglu_out = Tensor();
         lm_head_mlp_residual_out = Tensor();
         logits_tensor = Tensor();
-        clearTensorVector(mtp_logits_tensors);
-        latent_preset_encoder_slots = Tensor();
-        latent_preset_mtp_hidden = Tensor();
-        latent_preset_future_fused = Tensor();
-        latent_preset_future_entropy = Tensor();
-        latent_preset_z = Tensor();
-        latent_preset_quantized = Tensor();
-        latent_preset_vec = Tensor();
-        latent_preset_gate_pre = Tensor();
-        latent_preset_gate = Tensor();
-        latent_preset_injected = Tensor();
-        latent_preset_h_enhanced = Tensor();
         selector_logits = Tensor();
         scratch_atom_embeddings = Tensor();
         resetExecutionMemoryVectorPreserveGeometry(exec_memories);
@@ -492,18 +462,6 @@ public:
         reportTensor("lm_head_mlp_swiglu_out", lm_head_mlp_swiglu_out);
         reportTensor("lm_head_mlp_residual_out", lm_head_mlp_residual_out);
         reportTensor("logits_tensor", logits_tensor);
-        reportVector("mtp_logits_tensors", mtp_logits_tensors);
-        reportTensor("latent_preset_encoder_slots", latent_preset_encoder_slots);
-        reportTensor("latent_preset_mtp_hidden", latent_preset_mtp_hidden);
-        reportTensor("latent_preset_future_fused", latent_preset_future_fused);
-        reportTensor("latent_preset_future_entropy", latent_preset_future_entropy);
-        reportTensor("latent_preset_z", latent_preset_z);
-        reportTensor("latent_preset_quantized", latent_preset_quantized);
-        reportTensor("latent_preset_vec", latent_preset_vec);
-        reportTensor("latent_preset_gate_pre", latent_preset_gate_pre);
-        reportTensor("latent_preset_gate", latent_preset_gate);
-        reportTensor("latent_preset_injected", latent_preset_injected);
-        reportTensor("latent_preset_h_enhanced", latent_preset_h_enhanced);
         reportTensor("selector_logits", selector_logits);
         reportTensor("scratch_atom_embeddings", scratch_atom_embeddings);
 

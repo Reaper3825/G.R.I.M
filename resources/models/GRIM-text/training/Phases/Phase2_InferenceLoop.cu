@@ -28,7 +28,6 @@ namespace GRIMText::Training {
 namespace {
 
 using GRIM::HyperParameters::GenerationHP;
-using GRIM::HyperParameters::MTPFeatureHP;
 using GRIM::HyperParameters::SamplingStrategy;
 
 struct InferenceForwardScope {
@@ -235,7 +234,6 @@ GRIM::GeneratedSequence generateOneSequence(
 
     generation_state.resetSession();
 
-    const auto mtp_hp = GRIM::HyperParameters::mtpFeatureHP(config);
     const auto number_encoder_hp = GRIM::HyperParameters::numberEncoderConstructionHP(config);
 
     // The execution-entangled decode-time slot selector was deleted
@@ -259,7 +257,7 @@ GRIM::GeneratedSequence generateOneSequence(
     const bool atom_generation_active = execution_hp.enabled;
     // ── KV-cache session setup ───────────────────────────────────────────────
     // Decode runs incrementally: prefill the prompt once (q_len=prompt_len), then
-    // decode one token (or K+1 for MTP speculative verification) at a time, reusing
+    // decode one token at a time, reusing
     // the per-layer K/V cache. This replaces the previous O(n^2) full-recompute.
     if (!training_state.initialized) {
         throw std::runtime_error("generateOneSequence: training state not initialized");
@@ -293,36 +291,22 @@ GRIM::GeneratedSequence generateOneSequence(
                              max_cached_seq_len, pbm.rope_inv_freq, stream);
     kv_cache.beginSession(stream);
 
-    // MTP self-speculative decode is enabled whenever the model has trained MTP
-    // predictors. It is EXACT (output-identical to plain decode): every committed
-    // token is selectNextToken(verify_logits, context); the MTP drafts only decide
-    // whether a verify row can be reused. draft_k == 0 collapses to plain decode.
-    const bool use_mtp = mtp_hp.enabled && mtp_hp.k > 0;
     // Arg/option selector decode bridge: when enabled, a generated numeric-atom
     // placeholder (<INT>/<FLOAT>) is bound to the candidate atom-entry the trained
-    // selector picks from this row's pool (prompt atoms). MTP speculation is
-    // disabled while the selector is active so each step has exactly one
-    // selector-logit row to resolve (selector + speculation is a future combo).
+    // selector picks from this row's pool (prompt atoms).
     const bool use_selector =
         GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "selector_enabled");
-    const int draft_k = (use_mtp && !use_selector) ? mtp_hp.k : 0;
-
     std::shared_ptr<GRIM::Batching::BatchDeviceStorage> inference_device_storage;
 
-    // Host copy of the last n_tail primary-logit rows of one cached forward, plus
-    // (optionally) the matching MTP-head rows. Rows are ordered oldest..newest.
+    // Host copy of the last n_tail logit rows. Rows are ordered oldest..newest.
     struct TailLogits {
         int n_rows = 0;
         int vocab = 0;
         std::vector<float> primary;            // [n_rows * vocab]
-        std::vector<std::vector<float>> mtp;   // mtp[k] = [n_rows * vocab], k = 0..K-1
         int num_pool_atoms = 0;                // candidate count for the selector rows
         std::vector<float> selector;           // [n_rows * num_pool_atoms] (empty if no selector)
         const float* primaryRow(int i) const {
             return primary.data() + static_cast<size_t>(i) * static_cast<size_t>(vocab);
-        }
-        const float* mtpRow(int k, int i) const {
-            return mtp[static_cast<size_t>(k)].data() + static_cast<size_t>(i) * static_cast<size_t>(vocab);
         }
         const float* selectorRow(int i) const {
             return selector.data() + static_cast<size_t>(i) * static_cast<size_t>(num_pool_atoms);
@@ -331,9 +315,9 @@ GRIM::GeneratedSequence generateOneSequence(
 
     // Run one cached forward over `active_payload` (q_len rows). The shared forward
     // appends this window's K/V to every layer's cache and advances cache_seqlens
-    // by q_len. Returns the last n_tail rows of the primary logits (+ MTP heads).
+    // by q_len. Returns the last n_tail rows of the primary logits.
     auto runCachedForward = [&](GRIM::Batching::BatchPayload& active_payload,
-                                int n_tail, bool want_mtp, bool want_selector) -> TailLogits {
+                                int n_tail, bool want_selector) -> TailLogits {
         validateInferenceForwardPayload(model, active_payload, "generateOneSequence");
         const int q_len = active_payload.total_tokens;
         if (n_tail <= 0 || n_tail > q_len) {
@@ -360,13 +344,11 @@ GRIM::GeneratedSequence generateOneSequence(
         request.bindings = &bindings;
         request.batch_idx = 0;
         request.kv_cache = &kv_cache;
-        const bool emit_mtp_logits = want_mtp && use_mtp;
         const bool emit_selector_logits = want_selector && use_selector;
         request.graph = GRIM::Forward::ModelForwardGraphPolicy{
             /*connect_parameter_graph=*/false,
             /*retain_backward_graph=*/false,
             /*enable_dropout=*/false,
-            /*emit_mtp_logits=*/emit_mtp_logits,
             /*emit_selector_logits=*/emit_selector_logits};
 
         auto forward_outputs = GRIM::Forward::executeModelForward(request, runtime_payload);
@@ -382,12 +364,6 @@ GRIM::GeneratedSequence generateOneSequence(
             throw std::runtime_error("generateOneSequence: live logits numel=" +
                 std::to_string(live_logits.numel()) + " < q_len*vocab=" + std::to_string(expected_logits));
         }
-        if (emit_mtp_logits && forward_outputs.mtp_logits_tensors.size() != static_cast<size_t>(mtp_hp.k)) {
-            throw std::runtime_error("generateOneSequence: mtp_logits_tensors.size()=" +
-                std::to_string(forward_outputs.mtp_logits_tensors.size()) + " != mtp_k=" +
-                std::to_string(mtp_hp.k) + " after cached forward");
-        }
-
         TailLogits tail;
         tail.n_rows = n_tail;
         tail.vocab = vocab_size;
@@ -400,24 +376,6 @@ GRIM::GeneratedSequence generateOneSequence(
         if (copy_err != cudaSuccess) {
             throw std::runtime_error("generateOneSequence: cudaMemcpyAsync primary logits failed: " +
                                      std::string(cudaGetErrorString(copy_err)));
-        }
-        if (emit_mtp_logits) {
-            tail.mtp.resize(static_cast<size_t>(mtp_hp.k));
-            for (int k = 0; k < mtp_hp.k; ++k) {
-                const auto& head_logits = forward_outputs.mtp_logits_tensors[static_cast<size_t>(k)];
-                if (!head_logits.data || static_cast<size_t>(head_logits.numel()) < expected_logits) {
-                    throw std::runtime_error("generateOneSequence: MTP head " + std::to_string(k) +
-                                             " logits invalid after cached forward");
-                }
-                tail.mtp[static_cast<size_t>(k)].resize(static_cast<size_t>(n_tail) * static_cast<size_t>(vocab_size));
-                cudaError_t mcopy = cudaMemcpyAsync(
-                    tail.mtp[static_cast<size_t>(k)].data(), head_logits.data + tail_off,
-                    static_cast<size_t>(n_tail) * row_bytes, cudaMemcpyDeviceToHost, stream);
-                if (mcopy != cudaSuccess) {
-                    throw std::runtime_error("generateOneSequence: cudaMemcpyAsync MTP logits failed: " +
-                                             std::string(cudaGetErrorString(mcopy)));
-                }
-            }
         }
         if (emit_selector_logits && forward_outputs.selector_logits.data && bindings.num_pool_atoms > 0) {
             tail.num_pool_atoms = bindings.num_pool_atoms;
@@ -507,8 +465,7 @@ GRIM::GeneratedSequence generateOneSequence(
     };
 
     // Select the next token from a primary-logit row using the SAME pipeline +
-    // pre-min_new_tokens EOS mask as the full-recompute decoder, so speculative
-    // and substrate decode are output-identical.
+    // pre-min_new_tokens EOS mask as the full-recompute decoder.
     auto selectFrom = [&](const float* logit_row, int committed_new_tokens) -> GRIM::Sampling::SampleResult {
         std::vector<float> row(logit_row, logit_row + vocab_size);
         if (committed_new_tokens + 1 < cfg.min_new_tokens &&
@@ -531,28 +488,8 @@ GRIM::GeneratedSequence generateOneSequence(
     };
 
     // ── Prefill: populate the cache from the prompt; read the last position. ──
-    TailLogits prefill = runCachedForward(prompt_payload, /*n_tail=*/1, /*want_mtp=*/use_mtp,
-                                          /*want_selector=*/use_selector);
-
-    // MTP drafts for the tokens AFTER `pending`, taken from the MTP heads at a
-    // chosen verify row. Head i (0-indexed) at a row predicts (that position)+i+2,
-    // i.e. (next pending)+i+1 — exactly the i-th draft slot.
-    std::vector<int> drafts;
-    auto refreshDrafts = [&](const TailLogits& t, int row) {
-        drafts.clear();
-        if (draft_k == 0) {
-            return;
-        }
-        for (int k = 0; k < draft_k; ++k) {
-            const float* mr = t.mtpRow(k, row);
-            int best = 0;
-            float bestv = mr[0];
-            for (int v = 1; v < vocab_size; ++v) {
-                if (mr[v] > bestv) { bestv = mr[v]; best = v; }
-            }
-            drafts.push_back(best);
-        }
-    };
+    TailLogits prefill = runCachedForward(
+        prompt_payload, /*n_tail=*/1, /*want_selector=*/use_selector);
 
     bool finished = false;
 
@@ -565,11 +502,7 @@ GRIM::GeneratedSequence generateOneSequence(
             finished = true;
         }
     }
-    if (use_mtp && !finished) {
-        refreshDrafts(prefill, 0);
-    }
-
-    // ── Decode loop: feed [pending (+ K drafts)], verify, accept, repeat. ─────
+    // Decode one pending token per cached forward.
     while (!finished) {
         if (committedNewTokens() >= cfg.max_new_tokens) {
             break;
@@ -579,66 +512,24 @@ GRIM::GeneratedSequence generateOneSequence(
         }
 
         const int pending = sequence.token_ids.back();
-        const int cache_base = kv_cache.currentSeqlen();   // == sequence length - 1
+        const int cache_base = kv_cache.currentSeqlen();
 
-        // Bound drafts by remaining cache capacity and the remaining emit budget.
-        const int max_emit = std::min(cfg.max_new_tokens - committedNewTokens(),
-                                      max_seq_len - static_cast<int>(sequence.token_ids.size()));
-        int k_eff = draft_k;
-        k_eff = std::min(k_eff, kv_cache.remainingCapacity() - 1);
-        k_eff = std::min(k_eff, max_emit - 1);
-        if (k_eff < 0) {
-            k_eff = 0;
-        }
+        std::vector<int> feed{pending};
+        GRIM::Batching::BatchPayload decode_payload = buildDecodePayload(feed);
+        TailLogits tail = runCachedForward(
+            decode_payload, /*n_tail=*/1, /*want_selector=*/use_selector);
 
-        std::vector<int> feed;
-        feed.reserve(static_cast<size_t>(1 + k_eff));
-        feed.push_back(pending);
-        for (int i = 0; i < k_eff; ++i) {
-            feed.push_back(drafts[static_cast<size_t>(i)]);
-        }
+        GRIM::Sampling::SampleResult chosen =
+            selectFrom(tail.primaryRow(0), committedNewTokens());
+        commitSampled(chosen, tail, 0);
 
-        GRIM::Batching::BatchPayload verify_payload = buildDecodePayload(feed);
-        TailLogits tail = runCachedForward(verify_payload, /*n_tail=*/(1 + k_eff), /*want_mtp=*/use_mtp,
-                                           /*want_selector=*/use_selector);
+        // The token just fed is now cached; the newly sampled token remains
+        // pending for the next iteration.
+        kv_cache.setSeqlen(cache_base + 1, stream);
 
-        // Verify row j predicts the token after feed[j]. Commit
-        // chosen_j = selectNextToken(row j, context); continue only while the draft
-        // matched the model's own choice (so the next row's context is correct).
-        int stop_j = k_eff;
-        for (int j = 0; j <= k_eff; ++j) {
-            GRIM::Sampling::SampleResult chosen = selectFrom(tail.primaryRow(j), committedNewTokens());
-            commitSampled(chosen, tail, j);
-
-            if (chosen.token_id == cfg.eos_token_id && committedNewTokens() >= cfg.min_new_tokens) {
-                finished = true; stop_j = j; break;
-            }
-            if (committedNewTokens() >= cfg.max_new_tokens) {
-                finished = true; stop_j = j; break;
-            }
-            if (static_cast<int>(sequence.token_ids.size()) >= max_seq_len) {
-                finished = true; stop_j = j; break;
-            }
-
-            if (j < k_eff && chosen.token_id == feed[static_cast<size_t>(j + 1)]) {
-                continue;  // draft j+1 matched -> reuse verify row j+1 (correct context)
-            }
-            stop_j = j; break;  // rejected draft j+1, or window exhausted
-        }
-
-        // The verify forward appended k_eff+1 tokens (cache_base -> cache_base+k_eff+1).
-        // Keep K/V for feed[0..stop_j] (== committed tokens at positions
-        // cache_base..cache_base+stop_j); the last committed token (next pending) is
-        // not cached yet. Roll back so its K/V is computed on the next forward.
-        kv_cache.setSeqlen(cache_base + stop_j + 1, stream);
-
-        if (finished) {
-            break;
-        }
-
-        // Next drafts: MTP heads at window position stop_j (correct context).
-        if (use_mtp) {
-            refreshDrafts(tail, stop_j);
+        if (chosen.token_id == cfg.eos_token_id &&
+            committedNewTokens() >= cfg.min_new_tokens) {
+            finished = true;
         }
     }
 

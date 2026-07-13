@@ -26,7 +26,7 @@ Status: implemented.
 Exit criteria:
 
 - Inference prefill no longer calls `initAutogradContext()`.
-- Inference prefill no longer calls any training-only forward adapter; optional MTP logits come from the same shared-forward request boundary as primary logits.
+- Inference prefill no longer calls any training-only forward adapter.
 - `AutogradContext` has no inference-only fields or inference initializer overload.
 
 ## Phase 2 — Shared full-forward primitive
@@ -36,7 +36,7 @@ Status: implemented.
 - [x] Extract the training/eval full-forward math from `AutogradTraining.cu` into `Shared/Forward/ModelForward_GPU.cu`.
 - [x] Route training and inference through the same shared forward primitive; Phase2 training now calls `Forward::executeModelForward(...)` explicitly and autograd owns only loss/backward.
 - [x] Route inference prefill through the shared primitive with `ModelForwardGraphPolicy{false,false,false,false}`: read-only parameter graph, no backward retention, no dropout, and optional forward extras requested explicitly.
-- [x] Delete per-layer K/V preservation for inference; Phase2 inference uses the shared full-context graph rather than a separate KV-cache decode graph. **(Superseded — see "Phase 5" below: a session-scoped KV cache + MTP speculative decode now replaces the O(n²) full-context recompute. The shared forward primitive is still the single entry; the cache is attached via an optional `ModelForwardRequest::kv_cache` pointer, so there is still no separate decode graph file.)**
+- [x] Use the shared full-forward primitive with a session-scoped KV cache for incremental decode.
 - [x] Delete the temporary `InferenceForward_GPU.{hpp,cu}` primitive.
 - [x] Keep loss/backward code in `training/Autograd`.
 
@@ -97,7 +97,7 @@ Exit criteria:
 - `grim_text_server` does not compile or link Phase1/Phase2/training/model CUDA objects; it links only HTTP/JSON/process-bridge dependencies.
 - Any accidental server dependency on training loss/backward fails at build time.
 
-## Phase 5 — Session KV cache + MTP speculative decode
+## Phase 5 — Session KV cache
 
 Status: implemented (pending GPU-box verification).
 
@@ -118,23 +118,7 @@ separate decode graph file.
   training), and advances `cache_seqlens` by `q_len` once after the layer loop.
   Training/eval callers leave `kv_cache` null and are unaffected.
 - Phase2 `generateOneSequence` prefills the prompt (`q_len = prompt_len`), then
-  decodes one token at a time (`q_len = 1`), or `q_len = K+1` for MTP
-  speculative verification.
-- MTP self-speculative decode (default ON when MTP is enabled) is
-  **exact / output-identical** to plain decode: each committed token is
-  `SamplingPipeline::selectNextToken(verify_row, context)`; the MTP argmax
-  drafts only decide whether the next verify row's context is already correct and
-  can be reused. On a mismatch the cache rolls back to the accepted prefix. With
-  `K=0` the loop is plain KV-cached decode.
-- LatentTrajectoryPreset runs on the cached path: it is a strictly row-local
-  post-encoder transform over the active window's `[q_len, d_model]` hidden
-  states, so no latent history cache exists. Each row selects one learned
-  atomic preset from the codebook; all positional MTP slots are decoded from
-  that selected preset, with no continuous bypass. In discrete-preset MTP mode
-  (`latent_trajectory_preset_use_mtp_logits=true`) MTP draft logits come from
-  `latent_preset_mtp_hidden` slices projected through the registered per-horizon
-  MTP heads; speculation uses the same verify/rollback loop.
-
+  decodes one token at a time (`q_len = 1`).
 Known limitations (tracked under "other missing pieces"): no HTTP token
 streaming; no stop-sequences; numeric-atom generation and execution-block decode
 are unsupported on the cached path (the forward throws if the execution block is
@@ -151,11 +135,8 @@ Build the `train_gpu` target (e.g. `training/build/Release/train_gpu.exe`), then
    between the fused-rotary kernel and the training SDPA path.
 2. **Decode equivalence** — greedy KV-cached decode must produce the identical
    token sequence as the previous full-recompute decode for several prompts.
-3. **MTP exactness** — with MTP on, the output sequence must equal plain
-   KV-cached decode (it is exact by construction); log the per-step acceptance
-   rate to confirm speculation is engaging.
-4. **Server smoke** — launch `grim_text_server`, `POST /api/generate`, confirm
+3. **Server smoke** — launch `grim_text_server`, `POST /api/generate`, confirm
    the response + stats and that decode latency scales ~linearly (not
    quadratically) with generated length.
-5. **Watch** — cache capacity at `max_seq_len`, `cache_seqlens` rollback,
+4. **Watch** — cache capacity at `max_seq_len`, `cache_seqlens` rollback,
    GQA mapping (`n_kv_heads`), host/device `cache_seqlens` sync.

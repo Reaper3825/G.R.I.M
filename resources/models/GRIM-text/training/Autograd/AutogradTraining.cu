@@ -5,7 +5,6 @@
 
 #include "AutogradTraining.hpp"
 #include "AutogradExecutionLoss.hpp"
-#include "AutogradMtpAuxiliaryLoss.hpp"
 
 // MUST include full definition of GPUGrimEncoder for method calls
 #include "../../GRIM/grim_language_model_cuda.hpp"
@@ -339,370 +338,6 @@ bool verifyGradientsAreConnectedImpl(
     const GradientSignalBaselines* baselines
 );
 
-constexpr int kLatentPresetBlockSize = 256;
-constexpr int kLatentPresetMaxGridBlocks1DFallback = 65534;
-constexpr int kLatentPresetMaxGridDimY = 65535;
-
-inline int latentPresetMaxGridBlocks1D() {
-    static int cached = -1;
-    if (cached < 0) {
-        int device = 0;
-        if (cudaGetDevice(&device) != cudaSuccess) {
-            cached = kLatentPresetMaxGridBlocks1DFallback;
-        } else {
-            int max_x = 0;
-            if (cudaDeviceGetAttribute(&max_x, cudaDevAttrMaxGridDimX, device) != cudaSuccess) {
-                cached = kLatentPresetMaxGridBlocks1DFallback;
-            } else {
-                cached = (max_x > kLatentPresetMaxGridBlocks1DFallback)
-                    ? kLatentPresetMaxGridBlocks1DFallback
-                    : max_x;
-            }
-        }
-    }
-    return cached;
-}
-
-inline dim3 latentPresetGridForCount(size_t count) {
-    if (count == 0) return dim3(1, 1, 1);
-    const int blocks = static_cast<int>((count + kLatentPresetBlockSize - 1) / kLatentPresetBlockSize);
-    const int max1d = latentPresetMaxGridBlocks1D();
-    if (blocks <= max1d) return dim3(blocks, 1, 1);
-    int gy = (blocks + max1d - 1) / max1d;
-    if (gy <= kLatentPresetMaxGridDimY) return dim3(max1d, gy, 1);
-    const int gx = (blocks + kLatentPresetMaxGridDimY - 1) / kLatentPresetMaxGridDimY;
-    return dim3(gx, kLatentPresetMaxGridDimY, 1);
-}
-
-__device__ inline size_t latentPresetFlatThreadIndex() {
-    return (static_cast<size_t>(blockIdx.y) * gridDim.x + blockIdx.x) * blockDim.x + threadIdx.x;
-}
-
-void checkLatentPresetCuda(cudaError_t err, const char* call) {
-    if (err != cudaSuccess) {
-        throw std::runtime_error(std::string("LatentTrajectoryPresetLoss: ") +
-                                 call + " failed: " + cudaGetErrorString(err));
-    }
-}
-
-__global__ void kernel_ltp_gate_mask_and_count(
-    const int* __restrict__ seq_lengths,
-    uint8_t* __restrict__ gate_valid,
-    int* __restrict__ gate_count,
-    int total_tokens,
-    int max_seq_len)
-{
-    const int row = static_cast<int>(latentPresetFlatThreadIndex());
-    if (row >= total_tokens) return;
-
-    const int b = row / max_seq_len;
-    const int t = row - b * max_seq_len;
-    const int seq_len = seq_lengths[b];
-    const bool gate_ok = (t < seq_len);
-
-    gate_valid[row] = gate_ok ? 1 : 0;
-    if (gate_ok) {
-        atomicAdd(gate_count, 1);
-    }
-}
-
-__global__ void kernel_ltp_sum_gate_loss(
-    const float* __restrict__ gate,
-    const uint8_t* __restrict__ gate_valid,
-    float* __restrict__ sums,
-    int total_tokens)
-{
-    const int row = static_cast<int>(latentPresetFlatThreadIndex());
-    if (row >= total_tokens || !gate_valid[row]) return;
-    atomicAdd(sums, fabsf(gate[row]));
-}
-
-__global__ void kernel_ltp_grad_gate(
-    const float* __restrict__ gate,
-    const uint8_t* __restrict__ gate_valid,
-    float* __restrict__ grad_gate,
-    float scale,
-    int total_tokens)
-{
-    const int row = static_cast<int>(latentPresetFlatThreadIndex());
-    if (row >= total_tokens || !gate_valid[row]) return;
-    const float sign = gate[row] < 0.0f ? -1.0f : 1.0f;
-    grad_gate[row] += scale * sign;
-}
-
-struct LatentPresetLossSummary {
-    Tensor loss_tensor;
-    float weighted_loss = 0.0f;
-    float traj_loss = 0.0f;
-    float delta_loss = 0.0f;
-    float gate_loss = 0.0f;
-    int gate_valid_count = 0;
-};
-
-struct LatentPresetLossGradFn : public GradFn {
-    bool gate_requires_grad = false;
-    TensorContract::TensorShape gate_shape;
-    std::shared_ptr<GradFn> gate_grad_fn;
-    float* grad_gate = nullptr;
-    std::shared_ptr<float> owned_grad_gate;
-    const float* gate_data = nullptr;
-    std::shared_ptr<uint8_t> gate_valid;
-    int total_tokens = 0;
-    int gate_valid_count = 0;
-    float lambda_gate = 0.0f;
-
-    LatentPresetLossGradFn() {
-        op_name = "latent_trajectory_preset_loss";
-    }
-
-    // Captures one loss input. `active` must reflect whether this term will
-    // actually contribute gradient during apply_impl (lambda > 0 AND a
-    // non-zero valid count): the AutogradEngine requires that every edge
-    // registered here receives exactly one contribution during backward, so
-    // inactive terms must not register an edge at all.
-    void captureInput(Tensor& tensor,
-                      bool active,
-                      bool& requires_grad,
-                      TensorContract::TensorShape& shape,
-                      std::shared_ptr<GradFn>& input_grad_fn,
-                      float*& grad_buffer,
-                      std::shared_ptr<float>& owned_buffer,
-                      const char* label,
-                      cudaStream_t stream) {
-        requires_grad = active && tensor.requires_grad;
-        shape = tensor.shape;
-        if (!requires_grad) {
-            return;
-        }
-        input_grad_fn = tensor.grad_fn;
-        register_input(tensor.grad_fn);
-        if (tensor.is_leaf) {
-            tensor.ensure_grad();
-            grad_buffer = tensor.grad_data();
-            return;
-        }
-        float* buffer = nullptr;
-        CudaAlloc::cudaMallocOrThrow(reinterpret_cast<void**>(&buffer),
-                                     tensor.numel() * sizeof(float),
-                                     label);
-        checkLatentPresetCuda(cudaMemsetAsync(buffer, 0, tensor.numel() * sizeof(float), stream),
-                              "cudaMemsetAsync(latent preset grad buffer)");
-        owned_buffer = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
-        grad_buffer = owned_buffer.get();
-    }
-
-protected:
-    void apply_impl(const Tensor& grad_output,
-                    cudaStream_t stream,
-                    const Batching::BatchPayload* backward_payload,
-                    const Batching::BatchDeviceBindings* backward_bindings) override {
-        if (applied) return;
-        applied = true;
-        if (!grad_output.data || grad_output.numel() < 1) {
-            throw std::runtime_error("LatentPresetLossGradFn::apply: grad_output is empty");
-        }
-
-        float root_grad = 0.0f;
-        checkLatentPresetCuda(cudaMemcpyAsync(&root_grad, grad_output.data, sizeof(float),
-                                              cudaMemcpyDeviceToHost, stream),
-                              "cudaMemcpyAsync(latent preset root grad)");
-        checkLatentPresetCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(latent preset root grad)");
-
-        // AutogradEngine contract: every edge registered at capture time MUST
-        // receive exactly one contribution during backward, or the engine
-        // throws (edge-count != contribute-count). Capture already gated on
-        // activity (lambda > 0 AND valid count > 0), so every captured buffer
-        // here unconditionally runs its kernel and propagates upstream.
-        if (gate_requires_grad && grad_gate) {
-            const float scale = root_grad * lambda_gate / static_cast<float>(gate_valid_count);
-            kernel_ltp_grad_gate<<<latentPresetGridForCount(total_tokens), kLatentPresetBlockSize, 0, stream>>>(
-                gate_data,
-                gate_valid.get(),
-                grad_gate,
-                scale,
-                total_tokens);
-            checkLatentPresetCuda(cudaGetLastError(), "kernel_ltp_grad_gate");
-
-            if (gate_grad_fn) {
-                Tensor view;
-                view.data = grad_gate;
-                view.shape = gate_shape;
-                view.owns_data = false;
-                view.stream = stream;
-                gate_grad_fn->apply(view, stream, backward_payload, backward_bindings);
-            }
-        }
-    }
-
-public:
-    void release_saved() override {
-        GradFn::release_saved();
-        gate_grad_fn.reset();
-        owned_grad_gate.reset();
-        grad_gate = nullptr;
-        gate_valid.reset();
-    }
-};
-
-LatentPresetLossSummary addLatentPresetAuxiliaryLoss(
-    AutogradContext& ctx,
-    const Batching::BatchPayload& payload,
-    Forward::ModelForwardOutputs& forward_outputs,
-    AutogradLossState& loss_state)
-{
-    LatentPresetLossSummary summary{};
-    const auto latent_hp = GRIM::HyperParameters::latentTrajectoryPresetHP(*ctx.config);
-    if (!latent_hp.enabled) {
-        return summary;
-    }
-    if (!loss_state.loss_tensor.data) {
-        throw std::runtime_error("addLatentPresetAuxiliaryLoss: loss_tensor is NULL");
-    }
-    if (!forward_outputs.latent_preset_gate.data) {
-        throw std::runtime_error("addLatentPresetAuxiliaryLoss: latent preset forward tensors are missing");
-    }
-    if (!latent_hp.use_gate_sparsity_loss || latent_hp.lambda_gate <= 0.0f) {
-        return summary;
-    }
-
-    const auto& gate_shape = forward_outputs.latent_preset_gate.shape.require("latent preset gate");
-    if (!gate_shape.is_2d_layout()) {
-        throw std::runtime_error("addLatentPresetAuxiliaryLoss: expected 2D latent preset tensors");
-    }
-    const auto gate_dims = gate_shape.as_2d();
-    if (gate_dims.rows != payload.total_tokens || gate_dims.cols != 1) {
-        throw std::runtime_error("addLatentPresetAuxiliaryLoss: latent tensor shape mismatch");
-    }
-    if (static_cast<int>(payload.seq_lengths.size()) != payload.batch_size) {
-        throw std::runtime_error("addLatentPresetAuxiliaryLoss: payload.seq_lengths size mismatch");
-    }
-
-    int* d_seq_lengths = nullptr;
-    int* d_gate_count = nullptr;
-    uint8_t* raw_gate_valid = nullptr;
-    float* d_sum = nullptr;
-    CudaAlloc::cudaMallocOrThrow(reinterpret_cast<void**>(&d_seq_lengths),
-                                 payload.seq_lengths.size() * sizeof(int),
-                                 "latent_preset_seq_lengths");
-    CudaAlloc::cudaMallocOrThrow(reinterpret_cast<void**>(&d_gate_count),
-                                 sizeof(int),
-                                 "latent_preset_gate_count");
-    CudaAlloc::cudaMallocOrThrow(reinterpret_cast<void**>(&raw_gate_valid),
-                                 static_cast<size_t>(payload.total_tokens) * sizeof(uint8_t),
-                                 "latent_preset_gate_valid");
-    CudaAlloc::cudaMallocOrThrow(reinterpret_cast<void**>(&d_sum),
-                                 sizeof(float),
-                                 "latent_preset_gate_loss_sum");
-
-    std::shared_ptr<uint8_t> gate_valid(raw_gate_valid, [](uint8_t* p) { queueForDeferredCleanup(p); });
-
-    checkLatentPresetCuda(cudaMemcpyAsync(d_seq_lengths,
-                                          payload.seq_lengths.data(),
-                                          payload.seq_lengths.size() * sizeof(int),
-                                          cudaMemcpyHostToDevice,
-                                          ctx.stream),
-                          "cudaMemcpyAsync(seq_lengths)");
-    checkLatentPresetCuda(cudaMemsetAsync(d_gate_count, 0, sizeof(int), ctx.stream),
-                          "cudaMemsetAsync(gate count)");
-    checkLatentPresetCuda(cudaMemsetAsync(d_sum, 0, sizeof(float), ctx.stream),
-                          "cudaMemsetAsync(gate loss sum)");
-
-    kernel_ltp_gate_mask_and_count<<<latentPresetGridForCount(payload.total_tokens),
-                                     kLatentPresetBlockSize, 0, ctx.stream>>>(
-        d_seq_lengths,
-        gate_valid.get(),
-        d_gate_count,
-        payload.total_tokens,
-        payload.max_seq_len);
-    checkLatentPresetCuda(cudaGetLastError(), "kernel_ltp_gate_mask_and_count");
-
-    checkLatentPresetCuda(cudaMemcpyAsync(&summary.gate_valid_count, d_gate_count, sizeof(int),
-                                          cudaMemcpyDeviceToHost, ctx.stream),
-                          "cudaMemcpyAsync(gate count host)");
-    checkLatentPresetCuda(cudaStreamSynchronize(ctx.stream), "cudaStreamSynchronize(gate count)");
-
-    if (summary.gate_valid_count > 0 && latent_hp.use_gate_sparsity_loss && latent_hp.lambda_gate > 0.0f) {
-        kernel_ltp_sum_gate_loss<<<latentPresetGridForCount(payload.total_tokens),
-                                   kLatentPresetBlockSize, 0, ctx.stream>>>(
-            forward_outputs.latent_preset_gate.data,
-            gate_valid.get(),
-            d_sum,
-            payload.total_tokens);
-        checkLatentPresetCuda(cudaGetLastError(), "kernel_ltp_sum_gate_loss");
-    }
-
-    float h_sum = 0.0f;
-    checkLatentPresetCuda(cudaMemcpyAsync(&h_sum, d_sum, sizeof(float),
-                                          cudaMemcpyDeviceToHost, ctx.stream),
-                          "cudaMemcpyAsync(gate loss sum host)");
-    checkLatentPresetCuda(cudaStreamSynchronize(ctx.stream), "cudaStreamSynchronize(gate loss sum)");
-
-    if (summary.gate_valid_count > 0 && latent_hp.use_gate_sparsity_loss) {
-        summary.gate_loss = h_sum / static_cast<float>(summary.gate_valid_count);
-    }
-    summary.weighted_loss = latent_hp.lambda_gate * summary.gate_loss;
-
-    if (!std::isfinite(summary.weighted_loss) ||
-        !std::isfinite(summary.traj_loss) ||
-        !std::isfinite(summary.delta_loss) ||
-        !std::isfinite(summary.gate_loss)) {
-        throw std::runtime_error("addLatentPresetAuxiliaryLoss: non-finite latent preset loss");
-    }
-
-    float* d_loss = nullptr;
-    CudaAlloc::cudaMallocOrThrow(reinterpret_cast<void**>(&d_loss),
-                                 sizeof(float),
-                                 "latent_preset_loss_scalar");
-    checkLatentPresetCuda(cudaMemcpyAsync(d_loss, &summary.weighted_loss, sizeof(float),
-                                          cudaMemcpyHostToDevice, ctx.stream),
-                          "cudaMemcpyAsync(latent preset loss scalar)");
-
-    // Per-term "active" flags: a term only participates in backward when its
-    // lambda is positive AND at least one position is valid this batch. These
-    // must exactly match the branches taken inside apply_impl (engine
-    // edge-count == contribute-count invariant).
-    const bool gate_active =
-        latent_hp.use_gate_sparsity_loss &&
-        latent_hp.lambda_gate > 0.0f &&
-        summary.gate_valid_count > 0 &&
-        forward_outputs.latent_preset_gate.requires_grad;
-    const bool requires_grad = gate_active;
-
-    summary.loss_tensor.data = d_loss;
-    summary.loss_tensor.owns_data = true;
-    summary.loss_tensor.shape = TensorContract::TensorShape::make_BSM(1, 1);
-    summary.loss_tensor.requires_grad = requires_grad;
-    summary.loss_tensor.is_leaf = false;
-    summary.loss_tensor.stream = ctx.stream;
-    summary.loss_tensor.name = "latent_preset_loss";
-
-    if (requires_grad) {
-        auto grad_fn = std::make_shared<LatentPresetLossGradFn>();
-        grad_fn->captureInput(forward_outputs.latent_preset_gate,
-                              gate_active,
-                              grad_fn->gate_requires_grad,
-                              grad_fn->gate_shape,
-                              grad_fn->gate_grad_fn,
-                              grad_fn->grad_gate,
-                              grad_fn->owned_grad_gate,
-                              "LatentPresetLossGradFn_grad_gate",
-                              ctx.stream);
-        grad_fn->gate_data = forward_outputs.latent_preset_gate.data;
-        grad_fn->gate_valid = gate_valid;
-        grad_fn->total_tokens = payload.total_tokens;
-        grad_fn->gate_valid_count = summary.gate_valid_count;
-        grad_fn->lambda_gate = latent_hp.use_gate_sparsity_loss ? latent_hp.lambda_gate : 0.0f;
-        summary.loss_tensor.grad_fn = grad_fn;
-    }
-
-    loss_state.loss_tensor = autograd::add(loss_state.loss_tensor, summary.loss_tensor, ctx.stream);
-
-    cudaFree(d_seq_lengths);
-    cudaFree(d_gate_count);
-    cudaFree(d_sum);
-    return summary;
-}
-
 void validateLossBoundaryInputs(
     const AutogradContext& ctx,
     const Batching::BatchPayload& payload,
@@ -721,9 +356,6 @@ void validateLossBoundaryInputs(
     if (!ctx.device_bindings->d_input_ids || !ctx.device_bindings->d_target_ids || !ctx.device_bindings->d_token_to_slot_map) {
         throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings has NULL device pointers");
     }
-    if (!payload.mtp_shifted_targets.empty() && !ctx.device_bindings->d_mtp_shifted_targets) {
-        throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings.d_mtp_shifted_targets is NULL for MTP payload");
-    }
 }
 }  // namespace
 
@@ -734,22 +366,15 @@ void validateLossBoundaryInputs(
 LossResult computeAutogradLoss(
     AutogradContext& ctx,
     const Batching::BatchPayload& payload,
-    const HyperParameters::LossConfigHP& loss_config,
-    float mtp_alpha_effective
+    const HyperParameters::LossConfigHP& loss_config
 ) {
     LossResult result{};
     result.success = false;
     
     // RULE 20: Fail loud
     validateLossBoundaryInputs(ctx, payload, "computeAutogradLoss");
-    if (!std::isfinite(mtp_alpha_effective) || mtp_alpha_effective < 0.0f) {
-        throw std::runtime_error("computeAutogradLoss: mtp_alpha_effective must be finite and >= 0, got " +
-                                 std::to_string(mtp_alpha_effective));
-    }
-    
     const auto* cfg = ctx.config;
     const auto model_hp = GRIM::HyperParameters::modelHP(*cfg);
-    const auto mtp_hp = GRIM::HyperParameters::mtpFeatureHP(*cfg);
     
     // RULE 20: Fail loud - validate logits tensor was populated by forward pass
     auto& forward_outputs = *ctx.forward_outputs;
@@ -796,31 +421,6 @@ LossResult computeAutogradLoss(
     if (!std::isfinite(text_ce_loss)) {
         throw std::runtime_error("computeAutogradLoss: pure text CE is non-finite (" +
                                  std::to_string(text_ce_loss) + ")");
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // 2. MTP (multi-token prediction) auxiliary losses: L_total += α/K * Σ_k L_k
-    //
-    // MTP logits must already exist as forward-owned Category 1 tensors.
-    // Loss assembly only consumes those tensors and adds the auxiliary losses;
-    // it must not create logits or re-run LM-head-side forward math.
-    // ═══════════════════════════════════════════════════════════════════════════
-    float mtp_loss = 0.0f;
-    result.mtp_diagnostics.clear();
-    if (mtp_hp.enabled && mtp_hp.k > 0) {
-        mtp_loss = computeAutogradMtpAuxiliaryLosses(
-            mtp_hp,
-            loss_state.loss_tensor,
-            forward_outputs.mtp_logits_tensors,
-            result.mtp_diagnostics,
-            payload,
-            *ctx.device_bindings,
-            loss_config,
-            ctx.d_class_weights,
-            ctx.stream,
-            mtp_alpha_effective,
-            text_ce_loss
-        );
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -886,45 +486,17 @@ LossResult computeAutogradLoss(
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // 4. Latent preset auxiliary loss:
-    //    L += λ_gate*mean(abs(gate))
-    //
-    // All future-mean targets have been removed. The preset path still receives
-    // regular LM/MTP gradients through the straight-through codebook and
-    // h_enhanced. The trajectory telemetry channel remains reserved.
-    // ═══════════════════════════════════════════════════════════════════════════
-    float latent_preset_loss = 0.0f;
-    LatentPresetLossSummary latent_preset_summary{};
-    if (model_hp.latent_trajectory_preset_enabled) {
-        latent_preset_summary = addLatentPresetAuxiliaryLoss(
-            ctx,
-            payload,
-            forward_outputs,
-            loss_state);
-        latent_preset_loss = latent_preset_summary.weighted_loss;
-    }
-
     float text_plus_aux_loss = 0.0f;
     cudaMemcpyAsync(&text_plus_aux_loss, loss_state.loss_tensor.data, sizeof(float),
                     cudaMemcpyDeviceToHost, ctx.stream);
     cudaStreamSynchronize(ctx.stream);
 
     if (!std::isfinite(text_plus_aux_loss)) {
-        std::string msg = "computeAutogradLoss: text+MTP/selector/latent loss is non-finite (" + std::to_string(text_plus_aux_loss) + ")";
-        if (result.mtp_diagnostics.valid) {
-            msg += " L0_main=" + std::to_string(result.mtp_diagnostics.L0_main);
-            for (size_t i = 0; i < result.mtp_diagnostics.head_loss.size(); ++i)
-                msg += " head_loss[" + std::to_string(i) + "]=" + std::to_string(result.mtp_diagnostics.head_loss[i]);
-        }
-        throw std::runtime_error(msg);
+        throw std::runtime_error("computeAutogradLoss: text/selector loss is non-finite (" +
+                                 std::to_string(text_plus_aux_loss) + ")");
     }
 
     result.text_loss = text_ce_loss;
-    result.mtp_loss = mtp_loss;
-    result.latent_preset_loss = latent_preset_loss;
-    result.latent_preset_traj_loss = latent_preset_summary.traj_loss;
-    result.latent_preset_delta_loss = latent_preset_summary.delta_loss;
-    result.latent_preset_gate_loss = latent_preset_summary.gate_loss;
     result.valid_tokens = lm_valid_tokens;
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -966,24 +538,17 @@ LossResult computeAutogradLoss(
     result.selector_loss = selector_loss_scaled;
     // Selector has its own reported channel now — subtract it so execution_loss is a
     // true execution-block-only residual (reads 0.0 when the block is disabled).
-    result.execution_loss = actual_loss - text_ce_loss - mtp_loss - selector_loss_scaled - latent_preset_loss;
+    result.execution_loss = actual_loss - text_ce_loss - selector_loss_scaled;
     result.weight_text = 1.0f;
     
     if (!std::isfinite(result.loss_value)) {
         throw std::runtime_error("computeAutogradLoss: combined loss is non-finite (actual_tensor=" 
             + std::to_string(actual_loss) + " text_ce=" + std::to_string(text_ce_loss)
-            + " mtp=" + std::to_string(mtp_loss)
-            + " latent_preset=" + std::to_string(latent_preset_loss)
             + " exec_ce=" + std::to_string(exec_structured_ce) + ")");
     }
     
     AG_INFO("Loss computed: total=" << actual_loss << " text_ce=" << text_ce_loss
-            << " mtp=" << mtp_loss
             << " selector=" << result.selector_loss
-            << " latent_preset=" << result.latent_preset_loss
-            << " latent_traj=" << result.latent_preset_traj_loss
-            << " latent_delta=" << result.latent_preset_delta_loss
-            << " latent_gate=" << result.latent_preset_gate_loss
             << " execution=" << result.execution_loss
             << " exec_ce=" << exec_structured_ce
             << " exec_entropy_monitor=" << exec_entropy_monitor
@@ -1366,31 +931,6 @@ bool verifyGradientsAreConnectedImpl(
                 };
                 probe_attn_param(enc_probe.W_qkv, "attnWqkv");
                 probe_attn_param(enc_probe.W_o, "attnWo");
-            }
-        }
-    }
-
-    if (model_hp.mtp_enabled && model_hp.mtp_k > 0) {
-        if (!ctx.parameter_registry) {
-            AG_WARN("ctx.parameter_registry is NULL during MTP gradient verification while MTP is enabled");
-            ok = false;
-        } else {
-            bool saw_mtp_group = false;
-            for (ParameterGroup& group : ctx.parameter_registry->requireParameterGroups("verifyGradientsAreConnectedImpl")) {
-                if (group.type != ParamGroupType::MTP) {
-                    continue;
-                }
-                saw_mtp_group = true;
-                if (!group.tensor) {
-                    AG_WARN("registered MTP ParameterGroup " << group.name << " has NULL tensor");
-                    ok = false;
-                    continue;
-                }
-                requireAllocatedFinite(*group.tensor, "registered MTP parameter " + group.name);
-            }
-            if (!saw_mtp_group) {
-                AG_WARN("MTP is enabled but no ParamGroupType::MTP entries were registered");
-                ok = false;
             }
         }
     }

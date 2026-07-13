@@ -551,12 +551,10 @@ enum class ParamGroupType : uint8_t {
     ATTENTION = 2,      ///< Attention weights (W_qkv, W_o)
     FFN = 3,            ///< Feed-forward network weights (W1, W2)
     RMSNORM = 4,        ///< RMSNorm gamma parameters
-    MTP = 5,            ///< Multi-token prediction auxiliary heads (weight + bias per head)
-    EXECUTION_BLOCK = 6,///< Execution block weights (decode MLP, arg/op/slot select, cross-attn)
-    NUMBER_ENCODER = 7, ///< NumberEncoder digit-place numeric-meaning weights (digit/pow10 emb, contribution + global MLPs)
-    ARG_SELECTOR = 8,   ///< Arg/option selector head (query projection over candidate atom-entry keys); execution-independent
-    LATENT_TRAJECTORY_PRESET = 9, ///< Latent trajectory preset / self-organizing attractor-memory weights
-    COUNT = 10          ///< Number of parameter group types
+    EXECUTION_BLOCK = 5,///< Execution block weights (decode MLP, arg/op/slot select, cross-attn)
+    NUMBER_ENCODER = 6, ///< NumberEncoder digit-place numeric-meaning weights (digit/pow10 emb, contribution + global MLPs)
+    ARG_SELECTOR = 7,   ///< Arg/option selector head (query projection over candidate atom-entry keys); execution-independent
+    COUNT = 8           ///< Number of parameter group types
 };
 
 enum class ParamStatsBucket : uint8_t {
@@ -628,7 +626,7 @@ namespace autograd { class AutogradEngine; }
 /**
  * Whether Tensor::backward() drives the graph with the iterative worklist
  * AutogradEngine (true, default) or the legacy first-wins DFS recursion
- * (false). The engine fixes silent fan-in gradient loss (MTP collapse) by
+ * (false). The engine fixes silent fan-in gradient loss by
  * accumulating every consumer's contribution before firing a node once.
  *
  * Default is engine. Override at startup with the GRIM_AUTOGRAD_ENGINE env var
@@ -1137,7 +1135,7 @@ Tensor matmul(const Tensor& a, const Tensor& b, cudaStream_t stream = nullptr,
 Tensor add(const Tensor& a, const Tensor& b, cudaStream_t stream = nullptr);
 
 /**
- * Scale a scalar tensor by a constant (for loss weighting, e.g. MTP alpha/K).
+ * Scale a scalar tensor by a constant for loss weighting.
  * Forward: result = scale * input (input must be 1 element).
  * Backward: gradient passed to input is scale * grad_output.
  */

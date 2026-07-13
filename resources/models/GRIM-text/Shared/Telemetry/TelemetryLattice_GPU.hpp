@@ -156,7 +156,7 @@ enum class MetricStream : int {
     EB_INJECT_WEIGHT_NORM = 23,      // RMS(w_inject_gate) — gate parameter evolution
     EB_READ_WEIGHT_NORM = 24,        // RMS(W_gate_read) — read gate parameter evolution
     EB_LOSS_FRAC = 25,               // execution_loss / total_loss
-    MTP_LOSS_FRAC = 26,              // mtp_loss / total_loss
+    RESERVED_26 = 26,
     // PBM (Positional Bias Method) diagnostics
     PBM_ALIBI_SLOPE_RMS = 27,        // RMS of ALiBi slopes (constant; verifies init integrity)
     PBM_ALIBI_EFF_BIAS_MAX = 28,     // max|slope| * batch_max_seq_len (varies per batch)
@@ -237,12 +237,12 @@ enum class MetricStream : int {
     // Raw loss decomposition from the completed BatchResult. These remain in
     // objective units so they can be graphed directly beside stream 0 (LOSS).
     TEXT_LOSS                = 61,
-    MTP_LOSS                 = 62,
+    RESERVED_62              = 62,
     SELECTOR_LOSS            = 63,
-    LATENT_PRESET_LOSS       = 64,
-    LATENT_PRESET_TRAJ_LOSS  = 65,
-    LATENT_PRESET_DELTA_LOSS = 66,
-    LATENT_PRESET_GATE_LOSS  = 67,
+    RESERVED_64              = 64,
+    RESERVED_65              = 65,
+    RESERVED_66              = 66,
+    RESERVED_67              = 67,
     EXECUTION_LOSS           = 68,
 };
 

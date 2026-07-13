@@ -162,41 +162,6 @@ BatchDeviceBindings uploadBatchToDevice(
             throw std::runtime_error("uploadBatchToDevice: BatchDeviceStorage.target_ids_tensor.data is NULL for training payload");
         }
     }
-    int* cached_mtp_shifted_targets_ptr = nullptr;
-    if (!payload.mtp_shifted_targets.empty()) {
-        const auto mtp_hp = HyperParameters::mtpFeatureHP(config);
-        if (!mtp_hp.enabled) {
-            throw std::runtime_error("uploadBatchToDevice: payload has MTP shifted targets but model config has mtp_enabled=false");
-        }
-        if (static_cast<int>(payload.mtp_shifted_targets.size()) != mtp_hp.k) {
-            throw std::runtime_error(
-                "uploadBatchToDevice: payload.mtp_shifted_targets.size()=" +
-                std::to_string(payload.mtp_shifted_targets.size()) +
-                " != config.mtp_k=" + std::to_string(mtp_hp.k));
-        }
-        const auto& mtp_shape = storage.mtp_shifted_targets_tensor.shape.require(
-            "uploadBatchToDevice mtp_shifted_targets_tensor");
-        if (!mtp_shape.is_2d_layout()) {
-            throw std::runtime_error(
-                "uploadBatchToDevice: BatchDeviceStorage.mtp_shifted_targets_tensor must be a 2D MTP target upload buffer");
-        }
-        if (mtp_shape.as_2d().rows != mtp_hp.k) {
-            throw std::runtime_error(
-                "uploadBatchToDevice: BatchDeviceStorage.mtp_shifted_targets_tensor.rows=" +
-                std::to_string(mtp_shape.as_2d().rows) +
-                " != config.mtp_k=" + std::to_string(mtp_hp.k));
-        }
-        if (static_cast<size_t>(mtp_shape.as_2d().cols) < total_tokens) {
-            throw std::runtime_error(
-                "uploadBatchToDevice: total_tokens=" + std::to_string(total_tokens) +
-                " exceeds MTP target buffer capacity=" +
-                std::to_string(mtp_shape.as_2d().cols));
-        }
-        cached_mtp_shifted_targets_ptr = reinterpret_cast<int*>(storage.mtp_shifted_targets_tensor.data);
-        if (!cached_mtp_shifted_targets_ptr) {
-            throw std::runtime_error("uploadBatchToDevice: BatchDeviceStorage.mtp_shifted_targets_tensor.data is NULL for MTP payload");
-        }
-    }
     float* cached_numeric_values_ptr = storage.numeric_values_tensor.data;
     if (!cached_numeric_values_ptr) {
         throw std::runtime_error("uploadBatchToDevice: BatchDeviceStorage.numeric_values_tensor.data is NULL");
@@ -286,23 +251,7 @@ BatchDeviceBindings uploadBatchToDevice(
     }
     BATCH_UPLOAD_CUDA_CHECK(cudaStreamSynchronize(stream));
 
-    // Round 6: MTP shifted targets. These are Phase1-authored payload arrays;
-    // upload owns the H2D copy so MTP loss consumes BatchDeviceBindings instead
-    // of allocating per-head target buffers inside loss assembly.
-    if (cached_mtp_shifted_targets_ptr) {
-        const size_t mtp_head_bytes = static_cast<size_t>(payload.total_tokens) * sizeof(int);
-        for (int k = 0; k < static_cast<int>(payload.mtp_shifted_targets.size()); ++k) {
-            BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
-                cached_mtp_shifted_targets_ptr + static_cast<size_t>(k) * payload.total_tokens,
-                payload.mtp_shifted_targets[k].data(),
-                mtp_head_bytes,
-                cudaMemcpyHostToDevice,
-                stream));
-        }
-        BATCH_UPLOAD_CUDA_CHECK(cudaStreamSynchronize(stream));
-    }
-
-    // Round 7: NumberEncoder digit-place channels (compact, atom-aligned).
+    // Round 6: NumberEncoder digit-place channels (compact, atom-aligned).
     int* cached_atom_digit_values_ptr = nullptr;
     int* cached_atom_digit_pow10_ptr = nullptr;
     float* cached_atom_digit_mask_ptr = nullptr;
@@ -439,7 +388,6 @@ BatchDeviceBindings uploadBatchToDevice(
     bindings.d_token_to_slot_map = cached_slot_map_ptr;
     bindings.d_atom_positions   = cached_atom_positions_ptr;
     bindings.d_atom_types       = cached_atom_types_ptr;
-    bindings.d_mtp_shifted_targets = cached_mtp_shifted_targets_ptr;
     bindings.d_atom_digit_values        = cached_atom_digit_values_ptr;
     bindings.d_atom_digit_pow10_index   = cached_atom_digit_pow10_ptr;
     bindings.d_atom_digit_mask          = cached_atom_digit_mask_ptr;
@@ -482,7 +430,6 @@ std::shared_ptr<BatchDeviceStorage> createBatchDeviceStorage(
     storage->batch_size_capacity = workspace_hp.batch_size;
     storage->max_seq_len_capacity = HyperParameters::snapshotTrainingConfigField<int>(config, "max_cached_seq_len");
     storage->max_tokens_capacity = max_tokens;
-    storage->mtp_k_capacity = workspace_hp.mtp_enabled ? workspace_hp.mtp_k : 0;
 
     storage->target_ids_tensor = Tensor::empty(
         TensorContract::TensorShape::make_BSM(max_tokens, 1),
@@ -524,18 +471,6 @@ std::shared_ptr<BatchDeviceStorage> createBatchDeviceStorage(
         false,
         stream,
         "batch_atom_types");
-
-    if (workspace_hp.mtp_enabled) {
-        if (workspace_hp.mtp_k <= 0) {
-            throw std::runtime_error(
-                "createBatchDeviceStorage: mtp_enabled=true but mtp_k <= 0");
-        }
-        storage->mtp_shifted_targets_tensor = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(workspace_hp.mtp_k, max_tokens),
-            false,
-            stream,
-            "batch_mtp_shifted_targets");
-    }
 
     const auto number_encoder_hp = HyperParameters::numberEncoderConstructionHP(config);
     if (number_encoder_hp.enabled) {

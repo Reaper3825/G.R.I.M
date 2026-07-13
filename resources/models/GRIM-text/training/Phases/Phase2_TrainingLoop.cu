@@ -364,22 +364,6 @@ float scheduledLearningRateForOptimizerStep(
         stability_hp.enabled);
 }
 
-float mtpAlphaEffectiveForBatch(
-    const ::GRIM::Config::AiConfigSnapshot& cfg)
-{
-    const bool mtp_enabled = ::GRIM::HyperParameters::snapshotTrainingConfigField<bool>(cfg, "mtp_enabled");
-    const int mtp_k = ::GRIM::HyperParameters::snapshotTrainingConfigField<int>(cfg, "mtp_k");
-    if (!mtp_enabled || mtp_k <= 0) {
-        return 0.0f;
-    }
-    const float mtp_alpha = ::GRIM::HyperParameters::snapshotTrainingConfigField<float>(cfg, "mtp_alpha");
-    if (!std::isfinite(mtp_alpha) || mtp_alpha < 0.0f) {
-        throw std::runtime_error("mtpAlphaEffectiveForBatch: mtp_alpha must be finite and >= 0, got " +
-                                 std::to_string(mtp_alpha));
-    }
-    return mtp_alpha;
-}
-
 void runOptimizerWindowFromEpoch(
     TrainingContext& ctx,
     TrainingLoopState& state,
@@ -503,12 +487,7 @@ void runOptimizerWindowFromEpoch(
         tel_input.optimizer_step    = optimizer_step;
         tel_input.should_step       = true;
         tel_input.text_loss         = result.text_loss;
-        tel_input.mtp_loss          = result.mtp_loss;
         tel_input.selector_loss     = result.selector_loss;
-        tel_input.latent_preset_loss = result.latent_preset_loss;
-        tel_input.latent_preset_traj_loss = result.latent_preset_traj_loss;
-        tel_input.latent_preset_delta_loss = result.latent_preset_delta_loss;
-        tel_input.latent_preset_gate_loss = result.latent_preset_gate_loss;
         tel_input.execution_loss    = result.execution_loss;
         tel_input.max_seq_len       = payload.max_seq_len;
         tel_input.exec_selection_entropy = result.exec_selection_entropy;
@@ -557,7 +536,6 @@ GRIMText::Training::Startup::ForwardTopologyView validateTrainingForwardInputs(
 
 void configureAutogradLossInputs(
     GRIM::Autograd::AutogradContext& autograd_ctx,
-    GRIM::LanguageModel& model,
     GRIM::TrainingState& training_state,
     const GRIM::Batching::BatchPayload& payload,
     const GRIM::HyperParameters::LossConfigHP& loss_config,
@@ -580,7 +558,6 @@ void configureAutogradLossInputs(
     }
 
     autograd_ctx.skip_equation_logging = skip_equation_logging;
-    autograd_ctx.model = &model;
 }
 
 GRIM::Forward::ModelForwardRuntimePayload buildTrainingForwardRuntimePayload(
@@ -602,7 +579,6 @@ GRIM::Forward::ModelForwardRequest buildTrainingForwardRequest(
     const GRIM::Batching::BatchPayload& payload,
     const GRIM::Batching::BatchDeviceBindings& bindings,
     uint64_t batch_idx,
-    bool emit_mtp_logits,
     bool emit_selector_logits)
 {
     GRIM::Forward::ModelForwardRequest request{};
@@ -620,7 +596,6 @@ GRIM::Forward::ModelForwardRequest buildTrainingForwardRequest(
         /*connect_parameter_graph=*/true,
         /*retain_backward_graph=*/true,
         /*enable_dropout=*/true,
-        /*emit_mtp_logits=*/emit_mtp_logits,
         /*emit_selector_logits=*/emit_selector_logits};
     return request;
 }
@@ -793,7 +768,6 @@ BatchResult processBatch(
             ctx.logging.logger->log("[CUDA] first_batch BEFORE explicit training forward: ok");
         }
     }
-    auto& model = *ctx.model;
     auto& training_state = ctx.requireTrainingState("processBatch");
     GRIM::Autograd::AutogradLossState autograd_loss_state;
     cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
@@ -826,15 +800,6 @@ BatchResult processBatch(
 
     GRIM::Forward::ModelForwardRuntimePayload runtime_payload =
         buildTrainingForwardRuntimePayload(training_state);
-    const float mtp_alpha_effective = mtpAlphaEffectiveForBatch(ctx.config);
-    const bool mtp_enabled =
-        GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "mtp_enabled");
-    const int mtp_k = mtp_enabled
-        ? GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "mtp_k")
-        : 0;
-    const bool emit_mtp_logits = mtp_enabled
-        && mtp_k > 0
-        && mtp_alpha_effective > 0.0f;
     const bool emit_selector_logits =
         GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "selector_enabled");
     GRIM::Forward::ModelForwardRequest forward_request =
@@ -848,7 +813,6 @@ BatchResult processBatch(
             payload,
             train_bindings,
             plan.batch_idx,
-            emit_mtp_logits,
             emit_selector_logits);
 
     if constexpr (GRIM::VerboseLogging::ENABLE_GPU_MEMORY_DIAGNOSTICS &&
@@ -907,7 +871,6 @@ BatchResult processBatch(
 
     configureAutogradLossInputs(
         autograd_ctx,
-        model,
         training_state,
         payload,
         loss_config,
@@ -918,8 +881,7 @@ BatchResult processBatch(
     auto loss_result = GRIM::Autograd::computeAutogradLoss(
         autograd_ctx,
         payload,
-        loss_config,
-        mtp_alpha_effective);
+        loss_config);
     if (!loss_result.success) {
         throw std::runtime_error(
             "[computeAutogradLoss] FAILED batch=" + std::to_string(batch_idx + 1) +
@@ -964,14 +926,8 @@ BatchResult processBatch(
 
     result.loss = loss_result.loss_value;
     result.text_loss = loss_result.text_loss;
-    result.mtp_loss = loss_result.mtp_loss;
     result.selector_loss = loss_result.selector_loss;
-    result.latent_preset_loss = loss_result.latent_preset_loss;
-    result.latent_preset_traj_loss = loss_result.latent_preset_traj_loss;
-    result.latent_preset_delta_loss = loss_result.latent_preset_delta_loss;
-    result.latent_preset_gate_loss = loss_result.latent_preset_gate_loss;
     result.execution_loss = loss_result.execution_loss;
-    result.mtp_diagnostics = std::move(loss_result.mtp_diagnostics);
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] explicit forward + autograd loss/backward returned, loss=%f success=%d\n", 
                         result.loss, static_cast<int>(loss_result.success));
 
@@ -1196,21 +1152,12 @@ ValidationResult runValidation(TrainingContext& ctx) {
         }
     }
 
-    auto& model = *ctx.model;
     auto& training_state = ctx.requireTrainingState("runValidation");
     cudaStream_t stream = training_state.stream_ctrl.getPrimaryStream();
     const auto loss_config = GRIM::HyperParameters::lossConfigHP(ctx.config);
     const auto& model_config = ctx.config;
 
-    // Match the training loss composition so the val number is comparable to the
-    // per-batch training loss (text CE + optional MTP/selector/execution terms).
-    const float mtp_alpha_effective = mtpAlphaEffectiveForBatch(ctx.config);
-    const bool mtp_enabled =
-        GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "mtp_enabled");
-    const int mtp_k = mtp_enabled
-        ? GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "mtp_k")
-        : 0;
-    const bool emit_mtp_logits = mtp_enabled && mtp_k > 0 && mtp_alpha_effective > 0.0f;
+    // Match the training loss composition so the validation number is comparable.
     const bool emit_selector_logits =
         GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "selector_enabled");
 
@@ -1271,8 +1218,7 @@ ValidationResult runValidation(TrainingContext& ctx) {
         forward_request.batch_idx = static_cast<uint64_t>(val_idx);
         // Eval policy: read-only forward (no autograd edges, no retained backward
         // graph) with dropout DISABLED — identical to the inference forward.
-        // The text-CE, MTP, and selector loss terms read only explicitly-emitted
-        // output tensors (logits / mtp_logits / selector_logits), so they are
+        // The text-CE and selector terms read only explicitly emitted outputs,
         // valid under this read-only policy. NOTE: if execution_block_enabled is
         // ever turned on, the execution auxiliary loss reads retained execution
         // forward tensors — revisit retain_backward_graph here before relying on
@@ -1281,7 +1227,6 @@ ValidationResult runValidation(TrainingContext& ctx) {
             /*connect_parameter_graph=*/false,
             /*retain_backward_graph=*/false,
             /*enable_dropout=*/false,
-            /*emit_mtp_logits=*/emit_mtp_logits,
             /*emit_selector_logits=*/emit_selector_logits};
 
         auto forward_outputs = GRIM::Forward::executeModelForward(forward_request, runtime_payload);
@@ -1306,11 +1251,11 @@ ValidationResult runValidation(TrainingContext& ctx) {
             static_cast<uint64_t>(val_idx));
 
         configureAutogradLossInputs(
-            autograd_ctx, model, training_state, val_payload, loss_config,
+            autograd_ctx, training_state, val_payload, loss_config,
             /*skip_equation_logging=*/true);
 
         const auto loss_result = GRIM::Autograd::computeAutogradLoss(
-            autograd_ctx, val_payload, loss_config, mtp_alpha_effective);
+            autograd_ctx, val_payload, loss_config);
         if (!loss_result.success) {
             throw std::runtime_error(
                 "[Val] computeAutogradLoss FAILED at batch " + std::to_string(val_idx + 1) +

@@ -11,26 +11,19 @@
 #include "../../TensorContract/TensorContract_GPU.hpp"
 #include <cuda_runtime.h>
 #include <cstddef>
-#include <optional>
 
 namespace GRIM {
 namespace autograd {
 
 enum class CrossEntropyTargetSource {
-    PrimaryLm,
-    MtpShiftedHead
+    PrimaryLm
 };
 
 struct CrossEntropyTargetSelection {
     CrossEntropyTargetSource source;
-    std::optional<int> mtp_head_idx;
 
     static CrossEntropyTargetSelection primaryLm() {
-        return CrossEntropyTargetSelection{CrossEntropyTargetSource::PrimaryLm, std::nullopt};
-    }
-
-    static CrossEntropyTargetSelection mtpShiftedHead(int head_idx) {
-        return CrossEntropyTargetSelection{CrossEntropyTargetSource::MtpShiftedHead, head_idx};
+        return CrossEntropyTargetSelection{CrossEntropyTargetSource::PrimaryLm};
     }
 };
 

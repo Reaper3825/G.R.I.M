@@ -575,9 +575,9 @@ void testRMSNorm() {
 }
 
 //==============================================================================
-// Test: Fan-in gradient accumulation (MTP collapse regression)
+// Test: Fan-in gradient accumulation regression
 //
-// Topology mirrors Multi-Token Prediction: a single non-leaf trunk feeds N
+// Topology uses a single non-leaf trunk feeding N
 // independent consumers whose outputs are summed into one root. The trunk's
 // upstream (a leaf "embedding") must receive the SUM of all N paths.
 //
@@ -597,14 +597,14 @@ void testRMSNorm() {
 bool testFanInAccumulation() {
     printf("\n");
     printf("################################################################\n");
-    printf("#  TEST: Fan-in accumulation (MTP collapse regression)        #\n");
+    printf("#  TEST: Fan-in accumulation regression                       #\n");
     printf("################################################################\n");
 
     cudaStream_t stream;
     CUDA_CHECK(cudaStreamCreate(&stream));
 
     constexpr int N = 16;            // trunk element count
-    constexpr int NUM_CONSUMERS = 4; // 1 main head + 3 MTP heads
+    constexpr int NUM_CONSUMERS = 4;
     const float c[NUM_CONSUMERS] = {1.0f, 2.0f, 3.0f, 4.0f};
     float c_sum = 0.0f;
     for (int k = 0; k < NUM_CONSUMERS; ++k) c_sum += c[k];

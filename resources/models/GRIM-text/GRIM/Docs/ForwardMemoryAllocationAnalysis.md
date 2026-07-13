@@ -1,5 +1,7 @@
 # Forward Memory Allocation Analysis
 
+> Historical snapshot: the MTP tensors measured below were removed from the active architecture. The tables remain useful for old-run memory accounting.
+
 ## Source
 
 Analyzed logs:

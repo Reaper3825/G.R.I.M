@@ -46,13 +46,10 @@ struct ModelForwardGraphPolicy {
     // Caller-authored graph policy. This is deliberately not a training-vs-inference
     // mode enum: orchestration chooses whether this forward call may connect
     // autograd edges to durable parameters and whether graph outputs must be
-    // retained for a later backward owner. Optional forward products such as
-    // MTP logits are requested explicitly here rather than inferred from
-    // training-vs-inference identity.
+    // retained for a later backward owner.
     bool connect_parameter_graph = false;
     bool retain_backward_graph = false;
     bool enable_dropout = false;
-    bool emit_mtp_logits = false;
     // Arg/option selector head: when true, the forward encodes candidate atom-entry
     // keys and emits ModelForwardOutputs::selector_logits [total_tokens, num_pool_atoms].
     // Requires the NumberEncoder + selector to be enabled and a non-empty pool.

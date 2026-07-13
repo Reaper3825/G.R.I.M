@@ -94,7 +94,7 @@ enum class LogGroup : uint8_t {
     FFN            = 3,
     RMSNorm        = 4,
     ScratchBlock   = 5,
-    MTP            = 6,
+    Reserved6      = 6,
     ExecutionBlock = 7,
     SlotSelector   = 8,
     // System groups
@@ -118,7 +118,7 @@ inline const char* logGroupToString(LogGroup group) {
         case LogGroup::FFN:            return "FFN";
         case LogGroup::RMSNorm:        return "NORM";
         case LogGroup::ScratchBlock:   return "SB";
-        case LogGroup::MTP:            return "MTP";
+        case LogGroup::Reserved6:      return "RESERVED6";
         case LogGroup::ExecutionBlock: return "EB";
         case LogGroup::SlotSelector:   return "SLOT";
         case LogGroup::Loss:           return "LOSS";
@@ -143,7 +143,6 @@ inline LogGroup logGroupFromString(const char* str) {
     if (std::strcmp(str, "FFN")   == 0 || std::strcmp(str, "FFN")            == 0) return LogGroup::FFN;
     if (std::strcmp(str, "NORM")  == 0 || std::strcmp(str, "RMSNorm")        == 0) return LogGroup::RMSNorm;
     if (std::strcmp(str, "SB")    == 0 || std::strcmp(str, "ScratchBlock")   == 0) return LogGroup::ScratchBlock;
-    if (std::strcmp(str, "MTP")   == 0)                                            return LogGroup::MTP;
     if (std::strcmp(str, "EB")    == 0 || std::strcmp(str, "ExecutionBlock") == 0) return LogGroup::ExecutionBlock;
     if (std::strcmp(str, "SLOT")  == 0 || std::strcmp(str, "SlotSelector")   == 0) return LogGroup::SlotSelector;
     if (std::strcmp(str, "LOSS")  == 0 || std::strcmp(str, "Loss")           == 0) return LogGroup::Loss;

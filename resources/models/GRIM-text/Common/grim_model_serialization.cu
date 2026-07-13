@@ -4,7 +4,6 @@
 #endif
 #endif
 
-#include <fstream>
 #include <filesystem>
 #include <iostream>
 #include <mutex>
@@ -45,13 +44,6 @@ SerializationModelConfigView makeConfigView(const Config::AiConfigSnapshot& cfg)
     view.tie_embeddings = HyperParameters::snapshotTrainingConfigField<bool>(cfg, "tie_embeddings");
     view.use_gpu = HyperParameters::snapshotTrainingConfigField<bool>(cfg, "use_gpu");
     view.use_bias = HyperParameters::snapshotTrainingConfigField<bool>(cfg, "use_bias");
-    const auto latent_preset = HyperParameters::latentTrajectoryPresetHP(cfg);
-    view.latent_trajectory_preset_enabled = latent_preset.enabled;
-    view.latent_trajectory_preset_mtp_k = latent_preset.mtp_k;
-    view.latent_trajectory_preset_fuse_dim = latent_preset.fuse_dim;
-    view.latent_trajectory_preset_dim = latent_preset.preset_dim;
-    view.latent_trajectory_preset_gate_dim = latent_preset.gate_dim;
-    view.latent_trajectory_preset_codebook_size = latent_preset.codebook_size;
     return view;
 }
 
@@ -129,24 +121,12 @@ bool saveLanguageModelCheckpoint(
     const int num_kv_heads = HyperParameters::snapshotTrainingConfigField<int>(config, "num_kv_heads");
     const int d_ff_i = HyperParameters::snapshotTrainingConfigField<int>(config, "d_ff");
     const int head_dim = HyperParameters::snapshotTrainingConfigField<int>(config, "head_dim");
-    const bool mtp_enabled = HyperParameters::snapshotTrainingConfigField<bool>(config, "mtp_enabled");
-    const int mtp_k = mtp_enabled
-        ? HyperParameters::snapshotTrainingConfigField<int>(config, "mtp_k")
-        : 0;
     auto* embedding_parameters = parameter_registry.getEmbeddingParameters();
     auto* lm_head_parameters = parameter_registry.getLmHeadParameters();
     auto* number_encoder_parameters = parameter_registry.getNumberEncoderParameters();
     auto* selector_parameters = parameter_registry.getSelectorParameters();
     auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
-    auto* latent_preset_parameters = parameter_registry.getLatentTrajectoryPresetParameters();
     auto* gpu_encoder_owner = gpu_model_state.gpu_encoder.get();
-    if (request.sources.config.latent_trajectory_preset_enabled != (latent_preset_parameters != nullptr)) {
-        EmitModuleError(ModuleId::Checkpoint,
-                        "LatentTrajectoryPreset config/registry mismatch during save(): config_enabled=" +
-                        std::to_string(request.sources.config.latent_trajectory_preset_enabled) +
-                        " owner_present=" + std::to_string(latent_preset_parameters != nullptr));
-        return false;
-    }
     EmitModuleInfo(ModuleId::Checkpoint, "Request initialized with version " + std::to_string(GRIM_MODEL_VERSION));
 
     EmitModuleInfo(ModuleId::Checkpoint, "Processing embeddings");
@@ -307,29 +287,6 @@ bool saveLanguageModelCheckpoint(
         EmitModuleInfo(ModuleId::Checkpoint, "Processing ExecutionBlock v2 weights for FlatBuffer serialization");
     }
 
-    if (latent_preset_parameters) {
-        auto assignReadTensor = [](DeviceReadView& v, const Tensor& t) {
-            v.ptr = t.data;
-            v.count = static_cast<std::size_t>(t.numel());
-        };
-        request.sources.latent_trajectory_preset.enabled = true;
-        assignReadTensor(request.sources.latent_trajectory_preset.W_hidden_traj, latent_preset_parameters->W_hidden_traj);
-        assignReadTensor(request.sources.latent_trajectory_preset.b_hidden_traj, latent_preset_parameters->b_hidden_traj);
-        assignReadTensor(request.sources.latent_trajectory_preset.W_fuse, latent_preset_parameters->W_fuse);
-        assignReadTensor(request.sources.latent_trajectory_preset.b_fuse, latent_preset_parameters->b_fuse);
-        assignReadTensor(request.sources.latent_trajectory_preset.W_down, latent_preset_parameters->W_down);
-        assignReadTensor(request.sources.latent_trajectory_preset.b_down, latent_preset_parameters->b_down);
-        assignReadTensor(request.sources.latent_trajectory_preset.W_up, latent_preset_parameters->W_up);
-        assignReadTensor(request.sources.latent_trajectory_preset.b_up, latent_preset_parameters->b_up);
-        assignReadTensor(request.sources.latent_trajectory_preset.W_gate, latent_preset_parameters->W_gate);
-        assignReadTensor(request.sources.latent_trajectory_preset.b_gate, latent_preset_parameters->b_gate);
-        assignReadTensor(request.sources.latent_trajectory_preset.fuse_norm_gamma, latent_preset_parameters->fuse_norm_gamma);
-        assignReadTensor(request.sources.latent_trajectory_preset.preset_norm_gamma, latent_preset_parameters->preset_norm_gamma);
-        assignReadTensor(request.sources.latent_trajectory_preset.codebook, latent_preset_parameters->codebook);
-        assignReadTensor(request.sources.latent_trajectory_preset.W_slots, latent_preset_parameters->W_slots);
-        EmitModuleInfo(ModuleId::Checkpoint, "Processing LatentTrajectoryPreset weights for FlatBuffer serialization");
-    }
-
     // Issue #33: Final RMSNorm gamma (normalizes encoder output before LM head)
     if (lm_head_parameters && lm_head_parameters->final_rms_gamma.data) {
         request.sources.final_rms_gamma.ptr = lm_head_parameters->final_rms_gamma.data;
@@ -343,39 +300,6 @@ bool saveLanguageModelCheckpoint(
     EmitModuleInfo(ModuleId::Checkpoint, std::string("SerializationLayer::save() returned ") + (result ? "true" : "false"));
     if (!result) return false;
 
-    // MTP heads: save to sidecar <path>.mtp (checkpoint has no MTP in FlatBuffer schema)
-    if (mtp_enabled && mtp_k > 0) {
-        const std::string mtp_path = path + ".mtp";
-        std::ofstream ofs(mtp_path, std::ios::binary);
-        if (!ofs) {
-            EmitModuleError(ModuleId::Checkpoint, "[save] Failed to open MTP sidecar: " + mtp_path);
-            return false;
-        }
-        const uint32_t K = static_cast<uint32_t>(mtp_k);
-        ofs.write(reinterpret_cast<const char*>(&K), sizeof(K));
-        const std::size_t weight_elems = static_cast<std::size_t>(vocab_size) * static_cast<std::size_t>(d_model_i);
-        const std::size_t bias_elems = static_cast<std::size_t>(vocab_size);
-        std::vector<float> h_buf(std::max(weight_elems, bias_elems));
-        const auto& mtp_heads = parameter_registry.mtpHeadParameterTensors();
-        for (uint32_t k = 0; k < K; ++k) {
-            GRIM::MtpHeadParameterTensors* head =
-                (k < mtp_heads.size())
-                    ? const_cast<GRIM::MtpHeadParameterTensors*>(&mtp_heads[k])
-                    : nullptr;
-            if (!head || !head->weight.data || !head->bias.data) continue;
-            if (cudaMemcpy(h_buf.data(), head->weight.data, weight_elems * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
-                EmitModuleError(ModuleId::Checkpoint, "[save] MTP head " + std::to_string(k) + " weight D2H failed");
-                return false;
-            }
-            ofs.write(reinterpret_cast<const char*>(h_buf.data()), weight_elems * sizeof(float));
-            if (cudaMemcpy(h_buf.data(), head->bias.data, bias_elems * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
-                EmitModuleError(ModuleId::Checkpoint, "[save] MTP head " + std::to_string(k) + " bias D2H failed");
-                return false;
-            }
-            ofs.write(reinterpret_cast<const char*>(h_buf.data()), bias_elems * sizeof(float));
-        }
-        EmitModuleInfo(ModuleId::Checkpoint, "[save] MTP sidecar written: " + mtp_path + " (K=" + std::to_string(K) + ")");
-    }
     return true;
 }
 
@@ -442,23 +366,11 @@ bool loadLanguageModelCheckpoint(
     const bool use_bias = HyperParameters::snapshotTrainingConfigField<bool>(config, "use_bias");
     const bool use_gpu = HyperParameters::snapshotTrainingConfigField<bool>(config, "use_gpu");
     const bool tie_embeddings = HyperParameters::snapshotTrainingConfigField<bool>(config, "tie_embeddings");
-    const bool mtp_enabled = HyperParameters::snapshotTrainingConfigField<bool>(config, "mtp_enabled");
-    const int mtp_k = mtp_enabled
-        ? HyperParameters::snapshotTrainingConfigField<int>(config, "mtp_k")
-        : 0;
     auto* embedding_parameters = parameter_registry.getEmbeddingParameters();
     auto* lm_head_parameters = parameter_registry.getLmHeadParameters();
     auto* number_encoder_parameters = parameter_registry.getNumberEncoderParameters();
     auto* selector_parameters = parameter_registry.getSelectorParameters();
     auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
-    auto* latent_preset_parameters = parameter_registry.getLatentTrajectoryPresetParameters();
-    if (request.config.latent_trajectory_preset_enabled != (latent_preset_parameters != nullptr)) {
-        EmitModuleError(ModuleId::Checkpoint,
-                        "[load] LatentTrajectoryPreset config/registry mismatch: config_enabled=" +
-                        std::to_string(request.config.latent_trajectory_preset_enabled) +
-                        " owner_present=" + std::to_string(latent_preset_parameters != nullptr));
-        return false;
-    }
 
     if (!training_state.initialized) {
         EmitModuleError(ModuleId::Checkpoint,
@@ -480,7 +392,6 @@ bool loadLanguageModelCheckpoint(
     request.capabilities.requires_number_encoder = (number_encoder_parameters != nullptr);
     request.capabilities.requires_arg_selector = (selector_parameters != nullptr);
     request.capabilities.requires_execution_block = (execution_block_parameters != nullptr);
-    request.capabilities.requires_latent_trajectory_preset = (latent_preset_parameters != nullptr);
     request.capabilities.requires_final_rms_gamma = (lm_head_parameters != nullptr
                                                       && lm_head_parameters->final_rms_gamma.data != nullptr
                                                       && !freeze_learned_rms_gammas);
@@ -638,51 +549,6 @@ bool loadLanguageModelCheckpoint(
         assignWrite(request.execution_block.W_trace_gate, execution_block_parameters->W_trace_gate.data, static_cast<std::size_t>(execution_block_parameters->W_trace_gate.numel()));
     }
 
-    if (latent_preset_parameters) {
-        assignWrite(request.latent_trajectory_preset.W_hidden_traj,
-                    latent_preset_parameters->W_hidden_traj.data,
-                    static_cast<std::size_t>(latent_preset_parameters->W_hidden_traj.numel()));
-        assignWrite(request.latent_trajectory_preset.b_hidden_traj,
-                    latent_preset_parameters->b_hidden_traj.data,
-                    static_cast<std::size_t>(latent_preset_parameters->b_hidden_traj.numel()));
-        assignWrite(request.latent_trajectory_preset.W_fuse,
-                    latent_preset_parameters->W_fuse.data,
-                    static_cast<std::size_t>(latent_preset_parameters->W_fuse.numel()));
-        assignWrite(request.latent_trajectory_preset.b_fuse,
-                    latent_preset_parameters->b_fuse.data,
-                    static_cast<std::size_t>(latent_preset_parameters->b_fuse.numel()));
-        assignWrite(request.latent_trajectory_preset.W_down,
-                    latent_preset_parameters->W_down.data,
-                    static_cast<std::size_t>(latent_preset_parameters->W_down.numel()));
-        assignWrite(request.latent_trajectory_preset.b_down,
-                    latent_preset_parameters->b_down.data,
-                    static_cast<std::size_t>(latent_preset_parameters->b_down.numel()));
-        assignWrite(request.latent_trajectory_preset.W_up,
-                    latent_preset_parameters->W_up.data,
-                    static_cast<std::size_t>(latent_preset_parameters->W_up.numel()));
-        assignWrite(request.latent_trajectory_preset.b_up,
-                    latent_preset_parameters->b_up.data,
-                    static_cast<std::size_t>(latent_preset_parameters->b_up.numel()));
-        assignWrite(request.latent_trajectory_preset.W_gate,
-                    latent_preset_parameters->W_gate.data,
-                    static_cast<std::size_t>(latent_preset_parameters->W_gate.numel()));
-        assignWrite(request.latent_trajectory_preset.b_gate,
-                    latent_preset_parameters->b_gate.data,
-                    static_cast<std::size_t>(latent_preset_parameters->b_gate.numel()));
-        assignWrite(request.latent_trajectory_preset.fuse_norm_gamma,
-                    latent_preset_parameters->fuse_norm_gamma.data,
-                    static_cast<std::size_t>(latent_preset_parameters->fuse_norm_gamma.numel()));
-        assignWrite(request.latent_trajectory_preset.preset_norm_gamma,
-                    latent_preset_parameters->preset_norm_gamma.data,
-                    static_cast<std::size_t>(latent_preset_parameters->preset_norm_gamma.numel()));
-        assignWrite(request.latent_trajectory_preset.codebook,
-                    latent_preset_parameters->codebook.data,
-                    static_cast<std::size_t>(latent_preset_parameters->codebook.numel()));
-        assignWrite(request.latent_trajectory_preset.W_slots,
-                    latent_preset_parameters->W_slots.data,
-                    static_cast<std::size_t>(latent_preset_parameters->W_slots.numel()));
-    }
-
     // Issue #33: Final RMSNorm gamma destination
     // When frozen, γ_final stays at 1.0 — do NOT overwrite from checkpoint.
     if (lm_head_parameters && lm_head_parameters->final_rms_gamma.data
@@ -708,15 +574,13 @@ bool loadLanguageModelCheckpoint(
         {
             std::ostringstream oss;
             oss << "[load]   tie_embeddings=" << tie_embeddings
-                << " use_bias=" << use_bias << " use_gpu=" << use_gpu
-                << " mtp_enabled=" << mtp_enabled;
+                << " use_bias=" << use_bias << " use_gpu=" << use_gpu;
             EmitModuleError(ModuleId::Checkpoint, oss.str());
         }
         {
             std::ostringstream oss;
             oss << "[load]   capabilities: number_encoder=" << request.capabilities.requires_number_encoder
                 << " exec_block=" << request.capabilities.requires_execution_block
-                << " latent_preset=" << request.capabilities.requires_latent_trajectory_preset
                 << " final_rms=" << request.capabilities.requires_final_rms_gamma;
             EmitModuleError(ModuleId::Checkpoint, oss.str());
         }
@@ -725,8 +589,7 @@ bool loadLanguageModelCheckpoint(
                 oss << "[load]   registry pointers: embedding=" << (embedding_parameters ? "OK" : "NULL")
                 << " lm_head_params=" << (lm_head_parameters ? "OK" : "NULL")
                 << " number_encoder=" << (number_encoder_parameters ? "OK" : "NULL")
-                << " exec_block=" << (execution_block_parameters ? "OK" : "NULL")
-                << " latent_preset=" << (latent_preset_parameters ? "OK" : "NULL");
+                << " exec_block=" << (execution_block_parameters ? "OK" : "NULL");
             EmitModuleError(ModuleId::Checkpoint, oss.str());
         }
         {
@@ -736,8 +599,6 @@ bool loadLanguageModelCheckpoint(
                 << " ne_digit_emb=" << (request.number_encoder.digit_emb.ptr ? "set" : "NULL")
                 << "(" << request.number_encoder.digit_emb.count << ")"
                 << " final_rms_gamma=" << (request.final_rms_gamma.ptr ? "set" : "SKIP(frozen)")
-                << " ltp_W_fuse=" << (request.latent_trajectory_preset.W_fuse.ptr ? "set" : "NULL")
-                << "(" << request.latent_trajectory_preset.W_fuse.count << ")"
                 << " lm_proj=" << (request.lm_head.projection.ptr ? "set" : "NULL")
                 << "(" << request.lm_head.projection.count << ")"
                 << " lm_bias=" << (request.lm_head.bias.ptr ? "set" : "NULL")
@@ -774,41 +635,6 @@ bool loadLanguageModelCheckpoint(
         return false;
     }
 
-    // MTP heads: load from sidecar <path>.mtp if present and config has MTP enabled
-    if (mtp_enabled && mtp_k > 0) {
-        const std::string mtp_path = path + ".mtp";
-        std::ifstream ifs(mtp_path, std::ios::binary);
-        if (ifs) {
-            uint32_t file_k = 0;
-            if (!ifs.read(reinterpret_cast<char*>(&file_k), sizeof(file_k)) || file_k != static_cast<uint32_t>(mtp_k)) {
-                EmitModuleInfo(ModuleId::Checkpoint, "[load] MTP sidecar K mismatch or read failed — using freshly initialized MTP heads");
-            } else {
-                const std::size_t weight_elems = static_cast<std::size_t>(vocab_size) * static_cast<std::size_t>(d_model_i);
-                const std::size_t bias_elems = static_cast<std::size_t>(vocab_size);
-                std::vector<float> h_buf(std::max(weight_elems, bias_elems));
-                auto& mtp_heads = parameter_registry.mtpHeadParameterTensors();
-                bool ok = true;
-                for (uint32_t k = 0; k < file_k && ok; ++k) {
-                    GRIM::MtpHeadParameterTensors* head =
-                        (k < mtp_heads.size())
-                            ? &mtp_heads[k]
-                            : nullptr;
-                    if (!head || !head->weight.data || !head->bias.data) { ok = false; break; }
-                    if (!ifs.read(reinterpret_cast<char*>(h_buf.data()), weight_elems * sizeof(float))) { ok = false; break; }
-                    if (cudaMemcpy(head->weight.data, h_buf.data(), weight_elems * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess) { ok = false; break; }
-                    if (!ifs.read(reinterpret_cast<char*>(h_buf.data()), bias_elems * sizeof(float))) { ok = false; break; }
-                    if (cudaMemcpy(head->bias.data, h_buf.data(), bias_elems * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess) { ok = false; break; }
-                }
-                if (ok) {
-                    EmitModuleInfo(ModuleId::Checkpoint, "[load] MTP sidecar loaded: " + mtp_path + " (K=" + std::to_string(file_k) + ")");
-                } else {
-                    EmitModuleInfo(ModuleId::Checkpoint, "[load] MTP sidecar read/copy failed — using freshly initialized MTP heads");
-                }
-            }
-        } else {
-            EmitModuleInfo(ModuleId::Checkpoint, "[load] No MTP sidecar — using freshly initialized MTP heads");
-        }
-    }
     return true;
 }
 

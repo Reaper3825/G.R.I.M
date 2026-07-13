@@ -18,7 +18,6 @@
 #include "PostClipParamGradEmbLmEquation.hpp"
 #include "OptimizerStepGuards.hpp"
 #include "TieVerifyDiagnostic.hpp"
-#include "MtpDiagnostic.hpp"
 #include "OptimizerMomentDiagnostic.hpp"
 #include "PostOptimizerWeightTrace.hpp"
 #include "PredictionDistributionDiagnostic.hpp"

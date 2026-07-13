@@ -659,47 +659,6 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
         Logging::EmitModuleInfo(kLogModule, "[load] ExecutionBlock v2 weights loaded");
     }
 
-    // ─── LatentTrajectoryPreset (gated by requires_latent_trajectory_preset) ───
-    if (req.requires_latent_trajectory_preset) {
-        const auto* fb_ltp = model_fb->latent_trajectory_preset();
-        if (!fb_ltp) {
-            Logging::EmitModuleError(kLogModule, "[load] FATAL: LatentTrajectoryPreset required but missing in checkpoint");
-            return false;
-        }
-        auto ul = [&](const flatbuffers::Vector<float>* src, const DeviceWriteView& dst, const char* name) -> bool {
-            if (!src) return false;
-            std::vector<float> buf(src->begin(), src->end());
-            return upload_device_vector(buf, dst, name);
-        };
-        const auto& ltp = request.latent_trajectory_preset;
-        bool ltp_ok = true;
-        ltp_ok = ltp_ok && ul(fb_ltp->w_hidden_traj_data(), ltp.W_hidden_traj, "LTP W_hidden_traj");
-        ltp_ok = ltp_ok && ul(fb_ltp->b_hidden_traj_data(), ltp.b_hidden_traj, "LTP b_hidden_traj");
-        ltp_ok = ltp_ok && ul(fb_ltp->w_fuse_data(), ltp.W_fuse, "LTP W_fuse");
-        ltp_ok = ltp_ok && ul(fb_ltp->b_fuse_data(), ltp.b_fuse, "LTP b_fuse");
-        ltp_ok = ltp_ok && ul(fb_ltp->w_down_data(), ltp.W_down, "LTP W_down");
-        ltp_ok = ltp_ok && ul(fb_ltp->b_down_data(), ltp.b_down, "LTP b_down");
-        ltp_ok = ltp_ok && ul(fb_ltp->w_up_data(), ltp.W_up, "LTP W_up");
-        ltp_ok = ltp_ok && ul(fb_ltp->b_up_data(), ltp.b_up, "LTP b_up");
-        ltp_ok = ltp_ok && ul(fb_ltp->w_gate_data(), ltp.W_gate, "LTP W_gate");
-        ltp_ok = ltp_ok && ul(fb_ltp->b_gate_data(), ltp.b_gate, "LTP b_gate");
-        ltp_ok = ltp_ok && ul(fb_ltp->fuse_norm_gamma_data(), ltp.fuse_norm_gamma, "LTP fuse_norm_gamma");
-        ltp_ok = ltp_ok && ul(fb_ltp->preset_norm_gamma_data(), ltp.preset_norm_gamma, "LTP preset_norm_gamma");
-        if (!ltp_ok) return false;
-        if (fb_ltp->codebook_data()) {
-            if (!ul(fb_ltp->codebook_data(), ltp.codebook, "LTP codebook") ||
-                !ul(fb_ltp->w_slots_data(), ltp.W_slots, "LTP W_slots")) {
-                return false;
-            }
-            Logging::EmitModuleInfo(kLogModule, "[load] LatentTrajectoryPreset codebook and slot decoder loaded");
-        } else {
-            Logging::EmitModuleInfo(kLogModule,
-                "[load] LatentTrajectoryPreset codebook absent; fresh initialization retained");
-        }
-        request.report.latent_trajectory_preset_loaded = true;
-        Logging::EmitModuleInfo(kLogModule, "[load] LatentTrajectoryPreset weights loaded");
-    }
-
     // ─── final_rms_gamma (gated by requires_final_rms_gamma) ───
     if (req.requires_final_rms_gamma) {
         const auto* fb_frg = model_fb->final_rms_gamma();
@@ -722,11 +681,6 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
         Logging::EmitModuleError(kLogModule, "[load] FATAL: ExecutionBlock required but not loaded");
         return false;
     }
-    if (req.requires_latent_trajectory_preset && !request.report.latent_trajectory_preset_loaded) {
-        Logging::EmitModuleError(kLogModule, "[load] FATAL: LatentTrajectoryPreset required but not loaded");
-        return false;
-    }
-
     Logging::EmitModuleInfo(kLogModule, "[load] Model loaded successfully");
     return true;
 }

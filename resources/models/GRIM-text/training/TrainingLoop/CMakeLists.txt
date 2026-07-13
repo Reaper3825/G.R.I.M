@@ -420,7 +420,6 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/InferenceState/KvCacheState_GPU.cu
     ../Autograd/AutogradContext.cu
     ../Autograd/AutogradExecutionLoss.cu
-    ../Autograd/AutogradMtpAuxiliaryLoss.cu
     ../Autograd/AutogradTraining.cu
     ../../Layers/HardcodedStates/HardcodedStates_GPU.cu
     ../../Layers/Embedding/Embedding_GPU.cu
@@ -447,7 +446,6 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/Loss/ComputeLoss/AutogradLoss.cu
     ../../Shared/Loss/ComputeLoss/CrossEntropyNLL.cu
     ../../Shared/Loss/LossSignals/LossSignals.cu
-    ../../Shared/MTP/MTP_GPU.cu
 )
 set_target_properties(grim_language_model_gpu_impl PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF
@@ -578,8 +576,6 @@ add_executable(train_gpu
     ../Diagnostics/OptimizerStepGuards.hpp
     ../Diagnostics/TieVerifyDiagnostic.cu
     ../Diagnostics/TieVerifyDiagnostic.hpp
-    ../Diagnostics/MtpDiagnostic.cu
-    ../Diagnostics/MtpDiagnostic.hpp
     ../Diagnostics/OptimizerMomentDiagnostic.cu
     ../Diagnostics/OptimizerMomentDiagnostic.hpp
     ../Diagnostics/PostOptimizerWeightTrace.cu

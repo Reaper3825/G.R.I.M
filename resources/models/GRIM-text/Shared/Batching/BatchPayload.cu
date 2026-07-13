@@ -493,7 +493,6 @@ BatchPayload buildBatchPayload(
     int execution_num_slots,
     int execution_num_ops,
     int execution_num_steps,
-    int mtp_k,
     int number_encoder_digit_slots,
     int number_encoder_max_abs_pow10)
 {
@@ -906,48 +905,6 @@ BatchPayload buildBatchPayload(
         }
         payload.valid_tokens   -= slots_masked;
         payload.lm_valid_tokens = payload.valid_tokens;
-    }
-
-    // ═════════════════════════════════════════════════════════════════════════
-    // PHASE 4c: MTP shifted targets (multi-token prediction)
-    // For each MTP head k (shift = k+1), build shifted target array from the
-    // ALREADY-MASKED target_ids.  This inherits execution-slot masking, final-
-    // position masking, and non-content defense masking — all done above.
-    // Shift rule per sequence row b:
-    //   shifted[b*S + t] = target_ids[b*S + t + shift]  if (t + shift) < S
-    //                     = -1                            otherwise (out of bounds)
-    //
-    // mtp_valid_counts[k] = count of shifted[t] != -1 across all tokens.
-    // This is the AUTHORITATIVE valid count for MTP head k loss normalization.
-    // ═════════════════════════════════════════════════════════════════════════
-    if (mtp_k > 0) {
-        payload.mtp_shifted_targets.resize(mtp_k);
-        payload.mtp_valid_counts.resize(mtp_k, 0);
-
-        for (int k = 0; k < mtp_k; ++k) {
-            const int shift = k + 1;
-            auto& shifted = payload.mtp_shifted_targets[k];
-            shifted.assign(flat_size, -1);
-            int valid_count = 0;
-
-            for (int b = 0; b < payload.batch_size; ++b) {
-                const int row_offset = b * S;
-                const int seq_len = payload.seq_lengths[b];
-
-                // Only positions where (t + shift) is within the sequence boundary
-                // can have valid shifted targets.  Padding beyond seq_len already
-                // has target_ids = -1, so shifted inherits that correctly.
-                const int max_t = seq_len - shift;  // last valid source position
-                for (int t = 0; t < max_t; ++t) {
-                    const int src = payload.target_ids[row_offset + t + shift];
-                    shifted[row_offset + t] = src;
-                    if (src >= 0) ++valid_count;
-                }
-                // Positions [max_t, S) stay -1 from assign() above
-            }
-
-            payload.mtp_valid_counts[k] = valid_count;
-        }
     }
 
     // ═════════════════════════════════════════════════════════════════════════

@@ -145,10 +145,6 @@ GradNormStatus accumulateGroupMetrics(
             m.rmsnorm_sum_sq += sum_sq;
             m.rmsnorm_count += count;
             return GradNormStatus::SUCCESS;
-        case GRIM::ParamGroupType::MTP:
-            m.mtp_sum_sq += sum_sq;
-            m.mtp_count += count;
-            return GradNormStatus::SUCCESS;
         case GRIM::ParamGroupType::EXECUTION_BLOCK:
             m.execution_block_sum_sq += sum_sq;
             m.execution_block_count += count;
@@ -160,10 +156,6 @@ GradNormStatus accumulateGroupMetrics(
         case GRIM::ParamGroupType::ARG_SELECTOR:
             m.arg_selector_sum_sq += sum_sq;
             m.arg_selector_count += count;
-            return GradNormStatus::SUCCESS;
-        case GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET:
-            m.latent_trajectory_preset_sum_sq += sum_sq;
-            m.latent_trajectory_preset_count += count;
             return GradNormStatus::SUCCESS;
         case GRIM::ParamGroupType::COUNT:
             return GradNormStatus::INVALID_PARAM;

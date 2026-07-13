@@ -70,11 +70,9 @@ const char* paramGroupTypeName(GRIM::ParamGroupType type) {
         case GRIM::ParamGroupType::FFN: return "FFN";
         case GRIM::ParamGroupType::RMSNORM: return "RMSNORM";
 
-        case GRIM::ParamGroupType::MTP: return "MTP";
         case GRIM::ParamGroupType::EXECUTION_BLOCK: return "EXECUTION_BLOCK";
         case GRIM::ParamGroupType::NUMBER_ENCODER: return "NUMBER_ENCODER";
         case GRIM::ParamGroupType::ARG_SELECTOR: return "ARG_SELECTOR";
-        case GRIM::ParamGroupType::LATENT_TRAJECTORY_PRESET: return "LATENT_TRAJECTORY_PRESET";
         case GRIM::ParamGroupType::COUNT: break;
     }
     throw std::runtime_error("paramGroupTypeName: invalid ParamGroupType::COUNT");
@@ -210,8 +208,6 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
     emitInitFactKeyValue("architecture.use_bias", boolText(GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "use_bias")));
     emitInitFactKeyValue("architecture.use_atom_data", boolText(GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "use_atom_data")));
     emitInitFactKeyValue("architecture.execution_block_enabled", boolText(GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "execution_block_enabled")));
-    emitInitFactKeyValue("architecture.mtp_enabled", boolText(GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "mtp_enabled")));
-
     const auto fixed_shape = GRIM::HyperParameters::trainingFixedShapeHP(ctx.config);
     emitInitFactLine("[INIT_FACTS] --- Fixed training shape -------------------------------------------------");
     emitInitFactKeyValue("fixed_shape.batch_size", fmtInt(fixed_shape.batch_size));

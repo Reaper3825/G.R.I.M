@@ -23,7 +23,6 @@
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
 #include "../../Shared/Batching/BatchDeviceBindings.hpp"
-#include "../../Shared/MTP/MTPDiagnostics.hpp"
 // MUST include full definitions for types used in AutogradContext
 #include "../../GRIM/grim_language_model_cuda.hpp"
 // ExecutionBlock for internal numeric reasoning
@@ -41,7 +40,6 @@ namespace GRIM {
 namespace Autograd {
 
 using ::GRIM::GPUGrimEncoder;
-using ::GRIM::LanguageModel;
 
 /**
  * Result of autograd loss computation
@@ -49,18 +47,12 @@ using ::GRIM::LanguageModel;
  */
 struct LossResult {
     float loss_value = 0.0f;         // Ground-truth: D2H read of loss_tensor AFTER all autograd::add()
-    float text_loss = 0.0f;          // Pure next-token CE, before MTP/exec/selector additions
-    float mtp_loss = 0.0f;           // Sum of weighted MTP auxiliary contributions
+    float text_loss = 0.0f;          // Pure next-token CE, before execution/selector additions
     float selector_loss = 0.0f;      // Scaled arg/option selector CE (α_sel * CE); own channel, no longer folded into execution_loss
-    float latent_preset_loss = 0.0f; // Scaled latent trajectory preset auxiliary contribution
-    float latent_preset_traj_loss = 0.0f;   // Reserved for the codebook reconstruction objective; zero during target-path removal pass
-    float latent_preset_delta_loss = 0.0f;  // Legacy telemetry channel; zero after future-mean target removal
-    float latent_preset_gate_loss = 0.0f;   // Raw mean gate sparsity term
     float execution_loss = 0.0f;     // Execution-block auxiliary contribution ONLY (transition/structured CE/div/REINFORCE); 0.0 when the block is disabled
     float entropy_monitor = 0.0f;    // Execution entropy monitoring scalar; not added to loss_tensor
     float weight_text = 1.0f;
     int valid_tokens = 0;
-    GRIM::MTP::MTPDiagnostics mtp_diagnostics;
     bool success = false;
     std::string error_message;
 };
@@ -105,9 +97,6 @@ struct AutogradContext {
     bool execution_block_enabled = false;
     ::ParameterRegistry::StartupParameterRegistry* parameter_registry = nullptr;
 
-    /** Model pointer for MTP head access in computeAutogradLoss; set by autogradTrainingStep. */
-    LanguageModel* model = nullptr;
-    
     // ═══════════════════════════════════════════════════════════════════════════
     // BATCH PAYLOAD VIEW
     // Training only: payload points to the caller-owned BatchPayload runtime
@@ -157,11 +146,6 @@ struct AutogradContext {
         if (!device_bindings->d_input_ids || !device_bindings->d_target_ids || !device_bindings->d_token_to_slot_map) {
             throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings has NULL device pointers");
         }
-        if (!payload->mtp_shifted_targets.empty()) {
-            if (!device_bindings->d_mtp_shifted_targets) {
-                throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings.d_mtp_shifted_targets is NULL for MTP payload");
-            }
-        }
     }
 };
 
@@ -194,24 +178,18 @@ AutogradContext initAutogradContext(
  * the caller-owned AutogradLossState for backward, and returns
  * the host-side LossResult consumed by Phase2.
  * 
- * Handles:
- *   1. Text CE via autograd::unified_loss()
- *   2. Consumes any shared-forward-owned MTP logits emitted for this batch
- *   3. Leaves the canonical loss Tensor on AutogradLossState for backward
- *   4. Returns decomposed host-side loss scalars/diagnostics to Phase2
+ * Computes text CE plus the enabled execution/selector auxiliary terms,
+ * leaves the canonical loss Tensor on AutogradLossState for backward, and
+ * returns decomposed host-side scalars to Phase2.
  * 
- * @param ctx     Autograd context (must have logits populated by the caller-owned
- *                 shared forward pass, any active MTP logits emitted by that
- *                 shared forward call, and valid device bindings/runtime state)
+ * @param ctx     Autograd context with logits populated by shared forward
  * @param payload Phase1-authored BatchPayload for this explicit loss boundary
  * @param loss_config Caller-derived loss hyperparameter grouping
- * @param mtp_alpha_effective Phase2-derived MTP loss weight for this batch
  */
 LossResult computeAutogradLoss(
     AutogradContext& ctx,
     const Batching::BatchPayload& payload,
-    const HyperParameters::LossConfigHP& loss_config,
-    float mtp_alpha_effective
+    const HyperParameters::LossConfigHP& loss_config
 );
 
 /**

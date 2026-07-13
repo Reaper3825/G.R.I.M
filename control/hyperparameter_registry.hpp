@@ -202,7 +202,6 @@ private:
             startsWith(key, "synchronize_after")) {
             return "CUDA";
         }
-        if (startsWith(key, "mtp_")) return "MTP";
         if (startsWith(key, "embedding_")) return "Embedding";
         if (startsWith(key, "stability_")) return "Stability";
         if (startsWith(key, "prediction_comparison_") || startsWith(key, "logit_update_trace_") ||

@@ -222,26 +222,6 @@ struct BatchPayload {
     std::vector<float> pool_global_features;       // [E * kNumberGlobalFeatureDim]
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // MTP (Multi-Token Prediction) SHIFTED TARGETS
-    //
-    // Computed ONCE during buildBatchPayload() when mtp_k > 0.
-    // mtp_shifted_targets[k] = [total_tokens] shifted target_ids for head k.
-    // mtp_valid_counts[k] = number of valid (non -1) targets after shift.
-    //
-    // Shift rule: for head k, shift = k+1.
-    //   shifted[b*S + t] = target_ids[b*S + t + shift]  if (t + shift) < seq_len[b]
-    //                     = -1                            otherwise
-    //
-    // Execution-slot masking is inherited: target_ids are already masked by
-    // Phase 4b before MTP shift, so shifted targets respect slot boundaries.
-    //
-    // These are the AUTHORITATIVE shifted targets. MTP_GPU must use these
-    // directly — no ad-hoc GPU shifting.
-    // ═══════════════════════════════════════════════════════════════════════════
-    std::vector<std::vector<int>> mtp_shifted_targets;  // [K][total_tokens]
-    std::vector<int> mtp_valid_counts;                   // [K] valid targets per head
-
-    // ═══════════════════════════════════════════════════════════════════════════
     // CACHE FIT (computed ONCE against model limits)
     // ═══════════════════════════════════════════════════════════════════════════
     bool fits_in_cache = false;
@@ -527,36 +507,6 @@ struct BatchPayload {
             }
         }
 
-        // MTP shifted targets validation
-        const int mtp_k = static_cast<int>(mtp_shifted_targets.size());
-        if (mtp_k > 0) {
-            if (static_cast<int>(mtp_valid_counts.size()) != mtp_k) {
-                throw std::runtime_error(
-                    std::string(caller) + ": BatchPayload.mtp_valid_counts.size()=" +
-                    std::to_string(mtp_valid_counts.size()) + " != mtp_shifted_targets.size()=" +
-                    std::to_string(mtp_k));
-            }
-            for (int k = 0; k < mtp_k; ++k) {
-                if (static_cast<int>(mtp_shifted_targets[k].size()) != total_tokens) {
-                    throw std::runtime_error(
-                        std::string(caller) + ": BatchPayload.mtp_shifted_targets[" +
-                        std::to_string(k) + "].size()=" +
-                        std::to_string(mtp_shifted_targets[k].size()) +
-                        " != total_tokens=" + std::to_string(total_tokens));
-                }
-                if (mtp_valid_counts[k] < 0) {
-                    throw std::runtime_error(
-                        std::string(caller) + ": BatchPayload.mtp_valid_counts[" +
-                        std::to_string(k) + "]=" + std::to_string(mtp_valid_counts[k]) +
-                        " — negative count is impossible (data corruption)");
-                }
-                // mtp_valid_counts[k] == 0 is LEGAL: short / heavily-masked
-                // batches may have valid LM targets but no valid targets at
-                // horizon (k+1). MTP_GPU treats zero-count heads as zero
-                // contribution (no loss, no grad). Aborting the batch would
-                // discard otherwise-valid LM training signal.
-            }
-        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -616,7 +566,6 @@ BatchPayload buildBatchPayload(
     int execution_num_slots,
     int execution_num_ops,
     int execution_num_steps,
-    int mtp_k,
     int number_encoder_digit_slots,
     int number_encoder_max_abs_pow10);
 

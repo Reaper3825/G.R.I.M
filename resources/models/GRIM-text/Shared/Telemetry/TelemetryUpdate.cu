@@ -13,7 +13,6 @@
 #include "../../training/Phases/Phase1_Startup.hpp"  // TrainingContext
 #include "../../training/Phases/Phase2_TrainingLoop.hpp"  // BatchResult
 #include "../../training/Diagnostics/DiagnosticInference.hpp"
-#include "../../training/Diagnostics/MtpDiagnostic.hpp"
 #include "../HyperParameters/HyperparameterGroupings.hpp"
 #include "../TrainingState/TrainingState_GPU.hpp"
 
@@ -97,12 +96,12 @@ void populateCoreStreams(float* obs, const TelemetryBatchInput& input) {
 //------------------------------------------------------
 void populateLossComponentStreams(float* obs, const TelemetryBatchInput& input) {
     obs[61] = input.text_loss;
-    obs[62] = input.mtp_loss;
+    obs[62] = 0.0f;
     obs[63] = input.selector_loss;
-    obs[64] = input.latent_preset_loss;
-    obs[65] = input.latent_preset_traj_loss;
-    obs[66] = input.latent_preset_delta_loss;
-    obs[67] = input.latent_preset_gate_loss;
+    obs[64] = 0.0f;
+    obs[65] = 0.0f;
+    obs[66] = 0.0f;
+    obs[67] = 0.0f;
     obs[68] = input.execution_loss;
 }
 
@@ -196,7 +195,7 @@ void populateEBInjectionStreams(
     // Stream 25: EB_LOSS_FRAC
     obs[25] = 0.0f;
 
-    // Stream 26: MTP_LOSS_FRAC
+    // Stream 26 is reserved for historical compatibility.
     obs[26] = 0.0f;
 }
 
@@ -313,7 +312,6 @@ void updateTelemetryObservations(
     // streams 25-26: explicit non-text loss fractions
     if (input.loss > 1e-12f) {
         obs[25] = input.execution_loss / input.loss;
-        obs[26] = input.mtp_loss / input.loss;
     }
 
     // Streams 27-30: PBM diagnostics
@@ -366,7 +364,6 @@ void logIntervalTelemetry(
                                 formatMetric("loss", batch_result.loss) + " " +
                                 formatMetric("lr", batch_result.learning_rate, 8));
 
-        GRIM::Diagnostics::runMtpDiagnostic(ctx, batch_result);
     }
 
     GRIMText::Training::logDiagnosticSample(
