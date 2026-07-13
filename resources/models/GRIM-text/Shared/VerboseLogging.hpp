@@ -30,7 +30,7 @@ constexpr bool ENABLE_LOSS_BACKWARD_SAMPLING = false;  ///< NLLLossGradFn diagno
 // Expensive diagnostics (D2H copies for analysis - disable for production training)
 constexpr bool ENABLE_EXPENSIVE_DIAGNOSTICS = false;   ///< Rule 21 argmax analysis, embedding cosine, etc.
 constexpr bool ENABLE_RHO_BUILDUP_DIAGNOSTICS = true;  ///< [RHO_BUILDUP_EQUATION*] hidden-state correlation diagnostics
-constexpr bool ENABLE_LOGIT_SCALE_DIAGNOSTICS = true;  ///< [LOGIT_SCALE_EQUATION] full-logits/hidden-state scale diagnostics
+constexpr bool ENABLE_LOGIT_SCALE_DIAGNOSTICS = false;  ///< [LOGIT_SCALE_EQUATION] full-logits/hidden-state scale diagnostics
 
 // GPU allocation diagnostics - OFF by default. When enabled, logs every allocation
 // request with requested size and current free/total VRAM to pinpoint OOM sources.

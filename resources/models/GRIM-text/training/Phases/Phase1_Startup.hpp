@@ -180,7 +180,7 @@ struct TelemetryContext {
     GRIM::Telemetry::TelemetryControlConfig control_config;
     std::unique_ptr<GRIM::Telemetry::TelemetryControl> controller;
     std::unique_ptr<GRIM::Telemetry::TelemetryCsvLogger> csv_logger;
-    float last_obs[61] = {};  // All metric streams (0-60 inclusive) — rho slots persist between diagnostic intervals; INIT_* slots (48-54) are constant for run
+    float last_obs[69] = {};  // All metric streams (0-68 inclusive) — rho slots persist between diagnostic intervals; INIT_* slots (48-54) are constant for run
     float adam_cumulative_disp = 0.0f;  // Running sum of lr(t) for Adam disruption tracking
     bool enabled = true;
 
