@@ -2134,12 +2134,6 @@ inline void validateRootBiasConfig(
     require_global("execution_block_value_embedding_bias_enabled");
     require_global("execution_block_scalar_bias_enabled");
     require_global("execution_block_trace_bias_enabled");
-    require_global("latent_trajectory_hidden_bias_enabled");
-    require_global("latent_trajectory_fuse_bias_enabled");
-    require_global("latent_trajectory_down_bias_enabled");
-    require_global("latent_trajectory_up_bias_enabled");
-    require_global("latent_trajectory_gate_bias_enabled");
-
     if (snapshotTrainingConfigField<bool>(snapshot, "lm_head_unigram_bias") &&
         !snapshotTrainingConfigField<bool>(snapshot, "lm_head_bias_enabled")) {
         throw std::runtime_error(std::string(caller) +
