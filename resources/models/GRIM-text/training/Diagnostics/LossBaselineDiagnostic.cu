@@ -47,14 +47,18 @@ void runLossBaselineAndTokenValidation(
     if (state.initial_loss == 0.0f) {
         state.initial_loss = loss;
         state.min_observed_loss = loss;
-        // Calculate expected random baseline for reference (ln(vocab_size))
-        const float expected_random_baseline = std::log(static_cast<float>(payload.vocab_size));
-        const bool likely_from_checkpoint = loss < (expected_random_baseline - 1.0f);
-        std::string baseline_note = likely_from_checkpoint
-            ? "(from checkpoint, expected random=" + formatScalar(expected_random_baseline) + ")"
-            : "(random baseline for vocab=" + std::to_string(payload.vocab_size) + ")";
-        ctx.logging.logger->log("[LossBaseline] Initial loss=" + formatScalar(state.initial_loss) +
-                                " " + baseline_note);
+        // Record the actual initialization source selected during Phase1. Do not
+        // infer checkpoint loading from loss magnitude: focal scaling and an
+        // LM-head unigram prior can both put a fresh model well below ln(V).
+        const float plain_ce_random_reference = std::log(static_cast<float>(payload.vocab_size));
+        const bool checkpoint_loaded = !ctx.loaded_checkpoint_path.empty();
+        const std::string source_note = checkpoint_loaded
+            ? "model_source=checkpoint checkpoint_path=\"" + ctx.loaded_checkpoint_path + "\""
+            : "model_source=random_initialization";
+        ctx.logging.logger->log(
+            "[LossBaseline] Initial optimized loss=" + formatScalar(state.initial_loss) +
+            " " + source_note +
+            " plain_ce_random_reference=" + formatScalar(plain_ce_random_reference));
         return;
     }
 

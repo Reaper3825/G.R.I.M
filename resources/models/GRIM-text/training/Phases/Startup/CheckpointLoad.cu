@@ -22,18 +22,14 @@ namespace GRIMText::Training {
 
 namespace {
 
-void handleUnusableCheckpointRequest(
-    GRIM::HyperParameters::ModelExecutionMode execution_mode,
-    bool had_explicit_path,
+void logFreshRandomInitialization(
+    const TrainingContext& ctx,
     TrainingLogger& logger,
     const std::string& reason)
 {
-    if (execution_mode != GRIM::HyperParameters::ModelExecutionMode::INFERENCE && had_explicit_path) {
-        return;
-    }
-
-    logger.log("Checkpoint request unusable for INFERENCE execution mode: " + reason);
-    logger.log("Starting fresh model state for INFERENCE execution mode");
+    logger.log(
+        "[MODEL_INIT] RESULT=RANDOM_INIT checkpoint_loaded=false weight_init_seed=" +
+        std::to_string(ctx.rng.init_seed) + " reason=\"" + reason + "\"");
 }
 
 std::string trimmed(std::string value) {
@@ -197,15 +193,23 @@ void loadRequestedCheckpoint(TrainingContext& ctx)
     ctx.loaded_checkpoint_path.clear();
 
     const auto execution_mode = GRIM::HyperParameters::snapshotExecutionMode(ctx.config);
-    const bool had_explicit_path = !ctx.requested_checkpoint_path.empty();
+    const std::string select = checkpointSelectField(ctx.config);
+    const std::string effective_select = select.empty() ? "default" : select;
+    const std::string requested_path = ctx.requested_checkpoint_path.empty()
+        ? "<none>"
+        : ctx.requested_checkpoint_path;
+    logger.log(
+        "[MODEL_INIT] Choosing parameter source | execution_mode=" +
+        std::string(GRIM::HyperParameters::modelExecutionModeToJsonString(execution_mode)) +
+        " checkpoint_select=\"" + effective_select +
+        "\" requested_path=\"" + requested_path + "\"");
 
     const std::vector<std::string> candidates =
         resolveCheckpointCandidates(ctx.config, ctx.requested_checkpoint_path, logger);
 
     if (candidates.empty()) {
-        handleUnusableCheckpointRequest(
-            execution_mode,
-            had_explicit_path,
+        logFreshRandomInitialization(
+            ctx,
             logger,
             "no checkpoint path was provided or discovered");
         return;
@@ -237,12 +241,14 @@ void loadRequestedCheckpoint(TrainingContext& ctx)
 
         logger.log("✓ Loaded weights from checkpoint: " + candidate);
         ctx.loaded_checkpoint_path = candidate;
+        logger.log(
+            "[MODEL_INIT] RESULT=CHECKPOINT_LOADED checkpoint_loaded=true path=\"" +
+            candidate + "\"");
         return;
     }
 
-    handleUnusableCheckpointRequest(
-        execution_mode,
-        had_explicit_path,
+    logFreshRandomInitialization(
+        ctx,
         logger,
         last_reason.empty() ? "no usable checkpoint candidate" : last_reason);
 }

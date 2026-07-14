@@ -48,7 +48,6 @@ TELEMETRY_STREAM_NAMES_BY_INDEX = {
     23: "eb_inject_weight_norm",
     24: "eb_read_weight_norm",
     25: "eb_loss_frac",
-    26: "mtp_loss_frac",
     27: "pbm_alibi_slope_rms",
     28: "pbm_alibi_eff_bias_max",
     29: "pbm_rope_inv_freq_rms",
@@ -84,17 +83,19 @@ TELEMETRY_STREAM_NAMES_BY_INDEX = {
     59: "rho_nonatom_only",
     60: "optimizer_iteration",
     61: "text_loss",
-    62: "mtp_loss",
-    63: "selector_loss",
-    64: "latent_preset_loss",
-    65: "latent_preset_traj_loss",
-    66: "latent_preset_delta_loss",
-    67: "latent_preset_gate_loss",
     68: "execution_loss",
 }
 
-LEGACY_STREAM_NAME_COMPATIBILITY = {
-    26: {"sb_atom_embed_rms", "mtp_loss_frac"},
+DEAD_TELEMETRY_STREAM_INDICES = {26, 62, 63, 64, 65, 66, 67}
+DEAD_TELEMETRY_STREAM_NAMES = {
+    "mtp_loss_frac",
+    "sb_atom_embed_rms",
+    "mtp_loss",
+    "selector_loss",
+    "latent_preset_loss",
+    "latent_preset_traj_loss",
+    "latent_preset_delta_loss",
+    "latent_preset_gate_loss",
 }
 
 TELEMETRY_IDENTIFIER_COLUMNS = {"stream_idx", "stream_name", "level", "stride"}
@@ -119,7 +120,6 @@ TELEMETRY_UNIT_INTERVAL_FIELDS = {
     "eb_inject_gate",
     "eb_read_gate_mean",
     "eb_loss_frac",
-    "mtp_loss_frac",
     "init_tie_cfg",
     "init_tie_ptrs_same",
     "init_tie_grads_same",
@@ -506,11 +506,7 @@ def stream_index_to_name(value):
 
 
 def is_stream_name_compatible(stream_idx, current_name, expected_name):
-    allowed_names = set()
-    if expected_name is not None:
-        allowed_names.add(expected_name)
-    allowed_names.update(LEGACY_STREAM_NAME_COMPATIBILITY.get(stream_idx, set()))
-    return current_name in allowed_names
+    return current_name == expected_name
 
 
 def repair_telemetry_stream_names(df):
@@ -551,7 +547,12 @@ def read_telemetry_csv(path):
         raise ValueError(f"Telemetry CSV is empty: {path}")
     df = pd.read_csv(path)
     df = canonicalize_telemetry_columns(df)
-    return repair_telemetry_stream_names(df)
+    df = repair_telemetry_stream_names(df)
+    dead_rows = df["stream_name"].isin(DEAD_TELEMETRY_STREAM_NAMES)
+    if "stream_idx" in df.columns:
+        indices = pd.to_numeric(df["stream_idx"], errors="coerce")
+        dead_rows |= indices.isin(DEAD_TELEMETRY_STREAM_INDICES)
+    return df[~dead_rows].copy()
 
 
 def load_telemetry(path):
@@ -1211,12 +1212,9 @@ def main():
     eb_inject_wnorm = streams.get("eb_inject_weight_norm")
     eb_read_wnorm = streams.get("eb_read_weight_norm")
     eb_loss_frac = streams.get("eb_loss_frac")
-    mtp_loss_frac = streams.get("mtp_loss_frac")
-    legacy_sb_atom_rms = streams.get("sb_atom_embed_rms")
 
     has_inject_diag = any(s is not None for s in [eb_inject_gate, eb_read_gate, eb_inject_wnorm,
-                                                   eb_read_wnorm, eb_loss_frac, mtp_loss_frac,
-                                                   legacy_sb_atom_rms,
+                                                   eb_read_wnorm, eb_loss_frac,
                                                    rho_atom_only, rho_nonatom_only])
     if has_inject_diag:
         fig7 = plt.figure(figsize=(16, 14), constrained_layout=True)
@@ -1281,78 +1279,30 @@ def main():
         ax.legend(fontsize=8)
         ax.grid(True, alpha=0.3)
 
-        # 7-3a) MTP Loss Fraction (or legacy ScratchBlock slot on old CSVs)
+        # 7-3a) Atom/non-atom rho split
         ax = fig7.add_subplot(gs7[2, 0])
-        if mtp_loss_frac is not None:
-            ax.plot(mtp_loss_frac.index, mtp_loss_frac["raw_observation"], alpha=0.3, linewidth=0.5, color="tab:green")
-            ax.plot(mtp_loss_frac.index, smooth(mtp_loss_frac["raw_observation"]), linewidth=1.5, color="tab:green", label="mtp_loss / total_loss")
-            ax.set_ylabel("Fraction")
-            ax.set_title("MTP Loss Fraction")
-        elif legacy_sb_atom_rms is not None:
-            ax.plot(legacy_sb_atom_rms.index, legacy_sb_atom_rms["raw_observation"], alpha=0.3, linewidth=0.5, color="tab:green")
-            ax.plot(legacy_sb_atom_rms.index, smooth(legacy_sb_atom_rms["raw_observation"]), linewidth=1.5, color="tab:green", label="atom_type_embeddings RMS")
-            ax.set_ylabel("RMS")
-            ax.set_title("Legacy ScratchBlock Atom Embedding Scale")
+        if rho_atom_only is not None:
+            plot_raw_and_smooth(ax, rho_atom_only.index, rho_atom_only["raw_observation"],
+                                color="tab:orange", raw_label="_nolegend_",
+                                smooth_label="rho_atom_only")
+        if rho_nonatom_only is not None:
+            plot_raw_and_smooth(ax, rho_nonatom_only.index, rho_nonatom_only["raw_observation"],
+                                color="tab:purple", raw_label="_nolegend_",
+                                smooth_label="rho_nonatom_only")
+        ax.set_ylabel("Rho")
+        ax.set_title("Atom vs Non-Atom Rho")
         ax.legend(fontsize=8)
         ax.grid(True, alpha=0.3)
 
-        # 7-3b) Explicit non-text loss fractions (fallback to legacy ScratchBlock panel on old CSVs)
+        # 7-3b) Execution loss fraction vs total loss
         ax = fig7.add_subplot(gs7[2, 1])
-        if mtp_loss_frac is not None or eb_loss_frac is not None:
-            if eb_loss_frac is not None:
-                plot_raw_and_smooth(ax, eb_loss_frac.index, eb_loss_frac["raw_observation"],
-                                    color="tab:orange",
-                                    raw_label="_nolegend_",
-                                    smooth_label="execution_loss / total_loss",
-                                    raw_alpha=0.14,
-                                    smooth_linewidth=1.3)
-            if mtp_loss_frac is not None:
-                plot_raw_and_smooth(ax, mtp_loss_frac.index, mtp_loss_frac["raw_observation"],
-                                    color="tab:green",
-                                    raw_label="_nolegend_",
-                                    smooth_label="mtp_loss / total_loss",
-                                    raw_alpha=0.14,
-                                    smooth_linewidth=1.3)
+        if eb_loss_frac is not None:
+            plot_raw_and_smooth(ax, eb_loss_frac.index, eb_loss_frac["raw_observation"],
+                                color="tab:orange", raw_label="_nolegend_",
+                                smooth_label="execution_loss / total_loss",
+                                raw_alpha=0.14, smooth_linewidth=1.3)
             ax.set_ylabel("Fraction")
-            ax.set_title("Explicit Non-Text Loss Fractions")
-            ax.legend(loc="upper left", fontsize=8)
-        else:
-            if legacy_sb_atom_rms is not None:
-                plot_raw_and_smooth(ax, legacy_sb_atom_rms.index, legacy_sb_atom_rms["raw_observation"],
-                                    color="tab:green",
-                                    raw_label="sb_atom_embed_rms (raw)",
-                                    smooth_label="sb_atom_embed_rms (smooth)",
-                                    raw_alpha=0.18,
-                                    smooth_linewidth=1.3)
-            ax.set_ylabel("ScratchBlock atom RMS", color="tab:green")
-            if rho_atom_only is not None or rho_nonatom_only is not None or rho_final is not None:
-                ax2 = ax.twinx()
-                if rho_atom_only is not None:
-                    plot_raw_and_smooth(ax2, rho_atom_only.index, rho_atom_only["raw_observation"],
-                                        color="tab:orange",
-                                        raw_label="ρ_atom_only (raw)",
-                                        smooth_label="ρ_atom_only (smooth)",
-                                        raw_alpha=0.14,
-                                        smooth_linewidth=1.3)
-                if rho_nonatom_only is not None:
-                    plot_raw_and_smooth(ax2, rho_nonatom_only.index, rho_nonatom_only["raw_observation"],
-                                        color="tab:purple",
-                                        raw_label="ρ_nonatom_only (raw)",
-                                        smooth_label="ρ_nonatom_only (smooth)",
-                                        raw_alpha=0.14,
-                                        smooth_linewidth=1.3)
-                if rho_final is not None:
-                    plot_raw_and_smooth(ax2, rho_final.index, rho_final["raw_observation"],
-                                        color="tab:blue",
-                                        raw_label="_nolegend_",
-                                        smooth_label="ρ_final (smooth)",
-                                        raw_alpha=0.08,
-                                        smooth_alpha=0.7,
-                                        smooth_linewidth=1.1,
-                                        smooth_linestyle="--")
-                ax2.set_ylabel("ρ", color="tab:orange")
-                ax2.legend(loc="center right", fontsize=8)
-            ax.set_title("Legacy ScratchBlock Atom RMS vs Atom/Non-Atom ρ Split")
+            ax.set_title("Execution Loss Fraction")
             ax.legend(loc="upper left", fontsize=8)
         ax.grid(True, alpha=0.3)
 
@@ -2020,14 +1970,8 @@ def main():
     primary_loss_streams = [
         ("total", loss, "tab:blue"),
         ("text", streams.get("text_loss"), "tab:green"),
-        ("MTP", streams.get("mtp_loss"), "tab:orange"),
-        ("selector", streams.get("selector_loss"), "tab:red"),
     ]
     auxiliary_loss_streams = [
-        ("latent preset", streams.get("latent_preset_loss"), "tab:blue"),
-        ("latent trajectory", streams.get("latent_preset_traj_loss"), "tab:orange"),
-        ("latent delta", streams.get("latent_preset_delta_loss"), "tab:green"),
-        ("latent gate", streams.get("latent_preset_gate_loss"), "tab:red"),
         ("execution", streams.get("execution_loss"), "tab:purple"),
     ]
     has_loss_components = any(

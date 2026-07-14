@@ -193,7 +193,10 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
     emitInitFactKeyValue("vocab_path", paths_hp.vocab_path);
     emitInitFactKeyValue("checkpoint_dir", paths_hp.checkpoint_dir);
     emitInitFactKeyValue("output_model_path", paths_hp.output_model_path);
-    emitInitFactKeyValue("loaded_checkpoint_path", ctx.loaded_checkpoint_path);
+    const bool checkpoint_loaded = !ctx.loaded_checkpoint_path.empty();
+    emitInitFactKeyValue("model_parameter_source", checkpoint_loaded ? "checkpoint" : "random_initialization");
+    emitInitFactKeyValue("checkpoint_loaded", boolText(checkpoint_loaded));
+    emitInitFactKeyValue("loaded_checkpoint_path", checkpoint_loaded ? ctx.loaded_checkpoint_path : "<none>");
 
     emitInitFactLine("[INIT_FACTS] --- Effective architecture -----------------------------------------------");
     emitInitFactKeyValue("architecture.d_model", fmtInt(GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "d_model")));

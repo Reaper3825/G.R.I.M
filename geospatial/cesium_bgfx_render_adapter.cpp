@@ -673,7 +673,9 @@ namespace {
                 CesiumBgfxVertex& vertex = primitive.vertices[i];
                 const glm::dvec4 world = primitive.transform * glm::dvec4(vertex.px, vertex.py, vertex.pz, 1.0);
                 isPolar[i] = std::sqrt(world.x * world.x + world.y * world.y) < polarAxisDistanceMeters;
-                if (!regenerateAllUvs)
+                const bool repairNonFiniteOverlayUv = !regenerateAllUvs &&
+                                                      (!std::isfinite(vertex.u) || !std::isfinite(vertex.v));
+                if (!regenerateAllUvs && !repairNonFiniteOverlayUv)
                     continue;
 
                 const auto cartographic = CesiumGeospatial::Ellipsoid::WGS84.cartesianToCartographic(
@@ -690,7 +692,7 @@ namespace {
                 if (regenerateAllUvs) {
                     vertex.u = static_cast<float>((longitude + pi) / twoPi);
                     vertex.v = static_cast<float>(0.5 - cartographic->latitude / pi);
-                } else if (!std::isfinite(vertex.u) || !std::isfinite(vertex.v)) {
+                } else {
                     const double rectangleWidth = rectangle.maximumX - rectangle.minimumX;
                     const double rectangleHeight = rectangle.maximumY - rectangle.minimumY;
                     if (rectangleWidth <= 0.0 || rectangleHeight <= 0.0)
@@ -1373,7 +1375,9 @@ CesiumBgfxRenderAdapter::prepareInLoadThread(const CesiumAsync::AsyncSystem& asy
 
 void* CesiumBgfxRenderAdapter::prepareInMainThread(Cesium3DTilesSelection::Tile& tile, void* pLoadThreadResult)
 {
-    std::unique_ptr<LoadTileResources> loadResources(static_cast<LoadTileResources*>(pLoadThreadResult));
+    auto* loadResources = static_cast<LoadTileResources*>(pLoadThreadResult);
+    if (!loadResources)
+        throw std::runtime_error("CesiumBgfxRenderAdapter main-thread preparation received NULL load resources");
     const std::optional<CesiumGeometry::Rectangle> rectangle = tileRectangle(tile);
     if (rectangle) {
         const GeneratedUvStats stats = regenerateGeneratedTextureCoordinates(*loadResources, *rectangle);
@@ -1405,7 +1409,9 @@ void* CesiumBgfxRenderAdapter::prepareInMainThread(Cesium3DTilesSelection::Tile&
         if (primitive.hasNonFiniteOverlayTextureCoordinates)
             throw std::runtime_error("Cesium tile has non-finite overlay UVs but no usable cartographic bounds");
     }
-    return createGpuResources(loadResources.get());
+    TileGpuResources* gpuResources = createGpuResources(loadResources);
+    delete loadResources;
+    return gpuResources;
 }
 
 void CesiumBgfxRenderAdapter::free(Cesium3DTilesSelection::Tile&, void* pLoadThreadResult, void* pMainThreadResult) noexcept

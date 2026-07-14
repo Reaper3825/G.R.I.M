@@ -16,8 +16,9 @@ namespace GRIMText { namespace Training {
 
 namespace GRIM::Diagnostics {
 
-// On the very first batch, captures `state.initial_loss` and logs the
-// baseline relative to ln(vocab_size). On subsequent batches:
+// On the very first batch, captures `state.initial_loss`, logs the actual
+// Phase1-selected model source, and includes ln(vocab_size) as a plain-CE
+// reference only. On subsequent batches:
 //   - updates `state.min_observed_loss` and `state.warmup_batches`
 //   - scans payload.input_ids and payload.target_ids for IDs outside
 //     the vocab range; THROWS std::runtime_error on corruption (Rule 20)
