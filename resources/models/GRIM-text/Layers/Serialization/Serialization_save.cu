@@ -377,8 +377,12 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
             builder.CreateVector(dl(eb_view.W_trace, "EB W_trace")),
             builder.CreateVector(dl(eb_view.b_trace, "EB b_trace")),
             builder.CreateVector(dl(eb_view.W_reason_gate, "EB W_reason_gate")),
-            builder.CreateVector(dl(eb_view.W_trace_gate, "EB W_trace_gate")));
-        Logging::EmitModuleInfo(kLogModule, "[save] ExecutionBlock v2 weights serialized");
+            builder.CreateVector(dl(eb_view.W_trace_gate, "EB W_trace_gate")),
+            builder.CreateVector(dl(eb_view.W_execute, "EB W_execute")),
+            builder.CreateVector(dl(eb_view.b_execute, "EB b_execute")),
+            builder.CreateVector(dl(eb_view.W_stop, "EB W_stop")),
+            builder.CreateVector(dl(eb_view.b_stop, "EB b_stop")));
+        Logging::EmitModuleInfo(kLogModule, "[save] ExecutionBlock v3 weights serialized");
     }
 
     flatbuffers::Offset<GRIMTransformer::LatentTrajectoryPresetWeights> fb_latent_trajectory_preset = 0;

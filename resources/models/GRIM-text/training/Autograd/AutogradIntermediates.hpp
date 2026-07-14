@@ -29,6 +29,8 @@ struct AutogradLossState {
     bool exec_arg_ce_added = false;    // true iff an active arg-path execution loss was added to loss_tensor
     bool exec_write_ce_added = false;  // true iff active write selection CE was added to loss_tensor
     bool exec_transition_added = false;// true iff active transition/value execution loss was added to loss_tensor
+    bool exec_execute_ce_added = false;// true iff EXECUTE/NOOP CE was added
+    bool exec_stop_ce_added = false;   // true iff STOP/CONTINUE CE was added
 
     void clear() {
         loss_tensor = Tensor();
@@ -36,6 +38,8 @@ struct AutogradLossState {
         exec_arg_ce_added = false;
         exec_write_ce_added = false;
         exec_transition_added = false;
+        exec_execute_ce_added = false;
+        exec_stop_ce_added = false;
     }
 
     bool hasLoss() const { return loss_tensor.data != nullptr; }

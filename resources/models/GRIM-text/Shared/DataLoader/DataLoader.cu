@@ -451,6 +451,7 @@ bool PrepareTrainingDataFromCache(
 				auto seq = build_sequence(text);
 				if (!seq) { ++selected_entries_skipped; continue; }
 				seq->execution_active = false;
+				seq->execution_gate_target = GRIM::Execution::ExecutionGateTarget::IGNORE;
 				all_tokens.push_back(std::move(*seq));
 				++plaintext_count;
 				continue;
@@ -486,6 +487,9 @@ bool PrepareTrainingDataFromCache(
 			auto seq = build_sequence(built.canonical_text);
 			if (!seq) { ++selected_entries_skipped; continue; }
 			seq->execution_active = built.payload.execution_active;
+			seq->execution_gate_target = built.payload.execution_gate_target;
+			seq->planner_query_pos = built.payload.planner_query_pos;
+			seq->planner_prefix_length = built.payload.planner_prefix_length;
 			if (built.payload.execution_active) {
 				seq->token_exec_slots = std::move(built.payload.token_exec_slots);
 				seq->compiled_bootstrap_bindings = std::move(built.payload.compiled_bootstrap_bindings);

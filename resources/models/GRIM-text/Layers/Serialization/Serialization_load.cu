@@ -654,9 +654,13 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
         if (fb_eb->w_trace_gate_data()) {
             eb_ok = eb_ok && ul(fb_eb->w_trace_gate_data(), eb.W_trace_gate, "EB W_trace_gate");
         }
+        eb_ok = eb_ok && ul(fb_eb->w_execute_data(), eb.W_execute, "EB W_execute");
+        eb_ok = eb_ok && ul(fb_eb->b_execute_data(), eb.b_execute, "EB b_execute");
+        eb_ok = eb_ok && ul(fb_eb->w_stop_data(), eb.W_stop, "EB W_stop");
+        eb_ok = eb_ok && ul(fb_eb->b_stop_data(), eb.b_stop, "EB b_stop");
         if (!eb_ok) return false;
         request.report.execution_block_loaded = true;
-        Logging::EmitModuleInfo(kLogModule, "[load] ExecutionBlock v2 weights loaded");
+        Logging::EmitModuleInfo(kLogModule, "[load] ExecutionBlock v3 weights loaded");
     }
 
     // ─── final_rms_gamma (gated by requires_final_rms_gamma) ───

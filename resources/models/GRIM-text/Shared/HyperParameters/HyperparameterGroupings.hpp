@@ -542,6 +542,8 @@ struct ModelHP {
     float execution_block_arg_reinforce_baseline_decay = 0.0f;
     float execution_block_entropy_aux_weight = 0.0f;
     float execution_block_structured_ce_weight = 0.0f;
+    float execution_block_execute_ce_weight = 0.0f;
+    float execution_block_stop_ce_weight = 0.0f;
 
     bool number_encoder_enabled = false;
     int number_encoder_d_model = 0;
@@ -1320,6 +1322,8 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.execution_block_arg_reinforce_baseline_decay = requireFloat("execution_block_arg_reinforce_baseline_decay");
     view.execution_block_entropy_aux_weight = requireFloat("execution_block_entropy_aux_weight");
     view.execution_block_structured_ce_weight = requireFloat("execution_block_structured_ce_weight");
+    view.execution_block_execute_ce_weight = requireFloat("execution_block_execute_ce_weight");
+    view.execution_block_stop_ce_weight = requireFloat("execution_block_stop_ce_weight");
 
     view.number_encoder_enabled = requireBool("number_encoder_enabled");
     view.number_encoder_d_model = d_model;

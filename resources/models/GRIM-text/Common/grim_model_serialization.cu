@@ -284,7 +284,11 @@ bool saveLanguageModelCheckpoint(
         assignRead(request.sources.execution_block.b_trace, execution_block_parameters->b_trace);
         assignRead(request.sources.execution_block.W_reason_gate, execution_block_parameters->W_reason_gate);
         assignRead(request.sources.execution_block.W_trace_gate, execution_block_parameters->W_trace_gate);
-        EmitModuleInfo(ModuleId::Checkpoint, "Processing ExecutionBlock v2 weights for FlatBuffer serialization");
+        assignRead(request.sources.execution_block.W_execute, execution_block_parameters->W_execute);
+        assignRead(request.sources.execution_block.b_execute, execution_block_parameters->b_execute);
+        assignRead(request.sources.execution_block.W_stop, execution_block_parameters->W_stop);
+        assignRead(request.sources.execution_block.b_stop, execution_block_parameters->b_stop);
+        EmitModuleInfo(ModuleId::Checkpoint, "Processing ExecutionBlock v3 weights for FlatBuffer serialization");
     }
 
     // Issue #33: Final RMSNorm gamma (normalizes encoder output before LM head)
@@ -547,6 +551,10 @@ bool loadLanguageModelCheckpoint(
         assignWrite(request.execution_block.b_trace, execution_block_parameters->b_trace.data, static_cast<std::size_t>(execution_block_parameters->b_trace.numel()));
         assignWrite(request.execution_block.W_reason_gate, execution_block_parameters->W_reason_gate.data, static_cast<std::size_t>(execution_block_parameters->W_reason_gate.numel()));
         assignWrite(request.execution_block.W_trace_gate, execution_block_parameters->W_trace_gate.data, static_cast<std::size_t>(execution_block_parameters->W_trace_gate.numel()));
+        assignWrite(request.execution_block.W_execute, execution_block_parameters->W_execute.data, static_cast<std::size_t>(execution_block_parameters->W_execute.numel()));
+        assignWrite(request.execution_block.b_execute, execution_block_parameters->b_execute.data, static_cast<std::size_t>(execution_block_parameters->b_execute.numel()));
+        assignWrite(request.execution_block.W_stop, execution_block_parameters->W_stop.data, static_cast<std::size_t>(execution_block_parameters->W_stop.numel()));
+        assignWrite(request.execution_block.b_stop, execution_block_parameters->b_stop.data, static_cast<std::size_t>(execution_block_parameters->b_stop.numel()));
     }
 
     // Issue #33: Final RMSNorm gamma destination

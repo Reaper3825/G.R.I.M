@@ -433,6 +433,8 @@ struct LanguageModelConfig {
 
     bool  structured_ce_enabled = false;
     float structured_ce_weight  = 0.0f;
+    float execute_ce_weight = 0.0f;
+    float stop_ce_weight = 0.0f;
 
     // NumberEncoder (numeric-meaning input path) config.
     // Digit-place contribution encoding per docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md.
@@ -1518,7 +1520,9 @@ inline void validateRootConfigDocument(
         validationField("execution_block_step_x_multiplier", &LanguageModelConfig::step_x_multiplier),
         validationField("execution_block_step_y_multiplier", &LanguageModelConfig::step_y_multiplier),
         validationField("execution_block_entropy_aux_weight", &LanguageModelConfig::entropy_aux_weight),
-        validationField("execution_block_final_slot_consistency_weight", &LanguageModelConfig::final_slot_consistency_weight)
+        validationField("execution_block_final_slot_consistency_weight", &LanguageModelConfig::final_slot_consistency_weight),
+        validationField("execution_block_execute_ce_weight", &LanguageModelConfig::execute_ce_weight),
+        validationField("execution_block_stop_ce_weight", &LanguageModelConfig::stop_ce_weight)
     }, caller);
     validatePositiveFiniteFields(params, {
         validationField("execution_block_value_match_epsilon", &LanguageModelConfig::value_match_epsilon)
@@ -1995,6 +1999,8 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_LEAF("execution_block_arg_reinforce_weight", arg_reinforce_weight);
     GRIM_LOAD_CONFIG_LEAF("execution_block_arg_reinforce_baseline_decay", arg_reinforce_baseline_decay);
     GRIM_LOAD_CONFIG_LEAF("execution_block_structured_ce_weight", structured_ce_weight);
+    GRIM_LOAD_CONFIG_LEAF("execution_block_execute_ce_weight", execute_ce_weight);
+    GRIM_LOAD_CONFIG_LEAF("execution_block_stop_ce_weight", stop_ce_weight);
     GRIM_LOAD_CONFIG_FIELD(number_encoder_enabled);
     GRIM_LOAD_CONFIG_FIELD(number_encoder_max_digit_slots);
     GRIM_LOAD_CONFIG_FIELD(number_encoder_d_hidden);
@@ -2350,6 +2356,8 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(arg_reinforce_baseline_decay);
     GRIM_WRITE_FINAL_CONFIG_FIELD(structured_ce_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(structured_ce_weight);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execute_ce_weight);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(stop_ce_weight);
     GRIM_WRITE_FINAL_CONFIG_FIELD(number_encoder_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(number_encoder_max_digit_slots);
     GRIM_WRITE_FINAL_CONFIG_FIELD(number_encoder_d_hidden);

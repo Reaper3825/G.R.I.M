@@ -22,6 +22,8 @@ struct ExecutionAuxiliaryLossSummary {
     float entropy_monitor = 0.0f;    // Monitoring-only entropy scalar; not added to loss_tensor
     int active_steps = 0;            // Active teacher/non-padded execution steps considered
     int scalar_loss_terms = 0;       // Scalar execution loss terms added before normalization
+    int execute_targets = 0;
+    int stop_targets = 0;
 };
 
 /**

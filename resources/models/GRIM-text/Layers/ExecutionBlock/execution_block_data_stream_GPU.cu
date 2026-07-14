@@ -11,6 +11,7 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 namespace GRIM::ExecutionBlockInternal {
 
 using GRIM::Forward::ExecutionBlockStepOutput;
+using GRIM::Forward::ExecutionGateOutput;
 using GRIM::Forward::ExecutionRecord;
 
 // ── Warp-level reduction primitives (all 32 threads must participate) ──
@@ -1357,6 +1358,56 @@ static void collectStepMetrics(const HyperParameters::ExecutionBlockConstruction
     cudaFree(d_buf);
 }
 
+void predictExecutionGateImpl(
+    const HyperParameters::ExecutionBlockConstructionHP& hp,
+    ExecutionBlockParameterTensors& parameters,
+    Tensor& H,
+    const Batching::BatchPayload& payload,
+    int batch_row,
+    cudaStream_t stream,
+    ExecutionGateOutput* output)
+{
+    if (!output) {
+        throw std::runtime_error("predictExecutionGateImpl: output is NULL");
+    }
+    if (batch_row < 0 || batch_row >= payload.batch_size) {
+        throw std::runtime_error("predictExecutionGateImpl: batch_row out of range");
+    }
+    if (payload.planner_query_positions.empty()) {
+        throw std::runtime_error("predictExecutionGateImpl: planner_query_positions is empty");
+    }
+
+    const int query_pos = payload.planner_query_positions[static_cast<size_t>(batch_row)];
+    const int row_tokens = payload.seq_lengths[static_cast<size_t>(batch_row)];
+    if (query_pos < 0 || query_pos >= row_tokens) {
+        throw std::runtime_error(
+            "predictExecutionGateImpl: planner query position out of row bounds");
+    }
+
+    const int dm = hp.d_model;
+    const int absolute_query = batch_row * payload.max_seq_len + query_pos;
+    Tensor query = Tensor::zeros({1, dm}, stream, "exec_gate_query");
+    query.requires_grad = true;
+    query.is_leaf = false;
+    kernelReduceMeanForward<<<(dm + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
+        query.data,
+        H.data + static_cast<size_t>(absolute_query) * dm,
+        1,
+        dm,
+        nullptr);
+    CUDA_CHECK_KERNEL();
+    {
+        auto gather_fn = std::make_shared<ReduceMeanGradFn>();
+        gather_fn->capture(H, payload.total_tokens, dm, stream, absolute_query, 1, nullptr);
+        query.grad_fn = gather_fn;
+    }
+
+    Tensor logits = autograd::matmul(query, parameters.W_execute, stream);
+    logits = autograd::add(logits, parameters.b_execute, stream);
+    output->probabilities = autograd::softmax(logits, 1.0f, stream);
+    output->logits = std::move(logits);
+}
+
 void executeStepCoordinatorImpl(
     const HyperParameters::ExecutionBlockConstructionHP& hp,
     ExecutionBlockDiagnosticsBuffers& diag,
@@ -1392,6 +1443,16 @@ void executeStepCoordinatorImpl(
     const int32_t* d_slot_map_row = bindings.d_token_to_slot_map
         + static_cast<size_t>(batch_row) * payload.max_seq_len;
     const int row_tokens = payload.seq_lengths[static_cast<size_t>(batch_row)];
+    if (payload.planner_prefix_lengths.empty()) {
+        throw std::runtime_error(
+            "executeStepCoordinatorImpl: planner_prefix_lengths is empty");
+    }
+    const int planner_prefix_tokens =
+        payload.planner_prefix_lengths[static_cast<size_t>(batch_row)];
+    if (planner_prefix_tokens <= 0 || planner_prefix_tokens > row_tokens) {
+        throw std::runtime_error(
+            "executeStepCoordinatorImpl: planner prefix length out of row bounds");
+    }
 
     // Row slice of the GLOBAL atom mask (BatchDeviceBindings). This is the
     // authoritative source of atom positions for this row: atom-slot validation
@@ -1421,13 +1482,13 @@ void executeStepCoordinatorImpl(
     kernelReduceMeanForward<<<(dm + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         work.context.data,
         H.data + static_cast<size_t>(batch_row) * payload.max_seq_len * dm,
-        row_tokens,
+        planner_prefix_tokens,
         dm,
         d_atom_mask_row);
     CUDA_CHECK_KERNEL();
     {
         auto mean_fn = std::make_shared<ReduceMeanGradFn>();
-        mean_fn->capture(H, payload.total_tokens, dm, stream, batch_row * payload.max_seq_len, row_tokens,
+        mean_fn->capture(H, payload.total_tokens, dm, stream, batch_row * payload.max_seq_len, planner_prefix_tokens,
                          d_atom_mask_row);
         work.context.grad_fn = mean_fn;
     }
@@ -1743,6 +1804,13 @@ void executeStepCoordinatorImpl(
     auto write_ctx_12 = autograd::concat(work.context_enriched, work.result_emb, stream);
     auto write_ctx_123 = autograd::concat(write_ctx_12, trace_state, stream);
     auto write_ctx = autograd::concat(write_ctx_123, work.step_emb, stream);
+
+    if (diag_out) {
+        Tensor stop_logits = autograd::matmul(write_ctx, params.W_stop, stream);
+        stop_logits = autograd::add(stop_logits, params.b_stop, stream);
+        diag_out->stop_probabilities = autograd::softmax(stop_logits, 1.0f, stream);
+        diag_out->stop_logits_tensor = std::move(stop_logits);
+    }
 
     auto q_write = autograd::matmul(write_ctx, params.W_write_query, stream);
 

@@ -84,6 +84,10 @@ BatchPayload makeInferenceBasePayload(
     payload.fits_in_cache = true;
 
     payload.execution_active.assign(1, row_execution_active);
+    payload.execution_gate_targets.assign(
+        1, GRIM::Execution::ExecutionGateTarget::IGNORE);
+    payload.planner_query_positions.assign(1, seq_len - 1);
+    payload.planner_prefix_lengths.assign(1, seq_len);
     payload.compiled_bootstrap_bindings.resize(1);
     payload.teacher_steps.resize(1);
     payload.teacher_step_mask.resize(1);
@@ -534,6 +538,9 @@ BatchPayload buildBatchPayload(
 
         // Compiled execution metadata (per-row, not per-token)
         bool execution_active;
+        GRIM::Execution::ExecutionGateTarget execution_gate_target;
+        int32_t planner_query_pos;
+        int32_t planner_prefix_length;
         const std::vector<GRIM::Execution::CompiledBootstrapBinding>* compiled_bootstrap_bindings;
         const std::vector<GRIM::Execution::TeacherStep>* teacher_steps;
     };
@@ -672,6 +679,9 @@ BatchPayload buildBatchPayload(
             exec_slots_ptr,
             seq_len,
             seq->execution_active,
+            seq->execution_gate_target,
+            seq->planner_query_pos,
+            seq->planner_prefix_length,
             &seq->compiled_bootstrap_bindings,
             &seq->teacher_steps
         });
@@ -751,6 +761,10 @@ BatchPayload buildBatchPayload(
 
     // Compiled execution metadata arrays — sized to batch_size
     payload.execution_active.resize(payload.batch_size, false);
+    payload.execution_gate_targets.resize(
+        payload.batch_size, GRIM::Execution::ExecutionGateTarget::IGNORE);
+    payload.planner_query_positions.resize(payload.batch_size, -1);
+    payload.planner_prefix_lengths.resize(payload.batch_size, 0);
     payload.compiled_bootstrap_bindings.resize(payload.batch_size);
     payload.teacher_steps.resize(payload.batch_size);
     payload.teacher_step_mask.resize(payload.batch_size);
@@ -836,6 +850,9 @@ BatchPayload buildBatchPayload(
 
         // Compiled execution metadata (per-row)
         payload.execution_active[b] = r.execution_active;
+        payload.execution_gate_targets[b] = r.execution_gate_target;
+        payload.planner_query_positions[b] = r.planner_query_pos;
+        payload.planner_prefix_lengths[b] = r.planner_prefix_length;
         if (r.compiled_bootstrap_bindings && !r.compiled_bootstrap_bindings->empty()) {
             payload.compiled_bootstrap_bindings[b] = *r.compiled_bootstrap_bindings;
         }

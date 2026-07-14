@@ -125,6 +125,7 @@ inline void provisionExecutionForwardRuntime(
     for (int b = 0; b < batch_size; ++b) {
         const size_t row = static_cast<size_t>(b);
         execution_runtime.execution_trace_by_row[row].clear();
+        forward_outputs.exec_outputs_per_row[row].gate = ExecutionGateOutput();
         forward_outputs.exec_outputs_per_row[row].steps.clear();
         auto& row_memory = forward_outputs.exec_memories[row];
 

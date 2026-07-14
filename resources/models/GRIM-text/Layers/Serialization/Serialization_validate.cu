@@ -321,6 +321,10 @@ bool validate_checkpoint_capabilities(
         ok = ok && eb_field(fb_eb->w_o_read_data(), eb.W_O_read, "EB W_O_read");
         ok = ok && eb_field(fb_eb->w_gate_read_data(), eb.W_gate_read, "EB W_gate_read");
         ok = ok && eb_field(fb_eb->tau_data(), eb.tau, "EB tau");
+        ok = ok && eb_field(fb_eb->w_execute_data(), eb.W_execute, "EB W_execute");
+        ok = ok && eb_field(fb_eb->b_execute_data(), eb.b_execute, "EB b_execute");
+        ok = ok && eb_field(fb_eb->w_stop_data(), eb.W_stop, "EB W_stop");
+        ok = ok && eb_field(fb_eb->b_stop_data(), eb.b_stop, "EB b_stop");
         if (!ok) return false;
     }
 

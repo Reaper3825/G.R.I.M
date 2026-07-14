@@ -23,6 +23,26 @@ namespace GRIM {
 namespace Execution {
 
 // =============================================================================
+// ExecutionGateTarget — supervised activation label
+//
+// IGNORE is intentionally distinct from NOOP. Ordinary plaintext rows often
+// have no authored execution trace, but absence of annotation is not evidence
+// that execution is unnecessary. Only explicitly-labelled negatives may use
+// NOOP; verified structured programs use EXECUTE.
+// =============================================================================
+enum class ExecutionGateTarget : int8_t {
+    IGNORE = -1,
+    NOOP = 0,
+    EXECUTE = 1
+};
+
+inline bool isValidExecutionGateTarget(ExecutionGateTarget target) {
+    return target == ExecutionGateTarget::IGNORE
+        || target == ExecutionGateTarget::NOOP
+        || target == ExecutionGateTarget::EXECUTE;
+}
+
+// =============================================================================
 // TeacherStep — per-step ground truth for execution supervision
 //
 // This is the execution supervision projection of the canonical
@@ -95,6 +115,7 @@ struct BootstrapLiteralBinding {
 // =============================================================================
 struct StructuredExecutionRecord {
     bool execution_active = false;
+    ExecutionGateTarget execution_gate_target = ExecutionGateTarget::IGNORE;
 
     // Bootstrap literal bindings — define which literals seed which registers
     std::vector<BootstrapLiteralBinding> bootstrap_bindings;
@@ -137,6 +158,13 @@ struct StructuredExecutionRecord {
 // =============================================================================
 struct CompiledStructuredExecutionPayload {
     bool execution_active = false;
+    ExecutionGateTarget execution_gate_target = ExecutionGateTarget::IGNORE;
+
+    // Prefix-only planner observation boundary. Positions are row-relative.
+    // A supervised gate target requires planner_prefix_length > 0 and
+    // planner_query_pos == planner_prefix_length - 1.
+    int32_t planner_query_pos = -1;
+    int32_t planner_prefix_length = 0;
 
     // Runtime binding projection: per-token slot assignment
     // token_exec_slots[pos] >= 0 means state-bearing, -1 means non-state-bearing

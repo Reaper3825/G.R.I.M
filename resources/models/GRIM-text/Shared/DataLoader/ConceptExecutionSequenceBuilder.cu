@@ -41,6 +41,33 @@ namespace DataLoader {
 
 namespace {
 
+Execution::ExecutionGateTarget parseExecutionGateTarget(const json& j, bool execution_active) {
+    if (execution_active) {
+        return Execution::ExecutionGateTarget::EXECUTE;
+    }
+
+    if (!j.contains("execution_gate_target")) {
+        return Execution::ExecutionGateTarget::IGNORE;
+    }
+    if (!j["execution_gate_target"].is_string()) {
+        throw std::runtime_error(
+            "parseExecutionGateTarget: execution_gate_target must be a string: "
+            "\"noop\", \"execute\", or \"ignore\"");
+    }
+
+    std::string value = j["execution_gate_target"].get<std::string>();
+    std::transform(value.begin(), value.end(), value.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (value == "noop") return Execution::ExecutionGateTarget::NOOP;
+    if (value == "ignore") return Execution::ExecutionGateTarget::IGNORE;
+    if (value == "execute") {
+        throw std::runtime_error(
+            "parseExecutionGateTarget: execution_gate_target=execute requires an authored execution program");
+    }
+    throw std::runtime_error(
+        "parseExecutionGateTarget: unknown execution_gate_target=\"" + value + "\"");
+}
+
 std::string formatNumber(double x) {
     if (x == std::floor(x) && std::fabs(x) < 1e12)
         return std::to_string(static_cast<long long>(x));
@@ -92,9 +119,14 @@ compileExecutionPayload(
     const std::string& rendered_text,
     const std::vector<int>& token_ids,
     const std::vector<const Tokenizer::StructuralSpan*>& token_to_span,
-    int seq_len)
+    int seq_len,
+    int planner_query_pos,
+    int planner_prefix_length)
 {
     Execution::CompiledStructuredExecutionPayload payload;
+    payload.execution_gate_target = record.execution_gate_target;
+    payload.planner_query_pos = planner_query_pos;
+    payload.planner_prefix_length = planner_prefix_length;
 
     if (!record.execution_active) {
         payload.execution_active = false;
@@ -243,8 +275,10 @@ CanonicalRenderResult renderWithSpans(const json& j) {
     // It is metadata only (filtering, UI, concept-block identity).
     // Tokenizing it leaks IDs / labels into the training signal.
 
-    if (j.contains("question") && j["question"].is_string() && !j["question"].get<std::string>().empty())
+    if (j.contains("question") && j["question"].is_string() && !j["question"].get<std::string>().empty()) {
         os << "Q: " << j["question"].get<std::string>() << "\n";
+        result.planner_prefix_byte_end = static_cast<size_t>(os.tellp());
+    }
 
     if (j.contains("state_0") && j["state_0"].is_object()) {
         const auto& s0 = j["state_0"];
@@ -375,6 +409,7 @@ buildStructuredExecutionRecord(const json& j, int base_slot) {
 
     if (!has_state0 && !has_execution) {
         record.execution_active = false;
+        record.execution_gate_target = parseExecutionGateTarget(j, false);
         return record;
     }
 
@@ -385,6 +420,7 @@ buildStructuredExecutionRecord(const json& j, int base_slot) {
     }
 
     record.execution_active = true;
+    record.execution_gate_target = Execution::ExecutionGateTarget::EXECUTE;
 
     // ── Bootstrap bindings from state_0.atoms ──
     const auto& atoms = j["state_0"]["atoms"];
@@ -557,8 +593,26 @@ ConceptBuildResult buildConceptSequence(
         }
     }
 
+    int planner_prefix_length = 0;
+    int planner_query_pos = -1;
+    if (render.planner_prefix_byte_end > 0) {
+        const std::string planner_prefix =
+            result.canonical_text.substr(0, render.planner_prefix_byte_end);
+        auto prefix_encoded = tokenizer.tokenizeWithMetadata(planner_prefix);
+        planner_prefix_length = static_cast<int>(prefix_encoded.token_ids.size());
+        planner_query_pos = planner_prefix_length - 1;
+    }
+    if (result.record.execution_gate_target != Execution::ExecutionGateTarget::IGNORE
+        && planner_prefix_length <= 0) {
+        throw std::runtime_error(
+            "buildConceptSequence: supervised execution gate target requires a non-empty question prefix");
+    }
+
     if (!result.record.execution_active) {
         result.payload.execution_active = false;
+        result.payload.execution_gate_target = result.record.execution_gate_target;
+        result.payload.planner_prefix_length = planner_prefix_length;
+        result.payload.planner_query_pos = planner_query_pos;
         return result;
     }
 
@@ -570,6 +624,10 @@ ConceptBuildResult buildConceptSequence(
     }
 
     const int seq_len = static_cast<int>(encoded.token_ids.size());
+    if (planner_prefix_length > seq_len) {
+        throw std::runtime_error(
+            "buildConceptSequence: planner prefix token count exceeds full sequence length");
+    }
 
     // 4. Build token-position → StructuralSpan correlation.
     //    The encoder pushes to result.atoms in the same order as atom tokens
@@ -603,7 +661,9 @@ ConceptBuildResult buildConceptSequence(
         result.canonical_text,
         encoded.token_ids,
         token_to_span,
-        seq_len);
+        seq_len,
+        planner_query_pos,
+        planner_prefix_length);
 
     return result;
 }

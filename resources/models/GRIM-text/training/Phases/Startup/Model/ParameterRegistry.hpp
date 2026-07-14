@@ -114,6 +114,10 @@ struct ExecutionBlockParameterTensors {
     Tensor b_trace;
     Tensor W_reason_gate;
     Tensor W_trace_gate;
+    Tensor W_execute;
+    Tensor b_execute;
+    Tensor W_stop;
+    Tensor b_stop;
 };
 
 struct EncodingLayerParameterTensors {
@@ -391,7 +395,7 @@ inline constexpr std::array<SelectorTensorParameterSpec, 1>
          GRIM::ParamGroupType::ARG_SELECTOR, GRIM::ParamStatsBucket::ENCODER},
     }};
 
-inline constexpr std::array<ExecutionBlockTensorParameterSpec, 30>
+inline constexpr std::array<ExecutionBlockTensorParameterSpec, 34>
     kExecutionBlockTensorParameters = {{
         {"exec_block_w_decode_1", &GRIM::ExecutionBlockParameterTensors::w_decode_1,
          GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
@@ -452,6 +456,14 @@ inline constexpr std::array<ExecutionBlockTensorParameterSpec, 30>
         {"exec_block_W_reason_gate", &GRIM::ExecutionBlockParameterTensors::W_reason_gate,
          GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
         {"exec_block_W_trace_gate", &GRIM::ExecutionBlockParameterTensors::W_trace_gate,
+         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
+        {"exec_block_W_execute", &GRIM::ExecutionBlockParameterTensors::W_execute,
+         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
+        {"exec_block_b_execute", &GRIM::ExecutionBlockParameterTensors::b_execute,
+         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
+        {"exec_block_W_stop", &GRIM::ExecutionBlockParameterTensors::W_stop,
+         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
+        {"exec_block_b_stop", &GRIM::ExecutionBlockParameterTensors::b_stop,
          GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
     }};
 

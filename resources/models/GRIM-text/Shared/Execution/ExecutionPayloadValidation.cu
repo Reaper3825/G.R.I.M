@@ -41,6 +41,21 @@ void validateExecutionPayload(
             std::to_string(payload.execution_active.size()) +
             " != batch_size=" + std::to_string(B));
     }
+    if (!payload.execution_gate_targets.empty() &&
+        static_cast<int>(payload.execution_gate_targets.size()) != B) {
+        throw std::runtime_error(
+            tag + ": execution_gate_targets.size() must equal batch_size");
+    }
+    if (!payload.planner_query_positions.empty() &&
+        static_cast<int>(payload.planner_query_positions.size()) != B) {
+        throw std::runtime_error(
+            tag + ": planner_query_positions.size() must equal batch_size");
+    }
+    if (!payload.planner_prefix_lengths.empty() &&
+        static_cast<int>(payload.planner_prefix_lengths.size()) != B) {
+        throw std::runtime_error(
+            tag + ": planner_prefix_lengths.size() must equal batch_size");
+    }
     if (!payload.compiled_bootstrap_bindings.empty() &&
         static_cast<int>(payload.compiled_bootstrap_bindings.size()) != B) {
         throw std::runtime_error(
@@ -74,6 +89,35 @@ void validateExecutionPayload(
             return tag + ": row " + std::to_string(b) + " " + detail;
         };
 
+        const auto gate_target = payload.execution_gate_targets.empty()
+            ? ExecutionGateTarget::IGNORE
+            : payload.execution_gate_targets[b];
+        if (!isValidExecutionGateTarget(gate_target)) {
+            throw std::runtime_error(row_tag("has invalid execution gate target"));
+        }
+        const int prefix_length = payload.planner_prefix_lengths.empty()
+            ? 0 : payload.planner_prefix_lengths[b];
+        const int query_pos = payload.planner_query_positions.empty()
+            ? -1 : payload.planner_query_positions[b];
+        if (gate_target != ExecutionGateTarget::IGNORE || active) {
+            if (prefix_length <= 0 || prefix_length > payload.seq_lengths[b]) {
+                throw std::runtime_error(row_tag(
+                    "has invalid supervised planner_prefix_length=" +
+                    std::to_string(prefix_length)));
+            }
+            if (query_pos != prefix_length - 1) {
+                throw std::runtime_error(row_tag(
+                    "planner_query_pos must equal planner_prefix_length - 1"));
+            }
+        }
+        if (active && gate_target != ExecutionGateTarget::EXECUTE) {
+            throw std::runtime_error(row_tag(
+                "execution_active=true requires EXECUTE gate target"));
+        }
+        if (!active && gate_target == ExecutionGateTarget::EXECUTE) {
+            throw std::runtime_error(row_tag(
+                "EXECUTE gate target requires execution_active=true"));
+        }
         // Access per-row data (safe — sizes checked above)
         const auto& cbb = payload.compiled_bootstrap_bindings.empty()
             ? std::vector<CompiledBootstrapBinding>{}

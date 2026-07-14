@@ -105,6 +105,8 @@ struct GradientVerificationActivity {
     bool exec_op_loss_active = false;
     bool exec_arg_loss_active = false;
     bool exec_write_selection_ce_active = false;
+    bool exec_execute_ce_active = false;
+    bool exec_stop_ce_active = false;
 };
 
 struct GradientSignalBaselines {
@@ -269,6 +271,8 @@ GradientVerificationActivity detectGradientVerificationActivity(AutogradContext&
         activity.exec_op_loss_active = loss_state.exec_op_ce_added;
         activity.exec_arg_loss_active = loss_state.exec_arg_ce_added;
         activity.exec_write_selection_ce_active = loss_state.exec_write_ce_added;
+        activity.exec_execute_ce_active = loss_state.exec_execute_ce_added;
+        activity.exec_stop_ce_active = loss_state.exec_stop_ce_added;
     }
     return activity;
 }
@@ -325,6 +329,12 @@ GradientSignalBaselines captureGradientVerificationBaselines(
         }
         if (activity.exec_write_selection_ce_active) {
             captureExpected(execution_block_parameters->W_write_query, "exec block W_write_query");
+        }
+        if (activity.exec_execute_ce_active) {
+            captureExpected(execution_block_parameters->W_execute, "exec block W_execute");
+        }
+        if (activity.exec_stop_ce_active) {
+            captureExpected(execution_block_parameters->W_stop, "exec block W_stop");
         }
     }
 
@@ -978,6 +988,10 @@ bool verifyGradientsAreConnectedImpl(
         checkEB(eb.b_trace, "b_trace");
         checkEB(eb.W_reason_gate, "W_reason_gate");
         checkEB(eb.W_trace_gate, "W_trace_gate");
+        checkEB(eb.W_execute, "W_execute");
+        checkEB(eb.b_execute, "b_execute");
+        checkEB(eb.W_stop, "W_stop");
+        checkEB(eb.b_stop, "b_stop");
         if (activity.exec_op_loss_active) {
             requireReceivedGradient(eb.W_op_select, "exec block W_op_select");
         }
@@ -987,6 +1001,12 @@ bool verifyGradientsAreConnectedImpl(
         }
         if (activity.exec_write_selection_ce_active) {
             requireReceivedGradient(eb.W_write_query, "exec block W_write_query");
+        }
+        if (activity.exec_execute_ce_active) {
+            requireReceivedGradient(eb.W_execute, "exec block W_execute");
+        }
+        if (activity.exec_stop_ce_active) {
+            requireReceivedGradient(eb.W_stop, "exec block W_stop");
         }
     }
     

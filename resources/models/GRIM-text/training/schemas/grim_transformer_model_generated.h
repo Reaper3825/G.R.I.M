@@ -1550,9 +1550,13 @@ struct ExecutionBlockWeightsT : public ::flatbuffers::NativeTable {
   std::vector<float> b_trace_data{};
   std::vector<float> w_reason_gate_data{};
   std::vector<float> w_trace_gate_data{};
+  std::vector<float> w_execute_data{};
+  std::vector<float> b_execute_data{};
+  std::vector<float> w_stop_data{};
+  std::vector<float> b_stop_data{};
 };
 
-/// Execution block v2 (softmax selections, 4 ops, linear value embedding, inject path).
+/// Execution block v3 (v2 core plus execute/noop and stop/continue control heads).
 struct ExecutionBlockWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef ExecutionBlockWeightsT NativeTableType;
   typedef ExecutionBlockWeightsBuilder Builder;
@@ -1586,7 +1590,11 @@ struct ExecutionBlockWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Ta
     VT_W_TRACE_DATA = 56,
     VT_B_TRACE_DATA = 58,
     VT_W_REASON_GATE_DATA = 60,
-    VT_W_TRACE_GATE_DATA = 62
+    VT_W_TRACE_GATE_DATA = 62,
+    VT_W_EXECUTE_DATA = 64,
+    VT_B_EXECUTE_DATA = 66,
+    VT_W_STOP_DATA = 68,
+    VT_B_STOP_DATA = 70
   };
   const ::flatbuffers::Vector<float> *w_decode_1_data() const {
     return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_DECODE_1_DATA);
@@ -1678,6 +1686,18 @@ struct ExecutionBlockWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Ta
   const ::flatbuffers::Vector<float> *w_trace_gate_data() const {
     return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_TRACE_GATE_DATA);
   }
+  const ::flatbuffers::Vector<float> *w_execute_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_EXECUTE_DATA);
+  }
+  const ::flatbuffers::Vector<float> *b_execute_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_B_EXECUTE_DATA);
+  }
+  const ::flatbuffers::Vector<float> *w_stop_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_STOP_DATA);
+  }
+  const ::flatbuffers::Vector<float> *b_stop_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_B_STOP_DATA);
+  }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffset(verifier, VT_W_DECODE_1_DATA) &&
@@ -1740,6 +1760,14 @@ struct ExecutionBlockWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Ta
            verifier.VerifyVector(w_reason_gate_data()) &&
            VerifyOffset(verifier, VT_W_TRACE_GATE_DATA) &&
            verifier.VerifyVector(w_trace_gate_data()) &&
+           VerifyOffset(verifier, VT_W_EXECUTE_DATA) &&
+           verifier.VerifyVector(w_execute_data()) &&
+           VerifyOffset(verifier, VT_B_EXECUTE_DATA) &&
+           verifier.VerifyVector(b_execute_data()) &&
+           VerifyOffset(verifier, VT_W_STOP_DATA) &&
+           verifier.VerifyVector(w_stop_data()) &&
+           VerifyOffset(verifier, VT_B_STOP_DATA) &&
+           verifier.VerifyVector(b_stop_data()) &&
            verifier.EndTable();
   }
   ExecutionBlockWeightsT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
@@ -1841,6 +1869,18 @@ struct ExecutionBlockWeightsBuilder {
   void add_w_trace_gate_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> w_trace_gate_data) {
     fbb_.AddOffset(ExecutionBlockWeights::VT_W_TRACE_GATE_DATA, w_trace_gate_data);
   }
+  void add_w_execute_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> w_execute_data) {
+    fbb_.AddOffset(ExecutionBlockWeights::VT_W_EXECUTE_DATA, w_execute_data);
+  }
+  void add_b_execute_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> b_execute_data) {
+    fbb_.AddOffset(ExecutionBlockWeights::VT_B_EXECUTE_DATA, b_execute_data);
+  }
+  void add_w_stop_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> w_stop_data) {
+    fbb_.AddOffset(ExecutionBlockWeights::VT_W_STOP_DATA, w_stop_data);
+  }
+  void add_b_stop_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> b_stop_data) {
+    fbb_.AddOffset(ExecutionBlockWeights::VT_B_STOP_DATA, b_stop_data);
+  }
   explicit ExecutionBlockWeightsBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -1883,8 +1923,16 @@ inline ::flatbuffers::Offset<ExecutionBlockWeights> CreateExecutionBlockWeights(
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_trace_data = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> b_trace_data = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_reason_gate_data = 0,
-    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_trace_gate_data = 0) {
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_trace_gate_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_execute_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> b_execute_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_stop_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> b_stop_data = 0) {
   ExecutionBlockWeightsBuilder builder_(_fbb);
+  builder_.add_b_stop_data(b_stop_data);
+  builder_.add_w_stop_data(w_stop_data);
+  builder_.add_b_execute_data(b_execute_data);
+  builder_.add_w_execute_data(w_execute_data);
   builder_.add_w_trace_gate_data(w_trace_gate_data);
   builder_.add_w_reason_gate_data(w_reason_gate_data);
   builder_.add_b_trace_data(b_trace_data);
@@ -1949,7 +1997,11 @@ inline ::flatbuffers::Offset<ExecutionBlockWeights> CreateExecutionBlockWeightsD
     const std::vector<float> *w_trace_data = nullptr,
     const std::vector<float> *b_trace_data = nullptr,
     const std::vector<float> *w_reason_gate_data = nullptr,
-    const std::vector<float> *w_trace_gate_data = nullptr) {
+    const std::vector<float> *w_trace_gate_data = nullptr,
+    const std::vector<float> *w_execute_data = nullptr,
+    const std::vector<float> *b_execute_data = nullptr,
+    const std::vector<float> *w_stop_data = nullptr,
+    const std::vector<float> *b_stop_data = nullptr) {
   auto w_decode_1_data__ = w_decode_1_data ? _fbb.CreateVector<float>(*w_decode_1_data) : 0;
   auto b_decode_1_data__ = b_decode_1_data ? _fbb.CreateVector<float>(*b_decode_1_data) : 0;
   auto w_decode_2_data__ = w_decode_2_data ? _fbb.CreateVector<float>(*w_decode_2_data) : 0;
@@ -1980,6 +2032,10 @@ inline ::flatbuffers::Offset<ExecutionBlockWeights> CreateExecutionBlockWeightsD
   auto b_trace_data__ = b_trace_data ? _fbb.CreateVector<float>(*b_trace_data) : 0;
   auto w_reason_gate_data__ = w_reason_gate_data ? _fbb.CreateVector<float>(*w_reason_gate_data) : 0;
   auto w_trace_gate_data__ = w_trace_gate_data ? _fbb.CreateVector<float>(*w_trace_gate_data) : 0;
+  auto w_execute_data__ = w_execute_data ? _fbb.CreateVector<float>(*w_execute_data) : 0;
+  auto b_execute_data__ = b_execute_data ? _fbb.CreateVector<float>(*b_execute_data) : 0;
+  auto w_stop_data__ = w_stop_data ? _fbb.CreateVector<float>(*w_stop_data) : 0;
+  auto b_stop_data__ = b_stop_data ? _fbb.CreateVector<float>(*b_stop_data) : 0;
   return GRIMTransformer::CreateExecutionBlockWeights(
       _fbb,
       w_decode_1_data__,
@@ -2011,7 +2067,11 @@ inline ::flatbuffers::Offset<ExecutionBlockWeights> CreateExecutionBlockWeightsD
       w_trace_data__,
       b_trace_data__,
       w_reason_gate_data__,
-      w_trace_gate_data__);
+      w_trace_gate_data__,
+      w_execute_data__,
+      b_execute_data__,
+      w_stop_data__,
+      b_stop_data__);
 }
 
 ::flatbuffers::Offset<ExecutionBlockWeights> CreateExecutionBlockWeights(::flatbuffers::FlatBufferBuilder &_fbb, const ExecutionBlockWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
@@ -3900,6 +3960,10 @@ inline void ExecutionBlockWeights::UnPackTo(ExecutionBlockWeightsT *_o, const ::
   { auto _e = b_trace_data(); if (_e) { _o->b_trace_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->b_trace_data[_i] = _e->Get(_i); } } else { _o->b_trace_data.resize(0); } }
   { auto _e = w_reason_gate_data(); if (_e) { _o->w_reason_gate_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_reason_gate_data[_i] = _e->Get(_i); } } else { _o->w_reason_gate_data.resize(0); } }
   { auto _e = w_trace_gate_data(); if (_e) { _o->w_trace_gate_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_trace_gate_data[_i] = _e->Get(_i); } } else { _o->w_trace_gate_data.resize(0); } }
+  { auto _e = w_execute_data(); if (_e) { _o->w_execute_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_execute_data[_i] = _e->Get(_i); } } else { _o->w_execute_data.resize(0); } }
+  { auto _e = b_execute_data(); if (_e) { _o->b_execute_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->b_execute_data[_i] = _e->Get(_i); } } else { _o->b_execute_data.resize(0); } }
+  { auto _e = w_stop_data(); if (_e) { _o->w_stop_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_stop_data[_i] = _e->Get(_i); } } else { _o->w_stop_data.resize(0); } }
+  { auto _e = b_stop_data(); if (_e) { _o->b_stop_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->b_stop_data[_i] = _e->Get(_i); } } else { _o->b_stop_data.resize(0); } }
 }
 
 inline ::flatbuffers::Offset<ExecutionBlockWeights> ExecutionBlockWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ExecutionBlockWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
@@ -3940,6 +4004,10 @@ inline ::flatbuffers::Offset<ExecutionBlockWeights> CreateExecutionBlockWeights(
   auto _b_trace_data = _o->b_trace_data.size() ? _fbb.CreateVector(_o->b_trace_data) : 0;
   auto _w_reason_gate_data = _o->w_reason_gate_data.size() ? _fbb.CreateVector(_o->w_reason_gate_data) : 0;
   auto _w_trace_gate_data = _o->w_trace_gate_data.size() ? _fbb.CreateVector(_o->w_trace_gate_data) : 0;
+  auto _w_execute_data = _o->w_execute_data.size() ? _fbb.CreateVector(_o->w_execute_data) : 0;
+  auto _b_execute_data = _o->b_execute_data.size() ? _fbb.CreateVector(_o->b_execute_data) : 0;
+  auto _w_stop_data = _o->w_stop_data.size() ? _fbb.CreateVector(_o->w_stop_data) : 0;
+  auto _b_stop_data = _o->b_stop_data.size() ? _fbb.CreateVector(_o->b_stop_data) : 0;
   return GRIMTransformer::CreateExecutionBlockWeights(
       _fbb,
       _w_decode_1_data,
@@ -3971,7 +4039,11 @@ inline ::flatbuffers::Offset<ExecutionBlockWeights> CreateExecutionBlockWeights(
       _w_trace_data,
       _b_trace_data,
       _w_reason_gate_data,
-      _w_trace_gate_data);
+      _w_trace_gate_data,
+      _w_execute_data,
+      _b_execute_data,
+      _w_stop_data,
+      _b_stop_data);
 }
 
 inline LatentTrajectoryPresetWeightsT *LatentTrajectoryPresetWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {

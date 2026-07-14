@@ -780,6 +780,20 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                     const bool row_exec_active = !payload.execution_active.empty()
                         && payload.execution_active[b];
 
+                    const bool gate_supervised = !payload.execution_gate_targets.empty()
+                        && payload.execution_gate_targets[b]
+                            != Execution::ExecutionGateTarget::IGNORE;
+                    if (gate_supervised) {
+                        GRIM::executionBlockPredictGate(
+                            execution_hp,
+                            layer_output,
+                            *execution_block_parameters,
+                            payload,
+                            b,
+                            request.stream,
+                            &forward_outputs.exec_outputs_per_row[b].gate);
+                    }
+
                     if (!row_exec_active) continue;
 
                     auto& M_b = forward_outputs.exec_memories[b];
@@ -802,7 +816,33 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                         request.bindings->d_token_to_slot_map + tok_off,
                         row_len, request.stream);
 
+                    if (payload.teacher_step_mask.empty()
+                        || static_cast<int>(payload.teacher_step_mask.size()) <= b) {
+                        throw std::runtime_error(
+                            "ModelForward: execution-active row has no teacher_step_mask");
+                    }
+                    const auto& step_mask = payload.teacher_step_mask[b];
+                    int real_step_count = 0;
+                    bool saw_padding = false;
                     for (int step = 0; step < exec_K; ++step) {
+                        const bool is_real = step < static_cast<int>(step_mask.size())
+                            && step_mask[static_cast<size_t>(step)] != 0;
+                        if (!is_real) {
+                            saw_padding = true;
+                            continue;
+                        }
+                        if (saw_padding) {
+                            throw std::runtime_error(
+                                "ModelForward: teacher_step_mask must contain a contiguous real-step prefix");
+                        }
+                        ++real_step_count;
+                    }
+                    if (real_step_count <= 0) {
+                        throw std::runtime_error(
+                            "ModelForward: execution-active row has zero real teacher steps");
+                    }
+
+                    for (int step = 0; step < real_step_count; ++step) {
                         ExecutionBlockStepOutput step_diag;
 
                         GRIM::executionBlockStep(

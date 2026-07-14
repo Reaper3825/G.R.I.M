@@ -135,6 +135,10 @@ struct SerializationExecutionBlockReadView {
 	DeviceReadView b_trace;
 	DeviceReadView W_reason_gate;
 	DeviceReadView W_trace_gate;
+	DeviceReadView W_execute;
+	DeviceReadView b_execute;
+	DeviceReadView W_stop;
+	DeviceReadView b_stop;
 	bool enabled = false;
 };
 
@@ -169,6 +173,10 @@ struct SerializationExecutionBlockWriteView {
 	DeviceWriteView b_trace;
 	DeviceWriteView W_reason_gate;
 	DeviceWriteView W_trace_gate;
+	DeviceWriteView W_execute;
+	DeviceWriteView b_execute;
+	DeviceWriteView W_stop;
+	DeviceWriteView b_stop;
 };
 
 struct SerializationNumberEncoderReadView {

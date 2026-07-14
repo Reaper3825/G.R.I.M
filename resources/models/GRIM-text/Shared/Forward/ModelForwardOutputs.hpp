@@ -49,6 +49,11 @@ struct ExecutionRecord {
     float value_after = 0.0f;
 };
 
+struct ExecutionGateOutput {
+    Tensor logits;         // [1, 2], class 0=NOOP, class 1=EXECUTE
+    Tensor probabilities;  // [1, 2]
+};
+
 struct ExecutionBlockStepOutput {
     Tensor p_arg1;      // [1, V_val] softmax over value slots [S..V-1] only (detached)
     Tensor p_arg2;      // [1, V_val]
@@ -69,11 +74,14 @@ struct ExecutionBlockStepOutput {
     Tensor op_logits_tensor;       // [1, num_ops] live logits for op CE / div penalty
     Tensor write_logits_tensor;    // [1, V] live logits for write-slot CE
     Tensor v_out_tensor;           // [1, 1] live scalar result for transition/div-magnitude loss
+    Tensor stop_logits_tensor;      // [1, 2], class 0=CONTINUE, class 1=STOP
+    Tensor stop_probabilities;      // [1, 2]
     float selection_temperature = 0.0f;
     bool div_was_clamped = false;
 };
 
 struct ExecutionBlockOutput {
+    ExecutionGateOutput gate;
     std::vector<ExecutionBlockStepOutput> steps;
 };
 
@@ -106,6 +114,7 @@ private:
 
     static void resetExecutionOutputVectorPreserveGeometry(std::vector<ExecutionBlockOutput>& outputs) {
         for (auto& output : outputs) {
+            output.gate = ExecutionGateOutput();
             for (auto& step : output.steps) {
                 step = ExecutionBlockStepOutput();
             }

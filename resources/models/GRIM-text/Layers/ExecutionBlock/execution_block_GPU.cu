@@ -22,6 +22,22 @@ using namespace ExecutionBlockInternal;
 using Forward::ExecutionBlockStepOutput;
 using Forward::ExecutionRecord;
 
+void executionBlockPredictGate(
+    const HyperParameters::ExecutionBlockConstructionHP& hp,
+    Tensor& H,
+    ExecutionBlockParameterTensors& parameters,
+    const Batching::BatchPayload& payload,
+    int batch_row,
+    cudaStream_t stream,
+    Forward::ExecutionGateOutput* output)
+{
+    EXEC_CHECK_SHAPE2(H, "H (execution gate)", payload.total_tokens, hp.d_model);
+    EXEC_CHECK(batch_row >= 0 && batch_row < payload.batch_size,
+               "execution gate batch_row out of range");
+    EXEC_CHECK(output != nullptr, "execution gate output is NULL");
+    predictExecutionGateImpl(hp, parameters, H, payload, batch_row, stream, output);
+}
+
 //======================================================//
 //  Thin-coordinator local kernel
 //======================================================//

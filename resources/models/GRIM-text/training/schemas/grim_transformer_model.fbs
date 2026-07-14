@@ -110,7 +110,7 @@ table ReasoningHeadWeights {
   d_total: uint32;
 }
 
-/// Execution block v2 (softmax selections, 4 ops, linear value embedding, inject path).
+/// Execution block v3 (v2 core plus execute/noop and stop/continue control heads).
 table ExecutionBlockWeights {
   w_decode_1_data: [float];
   b_decode_1_data: [float];
@@ -142,6 +142,10 @@ table ExecutionBlockWeights {
   b_trace_data: [float];
   w_reason_gate_data: [float];
   w_trace_gate_data: [float];
+  w_execute_data: [float];
+  b_execute_data: [float];
+  w_stop_data: [float];
+  b_stop_data: [float];
 }
 
 table LatentTrajectoryPresetWeights {

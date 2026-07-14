@@ -44,6 +44,12 @@ void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
             // Remap compiled_bootstrap_bindings token_pos to match.
             for (auto& b : seq.compiled_bootstrap_bindings)
                 b.token_pos += 1;
+            if (seq.planner_query_pos >= 0) {
+                seq.planner_query_pos += 1;
+            }
+            if (seq.planner_prefix_length > 0) {
+                seq.planner_prefix_length += 1;
+            }
             added_bos_out++;
         }
 
@@ -112,12 +118,13 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
 
         // Execution-active rows MUST NOT be fragmented — compiled_bootstrap_bindings
         // and teacher_steps are whole-sequence structures with no windowing semantics.
-        if (seq.execution_active) {
+        if (seq.execution_active ||
+            seq.execution_gate_target != GRIM::Execution::ExecutionGateTarget::IGNORE) {
             throw std::runtime_error(
-                "Execution-active sequence exceeds max_seq_len (" +
+                "Execution-control-supervised sequence exceeds max_seq_len (" +
                 std::to_string(seq.token_ids.size()) + " > " +
                 std::to_string(max_seq_len) +
-                "). Execution rows cannot be split by sliding window. "
+                "). Execution-control rows cannot be split by sliding window. "
                 "Increase max_seq_len or shorten the source data.");
         }
 

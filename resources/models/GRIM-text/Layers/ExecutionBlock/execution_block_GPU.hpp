@@ -32,6 +32,7 @@ namespace Batching { struct BatchPayload; struct BatchDeviceBindings; }
 namespace Forward {
 struct ExecStepMetrics;
 struct ExecutionRecord;
+struct ExecutionGateOutput;
 struct ExecutionBlockStepOutput;
 struct ExecutionBlockOutput;
 }
@@ -125,6 +126,18 @@ private:
 //  ExecutionBlockDiagnosticsBuffers (durable REINFORCE baseline + per-step
 //  workspace) where the step machinery needs one.
 //======================================================//
+
+//--------------------------------------------------//
+// Activation control head. Reads only the row-relative planner query token.
+//--------------------------------------------------//
+void executionBlockPredictGate(
+    const HyperParameters::ExecutionBlockConstructionHP& hp,
+    Tensor& H,
+    ExecutionBlockParameterTensors& parameters,
+    const Batching::BatchPayload& payload,
+    int batch_row,
+    cudaStream_t stream,
+    Forward::ExecutionGateOutput* output);
 
 //--------------------------------------------------//
 // Forward: one execution step — mutates H and M

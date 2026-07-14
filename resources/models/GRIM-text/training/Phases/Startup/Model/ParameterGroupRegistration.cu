@@ -1246,6 +1246,10 @@ void initializeExecutionBlockParameterTensors(
     }
     params.W_reason_gate = make_param(2 * dm, dm, weight_init_seed + 20, "exec_block.W_reason_gate");
     params.W_trace_gate = make_param(2 * dm, dm, weight_init_seed + 21, "exec_block.W_trace_gate");
+    params.W_execute = make_param(dm, 2, weight_init_seed + 22, "exec_block.W_execute");
+    params.b_execute = make_bias(2, "exec_block.b_execute");
+    params.W_stop = make_param(4 * dm, 2, weight_init_seed + 23, "exec_block.W_stop");
+    params.b_stop = make_bias(2, "exec_block.b_stop");
 
     params.w_inject_gate = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(dm, 1),

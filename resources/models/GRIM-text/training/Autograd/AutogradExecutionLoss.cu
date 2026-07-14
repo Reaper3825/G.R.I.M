@@ -859,10 +859,16 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
             + std::to_string(payload.teacher_step_mask.size())
             + " does not match payload.batch_size=" + std::to_string(payload.batch_size));
     }
+    if (!payload.execution_gate_targets.empty()
+        && static_cast<int>(payload.execution_gate_targets.size()) != payload.batch_size) {
+        throw std::runtime_error(
+            "addExecutionAuxiliaryLoss: execution_gate_targets size does not match batch_size");
+    }
 
     const bool need_teacher_targets =
         (model_hp.execution_block_causal_w1_transition > 0.0f)
         || (model_hp.structured_ce_enabled && model_hp.execution_block_structured_ce_weight > 0.0f)
+        || (model_hp.execution_block_stop_ce_weight > 0.0f)
         || (execution_hp.arg_reinforce_weight > 0.0f);
 
     if (need_teacher_targets) {
@@ -882,12 +888,16 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
     loss_state.exec_arg_ce_added = false;
     loss_state.exec_write_ce_added = false;
     loss_state.exec_transition_added = false;
+    loss_state.exec_execute_ce_added = false;
+    loss_state.exec_stop_ce_added = false;
 
     enum class ExecLossFlag {
         Op,
         Arg,
         Write,
-        Transition
+        Transition,
+        Execute,
+        Stop
     };
 
     Tensor exec_loss_sum;
@@ -899,6 +909,8 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
     int monitored_entropy_rows = 0;
     const bool have_step_mask = !payload.teacher_step_mask.empty();
     const float ce_weight = model_hp.execution_block_structured_ce_weight;
+    const float execute_ce_weight = model_hp.execution_block_execute_ce_weight;
+    const float stop_ce_weight = model_hp.execution_block_stop_ce_weight;
     const int num_slots = execution_hp.num_slots;
     const int num_scratch_slots = execution_hp.num_scratch_slots;
     const int num_value_slots = num_slots - num_scratch_slots;
@@ -945,11 +957,35 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
             case ExecLossFlag::Transition:
                 loss_state.exec_transition_added = true;
                 break;
+            case ExecLossFlag::Execute:
+                loss_state.exec_execute_ce_added = true;
+                break;
+            case ExecLossFlag::Stop:
+                loss_state.exec_stop_ce_added = true;
+                break;
         }
         summary.scalar_loss_terms++;
     };
 
     for (int b = 0; b < payload.batch_size; ++b) {
+        const auto gate_target = payload.execution_gate_targets.empty()
+            ? Execution::ExecutionGateTarget::IGNORE
+            : payload.execution_gate_targets[b];
+        if (gate_target != Execution::ExecutionGateTarget::IGNORE
+            && execute_ce_weight > 0.0f) {
+            auto& gate_logits = forward_outputs.exec_outputs_per_row[b].gate.logits;
+            requireTensor(gate_logits, "execution_gate_logits", b, -1);
+            const int target = gate_target == Execution::ExecutionGateTarget::EXECUTE ? 1 : 0;
+            Tensor gate_ce = autograd::cross_entropy_logits(gate_logits, target, ctx.stream);
+            float gate_ce_value = 0.0f;
+            readScalarFromDevice(gate_ce, gate_ce_value, ctx.stream, "execution_gate_ce");
+            ce_scalar_sum += gate_ce_value;
+            ce_tensor_count++;
+            Tensor scaled_gate = autograd::scale_scalar(gate_ce, execute_ce_weight, ctx.stream);
+            addExecLossTerm(std::move(scaled_gate), "execution_gate_ce", b, -1, ExecLossFlag::Execute);
+            summary.execute_targets++;
+        }
+
         if (!payload.execution_active.empty() && !payload.execution_active[b]) {
             continue;
         }
@@ -961,12 +997,29 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
         const std::vector<Batching::TeacherStep>* teacher_row = nullptr;
         if (!payload.teacher_steps.empty()) {
             teacher_row = &payload.teacher_steps[b];
-            if (row_steps.size() != teacher_row->size()) {
+            int real_teacher_steps = 0;
+            if (have_step_mask) {
+                bool saw_padding = false;
+                for (uint8_t mask_value : payload.teacher_step_mask[b]) {
+                    if (mask_value == 0) {
+                        saw_padding = true;
+                    } else {
+                        if (saw_padding) {
+                            throw std::runtime_error(
+                                "addExecutionAuxiliaryLoss: teacher step mask must be a contiguous prefix");
+                        }
+                        ++real_teacher_steps;
+                    }
+                }
+            } else {
+                real_teacher_steps = static_cast<int>(teacher_row->size());
+            }
+            if (static_cast<int>(row_steps.size()) != real_teacher_steps) {
                 throw std::runtime_error(
                     "addExecutionAuxiliaryLoss: row " + std::to_string(b)
                     + " produced " + std::to_string(row_steps.size())
-                    + " execution outputs but payload.teacher_steps has "
-                    + std::to_string(teacher_row->size()) + " entries");
+                    + " execution outputs but teacher mask has "
+                    + std::to_string(real_teacher_steps) + " real steps");
             }
         }
 
@@ -980,6 +1033,21 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
 
             auto& sout = row_steps[k];
             summary.active_steps++;
+
+            if (stop_ce_weight > 0.0f) {
+                requireTensor(sout.stop_logits_tensor, "stop_logits_tensor", b, k);
+                const int stop_target =
+                    (k + 1 == static_cast<int>(row_steps.size())) ? 1 : 0;
+                Tensor stop_ce = autograd::cross_entropy_logits(
+                    sout.stop_logits_tensor, stop_target, ctx.stream);
+                float stop_ce_value = 0.0f;
+                readScalarFromDevice(stop_ce, stop_ce_value, ctx.stream, "stop_control_ce");
+                ce_scalar_sum += stop_ce_value;
+                ce_tensor_count++;
+                Tensor scaled_stop = autograd::scale_scalar(stop_ce, stop_ce_weight, ctx.stream);
+                addExecLossTerm(std::move(scaled_stop), "stop_control_ce", b, k, ExecLossFlag::Stop);
+                summary.stop_targets++;
+            }
 
             Tensor transition_loss_raw;
             bool have_transition_loss_raw = false;

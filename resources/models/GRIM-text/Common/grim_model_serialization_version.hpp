@@ -20,7 +20,8 @@ namespace GRIM {
 //   v11: LayerScale weights are per-channel gamma vectors [d_model], not one scalar
 //   v12: Removed ScratchBlock text-feature projection from the checkpoint schema
 //   v13: Added NumberEncoder checkpoint weights
-inline constexpr std::uint32_t GRIM_MODEL_VERSION = 13;
+//   v14: Added ExecutionBlock EXECUTE/NOOP and STOP/CONTINUE control-head weights
+inline constexpr std::uint32_t GRIM_MODEL_VERSION = 14;
 
 // GRMT training tensor stream may advance without bumping checkpoint MODEL_VERSION.
 // v10: After per-token atom length-prefixed strings, append int32 token_exec_slots[len]
@@ -41,6 +42,8 @@ inline constexpr std::uint32_t GRIM_MODEL_VERSION = 13;
 //      uint32 atom_entry_ids[len]
 //      uint8  has_atom_table
 //      AtomTable binary payload (entries + exact numeric payload arrays + string pool)
-inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 14;
+// v15: Added execution gate supervision and prefix-only planner boundary:
+//      int8 execution_gate_target, int32 planner_query_pos, int32 planner_prefix_length
+inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 15;
 
 } // namespace GRIM
