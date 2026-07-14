@@ -24,6 +24,7 @@
 #include "../VerboseLogging.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -129,6 +130,31 @@ Tensor viewCommittedTensor(const Tensor& owned,
     view.grad_fn = owned.grad_fn;
     view.stream = stream;
     return view;
+}
+
+std::array<float, 2> readBinaryControlProbabilities(
+    const Tensor& probabilities,
+    cudaStream_t stream,
+    const char* caller)
+{
+    probabilities.require(caller);
+    if (probabilities.numel() != 2) {
+        throw std::runtime_error(std::string(caller) + ": expected exactly two probabilities");
+    }
+    std::array<float, 2> host{};
+    cudaError_t copy_err = cudaMemcpyAsync(
+        host.data(), probabilities.data, 2 * sizeof(float),
+        cudaMemcpyDeviceToHost, stream);
+    if (copy_err != cudaSuccess) {
+        throw std::runtime_error(std::string(caller) + ": cudaMemcpyAsync failed: " +
+                                 cudaGetErrorString(copy_err));
+    }
+    cudaError_t sync_err = cudaStreamSynchronize(stream);
+    if (sync_err != cudaSuccess) {
+        throw std::runtime_error(std::string(caller) + ": cudaStreamSynchronize failed: " +
+                                 cudaGetErrorString(sync_err));
+    }
+    return host;
 }
 
 // Arg/option selector head: encode candidate atom-entry keys (detached, from the
@@ -553,8 +579,20 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     forward_outputs.clearRetainedLayerOutputs();
     forward_outputs.embedding_tensor.is_leaf = false;
 
+    int exec_layer = -1;
+    int exec_K = 0;
+    if (execution_block_active) {
+        exec_layer = execution_block_layer;
+        if (exec_layer < 0) exec_layer = num_layers - 2;
+        if (exec_layer < 0) exec_layer = 0;
+        if (exec_layer >= num_layers) exec_layer = num_layers - 1;
+        exec_K = execution_block_num_steps;
+    }
+
     if (!retain_backward_graph) {
         Tensor running;
+        std::vector<bool> inference_execution_active(
+            static_cast<size_t>(payload.batch_size), false);
         forward_outputs.reserveLayerOutputs(num_layers);
         MFWD_INFO("Step 2: Running " << num_layers << " encoder layers (no_grad)...");
 
@@ -573,7 +611,39 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
 
             forward_outputs.pushLayerOutputs();
 
-            Tensor& layer_input = (layer_idx == 0) ? forward_outputs.embedding_tensor : running;
+            Tensor* layer_input = (layer_idx == 0) ? &forward_outputs.embedding_tensor : &running;
+            Tensor execution_read_augmented_input;
+            if (payload.isInferencePrefill()
+                && exec_layer >= 0
+                && layer_idx > exec_layer
+                && execution_block_active
+                && !forward_outputs.exec_memories.empty()) {
+                bool has_execution_readback = false;
+                for (int b = 0; b < payload.batch_size; ++b) {
+                    if (!inference_execution_active[static_cast<size_t>(b)]) continue;
+                    const Tensor& read_source = has_execution_readback
+                        ? execution_read_augmented_input
+                        : *layer_input;
+                    const int row_len = requirePayloadRowLength(
+                        payload, b, "ModelForward(no_grad) execution readback");
+                    const int final_token_offset = b * payload.max_seq_len + row_len - 1;
+                    Tensor row_delta = GRIM::executionBlockCrossAttentionRead(
+                        execution_hp, read_source, forward_outputs.exec_memories[b],
+                        *execution_block_parameters, total_tokens, request.stream,
+                        final_token_offset, 1,
+                        runtime.read_gate_accum_tensor
+                            ? runtime.read_gate_accum_tensor->data
+                            : nullptr);
+                    Tensor padded = autograd::zero_pad(
+                        row_delta, final_token_offset, total_tokens, request.stream);
+                    execution_read_augmented_input = autograd::add(
+                        read_source, padded, request.stream);
+                    has_execution_readback = true;
+                }
+                if (has_execution_readback) {
+                    layer_input = &execution_read_augmented_input;
+                }
+            }
 
             const auto& encoding_parameters = request.parameter_registry->requireEncodingLayerParameters(
                 layer_idx,
@@ -611,7 +681,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
             forwardEncodingLayer(
                 enc_layer->hp(),
                 enc_layer->requireFeedForwardCompute("executeModelForward(no_grad)"),
-                layer_input,
+                *layer_input,
                 payload,
                 *request.pbm,
                 request.stream,
@@ -641,6 +711,114 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 throw std::runtime_error("ModelForward(no_grad): sync after layer output copy failed: " +
                     std::string(cudaGetErrorString(sync_err)));
             }
+
+            if (payload.isInferencePrefill()
+                && layer_idx == exec_layer
+                && execution_block_active) {
+                std::vector<bool> provision_rows(
+                    static_cast<size_t>(payload.batch_size), true);
+                auto& execution_runtime = *runtime.execution_runtime;
+                Forward::provisionExecutionForwardRuntime(
+                    provision_rows,
+                    payload.batch_size,
+                    execution_hp.num_slots,
+                    execution_hp.atom_embedding_dim,
+                    execution_hp.d_model,
+                    execution_hp.d_key,
+                    execution_hp.d_type,
+                    false,
+                    request.stream,
+                    forward_outputs,
+                    execution_runtime);
+                execution_runtime.ensureDiagnostics(request.stream);
+
+                for (int b = 0; b < payload.batch_size; ++b) {
+                    auto& row_output = forward_outputs.exec_outputs_per_row[b];
+                    GRIM::executionBlockPredictGate(
+                        execution_hp,
+                        owned,
+                        *execution_block_parameters,
+                        payload,
+                        b,
+                        request.stream,
+                        &row_output.gate);
+                    const auto gate_probs = readBinaryControlProbabilities(
+                        row_output.gate.probabilities,
+                        request.stream,
+                        "ModelForward(no_grad) execution gate");
+                    row_output.gate.noop_probability = gate_probs[0];
+                    row_output.gate.execute_probability = gate_probs[1];
+                    row_output.gate.predicted_class = gate_probs[1] > gate_probs[0] ? 1 : 0;
+
+                    const int row_len = requirePayloadRowLength(
+                        payload, b, "ModelForward(no_grad) execution bootstrap");
+                    const int row_offset = b * payload.max_seq_len;
+                    bool has_bootstrap_slot = false;
+                    for (int t = 0; t < row_len; ++t) {
+                        if (payload.token_to_slot_map[static_cast<size_t>(row_offset + t)] >= 0) {
+                            has_bootstrap_slot = true;
+                            break;
+                        }
+                    }
+                    const bool execute_row = row_output.gate.predicted_class == 1
+                        && has_bootstrap_slot;
+                    inference_execution_active[static_cast<size_t>(b)] = execute_row;
+                    if (!execute_row) continue;
+
+                    if (!request.bindings || !request.bindings->d_token_to_slot_map
+                        || !request.bindings->d_numeric_values) {
+                        throw std::runtime_error(
+                            "ModelForward(no_grad): execution decision has no bootstrap bindings");
+                    }
+                    auto& memory = forward_outputs.exec_memories[b];
+                    GRIM::executionBlockBootstrapMemoryFromSlotMap(
+                        execution_hp,
+                        memory,
+                        *execution_block_parameters,
+                        request.bindings->d_numeric_values + row_offset,
+                        request.bindings->d_token_to_slot_map + row_offset,
+                        row_len,
+                        request.stream);
+
+                    bool stopped = false;
+                    for (int step = 0; step < exec_K; ++step) {
+                        ExecutionBlockStepOutput step_output;
+                        GRIM::executionBlockStep(
+                            execution_hp,
+                            execution_runtime.execution_diag,
+                            owned,
+                            memory,
+                            *execution_block_parameters,
+                            payload,
+                            *request.bindings,
+                            b,
+                            step,
+                            execution_block_temp_start,
+                            request.stream,
+                            &step_output,
+                            execution_runtime.trace_state_by_row[b],
+                            execution_runtime.execution_trace_by_row[b]);
+                        execution_runtime.execution_trace_by_row[b].push_back(step_output.record);
+
+                        const auto stop_probs = readBinaryControlProbabilities(
+                            step_output.stop_probabilities,
+                            request.stream,
+                            "ModelForward(no_grad) stop control");
+                        step_output.continue_probability = stop_probs[0];
+                        step_output.stop_probability = stop_probs[1];
+                        step_output.stop_predicted_class = stop_probs[1] >= stop_probs[0] ? 1 : 0;
+                        stopped = step_output.stop_predicted_class == 1;
+                        row_output.steps.push_back(std::move(step_output));
+                        if (stopped) {
+                            row_output.stopped_by_model = true;
+                            break;
+                        }
+                    }
+                    if (!stopped) {
+                        row_output.stopped_at_max_steps = true;
+                    }
+                }
+            }
             running = std::move(owned);
         }
 
@@ -669,16 +847,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
         MFWD_INFO("Step 2: Running " << num_layers << " encoder layers with retained graph...");
         MFWD_INFO("  embedding_tensor.grad_fn=" << (void*)forward_outputs.embedding_tensor.grad_fn.get()
                   << " requires_grad=" << forward_outputs.embedding_tensor.requires_grad);
-
-        int exec_layer = -1;
-        int exec_K = 0;
-        if (execution_block_active) {
-            exec_layer = execution_block_layer;
-            if (exec_layer < 0) exec_layer = num_layers - 2;
-            if (exec_layer < 0) exec_layer = 0;
-            if (exec_layer >= num_layers) exec_layer = num_layers - 1;
-            exec_K = execution_block_num_steps;
-        }
 
         for (int layer_idx = 0; layer_idx < num_layers; ++layer_idx) {
             auto* enc_layer = request.gpu_encoder->getLayer(layer_idx);

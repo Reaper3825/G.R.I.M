@@ -63,7 +63,7 @@ struct RenderedLiteralSpan {
 struct CanonicalRenderResult {
     std::string text;
     std::vector<RenderedLiteralSpan> literal_spans;
-    size_t planner_prefix_byte_end = 0;  // exclusive end of the rendered Q: line
+    size_t execution_prompt_byte_end = 0;  // exclusive end of all rendered prompt text
 };
 
 // Result of building one concept row.

@@ -52,6 +52,9 @@ struct ExecutionRecord {
 struct ExecutionGateOutput {
     Tensor logits;         // [1, 2], class 0=NOOP, class 1=EXECUTE
     Tensor probabilities;  // [1, 2]
+    int predicted_class = -1;
+    float noop_probability = 0.0f;
+    float execute_probability = 0.0f;
 };
 
 struct ExecutionBlockStepOutput {
@@ -76,6 +79,9 @@ struct ExecutionBlockStepOutput {
     Tensor v_out_tensor;           // [1, 1] live scalar result for transition/div-magnitude loss
     Tensor stop_logits_tensor;      // [1, 2], class 0=CONTINUE, class 1=STOP
     Tensor stop_probabilities;      // [1, 2]
+    int stop_predicted_class = -1;
+    float continue_probability = 0.0f;
+    float stop_probability = 0.0f;
     float selection_temperature = 0.0f;
     bool div_was_clamped = false;
 };
@@ -83,6 +89,8 @@ struct ExecutionBlockStepOutput {
 struct ExecutionBlockOutput {
     ExecutionGateOutput gate;
     std::vector<ExecutionBlockStepOutput> steps;
+    bool stopped_by_model = false;
+    bool stopped_at_max_steps = false;
 };
 
 struct ModelForwardOutputs {
@@ -115,6 +123,8 @@ private:
     static void resetExecutionOutputVectorPreserveGeometry(std::vector<ExecutionBlockOutput>& outputs) {
         for (auto& output : outputs) {
             output.gate = ExecutionGateOutput();
+            output.stopped_by_model = false;
+            output.stopped_at_max_steps = false;
             for (auto& step : output.steps) {
                 step = ExecutionBlockStepOutput();
             }

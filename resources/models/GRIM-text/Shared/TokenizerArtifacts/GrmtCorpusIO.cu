@@ -170,18 +170,18 @@ void GrmtSequence::validateForWrite(const std::string& source) const {
     const bool gate_supervised =
         execution_gate_target != GRIM::Execution::ExecutionGateTarget::IGNORE;
     if (gate_supervised) {
-        if (planner_prefix_length <= 0 || planner_prefix_length > static_cast<std::int32_t>(n)) {
+        if (execution_prompt_length <= 0 || execution_prompt_length > static_cast<std::int32_t>(n)) {
             throw std::runtime_error("[GRMT] " + source +
-                                     ": supervised execution gate has invalid planner_prefix_length=" +
-                                     std::to_string(planner_prefix_length));
+                                     ": supervised execution gate has invalid execution_prompt_length=" +
+                                     std::to_string(execution_prompt_length));
         }
-        if (planner_query_pos != planner_prefix_length - 1) {
+        if (execution_prompt_end_pos != execution_prompt_length - 1) {
             throw std::runtime_error("[GRMT] " + source +
-                                     ": planner_query_pos must equal planner_prefix_length - 1");
+                                     ": execution_prompt_end_pos must equal execution_prompt_length - 1");
         }
-    } else if (planner_query_pos < -1 || planner_prefix_length < 0 ||
-               planner_prefix_length > static_cast<std::int32_t>(n)) {
-        throw std::runtime_error("[GRMT] " + source + ": invalid unsupervised planner boundary");
+    } else if (execution_prompt_end_pos < -1 || execution_prompt_length < 0 ||
+               execution_prompt_length > static_cast<std::int32_t>(n)) {
+        throw std::runtime_error("[GRMT] " + source + ": invalid unsupervised execution prompt boundary");
     }
     if (execution_active &&
         execution_gate_target != GRIM::Execution::ExecutionGateTarget::EXECUTE) {
@@ -311,8 +311,8 @@ void GrmtCorpusWriter::writeSequence(const GrmtSequence& sequence) {
     writeScalar(file_, exec_active, sink);
     const std::int8_t gate_target = static_cast<std::int8_t>(sequence.execution_gate_target);
     writeScalar(file_, gate_target, sink);
-    writeScalar(file_, sequence.planner_query_pos, sink);
-    writeScalar(file_, sequence.planner_prefix_length, sink);
+    writeScalar(file_, sequence.execution_prompt_end_pos, sink);
+    writeScalar(file_, sequence.execution_prompt_length, sink);
     writeExact(file_, sequence.token_exec_slots.data(), static_cast<std::size_t>(len) * sizeof(std::int32_t), sink);
 
     static_assert(sizeof(GRIM::Execution::CompiledBootstrapBinding) == 12,
@@ -413,8 +413,8 @@ bool GrmtCorpusReader::readNext(GrmtSequence& out_sequence) {
     seq.execution_active = (exec_active != 0);
     const std::int8_t gate_target = readScalar<std::int8_t>(file_, source);
     seq.execution_gate_target = static_cast<GRIM::Execution::ExecutionGateTarget>(gate_target);
-    seq.planner_query_pos = readScalar<std::int32_t>(file_, source);
-    seq.planner_prefix_length = readScalar<std::int32_t>(file_, source);
+    seq.execution_prompt_end_pos = readScalar<std::int32_t>(file_, source);
+    seq.execution_prompt_length = readScalar<std::int32_t>(file_, source);
 
     seq.token_exec_slots.resize(seq_len);
     readExact(file_, seq.token_exec_slots.data(), static_cast<std::size_t>(seq_len) * sizeof(std::int32_t), source);

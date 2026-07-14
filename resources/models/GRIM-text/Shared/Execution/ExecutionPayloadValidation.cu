@@ -46,15 +46,15 @@ void validateExecutionPayload(
         throw std::runtime_error(
             tag + ": execution_gate_targets.size() must equal batch_size");
     }
-    if (!payload.planner_query_positions.empty() &&
-        static_cast<int>(payload.planner_query_positions.size()) != B) {
+    if (!payload.execution_prompt_end_positions.empty() &&
+        static_cast<int>(payload.execution_prompt_end_positions.size()) != B) {
         throw std::runtime_error(
-            tag + ": planner_query_positions.size() must equal batch_size");
+            tag + ": execution_prompt_end_positions.size() must equal batch_size");
     }
-    if (!payload.planner_prefix_lengths.empty() &&
-        static_cast<int>(payload.planner_prefix_lengths.size()) != B) {
+    if (!payload.execution_prompt_lengths.empty() &&
+        static_cast<int>(payload.execution_prompt_lengths.size()) != B) {
         throw std::runtime_error(
-            tag + ": planner_prefix_lengths.size() must equal batch_size");
+            tag + ": execution_prompt_lengths.size() must equal batch_size");
     }
     if (!payload.compiled_bootstrap_bindings.empty() &&
         static_cast<int>(payload.compiled_bootstrap_bindings.size()) != B) {
@@ -95,19 +95,19 @@ void validateExecutionPayload(
         if (!isValidExecutionGateTarget(gate_target)) {
             throw std::runtime_error(row_tag("has invalid execution gate target"));
         }
-        const int prefix_length = payload.planner_prefix_lengths.empty()
-            ? 0 : payload.planner_prefix_lengths[b];
-        const int query_pos = payload.planner_query_positions.empty()
-            ? -1 : payload.planner_query_positions[b];
+        const int prompt_length = payload.execution_prompt_lengths.empty()
+            ? 0 : payload.execution_prompt_lengths[b];
+        const int prompt_end_pos = payload.execution_prompt_end_positions.empty()
+            ? -1 : payload.execution_prompt_end_positions[b];
         if (gate_target != ExecutionGateTarget::IGNORE || active) {
-            if (prefix_length <= 0 || prefix_length > payload.seq_lengths[b]) {
+            if (prompt_length <= 0 || prompt_length > payload.seq_lengths[b]) {
                 throw std::runtime_error(row_tag(
-                    "has invalid supervised planner_prefix_length=" +
-                    std::to_string(prefix_length)));
+                    "has invalid execution_prompt_length=" +
+                    std::to_string(prompt_length)));
             }
-            if (query_pos != prefix_length - 1) {
+            if (prompt_end_pos != prompt_length - 1) {
                 throw std::runtime_error(row_tag(
-                    "planner_query_pos must equal planner_prefix_length - 1"));
+                    "execution_prompt_end_pos must equal execution_prompt_length - 1"));
             }
         }
         if (active && gate_target != ExecutionGateTarget::EXECUTE) {

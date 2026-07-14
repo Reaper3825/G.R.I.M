@@ -43,7 +43,8 @@ inline constexpr std::uint32_t GRIM_MODEL_VERSION = 14;
 //      uint8  has_atom_table
 //      AtomTable binary payload (entries + exact numeric payload arrays + string pool)
 // v15: Added execution gate supervision and prefix-only planner boundary:
-//      int8 execution_gate_target, int32 planner_query_pos, int32 planner_prefix_length
+//      int8 execution_gate_target, int32 execution_prompt_end_pos,
+//      int32 execution_prompt_length
 inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 15;
 
 } // namespace GRIM

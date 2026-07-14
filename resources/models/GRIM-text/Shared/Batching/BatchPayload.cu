@@ -86,8 +86,8 @@ BatchPayload makeInferenceBasePayload(
     payload.execution_active.assign(1, row_execution_active);
     payload.execution_gate_targets.assign(
         1, GRIM::Execution::ExecutionGateTarget::IGNORE);
-    payload.planner_query_positions.assign(1, seq_len - 1);
-    payload.planner_prefix_lengths.assign(1, seq_len);
+    payload.execution_prompt_end_positions.assign(1, seq_len - 1);
+    payload.execution_prompt_lengths.assign(1, seq_len);
     payload.compiled_bootstrap_bindings.resize(1);
     payload.teacher_steps.resize(1);
     payload.teacher_step_mask.resize(1);
@@ -539,8 +539,8 @@ BatchPayload buildBatchPayload(
         // Compiled execution metadata (per-row, not per-token)
         bool execution_active;
         GRIM::Execution::ExecutionGateTarget execution_gate_target;
-        int32_t planner_query_pos;
-        int32_t planner_prefix_length;
+        int32_t execution_prompt_end_pos;
+        int32_t execution_prompt_length;
         const std::vector<GRIM::Execution::CompiledBootstrapBinding>* compiled_bootstrap_bindings;
         const std::vector<GRIM::Execution::TeacherStep>* teacher_steps;
     };
@@ -680,8 +680,8 @@ BatchPayload buildBatchPayload(
             seq_len,
             seq->execution_active,
             seq->execution_gate_target,
-            seq->planner_query_pos,
-            seq->planner_prefix_length,
+            seq->execution_prompt_end_pos,
+            seq->execution_prompt_length,
             &seq->compiled_bootstrap_bindings,
             &seq->teacher_steps
         });
@@ -763,8 +763,8 @@ BatchPayload buildBatchPayload(
     payload.execution_active.resize(payload.batch_size, false);
     payload.execution_gate_targets.resize(
         payload.batch_size, GRIM::Execution::ExecutionGateTarget::IGNORE);
-    payload.planner_query_positions.resize(payload.batch_size, -1);
-    payload.planner_prefix_lengths.resize(payload.batch_size, 0);
+    payload.execution_prompt_end_positions.resize(payload.batch_size, -1);
+    payload.execution_prompt_lengths.resize(payload.batch_size, 0);
     payload.compiled_bootstrap_bindings.resize(payload.batch_size);
     payload.teacher_steps.resize(payload.batch_size);
     payload.teacher_step_mask.resize(payload.batch_size);
@@ -851,8 +851,8 @@ BatchPayload buildBatchPayload(
         // Compiled execution metadata (per-row)
         payload.execution_active[b] = r.execution_active;
         payload.execution_gate_targets[b] = r.execution_gate_target;
-        payload.planner_query_positions[b] = r.planner_query_pos;
-        payload.planner_prefix_lengths[b] = r.planner_prefix_length;
+        payload.execution_prompt_end_positions[b] = r.execution_prompt_end_pos;
+        payload.execution_prompt_lengths[b] = r.execution_prompt_length;
         if (r.compiled_bootstrap_bindings && !r.compiled_bootstrap_bindings->empty()) {
             payload.compiled_bootstrap_bindings[b] = *r.compiled_bootstrap_bindings;
         }
@@ -1010,6 +1010,8 @@ BatchPayload buildInferenceBatchPayload(
             std::to_string(seq_len));
     }
 
+    // Inference activation is decided by the EXECUTE/NOOP head at the final
+    // prompt token. A slot map only supplies candidate bootstrap bindings.
     bool row_execution_active = false;
     if (!token_to_slot_map.empty()) {
         if (execution_num_slots <= 0) {
@@ -1025,7 +1027,6 @@ BatchPayload buildInferenceBatchPayload(
                         "]=" + std::to_string(slot) + " out of range [0, " +
                         std::to_string(execution_num_slots) + ") or -1");
                 }
-                row_execution_active = true;
             }
         }
     }
@@ -1071,7 +1072,7 @@ BatchPayload buildInferenceDecodePayload(int vocab_size)
     const char* caller = "buildInferenceDecodePayload";
     BatchPayload payload = makeInferenceBasePayload(
         1, vocab_size, 1, 1,
-        BatchPayloadMode::InferenceDecode, true, caller);
+        BatchPayloadMode::InferenceDecode, false, caller);
     payload.validate(caller);
     return payload;
 }

@@ -144,8 +144,8 @@ struct BatchPayload {
     // ═══════════════════════════════════════════════════════════════════════
     std::vector<bool> execution_active;    // [batch_size] — authoritative per-row activation
     std::vector<GRIM::Execution::ExecutionGateTarget> execution_gate_targets; // [batch_size]
-    std::vector<int32_t> planner_query_positions;      // [batch_size], row-relative
-    std::vector<int32_t> planner_prefix_lengths;       // [batch_size]
+    std::vector<int32_t> execution_prompt_end_positions; // [batch_size], row-relative
+    std::vector<int32_t> execution_prompt_lengths;       // [batch_size]
     std::vector<std::vector<GRIM::Execution::CompiledBootstrapBinding>> compiled_bootstrap_bindings;  // [batch_size]
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -508,15 +508,15 @@ struct BatchPayload {
                 std::to_string(execution_gate_targets.size()) + " != batch_size=" +
                 std::to_string(batch_size));
         }
-        if (!planner_query_positions.empty() &&
-            static_cast<int>(planner_query_positions.size()) != batch_size) {
+        if (!execution_prompt_end_positions.empty() &&
+            static_cast<int>(execution_prompt_end_positions.size()) != batch_size) {
             throw std::runtime_error(
-                std::string(caller) + ": BatchPayload.planner_query_positions.size() != batch_size");
+                std::string(caller) + ": BatchPayload.execution_prompt_end_positions.size() != batch_size");
         }
-        if (!planner_prefix_lengths.empty() &&
-            static_cast<int>(planner_prefix_lengths.size()) != batch_size) {
+        if (!execution_prompt_lengths.empty() &&
+            static_cast<int>(execution_prompt_lengths.size()) != batch_size) {
             throw std::runtime_error(
-                std::string(caller) + ": BatchPayload.planner_prefix_lengths.size() != batch_size");
+                std::string(caller) + ": BatchPayload.execution_prompt_lengths.size() != batch_size");
         }
         if (!compiled_bootstrap_bindings.empty()) {
             if (static_cast<int>(compiled_bootstrap_bindings.size()) != batch_size) {

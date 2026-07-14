@@ -488,8 +488,8 @@ bool PrepareTrainingDataFromCache(
 			if (!seq) { ++selected_entries_skipped; continue; }
 			seq->execution_active = built.payload.execution_active;
 			seq->execution_gate_target = built.payload.execution_gate_target;
-			seq->planner_query_pos = built.payload.planner_query_pos;
-			seq->planner_prefix_length = built.payload.planner_prefix_length;
+			seq->execution_prompt_end_pos = built.payload.execution_prompt_end_pos;
+			seq->execution_prompt_length = built.payload.execution_prompt_length;
 			if (built.payload.execution_active) {
 				seq->token_exec_slots = std::move(built.payload.token_exec_slots);
 				seq->compiled_bootstrap_bindings = std::move(built.payload.compiled_bootstrap_bindings);

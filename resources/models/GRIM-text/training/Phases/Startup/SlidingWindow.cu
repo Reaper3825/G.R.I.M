@@ -44,11 +44,11 @@ void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
             // Remap compiled_bootstrap_bindings token_pos to match.
             for (auto& b : seq.compiled_bootstrap_bindings)
                 b.token_pos += 1;
-            if (seq.planner_query_pos >= 0) {
-                seq.planner_query_pos += 1;
+            if (seq.execution_prompt_end_pos >= 0) {
+                seq.execution_prompt_end_pos += 1;
             }
-            if (seq.planner_prefix_length > 0) {
-                seq.planner_prefix_length += 1;
+            if (seq.execution_prompt_length > 0) {
+                seq.execution_prompt_length += 1;
             }
             added_bos_out++;
         }

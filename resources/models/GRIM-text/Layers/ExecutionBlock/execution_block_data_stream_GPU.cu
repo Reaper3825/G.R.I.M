@@ -1373,11 +1373,11 @@ void predictExecutionGateImpl(
     if (batch_row < 0 || batch_row >= payload.batch_size) {
         throw std::runtime_error("predictExecutionGateImpl: batch_row out of range");
     }
-    if (payload.planner_query_positions.empty()) {
-        throw std::runtime_error("predictExecutionGateImpl: planner_query_positions is empty");
+    if (payload.execution_prompt_end_positions.empty()) {
+        throw std::runtime_error("predictExecutionGateImpl: execution_prompt_end_positions is empty");
     }
 
-    const int query_pos = payload.planner_query_positions[static_cast<size_t>(batch_row)];
+    const int query_pos = payload.execution_prompt_end_positions[static_cast<size_t>(batch_row)];
     const int row_tokens = payload.seq_lengths[static_cast<size_t>(batch_row)];
     if (query_pos < 0 || query_pos >= row_tokens) {
         throw std::runtime_error(
@@ -1443,15 +1443,15 @@ void executeStepCoordinatorImpl(
     const int32_t* d_slot_map_row = bindings.d_token_to_slot_map
         + static_cast<size_t>(batch_row) * payload.max_seq_len;
     const int row_tokens = payload.seq_lengths[static_cast<size_t>(batch_row)];
-    if (payload.planner_prefix_lengths.empty()) {
+    if (payload.execution_prompt_lengths.empty()) {
         throw std::runtime_error(
-            "executeStepCoordinatorImpl: planner_prefix_lengths is empty");
+            "executeStepCoordinatorImpl: execution_prompt_lengths is empty");
     }
-    const int planner_prefix_tokens =
-        payload.planner_prefix_lengths[static_cast<size_t>(batch_row)];
-    if (planner_prefix_tokens <= 0 || planner_prefix_tokens > row_tokens) {
+    const int prompt_tokens =
+        payload.execution_prompt_lengths[static_cast<size_t>(batch_row)];
+    if (prompt_tokens <= 0 || prompt_tokens > row_tokens) {
         throw std::runtime_error(
-            "executeStepCoordinatorImpl: planner prefix length out of row bounds");
+            "executeStepCoordinatorImpl: execution prompt length out of row bounds");
     }
 
     // Row slice of the GLOBAL atom mask (BatchDeviceBindings). This is the
@@ -1482,13 +1482,13 @@ void executeStepCoordinatorImpl(
     kernelReduceMeanForward<<<(dm + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         work.context.data,
         H.data + static_cast<size_t>(batch_row) * payload.max_seq_len * dm,
-        planner_prefix_tokens,
+        prompt_tokens,
         dm,
         d_atom_mask_row);
     CUDA_CHECK_KERNEL();
     {
         auto mean_fn = std::make_shared<ReduceMeanGradFn>();
-        mean_fn->capture(H, payload.total_tokens, dm, stream, batch_row * payload.max_seq_len, planner_prefix_tokens,
+        mean_fn->capture(H, payload.total_tokens, dm, stream, batch_row * payload.max_seq_len, prompt_tokens,
                          d_atom_mask_row);
         work.context.grad_fn = mean_fn;
     }

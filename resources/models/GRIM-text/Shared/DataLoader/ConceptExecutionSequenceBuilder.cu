@@ -120,13 +120,13 @@ compileExecutionPayload(
     const std::vector<int>& token_ids,
     const std::vector<const Tokenizer::StructuralSpan*>& token_to_span,
     int seq_len,
-    int planner_query_pos,
-    int planner_prefix_length)
+    int execution_prompt_end_pos,
+    int execution_prompt_length)
 {
     Execution::CompiledStructuredExecutionPayload payload;
     payload.execution_gate_target = record.execution_gate_target;
-    payload.planner_query_pos = planner_query_pos;
-    payload.planner_prefix_length = planner_prefix_length;
+    payload.execution_prompt_end_pos = execution_prompt_end_pos;
+    payload.execution_prompt_length = execution_prompt_length;
 
     if (!record.execution_active) {
         payload.execution_active = false;
@@ -277,7 +277,7 @@ CanonicalRenderResult renderWithSpans(const json& j) {
 
     if (j.contains("question") && j["question"].is_string() && !j["question"].get<std::string>().empty()) {
         os << "Q: " << j["question"].get<std::string>() << "\n";
-        result.planner_prefix_byte_end = static_cast<size_t>(os.tellp());
+        result.execution_prompt_byte_end = static_cast<size_t>(os.tellp());
     }
 
     if (j.contains("state_0") && j["state_0"].is_object()) {
@@ -593,26 +593,26 @@ ConceptBuildResult buildConceptSequence(
         }
     }
 
-    int planner_prefix_length = 0;
-    int planner_query_pos = -1;
-    if (render.planner_prefix_byte_end > 0) {
-        const std::string planner_prefix =
-            result.canonical_text.substr(0, render.planner_prefix_byte_end);
-        auto prefix_encoded = tokenizer.tokenizeWithMetadata(planner_prefix);
-        planner_prefix_length = static_cast<int>(prefix_encoded.token_ids.size());
-        planner_query_pos = planner_prefix_length - 1;
+    int execution_prompt_length = 0;
+    int execution_prompt_end_pos = -1;
+    if (render.execution_prompt_byte_end > 0) {
+        const std::string rendered_prompt =
+            result.canonical_text.substr(0, render.execution_prompt_byte_end);
+        auto prompt_encoded = tokenizer.tokenizeWithMetadata(rendered_prompt);
+        execution_prompt_length = static_cast<int>(prompt_encoded.token_ids.size());
+        execution_prompt_end_pos = execution_prompt_length - 1;
     }
     if (result.record.execution_gate_target != Execution::ExecutionGateTarget::IGNORE
-        && planner_prefix_length <= 0) {
+        && execution_prompt_length <= 0) {
         throw std::runtime_error(
-            "buildConceptSequence: supervised execution gate target requires a non-empty question prefix");
+            "buildConceptSequence: supervised execution gate target requires a non-empty prompt");
     }
 
     if (!result.record.execution_active) {
         result.payload.execution_active = false;
         result.payload.execution_gate_target = result.record.execution_gate_target;
-        result.payload.planner_prefix_length = planner_prefix_length;
-        result.payload.planner_query_pos = planner_query_pos;
+        result.payload.execution_prompt_length = execution_prompt_length;
+        result.payload.execution_prompt_end_pos = execution_prompt_end_pos;
         return result;
     }
 
@@ -624,9 +624,9 @@ ConceptBuildResult buildConceptSequence(
     }
 
     const int seq_len = static_cast<int>(encoded.token_ids.size());
-    if (planner_prefix_length > seq_len) {
+    if (execution_prompt_length > seq_len) {
         throw std::runtime_error(
-            "buildConceptSequence: planner prefix token count exceeds full sequence length");
+            "buildConceptSequence: prompt token count exceeds full sequence length");
     }
 
     // 4. Build token-position → StructuralSpan correlation.
@@ -662,8 +662,8 @@ ConceptBuildResult buildConceptSequence(
         encoded.token_ids,
         token_to_span,
         seq_len,
-        planner_query_pos,
-        planner_prefix_length);
+        execution_prompt_end_pos,
+        execution_prompt_length);
 
     return result;
 }

@@ -127,6 +127,8 @@ inline void provisionExecutionForwardRuntime(
         execution_runtime.execution_trace_by_row[row].clear();
         forward_outputs.exec_outputs_per_row[row].gate = ExecutionGateOutput();
         forward_outputs.exec_outputs_per_row[row].steps.clear();
+        forward_outputs.exec_outputs_per_row[row].stopped_by_model = false;
+        forward_outputs.exec_outputs_per_row[row].stopped_at_max_steps = false;
         auto& row_memory = forward_outputs.exec_memories[row];
 
         const bool row_exec_active = !execution_active.empty() && execution_active[row];

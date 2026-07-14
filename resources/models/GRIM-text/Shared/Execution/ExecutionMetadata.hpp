@@ -161,10 +161,11 @@ struct CompiledStructuredExecutionPayload {
     ExecutionGateTarget execution_gate_target = ExecutionGateTarget::IGNORE;
 
     // Prefix-only planner observation boundary. Positions are row-relative.
-    // A supervised gate target requires planner_prefix_length > 0 and
-    // planner_query_pos == planner_prefix_length - 1.
-    int32_t planner_query_pos = -1;
-    int32_t planner_prefix_length = 0;
+    // The gate reads the final token of the complete prompt. A supervised
+    // target requires execution_prompt_length > 0 and
+    // execution_prompt_end_pos == execution_prompt_length - 1.
+    int32_t execution_prompt_end_pos = -1;
+    int32_t execution_prompt_length = 0;
 
     // Runtime binding projection: per-token slot assignment
     // token_exec_slots[pos] >= 0 means state-bearing, -1 means non-state-bearing

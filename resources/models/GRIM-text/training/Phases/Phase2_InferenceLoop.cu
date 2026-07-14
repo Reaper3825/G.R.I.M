@@ -95,8 +95,8 @@ void validateInferenceForwardPayload(
     const char* caller)
 {
     active_payload.validate(caller);
-    if (!active_payload.isInferencePrefill()) {
-        throw std::runtime_error(std::string(caller) + ": payload must be InferencePrefill");
+    if (!active_payload.isInference()) {
+        throw std::runtime_error(std::string(caller) + ": payload must be an inference payload");
     }
     if (active_payload.batch_size != 1) {
         throw std::runtime_error(std::string(caller) + ": batch_size must be 1");
@@ -267,14 +267,6 @@ GRIM::GeneratedSequence generateOneSequence(
     if (!gpu_encoder) {
         throw std::runtime_error("Phase2::generateOneSequence: gpu_model_state.gpu_encoder is NULL");
     }
-    if (execution_hp.enabled) {
-        // The cached decode path does not yet thread persistent ExecutionMemory
-        // through the cache (config has the execution block disabled for inference).
-        throw std::runtime_error(
-            "Phase2::generateOneSequence: KV-cache decode does not support the execution block; "
-            "disable it for inference");
-    }
-
     const int num_layers = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "num_layers");
     const int num_heads = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "num_heads");
     const int num_kv_heads = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "num_kv_heads");
@@ -337,7 +329,7 @@ GRIM::GeneratedSequence generateOneSequence(
         request.gpu_encoder = gpu_encoder;
         request.parameter_registry = &parameter_registry;
         request.pbm = &pbm;
-        request.execution_block_enabled = execution_hp.enabled;  // false on this path
+        request.execution_block_enabled = execution_hp.enabled;
         request.cublas_handle = training_state.cublas_handle.get();
         request.stream = stream;
         request.payload = &active_payload;
@@ -407,12 +399,14 @@ GRIM::GeneratedSequence generateOneSequence(
         std::vector<uint32_t> aflags(static_cast<size_t>(q), 0);
         std::vector<uint32_t> aentry(static_cast<size_t>(q), GRIM::Tokenizer::kAtomEntryNone);
         const std::vector<int32_t> slotmap;  // empty -> no execution-active row
-        return GRIM::Batching::buildInferenceBatchPayload(
+        auto decode_payload = GRIM::Batching::buildInferenceBatchPayload(
             feed_tokens, numeric, amask, aflags, prompt_atom_table, aentry, slotmap,
             vocab_size, /*batch_capacity=*/1, static_cast<size_t>(q),
             execution_hp.num_slots,
             number_encoder_hp.enabled ? number_encoder_hp.max_digit_slots : 0,
             number_encoder_hp.max_abs_pow10);
+        decode_payload.mode = GRIM::Batching::BatchPayloadMode::InferenceDecode;
+        return decode_payload;
     };
 
     const int prompt_len = static_cast<int>(prompt_tokens.size());
@@ -632,7 +626,20 @@ Phase2TextInferenceResult executePhase2TextInference(
 
     result.prompt_token_count = tokens.size();
 
-    const std::vector<int32_t> prompt_token_to_slot_map;
+    std::vector<int32_t> prompt_token_to_slot_map(tokens.size(), -1);
+    if (execution_hp.enabled) {
+        const int value_slots = execution_hp.num_slots - execution_hp.num_scratch_slots;
+        const int int_token_id = GRIM::Tokenizer::atomTypeToTokenId(
+            GRIM::Tokenizer::AtomType::ATOM_INT);
+        const int float_token_id = GRIM::Tokenizer::atomTypeToTokenId(
+            GRIM::Tokenizer::AtomType::ATOM_FLOAT);
+        int next_slot = 0;
+        for (size_t t = 0; t < tokens.size() && next_slot < value_slots; ++t) {
+            if (tokens[t] == int_token_id || tokens[t] == float_token_id) {
+                prompt_token_to_slot_map[t] = next_slot++;
+            }
+        }
+    }
     const auto number_encoder_hp = GRIM::HyperParameters::numberEncoderConstructionHP(model_config);
     auto prompt_payload = GRIM::Batching::buildInferenceBatchPayload(
         tokens,
