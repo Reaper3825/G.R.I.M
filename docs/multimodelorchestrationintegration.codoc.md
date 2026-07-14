@@ -24,6 +24,47 @@ Minimum required update each time:
 
 If a refactor changes code but not this document, the refactor is incomplete.
 
+## Section 47 - GRIM-text LoRA Support Map (design only)
+
+**What changed**
+
+- Added `docs/GRIM_TEXT_LORA_SUPPORT_PLAN.md`, a repository-grounded implementation map for the router-only personalization adapter.
+- Linked the map from `docs/multimodelorchestrationintegration.md`.
+- Selected attention-only V1 targets matching the live GRIM-text tensor layout: fused per-layer `W_qkv` and `W_o`.
+- Defined a separate FlatBuffers LoRA artifact, base-checkpoint fingerprint binding, separate adapter tensor registry, Phase 1 load/handoff, forward application points, adapter-aware readiness, process-restart reload, separate trainer boundary, and verification gates.
+- Resolved the startup mismatch: `train_gpu` remains authoritative for model/vocabulary fields from canonical `ai_config.json`; launchers pass only named public/worker ports; MMO launches run from the GRIM root; and `/api/status` reports the worker's actual config/model/vocabulary identity.
+- Refined the trainer design for frequent local micro-training: durable 1-10 sequence queue, hourly/size triggers, immutable run manifests, A/B-only optimizer groups, persistent LoRA-only optimizer state, tiny-dataset replay/canary gates, ResourceCoordinator leasing, and exclusive-GPU drain/train/restart as the V1 default.
+- Defined the upstream personalization boundary: GRIM has one process-lifetime conversation, `SessionContextManager` is Buffer 1 (active short-term context), and token-pressure retirement emits an immutable boundary artifact to both memory consolidation and the near-term 1-10 sequence LoRA queue. Context compaction commits independently so inference never waits for adapter training.
+- `MMO/Core/ProcessManager.cpp` now removes ignored positional model/vocabulary arguments, validates config-owned ports, launches from the GRIM root, and avoids mutex re-entry while checking an existing server.
+- `ai/grim_text_server_manager.cpp` now passes only config-derived public/worker ports on the legacy direct launch path.
+- `resources/models/GRIM-text/GRIM/grim_text_server.cpp` now parses named process arguments and proxies `/api/status`.
+- `resources/models/GRIM-text/training/train_gpu.cu` now reports canonical config source, configured model path, actual loaded checkpoint path, and vocabulary path from the inference owner.
+
+**Owns**
+
+- Design contract and phased implementation order for native GRIM-text LoRA support.
+- V1 adapter target, artifact, lifecycle, failure, publication, and test decisions.
+
+**Does not own**
+
+- Runtime adapter loading or inference math; these remain unimplemented.
+- LoRA training; the map specifies the near-term separate trainer target but does not implement it.
+- MMO route/synthesize endpoint implementation.
+- Base checkpoint serialization, which remains separate and immutable.
+
+**Canonical future hook points**
+
+- `ModelRegistry` / `ProcessManager` for router-only configuration and startup handoff.
+- `train_gpu --inference` Phase 1 for verified adapter loading.
+- A new `LoraParameterRegistry` alongside `StartupParameterRegistry` for separate tensor ownership.
+- `EncoderSelfAttention_GPU.cu` full and cached paths for QKV/output low-rank deltas.
+- Adapter-aware status for readiness.
+- `AtomicWriter`-style publication plus coordinated router restart/rollback.
+
+**Status**
+
+- Design mapped. Canonical startup prerequisite implemented; LoRA artifact/runtime/trainer work not started.
+
 ## Current implemented refactors
 
 ### 1. Static hardware inventory
@@ -478,6 +519,7 @@ If a refactor changes code but not this document, the refactor is incomplete.
 **Owns**
 - Session-scoped interaction state: turn records, referent bindings, pending interactions, action episodes
 - Session-scoped conversation history (`ChatMessage` log per session)
+- One canonical GRIM session spans the process lifetime; idle time, topic changes, completed tasks, context compaction, model switches, and LoRA revisions do not create a new chat.
 - Append-only `TurnRecord` log with NLP summary and outcome tracking
 - `ReferentBinding` — entity tracking for pronoun/deictic resolution ("it", "that file", "the app")
 - `PendingInteraction` — unified pending state replacing fragmented globals
@@ -485,10 +527,12 @@ If a refactor changes code but not this document, the refactor is incomplete.
 - `ActionEpisode` — proposal → user response → execution result lifecycle
 - `VisualContext` — separate `DigitalVisual` (active window/selection) + `PhysicalVisual` (camera/gesture/gaze)
 - `ContextSnapshotV2` — rich projection for router/classifier/policy consumers
-- Session lifecycle: `beginTurn()` / `setNlpSummary()` / `setTurnTags()` / `recordOutcome()` / `tick()` / `destroySession()`
+- Turn lifecycle: `beginTurn()` / `setNlpSummary()` / `setTurnTags()` / `recordOutcome()` / `tick()`
+- Process lifecycle: create the canonical session during bootstrap and reserve `destroySession()` for shutdown/tests.
 
 **Does not own**
 - Memory persistence (delegated to `MemoryFacade`)
+- LoRA trainer execution and adapter publication
 - Action policy evaluation (delegated to `ActionPolicyRegistry`)
 - Tool metadata (delegated to `ToolRegistry`)
 
@@ -507,7 +551,7 @@ If a refactor changes code but not this document, the refactor is incomplete.
 - `addMessage(session_id, role, content)` — append to conversation history
 - `setSystemPrompt(session_id, content)` — insert system prompt at position 0 (idempotent)
 - `getMessages(session_id)` → `vector<ChatMessage>` — full conversation history
-- `clearHistory(session_id)` — wipe conversation history + reset system prompt flag
+- `clearHistory(session_id)` — current API wipes prompt history and resets the system prompt flag; permanent-chat design must replace this with active-view reconstruction rather than new-chat semantics
 - `trimHistory(session_id, max_messages)` — remove oldest non-system messages
 
 **Replaces**
@@ -519,6 +563,7 @@ If a refactor changes code but not this document, the refactor is incomplete.
 
 **Migration status**
 - SessionContextManager implemented and bootstrapped
+- Rolling context management is design-only: current history is capped by message count through `conversation_history_size`; tokenizer accounting, compression frontier, pinned-tail policy, boundary artifacts, and non-blocking compaction are not implemented.
 - `ai_interpret()` in `ai/ai.cpp` sets `PendingInteraction` when `ActionPolicyRegistry` requires verification
 - ALL legacy callers migrated:
   - `commands_core.cpp` — 30+ call sites rewritten to SCM
@@ -1577,7 +1622,7 @@ When refactoring a system, append or update the relevant section in this file wi
 | Action command execution | `ActionExecutor::executeAction()` (still used, but now inside policy-gated path) |
 | Conversation history storage | `SessionContextManager::addMessage()` in `ai_interpret()` |
 | System prompt management | `SessionContextManager::setSystemPrompt()` in `ai_interpret()` (reads `ai_config.json → personality`) |
-| History trimming | `SessionContextManager::trimHistory()` — capped by `ai_config.json → conversation_history_size` |
+| History trimming | Current: `SessionContextManager::trimHistory()` capped by message count. Planned: tokenizer-measured rolling Buffer 1 boundary feeding memory + LoRA without changing the permanent session. |
 
 **Deleted legacy paths**
 

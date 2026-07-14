@@ -36,6 +36,58 @@ using json = nlohmann::json;
 
 namespace {
 
+struct BridgeOptions {
+    int public_port = 11435;
+    int worker_port = 11436;
+    std::filesystem::path train_gpu_path;
+};
+
+int parsePort(const std::string& value, const char* option_name) {
+    std::size_t parsed = 0;
+    int port = 0;
+    try {
+        port = std::stoi(value, &parsed);
+    } catch (const std::exception&) {
+        throw std::runtime_error(std::string("grim_text_server: ") + option_name +
+                                 " requires an integer port, got '" + value + "'");
+    }
+    if (parsed != value.size() || port <= 0 || port > 65535) {
+        throw std::runtime_error(std::string("grim_text_server: ") + option_name +
+                                 " must be in 1..65535, got '" + value + "'");
+    }
+    return port;
+}
+
+BridgeOptions parseBridgeOptions(int argc, char** argv) {
+    BridgeOptions options;
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        const auto requireValue = [&](const char* option_name) -> std::string {
+            if (i + 1 >= argc) {
+                throw std::runtime_error(std::string("grim_text_server: ") +
+                                         option_name + " requires a value");
+            }
+            return argv[++i];
+        };
+
+        if (arg == "--public-port") {
+            options.public_port = parsePort(requireValue("--public-port"), "--public-port");
+        } else if (arg == "--worker-port") {
+            options.worker_port = parsePort(requireValue("--worker-port"), "--worker-port");
+        } else if (arg == "--train-gpu") {
+            options.train_gpu_path = requireValue("--train-gpu");
+        } else {
+            throw std::runtime_error("grim_text_server: unknown argument '" + arg + "'");
+        }
+    }
+
+    if (options.public_port == options.worker_port) {
+        throw std::runtime_error(
+            "grim_text_server: --public-port and --worker-port must be different");
+    }
+    return options;
+}
+
 std::filesystem::path currentExecutablePath() {
 #ifdef _WIN32
     std::vector<wchar_t> buffer(32768);
@@ -323,9 +375,25 @@ void forwardToWorker(
     res.set_content(worker_response->body, content_type.c_str());
 }
 
+void forwardStatusFromWorker(int worker_port, httplib::Response& res) {
+    httplib::Client client("127.0.0.1", worker_port);
+    client.set_connection_timeout(2, 0);
+    client.set_read_timeout(5, 0);
+    auto worker_response = client.Get("/internal/status");
+    if (!worker_response) {
+        res.status = 502;
+        res.set_content(json({{"error", "train_gpu inference worker status unavailable"}}).dump(),
+                        "application/json");
+        return;
+    }
+
+    res.status = worker_response->status;
+    res.set_content(worker_response->body, "application/json");
+}
+
 } // namespace
 
-int main()
+int main(int argc, char** argv)
 {
 #ifdef _WIN32
     WSADATA wsaData;
@@ -333,20 +401,21 @@ int main()
 #endif
 
     try {
-        constexpr int public_port = 11435;
-        constexpr int worker_port = 11436;
-        const auto train_gpu_path = resolveTrainGpuPath(std::filesystem::path{});
+        const BridgeOptions options = parseBridgeOptions(argc, argv);
+        const auto train_gpu_path = resolveTrainGpuPath(options.train_gpu_path);
 
         std::cout << "========================================\n";
         std::cout << "  GRIM-text HTTP Bridge v1.0.0\n";
         std::cout << "  Ollama-compatible API\n";
         std::cout << "========================================\n";
         std::cout << "[GRIM-text] Launching train_gpu inference owner: " << train_gpu_path.string() << "\n";
-        std::cout << "[GRIM-text] Internal worker port: " << worker_port << "\n";
+        std::cout << "[GRIM-text] Public port: " << options.public_port << "\n";
+        std::cout << "[GRIM-text] Internal worker port: " << options.worker_port << "\n";
+        std::cout << "[GRIM-text] Model/vocabulary config owner: train_gpu -> ai_config.json\n";
 
         TrainGpuProcess worker;
-        worker.start(train_gpu_path, worker_port);
-        waitForWorkerReady(worker, worker_port);
+        worker.start(train_gpu_path, options.worker_port);
+        waitForWorkerReady(worker, options.worker_port);
         std::cout << "[GRIM-text] ✓ train_gpu inference worker ready\n";
 
         httplib::Server svr;
@@ -371,18 +440,23 @@ int main()
             res.set_content(response.dump(), "application/json");
         });
 
+        svr.Get("/api/status", [&](const httplib::Request&, httplib::Response& res) {
+            forwardStatusFromWorker(options.worker_port, res);
+        });
+
         svr.Post("/api/generate", [&](const httplib::Request& req, httplib::Response& res) {
-            forwardToWorker(worker_port, "/internal/generate", req, res);
+            forwardToWorker(options.worker_port, "/internal/generate", req, res);
         });
 
         svr.Post("/api/chat", [&](const httplib::Request& req, httplib::Response& res) {
-            forwardToWorker(worker_port, "/internal/chat", req, res);
+            forwardToWorker(options.worker_port, "/internal/chat", req, res);
         });
 
-        std::cout << "[GRIM-text] Starting HTTP bridge on http://127.0.0.1:" << public_port << "\n";
+        std::cout << "[GRIM-text] Starting HTTP bridge on http://127.0.0.1:"
+                  << options.public_port << "\n";
         std::cout << "[GRIM-text] Press Ctrl+C to stop.\n";
 
-        svr.listen("127.0.0.1", public_port);
+        svr.listen("127.0.0.1", options.public_port);
         worker.stop();
     } catch (const std::exception& e) {
         std::cerr << "[GRIM-text] ERROR: " << e.what() << "\n";

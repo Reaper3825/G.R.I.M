@@ -9,6 +9,8 @@ isProject: false
 
 > Living refactor companion: [`multimodelorchestrationintegration.codoc.md`](multimodelorchestrationintegration.codoc.md)
 >
+> GRIM-text LoRA and permanent rolling-session implementation map: [`GRIM_TEXT_LORA_SUPPORT_PLAN.md`](GRIM_TEXT_LORA_SUPPORT_PLAN.md)
+>
 > When MMO-related systems are refactored, split, renamed, replaced, or deleted, update the companion doc in the same change so ownership boundaries and hook points stay explicit.
 
 ## Invariants (non-negotiable)

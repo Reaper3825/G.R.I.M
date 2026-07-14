@@ -203,12 +203,17 @@ int runInferenceWorker(
     GRIM::Tokenizer::UniByte& tokenizer,
     int port) {
     httplib::Server svr;
+    const auto paths_hp = GRIM::HyperParameters::pathsHP(ctx.config);
 
     svr.Get("/internal/status", [&](const httplib::Request&, httplib::Response& res) {
         json response = {
             {"status", "ready"},
             {"model", "grim-text"},
-            {"execution_mode", "inference"}
+            {"execution_mode", "inference"},
+            {"config_source", "ai_config.json"},
+            {"configured_model_path", paths_hp.output_model_path},
+            {"loaded_checkpoint_path", ctx.loaded_checkpoint_path},
+            {"vocab_path", paths_hp.vocab_path}
         };
         res.set_content(response.dump(), "application/json");
     });

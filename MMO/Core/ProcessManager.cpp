@@ -48,10 +48,43 @@ static uint16_t extractPort(const std::string& url) {
         return 0;
     }
     try {
-        return static_cast<uint16_t>(std::stoi(url.substr(colon + 1)));
+        std::string port_text = url.substr(colon + 1);
+        const auto path_start = port_text.find('/');
+        if (path_start != std::string::npos) {
+            port_text.resize(path_start);
+        }
+        std::size_t parsed = 0;
+        const int port = std::stoi(port_text, &parsed);
+        if (parsed != port_text.size() || port <= 0 || port > 65535) {
+            return 0;
+        }
+        return static_cast<uint16_t>(port);
     } catch (...) {
         return 0;
     }
+}
+
+// train_gpu is the model/config authority and reads canonical ai_config.json.
+// The body supplies only process-scoped ports to the HTTP bridge.
+static uint16_t configuredInferenceWorkerPort(uint16_t public_port) {
+    if (!aiConfig.contains("training") || !aiConfig["training"].is_object() ||
+        !aiConfig["training"].contains("server_port")) {
+        throw std::runtime_error(
+            "ProcessManager: ai_config.json is missing training.server_port for the "
+            "GRIM-text inference worker");
+    }
+
+    const int worker_port = aiConfig["training"].at("server_port").get<int>();
+    if (worker_port <= 0 || worker_port > 65535) {
+        throw std::runtime_error(
+            "ProcessManager: training.server_port must be in 1..65535, got " +
+            std::to_string(worker_port));
+    }
+    if (static_cast<uint16_t>(worker_port) == public_port) {
+        throw std::runtime_error(
+            "ProcessManager: GRIM-text public port and training.server_port must differ");
+    }
+    return static_cast<uint16_t>(worker_port);
 }
 
 // =========================================================
@@ -75,6 +108,12 @@ bool ProcessManager::start(const ModelInfo& model) {
     }
 
     uint16_t port = extractPort(model.url);
+    if (model.backend_type == BackendType::GrimTextServer && port == 0) {
+        throw std::runtime_error(
+            "ProcessManager: GRIM-text model '" + model.id +
+            "' must have a URL with an explicit port in ai_config.json, got '" +
+            model.url + "'");
+    }
 
     // Validate port uniqueness across all other running models
     validatePortUniqueness(model.id, port);
@@ -202,12 +241,16 @@ bool ProcessManager::launchGrimTextServer(ProcessSlot& slot, const ModelInfo& mo
     slot.h_mutex = CreateMutexA(nullptr, FALSE, mutex_name.c_str());
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         LOG_DEBUG("ProcessManager", "Another instance of model '" + model.id + "' already running");
-        // Check if the existing instance is healthy
-        if (checkHealth(model.id, 2000)) {
-            LOG_DEBUG("ProcessManager", "Existing server for '" + model.id + "' is healthy, reusing");
-            slot.running = true;
-            return true;
-        }
+        // start() already holds mutex_; call the URL directly rather than
+        // re-entering checkHealth(), which also locks mutex_.
+        try {
+            auto resp = cpr::Get(cpr::Url{slot.url}, cpr::Timeout{2000});
+            if (resp.status_code != 0) {
+                LOG_DEBUG("ProcessManager", "Existing server for '" + model.id + "' is healthy, reusing");
+                slot.running = true;
+                return true;
+            }
+        } catch (...) {}
         LOG_DEBUG("ProcessManager", "Existing server for '" + model.id + "' not responding");
         // Release the stale mutex and try again
         CloseHandle(slot.h_mutex);
@@ -225,47 +268,30 @@ bool ProcessManager::launchGrimTextServer(ProcessSlot& slot, const ModelInfo& mo
         return fs::path(getGrimRootDir()) / path;
     };
 
-    const nlohmann::json& grimTextPaths = aiConfig.at("paths").at("grim_text");
-
     // Determine executable path — use model-specific path if provided, else default
     fs::path server_exe;
-    if (!model.model_path.empty() && fs::exists(model.model_path)) {
-        // If model_path points to the exe itself (unlikely but supported)
-        if (hasSuffix(model.model_path, ".exe")) {
-            server_exe = fs::absolute(model.model_path);
-        } else {
-            // Default exe location
-            server_exe = fs::absolute("resources/models/GRIM-text/training/build/Release/grim_text_server.exe");
-        }
+    const fs::path configured_model_path = resolveFromGrimRoot(model.model_path);
+    if (!model.model_path.empty() && hasSuffix(model.model_path, ".exe") &&
+        fs::exists(configured_model_path)) {
+        server_exe = configured_model_path;
     } else {
         server_exe = resolveFromGrimRoot("resources/models/GRIM-text/training/build/Release/grim_text_server.exe");
     }
-
-    fs::path vocab_path = resolveFromGrimRoot(grimTextPaths.at("vocab").get<std::string>());
-    fs::path model_weights = resolveFromGrimRoot(grimTextPaths.at("model").get<std::string>());
 
     if (!fs::exists(server_exe)) {
         LOG_ERROR("ProcessManager", "Server executable not found: " + server_exe.string());
         return false;
     }
-    if (!fs::exists(vocab_path)) {
-        LOG_ERROR("ProcessManager", "Vocabulary file not found: " + vocab_path.string());
-        return false;
-    }
-    if (!fs::exists(model_weights)) {
-        LOG_ERROR("ProcessManager", "Model file not found: " + model_weights.string());
-        return false;
-    }
-
     slot.executable_path = server_exe.string();
 
-    // Build command line
-    std::string port_str = std::to_string(slot.port > 0 ? slot.port : 11435);
-    std::string cmd_line = "\"" + server_exe.string() + "\" \"" +
-                           vocab_path.string() + "\" \"" +
-                           model_weights.string() + "\" " + port_str;
+    const uint16_t public_port = slot.port > 0 ? slot.port : 11435;
+    const uint16_t worker_port = configuredInferenceWorkerPort(public_port);
+    const std::string cmd_line = "\"" + server_exe.string() +
+        "\" --public-port " + std::to_string(public_port) +
+        " --worker-port " + std::to_string(worker_port);
 
     LOG_DEBUG("ProcessManager", "Starting model '" + model.id + "': " + cmd_line);
+    LOG_DEBUG("ProcessManager", "GRIM-text model/vocabulary source: train_gpu -> ai_config.json");
 
     STARTUPINFOA si{};
     ZeroMemory(&si, sizeof(si));
@@ -285,7 +311,7 @@ bool ProcessManager::launchGrimTextServer(ProcessSlot& slot, const ModelInfo& mo
         FALSE,
         CREATE_NO_WINDOW,
         nullptr,
-        server_exe.parent_path().string().c_str(),
+        getGrimRootDir().c_str(),
         &si,
         &slot.process_info
     );
@@ -363,57 +389,50 @@ bool ProcessManager::launchGrimTextServer(ProcessSlot& slot, const ModelInfo& mo
         return fs::path(getGrimRootDir()) / path;
     };
 
-    const nlohmann::json& grimTextPaths = aiConfig.at("paths").at("grim_text");
-
     // Determine executable path
     fs::path server_exe;
-    if (!model.model_path.empty() && fs::exists(model.model_path) && model.model_path.ends_with(".exe")) {
-        server_exe = fs::absolute(model.model_path);
+    const fs::path configured_model_path = resolveFromGrimRoot(model.model_path);
+    if (!model.model_path.empty() && hasSuffix(model.model_path, ".exe") &&
+        fs::exists(configured_model_path)) {
+        server_exe = configured_model_path;
     } else {
         server_exe = resolveFromGrimRoot("resources/models/GRIM-text/training/build/Release/grim_text_server");
     }
-
-    fs::path vocab_path = resolveFromGrimRoot(grimTextPaths.at("vocab").get<std::string>());
-    fs::path model_weights = resolveFromGrimRoot(grimTextPaths.at("model").get<std::string>());
 
     if (!fs::exists(server_exe)) {
         LOG_ERROR("ProcessManager", "Server executable not found: " + server_exe.string());
         return false;
     }
-    if (!fs::exists(vocab_path)) {
-        LOG_ERROR("ProcessManager", "Vocabulary file not found: " + vocab_path.string());
-        return false;
-    }
-    if (!fs::exists(model_weights)) {
-        LOG_ERROR("ProcessManager", "Model file not found: " + model_weights.string());
-        return false;
-    }
-
     slot.executable_path = server_exe.string();
 
-    std::string port_str = std::to_string(slot.port > 0 ? slot.port : 11435);
+    const uint16_t public_port = slot.port > 0 ? slot.port : 11435;
+    const uint16_t worker_port = configuredInferenceWorkerPort(public_port);
+    const std::string public_port_str = std::to_string(public_port);
+    const std::string worker_port_str = std::to_string(worker_port);
 
     LOG_DEBUG("ProcessManager", "Starting model '" + model.id + "': "
-              + server_exe.string() + " " + vocab_path.string()
-              + " " + model_weights.string() + " " + port_str);
+              + server_exe.string() + " --public-port " + public_port_str
+              + " --worker-port " + worker_port_str);
+    LOG_DEBUG("ProcessManager", "GRIM-text model/vocabulary source: train_gpu -> ai_config.json");
 
     // Build argv for posix_spawn
-    std::string exe_str   = server_exe.string();
-    std::string vocab_str = vocab_path.string();
-    std::string model_str = model_weights.string();
+    std::string exe_str = server_exe.string();
+    std::string public_port_option = "--public-port";
+    std::string worker_port_option = "--worker-port";
 
     char* argv[] = {
         const_cast<char*>(exe_str.c_str()),
-        const_cast<char*>(vocab_str.c_str()),
-        const_cast<char*>(model_str.c_str()),
-        const_cast<char*>(port_str.c_str()),
+        const_cast<char*>(public_port_option.c_str()),
+        const_cast<char*>(public_port_str.c_str()),
+        const_cast<char*>(worker_port_option.c_str()),
+        const_cast<char*>(worker_port_str.c_str()),
         nullptr
     };
 
     // Set working directory via file actions (chdir)
     posix_spawn_file_actions_t file_actions;
     posix_spawn_file_actions_init(&file_actions);
-    std::string cwd = server_exe.parent_path().string();
+    std::string cwd = getGrimRootDir();
     posix_spawn_file_actions_addchdir_np(&file_actions, cwd.c_str());
 
     pid_t pid = 0;

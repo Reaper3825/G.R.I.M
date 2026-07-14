@@ -13,6 +13,7 @@
 #include <chrono>
 #include <sstream>
 #include <iomanip>
+#include <stdexcept>
 
 #ifdef _WIN32
 #include "core/grim_platform.h"
@@ -42,6 +43,40 @@ void logServerTerminationDiagnosis(DWORD exitCode, const fs::path& serverExe) {
         " (STATUS_DLL_NOT_FOUND): missing runtime dependency while loading " + serverExe.string());
     LOG_ERROR("GRIMTextServer",
         "Install/repair Microsoft Visual C++ Redistributable (x64), verify CUDA runtime DLLs are on PATH, then inspect grim_text_server.exe dependencies.");
+}
+
+int extractConfiguredPublicPort(const std::string& url) {
+    const auto scheme_end = url.find("://");
+    const std::size_t host_start = scheme_end == std::string::npos ? 0 : scheme_end + 3;
+    const auto colon = url.rfind(':');
+    if (colon == std::string::npos || colon < host_start) {
+        throw std::runtime_error(
+            "GRIMTextServer: configured server URL must contain an explicit port: " + url);
+    }
+    const int port = std::stoi(url.substr(colon + 1));
+    if (port <= 0 || port > 65535) {
+        throw std::runtime_error(
+            "GRIMTextServer: configured public port must be in 1..65535");
+    }
+    return port;
+}
+
+int configuredInferenceWorkerPort(int publicPort) {
+    if (!aiConfig.contains("training") || !aiConfig["training"].is_object() ||
+        !aiConfig["training"].contains("server_port")) {
+        throw std::runtime_error(
+            "GRIMTextServer: ai_config.json is missing training.server_port");
+    }
+    const int port = aiConfig["training"].at("server_port").get<int>();
+    if (port <= 0 || port > 65535) {
+        throw std::runtime_error(
+            "GRIMTextServer: training.server_port must be in 1..65535");
+    }
+    if (port == publicPort) {
+        throw std::runtime_error(
+            "GRIMTextServer: public port and training.server_port must differ");
+    }
+    return port;
 }
 
 } // namespace
@@ -154,8 +189,13 @@ bool GRIMTextServerManager::start() {
     
     ZeroMemory(&processInfo_, sizeof(processInfo_));
     
-    // The server now reads config internally; no CLI arguments are required.
-    std::string cmdLine = "\"" + serverExe.string() + "\"";
+    // train_gpu reads model/vocabulary settings from canonical ai_config.json.
+    // Only process-scoped bridge ports are passed on the command line.
+    const int publicPort = extractConfiguredPublicPort(serverURL_);
+    const int workerPort = configuredInferenceWorkerPort(publicPort);
+    std::string cmdLine = "\"" + serverExe.string() +
+        "\" --public-port " + std::to_string(publicPort) +
+        " --worker-port " + std::to_string(workerPort);
     
     std::vector<char> mutableCmd(cmdLine.begin(), cmdLine.end());
     mutableCmd.push_back('\0');
