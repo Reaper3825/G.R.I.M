@@ -24,6 +24,8 @@ static json conceptBlockToJson(const GRIM::ConceptBlock& cb) {
     j["intermediates"]      = cb.intermediates;
     j["explanation"]        = cb.explanation;
     j["answer"]             = cb.answer;
+    j["execution_gate_target"] =
+        GRIM::conceptExecutionGateTargetJsonValue(cb.execution_gate_target);
     j["intermediate_count"] = cb.intermediate_count;
     j["step_index"]         = cb.step_index;
     j["format_type"]        = cb.format_type;
@@ -61,6 +63,8 @@ static GRIM::ConceptBlock conceptBlockFromJson(const json& j) {
     cb.name               = j.value("name", std::string());
     cb.question           = j.value("question", std::string());
     cb.answer             = j.value("answer", std::string());
+    cb.execution_gate_target = GRIM::conceptExecutionGateTargetFromJsonValue(
+        j.value("execution_gate_target", std::string("ignore")));
     cb.format_type        = j.value("format_type", std::string("chain_of_thought"));
     cb.source_sequence_id = j.value("source_sequence_id", std::string());
     cb.timestamp          = j.value("timestamp", int64_t(0));
@@ -112,6 +116,13 @@ static GRIM::ConceptBlock conceptBlockFromJson(const json& j) {
             cb.state_1.result     = s1["result"].get<double>();
             cb.state_1.has_result = true;
         }
+    }
+
+    // Legacy execution blocks predate the explicit gate field. Preserve their
+    // established meaning when loading them into the updated editor.
+    if (!j.contains("execution_gate_target")
+        && (!cb.state_0.atoms.empty() || !cb.execution.empty())) {
+        cb.execution_gate_target = GRIM::ConceptExecutionGateTarget::Execute;
     }
 
     cb.recomputeDerived();

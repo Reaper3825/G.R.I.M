@@ -20,6 +20,8 @@
 
 #include "ConceptExecutionSequenceBuilder.hpp"
 
+#include "../../../../../DataCollection/concept_block_canonical.hpp"
+
 #include <nlohmann/json.hpp>
 #include <cmath>
 #include <iostream>
@@ -66,14 +68,6 @@ Execution::ExecutionGateTarget parseExecutionGateTarget(const json& j, bool exec
     }
     throw std::runtime_error(
         "parseExecutionGateTarget: unknown execution_gate_target=\"" + value + "\"");
-}
-
-std::string formatNumber(double x) {
-    if (x == std::floor(x) && std::fabs(x) < 1e12)
-        return std::to_string(static_cast<long long>(x));
-    std::ostringstream oss;
-    oss << x;
-    return oss.str();
 }
 
 // Compute an arithmetic operation for result validation.
@@ -268,76 +262,15 @@ int opStringToId(const std::string& op) {
 // from the atom detector to locate the unique ATOM_NUM token.
 
 CanonicalRenderResult renderWithSpans(const json& j) {
+    const auto shared = GRIM::ConceptCanonical::render(j);
     CanonicalRenderResult result;
-    std::ostringstream os;
-
-    // NOTE: "name" is intentionally NOT rendered into canonical text.
-    // It is metadata only (filtering, UI, concept-block identity).
-    // Tokenizing it leaks IDs / labels into the training signal.
-
-    if (j.contains("question") && j["question"].is_string() && !j["question"].get<std::string>().empty()) {
-        os << "Q: " << j["question"].get<std::string>() << "\n";
-        result.execution_prompt_byte_end = static_cast<size_t>(os.tellp());
+    result.text = shared.text;
+    result.execution_prompt_byte_end = shared.execution_prompt_byte_end;
+    result.literal_spans.reserve(shared.literal_spans.size());
+    for (const auto& span : shared.literal_spans) {
+        result.literal_spans.push_back(
+            {span.binding_index, span.byte_start, span.byte_end});
     }
-
-    if (j.contains("state_0") && j["state_0"].is_object()) {
-        const auto& s0 = j["state_0"];
-        os << "STATE0";
-
-        if (s0.contains("type") && s0["type"].is_string() && !s0["type"].get<std::string>().empty())
-            os << " type=" << s0["type"].get<std::string>();
-
-        // Render bootstrap literal values with explicit span tracking.
-        // Each atom value appears in the text at a known byte offset;
-        // this is the ONLY place bootstrap literals are rendered.
-        if (s0.contains("atoms") && s0["atoms"].is_array()) {
-            int binding_idx = 0;
-            for (const auto& a : s0["atoms"]) {
-                if (!a.is_number()) continue;
-                os << " ";
-                const size_t byte_start = static_cast<size_t>(os.tellp());
-                os << formatNumber(a.get<double>());
-                const size_t byte_end = static_cast<size_t>(os.tellp());
-                result.literal_spans.push_back({binding_idx, byte_start, byte_end});
-                binding_idx++;
-            }
-        }
-
-        os << "\n";
-    }
-
-    const json* expl = nullptr;
-    if (j.contains("explanation") && j["explanation"].is_array())
-        expl = &j["explanation"];
-    else if (j.contains("intermediates") && j["intermediates"].is_array())
-        expl = &j["intermediates"];
-    if (expl) {
-        for (const auto& s : *expl) {
-            if (s.is_string()) os << "EXP: " << s.get<std::string>() << "\n";
-        }
-    }
-
-    if (j.contains("execution") && j["execution"].is_array()) {
-        for (const auto& e : j["execution"]) {
-            if (!e.is_object()) continue;
-            std::string op = e.value("op", std::string());
-            os << "EXEC " << op;
-            if (e.contains("args") && e["args"].is_array()) {
-                for (const auto& a : e["args"]) {
-                    if (a.is_number()) os << " " << formatNumber(a.get<double>());
-                }
-            }
-            if (e.contains("result") && e["result"].is_number())
-                os << " => " << formatNumber(e["result"].get<double>());
-            os << "\n";
-        }
-    }
-
-    if (j.contains("state_1") && j["state_1"].is_object()) {
-        os << "A: " << j["answer"].get<std::string>() << "\n";
-    }
-
-    result.text = os.str();
     return result;
 }
 
@@ -359,30 +292,7 @@ std::string renderCanonicalText(const json& j) {
 std::string renderPlainText(const json& j, bool format_as_concept) {
     if (format_as_concept)
         return renderCanonicalText(j);
-
-    std::ostringstream os;
-
-    if (j.contains("question") && j["question"].is_string() &&
-        !j["question"].get<std::string>().empty())
-        os << j["question"].get<std::string>() << "\n";
-
-    const json* expl = nullptr;
-    if (j.contains("explanation") && j["explanation"].is_array())
-        expl = &j["explanation"];
-    else if (j.contains("intermediates") && j["intermediates"].is_array())
-        expl = &j["intermediates"];
-    if (expl) {
-        for (const auto& s : *expl) {
-            if (s.is_string())
-                os << s.get<std::string>() << "\n";
-        }
-    }
-
-    if (j.contains("answer") && j["answer"].is_string() &&
-        !j["answer"].get<std::string>().empty())
-        os << j["answer"].get<std::string>() << "\n";
-
-    return os.str();
+    return GRIM::ConceptCanonical::renderPlainText(j);
 }
 
 // ─── buildStructuredExecutionRecord ─────────────────────

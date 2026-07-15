@@ -250,6 +250,16 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     cbQuestionArea_->drawOverlay(renderer, position);
     ey += (conceptMode ? areaH : areaH * 2.0f) + 16.0f;
 
+    if (conceptMode) {
+        renderer.drawText({editorX + ePad, ey}, "Execution Gate Target",
+                          UITheme::Colors::TextSecondary);
+        ey += 20.0f;
+        cbExecutionGateDropdown_->setPosition(editorX + ePad, ey);
+        cbExecutionGateDropdown_->setSize(eInnerW, fieldH);
+        cbExecutionGateDropdown_->drawOverlay(renderer, position);
+        ey += fieldH + 16.0f;
+    }
+
     // ─── STATE0: Bootstrap Atoms (concept mode only) ────
     if (conceptMode) {
     renderer.drawRect({editorX + ePad, ey}, {eInnerW, 1.0f}, 0x18FFFFFF);
@@ -333,7 +343,8 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
         float opW    = 80.0f;
         float slotsW = 90.0f;
         float colGap = 6.0f;
-        float argsW  = (innerW - opW - slotsW - colGap * 3.0f) * 0.5f;
+        float controlW = 74.0f;
+        float argsW  = (innerW - opW - slotsW - controlW - colGap * 4.0f) * 0.5f;
         float resW   = argsW;
 
         // Column sub-headers
@@ -346,6 +357,8 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
             renderer.drawText({hx, ey}, "args", UITheme::Colors::TextMuted);
             hx += argsW + colGap;
             renderer.drawText({hx, ey}, "=> result", UITheme::Colors::TextMuted);
+            hx += resW + colGap;
+            renderer.drawText({hx, ey}, "control", UITheme::Colors::TextMuted);
             ey += 16.0f;
         }
 
@@ -371,6 +384,12 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
             row.resultInput->setPosition(cx, ey);
             row.resultInput->setSize(resW, fieldH);
             row.resultInput->drawOverlay(renderer, position);
+            cx += resW + colGap;
+
+            const bool final_step = ei + 1 == cbExecStepRows_.size();
+            renderer.drawText({cx, ey + 7.0f}, final_step ? "STOP" : "CONTINUE",
+                              final_step ? UITheme::Colors::Danger
+                                         : UITheme::Colors::Success);
 
             ey += fieldH + 8.0f;
         }
@@ -429,49 +448,15 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
 
         // Build a ConceptBlock from current editor state for preview
         GRIM::ConceptBlock previewCB;
-        previewCB.question = cbQuestionArea_ ? cbQuestionArea_->getText() : "";
-        previewCB.answer   = (conceptMode && cbAnswerArea_) ? cbAnswerArea_->getText() : "";
-        previewCB.state_0.type = cbState0TypeInput_ ? cbState0TypeInput_->getText() : "";
-        if (conceptMode && cbState0AtomsInput_) {
-            std::string atomsStr = cbState0AtomsInput_->getText();
-            if (!atomsStr.empty()) {
-                std::istringstream iss(atomsStr);
-                std::string tok;
-                while (std::getline(iss, tok, ',')) {
-                    try { previewCB.state_0.atoms.push_back(std::stod(tok)); }
-                    catch (...) {}
-                }
-            }
+        std::string previewValidationError;
+        const bool previewValid =
+            buildConceptBlockFromEditor(previewCB, previewValidationError);
+        if (conceptMode && !previewValid) {
+            renderer.drawText({editorX + ePad, ey},
+                              "Validation: " + previewValidationError,
+                              UITheme::Colors::Danger);
+            ey += 20.0f;
         }
-        if (conceptMode) {
-        for (const auto& row : cbExecStepRows_) {
-            GRIM::ConceptExecutionStep step;
-            static const char* opNames[] = {"add", "sub", "mul", "div"};
-            int opIdx = row.opDropdown ? row.opDropdown->getSelectedIndex() : 0;
-            step.op = (opIdx >= 0 && opIdx < 4) ? opNames[opIdx] : "add";
-            if (row.argsInput) {
-                std::istringstream iss(row.argsInput->getText());
-                std::string tok;
-                while (std::getline(iss, tok, ',')) {
-                    try { step.args.push_back(std::stod(tok)); }
-                    catch (...) {}
-                }
-            }
-            if (row.resultInput) {
-                try { step.result = std::stod(row.resultInput->getText()); }
-                catch (...) { step.result = 0.0; }
-            }
-            previewCB.execution.push_back(std::move(step));
-        }
-        if (!previewCB.execution.empty()) {
-            previewCB.state_1.result = previewCB.execution.back().result;
-            previewCB.state_1.has_result = true;
-        }
-        for (const auto& area : cbIntermediateAreas_) {
-            previewCB.explanation.push_back(area ? area->getText() : "");
-        }
-        } // end if (conceptMode)
-
         std::string preview = buildTrainingPreview(previewCB, conceptMode);
 
         // Pre-count lines so we can draw the background FIRST
@@ -567,6 +552,9 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
 
 void UIDataHubPanel::refreshCurriculumTabState() {
     if (!datasetTarget_) return;
+    if (!datasetTarget_->loadCurriculumRegistry()) {
+        addLog("Failed to reload curriculum registry", 2);
+    }
     datasetTarget_->loadConceptBlocks();
     cbTotalCount_ = datasetTarget_->conceptBlockCount();
     populateCBCurriculumDropdown();
@@ -622,6 +610,10 @@ void UIDataHubPanel::loadConceptBlockIntoEditor(size_t cbIndex) {
     if (cbNameInput_)    cbNameInput_->setText(cb.name);
     if (cbQuestionArea_) cbQuestionArea_->setText(cb.question);
     if (cbAnswerArea_)   cbAnswerArea_->setText(cb.answer);
+    if (cbExecutionGateDropdown_) {
+        cbExecutionGateDropdown_->setSelectedIndex(
+            static_cast<int>(cb.execution_gate_target));
+    }
 
     int pi = GRIM::presetIndexForKey(cb.format_type);
     if (cbListTypeDropdown_ && pi >= 0) cbListTypeDropdown_->setSelectedIndex(pi);
@@ -682,6 +674,7 @@ void UIDataHubPanel::clearCBEditor() {
     if (cbNameInput_)    cbNameInput_->setText("");
     if (cbQuestionArea_) cbQuestionArea_->setText("");
     if (cbAnswerArea_)   cbAnswerArea_->setText("");
+    if (cbExecutionGateDropdown_) cbExecutionGateDropdown_->setSelectedIndex(0);
     cbIntermediateAreas_.clear();
     if (cbState0TypeInput_)   cbState0TypeInput_->setText("");
     if (cbState0AtomsInput_)  cbState0AtomsInput_->setText("");
@@ -723,41 +716,137 @@ void UIDataHubPanel::syncExecStepRows(int count) {
     }
 }
 
-std::string UIDataHubPanel::buildTrainingPreview(const GRIM::ConceptBlock& cb, bool conceptMode) const {
-    std::ostringstream oss;
+bool UIDataHubPanel::buildConceptBlockFromEditor(
+    GRIM::ConceptBlock& out,
+    std::string& validation_error) const
+{
+    validation_error.clear();
+    out = GRIM::ConceptBlock{};
+    out.name = cbNameInput_ ? cbNameInput_->getText() : "";
+    out.question = cbQuestionArea_ ? cbQuestionArea_->getText() : "";
+    out.answer = cbAnswerArea_ ? cbAnswerArea_->getText() : "";
 
-    if (conceptMode) {
-        oss << "Q: " << cb.question << "\n";
+    const int preset_index = cbListTypeDropdown_
+        ? cbListTypeDropdown_->getSelectedIndex() : 1;
+    out.format_type = (preset_index >= 0 && preset_index < GRIM::kConceptPresetCount)
+        ? GRIM::kConceptPresets[preset_index].key : "chain_of_thought";
 
-        if (!cb.state_0.atoms.empty()) {
-            oss << "STATE0 type=" << cb.state_0.type;
-            for (double a : cb.state_0.atoms)
-                oss << " " << a;
-            oss << "\n";
+    const int gate_index = cbExecutionGateDropdown_
+        ? cbExecutionGateDropdown_->getSelectedIndex() : 0;
+    if (gate_index < 0 || gate_index > 2) {
+        validation_error = "invalid execution gate selection";
+        return false;
+    }
+    out.execution_gate_target =
+        static_cast<GRIM::ConceptExecutionGateTarget>(gate_index);
+
+    for (const auto& area : cbIntermediateAreas_) {
+        out.intermediates.push_back(area ? area->getText() : "");
+    }
+    out.state_0.type = cbState0TypeInput_ ? cbState0TypeInput_->getText() : "";
+
+    auto trim = [](std::string value) {
+        const auto first = value.find_first_not_of(" \t\r\n");
+        if (first == std::string::npos) return std::string{};
+        const auto last = value.find_last_not_of(" \t\r\n");
+        return value.substr(first, last - first + 1);
+    };
+    auto parseDoubles = [&](const std::string& text, const std::string& field,
+                            std::vector<double>& values) {
+        if (trim(text).empty()) return true;
+        std::istringstream input(text);
+        std::string token;
+        while (std::getline(input, token, ',')) {
+            token = trim(token);
+            try {
+                size_t used = 0;
+                const double value = std::stod(token, &used);
+                if (token.empty() || used != token.size() || !std::isfinite(value)) {
+                    validation_error = field + " contains invalid number '" + token + "'";
+                    return false;
+                }
+                values.push_back(value);
+            } catch (...) {
+                validation_error = field + " contains invalid number '" + token + "'";
+                return false;
+            }
         }
-
-        for (const auto& exp : cb.explanation)
-            oss << "EXP: " << exp << "\n";
-
-        for (const auto& step : cb.execution) {
-            oss << "EXEC " << step.op;
-            for (double a : step.args)
-                oss << " " << a;
-            oss << " => " << step.result << "\n";
+        return true;
+    };
+    auto parseInts = [&](const std::string& text, const std::string& field,
+                         std::vector<int>& values) {
+        if (trim(text).empty()) return true;
+        std::istringstream input(text);
+        std::string token;
+        while (std::getline(input, token, ',')) {
+            token = trim(token);
+            try {
+                size_t used = 0;
+                const int value = std::stoi(token, &used);
+                if (token.empty() || used != token.size()) {
+                    validation_error = field + " contains invalid integer '" + token + "'";
+                    return false;
+                }
+                values.push_back(value);
+            } catch (...) {
+                validation_error = field + " contains invalid integer '" + token + "'";
+                return false;
+            }
         }
+        return true;
+    };
 
-        if (cb.state_1.has_result)
-            oss << "STATE1 result=" << cb.state_1.result << "\n";
-
-        oss << "A: " << cb.answer;
-    } else {
-        // Plain text / raw mode — no structural prefixes
-        oss << cb.question;
-        if (!cb.answer.empty())
-            oss << "\n" << cb.answer;
+    if (cbState0AtomsInput_
+        && !parseDoubles(cbState0AtomsInput_->getText(), "STATE0 atoms", out.state_0.atoms)) {
+        return false;
     }
 
-    return oss.str();
+    static const char* op_names[] = {"add", "sub", "mul", "div"};
+    for (size_t i = 0; i < cbExecStepRows_.size(); ++i) {
+        const auto& row = cbExecStepRows_[i];
+        GRIM::ConceptExecutionStep step;
+        const int op_index = row.opDropdown ? row.opDropdown->getSelectedIndex() : 0;
+        step.op = (op_index >= 0 && op_index < 4) ? op_names[op_index] : "add";
+        const std::string field_prefix = "EXEC step " + std::to_string(i + 1);
+        if (row.argSlotsInput
+            && !parseInts(row.argSlotsInput->getText(), field_prefix + " arg_slots",
+                          step.arg_slots)) {
+            return false;
+        }
+        if (row.argsInput
+            && !parseDoubles(row.argsInput->getText(), field_prefix + " args", step.args)) {
+            return false;
+        }
+        const std::string result_text = row.resultInput
+            ? trim(row.resultInput->getText()) : std::string{};
+        try {
+            size_t used = 0;
+            step.result = std::stod(result_text, &used);
+            if (result_text.empty() || used != result_text.size()
+                || !std::isfinite(step.result)) {
+                validation_error = field_prefix + " has an invalid result";
+                return false;
+            }
+        } catch (...) {
+            validation_error = field_prefix + " has an invalid result";
+            return false;
+        }
+        out.execution.push_back(std::move(step));
+    }
+
+    if (!out.execution.empty()) {
+        out.state_1.result = out.execution.back().result;
+        out.state_1.has_result = true;
+    }
+    out.recomputeDerived();
+    validation_error = GRIM::validateConceptBlockExecutionControl(out);
+    return validation_error.empty();
+}
+
+std::string UIDataHubPanel::buildTrainingPreview(const GRIM::ConceptBlock& cb, bool conceptMode) const {
+    return conceptMode
+        ? GRIM::ConceptCanonical::render(cb).text
+        : GRIM::ConceptCanonical::renderPlainText(cb);
 }
 
 void UIDataHubPanel::generateConceptBlock() {

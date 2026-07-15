@@ -13,11 +13,35 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <string>
 #include <vector>
 
 namespace GRIM {
+
+enum class ConceptExecutionGateTarget : uint8_t {
+    Unsupervised = 0,
+    Noop = 1,
+    Execute = 2
+};
+
+inline const char* conceptExecutionGateTargetJsonValue(ConceptExecutionGateTarget target) {
+    switch (target) {
+        case ConceptExecutionGateTarget::Noop: return "noop";
+        case ConceptExecutionGateTarget::Execute: return "execute";
+        case ConceptExecutionGateTarget::Unsupervised: return "ignore";
+    }
+    return "ignore";
+}
+
+inline ConceptExecutionGateTarget conceptExecutionGateTargetFromJsonValue(
+    const std::string& value)
+{
+    if (value == "noop") return ConceptExecutionGateTarget::Noop;
+    if (value == "execute") return ConceptExecutionGateTarget::Execute;
+    return ConceptExecutionGateTarget::Unsupervised;
+}
 
 // Structured register-style fields (optional). DEBUG: DataLoader may serialize this
 // JSON into GRMT directly. Target: blocks are mainly id + pointer (e.g.
@@ -50,6 +74,9 @@ struct ConceptBlock {
     std::vector<std::string> intermediates;
     std::string answer;
 
+    ConceptExecutionGateTarget execution_gate_target =
+        ConceptExecutionGateTarget::Unsupervised;
+
     /// NL steps parallel to `intermediates`; JSON field `explanation`.
     std::vector<std::string> explanation;
 
@@ -76,6 +103,89 @@ struct ConceptBlock {
             step_index[i] = i;
     }
 };
+
+// Returns an empty string when the block is safe to persist for the GRIM-text
+// concept loader. The loader performs the same arithmetic checks again while
+// compiling the training corpus; this provides immediate authoring feedback.
+inline std::string validateConceptBlockExecutionControl(const ConceptBlock& cb) {
+    const bool has_state = !cb.state_0.type.empty() || !cb.state_0.atoms.empty();
+    const bool has_bootstrap = !cb.state_0.atoms.empty();
+    const bool has_steps = !cb.execution.empty();
+
+    if (cb.execution_gate_target != ConceptExecutionGateTarget::Unsupervised
+        && cb.question.empty()) {
+        return "supervised execution control requires a non-empty question";
+    }
+
+    if (cb.execution_gate_target == ConceptExecutionGateTarget::Noop) {
+        if (has_state || has_steps) {
+            return "NOOP blocks cannot contain STATE0 or EXEC data";
+        }
+        return {};
+    }
+
+    if (cb.execution_gate_target == ConceptExecutionGateTarget::Execute) {
+        if (!has_bootstrap) return "EXECUTE blocks require at least one STATE0 atom";
+        if (!has_steps) return "EXECUTE blocks require at least one EXEC step";
+    } else if (has_state || has_steps) {
+        return "blocks with STATE0 or EXEC data must use the EXECUTE gate target";
+    } else {
+        return {};
+    }
+
+    std::vector<double> slots = cb.state_0.atoms;
+    for (size_t i = 0; i < slots.size(); ++i) {
+        if (!std::isfinite(slots[i])) {
+            return "STATE0 atom " + std::to_string(i) + " is not finite";
+        }
+    }
+
+    for (size_t step_index = 0; step_index < cb.execution.size(); ++step_index) {
+        const auto& step = cb.execution[step_index];
+        const std::string prefix = "EXEC step " + std::to_string(step_index + 1) + ": ";
+        if (step.args.size() < 2) return prefix + "requires two args";
+        if (step.arg_slots.size() != 2) return prefix + "requires exactly two arg_slots";
+        const int lhs_slot = step.arg_slots[0];
+        const int rhs_slot = step.arg_slots[1];
+        if (lhs_slot < 0 || lhs_slot >= static_cast<int>(slots.size())) {
+            return prefix + "arg_slots[0] is outside the current slot range";
+        }
+        if (rhs_slot < 0 || rhs_slot >= static_cast<int>(slots.size())) {
+            return prefix + "arg_slots[1] is outside the current slot range";
+        }
+        if (!std::isfinite(step.result)) return prefix + "result is not finite";
+
+        const double lhs_tolerance = 1e-9 * std::max(1.0, std::fabs(slots[lhs_slot]));
+        const double rhs_tolerance = 1e-9 * std::max(1.0, std::fabs(slots[rhs_slot]));
+        if (!std::isfinite(step.args[0])
+            || std::fabs(step.args[0] - slots[lhs_slot]) > lhs_tolerance) {
+            return prefix + "args[0] does not match arg_slots[0]";
+        }
+        if (!std::isfinite(step.args[1])
+            || std::fabs(step.args[1] - slots[rhs_slot]) > rhs_tolerance) {
+            return prefix + "args[1] does not match arg_slots[1]";
+        }
+
+        double computed = 0.0;
+        if (step.op == "add") computed = slots[lhs_slot] + slots[rhs_slot];
+        else if (step.op == "sub") computed = slots[lhs_slot] - slots[rhs_slot];
+        else if (step.op == "mul") computed = slots[lhs_slot] * slots[rhs_slot];
+        else if (step.op == "div") {
+            if (slots[rhs_slot] == 0.0) return prefix + "division by zero";
+            computed = slots[lhs_slot] / slots[rhs_slot];
+        } else {
+            return prefix + "unknown operation '" + step.op + "'";
+        }
+
+        const double tolerance = 1e-9 * std::max(1.0, std::fabs(step.result));
+        if (std::fabs(computed - step.result) > tolerance) {
+            return prefix + "arg_slots compute " + std::to_string(computed)
+                + " but result is " + std::to_string(step.result);
+        }
+        slots.push_back(step.result);
+    }
+    return {};
+}
 
 // ── Format presets ──────────────────────────────────────
 

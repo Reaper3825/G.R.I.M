@@ -510,6 +510,11 @@ UIDataHubPanel::UIDataHubPanel()
         [](const std::string&) {});
 
     // ── State 0 / Execution / State 1 widgets ───────────
+    cbExecutionGateDropdown_ = std::make_shared<UIDropdown>(
+        "Execution Gate",
+        std::vector<std::string>{"Unsupervised", "Noop", "Execute"},
+        0, [](int, const std::string&) {});
+    cbExecutionGateDropdown_->setMaxVisibleItems(3);
     cbState0TypeInput_ = std::make_shared<UIInputBox>();
     cbState0TypeInput_->setPlaceholder("e.g. arithmetic");
     cbState0AtomsInput_ = std::make_shared<UIInputBox>();
@@ -534,6 +539,9 @@ UIDataHubPanel::UIDataHubPanel()
     execStepActionMenu_ = std::make_shared<UIActionMenu>("Exec Steps");
     execStepActionMenu_->addItem("+ Exec Step", [this]() {
         syncExecStepRows(static_cast<int>(cbExecStepRows_.size()) + 1);
+        if (cbExecutionGateDropdown_)
+            cbExecutionGateDropdown_->setSelectedIndex(
+                static_cast<int>(GRIM::ConceptExecutionGateTarget::Execute));
     }, UITheme::Colors::Success);
     execStepActionMenu_->addItem("- Exec Step", [this]() {
         if (!cbExecStepRows_.empty())
@@ -564,70 +572,15 @@ UIDataHubPanel::UIDataHubPanel()
             ? GRIM::kConceptPresets[presetIdx].key : "chain_of_thought";
 
         GRIM::ConceptBlock cb;
+        std::string validationError;
+        if (!buildConceptBlockFromEditor(cb, validationError)) {
+            addLog("Cannot save ConceptBlock: " + validationError, 2);
+            return;
+        }
         cb.name = name;
         cb.question = question;
-        cb.answer = cbAnswerArea_ ? cbAnswerArea_->getText() : "";
         cb.format_type = formatKey;
-        cb.intermediates.clear();
-        for (const auto& area : cbIntermediateAreas_) {
-            cb.intermediates.push_back(area ? area->getText() : "");
-        }
 
-        // State 0
-        cb.state_0.type = cbState0TypeInput_ ? cbState0TypeInput_->getText() : "";
-        if (cbState0AtomsInput_) {
-            std::string atomsStr = cbState0AtomsInput_->getText();
-            cb.state_0.atoms.clear();
-            if (!atomsStr.empty()) {
-                std::istringstream iss(atomsStr);
-                std::string tok;
-                while (std::getline(iss, tok, ',')) {
-                    try { cb.state_0.atoms.push_back(std::stod(tok)); }
-                    catch (...) {}
-                }
-            }
-        }
-
-        // Execution steps
-        cb.execution.clear();
-        for (const auto& row : cbExecStepRows_) {
-            GRIM::ConceptExecutionStep step;
-            static const char* opNames[] = {"add", "sub", "mul", "div"};
-            int opIdx = row.opDropdown ? row.opDropdown->getSelectedIndex() : 0;
-            step.op = (opIdx >= 0 && opIdx < 4) ? opNames[opIdx] : "add";
-
-            if (row.argSlotsInput) {
-                std::istringstream iss(row.argSlotsInput->getText());
-                std::string tok;
-                while (std::getline(iss, tok, ',')) {
-                    try { step.arg_slots.push_back(std::stoi(tok)); }
-                    catch (...) {}
-                }
-            }
-            if (row.argsInput) {
-                std::istringstream iss(row.argsInput->getText());
-                std::string tok;
-                while (std::getline(iss, tok, ',')) {
-                    try { step.args.push_back(std::stod(tok)); }
-                    catch (...) {}
-                }
-            }
-            if (row.resultInput) {
-                try { step.result = std::stod(row.resultInput->getText()); }
-                catch (...) { step.result = 0.0; }
-            }
-            cb.execution.push_back(std::move(step));
-        }
-
-        // State 1 — derived from last execution step result
-        if (!cb.execution.empty()) {
-            cb.state_1.result = cb.execution.back().result;
-            cb.state_1.has_result = true;
-        } else {
-            cb.state_1.has_result = false;
-        }
-
-        cb.recomputeDerived();
         cb.timestamp = std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
 
@@ -838,7 +791,7 @@ UIDataHubPanel::UIDataHubPanel()
         cbModelDropdown_, cbCurriculumDropdown_, cbCurriculumRenameInput_,
         cbListTypeDropdown_, cbTypeFilterDropdown_, cbCurriculumFilterToggle_, cbSearchInput_,
         cbNameInput_, cbQuestionArea_, cbAnswerArea_, cbCustomPromptArea_,
-        cbState0TypeInput_, cbState0AtomsInput_,
+        cbExecutionGateDropdown_, cbState0TypeInput_, cbState0AtomsInput_,
         btnCBGenerate_, stepActionMenu_, execStepActionMenu_, blockActionMenu_,
         curriculumActionMenu_, blockCurriculumMenu_
     };

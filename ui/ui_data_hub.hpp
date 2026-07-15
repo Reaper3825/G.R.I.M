@@ -380,6 +380,7 @@ private:
     std::vector<std::shared_ptr<UITextArea>> cbIntermediateAreas_;
 
     // ── State 0 / Execution / State 1 widgets ───────────
+    std::shared_ptr<UIDropdown>  cbExecutionGateDropdown_;
     std::shared_ptr<UIInputBox>  cbState0TypeInput_;
     std::shared_ptr<UIInputBox>  cbState0AtomsInput_;     // comma-separated doubles
 
@@ -501,6 +502,8 @@ private:
     void clearCBEditor();
     void syncIntermediateAreas(int count);
     void syncExecStepRows(int count);
+    bool buildConceptBlockFromEditor(GRIM::ConceptBlock& out,
+                                     std::string& validation_error) const;
     std::string buildTrainingPreview(const GRIM::ConceptBlock& cb, bool conceptMode) const;
     void generateConceptBlock();
     void populateCBModelDropdown();
