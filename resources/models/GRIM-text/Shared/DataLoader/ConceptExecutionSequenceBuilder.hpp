@@ -40,10 +40,9 @@
 #include <nlohmann/json_fwd.hpp>
 
 #include "../Execution/ExecutionMetadata.hpp"
+#include "../UnigramByte/UniByte.hpp"
 
 namespace GRIM {
-
-namespace Tokenizer { class UniByte; }
 
 namespace DataLoader {
 
@@ -72,6 +71,7 @@ struct ConceptBuildResult {
     std::string canonical_text;
     Execution::StructuredExecutionRecord record;
     Execution::CompiledStructuredExecutionPayload payload;
+    GRIM::Tokenizer::UniByteResult encoded;
 };
 
 // ─── Public API ─────────────────────────────────────────

@@ -762,6 +762,8 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                     }
                     const bool execute_row = row_output.gate.predicted_class == 1
                         && has_bootstrap_slot;
+                    row_output.execution_suppressed_no_bootstrap =
+                        row_output.gate.predicted_class == 1 && !has_bootstrap_slot;
                     inference_execution_active[static_cast<size_t>(b)] = execute_row;
                     if (!execute_row) continue;
 
@@ -950,7 +952,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
 
                     const bool gate_supervised = !payload.execution_gate_targets.empty()
                         && payload.execution_gate_targets[b]
-                            != Execution::ExecutionGateTarget::IGNORE;
+                            != Execution::ExecutionGateTarget::UNSUPERVISED;
                     if (gate_supervised) {
                         GRIM::executionBlockPredictGate(
                             execution_hp,

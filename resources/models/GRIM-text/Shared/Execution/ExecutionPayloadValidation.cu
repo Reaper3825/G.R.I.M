@@ -90,7 +90,7 @@ void validateExecutionPayload(
         };
 
         const auto gate_target = payload.execution_gate_targets.empty()
-            ? ExecutionGateTarget::IGNORE
+            ? ExecutionGateTarget::UNSUPERVISED
             : payload.execution_gate_targets[b];
         if (!isValidExecutionGateTarget(gate_target)) {
             throw std::runtime_error(row_tag("has invalid execution gate target"));
@@ -99,7 +99,7 @@ void validateExecutionPayload(
             ? 0 : payload.execution_prompt_lengths[b];
         const int prompt_end_pos = payload.execution_prompt_end_positions.empty()
             ? -1 : payload.execution_prompt_end_positions[b];
-        if (gate_target != ExecutionGateTarget::IGNORE || active) {
+        if (gate_target != ExecutionGateTarget::UNSUPERVISED || active) {
             if (prompt_length <= 0 || prompt_length > payload.seq_lengths[b]) {
                 throw std::runtime_error(row_tag(
                     "has invalid execution_prompt_length=" +

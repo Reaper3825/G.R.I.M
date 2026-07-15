@@ -6,6 +6,7 @@
 
 #include "Phase1_Startup.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
+#include "../../Shared/Forward/GeneratedSequence.hpp"
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../../Shared/UnigramByte/UniByte.hpp"
 
@@ -23,6 +24,7 @@ struct Phase2TextInferenceResult {
     std::int64_t encode_ms = 0;
     std::int64_t generation_ms = 0;
     std::int64_t decode_ms = 0;
+    GRIM::ExecutionControlTelemetry execution_control;
 };
 
 /**

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run GRIM-text training on PSC Bridges-2 via SSH.
-# Usage: ./scripts/run_train_on_bridges2.sh [--build] [--jobs N] [--sbatch] [--sync TARGET...] [--sync-all|--sync-mcs|--sync-cbs|--sync-crs|--sync-fas] [--pull-vocab] [--pull-logs] [--allow-vcpkg-tool-downloads]
+# Usage: ./scripts/run_train_on_bridges2.sh [--build] [--jobs N] [--exclude NODELIST] [--sbatch] [--sync TARGET...] [--sync-all|--sync-mcs|--sync-cbs|--sync-crs|--sync-fas] [--pull-vocab] [--pull-logs] [--allow-vcpkg-tool-downloads]
 #
 # Prerequisites:
 #   - SSH: ssh uwadkins@bridges2.psc.edu (or add to ~/.ssh/config as Host bridges2)
@@ -52,6 +52,8 @@
 #                    Permit vcpkg to download helper tools when Bridges-2 system cmake/ninja is missing or when the
 #                    cluster cmake is older than the pinned helper requirement. Compatible system tools still win.
 #   --jobs N         make -j N for train_gpu (default 100; override with GRIM_BRIDGES2_MAKE_JOBS).
+#   --exclude NODES  Exclude a Slurm node list from only the build allocation (for example, w001).
+#                    GRIM_BRIDGES2_BUILD_EXCLUDE_NODES provides the same setting through the environment.
 #   --time T         SLURM wall-clock time limit for train_gpu (--sbatch and interactive srun).
 #                    Format: HH:MM:SS or D-HH:MM:SS. Default: 2-00:00:00
 #                    (GPU-shared's QOS max; avoids the partition's 1-hour default).
@@ -83,6 +85,7 @@ ACCOUNT="${GRIM_BRIDGES2_ACCOUNT:-cis250124p}"
 PARTITION="${PARTITION:-GPU-shared}"
 GPU_TYPE="${GPU_TYPE:-h100-80}"
 BRIDGES2_MAKE_JOBS="${GRIM_BRIDGES2_MAKE_JOBS:-100}"
+BRIDGES2_BUILD_EXCLUDE_NODES="${GRIM_BRIDGES2_BUILD_EXCLUDE_NODES:-}"
 BRIDGES2_TIME_LIMIT_EXPLICIT=false
 if [[ -n "${GRIM_BRIDGES2_TIME_LIMIT:-}" ]]; then
   BRIDGES2_TIME_LIMIT="$GRIM_BRIDGES2_TIME_LIMIT"
@@ -133,6 +136,16 @@ while [[ $# -gt 0 ]]; do
     --sync-crs)       FLAG_SYNC_CRS=true; shift ;;
     --sync-fas)       FLAG_SYNC_FAS=true; shift ;;
     --allow-vcpkg-tool-downloads) ALLOW_VCPKG_TOOL_DOWNLOADS=true; shift ;;
+    --exclude)
+      [[ $# -lt 2 || -z "$2" ]] && { echo "ERROR: --exclude requires a Slurm node list (e.g. w001)"; exit 1; }
+      BRIDGES2_BUILD_EXCLUDE_NODES="$2"
+      shift 2
+      ;;
+    --exclude=*)
+      BRIDGES2_BUILD_EXCLUDE_NODES="${1#--exclude=}"
+      [[ -z "$BRIDGES2_BUILD_EXCLUDE_NODES" ]] && { echo "ERROR: --exclude requires a Slurm node list (e.g. w001)"; exit 1; }
+      shift
+      ;;
     --sync)
       shift
       while [[ $# -gt 0 ]] && [[ "$1" != --* ]]; do
@@ -1408,13 +1421,22 @@ else
   BRIDGES2_BUILD_USE_GPU=0
 fi
 [[ "$BRIDGES2_BUILD_CPUS" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: GRIM_BRIDGES2_BUILD_CPUS must be a positive integer (got: $BRIDGES2_BUILD_CPUS)"; exit 1; }
+BRIDGES2_BUILD_EXCLUDE_PATTERN='^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*$'
+if [[ -n "$BRIDGES2_BUILD_EXCLUDE_NODES" && ! "$BRIDGES2_BUILD_EXCLUDE_NODES" =~ $BRIDGES2_BUILD_EXCLUDE_PATTERN ]]; then
+  echo "ERROR: GRIM_BRIDGES2_BUILD_EXCLUDE_NODES must be a comma-separated node list (got: $BRIDGES2_BUILD_EXCLUDE_NODES)"
+  exit 1
+fi
 BRIDGES2_BUILD_GPU_ARGS=""
 if [[ "$BRIDGES2_BUILD_USE_GPU" == "1" ]]; then
   BRIDGES2_BUILD_GPU_ARGS="--gres=gpu:$GPU_TYPE:1"
 fi
+BRIDGES2_BUILD_EXCLUDE_ARGS=""
+if [[ -n "$BRIDGES2_BUILD_EXCLUDE_NODES" ]]; then
+  BRIDGES2_BUILD_EXCLUDE_ARGS="--exclude=$BRIDGES2_BUILD_EXCLUDE_NODES"
+fi
 BRIDGES2_BUILD_TIME_ARGS="-t $BRIDGES2_BUILD_TIME_LIMIT"
 BRIDGES2_BUILD_TIME_LABEL="$BRIDGES2_BUILD_TIME_LIMIT"
-BRIDGES2_BUILD_SRUN_ARGS="-p $BRIDGES2_BUILD_PARTITION $SLURM_ACCOUNT_ARGS --ntasks=1 --cpus-per-task=$BRIDGES2_BUILD_CPUS $BRIDGES2_BUILD_GPU_ARGS $BRIDGES2_BUILD_TIME_ARGS"
+BRIDGES2_BUILD_SRUN_ARGS="-p $BRIDGES2_BUILD_PARTITION $SLURM_ACCOUNT_ARGS --ntasks=1 --cpus-per-task=$BRIDGES2_BUILD_CPUS $BRIDGES2_BUILD_GPU_ARGS $BRIDGES2_BUILD_EXCLUDE_ARGS $BRIDGES2_BUILD_TIME_ARGS"
 
 # Single remote command for the build, used both by the staged path below and by the
 # single-shot combined submission.

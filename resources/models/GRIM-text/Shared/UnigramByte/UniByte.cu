@@ -156,13 +156,30 @@ const UnigramTrainingRuntimeReport& UniByte::lastTrainingRuntimeReport() const {
 // Encoding
 //--------------------------------------------------//
 
-UniByteResult UniByte::tokenizeWithMetadata(const std::string& text) const {
+UniByteResult UniByte::tokenizeWithMetadata(
+    const std::string& text,
+    size_t forced_segment_boundary,
+    size_t* token_count_at_boundary) const {
     UniByteResult result;
+
+    const bool track_boundary = token_count_at_boundary != nullptr;
+    if (track_boundary && forced_segment_boundary > text.size()) {
+        throw std::runtime_error(
+            "UniByte::tokenizeWithMetadata: forced segment boundary exceeds text length");
+    }
+    bool boundary_recorded = false;
+    auto recordBoundary = [&](size_t byte_pos) {
+        if (track_boundary && !boundary_recorded && byte_pos == forced_segment_boundary) {
+            *token_count_at_boundary = result.token_ids.size();
+            boundary_recorded = true;
+        }
+    };
 
     if (text.empty()) {
         // Keep the contract uniform: every result carries an allocated (possibly
         // empty) per-sequence AtomTable, never a null pointer.
         result.atom_table = std::make_shared<AtomTable>();
+        recordBoundary(0);
         result.validate("UniByte::tokenizeWithMetadata");
         return result;
     }
@@ -254,9 +271,17 @@ UniByteResult UniByte::tokenizeWithMetadata(const std::string& text) const {
     };
 
     while (pos < text.size()) {
+        recordBoundary(pos);
         if (struct_idx < atom_tokens.size() && pos == atom_tokens[struct_idx].span.start) {
             const AtomTokenizationPayload& atom_payload = atom_tokens[struct_idx];
             const StructuralSpan& span = atom_payload.span;
+
+            if (track_boundary && !boundary_recorded
+                && forced_segment_boundary > span.start
+                && forced_segment_boundary < span.end) {
+                throw std::runtime_error(
+                    "UniByte::tokenizeWithMetadata: forced segment boundary falls inside an atom span");
+            }
 
             result.token_ids.push_back(atom_payload.token_id);
             result.is_byte_fallback.push_back(atom_payload.is_byte_fallback);
@@ -277,10 +302,20 @@ UniByteResult UniByte::tokenizeWithMetadata(const std::string& text) const {
         if (struct_idx < atom_tokens.size()) {
             segment_end = atom_tokens[struct_idx].span.start;
         }
+        if (track_boundary && !boundary_recorded
+            && forced_segment_boundary > pos
+            && forced_segment_boundary < segment_end) {
+            segment_end = forced_segment_boundary;
+        }
 
         appendSegmentTokens(pos, segment_end);
 
         pos = segment_end;
+    }
+    recordBoundary(pos);
+    if (track_boundary && !boundary_recorded) {
+        throw std::runtime_error(
+            "UniByte::tokenizeWithMetadata: failed to materialize forced segment boundary");
     }
     
     // Pipeline contract: validate all per-token arrays are consistent

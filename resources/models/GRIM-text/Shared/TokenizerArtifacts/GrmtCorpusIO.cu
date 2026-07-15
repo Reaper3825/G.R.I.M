@@ -168,7 +168,7 @@ void GrmtSequence::validateForWrite(const std::string& source) const {
         throw std::runtime_error("[GRMT] " + source + ": invalid execution_gate_target");
     }
     const bool gate_supervised =
-        execution_gate_target != GRIM::Execution::ExecutionGateTarget::IGNORE;
+        execution_gate_target != GRIM::Execution::ExecutionGateTarget::UNSUPERVISED;
     if (gate_supervised) {
         if (execution_prompt_length <= 0 || execution_prompt_length > static_cast<std::int32_t>(n)) {
             throw std::runtime_error("[GRMT] " + source +

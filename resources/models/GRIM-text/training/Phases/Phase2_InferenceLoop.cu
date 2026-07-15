@@ -297,6 +297,7 @@ GRIM::GeneratedSequence generateOneSequence(
         std::vector<float> primary;            // [n_rows * vocab]
         int num_pool_atoms = 0;                // candidate count for the selector rows
         std::vector<float> selector;           // [n_rows * num_pool_atoms] (empty if no selector)
+        GRIM::ExecutionControlTelemetry execution_control;
         const float* primaryRow(int i) const {
             return primary.data() + static_cast<size_t>(i) * static_cast<size_t>(vocab);
         }
@@ -359,6 +360,30 @@ GRIM::GeneratedSequence generateOneSequence(
         TailLogits tail;
         tail.n_rows = n_tail;
         tail.vocab = vocab_size;
+        if (!forward_outputs.exec_outputs_per_row.empty()) {
+            const auto& execution_output = forward_outputs.exec_outputs_per_row.front();
+            if (execution_output.gate.predicted_class >= 0) {
+                auto& telemetry = tail.execution_control;
+                telemetry.gate_evaluated = true;
+                telemetry.gate_predicted_class = execution_output.gate.predicted_class;
+                telemetry.noop_probability = execution_output.gate.noop_probability;
+                telemetry.execute_probability = execution_output.gate.execute_probability;
+                telemetry.execution_ran = !execution_output.steps.empty();
+                telemetry.execution_suppressed_no_bootstrap =
+                    execution_output.execution_suppressed_no_bootstrap;
+                telemetry.stopped_by_model = execution_output.stopped_by_model;
+                telemetry.stopped_at_max_steps = execution_output.stopped_at_max_steps;
+                telemetry.steps.reserve(execution_output.steps.size());
+                for (size_t step_idx = 0; step_idx < execution_output.steps.size(); ++step_idx) {
+                    const auto& step = execution_output.steps[step_idx];
+                    telemetry.steps.push_back(GRIM::ExecutionStepControlTelemetry{
+                        static_cast<int>(step_idx),
+                        step.stop_predicted_class,
+                        step.continue_probability,
+                        step.stop_probability});
+                }
+            }
+        }
         const size_t row_bytes = static_cast<size_t>(vocab_size) * sizeof(float);
         const size_t tail_off = static_cast<size_t>(q_len - n_tail) * static_cast<size_t>(vocab_size);
         tail.primary.resize(static_cast<size_t>(n_tail) * static_cast<size_t>(vocab_size));
@@ -484,6 +509,7 @@ GRIM::GeneratedSequence generateOneSequence(
     // ── Prefill: populate the cache from the prompt; read the last position. ──
     TailLogits prefill = runCachedForward(
         prompt_payload, /*n_tail=*/1, /*want_selector=*/use_selector);
+    sequence.execution_control = prefill.execution_control;
 
     bool finished = false;
 
@@ -678,6 +704,7 @@ Phase2TextInferenceResult executePhase2TextInference(
     result.decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         end_decode - start_decode).count();
     result.sequence_token_count = sequence.token_ids.size();
+    result.execution_control = sequence.execution_control;
 
     return result;
 }

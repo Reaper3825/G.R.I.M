@@ -162,12 +162,37 @@ GRIM::HyperParameters::GenerationHP generationHPFromRequest(
 }
 
 json inferenceStatsJson(const GRIMText::Training::Phase2TextInferenceResult& result) {
+    const char* gate_decision = !result.execution_control.gate_evaluated
+        ? "not_evaluated"
+        : (result.execution_control.gate_predicted_class == 1 ? "execute" : "noop");
+    json execution_steps = json::array();
+    for (const auto& step : result.execution_control.steps) {
+        execution_steps.push_back(json{
+            {"step_index", step.step_index},
+            {"predicted_class", step.predicted_class},
+            {"decision", step.predicted_class == 1 ? "stop" : "continue"},
+            {"continue_probability", step.continue_probability},
+            {"stop_probability", step.stop_probability}
+        });
+    }
     return json{
         {"prompt_token_count", result.prompt_token_count},
         {"sequence_token_count", result.sequence_token_count},
         {"encode_ms", result.encode_ms},
         {"generation_ms", result.generation_ms},
-        {"decode_ms", result.decode_ms}
+        {"decode_ms", result.decode_ms},
+        {"execution_control", {
+            {"gate_evaluated", result.execution_control.gate_evaluated},
+            {"gate_predicted_class", result.execution_control.gate_predicted_class},
+            {"gate_decision", gate_decision},
+            {"noop_probability", result.execution_control.noop_probability},
+            {"execute_probability", result.execution_control.execute_probability},
+            {"execution_ran", result.execution_control.execution_ran},
+            {"execution_suppressed_no_bootstrap", result.execution_control.execution_suppressed_no_bootstrap},
+            {"stopped_by_model", result.execution_control.stopped_by_model},
+            {"stopped_at_max_steps", result.execution_control.stopped_at_max_steps},
+            {"steps", std::move(execution_steps)}
+        }}
     };
 }
 

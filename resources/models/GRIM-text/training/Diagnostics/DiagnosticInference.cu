@@ -137,6 +137,16 @@ void logDiagnosticSample(TrainingContext& ctx,
                                 " decode_ms=" + std::to_string(sample.decode_ms) +
                                 " prompt_tokens=" + std::to_string(sample.prompt_token_count) +
                                 " sequence_tokens=" + std::to_string(sample.sequence_token_count) +
+                                " exec_gate=" +
+                                    (!sample.execution_control.gate_evaluated
+                                        ? "not_evaluated"
+                                        : (sample.execution_control.gate_predicted_class == 1
+                                            ? "execute" : "noop")) +
+                                " exec_steps=" + std::to_string(sample.execution_control.steps.size()) +
+                                " exec_model_stop=" +
+                                    std::to_string(sample.execution_control.stopped_by_model ? 1 : 0) +
+                                " exec_max_stop=" +
+                                    std::to_string(sample.execution_control.stopped_at_max_steps ? 1 : 0) +
                                 " prompt=\"" + prompt + "\"");
         ctx.logging.logger->log("[Sample] " + decoded);
     } catch (const std::exception& e) {

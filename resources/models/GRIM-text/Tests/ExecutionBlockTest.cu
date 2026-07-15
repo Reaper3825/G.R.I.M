@@ -9,11 +9,14 @@
 #include "ExecutionBlockTest.hpp"
 
 #include "../Layers/ExecutionBlock/execution_block_GPU.hpp"
+#include "../Shared/Batching/BatchPayload.hpp"
 #include "../Shared/Forward/ModelForwardOutputs.hpp"
+#include "../Shared/UnigramByte/AtomTable.hpp"
 
 #include <cuda_runtime.h>
 
 #include <cmath>
+#include <memory>
 #include <vector>
 
 using namespace GRIM;
@@ -96,6 +99,12 @@ bool testStepOutputDefaults(std::string& message) {
                    "write_logits_tensor should start null");
     EB_ASSERT_TRUE(!sout.v_out_tensor.data,
                    "v_out_tensor should start null");
+    EB_ASSERT_TRUE(!sout.stop_logits_tensor.data,
+                   "stop_logits_tensor should start null");
+    EB_ASSERT_TRUE(!sout.stop_probabilities.data,
+                   "stop_probabilities should start null");
+    EB_ASSERT_EQ(sout.stop_predicted_class, -1,
+                 "stop_predicted_class default");
     EB_ASSERT_NEAR(sout.selection_temperature, 0.0f, 1e-6f,
                    "selection_temperature should default zero");
     EB_ASSERT_TRUE(!sout.div_was_clamped,
@@ -386,6 +395,11 @@ bool testExecutionBlockOutputMultiStep(std::string& message) {
     GRIM::Forward::ExecutionBlockOutput output;
 
     EB_ASSERT_EQ(static_cast<int>(output.steps.size()), 0, "steps starts empty");
+    EB_ASSERT_EQ(output.gate.predicted_class, -1, "gate prediction starts unset");
+    EB_ASSERT_TRUE(!output.stopped_by_model, "model-stop flag starts false");
+    EB_ASSERT_TRUE(!output.stopped_at_max_steps, "max-step flag starts false");
+    EB_ASSERT_TRUE(!output.execution_suppressed_no_bootstrap,
+                   "no-bootstrap suppression flag starts false");
 
     for (int k = 0; k < 3; ++k) {
         GRIM::Forward::ExecutionBlockStepOutput s{};
@@ -402,7 +416,50 @@ bool testExecutionBlockOutputMultiStep(std::string& message) {
 }
 
 //======================================================//
-//  12. num_scratch_slots must stay < num_slots
+//  12. Inference control boundary is final prompt token
+//======================================================//
+
+bool testInferencePromptControlBoundary(std::string& message) {
+    const std::vector<int> token_ids{5, 6, 7, 8};
+    const std::vector<float> numeric_values(token_ids.size(), 0.0f);
+    const std::vector<uint8_t> atom_mask(token_ids.size(), 0);
+    const std::vector<uint32_t> atom_flags(token_ids.size(), 0);
+    const std::vector<uint32_t> atom_entry_ids(
+        token_ids.size(), GRIM::Tokenizer::kAtomEntryNone);
+    const std::vector<int32_t> candidate_slot_map;
+
+    auto payload = GRIM::Batching::buildInferenceBatchPayload(
+        token_ids,
+        numeric_values,
+        atom_mask,
+        atom_flags,
+        std::make_shared<GRIM::Tokenizer::AtomTable>(),
+        atom_entry_ids,
+        candidate_slot_map,
+        /*vocab_size=*/1024,
+        /*batch_capacity=*/1,
+        /*max_cached_seq_len=*/16,
+        /*execution_num_slots=*/8,
+        /*number_encoder_digit_slots=*/0,
+        /*number_encoder_max_abs_pow10=*/0);
+
+    EB_ASSERT_TRUE(payload.isInferencePrefill(), "payload should be inference prefill");
+    EB_ASSERT_EQ(payload.execution_prompt_lengths[0], 4,
+                 "execution prompt length is the full prompt");
+    EB_ASSERT_EQ(payload.execution_prompt_end_positions[0], 3,
+                 "execution decision is anchored to the final prompt token");
+    EB_ASSERT_TRUE(!payload.execution_active[0],
+                   "inference metadata must not pre-activate execution");
+    EB_ASSERT_TRUE(
+        payload.execution_gate_targets[0]
+            == GRIM::Execution::ExecutionGateTarget::UNSUPERVISED,
+        "inference control must come from the model, not a teacher target");
+
+    return true;
+}
+
+//======================================================//
+//  13. num_scratch_slots must stay < num_slots
 //======================================================//
 
 bool testScratchSlotConstraint(std::string& message) {
@@ -446,6 +503,7 @@ int GRIM::Test::runExecutionBlockTests() {
     suite.addTest("Arithmetic: four-op semantics", testFourOpsSemantics);
     suite.addTest("Bootstrap: slot map semantics", testBootstrapSlotMapSemantics);
     suite.addTest("Output: multi-step aggregation", testExecutionBlockOutputMultiStep);
+    suite.addTest("Control: final prompt-token boundary", testInferencePromptControlBoundary);
     suite.addTest("Config: scratch-slot constraint", testScratchSlotConstraint);
 
     auto results = suite.runAll();

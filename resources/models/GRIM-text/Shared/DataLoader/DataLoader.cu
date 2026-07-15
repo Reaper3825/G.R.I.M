@@ -389,8 +389,8 @@ bool PrepareTrainingDataFromCache(
 	// BOS/EOS are NOT added here — Phase1_Startup owns boundary token
 	// insertion (add_bos, add_eos config flags) and target fixup for them.
 
-	auto build_sequence = [&](const std::string& text) -> std::optional<TokenizedSequence> {
-		auto result = tokenizer.tokenizeWithMetadata(text);
+	auto materialize_sequence = [](GRIM::Tokenizer::UniByteResult result)
+		-> std::optional<TokenizedSequence> {
 		if (result.token_ids.empty()) {
 			return std::nullopt;
 		}
@@ -416,6 +416,10 @@ bool PrepareTrainingDataFromCache(
 		}
 		seq.token_exec_slots.assign(seq_len, -1);
 		return seq;
+	};
+
+	auto build_sequence = [&](const std::string& text) -> std::optional<TokenizedSequence> {
+		return materialize_sequence(tokenizer.tokenizeWithMetadata(text));
 	};
 
 	std::cout << "[DataLoader] Encoding " << concept_json_entries.size()
@@ -451,7 +455,7 @@ bool PrepareTrainingDataFromCache(
 				auto seq = build_sequence(text);
 				if (!seq) { ++selected_entries_skipped; continue; }
 				seq->execution_active = false;
-				seq->execution_gate_target = GRIM::Execution::ExecutionGateTarget::IGNORE;
+				seq->execution_gate_target = GRIM::Execution::ExecutionGateTarget::UNSUPERVISED;
 				all_tokens.push_back(std::move(*seq));
 				++plaintext_count;
 				continue;
@@ -484,7 +488,7 @@ bool PrepareTrainingDataFromCache(
 				// GRMT stores original step count; batch builder pads + masks.
 			}
 
-			auto seq = build_sequence(built.canonical_text);
+			auto seq = materialize_sequence(std::move(built.encoded));
 			if (!seq) { ++selected_entries_skipped; continue; }
 			seq->execution_active = built.payload.execution_active;
 			seq->execution_gate_target = built.payload.execution_gate_target;

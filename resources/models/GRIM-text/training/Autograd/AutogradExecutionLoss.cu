@@ -969,9 +969,9 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
 
     for (int b = 0; b < payload.batch_size; ++b) {
         const auto gate_target = payload.execution_gate_targets.empty()
-            ? Execution::ExecutionGateTarget::IGNORE
+            ? Execution::ExecutionGateTarget::UNSUPERVISED
             : payload.execution_gate_targets[b];
-        if (gate_target != Execution::ExecutionGateTarget::IGNORE
+        if (gate_target != Execution::ExecutionGateTarget::UNSUPERVISED
             && execute_ce_weight > 0.0f) {
             auto& gate_logits = forward_outputs.exec_outputs_per_row[b].gate.logits;
             requireTensor(gate_logits, "execution_gate_logits", b, -1);

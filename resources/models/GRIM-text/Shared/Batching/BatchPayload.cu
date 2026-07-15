@@ -85,7 +85,7 @@ BatchPayload makeInferenceBasePayload(
 
     payload.execution_active.assign(1, row_execution_active);
     payload.execution_gate_targets.assign(
-        1, GRIM::Execution::ExecutionGateTarget::IGNORE);
+        1, GRIM::Execution::ExecutionGateTarget::UNSUPERVISED);
     payload.execution_prompt_end_positions.assign(1, seq_len - 1);
     payload.execution_prompt_lengths.assign(1, seq_len);
     payload.compiled_bootstrap_bindings.resize(1);
@@ -762,7 +762,7 @@ BatchPayload buildBatchPayload(
     // Compiled execution metadata arrays — sized to batch_size
     payload.execution_active.resize(payload.batch_size, false);
     payload.execution_gate_targets.resize(
-        payload.batch_size, GRIM::Execution::ExecutionGateTarget::IGNORE);
+        payload.batch_size, GRIM::Execution::ExecutionGateTarget::UNSUPERVISED);
     payload.execution_prompt_end_positions.resize(payload.batch_size, -1);
     payload.execution_prompt_lengths.resize(payload.batch_size, 0);
     payload.compiled_bootstrap_bindings.resize(payload.batch_size);

@@ -31,13 +31,13 @@ namespace Execution {
 // NOOP; verified structured programs use EXECUTE.
 // =============================================================================
 enum class ExecutionGateTarget : int8_t {
-    IGNORE = -1,
+    UNSUPERVISED = -1,
     NOOP = 0,
     EXECUTE = 1
 };
 
 inline bool isValidExecutionGateTarget(ExecutionGateTarget target) {
-    return target == ExecutionGateTarget::IGNORE
+    return target == ExecutionGateTarget::UNSUPERVISED
         || target == ExecutionGateTarget::NOOP
         || target == ExecutionGateTarget::EXECUTE;
 }
@@ -115,7 +115,7 @@ struct BootstrapLiteralBinding {
 // =============================================================================
 struct StructuredExecutionRecord {
     bool execution_active = false;
-    ExecutionGateTarget execution_gate_target = ExecutionGateTarget::IGNORE;
+    ExecutionGateTarget execution_gate_target = ExecutionGateTarget::UNSUPERVISED;
 
     // Bootstrap literal bindings — define which literals seed which registers
     std::vector<BootstrapLiteralBinding> bootstrap_bindings;
@@ -158,7 +158,7 @@ struct StructuredExecutionRecord {
 // =============================================================================
 struct CompiledStructuredExecutionPayload {
     bool execution_active = false;
-    ExecutionGateTarget execution_gate_target = ExecutionGateTarget::IGNORE;
+    ExecutionGateTarget execution_gate_target = ExecutionGateTarget::UNSUPERVISED;
 
     // Prefix-only planner observation boundary. Positions are row-relative.
     // The gate reads the final token of the complete prompt. A supervised

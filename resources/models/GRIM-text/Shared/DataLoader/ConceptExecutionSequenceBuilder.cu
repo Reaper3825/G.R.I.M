@@ -47,7 +47,7 @@ Execution::ExecutionGateTarget parseExecutionGateTarget(const json& j, bool exec
     }
 
     if (!j.contains("execution_gate_target")) {
-        return Execution::ExecutionGateTarget::IGNORE;
+        return Execution::ExecutionGateTarget::UNSUPERVISED;
     }
     if (!j["execution_gate_target"].is_string()) {
         throw std::runtime_error(
@@ -59,7 +59,7 @@ Execution::ExecutionGateTarget parseExecutionGateTarget(const json& j, bool exec
     std::transform(value.begin(), value.end(), value.begin(),
         [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     if (value == "noop") return Execution::ExecutionGateTarget::NOOP;
-    if (value == "ignore") return Execution::ExecutionGateTarget::IGNORE;
+    if (value == "ignore") return Execution::ExecutionGateTarget::UNSUPERVISED;
     if (value == "execute") {
         throw std::runtime_error(
             "parseExecutionGateTarget: execution_gate_target=execute requires an authored execution program");
@@ -593,31 +593,23 @@ ConceptBuildResult buildConceptSequence(
         }
     }
 
-    int execution_prompt_length = 0;
-    int execution_prompt_end_pos = -1;
-    if (render.execution_prompt_byte_end > 0) {
-        const std::string rendered_prompt =
-            result.canonical_text.substr(0, render.execution_prompt_byte_end);
-        auto prompt_encoded = tokenizer.tokenizeWithMetadata(rendered_prompt);
-        execution_prompt_length = static_cast<int>(prompt_encoded.token_ids.size());
-        execution_prompt_end_pos = execution_prompt_length - 1;
-    }
-    if (result.record.execution_gate_target != Execution::ExecutionGateTarget::IGNORE
+    // Tokenize exactly once. The prompt-end byte offset is a forced Viterbi
+    // segment boundary, so no token can straddle prompt and supervision text.
+    // The tokenizer reports the cumulative token count at that boundary from
+    // the same full-sequence pass.
+    size_t prompt_token_count = 0;
+    auto encoded = tokenizer.tokenizeWithMetadata(
+        result.canonical_text,
+        render.execution_prompt_byte_end,
+        &prompt_token_count);
+    const int execution_prompt_length = static_cast<int>(prompt_token_count);
+    const int execution_prompt_end_pos = execution_prompt_length - 1;
+    if (result.record.execution_gate_target != Execution::ExecutionGateTarget::UNSUPERVISED
         && execution_prompt_length <= 0) {
         throw std::runtime_error(
             "buildConceptSequence: supervised execution gate target requires a non-empty prompt");
     }
 
-    if (!result.record.execution_active) {
-        result.payload.execution_active = false;
-        result.payload.execution_gate_target = result.record.execution_gate_target;
-        result.payload.execution_prompt_length = execution_prompt_length;
-        result.payload.execution_prompt_end_pos = execution_prompt_end_pos;
-        return result;
-    }
-
-    // 3. Tokenize the canonical text
-    auto encoded = tokenizer.tokenizeWithMetadata(result.canonical_text);
     if (encoded.token_ids.empty()) {
         throw std::runtime_error(
             "buildConceptSequence: tokenization produced zero tokens for concept row");
@@ -627,6 +619,15 @@ ConceptBuildResult buildConceptSequence(
     if (execution_prompt_length > seq_len) {
         throw std::runtime_error(
             "buildConceptSequence: prompt token count exceeds full sequence length");
+    }
+
+    if (!result.record.execution_active) {
+        result.payload.execution_active = false;
+        result.payload.execution_gate_target = result.record.execution_gate_target;
+        result.payload.execution_prompt_length = execution_prompt_length;
+        result.payload.execution_prompt_end_pos = execution_prompt_end_pos;
+        result.encoded = std::move(encoded);
+        return result;
     }
 
     // 4. Build token-position → StructuralSpan correlation.
@@ -664,6 +665,7 @@ ConceptBuildResult buildConceptSequence(
         seq_len,
         execution_prompt_end_pos,
         execution_prompt_length);
+    result.encoded = std::move(encoded);
 
     return result;
 }

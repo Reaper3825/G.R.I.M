@@ -191,7 +191,10 @@ public:
     
     // The single tokenization op. Runs structural/atom detection per config and
     // returns the full result; callers wanting only token IDs read result.token_ids.
-    UniByteResult tokenizeWithMetadata(const std::string& text) const;
+    UniByteResult tokenizeWithMetadata(
+        const std::string& text,
+        size_t forced_segment_boundary = std::string::npos,
+        size_t* token_count_at_boundary = nullptr) const;
     
     //--------------------------------------------------//
     // Decoding

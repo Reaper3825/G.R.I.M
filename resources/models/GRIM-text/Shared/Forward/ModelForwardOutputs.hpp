@@ -89,6 +89,7 @@ struct ExecutionBlockStepOutput {
 struct ExecutionBlockOutput {
     ExecutionGateOutput gate;
     std::vector<ExecutionBlockStepOutput> steps;
+    bool execution_suppressed_no_bootstrap = false;
     bool stopped_by_model = false;
     bool stopped_at_max_steps = false;
 };
@@ -123,6 +124,7 @@ private:
     static void resetExecutionOutputVectorPreserveGeometry(std::vector<ExecutionBlockOutput>& outputs) {
         for (auto& output : outputs) {
             output.gate = ExecutionGateOutput();
+            output.execution_suppressed_no_bootstrap = false;
             output.stopped_by_model = false;
             output.stopped_at_max_steps = false;
             for (auto& step : output.steps) {

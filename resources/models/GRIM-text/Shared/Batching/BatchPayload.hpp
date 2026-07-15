@@ -142,7 +142,9 @@ struct BatchPayload {
     //
     // Runtime D_row is reconstructed from compiled_bootstrap_bindings ∪ teacher_steps.
     // ═══════════════════════════════════════════════════════════════════════
-    std::vector<bool> execution_active;    // [batch_size] — authoritative per-row activation
+    // Supervised rows use this as the teacher-forced activation. Inference prefill
+    // starts inactive and lets the execution gate make the runtime decision.
+    std::vector<bool> execution_active;    // [batch_size]
     std::vector<GRIM::Execution::ExecutionGateTarget> execution_gate_targets; // [batch_size]
     std::vector<int32_t> execution_prompt_end_positions; // [batch_size], row-relative
     std::vector<int32_t> execution_prompt_lengths;       // [batch_size]
