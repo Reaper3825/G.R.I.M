@@ -48,6 +48,7 @@
 #include "perception/digital/DigitalPerceptionPrimitivesLoop.hpp"
 #include "perception/physical/PhysicalEnvironmentLoop.hpp"
 #include "perception/physical/PhysicalInteractionLoop.hpp"
+#include "perception/physical/PhysicalGestureControlLoop.hpp"
 #include "perception/physical/PhysicalPerceptionPrimitivesLoop.hpp"
 #include "perception/physical/PhysicalSpatialGroundingLoop.hpp"
 #include "perception/physical/PhysicalLocalizationLoop.hpp"
@@ -103,6 +104,7 @@ BOOL WINAPI consoleHandler(DWORD signal) {
         GRIM::Perception::Digital::ShutdownDigitalPerceptionPrimitives();
         GRIM::Perception::Digital::ShutdownDigitalEnvironment();
         GRIM::Perception::Digital::ShutdownDigitalContextProjector();
+        GRIM::Perception::Physical::ShutdownPhysicalGestureControl();
         GRIM::Perception::Physical::ShutdownPhysicalInteraction();
 
         // Stop perception-side world-state consumers BEFORE the facade is
@@ -174,6 +176,7 @@ void signalHandler(int signal) {
         GRIM::Perception::Digital::ShutdownDigitalPerceptionPrimitives();
         GRIM::Perception::Digital::ShutdownDigitalEnvironment();
         GRIM::Perception::Digital::ShutdownDigitalContextProjector();
+        GRIM::Perception::Physical::ShutdownPhysicalGestureControl();
         GRIM::Perception::Physical::ShutdownPhysicalInteraction();
 
         // Stop perception-side world-state consumers BEFORE the facade is
@@ -684,6 +687,9 @@ int main(int argc, char* argv[])
         // Stage 2 auxiliary: non-blocking local hand/gesture interaction branch.
         // It owns a one-frame worker queue and never performs inference here.
         GRIM::Perception::Physical::TickPhysicalInteraction();
+        // Phase 2 controller: stabilizes hand results into semantic events,
+        // then routes only guarded mouse/wake mappings on the main thread.
+        GRIM::Perception::Physical::TickPhysicalGestureControl();
         // Stage 2: pulls the latest frame from the FrameBus, runs every enabled
         // perception primitive (detection / segmentation / classification / pose /
         // scene text), publishes the aggregate to PhysicalPerceptionPrimitiveBus.
@@ -819,6 +825,7 @@ int main(int argc, char* argv[])
     GRIM::Perception::Physical::ShutdownPhysicalLocalization();
     GRIM::Perception::Physical::ShutdownPhysicalSpatialGrounding();
     GRIM::Perception::Physical::ShutdownPhysicalPerceptionPrimitives();
+    GRIM::Perception::Physical::ShutdownPhysicalGestureControl();
     GRIM::Perception::Physical::ShutdownPhysicalInteraction();
     GRIM::Perception::Physical::ShutdownPhysicalEnvironment();
     GRIM::Perception::shutdown();  

@@ -12,6 +12,7 @@
 #include "perception/physical/PhysicalPerceptionPrimitivesLoop.hpp"
 #include "perception/physical/PhysicalHandGestureBus.hpp"
 #include "perception/physical/PhysicalInteractionLoop.hpp"
+#include "perception/physical/PhysicalGestureControlLoop.hpp"
 #include "perception/physical/PhysicalSpatialGroundingBus.hpp"
 #include "perception/physical/PhysicalSpatialGroundingLoop.hpp"
 #include "perception/physical/PhysicalLocalizationBus.hpp"

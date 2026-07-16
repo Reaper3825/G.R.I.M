@@ -2397,6 +2397,25 @@ void UIPhysicalEnvironmentPanel::DrawInteractionTab(OverlayRenderer& renderer) {
     }
     gap();
 
+    const auto control = PE::GetPhysicalGestureControlStatus();
+    line(std::string("Controller: ") + (control.enabled ? "enabled" : "disabled"),
+         control.enabled ? UITheme::Colors::TextPrimary : UITheme::Colors::TextMuted);
+    line(std::string("Armed: ") + (control.armed ? "YES" : "no"),
+         control.armed ? UITheme::Colors::Success : UITheme::Colors::Warning);
+    line("Stable event: " + (control.stable_gesture.empty()
+         ? std::string("none") : control.stable_gesture));
+    line("Events/actions: " + std::to_string(control.events_emitted)
+         + "/" + std::to_string(control.actions_executed));
+    if (!control.last_action.empty())
+        line("Last action: " + CompactPath(control.last_action));
+    if (!control.last_block_reason.empty())
+        line("Blocked: " + CompactPath(control.last_block_reason),
+             UITheme::Colors::Warning);
+    if (!control.last_error.empty())
+        line("Control error: " + CompactPath(control.last_error),
+             UITheme::Colors::Danger);
+    gap();
+
     line("Hands: " + std::to_string(s.hands.size()), UITheme::Colors::TextHeader);
     for (size_t i = 0; i < s.hands.size(); ++i) {
         const auto& hand = s.hands[i];

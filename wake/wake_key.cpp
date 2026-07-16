@@ -1,4 +1,5 @@
 #include "wake_key.hpp"
+#include "wake.hpp"
 #include "logger.hpp"
 #include "voice/voice.hpp"
 #include "ui/ui_helpers.hpp"
@@ -87,6 +88,26 @@ void update()
         LOG_DEBUG("WakeKey", "Configurable wake binding detected.");
         handleVoiceCommand(g_history, *g_timers, *g_longTermMemory, *g_nlp);
     }
+}
+
+bool requestWake(const std::string& source)
+{
+    if (!g_running || g_listening || !g_timers || !g_longTermMemory || !g_nlp) {
+        LOG_DEBUG("WakeKey", "External wake request rejected: " + source);
+        return false;
+    }
+
+    Wake::WakeEvent event;
+    event.stimulant = Wake::Stimulant::Motion;
+    event.source = source;
+    event.intensity = 1.0f;
+    event.priority = 5;
+    event.timestamp = std::chrono::steady_clock::now();
+    event.payload = "voice_capture";
+    Wake::triggerWake(event);
+    LOG_DEBUG("WakeKey", "External wake request accepted: " + source);
+    handleVoiceCommand(g_history, *g_timers, *g_longTermMemory, *g_nlp);
+    return true;
 }
 
 void stop()

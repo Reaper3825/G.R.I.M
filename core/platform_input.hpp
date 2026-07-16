@@ -25,6 +25,12 @@ namespace PlatformInput {
     
     // Get cursor position relative to a window
     void getCursorPosRelative(void* windowHandle, int& x, int& y);
+
+    // Synthetic output boundary used by explicit local controller layers.
+    // Returns false when the OS rejects injection or the platform backend does
+    // not support it. These functions do not mutate GRIM's polled input state.
+    bool moveCursorRelative(int deltaX, int deltaY);
+    bool emitMouseClick(int button); // 0 = left, 1 = right, 2 = middle
     
     // On macOS, returns true when Command is held (used so Cmd maps to Ctrl for shortcuts)
     bool isCommandDown();

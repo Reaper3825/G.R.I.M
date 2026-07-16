@@ -147,7 +147,7 @@ inline void provisionExecutionForwardRuntime(
             Tensor::zeros({1, d_model}, stream, "trace_state_row");
         if (connect_parameter_graph) {
             execution_runtime.trace_state_by_row[row].requires_grad_();
-            execution_runtime.trace_state_by_row[row].ensure_grad();
+            execution_runtime.trace_state_by_row[row].alloc_grad();
         } else {
             execution_runtime.trace_state_by_row[row].requires_grad = false;
         }

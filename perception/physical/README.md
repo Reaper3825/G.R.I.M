@@ -115,12 +115,20 @@ loop reuses the cached mask bundle instead of re-running SAM, with
 | `PhysicalMediaPipeHandGestureBackend.cpp` | Optional MediaPipe Tasks C adapter; a visible unavailable adapter is compiled when MediaPipe is off. |
 | `PhysicalHandGestureBus.*` | Latest operational/result snapshot consumed by the UI and future controller layer. |
 | `PhysicalHandGestureResult.hpp` | MediaPipe-free 21-landmark, handedness, gesture, provenance, and telemetry contract. |
+| `PhysicalGestureControlLoop.*` | Temporal hysteresis, arming/cooldown safety, and allowlisted mouse/wake routing. |
+| `PhysicalGestureEventBus.*` | Bounded semantic `Started`/`Held`/`Released` event history for controller consumers. |
+| `PhysicalGestureControlResult.hpp` | Backend-free controller event and operational-status contracts. |
 
 The interaction branch consumes `PhysicalFrameBus` independently of the main
 Stage-2 primitive bundle. It does not delay Stage 2/3/4/5, and Phase 1 does not
 project gestures into model context. Its queue is deliberately bounded to one
 frame: a new frame replaces stale pending work instead of allowing latency to
 grow without bound.
+
+Phase 2 consumes completed interaction snapshots on the main thread. It never
+injects raw per-frame labels directly: confidence hysteresis and dwell/release
+timers first produce semantic gesture events. Computer actions are restricted
+to the explicit mapping table in `PhysicalGestureControlConfig`.
 
 ## Stage 3 — Spatial Grounding
 

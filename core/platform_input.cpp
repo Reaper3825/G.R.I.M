@@ -50,6 +50,32 @@ namespace PlatformInput {
         x = p.x;
         y = p.y;
     }
+
+    bool moveCursorRelative(int deltaX, int deltaY) {
+        INPUT input{};
+        input.type = INPUT_MOUSE;
+        input.mi.dx = deltaX;
+        input.mi.dy = deltaY;
+        input.mi.dwFlags = MOUSEEVENTF_MOVE;
+        return ::SendInput(1, &input, sizeof(INPUT)) == 1;
+    }
+
+    bool emitMouseClick(int button) {
+        DWORD downFlag = 0;
+        DWORD upFlag = 0;
+        switch (button) {
+            case 0: downFlag = MOUSEEVENTF_LEFTDOWN;   upFlag = MOUSEEVENTF_LEFTUP; break;
+            case 1: downFlag = MOUSEEVENTF_RIGHTDOWN;  upFlag = MOUSEEVENTF_RIGHTUP; break;
+            case 2: downFlag = MOUSEEVENTF_MIDDLEDOWN; upFlag = MOUSEEVENTF_MIDDLEUP; break;
+            default: return false;
+        }
+        INPUT inputs[2]{};
+        inputs[0].type = INPUT_MOUSE;
+        inputs[0].mi.dwFlags = downFlag;
+        inputs[1].type = INPUT_MOUSE;
+        inputs[1].mi.dwFlags = upFlag;
+        return ::SendInput(2, inputs, sizeof(INPUT)) == 2;
+    }
 }
 
 #elif __linux__
@@ -196,6 +222,52 @@ namespace PlatformInput {
         x = win_x;
         y = win_y;
     }
+
+    bool moveCursorRelative(int deltaX, int deltaY) {
+        if (!display) return false;
+        XWarpPointer(display, None, root, 0, 0, 0, 0, deltaX, deltaY);
+        XFlush(display);
+        return true;
+    }
+
+    bool emitMouseClick(int button) {
+        if (!display) return false;
+        unsigned int xButton = 0;
+        switch (button) {
+            case 0: xButton = Button1; break;
+            case 1: xButton = Button3; break;
+            case 2: xButton = Button2; break;
+            default: return false;
+        }
+
+        Window rootReturn = 0, childReturn = 0;
+        int rootX = 0, rootY = 0, winX = 0, winY = 0;
+        unsigned int mask = 0;
+        if (!XQueryPointer(display, root, &rootReturn, &childReturn,
+                           &rootX, &rootY, &winX, &winY, &mask)) return false;
+        const Window target = childReturn != None ? childReturn : root;
+        XEvent event{};
+        event.xbutton.display = display;
+        event.xbutton.window = target;
+        event.xbutton.root = root;
+        event.xbutton.subwindow = None;
+        event.xbutton.time = CurrentTime;
+        event.xbutton.x = winX;
+        event.xbutton.y = winY;
+        event.xbutton.x_root = rootX;
+        event.xbutton.y_root = rootY;
+        event.xbutton.same_screen = True;
+        event.xbutton.button = xButton;
+
+        event.xbutton.type = ButtonPress;
+        const Status pressed = XSendEvent(
+            display, target, True, ButtonPressMask, &event);
+        event.xbutton.type = ButtonRelease;
+        const Status released = XSendEvent(
+            display, target, True, ButtonReleaseMask, &event);
+        XFlush(display);
+        return pressed != 0 && released != 0;
+    }
 }
 
 #elif __APPLE__
@@ -330,6 +402,62 @@ namespace PlatformInput {
         // For now, just return screen coordinates
         getCursorPos(x, y);
     }
+
+    bool moveCursorRelative(int deltaX, int deltaY) {
+        CGEventRef current = CGEventCreate(nullptr);
+        if (!current) return false;
+        CGPoint position = CGEventGetLocation(current);
+        CFRelease(current);
+        position.x += deltaX;
+        position.y += deltaY;
+        CGEventRef move = CGEventCreateMouseEvent(
+            nullptr, kCGEventMouseMoved, position, kCGMouseButtonLeft);
+        if (!move) return false;
+        CGEventPost(kCGHIDEventTap, move);
+        CFRelease(move);
+        return true;
+    }
+
+    bool emitMouseClick(int button) {
+        CGMouseButton mouseButton;
+        CGEventType downType;
+        CGEventType upType;
+        switch (button) {
+            case 0:
+                mouseButton = kCGMouseButtonLeft;
+                downType = kCGEventLeftMouseDown;
+                upType = kCGEventLeftMouseUp;
+                break;
+            case 1:
+                mouseButton = kCGMouseButtonRight;
+                downType = kCGEventRightMouseDown;
+                upType = kCGEventRightMouseUp;
+                break;
+            case 2:
+                mouseButton = kCGMouseButtonCenter;
+                downType = kCGEventOtherMouseDown;
+                upType = kCGEventOtherMouseUp;
+                break;
+            default:
+                return false;
+        }
+        CGEventRef current = CGEventCreate(nullptr);
+        if (!current) return false;
+        const CGPoint position = CGEventGetLocation(current);
+        CFRelease(current);
+        CGEventRef down = CGEventCreateMouseEvent(nullptr, downType, position, mouseButton);
+        CGEventRef up = CGEventCreateMouseEvent(nullptr, upType, position, mouseButton);
+        if (!down || !up) {
+            if (down) CFRelease(down);
+            if (up) CFRelease(up);
+            return false;
+        }
+        CGEventPost(kCGHIDEventTap, down);
+        CGEventPost(kCGHIDEventTap, up);
+        CFRelease(down);
+        CFRelease(up);
+        return true;
+    }
 }
 
 #else
@@ -344,6 +472,8 @@ namespace PlatformInput {
     void setCommandDownFromEvent(bool) {}
     void getCursorPos(int& x, int& y) { x = y = 0; }
     void getCursorPosRelative(void*, int& x, int& y) { x = y = 0; }
+    bool moveCursorRelative(int, int) { return false; }
+    bool emitMouseClick(int) { return false; }
 }
 
 #endif
