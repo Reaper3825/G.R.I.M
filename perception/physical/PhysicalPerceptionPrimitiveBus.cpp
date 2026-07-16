@@ -20,6 +20,12 @@ void PhysicalPerceptionPrimitiveBus::PublishPhysicalPerceptionResultsToBus(
             "source_frame_counter is 0 — producer MUST stamp the originating "
             "PhysicalFrameBus counter (which starts at 1)");
     }
+    if (!results.source_frame.packet
+        || results.source_frame.frame_counter != results.source_frame_counter) {
+        throw std::runtime_error(
+            "PhysicalPerceptionPrimitiveBus::PublishPhysicalPerceptionResultsToBus: "
+            "source_frame is missing or does not match source_frame_counter");
+    }
     if (results.model_image_width <= 0 || results.model_image_height <= 0) {
         throw std::runtime_error(
             "PhysicalPerceptionPrimitiveBus::PublishPhysicalPerceptionResultsToBus: "

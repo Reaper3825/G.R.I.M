@@ -1735,8 +1735,12 @@ void executeStepCoordinatorImpl(
     CUDA_CHECK_KERNEL();
 
     auto decode_input = Tensor::zeros({1, vid}, stream, "exec_decode_input");
-    decode_input.requires_grad = true;
+    // This direct slice is a detached leaf. MatMulGradFn therefore consumes its
+    // persistent leaf-gradient buffer rather than owning a transient non-leaf
+    // buffer; provision that storage at the leaf's creation boundary.
+    decode_input.requires_grad_();
     decode_input.is_leaf = true;
+    decode_input.alloc_grad();
     cudaMemcpyAsync(decode_input.data, work.atom_new.data + 16, vid * sizeof(float), cudaMemcpyDeviceToDevice, stream);
 
     auto decode_h = autograd::matmul(decode_input, params.w_decode_1, stream);

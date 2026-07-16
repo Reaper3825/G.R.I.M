@@ -1,11 +1,13 @@
 #include "PhysicalSpatialGroundingLoop.hpp"
 
 #include "PhysicalFrameBus.hpp"
+#include "PhysicalLatestTickWorker.hpp"
 #include "PhysicalPerceptionPrimitiveBus.hpp"
 #include "PhysicalSpatialGroundingBus.hpp"
 #include "PhysicalSpatialGroundingLogTag.hpp"
 #include "logger.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <mutex>
@@ -40,8 +42,8 @@ struct PhysicalSpatialGroundingState {
     std::unique_ptr<PhysicalSpatialGrounderConfig>          pending_ground_cfg;
 
     std::string  last_error_reason;
-    uint64_t     tick_count          = 0;
-    uint64_t     processed_count     = 0;
+    std::atomic<uint64_t> tick_count      {0};
+    std::atomic<uint64_t> processed_count {0};
     uint64_t     last_seen_frame_ctr = 0;       // PhysicalFrameBus counter
     uint64_t     last_seen_perc_ctr  = 0;       // PhysicalPerceptionPrimitiveBus counter
 
@@ -66,6 +68,11 @@ struct PhysicalSpatialGroundingState {
 PhysicalSpatialGroundingState& GetState() {
     static PhysicalSpatialGroundingState s;
     return s;
+}
+
+PhysicalLatestTickWorker& GetSpatialGroundingWorker() {
+    static PhysicalLatestTickWorker worker;
+    return worker;
 }
 
 void LazyInitLocked(PhysicalSpatialGroundingState& s) {
@@ -111,7 +118,9 @@ void LazyInitLocked(PhysicalSpatialGroundingState& s) {
 
 } // anonymous namespace
 
-void TickPhysicalSpatialGrounding() {
+namespace {
+
+void RunPhysicalSpatialGroundingOnce() {
     const auto tick_start = std::chrono::steady_clock::now();
     auto& s = GetState();
     std::lock_guard<std::mutex> lk(s.mutex);
@@ -119,24 +128,28 @@ void TickPhysicalSpatialGrounding() {
     LazyInitLocked(s);
     ++s.tick_count;
 
-    // We need BOTH the source frame (for depth inference) AND the matching
-    // tracker output (for fusion). Either advancing on its own is not
-    // enough — we wait for both, then verify they share a frame counter so
-    // the fused result is coherent.
-    const auto frame_pull_start = std::chrono::steady_clock::now();
-    const bool frame_advanced = PhysicalFrameBus::Instance().PullLatestFrameView(
-        s.frame_view, s.last_seen_frame_ctr);
-    const double frame_pull_ms = PhysicalSpatialElapsedMsSince(frame_pull_start);
+    // Stage 2 pins the exact immutable source frame inside its result. Use
+    // that frame for depth inference so asynchronous workers cannot combine
+    // tracker output from one frame with pixels from a newer frame.
     const auto perc_pull_start = std::chrono::steady_clock::now();
     const bool perc_advanced  = PhysicalPerceptionPrimitiveBus::Instance()
         .PullLatestPhysicalPerceptionResultsView(s.perc_view, s.last_seen_perc_ctr);
     const double perc_pull_ms = PhysicalSpatialElapsedMsSince(perc_pull_start);
 
-    if (!frame_advanced && !perc_advanced) return;
+    if (!perc_advanced) return;
 
-    // If only one advanced we cannot guarantee correlated inputs. Wait.
-    if (s.frame_view.frame_counter == 0 || s.perc_view.results.source_frame_counter == 0) return;
-    if (s.frame_view.frame_counter != s.perc_view.results.source_frame_counter) return;
+    const auto frame_pull_start = std::chrono::steady_clock::now();
+    s.frame_view = s.perc_view.results.source_frame;
+    const double frame_pull_ms = PhysicalSpatialElapsedMsSince(frame_pull_start);
+    if (!s.frame_view.packet
+        || s.frame_view.frame_counter == 0
+        || s.frame_view.frame_counter != s.perc_view.results.source_frame_counter) {
+        s.last_error_reason =
+            "TickPhysicalSpatialGrounding: Stage-2 result has no matching pinned source frame";
+        LOG_ERROR(PHYSICAL_SPATIAL_GROUND_LOG_TAG, s.last_error_reason);
+        return;
+    }
+    s.last_seen_frame_ctr = s.frame_view.frame_counter;
 
     if (s.frame_view.model_image.empty()) {
         s.last_error_reason = "TickPhysicalSpatialGrounding: pulled frame has empty model_image";
@@ -270,7 +283,30 @@ void TickPhysicalSpatialGrounding() {
     }
 }
 
+} // anonymous namespace
+
+void TickPhysicalSpatialGrounding() {
+    auto& worker = GetSpatialGroundingWorker();
+    worker.Start([] {
+        try {
+            RunPhysicalSpatialGroundingOnce();
+        } catch (const std::exception& e) {
+            auto& s = GetState();
+            std::lock_guard<std::mutex> lk(s.mutex);
+            s.last_error_reason = std::string("spatial-grounding worker threw: ") + e.what();
+            LOG_ERROR(PHYSICAL_SPATIAL_GROUND_LOG_TAG, s.last_error_reason);
+        } catch (...) {
+            auto& s = GetState();
+            std::lock_guard<std::mutex> lk(s.mutex);
+            s.last_error_reason = "spatial-grounding worker threw a non-standard exception";
+            LOG_ERROR(PHYSICAL_SPATIAL_GROUND_LOG_TAG, s.last_error_reason);
+        }
+    });
+    worker.RequestLatest();
+}
+
 void ShutdownPhysicalSpatialGrounding() {
+    GetSpatialGroundingWorker().Stop();
     auto& s = GetState();
     std::lock_guard<std::mutex> lk(s.mutex);
     s.shutting_down = true;
@@ -297,7 +333,8 @@ void ShutdownPhysicalSpatialGrounding() {
 
 bool IsPhysicalSpatialGroundingRunning() {
     auto& s = GetState();
-    std::lock_guard<std::mutex> lk(s.mutex);
+    std::unique_lock<std::mutex> lk(s.mutex, std::try_to_lock);
+    if (!lk.owns_lock()) return GetSpatialGroundingWorker().IsStarted();
     return s.initialized && !s.shutting_down;
 }
 
@@ -309,20 +346,17 @@ PhysicalSpatialGroundingEnableFlags GetPhysicalSpatialGroundingEnableFlags() {
 
 std::string GetLastPhysicalSpatialGroundingError() {
     auto& s = GetState();
-    std::lock_guard<std::mutex> lk(s.mutex);
+    std::unique_lock<std::mutex> lk(s.mutex, std::try_to_lock);
+    if (!lk.owns_lock()) return {};
     return s.last_error_reason;
 }
 
 uint64_t GetPhysicalSpatialGroundingTickCount() {
-    auto& s = GetState();
-    std::lock_guard<std::mutex> lk(s.mutex);
-    return s.tick_count;
+    return GetState().tick_count.load();
 }
 
 uint64_t GetPhysicalSpatialGroundingProcessedCount() {
-    auto& s = GetState();
-    std::lock_guard<std::mutex> lk(s.mutex);
-    return s.processed_count;
+    return GetState().processed_count.load();
 }
 
 void RequestSetPhysicalSpatialGroundingEnableFlags(

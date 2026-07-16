@@ -98,7 +98,7 @@ struct PhysicalInstanceSegmenterConfig {
     float        mask_logit_threshold   = 0.0f;   // SAM 2 default: 0 (sigmoid > 0.5)
 
     // ONNX Runtime backend tuning.
-    //   intra_op_num_threads: 0 = let ORT decide based on hw_concurrency.
+    //   intra_op_num_threads: 0 = automatic (max 8, preserving UI headroom).
     // CoreML EP is intentionally NOT exposed here — the current vcpkg
     // onnxruntime port does not ship the CoreML provider headers/symbols,
     // so we cannot honor an EP-selection toggle without violating Rule 20.

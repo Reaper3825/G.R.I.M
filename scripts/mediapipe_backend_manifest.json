@@ -1,0 +1,39 @@
+{
+  "mediapipe": {
+    "version": "0.10.35",
+    "source_url": "https://codeload.github.com/google-ai-edge/mediapipe/zip/refs/tags/v0.10.35",
+    "source_sha256": "818c9901973611fff2576d22fef0ca16c30474d0c330eb80936524324c575776",
+    "critical_files": [
+      {
+        "path": ".bazelversion",
+        "sha256": "910121d8fda1ee513d664110f94bef46c4791698010db514c2a71cc1932bc3cf"
+      },
+      {
+        "path": "mediapipe/tasks/c/BUILD",
+        "sha256": "c0719db1d5f391b6cecc993f1a7026d9a160472119aa9d338827d0c86d8d3143"
+      },
+      {
+        "path": "mediapipe/tasks/c/vision/gesture_recognizer/gesture_recognizer.h",
+        "sha256": "d802f8e7635ce7104f23534f2f2475021f5b8527dc1a00b9f40a407963e84980"
+      },
+      {
+        "path": "mediapipe/tasks/c/vision/gesture_recognizer/gesture_recognizer.cc",
+        "sha256": "b20111ee877beb7dc2bc2278e3789f0b985c85bf8468c8870278a94c4e063886"
+      },
+      {
+        "path": "mediapipe/tasks/c/vision/core/image.cc",
+        "sha256": "dcd76dbf77d3caef906e04b65a9b71758a86b2a608d4f7230108a6b25d20243e"
+      }
+    ]
+  },
+  "bazelisk": {
+    "version": "1.29.0",
+    "windows_x86_64_url": "https://github.com/bazelbuild/bazelisk/releases/download/v1.29.0/bazelisk-windows-amd64.exe",
+    "windows_x86_64_sha256": "092a8738d5b41aae7a85c42cc961b1034e3389aba43ffc20c0fabda7b43e095b"
+  },
+  "gesture_model": {
+    "version": "float16/1",
+    "url": "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task",
+    "sha256": "97952348cf6a6a4915c2ea1496b4b37ebabc50cbbf80571435643c455f2b0482"
+  }
+}

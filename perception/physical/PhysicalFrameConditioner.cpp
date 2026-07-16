@@ -461,15 +461,14 @@ PhysicalSignalConditioningResult PhysicalFrameConditioner::ProcessRawFrameToMode
 
     if (config_.enable_denoise && config_.denoise_strength > 0) {
         stage_start = std::chrono::steady_clock::now();
-        cv::Mat denoised;
-        cv::fastNlMeansDenoisingColored(working,
-                                        denoised,
-                                        static_cast<float>(config_.denoise_strength),
-                                        static_cast<float>(config_.denoise_strength),
-                                        7,
-                                        21);
-        working = denoised;
-        pipeline << "denoise ";
+        int kernel_size = std::max(1, config_.denoise_strength);
+        if ((kernel_size & 1) == 0) ++kernel_size;
+        if (kernel_size > 1) {
+            cv::Mat denoised;
+            cv::medianBlur(working, denoised, kernel_size);
+            working = denoised;
+        }
+        pipeline << "median_denoise(k=" << kernel_size << ") ";
         result.denoise_ms = elapsed_ms_since(stage_start);
         status_.last_denoise_ms = result.denoise_ms;
     }

@@ -175,11 +175,13 @@ include(cmake/Config.cmake)
 # remains fully functional without MediaPipe. No FetchContent or download path
 # is allowed here because base operation must remain offline-capable.
 if(GRIM_USE_MEDIAPIPE_HAND_GESTURES)
-    if(NOT GRIM_MEDIAPIPE_OFFLINE_LOGGER_VERIFIED)
+    if(NOT EXISTS "${GRIM_MEDIAPIPE_OFFLINE_AUDIT_STAMP}" AND
+       NOT GRIM_MEDIAPIPE_OFFLINE_LOGGER_VERIFIED)
         message(FATAL_ERROR
             "MediaPipe hand gestures require "
-            "-DGRIM_MEDIAPIPE_OFFLINE_LOGGER_VERIFIED=ON after supplying a "
-            "MediaPipe build whose usage-metrics transport is disabled.")
+            "scripts/setup_mediapipe_backend.ps1 -Build, or explicit "
+            "-DGRIM_MEDIAPIPE_OFFLINE_LOGGER_VERIFIED=ON for an independently "
+            "audited custom build.")
     endif()
     if(NOT EXISTS
        "${GRIM_MEDIAPIPE_ROOT}/mediapipe/tasks/c/vision/gesture_recognizer/gesture_recognizer.h")
@@ -190,13 +192,59 @@ if(GRIM_USE_MEDIAPIPE_HAND_GESTURES)
         message(FATAL_ERROR
             "GRIM_MEDIAPIPE_TASKS_C_LIBRARY must name an existing local library")
     endif()
+    if(EXISTS "${GRIM_MEDIAPIPE_OFFLINE_AUDIT_STAMP}")
+        file(READ "${GRIM_MEDIAPIPE_OFFLINE_AUDIT_STAMP}"
+             _GRIM_MEDIAPIPE_AUDIT_JSON)
+        string(JSON _GRIM_MEDIAPIPE_AUDITED_HASH ERROR_VARIABLE
+               _GRIM_MEDIAPIPE_AUDIT_ERROR GET
+               "${_GRIM_MEDIAPIPE_AUDIT_JSON}" runtime_sha256)
+        if(NOT "${_GRIM_MEDIAPIPE_AUDIT_ERROR}" STREQUAL "NOTFOUND")
+            message(FATAL_ERROR
+                "MediaPipe offline audit stamp is invalid: "
+                "${_GRIM_MEDIAPIPE_AUDIT_ERROR}")
+        endif()
+        file(SHA256 "${GRIM_MEDIAPIPE_TASKS_C_LIBRARY}"
+             _GRIM_MEDIAPIPE_RUNTIME_HASH)
+        if(NOT "${_GRIM_MEDIAPIPE_RUNTIME_HASH}" STREQUAL
+           "${_GRIM_MEDIAPIPE_AUDITED_HASH}")
+            message(FATAL_ERROR
+                "MediaPipe runtime changed after its offline audit; rerun "
+                "scripts/setup_mediapipe_backend.ps1 -Build")
+        endif()
+        unset(_GRIM_MEDIAPIPE_AUDIT_JSON)
+        unset(_GRIM_MEDIAPIPE_AUDITED_HASH)
+        unset(_GRIM_MEDIAPIPE_AUDIT_ERROR)
+        unset(_GRIM_MEDIAPIPE_RUNTIME_HASH)
+    endif()
 
     target_include_directories(GRIM PRIVATE "${GRIM_MEDIAPIPE_ROOT}")
-    target_link_libraries(GRIM PRIVATE "${GRIM_MEDIAPIPE_TASKS_C_LIBRARY}")
+    # Resolve the C exports dynamically. Windows DLL packages do not need an
+    # import library, and a missing/wrong runtime becomes a visible backend
+    # state rather than a process-start failure.
+    if(CMAKE_DL_LIBS)
+        target_link_libraries(GRIM PRIVATE ${CMAKE_DL_LIBS})
+    endif()
+    file(TO_CMAKE_PATH "${GRIM_MEDIAPIPE_TASKS_C_LIBRARY}"
+         _GRIM_MEDIAPIPE_RUNTIME_PATH)
     target_compile_definitions(GRIM PRIVATE
         GRIM_HAS_MEDIAPIPE_TASKS_C=1
         GRIM_MEDIAPIPE_TELEMETRY_DISABLED=1
+        GRIM_MEDIAPIPE_RUNTIME_LIBRARY_PATH="${_GRIM_MEDIAPIPE_RUNTIME_PATH}"
         GRIM_MEDIAPIPE_VERSION="${GRIM_MEDIAPIPE_VERSION}")
+    if(WIN32)
+        set(_GRIM_MEDIAPIPE_RUNTIME_NAME "libmediapipe.dll")
+    elseif(APPLE)
+        set(_GRIM_MEDIAPIPE_RUNTIME_NAME "libmediapipe.dylib")
+    else()
+        set(_GRIM_MEDIAPIPE_RUNTIME_NAME "libmediapipe.so")
+    endif()
+    add_custom_command(TARGET GRIM POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${GRIM_MEDIAPIPE_TASKS_C_LIBRARY}"
+                "$<TARGET_FILE_DIR:GRIM>/${_GRIM_MEDIAPIPE_RUNTIME_NAME}"
+        COMMENT "Copying the local MediaPipe Tasks runtime")
+    unset(_GRIM_MEDIAPIPE_RUNTIME_PATH)
+    unset(_GRIM_MEDIAPIPE_RUNTIME_NAME)
     message(STATUS
         "GRIM MediaPipe hand gestures: local backend enabled "
         "(${GRIM_MEDIAPIPE_VERSION}); network fallback disabled")

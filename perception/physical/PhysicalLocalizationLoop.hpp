@@ -12,19 +12,20 @@ namespace GRIM { namespace Perception { namespace Physical {
 // ─────────────────────────────────────────────────────────────────────────────
 //  PhysicalLocalizationLoop — Stage-5 mainloop integration point.
 //
-//  The mainloop calls TickPhysicalLocalization() exactly once per frame
-//  immediately AFTER TickPhysicalSpatialGrounding() (and BEFORE
+//  The mainloop calls TickPhysicalLocalization() exactly once per frame.
+//  Tick only schedules a bounded latest-frame worker and never waits for
+//  odometry. It is invoked immediately AFTER TickPhysicalSpatialGrounding() (and BEFORE
 //  TickPhysicalWorldState() so a future revision of the world-state
 //  builder can stamp every entity into the world frame).
 //
-//  On the first call:
+//  On the first worker invocation:
 //    * Constructs PhysicalVisualOdometer + PhysicalOccupancyGridMapper.
 //    * Pulls camera intrinsics from PhysicalCameraCalibrator (if available)
 //      and feeds them into the odometer. If no calibration is loaded,
 //      the loop publishes a Failed snapshot every tick with a clear
 //      reason — the UI will display it.
 //
-//  Every subsequent call:
+//  Every subsequent worker invocation:
 //    * PullLatestFrameView from PhysicalFrameBus.
 //    * If calibration just became available, push it into the odometer.
 //    * If a new frame arrived, RouteFrameToPhysicalVisualOdometer.

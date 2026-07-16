@@ -1,0 +1,20 @@
+GRIM native crash report
+Dump: D:\G.R.I.M\logs\GRIM_crash_20260716_170004_453.dmp
+ProcessId: 43200
+ThreadId: 18784
+ExceptionCode: 0xc0000005
+ExceptionAddress: 0x7ff9076f2ad0
+AccessViolationOperation: read
+AccessViolationAddress: 0x6000000041
+Stack:
+  0x7ff9076f2ad0 cv::Mat::empty+0x30 [D:\G.R.I.M\build\release\opencv_core4.dll]
+  0x7ff90767c64e cv::Mat::copyTo+0xae [D:\G.R.I.M\build\release\opencv_core4.dll]
+  0x7ff9076f1ad6 cv::Mat::clone+0x76 [D:\G.R.I.M\build\release\opencv_core4.dll]
+  0x7ff7f6ee9aeb GRIM::Perception::Physical::PhysicalVisualOdometer::RouteFrameToPhysicalVisualOdometer+0x31b [D:\G.R.I.M\build\release\GRIM.exe]
+  0x7ff7f6eae1dd GRIM::Perception::Physical::`anonymous namespace'::RunPhysicalLocalizationOnce+0x85d [D:\G.R.I.M\build\release\GRIM.exe]
+  0x7ff7f6eac04b `GRIM::Perception::Physical::TickPhysicalLocalization'::`2'::<lambda_1>::operator()+0x1b [D:\G.R.I.M\build\release\GRIM.exe]
+  0x7ff7f6eafe98 GRIM::Perception::Physical::PhysicalLatestTickWorker::WorkerMain+0xf8 [D:\G.R.I.M\build\release\GRIM.exe]
+  0x7ff7f6eaad71 std::thread::_Invoke<std::tuple<`GRIM::Perception::Physical::PhysicalLatestTickWorker::Start'::`2'::<lambda_1> >,0>+0x11 [D:\G.R.I.M\build\release\GRIM.exe]
+  0x7ff9cc53cd30 wcsrchr+0x150 [C:\WINDOWS\System32\ucrtbase.dll]
+  0x7ff9cdcbe957 BaseThreadInitThunk+0x17 [C:\WINDOWS\System32\KERNEL32.DLL]
+  0x7ff9ce9ead6c RtlUserThreadStart+0x2c [C:\WINDOWS\SYSTEM32\ntdll.dll]

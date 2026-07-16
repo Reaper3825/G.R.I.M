@@ -113,6 +113,7 @@ resources/*.hpp
 resources/*.cpp
 resources/*.png        # Large PNGs (e.g., GRIM_Listener_ss_normal.png)
 resources/models/*.bin
+/resources/models/vision/mediapipe/*.task
 /resources/models/whisper/*
 resources/Resources/models/
 resources/wakeword/*

@@ -2,6 +2,7 @@
 
 #include "PhysicalImageOperatorState.hpp"
 #include "PhysicalFrameConditioner.hpp"   // PhysicalSignalRawToModelTransform
+#include "PhysicalFrameBus.hpp"
 
 #include <cstdint>
 #include <string>
@@ -386,6 +387,10 @@ struct PhysicalPerceptionPrimitiveTelemetry {
 // coherent set (same input frame for every operator).
 struct PhysicalPerceptionPrimitiveResults {
     uint64_t                              source_frame_counter = 0;
+    // Pins the exact immutable frame consumed by Stage 2. Asynchronous
+    // downstream stages must use this view instead of pulling the newer
+    // latest-frame slot and accidentally fusing different frame identities.
+    PhysicalFrameBus::FrameView            source_frame;
     int                                   model_image_width    = 0;
     int                                   model_image_height   = 0;
     int                                   raw_image_width      = 0;

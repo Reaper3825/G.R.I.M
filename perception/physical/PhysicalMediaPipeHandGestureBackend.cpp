@@ -6,11 +6,22 @@
 #include <sstream>
 #include <string>
 #include <utility>
+#include <vector>
 
 #if defined(GRIM_HAS_MEDIAPIPE_TASKS_C)
 #include "mediapipe/tasks/c/core/common.h"
 #include "mediapipe/tasks/c/vision/core/image.h"
 #include "mediapipe/tasks/c/vision/gesture_recognizer/gesture_recognizer.h"
+
+#if defined(_WIN32)
+#include <Windows.h>
+#elif defined(__APPLE__)
+#include <dlfcn.h>
+#include <mach-o/dyld.h>
+#else
+#include <dlfcn.h>
+#include <unistd.h>
+#endif
 #endif
 
 namespace GRIM { namespace Perception { namespace Physical {
@@ -24,19 +35,198 @@ uint64_t SteadyNowNs() {
 
 #if defined(GRIM_HAS_MEDIAPIPE_TASKS_C)
 
-std::string TakeMediaPipeError(char*& error_message) {
+class MediaPipeTasksCApi {
+public:
+    ~MediaPipeTasksCApi() { Unload(); }
+
+    MediaPipeTasksCApi(const MediaPipeTasksCApi&) = delete;
+    MediaPipeTasksCApi& operator=(const MediaPipeTasksCApi&) = delete;
+    MediaPipeTasksCApi() = default;
+
+    bool Load(std::string& error) {
+        Unload();
+
+        std::vector<std::filesystem::path> candidates;
+#if defined(GRIM_MEDIAPIPE_RUNTIME_LIBRARY_PATH)
+        candidates.emplace_back(GRIM_MEDIAPIPE_RUNTIME_LIBRARY_PATH);
+#endif
+        const auto executable_dir = ExecutableDirectory();
+        if (!executable_dir.empty()) {
+            candidates.emplace_back(executable_dir / LibraryFileName());
+        }
+        candidates.emplace_back(LibraryFileName());
+
+        std::ostringstream failures;
+        for (const auto& candidate : candidates) {
+            if (candidate.empty()) continue;
+            module_ = OpenModule(candidate);
+            if (module_) {
+                loaded_path_ = candidate.string();
+                break;
+            }
+            if (failures.tellp() > 0) failures << "; ";
+            failures << candidate.string();
+        }
+        if (!module_) {
+            error = "Unable to load the local MediaPipe Tasks C runtime. Tried: " +
+                    failures.str() + ". " + LastModuleError();
+            return false;
+        }
+
+        bool complete = true;
+        complete &= Resolve(error_free, "MpErrorFree", error);
+        complete &= Resolve(image_create_from_uint8_data,
+                            "MpImageCreateFromUint8Data", error);
+        complete &= Resolve(image_free, "MpImageFree", error);
+        complete &= Resolve(gesture_recognizer_create,
+                            "MpGestureRecognizerCreate", error);
+        complete &= Resolve(gesture_recognizer_recognize_for_video,
+                            "MpGestureRecognizerRecognizeForVideo", error);
+        complete &= Resolve(gesture_recognizer_close_result,
+                            "MpGestureRecognizerCloseResult", error);
+        complete &= Resolve(gesture_recognizer_close,
+                            "MpGestureRecognizerClose", error);
+        if (!complete) {
+            Unload();
+            return false;
+        }
+        return true;
+    }
+
+    void Unload() noexcept {
+        error_free = nullptr;
+        image_create_from_uint8_data = nullptr;
+        image_free = nullptr;
+        gesture_recognizer_create = nullptr;
+        gesture_recognizer_recognize_for_video = nullptr;
+        gesture_recognizer_close_result = nullptr;
+        gesture_recognizer_close = nullptr;
+        loaded_path_.clear();
+        if (!module_) return;
+#if defined(_WIN32)
+        FreeLibrary(module_);
+#else
+        dlclose(module_);
+#endif
+        module_ = nullptr;
+    }
+
+    decltype(&MpErrorFree) error_free = nullptr;
+    decltype(&MpImageCreateFromUint8Data) image_create_from_uint8_data = nullptr;
+    decltype(&MpImageFree) image_free = nullptr;
+    decltype(&MpGestureRecognizerCreate) gesture_recognizer_create = nullptr;
+    decltype(&MpGestureRecognizerRecognizeForVideo)
+        gesture_recognizer_recognize_for_video = nullptr;
+    decltype(&MpGestureRecognizerCloseResult)
+        gesture_recognizer_close_result = nullptr;
+    decltype(&MpGestureRecognizerClose) gesture_recognizer_close = nullptr;
+
+private:
+#if defined(_WIN32)
+    using ModuleHandle = HMODULE;
+#else
+    using ModuleHandle = void*;
+#endif
+
+    static const char* LibraryFileName() noexcept {
+#if defined(_WIN32)
+        return "libmediapipe.dll";
+#elif defined(__APPLE__)
+        return "libmediapipe.dylib";
+#else
+        return "libmediapipe.so";
+#endif
+    }
+
+    static std::filesystem::path ExecutableDirectory() {
+#if defined(_WIN32)
+        std::wstring path(32768, L'\0');
+        const DWORD count = GetModuleFileNameW(
+            nullptr, path.data(), static_cast<DWORD>(path.size()));
+        if (count == 0 || count >= path.size()) return {};
+        path.resize(count);
+        return std::filesystem::path(path).parent_path();
+#elif defined(__APPLE__)
+        uint32_t size = 0;
+        (void)_NSGetExecutablePath(nullptr, &size);
+        if (size == 0) return {};
+        std::vector<char> path(size);
+        if (_NSGetExecutablePath(path.data(), &size) != 0) return {};
+        return std::filesystem::weakly_canonical(path.data()).parent_path();
+#else
+        std::vector<char> path(4096, '\0');
+        const ssize_t count = readlink("/proc/self/exe", path.data(),
+                                       path.size() - 1);
+        if (count <= 0) return {};
+        path[static_cast<size_t>(count)] = '\0';
+        return std::filesystem::path(path.data()).parent_path();
+#endif
+    }
+
+    static ModuleHandle OpenModule(const std::filesystem::path& path) {
+#if defined(_WIN32)
+        return LoadLibraryW(path.wstring().c_str());
+#else
+        return dlopen(path.string().c_str(), RTLD_NOW | RTLD_LOCAL);
+#endif
+    }
+
+    static std::string LastModuleError() {
+#if defined(_WIN32)
+        const DWORD code = GetLastError();
+        char* message = nullptr;
+        const DWORD length = FormatMessageA(
+            FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+                FORMAT_MESSAGE_IGNORE_INSERTS,
+            nullptr, code, 0, reinterpret_cast<char*>(&message), 0, nullptr);
+        std::string result = length && message
+            ? std::string(message, length)
+            : "Windows loader error " + std::to_string(code);
+        if (message) LocalFree(message);
+        return result;
+#else
+        const char* detail = dlerror();
+        return detail ? detail : "dynamic loader returned no detail";
+#endif
+    }
+
+    void* FindSymbol(const char* name) const noexcept {
+#if defined(_WIN32)
+        return reinterpret_cast<void*>(GetProcAddress(module_, name));
+#else
+        return dlsym(module_, name);
+#endif
+    }
+
+    template <typename Function>
+    bool Resolve(Function& function, const char* name, std::string& error) {
+        function = reinterpret_cast<Function>(FindSymbol(name));
+        if (function) return true;
+        if (!error.empty()) error += "; ";
+        error += "MediaPipe runtime is missing required symbol ";
+        error += name;
+        return false;
+    }
+
+    ModuleHandle module_ = nullptr;
+    std::string loaded_path_;
+};
+
+std::string TakeMediaPipeError(MediaPipeTasksCApi& api,
+                               char*& error_message) {
     std::string value = error_message ? error_message : "MediaPipe returned no detail";
     if (error_message) {
-        MpErrorFree(error_message);
+        api.error_free(error_message);
         error_message = nullptr;
     }
     return value;
 }
 
-std::string StatusError(const char* operation, MpStatus status, char*& detail) {
+std::string StatusError(MediaPipeTasksCApi& api, const char* operation,
+                        MpStatus status, char*& detail) {
     std::ostringstream out;
     out << operation << " failed (MpStatus " << static_cast<int>(status)
-        << "): " << TakeMediaPipeError(detail);
+        << "): " << TakeMediaPipeError(api, detail);
     return out.str();
 }
 
@@ -72,6 +262,7 @@ public:
             error = "Local MediaPipe gesture model is missing: " + config.model_path;
             return false;
         }
+        if (!api_.Load(error)) return false;
 
         GestureRecognizerOptions options{};
         options.base_options.model_asset_buffer = nullptr;
@@ -109,14 +300,15 @@ public:
         options.result_callback = nullptr;
 
         char* detail = nullptr;
-        const MpStatus status =
-            MpGestureRecognizerCreate(&options, &recognizer_, &detail);
+        const MpStatus status = api_.gesture_recognizer_create(
+            &options, &recognizer_, &detail);
         if (status != kMpOk || !recognizer_) {
-            error = StatusError("MpGestureRecognizerCreate", status, detail);
+            error = StatusError(api_, "MpGestureRecognizerCreate", status, detail);
             recognizer_ = nullptr;
+            api_.Unload();
             return false;
         }
-        if (detail) MpErrorFree(detail);
+        if (detail) api_.error_free(detail);
         max_hands_ = options.num_hands;
         last_timestamp_ms_ = -1;
         return true;
@@ -141,15 +333,15 @@ public:
 
         MpImagePtr image = nullptr;
         char* detail = nullptr;
-        MpStatus status = MpImageCreateFromUint8Data(
+        MpStatus status = api_.image_create_from_uint8_data(
             kMpImageFormatSrgb, frame.width, frame.height, frame.rgb_data,
             frame.byte_count, &image, &detail);
         if (status != kMpOk || !image) {
-            error = StatusError("MpImageCreateFromUint8Data", status, detail);
+            error = StatusError(api_, "MpImageCreateFromUint8Data", status, detail);
             return false;
         }
         if (detail) {
-            MpErrorFree(detail);
+            api_.error_free(detail);
             detail = nullptr;
         }
 
@@ -159,17 +351,18 @@ public:
 
         GestureRecognizerResult result{};
         const auto started = std::chrono::steady_clock::now();
-        status = MpGestureRecognizerRecognizeForVideo(
+        status = api_.gesture_recognizer_recognize_for_video(
             recognizer_, image, nullptr, timestamp_ms, &result, &detail);
         inference_ms = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - started).count();
-        MpImageFree(image);
+        api_.image_free(image);
 
         if (status != kMpOk) {
-            error = StatusError("MpGestureRecognizerRecognizeForVideo", status, detail);
+            error = StatusError(
+                api_, "MpGestureRecognizerRecognizeForVideo", status, detail);
             return false;
         }
-        if (detail) MpErrorFree(detail);
+        if (detail) api_.error_free(detail);
         last_timestamp_ms_ = timestamp_ms;
 
         const uint32_t hand_count = result.hand_landmarks
@@ -238,16 +431,18 @@ public:
             }
             observations.push_back(std::move(hand));
         }
-        MpGestureRecognizerCloseResult(&result);
+        api_.gesture_recognizer_close_result(&result);
         return true;
     }
 
     void Shutdown() noexcept override {
-        if (!recognizer_) return;
-        char* detail = nullptr;
-        (void)MpGestureRecognizerClose(recognizer_, &detail);
-        if (detail) MpErrorFree(detail);
-        recognizer_ = nullptr;
+        if (recognizer_) {
+            char* detail = nullptr;
+            (void)api_.gesture_recognizer_close(recognizer_, &detail);
+            if (detail) api_.error_free(detail);
+            recognizer_ = nullptr;
+        }
+        api_.Unload();
         last_timestamp_ms_ = -1;
         max_hands_ = 1;
     }
@@ -272,6 +467,7 @@ public:
     }
 
 private:
+    MediaPipeTasksCApi api_;
     MpGestureRecognizerPtr recognizer_ = nullptr;
     int64_t last_timestamp_ms_ = -1;
     int max_hands_ = 1;

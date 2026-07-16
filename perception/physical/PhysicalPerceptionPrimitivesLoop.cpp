@@ -1,6 +1,7 @@
 #include "PhysicalPerceptionPrimitivesLoop.hpp"
 
 #include "PhysicalFrameBus.hpp"
+#include "PhysicalLatestTickWorker.hpp"
 #include "PhysicalPerceptionPrimitiveBus.hpp"
 #include "PhysicalPerceptionPrimitivesLogTag.hpp"
 #include "logger.hpp"
@@ -154,8 +155,8 @@ struct PhysicalPerceptionPrimitivesState {
     std::unique_ptr<PhysicalClassPolicyConfig>              pending_class_policy_cfg;
 
     std::string  last_error_reason;
-    uint64_t     tick_count           = 0;
-    uint64_t     processed_count      = 0;
+    std::atomic<uint64_t> tick_count      {0};
+    std::atomic<uint64_t> processed_count {0};
     uint64_t     last_seen_frame_ctr  = 0;
 
     // Pre-allocated FrameView so we don't reallocate cv::Mats every Tick.
@@ -213,6 +214,11 @@ struct PhysicalPerceptionPrimitivesState {
 PhysicalPerceptionPrimitivesState& GetState() {
     static PhysicalPerceptionPrimitivesState s;
     return s;
+}
+
+PhysicalLatestTickWorker& GetPerceptionWorker() {
+    static PhysicalLatestTickWorker worker;
+    return worker;
 }
 
 // ── Cadence gate ─────────────────────────────────────────────────────────
@@ -394,7 +400,9 @@ void LazyInitLocked(PhysicalPerceptionPrimitivesState& s) {
 
 } // anonymous namespace
 
-void TickPhysicalPerceptionPrimitives() {
+namespace {
+
+void RunPhysicalPerceptionPrimitivesOnce() {
     const auto tick_start = std::chrono::steady_clock::now();
     auto& s = GetState();
     std::lock_guard<std::mutex> lk(s.mutex);
@@ -416,6 +424,7 @@ void TickPhysicalPerceptionPrimitives() {
 
     PhysicalPerceptionPrimitiveResults results;
     results.source_frame_counter = s.frame_view.frame_counter;
+    results.source_frame         = s.frame_view;
     results.model_image_width    = s.frame_view.metadata.model_width;
     results.model_image_height   = s.frame_view.metadata.model_height;
     results.raw_image_width      = s.frame_view.metadata.raw_width;
@@ -757,7 +766,30 @@ void TickPhysicalPerceptionPrimitives() {
     }
 }
 
+} // anonymous namespace
+
+void TickPhysicalPerceptionPrimitives() {
+    auto& worker = GetPerceptionWorker();
+    worker.Start([] {
+        try {
+            RunPhysicalPerceptionPrimitivesOnce();
+        } catch (const std::exception& e) {
+            auto& s = GetState();
+            std::lock_guard<std::mutex> lk(s.mutex);
+            s.last_error_reason = std::string("perception worker threw: ") + e.what();
+            LOG_ERROR(PHYSICAL_PERC_PRIM_LOG_TAG, s.last_error_reason);
+        } catch (...) {
+            auto& s = GetState();
+            std::lock_guard<std::mutex> lk(s.mutex);
+            s.last_error_reason = "perception worker threw a non-standard exception";
+            LOG_ERROR(PHYSICAL_PERC_PRIM_LOG_TAG, s.last_error_reason);
+        }
+    });
+    worker.RequestLatest();
+}
+
 void ShutdownPhysicalPerceptionPrimitives() {
+    GetPerceptionWorker().Stop();
     auto& s = GetState();
     std::lock_guard<std::mutex> lk(s.mutex);
     s.shutting_down = true;
@@ -815,7 +847,8 @@ void ShutdownPhysicalPerceptionPrimitives() {
 
 bool IsPhysicalPerceptionPrimitivesRunning() {
     auto& s = GetState();
-    std::lock_guard<std::mutex> lk(s.mutex);
+    std::unique_lock<std::mutex> lk(s.mutex, std::try_to_lock);
+    if (!lk.owns_lock()) return GetPerceptionWorker().IsStarted();
     return s.initialized && !s.shutting_down;
 }
 
@@ -827,20 +860,17 @@ PhysicalPerceptionPrimitivesEnableFlags GetPhysicalPerceptionPrimitivesEnableFla
 
 std::string GetLastPhysicalPerceptionPrimitivesError() {
     auto& s = GetState();
-    std::lock_guard<std::mutex> lk(s.mutex);
+    std::unique_lock<std::mutex> lk(s.mutex, std::try_to_lock);
+    if (!lk.owns_lock()) return {};
     return s.last_error_reason;
 }
 
 uint64_t GetPhysicalPerceptionPrimitivesTickCount() {
-    auto& s = GetState();
-    std::lock_guard<std::mutex> lk(s.mutex);
-    return s.tick_count;
+    return GetState().tick_count.load();
 }
 
 uint64_t GetPhysicalPerceptionPrimitivesProcessedCount() {
-    auto& s = GetState();
-    std::lock_guard<std::mutex> lk(s.mutex);
-    return s.processed_count;
+    return GetState().processed_count.load();
 }
 
 void RequestSetPhysicalPerceptionPrimitivesEnableFlags(

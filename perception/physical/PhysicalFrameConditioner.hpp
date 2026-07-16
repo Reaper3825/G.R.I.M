@@ -39,7 +39,7 @@ struct PhysicalSignalConditioningConfig {
     int    letterbox_pad_value         = 114;     // 0..255; 114 matches YOLO/Ultralytics convention
 
     bool   enable_denoise              = true; // median blur is cheap and helps stabilize the scene-stability signal (and downstream cache reuse) when sensor noise is high — e.g. in low light or with aggressive digital zoom.
-    int    denoise_strength            = 6; // median blur kernel size. Must be odd. 5 is a good default for 640x360 input; adjust up/down for larger/smaller resolutions.
+    int    denoise_strength            = 5; // median kernel size; even values are rounded up to the next odd value.
     bool   enable_exposure_correction  = true; // master switch for the exposure-correction subsystem (auto and manual paths both gated on this).
     bool   exposure_auto               = true; // when true, overrides manual_exposure_gain and automatically computes a gain to push the mean luma towards target_luma.
     double manual_exposure_gain        = 1.00; // applied when exposure_auto is false. Multiplier on the input pixel values; 1.0 means no change, <1.0 darkens, >1.0 brightens.

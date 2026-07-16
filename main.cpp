@@ -690,17 +690,16 @@ int main(int argc, char* argv[])
         // Phase 2 controller: stabilizes hand results into semantic events,
         // then routes only guarded mouse/wake mappings on the main thread.
         GRIM::Perception::Physical::TickPhysicalGestureControl();
-        // Stage 2: pulls the latest frame from the FrameBus, runs every enabled
-        // perception primitive (detection / segmentation / classification / pose /
-        // scene text), publishes the aggregate to PhysicalPerceptionPrimitiveBus.
+        // Stage 2: issue a non-blocking, coalesced latest-frame request. Its
+        // worker runs enabled perception primitives and publishes the aggregate
+        // without stalling capture, UI texture upload, or rendering.
         GRIM::Perception::Physical::TickPhysicalPerceptionPrimitives();
-        // Stage 3: pulls the latest matching frame + perception result, runs the
-        // monocular depth estimator and the spatial grounder, publishes the
-        // per-track grounded results to PhysicalSpatialGroundingBus.
+        // Stage 3: issue a non-blocking, coalesced latest-result request. Its
+        // worker uses Stage 2's pinned source frame for coherent depth/grounding.
         GRIM::Perception::Physical::TickPhysicalSpatialGrounding();
-        // Stage 5: pulls camera intrinsics + the latest frame, runs monocular
-        // visual odometry (ORB + 5-point essential matrix), updates a Nav2-style
-        // 2D occupancy grid along the trajectory, and publishes a
+        // Stage 5: issue a non-blocking, coalesced latest-frame request. Its
+        // worker runs visual odometry, updates a Nav2-style 2D occupancy grid,
+        // and publishes a
         // PhysicalLocalizationSnapshot (T_world_camera, velocity, trajectory,
         // grid) to PhysicalLocalizationBus. Stage 4 below can later stamp the
         // world frame onto every entity it publishes.

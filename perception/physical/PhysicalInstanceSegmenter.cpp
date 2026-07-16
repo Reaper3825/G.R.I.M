@@ -368,9 +368,18 @@ void PhysicalInstanceSegmenter::LoadOnnxModelsIntoPhysicalInstanceSegmenter(
         auto impl = std::make_unique<PhysicalInstanceSegmenterOrtImpl>();
 
         Ort::SessionOptions opts;
+        const int hardware_threads =
+            std::max(1, static_cast<int>(std::thread::hardware_concurrency()));
+        // Keep the automatic CPU backend from occupying every logical core.
+        // The render, capture, and other perception workers still need prompt
+        // scheduling while the SAM encoder is running. Explicit configuration
+        // continues to override this UI-friendly automatic policy.
+        const int automatic_threads = std::max(
+            1,
+            std::min(8, hardware_threads > 2 ? hardware_threads - 2 : hardware_threads));
         const int n_threads = cfg.intra_op_num_threads > 0
             ? cfg.intra_op_num_threads
-            : std::max(1, static_cast<int>(std::thread::hardware_concurrency()));
+            : automatic_threads;
         opts.SetIntraOpNumThreads(n_threads);
         opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
         // Note: this vcpkg onnxruntime port (1.23.2, arm64-osx) ships only the

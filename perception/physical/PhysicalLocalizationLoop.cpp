@@ -3,6 +3,7 @@
 #include "PhysicalCameraCalibrator.hpp"
 #include "PhysicalCalibrationStore.hpp"
 #include "PhysicalFrameBus.hpp"
+#include "PhysicalLatestTickWorker.hpp"
 #include "PhysicalLocalizationBus.hpp"
 #include "PhysicalLocalizationLogTag.hpp"
 #include "PhysicalSpatialGroundingBus.hpp"
@@ -11,6 +12,7 @@
 
 #include <opencv2/calib3d.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <deque>
@@ -146,8 +148,8 @@ struct PhysicalLocalizationState {
     bool                                                intrinsics_synced = false;
 
     std::string                                         last_error_reason;
-    uint64_t                                            tick_count          = 0;
-    uint64_t                                            processed_count     = 0;
+    std::atomic<uint64_t>                               tick_count      {0};
+    std::atomic<uint64_t>                               processed_count {0};
     uint64_t                                            last_seen_frame_ctr = 0;
 
     PhysicalFrameBus::FrameView                         frame_view;
@@ -171,6 +173,11 @@ struct PhysicalLocalizationState {
 PhysicalLocalizationState& GetState() {
     static PhysicalLocalizationState s;
     return s;
+}
+
+PhysicalLatestTickWorker& GetLocalizationWorker() {
+    static PhysicalLatestTickWorker worker;
+    return worker;
 }
 
 void LazyInitLocked(PhysicalLocalizationState& s) {
@@ -270,7 +277,9 @@ void PublishFailedSnapshotLocked(const std::string& reason, uint64_t source_fram
 
 } // anonymous namespace
 
-void TickPhysicalLocalization() {
+namespace {
+
+void RunPhysicalLocalizationOnce() {
     auto& s = GetState();
     std::lock_guard<std::mutex> lk(s.mutex);
     if (s.shutting_down) return;
@@ -535,7 +544,30 @@ void TickPhysicalLocalization() {
     }
 }
 
+} // anonymous namespace
+
+void TickPhysicalLocalization() {
+    auto& worker = GetLocalizationWorker();
+    worker.Start([] {
+        try {
+            RunPhysicalLocalizationOnce();
+        } catch (const std::exception& e) {
+            auto& s = GetState();
+            std::lock_guard<std::mutex> lk(s.mutex);
+            s.last_error_reason = std::string("localization worker threw: ") + e.what();
+            LOG_ERROR(PHYSICAL_LOCALIZATION_LOG_TAG, s.last_error_reason);
+        } catch (...) {
+            auto& s = GetState();
+            std::lock_guard<std::mutex> lk(s.mutex);
+            s.last_error_reason = "localization worker threw a non-standard exception";
+            LOG_ERROR(PHYSICAL_LOCALIZATION_LOG_TAG, s.last_error_reason);
+        }
+    });
+    worker.RequestLatest();
+}
+
 void ShutdownPhysicalLocalization() {
+    GetLocalizationWorker().Stop();
     auto& s = GetState();
     std::lock_guard<std::mutex> lk(s.mutex);
     s.shutting_down = true;
@@ -559,26 +591,24 @@ void ShutdownPhysicalLocalization() {
 
 bool IsPhysicalLocalizationRunning() {
     auto& s = GetState();
-    std::lock_guard<std::mutex> lk(s.mutex);
+    std::unique_lock<std::mutex> lk(s.mutex, std::try_to_lock);
+    if (!lk.owns_lock()) return GetLocalizationWorker().IsStarted();
     return s.initialized && !s.shutting_down;
 }
 
 std::string GetLastPhysicalLocalizationError() {
     auto& s = GetState();
-    std::lock_guard<std::mutex> lk(s.mutex);
+    std::unique_lock<std::mutex> lk(s.mutex, std::try_to_lock);
+    if (!lk.owns_lock()) return {};
     return s.last_error_reason;
 }
 
 uint64_t GetPhysicalLocalizationTickCount() {
-    auto& s = GetState();
-    std::lock_guard<std::mutex> lk(s.mutex);
-    return s.tick_count;
+    return GetState().tick_count.load();
 }
 
 uint64_t GetPhysicalLocalizationProcessedCount() {
-    auto& s = GetState();
-    std::lock_guard<std::mutex> lk(s.mutex);
-    return s.processed_count;
+    return GetState().processed_count.load();
 }
 
 PhysicalVisualOdometerConfig GetPhysicalLocalizationOdometerConfigSnapshot() {

@@ -18,20 +18,21 @@ namespace GRIM { namespace Perception { namespace Physical {
 //  PhysicalPerceptionPrimitivesLoop — Stage-2 integration point.
 //
 //  The mainloop calls TickPhysicalPerceptionPrimitives() exactly once per
-//  frame (immediately AFTER TickPhysicalEnvironment()). On the first call
-//  the subsystem lazy-initialises:
+//  frame (immediately AFTER TickPhysicalEnvironment()). Tick only schedules
+//  a bounded latest-frame worker and never waits for inference. On the first
+//  worker invocation the subsystem lazy-initialises:
 //    - constructs the five operator instances
 //    - applies the configuration registered via
 //      ConfigurePhysicalPerceptionPrimitives*() OR the empty defaults
 //      (which leave every operator in NoModelConfigured)
 //
-//  Every subsequent call:
+//  Every subsequent worker invocation:
 //    - PullLatestFrameView from PhysicalFrameBus; if the counter has not
 //      advanced, do nothing (no redundant inference)
 //    - For each operator whose state == ModelLoaded AND whose enabled flag
 //      is true, RouteFrameTo<Operator>() and collect the result
-//    - PublishPhysicalPerceptionResultsToBus() once per Tick with the
-//      coherent set of results
+//    - PublishPhysicalPerceptionResultsToBus() with the coherent set of
+//      results and a pinned view of the exact source frame
 //
 //  No other file should touch the operators directly during the main loop.
 //  All UI / config mutation goes through the Request* functions below; they
