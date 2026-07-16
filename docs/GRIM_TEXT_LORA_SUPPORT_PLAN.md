@@ -316,7 +316,7 @@ one permanent GRIM conversation
   -> rolling token-pressure boundary
        -> Buffer 2/3 memory consolidation and exact retrieval references
        -> eligible personalization sequences for LoRA
-  -> bounded LoRA-only trainer (1-10 sequences)
+  -> bounded LoRA-only trainer (1-interval set/learned sequences)
   -> evaluated candidate adapter
   -> safe-boundary adapter activation
 ```
@@ -448,7 +448,7 @@ Initial hyperparameters should be configuration, not constants. A reasonable sta
 
 ## Frequent micro-training operating model
 
-The expected workload is not a conventional fine-tuning run. Rolling context boundaries may accumulate roughly 1-10 new eligible personalization sequences and trigger training as often as once per hour. The trainer must therefore be resumable, bounded, cheap to invoke, and safe on tiny datasets. It remains a near-term component of this design, not a deferred replacement for context management.
+The expected workload is not a conventional fine-tuning run. Rolling context boundaries may accumulate roughly 1-interval set/learned new eligible personalization sequences and trigger training as often as once per hour. The trainer must therefore be resumable, bounded, cheap to invoke, and safe on tiny datasets. It remains a near-term component of this design, not a deferred replacement for context management.
 
 ### Trigger and queue policy
 
@@ -461,7 +461,7 @@ Recommended trigger rule:
 - require at least `min_new_sequences_per_run` (initially 1); and
 - debounce after new input so a burst becomes one run rather than several one-example runs.
 
-The scheduler takes an immutable manifest snapshot of at most 10 new sequence IDs, including their boundary and source-memory references. Records arriving after the snapshot remain pending for the next run. A single-writer lease prevents overlapping trainers or publishers.
+The scheduler takes an immutable manifest snapshot of at most 1-interval set/learned new sequence IDs, including their boundary and source-memory references. Records arriving after the snapshot remain pending for the next run. A single-writer lease prevents overlapping trainers or publishers.
 
 Suggested canonical `ai_config.json` section:
 
@@ -594,7 +594,7 @@ This prevents an hourly scheduler from repeatedly training and rejecting the sam
 - Add tokenizer-measured prompt accounting, monotonic event/token positions, pinned state, a recent-tail budget, and a compression frontier to `SessionContextManager`.
 - Add immutable `ContextBoundaryArtifact` snapshots with dialogue state, episodic gist, memory references, correction/reward provenance, and personalization candidates.
 - Commit boundary artifacts atomically and advance the frontier with compare-and-swap semantics while new turns append beyond the frozen cutoff.
-- Feed eligible candidates from committed boundaries into the durable 1-10 sequence LoRA queue.
+- Feed eligible candidates from committed boundaries into the durable 1-interval set/learned sequence LoRA queue.
 
 Exit criterion: one permanent conversation can pass multiple configured context limits without changing session identity, silently dropping live state, or waiting for LoRA training; every retired span has exact source/memory provenance and can feed the trainer.
 
@@ -631,7 +631,7 @@ Exit criterion: a deterministic non-zero fixture changes expected logits, a zero
 ### Slice 3 - Trainer and candidate publication
 
 - Add the separate on-demand LoRA micro-trainer target and A/B-only optimizer inventory.
-- Add the durable 1-10 sequence queue, immutable run manifests, replay sampling, and idempotent example IDs.
+- Add the durable 1-interval set/learned sequence queue, immutable run manifests, replay sampling, and idempotent example IDs.
 - Add dataset normalization for boundary/correction/tool/approved-memory inputs with response-token loss masks.
 - Add LoRA-only optimizer-state resume, bounded step budgets, candidate evaluation, atomic publication, and rollback.
 - Integrate ResourceCoordinator leases and the default exclusive-GPU drain/train/restart lifecycle.
@@ -675,8 +675,8 @@ Exit criterion: an atomic adapter update becomes active on the next verified rou
 
 ### Frequent micro-training
 
-- Trigger at 10 pending sequences or the configured maximum age, never with zero sequences.
-- Snapshot at most 10 IDs; examples arriving during a run stay queued for the next run.
+- Trigger at 1-interval set/learned pending sequences or the configured maximum age, never with zero sequences.
+- Snapshot at most 1-interval set/learned IDs; examples arriving during a run stay queued for the next run.
 - Run successfully with 1, 5, and 10 new sequences plus deterministic replay.
 - Verify normal base `parameter_groups` are absent from the trainer optimizer and have no moment tensors.
 - Verify frozen base matmuls propagate required activation gradients without producing base-weight gradients.
@@ -723,7 +723,7 @@ LoRA support is ready for enforced MMO only when all of the following are true:
 - both attention execution paths apply the adapter;
 - status proves which base and adapter are active;
 - the trainer updates only adapter tensors and cannot save the base;
-- hourly/on-demand 1-10 sequence jobs resume LoRA-only optimizer state and obey bounded step/resource policies;
+- hourly/on-demand 1-interval set/learned sequence jobs resume LoRA-only optimizer state and obey bounded step/resource policies;
 - committed rolling boundaries feed those jobs without changing the single permanent session or placing training on the context-compaction critical path;
 - publication is atomic and restart/rollback is coordinated;
 - corrupt, missing, stale, or incompatible adapters fail closed;

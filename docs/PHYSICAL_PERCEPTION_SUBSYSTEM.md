@@ -72,7 +72,9 @@ stage:
 > tick order. Stage 4 (world state) ticks **after** Stage 5 (localization)
 > so future revisions can stamp `T_world_camera` onto every entity in a
 > single snapshot. The mainloop call order is:
-> `Environment → PerceptionPrimitives → SpatialGrounding → Localization → WorldState`.
+> `Environment → Interaction → PerceptionPrimitives → SpatialGrounding → Localization → WorldState`.
+> Interaction is an auxiliary `PhysicalFrameBus` consumer, not a dependency of
+> the numbered world-understanding stages.
 
 ---
 
@@ -123,6 +125,9 @@ calculations. Wall clock is recorded only for human-readable display.
 * Every `Request*()` and `Get*Snapshot()` is thread-safe (mutex inside).
 * Operators are **not** internally thread-safe; the loops own them and
   hold a mutex around every call.
+* `TickPhysicalInteraction()` is a non-blocking exception by design: it only
+  replaces a one-frame queue. Its loop-owned worker performs BGR-to-RGB
+  conversion and MediaPipe inference, then publishes a pure-data snapshot.
 
 ### 2.6 File taxonomy
 
@@ -512,8 +517,8 @@ stage contracts.
 ## 12. Invariants Worth Memorising
 
 1. **`Tick*()` is called exactly once per mainloop iteration, in this
-   order:** Environment → PerceptionPrimitives → SpatialGrounding →
-   Localization → WorldState.
+   order:** Environment → Interaction → PerceptionPrimitives →
+   SpatialGrounding → Localization → WorldState.
 2. **No file outside a stage's loop should touch that stage's operators
    directly.** All mutation goes through `Request*()`.
 3. **Never re-derive raw coordinates from model coordinates** (or vice

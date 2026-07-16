@@ -1200,6 +1200,7 @@ SequenceData buildPhase1SequenceData(
 			   std::to_string(data.train_seqs.size()) +
 			   " val_sequences=" + std::to_string(data.val_seqs.size()) +
 			   " holdout_ratio=10%");
+	const std::size_t pre_window_train_count = data.train_seqs.size();
 
 	logger.log("[Data] Applying sliding windows to train split...");
 	applySlidingWindows(data.train_seqs, "train",
@@ -1207,6 +1208,16 @@ SequenceData buildPhase1SequenceData(
 						tokenizer_hp.add_bos, tokenizer_hp.add_eos, logger);
 	logger.log("[Data] Train split post-window sequence count=" +
 			   std::to_string(data.train_seqs.size()));
+	if (data.train_seqs.empty()) {
+		throw std::runtime_error(
+			"buildPhase1SequenceData: train split became empty during sliding-window/filter processing "
+			"(raw_corpus_sequences=" + std::to_string(raw_sequence_count) +
+			", pre_window_train_sequences=" + std::to_string(pre_window_train_count) +
+			", max_seq_len=" + std::to_string(max_seq_len) +
+			", sliding_window_stride=" + std::to_string(data_hp.sliding_window_stride) +
+			", min_seq_valid_tokens=" + std::to_string(data_hp.min_seq_valid_tokens) +
+			"). Inspect the preceding [FILTER] log; lower min_seq_valid_tokens if valid short rows are being removed.");
+	}
 
 	logger.log("[Data] Applying sliding windows to validation split...");
 	applySlidingWindows(data.val_seqs, "val",

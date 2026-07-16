@@ -6,6 +6,7 @@
 #include "primitives/ui_scrollbox.hpp"
 #include "primitives/ui_dropdown.hpp"
 #include "primitives/ui_textarea.hpp"
+#include "primitives/ui_keybind.hpp"
 #include <vector>
 #include <unordered_map>
 #include <memory>
@@ -23,7 +24,8 @@ enum class SettingsTab : uint8_t {
     Preferences = 5,
     GeoSpatial  = 6,
     Memory      = 7,
-    Intents     = 8
+    Controls    = 8,
+    Intents     = 9
 };
 
 class UISettingsMenu : public UIPanel {
@@ -51,6 +53,7 @@ private:
     void createPreferencesWidgets();
     void createGeoSpatialWidgets();
     void createMemoryWidgets();
+    void createControlsWidgets();
     void createIntentsWidgets();
 
     void cycleBackend();
@@ -77,6 +80,7 @@ private:
     std::shared_ptr<UIButton> tabPreferencesBtn_;
     std::shared_ptr<UIButton> tabGeoSpatialBtn_;
     std::shared_ptr<UIButton> tabMemoryBtn_;
+    std::shared_ptr<UIButton> tabControlsBtn_;
     std::shared_ptr<UIButton> tabIntentsBtn_;
 
     std::shared_ptr<UIScrollBox> scrollBox;
@@ -87,6 +91,7 @@ private:
     bool hasChanges = false;
     bool isRefreshing = false;
     bool needsWidgetRefresh = false;
+    std::string controlsStatus_;
 
     std::unordered_map<std::string, std::string> m_fontPathMap;
 };

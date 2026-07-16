@@ -10,6 +10,8 @@
 #include "perception/physical/PhysicalFrameBus.hpp"
 #include "perception/physical/PhysicalPerceptionPrimitiveBus.hpp"
 #include "perception/physical/PhysicalPerceptionPrimitivesLoop.hpp"
+#include "perception/physical/PhysicalHandGestureBus.hpp"
+#include "perception/physical/PhysicalInteractionLoop.hpp"
 #include "perception/physical/PhysicalSpatialGroundingBus.hpp"
 #include "perception/physical/PhysicalSpatialGroundingLoop.hpp"
 #include "perception/physical/PhysicalLocalizationBus.hpp"
@@ -45,9 +47,10 @@ public:
         Camera       = 0,
         Calibration  = 1,
         Perception   = 2,
-        Spatial      = 3,
-        Localization = 4,
-        World        = 5
+        Interaction  = 3,
+        Spatial      = 4,
+        Localization = 5,
+        World        = 6
     };
 
     UIPhysicalEnvironmentPanel();
@@ -178,6 +181,7 @@ private:
     std::shared_ptr<UIButton>   tab_camera_btn_;
     std::shared_ptr<UIButton>   tab_calibration_btn_;
     std::shared_ptr<UIButton>   tab_perception_btn_;
+    std::shared_ptr<UIButton>   tab_interaction_btn_;
     std::shared_ptr<UIButton>   tab_spatial_btn_;
     std::shared_ptr<UIButton>   tab_localization_btn_;
     std::shared_ptr<UIButton>   tab_world_btn_;
@@ -292,6 +296,25 @@ private:
         uint64_t                            last_seen_frame_counter = 0;
     };
     std::unordered_map<uint64_t, TrackTrail> track_trails_;
+
+    // Human-interaction branch (independent Stage-2 FrameBus consumer).
+    void HandleToggleHandGestures();
+    void HandleReloadHandGestureBackend();
+    void RefreshInteractionButtonLabels();
+    void UpdateInteractionTab(const InputState& input, float dt);
+    void DrawInteractionTab(OverlayRenderer& renderer);
+    void DrawHandGestureOverlay(
+        OverlayRenderer& renderer,
+        const GRIM::Perception::Physical::PhysicalHandGestureSnapshot& snapshot,
+        int blit_x, int blit_y, int blit_w, int blit_h);
+
+    std::shared_ptr<UIButton> interaction_enable_btn_;
+    std::shared_ptr<UIButton> interaction_reload_btn_;
+    PreviewBlitCache interaction_blit_cache_;
+    GRIM::Perception::Physical::PhysicalHandGestureBus::SnapshotView
+        interaction_snapshot_view_;
+    uint64_t interaction_last_seen_sequence_ = 0;
+    bool     have_interaction_snapshot_ = false;
 
     // ── Spatial tab (Stage-3) ──
     void HandleToggleSpatialDepthEstimator();

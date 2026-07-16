@@ -913,10 +913,8 @@ inline TrainingStateWorkspaceHP trainingStateWorkspaceHP(
 }
 
 inline DataLoadingHP dataLoadingHP(const GRIM::Config::AiConfigSnapshot& snapshot) {
-    const auto fixed_shape = trainingFixedShapeHP(snapshot);
-
     DataLoadingHP view;
-    view.min_seq_valid_tokens = fixed_shape.max_seq_len / 4;
+    view.min_seq_valid_tokens = snapshotTrainingConfigField<int>(snapshot, "min_seq_valid_tokens");
     view.sliding_window_stride = snapshotTrainingConfigField<int>(snapshot, "sliding_window_stride");
     return view;
 }

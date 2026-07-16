@@ -14,5 +14,6 @@ void start(ConsoleHistory* history,
 
 void stop();
 bool isRunning();
+void update();
 
 } // namespace WakeKey

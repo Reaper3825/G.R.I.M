@@ -15,6 +15,7 @@
 #include "core/window_manager.hpp"
 #include "core/plugin_manager.hpp"
 #include "core/input_parser.hpp"
+#include "core/input/InputBindings.hpp"
 #include "core/crash_dump.hpp"
 #include "core/platform_input.hpp"
 #include "core/platform_clipboard.hpp"
@@ -46,6 +47,7 @@
 #include "perception/digital/DigitalEnvironmentLoop.hpp"
 #include "perception/digital/DigitalPerceptionPrimitivesLoop.hpp"
 #include "perception/physical/PhysicalEnvironmentLoop.hpp"
+#include "perception/physical/PhysicalInteractionLoop.hpp"
 #include "perception/physical/PhysicalPerceptionPrimitivesLoop.hpp"
 #include "perception/physical/PhysicalSpatialGroundingLoop.hpp"
 #include "perception/physical/PhysicalLocalizationLoop.hpp"
@@ -101,6 +103,7 @@ BOOL WINAPI consoleHandler(DWORD signal) {
         GRIM::Perception::Digital::ShutdownDigitalPerceptionPrimitives();
         GRIM::Perception::Digital::ShutdownDigitalEnvironment();
         GRIM::Perception::Digital::ShutdownDigitalContextProjector();
+        GRIM::Perception::Physical::ShutdownPhysicalInteraction();
 
         // Stop perception-side world-state consumers BEFORE the facade is
         // freed — the memory writer flushes long-dwell entity summaries on
@@ -171,6 +174,7 @@ void signalHandler(int signal) {
         GRIM::Perception::Digital::ShutdownDigitalPerceptionPrimitives();
         GRIM::Perception::Digital::ShutdownDigitalEnvironment();
         GRIM::Perception::Digital::ShutdownDigitalContextProjector();
+        GRIM::Perception::Physical::ShutdownPhysicalInteraction();
 
         // Stop perception-side world-state consumers BEFORE the facade is
         // freed — the memory writer flushes long-dwell entity summaries on
@@ -580,6 +584,8 @@ int main(int argc, char* argv[])
     UIRoot::get().addPanel(physicalEnvPanel);
     UIRoot::get().addPanel(digitalEnvPanel);
 
+    GRIM::InputBindings::loadRuntimeConfig(aiConfig);
+
 #if defined(__APPLE__)
     // macOS: inject typed characters into text input (Windows uses WM_CHAR in OverlayWndProc)
     PlatformWindow::setTextInputCallback([](const std::string& text) {
@@ -635,7 +641,8 @@ int main(int argc, char* argv[])
     {
         auto frameStart = std::chrono::steady_clock::now();
 
-        // Pump OS messages first so GetKeyboardState reflects latest input
+        // Pump OS messages first. Windows bindings use global asynchronous
+        // state; macOS updates its global event-backed state here.
         float wheelDelta = 0.0f;
         bool quitRequested = false;
         PlatformWindow::pumpEvents(wheelDelta, quitRequested);
@@ -650,10 +657,33 @@ int main(int argc, char* argv[])
         // Update Mouse class state from InputState for better reliability
         Mouse::updateFromInput(input);
         Key::updateFromInput(input);
+        WakeKey::update();
+
+        // Resolve configurable actions only after the low-level input snapshot
+        // has been normalized. Binding capture suppresses runtime shortcuts so
+        // the key being assigned cannot also trigger its previous action.
+        auto toggleBoundPanel = [](const char* actionId, const char* panelName) {
+            if (!GRIM::InputBindings::wasPressed(actionId)) return;
+            auto panel = UIRoot::get().getPanel(panelName);
+            if (!panel) return;
+            const bool show = !panel->isVisible();
+            UIRoot::get().setVisible(panelName, show);
+        };
+        toggleBoundPanel("toggle_console", "Console");
+        toggleBoundPanel("toggle_settings", "Settings");
+        toggleBoundPanel("toggle_training", "GRIM-text Training Control");
+        toggleBoundPanel("toggle_data_hub", "DataHub");
+        toggleBoundPanel("toggle_storage", "Shared Storage");
+        toggleBoundPanel("toggle_geospatial", "GeoSpatial");
+        toggleBoundPanel("toggle_physical_environment", "Physical Environment");
+        toggleBoundPanel("toggle_digital_environment", "Digital Environment");
 
         // Single integration point for the physical-environment perception subsystem.
         // Lazy-inits on first call; pumps the active IP camera stream into the FrameBus.
         GRIM::Perception::Physical::TickPhysicalEnvironment();
+        // Stage 2 auxiliary: non-blocking local hand/gesture interaction branch.
+        // It owns a one-frame worker queue and never performs inference here.
+        GRIM::Perception::Physical::TickPhysicalInteraction();
         // Stage 2: pulls the latest frame from the FrameBus, runs every enabled
         // perception primitive (detection / segmentation / classification / pose /
         // scene text), publishes the aggregate to PhysicalPerceptionPrimitiveBus.
@@ -789,6 +819,7 @@ int main(int argc, char* argv[])
     GRIM::Perception::Physical::ShutdownPhysicalLocalization();
     GRIM::Perception::Physical::ShutdownPhysicalSpatialGrounding();
     GRIM::Perception::Physical::ShutdownPhysicalPerceptionPrimitives();
+    GRIM::Perception::Physical::ShutdownPhysicalInteraction();
     GRIM::Perception::Physical::ShutdownPhysicalEnvironment();
     GRIM::Perception::shutdown();  
     Mouse::shutdown();

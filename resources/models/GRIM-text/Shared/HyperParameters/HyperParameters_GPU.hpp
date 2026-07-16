@@ -1217,7 +1217,6 @@ inline void deriveComputedLanguageModelConfig(LanguageModelConfig& params) {
             "deriveComputedLanguageModelConfig: max_seq_len must be > 0, got " +
             std::to_string(params.max_seq_len));
     }
-    params.min_seq_valid_tokens = params.max_seq_len / 4;
     params.min_seq_len_for_flash = params.max_seq_len / 4;
     params.scratch_max_tokens_per_block = static_cast<size_t>(params.max_seq_len);
     params.attention_dropout = params.dropout_rate;
@@ -1317,6 +1316,11 @@ inline void validateRootConfigDocument(
                                  std::to_string(params.sliding_window_stride) +
                                  " exceeds max_seq_len=" +
                                  std::to_string(params.max_seq_len));
+    }
+    if (params.min_seq_valid_tokens < 0) {
+        throw std::runtime_error(std::string(caller) + ": min_seq_valid_tokens=" +
+                                 std::to_string(params.min_seq_valid_tokens) +
+                                 " must be >= 0");
     }
     if (!isValidGQAConfig(params.num_heads, params.num_kv_heads)) {
         throw std::runtime_error(std::string(caller) + ": invalid GQA config num_heads=" +
@@ -1802,6 +1806,7 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(dropout_rate);
     GRIM_LOAD_CONFIG_FIELD(embedding_scale);
     GRIM_LOAD_CONFIG_FIELD(sliding_window_stride);
+    GRIM_LOAD_CONFIG_FIELD(min_seq_valid_tokens);
     GRIM_LOAD_CONFIG_FIELD(warmup_fraction);
     GRIM_LOAD_CONFIG_FIELD(cosine_decay_enabled);
     GRIM_LOAD_CONFIG_FIELD(cosine_warm_restarts);

@@ -9,6 +9,7 @@
 #include "console_history.hpp"
 #include "resources.hpp"
 #include "helpers/key.hpp"
+#include "core/input/InputBindings.hpp"
 #include "popup_ui/popup_ui.hpp"
 #include "bootstrap/bootstrap_config.hpp"
 
@@ -19,8 +20,10 @@ namespace WakeKey {
 
 static bool g_running = false;
 static bool g_listening = false;
-static KeyCode g_hotkey = KeyCode::RCtrl; // Default: Right Ctrl
-static KeyCode g_consoleToggleKey = KeyCode::Grave; // Default: ~ / ` key
+static ConsoleHistory* g_history = nullptr;
+static std::vector<Timer>* g_timers = nullptr;
+static nlohmann::json* g_longTermMemory = nullptr;
+static NLP* g_nlp = nullptr;
 
 // -----------------------------------------------------------
 // Voice command handler
@@ -66,39 +69,24 @@ void start(ConsoleHistory* history,
     LOG_DEBUG("WakeKey", "Initializing Key system hook...");
     Key::initialize();
 
-    LOG_DEBUG("WakeKey", "Registering wake key callback for KeyCode::RCtrl (macOS maps Right Command here)");
-
-    // Register callback for wake key press (voice command)
-    Key::onPress(g_hotkey, [=, &timers, &longTermMemory, &nlp](KeyCode code) {
-        LOG_DEBUG("WakeKey", "Wake key detected via Key system.");
-        handleVoiceCommand(history, timers, longTermMemory, nlp);
-    });
-
-    LOG_DEBUG("WakeKey", "Registering console toggle callback for KeyCode::Grave");
-
-    // Register callback for console toggle key (grave/tilde) - Toggle OVERLAY console
-    Key::onPress(g_consoleToggleKey, [](KeyCode code) {
-        LOG_DEBUG("WakeKey", "Console toggle key pressed (Grave/~) - Toggling overlay console");
-        
-        // Toggle the overlay console panel instead of Win32 console
-        auto consolePanel = UIRoot::get().getPanel("Console");
-        if (consolePanel) {
-            bool newState = !consolePanel->isVisible();
-            LOG_DEBUG("WakeKey", "Found Console panel, current state: " + std::string(consolePanel->isVisible() ? "visible" : "hidden"));
-            UIRoot::get().setVisible("Console", newState);
-            LOG_DEBUG("WakeKey", std::string("Overlay console set to ") + (newState ? "VISIBLE" : "HIDDEN"));
-        } else {
-            LOG_ERROR("WakeKey", "Console panel not found in UIRoot - checking all panels...");
-            // Debug: List all available panels
-            auto settingsPanel = UIRoot::get().getPanel("Settings");
-            auto grimSettings = UIRoot::get().getPanel("GRIM Settings");
-            LOG_DEBUG("WakeKey", "Settings panel exists: " + std::string(settingsPanel ? "YES" : "NO"));
-            LOG_DEBUG("WakeKey", "GRIM Settings panel exists: " + std::string(grimSettings ? "YES" : "NO"));
-        }
-    });
+    g_history = history;
+    g_timers = &timers;
+    g_longTermMemory = &longTermMemory;
+    g_nlp = &nlp;
 
     g_running = true;
-    LOG_PHASE("WakeKey system active (overlay console toggle)", true);
+    LOG_PHASE("WakeKey system active (configurable global binding)", true);
+}
+
+void update()
+{
+    if (!g_running || g_listening || !g_timers || !g_longTermMemory || !g_nlp)
+        return;
+
+    if (GRIM::InputBindings::wasPressed("wake_voice")) {
+        LOG_DEBUG("WakeKey", "Configurable wake binding detected.");
+        handleVoiceCommand(g_history, *g_timers, *g_longTermMemory, *g_nlp);
+    }
 }
 
 void stop()
@@ -107,6 +95,10 @@ void stop()
 
     LOG_DEBUG("WakeKey", "Stopping WakeKey system...");
     Key::shutdown();
+    g_history = nullptr;
+    g_timers = nullptr;
+    g_longTermMemory = nullptr;
+    g_nlp = nullptr;
     g_running = false;
 
     LOG_PHASE("WakeKey system stopped", true);

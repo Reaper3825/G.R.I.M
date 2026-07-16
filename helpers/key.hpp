@@ -2,6 +2,8 @@
 #include <unordered_map>
 #include <vector>
 #include <functional>
+#include <optional>
+#include <string>
 
 // =====================================================
 // Comprehensive keyboard key enumeration for GRIM
@@ -88,6 +90,15 @@ public:
     static bool isDown(KeyCode code);
     static bool wasPressed(KeyCode code);
     static bool wasReleased(KeyCode code);
+
+    // Platform input is normalized to a shared 0-255 logical key space before
+    // it reaches this class. These helpers expose that mapping to the binding
+    // layer without persisting OS-specific scan codes.
+    static KeyCode fromPlatformCode(int code);
+    static int toPlatformCode(KeyCode code);
+    static std::string name(KeyCode code);
+    static std::optional<KeyCode> fromName(const std::string& name);
+    static bool isModifier(KeyCode code);
 
     static void onPress(KeyCode code, Callback cb);
     static void onRelease(KeyCode code, Callback cb);

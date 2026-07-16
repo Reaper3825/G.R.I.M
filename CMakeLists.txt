@@ -170,6 +170,41 @@ target_compile_definitions(GRIM PRIVATE GRIM_BUILD_HOST)
 
 include(cmake/Config.cmake)
 
+# MediaPipe hand gestures are an explicitly opt-in local dependency. The
+# default GRIM target compiles the visible "backend unavailable" adapter and
+# remains fully functional without MediaPipe. No FetchContent or download path
+# is allowed here because base operation must remain offline-capable.
+if(GRIM_USE_MEDIAPIPE_HAND_GESTURES)
+    if(NOT GRIM_MEDIAPIPE_OFFLINE_LOGGER_VERIFIED)
+        message(FATAL_ERROR
+            "MediaPipe hand gestures require "
+            "-DGRIM_MEDIAPIPE_OFFLINE_LOGGER_VERIFIED=ON after supplying a "
+            "MediaPipe build whose usage-metrics transport is disabled.")
+    endif()
+    if(NOT EXISTS
+       "${GRIM_MEDIAPIPE_ROOT}/mediapipe/tasks/c/vision/gesture_recognizer/gesture_recognizer.h")
+        message(FATAL_ERROR
+            "GRIM_MEDIAPIPE_ROOT does not contain the MediaPipe Tasks C headers")
+    endif()
+    if(NOT EXISTS "${GRIM_MEDIAPIPE_TASKS_C_LIBRARY}")
+        message(FATAL_ERROR
+            "GRIM_MEDIAPIPE_TASKS_C_LIBRARY must name an existing local library")
+    endif()
+
+    target_include_directories(GRIM PRIVATE "${GRIM_MEDIAPIPE_ROOT}")
+    target_link_libraries(GRIM PRIVATE "${GRIM_MEDIAPIPE_TASKS_C_LIBRARY}")
+    target_compile_definitions(GRIM PRIVATE
+        GRIM_HAS_MEDIAPIPE_TASKS_C=1
+        GRIM_MEDIAPIPE_TELEMETRY_DISABLED=1
+        GRIM_MEDIAPIPE_VERSION="${GRIM_MEDIAPIPE_VERSION}")
+    message(STATUS
+        "GRIM MediaPipe hand gestures: local backend enabled "
+        "(${GRIM_MEDIAPIPE_VERSION}); network fallback disabled")
+else()
+    message(STATUS
+        "GRIM MediaPipe hand gestures: disabled (base offline build unchanged)")
+endif()
+
 # Ensure ONNX Runtime includes are available if perception is enabled
 if(GRIM_USE_PERCEPTION)
     target_include_directories(GRIM PRIVATE "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include")

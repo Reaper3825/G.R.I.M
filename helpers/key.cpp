@@ -3,6 +3,8 @@
 #include "logger.hpp"
 
 #include "core/grim_platform.h"
+#include <algorithm>
+#include <cctype>
 
 std::unordered_map<KeyCode, Key::KeyState> Key::keyStates;
 
@@ -102,6 +104,105 @@ KeyCode fromVirtualKey(int vk)
 }
 
 } // namespace
+
+KeyCode Key::fromPlatformCode(int code)
+{
+    return fromVirtualKey(code);
+}
+
+int Key::toPlatformCode(KeyCode code)
+{
+    for (int candidate = 0; candidate < 256; ++candidate)
+    {
+        if (fromVirtualKey(candidate) == code)
+            return candidate;
+    }
+    return -1;
+}
+
+std::string Key::name(KeyCode code)
+{
+    const int value = static_cast<int>(code);
+    const int a = static_cast<int>(KeyCode::A);
+    const int z = static_cast<int>(KeyCode::Z);
+    if (value >= a && value <= z)
+        return std::string(1, static_cast<char>('A' + value - a));
+
+    const int n0 = static_cast<int>(KeyCode::Num0);
+    const int n9 = static_cast<int>(KeyCode::Num9);
+    if (value >= n0 && value <= n9)
+        return std::string(1, static_cast<char>('0' + value - n0));
+
+    const int f1 = static_cast<int>(KeyCode::F1);
+    const int f12 = static_cast<int>(KeyCode::F12);
+    if (value >= f1 && value <= f12)
+        return "F" + std::to_string(value - f1 + 1);
+
+    const int kp0 = static_cast<int>(KeyCode::Numpad0);
+    const int kp9 = static_cast<int>(KeyCode::Numpad9);
+    if (value >= kp0 && value <= kp9)
+        return "Numpad" + std::to_string(value - kp0);
+
+    switch (code)
+    {
+        case KeyCode::LShift: return "Left Shift"; case KeyCode::RShift: return "Right Shift";
+        case KeyCode::LCtrl: return "Left Ctrl"; case KeyCode::RCtrl: return "Right Ctrl";
+        case KeyCode::LAlt: return "Left Alt"; case KeyCode::RAlt: return "Right Alt";
+        case KeyCode::LSystem: return "Left System"; case KeyCode::RSystem: return "Right System";
+        case KeyCode::CapsLock: return "Caps Lock"; case KeyCode::NumLock: return "Num Lock";
+        case KeyCode::ScrollLock: return "Scroll Lock";
+        case KeyCode::Enter: return "Enter"; case KeyCode::Escape: return "Escape";
+        case KeyCode::Space: return "Space"; case KeyCode::Backspace: return "Backspace";
+        case KeyCode::Tab: return "Tab"; case KeyCode::Insert: return "Insert";
+        case KeyCode::Delete: return "Delete"; case KeyCode::Home: return "Home";
+        case KeyCode::End: return "End"; case KeyCode::PageUp: return "Page Up";
+        case KeyCode::PageDown: return "Page Down";
+        case KeyCode::Left: return "Left Arrow"; case KeyCode::Right: return "Right Arrow";
+        case KeyCode::Up: return "Up Arrow"; case KeyCode::Down: return "Down Arrow";
+        case KeyCode::Dash: return "-"; case KeyCode::Equal: return "=";
+        case KeyCode::LBracket: return "["; case KeyCode::RBracket: return "]";
+        case KeyCode::Backslash: return "\\"; case KeyCode::Semicolon: return ";";
+        case KeyCode::Apostrophe: return "'"; case KeyCode::Comma: return ",";
+        case KeyCode::Period: return "."; case KeyCode::Slash: return "/";
+        case KeyCode::Grave: return "`";
+        case KeyCode::NumpadAdd: return "Numpad Add"; case KeyCode::NumpadSubtract: return "Numpad Subtract";
+        case KeyCode::NumpadMultiply: return "Numpad Multiply"; case KeyCode::NumpadDivide: return "Numpad Divide";
+        case KeyCode::NumpadDecimal: return "Numpad Decimal"; case KeyCode::NumpadEnter: return "Numpad Enter";
+        case KeyCode::PrintScreen: return "Print Screen"; case KeyCode::Pause: return "Pause";
+        case KeyCode::Menu: return "Menu";
+        default: return "Unknown";
+    }
+}
+
+std::optional<KeyCode> Key::fromName(const std::string& requestedName)
+{
+    auto normalize = [](std::string value) {
+        value.erase(std::remove_if(value.begin(), value.end(), [](unsigned char c) {
+            return std::isspace(c) != 0;
+        }), value.end());
+        std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return value;
+    };
+
+    const std::string target = normalize(requestedName);
+    for (int value = 0; value < static_cast<int>(KeyCode::Unknown); ++value)
+    {
+        const auto candidate = static_cast<KeyCode>(value);
+        if (normalize(name(candidate)) == target)
+            return candidate;
+    }
+    return std::nullopt;
+}
+
+bool Key::isModifier(KeyCode code)
+{
+    return code == KeyCode::LShift || code == KeyCode::RShift ||
+           code == KeyCode::LCtrl || code == KeyCode::RCtrl ||
+           code == KeyCode::LAlt || code == KeyCode::RAlt ||
+           code == KeyCode::LSystem || code == KeyCode::RSystem;
+}
 
 void Key::initialize()
 {

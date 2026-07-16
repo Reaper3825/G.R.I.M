@@ -10,6 +10,8 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <iomanip>
@@ -71,6 +73,32 @@ std::string FormatDouble(double v, int prec = 3) {
     return ss.str();
 }
 
+const char* FormatHandBackendState(PE::PhysicalHandGestureBackendState state) {
+    switch (state) {
+        case PE::PhysicalHandGestureBackendState::Disabled: return "Disabled";
+        case PE::PhysicalHandGestureBackendState::BackendUnavailable: return "Backend unavailable";
+        case PE::PhysicalHandGestureBackendState::ModelMissing: return "Model missing";
+        case PE::PhysicalHandGestureBackendState::Initializing: return "Initializing";
+        case PE::PhysicalHandGestureBackendState::Ready: return "Ready";
+        case PE::PhysicalHandGestureBackendState::Failed: return "Failed";
+    }
+    return "Unknown";
+}
+
+const char* FormatHandedness(PE::PhysicalHandedness handedness) {
+    switch (handedness) {
+        case PE::PhysicalHandedness::Left: return "Left";
+        case PE::PhysicalHandedness::Right: return "Right";
+        case PE::PhysicalHandedness::Unknown: return "Unknown";
+    }
+    return "Unknown";
+}
+
+std::string CompactPath(const std::string& path, size_t max_chars = 42) {
+    if (path.size() <= max_chars) return path;
+    return "..." + path.substr(path.size() - (max_chars - 3));
+}
+
 bool TryParseInt(const std::string& s, int& out) {
     if (s.empty()) return false;
     try { out = std::stoi(s); return true; } catch (...) { return false; }
@@ -107,6 +135,8 @@ UIPhysicalEnvironmentPanel::UIPhysicalEnvironmentPanel()
         [this]() { setActiveTab(Tab::Calibration); });
     tab_perception_btn_ = std::make_shared<UIButton>(" Perception ",
         [this]() { setActiveTab(Tab::Perception); });
+    tab_interaction_btn_ = std::make_shared<UIButton>(" Interaction ",
+        [this]() { setActiveTab(Tab::Interaction); });
     tab_spatial_btn_ = std::make_shared<UIButton>(" Spatial ",
         [this]() { setActiveTab(Tab::Spatial); });
     tab_localization_btn_ = std::make_shared<UIButton>(" Localization ",
@@ -138,6 +168,12 @@ UIPhysicalEnvironmentPanel::UIPhysicalEnvironmentPanel()
     perc_btn_class_policy_ = std::make_shared<UIButton>(" Policy: on ",
         [this]{ HandleTogglePerceptionClassPolicy(); });
     RefreshPerceptionEnableButtonLabelsFromSubsystem();
+
+    interaction_enable_btn_ = std::make_shared<UIButton>(" Gestures: on ",
+        [this]{ HandleToggleHandGestures(); });
+    interaction_reload_btn_ = std::make_shared<UIButton>(" Reinitialize local backend ",
+        [this]{ HandleReloadHandGestureBackend(); });
+    RefreshInteractionButtonLabels();
 
     // ── Spatial tab toggle buttons (labels refreshed at end of ctor) ──
     spatial_btn_depth_ = std::make_shared<UIButton>(" Depth: on ",
@@ -627,33 +663,38 @@ void UIPhysicalEnvironmentPanel::update(const InputState& input, float dt) {
     // ── Tab bar ──
     const float tab_y = position.y + titleBarHeight + 4.0f;
     if (tab_camera_btn_) {
-        tab_camera_btn_->setSize(110.0f, kTabBarHeight - 4.0f);
+        tab_camera_btn_->setSize(90.0f, kTabBarHeight - 4.0f);
         tab_camera_btn_->setPosition(position.x + kTabBarPad, tab_y);
         tab_camera_btn_->update(input, dt);
     }
     if (tab_calibration_btn_) {
-        tab_calibration_btn_->setSize(130.0f, kTabBarHeight - 4.0f);
-        tab_calibration_btn_->setPosition(position.x + kTabBarPad + 116.0f, tab_y);
+        tab_calibration_btn_->setSize(110.0f, kTabBarHeight - 4.0f);
+        tab_calibration_btn_->setPosition(position.x + kTabBarPad + 96.0f, tab_y);
         tab_calibration_btn_->update(input, dt);
     }
     if (tab_perception_btn_) {
-        tab_perception_btn_->setSize(130.0f, kTabBarHeight - 4.0f);
-        tab_perception_btn_->setPosition(position.x + kTabBarPad + 252.0f, tab_y);
+        tab_perception_btn_->setSize(105.0f, kTabBarHeight - 4.0f);
+        tab_perception_btn_->setPosition(position.x + kTabBarPad + 212.0f, tab_y);
         tab_perception_btn_->update(input, dt);
     }
+    if (tab_interaction_btn_) {
+        tab_interaction_btn_->setSize(110.0f, kTabBarHeight - 4.0f);
+        tab_interaction_btn_->setPosition(position.x + kTabBarPad + 323.0f, tab_y);
+        tab_interaction_btn_->update(input, dt);
+    }
     if (tab_spatial_btn_) {
-        tab_spatial_btn_->setSize(110.0f, kTabBarHeight - 4.0f);
-        tab_spatial_btn_->setPosition(position.x + kTabBarPad + 388.0f, tab_y);
+        tab_spatial_btn_->setSize(90.0f, kTabBarHeight - 4.0f);
+        tab_spatial_btn_->setPosition(position.x + kTabBarPad + 439.0f, tab_y);
         tab_spatial_btn_->update(input, dt);
     }
     if (tab_localization_btn_) {
-        tab_localization_btn_->setSize(130.0f, kTabBarHeight - 4.0f);
-        tab_localization_btn_->setPosition(position.x + kTabBarPad + 504.0f, tab_y);
+        tab_localization_btn_->setSize(115.0f, kTabBarHeight - 4.0f);
+        tab_localization_btn_->setPosition(position.x + kTabBarPad + 535.0f, tab_y);
         tab_localization_btn_->update(input, dt);
     }
     if (tab_world_btn_) {
-        tab_world_btn_->setSize(110.0f, kTabBarHeight - 4.0f);
-        tab_world_btn_->setPosition(position.x + kTabBarPad + 640.0f, tab_y);
+        tab_world_btn_->setSize(85.0f, kTabBarHeight - 4.0f);
+        tab_world_btn_->setPosition(position.x + kTabBarPad + 656.0f, tab_y);
         tab_world_btn_->update(input, dt);
     }
 
@@ -662,6 +703,7 @@ void UIPhysicalEnvironmentPanel::update(const InputState& input, float dt) {
         case Tab::Camera:       UpdateCameraTab(input, dt);       break;
         case Tab::Calibration:  UpdateCalibrationTab(input, dt);  break;
         case Tab::Perception:   UpdatePerceptionTab(input, dt);   break;
+        case Tab::Interaction:  UpdateInteractionTab(input, dt);  break;
         case Tab::Spatial:      UpdateSpatialTab(input, dt);      break;
         case Tab::Localization: UpdateLocalizationTab(input, dt); break;
         case Tab::World:        UpdateWorldTab(input, dt);        break;
@@ -878,6 +920,7 @@ bool UIPhysicalEnvironmentPanel::drawOverlay(OverlayRenderer& renderer) {
     if (tab_camera_btn_)       tab_camera_btn_->drawOverlay(renderer, position);
     if (tab_calibration_btn_)  tab_calibration_btn_->drawOverlay(renderer, position);
     if (tab_perception_btn_)   tab_perception_btn_->drawOverlay(renderer, position);
+    if (tab_interaction_btn_)  tab_interaction_btn_->drawOverlay(renderer, position);
     if (tab_spatial_btn_)      tab_spatial_btn_->drawOverlay(renderer, position);
     if (tab_localization_btn_) tab_localization_btn_->drawOverlay(renderer, position);
     if (tab_world_btn_)        tab_world_btn_->drawOverlay(renderer, position);
@@ -888,17 +931,19 @@ bool UIPhysicalEnvironmentPanel::drawOverlay(OverlayRenderer& renderer) {
         float ix = 0.0f, iw = 0.0f;
         switch (active_tab_) {
             case Tab::Camera:
-                ix = position.x + kTabBarPad;          iw = 110.0f; break;
+                ix = position.x + kTabBarPad;          iw = 90.0f; break;
             case Tab::Calibration:
-                ix = position.x + kTabBarPad + 116.0f; iw = 130.0f; break;
+                ix = position.x + kTabBarPad + 96.0f;  iw = 110.0f; break;
             case Tab::Perception:
-                ix = position.x + kTabBarPad + 252.0f; iw = 130.0f; break;
+                ix = position.x + kTabBarPad + 212.0f; iw = 105.0f; break;
+            case Tab::Interaction:
+                ix = position.x + kTabBarPad + 323.0f; iw = 110.0f; break;
             case Tab::Spatial:
-                ix = position.x + kTabBarPad + 388.0f; iw = 110.0f; break;
+                ix = position.x + kTabBarPad + 439.0f; iw = 90.0f; break;
             case Tab::Localization:
-                ix = position.x + kTabBarPad + 504.0f; iw = 130.0f; break;
+                ix = position.x + kTabBarPad + 535.0f; iw = 115.0f; break;
             case Tab::World:
-                ix = position.x + kTabBarPad + 640.0f; iw = 110.0f; break;
+                ix = position.x + kTabBarPad + 656.0f; iw = 85.0f; break;
         }
         renderer.drawRect({ix, y}, {iw, 2.0f}, UITheme::Colors::Primary);
     }
@@ -913,6 +958,7 @@ bool UIPhysicalEnvironmentPanel::drawOverlay(OverlayRenderer& renderer) {
         case Tab::Camera:       DrawCameraTab(renderer);       break;
         case Tab::Calibration:  DrawCalibrationTab(renderer);  break;
         case Tab::Perception:   DrawPerceptionTab(renderer);   break;
+        case Tab::Interaction:  DrawInteractionTab(renderer);  break;
         case Tab::Spatial:      DrawSpatialTab(renderer);      break;
         case Tab::Localization: DrawLocalizationTab(renderer); break;
         case Tab::World:        DrawWorldTab(renderer);        break;
@@ -2145,6 +2191,223 @@ void UIPhysicalEnvironmentPanel::DrawPerceptionTab(OverlayRenderer& renderer) {
     DrawPerceptionSidebar(renderer, sidebar_x + 8, sidebar_y + 8,
                           sidebar_w - 16, sidebar_h - 16,
                           perc_results_view_.results, have_any_perc_results_);
+}
+
+// ============================================================================
+//  Interaction tab (Stage-2 auxiliary — local controller input)
+// ============================================================================
+
+void UIPhysicalEnvironmentPanel::HandleToggleHandGestures() {
+    const auto config = PE::GetPhysicalHandGestureConfig();
+    PE::RequestSetPhysicalHandGesturesEnabled(!config.enabled);
+    RefreshInteractionButtonLabels();
+}
+
+void UIPhysicalEnvironmentPanel::HandleReloadHandGestureBackend() {
+    PE::RequestConfigurePhysicalHandGestures(
+        PE::GetPhysicalHandGestureConfig());
+}
+
+void UIPhysicalEnvironmentPanel::RefreshInteractionButtonLabels() {
+    if (!interaction_enable_btn_) return;
+    const auto config = PE::GetPhysicalHandGestureConfig();
+    interaction_enable_btn_->setText(config.enabled
+        ? std::string(" Gestures: on ")
+        : std::string(" Gestures: off "));
+}
+
+void UIPhysicalEnvironmentPanel::UpdateInteractionTab(
+    const InputState& input, float dt)
+{
+    try {
+        if (PE::PhysicalHandGestureBus::Instance()
+                .PullLatestPhysicalHandGestureSnapshot(
+                    interaction_snapshot_view_,
+                    interaction_last_seen_sequence_)) {
+            have_interaction_snapshot_ = true;
+            RefreshInteractionButtonLabels();
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR(kPanelLogTag,
+            std::string("UpdateInteractionTab: snapshot pull threw: ") + e.what());
+    }
+
+    const float content_top =
+        position.y + titleBarHeight + kTabBarHeight + 8.0f;
+    if (interaction_enable_btn_) {
+        interaction_enable_btn_->setSize(132.0f, 24.0f);
+        interaction_enable_btn_->setPosition(position.x + 16.0f, content_top);
+        interaction_enable_btn_->update(input, dt);
+    }
+    if (interaction_reload_btn_) {
+        interaction_reload_btn_->setSize(210.0f, 24.0f);
+        interaction_reload_btn_->setPosition(position.x + 154.0f, content_top);
+        interaction_reload_btn_->update(input, dt);
+    }
+}
+
+void UIPhysicalEnvironmentPanel::DrawHandGestureOverlay(
+    OverlayRenderer& renderer,
+    const PE::PhysicalHandGestureSnapshot& snapshot,
+    int blit_x, int blit_y, int blit_w, int blit_h)
+{
+    static constexpr std::array<std::array<uint8_t, 2>, 21> kHandEdges{{
+        {{0,1}}, {{1,2}}, {{2,3}}, {{3,4}},
+        {{0,5}}, {{5,6}}, {{6,7}}, {{7,8}},
+        {{5,9}}, {{9,10}}, {{10,11}}, {{11,12}},
+        {{9,13}}, {{13,14}}, {{14,15}}, {{15,16}},
+        {{13,17}}, {{0,17}}, {{17,18}}, {{18,19}}, {{19,20}}
+    }};
+
+    for (const auto& hand : snapshot.hands) {
+        if (hand.landmark_count == 0) continue;
+        const uint32_t color = hand.handedness == PE::PhysicalHandedness::Left
+            ? UITheme::Colors::AccentBlue : UITheme::Colors::Success;
+        auto point = [&](uint8_t index) {
+            const auto& landmark = hand.landmarks[index];
+            return std::pair<float, float>{
+                static_cast<float>(blit_x) + landmark.normalized_x * blit_w,
+                static_cast<float>(blit_y) + landmark.normalized_y * blit_h
+            };
+        };
+        for (const auto& edge : kHandEdges) {
+            if (edge[0] >= hand.landmark_count || edge[1] >= hand.landmark_count)
+                continue;
+            const auto a = point(edge[0]);
+            const auto b = point(edge[1]);
+            renderer.drawLine({a.first, a.second}, {b.first, b.second}, color);
+        }
+        for (uint8_t i = 0; i < std::min<uint32_t>(21, hand.landmark_count); ++i) {
+            const auto p = point(i);
+            renderer.drawRect({p.first - 2.0f, p.second - 2.0f},
+                              {5.0f, 5.0f}, color);
+        }
+        const auto wrist = point(0);
+        const std::string label = std::string(FormatHandedness(hand.handedness))
+            + "  " + (hand.gesture_label.empty() ? "No gesture" : hand.gesture_label)
+            + "  " + FormatDouble(hand.gesture_confidence * 100.0, 0) + "%";
+        renderer.drawText({wrist.first + 5.0f, wrist.second + 5.0f}, label, color);
+    }
+}
+
+void UIPhysicalEnvironmentPanel::DrawInteractionTab(OverlayRenderer& renderer) {
+    if (interaction_enable_btn_)
+        interaction_enable_btn_->drawOverlay(renderer, position);
+    if (interaction_reload_btn_)
+        interaction_reload_btn_->drawOverlay(renderer, position);
+
+    const float pad = 12.0f;
+    const float toolbar_h = 32.0f;
+    const float content_top =
+        position.y + titleBarHeight + kTabBarHeight + toolbar_h + pad;
+    const float sidebar_w = 310.0f;
+    const float frame_x = position.x + pad;
+    const float frame_y = content_top;
+    const float frame_w = std::max(64.0f, size.x - sidebar_w - pad * 3.0f);
+    const float frame_h = std::max(64.0f, position.y + size.y - frame_y - pad);
+    const float sidebar_x = frame_x + frame_w + pad;
+    const float sidebar_y = frame_y;
+
+    renderer.drawRect({frame_x - 1, frame_y - 1}, {frame_w + 2, frame_h + 2},
+                      UITheme::Colors::DividerLine);
+    renderer.drawRect({frame_x, frame_y}, {frame_w, frame_h},
+                      UITheme::Colors::Background);
+
+    if (!have_any_frame_ || last_view_.raw_image.empty()) {
+        renderer.drawText({frame_x + 12, frame_y + 12},
+            "No camera frame yet - connect a source in Camera.",
+            UITheme::Colors::TextSecondary);
+    } else {
+        DrawBgrFrameIntoOverlay(renderer, last_view_.raw_image,
+                                last_view_.frame_counter, false,
+                                frame_x, frame_y, frame_w, frame_h,
+                                interaction_blit_cache_);
+        const int blit_w = interaction_blit_cache_.out_w;
+        const int blit_h = interaction_blit_cache_.out_h;
+        const int blit_x = static_cast<int>(frame_x + (frame_w - blit_w) * 0.5f);
+        const int blit_y = static_cast<int>(frame_y + (frame_h - blit_h) * 0.5f);
+        if (have_interaction_snapshot_ &&
+            interaction_snapshot_view_.snapshot.source_frame_counter ==
+                last_view_.frame_counter) {
+            DrawHandGestureOverlay(renderer, interaction_snapshot_view_.snapshot,
+                                   blit_x, blit_y, blit_w, blit_h);
+        } else if (have_interaction_snapshot_ &&
+                   interaction_snapshot_view_.snapshot.source_frame_counter != 0) {
+            renderer.drawText({frame_x + 10, frame_y + frame_h - 22},
+                "Landmarks are from an older frame; overlay withheld.",
+                UITheme::Colors::Warning);
+        }
+    }
+
+    renderer.drawRect({sidebar_x - 1, sidebar_y - 1},
+                      {sidebar_w + 2, frame_h + 2}, UITheme::Colors::DividerLine);
+    renderer.drawRect({sidebar_x, sidebar_y},
+                      {sidebar_w, frame_h}, UITheme::Colors::PanelBg);
+
+    float line_y = sidebar_y + 9.0f;
+    auto line = [&](const std::string& text,
+                    uint32_t color = UITheme::Colors::TextPrimary) {
+        if (line_y <= sidebar_y + frame_h - 16.0f)
+            renderer.drawText({sidebar_x + 9.0f, line_y}, text, color);
+        line_y += 17.0f;
+    };
+    auto gap = [&] { line_y += 7.0f; };
+
+    line("Local Hand Interaction", UITheme::Colors::TextHeader);
+    line("OFFLINE ONLY - no network fallback", UITheme::Colors::Success);
+    if (!have_interaction_snapshot_) {
+        line("Waiting for worker status...", UITheme::Colors::Warning);
+        return;
+    }
+
+    const auto& s = interaction_snapshot_view_.snapshot;
+    uint32_t state_color = UITheme::Colors::Warning;
+    if (s.backend_state == PE::PhysicalHandGestureBackendState::Ready)
+        state_color = UITheme::Colors::Success;
+    else if (s.backend_state == PE::PhysicalHandGestureBackendState::Failed)
+        state_color = UITheme::Colors::Danger;
+    line(std::string("State: ") + FormatHandBackendState(s.backend_state), state_color);
+    line(std::string("Enabled: ") + (s.enabled ? "yes" : "no")
+         + "   worker: " + (s.worker_running ? (s.worker_busy ? "busy" : "idle") : "stopped"));
+    line(std::string("Metrics transport: ")
+         + (s.telemetry_disabled ? "disabled" : "NOT VERIFIED"),
+         s.telemetry_disabled ? UITheme::Colors::Success : UITheme::Colors::Danger);
+    line("Backend: " + CompactPath(s.backend_name + " " + s.backend_version));
+    line("Model: " + CompactPath(s.model_path));
+    line("Detail: " + CompactPath(s.status_detail));
+    if (!s.last_error.empty())
+        line("Error: " + CompactPath(s.last_error), UITheme::Colors::Danger);
+    gap();
+
+    line("Frames submitted: " + std::to_string(s.frames_submitted));
+    line("Frames processed: " + std::to_string(s.frames_processed));
+    line("Queue replacements: " + std::to_string(s.frames_replaced));
+    line("Cadence skipped: " + std::to_string(s.frames_cadence_skipped));
+    line("Inference failures: " + std::to_string(s.inference_failures));
+    line("Inference: " + FormatDouble(s.last_inference_ms, 1)
+         + " ms  mean " + FormatDouble(s.mean_inference_ms, 1) + " ms");
+    line("Result frame: " + std::to_string(s.source_frame_counter));
+    if (s.published_steady_ns != 0) {
+        const uint64_t now_ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
+        const double age_ms = now_ns >= s.published_steady_ns
+            ? static_cast<double>(now_ns - s.published_steady_ns) / 1.0e6 : 0.0;
+        line("Status age: " + FormatDouble(age_ms, 0) + " ms");
+    }
+    gap();
+
+    line("Hands: " + std::to_string(s.hands.size()), UITheme::Colors::TextHeader);
+    for (size_t i = 0; i < s.hands.size(); ++i) {
+        const auto& hand = s.hands[i];
+        line("#" + std::to_string(i + 1) + " " + FormatHandedness(hand.handedness)
+             + " " + FormatDouble(hand.handedness_confidence * 100.0, 0) + "%");
+        line("  gesture: "
+             + (hand.gesture_label.empty() ? std::string("none") : hand.gesture_label)
+             + " " + FormatDouble(hand.gesture_confidence * 100.0, 0) + "%",
+             UITheme::Colors::TextValue);
+        line("  landmarks: " + std::to_string(hand.landmark_count) + "/21");
+    }
 }
 
 // ============================================================================

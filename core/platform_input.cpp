@@ -1,8 +1,7 @@
 #include "platform_input.hpp"
-
-#ifdef _WIN32
 #include "grim_platform.h"
 
+#ifdef _WIN32
 namespace PlatformInput {
     
     void initialize() {
@@ -61,6 +60,53 @@ namespace PlatformInput {
 namespace PlatformInput {
     static Display* display = nullptr;
     static Window root;
+
+    static KeySym logicalKeyToKeysym(int keyCode) {
+        if ((keyCode >= '0' && keyCode <= '9') || (keyCode >= 'A' && keyCode <= 'Z'))
+            return static_cast<KeySym>(keyCode);
+        if (keyCode >= VK_F1 && keyCode <= VK_F12)
+            return static_cast<KeySym>(XK_F1 + keyCode - VK_F1);
+
+        switch (keyCode) {
+            case VK_BACK: return XK_BackSpace; case VK_TAB: return XK_Tab;
+            case VK_RETURN: return XK_Return; case VK_ESCAPE: return XK_Escape;
+            case VK_SPACE: return XK_space; case VK_INSERT: return XK_Insert;
+            case VK_DELETE: return XK_Delete; case VK_HOME: return XK_Home;
+            case VK_END: return XK_End; case VK_PRIOR: return XK_Page_Up;
+            case VK_NEXT: return XK_Page_Down; case VK_LEFT: return XK_Left;
+            case VK_RIGHT: return XK_Right; case VK_UP: return XK_Up;
+            case VK_DOWN: return XK_Down;
+            case VK_LSHIFT: return XK_Shift_L; case VK_RSHIFT: return XK_Shift_R;
+            case VK_LCONTROL: return XK_Control_L; case VK_RCONTROL: return XK_Control_R;
+            case VK_LMENU: return XK_Alt_L; case VK_RMENU: return XK_Alt_R;
+            case VK_LWIN: return XK_Super_L; case VK_RWIN: return XK_Super_R;
+            case VK_CAPITAL: return XK_Caps_Lock; case VK_NUMLOCK: return XK_Num_Lock;
+            case VK_SCROLL: return XK_Scroll_Lock;
+            case VK_OEM_MINUS: return XK_minus; case VK_OEM_PLUS: return XK_equal;
+            case VK_OEM_4: return XK_bracketleft; case VK_OEM_6: return XK_bracketright;
+            case VK_OEM_5: return XK_backslash; case VK_OEM_1: return XK_semicolon;
+            case VK_OEM_7: return XK_apostrophe; case VK_OEM_COMMA: return XK_comma;
+            case VK_OEM_PERIOD: return XK_period; case VK_OEM_2: return XK_slash;
+            case VK_OEM_3: return XK_grave;
+            case VK_NUMPAD0: return XK_KP_0; case VK_NUMPAD1: return XK_KP_1;
+            case VK_NUMPAD2: return XK_KP_2; case VK_NUMPAD3: return XK_KP_3;
+            case VK_NUMPAD4: return XK_KP_4; case VK_NUMPAD5: return XK_KP_5;
+            case VK_NUMPAD6: return XK_KP_6; case VK_NUMPAD7: return XK_KP_7;
+            case VK_NUMPAD8: return XK_KP_8; case VK_NUMPAD9: return XK_KP_9;
+            case VK_ADD: return XK_KP_Add; case VK_SUBTRACT: return XK_KP_Subtract;
+            case VK_MULTIPLY: return XK_KP_Multiply; case VK_DIVIDE: return XK_KP_Divide;
+            case VK_DECIMAL: return XK_KP_Decimal; case VK_SEPARATOR: return XK_KP_Enter;
+            case VK_SNAPSHOT: return XK_Print; case VK_PAUSE: return XK_Pause;
+            case VK_APPS: return XK_Menu;
+            default: return NoSymbol;
+        }
+    }
+
+    static bool keysymIsDown(const char keys[32], KeySym symbol) {
+        if (symbol == NoSymbol) return false;
+        const ::KeyCode nativeCode = XKeysymToKeycode(display, symbol);
+        return nativeCode != 0 && (keys[nativeCode / 8] & (1 << (nativeCode % 8))) != 0;
+    }
     
     void initialize() {
         display = XOpenDisplay(nullptr);
@@ -99,9 +145,14 @@ namespace PlatformInput {
         
         char keys[32];
         XQueryKeymap(display, keys);
-        
-        KeyCode kc = XKeysymToKeycode(display, keyCode);
-        return (keys[kc / 8] & (1 << (kc % 8))) != 0;
+
+        if (keyCode == VK_SHIFT)
+            return keysymIsDown(keys, XK_Shift_L) || keysymIsDown(keys, XK_Shift_R);
+        if (keyCode == VK_CONTROL)
+            return keysymIsDown(keys, XK_Control_L) || keysymIsDown(keys, XK_Control_R);
+        if (keyCode == VK_MENU)
+            return keysymIsDown(keys, XK_Alt_L) || keysymIsDown(keys, XK_Alt_R);
+        return keysymIsDown(keys, logicalKeyToKeysym(keyCode));
     }
 
     bool isCommandDown() {
@@ -250,6 +301,12 @@ namespace PlatformInput {
     }
 
     bool isKeyDown(int keyCode) {
+        if (keyCode == 0x10)
+            return s_eventKeyStates[0xA0] || s_eventKeyStates[0xA1];
+        if (keyCode == 0x11)
+            return s_eventKeyStates[0xA2] || s_eventKeyStates[0xA3];
+        if (keyCode == 0x12)
+            return s_eventKeyStates[0xA4] || s_eventKeyStates[0xA5];
         if (keyCode >= 0 && keyCode < 256)
             return s_eventKeyStates[keyCode];
         return false;

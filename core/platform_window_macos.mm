@@ -171,7 +171,29 @@ int processKeyEvent(unsigned short macKeyCode, bool down, NSEventModifierFlags m
         case kVK_ANSI_4: vk = '4'; break; case kVK_ANSI_5: vk = '5'; break;
         case kVK_ANSI_6: vk = '6'; break; case kVK_ANSI_7: vk = '7'; break;
         case kVK_ANSI_8: vk = '8'; break; case kVK_ANSI_9: vk = '9'; break;
+        case kVK_ANSI_Minus:        vk = 0xBD; break;
+        case kVK_ANSI_Equal:        vk = 0xBB; break;
+        case kVK_ANSI_LeftBracket:  vk = 0xDB; break;
+        case kVK_ANSI_RightBracket: vk = 0xDD; break;
+        case kVK_ANSI_Backslash:    vk = 0xDC; break;
+        case kVK_ANSI_Semicolon:    vk = 0xBA; break;
+        case kVK_ANSI_Quote:        vk = 0xDE; break;
+        case kVK_ANSI_Comma:        vk = 0xBC; break;
+        case kVK_ANSI_Period:       vk = 0xBE; break;
+        case kVK_ANSI_Slash:        vk = 0xBF; break;
         case kVK_ANSI_Grave: vk = 0xC0; break;
+        case kVK_ANSI_Keypad0: vk = 0x60; break; case kVK_ANSI_Keypad1: vk = 0x61; break;
+        case kVK_ANSI_Keypad2: vk = 0x62; break; case kVK_ANSI_Keypad3: vk = 0x63; break;
+        case kVK_ANSI_Keypad4: vk = 0x64; break; case kVK_ANSI_Keypad5: vk = 0x65; break;
+        case kVK_ANSI_Keypad6: vk = 0x66; break; case kVK_ANSI_Keypad7: vk = 0x67; break;
+        case kVK_ANSI_Keypad8: vk = 0x68; break; case kVK_ANSI_Keypad9: vk = 0x69; break;
+        case kVK_ANSI_KeypadMultiply: vk = 0x6A; break;
+        case kVK_ANSI_KeypadPlus:     vk = 0x6B; break;
+        case kVK_ANSI_KeypadEnter:    vk = 0x6C; break;
+        case kVK_ANSI_KeypadMinus:    vk = 0x6D; break;
+        case kVK_ANSI_KeypadDecimal:  vk = 0x6E; break;
+        case kVK_ANSI_KeypadDivide:   vk = 0x6F; break;
+        case kVK_CapsLock:            vk = 0x14; break;
         case kVK_F1:  vk = 0x70; break; case kVK_F2:  vk = 0x71; break;
         case kVK_F3:  vk = 0x72; break; case kVK_F4:  vk = 0x73; break;
         case kVK_F5:  vk = 0x74; break; case kVK_F6:  vk = 0x75; break;
@@ -199,6 +221,7 @@ void processFlagsChanged(unsigned short flagKey, NSEventModifierFlags mods) {
         case kVK_RightControl: modifierVk = 0xA3; modifierDown = (mods & NSEventModifierFlagControl) != 0; break;
         case kVK_Option:       modifierVk = 0xA4; modifierDown = (mods & NSEventModifierFlagOption) != 0; break;
         case kVK_RightOption:  modifierVk = 0xA5; modifierDown = (mods & NSEventModifierFlagOption) != 0; break;
+        case kVK_CapsLock:     modifierVk = 0x14; modifierDown = (mods & NSEventModifierFlagCapsLock) != 0; break;
         default: break;
     }
     if (modifierVk >= 0) {

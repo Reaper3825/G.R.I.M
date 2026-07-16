@@ -8,6 +8,7 @@
 #include "core/platform_window.hpp"
 #include "../settings/runtime_ai_config.hpp"
 #include "../settings/settings_apply.hpp"
+#include "core/input/InputBindings.hpp"
 #include <functional>
 
 static constexpr float kTabBarY     = 35.0f;
@@ -41,6 +42,8 @@ UISettingsMenu::UISettingsMenu()
     tabGeoSpatialBtn_->setSize(48.0f, 26.0f);
     tabMemoryBtn_ = std::make_shared<UIButton>("Memory", [this]() { setTab(SettingsTab::Memory); });
     tabMemoryBtn_->setSize(68.0f, 26.0f);
+    tabControlsBtn_ = std::make_shared<UIButton>("Controls", [this]() { setTab(SettingsTab::Controls); });
+    tabControlsBtn_->setSize(72.0f, 26.0f);
     tabIntentsBtn_ = std::make_shared<UIButton>("Intents", [this]() { setTab(SettingsTab::Intents); });
     tabIntentsBtn_->setSize(68.0f, 26.0f);
 
@@ -95,6 +98,8 @@ void UISettingsMenu::applyChanges() {
             PlatformWindow::setOverlayBlurStyle(
                 UIRoot::get().getHWND(), enabled, opacity, intensity);
         });
+
+    GRIM::InputBindings::loadRuntimeConfig(config);
 }
 
 // ? Action handlers - these can safely be called from callbacks
@@ -309,6 +314,7 @@ void UISettingsMenu::cyclePersonality() {
 
 void UISettingsMenu::doSaveAndClose() {
     try {
+        GRIM::InputBindings::endCapture();
         LOG_DEBUG("UISettingsMenu", "doSaveAndClose() called");
         applyChanges();
         setVisible(false);
@@ -322,6 +328,7 @@ void UISettingsMenu::doSaveAndClose() {
 
 void UISettingsMenu::doCancel() {
     try {
+        GRIM::InputBindings::endCapture();
         LOG_DEBUG("UISettingsMenu", "doCancel() called");
         pendingConfig = config;
         hasChanges = false;
@@ -356,6 +363,7 @@ void UISettingsMenu::createWidgets() {
             case SettingsTab::Preferences: createPreferencesWidgets(); break;
             case SettingsTab::GeoSpatial:  createGeoSpatialWidgets();  break;
             case SettingsTab::Memory:      createMemoryWidgets();      break;
+            case SettingsTab::Controls:    createControlsWidgets();    break;
             case SettingsTab::Intents:     createIntentsWidgets();     break;
         }
         
@@ -1434,6 +1442,57 @@ void UISettingsMenu::createMemoryWidgets() {
 }
 
 // =========================================================
+// Controls Tab — editable bindings over the low-level input layer
+// =========================================================
+void UISettingsMenu::createControlsWidgets() {
+    const float widgetWidth = scrollBox->getSize().x - 30.0f;
+    constexpr float widgetHeight = 52.0f;
+
+    if (controlsStatus_.empty())
+        controlsStatus_ = "Click a binding, press a key; Backspace clears, Escape cancels";
+
+    for (const auto& definition : GRIM::InputBindings::actions()) {
+        const auto current = GRIM::InputBindings::bindingFromConfig(pendingConfig, definition.id);
+        auto row = std::make_shared<UIKeybind>(
+            definition.label,
+            current,
+            [this, actionId = definition.id](
+                const std::optional<GRIM::InputBindings::Binding>& requested) {
+                controlsStatus_.clear();
+                if (requested && !requested->empty()) {
+                    if (const auto conflict = GRIM::InputBindings::findConflict(
+                            pendingConfig, actionId, *requested)) {
+                        GRIM::InputBindings::setBindingInConfig(
+                            pendingConfig, *conflict, std::nullopt);
+                        const auto previous = GRIM::InputBindings::action(*conflict);
+                        controlsStatus_ = "Reassigned from " +
+                            (previous ? previous->label : *conflict);
+                    } else {
+                        controlsStatus_ = "Binding updated";
+                    }
+                } else {
+                    controlsStatus_ = "Binding cleared";
+                }
+
+                GRIM::InputBindings::setBindingInConfig(pendingConfig, actionId, requested);
+                hasChanges = true;
+                needsWidgetRefresh = true;
+            });
+        row->setSize(widgetWidth, widgetHeight);
+        scrollBox->addChild(row);
+    }
+
+    auto resetButton = std::make_shared<UIButton>("Reset All to Defaults", [this]() {
+        GRIM::InputBindings::resetBindingsInConfig(pendingConfig);
+        controlsStatus_ = "Default bindings restored";
+        hasChanges = true;
+        needsWidgetRefresh = true;
+    });
+    resetButton->setSize(widgetWidth, 42.0f);
+    scrollBox->addChild(resetButton);
+}
+
+// =========================================================
 // Intents Tab — per-system enable flags for GRIM's intent
 //   interventions (intent_systems.* in ai_config.json). Each toggle guards a
 //   pre-model stage so the native grim-text model can be tested with and
@@ -1485,7 +1544,11 @@ void UISettingsMenu::createIntentsWidgets() {
 void UISettingsMenu::update(const InputState& input, float dt) {
     UIPanel::update(input, dt);
     
-    if (!isVisible()) return;
+    if (!isVisible()) {
+        GRIM::InputBindings::endCapture();
+        if (activeTab_ == SettingsTab::Controls) needsWidgetRefresh = true;
+        return;
+    }
     
     // Check refresh flag BEFORE updating widgets
     bool shouldRefresh = needsWidgetRefresh;
@@ -1498,7 +1561,7 @@ void UISettingsMenu::update(const InputState& input, float dt) {
     
     // Position and update tab buttons
     float tabX = position.x + 10.0f;
-    float tabW = (size.x - 20.0f) / 9.0f;  // 9 tabs
+    float tabW = (size.x - 20.0f) / 10.0f;
 
     tabGeneralBtn_->setPosition(tabX, position.y + kTabBarY);
     tabGeneralBtn_->setSize(tabW - 2, 28);
@@ -1516,7 +1579,9 @@ void UISettingsMenu::update(const InputState& input, float dt) {
     tabGeoSpatialBtn_->setSize(tabW - 2, 28);
     tabMemoryBtn_->setPosition(tabX + tabW * 7, position.y + kTabBarY);
     tabMemoryBtn_->setSize(tabW - 2, 28);
-    tabIntentsBtn_->setPosition(tabX + tabW * 8, position.y + kTabBarY);
+    tabControlsBtn_->setPosition(tabX + tabW * 8, position.y + kTabBarY);
+    tabControlsBtn_->setSize(tabW - 2, 28);
+    tabIntentsBtn_->setPosition(tabX + tabW * 9, position.y + kTabBarY);
     tabIntentsBtn_->setSize(tabW - 2, 28);
 
     tabGeneralBtn_->update(input, dt);
@@ -1527,6 +1592,7 @@ void UISettingsMenu::update(const InputState& input, float dt) {
     tabPreferencesBtn_->update(input, dt);
     tabGeoSpatialBtn_->update(input, dt);
     tabMemoryBtn_->update(input, dt);
+    tabControlsBtn_->update(input, dt);
     tabIntentsBtn_->update(input, dt);
     
     // Update scroll box position below tab bar
@@ -1566,11 +1632,12 @@ bool UISettingsMenu::drawOverlay(OverlayRenderer& renderer)
     tabPreferencesBtn_->drawOverlay(renderer, position);
     tabGeoSpatialBtn_->drawOverlay(renderer, position);
     tabMemoryBtn_->drawOverlay(renderer, position);
+    tabControlsBtn_->drawOverlay(renderer, position);
     tabIntentsBtn_->drawOverlay(renderer, position);
 
     // Active tab indicator (2px underline)
     float tabX = position.x + 10.0f;
-    float tabW = (size.x - 20.0f) / 9.0f;
+    float tabW = (size.x - 20.0f) / 10.0f;
     int tabIdx = static_cast<int>(activeTab_);
     float indicatorX = tabX + tabW * tabIdx;
     renderer.drawRect({indicatorX, position.y + kTabBarY + 28.0f}, {tabW - 2, 2.0f}, Colors::Primary);
@@ -1608,6 +1675,11 @@ bool UISettingsMenu::drawOverlay(OverlayRenderer& renderer)
     // Unsaved indicator
     if (hasChanges) {
         renderer.drawText({position.x + size.x - 150, position.y + 8}, "* Unsaved", Colors::WarningLight);
+    }
+
+    if (activeTab_ == SettingsTab::Controls && !controlsStatus_.empty()) {
+        renderer.drawText({position.x + 14.0f, position.y + size.y - 72.0f},
+                          controlsStatus_, Colors::TextSecondary);
     }
     
     renderer.popClipRect();

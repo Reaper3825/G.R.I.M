@@ -117,44 +117,10 @@ void InputState::captureFromHWND(HWND hwnd)
     mouseDelta.y = mousePos.y - prevMousePos.y;
     prevMousePos = mousePos;
 
-    // Keyboard state transitions
-    // On Windows, use GetKeyboardState (1 kernel call) instead of
-    // 256 × GetAsyncKeyState (256 kernel calls). Also read mouse
-    // buttons and modifiers from the same state snapshot.
-#ifdef _WIN32
-    BYTE keyboardState[256]{};
-    GetKeyboardState(keyboardState);
-
-    // Mouse buttons from same snapshot (avoids 3 extra GetAsyncKeyState calls)
-    {
-        bool lDown = (keyboardState[VK_LBUTTON] & 0x80) != 0;
-        bool rDown = (keyboardState[VK_RBUTTON] & 0x80) != 0;
-        bool mDown = (keyboardState[VK_MBUTTON] & 0x80) != 0;
-        bool btns[3] = {lDown, rDown, mDown};
-        for (int i = 0; i < 3; ++i) {
-            if (btns[i] && !prevMouseDown[i]) mousePressed[i] = true;
-            if (!btns[i] && prevMouseDown[i]) mouseReleased[i] = true;
-            mouseDown[i] = btns[i];
-            prevMouseDown[i] = btns[i];
-        }
-    }
-
-    for (int i = 0; i < 256; ++i)
-    {
-        bool down = (keyboardState[i] & 0x80) != 0;
-
-        if (down && !prevKeyDown[i]) keyPressed[i] = true;
-        if (!down && prevKeyDown[i]) keyReleased[i] = true;
-
-        keysDown[i] = down;
-        prevKeyDown[i] = down;
-    }
-
-    // Modifiers from same snapshot
-    ctrl = (keyboardState[VK_CONTROL] & 0x80) != 0;
-    shift = (keyboardState[VK_SHIFT] & 0x80) != 0;
-    alt = (keyboardState[VK_MENU] & 0x80) != 0;
-#else
+    // PlatformInput is intentionally global-capable. On Windows it uses
+    // GetAsyncKeyState rather than GetKeyboardState, whose snapshot follows
+    // only the focused thread's message queue. This keeps wake keys and saved
+    // bindings alive while another application owns focus.
     for (int i = 0; i < 3; ++i)
     {
         bool down = PlatformInput::isMouseButtonDown(i);
@@ -179,7 +145,6 @@ void InputState::captureFromHWND(HWND hwnd)
            || PlatformInput::isCommandDown();
     shift = PlatformInput::isKeyDown(static_cast<int>(PlatformInput::Key::Shift));
     alt = PlatformInput::isKeyDown(static_cast<int>(PlatformInput::Key::Alt));
-#endif
 
 
     // Detect clipboard shortcuts (Ctrl+C / Cmd+C, Ctrl+V / Cmd+V, Ctrl+X / Cmd+X)
