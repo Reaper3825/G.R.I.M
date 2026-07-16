@@ -220,7 +220,7 @@ if (MSVC)
 endif()
 
 if(WIN32)
-  target_link_libraries(GRIM PRIVATE Dbghelp)
+  target_link_libraries(GRIM PRIVATE Dbghelp Ole32 OleAut32 UIAutomationCore)
 endif()
 
 include(${CMAKE_SOURCE_DIR}/cmake/Dependencies.cmake)

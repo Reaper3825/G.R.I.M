@@ -54,4 +54,18 @@ $$
 M_t = \operatorname{Execute}(\text{atoms}_{u \le t}, h_{u \le t})
 $$
 
-Then token `t` may read only `M_t`. Until such snapshots exist, ExecutionBlock remains a row-final augmentation and auxiliary-supervision mechanism, not an all-position hidden-state source.
+Then prompt token `t` may read only `M_t`. Until such snapshots exist,
+ExecutionBlock remains a row-final augmentation within a prompt, not an
+all-prompt-position hidden-state source. Generated decode tokens are different:
+the completed prompt-final memory is entirely in their causal past, so cached
+decode windows may read that fixed session memory at downstream layers without
+requiring per-prompt-token snapshots. They must not re-bootstrap it from the
+decode window or rerun prompt execution.
+
+Decode-time result emission is a separate, strict boundary. The write slot of a
+step is exposed only when the learned stop controller classifies that completed
+step as `STOP`. It is therefore an explicit terminal-step result, not a
+"most-recent slot" heuristic. Max-step exhaustion exposes no result. The value
+must be valid and finite before generation may unmask the matching numeric atom
+placeholder, and the emitted value is registered in a session-owned AtomTable
+so it remains a fully bound numeric token during later cached decode.

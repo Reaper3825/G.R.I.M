@@ -10,7 +10,9 @@
 
 #include "../Layers/ExecutionBlock/execution_block_GPU.hpp"
 #include "../Shared/Batching/BatchPayload.hpp"
+#include "../Shared/Execution/ExecutionResultEmission.hpp"
 #include "../Shared/Forward/ModelForwardOutputs.hpp"
+#include "../Shared/Forward/ModelForwardRuntimePayload.hpp"
 #include "../Shared/UnigramByte/AtomTable.hpp"
 #include "../Shared/UnigramByte/TokenLayout.hpp"
 
@@ -533,6 +535,100 @@ bool testInferenceSlotCompilerOverflow(std::string& message) {
 }
 
 //======================================================//
+//  16. Persistent decode memory is an explicit validated borrow
+//======================================================//
+
+bool testPersistentExecutionMemoryRuntimeContract(std::string& message) {
+    GRIM::Forward::ModelForwardExecutionRuntime execution_runtime;
+    GRIM::Forward::ModelForwardRuntimePayload runtime{};
+    runtime.execution_runtime = &execution_runtime;
+
+    GRIM::ExecutionMemory empty_memory;
+    runtime.persistent_execution_memory = &empty_memory;
+
+    bool rejected_empty = false;
+    try {
+        runtime.validate("testPersistentExecutionMemoryRuntimeContract", true);
+    } catch (const std::runtime_error&) {
+        rejected_empty = true;
+    }
+    EB_ASSERT_TRUE(rejected_empty, "incomplete persistent memory must be rejected");
+
+    bool rejected_inactive = false;
+    try {
+        runtime.validate("testPersistentExecutionMemoryRuntimeContract", false);
+    } catch (const std::runtime_error&) {
+        rejected_inactive = true;
+    }
+    EB_ASSERT_TRUE(rejected_inactive, "persistent memory with inactive ExecutionBlock must be rejected");
+    EB_ASSERT_TRUE(!runtime.persistent_execution_memory_was_read,
+                   "persistent read telemetry starts false");
+    return true;
+}
+
+//======================================================//
+//  17. Terminal result emission requires an explicit model stop
+//======================================================//
+
+bool testTerminalExecutionResultEmissionContract(std::string& message) {
+    std::vector<GRIM::ExecutionStepControlTelemetry> steps(2);
+    steps[0].predicted_class = 0;
+    steps[0].write_slot = 1;
+    steps[1].predicted_class = 1;
+    steps[1].write_slot = 3;
+    const std::vector<float> values{0.0f, 4.0f, 0.0f, 42.0f};
+    const std::vector<uint8_t> valid{0, 1, 0, 1};
+
+    const auto emission = GRIM::Execution::resolveTerminalExecutionResult(
+        true, true, false, steps, values, valid);
+    EB_ASSERT_TRUE(emission.available, "model-stopped terminal result is available");
+    EB_ASSERT_EQ(emission.slot, 3, "terminal STOP step owns the result slot");
+    EB_ASSERT_NEAR(emission.value, 42.0f, 1e-6f, "terminal result value");
+    EB_ASSERT_TRUE(emission.atom_type == GRIM::Tokenizer::AtomType::ATOM_INT,
+                   "integral result uses INT atom");
+
+    const auto max_step_only = GRIM::Execution::resolveTerminalExecutionResult(
+        true, false, true, steps, values, valid);
+    EB_ASSERT_TRUE(!max_step_only.available,
+                   "reaching max steps does not implicitly choose a result");
+
+    bool rejected_invalid = false;
+    try {
+        const std::vector<uint8_t> invalid{0, 1, 0, 0};
+        (void)GRIM::Execution::resolveTerminalExecutionResult(
+            true, true, false, steps, values, invalid);
+    } catch (const std::runtime_error&) {
+        rejected_invalid = true;
+    }
+    EB_ASSERT_TRUE(rejected_invalid, "invalid terminal write slot must fail loudly");
+    return true;
+}
+
+//======================================================//
+//  18. Generated numeric atoms live in a session-owned table
+//======================================================//
+
+bool testGeneratedNumericAtomSessionTable(std::string& message) {
+    auto authored = std::make_shared<GRIM::Tokenizer::AtomTable>();
+    const uint32_t authored_id = authored->registerGeneratedNumericValue(7.0f);
+    auto session = authored->cloneHostForGeneration();
+    const uint32_t result_id = session->registerGeneratedNumericValue(3.5f);
+
+    EB_ASSERT_EQ(authored_id, 0u, "first authored id");
+    EB_ASSERT_EQ(static_cast<int>(authored->size()), 1, "authored table remains unchanged");
+    EB_ASSERT_EQ(static_cast<int>(session->size()), 2, "session table receives result atom");
+    const auto result = session->getAtom(result_id);
+    EB_ASSERT_TRUE(result.has_value(), "generated result atom is retrievable");
+    EB_ASSERT_TRUE(result->type == GRIM::Tokenizer::AtomType::ATOM_FLOAT,
+                   "fractional result uses FLOAT atom");
+    EB_ASSERT_TRUE(result->origin == GRIM::Tokenizer::AtomOrigin::MODEL_GENERATED,
+                   "generated result origin is retained");
+    EB_ASSERT_TRUE(session->atomToString(*result) == "3.5",
+                   "generated result uses canonical text");
+    return true;
+}
+
+//======================================================//
 //  Entry point
 //======================================================//
 
@@ -558,6 +654,9 @@ int GRIM::Test::runExecutionBlockTests() {
     suite.addTest("Config: scratch-slot constraint", testScratchSlotConstraint);
     suite.addTest("Inference: slot compiler uses value-slot range", testInferenceSlotCompiler);
     suite.addTest("Inference: slot compiler rejects overflow", testInferenceSlotCompilerOverflow);
+    suite.addTest("Inference: persistent memory runtime contract", testPersistentExecutionMemoryRuntimeContract);
+    suite.addTest("Inference: terminal result emission contract", testTerminalExecutionResultEmissionContract);
+    suite.addTest("Inference: generated result session table", testGeneratedNumericAtomSessionTable);
 
     auto results = suite.runAll();
 

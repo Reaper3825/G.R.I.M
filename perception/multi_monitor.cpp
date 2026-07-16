@@ -1,4 +1,5 @@
 #include "multi_monitor.hpp"
+#include "digital/DigitalCaptureSource.hpp"
 #include "logger.hpp"
 #include <opencv2/opencv.hpp>
 #include <algorithm>
@@ -32,39 +33,52 @@ MultiMonitorManager::~MultiMonitorManager() = default;
 
 bool MultiMonitorManager::init(const GRIM::MMO::HardwareInventory* inventory) {
     LOG_DEBUG("MultiMonitor", "Initializing multi-monitor manager");
-    
-    // Use provided inventory or global
-    const GRIM::MMO::HardwareInventory& inv = inventory ? *inventory : g_hardwareInventory;
-    
-    if (inv.monitor_count == 0) {
-        LOG_DEBUG("MultiMonitor", "No monitors detected in hardware inventory");
-        return false;
-    }
-    
+
     pImpl->monitors.clear();
-    
-    // Convert MMO::MonitorInfo to ExtendedMonitorInfo
-    for (int i = 0; i < static_cast<int>(inv.monitors.size()); ++i) {
-        const auto& mon = inv.monitors[i];
-        
+
+    // The live OS directory is authoritative for capture. HardwareInventory is
+    // a bootstrap snapshot and may be empty or stale after monitor hot-plug.
+    auto source = Digital::CreatePlatformDigitalCaptureSource();
+    const auto live_monitors = source ? source->EnumerateMonitors()
+                                      : std::vector<Digital::DigitalMonitorDescriptor>{};
+    for (const auto& mon : live_monitors) {
         ExtendedMonitorInfo extended;
-        // Copy base MonitorInfo fields
-        extended.x = mon.x;
-        extended.y = mon.y;
-        extended.width = mon.width;
-        extended.height = mon.height;
+        extended.x = mon.desktop_rect.x;
+        extended.y = mon.desktop_rect.y;
+        extended.width = mon.desktop_rect.width;
+        extended.height = mon.desktop_rect.height;
         extended.is_primary = mon.is_primary;
-        
-        // Add extended fields
-        extended.monitorIndex = i;
-        
+        extended.monitorIndex = mon.index;
+        extended.deviceName = mon.id;
+        extended.friendlyName = mon.friendly_name;
+        extended.dpiX = static_cast<int>(mon.dpi_x);
+        extended.dpiY = static_cast<int>(mon.dpi_y);
+        extended.scaleFactor = mon.scale_factor;
         pImpl->monitors.push_back(extended);
     }
-    
-    // Store virtual desktop bounds
-    pImpl->totalVirtualWidth = inv.virtual_desktop_w;
-    pImpl->totalVirtualHeight = inv.virtual_desktop_h;
-    
+
+    // Non-Windows builds do not yet have a digital source. Retain the
+    // inventory projection there until their platform backend lands.
+    if (pImpl->monitors.empty()) {
+        const GRIM::MMO::HardwareInventory& inv = inventory ? *inventory : g_hardwareInventory;
+        for (int i = 0; i < static_cast<int>(inv.monitors.size()); ++i) {
+            const auto& mon = inv.monitors[i];
+            ExtendedMonitorInfo extended;
+            extended.x = mon.x;
+            extended.y = mon.y;
+            extended.width = mon.width;
+            extended.height = mon.height;
+            extended.is_primary = mon.is_primary;
+            extended.monitorIndex = i;
+            pImpl->monitors.push_back(extended);
+        }
+    }
+
+    if (pImpl->monitors.empty()) {
+        LOG_ERROR("MultiMonitor", "No active monitors detected by OS or hardware inventory");
+        return false;
+    }
+
     // Calculate virtual bounds (min/max of all monitor positions)
     if (!pImpl->monitors.empty()) {
         int minX = pImpl->monitors[0].x;
@@ -81,6 +95,8 @@ bool MultiMonitorManager::init(const GRIM::MMO::HardwareInventory* inventory) {
         
         pImpl->totalVirtualX = minX;
         pImpl->totalVirtualY = minY;
+        pImpl->totalVirtualWidth = maxX - minX;
+        pImpl->totalVirtualHeight = maxY - minY;
     }
     
     // Refresh additional details from Windows API
@@ -196,49 +212,17 @@ cv::Mat MultiMonitorManager::captureMonitor(int monitorIndex) const {
         return cv::Mat();
     }
     
-    const auto& mon = pImpl->monitors[monitorIndex];
-    
-#ifdef _WIN32
-    HDC hdcScreen = GetDC(nullptr);
-    HDC hdcMem = CreateCompatibleDC(hdcScreen);
-    
-    HBITMAP hBitmap = CreateCompatibleBitmap(hdcScreen, mon.width, mon.height);
-    HBITMAP hOldBitmap = (HBITMAP)SelectObject(hdcMem, hBitmap);
-    
-    // Capture from monitor's position
-    BitBlt(hdcMem, 0, 0, mon.width, mon.height, hdcScreen, mon.x, mon.y, SRCCOPY);
-    
-    // Convert to OpenCV Mat
-    BITMAPINFO bmi = {};
-    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = mon.width;
-    bmi.bmiHeader.biHeight = -mon.height; // Negative for top-down DIB
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
-    
-    std::vector<BYTE> buffer(mon.width * mon.height * 4);
-    GetDIBits(hdcMem, hBitmap, 0, mon.height, buffer.data(), &bmi, DIB_RGB_COLORS);
-    
-    // Convert BGRA to BGR
-    cv::Mat temp(mon.height, mon.width, CV_8UC4, buffer.data());
-    cv::Mat result;
-    cv::cvtColor(temp, result, cv::COLOR_BGRA2BGR);
-    
-    // Cleanup
-    SelectObject(hdcMem, hOldBitmap);
-    DeleteObject(hBitmap);
-    DeleteDC(hdcMem);
-    ReleaseDC(nullptr, hdcScreen);
-    
-    // LOG_DEBUG("MultiMonitor", "Captured monitor " + std::to_string(monitorIndex) + 
-    //           " (" + std::to_string(mon.width) + "x" + std::to_string(mon.height) + ")");
-    
-    return result;
-#else
-    LOG_ERROR("MultiMonitor", "Screen capture only supported on Windows");
-    return cv::Mat();
-#endif
+    auto source = Digital::CreatePlatformDigitalCaptureSource();
+    if (!source) return {};
+    Digital::DigitalCaptureRequest request;
+    request.mode = Digital::DigitalCaptureMode::Monitor;
+    request.monitor_index = monitorIndex;
+    auto result = source->Capture(request);
+    if (!result.Succeeded()) {
+        LOG_ERROR("MultiMonitor", "Capture monitor failed: " + result.metadata.error);
+        return {};
+    }
+    return result.image;
 }
 
 cv::Mat MultiMonitorManager::capturePrimaryMonitor() const {
@@ -257,74 +241,29 @@ cv::Mat MultiMonitorManager::capturePrimaryMonitor() const {
 }
 
 cv::Mat MultiMonitorManager::captureAllMonitors() const {
-#ifdef _WIN32
-    // Capture entire virtual desktop
-    HDC hdcScreen = GetDC(nullptr);
-    HDC hdcMem = CreateCompatibleDC(hdcScreen);
-    
-    int width = pImpl->totalVirtualWidth;
-    int height = pImpl->totalVirtualHeight;
-    int x = pImpl->totalVirtualX;
-    int y = pImpl->totalVirtualY;
-    
-    HBITMAP hBitmap = CreateCompatibleBitmap(hdcScreen, width, height);
-    HBITMAP hOldBitmap = (HBITMAP)SelectObject(hdcMem, hBitmap);
-    
-    BitBlt(hdcMem, 0, 0, width, height, hdcScreen, x, y, SRCCOPY);
-    
-    // Convert to OpenCV Mat
-    BITMAPINFO bmi = {};
-    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = width;
-    bmi.bmiHeader.biHeight = -height;
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
-    
-    std::vector<BYTE> buffer(width * height * 4);
-    GetDIBits(hdcMem, hBitmap, 0, height, buffer.data(), &bmi, DIB_RGB_COLORS);
-    
-    cv::Mat temp(height, width, CV_8UC4, buffer.data());
-    cv::Mat result;
-    cv::cvtColor(temp, result, cv::COLOR_BGRA2BGR);
-    
-    SelectObject(hdcMem, hOldBitmap);
-    DeleteObject(hBitmap);
-    DeleteDC(hdcMem);
-    ReleaseDC(nullptr, hdcScreen);
-    
-    LOG_DEBUG("MultiMonitor", "Captured all monitors (virtual desktop: " + 
-              std::to_string(width) + "x" + std::to_string(height) + ")");
-    
-    return result;
-#else
-    return cv::Mat();
-#endif
+    auto source = Digital::CreatePlatformDigitalCaptureSource();
+    if (!source) return {};
+    Digital::DigitalCaptureRequest request;
+    request.mode = Digital::DigitalCaptureMode::VirtualDesktop;
+    auto result = source->Capture(request);
+    if (!result.Succeeded()) {
+        LOG_ERROR("MultiMonitor", "Capture virtual desktop failed: " + result.metadata.error);
+        return {};
+    }
+    return result.image;
 }
 
 cv::Mat MultiMonitorManager::captureActiveMonitor() const {
-#ifdef _WIN32
-    // Get foreground window
-    HWND hwnd = GetForegroundWindow();
-    if (!hwnd) {
-        return capturePrimaryMonitor();
+    auto source = Digital::CreatePlatformDigitalCaptureSource();
+    if (!source) return {};
+    Digital::DigitalCaptureRequest request;
+    request.mode = Digital::DigitalCaptureMode::ActiveMonitor;
+    auto result = source->Capture(request);
+    if (!result.Succeeded()) {
+        LOG_ERROR("MultiMonitor", "Capture active monitor failed: " + result.metadata.error);
+        return {};
     }
-    
-    // Get window rect
-    RECT rect;
-    if (!GetWindowRect(hwnd, &rect)) {
-        return capturePrimaryMonitor();
-    }
-    
-    // Find monitor containing window center
-    int centerX = (rect.left + rect.right) / 2;
-    int centerY = (rect.top + rect.bottom) / 2;
-    
-    ExtendedMonitorInfo mon = getMonitorContainingPoint(centerX, centerY);
-    return captureMonitor(mon.monitorIndex);
-#else
-    return capturePrimaryMonitor();
-#endif
+    return result.image;
 }
 
 int MultiMonitorManager::getMonitorCount() const {

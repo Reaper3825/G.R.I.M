@@ -82,6 +82,12 @@
 
 namespace GRIMText::Training {
 
+enum class ModelParameterSourcePlan : std::uint8_t {
+    UNRESOLVED = 0,
+    FRESH_INITIALIZATION = 1,
+    CHECKPOINT_RESTORE = 2
+};
+
 //======================================================//
 //  Data Structures for Training Loop 
 //======================================================//
@@ -304,6 +310,13 @@ struct TrainingContext {
 
     /** Optional explicit checkpoint path requested by the orchestrator. */
     std::string requested_checkpoint_path;
+
+    /** Parameter source resolved before corpus-derived or model initialization. */
+    ModelParameterSourcePlan model_parameter_source_plan =
+        ModelParameterSourcePlan::UNRESOLVED;
+
+    /** Ordered, preflight-validated checkpoint candidates for restore. */
+    std::vector<std::string> planned_checkpoint_candidates;
     
     /** Path to the checkpoint that was loaded at startup (empty if fresh start). */
     std::string loaded_checkpoint_path;

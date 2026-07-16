@@ -1507,6 +1507,58 @@ uint32_t AtomTable::registerSpan(const StructuralSpan& span) {
     return out_id;
 }
 
+std::shared_ptr<AtomTable> AtomTable::cloneHostForGeneration() const {
+    auto clone = std::make_shared<AtomTable>();
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    clone->entries_ = entries_;
+    clone->numeric_float_values_ = numeric_float_values_;
+    clone->numeric_int_values_ = numeric_int_values_;
+    clone->numeric_kinds_ = numeric_kinds_;
+    clone->string_pool_ = string_pool_;
+    clone->hash_to_ids_ = hash_to_ids_;
+    clone->type_index_ = type_index_;
+    clone->next_id_ = next_id_;
+    clone->dedup_hits_ = dedup_hits_;
+    clone->total_queries_ = total_queries_;
+
+    // GPUAtomData owns allocations and is never shared with the session copy.
+    clone->pending_gpu_upload_.clear();
+    clone->pending_gpu_upload_.reserve(clone->entries_.size());
+    for (uint32_t id = 0; id < clone->entries_.size(); ++id) {
+        clone->pending_gpu_upload_.push_back(id);
+    }
+    clone->gpu_dirty_ = !clone->entries_.empty();
+    clone->gpu_data_ = GPUAtomData();
+    return clone;
+}
+
+uint32_t AtomTable::registerGeneratedNumericValue(float value) {
+    if (!std::isfinite(value)) {
+        throw std::runtime_error(
+            "AtomTable::registerGeneratedNumericValue requires a finite value");
+    }
+
+    const std::string rendered = formatNumericValue(value);
+    StructuralSpan span{};
+    span.start = 0;
+    span.end = rendered.size();
+    span.atom_type = numericAtomTypeForValue(value);
+    span.buffer_ptr = rendered.data();
+    span.offset = 0;
+    span.length = static_cast<uint32_t>(rendered.size());
+    span.content_offset = 0;
+    span.content_length = static_cast<uint32_t>(rendered.size());
+    span.placeholder_id = atomTypeToTokenId(span.atom_type);
+
+    const size_t size_before = size();
+    const uint32_t id = registerSpan(span);
+    if (static_cast<size_t>(id) >= size_before) {
+        setOrigin(id, AtomOrigin::MODEL_GENERATED);
+    }
+    return id;
+}
+
 //--------------------------------------------------//
 // Lookup
 //--------------------------------------------------//

@@ -334,7 +334,12 @@ Inference now follows the same strict row-local execution contract:
 
 - KV-cached inference prefill may run the gate and structured execution steps,
 - the final prefill register file moves into session-owned `GenerationState`,
-- decode windows do not re-bootstrap or re-execute the block in Phase 1,
+- cached decode windows borrow that memory for readback at layers after the execution layer,
+- decode windows do not re-run the gate, bootstrap, or execution steps,
+- semantic register values and validity remain unchanged during decode readback (`usage` remains telemetry),
+- a model-confirmed terminal STOP step exposes its valid finite write value as the pending generation result,
+- max-step termination and arbitrary live-slot recency never select a rendered result,
+- the pending result is materialized as a session-owned AtomTable entry when the LM emits the matching numeric placeholder,
 - prefill execution sources atom positions from the global atom mask (`bindings.d_atom_mask`),
 - null atom-pointer execution calls are forbidden,
 - the old last-write `<NUM>` binding fallback is gone,

@@ -254,6 +254,13 @@ public:
     // Returns false if the table is full and the span is not already present.
     bool tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id);
 
+    // Create a host-only session copy with stable entry ids and no aliased GPU
+    // allocation. Generation may append atoms without mutating the prompt table.
+    std::shared_ptr<AtomTable> cloneHostForGeneration() const;
+
+    // Register one finite model-produced number using canonical formatting.
+    uint32_t registerGeneratedNumericValue(float value);
+
     //--------------------------------------------------//
     // Lookup
     //--------------------------------------------------//
@@ -440,14 +447,26 @@ private:
 /// - double precision to avoid premature rounding
 /// - near-integer within epsilon → printed as integer (no trailing ".0")
 /// - otherwise %.9g for consistent output with enough precision
+inline bool numericValueUsesIntegerAtom(float value) {
+    const double v = static_cast<double>(value);
+    const double rounded = std::round(v);
+    constexpr double kEpsilon = 1e-6;
+    return std::isfinite(v) && std::fabs(v - rounded) < kEpsilon &&
+           std::fabs(v) < 1e15 && (rounded != 0.0 || v == 0.0);
+}
+
+inline AtomType numericAtomTypeForValue(float value) {
+    return numericValueUsesIntegerAtom(value)
+        ? AtomType::ATOM_INT
+        : AtomType::ATOM_FLOAT;
+}
+
 inline std::string formatNumericValue(float value) {
     double v = static_cast<double>(value);
     double rounded = std::round(v);
-    constexpr double kEpsilon = 1e-6;
     // Never snap a tiny non-zero value to "0": |v| < epsilon would otherwise
     // round to zero and silently erase the value (e.g. 5e-7 -> "0").
-    if (std::fabs(v - rounded) < kEpsilon && std::fabs(v) < 1e15 &&
-        (rounded != 0.0 || v == 0.0)) {
+    if (numericValueUsesIntegerAtom(value)) {
         char buf[32];
         std::snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(rounded));
         return std::string(buf);

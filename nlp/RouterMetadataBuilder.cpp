@@ -163,7 +163,32 @@ RouterMetadataBuilder& RouterMetadataBuilder::setContextV2(const GRIM::MMO::Cont
         dv["active_window"]  = v2.visual_context.digital.active_window;
         dv["active_process"] = v2.visual_context.digital.active_process;
         dv["ocr_text"]       = v2.visual_context.digital.ocr_text;
+        dv["ocr_regions"]    = v2.visual_context.digital.ocr_regions;
+        dv["ui_elements"]    = v2.visual_context.digital.ui_elements;
         dv["scene"]          = v2.visual_context.digital.scene_classification;
+        dv["monitor_id"]     = v2.visual_context.digital.monitor_id;
+        dv["source_device_id"] = v2.visual_context.digital.source_device_id;
+        dv["source_platform"] = v2.visual_context.digital.source_platform;
+        dv["source_transport"] = v2.visual_context.digital.source_transport;
+        dv["capture_status"] = v2.visual_context.digital.capture_status;
+        dv["capture_error"]  = v2.visual_context.digital.capture_error;
+        dv["capture_backend"] = v2.visual_context.digital.capture_backend;
+        dv["ocr_status"]      = v2.visual_context.digital.ocr_status;
+        dv["ocr_error"]       = v2.visual_context.digital.ocr_error;
+        dv["ocr_provider"]    = v2.visual_context.digital.ocr_provider;
+        dv["ocr_mean_confidence"] = v2.visual_context.digital.ocr_mean_confidence;
+        dv["automation_status"] = v2.visual_context.digital.automation_status;
+        dv["automation_error"] = v2.visual_context.digital.automation_error;
+        dv["automation_provider"] = v2.visual_context.digital.automation_provider;
+        dv["automation_target_window"] = v2.visual_context.digital.automation_target_window;
+        dv["automation_target_matches_capture"] =
+            v2.visual_context.digital.automation_target_matches_capture;
+        dv["automation_target_changed"] = v2.visual_context.digital.automation_target_changed;
+        dv["preferred_grounding_source"] =
+            v2.visual_context.digital.preferred_grounding_source;
+        dv["capture_frame_counter"] = v2.visual_context.digital.provenance_frame_counter;
+        dv["primitive_frame_counter"] =
+            v2.visual_context.digital.primitive_provenance_frame_counter;
         digi_visual_ = std::move(dv);
     }
     {

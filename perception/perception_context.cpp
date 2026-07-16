@@ -1,4 +1,5 @@
 #include "perception_context.hpp"
+#include "digital/DigitalCaptureSource.hpp"
 #include "core/grim_platform.h"
 #include "perception.hpp"
 #include "multi_monitor.hpp" // ✅ Multi-monitor support
@@ -193,7 +194,9 @@ struct PerceptionContextManager::Impl {
     
     // Configuration
     bool featureOCR = true;
-    bool featureObjectDetection = true;
+    // The legacy detector recaptures the desktop and cannot produce
+    // frame-coherent evidence. A typed bus consumer will replace it.
+    bool featureObjectDetection = false;
     bool featureVisionAI = true;
     bool featureWindowTracking = true;
     
@@ -384,14 +387,9 @@ VisualContext PerceptionContextManager::captureAndAnalyzeMonitor(int monitorInde
             ctx.changeScore = computeChangeScore(ctx.screenshot, pImpl->lastScreenshot);
         }
         
-        // Update cache
-        pImpl->lastContext = ctx;
-        pImpl->lastCaptureTime = ctx.captureTime;
+        // Preserve the analysis frame for change detection before optionally
+        // releasing pixels from the caller-visible context below.
         
-        // ✅ Update monitor-specific cache if applicable
-        if (ctx.monitorIndex >= 0 && ctx.monitorIndex < static_cast<int>(pImpl->monitorContexts.size())) {
-            pImpl->monitorContexts[ctx.monitorIndex] = ctx;
-        }
         
         if (!ctx.screenshot.empty()) {
             ctx.screenshot.copyTo(pImpl->lastScreenshot);
@@ -400,6 +398,15 @@ VisualContext PerceptionContextManager::captureAndAnalyzeMonitor(int monitorInde
             if (!saveScreenshot) {
                 ctx.screenshot.release();
             }
+        }
+
+        // Replace the pre-release cache copies above with the caller-visible
+        // form so saveScreenshot=false never retains raw pixels in contexts.
+        pImpl->lastContext = ctx;
+        pImpl->lastCaptureTime = ctx.captureTime;
+        if (ctx.monitorIndex >= 0 &&
+            ctx.monitorIndex < static_cast<int>(pImpl->monitorContexts.size())) {
+            pImpl->monitorContexts[ctx.monitorIndex] = ctx;
         }
         
         // LOG_DEBUG("PerceptionContext", "Context analysis complete: " + ctx.toSummary());
@@ -619,6 +626,9 @@ void PerceptionContextManager::analyzeWithVisionAI(VisualContext& ctx) {
         ctx.visionAIDescription = result.description;
         ctx.visionAIConfidence = result.confidence;
         ctx.visionModelUsed = result.modelUsed;
+        ctx.aiDescription = result.description;
+        ctx.aiConfidence = result.confidence;
+        ctx.hasAIAnalysis = true;
         
         // Update context type if vision AI provided better classification
         if (!result.contextType.empty()) {
@@ -776,12 +786,13 @@ void PerceptionContextManager::setFeatureEnabled(const std::string& feature, boo
 
 PerceptionContextManager::PerceptionStatus PerceptionContextManager::getStatus() {
     PerceptionStatus status;
-    
+
+    auto digitalSource = Digital::CreatePlatformDigitalCaptureSource();
+    status.screenCaptureAvailable = digitalSource &&
+                                    !digitalSource->EnumerateMonitors().empty();
 #ifdef _WIN32
-    status.screenCaptureAvailable = true;
-    status.windowTrackingAvailable = true;
+    status.windowTrackingAvailable = status.screenCaptureAvailable;
 #else
-    status.screenCaptureAvailable = false;
     status.windowTrackingAvailable = false;
 #endif
     

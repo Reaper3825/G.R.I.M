@@ -198,6 +198,13 @@ json inferenceStatsJson(const GRIMText::Training::Phase2TextInferenceResult& res
             {"execution_suppressed_no_bootstrap", result.execution_control.execution_suppressed_no_bootstrap},
             {"stopped_by_model", result.execution_control.stopped_by_model},
             {"stopped_at_max_steps", result.execution_control.stopped_at_max_steps},
+            {"persistent_memory_available", result.execution_control.persistent_memory_available},
+            {"persistent_memory_read_during_decode", result.execution_control.persistent_memory_read_during_decode},
+            {"terminal_result_available", result.execution_control.terminal_result_available},
+            {"terminal_result_slot", result.execution_control.terminal_result_slot},
+            {"terminal_result_value", result.execution_control.terminal_result_value},
+            {"terminal_result_emitted", result.execution_control.terminal_result_emitted},
+            {"terminal_result_emission_token_index", result.execution_control.terminal_result_emission_token_index},
             {"final_slot_values", result.execution_control.final_slot_values},
             {"final_slot_valid", result.execution_control.final_slot_valid},
             {"steps", std::move(execution_steps)}

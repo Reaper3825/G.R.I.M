@@ -30,10 +30,32 @@ struct ModelForwardRuntimePayload {
     ModelForwardExecutionRuntime* execution_runtime = nullptr;
     Tensor* read_gate_accum_tensor = nullptr;
 
+    // Optional single-row register file owned by the caller's generation
+    // session. Shared forward borrows it only for downstream cross-attention
+    // readback; it never bootstraps, clears, or executes steps against it.
+    // Cross-attention may update ExecutionMemory::usage telemetry, but semantic
+    // register values and validity remain unchanged.
+    ExecutionMemory* persistent_execution_memory = nullptr;
+    bool persistent_execution_memory_was_read = false;
+
     void validate(const char* caller, bool execution_block_active) const {
         if (execution_block_active) {
             if (!execution_runtime) {
                 throw std::runtime_error(std::string(caller) + ": runtime payload execution_runtime is NULL");
+            }
+        } else if (persistent_execution_memory) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": persistent_execution_memory supplied while execution block is inactive");
+        }
+        if (persistent_execution_memory) {
+            const auto& memory = *persistent_execution_memory;
+            if (!memory.values.data || !memory.valid_mask.data ||
+                !memory.usage.data || !memory.key_embeds.data ||
+                !memory.state_embeds.data) {
+                throw std::runtime_error(
+                    std::string(caller) +
+                    ": persistent_execution_memory is missing required register/readback tensors");
             }
         }
     }

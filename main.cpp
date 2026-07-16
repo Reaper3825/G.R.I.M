@@ -40,6 +40,11 @@
 #include "timer.hpp"
 #include "perception/perception.hpp"
 #include "perception/perception_context.hpp" 
+#include "perception/digital/DigitalCaptureProbe.hpp"
+#include "perception/digital/DigitalCaptureSource.hpp"
+#include "perception/digital/DigitalContextProjector.hpp"
+#include "perception/digital/DigitalEnvironmentLoop.hpp"
+#include "perception/digital/DigitalPerceptionPrimitivesLoop.hpp"
 #include "perception/physical/PhysicalEnvironmentLoop.hpp"
 #include "perception/physical/PhysicalPerceptionPrimitivesLoop.hpp"
 #include "perception/physical/PhysicalSpatialGroundingLoop.hpp"
@@ -48,6 +53,7 @@
 #include "perception/physical/PhysicalWorldStateContextProjector.hpp"
 #include "perception/physical/PhysicalWorldStateMemoryWriter.hpp"
 #include "ui/ui_physical_environment_panel.hpp"
+#include "ui/ui_digital_environment_panel.hpp"
 #include "MMO/UI/UISurfaceRegistry.hpp"
 #ifdef _WIN32
 #include <crtdbg.h>
@@ -91,6 +97,10 @@ BOOL WINAPI consoleHandler(DWORD signal) {
 
         // Stop idle-tick thread first
         stopMMOIdleTick();
+
+        GRIM::Perception::Digital::ShutdownDigitalPerceptionPrimitives();
+        GRIM::Perception::Digital::ShutdownDigitalEnvironment();
+        GRIM::Perception::Digital::ShutdownDigitalContextProjector();
 
         // Stop perception-side world-state consumers BEFORE the facade is
         // freed — the memory writer flushes long-dwell entity summaries on
@@ -158,6 +168,10 @@ void signalHandler(int signal) {
         // Stop idle-tick thread first
         stopMMOIdleTick();
 
+        GRIM::Perception::Digital::ShutdownDigitalPerceptionPrimitives();
+        GRIM::Perception::Digital::ShutdownDigitalEnvironment();
+        GRIM::Perception::Digital::ShutdownDigitalContextProjector();
+
         // Stop perception-side world-state consumers BEFORE the facade is
         // freed — the memory writer flushes long-dwell entity summaries on
         // shutdown and needs g_memoryFacade alive to do so.
@@ -219,6 +233,18 @@ int main(int argc, char* argv[])
     initLogger("grim.log");
     GRIM::InstallCrashDumpHandler();
     LOG_PHASE("Initializing G.R.I.M", true);
+
+    std::string dpiAwarenessError;
+    if (!GRIM::Perception::Digital::EnsureDigitalCaptureDpiAwareness(&dpiAwarenessError)) {
+        LOG_ERROR("DigitalCapture", "Failed to enable per-monitor DPI awareness: " +
+                  dpiAwarenessError);
+    }
+
+    int digitalProbeExitCode = 0;
+    if (GRIM::Perception::Digital::TryRunDigitalCaptureProbe(
+            argc, argv, digitalProbeExitCode)) {
+        return digitalProbeExitCode;
+    }
 
     // ======================================================
     // 0. Install signal handlers for clean shutdown
@@ -361,22 +387,6 @@ int main(int argc, char* argv[])
     GRIM::TaskPlanner::init();
     LOG_PHASE("Task planner initialized", true);
     
-    // Start continuous screen awareness — gated by vision.enabled in ai_config.json
-    bool visionEnabled = aiConfig.contains("vision") &&
-                         aiConfig["vision"].is_object() &&
-                         aiConfig["vision"].contains("enabled") &&
-                         aiConfig["vision"]["enabled"].get<bool>();
-    if (visionEnabled) {
-        GRIM::Perception::ContinuousCaptureConfig captureConfig;
-        captureConfig.frameSkip = 30;           // Capture every 30 frames (~1/sec at 30fps)
-        captureConfig.captureIntervalMs = 1000; // Or every 1000ms
-        captureConfig.useFrameSkip = false;     // Use time-based for consistency
-        captureConfig.captureAllMonitors = false; // Just active monitor
-        captureConfig.changeThreshold = 1.0;    // 5% change detection
-        captureConfig.useVisionAI = false;      // Vision AI too slow for background capture (only on-demand)
-        GRIM::Perception::g_contextManager->startContinuousCapture(captureConfig);
-    }
-    LOG_PHASE("Continuous screen capture started", visionEnabled);
     // ======================================================
     // 7. Initialize BGFX global context (platform window)
     // ======================================================
@@ -450,6 +460,23 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+    std::string captureExclusionError;
+    if (!GRIM::Perception::Digital::SetDigitalCaptureExcludedWindow(
+            overlayWin->hwnd, &captureExclusionError)) {
+        LOG_ERROR("DigitalCapture", "Could not exclude GRIM overlay from capture: " +
+                  captureExclusionError);
+    } else {
+        LOG_PHASE("GRIM overlay excluded from digital capture", true);
+    }
+
+    GRIM::Perception::Digital::DigitalEnvironmentConfig digitalCaptureConfig;
+    digitalCaptureConfig.request.mode =
+        GRIM::Perception::Digital::DigitalCaptureMode::ActiveMonitor;
+    digitalCaptureConfig.capture_interval = std::chrono::milliseconds(1000);
+    GRIM::Perception::Digital::StartDigitalEnvironment(digitalCaptureConfig);
+    GRIM::Perception::Digital::StartDigitalPerceptionPrimitives();
+    LOG_PHASE("Digital environment capture started", true);
+
     // BGFX stays on tempHwnd (hidden on Windows, visible on macOS).
     // The overlay is software-rendered via OverlayRenderer → UpdateLayeredWindow.
     // Do NOT redirect BGFX to the overlay — it conflicts with layered window rendering.
@@ -521,6 +548,7 @@ int main(int argc, char* argv[])
     // refresh sees hub candidates.
     GRIM::Perception::Physical::RegisterPhysicalEnvironmentDeviceServer(g_deviceCommServer.get());
     auto physicalEnvPanel = std::make_shared<UIPhysicalEnvironmentPanel>();
+    auto digitalEnvPanel = std::make_shared<UIDigitalEnvironmentPanel>();
     // Stage 2 perception-primitives surface lives as a tab inside
     // UIPhysicalEnvironmentPanel; the standalone panel was removed.
     if (g_deviceCommServer) {
@@ -541,6 +569,7 @@ int main(int argc, char* argv[])
     storagePanel->setVisible(false);
     geoSpatialPanel->setVisible(false);
     physicalEnvPanel->setVisible(false);
+    digitalEnvPanel->setVisible(false);
 
     UIRoot::get().addPanel(consolePanel);
     UIRoot::get().addPanel(settingsPanel);
@@ -549,6 +578,7 @@ int main(int argc, char* argv[])
     UIRoot::get().addPanel(storagePanel);
     UIRoot::get().addPanel(geoSpatialPanel);
     UIRoot::get().addPanel(physicalEnvPanel);
+    UIRoot::get().addPanel(digitalEnvPanel);
 
 #if defined(__APPLE__)
     // macOS: inject typed characters into text input (Windows uses WM_CHAR in OverlayWndProc)
@@ -653,6 +683,9 @@ int main(int argc, char* argv[])
         GRIM::Perception::Physical::TickPhysicalWorldStateContextProjector();
         GRIM::Perception::Physical::TickPhysicalWorldStateMemoryWriter();
 
+        // Capture runs on a low-frequency worker; this is a cheap bus pull.
+        GRIM::Perception::Digital::TickDigitalContextProjector();
+
         geoSpatialRuntime->tick(0.016f);
 
         UIRoot::get().update(input, 0.016f);
@@ -747,6 +780,9 @@ int main(int argc, char* argv[])
     Voice::shutdownTTS();
     GRIM::RL::shutdown();
     GRIM::IntentGate::shutdown(); 
+    GRIM::Perception::Digital::ShutdownDigitalPerceptionPrimitives();
+    GRIM::Perception::Digital::ShutdownDigitalEnvironment();
+    GRIM::Perception::Digital::ShutdownDigitalContextProjector();
     GRIM::Perception::Physical::ShutdownPhysicalWorldStateMemoryWriter();
     GRIM::Perception::Physical::ShutdownPhysicalWorldStateContextProjector();
     GRIM::Perception::Physical::ShutdownPhysicalWorldState();

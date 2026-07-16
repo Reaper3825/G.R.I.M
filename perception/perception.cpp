@@ -6,6 +6,7 @@
 #include <sstream>
 #include <fstream>
 #include <algorithm>
+#include <filesystem>
 #include <mutex>
 
 // ✅ OpenCV includes
@@ -197,11 +198,16 @@ namespace GRIM {
 
             g_tessEngine = new tesseract::TessBaseAPI();
 
-            // Try to initialize with English language data
-              // Tesseract expects tessdata folder in: D:/G.R.I.M/resources/tessdata
-            const char* tessdataPath = "D:/G.R.I.M/resources";
+            // Tesseract expects resources/tessdata/eng.traineddata.
+#ifdef GRIM_ROOT_DIR
+            const std::string tessdataPath =
+                (std::filesystem::path(GRIM_ROOT_DIR) / "resources").string();
+#else
+            const std::string tessdataPath =
+                (std::filesystem::current_path() / "resources").string();
+#endif
 
-            if (g_tessEngine->Init(tessdataPath, "eng") != 0) {
+            if (g_tessEngine->Init(tessdataPath.c_str(), "eng") != 0) {
                 LOG_ERROR("Perception", "Failed to initialize Tesseract OCR - check tessdata folder");
                 delete g_tessEngine;
                 g_tessEngine = nullptr;
@@ -209,7 +215,11 @@ namespace GRIM {
             }
 
             // Suppress Tesseract warning messages
-            g_tessEngine->SetVariable("debug_file", "nul");  // Windows null device
+#ifdef _WIN32
+            g_tessEngine->SetVariable("debug_file", "nul");
+#else
+            g_tessEngine->SetVariable("debug_file", "/dev/null");
+#endif
 
             // Set page segmentation mode (PSM_AUTO = automatic)
             g_tessEngine->SetPageSegMode(tesseract::PSM_AUTO);
@@ -461,7 +471,6 @@ namespace GRIM {
                 return "";
             }
 
-#ifdef _WIN32
             if (!g_tessEngine) {
                 return "";
             }
@@ -493,9 +502,6 @@ namespace GRIM {
                 LOG_ERROR("Perception", std::string("readTextFromImage failed: ") + e.what());
                 return "";
             }
-#else
-            return "";
-#endif
         }
 
         // ✅ NEW: Advanced object detection with YOLO

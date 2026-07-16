@@ -1313,6 +1313,18 @@ void authorOutputUnigramPrior(TrainingContext& ctx, std::uint32_t vocab_size) {
 		ctx.data.output_unigram_prior = {};
 		return;
 	}
+	if (ctx.model_parameter_source_plan == ModelParameterSourcePlan::UNRESOLVED) {
+		throw std::runtime_error(
+			"authorOutputUnigramPrior: parameter source is unresolved; CheckpointPlanReady must run before training-data initialization");
+	}
+	if (ctx.model_parameter_source_plan == ModelParameterSourcePlan::CHECKPOINT_RESTORE) {
+		ctx.data.output_unigram_prior = {};
+		GRIM::Logging::EmitModuleInfo(
+			GRIM::Logging::ModuleId::Training,
+			"[DataLoader] lm_head_unigram_bias: skipped corpus prior authoring because checkpoint restore owns the bias value",
+			0);
+		return;
+	}
 
 	if (vocab_size == 0) {
 		throw std::runtime_error("authorOutputUnigramPrior: vocab_size must be positive");

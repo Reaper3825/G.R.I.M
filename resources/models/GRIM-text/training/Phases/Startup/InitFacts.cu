@@ -194,6 +194,15 @@ void verifyAndDumpInitFacts(TrainingContext& ctx) {
     emitInitFactKeyValue("checkpoint_dir", paths_hp.checkpoint_dir);
     emitInitFactKeyValue("output_model_path", paths_hp.output_model_path);
     const bool checkpoint_loaded = !ctx.loaded_checkpoint_path.empty();
+    const char* planned_parameter_source =
+        ctx.model_parameter_source_plan == ModelParameterSourcePlan::CHECKPOINT_RESTORE
+            ? "checkpoint"
+            : (ctx.model_parameter_source_plan == ModelParameterSourcePlan::FRESH_INITIALIZATION
+                   ? "random_initialization"
+                   : "unresolved");
+    emitInitFactKeyValue("planned_model_parameter_source", planned_parameter_source);
+    emitInitFactKeyValue("planned_checkpoint_candidates",
+                         fmtUInt64(static_cast<std::uint64_t>(ctx.planned_checkpoint_candidates.size())));
     emitInitFactKeyValue("model_parameter_source", checkpoint_loaded ? "checkpoint" : "random_initialization");
     emitInitFactKeyValue("checkpoint_loaded", boolText(checkpoint_loaded));
     emitInitFactKeyValue("loaded_checkpoint_path", checkpoint_loaded ? ctx.loaded_checkpoint_path : "<none>");

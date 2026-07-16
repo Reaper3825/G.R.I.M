@@ -205,8 +205,25 @@ void ModelAllocated(TrainingContext& ctx) {
     const bool unigram_bias_enabled = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(
         ctx.config,
         "lm_head_unigram_bias");
+    if (ctx.model_parameter_source_plan == ModelParameterSourcePlan::UNRESOLVED) {
+        throw std::runtime_error(
+            "ModelAllocated: parameter source is unresolved; call CheckpointPlanReady(ctx) before model allocation");
+    }
+    const bool fresh_parameter_initialization =
+        ctx.model_parameter_source_plan == ModelParameterSourcePlan::FRESH_INITIALIZATION;
     const bool pass_output_unigram_prior =
-        execution_mode == GRIM::HyperParameters::ModelExecutionMode::TRAINING && unigram_bias_enabled;
+        execution_mode == GRIM::HyperParameters::ModelExecutionMode::TRAINING &&
+        unigram_bias_enabled && fresh_parameter_initialization;
+    if (!fresh_parameter_initialization && !ctx.data.output_unigram_prior.log_bias.empty()) {
+        throw std::runtime_error(
+            "ModelAllocated: checkpoint restore plan carries a fresh-only output unigram prior");
+    }
+    EmitModuleInfo(
+        ModuleId::Training,
+        fresh_parameter_initialization
+            ? "[MODEL_INIT] Model allocation uses fresh parameter initialization"
+            : "[MODEL_INIT] Model allocation creates checkpoint destination buffers; corpus-derived parameter initialization is disabled",
+        0);
     if (pass_output_unigram_prior) {
         const auto& prior = ctx.data.output_unigram_prior;
         if (prior.log_bias.empty()) {

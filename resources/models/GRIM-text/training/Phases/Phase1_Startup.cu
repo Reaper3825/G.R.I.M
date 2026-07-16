@@ -72,6 +72,7 @@ Phase1Result executePhase1(GRIM::Config::AiConfigSnapshot config) {
     LoggingReady(ctx);
     const MemorySnapshot startup_memory_snapshot = captureMemorySnapshotOrThrow();
     HyperparametersReady(ctx);
+    CheckpointPlanReady(ctx);
 
     if (GRIM::HyperParameters::snapshotExecutionMode(ctx.config) == GRIM::HyperParameters::ModelExecutionMode::INFERENCE) {
         GRIM::Logging::EmitModuleInfo(

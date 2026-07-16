@@ -204,15 +204,26 @@ void loadRequestedCheckpoint(TrainingContext& ctx)
         " checkpoint_select=\"" + effective_select +
         "\" requested_path=\"" + requested_path + "\"");
 
-    const std::vector<std::string> candidates =
-        resolveCheckpointCandidates(ctx.config, ctx.requested_checkpoint_path, logger);
-
-    if (candidates.empty()) {
+    if (ctx.model_parameter_source_plan == ModelParameterSourcePlan::UNRESOLVED) {
+        throw std::runtime_error(
+            "CheckpointLoaded: parameter source plan is unresolved; call CheckpointPlanReady(ctx) before data/model initialization");
+    }
+    if (ctx.model_parameter_source_plan == ModelParameterSourcePlan::FRESH_INITIALIZATION) {
+        if (!ctx.planned_checkpoint_candidates.empty()) {
+            throw std::runtime_error(
+                "CheckpointLoaded: fresh initialization plan unexpectedly carries checkpoint candidates");
+        }
         logFreshRandomInitialization(
             ctx,
             logger,
-            "no checkpoint path was provided or discovered");
+            "startup parameter-source plan selected fresh initialization");
         return;
+    }
+
+    const auto& candidates = ctx.planned_checkpoint_candidates;
+    if (candidates.empty()) {
+        throw std::runtime_error(
+            "CheckpointLoaded: checkpoint restore was planned without any validated candidate");
     }
 
     std::string last_reason;
@@ -247,10 +258,9 @@ void loadRequestedCheckpoint(TrainingContext& ctx)
         return;
     }
 
-    logFreshRandomInitialization(
-        ctx,
-        logger,
-        last_reason.empty() ? "no usable checkpoint candidate" : last_reason);
+    throw std::runtime_error(
+        "CheckpointLoaded: planned checkpoint restore failed; refusing to fall back to fresh initialization (" +
+        (last_reason.empty() ? std::string("no candidate produced a loadable checkpoint") : last_reason) + ")");
 }
 
 void runSaveTestIfRequested(TrainingContext& ctx)
@@ -290,6 +300,77 @@ void runSaveTestIfRequested(TrainingContext& ctx)
 }
 
 } // namespace
+
+void CheckpointPlanReady(TrainingContext& ctx) {
+    if (!ctx.logging.logger) {
+        throw std::runtime_error(
+            "CheckpointPlanReady: logger is NULL; call LoggingReady(ctx) first");
+    }
+    if (ctx.model_parameter_source_plan != ModelParameterSourcePlan::UNRESOLVED ||
+        !ctx.planned_checkpoint_candidates.empty()) {
+        throw std::runtime_error(
+            "CheckpointPlanReady: parameter source was already resolved");
+    }
+
+    auto& logger = *ctx.logging.logger;
+    const std::string select = checkpointSelectField(ctx.config);
+    const bool explicit_checkpoint_selection =
+        !select.empty() && select != "default";
+    const bool checkpoint_requested =
+        explicit_checkpoint_selection || !ctx.requested_checkpoint_path.empty();
+
+    const auto resolved = resolveCheckpointCandidates(
+        ctx.config, ctx.requested_checkpoint_path, logger);
+    if (!checkpoint_requested) {
+        if (!resolved.empty()) {
+            throw std::runtime_error(
+                "CheckpointPlanReady: fresh initialization resolved unexpected checkpoint candidates");
+        }
+        ctx.model_parameter_source_plan =
+            ModelParameterSourcePlan::FRESH_INITIALIZATION;
+        logger.log(
+            "[MODEL_INIT] PLAN=FRESH_INITIALIZATION checkpoint_requested=false; "
+            "fresh-only initializers are enabled");
+        return;
+    }
+
+    std::string last_rejection;
+    for (const auto& candidate : resolved) {
+        const fs::path path(candidate);
+        std::error_code ec;
+        if (!fs::exists(path, ec) || ec) {
+            last_rejection = "checkpoint does not exist: " + candidate;
+            logger.log(last_rejection);
+            continue;
+        }
+        if (!fs::is_regular_file(path, ec) || ec) {
+            last_rejection = "checkpoint is not a regular file: " + candidate;
+            logger.log(last_rejection);
+            continue;
+        }
+        const auto bytes = fs::file_size(path, ec);
+        if (ec || bytes == 0) {
+            last_rejection = "checkpoint is empty or unreadable: " + candidate;
+            logger.log(last_rejection);
+            continue;
+        }
+        ctx.planned_checkpoint_candidates.push_back(candidate);
+    }
+
+    if (ctx.planned_checkpoint_candidates.empty()) {
+        throw std::runtime_error(
+            "CheckpointPlanReady: checkpoint restore was requested but no usable checkpoint exists; "
+            "refusing fresh initialization" +
+            (last_rejection.empty() ? std::string() : " (" + last_rejection + ")"));
+    }
+
+    ctx.model_parameter_source_plan = ModelParameterSourcePlan::CHECKPOINT_RESTORE;
+    logger.log(
+        "[MODEL_INIT] PLAN=CHECKPOINT_RESTORE checkpoint_requested=true candidates=" +
+        std::to_string(ctx.planned_checkpoint_candidates.size()) +
+        " primary=\"" + ctx.planned_checkpoint_candidates.front() +
+        "\"; fresh-only initializers are disabled");
+}
 
 void CheckpointLoaded(TrainingContext& ctx) {
     loadRequestedCheckpoint(ctx);

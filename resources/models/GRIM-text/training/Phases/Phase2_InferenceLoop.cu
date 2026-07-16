@@ -6,6 +6,7 @@
 #include "Phase2_InferenceLoop.hpp"
 
 #include "../../Shared/Batching/BatchDeviceUpload.hpp"
+#include "../../Shared/Execution/ExecutionResultEmission.hpp"
 #include "Shared/Forward/GeneratedSequence.hpp"
 #include "../../Shared/Forward/ModelForwardRuntimePayload.hpp"
 #include "../../Shared/Forward/ModelForward_GPU.hpp"
@@ -148,7 +149,13 @@ GRIM::GeneratedSequence generateOneSequence(
     const auto& prompt_atom_flags = prompt_payload.atom_flags;
     const auto& prompt_token_to_slot_map = prompt_payload.token_to_slot_map;
     const auto& prompt_atom_entry_ids = prompt_payload.atom_entry_ids;
-    const auto& prompt_atom_table = prompt_payload.seq_atom_tables[0];
+    const auto authored_prompt_atom_table = prompt_payload.seq_atom_tables[0];
+    auto generation_atom_table = authored_prompt_atom_table
+        ? authored_prompt_atom_table->cloneHostForGeneration()
+        : std::make_shared<GRIM::Tokenizer::AtomTable>();
+    prompt_payload.seq_atom_tables[0] = generation_atom_table;
+    const std::shared_ptr<const GRIM::Tokenizer::AtomTable> prompt_atom_table =
+        generation_atom_table;
 
     GRIM::GeneratedSequence sequence;
     sequence.token_ids = prompt_tokens;
@@ -236,25 +243,7 @@ GRIM::GeneratedSequence generateOneSequence(
 
     const auto number_encoder_hp = GRIM::HyperParameters::numberEncoderConstructionHP(config);
 
-    // The execution-entangled decode-time slot selector was deleted
-    // (docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md, Workstream 1). Until the
-    // numeric-meaning selector lands, numeric atom placeholders are NEVER
-    // sampleable while the execution block is enabled: there is no owner that
-    // can bind a value to a generated <INT>/<FLOAT> slot.
-    if (execution_hp.enabled) {
-        const int int_tid = GRIM::Tokenizer::atomTypeToTokenId(GRIM::Tokenizer::AtomType::ATOM_INT);
-        const int float_tid = GRIM::Tokenizer::atomTypeToTokenId(GRIM::Tokenizer::AtomType::ATOM_FLOAT);
-        sampling_cfg.bad_token_ids.push_back(int_tid);
-        sampling_cfg.bad_token_ids.push_back(float_tid);
-        std::sort(sampling_cfg.bad_token_ids.begin(), sampling_cfg.bad_token_ids.end());
-        sampling_cfg.bad_token_ids.erase(
-            std::unique(sampling_cfg.bad_token_ids.begin(), sampling_cfg.bad_token_ids.end()),
-            sampling_cfg.bad_token_ids.end());
-    }
-
     GRIM::Sampling::SamplingPipeline pipeline(sampling_cfg);
-
-    const bool atom_generation_active = execution_hp.enabled;
     // ── KV-cache session setup ───────────────────────────────────────────────
     // Decode runs incrementally: prefill the prompt once (q_len=prompt_len), then
     // decode one token at a time, reusing
@@ -297,6 +286,7 @@ GRIM::GeneratedSequence generateOneSequence(
         std::vector<float> primary;            // [n_rows * vocab]
         int num_pool_atoms = 0;                // candidate count for the selector rows
         std::vector<float> selector;           // [n_rows * num_pool_atoms] (empty if no selector)
+        bool persistent_execution_memory_was_read = false;
         GRIM::ExecutionControlTelemetry execution_control;
         const float* primaryRow(int i) const {
             return primary.data() + static_cast<size_t>(i) * static_cast<size_t>(vocab);
@@ -324,6 +314,10 @@ GRIM::GeneratedSequence generateOneSequence(
         GRIM::Forward::ModelForwardRuntimePayload runtime_payload{};
         runtime_payload.execution_runtime = &generation_state.execution_runtime;
         runtime_payload.read_gate_accum_tensor = nullptr;
+        runtime_payload.persistent_execution_memory =
+            active_payload.isInferenceDecode() && generation_state.has_exec_memory
+                ? &generation_state.exec_memory
+                : nullptr;
 
         GRIM::Forward::ModelForwardRequest request{};
         request.config = &config;
@@ -360,6 +354,8 @@ GRIM::GeneratedSequence generateOneSequence(
         TailLogits tail;
         tail.n_rows = n_tail;
         tail.vocab = vocab_size;
+        tail.persistent_execution_memory_was_read =
+            runtime_payload.persistent_execution_memory_was_read;
         std::vector<float> final_slot_valid_float;
         if (!forward_outputs.exec_outputs_per_row.empty()) {
             const auto& execution_output = forward_outputs.exec_outputs_per_row.front();
@@ -407,6 +403,7 @@ GRIM::GeneratedSequence generateOneSequence(
                     }
                     generation_state.exec_memory = std::move(forward_outputs.exec_memories.front());
                     generation_state.has_exec_memory = true;
+                    tail.execution_control.persistent_memory_available = true;
 
                     const int slots = execution_hp.num_slots;
                     tail.execution_control.final_slot_values.resize(static_cast<size_t>(slots));
@@ -473,22 +470,43 @@ GRIM::GeneratedSequence generateOneSequence(
                 tail.execution_control.final_slot_valid[i] =
                     final_slot_valid_float[i] >= 0.5f ? uint8_t{1} : uint8_t{0};
             }
+
+            const auto emission = GRIM::Execution::resolveTerminalExecutionResult(
+                tail.execution_control.execution_ran,
+                tail.execution_control.stopped_by_model,
+                tail.execution_control.stopped_at_max_steps,
+                tail.execution_control.steps,
+                tail.execution_control.final_slot_values,
+                tail.execution_control.final_slot_valid);
+            tail.execution_control.terminal_result_available = emission.available;
+            tail.execution_control.terminal_result_slot = emission.slot;
+            tail.execution_control.terminal_result_value = emission.value;
         }
         return tail;
     };
 
-    // Build a decode/verification payload over `feed_tokens`. Generated tokens are
-    // plain text (no atoms); execution and number-encoder are disabled on this path.
-    auto buildDecodePayload = [&](const std::vector<int>& feed_tokens) -> GRIM::Batching::BatchPayload {
-        const int q = static_cast<int>(feed_tokens.size());
-        std::vector<float> numeric(static_cast<size_t>(q), 0.0f);
-        std::vector<uint8_t> amask(static_cast<size_t>(q), 0);
-        std::vector<uint32_t> aflags(static_cast<size_t>(q), 0);
-        std::vector<uint32_t> aentry(static_cast<size_t>(q), GRIM::Tokenizer::kAtomEntryNone);
+    // Build the one-token decode payload from the pending token's committed
+    // metadata. Generated numeric atoms retain their session AtomTable binding,
+    // so NumberEncoder sees their actual meaning on the following decode step.
+    auto buildDecodePayload = [&]() -> GRIM::Batching::BatchPayload {
+        if (sequence.token_ids.empty() ||
+            sequence.token_numeric_values.size() != sequence.token_ids.size() ||
+            sequence.token_atom_mask.size() != sequence.token_ids.size() ||
+            sequence.atom_entry_ids.size() != sequence.token_ids.size() ||
+            sequence_atom_flags.size() != sequence.token_ids.size()) {
+            throw std::runtime_error(
+                "generateOneSequence: pending-token metadata is incomplete");
+        }
+        const size_t pending_index = sequence.token_ids.size() - 1;
+        std::vector<int> feed_tokens{sequence.token_ids[pending_index]};
+        std::vector<float> numeric{sequence.token_numeric_values[pending_index]};
+        std::vector<uint8_t> amask{sequence.token_atom_mask[pending_index]};
+        std::vector<uint32_t> aflags{sequence_atom_flags[pending_index]};
+        std::vector<uint32_t> aentry{sequence.atom_entry_ids[pending_index]};
         const std::vector<int32_t> slotmap;  // empty -> no execution-active row
         auto decode_payload = GRIM::Batching::buildInferenceBatchPayload(
             feed_tokens, numeric, amask, aflags, prompt_atom_table, aentry, slotmap,
-            vocab_size, /*batch_capacity=*/1, static_cast<size_t>(q),
+            vocab_size, /*batch_capacity=*/1, /*max_cached_seq_len=*/1,
             execution_hp.num_slots,
             execution_hp.num_scratch_slots,
             number_encoder_hp.enabled ? number_encoder_hp.max_digit_slots : 0,
@@ -502,69 +520,154 @@ GRIM::GeneratedSequence generateOneSequence(
         return static_cast<int>(sequence.token_ids.size()) - prompt_len;
     };
 
+    auto terminalResultPending = [&]() -> bool {
+        return sequence.execution_control.terminal_result_available &&
+               !sequence.execution_control.terminal_result_emitted;
+    };
+
+    auto selectorHasCandidateType = [&](const TailLogits& tail,
+                                        GRIM::Tokenizer::AtomType type) -> bool {
+        if (!use_selector || tail.num_pool_atoms <= 0) {
+            return false;
+        }
+        if (tail.selector.size() != static_cast<size_t>(tail.n_rows) *
+                                    static_cast<size_t>(tail.num_pool_atoms)) {
+            throw std::runtime_error(
+                "generateOneSequence: selector candidate pool has no matching logits");
+        }
+        for (int e = 0; e < tail.num_pool_atoms; ++e) {
+            const auto entry = prompt_atom_table->getAtom(static_cast<uint32_t>(e));
+            if (!entry.has_value()) {
+                throw std::runtime_error(
+                    "generateOneSequence: selector pool entry has no AtomTable record");
+            }
+            if (entry->type == type) {
+                return true;
+            }
+        }
+        return false;
+    };
+
     // Commit one generated token to the output sequence with explicit atom binding.
     auto commitToken = [&](const GRIM::Sampling::SampleResult& s,
-                           float numeric_value, uint8_t atom_mask, uint32_t atom_entry_id) {
+                           float numeric_value, uint8_t atom_mask,
+                           uint32_t atom_flags, uint32_t atom_entry_id) {
         sequence.token_ids.push_back(s.token_id);
         sequence.token_scores.push_back(s.log_probability);
         sequence.token_numeric_values.push_back(numeric_value);
         sequence.token_atom_mask.push_back(atom_mask);
         sequence.token_to_slot_map.push_back(-1);
         sequence.atom_entry_ids.push_back(atom_entry_id);
-        sequence_atom_flags.push_back(0);
+        sequence_atom_flags.push_back(atom_flags);
         sequence.score += s.log_probability;
         if (stream_callback) {
             (*stream_callback)(s.token_id, s.probability);
         }
     };
 
-    // Commit a sampled token, binding the arg/option selector's choice when the
-    // token is a numeric-atom placeholder and the selector is active. The selector
-    // picks the highest-scoring candidate entry in this row's pool; its exact value
-    // and entry id are bound so decode() round-trips the chosen number. Non-atoms,
-    // and numeric atoms with no candidate pool, commit as plain text (numeric 0).
+    // A pending terminal execution result owns the next numeric placeholder. Once
+    // it has been emitted, later numeric placeholders use the normal numeric-
+    // meaning selector over session AtomTable entries. There is no unbound atom
+    // fallback and selector candidates must match the LM-selected atom type.
     auto commitSampled = [&](const GRIM::Sampling::SampleResult& s, const TailLogits& tail, int row) {
         const bool is_numeric_atom = token_layout.isAtom(s.token_id) &&
             GRIM::Tokenizer::isNumericAtom(GRIM::Tokenizer::tokenIdToAtomType(s.token_id));
-        if (use_selector && is_numeric_atom && tail.num_pool_atoms > 0 &&
-            !tail.selector.empty() && prompt_atom_table) {
-            const float* sel_row = tail.selectorRow(row);
-            int best = 0;
-            float best_score = sel_row[0];
-            for (int e = 1; e < tail.num_pool_atoms; ++e) {
-                if (sel_row[e] > best_score) { best_score = sel_row[e]; best = e; }
+        if (!is_numeric_atom) {
+            commitToken(s, 0.0f, /*atom_mask=*/0, /*atom_flags=*/0,
+                        GRIM::Tokenizer::kAtomEntryNone);
+            return;
+        }
+
+        const auto sampled_type = GRIM::Tokenizer::tokenIdToAtomType(s.token_id);
+        if (terminalResultPending()) {
+            const auto expected_type = GRIM::Tokenizer::numericAtomTypeForValue(
+                sequence.execution_control.terminal_result_value);
+            if (sampled_type != expected_type) {
+                throw std::runtime_error(
+                    "generateOneSequence: sampled numeric atom type does not match pending execution result");
             }
-            // batch_size == 1 for inference: row_atom_offset[0] == 0, so the
-            // batch-global pool index equals the prompt table's row-local entry id.
-            const uint32_t entry_id = static_cast<uint32_t>(best);
-            const auto entry = prompt_atom_table->getAtom(entry_id);
-            if (entry.has_value()) {
-                commitToken(s, entry->numeric_value, /*atom_mask=*/1, entry_id);
+            const size_t token_index = sequence.token_ids.size();
+            const uint32_t entry_id = generation_atom_table->registerGeneratedNumericValue(
+                sequence.execution_control.terminal_result_value);
+            const auto entry = generation_atom_table->getAtom(entry_id);
+            if (!entry.has_value() || entry->type != expected_type) {
+                throw std::runtime_error(
+                    "generateOneSequence: generated execution result has no matching AtomTable entry");
+            }
+            commitToken(s, entry->numeric_value, /*atom_mask=*/1, entry->flags, entry_id);
+            sequence.execution_control.terminal_result_emitted = true;
+            sequence.execution_control.terminal_result_emission_token_index =
+                static_cast<int>(token_index);
+            return;
+        }
+
+        if (use_selector && tail.num_pool_atoms > 0 && !tail.selector.empty()) {
+            const float* sel_row = tail.selectorRow(row);
+            int best = -1;
+            float best_score = 0.0f;
+            for (int e = 0; e < tail.num_pool_atoms; ++e) {
+                const auto candidate = prompt_atom_table->getAtom(static_cast<uint32_t>(e));
+                if (!candidate.has_value()) {
+                    throw std::runtime_error(
+                        "generateOneSequence: selector candidate has no AtomTable entry");
+                }
+                if (candidate->type != sampled_type) {
+                    continue;
+                }
+                if (best < 0 || sel_row[e] > best_score) {
+                    best_score = sel_row[e];
+                    best = e;
+                }
+            }
+            if (best >= 0) {
+                // batch_size == 1: pool index equals the session table entry id.
+                const uint32_t entry_id = static_cast<uint32_t>(best);
+                const auto entry = prompt_atom_table->getAtom(entry_id);
+                commitToken(s, entry->numeric_value, /*atom_mask=*/1,
+                            entry->flags, entry_id);
                 return;
             }
         }
-        commitToken(s, 0.0f, /*atom_mask=*/0, GRIM::Tokenizer::kAtomEntryNone);
+        throw std::runtime_error(
+            "generateOneSequence: sampled numeric placeholder has no legal value binding");
     };
 
     // Select the next token from a primary-logit row using the SAME pipeline +
-    // pre-min_new_tokens EOS mask as the full-recompute decoder.
-    auto selectFrom = [&](const float* logit_row, int committed_new_tokens) -> GRIM::Sampling::SampleResult {
+    // pre-min_new_tokens EOS mask as the full-recompute decoder. Numeric atom
+    // availability is decided per row before sampling, never inferred afterward.
+    auto selectFrom = [&](const TailLogits& tail, int tail_row,
+                          int committed_new_tokens) -> GRIM::Sampling::SampleResult {
+        const float* logit_row = tail.primaryRow(tail_row);
         std::vector<float> row(logit_row, logit_row + vocab_size);
         if (committed_new_tokens + 1 < cfg.min_new_tokens &&
             cfg.eos_token_id >= 0 && cfg.eos_token_id < vocab_size) {
             row[static_cast<size_t>(cfg.eos_token_id)] = -1e30f;
         }
+
+        const int int_tid = GRIM::Tokenizer::atomTypeToTokenId(
+            GRIM::Tokenizer::AtomType::ATOM_INT);
+        const int float_tid = GRIM::Tokenizer::atomTypeToTokenId(
+            GRIM::Tokenizer::AtomType::ATOM_FLOAT);
+        bool allow_int = false;
+        bool allow_float = false;
+        if (terminalResultPending()) {
+            const auto result_type = GRIM::Tokenizer::numericAtomTypeForValue(
+                sequence.execution_control.terminal_result_value);
+            allow_int = result_type == GRIM::Tokenizer::AtomType::ATOM_INT;
+            allow_float = result_type == GRIM::Tokenizer::AtomType::ATOM_FLOAT;
+        } else {
+            allow_int = selectorHasCandidateType(
+                tail, GRIM::Tokenizer::AtomType::ATOM_INT);
+            allow_float = selectorHasCandidateType(
+                tail, GRIM::Tokenizer::AtomType::ATOM_FLOAT);
+        }
+        if (!allow_int) row[static_cast<size_t>(int_tid)] = -1e30f;
+        if (!allow_float) row[static_cast<size_t>(float_tid)] = -1e30f;
+
         GRIM::Sampling::SampleResult s = pipeline.selectNextToken(row, sequence.token_ids, vocab_size);
         if (s.token_id < 0 || s.token_id >= vocab_size) {
             throw std::runtime_error("Phase2 payload inference: sampled token out of range (token_id=" +
                                      std::to_string(s.token_id) + ", vocab=" + std::to_string(vocab_size) + ")");
-        }
-        if (atom_generation_active && token_layout.isAtom(s.token_id) &&
-            GRIM::Tokenizer::isNumericAtom(GRIM::Tokenizer::tokenIdToAtomType(s.token_id))) {
-            // Numeric atom ids are masked while execution is enabled; sampling one
-            // is a pipeline bug (no decode-time slot selector exists).
-            throw std::runtime_error("Phase2 payload inference: sampled numeric atom token_id=" +
-                std::to_string(s.token_id) + " but numeric placeholders are masked while execution is enabled");
         }
         return s;
     };
@@ -579,7 +682,7 @@ GRIM::GeneratedSequence generateOneSequence(
     // First generated token ("pending"), sampled from the prompt's last position.
     // Its K/V is appended by the next cached forward as window position 0.
     {
-        GRIM::Sampling::SampleResult first = selectFrom(prefill.primaryRow(0), committedNewTokens());
+        GRIM::Sampling::SampleResult first = selectFrom(prefill, 0, committedNewTokens());
         commitSampled(first, prefill, 0);
         if (first.token_id == cfg.eos_token_id && committedNewTokens() >= cfg.min_new_tokens) {
             finished = true;
@@ -594,16 +697,17 @@ GRIM::GeneratedSequence generateOneSequence(
             break;
         }
 
-        const int pending = sequence.token_ids.back();
         const int cache_base = kv_cache.currentSeqlen();
 
-        std::vector<int> feed{pending};
-        GRIM::Batching::BatchPayload decode_payload = buildDecodePayload(feed);
+        GRIM::Batching::BatchPayload decode_payload = buildDecodePayload();
         TailLogits tail = runCachedForward(
             decode_payload, /*n_tail=*/1, /*want_selector=*/use_selector);
+        sequence.execution_control.persistent_memory_read_during_decode =
+            sequence.execution_control.persistent_memory_read_during_decode ||
+            tail.persistent_execution_memory_was_read;
 
         GRIM::Sampling::SampleResult chosen =
-            selectFrom(tail.primaryRow(0), committedNewTokens());
+            selectFrom(tail, 0, committedNewTokens());
         commitSampled(chosen, tail, 0);
 
         // The token just fed is now cached; the newly sampled token remains

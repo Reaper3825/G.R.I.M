@@ -430,6 +430,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
 
     const auto& payload = *request.payload;
     auto& runtime = runtime_payload;
+    runtime.persistent_execution_memory_was_read = false;
     ModelForwardOutputs forward_outputs;
     if (execution_block_active) {
         forward_outputs.ensureExecutionBatchGeometry(
@@ -585,6 +586,12 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
         if (exec_layer >= num_layers) exec_layer = num_layers - 1;
         exec_K = execution_block_num_steps;
     }
+    if (payload.isInferenceDecode() && runtime.persistent_execution_memory &&
+        exec_layer >= num_layers - 1) {
+        throw std::runtime_error(
+            "ModelForward: persistent execution-memory decode readback requires at least one "
+            "encoder layer after the configured execution layer");
+    }
 
     if (!retain_backward_graph) {
         Tensor running;
@@ -610,31 +617,49 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
 
             Tensor* layer_input = (layer_idx == 0) ? &forward_outputs.embedding_tensor : &running;
             Tensor execution_read_augmented_input;
-            if (payload.isInferencePrefill()
-                && exec_layer >= 0
+            if (exec_layer >= 0
                 && layer_idx > exec_layer
-                && execution_block_active
-                && !forward_outputs.exec_memories.empty()) {
+                && execution_block_active) {
                 bool has_execution_readback = false;
-                for (int b = 0; b < payload.batch_size; ++b) {
-                    if (!inference_execution_active[static_cast<size_t>(b)]) continue;
-                    const Tensor& read_source = has_execution_readback
-                        ? execution_read_augmented_input
-                        : *layer_input;
+                if (payload.isInferencePrefill() && !forward_outputs.exec_memories.empty()) {
+                    for (int b = 0; b < payload.batch_size; ++b) {
+                        if (!inference_execution_active[static_cast<size_t>(b)]) continue;
+                        const Tensor& read_source = has_execution_readback
+                            ? execution_read_augmented_input
+                            : *layer_input;
+                        const int row_len = requirePayloadRowLength(
+                            payload, b, "ModelForward(no_grad) execution prefill readback");
+                        const int final_token_offset = b * payload.max_seq_len + row_len - 1;
+                        Tensor row_delta = GRIM::executionBlockCrossAttentionRead(
+                            execution_hp, read_source, forward_outputs.exec_memories[b],
+                            *execution_block_parameters, total_tokens, request.stream,
+                            final_token_offset, 1,
+                            runtime.read_gate_accum_tensor
+                                ? runtime.read_gate_accum_tensor->data
+                                : nullptr);
+                        Tensor padded = autograd::zero_pad(
+                            row_delta, final_token_offset, total_tokens, request.stream);
+                        execution_read_augmented_input = autograd::add(
+                            read_source, padded, request.stream);
+                        has_execution_readback = true;
+                    }
+                } else if (payload.isInferenceDecode() && runtime.persistent_execution_memory) {
+                    if (payload.batch_size != 1) {
+                        throw std::runtime_error(
+                            "ModelForward(no_grad): persistent decode execution memory requires batch_size == 1");
+                    }
                     const int row_len = requirePayloadRowLength(
-                        payload, b, "ModelForward(no_grad) execution readback");
-                    const int final_token_offset = b * payload.max_seq_len + row_len - 1;
+                        payload, 0, "ModelForward(no_grad) persistent decode readback");
                     Tensor row_delta = GRIM::executionBlockCrossAttentionRead(
-                        execution_hp, read_source, forward_outputs.exec_memories[b],
+                        execution_hp, *layer_input, *runtime.persistent_execution_memory,
                         *execution_block_parameters, total_tokens, request.stream,
-                        final_token_offset, 1,
+                        /*token_offset=*/0, row_len,
                         runtime.read_gate_accum_tensor
                             ? runtime.read_gate_accum_tensor->data
                             : nullptr);
-                    Tensor padded = autograd::zero_pad(
-                        row_delta, final_token_offset, total_tokens, request.stream);
                     execution_read_augmented_input = autograd::add(
-                        read_source, padded, request.stream);
+                        *layer_input, row_delta, request.stream);
+                    runtime.persistent_execution_memory_was_read = true;
                     has_execution_readback = true;
                 }
                 if (has_execution_readback) {

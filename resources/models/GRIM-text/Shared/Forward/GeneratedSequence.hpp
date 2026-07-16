@@ -37,6 +37,13 @@ struct ExecutionControlTelemetry {
     bool execution_suppressed_no_bootstrap = false;
     bool stopped_by_model = false;
     bool stopped_at_max_steps = false;
+    bool persistent_memory_available = false;
+    bool persistent_memory_read_during_decode = false;
+    bool terminal_result_available = false;
+    int terminal_result_slot = -1;
+    float terminal_result_value = 0.0f;
+    bool terminal_result_emitted = false;
+    int terminal_result_emission_token_index = -1;
     std::vector<ExecutionStepControlTelemetry> steps;
     std::vector<float> final_slot_values;
     std::vector<uint8_t> final_slot_valid;

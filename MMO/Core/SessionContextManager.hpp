@@ -112,8 +112,30 @@ struct VisualContext {
         std::string active_window;
         std::string active_process;
         std::string ocr_text;
+        std::vector<std::string> ocr_regions;
+        std::vector<std::string> ui_elements;
         std::string scene_classification;
         std::string monitor_id;
+        std::string source_device_id;
+        std::string source_platform;
+        std::string source_transport;
+        std::string capture_status;
+        std::string capture_error;
+        std::string capture_backend;
+        std::string ocr_status;
+        std::string ocr_error;
+        std::string ocr_provider;
+        std::string automation_status;
+        std::string automation_error;
+        std::string automation_provider;
+        std::string automation_target_window;
+        std::string preferred_grounding_source;
+        float       ocr_mean_confidence = 0.0f;
+        bool        automation_target_matches_capture = false;
+        bool        automation_target_changed = false;
+        uint64_t    provenance_frame_counter = 0;
+        uint64_t    primitive_provenance_frame_counter = 0;
+        uint64_t    capture_wall_ns = 0;
     } digital;
 
     // Physical: real-world / camera semantic input.

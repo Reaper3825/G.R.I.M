@@ -33,8 +33,8 @@ isProject: false
   - [ ] Explicit `digit_loss_mask` loss path for variable-length digit slots
 - [ ] **W4 — Decode bridge into execution plumbing**
   - [ ] Selector output consumed by execution when active
-  - [ ] Temporary metadata -> `AtomTable` entry-id lookup -> placeholder fill bridge
-  - [ ] Removal of current inference stopgap (mask `<INT>/<FLOAT>` + fail loud if sampled)
+  - [x] Temporary metadata -> `AtomTable` entry-id lookup -> placeholder fill bridge
+  - [x] Removal of the unconditional stopgap; numeric placeholders are dynamically mask-or-bind
 - [ ] **W5 — Parity + semantics validation**
   - [ ] End-to-end parity/semantics validation for numeric meaning + surface identity split
 
@@ -57,7 +57,8 @@ isProject: false
 
 ## Current pending-state note
 
-- [ ] Inference currently still uses the stopgap path while execution is enabled (numeric placeholders masked and fail-loud if sampled), so W4 remains pending.
+- [x] Inference binds a model-confirmed terminal result into a session AtomTable and uses the numeric-meaning selector after no result is pending.
+- [ ] W4 remains incomplete only for routing selector decisions into execution argument plumbing itself.
 - [ ] Loss decomposition currently exposes `text_loss`, `mtp_loss`, and `execution_loss`; numeric supervision head channels are not yet wired, so W3 remains pending.
 
 ## Update rule

@@ -61,6 +61,15 @@ ConsolePanel::ConsolePanel()
               LOG_DEBUG("ConsolePanel", "Physical Environment panel not found");
           }
       })),
+      digitalButton(std::make_shared<UIButton>(" Digital ", []() {
+          auto digitalEnvPanel = UIRoot::get().getPanel("Digital Environment");
+          if (digitalEnvPanel) {
+              digitalEnvPanel->setVisible(true);
+              LOG_DEBUG("ConsolePanel", "Opened Digital Environment panel via button");
+          } else {
+              LOG_DEBUG("ConsolePanel", "Digital Environment panel not found");
+          }
+      })),
       geoSpatialButton(std::make_shared<UIButton>(" GeoSpatial ", []() {
           auto geoSpatialPanel = UIRoot::get().getPanel("GeoSpatial");
           if (geoSpatialPanel) {
@@ -109,6 +118,7 @@ ConsolePanel::ConsolePanel()
     if (trainingButton) trainingButton->setSize(btnW, btnH);
     if (storageButton)  storageButton->setSize(btnW, btnH);
     if (cameraButton)   cameraButton->setSize(btnW, btnH);
+    if (digitalButton)  digitalButton->setSize(btnW, btnH);
     if (geoSpatialButton) geoSpatialButton->setSize(120.0f, btnH);
     
     toolbarBox = std::make_shared<UIHBox>(LayoutDirection::Horizontal, 8.0f);
@@ -116,6 +126,7 @@ ConsolePanel::ConsolePanel()
     toolbarBox->addWidget(trainingButton);
     toolbarBox->addWidget(storageButton);
     toolbarBox->addWidget(cameraButton);
+    toolbarBox->addWidget(digitalButton);
     toolbarBox->addWidget(geoSpatialButton);
     toolbarBox->addWidget(settingsButton);
     toolbarBox->layout();

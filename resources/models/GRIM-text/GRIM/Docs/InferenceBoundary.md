@@ -120,17 +120,28 @@ separate decode graph file.
 - Phase2 `generateOneSequence` prefills the prompt (`q_len = prompt_len`), then
   decodes one token at a time (`q_len = 1`).
 Known limitations (tracked under "other missing pieces"): no HTTP token
-streaming; no stop-sequences; numeric-atom generation remains masked while the
-execution block is enabled; persistent execution memory is captured after
-cached prefill but is not yet consumed directly by later decode windows;
-single-sequence only (batch_size == 1); the cache is rebuilt per request (no
-cross-request prefix reuse).
+streaming; no stop-sequences; single-sequence only (batch_size == 1); the cache
+is rebuilt per request (no cross-request prefix reuse).
 
 ExecutionBlock Phase 1 is supported on the cached path: inference prefill may
 run the learned EXECUTE/NOOP gate and structured steps, apply causal readback at
 the final prompt token in downstream layers, and move the resulting row-local
 register file into `GenerationState::exec_memory` before temporary forward
-outputs are cleared. Decode windows do not re-bootstrap or re-execute the block.
+outputs are cleared. ExecutionBlock Phase 2 lets later cached decode windows
+borrow that session memory for downstream cross-attention readback. Decode does
+not re-run the gate, bootstrap, or execution steps, and it does not modify
+semantic register values/validity.
+
+ExecutionBlock Phase 3 exposes one strict terminal result to generation. A
+result is available only when the learned stop controller ends execution after
+a completed step; that step's explicit write slot must be valid and finite.
+Reaching the configured step limit does not select a result, and there is no
+first/last-valid or recency fallback. While a terminal result is pending, only
+its matching `<INT>` or `<FLOAT>` placeholder is sampleable. The placeholder is
+bound to a model-generated entry in a session-owned AtomTable, so decode renders
+the concrete value and the next cached token can consume full NumberEncoder
+metadata. Once no execution result is pending, numeric placeholders are enabled
+only when the numeric-meaning selector has a same-type candidate.
 
 ### Verification (run on an SM80+ GPU box)
 

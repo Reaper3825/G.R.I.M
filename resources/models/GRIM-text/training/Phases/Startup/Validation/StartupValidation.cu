@@ -28,6 +28,20 @@ void validateStartupOrThrow(const StartupValidationInputs& inputs) {
     require(ctx.logging.logger != nullptr, "logging logger is null");
     require(ctx.logging.status_writer != nullptr, "status writer is null");
 
+    require(ctx.model_parameter_source_plan != ModelParameterSourcePlan::UNRESOLVED,
+            "model parameter source plan is unresolved");
+    if (ctx.model_parameter_source_plan == ModelParameterSourcePlan::CHECKPOINT_RESTORE) {
+        require(!ctx.planned_checkpoint_candidates.empty(),
+                "checkpoint restore plan has no candidates");
+        require(!ctx.loaded_checkpoint_path.empty(),
+                "checkpoint restore plan completed without a loaded checkpoint");
+    } else {
+        require(ctx.planned_checkpoint_candidates.empty(),
+                "fresh initialization plan carries checkpoint candidates");
+        require(ctx.loaded_checkpoint_path.empty(),
+                "fresh initialization plan unexpectedly loaded a checkpoint");
+    }
+
     require(fixed_shape.batch_size == GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "batch_size"),
             "trainingFixedShapeHP.batch_size does not match config.batch_size");
     require(fixed_shape.max_seq_len == GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "max_seq_len"),

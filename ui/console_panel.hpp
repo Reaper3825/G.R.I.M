@@ -34,6 +34,7 @@ private:
     std::shared_ptr<UIButton> DCButton;        // Data Collection button
     std::shared_ptr<UIButton> storageButton;   // Shared Storage button
     std::shared_ptr<UIButton> cameraButton;    // Physical Environment / IP camera button
+    std::shared_ptr<UIButton> digitalButton;   // Digital Environment / screen capture button
     std::shared_ptr<UIButton> geoSpatialButton; // GeoSpatial / Cesium viewport target button
     std::shared_ptr<UIHBox> toolbarBox;         // Horizontal layout for toolbar buttons
     

@@ -6,6 +6,12 @@ The G.R.I.M perception system provides advanced digital context awareness, allow
 
 ## Architecture
 
+The production digital acquisition spine is documented in
+[`digital/README.md`](digital/README.md). It publishes immutable capture attempts
+to `DigitalFrameBus`, runs frame-coherent OCR plus optional host-native UI
+automation, and projects both into live reasoning context. The older
+`PerceptionContextManager` remains as an on-demand compatibility layer.
+
 ### Components
 
 1. **Core Perception** (`perception/perception.cpp`)
