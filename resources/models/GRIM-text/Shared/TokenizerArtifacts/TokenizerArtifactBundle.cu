@@ -59,6 +59,25 @@ bool tokenizerArtifactBundleExists(const GRIM::HyperParameters::TokenizerHP& hp)
     return fs::exists(hp.data_path) && fs::exists(hp.vocab_path);
 }
 
+std::uint32_t loadSharedTokenizerVocabulary(
+    const GRIM::HyperParameters::TokenizerHP& hp,
+    GRIM::Tokenizer::UniByte& tokenizer) {
+    requireTokenizerArtifactPaths(hp);
+    const fs::path vocab_path(hp.vocab_path);
+    if (!fs::exists(vocab_path)) {
+        throw std::runtime_error("[TokenizerArtifactBundle] shared vocab file missing: " +
+                                 vocab_path.string());
+    }
+
+    TokenizerVocabFile(vocab_path).readInto(hp, tokenizer.unigramLM());
+    const auto vocab_size = static_cast<std::uint32_t>(tokenizer.vocabSize());
+    if (vocab_size == 0) {
+        throw std::runtime_error("[TokenizerArtifactBundle] shared vocab loaded with zero token-space size: " +
+                                 vocab_path.string());
+    }
+    return vocab_size;
+}
+
 TokenizerBundleManifest loadTokenizerArtifactBundle(
     const GRIM::HyperParameters::TokenizerHP& hp,
     GRIM::Tokenizer::UniByte& tokenizer) {
@@ -112,6 +131,42 @@ TokenizerBundleSaveReport saveTokenizerArtifactBundle(
     report.manifest.tokenizer_vocab_size = tokenizer_vocab_size;
     validateVocabAgreement(report.manifest.grmt_header,
                            report.manifest.tokenizer_vocab_size,
+                           grmt_path,
+                           vocab_path);
+    return report;
+}
+
+TokenizerBundleSaveReport saveGrmtForSharedTokenizerVocabulary(
+    const GRIM::HyperParameters::TokenizerHP& hp,
+    const GRIM::Tokenizer::UniByte& tokenizer,
+    const std::vector<GrmtSequence>& sequences) {
+    requireTokenizerArtifactPaths(hp);
+    const fs::path grmt_path(hp.data_path);
+    const fs::path vocab_path(hp.vocab_path);
+    if (!fs::exists(vocab_path)) {
+        throw std::runtime_error("[TokenizerArtifactBundle] shared vocab file missing before GRMT-only save: " +
+                                 vocab_path.string());
+    }
+
+    // Re-read the shared artifact so the persisted token-space authority, not
+    // an authored GRMT header value, determines the output vocabulary size.
+    GRIM::Tokenizer::UniByte verifier(hp);
+    const std::uint32_t persisted_vocab_size = loadSharedTokenizerVocabulary(hp, verifier);
+    const std::uint32_t live_vocab_size = static_cast<std::uint32_t>(tokenizer.vocabSize());
+    if (live_vocab_size != persisted_vocab_size) {
+        throw std::runtime_error(
+            "[TokenizerArtifactBundle] live tokenizer token-space size " +
+            std::to_string(live_vocab_size) + " does not match shared vocab " +
+            std::to_string(persisted_vocab_size) + " at " + vocab_path.string());
+    }
+
+    ensureParentDirectory(grmt_path, "grmt");
+    TokenizerBundleSaveReport report{};
+    report.grmt = saveGrmtCorpus(grmt_path, sequences, persisted_vocab_size);
+    report.manifest.grmt_header = loadGrmtHeader(grmt_path);
+    report.manifest.tokenizer_vocab_size = persisted_vocab_size;
+    validateVocabAgreement(report.manifest.grmt_header,
+                           persisted_vocab_size,
                            grmt_path,
                            vocab_path);
     return report;

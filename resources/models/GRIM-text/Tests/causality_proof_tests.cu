@@ -90,6 +90,7 @@ std::vector<float> runInferencePrefill(GRIM::LanguageModel* model,
         static_cast<size_t>(cfg.batch_size),
         static_cast<size_t>(cfg.max_cached_seq_len),
         cfg.execution_block_num_slots,
+        execution_hp.num_scratch_slots,
         /*number_encoder_digit_slots=*/0,
         /*number_encoder_max_abs_pow10=*/0);
 

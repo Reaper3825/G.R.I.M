@@ -4,6 +4,12 @@
 > This is a **data guide**, not a code guide. It tells you what to write, what the
 > system expects, and what will crash if you get it wrong.
 
+> **Storage transition:** `concept_blocks.fb` is now the authoritative DataHub
+> and training dataset. The JSONL shape documented below remains the legacy
+> authoring/import format. DataHub imports it when the FlatBuffer is missing or
+> older, then writes the versioned `GRCB` FlatBuffer. Training refuses to use a
+> stale FlatBuffer when a newer JSONL is present.
+
 ---
 
 ## Table of Contents

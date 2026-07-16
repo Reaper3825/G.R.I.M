@@ -1,0 +1,132 @@
+// GRIM model-store manifest schema.
+//
+// This file describes one model installation. It contains paths, lightweight
+// configuration, compatibility facts, and routing/loading policy. Model tensor
+// data remains in the weights artifact referenced by `paths.weights_path`.
+//
+// All relative paths are resolved from the directory containing the manifest.
+// This schema is source-only during the transition; do not generate bindings
+// until the model-store read/write boundary is implemented.
+
+namespace GRIMModelStore;
+
+enum ModelRole : ubyte {
+  Router = 0,
+  SubModel = 1
+}
+
+enum BackendType : ubyte {
+  GrimTextServer = 0,
+  LlamaCpp = 1,
+  Ollama = 2,
+  External = 3
+}
+
+enum ModelState : ubyte {
+  Active = 0,
+  Disabled = 1,
+  Archived = 2
+}
+
+table ArtifactPaths {
+  // Required model-owned artifacts.
+  weights_path: string (required);
+  vocab_path: string (required);
+
+  // Derived training cache and tokenizer-neutral source dataset.
+  training_data_path: string;
+  source_dataset_path: string;
+
+  // Optional configuration and training/resume artifacts.
+  config_path: string;
+  optimizer_state_path: string;
+  checkpoint_dir: string;
+
+  // Router-only personalization artifacts. Sub-model manifests must leave
+  // these empty because frozen information bricks cannot own LoRA/hard copy.
+  lora_path: string;
+  hard_copy_path: string;
+
+  // Optional process override. Empty means use the registered backend default.
+  server_executable_path: string;
+}
+
+table ModelConfig {
+  // Model-specific token space. This replaces GRMT as vocab-size authority and
+  // must match vocab.bin plus the embedding and LM-head dimensions in weights.
+  vocab_size: uint32;
+
+  // Lightweight architecture facts let the model store inspect compatibility
+  // and resource requirements without loading the complete weights artifact.
+  d_model: uint32;
+  num_layers: uint32;
+  num_heads: uint32;
+  num_kv_heads: uint32;
+  d_ff: uint32;
+  max_seq_len: uint32;
+  tie_embeddings: bool;
+  use_bias: bool;
+
+  // Tokenizer compatibility contract.
+  tokenizer_format_version: uint32;
+  special_token_layout_version: uint32;
+  unk_token_id: int32 = -1;
+  pad_token_id: int32 = -1;
+  bos_token_id: int32 = -1;
+  eos_token_id: int32 = -1;
+}
+
+table ArtifactIntegrity {
+  // SHA-256 byte vectors are exactly 32 bytes when present. Runtime validation
+  // must reject a configured artifact whose digest does not match.
+  weights_sha256: [ubyte];
+  vocab_sha256: [ubyte];
+  training_data_sha256: [ubyte];
+  source_dataset_sha256: [ubyte];
+}
+
+table RuntimeConfig {
+  enabled: bool = true;
+  backend: BackendType = GrimTextServer;
+  endpoint: string;
+
+  use_gpu: bool = true;
+  use_flash_attention: bool = true;
+  max_concurrency: uint32 = 1;
+  request_timeout_ms: uint32;
+  load_timeout_ms: uint32;
+  idle_ttl_ms: uint64;
+
+  estimated_ram_mb: uint64;
+  estimated_vram_mb: uint64;
+}
+
+table RoutingConfig {
+  subject: string;
+  description: string;
+  subject_tags: [string];
+  usage_weight: float32;
+}
+
+table ModelManifest {
+  schema_version: uint32 = 1;
+
+  model_id: string (required);
+  name: string (required);
+  version: string;
+  role: ModelRole = SubModel;
+  state: ModelState = Active;
+
+  paths: ArtifactPaths (required);
+  config: ModelConfig (required);
+  integrity: ArtifactIntegrity;
+  runtime: RuntimeConfig;
+  routing: RoutingConfig;
+
+  created_timestamp: uint64;
+  modified_timestamp: uint64;
+}
+
+root_type ModelManifest;
+file_identifier "GMOD";
+file_extension "gmodel";

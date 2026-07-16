@@ -381,9 +381,6 @@ void ModelForwardRequest::validate(const char* caller) const {
         if (payload->batch_size != 1) {
             throw std::runtime_error(std::string(caller) + ": kv_cache decode requires payload.batch_size == 1");
         }
-        if (execution_block_enabled) {
-            throw std::runtime_error(std::string(caller) + ": kv_cache decode does not yet support the execution block; disable it for inference");
-        }
         if (!kv_cache->allocated) {
             throw std::runtime_error(std::string(caller) + ": kv_cache is not allocated (call ensureAllocated/beginSession before the forward)");
         }

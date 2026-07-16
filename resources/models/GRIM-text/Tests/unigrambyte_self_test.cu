@@ -2609,6 +2609,66 @@ bool testVocabSaveLoadBinary(std::string& message) {
     return true;
 }
 
+bool testSharedVocabWritesMultipleGrmtsWithoutMutation(std::string& message) {
+    std::filesystem::create_directories("output");
+
+    auto config = makeSelfTestTokenizerHP();
+    const std::string vocab_path = "output/test_shared_vocab.bin";
+    const std::string first_grmt = "output/test_shared_vocab_first.grmt";
+    const std::string second_grmt = "output/test_shared_vocab_second.grmt";
+    config.vocab_path = vocab_path;
+    config.data_path = first_grmt;
+
+    UniByte original(config);
+    appendSelfTestUnigramPiece(original.unigramLM(), "shared", -1.0f, false);
+    appendSelfTestUnigramPiece(original.unigramLM(), "vocab", -1.5f, false);
+    original.unigramLM().buildTrie();
+
+    std::vector<TokenizerArtifacts::GrmtSequence> sequences{
+        makePersistenceGrmtSequence()
+    };
+    (void)TokenizerArtifacts::saveTokenizerArtifactBundle(config, original, sequences);
+
+    auto read_bytes = [](const std::string& path) {
+        std::ifstream input(path, std::ios::binary | std::ios::ate);
+        if (!input.is_open()) {
+            throw std::runtime_error("failed to open test artifact: " + path);
+        }
+        const std::streamsize size = input.tellg();
+        input.seekg(0, std::ios::beg);
+        std::vector<char> bytes(static_cast<std::size_t>(size));
+        if (size > 0 && !input.read(bytes.data(), size)) {
+            throw std::runtime_error("failed to read test artifact: " + path);
+        }
+        return bytes;
+    };
+    const auto vocab_before = read_bytes(vocab_path);
+
+    config.data_path = second_grmt;
+    UniByte shared(config);
+    const auto shared_size = TokenizerArtifacts::loadSharedTokenizerVocabulary(config, shared);
+    ASSERT_EQ(shared_size, static_cast<std::uint32_t>(original.vocabSize()),
+              "Shared-vocab load should preserve the original token space");
+    const auto report = TokenizerArtifacts::saveGrmtForSharedTokenizerVocabulary(
+        config, shared, sequences);
+    ASSERT_EQ(report.grmt.written_sequences, 1u,
+              "GRMT-only save should write the second corpus");
+    ASSERT_TRUE(std::filesystem::exists(first_grmt),
+                "Writing the second GRMT must preserve the first GRMT");
+    ASSERT_TRUE(vocab_before == read_bytes(vocab_path),
+                "GRMT-only save must not mutate the shared vocab bytes");
+
+    UniByte verified(config);
+    const auto manifest = TokenizerArtifacts::loadTokenizerArtifactBundle(config, verified);
+    ASSERT_EQ(manifest.grmt_header.vocab_size, shared_size,
+              "Second GRMT must validate against the shared vocab");
+
+    std::filesystem::remove(first_grmt);
+    std::filesystem::remove(second_grmt);
+    std::filesystem::remove(vocab_path);
+    return true;
+}
+
 //======================================================//
 //  Section 14: GPU Upload Tests
 //======================================================//
@@ -3079,6 +3139,7 @@ int main(int argc, char** argv) {
     // Section 13: Vocabulary Persistence Tests
     suite.addTest("Vocab.TextExportBinaryLoad", testVocabTextExportBinaryLoad);
     suite.addTest("Vocab.SaveLoadBinary", testVocabSaveLoadBinary);
+    suite.addTest("Vocab.SharedAcrossMultipleGrmts", testSharedVocabWritesMultipleGrmtsWithoutMutation);
     
     // Section 14: GPU Upload Tests
     suite.addTest("GPU.ViterbiForwardTrie", testCudaViterbiForwardUsesForwardTrie);

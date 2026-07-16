@@ -332,8 +332,11 @@ These concerns are outside the execution-block math boundary now:
 
 Inference now follows the same strict row-local execution contract:
 
-- decode-time ExecutionBlock calls source atom positions from the global atom mask (`bindings.d_atom_mask`),
-- null atom-pointer decode calls are gone,
+- KV-cached inference prefill may run the gate and structured execution steps,
+- the final prefill register file moves into session-owned `GenerationState`,
+- decode windows do not re-bootstrap or re-execute the block in Phase 1,
+- prefill execution sources atom positions from the global atom mask (`bindings.d_atom_mask`),
+- null atom-pointer execution calls are forbidden,
 - the old last-write `<NUM>` binding fallback is gone,
 - generation masks numeric atom placeholders only when decode-time selector/runtime state cannot supply a concrete slot binding.
 

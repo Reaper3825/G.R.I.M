@@ -47,7 +47,9 @@ The GRIM project uses a three-tier configuration system:
       "grim_text_training_data": "resources/models/GRIM-text/training/data/training_data.grmt",
       "batch_size": 4,
       "learning_rate": 0.0001,
-      "current_curriculum": "Pre-Trainingv1",
+      "tokenizer_curriculum": "Pre-Trainingv1",
+      "tokenizer_output_grmt": "resources/models/GRIM-text/training/data/pretraining_v1.grmt",
+      "training_curriculum": "Pre-Trainingv1",
       "current_model_training": "",
       "clear_merged_cache_on_merge": false,
       "loss_label_smoothing_enabled": true,
@@ -68,6 +70,21 @@ The GRIM project uses a three-tier configuration system:
 - `training.config.generation_*` leaves → `GenerationConfig` through `loadGenerationConfig()`
 - `training.config.clear_merged_cache_on_merge` → `TrainingHyperparameters::clear_merged_cache_on_merge`
 - `data_collection` → GRIM process consumers; do not add typed GRIM-text snapshot leaves for these fields
+
+### Multi-GRMT tokenizer and training targets
+
+Tokenizer output and trainer input are intentionally independent:
+
+- `tokenizer_output_grmt` is the GRMT created by the tokenizer subprocess.
+- `tokenizer_curriculum` selects the curriculum encoded into that output.
+- `grim_text_training_data` is the GRMT consumed by model training.
+- `training_curriculum` names the curriculum represented by that input.
+- `grim_text_vocab` is shared by every compatible GRMT. With
+  `force_rebuild_vocab=false`, a missing or incompatible tokenizer output is
+  rebuilt using that vocabulary without rewriting it.
+
+This permits PT, execution-control, SFT, validation, and test GRMTs to coexist
+without changing the checkpoint's token-ID mapping.
 
 ### 3. ai_config_paths.hpp
 **Location:** `d:\G.R.I.M\control\ai_config_paths.hpp`

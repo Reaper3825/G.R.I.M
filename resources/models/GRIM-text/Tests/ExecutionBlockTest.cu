@@ -12,6 +12,7 @@
 #include "../Shared/Batching/BatchPayload.hpp"
 #include "../Shared/Forward/ModelForwardOutputs.hpp"
 #include "../Shared/UnigramByte/AtomTable.hpp"
+#include "../Shared/UnigramByte/TokenLayout.hpp"
 
 #include <cuda_runtime.h>
 
@@ -290,6 +291,7 @@ bool testExecutionRecordDefaults(std::string& message) {
     EB_ASSERT_EQ(rec.arg1_slot, -1, "arg1_slot default -1");
     EB_ASSERT_EQ(rec.arg2_slot, -1, "arg2_slot default -1");
     EB_ASSERT_EQ(rec.op_id, -1, "op_id default -1");
+    EB_ASSERT_EQ(rec.write_slot, -1, "write_slot default -1");
     EB_ASSERT_NEAR(rec.value_before_1, 0.0f, 1e-6f, "value_before_1 default");
     EB_ASSERT_NEAR(rec.value_before_2, 0.0f, 1e-6f, "value_before_2 default");
     EB_ASSERT_NEAR(rec.value_after, 0.0f, 1e-6f, "value_after default");
@@ -440,6 +442,7 @@ bool testInferencePromptControlBoundary(std::string& message) {
         /*batch_capacity=*/1,
         /*max_cached_seq_len=*/16,
         /*execution_num_slots=*/8,
+        /*execution_num_scratch_slots=*/0,
         /*number_encoder_digit_slots=*/0,
         /*number_encoder_max_abs_pow10=*/0);
 
@@ -482,6 +485,54 @@ bool testScratchSlotConstraint(std::string& message) {
 }
 
 //======================================================//
+//  14. Inference slot compiler respects scratch prefix
+//======================================================//
+
+bool testInferenceSlotCompiler(std::string& message) {
+    const int int_token = GRIM::Tokenizer::atomTypeToTokenId(
+        GRIM::Tokenizer::AtomType::ATOM_INT);
+    const int float_token = GRIM::Tokenizer::atomTypeToTokenId(
+        GRIM::Tokenizer::AtomType::ATOM_FLOAT);
+    const std::vector<int> tokens{
+        GRIM::Tokenizer::BOS_TOKEN_ID,
+        int_token,
+        GRIM::Tokenizer::byteToTokenId(static_cast<uint8_t>('+')),
+        float_token};
+    const std::vector<uint8_t> atom_mask{0, 1, 0, 1};
+
+    const auto slot_map = GRIM::Batching::buildInferenceExecutionSlotMap(
+        tokens, atom_mask, /*num_slots=*/5, /*num_scratch_slots=*/2);
+
+    EB_ASSERT_EQ(slot_map.size(), tokens.size(), "slot map geometry");
+    EB_ASSERT_EQ(slot_map[0], -1, "BOS remains unbound");
+    EB_ASSERT_EQ(slot_map[1], 2, "first atom starts after scratch prefix");
+    EB_ASSERT_EQ(slot_map[2], -1, "plain byte remains unbound");
+    EB_ASSERT_EQ(slot_map[3], 3, "second atom receives next value slot");
+    return true;
+}
+
+//======================================================//
+//  15. Inference slot compiler fails on capacity overflow
+//======================================================//
+
+bool testInferenceSlotCompilerOverflow(std::string& message) {
+    const int int_token = GRIM::Tokenizer::atomTypeToTokenId(
+        GRIM::Tokenizer::AtomType::ATOM_INT);
+    const std::vector<int> tokens{int_token, int_token};
+    const std::vector<uint8_t> atom_mask{1, 1};
+
+    bool threw = false;
+    try {
+        (void)GRIM::Batching::buildInferenceExecutionSlotMap(
+            tokens, atom_mask, /*num_slots=*/3, /*num_scratch_slots=*/2);
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+    EB_ASSERT_TRUE(threw, "numeric atoms beyond value-slot capacity must throw");
+    return true;
+}
+
+//======================================================//
 //  Entry point
 //======================================================//
 
@@ -505,6 +556,8 @@ int GRIM::Test::runExecutionBlockTests() {
     suite.addTest("Output: multi-step aggregation", testExecutionBlockOutputMultiStep);
     suite.addTest("Control: final prompt-token boundary", testInferencePromptControlBoundary);
     suite.addTest("Config: scratch-slot constraint", testScratchSlotConstraint);
+    suite.addTest("Inference: slot compiler uses value-slot range", testInferenceSlotCompiler);
+    suite.addTest("Inference: slot compiler rejects overflow", testInferenceSlotCompilerOverflow);
 
     auto results = suite.runAll();
 

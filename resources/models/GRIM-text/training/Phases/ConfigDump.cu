@@ -142,7 +142,7 @@ std::string formatJsonValue(const nlohmann::json& value) {
 }
 
 const char* classifyConfigSection(const std::string& key) {
-    if (startsWith(key, "current_")) {
+    if (startsWith(key, "current_") || key == "training_curriculum") {
         return "Run selectors";
     }
     if (startsWith(key, "grim_text_")) {

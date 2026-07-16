@@ -20,6 +20,14 @@ For PSC Bridges-2, use the launcher as usual; it selects the TrainingLoop preset
 ./scripts/run_train_on_bridges2.sh --build --gpu-type h100-80
 ```
 
+The Bridges-2 build and training batch jobs both load `gcc/13.3.1-p20240614`.
+The launcher passes that module's `gcc` and `g++` paths explicitly to CMake and
+deletes an existing build tree when its cached C++ compiler differs. This keeps
+the compiler headers, link-time `libstdc++`, and runtime `libstdc++` on one ABI.
+After changing this toolchain contract, run one `--build`; a binary from the old
+hybrid GCC 8 cache can require `GLIBCXX_3.4.32` even though CMake recorded
+`/usr/bin/c++`.
+
 Manual Bridges-2 configure/build, after loading modules and setting CUDA 12 via `GRIM_CUDA_ROOT`, is:
 
 ```bash

@@ -25,6 +25,59 @@
 namespace GRIM {
 namespace Batching {
 
+std::vector<int32_t> buildInferenceExecutionSlotMap(
+    const std::vector<int>& token_ids,
+    const std::vector<uint8_t>& atom_mask,
+    int num_slots,
+    int num_scratch_slots)
+{
+    const char* caller = "buildInferenceExecutionSlotMap";
+    if (token_ids.size() != atom_mask.size()) {
+        throw std::runtime_error(
+            std::string(caller) + ": token_ids.size()=" + std::to_string(token_ids.size()) +
+            " != atom_mask.size()=" + std::to_string(atom_mask.size()));
+    }
+    if (num_slots <= 0) {
+        throw std::runtime_error(std::string(caller) + ": num_slots must be > 0");
+    }
+    if (num_scratch_slots < 0 || num_scratch_slots >= num_slots) {
+        throw std::runtime_error(
+            std::string(caller) + ": num_scratch_slots=" +
+            std::to_string(num_scratch_slots) + " must be in [0, num_slots)");
+    }
+
+    std::vector<int32_t> slot_map(token_ids.size(), -1);
+    int next_slot = num_scratch_slots;
+    for (size_t t = 0; t < token_ids.size(); ++t) {
+        if (atom_mask[t] == 0) {
+            if (Tokenizer::isAtomTokenId(token_ids[t])) {
+                throw std::runtime_error(
+                    std::string(caller) + ": atom token at position " + std::to_string(t) +
+                    " is missing tokenizer-authored atom_mask metadata");
+            }
+            continue;
+        }
+        if (!Tokenizer::isAtomTokenId(token_ids[t])) {
+            throw std::runtime_error(
+                std::string(caller) + ": atom_mask marks non-atom token at position " +
+                std::to_string(t));
+        }
+        const auto atom_type = Tokenizer::tokenIdToAtomType(token_ids[t]);
+        if (!Tokenizer::isNumericAtom(atom_type)) {
+            throw std::runtime_error(
+                std::string(caller) + ": non-numeric atom at position " +
+                std::to_string(t) + " cannot bind ExecutionBlock value memory");
+        }
+        if (next_slot >= num_slots) {
+            throw std::runtime_error(
+                std::string(caller) + ": numeric atom count exceeds available value-slot capacity=" +
+                std::to_string(num_slots - num_scratch_slots));
+        }
+        slot_map[t] = next_slot++;
+    }
+    return slot_map;
+}
+
 namespace {
 
 void requirePositiveVocab(int vocab_size, const char* caller)
@@ -971,6 +1024,7 @@ BatchPayload buildInferenceBatchPayload(
     size_t batch_capacity,
     size_t max_cached_seq_len,
     int execution_num_slots,
+    int execution_num_scratch_slots,
     int number_encoder_digit_slots,
     int number_encoder_max_abs_pow10)
 {
@@ -1018,13 +1072,21 @@ BatchPayload buildInferenceBatchPayload(
             throw std::runtime_error(
                 "buildInferenceBatchPayload: execution_num_slots must be > 0 when token_to_slot_map is provided");
         }
+        if (execution_num_scratch_slots < 0 ||
+            execution_num_scratch_slots >= execution_num_slots) {
+            throw std::runtime_error(
+                "buildInferenceBatchPayload: execution_num_scratch_slots=" +
+                std::to_string(execution_num_scratch_slots) +
+                " must be in [0, execution_num_slots)");
+        }
         for (int t = 0; t < seq_len; ++t) {
             const int32_t slot = token_to_slot_map[static_cast<size_t>(t)];
             if (slot != -1) {
-                if (slot < 0 || slot >= execution_num_slots) {
+                if (slot < execution_num_scratch_slots || slot >= execution_num_slots) {
                     throw std::runtime_error(
                         "buildInferenceBatchPayload: token_to_slot_map[" + std::to_string(t) +
-                        "]=" + std::to_string(slot) + " out of range [0, " +
+                        "]=" + std::to_string(slot) + " out of value-slot range [" +
+                        std::to_string(execution_num_scratch_slots) + ", " +
                         std::to_string(execution_num_slots) + ") or -1");
                 }
             }

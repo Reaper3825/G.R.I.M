@@ -1,4 +1,5 @@
 #include "dataset_target.hpp"
+#include "io/concept_block_io_flatbuffer.hpp"
 #include "io/dataset_io.hpp"
 #include "io/dataset_io_json.hpp"
 #include "pipeline/pipeline_context.hpp"
@@ -14,49 +15,7 @@
 using json = nlohmann::json;
 namespace fs = std::filesystem;
 
-// ─── ConceptBlock JSON helpers ───────────────────────────
-
-static json conceptBlockToJson(const GRIM::ConceptBlock& cb) {
-    json j;
-    j["id"]                 = cb.id;
-    j["name"]               = cb.name;
-    j["question"]           = cb.question;
-    j["intermediates"]      = cb.intermediates;
-    j["explanation"]        = cb.explanation;
-    j["answer"]             = cb.answer;
-    j["execution_gate_target"] =
-        GRIM::conceptExecutionGateTargetJsonValue(cb.execution_gate_target);
-    j["intermediate_count"] = cb.intermediate_count;
-    j["step_index"]         = cb.step_index;
-    j["format_type"]        = cb.format_type;
-    j["timestamp"]          = cb.timestamp;
-    if (!cb.source_sequence_id.empty())
-        j["source_sequence_id"] = cb.source_sequence_id;
-
-    if (!cb.state_0.type.empty() || !cb.state_0.atoms.empty()) {
-        json s0;
-        s0["atoms"] = cb.state_0.atoms;
-        s0["type"]  = cb.state_0.type;
-        j["state_0"] = s0;
-    }
-    if (!cb.execution.empty()) {
-        json arr = json::array();
-        for (const auto& st : cb.execution) {
-            json e;
-            e["op"]     = st.op;
-            e["args"]   = st.args;
-            e["result"] = st.result;
-            if (!st.arg_slots.empty())
-                e["arg_slots"] = st.arg_slots;
-            arr.push_back(std::move(e));
-        }
-        j["execution"] = std::move(arr);
-    }
-    if (cb.state_1.has_result)
-        j["state_1"] = json{{"result", cb.state_1.result}};
-    return j;
-}
-
+// Legacy JSONL import helper. New persistence is concept_blocks.fb.
 static GRIM::ConceptBlock conceptBlockFromJson(const json& j) {
     GRIM::ConceptBlock cb;
     cb.id                 = j.value("id", std::string());
@@ -611,6 +570,10 @@ bool DatasetTarget::appendStructuredEntry(
 // ─── ConceptBlock persistence ────────────────────────────
 
 fs::path DatasetTarget::conceptBlocksPath() const {
+    return massDatasetPath_.parent_path() / "concept_blocks.fb";
+}
+
+fs::path DatasetTarget::legacyConceptBlocksPath() const {
     return massDatasetPath_.parent_path() / "concept_blocks.jsonl";
 }
 
@@ -623,39 +586,70 @@ void DatasetTarget::rebuildCBIndex() {
 bool DatasetTarget::loadConceptBlocks() {
     conceptBlocks_.clear();
     cbIdIndex_.clear();
-    fs::path path = conceptBlocksPath();
-    if (!fs::exists(path)) return true;
+    const fs::path path = conceptBlocksPath();
+    const fs::path legacy_path = legacyConceptBlocksPath();
 
-    std::ifstream file(path);
+    bool legacy_is_newer = false;
+    if (fs::exists(path) && fs::exists(legacy_path)) {
+        std::error_code fb_time_error;
+        std::error_code legacy_time_error;
+        const auto fb_time = fs::last_write_time(path, fb_time_error);
+        const auto legacy_time = fs::last_write_time(legacy_path, legacy_time_error);
+        legacy_is_newer = !fb_time_error && !legacy_time_error
+            && legacy_time > fb_time;
+    }
+
+    if (fs::exists(path) && !legacy_is_newer) {
+        std::string error;
+        if (!GRIM::ConceptBlockIO::loadFlatBuffer(path, conceptBlocks_, &error)) {
+            std::cerr << "[DatasetTarget] Error loading " << path.string()
+                      << ": " << error << "\n";
+            return false;
+        }
+        rebuildCBIndex();
+        return true;
+    }
+
+    // One-time, non-destructive migration. This also refreshes the FB when a
+    // legacy maintenance script has updated the JSONL more recently. The
+    // JSONL remains in place as a rollback artifact.
+    if (!fs::exists(legacy_path)) return true;
+
+    std::ifstream file(legacy_path);
     if (!file.is_open()) return false;
 
     std::string line;
+    size_t line_number = 0;
     while (std::getline(file, line)) {
+        ++line_number;
         if (line.empty()) continue;
         try {
             conceptBlocks_.push_back(conceptBlockFromJson(json::parse(line)));
-        } catch (...) { continue; }
+        } catch (const std::exception& ex) {
+            std::cerr << "[DatasetTarget] Skipping invalid legacy concept block at line "
+                      << line_number << ": " << ex.what() << "\n";
+        }
     }
     rebuildCBIndex();
+    if (!saveConceptBlocks()) {
+        std::cerr << "[DatasetTarget] Failed to migrate " << legacy_path.string()
+                  << " to " << path.string() << "\n";
+        return false;
+    }
+    std::cout << "[DatasetTarget] Migrated " << conceptBlocks_.size()
+              << " concept blocks to " << path.string() << "\n";
     return true;
 }
 
 bool DatasetTarget::saveConceptBlocks() const {
-    fs::path path = conceptBlocksPath();
-    std::error_code ec;
-    fs::create_directories(path.parent_path(), ec);
-
-    fs::path tmpPath = path;
-    tmpPath += ".tmp";
-    {
-        std::ofstream out(tmpPath, std::ios::trunc);
-        if (!out.is_open()) return false;
-        for (const auto& cb : conceptBlocks_)
-            out << conceptBlockToJson(cb).dump() << "\n";
-        if (!out.good()) return false;
+    std::string error;
+    if (!GRIM::ConceptBlockIO::saveFlatBuffer(
+            conceptBlocksPath(), conceptBlocks_, &error)) {
+        std::cerr << "[DatasetTarget] Error saving concept blocks: "
+                  << error << "\n";
+        return false;
     }
-    fs::rename(tmpPath, path, ec);
-    return !ec;
+    return true;
 }
 
 size_t DatasetTarget::conceptBlockCount() const {

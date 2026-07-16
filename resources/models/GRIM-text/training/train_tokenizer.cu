@@ -18,7 +18,7 @@
 //
 //   { "outcome": "error", "error_message": "<precise>" }
 //
-// vocab_path / training_data_path are NOT in the IPC payload — they are
+// vocab_path / output_grmt_path are NOT in the IPC payload — they are
 // owned by TokenizerHP and the parent resolves them from the same
 // hyperparameter grouping. Echoing them over IPC would
 // create a second source of truth.
@@ -111,16 +111,17 @@ int main(int argc, char** argv) {
             GRIM::HyperParameters::ModelExecutionMode::TRAINING);
         const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(startup_config);
 
-        if (tokenizer_hp.data_path.empty() || tokenizer_hp.vocab_path.empty()) {
+        if (tokenizer_hp.output_data_path.empty() || tokenizer_hp.vocab_path.empty()) {
             throw std::runtime_error(
-            "TokenizerHP missing required tokenizer artifact paths (vocab and/or training_data)");
+            "TokenizerHP missing required tokenizer output and/or shared vocab path");
         }
 
         std::cout << "=== GRIM Tokenizer Subprocess ===\n"
                   << "Status file: " << args.status_file << "\n"
                   << "Mode:        " << (tokenizer_hp.force_rebuild_vocab ? "FORCE REBUILD" : "build if missing/mismatched") << "\n"
+                  << "Curriculum:  " << tokenizer_hp.tokenizer_curriculum << "\n"
                   << "Vocab path:  " << tokenizer_hp.vocab_path << "\n"
-                  << "GRMT path:   " << tokenizer_hp.data_path << "\n" << std::endl;
+                  << "Output GRMT: " << tokenizer_hp.output_data_path << "\n" << std::endl;
 
         const bool ok = GRIM::PrepareTrainingDataFromCache(tokenizer_hp);
 
@@ -132,16 +133,16 @@ int main(int argc, char** argv) {
             throw std::runtime_error(
             "PrepareTrainingDataFromCache reported success but vocab file is missing: " + tokenizer_hp.vocab_path);
         }
-        if (tokenizer_hp.data_path.empty() || !fs::exists(tokenizer_hp.data_path)) {
+        if (tokenizer_hp.output_data_path.empty() || !fs::exists(tokenizer_hp.output_data_path)) {
             throw std::runtime_error(
-            "PrepareTrainingDataFromCache reported success but GRMT file is missing: " + tokenizer_hp.data_path);
+            "PrepareTrainingDataFromCache reported success but output GRMT is missing: " + tokenizer_hp.output_data_path);
         }
 
-        const std::uint32_t vocab_size = GRIM::GRMT::readHeaderOrThrow(tokenizer_hp.data_path).vocab_size;
+        const std::uint32_t vocab_size = GRIM::GRMT::readHeaderOrThrow(tokenizer_hp.output_data_path).vocab_size;
 
         std::cout << "\n=== Tokenizer Subprocess Complete ===\n"
               << "Vocab:      " << tokenizer_hp.vocab_path << "\n"
-              << "GRMT:       " << tokenizer_hp.data_path << "\n"
+              << "GRMT:       " << tokenizer_hp.output_data_path << "\n"
                   << "Vocab size: " << vocab_size << std::endl;
 
         writeStatusSuccess(args.status_file, vocab_size);

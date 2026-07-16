@@ -138,7 +138,7 @@ Phase1Result executePhase1(GRIM::Config::AiConfigSnapshot config) {
             std::ostringstream oss;
             oss << "[Subprocess:" << tok_result.subprocess_name
                 << "] ok_proceed | vocab=" << tok_result.vocab_path
-                << " | data=" << tok_result.training_data_path
+                << " | tokenizer_output=" << tok_result.output_grmt_path
                 << " | vocab_size=" << tok_result.vocab_size;
             EmitModuleInfo(ModuleId::Training, oss.str(), 0);
             tokenizer_outcome = Phase1Outcome::ready_for_training;
@@ -148,7 +148,7 @@ Phase1Result executePhase1(GRIM::Config::AiConfigSnapshot config) {
             std::ostringstream oss;
             oss << "[Subprocess:" << tok_result.subprocess_name
                 << "] ok_one_off | vocab=" << tok_result.vocab_path
-                << " | data=" << tok_result.training_data_path
+                << " | tokenizer_output=" << tok_result.output_grmt_path
                 << " | vocab_size=" << tok_result.vocab_size
                 << " | ai_config.json subprocess.tokenizer.only_mode=true; "
                    "skipping remaining startup and Phases 2-3";

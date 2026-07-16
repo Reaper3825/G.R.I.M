@@ -1,0 +1,57 @@
+// FlatBuffers schema for the GRIM concept-block dataset.
+// Regenerate C++ with:
+//   flatc --cpp --scoped-enums -o DataCollection DataCollection/concept_block.fbs
+//
+// `schema_version` is the dataset-level migration boundary. Additive table
+// fields remain backward compatible; bump the version only when readers need
+// explicit migration behavior.
+namespace GRIMConcept;
+
+enum ExecutionGateTarget : ubyte {
+    Unsupervised = 0,
+    Noop = 1,
+    Execute = 2
+}
+
+table ConceptBlockState0 {
+    atoms: [double];
+    type: string;
+}
+
+table ConceptExecutionStep {
+    op: string;
+    args: [double];
+    arg_slots: [int];
+    result: double;
+}
+
+table ConceptBlockState1 {
+    result: double;
+}
+
+table ConceptBlock {
+    id: string;
+    name: string;
+    question: string;
+    intermediates: [string];
+    answer: string;
+    execution_gate_target: ExecutionGateTarget = Unsupervised;
+    explanation: [string];
+    state_0: ConceptBlockState0;
+    execution: [ConceptExecutionStep];
+    state_1: ConceptBlockState1;
+    intermediate_count: int;
+    step_index: [int];
+    format_type: string;
+    source_sequence_id: string;
+    timestamp: long;
+}
+
+table ConceptBlockDataset {
+    schema_version: uint = 1;
+    blocks: [ConceptBlock];
+}
+
+root_type ConceptBlockDataset;
+file_identifier "GRCB";
+file_extension "fb";

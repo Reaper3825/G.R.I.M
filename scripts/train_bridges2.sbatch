@@ -10,9 +10,8 @@
 #SBATCH --output=logs/train_bridges2_%j.out
 #SBATCH --error=logs/train_bridges2_%j.err
 #
-# GRIM-text training on PSC Bridges-2 (batch). Runtime matches the interactive
-# srun wrapper in scripts/run_train_on_bridges2.sh (BRIDGES2_RUN_WRAPPER).
-# Bridges-2: sbatch uses --gpus=type:n; srun uses --gres=gpu:type:n.
+# GRIM-text training on PSC Bridges-2. This is the authoritative train_gpu
+# runtime path used by scripts/run_train_on_bridges2.sh.
 #
 # Defaults match run_train_on_bridges2.sh (override at submit: sbatch -p/-A/--gpus/-t).
 # If your partition QOS caps walltime lower, submit with e.g. sbatch -t 12:00:00 ....
@@ -25,7 +24,7 @@
 #
 # From your machine (syncs + submits a real batch job via sbatch on Bridges-2):
 #   ./scripts/run_train_on_bridges2.sh --sbatch
-# Build train_gpu on the cluster first (SSH; not Slurm batch):
+# Build train_gpu on the cluster first (submitted as a synchronous Slurm batch job):
 #   ./scripts/run_train_on_bridges2.sh --build
 #
 # Do not run this .sbatch file with ./ on a laptop — it only runs on a compute node
@@ -69,17 +68,56 @@ if [[ ! -f "$CONFIG_PATH" ]]; then
   exit 1
 fi
 
-# Mirror BRIDGES2_RUN_WRAPPER in scripts/run_train_on_bridges2.sh
-source /etc/profile.d/modules.sh 2>/dev/null || true
+# Initialize the CUDA runtime environment inside the allocated batch node.
+source /etc/profile.d/modules.sh 2>/dev/null || {
+  echo "ERROR: Bridges-2 module initialization failed." >&2
+  exit 1
+}
 module load cuda 2>/dev/null || true
+module load gcc/13.3.1-p20240614
 export GRIM_PROJECT_DIR="$GRIM_ROOT"
 source "$GRIM_ROOT/scripts/ensure_cuda12_for_training.sh" 2>/dev/null || true
 export PATH="${GRIM_CUDA_ROOT:-}/bin:$PATH"
 export LD_LIBRARY_PATH="${GRIM_CUDA_ROOT:-}/lib64:${LD_LIBRARY_PATH:-}"
 
+GXX_PATH=$(command -v g++)
+if [[ -z "$GXX_PATH" ]]; then
+  echo "ERROR: gcc/13.3.1-p20240614 did not provide g++ on $(hostname)." >&2
+  exit 1
+fi
+LIBSTDCXX_PATH=$(g++ -print-file-name=libstdc++.so.6)
+if [[ ! -f "$LIBSTDCXX_PATH" ]]; then
+  echo "ERROR: GCC runtime libstdc++.so.6 not found at $LIBSTDCXX_PATH." >&2
+  exit 1
+fi
+if ! strings "$LIBSTDCXX_PATH" | grep -qx 'GLIBCXX_3.4.32'; then
+  echo "ERROR: $LIBSTDCXX_PATH does not provide required ABI GLIBCXX_3.4.32." >&2
+  exit 1
+fi
+LIBSTDCXX_RESOLVED_PATH=$(ldd "$EXE" | awk '$1 == "libstdc++.so.6" && $2 == "=>" { print $3 }')
+if [[ -z "$LIBSTDCXX_RESOLVED_PATH" || ! -f "$LIBSTDCXX_RESOLVED_PATH" ]]; then
+  echo "ERROR: could not resolve libstdc++.so.6 for $EXE." >&2
+  ldd "$EXE" >&2
+  exit 1
+fi
+LIBSTDCXX_CANONICAL_PATH=$(readlink -f "$LIBSTDCXX_PATH")
+LIBSTDCXX_RESOLVED_CANONICAL_PATH=$(readlink -f "$LIBSTDCXX_RESOLVED_PATH")
+if [[ -z "$LIBSTDCXX_CANONICAL_PATH" || -z "$LIBSTDCXX_RESOLVED_CANONICAL_PATH" ]]; then
+  echo "ERROR: failed to canonicalize the expected or resolved libstdc++.so.6 path." >&2
+  exit 1
+fi
+if [[ "$LIBSTDCXX_RESOLVED_CANONICAL_PATH" != "$LIBSTDCXX_CANONICAL_PATH" ]]; then
+  echo "ERROR: $EXE is not resolving libstdc++.so.6 from the pinned GCC runtime." >&2
+  echo "  expected: $LIBSTDCXX_PATH -> $LIBSTDCXX_CANONICAL_PATH" >&2
+  echo "  resolved: $LIBSTDCXX_RESOLVED_PATH -> $LIBSTDCXX_RESOLVED_CANONICAL_PATH" >&2
+  ldd "$EXE" >&2
+  exit 1
+fi
+
 echo "Running train_gpu on $(hostname) at $(date)"
 echo "  GRIM_ROOT=$GRIM_ROOT"
 echo "  EXE=$EXE"
 echo "  config=$CONFIG_PATH"
+echo "  C++ runtime=$LIBSTDCXX_RESOLVED_PATH"
 "$EXE"
 echo "Done at $(date)"

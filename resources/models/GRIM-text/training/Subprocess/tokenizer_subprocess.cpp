@@ -36,9 +36,9 @@ std::uint32_t extract_vocab_size(const subprocess_result& env,
 tokenizer_subprocess_result run_tokenizer_subprocess(
     const Training::TrainingContext& ctx) {
     const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(ctx.config);
-    if (tokenizer_hp.vocab_path.empty() || tokenizer_hp.data_path.empty()) {
+    if (tokenizer_hp.vocab_path.empty() || tokenizer_hp.output_data_path.empty()) {
         throw std::runtime_error(
-            "tokenizer_subprocess: TokenizerHP missing vocab_path and/or data_path");
+            "tokenizer_subprocess: TokenizerHP missing vocab_path and/or output_data_path");
     }
 
     subprocess_request sreq;
@@ -70,7 +70,7 @@ tokenizer_subprocess_result run_tokenizer_subprocess(
     // The child does NOT echo these over IPC; doing so would let the wire schema
     // drift from ai_config.json / TokenizerHP.
     result.vocab_path = tokenizer_hp.vocab_path;
-    result.training_data_path = tokenizer_hp.data_path;
+    result.output_grmt_path = tokenizer_hp.output_data_path;
 
     // Rewrite ok_proceed -> ok_one_off when the config requested a one-off.
     if (tokenizer_hp.only_mode && result.outcome == subprocess_outcome::ok_proceed) {

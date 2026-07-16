@@ -674,12 +674,15 @@ void finalizeStepOrThrow(
     cudaStream_t stream
 ) {
     int h_error = 0;
+    int write_slot = -1;
     int ri[3] = {0, 0, 0};
     float rf[3] = {0.0f, 0.0f, 0.0f};
     if (diag_out) {
         CUDA_CHECK(cudaMemcpyAsync(ri, diag.execRecordI(), 3 * sizeof(int),
             cudaMemcpyDeviceToHost, stream));
         CUDA_CHECK(cudaMemcpyAsync(rf, diag.execRecordF(), 3 * sizeof(float),
+            cudaMemcpyDeviceToHost, stream));
+        CUDA_CHECK(cudaMemcpyAsync(&write_slot, diag.execIndices() + 3, sizeof(int),
             cudaMemcpyDeviceToHost, stream));
     }
     CUDA_CHECK(cudaMemcpyAsync(&h_error, diag.numericErrorFlag(), sizeof(int),
@@ -690,6 +693,7 @@ void finalizeStepOrThrow(
         diag_out->record.arg1_slot = ri[0];
         diag_out->record.arg2_slot = ri[1];
         diag_out->record.op_id = ri[2];
+        diag_out->record.write_slot = write_slot;
         diag_out->record.value_before_1 = rf[0];
         diag_out->record.value_before_2 = rf[1];
         diag_out->record.value_after = rf[2];
@@ -699,8 +703,8 @@ void finalizeStepOrThrow(
         const char* op_str = (ri[2] >= 0 && ri[2] < 4) ? op_names[ri[2]] : "?";
         char msg[256];
         snprintf(msg, sizeof(msg),
-            "[EXEC_RECORD_EQUATION] step=%d: slot[%d](%.4f) %s slot[%d](%.4f) = %.4f",
-            step, ri[0], rf[0], op_str, ri[1], rf[1], rf[2]);
+            "[EXEC_RECORD_EQUATION] step=%d: slot[%d](%.4f) %s slot[%d](%.4f) -> slot[%d]=%.4f",
+            step, ri[0], rf[0], op_str, ri[1], rf[1], write_slot, rf[2]);
         GRIM::Logging::EmitModuleInfo(
             GRIM::Logging::ModuleId::ExecutionBlock, msg);
     }

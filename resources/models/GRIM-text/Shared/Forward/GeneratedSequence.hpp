@@ -19,6 +19,13 @@ struct ExecutionStepControlTelemetry {
     int predicted_class = -1;  // 0=CONTINUE, 1=STOP
     float continue_probability = 0.0f;
     float stop_probability = 0.0f;
+    int arg1_slot = -1;
+    int arg2_slot = -1;
+    int op_id = -1;
+    int write_slot = -1;
+    float value_before_1 = 0.0f;
+    float value_before_2 = 0.0f;
+    float value_after = 0.0f;
 };
 
 struct ExecutionControlTelemetry {
@@ -31,6 +38,8 @@ struct ExecutionControlTelemetry {
     bool stopped_by_model = false;
     bool stopped_at_max_steps = false;
     std::vector<ExecutionStepControlTelemetry> steps;
+    std::vector<float> final_slot_values;
+    std::vector<uint8_t> final_slot_valid;
 };
 
 struct GeneratedSequence {

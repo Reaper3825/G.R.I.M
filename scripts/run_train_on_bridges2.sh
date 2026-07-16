@@ -38,7 +38,7 @@
 #   ai_config.json   Canonical config at the repo root. Edit that file before launching.
 #   --pull-vocab     Download Bridges-2 training/data/vocab.bin, vocab.txt, and training_data.grmt into the local training data dir, then exit.
 #   --pull-logs      Download the latest Bridges-2 *_tape.log, training_<session>.log, and telemetry_<session>.csv from training/logs into the local logs dir, then exit.
-#   --sbatch         Submit batch job (scripts/train_bridges2.sbatch).
+#   --sbatch         Explicitly select batch submission (already the default for train_gpu).
 #   --partition P    GPU-shared (default) or GPU.
 #   --gpu-type T     h100-80 (default), v100-32, v100-16, or l40s-48.
 #   --account A      Override GRIM_BRIDGES2_ACCOUNT.
@@ -54,7 +54,7 @@
 #   --jobs N         make -j N for train_gpu (default 100; override with GRIM_BRIDGES2_MAKE_JOBS).
 #   --exclude NODES  Exclude a Slurm node list from only the build allocation (for example, w001).
 #                    GRIM_BRIDGES2_BUILD_EXCLUDE_NODES provides the same setting through the environment.
-#   --time T         SLURM wall-clock time limit for train_gpu (--sbatch and interactive srun).
+#   --time T         SLURM wall-clock time limit for the train_gpu batch job.
 #                    Format: HH:MM:SS or D-HH:MM:SS. Default: 2-00:00:00
 #                    (GPU-shared's QOS max; avoids the partition's 1-hour default).
 #                    Examples: --time 1:00:00  --time 0:30:00  --time 2-12:00:00
@@ -180,6 +180,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ "$DO_TD" == true || "$DO_UT" == true || "$DO_TT" == true ]]; then
+  if [[ "$USE_SBATCH" == true ]]; then
+    echo "ERROR: --sbatch cannot be combined with --TD, --UT, or --TT." >&2
+    exit 1
+  fi
+else
+  USE_SBATCH=true
+fi
+
 if [[ "$ALLOW_VCPKG_TOOL_DOWNLOADS" == true ]]; then
   export GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS=1
 fi
@@ -266,18 +275,10 @@ if [[ "$DO_PULL_LOGS" == true ]]; then
   ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new "$BRIDGES2_SSH" "REMOTE_TRAINING_LOGS=$REMOTE_TRAINING_LOGS_Q bash -s" <<'EOF' | tar -xzf - -C "$TRAINING_LOGS_DIR_EXPANDED"
 set -e
 logs_dir="$REMOTE_TRAINING_LOGS"
-cleanup_snapshot() {
-  if [ -n "${snapshot_dir:-}" ]; then
-    rm -rf "$snapshot_dir"
-  fi
-}
-trap cleanup_snapshot EXIT
-
 if ! cd "$logs_dir" 2>/dev/null; then
   echo "__GRIM_NO_LOGS__" >&2
   exit 3
 fi
-snapshot_dir=$(mktemp -d "$logs_dir/.grim_log_pull_snapshot.XXXXXX")
 
 files=$(find . -maxdepth 1 -type f \( -name '*_tape.log' -o -name 'training_*.log' -o -name 'telemetry_*.csv' -o -name 'train_*.out' -o -name 'train_*.err' \) -printf '%T@ %P\n' | sort -nr | head -20 | cut -d' ' -f2-)
 if [ -z "$files" ]; then
@@ -285,24 +286,7 @@ if [ -z "$files" ]; then
   exit 3
 fi
 
-copied=0
-while IFS= read -r file; do
-  [ -n "$file" ] || continue
-  if cp -p -- "$file" "$snapshot_dir/$file" 2>/dev/null; then
-    copied=1
-  else
-    echo "WARNING: skipped log that could not be snapshotted: $file" >&2
-  fi
-done <<FILES
-$files
-FILES
-
-if [ "$copied" -eq 0 ]; then
-  echo "__GRIM_NO_LOGS__" >&2
-  exit 3
-fi
-
-find "$snapshot_dir" -maxdepth 1 -type f -printf '%P\n' | tar -czf - -C "$snapshot_dir" -T -
+printf '%s\n' "$files" | tar --ignore-failed-read -czf - -T -
 EOF
   pipe_status=("${PIPESTATUS[@]}")
   status=${pipe_status[0]}
@@ -1143,9 +1127,10 @@ if [[ "$DO_BUILD" == true ]] && [[ "$BRIDGES2_SYNCED" == true ]] && [[ "$DO_CLEA
   DO_INCREMENTAL=true
 fi
 
-# Bridges-2 modules: cuda, gcc, cmake, ninja. CUDA 12+ required.
+# Bridges-2 modules: cuda, pinned GCC 13.3, cmake, ninja. CUDA 12+ required.
 # TrainingLoop itself requires CMake 3.20; prefer the cluster's default cmake module instead of pinning 3.30.x here.
-BRIDGES2_MODULES="source /etc/profile.d/modules.sh 2>/dev/null || true; module load cuda 2>/dev/null || module load cuda/12 2>/dev/null || module load cuda/12.0 2>/dev/null || true; module load gcc 2>/dev/null || true; module load cmake 2>/dev/null || true; module load ninja 2>/dev/null || module load ninja/1.11 2>/dev/null || module load ninja/1.10 2>/dev/null || true"
+BRIDGES2_GCC_MODULE="gcc/13.3.1-p20240614"
+BRIDGES2_MODULES="source /etc/profile.d/modules.sh 2>/dev/null || { echo 'ERROR: Bridges-2 module initialization failed.' >&2; exit 1; }; module load cuda 2>/dev/null || module load cuda/12 2>/dev/null || module load cuda/12.0 2>/dev/null || true; module load $BRIDGES2_GCC_MODULE; module load cmake 2>/dev/null || true; module load ninja 2>/dev/null || module load ninja/1.11 2>/dev/null || module load ninja/1.10 2>/dev/null || true"
 # Default to project CUDA 12 when 11.x is detected (CUTLASS requires 12+). Uses GRIM_PROJECT_DIR=$BRIDGES2_DIR to find cuda-12.0.
 BRIDGES2_ENSURE_CUDA12="export GRIM_PROJECT_DIR=\$BRIDGES2_DIR; source \"\$BRIDGES2_DIR/scripts/ensure_cuda12_for_training.sh\" 2>/dev/null || true"
 # CUDAToolkit_ROOT for cmake comes from GRIM_CUDA_ROOT (set by ensure_cuda12_for_training.sh). Do not inline
@@ -1377,13 +1362,14 @@ case "$BRIDGES2_CMAKE_PRESET" in
   bridges2-v100-release) BRIDGES2_CMAKE_FALLBACK_PRESET="bridges2-v100-release-make" ;;
 esac
 BRIDGES2_BUILD_TOOL_DETECT="grim_resolved_preset=\"$BRIDGES2_CMAKE_PRESET\"; grim_cmake_make_program=\"\"; grim_cmake_generator=\"\"; if command -v ninja >/dev/null 2>&1; then grim_cmake_make_program=\$(command -v ninja); grim_cmake_generator='Ninja'; echo \"  CMake generator backend: Ninja (\$grim_cmake_make_program)\"; elif command -v ninja-build >/dev/null 2>&1; then grim_cmake_make_program=\$(command -v ninja-build); grim_cmake_generator='Ninja'; echo \"  CMake generator backend: Ninja via ninja-build (\$grim_cmake_make_program)\"; elif command -v make >/dev/null 2>&1; then grim_cmake_make_program=\$(command -v make); grim_cmake_generator='Unix Makefiles'; if [ -n \"$BRIDGES2_CMAKE_FALLBACK_PRESET\" ]; then grim_resolved_preset=\"$BRIDGES2_CMAKE_FALLBACK_PRESET\"; fi; echo \"  CMake generator backend: Unix Makefiles fallback (\$grim_cmake_make_program)\"; elif command -v gmake >/dev/null 2>&1; then grim_cmake_make_program=\$(command -v gmake); grim_cmake_generator='Unix Makefiles'; if [ -n \"$BRIDGES2_CMAKE_FALLBACK_PRESET\" ]; then grim_resolved_preset=\"$BRIDGES2_CMAKE_FALLBACK_PRESET\"; fi; echo \"  CMake generator backend: Unix Makefiles fallback via gmake (\$grim_cmake_make_program)\"; else echo \"ERROR: no compatible CMake generator backend found on Bridges-2 (need ninja, ninja-build, make, or gmake on PATH).\" >&2; exit 1; fi; export GRIM_BRIDGES2_RESOLVED_PRESET=\"\$grim_resolved_preset\"; export GRIM_BRIDGES2_CMAKE_GENERATOR=\"\$grim_cmake_generator\"; export GRIM_BRIDGES2_CMAKE_MAKE_PROGRAM=\"\$grim_cmake_make_program\""
+BRIDGES2_COMPILER_CACHE_POLICY="grim_c_compiler=\$(command -v gcc); grim_cxx_compiler=\$(command -v g++); if [ -z \"\$grim_c_compiler\" ] || [ -z \"\$grim_cxx_compiler\" ]; then echo 'ERROR: pinned Bridges-2 GCC module did not provide gcc and g++.' >&2; exit 1; fi; echo \"  C/C++ toolchain: \$grim_c_compiler / \$grim_cxx_compiler\"; if [ -f \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" ]; then cached_cxx_compiler=\$(grep '^CMAKE_CXX_COMPILER:FILEPATH=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); if [ -z \"\$cached_cxx_compiler\" ] || [ \"\$cached_cxx_compiler\" != \"\$grim_cxx_compiler\" ]; then echo \"  stale CMake C++ compiler cache: \${cached_cxx_compiler:-missing} -> \$grim_cxx_compiler\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake uses the pinned GCC toolchain consistently\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; grim_need_configure=1; fi; fi"
 BRIDGES2_DEP_MODE_LABEL="TrainingLoop vcpkg manifest"
 BRIDGES2_DEP_BOOTSTRAP="$BRIDGES2_VCPKG_ENSURE && echo \"  vcpkg checkout: baseline/toolchain checks complete; sweeping for stale locks...\" && $BRIDGES2_VCPKG_LOCK_SWEEP && $BRIDGES2_MANIFEST_ASSERT"
 BRIDGES2_DEP_PRECONFIG="$BRIDGES2_VCPKG_TOOL_POLICY && $BRIDGES2_VCPKG_ENV && $BRIDGES2_VCPKG_MANIFEST_POLICY"
 BRIDGES2_CMAKE_DEP_ARGS="-DCMAKE_TOOLCHAIN_FILE=\"$VCPKG_TOOLCHAIN\" -DVCPKG_MANIFEST_DIR=\"$BRIDGES2_DIR/$TRAINING_DIR\" -DVCPKG_INSTALLED_DIR=\"$BRIDGES2_TRAINING_VCPKG_INSTALLED\" -DVCPKG_TARGET_TRIPLET=x64-linux -DVCPKG_MANIFEST_INSTALL=\$cmake_manifest_install -DGRIM_TRAINING_USE_MANUAL_DEPS=OFF -DGRIM_TRAINING_ENABLE_VCPKG_FALLBACK=ON"
 BRIDGES2_PREP_BUILD="grim_need_configure=0; if [ -f \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" ]; then cached_toolchain=\$(grep '^CMAKE_TOOLCHAIN_FILE:FILEPATH=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); cached_installed=\$(grep '^VCPKG_INSTALLED_DIR:PATH=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); cached_manual=\$(grep '^GRIM_TRAINING_USE_MANUAL_DEPS:BOOL=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); if [ -n \"\$cached_toolchain\" ] && [ \"\$cached_toolchain\" != \"$VCPKG_TOOLCHAIN\" ]; then echo \"  stale CMake toolchain cache: \$cached_toolchain -> $VCPKG_TOOLCHAIN\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure with the pinned vcpkg cache\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; grim_need_configure=1; elif [ -n \"\$cached_installed\" ] && [ \"\$cached_installed\" != \"$BRIDGES2_TRAINING_VCPKG_INSTALLED\" ]; then echo \"  stale TrainingLoop vcpkg installed cache: \$cached_installed -> $BRIDGES2_TRAINING_VCPKG_INSTALLED\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure the manifest install root\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; grim_need_configure=1; elif [ -n \"\$cached_manual\" ] && [ \"\$cached_manual\" != \"OFF\" ]; then echo \"  stale TrainingLoop dependency mode cache: manual deps -> OFF\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure for manifest-mode vcpkg\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; grim_need_configure=1; fi; else grim_need_configure=1; fi"
 BRIDGES2_PRECONFIGURE_BUILD="{ if [ -f \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" ]; then cached_generator=\$(grep '^CMAKE_GENERATOR:INTERNAL=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); cached_make_program=\$(grep '^CMAKE_MAKE_PROGRAM:FILEPATH=' \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" | cut -d= -f2- || true); if [ -n \"\$cached_generator\" ] && [ \"\$cached_generator\" != \"\$GRIM_BRIDGES2_CMAKE_GENERATOR\" ]; then echo \"  stale CMake generator cache: \$cached_generator -> \$GRIM_BRIDGES2_CMAKE_GENERATOR\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure with the current generator backend\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; grim_need_configure=1; elif [ -n \"\$cached_make_program\" ] && [ \"\$cached_make_program\" != \"\$GRIM_BRIDGES2_CMAKE_MAKE_PROGRAM\" ]; then echo \"  stale CMake make-program cache: \$cached_make_program -> \$GRIM_BRIDGES2_CMAKE_MAKE_PROGRAM\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can reconfigure with the current generator executable\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; grim_need_configure=1; elif [ \"\$GRIM_BRIDGES2_CMAKE_GENERATOR\" = \"Unix Makefiles\" ] && [ ! -f \"$BRIDGES2_DIR/$BUILD_DIR/Makefile\" ]; then echo \"  incomplete CMake build tree: missing Makefile for Unix Makefiles generator\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can finish a clean configure\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; grim_need_configure=1; elif [ \"\$GRIM_BRIDGES2_CMAKE_GENERATOR\" = \"Ninja\" ] && [ ! -f \"$BRIDGES2_DIR/$BUILD_DIR/build.ninja\" ]; then echo \"  incomplete CMake build tree: missing build.ninja for Ninja generator\"; echo \"  removing $BRIDGES2_DIR/$BUILD_DIR so CMake can finish a clean configure\"; rm -rf \"$BRIDGES2_DIR/$BUILD_DIR\"; grim_need_configure=1; fi; fi; if [ ! -f \"$BRIDGES2_DIR/$BUILD_DIR/CMakeCache.txt\" ]; then grim_need_configure=1; fi; }"
-BRIDGES2_CONFIGURE_STEP="{ if [ \"\${cmake_manifest_install}\" = \"ON\" ] || [ \"\${grim_need_configure:-1}\" = \"1\" ]; then echo \"  CMake configure: running for $BRIDGES2_DIR/$BUILD_DIR\"; cmake -S . -B \"$BRIDGES2_DIR/$BUILD_DIR\" -G \"\$GRIM_BRIDGES2_CMAKE_GENERATOR\" -DCMAKE_MAKE_PROGRAM=\"\$GRIM_BRIDGES2_CMAKE_MAKE_PROGRAM\" -DCMAKE_BUILD_TYPE=Release -DCUDAToolkit_ROOT=\$GRIM_CUDA_ROOT $BRIDGES2_CMAKE_DEP_ARGS; else echo \"  CMake configure: reusing existing build tree $BRIDGES2_DIR/$BUILD_DIR\"; fi; }"
+BRIDGES2_CONFIGURE_STEP="{ if [ \"\${cmake_manifest_install}\" = \"ON\" ] || [ \"\${grim_need_configure:-1}\" = \"1\" ]; then echo \"  CMake configure: running for $BRIDGES2_DIR/$BUILD_DIR\"; cmake -S . -B \"$BRIDGES2_DIR/$BUILD_DIR\" -G \"\$GRIM_BRIDGES2_CMAKE_GENERATOR\" -DCMAKE_MAKE_PROGRAM=\"\$GRIM_BRIDGES2_CMAKE_MAKE_PROGRAM\" -DCMAKE_C_COMPILER=\"\$grim_c_compiler\" -DCMAKE_CXX_COMPILER=\"\$grim_cxx_compiler\" -DCMAKE_BUILD_TYPE=Release -DCUDAToolkit_ROOT=\$GRIM_CUDA_ROOT $BRIDGES2_CMAKE_DEP_ARGS; else echo \"  CMake configure: reusing existing build tree $BRIDGES2_DIR/$BUILD_DIR\"; fi; }"
 
 # --build
 # Default to building train_gpu PLUS train_tokenizer because train_gpu spawns
@@ -1404,8 +1390,8 @@ elif [[ "$DO_TT" == true ]]; then
 fi
 
 # Keep only lightweight orchestration on the login node. The actual build
-# (vcpkg lock checks, CMake configure, and compiler/linker work) runs inside
-# a Slurm allocation so a sick login node cannot stall the build pipeline.
+# (vcpkg lock checks, CMake configure, and compiler/linker work) runs as a
+# batch job so the login-side srun forwarding thread is not part of launch.
 BRIDGES2_BUILD_PARTITION="${GRIM_BRIDGES2_BUILD_PARTITION:-$PARTITION}"
 BRIDGES2_BUILD_CPUS="${GRIM_BRIDGES2_BUILD_CPUS:-8}"
 BRIDGES2_BUILD_TIME_LIMIT="${GRIM_BRIDGES2_BUILD_TIME_LIMIT:-$BRIDGES2_TIME_LIMIT}"
@@ -1436,17 +1422,19 @@ if [[ -n "$BRIDGES2_BUILD_EXCLUDE_NODES" ]]; then
 fi
 BRIDGES2_BUILD_TIME_ARGS="-t $BRIDGES2_BUILD_TIME_LIMIT"
 BRIDGES2_BUILD_TIME_LABEL="$BRIDGES2_BUILD_TIME_LIMIT"
-BRIDGES2_BUILD_SRUN_ARGS="-p $BRIDGES2_BUILD_PARTITION $SLURM_ACCOUNT_ARGS --ntasks=1 --cpus-per-task=$BRIDGES2_BUILD_CPUS $BRIDGES2_BUILD_GPU_ARGS $BRIDGES2_BUILD_EXCLUDE_ARGS $BRIDGES2_BUILD_TIME_ARGS"
+BRIDGES2_BUILD_SBATCH_ARGS="-p $BRIDGES2_BUILD_PARTITION $SLURM_ACCOUNT_ARGS --ntasks=1 --cpus-per-task=$BRIDGES2_BUILD_CPUS $BRIDGES2_BUILD_GPU_ARGS $BRIDGES2_BUILD_EXCLUDE_ARGS $BRIDGES2_BUILD_TIME_ARGS"
 
 # Single remote command for the build, used both by the staged path below and by the
 # single-shot combined submission.
 BRIDGES2_REMOTE_BUILD_SCRIPT="$BRIDGES2_REMOTE_STATE_DIR/run_train_on_bridges2.build.$BRIDGES2_RUN_ID.sh"
+BRIDGES2_REMOTE_BUILD_LOG="$BRIDGES2_REMOTE_STATE_DIR/run_train_on_bridges2.build.$BRIDGES2_RUN_ID.log"
 BRIDGES2_REMOTE_BUILD_SCRIPT_Q="$(remote_quote "$BRIDGES2_REMOTE_BUILD_SCRIPT")"
+BRIDGES2_REMOTE_BUILD_LOG_Q="$(remote_quote "$BRIDGES2_REMOTE_BUILD_LOG")"
 BRIDGES2_REMOTE_STATE_DIR_Q="$(remote_quote "$BRIDGES2_REMOTE_STATE_DIR")"
 BRIDGES2_DIR_Q="$(remote_quote "$BRIDGES2_DIR")"
-BRIDGES2_BUILD_INNER_REMOTE_CMD="BRIDGES2_DIR=$BRIDGES2_DIR; $BRIDGES2_CUDA_ARCH cd \$BRIDGES2_DIR && $BRIDGES2_VCPKG_PLACEHOLDER_REPAIR && $BRIDGES2_REMOTE_BUILD_STATE_SETUP && $BRIDGES2_SUBMODULE && $BRIDGES2_DEP_BOOTSTRAP && $BRIDGES2_PREP_BUILD && cd \$BRIDGES2_DIR/$TRAINING_DIR/TrainingLoop && ${BRIDGES2_CLEAN}$BRIDGES2_MODULES && $BRIDGES2_ENSURE_CUDA12 && $BRIDGES2_BUILD_TOOL_DETECT && $BRIDGES2_PRECONFIGURE_BUILD && $BRIDGES2_DEP_PRECONFIG && echo \"  CMake profile: \$GRIM_BRIDGES2_RESOLVED_PRESET via \$GRIM_BRIDGES2_CMAKE_GENERATOR\" && $BRIDGES2_CONFIGURE_STEP && cmake --build \"$BRIDGES2_DIR/$BUILD_DIR\" --target $BUILD_TARGET -j $BRIDGES2_MAKE_JOBS"
-BRIDGES2_BUILD_SCRIPT_B64="$(printf '%s\n' 'set -e' "$BRIDGES2_BUILD_INNER_REMOTE_CMD" | base64 | tr -d '\n')"
-BRIDGES2_BUILD_REMOTE_CMD="mkdir -p $BRIDGES2_REMOTE_STATE_DIR_Q && printf %s '$BRIDGES2_BUILD_SCRIPT_B64' | base64 -d > $BRIDGES2_REMOTE_BUILD_SCRIPT_Q && chmod 700 $BRIDGES2_REMOTE_BUILD_SCRIPT_Q && cd $BRIDGES2_DIR_Q && echo \"  Slurm build allocation: srun $BRIDGES2_BUILD_SRUN_ARGS\" && srun $BRIDGES2_BUILD_SRUN_ARGS bash $BRIDGES2_REMOTE_BUILD_SCRIPT_Q; grim_build_rc=\$?; rm -f $BRIDGES2_REMOTE_BUILD_SCRIPT_Q; exit \$grim_build_rc"
+BRIDGES2_BUILD_INNER_REMOTE_CMD="BRIDGES2_DIR=$BRIDGES2_DIR; $BRIDGES2_CUDA_ARCH cd \$BRIDGES2_DIR && $BRIDGES2_VCPKG_PLACEHOLDER_REPAIR && $BRIDGES2_REMOTE_BUILD_STATE_SETUP && $BRIDGES2_SUBMODULE && $BRIDGES2_DEP_BOOTSTRAP && $BRIDGES2_PREP_BUILD && cd \$BRIDGES2_DIR/$TRAINING_DIR/TrainingLoop && ${BRIDGES2_CLEAN}$BRIDGES2_MODULES && $BRIDGES2_ENSURE_CUDA12 && $BRIDGES2_BUILD_TOOL_DETECT && $BRIDGES2_COMPILER_CACHE_POLICY && $BRIDGES2_PRECONFIGURE_BUILD && $BRIDGES2_DEP_PRECONFIG && echo \"  CMake profile: \$GRIM_BRIDGES2_RESOLVED_PRESET via \$GRIM_BRIDGES2_CMAKE_GENERATOR\" && $BRIDGES2_CONFIGURE_STEP && cmake --build \"$BRIDGES2_DIR/$BUILD_DIR\" --target $BUILD_TARGET -j $BRIDGES2_MAKE_JOBS"
+BRIDGES2_BUILD_SCRIPT_B64="$(printf '%s\n' '#!/bin/bash' 'set -e' "$BRIDGES2_BUILD_INNER_REMOTE_CMD" | base64 | tr -d '\n')"
+BRIDGES2_BUILD_REMOTE_CMD="mkdir -p $BRIDGES2_REMOTE_STATE_DIR_Q && printf %s '$BRIDGES2_BUILD_SCRIPT_B64' | base64 -d > $BRIDGES2_REMOTE_BUILD_SCRIPT_Q && chmod 700 $BRIDGES2_REMOTE_BUILD_SCRIPT_Q && cd $BRIDGES2_DIR_Q && echo \"  Slurm build submission: sbatch --wait $BRIDGES2_BUILD_SBATCH_ARGS\" && sbatch --wait --job-name=grim-build --output=$BRIDGES2_REMOTE_BUILD_LOG_Q --error=$BRIDGES2_REMOTE_BUILD_LOG_Q $BRIDGES2_BUILD_SBATCH_ARGS $BRIDGES2_REMOTE_BUILD_SCRIPT_Q; grim_build_rc=\$?; cat $BRIDGES2_REMOTE_BUILD_LOG_Q; rm -f $BRIDGES2_REMOTE_BUILD_SCRIPT_Q $BRIDGES2_REMOTE_BUILD_LOG_Q; exit \$grim_build_rc"
 
 if [[ "$DO_BUILD" == true ]]; then
   if [[ "${GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS:-0}" == "1" ]]; then
@@ -1462,9 +1450,9 @@ if [[ "$DO_BUILD" == true ]]; then
   echo "  vcpkg installed dir: $BRIDGES2_TRAINING_VCPKG_INSTALLED"
   echo "  vcpkg downloads cache: $BRIDGES2_VCPKG_DOWNLOADS"
   echo "  CMake preset: $BRIDGES2_CMAKE_PRESET (auto-falls back to -make when Ninja is unavailable)"
-  echo "  build execution: Slurm srun on partition=$BRIDGES2_BUILD_PARTITION, cpus=$BRIDGES2_BUILD_CPUS, gpu=$([[ "$BRIDGES2_BUILD_USE_GPU" == "1" ]] && echo "$GPU_TYPE:1" || echo none), time=$BRIDGES2_BUILD_TIME_LABEL"
+  echo "  build execution: Slurm sbatch --wait on partition=$BRIDGES2_BUILD_PARTITION, cpus=$BRIDGES2_BUILD_CPUS, gpu=$([[ "$BRIDGES2_BUILD_USE_GPU" == "1" ]] && echo "$GPU_TYPE:1" || echo none), time=$BRIDGES2_BUILD_TIME_LABEL"
   if [[ "$SINGLE_SHOT" == true ]]; then
-    echo "  (build is launched with srun inside the single combined SSH command at submit time)"
+    echo "  (build is submitted with sbatch --wait inside the single combined SSH command)"
   else
     ACTIVE_REMOTE_STATE_FILE="$BRIDGES2_BUILD_STATE_FILE"
     ACTIVE_REMOTE_LABEL="build"
@@ -1509,7 +1497,8 @@ if [[ "$SINGLE_SHOT" != true ]]; then
   ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cat > $BRIDGES2_DIR/ai_config.json" < "$REPO_ROOT/ai_config.json"
 fi
 
-# Batch job
+# Normal training always uses a batch job. Login-side srun forwarding is not
+# reliable on Bridges-2 and is unnecessary for a durable multi-day run.
 if [[ "$USE_SBATCH" == true ]]; then
   SBATCH_PATH="$REPO_ROOT/scripts/train_bridges2.sbatch"
   if [[ ! -f "$SBATCH_PATH" ]]; then
@@ -1611,14 +1600,6 @@ elif [[ "$DO_TD" == true ]]; then
     ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && srun $TD_SRUN_ARGS $TD_RUN_WRAPPER"
   fi
 else
-  # Normal: srun train_gpu (load cuda module + set LD_LIBRARY_PATH so compute node finds libcudart)
-  BRIDGES2_RUN_WRAPPER="bash -c 'source /etc/profile.d/modules.sh 2>/dev/null || true; module load cuda 2>/dev/null || true; export GRIM_PROJECT_DIR=\"$BRIDGES2_DIR\"; source \"$BRIDGES2_DIR/scripts/ensure_cuda12_for_training.sh\" 2>/dev/null || true; export PATH=\"\${GRIM_CUDA_ROOT:-}/bin:\$PATH\"; export LD_LIBRARY_PATH=\"\${GRIM_CUDA_ROOT:-}/lib64:\$LD_LIBRARY_PATH\"; cd \"$BRIDGES2_DIR\" && exec \"$REMOTE_EXE\"'"
-  echo "Running train_gpu on Bridges-2 (partition=$PARTITION, gpu=$GPU_TYPE)..."
-  print_bridges2_time_limit
-  SRUN_ARGS="-p $PARTITION $SLURM_ACCOUNT_ARGS --gres=gpu:$GPU_TYPE:1 $SLURM_TIME_ARGS --pty"
-  if [[ -t 0 ]]; then
-    ssh -t $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && srun $SRUN_ARGS $BRIDGES2_RUN_WRAPPER"
-  else
-    ssh $BRIDGES2_SSH_OPTS "$BRIDGES2_SSH" "cd $BRIDGES2_DIR && srun $SRUN_ARGS $BRIDGES2_RUN_WRAPPER"
-  fi
+  echo "ERROR: internal launcher state reached training without batch submission or a special mode." >&2
+  exit 1
 fi

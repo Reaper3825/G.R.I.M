@@ -197,7 +197,7 @@ public:
     const std::vector<std::string>& assignedCurriculumOrder() const;
 
     // ── Curriculum manifest export ───────────────────────
-    // Writes curriculum_manifest.json next to concept_blocks.jsonl.
+    // Writes curriculum_manifest.json next to concept_blocks.fb.
     // Contains the union of concept_block_ids from all assigned
     // curricula so the GRIM-text DataLoader can filter at load time.
 
@@ -225,6 +225,7 @@ private:
 
     std::filesystem::path configFilePath() const;
     std::filesystem::path conceptBlocksPath() const;
+    std::filesystem::path legacyConceptBlocksPath() const;
     std::filesystem::path curriculumRegistryPath() const;
     void rebuildSequenceCache(const std::vector<GRIM::Pipeline::TaggedEntry>& entries);
     void rebuildCBIndex();

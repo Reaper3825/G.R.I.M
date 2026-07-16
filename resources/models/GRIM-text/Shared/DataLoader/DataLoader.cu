@@ -22,8 +22,10 @@
 #include <limits>
 #include <sstream>
 #include <string>
+#include <system_error>
 
 #include <nlohmann/json.hpp>
+#include "../../../../../DataCollection/concept_block_generated.h"
 #include "../GRMT/GrmtFormat.hpp"
 #include "../LogRecorder/LogRecorder.hpp"
 #include "../UnigramByte/TokenLayout.hpp"
@@ -45,7 +47,8 @@ namespace GRIM {
 
 // ─── Concept blocks corpus loading ──────────────────────────────────────────
 //
-// Loads concept_blocks.jsonl and returns parsed JSON objects.
+// Loads concept_blocks.fb (with a legacy JSONL fallback during rollout) and
+// returns the canonical JSON objects consumed by the sequence builder.
 // The canonical builder (ConceptExecutionSequenceBuilder) handles all
 // structured execution record building, text rendering, and payload
 // compilation — no __SLOTS__ debug path.
@@ -219,49 +222,188 @@ CurriculumFilter loadCurriculumFilter(const fs::path& dir, const std::string& cu
 	return filter;
 }
 
-void loadConceptBlocksJson(const fs::path& cache_dir,
-                           std::vector<json>& out,
-                           CurriculumFilter& out_filter,
-                           const std::string& curriculum_name = "") {
-	fs::path p = cache_dir / "concept_blocks.jsonl";
-	std::ifstream in(p);
-	if (!in.is_open()) {
-		std::cout << "[DataLoader] No concept_blocks.jsonl at " << p.string()
-		          << " (optional)\n";
+std::string fbString(const flatbuffers::String* value) {
+	return value ? value->str() : std::string{};
+}
+
+json conceptBlockFlatBufferToJson(const GRIMConcept::ConceptBlock& source) {
+	json j;
+	j["id"] = fbString(source.id());
+	j["name"] = fbString(source.name());
+	j["question"] = fbString(source.question());
+	j["answer"] = fbString(source.answer());
+	j["format_type"] = fbString(source.format_type());
+	j["source_sequence_id"] = fbString(source.source_sequence_id());
+	j["timestamp"] = source.timestamp();
+	j["intermediate_count"] = source.intermediate_count();
+
+	switch (source.execution_gate_target()) {
+		case GRIMConcept::ExecutionGateTarget::Noop:
+			j["execution_gate_target"] = "noop";
+			break;
+		case GRIMConcept::ExecutionGateTarget::Execute:
+			j["execution_gate_target"] = "execute";
+			break;
+		default:
+			j["execution_gate_target"] = "ignore";
+			break;
+	}
+
+	j["intermediates"] = json::array();
+	if (const auto* values = source.intermediates()) {
+		for (const auto* value : *values) j["intermediates"].push_back(fbString(value));
+	}
+	j["explanation"] = json::array();
+	if (const auto* values = source.explanation()) {
+		for (const auto* value : *values) j["explanation"].push_back(fbString(value));
+	}
+	j["step_index"] = json::array();
+	if (const auto* values = source.step_index()) {
+		for (const auto value : *values) j["step_index"].push_back(value);
+	}
+
+	if (const auto* state0 = source.state_0()) {
+		json state;
+		state["type"] = fbString(state0->type());
+		state["atoms"] = json::array();
+		if (const auto* atoms = state0->atoms()) {
+			for (const auto value : *atoms) state["atoms"].push_back(value);
+		}
+		j["state_0"] = std::move(state);
+	}
+
+	if (const auto* steps = source.execution()) {
+		j["execution"] = json::array();
+		for (const auto* source_step : *steps) {
+			if (!source_step) continue;
+			json step;
+			step["op"] = fbString(source_step->op());
+			step["result"] = source_step->result();
+			step["args"] = json::array();
+			if (const auto* args = source_step->args()) {
+				for (const auto value : *args) step["args"].push_back(value);
+			}
+			step["arg_slots"] = json::array();
+			if (const auto* slots = source_step->arg_slots()) {
+				for (const auto value : *slots) step["arg_slots"].push_back(value);
+			}
+			j["execution"].push_back(std::move(step));
+		}
+	}
+
+	if (const auto* state1 = source.state_1()) {
+		j["state_1"] = json{{"result", state1->result()}};
+	}
+	return j;
+}
+
+bool selectedByCurriculum(const std::string& id, const CurriculumFilter& filter) {
+	return !filter.has_filter ||
+	       filter.concept_ids.find(id) != filter.concept_ids.end() ||
+	       filter.plaintext_ids.find(id) != filter.plaintext_ids.end();
+}
+
+void loadConceptBlocks(const fs::path& cache_dir,
+                       std::vector<json>& out,
+                       CurriculumFilter& out_filter,
+                       const std::string& curriculum_name = "") {
+	const fs::path flatbuffer_path = cache_dir / "concept_blocks.fb";
+	const fs::path legacy_path = cache_dir / "concept_blocks.jsonl";
+	out_filter = loadCurriculumFilter(cache_dir, curriculum_name);
+
+	if (fs::exists(flatbuffer_path)) {
+		if (fs::exists(legacy_path)) {
+			std::error_code fb_time_error;
+			std::error_code legacy_time_error;
+			const auto fb_time = fs::last_write_time(flatbuffer_path, fb_time_error);
+			const auto legacy_time = fs::last_write_time(legacy_path, legacy_time_error);
+			if (!fb_time_error && !legacy_time_error && legacy_time > fb_time) {
+				throw std::runtime_error(
+					"[DataLoader] FATAL: legacy concept_blocks.jsonl is newer than "
+					"concept_blocks.fb. Open the dataset in DataHub to refresh the "
+					"FlatBuffer before training.");
+			}
+		}
+		std::ifstream input(flatbuffer_path, std::ios::binary | std::ios::ate);
+		if (!input.is_open()) {
+			throw std::runtime_error(
+				"[DataLoader] FATAL: cannot open " + flatbuffer_path.string());
+		}
+		const std::streamsize size = input.tellg();
+		if (size <= 0) {
+			throw std::runtime_error(
+				"[DataLoader] FATAL: concept-block FlatBuffer is empty: " +
+				flatbuffer_path.string());
+		}
+		input.seekg(0, std::ios::beg);
+		std::vector<uint8_t> buffer(static_cast<size_t>(size));
+		if (!input.read(reinterpret_cast<char*>(buffer.data()), size)) {
+			throw std::runtime_error(
+				"[DataLoader] FATAL: failed to read " + flatbuffer_path.string());
+		}
+
+		flatbuffers::Verifier verifier(buffer.data(), buffer.size());
+		if (!GRIMConcept::VerifyConceptBlockDatasetBuffer(verifier)) {
+			throw std::runtime_error(
+				"[DataLoader] FATAL: FlatBuffer verification failed for " +
+				flatbuffer_path.string());
+		}
+		const auto* dataset = GRIMConcept::GetConceptBlockDataset(buffer.data());
+		constexpr uint32_t supported_schema_version = 1;
+		if (!dataset || dataset->schema_version() > supported_schema_version) {
+			throw std::runtime_error(
+				"[DataLoader] FATAL: unsupported concept-block schema version " +
+				std::to_string(dataset ? dataset->schema_version() : 0));
+		}
+
+		size_t total = 0;
+		size_t accepted = 0;
+		if (const auto* blocks = dataset->blocks()) {
+			out.reserve(blocks->size());
+			for (const auto* block : *blocks) {
+				if (!block) continue;
+				++total;
+				const std::string id = fbString(block->id());
+				if (!selectedByCurriculum(id, out_filter)) continue;
+				out.push_back(conceptBlockFlatBufferToJson(*block));
+				++accepted;
+			}
+		}
+		std::cout << "[DataLoader] Loaded " << accepted;
+		if (out_filter.has_filter) std::cout << "/" << total;
+		std::cout << " concept blocks from " << flatbuffer_path.string() << std::endl;
 		return;
 	}
 
-	// Load optional curriculum filter.
-	out_filter = loadCurriculumFilter(cache_dir, curriculum_name);
+	// Rollout fallback only. Once the DataHub migration has produced the FB,
+	// a corrupt FB never silently falls back to a stale JSONL dataset.
+	std::ifstream input(legacy_path);
+	if (!input.is_open()) {
+		std::cout << "[DataLoader] No concept_blocks.fb or legacy JSONL at "
+		          << cache_dir.string() << "\n";
+		return;
+	}
+	std::cout << "[DataLoader] WARNING: using legacy concept_blocks.jsonl; "
+	          << "open the dataset in DataHub to migrate it.\n";
 
 	std::string line;
 	size_t total = 0;
 	size_t accepted = 0;
-	while (std::getline(in, line)) {
+	while (std::getline(input, line)) {
 		if (line.empty()) continue;
 		try {
 			auto j = json::parse(line);
 			++total;
-			if (out_filter.has_filter) {
-				std::string id = j.value("id", std::string());
-				if (out_filter.concept_ids.find(id) == out_filter.concept_ids.end() &&
-				    out_filter.plaintext_ids.find(id) == out_filter.plaintext_ids.end())
-					continue;
-			}
+			if (!selectedByCurriculum(j.value("id", std::string()), out_filter)) continue;
 			out.push_back(std::move(j));
 			++accepted;
 		} catch (const std::exception& e) {
 			std::cerr << "[DataLoader] concept_blocks.jsonl skip line: " << e.what() << "\n";
 		}
 	}
-	if (out_filter.has_filter) {
-		std::cout << "[DataLoader] Loaded " << accepted << "/" << total
-		          << " concept blocks (filtered by curriculum manifest) from "
-		          << p.string() << std::endl;
-	} else {
-		std::cout << "[DataLoader] Loaded " << accepted
-		          << " concept block entries from " << p.string() << std::endl;
-	}
+	std::cout << "[DataLoader] Loaded " << accepted;
+	if (out_filter.has_filter) std::cout << "/" << total;
+	std::cout << " legacy concept blocks from " << legacy_path.string() << std::endl;
 }
 
 }  // namespace
@@ -270,72 +412,89 @@ bool PrepareTrainingDataFromCache(
 	const GRIM::HyperParameters::TokenizerHP& tokenizer_hp) {
 	const size_t min_cleaned_text_length = static_cast<size_t>(tokenizer_hp.min_cleaned_text_length);
 
-	if (tokenizer_hp.data_path.empty()) {
-		std::cerr << "[DataLoader] No training_data path configured; skipping cache preparation." << std::endl;
+	if (tokenizer_hp.output_data_path.empty()) {
+		std::cerr << "[DataLoader] No tokenizer_output_grmt path configured; skipping cache preparation." << std::endl;
 		return false;
 	}
 	if (tokenizer_hp.vocab_path.empty()) {
-		throw std::runtime_error("[DataLoader] vocab path is empty; tokenizer artifacts must be saved/loaded as vocab+GRMT pair");
+		throw std::runtime_error("[DataLoader] vocab path is empty; tokenizer generation requires a shared vocabulary path");
 	}
+	if (tokenizer_hp.tokenizer_curriculum.empty()) {
+		throw std::runtime_error("[DataLoader] tokenizer_curriculum is empty; tokenizer generation requires an explicit curriculum target");
+	}
+
+	auto build_hp = tokenizer_hp;
+	build_hp.data_path = tokenizer_hp.output_data_path;
 
 	std::cout << "[DataLoader] Atom token range fixed at " << GRIM::Tokenizer::ATOM_VOCAB_SIZE
 	          << " type tokens" << std::endl;
 
-	GRIM::Tokenizer::UniByte tokenizer(tokenizer_hp);
+	GRIM::Tokenizer::UniByte tokenizer(build_hp);
 
-	const bool training_exists = fs::exists(tokenizer_hp.data_path);
+	const bool output_exists = fs::exists(build_hp.data_path);
 	const bool vocab_exists = fs::exists(tokenizer_hp.vocab_path);
-	bool artifact_pair_invalid = false;
+	bool reuse_shared_vocab = false;
 
-	// Vocab + GRMT are one artifact pair. A valid cache must load the vocab and
-	// validate the GRMT header vocab against the tokenizer's live token space.
-	if (!tokenizer_hp.force_rebuild_vocab && training_exists && vocab_exists) {
+	// Each tokenizer output is independently cacheable against the shared vocab.
+	// A mismatch invalidates this GRMT, not the vocabulary token space.
+	if (!tokenizer_hp.force_rebuild_vocab && output_exists && vocab_exists) {
 		try {
-			const auto manifest = GRIM::TokenizerArtifacts::loadTokenizerArtifactBundle(tokenizer_hp, tokenizer);
-			std::cout << "[DataLoader] Existing tokenizer artifact bundle is valid; "
+			const auto manifest = GRIM::TokenizerArtifacts::loadTokenizerArtifactBundle(build_hp, tokenizer);
+			std::cout << "[DataLoader] Existing tokenizer output is valid for shared vocab; "
 			          << "GRMT sequences=" << manifest.grmt_header.num_sequences
 			          << ", vocab_size=" << manifest.grmt_header.vocab_size
 			          << ". Skipping cache rebuild." << std::endl;
 			return true;
 		} catch (const std::exception& e) {
-			std::cerr << "[DataLoader] Tokenizer artifact bundle invalid: " << e.what()
-			          << "; rebuilding vocab+GRMT together." << std::endl;
-			artifact_pair_invalid = true;
-			tokenizer = GRIM::Tokenizer::UniByte(tokenizer_hp);
+			std::cerr << "[DataLoader] Tokenizer output is stale or mismatched: " << e.what()
+			          << "; rebuilding only " << build_hp.data_path
+			          << " with the existing shared vocab." << std::endl;
+			tokenizer = GRIM::Tokenizer::UniByte(build_hp);
+			(void)GRIM::TokenizerArtifacts::loadSharedTokenizerVocabulary(build_hp, tokenizer);
+			reuse_shared_vocab = true;
 		}
+	}
+	if (!tokenizer_hp.force_rebuild_vocab && !output_exists && vocab_exists) {
+		(void)GRIM::TokenizerArtifacts::loadSharedTokenizerVocabulary(build_hp, tokenizer);
+		reuse_shared_vocab = true;
+	}
+	if (reuse_shared_vocab && !tokenizer.initGPU()) {
+		throw std::runtime_error(
+			"[DataLoader] failed to initialize CUDA tokenizer runtime after loading shared vocab");
 	}
 
 	// Log reason for rebuild
 	if (tokenizer_hp.force_rebuild_vocab) {
-		std::cout << "[DataLoader] force_rebuild_vocab=true, rebuilding tokenizer artifact bundle..." << std::endl;
-	} else if (artifact_pair_invalid) {
-		std::cout << "[DataLoader] Rebuilding due to invalid tokenizer artifact bundle..." << std::endl;
-	} else if (training_exists && !vocab_exists) {
-		std::cout << "[DataLoader] GRMT present but vocab missing; rebuilding both artifacts." << std::endl;
-	} else if (!training_exists && vocab_exists) {
-		std::cout << "[DataLoader] Vocab present but GRMT missing; rebuilding both artifacts." << std::endl;
+		std::cout << "[DataLoader] force_rebuild_vocab=true; replacing shared vocab and tokenizer output..." << std::endl;
+	} else if (reuse_shared_vocab) {
+		std::cout << "[DataLoader] Shared vocab is frozen; generating tokenizer output GRMT only." << std::endl;
+	} else if (output_exists && !vocab_exists) {
+		std::cout << "[DataLoader] Tokenizer output exists but shared vocab is missing; training vocab and rebuilding output." << std::endl;
 	} else {
-		std::cout << "[DataLoader] Tokenizer artifact bundle missing; building from cache..." << std::endl;
+		std::cout << "[DataLoader] Shared vocab and tokenizer output are missing; building both." << std::endl;
 	}
 
 	// Derive the data directory from the configured GRMT path.
-	fs::path training_path(tokenizer_hp.data_path);
-	fs::path cache_dir = training_path.parent_path();
+	fs::path output_path(build_hp.data_path);
+	fs::path cache_dir = output_path.parent_path();
 
 	std::cout << "[DataLoader] Preparing GRMT from concept blocks in: "
 			  << cache_dir.string() << std::endl;
 
 	std::vector<nlohmann::json> concept_json_entries;
 	CurriculumFilter curriculum_filter;
-	loadConceptBlocksJson(cache_dir, concept_json_entries, curriculum_filter, tokenizer_hp.current_curriculum);
+	loadConceptBlocks(cache_dir, concept_json_entries, curriculum_filter, tokenizer_hp.tokenizer_curriculum);
 
 	// ── Curriculum startup summary ──
 	std::cout << "[DataLoader] ═══════════ Curriculum Config ═══════════" << std::endl;
-	if (!tokenizer_hp.current_curriculum.empty()) {
-		std::cout << "[DataLoader]   curriculum        = " << tokenizer_hp.current_curriculum << std::endl;
+	if (!tokenizer_hp.tokenizer_curriculum.empty()) {
+		std::cout << "[DataLoader]   tokenizer curriculum = " << tokenizer_hp.tokenizer_curriculum << std::endl;
 	} else {
 		std::cout << "[DataLoader]   curriculum        = (NONE — loading ALL blocks unfiltered)" << std::endl;
 	}
+	std::cout << "[DataLoader]   tokenizer output     = " << build_hp.data_path << std::endl;
+	std::cout << "[DataLoader]   training curriculum  = " << tokenizer_hp.training_curriculum << std::endl;
+	std::cout << "[DataLoader]   training input       = " << tokenizer_hp.data_path << std::endl;
 	std::cout << "[DataLoader]   format_as_concept = " << (curriculum_filter.format_as_concept ? "true" : "false") << std::endl;
 	std::cout << "[DataLoader]   has_filter        = " << (curriculum_filter.has_filter ? "true" : "false") << std::endl;
 	std::cout << "[DataLoader]   concept_ids       = " << curriculum_filter.concept_ids.size() << std::endl;
@@ -348,41 +507,47 @@ bool PrepareTrainingDataFromCache(
 	}
 
 	if (concept_json_entries.empty()) {
-		std::cerr << "[DataLoader] FATAL: No concept_blocks.jsonl entries found in "
+		std::cerr << "[DataLoader] FATAL: No concept-block entries found in "
 				  << cache_dir.string()
 				  << "; all training data must come from curriculum concept blocks."
 				  << std::endl;
 		throw std::runtime_error(
-			"DataLoader: concept_blocks.jsonl is required but empty or missing");
+			"DataLoader: concept_blocks.fb is required but empty or missing");
 	}
 
 	// No train/val/test split here — Phase1_Startup owns that decision.  
 	// DataLoader writes ALL sequences to a single GRMT file.
 
-	std::cout << "[DataLoader] Training new tokenizer pieces from concept blocks (target: " 
-			  << tokenizer_hp.target_vocab_size << " learned pieces)..." << std::endl;
-	std::vector<std::string> vocab_corpus;
-	vocab_corpus.reserve(concept_json_entries.size());
-	for (const auto& cj : concept_json_entries) {
-		std::string entry_id = cj.value("id", std::string());
-		bool is_plaintext = !curriculum_filter.format_as_concept ||
-		                    (curriculum_filter.has_filter &&
-		                     curriculum_filter.plaintext_ids.count(entry_id) > 0);
-		if (is_plaintext)
-			vocab_corpus.push_back(GRIM::DataLoader::renderPlainText(cj, false));
-		else
-			vocab_corpus.push_back(GRIM::DataLoader::renderCanonicalText(cj));
+	if (!reuse_shared_vocab) {
+		std::cout << "[DataLoader] Training new tokenizer pieces from concept blocks (target: "
+		          << tokenizer_hp.target_vocab_size << " learned pieces)..." << std::endl;
+		std::vector<std::string> vocab_corpus;
+		vocab_corpus.reserve(concept_json_entries.size());
+		for (const auto& cj : concept_json_entries) {
+			std::string entry_id = cj.value("id", std::string());
+			bool is_plaintext = !curriculum_filter.format_as_concept ||
+			                    (curriculum_filter.has_filter &&
+			                     curriculum_filter.plaintext_ids.count(entry_id) > 0);
+			if (is_plaintext)
+				vocab_corpus.push_back(GRIM::DataLoader::renderPlainText(cj, false));
+			else
+				vocab_corpus.push_back(GRIM::DataLoader::renderCanonicalText(cj));
+		}
+		if (!tokenizer.unigramLM().trainFromCorpus(vocab_corpus, build_hp)) {
+			throw std::runtime_error("[DataLoader] tokenizer training returned false; refusing to encode GRMT without a finalized tokenizer runtime state");
+		}
+		tokenizer.unigramLM().requireRuntimeReadyForLastTraining("DataLoader::PrepareTrainingDataFromCache");
+		const auto& tokenizer_runtime_report = tokenizer.lastTrainingRuntimeReport();
+		std::cout << "[DataLoader] Tokenizer runtime finalized for corpus encoding: required_viterbi_workspace_length="
+		          << tokenizer_runtime_report.required_viterbi_workspace_length
+		          << ", final_piece_count=" << tokenizer_runtime_report.final_piece_count
+		          << ", trie_generation=" << tokenizer_runtime_report.finalized_trie_generation
+		          << std::endl;
+	} else {
+		std::cout << "[DataLoader] Reusing shared tokenizer token space (vocab_size="
+		          << tokenizer.vocabSize()
+		          << "); vocabulary training is disabled for this output." << std::endl;
 	}
-	if (!tokenizer.unigramLM().trainFromCorpus(vocab_corpus, tokenizer_hp)) {
-		throw std::runtime_error("[DataLoader] tokenizer training returned false; refusing to encode GRMT without a finalized tokenizer runtime state");
-	}
-	tokenizer.unigramLM().requireRuntimeReadyForLastTraining("DataLoader::PrepareTrainingDataFromCache");
-	const auto& tokenizer_runtime_report = tokenizer.lastTrainingRuntimeReport();
-	std::cout << "[DataLoader] Tokenizer runtime finalized for corpus encoding: required_viterbi_workspace_length="
-	          << tokenizer_runtime_report.required_viterbi_workspace_length
-	          << ", final_piece_count=" << tokenizer_runtime_report.final_piece_count
-	          << ", trie_generation=" << tokenizer_runtime_report.finalized_trie_generation
-	          << std::endl;
 
 	using TokenizedSequence = GRIM::TokenizerArtifacts::GrmtSequence;
 
@@ -552,7 +717,7 @@ bool PrepareTrainingDataFromCache(
 
 	// Write single GRMT file — Phase1_Startup handles train/val splitting
 	fs::create_directories(cache_dir);
-	fs::path train_grmt = training_path;
+	fs::path train_grmt = output_path;
 
 	// Log sequence statistics + atom diagnostics
 	size_t total_tokens = 0;
@@ -589,9 +754,15 @@ bool PrepareTrainingDataFromCache(
 
 	GRIM::TokenizerArtifacts::TokenizerBundleSaveReport save_report;
 	try {
-		save_report = GRIM::TokenizerArtifacts::saveTokenizerArtifactBundle(tokenizer_hp, tokenizer, all_tokens);
+		if (reuse_shared_vocab) {
+			save_report = GRIM::TokenizerArtifacts::saveGrmtForSharedTokenizerVocabulary(
+				build_hp, tokenizer, all_tokens);
+		} else {
+			save_report = GRIM::TokenizerArtifacts::saveTokenizerArtifactBundle(
+				build_hp, tokenizer, all_tokens);
+		}
 	} catch (const std::exception& e) {
-		std::cerr << "[DataLoader] FATAL: failed to save tokenizer artifact bundle: "
+		std::cerr << "[DataLoader] FATAL: failed to save tokenizer output: "
 		          << e.what() << std::endl;
 		return false;
 	}
@@ -600,11 +771,11 @@ bool PrepareTrainingDataFromCache(
 		          << save_report.grmt.dropped_targetless_sequences
 		          << " sequences with 0 valid targets" << std::endl;
 	}
-	if (tokenizer_hp.save_text_vocab) {
+	if (!reuse_shared_vocab && tokenizer_hp.save_text_vocab) {
 		std::cout << "[DataLoader] Also saved human-readable .txt vocab" << std::endl;
 	}
 
-	std::cout << "[DataLoader] Saved tokenizer artifact bundle:" << std::endl
+	std::cout << "[DataLoader] Saved tokenizer output:" << std::endl
 	          << "  Vocab: " << tokenizer_hp.vocab_path << std::endl
 	          << "  GRMT:  " << train_grmt.string() << std::endl
 	          << "  Written sequences: " << save_report.grmt.written_sequences << std::endl
@@ -1194,6 +1365,16 @@ void LoadTrainingData(TrainingContext& ctx, const MemorySnapshot& startup_memory
 	const auto number_encoder_hp = GRIM::HyperParameters::numberEncoderConstructionHP(ctx.config);
 	const auto paths_hp = GRIM::HyperParameters::pathsHP(ctx.config);
 	const auto data_hp = GRIM::HyperParameters::dataLoadingHP(ctx.config);
+	if (tokenizer_hp.training_curriculum.empty()) {
+		throw std::runtime_error(
+			"LoadTrainingData: training_curriculum is empty; select the curriculum represented by grim_text_training_data");
+	}
+	EmitModuleInfo(
+		ModuleId::Training,
+		"[Phase1] Training corpus target | curriculum=" + tokenizer_hp.training_curriculum +
+			" | data=" + tokenizer_hp.data_path +
+			" | shared_vocab=" + tokenizer_hp.vocab_path,
+		0);
 
  	EmitModuleInfo(ModuleId::Training, "[Phase1] Validating paths...", 0);
  	Internal::validateStartupPaths(tokenizer_hp, paths_hp);

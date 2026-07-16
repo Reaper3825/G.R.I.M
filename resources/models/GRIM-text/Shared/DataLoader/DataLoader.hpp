@@ -10,10 +10,13 @@ namespace GRIM { namespace Tokenizer { class UniByte; } }
 namespace GRIM {
 
 // Prepares GRIM-text training data from curriculum concept blocks.
-// - Uses `TokenizerHP` for all tokenizer settings and resolved artifact paths.
-// - If a fresh GRMT already exists and `TokenizerHP::force_rebuild_vocab` is false, it is left as-is.
+// - Writes `TokenizerHP::output_data_path`; training separately consumes
+//   `TokenizerHP::data_path`, so multiple GRMTs may share one vocab.
+// - A valid existing output is cached. A missing/mismatched output is rebuilt
+//   with the shared vocab unless `force_rebuild_vocab=true` explicitly allows
+//   tokenizer retraining.
 // - Writes GRMT sequences with per-token numeric side-channel data.
-// - Loads `concept_blocks.jsonl` via ConceptExecutionSequenceBuilder:
+// - Loads `concept_blocks.fb` via ConceptExecutionSequenceBuilder:
 //   canonical structured execution records with paired bootstrap/teacher payloads.
 // - Optionally filtered by `curriculum_manifest.json` (concept_block_ids).
 //

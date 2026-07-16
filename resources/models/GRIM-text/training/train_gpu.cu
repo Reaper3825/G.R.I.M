@@ -172,7 +172,14 @@ json inferenceStatsJson(const GRIMText::Training::Phase2TextInferenceResult& res
             {"predicted_class", step.predicted_class},
             {"decision", step.predicted_class == 1 ? "stop" : "continue"},
             {"continue_probability", step.continue_probability},
-            {"stop_probability", step.stop_probability}
+            {"stop_probability", step.stop_probability},
+            {"arg1_slot", step.arg1_slot},
+            {"arg2_slot", step.arg2_slot},
+            {"op_id", step.op_id},
+            {"write_slot", step.write_slot},
+            {"value_before_1", step.value_before_1},
+            {"value_before_2", step.value_before_2},
+            {"value_after", step.value_after}
         });
     }
     return json{
@@ -191,6 +198,8 @@ json inferenceStatsJson(const GRIMText::Training::Phase2TextInferenceResult& res
             {"execution_suppressed_no_bootstrap", result.execution_control.execution_suppressed_no_bootstrap},
             {"stopped_by_model", result.execution_control.stopped_by_model},
             {"stopped_at_max_steps", result.execution_control.stopped_at_max_steps},
+            {"final_slot_values", result.execution_control.final_slot_values},
+            {"final_slot_valid", result.execution_control.final_slot_valid},
             {"steps", std::move(execution_steps)}
         }}
     };

@@ -360,6 +360,7 @@ GRIM::GeneratedSequence generateOneSequence(
         TailLogits tail;
         tail.n_rows = n_tail;
         tail.vocab = vocab_size;
+        std::vector<float> final_slot_valid_float;
         if (!forward_outputs.exec_outputs_per_row.empty()) {
             const auto& execution_output = forward_outputs.exec_outputs_per_row.front();
             if (execution_output.gate.predicted_class >= 0) {
@@ -376,11 +377,65 @@ GRIM::GeneratedSequence generateOneSequence(
                 telemetry.steps.reserve(execution_output.steps.size());
                 for (size_t step_idx = 0; step_idx < execution_output.steps.size(); ++step_idx) {
                     const auto& step = execution_output.steps[step_idx];
+                    const auto& record = step.record;
                     telemetry.steps.push_back(GRIM::ExecutionStepControlTelemetry{
                         static_cast<int>(step_idx),
                         step.stop_predicted_class,
                         step.continue_probability,
-                        step.stop_probability});
+                        step.stop_probability,
+                        record.arg1_slot,
+                        record.arg2_slot,
+                        record.op_id,
+                        record.write_slot,
+                        record.value_before_1,
+                        record.value_before_2,
+                        record.value_after});
+                }
+            }
+
+            // Phase 1 ownership handoff: the inference-prefill forward owns the
+            // register file while later encoder layers consume it. Once the
+            // forward is complete, move the final state into GenerationState
+            // before InferenceForwardScope clears temporary forward outputs.
+            if (execution_hp.enabled && active_payload.isInferencePrefill()) {
+                if (!execution_output.steps.empty()) {
+                    if (forward_outputs.exec_memories.empty() ||
+                        !forward_outputs.exec_memories.front().values.data ||
+                        !forward_outputs.exec_memories.front().valid_mask.data) {
+                        throw std::runtime_error(
+                            "generateOneSequence: execution ran during prefill but final memory is missing");
+                    }
+                    generation_state.exec_memory = std::move(forward_outputs.exec_memories.front());
+                    generation_state.has_exec_memory = true;
+
+                    const int slots = execution_hp.num_slots;
+                    tail.execution_control.final_slot_values.resize(static_cast<size_t>(slots));
+                    final_slot_valid_float.resize(static_cast<size_t>(slots));
+                    cudaError_t value_copy = cudaMemcpyAsync(
+                        tail.execution_control.final_slot_values.data(),
+                        generation_state.exec_memory.values.data,
+                        static_cast<size_t>(slots) * sizeof(float),
+                        cudaMemcpyDeviceToHost,
+                        stream);
+                    if (value_copy != cudaSuccess) {
+                        throw std::runtime_error(
+                            "generateOneSequence: cudaMemcpyAsync final execution values failed: " +
+                            std::string(cudaGetErrorString(value_copy)));
+                    }
+                    cudaError_t valid_copy = cudaMemcpyAsync(
+                        final_slot_valid_float.data(),
+                        generation_state.exec_memory.valid_mask.data,
+                        static_cast<size_t>(slots) * sizeof(float),
+                        cudaMemcpyDeviceToHost,
+                        stream);
+                    if (valid_copy != cudaSuccess) {
+                        throw std::runtime_error(
+                            "generateOneSequence: cudaMemcpyAsync final execution validity failed: " +
+                            std::string(cudaGetErrorString(valid_copy)));
+                    }
+                } else {
+                    generation_state.exec_memory = GRIM::ExecutionMemory();
+                    generation_state.has_exec_memory = false;
                 }
             }
         }
@@ -412,6 +467,13 @@ GRIM::GeneratedSequence generateOneSequence(
             throw std::runtime_error("generateOneSequence: cudaStreamSynchronize failed: " +
                                      std::string(cudaGetErrorString(sync_err)));
         }
+        if (!final_slot_valid_float.empty()) {
+            tail.execution_control.final_slot_valid.resize(final_slot_valid_float.size());
+            for (size_t i = 0; i < final_slot_valid_float.size(); ++i) {
+                tail.execution_control.final_slot_valid[i] =
+                    final_slot_valid_float[i] >= 0.5f ? uint8_t{1} : uint8_t{0};
+            }
+        }
         return tail;
     };
 
@@ -428,6 +490,7 @@ GRIM::GeneratedSequence generateOneSequence(
             feed_tokens, numeric, amask, aflags, prompt_atom_table, aentry, slotmap,
             vocab_size, /*batch_capacity=*/1, static_cast<size_t>(q),
             execution_hp.num_slots,
+            execution_hp.num_scratch_slots,
             number_encoder_hp.enabled ? number_encoder_hp.max_digit_slots : 0,
             number_encoder_hp.max_abs_pow10);
         decode_payload.mode = GRIM::Batching::BatchPayloadMode::InferenceDecode;
@@ -654,17 +717,11 @@ Phase2TextInferenceResult executePhase2TextInference(
 
     std::vector<int32_t> prompt_token_to_slot_map(tokens.size(), -1);
     if (execution_hp.enabled) {
-        const int value_slots = execution_hp.num_slots - execution_hp.num_scratch_slots;
-        const int int_token_id = GRIM::Tokenizer::atomTypeToTokenId(
-            GRIM::Tokenizer::AtomType::ATOM_INT);
-        const int float_token_id = GRIM::Tokenizer::atomTypeToTokenId(
-            GRIM::Tokenizer::AtomType::ATOM_FLOAT);
-        int next_slot = 0;
-        for (size_t t = 0; t < tokens.size() && next_slot < value_slots; ++t) {
-            if (tokens[t] == int_token_id || tokens[t] == float_token_id) {
-                prompt_token_to_slot_map[t] = next_slot++;
-            }
-        }
+        prompt_token_to_slot_map = GRIM::Batching::buildInferenceExecutionSlotMap(
+            tokens,
+            atom_mask,
+            execution_hp.num_slots,
+            execution_hp.num_scratch_slots);
     }
     const auto number_encoder_hp = GRIM::HyperParameters::numberEncoderConstructionHP(model_config);
     auto prompt_payload = GRIM::Batching::buildInferenceBatchPayload(
@@ -679,6 +736,7 @@ Phase2TextInferenceResult executePhase2TextInference(
         static_cast<size_t>(batch_size),
         static_cast<size_t>(max_cached_seq_len),
         execution_hp.num_slots,
+        execution_hp.num_scratch_slots,
         number_encoder_hp.enabled ? number_encoder_hp.max_digit_slots : 0,
         number_encoder_hp.max_abs_pow10);
 

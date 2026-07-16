@@ -592,10 +592,24 @@ BatchPayload buildBatchPayload(
     int number_encoder_max_abs_pow10);
 
 /**
+ * Compile tokenizer-authored numeric atom positions into deterministic
+ * ExecutionBlock value-slot bindings for inference prefill.
+ *
+ * Numeric atoms are assigned left-to-right into [num_scratch_slots, num_slots).
+ * Any metadata mismatch or capacity overflow fails before device upload.
+ */
+std::vector<int32_t> buildInferenceExecutionSlotMap(
+    const std::vector<int>& token_ids,
+    const std::vector<uint8_t>& atom_mask,
+    int num_slots,
+    int num_scratch_slots);
+
+/**
  * Build a validated single-row inference prefill payload from tokenizer-authored
  * metadata. This is the inference data-ingestion boundary: callers provide all
  * per-token atom side channels explicitly, and downstream CUDA code consumes the
- * resulting BatchPayload + BatchDeviceBindings pair.
+ * resulting BatchPayload + BatchDeviceBindings pair. Non-negative slot bindings
+ * must lie in [execution_num_scratch_slots, execution_num_slots).
  */
 BatchPayload buildInferenceBatchPayload(
     const std::vector<int>& token_ids,
@@ -609,6 +623,7 @@ BatchPayload buildInferenceBatchPayload(
     size_t batch_capacity,
     size_t max_cached_seq_len,
     int execution_num_slots,
+    int execution_num_scratch_slots,
     int number_encoder_digit_slots,
     int number_encoder_max_abs_pow10);
 

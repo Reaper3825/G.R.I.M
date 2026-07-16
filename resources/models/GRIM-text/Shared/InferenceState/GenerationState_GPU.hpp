@@ -35,6 +35,7 @@ struct GenerationState {
     KvCacheState kv_cache;
 
     void resetSession() {
+        exec_memory = ExecutionMemory();
         has_exec_memory = false;
         execution_runtime.clear();
         kv_cache.resetSession();

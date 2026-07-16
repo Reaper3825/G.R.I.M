@@ -74,8 +74,9 @@ struct ModelForwardRequest {
     // Inference-only: when non-null, the encoder attention sublayers run the
     // KV-cache decode/prefill path over this session cache instead of full
     // self-attention. Requires a read-only graph policy (connect_parameter_graph
-    // == retain_backward_graph == false), batch_size == 1, dropout disabled, and
-    // the execution block disabled. Training callers leave this null.
+    // == retain_backward_graph == false), batch_size == 1, and dropout disabled.
+    // ExecutionBlock inference may run during InferencePrefill; decode windows do
+    // not re-bootstrap or re-execute it. Training callers leave this null.
     KvCacheState* kv_cache = nullptr;
 
     void validate(const char* caller) const;

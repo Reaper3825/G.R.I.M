@@ -120,10 +120,17 @@ separate decode graph file.
 - Phase2 `generateOneSequence` prefills the prompt (`q_len = prompt_len`), then
   decodes one token at a time (`q_len = 1`).
 Known limitations (tracked under "other missing pieces"): no HTTP token
-streaming; no stop-sequences; numeric-atom generation and execution-block decode
-are unsupported on the cached path (the forward throws if the execution block is
-enabled); single-sequence only (batch_size == 1); the cache is rebuilt per
-request (no cross-request prefix reuse).
+streaming; no stop-sequences; numeric-atom generation remains masked while the
+execution block is enabled; persistent execution memory is captured after
+cached prefill but is not yet consumed directly by later decode windows;
+single-sequence only (batch_size == 1); the cache is rebuilt per request (no
+cross-request prefix reuse).
+
+ExecutionBlock Phase 1 is supported on the cached path: inference prefill may
+run the learned EXECUTE/NOOP gate and structured steps, apply causal readback at
+the final prompt token in downstream layers, and move the resulting row-local
+register file into `GenerationState::exec_memory` before temporary forward
+outputs are cleared. Decode windows do not re-bootstrap or re-execute the block.
 
 ### Verification (run on an SM80+ GPU box)
 

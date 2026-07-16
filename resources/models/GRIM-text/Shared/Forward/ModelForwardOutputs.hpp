@@ -44,6 +44,7 @@ struct ExecutionRecord {
     int arg1_slot = -1;
     int arg2_slot = -1;
     int op_id = -1;
+    int write_slot = -1;
     float value_before_1 = 0.0f;
     float value_before_2 = 0.0f;
     float value_after = 0.0f;

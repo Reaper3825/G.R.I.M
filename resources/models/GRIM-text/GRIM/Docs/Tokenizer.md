@@ -45,10 +45,10 @@ Use `TokenLayout.hpp` constants and layout helpers for range checks; do not dupl
 
 ## Persistence primitives
 - `Shared/TokenizerArtifacts/GrmtSequence.hpp` is the canonical GRMT row payload type: token IDs, supervision targets, atom side channels, and execution metadata. Move row-shape fields and row-level validation methods there instead of burying them inside reader/writer headers.
-- `Shared/TokenizerArtifacts/TokenizerArtifactBundle.hpp/.cu` is the single function primitive for the tokenizer cache pair: binary `vocab.bin` plus `training_data.grmt`. Its load/save/exists functions consume `TokenizerHP` directly, load the vocab, and validate the `.grmt` header vocab against `UniByte::vocabSize()` before a cache can be accepted.
+- `Shared/TokenizerArtifacts/TokenizerArtifactBundle.hpp/.cu` owns shared-vocabulary and GRMT compatibility. One binary `vocab.bin` may back multiple GRMT corpora. Bundle loading validates the selected GRMT header against `UniByte::vocabSize()`; the shared-vocab load plus GRMT-only save path creates another compatible corpus without rewriting `vocab.bin`.
 - `Shared/TokenizerArtifacts/GrmtCorpusIO.hpp/.cu` is the single GRMT row I/O primitive. It owns RAII file open/close, temp-file cleanup, header writes, row serialization/deserialization, and fail-loud validation for persisted row contents; the `GrmtSequence` type itself lives in `GrmtSequence.hpp`.
 - `Shared/TokenizerArtifacts/VocabArtifactIO.hpp/.cu` is an internal read/write helper used only by `TokenizerArtifactBundle` functions; it is not a standalone tokenizer save/load path.
-- `DataLoader.cu` treats vocab and GRMT as an inseparable cache bundle. If either artifact is missing or the pair fails validation, it retrains the tokenizer and regenerates both artifacts together.
+- `DataLoader.cu` independently targets `tokenizer_output_grmt`/`tokenizer_curriculum` for generation and `grim_text_training_data`/`training_curriculum` for model training. If the shared vocab exists, a missing, stale, or mismatched tokenizer output rebuilds only that GRMT. Vocabulary retraining requires `force_rebuild_vocab=true` or a missing vocabulary artifact.
 - `Shared/DataLoader/DataLoader.cu` and GRMT diagnostics must use `GrmtCorpusReader` / `loadGrmtCorpus()` instead of open-coding row seeks. Header-only checks may still call `GRMT::readHeaderOrThrow()` directly.
 - Text vocab is export-only for human inspection. Runtime loading is binary KTMG through `TokenizerArtifactBundle` functions; do not re-add text vocab loading.
 

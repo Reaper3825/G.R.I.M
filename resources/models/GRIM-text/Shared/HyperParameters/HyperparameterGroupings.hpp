@@ -52,7 +52,10 @@ struct CheckpointLoadHP {
 };
 
 struct TokenizerHP {
+    // Training consumes data_path. Tokenizer generation writes output_data_path.
+    // They may intentionally name different GRMT artifacts sharing vocab_path.
     std::string data_path;
+    std::string output_data_path;
     std::string vocab_path;
     int max_seq_len = 0;
     int target_vocab_size = 0;
@@ -77,7 +80,8 @@ struct TokenizerHP {
     bool save_text_vocab = false;
     float vocab_score_multiplier = 0.0f;
 
-    std::string current_curriculum;
+    std::string tokenizer_curriculum;
+    std::string training_curriculum;
     std::string current_model_training;
     int execution_block_num_steps = 0;
 };
@@ -946,6 +950,8 @@ inline TokenizerHP tokenizerHP(const GRIM::Config::AiConfigSnapshot& snapshot) {
 
     TokenizerHP view;
     view.data_path = paths.data_path;
+    view.output_data_path = resolveMappedPath(
+        snapshotTrainingConfigField<std::string>(snapshot, "tokenizer_output_grmt"));
     view.vocab_path = paths.vocab_path;
     view.target_vocab_size = snapshotTokenizerTargetVocabSize(snapshot);
     view.character_coverage = snapshotTrainingConfigField<float>(snapshot, "tokenizer_character_coverage");
@@ -966,7 +972,8 @@ inline TokenizerHP tokenizerHP(const GRIM::Config::AiConfigSnapshot& snapshot) {
     view.only_mode = snapshotTrainingConfigField<bool>(snapshot, "subprocess_tokenizer_only_mode");
     view.save_text_vocab = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_save_text_vocab");
     view.vocab_score_multiplier = snapshotTrainingConfigField<float>(snapshot, "tokenizer_vocab_score_multiplier");
-    view.current_curriculum = snapshotTrainingConfigField<std::string>(snapshot, "current_curriculum");
+    view.tokenizer_curriculum = snapshotTrainingConfigField<std::string>(snapshot, "tokenizer_curriculum");
+    view.training_curriculum = snapshotTrainingConfigField<std::string>(snapshot, "training_curriculum");
     view.current_model_training = snapshotTrainingConfigField<std::string>(snapshot, "current_model_training");
     view.execution_block_num_steps = snapshotTrainingConfigField<int>(snapshot, "execution_block_num_steps");
     view.max_seq_len = snapshotTrainingConfigField<int>(snapshot, "max_seq_len");

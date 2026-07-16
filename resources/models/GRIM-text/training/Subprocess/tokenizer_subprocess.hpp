@@ -14,7 +14,7 @@
 //   - Spawns it with `--status-file <path>`, waits for completion, and
 //     decodes the tokenizer-specific success payload (vocab_size) into a
 //     tokenizer_subprocess_result.
-//   - vocab_path / training_data_path are NOT carried over IPC — they are
+//   - vocab_path / output_grmt_path are NOT carried over IPC — they are
 //     resolved from TokenizerHP so there is exactly one tokenizer source of truth.
 //   - If the tokenizer grouping says `only_mode=true` AND the tokenizer reports
 //     success, the returned outcome is rewritten to ok_one_off so the caller
@@ -50,9 +50,9 @@ struct tokenizer_subprocess_result {
     // Populated on ok_proceed / ok_one_off. Paths come from TokenizerHP —
     // the IPC envelope does not carry them.
     // vocab_size comes from the child's success payload (it inspected the
-    // GRMT header it just wrote).
+    // tokenizer output GRMT header it just wrote).
     std::string vocab_path;
-    std::string training_data_path;
+    std::string output_grmt_path;
     std::uint32_t vocab_size = 0;
 
     // Populated on error.

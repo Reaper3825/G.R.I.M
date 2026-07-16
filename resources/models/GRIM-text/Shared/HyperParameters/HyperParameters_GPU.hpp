@@ -497,7 +497,9 @@ struct LanguageModelConfig {
 
     // Training run selectors — which model and curriculum to use
     std::string current_model_training;
-    std::string current_curriculum;
+    std::string tokenizer_curriculum;
+    std::string training_curriculum;
+    std::string tokenizer_output_grmt;
 
     // Log recorder/tape logging leaves
     bool log_recorder_enabled = false;
@@ -1774,7 +1776,9 @@ inline LanguageModelConfig loadLanguageModelConfig(
 #define GRIM_LOAD_CONFIG_LEAF(leaf, member) load(leaf, &LanguageModelConfig::member)
 
     GRIM_LOAD_CONFIG_FIELD(current_model_training);
-    GRIM_LOAD_CONFIG_FIELD(current_curriculum);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_curriculum);
+    GRIM_LOAD_CONFIG_FIELD(training_curriculum);
+    GRIM_LOAD_CONFIG_FIELD(tokenizer_output_grmt);
     GRIM_LOAD_CONFIG_FIELD(clear_merged_cache_on_merge);
     GRIM_LOAD_CONFIG_FIELD(epochs);
     GRIM_LOAD_CONFIG_FIELD(seed);
@@ -2403,7 +2407,9 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(generation_seed);
     GRIM_WRITE_FINAL_CONFIG_FIELD(generation_enable_scratchblock_reasoning);
     GRIM_WRITE_FINAL_CONFIG_FIELD(current_model_training);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(current_curriculum);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_curriculum);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(training_curriculum);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_output_grmt);
     GRIM_WRITE_FINAL_CONFIG_FIELD(log_recorder_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(log_recorder_default_level);
     GRIM_WRITE_FINAL_CONFIG_FIELD(log_recorder_modules);
