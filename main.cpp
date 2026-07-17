@@ -49,6 +49,7 @@
 #include "perception/physical/PhysicalEnvironmentLoop.hpp"
 #include "perception/physical/PhysicalInteractionLoop.hpp"
 #include "perception/physical/PhysicalGestureControlLoop.hpp"
+#include "perception/physical/PhysicalGestureControlConfigIO.hpp"
 #include "perception/physical/PhysicalPerceptionPrimitivesLoop.hpp"
 #include "perception/physical/PhysicalSpatialGroundingLoop.hpp"
 #include "perception/physical/PhysicalLocalizationLoop.hpp"
@@ -320,6 +321,16 @@ int main(int argc, char* argv[])
     // ======================================================
     runBootstrapChecks(argc, argv);
     LOG_PHASE("Bootstrap checks complete", true);
+
+    {
+        std::string gestureConfigError;
+        if (!GRIM::Perception::Physical::ApplyPhysicalGestureControlConfigFromRuntime(
+                aiConfig, gestureConfigError)) {
+            LOG_ERROR("PhysicalGestureControl",
+                "Gesture-control config rejected; using safe defaults: " +
+                gestureConfigError);
+        }
+    }
 
     aliases::init();
     LOG_PHASE("Aliases initialized", true);

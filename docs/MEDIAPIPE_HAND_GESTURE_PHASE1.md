@@ -1,5 +1,9 @@
 # MediaPipe Hand Gesture Integration — Phase 1
 
+> **Status: COMPLETE / READY** — The base hand-perception layer and its
+> Physical Environment UI visuals were validated in the live GRIM runtime on
+> July 16, 2026.
+
 Phase 1 adds a controller-oriented hand interaction branch to GRIM's physical
 perception layer. It does not add gestures to LLM context yet, and it does not
 make MediaPipe a base dependency.
@@ -39,6 +43,33 @@ types, and are published through `PhysicalHandGestureBus`.
 Phase 1's UI overlays landmarks only when the result counter exactly matches
 the displayed raw frame. A stale result remains visible in diagnostics, but its
 geometry is withheld so the UI never presents a misleading overlay.
+
+## Completion validation
+
+The locally built MediaPipe backend loaded successfully and reached `Ready` in
+the running application. Live-camera validation covered:
+
+- Multiple supported hand poses across repeated recognition changes.
+- Left-hand-only and right-hand-only recognition.
+- Simultaneous left-and-right-hand recognition.
+- Correct live presentation of handedness, gesture results, and hand landmark
+  visuals in the Physical Environment Interaction UI.
+- Continued UI and mainloop responsiveness during live recognition, with
+  inference timing, frame provenance, counters, and queue pressure visible in
+  the diagnostics surface.
+
+The base-layer UI visuals are therefore ready for use. Interactive runtime
+performance passed the live test without an observed UI or mainloop stall. No
+fixed-camera numeric FPS or latency benchmark was recorded in this validation,
+so future performance comparisons should use the UI's timing and queue-pressure
+fields rather than treating this completion record as a hardware benchmark.
+
+This completion applies to local hand recognition, result publication, and UI
+visibility. Phase 2 computer-control routing and any future projection of hand
+state into LLM context remain separate validation scopes.
+
+The later offline binding-customizer implementation is documented separately
+in [`MEDIAPIPE_GESTURE_CONTROL_CUSTOMIZER_PHASE1.md`](MEDIAPIPE_GESTURE_CONTROL_CUSTOMIZER_PHASE1.md).
 
 ## Opt-in configuration
 

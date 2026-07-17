@@ -32,6 +32,7 @@ struct PhysicalGestureEvent {
 
 struct PhysicalGestureControlStatus {
     bool enabled = true;
+    bool dry_run = false;
     bool armed = false;
     bool pointer_active = false;
     std::string candidate_gesture;
@@ -41,6 +42,7 @@ struct PhysicalGestureControlStatus {
     uint64_t armed_until_steady_ns = 0;
     uint64_t events_emitted = 0;
     uint64_t actions_executed = 0;
+    uint64_t actions_previewed = 0;
     uint64_t actions_blocked = 0;
     uint64_t actions_failed = 0;
     std::string last_action;

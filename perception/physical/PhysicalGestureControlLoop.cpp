@@ -8,9 +8,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <mutex>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -34,23 +37,25 @@ std::string UsableGestureLabel(const std::string& label) {
     return label;
 }
 
-enum class PendingActionType : uint8_t {
-    MovePointer = 0,
-    LeftClick,
-    RightClick,
-    WakeVoice
-};
+std::string SanitizeBindingId(std::string value) {
+    for (char& ch : value) {
+        const auto uch = static_cast<unsigned char>(ch);
+        if (!std::isalnum(uch) && ch != '_' && ch != '-' && ch != '.') ch = '_';
+    }
+    return value;
+}
 
 struct PendingAction {
-    PendingActionType type = PendingActionType::MovePointer;
+    PhysicalGestureAction type = PhysicalGestureAction::PointerMove;
     int dx = 0;
     int dy = 0;
     std::string description;
+    std::string binding_id;
 };
 
 struct PhysicalGestureControlState {
     std::mutex mutex;
-    PhysicalGestureControlConfig config{};
+    PhysicalGestureControlConfig config = DefaultPhysicalGestureControlConfig();
     PhysicalGestureControlStatus status{};
 
     uint64_t last_hand_bus_sequence = 0;
@@ -74,11 +79,8 @@ struct PhysicalGestureControlState {
     float stable_pointer_y = 0.0f;
     bool stable_has_pointer = false;
 
-    bool arm_latched = false;
-    bool disarm_latched = false;
-    bool wake_latched = false;
-    uint64_t last_click_ns = 0;
-    uint64_t last_wake_ns = 0;
+    std::unordered_set<std::string> latched_bindings;
+    std::unordered_map<std::string, uint64_t> last_binding_action_ns;
 
     float previous_pointer_x = 0.0f;
     float previous_pointer_y = 0.0f;
@@ -125,6 +127,53 @@ void RecordBlockedLocked(PhysicalGestureControlState& state,
     state.status.last_block_reason = reason;
 }
 
+bool BindingHandMatches(const PhysicalGestureBinding& binding,
+                        PhysicalHandedness handedness)
+{
+    return binding.handedness == PhysicalHandedness::Unknown ||
+           binding.handedness == handedness;
+}
+
+bool BindingTriggerMatches(const PhysicalGestureBinding& binding,
+                           const PhysicalGestureEvent& event)
+{
+    switch (binding.trigger) {
+        case PhysicalGestureTrigger::Started:
+            return event.phase == PhysicalGesturePhase::Started;
+        case PhysicalGestureTrigger::Held:
+            return event.phase != PhysicalGesturePhase::Released &&
+                   event.held_ms >= binding.minimum_hold_ms;
+        case PhysicalGestureTrigger::Released:
+            return event.phase == PhysicalGesturePhase::Released &&
+                   event.held_ms >= binding.minimum_hold_ms;
+    }
+    return false;
+}
+
+void RecordInternalActionLocked(PhysicalGestureControlState& state,
+                                const PhysicalGestureBinding& binding)
+{
+    const std::string action_id = PhysicalGestureActionId(binding.action);
+    if (state.config.dry_run) {
+        ++state.status.actions_previewed;
+        state.status.last_action = "dry_run:" + action_id;
+    } else {
+        ++state.status.actions_executed;
+        state.status.last_action = action_id;
+    }
+    state.status.last_block_reason.clear();
+}
+
+bool BindingCoolingDownLocked(const PhysicalGestureControlState& state,
+                              const PhysicalGestureBinding& binding,
+                              uint64_t now_ns)
+{
+    const auto it = state.last_binding_action_ns.find(binding.binding_id);
+    return binding.cooldown_ms != 0 &&
+           it != state.last_binding_action_ns.end() &&
+           now_ns - it->second < MillisecondsToNs(binding.cooldown_ms);
+}
+
 void RouteEventLocked(PhysicalGestureControlState& state,
                       const PhysicalGestureEvent& event,
                       std::vector<PendingAction>& actions)
@@ -133,113 +182,108 @@ void RouteEventLocked(PhysicalGestureControlState& state,
     const uint64_t now_ns = event.event_steady_ns;
 
     if (event.phase == PhysicalGesturePhase::Released) {
-        if (event.gesture_label == config.arm_gesture) state.arm_latched = false;
-        if (event.gesture_label == config.disarm_gesture) state.disarm_latched = false;
-        if (event.gesture_label == config.wake_gesture) state.wake_latched = false;
-        if (event.gesture_label == config.pointer_gesture) ResetPointerLocked(state);
-        return;
-    }
-
-    if (event.gesture_label == config.arm_gesture &&
-        event.held_ms >= config.arm_hold_ms && !state.arm_latched) {
-        state.arm_latched = true;
-        state.status.armed = true;
-        state.status.last_action = "control_armed";
-        state.status.last_block_reason.clear();
-        ++state.status.actions_executed;
-        ExtendArmedWindowLocked(state, now_ns);
-        LOG_DEBUG(kLogTag, "Gesture control armed");
-        return;
-    }
-
-    if (event.gesture_label == config.disarm_gesture &&
-        event.held_ms >= config.disarm_hold_ms && !state.disarm_latched) {
-        state.disarm_latched = true;
-        ++state.status.actions_executed;
-        DisarmLocked(state, "explicit disarm gesture");
-        return;
-    }
-
-    if (event.gesture_label == config.wake_gesture &&
-        event.held_ms >= config.wake_hold_ms && !state.wake_latched) {
-        state.wake_latched = true;
-        if (config.wake_requires_armed && !state.status.armed) {
-            RecordBlockedLocked(state, "wake gesture requires armed control");
-        } else if (state.last_wake_ns != 0 &&
-                   now_ns - state.last_wake_ns <
-                       MillisecondsToNs(config.wake_cooldown_ms)) {
-            RecordBlockedLocked(state, "wake gesture is cooling down");
-        } else {
-            state.last_wake_ns = now_ns;
-            actions.push_back({PendingActionType::WakeVoice, 0, 0,
-                               "wake_voice"});
+        for (const auto& binding : config.bindings) {
+            if (binding.gesture_label != event.gesture_label ||
+                !BindingHandMatches(binding, event.handedness)) continue;
+            state.latched_bindings.erase(binding.binding_id);
+            if (binding.action == PhysicalGestureAction::PointerMove)
+                ResetPointerLocked(state);
         }
-        return;
     }
 
-    const bool computer_action =
-        event.gesture_label == config.pointer_gesture ||
-        event.gesture_label == config.left_click_gesture ||
-        event.gesture_label == config.right_click_gesture;
-    if (computer_action && !state.status.armed) {
-        if (event.phase == PhysicalGesturePhase::Started)
-            RecordBlockedLocked(state, "computer control is not armed");
-        return;
-    }
+    for (const auto& binding : config.bindings) {
+        if (!binding.enabled || binding.gesture_label != event.gesture_label ||
+            !BindingHandMatches(binding, event.handedness)) continue;
 
-    if (event.gesture_label == config.pointer_gesture && event.has_pointer) {
-        ExtendArmedWindowLocked(state, now_ns);
-        if (event.phase == PhysicalGesturePhase::Started ||
-            !state.have_previous_pointer) {
+        if (binding.action == PhysicalGestureAction::PointerMove) {
+            if (event.phase == PhysicalGesturePhase::Released) continue;
+            if (event.held_ms < binding.minimum_hold_ms) break;
+            if (binding.requires_armed && !state.status.armed) {
+                if (event.phase == PhysicalGesturePhase::Started)
+                    RecordBlockedLocked(state, binding.binding_id +
+                        ": control is not armed");
+                break;
+            }
+            if (!event.has_pointer) break;
+            ExtendArmedWindowLocked(state, now_ns);
+            if (event.phase == PhysicalGesturePhase::Started ||
+                !state.have_previous_pointer) {
+                state.previous_pointer_x = event.pointer_x;
+                state.previous_pointer_y = event.pointer_y;
+                state.have_previous_pointer = true;
+                state.status.pointer_active = true;
+                break;
+            }
+
+            float nx = event.pointer_x - state.previous_pointer_x;
+            float ny = event.pointer_y - state.previous_pointer_y;
             state.previous_pointer_x = event.pointer_x;
             state.previous_pointer_y = event.pointer_y;
-            state.have_previous_pointer = true;
-            state.status.pointer_active = true;
-            return;
+            if (config.invert_pointer_x) nx = -nx;
+            if (config.invert_pointer_y) ny = -ny;
+            if (std::abs(nx) < config.pointer_deadzone_normalized) nx = 0.0f;
+            if (std::abs(ny) < config.pointer_deadzone_normalized) ny = 0.0f;
+            const float raw_dx = nx * config.pointer_gain_pixels;
+            const float raw_dy = ny * config.pointer_gain_pixels;
+            const float alpha = std::clamp(config.pointer_smoothing, 0.0f, 1.0f);
+            state.smoothed_dx = alpha * raw_dx +
+                (1.0f - alpha) * state.smoothed_dx;
+            state.smoothed_dy = alpha * raw_dy +
+                (1.0f - alpha) * state.smoothed_dy;
+            const int limit = std::max(1, config.max_pointer_step_pixels);
+            const int dx = std::clamp(
+                static_cast<int>(std::lround(state.smoothed_dx)), -limit, limit);
+            const int dy = std::clamp(
+                static_cast<int>(std::lround(state.smoothed_dy)), -limit, limit);
+            if (dx != 0 || dy != 0) {
+                actions.push_back({PhysicalGestureAction::PointerMove, dx, dy,
+                    PhysicalGestureActionId(binding.action), binding.binding_id});
+            }
+            break;
         }
 
-        float nx = event.pointer_x - state.previous_pointer_x;
-        float ny = event.pointer_y - state.previous_pointer_y;
-        state.previous_pointer_x = event.pointer_x;
-        state.previous_pointer_y = event.pointer_y;
-        if (config.invert_pointer_x) nx = -nx;
-        if (config.invert_pointer_y) ny = -ny;
-        if (std::abs(nx) < config.pointer_deadzone_normalized) nx = 0.0f;
-        if (std::abs(ny) < config.pointer_deadzone_normalized) ny = 0.0f;
+        if (!BindingTriggerMatches(binding, event)) continue;
+        if (state.latched_bindings.count(binding.binding_id) != 0) break;
+        state.latched_bindings.insert(binding.binding_id);
 
-        const float raw_dx = nx * config.pointer_gain_pixels;
-        const float raw_dy = ny * config.pointer_gain_pixels;
-        const float alpha = std::clamp(config.pointer_smoothing, 0.0f, 1.0f);
-        state.smoothed_dx = alpha * raw_dx + (1.0f - alpha) * state.smoothed_dx;
-        state.smoothed_dy = alpha * raw_dy + (1.0f - alpha) * state.smoothed_dy;
-        const int limit = std::max(1, config.max_pointer_step_pixels);
-        const int dx = std::clamp(static_cast<int>(std::lround(state.smoothed_dx)),
-                                  -limit, limit);
-        const int dy = std::clamp(static_cast<int>(std::lround(state.smoothed_dy)),
-                                  -limit, limit);
-        if (dx != 0 || dy != 0) {
-            actions.push_back({PendingActionType::MovePointer, dx, dy,
-                               "pointer_move"});
+        if (binding.requires_armed && !state.status.armed) {
+            RecordBlockedLocked(state, binding.binding_id +
+                ": action requires armed control");
+            break;
         }
-        return;
-    }
+        if (BindingCoolingDownLocked(state, binding, now_ns)) {
+            RecordBlockedLocked(state, binding.binding_id +
+                ": action is cooling down");
+            break;
+        }
 
-    if (event.phase != PhysicalGesturePhase::Started) return;
-    if (event.gesture_label != config.left_click_gesture &&
-        event.gesture_label != config.right_click_gesture) return;
-
-    if (state.last_click_ns != 0 &&
-        now_ns - state.last_click_ns < MillisecondsToNs(config.click_cooldown_ms)) {
-        RecordBlockedLocked(state, "mouse click is cooling down");
-        return;
-    }
-    state.last_click_ns = now_ns;
-    ExtendArmedWindowLocked(state, now_ns);
-    ResetPointerLocked(state);
-    if (event.gesture_label == config.left_click_gesture) {
-        actions.push_back({PendingActionType::LeftClick, 0, 0, "mouse_left_click"});
-    } else {
-        actions.push_back({PendingActionType::RightClick, 0, 0, "mouse_right_click"});
+        state.last_binding_action_ns[binding.binding_id] = now_ns;
+        switch (binding.action) {
+            case PhysicalGestureAction::ControlArm:
+                state.status.armed = true;
+                ExtendArmedWindowLocked(state, now_ns);
+                RecordInternalActionLocked(state, binding);
+                LOG_DEBUG(kLogTag, "Gesture control armed by " + binding.binding_id);
+                break;
+            case PhysicalGestureAction::ControlDisarm:
+                RecordInternalActionLocked(state, binding);
+                DisarmLocked(state, "explicit disarm binding " + binding.binding_id);
+                break;
+            case PhysicalGestureAction::MouseLeftClick:
+            case PhysicalGestureAction::MouseRightClick:
+                ExtendArmedWindowLocked(state, now_ns);
+                ResetPointerLocked(state);
+                actions.push_back({binding.action, 0, 0,
+                    PhysicalGestureActionId(binding.action), binding.binding_id});
+                break;
+            case PhysicalGestureAction::VoiceWake:
+                actions.push_back({binding.action, 0, 0,
+                    PhysicalGestureActionId(binding.action), binding.binding_id});
+                break;
+            case PhysicalGestureAction::PointerMove:
+                break;
+        }
+        break;
     }
 }
 
@@ -401,19 +445,153 @@ void ApplyStalenessLocked(PhysicalGestureControlState& state,
 
 bool ExecutePendingAction(const PendingAction& action) {
     switch (action.type) {
-        case PendingActionType::MovePointer:
+        case PhysicalGestureAction::PointerMove:
             return PlatformInput::moveCursorRelative(action.dx, action.dy);
-        case PendingActionType::LeftClick:
+        case PhysicalGestureAction::MouseLeftClick:
             return PlatformInput::emitMouseClick(0);
-        case PendingActionType::RightClick:
+        case PhysicalGestureAction::MouseRightClick:
             return PlatformInput::emitMouseClick(1);
-        case PendingActionType::WakeVoice:
-            return WakeKey::requestWake("physical_gesture");
+        case PhysicalGestureAction::VoiceWake:
+            return WakeKey::requestWake(action.binding_id.empty()
+                ? "physical_gesture"
+                : "physical_gesture:" + action.binding_id);
+        case PhysicalGestureAction::ControlArm:
+        case PhysicalGestureAction::ControlDisarm:
+            return true;
     }
     return false;
 }
 
 } // namespace
+
+std::vector<PhysicalGestureBinding> DefaultPhysicalGestureBindings() {
+    return {
+        {"arm", "Victory", PhysicalGestureAction::ControlArm,
+         PhysicalGestureTrigger::Held, PhysicalHandedness::Unknown,
+         800, 1000, false, true, 100},
+        {"disarm", "Open_Palm", PhysicalGestureAction::ControlDisarm,
+         PhysicalGestureTrigger::Held, PhysicalHandedness::Unknown,
+         700, 500, false, true, 110},
+        {"pointer", "Pointing_Up", PhysicalGestureAction::PointerMove,
+         PhysicalGestureTrigger::Held, PhysicalHandedness::Unknown,
+         0, 0, true, true, 50},
+        {"left_click", "Closed_Fist", PhysicalGestureAction::MouseLeftClick,
+         PhysicalGestureTrigger::Started, PhysicalHandedness::Unknown,
+         0, 650, true, true, 60},
+        {"right_click", "Thumb_Down", PhysicalGestureAction::MouseRightClick,
+         PhysicalGestureTrigger::Started, PhysicalHandedness::Unknown,
+         0, 650, true, true, 60},
+        {"wake", "ILoveYou", PhysicalGestureAction::VoiceWake,
+         PhysicalGestureTrigger::Held, PhysicalHandedness::Unknown,
+         1100, 10000, false, true, 80}
+    };
+}
+
+PhysicalGestureControlConfig DefaultPhysicalGestureControlConfig() {
+    PhysicalGestureControlConfig config;
+    config.bindings = DefaultPhysicalGestureBindings();
+    return config;
+}
+
+const char* PhysicalGestureActionId(PhysicalGestureAction action) noexcept {
+    switch (action) {
+        case PhysicalGestureAction::ControlArm: return "control.arm";
+        case PhysicalGestureAction::ControlDisarm: return "control.disarm";
+        case PhysicalGestureAction::PointerMove: return "pointer.move";
+        case PhysicalGestureAction::MouseLeftClick: return "mouse.left_click";
+        case PhysicalGestureAction::MouseRightClick: return "mouse.right_click";
+        case PhysicalGestureAction::VoiceWake: return "voice.wake";
+    }
+    return "unknown";
+}
+
+const char* PhysicalGestureActionDisplayName(PhysicalGestureAction action) noexcept {
+    switch (action) {
+        case PhysicalGestureAction::ControlArm: return "Arm control";
+        case PhysicalGestureAction::ControlDisarm: return "Disarm control";
+        case PhysicalGestureAction::PointerMove: return "Move pointer";
+        case PhysicalGestureAction::MouseLeftClick: return "Left click";
+        case PhysicalGestureAction::MouseRightClick: return "Right click";
+        case PhysicalGestureAction::VoiceWake: return "Wake voice";
+    }
+    return "Unknown";
+}
+
+bool TryParsePhysicalGestureAction(const std::string& value,
+                                   PhysicalGestureAction& action) noexcept
+{
+    for (int i = static_cast<int>(PhysicalGestureAction::ControlArm);
+         i <= static_cast<int>(PhysicalGestureAction::VoiceWake); ++i) {
+        const auto candidate = static_cast<PhysicalGestureAction>(i);
+        if (value == PhysicalGestureActionId(candidate)) {
+            action = candidate;
+            return true;
+        }
+    }
+    return false;
+}
+
+const char* PhysicalGestureTriggerId(PhysicalGestureTrigger trigger) noexcept {
+    switch (trigger) {
+        case PhysicalGestureTrigger::Started: return "started";
+        case PhysicalGestureTrigger::Held: return "held";
+        case PhysicalGestureTrigger::Released: return "released";
+    }
+    return "unknown";
+}
+
+bool TryParsePhysicalGestureTrigger(const std::string& value,
+                                    PhysicalGestureTrigger& trigger) noexcept
+{
+    if (value == "started") {
+        trigger = PhysicalGestureTrigger::Started;
+        return true;
+    }
+    if (value == "held") {
+        trigger = PhysicalGestureTrigger::Held;
+        return true;
+    }
+    if (value == "released") {
+        trigger = PhysicalGestureTrigger::Released;
+        return true;
+    }
+    return false;
+}
+
+std::vector<std::string> ValidatePhysicalGestureBindings(
+    const PhysicalGestureControlConfig& config)
+{
+    std::vector<std::string> issues;
+    std::unordered_set<std::string> ids;
+    for (size_t i = 0; i < config.bindings.size(); ++i) {
+        const auto& binding = config.bindings[i];
+        if (binding.binding_id.empty())
+            issues.push_back("Binding " + std::to_string(i + 1) + " has no id");
+        else if (!ids.insert(binding.binding_id).second)
+            issues.push_back("Duplicate binding id: " + binding.binding_id);
+        if (binding.enabled && binding.gesture_label.empty())
+            issues.push_back("Enabled binding " + binding.binding_id +
+                             " has no gesture label");
+
+        for (size_t j = i + 1; binding.enabled && j < config.bindings.size(); ++j) {
+            const auto& other = config.bindings[j];
+            if (!other.enabled || binding.gesture_label.empty() ||
+                binding.gesture_label != other.gesture_label) continue;
+            const bool hands_overlap =
+                binding.handedness == PhysicalHandedness::Unknown ||
+                other.handedness == PhysicalHandedness::Unknown ||
+                binding.handedness == other.handedness;
+            const bool phases_overlap = binding.trigger == other.trigger ||
+                binding.action == PhysicalGestureAction::PointerMove ||
+                other.action == PhysicalGestureAction::PointerMove;
+            if (hands_overlap && phases_overlap) {
+                issues.push_back("Conflict: " + binding.binding_id + " and " +
+                    other.binding_id + " overlap for the same gesture");
+            }
+        }
+    }
+    return issues;
+}
 
 void TickPhysicalGestureControl() {
     auto& state = State();
@@ -431,6 +609,7 @@ void TickPhysicalGestureControl() {
     {
         std::lock_guard<std::mutex> lock(state.mutex);
         state.status.enabled = state.config.enabled;
+        state.status.dry_run = state.config.dry_run;
         if (!state.config.enabled) {
             if (state.status.armed) DisarmLocked(state, "controller disabled");
             ReleaseStableLocked(state, now_ns, actions);
@@ -448,11 +627,18 @@ void TickPhysicalGestureControl() {
     }
 
     for (const auto& action : actions) {
-        const bool ok = ExecutePendingAction(action);
+        bool dry_run = false;
+        {
+            std::lock_guard<std::mutex> lock(state.mutex);
+            dry_run = state.config.dry_run;
+        }
+        const bool ok = dry_run || ExecutePendingAction(action);
         std::lock_guard<std::mutex> lock(state.mutex);
-        state.status.last_action = action.description;
+        state.status.last_action = dry_run
+            ? "dry_run:" + action.description : action.description;
         if (ok) {
-            ++state.status.actions_executed;
+            if (dry_run) ++state.status.actions_previewed;
+            else ++state.status.actions_executed;
             state.status.last_error.clear();
             state.last_logged_failure_action.clear();
         } else {
@@ -491,8 +677,6 @@ void RequestConfigurePhysicalGestureControl(
         config.release_grace_ms, 50, 5000);
     config.result_stale_ms = std::clamp<uint64_t>(
         config.result_stale_ms, config.release_grace_ms, 10000);
-    config.arm_hold_ms = std::clamp<uint64_t>(config.arm_hold_ms, 250, 10000);
-    config.disarm_hold_ms = std::clamp<uint64_t>(config.disarm_hold_ms, 250, 10000);
     config.armed_timeout_ms = std::clamp<uint64_t>(
         config.armed_timeout_ms, 1000, 300000);
     config.pointer_gain_pixels = std::clamp(config.pointer_gain_pixels,
@@ -502,15 +686,47 @@ void RequestConfigurePhysicalGestureControl(
         config.pointer_deadzone_normalized, 0.0f, 0.1f);
     config.max_pointer_step_pixels = std::clamp(
         config.max_pointer_step_pixels, 1, 500);
-    config.click_cooldown_ms = std::clamp<uint64_t>(
-        config.click_cooldown_ms, 100, 10000);
-    config.wake_hold_ms = std::clamp<uint64_t>(config.wake_hold_ms, 250, 10000);
-    config.wake_cooldown_ms = std::clamp<uint64_t>(
-        config.wake_cooldown_ms, 1000, 300000);
+    if (config.bindings.empty()) config.bindings = DefaultPhysicalGestureBindings();
+    std::unordered_set<std::string> used_ids;
+    for (size_t i = 0; i < config.bindings.size(); ++i) {
+        auto& binding = config.bindings[i];
+        binding.binding_id = SanitizeBindingId(std::move(binding.binding_id));
+        if (binding.binding_id.empty())
+            binding.binding_id = "binding_" + std::to_string(i + 1);
+        const std::string base_id = binding.binding_id;
+        int suffix = 2;
+        while (!used_ids.insert(binding.binding_id).second)
+            binding.binding_id = base_id + "_" + std::to_string(suffix++);
+        binding.minimum_hold_ms = std::clamp<uint64_t>(
+            binding.minimum_hold_ms, 0, 10000);
+        binding.cooldown_ms = std::clamp<uint64_t>(
+            binding.cooldown_ms, 0, 300000);
+        binding.priority = std::clamp(binding.priority, -1000, 1000);
+        if (binding.trigger == PhysicalGestureTrigger::Started)
+            binding.minimum_hold_ms = 0;
+        if (binding.action == PhysicalGestureAction::PointerMove) {
+            binding.trigger = PhysicalGestureTrigger::Held;
+            binding.requires_armed = true;
+        }
+        if (binding.action == PhysicalGestureAction::MouseLeftClick ||
+            binding.action == PhysicalGestureAction::MouseRightClick) {
+            binding.requires_armed = true;
+        }
+        if (binding.action == PhysicalGestureAction::ControlArm ||
+            binding.action == PhysicalGestureAction::ControlDisarm) {
+            binding.requires_armed = false;
+        }
+    }
+    std::stable_sort(config.bindings.begin(), config.bindings.end(),
+        [](const PhysicalGestureBinding& a, const PhysicalGestureBinding& b) {
+            return a.priority > b.priority;
+        });
 
     auto& state = State();
     std::lock_guard<std::mutex> lock(state.mutex);
     state.config = std::move(config);
+    state.latched_bindings.clear();
+    state.last_binding_action_ns.clear();
     DisarmLocked(state, "controller configuration changed");
     state.candidate_gesture.clear();
     state.stable_gesture.clear();
@@ -521,6 +737,7 @@ void RequestConfigurePhysicalGestureControl(
     state.status.candidate_gesture.clear();
     state.status.stable_gesture.clear();
     state.status.enabled = state.config.enabled;
+    state.status.dry_run = state.config.dry_run;
 }
 
 void RequestSetPhysicalGestureControlEnabled(bool enabled) {
@@ -542,6 +759,8 @@ void ShutdownPhysicalGestureControl() {
         state.status.candidate_gesture.clear();
         state.status.stable_gesture.clear();
         state.status.active_hand = PhysicalHandedness::Unknown;
+        state.latched_bindings.clear();
+        state.last_binding_action_ns.clear();
         state.last_logged_failure_action.clear();
     }
     PhysicalGestureEventBus::Instance().ResetPhysicalGestureEventBus();

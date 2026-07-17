@@ -6,18 +6,21 @@
 #include "perception/physical/PhysicalCalibrationPattern.hpp"
 #include "perception/physical/PhysicalEnvironmentLogTag.hpp"
 #include "perception/physical/PhysicalEnvironmentLoop.hpp"
+#include "perception/physical/PhysicalGestureControlConfigIO.hpp"
 
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 
 namespace PE = GRIM::Perception::Physical;
 
@@ -173,7 +176,61 @@ UIPhysicalEnvironmentPanel::UIPhysicalEnvironmentPanel()
         [this]{ HandleToggleHandGestures(); });
     interaction_reload_btn_ = std::make_shared<UIButton>(" Reinitialize local backend ",
         [this]{ HandleReloadHandGestureBackend(); });
+    interaction_controller_btn_ = std::make_shared<UIButton>(" Controller: on ",
+        [this]{ HandleToggleGestureController(); });
+    interaction_dry_run_btn_ = std::make_shared<UIButton>(" Dry run: off ",
+        [this]{ HandleToggleGestureDryRun(); });
+    interaction_view_btn_ = std::make_shared<UIButton>(" View: Live ",
+        [this]{ HandleToggleGestureStudioView(); });
+
+    interaction_binding_list_ = std::make_shared<UIScrollBox>();
+    interaction_binding_list_->setChildSpacing(6.0f);
+    interaction_action_select_ = std::make_shared<UIDropdown>(
+        "Action", std::vector<std::string>{
+            "control.arm", "control.disarm", "pointer.move",
+            "mouse.left_click", "mouse.right_click", "voice.wake"}, 0,
+        [](int, const std::string&) {});
+    interaction_trigger_select_ = std::make_shared<UIDropdown>(
+        "Trigger", std::vector<std::string>{"started", "held", "released"},
+        1, [](int, const std::string&) {});
+    interaction_hand_select_ = std::make_shared<UIDropdown>(
+        "Hand", std::vector<std::string>{"either", "left", "right"},
+        0, [](int, const std::string&) {});
+
+    interaction_gesture_box_ = std::make_shared<UIInputBox>(&interaction_gesture_buf_);
+    interaction_gesture_box_->setPlaceholder("MediaPipe gesture label");
+    interaction_hold_box_ = std::make_shared<UIInputBox>(&interaction_hold_buf_);
+    interaction_hold_box_->setPlaceholder("hold ms");
+    interaction_cooldown_box_ = std::make_shared<UIInputBox>(&interaction_cooldown_buf_);
+    interaction_cooldown_box_->setPlaceholder("cooldown ms");
+    interaction_priority_box_ = std::make_shared<UIInputBox>(&interaction_priority_buf_);
+    interaction_priority_box_->setPlaceholder("priority");
+
+    interaction_use_live_btn_ = std::make_shared<UIButton>(" Use live gesture ",
+        [this]{ HandleUseLiveGesture(); });
+    interaction_binding_enabled_btn_ = std::make_shared<UIButton>(" Binding: on ",
+        [this] {
+            interaction_editor_binding_enabled_ = !interaction_editor_binding_enabled_;
+            interaction_binding_enabled_btn_->setText(
+                interaction_editor_binding_enabled_ ? " Binding: on " : " Binding: off ");
+        });
+    interaction_requires_arm_btn_ = std::make_shared<UIButton>(" Requires arm: no ",
+        [this] {
+            interaction_editor_requires_arm_ = !interaction_editor_requires_arm_;
+            interaction_requires_arm_btn_->setText(
+                interaction_editor_requires_arm_ ? " Requires arm: yes "
+                                                 : " Requires arm: no ");
+        });
+    interaction_apply_binding_btn_ = std::make_shared<UIButton>(" Apply + Save ",
+        [this]{ HandleApplyGestureBinding(); });
+    interaction_add_binding_btn_ = std::make_shared<UIButton>(" Add ",
+        [this]{ HandleAddGestureBinding(); });
+    interaction_delete_binding_btn_ = std::make_shared<UIButton>(" Delete ",
+        [this]{ HandleDeleteGestureBinding(); });
+    interaction_defaults_btn_ = std::make_shared<UIButton>(" Restore Defaults ",
+        [this]{ HandleRestoreDefaultGestureBindings(); });
     RefreshInteractionButtonLabels();
+    RebuildGestureBindingEditor();
 
     // ── Spatial tab toggle buttons (labels refreshed at end of ctor) ──
     spatial_btn_depth_ = std::make_shared<UIButton>(" Depth: on ",
@@ -2208,12 +2265,285 @@ void UIPhysicalEnvironmentPanel::HandleReloadHandGestureBackend() {
         PE::GetPhysicalHandGestureConfig());
 }
 
+void UIPhysicalEnvironmentPanel::HandleToggleGestureController() {
+    auto config = PE::GetPhysicalGestureControlConfig();
+    config.enabled = !config.enabled;
+    PE::RequestConfigurePhysicalGestureControl(config);
+    PersistGestureBindingsFromUi();
+    RefreshInteractionButtonLabels();
+}
+
+void UIPhysicalEnvironmentPanel::HandleToggleGestureDryRun() {
+    auto config = PE::GetPhysicalGestureControlConfig();
+    config.dry_run = !config.dry_run;
+    PE::RequestConfigurePhysicalGestureControl(config);
+    PersistGestureBindingsFromUi();
+    RefreshInteractionButtonLabels();
+}
+
+void UIPhysicalEnvironmentPanel::HandleToggleGestureStudioView() {
+    interaction_show_bindings_ = !interaction_show_bindings_;
+    if (interaction_show_bindings_) RebuildGestureBindingEditor();
+    RefreshInteractionButtonLabels();
+}
+
+void UIPhysicalEnvironmentPanel::HandleUseLiveGesture() {
+    if (!have_interaction_snapshot_) {
+        interaction_binding_status_ = "No live gesture result is available.";
+        return;
+    }
+    const auto& hands = interaction_snapshot_view_.snapshot.hands;
+    const PE::PhysicalHandObservation* best = nullptr;
+    for (const auto& hand : hands) {
+        if (hand.gesture_label.empty() || hand.gesture_label == "None" ||
+            hand.gesture_label == "none") continue;
+        if (!best || hand.gesture_confidence > best->gesture_confidence)
+            best = &hand;
+    }
+    if (!best) {
+        interaction_binding_status_ = "No recognized live gesture to copy.";
+        return;
+    }
+    interaction_gesture_buf_ = best->gesture_label;
+    if (interaction_gesture_box_)
+        interaction_gesture_box_->setText(interaction_gesture_buf_);
+    interaction_binding_status_ = "Copied live label: " + best->gesture_label;
+}
+
+void UIPhysicalEnvironmentPanel::PersistGestureBindingsFromUi() {
+    std::string error;
+    if (!PE::PersistPhysicalGestureControlConfig(error)) {
+        interaction_binding_status_ = "Save failed: " + error;
+        LOG_ERROR(kPanelLogTag, interaction_binding_status_);
+    } else {
+        interaction_binding_status_ = "Gesture control saved locally.";
+    }
+}
+
+void UIPhysicalEnvironmentPanel::LoadSelectedGestureBindingIntoEditor() {
+    const auto config = PE::GetPhysicalGestureControlConfig();
+    if (config.bindings.empty()) return;
+    interaction_selected_binding_ = std::min(
+        interaction_selected_binding_, config.bindings.size() - 1);
+    const auto& binding = config.bindings[interaction_selected_binding_];
+
+    interaction_gesture_buf_ = binding.gesture_label;
+    interaction_hold_buf_ = std::to_string(binding.minimum_hold_ms);
+    interaction_cooldown_buf_ = std::to_string(binding.cooldown_ms);
+    interaction_priority_buf_ = std::to_string(binding.priority);
+    if (interaction_gesture_box_) interaction_gesture_box_->setText(interaction_gesture_buf_);
+    if (interaction_hold_box_) interaction_hold_box_->setText(interaction_hold_buf_);
+    if (interaction_cooldown_box_) interaction_cooldown_box_->setText(interaction_cooldown_buf_);
+    if (interaction_priority_box_) interaction_priority_box_->setText(interaction_priority_buf_);
+
+    if (interaction_action_select_) {
+        interaction_action_select_->setSelectedIndex(
+            static_cast<int>(binding.action));
+    }
+    if (interaction_trigger_select_) {
+        interaction_trigger_select_->setSelectedIndex(
+            static_cast<int>(binding.trigger));
+    }
+    if (interaction_hand_select_) {
+        interaction_hand_select_->setSelectedIndex(
+            binding.handedness == PE::PhysicalHandedness::Left ? 1 :
+            binding.handedness == PE::PhysicalHandedness::Right ? 2 : 0);
+    }
+    interaction_editor_binding_enabled_ = binding.enabled;
+    interaction_editor_requires_arm_ = binding.requires_armed;
+    if (interaction_binding_enabled_btn_) {
+        interaction_binding_enabled_btn_->setText(
+            binding.enabled ? " Binding: on " : " Binding: off ");
+    }
+    if (interaction_requires_arm_btn_) {
+        interaction_requires_arm_btn_->setText(
+            binding.requires_armed ? " Requires arm: yes " : " Requires arm: no ");
+    }
+}
+
+void UIPhysicalEnvironmentPanel::RebuildGestureBindingEditor() {
+    const auto config = PE::GetPhysicalGestureControlConfig();
+    interaction_selected_binding_ = config.bindings.empty() ? 0 :
+        std::min(interaction_selected_binding_, config.bindings.size() - 1);
+
+    const float previous_scroll = interaction_binding_list_
+        ? interaction_binding_list_->getScrollOffset() : 0.0f;
+    interaction_binding_rows_.clear();
+    if (interaction_binding_list_) interaction_binding_list_->clearChildren();
+
+    for (size_t i = 0; i < config.bindings.size(); ++i) {
+        const auto& binding = config.bindings[i];
+        std::string row_text = binding.enabled ? "ON  " : "OFF ";
+        row_text += binding.binding_id + " | " + binding.gesture_label;
+        if (row_text.size() > 31) row_text = row_text.substr(0, 28) + "...";
+        row_text = (i == interaction_selected_binding_ ? "> " : "  ") + row_text;
+        const std::string binding_id = binding.binding_id;
+        auto row = std::make_shared<UIButton>(row_text,
+            [this, binding_id] {
+                const auto current = PE::GetPhysicalGestureControlConfig();
+                for (size_t index = 0; index < current.bindings.size(); ++index) {
+                    if (current.bindings[index].binding_id != binding_id) continue;
+                    interaction_selected_binding_ = index;
+                    LoadSelectedGestureBindingIntoEditor();
+                    interaction_binding_list_needs_rebuild_ = true;
+                    break;
+                }
+            });
+        row->setSize(232.0f, 34.0f);
+        interaction_binding_rows_.push_back(row);
+        if (interaction_binding_list_) interaction_binding_list_->addChild(row);
+    }
+    if (interaction_binding_list_) {
+        interaction_binding_list_->autoLayoutChildren(8.0f);
+        interaction_binding_list_->scrollTo(previous_scroll);
+        if (interaction_selected_binding_ < interaction_binding_rows_.size() &&
+            interaction_binding_list_->getSize().y > 0.0f) {
+            const auto& selected_row = interaction_binding_rows_[interaction_selected_binding_];
+            const float row_top = selected_row->getPosition().y;
+            const float row_bottom = row_top + selected_row->getSize().y;
+            const float view_top = interaction_binding_list_->getScrollOffset();
+            const float view_bottom = view_top + interaction_binding_list_->getSize().y;
+            if (row_top < view_top) {
+                interaction_binding_list_->scrollTo(row_top);
+            } else if (row_bottom > view_bottom) {
+                interaction_binding_list_->scrollTo(
+                    row_bottom - interaction_binding_list_->getSize().y);
+            }
+        }
+    }
+    if (!config.bindings.empty()) LoadSelectedGestureBindingIntoEditor();
+
+    const auto issues = PE::ValidatePhysicalGestureBindings(config);
+    if (!issues.empty()) interaction_binding_status_ = issues.front();
+    interaction_binding_list_needs_rebuild_ = false;
+}
+
+void UIPhysicalEnvironmentPanel::HandleApplyGestureBinding() {
+    auto config = PE::GetPhysicalGestureControlConfig();
+    if (interaction_selected_binding_ >= config.bindings.size()) {
+        interaction_binding_status_ = "Select or add a binding first.";
+        return;
+    }
+    int hold_ms = 0, cooldown_ms = 0, priority = 0;
+    if (interaction_gesture_buf_.empty() ||
+        !TryParseInt(interaction_hold_buf_, hold_ms) || hold_ms < 0 ||
+        !TryParseInt(interaction_cooldown_buf_, cooldown_ms) || cooldown_ms < 0 ||
+        !TryParseInt(interaction_priority_buf_, priority)) {
+        interaction_binding_status_ =
+            "Gesture is required; hold/cooldown/priority must be valid integers.";
+        return;
+    }
+
+    auto& binding = config.bindings[interaction_selected_binding_];
+    const std::string selected_id = binding.binding_id;
+    PE::PhysicalGestureAction action;
+    PE::PhysicalGestureTrigger trigger;
+    if (!PE::TryParsePhysicalGestureAction(
+            interaction_action_select_->getSelectedItem(), action) ||
+        !PE::TryParsePhysicalGestureTrigger(
+            interaction_trigger_select_->getSelectedItem(), trigger)) {
+        interaction_binding_status_ = "Invalid action or trigger selection.";
+        return;
+    }
+    binding.gesture_label = interaction_gesture_buf_;
+    binding.action = action;
+    binding.trigger = trigger;
+    binding.minimum_hold_ms = static_cast<uint64_t>(hold_ms);
+    binding.cooldown_ms = static_cast<uint64_t>(cooldown_ms);
+    binding.priority = priority;
+    binding.enabled = interaction_editor_binding_enabled_;
+    binding.requires_armed = interaction_editor_requires_arm_;
+    const std::string hand = interaction_hand_select_->getSelectedItem();
+    binding.handedness = hand == "left" ? PE::PhysicalHandedness::Left :
+        hand == "right" ? PE::PhysicalHandedness::Right :
+                           PE::PhysicalHandedness::Unknown;
+
+    PE::RequestConfigurePhysicalGestureControl(config);
+    const auto applied = PE::GetPhysicalGestureControlConfig();
+    for (size_t i = 0; i < applied.bindings.size(); ++i) {
+        if (applied.bindings[i].binding_id == selected_id) {
+            interaction_selected_binding_ = i;
+            break;
+        }
+    }
+    RebuildGestureBindingEditor();
+    PersistGestureBindingsFromUi();
+    const auto issues = PE::ValidatePhysicalGestureBindings(applied);
+    if (!issues.empty()) interaction_binding_status_ = "Saved with warning: " + issues.front();
+}
+
+void UIPhysicalEnvironmentPanel::HandleAddGestureBinding() {
+    auto config = PE::GetPhysicalGestureControlConfig();
+    std::unordered_set<std::string> ids;
+    for (const auto& binding : config.bindings) ids.insert(binding.binding_id);
+    int suffix = 1;
+    std::string id;
+    do { id = "custom_" + std::to_string(suffix++); }
+    while (ids.count(id) != 0);
+
+    PE::PhysicalGestureBinding binding;
+    binding.binding_id = id;
+    binding.gesture_label = "New_Gesture";
+    binding.action = PE::PhysicalGestureAction::VoiceWake;
+    binding.trigger = PE::PhysicalGestureTrigger::Held;
+    binding.minimum_hold_ms = 1000;
+    binding.cooldown_ms = 10000;
+    binding.enabled = false;
+    config.bindings.push_back(binding);
+    PE::RequestConfigurePhysicalGestureControl(config);
+    const auto applied = PE::GetPhysicalGestureControlConfig();
+    for (size_t i = 0; i < applied.bindings.size(); ++i) {
+        if (applied.bindings[i].binding_id == id) {
+            interaction_selected_binding_ = i;
+            break;
+        }
+    }
+    RebuildGestureBindingEditor();
+    PersistGestureBindingsFromUi();
+}
+
+void UIPhysicalEnvironmentPanel::HandleDeleteGestureBinding() {
+    auto config = PE::GetPhysicalGestureControlConfig();
+    if (interaction_selected_binding_ >= config.bindings.size()) return;
+    config.bindings.erase(config.bindings.begin() +
+        static_cast<std::ptrdiff_t>(interaction_selected_binding_));
+    if (config.bindings.empty()) {
+        interaction_binding_status_ =
+            "At least one binding is required; restore defaults instead.";
+        return;
+    }
+    if (interaction_selected_binding_ >= config.bindings.size())
+        interaction_selected_binding_ = config.bindings.size() - 1;
+    PE::RequestConfigurePhysicalGestureControl(config);
+    RebuildGestureBindingEditor();
+    PersistGestureBindingsFromUi();
+}
+
+void UIPhysicalEnvironmentPanel::HandleRestoreDefaultGestureBindings() {
+    auto config = PE::GetPhysicalGestureControlConfig();
+    config.bindings = PE::DefaultPhysicalGestureBindings();
+    PE::RequestConfigurePhysicalGestureControl(config);
+    interaction_selected_binding_ = 0;
+    RebuildGestureBindingEditor();
+    PersistGestureBindingsFromUi();
+}
+
 void UIPhysicalEnvironmentPanel::RefreshInteractionButtonLabels() {
     if (!interaction_enable_btn_) return;
     const auto config = PE::GetPhysicalHandGestureConfig();
     interaction_enable_btn_->setText(config.enabled
         ? std::string(" Gestures: on ")
         : std::string(" Gestures: off "));
+    const auto control = PE::GetPhysicalGestureControlConfig();
+    if (interaction_controller_btn_)
+        interaction_controller_btn_->setText(control.enabled
+            ? " Controller: on " : " Controller: off ");
+    if (interaction_dry_run_btn_)
+        interaction_dry_run_btn_->setText(control.dry_run
+            ? " Dry run: on " : " Dry run: off ");
+    if (interaction_view_btn_)
+        interaction_view_btn_->setText(interaction_show_bindings_
+            ? " View: Bindings " : " View: Live ");
 }
 
 void UIPhysicalEnvironmentPanel::UpdateInteractionTab(
@@ -2234,16 +2564,83 @@ void UIPhysicalEnvironmentPanel::UpdateInteractionTab(
 
     const float content_top =
         position.y + titleBarHeight + kTabBarHeight + 8.0f;
-    if (interaction_enable_btn_) {
-        interaction_enable_btn_->setSize(132.0f, 24.0f);
-        interaction_enable_btn_->setPosition(position.x + 16.0f, content_top);
-        interaction_enable_btn_->update(input, dt);
+    auto place_button = [&](const std::shared_ptr<UIButton>& button,
+                            float x, float y, float w) {
+        if (!button) return;
+        button->setSize(w, 24.0f);
+        button->setPosition(x, y);
+        button->update(input, dt);
+    };
+    const float toolbar_x = position.x + 12.0f;
+    place_button(interaction_enable_btn_, toolbar_x, content_top, 112.0f);
+    place_button(interaction_reload_btn_, toolbar_x + 118.0f, content_top, 190.0f);
+    place_button(interaction_controller_btn_, toolbar_x + 314.0f, content_top, 126.0f);
+    place_button(interaction_view_btn_, toolbar_x + 446.0f, content_top, 132.0f);
+    place_button(interaction_dry_run_btn_, toolbar_x + 584.0f, content_top, 116.0f);
+
+    if (!interaction_show_bindings_) return;
+
+    if (interaction_binding_list_needs_rebuild_)
+        RebuildGestureBindingEditor();
+
+    const float pad = 12.0f;
+    const float pane_top = position.y + titleBarHeight + kTabBarHeight + 44.0f;
+    const float sidebar_w = 350.0f;
+    const float sidebar_x = position.x + size.x - pad - sidebar_w;
+    const float inner_x = sidebar_x + 8.0f;
+    const float inner_w = sidebar_w - 16.0f;
+    const float list_y = pane_top + 30.0f;
+    const float list_h = 116.0f;
+    if (interaction_binding_list_) {
+        interaction_binding_list_->setPosition(inner_x, list_y);
+        interaction_binding_list_->setSize(inner_w, list_h);
+        for (const auto& row : interaction_binding_rows_)
+            if (row) row->setSize(inner_w - 22.0f, 34.0f);
+        interaction_binding_list_->update(input, dt);
     }
-    if (interaction_reload_btn_) {
-        interaction_reload_btn_->setSize(210.0f, 24.0f);
-        interaction_reload_btn_->setPosition(position.x + 154.0f, content_top);
-        interaction_reload_btn_->update(input, dt);
-    }
+    const float list_buttons_y = list_y + list_h + 6.0f;
+    place_button(interaction_add_binding_btn_, inner_x,
+                 list_buttons_y, 70.0f);
+    place_button(interaction_delete_binding_btn_, inner_x + 76.0f,
+                 list_buttons_y, 70.0f);
+    place_button(interaction_defaults_btn_, inner_x + 152.0f,
+                 list_buttons_y, inner_w - 152.0f);
+
+    const float editor_x = inner_x;
+    const float editor_w = inner_w;
+    const float editor_y = list_buttons_y + 52.0f;
+    auto place_dropdown = [&](const std::shared_ptr<UIDropdown>& dropdown,
+                              float y) {
+        if (!dropdown) return;
+        dropdown->setPosition(editor_x, y);
+        dropdown->setSize(editor_w, 30.0f);
+        dropdown->update(input, dt);
+    };
+    place_dropdown(interaction_action_select_, editor_y);
+    place_dropdown(interaction_trigger_select_, editor_y + 34.0f);
+    place_dropdown(interaction_hand_select_, editor_y + 68.0f);
+
+    auto place_box = [&](const std::shared_ptr<UIInputBox>& box,
+                         float x, float y, float w) {
+        if (!box) return;
+        box->setPosition(x, y);
+        box->setSize(w, 28.0f);
+        box->update(input, dt);
+    };
+    place_box(interaction_gesture_box_, editor_x, editor_y + 120.0f, 214.0f);
+    place_button(interaction_use_live_btn_, editor_x + 220.0f,
+                 editor_y + 122.0f, editor_w - 220.0f);
+    place_box(interaction_hold_box_, editor_x, editor_y + 164.0f, 102.0f);
+    place_box(interaction_cooldown_box_, editor_x + 108.0f,
+              editor_y + 164.0f, 112.0f);
+    place_box(interaction_priority_box_, editor_x + 226.0f,
+              editor_y + 164.0f, editor_w - 226.0f);
+    place_button(interaction_binding_enabled_btn_, editor_x,
+                 editor_y + 204.0f, 98.0f);
+    place_button(interaction_requires_arm_btn_, editor_x + 104.0f,
+                 editor_y + 204.0f, 132.0f);
+    place_button(interaction_apply_binding_btn_, editor_x + 242.0f,
+                 editor_y + 204.0f, editor_w - 242.0f);
 }
 
 void UIPhysicalEnvironmentPanel::DrawHandGestureOverlay(
@@ -2290,11 +2687,55 @@ void UIPhysicalEnvironmentPanel::DrawHandGestureOverlay(
     }
 }
 
+void UIPhysicalEnvironmentPanel::DrawInteractionPreview(
+    OverlayRenderer& renderer,
+    float frame_x, float frame_y, float frame_w, float frame_h)
+{
+    renderer.drawRect({frame_x - 1, frame_y - 1}, {frame_w + 2, frame_h + 2},
+                      UITheme::Colors::DividerLine);
+    renderer.drawRect({frame_x, frame_y}, {frame_w, frame_h},
+                      UITheme::Colors::Background);
+
+    if (!have_any_frame_ || last_view_.raw_image.empty()) {
+        renderer.drawText({frame_x + 12, frame_y + 12},
+            "No camera frame yet - connect a source in Camera.",
+            UITheme::Colors::TextSecondary);
+        return;
+    }
+
+    DrawBgrFrameIntoOverlay(renderer, last_view_.raw_image,
+                            last_view_.frame_counter, false,
+                            frame_x, frame_y, frame_w, frame_h,
+                            interaction_blit_cache_);
+    const int blit_w = interaction_blit_cache_.out_w;
+    const int blit_h = interaction_blit_cache_.out_h;
+    const int blit_x = static_cast<int>(frame_x + (frame_w - blit_w) * 0.5f);
+    const int blit_y = static_cast<int>(frame_y + (frame_h - blit_h) * 0.5f);
+    if (have_interaction_snapshot_ &&
+        interaction_snapshot_view_.snapshot.source_frame_counter ==
+            last_view_.frame_counter) {
+        DrawHandGestureOverlay(renderer, interaction_snapshot_view_.snapshot,
+                               blit_x, blit_y, blit_w, blit_h);
+    } else if (have_interaction_snapshot_ &&
+               interaction_snapshot_view_.snapshot.source_frame_counter != 0) {
+        renderer.drawText({frame_x + 10, frame_y + frame_h - 22},
+            "Landmarks are from an older frame; overlay withheld.",
+            UITheme::Colors::Warning);
+    }
+}
+
 void UIPhysicalEnvironmentPanel::DrawInteractionTab(OverlayRenderer& renderer) {
-    if (interaction_enable_btn_)
-        interaction_enable_btn_->drawOverlay(renderer, position);
-    if (interaction_reload_btn_)
-        interaction_reload_btn_->drawOverlay(renderer, position);
+    const std::array<std::shared_ptr<UIButton>, 5> toolbar_buttons{{
+        interaction_enable_btn_, interaction_reload_btn_, interaction_controller_btn_,
+        interaction_view_btn_, interaction_dry_run_btn_
+    }};
+    for (const auto& button : toolbar_buttons) {
+        if (button) button->drawOverlay(renderer, position);
+    }
+    if (interaction_show_bindings_) {
+        DrawGestureBindingsEditor(renderer);
+        return;
+    }
 
     const float pad = 12.0f;
     const float toolbar_h = 32.0f;
@@ -2308,36 +2749,7 @@ void UIPhysicalEnvironmentPanel::DrawInteractionTab(OverlayRenderer& renderer) {
     const float sidebar_x = frame_x + frame_w + pad;
     const float sidebar_y = frame_y;
 
-    renderer.drawRect({frame_x - 1, frame_y - 1}, {frame_w + 2, frame_h + 2},
-                      UITheme::Colors::DividerLine);
-    renderer.drawRect({frame_x, frame_y}, {frame_w, frame_h},
-                      UITheme::Colors::Background);
-
-    if (!have_any_frame_ || last_view_.raw_image.empty()) {
-        renderer.drawText({frame_x + 12, frame_y + 12},
-            "No camera frame yet - connect a source in Camera.",
-            UITheme::Colors::TextSecondary);
-    } else {
-        DrawBgrFrameIntoOverlay(renderer, last_view_.raw_image,
-                                last_view_.frame_counter, false,
-                                frame_x, frame_y, frame_w, frame_h,
-                                interaction_blit_cache_);
-        const int blit_w = interaction_blit_cache_.out_w;
-        const int blit_h = interaction_blit_cache_.out_h;
-        const int blit_x = static_cast<int>(frame_x + (frame_w - blit_w) * 0.5f);
-        const int blit_y = static_cast<int>(frame_y + (frame_h - blit_h) * 0.5f);
-        if (have_interaction_snapshot_ &&
-            interaction_snapshot_view_.snapshot.source_frame_counter ==
-                last_view_.frame_counter) {
-            DrawHandGestureOverlay(renderer, interaction_snapshot_view_.snapshot,
-                                   blit_x, blit_y, blit_w, blit_h);
-        } else if (have_interaction_snapshot_ &&
-                   interaction_snapshot_view_.snapshot.source_frame_counter != 0) {
-            renderer.drawText({frame_x + 10, frame_y + frame_h - 22},
-                "Landmarks are from an older frame; overlay withheld.",
-                UITheme::Colors::Warning);
-        }
-    }
+    DrawInteractionPreview(renderer, frame_x, frame_y, frame_w, frame_h);
 
     renderer.drawRect({sidebar_x - 1, sidebar_y - 1},
                       {sidebar_w + 2, frame_h + 2}, UITheme::Colors::DividerLine);
@@ -2398,7 +2810,8 @@ void UIPhysicalEnvironmentPanel::DrawInteractionTab(OverlayRenderer& renderer) {
     gap();
 
     const auto control = PE::GetPhysicalGestureControlStatus();
-    line(std::string("Controller: ") + (control.enabled ? "enabled" : "disabled"),
+    line(std::string("Controller: ") + (control.enabled ? "enabled" : "disabled")
+         + (control.dry_run ? " (DRY RUN)" : ""),
          control.enabled ? UITheme::Colors::TextPrimary : UITheme::Colors::TextMuted);
     line(std::string("Armed: ") + (control.armed ? "YES" : "no"),
          control.armed ? UITheme::Colors::Success : UITheme::Colors::Warning);
@@ -2406,6 +2819,9 @@ void UIPhysicalEnvironmentPanel::DrawInteractionTab(OverlayRenderer& renderer) {
          ? std::string("none") : control.stable_gesture));
     line("Events/actions: " + std::to_string(control.events_emitted)
          + "/" + std::to_string(control.actions_executed));
+    if (control.actions_previewed != 0)
+        line("Dry-run previews: " + std::to_string(control.actions_previewed),
+             UITheme::Colors::Warning);
     if (!control.last_action.empty())
         line("Last action: " + CompactPath(control.last_action));
     if (!control.last_block_reason.empty())
@@ -2426,6 +2842,118 @@ void UIPhysicalEnvironmentPanel::DrawInteractionTab(OverlayRenderer& renderer) {
              + " " + FormatDouble(hand.gesture_confidence * 100.0, 0) + "%",
              UITheme::Colors::TextValue);
         line("  landmarks: " + std::to_string(hand.landmark_count) + "/21");
+    }
+}
+
+void UIPhysicalEnvironmentPanel::DrawGestureBindingsEditor(
+    OverlayRenderer& renderer)
+{
+    const float pad = 12.0f;
+    const float toolbar_h = 32.0f;
+    const float pane_top =
+        position.y + titleBarHeight + kTabBarHeight + toolbar_h + pad;
+    const float sidebar_w = 350.0f;
+    const float frame_x = position.x + pad;
+    const float frame_y = pane_top;
+    const float frame_w = std::max(64.0f, size.x - sidebar_w - pad * 3.0f);
+    const float frame_h = std::max(
+        64.0f, position.y + size.y - frame_y - pad);
+    const float sidebar_x = frame_x + frame_w + pad;
+
+    // Bindings customize the live result, so keep the camera and landmark
+    // preview present while the right-hand diagnostics pane becomes an editor.
+    DrawInteractionPreview(renderer, frame_x, frame_y, frame_w, frame_h);
+    renderer.drawRect({sidebar_x - 1.0f, frame_y - 1.0f},
+                      {sidebar_w + 2.0f, frame_h + 2.0f},
+                      UITheme::Colors::DividerLine);
+    renderer.drawRect({sidebar_x, frame_y}, {sidebar_w, frame_h},
+                      UITheme::Colors::PanelBg);
+
+    const auto config = PE::GetPhysicalGestureControlConfig();
+    const float inner_x = sidebar_x + 8.0f;
+    const float inner_w = sidebar_w - 16.0f;
+    const float list_y = pane_top + 30.0f;
+    const float list_h = 116.0f;
+    const float list_buttons_y = list_y + list_h + 6.0f;
+    const float editor_y = list_buttons_y + 52.0f;
+
+    renderer.drawText({inner_x + 2.0f, pane_top + 8.0f},
+        "Bindings (" + std::to_string(config.bindings.size()) + ")",
+        UITheme::Colors::TextHeader);
+    if (interaction_binding_list_)
+        interaction_binding_list_->drawOverlay(renderer, position);
+    if (interaction_add_binding_btn_)
+        interaction_add_binding_btn_->drawOverlay(renderer, position);
+    if (interaction_delete_binding_btn_)
+        interaction_delete_binding_btn_->drawOverlay(renderer, position);
+    if (interaction_defaults_btn_)
+        interaction_defaults_btn_->drawOverlay(renderer, position);
+
+    std::string selected_title = "Selected binding";
+    if (interaction_selected_binding_ < config.bindings.size()) {
+        const auto& binding = config.bindings[interaction_selected_binding_];
+        selected_title = binding.binding_id + " - " + binding.gesture_label;
+    }
+    renderer.drawText({inner_x + 2.0f, editor_y - 22.0f},
+                      CompactPath(selected_title, 38),
+                      UITheme::Colors::TextHeader);
+
+    if (interaction_action_select_)
+        interaction_action_select_->drawOverlay(renderer, position);
+    if (interaction_trigger_select_)
+        interaction_trigger_select_->drawOverlay(renderer, position);
+    if (interaction_hand_select_)
+        interaction_hand_select_->drawOverlay(renderer, position);
+
+    renderer.drawText({inner_x, editor_y + 104.0f}, "Gesture label",
+                      UITheme::Colors::TextSecondary);
+    renderer.drawText({inner_x, editor_y + 148.0f}, "hold ms",
+                      UITheme::Colors::TextSecondary);
+    renderer.drawText({inner_x + 108.0f, editor_y + 148.0f}, "cooldown",
+                      UITheme::Colors::TextSecondary);
+    renderer.drawText({inner_x + 226.0f, editor_y + 148.0f}, "priority",
+                      UITheme::Colors::TextSecondary);
+
+    const std::array<std::shared_ptr<UIInputBox>, 4> boxes{{
+        interaction_gesture_box_, interaction_hold_box_,
+        interaction_cooldown_box_, interaction_priority_box_
+    }};
+    for (const auto& box : boxes)
+        if (box) box->drawOverlay(renderer, position);
+    const std::array<std::shared_ptr<UIButton>, 4> editor_buttons{{
+        interaction_use_live_btn_, interaction_binding_enabled_btn_,
+        interaction_requires_arm_btn_, interaction_apply_binding_btn_
+    }};
+    for (const auto& button : editor_buttons)
+        if (button) button->drawOverlay(renderer, position);
+
+    const auto issues = PE::ValidatePhysicalGestureBindings(config);
+    const float info_y = editor_y + 240.0f;
+    renderer.drawText({inner_x, info_y},
+        "Mouse actions require arming; priority resolves overlap.",
+        UITheme::Colors::TextSecondary);
+    if (!interaction_binding_status_.empty()) {
+        const bool problem = interaction_binding_status_.find("failed") != std::string::npos ||
+            interaction_binding_status_.find("Conflict") != std::string::npos ||
+            interaction_binding_status_.find("warning") != std::string::npos ||
+            interaction_binding_status_.find("required") != std::string::npos;
+        renderer.drawText({inner_x, info_y + 24.0f},
+            CompactPath(interaction_binding_status_, 40),
+            problem ? UITheme::Colors::Warning : UITheme::Colors::Success);
+    }
+    if (!issues.empty()) {
+        renderer.drawText({inner_x, info_y + 44.0f},
+            CompactPath(issues.front(), 40), UITheme::Colors::Warning);
+    }
+
+    // Expanded dropdown lists must be emitted last so they remain above fields.
+    const std::array<std::shared_ptr<UIDropdown>, 3> dropdowns{{
+        interaction_action_select_, interaction_trigger_select_,
+        interaction_hand_select_
+    }};
+    for (const auto& dropdown : dropdowns) {
+        if (dropdown && dropdown->isExpanded())
+            dropdown->drawExpandedList(renderer, position);
     }
 }
 

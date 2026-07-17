@@ -116,6 +116,7 @@ loop reuses the cached mask bundle instead of re-running SAM, with
 | `PhysicalHandGestureBus.*` | Latest operational/result snapshot consumed by the UI and future controller layer. |
 | `PhysicalHandGestureResult.hpp` | MediaPipe-free 21-landmark, handedness, gesture, provenance, and telemetry contract. |
 | `PhysicalGestureControlLoop.*` | Temporal hysteresis, arming/cooldown safety, and allowlisted mouse/wake routing. |
+| `PhysicalGestureControlConfigIO.*` | Schema-versioned offline binding persistence through the canonical runtime configuration. |
 | `PhysicalGestureEventBus.*` | Bounded semantic `Started`/`Held`/`Released` event history for controller consumers. |
 | `PhysicalGestureControlResult.hpp` | Backend-free controller event and operational-status contracts. |
 
@@ -125,10 +126,13 @@ project gestures into model context. Its queue is deliberately bounded to one
 frame: a new frame replaces stale pending work instead of allowing latency to
 grow without bound.
 
-Phase 2 consumes completed interaction snapshots on the main thread. It never
+The controller consumes completed interaction snapshots on the main thread. It never
 injects raw per-frame labels directly: confidence hysteresis and dwell/release
 timers first produce semantic gesture events. Computer actions are restricted
-to the explicit mapping table in `PhysicalGestureControlConfig`.
+to the allowlisted binding table in `PhysicalGestureControlConfig`. The
+Interaction UI can edit and persist label/action/phase/hold/cooldown/hand
+mappings and provides a no-output dry-run mode. Pointer and mouse bindings are
+always forced to require an armed control session.
 
 ## Stage 3 — Spatial Grounding
 

@@ -6,6 +6,7 @@
 #include "helpers/mouse.hpp"
 #include "logger.hpp"
 #include <algorithm>
+#include <cmath>
 
 UIScrollBox::UIScrollBox()
     : scrollOffset(0.0f), contentHeight(0.0f), childSpacing(5.0f)
@@ -97,6 +98,8 @@ bool UIScrollBox::isMouseOverScrollbar(const Vec2& mousePos) const {
 }
 
 void UIScrollBox::update(const InputState& input, float dt) {
+    // The owning panel may resize this widget between frames.
+    scrollTo(scrollOffset);
     Vec2 m = input.mousePos;
     
     // Check if mouse is over the scrollbox
@@ -135,18 +138,30 @@ void UIScrollBox::update(const InputState& input, float dt) {
     }
     
     // Handle mouse wheel scrolling
-    if (inside && needsScrollbar()) {
-        // Note: Mouse wheel delta would need to be added to InputState
-        // For now, this is a placeholder for future mouse wheel support
+    if (inside && needsScrollbar() && input.mouseWheelDelta != 0.0f) {
+        const float wheel_steps = std::fabs(input.mouseWheelDelta) >= 120.0f
+            ? input.mouseWheelDelta / 120.0f
+            : input.mouseWheelDelta;
+        scrollBy(-wheel_steps * 42.0f);
     }
     
     // Update children with positions adjusted for scrolling
     for (auto& child : children) {
         if (child->isVisible()) {
             Vec2 childPos = child->getPosition();  // Relative to content area
+            Vec2 childSize = child->getSize();
             
             // Calculate absolute screen position for update
             Vec2 absolutePos = {position.x + childPos.x, position.y + childPos.y - scrollOffset};
+
+            // Clipping the draw is not enough: off-screen rows must not retain
+            // hit targets over controls elsewhere in the panel.
+            const bool intersectsViewport =
+                absolutePos.x + childSize.x >= position.x &&
+                absolutePos.x <= position.x + size.x &&
+                absolutePos.y + childSize.y >= position.y &&
+                absolutePos.y <= position.y + size.y;
+            if (!intersectsViewport) continue;
             
             // Temporarily update child position for input handling
             child->setPosition(absolutePos.x, absolutePos.y);
@@ -173,6 +188,10 @@ void UIScrollBox::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
     
 
     
+    // Keep partially visible children inside the recessed list surface. The
+    // scrollbar and expanded dropdown lists are drawn after this clip.
+    renderer.pushClipRect(position, size);
+
     // Render children with scroll offset and culling
     int drawnCount = 0;
     for (auto& child : children) {
@@ -206,7 +225,8 @@ void UIScrollBox::drawOverlay(OverlayRenderer& renderer, const Vec2& panelPos) {
         // Restore original position
         child->setPosition(originalPos.x, originalPos.y);
     }
-    
+
+    renderer.popClipRect();
 
     
     // Draw scrollbar if needed

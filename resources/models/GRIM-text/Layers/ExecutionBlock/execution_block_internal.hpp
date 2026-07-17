@@ -26,10 +26,8 @@ inline constexpr int kStagePArg2 = 6;
 inline constexpr int kStagePOp = 7;
 inline constexpr int kStagePWrite = 8;
 
-inline constexpr int kStageEntropyArg1 = 21;
-inline constexpr int kStageEntropyArg2 = 22;
-inline constexpr int kStageEntropyOp = 23;
-inline constexpr int kStageWriteCollapse = 24;
+// Stages 21-24 are retired. Low entropy / high confidence are optimization
+// diagnostics, not invalid execution state. Softmax validity remains fatal.
 inline constexpr int kStageWriteSlotInvalid = 25;
 
 // Stage 31 is retired. Ordinary numeric atoms are not implicitly state-bearing;
@@ -50,10 +48,6 @@ inline const char* stageIdToName(int id) {
 		case kStagePArg2: return "p_arg2 (softmax validity)";
 		case kStagePOp: return "p_op (softmax validity)";
 		case kStagePWrite: return "p_write (softmax validity)";
-		case kStageEntropyArg1: return "entropy collapse (p_arg1)";
-		case kStageEntropyArg2: return "entropy collapse (p_arg2)";
-		case kStageEntropyOp: return "entropy collapse (p_op)";
-		case kStageWriteCollapse: return "write collapse (max p_write)";
 		case kStageWriteSlotInvalid: return "write slot not in value range [S,V)";
 		case kStageSlotInvalid: return "invalid slot index";
 		case kStageSlotUninit: return "slot read before initialization";

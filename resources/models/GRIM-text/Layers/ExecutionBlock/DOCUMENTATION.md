@@ -66,7 +66,7 @@ Grouped fields consumed by the execution-block ops:
 - dimensions: `d_model`, `atom_embedding_dim`, `num_ops`, `num_slots`, `num_scratch_slots`, `num_exec_steps`, `value_decode_input_dim`, `value_decode_hidden_dim`, `d_key`, `d_type`, `cross_attn_head_dim`
 - read/write behavior: `cross_attn_topk`, `usage_decay`, `inject_gate_temp`
 - result placement: `result_slot_mode`, `result_slot_index`
-- validation/debug gates: `debug_mode`, `entropy_collapse_threshold`, `write_collapse_threshold`, `magnitude_limit`, `transition_hard_threshold`
+- validation/debug policy: `debug_mode`, `magnitude_limit`, and `transition_hard_threshold` control fail-loud state/numeric checks; `entropy_collapse_threshold` and `write_collapse_threshold` are warning thresholds for trainable selection confidence
 
 ### `ExecutionBlockDiagnosticsBuffers`
 
@@ -228,6 +228,10 @@ This keeps execution cleanup behind one fail-loud execution-block boundary inste
 The current implementation does **not** do blended writes.
 
 It computes a softmax distribution `p_write` for learning/diagnostics, then performs a **hard argmax write** to exactly one slot in forward execution.
+
+The content term uses scaled query/key scoring, `dot(q_write, K_write) / sqrt(d_key)`, before the learned content coefficient is applied. This keeps initialization variance independent of key width and avoids saturating the write softmax before structured cross-entropy can train it.
+
+Low selection entropy or `max(p_write)` above the configured confidence threshold is diagnostic, not an invalid execution state. Debug mode reports those conditions and training continues; non-finite or non-normalized softmax output remains fatal. Entropy regularization belongs to the auxiliary loss rather than the execution-state validity flag.
 
 Consequences:
 

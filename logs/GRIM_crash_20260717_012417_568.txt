@@ -1,0 +1,19 @@
+GRIM native crash report
+Dump: D:\G.R.I.M\logs\GRIM_crash_20260717_012417_568.dmp
+ProcessId: 16656
+ThreadId: 43248
+ExceptionCode: 0xc0000005
+ExceptionAddress: 0x7ff6d03dd7a5
+AccessViolationOperation: read
+AccessViolationAddress: 0x100000001
+Stack:
+  0x7ff6d03dd7a5 GRIM::Perception::Physical::PhysicalFrameBus::FrameView::operator=+0x55 [D:\G.R.I.M\build\release\GRIM.exe]
+  0x7ff6d03de96e GRIM::Perception::Physical::PhysicalPerceptionPrimitiveResults::operator=+0x2e [D:\G.R.I.M\build\release\GRIM.exe]
+  0x7ff6d03df9a1 GRIM::Perception::Physical::PhysicalPerceptionPrimitiveBus::PullLatestPhysicalPerceptionResultsView+0x51 [D:\G.R.I.M\build\release\GRIM.exe]
+  0x7ff6d0401a3c GRIM::Perception::Physical::`anonymous namespace'::RunPhysicalSpatialGroundingOnce+0xbc [D:\G.R.I.M\build\release\GRIM.exe]
+  0x7ff6d0400d4b `GRIM::Perception::Physical::TickPhysicalSpatialGrounding'::`2'::<lambda_1>::operator()+0x1b [D:\G.R.I.M\build\release\GRIM.exe]
+  0x7ff6d03c9868 GRIM::Perception::Physical::PhysicalLatestTickWorker::WorkerMain+0xf8 [D:\G.R.I.M\build\release\GRIM.exe]
+  0x7ff6d03c4741 std::thread::_Invoke<std::tuple<`GRIM::Perception::Physical::PhysicalLatestTickWorker::Start'::`2'::<lambda_1> >,0>+0x11 [D:\G.R.I.M\build\release\GRIM.exe]
+  0x7ff9cc53cd30 wcsrchr+0x150 [C:\WINDOWS\System32\ucrtbase.dll]
+  0x7ff9cdcbe957 BaseThreadInitThunk+0x17 [C:\WINDOWS\System32\KERNEL32.DLL]
+  0x7ff9ce9ead6c RtlUserThreadStart+0x2c [C:\WINDOWS\SYSTEM32\ntdll.dll]

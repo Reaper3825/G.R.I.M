@@ -4,6 +4,7 @@
 #include "primitives/ui_button.hpp"
 #include "primitives/ui_dropdown.hpp"
 #include "primitives/ui_inputbox.hpp"
+#include "primitives/ui_scrollbox.hpp"
 #include "perception/physical/PhysicalCameraSource.hpp"
 #include "perception/physical/PhysicalCameraCalibrator.hpp"
 #include "perception/physical/PhysicalFrameConditioner.hpp"
@@ -301,9 +302,24 @@ private:
     // Human-interaction branch (independent Stage-2 FrameBus consumer).
     void HandleToggleHandGestures();
     void HandleReloadHandGestureBackend();
+    void HandleToggleGestureController();
+    void HandleToggleGestureDryRun();
+    void HandleToggleGestureStudioView();
+    void HandleUseLiveGesture();
+    void HandleApplyGestureBinding();
+    void HandleAddGestureBinding();
+    void HandleDeleteGestureBinding();
+    void HandleRestoreDefaultGestureBindings();
     void RefreshInteractionButtonLabels();
+    void RebuildGestureBindingEditor();
+    void LoadSelectedGestureBindingIntoEditor();
+    void PersistGestureBindingsFromUi();
     void UpdateInteractionTab(const InputState& input, float dt);
     void DrawInteractionTab(OverlayRenderer& renderer);
+    void DrawInteractionPreview(OverlayRenderer& renderer,
+                                float frame_x, float frame_y,
+                                float frame_w, float frame_h);
+    void DrawGestureBindingsEditor(OverlayRenderer& renderer);
     void DrawHandGestureOverlay(
         OverlayRenderer& renderer,
         const GRIM::Perception::Physical::PhysicalHandGestureSnapshot& snapshot,
@@ -311,6 +327,35 @@ private:
 
     std::shared_ptr<UIButton> interaction_enable_btn_;
     std::shared_ptr<UIButton> interaction_reload_btn_;
+    std::shared_ptr<UIButton> interaction_controller_btn_;
+    std::shared_ptr<UIButton> interaction_dry_run_btn_;
+    std::shared_ptr<UIButton> interaction_view_btn_;
+    std::shared_ptr<UIScrollBox> interaction_binding_list_;
+    std::vector<std::shared_ptr<UIButton>> interaction_binding_rows_;
+    std::shared_ptr<UIDropdown> interaction_action_select_;
+    std::shared_ptr<UIDropdown> interaction_trigger_select_;
+    std::shared_ptr<UIDropdown> interaction_hand_select_;
+    std::shared_ptr<UIInputBox> interaction_gesture_box_;
+    std::shared_ptr<UIInputBox> interaction_hold_box_;
+    std::shared_ptr<UIInputBox> interaction_cooldown_box_;
+    std::shared_ptr<UIInputBox> interaction_priority_box_;
+    std::shared_ptr<UIButton> interaction_use_live_btn_;
+    std::shared_ptr<UIButton> interaction_binding_enabled_btn_;
+    std::shared_ptr<UIButton> interaction_requires_arm_btn_;
+    std::shared_ptr<UIButton> interaction_apply_binding_btn_;
+    std::shared_ptr<UIButton> interaction_add_binding_btn_;
+    std::shared_ptr<UIButton> interaction_delete_binding_btn_;
+    std::shared_ptr<UIButton> interaction_defaults_btn_;
+    std::string interaction_gesture_buf_;
+    std::string interaction_hold_buf_;
+    std::string interaction_cooldown_buf_;
+    std::string interaction_priority_buf_;
+    std::string interaction_binding_status_;
+    size_t interaction_selected_binding_ = 0;
+    bool interaction_editor_binding_enabled_ = true;
+    bool interaction_editor_requires_arm_ = false;
+    bool interaction_show_bindings_ = false;
+    bool interaction_binding_list_needs_rebuild_ = false;
     PreviewBlitCache interaction_blit_cache_;
     GRIM::Perception::Physical::PhysicalHandGestureBus::SnapshotView
         interaction_snapshot_view_;

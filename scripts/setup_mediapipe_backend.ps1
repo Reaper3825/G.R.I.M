@@ -108,6 +108,24 @@ function Get-ShortBazelUserRoot {
     return [System.IO.Path]::GetFullPath($shortRoot)
 }
 
+function Find-Dumpbin {
+    $direct = Get-Command dumpbin.exe -ErrorAction SilentlyContinue
+    if ($direct) { return $direct.Source }
+
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} `
+        'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (-not (Test-Path -LiteralPath $vswhere)) { return $null }
+    $installation = & $vswhere -latest -products * `
+        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+        -property installationPath
+    if (-not $installation) { return $null }
+    return Get-ChildItem -LiteralPath (Join-Path $installation `
+        'VC\Tools\MSVC') -Recurse -Filter dumpbin.exe -File `
+        -ErrorAction SilentlyContinue |
+        Where-Object FullName -Match 'Hostx64\\x64' |
+        Select-Object -First 1 -ExpandProperty FullName
+}
+
 New-Item -ItemType Directory -Path $cacheRoot, $externalRoot, $toolRoot -Force |
     Out-Null
 
@@ -212,6 +230,170 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot `
     'mediapipe\grim_gesture_backend.BUILD') `
     -Destination (Join-Path $grimBazelPackage 'BUILD') -Force
 
+# MediaPipe v0.10.35 declares kGpuService with ABSL_CONST_INIT but omits the
+# specifier on its definition. MSVC correctly diagnoses that C++20 mismatch.
+# Apply only the exact pinned-source transformation and remain idempotent.
+$gpuServicePath = Join-Path $sourceRoot 'mediapipe\gpu\gpu_service.cc'
+$gpuServiceText = Get-Content -LiteralPath $gpuServicePath -Raw
+$gpuServiceDefinition = @'
+const GraphService<GpuResources> kGpuService(
+    "kGpuService", GraphServiceBase::kAllowDefaultInitialization);
+'@
+$patchedGpuServiceDefinition = @'
+ABSL_CONST_INIT const GraphService<GpuResources> kGpuService(
+    "kGpuService", GraphServiceBase::kAllowDefaultInitialization);
+'@
+if ($gpuServiceText.Contains($patchedGpuServiceDefinition)) {
+    Write-Host 'MediaPipe MSVC constinit patch already applied.'
+} elseif ($gpuServiceText.Contains($gpuServiceDefinition)) {
+    $gpuServiceText = $gpuServiceText.Replace(
+        $gpuServiceDefinition, $patchedGpuServiceDefinition)
+    [System.IO.File]::WriteAllText(
+        $gpuServicePath, $gpuServiceText, $utf8NoBom)
+    Write-Host 'Applied MediaPipe MSVC constinit patch.'
+} else {
+    throw 'Pinned MediaPipe gpu_service.cc no longer matches the expected source.'
+}
+
+# MSVC rejects the internal VisitPacket* helper templates because the
+# non-deducible int-reference sentinel pack follows the payload type pack.
+# The helpers are private and every call site supplies only payload types, so
+# remove just that sentinel while preserving visitor deduction and recursion.
+$calculatorContextPath = Join-Path $sourceRoot `
+    'mediapipe\framework\api3\calculator_context.h'
+$calculatorContextText = Get-Content -LiteralPath $calculatorContextPath -Raw
+$singleVisitTemplate = `
+    'template <typename T, int&... DoNotSpecify, typename F>'
+$patchedSingleVisitTemplate = 'template <typename T, typename F>'
+$recursiveVisitTemplate = @'
+template <typename T, typename U, typename... Rest, int&... DoNotSpecify,
+          typename F>
+'@
+$patchedRecursiveVisitTemplate = @'
+template <typename T, typename U, typename... Rest, typename F>
+'@
+$singleOriginalCount = [regex]::Matches(
+    $calculatorContextText, [regex]::Escape($singleVisitTemplate)).Count
+$singlePatchedCount = [regex]::Matches(
+    $calculatorContextText, [regex]::Escape($patchedSingleVisitTemplate)).Count
+$recursiveOriginalCount = [regex]::Matches(
+    $calculatorContextText, [regex]::Escape($recursiveVisitTemplate)).Count
+$recursivePatchedCount = [regex]::Matches(
+    $calculatorContextText,
+    [regex]::Escape($patchedRecursiveVisitTemplate)).Count
+if ($singleOriginalCount -eq 2 -and $singlePatchedCount -eq 0 -and
+    $recursiveOriginalCount -eq 2 -and $recursivePatchedCount -eq 0) {
+    $calculatorContextText = $calculatorContextText.Replace(
+        $singleVisitTemplate, $patchedSingleVisitTemplate)
+    $calculatorContextText = $calculatorContextText.Replace(
+        $recursiveVisitTemplate, $patchedRecursiveVisitTemplate)
+    [System.IO.File]::WriteAllText(
+        $calculatorContextPath, $calculatorContextText, $utf8NoBom)
+    Write-Host 'Applied MediaPipe MSVC VisitPacket template patch.'
+} elseif ($singleOriginalCount -eq 0 -and $singlePatchedCount -eq 2 -and
+          $recursiveOriginalCount -eq 0 -and $recursivePatchedCount -eq 2) {
+    Write-Host 'MediaPipe MSVC VisitPacket template patch already applied.'
+} else {
+    throw 'Pinned MediaPipe calculator_context.h no longer matches the expected source.'
+}
+
+# graph.h befriends api3::SubgraphContext<NodeT> before that template has been
+# declared. MSVC instead finds mediapipe::SubgraphContext in the outer
+# namespace and rejects a template friend declaration for the non-template
+# class. Forward-declare the intended API3 template.
+$api3GraphPath = Join-Path $sourceRoot 'mediapipe\framework\api3\graph.h'
+$api3GraphText = Get-Content -LiteralPath $api3GraphPath -Raw
+$graphForwardDeclaration = @'
+template <template <typename, typename...> typename ContractT, typename... Ts>
+class Graph;
+'@
+$patchedGraphForwardDeclaration = @'
+template <template <typename, typename...> typename ContractT, typename... Ts>
+class Graph;
+
+template <typename NodeT>
+class SubgraphContext;
+'@
+if ($api3GraphText.Contains($patchedGraphForwardDeclaration)) {
+    Write-Host 'MediaPipe MSVC SubgraphContext declaration patch already applied.'
+} elseif ($api3GraphText.Contains($graphForwardDeclaration)) {
+    $api3GraphText = $api3GraphText.Replace(
+        $graphForwardDeclaration, $patchedGraphForwardDeclaration)
+    [System.IO.File]::WriteAllText($api3GraphPath, $api3GraphText, $utf8NoBom)
+    Write-Host 'Applied MediaPipe MSVC SubgraphContext declaration patch.'
+} else {
+    throw 'Pinned MediaPipe graph.h no longer matches the expected source.'
+}
+
+# Mirror the header's ABSL_CONST_INIT specifier onto the two explicit
+# thread-local current_ definitions. MSVC requires declaration and definition
+# to carry matching C++20 constinit semantics.
+$legacySupportPath = Join-Path $sourceRoot `
+    'mediapipe\framework\legacy_calculator_support.cc'
+$legacySupportText = Get-Content -LiteralPath $legacySupportPath -Raw
+$legacyCurrentDefinitions = @'
+template <>
+thread_local CalculatorContext*
+    LegacyCalculatorSupport::Scoped<CalculatorContext>::current_ = nullptr;
+template <>
+thread_local CalculatorContract*
+    LegacyCalculatorSupport::Scoped<CalculatorContract>::current_ = nullptr;
+'@
+$patchedLegacyCurrentDefinitions = @'
+template <>
+ABSL_CONST_INIT thread_local CalculatorContext*
+    LegacyCalculatorSupport::Scoped<CalculatorContext>::current_ = nullptr;
+template <>
+ABSL_CONST_INIT thread_local CalculatorContract*
+    LegacyCalculatorSupport::Scoped<CalculatorContract>::current_ = nullptr;
+'@
+if ($legacySupportText.Contains($patchedLegacyCurrentDefinitions)) {
+    Write-Host 'MediaPipe MSVC legacy constinit patch already applied.'
+} elseif ($legacySupportText.Contains($legacyCurrentDefinitions)) {
+    $legacySupportText = $legacySupportText.Replace(
+        $legacyCurrentDefinitions, $patchedLegacyCurrentDefinitions)
+    [System.IO.File]::WriteAllText(
+        $legacySupportPath, $legacySupportText, $utf8NoBom)
+    Write-Host 'Applied MediaPipe MSVC legacy constinit patch.'
+} else {
+    throw 'Pinned MediaPipe legacy_calculator_support.cc no longer matches expected source.'
+}
+
+# image_c_lib is marked alwayslink upstream, but it has no source of its own;
+# image.cc remains in the non-alwayslink :image archive and is discarded when
+# no linked C++ implementation calls MpImageCreate*. GRIM calls those exports
+# dynamically, so force the implementation archive into the shared library.
+$imageBuildPath = Join-Path $sourceRoot `
+    'mediapipe\tasks\c\vision\core\BUILD'
+$imageBuildText = Get-Content -LiteralPath $imageBuildPath -Raw
+$imageLibraryRule = @'
+cc_library(
+    name = "image",
+    srcs = ["image.cc"],
+    hdrs = ["image.h"],
+    deps = IMAGE_DEPS,
+)
+'@
+$patchedImageLibraryRule = @'
+cc_library(
+    name = "image",
+    srcs = ["image.cc"],
+    hdrs = ["image.h"],
+    deps = IMAGE_DEPS,
+    alwayslink = 1,
+)
+'@
+if ($imageBuildText.Contains($patchedImageLibraryRule)) {
+    Write-Host 'MediaPipe MpImage export patch already applied.'
+} elseif ($imageBuildText.Contains($imageLibraryRule)) {
+    $imageBuildText = $imageBuildText.Replace(
+        $imageLibraryRule, $patchedImageLibraryRule)
+    [System.IO.File]::WriteAllText($imageBuildPath, $imageBuildText, $utf8NoBom)
+    Write-Host 'Applied MediaPipe MpImage export patch.'
+} else {
+    throw 'Pinned MediaPipe vision/core/BUILD no longer matches expected source.'
+}
+
 $gitBash = Join-Path $env:ProgramFiles 'Git\bin\bash.exe'
 if (Test-Path -LiteralPath $gitBash) {
     $env:BAZEL_SH = $gitBash
@@ -282,6 +464,26 @@ foreach ($marker in $forbiddenMarkers) {
     }
 }
 
+$dumpbin = Find-Dumpbin
+if (-not $dumpbin) {
+    throw 'dumpbin.exe is required to validate the MediaPipe runtime exports.'
+}
+$exportTable = (& $dumpbin /exports $runtimePath 2>&1) -join "`n"
+$requiredExports = @(
+    'MpErrorFree',
+    'MpImageCreateFromUint8Data',
+    'MpImageFree',
+    'MpGestureRecognizerCreate',
+    'MpGestureRecognizerRecognizeForVideo',
+    'MpGestureRecognizerCloseResult',
+    'MpGestureRecognizerClose'
+)
+foreach ($requiredExport in $requiredExports) {
+    if ($exportTable -notmatch "(?m)\b$([regex]::Escape($requiredExport))\s*$") {
+        throw "MediaPipe runtime is missing required export: $requiredExport"
+    }
+}
+
 $audit = [ordered]@{
     schema = 1
     mediapipe_version = $manifest.mediapipe.version
@@ -290,6 +492,7 @@ $audit = [ordered]@{
     build_target = '//mediapipe/tasks/c/grim:libmediapipe.dll'
     cpu_only = $true
     usage_logging_markers_absent = $true
+    required_exports_verified = $true
 }
 $auditPath = Join-Path $sourceRoot '.grim-offline-audit.json'
 $audit | ConvertTo-Json | Set-Content -LiteralPath $auditPath -Encoding UTF8

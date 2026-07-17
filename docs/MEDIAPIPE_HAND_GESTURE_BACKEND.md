@@ -1,5 +1,10 @@
 # MediaPipe hand-gesture backend
 
+> **Integration status: READY** — The local Windows backend, base physical
+> perception path, and Physical Environment UI visuals were built and exercised
+> successfully with left, right, and simultaneous two-hand input. See
+> [Phase 1 completion validation](MEDIAPIPE_HAND_GESTURE_PHASE1.md#completion-validation).
+
 GRIM uses the MediaPipe Tasks C `GestureRecognizer` through a native runtime
 that is built locally from the pinned v0.10.35 public source. Camera frames,
 landmarks, and gesture results stay in-process. The runtime never downloads a
@@ -40,6 +45,18 @@ The Windows build also supplies MSVC's native `/std:c11` and
 pthreadpool, whose upstream BUILD file uses GCC syntax.
 MediaPipe's variadic status macros also require MSVC's conforming preprocessor,
 so `/Zc:preprocessor` is applied to target and host C++ compilation.
+The setup applies one guarded v0.10.35 source compatibility patch: it mirrors
+the header's `ABSL_CONST_INIT` specifier onto the `kGpuService` definition, as
+required by MSVC in C++20 mode. The transformation is exact and idempotent.
+It also removes a non-deducible sentinel parameter pack from four private
+`VisitPacket*` helper overloads that MSVC rejects. All payload typing, visitor
+deduction, recursion, and public `VisitOrDie` checks remain unchanged.
+Finally, it forward-declares the API3 `SubgraphContext<NodeT>` template before
+`GenericGraph`'s friend declaration. This prevents MSVC from resolving that
+friend to MediaPipe's unrelated outer-namespace, non-template context class.
+The same declaration/definition consistency rule is applied to the two
+`LegacyCalculatorSupport::Scoped<...>::current_` thread-local specializations,
+whose header declarations carry `ABSL_CONST_INIT` on Windows.
 The script also creates a genuine short drive-root output directory at
 `D:\.gbz` and passes it as `--output_user_root`, keeping generated protobuf
 include paths below Windows' legacy 260-character lookup boundary. It shares
@@ -56,6 +73,12 @@ headers and import libraries. A GRIM-specific Bazel target links only the
 gesture recognizer and image C APIs instead of the complete MediaPipe Tasks C
 bundle. The generated runtime therefore uses the same OpenCV DLL family already
 deployed for GRIM's physical perception layer.
+
+The minimized target forces the Tasks C `image.cc` archive into the DLL so the
+`MpImageCreateFromUint8Data` and `MpImageFree` entry points are not discarded
+by Windows link-time archive selection. Before an audit stamp is written, the
+setup script inspects the DLL export table and requires every symbol consumed
+by GRIM's runtime adapter.
 
 ## Build GRIM
 

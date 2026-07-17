@@ -4,11 +4,41 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace GRIM { namespace Perception { namespace Physical {
 
+enum class PhysicalGestureAction : uint8_t {
+    ControlArm = 0,
+    ControlDisarm,
+    PointerMove,
+    MouseLeftClick,
+    MouseRightClick,
+    VoiceWake
+};
+
+enum class PhysicalGestureTrigger : uint8_t {
+    Started = 0,
+    Held,
+    Released
+};
+
+struct PhysicalGestureBinding {
+    std::string binding_id;
+    std::string gesture_label;
+    PhysicalGestureAction action = PhysicalGestureAction::VoiceWake;
+    PhysicalGestureTrigger trigger = PhysicalGestureTrigger::Held;
+    PhysicalHandedness handedness = PhysicalHandedness::Unknown; // either hand
+    uint64_t minimum_hold_ms = 0;
+    uint64_t cooldown_ms = 0;
+    bool requires_armed = false;
+    bool enabled = true;
+    int priority = 0;
+};
+
 struct PhysicalGestureControlConfig {
     bool enabled = true;
+    bool dry_run = false;
     PhysicalHandedness preferred_hand = PhysicalHandedness::Unknown; // either hand
 
     float enter_confidence = 0.75f;
@@ -17,28 +47,32 @@ struct PhysicalGestureControlConfig {
     uint64_t release_grace_ms = 250;
     uint64_t result_stale_ms = 650;
 
-    std::string arm_gesture = "Victory";
-    uint64_t arm_hold_ms = 800;
-    std::string disarm_gesture = "Open_Palm";
-    uint64_t disarm_hold_ms = 700;
     uint64_t armed_timeout_ms = 15000;
 
-    std::string pointer_gesture = "Pointing_Up";
-    std::string left_click_gesture = "Closed_Fist";
-    std::string right_click_gesture = "Thumb_Down";
     float pointer_gain_pixels = 1600.0f;
     float pointer_smoothing = 0.45f;
     float pointer_deadzone_normalized = 0.0025f;
     int max_pointer_step_pixels = 55;
-    bool invert_pointer_x = false;
+    // Camera previews are mirrored for natural interaction, so horizontal
+    // pointer deltas must be mirrored as well to follow the displayed hand.
+    bool invert_pointer_x = true;
     bool invert_pointer_y = false;
-    uint64_t click_cooldown_ms = 650;
 
-    std::string wake_gesture = "ILoveYou";
-    uint64_t wake_hold_ms = 1100;
-    uint64_t wake_cooldown_ms = 10000;
-    bool wake_requires_armed = false;
+    std::vector<PhysicalGestureBinding> bindings;
 };
+
+std::vector<PhysicalGestureBinding> DefaultPhysicalGestureBindings();
+PhysicalGestureControlConfig DefaultPhysicalGestureControlConfig();
+
+const char* PhysicalGestureActionId(PhysicalGestureAction action) noexcept;
+const char* PhysicalGestureActionDisplayName(PhysicalGestureAction action) noexcept;
+bool TryParsePhysicalGestureAction(const std::string& value,
+                                   PhysicalGestureAction& action) noexcept;
+const char* PhysicalGestureTriggerId(PhysicalGestureTrigger trigger) noexcept;
+bool TryParsePhysicalGestureTrigger(const std::string& value,
+                                    PhysicalGestureTrigger& trigger) noexcept;
+std::vector<std::string> ValidatePhysicalGestureBindings(
+    const PhysicalGestureControlConfig& config);
 
 // Main-thread controller tick. It consumes new inference results, emits
 // stabilized events, and executes only the explicitly mapped local actions.

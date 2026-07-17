@@ -124,47 +124,6 @@ __global__ void kernelValidateSoftmax(
         atomicMax(error_flag, stage_id);
 }
 
-__global__ void kernelCheckEntropyCollapse(
-    const float* __restrict__ probs,
-    int N,
-    int* __restrict__ error_flag,
-    int stage_id,
-    float threshold   // compared against NORMALIZED entropy in [0,1]
-) {
-    const int tid = threadIdx.x;
-    float ent = 0.0f;
-    for (int i = tid; i < N; i += blockDim.x) {
-        float p = probs[i];
-        if (p > 1e-10f)
-            ent -= p * logf(p + 1e-10f);
-    }
-    ent = warpReduceSum(ent);
-    // Normalize: ent_norm = ent / log(N) ∈ [0,1] regardless of distribution size.
-    // Without this, threshold means different things for N=4 vs N=128.
-    if (tid == 0) {
-        float max_ent = logf(static_cast<float>(N));
-        float ent_norm = (max_ent > 1e-10f) ? (ent / max_ent) : 0.0f;
-        if (ent_norm < threshold)
-            atomicMax(error_flag, stage_id);
-    }
-}
-
-__global__ void kernelCheckWriteCollapse(
-    const float* __restrict__ probs,
-    int N,
-    int* __restrict__ error_flag,
-    int stage_id,
-    float threshold
-) {
-    const int tid = threadIdx.x;
-    float mx = 0.0f;
-    for (int i = tid; i < N; i += blockDim.x)
-        mx = fmaxf(mx, probs[i]);
-    mx = warpReduceMax(mx);
-    if (tid == 0 && mx > threshold)
-        atomicMax(error_flag, stage_id);
-}
-
 // Masked reduce-mean: exclude atom positions from the mean so that numeric
 // surface features in H cannot leak into execution decision context.
 // When atom_mask is nullptr the kernel falls back to the unmasked path.
@@ -1339,6 +1298,30 @@ static void collectStepMetrics(const HyperParameters::ExecutionBlockConstruction
     for (int k = 0; k < 4; ++k)
         diag_out->metrics.op_distribution[k] = (k < op_copy) ? op_dist[k] : 0.0f;
 
+    const auto normalized_entropy = [](float entropy, int choices) {
+        const float max_entropy = logf(static_cast<float>(choices));
+        return max_entropy > 1e-10f ? entropy / max_entropy : 0.0f;
+    };
+    const float arg1_entropy_norm = normalized_entropy(d_metrics[0], V_val);
+    const float arg2_entropy_norm = normalized_entropy(d_metrics[1], V_val);
+    const float op_entropy_norm = normalized_entropy(d_metrics[2], nop);
+    const bool low_selection_entropy =
+        arg1_entropy_norm < hp.entropy_collapse_threshold ||
+        arg2_entropy_norm < hp.entropy_collapse_threshold ||
+        op_entropy_norm < hp.entropy_collapse_threshold;
+    const bool high_write_confidence = d_metrics[4] > hp.write_collapse_threshold;
+    if (low_selection_entropy || high_write_confidence) {
+        char warning[384];
+        snprintf(warning, sizeof(warning),
+            "[ExecutionBlock diagnostic] confident selection; continuing training | "
+            "H_norm(arg1)=%.4f H_norm(arg2)=%.4f H_norm(op)=%.4f "
+            "max_p_write=%.4f thresholds(entropy=%.4f,write=%.4f)",
+            arg1_entropy_norm, arg2_entropy_norm, op_entropy_norm,
+            d_metrics[4], hp.entropy_collapse_threshold, hp.write_collapse_threshold);
+        GRIM::Logging::EmitModuleWarning(
+            GRIM::Logging::ModuleId::ExecutionBlock, warning);
+    }
+
     // Emit per-step metrics via module log system
     {
         char msg[384];
@@ -1594,8 +1577,6 @@ void executeStepCoordinatorImpl(
         diag_out->selection_temperature = temperature;
     }
     kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_arg1.data, V_val, diag.numericErrorFlag(), kStagePArg1);
-    kernelCheckEntropyCollapse<<<1, kWarpSize, 0, stream>>>(
-        work.p_arg1.data, V_val, diag.numericErrorFlag(), kStageEntropyArg1, hp.entropy_collapse_threshold);
 
     auto query2 = autograd::matmul(decision_input, params.w_arg2_select, stream);
     auto arg2_logits = autograd::matmul(query2, work.cand_hidden, stream, true);
@@ -1607,8 +1588,6 @@ void executeStepCoordinatorImpl(
         diag_out->arg2_logits_tensor = std::move(arg2_logits);
     }
     kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_arg2.data, V_val, diag.numericErrorFlag(), kStagePArg2);
-    kernelCheckEntropyCollapse<<<1, kWarpSize, 0, stream>>>(
-        work.p_arg2.data, V_val, diag.numericErrorFlag(), kStageEntropyArg2, hp.entropy_collapse_threshold);
 
     materializeSelectedOperands(hp, diag, memory, stream, work);
     kernelCheckFinite<<<(V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
@@ -1633,8 +1612,6 @@ void executeStepCoordinatorImpl(
         diag_out->op_logits_tensor = std::move(op_logits);
     }
     kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_op.data, nop, diag.numericErrorFlag(), kStagePOp);
-    kernelCheckEntropyCollapse<<<1, kWarpSize, 0, stream>>>(
-        work.p_op.data, nop, diag.numericErrorFlag(), kStageEntropyOp, hp.entropy_collapse_threshold);
 
     work.op_results = Tensor::zeros({1, nop}, stream, "exec_op_results");
     // Fix #6: Reset per-step division invalid flag before FourOps
@@ -1825,12 +1802,17 @@ void executeStepCoordinatorImpl(
     CUDA_CHECK_KERNEL();
 
     // ── Write logits via autograd ops (tape-connected to W_write_query, W_write_key, alpha, beta) ──
-    // Formula: logits[i] = alpha * dot(q, K_proj[i]) + beta * (-usage[i])
+    // Formula: logits[i] = alpha * dot(q, K_proj[i]) / sqrt(d_key)
+    //                    + beta * (-usage[i])
     // Pure CE classification — no non-differentiable bias terms (Fix #4).
     //
-    // content_scores = q_write @ K_proj^T → [1, V]
-    auto content_scores = autograd::matmul(q_write, K_proj, stream,
+    // Scale query/key content scores exactly as the execution read-attention
+    // path does. Without this, initialization variance grows with d_key and
+    // saturates p_write before structured CE can train the selector.
+    auto raw_content_scores = autograd::matmul(q_write, K_proj, stream,
         /*transpose_b=*/true);
+    const float inv_sqrt_dk = 1.0f / sqrtf(static_cast<float>(dk));
+    auto content_scores = autograd::mul_scalar(raw_content_scores, inv_sqrt_dk, stream);
 
     // alpha_content = alpha [1,1] @ content_scores [1,V] → [1,V] (broadcast scalar multiply)
     auto alpha_content = autograd::matmul(params.alpha, content_scores, stream);
@@ -1858,8 +1840,6 @@ void executeStepCoordinatorImpl(
         diag_out->write_logits_tensor = std::move(write_logits);
     }
     kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_write.data, V, diag.numericErrorFlag(), kStagePWrite);
-    kernelCheckWriteCollapse<<<1, kWarpSize, 0, stream>>>(
-        work.p_write.data, V, diag.numericErrorFlag(), kStageWriteCollapse, hp.write_collapse_threshold);
 
     work.state_new = Tensor::zeros({1, dm}, stream, "exec_state_new");
     const float* step_emb_ptr = params.step_embeddings.data + static_cast<size_t>(step) * dm;

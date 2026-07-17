@@ -12,6 +12,14 @@ option(GRIM_PORTABLE_ONLY "Force resources to live next to executable" OFF)
 # the only download path; GRIM itself never fetches a runtime or model.
 set(GRIM_MEDIAPIPE_ROOT "${CMAKE_SOURCE_DIR}/external/mediapipe" CACHE PATH
     "MediaPipe source/install root containing mediapipe/tasks/c headers")
+# Migrate caches created when this option defaulted to an empty string. Do not
+# overwrite any non-empty custom installation path.
+if(NOT GRIM_MEDIAPIPE_ROOT)
+    set(GRIM_MEDIAPIPE_ROOT "${CMAKE_SOURCE_DIR}/external/mediapipe"
+        CACHE PATH
+        "MediaPipe source/install root containing mediapipe/tasks/c headers"
+        FORCE)
+endif()
 if(WIN32)
     set(_GRIM_MEDIAPIPE_LIBRARY_DEFAULT
         "${GRIM_MEDIAPIPE_ROOT}/bazel-bin/mediapipe/tasks/c/libmediapipe.dll")
@@ -25,6 +33,11 @@ endif()
 set(GRIM_MEDIAPIPE_TASKS_C_LIBRARY "${_GRIM_MEDIAPIPE_LIBRARY_DEFAULT}"
     CACHE FILEPATH
     "Path to the locally built MediaPipe Tasks C library")
+if(NOT GRIM_MEDIAPIPE_TASKS_C_LIBRARY)
+    set(GRIM_MEDIAPIPE_TASKS_C_LIBRARY
+        "${_GRIM_MEDIAPIPE_LIBRARY_DEFAULT}" CACHE FILEPATH
+        "Path to the locally built MediaPipe Tasks C library" FORCE)
+endif()
 set(_GRIM_MEDIAPIPE_DEFAULT OFF)
 if(EXISTS
    "${GRIM_MEDIAPIPE_ROOT}/mediapipe/tasks/c/vision/gesture_recognizer/gesture_recognizer.h"
@@ -39,6 +52,14 @@ set(GRIM_MEDIAPIPE_VERSION "0.10.35" CACHE STRING
 set(GRIM_MEDIAPIPE_OFFLINE_AUDIT_STAMP
     "${GRIM_MEDIAPIPE_ROOT}/.grim-offline-audit.json" CACHE FILEPATH
     "Audit stamp emitted by scripts/setup_mediapipe_backend.ps1 -Build")
+if(NOT GRIM_MEDIAPIPE_OFFLINE_AUDIT_STAMP OR
+   GRIM_MEDIAPIPE_OFFLINE_AUDIT_STAMP STREQUAL
+       "/.grim-offline-audit.json")
+    set(GRIM_MEDIAPIPE_OFFLINE_AUDIT_STAMP
+        "${GRIM_MEDIAPIPE_ROOT}/.grim-offline-audit.json" CACHE FILEPATH
+        "Audit stamp emitted by scripts/setup_mediapipe_backend.ps1 -Build"
+        FORCE)
+endif()
 option(GRIM_MEDIAPIPE_OFFLINE_LOGGER_VERIFIED
        "Manually confirm a custom MediaPipe build has usage metrics disabled" OFF)
 unset(_GRIM_MEDIAPIPE_DEFAULT)

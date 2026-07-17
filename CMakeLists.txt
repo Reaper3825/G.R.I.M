@@ -238,10 +238,11 @@ if(GRIM_USE_MEDIAPIPE_HAND_GESTURES)
     else()
         set(_GRIM_MEDIAPIPE_RUNTIME_NAME "libmediapipe.so")
     endif()
-    add_custom_command(TARGET GRIM POST_BUILD
+    add_custom_target(GRIMMediaPipeRuntime ALL
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${GRIM_MEDIAPIPE_TASKS_C_LIBRARY}"
                 "$<TARGET_FILE_DIR:GRIM>/${_GRIM_MEDIAPIPE_RUNTIME_NAME}"
+        DEPENDS GRIM "${GRIM_MEDIAPIPE_TASKS_C_LIBRARY}"
         COMMENT "Copying the local MediaPipe Tasks runtime")
     unset(_GRIM_MEDIAPIPE_RUNTIME_PATH)
     unset(_GRIM_MEDIAPIPE_RUNTIME_NAME)
