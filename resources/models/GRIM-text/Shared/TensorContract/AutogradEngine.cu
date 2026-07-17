@@ -9,6 +9,7 @@
 
 #include <cuda_runtime.h>
 
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
@@ -31,6 +32,23 @@ const char* nodeName(const GradFn* node) {
         return node->op_name;
     }
     return "<unnamed>";
+}
+
+bool syncEachNodeForDiagnostics() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("GRIM_AUTOGRAD_SYNC_EACH_NODE");
+        return value != nullptr && value[0] != '\0' && value[0] != '0';
+    }();
+    return enabled;
+}
+
+void synchronizeAfterNodeOrThrow(cudaStream_t stream, const GradFn* node) {
+    const cudaError_t status = cudaStreamSynchronize(stream);
+    if (status != cudaSuccess) {
+        throw std::runtime_error(
+            std::string("[AutogradEngine] CUDA failure after node '") + nodeName(node) +
+            "': " + cudaGetErrorString(status));
+    }
 }
 }  // namespace
 
@@ -184,6 +202,9 @@ void AutogradEngine::run(GradFn* root,
             // for each upstream edge; the map is fully populated by discover()
             // so no structural rehash occurs and `st` stays valid.
             node->run_backward(grad_view, stream_, payload_, bindings_);
+            if (syncEachNodeForDiagnostics()) {
+                synchronizeAfterNodeOrThrow(stream_, node);
+            }
         }
 
         // Topology invariant: every discovered node must have fired exactly once

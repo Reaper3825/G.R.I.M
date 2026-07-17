@@ -2797,7 +2797,9 @@ void UIPhysicalEnvironmentPanel::DrawInteractionTab(OverlayRenderer& renderer) {
     line("Cadence skipped: " + std::to_string(s.frames_cadence_skipped));
     line("Inference failures: " + std::to_string(s.inference_failures));
     line("Inference: " + FormatDouble(s.last_inference_ms, 1)
-         + " ms  mean " + FormatDouble(s.mean_inference_ms, 1) + " ms");
+         + " ms  p95 " + FormatDouble(s.p95_inference_ms, 1) + " ms");
+    line("Cadence: " + FormatDouble(s.effective_target_fps, 1)
+         + "/" + FormatDouble(s.configured_target_fps, 1) + " FPS");
     line("Result frame: " + std::to_string(s.source_frame_counter));
     if (s.published_steady_ns != 0) {
         const uint64_t now_ns = static_cast<uint64_t>(
@@ -2819,6 +2821,21 @@ void UIPhysicalEnvironmentPanel::DrawInteractionTab(OverlayRenderer& renderer) {
          ? std::string("none") : control.stable_gesture));
     line("Events/actions: " + std::to_string(control.events_emitted)
          + "/" + std::to_string(control.actions_executed));
+    line(std::string("Pointer: ") + (control.pointer_active ? "active" : "idle")
+         + "  lock " + (control.hand_lock_active ? "yes" : "no")
+         + "  " + FormatDouble(control.pointer_sample_hz, 1) + " Hz",
+         control.pointer_active ? UITheme::Colors::Success
+                                : UITheme::Colors::TextSecondary);
+    line("Raw " + FormatDouble(control.pointer_raw_x, 3) + ","
+         + FormatDouble(control.pointer_raw_y, 3) + "  filtered "
+         + FormatDouble(control.pointer_filtered_x, 3) + ","
+         + FormatDouble(control.pointer_filtered_y, 3));
+    line("Samples/moves/outliers: " + std::to_string(control.pointer_samples) + "/"
+         + std::to_string(control.pointer_moves_emitted) + "/"
+         + std::to_string(control.pointer_outliers_rejected));
+    line("Classifier bypass/reacquire: "
+         + std::to_string(control.pointer_classifier_bypass_frames) + "/"
+         + std::to_string(control.hand_reacquisitions));
     if (control.actions_previewed != 0)
         line("Dry-run previews: " + std::to_string(control.actions_previewed),
              UITheme::Colors::Warning);

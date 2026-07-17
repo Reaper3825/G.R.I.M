@@ -34,6 +34,22 @@ disabled, deleted, restored to defaults, populated from the strongest current
 live gesture, and tested with global dry-run mode. Apply persists immediately
 through GRIM's canonical runtime-config merge path.
 
+## Pointer tracking quality
+
+The pointer gesture is required only to activate pointer mode. After activation,
+the controller locks the selected wrist spatially and continues consuming its
+landmarks through brief gesture-classifier dropouts. Sustained hand loss,
+disarming, a mouse action, or a confidently established different gesture ends
+pointer mode.
+
+Pointer coordinates blend index tip and index PIP, reject implausible velocity
+spikes, pass through a time-aware One Euro filter, and use a hysteretic radial
+deadzone. The inference worker targets 30 FPS but adapts downward when measured
+inference cost or one-frame queue replacement pressure indicates overload.
+The Live sidebar exposes cadence, inference p95, raw and filtered coordinates,
+sample/move/outlier counters, classifier-bypass frames, and hand reacquisitions.
+All processing and telemetry remain local.
+
 ## Persistence
 
 Configuration is stored under:

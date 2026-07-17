@@ -7,7 +7,9 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <filesystem>
 #include <memory>
@@ -49,6 +51,10 @@ struct PhysicalInteractionState {
     uint64_t config_generation = 1;
     uint64_t last_seen_frame_counter = 0;
     uint64_t last_submitted_capture_ns = 0;
+    double effective_target_fps = 30.0;
+    std::array<double, 60> inference_window{};
+    size_t inference_window_count = 0;
+    size_t inference_window_index = 0;
 
     PhysicalHandGestureConfig config{};
     PhysicalHandGestureSnapshot snapshot{};
@@ -59,6 +65,8 @@ struct PhysicalInteractionState {
     PhysicalInteractionState() {
         config.model_path = DefaultGestureModelPath();
         snapshot.model_path = config.model_path;
+        snapshot.configured_target_fps = config.target_fps;
+        snapshot.effective_target_fps = effective_target_fps;
         snapshot.status_detail = "Waiting for interaction worker initialization";
     }
 };
@@ -72,8 +80,39 @@ void PublishSnapshotLocked(PhysicalInteractionState& state) {
     state.snapshot.enabled = state.config.enabled;
     state.snapshot.model_path = state.config.model_path;
     state.snapshot.offline_only = true;
+    state.snapshot.configured_target_fps = state.config.target_fps;
+    state.snapshot.effective_target_fps = state.effective_target_fps;
     PhysicalHandGestureBus::Instance().PublishPhysicalHandGestureSnapshot(
         state.snapshot);
+}
+
+void UpdateInferenceTelemetryLocked(PhysicalInteractionState& state,
+                                    double inference_ms)
+{
+    state.inference_window[state.inference_window_index] = inference_ms;
+    state.inference_window_index =
+        (state.inference_window_index + 1) % state.inference_window.size();
+    state.inference_window_count = std::min(
+        state.inference_window_count + 1, state.inference_window.size());
+    auto sorted = state.inference_window;
+    std::sort(sorted.begin(), sorted.begin() + state.inference_window_count);
+    if (state.inference_window_count != 0) {
+        const size_t p95_index = std::min(
+            state.inference_window_count - 1,
+            static_cast<size_t>(std::ceil(
+                static_cast<double>(state.inference_window_count) * 0.95)) - 1);
+        state.snapshot.p95_inference_ms = sorted[p95_index];
+    }
+
+    if (!state.config.adaptive_fps || inference_ms <= 0.0) {
+        state.effective_target_fps = state.config.target_fps;
+        return;
+    }
+    const double capacity_fps = 1000.0 / std::max(1.0, inference_ms * 1.35);
+    const double desired_fps = std::clamp(
+        capacity_fps, state.config.minimum_adaptive_fps, state.config.target_fps);
+    state.effective_target_fps =
+        0.85 * state.effective_target_fps + 0.15 * desired_fps;
 }
 
 void SetBackendIdentityLocked(PhysicalInteractionState& state) {
@@ -274,6 +313,7 @@ void WorkerMain() {
             const double n = static_cast<double>(state.snapshot.frames_processed);
             state.snapshot.mean_inference_ms +=
                 (inference_ms - state.snapshot.mean_inference_ms) / n;
+            UpdateInferenceTelemetryLocked(state, inference_ms);
             state.snapshot.source_frame_counter = frame.frame_counter;
             state.snapshot.hands = std::move(observations);
             state.snapshot.last_error.clear();
@@ -330,9 +370,11 @@ void TickPhysicalInteraction() {
 
     const uint64_t capture_ns = frame.metadata.capture_steady_ns != 0
         ? frame.metadata.capture_steady_ns : SteadyNowNs();
-    if (state.config.target_fps > 0.0 && state.last_submitted_capture_ns != 0) {
+    const double cadence_fps = state.config.adaptive_fps
+        ? state.effective_target_fps : state.config.target_fps;
+    if (cadence_fps > 0.0 && state.last_submitted_capture_ns != 0) {
         const uint64_t interval_ns = static_cast<uint64_t>(
-            1000000000.0 / std::max(1.0, state.config.target_fps));
+            1000000000.0 / std::max(1.0, cadence_fps));
         if (capture_ns > state.last_submitted_capture_ns &&
             capture_ns - state.last_submitted_capture_ns < interval_ns) {
             ++state.snapshot.frames_cadence_skipped;
@@ -342,7 +384,14 @@ void TickPhysicalInteraction() {
     }
 
     state.last_submitted_capture_ns = capture_ns;
-    if (state.pending_frame) ++state.snapshot.frames_replaced;
+    if (state.pending_frame) {
+        ++state.snapshot.frames_replaced;
+        if (state.config.adaptive_fps) {
+            state.effective_target_fps = std::max(
+                state.config.minimum_adaptive_fps,
+                state.effective_target_fps * 0.97);
+        }
+    }
     state.pending_frame = std::move(frame);
     ++state.snapshot.frames_submitted;
     PublishSnapshotLocked(state);
@@ -370,6 +419,8 @@ void RequestConfigurePhysicalHandGestures(
     config.min_gesture_confidence =
         std::clamp(config.min_gesture_confidence, 0.0f, 1.0f);
     config.target_fps = std::clamp(config.target_fps, 1.0, 60.0);
+    config.minimum_adaptive_fps = std::clamp(
+        config.minimum_adaptive_fps, 1.0, config.target_fps);
 
     auto& state = State();
     std::lock_guard<std::mutex> lock(state.mutex);
@@ -378,6 +429,11 @@ void RequestConfigurePhysicalHandGestures(
     state.backend_ready = false;
     state.pending_frame.reset();
     state.last_submitted_capture_ns = 0;
+    state.effective_target_fps = state.config.target_fps;
+    state.inference_window.fill(0.0);
+    state.inference_window_count = 0;
+    state.inference_window_index = 0;
+    state.snapshot.p95_inference_ms = 0.0;
     state.snapshot.status_detail = "Gesture backend reconfiguration requested";
     PublishSnapshotLocked(state);
     state.cv.notify_all();

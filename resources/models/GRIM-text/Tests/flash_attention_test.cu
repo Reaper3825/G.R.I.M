@@ -191,6 +191,7 @@ struct FlashAttnBackwardScratch {
     void* dsoftmax_sum = nullptr;
     size_t dq_accum_bytes = 0;
     size_t dsoftmax_sum_bytes = 0;
+    size_t dkv_elems = 0;
 };
 
 FlashAttnForwardScratch allocateFlashAttnForwardScratch(int batch, int heads, int kv_heads,
@@ -225,8 +226,11 @@ FlashAttnBackwardScratch allocateFlashAttnBackwardScratch(int batch, int heads, 
 
     checkCuda(cudaMalloc(&scratch.dout, scratch.fwd.out_elems * sizeof(__nv_bfloat16)), "alloc fa_dout");
     checkCuda(cudaMalloc(&scratch.dq, scratch.fwd.q_elems * sizeof(__nv_bfloat16)), "alloc fa_dq");
-    checkCuda(cudaMalloc(&scratch.dk, scratch.fwd.kv_elems * sizeof(__nv_bfloat16)), "alloc fa_dk");
-    checkCuda(cudaMalloc(&scratch.dv, scratch.fwd.kv_elems * sizeof(__nv_bfloat16)), "alloc fa_dv");
+    // The pinned FA2 backward kernel emits one dK/dV contribution per query
+    // head. GQA callers reduce those contributions to KV heads afterwards.
+    scratch.dkv_elems = scratch.fwd.q_elems;
+    checkCuda(cudaMalloc(&scratch.dk, scratch.dkv_elems * sizeof(__nv_bfloat16)), "alloc fa_dk");
+    checkCuda(cudaMalloc(&scratch.dv, scratch.dkv_elems * sizeof(__nv_bfloat16)), "alloc fa_dv");
 
     scratch.dq_accum_bytes = flash_attn_dq_accum_bytes(batch, seq, heads, head_dim);
     scratch.dsoftmax_sum_bytes = flash_attn_dsoftmax_sum_bytes(batch, seq, heads);
@@ -659,6 +663,91 @@ bool GRIM::Test::testFlashBackwardNumericalGradient(std::string& message) {
     return true;
 }
 
+bool GRIM::Test::testFlashBackwardProductionGQA(std::string& message) {
+    constexpr int batch = 10;
+    constexpr int heads = 12;
+    constexpr int kv_heads = 4;
+    constexpr int seq = 1024;
+    constexpr int dim = 64;
+    constexpr float dropout_p = 0.1f;
+    constexpr uint64_t dropout_seed = 42;
+    const float softmax_scale = canonicalSoftmaxScale(dim);
+
+    FlashAttnBackwardScratch scratch =
+        allocateFlashAttnBackwardScratch(batch, heads, kv_heads, seq, dim);
+    const size_t q_elems = scratch.fwd.q_elems;
+    const size_t kv_elems = scratch.fwd.kv_elems;
+
+    float* d_q = nullptr;
+    float* d_k = nullptr;
+    float* d_v = nullptr;
+    float* d_dout = nullptr;
+    float* d_alibi = nullptr;
+    checkCuda(cudaMalloc(&d_q, q_elems * sizeof(float)), "alloc production_gqa_q");
+    checkCuda(cudaMalloc(&d_k, kv_elems * sizeof(float)), "alloc production_gqa_k");
+    checkCuda(cudaMalloc(&d_v, kv_elems * sizeof(float)), "alloc production_gqa_v");
+    checkCuda(cudaMalloc(&d_dout, q_elems * sizeof(float)), "alloc production_gqa_dout");
+    checkCuda(cudaMalloc(&d_alibi, heads * sizeof(float)), "alloc production_gqa_alibi");
+
+    initRandom(d_q, q_elems, 0.1f, 14000);
+    initRandom(d_k, kv_elems, 0.1f, 15000);
+    initRandom(d_v, kv_elems, 0.1f, 16000);
+    initRandom(d_dout, q_elems, 0.1f, 17000);
+    const std::vector<float> h_alibi(heads, 0.01f);
+    checkCuda(cudaMemcpy(d_alibi, h_alibi.data(), heads * sizeof(float), cudaMemcpyHostToDevice),
+              "copy production_gqa_alibi");
+
+    TensorConversion::convert_BHSD_to_BSHD_bf16(
+        d_q, scratch.fwd.q, batch, heads, seq, dim, nullptr);
+    TensorConversion::convert_BHSD_to_BSHD_bf16(
+        d_k, scratch.fwd.k, batch, kv_heads, seq, dim, nullptr);
+    TensorConversion::convert_BHSD_to_BSHD_bf16(
+        d_v, scratch.fwd.v, batch, kv_heads, seq, dim, nullptr);
+    TensorConversion::convert_BHSD_to_BSHD_bf16(
+        d_dout, scratch.dout, batch, heads, seq, dim, nullptr);
+
+    flash_attn_fwd_ex(
+        scratch.fwd.q, scratch.fwd.k, scratch.fwd.v,
+        scratch.fwd.out, scratch.fwd.softmax_lse, d_alibi,
+        batch, seq, heads, kv_heads, dim, softmax_scale,
+        true, true, dropout_p, dropout_seed, nullptr);
+    flash_attn_bwd_ex(
+        scratch.fwd.q, scratch.fwd.k, scratch.fwd.v,
+        scratch.fwd.out, scratch.dout, scratch.fwd.softmax_lse, d_alibi,
+        scratch.dq, scratch.dk, scratch.dv,
+        scratch.dq_accum, scratch.dsoftmax_sum,
+        batch, seq, heads, kv_heads, dim, softmax_scale,
+        true, true, dropout_p, dropout_seed, nullptr);
+
+    std::vector<__nv_bfloat16> h_dq(q_elems);
+    std::vector<__nv_bfloat16> h_dk(scratch.dkv_elems);
+    std::vector<__nv_bfloat16> h_dv(scratch.dkv_elems);
+    checkCuda(cudaMemcpy(h_dq.data(), scratch.dq, q_elems * sizeof(__nv_bfloat16), cudaMemcpyDeviceToHost),
+              "copy production_gqa_dq");
+    checkCuda(cudaMemcpy(h_dk.data(), scratch.dk, scratch.dkv_elems * sizeof(__nv_bfloat16), cudaMemcpyDeviceToHost),
+              "copy production_gqa_dk");
+    checkCuda(cudaMemcpy(h_dv.data(), scratch.dv, scratch.dkv_elems * sizeof(__nv_bfloat16), cudaMemcpyDeviceToHost),
+              "copy production_gqa_dv");
+
+    const auto all_bf16_finite = [](const std::vector<__nv_bfloat16>& values) {
+        return std::all_of(values.begin(), values.end(), [](__nv_bfloat16 value) {
+            return std::isfinite(__bfloat162float(value));
+        });
+    };
+    const bool gradients_finite =
+        all_bf16_finite(h_dq) && all_bf16_finite(h_dk) && all_bf16_finite(h_dv);
+
+    cudaFree(d_q);
+    cudaFree(d_k);
+    cudaFree(d_v);
+    cudaFree(d_dout);
+    cudaFree(d_alibi);
+    freeFlashAttnBackwardScratch(scratch);
+
+    ATTN_ASSERT(gradients_finite, "Production GQA backward produced NaN/Inf");
+    return true;
+}
+
 bool GRIM::Test::testFlashBackwardVsNaive(std::string& message) {
     // This would require implementing naive backward - skip for now
     message = "Not implemented (would need naive backward)";
@@ -883,6 +972,7 @@ std::vector<AttentionTestResult> GRIM::Test::runAllAttentionTests() {
         {"FlashMultiBatch", testFlashMultiBatch},
         {"FlashMultiHead", testFlashMultiHead},
         {"FlashGradientMagnitude", testFlashGradientMagnitude},
+        {"FlashBackwardProductionGQA", testFlashBackwardProductionGQA},
     };
     
     std::vector<AttentionTestResult> results;

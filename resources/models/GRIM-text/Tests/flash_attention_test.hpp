@@ -40,6 +40,7 @@ bool testFlashForwardCausalMask(std::string& message);
 bool testFlashForwardCustomScale(std::string& message);
 bool testFlashBackwardGradientFlow(std::string& message);
 bool testFlashBackwardNumericalGradient(std::string& message);
+bool testFlashBackwardProductionGQA(std::string& message);
 bool testFlashForwardVsNaive(std::string& message);
 bool testFlashBackwardVsNaive(std::string& message);
 bool testFlashLargeSequence(std::string& message);

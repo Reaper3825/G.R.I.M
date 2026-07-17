@@ -23,8 +23,8 @@ struct PhysicalGestureEvent {
     float confidence = 0.0f;
     uint64_t held_ms = 0;
 
-    // Index-fingertip position (landmark 8), normalized to the raw image.
-    // This remains useful for pointer routing without exposing backend types.
+    // Pointer control position normalized to the raw image. The controller may
+    // derive it from multiple landmarks without exposing backend types.
     float pointer_x = 0.0f;
     float pointer_y = 0.0f;
     bool has_pointer = false;
@@ -35,8 +35,10 @@ struct PhysicalGestureControlStatus {
     bool dry_run = false;
     bool armed = false;
     bool pointer_active = false;
+    bool hand_lock_active = false;
     std::string candidate_gesture;
     std::string stable_gesture;
+    std::string pointer_activation_gesture;
     PhysicalHandedness active_hand = PhysicalHandedness::Unknown;
     uint64_t last_source_frame_counter = 0;
     uint64_t armed_until_steady_ns = 0;
@@ -45,6 +47,16 @@ struct PhysicalGestureControlStatus {
     uint64_t actions_previewed = 0;
     uint64_t actions_blocked = 0;
     uint64_t actions_failed = 0;
+    uint64_t pointer_samples = 0;
+    uint64_t pointer_moves_emitted = 0;
+    uint64_t pointer_outliers_rejected = 0;
+    uint64_t pointer_classifier_bypass_frames = 0;
+    uint64_t hand_reacquisitions = 0;
+    float pointer_raw_x = 0.0f;
+    float pointer_raw_y = 0.0f;
+    float pointer_filtered_x = 0.0f;
+    float pointer_filtered_y = 0.0f;
+    float pointer_sample_hz = 0.0f;
     std::string last_action;
     std::string last_block_reason;
     std::string last_error;

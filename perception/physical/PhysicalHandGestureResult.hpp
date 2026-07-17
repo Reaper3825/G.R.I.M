@@ -82,6 +82,9 @@ struct PhysicalHandGestureSnapshot {
 
     double last_inference_ms = 0.0;
     double mean_inference_ms = 0.0;
+    double p95_inference_ms = 0.0;
+    double configured_target_fps = 30.0;
+    double effective_target_fps = 30.0;
 
     std::vector<PhysicalHandObservation> hands;
 };

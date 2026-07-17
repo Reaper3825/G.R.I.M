@@ -17,7 +17,9 @@ struct PhysicalHandGestureConfig {
     float       min_hand_presence_confidence  = 0.5f;
     float       min_tracking_confidence       = 0.5f;
     float       min_gesture_confidence        = 0.5f;
-    double      target_fps                    = 20.0;
+    double      target_fps                    = 30.0;
+    double      minimum_adaptive_fps          = 12.0;
+    bool        adaptive_fps                  = true;
 };
 
 // RGB pixels are owned by the caller and remain valid for the duration of the

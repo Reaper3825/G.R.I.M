@@ -50,9 +50,17 @@ struct PhysicalGestureControlConfig {
     uint64_t armed_timeout_ms = 15000;
 
     float pointer_gain_pixels = 1600.0f;
-    float pointer_smoothing = 0.45f;
-    float pointer_deadzone_normalized = 0.0025f;
-    int max_pointer_step_pixels = 55;
+    float pointer_smoothing = 0.45f; // Legacy persisted value; One Euro is used.
+    float pointer_deadzone_normalized = 0.0008f;
+    float pointer_deadzone_start_multiplier = 1.75f;
+    float pointer_one_euro_min_cutoff = 1.2f;
+    float pointer_one_euro_beta = 0.025f;
+    float pointer_one_euro_derivative_cutoff = 1.0f;
+    float pointer_outlier_velocity_normalized_per_second = 4.0f;
+    float pointer_tip_weight = 0.70f;
+    float pointer_hand_lock_radius_normalized = 0.24f;
+    uint64_t pointer_hand_loss_grace_ms = 450;
+    int max_pointer_step_pixels = 80;
     // Camera previews are mirrored for natural interaction, so horizontal
     // pointer deltas must be mirrored as well to follow the displayed hand.
     bool invert_pointer_x = true;

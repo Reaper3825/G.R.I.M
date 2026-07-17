@@ -128,11 +128,21 @@ grow without bound.
 
 The controller consumes completed interaction snapshots on the main thread. It never
 injects raw per-frame labels directly: confidence hysteresis and dwell/release
-timers first produce semantic gesture events. Computer actions are restricted
-to the allowlisted binding table in `PhysicalGestureControlConfig`. The
+timers first produce semantic gesture events. Once a pointer binding activates,
+motion follows a wrist-locked hand independently of short classifier dropouts.
+Its control point blends index-tip and index-PIP landmarks, then applies
+velocity outlier rejection, a time-aware One Euro filter, and a hysteretic
+deadzone. Computer actions are restricted to the allowlisted binding table in
+`PhysicalGestureControlConfig`. The
 Interaction UI can edit and persist label/action/phase/hold/cooldown/hand
 mappings and provides a no-output dry-run mode. Pointer and mouse bindings are
 always forced to require an armed control session.
+
+The interaction worker targets 30 FPS and adapts downward from measured
+inference cost and queue replacement pressure. The Live diagnostics sidebar
+reports effective cadence, inference p95, pointer sample rate, raw/filtered
+coordinates, outlier rejections, classifier-bypass frames, and hand
+reacquisitions. These mechanisms are local and do not add a network path.
 
 ## Stage 3 — Spatial Grounding
 

@@ -53,6 +53,52 @@ struct PendingAction {
     std::string binding_id;
 };
 
+float OneEuroAlpha(float cutoff_hz, float dt_seconds) {
+    constexpr float kTwoPi = 6.28318530717958647692f;
+    const float safe_cutoff = std::max(0.001f, cutoff_hz);
+    const float tau = 1.0f / (kTwoPi * safe_cutoff);
+    return 1.0f / (1.0f + tau / std::max(0.0001f, dt_seconds));
+}
+
+struct OneEuroAxis {
+    bool initialized = false;
+    float raw = 0.0f;
+    float filtered = 0.0f;
+    float derivative = 0.0f;
+    uint64_t sample_ns = 0;
+
+    void Reset() {
+        initialized = false;
+        raw = 0.0f;
+        filtered = 0.0f;
+        derivative = 0.0f;
+        sample_ns = 0;
+    }
+
+    float Filter(float value, uint64_t now_ns,
+                 float min_cutoff, float beta, float derivative_cutoff) {
+        if (!initialized || now_ns <= sample_ns) {
+            initialized = true;
+            raw = value;
+            filtered = value;
+            derivative = 0.0f;
+            sample_ns = now_ns;
+            return filtered;
+        }
+        const float dt = std::clamp(
+            static_cast<float>(now_ns - sample_ns) / 1.0e9f, 0.001f, 0.25f);
+        const float raw_derivative = (value - raw) / dt;
+        const float derivative_alpha = OneEuroAlpha(derivative_cutoff, dt);
+        derivative += derivative_alpha * (raw_derivative - derivative);
+        const float cutoff = min_cutoff + beta * std::abs(derivative);
+        const float value_alpha = OneEuroAlpha(cutoff, dt);
+        filtered += value_alpha * (value - filtered);
+        raw = value;
+        sample_ns = now_ns;
+        return filtered;
+    }
+};
+
 struct PhysicalGestureControlState {
     std::mutex mutex;
     PhysicalGestureControlConfig config = DefaultPhysicalGestureControlConfig();
@@ -82,11 +128,20 @@ struct PhysicalGestureControlState {
     std::unordered_set<std::string> latched_bindings;
     std::unordered_map<std::string, uint64_t> last_binding_action_ns;
 
-    float previous_pointer_x = 0.0f;
-    float previous_pointer_y = 0.0f;
-    bool have_previous_pointer = false;
-    float smoothed_dx = 0.0f;
-    float smoothed_dy = 0.0f;
+    OneEuroAxis pointer_filter_x;
+    OneEuroAxis pointer_filter_y;
+    bool pointer_motion_active = false;
+    uint64_t last_pointer_hand_seen_ns = 0;
+    uint64_t last_pointer_observation_ns = 0;
+    std::string active_pointer_binding_id;
+    std::string active_pointer_gesture;
+
+    bool hand_lock_active = false;
+    bool ever_had_hand_lock = false;
+    PhysicalHandedness locked_handedness = PhysicalHandedness::Unknown;
+    float locked_wrist_x = 0.0f;
+    float locked_wrist_y = 0.0f;
+    uint64_t last_locked_hand_seen_ns = 0;
     std::string last_logged_failure_action;
 };
 
@@ -97,9 +152,14 @@ PhysicalGestureControlState& State() {
 
 void ResetPointerLocked(PhysicalGestureControlState& state) {
     state.status.pointer_active = false;
-    state.have_previous_pointer = false;
-    state.smoothed_dx = 0.0f;
-    state.smoothed_dy = 0.0f;
+    state.status.pointer_activation_gesture.clear();
+    state.pointer_filter_x.Reset();
+    state.pointer_filter_y.Reset();
+    state.pointer_motion_active = false;
+    state.last_pointer_hand_seen_ns = 0;
+    state.last_pointer_observation_ns = 0;
+    state.active_pointer_binding_id.clear();
+    state.active_pointer_gesture.clear();
 }
 
 void DisarmLocked(PhysicalGestureControlState& state,
@@ -174,6 +234,164 @@ bool BindingCoolingDownLocked(const PhysicalGestureControlState& state,
            now_ns - it->second < MillisecondsToNs(binding.cooldown_ms);
 }
 
+bool ControlPointForHand(const PhysicalHandObservation& hand,
+                         const PhysicalGestureControlConfig& config,
+                         float& x, float& y)
+{
+    if (hand.landmark_count <= 8) return false;
+    const float tip_weight = std::clamp(config.pointer_tip_weight, 0.0f, 1.0f);
+    const auto& tip = hand.landmarks[8];
+    const auto& pip = hand.landmarks[6];
+    x = tip_weight * tip.normalized_x +
+        (1.0f - tip_weight) * pip.normalized_x;
+    y = tip_weight * tip.normalized_y +
+        (1.0f - tip_weight) * pip.normalized_y;
+    return std::isfinite(x) && std::isfinite(y);
+}
+
+void LockHandLocked(PhysicalGestureControlState& state,
+                    const PhysicalHandObservation& hand,
+                    uint64_t now_ns)
+{
+    if (!state.hand_lock_active && state.ever_had_hand_lock)
+        ++state.status.hand_reacquisitions;
+    state.hand_lock_active = true;
+    state.ever_had_hand_lock = true;
+    state.locked_handedness = hand.handedness;
+    if (hand.landmark_count > 0) {
+        state.locked_wrist_x = hand.landmarks[0].normalized_x;
+        state.locked_wrist_y = hand.landmarks[0].normalized_y;
+    }
+    state.last_locked_hand_seen_ns = now_ns;
+    state.status.hand_lock_active = true;
+    state.status.active_hand = hand.handedness;
+}
+
+void ReleaseHandLockLocked(PhysicalGestureControlState& state) {
+    state.hand_lock_active = false;
+    state.locked_handedness = PhysicalHandedness::Unknown;
+    state.last_locked_hand_seen_ns = 0;
+    state.status.hand_lock_active = false;
+    if (state.stable_gesture.empty())
+        state.status.active_hand = PhysicalHandedness::Unknown;
+}
+
+void BeginPointerLocked(PhysicalGestureControlState& state,
+                        const PhysicalGestureBinding& binding,
+                        const PhysicalGestureEvent& event)
+{
+    state.pointer_filter_x.Reset();
+    state.pointer_filter_y.Reset();
+    state.pointer_filter_x.Filter(
+        event.pointer_x, event.event_steady_ns,
+        state.config.pointer_one_euro_min_cutoff,
+        state.config.pointer_one_euro_beta,
+        state.config.pointer_one_euro_derivative_cutoff);
+    state.pointer_filter_y.Filter(
+        event.pointer_y, event.event_steady_ns,
+        state.config.pointer_one_euro_min_cutoff,
+        state.config.pointer_one_euro_beta,
+        state.config.pointer_one_euro_derivative_cutoff);
+    state.pointer_motion_active = false;
+    state.last_pointer_hand_seen_ns = event.event_steady_ns;
+    state.last_pointer_observation_ns = event.event_steady_ns;
+    state.active_pointer_binding_id = binding.binding_id;
+    state.active_pointer_gesture = event.gesture_label;
+    state.status.pointer_active = true;
+    state.status.pointer_activation_gesture = event.gesture_label;
+    state.status.pointer_raw_x = event.pointer_x;
+    state.status.pointer_raw_y = event.pointer_y;
+    state.status.pointer_filtered_x = event.pointer_x;
+    state.status.pointer_filtered_y = event.pointer_y;
+    state.status.pointer_sample_hz = 0.0f;
+    ++state.status.pointer_samples;
+}
+
+void ProcessPointerSampleLocked(PhysicalGestureControlState& state,
+                                float raw_x, float raw_y,
+                                uint64_t sample_ns,
+                                bool classifier_supports_pointer,
+                                std::vector<PendingAction>& actions)
+{
+    if (!state.status.pointer_active) return;
+    state.last_pointer_hand_seen_ns = sample_ns;
+    ++state.status.pointer_samples;
+    if (!classifier_supports_pointer)
+        ++state.status.pointer_classifier_bypass_frames;
+
+    if (state.last_pointer_observation_ns != 0 &&
+        sample_ns > state.last_pointer_observation_ns) {
+        const float observation_dt = std::max(0.001f,
+            static_cast<float>(sample_ns - state.last_pointer_observation_ns) / 1.0e9f);
+        const float instant_hz = 1.0f / observation_dt;
+        state.status.pointer_sample_hz = state.status.pointer_sample_hz <= 0.0f
+            ? instant_hz
+            : 0.85f * state.status.pointer_sample_hz + 0.15f * instant_hz;
+    }
+    state.last_pointer_observation_ns = sample_ns;
+
+    const bool initialized = state.pointer_filter_x.initialized &&
+                             state.pointer_filter_y.initialized;
+    if (initialized && sample_ns > state.pointer_filter_x.sample_ns) {
+        const float dt = std::max(0.001f,
+            static_cast<float>(sample_ns - state.pointer_filter_x.sample_ns) / 1.0e9f);
+        const float distance = std::hypot(
+            raw_x - state.pointer_filter_x.raw,
+            raw_y - state.pointer_filter_y.raw);
+        const float velocity = distance / dt;
+        if (velocity > state.config.pointer_outlier_velocity_normalized_per_second) {
+            ++state.status.pointer_outliers_rejected;
+            return;
+        }
+    }
+
+    const float previous_x = state.pointer_filter_x.filtered;
+    const float previous_y = state.pointer_filter_y.filtered;
+    const float filtered_x = state.pointer_filter_x.Filter(
+        raw_x, sample_ns,
+        state.config.pointer_one_euro_min_cutoff,
+        state.config.pointer_one_euro_beta,
+        state.config.pointer_one_euro_derivative_cutoff);
+    const float filtered_y = state.pointer_filter_y.Filter(
+        raw_y, sample_ns,
+        state.config.pointer_one_euro_min_cutoff,
+        state.config.pointer_one_euro_beta,
+        state.config.pointer_one_euro_derivative_cutoff);
+    state.status.pointer_raw_x = raw_x;
+    state.status.pointer_raw_y = raw_y;
+    state.status.pointer_filtered_x = filtered_x;
+    state.status.pointer_filtered_y = filtered_y;
+    if (!initialized) return;
+
+    float nx = filtered_x - previous_x;
+    float ny = filtered_y - previous_y;
+    const float magnitude = std::hypot(nx, ny);
+    const float base_deadzone = state.config.pointer_deadzone_normalized;
+    const float start_deadzone = base_deadzone *
+        state.config.pointer_deadzone_start_multiplier;
+    if (!state.pointer_motion_active) {
+        if (magnitude < start_deadzone) return;
+        state.pointer_motion_active = true;
+    } else if (magnitude < base_deadzone) {
+        state.pointer_motion_active = false;
+        return;
+    }
+
+    if (state.config.invert_pointer_x) nx = -nx;
+    if (state.config.invert_pointer_y) ny = -ny;
+    const int limit = std::max(1, state.config.max_pointer_step_pixels);
+    const int dx = std::clamp(static_cast<int>(std::lround(
+        nx * state.config.pointer_gain_pixels)), -limit, limit);
+    const int dy = std::clamp(static_cast<int>(std::lround(
+        ny * state.config.pointer_gain_pixels)), -limit, limit);
+    if (dx == 0 && dy == 0) return;
+    ++state.status.pointer_moves_emitted;
+    actions.push_back({PhysicalGestureAction::PointerMove, dx, dy,
+        PhysicalGestureActionId(PhysicalGestureAction::PointerMove),
+        state.active_pointer_binding_id});
+    ExtendArmedWindowLocked(state, sample_ns);
+}
+
 void RouteEventLocked(PhysicalGestureControlState& state,
                       const PhysicalGestureEvent& event,
                       std::vector<PendingAction>& actions)
@@ -186,8 +404,6 @@ void RouteEventLocked(PhysicalGestureControlState& state,
             if (binding.gesture_label != event.gesture_label ||
                 !BindingHandMatches(binding, event.handedness)) continue;
             state.latched_bindings.erase(binding.binding_id);
-            if (binding.action == PhysicalGestureAction::PointerMove)
-                ResetPointerLocked(state);
         }
     }
 
@@ -206,39 +422,8 @@ void RouteEventLocked(PhysicalGestureControlState& state,
             }
             if (!event.has_pointer) break;
             ExtendArmedWindowLocked(state, now_ns);
-            if (event.phase == PhysicalGesturePhase::Started ||
-                !state.have_previous_pointer) {
-                state.previous_pointer_x = event.pointer_x;
-                state.previous_pointer_y = event.pointer_y;
-                state.have_previous_pointer = true;
-                state.status.pointer_active = true;
-                break;
-            }
-
-            float nx = event.pointer_x - state.previous_pointer_x;
-            float ny = event.pointer_y - state.previous_pointer_y;
-            state.previous_pointer_x = event.pointer_x;
-            state.previous_pointer_y = event.pointer_y;
-            if (config.invert_pointer_x) nx = -nx;
-            if (config.invert_pointer_y) ny = -ny;
-            if (std::abs(nx) < config.pointer_deadzone_normalized) nx = 0.0f;
-            if (std::abs(ny) < config.pointer_deadzone_normalized) ny = 0.0f;
-            const float raw_dx = nx * config.pointer_gain_pixels;
-            const float raw_dy = ny * config.pointer_gain_pixels;
-            const float alpha = std::clamp(config.pointer_smoothing, 0.0f, 1.0f);
-            state.smoothed_dx = alpha * raw_dx +
-                (1.0f - alpha) * state.smoothed_dx;
-            state.smoothed_dy = alpha * raw_dy +
-                (1.0f - alpha) * state.smoothed_dy;
-            const int limit = std::max(1, config.max_pointer_step_pixels);
-            const int dx = std::clamp(
-                static_cast<int>(std::lround(state.smoothed_dx)), -limit, limit);
-            const int dy = std::clamp(
-                static_cast<int>(std::lround(state.smoothed_dy)), -limit, limit);
-            if (dx != 0 || dy != 0) {
-                actions.push_back({PhysicalGestureAction::PointerMove, dx, dy,
-                    PhysicalGestureActionId(binding.action), binding.binding_id});
-            }
+            if (!state.status.pointer_active)
+                BeginPointerLocked(state, binding, event);
             break;
         }
 
@@ -332,13 +517,46 @@ void ReleaseStableLocked(PhysicalGestureControlState& state,
     state.stable_hand = PhysicalHandedness::Unknown;
     state.stable_has_pointer = false;
     state.status.stable_gesture.clear();
-    state.status.active_hand = PhysicalHandedness::Unknown;
+    state.status.active_hand = state.hand_lock_active
+        ? state.locked_handedness : PhysicalHandedness::Unknown;
 }
 
-const PhysicalHandObservation* SelectControlHand(
-    const PhysicalGestureControlConfig& config,
-    const PhysicalHandGestureSnapshot& snapshot)
+const PhysicalHandObservation* SelectControlHandLocked(
+    PhysicalGestureControlState& state,
+    const PhysicalHandGestureSnapshot& snapshot,
+    uint64_t now_ns)
 {
+    const auto& config = state.config;
+    if (state.hand_lock_active) {
+        const PhysicalHandObservation* nearest = nullptr;
+        float nearest_distance = 0.0f;
+        for (const auto& hand : snapshot.hands) {
+            if (config.preferred_hand != PhysicalHandedness::Unknown &&
+                hand.handedness != config.preferred_hand) continue;
+            if (hand.landmark_count == 0) continue;
+            const float dx = hand.landmarks[0].normalized_x - state.locked_wrist_x;
+            const float dy = hand.landmarks[0].normalized_y - state.locked_wrist_y;
+            float distance = std::hypot(dx, dy);
+            if (state.locked_handedness != PhysicalHandedness::Unknown &&
+                hand.handedness != PhysicalHandedness::Unknown &&
+                hand.handedness != state.locked_handedness) {
+                distance += 0.08f;
+            }
+            if (!nearest || distance < nearest_distance) {
+                nearest = &hand;
+                nearest_distance = distance;
+            }
+        }
+        if (nearest && nearest_distance <=
+            config.pointer_hand_lock_radius_normalized) {
+            state.locked_wrist_x = nearest->landmarks[0].normalized_x;
+            state.locked_wrist_y = nearest->landmarks[0].normalized_y;
+            state.last_locked_hand_seen_ns = now_ns;
+            return nearest;
+        }
+        return nullptr;
+    }
+
     const PhysicalHandObservation* best = nullptr;
     for (const auto& hand : snapshot.hands) {
         if (config.preferred_hand != PhysicalHandedness::Unknown &&
@@ -356,13 +574,30 @@ void ProcessHandSnapshotLocked(PhysicalGestureControlState& state,
 {
     state.status.last_source_frame_counter = snapshot.source_frame_counter;
     state.last_result_seen_ns = now_ns;
-    const auto* hand = SelectControlHand(state.config, snapshot);
+    const auto* hand = SelectControlHandLocked(state, snapshot, now_ns);
     const std::string label = hand
         ? UsableGestureLabel(hand->gesture_label) : std::string{};
     const float confidence = hand ? hand->gesture_confidence : 0.0f;
-    const bool has_pointer = hand && hand->landmark_count > 8;
-    const float pointer_x = has_pointer ? hand->landmarks[8].normalized_x : 0.0f;
-    const float pointer_y = has_pointer ? hand->landmarks[8].normalized_y : 0.0f;
+    float pointer_x = 0.0f;
+    float pointer_y = 0.0f;
+    const bool has_pointer = hand &&
+        ControlPointForHand(*hand, state.config, pointer_x, pointer_y);
+
+    if (state.hand_lock_active && !hand &&
+        state.last_locked_hand_seen_ns != 0 &&
+        now_ns - state.last_locked_hand_seen_ns >=
+            MillisecondsToNs(state.config.pointer_hand_loss_grace_ms)) {
+        ResetPointerLocked(state);
+        ReleaseHandLockLocked(state);
+    }
+
+    if (state.status.pointer_active && hand && has_pointer) {
+        const bool classifier_supports_pointer =
+            label == state.active_pointer_gesture &&
+            confidence >= state.config.exit_confidence;
+        ProcessPointerSampleLocked(state, pointer_x, pointer_y, now_ns,
+                                   classifier_supports_pointer, actions);
+    }
 
     if (label != state.candidate_gesture ||
         (hand && hand->handedness != state.candidate_hand)) {
@@ -393,6 +628,10 @@ void ProcessHandSnapshotLocked(PhysicalGestureControlState& state,
     if (!label.empty() && confidence >= state.config.enter_confidence &&
         now_ns - state.candidate_since_ns >=
             MillisecondsToNs(state.config.activation_dwell_ms)) {
+        if (state.status.pointer_active &&
+            label != state.active_pointer_gesture) {
+            ResetPointerLocked(state);
+        }
         ReleaseStableLocked(state, now_ns, actions);
         state.stable_gesture = label;
         state.stable_since_ns = state.candidate_since_ns;
@@ -402,6 +641,7 @@ void ProcessHandSnapshotLocked(PhysicalGestureControlState& state,
         state.stable_pointer_x = pointer_x;
         state.stable_pointer_y = pointer_y;
         state.stable_has_pointer = has_pointer;
+        if (hand) LockHandLocked(state, *hand, now_ns);
         state.status.stable_gesture = label;
         state.status.active_hand = state.stable_hand;
         PublishAndRouteLocked(state, PhysicalGesturePhase::Started,
@@ -413,6 +653,16 @@ void ApplyStalenessLocked(PhysicalGestureControlState& state,
                           uint64_t now_ns,
                           std::vector<PendingAction>& actions)
 {
+    if (state.status.pointer_active && state.last_pointer_hand_seen_ns != 0 &&
+        now_ns - state.last_pointer_hand_seen_ns >=
+            MillisecondsToNs(state.config.pointer_hand_loss_grace_ms)) {
+        ResetPointerLocked(state);
+    }
+    if (state.hand_lock_active && state.last_locked_hand_seen_ns != 0 &&
+        now_ns - state.last_locked_hand_seen_ns >=
+            MillisecondsToNs(state.config.pointer_hand_loss_grace_ms)) {
+        ReleaseHandLockLocked(state);
+    }
     if (!state.stable_gesture.empty()) {
         const uint64_t confidence_age = state.last_stable_confident_ns != 0
             ? now_ns - state.last_stable_confident_ns : 0;
@@ -613,6 +863,7 @@ void TickPhysicalGestureControl() {
         if (!state.config.enabled) {
             if (state.status.armed) DisarmLocked(state, "controller disabled");
             ReleaseStableLocked(state, now_ns, actions);
+            ReleaseHandLockLocked(state);
             return;
         }
 
@@ -684,6 +935,21 @@ void RequestConfigurePhysicalGestureControl(
     config.pointer_smoothing = std::clamp(config.pointer_smoothing, 0.0f, 1.0f);
     config.pointer_deadzone_normalized = std::clamp(
         config.pointer_deadzone_normalized, 0.0f, 0.1f);
+    config.pointer_deadzone_start_multiplier = std::clamp(
+        config.pointer_deadzone_start_multiplier, 1.0f, 5.0f);
+    config.pointer_one_euro_min_cutoff = std::clamp(
+        config.pointer_one_euro_min_cutoff, 0.05f, 20.0f);
+    config.pointer_one_euro_beta = std::clamp(
+        config.pointer_one_euro_beta, 0.0f, 2.0f);
+    config.pointer_one_euro_derivative_cutoff = std::clamp(
+        config.pointer_one_euro_derivative_cutoff, 0.05f, 20.0f);
+    config.pointer_outlier_velocity_normalized_per_second = std::clamp(
+        config.pointer_outlier_velocity_normalized_per_second, 0.25f, 20.0f);
+    config.pointer_tip_weight = std::clamp(config.pointer_tip_weight, 0.0f, 1.0f);
+    config.pointer_hand_lock_radius_normalized = std::clamp(
+        config.pointer_hand_lock_radius_normalized, 0.05f, 1.0f);
+    config.pointer_hand_loss_grace_ms = std::clamp<uint64_t>(
+        config.pointer_hand_loss_grace_ms, 100, 3000);
     config.max_pointer_step_pixels = std::clamp(
         config.max_pointer_step_pixels, 1, 500);
     if (config.bindings.empty()) config.bindings = DefaultPhysicalGestureBindings();
@@ -728,14 +994,17 @@ void RequestConfigurePhysicalGestureControl(
     state.latched_bindings.clear();
     state.last_binding_action_ns.clear();
     DisarmLocked(state, "controller configuration changed");
+    ReleaseHandLockLocked(state);
     state.candidate_gesture.clear();
     state.stable_gesture.clear();
     state.candidate_since_ns = 0;
     state.stable_since_ns = 0;
     state.last_stable_confident_ns = 0;
     state.last_processed_source_frame = 0;
+    state.ever_had_hand_lock = false;
     state.status.candidate_gesture.clear();
     state.status.stable_gesture.clear();
+    state.status.active_hand = PhysicalHandedness::Unknown;
     state.status.enabled = state.config.enabled;
     state.status.dry_run = state.config.dry_run;
 }
@@ -759,6 +1028,8 @@ void ShutdownPhysicalGestureControl() {
         state.status.candidate_gesture.clear();
         state.status.stable_gesture.clear();
         state.status.active_hand = PhysicalHandedness::Unknown;
+        ReleaseHandLockLocked(state);
+        state.ever_had_hand_lock = false;
         state.latched_bindings.clear();
         state.last_binding_action_ns.clear();
         state.last_logged_failure_action.clear();

@@ -110,6 +110,26 @@ bool ApplyPhysicalGestureControlConfigFromRuntime(
             "pointer_smoothing", config.pointer_smoothing);
         config.pointer_deadzone_normalized = value.value(
             "pointer_deadzone_normalized", config.pointer_deadzone_normalized);
+        config.pointer_deadzone_start_multiplier = value.value(
+            "pointer_deadzone_start_multiplier",
+            config.pointer_deadzone_start_multiplier);
+        config.pointer_one_euro_min_cutoff = value.value(
+            "pointer_one_euro_min_cutoff", config.pointer_one_euro_min_cutoff);
+        config.pointer_one_euro_beta = value.value(
+            "pointer_one_euro_beta", config.pointer_one_euro_beta);
+        config.pointer_one_euro_derivative_cutoff = value.value(
+            "pointer_one_euro_derivative_cutoff",
+            config.pointer_one_euro_derivative_cutoff);
+        config.pointer_outlier_velocity_normalized_per_second = value.value(
+            "pointer_outlier_velocity_normalized_per_second",
+            config.pointer_outlier_velocity_normalized_per_second);
+        config.pointer_tip_weight = value.value(
+            "pointer_tip_weight", config.pointer_tip_weight);
+        config.pointer_hand_lock_radius_normalized = value.value(
+            "pointer_hand_lock_radius_normalized",
+            config.pointer_hand_lock_radius_normalized);
+        config.pointer_hand_loss_grace_ms = value.value(
+            "pointer_hand_loss_grace_ms", config.pointer_hand_loss_grace_ms);
         config.max_pointer_step_pixels = value.value(
             "max_pointer_step_pixels", config.max_pointer_step_pixels);
         config.invert_pointer_x = value.value(
@@ -153,6 +173,17 @@ nlohmann::json SerializePhysicalGestureControlConfig() {
         {"pointer_gain_pixels", config.pointer_gain_pixels},
         {"pointer_smoothing", config.pointer_smoothing},
         {"pointer_deadzone_normalized", config.pointer_deadzone_normalized},
+        {"pointer_deadzone_start_multiplier", config.pointer_deadzone_start_multiplier},
+        {"pointer_one_euro_min_cutoff", config.pointer_one_euro_min_cutoff},
+        {"pointer_one_euro_beta", config.pointer_one_euro_beta},
+        {"pointer_one_euro_derivative_cutoff",
+         config.pointer_one_euro_derivative_cutoff},
+        {"pointer_outlier_velocity_normalized_per_second",
+         config.pointer_outlier_velocity_normalized_per_second},
+        {"pointer_tip_weight", config.pointer_tip_weight},
+        {"pointer_hand_lock_radius_normalized",
+         config.pointer_hand_lock_radius_normalized},
+        {"pointer_hand_loss_grace_ms", config.pointer_hand_loss_grace_ms},
         {"max_pointer_step_pixels", config.max_pointer_step_pixels},
         {"invert_pointer_x", config.invert_pointer_x},
         {"invert_pointer_y", config.invert_pointer_y},
