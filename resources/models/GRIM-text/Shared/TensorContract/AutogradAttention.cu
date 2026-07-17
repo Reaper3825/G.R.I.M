@@ -1391,7 +1391,8 @@ struct ReshapeFromBHSDGradFn : public GradFn {
     // Input tensor info
     std::shared_ptr<GradFn> input_grad_fn;
     bool input_requires_grad = false;
-    float* input_grad = nullptr;  // Pre-allocated gradient buffer
+    float* input_grad = nullptr;
+    std::shared_ptr<float> owned_input_grad;
     TensorContract::TensorShape input_shape;
     
     // Dimensions for reshape
@@ -1406,7 +1407,7 @@ struct ReshapeFromBHSDGradFn : public GradFn {
         release_saved();
     }
     
-    void capture_input(Tensor& bhsd_input) {
+    void capture_input(Tensor& bhsd_input, cudaStream_t stream) {
         input_requires_grad = bhsd_input.requires_grad;
         input_shape = bhsd_input.shape;
         
@@ -1415,8 +1416,21 @@ struct ReshapeFromBHSDGradFn : public GradFn {
         register_input(bhsd_input.grad_fn);
         
         if (input_requires_grad) {
-            bhsd_input.alloc_grad();
-            input_grad = bhsd_input.grad_data();
+            if (bhsd_input.is_leaf) {
+                bhsd_input.ensure_grad();
+                input_grad = bhsd_input.grad_data();
+            } else {
+                float* buffer = nullptr;
+                cudaMallocOrThrow(
+                    reinterpret_cast<void**>(&buffer),
+                    bhsd_input.numel() * sizeof(float),
+                    "ReshapeBHSDGradFn_input_grad");
+                cudaMemsetAsync(buffer, 0, bhsd_input.numel() * sizeof(float), stream);
+                owned_input_grad = std::shared_ptr<float>(buffer, [](float* p) {
+                    queueForDeferredCleanup(p);
+                });
+                input_grad = owned_input_grad.get();
+            }
         }
     }
     
@@ -1432,17 +1446,14 @@ struct ReshapeFromBHSDGradFn : public GradFn {
         if (!input_requires_grad) {
             return;
         }
+        if (!input_grad) {
+            throw std::runtime_error("ReshapeFromBHSDGradFn::apply: input_grad is NULL");
+        }
         
         // Reshape gradient from flat [tokens, d_model] to BHSD [B, H, S, D]
         // via TensorConversion's single source of truth geometry kernel.
-        const int total_elems = batch_size * num_heads * seq_len * head_dim;
-        
-        // Allocate temporary buffer for reshaped gradient
-        float* bhsd_grad = nullptr;
-        cudaMallocOrThrow(reinterpret_cast<void**>(&bhsd_grad), total_elems * sizeof(float), "ReshapeBHSDGradFn_bhsd_grad");
-        
         TensorConversion::convert_BSM_to_BHSD(
-            grad_output.data, bhsd_grad, batch_size, seq_len, num_heads, head_dim, stream);
+            grad_output.data, input_grad, batch_size, seq_len, num_heads, head_dim, stream);
         {
             cudaError_t err = cudaGetLastError();
             if (err != cudaSuccess) {
@@ -1454,7 +1465,7 @@ struct ReshapeFromBHSDGradFn : public GradFn {
         // Continue chain to attention backward
         if (input_grad_fn) {
             Tensor bhsd_grad_tensor;
-            bhsd_grad_tensor.data = bhsd_grad;
+            bhsd_grad_tensor.data = input_grad;
             bhsd_grad_tensor.shape = input_shape;
             bhsd_grad_tensor.owns_data = false;
             bhsd_grad_tensor.stream = stream;
@@ -1464,14 +1475,13 @@ struct ReshapeFromBHSDGradFn : public GradFn {
         } else {
             throw std::runtime_error("[ReshapeBHSDtoFlat] input_grad_fn is NULL - autograd chain is broken at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
         }
-        
-        // ISSUE #62: Use cudaFreeAsync to ensure kernels in apply() complete before freeing
-        // Regular cudaFree might execute before async kernels finish using the buffer
-        cudaFreeAsync(bhsd_grad, stream);
     }
     
     void release_saved() override {
         GradFn::release_saved();
+        owned_input_grad.reset();
+        input_grad = nullptr;
+        input_grad_fn.reset();
     }
 };
 
@@ -1529,7 +1539,7 @@ Tensor reshape_bhsd_to_flat(
         auto grad_fn = std::make_shared<ReshapeFromBHSDGradFn>();
         
         // Capture input for backward
-        grad_fn->capture_input(bhsd_input);
+        grad_fn->capture_input(bhsd_input, stream);
         grad_fn->batch_size = batch_size;
         grad_fn->seq_len = seq_len;
         grad_fn->num_heads = num_heads;
