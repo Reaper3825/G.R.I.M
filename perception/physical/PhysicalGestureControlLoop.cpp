@@ -1,12 +1,15 @@
 #include "PhysicalGestureControlLoop.hpp"
 
+#include "PhysicalGestureCursor.hpp"
 #include "PhysicalGestureEventBus.hpp"
+#include "PhysicalHandLandmarkMetrics.hpp"
 #include "PhysicalHandGestureBus.hpp"
 #include "core/platform_input.hpp"
 #include "logger.hpp"
 #include "wake/wake_key.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cctype>
 #include <cmath>
@@ -136,6 +139,12 @@ struct PhysicalGestureControlState {
     std::string active_pointer_binding_id;
     std::string active_pointer_gesture;
 
+    PhysicalGestureCursor gesture_cursor;
+    std::string last_logged_cursor_error;
+    bool pinch_latched = false;
+    uint64_t pinch_close_since_ns = 0;
+    uint64_t last_pinch_click_ns = 0;
+
     bool hand_lock_active = false;
     bool ever_had_hand_lock = false;
     PhysicalHandedness locked_handedness = PhysicalHandedness::Unknown;
@@ -150,6 +159,30 @@ PhysicalGestureControlState& State() {
     return state;
 }
 
+void SyncGestureCursorLocked(PhysicalGestureControlState& state) {
+    const bool should_show_armed_cursor =
+        state.config.enabled && state.status.armed;
+    const float pinch_openness = state.status.pinch_tracking
+        ? state.status.pinch_visual_openness : 1.0f;
+    const bool ok = state.gesture_cursor.SyncArmedState(
+        should_show_armed_cursor, pinch_openness);
+    state.status.custom_cursor_active =
+        state.gesture_cursor.IsApplied();
+    if (ok) {
+        state.status.cursor_error.clear();
+        state.last_logged_cursor_error.clear();
+        return;
+    }
+
+    state.status.cursor_error = state.gesture_cursor.LastError();
+    if (state.status.cursor_error.empty())
+        state.status.cursor_error = "gesture cursor state change failed";
+    if (state.last_logged_cursor_error != state.status.cursor_error) {
+        LOG_ERROR(kLogTag, state.status.cursor_error);
+        state.last_logged_cursor_error = state.status.cursor_error;
+    }
+}
+
 void ResetPointerLocked(PhysicalGestureControlState& state) {
     state.status.pointer_active = false;
     state.status.pointer_activation_gesture.clear();
@@ -160,6 +193,12 @@ void ResetPointerLocked(PhysicalGestureControlState& state) {
     state.last_pointer_observation_ns = 0;
     state.active_pointer_binding_id.clear();
     state.active_pointer_gesture.clear();
+    state.pinch_latched = false;
+    state.pinch_close_since_ns = 0;
+    state.status.pinch_tracking = false;
+    state.status.pinch_closed = false;
+    state.status.pinch_distance_ratio = 0.0f;
+    state.status.pinch_visual_openness = 1.0f;
 }
 
 void DisarmLocked(PhysicalGestureControlState& state,
@@ -238,14 +277,22 @@ bool ControlPointForHand(const PhysicalHandObservation& hand,
                          const PhysicalGestureControlConfig& config,
                          float& x, float& y)
 {
-    if (hand.landmark_count <= 8) return false;
-    const float tip_weight = std::clamp(config.pointer_tip_weight, 0.0f, 1.0f);
-    const auto& tip = hand.landmarks[8];
-    const auto& pip = hand.landmarks[6];
-    x = tip_weight * tip.normalized_x +
-        (1.0f - tip_weight) * pip.normalized_x;
-    y = tip_weight * tip.normalized_y +
-        (1.0f - tip_weight) * pip.normalized_y;
+    (void)config;
+    if (hand.landmark_count <= 17) return false;
+
+    // Track the hand itself, not either half of the pinch. The four MCP
+    // knuckles form a stable palm anchor while thumb tip (4) and index tip (8)
+    // move toward one another. Keeping those concerns separate prevents a
+    // deliberate pinch from dragging the cursor off the intended target.
+    static constexpr std::array<uint8_t, 4> kPalmAnchorLandmarks{{5, 9, 13, 17}};
+    x = 0.0f;
+    y = 0.0f;
+    for (const uint8_t index : kPalmAnchorLandmarks) {
+        x += hand.landmarks[index].normalized_x;
+        y += hand.landmarks[index].normalized_y;
+    }
+    x *= 0.25f;
+    y *= 0.25f;
     return std::isfinite(x) && std::isfinite(y);
 }
 
@@ -392,6 +439,64 @@ void ProcessPointerSampleLocked(PhysicalGestureControlState& state,
     ExtendArmedWindowLocked(state, sample_ns);
 }
 
+void ProcessPinchSampleLocked(PhysicalGestureControlState& state,
+                              const PhysicalHandObservation& hand,
+                              uint64_t sample_ns,
+                              std::vector<PendingAction>& actions)
+{
+    const auto measurement = MeasurePhysicalHandPinch(hand);
+    if (!measurement.valid) {
+        state.status.pinch_tracking = false;
+        state.status.pinch_closed = false;
+        state.status.pinch_visual_openness = 1.0f;
+        state.pinch_close_since_ns = 0;
+        return;
+    }
+
+    const float ratio = measurement.normalized_distance;
+    const float visual_range = std::max(
+        0.01f, state.config.pinch_visual_open_ratio -
+                   state.config.pinch_close_ratio);
+    state.status.pinch_tracking = true;
+    state.status.pinch_distance_ratio = ratio;
+    state.status.pinch_visual_openness = std::clamp(
+        (ratio - state.config.pinch_close_ratio) / visual_range,
+        0.0f, 1.0f);
+
+    if (ratio >= state.config.pinch_release_ratio) {
+        state.pinch_latched = false;
+        state.pinch_close_since_ns = 0;
+        state.status.pinch_closed = false;
+        return;
+    }
+    if (state.pinch_latched) {
+        state.status.pinch_closed = true;
+        return;
+    }
+    if (ratio > state.config.pinch_close_ratio) {
+        state.pinch_close_since_ns = 0;
+        state.status.pinch_closed = false;
+        return;
+    }
+
+    state.status.pinch_closed = true;
+    if (state.pinch_close_since_ns == 0)
+        state.pinch_close_since_ns = sample_ns;
+    if (!state.status.armed || !state.config.pinch_click_enabled ||
+        sample_ns - state.pinch_close_since_ns <
+            MillisecondsToNs(state.config.pinch_dwell_ms)) return;
+    if (state.last_pinch_click_ns != 0 &&
+        sample_ns - state.last_pinch_click_ns <
+            MillisecondsToNs(state.config.pinch_click_cooldown_ms)) return;
+
+    state.pinch_latched = true;
+    state.last_pinch_click_ns = sample_ns;
+    ++state.status.pinch_clicks_emitted;
+    actions.push_back({PhysicalGestureAction::MouseLeftClick, 0, 0,
+        "mouse.left_click:pinch", "pinch"});
+    ExtendArmedWindowLocked(state, sample_ns);
+}
+
 void RouteEventLocked(PhysicalGestureControlState& state,
                       const PhysicalGestureEvent& event,
                       std::vector<PendingAction>& actions)
@@ -435,6 +540,17 @@ void RouteEventLocked(PhysicalGestureControlState& state,
             RecordBlockedLocked(state, binding.binding_id +
                 ": action requires armed control");
             break;
+        }
+        if (binding.action == PhysicalGestureAction::MouseLeftClick &&
+            state.last_pinch_click_ns != 0) {
+            const uint64_t pinch_guard_ms = std::max(
+                binding.cooldown_ms, state.config.pinch_click_cooldown_ms);
+            if (now_ns - state.last_pinch_click_ns <
+                MillisecondsToNs(pinch_guard_ms)) {
+                RecordBlockedLocked(state, binding.binding_id +
+                    ": geometric pinch already emitted this click");
+                break;
+            }
         }
         if (BindingCoolingDownLocked(state, binding, now_ns)) {
             RecordBlockedLocked(state, binding.binding_id +
@@ -592,6 +708,7 @@ void ProcessHandSnapshotLocked(PhysicalGestureControlState& state,
     }
 
     if (state.status.pointer_active && hand && has_pointer) {
+        ProcessPinchSampleLocked(state, *hand, now_ns, actions);
         const bool classifier_supports_pointer =
             label == state.active_pointer_gesture &&
             confidence >= state.config.exit_confidence;
@@ -864,6 +981,7 @@ void TickPhysicalGestureControl() {
             if (state.status.armed) DisarmLocked(state, "controller disabled");
             ReleaseStableLocked(state, now_ns, actions);
             ReleaseHandLockLocked(state);
+            SyncGestureCursorLocked(state);
             return;
         }
 
@@ -875,6 +993,7 @@ void TickPhysicalGestureControl() {
             ProcessHandSnapshotLocked(state, view.snapshot, now_ns, actions);
         }
         ApplyStalenessLocked(state, now_ns, actions);
+        SyncGestureCursorLocked(state);
     }
 
     for (const auto& action : actions) {
@@ -952,6 +1071,18 @@ void RequestConfigurePhysicalGestureControl(
         config.pointer_hand_loss_grace_ms, 100, 3000);
     config.max_pointer_step_pixels = std::clamp(
         config.max_pointer_step_pixels, 1, 500);
+    config.pinch_close_ratio = std::clamp(
+        config.pinch_close_ratio, 0.02f, 1.0f);
+    config.pinch_release_ratio = std::clamp(
+        config.pinch_release_ratio,
+        config.pinch_close_ratio + 0.01f, 1.5f);
+    config.pinch_visual_open_ratio = std::clamp(
+        config.pinch_visual_open_ratio,
+        config.pinch_release_ratio, 2.0f);
+    config.pinch_dwell_ms = std::clamp<uint64_t>(
+        config.pinch_dwell_ms, 0, 1000);
+    config.pinch_click_cooldown_ms = std::clamp<uint64_t>(
+        config.pinch_click_cooldown_ms, 0, 5000);
     if (config.bindings.empty()) config.bindings = DefaultPhysicalGestureBindings();
     std::unordered_set<std::string> used_ids;
     for (size_t i = 0; i < config.bindings.size(); ++i) {
@@ -1007,6 +1138,7 @@ void RequestConfigurePhysicalGestureControl(
     state.status.active_hand = PhysicalHandedness::Unknown;
     state.status.enabled = state.config.enabled;
     state.status.dry_run = state.config.dry_run;
+    SyncGestureCursorLocked(state);
 }
 
 void RequestSetPhysicalGestureControlEnabled(bool enabled) {
@@ -1033,6 +1165,7 @@ void ShutdownPhysicalGestureControl() {
         state.latched_bindings.clear();
         state.last_binding_action_ns.clear();
         state.last_logged_failure_action.clear();
+        SyncGestureCursorLocked(state);
     }
     PhysicalGestureEventBus::Instance().ResetPhysicalGestureEventBus();
 }

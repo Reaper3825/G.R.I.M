@@ -36,6 +36,8 @@ struct PhysicalGestureControlStatus {
     bool armed = false;
     bool pointer_active = false;
     bool hand_lock_active = false;
+    bool custom_cursor_active = false;
+    std::string cursor_error;
     std::string candidate_gesture;
     std::string stable_gesture;
     std::string pointer_activation_gesture;
@@ -52,11 +54,16 @@ struct PhysicalGestureControlStatus {
     uint64_t pointer_outliers_rejected = 0;
     uint64_t pointer_classifier_bypass_frames = 0;
     uint64_t hand_reacquisitions = 0;
+    uint64_t pinch_clicks_emitted = 0;
     float pointer_raw_x = 0.0f;
     float pointer_raw_y = 0.0f;
     float pointer_filtered_x = 0.0f;
     float pointer_filtered_y = 0.0f;
     float pointer_sample_hz = 0.0f;
+    bool pinch_tracking = false;
+    bool pinch_closed = false;
+    float pinch_distance_ratio = 0.0f;
+    float pinch_visual_openness = 1.0f;
     std::string last_action;
     std::string last_block_reason;
     std::string last_error;

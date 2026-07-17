@@ -6,8 +6,6 @@
 
 using GRIM::CudaAlloc::cudaMallocOrThrow;
 
-#ifdef USE_CUDA
-
 namespace GRIM::ExecutionBlockInternal {
 
 using GRIM::Forward::ExecutionBlockStepOutput;
@@ -222,14 +220,6 @@ __global__ void kernelApplyLogitMask(
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= C) return;
     masked_logits[i] = logits[i] + (1.0f - mask[i]) * (-1e9f);
-}
-
-__global__ void kernelAccumulateScalar(
-    float* __restrict__ a,
-    const float* __restrict__ b
-) {
-    if (threadIdx.x != 0) return;
-    a[0] += b[0];
 }
 
 // [DELETED] kernelOperandConsistencyGrad — removed per Fix #1.
@@ -560,229 +550,6 @@ __global__ void kernelMaskScratchSlots(
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < S) logits[i] = -1e9f;
 }
-
-__global__ void kernelFourOpMixBackward(
-    float* __restrict__ grad_v1,
-    float* __restrict__ grad_v2,
-    float* __restrict__ grad_p_op,
-    const float* __restrict__ grad_v_out_ptr,
-    const float* __restrict__ pv1,
-    const float* __restrict__ pv2,
-    const int* __restrict__ op_idx,    // hard-selected op from forward argmax
-    float eps,
-    int num_ops
-) {
-    const int tid = threadIdx.x;
-    float grad_v_out = grad_v_out_ptr[0];
-    float v1 = pv1[0];
-    float v2 = pv2[0];
-    float abs_v2 = fabsf(v2);
-    float denom = (abs_v2 > eps) ? v2 : copysignf(eps, v2);
-
-    // ── FULL HARD backward (Fix #2 hardened) ──
-    // Forward: v_out = results[argmax(p_op)]   (hard pick)
-    // Backward: use ONLY the selected op's derivative for v1/v2.
-    //
-    // Previous code used p_op as soft weights for v1/v2 derivatives.
-    // That leaked: p_op influenced v1/v2 gradient magnitude/direction,
-    // so the model could shape p_op to get "better" value gradients.
-    // This violated true symbolic separation.
-    //
-    // Now: backward matches forward exactly — only the hard-selected op
-    // contributes derivative signal.  p_op has ZERO influence on any
-    // gradient path.  Op selection supervision is assembled later at the
-    // explicit autograd loss boundary from retained logits.
-
-    if (tid == 0) {
-        constexpr float kDerivClip = 10.0f;
-        int k = op_idx[0];
-        if (k < 0 || k >= num_ops) k = 0;
-
-        // Derivative of the selected op only
-        float dv1_k = 0.0f, dv2_k = 0.0f;
-        switch (k) {
-            case 0:  // add: v1 + v2
-                dv1_k = 1.0f;
-                dv2_k = 1.0f;
-                break;
-            case 1:  // sub: v1 - v2
-                dv1_k = 1.0f;
-                dv2_k = -1.0f;
-                break;
-            case 2:  // mul: v1 * v2
-                dv1_k = fminf(fmaxf(v2, -kDerivClip), kDerivClip);
-                dv2_k = fminf(fmaxf(v1, -kDerivClip), kDerivClip);
-                break;
-            case 3: { // div: v1 / denom
-                float dv1_raw = 1.0f / denom;
-                dv1_k = fminf(fmaxf(dv1_raw, -kDerivClip), kDerivClip);
-                float dv2_raw = -v1 / (denom * denom);
-                dv2_k = fminf(fmaxf(dv2_raw, -kDerivClip), kDerivClip);
-                break;
-            }
-        }
-
-        if (grad_v1) grad_v1[0] += dv1_k * grad_v_out;
-        if (grad_v2) grad_v2[0] += dv2_k * grad_v_out;
-
-        // grad_p_op intentionally left at zero — CE only
-    }
-}
-
-// [DELETED] OperandConsistencyGradFn — removed per Fix #1.
-// Value-path gradients leaked back into arg selection (p_arg) through
-// v1/v2 → FourOpMixGradFn → v1/v2 → OperandConsistencyGradFn → p_arg.
-// This taught "pick slots that give good answers" instead of "pick the
-// correct symbolic slot".  Selection CE is now the ONLY arg selection signal.
-// v1/v2 grad_fn are left as nullptr (detached from p_arg).
-
-// Placeholder struct removed — OperandConsistencyGradFn no longer exists.
-// The code below continues with FourOpMixGradFn.
-struct _OperandConsistencyGradFn_DELETED;
-// (end of deleted OperandConsistencyGradFn)
-
-struct FourOpMixGradFn : public GradFn {
-    float* saved_v1 = nullptr;
-    float* saved_v2 = nullptr;
-    int* saved_op_idx = nullptr;       // hard-selected op from forward argmax
-    int num_ops_ = 4;
-
-    float* grad_v1 = nullptr;
-    float* grad_v2 = nullptr;
-    float* grad_p_op = nullptr;
-    std::shared_ptr<float> owned_grad_v1;
-    std::shared_ptr<float> owned_grad_v2;
-    std::shared_ptr<float> owned_grad_p_op;
-    std::shared_ptr<GradFn> v1_grad_fn;
-    std::shared_ptr<GradFn> v2_grad_fn;
-    std::shared_ptr<GradFn> p_op_grad_fn;
-    TensorContract::TensorShape v1_shape;
-    TensorContract::TensorShape v2_shape;
-    TensorContract::TensorShape p_op_shape;
-    bool v1_requires_grad = false;
-    bool v2_requires_grad = false;
-    bool p_op_requires_grad = false;
-
-    FourOpMixGradFn() { op_name = "four_op_mix"; }
-
-    ~FourOpMixGradFn() override {
-        if (saved_v1) cudaFree(saved_v1);
-        if (saved_v2) cudaFree(saved_v2);
-        if (saved_op_idx) cudaFree(saved_op_idx);
-    }
-
-    void capture(Tensor& v1_t, Tensor& v2_t, Tensor& p_op_t,
-                 const int* d_op_idx,
-                 int num_ops, cudaStream_t stream) {
-        num_ops_ = num_ops;
-
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_v1), sizeof(float), "datastream_saved_v1");
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_v2), sizeof(float), "datastream_saved_v2");
-        cudaMemcpyAsync(saved_v1, v1_t.data, sizeof(float), cudaMemcpyDeviceToDevice, stream);
-        cudaMemcpyAsync(saved_v2, v2_t.data, sizeof(float), cudaMemcpyDeviceToDevice, stream);
-
-        // Save the hard-selected op index — backward uses ONLY this op's derivative.
-        // No p_op or results saved: p_op must have ZERO influence on value gradients.
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_op_idx), sizeof(int), "datastream_saved_op_idx");
-        cudaMemcpyAsync(saved_op_idx, d_op_idx, sizeof(int), cudaMemcpyDeviceToDevice, stream);
-
-        v1_requires_grad = v1_t.requires_grad;
-        v2_requires_grad = v2_t.requires_grad;
-        p_op_requires_grad = p_op_t.requires_grad;
-        v1_shape = v1_t.shape;
-        v2_shape = v2_t.shape;
-        p_op_shape = p_op_t.shape;
-        v1_grad_fn = v1_t.grad_fn;
-        v2_grad_fn = v2_t.grad_fn;
-        p_op_grad_fn = p_op_t.grad_fn;
-        register_input(v1_t.grad_fn);
-        register_input(v2_t.grad_fn);
-        register_input(p_op_t.grad_fn);
-
-        auto setup_grad_buf = [&](Tensor& t, float*& gp, std::shared_ptr<float>& owned, size_t n) {
-            if (!t.requires_grad) return;
-            if (t.is_leaf) {
-                t.ensure_grad();
-                gp = t.grad_data();
-            } else {
-                float* buf = nullptr;
-                cudaMallocOrThrow(reinterpret_cast<void**>(&buf), n * sizeof(float), "datastream_alu_grad_buf");
-                cudaMemsetAsync(buf, 0, n * sizeof(float), stream);
-                owned = std::shared_ptr<float>(buf, [](float* p) { cudaFree(p); });
-                gp = owned.get();
-            }
-        };
-
-        setup_grad_buf(v1_t, grad_v1, owned_grad_v1, 1);
-        setup_grad_buf(v2_t, grad_v2, owned_grad_v2, 1);
-        setup_grad_buf(p_op_t, grad_p_op, owned_grad_p_op, num_ops);
-    }
-
-    void apply_impl(const Tensor& grad_output,
-                    cudaStream_t stream,
-                    const Batching::BatchPayload* backward_payload,
-                    const Batching::BatchDeviceBindings* backward_bindings) override {
-        if (applied) return;
-        applied = true;
-
-        kernelFourOpMixBackward<<<1, kWarpSize, 0, stream>>>(
-            grad_v1, grad_v2, grad_p_op,
-            grad_output.data,
-            saved_v1, saved_v2,
-            saved_op_idx,
-            kEps, num_ops_);
-        CUDA_CHECK_KERNEL();
-
-        if (v2_requires_grad && v2_grad_fn && v2_grad_fn == v1_grad_fn) {
-            kernelAccumulateScalar<<<1, 1, 0, stream>>>(grad_v1, grad_v2);
-            Tensor view;
-            view.data = grad_v1;
-            view.shape = v1_shape;
-            view.owns_data = false;
-            view.stream = stream;
-            v1_grad_fn->apply(view, stream, backward_payload, backward_bindings);
-        } else {
-            if (v1_requires_grad && v1_grad_fn) {
-                Tensor view;
-                view.data = grad_v1;
-                view.shape = v1_shape;
-                view.owns_data = false;
-                view.stream = stream;
-                v1_grad_fn->apply(view, stream, backward_payload, backward_bindings);
-            }
-            if (v2_requires_grad && v2_grad_fn) {
-                Tensor view;
-                view.data = grad_v2;
-                view.shape = v2_shape;
-                view.owns_data = false;
-                view.stream = stream;
-                v2_grad_fn->apply(view, stream, backward_payload, backward_bindings);
-            }
-        }
-
-        if (p_op_requires_grad && p_op_grad_fn) {
-            Tensor view;
-            view.data = grad_p_op;
-            view.shape = p_op_shape;
-            view.owns_data = false;
-            view.stream = stream;
-            p_op_grad_fn->apply(view, stream, backward_payload, backward_bindings);
-        }
-    }
-
-    void release_saved() override {
-        GradFn::release_saved();
-        if (saved_v1) { cudaFree(saved_v1); saved_v1 = nullptr; }
-        if (saved_v2) { cudaFree(saved_v2); saved_v2 = nullptr; }
-        if (saved_op_idx) { cudaFree(saved_op_idx); saved_op_idx = nullptr; }
-        grad_v1 = nullptr;
-        grad_v2 = nullptr;
-        grad_p_op = nullptr;
-        v1_grad_fn.reset();
-        v2_grad_fn.reset();
-        p_op_grad_fn.reset();
-    }
-};
 
 struct ExecutionBlockInjectGradFn : public GradFn {
     float* saved_result_emb = nullptr;
@@ -1626,25 +1393,18 @@ void executeStepCoordinatorImpl(
 
     // Hard op selection (clean classification).
     // Forward: argmax(p_op) → pick discrete result.  v_out = results[hard_op].
-    // Backward: grad_p_op is ZERO — no execution-value gradient into op selection.
-    // Op supervision is assembled later from retained logits at the loss boundary.
+    // The hard result is detached. Op selection is supervised from retained logits
+    // at the loss boundary; execution values do not create an autograd edge.
     // Blending +/-/*/÷ results is FUCKING STUPID! for a register machine.
     kernelArgmax1DIntData<<<1, kWarpSize, 0, stream>>>(d_exec_idx + 2, work.p_op.data, nop);
     CUDA_CHECK_KERNEL();
 
     work.v_out = Tensor::zeros({1, 1}, stream, "exec_v_out");
-    work.v_out.requires_grad = true;
-    work.v_out.is_leaf = false;
+    work.v_out.requires_grad = false;
+    work.v_out.is_leaf = true;
     kernelHardPickOpForward<<<1, 1, 0, stream>>>(work.v_out.data, work.op_results.data, d_exec_idx + 2, nop);
     CUDA_CHECK_KERNEL();
     kernelCheckFinite<<<1, 1, 0, stream>>>(work.v_out.data, 1, diag.numericErrorFlag(), kStageVOut, hp.magnitude_limit);
-
-    {
-        auto grad_fn = std::make_shared<FourOpMixGradFn>();
-        grad_fn->capture(work.v1, work.v2, work.p_op, d_exec_idx + 2,
-                         nop, stream);
-        work.v_out.grad_fn = grad_fn;
-    }
 
     kernelAssembleExecRecord<<<1, 1, 0, stream>>>(
         d_exec_record_i, d_exec_record_f,
@@ -1893,5 +1653,3 @@ GRIM::Tensor GRIM::executionBlockComputeEntropyLoss(
     GRIM::ExecutionBlockInternal::kernelScaleNegAvg<<<1, 1, 0, stream>>>(result.data, accum.data, weight, count);
     return result;
 }
-
-#endif  // USE_CUDA

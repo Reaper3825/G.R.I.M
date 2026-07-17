@@ -1,5 +1,7 @@
 #pragma once
 
+#include "PhysicalFrameBus.hpp"
+
 #include <array>
 #include <cstdint>
 #include <string>
@@ -59,6 +61,13 @@ struct PhysicalHandGestureSnapshot {
     uint64_t publish_sequence     = 0;
     uint64_t source_frame_counter = 0;
     uint64_t published_steady_ns  = 0;
+
+    // Pin the exact immutable frame consumed by the interaction worker. The
+    // camera bus is a latest-frame slot, so an asynchronous MediaPipe result
+    // will almost never match the frame in that slot by the time inference
+    // completes. Keeping the source view with the result lets preview clients
+    // render a coherent frame/landmark pair without copying image pixels.
+    PhysicalFrameBus::FrameView source_frame;
 
     PhysicalHandGestureBackendState backend_state =
         PhysicalHandGestureBackendState::BackendUnavailable;

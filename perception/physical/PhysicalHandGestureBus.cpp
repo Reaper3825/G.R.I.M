@@ -1,6 +1,7 @@
 #include "PhysicalHandGestureBus.hpp"
 
 #include <chrono>
+#include <stdexcept>
 
 namespace GRIM { namespace Perception { namespace Physical {
 
@@ -19,6 +20,13 @@ PhysicalHandGestureBus& PhysicalHandGestureBus::Instance() {
 void PhysicalHandGestureBus::PublishPhysicalHandGestureSnapshot(
     const PhysicalHandGestureSnapshot& snapshot)
 {
+    if (snapshot.source_frame_counter != 0 &&
+        (!snapshot.source_frame.packet ||
+         snapshot.source_frame.frame_counter != snapshot.source_frame_counter)) {
+        throw std::runtime_error(
+            "PhysicalHandGestureBus::PublishPhysicalHandGestureSnapshot: "
+            "source_frame is missing or does not match source_frame_counter");
+    }
     std::lock_guard<std::mutex> lock(mutex_);
     latest_ = snapshot;
     latest_.publish_sequence = next_publish_sequence_++;

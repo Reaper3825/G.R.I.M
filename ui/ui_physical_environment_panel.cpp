@@ -2696,30 +2696,46 @@ void UIPhysicalEnvironmentPanel::DrawInteractionPreview(
     renderer.drawRect({frame_x, frame_y}, {frame_w, frame_h},
                       UITheme::Colors::Background);
 
-    if (!have_any_frame_ || last_view_.raw_image.empty()) {
+    // MediaPipe runs asynchronously, so the newest camera frame normally
+    // advances beyond the frame that produced the latest landmarks. Prefer
+    // the immutable source frame pinned in the gesture snapshot; only use the
+    // live latest-frame view while waiting for the first processed result.
+    const PE::PhysicalFrameBus::FrameView* preview_frame = &last_view_;
+    bool have_coherent_overlay = false;
+    if (have_interaction_snapshot_) {
+        const auto& snapshot = interaction_snapshot_view_.snapshot;
+        const auto& source_frame = snapshot.source_frame;
+        have_coherent_overlay =
+            snapshot.source_frame_counter != 0 &&
+            source_frame.packet &&
+            source_frame.frame_counter == snapshot.source_frame_counter &&
+            !source_frame.raw_image.empty();
+        if (have_coherent_overlay) preview_frame = &source_frame;
+    }
+
+    if ((!have_any_frame_ && !have_coherent_overlay) ||
+        preview_frame->raw_image.empty()) {
         renderer.drawText({frame_x + 12, frame_y + 12},
             "No camera frame yet - connect a source in Camera.",
             UITheme::Colors::TextSecondary);
         return;
     }
 
-    DrawBgrFrameIntoOverlay(renderer, last_view_.raw_image,
-                            last_view_.frame_counter, false,
+    DrawBgrFrameIntoOverlay(renderer, preview_frame->raw_image,
+                            preview_frame->frame_counter, false,
                             frame_x, frame_y, frame_w, frame_h,
                             interaction_blit_cache_);
     const int blit_w = interaction_blit_cache_.out_w;
     const int blit_h = interaction_blit_cache_.out_h;
     const int blit_x = static_cast<int>(frame_x + (frame_w - blit_w) * 0.5f);
     const int blit_y = static_cast<int>(frame_y + (frame_h - blit_h) * 0.5f);
-    if (have_interaction_snapshot_ &&
-        interaction_snapshot_view_.snapshot.source_frame_counter ==
-            last_view_.frame_counter) {
+    if (have_coherent_overlay) {
         DrawHandGestureOverlay(renderer, interaction_snapshot_view_.snapshot,
                                blit_x, blit_y, blit_w, blit_h);
     } else if (have_interaction_snapshot_ &&
                interaction_snapshot_view_.snapshot.source_frame_counter != 0) {
         renderer.drawText({frame_x + 10, frame_y + frame_h - 22},
-            "Landmarks are from an older frame; overlay withheld.",
+            "Gesture source frame is unavailable; overlay withheld.",
             UITheme::Colors::Warning);
     }
 }
@@ -2817,6 +2833,13 @@ void UIPhysicalEnvironmentPanel::DrawInteractionTab(OverlayRenderer& renderer) {
          control.enabled ? UITheme::Colors::TextPrimary : UITheme::Colors::TextMuted);
     line(std::string("Armed: ") + (control.armed ? "YES" : "no"),
          control.armed ? UITheme::Colors::Success : UITheme::Colors::Warning);
+    line(std::string("Cursor: ") +
+         (control.custom_cursor_active ? "armed circle" : "system arrow"),
+         control.custom_cursor_active ? UITheme::Colors::Success
+                                      : UITheme::Colors::TextSecondary);
+    if (!control.cursor_error.empty())
+        line("Cursor error: " + CompactPath(control.cursor_error),
+             UITheme::Colors::Danger);
     line("Stable event: " + (control.stable_gesture.empty()
          ? std::string("none") : control.stable_gesture));
     line("Events/actions: " + std::to_string(control.events_emitted)
@@ -2833,6 +2856,13 @@ void UIPhysicalEnvironmentPanel::DrawInteractionTab(OverlayRenderer& renderer) {
     line("Samples/moves/outliers: " + std::to_string(control.pointer_samples) + "/"
          + std::to_string(control.pointer_moves_emitted) + "/"
          + std::to_string(control.pointer_outliers_rejected));
+    line("Pinch: " + (control.pinch_tracking
+         ? FormatDouble(control.pinch_distance_ratio, 3)
+         : std::string("not tracked"))
+         + (control.pinch_closed ? " CLOSED" : "")
+         + "  clicks " + std::to_string(control.pinch_clicks_emitted),
+         control.pinch_closed ? UITheme::Colors::Success
+                              : UITheme::Colors::TextSecondary);
     line("Classifier bypass/reacquire: "
          + std::to_string(control.pointer_classifier_bypass_frames) + "/"
          + std::to_string(control.hand_reacquisitions));

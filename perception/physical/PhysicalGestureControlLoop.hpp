@@ -57,10 +57,18 @@ struct PhysicalGestureControlConfig {
     float pointer_one_euro_beta = 0.025f;
     float pointer_one_euro_derivative_cutoff = 1.0f;
     float pointer_outlier_velocity_normalized_per_second = 4.0f;
+    // Legacy persisted value retained for config compatibility. Pointer
+    // motion now uses the stable MCP palm centroid so pinching cannot move it.
     float pointer_tip_weight = 0.70f;
     float pointer_hand_lock_radius_normalized = 0.24f;
     uint64_t pointer_hand_loss_grace_ms = 450;
     int max_pointer_step_pixels = 80;
+    bool pinch_click_enabled = true;
+    float pinch_close_ratio = 0.22f;
+    float pinch_release_ratio = 0.34f;
+    float pinch_visual_open_ratio = 0.85f;
+    uint64_t pinch_dwell_ms = 60;
+    uint64_t pinch_click_cooldown_ms = 250;
     // Camera previews are mirrored for natural interaction, so horizontal
     // pointer deltas must be mirrored as well to follow the displayed hand.
     bool invert_pointer_x = true;

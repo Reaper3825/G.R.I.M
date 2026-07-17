@@ -132,6 +132,18 @@ bool ApplyPhysicalGestureControlConfigFromRuntime(
             "pointer_hand_loss_grace_ms", config.pointer_hand_loss_grace_ms);
         config.max_pointer_step_pixels = value.value(
             "max_pointer_step_pixels", config.max_pointer_step_pixels);
+        config.pinch_click_enabled = value.value(
+            "pinch_click_enabled", config.pinch_click_enabled);
+        config.pinch_close_ratio = value.value(
+            "pinch_close_ratio", config.pinch_close_ratio);
+        config.pinch_release_ratio = value.value(
+            "pinch_release_ratio", config.pinch_release_ratio);
+        config.pinch_visual_open_ratio = value.value(
+            "pinch_visual_open_ratio", config.pinch_visual_open_ratio);
+        config.pinch_dwell_ms = value.value(
+            "pinch_dwell_ms", config.pinch_dwell_ms);
+        config.pinch_click_cooldown_ms = value.value(
+            "pinch_click_cooldown_ms", config.pinch_click_cooldown_ms);
         config.invert_pointer_x = value.value(
             "invert_pointer_x", config.invert_pointer_x);
         config.invert_pointer_y = value.value(
@@ -185,6 +197,12 @@ nlohmann::json SerializePhysicalGestureControlConfig() {
          config.pointer_hand_lock_radius_normalized},
         {"pointer_hand_loss_grace_ms", config.pointer_hand_loss_grace_ms},
         {"max_pointer_step_pixels", config.max_pointer_step_pixels},
+        {"pinch_click_enabled", config.pinch_click_enabled},
+        {"pinch_close_ratio", config.pinch_close_ratio},
+        {"pinch_release_ratio", config.pinch_release_ratio},
+        {"pinch_visual_open_ratio", config.pinch_visual_open_ratio},
+        {"pinch_dwell_ms", config.pinch_dwell_ms},
+        {"pinch_click_cooldown_ms", config.pinch_click_cooldown_ms},
         {"invert_pointer_x", config.invert_pointer_x},
         {"invert_pointer_y", config.invert_pointer_y},
         {"bindings", std::move(bindings)}

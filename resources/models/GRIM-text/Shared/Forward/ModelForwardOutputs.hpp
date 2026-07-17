@@ -63,7 +63,7 @@ struct ExecutionBlockStepOutput {
     Tensor p_arg2;      // [1, V_val]
     Tensor p_op;        // [1, num_ops]
     Tensor p_write;     // [1, V]
-    Tensor v_out;       // [1, 1] scalar result (hard forward selection; soft backward path)
+    Tensor v_out;       // [1, 1] detached scalar result from hard op selection
     Tensor result_emb;  // [1, d_model]
     Tensor state_before_values;  // [V, 1] M.values snapshot before this step
     Tensor state_before_valid;   // [V]    M.valid_mask snapshot before this step
@@ -77,7 +77,7 @@ struct ExecutionBlockStepOutput {
     Tensor arg2_logits_tensor;     // [1, V_val] live logits for arg2 CE / REINFORCE
     Tensor op_logits_tensor;       // [1, num_ops] live logits for op CE / div penalty
     Tensor write_logits_tensor;    // [1, V] live logits for write-slot CE
-    Tensor v_out_tensor;           // [1, 1] live scalar result for transition/div-magnitude loss
+    Tensor v_out_tensor;           // [1, 1] retained detached result for argument-selection REINFORCE reward
     Tensor stop_logits_tensor;      // [1, 2], class 0=CONTINUE, class 1=STOP
     Tensor stop_probabilities;      // [1, 2]
     int stop_predicted_class = -1;

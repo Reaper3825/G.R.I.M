@@ -134,6 +134,7 @@ void ApplyBackendConfiguration(PhysicalInteractionState& state,
         SetBackendIdentityLocked(state);
         state.snapshot.hands.clear();
         state.snapshot.source_frame_counter = 0;
+        state.snapshot.source_frame = {};
         state.snapshot.last_error.clear();
         state.snapshot.worker_busy = true;
         state.snapshot.backend_state = config.enabled
@@ -315,6 +316,7 @@ void WorkerMain() {
                 (inference_ms - state.snapshot.mean_inference_ms) / n;
             UpdateInferenceTelemetryLocked(state, inference_ms);
             state.snapshot.source_frame_counter = frame.frame_counter;
+            state.snapshot.source_frame = std::move(frame);
             state.snapshot.hands = std::move(observations);
             state.snapshot.last_error.clear();
             state.snapshot.status_detail = state.snapshot.hands.empty()

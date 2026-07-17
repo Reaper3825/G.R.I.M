@@ -31,27 +31,6 @@ constexpr int kWarpSize = 32;
 constexpr int kEntropyBlockSize = 256;
 constexpr int kDivOpIdx = 3;
 
-__global__ void kernelAbsDiffForward(
-    float* __restrict__ out_loss,
-    const float* __restrict__ a,
-    float b_value
-) {
-    if (threadIdx.x != 0) return;
-    out_loss[0] = fabsf(a[0] - b_value);
-}
-
-__global__ void kernelL1LossBackward(
-    float* __restrict__ grad_input,
-    const float* __restrict__ grad_output,
-    const float* __restrict__ a,
-    float b_value
-) {
-    if (threadIdx.x != 0) return;
-    const float diff = a[0] - b_value;
-    const float sign = (fabsf(diff) > 1e-10f) ? copysignf(1.0f, diff) : 0.0f;
-    grad_input[0] += grad_output[0] * sign;
-}
-
 __global__ void kernelDivInvalidPenaltyForward(
     float* __restrict__ out_loss,
     const float* __restrict__ p_op,
@@ -80,29 +59,6 @@ __global__ void kernelDivInvalidPenaltyBackward(
     }
 }
 
-__global__ void kernelDivMagnitudePenaltyForward(
-    float* __restrict__ out_loss,
-    const float* __restrict__ v_out,
-    int div_flag,
-    float weight
-) {
-    if (threadIdx.x != 0) return;
-    out_loss[0] = div_flag ? (weight * fabsf(v_out[0])) : 0.0f;
-}
-
-__global__ void kernelDivMagnitudePenaltyBackward(
-    float* __restrict__ grad_v_out,
-    const float* __restrict__ grad_out,
-    const float* __restrict__ saved_v_out,
-    int div_flag,
-    float weight
-) {
-    if (threadIdx.x != 0) return;
-    if (!div_flag) return;
-    const float sign_v = (saved_v_out[0] >= 0.0f) ? 1.0f : -1.0f;
-    grad_v_out[0] += grad_out[0] * weight * sign_v;
-}
-
 __global__ void kernelArgReinforceLossForward(
     float* __restrict__ out_loss,
     float* __restrict__ out_advantage,
@@ -110,13 +66,14 @@ __global__ void kernelArgReinforceLossForward(
     const float* __restrict__ p_arg2,
     int idx1,
     int idx2,
-    const float* __restrict__ transition_err,
+    const float* __restrict__ v_out,
+    float expected_value,
     float* __restrict__ baseline,
     float baseline_decay,
     float weight
 ) {
     if (threadIdx.x != 0) return;
-    const float err = transition_err[0];
+    const float err = fabsf(v_out[0] - expected_value);
     const float baseline_prev = baseline[0];
     // Error-as-cost REINFORCE: worse-than-baseline choices must receive a
     // negative coefficient on NLL so gradient descent pushes their probability
@@ -205,76 +162,6 @@ __global__ void kernelNormalizedEntropyBackward(
     grad_probs[idx] += grad_output[0] * (-(logf(p) + 1.0f) / max_entropy);
 }
 
-struct L1ScalarLossGradFn : public GradFn {
-    float* saved_a_ = nullptr;
-    float saved_b_ = 0.0f;
-    float* grad_a_ = nullptr;
-    std::shared_ptr<float> owned_grad_a_;
-
-    std::shared_ptr<GradFn> a_grad_fn_;
-    TensorContract::TensorShape a_shape_;
-    bool a_requires_grad_ = false;
-
-    L1ScalarLossGradFn() { op_name = "autograd_exec_l1_scalar_loss"; }
-
-    ~L1ScalarLossGradFn() override {
-        if (saved_a_) cudaFree(saved_a_);
-    }
-
-    void capture(Tensor& a_tensor, float target_value, cudaStream_t stream) {
-        a_requires_grad_ = a_tensor.requires_grad;
-        a_shape_ = a_tensor.shape;
-        a_grad_fn_ = a_tensor.grad_fn;
-        register_input(a_tensor.grad_fn);
-        saved_b_ = target_value;
-
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_a_), sizeof(float), "autograd_exec_saved_a");
-        CUDA_CHECK(cudaMemcpyAsync(saved_a_, a_tensor.data, sizeof(float), cudaMemcpyDeviceToDevice, stream));
-
-        if (a_requires_grad_) {
-            if (a_tensor.is_leaf) {
-                a_tensor.ensure_grad();
-                grad_a_ = a_tensor.grad_data();
-            } else {
-                float* buf = nullptr;
-                cudaMallocOrThrow(reinterpret_cast<void**>(&buf), sizeof(float), "autograd_exec_grad_a");
-                CUDA_CHECK(cudaMemsetAsync(buf, 0, sizeof(float), stream));
-                owned_grad_a_ = std::shared_ptr<float>(buf, [](float* p) { cudaFree(p); });
-                grad_a_ = owned_grad_a_.get();
-            }
-        }
-    }
-
-    void apply_impl(const Tensor& grad_output,
-                    cudaStream_t stream,
-                    const Batching::BatchPayload* backward_payload,
-                    const Batching::BatchDeviceBindings* backward_bindings) override {
-        if (applied) return;
-        applied = true;
-        if (!a_requires_grad_ || !grad_a_) return;
-
-        kernelL1LossBackward<<<1, 1, 0, stream>>>(grad_a_, grad_output.data, saved_a_, saved_b_);
-        CUDA_CHECK_KERNEL();
-
-        if (a_grad_fn_) {
-            Tensor view;
-            view.data = grad_a_;
-            view.shape = a_shape_;
-            view.owns_data = false;
-            view.stream = stream;
-            a_grad_fn_->apply(view, stream, backward_payload, backward_bindings);
-        }
-    }
-
-    void release_saved() override {
-        GradFn::release_saved();
-        if (saved_a_) { cudaFree(saved_a_); saved_a_ = nullptr; }
-        grad_a_ = nullptr;
-        owned_grad_a_.reset();
-        a_grad_fn_.reset();
-    }
-};
-
 struct DivInvalidPenaltyGradFn : public GradFn {
     int saved_div_flag_ = 0;
     float weight_ = 0.0f;
@@ -332,79 +219,6 @@ struct DivInvalidPenaltyGradFn : public GradFn {
         grad_p_op_ = nullptr;
         owned_grad_p_op_.reset();
         p_op_grad_fn_.reset();
-    }
-};
-
-struct DivMagnitudePenaltyGradFn : public GradFn {
-    float* saved_v_out_ = nullptr;
-    int saved_div_flag_ = 0;
-    float weight_ = 0.0f;
-
-    float* grad_v_out_ = nullptr;
-    std::shared_ptr<float> owned_grad_v_out_;
-    std::shared_ptr<GradFn> v_out_grad_fn_;
-    TensorContract::TensorShape v_out_shape_;
-    bool v_out_requires_grad_ = false;
-
-    DivMagnitudePenaltyGradFn() { op_name = "autograd_exec_div_magnitude_penalty"; }
-
-    ~DivMagnitudePenaltyGradFn() override {
-        if (saved_v_out_) cudaFree(saved_v_out_);
-    }
-
-    void capture(Tensor& v_out_t, int div_flag, float weight, cudaStream_t stream) {
-        saved_div_flag_ = div_flag;
-        weight_ = weight;
-        v_out_requires_grad_ = v_out_t.requires_grad;
-        v_out_shape_ = v_out_t.shape;
-        v_out_grad_fn_ = v_out_t.grad_fn;
-        register_input(v_out_t.grad_fn);
-
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_v_out_), sizeof(float), "autograd_exec_div_mag_saved_vout");
-        cudaMemcpyAsync(saved_v_out_, v_out_t.data, sizeof(float), cudaMemcpyDeviceToDevice, stream);
-
-        if (v_out_requires_grad_) {
-            if (v_out_t.is_leaf) {
-                v_out_t.ensure_grad();
-                grad_v_out_ = v_out_t.grad_data();
-            } else {
-                float* buf = nullptr;
-                cudaMallocOrThrow(reinterpret_cast<void**>(&buf), sizeof(float), "autograd_exec_div_mag_grad_vout");
-                cudaMemsetAsync(buf, 0, sizeof(float), stream);
-                owned_grad_v_out_ = std::shared_ptr<float>(buf, [](float* p) { cudaFree(p); });
-                grad_v_out_ = owned_grad_v_out_.get();
-            }
-        }
-    }
-
-    void apply_impl(const Tensor& grad_output,
-                    cudaStream_t stream,
-                    const Batching::BatchPayload* backward_payload,
-                    const Batching::BatchDeviceBindings* backward_bindings) override {
-        if (applied) return;
-        applied = true;
-        if (!v_out_requires_grad_ || !grad_v_out_) return;
-
-        kernelDivMagnitudePenaltyBackward<<<1, 1, 0, stream>>>(
-            grad_v_out_, grad_output.data, saved_v_out_, saved_div_flag_, weight_);
-        CUDA_CHECK_KERNEL();
-
-        if (v_out_grad_fn_) {
-            Tensor view;
-            view.data = grad_v_out_;
-            view.shape = v_out_shape_;
-            view.owns_data = false;
-            view.stream = stream;
-            v_out_grad_fn_->apply(view, stream, backward_payload, backward_bindings);
-        }
-    }
-
-    void release_saved() override {
-        GradFn::release_saved();
-        if (saved_v_out_) { cudaFree(saved_v_out_); saved_v_out_ = nullptr; }
-        grad_v_out_ = nullptr;
-        owned_grad_v_out_.reset();
-        v_out_grad_fn_.reset();
     }
 };
 
@@ -697,19 +511,6 @@ void readScalarFromDevice(const Tensor& tensor, float& out_value, cudaStream_t s
     CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 
-Tensor makeTransitionLoss(Tensor& v_out_tensor, float expected_target, cudaStream_t stream) {
-    Tensor loss = Tensor::zeros({1, 1}, stream, "autograd_exec_transition_loss");
-    kernelAbsDiffForward<<<1, 1, 0, stream>>>(loss.data, v_out_tensor.data, expected_target);
-    CUDA_CHECK_KERNEL();
-
-    auto grad_fn = std::make_shared<L1ScalarLossGradFn>();
-    grad_fn->capture(v_out_tensor, expected_target, stream);
-    loss.grad_fn = grad_fn;
-    loss.requires_grad = true;
-    loss.is_leaf = false;
-    return loss;
-}
-
 Tensor makeDivInvalidPenalty(Tensor& p_op_tensor, bool div_was_clamped, float weight, int num_ops, cudaStream_t stream) {
     Tensor loss = Tensor::zeros({1, 1}, stream, "autograd_exec_div_invalid_penalty");
     kernelDivInvalidPenaltyForward<<<1, 1, 0, stream>>>(
@@ -728,29 +529,13 @@ Tensor makeDivInvalidPenalty(Tensor& p_op_tensor, bool div_was_clamped, float we
     return loss;
 }
 
-Tensor makeDivMagnitudePenalty(Tensor& v_out_tensor, bool div_was_clamped, float weight, cudaStream_t stream) {
-    Tensor loss = Tensor::zeros({1, 1}, stream, "autograd_exec_div_magnitude_penalty");
-    kernelDivMagnitudePenaltyForward<<<1, 1, 0, stream>>>(
-        loss.data,
-        v_out_tensor.data,
-        div_was_clamped ? 1 : 0,
-        weight);
-    CUDA_CHECK_KERNEL();
-
-    auto grad_fn = std::make_shared<DivMagnitudePenaltyGradFn>();
-    grad_fn->capture(v_out_tensor, div_was_clamped ? 1 : 0, weight, stream);
-    loss.grad_fn = grad_fn;
-    loss.requires_grad = true;
-    loss.is_leaf = false;
-    return loss;
-}
-
 Tensor makeArgReinforceLoss(
     Tensor& p_arg1_tensor,
     Tensor& p_arg2_tensor,
     int idx1,
     int idx2,
-    const Tensor& transition_err_tensor,
+    const Tensor& v_out_tensor,
+    float expected_value,
     float* reinforce_baseline,
     float baseline_decay,
     float weight,
@@ -771,7 +556,8 @@ Tensor makeArgReinforceLoss(
         p_arg2_tensor.data,
         idx1,
         idx2,
-        transition_err_tensor.data,
+        v_out_tensor.data,
+        expected_value,
         reinforce_baseline,
         baseline_decay,
         weight);
@@ -866,8 +652,7 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
     }
 
     const bool need_teacher_targets =
-        (model_hp.execution_block_causal_w1_transition > 0.0f)
-        || (model_hp.structured_ce_enabled && model_hp.execution_block_structured_ce_weight > 0.0f)
+        (model_hp.structured_ce_enabled && model_hp.execution_block_structured_ce_weight > 0.0f)
         || (model_hp.execution_block_stop_ce_weight > 0.0f)
         || (execution_hp.arg_reinforce_weight > 0.0f);
 
@@ -887,7 +672,6 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
     loss_state.exec_op_ce_added = false;
     loss_state.exec_arg_ce_added = false;
     loss_state.exec_write_ce_added = false;
-    loss_state.exec_transition_added = false;
     loss_state.exec_execute_ce_added = false;
     loss_state.exec_stop_ce_added = false;
 
@@ -895,7 +679,6 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
         Op,
         Arg,
         Write,
-        Transition,
         Execute,
         Stop
     };
@@ -916,8 +699,7 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
     const int num_value_slots = num_slots - num_scratch_slots;
     const int num_ops = execution_hp.num_ops;
 
-    if ((execution_hp.div_invalid_penalty_weight > 0.0f || execution_hp.div_magnitude_penalty_weight > 0.0f)
-        && num_ops <= kDivOpIdx) {
+    if (execution_hp.div_invalid_penalty_weight > 0.0f && num_ops <= kDivOpIdx) {
         throw std::runtime_error(
             "addExecutionAuxiliaryLoss: division penalty requested but num_ops="
             + std::to_string(num_ops) + " does not contain division op index "
@@ -953,9 +735,6 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
                 break;
             case ExecLossFlag::Write:
                 loss_state.exec_write_ce_added = true;
-                break;
-            case ExecLossFlag::Transition:
-                loss_state.exec_transition_added = true;
                 break;
             case ExecLossFlag::Execute:
                 loss_state.exec_execute_ce_added = true;
@@ -1049,10 +828,6 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
                 summary.stop_targets++;
             }
 
-            Tensor transition_loss_raw;
-            bool have_transition_loss_raw = false;
-            float expected_target_value = 0.0f;
-            bool have_expected_target_value = false;
             Tensor p_arg1_live;
             Tensor p_arg2_live;
             Tensor p_op_live;
@@ -1061,30 +836,6 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
             bool have_p_arg2_live = false;
             bool have_p_op_live = false;
             bool have_p_write_live = false;
-
-            auto ensureTransitionLossRaw = [&]() {
-                if (!have_transition_loss_raw) {
-                    if (!teacher_row) {
-                        throw std::runtime_error(
-                            "addExecutionAuxiliaryLoss: transition/reinforce supervision reached row="
-                            + std::to_string(b) + " step=" + std::to_string(k)
-                            + " without teacher_steps");
-                    }
-                    if (k >= static_cast<int>(teacher_row->size())) {
-                        throw std::runtime_error(
-                            "addExecutionAuxiliaryLoss: teacher_steps row="
-                            + std::to_string(b) + " is missing step=" + std::to_string(k)
-                            + " required for transition/reinforce supervision");
-                    }
-                    requireScalarTensor(sout.v_out_tensor, "v_out_tensor", b, k);
-                    if (!have_expected_target_value) {
-                        expected_target_value = (*teacher_row)[k].expected_value;
-                        have_expected_target_value = true;
-                    }
-                    transition_loss_raw = makeTransitionLoss(sout.v_out_tensor, expected_target_value, ctx.stream);
-                    have_transition_loss_raw = true;
-                }
-            };
 
             auto ensurePArg1Live = [&]() {
                 if (!have_p_arg1_live) {
@@ -1167,16 +918,6 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
                 accumulateCe(sout.write_logits_tensor, write_target, "selection_ce_write", ExecLossFlag::Write);
             }
 
-            if (model_hp.execution_block_causal_w1_transition > 0.0f) {
-                ensureTransitionLossRaw();
-                Tensor& transition_loss = transition_loss_raw;
-                Tensor scaled = autograd::scale_scalar(
-                    transition_loss,
-                    model_hp.execution_block_causal_w1_transition,
-                    ctx.stream);
-                addExecLossTerm(std::move(scaled), "transition_loss", b, k, ExecLossFlag::Transition);
-            }
-
             if (execution_hp.div_invalid_penalty_weight > 0.0f && sout.div_was_clamped) {
                 ensurePOpLive();
                 Tensor& p_op = p_op_live;
@@ -1189,22 +930,18 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
                 addExecLossTerm(std::move(penalty), "div_invalid_penalty", b, k, ExecLossFlag::Op);
             }
 
-            if (execution_hp.div_magnitude_penalty_weight > 0.0f && sout.div_was_clamped) {
-                requireScalarTensor(sout.v_out_tensor, "v_out_tensor", b, k);
-                Tensor penalty = makeDivMagnitudePenalty(
-                    sout.v_out_tensor,
-                    sout.div_was_clamped,
-                    execution_hp.div_magnitude_penalty_weight,
-                    ctx.stream);
-                addExecLossTerm(std::move(penalty), "div_magnitude_penalty", b, k, ExecLossFlag::Transition);
-            }
-
             if (execution_hp.arg_reinforce_weight > 0.0f) {
                 if (!teacher_row) {
                     throw std::runtime_error(
                         "addExecutionAuxiliaryLoss: arg REINFORCE reached row="
                         + std::to_string(b) + " step=" + std::to_string(k)
                         + " without teacher_steps");
+                }
+                if (k >= static_cast<int>(teacher_row->size())) {
+                    throw std::runtime_error(
+                        "addExecutionAuxiliaryLoss: teacher_steps row="
+                        + std::to_string(b) + " is missing step=" + std::to_string(k)
+                        + " required for argument REINFORCE");
                 }
                 const auto& teacher = (*teacher_row)[k];
                 requirePositiveTemperature(sout.selection_temperature, b, k);
@@ -1218,16 +955,16 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
                 if (effective_weight > 0.0f) {
                     ensurePArg1Live();
                     ensurePArg2Live();
-                    ensureTransitionLossRaw();
+                    requireScalarTensor(sout.v_out_tensor, "v_out_tensor", b, k);
                     Tensor& p_arg1 = p_arg1_live;
                     Tensor& p_arg2 = p_arg2_live;
-                    Tensor& transition_loss = transition_loss_raw;
                     Tensor reinforce = makeArgReinforceLoss(
                         p_arg1,
                         p_arg2,
                         selected_arg1,
                         selected_arg2,
-                        transition_loss,
+                        sout.v_out_tensor,
+                        teacher.expected_value,
                         ctx.training_state->execution_runtime.execution_diag.reinforceBaseline(),
                         execution_hp.arg_reinforce_baseline_decay,
                         effective_weight,

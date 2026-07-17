@@ -215,7 +215,6 @@ const char* classifyConfigSection(const std::string& key) {
             "value_match_epsilon",
             "final_slot_consistency_weight",
             "div_invalid_penalty_weight",
-            "div_magnitude_penalty_weight",
             "arg_reinforce_weight",
             "arg_reinforce_baseline_decay",
             "structured_ce_enabled",

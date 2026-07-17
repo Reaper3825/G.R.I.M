@@ -431,9 +431,7 @@ struct ExecutionBlockConstructionHP {
     float entropy_weight = 0.0f;
     float transition_hard_threshold = 0.0f;
     int gate_warmup_steps = 0;
-    float causal_w1_transition = 0.0f;
     float div_invalid_penalty_weight = 0.0f;
-    float div_magnitude_penalty_weight = 0.0f;
     float arg_reinforce_weight = 0.0f;
     float arg_reinforce_baseline_decay = 0.0f;
 };
@@ -539,9 +537,7 @@ struct ModelHP {
     float execution_block_entropy_weight = 0.0f;
     float execution_block_transition_hard_threshold = 0.0f;
     int execution_block_gate_warmup_steps = 0;
-    float execution_block_causal_w1_transition = 0.0f;
     float execution_block_div_invalid_penalty_weight = 0.0f;
-    float execution_block_div_magnitude_penalty_weight = 0.0f;
     float execution_block_arg_reinforce_weight = 0.0f;
     float execution_block_arg_reinforce_baseline_decay = 0.0f;
     float execution_block_entropy_aux_weight = 0.0f;
@@ -1320,9 +1316,7 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.execution_block_entropy_weight = requireFloat("execution_block_entropy_weight");
     view.execution_block_transition_hard_threshold = requireFloat("execution_block_transition_hard_threshold");
     view.execution_block_gate_warmup_steps = 0;
-    view.execution_block_causal_w1_transition = requireFloat("execution_block_causal_w1_transition");
     view.execution_block_div_invalid_penalty_weight = requireFloat("execution_block_div_invalid_penalty_weight");
-    view.execution_block_div_magnitude_penalty_weight = requireFloat("execution_block_div_magnitude_penalty_weight");
     view.execution_block_arg_reinforce_weight = requireFloat("execution_block_arg_reinforce_weight");
     view.execution_block_arg_reinforce_baseline_decay = requireFloat("execution_block_arg_reinforce_baseline_decay");
     view.execution_block_entropy_aux_weight = requireFloat("execution_block_entropy_aux_weight");
@@ -1468,9 +1462,7 @@ inline ExecutionBlockConstructionHP executionBlockConstructionHP(
     view.entropy_weight = model.execution_block_entropy_weight;
     view.transition_hard_threshold = model.execution_block_transition_hard_threshold;
     view.gate_warmup_steps = model.execution_block_gate_warmup_steps;
-    view.causal_w1_transition = model.execution_block_causal_w1_transition;
     view.div_invalid_penalty_weight = model.execution_block_div_invalid_penalty_weight;
-    view.div_magnitude_penalty_weight = model.execution_block_div_magnitude_penalty_weight;
     view.arg_reinforce_weight = model.execution_block_arg_reinforce_weight;
     view.arg_reinforce_baseline_decay = model.execution_block_arg_reinforce_baseline_decay;
     return view;

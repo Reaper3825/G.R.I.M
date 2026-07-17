@@ -423,10 +423,7 @@ struct LanguageModelConfig {
     // Causal state loss weights
     float execution_block_transition_hard_threshold = 0.0f;
     int   execution_block_gate_warmup_steps = 0;
-    float execution_block_causal_w1_transition = 0.0f;
-
     float div_invalid_penalty_weight = 0.0f;
-    float div_magnitude_penalty_weight = 0.0f;
 
     float arg_reinforce_weight = 0.0f;
     float arg_reinforce_baseline_decay = 0.0f;
@@ -1600,9 +1597,7 @@ inline void validateRootConfigDocument(
         validateNonNegativeFiniteFields(params, {
             validationField("execution_block_entropy_weight", &LanguageModelConfig::execution_block_entropy_weight),
             validationField("execution_block_transition_hard_threshold", &LanguageModelConfig::execution_block_transition_hard_threshold),
-            validationField("execution_block_causal_w1_transition", &LanguageModelConfig::execution_block_causal_w1_transition),
             validationField("execution_block_div_invalid_penalty_weight", &LanguageModelConfig::div_invalid_penalty_weight),
-            validationField("execution_block_div_magnitude_penalty_weight", &LanguageModelConfig::div_magnitude_penalty_weight),
             validationField("execution_block_arg_reinforce_weight", &LanguageModelConfig::arg_reinforce_weight)
         }, caller);
         validateClosedUnitIntervalFields(params, {
@@ -2002,9 +1997,7 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_LEAF("execution_block_value_match_epsilon", value_match_epsilon);
     GRIM_LOAD_CONFIG_LEAF("execution_block_final_slot_consistency_weight", final_slot_consistency_weight);
     GRIM_LOAD_CONFIG_FIELD(execution_block_transition_hard_threshold);
-    GRIM_LOAD_CONFIG_FIELD(execution_block_causal_w1_transition);
     GRIM_LOAD_CONFIG_LEAF("execution_block_div_invalid_penalty_weight", div_invalid_penalty_weight);
-    GRIM_LOAD_CONFIG_LEAF("execution_block_div_magnitude_penalty_weight", div_magnitude_penalty_weight);
     GRIM_LOAD_CONFIG_LEAF("execution_block_arg_reinforce_weight", arg_reinforce_weight);
     GRIM_LOAD_CONFIG_LEAF("execution_block_arg_reinforce_baseline_decay", arg_reinforce_baseline_decay);
     GRIM_LOAD_CONFIG_LEAF("execution_block_structured_ce_weight", structured_ce_weight);
@@ -2358,9 +2351,7 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_entropy_weight);
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_transition_hard_threshold);
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_gate_warmup_steps);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_causal_w1_transition);
     GRIM_WRITE_FINAL_CONFIG_FIELD(div_invalid_penalty_weight);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(div_magnitude_penalty_weight);
     GRIM_WRITE_FINAL_CONFIG_FIELD(arg_reinforce_weight);
     GRIM_WRITE_FINAL_CONFIG_FIELD(arg_reinforce_baseline_decay);
     GRIM_WRITE_FINAL_CONFIG_FIELD(structured_ce_enabled);
