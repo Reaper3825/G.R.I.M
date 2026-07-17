@@ -1,15 +1,96 @@
 #include "platform_input.hpp"
 #include "grim_platform.h"
 
+#include <atomic>
+
 #ifdef _WIN32
+
+namespace {
+
+constexpr wchar_t kRawMouseWindowClass[] = L"GRIMRawMouseInputWindow";
+std::atomic<uint64_t> s_physicalMouseActivitySequence{0};
+std::atomic<uint64_t> s_lastPhysicalMouseActivityMs{0};
+HWND s_rawMouseWindow = nullptr;
+bool s_rawMouseClassRegistered = false;
+
+LRESULT CALLBACK RawMouseInputWindowProc(HWND window, UINT message,
+                                         WPARAM wParam, LPARAM lParam)
+{
+    if (message == WM_INPUT) {
+        RAWINPUT input{};
+        UINT inputSize = sizeof(input);
+        const UINT bytesRead = ::GetRawInputData(
+            reinterpret_cast<HRAWINPUT>(lParam), RID_INPUT, &input,
+            &inputSize, sizeof(RAWINPUTHEADER));
+        if (bytesRead != static_cast<UINT>(-1) &&
+            input.header.dwType == RIM_TYPEMOUSE) {
+            const RAWMOUSE& mouse = input.data.mouse;
+            if (mouse.lLastX != 0 || mouse.lLastY != 0 ||
+                mouse.usButtonFlags != 0) {
+                s_lastPhysicalMouseActivityMs.store(
+                    ::GetTickCount64(), std::memory_order_release);
+                s_physicalMouseActivitySequence.fetch_add(
+                    1, std::memory_order_acq_rel);
+            }
+        }
+
+        // Foreground raw-input packets require default processing for cleanup.
+        if (GET_RAWINPUT_CODE_WPARAM(wParam) == RIM_INPUT)
+            return ::DefWindowProcW(window, message, wParam, lParam);
+        return 0;
+    }
+    return ::DefWindowProcW(window, message, wParam, lParam);
+}
+
+} // namespace
+
 namespace PlatformInput {
     
     void initialize() {
-        // No initialization needed for GetAsyncKeyState approach
+        s_physicalMouseActivitySequence.store(0, std::memory_order_release);
+        s_lastPhysicalMouseActivityMs.store(0, std::memory_order_release);
+
+        WNDCLASSW windowClass{};
+        windowClass.lpfnWndProc = RawMouseInputWindowProc;
+        windowClass.hInstance = ::GetModuleHandleW(nullptr);
+        windowClass.lpszClassName = kRawMouseWindowClass;
+        s_rawMouseClassRegistered = ::RegisterClassW(&windowClass) != 0;
+        if (!s_rawMouseClassRegistered &&
+            ::GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return;
+
+        s_rawMouseWindow = ::CreateWindowExW(
+            0, kRawMouseWindowClass, L"", 0,
+            0, 0, 0, 0, HWND_MESSAGE, nullptr,
+            ::GetModuleHandleW(nullptr), nullptr);
+        if (!s_rawMouseWindow) return;
+
+        RAWINPUTDEVICE mouseDevice{};
+        mouseDevice.usUsagePage = 0x01; // Generic desktop controls
+        mouseDevice.usUsage = 0x02;     // Mouse
+        mouseDevice.dwFlags = RIDEV_INPUTSINK;
+        mouseDevice.hwndTarget = s_rawMouseWindow;
+        if (::RegisterRawInputDevices(
+                &mouseDevice, 1, sizeof(mouseDevice)) == FALSE) {
+            ::DestroyWindow(s_rawMouseWindow);
+            s_rawMouseWindow = nullptr;
+        }
     }
     
     void shutdown() {
-        // No cleanup needed
+        if (s_rawMouseWindow) {
+            RAWINPUTDEVICE mouseDevice{};
+            mouseDevice.usUsagePage = 0x01;
+            mouseDevice.usUsage = 0x02;
+            mouseDevice.dwFlags = RIDEV_REMOVE;
+            mouseDevice.hwndTarget = nullptr;
+            ::RegisterRawInputDevices(&mouseDevice, 1, sizeof(mouseDevice));
+            ::DestroyWindow(s_rawMouseWindow);
+            s_rawMouseWindow = nullptr;
+        }
+        if (s_rawMouseClassRegistered) {
+            ::UnregisterClassW(kRawMouseWindowClass, ::GetModuleHandleW(nullptr));
+            s_rawMouseClassRegistered = false;
+        }
     }
     
     bool isMouseButtonDown(int button) {
@@ -75,6 +156,17 @@ namespace PlatformInput {
         inputs[1].type = INPUT_MOUSE;
         inputs[1].mi.dwFlags = upFlag;
         return ::SendInput(2, inputs, sizeof(INPUT)) == 2;
+    }
+
+    uint64_t physicalMouseActivitySequence() {
+        return s_physicalMouseActivitySequence.load(std::memory_order_acquire);
+    }
+
+    bool wasPhysicalMouseActiveWithin(uint64_t quietPeriodMs) {
+        const uint64_t lastActivityMs =
+            s_lastPhysicalMouseActivityMs.load(std::memory_order_acquire);
+        return lastActivityMs != 0 &&
+               ::GetTickCount64() - lastActivityMs <= quietPeriodMs;
     }
 }
 
@@ -268,6 +360,9 @@ namespace PlatformInput {
         XFlush(display);
         return pressed != 0 && released != 0;
     }
+
+    uint64_t physicalMouseActivitySequence() { return 0; }
+    bool wasPhysicalMouseActiveWithin(uint64_t) { return false; }
 }
 
 #elif __APPLE__
@@ -458,6 +553,9 @@ namespace PlatformInput {
         CFRelease(up);
         return true;
     }
+
+    uint64_t physicalMouseActivitySequence() { return 0; }
+    bool wasPhysicalMouseActiveWithin(uint64_t) { return false; }
 }
 
 #else
@@ -474,6 +572,8 @@ namespace PlatformInput {
     void getCursorPosRelative(void*, int& x, int& y) { x = y = 0; }
     bool moveCursorRelative(int, int) { return false; }
     bool emitMouseClick(int) { return false; }
+    uint64_t physicalMouseActivitySequence() { return 0; }
+    bool wasPhysicalMouseActiveWithin(uint64_t) { return false; }
 }
 
 #endif

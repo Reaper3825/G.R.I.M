@@ -92,142 +92,40 @@ std::shared_ptr<UITrainingPanel> g_trainingPanel;
 // ============================================================
 
 std::atomic<bool> g_shutdownRequested{false};
+std::atomic<bool> g_shutdownComplete{false};
 
 #ifdef _WIN32
 BOOL WINAPI consoleHandler(DWORD signal) {
-    if (signal == CTRL_C_EVENT || signal == CTRL_CLOSE_EVENT || signal == CTRL_BREAK_EVENT) {
-        LOG_PHASE("Shutdown signal received, cleaning up...", true);
-        g_shutdownRequested = true;
-
-        // Stop idle-tick thread first
-        stopMMOIdleTick();
-
-        GRIM::Perception::Digital::ShutdownDigitalPerceptionPrimitives();
-        GRIM::Perception::Digital::ShutdownDigitalEnvironment();
-        GRIM::Perception::Digital::ShutdownDigitalContextProjector();
-        GRIM::Perception::Physical::ShutdownPhysicalGestureControl();
-        GRIM::Perception::Physical::ShutdownPhysicalInteraction();
-
-        // Stop perception-side world-state consumers BEFORE the facade is
-        // freed — the memory writer flushes long-dwell entity summaries on
-        // shutdown and needs g_memoryFacade alive to do so.
-        GRIM::Perception::Physical::ShutdownPhysicalWorldStateMemoryWriter();
-        GRIM::Perception::Physical::ShutdownPhysicalWorldStateContextProjector();
-
-        // Flush rotation pipeline to long-term storage
-        GRIM::MemoryBufferRotation::instance().mergeToWorking();
-        GRIM::MemoryBufferRotation::instance().syncToLongTerm(g_memoryStorage);
-        GRIM::MemoryBufferRotation::instance().clear();
-
-        // Tear down MMO orchestration layer (top-down)
-        if (g_orchestrator) {
-            g_orchestrator->shutdown();
-            delete g_orchestrator;
-            g_orchestrator = nullptr;
-        }
-        if (g_memoryFacade) {
-            delete g_memoryFacade;
-            g_memoryFacade = nullptr;
-        }
-        if (g_modelLoader) {
-            g_modelLoader->unloadAll();
-            delete g_modelLoader;
-            g_modelLoader = nullptr;
-        }
-        // ProcessManager — stop all model server processes
-        if (g_processManager) {
-            LOG_DEBUG("Shutdown", "Stopping model server processes...");
-            g_processManager->stopAll();
-            delete g_processManager;
-            g_processManager = nullptr;
-        }
-        // UISurfaceRegistry — tear down all managed surfaces
-        GRIM::MMO::UISurfaceRegistry::instance().destroyAll();
-        if (g_resourceCoordinator) {
-
-            delete g_resourceCoordinator;
-            g_resourceCoordinator = nullptr;
-        }
-        if (g_resourceSignal) {
-            g_resourceSignal->stop();
-            delete g_resourceSignal;
-            g_resourceSignal = nullptr;
-        }
-        
-        LOG_DEBUG("Shutdown", "Stopping training control server...");
-        GRIM::stopTrainingServer();
-        
-        // Give a moment for servers to shut down
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        
-        LOG_PHASE("Cleanup complete, exiting...", true);
-        std::exit(0);  // Exit cleanly after cleanup
+    if (signal != CTRL_C_EVENT &&
+        signal != CTRL_CLOSE_EVENT &&
+        signal != CTRL_BREAK_EVENT) {
+        return FALSE;
     }
-    return FALSE;
+
+    // Console control handlers run on a Windows-owned thread. Only request
+    // shutdown here; the main thread owns subsystem teardown and its ordering.
+    g_shutdownRequested.store(true, std::memory_order_release);
+    WindowManager::requestMainLoopStop();
+
+    // Windows may terminate the process as soon as a CTRL_CLOSE handler
+    // returns. Give the main thread most of that window to drain cleanly.
+    if (signal == CTRL_CLOSE_EVENT) {
+        constexpr DWORD kCloseDrainTimeoutMs = 4500;
+        constexpr DWORD kPollIntervalMs = 10;
+        for (DWORD waitedMs = 0;
+             waitedMs < kCloseDrainTimeoutMs &&
+                 !g_shutdownComplete.load(std::memory_order_acquire);
+             waitedMs += kPollIntervalMs) {
+            ::Sleep(kPollIntervalMs);
+        }
+    }
+
+    return TRUE;
 }
 #else
 void signalHandler(int signal) {
     if (signal == SIGINT || signal == SIGTERM) {
-        LOG_PHASE("Shutdown signal received, cleaning up...", true);
-        g_shutdownRequested = true;
-
-        // Stop idle-tick thread first
-        stopMMOIdleTick();
-
-        GRIM::Perception::Digital::ShutdownDigitalPerceptionPrimitives();
-        GRIM::Perception::Digital::ShutdownDigitalEnvironment();
-        GRIM::Perception::Digital::ShutdownDigitalContextProjector();
-        GRIM::Perception::Physical::ShutdownPhysicalGestureControl();
-        GRIM::Perception::Physical::ShutdownPhysicalInteraction();
-
-        // Stop perception-side world-state consumers BEFORE the facade is
-        // freed — the memory writer flushes long-dwell entity summaries on
-        // shutdown and needs g_memoryFacade alive to do so.
-        GRIM::Perception::Physical::ShutdownPhysicalWorldStateMemoryWriter();
-        GRIM::Perception::Physical::ShutdownPhysicalWorldStateContextProjector();
-
-        // Flush rotation pipeline to long-term storage
-        GRIM::MemoryBufferRotation::instance().mergeToWorking();
-        GRIM::MemoryBufferRotation::instance().syncToLongTerm(g_memoryStorage);
-        GRIM::MemoryBufferRotation::instance().clear();
-
-        // Tear down MMO orchestration layer (top-down)
-        if (g_orchestrator) {
-            g_orchestrator->shutdown();
-            delete g_orchestrator;
-            g_orchestrator = nullptr;
-        }
-        if (g_memoryFacade) {
-            delete g_memoryFacade;
-            g_memoryFacade = nullptr;
-        }
-        if (g_modelLoader) {
-            g_modelLoader->unloadAll();
-            delete g_modelLoader;
-            g_modelLoader = nullptr;
-        }
-        // ProcessManager — stop all model server processes
-        if (g_processManager) {
-            g_processManager->stopAll();
-            delete g_processManager;
-            g_processManager = nullptr;
-        }
-        // UISurfaceRegistry — tear down all managed surfaces
-        GRIM::MMO::UISurfaceRegistry::instance().destroyAll();
-        if (g_resourceCoordinator) {
-            delete g_resourceCoordinator;
-            g_resourceCoordinator = nullptr;
-        }
-        if (g_resourceSignal) {
-            g_resourceSignal->stop();
-            delete g_resourceSignal;
-            g_resourceSignal = nullptr;
-        }
-        
-        GRIM::stopTrainingServer();
-        
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        std::exit(0);
+        g_shutdownRequested.store(true, std::memory_order_release);
     }
 }
 #endif
@@ -651,7 +549,8 @@ int main(int argc, char* argv[])
     LOG_PHASE("Entering main thread render loop", true);
     constexpr auto kFrameDuration = std::chrono::milliseconds(16);
 
-    while (!WindowManager::isMainLoopStopRequested())
+    while (!WindowManager::isMainLoopStopRequested() &&
+           !g_shutdownRequested.load(std::memory_order_acquire))
     {
         auto frameStart = std::chrono::steady_clock::now();
 
@@ -856,5 +755,6 @@ int main(int argc, char* argv[])
     LOG_PHASE("All subsystems shut down", true);
     LOG_PHASE("G.R.I.M terminated successfully", true);
     shutdownLogger();
+    g_shutdownComplete.store(true, std::memory_order_release);
     return 0;
 }

@@ -25,6 +25,7 @@ namespace GRIM { namespace Perception { namespace Physical {
 namespace {
 
 constexpr const char* kLogTag = "PHYSICAL_GESTURE_CONTROL";
+constexpr uint64_t kPhysicalMouseOverrideQuietMs = 450;
 
 uint64_t SteadyNowNs() {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -141,6 +142,8 @@ struct PhysicalGestureControlState {
 
     PhysicalGestureCursor gesture_cursor;
     std::string last_logged_cursor_error;
+    uint64_t last_physical_mouse_activity_sequence = 0;
+    bool gesture_cursor_claimed = false;
     bool pinch_latched = false;
     uint64_t pinch_close_since_ns = 0;
     uint64_t last_pinch_click_ns = 0;
@@ -160,8 +163,17 @@ PhysicalGestureControlState& State() {
 }
 
 void SyncGestureCursorLocked(PhysicalGestureControlState& state) {
+    const uint64_t physical_mouse_sequence =
+        PlatformInput::physicalMouseActivitySequence();
+    if (physical_mouse_sequence !=
+        state.last_physical_mouse_activity_sequence) {
+        state.last_physical_mouse_activity_sequence = physical_mouse_sequence;
+        state.gesture_cursor_claimed = false;
+    }
+
     const bool should_show_armed_cursor =
-        state.config.enabled && state.status.armed;
+        state.config.enabled && state.status.armed &&
+        state.gesture_cursor_claimed;
     const float pinch_openness = state.status.pinch_tracking
         ? state.status.pinch_visual_openness : 1.0f;
     const bool ok = state.gesture_cursor.SyncArmedState(
@@ -205,6 +217,7 @@ void DisarmLocked(PhysicalGestureControlState& state,
                   const std::string& reason)
 {
     state.status.armed = false;
+    state.gesture_cursor_claimed = false;
     state.status.armed_until_steady_ns = 0;
     state.status.last_action = "control_disarmed";
     state.status.last_block_reason = reason;
@@ -412,6 +425,11 @@ void ProcessPointerSampleLocked(PhysicalGestureControlState& state,
 
     float nx = filtered_x - previous_x;
     float ny = filtered_y - previous_y;
+    if (PlatformInput::wasPhysicalMouseActiveWithin(
+            kPhysicalMouseOverrideQuietMs)) {
+        state.pointer_motion_active = false;
+        return;
+    }
     const float magnitude = std::hypot(nx, ny);
     const float base_deadzone = state.config.pointer_deadzone_normalized;
     const float start_deadzone = base_deadzone *
@@ -462,6 +480,14 @@ void ProcessPinchSampleLocked(PhysicalGestureControlState& state,
     state.status.pinch_visual_openness = std::clamp(
         (ratio - state.config.pinch_close_ratio) / visual_range,
         0.0f, 1.0f);
+
+    if (PlatformInput::wasPhysicalMouseActiveWithin(
+            kPhysicalMouseOverrideQuietMs)) {
+        state.pinch_latched = false;
+        state.pinch_close_since_ns = 0;
+        state.status.pinch_closed = false;
+        return;
+    }
 
     if (ratio >= state.config.pinch_release_ratio) {
         state.pinch_latched = false;
@@ -562,6 +588,9 @@ void RouteEventLocked(PhysicalGestureControlState& state,
         switch (binding.action) {
             case PhysicalGestureAction::ControlArm:
                 state.status.armed = true;
+                state.last_physical_mouse_activity_sequence =
+                    PlatformInput::physicalMouseActivitySequence();
+                state.gesture_cursor_claimed = true;
                 ExtendArmedWindowLocked(state, now_ns);
                 RecordInternalActionLocked(state, binding);
                 LOG_DEBUG(kLogTag, "Gesture control armed by " + binding.binding_id);
@@ -1009,6 +1038,11 @@ void TickPhysicalGestureControl() {
         if (ok) {
             if (dry_run) ++state.status.actions_previewed;
             else ++state.status.actions_executed;
+            if (!dry_run &&
+                action.type == PhysicalGestureAction::PointerMove) {
+                state.gesture_cursor_claimed = true;
+                SyncGestureCursorLocked(state);
+            }
             state.status.last_error.clear();
             state.last_logged_failure_action.clear();
         } else {

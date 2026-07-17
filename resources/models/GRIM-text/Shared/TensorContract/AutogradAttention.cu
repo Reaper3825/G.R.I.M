@@ -336,6 +336,66 @@ struct MatMulGradFn : public GradFn {
         const float beta_accum = 1.0f;  // Accumulate to existing gradient
         
         cublasSetStream(cublas_handle, stream);;
+
+        // Trace-mode stage barriers make asynchronous cuBLAS failures attributable to
+        // the exact half of matmul backward. They are active only while the existing
+        // autograd verbose trace is enabled; normal training remains asynchronous.
+        auto trace_stage_or_throw = [&](const char* stage) {
+            if (!g_autograd_verbose) {
+                return;
+            }
+            const cudaError_t status = cudaStreamSynchronize(stream);
+            AG_TRACE(
+                "[MatMulGradFn][STAGE] gradfn=%p stage=%s status=%s(%d) "
+                "A=%s B=%s M=%d K=%d N=%d transB=%d "
+                "grad_output=%p grad_count=%zu grad_a=%p grad_b=%p "
+                "cached_a=%p cached_b=%p\n",
+                static_cast<void*>(this),
+                stage,
+                cudaGetErrorString(status),
+                static_cast<int>(status),
+                a_name ? a_name : "<unnamed>",
+                b_name ? b_name : "<unnamed>",
+                M,
+                K,
+                N,
+                transpose_b ? 1 : 0,
+                static_cast<const void*>(grad_output.data),
+                grad_output.numel(),
+                static_cast<void*>(grad_a),
+                static_cast<void*>(grad_b),
+                static_cast<const void*>(cached_a),
+                static_cast<const void*>(cached_b));
+            if (status != cudaSuccess) {
+                throw std::runtime_error(
+                    std::string("MatMulGradFn::apply: CUDA failure after ") + stage +
+                    " for A=" + (a_name ? a_name : "<unnamed>") +
+                    " B=" + (b_name ? b_name : "<unnamed>") +
+                    " M=" + std::to_string(M) +
+                    " K=" + std::to_string(K) +
+                    " N=" + std::to_string(N) +
+                    ": " + cudaGetErrorString(status));
+            }
+        };
+
+        AG_TRACE(
+            "[MatMulGradFn][STAGE] gradfn=%p stage=begin "
+            "A=%s B=%s M=%d K=%d N=%d transB=%d "
+            "grad_output=%p grad_count=%zu grad_a=%p grad_b=%p "
+            "cached_a=%p cached_b=%p\n",
+            static_cast<void*>(this),
+            a_name ? a_name : "<unnamed>",
+            b_name ? b_name : "<unnamed>",
+            M,
+            K,
+            N,
+            transpose_b ? 1 : 0,
+            static_cast<const void*>(grad_output.data),
+            grad_output.numel(),
+            static_cast<void*>(grad_a),
+            static_cast<void*>(grad_b),
+            static_cast<const void*>(cached_a),
+            static_cast<const void*>(cached_b));
         
         // Without transpose_b: Forward was C = A @ B, where A[M,K], B[K,N], C[M,N]
         //   grad_A = grad_C @ B^T   [M,N] @ [N,K] = [M,K]
@@ -419,6 +479,7 @@ struct MatMulGradFn : public GradFn {
                 );
                 trackCublasCall("cublasSgemm_grad_A", cublas_handle, stream, sgemm_status_2);
             }
+            trace_stage_or_throw("grad_A");
         }
         
         // ISSUE #48 FIX: Use stored grad pointers instead of Tensor*
@@ -490,6 +551,7 @@ struct MatMulGradFn : public GradFn {
                 );
                 trackCublasCall("cublasSgemm_grad_B", cublas_handle, stream, sgemm_status_4);
             }
+            trace_stage_or_throw("grad_B");
         }
 
         logLmHeadGemmBackwardEquation(grad_output,

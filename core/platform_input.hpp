@@ -31,6 +31,11 @@ namespace PlatformInput {
     // not support it. These functions do not mutate GRIM's polled input state.
     bool moveCursorRelative(int deltaX, int deltaY);
     bool emitMouseClick(int button); // 0 = left, 1 = right, 2 = middle
+
+    // Hardware-mouse activity is tracked separately from synthetic cursor
+    // output so higher-level controllers can arbitrate ownership cleanly.
+    uint64_t physicalMouseActivitySequence();
+    bool wasPhysicalMouseActiveWithin(uint64_t quietPeriodMs);
     
     // On macOS, returns true when Command is held (used so Cmd maps to Ctrl for shortcuts)
     bool isCommandDown();
