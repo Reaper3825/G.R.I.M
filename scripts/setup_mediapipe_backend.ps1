@@ -77,6 +77,37 @@ function Find-HostPython {
     throw 'LLVM repository setup requires a runnable host Python interpreter.'
 }
 
+function Get-ShortBazelUserRoot {
+    $defaultRoot = [System.IO.Path]::GetFullPath(
+        (Join-Path $env:USERPROFILE "_bazel_$env:USERNAME"))
+    New-Item -ItemType Directory -Path $defaultRoot -Force | Out-Null
+
+    $workspaceDrive = [System.IO.Path]::GetPathRoot($repoRoot)
+    $shortRoot = Join-Path $workspaceDrive '.gbz'
+    if (Test-Path -LiteralPath $shortRoot) {
+        $existing = Get-Item -LiteralPath $shortRoot -Force
+        if ($existing.LinkType -eq 'Junction') {
+            $target = @($existing.Target) | Select-Object -First 1
+            if (-not $target -or -not [string]::Equals(
+                    [System.IO.Path]::GetFullPath($target),
+                    $defaultRoot,
+                    [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "Short Bazel root is an unrelated junction: $shortRoot"
+            }
+            # Earlier setup revisions used a junction, but Bazel canonicalizes
+            # it and recreates the long path. Delete only the verified reparse
+            # point, never its target, then create a genuine short directory.
+            [System.IO.Directory]::Delete($shortRoot)
+            New-Item -ItemType Directory -Path $shortRoot | Out-Null
+        } elseif (-not $existing.PSIsContainer) {
+            throw "Short Bazel root is not a directory: $shortRoot"
+        }
+    } else {
+        New-Item -ItemType Directory -Path $shortRoot | Out-Null
+    }
+    return [System.IO.Path]::GetFullPath($shortRoot)
+}
+
 New-Item -ItemType Directory -Path $cacheRoot, $externalRoot, $toolRoot -Force |
     Out-Null
 
@@ -194,18 +225,30 @@ $hostPython = Find-HostPython
 $repositoryPath = "$(Split-Path -Parent $hostPython);$env:PATH"
 $env:PATH = $repositoryPath
 Write-Host "LLVM setup Python: $hostPython"
+$shortBazelRoot = Get-ShortBazelUserRoot
+$sharedRepositoryCache = Join-Path `
+    (Join-Path $env:USERPROFILE "_bazel_$env:USERNAME") `
+    'cache\repos\v1'
+New-Item -ItemType Directory -Path $sharedRepositoryCache -Force | Out-Null
+Write-Host "Short Bazel root:   $shortBazelRoot"
 
 Write-Host 'Building the CPU-only MediaPipe Tasks C runtime...'
 Push-Location $sourceRoot
 try {
     $bazelArguments = @(
+        "--output_user_root=$shortBazelRoot",
         'build',
+        "--repository_cache=$sharedRepositoryCache",
         '-c', 'opt',
         '--strip', 'always',
         '--repo_env=HERMETIC_PYTHON_VERSION=3.12',
         "--repo_env=PATH=$repositoryPath",
         '--conlyopt=/std:c11',
+        '--conlyopt=/experimental:c11atomics',
         '--host_conlyopt=/std:c11',
+        '--host_conlyopt=/experimental:c11atomics',
+        '--cxxopt=/Zc:preprocessor',
+        '--host_cxxopt=/Zc:preprocessor',
         '--define', 'MEDIAPIPE_DISABLE_GPU=1',
         '//mediapipe/tasks/c/grim:libmediapipe.dll'
     )

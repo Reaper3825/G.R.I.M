@@ -32,7 +32,8 @@ inline constexpr int kStageEntropyOp = 23;
 inline constexpr int kStageWriteCollapse = 24;
 inline constexpr int kStageWriteSlotInvalid = 25;
 
-inline constexpr int kStageSlotMissing = 31;
+// Stage 31 is retired. Ordinary numeric atoms are not implicitly state-bearing;
+// only compiled bootstrap bindings create slot-map entries.
 inline constexpr int kStageSlotInvalid = 32;
 inline constexpr int kStageSlotUninit = 33;
 
@@ -54,7 +55,6 @@ inline const char* stageIdToName(int id) {
 		case kStageEntropyOp: return "entropy collapse (p_op)";
 		case kStageWriteCollapse: return "write collapse (max p_write)";
 		case kStageWriteSlotInvalid: return "write slot not in value range [S,V)";
-		case kStageSlotMissing: return "missing slot mapping for required state-bearing token";
 		case kStageSlotInvalid: return "invalid slot index";
 		case kStageSlotUninit: return "slot read before initialization";
 		case kStageTransitionInvalid: return "transition error exceeds hard threshold";

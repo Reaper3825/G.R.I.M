@@ -1455,14 +1455,14 @@ void executeStepCoordinatorImpl(
     }
 
     // Row slice of the GLOBAL atom mask (BatchDeviceBindings). This is the
-    // authoritative source of atom positions for this row: atom-slot validation
-    // and ReduceMean atom exclusion both read it directly, with no ScratchBlock
-    // row-local extraction. payload.atom_mask is validated at build time to equal
-    // token_layout.isAtom(token_id), so it matches ScratchBlock's atom detection.
+    // authoritative numeric-atom annotation for this row. ReduceMean atom
+    // exclusion reads it directly, while state-bearing positions come only from
+    // the compiled slot map. payload.atom_mask is validated at build time to
+    // equal token_layout.isAtom(token_id), so it matches ScratchBlock detection.
     if (!bindings.d_atom_mask) {
         throw std::runtime_error(
             "executeStepCoordinatorImpl: bindings.d_atom_mask is NULL - execution "
-            "requires global atom annotations to validate atom slots");
+            "requires global atom annotations to validate state-bearing slot bindings");
     }
     const uint8_t* d_atom_mask_row = bindings.d_atom_mask
         + static_cast<size_t>(batch_row) * payload.max_seq_len;

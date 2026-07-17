@@ -35,8 +35,16 @@ The build pins TensorFlow's dependency environment to hermetic Python 3.12.
 LLVM's repository setup also needs a runnable host Python of any supported
 version; the script resolves the real interpreter behind WindowsApps aliases
 and passes its directory explicitly to Bazel.
-The Windows build also supplies MSVC's native `/std:c11` option for C-only
-dependencies such as pthreadpool, whose upstream BUILD file uses GCC syntax.
+The Windows build also supplies MSVC's native `/std:c11` and
+`/experimental:c11atomics` options for C-only dependencies such as
+pthreadpool, whose upstream BUILD file uses GCC syntax.
+MediaPipe's variadic status macros also require MSVC's conforming preprocessor,
+so `/Zc:preprocessor` is applied to target and host C++ compilation.
+The script also creates a genuine short drive-root output directory at
+`D:\.gbz` and passes it as `--output_user_root`, keeping generated protobuf
+include paths below Windows' legacy 260-character lookup boundary. It shares
+Bazel's normal repository archive cache to avoid downloading dependencies
+again; changing the output root can require one recompilation of cached actions.
 
 The script builds MediaPipe CPU-only, scans the DLL for forbidden logging
 markers, and writes `external/mediapipe/.grim-offline-audit.json`. CMake will

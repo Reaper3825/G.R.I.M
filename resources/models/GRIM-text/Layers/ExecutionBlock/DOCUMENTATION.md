@@ -116,8 +116,10 @@ The caller must provide:
 - `token_offset` and `row_tokens` describing the active valid row span inside `H` (`payload.seq_lengths[b]`, not padded `payload.max_seq_len`),
 - `token_to_slot_map` for that row only.
 
-Atom positions are NOT passed by the caller: the step derives them directly from the
-global atom mask (`bindings.d_atom_mask`) row slice. `payload.atom_mask` is validated
+Numeric-atom annotations are read directly from the global atom mask
+(`bindings.d_atom_mask`) row slice. State-bearing positions are not inferred from
+that mask: they are defined exclusively by the row-local `token_to_slot_map`, which
+is validated against `compiled_bootstrap_bindings`. `payload.atom_mask` is validated
 at build time to equal `token_layout.isAtom(token_id)`, so it matches ScratchBlock's
 atom detection exactly.
 
@@ -128,12 +130,13 @@ The execution-block boundary fail-loud checks:
 - `token_offset + row_tokens <= total_tokens`
 - `token_to_slot_map != nullptr`
 - `bindings.d_atom_mask != nullptr`
-- every slot-bearing atom position (where `atom_mask[pos] != 0`) maps to an initialized value-slot in `[S, V)`
+- every mapped position (`token_to_slot_map[pos] >= 0`) is a numeric atom and maps to an initialized value-slot in `[S, V)`
+- ordinary numeric atoms may remain unmapped (`token_to_slot_map[pos] == -1`); they are not execution state
 
 Important current nuance:
 
-- atom positions are iterated over the row span via the global mask,
-- validation uses the mask-flagged positions,
+- the global atom mask identifies numeric tokens and excludes them from decision-context pooling,
+- the compiled slot map identifies the strict subset that seeds execution state,
 - but the **current step-local math reads operands only from value slots**.
 
 `atom_embeddings` were removed from the `executeStep()` contract (WS6) because the data-stream path does not consume them.

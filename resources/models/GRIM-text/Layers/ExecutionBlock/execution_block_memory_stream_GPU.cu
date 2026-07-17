@@ -228,28 +228,26 @@ __global__ void kernelSetRecentWriteOneHotDev(
     recent[i] = (i == ws) ? 1.0f : 0.0f;
 }
 
-__global__ void kernelValidateAtomSlots(
+__global__ void kernelValidateStateBearingSlots(
     const uint8_t* __restrict__ atom_mask,
     const int32_t* __restrict__ slot_map,
     const float* __restrict__ M_valid_mask,
     int row_tokens, int V, int S,
     int* __restrict__ error_flag,
-    int stage_missing,
     int stage_invalid,
     int stage_uninit
 ) {
-    // Mask-driven validation: iterate the row's tokens (sourced directly from
-    // the global BatchDeviceBindings atom-mask and slot-map row slices) and
-    // validate the slot of every atom-flagged position. Positions are in-range
-    // by construction, so no position-bound check is needed.
+    // Slot-map-driven validation: only compiled bootstrap literals are
+    // state-bearing. Ordinary numeric atoms intentionally keep slot=-1 and
+    // remain LM-owned, so atom_mask must never be used to infer that a token
+    // requires a register binding. Host payload validation already proves the
+    // slot map exactly matches compiled_bootstrap_bindings.
     const int pos = blockIdx.x * blockDim.x + threadIdx.x;
     if (pos >= row_tokens) return;
-    if (atom_mask[pos] == 0) return;
 
     int slot = slot_map[pos];
-    if (slot == -1) {
-        atomicMax(error_flag, stage_missing);
-    } else if (slot < S || slot >= V) {
+    if (slot == -1) return;
+    if (atom_mask[pos] == 0 || slot < S || slot >= V) {
         atomicMax(error_flag, stage_invalid);
     } else if (M_valid_mask[slot] == 0.0f) {
         atomicMax(error_flag, stage_uninit);
@@ -492,6 +490,9 @@ void prepareMemoryStepOrThrow(
     ExecutionBlockStepOutput* diag_out,
     cudaStream_t stream
 ) {
+    // One flag is shared by all validation kernels in this step. Reset it
+    // before the first kernel so earlier failures are not erased below.
+    CUDA_CHECK(cudaMemsetAsync(diag.numericErrorFlag(), 0, sizeof(int), stream));
     ensureBootstrappedValueSlotsOrThrow(hp, diag, memory, stream);
 
     const int V = hp.num_slots;
@@ -504,9 +505,8 @@ void prepareMemoryStepOrThrow(
             V * sizeof(float), cudaMemcpyDeviceToDevice, stream));
     }
 
-    CUDA_CHECK(cudaMemsetAsync(diag.numericErrorFlag(), 0, sizeof(int), stream));
     if (row_tokens > 0) {
-        kernelValidateAtomSlots<<<(row_tokens + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
+        kernelValidateStateBearingSlots<<<(row_tokens + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
             atom_mask,
             token_to_slot_map,
             memory.valid_mask.data,
@@ -514,7 +514,6 @@ void prepareMemoryStepOrThrow(
             hp.num_slots,
             hp.num_scratch_slots,
             diag.numericErrorFlag(),
-            kStageSlotMissing,
             kStageSlotInvalid,
             kStageSlotUninit);
         CUDA_CHECK_KERNEL();

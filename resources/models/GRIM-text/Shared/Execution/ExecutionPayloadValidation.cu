@@ -191,6 +191,17 @@ void validateExecutionPayload(
                         " out of range [0, " + std::to_string(seq_len) + ")"));
                 }
 
+                // Bootstrap provenance may bind only numeric atom tokens.
+                // Non-bootstrap numeric atoms remain deliberately unbound;
+                // conversely, a compiled binding targeting ordinary text is
+                // malformed metadata and must fail before device execution.
+                if (payload.atom_mask[row_offset + binding.token_pos] == 0) {
+                    throw std::runtime_error(row_tag(
+                        "compiled_bootstrap_bindings[" + std::to_string(i) +
+                        "].token_pos=" + std::to_string(binding.token_pos) +
+                        " does not identify a numeric atom token"));
+                }
+
                 // slot_id in valid range
                 if (binding.slot_id < 0 || binding.slot_id >= num_slots) {
                     throw std::runtime_error(row_tag(
