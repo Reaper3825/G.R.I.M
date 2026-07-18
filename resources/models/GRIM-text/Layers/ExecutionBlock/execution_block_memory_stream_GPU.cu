@@ -5,7 +5,7 @@
 
 using GRIM::CudaAlloc::cudaMallocOrThrow;
 
-#ifdef USE_CUDA
+
 
 namespace GRIM {
 
@@ -208,32 +208,6 @@ __global__ void kernelSetRecentWriteOneHotDev(
     recent[i] = (i == ws) ? 1.0f : 0.0f;
 }
 
-__global__ void kernelValidateStateBearingSlots(
-    const uint8_t* __restrict__ atom_mask,
-    const int32_t* __restrict__ slot_map,
-    const float* __restrict__ M_valid_mask,
-    int row_tokens, int V, int S,
-    int* __restrict__ error_flag,
-    int stage_invalid,
-    int stage_uninit
-) {
-    // Slot-map-driven validation: only compiled bootstrap literals are
-    // state-bearing. Ordinary numeric atoms intentionally keep slot=-1 and
-    // remain LM-owned, so atom_mask must never be used to infer that a token
-    // requires a register binding. Host payload validation already proves the
-    // slot map exactly matches compiled_bootstrap_bindings.
-    const int pos = blockIdx.x * blockDim.x + threadIdx.x;
-    if (pos >= row_tokens) return;
-
-    int slot = slot_map[pos];
-    if (slot == -1) return;
-    if (atom_mask[pos] == 0 || slot < S || slot >= V) {
-        recordFirstExecutionError(error_flag, stage_invalid);
-    } else if (M_valid_mask[slot] == 0.0f) {
-        recordFirstExecutionError(error_flag, stage_uninit);
-    }
-}
-
 __global__ void kernelStateDeltaCheck(
     float* __restrict__ state_integrity_loss,
     int* __restrict__ changed_count,
@@ -424,79 +398,7 @@ void executionBlockBootstrapMemoryFromSlotMap(
     CUDA_CHECK_KERNEL();
 }
 
-// Device kernel: check if any value slot [S..S+V_val) has valid_mask >= 0.5.
-// If none valid, records the first error to fail in finalizeStepOrThrow.
-__global__ void kernelCheckAnyValueSlotValid(
-    const float* __restrict__ valid_mask,
-    int* __restrict__ error_flag,
-    int S, int V_val, int stage_id
-) {
-    if (threadIdx.x != 0) return;
-    for (int i = 0; i < V_val; ++i) {
-        if (valid_mask[S + i] >= 0.5f) return;  // at least one valid — OK
-    }
-    recordFirstExecutionError(error_flag, stage_id);  // no valid value slots
-}
-
-static void ensureBootstrappedValueSlotsOrThrow(
-    const HyperParameters::ExecutionBlockConstructionHP& hp,
-    ExecutionBlockDiagnosticsBuffers& diag,
-    const ExecutionMemory& memory,
-    cudaStream_t stream
-) {
-    const int V = hp.num_slots;
-    const int S = hp.num_scratch_slots;
-    const int V_val = V - S;
-    EXEC_CHECK(V_val > 0, "executeStep: no value slots (V - S == 0)");
-
-    // Uses existing persistent error flag — defers sync to finalizeStepOrThrow.
-    // No per-step allocation or pipeline drain.
-    kernelCheckAnyValueSlotValid<<<1, 1, 0, stream>>>(
-        memory.valid_mask.data,
-        diag.numericErrorFlag(),
-        S, V_val, kStageSlotUninit);
-    CUDA_CHECK_KERNEL();
-}
-
 namespace ExecutionBlockInternal {
-
-void prepareMemoryStepOrThrow(
-    const HyperParameters::ExecutionBlockConstructionHP& hp,
-    ExecutionBlockDiagnosticsBuffers& diag,
-    const ExecutionMemory& memory,
-    const uint8_t* atom_mask,
-    const int32_t* token_to_slot_map,
-    int row_tokens,
-    ExecutionBlockStepOutput& forward_output,
-    cudaStream_t stream
-) {
-    // One flag is shared by all validation kernels in this step. Reset it
-    // before the first kernel so earlier failures are not erased below.
-    CUDA_CHECK(cudaMemsetAsync(diag.numericErrorFlag(), 0, sizeof(int), stream));
-    ensureBootstrappedValueSlotsOrThrow(hp, diag, memory, stream);
-
-    const int V = hp.num_slots;
-    forward_output.state_before_values = Tensor::zeros({V, 1}, stream, "state_before_values");
-    forward_output.state_before_valid = Tensor::zeros({1, V}, stream, "state_before_valid");
-    CUDA_CHECK(cudaMemcpyAsync(forward_output.state_before_values.data, memory.values.data,
-        V * sizeof(float), cudaMemcpyDeviceToDevice, stream));
-    CUDA_CHECK(cudaMemcpyAsync(forward_output.state_before_valid.data, memory.valid_mask.data,
-        V * sizeof(float), cudaMemcpyDeviceToDevice, stream));
-
-    if (row_tokens > 0) {
-        kernelValidateStateBearingSlots<<<(row_tokens + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
-            atom_mask,
-            token_to_slot_map,
-            memory.valid_mask.data,
-            row_tokens,
-            hp.num_slots,
-            hp.num_scratch_slots,
-            diag.numericErrorFlag(),
-            kStageSlotInvalid,
-            kStageSlotUninit);
-        CUDA_CHECK_KERNEL();
-    }
-}
 
 void buildValueSlotCandidates(
     const HyperParameters::ExecutionBlockConstructionHP& hp,
@@ -784,4 +686,4 @@ Tensor crossAttentionReadImpl(
 
 }  // namespace GRIM
 
-#endif  // USE_CUDA
+

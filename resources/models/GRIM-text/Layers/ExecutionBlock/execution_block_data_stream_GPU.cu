@@ -12,6 +12,42 @@ using GRIM::Forward::ExecutionBlockStepOutput;
 using GRIM::Forward::ExecutionGateOutput;
 using GRIM::Forward::ExecutionRecord;
 
+// Check that execution begins with at least one initialized value slot.
+__global__ void kernelCheckAnyValueSlotValid(
+    const float* __restrict__ valid_mask,
+    int* __restrict__ error_flag,
+    int S, int V_val, int stage_id
+) {
+    if (threadIdx.x != 0) return;
+    for (int i = 0; i < V_val; ++i) {
+        if (valid_mask[S + i] >= 0.5f) return;
+    }
+    recordFirstExecutionError(error_flag, stage_id);
+}
+
+__global__ void kernelValidateStateBearingSlots(
+    const uint8_t* __restrict__ atom_mask,
+    const int32_t* __restrict__ slot_map,
+    const float* __restrict__ valid_mask,
+    int row_tokens, int V, int S,
+    int* __restrict__ error_flag,
+    int stage_invalid,
+    int stage_uninit
+) {
+    // Only compiled bootstrap literals are state-bearing. Ordinary numeric
+    // atoms keep slot=-1 and remain LM-owned.
+    const int pos = blockIdx.x * blockDim.x + threadIdx.x;
+    if (pos >= row_tokens) return;
+
+    const int slot = slot_map[pos];
+    if (slot == -1) return;
+    if (atom_mask[pos] == 0 || slot < S || slot >= V) {
+        recordFirstExecutionError(error_flag, stage_invalid);
+    } else if (valid_mask[slot] == 0.0f) {
+        recordFirstExecutionError(error_flag, stage_uninit);
+    }
+}
+
 // ── Warp-level reduction primitives (all 32 threads must participate) ──
 __device__ __forceinline__ float warpReduceSum(float val) {
     for (int offset = kWarpSize / 2; offset > 0; offset >>= 1)
@@ -574,7 +610,7 @@ __global__ void kernelMaskScratchSlots(
 struct ExecutionBlockInjectGradFn : public GradFn {
     float* saved_result_emb = nullptr;
     float* saved_H_slot = nullptr;
-    float* saved_gate = nullptr;
+    Tensor saved_gate;  // non-owning Tensor view; storage owned by ModelForwardOutputs
     float* mod_grad_buf = nullptr;
     float inv_sqrt_d = 0.0f;
     float gate_temp = 0.5f;
@@ -599,12 +635,11 @@ struct ExecutionBlockInjectGradFn : public GradFn {
     ~ExecutionBlockInjectGradFn() override {
         if (saved_result_emb) cudaFree(saved_result_emb);
         if (saved_H_slot) cudaFree(saved_H_slot);
-        if (saved_gate) cudaFree(saved_gate);
         if (mod_grad_buf) cudaFree(mod_grad_buf);
     }
 
     void capture(Tensor& H_t, Tensor& result_t, Tensor& w_gate_t,
-                 float* gate_device, float* H_slot_device,
+                 const Tensor& gate_tensor, float* H_slot_device,
                  float inv_sqrt_d_, float gate_temp_,
                  int result_slot_, int total_tokens_, int d_model_,
                  cudaStream_t stream) {
@@ -614,7 +649,20 @@ struct ExecutionBlockInjectGradFn : public GradFn {
         total_tokens = total_tokens_;
         d_model = d_model_;
 
-        saved_gate = gate_device;
+        gate_tensor.require("ExecutionBlockInjectGradFn::capture gate_tensor");
+        if (!gate_tensor.shape.is_2d_layout() ||
+            gate_tensor.shape.as_2d() != TensorContract::Shape2D{1, 1}) {
+            throw std::runtime_error(
+                "ExecutionBlockInjectGradFn::capture: gate_tensor must be [1, 1]");
+        }
+        saved_gate = Tensor::from_ptr(
+            gate_tensor.data,
+            gate_tensor.shape,
+            false,
+            false,
+            "exec_inject_gate_saved_view");
+        saved_gate.stream = gate_tensor.stream;
+        saved_gate.compute_precision = gate_tensor.compute_precision;
         saved_H_slot = H_slot_device;
 
         cudaMallocOrThrow(reinterpret_cast<void**>(&saved_result_emb), d_model_ * sizeof(float), "datastream_saved_result_emb");
@@ -661,8 +709,10 @@ struct ExecutionBlockInjectGradFn : public GradFn {
         cudaMemcpyAsync(mod_grad_buf, grad_output.data, total_size, cudaMemcpyDeviceToDevice, stream);
         float* slot_grad = mod_grad_buf + static_cast<size_t>(result_slot) * d_model;
 
-        if (!saved_gate || !saved_result_emb || !saved_H_slot)
+        if (!saved_gate.data || !saved_result_emb || !saved_H_slot)
             throw std::runtime_error("ExecutionBlockInjectGradFn::apply: saved state is NULL at " + std::string(__FILE__) + ":" + std::to_string(__LINE__));
+
+        saved_gate.require("ExecutionBlockInjectGradFn::apply saved_gate");
 
         // The backward kernel MUST always run — it computes d_logit, writes
         // grad_w_gate, and corrects the slot gradient in mod_grad_buf.
@@ -685,7 +735,7 @@ struct ExecutionBlockInjectGradFn : public GradFn {
             saved_result_emb,
             saved_H_slot,
             w_gate_data,
-            saved_gate,
+            saved_gate.data,
             inv_sqrt_d,
             gate_temp,
             d_model);
@@ -714,7 +764,7 @@ struct ExecutionBlockInjectGradFn : public GradFn {
         GradFn::release_saved();
         if (saved_result_emb) { cudaFree(saved_result_emb); saved_result_emb = nullptr; }
         if (saved_H_slot) { cudaFree(saved_H_slot); saved_H_slot = nullptr; }
-        if (saved_gate) { cudaFree(saved_gate); saved_gate = nullptr; }
+        saved_gate = Tensor{};
         if (mod_grad_buf) { cudaFree(mod_grad_buf); mod_grad_buf = nullptr; }
         grad_result_emb = nullptr;
         w_gate_data = nullptr;
@@ -1347,8 +1397,40 @@ void executeStepCoordinatorImpl(
     const uint8_t* d_atom_mask_row = bindings.d_atom_mask
         + static_cast<size_t>(batch_row) * payload.max_seq_len;
 
+    // One flag is shared by all validation kernels in this step. Reset it
+    // before the first kernel so earlier failures are not erased below.
+    CUDA_CHECK(cudaMemsetAsync(diag.numericErrorFlag(), 0, sizeof(int), stream));
+    EXEC_CHECK(V_val > 0, "executeStep: no value slots (V - S == 0)");
+
+    // Defer validation failure synchronization to finalizeStepOrThrow.
+    kernelCheckAnyValueSlotValid<<<1, 1, 0, stream>>>(
+        memory.valid_mask.data,
+        diag.numericErrorFlag(),
+        S, V_val, kStageSlotUninit);
+    CUDA_CHECK_KERNEL();
+
+    forward_output.state_before_values = Tensor::zeros({V, 1}, stream, "state_before_values");
+    forward_output.state_before_valid = Tensor::zeros({1, V}, stream, "state_before_valid");
+    CUDA_CHECK(cudaMemcpyAsync(forward_output.state_before_values.data, memory.values.data,
+        V * sizeof(float), cudaMemcpyDeviceToDevice, stream));
+    CUDA_CHECK(cudaMemcpyAsync(forward_output.state_before_valid.data, memory.valid_mask.data,
+        V * sizeof(float), cudaMemcpyDeviceToDevice, stream));
+
+    if (row_tokens > 0) {
+        kernelValidateStateBearingSlots<<<(row_tokens + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
+            d_atom_mask_row,
+            d_slot_map_row,
+            memory.valid_mask.data,
+            row_tokens,
+            hp.num_slots,
+            hp.num_scratch_slots,
+            diag.numericErrorFlag(),
+            kStageSlotInvalid,
+            kStageSlotUninit);
+        CUDA_CHECK_KERNEL();
+    }
+
     StepWorkingSet work;
-    prepareMemoryStepOrThrow(hp, diag, memory, d_atom_mask_row, d_slot_map_row, row_tokens, forward_output, stream);
     buildValueSlotCandidates(hp, memory, stream, work);
     kernelCheckFinite<<<(V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         work.slot_values.data, V_val, diag.numericErrorFlag(), kStageV1, hp.magnitude_limit);
@@ -1648,26 +1730,29 @@ void executeStepCoordinatorImpl(
     EXEC_CHECK(work.result_slot >= 0 && work.result_slot < payload.total_tokens, "result_slot out of bounds");
     float inv_sqrt_d = 1.0f / sqrtf(static_cast<float>(dm));
 
-    float* save_gate_buf = nullptr;
     float* save_H_slot_buf = nullptr;
     float h_inject_gate_value = 0.0f;  // host-side readback for telemetry
-    cudaMallocOrThrow(reinterpret_cast<void**>(&save_gate_buf), sizeof(float), "datastream_save_gate");
+    forward_output.inject_gate_tensor = Tensor::empty(
+        TensorContract::TensorShape::make_BSM(1, 1),
+        false,
+        stream,
+        "exec_inject_gate");
     cudaMallocOrThrow(reinterpret_cast<void**>(&save_H_slot_buf), dm * sizeof(float), "datastream_save_H_slot");
     kernelInjectResultSlot<<<1, kBlockSize, 0, stream>>>(
         H.data, work.result_emb.data, params.w_inject_gate.data,
         inv_sqrt_d, work.result_slot, dm, hp.inject_gate_temp,
-        save_gate_buf, save_H_slot_buf);
+        forward_output.inject_gate_tensor.data, save_H_slot_buf);
     CUDA_CHECK_KERNEL();
     // Queue async readback of inject gate for telemetry (completes at next sync)
     if (hp.debug_mode) {
-        CUDA_CHECK(cudaMemcpyAsync(&h_inject_gate_value, save_gate_buf, sizeof(float),
+        CUDA_CHECK(cudaMemcpyAsync(&h_inject_gate_value, forward_output.inject_gate_tensor.data, sizeof(float),
                                    cudaMemcpyDeviceToHost, stream));
     }
 
     {
         auto inject_fn = std::make_shared<ExecutionBlockInjectGradFn>();
         inject_fn->capture(H, work.result_emb, params.w_inject_gate,
-                           save_gate_buf, save_H_slot_buf,
+                           forward_output.inject_gate_tensor, save_H_slot_buf,
                            inv_sqrt_d, hp.inject_gate_temp,
                            work.result_slot, payload.total_tokens, dm, stream);
         H.grad_fn = inject_fn;

@@ -81,6 +81,11 @@ struct ExecutionBlockStepOutput {
     Tensor stop_logits_tensor;      // [1, 2], class 0=CONTINUE, class 1=STOP
     Tensor stop_probabilities;      // [1, 2]
 
+    // Forward-authored scalar injection gate retained for telemetry and
+    // ExecutionBlockInjectGradFn backward. ModelForwardOutputs owns the
+    // storage for the complete forward/loss/backward window.
+    Tensor inject_gate_tensor;       // [1, 1], sigmoid injection gate
+
     // Category 1 execution-decoder activation retained specifically for
     // SiluGradFn's non-owning backward cache. The execution step moves the
     // pre-activation here before its local working set is destroyed; the
@@ -504,6 +509,10 @@ public:
                     "exec_outputs_per_row[" + std::to_string(row) + "].steps[" +
                         std::to_string(step) + "].decoder_silu_input_tensor",
                     execution_output.steps[step].decoder_silu_input_tensor);
+                reportTensor(
+                    "exec_outputs_per_row[" + std::to_string(row) + "].steps[" +
+                        std::to_string(step) + "].inject_gate_tensor",
+                    execution_output.steps[step].inject_gate_tensor);
             }
         }
 

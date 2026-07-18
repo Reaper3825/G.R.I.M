@@ -5,16 +5,6 @@
 #include "execution_block_internal.hpp"
 
 namespace GRIM::ExecutionBlockInternal {
-void prepareMemoryStepOrThrow(
-	const HyperParameters::ExecutionBlockConstructionHP& hp,
-	ExecutionBlockDiagnosticsBuffers& diag,
-	const ExecutionMemory& memory,
-	const uint8_t* atom_mask,
-	const int32_t* token_to_slot_map,
-	int row_tokens,
-	Forward::ExecutionBlockStepOutput& forward_output,
-	cudaStream_t stream);
-
 void buildValueSlotCandidates(
 	const HyperParameters::ExecutionBlockConstructionHP& hp,
 	const ExecutionMemory& memory,
