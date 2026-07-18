@@ -156,11 +156,15 @@ At a high level, one step does this:
    - add encoded trace history from prior `ExecutionRecord`s.
 5. **Select operands**
    - `p_arg1`, `p_arg2` are softmax distributions over value slots,
-   - forward reads are materialized by hard argmax slot reads,
+   - inference and on-policy REINFORCE training materialize hard argmax slot reads,
+   - structured-CE-only Training mode materializes the hard reads from the
+     authoritative `BatchPayload.teacher_steps` entry while retaining the
+     model distributions/logits for loss and diagnostics,
    - backward uses straight-through-style routing through `SlotValueSTGradFn`.
 6. **Select and apply the operation**
    - compute the built-in four ops: `+`, `-`, `*`, safe `/`,
-   - choose the forward result via hard argmax over `p_op`,
+   - choose the detached hard operation from the same mode-specific decision
+     source used for operands,
    - keep the soft distribution for diagnostics/loss/gradients.
 7. **Update trace state**
    - encode the current discrete execution record,
@@ -175,7 +179,9 @@ At a high level, one step does this:
 10. **Score write destinations**
     - compute `p_write` over all slots.
 11. **Hard write back**
-    - choose one slot by argmax over `p_write`,
+    - choose one slot from the mode-specific hard decision source (`p_write`
+      argmax for inference/on-policy execution, teacher step for
+      structured-CE-only Training),
     - overwrite `values`, `state_embeds`, `key_embeds`, `atom_embeds`, `type_embed`,
     - set `valid_mask[slot] = 1`,
     - set `recent_write_mask` to a one-hot vector for that slot.
@@ -227,7 +233,12 @@ This keeps execution cleanup behind one fail-loud execution-block boundary inste
 
 The current implementation does **not** do blended writes.
 
-It computes a softmax distribution `p_write` for learning/diagnostics, then performs a **hard argmax write** to exactly one slot in forward execution.
+It always computes a softmax distribution `p_write` for learning/diagnostics,
+then performs a hard write to exactly one slot. `ExecutionBlockConstructionHP`
+derives `teacher_force_transitions=true` when structured CE is enabled and
+argument REINFORCE is disabled. In that supervised Training mode the hard
+arg/op/write transition comes directly from the `BatchPayload` teacher step;
+inference and on-policy REINFORCE training remain model-argmax driven.
 
 The content term uses scaled query/key scoring, `dot(q_write, K_write) / sqrt(d_key)`, before the learned content coefficient is applied. This keeps initialization variance independent of key width and avoids saturating the write softmax before structured cross-entropy can train it.
 

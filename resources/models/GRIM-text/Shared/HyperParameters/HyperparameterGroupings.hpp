@@ -434,6 +434,10 @@ struct ExecutionBlockConstructionHP {
     float div_invalid_penalty_weight = 0.0f;
     float arg_reinforce_weight = 0.0f;
     float arg_reinforce_baseline_decay = 0.0f;
+    // Derived training policy: structured-CE-only training executes the
+    // authoritative BatchPayload teacher transition while retaining model
+    // logits for the classification losses. Inference remains model-driven.
+    bool teacher_force_transitions = false;
 };
 
 // NumberEncoder construction view — numeric-meaning input path.
@@ -1465,6 +1469,9 @@ inline ExecutionBlockConstructionHP executionBlockConstructionHP(
     view.div_invalid_penalty_weight = model.execution_block_div_invalid_penalty_weight;
     view.arg_reinforce_weight = model.execution_block_arg_reinforce_weight;
     view.arg_reinforce_baseline_decay = model.execution_block_arg_reinforce_baseline_decay;
+    view.teacher_force_transitions =
+        model.structured_ce_enabled
+        && model.execution_block_arg_reinforce_weight <= 0.0f;
     return view;
 }
 

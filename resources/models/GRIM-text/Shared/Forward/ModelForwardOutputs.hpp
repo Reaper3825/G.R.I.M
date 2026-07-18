@@ -92,6 +92,10 @@ struct ExecutionBlockStepOutput {
     float stop_probability = 0.0f;
     float selection_temperature = 0.0f;
     bool div_was_clamped = false;
+    // True when Training mode materialized the hard arg/op/write transition
+    // from BatchPayload.teacher_steps. Model logits/probabilities above remain
+    // the Category 1 owners used by structured CE.
+    bool teacher_forced_transition = false;
 };
 
 struct ExecutionBlockOutput {

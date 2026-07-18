@@ -9,6 +9,7 @@
 #include "ExecutionBlockTest.hpp"
 
 #include "../Layers/ExecutionBlock/execution_block_GPU.hpp"
+#include "../Layers/ExecutionBlock/execution_block_data_stream_GPU.hpp"
 #include "../Shared/Batching/BatchPayload.hpp"
 #include "../Shared/Execution/ExecutionResultEmission.hpp"
 #include "../Shared/Forward/ModelForwardOutputs.hpp"
@@ -25,6 +26,12 @@
 using namespace GRIM;
 using namespace GRIM::Forward;
 using namespace GRIM::Test;
+
+__global__ void kernelTestFirstExecutionErrorWins(int* error_flag) {
+    if (threadIdx.x != 0) return;
+    GRIM::ExecutionBlockInternal::recordFirstExecutionError(error_flag, 3);
+    GRIM::ExecutionBlockInternal::recordFirstExecutionError(error_flag, 8);
+}
 
 //======================================================//
 //  1. Batched ExecutionMemory — per-row isolation
@@ -114,6 +121,8 @@ bool testStepOutputDefaults(std::string& message) {
                    "selection_temperature should default zero");
     EB_ASSERT_TRUE(!sout.div_was_clamped,
                    "div_was_clamped should default false");
+    EB_ASSERT_TRUE(!sout.teacher_forced_transition,
+                   "teacher_forced_transition should default false");
 
     EB_ASSERT_EQ(sout.record.arg1_slot, -1, "record.arg1_slot default");
     EB_ASSERT_EQ(sout.record.arg2_slot, -1, "record.arg2_slot default");
@@ -281,6 +290,8 @@ bool testExecutionBlockConstructionHPDefaults(std::string& message) {
     EB_ASSERT_NEAR(cfg.magnitude_limit, 1e6f, 1e-1f, "magnitude_limit default");
     EB_ASSERT_NEAR(cfg.transition_hard_threshold, 0.0f, 1e-6f,
                    "transition_hard_threshold default");
+    EB_ASSERT_TRUE(!cfg.teacher_force_transitions,
+                   "teacher_force_transitions default false");
 
     return true;
 }
@@ -651,6 +662,102 @@ bool testGeneratedNumericAtomSessionTable(std::string& message) {
 }
 
 //======================================================//
+//  19. First execution validation failure is preserved
+//======================================================//
+
+bool testFirstExecutionErrorWins(std::string& message) {
+    int* d_error = nullptr;
+    cudaMalloc(&d_error, sizeof(int));
+    cudaMemset(d_error, 0, sizeof(int));
+    kernelTestFirstExecutionErrorWins<<<1, 1>>>(d_error);
+
+    int error = 0;
+    cudaMemcpy(&error, d_error, sizeof(int), cudaMemcpyDeviceToHost);
+    cudaFree(d_error);
+
+    EB_ASSERT_EQ(error, 3,
+                 "later validation stages must not overwrite the first failure");
+    return true;
+}
+
+//======================================================//
+//  20. Hard transition decision follows payload mode
+//======================================================//
+
+bool testHardTransitionDecisionPolicy(std::string& message) {
+    cudaStream_t stream = nullptr;
+    cudaStreamCreate(&stream);
+
+    HyperParameters::ExecutionBlockConstructionHP hp;
+    hp.num_slots = 8;
+    hp.num_scratch_slots = 2;
+    hp.num_ops = 4;
+    hp.teacher_force_transitions = true;
+
+    ExecutionBlockDiagnosticsBuffers diag;
+    diag.allocate(stream);
+
+    {
+        GRIM::ExecutionBlockInternal::StepWorkingSet work;
+        work.p_arg1 = Tensor::zeros({1, 6}, stream, "test_policy_arg1");
+        work.p_arg2 = Tensor::zeros({1, 6}, stream, "test_policy_arg2");
+        work.p_op = Tensor::zeros({1, 4}, stream, "test_policy_op");
+        work.p_write = Tensor::zeros({1, 8}, stream, "test_policy_write");
+
+        const float arg1[] = {0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f};
+        const float arg2[] = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+        const float op[] = {0.0f, 0.0f, 0.0f, 1.0f};
+        const float write[] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+        cudaMemcpyAsync(work.p_arg1.data, arg1, sizeof(arg1), cudaMemcpyHostToDevice, stream);
+        cudaMemcpyAsync(work.p_arg2.data, arg2, sizeof(arg2), cudaMemcpyHostToDevice, stream);
+        cudaMemcpyAsync(work.p_op.data, op, sizeof(op), cudaMemcpyHostToDevice, stream);
+        cudaMemcpyAsync(work.p_write.data, write, sizeof(write), cudaMemcpyHostToDevice, stream);
+
+        Batching::BatchPayload payload;
+        payload.mode = Batching::BatchPayloadMode::Training;
+        payload.batch_size = 1;
+        payload.teacher_steps = {{Execution::TeacherStep{
+            /*op_id=*/2,
+            /*arg1_slot=*/3,
+            /*arg2_slot=*/4,
+            /*write_slot=*/5,
+            /*expected_value=*/0.0f}}};
+        payload.teacher_step_mask = {{1}};
+
+        GRIM::ExecutionBlockInternal::materializeHardReadAndOpDecision(
+            hp, diag, payload, 0, 0, stream, work);
+        GRIM::ExecutionBlockInternal::materializeHardWriteDecision(
+            hp, diag, payload, 0, 0, stream, work);
+
+        int indices[4] = {-1, -1, -1, -1};
+        cudaMemcpyAsync(indices, diag.execIndices(), sizeof(indices),
+                        cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+        EB_ASSERT_EQ(indices[0], 1, "training arg1 uses teacher slot relative to S");
+        EB_ASSERT_EQ(indices[1], 2, "training arg2 uses teacher slot relative to S");
+        EB_ASSERT_EQ(indices[2], 2, "training op uses teacher op");
+        EB_ASSERT_EQ(indices[3], 5, "training write uses teacher slot");
+
+        payload.mode = Batching::BatchPayloadMode::InferencePrefill;
+        GRIM::ExecutionBlockInternal::materializeHardReadAndOpDecision(
+            hp, diag, payload, 0, 0, stream, work);
+        GRIM::ExecutionBlockInternal::materializeHardWriteDecision(
+            hp, diag, payload, 0, 0, stream, work);
+        cudaMemcpyAsync(indices, diag.execIndices(), sizeof(indices),
+                        cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+        EB_ASSERT_EQ(indices[0], 4, "inference arg1 uses model argmax");
+        EB_ASSERT_EQ(indices[1], 0, "inference arg2 uses model argmax");
+        EB_ASSERT_EQ(indices[2], 3, "inference op uses model argmax");
+        EB_ASSERT_EQ(indices[3], 7, "inference write uses model argmax");
+    }
+
+    diag.destroy();
+    cudaStreamDestroy(stream);
+    return true;
+}
+
+//======================================================//
 //  Entry point
 //======================================================//
 
@@ -680,6 +787,8 @@ int GRIM::Test::runExecutionBlockTests() {
     suite.addTest("Inference: persistent memory runtime contract", testPersistentExecutionMemoryRuntimeContract);
     suite.addTest("Inference: terminal result emission contract", testTerminalExecutionResultEmissionContract);
     suite.addTest("Inference: generated result session table", testGeneratedNumericAtomSessionTable);
+    suite.addTest("Validation: first execution error wins", testFirstExecutionErrorWins);
+    suite.addTest("Policy: hard transition follows payload mode", testHardTransitionDecisionPolicy);
 
     auto results = suite.runAll();
 

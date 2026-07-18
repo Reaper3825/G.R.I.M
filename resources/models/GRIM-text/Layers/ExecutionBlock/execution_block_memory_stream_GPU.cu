@@ -127,26 +127,6 @@ __global__ void kernelGatherValueSlotScalars(
     out[i] = M_valid[slot] * M_values[slot];
 }
 
-__global__ void kernelArgmax1DInt(
-    int* __restrict__ out_idx,
-    const float* __restrict__ probs,
-    int N
-) {
-    const int tid = threadIdx.x;
-    float best_val = -1e30f;
-    int best_idx = 0;
-    for (int i = tid; i < N; i += blockDim.x) {
-        float v = probs[i];
-        if (v > best_val) { best_val = v; best_idx = i; }
-    }
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        float other_val = __shfl_down_sync(0xffffffff, best_val, offset);
-        int other_idx = __shfl_down_sync(0xffffffff, best_idx, offset);
-        if (other_val > best_val) { best_val = other_val; best_idx = other_idx; }
-    }
-    if (tid == 0) out_idx[0] = best_idx;
-}
-
 __global__ void kernelReadSlotValueByRelIdx(
     float* __restrict__ out,
     const float* __restrict__ M_values,
@@ -160,18 +140,18 @@ __global__ void kernelReadSlotValueByRelIdx(
     if (threadIdx.x != 0) return;
     int r = rel_idx[0];
     if (r < 0 || r >= V_val) {
-        atomicMax(error_flag, stage_invalid);
+        recordFirstExecutionError(error_flag, stage_invalid);
         out[0] = 0.0f;
         return;
     }
     int slot = S + r;
     if (slot < S || slot >= V) {
-        atomicMax(error_flag, stage_invalid);
+        recordFirstExecutionError(error_flag, stage_invalid);
         out[0] = 0.0f;
         return;
     }
     if (M_valid[slot] == 0.0f) {
-        atomicMax(error_flag, stage_uninit);
+        recordFirstExecutionError(error_flag, stage_uninit);
         out[0] = 0.0f;
         return;
     }
@@ -187,7 +167,7 @@ __global__ void kernelValidateWriteSlotDev(
     if (threadIdx.x != 0) return;
     int ws = d_write_slot[0];
     if (ws < S || ws >= V)
-        atomicMax(error_flag, stage_id);
+        recordFirstExecutionError(error_flag, stage_id);
 }
 
 __global__ void kernelHardWriteScalarDev(
@@ -248,9 +228,9 @@ __global__ void kernelValidateStateBearingSlots(
     int slot = slot_map[pos];
     if (slot == -1) return;
     if (atom_mask[pos] == 0 || slot < S || slot >= V) {
-        atomicMax(error_flag, stage_invalid);
+        recordFirstExecutionError(error_flag, stage_invalid);
     } else if (M_valid_mask[slot] == 0.0f) {
-        atomicMax(error_flag, stage_uninit);
+        recordFirstExecutionError(error_flag, stage_uninit);
     }
 }
 
@@ -286,7 +266,7 @@ __global__ void kernelCheckMultiSlotMutation(
 ) {
     if (threadIdx.x != 0) return;
     if (changed_count[0] > 1)
-        atomicMax(error_flag, stage_id);
+        recordFirstExecutionError(error_flag, stage_id);
 }
 
 // Accumulate sum of gate values into a [2]-float accumulator: [sum, count]
@@ -445,7 +425,7 @@ void executionBlockBootstrapMemoryFromSlotMap(
 }
 
 // Device kernel: check if any value slot [S..S+V_val) has valid_mask >= 0.5.
-// If none valid, sets error_flag via atomicMax to fail in finalizeStepOrThrow.
+// If none valid, records the first error to fail in finalizeStepOrThrow.
 __global__ void kernelCheckAnyValueSlotValid(
     const float* __restrict__ valid_mask,
     int* __restrict__ error_flag,
@@ -455,7 +435,7 @@ __global__ void kernelCheckAnyValueSlotValid(
     for (int i = 0; i < V_val; ++i) {
         if (valid_mask[S + i] >= 0.5f) return;  // at least one valid — OK
     }
-    atomicMax(error_flag, stage_id);  // no valid value slots
+    recordFirstExecutionError(error_flag, stage_id);  // no valid value slots
 }
 
 static void ensureBootstrappedValueSlotsOrThrow(
@@ -558,14 +538,6 @@ void materializeSelectedOperands(
     const int V_val = V - S;
     int* d_exec_idx = diag.execIndices();
 
-    EXEC_CHECK(work.p_arg1.data != nullptr, "materializeSelectedOperands: p_arg1 is null");
-    EXEC_CHECK(work.p_arg2.data != nullptr, "materializeSelectedOperands: p_arg2 is null");
-
-    kernelArgmax1DInt<<<1, 32, 0, stream>>>(d_exec_idx, work.p_arg1.data, V_val);
-    CUDA_CHECK_KERNEL();
-    kernelArgmax1DInt<<<1, 32, 0, stream>>>(d_exec_idx + 1, work.p_arg2.data, V_val);
-    CUDA_CHECK_KERNEL();
-
     work.v1 = Tensor::zeros({1, 1}, stream, "exec_v1");
     work.v1.requires_grad = work.p_arg1.requires_grad;
     work.v1.is_leaf = false;
@@ -600,8 +572,6 @@ void applyHardWriteback(
     const int dt = hp.d_type;
     int* d_exec_idx = diag.execIndices();
 
-    kernelArgmax1DInt<<<1, 32, 0, stream>>>(d_exec_idx + 3, work.p_write.data, V);
-    CUDA_CHECK_KERNEL();
     kernelValidateWriteSlotDev<<<1, 1, 0, stream>>>(
         d_exec_idx + 3, S, V, diag.numericErrorFlag(), kStageWriteSlotInvalid);
     CUDA_CHECK_KERNEL();
@@ -701,10 +671,16 @@ void finalizeStepOrThrow(
         GRIM::Logging::ModuleId::ExecutionBlock, msg);
 
     if (h_error > 0) {
-        char buf[384];
+        char buf[640];
         snprintf(buf, sizeof(buf),
-            "ExecutionBlock FATAL: invalid state at step %d — %s (stage id=%d)",
-            step, stageIdToName(h_error), h_error);
+            "ExecutionBlock FATAL: invalid state at step %d - %s (stage id=%d); "
+            "decision=%s; equation=slot[%d](%.9g) %s slot[%d](%.9g) -> "
+            "slot[%d]=%.9g; magnitude_limit=%.9g",
+            step, stageIdToName(h_error), h_error,
+            forward_output.teacher_forced_transition ? "teacher" : "model",
+            ri[0], static_cast<double>(rf[0]), op_str,
+            ri[1], static_cast<double>(rf[1]), write_slot,
+            static_cast<double>(rf[2]), static_cast<double>(hp.magnitude_limit));
         if (hp.debug_mode)
             GRIM::Logging::EmitModuleError(GRIM::Logging::ModuleId::ExecutionBlock,
                 std::string("[ExecutionBlock debug] ") + buf);

@@ -99,7 +99,7 @@ __global__ void kernelCheckFinite(
     if (i >= N) return;
     float val = data[i];
     if (isnan(val) || isinf(val) || fabsf(val) > magnitude_limit)
-        atomicMax(error_flag, stage_id);
+        recordFirstExecutionError(error_flag, stage_id);
 }
 
 __global__ void kernelValidateSoftmax(
@@ -119,7 +119,7 @@ __global__ void kernelValidateSoftmax(
     local_sum = warpReduceSum(local_sum);
     local_bad = warpReduceOr(local_bad);
     if (tid == 0 && (local_bad || fabsf(local_sum - 1.0f) > 1e-3f))
-        atomicMax(error_flag, stage_id);
+        recordFirstExecutionError(error_flag, stage_id);
 }
 
 // Masked reduce-mean: exclude atom positions from the mean so that numeric
@@ -274,6 +274,26 @@ __global__ void kernelArgmax1DIntData(
         if (other_val > best_val) { best_val = other_val; best_idx = other_idx; }
     }
     if (tid == 0) out_idx[0] = best_idx;
+}
+
+__global__ void kernelSetHardReadAndOpDecision(
+    int* __restrict__ exec_indices,
+    int arg1_rel,
+    int arg2_rel,
+    int op_id
+) {
+    if (threadIdx.x != 0) return;
+    exec_indices[0] = arg1_rel;
+    exec_indices[1] = arg2_rel;
+    exec_indices[2] = op_id;
+}
+
+__global__ void kernelSetHardWriteDecision(
+    int* __restrict__ exec_indices,
+    int write_slot
+) {
+    if (threadIdx.x != 0) return;
+    exec_indices[3] = write_slot;
 }
 
 __global__ void kernelHardPickOpForward(
@@ -1156,6 +1176,114 @@ void predictExecutionGateImpl(
     output->logits = std::move(logits);
 }
 
+namespace {
+
+const Execution::TeacherStep& requireTeacherForcedStep(
+    const HyperParameters::ExecutionBlockConstructionHP& hp,
+    const Batching::BatchPayload& payload,
+    int batch_row,
+    int step
+) {
+    EXEC_CHECK(payload.isTraining(),
+        "teacher-forced transition requested outside Training mode");
+    EXEC_CHECK(batch_row >= 0 && batch_row < payload.batch_size,
+        "teacher-forced transition batch row is out of range");
+    EXEC_CHECK(static_cast<int>(payload.teacher_steps.size()) == payload.batch_size,
+        "teacher-forced transition requires one BatchPayload.teacher_steps row per batch row");
+    EXEC_CHECK(static_cast<int>(payload.teacher_step_mask.size()) == payload.batch_size,
+        "teacher-forced transition requires one BatchPayload.teacher_step_mask row per batch row");
+
+    const auto& teacher_row = payload.teacher_steps[static_cast<size_t>(batch_row)];
+    const auto& mask_row = payload.teacher_step_mask[static_cast<size_t>(batch_row)];
+    EXEC_CHECK(step >= 0 && step < static_cast<int>(teacher_row.size()),
+        "teacher-forced transition step is absent from BatchPayload.teacher_steps");
+    EXEC_CHECK(step < static_cast<int>(mask_row.size())
+        && mask_row[static_cast<size_t>(step)] != 0,
+        "teacher-forced transition cannot consume a padded teacher step");
+
+    const auto& teacher = teacher_row[static_cast<size_t>(step)];
+    EXEC_CHECK(teacher.arg1_slot >= hp.num_scratch_slots
+        && teacher.arg1_slot < hp.num_slots,
+        "teacher arg1 slot is outside the configured value-slot range [S,V)");
+    EXEC_CHECK(teacher.arg2_slot >= hp.num_scratch_slots
+        && teacher.arg2_slot < hp.num_slots,
+        "teacher arg2 slot is outside the configured value-slot range [S,V)");
+    EXEC_CHECK(teacher.op_id >= 0 && teacher.op_id < hp.num_ops,
+        "teacher op id is outside the configured operation range");
+    EXEC_CHECK(teacher.write_slot >= hp.num_scratch_slots
+        && teacher.write_slot < hp.num_slots,
+        "teacher write slot is outside the configured value-slot range [S,V)");
+    return teacher;
+}
+
+}  // namespace
+
+void materializeHardReadAndOpDecision(
+    const HyperParameters::ExecutionBlockConstructionHP& hp,
+    ExecutionBlockDiagnosticsBuffers& diag,
+    const Batching::BatchPayload& payload,
+    int batch_row,
+    int step,
+    cudaStream_t stream,
+    const StepWorkingSet& work
+) {
+    EXEC_CHECK(work.p_arg1.data != nullptr,
+        "materializeHardReadAndOpDecision: p_arg1 is null");
+    EXEC_CHECK(work.p_arg2.data != nullptr,
+        "materializeHardReadAndOpDecision: p_arg2 is null");
+    EXEC_CHECK(work.p_op.data != nullptr,
+        "materializeHardReadAndOpDecision: p_op is null");
+
+    int* d_exec_idx = diag.execIndices();
+    if (payload.isTraining() && hp.teacher_force_transitions) {
+        const auto& teacher = requireTeacherForcedStep(hp, payload, batch_row, step);
+        kernelSetHardReadAndOpDecision<<<1, 1, 0, stream>>>(
+            d_exec_idx,
+            teacher.arg1_slot - hp.num_scratch_slots,
+            teacher.arg2_slot - hp.num_scratch_slots,
+            teacher.op_id);
+        CUDA_CHECK_KERNEL();
+        return;
+    }
+
+    const int value_slots = hp.num_slots - hp.num_scratch_slots;
+    kernelArgmax1DIntData<<<1, kWarpSize, 0, stream>>>(
+        d_exec_idx, work.p_arg1.data, value_slots);
+    CUDA_CHECK_KERNEL();
+    kernelArgmax1DIntData<<<1, kWarpSize, 0, stream>>>(
+        d_exec_idx + 1, work.p_arg2.data, value_slots);
+    CUDA_CHECK_KERNEL();
+    kernelArgmax1DIntData<<<1, kWarpSize, 0, stream>>>(
+        d_exec_idx + 2, work.p_op.data, hp.num_ops);
+    CUDA_CHECK_KERNEL();
+}
+
+void materializeHardWriteDecision(
+    const HyperParameters::ExecutionBlockConstructionHP& hp,
+    ExecutionBlockDiagnosticsBuffers& diag,
+    const Batching::BatchPayload& payload,
+    int batch_row,
+    int step,
+    cudaStream_t stream,
+    const StepWorkingSet& work
+) {
+    EXEC_CHECK(work.p_write.data != nullptr,
+        "materializeHardWriteDecision: p_write is null");
+
+    int* d_exec_idx = diag.execIndices();
+    if (payload.isTraining() && hp.teacher_force_transitions) {
+        const auto& teacher = requireTeacherForcedStep(hp, payload, batch_row, step);
+        kernelSetHardWriteDecision<<<1, 1, 0, stream>>>(
+            d_exec_idx, teacher.write_slot);
+        CUDA_CHECK_KERNEL();
+        return;
+    }
+
+    kernelArgmax1DIntData<<<1, kWarpSize, 0, stream>>>(
+        d_exec_idx + 3, work.p_write.data, hp.num_slots);
+    CUDA_CHECK_KERNEL();
+}
+
 void executeStepCoordinatorImpl(
     const HyperParameters::ExecutionBlockConstructionHP& hp,
     ExecutionBlockDiagnosticsBuffers& diag,
@@ -1187,6 +1315,8 @@ void executeStepCoordinatorImpl(
     int* d_exec_idx = diag.execIndices();
     int* d_exec_record_i = diag.execRecordI();
     float* d_exec_record_f = diag.execRecordF();
+    forward_output.teacher_forced_transition =
+        payload.isTraining() && hp.teacher_force_transitions;
 
     // Row-local device slot map: derived from BatchDeviceBindings (host BatchPayload no
     // longer carries device pointers — see Shared/Batching/BatchDeviceBindings.hpp).
@@ -1352,6 +1482,17 @@ void executeStepCoordinatorImpl(
     forward_output.arg2_logits_tensor = std::move(arg2_logits);
     kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_arg2.data, V_val, diag.numericErrorFlag(), kStagePArg2);
 
+    // The op head is independent of the selected operand values. Compute all
+    // three read/op distributions before materializing the detached decision.
+    auto op_logits = autograd::matmul(decision_input, params.W_op_select, stream);
+    work.p_op = autograd::softmax(op_logits, temperature, stream);
+    forward_output.op_logits_tensor = std::move(op_logits);
+    kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(
+        work.p_op.data, nop, diag.numericErrorFlag(), kStagePOp);
+
+    materializeHardReadAndOpDecision(
+        hp, diag, payload, batch_row, step, stream, work);
+
     materializeSelectedOperands(hp, diag, memory, stream, work);
     kernelCheckFinite<<<(V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         work.slot_values.data, V_val, diag.numericErrorFlag(), kStageV1, hp.magnitude_limit);
@@ -1369,10 +1510,6 @@ void executeStepCoordinatorImpl(
     // Op selection is DETACHED from arg selection (Option B).
     // op sees (context_enriched, trace_state, step_emb) only — same as decision_input.
     // arg selection cannot influence op selection through the gradient path.
-    auto op_logits = autograd::matmul(decision_input, params.W_op_select, stream);
-    work.p_op = autograd::softmax(op_logits, temperature, stream);
-    forward_output.op_logits_tensor = std::move(op_logits);
-    kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_op.data, nop, diag.numericErrorFlag(), kStagePOp);
 
     work.op_results = Tensor::zeros({1, nop}, stream, "exec_op_results");
     // Fix #6: Reset per-step division invalid flag before FourOps
@@ -1383,14 +1520,12 @@ void executeStepCoordinatorImpl(
     CUDA_CHECK_KERNEL();
     CUDA_CHECK(cudaMemcpyAsync(&h_div_flag, d_div_flag, sizeof(int), cudaMemcpyDeviceToHost, stream));
 
-    // Hard op selection (clean classification).
-    // Forward: argmax(p_op) → pick discrete result.  v_out = results[hard_op].
+    // Hard op application (clean classification).
+    // The mode-specific decision above already materialized hard_op; select
+    // exactly one discrete result. v_out = results[hard_op].
     // The hard result is detached. Op selection is supervised from retained logits
     // at the loss boundary; execution values do not create an autograd edge.
     // Blending +/-/*/÷ results is FUCKING STUPID! for a register machine.
-    kernelArgmax1DIntData<<<1, kWarpSize, 0, stream>>>(d_exec_idx + 2, work.p_op.data, nop);
-    CUDA_CHECK_KERNEL();
-
     work.v_out = Tensor::zeros({1, 1}, stream, "exec_v_out");
     work.v_out.requires_grad = false;
     work.v_out.is_leaf = true;
@@ -1604,6 +1739,8 @@ void executeStepCoordinatorImpl(
     CUDA_CHECK_KERNEL();
 
     work.key_new = autograd::matmul(work.result_emb, params.W_key_proj, stream);
+    materializeHardWriteDecision(
+        hp, diag, payload, batch_row, step, stream, work);
     applyHardWriteback(hp, diag, parameters, memory, stream, work);
     copyStepDiagnostics(work, forward_output, V_val, nop, V, dm, stream);
     captureStateAfterWriteAndCheckMutations(hp, diag, memory, forward_output, stream);

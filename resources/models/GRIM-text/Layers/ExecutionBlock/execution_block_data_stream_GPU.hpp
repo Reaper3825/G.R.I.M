@@ -31,6 +31,28 @@ void executeStepCoordinatorImpl(
 	Forward::ExecutionBlockStepOutput& forward_output,
 	Tensor& trace_state,
 	const std::vector<Forward::ExecutionRecord>& prior_records);
+
+// Materialize only the non-differentiable hard transition decision. During
+// structured-CE-only training this consumes the authoritative teacher step
+// owned by BatchPayload; inference and on-policy REINFORCE training use model
+// argmax. The live model tensors remain unchanged for loss construction.
+void materializeHardReadAndOpDecision(
+	const HyperParameters::ExecutionBlockConstructionHP& hp,
+	ExecutionBlockDiagnosticsBuffers& diag,
+	const Batching::BatchPayload& payload,
+	int batch_row,
+	int step,
+	cudaStream_t stream,
+	const StepWorkingSet& work);
+
+void materializeHardWriteDecision(
+	const HyperParameters::ExecutionBlockConstructionHP& hp,
+	ExecutionBlockDiagnosticsBuffers& diag,
+	const Batching::BatchPayload& payload,
+	int batch_row,
+	int step,
+	cudaStream_t stream,
+	const StepWorkingSet& work);
 }
 
 #endif  // USE_CUDA

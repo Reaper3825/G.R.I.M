@@ -38,6 +38,13 @@ inline constexpr int kStageSlotUninit = 33;
 inline constexpr int kStageTransitionInvalid = 41;
 inline constexpr int kStageMultiSlotMutation = 42;
 
+// Validation kernels execute in-order on one stream. Preserve the first
+// observed failure instead of allowing a later, numerically larger stage id
+// to overwrite the actual producer that violated the execution contract.
+__device__ inline void recordFirstExecutionError(int* error_flag, int stage_id) {
+	atomicCAS(error_flag, 0, stage_id);
+}
+
 inline const char* stageIdToName(int id) {
 	switch (id) {
 		case kStageV1: return "v1";
