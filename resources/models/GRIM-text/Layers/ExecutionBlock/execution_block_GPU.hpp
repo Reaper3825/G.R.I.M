@@ -198,15 +198,6 @@ Tensor executionBlockCrossAttentionRead(
     float* d_gate_accum = nullptr  // [2] device: [sum, count] for telemetry
 );
 
-//--------------------------------------------------//
-// Entropy loss over arg/op/write distributions
-//--------------------------------------------------//
-Tensor executionBlockComputeEntropyLoss(
-    const std::vector<const Forward::ExecutionBlockStepOutput*>& steps,
-    float weight,
-    cudaStream_t stream
-);
-
 }  // namespace GRIM
 
 #endif  // USE_CUDA

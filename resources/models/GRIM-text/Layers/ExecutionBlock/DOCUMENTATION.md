@@ -97,7 +97,6 @@ Public methods:
 - `executionBlockStep(...)`
 - `executionBlockBootstrapMemoryFromSlotMap(...)`
 - `executionBlockCrossAttentionRead(...)`
-- `executionBlockComputeEntropyLoss(...)`
 
 Deleted public APIs such as `ExecutionBlockLayer`, `prepareForwardRuntime(...)`, the public validation helpers, `encodeState()`, and `lastDivClampCount()` are gone.
 
