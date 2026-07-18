@@ -701,22 +701,63 @@ void setUseEngineBackward(bool enabled) {
     g_use_engine_backward = enabled;
 }
 
+void GradFn::receive_gradient(const Tensor& contribution, cudaStream_t stream) {
+    contribution.require("GradFn::receive_gradient contribution");
+    if (stream == nullptr) {
+        throw std::runtime_error("GradFn::receive_gradient: stream is NULL");
+    }
+
+    if (!pending_gradient_) {
+        Tensor accumulator = Tensor::zeros(
+            contribution.shape,
+            false,
+            stream,
+            "GradFn_pending_gradient");
+        pending_gradient_ = std::make_shared<Tensor>(std::move(accumulator));
+    }
+
+    autograd::accumulate_grad(
+        *pending_gradient_,
+        contribution,
+        1.0f,
+        stream,
+        "GradFn::receive_gradient");
+}
+
+const Tensor& GradFn::pending_gradient(const char* context) const {
+    const char* operation = context ? context : "GradFn::pending_gradient";
+    if (!pending_gradient_) {
+        throw std::runtime_error(std::string(operation) + ": node has no pending gradient tensor");
+    }
+    return pending_gradient_->require(operation);
+}
+
 void GradFn::apply(const Tensor& grad_output,
                    cudaStream_t stream,
                    const Batching::BatchPayload* backward_payload,
                    const Batching::BatchDeviceBindings* backward_bindings) {
     // Worklist engine active: a downstream node is handing us our share of this
-    // node's output gradient. Route to the engine, which accumulates the
-    // contribution and fires run_backward() once all consumers have reported.
+    // node's output gradient. Route to the engine, which schedules the producer
+    // after the producer has received every downstream contribution.
     // This replaces the recursive descent below and fixes silent fan-in loss.
     if (autograd::AutogradEngine* engine = autograd::AutogradEngine::active()) {
-        engine->contribute(this, grad_output);
+        receive_gradient(grad_output, stream);
+        engine->contribute(this);
         return;
     }
 
     // Legacy first-wins DFS recursion (retained for A/B parity + regression
     // test). Each node propagates immediately and the `applied` guard drops
     // every consumer after the first.
+    logTensorContractApplyGradOutputStats(*this, grad_output, stream);
+    apply_impl(grad_output, stream, backward_payload, backward_bindings);
+}
+
+void GradFn::run_backward(
+    cudaStream_t stream,
+    const Batching::BatchPayload* backward_payload,
+    const Batching::BatchDeviceBindings* backward_bindings) {
+    const Tensor& grad_output = pending_gradient("GradFn::run_backward");
     logTensorContractApplyGradOutputStats(*this, grad_output, stream);
     apply_impl(grad_output, stream, backward_payload, backward_bindings);
 }
@@ -1389,8 +1430,9 @@ void Tensor::backward(const Tensor* grad_output,
             // Iterative worklist engine: discovers the graph, accumulates every
             // consumer's contribution per node (true fan-in), and fires each
             // node once in topological order. Fixes silent fan-in gradient loss.
+            grad_fn->receive_gradient(*grad(), stream);
             autograd::AutogradEngine engine(stream, backward_payload, backward_bindings);
-            engine.run(grad_fn.get(), grad_data(), shape);
+            engine.run(grad_fn.get());
         } else {
             // Legacy first-wins DFS recursion.
             Tensor grad_tensor;

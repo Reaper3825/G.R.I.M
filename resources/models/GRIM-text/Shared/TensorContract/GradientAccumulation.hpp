@@ -14,7 +14,16 @@
 #include <cstddef>
 
 namespace GRIM {
+
+struct Tensor;
+
 namespace autograd {
+
+void accumulate_grad(Tensor& dst,
+                     const Tensor& src,
+                     float scale,
+                     cudaStream_t stream,
+                     const char* caller);
 
 void accumulate_grad(float* dst,
                      const float* src,

@@ -5,7 +5,6 @@
 //======================================================//
 
 #include "AutogradEngine.hpp"
-#include "GradientAccumulation.hpp"
 
 #include <cuda_runtime.h>
 
@@ -13,12 +12,6 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
-
-// Defined at global scope in TensorContract_GPU.cu. Emits per-node gradient-flow
-// diagnostics when the global tape is at Debug/Trace level; no-op otherwise.
-void logTensorContractApplyGradOutputStats(const GRIM::GradFn& grad_fn,
-                                           const GRIM::Tensor& grad_output,
-                                           cudaStream_t stream);
 
 namespace GRIM {
 
@@ -74,10 +67,6 @@ AutogradEngine::~AutogradEngine() {
     }
 }
 
-AutogradEngine::NodeState& AutogradEngine::stateFor(GradFn* node) {
-    return nodes_[node];
-}
-
 void AutogradEngine::discover(GradFn* root) {
     nodes_[root];  // ensure root exists with in_degree 0
 
@@ -109,42 +98,19 @@ void AutogradEngine::discover(GradFn* root) {
     }
 }
 
-void AutogradEngine::contribute(GradFn* producer, const Tensor& grad_view) {
+void AutogradEngine::contribute(GradFn* producer) {
     auto it = nodes_.find(producer);
     if (it == nodes_.end()) {
         throw std::runtime_error(std::string("[AutogradEngine] contribution to undiscovered node '") +
                                  nodeName(producer) +
                                  "' - collect_input_edges() under-reported an edge (contribute-count > edge-count)");
     }
-    if (grad_view.data == nullptr) {
-        throw std::runtime_error(std::string("[AutogradEngine] NULL gradient contributed to node '") +
-                                 nodeName(producer) + "'");
-    }
-
     NodeState& st = it->second;
-    const std::size_t count = grad_view.numel();
-    if (st.accum == nullptr) {
-        // First contribution: borrow the consuming node's gradient buffer
-        // directly. That buffer is owned (and deferred-freed) by the producing
-        // GradFn, so the scheduler allocates nothing. Single-consumer nodes —
-        // the common case — therefore never trigger an accumulation kernel.
-        st.accum = grad_view.data;
-        st.count = count;
-        st.shape = grad_view.shape;
-    } else {
-        if (st.count != count) {
-            throw std::runtime_error("[AutogradEngine] gradient contribution size mismatch: have " +
-                                     std::to_string(st.count) + " got " + std::to_string(count));
-        }
-        // True fan-in: sum this consumer's share into the borrowed buffer in
-        // place. Serialized on stream_, so ordering with the first write holds.
-        accumulate_grad(st.accum, grad_view.data, count, 1.0f, stream_, "AutogradEngine::contribute");
-    }
-
     if (st.remaining <= 0) {
         throw std::runtime_error(std::string("[AutogradEngine] node '") + nodeName(producer) +
                                  "' received more contributions than discovered edges");
     }
+
     st.remaining -= 1;
     if (st.remaining == 0 && !st.queued) {
         st.queued = true;
@@ -152,32 +118,21 @@ void AutogradEngine::contribute(GradFn* producer, const Tensor& grad_view) {
     }
 }
 
-void AutogradEngine::run(GradFn* root,
-                         const float* seed_grad,
-                         const TensorContract::TensorShape& seed_shape) {
+void AutogradEngine::run(GradFn* root) {
     if (root == nullptr) {
         throw std::runtime_error("[AutogradEngine] run() called with NULL root grad_fn");
     }
-    if (seed_grad == nullptr) {
-        throw std::runtime_error("[AutogradEngine] run() called with NULL seed gradient");
-    }
-
     t_active_engine = this;
     try {
         discover(root);
 
-        // Seed the root with the loss gradient by borrowing the caller's loss
-        // grad buffer directly (the loss tensor's registry/lazy grad_). The root
-        // has no consumers (in_degree 0), so it is never written to and is
-        // immediately ready — the scheduler allocates nothing here either.
+        // The caller delivered the loss gradient before entering the scheduler.
+        // The root has no consumers (in_degree 0), so it is immediately ready.
         NodeState& root_state = nodes_[root];
         if (root_state.in_degree != 0) {
             throw std::runtime_error(std::string("[AutogradEngine] root node '") + nodeName(root) +
                                      "' has incoming edges - it must be the graph sink (loss)");
         }
-        root_state.accum = const_cast<float*>(seed_grad);
-        root_state.count = seed_shape.total_elements();
-        root_state.shape = seed_shape;
         root_state.queued = true;
         ready_.push_back(root);
 
@@ -191,17 +146,10 @@ void AutogradEngine::run(GradFn* root,
             }
             st.executed = true;
 
-            Tensor grad_view;
-            grad_view.data = st.accum;
-            grad_view.shape = st.shape;
-            grad_view.owns_data = false;
-            grad_view.stream = stream_;
-
-            logTensorContractApplyGradOutputStats(*node, grad_view, stream_);
             // run_backward() may call contribute() (via GradFn::apply re-route)
             // for each upstream edge; the map is fully populated by discover()
             // so no structural rehash occurs and `st` stays valid.
-            node->run_backward(grad_view, stream_, payload_, bindings_);
+            node->run_backward(stream_, payload_, bindings_);
             if (syncEachNodeForDiagnostics()) {
                 synchronizeAfterNodeOrThrow(stream_, node);
             }
@@ -223,9 +171,8 @@ void AutogradEngine::run(GradFn* root,
     }
     t_active_engine = nullptr;
 
-    // No engine-owned buffers to release: every accumulator is a borrowed
-    // pointer into a consuming GradFn's buffer (or the caller's seed buffer),
-    // each freed by its own owner's deferred-cleanup path.
+    // Gradient tensors remain owned by their GradFns. The engine has only
+    // scheduling state to destroy.
 }
 
 }  // namespace autograd

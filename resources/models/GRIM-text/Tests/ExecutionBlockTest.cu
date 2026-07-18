@@ -271,23 +271,29 @@ bool testExecutionBlockConstructionHPDefaults(std::string& message) {
     EB_ASSERT_EQ(cfg.num_slots, 0, "num_slots default 0");
     EB_ASSERT_EQ(cfg.num_scratch_slots, 0, "num_scratch_slots default 0");
     EB_ASSERT_EQ(cfg.num_exec_steps, 0, "num_exec_steps default 0");
-    EB_ASSERT_EQ(cfg.value_decode_input_dim, 24, "value_decode_input_dim default 24");
-    EB_ASSERT_EQ(cfg.value_decode_hidden_dim, 16, "value_decode_hidden_dim default 16");
+    EB_ASSERT_EQ(cfg.value_decode_input_dim, 0,
+                 "value_decode_input_dim is config-owned and defaults to 0");
+    EB_ASSERT_EQ(cfg.value_decode_hidden_dim, 0,
+                 "value_decode_hidden_dim is config-owned and defaults to 0");
     EB_ASSERT_EQ(cfg.d_key, 0, "d_key default 0");
     EB_ASSERT_EQ(cfg.d_type, 0, "d_type default 0");
     EB_ASSERT_EQ(cfg.cross_attn_head_dim, 0, "cross_attn_head_dim default 0");
     EB_ASSERT_EQ(cfg.cross_attn_topk, 0, "cross_attn_topk default 0");
     EB_ASSERT_NEAR(cfg.usage_decay, 0.0f, 1e-6f, "usage_decay default");
     // [DELETED] empty_slot_bonus, diversity_kappa checks — fields removed per Fix #4.
-    EB_ASSERT_NEAR(cfg.inject_gate_temp, 0.5f, 1e-6f, "inject_gate_temp default");
+    EB_ASSERT_NEAR(cfg.inject_gate_temp, 0.0f, 1e-6f,
+                   "inject_gate_temp is config-owned and defaults to 0");
     EB_ASSERT_EQ(cfg.result_slot_mode, 0, "result_slot_mode default 0");
-    EB_ASSERT_EQ(cfg.result_slot_index, -1, "result_slot_index default -1");
-    EB_ASSERT_TRUE(cfg.debug_mode, "debug_mode default true");
-    EB_ASSERT_NEAR(cfg.entropy_collapse_threshold, 0.01f, 1e-6f,
-                   "entropy_collapse_threshold default");
-    EB_ASSERT_NEAR(cfg.write_collapse_threshold, 0.98f, 1e-6f,
-                   "write_collapse_threshold default");
-    EB_ASSERT_NEAR(cfg.magnitude_limit, 1e6f, 1e-1f, "magnitude_limit default");
+    EB_ASSERT_EQ(cfg.result_slot_index, 0,
+                 "result_slot_index is config-owned and defaults to 0");
+    EB_ASSERT_TRUE(!cfg.debug_mode,
+                   "debug_mode is config-owned and defaults to false");
+    EB_ASSERT_NEAR(cfg.entropy_collapse_threshold, 0.0f, 1e-6f,
+                   "entropy_collapse_threshold is config-owned and defaults to 0");
+    EB_ASSERT_NEAR(cfg.write_collapse_threshold, 0.0f, 1e-6f,
+                   "write_collapse_threshold is config-owned and defaults to 0");
+    EB_ASSERT_NEAR(cfg.magnitude_limit, 0.0f, 1e-6f,
+                   "magnitude_limit is config-owned and defaults to 0");
     EB_ASSERT_NEAR(cfg.transition_hard_threshold, 0.0f, 1e-6f,
                    "transition_hard_threshold default");
     EB_ASSERT_TRUE(!cfg.teacher_force_transitions,

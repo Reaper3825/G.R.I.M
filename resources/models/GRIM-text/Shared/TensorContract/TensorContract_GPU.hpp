@@ -691,6 +691,12 @@ struct GradFn {
     std::vector<GradFn*> engine_inputs_;
 
     /**
+     * Gradient contributions waiting for this node to execute. The GradFn owns
+     * this tensor; AutogradEngine only decides when the node is ready.
+     */
+    std::shared_ptr<Tensor> pending_gradient_;
+
+    /**
      * Record an upstream producer edge. Null (leaf) producers are ignored;
      * duplicates collapse to one edge so contribute-count == edge-count.
      */
@@ -715,6 +721,18 @@ struct GradFn {
     virtual void collect_input_edges(std::vector<GradFn*>& out) const {
         out = engine_inputs_;
     }
+
+    /**
+     * Accept one downstream contribution into this node-owned accumulator.
+     * Raw storage access remains inside TensorContract accumulation kernels.
+     */
+    void receive_gradient(const Tensor& contribution, cudaStream_t stream);
+
+    /**
+     * Return the complete node-owned gradient after the scheduler has observed
+     * every expected contribution.
+     */
+    const Tensor& pending_gradient(const char* context) const;
 
     //--------------------------------------------------//
     // Virtual Interface
@@ -743,20 +761,16 @@ struct GradFn {
      * @brief Engine execution entry point.
      *
      * Called by AutogradEngine exactly once per node, after all consumer
-     * contributions for this node's output have been summed into the engine's
-     * accumulator (grad_output is a view over that accumulator). Computes the
-     * local input gradients — accumulating leaf gradients into registry-owned
-     * grad_ buffers — and propagates to upstream producers via apply(), which
-     * the active engine intercepts as contribute() calls. Reuses the existing
-     * apply_impl() body so the per-operator backward math is the single source
-     * of truth for both the engine and the legacy recursive path.
+     * contributions have reached the GradFn-owned pending-gradient Tensor.
+     * Computes the local input gradients — accumulating leaf gradients into
+     * registry-owned grad_ buffers — and propagates to upstream producers via
+     * apply(), which the active engine intercepts as scheduling notifications.
+     * Reuses apply_impl() so operator backward math remains the single source
+     * of truth for both engine and legacy recursive execution.
      */
-    void run_backward(const Tensor& grad_output,
-                      cudaStream_t stream,
+    void run_backward(cudaStream_t stream,
                       const Batching::BatchPayload* backward_payload = nullptr,
-                      const Batching::BatchDeviceBindings* backward_bindings = nullptr) {
-        apply_impl(grad_output, stream, backward_payload, backward_bindings);
-    }
+                      const Batching::BatchDeviceBindings* backward_bindings = nullptr);
 
     /**
      * @brief Release saved tensors (called after backward to free memory)

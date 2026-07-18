@@ -4,6 +4,7 @@
 //======================================================//
 
 #include "GradientAccumulation.hpp"
+#include "TensorContract_GPU.hpp"
 
 #include <cmath>
 #include <stdexcept>
@@ -62,6 +63,29 @@ __global__ void kernel_accumulate_grad(float* dst, const float* src, std::size_t
 
 namespace GRIM {
 namespace autograd {
+
+void accumulate_grad(Tensor& dst,
+                     const Tensor& src,
+                     float scale,
+                     cudaStream_t stream,
+                     const char* caller) {
+    const char* context = caller ? caller : "autograd::accumulate_grad";
+    dst.shape.require(context);
+    src.shape.require(context);
+
+    bool matching_shape = dst.shape.layout == src.shape.layout;
+    if (matching_shape && dst.shape.is_2d_layout()) {
+        matching_shape = dst.shape.as_2d() == src.shape.as_2d();
+    }
+    if (matching_shape && dst.shape.is_4d()) {
+        matching_shape = dst.shape.as_4d() == src.shape.as_4d();
+    }
+    if (!matching_shape) {
+        throw std::runtime_error(std::string(context) + ": tensor shape mismatch");
+    }
+
+    accumulate_grad(dst.data, src.data, dst.numel(), scale, stream, context);
+}
 
 void accumulate_grad(float* dst,
                      const float* src,

@@ -4,15 +4,14 @@
 //  Iterative worklist (topological-sort-with-fan-in) backward engine.
 //
 //  Replaces the legacy DFS-recursive, first-wins ("applied" guard) traversal.
-//  The engine is a pure scheduler: it owns NO gradient memory and allocates
-//  nothing. It orchestrates over the two existing backbones:
+//  The engine is a pure scheduler: it owns no gradient tensors, accesses no
+//  gradient storage, and allocates nothing. It orchestrates over the two
+//  existing backbones:
 //    - Leaf parameter gradients accumulate into StartupParameterRegistry-owned
 //      grad_ buffers, terminally, inside each node's backward math.
-//    - Non-leaf (interior / staged-activation) output gradients already live in
-//      the consuming GradFn's own input-grad buffer (deferred-freed by that
-//      node). The engine simply borrows the first contribution's buffer and, on
-//      true fan-in, sums later contributions into it in place — no copies, no
-//      per-node engine accumulator.
+//    - Every GradFn receives and owns its pending output-gradient Tensor. The
+//      engine only counts arrivals and schedules the GradFn after true fan-in
+//      is complete.
 //
 //  Each node fires exactly once, after every consumer has contributed its
 //  share of that node's output gradient (true fan-in). This fixes silent
@@ -51,22 +50,18 @@ public:
     AutogradEngine& operator=(const AutogradEngine&) = delete;
 
     /**
-     * Drive the full backward pass from the root grad_fn, seeded with the loss
-     * gradient (device pointer + shape of the root/loss tensor). Discovers the
-     * graph, seeds the root accumulator, then processes the ready-queue until
-     * empty. Throws on any topology mismatch.
+     * Drive the full backward pass from a root GradFn that has already received
+     * its loss-gradient Tensor. Discovers the graph and processes the
+     * ready-queue until empty. Throws on any topology mismatch.
      */
-    void run(GradFn* root,
-             const float* seed_grad,
-             const TensorContract::TensorShape& seed_shape);
+    void run(GradFn* root);
 
     /**
-     * Engine-side of GradFn::apply(): a downstream node hands `producer` its
-     * share of the producer's output gradient. Accumulates into the producer's
-     * engine accumulator and decrements its pending counter; enqueues the
-     * producer once all expected contributions have arrived.
+     * Scheduler notification from GradFn::apply(): the producer has already
+     * accepted one downstream gradient contribution. Decrements its pending
+     * counter and enqueues it once all expected contributions have arrived.
      */
-    void contribute(GradFn* producer, const Tensor& grad_view);
+    void contribute(GradFn* producer);
 
     /**
      * The engine currently driving backward on this thread, or nullptr when a
@@ -79,14 +74,10 @@ private:
     struct NodeState {
         int in_degree = 0;     ///< expected contributions (from discovery)
         int remaining = 0;     ///< countdown of pending contributions
-        float* accum = nullptr;///< BORROWED grad buffer (owned by the producing GradFn / registry), never freed here
-        std::size_t count = 0; ///< element count of accum
-        TensorContract::TensorShape shape;  ///< shape of this node's output gradient
         bool queued = false;   ///< already pushed to the ready-queue
         bool executed = false; ///< run_backward has fired
     };
 
-    NodeState& stateFor(GradFn* node);
     void discover(GradFn* root);
 
     cudaStream_t stream_;
