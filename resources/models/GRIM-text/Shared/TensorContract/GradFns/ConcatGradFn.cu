@@ -4,8 +4,6 @@
 //======================================================//
 
 #include "ConcatGradFn.hpp"
-#include "../../CudaAllocUtils.hpp"
-
 #include <cuda_runtime.h>
 #include <stdexcept>
 #include <string>
@@ -59,7 +57,6 @@ __global__ void kernel_concat_backward_b(
 }  // anonymous namespace
 
 namespace GRIM {
-using CudaAlloc::cudaMallocOrThrow;
 namespace autograd {
 
 ConcatGradFn::ConcatGradFn() {
@@ -67,8 +64,11 @@ ConcatGradFn::ConcatGradFn() {
 }
 
 void ConcatGradFn::capture_inputs(Tensor& a, Tensor& b, cudaStream_t stream) {
+    (void)stream;
     a_requires_grad = a.requires_grad;
     b_requires_grad = b.requires_grad;
+    a_is_leaf = a.is_leaf;
+    b_is_leaf = b.is_leaf;
     a_shape = a.shape;
     b_shape = b.shape;
     a_grad_fn = a.grad_fn;
@@ -77,29 +77,15 @@ void ConcatGradFn::capture_inputs(Tensor& a, Tensor& b, cudaStream_t stream) {
     register_input(b.grad_fn);
 
     if (a_requires_grad) {
-        if (a.is_leaf) {
+        if (a_is_leaf) {
             a.ensure_grad();
-            grad_a = a.grad_data();
-        } else {
-            const size_t n = a.numel();
-            float* buffer = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), n * sizeof(float), "ConcatGradFn_grad_a");
-            cudaMemsetAsync(buffer, 0, n * sizeof(float), stream);
-            owned_grad_a = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
-            grad_a = owned_grad_a.get();
+            grad_a = a.grad_;
         }
     }
     if (b_requires_grad) {
-        if (b.is_leaf) {
+        if (b_is_leaf) {
             b.ensure_grad();
-            grad_b = b.grad_data();
-        } else {
-            const size_t n = b.numel();
-            float* buffer = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), n * sizeof(float), "ConcatGradFn_grad_b");
-            cudaMemsetAsync(buffer, 0, n * sizeof(float), stream);
-            owned_grad_b = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
-            grad_b = owned_grad_b.get();
+            grad_b = b.grad_;
         }
     }
 }
@@ -113,33 +99,77 @@ void ConcatGradFn::apply_impl(const Tensor& grad_output,
     applied = true;
 
     const int D_total = D1 + D2;
+    const auto expected_output = TensorContract::TensorShape::make_BSM(rows, D_total);
+    if (grad_output.shape.layout != expected_output.layout ||
+        grad_output.shape.as_2d() != expected_output.as_2d()) {
+        throw std::runtime_error(
+            "ConcatGradFn::apply: grad_output shape does not match captured concat output");
+    }
 
-    if (a_requires_grad && grad_a) {
-        kernel_concat_backward_a<<<rows, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-            grad_a, grad_output.data, rows, D1, D_total);
-        if (a_grad_fn) {
-            Tensor view;
-            view.data = grad_a; view.shape = a_shape;
-            view.owns_data = false; view.stream = stream;
-            a_grad_fn->apply(view, stream, backward_payload, backward_bindings);
+    // Non-leaf input gradients are real Tensor-owned contributions. Allocate
+    // them lazily at backward time instead of keeping anonymous float buffers
+    // alive from forward capture through the whole graph lifetime.
+    if (a_requires_grad && !grad_a) {
+        grad_a = std::make_shared<Tensor>(Tensor::zeros(
+            a_shape, false, stream, "ConcatGradFn_grad_a"));
+    }
+    if (b_requires_grad && !grad_b) {
+        if (a_grad_fn && b_grad_fn == a_grad_fn) {
+            if (a_shape.layout != b_shape.layout || a_shape.as_2d() != b_shape.as_2d()) {
+                throw std::runtime_error(
+                    "ConcatGradFn::apply: inputs sharing one producer must have identical shapes");
+            }
+            grad_b = grad_a;
+        } else {
+            grad_b = std::make_shared<Tensor>(Tensor::zeros(
+                b_shape, false, stream, "ConcatGradFn_grad_b"));
         }
     }
-    if (b_requires_grad && grad_b) {
-        kernel_concat_backward_b<<<rows, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-            grad_b, grad_output.data, rows, D1, D2, D_total);
-        if (b_grad_fn && b_grad_fn != a_grad_fn) {
-            Tensor view;
-            view.data = grad_b; view.shape = b_shape;
-            view.owns_data = false; view.stream = stream;
-            b_grad_fn->apply(view, stream, backward_payload, backward_bindings);
+
+    if (a_requires_grad) {
+        if (!grad_a) {
+            throw std::runtime_error("ConcatGradFn::apply: grad_a Tensor is missing");
         }
+        grad_a->require("ConcatGradFn::apply grad_a");
+        kernel_concat_backward_a<<<rows, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            grad_a->data, grad_output.data, rows, D1, D_total);
+        const cudaError_t launch_status = cudaGetLastError();
+        if (launch_status != cudaSuccess) {
+            throw std::runtime_error(
+                std::string("ConcatGradFn::apply: grad_a kernel launch failed: ") +
+                cudaGetErrorString(launch_status));
+        }
+    }
+    if (b_requires_grad) {
+        if (!grad_b) {
+            throw std::runtime_error("ConcatGradFn::apply: grad_b Tensor is missing");
+        }
+        grad_b->require("ConcatGradFn::apply grad_b");
+        kernel_concat_backward_b<<<rows, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+            grad_b->data, grad_output.data, rows, D1, D2, D_total);
+        const cudaError_t launch_status = cudaGetLastError();
+        if (launch_status != cudaSuccess) {
+            throw std::runtime_error(
+                std::string("ConcatGradFn::apply: grad_b kernel launch failed: ") +
+                cudaGetErrorString(launch_status));
+        }
+    }
+
+    // Both split kernels must be enqueued before propagation. When both inputs
+    // share one producer, grad_a and grad_b alias the same Tensor and the two
+    // slices are accumulated before sending exactly one scheduler contribution.
+    if (a_grad_fn) {
+        a_grad_fn->apply(*grad_a, stream, backward_payload, backward_bindings);
+    }
+    if (b_grad_fn && b_grad_fn != a_grad_fn) {
+        b_grad_fn->apply(*grad_b, stream, backward_payload, backward_bindings);
     }
 }
 
 void ConcatGradFn::release_saved() {
     GradFn::release_saved();
-    grad_a = nullptr;
-    grad_b = nullptr;
+    grad_a.reset();
+    grad_b.reset();
     a_grad_fn.reset();
     b_grad_fn.reset();
 }

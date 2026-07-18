@@ -29,7 +29,6 @@
 #include <algorithm>
 #include <cstdlib>
 #include <limits>
-#include <mutex>
 #include <vector>
 #include <atomic>
 #include <chrono>
@@ -59,19 +58,8 @@ std::atomic<int> TensorLifecycleCounters::move_counter{0};
 
 #define AG_TRACE(...) do { if (g_autograd_verbose) { fprintf(stderr, __VA_ARGS__); fflush(stderr); } } while(0)
 
-// Global stream for async cleanup - initialized on first use
-static cudaStream_t g_cleanup_stream = nullptr;
-static std::mutex g_cleanup_stream_mutex;
-
 // cuBLAS for autograd is the handle from TrainingState/InferenceState; layers call
 // set_autograd_cublas_handle() and autograd matmul uses get_autograd_cublas_handle() (thread-local).
-
-void initCleanupStream() {
-    std::lock_guard<std::mutex> lock(g_cleanup_stream_mutex);
-    if (g_cleanup_stream == nullptr) {
-        cudaStreamCreate(&g_cleanup_stream);
-    }
-}
 
 // cudaMallocOrThrow and helpers now live in shared header
 using GRIM::CudaAlloc::cudaMallocOrThrow;
@@ -384,33 +372,32 @@ void trackCublasCall(const char* op_name, cublasHandle_t handle, cudaStream_t st
     }
 }
 
-// Call this from shared_ptr deleters - uses cudaFreeAsync for non-blocking cleanup
+// Call this from legacy raw-buffer shared_ptr deleters. These allocations are
+// created with cudaMalloc, so cudaFree is the only safe generic release when
+// the deleter does not know the stream that last used the pointer. The previous
+// cudaFreeAsync(ptr, cleanup_stream) implementation had no dependency on the
+// producer stream and could recycle storage while a kernel still referenced it.
 void queueForDeferredCleanup(void* ptr) {
-    if (ptr) {
-        initCleanupStream();
-        cudaError_t err = cudaFreeAsync(ptr, g_cleanup_stream);
-        if (err != cudaSuccess) {
-            cudaFree(ptr);  // Fallback - may block but at least frees
-        }
+    if (!ptr) {
+        return;
+    }
+    const cudaError_t status = cudaFree(ptr);
+    if (status != cudaSuccess) {
+        std::fprintf(stderr,
+                     "[queueForDeferredCleanup] cudaFree(%p) failed: %s\n",
+                     ptr,
+                     cudaGetErrorString(status));
     }
 }
 
-// Synchronize the cleanup stream - call this at safe points to ensure all frees complete
+// Compatibility no-op: queueForDeferredCleanup now completes each safe release.
 void flushDeferredCleanup() {
-    if (g_cleanup_stream) {
-        cudaStreamSynchronize(g_cleanup_stream);
-    }
 }
 
-// Destroy module-static GPU resources (cleanup stream only).
+// Destroy module-static GPU resources.
 // cuBLAS handle is owned by TrainingState/InferenceState and destroyed there.
 // Call during process shutdown after all GPU work is complete.
 void shutdownAutogradResources() {
-    if (g_cleanup_stream) {
-        cudaStreamSynchronize(g_cleanup_stream);
-        cudaStreamDestroy(g_cleanup_stream);
-        g_cleanup_stream = nullptr;
-    }
 }
 
 namespace TensorContract {

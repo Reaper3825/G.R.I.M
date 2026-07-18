@@ -108,30 +108,26 @@ struct TensorLifecycleCounters {
 #endif
 
 //======================================================//
-//  ISSUE #53 FIX: Deferred GPU Memory Cleanup (GLOBAL SCOPE)
-//  
-//  Call flushDeferredCleanup() after cudaStreamSynchronize() to 
-//  free GPU memory that was queued by shared_ptr deleters.
-//  This prevents cudaFree from blocking when called during 
-//  destructor chains while the GPU is still busy.
-//  
-//  NOTE: In global scope so lambdas in shared_ptr deleters can access them.
+//  Legacy raw GPU buffer cleanup (GLOBAL SCOPE)
+//
+//  Raw shared_ptr-owned buffers do not retain the stream that last used them.
+//  Their deleter therefore uses ordering-safe cudaFree rather than enqueueing
+//  cudaFreeAsync on an unrelated cleanup stream. New GradFns should own Tensor
+//  objects and avoid this compatibility path.
 //======================================================//
 
 /**
- * Queue a GPU pointer for deferred cleanup.
- * Called from shared_ptr deleters instead of cudaFree() directly.
+ * Safely free a legacy raw GPU pointer from a shared_ptr deleter.
  */
 void queueForDeferredCleanup(void* ptr);
 
 /**
- * Flush the deferred GPU memory cleanup queue.
- * Call this AFTER cudaStreamSynchronize() when it's safe to free GPU memory.
+ * Compatibility no-op retained for existing callers.
  */
 void flushDeferredCleanup();
 
 /**
- * Destroy all module-static autograd GPU resources (cleanup stream + cuBLAS handle).
+ * Destroy all module-static autograd GPU resources.
  * Call during process shutdown after all GPU work is complete.
  */
 void shutdownAutogradResources();
@@ -779,6 +775,8 @@ struct GradFn {
         if (released_) return;  // ISSUE #50: Prevent double release
         released_ = true;
         saved_tensors.clear();
+        pending_gradient_.reset();
+        engine_inputs_.clear();
     }
 
 protected:

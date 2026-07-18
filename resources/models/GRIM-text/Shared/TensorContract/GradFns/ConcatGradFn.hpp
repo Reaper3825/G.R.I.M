@@ -15,10 +15,10 @@ namespace autograd {
 struct ConcatGradFn : public GradFn {
     bool a_requires_grad = false;
     bool b_requires_grad = false;
-    float* grad_a = nullptr;
-    float* grad_b = nullptr;
-    std::shared_ptr<float> owned_grad_a;
-    std::shared_ptr<float> owned_grad_b;
+    bool a_is_leaf = false;
+    bool b_is_leaf = false;
+    std::shared_ptr<Tensor> grad_a;
+    std::shared_ptr<Tensor> grad_b;
     TensorContract::TensorShape a_shape;
     TensorContract::TensorShape b_shape;
     std::shared_ptr<GradFn> a_grad_fn;
