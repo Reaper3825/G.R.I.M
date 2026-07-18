@@ -819,7 +819,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                             step,
                             execution_block_temp_start,
                             request.stream,
-                            &step_output,
+                            step_output,
                             execution_runtime.trace_state_by_row[b],
                             execution_runtime.execution_trace_by_row[b]);
                         execution_runtime.execution_trace_by_row[b].push_back(step_output.record);
@@ -1042,7 +1042,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                             layer_output, M_b, *execution_block_parameters,
                             payload, *request.bindings, b,
                             step, T, request.stream,
-                            &step_diag,
+                            step_diag,
                             runtime.execution_runtime->trace_state_by_row[b],
                             runtime.execution_runtime->execution_trace_by_row[b]);
                         runtime.execution_runtime->execution_trace_by_row[b].push_back(step_diag.record);

@@ -1005,37 +1005,35 @@ struct GatedTraceUpdateGradFn : public GradFn {
 };
 
 static void copyStepDiagnostics(const StepWorkingSet& work,
-                                ExecutionBlockStepOutput* diag_out,
+                                ExecutionBlockStepOutput& forward_output,
                                 int V_val,
                                 int nop,
                                 int V,
                                 int dm,
                                 cudaStream_t stream) {
-    if (!diag_out) return;
-
-    diag_out->p_arg1 = Tensor::zeros({1, V_val}, stream);
-    cudaMemcpyAsync(diag_out->p_arg1.data, work.p_arg1.data, V_val * sizeof(float), cudaMemcpyDeviceToDevice, stream);
-    diag_out->p_arg2 = Tensor::zeros({1, V_val}, stream);
-    cudaMemcpyAsync(diag_out->p_arg2.data, work.p_arg2.data, V_val * sizeof(float), cudaMemcpyDeviceToDevice, stream);
-    diag_out->p_op = Tensor::zeros({1, nop}, stream);
-    cudaMemcpyAsync(diag_out->p_op.data, work.p_op.data, nop * sizeof(float), cudaMemcpyDeviceToDevice, stream);
-    diag_out->p_write = Tensor::zeros({1, V}, stream);
-    cudaMemcpyAsync(diag_out->p_write.data, work.p_write.data, V * sizeof(float), cudaMemcpyDeviceToDevice, stream);
-    diag_out->v_out = Tensor::zeros({1, 1}, stream);
-    cudaMemcpyAsync(diag_out->v_out.data, work.v_out.data, sizeof(float), cudaMemcpyDeviceToDevice, stream);
-    diag_out->result_emb = Tensor::zeros({1, dm}, stream);
-    cudaMemcpyAsync(diag_out->result_emb.data, work.result_emb.data, dm * sizeof(float), cudaMemcpyDeviceToDevice, stream);
+    forward_output.p_arg1 = Tensor::zeros({1, V_val}, stream);
+    cudaMemcpyAsync(forward_output.p_arg1.data, work.p_arg1.data, V_val * sizeof(float), cudaMemcpyDeviceToDevice, stream);
+    forward_output.p_arg2 = Tensor::zeros({1, V_val}, stream);
+    cudaMemcpyAsync(forward_output.p_arg2.data, work.p_arg2.data, V_val * sizeof(float), cudaMemcpyDeviceToDevice, stream);
+    forward_output.p_op = Tensor::zeros({1, nop}, stream);
+    cudaMemcpyAsync(forward_output.p_op.data, work.p_op.data, nop * sizeof(float), cudaMemcpyDeviceToDevice, stream);
+    forward_output.p_write = Tensor::zeros({1, V}, stream);
+    cudaMemcpyAsync(forward_output.p_write.data, work.p_write.data, V * sizeof(float), cudaMemcpyDeviceToDevice, stream);
+    forward_output.v_out = Tensor::zeros({1, 1}, stream);
+    cudaMemcpyAsync(forward_output.v_out.data, work.v_out.data, sizeof(float), cudaMemcpyDeviceToDevice, stream);
+    forward_output.result_emb = Tensor::zeros({1, dm}, stream);
+    cudaMemcpyAsync(forward_output.result_emb.data, work.result_emb.data, dm * sizeof(float), cudaMemcpyDeviceToDevice, stream);
 }
 
 static void collectStepMetrics(const HyperParameters::ExecutionBlockConstructionHP& hp,
                                ExecutionBlockDiagnosticsBuffers& diag,
                                const StepWorkingSet& work,
-                               ExecutionBlockStepOutput* diag_out,
+                               ExecutionBlockStepOutput& forward_output,
                                int V_val,
                                int nop,
                                int V,
                                cudaStream_t stream) {
-    if (!diag_out || !hp.debug_mode) return;
+    if (!hp.debug_mode) return;
 
     float d_metrics[7];
     float* d_buf = nullptr;
@@ -1056,14 +1054,14 @@ static void collectStepMetrics(const HyperParameters::ExecutionBlockConstruction
     CUDA_CHECK(cudaMemcpyAsync(op_dist, work.p_op.data, op_copy * sizeof(float), cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
-    diag_out->metrics.arg1_entropy = d_metrics[0];
-    diag_out->metrics.arg2_entropy = d_metrics[1];
-    diag_out->metrics.op_entropy = d_metrics[2];
-    diag_out->metrics.write_entropy = d_metrics[3];
-    diag_out->metrics.max_p_write = d_metrics[4];
-    diag_out->metrics.div_clamp_count = div_count;
+    forward_output.metrics.arg1_entropy = d_metrics[0];
+    forward_output.metrics.arg2_entropy = d_metrics[1];
+    forward_output.metrics.op_entropy = d_metrics[2];
+    forward_output.metrics.write_entropy = d_metrics[3];
+    forward_output.metrics.max_p_write = d_metrics[4];
+    forward_output.metrics.div_clamp_count = div_count;
     for (int k = 0; k < 4; ++k)
-        diag_out->metrics.op_distribution[k] = (k < op_copy) ? op_dist[k] : 0.0f;
+        forward_output.metrics.op_distribution[k] = (k < op_copy) ? op_dist[k] : 0.0f;
 
     const auto normalized_entropy = [](float entropy, int choices) {
         const float max_entropy = logf(static_cast<float>(choices));
@@ -1097,10 +1095,10 @@ static void collectStepMetrics(const HyperParameters::ExecutionBlockConstruction
             "max_p_write=%.4f div_clamps=%d op_dist=[%.3f,%.3f,%.3f,%.3f]",
             d_metrics[0], d_metrics[1], d_metrics[2], d_metrics[3],
             d_metrics[4], div_count,
-            diag_out->metrics.op_distribution[0],
-            diag_out->metrics.op_distribution[1],
-            diag_out->metrics.op_distribution[2],
-            diag_out->metrics.op_distribution[3]);
+            forward_output.metrics.op_distribution[0],
+            forward_output.metrics.op_distribution[1],
+            forward_output.metrics.op_distribution[2],
+            forward_output.metrics.op_distribution[3]);
         GRIM::Logging::EmitModuleInfo(
             GRIM::Logging::ModuleId::ExecutionBlock, msg);
     }
@@ -1170,10 +1168,12 @@ void executeStepCoordinatorImpl(
     int step,
     float temperature,
     cudaStream_t stream,
-    ExecutionBlockStepOutput* diag_out,
+    ExecutionBlockStepOutput& forward_output,
     Tensor& trace_state,
     const std::vector<ExecutionRecord>& prior_records
 ) {
+    // The forward output is the non-null Category 1 owner for every live
+    // execution-step tensor that must survive until backward.
     auto& params = parameters;
     const int dm = hp.d_model;
     const int V = hp.num_slots;
@@ -1218,7 +1218,7 @@ void executeStepCoordinatorImpl(
         + static_cast<size_t>(batch_row) * payload.max_seq_len;
 
     StepWorkingSet work;
-    prepareMemoryStepOrThrow(hp, diag, memory, d_atom_mask_row, d_slot_map_row, row_tokens, diag_out, stream);
+    prepareMemoryStepOrThrow(hp, diag, memory, d_atom_mask_row, d_slot_map_row, row_tokens, forward_output, stream);
     buildValueSlotCandidates(hp, memory, stream, work);
     kernelCheckFinite<<<(V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         work.slot_values.data, V_val, diag.numericErrorFlag(), kStageV1, hp.magnitude_limit);
@@ -1339,10 +1339,8 @@ void executeStepCoordinatorImpl(
         arg1_logits.data, arg1_logits.data, work.cand_mask.data, V_val);
     CUDA_CHECK_KERNEL();
     work.p_arg1 = autograd::softmax(arg1_logits, temperature, stream);
-    if (diag_out) {
-        diag_out->arg1_logits_tensor = std::move(arg1_logits);
-        diag_out->selection_temperature = temperature;
-    }
+    forward_output.arg1_logits_tensor = std::move(arg1_logits);
+    forward_output.selection_temperature = temperature;
     kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_arg1.data, V_val, diag.numericErrorFlag(), kStagePArg1);
 
     auto query2 = autograd::matmul(decision_input, params.w_arg2_select, stream);
@@ -1351,9 +1349,7 @@ void executeStepCoordinatorImpl(
         arg2_logits.data, arg2_logits.data, work.cand_mask.data, V_val);
     CUDA_CHECK_KERNEL();
     work.p_arg2 = autograd::softmax(arg2_logits, temperature, stream);
-    if (diag_out) {
-        diag_out->arg2_logits_tensor = std::move(arg2_logits);
-    }
+    forward_output.arg2_logits_tensor = std::move(arg2_logits);
     kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_arg2.data, V_val, diag.numericErrorFlag(), kStagePArg2);
 
     materializeSelectedOperands(hp, diag, memory, stream, work);
@@ -1375,9 +1371,7 @@ void executeStepCoordinatorImpl(
     // arg selection cannot influence op selection through the gradient path.
     auto op_logits = autograd::matmul(decision_input, params.W_op_select, stream);
     work.p_op = autograd::softmax(op_logits, temperature, stream);
-    if (diag_out) {
-        diag_out->op_logits_tensor = std::move(op_logits);
-    }
+    forward_output.op_logits_tensor = std::move(op_logits);
     kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_op.data, nop, diag.numericErrorFlag(), kStagePOp);
 
     work.op_results = Tensor::zeros({1, nop}, stream, "exec_op_results");
@@ -1387,9 +1381,7 @@ void executeStepCoordinatorImpl(
     CUDA_CHECK(cudaMemsetAsync(d_div_flag, 0, sizeof(int), stream));
     kernelFourOps<<<1, kWarpSize, 0, stream>>>(work.op_results.data, work.v1.data, work.v2.data, kEps, diag.divClampCount(), d_div_flag);
     CUDA_CHECK_KERNEL();
-    if (diag_out) {
-        CUDA_CHECK(cudaMemcpyAsync(&h_div_flag, d_div_flag, sizeof(int), cudaMemcpyDeviceToHost, stream));
-    }
+    CUDA_CHECK(cudaMemcpyAsync(&h_div_flag, d_div_flag, sizeof(int), cudaMemcpyDeviceToHost, stream));
 
     // Hard op selection (clean classification).
     // Forward: argmax(p_op) → pick discrete result.  v_out = results[hard_op].
@@ -1472,12 +1464,14 @@ void executeStepCoordinatorImpl(
     CUDA_CHECK_KERNEL();
 
     auto decode_input = Tensor::zeros({1, vid}, stream, "exec_decode_input");
-    // This direct slice is a detached leaf. MatMulGradFn therefore consumes its
-    // persistent leaf-gradient buffer rather than owning a transient non-leaf
-    // buffer; provision that storage at the leaf's creation boundary.
-    decode_input.requires_grad_();
+    // This direct slice is intentionally detached. w_decode_1 still receives
+    // grad_B because the durable registry-owned weight requires grad, and
+    // MatMulGradFn owns the saved A copy needed for that calculation. Giving
+    // this function-local tensor a leaf grad buffer would violate the leaf
+    // contract: MatMulGradFn borrows leaf grads under the assumption that their
+    // ParameterRegistry owner outlives backward.
+    decode_input.requires_grad = false;
     decode_input.is_leaf = true;
-    decode_input.alloc_grad();
     cudaMemcpyAsync(decode_input.data, work.atom_new.data + 16, vid * sizeof(float), cudaMemcpyDeviceToDevice, stream);
 
     auto decode_h = autograd::matmul(decode_input, params.w_decode_1, stream);
@@ -1486,6 +1480,12 @@ void executeStepCoordinatorImpl(
     }
 
     auto decode_act = autograd::silu(decode_h, stream, decode_h.data);
+
+    // SiluGradFn deliberately borrows its forward input cache. Move the
+    // pre-activation into the ModelForwardOutputs-owned step payload before the
+    // local working set can release it. The payload is cleared only after the
+    // active forward/loss/backward window completes.
+    forward_output.decoder_silu_input_tensor = std::move(decode_h);
 
     work.v_decoded = autograd::matmul(decode_act, params.w_decode_2, stream);
     work.result_emb = autograd::matmul(work.v_decoded, params.W_value_to_emb, stream);
@@ -1524,7 +1524,7 @@ void executeStepCoordinatorImpl(
         save_gate_buf, save_H_slot_buf);
     CUDA_CHECK_KERNEL();
     // Queue async readback of inject gate for telemetry (completes at next sync)
-    if (diag_out && hp.debug_mode) {
+    if (hp.debug_mode) {
         CUDA_CHECK(cudaMemcpyAsync(&h_inject_gate_value, save_gate_buf, sizeof(float),
                                    cudaMemcpyDeviceToHost, stream));
     }
@@ -1546,12 +1546,10 @@ void executeStepCoordinatorImpl(
     auto write_ctx_123 = autograd::concat(write_ctx_12, trace_state, stream);
     auto write_ctx = autograd::concat(write_ctx_123, work.step_emb, stream);
 
-    if (diag_out) {
-        Tensor stop_logits = autograd::matmul(write_ctx, params.W_stop, stream);
-        stop_logits = autograd::add(stop_logits, params.b_stop, stream);
-        diag_out->stop_probabilities = autograd::softmax(stop_logits, 1.0f, stream);
-        diag_out->stop_logits_tensor = std::move(stop_logits);
-    }
+    Tensor stop_logits = autograd::matmul(write_ctx, params.W_stop, stream);
+    stop_logits = autograd::add(stop_logits, params.b_stop, stream);
+    forward_output.stop_probabilities = autograd::softmax(stop_logits, 1.0f, stream);
+    forward_output.stop_logits_tensor = std::move(stop_logits);
 
     auto q_write = autograd::matmul(write_ctx, params.W_write_query, stream);
 
@@ -1596,9 +1594,7 @@ void executeStepCoordinatorImpl(
         CUDA_CHECK_KERNEL();
     }
     work.p_write = autograd::softmax(write_logits, temperature, stream);
-    if (diag_out) {
-        diag_out->write_logits_tensor = std::move(write_logits);
-    }
+    forward_output.write_logits_tensor = std::move(write_logits);
     kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_write.data, V, diag.numericErrorFlag(), kStagePWrite);
 
     work.state_new = Tensor::zeros({1, dm}, stream, "exec_state_new");
@@ -1609,18 +1605,16 @@ void executeStepCoordinatorImpl(
 
     work.key_new = autograd::matmul(work.result_emb, params.W_key_proj, stream);
     applyHardWriteback(hp, diag, parameters, memory, stream, work);
-    copyStepDiagnostics(work, diag_out, V_val, nop, V, dm, stream);
-    captureStateAfterWriteAndCheckMutations(hp, diag, memory, diag_out, stream);
-    collectStepMetrics(hp, diag, work, diag_out, V_val, nop, V, stream);
+    copyStepDiagnostics(work, forward_output, V_val, nop, V, dm, stream);
+    captureStateAfterWriteAndCheckMutations(hp, diag, memory, forward_output, stream);
+    collectStepMetrics(hp, diag, work, forward_output, V_val, nop, V, stream);
     // collectStepMetrics synced the stream — h_inject_gate_value is now valid
-    if (diag_out && hp.debug_mode) {
-        diag_out->metrics.inject_gate_value = h_inject_gate_value;
+    if (hp.debug_mode) {
+        forward_output.metrics.inject_gate_value = h_inject_gate_value;
     }
-    finalizeStepOrThrow(hp, diag, diag_out, step, stream);
-    if (diag_out) {
-        diag_out->div_was_clamped = (h_div_flag != 0);
-        diag_out->v_out_tensor = std::move(work.v_out);
-    }
+    finalizeStepOrThrow(hp, diag, forward_output, step, stream);
+    forward_output.div_was_clamped = (h_div_flag != 0);
+    forward_output.v_out_tensor = std::move(work.v_out);
 }
 
 }  // namespace GRIM::ExecutionBlockInternal

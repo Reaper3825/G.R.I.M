@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cctype>
 #include <cmath>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -25,7 +26,7 @@ namespace GRIM { namespace Perception { namespace Physical {
 namespace {
 
 constexpr const char* kLogTag = "PHYSICAL_GESTURE_CONTROL";
-constexpr uint64_t kPhysicalMouseOverrideQuietMs = 450;
+constexpr uint64_t kPhysicalMouseOverrideQuietMs = 250;
 
 uint64_t SteadyNowNs() {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -666,6 +667,53 @@ void ReleaseStableLocked(PhysicalGestureControlState& state,
         ? state.locked_handedness : PhysicalHandedness::Unknown;
 }
 
+bool BindingSelectableForStateLocked(
+    const PhysicalGestureControlState& state,
+    const PhysicalGestureBinding& binding)
+{
+    if (!binding.enabled) return false;
+    if (binding.requires_armed && !state.status.armed) return false;
+    if (binding.action == PhysicalGestureAction::ControlArm &&
+        state.status.armed) return false;
+    if (binding.action == PhysicalGestureAction::ControlDisarm &&
+        !state.status.armed) return false;
+    return true;
+}
+
+int HandGestureSelectionPriorityLocked(
+    const PhysicalGestureControlState& state,
+    const PhysicalHandObservation& hand,
+    bool control_actions_only = false)
+{
+    const std::string label = UsableGestureLabel(hand.gesture_label);
+    if (label.empty()) return std::numeric_limits<int>::min();
+
+    int priority = std::numeric_limits<int>::min();
+    for (const auto& binding : state.config.bindings) {
+        if (!BindingSelectableForStateLocked(state, binding) ||
+            binding.gesture_label != label ||
+            !BindingHandMatches(binding, hand.handedness)) continue;
+        if (control_actions_only &&
+            binding.action != PhysicalGestureAction::ControlArm &&
+            binding.action != PhysicalGestureAction::ControlDisarm) continue;
+        priority = std::max(priority, binding.priority);
+    }
+    return priority;
+}
+
+bool GestureDrivesPointerLocked(const PhysicalGestureControlState& state,
+                                const std::string& label,
+                                PhysicalHandedness handedness)
+{
+    for (const auto& binding : state.config.bindings) {
+        if (binding.action == PhysicalGestureAction::PointerMove &&
+            BindingSelectableForStateLocked(state, binding) &&
+            binding.gesture_label == label &&
+            BindingHandMatches(binding, handedness)) return true;
+    }
+    return false;
+}
+
 const PhysicalHandObservation* SelectControlHandLocked(
     PhysicalGestureControlState& state,
     const PhysicalHandGestureSnapshot& snapshot,
@@ -697,17 +745,58 @@ const PhysicalHandObservation* SelectControlHandLocked(
             state.locked_wrist_x = nearest->landmarks[0].normalized_x;
             state.locked_wrist_y = nearest->landmarks[0].normalized_y;
             state.last_locked_hand_seen_ns = now_ns;
+
+            // A control action from either visible hand may interrupt pointer
+            // ownership. This keeps an explicit disarm reachable without
+            // allowing an unrelated second hand to steer the cursor.
+            const PhysicalHandObservation* control_override = nullptr;
+            int override_priority = std::numeric_limits<int>::min();
+            for (const auto& hand : snapshot.hands) {
+                if (config.preferred_hand != PhysicalHandedness::Unknown &&
+                    hand.handedness != config.preferred_hand) continue;
+                const int priority = HandGestureSelectionPriorityLocked(
+                    state, hand, true);
+                if (!control_override || priority > override_priority ||
+                    (priority == override_priority &&
+                     hand.gesture_confidence >
+                         control_override->gesture_confidence)) {
+                    control_override = &hand;
+                    override_priority = priority;
+                }
+            }
+            if (control_override &&
+                override_priority != std::numeric_limits<int>::min())
+                return control_override;
             return nearest;
         }
         return nullptr;
     }
 
     const PhysicalHandObservation* best = nullptr;
+    int best_priority = std::numeric_limits<int>::min();
+    int best_continuity = -1;
     for (const auto& hand : snapshot.hands) {
         if (config.preferred_hand != PhysicalHandedness::Unknown &&
             hand.handedness != config.preferred_hand) continue;
-        if (!best || hand.gesture_confidence > best->gesture_confidence)
+        const std::string label = UsableGestureLabel(hand.gesture_label);
+        const int priority = HandGestureSelectionPriorityLocked(state, hand);
+        int continuity = 0;
+        if (!state.stable_gesture.empty() &&
+            label == state.stable_gesture &&
+            hand.handedness == state.stable_hand) {
+            continuity = 2;
+        } else if (label == state.candidate_gesture &&
+                   hand.handedness == state.candidate_hand) {
+            continuity = 1;
+        }
+        if (!best || priority > best_priority ||
+            (priority == best_priority && continuity > best_continuity) ||
+            (priority == best_priority && continuity == best_continuity &&
+             hand.gesture_confidence > best->gesture_confidence)) {
             best = &hand;
+            best_priority = priority;
+            best_continuity = continuity;
+        }
     }
     return best;
 }
@@ -736,7 +825,12 @@ void ProcessHandSnapshotLocked(PhysicalGestureControlState& state,
         ReleaseHandLockLocked(state);
     }
 
-    if (state.status.pointer_active && hand && has_pointer) {
+    const bool selected_pointer_hand = hand &&
+        (!state.hand_lock_active ||
+         state.locked_handedness == PhysicalHandedness::Unknown ||
+         hand->handedness == PhysicalHandedness::Unknown ||
+         hand->handedness == state.locked_handedness);
+    if (state.status.pointer_active && selected_pointer_hand && has_pointer) {
         ProcessPinchSampleLocked(state, *hand, now_ns, actions);
         const bool classifier_supports_pointer =
             label == state.active_pointer_gesture &&
@@ -787,7 +881,12 @@ void ProcessHandSnapshotLocked(PhysicalGestureControlState& state,
         state.stable_pointer_x = pointer_x;
         state.stable_pointer_y = pointer_y;
         state.stable_has_pointer = has_pointer;
-        if (hand) LockHandLocked(state, *hand, now_ns);
+        if (hand && GestureDrivesPointerLocked(
+                state, label, hand->handedness)) {
+            LockHandLocked(state, *hand, now_ns);
+        } else {
+            ReleaseHandLockLocked(state);
+        }
         state.status.stable_gesture = label;
         state.status.active_hand = state.stable_hand;
         PublishAndRouteLocked(state, PhysicalGesturePhase::Started,

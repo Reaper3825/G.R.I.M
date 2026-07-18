@@ -487,7 +487,7 @@ void prepareMemoryStepOrThrow(
     const uint8_t* atom_mask,
     const int32_t* token_to_slot_map,
     int row_tokens,
-    ExecutionBlockStepOutput* diag_out,
+    ExecutionBlockStepOutput& forward_output,
     cudaStream_t stream
 ) {
     // One flag is shared by all validation kernels in this step. Reset it
@@ -496,14 +496,12 @@ void prepareMemoryStepOrThrow(
     ensureBootstrappedValueSlotsOrThrow(hp, diag, memory, stream);
 
     const int V = hp.num_slots;
-    if (diag_out) {
-        diag_out->state_before_values = Tensor::zeros({V, 1}, stream, "state_before_values");
-        diag_out->state_before_valid = Tensor::zeros({1, V}, stream, "state_before_valid");
-        CUDA_CHECK(cudaMemcpyAsync(diag_out->state_before_values.data, memory.values.data,
-            V * sizeof(float), cudaMemcpyDeviceToDevice, stream));
-        CUDA_CHECK(cudaMemcpyAsync(diag_out->state_before_valid.data, memory.valid_mask.data,
-            V * sizeof(float), cudaMemcpyDeviceToDevice, stream));
-    }
+    forward_output.state_before_values = Tensor::zeros({V, 1}, stream, "state_before_values");
+    forward_output.state_before_valid = Tensor::zeros({1, V}, stream, "state_before_valid");
+    CUDA_CHECK(cudaMemcpyAsync(forward_output.state_before_values.data, memory.values.data,
+        V * sizeof(float), cudaMemcpyDeviceToDevice, stream));
+    CUDA_CHECK(cudaMemcpyAsync(forward_output.state_before_valid.data, memory.valid_mask.data,
+        V * sizeof(float), cudaMemcpyDeviceToDevice, stream));
 
     if (row_tokens > 0) {
         kernelValidateStateBearingSlots<<<(row_tokens + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
@@ -629,17 +627,15 @@ void captureStateAfterWriteAndCheckMutations(
     const HyperParameters::ExecutionBlockConstructionHP& hp,
     ExecutionBlockDiagnosticsBuffers& diag,
     const ExecutionMemory& memory,
-    ExecutionBlockStepOutput* diag_out,
+    ExecutionBlockStepOutput& forward_output,
     cudaStream_t stream
 ) {
-    if (!diag_out) return;
-
     const int V = hp.num_slots;
-    diag_out->state_after_values = Tensor::zeros({V, 1}, stream, "state_after_values");
-    diag_out->state_after_valid = Tensor::zeros({1, V}, stream, "state_after_valid");
-    CUDA_CHECK(cudaMemcpyAsync(diag_out->state_after_values.data, memory.values.data,
+    forward_output.state_after_values = Tensor::zeros({V, 1}, stream, "state_after_values");
+    forward_output.state_after_valid = Tensor::zeros({1, V}, stream, "state_after_valid");
+    CUDA_CHECK(cudaMemcpyAsync(forward_output.state_after_values.data, memory.values.data,
         V * sizeof(float), cudaMemcpyDeviceToDevice, stream));
-    CUDA_CHECK(cudaMemcpyAsync(diag_out->state_after_valid.data, memory.valid_mask.data,
+    CUDA_CHECK(cudaMemcpyAsync(forward_output.state_after_valid.data, memory.valid_mask.data,
         V * sizeof(float), cudaMemcpyDeviceToDevice, stream));
 
     // Use Tensor::zeros (async cudaMemsetAsync) instead of synchronous cudaMalloc.
@@ -651,8 +647,8 @@ void captureStateAfterWriteAndCheckMutations(
     kernelStateDeltaCheck<<<1, 1, 0, stream>>>(
         hinge_discard.data,
         d_changed_count,
-        diag_out->state_before_values.data,
-        diag_out->state_after_values.data,
+        forward_output.state_before_values.data,
+        forward_output.state_after_values.data,
         diag.execIndices() + 3,
         V);
     CUDA_CHECK_KERNEL();
@@ -668,7 +664,7 @@ void captureStateAfterWriteAndCheckMutations(
 void finalizeStepOrThrow(
     const HyperParameters::ExecutionBlockConstructionHP& hp,
     ExecutionBlockDiagnosticsBuffers& diag,
-    ExecutionBlockStepOutput* diag_out,
+    ExecutionBlockStepOutput& forward_output,
     int step,
     cudaStream_t stream
 ) {
@@ -676,37 +672,33 @@ void finalizeStepOrThrow(
     int write_slot = -1;
     int ri[3] = {0, 0, 0};
     float rf[3] = {0.0f, 0.0f, 0.0f};
-    if (diag_out) {
-        CUDA_CHECK(cudaMemcpyAsync(ri, diag.execRecordI(), 3 * sizeof(int),
-            cudaMemcpyDeviceToHost, stream));
-        CUDA_CHECK(cudaMemcpyAsync(rf, diag.execRecordF(), 3 * sizeof(float),
-            cudaMemcpyDeviceToHost, stream));
-        CUDA_CHECK(cudaMemcpyAsync(&write_slot, diag.execIndices() + 3, sizeof(int),
-            cudaMemcpyDeviceToHost, stream));
-    }
+    CUDA_CHECK(cudaMemcpyAsync(ri, diag.execRecordI(), 3 * sizeof(int),
+        cudaMemcpyDeviceToHost, stream));
+    CUDA_CHECK(cudaMemcpyAsync(rf, diag.execRecordF(), 3 * sizeof(float),
+        cudaMemcpyDeviceToHost, stream));
+    CUDA_CHECK(cudaMemcpyAsync(&write_slot, diag.execIndices() + 3, sizeof(int),
+        cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaMemcpyAsync(&h_error, diag.numericErrorFlag(), sizeof(int),
         cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
-    if (diag_out) {
-        diag_out->record.arg1_slot = ri[0];
-        diag_out->record.arg2_slot = ri[1];
-        diag_out->record.op_id = ri[2];
-        diag_out->record.write_slot = write_slot;
-        diag_out->record.value_before_1 = rf[0];
-        diag_out->record.value_before_2 = rf[1];
-        diag_out->record.value_after = rf[2];
+    forward_output.record.arg1_slot = ri[0];
+    forward_output.record.arg2_slot = ri[1];
+    forward_output.record.op_id = ri[2];
+    forward_output.record.write_slot = write_slot;
+    forward_output.record.value_before_1 = rf[0];
+    forward_output.record.value_before_2 = rf[1];
+    forward_output.record.value_after = rf[2];
 
-        // Emit execution record via module log system
-        static const char* op_names[] = {"+", "-", "*", "/"};
-        const char* op_str = (ri[2] >= 0 && ri[2] < 4) ? op_names[ri[2]] : "?";
-        char msg[256];
-        snprintf(msg, sizeof(msg),
-            "[EXEC_RECORD_EQUATION] step=%d: slot[%d](%.4f) %s slot[%d](%.4f) -> slot[%d]=%.4f",
-            step, ri[0], rf[0], op_str, ri[1], rf[1], write_slot, rf[2]);
-        GRIM::Logging::EmitModuleInfo(
-            GRIM::Logging::ModuleId::ExecutionBlock, msg);
-    }
+    // Emit execution record via module log system
+    static const char* op_names[] = {"+", "-", "*", "/"};
+    const char* op_str = (ri[2] >= 0 && ri[2] < 4) ? op_names[ri[2]] : "?";
+    char msg[256];
+    snprintf(msg, sizeof(msg),
+        "[EXEC_RECORD_EQUATION] step=%d: slot[%d](%.4f) %s slot[%d](%.4f) -> slot[%d]=%.4f",
+        step, ri[0], rf[0], op_str, ri[1], rf[1], write_slot, rf[2]);
+    GRIM::Logging::EmitModuleInfo(
+        GRIM::Logging::ModuleId::ExecutionBlock, msg);
 
     if (h_error > 0) {
         char buf[384];

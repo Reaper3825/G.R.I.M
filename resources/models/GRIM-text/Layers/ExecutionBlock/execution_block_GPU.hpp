@@ -23,12 +23,11 @@
 
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
+#include "../../Shared/Batching/BatchPayload.hpp"
+#include "../../Shared/Batching/BatchDeviceBindings.hpp"
+#include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
 
 namespace GRIM {
-
-struct ExecutionBlockParameterTensors;
-
-namespace Batching { struct BatchPayload; struct BatchDeviceBindings; }
 namespace Forward {
 struct ExecStepMetrics;
 struct ExecutionRecord;
@@ -165,7 +164,7 @@ void executionBlockStep(
     int step,
     float temperature,
     cudaStream_t stream,
-    Forward::ExecutionBlockStepOutput* diag_out,
+    Forward::ExecutionBlockStepOutput& forward_output,
     Tensor& trace_state,
     const std::vector<Forward::ExecutionRecord>& prior_records
 );

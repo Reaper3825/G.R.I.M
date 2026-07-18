@@ -82,6 +82,8 @@ bool testStepOutputDefaults(std::string& message) {
     EB_ASSERT_TRUE(!sout.p_write.data, "p_write should start null");
     EB_ASSERT_TRUE(!sout.v_out.data, "v_out should start null");
     EB_ASSERT_TRUE(!sout.result_emb.data, "result_emb should start null");
+    EB_ASSERT_TRUE(!sout.decoder_silu_input_tensor.data,
+                   "decoder_silu_input_tensor should start null");
 
     EB_ASSERT_TRUE(!sout.state_before_values.data,
                    "state_before_values should start null");
@@ -419,6 +421,26 @@ bool testExecutionBlockOutputMultiStep(std::string& message) {
     return true;
 }
 
+bool testDecoderSiluCacheForwardOwnership(std::string& message) {
+    ModelForwardOutputs outputs;
+    outputs.ensureExecutionBatchGeometry(1, "testDecoderSiluCacheForwardOwnership");
+
+    float sentinel = 0.0f;
+    ExecutionBlockStepOutput step_output;
+    step_output.decoder_silu_input_tensor.data = &sentinel;
+    step_output.decoder_silu_input_tensor.owns_data = false;
+
+    outputs.exec_outputs_per_row[0].steps.push_back(std::move(step_output));
+    EB_ASSERT_TRUE(
+        outputs.exec_outputs_per_row[0].steps[0].decoder_silu_input_tensor.data == &sentinel,
+        "ModelForwardOutputs step payload should retain the decoder SiLU cache");
+
+    outputs.clear();
+    EB_ASSERT_TRUE(outputs.exec_outputs_per_row[0].steps.empty(),
+                   "ModelForwardOutputs::clear should release execution-step payloads");
+    return true;
+}
+
 //======================================================//
 //  12. Inference control boundary is final prompt token
 //======================================================//
@@ -641,6 +663,7 @@ int GRIM::Test::runExecutionBlockTests() {
 
     suite.addTest("Memory: per-row isolation", testBatchedMemoryIsolation);
     suite.addTest("StepOutput: defaults", testStepOutputDefaults);
+    suite.addTest("StepOutput: decoder SiLU cache ownership", testDecoderSiluCacheForwardOwnership);
     suite.addTest("Memory: allocate shapes", testExecutionMemoryAllocateShapes);
     suite.addTest("Memory: allocate rejects invalid dims", testExecutionMemoryAllocateRejectsInvalid);
     suite.addTest("Memory: clear zeros state", testExecutionMemoryClear);

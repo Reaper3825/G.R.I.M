@@ -8,10 +8,24 @@
 namespace {
 
 constexpr wchar_t kRawMouseWindowClass[] = L"GRIMRawMouseInputWindow";
+constexpr uint64_t kMouseMotionCandidateWindowMs = 120;
+constexpr uint64_t kMouseMotionOverrideThreshold = 12;
 std::atomic<uint64_t> s_physicalMouseActivitySequence{0};
 std::atomic<uint64_t> s_lastPhysicalMouseActivityMs{0};
 HWND s_rawMouseWindow = nullptr;
 bool s_rawMouseClassRegistered = false;
+uint64_t s_mouseMotionCandidateStartedMs = 0;
+uint64_t s_mouseMotionCandidateDistance = 0;
+
+uint64_t AbsoluteMouseDelta(LONG delta) {
+    const int64_t widened = static_cast<int64_t>(delta);
+    return static_cast<uint64_t>(widened < 0 ? -widened : widened);
+}
+
+void RecordPhysicalMouseActivity(uint64_t nowMs) {
+    s_lastPhysicalMouseActivityMs.store(nowMs, std::memory_order_release);
+    s_physicalMouseActivitySequence.fetch_add(1, std::memory_order_acq_rel);
+}
 
 LRESULT CALLBACK RawMouseInputWindowProc(HWND window, UINT message,
                                          WPARAM wParam, LPARAM lParam)
@@ -25,12 +39,31 @@ LRESULT CALLBACK RawMouseInputWindowProc(HWND window, UINT message,
         if (bytesRead != static_cast<UINT>(-1) &&
             input.header.dwType == RIM_TYPEMOUSE) {
             const RAWMOUSE& mouse = input.data.mouse;
-            if (mouse.lLastX != 0 || mouse.lLastY != 0 ||
-                mouse.usButtonFlags != 0) {
-                s_lastPhysicalMouseActivityMs.store(
-                    ::GetTickCount64(), std::memory_order_release);
-                s_physicalMouseActivitySequence.fetch_add(
-                    1, std::memory_order_acq_rel);
+            const uint64_t nowMs = ::GetTickCount64();
+            if (mouse.usButtonFlags != 0) {
+                // Clicks and wheel input are unambiguous physical intent.
+                RecordPhysicalMouseActivity(nowMs);
+                s_mouseMotionCandidateStartedMs = 0;
+                s_mouseMotionCandidateDistance = 0;
+            } else if (mouse.lLastX != 0 || mouse.lLastY != 0) {
+                // Require a small burst of accumulated motion before taking
+                // ownership. This filters stationary sensor noise and desk
+                // vibration without making deliberate mouse motion feel slow.
+                if (s_mouseMotionCandidateStartedMs == 0 ||
+                    nowMs - s_mouseMotionCandidateStartedMs >
+                        kMouseMotionCandidateWindowMs) {
+                    s_mouseMotionCandidateStartedMs = nowMs;
+                    s_mouseMotionCandidateDistance = 0;
+                }
+                s_mouseMotionCandidateDistance +=
+                    AbsoluteMouseDelta(mouse.lLastX) +
+                    AbsoluteMouseDelta(mouse.lLastY);
+                if (s_mouseMotionCandidateDistance >=
+                    kMouseMotionOverrideThreshold) {
+                    RecordPhysicalMouseActivity(nowMs);
+                    s_mouseMotionCandidateStartedMs = nowMs;
+                    s_mouseMotionCandidateDistance = 0;
+                }
             }
         }
 
@@ -49,6 +82,8 @@ namespace PlatformInput {
     void initialize() {
         s_physicalMouseActivitySequence.store(0, std::memory_order_release);
         s_lastPhysicalMouseActivityMs.store(0, std::memory_order_release);
+        s_mouseMotionCandidateStartedMs = 0;
+        s_mouseMotionCandidateDistance = 0;
 
         WNDCLASSW windowClass{};
         windowClass.lpfnWndProc = RawMouseInputWindowProc;

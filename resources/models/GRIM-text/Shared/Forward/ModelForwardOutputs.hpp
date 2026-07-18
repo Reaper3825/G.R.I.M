@@ -69,7 +69,7 @@ struct ExecutionBlockStepOutput {
     Tensor state_before_valid;   // [V]    M.valid_mask snapshot before this step
     Tensor state_after_values;   // [V, 1] M.values snapshot after this step
     Tensor state_after_valid;    // [V]    M.valid_mask snapshot after this step
-    ExecutionRecord record;      // filled when diag_out != nullptr (host copy at step sync)
+    ExecutionRecord record;      // filled from the execution diagnostics payload at step sync
     ExecStepMetrics metrics;     // populated when debug_mode is enabled
 
     // Retained live tensors for later loss assembly (Category 1 graph-owned)
@@ -80,6 +80,13 @@ struct ExecutionBlockStepOutput {
     Tensor v_out_tensor;           // [1, 1] retained detached result for argument-selection REINFORCE reward
     Tensor stop_logits_tensor;      // [1, 2], class 0=CONTINUE, class 1=STOP
     Tensor stop_probabilities;      // [1, 2]
+
+    // Category 1 execution-decoder activation retained specifically for
+    // SiluGradFn's non-owning backward cache. The execution step moves the
+    // pre-activation here before its local working set is destroyed; the
+    // batch-boundary ModelForwardOutputs::clear() remains the sole teardown.
+    Tensor decoder_silu_input_tensor;  // [1, value_decode_hidden_dim]
+
     int stop_predicted_class = -1;
     float continue_probability = 0.0f;
     float stop_probability = 0.0f;
@@ -486,6 +493,15 @@ public:
         reportTensor("logits_tensor", logits_tensor);
         reportTensor("selector_logits", selector_logits);
         reportTensor("scratch_atom_embeddings", scratch_atom_embeddings);
+        for (size_t row = 0; row < exec_outputs_per_row.size(); ++row) {
+            const auto& execution_output = exec_outputs_per_row[row];
+            for (size_t step = 0; step < execution_output.steps.size(); ++step) {
+                reportTensor(
+                    "exec_outputs_per_row[" + std::to_string(row) + "].steps[" +
+                        std::to_string(step) + "].decoder_silu_input_tensor",
+                    execution_output.steps[step].decoder_silu_input_tensor);
+            }
+        }
 
         std::ostringstream out;
         out << std::fixed;

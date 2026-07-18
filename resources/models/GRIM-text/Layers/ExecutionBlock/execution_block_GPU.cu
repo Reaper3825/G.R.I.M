@@ -94,7 +94,7 @@ void executionBlockStep(
     int step,
     float temperature,
     cudaStream_t stream,
-    ExecutionBlockStepOutput* diag_out,
+    ExecutionBlockStepOutput& forward_output,
     Tensor& trace_state,
     const std::vector<ExecutionRecord>& prior_records)
 {
@@ -123,7 +123,7 @@ void executionBlockStep(
         step,
         temperature,
         stream,
-        diag_out,
+        forward_output,
         trace_state,
         prior_records);
 }

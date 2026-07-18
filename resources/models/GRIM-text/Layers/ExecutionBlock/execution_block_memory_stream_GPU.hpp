@@ -12,7 +12,7 @@ void prepareMemoryStepOrThrow(
 	const uint8_t* atom_mask,
 	const int32_t* token_to_slot_map,
 	int row_tokens,
-	Forward::ExecutionBlockStepOutput* diag_out,
+	Forward::ExecutionBlockStepOutput& forward_output,
 	cudaStream_t stream);
 
 void buildValueSlotCandidates(
@@ -40,13 +40,13 @@ void captureStateAfterWriteAndCheckMutations(
 	const HyperParameters::ExecutionBlockConstructionHP& hp,
 	ExecutionBlockDiagnosticsBuffers& diag,
 	const ExecutionMemory& memory,
-	Forward::ExecutionBlockStepOutput* diag_out,
+	Forward::ExecutionBlockStepOutput& forward_output,
 	cudaStream_t stream);
 
 void finalizeStepOrThrow(
 	const HyperParameters::ExecutionBlockConstructionHP& hp,
 	ExecutionBlockDiagnosticsBuffers& diag,
-	Forward::ExecutionBlockStepOutput* diag_out,
+	Forward::ExecutionBlockStepOutput& forward_output,
 	int step,
 	cudaStream_t stream);
 
