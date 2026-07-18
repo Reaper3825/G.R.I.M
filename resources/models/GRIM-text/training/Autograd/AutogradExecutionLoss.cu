@@ -10,6 +10,7 @@
 #include "../../Layers/ExecutionBlock/execution_block_internal.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
+#include "../../Shared/TensorContract/GradFns/NormalizedEntropyGradFn.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 
 #include <cuda_runtime.h>
@@ -28,7 +29,6 @@ namespace Autograd {
 namespace {
 
 constexpr int kWarpSize = 32;
-constexpr int kEntropyBlockSize = 256;
 constexpr int kDivOpIdx = 3;
 
 __global__ void kernelDivInvalidPenaltyForward(
@@ -119,47 +119,6 @@ __global__ void kernelArgReinforceLossBackward(
         const float p2 = fmaxf(saved_p_arg2[idx2], kMinProb);
         grad_p_arg2[idx2] += g * weight * adv * (-1.0f / p2);
     }
-}
-
-__global__ void kernelNormalizedEntropyForward(
-    float* __restrict__ out_entropy,
-    const float* __restrict__ probs,
-    int num_classes
-) {
-    if (threadIdx.x != 0) return;
-    if (num_classes <= 1) {
-        out_entropy[0] = 0.0f;
-        return;
-    }
-
-    constexpr float kMinProb = 1e-10f;
-    float entropy = 0.0f;
-    for (int i = 0; i < num_classes; ++i) {
-        const float p = fmaxf(probs[i], kMinProb);
-        entropy -= p * logf(p);
-    }
-
-    const float max_entropy = logf(static_cast<float>(num_classes));
-    out_entropy[0] = (max_entropy > kMinProb) ? (entropy / max_entropy) : 0.0f;
-}
-
-__global__ void kernelNormalizedEntropyBackward(
-    float* __restrict__ grad_probs,
-    const float* __restrict__ grad_output,
-    const float* __restrict__ saved_probs,
-    int num_classes
-) {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= num_classes || num_classes <= 1) return;
-
-    constexpr float kMinProb = 1e-10f;
-    const float max_entropy = logf(static_cast<float>(num_classes));
-    if (max_entropy <= kMinProb) {
-        return;
-    }
-
-    const float p = fmaxf(saved_probs[idx], kMinProb);
-    grad_probs[idx] += grad_output[0] * (-(logf(p) + 1.0f) / max_entropy);
 }
 
 struct DivInvalidPenaltyGradFn : public GradFn {
@@ -345,98 +304,6 @@ struct ArgReinforceLossGradFn : public GradFn {
         p_arg2_grad_fn_.reset();
     }
 };
-
-struct NormalizedEntropyGradFn : public GradFn {
-    int num_classes_ = 0;
-    float* saved_probs_ = nullptr;
-
-    float* grad_probs_ = nullptr;
-    std::shared_ptr<float> owned_grad_probs_;
-    std::shared_ptr<GradFn> probs_grad_fn_;
-    TensorContract::TensorShape probs_shape_;
-    bool probs_requires_grad_ = false;
-
-    NormalizedEntropyGradFn() { op_name = "autograd_exec_normalized_entropy"; }
-
-    ~NormalizedEntropyGradFn() override {
-        if (saved_probs_) cudaFree(saved_probs_);
-    }
-
-    void capture(Tensor& probs_tensor, cudaStream_t stream) {
-        if (!probs_tensor.data) {
-            throw std::runtime_error("makeNormalizedEntropy: probs tensor data is NULL");
-        }
-        if (!probs_tensor.shape.is_2d_layout()) {
-            throw std::runtime_error("makeNormalizedEntropy: probs tensor must be 2D");
-        }
-        if (probs_tensor.shape.flat.rows != 1) {
-            throw std::runtime_error(
-                "makeNormalizedEntropy: probs tensor must be [1, C], got rows="
-                + std::to_string(probs_tensor.shape.flat.rows));
-        }
-
-        num_classes_ = probs_tensor.shape.flat.cols;
-        probs_requires_grad_ = probs_tensor.requires_grad;
-        probs_shape_ = probs_tensor.shape;
-        probs_grad_fn_ = probs_tensor.grad_fn;
-        register_input(probs_tensor.grad_fn);
-
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_probs_), static_cast<size_t>(num_classes_) * sizeof(float), "autograd_exec_entropy_saved_probs");
-        CUDA_CHECK(cudaMemcpyAsync(
-            saved_probs_,
-            probs_tensor.data,
-            static_cast<size_t>(num_classes_) * sizeof(float),
-            cudaMemcpyDeviceToDevice,
-            stream));
-
-        if (!probs_requires_grad_) {
-            return;
-        }
-
-        if (probs_tensor.is_leaf) {
-            probs_tensor.ensure_grad();
-            grad_probs_ = probs_tensor.grad_data();
-        } else {
-            float* buf = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buf), static_cast<size_t>(num_classes_) * sizeof(float), "autograd_exec_entropy_grad_probs");
-            CUDA_CHECK(cudaMemsetAsync(buf, 0, static_cast<size_t>(num_classes_) * sizeof(float), stream));
-            owned_grad_probs_ = std::shared_ptr<float>(buf, [](float* p) { cudaFree(p); });
-            grad_probs_ = owned_grad_probs_.get();
-        }
-    }
-
-    void apply_impl(const Tensor& grad_output,
-                    cudaStream_t stream,
-                    const Batching::BatchPayload* backward_payload,
-                    const Batching::BatchDeviceBindings* backward_bindings) override {
-        if (applied) return;
-        applied = true;
-        if (!probs_requires_grad_ || !grad_probs_) return;
-
-        const int blocks = (num_classes_ + kEntropyBlockSize - 1) / kEntropyBlockSize;
-        kernelNormalizedEntropyBackward<<<blocks, kEntropyBlockSize, 0, stream>>>(
-            grad_probs_, grad_output.data, saved_probs_, num_classes_);
-        CUDA_CHECK_KERNEL();
-
-        if (probs_grad_fn_) {
-            Tensor view;
-            view.data = grad_probs_;
-            view.shape = probs_shape_;
-            view.owns_data = false;
-            view.stream = stream;
-            probs_grad_fn_->apply(view, stream, backward_payload, backward_bindings);
-        }
-    }
-
-    void release_saved() override {
-        GradFn::release_saved();
-        if (saved_probs_) { cudaFree(saved_probs_); saved_probs_ = nullptr; }
-        grad_probs_ = nullptr;
-        owned_grad_probs_.reset();
-        probs_grad_fn_.reset();
-    }
-};
-
 void requireScalarTensor(const Tensor& tensor, const char* label, int row, int step) {
     if (!tensor.data) {
         throw std::runtime_error(
@@ -568,34 +435,6 @@ Tensor makeArgReinforceLoss(
     loss.requires_grad = true;
     loss.is_leaf = false;
     return loss;
-}
-
-Tensor makeNormalizedEntropy(Tensor& probs_tensor, cudaStream_t stream) {
-    if (!probs_tensor.data) {
-        throw std::runtime_error("makeNormalizedEntropy: probs tensor data is NULL");
-    }
-    if (!probs_tensor.shape.is_2d_layout()) {
-        throw std::runtime_error("makeNormalizedEntropy: probs tensor must be 2D");
-    }
-    if (probs_tensor.shape.flat.rows != 1) {
-        throw std::runtime_error(
-            "makeNormalizedEntropy: probs tensor must be [1, C], got rows="
-            + std::to_string(probs_tensor.shape.flat.rows));
-    }
-
-    Tensor entropy = Tensor::zeros({1, 1}, stream, "autograd_exec_normalized_entropy");
-    kernelNormalizedEntropyForward<<<1, 1, 0, stream>>>(
-        entropy.data,
-        probs_tensor.data,
-        probs_tensor.shape.flat.cols);
-    CUDA_CHECK_KERNEL();
-
-    auto grad_fn = std::make_shared<NormalizedEntropyGradFn>();
-    grad_fn->capture(probs_tensor, stream);
-    entropy.grad_fn = grad_fn;
-    entropy.requires_grad = true;
-    entropy.is_leaf = false;
-    return entropy;
 }
 
 }  // namespace
@@ -874,7 +713,7 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
             };
 
             auto addRowEntropyTerm = [&](Tensor& probs, const char* name) {
-                Tensor entropy = makeNormalizedEntropy(probs, ctx.stream);
+                Tensor entropy = autograd::normalized_entropy(probs, ctx.stream);
                 if (!entropy.data || !entropy.grad_fn) {
                     throw std::runtime_error(
                         std::string("addExecutionAuxiliaryLoss: entropy tensor '") + name
