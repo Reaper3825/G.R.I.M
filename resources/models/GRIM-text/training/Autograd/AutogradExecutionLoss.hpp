@@ -18,7 +18,7 @@ struct AutogradContext;
 struct AutogradLossState;
 
 struct ExecutionAuxiliaryLossSummary {
-    float structured_ce = 0.0f;      // Unweighted raw CE monitor averaged over emitted CE tensors
+    float structured_ce = 0.0f;      // Unweighted policy-temperature CE averaged over emitted CE tensors
     float entropy_monitor = 0.0f;    // Monitoring-only entropy scalar; not added to loss_tensor
     int active_steps = 0;            // Active teacher/non-padded execution steps considered
     int scalar_loss_terms = 0;       // Scalar execution loss terms added before normalization

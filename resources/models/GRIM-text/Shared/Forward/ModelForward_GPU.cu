@@ -418,7 +418,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const int execution_block_num_steps = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "execution_block_num_steps");
     const int execution_block_num_slots = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "execution_block_num_slots");
     const int execution_block_num_ops = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "execution_block_num_ops");
-    const float execution_block_temp_start = HyperParameters::snapshotTrainingConfigField<float>(*cfg, "execution_block_temp_start");
     const bool execution_block_active = execution_hp.enabled && request.execution_block_enabled;
     auto* execution_block_parameters = execution_block_active
         ? &request.parameter_registry->requireExecutionBlockParameters("executeModelForward")
@@ -820,7 +819,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                             *request.bindings,
                             b,
                             step,
-                            execution_block_temp_start,
+                            execution_hp.temp_start,
                             request.stream,
                             step_output,
                             record_encode_backward_staging,
@@ -972,7 +971,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 const int V = execution_block_num_slots;
                 const int nop = execution_block_num_ops;
 
-                float T = execution_block_temp_start;
+                const float T = execution_hp.temp_start;
 
                 auto& execution_runtime = *runtime.execution_runtime;
                 Forward::provisionExecutionForwardRuntime(

@@ -742,9 +742,18 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
                 const int arg1_target = requireValueSlotTarget(teacher.arg1_slot, num_scratch_slots, num_slots, b, k, "teacher arg1_slot");
                 const int arg2_target = requireValueSlotTarget(teacher.arg2_slot, num_scratch_slots, num_slots, b, k, "teacher arg2_slot");
                 const int write_target = requireWriteTarget(teacher.write_slot, num_scratch_slots, num_slots, b, k);
+                requirePositiveTemperature(sout.selection_temperature, b, k);
+                const float inverse_selection_temperature = 1.0f / sout.selection_temperature;
 
                 auto accumulateCe = [&](Tensor& logits, int target, const char* name, ExecLossFlag flag) {
-                    Tensor ce = autograd::cross_entropy_logits(logits, target, ctx.stream);
+                    // Match the policy sampled by the forward pass. Keeping the
+                    // temperature scaling in the graph also supplies the correct
+                    // 1/T chain-rule factor to the selector logits.
+                    Tensor policy_logits = autograd::mul_scalar(
+                        logits,
+                        inverse_selection_temperature,
+                        ctx.stream);
+                    Tensor ce = autograd::cross_entropy_logits(policy_logits, target, ctx.stream);
                     float ce_value = 0.0f;
                     readScalarFromDevice(ce, ce_value, ctx.stream, name);
                     ce_scalar_sum += ce_value;

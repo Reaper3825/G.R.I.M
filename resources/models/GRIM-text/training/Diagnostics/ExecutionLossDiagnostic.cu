@@ -124,7 +124,8 @@ ClassificationObservation observeClassification(
     int target,
     const char* label,
     int row,
-    int step)
+    int step,
+    float temperature = 1.0f)
 {
     const std::vector<float> values = copyTensorToHost(logits, label, row, step);
     if (target < 0 || target >= static_cast<int>(values.size())) {
@@ -134,12 +135,20 @@ ClassificationObservation observeClassification(
             " at row=" + std::to_string(row) +
             " step=" + std::to_string(step));
     }
+    if (!std::isfinite(temperature) || temperature <= 0.0f) {
+        throw std::runtime_error(
+            std::string("runExecutionLossDiagnostic: invalid temperature ") +
+            std::to_string(temperature) + " for " + label +
+            " at row=" + std::to_string(row) +
+            " step=" + std::to_string(step));
+    }
 
+    const double inverse_temperature = 1.0 / static_cast<double>(temperature);
     const auto max_it = std::max_element(values.begin(), values.end());
-    const float max_logit = *max_it;
+    const double max_logit = static_cast<double>(*max_it) * inverse_temperature;
     double exp_sum = 0.0;
     for (float value : values) {
-        exp_sum += std::exp(static_cast<double>(value - max_logit));
+        exp_sum += std::exp(static_cast<double>(value) * inverse_temperature - max_logit);
     }
     if (!std::isfinite(exp_sum) || exp_sum <= 0.0) {
         throw std::runtime_error(
@@ -150,8 +159,8 @@ ClassificationObservation observeClassification(
 
     ClassificationObservation observation;
     observation.cross_entropy = static_cast<float>(
-        static_cast<double>(max_logit) + std::log(exp_sum) -
-        static_cast<double>(values[static_cast<std::size_t>(target)]));
+        max_logit + std::log(exp_sum) -
+        static_cast<double>(values[static_cast<std::size_t>(target)]) * inverse_temperature);
     observation.predicted_class = static_cast<int>(std::distance(values.begin(), max_it));
     return observation;
 }
@@ -388,13 +397,17 @@ void runExecutionLossDiagnostic(
                     const int write_target = teacher.write_slot;
 
                     const auto op_observation = observeClassification(
-                        step_output.op_logits_tensor, op_target, "op_logits", row, step_index);
+                        step_output.op_logits_tensor, op_target, "op_logits", row, step_index,
+                        step_output.selection_temperature);
                     const auto arg1_observation = observeClassification(
-                        step_output.arg1_logits_tensor, arg1_target, "arg1_logits", row, step_index);
+                        step_output.arg1_logits_tensor, arg1_target, "arg1_logits", row, step_index,
+                        step_output.selection_temperature);
                     const auto arg2_observation = observeClassification(
-                        step_output.arg2_logits_tensor, arg2_target, "arg2_logits", row, step_index);
+                        step_output.arg2_logits_tensor, arg2_target, "arg2_logits", row, step_index,
+                        step_output.selection_temperature);
                     const auto write_observation = observeClassification(
-                        step_output.write_logits_tensor, write_target, "write_logits", row, step_index);
+                        step_output.write_logits_tensor, write_target, "write_logits", row, step_index,
+                        step_output.selection_temperature);
 
                     accumulateClassification(op, op_observation, op_target, structured_weight);
                     accumulateClassification(arg1, arg1_observation, arg1_target, structured_weight);
