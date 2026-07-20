@@ -244,6 +244,36 @@ enum class MetricStream : int {
     RESERVED_66              = 66,
     RESERVED_67              = 67,
     EXECUTION_LOSS           = 68,
+
+    // Execution-objective diagnostic decomposition. These streams are written
+    // by ExecutionLossDiagnostic at the single Phase-2 loss boundary. Raw CE
+    // and accuracy expose head learning; contribution streams reconstruct the
+    // aggregate execution objective in the same normalization used by autograd.
+    EXEC_LOSS_GATE_CE_RAW          = 69,
+    EXEC_LOSS_STOP_CE_RAW          = 70,
+    EXEC_LOSS_OP_CE_RAW            = 71,
+    EXEC_LOSS_ARG1_CE_RAW          = 72,
+    EXEC_LOSS_ARG2_CE_RAW          = 73,
+    EXEC_LOSS_WRITE_CE_RAW         = 74,
+    EXEC_LOSS_DIV_PRE_NORM         = 75,
+    EXEC_LOSS_ENTROPY_CONTRIBUTION = 76,
+    EXEC_LOSS_GATE_CONTRIBUTION    = 77,
+    EXEC_LOSS_STOP_CONTRIBUTION    = 78,
+    EXEC_LOSS_OP_CONTRIBUTION      = 79,
+    EXEC_LOSS_ARG1_CONTRIBUTION    = 80,
+    EXEC_LOSS_ARG2_CONTRIBUTION    = 81,
+    EXEC_LOSS_WRITE_CONTRIBUTION   = 82,
+    EXEC_LOSS_DIV_CONTRIBUTION     = 83,
+    EXEC_LOSS_RECONSTRUCTED        = 84,
+    EXEC_LOSS_RESIDUAL             = 85,
+    EXEC_GATE_ACCURACY             = 86,
+    EXEC_STOP_ACCURACY             = 87,
+    EXEC_OP_ACCURACY               = 88,
+    EXEC_ARG1_ACCURACY             = 89,
+    EXEC_ARG2_ACCURACY             = 90,
+    EXEC_WRITE_ACCURACY            = 91,
+    EXEC_TEACHER_FORCED_RATIO      = 92,
+    EXEC_LOSS_SCALAR_TERM_COUNT    = 93,
 };
 
 const char* getMetricStreamName(MetricStream stream);

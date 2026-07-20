@@ -568,6 +568,8 @@ add_executable(train_gpu
     ../Diagnostics/LossBaselineDiagnostic.hpp
     ../Diagnostics/LossStatsDiagnostic.cu
     ../Diagnostics/LossStatsDiagnostic.hpp
+    ../Diagnostics/ExecutionLossDiagnostic.cu
+    ../Diagnostics/ExecutionLossDiagnostic.hpp
     ../Diagnostics/GradientNormDiagnostic.cu
     ../Diagnostics/GradientNormDiagnostic.hpp
     ../Diagnostics/PostClipParamGradEmbLmEquation.cu

@@ -373,6 +373,31 @@ const char* getMetricStreamName(MetricStream stream) {
         case MetricStream::RESERVED_66: return "reserved_66";
         case MetricStream::RESERVED_67: return "reserved_67";
         case MetricStream::EXECUTION_LOSS: return "execution_loss";
+        case MetricStream::EXEC_LOSS_GATE_CE_RAW: return "exec_loss_gate_ce_raw";
+        case MetricStream::EXEC_LOSS_STOP_CE_RAW: return "exec_loss_stop_ce_raw";
+        case MetricStream::EXEC_LOSS_OP_CE_RAW: return "exec_loss_op_ce_raw";
+        case MetricStream::EXEC_LOSS_ARG1_CE_RAW: return "exec_loss_arg1_ce_raw";
+        case MetricStream::EXEC_LOSS_ARG2_CE_RAW: return "exec_loss_arg2_ce_raw";
+        case MetricStream::EXEC_LOSS_WRITE_CE_RAW: return "exec_loss_write_ce_raw";
+        case MetricStream::EXEC_LOSS_DIV_PRE_NORM: return "exec_loss_div_pre_norm";
+        case MetricStream::EXEC_LOSS_ENTROPY_CONTRIBUTION: return "exec_loss_entropy_contribution";
+        case MetricStream::EXEC_LOSS_GATE_CONTRIBUTION: return "exec_loss_gate_contribution";
+        case MetricStream::EXEC_LOSS_STOP_CONTRIBUTION: return "exec_loss_stop_contribution";
+        case MetricStream::EXEC_LOSS_OP_CONTRIBUTION: return "exec_loss_op_contribution";
+        case MetricStream::EXEC_LOSS_ARG1_CONTRIBUTION: return "exec_loss_arg1_contribution";
+        case MetricStream::EXEC_LOSS_ARG2_CONTRIBUTION: return "exec_loss_arg2_contribution";
+        case MetricStream::EXEC_LOSS_WRITE_CONTRIBUTION: return "exec_loss_write_contribution";
+        case MetricStream::EXEC_LOSS_DIV_CONTRIBUTION: return "exec_loss_div_contribution";
+        case MetricStream::EXEC_LOSS_RECONSTRUCTED: return "exec_loss_reconstructed";
+        case MetricStream::EXEC_LOSS_RESIDUAL: return "exec_loss_residual";
+        case MetricStream::EXEC_GATE_ACCURACY: return "exec_gate_accuracy";
+        case MetricStream::EXEC_STOP_ACCURACY: return "exec_stop_accuracy";
+        case MetricStream::EXEC_OP_ACCURACY: return "exec_op_accuracy";
+        case MetricStream::EXEC_ARG1_ACCURACY: return "exec_arg1_accuracy";
+        case MetricStream::EXEC_ARG2_ACCURACY: return "exec_arg2_accuracy";
+        case MetricStream::EXEC_WRITE_ACCURACY: return "exec_write_accuracy";
+        case MetricStream::EXEC_TEACHER_FORCED_RATIO: return "exec_teacher_forced_ratio";
+        case MetricStream::EXEC_LOSS_SCALAR_TERM_COUNT: return "exec_loss_scalar_term_count";
         default: return "unknown";
     }
 }

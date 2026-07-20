@@ -98,7 +98,7 @@ constexpr int CUDA_TILE_DIM_TRANSPOSE = CUDA_WARP_SIZE;  // Tile dim = warp size
 // Hierarchical streaming statistics
 //======================================================//
 constexpr int TELEMETRY_MAX_LEVELS = 8;           // TelemetryLattice temporal levels
-constexpr int TELEMETRY_MAX_STREAMS = 69;         // TelemetryLattice metric streams (0-60 existing diagnostics, 61-68 raw loss components)
+constexpr int TELEMETRY_MAX_STREAMS = 94;         // TelemetryLattice metric streams (0-68 existing diagnostics, 69-93 execution-loss decomposition)
 
 //======================================================//
 // UnigramLM Training Constants

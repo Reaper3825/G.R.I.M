@@ -928,6 +928,12 @@ BatchResult processBatch(
     result.text_loss = loss_result.text_loss;
     result.selector_loss = loss_result.selector_loss;
     result.execution_loss = loss_result.execution_loss;
+    GRIM::Diagnostics::runExecutionLossDiagnostic(
+        ctx,
+        payload,
+        forward_outputs,
+        loss_result,
+        batch_idx);
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] explicit forward + autograd loss/backward returned, loss=%f success=%d\n", 
                         result.loss, static_cast<int>(loss_result.success));
 
