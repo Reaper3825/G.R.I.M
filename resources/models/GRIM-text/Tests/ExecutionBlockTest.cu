@@ -450,6 +450,24 @@ bool testExecutionBlockOutputMultiStep(std::string& message) {
     return true;
 }
 
+bool testExecutionOperandSelectionScale(std::string& message) {
+    const float expected = 1.0f / std::sqrt(768.0f);
+    const float actual = HyperParameters::computeExecutionOperandSelectionScale(
+        768, "testExecutionOperandSelectionScale");
+    EB_ASSERT_NEAR(actual, expected, 1e-7f,
+                   "operand selection scale uses full d_model width");
+
+    bool threw = false;
+    try {
+        (void)HyperParameters::computeExecutionOperandSelectionScale(
+            0, "testExecutionOperandSelectionScale");
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+    EB_ASSERT_TRUE(threw, "operand selection scale rejects d_model=0");
+    return true;
+}
+
 bool testDecoderSiluCacheForwardOwnership(std::string& message) {
     ModelForwardOutputs outputs;
     outputs.ensureExecutionBatchGeometry(1, "testDecoderSiluCacheForwardOwnership");
@@ -515,7 +533,48 @@ bool testInferencePromptControlBoundary(std::string& message) {
 }
 
 //======================================================//
-//  13. num_scratch_slots must stay < num_slots
+//  13. Cached decode payload retains host input ownership
+//======================================================//
+
+bool testInferenceDecodeHostInputOwnership(std::string& message) {
+    const std::vector<int> token_ids{7};
+    const std::vector<float> numeric_values{0.0f};
+    const std::vector<uint8_t> atom_mask{0};
+    const std::vector<uint32_t> atom_flags{0};
+    const std::vector<uint32_t> atom_entry_ids{GRIM::Tokenizer::kAtomEntryNone};
+    const std::vector<int32_t> candidate_slot_map;
+
+    auto payload = GRIM::Batching::buildInferenceBatchPayload(
+        token_ids,
+        numeric_values,
+        atom_mask,
+        atom_flags,
+        std::make_shared<GRIM::Tokenizer::AtomTable>(),
+        atom_entry_ids,
+        candidate_slot_map,
+        /*vocab_size=*/1024,
+        /*batch_capacity=*/1,
+        /*max_cached_seq_len=*/1,
+        /*execution_num_slots=*/8,
+        /*execution_num_scratch_slots=*/0,
+        /*number_encoder_digit_slots=*/0,
+        /*number_encoder_max_abs_pow10=*/0);
+
+    payload.mode = GRIM::Batching::BatchPayloadMode::InferenceDecode;
+    EB_ASSERT_TRUE(payload.isInferenceDecode(), "payload should be inference decode");
+    EB_ASSERT_TRUE(payload.ownsHostInputData(),
+                   "populated inference decode payload should own host input data");
+    payload.validate("testInferenceDecodeHostInputOwnership");
+
+    const auto geometry_only = GRIM::Batching::buildInferenceDecodePayload(/*vocab_size=*/1024);
+    EB_ASSERT_TRUE(!geometry_only.ownsHostInputData(),
+                   "geometry-only decode payload should not claim host input data");
+
+    return true;
+}
+
+//======================================================//
+//  14. num_scratch_slots must stay < num_slots
 //======================================================//
 
 bool testScratchSlotConstraint(std::string& message) {
@@ -793,12 +852,14 @@ int GRIM::Test::runExecutionBlockTests() {
     suite.addTest("Memory: allocate rejects invalid dims", testExecutionMemoryAllocateRejectsInvalid);
     suite.addTest("Memory: clear zeros state", testExecutionMemoryClear);
     suite.addTest("Config: ExecutionBlockConstructionHP defaults", testExecutionBlockConstructionHPDefaults);
+    suite.addTest("Config: execution operand-selection scale", testExecutionOperandSelectionScale);
     suite.addTest("Record: ExecutionRecord defaults", testExecutionRecordDefaults);
     suite.addTest("Metrics: ExecStepMetrics defaults", testExecStepMetricsDefaults);
     suite.addTest("Arithmetic: four-op semantics", testFourOpsSemantics);
     suite.addTest("Bootstrap: slot map semantics", testBootstrapSlotMapSemantics);
     suite.addTest("Output: multi-step aggregation", testExecutionBlockOutputMultiStep);
     suite.addTest("Control: final prompt-token boundary", testInferencePromptControlBoundary);
+    suite.addTest("Inference: decode payload owns host inputs", testInferenceDecodeHostInputOwnership);
     suite.addTest("Config: scratch-slot constraint", testScratchSlotConstraint);
     suite.addTest("Inference: slot compiler uses value-slot range", testInferenceSlotCompiler);
     suite.addTest("Inference: slot compiler rejects overflow", testInferenceSlotCompilerOverflow);

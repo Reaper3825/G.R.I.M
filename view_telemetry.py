@@ -84,6 +84,31 @@ TELEMETRY_STREAM_NAMES_BY_INDEX = {
     60: "optimizer_iteration",
     61: "text_loss",
     68: "execution_loss",
+    69: "exec_loss_gate_ce_raw",
+    70: "exec_loss_stop_ce_raw",
+    71: "exec_loss_op_ce_raw",
+    72: "exec_loss_arg1_ce_raw",
+    73: "exec_loss_arg2_ce_raw",
+    74: "exec_loss_write_ce_raw",
+    75: "exec_loss_div_pre_norm",
+    76: "exec_loss_entropy_contribution",
+    77: "exec_loss_gate_contribution",
+    78: "exec_loss_stop_contribution",
+    79: "exec_loss_op_contribution",
+    80: "exec_loss_arg1_contribution",
+    81: "exec_loss_arg2_contribution",
+    82: "exec_loss_write_contribution",
+    83: "exec_loss_div_contribution",
+    84: "exec_loss_reconstructed",
+    85: "exec_loss_residual",
+    86: "exec_gate_accuracy",
+    87: "exec_stop_accuracy",
+    88: "exec_op_accuracy",
+    89: "exec_arg1_accuracy",
+    90: "exec_arg2_accuracy",
+    91: "exec_write_accuracy",
+    92: "exec_teacher_forced_ratio",
+    93: "exec_loss_scalar_term_count",
 }
 
 DEAD_TELEMETRY_STREAM_INDICES = {26, 62, 63, 64, 65, 66, 67}
@@ -112,6 +137,7 @@ TELEMETRY_ZERO_REFERENCE_FIELDS = {
     "hw_h_dc_mean",
     "unigram_dir_cos_signed_mean",
     "rho_raw_avg_signed_dot",
+    "exec_loss_residual",
 }
 TELEMETRY_UNIT_INTERVAL_FIELDS = {
     "r_out",
@@ -124,6 +150,13 @@ TELEMETRY_UNIT_INTERVAL_FIELDS = {
     "init_tie_ptrs_same",
     "init_tie_grads_same",
     "init_lm_owns_weights",
+    "exec_gate_accuracy",
+    "exec_stop_accuracy",
+    "exec_op_accuracy",
+    "exec_arg1_accuracy",
+    "exec_arg2_accuracy",
+    "exec_write_accuracy",
+    "exec_teacher_forced_ratio",
 }
 TELEMETRY_FIELD_LABELS = {
     "raw_observation": "raw_observation",
@@ -1205,6 +1238,208 @@ def main():
         print(f"Saved: {os.path.splitext(path)[0]}_exec_block.png")
     else:
         print("Execution block figure skipped: no exec streams in CSV")
+
+    # --- Figure 6b: Execution Loss Objective Decomposition ---
+    exec_loss = streams.get("execution_loss")
+    exec_loss_reconstructed = streams.get("exec_loss_reconstructed")
+    exec_loss_residual = streams.get("exec_loss_residual")
+    exec_raw_ce_streams = [
+        ("gate", streams.get("exec_loss_gate_ce_raw"), "tab:blue"),
+        ("stop", streams.get("exec_loss_stop_ce_raw"), "tab:orange"),
+        ("op", streams.get("exec_loss_op_ce_raw"), "tab:green"),
+        ("arg1", streams.get("exec_loss_arg1_ce_raw"), "tab:red"),
+        ("arg2", streams.get("exec_loss_arg2_ce_raw"), "tab:purple"),
+        ("write", streams.get("exec_loss_write_ce_raw"), "tab:brown"),
+    ]
+    exec_contribution_streams = [
+        ("gate", streams.get("exec_loss_gate_contribution"), "tab:blue"),
+        ("stop", streams.get("exec_loss_stop_contribution"), "tab:orange"),
+        ("op", streams.get("exec_loss_op_contribution"), "tab:green"),
+        ("arg1", streams.get("exec_loss_arg1_contribution"), "tab:red"),
+        ("arg2", streams.get("exec_loss_arg2_contribution"), "tab:purple"),
+        ("write", streams.get("exec_loss_write_contribution"), "tab:brown"),
+        ("division", streams.get("exec_loss_div_contribution"), "tab:pink"),
+        ("entropy", streams.get("exec_loss_entropy_contribution"), "tab:gray"),
+    ]
+    exec_accuracy_streams = [
+        ("gate", streams.get("exec_gate_accuracy"), "tab:blue"),
+        ("stop", streams.get("exec_stop_accuracy"), "tab:orange"),
+        ("op", streams.get("exec_op_accuracy"), "tab:green"),
+        ("arg1", streams.get("exec_arg1_accuracy"), "tab:red"),
+        ("arg2", streams.get("exec_arg2_accuracy"), "tab:purple"),
+        ("write", streams.get("exec_write_accuracy"), "tab:brown"),
+    ]
+    exec_div_pre_norm = streams.get("exec_loss_div_pre_norm")
+    exec_div_contribution = streams.get("exec_loss_div_contribution")
+    exec_entropy_contribution = streams.get("exec_loss_entropy_contribution")
+    exec_teacher_forced = streams.get("exec_teacher_forced_ratio")
+    exec_scalar_terms = streams.get("exec_loss_scalar_term_count")
+
+    exec_loss_diag_streams = [
+        exec_loss_reconstructed,
+        exec_loss_residual,
+        exec_div_pre_norm,
+        exec_teacher_forced,
+        exec_scalar_terms,
+        *(stream for _, stream, _ in exec_raw_ce_streams),
+        *(stream for _, stream, _ in exec_contribution_streams),
+        *(stream for _, stream, _ in exec_accuracy_streams),
+    ]
+    if any(stream is not None for stream in exec_loss_diag_streams):
+        fig6b = plt.figure(figsize=(18, 16), constrained_layout=True)
+        fig6b.suptitle(
+            "GRIM-text Telemetry - Execution Loss Objective Decomposition",
+            fontsize=14,
+            fontweight="bold",
+        )
+        gs6b = GridSpec(3, 2, figure=fig6b)
+
+        # Aggregate loss must close against the independent reconstruction.
+        ax = fig6b.add_subplot(gs6b[0, 0])
+        for label, stream, color, linestyle in [
+            ("aggregate execution_loss", exec_loss, "tab:blue", "-"),
+            ("reconstructed", exec_loss_reconstructed, "tab:orange", "--"),
+        ]:
+            if stream is not None:
+                plot_raw_and_smooth(
+                    ax, stream.index, stream["raw_observation"],
+                    color=color,
+                    raw_label="_nolegend_",
+                    smooth_label=label,
+                    raw_alpha=0.10,
+                    smooth_linewidth=1.5,
+                    smooth_linestyle=linestyle,
+                )
+        ax.set_ylabel("Loss")
+        ax.set_title("Aggregate vs Independent Reconstruction")
+        ax.grid(True, alpha=0.3)
+        if ax.lines:
+            ax.legend(fontsize=8, loc="upper left")
+        if exec_loss_residual is not None:
+            ax2 = ax.twinx()
+            plot_raw_and_smooth(
+                ax2, exec_loss_residual.index, exec_loss_residual["raw_observation"],
+                color="tab:red",
+                raw_label="_nolegend_",
+                smooth_label="closure residual",
+                raw_alpha=0.12,
+                smooth_linewidth=1.2,
+            )
+            ax2.axhline(0.0, color="tab:red", linewidth=0.6, linestyle=":", alpha=0.6)
+            ax2.set_ylabel("Residual", color="tab:red")
+            ax2.legend(fontsize=8, loc="upper right")
+
+        # Unweighted CE shows which prediction heads are actually learning.
+        ax = fig6b.add_subplot(gs6b[0, 1])
+        for label, stream, color in exec_raw_ce_streams:
+            if stream is not None:
+                plot_raw_and_smooth(
+                    ax, stream.index, stream["raw_observation"],
+                    color=color,
+                    raw_label="_nolegend_",
+                    smooth_label=label,
+                    raw_alpha=0.08,
+                    smooth_linewidth=1.25,
+                )
+        ax.set_ylabel("Cross-entropy")
+        ax.set_title("Raw CE by Execution Head")
+        ax.grid(True, alpha=0.3)
+        if ax.lines:
+            ax.legend(fontsize=8, ncol=2)
+
+        # These are the terms after weights and scalar-term normalization.
+        ax = fig6b.add_subplot(gs6b[1, 0])
+        for label, stream, color in exec_contribution_streams:
+            if stream is not None:
+                plot_raw_and_smooth(
+                    ax, stream.index, stream["raw_observation"],
+                    color=color,
+                    raw_label="_nolegend_",
+                    smooth_label=label,
+                    raw_alpha=0.07,
+                    smooth_linewidth=1.2,
+                )
+        ax.axhline(0.0, color="gray", linewidth=0.6, linestyle=":")
+        ax.set_ylabel("Contribution to execution_loss")
+        ax.set_title("Weighted, Normalized Objective Contributions")
+        ax.grid(True, alpha=0.3)
+        if ax.lines:
+            ax.legend(fontsize=8, ncol=2)
+
+        ax = fig6b.add_subplot(gs6b[1, 1])
+        for label, stream, color in exec_accuracy_streams:
+            if stream is not None:
+                plot_raw_and_smooth(
+                    ax, stream.index, stream["raw_observation"],
+                    color=color,
+                    raw_label="_nolegend_",
+                    smooth_label=label,
+                    raw_alpha=0.08,
+                    smooth_linewidth=1.25,
+                )
+        ax.set_ylim(-0.03, 1.03)
+        ax.set_ylabel("Top-1 accuracy")
+        ax.set_title("Execution Head Accuracy")
+        ax.grid(True, alpha=0.3)
+        if ax.lines:
+            ax.legend(fontsize=8, ncol=2)
+
+        # Compare the raw division penalty with what survives normalization.
+        ax = fig6b.add_subplot(gs6b[2, 0])
+        for label, stream, color in [
+            ("division pre-normalization", exec_div_pre_norm, "tab:red"),
+            ("division contribution", exec_div_contribution, "tab:pink"),
+            ("entropy contribution", exec_entropy_contribution, "tab:gray"),
+        ]:
+            if stream is not None:
+                plot_raw_and_smooth(
+                    ax, stream.index, stream["raw_observation"],
+                    color=color,
+                    raw_label="_nolegend_",
+                    smooth_label=label,
+                    raw_alpha=0.10,
+                    smooth_linewidth=1.3,
+                )
+        ax.axhline(0.0, color="gray", linewidth=0.6, linestyle=":")
+        ax.set_ylabel("Loss units")
+        ax.set_title("Penalty and Entropy Terms")
+        ax.grid(True, alpha=0.3)
+        if ax.lines:
+            ax.legend(fontsize=8)
+
+        ax = fig6b.add_subplot(gs6b[2, 1])
+        if exec_teacher_forced is not None:
+            plot_raw_and_smooth(
+                ax, exec_teacher_forced.index, exec_teacher_forced["raw_observation"],
+                color="tab:cyan",
+                raw_label="_nolegend_",
+                smooth_label="teacher-forced ratio",
+                raw_alpha=0.10,
+                smooth_linewidth=1.4,
+            )
+        ax.set_ylim(-0.03, 1.03)
+        ax.set_ylabel("Teacher-forced fraction", color="tab:cyan")
+        ax.set_title("Supervision Mix and Scalar-Term Denominator")
+        ax.grid(True, alpha=0.3)
+        if ax.lines:
+            ax.legend(fontsize=8, loc="upper left")
+        if exec_scalar_terms is not None:
+            ax2 = ax.twinx()
+            plot_raw_and_smooth(
+                ax2, exec_scalar_terms.index, exec_scalar_terms["raw_observation"],
+                color="tab:olive",
+                raw_label="_nolegend_",
+                smooth_label="scalar term count",
+                raw_alpha=0.10,
+                smooth_linewidth=1.3,
+            )
+            ax2.set_ylabel("Scalar loss terms", color="tab:olive")
+            ax2.legend(fontsize=8, loc="upper right")
+
+        execution_loss_path = output_root(path) + "_exec_loss.png"
+        save_figure(fig6b, execution_loss_path)
+    else:
+        print("Execution loss decomposition figure skipped: no diagnostic streams in CSV")
 
     # --- Figure 7: EB Injection Diagnostics + Explicit Loss Composition ---
     eb_inject_gate = streams.get("eb_inject_gate")

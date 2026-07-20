@@ -239,7 +239,21 @@ struct BatchPayload {
     bool isInferencePrefill() const { return mode == BatchPayloadMode::InferencePrefill; }
     bool isInferenceDecode() const { return mode == BatchPayloadMode::InferenceDecode; }
     bool ownsHostInputData() const {
-        return mode == BatchPayloadMode::Training || mode == BatchPayloadMode::InferencePrefill;
+        if (!isInferenceDecode()) {
+            return true;
+        }
+
+        // Cached decode payloads normally carry the pending token and all of
+        // its host-authored side channels. The legacy geometry-only decode
+        // helper intentionally leaves every input array empty, so detect
+        // ownership from the payload contents instead of rejecting all decode
+        // payloads solely because of their mode.
+        return !input_ids.empty() ||
+               !numeric_values.empty() ||
+               !atom_mask.empty() ||
+               !atom_flags.empty() ||
+               !atom_entry_ids.empty() ||
+               !token_to_slot_map.empty();
     }
     bool hasTrainingTargets() const { return mode == BatchPayloadMode::Training; }
 

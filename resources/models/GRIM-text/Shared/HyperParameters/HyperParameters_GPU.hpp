@@ -229,6 +229,26 @@ inline float computeAttentionSoftmaxScale(int head_dim, const char* caller) {
     return scale;
 }
 
+// Execution operand selection scores contract a full-width [1, d_model]
+// selector query against [num_candidates, d_model] candidate states. This is
+// independent of transformer attention head partitioning (including GQA), so
+// the stabilizing dot-product scale is derived from d_model, not head_dim or
+// kv_dim.
+inline float computeExecutionOperandSelectionScale(int d_model, const char* caller) {
+    if (d_model <= 0) {
+        throw std::runtime_error(std::string(caller) + ": d_model must be > 0, got " +
+                                 std::to_string(d_model));
+    }
+    const float scale = 1.0f / std::sqrt(static_cast<float>(d_model));
+    if (!std::isfinite(scale) || scale <= 0.0f) {
+        throw std::runtime_error(
+            std::string(caller) +
+            ": computed execution operand-selection scale must be finite and > 0, got " +
+            std::to_string(scale));
+    }
+    return scale;
+}
+
 struct DerivationContext {
     int train_sequence_count = 0;
     int validation_interval = 0;

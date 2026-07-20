@@ -757,6 +757,9 @@ void executeStepCoordinatorImpl(
     const int ae = hp.atom_embedding_dim;
     const int vid = hp.value_decode_input_dim;
     const int vhd = hp.value_decode_hidden_dim;
+    const float operand_selection_scale =
+        HyperParameters::computeExecutionOperandSelectionScale(
+            dm, "executeStepCoordinatorImpl");
     int* d_exec_idx = diag.execIndices();
     int* d_exec_record_i = diag.execRecordI();
     float* d_exec_record_f = diag.execRecordF();
@@ -933,7 +936,9 @@ void executeStepCoordinatorImpl(
     auto decision_input = autograd::concat(dec_12, work.step_emb, stream);
 
     auto query1 = autograd::matmul(decision_input, params.w_arg1_select, stream);
-    auto arg1_logits = autograd::matmul(query1, work.cand_hidden, stream, true);
+    auto arg1_raw_scores = autograd::matmul(query1, work.cand_hidden, stream, true);
+    auto arg1_logits = autograd::mul_scalar(
+        arg1_raw_scores, operand_selection_scale, stream);
     kernelApplyLogitMask<<<(V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         arg1_logits.data, arg1_logits.data, work.cand_mask.data, V_val);
     CUDA_CHECK_KERNEL();
@@ -943,7 +948,9 @@ void executeStepCoordinatorImpl(
     kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_arg1.data, V_val, diag.numericErrorFlag(), kStagePArg1);
 
     auto query2 = autograd::matmul(decision_input, params.w_arg2_select, stream);
-    auto arg2_logits = autograd::matmul(query2, work.cand_hidden, stream, true);
+    auto arg2_raw_scores = autograd::matmul(query2, work.cand_hidden, stream, true);
+    auto arg2_logits = autograd::mul_scalar(
+        arg2_raw_scores, operand_selection_scale, stream);
     kernelApplyLogitMask<<<(V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         arg2_logits.data, arg2_logits.data, work.cand_mask.data, V_val);
     CUDA_CHECK_KERNEL();
