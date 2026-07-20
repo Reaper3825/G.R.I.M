@@ -44,7 +44,7 @@ Workstream 0 leaves the ExecutionBlock in a much smaller and stricter shape:
 |---|---|---|
 | `values` | `[V, 1]` | Scalar value stored per slot |
 | `atom_embeds` | `[V, atom_embedding_dim]` | Atom-format embedding stored per slot |
-| `state_embeds` | `[V, d_model]` | Hidden-state embedding stored per slot |
+| `state_embeds` | `[V, d_model]` | Runtime content embedding; authored bootstrap fuses value projection with the mapped selector candidate key, while generated writes replace it with result state |
 | `valid_mask` | `[V]` | Slot initialized / live mask |
 | `usage` | `[V]` | Decayed cross-attention usage score |
 | `key_embeds` | `[V, d_key]` | Addressing keys for write/read |

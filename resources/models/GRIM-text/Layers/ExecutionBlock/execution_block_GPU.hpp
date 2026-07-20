@@ -48,7 +48,7 @@ struct RecordEncodeBackwardStaging;
 struct ExecutionMemory {
     Tensor values;            // [V, 1]       scalar ground truth per slot
     Tensor atom_embeds;       // [V, 64]      ScratchBlock-format encoding
-    Tensor state_embeds;      // [V, d_model] value projection for cross-attn V
+    Tensor state_embeds;      // [V, d_model] runtime content; bootstrap fuses value + selector key
     Tensor valid_mask;        // [V]          1.0 if filled, 0.0 if empty
     Tensor usage;             // [V]          decayed cross-attn read weight
     Tensor key_embeds;        // [V, d_key]   addressing keys
@@ -180,7 +180,8 @@ void executionBlockStep(
 );
 
 //--------------------------------------------------//
-// Bootstrap: copy literal values into M.values via slot map (detached, no grad)
+// Bootstrap: copy literal values into M.values and fuse selector candidate
+// identity into M.state_embeds via the slot-to-pool map (detached, no grad).
 //--------------------------------------------------//
 void executionBlockBootstrapMemoryFromSlotMap(
     const HyperParameters::ExecutionBlockConstructionHP& hp,
@@ -188,6 +189,9 @@ void executionBlockBootstrapMemoryFromSlotMap(
     ExecutionBlockParameterTensors& parameters,
     const float* device_numeric_values,  // [row_tokens]
     const int32_t* device_slot_map,      // [row_tokens]
+    const float* selector_candidate_keys, // [num_pool_atoms, d_model], nullable with map
+    const int* bootstrap_slot_to_pool_index, // [num_slots], nullable with keys
+    int num_pool_atoms,
     int row_tokens,
     cudaStream_t stream
 );

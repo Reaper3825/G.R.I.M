@@ -14,6 +14,8 @@ using Forward::ExecutionBlockOutput;
 using Forward::ExecutionBlockStepOutput;
 using Forward::ExecutionRecord;
 
+constexpr float kResidualFusionScale = 0.7071067811865475f; // 1 / sqrt(2)
+
 // Bootstrap slots — last-token-wins semantics for duplicate slot mappings.
 // Multiple tokens may map to the same slot; we use atomicExch on valid_mask
 // (idempotent) and a two-pass approach: first mark valid, then a second kernel
@@ -55,15 +57,33 @@ __global__ void kernelBootstrapSlotEmbeddings(
     const float* __restrict__ W_val2emb,
     const float* __restrict__ b_val2emb,
     const float* __restrict__ W_key_proj,
+    const float* __restrict__ selector_candidate_keys,
+    const int* __restrict__ bootstrap_slot_to_pool_index,
+    int num_pool_atoms,
+    int* __restrict__ bridge_error,
     int V, int d_model, int d_key
 ) {
     const int slot = blockIdx.x;
     if (slot >= V || valid_mask[slot] == 0.0f) return;
 
     const float val = values[slot];
+    int pool_index = -1;
+    const bool bridge_enabled = selector_candidate_keys != nullptr;
+    if (bridge_enabled) {
+        pool_index = bootstrap_slot_to_pool_index[slot];
+        if (pool_index < 0 || pool_index >= num_pool_atoms) {
+            if (threadIdx.x == 0 && bridge_error) atomicCAS(bridge_error, 0, 1);
+            pool_index = -1;
+        }
+    }
     extern __shared__ float smem[];
     for (int d = threadIdx.x; d < d_model; d += blockDim.x) {
         float emb_d = val * W_val2emb[d] + (b_val2emb ? b_val2emb[d] : 0.0f);
+        if (pool_index >= 0) {
+            emb_d = kResidualFusionScale *
+                (emb_d + selector_candidate_keys[
+                    static_cast<size_t>(pool_index) * d_model + d]);
+        }
         state_embeds[static_cast<size_t>(slot) * d_model + d] = emb_d;
         smem[d] = emb_d;
     }
@@ -93,6 +113,7 @@ __global__ void kernelGatherSlotOnlyHidden(
     float* __restrict__ out,
     const float* __restrict__ mem_state,
     const float* __restrict__ mem_valid,
+    const float* __restrict__ slot_embeddings,
     int V_val, int S, int d_model
 ) {
     const int i = blockIdx.x;
@@ -100,9 +121,10 @@ __global__ void kernelGatherSlotOnlyHidden(
     const int slot = S + i;
     const float valid = mem_valid[slot];
     const float* src = mem_state + static_cast<size_t>(slot) * d_model;
+    const float* slot_emb = slot_embeddings + static_cast<size_t>(slot) * d_model;
     float* dst = out + static_cast<size_t>(i) * d_model;
     for (int j = threadIdx.x; j < d_model; j += blockDim.x)
-        dst[j] = valid * src[j];
+        dst[j] = valid * kResidualFusionScale * (src[j] + slot_emb[j]);
 }
 
 __global__ void kernelBuildSlotOnlyCandidateMask(
@@ -367,12 +389,26 @@ void executionBlockBootstrapMemoryFromSlotMap(
     ExecutionBlockParameterTensors& parameters,
     const float* device_numeric_values,
     const int32_t* device_slot_map,
+    const float* selector_candidate_keys,
+    const int* bootstrap_slot_to_pool_index,
+    int num_pool_atoms,
     int row_tokens,
     cudaStream_t stream)
 {
     EXEC_CHECK(device_numeric_values != nullptr, "bootstrapMemoryFromSlotMap: device_numeric_values is null");
     EXEC_CHECK(device_slot_map != nullptr, "bootstrapMemoryFromSlotMap: device_slot_map is null");
     EXEC_CHECK(row_tokens > 0, "bootstrapMemoryFromSlotMap: row_tokens must be positive");
+    const bool has_selector_keys = selector_candidate_keys != nullptr;
+    const bool has_bridge_map = bootstrap_slot_to_pool_index != nullptr;
+    EXEC_CHECK(has_selector_keys == has_bridge_map,
+               "bootstrapMemoryFromSlotMap: selector keys and slot-to-pool map must be supplied together");
+    if (has_selector_keys) {
+        EXEC_CHECK(num_pool_atoms > 0,
+                   "bootstrapMemoryFromSlotMap: selector bridge requires num_pool_atoms > 0");
+    } else {
+        EXEC_CHECK(num_pool_atoms == 0,
+                   "bootstrapMemoryFromSlotMap: num_pool_atoms must be zero when selector bridge is absent");
+    }
     auto& params = parameters;
 
     const int V = hp.num_slots;
@@ -399,13 +435,41 @@ void executionBlockBootstrapMemoryFromSlotMap(
     const int dm = hp.d_model;
     const int dk = hp.d_key;
     const size_t smem_bytes = dm * sizeof(float);
+    int* d_bridge_error = nullptr;
+    if (has_selector_keys) {
+        cudaMallocOrThrow(
+            reinterpret_cast<void**>(&d_bridge_error),
+            sizeof(int),
+            "bootstrap_selector_bridge_error");
+        CUDA_CHECK(cudaMemsetAsync(d_bridge_error, 0, sizeof(int), stream));
+    }
     kernelBootstrapSlotEmbeddings<<<V, kBlockSize, smem_bytes, stream>>>(
         M.state_embeds.data, M.key_embeds.data,
         M.values.data, M.valid_mask.data,
         params.W_value_to_emb.data, params.b_value_to_emb.data,
         params.W_key_proj.data,
+        selector_candidate_keys,
+        bootstrap_slot_to_pool_index,
+        num_pool_atoms,
+        d_bridge_error,
         V, dm, dk);
     CUDA_CHECK_KERNEL();
+    if (d_bridge_error) {
+        int h_bridge_error = 0;
+        CUDA_CHECK(cudaMemcpyAsync(
+            &h_bridge_error,
+            d_bridge_error,
+            sizeof(int),
+            cudaMemcpyDeviceToHost,
+            stream));
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        CUDA_CHECK(cudaFree(d_bridge_error));
+        if (h_bridge_error != 0) {
+            throw std::runtime_error(
+                "bootstrapMemoryFromSlotMap: a valid authored execution slot has no "
+                "in-range selector-pool identity");
+        }
+    }
 
     const int dt = hp.d_type;
     kernelBootstrapTypeEmbed<<<V, kBlockSize, 0, stream>>>(
@@ -419,6 +483,7 @@ namespace ExecutionBlockInternal {
 void buildValueSlotCandidates(
     const HyperParameters::ExecutionBlockConstructionHP& hp,
     const ExecutionMemory& memory,
+    const ExecutionBlockParameterTensors& parameters,
     cudaStream_t stream,
     StepWorkingSet& work
 ) {
@@ -430,7 +495,13 @@ void buildValueSlotCandidates(
     work.cand_hidden.requires_grad = false;
     work.cand_hidden.is_leaf = true;
     kernelGatherSlotOnlyHidden<<<V_val, kBlockSize, 0, stream>>>(
-        work.cand_hidden.data, memory.state_embeds.data, memory.valid_mask.data, V_val, S, dm);
+        work.cand_hidden.data,
+        memory.state_embeds.data,
+        memory.valid_mask.data,
+        parameters.E_slot.data,
+        V_val,
+        S,
+        dm);
     CUDA_CHECK_KERNEL();
 
     work.cand_mask = Tensor::zeros({1, V_val}, stream, "exec_cand_mask");

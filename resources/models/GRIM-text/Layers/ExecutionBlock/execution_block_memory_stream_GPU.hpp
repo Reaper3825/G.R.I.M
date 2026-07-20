@@ -8,6 +8,7 @@ namespace GRIM::ExecutionBlockInternal {
 void buildValueSlotCandidates(
 	const HyperParameters::ExecutionBlockConstructionHP& hp,
 	const ExecutionMemory& memory,
+	const ExecutionBlockParameterTensors& parameters,
 	cudaStream_t stream,
 	StepWorkingSet& work);
 

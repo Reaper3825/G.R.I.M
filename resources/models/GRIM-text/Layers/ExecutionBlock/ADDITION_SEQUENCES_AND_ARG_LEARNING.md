@@ -34,7 +34,9 @@ There are **no built-in labels** that say “gold arg1 slot = 0, gold arg2 slot 
 - Use **two distinct slots** for two addends (e.g. first literal → slot `S`, second → `S+1`, or fixed indices like `0` and `1` when `num_scratch_slots == 0`).
 - All **non-state** positions should be **`-1`**.
 
-Bootstrap runs once per forward at the execution layer (before `executeStep` loops): it copies literals into **`M.values[slot]`** and sets **`valid_mask`**.
+Bootstrap runs once per forward at the execution layer (before `executeStep` loops): it copies literals into **`M.values[slot]`** and sets **`valid_mask`**. It also uses `bootstrap_slot_to_pool_index` to fuse the authored token's NumberEncoder-derived selector key into **`M.state_embeds[slot]`**. Generated writes replace that state embedding, so authored provenance cannot remain stale after an overwrite.
+
+Operand candidate rows add the learned absolute address **`E_slot[slot]`** to the current runtime content. Consequently, equal values or repeated selector candidates can still occupy distinguishable registers while `w_arg1_select_` and `w_arg2_select_` retain ownership of operand-role selection.
 
 ### 3. Prompt shape (recommended for curriculum)
 

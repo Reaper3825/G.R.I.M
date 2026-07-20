@@ -157,18 +157,17 @@ std::array<float, 2> readBinaryControlProbabilities(
     return host;
 }
 
-// Arg/option selector head: encode candidate atom-entry keys (detached, from the
-// NumberEncoder) and score the live LM-head hidden state against this row's
-// candidate window. Emits ModelForwardOutputs::selector_logits [total_tokens,
-// num_pool_atoms]. W_q carries gradient only when the parameter graph is
-// connected (training); keys are always detached (NumberEncoder trains via the
-// input-side fusion). No-op when the pool is empty for this batch.
-void materializeForwardSelectorLogits(
+// Encode the candidate atom-entry pool once for both forward consumers:
+// token-level selector scoring and ExecutionBlock authored-slot bootstrap.
+// Candidate keys are independent of encoder hidden state, so preparing them
+// before the encoder loop does not change selector causality.
+void materializeForwardSelectorCandidateKeys(
     const ModelForwardRequest& request,
     const Batching::BatchPayload& payload,
+    bool execution_bridge_requested,
     ModelForwardOutputs& forward_outputs) {
-    forward_outputs.selector_logits = Tensor();
-    if (!request.graph.emit_selector_logits) {
+    forward_outputs.selector_candidate_keys = Tensor();
+    if (!request.graph.emit_selector_logits && !execution_bridge_requested) {
         return;
     }
 
@@ -179,17 +178,16 @@ void materializeForwardSelectorLogits(
 
     const auto number_encoder_hp = HyperParameters::numberEncoderConstructionHP(*request.config);
     if (!number_encoder_hp.enabled) {
-        throw std::runtime_error("executeModelForward: graph.emit_selector_logits=true requires the NumberEncoder to be enabled (candidate keys are NumberEncoder-derived)");
+        throw std::runtime_error(
+            "executeModelForward: selector candidate keys require the NumberEncoder "
+            "to be enabled");
     }
     if (!request.bindings->d_pool_digit_values || !request.bindings->d_pool_digit_pow10_index ||
         !request.bindings->d_pool_digit_mask || !request.bindings->d_pool_digit_slot_features ||
         !request.bindings->d_pool_global_features || !request.bindings->d_row_atom_offset) {
-        throw std::runtime_error("executeModelForward: selector requested but candidate-pool device bindings are NULL");
-    }
-
-    Tensor* sel_input = forward_outputs.liveLmHeadInputOrNull();
-    if (!sel_input || !sel_input->data) {
-        throw std::runtime_error("executeModelForward: live LM-head input is NULL before selector materialization");
+        throw std::runtime_error(
+            "executeModelForward: selector candidate keys requested but candidate-pool "
+            "device bindings are NULL");
     }
 
     auto& ne = request.parameter_registry->requireNumberEncoderParameters("executeModelForward(selector)");
@@ -221,7 +219,7 @@ void materializeForwardSelectorLogits(
     ne_params.b_g1 = &ne_src->b_g1;
     ne_params.W_g2 = &ne_src->W_g2;
 
-    Tensor keys = autograd::encodeAtomEntryPoolKeys(
+    forward_outputs.selector_candidate_keys = autograd::encodeAtomEntryPoolKeys(
         ne_params, number_encoder_hp,
         request.bindings->d_pool_digit_values,
         request.bindings->d_pool_digit_pow10_index,
@@ -229,6 +227,35 @@ void materializeForwardSelectorLogits(
         request.bindings->d_pool_digit_slot_features,
         request.bindings->d_pool_global_features,
         num_pool_atoms, request.stream);
+}
+
+// Arg/option selector head: score the live LM-head hidden state against the
+// already-materialized candidate pool. Emits selector_logits
+// [total_tokens, num_pool_atoms].
+void materializeForwardSelectorLogits(
+    const ModelForwardRequest& request,
+    const Batching::BatchPayload& payload,
+    ModelForwardOutputs& forward_outputs) {
+    forward_outputs.selector_logits = Tensor();
+    if (!request.graph.emit_selector_logits) {
+        return;
+    }
+
+    const int num_pool_atoms = request.bindings->num_pool_atoms;
+    if (num_pool_atoms <= 0) {
+        return;
+    }
+    if (!forward_outputs.selector_candidate_keys.data) {
+        throw std::runtime_error(
+            "executeModelForward: selector logits requested before candidate keys "
+            "were materialized");
+    }
+
+    Tensor* sel_input = forward_outputs.liveLmHeadInputOrNull();
+    if (!sel_input || !sel_input->data) {
+        throw std::runtime_error(
+            "executeModelForward: live LM-head input is NULL before selector materialization");
+    }
 
     auto& sel = request.parameter_registry->requireSelectorParameters("executeModelForward(selector)");
     // Connected (training): score against the registered W_q leaf so gradient
@@ -245,7 +272,7 @@ void materializeForwardSelectorLogits(
     const float selector_scale = 1.0f / std::sqrt(static_cast<float>(d_model));
 
     forward_outputs.selector_logits = ArgSelector::argSelectorForward(
-        *sel_input, *W_q_ptr, keys, payload,
+        *sel_input, *W_q_ptr, forward_outputs.selector_candidate_keys, payload,
         request.bindings->d_row_atom_offset, num_pool_atoms, selector_scale, request.stream);
 }
 
@@ -555,6 +582,29 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
         }
     }
 
+    const bool execution_selector_bridge_requested =
+        execution_block_active && payload.execution_slot_count > 0;
+    if (execution_selector_bridge_requested) {
+        if (payload.execution_slot_count != execution_hp.num_slots) {
+            throw std::runtime_error(
+                "ModelForward: payload.execution_slot_count=" +
+                std::to_string(payload.execution_slot_count) +
+                " does not match ExecutionBlock num_slots=" +
+                std::to_string(execution_hp.num_slots));
+        }
+        if (!bindings->d_bootstrap_slot_to_pool_index ||
+            bindings->execution_slot_count != execution_hp.num_slots) {
+            throw std::runtime_error(
+                "ModelForward: selector-to-execution bootstrap bridge bindings are "
+                "missing or have incompatible slot geometry");
+        }
+    }
+    materializeForwardSelectorCandidateKeys(
+        request,
+        payload,
+        execution_selector_bridge_requested,
+        forward_outputs);
+
     if (dropout_enabled && dropout_rate > 0.0f) {
         const uint64_t emb_dropout_seed = request.batch_idx * 2654435761ULL + 500;
         constexpr uint64_t kEmbeddingDropoutMaskStream = 0x0005000000000001ULL;
@@ -794,12 +844,28 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                             "ModelForward(no_grad): execution decision has no bootstrap bindings");
                     }
                     auto& memory = forward_outputs.exec_memories[b];
+                    if (execution_selector_bridge_requested &&
+                        !forward_outputs.selector_candidate_keys.data) {
+                        throw std::runtime_error(
+                            "ModelForward(no_grad): execution bootstrap has selector bridge "
+                            "metadata but no candidate-key tensor");
+                    }
                     GRIM::executionBlockBootstrapMemoryFromSlotMap(
                         execution_hp,
                         memory,
                         *execution_block_parameters,
                         request.bindings->d_numeric_values + row_offset,
                         request.bindings->d_token_to_slot_map + row_offset,
+                        execution_selector_bridge_requested
+                            ? forward_outputs.selector_candidate_keys.data
+                            : nullptr,
+                        execution_selector_bridge_requested
+                            ? request.bindings->d_bootstrap_slot_to_pool_index +
+                                static_cast<size_t>(b) * execution_hp.num_slots
+                            : nullptr,
+                        execution_selector_bridge_requested
+                            ? request.bindings->num_pool_atoms
+                            : 0,
                         row_len,
                         request.stream);
 
@@ -1020,12 +1086,28 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                             + " has no slot map or numeric values for bootstrap — "
                             "compiled payload marks row active but bootstrap data is missing");
                     }
+                    if (execution_selector_bridge_requested &&
+                        !forward_outputs.selector_candidate_keys.data) {
+                        throw std::runtime_error(
+                            "ModelForward: execution-active row has selector bridge metadata "
+                            "but no candidate-key tensor");
+                    }
                     GRIM::executionBlockBootstrapMemoryFromSlotMap(
                         execution_hp,
                         M_b,
                         *execution_block_parameters,
                         request.bindings->d_numeric_values + tok_off,
                         request.bindings->d_token_to_slot_map + tok_off,
+                        execution_selector_bridge_requested
+                            ? forward_outputs.selector_candidate_keys.data
+                            : nullptr,
+                        execution_selector_bridge_requested
+                            ? request.bindings->d_bootstrap_slot_to_pool_index +
+                                static_cast<size_t>(b) * execution_hp.num_slots
+                            : nullptr,
+                        execution_selector_bridge_requested
+                            ? request.bindings->num_pool_atoms
+                            : 0,
                         row_len, request.stream);
 
                     if (payload.teacher_step_mask.empty()

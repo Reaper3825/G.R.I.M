@@ -829,7 +829,7 @@ void executeStepCoordinatorImpl(
     }
 
     StepWorkingSet work;
-    buildValueSlotCandidates(hp, memory, stream, work);
+    buildValueSlotCandidates(hp, memory, parameters, stream, work);
     kernelCheckFinite<<<(V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         work.slot_values.data, V_val, diag.numericErrorFlag(), kStageV1, hp.magnitude_limit);
 

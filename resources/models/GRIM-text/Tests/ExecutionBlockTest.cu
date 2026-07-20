@@ -10,6 +10,7 @@
 
 #include "../Layers/ExecutionBlock/execution_block_GPU.hpp"
 #include "../Layers/ExecutionBlock/execution_block_data_stream_GPU.hpp"
+#include "../Layers/ExecutionBlock/execution_block_memory_stream_GPU.hpp"
 #include "../Shared/Batching/BatchPayload.hpp"
 #include "../Shared/Execution/ExecutionResultEmission.hpp"
 #include "../Shared/Forward/ModelForwardOutputs.hpp"
@@ -549,6 +550,163 @@ bool testSelectorExecutionBootstrapMetadata(std::string& message) {
     return true;
 }
 
+bool testSelectorExecutionForwardBridge(std::string& message) {
+    cudaStream_t stream = nullptr;
+    cudaStreamCreate(&stream);
+
+    constexpr int V = 4;
+    constexpr int S = 2;
+    constexpr int dm = 4;
+    constexpr int dk = 2;
+    constexpr int dt = 2;
+    constexpr int pool_atoms = 2;
+    constexpr float inv_sqrt_2 = 0.7071067811865475f;
+
+    HyperParameters::ExecutionBlockConstructionHP hp{};
+    hp.num_slots = V;
+    hp.num_scratch_slots = S;
+    hp.d_model = dm;
+    hp.d_key = dk;
+    hp.d_type = dt;
+
+    {
+        ModelForwardOutputs outputs;
+        outputs.ensureExecutionBatchGeometry(1, "testSelectorExecutionForwardBridge");
+        outputs.allocateExecutionMemoryRow(
+            0, V, /*atom_dim=*/4, dm, dk, dt, stream,
+            "testSelectorExecutionForwardBridge");
+        auto& memory = outputs.exec_memories[0];
+
+        ExecutionBlockParameterTensors params{};
+        params.W_value_to_emb = Tensor::zeros({1, dm}, stream, "test_W_value_to_emb");
+        params.b_value_to_emb = Tensor::zeros({1, dm}, stream, "test_b_value_to_emb");
+        params.W_key_proj = Tensor::zeros({dm, dk}, stream, "test_W_key_proj");
+        params.type_num_embed = Tensor::zeros({1, dt}, stream, "test_type_num_embed");
+        params.E_slot = Tensor::zeros({V, dm}, stream, "test_E_slot");
+
+        const std::vector<float> h_slot_embeddings{
+            0.0f, 0.0f, 0.0f, 0.0f,
+            0.0f, 0.0f, 0.0f, 0.0f,
+            100.0f, 0.0f, 0.0f, 0.0f,
+            0.0f, 200.0f, 0.0f, 0.0f};
+        cudaMemcpyAsync(
+            params.E_slot.data,
+            h_slot_embeddings.data(),
+            h_slot_embeddings.size() * sizeof(float),
+            cudaMemcpyHostToDevice,
+            stream);
+
+        Tensor candidate_keys = Tensor::zeros(
+            {pool_atoms, dm}, stream, "test_selector_candidate_keys");
+        const std::vector<float> h_candidate_keys{
+            1.0f, 2.0f, 3.0f, 4.0f,
+            10.0f, 20.0f, 30.0f, 40.0f};
+        cudaMemcpyAsync(
+            candidate_keys.data,
+            h_candidate_keys.data(),
+            h_candidate_keys.size() * sizeof(float),
+            cudaMemcpyHostToDevice,
+            stream);
+
+        const std::vector<float> h_numeric_values{7.0f, 7.0f};
+        const std::vector<int32_t> h_slot_map{2, 3};
+        const std::vector<int> h_slot_to_pool{-1, -1, 0, 1};
+        float* d_numeric_values = nullptr;
+        int32_t* d_slot_map = nullptr;
+        int* d_slot_to_pool = nullptr;
+        cudaMalloc(reinterpret_cast<void**>(&d_numeric_values),
+                   h_numeric_values.size() * sizeof(float));
+        cudaMalloc(reinterpret_cast<void**>(&d_slot_map),
+                   h_slot_map.size() * sizeof(int32_t));
+        cudaMalloc(reinterpret_cast<void**>(&d_slot_to_pool),
+                   h_slot_to_pool.size() * sizeof(int));
+        cudaMemcpyAsync(
+            d_numeric_values,
+            h_numeric_values.data(),
+            h_numeric_values.size() * sizeof(float),
+            cudaMemcpyHostToDevice,
+            stream);
+        cudaMemcpyAsync(
+            d_slot_map,
+            h_slot_map.data(),
+            h_slot_map.size() * sizeof(int32_t),
+            cudaMemcpyHostToDevice,
+            stream);
+        cudaMemcpyAsync(
+            d_slot_to_pool,
+            h_slot_to_pool.data(),
+            h_slot_to_pool.size() * sizeof(int),
+            cudaMemcpyHostToDevice,
+            stream);
+
+        executionBlockBootstrapMemoryFromSlotMap(
+            hp,
+            memory,
+            params,
+            d_numeric_values,
+            d_slot_map,
+            candidate_keys.data,
+            d_slot_to_pool,
+            pool_atoms,
+            static_cast<int>(h_slot_map.size()),
+            stream);
+
+        std::vector<float> h_state(static_cast<size_t>(V) * dm, 0.0f);
+        cudaMemcpy(
+            h_state.data(),
+            memory.state_embeds.data,
+            h_state.size() * sizeof(float),
+            cudaMemcpyDeviceToHost);
+        for (int d = 0; d < dm; ++d) {
+            EB_ASSERT_NEAR(
+                h_state[static_cast<size_t>(2) * dm + d],
+                inv_sqrt_2 * h_candidate_keys[static_cast<size_t>(d)],
+                1e-5f,
+                "bootstrap slot 2 gathers selector candidate 0");
+            EB_ASSERT_NEAR(
+                h_state[static_cast<size_t>(3) * dm + d],
+                inv_sqrt_2 * h_candidate_keys[static_cast<size_t>(dm + d)],
+                1e-5f,
+                "bootstrap slot 3 gathers selector candidate 1");
+        }
+
+        ExecutionBlockInternal::StepWorkingSet work;
+        ExecutionBlockInternal::buildValueSlotCandidates(
+            hp, memory, params, stream, work);
+        std::vector<float> h_candidates(static_cast<size_t>(V - S) * dm, 0.0f);
+        cudaMemcpy(
+            h_candidates.data(),
+            work.cand_hidden.data,
+            h_candidates.size() * sizeof(float),
+            cudaMemcpyDeviceToHost);
+        for (int d = 0; d < dm; ++d) {
+            const float slot2_state =
+                inv_sqrt_2 * h_candidate_keys[static_cast<size_t>(d)];
+            const float slot3_state =
+                inv_sqrt_2 * h_candidate_keys[static_cast<size_t>(dm + d)];
+            EB_ASSERT_NEAR(
+                h_candidates[static_cast<size_t>(d)],
+                inv_sqrt_2 *
+                    (slot2_state + h_slot_embeddings[static_cast<size_t>(2) * dm + d]),
+                1e-5f,
+                "operand candidate 0 includes absolute slot identity");
+            EB_ASSERT_NEAR(
+                h_candidates[static_cast<size_t>(dm + d)],
+                inv_sqrt_2 *
+                    (slot3_state + h_slot_embeddings[static_cast<size_t>(3) * dm + d]),
+                1e-5f,
+                "operand candidate 1 includes absolute slot identity");
+        }
+
+        cudaFree(d_numeric_values);
+        cudaFree(d_slot_map);
+        cudaFree(d_slot_to_pool);
+    }
+
+    cudaStreamDestroy(stream);
+    return true;
+}
+
 //======================================================//
 //  12. Inference control boundary is final prompt token
 //======================================================//
@@ -920,6 +1078,7 @@ int GRIM::Test::runExecutionBlockTests() {
     suite.addTest("Bootstrap: slot map semantics", testBootstrapSlotMapSemantics);
     suite.addTest("Output: multi-step aggregation", testExecutionBlockOutputMultiStep);
     suite.addTest("Metadata: selector-to-execution bootstrap identity", testSelectorExecutionBootstrapMetadata);
+    suite.addTest("Forward: selector-to-execution operand bridge", testSelectorExecutionForwardBridge);
     suite.addTest("Control: final prompt-token boundary", testInferencePromptControlBoundary);
     suite.addTest("Inference: decode payload owns host inputs", testInferenceDecodeHostInputOwnership);
     suite.addTest("Config: scratch-slot constraint", testScratchSlotConstraint);

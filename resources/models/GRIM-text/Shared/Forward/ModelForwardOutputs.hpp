@@ -390,6 +390,10 @@ public:
     Tensor lm_head_mlp_swiglu_out;    // [total_tokens, mlp_d_ff] silu ⊙ up
     Tensor lm_head_mlp_residual_out;  // [total_tokens, d_model] u = z + alpha * (swiglu @ W_down)
     Tensor logits_tensor;
+    // NumberEncoder-derived candidate keys shared by the token-level selector
+    // and ExecutionBlock authored-slot bootstrap. Prepared before the encoder
+    // loop whenever either consumer needs them.
+    Tensor selector_candidate_keys; // [num_pool_atoms, d_model]
     // Arg/option selector head: [total_tokens, num_pool_atoms] selection logits over
     // the candidate atom-entry pool (out-of-row-window candidates masked to -inf).
     // Empty unless the forward graph policy requested emit_selector_logits.
@@ -578,6 +582,7 @@ public:
         lm_head_mlp_swiglu_out = Tensor();
         lm_head_mlp_residual_out = Tensor();
         logits_tensor = Tensor();
+        selector_candidate_keys = Tensor();
         selector_logits = Tensor();
         scratch_atom_embeddings = Tensor();
         for (auto& staging : normalized_entropy_backward_staging) {
@@ -677,6 +682,7 @@ public:
         reportTensor("lm_head_mlp_swiglu_out", lm_head_mlp_swiglu_out);
         reportTensor("lm_head_mlp_residual_out", lm_head_mlp_residual_out);
         reportTensor("logits_tensor", logits_tensor);
+        reportTensor("selector_candidate_keys", selector_candidate_keys);
         reportTensor("selector_logits", selector_logits);
         reportTensor("scratch_atom_embeddings", scratch_atom_embeddings);
         for (size_t row = 0; row < exec_memory_storage.size(); ++row) {
