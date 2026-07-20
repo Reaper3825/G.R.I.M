@@ -900,8 +900,11 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 && !forward_outputs.exec_memories.empty()) {
                 // executeStep(...) may export the immediate step result on the
                 // execution layer output, but persistent ExecutionMemory is a
-                // downstream side channel. Its first consumer is the next
-                // layer input at the row-final token only.
+                // downstream side channel. During retained-graph training its
+                // first consumer is the execution prompt-end token. Unlike the
+                // row-final token (whose next-token target is masked), this
+                // position can influence supervised completion tokens through
+                // the remaining causal encoder layer(s).
                 bool has_execution_readback = false;
                 for (int b = 0; b < payload.batch_size; ++b) {
                     const bool row_exec_active = !payload.execution_active.empty()
@@ -912,16 +915,30 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                         : *layer_input;
                     const int row_len = requirePayloadRowLength(
                         payload, b, "ModelForward ExecutionBlock next-layer input readback");
-                    const int final_token_offset = b * payload.max_seq_len + row_len - 1;
+                    if (payload.execution_prompt_end_positions.empty()) {
+                        throw std::runtime_error(
+                            "ModelForward ExecutionBlock training readback requires "
+                            "execution_prompt_end_positions");
+                    }
+                    const int prompt_end =
+                        payload.execution_prompt_end_positions[static_cast<size_t>(b)];
+                    if (prompt_end < 0 || prompt_end >= row_len) {
+                        throw std::runtime_error(
+                            "ModelForward ExecutionBlock training readback prompt_end=" +
+                            std::to_string(prompt_end) + " is outside row " +
+                            std::to_string(b) + " length " + std::to_string(row_len));
+                    }
+                    const int readback_token_offset =
+                        b * payload.max_seq_len + prompt_end;
                     Tensor row_delta = GRIM::executionBlockCrossAttentionRead(
                         execution_hp, read_source, forward_outputs.exec_memories[b], *execution_block_parameters,
                         total_tokens, request.stream,
-                        final_token_offset, 1,
+                        readback_token_offset, 1,
                         runtime.read_gate_accum_tensor
                             ? runtime.read_gate_accum_tensor->data
                             : nullptr);
                     Tensor padded = autograd::zero_pad(
-                        row_delta, final_token_offset, total_tokens, request.stream);
+                        row_delta, readback_token_offset, total_tokens, request.stream);
                     execution_read_augmented_input = autograd::add(
                         read_source, padded, request.stream);
                     has_execution_readback = true;
