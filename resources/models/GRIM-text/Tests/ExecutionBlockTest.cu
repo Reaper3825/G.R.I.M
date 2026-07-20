@@ -1,7 +1,7 @@
 //======================================================//
 //  ExecutionBlockTest.cu
 //  Workstream 0 surface tests for the trimmed ExecutionBlock API:
-//    - ExecutionMemory allocation / clearing / per-row isolation
+//    - ModelForwardOutputs execution-memory ownership / clearing / per-row isolation
 //    - surviving config / record / metrics / step-output defaults
 //    - current arithmetic and bootstrap semantics documented by the layer
 //======================================================//
@@ -48,11 +48,14 @@ bool testBatchedMemoryIsolation(std::string& message) {
     const int dt = 16;
     const int B = 3;
 
-    std::vector<ExecutionMemory> memories(B);
+    ModelForwardOutputs forward_outputs;
+    forward_outputs.ensureExecutionBatchGeometry(B, "testBatchedMemoryIsolation");
     for (int b = 0; b < B; ++b) {
-        memories[b].allocate(V, ae, dm, dk, dt, stream);
-        memories[b].clear(stream);
+        forward_outputs.allocateExecutionMemoryRow(
+            static_cast<size_t>(b), V, ae, dm, dk, dt, stream,
+            "testBatchedMemoryIsolation");
     }
+    auto& memories = forward_outputs.exec_memories;
 
     for (int b = 0; b < B; ++b) {
         float val = static_cast<float>(b + 1) * 10.0f;
@@ -133,7 +136,7 @@ bool testStepOutputDefaults(std::string& message) {
 }
 
 //======================================================//
-//  3. ExecutionMemory allocate shapes
+//  3. ModelForwardOutputs execution-memory allocation shapes
 //======================================================//
 
 bool testExecutionMemoryAllocateShapes(std::string& message) {
@@ -146,8 +149,12 @@ bool testExecutionMemoryAllocateShapes(std::string& message) {
     const int dk = 32;
     const int dt = 8;
 
-    ExecutionMemory M;
-    M.allocate(V, ae, dm, dk, dt, stream);
+    ModelForwardOutputs forward_outputs;
+    forward_outputs.ensureExecutionBatchGeometry(1, "testExecutionMemoryAllocateShapes");
+    forward_outputs.allocateExecutionMemoryRow(
+        0, V, ae, dm, dk, dt, stream,
+        "testExecutionMemoryAllocateShapes");
+    auto& M = forward_outputs.exec_memories.front();
     cudaStreamSynchronize(stream);
 
     EB_ASSERT_EQ(M.values.shape.as_2d().rows, V, "values rows");
@@ -178,37 +185,38 @@ bool testExecutionMemoryAllocateShapes(std::string& message) {
 }
 
 //======================================================//
-//  4. ExecutionMemory allocate rejects invalid dimensions
+//  4. ModelForwardOutputs allocation rejects invalid dimensions
 //======================================================//
 
 bool testExecutionMemoryAllocateRejectsInvalid(std::string& message) {
     cudaStream_t stream;
     cudaStreamCreate(&stream);
 
-    ExecutionMemory M;
+    ModelForwardOutputs forward_outputs;
+    forward_outputs.ensureExecutionBatchGeometry(1, "testExecutionMemoryAllocateRejectsInvalid");
     bool threw = false;
 
-    try { M.allocate(0, 64, 128, 32, 8, stream); }
+    try { forward_outputs.allocateExecutionMemoryRow(0, 0, 64, 128, 32, 8, stream, "test"); }
     catch (const std::runtime_error&) { threw = true; }
     EB_ASSERT_TRUE(threw, "allocate(V=0) must throw");
 
     threw = false;
-    try { M.allocate(4, 0, 128, 32, 8, stream); }
+    try { forward_outputs.allocateExecutionMemoryRow(0, 4, 0, 128, 32, 8, stream, "test"); }
     catch (const std::runtime_error&) { threw = true; }
     EB_ASSERT_TRUE(threw, "allocate(atom_dim=0) must throw");
 
     threw = false;
-    try { M.allocate(4, 64, 0, 32, 8, stream); }
+    try { forward_outputs.allocateExecutionMemoryRow(0, 4, 64, 0, 32, 8, stream, "test"); }
     catch (const std::runtime_error&) { threw = true; }
     EB_ASSERT_TRUE(threw, "allocate(d_model=0) must throw");
 
     threw = false;
-    try { M.allocate(4, 64, 128, 0, 8, stream); }
+    try { forward_outputs.allocateExecutionMemoryRow(0, 4, 64, 128, 0, 8, stream, "test"); }
     catch (const std::runtime_error&) { threw = true; }
     EB_ASSERT_TRUE(threw, "allocate(d_key=0) must throw");
 
     threw = false;
-    try { M.allocate(4, 64, 128, 32, 0, stream); }
+    try { forward_outputs.allocateExecutionMemoryRow(0, 4, 64, 128, 32, 0, stream, "test"); }
     catch (const std::runtime_error&) { threw = true; }
     EB_ASSERT_TRUE(threw, "allocate(d_type=0) must throw");
 
@@ -229,8 +237,12 @@ bool testExecutionMemoryClear(std::string& message) {
     const int dm = 128;
     const int dk = 32;
     const int dt = 8;
-    ExecutionMemory M;
-    M.allocate(V, ae, dm, dk, dt, stream);
+    ModelForwardOutputs forward_outputs;
+    forward_outputs.ensureExecutionBatchGeometry(1, "testExecutionMemoryClear");
+    forward_outputs.allocateExecutionMemoryRow(
+        0, V, ae, dm, dk, dt, stream,
+        "testExecutionMemoryClear");
+    auto& M = forward_outputs.exec_memories.front();
 
     float val = 42.0f;
     float one = 1.0f;

@@ -14,10 +14,10 @@ struct RecordEncodeGradFn : public GradFn {
     int num_ops_ = 0;
     int d_model_ = 0;
 
-    int* saved_slot1_ = nullptr;
-    int* saved_slot2_ = nullptr;
-    int* saved_ops_ = nullptr;
-    float* saved_scalars_ = nullptr;
+    const int* saved_slot1_view_ = nullptr;
+    const int* saved_slot2_view_ = nullptr;
+    const int* saved_ops_view_ = nullptr;
+    const float* saved_scalars_view_ = nullptr;
 
     float* E_slot_grad_ = nullptr;
     float* E_op_grad_ = nullptr;
@@ -25,7 +25,6 @@ struct RecordEncodeGradFn : public GradFn {
     float* b_scal_grad_ = nullptr;
 
     RecordEncodeGradFn();
-    ~RecordEncodeGradFn() override;
 
     void capture(int N,
                  int num_slots,
@@ -35,6 +34,8 @@ struct RecordEncodeGradFn : public GradFn {
                  const int* d_slot2,
                  const int* d_ops,
                  const float* d_scalars,
+                 int* saved_ids_staging,
+                 float* saved_scalars_staging,
                  Tensor& E_slot,
                  Tensor& E_op,
                  Tensor& W_scal,

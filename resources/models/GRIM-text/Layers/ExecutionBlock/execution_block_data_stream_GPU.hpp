@@ -29,6 +29,7 @@ void executeStepCoordinatorImpl(
 	float temperature,
 	cudaStream_t stream,
 	Forward::ExecutionBlockStepOutput& forward_output,
+	Forward::RecordEncodeBackwardStaging& record_encode_backward_staging,
 	Tensor& trace_state,
 	const std::vector<Forward::ExecutionRecord>& prior_records);
 

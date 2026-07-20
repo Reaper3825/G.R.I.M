@@ -34,15 +34,16 @@ struct ExecutionRecord;
 struct ExecutionGateOutput;
 struct ExecutionBlockStepOutput;
 struct ExecutionBlockOutput;
+struct RecordEncodeBackwardStaging;
 }
 
 //======================================================//
 //  ExecutionMemory — addressable register file
 //
 //  Each instance represents ONE batch row's register file [V, …].
-//  Per-row isolation: the active forward sink stores a vector<ExecutionMemory>
-//  of size batch_size, and materializeTrainingGraphActivations processes each
-//  row with its own M, using token_offset/row_tokens to scope H access.
+//  Per-row isolation: the active owner stores one row of tensors and binds a
+//  non-owning ExecutionMemory view. Execution-block math never allocates or
+//  owns the register storage.
 //======================================================//
 struct ExecutionMemory {
     Tensor values;            // [V, 1]       scalar ground truth per slot
@@ -55,7 +56,15 @@ struct ExecutionMemory {
     Tensor recent_write_mask; // [V]          one-hot mask of the most recent hard write
 
     void clear(cudaStream_t stream);
-    void allocate(int V, int atom_dim, int d_model, int d_key, int d_type, cudaStream_t stream);
+    void bind(
+        Tensor& values_owner,
+        Tensor& atom_embeds_owner,
+        Tensor& state_embeds_owner,
+        Tensor& valid_mask_owner,
+        Tensor& usage_owner,
+        Tensor& key_embeds_owner,
+        Tensor& type_embed_owner,
+        Tensor& recent_write_mask_owner);
 };
 
 //======================================================//
@@ -165,6 +174,7 @@ void executionBlockStep(
     float temperature,
     cudaStream_t stream,
     Forward::ExecutionBlockStepOutput& forward_output,
+    Forward::RecordEncodeBackwardStaging& record_encode_backward_staging,
     Tensor& trace_state,
     const std::vector<Forward::ExecutionRecord>& prior_records
 );

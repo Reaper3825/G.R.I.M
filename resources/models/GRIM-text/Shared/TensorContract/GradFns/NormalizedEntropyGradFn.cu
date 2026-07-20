@@ -4,7 +4,7 @@
 //======================================================//
 
 #include "NormalizedEntropyGradFn.hpp"
-#include "../../CudaAllocUtils.hpp"
+#include "../GradientAccumulation.hpp"
 
 #include <cuda_runtime.h>
 
@@ -13,8 +13,6 @@
 #include <string>
 
 namespace GRIM::autograd {
-
-using CudaAlloc::cudaMallocOrThrow;
 
 namespace {
 
@@ -71,11 +69,12 @@ NormalizedEntropyGradFn::NormalizedEntropyGradFn() {
     op_name = "autograd_exec_normalized_entropy";
 }
 
-NormalizedEntropyGradFn::~NormalizedEntropyGradFn() {
-    if (saved_probs_) cudaFree(saved_probs_);
-}
-
-void NormalizedEntropyGradFn::capture(Tensor& probs_tensor, cudaStream_t stream) {
+void NormalizedEntropyGradFn::capture(
+    Tensor& probs_tensor,
+    Tensor& saved_probs_staging,
+    Tensor& grad_probs_staging,
+    cudaStream_t stream)
+{
     if (!probs_tensor.data) {
         throw std::runtime_error("normalized_entropy: probs tensor data is NULL");
     }
@@ -90,17 +89,39 @@ void NormalizedEntropyGradFn::capture(Tensor& probs_tensor, cudaStream_t stream)
 
     num_classes_ = probs_tensor.shape.flat.cols;
     probs_requires_grad_ = probs_tensor.requires_grad;
+    probs_is_leaf_ = probs_tensor.is_leaf;
     probs_shape_ = probs_tensor.shape;
     probs_grad_fn_ = probs_tensor.grad_fn;
     register_input(probs_tensor.grad_fn);
 
-    cudaMallocOrThrow(
-        reinterpret_cast<void**>(&saved_probs_),
-        static_cast<size_t>(num_classes_) * sizeof(float),
-        "autograd_exec_entropy_saved_probs");
+    saved_probs_staging.require("NormalizedEntropyGradFn::capture saved_probs_staging");
+    grad_probs_staging.require("NormalizedEntropyGradFn::capture grad_probs_staging");
+    if (!saved_probs_staging.shape.is_2d_layout() ||
+        !grad_probs_staging.shape.is_2d_layout() ||
+        saved_probs_staging.shape.as_2d() != probs_tensor.shape.as_2d() ||
+        grad_probs_staging.shape.as_2d() != probs_tensor.shape.as_2d()) {
+        throw std::runtime_error(
+            "NormalizedEntropyGradFn::capture: staging tensors must match probs shape");
+    }
+
+    saved_probs_view_ = Tensor::from_ptr(
+        saved_probs_staging.data,
+        saved_probs_staging.shape,
+        false,
+        false,
+        "normalized_entropy_saved_probs_view");
+    saved_probs_view_.stream = stream;
+    grad_probs_view_ = Tensor::from_ptr(
+        grad_probs_staging.data,
+        grad_probs_staging.shape,
+        false,
+        false,
+        "normalized_entropy_grad_probs_view");
+    grad_probs_view_.stream = stream;
+
     checkCuda(
         cudaMemcpyAsync(
-            saved_probs_,
+            saved_probs_view_.data,
             probs_tensor.data,
             static_cast<size_t>(num_classes_) * sizeof(float),
             cudaMemcpyDeviceToDevice,
@@ -109,24 +130,9 @@ void NormalizedEntropyGradFn::capture(Tensor& probs_tensor, cudaStream_t stream)
 
     if (!probs_requires_grad_) return;
 
-    if (probs_tensor.is_leaf) {
+    if (probs_is_leaf_) {
         probs_tensor.ensure_grad();
-        grad_probs_ = probs_tensor.grad_data();
-    } else {
-        float* buf = nullptr;
-        cudaMallocOrThrow(
-            reinterpret_cast<void**>(&buf),
-            static_cast<size_t>(num_classes_) * sizeof(float),
-            "autograd_exec_entropy_grad_probs");
-        checkCuda(
-            cudaMemsetAsync(
-                buf,
-                0,
-                static_cast<size_t>(num_classes_) * sizeof(float),
-                stream),
-            "NormalizedEntropyGradFn::capture cudaMemsetAsync");
-        owned_grad_probs_ = std::shared_ptr<float>(buf, [](float* p) { cudaFree(p); });
-        grad_probs_ = owned_grad_probs_.get();
+        probs_leaf_grad_ = probs_tensor.grad_data();
     }
 }
 
@@ -138,19 +144,27 @@ void NormalizedEntropyGradFn::apply_impl(
 {
     if (applied) return;
     applied = true;
-    if (!probs_requires_grad_ || !grad_probs_) return;
+    if (!probs_requires_grad_ || !grad_probs_view_.data) return;
 
     const int blocks = (num_classes_ + kEntropyBlockSize - 1) / kEntropyBlockSize;
     kernelNormalizedEntropyBackward<<<blocks, kEntropyBlockSize, 0, stream>>>(
-        grad_probs_,
+        grad_probs_view_.data,
         grad_output.data,
-        saved_probs_,
+        saved_probs_view_.data,
         num_classes_);
     checkCuda(cudaGetLastError(), "NormalizedEntropyGradFn::apply kernelNormalizedEntropyBackward");
 
-    if (probs_grad_fn_) {
+    if (probs_is_leaf_ && probs_leaf_grad_) {
+        accumulate_grad(
+            probs_leaf_grad_,
+            grad_probs_view_.data,
+            static_cast<size_t>(num_classes_),
+            1.0f,
+            stream,
+            "NormalizedEntropyGradFn::apply probs_leaf_grad");
+    } else if (probs_grad_fn_) {
         Tensor view;
-        view.data = grad_probs_;
+        view.data = grad_probs_view_.data;
         view.shape = probs_shape_;
         view.owns_data = false;
         view.stream = stream;
@@ -160,13 +174,18 @@ void NormalizedEntropyGradFn::apply_impl(
 
 void NormalizedEntropyGradFn::release_saved() {
     GradFn::release_saved();
-    if (saved_probs_) { cudaFree(saved_probs_); saved_probs_ = nullptr; }
-    grad_probs_ = nullptr;
-    owned_grad_probs_.reset();
+    saved_probs_view_ = Tensor();
+    grad_probs_view_ = Tensor();
+    probs_leaf_grad_ = nullptr;
     probs_grad_fn_.reset();
 }
 
-Tensor normalized_entropy(Tensor& probs_tensor, cudaStream_t stream) {
+Tensor normalized_entropy(
+    Tensor& probs_tensor,
+    Tensor& saved_probs_staging,
+    Tensor& grad_probs_staging,
+    cudaStream_t stream)
+{
     if (!probs_tensor.data) {
         throw std::runtime_error("normalized_entropy: probs tensor data is NULL");
     }
@@ -187,7 +206,11 @@ Tensor normalized_entropy(Tensor& probs_tensor, cudaStream_t stream) {
     checkCuda(cudaGetLastError(), "normalized_entropy kernelNormalizedEntropyForward");
 
     auto grad_fn = std::make_shared<NormalizedEntropyGradFn>();
-    grad_fn->capture(probs_tensor, stream);
+    grad_fn->capture(
+        probs_tensor,
+        saved_probs_staging,
+        grad_probs_staging,
+        stream);
     entropy.grad_fn = grad_fn;
     entropy.requires_grad = true;
     entropy.is_leaf = false;

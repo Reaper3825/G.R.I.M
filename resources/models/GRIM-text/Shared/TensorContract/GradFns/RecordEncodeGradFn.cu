@@ -4,15 +4,12 @@
 //======================================================//
 
 #include "RecordEncodeGradFn.hpp"
-#include "../../CudaAllocUtils.hpp"
 
 #include <cuda_runtime.h>
 #include <stdexcept>
 #include <string>
 
 namespace GRIM::autograd {
-
-using CudaAlloc::cudaMallocOrThrow;
 
 namespace {
 
@@ -70,13 +67,6 @@ RecordEncodeGradFn::RecordEncodeGradFn() {
     op_name = "record_encode";
 }
 
-RecordEncodeGradFn::~RecordEncodeGradFn() {
-    if (saved_slot1_) cudaFree(saved_slot1_);
-    if (saved_slot2_) cudaFree(saved_slot2_);
-    if (saved_ops_) cudaFree(saved_ops_);
-    if (saved_scalars_) cudaFree(saved_scalars_);
-}
-
 void RecordEncodeGradFn::capture(
     int N,
     int num_slots,
@@ -86,6 +76,8 @@ void RecordEncodeGradFn::capture(
     const int* d_slot2,
     const int* d_ops,
     const float* d_scalars,
+    int* saved_ids_staging,
+    float* saved_scalars_staging,
     Tensor& E_slot,
     Tensor& E_op,
     Tensor& W_scal,
@@ -97,18 +89,23 @@ void RecordEncodeGradFn::capture(
     num_ops_ = num_ops;
     d_model_ = d_model;
 
-    cudaMallocOrThrow(reinterpret_cast<void**>(&saved_slot1_), N * sizeof(int), "datastream_saved_slot1");
-    cudaMallocOrThrow(reinterpret_cast<void**>(&saved_slot2_), N * sizeof(int), "datastream_saved_slot2");
-    cudaMallocOrThrow(reinterpret_cast<void**>(&saved_ops_), N * sizeof(int), "datastream_saved_ops");
-    cudaMallocOrThrow(reinterpret_cast<void**>(&saved_scalars_), N * 3 * sizeof(float), "datastream_saved_scalars");
-    checkCuda(cudaMemcpyAsync(saved_slot1_, d_slot1, N * sizeof(int), cudaMemcpyDeviceToDevice, stream),
+    if (!saved_ids_staging || !saved_scalars_staging) {
+        throw std::runtime_error(
+            "RecordEncodeGradFn::capture: ModelForwardOutputs staging is NULL");
+    }
+    checkCuda(cudaMemcpyAsync(saved_ids_staging, d_slot1, N * sizeof(int), cudaMemcpyDeviceToDevice, stream),
               "RecordEncodeGradFn::capture slot1");
-    checkCuda(cudaMemcpyAsync(saved_slot2_, d_slot2, N * sizeof(int), cudaMemcpyDeviceToDevice, stream),
+    checkCuda(cudaMemcpyAsync(saved_ids_staging + N, d_slot2, N * sizeof(int), cudaMemcpyDeviceToDevice, stream),
               "RecordEncodeGradFn::capture slot2");
-    checkCuda(cudaMemcpyAsync(saved_ops_, d_ops, N * sizeof(int), cudaMemcpyDeviceToDevice, stream),
+    checkCuda(cudaMemcpyAsync(saved_ids_staging + 2 * N, d_ops, N * sizeof(int), cudaMemcpyDeviceToDevice, stream),
               "RecordEncodeGradFn::capture ops");
-    checkCuda(cudaMemcpyAsync(saved_scalars_, d_scalars, N * 3 * sizeof(float), cudaMemcpyDeviceToDevice, stream),
+    checkCuda(cudaMemcpyAsync(saved_scalars_staging, d_scalars, N * 3 * sizeof(float), cudaMemcpyDeviceToDevice, stream),
               "RecordEncodeGradFn::capture scalars");
+
+    saved_slot1_view_ = saved_ids_staging;
+    saved_slot2_view_ = saved_ids_staging + N;
+    saved_ops_view_ = saved_ids_staging + 2 * N;
+    saved_scalars_view_ = saved_scalars_staging;
 
     E_slot_grad_ = E_slot.grad_data();
     E_op_grad_ = E_op.grad_data();
@@ -135,10 +132,10 @@ void RecordEncodeGradFn::apply_impl(
         E_op_grad_,
         W_scal_grad_,
         b_scal_grad_,
-        saved_slot1_,
-        saved_slot2_,
-        saved_ops_,
-        saved_scalars_,
+        saved_slot1_view_,
+        saved_slot2_view_,
+        saved_ops_view_,
+        saved_scalars_view_,
         N_,
         num_slots_,
         num_ops_,
@@ -148,10 +145,10 @@ void RecordEncodeGradFn::apply_impl(
 
 void RecordEncodeGradFn::release_saved() {
     GradFn::release_saved();
-    if (saved_slot1_) { cudaFree(saved_slot1_); saved_slot1_ = nullptr; }
-    if (saved_slot2_) { cudaFree(saved_slot2_); saved_slot2_ = nullptr; }
-    if (saved_ops_) { cudaFree(saved_ops_); saved_ops_ = nullptr; }
-    if (saved_scalars_) { cudaFree(saved_scalars_); saved_scalars_ = nullptr; }
+    saved_slot1_view_ = nullptr;
+    saved_slot2_view_ = nullptr;
+    saved_ops_view_ = nullptr;
+    saved_scalars_view_ = nullptr;
 }
 
 }  // namespace GRIM::autograd

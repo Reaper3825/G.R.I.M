@@ -713,7 +713,14 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
             };
 
             auto addRowEntropyTerm = [&](Tensor& probs, const char* name) {
-                Tensor entropy = autograd::normalized_entropy(probs, ctx.stream);
+                auto& staging = forward_outputs.appendNormalizedEntropyBackwardStaging(
+                    probs.shape,
+                    ctx.stream);
+                Tensor entropy = autograd::normalized_entropy(
+                    probs,
+                    staging.saved_probs,
+                    staging.grad_probs,
+                    ctx.stream);
                 if (!entropy.data || !entropy.grad_fn) {
                     throw std::runtime_error(
                         std::string("addExecutionAuxiliaryLoss: entropy tensor '") + name

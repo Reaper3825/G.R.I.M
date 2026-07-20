@@ -12,6 +12,7 @@
 #ifdef USE_CUDA
 
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
+#include "../CudaAllocUtils.hpp"
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 
 #include <memory>
@@ -111,6 +112,48 @@ struct ExecutionBlockOutput {
     bool stopped_at_max_steps = false;
 };
 
+// Loss-time Category 1 staging for one normalized-entropy term. The forward
+// sink owns both buffers through the complete loss/backward window; the
+// corresponding GradFn holds non-owning views only.
+struct NormalizedEntropyBackwardStaging {
+    Tensor saved_probs;
+    Tensor grad_probs;
+};
+
+// Forward-owned saved record data for one live RecordEncodeGradFn. IDs are
+// packed as [slot1 records][slot2 records][op records]. The GradFn borrows raw
+// views only; this staging object is the sole owner through backward.
+struct RecordEncodeBackwardStaging {
+    std::shared_ptr<int> saved_ids;
+    std::shared_ptr<float> saved_scalars;
+    int record_count = 0;
+};
+
+// Owning storage for one row's execution register file. Shared execution math
+// receives only the non-owning ExecutionMemory view bound by this owner.
+struct ExecutionMemoryOwnedStorage {
+    Tensor values;
+    Tensor atom_embeds;
+    Tensor state_embeds;
+    Tensor valid_mask;
+    Tensor usage;
+    Tensor key_embeds;
+    Tensor type_embed;
+    Tensor recent_write_mask;
+
+    void bind(ExecutionMemory& memory) {
+        memory.bind(
+            values,
+            atom_embeds,
+            state_embeds,
+            valid_mask,
+            usage,
+            key_embeds,
+            type_embed,
+            recent_write_mask);
+    }
+};
+
 struct ModelForwardOutputs {
 private:
     static int countGradFns(const std::vector<Tensor>& tensors) {
@@ -135,6 +178,14 @@ private:
     static void resetExecutionMemoryVectorPreserveGeometry(std::vector<ExecutionMemory>& memories) {
         for (auto& memory : memories) {
             memory = ExecutionMemory();
+        }
+    }
+
+    static void resetExecutionMemoryStorageVectorPreserveGeometry(
+        std::vector<ExecutionMemoryOwnedStorage>& storage_by_row)
+    {
+        for (auto& storage : storage_by_row) {
+            storage = ExecutionMemoryOwnedStorage();
         }
     }
 
@@ -346,37 +397,142 @@ public:
 
     // Optional reasoning / execution forward-owned state.
     Tensor scratch_atom_embeddings;
+    std::vector<ExecutionMemoryOwnedStorage> exec_memory_storage;
     std::vector<ExecutionMemory> exec_memories;
     std::vector<ExecutionBlockOutput> exec_outputs_per_row;
+    std::vector<NormalizedEntropyBackwardStaging> normalized_entropy_backward_staging;
+    std::vector<RecordEncodeBackwardStaging> record_encode_backward_staging;
+
+    NormalizedEntropyBackwardStaging& appendNormalizedEntropyBackwardStaging(
+        const TensorContract::TensorShape& shape,
+        cudaStream_t stream)
+    {
+        normalized_entropy_backward_staging.emplace_back();
+        auto& staging = normalized_entropy_backward_staging.back();
+        staging.saved_probs = Tensor::empty(
+            shape,
+            false,
+            stream,
+            "normalized_entropy_saved_probs");
+        staging.grad_probs = Tensor::zeros(
+            shape,
+            false,
+            stream,
+            "normalized_entropy_grad_probs");
+        return staging;
+    }
+
+    RecordEncodeBackwardStaging& appendRecordEncodeBackwardStaging(
+        int record_count,
+        cudaStream_t stream)
+    {
+        if (record_count <= 0) {
+            throw std::runtime_error(
+                "appendRecordEncodeBackwardStaging: record_count must be > 0");
+        }
+        if (!stream) {
+            throw std::runtime_error(
+                "appendRecordEncodeBackwardStaging: stream is NULL");
+        }
+
+        record_encode_backward_staging.emplace_back();
+        auto& staging = record_encode_backward_staging.back();
+        staging.record_count = record_count;
+
+        int* saved_ids = nullptr;
+        CudaAlloc::cudaMallocOrThrow(
+            reinterpret_cast<void**>(&saved_ids),
+            static_cast<size_t>(record_count) * 3 * sizeof(int),
+            "record_encode_saved_ids");
+        staging.saved_ids.reset(saved_ids, [](int* ptr) {
+            queueForDeferredCleanup(ptr);
+        });
+
+        float* saved_scalars = nullptr;
+        CudaAlloc::cudaMallocOrThrow(
+            reinterpret_cast<void**>(&saved_scalars),
+            static_cast<size_t>(record_count) * 3 * sizeof(float),
+            "record_encode_saved_scalars");
+        staging.saved_scalars.reset(saved_scalars, [](float* ptr) {
+            queueForDeferredCleanup(ptr);
+        });
+        return staging;
+    }
 
     void ensureExecutionBatchGeometry(size_t batch_size, const char* caller) {
         if (batch_size == 0) {
             throw std::runtime_error(std::string(caller) + ": execution batch_size must be > 0");
         }
 
+        const bool storage_uninitialized = exec_memory_storage.empty();
         const bool memories_uninitialized = exec_memories.empty();
         const bool outputs_uninitialized = exec_outputs_per_row.empty();
-        if (memories_uninitialized != outputs_uninitialized) {
+        if (storage_uninitialized != memories_uninitialized ||
+            memories_uninitialized != outputs_uninitialized) {
             throw std::runtime_error(std::string(caller) +
-                                     ": execution forward sink geometry is inconsistent (exec_memories size=" +
+                                     ": execution forward sink geometry is inconsistent (exec_memory_storage size=" +
+                                     std::to_string(exec_memory_storage.size()) +
+                                     ", exec_memories size=" +
                                      std::to_string(exec_memories.size()) +
                                      ", exec_outputs_per_row size=" +
                                      std::to_string(exec_outputs_per_row.size()) + ")");
         }
 
         if (memories_uninitialized) {
+            exec_memory_storage.resize(batch_size);
             exec_memories.resize(batch_size);
             exec_outputs_per_row.resize(batch_size);
             return;
         }
 
-        if (exec_memories.size() != batch_size || exec_outputs_per_row.size() != batch_size) {
+        if (exec_memory_storage.size() != batch_size ||
+            exec_memories.size() != batch_size ||
+            exec_outputs_per_row.size() != batch_size) {
             throw std::runtime_error(std::string(caller) +
                                      ": execution forward sink batch geometry mismatch expected=" +
                                      std::to_string(batch_size) +
+                                     " exec_memory_storage=" + std::to_string(exec_memory_storage.size()) +
                                      " exec_memories=" + std::to_string(exec_memories.size()) +
                                      " exec_outputs_per_row=" + std::to_string(exec_outputs_per_row.size()));
         }
+    }
+
+    void resetExecutionMemoryRow(size_t row, const char* caller) {
+        if (row >= exec_memory_storage.size() || row >= exec_memories.size()) {
+            throw std::runtime_error(std::string(caller) + ": execution row is out of range");
+        }
+        exec_memories[row] = ExecutionMemory();
+        exec_memory_storage[row] = ExecutionMemoryOwnedStorage();
+    }
+
+    void allocateExecutionMemoryRow(
+        size_t row,
+        int V,
+        int atom_dim,
+        int d_model,
+        int d_key,
+        int d_type,
+        cudaStream_t stream,
+        const char* caller)
+    {
+        if (!stream) {
+            throw std::runtime_error(std::string(caller) + ": stream is NULL");
+        }
+        if (V <= 0 || atom_dim <= 0 || d_model <= 0 || d_key <= 0 || d_type <= 0) {
+            throw std::runtime_error(std::string(caller) + ": execution-memory dimensions must be positive");
+        }
+        resetExecutionMemoryRow(row, caller);
+
+        auto& storage = exec_memory_storage[row];
+        storage.values = Tensor::zeros({V, 1}, stream, "exec_memory_values");
+        storage.atom_embeds = Tensor::zeros({V, atom_dim}, stream, "exec_memory_atom_embeds");
+        storage.state_embeds = Tensor::zeros({V, d_model}, stream, "exec_memory_state_embeds");
+        storage.valid_mask = Tensor::zeros({1, V}, stream, "exec_memory_valid_mask");
+        storage.usage = Tensor::zeros({1, V}, stream, "exec_memory_usage");
+        storage.key_embeds = Tensor::zeros({V, d_key}, stream, "exec_memory_key_embeds");
+        storage.type_embed = Tensor::zeros({V, d_type}, stream, "exec_memory_type_embed");
+        storage.recent_write_mask = Tensor::zeros({1, V}, stream, "exec_memory_recent_write_mask");
+        storage.bind(exec_memories[row]);
     }
 
     Tensor* liveLmHeadInputOrNull() {
@@ -424,7 +580,19 @@ public:
         logits_tensor = Tensor();
         selector_logits = Tensor();
         scratch_atom_embeddings = Tensor();
+        for (auto& staging : normalized_entropy_backward_staging) {
+            staging.saved_probs = Tensor();
+            staging.grad_probs = Tensor();
+        }
+        normalized_entropy_backward_staging.clear();
+        for (auto& staging : record_encode_backward_staging) {
+            staging.saved_ids.reset();
+            staging.saved_scalars.reset();
+            staging.record_count = 0;
+        }
+        record_encode_backward_staging.clear();
         resetExecutionMemoryVectorPreserveGeometry(exec_memories);
+        resetExecutionMemoryStorageVectorPreserveGeometry(exec_memory_storage);
         resetExecutionOutputVectorPreserveGeometry(exec_outputs_per_row);
     }
 
@@ -462,6 +630,15 @@ public:
             for (size_t i = 0; i < v.size(); ++i) {
                 reportTensor(name + "[" + std::to_string(i) + "]", v[i]);
             }
+        };
+
+        auto reportBuffer = [&](const std::string& name, const void* data, size_t bytes) {
+            if (!data) return;
+            total_bytes += bytes;
+            ++live_tensors;
+            body << "\n  " << name
+                 << " bytes=" << bytes
+                 << " MiB=" << mib(bytes);
         };
 
         // Per-layer retained tensors
@@ -502,6 +679,39 @@ public:
         reportTensor("logits_tensor", logits_tensor);
         reportTensor("selector_logits", selector_logits);
         reportTensor("scratch_atom_embeddings", scratch_atom_embeddings);
+        for (size_t row = 0; row < exec_memory_storage.size(); ++row) {
+            const auto& storage = exec_memory_storage[row];
+            const std::string prefix =
+                "exec_memory_storage[" + std::to_string(row) + "].";
+            reportTensor(prefix + "values", storage.values);
+            reportTensor(prefix + "atom_embeds", storage.atom_embeds);
+            reportTensor(prefix + "state_embeds", storage.state_embeds);
+            reportTensor(prefix + "valid_mask", storage.valid_mask);
+            reportTensor(prefix + "usage", storage.usage);
+            reportTensor(prefix + "key_embeds", storage.key_embeds);
+            reportTensor(prefix + "type_embed", storage.type_embed);
+            reportTensor(prefix + "recent_write_mask", storage.recent_write_mask);
+        }
+        for (size_t i = 0; i < normalized_entropy_backward_staging.size(); ++i) {
+            reportTensor(
+                "normalized_entropy_backward_staging[" + std::to_string(i) + "].saved_probs",
+                normalized_entropy_backward_staging[i].saved_probs);
+            reportTensor(
+                "normalized_entropy_backward_staging[" + std::to_string(i) + "].grad_probs",
+                normalized_entropy_backward_staging[i].grad_probs);
+        }
+        for (size_t i = 0; i < record_encode_backward_staging.size(); ++i) {
+            const auto& staging = record_encode_backward_staging[i];
+            const size_t element_count = static_cast<size_t>(staging.record_count) * 3;
+            reportBuffer(
+                "record_encode_backward_staging[" + std::to_string(i) + "].saved_ids",
+                staging.saved_ids.get(),
+                element_count * sizeof(int));
+            reportBuffer(
+                "record_encode_backward_staging[" + std::to_string(i) + "].saved_scalars",
+                staging.saved_scalars.get(),
+                element_count * sizeof(float));
+        }
         for (size_t row = 0; row < exec_outputs_per_row.size(); ++row) {
             const auto& execution_output = exec_outputs_per_row[row];
             for (size_t step = 0; step < execution_output.steps.size(); ++step) {

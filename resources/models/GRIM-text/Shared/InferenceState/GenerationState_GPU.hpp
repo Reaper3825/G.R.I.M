@@ -22,6 +22,7 @@ namespace GRIM {
 struct GenerationState {
     // Persistent inference execution state. Survives prefill -> decode steps
     // within a generation session and is invalidated only at session reset.
+    Forward::ExecutionMemoryOwnedStorage exec_memory_storage;
     ExecutionMemory exec_memory;
     bool has_exec_memory = false;
 
@@ -36,6 +37,7 @@ struct GenerationState {
 
     void resetSession() {
         exec_memory = ExecutionMemory();
+        exec_memory_storage = Forward::ExecutionMemoryOwnedStorage();
         has_exec_memory = false;
         execution_runtime.clear();
         kv_cache.resetSession();

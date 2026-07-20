@@ -401,7 +401,11 @@ GRIM::GeneratedSequence generateOneSequence(
                         throw std::runtime_error(
                             "generateOneSequence: execution ran during prefill but final memory is missing");
                     }
-                    generation_state.exec_memory = std::move(forward_outputs.exec_memories.front());
+                    generation_state.exec_memory = GRIM::ExecutionMemory();
+                    generation_state.exec_memory_storage =
+                        std::move(forward_outputs.exec_memory_storage.front());
+                    generation_state.exec_memory_storage.bind(generation_state.exec_memory);
+                    forward_outputs.exec_memories.front() = GRIM::ExecutionMemory();
                     generation_state.has_exec_memory = true;
                     tail.execution_control.persistent_memory_available = true;
 
@@ -432,6 +436,8 @@ GRIM::GeneratedSequence generateOneSequence(
                     }
                 } else {
                     generation_state.exec_memory = GRIM::ExecutionMemory();
+                    generation_state.exec_memory_storage =
+                        GRIM::Forward::ExecutionMemoryOwnedStorage();
                     generation_state.has_exec_memory = false;
                 }
             }

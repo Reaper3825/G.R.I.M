@@ -83,11 +83,11 @@ struct ModelForwardExecutionRuntime {
 //======================================================//
 //  provisionExecutionForwardRuntime
 //
-//  Shared-forward-owned per-row reset + allocation for one execution-layer
-//  boundary. Allocation of ExecutionMemory and the per-row trace_state lives
-//  here (the runtime owner), not on any layer object: active rows get a fresh
-//  zeroed register file and a [1, d_model] trace accumulator; inactive rows are
-//  reset to empty. Row geometry must already be provisioned by
+//  Shared-forward-owned per-row reset + provisioning for one execution-layer
+//  boundary. ModelForwardOutputs allocates and owns the register tensors; this
+//  runtime owns the per-row trace state. Active rows get a fresh zeroed register
+//  file and a [1, d_model] trace accumulator; inactive rows are reset to empty.
+//  Row geometry must already be provisioned by
 //  ModelForwardOutputs::ensureExecutionBatchGeometry and
 //  ModelForwardExecutionRuntime::ensureBatchGeometry.
 //======================================================//
@@ -114,7 +114,8 @@ inline void provisionExecutionForwardRuntime(
         static_cast<int>(execution_active.size()) != batch_size) {
         throw std::runtime_error("provisionExecutionForwardRuntime: execution_active size must equal batch_size");
     }
-    if (static_cast<int>(forward_outputs.exec_memories.size()) != batch_size ||
+    if (static_cast<int>(forward_outputs.exec_memory_storage.size()) != batch_size ||
+        static_cast<int>(forward_outputs.exec_memories.size()) != batch_size ||
         static_cast<int>(forward_outputs.exec_outputs_per_row.size()) != batch_size ||
         static_cast<int>(execution_runtime.execution_trace_by_row.size()) != batch_size ||
         static_cast<int>(execution_runtime.trace_state_by_row.size()) != batch_size) {
@@ -130,18 +131,24 @@ inline void provisionExecutionForwardRuntime(
         forward_outputs.exec_outputs_per_row[row].execution_suppressed_no_bootstrap = false;
         forward_outputs.exec_outputs_per_row[row].stopped_by_model = false;
         forward_outputs.exec_outputs_per_row[row].stopped_at_max_steps = false;
-        auto& row_memory = forward_outputs.exec_memories[row];
-
         const bool row_exec_active = !execution_active.empty() && execution_active[row];
         if (!row_exec_active) {
-            row_memory = ExecutionMemory();
+            forward_outputs.resetExecutionMemoryRow(
+                row,
+                "provisionExecutionForwardRuntime");
             execution_runtime.trace_state_by_row[row] = Tensor();
             continue;
         }
 
-        row_memory = ExecutionMemory();
-        row_memory.allocate(num_slots, atom_embedding_dim, d_model, d_key, d_type, stream);
-        row_memory.clear(stream);
+        forward_outputs.allocateExecutionMemoryRow(
+            row,
+            num_slots,
+            atom_embedding_dim,
+            d_model,
+            d_key,
+            d_type,
+            stream,
+            "provisionExecutionForwardRuntime");
 
         execution_runtime.trace_state_by_row[row] =
             Tensor::zeros({1, d_model}, stream, "trace_state_row");

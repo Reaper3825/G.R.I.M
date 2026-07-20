@@ -807,6 +807,9 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                     bool stopped = false;
                     for (int step = 0; step < exec_K; ++step) {
                         ExecutionBlockStepOutput step_output;
+                        auto& record_encode_backward_staging =
+                            forward_outputs.appendRecordEncodeBackwardStaging(
+                                1, request.stream);
                         GRIM::executionBlockStep(
                             execution_hp,
                             execution_runtime.execution_diag,
@@ -820,6 +823,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                             execution_block_temp_start,
                             request.stream,
                             step_output,
+                            record_encode_backward_staging,
                             execution_runtime.trace_state_by_row[b],
                             execution_runtime.execution_trace_by_row[b]);
                         execution_runtime.execution_trace_by_row[b].push_back(step_output.record);
@@ -1036,6 +1040,9 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
 
                     for (int step = 0; step < real_step_count; ++step) {
                         ExecutionBlockStepOutput step_diag;
+                        auto& record_encode_backward_staging =
+                            forward_outputs.appendRecordEncodeBackwardStaging(
+                                1, request.stream);
 
                         GRIM::executionBlockStep(
                             execution_hp, execution_runtime.execution_diag,
@@ -1043,6 +1050,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                             payload, *request.bindings, b,
                             step, T, request.stream,
                             step_diag,
+                            record_encode_backward_staging,
                             runtime.execution_runtime->trace_state_by_row[b],
                             runtime.execution_runtime->execution_trace_by_row[b]);
                         runtime.execution_runtime->execution_trace_by_row[b].push_back(step_diag.record);

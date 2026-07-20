@@ -741,11 +741,12 @@ void executeStepCoordinatorImpl(
     float temperature,
     cudaStream_t stream,
     ExecutionBlockStepOutput& forward_output,
+    GRIM::Forward::RecordEncodeBackwardStaging& record_encode_backward_staging,
     Tensor& trace_state,
     const std::vector<ExecutionRecord>& prior_records
 ) {
-    // The forward output is the non-null Category 1 owner for every live
-    // execution-step tensor that must survive until backward.
+    // ModelForwardOutputs owns the supplied backward staging. The step output
+    // remains diagnostics/live-loss output and is not the staging owner.
     auto& params = parameters;
     const int dm = hp.d_model;
     const int V = hp.num_slots;
@@ -875,8 +876,6 @@ void executeStepCoordinatorImpl(
         CUDA_CHECK(cudaMemcpyAsync(d_scalars, h_scalars.data(), N_prior * 3 * sizeof(float), cudaMemcpyHostToDevice, stream));
 
         auto encoded_records = Tensor::zeros({N_prior, dm}, stream, "exec_encoded_records");
-        encoded_records.requires_grad = true;
-        encoded_records.is_leaf = false;
         int total_enc = N_prior * dm;
         kernelEncodeRecords<<<(total_enc + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
             encoded_records.data,
@@ -894,26 +893,20 @@ void executeStepCoordinatorImpl(
             dm);
         CUDA_CHECK_KERNEL();
 
-        {
-            auto enc_fn = std::make_shared<RecordEncodeGradFn>();
-            enc_fn->capture(N_prior, V, nop, dm, d_slot1, d_slot2, d_ops, d_scalars,
-                            params.E_slot, params.E_op, params.W_scal, params.b_scal, stream);
-            encoded_records.grad_fn = enc_fn;
-        }
-
         auto padded = Tensor::zeros({K, dm}, stream, "exec_trace_padded");
         int copy_rows = (N_prior < K) ? N_prior : K;
         int src_offset = (N_prior > K) ? (N_prior - K) : 0;
         CUDA_CHECK(cudaMemcpyAsync(padded.data,
             encoded_records.data + static_cast<size_t>(src_offset) * dm,
             copy_rows * dm * sizeof(float), cudaMemcpyDeviceToDevice, stream));
-        padded.requires_grad = encoded_records.requires_grad;
-        padded.is_leaf = false;
 
         auto flattened = Tensor::zeros({1, K * dm}, stream, "exec_trace_flat");
         CUDA_CHECK(cudaMemcpyAsync(flattened.data, padded.data, K * dm * sizeof(float), cudaMemcpyDeviceToDevice, stream));
-        flattened.requires_grad = padded.requires_grad;
-        flattened.is_leaf = false;
+
+        // Prior records are discrete host history. The raw padding/flattening
+        // copies produce a detached trace input; attaching a
+        // RecordEncodeGradFn to encoded_records here created an unreachable
+        // backward node because neither copy has an autograd edge.
 
         work.trace_vec = autograd::matmul(flattened, params.W_trace, stream);
         if (hp.trace_bias_enabled) {
@@ -1036,10 +1029,19 @@ void executeStepCoordinatorImpl(
         CUDA_CHECK_KERNEL();
 
         {
+            if (record_encode_backward_staging.record_count != 1 ||
+                !record_encode_backward_staging.saved_ids ||
+                !record_encode_backward_staging.saved_scalars) {
+                throw std::runtime_error(
+                    "executeStepCoordinatorImpl: invalid ModelForwardOutputs "
+                    "RecordEncode backward staging");
+            }
             auto enc_fn = std::make_shared<RecordEncodeGradFn>();
             enc_fn->capture(1, V, nop, dm,
                             d_exec_record_i, d_exec_record_i + 1,
                             d_exec_record_i + 2, d_exec_record_f,
+                            record_encode_backward_staging.saved_ids.get(),
+                            record_encode_backward_staging.saved_scalars.get(),
                             params.E_slot, params.E_op, params.W_scal, params.b_scal, stream);
             cur_encoded.grad_fn = enc_fn;
         }

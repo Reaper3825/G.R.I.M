@@ -317,21 +317,37 @@ __global__ void kernelDecayedUsageUpdate(
     usage[v] = decay * usage[v] + sum;
 }
 
-void ExecutionMemory::allocate(int V, int atom_dim, int d_model, int d_key, int d_type, cudaStream_t stream) {
-    EXEC_CHECK(V > 0, "ExecutionMemory::allocate: V must be positive");
-    EXEC_CHECK(atom_dim > 0, "ExecutionMemory::allocate: atom_dim must be positive");
-    EXEC_CHECK(d_model > 0, "ExecutionMemory::allocate: d_model must be positive");
-    EXEC_CHECK(d_key > 0, "ExecutionMemory::allocate: d_key must be positive");
-    EXEC_CHECK(d_type > 0, "ExecutionMemory::allocate: d_type must be positive");
+void ExecutionMemory::bind(
+    Tensor& values_owner,
+    Tensor& atom_embeds_owner,
+    Tensor& state_embeds_owner,
+    Tensor& valid_mask_owner,
+    Tensor& usage_owner,
+    Tensor& key_embeds_owner,
+    Tensor& type_embed_owner,
+    Tensor& recent_write_mask_owner)
+{
+    auto borrow = [](Tensor& owner) {
+        EXEC_CHECK(owner.data != nullptr, "ExecutionMemory::bind: owner tensor is empty");
+        Tensor view = Tensor::from_ptr(
+            owner.data,
+            owner.shape,
+            false,
+            owner.requires_grad,
+            owner.name);
+        view.stream = owner.stream;
+        view.is_leaf = owner.is_leaf;
+        return view;
+    };
 
-    values            = Tensor::zeros({V, 1}, stream);
-    atom_embeds       = Tensor::zeros({V, atom_dim}, stream);
-    state_embeds      = Tensor::zeros({V, d_model}, stream);
-    valid_mask        = Tensor::zeros({1, V}, stream);
-    usage             = Tensor::zeros({1, V}, stream);
-    key_embeds        = Tensor::zeros({V, d_key}, stream);
-    type_embed        = Tensor::zeros({V, d_type}, stream);
-    recent_write_mask = Tensor::zeros({1, V}, stream);
+    values            = borrow(values_owner);
+    atom_embeds       = borrow(atom_embeds_owner);
+    state_embeds      = borrow(state_embeds_owner);
+    valid_mask        = borrow(valid_mask_owner);
+    usage             = borrow(usage_owner);
+    key_embeds        = borrow(key_embeds_owner);
+    type_embed        = borrow(type_embed_owner);
+    recent_write_mask = borrow(recent_write_mask_owner);
 }
 
 void ExecutionMemory::clear(cudaStream_t stream) {
@@ -685,4 +701,3 @@ Tensor crossAttentionReadImpl(
 }  // namespace ExecutionBlockInternal
 
 }  // namespace GRIM
-
