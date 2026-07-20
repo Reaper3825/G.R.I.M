@@ -488,6 +488,67 @@ bool testDecoderSiluCacheForwardOwnership(std::string& message) {
     return true;
 }
 
+bool testSelectorExecutionBootstrapMetadata(std::string& message) {
+    auto atom_table = std::make_shared<GRIM::Tokenizer::AtomTable>();
+    const uint32_t integer_id = atom_table->registerGeneratedNumericValue(7.0f);
+    const uint32_t float_id = atom_table->registerGeneratedNumericValue(3.5f);
+    const auto integer_entry = atom_table->getAtom(integer_id);
+    const auto float_entry = atom_table->getAtom(float_id);
+    EB_ASSERT_TRUE(integer_entry.has_value(), "integer candidate entry exists");
+    EB_ASSERT_TRUE(float_entry.has_value(), "float candidate entry exists");
+
+    const std::vector<int> token_ids{
+        GRIM::Tokenizer::atomTypeToTokenId(integer_entry->type),
+        GRIM::Tokenizer::atomTypeToTokenId(float_entry->type),
+        GRIM::Tokenizer::atomTypeToTokenId(integer_entry->type)};
+    const std::vector<float> numeric_values{7.0f, 3.5f, 7.0f};
+    const std::vector<uint8_t> atom_mask{1, 1, 1};
+    const std::vector<uint32_t> atom_flags{
+        integer_entry->flags, float_entry->flags, integer_entry->flags};
+    const std::vector<uint32_t> atom_entry_ids{integer_id, float_id, integer_id};
+    // Slot 3 is deliberately rebound: the bridge must match ExecutionBlock's
+    // existing left-to-right bootstrap contract, where the final occurrence wins.
+    const std::vector<int32_t> slot_map{3, 3, 4};
+
+    auto payload = GRIM::Batching::buildInferenceBatchPayload(
+        token_ids,
+        numeric_values,
+        atom_mask,
+        atom_flags,
+        atom_table,
+        atom_entry_ids,
+        slot_map,
+        /*vocab_size=*/1024,
+        /*batch_capacity=*/1,
+        /*max_cached_seq_len=*/16,
+        /*execution_num_slots=*/8,
+        /*execution_num_scratch_slots=*/2,
+        /*number_encoder_digit_slots=*/16,
+        /*number_encoder_max_abs_pow10=*/32);
+
+    EB_ASSERT_EQ(payload.execution_slot_count, 8,
+                 "bridge carries execution slot geometry");
+    EB_ASSERT_EQ(static_cast<int>(payload.bootstrap_slot_to_pool_index.size()), 8,
+                 "bridge is one row by execution slots");
+    EB_ASSERT_EQ(payload.bootstrap_slot_to_pool_index[3], 1,
+                 "rebound slot resolves to final token occurrence's selector candidate");
+    EB_ASSERT_EQ(payload.bootstrap_slot_to_pool_index[4], 0,
+                 "second slot preserves its selector candidate identity");
+    EB_ASSERT_EQ(payload.bootstrap_slot_to_pool_index[2], -1,
+                 "unbound slot remains explicitly unmapped");
+
+    auto invalid = payload;
+    invalid.bootstrap_slot_to_pool_index[4] = 1;
+    bool threw = false;
+    try {
+        invalid.validate("testSelectorExecutionBootstrapMetadata");
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+    EB_ASSERT_TRUE(threw, "validation rejects selector/slot identity disagreement");
+    return true;
+}
+
 //======================================================//
 //  12. Inference control boundary is final prompt token
 //======================================================//
@@ -858,6 +919,7 @@ int GRIM::Test::runExecutionBlockTests() {
     suite.addTest("Arithmetic: four-op semantics", testFourOpsSemantics);
     suite.addTest("Bootstrap: slot map semantics", testBootstrapSlotMapSemantics);
     suite.addTest("Output: multi-step aggregation", testExecutionBlockOutputMultiStep);
+    suite.addTest("Metadata: selector-to-execution bootstrap identity", testSelectorExecutionBootstrapMetadata);
     suite.addTest("Control: final prompt-token boundary", testInferencePromptControlBoundary);
     suite.addTest("Inference: decode payload owns host inputs", testInferenceDecodeHostInputOwnership);
     suite.addTest("Config: scratch-slot constraint", testScratchSlotConstraint);

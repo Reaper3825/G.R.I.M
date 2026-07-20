@@ -47,6 +47,7 @@ struct BatchDeviceStorage {
     Tensor pool_numeric_values_tensor;      // float [1, max_tokens]
     Tensor pool_atom_types_tensor;          // int32 [1, max_tokens]
     Tensor row_atom_offset_tensor;          // int32 [1, batch_size + 1]
+    Tensor bootstrap_slot_to_pool_index_tensor; // int32 [1, batch_size * execution slots]
     // Per-entry NumberEncoder feature channels for selector key encoding (same
     // capacity as the per-token digit channels: max_tokens * digit_slots).
     Tensor pool_digit_values_tensor;        // int32 [1, max_tokens * digit_slots]
@@ -60,6 +61,7 @@ struct BatchDeviceStorage {
     int max_seq_len_capacity = 0;
     int max_tokens_capacity = 0;
     int number_encoder_digit_slots_capacity = 0;
+    int execution_slot_count_capacity = 0;
 };
 
 std::shared_ptr<BatchDeviceStorage> createBatchDeviceStorage(

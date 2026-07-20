@@ -315,6 +315,7 @@ BatchDeviceBindings uploadBatchToDevice(
     float* cached_pool_digit_slot_features_ptr = nullptr;
     float* cached_pool_global_features_ptr = nullptr;
     int*   cached_arg_select_targets_ptr = nullptr;
+    int*   cached_bootstrap_slot_to_pool_index_ptr = nullptr;
     if (storage.pool_numeric_values_tensor.data && !payload.row_atom_offset.empty()) {
         cached_pool_values_ptr = storage.pool_numeric_values_tensor.data;
         cached_pool_types_ptr = reinterpret_cast<int*>(storage.pool_atom_types_tensor.data);
@@ -328,6 +329,22 @@ BatchDeviceBindings uploadBatchToDevice(
             BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
                 cached_arg_select_targets_ptr, payload.arg_select_targets.data(),
                 payload.arg_select_targets.size() * sizeof(int),
+                cudaMemcpyHostToDevice, stream));
+        }
+        if (!payload.bootstrap_slot_to_pool_index.empty()) {
+            if (storage.execution_slot_count_capacity != payload.execution_slot_count ||
+                !storage.bootstrap_slot_to_pool_index_tensor.data) {
+                throw std::runtime_error(
+                    "uploadBatchToDevice: selector-to-execution bridge capacity does not "
+                    "match payload.execution_slot_count=" +
+                    std::to_string(payload.execution_slot_count));
+            }
+            cached_bootstrap_slot_to_pool_index_ptr = reinterpret_cast<int*>(
+                storage.bootstrap_slot_to_pool_index_tensor.data);
+            BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+                cached_bootstrap_slot_to_pool_index_ptr,
+                payload.bootstrap_slot_to_pool_index.data(),
+                payload.bootstrap_slot_to_pool_index.size() * sizeof(int),
                 cudaMemcpyHostToDevice, stream));
         }
         if (payload.num_pool_atoms > 0) {
@@ -397,6 +414,8 @@ BatchDeviceBindings uploadBatchToDevice(
     bindings.d_pool_atom_types     = (payload.num_pool_atoms > 0) ? cached_pool_types_ptr : nullptr;
     bindings.d_row_atom_offset     = cached_row_atom_offset_ptr;
     bindings.num_pool_atoms        = payload.num_pool_atoms;
+    bindings.d_bootstrap_slot_to_pool_index = cached_bootstrap_slot_to_pool_index_ptr;
+    bindings.execution_slot_count = payload.execution_slot_count;
     bindings.d_pool_digit_values        = cached_pool_digit_values_ptr;
     bindings.d_pool_digit_pow10_index   = cached_pool_digit_pow10_ptr;
     bindings.d_pool_digit_mask          = cached_pool_digit_mask_ptr;
@@ -524,6 +543,16 @@ std::shared_ptr<BatchDeviceStorage> createBatchDeviceStorage(
             false,
             stream,
             "batch_row_atom_offset");
+        const auto execution_hp = HyperParameters::executionBlockConstructionHP(config);
+        if (execution_hp.num_slots > 0) {
+            storage->execution_slot_count_capacity = execution_hp.num_slots;
+            storage->bootstrap_slot_to_pool_index_tensor = Tensor::zeros(
+                TensorContract::TensorShape::make_BSM(
+                    1, storage->batch_size_capacity * execution_hp.num_slots),
+                false,
+                stream,
+                "batch_bootstrap_slot_to_pool_index");
+        }
         storage->pool_digit_values_tensor = Tensor::zeros(
             TensorContract::TensorShape::make_BSM(1, slot_capacity),
             false, stream, "batch_pool_digit_values");

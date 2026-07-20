@@ -22,6 +22,7 @@
 #include <vector>
 #include <string>
 #include <memory>
+#include <limits>
 #include <stdexcept>
 #include <numeric>
 
@@ -225,6 +226,18 @@ struct BatchPayload {
     std::vector<float> pool_digit_mask;        // [E * S]
     std::vector<float> pool_digit_slot_features;   // [E * S * kNumberSlotFeatureDim]
     std::vector<float> pool_global_features;       // [E * kNumberGlobalFeatureDim]
+
+    // Selector-to-execution identity bridge for authored bootstrap operands.
+    // Layout is row-major [batch_size * execution_slot_count]. Each entry is
+    // the batch-global selector-pool index whose authored token initializes
+    // that execution slot, or -1 when the slot has no authored bootstrap.
+    //
+    // This is identity/provenance metadata only: the selector still owns the
+    // candidate representation and ExecutionBlock still owns arg-role scoring.
+    // Generated result slots are runtime state and therefore remain outside
+    // this static bootstrap map.
+    int execution_slot_count = 0;
+    std::vector<int> bootstrap_slot_to_pool_index;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // CACHE FIT (computed ONCE against model limits)
@@ -466,6 +479,11 @@ struct BatchPayload {
                     std::string(caller) + ": BatchPayload number-encoder channels are populated "
                     "while number_encoder_digit_slots=0");
             }
+            if (execution_slot_count != 0 || !bootstrap_slot_to_pool_index.empty()) {
+                throw std::runtime_error(
+                    std::string(caller) + ": selector-to-execution bootstrap metadata is populated "
+                    "while number_encoder_digit_slots=0");
+            }
         } else {
             const std::size_t atoms = atom_positions.size();
             const std::size_t slots = static_cast<std::size_t>(number_encoder_digit_slots);
@@ -487,6 +505,91 @@ struct BatchPayload {
             requireChannelSize(atom_global_features.size(),
                                atoms * static_cast<std::size_t>(kNumberGlobalFeatureDim),
                                "atom_global_features");
+        }
+        // Selector-to-execution bootstrap identity geometry and agreement.
+        if (execution_slot_count < 0) {
+            throw std::runtime_error(
+                std::string(caller) + ": BatchPayload.execution_slot_count=" +
+                std::to_string(execution_slot_count) + " is negative");
+        }
+        if (execution_slot_count == 0) {
+            if (!bootstrap_slot_to_pool_index.empty()) {
+                throw std::runtime_error(
+                    std::string(caller) + ": BatchPayload.bootstrap_slot_to_pool_index is populated "
+                    "while execution_slot_count=0");
+            }
+        } else {
+            const std::size_t expected_size =
+                static_cast<std::size_t>(batch_size) *
+                static_cast<std::size_t>(execution_slot_count);
+            if (bootstrap_slot_to_pool_index.size() != expected_size) {
+                throw std::runtime_error(
+                    std::string(caller) + ": BatchPayload.bootstrap_slot_to_pool_index.size()=" +
+                    std::to_string(bootstrap_slot_to_pool_index.size()) + " != batch_size(" +
+                    std::to_string(batch_size) + ") * execution_slot_count(" +
+                    std::to_string(execution_slot_count) + ")=" +
+                    std::to_string(expected_size));
+            }
+            if (row_atom_offset.size() != static_cast<std::size_t>(batch_size) + 1) {
+                throw std::runtime_error(
+                    std::string(caller) + ": selector-to-execution bootstrap metadata requires "
+                    "row_atom_offset.size() == batch_size + 1");
+            }
+            if (ownsHostInputData() &&
+                static_cast<int>(atom_entry_ids.size()) != total_tokens) {
+                throw std::runtime_error(
+                    std::string(caller) + ": selector-to-execution bootstrap metadata requires "
+                    "atom_entry_ids.size() == total_tokens");
+            }
+
+            std::vector<int> expected(expected_size, -1);
+            for (int token_pos = 0; token_pos < total_tokens; ++token_pos) {
+                const int slot = token_to_slot_map[static_cast<std::size_t>(token_pos)];
+                if (slot < 0) {
+                    continue;
+                }
+                if (slot >= execution_slot_count) {
+                    throw std::runtime_error(
+                        std::string(caller) + ": token_to_slot_map[" +
+                        std::to_string(token_pos) + "]=" + std::to_string(slot) +
+                        " exceeds execution_slot_count=" +
+                        std::to_string(execution_slot_count));
+                }
+                if (atom_mask[static_cast<std::size_t>(token_pos)] == 0) {
+                    throw std::runtime_error(
+                        std::string(caller) + ": execution bootstrap token_pos=" +
+                        std::to_string(token_pos) + " is not an atom and cannot map to "
+                        "the selector candidate pool");
+                }
+                const int row = token_pos / max_seq_len;
+                const uint32_t local_entry =
+                    atom_entry_ids[static_cast<std::size_t>(token_pos)];
+                const int row_begin = row_atom_offset[static_cast<std::size_t>(row)];
+                const int row_end = row_atom_offset[static_cast<std::size_t>(row) + 1];
+                if (local_entry == std::numeric_limits<uint32_t>::max()) {
+                    throw std::runtime_error(
+                        std::string(caller) + ": execution bootstrap token_pos=" +
+                        std::to_string(token_pos) + " has no atom_entry_id");
+                }
+                const int pool_index = row_begin + static_cast<int>(local_entry);
+                if (pool_index < row_begin || pool_index >= row_end) {
+                    throw std::runtime_error(
+                        std::string(caller) + ": execution bootstrap token_pos=" +
+                        std::to_string(token_pos) + " has atom_entry_id=" +
+                        std::to_string(local_entry) + " outside row " +
+                        std::to_string(row) + " selector-pool window");
+                }
+                // Match ExecutionBlock bootstrap semantics: later authored
+                // occurrences overwrite earlier occurrences of the same slot.
+                expected[static_cast<std::size_t>(row) *
+                             static_cast<std::size_t>(execution_slot_count) +
+                         static_cast<std::size_t>(slot)] = pool_index;
+            }
+            if (bootstrap_slot_to_pool_index != expected) {
+                throw std::runtime_error(
+                    std::string(caller) + ": BatchPayload.bootstrap_slot_to_pool_index "
+                    "does not agree with token_to_slot_map + atom_entry_ids");
+            }
         }
         // Teacher steps validation (when populated for arithmetic batches)
         if (!teacher_steps.empty()) {
