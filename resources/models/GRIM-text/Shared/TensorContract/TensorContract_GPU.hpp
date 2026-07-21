@@ -594,6 +594,7 @@ struct ParameterGroup {
     float upsilon = 1.0f;    ///< Depth-aware regularization scale: Υ_l = 0.1 * sqrt(L_ref / L)
     float weight_decay_multiplier = 1.0f;  ///< Registration-stamped multiplier; currently defaults uniformly to 1.0
     float lr_multiplier = 1.0f;  ///< Registration-stamped multiplier; currently defaults uniformly to 1.0
+    bool gradient_verification_missed_previous_signal = false;  ///< Tolerate one numerical zero-signal check; a second consecutive miss fails
     
     // Live accessors — always read through the Tensor, never stale
     // Defined after struct Tensor (forward-declared only here)

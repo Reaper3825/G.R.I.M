@@ -698,6 +698,39 @@ bool verifyGradientsAreConnectedImpl(
     bool ok = true;
     const GradientVerificationActivity activity = detectGradientVerificationActivity(ctx);
     const auto model_hp = GRIM::HyperParameters::modelHP(*ctx.config);
+    auto& parameter_groups =
+        ctx.parameter_registry->requireParameterGroups("verifyGradientsAreConnectedImpl");
+
+    auto requireRegisteredGroup = [&](Tensor& tensor, const std::string& label) -> ParameterGroup& {
+        for (auto& group : parameter_groups) {
+            if (group.tensor == &tensor ||
+                (group.tensor && group.tensor->grad_data() == tensor.grad_data())) {
+                return group;
+            }
+        }
+        throw std::runtime_error(
+            "verifyGradientsAreConnectedImpl: expected gradient tensor '" + label +
+            "' is absent from the parameter registry");
+    };
+
+    auto recordNumericalSignal = [&](Tensor& tensor, const std::string& label, bool received) -> bool {
+        auto& group = requireRegisteredGroup(tensor, label);
+        if (received) {
+            group.gradient_verification_missed_previous_signal = false;
+            return false;
+        }
+
+        if (!group.gradient_verification_missed_previous_signal) {
+            group.gradient_verification_missed_previous_signal = true;
+            AG_WARN(label << ".grad delivered no representable numerical signal; "
+                    << "tolerating the first consecutive miss");
+            return false;
+        }
+
+        AG_WARN(label << ".grad delivered no representable numerical signal for "
+                << "two consecutive active checks");
+        return true;
+    };
 
     auto requireAllocatedFinite = [&](Tensor& t, const std::string& label) {
         if (!t.data) return;
@@ -747,7 +780,12 @@ bool verifyGradientsAreConnectedImpl(
                 ok = false;
                 return;
             }
-            if (!delta_probe.changed || delta_probe.delta_rms == 0.0f) {
+            const bool numerical_signal_missing =
+                !delta_probe.changed || delta_probe.delta_rms == 0.0f;
+            if (!numerical_signal_missing) {
+                (void)recordNumericalSignal(t, label, true);
+            }
+            if (numerical_signal_missing && recordNumericalSignal(t, label, false)) {
                 AG_WARN(label << ".grad did not change during this accumulation microbatch "
                         << "(checked=" << delta_probe.checked << ") — current backward path did not deliver signal");
                 ok = false;
@@ -759,7 +797,11 @@ bool verifyGradientsAreConnectedImpl(
         }
 
         GradientSignalProbe probe = probeGradientSignal(t, ctx.stream);
-        if (!probe.nonzero || probe.rms == 0.0f) {
+        const bool numerical_signal_missing = !probe.nonzero || probe.rms == 0.0f;
+        if (!numerical_signal_missing) {
+            (void)recordNumericalSignal(t, label, true);
+        }
+        if (numerical_signal_missing && recordNumericalSignal(t, label, false)) {
             AG_WARN(label << ".grad is allocated but full-tensor RMS is zero after this backward "
                     << "(checked=" << probe.checked << ") — gradient path did not deliver signal");
             ok = false;
