@@ -16,6 +16,14 @@ Each gamma tensor has shape `[1, d_model]` and is initialized from `training.con
 
 Backward keeps TensorContract's parameter convention: `grad_gamma[d] = sum_t(grad_out[t,d] * sublayer_out[t,d])`. Do **not** divide by token count inside LayerScale; cross-entropy/root backward already mean-scales `grad_out`.
 
+## Token-wise attention residual gate
+
+`attention_residual_gate_enabled` owns one registry-backed gate bundle per encoder layer: `W_gate[d_model,1]` and `b_gate[1]`. The bundle is nested under `EncodingLayerParameterTensors::attention_residual_gate`, initialized only when enabled, registered as attention parameters, and accessed through `StartupParameterRegistry::requireAttentionResidualGateParameters(layer, caller)`. Both tensors initialize to zero, giving the identity-preserving forward equation `gate_multiplier = 2 * sigmoid(ln1_out @ W_gate + b_gate)` and starting the residual multiplier at exactly `1.0`.
+
+The attention residual branch is `attention_residual_branch = residual_scale * broadcast_row_mul(gate_multiplier, proj_out)`, followed by optional LayerScale and the residual add. `ModelForwardOutputs` retains the gate logits, multiplier, raw `proj_out`, and final attention residual branch through backward. Existing TensorContract GradFns provide the complete backward chain into the attention projection, gate parameters, and `ln1_out`; do not add a parallel hand-written gate backward path.
+
+The gate belongs to the encoder residual boundary, not `EncoderSelfAttentionHP` or the FlashAttention implementation. Disabled configurations must leave both gate tensors absent; callers must not silently substitute unregistered tensors.
+
 ## Bias additions through autograd
 Use `autograd::broadcast_add()` for **all** biases (`b_qkv`, `b_o`, `b1`, `b2`). Raw `launchFFNBiasAdd` bypasses autograd → zero bias gradients.
 

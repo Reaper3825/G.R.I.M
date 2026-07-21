@@ -431,6 +431,7 @@ void registerEncoderParameters(Startup::GpuModelState& gpu_model_state,
             encoder_hp.attention_output_bias_enabled,
             freeze_learned_rms_gammas,
             use_layer_scale,
+            encoder_hp.attention_residual_gate_enabled,
             registrar);
 
         auto& ffn_parameters = parameter_registry.requireFeedForwardParameters(layer, "registerEncoderParameters");
@@ -899,6 +900,20 @@ void initializeEncodingLayerParameterTensors(
             tensors.b_o = GRIM::Tensor::zeros({encoder_hp.d_model}, init_stream, "enc_b_o");
             tensors.b_o.requires_grad_();
             tensors.b_o.alloc_grad();
+        }
+
+        if (encoder_hp.attention_residual_gate_enabled) {
+            // The forward gate will use 2 * sigmoid(logit), so zero logits
+            // initialize the residual multiplier to exactly 1.0.
+            tensors.attention_residual_gate.W_gate = GRIM::Tensor::zeros(
+                {encoder_hp.d_model, 1}, init_stream, "enc_attention_residual_gate_W");
+            tensors.attention_residual_gate.W_gate.requires_grad_();
+            tensors.attention_residual_gate.W_gate.alloc_grad();
+
+            tensors.attention_residual_gate.b_gate = GRIM::Tensor::zeros(
+                {1}, init_stream, "enc_attention_residual_gate_b");
+            tensors.attention_residual_gate.b_gate.requires_grad_();
+            tensors.attention_residual_gate.b_gate.alloc_grad();
         }
 
         if (encoder_hp.use_layer_scale) {

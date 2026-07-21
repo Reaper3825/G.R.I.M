@@ -345,6 +345,7 @@ struct EncoderLayerConstructionHP {
     float attention_dropout = 0.0f;
     bool qk_norm_enabled = false;
     bool attention_off_by_one = false;
+    bool attention_residual_gate_enabled = false;
     float residual_projection_init_gain = 0.0f;
     bool is_gqa = false;
     bool freeze_learned_rms_gammas = false;
@@ -495,6 +496,7 @@ struct ModelHP {
     float encoder_attention_dropout = 0.0f;
     bool encoder_qk_norm_enabled = false;
     bool encoder_attention_off_by_one = false;
+    bool encoder_attention_residual_gate_enabled = false;
     float encoder_residual_projection_init_gain = 0.0f;
     bool encoder_is_gqa = false;
     bool encoder_freeze_learned_rms_gammas = false;
@@ -1293,6 +1295,7 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.encoder_attention_dropout = attention_dropout;
     view.encoder_qk_norm_enabled = requireBool("qk_norm_enabled");
     view.encoder_attention_off_by_one = requireBool("attention_off_by_one");
+    view.encoder_attention_residual_gate_enabled = requireBool("attention_residual_gate_enabled");
     view.encoder_residual_projection_init_gain = residual_projection_init_gain;
     view.encoder_is_gqa = is_gqa;
     view.encoder_freeze_learned_rms_gammas = requireBool("freeze_learned_rms_gammas");
@@ -1408,6 +1411,7 @@ inline EncoderLayerConstructionHP encoderLayerConstructionHP(
     view.attention_dropout = model.encoder_attention_dropout;
     view.qk_norm_enabled = model.encoder_qk_norm_enabled;
     view.attention_off_by_one = model.encoder_attention_off_by_one;
+    view.attention_residual_gate_enabled = model.encoder_attention_residual_gate_enabled;
     view.residual_projection_init_gain = model.encoder_residual_projection_init_gain;
     view.is_gqa = model.encoder_is_gqa;
     view.freeze_learned_rms_gammas = model.encoder_freeze_learned_rms_gammas;

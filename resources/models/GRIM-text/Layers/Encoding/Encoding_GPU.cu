@@ -122,6 +122,34 @@ void validateEncodingParameters(const EncodingLayerParameterTensors* parameters,
             throw std::runtime_error(std::string(context) + ": hp.use_layer_scale=false but layer-scale parameter tensors were provided");
         }
     }
+
+    const auto& gate_parameters = parameters->attention_residual_gate;
+    if (hp.attention_residual_gate_enabled) {
+        if (!gate_parameters.W_gate.data || !gate_parameters.b_gate.data) {
+            throw std::runtime_error(std::string(context) +
+                                     ": attention_residual_gate_enabled=true requires W_gate and b_gate");
+        }
+        gate_parameters.W_gate.shape.require("validateEncodingParameters attention residual W_gate");
+        if (!gate_parameters.W_gate.shape.is_2d_layout()) {
+            throw std::runtime_error(std::string(context) +
+                                     ": attention residual W_gate must be 2D [d_model,1]");
+        }
+        const auto gate_weight_shape = gate_parameters.W_gate.shape.as_2d();
+        if (gate_weight_shape.rows != hp.d_model || gate_weight_shape.cols != 1) {
+            throw std::runtime_error(std::string(context) +
+                                     ": attention residual W_gate shape mismatch. expected=[" +
+                                     std::to_string(hp.d_model) + ",1] got=[" +
+                                     std::to_string(gate_weight_shape.rows) + "," +
+                                     std::to_string(gate_weight_shape.cols) + "]");
+        }
+        if (gate_parameters.b_gate.numel() != 1) {
+            throw std::runtime_error(std::string(context) +
+                                     ": attention residual b_gate must contain exactly one value");
+        }
+    } else if (gate_parameters.W_gate.data || gate_parameters.b_gate.data) {
+        throw std::runtime_error(std::string(context) +
+                                 ": attention_residual_gate_enabled=false but gate parameters were provided");
+    }
 }
 
 void validateEncodingConstructionHP(const HyperParameters::EncoderLayerConstructionHP& hp,
@@ -201,6 +229,12 @@ void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
     Tensor& residual1 = forward_outputs.residual1_per_layer[layer_slot];
     Tensor& ln2_out = forward_outputs.ln2_out_per_layer[layer_slot];
     Tensor& scaled_proj = forward_outputs.scaled_proj_per_layer[layer_slot];
+    Tensor& attention_gate_logits =
+        forward_outputs.attention_residual_gate_logits_per_layer[layer_slot];
+    Tensor& attention_gate_multiplier =
+        forward_outputs.attention_residual_gate_multiplier_per_layer[layer_slot];
+    Tensor& attention_residual_branch =
+        forward_outputs.attention_residual_branch_per_layer[layer_slot];
     Tensor& scaled_ffn = forward_outputs.scaled_ffn_per_layer[layer_slot];
     Tensor& proj_out = forward_outputs.proj_out_per_layer[layer_slot];
     Tensor& ffn_out = forward_outputs.ffn_out_per_layer[layer_slot];
@@ -339,21 +373,47 @@ void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
                                      attn_proj_dropout_seed, stream,
                                      attn_proj_dropout_mask_stream);
     }
-    proj_out = autograd::mul_scalar(proj_out, residual_scale, stream);
+    if (hp.attention_residual_gate_enabled) {
+        const auto& gate_parameters = encoding_parameters->attention_residual_gate;
+
+        // Token-wise decision: [tokens,d_model] @ [d_model,1] -> [tokens,1].
+        attention_gate_logits = autograd::matmul(
+            ln1_out, gate_parameters.W_gate, stream);
+        attention_gate_logits = autograd::broadcast_add(
+            attention_gate_logits, gate_parameters.b_gate, stream);
+
+        // Identity-preserving parameterization. Zero-initialized logits produce
+        // multiplier 2 * sigmoid(0) == 1, exactly matching the pre-gate model.
+        Tensor gate_probability = autograd::sigmoid(
+            attention_gate_logits, stream, attention_gate_logits.data);
+        attention_gate_multiplier = autograd::mul_scalar(
+            gate_probability, 2.0f, stream);
+
+        // BroadcastRowMulGradFn propagates into both proj_out and the token gate.
+        // It borrows multiplier/proj_out data, both retained on forward_outputs.
+        Tensor gated_projection = autograd::broadcast_row_mul(
+            attention_gate_multiplier, proj_out, stream);
+        attention_residual_branch = autograd::mul_scalar(
+            gated_projection, residual_scale, stream);
+    } else {
+        attention_residual_branch = autograd::mul_scalar(
+            proj_out, residual_scale, stream);
+    }
     
     //--------------------------------------------------
-    // 7. Residual1: input + proj_out -> residual1
+    // 7. Residual1: input + attention_residual_branch -> residual1
     // Issue #56: Store on ModelForwardOutputs
-    // Issue #109: Apply LayerScale to proj_out before residual addition
+    // Issue #109: Apply LayerScale to the attention branch before residual addition
     // Note: Standard pre-norm architecture (Issue #148: Sandwich Norm removed).
     //--------------------------------------------------
     if constexpr (kEnableEncoderStepLogs) fprintf(stderr, "[EncoderFwd] Step 7: Residual1...\n");
     
     // Issue #109: LayerScale gating for attention sublayer
-    const Tensor* proj_for_residual = &proj_out;
+    const Tensor* proj_for_residual = &attention_residual_branch;
     if (hp.use_layer_scale) {
         validateLayerScaleGamma(*layer_scale1, "layer_scale1_", hp.d_model, "forwardEncodingLayer");
-        scaled_proj = autograd::layer_scale(proj_out, *const_cast<Tensor*>(layer_scale1), stream);
+        scaled_proj = autograd::layer_scale(
+            attention_residual_branch, *const_cast<Tensor*>(layer_scale1), stream);
         proj_for_residual = &scaled_proj;
     }
 
@@ -362,14 +422,16 @@ void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
     // branch tensor is multiplied by 0 so residual1 == input (+ centering),
     // and attention parameters receive zero gradient (sublayer frozen).
     if (GRIM::Ablation::kZeroAttnResidual) {
-        Tensor& attn_branch = hp.use_layer_scale ? scaled_proj : proj_out;
+        Tensor& attn_branch = hp.use_layer_scale ? scaled_proj : attention_residual_branch;
         attn_branch = autograd::mul_scalar(attn_branch, 0.0f, stream);
     }
     
     // ========================================================================
     // STANDARD PRE-NORM RESIDUAL (Issue #148: Sandwich Norm REMOVED)
     //
-    // Architecture: residual1 = input + LayerScale(attn_out)
+    // Architecture: residual1 = input + LayerScale(
+    //     residual_scale * token_gate(ln1_out) * attn_out)
+    // token_gate is exactly 1 when the learned gate is disabled.
     //
     // Standard pre-norm transformer residual connection. Hidden state norms
     // are FREE to vary across tokens, providing an additional degree of freedom
@@ -475,7 +537,7 @@ void forwardEncodingLayer(const HyperParameters::EncoderLayerConstructionHP& hp,
     EncoderDiagnostics::emitLayerResidualDiagnostic({
         input,
         proj_out,
-        scaled_proj,
+        *proj_for_residual,
         residual1,
         ffn_out,
         *ffn_for_residual,

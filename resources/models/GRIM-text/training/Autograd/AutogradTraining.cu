@@ -914,6 +914,12 @@ bool verifyGradientsAreConnectedImpl(
             check(enc.b_qkv, "attnBqkv");
             check(enc.W_o, "attnWo");
             check(enc.b_o, "attnBo");
+            if (model_hp.encoder_attention_residual_gate_enabled) {
+                auto& gate = ctx.parameter_registry->requireAttentionResidualGateParameters(
+                    layer, "verifyGradientsAreConnectedImpl");
+                check(gate.W_gate, "attentionResidualGateW");
+                check(gate.b_gate, "attentionResidualGateB");
+            }
             auto& ffn_parameters = ctx.parameter_registry->requireFeedForwardParameters(layer, "verifyGradientsAreConnectedImpl");
             check(ffn_parameters.W_gate, "ffnWGate");
             check(ffn_parameters.W1, "ffnW1");
@@ -933,6 +939,12 @@ bool verifyGradientsAreConnectedImpl(
             auto& enc0 = ctx.parameter_registry->requireEncodingLayerParameters(0, "verifyGradientsAreConnectedImpl");
             if (GRIM::Ablation::kAttnDeliversParamGradient) {
                 requireReceivedGradient(enc0.W_qkv, "layer 0 attnWqkv");
+                if (model_hp.encoder_attention_residual_gate_enabled) {
+                    auto& gate0 = ctx.parameter_registry->requireAttentionResidualGateParameters(
+                        0, "verifyGradientsAreConnectedImpl");
+                    requireReceivedGradient(
+                        gate0.W_gate, "layer 0 attentionResidualGateW");
+                }
             } else if (!GRIM::Ablation::kZeroFfnResidual) {
                 auto& ffn0 = ctx.parameter_registry->requireFeedForwardParameters(0, "verifyGradientsAreConnectedImpl");
                 requireReceivedGradient(ffn0.W2, "layer 0 ffnW2 (attn ablated)");

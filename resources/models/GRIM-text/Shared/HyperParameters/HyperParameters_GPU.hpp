@@ -384,6 +384,11 @@ struct LanguageModelConfig {
     // post-process of the FlashAttention result, no learnable tensor.
     bool attention_off_by_one = false;
 
+    // Token-wise learned gate on the encoder attention residual branch. This is
+    // owned by the encoder boundary rather than the FlashAttention sublayer:
+    // each token decides how much of proj_out enters its residual stream.
+    bool attention_residual_gate_enabled = false;
+
     // LayerScale - per-channel learnable residual scaling vectors [1, d_model]
     bool use_layer_scale = false;
     float layer_scale_init = 1.0f;
@@ -1966,6 +1971,7 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(layer_scale_init);
     GRIM_LOAD_CONFIG_FIELD(qk_norm_enabled);
     GRIM_LOAD_CONFIG_FIELD(attention_off_by_one);
+    GRIM_LOAD_CONFIG_FIELD(attention_residual_gate_enabled);
     if (config.at("hardcoded_hidden_states_enabled").get<bool>()) {
         params.hardcoded_hidden_pattern = config.at("hardcoded_hidden_states_pattern").get<HardcodedPattern>();
     }
@@ -2345,6 +2351,7 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(lm_head_unigram_bias);
     GRIM_WRITE_FINAL_CONFIG_FIELD(qk_norm_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(attention_off_by_one);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(attention_residual_gate_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(use_layer_scale);
     GRIM_WRITE_FINAL_CONFIG_FIELD(layer_scale_init);
     GRIM_WRITE_FINAL_CONFIG_FIELD(data_path);
