@@ -89,6 +89,7 @@ struct ExecutionBlockParameterTensors {
     Tensor w_decode_2;
     Tensor w_arg1_select;
     Tensor w_arg2_select;
+    Tensor W_arg1_to_arg2;
     Tensor W_op_select;
     Tensor W_key_proj;
     Tensor W_write_query;
@@ -395,7 +396,7 @@ inline constexpr std::array<SelectorTensorParameterSpec, 1>
          GRIM::ParamGroupType::ARG_SELECTOR, GRIM::ParamStatsBucket::ENCODER},
     }};
 
-inline constexpr std::array<ExecutionBlockTensorParameterSpec, 34>
+inline constexpr std::array<ExecutionBlockTensorParameterSpec, 35>
     kExecutionBlockTensorParameters = {{
         {"exec_block_w_decode_1", &GRIM::ExecutionBlockParameterTensors::w_decode_1,
          GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
@@ -406,6 +407,8 @@ inline constexpr std::array<ExecutionBlockTensorParameterSpec, 34>
         {"exec_block_w_arg1_select", &GRIM::ExecutionBlockParameterTensors::w_arg1_select,
          GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
         {"exec_block_w_arg2_select", &GRIM::ExecutionBlockParameterTensors::w_arg2_select,
+         GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
+        {"exec_block_W_arg1_to_arg2", &GRIM::ExecutionBlockParameterTensors::W_arg1_to_arg2,
          GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},
         {"exec_block_W_op_select", &GRIM::ExecutionBlockParameterTensors::W_op_select,
          GRIM::ParamGroupType::EXECUTION_BLOCK, GRIM::ParamStatsBucket::ENCODER},

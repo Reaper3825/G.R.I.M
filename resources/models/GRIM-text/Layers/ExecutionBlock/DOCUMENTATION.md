@@ -154,7 +154,11 @@ At a high level, one step does this:
    - `context = reduce_mean(H[token_offset : token_offset + row_tokens])`
    - add encoded trace history from prior `ExecutionRecord`s.
 5. **Select operands**
-   - `p_arg1`, `p_arg2` are softmax distributions over value slots,
+   - `p_arg1` is a softmax distribution over value slots from the shared decision input,
+   - `arg1_summary = p_arg1 * cand_hidden` provides a differentiable first-operand summary,
+   - `p_arg2` is scored from the shared decision input plus
+     `arg1_summary * W_arg1_to_arg2`, so operand selection factors as
+     `p(arg1 | context) * p(arg2 | context, p(arg1))`,
    - the optimizer-step execution-transition schedule chooses one authority for
      the complete trajectory,
    - model trajectories materialize hard argmax slot reads,
@@ -308,7 +312,7 @@ forward / autograd call sites:
 
 ### Operand / op selection
 
-- `w_arg1_select`, `w_arg2_select`
+- `w_arg1_select`, `w_arg2_select`, `W_arg1_to_arg2`
 - `W_op_select`
 
 ### Write path

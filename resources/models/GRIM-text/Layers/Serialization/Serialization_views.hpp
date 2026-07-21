@@ -110,6 +110,7 @@ struct SerializationExecutionBlockReadView {
 	DeviceReadView w_decode_2;
 	DeviceReadView w_arg1_select;
 	DeviceReadView w_arg2_select;
+	DeviceReadView W_arg1_to_arg2;
 	DeviceReadView W_op_select;
 	DeviceReadView W_key_proj;
 	DeviceReadView W_write_query;
@@ -148,6 +149,7 @@ struct SerializationExecutionBlockWriteView {
 	DeviceWriteView w_decode_2;
 	DeviceWriteView w_arg1_select;
 	DeviceWriteView w_arg2_select;
+	DeviceWriteView W_arg1_to_arg2;
 	DeviceWriteView W_op_select;
 	DeviceWriteView W_key_proj;
 	DeviceWriteView W_write_query;

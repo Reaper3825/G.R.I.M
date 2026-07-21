@@ -11,12 +11,15 @@ It is **not** a substitute for `DOCUMENTATION.md` kernel-level detail; it focuse
 | Responsibility | You (data / pipeline) | Model (trained weights) |
 |----------------|-------------------------|-------------------------|
 | Which literal is which scalar in memory | `token_to_slot_map` per token (`-1` = non-state) + numeric side channel; `bootstrapMemoryFromSlotMap` copies into `M.values[slot]` | — |
-| Which slot is arg1 / arg2 | — | `w_arg1_select_` / `w_arg2_select_` over **value-slot** rows of `M.state_embeds`, softmax → argmax → hard read from `M.values` |
+| Which slot is arg1 / arg2 | `teacher_steps` supplies structured CE targets when enabled | `w_arg1_select` scores arg1 over **value-slot** rows; `W_arg1_to_arg2` projects its soft candidate summary into the `w_arg2_select` query before argmax and hard reads from `M.values` |
 | Which operation (+ − * /) | — | `W_op_select_` from pooled context + soft arg hiddens; softmax → argmax → `kernelHardPickOpForward` |
 | Where to write the result | — | Write head softmax over `V` (scratch masked) → argmax → `kernelHardWriteScalarDev` |
 | What token to predict next | Targets in the batch / LM loss | LM head, injection path, rest of encoder |
 
-There are **no built-in labels** that say “gold arg1 slot = 0, gold arg2 slot = 1.” Unless you add an auxiliary loss, arg identification is learned only through **end-to-end pressure** from whatever losses you optimize.
+The compiled `teacher_steps` payload supplies gold arg1/arg2 slots. When
+structured CE is enabled, those targets directly supervise both selector
+logits; arg2 CE also flows through the conditional summary into arg1 once the
+zero-initialized conditional projection begins to move.
 
 ---
 

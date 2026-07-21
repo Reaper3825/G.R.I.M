@@ -247,7 +247,7 @@ bool saveLanguageModelCheckpoint(
         EmitModuleInfo(ModuleId::Checkpoint, "Processing ArgSelector weights for FlatBuffer serialization");
     }
 
-    // ExecutionBlock v2 weights — serialized via FlatBuffer
+    // ExecutionBlock v4 weights — serialized via FlatBuffer
     if (execution_block_parameters) {
         auto assignRead = [](DeviceReadView& v, const Tensor& t) {
             v.ptr = t.data;
@@ -259,6 +259,7 @@ bool saveLanguageModelCheckpoint(
         assignRead(request.sources.execution_block.w_decode_2, execution_block_parameters->w_decode_2);
         assignRead(request.sources.execution_block.w_arg1_select, execution_block_parameters->w_arg1_select);
         assignRead(request.sources.execution_block.w_arg2_select, execution_block_parameters->w_arg2_select);
+        assignRead(request.sources.execution_block.W_arg1_to_arg2, execution_block_parameters->W_arg1_to_arg2);
         assignRead(request.sources.execution_block.W_op_select, execution_block_parameters->W_op_select);
         assignRead(request.sources.execution_block.W_key_proj, execution_block_parameters->W_key_proj);
         assignRead(request.sources.execution_block.W_write_query, execution_block_parameters->W_write_query);
@@ -288,7 +289,7 @@ bool saveLanguageModelCheckpoint(
         assignRead(request.sources.execution_block.b_execute, execution_block_parameters->b_execute);
         assignRead(request.sources.execution_block.W_stop, execution_block_parameters->W_stop);
         assignRead(request.sources.execution_block.b_stop, execution_block_parameters->b_stop);
-        EmitModuleInfo(ModuleId::Checkpoint, "Processing ExecutionBlock v3 weights for FlatBuffer serialization");
+        EmitModuleInfo(ModuleId::Checkpoint, "Processing ExecutionBlock v4 weights for FlatBuffer serialization");
     }
 
     // Issue #33: Final RMSNorm gamma (normalizes encoder output before LM head)
@@ -519,13 +520,14 @@ bool loadLanguageModelCheckpoint(
                     static_cast<std::size_t>(selector_parameters->W_q.numel()));
     }
 
-    // ExecutionBlock v2 weight destinations — loaded via FlatBuffer
+    // ExecutionBlock v4 weight destinations — loaded via FlatBuffer
     if (execution_block_parameters) {
         assignWrite(request.execution_block.w_decode_1, execution_block_parameters->w_decode_1.data, static_cast<std::size_t>(execution_block_parameters->w_decode_1.numel()));
         assignWrite(request.execution_block.b_decode_1, execution_block_parameters->b_decode_1.data, static_cast<std::size_t>(execution_block_parameters->b_decode_1.numel()));
         assignWrite(request.execution_block.w_decode_2, execution_block_parameters->w_decode_2.data, static_cast<std::size_t>(execution_block_parameters->w_decode_2.numel()));
         assignWrite(request.execution_block.w_arg1_select, execution_block_parameters->w_arg1_select.data, static_cast<std::size_t>(execution_block_parameters->w_arg1_select.numel()));
         assignWrite(request.execution_block.w_arg2_select, execution_block_parameters->w_arg2_select.data, static_cast<std::size_t>(execution_block_parameters->w_arg2_select.numel()));
+        assignWrite(request.execution_block.W_arg1_to_arg2, execution_block_parameters->W_arg1_to_arg2.data, static_cast<std::size_t>(execution_block_parameters->W_arg1_to_arg2.numel()));
         assignWrite(request.execution_block.W_op_select, execution_block_parameters->W_op_select.data, static_cast<std::size_t>(execution_block_parameters->W_op_select.numel()));
         assignWrite(request.execution_block.W_key_proj, execution_block_parameters->W_key_proj.data, static_cast<std::size_t>(execution_block_parameters->W_key_proj.numel()));
         assignWrite(request.execution_block.W_write_query, execution_block_parameters->W_write_query.data, static_cast<std::size_t>(execution_block_parameters->W_write_query.numel()));

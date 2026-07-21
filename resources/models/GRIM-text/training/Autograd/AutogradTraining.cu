@@ -326,6 +326,7 @@ GradientSignalBaselines captureGradientVerificationBaselines(
         if (activity.exec_arg_loss_active) {
             captureExpected(execution_block_parameters->w_arg1_select, "exec block w_arg1_select");
             captureExpected(execution_block_parameters->w_arg2_select, "exec block w_arg2_select");
+            captureExpected(execution_block_parameters->W_arg1_to_arg2, "exec block W_arg1_to_arg2");
         }
         if (activity.exec_write_selection_ce_active) {
             captureExpected(execution_block_parameters->W_write_query, "exec block W_write_query");
@@ -1005,6 +1006,7 @@ bool verifyGradientsAreConnectedImpl(
         checkEB(eb.w_decode_2, "w_decode_2");
         checkEB(eb.w_arg1_select, "w_arg1_select");
         checkEB(eb.w_arg2_select, "w_arg2_select");
+        checkEB(eb.W_arg1_to_arg2, "W_arg1_to_arg2");
         checkEB(eb.W_op_select, "W_op_select");
         checkEB(eb.W_key_proj, "W_key_proj");
         checkEB(eb.W_write_query, "W_write_query");
@@ -1040,6 +1042,7 @@ bool verifyGradientsAreConnectedImpl(
         if (activity.exec_arg_loss_active) {
             requireReceivedGradient(eb.w_arg1_select, "exec block w_arg1_select");
             requireReceivedGradient(eb.w_arg2_select, "exec block w_arg2_select");
+            requireReceivedGradient(eb.W_arg1_to_arg2, "exec block W_arg1_to_arg2");
         }
         if (activity.exec_write_selection_ce_active) {
             requireReceivedGradient(eb.W_write_query, "exec block W_write_query");

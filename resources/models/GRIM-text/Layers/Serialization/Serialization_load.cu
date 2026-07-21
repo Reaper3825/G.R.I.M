@@ -626,6 +626,7 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
         eb_ok = eb_ok && ul(fb_eb->w_decode_2_data(), eb.w_decode_2, "EB w_decode_2");
         eb_ok = eb_ok && ul(fb_eb->w_arg1_select_data(), eb.w_arg1_select, "EB w_arg1_select");
         eb_ok = eb_ok && ul(fb_eb->w_arg2_select_data(), eb.w_arg2_select, "EB w_arg2_select");
+        eb_ok = eb_ok && ul(fb_eb->w_arg1_to_arg2_data(), eb.W_arg1_to_arg2, "EB W_arg1_to_arg2");
         eb_ok = eb_ok && ul(fb_eb->w_op_select_data(), eb.W_op_select, "EB W_op_select");
         eb_ok = eb_ok && ul(fb_eb->w_key_proj_data(), eb.W_key_proj, "EB W_key_proj");
         eb_ok = eb_ok && ul(fb_eb->w_write_query_data(), eb.W_write_query, "EB W_write_query");
@@ -660,7 +661,7 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
         eb_ok = eb_ok && ul(fb_eb->b_stop_data(), eb.b_stop, "EB b_stop");
         if (!eb_ok) return false;
         request.report.execution_block_loaded = true;
-        Logging::EmitModuleInfo(kLogModule, "[load] ExecutionBlock v3 weights loaded");
+        Logging::EmitModuleInfo(kLogModule, "[load] ExecutionBlock v4 weights loaded");
     }
 
     // ─── final_rms_gamma (gated by requires_final_rms_gamma) ───

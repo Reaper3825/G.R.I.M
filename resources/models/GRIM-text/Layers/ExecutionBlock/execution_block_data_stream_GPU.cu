@@ -961,7 +961,16 @@ void executeStepCoordinatorImpl(
     forward_output.selection_temperature = temperature;
     kernelValidateSoftmax<<<1, kWarpSize, 0, stream>>>(work.p_arg1.data, V_val, diag.numericErrorFlag(), kStagePArg1);
 
-    auto query2 = autograd::matmul(decision_input, params.w_arg2_select, stream);
+    // Autoregressive operand factorization:
+    //   p(arg1, arg2 | context) = p(arg1 | context)
+    //                              * p(arg2 | context, p(arg1)).
+    // Keep the complete soft arg1 distribution in the graph so arg2 CE can
+    // train both the conditional projection and, once that projection moves
+    // away from its zero initialization, the arg1 selector itself.
+    auto arg1_summary = autograd::matmul(work.p_arg1, work.cand_hidden, stream);
+    auto query2_context = autograd::matmul(decision_input, params.w_arg2_select, stream);
+    auto query2_condition = autograd::matmul(arg1_summary, params.W_arg1_to_arg2, stream);
+    auto query2 = autograd::add(query2_context, query2_condition, stream);
     auto arg2_raw_scores = autograd::matmul(query2, work.cand_hidden, stream, true);
     auto arg2_logits = autograd::mul_scalar(
         arg2_raw_scores, operand_selection_scale, stream);
@@ -993,9 +1002,9 @@ void executeStepCoordinatorImpl(
     // value loss back into arg selection.  Only selection CE trains arg selection.
     // v1/v2 grad_fn are left as nullptr (set by materializeSelectedOperands).
 
-    // [DELETED] h_arg1/h_arg2 = matmul(p_arg, cand_hidden)
-    // These leaked arg selection into op and write heads. All three selection
-    // heads (arg, op, write) are now fully independent classification tasks.
+    // arg1_summary intentionally conditions arg2 only. Operand selection does
+    // not leak into the op or write heads; those remain independent
+    // classification tasks over decision_input-derived state.
 
     // Op selection is DETACHED from arg selection (Option B).
     // op sees (context_enriched, trace_state, step_emb) only — same as decision_input.

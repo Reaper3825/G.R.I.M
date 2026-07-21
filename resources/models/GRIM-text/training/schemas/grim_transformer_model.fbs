@@ -110,7 +110,7 @@ table ReasoningHeadWeights {
   d_total: uint32;
 }
 
-/// Execution block v3 (v2 core plus execute/noop and stop/continue control heads).
+/// Execution block v4 (v3 plus conditional arg1-to-arg2 projection).
 table ExecutionBlockWeights {
   w_decode_1_data: [float];
   b_decode_1_data: [float];
@@ -146,6 +146,8 @@ table ExecutionBlockWeights {
   b_execute_data: [float];
   w_stop_data: [float];
   b_stop_data: [float];
+  // Appended for FlatBuffer field-id compatibility with ExecutionBlock v3.
+  w_arg1_to_arg2_data: [float];
 }
 
 table LatentTrajectoryPresetWeights {

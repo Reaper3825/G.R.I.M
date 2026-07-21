@@ -1218,6 +1218,13 @@ void initializeExecutionBlockParameterTensors(
     params.w_decode_2 = make_param(vhd, 1, weight_init_seed + 1, "exec_block.w_decode_2");
     params.w_arg1_select = make_param(3 * dm, dm, weight_init_seed + 2, "exec_block.w_arg1_select");
     params.w_arg2_select = make_param(3 * dm, dm, weight_init_seed + 3, "exec_block.w_arg2_select");
+    params.W_arg1_to_arg2 = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(dm, dm),
+        true,
+        init_stream,
+        "exec_block.W_arg1_to_arg2");
+    params.W_arg1_to_arg2.requires_grad_();
+    params.W_arg1_to_arg2.alloc_grad();
     params.W_op_select = make_param(3 * dm, nop, weight_init_seed + 4, "exec_block.W_op_select");
     params.W_key_proj = make_param(dm, dk, weight_init_seed + 5, "exec_block.W_key_proj");
     params.W_write_query = make_param(4 * dm, dk, weight_init_seed + 7, "exec_block.W_write_query");
