@@ -443,6 +443,9 @@ struct LanguageModelConfig {
     // Causal state loss weights
     float execution_block_transition_hard_threshold = 0.0f;
     int   execution_block_gate_warmup_steps = 0;
+    float execution_block_transition_alpha_start = 0.0f;
+    float execution_block_transition_alpha_end = 1.0f;
+    float execution_block_transition_alpha_ramp_fraction = 0.0f;
     float div_invalid_penalty_weight = 0.0f;
 
     float arg_reinforce_weight = 0.0f;
@@ -1623,8 +1626,18 @@ inline void validateRootConfigDocument(
         validateClosedUnitIntervalFields(params, {
             validationField("execution_block_entropy_collapse_threshold", &LanguageModelConfig::execution_block_entropy_collapse_threshold),
             validationField("execution_block_write_collapse_threshold", &LanguageModelConfig::execution_block_write_collapse_threshold),
-            validationField("execution_block_arg_reinforce_baseline_decay", &LanguageModelConfig::arg_reinforce_baseline_decay)
+            validationField("execution_block_arg_reinforce_baseline_decay", &LanguageModelConfig::arg_reinforce_baseline_decay),
+            validationField("execution_block_transition_alpha_start", &LanguageModelConfig::execution_block_transition_alpha_start),
+            validationField("execution_block_transition_alpha_end", &LanguageModelConfig::execution_block_transition_alpha_end),
+            validationField("execution_block_transition_alpha_ramp_fraction", &LanguageModelConfig::execution_block_transition_alpha_ramp_fraction)
         }, caller);
+        if (params.execution_block_transition_alpha_end <
+            params.execution_block_transition_alpha_start) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": execution_block_transition_alpha_end must be >= "
+                "execution_block_transition_alpha_start");
+        }
     }
     if (params.number_encoder_enabled) {
         if (!params.use_atom_data) {
@@ -2017,6 +2030,9 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_LEAF("execution_block_value_match_epsilon", value_match_epsilon);
     GRIM_LOAD_CONFIG_LEAF("execution_block_final_slot_consistency_weight", final_slot_consistency_weight);
     GRIM_LOAD_CONFIG_FIELD(execution_block_transition_hard_threshold);
+    GRIM_LOAD_CONFIG_FIELD(execution_block_transition_alpha_start);
+    GRIM_LOAD_CONFIG_FIELD(execution_block_transition_alpha_end);
+    GRIM_LOAD_CONFIG_FIELD(execution_block_transition_alpha_ramp_fraction);
     GRIM_LOAD_CONFIG_LEAF("execution_block_div_invalid_penalty_weight", div_invalid_penalty_weight);
     GRIM_LOAD_CONFIG_LEAF("execution_block_arg_reinforce_weight", arg_reinforce_weight);
     GRIM_LOAD_CONFIG_LEAF("execution_block_arg_reinforce_baseline_decay", arg_reinforce_baseline_decay);
@@ -2371,6 +2387,9 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_entropy_weight);
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_transition_hard_threshold);
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_gate_warmup_steps);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_transition_alpha_start);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_transition_alpha_end);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_transition_alpha_ramp_fraction);
     GRIM_WRITE_FINAL_CONFIG_FIELD(div_invalid_penalty_weight);
     GRIM_WRITE_FINAL_CONFIG_FIELD(arg_reinforce_weight);
     GRIM_WRITE_FINAL_CONFIG_FIELD(arg_reinforce_baseline_decay);

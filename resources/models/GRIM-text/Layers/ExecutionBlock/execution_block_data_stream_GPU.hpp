@@ -26,6 +26,7 @@ void executeStepCoordinatorImpl(
 	const Batching::BatchDeviceBindings& bindings,
 	int batch_row,
 	int step,
+	bool teacher_force_transition,
 	float temperature,
 	cudaStream_t stream,
 	Forward::ExecutionBlockStepOutput& forward_output,
@@ -34,16 +35,16 @@ void executeStepCoordinatorImpl(
 	const std::vector<Forward::ExecutionRecord>& prior_records,
 	const Tensor* selector_candidate_keys);
 
-// Materialize only the non-differentiable hard transition decision. During
-// structured-CE-only training this consumes the authoritative teacher step
-// owned by BatchPayload; inference and on-policy REINFORCE training use model
-// argmax. The live model tensors remain unchanged for loss construction.
+// Materialize only the non-differentiable hard transition decision. The caller
+// supplies trajectory authority explicitly; structured CE and REINFORCE do not
+// implicitly choose the executed policy. Live model tensors remain unchanged.
 void materializeHardReadAndOpDecision(
 	const HyperParameters::ExecutionBlockConstructionHP& hp,
 	ExecutionBlockDiagnosticsBuffers& diag,
 	const Batching::BatchPayload& payload,
 	int batch_row,
 	int step,
+	bool teacher_force_transition,
 	cudaStream_t stream,
 	const StepWorkingSet& work);
 
@@ -53,6 +54,7 @@ void materializeHardWriteDecision(
 	const Batching::BatchPayload& payload,
 	int batch_row,
 	int step,
+	bool teacher_force_transition,
 	cudaStream_t stream,
 	const StepWorkingSet& work);
 }

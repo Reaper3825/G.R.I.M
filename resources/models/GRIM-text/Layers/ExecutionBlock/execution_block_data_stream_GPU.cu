@@ -668,6 +668,7 @@ void materializeHardReadAndOpDecision(
     const Batching::BatchPayload& payload,
     int batch_row,
     int step,
+    bool teacher_force_transition,
     cudaStream_t stream,
     const StepWorkingSet& work
 ) {
@@ -679,7 +680,7 @@ void materializeHardReadAndOpDecision(
         "materializeHardReadAndOpDecision: p_op is null");
 
     int* d_exec_idx = diag.execIndices();
-    if (payload.isTraining() && hp.teacher_force_transitions) {
+    if (teacher_force_transition) {
         const auto& teacher = requireTeacherForcedStep(hp, payload, batch_row, step);
         kernelSetHardReadAndOpDecision<<<1, 1, 0, stream>>>(
             d_exec_idx,
@@ -708,6 +709,7 @@ void materializeHardWriteDecision(
     const Batching::BatchPayload& payload,
     int batch_row,
     int step,
+    bool teacher_force_transition,
     cudaStream_t stream,
     const StepWorkingSet& work
 ) {
@@ -715,7 +717,7 @@ void materializeHardWriteDecision(
         "materializeHardWriteDecision: p_write is null");
 
     int* d_exec_idx = diag.execIndices();
-    if (payload.isTraining() && hp.teacher_force_transitions) {
+    if (teacher_force_transition) {
         const auto& teacher = requireTeacherForcedStep(hp, payload, batch_row, step);
         kernelSetHardWriteDecision<<<1, 1, 0, stream>>>(
             d_exec_idx, teacher.write_slot);
@@ -738,6 +740,7 @@ void executeStepCoordinatorImpl(
     const Batching::BatchDeviceBindings& bindings,
     int batch_row,
     int step,
+    bool teacher_force_transition,
     float temperature,
     cudaStream_t stream,
     ExecutionBlockStepOutput& forward_output,
@@ -764,8 +767,9 @@ void executeStepCoordinatorImpl(
     int* d_exec_idx = diag.execIndices();
     int* d_exec_record_i = diag.execRecordI();
     float* d_exec_record_f = diag.execRecordF();
-    forward_output.teacher_forced_transition =
-        payload.isTraining() && hp.teacher_force_transitions;
+    EXEC_CHECK(!teacher_force_transition || payload.isTraining(),
+        "executeStepCoordinatorImpl: teacher authority requested outside Training mode");
+    forward_output.teacher_forced_transition = teacher_force_transition;
 
     // Row-local device slot map: derived from BatchDeviceBindings (host BatchPayload no
     // longer carries device pointers — see Shared/Batching/BatchDeviceBindings.hpp).
@@ -977,7 +981,7 @@ void executeStepCoordinatorImpl(
         work.p_op.data, nop, diag.numericErrorFlag(), kStagePOp);
 
     materializeHardReadAndOpDecision(
-        hp, diag, payload, batch_row, step, stream, work);
+        hp, diag, payload, batch_row, step, teacher_force_transition, stream, work);
 
     materializeSelectedOperands(hp, diag, memory, stream, work);
     kernelCheckFinite<<<(V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
@@ -1238,7 +1242,7 @@ void executeStepCoordinatorImpl(
 
     work.key_new = autograd::matmul(work.result_emb, params.W_key_proj, stream);
     materializeHardWriteDecision(
-        hp, diag, payload, batch_row, step, stream, work);
+        hp, diag, payload, batch_row, step, teacher_force_transition, stream, work);
     applyHardWriteback(hp, diag, parameters, memory, stream, work);
     copyStepDiagnostics(work, forward_output, V_val, nop, V, dm, stream);
     captureStateAfterWriteAndCheckMutations(hp, diag, memory, forward_output, stream);

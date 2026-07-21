@@ -8,6 +8,7 @@
 #endif
 
 #include "ModelForward_GPU.hpp"
+#include "../Dynamic_Execution/ExecutionTransitionSchedule.hpp"
 
 #include "../../GRIM/grim_language_model_cuda.hpp"
 #include "../../Layers/Encoding/Encoding_GPU.hpp"
@@ -338,6 +339,18 @@ GRIM::LMHeadParameterTensors detachLmHeadParameters(
     return detached;
 }
 
+bool teacherOwnsExecutionTrajectory(
+    const ModelForwardRequest& request,
+    int batch_row)
+{
+    if (!request.payload || !request.payload->isTraining()) return false;
+    return !ExecutionTransition::useModelTrajectory(
+        request.execution_transition_student_alpha,
+        static_cast<std::uint64_t>(request.optimizer_step),
+        request.batch_idx,
+        batch_row);
+}
+
 }  // namespace
 
 void ModelForwardRequest::validate(const char* caller) const {
@@ -362,6 +375,17 @@ void ModelForwardRequest::validate(const char* caller) const {
     if (!stream) throw std::runtime_error(std::string(caller) + ": stream is NULL");
     if (!payload) throw std::runtime_error(std::string(caller) + ": payload is NULL");
     if (!bindings) throw std::runtime_error(std::string(caller) + ": bindings is NULL");
+    if (!std::isfinite(execution_transition_student_alpha) ||
+        execution_transition_student_alpha < 0.0f ||
+        execution_transition_student_alpha > 1.0f) {
+        throw std::runtime_error(
+            std::string(caller) +
+            ": execution_transition_student_alpha must be finite and in [0, 1]");
+    }
+    if (optimizer_step < 0) {
+        throw std::runtime_error(
+            std::string(caller) + ": optimizer_step must be >= 0");
+    }
     (void)graphPolicyName(graph);
     const auto execution_hp = HyperParameters::executionBlockConstructionHP(*config);
     if (execution_hp.enabled) {
@@ -870,6 +894,8 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                         request.stream);
 
                     bool stopped = false;
+                    const bool teacher_force_transition =
+                        teacherOwnsExecutionTrajectory(request, b);
                     for (int step = 0; step < exec_K; ++step) {
                         ExecutionBlockStepOutput step_output;
                         auto& record_encode_backward_staging =
@@ -885,6 +911,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                             *request.bindings,
                             b,
                             step,
+                            teacher_force_transition,
                             execution_hp.temp_start,
                             request.stream,
                             step_output,
@@ -1139,6 +1166,8 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                             "ModelForward: execution-active row has zero real teacher steps");
                     }
 
+                    const bool teacher_force_transition =
+                        teacherOwnsExecutionTrajectory(request, b);
                     for (int step = 0; step < real_step_count; ++step) {
                         ExecutionBlockStepOutput step_diag;
                         auto& record_encode_backward_staging =
@@ -1149,7 +1178,9 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                             execution_hp, execution_runtime.execution_diag,
                             layer_output, M_b, *execution_block_parameters,
                             payload, *request.bindings, b,
-                            step, T, request.stream,
+                            step,
+                            teacher_force_transition,
+                            T, request.stream,
                             step_diag,
                             record_encode_backward_staging,
                             runtime.execution_runtime->trace_state_by_row[b],

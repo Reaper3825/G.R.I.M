@@ -431,6 +431,7 @@ void runExecutionLossDiagnostic(
                 }
 
                 if (execution_hp.arg_reinforce_weight > 0.0f &&
+                    !step_output.teacher_forced_transition &&
                     step_output.record.op_id ==
                         (*teacher_row)[static_cast<std::size_t>(step_index)].op_id) {
                     // The REINFORCE baseline is stateful and is updated while the

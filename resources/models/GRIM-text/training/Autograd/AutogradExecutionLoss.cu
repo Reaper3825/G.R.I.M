@@ -785,7 +785,11 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
                 addExecLossTerm(std::move(penalty), "div_invalid_penalty", b, k, ExecLossFlag::Op);
             }
 
-            if (execution_hp.arg_reinforce_weight > 0.0f) {
+            // REINFORCE is an on-policy estimator. Teacher-authored transitions
+            // retain structured CE, but must not be presented as sampled model
+            // actions while the alpha handoff is in progress.
+            if (execution_hp.arg_reinforce_weight > 0.0f &&
+                !sout.teacher_forced_transition) {
                 if (!teacher_row) {
                     throw std::runtime_error(
                         "addExecutionAuxiliaryLoss: arg REINFORCE reached row="

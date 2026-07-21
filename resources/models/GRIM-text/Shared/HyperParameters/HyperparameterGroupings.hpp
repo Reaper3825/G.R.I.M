@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "HyperParameters_GPU.hpp"
+#include "../Dynamic_Execution/ExecutionTransitionSchedule.hpp"
 #include "../Dynamic_LR/LRSchedule.hpp"
 
 namespace GRIM::HyperParameters {
@@ -92,6 +93,12 @@ struct LearningRateScheduleInputs {
     int warmup_steps = 0;
     bool cosine_decay_enabled = false;
     bool cosine_warm_restarts = false;
+};
+
+struct ExecutionTransitionScheduleInputs {
+    float initial_student_alpha = 0.0f;
+    float final_student_alpha = 1.0f;
+    float ramp_fraction = 0.0f;
 };
 
 struct TrainingSeedHP {
@@ -434,10 +441,6 @@ struct ExecutionBlockConstructionHP {
     float div_invalid_penalty_weight = 0.0f;
     float arg_reinforce_weight = 0.0f;
     float arg_reinforce_baseline_decay = 0.0f;
-    // Derived training policy: structured-CE-only training executes the
-    // authoritative BatchPayload teacher transition while retaining model
-    // logits for the classification losses. Inference remains model-driven.
-    bool teacher_force_transitions = false;
 };
 
 // NumberEncoder construction view — numeric-meaning input path.
@@ -607,6 +610,19 @@ inline LearningRateScheduleInputs learningRateScheduleInputs(
     inputs.warmup_steps = hp.warmup_steps;
     inputs.cosine_decay_enabled = hp.cosine_decay_enabled;
     inputs.cosine_warm_restarts = hp.cosine_warm_restarts;
+    return inputs;
+}
+
+inline ExecutionTransitionScheduleInputs executionTransitionScheduleInputs(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    ExecutionTransitionScheduleInputs inputs;
+    inputs.initial_student_alpha = snapshotTrainingConfigField<float>(
+        snapshot, "execution_block_transition_alpha_start");
+    inputs.final_student_alpha = snapshotTrainingConfigField<float>(
+        snapshot, "execution_block_transition_alpha_end");
+    inputs.ramp_fraction = snapshotTrainingConfigField<float>(
+        snapshot, "execution_block_transition_alpha_ramp_fraction");
     return inputs;
 }
 
@@ -1469,9 +1485,6 @@ inline ExecutionBlockConstructionHP executionBlockConstructionHP(
     view.div_invalid_penalty_weight = model.execution_block_div_invalid_penalty_weight;
     view.arg_reinforce_weight = model.execution_block_arg_reinforce_weight;
     view.arg_reinforce_baseline_decay = model.execution_block_arg_reinforce_baseline_decay;
-    view.teacher_force_transitions =
-        model.structured_ce_enabled
-        && model.execution_block_arg_reinforce_weight <= 0.0f;
     return view;
 }
 
@@ -1563,6 +1576,20 @@ inline ::GRIM::LR::LRScheduleConfig makeLRScheduleConfig(
     cfg.steps_per_epoch = steps_per_epoch;
     cfg.cosine_decay_enabled = inputs.cosine_decay_enabled;
     cfg.warm_restarts = inputs.cosine_warm_restarts;
+    return cfg;
+}
+
+inline ::GRIM::ExecutionTransition::ExecutionTransitionScheduleConfig
+makeExecutionTransitionScheduleConfig(
+    const ExecutionTransitionScheduleInputs& inputs,
+    int total_steps)
+{
+    ::GRIM::ExecutionTransition::ExecutionTransitionScheduleConfig cfg;
+    cfg.initial_student_alpha = inputs.initial_student_alpha;
+    cfg.final_student_alpha = inputs.final_student_alpha;
+    cfg.ramp_steps = inputs.ramp_fraction <= 0.0f
+        ? 0
+        : std::max(1, static_cast<int>(inputs.ramp_fraction * total_steps));
     return cfg;
 }
 

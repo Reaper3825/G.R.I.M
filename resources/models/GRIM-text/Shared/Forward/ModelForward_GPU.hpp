@@ -69,6 +69,10 @@ struct ModelForwardRequest {
     const Batching::BatchPayload* payload = nullptr;
     const Batching::BatchDeviceBindings* bindings = nullptr;
     uint64_t batch_idx = 0;
+    // Training-only execution handoff inputs. Alpha is the probability of a
+    // wholly model-authored trajectory; inference/validation default to model.
+    float execution_transition_student_alpha = 1.0f;
+    int optimizer_step = 0;
     ModelForwardGraphPolicy graph{};
 
     // Inference-only: when non-null, the encoder attention sublayers run the

@@ -12,6 +12,7 @@
 #include "../Layers/ExecutionBlock/execution_block_data_stream_GPU.hpp"
 #include "../Layers/ExecutionBlock/execution_block_memory_stream_GPU.hpp"
 #include "../Shared/Batching/BatchPayload.hpp"
+#include "../Shared/Dynamic_Execution/ExecutionTransitionSchedule.hpp"
 #include "../Shared/Execution/ExecutionResultEmission.hpp"
 #include "../Shared/Forward/ModelForwardOutputs.hpp"
 #include "../Shared/Forward/ModelForwardRuntimePayload.hpp"
@@ -310,9 +311,6 @@ bool testExecutionBlockConstructionHPDefaults(std::string& message) {
                    "magnitude_limit is config-owned and defaults to 0");
     EB_ASSERT_NEAR(cfg.transition_hard_threshold, 0.0f, 1e-6f,
                    "transition_hard_threshold default");
-    EB_ASSERT_TRUE(!cfg.teacher_force_transitions,
-                   "teacher_force_transitions default false");
-
     return true;
 }
 
@@ -1133,8 +1131,6 @@ bool testHardTransitionDecisionPolicy(std::string& message) {
     hp.num_slots = 8;
     hp.num_scratch_slots = 2;
     hp.num_ops = 4;
-    hp.teacher_force_transitions = true;
-
     ExecutionBlockDiagnosticsBuffers diag;
     diag.allocate(stream);
 
@@ -1166,9 +1162,9 @@ bool testHardTransitionDecisionPolicy(std::string& message) {
         payload.teacher_step_mask = {{1}};
 
         GRIM::ExecutionBlockInternal::materializeHardReadAndOpDecision(
-            hp, diag, payload, 0, 0, stream, work);
+            hp, diag, payload, 0, 0, true, stream, work);
         GRIM::ExecutionBlockInternal::materializeHardWriteDecision(
-            hp, diag, payload, 0, 0, stream, work);
+            hp, diag, payload, 0, 0, true, stream, work);
 
         int indices[4] = {-1, -1, -1, -1};
         cudaMemcpyAsync(indices, diag.execIndices(), sizeof(indices),
@@ -1181,9 +1177,9 @@ bool testHardTransitionDecisionPolicy(std::string& message) {
 
         payload.mode = Batching::BatchPayloadMode::InferencePrefill;
         GRIM::ExecutionBlockInternal::materializeHardReadAndOpDecision(
-            hp, diag, payload, 0, 0, stream, work);
+            hp, diag, payload, 0, 0, false, stream, work);
         GRIM::ExecutionBlockInternal::materializeHardWriteDecision(
-            hp, diag, payload, 0, 0, stream, work);
+            hp, diag, payload, 0, 0, false, stream, work);
         cudaMemcpyAsync(indices, diag.execIndices(), sizeof(indices),
                         cudaMemcpyDeviceToHost, stream);
         cudaStreamSynchronize(stream);
@@ -1195,6 +1191,40 @@ bool testHardTransitionDecisionPolicy(std::string& message) {
 
     diag.destroy();
     cudaStreamDestroy(stream);
+    return true;
+}
+
+bool testExecutionTransitionSchedule(std::string& message) {
+    using namespace GRIM::ExecutionTransition;
+
+    ExecutionTransitionScheduleConfig cfg;
+    cfg.initial_student_alpha = 0.0f;
+    cfg.final_student_alpha = 1.0f;
+    cfg.ramp_steps = 10;
+    ExecutionTransitionSchedule schedule(cfg);
+
+    const auto first = schedule.query(0);
+    EB_ASSERT_TRUE(first.student_alpha > 0.0f,
+                   "update zero should already have progressive student exposure");
+    EB_ASSERT_TRUE(first.student_alpha < 1.0f,
+                   "update zero should remain inside the handoff ramp");
+    EB_ASSERT_TRUE(first.in_ramp, "update zero should report in_ramp");
+
+    const auto last = schedule.query(9);
+    EB_ASSERT_NEAR(last.student_alpha, 1.0f, 1e-6f,
+                   "last ramp update should reach full student authority");
+    EB_ASSERT_TRUE(!last.in_ramp, "completed ramp should clear in_ramp");
+    EB_ASSERT_NEAR(schedule.studentAlpha(100), 1.0f, 1e-6f,
+                   "student authority should hold after ramp completion");
+
+    EB_ASSERT_TRUE(!useModelTrajectory(0.0f, 3, 7, 1),
+                   "alpha zero must always select the teacher");
+    EB_ASSERT_TRUE(useModelTrajectory(1.0f, 3, 7, 1),
+                   "alpha one must always select the model");
+    const bool first_pick = useModelTrajectory(0.5f, 3, 7, 1);
+    const bool repeated_pick = useModelTrajectory(0.5f, 3, 7, 1);
+    EB_ASSERT_EQ(first_pick, repeated_pick,
+                 "trajectory selection must be deterministic");
     return true;
 }
 
@@ -1234,6 +1264,7 @@ int GRIM::Test::runExecutionBlockTests() {
     suite.addTest("Inference: terminal result emission contract", testTerminalExecutionResultEmissionContract);
     suite.addTest("Inference: generated result session table", testGeneratedNumericAtomSessionTable);
     suite.addTest("Validation: first execution error wins", testFirstExecutionErrorWins);
+    suite.addTest("Policy: execution transition alpha schedule", testExecutionTransitionSchedule);
     suite.addTest("Policy: hard transition follows payload mode", testHardTransitionDecisionPolicy);
 
     auto results = suite.runAll();

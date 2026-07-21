@@ -364,6 +364,18 @@ float scheduledLearningRateForOptimizerStep(
         stability_hp.enabled);
 }
 
+float scheduledExecutionStudentAlphaForOptimizerStep(
+    const TrainingContext& ctx,
+    int optimizer_step)
+{
+    if (!ctx.execution_transition_schedule) {
+        throw std::runtime_error(
+            "execution_transition_schedule is not initialized at " +
+            std::string(__FILE__) + ":" + std::to_string(__LINE__));
+    }
+    return ctx.execution_transition_schedule->studentAlpha(optimizer_step);
+}
+
 void runOptimizerWindowFromEpoch(
     TrainingContext& ctx,
     TrainingLoopState& state,
@@ -579,6 +591,8 @@ GRIM::Forward::ModelForwardRequest buildTrainingForwardRequest(
     const GRIM::Batching::BatchPayload& payload,
     const GRIM::Batching::BatchDeviceBindings& bindings,
     uint64_t batch_idx,
+    int optimizer_step,
+    float execution_transition_student_alpha,
     bool emit_selector_logits)
 {
     GRIM::Forward::ModelForwardRequest request{};
@@ -592,6 +606,9 @@ GRIM::Forward::ModelForwardRequest buildTrainingForwardRequest(
     request.payload = &payload;
     request.bindings = &bindings;
     request.batch_idx = batch_idx;
+    request.optimizer_step = optimizer_step;
+    request.execution_transition_student_alpha =
+        execution_transition_student_alpha;
     request.graph = GRIM::Forward::ModelForwardGraphPolicy{
         /*connect_parameter_graph=*/true,
         /*retain_backward_graph=*/true,
@@ -802,6 +819,9 @@ BatchResult processBatch(
         buildTrainingForwardRuntimePayload(training_state);
     const bool emit_selector_logits =
         GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "selector_enabled");
+    const int optimizer_step = static_cast<int>(ctx.optimizer.optimizer_step.step);
+    const float execution_transition_student_alpha =
+        scheduledExecutionStudentAlphaForOptimizerStep(ctx, optimizer_step);
     GRIM::Forward::ModelForwardRequest forward_request =
         buildTrainingForwardRequest(
             ctx.parameter_registry,
@@ -813,6 +833,8 @@ BatchResult processBatch(
             payload,
             train_bindings,
             plan.batch_idx,
+            optimizer_step,
+            execution_transition_student_alpha,
             emit_selector_logits);
 
     if constexpr (GRIM::VerboseLogging::ENABLE_GPU_MEMORY_DIAGNOSTICS &&
@@ -834,6 +856,9 @@ BatchResult processBatch(
         oss << "EXPLICIT_TRAINING_FORWARD_COMPLETE batch=" << (batch_idx + 1)
             << " total_tokens=" << payload.total_tokens
             << " max_seq_len=" << payload.max_seq_len
+            << " optimizer_step=" << optimizer_step
+            << " execution_student_alpha="
+            << execution_transition_student_alpha
             << " accumulate=" << (plan.should_accumulate ? "true" : "false");
         EmitModuleInfo(ModuleId::ForwardPass, oss.str(), ctx.global_step);
     }

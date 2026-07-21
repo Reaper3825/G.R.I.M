@@ -77,6 +77,8 @@ void validateStartupOrThrow(const StartupValidationInputs& inputs) {
             "EpochPlan estimated_total_steps does not match TrainingContext");
     require(ctx.epoch_plan.estimated_total_steps > 0, "estimated_total_steps <= 0");
     require(ctx.lr_schedule.has_value(), "lr_schedule is not initialized");
+    require(ctx.execution_transition_schedule.has_value(),
+            "execution_transition_schedule is not initialized");
 
     require(static_cast<int>(ctx.epoch_batch_order.size()) == schedule_hp.epochs,
             "epoch_batch_order size does not match epochs");

@@ -56,6 +56,7 @@
 #include "../../Shared/Batching/Batching_GPU.hpp"
 #include "../../Shared/Batching/BatchPayload.hpp"
 #include "../../Shared/Dynamic_LR/LRSchedule.hpp"
+#include "../../Shared/Dynamic_Execution/ExecutionTransitionSchedule.hpp"
 #include "../../Shared/SoftRestart/SoftRestart.hpp"
 #include "../../Shared/Telemetry/TelemetryLattice_GPU.hpp"
 #include "../../Shared/Telemetry/TelemetryControl_GPU.hpp"
@@ -302,6 +303,9 @@ struct TrainingContext {
     /** Deterministic LR schedule — exposed curve queryable at any step.
      *  Constructed in Phase1 after PlannedBatchesReady authors the train payload count. */
     std::optional<GRIM::LR::LRSchedule> lr_schedule;
+    /** Optimizer-step teacher-to-model execution trajectory handoff. */
+    std::optional<GRIM::ExecutionTransition::ExecutionTransitionSchedule>
+        execution_transition_schedule;
     
     
     float best_val_loss = std::numeric_limits<float>::infinity();
