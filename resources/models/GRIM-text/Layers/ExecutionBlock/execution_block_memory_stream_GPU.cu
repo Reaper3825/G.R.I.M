@@ -10,9 +10,7 @@ using GRIM::CudaAlloc::cudaMallocOrThrow;
 namespace GRIM {
 
 using namespace ExecutionBlockInternal;
-using Forward::ExecutionBlockOutput;
 using Forward::ExecutionBlockStepOutput;
-using Forward::ExecutionRecord;
 
 constexpr float kResidualFusionScale = 0.7071067811865475f; // 1 / sqrt(2)
 
@@ -252,27 +250,19 @@ __global__ void kernelSetRecentWriteOneHotDev(
 }
 
 __global__ void kernelStateDeltaCheck(
-    float* __restrict__ state_integrity_loss,
     int* __restrict__ changed_count,
     const float* __restrict__ before,
     const float* __restrict__ after,
-    const int* __restrict__ d_write_slot,
     int V
 ) {
     if (threadIdx.x != 0) return;
-    int ws = d_write_slot[0];
-    float hinge_sum = 0.0f;
     int count = 0;
     for (int i = 0; i < V; ++i) {
         float delta = fabsf(after[i] - before[i]);
         float eps_i = fmaxf(1e-6f, 0.01f * fabsf(before[i]));
-        if (delta > eps_i) {
+        if (delta > eps_i)
             count++;
-            if (i != ws)
-                hinge_sum += delta - eps_i;
-        }
     }
-    state_integrity_loss[0] = hinge_sum;
     changed_count[0] = count;
 }
 
@@ -350,7 +340,7 @@ __global__ void kernelDecayedUsageUpdate(
     float* __restrict__ usage,
     const float* __restrict__ attn,
     float decay,
-    int total_tokens, int num_valid, int V
+    int total_tokens, int num_valid
 ) {
     const int v = blockIdx.x * blockDim.x + threadIdx.x;
     if (v >= num_valid) return;
@@ -718,18 +708,14 @@ void captureStateAfterWriteAndCheckMutations(
     CUDA_CHECK(cudaMemcpyAsync(forward_output.state_after_valid.data, memory.valid_mask.data,
         V * sizeof(float), cudaMemcpyDeviceToDevice, stream));
 
-    // Use Tensor::zeros (async cudaMemsetAsync) instead of synchronous cudaMalloc.
-    auto hinge_discard = Tensor::zeros({1, 1}, stream, "memstream_hinge_discard");
     auto changed_count_tensor = Tensor::zeros({1, 1}, stream, "memstream_changed_count");
     // Reinterpret float* as int* for changed_count (single element, aligned)
     int* d_changed_count = reinterpret_cast<int*>(changed_count_tensor.data);
 
     kernelStateDeltaCheck<<<1, 1, 0, stream>>>(
-        hinge_discard.data,
         d_changed_count,
         forward_output.state_before_values.data,
         forward_output.state_after_values.data,
-        diag.execIndices() + 3,
         V);
     CUDA_CHECK_KERNEL();
 
@@ -738,7 +724,7 @@ void captureStateAfterWriteAndCheckMutations(
         diag.numericErrorFlag(),
         kStageMultiSlotMutation);
     CUDA_CHECK_KERNEL();
-    // hinge_discard and changed_count_tensor freed by Tensor RAII destructor
+    // changed_count_tensor freed by Tensor RAII destructor
 }
 
 void finalizeStepOrThrow(
@@ -813,8 +799,7 @@ Tensor crossAttentionReadImpl(
 
     const int dm = hp.d_model;
     const int hd = hp.cross_attn_head_dim;
-    const int V = hp.num_slots;
-    const int nv = V;
+    const int nv = hp.num_slots;
     const int topk = hp.cross_attn_topk;
     const float inv_sqrt_d = 1.0f / sqrtf(static_cast<float>(hd));
 
@@ -884,7 +869,7 @@ Tensor crossAttentionReadImpl(
 
     // Usage update (detached telemetry — no autograd)
     kernelDecayedUsageUpdate<<<(nv + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
-        memory.usage.data, attn_weights.data, hp.usage_decay, row_tokens, nv, V);
+        memory.usage.data, attn_weights.data, hp.usage_decay, row_tokens, nv);
     CUDA_CHECK_KERNEL();
 
     return delta;
