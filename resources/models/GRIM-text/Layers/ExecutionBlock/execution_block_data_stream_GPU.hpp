@@ -31,7 +31,8 @@ void executeStepCoordinatorImpl(
 	Forward::ExecutionBlockStepOutput& forward_output,
 	Forward::RecordEncodeBackwardStaging& record_encode_backward_staging,
 	Tensor& trace_state,
-	const std::vector<Forward::ExecutionRecord>& prior_records);
+	const std::vector<Forward::ExecutionRecord>& prior_records,
+	const Tensor* selector_candidate_keys);
 
 // Materialize only the non-differentiable hard transition decision. During
 // structured-CE-only training this consumes the authoritative teacher step

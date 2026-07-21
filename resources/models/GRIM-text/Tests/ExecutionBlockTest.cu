@@ -19,6 +19,7 @@
 #include "../Shared/UnigramByte/TokenLayout.hpp"
 
 #include <cuda_runtime.h>
+#include <cublas_v2.h>
 
 #include <cmath>
 #include <memory>
@@ -553,6 +554,9 @@ bool testSelectorExecutionBootstrapMetadata(std::string& message) {
 bool testSelectorExecutionForwardBridge(std::string& message) {
     cudaStream_t stream = nullptr;
     cudaStreamCreate(&stream);
+    cublasHandle_t cublas_handle = nullptr;
+    cublasCreate(&cublas_handle);
+    autograd::set_autograd_cublas_handle(cublas_handle);
 
     constexpr int V = 4;
     constexpr int S = 2;
@@ -611,6 +615,10 @@ bool testSelectorExecutionForwardBridge(std::string& message) {
         const std::vector<float> h_numeric_values{7.0f, 7.0f};
         const std::vector<int32_t> h_slot_map{2, 3};
         const std::vector<int> h_slot_to_pool{-1, -1, 0, 1};
+        Batching::BatchPayload payload;
+        payload.batch_size = 1;
+        payload.execution_slot_count = V;
+        payload.bootstrap_slot_to_pool_index = h_slot_to_pool;
         float* d_numeric_values = nullptr;
         int32_t* d_slot_map = nullptr;
         int* d_slot_to_pool = nullptr;
@@ -672,7 +680,15 @@ bool testSelectorExecutionForwardBridge(std::string& message) {
 
         ExecutionBlockInternal::StepWorkingSet work;
         ExecutionBlockInternal::buildValueSlotCandidates(
-            hp, memory, params, stream, work);
+            hp,
+            memory,
+            params,
+            payload,
+            /*batch_row=*/0,
+            /*prior_records=*/{},
+            &candidate_keys,
+            stream,
+            work);
         std::vector<float> h_candidates(static_cast<size_t>(V - S) * dm, 0.0f);
         cudaMemcpy(
             h_candidates.data(),
@@ -703,12 +719,141 @@ bool testSelectorExecutionForwardBridge(std::string& message) {
         cudaFree(d_slot_to_pool);
     }
 
+    autograd::set_autograd_cublas_handle(nullptr);
+    cublasDestroy(cublas_handle);
     cudaStreamDestroy(stream);
     return true;
 }
 
 //======================================================//
-//  12. Inference control boundary is final prompt token
+//  12. Operand bridge backward uses existing primitives
+//======================================================//
+
+bool testSelectorExecutionBackwardBridge(std::string& message) {
+    cudaStream_t stream = nullptr;
+    cudaStreamCreate(&stream);
+    cublasHandle_t cublas_handle = nullptr;
+    cublasCreate(&cublas_handle);
+    autograd::set_autograd_cublas_handle(cublas_handle);
+    GRIM::setUseEngineBackward(true);
+
+    constexpr int V = 4;
+    constexpr int S = 2;
+    constexpr int dm = 3;
+    constexpr int dk = 2;
+    constexpr int dt = 2;
+    constexpr int pool_atoms = 2;
+    constexpr float inv_sqrt_2 = 0.7071067811865475f;
+
+    HyperParameters::ExecutionBlockConstructionHP hp{};
+    hp.num_slots = V;
+    hp.num_scratch_slots = S;
+    hp.d_model = dm;
+    hp.d_key = dk;
+    hp.d_type = dt;
+
+    ModelForwardOutputs outputs;
+    outputs.ensureExecutionBatchGeometry(1, "testSelectorExecutionBackwardBridge");
+    outputs.allocateExecutionMemoryRow(
+        0, V, /*atom_dim=*/4, dm, dk, dt, stream,
+        "testSelectorExecutionBackwardBridge");
+    auto& memory = outputs.exec_memories[0];
+
+    const std::vector<float> h_valid{0.0f, 0.0f, 1.0f, 1.0f};
+    cudaMemcpyAsync(
+        memory.valid_mask.data,
+        h_valid.data(),
+        h_valid.size() * sizeof(float),
+        cudaMemcpyHostToDevice,
+        stream);
+
+    ExecutionBlockParameterTensors params{};
+    params.E_slot = Tensor::zeros({V, dm}, stream, "test_backward_E_slot");
+    params.E_slot.requires_grad_(true);
+    params.E_slot.alloc_grad();
+
+    Tensor candidate_keys = Tensor::zeros(
+        {pool_atoms, dm}, stream, "test_backward_selector_keys");
+    candidate_keys.requires_grad_(true);
+    candidate_keys.alloc_grad();
+
+    Batching::BatchPayload payload;
+    payload.batch_size = 1;
+    payload.execution_slot_count = V;
+    payload.bootstrap_slot_to_pool_index = {-1, -1, 0, 1};
+
+    ExecutionRecord overwritten_record{};
+    overwritten_record.write_slot = 3;
+    const std::vector<ExecutionRecord> prior_records{overwritten_record};
+
+    ExecutionBlockInternal::StepWorkingSet work;
+    ExecutionBlockInternal::buildValueSlotCandidates(
+        hp,
+        memory,
+        params,
+        payload,
+        /*batch_row=*/0,
+        prior_records,
+        &candidate_keys,
+        stream,
+        work);
+
+    Tensor upstream = Tensor::zeros(
+        {V - S, dm}, stream, "test_backward_candidate_seed");
+    const std::vector<float> h_upstream(static_cast<size_t>(V - S) * dm, 1.0f);
+    cudaMemcpyAsync(
+        upstream.data,
+        h_upstream.data(),
+        h_upstream.size() * sizeof(float),
+        cudaMemcpyHostToDevice,
+        stream);
+    work.cand_hidden.alloc_grad();
+    work.cand_hidden.backward(&upstream);
+
+    std::vector<float> h_slot_grad(static_cast<size_t>(V) * dm, 0.0f);
+    std::vector<float> h_key_grad(static_cast<size_t>(pool_atoms) * dm, 0.0f);
+    cudaMemcpy(
+        h_slot_grad.data(),
+        params.E_slot.grad_data(),
+        h_slot_grad.size() * sizeof(float),
+        cudaMemcpyDeviceToHost);
+    cudaMemcpy(
+        h_key_grad.data(),
+        candidate_keys.grad_data(),
+        h_key_grad.size() * sizeof(float),
+        cudaMemcpyDeviceToHost);
+
+    for (int slot = 0; slot < V; ++slot) {
+        const float expected = slot >= S ? inv_sqrt_2 : 0.0f;
+        for (int d = 0; d < dm; ++d) {
+            EB_ASSERT_NEAR(
+                h_slot_grad[static_cast<size_t>(slot) * dm + d],
+                expected,
+                1e-5f,
+                "operand gradient routes through E_slot primitive matmul");
+        }
+    }
+    for (int d = 0; d < dm; ++d) {
+        EB_ASSERT_NEAR(
+            h_key_grad[static_cast<size_t>(d)],
+            0.5f,
+            1e-5f,
+            "authored slot routes operand gradient to its selector key");
+        EB_ASSERT_NEAR(
+            h_key_grad[static_cast<size_t>(dm + d)],
+            0.0f,
+            1e-5f,
+            "overwritten slot does not retain stale authored-key gradient");
+    }
+
+    autograd::set_autograd_cublas_handle(nullptr);
+    cublasDestroy(cublas_handle);
+    cudaStreamDestroy(stream);
+    return true;
+}
+
+//======================================================//
+//  13. Inference control boundary is final prompt token
 //======================================================//
 
 bool testInferencePromptControlBoundary(std::string& message) {
@@ -1079,6 +1224,7 @@ int GRIM::Test::runExecutionBlockTests() {
     suite.addTest("Output: multi-step aggregation", testExecutionBlockOutputMultiStep);
     suite.addTest("Metadata: selector-to-execution bootstrap identity", testSelectorExecutionBootstrapMetadata);
     suite.addTest("Forward: selector-to-execution operand bridge", testSelectorExecutionForwardBridge);
+    suite.addTest("Backward: selector-to-execution operand bridge", testSelectorExecutionBackwardBridge);
     suite.addTest("Control: final prompt-token boundary", testInferencePromptControlBoundary);
     suite.addTest("Inference: decode payload owns host inputs", testInferenceDecodeHostInputOwnership);
     suite.addTest("Config: scratch-slot constraint", testScratchSlotConstraint);

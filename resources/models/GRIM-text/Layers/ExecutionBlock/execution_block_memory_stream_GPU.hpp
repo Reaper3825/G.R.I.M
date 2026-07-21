@@ -3,12 +3,17 @@
 #ifdef USE_CUDA
 
 #include "execution_block_internal.hpp"
+#include "../../Shared/Batching/BatchPayload.hpp"
 
 namespace GRIM::ExecutionBlockInternal {
 void buildValueSlotCandidates(
 	const HyperParameters::ExecutionBlockConstructionHP& hp,
 	const ExecutionMemory& memory,
 	const ExecutionBlockParameterTensors& parameters,
+	const Batching::BatchPayload& payload,
+	int batch_row,
+	const std::vector<Forward::ExecutionRecord>& prior_records,
+	const Tensor* selector_candidate_keys,
 	cudaStream_t stream,
 	StepWorkingSet& work);
 

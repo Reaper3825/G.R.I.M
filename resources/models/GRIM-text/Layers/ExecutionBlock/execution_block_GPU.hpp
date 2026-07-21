@@ -176,7 +176,8 @@ void executionBlockStep(
     Forward::ExecutionBlockStepOutput& forward_output,
     Forward::RecordEncodeBackwardStaging& record_encode_backward_staging,
     Tensor& trace_state,
-    const std::vector<Forward::ExecutionRecord>& prior_records
+    const std::vector<Forward::ExecutionRecord>& prior_records,
+    const Tensor* selector_candidate_keys = nullptr
 );
 
 //--------------------------------------------------//

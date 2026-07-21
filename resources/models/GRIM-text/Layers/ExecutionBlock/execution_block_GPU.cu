@@ -97,7 +97,8 @@ void executionBlockStep(
     ExecutionBlockStepOutput& forward_output,
     Forward::RecordEncodeBackwardStaging& record_encode_backward_staging,
     Tensor& trace_state,
-    const std::vector<ExecutionRecord>& prior_records)
+    const std::vector<ExecutionRecord>& prior_records,
+    const Tensor* selector_candidate_keys)
 {
     // BatchPayload owns/validates per-batch geometry (batch_size, seq_lengths,
     // max_seq_len, total_tokens) via BatchPayload::validate() +
@@ -127,7 +128,8 @@ void executionBlockStep(
         forward_output,
         record_encode_backward_staging,
         trace_state,
-        prior_records);
+        prior_records,
+        selector_candidate_keys);
 }
 
 //======================================================//

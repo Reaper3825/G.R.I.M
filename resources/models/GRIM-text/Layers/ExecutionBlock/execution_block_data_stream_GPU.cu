@@ -743,7 +743,8 @@ void executeStepCoordinatorImpl(
     ExecutionBlockStepOutput& forward_output,
     GRIM::Forward::RecordEncodeBackwardStaging& record_encode_backward_staging,
     Tensor& trace_state,
-    const std::vector<ExecutionRecord>& prior_records
+    const std::vector<ExecutionRecord>& prior_records,
+    const Tensor* selector_candidate_keys
 ) {
     // ModelForwardOutputs owns the supplied backward staging. The step output
     // remains diagnostics/live-loss output and is not the staging owner.
@@ -829,7 +830,16 @@ void executeStepCoordinatorImpl(
     }
 
     StepWorkingSet work;
-    buildValueSlotCandidates(hp, memory, parameters, stream, work);
+    buildValueSlotCandidates(
+        hp,
+        memory,
+        parameters,
+        payload,
+        batch_row,
+        prior_records,
+        selector_candidate_keys,
+        stream,
+        work);
     kernelCheckFinite<<<(V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         work.slot_values.data, V_val, diag.numericErrorFlag(), kStageV1, hp.magnitude_limit);
 

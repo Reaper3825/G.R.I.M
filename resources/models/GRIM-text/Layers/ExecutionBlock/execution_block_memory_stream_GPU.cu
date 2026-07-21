@@ -113,7 +113,6 @@ __global__ void kernelGatherSlotOnlyHidden(
     float* __restrict__ out,
     const float* __restrict__ mem_state,
     const float* __restrict__ mem_valid,
-    const float* __restrict__ slot_embeddings,
     int V_val, int S, int d_model
 ) {
     const int i = blockIdx.x;
@@ -121,10 +120,32 @@ __global__ void kernelGatherSlotOnlyHidden(
     const int slot = S + i;
     const float valid = mem_valid[slot];
     const float* src = mem_state + static_cast<size_t>(slot) * d_model;
-    const float* slot_emb = slot_embeddings + static_cast<size_t>(slot) * d_model;
     float* dst = out + static_cast<size_t>(i) * d_model;
     for (int j = threadIdx.x; j < d_model; j += blockDim.x)
-        dst[j] = valid * kResidualFusionScale * (src[j] + slot_emb[j]);
+        dst[j] = valid * src[j];
+}
+
+__global__ void kernelBuildValidSlotRoute(
+    float* __restrict__ route,
+    const float* __restrict__ mem_valid,
+    int V_val, int S, int V
+) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= V_val) return;
+    const int slot = S + i;
+    route[static_cast<size_t>(i) * V + slot] = mem_valid[slot];
+}
+
+__global__ void kernelMaskDenseRouteRows(
+    float* __restrict__ route,
+    const float* __restrict__ mem_valid,
+    int rows, int cols, int S
+) {
+    const size_t index = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t count = static_cast<size_t>(rows) * cols;
+    if (index >= count) return;
+    const int row = static_cast<int>(index / cols);
+    route[index] *= mem_valid[S + row];
 }
 
 __global__ void kernelBuildSlotOnlyCandidateMask(
@@ -484,25 +505,125 @@ void buildValueSlotCandidates(
     const HyperParameters::ExecutionBlockConstructionHP& hp,
     const ExecutionMemory& memory,
     const ExecutionBlockParameterTensors& parameters,
+    const Batching::BatchPayload& payload,
+    int batch_row,
+    const std::vector<Forward::ExecutionRecord>& prior_records,
+    const Tensor* selector_candidate_keys,
     cudaStream_t stream,
     StepWorkingSet& work
 ) {
     const int dm = hp.d_model;
+    const int V = hp.num_slots;
     const int V_val = hp.num_slots - hp.num_scratch_slots;
     const int S = hp.num_scratch_slots;
 
-    work.cand_hidden = Tensor::zeros({V_val, dm}, stream, "exec_cand_hidden");
-    work.cand_hidden.requires_grad = false;
-    work.cand_hidden.is_leaf = true;
+    // Runtime register contents are hard state, so gather them as a detached
+    // operand. Trainable identity is then composed around that state with
+    // ordinary autograd primitives: route @ E_slot supplies absolute slot
+    // identity, and the zero-valued key branch below restores the authored
+    // selector-key edge without changing the forward value.
+    Tensor runtime_state = Tensor::zeros(
+        {V_val, dm}, stream, "exec_candidate_runtime_state");
     kernelGatherSlotOnlyHidden<<<V_val, kBlockSize, 0, stream>>>(
-        work.cand_hidden.data,
+        runtime_state.data,
         memory.state_embeds.data,
         memory.valid_mask.data,
-        parameters.E_slot.data,
         V_val,
         S,
         dm);
     CUDA_CHECK_KERNEL();
+
+    Tensor slot_route = Tensor::zeros(
+        {V_val, V}, stream, "exec_candidate_slot_route");
+    kernelBuildValidSlotRoute<<<
+        (V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
+        slot_route.data, memory.valid_mask.data, V_val, S, V);
+    CUDA_CHECK_KERNEL();
+
+    Tensor slot_rows = autograd::matmul(
+        slot_route, parameters.E_slot, stream);
+    Tensor state_with_slot = autograd::add(
+        runtime_state, slot_rows, stream);
+    Tensor base_candidate = autograd::mul_scalar(
+        state_with_slot, kResidualFusionScale, stream);
+
+    if (selector_candidate_keys) {
+        EXEC_CHECK(selector_candidate_keys->data != nullptr,
+            "buildValueSlotCandidates: selector_candidate_keys has null data");
+        EXEC_CHECK_SHAPE2(
+            *selector_candidate_keys,
+            "selector_candidate_keys (execution operand bridge)",
+            selector_candidate_keys->shape.flat.rows,
+            dm);
+        const int num_pool_atoms = selector_candidate_keys->shape.flat.rows;
+        EXEC_CHECK(num_pool_atoms > 0,
+            "buildValueSlotCandidates: selector candidate pool is empty");
+        EXEC_CHECK(batch_row >= 0 && batch_row < payload.batch_size,
+            "buildValueSlotCandidates: batch_row out of range");
+        EXEC_CHECK(payload.execution_slot_count == V,
+            "buildValueSlotCandidates: payload execution-slot geometry mismatch");
+        const size_t expected_map_size =
+            static_cast<size_t>(payload.batch_size) * V;
+        EXEC_CHECK(payload.bootstrap_slot_to_pool_index.size() == expected_map_size,
+            "buildValueSlotCandidates: selector-to-slot map geometry mismatch");
+
+        std::vector<uint8_t> overwritten(static_cast<size_t>(V), 0);
+        for (const auto& record : prior_records) {
+            EXEC_CHECK(record.write_slot >= S && record.write_slot < V,
+                "buildValueSlotCandidates: prior write slot is outside value-slot range");
+            overwritten[static_cast<size_t>(record.write_slot)] = 1;
+        }
+
+        std::vector<float> host_pool_route(
+            static_cast<size_t>(V_val) * num_pool_atoms, 0.0f);
+        const size_t row_map_offset = static_cast<size_t>(batch_row) * V;
+        for (int i = 0; i < V_val; ++i) {
+            const int slot = S + i;
+            if (overwritten[static_cast<size_t>(slot)] != 0) continue;
+            const int pool_index = payload.bootstrap_slot_to_pool_index[
+                row_map_offset + static_cast<size_t>(slot)];
+            if (pool_index < 0) continue;
+            EXEC_CHECK(pool_index < num_pool_atoms,
+                "buildValueSlotCandidates: selector pool index out of range");
+            host_pool_route[
+                static_cast<size_t>(i) * num_pool_atoms + pool_index] = 1.0f;
+        }
+
+        Tensor active_pool_route = Tensor::zeros(
+            {V_val, num_pool_atoms}, stream, "exec_candidate_pool_route");
+        CUDA_CHECK(cudaMemcpyAsync(
+            active_pool_route.data,
+            host_pool_route.data(),
+            host_pool_route.size() * sizeof(float),
+            cudaMemcpyHostToDevice,
+            stream));
+        const size_t route_count = host_pool_route.size();
+        kernelMaskDenseRouteRows<<<
+            static_cast<int>((route_count + kBlockSize - 1) / kBlockSize),
+            kBlockSize,
+            0,
+            stream>>>(
+            active_pool_route.data,
+            memory.valid_mask.data,
+            V_val,
+            num_pool_atoms,
+            S);
+        CUDA_CHECK_KERNEL();
+
+        Tensor mapped_keys = autograd::matmul(
+            active_pool_route, *selector_candidate_keys, stream);
+        Tensor detached_keys = mapped_keys.detach(stream);
+        Tensor neg_detached_keys = autograd::mul_scalar(
+            detached_keys, -1.0f, stream);
+        Tensor zero_value_key_edge = autograd::add(
+            mapped_keys, neg_detached_keys, stream);
+        Tensor scaled_key_edge = autograd::mul_scalar(
+            zero_value_key_edge, 0.5f, stream);
+        work.cand_hidden = autograd::add(
+            base_candidate, scaled_key_edge, stream);
+    } else {
+        work.cand_hidden = std::move(base_candidate);
+    }
 
     work.cand_mask = Tensor::zeros({1, V_val}, stream, "exec_cand_mask");
     kernelBuildSlotOnlyCandidateMask<<<(V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(

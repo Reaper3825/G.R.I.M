@@ -890,7 +890,10 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                             step_output,
                             record_encode_backward_staging,
                             execution_runtime.trace_state_by_row[b],
-                            execution_runtime.execution_trace_by_row[b]);
+                            execution_runtime.execution_trace_by_row[b],
+                            execution_selector_bridge_requested
+                                ? &forward_outputs.selector_candidate_keys
+                                : nullptr);
                         execution_runtime.execution_trace_by_row[b].push_back(step_output.record);
 
                         const auto stop_probs = readBinaryControlProbabilities(
@@ -1150,7 +1153,10 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                             step_diag,
                             record_encode_backward_staging,
                             runtime.execution_runtime->trace_state_by_row[b],
-                            runtime.execution_runtime->execution_trace_by_row[b]);
+                            runtime.execution_runtime->execution_trace_by_row[b],
+                            execution_selector_bridge_requested
+                                ? &forward_outputs.selector_candidate_keys
+                                : nullptr);
                         runtime.execution_runtime->execution_trace_by_row[b].push_back(step_diag.record);
                         forward_outputs.exec_outputs_per_row[b].steps.push_back(std::move(step_diag));
                     }
