@@ -22,7 +22,7 @@ namespace GRIM {
 //   v13: Added NumberEncoder checkpoint weights
 //   v14: Added ExecutionBlock EXECUTE/NOOP and STOP/CONTINUE control-head weights
 //   v15: Added ExecutionBlock conditional arg1-to-arg2 projection weights
-inline constexpr std::uint32_t GRIM_MODEL_VERSION = 15;
+inline constexpr std::uint32_t GRIM_MODEL_VERSION = 14;
 
 // GRMT training tensor stream may advance without bumping checkpoint MODEL_VERSION.
 // v10: After per-token atom length-prefixed strings, append int32 token_exec_slots[len]
