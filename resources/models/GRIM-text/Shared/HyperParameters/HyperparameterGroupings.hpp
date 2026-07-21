@@ -49,7 +49,9 @@ struct PathsHP {
 struct CheckpointLoadHP {
     std::string checkpoint_dir;
     std::string checkpoint_path;
+    std::string checkpoint_select;
     ModelExecutionMode execution_mode = ModelExecutionMode::INFERENCE;
+    TrainingStage training_stage = TrainingStage::UNSPECIFIED;
 };
 
 struct TokenizerHP {
@@ -955,7 +957,13 @@ inline CheckpointLoadHP checkpointLoadHP(
     CheckpointLoadHP view;
     view.checkpoint_dir = pathsHP(snapshot).checkpoint_dir;
     view.checkpoint_path = checkpoint_path;
+    const auto& config = snapshotTrainingConfig(snapshot);
+    if (config.contains("grim_text_checkpoint_select") &&
+        config.at("grim_text_checkpoint_select").is_string()) {
+        view.checkpoint_select = config.at("grim_text_checkpoint_select").get<std::string>();
+    }
     view.execution_mode = execution_mode;
+    view.training_stage = snapshotTrainingConfigField<TrainingStage>(snapshot, "training_stage");
     return view;
 }
 

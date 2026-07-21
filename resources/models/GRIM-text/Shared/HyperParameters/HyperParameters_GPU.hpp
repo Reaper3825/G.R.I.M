@@ -398,6 +398,7 @@ struct LanguageModelConfig {
 
     // Execution mode - determines memory allocation strategy
     ModelExecutionMode execution_mode = ModelExecutionMode::INFERENCE;
+    TrainingStage training_stage = TrainingStage::UNSPECIFIED;
 
     // Parameter-group precision policy. Registration reads these from the
     // actual LanguageModelConfig carried by LanguageModel::getConfig(); do not
@@ -1810,6 +1811,7 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(current_model_training);
     GRIM_LOAD_CONFIG_FIELD(tokenizer_curriculum);
     GRIM_LOAD_CONFIG_FIELD(training_curriculum);
+    GRIM_LOAD_CONFIG_FIELD(training_stage);
     GRIM_LOAD_CONFIG_FIELD(tokenizer_output_grmt);
     GRIM_LOAD_CONFIG_FIELD(clear_merged_cache_on_merge);
     GRIM_LOAD_CONFIG_FIELD(epochs);
@@ -2444,6 +2446,7 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(current_model_training);
     GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_curriculum);
     GRIM_WRITE_FINAL_CONFIG_FIELD(training_curriculum);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(training_stage);
     GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_output_grmt);
     GRIM_WRITE_FINAL_CONFIG_FIELD(log_recorder_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(log_recorder_default_level);

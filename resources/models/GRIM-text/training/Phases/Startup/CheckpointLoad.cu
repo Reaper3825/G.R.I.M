@@ -41,16 +41,10 @@ std::string trimmed(std::string value) {
 
 // Read training.config.grim_text_checkpoint_select tolerantly — the key is
 // optional, so a missing or non-string value yields an empty selection.
-std::string checkpointSelectField(const GRIM::Config::AiConfigSnapshot& snapshot) {
-    const auto& cfg = GRIM::HyperParameters::snapshotTrainingConfig(snapshot);
-    if (!cfg.contains("grim_text_checkpoint_select")) {
-        return std::string();
-    }
-    const auto& value = cfg.at("grim_text_checkpoint_select");
-    if (!value.is_string()) {
-        return std::string();
-    }
-    return trimmed(value.get<std::string>());
+std::string checkpointSelectField(
+    const GRIM::HyperParameters::CheckpointLoadHP& checkpoint_hp)
+{
+    return trimmed(checkpoint_hp.checkpoint_select);
 }
 
 // Parse a trailing integer from a filename stem (e.g. "checkpoint_epoch_3" -> 3).
@@ -141,26 +135,23 @@ std::vector<std::string> rankedCheckpoints(const std::string& checkpoint_dir) {
 //   - "<name>.bin"    → that file inside the checkpoint dir
 //   - "<path>/<name>" → an explicit (possibly relative) path
 std::vector<std::string> resolveCheckpointCandidates(
-    const GRIM::Config::AiConfigSnapshot& snapshot,
-    const std::string& requested_path,
+    const GRIM::HyperParameters::CheckpointLoadHP& checkpoint_hp,
     TrainingLogger& logger)
 {
-    const std::string select = checkpointSelectField(snapshot);
+    const std::string select = checkpointSelectField(checkpoint_hp);
 
     if (select.empty() || select == "default") {
-        if (requested_path.empty()) {
+        if (checkpoint_hp.checkpoint_path.empty()) {
             return {};
         }
-        return {requested_path};
+        return {checkpoint_hp.checkpoint_path};
     }
 
-    const auto paths_hp = GRIM::HyperParameters::pathsHP(snapshot);
-
     if (select == "latest") {
-        auto candidates = rankedCheckpoints(paths_hp.checkpoint_dir);
+        auto candidates = rankedCheckpoints(checkpoint_hp.checkpoint_dir);
         if (candidates.empty()) {
             logger.log("Checkpoint select=\"latest\": no usable checkpoint found in " +
-                       paths_hp.checkpoint_dir);
+                       checkpoint_hp.checkpoint_dir);
         } else {
             logger.log("Checkpoint select=\"latest\": newest candidate is " + candidates.front());
         }
@@ -174,7 +165,7 @@ std::vector<std::string> resolveCheckpointCandidates(
     if (select_path.has_parent_path() || select_path.is_absolute()) {
         resolved = GRIM::HyperParameters::resolveMappedPath(select);
     } else {
-        resolved = (fs::path(paths_hp.checkpoint_dir) / select_path).string();
+        resolved = (fs::path(checkpoint_hp.checkpoint_dir) / select_path).string();
     }
     logger.log("Checkpoint select=\"" + select + "\": resolved to " + resolved);
     return {resolved};
@@ -192,15 +183,19 @@ void loadRequestedCheckpoint(TrainingContext& ctx)
     auto& logger = *ctx.logging.logger;
     ctx.loaded_checkpoint_path.clear();
 
-    const auto execution_mode = GRIM::HyperParameters::snapshotExecutionMode(ctx.config);
-    const std::string select = checkpointSelectField(ctx.config);
+    const auto checkpoint_hp = GRIM::HyperParameters::checkpointLoadHP(
+        ctx.config,
+        ctx.requested_checkpoint_path,
+        GRIM::HyperParameters::snapshotExecutionMode(ctx.config));
+    const std::string select = checkpointSelectField(checkpoint_hp);
     const std::string effective_select = select.empty() ? "default" : select;
-    const std::string requested_path = ctx.requested_checkpoint_path.empty()
+    const std::string requested_path = checkpoint_hp.checkpoint_path.empty()
         ? "<none>"
-        : ctx.requested_checkpoint_path;
+        : checkpoint_hp.checkpoint_path;
     logger.log(
         "[MODEL_INIT] Choosing parameter source | execution_mode=" +
-        std::string(GRIM::HyperParameters::modelExecutionModeToJsonString(execution_mode)) +
+        std::string(GRIM::HyperParameters::modelExecutionModeToJsonString(checkpoint_hp.execution_mode)) +
+        " training_stage=" + GRIM::HyperParameters::trainingStageToJsonString(checkpoint_hp.training_stage) +
         " checkpoint_select=\"" + effective_select +
         "\" requested_path=\"" + requested_path + "\"");
 
@@ -313,15 +308,31 @@ void CheckpointPlanReady(TrainingContext& ctx) {
     }
 
     auto& logger = *ctx.logging.logger;
-    const std::string select = checkpointSelectField(ctx.config);
+    const auto checkpoint_hp = GRIM::HyperParameters::checkpointLoadHP(
+        ctx.config,
+        ctx.requested_checkpoint_path,
+        GRIM::HyperParameters::snapshotExecutionMode(ctx.config));
+    const std::string select = checkpointSelectField(checkpoint_hp);
     const bool explicit_checkpoint_selection =
         !select.empty() && select != "default";
     const bool checkpoint_requested =
-        explicit_checkpoint_selection || !ctx.requested_checkpoint_path.empty();
+        explicit_checkpoint_selection || !checkpoint_hp.checkpoint_path.empty();
+    const bool fresh_pretraining_allowed =
+        checkpoint_hp.execution_mode == GRIM::HyperParameters::ModelExecutionMode::TRAINING &&
+        checkpoint_hp.training_stage == GRIM::HyperParameters::TrainingStage::PT;
+    const bool checkpoint_discovery_request = select == "latest";
 
     const auto resolved = resolveCheckpointCandidates(
-        ctx.config, ctx.requested_checkpoint_path, logger);
+        checkpoint_hp, logger);
     if (!checkpoint_requested) {
+        if (!fresh_pretraining_allowed) {
+            throw std::runtime_error(
+                "CheckpointPlanReady: execution_mode=" +
+                std::string(GRIM::HyperParameters::modelExecutionModeToJsonString(checkpoint_hp.execution_mode)) +
+                " training_stage=" +
+                std::string(GRIM::HyperParameters::trainingStageToJsonString(checkpoint_hp.training_stage)) +
+                " requires a checkpoint restore, but no checkpoint was selected");
+        }
         if (!resolved.empty()) {
             throw std::runtime_error(
                 "CheckpointPlanReady: fresh initialization resolved unexpected checkpoint candidates");
@@ -329,7 +340,7 @@ void CheckpointPlanReady(TrainingContext& ctx) {
         ctx.model_parameter_source_plan =
             ModelParameterSourcePlan::FRESH_INITIALIZATION;
         logger.log(
-            "[MODEL_INIT] PLAN=FRESH_INITIALIZATION checkpoint_requested=false; "
+            "[MODEL_INIT] PLAN=FRESH_INITIALIZATION training_stage=pt checkpoint_requested=false; "
             "fresh-only initializers are enabled");
         return;
     }
@@ -358,15 +369,29 @@ void CheckpointPlanReady(TrainingContext& ctx) {
     }
 
     if (ctx.planned_checkpoint_candidates.empty()) {
+        if (fresh_pretraining_allowed && checkpoint_discovery_request) {
+            ctx.model_parameter_source_plan =
+                ModelParameterSourcePlan::FRESH_INITIALIZATION;
+            logger.log(
+                "[MODEL_INIT] PLAN=FRESH_INITIALIZATION training_stage=pt "
+                "checkpoint_select=\"latest\" candidates=0; fresh-only initializers are enabled");
+            return;
+        }
         throw std::runtime_error(
             "CheckpointPlanReady: checkpoint restore was requested but no usable checkpoint exists; "
-            "refusing fresh initialization" +
+            "execution_mode=" +
+            std::string(GRIM::HyperParameters::modelExecutionModeToJsonString(checkpoint_hp.execution_mode)) +
+            " training_stage=" +
+            std::string(GRIM::HyperParameters::trainingStageToJsonString(checkpoint_hp.training_stage)) +
+            " startup policy refuses fresh initialization" +
             (last_rejection.empty() ? std::string() : " (" + last_rejection + ")"));
     }
 
     ctx.model_parameter_source_plan = ModelParameterSourcePlan::CHECKPOINT_RESTORE;
     logger.log(
-        "[MODEL_INIT] PLAN=CHECKPOINT_RESTORE checkpoint_requested=true candidates=" +
+        "[MODEL_INIT] PLAN=CHECKPOINT_RESTORE training_stage=" +
+        std::string(GRIM::HyperParameters::trainingStageToJsonString(checkpoint_hp.training_stage)) +
+        " checkpoint_requested=true candidates=" +
         std::to_string(ctx.planned_checkpoint_candidates.size()) +
         " primary=\"" + ctx.planned_checkpoint_candidates.front() +
         "\"; fresh-only initializers are disabled");

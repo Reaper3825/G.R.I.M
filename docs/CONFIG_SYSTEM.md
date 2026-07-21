@@ -50,6 +50,7 @@ The GRIM project uses a three-tier configuration system:
       "tokenizer_curriculum": "Pre-Trainingv1",
       "tokenizer_output_grmt": "resources/models/GRIM-text/training/data/pretraining_v1.grmt",
       "training_curriculum": "Pre-Trainingv1",
+      "training_stage": "pt",
       "current_model_training": "",
       "clear_merged_cache_on_merge": false,
       "loss_label_smoothing_enabled": true,
@@ -79,12 +80,18 @@ Tokenizer output and trainer input are intentionally independent:
 - `tokenizer_curriculum` selects the curriculum encoded into that output.
 - `grim_text_training_data` is the GRMT consumed by model training.
 - `training_curriculum` names the curriculum represented by that input.
+- `training_stage` is a typed lifecycle stage: `pt`, `sft`, `dpo`, or `rlhf`.
 - `grim_text_vocab` is shared by every compatible GRMT. With
   `force_rebuild_vocab=false`, a missing or incompatible tokenizer output is
   rebuilt using that vocabulary without rewriting it.
 
 This permits PT, execution-control, SFT, validation, and test GRMTs to coexist
 without changing the checkpoint's token-ID mapping.
+
+Checkpoint startup uses `training_stage` separately from the curriculum name.
+PT may initialize fresh when `grim_text_checkpoint_select` is absent/default or
+when `latest` finds no checkpoint. SFT, DPO, and RLHF require a usable checkpoint.
+An explicitly named missing checkpoint always fails, including during PT.
 
 ### 3. ai_config_paths.hpp
 **Location:** `d:\G.R.I.M\control\ai_config_paths.hpp`

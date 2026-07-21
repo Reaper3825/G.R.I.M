@@ -20,6 +20,59 @@ inline std::string normalizeHyperparameterEnumToken(std::string value) {
 }
 
 //======================================================//
+// Training stage
+// Determines whether a run may initialize model parameters from scratch.
+//======================================================//
+enum class TrainingStage : uint8_t {
+    UNSPECIFIED,
+    PT,    // Pre-training; may start from a fresh random initialization.
+    SFT,   // Supervised fine-tuning; requires an existing model checkpoint.
+    DPO,   // Direct preference optimization; requires an existing checkpoint.
+    RLHF   // Reinforcement learning from human feedback; requires a checkpoint.
+};
+
+inline const char* trainingStageToString(TrainingStage stage) {
+    switch (stage) {
+        case TrainingStage::UNSPECIFIED: return "UNSPECIFIED";
+        case TrainingStage::PT: return "PT";
+        case TrainingStage::SFT: return "SFT";
+        case TrainingStage::DPO: return "DPO";
+        case TrainingStage::RLHF: return "RLHF";
+    }
+    throw std::runtime_error("trainingStageToString: unknown TrainingStage enum value");
+}
+
+inline const char* trainingStageToJsonString(TrainingStage stage) {
+    switch (stage) {
+        case TrainingStage::UNSPECIFIED: return "unspecified";
+        case TrainingStage::PT: return "pt";
+        case TrainingStage::SFT: return "sft";
+        case TrainingStage::DPO: return "dpo";
+        case TrainingStage::RLHF: return "rlhf";
+    }
+    throw std::runtime_error("trainingStageToJsonString: unknown TrainingStage enum value");
+}
+
+inline TrainingStage parseTrainingStage(const std::string& value) {
+    const std::string normalized = normalizeHyperparameterEnumToken(value);
+    if (normalized == "pt" || normalized == "pretraining" || normalized == "pre_training") {
+        return TrainingStage::PT;
+    }
+    if (normalized == "sft" || normalized == "supervised_fine_tuning") {
+        return TrainingStage::SFT;
+    }
+    if (normalized == "dpo" || normalized == "direct_preference_optimization") {
+        return TrainingStage::DPO;
+    }
+    if (normalized == "rlhf" || normalized == "reinforcement_learning_from_human_feedback") {
+        return TrainingStage::RLHF;
+    }
+    throw std::runtime_error(
+        "ai_config.json: training.config.training_stage has unknown value '" + value +
+        "' (valid: pt, sft, dpo, rlhf)");
+}
+
+//======================================================//
 // Positional Encoding Configuration
 // Supports ALiBi, RoPE, and Hybrid (ALiBi+RoPE)
 //======================================================//
@@ -262,6 +315,17 @@ inline HardcodedPattern parseHardcodedHiddenPattern(const std::string& pattern) 
 } // namespace GRIM::HyperParameters
 
 namespace nlohmann {
+
+template <>
+struct adl_serializer<GRIM::HyperParameters::TrainingStage> {
+    static void to_json(json& j, const GRIM::HyperParameters::TrainingStage& value) {
+        j = GRIM::HyperParameters::trainingStageToJsonString(value);
+    }
+
+    static void from_json(const json& j, GRIM::HyperParameters::TrainingStage& value) {
+        value = GRIM::HyperParameters::parseTrainingStage(j.get<std::string>());
+    }
+};
 
 template <>
 struct adl_serializer<GRIM::HyperParameters::PositionalEncodingType> {
