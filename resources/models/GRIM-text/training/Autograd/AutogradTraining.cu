@@ -305,6 +305,12 @@ GradientSignalBaselines captureGradientVerificationBaselines(
             if (GRIM::Ablation::kAttnDeliversParamGradient) {
                 auto& enc0 = ctx.parameter_registry->requireEncodingLayerParameters(0, "captureGradientSignalBaselines");
                 captureExpected(enc0.W_qkv, "layer 0 attnWqkv");
+                if (model_hp.encoder_attention_residual_gate_enabled) {
+                    auto& gate0 = ctx.parameter_registry->requireAttentionResidualGateParameters(
+                        0, "captureGradientSignalBaselines");
+                    captureExpected(
+                        gate0.W_gate, "layer 0 attentionResidualGateW");
+                }
             } else if (!GRIM::Ablation::kZeroFfnResidual) {
                 auto& ffn0 = ctx.parameter_registry->requireFeedForwardParameters(0, "captureGradientSignalBaselines");
                 captureExpected(ffn0.W2, "layer 0 ffnW2 (attn ablated)");
