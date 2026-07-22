@@ -107,7 +107,7 @@ void logDiagnosticSample(TrainingContext& ctx,
     }
 
     const std::string prompt = readEnvString("GRIM_SAMPLE_PROMPT",
-        "A tank holds 120 liters. After using some, 84 liters remain. How much was used?");
+        "A tank holds 120 liters. After using some, 84 liters remain. How many liters were used?");
     const int max_new_tokens = readEnvInt("GRIM_SAMPLE_TOKENS", 100);
     const int max_chars = readEnvInt("GRIM_SAMPLE_MAX_CHARS", 300);
     if (max_new_tokens <= 0 || max_chars <= 0) {
