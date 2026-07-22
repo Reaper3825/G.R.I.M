@@ -170,6 +170,8 @@ struct MatMulGradFn : public GradFn {
     // - For non-leaf tensors (activations): grad_a/b point to owned_grad_a/b.get()
     std::shared_ptr<float> owned_grad_a;   // Owned GPU memory for grad_A (non-leaf only)
     std::shared_ptr<float> owned_grad_b;   // Owned GPU memory for grad_B (non-leaf only)
+    std::shared_ptr<Tensor> leaf_grad_a;   // Shared parameter grad owner used for delivery telemetry
+    std::shared_ptr<Tensor> leaf_grad_b;   // Shared parameter grad owner used for delivery telemetry
     float* grad_a = nullptr;       // Gradient buffer for A (owned or persistent)
     float* grad_b = nullptr;       // Gradient buffer for B (owned or persistent)
     
@@ -219,6 +221,7 @@ struct MatMulGradFn : public GradFn {
         if (a_requires_grad) {
             if (a.is_leaf) {
                 a.ensure_grad();
+                leaf_grad_a = a.grad_;
                 grad_a = a.grad_data();
                 AG_TRACE("[MatMulGradFn] Using persistent grad_a buffer (leaf): %p\n", (void*)grad_a);
             } else {
@@ -242,6 +245,7 @@ struct MatMulGradFn : public GradFn {
         if (b_requires_grad) {
             if (b.is_leaf) {
                 b.ensure_grad();
+                leaf_grad_b = b.grad_;
                 grad_b = b.grad_data();
                 AG_TRACE("[MatMulGradFn] Using persistent grad_b buffer (leaf): %p\n", (void*)grad_b);
                 
@@ -480,6 +484,9 @@ struct MatMulGradFn : public GradFn {
                 trackCublasCall("cublasSgemm_grad_A", cublas_handle, stream, sgemm_status_2);
             }
             trace_stage_or_throw("grad_A");
+            if (leaf_grad_a) {
+                leaf_grad_a->record_leaf_gradient_delivery();
+            }
         }
         
         // ISSUE #48 FIX: Use stored grad pointers instead of Tensor*
@@ -552,6 +559,9 @@ struct MatMulGradFn : public GradFn {
                 trackCublasCall("cublasSgemm_grad_B", cublas_handle, stream, sgemm_status_4);
             }
             trace_stage_or_throw("grad_B");
+            if (leaf_grad_b) {
+                leaf_grad_b->record_leaf_gradient_delivery();
+            }
         }
 
         logLmHeadGemmBackwardEquation(grad_output,
@@ -613,6 +623,8 @@ struct MatMulGradFn : public GradFn {
         cached_b = nullptr;
         grad_a = nullptr;
         grad_b = nullptr;
+        leaf_grad_a.reset();
+        leaf_grad_b.reset();
         a_grad_fn.reset();
         b_grad_fn.reset();
     }

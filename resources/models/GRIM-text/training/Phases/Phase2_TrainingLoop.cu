@@ -892,7 +892,8 @@ BatchResult processBatch(
         stream,
         payload,
         train_bindings,
-        plan.batch_idx);
+        plan.batch_idx,
+        ctx.global_step);
 
     configureAutogradLossInputs(
         autograd_ctx,
@@ -1279,7 +1280,8 @@ ValidationResult runValidation(TrainingContext& ctx) {
             stream,
             val_payload,
             val_bindings,
-            static_cast<uint64_t>(val_idx));
+            static_cast<uint64_t>(val_idx),
+            ctx.global_step);
 
         configureAutogradLossInputs(
             autograd_ctx, training_state, val_payload, loss_config,

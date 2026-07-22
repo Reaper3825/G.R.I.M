@@ -116,6 +116,7 @@ struct AutogradContext {
     const Batching::BatchPayload* payload = nullptr;
     const Batching::BatchDeviceBindings* device_bindings = nullptr;
     uint64_t batch_idx = 0;
+    uint64_t global_step = 0;  ///< Phase2-authored optimizer step for persistent verifier telemetry
     /** When true, skip duplicate equation logging on non-initial accumulation slots. */
     bool skip_equation_logging = false;
     
@@ -167,7 +168,8 @@ AutogradContext initAutogradContext(
     cudaStream_t stream,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
-    uint64_t batch_idx
+    uint64_t batch_idx,
+    uint64_t global_step
 );
 
 /**

@@ -705,37 +705,42 @@ bool verifyGradientsAreConnectedImpl(
     bool ok = true;
     const GradientVerificationActivity activity = detectGradientVerificationActivity(ctx);
     const auto model_hp = GRIM::HyperParameters::modelHP(*ctx.config);
-    auto& parameter_groups =
-        ctx.parameter_registry->requireParameterGroups("verifyGradientsAreConnectedImpl");
 
     auto requireRegisteredGroup = [&](Tensor& tensor, const std::string& label) -> ParameterGroup& {
-        for (auto& group : parameter_groups) {
-            if (group.tensor == &tensor ||
-                (group.tensor && group.tensor->grad_data() == tensor.grad_data())) {
-                return group;
-            }
-        }
-        throw std::runtime_error(
-            "verifyGradientsAreConnectedImpl: expected gradient tensor '" + label +
-            "' is absent from the parameter registry");
+        return ctx.parameter_registry->requireParameterGroupForTensor(
+            tensor, label, "verifyGradientsAreConnectedImpl");
     };
 
-    auto recordNumericalSignal = [&](Tensor& tensor, const std::string& label, bool received) -> bool {
-        auto& group = requireRegisteredGroup(tensor, label);
+    auto recordNumericalSignal = [&](ParameterGroup& group, const std::string& label, bool received) -> bool {
+        auto& state = group.gradient_verification;
         if (received) {
-            group.gradient_verification_missed_previous_signal = false;
+            state.record_nonzero_signal(ctx.global_step);
             return false;
         }
 
-        if (!group.gradient_verification_missed_previous_signal) {
-            group.gradient_verification_missed_previous_signal = true;
+        const uint64_t zero_streak = state.record_zero_signal();
+        if (state.ever_received_nonzero_signal) {
+            // A parameter that already proved numerical connectivity may later
+            // enter a legitimate saturated/dead-zone interval. Keep checking
+            // exactly, but rate-limit the persistent warning to powers of two.
+            if (zero_streak == 1 || (zero_streak & (zero_streak - 1)) == 0) {
+                AG_WARN(label << ".grad received structural delivery but no representable numerical signal"
+                        << " (consecutive_zero_signal_checks=" << zero_streak
+                        << ", last_nonzero_step=" << state.last_nonzero_step << ")");
+            }
+            return false;
+        }
+
+        if (zero_streak == 1) {
             AG_WARN(label << ".grad delivered no representable numerical signal; "
-                    << "tolerating the first consecutive miss");
+                    << "tolerating the first active check because this parameter has not yet "
+                    << "established a nonzero history");
             return false;
         }
 
         AG_WARN(label << ".grad delivered no representable numerical signal for "
-                << "two consecutive active checks");
+                << zero_streak << " consecutive active checks and has never produced "
+                << "a nonzero gradient in this training process");
         return true;
     };
 
@@ -767,6 +772,17 @@ bool verifyGradientsAreConnectedImpl(
         requireAllocatedFinite(t, label);
         if (!t.data || !t.has_grad() || !t.grad_data()) return;
 
+        auto& group = requireRegisteredGroup(t, label);
+        auto& verification = group.gradient_verification;
+        const uint64_t delivery_count = t.gradient_delivery_count();
+        if (!verification.observe_active_check(delivery_count)) {
+            AG_WARN(label << ".grad received no leaf-gradient delivery during this active backward"
+                    << " (active_check=" << verification.active_check_count
+                    << ", delivery_count=" << delivery_count << ")");
+            ok = false;
+            return;
+        }
+
         if (baselines && baselines->require_current_microbatch_delta) {
             const GradientSignalExpectation* expectation = baselines->find(label);
             if (!expectation) {
@@ -790,27 +806,34 @@ bool verifyGradientsAreConnectedImpl(
             const bool numerical_signal_missing =
                 !delta_probe.changed || delta_probe.delta_rms == 0.0f;
             if (!numerical_signal_missing) {
-                (void)recordNumericalSignal(t, label, true);
+                (void)recordNumericalSignal(group, label, true);
             }
-            if (numerical_signal_missing && recordNumericalSignal(t, label, false)) {
+            if (numerical_signal_missing && recordNumericalSignal(group, label, false)) {
                 AG_WARN(label << ".grad did not change during this accumulation microbatch "
-                        << "(checked=" << delta_probe.checked << ") — current backward path did not deliver signal");
+                        << "(checked=" << delta_probe.checked << ") — current backward delivered "
+                        << "structurally but has never established nonzero numerical signal");
                 ok = false;
                 return;
             }
-            AG_INFO(label << ".grad received current-microbatch signal; checked="
-                    << delta_probe.checked << " delta_rms=" << delta_probe.delta_rms);
+            if (numerical_signal_missing) {
+                AG_INFO(label << ".grad received current-microbatch structural delivery; checked="
+                        << delta_probe.checked << " delta_rms=0");
+            } else {
+                AG_INFO(label << ".grad received current-microbatch numerical signal; checked="
+                        << delta_probe.checked << " delta_rms=" << delta_probe.delta_rms);
+            }
             return;
         }
 
         GradientSignalProbe probe = probeGradientSignal(t, ctx.stream);
         const bool numerical_signal_missing = !probe.nonzero || probe.rms == 0.0f;
         if (!numerical_signal_missing) {
-            (void)recordNumericalSignal(t, label, true);
+            (void)recordNumericalSignal(group, label, true);
         }
-        if (numerical_signal_missing && recordNumericalSignal(t, label, false)) {
+        if (numerical_signal_missing && recordNumericalSignal(group, label, false)) {
             AG_WARN(label << ".grad is allocated but full-tensor RMS is zero after this backward "
-                    << "(checked=" << probe.checked << ") — gradient path did not deliver signal");
+                    << "(checked=" << probe.checked << ") — leaf delivery occurred but this "
+                    << "parameter has never established nonzero numerical signal");
             ok = false;
         }
     };

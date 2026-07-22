@@ -24,7 +24,8 @@ void populateCommonContext(
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     cublasHandle_t cublas_handle,
     cudaStream_t stream,
-    uint64_t batch_idx)
+    uint64_t batch_idx,
+    uint64_t global_step)
 {
     ctx.config = config;
     ctx.training_state = training_state;
@@ -36,6 +37,7 @@ void populateCommonContext(
     ctx.cublas_handle = cublas_handle;
     ctx.stream = stream;
     ctx.batch_idx = batch_idx;
+    ctx.global_step = global_step;
 }
 
 void validateDeviceBindingsForPayload(
@@ -70,7 +72,8 @@ AutogradContext initAutogradContext(
     cudaStream_t stream,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
-    uint64_t batch_idx
+    uint64_t batch_idx,
+    uint64_t global_step
 ) {
     validateDeviceBindingsForPayload(payload, bindings, "initAutogradContext(payload)");
 
@@ -79,7 +82,7 @@ AutogradContext initAutogradContext(
         ctx, config, training_state, forward_outputs, loss_state,
         gpu_encoder,
         execution_block_enabled, parameter_registry, cublas_handle, stream,
-        batch_idx);
+        batch_idx, global_step);
 
     ctx.payload = &payload;
     ctx.device_bindings = &bindings;

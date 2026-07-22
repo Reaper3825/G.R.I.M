@@ -927,6 +927,26 @@ float computeExactTensorMeanForInit(const float* data, size_t count, cudaStream_
 
 }  // anonymous namespace
 
+bool GradientVerificationState::observe_active_check(
+    uint64_t current_delivery_count
+) noexcept {
+    ++active_check_count;
+    const bool delivered_since_last_check =
+        current_delivery_count != last_observed_delivery_count;
+    last_observed_delivery_count = current_delivery_count;
+    return delivered_since_last_check;
+}
+
+void GradientVerificationState::record_nonzero_signal(uint64_t global_step) noexcept {
+    consecutive_zero_signal_count = 0;
+    last_nonzero_step = global_step;
+    ever_received_nonzero_signal = true;
+}
+
+uint64_t GradientVerificationState::record_zero_signal() noexcept {
+    return ++consecutive_zero_signal_count;
+}
+
 //======================================================//
 //  Tensor Move Constructor/Assignment
 //======================================================//
@@ -945,9 +965,11 @@ Tensor::Tensor(Tensor&& other) noexcept
     , device_id(other.device_id)
     , name(other.name)
     , version(other.version)
+    , leaf_gradient_delivery_count(other.leaf_gradient_delivery_count)
 {
     other.data = nullptr;
     other.owns_data = false;
+    other.leaf_gradient_delivery_count = 0;
 }
 
 Tensor& Tensor::operator=(Tensor&& other) noexcept {
@@ -967,8 +989,10 @@ Tensor& Tensor::operator=(Tensor&& other) noexcept {
         device_id = other.device_id;
         name = other.name;
         version = other.version;
+        leaf_gradient_delivery_count = other.leaf_gradient_delivery_count;
         other.data = nullptr;
         other.owns_data = false;
+        other.leaf_gradient_delivery_count = 0;
     }
     return *this;
 }
@@ -1219,6 +1243,14 @@ void Tensor::xavier_uniform_with_gain_(Tensor& t, uint64_t seed, float gain, cud
 //======================================================//
 //  Gradient Management
 //======================================================
+
+void Tensor::record_leaf_gradient_delivery() noexcept {
+    ++leaf_gradient_delivery_count;
+}
+
+uint64_t Tensor::gradient_delivery_count() const noexcept {
+    return grad_ ? grad_->leaf_gradient_delivery_count : 0;
+}
 
 void Tensor::alloc_grad() {
     if (!requires_grad) {

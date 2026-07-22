@@ -369,6 +369,23 @@ struct StartupParameterRegistry {
         }
         return parameter_groups;
     }
+
+    GRIM::ParameterGroup& requireParameterGroupForTensor(
+        GRIM::Tensor& tensor,
+        const std::string& label,
+        const char* caller)
+    {
+        auto& groups = requireParameterGroups(caller);
+        for (auto& group : groups) {
+            if (group.tensor == &tensor ||
+                (group.tensor && group.tensor->grad_data() == tensor.grad_data())) {
+                return group;
+            }
+        }
+        throw std::runtime_error(
+            std::string(caller) + ": expected gradient tensor '" + label +
+            "' is absent from the parameter registry");
+    }
 };
 
 template <typename OwnerT>

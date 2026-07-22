@@ -563,6 +563,25 @@ enum class ParamStatsBucket : uint8_t {
 struct Tensor;
 
 /**
+ * @brief Persistent numerical-signal history for one optimizer parameter group.
+ *
+ * Structural gradient delivery is recorded on the parameter's shared gradient
+ * Tensor. This state tracks the verifier's interpretation across active checks
+ * without allocating another device-side gradient buffer.
+ */
+struct GradientVerificationState {
+    uint64_t active_check_count = 0;
+    uint64_t consecutive_zero_signal_count = 0;
+    uint64_t last_nonzero_step = 0;
+    uint64_t last_observed_delivery_count = 0;
+    bool ever_received_nonzero_signal = false;
+
+    bool observe_active_check(uint64_t current_delivery_count) noexcept;
+    void record_nonzero_signal(uint64_t global_step) noexcept;
+    uint64_t record_zero_signal() noexcept;
+};
+
+/**
  * @brief A group of parameters with associated gradient and optimizer state
  * 
  * Holds a pointer to the owning Tensor for weights/grads/size (single source
@@ -589,7 +608,7 @@ struct ParameterGroup {
     float upsilon = 1.0f;    ///< Depth-aware regularization scale: Υ_l = 0.1 * sqrt(L_ref / L)
     float weight_decay_multiplier = 1.0f;  ///< Registration-stamped multiplier; currently defaults uniformly to 1.0
     float lr_multiplier = 1.0f;  ///< Registration-stamped multiplier; currently defaults uniformly to 1.0
-    bool gradient_verification_missed_previous_signal = false;  ///< Tolerate one numerical zero-signal check; a second consecutive miss fails
+    GradientVerificationState gradient_verification{};  ///< Structural-delivery and numerical-signal verification history
     
     // Live accessors — always read through the Tensor, never stale
     // Defined after struct Tensor (forward-declared only here)
@@ -850,6 +869,7 @@ struct Tensor {
     
     const char* name = nullptr;         ///< Optional debug name
     uint64_t version = 0;               ///< Incremented on each in-place modification
+    uint64_t leaf_gradient_delivery_count = 0;  ///< Host-side count of backward accumulation attempts; meaningful on shared parameter grad_ tensors
     
     //--------------------------------------------------//
     // Constructors / Destructor
@@ -945,6 +965,12 @@ struct Tensor {
     
     /// Check if gradient is allocated
     bool has_grad() const { return grad_ != nullptr && grad_->data != nullptr; }
+
+    /// Record that a backward operation reached this shared leaf-gradient tensor.
+    void record_leaf_gradient_delivery() noexcept;
+
+    /// Read the delivery counter from this parameter's shared gradient tensor.
+    uint64_t gradient_delivery_count() const noexcept;
     
     /// Share gradient storage with another tensor (for weight tying)
     /// This tensor's grad will point to other's grad Tensor

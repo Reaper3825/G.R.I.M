@@ -241,6 +241,12 @@ public:
         group.layer_index = layer;
         group.weight_decay_multiplier = wd_mult;
         group.lr_multiplier = lr_mult;
+        // Registration is the durable ownership boundary for verifier history.
+        // Seed the observation point from the shared gradient tensor so a
+        // rebuilt registry never mistakes pre-registration writes for delivery
+        // by the first active backward it verifies.
+        group.gradient_verification.last_observed_delivery_count =
+            tensor.gradient_delivery_count();
         if (optimizer_hp_.use_depth_aware_upsilon && layer >= 0) {
             group.upsilon = GRIM::HyperParameters::UPSILON_BASE *
                 std::sqrt(static_cast<float>(GRIM::HyperParameters::UPSILON_REFERENCE_LAYERS) /
