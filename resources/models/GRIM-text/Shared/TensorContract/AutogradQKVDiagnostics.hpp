@@ -24,17 +24,37 @@ void checkQKVTensorFinite(const char* tag,
                           const Tensor& tensor,
                           cudaStream_t stream);
 
-void logGradFlowTensorStats(const char* tag,
-                            const float* data,
-                            std::size_t count,
-                            cudaStream_t stream,
-                            bool force = false);
-
-void logGradFlowBf16TensorStats(const char* tag,
-                                const __nv_bfloat16* data,
+void logGradFlowTensorStatsImpl(const char* tag,
+                                const float* data,
                                 std::size_t count,
                                 cudaStream_t stream,
-                                bool force = false);
+                                bool force);
+
+inline void logGradFlowTensorStats(const char* tag,
+                                   const float* data,
+                                   std::size_t count,
+                                   cudaStream_t stream,
+                                   bool force = false) {
+    if constexpr (GRIM::VerboseLogging::ENABLE_GRADFLOW_LOGS) {
+        logGradFlowTensorStatsImpl(tag, data, count, stream, force);
+    }
+}
+
+void logGradFlowBf16TensorStatsImpl(const char* tag,
+                                    const __nv_bfloat16* data,
+                                    std::size_t count,
+                                    cudaStream_t stream,
+                                    bool force);
+
+inline void logGradFlowBf16TensorStats(const char* tag,
+                                       const __nv_bfloat16* data,
+                                       std::size_t count,
+                                       cudaStream_t stream,
+                                       bool force = false) {
+    if constexpr (GRIM::VerboseLogging::ENABLE_GRADFLOW_LOGS) {
+        logGradFlowBf16TensorStatsImpl(tag, data, count, stream, force);
+    }
+}
 
 void logQKVProjectionEquation(const Tensor& ln1_out,
                               const Tensor& W_qkv,

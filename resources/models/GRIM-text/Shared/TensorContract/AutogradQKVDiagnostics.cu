@@ -281,11 +281,11 @@ int qkvDebugLevel() {
     return level;
 }
 
-void logGradFlowTensorStats(const char* tag,
-                            const float* data,
-                            std::size_t count,
-                            cudaStream_t stream,
-                            bool force) {
+void logGradFlowTensorStatsImpl(const char* tag,
+                                const float* data,
+                                std::size_t count,
+                                cudaStream_t stream,
+                                bool force) {
     auto* tape = GRIM::Logging::getGlobalTape();
     const bool debug_enabled = tape && tape->accepts(GRIM::Logging::LogLevel::Debug);
     const bool trace_enabled = tape && tape->accepts(GRIM::Logging::LogLevel::Trace);
@@ -391,11 +391,11 @@ void logGradFlowTensorStats(const char* tag,
     std::fflush(stderr);
 }
 
-void logGradFlowBf16TensorStats(const char* tag,
-                                const __nv_bfloat16* data,
-                                std::size_t count,
-                                cudaStream_t stream,
-                                bool force) {
+void logGradFlowBf16TensorStatsImpl(const char* tag,
+                                    const __nv_bfloat16* data,
+                                    std::size_t count,
+                                    cudaStream_t stream,
+                                    bool force) {
     auto* tape = GRIM::Logging::getGlobalTape();
     const bool debug_enabled = tape && tape->accepts(GRIM::Logging::LogLevel::Debug);
     const bool trace_enabled = tape && tape->accepts(GRIM::Logging::LogLevel::Trace);

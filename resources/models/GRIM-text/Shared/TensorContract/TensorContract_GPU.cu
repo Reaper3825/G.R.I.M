@@ -192,6 +192,9 @@ float tensorContractGradFlowThreshold() {
 void logTensorContractApplyGradOutputStats(const GRIM::GradFn& grad_fn,
                                            const GRIM::Tensor& grad_output,
                                            cudaStream_t stream) {
+    if constexpr (!GRIM::VerboseLogging::ENABLE_GRADFLOW_LOGS) {
+        return;
+    }
     auto* tape = GRIM::Logging::getGlobalTape();
     const bool debug_enabled = tape && tape->accepts(GRIM::Logging::LogLevel::Debug);
     const bool trace_enabled = tape && tape->accepts(GRIM::Logging::LogLevel::Trace);
@@ -734,7 +737,9 @@ void GradFn::apply(const Tensor& grad_output,
     // Legacy first-wins DFS recursion (retained for A/B parity + regression
     // test). Each node propagates immediately and the `applied` guard drops
     // every consumer after the first.
-    logTensorContractApplyGradOutputStats(*this, grad_output, stream);
+    if constexpr (GRIM::VerboseLogging::ENABLE_GRADFLOW_LOGS) {
+        logTensorContractApplyGradOutputStats(*this, grad_output, stream);
+    }
     apply_impl(grad_output, stream, backward_payload, backward_bindings);
 }
 
@@ -743,7 +748,9 @@ void GradFn::run_backward(
     const Batching::BatchPayload* backward_payload,
     const Batching::BatchDeviceBindings* backward_bindings) {
     const Tensor& grad_output = pending_gradient("GradFn::run_backward");
-    logTensorContractApplyGradOutputStats(*this, grad_output, stream);
+    if constexpr (GRIM::VerboseLogging::ENABLE_GRADFLOW_LOGS) {
+        logTensorContractApplyGradOutputStats(*this, grad_output, stream);
+    }
     apply_impl(grad_output, stream, backward_payload, backward_bindings);
 }
 
