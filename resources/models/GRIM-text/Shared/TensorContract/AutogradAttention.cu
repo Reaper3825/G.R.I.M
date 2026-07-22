@@ -26,7 +26,7 @@
 #include <atomic>
 
 // Mirror of AG_TRACE from TensorContract_GPU.cu
-#define AG_TRACE(...) do { if (g_autograd_verbose) { fprintf(stderr, __VA_ARGS__); fflush(stderr); } } while(0)
+#define AG_TRACE(...) do { if constexpr (GRIM::VerboseLogging::ENABLE_AUTOGRAD_TRACE_LOGS) { fprintf(stderr, __VA_ARGS__); fflush(stderr); } } while(0)
 
 // ─── Forward declaration: defined in TensorContract_GPU.cu at global scope ───
 void trackCublasCall(const char* op_name, cublasHandle_t handle, cudaStream_t stream, cublasStatus_t status);
@@ -338,10 +338,10 @@ struct MatMulGradFn : public GradFn {
         cublasSetStream(cublas_handle, stream);;
 
         // Trace-mode stage barriers make asynchronous cuBLAS failures attributable to
-        // the exact half of matmul backward. They are active only while the existing
-        // autograd verbose trace is enabled; normal training remains asynchronous.
+        // the exact half of matmul backward. They compile out with the shared autograd
+        // trace gate, so normal training remains asynchronous.
         auto trace_stage_or_throw = [&](const char* stage) {
-            if (!g_autograd_verbose) {
+            if constexpr (!GRIM::VerboseLogging::ENABLE_AUTOGRAD_TRACE_LOGS) {
                 return;
             }
             const cudaError_t status = cudaStreamSynchronize(stream);

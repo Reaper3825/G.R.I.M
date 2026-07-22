@@ -1,4 +1,5 @@
 #pragma once
+#include "../VerboseLogging.hpp"
 //======================================================//
 //  TensorContract_GPU.hpp
 //  Type-safe tensor abstraction + Native Autograd for CUDA
@@ -26,12 +27,6 @@
 //  6. FAIL CLOSED: Unsafe operations throw, not return false silently
 //  7. AUTOGRAD: Gradient tracking via computation graph (GradFn nodes)
 //
-//  AUTOGRAD DEBUG TOGGLE
-//  =====================
-//  Set g_autograd_verbose = true to trace autograd chain execution
-//  (defined in TensorContract_GPU.cu)
-extern bool g_autograd_verbose;
-
 //  TENSOR LAYOUTS
 //  ==============
 //  2D LAYOUTS (flat tensors):

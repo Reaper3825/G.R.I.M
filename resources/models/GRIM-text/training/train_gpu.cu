@@ -326,9 +326,6 @@ int runInferenceWorker(
 
 } // anonymous namespace
 
-// Import autograd verbose flag
-extern bool g_autograd_verbose;
-
 //======================================================//
 //  Main Entry Point
 //======================================================//
@@ -392,14 +389,6 @@ int main(int argc, char** argv) {
     SetUnhandledExceptionFilter(GrimSEHHandler);
 #endif
     
-    // Check for --autograd-verbose flag to enable detailed autograd tracing
-    for (int i = 1; i < argc; ++i) {
-        if (std::string(argv[i]) == "--autograd-verbose") {
-            g_autograd_verbose = true;
-            EmitModuleInfo(ModuleId::TrainingOrchestrator, "Autograd verbose logging ENABLED", 0);
-        }
-    }
-
     printBanner();
     
     int exit_code = 0;

@@ -24,8 +24,8 @@
 #include <stdexcept>
 #include <string>
 
-// Mirrors AG_TRACE in TensorContract_GPU.cu — gated on the global verbose flag.
-#define AG_TRACE(...) do { if (g_autograd_verbose) { fprintf(stderr, __VA_ARGS__); fflush(stderr); } } while(0)
+// Mirrors AG_TRACE in TensorContract_GPU.cu — gated by VerboseLogging.hpp.
+#define AG_TRACE(...) do { if constexpr (GRIM::VerboseLogging::ENABLE_AUTOGRAD_TRACE_LOGS) { fprintf(stderr, __VA_ARGS__); fflush(stderr); } } while(0)
 
 // ─── Forward declarations: defined in TensorContract_GPU.cu at global scope ───
 void setCurrentGradFnOp(const char* op_name, void* gradfn_ptr);

@@ -44,10 +44,8 @@
 #endif
 
 // ═══════════════════════════════════════════════════════════════════════════
-// AUTOGRAD DEBUG TOGGLE - Set to true to trace autograd chain execution
+// AUTOGRAD TRACE OUTPUT - controlled by VerboseLogging::ENABLE_AUTOGRAD_TRACE_LOGS
 // ═══════════════════════════════════════════════════════════════════════════
-bool g_autograd_verbose = true;  // DEBUG: Set true to trace autograd chain (KILLS PERF with fflush!)
-
 // ═══════════════════════════════════════════════════════════════════════════
 // Tensor Lifecycle Counters - sequential IDs for alloc/free/delete tracking
 // ═══════════════════════════════════════════════════════════════════════════
@@ -56,7 +54,7 @@ std::atomic<int> TensorLifecycleCounters::free_counter{0};
 std::atomic<int> TensorLifecycleCounters::gradfn_del_counter{0};
 std::atomic<int> TensorLifecycleCounters::move_counter{0};
 
-#define AG_TRACE(...) do { if (g_autograd_verbose) { fprintf(stderr, __VA_ARGS__); fflush(stderr); } } while(0)
+#define AG_TRACE(...) do { if constexpr (GRIM::VerboseLogging::ENABLE_AUTOGRAD_TRACE_LOGS) { fprintf(stderr, __VA_ARGS__); fflush(stderr); } } while(0)
 
 // cuBLAS for autograd is the handle from TrainingState/InferenceState; layers call
 // set_autograd_cublas_handle() and autograd matmul uses get_autograd_cublas_handle() (thread-local).

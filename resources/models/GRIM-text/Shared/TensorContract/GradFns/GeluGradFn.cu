@@ -20,7 +20,7 @@
 #define TENSOR_VERBOSE_DEBUG 0
 #endif
 
-#define AG_TRACE(...) do { if (g_autograd_verbose) { fprintf(stderr, __VA_ARGS__); fflush(stderr); } } while(0)
+#define AG_TRACE(...) do { if constexpr (GRIM::VerboseLogging::ENABLE_AUTOGRAD_TRACE_LOGS) { fprintf(stderr, __VA_ARGS__); fflush(stderr); } } while(0)
 
 // ─── Forward declaration: defined in TensorContract_GPU.cu at global scope ───
 void trackKernelLaunch(const char* kernel_name, cudaStream_t stream);
