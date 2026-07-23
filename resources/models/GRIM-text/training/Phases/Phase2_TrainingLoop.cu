@@ -917,10 +917,11 @@ BatchResult processBatch(
         throw std::runtime_error("Non-finite loss: " + std::to_string(loss_result.loss_value));
     }
 
-    if constexpr (GRIM::VerboseLogging::ENABLE_RHO_BUILDUP_DIAGNOSTICS) {
+    if constexpr (GRIM::VerboseLogging::ENABLE_RHO_BUILDUP_LOGS) {
         const GRIM::Diagnostics::RhoDiagnosticOptions rho_pre_backward_options{
             GRIM::Diagnostics::RhoDiagnosticPhase::PostForwardPreBackward,
-            false};
+            false,
+            true};
         GRIM::Diagnostics::computeRhoDiagnostic(
             ctx,
             payload,
@@ -1018,10 +1019,12 @@ BatchResult processBatch(
             *live_lm_head_input,
             batch_idx);
     }
-    if constexpr (GRIM::VerboseLogging::ENABLE_RHO_BUILDUP_DIAGNOSTICS) {
+    if constexpr (GRIM::VerboseLogging::ENABLE_RHO_BUILDUP_LOGS ||
+                  GRIM::VerboseLogging::ENABLE_RHO_BUILDUP_TELEMETRY) {
         const GRIM::Diagnostics::RhoDiagnosticOptions rho_post_backward_options{
             GRIM::Diagnostics::RhoDiagnosticPhase::PostBackward,
-            true};
+            GRIM::VerboseLogging::ENABLE_RHO_BUILDUP_TELEMETRY,
+            GRIM::VerboseLogging::ENABLE_RHO_BUILDUP_LOGS};
         GRIM::Diagnostics::computeRhoDiagnostic(
             ctx,
             payload,

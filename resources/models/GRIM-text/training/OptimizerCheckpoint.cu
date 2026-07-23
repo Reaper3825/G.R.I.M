@@ -10,7 +10,10 @@
 
 #include <fstream>
 #include <filesystem>
+#include <cerrno>
 #include <cstring>
+#include <limits>
+#include <sstream>
 #include <vector>
 #include <stdexcept>
 
@@ -34,6 +37,54 @@ namespace GRIMText::Training {
 static constexpr uint32_t OPT_MAGIC   = 0x47524F50;  // "GROP"
 static constexpr uint32_t OPT_VERSION = 1;
 static constexpr size_t   RESERVED_BYTES = 32;
+
+namespace {
+
+uint64_t checkedAdd(uint64_t lhs, uint64_t rhs, const char* context) {
+    if (rhs > std::numeric_limits<uint64_t>::max() - lhs) {
+        throw std::runtime_error(
+            std::string("[OptimizerCheckpoint] Byte-count overflow while computing ") + context);
+    }
+    return lhs + rhs;
+}
+
+uint64_t checkedTensorBytes(uint64_t numel, const char* context) {
+    constexpr uint64_t float_bytes = sizeof(float);
+    if (numel > std::numeric_limits<uint64_t>::max() / float_bytes) {
+        throw std::runtime_error(
+            std::string("[OptimizerCheckpoint] Tensor byte-count overflow while computing ") +
+            context);
+    }
+    return numel * float_bytes;
+}
+
+std::string streamState(const std::ios& stream) {
+    std::ostringstream state;
+    state << "good=" << (stream.good() ? "true" : "false")
+          << ",eof=" << (stream.eof() ? "true" : "false")
+          << ",fail=" << (stream.fail() ? "true" : "false")
+          << ",bad=" << (stream.bad() ? "true" : "false");
+    return state.str();
+}
+
+uint64_t fileSizeOrThrow(const std::string& path, const char* operation) {
+    std::error_code ec;
+    const auto bytes = fs::file_size(path, ec);
+    if (ec) {
+        throw std::runtime_error(
+            std::string("[") + operation + "] Failed to query sidecar size: path=\"" +
+            path + "\", error_code=" + std::to_string(ec.value()) +
+            ", error=\"" + ec.message() + "\"");
+    }
+    if (bytes > std::numeric_limits<uint64_t>::max()) {
+        throw std::runtime_error(
+            std::string("[") + operation + "] Sidecar size exceeds uint64 range: path=\"" +
+            path + "\"");
+    }
+    return static_cast<uint64_t>(bytes);
+}
+
+} // namespace
 
 //======================================================//
 //  Header Layout (POD, no padding surprises)
@@ -114,6 +165,31 @@ bool saveOptimizerState(const TrainingContext& ctx, const std::string& sidecar_p
     header.accumulation_slot = ctx.optimizer.accumulationSlot();
     std::memset(header.reserved, 0, RESERVED_BYTES);
 
+    uint64_t expected_file_bytes = sizeof(header);
+    for (const auto& group : groups) {
+        if (group.name.size() > std::numeric_limits<uint16_t>::max()) {
+            throw std::runtime_error(
+                "[saveOptimizerState] Parameter group name is too long: group_name=\"" +
+                group.name + "\", name_bytes=" + std::to_string(group.name.size()));
+        }
+        expected_file_bytes = checkedAdd(
+            expected_file_bytes,
+            sizeof(uint16_t) + static_cast<uint64_t>(group.name.size()) + sizeof(uint64_t),
+            "optimizer sidecar directory");
+        const uint64_t tensor_bytes =
+            checkedTensorBytes(static_cast<uint64_t>(group.size()), "optimizer tensor data");
+        expected_file_bytes = checkedAdd(
+            expected_file_bytes, tensor_bytes, "optimizer m_state data");
+        expected_file_bytes = checkedAdd(
+            expected_file_bytes, tensor_bytes, "optimizer v_state data");
+    }
+
+    EmitModuleInfo(ModuleId::Checkpoint,
+        "[saveOptimizerState] Sidecar write begin: path=\"" + sidecar_path +
+        "\", groups=" + std::to_string(groups.size()) +
+        ", expected_file_bytes=" + std::to_string(expected_file_bytes),
+        ctx.global_step);
+
     // Open file
     std::ofstream out(sidecar_path, std::ios::binary);
     if (!out) {
@@ -123,18 +199,76 @@ bool saveOptimizerState(const TrainingContext& ctx, const std::string& sidecar_p
         return false;
     }
 
+    auto writeBytes = [&](const char* data,
+                          size_t bytes,
+                          const char* stage,
+                          size_t group_index,
+                          const std::string& group_name) {
+        if (bytes > static_cast<size_t>(std::numeric_limits<std::streamsize>::max())) {
+            throw std::runtime_error(
+                std::string("[saveOptimizerState] Write request exceeds streamsize: stage=") +
+                stage + ", requested_bytes=" + std::to_string(bytes));
+        }
+
+        const std::streampos raw_offset = out.tellp();
+        const std::string offset = raw_offset == std::streampos(-1)
+            ? std::string("unknown")
+            : std::to_string(static_cast<uint64_t>(
+                static_cast<std::streamoff>(raw_offset)));
+
+        errno = 0;
+        out.write(data, static_cast<std::streamsize>(bytes));
+        if (!out.good()) {
+            const int write_errno = errno;
+            std::error_code size_ec;
+            const auto actual_size = fs::file_size(sidecar_path, size_ec);
+            throw std::runtime_error(
+                std::string("[saveOptimizerState] Sidecar write failed: path=\"") +
+                sidecar_path + "\", stage=" + stage +
+                ", group_index=" +
+                (group_index == std::numeric_limits<size_t>::max()
+                    ? std::string("none")
+                    : std::to_string(group_index)) +
+                ", group_name=\"" + group_name +
+                "\", offset=" + offset +
+                ", requested_bytes=" + std::to_string(bytes) +
+                ", expected_file_bytes=" + std::to_string(expected_file_bytes) +
+                ", actual_file_bytes_on_disk=" +
+                (size_ec ? std::string("unknown") : std::to_string(actual_size)) +
+                ", errno=" + std::to_string(write_errno) +
+                ", errno_message=\"" +
+                (write_errno == 0 ? std::string("not reported") : std::strerror(write_errno)) +
+                "\", stream_state={" + streamState(out) + "}");
+        }
+    };
+
     // Write header
-    out.write(reinterpret_cast<const char*>(&header), sizeof(header));
+    writeBytes(
+        reinterpret_cast<const char*>(&header),
+        sizeof(header),
+        "header",
+        std::numeric_limits<size_t>::max(),
+        "");
 
     // Write per-group directory
     for (size_t i = 0; i < groups.size(); ++i) {
         const auto& g = groups[i];
         uint16_t name_len = static_cast<uint16_t>(g.name.size());
-        out.write(reinterpret_cast<const char*>(&name_len), sizeof(name_len));
-        out.write(g.name.data(), name_len);
+        writeBytes(
+            reinterpret_cast<const char*>(&name_len),
+            sizeof(name_len),
+            "directory_name_length",
+            i,
+            g.name);
+        writeBytes(g.name.data(), name_len, "directory_name", i, g.name);
 
         uint64_t numel = static_cast<uint64_t>(g.size());
-        out.write(reinterpret_cast<const char*>(&numel), sizeof(numel));
+        writeBytes(
+            reinterpret_cast<const char*>(&numel),
+            sizeof(numel),
+            "directory_numel",
+            i,
+            g.name);
     }
 
     // Write bulk tensor data (D2H per group)
@@ -157,7 +291,12 @@ bool saveOptimizerState(const TrainingContext& ctx, const std::string& sidecar_p
         } else {
             std::fill(host_buf.begin(), host_buf.end(), 0.0f);
         }
-        out.write(reinterpret_cast<const char*>(host_buf.data()), bytes);
+        writeBytes(
+            reinterpret_cast<const char*>(host_buf.data()),
+            bytes,
+            "m_state",
+            i,
+            groups[i].name);
 
         // v state
         if (i < opt_state.v_states.size() && opt_state.v_states[i].data) {
@@ -171,24 +310,55 @@ bool saveOptimizerState(const TrainingContext& ctx, const std::string& sidecar_p
         } else {
             std::fill(host_buf.begin(), host_buf.end(), 0.0f);
         }
-        out.write(reinterpret_cast<const char*>(host_buf.data()), bytes);
+        writeBytes(
+            reinterpret_cast<const char*>(host_buf.data()),
+            bytes,
+            "v_state",
+            i,
+            groups[i].name);
     }
 
+    errno = 0;
     out.flush();
     if (!out.good()) {
-        EmitModuleError(ModuleId::Checkpoint,
-            "[saveOptimizerState] Write error during flush: " + sidecar_path,
-            ctx.global_step);
-        return false;
+        const int flush_errno = errno;
+        std::error_code size_ec;
+        const auto actual_size = fs::file_size(sidecar_path, size_ec);
+        throw std::runtime_error(
+            "[saveOptimizerState] Sidecar flush failed: path=\"" + sidecar_path +
+            "\", expected_file_bytes=" + std::to_string(expected_file_bytes) +
+            ", actual_file_bytes_on_disk=" +
+            (size_ec ? std::string("unknown") : std::to_string(actual_size)) +
+            ", errno=" + std::to_string(flush_errno) +
+            ", errno_message=\"" +
+            (flush_errno == 0 ? std::string("not reported") : std::strerror(flush_errno)) +
+            "\", stream_state={" + streamState(out) + "}");
     }
     out.close();
 
+    const uint64_t actual_file_bytes =
+        fileSizeOrThrow(sidecar_path, "saveOptimizerState");
+    if (actual_file_bytes != expected_file_bytes) {
+        const bool truncated = actual_file_bytes < expected_file_bytes;
+        throw std::runtime_error(
+            "[saveOptimizerState] Sidecar size mismatch after close: path=\"" +
+            sidecar_path + "\", expected_file_bytes=" +
+            std::to_string(expected_file_bytes) + ", actual_file_bytes=" +
+            std::to_string(actual_file_bytes) +
+            (truncated
+                ? ", missing_bytes=" +
+                    std::to_string(expected_file_bytes - actual_file_bytes)
+                : ", trailing_bytes=" +
+                    std::to_string(actual_file_bytes - expected_file_bytes)));
+    }
+
     // Log file size
     if (fs::exists(sidecar_path)) {
-        auto file_size = fs::file_size(sidecar_path);
         EmitModuleInfo(ModuleId::Checkpoint,
             "✓ Optimizer state saved: " + sidecar_path +
-            " (" + std::to_string(file_size / (1024*1024)) + " MB)",
+            " (" + std::to_string(actual_file_bytes / (1024*1024)) +
+            " MB, bytes=" + std::to_string(actual_file_bytes) +
+            ", groups=" + std::to_string(groups.size()) + ")",
             ctx.global_step);
     }
 
@@ -307,8 +477,114 @@ bool loadOptimizerState(TrainingContext& ctx, const std::string& sidecar_path) {
         }
     }
 
+    const std::streampos raw_tensor_data_offset = in.tellg();
+    if (raw_tensor_data_offset == std::streampos(-1)) {
+        throw std::runtime_error(
+            "[loadOptimizerState] Failed to determine tensor data offset: path=\"" +
+            sidecar_path + "\", stream_state={" + streamState(in) + "}");
+    }
+    const uint64_t tensor_data_offset =
+        static_cast<uint64_t>(
+            static_cast<std::streamoff>(raw_tensor_data_offset));
+
+    uint64_t expected_file_bytes = tensor_data_offset;
+    for (const auto& entry : entries) {
+        const uint64_t tensor_bytes =
+            checkedTensorBytes(entry.numel, "optimizer tensor data");
+        expected_file_bytes = checkedAdd(
+            expected_file_bytes, tensor_bytes, "optimizer m_state data");
+        expected_file_bytes = checkedAdd(
+            expected_file_bytes, tensor_bytes, "optimizer v_state data");
+    }
+
+    const uint64_t actual_file_bytes =
+        fileSizeOrThrow(sidecar_path, "loadOptimizerState");
+
+    EmitModuleInfo(ModuleId::Checkpoint,
+        "[loadOptimizerState] Sidecar preflight: path=\"" + sidecar_path +
+        "\", groups=" + std::to_string(header.num_groups) +
+        ", actual_file_bytes=" + std::to_string(actual_file_bytes) +
+        ", expected_file_bytes=" + std::to_string(expected_file_bytes) +
+        ", header_bytes=" + std::to_string(sizeof(header)) +
+        ", directory_bytes=" +
+        std::to_string(tensor_data_offset - sizeof(header)) +
+        ", tensor_data_offset=" + std::to_string(tensor_data_offset),
+        ctx.global_step);
+
+    if (actual_file_bytes < expected_file_bytes) {
+        uint64_t tensor_offset = tensor_data_offset;
+        for (uint32_t i = 0; i < header.num_groups; ++i) {
+            const uint64_t tensor_bytes =
+                checkedTensorBytes(entries[i].numel, "optimizer tensor data");
+            for (const char* tensor_name : {"m_state", "v_state"}) {
+                const uint64_t tensor_end =
+                    checkedAdd(tensor_offset, tensor_bytes, "optimizer tensor end offset");
+                if (actual_file_bytes < tensor_end) {
+                    const uint64_t available_bytes = actual_file_bytes > tensor_offset
+                        ? actual_file_bytes - tensor_offset
+                        : 0;
+                    throw std::runtime_error(
+                        std::string("[loadOptimizerState] Truncated ") + tensor_name +
+                        " data at group " + std::to_string(i) +
+                        ": path=\"" + sidecar_path +
+                        "\", group_name=\"" + entries[i].name +
+                        "\", group_numel=" + std::to_string(entries[i].numel) +
+                        ", groups=" + std::to_string(header.num_groups) +
+                        ", tensor_offset=" + std::to_string(tensor_offset) +
+                        ", tensor_bytes=" + std::to_string(tensor_bytes) +
+                        ", tensor_available_bytes=" + std::to_string(available_bytes) +
+                        ", tensor_missing_bytes=" +
+                        std::to_string(tensor_bytes - available_bytes) +
+                        ", actual_file_bytes=" + std::to_string(actual_file_bytes) +
+                        ", expected_file_bytes=" + std::to_string(expected_file_bytes) +
+                        ", total_missing_bytes=" +
+                        std::to_string(expected_file_bytes - actual_file_bytes) +
+                        ", tensor_data_offset=" + std::to_string(tensor_data_offset));
+                }
+                tensor_offset = tensor_end;
+            }
+        }
+    } else if (actual_file_bytes > expected_file_bytes) {
+        EmitModuleWarning(ModuleId::Checkpoint,
+            "[loadOptimizerState] Sidecar has trailing data: path=\"" + sidecar_path +
+            "\", actual_file_bytes=" + std::to_string(actual_file_bytes) +
+            ", expected_file_bytes=" + std::to_string(expected_file_bytes) +
+            ", trailing_bytes=" +
+            std::to_string(actual_file_bytes - expected_file_bytes),
+            ctx.global_step);
+    }
+
     // Read bulk tensor data (H2D per group)
     cudaStream_t stream = ts.stream_ctrl.getPrimaryStream();
+
+    auto readTensor = [&](char* destination,
+                          size_t bytes,
+                          const char* tensor_name,
+                          uint32_t group_index) {
+        const std::streampos raw_offset = in.tellg();
+        const uint64_t offset = raw_offset == std::streampos(-1)
+            ? 0
+            : static_cast<uint64_t>(static_cast<std::streamoff>(raw_offset));
+        in.read(destination, static_cast<std::streamsize>(bytes));
+        const uint64_t bytes_read = in.gcount() < 0
+            ? 0
+            : static_cast<uint64_t>(in.gcount());
+        if (bytes_read != static_cast<uint64_t>(bytes)) {
+            throw std::runtime_error(
+                std::string("[loadOptimizerState] Truncated ") + tensor_name +
+                " data at group " + std::to_string(group_index) +
+                ": path=\"" + sidecar_path +
+                "\", group_name=\"" + entries[group_index].name +
+                "\", group_numel=" + std::to_string(entries[group_index].numel) +
+                ", offset=" + std::to_string(offset) +
+                ", requested_bytes=" + std::to_string(bytes) +
+                ", bytes_read=" + std::to_string(bytes_read) +
+                ", actual_file_bytes_at_preflight=" +
+                std::to_string(actual_file_bytes) +
+                ", expected_file_bytes=" + std::to_string(expected_file_bytes) +
+                ", stream_state={" + streamState(in) + "}");
+        }
+    };
 
     for (uint32_t i = 0; i < header.num_groups; ++i) {
         const size_t numel = static_cast<size_t>(entries[i].numel);
@@ -318,11 +594,8 @@ bool loadOptimizerState(TrainingContext& ctx, const std::string& sidecar_path) {
         std::vector<float> host_buf(numel);
 
         // m state
-        in.read(reinterpret_cast<char*>(host_buf.data()), bytes);
-        if (!in.good()) {
-            throw std::runtime_error(
-                "[loadOptimizerState] Truncated m_state data at group " + std::to_string(i));
-        }
+        readTensor(
+            reinterpret_cast<char*>(host_buf.data()), bytes, "m_state", i);
         if (i < opt_state.m_states.size() && opt_state.m_states[i].data) {
             cudaError_t err = cudaMemcpyAsync(opt_state.m_states[i].data, host_buf.data(),
                                                bytes, cudaMemcpyHostToDevice, stream);
@@ -334,11 +607,8 @@ bool loadOptimizerState(TrainingContext& ctx, const std::string& sidecar_path) {
         }
 
         // v state
-        in.read(reinterpret_cast<char*>(host_buf.data()), bytes);
-        if (!in.good()) {
-            throw std::runtime_error(
-                "[loadOptimizerState] Truncated v_state data at group " + std::to_string(i));
-        }
+        readTensor(
+            reinterpret_cast<char*>(host_buf.data()), bytes, "v_state", i);
         if (i < opt_state.v_states.size() && opt_state.v_states[i].data) {
             cudaError_t err = cudaMemcpyAsync(opt_state.v_states[i].data, host_buf.data(),
                                                bytes, cudaMemcpyHostToDevice, stream);

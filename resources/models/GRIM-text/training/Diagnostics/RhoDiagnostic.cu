@@ -414,6 +414,7 @@ void computeRhoDiagnostic(
     rho_eq << std::fixed << std::setprecision(4);
         rho_eq << "[" << equation_tag << "] phase=" << phase_name
             << " telemetry_write=" << (options.write_telemetry ? "true" : "false")
+            << " log_write=" << (options.write_logs ? "true" : "false")
             << "  ρ(l) = avg|cos(h_i^l, h_j^l)|, Δρ = ρ(l) - ρ(prev_collected)\n";
         rho_eq << "  PHASE: " << phase_description << "\n";
          rho_eq << "  RAW DOT: avg_abs_dot(l)=P^-1 Σ_{i<j}|h_i^l · h_j^l|, "
@@ -565,10 +566,12 @@ void computeRhoDiagnostic(
                 rho_nonatom = compute_rho(final_device_ptr, nonatom_positions).rho;
             }
         }
-        ctx.telemetry.last_obs[(int)GRIM::Telemetry::MetricStream::RHO_ATOM_ONLY]
-            = rho_atom;
-        ctx.telemetry.last_obs[(int)GRIM::Telemetry::MetricStream::RHO_NONATOM_ONLY]
-            = rho_nonatom;
+        if (options.write_telemetry) {
+            ctx.telemetry.last_obs[(int)GRIM::Telemetry::MetricStream::RHO_ATOM_ONLY]
+                = rho_atom;
+            ctx.telemetry.last_obs[(int)GRIM::Telemetry::MetricStream::RHO_NONATOM_ONLY]
+                = rho_nonatom;
+        }
 
         rho_eq << "  SUMMARY: ρ(" << first_label << ")=" << rho_first
                << " → ρ(" << last_label << ")=" << rho_final
@@ -650,8 +653,11 @@ void computeRhoDiagnostic(
         rho_eq << "\n";
     }
 
-    ctx.logging.logger->log(rho_eq.str());
-    EQ_LOG(ctx.logging.tape.get(), GRIM::Logging::LogGroup::Telemetry, GRIM::Logging::LogPhase::DIAGNOSTICS, -1, equation_tag, rho_eq.str().c_str());
+    if (options.write_logs) {
+        const std::string rho_log = rho_eq.str();
+        ctx.logging.logger->log(rho_log);
+        EQ_LOG(ctx.logging.tape.get(), GRIM::Logging::LogGroup::Telemetry, GRIM::Logging::LogPhase::DIAGNOSTICS, -1, equation_tag, rho_log.c_str());
+    }
 }
 
 } // namespace GRIM::Diagnostics

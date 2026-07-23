@@ -46,13 +46,14 @@ enum class RhoDiagnosticPhase {
 struct RhoDiagnosticOptions {
     RhoDiagnosticPhase phase = RhoDiagnosticPhase::PostBackward;
     bool write_telemetry = true;
+    bool write_logs = true;
 };
 
 /// Run the RHO_BUILDUP_EQUATION diagnostic once per batch.
 ///
 /// Reads encoder layer outputs from the active shared-forward sink,
 /// computes per-layer ρ and Δρ, writes to telemetry last_obs[5-8],
-/// emits an EQ_LOG entry, and logs top-10 batch tokens.
+/// optionally emits an EQ_LOG/logger entry containing the top-10 batch tokens.
 ///
 /// Phase2 may invoke this helper at multiple points inside the active
 /// forward/autograd boundary. The pre-backward emission is intended for
@@ -62,7 +63,7 @@ struct RhoDiagnosticOptions {
 /// @param ctx          Full training context (model, tokenizer, logging, telemetry)
 /// @param payload      Current batch (for token frequency analysis)
 /// @param batch_idx    Batch index within epoch (for logging)
-/// @param options      Phase/tag selection and whether telemetry last_obs[] is updated
+/// @param options      Phase/tag selection and independent telemetry/log output controls
 void computeRhoDiagnostic(
     GRIMText::Training::TrainingContext& ctx,
     const GRIM::Batching::BatchPayload& payload,
