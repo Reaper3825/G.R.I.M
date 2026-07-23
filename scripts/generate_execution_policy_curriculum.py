@@ -39,6 +39,19 @@ OPS = {"add", "sub", "mul", "div"}
 NUMBER_RE = re.compile(r"(?<![A-Za-z0-9_])[-+]?\d+(?:\.\d+)?")
 WORD_RE = re.compile(r"[a-z]+(?:'[a-z]+)?")
 CONTROL_CUE_WORDS = {"calculate", "compute", "evaluate", "solve"}
+MAX_LEXICAL_LABEL_GAP = 0.20
+
+PROMPT_LAYOUTS: tuple[tuple[str, bool], ...] = (
+    ("{context} {request}", False),
+    ("Report: {context} {request}", False),
+    ("Details: {context} Question: {request}", False),
+    ("Question: {request} Details: {context}", True),
+    ("Task: {request} Supporting record: {context}", True),
+    ("Record: {context} Requested value: {request}", False),
+    ("Requested value: {request} Record: {context}", True),
+    ("Read this entry: {context} Then respond: {request}", False),
+    ("Consider this question: {request} Here is the relevant entry: {context}", True),
+)
 
 NAMES = (
     "Avery", "Blake", "Casey", "Devon", "Emery", "Finley", "Gray", "Harper",
@@ -124,6 +137,7 @@ class Scenario:
 class PolicyPair:
     pair_id: str
     family: str
+    prompt_layout: int
     execute: dict[str, Any]
     noop: dict[str, Any]
 
@@ -139,8 +153,8 @@ def scenario_inventory_add(rng: random.Random) -> Scenario:
     context = f"At {place}, {name} counted {initial} {item} before {received} more arrived."
     return Scenario(
         "inventory_add", context,
-        f"How many {item} were there after the arrival?",
-        f"How many {item} had {name} counted before the arrival?",
+        f"After the arrival, how many {item} were there?",
+        f"Before the arrival, how many {item} had {name} counted?",
         [float(initial), float(received)], [("add", 0, 1)], float(initial))
 
 
@@ -151,8 +165,8 @@ def scenario_inventory_sub(rng: random.Random) -> Scenario:
     context = f"At {place}, {name} started with {initial} {item} and sent out {removed} of them."
     return Scenario(
         "inventory_sub", context,
-        f"How many {item} remained after the shipment?",
-        f"How many {item} were sent out in the shipment?",
+        f"After the shipment, how many {item} remained?",
+        f"In the shipment, how many {item} were sent out?",
         [float(initial), float(removed)], [("sub", 0, 1)], float(removed))
 
 
@@ -163,8 +177,8 @@ def scenario_equal_groups(rng: random.Random) -> Scenario:
     context = f"At {place}, {name} arranged {groups} shelves with {each} {item} on every shelf."
     return Scenario(
         "equal_groups", context,
-        f"How many {item} were arranged across all the shelves?",
-        "How many shelves did the arrangement use?",
+        f"Across all the shelves, how many {item} were arranged?",
+        "Across all the shelves, how many shelves were used?",
         [float(groups), float(each)], [("mul", 0, 1)], float(groups))
 
 
@@ -176,8 +190,8 @@ def scenario_equal_share(rng: random.Random) -> Scenario:
     context = f"At {place}, {name} divided {total} {item} equally among {containers} bins."
     return Scenario(
         "equal_share", context,
-        f"How many {item} went into each bin?",
-        "How many bins received the items?",
+        f"Across all the bins, how many {item} went into each bin?",
+        f"Across all the bins, how many bins received {item}?",
         [float(total), float(containers)], [("div", 0, 1)], float(containers))
 
 
@@ -191,8 +205,8 @@ def scenario_difference(rng: random.Random) -> Scenario:
     )
     return Scenario(
         "difference", context,
-        "How many more were recorded in the north section than in the south section?",
-        "How many were recorded in the south section?",
+        "Between the north and south sections, how many more were recorded in the north?",
+        "Between the north and south sections, how many were recorded in the south?",
         [float(larger), float(smaller)], [("sub", 0, 1)], float(smaller))
 
 
@@ -207,8 +221,8 @@ def scenario_two_step_stock(rng: random.Random) -> Scenario:
     )
     return Scenario(
         "two_step_stock", context,
-        f"How many {item} remained after both changes?",
-        f"How many {item} were received?",
+        f"Across both changes, how many {item} remained?",
+        f"Across both changes, how many {item} were received?",
         [float(initial), float(received), float(shipped)],
         [("add", 0, 1), ("sub", 3, 2)], float(received))
 
@@ -225,8 +239,8 @@ def scenario_two_group_total(rng: random.Random) -> Scenario:
     )
     return Scenario(
         "two_group_total", context,
-        f"How many {item} were packed altogether?",
-        "How many cases were in the second group?",
+        f"Across both groups, how many {item} were packed?",
+        "Across both groups, how many cases were in the second group?",
         [float(first_groups), float(first_each), float(second_groups), float(second_each)],
         [("mul", 0, 1), ("mul", 2, 3), ("add", 4, 5)], float(second_groups))
 
@@ -242,8 +256,8 @@ def scenario_price_with_fee(rng: random.Random) -> Scenario:
     )
     return Scenario(
         "price_with_fee", context,
-        "What was the complete charge including the handling fee?",
-        "What handling fee was stated?",
+        "Including the handling fee, what was the complete charge?",
+        "Within the complete charge, what was the handling fee?",
         [float(count), float(unit_price), float(fee)],
         [("mul", 0, 1), ("add", 3, 2)], float(fee))
 
@@ -260,8 +274,8 @@ def scenario_share_with_bonus(rng: random.Random) -> Scenario:
     )
     return Scenario(
         "share_with_bonus", context,
-        f"How many {item} did each team receive in all?",
-        f"How many extra {item} did every team receive?",
+        f"In all, how many {item} did each team receive?",
+        f"In all, how many extra {item} did each team receive?",
         [float(total), float(recipients), float(bonus)],
         [("div", 0, 1), ("add", 3, 2)], float(bonus))
 
@@ -276,8 +290,8 @@ def scenario_average_pair(rng: random.Random) -> Scenario:
     )
     return Scenario(
         "average_pair", context,
-        "What was the average of the two readings?",
-        "What was the first reading?",
+        "Across the two readings, what was the average reading?",
+        "Across the two readings, what was the first reading?",
         [2.0, float(first), float(second)],
         [("add", 1, 2), ("div", 3, 0)], float(first))
 
@@ -308,7 +322,7 @@ def scenario_identifier_distractor(rng: random.Random) -> Scenario:
     return Scenario(
         "identifier_distractor", context,
         f"How many {item} were logged across both periods?",
-        "What record number identifies this entry?",
+        "Across both periods, what record number identifies this entry?",
         [float(record_id), float(first), float(second)],
         [("add", 1, 2)], float(record_id))
 
@@ -348,8 +362,12 @@ def make_pair(pair_index: int, rng: random.Random) -> PolicyPair:
     builder = SCENARIO_BUILDERS[pair_index % len(SCENARIO_BUILDERS)]
     scenario = builder(rng)
     pair_id = f"{ENTRY_PREFIX}{scenario.family}_{pair_index:06d}"
-    execute_question = f"{scenario.context} {scenario.execute_request}"
-    noop_question = f"{scenario.context} {scenario.noop_request}"
+    prompt_layout = rng.randrange(len(PROMPT_LAYOUTS))
+    layout, _ = PROMPT_LAYOUTS[prompt_layout]
+    execute_question = layout.format(
+        context=scenario.context, request=scenario.execute_request)
+    noop_question = layout.format(
+        context=scenario.context, request=scenario.noop_request)
 
     steps, explanations, execute_answer = build_program(scenario.atoms, scenario.program)
     execute = make_base_entry(
@@ -376,7 +394,7 @@ def make_pair(pair_index: int, rng: random.Random) -> PolicyPair:
         scenario.noop_answer,
     )
     noop["execution_gate_target"] = "noop"
-    return PolicyPair(pair_id, scenario.family, execute, noop)
+    return PolicyPair(pair_id, scenario.family, prompt_layout, execute, noop)
 
 
 def validate_entry(entry: dict[str, Any], max_slots: int = 8, max_steps: int = 4) -> None:
@@ -465,11 +483,28 @@ def validate_pairs(pairs: list[PolicyPair]) -> dict[str, Any]:
     lengths: dict[str, list[int]] = {"execute": [], "noop": []}
     numeric_counts: dict[str, collections.Counter[int]] = {
         "execute": collections.Counter(), "noop": collections.Counter()}
+    first_token_counts: collections.Counter[str] = collections.Counter()
+    layout_counts: collections.Counter[int] = collections.Counter()
+    common_prefix_ratios: list[float] = []
 
     all_entries: list[dict[str, Any]] = []
     for pair in pairs:
-        if not pair.execute["question"].startswith(pair.execute["question"].split("?", 1)[0][:1]):
-            raise ValueError(f"{pair.pair_id}: malformed execute question")
+        execute_words = WORD_RE.findall(pair.execute["question"].lower())
+        noop_words = WORD_RE.findall(pair.noop["question"].lower())
+        if not execute_words or not noop_words:
+            raise ValueError(f"{pair.pair_id}: prompt has no lexical tokens")
+        if execute_words[0] != noop_words[0]:
+            raise ValueError(f"{pair.pair_id}: counterfactual first-token mismatch")
+        first_token_counts[execute_words[0]] += 1
+        layout_counts[pair.prompt_layout] += 1
+        common_prefix = 0
+        for execute_word, noop_word in zip(execute_words, noop_words):
+            if execute_word != noop_word:
+                break
+            common_prefix += 1
+        common_prefix_ratios.append(
+            common_prefix / max(len(execute_words), len(noop_words)))
+
         for target, entry in (("execute", pair.execute), ("noop", pair.noop)):
             validate_entry(entry)
             if entry["execution_gate_target"] != target:
@@ -504,6 +539,33 @@ def validate_pairs(pairs: list[PolicyPair]) -> dict[str, Any]:
     if relative_length_gap > 0.20:
         raise ValueError(f"question length gap is too large: {relative_length_gap:.3f}")
 
+    lexical_gaps = lexical_audit(all_entries)
+    if lexical_gaps and lexical_gaps[0][1] > MAX_LEXICAL_LABEL_GAP:
+        word, gap, execute_count, noop_count = lexical_gaps[0]
+        raise ValueError(
+            f"lexical label shortcut is too strong: {word!r} gap={gap:.3f} "
+            f"execute={execute_count} noop={noop_count}")
+
+    mean_common_prefix_ratio = sum(common_prefix_ratios) / len(common_prefix_ratios)
+    request_first_count = sum(
+        count for layout_index, count in layout_counts.items()
+        if PROMPT_LAYOUTS[layout_index][1])
+    request_first_fraction = request_first_count / len(pairs)
+    if len(pairs) >= 100:
+        if len(first_token_counts) < len(PROMPT_LAYOUTS) - 2:
+            raise ValueError(
+                f"insufficient first-token diversity: {dict(first_token_counts)}")
+        if max(first_token_counts.values()) / len(pairs) > 0.25:
+            raise ValueError(
+                f"first-token template concentration is too high: {dict(first_token_counts)}")
+        if not 0.25 <= request_first_fraction <= 0.75:
+            raise ValueError(
+                f"request position is imbalanced: front fraction={request_first_fraction:.3f}")
+        if mean_common_prefix_ratio > 0.65:
+            raise ValueError(
+                f"counterfactual common-prefix ratio is too high: "
+                f"{mean_common_prefix_ratio:.3f}")
+
     return {
         "pairs": len(pairs),
         "entries": len(all_entries),
@@ -511,7 +573,10 @@ def validate_pairs(pairs: list[PolicyPair]) -> dict[str, Any]:
         "mean_question_length": mean_lengths,
         "numeric_count_distribution": {
             target: dict(sorted(counts.items())) for target, counts in numeric_counts.items()},
-        "top_lexical_gaps": lexical_audit(all_entries),
+        "first_token_distribution": dict(sorted(first_token_counts.items())),
+        "request_first_fraction": request_first_fraction,
+        "mean_common_prefix_ratio": mean_common_prefix_ratio,
+        "top_lexical_gaps": lexical_gaps,
     }
 
 
@@ -519,7 +584,20 @@ def generate_pairs(pair_count: int, seed: int) -> list[PolicyPair]:
     if pair_count <= 0:
         raise ValueError("pair_count must be positive")
     rng = random.Random(seed)
-    pairs = [make_pair(index, rng) for index in range(pair_count)]
+    pairs: list[PolicyPair] = []
+    questions: set[str] = set()
+    for index in range(pair_count):
+        for _ in range(1000):
+            pair = make_pair(index, rng)
+            if (pair.execute["question"] not in questions
+                    and pair.noop["question"] not in questions):
+                pairs.append(pair)
+                questions.add(pair.execute["question"])
+                questions.add(pair.noop["question"])
+                break
+        else:
+            raise RuntimeError(
+                f"failed to generate a unique counterfactual pair at index {index}")
     # Ordering is deliberately not part of the split contract.  The trainer
     # owns randomized sampling; this shuffle only prevents family runs in the
     # persisted curriculum and remains reproducible for audits.
@@ -649,6 +727,14 @@ def print_report(report: dict[str, Any]) -> None:
           f"EXECUTE={report['mean_question_length']['execute']:.1f}, "
           f"NOOP={report['mean_question_length']['noop']:.1f}")
     print(f"  numeric-count distribution: {report['numeric_count_distribution']}")
+    print(f"  first-token distribution: {report['first_token_distribution']}")
+    print(
+        "  request position: "
+        f"{report['request_first_fraction']:.3f} front, "
+        f"{1.0 - report['request_first_fraction']:.3f} trailing")
+    print(
+        "  mean counterfactual common-prefix ratio: "
+        f"{report['mean_common_prefix_ratio']:.3f}")
     print("  top lexical label gaps (audit only):")
     for word, gap, execute_count, noop_count in report["top_lexical_gaps"][:10]:
         print(

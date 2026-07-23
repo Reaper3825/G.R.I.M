@@ -813,8 +813,11 @@ UIDataHubPanel::UIDataHubPanel()
         fs::path modelStoreRoot = resolvePathFromGrimRoot(
             aiConfig.at("paths").at("grim_text").at("model_store").get<std::string>());
 
-        fs::path massDatasetPath = resolvePathFromGrimRoot(
-            aiConfig.at("paths").at("grim_text").at("training_data").get<std::string>()).parent_path() / "mass_dataset.jsonl";
+        // DataHub operates on the source-data catalog, independently of the
+        // curriculum-specific GRMT artifacts used by training.
+        fs::path dataDirectory = resolvePathFromGrimRoot(
+            aiConfig.at("paths").at("grim_text").at("training_data").get<std::string>());
+        fs::path massDatasetPath = dataDirectory / "mass_dataset.jsonl";
 
         datasetTarget_ = std::make_unique<DatasetTarget>(modelStoreRoot, massDatasetPath);
 

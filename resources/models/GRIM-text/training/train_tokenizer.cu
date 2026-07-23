@@ -123,11 +123,11 @@ int main(int argc, char** argv) {
                   << "Vocab path:  " << tokenizer_hp.vocab_path << "\n"
                   << "Output GRMT: " << tokenizer_hp.output_data_path << "\n" << std::endl;
 
-        const bool ok = GRIM::PrepareTrainingDataFromCache(tokenizer_hp);
-
-        if (!ok) {
+        const bool tokenizer_ok = GRIM::PrepareTrainingDataFromCache(tokenizer_hp);
+        if (!tokenizer_ok) {
             throw std::runtime_error(
-                "PrepareTrainingDataFromCache returned false (vocab/training_data not produced)");
+                "PrepareTrainingDataFromCache returned false for tokenizer curriculum '" +
+                tokenizer_hp.tokenizer_curriculum + "'");
         }
         if (tokenizer_hp.vocab_path.empty() || !fs::exists(tokenizer_hp.vocab_path)) {
             throw std::runtime_error(
@@ -138,7 +138,54 @@ int main(int argc, char** argv) {
             "PrepareTrainingDataFromCache reported success but output GRMT is missing: " + tokenizer_hp.output_data_path);
         }
 
-        const std::uint32_t vocab_size = GRIM::GRMT::readHeaderOrThrow(tokenizer_hp.output_data_path).vocab_size;
+        const std::uint32_t vocab_size =
+            GRIM::GRMT::readHeaderOrThrow(tokenizer_hp.output_data_path).vocab_size;
+
+        if (!tokenizer_hp.only_mode) {
+            if (tokenizer_hp.data_path.empty() || tokenizer_hp.training_curriculum.empty()) {
+                throw std::runtime_error(
+                    "TokenizerHP missing training curriculum and/or resolved training GRMT path");
+            }
+
+            const fs::path tokenizer_output =
+                fs::absolute(tokenizer_hp.output_data_path).lexically_normal();
+            const fs::path training_output =
+                fs::absolute(tokenizer_hp.data_path).lexically_normal();
+            if (training_output != tokenizer_output) {
+                auto training_hp = tokenizer_hp;
+                training_hp.output_data_path = tokenizer_hp.data_path;
+                training_hp.tokenizer_curriculum = tokenizer_hp.training_curriculum;
+                // The tokenizer curriculum exclusively owns vocabulary
+                // training. Other curricula may only consume that shared
+                // token space while materializing their own GRMT.
+                training_hp.force_rebuild_vocab = false;
+
+                std::cout << "\n=== Materializing Training Curriculum ===\n"
+                          << "Curriculum:   " << training_hp.tokenizer_curriculum << "\n"
+                          << "Shared vocab: " << training_hp.vocab_path << "\n"
+                          << "Output GRMT:  " << training_hp.output_data_path
+                          << "\n" << std::endl;
+
+                if (!GRIM::PrepareTrainingDataFromCache(training_hp)) {
+                    throw std::runtime_error(
+                        "PrepareTrainingDataFromCache returned false for training curriculum '" +
+                        tokenizer_hp.training_curriculum + "'");
+                }
+                if (!fs::exists(training_hp.output_data_path)) {
+                    throw std::runtime_error(
+                        "PrepareTrainingDataFromCache reported success but training GRMT is missing: " +
+                        training_hp.output_data_path);
+                }
+                const std::uint32_t training_vocab_size =
+                    GRIM::GRMT::readHeaderOrThrow(training_hp.output_data_path).vocab_size;
+                if (training_vocab_size != vocab_size) {
+                    throw std::runtime_error(
+                        "training GRMT vocab_size=" + std::to_string(training_vocab_size) +
+                        " does not match shared tokenizer vocab_size=" +
+                        std::to_string(vocab_size));
+                }
+            }
+        }
 
         std::cout << "\n=== Tokenizer Subprocess Complete ===\n"
               << "Vocab:      " << tokenizer_hp.vocab_path << "\n"
