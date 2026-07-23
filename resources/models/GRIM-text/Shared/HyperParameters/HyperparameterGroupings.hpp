@@ -942,7 +942,9 @@ inline DataLoadingHP dataLoadingHP(const GRIM::Config::AiConfigSnapshot& snapsho
 inline PathsHP pathsHP(const GRIM::Config::AiConfigSnapshot& snapshot)
 {
     PathsHP view;
-    view.data_path = resolveMappedPath(snapshotTrainingConfigField<std::string>(snapshot, "grim_text_training_data"));
+    view.data_path = resolveCurriculumGrmtPath(
+        snapshotTrainingConfigField<std::string>(snapshot, "grim_text_training_data"),
+        snapshotTrainingConfigField<std::string>(snapshot, "training_curriculum"));
     view.vocab_path = resolveMappedPath(snapshotTrainingConfigField<std::string>(snapshot, "grim_text_vocab"));
     view.output_model_path = resolveMappedPath(snapshotTrainingConfigField<std::string>(snapshot, "grim_text_model"));
     view.checkpoint_dir = resolveMappedPath(snapshotTrainingConfigField<std::string>(snapshot, "grim_text_checkpoints"));
@@ -974,8 +976,9 @@ inline TokenizerHP tokenizerHP(const GRIM::Config::AiConfigSnapshot& snapshot) {
 
     TokenizerHP view;
     view.data_path = paths.data_path;
-    view.output_data_path = resolveMappedPath(
-        snapshotTrainingConfigField<std::string>(snapshot, "tokenizer_output_grmt"));
+    view.output_data_path = resolveCurriculumGrmtPath(
+        snapshotTrainingConfigField<std::string>(snapshot, "tokenizer_output_grmt"),
+        snapshotTrainingConfigField<std::string>(snapshot, "tokenizer_curriculum"));
     view.vocab_path = paths.vocab_path;
     view.target_vocab_size = snapshotTokenizerTargetVocabSize(snapshot);
     view.character_coverage = snapshotTrainingConfigField<float>(snapshot, "tokenizer_character_coverage");

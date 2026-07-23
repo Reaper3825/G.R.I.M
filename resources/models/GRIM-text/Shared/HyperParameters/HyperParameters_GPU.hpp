@@ -8,6 +8,7 @@
 #define GRIM_SHARED_HYPERPARAMETERS_GPU_HPP
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -2123,12 +2124,141 @@ inline std::string resolveMappedPath(const std::string& raw_path) {
     return (GRIM::Config::detail::resolveAiConfigPath().parent_path() / path).string();
 }
 
+// GRMT artifacts are named after their curriculum display name. For example,
+// "Execution Control v1 - Train" maps to execution_control_v1_train.grmt.
+// ai_config.json therefore owns only the artifact directory; selecting a
+// curriculum selects the file within it.
+inline std::string curriculumArtifactPrefix(std::string_view curriculum) {
+    std::string prefix;
+    prefix.reserve(curriculum.size());
+    bool pending_separator = false;
+    for (const unsigned char ch : curriculum) {
+        if (std::isalnum(ch)) {
+            if (pending_separator && !prefix.empty()) {
+                prefix.push_back('_');
+            }
+            prefix.push_back(static_cast<char>(std::tolower(ch)));
+            pending_separator = false;
+        } else {
+            pending_separator = !prefix.empty();
+        }
+    }
+    return prefix;
+}
+
+inline std::string resolveCurriculumGrmtPath(
+    const std::string& raw_path,
+    const std::string& curriculum)
+{
+    if (raw_path.empty()) {
+        throw std::runtime_error(
+            "FATAL: configured GRMT directory/path must not be empty");
+    }
+    const std::filesystem::path resolved(resolveMappedPath(raw_path));
+    std::string extension = resolved.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    if (extension == ".grmt") {
+        return resolved.string();
+    }
+
+    const std::string prefix = curriculumArtifactPrefix(curriculum);
+    if (prefix.empty()) {
+        throw std::runtime_error(
+            "FATAL: cannot resolve a GRMT artifact from an empty curriculum name");
+    }
+
+    std::error_code status_error;
+    const bool path_exists = std::filesystem::exists(resolved, status_error);
+    if (status_error) {
+        throw std::runtime_error(
+            "FATAL: cannot inspect configured GRMT directory " + resolved.string() +
+            ": " + status_error.message());
+    }
+    if (path_exists) {
+        const bool is_directory = std::filesystem::is_directory(resolved, status_error);
+        if (status_error) {
+            throw std::runtime_error(
+                "FATAL: cannot inspect configured GRMT path " + resolved.string() +
+                ": " + status_error.message());
+        }
+        if (!is_directory) {
+            throw std::runtime_error(
+                "FATAL: configured GRMT path is neither a .grmt file nor a directory: " +
+                resolved.string());
+        }
+    }
+
+    // Prefer the exact conventional name. Prefix matching also permits a
+    // convention-preserving suffix (for example, a version/checksum suffix),
+    // but ambiguity is always fatal rather than selecting an arbitrary corpus.
+    const std::filesystem::path conventional = resolved / (prefix + ".grmt");
+    if (std::filesystem::is_regular_file(conventional, status_error) && !status_error) {
+        return conventional.string();
+    }
+
+    std::vector<std::filesystem::path> matches;
+    if (path_exists) {
+        std::error_code iteration_error;
+        for (std::filesystem::directory_iterator it(resolved, iteration_error), end;
+             !iteration_error && it != end;
+             it.increment(iteration_error)) {
+            std::error_code entry_error;
+            if (!it->is_regular_file(entry_error) || entry_error) {
+                continue;
+            }
+            std::string candidate_extension = it->path().extension().string();
+            std::transform(candidate_extension.begin(), candidate_extension.end(), candidate_extension.begin(),
+                [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            if (candidate_extension != ".grmt") {
+                continue;
+            }
+            const std::string candidate_prefix = curriculumArtifactPrefix(it->path().stem().string());
+            if (candidate_prefix == prefix ||
+                (candidate_prefix.size() > prefix.size() &&
+                 candidate_prefix.compare(0, prefix.size(), prefix) == 0 &&
+                 candidate_prefix[prefix.size()] == '_')) {
+                matches.push_back(it->path());
+            }
+        }
+        if (iteration_error) {
+            throw std::runtime_error(
+                "FATAL: cannot scan configured GRMT directory " + resolved.string() +
+                ": " + iteration_error.message());
+        }
+    }
+
+    if (matches.size() == 1) {
+        return matches.front().string();
+    }
+    if (matches.size() > 1) {
+        std::sort(matches.begin(), matches.end());
+        std::ostringstream message;
+        message << "FATAL: multiple .grmt artifacts in " << resolved.string()
+                << " match curriculum prefix '" << prefix << "':";
+        for (const auto& match : matches) {
+            message << " " << match.filename().string();
+        }
+        throw std::runtime_error(message.str());
+    }
+
+    // The tokenizer build path may not exist yet. Return the deterministic
+    // conventional target; training startup will separately require that file
+    // to exist, while data preparation will create it from concept_blocks.fb.
+    return conventional.string();
+}
+
 inline void loadResolvedPathFields(
     LanguageModelConfig& config,
     const nlohmann::json& document)
 {
     const auto& doc_config = document.at("training").at("config");
-    config.data_path = resolveMappedPath(doc_config.at("grim_text_training_data").get<std::string>());
+    config.data_path = resolveCurriculumGrmtPath(
+        doc_config.at("grim_text_training_data").get<std::string>(),
+        config.training_curriculum);
+    config.tokenizer_output_grmt = resolveCurriculumGrmtPath(
+        doc_config.at("tokenizer_output_grmt").get<std::string>(),
+        config.tokenizer_curriculum);
     config.vocab_path = resolveMappedPath(doc_config.at("grim_text_vocab").get<std::string>());
     config.output_model_path = resolveMappedPath(doc_config.at("grim_text_model").get<std::string>());
     config.checkpoint_dir = resolveMappedPath(doc_config.at("grim_text_checkpoints").get<std::string>());
