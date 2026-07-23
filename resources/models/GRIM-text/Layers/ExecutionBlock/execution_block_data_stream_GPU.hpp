@@ -36,7 +36,7 @@ void executeStepCoordinatorImpl(
 	const Tensor* selector_candidate_keys);
 
 // Materialize only the non-differentiable hard transition decision. The caller
-// supplies trajectory authority explicitly; structured CE and REINFORCE do not
+// supplies trajectory authority explicitly; auxiliary loss weights do not
 // implicitly choose the executed policy. Live model tensors remain unchanged.
 void materializeHardReadAndOpDecision(
 	const HyperParameters::ExecutionBlockConstructionHP& hp,

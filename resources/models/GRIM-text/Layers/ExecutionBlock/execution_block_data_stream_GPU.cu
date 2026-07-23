@@ -756,7 +756,6 @@ void executeStepCoordinatorImpl(
     const int V = hp.num_slots;
     const int S = hp.num_scratch_slots;
     const int V_val = V - S;
-    const int dk = hp.d_key;
     const int nop = hp.num_ops;
     const int ae = hp.atom_embedding_dim;
     const int vid = hp.value_decode_input_dim;
@@ -1206,17 +1205,13 @@ void executeStepCoordinatorImpl(
     CUDA_CHECK_KERNEL();
 
     // ── Write logits via autograd ops (tape-connected to W_write_query, W_write_key, alpha, beta) ──
-    // Formula: logits[i] = alpha * dot(q, K_proj[i]) / sqrt(d_key)
+    // Formula: logits[i] = alpha * dot(q, K_proj[i])
     //                    + beta * (-usage[i])
     // Pure CE classification — no non-differentiable bias terms (Fix #4).
-    //
-    // Scale query/key content scores exactly as the execution read-attention
-    // path does. Without this, initialization variance grows with d_key and
-    // saturates p_write before structured CE can train the selector.
-    auto raw_content_scores = autograd::matmul(q_write, K_proj, stream,
+    // alpha is initialized to 1 / sqrt(d_key), folding the static attention
+    // scale into the learned content coefficient.
+    auto content_scores = autograd::matmul(q_write, K_proj, stream,
         /*transpose_b=*/true);
-    const float inv_sqrt_dk = 1.0f / sqrtf(static_cast<float>(dk));
-    auto content_scores = autograd::mul_scalar(raw_content_scores, inv_sqrt_dk, stream);
 
     // alpha_content = alpha [1,1] @ content_scores [1,V] → [1,V] (broadcast scalar multiply)
     auto alpha_content = autograd::matmul(params.alpha, content_scores, stream);
@@ -1262,7 +1257,6 @@ void executeStepCoordinatorImpl(
     }
     finalizeStepOrThrow(hp, diag, forward_output, step, stream);
     forward_output.div_was_clamped = (h_div_flag != 0);
-    forward_output.v_out_tensor = std::move(work.v_out);
 }
 
 }  // namespace GRIM::ExecutionBlockInternal

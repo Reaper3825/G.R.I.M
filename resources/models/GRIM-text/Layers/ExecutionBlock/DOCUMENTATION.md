@@ -83,12 +83,10 @@ Public methods / accessors:
 - `execIndices()`
 - `execRecordI()`
 - `execRecordF()`
-- `reinforceBaseline()`
 
 Ownership note:
 
-- the first six buffers are per-step execution workspace / diagnostics,
-- `reinforceBaseline()` is the durable REINFORCE EMA carried on the runtime owner.
+- all buffers are per-step execution workspace / diagnostics.
 
 ### Execution-block free operations
 
@@ -224,10 +222,10 @@ Current `provisionExecutionForwardRuntime(...)` behavior:
 4. allocates + zeroes each active row's `ExecutionMemory`,
 5. recreates each active row's `trace_state`, enabling autograd only when the caller requested a connected parameter graph.
 
-Durable execution-block diagnostics live alongside that runtime on
+Execution-block diagnostics live alongside that runtime on
 `Forward::ModelForwardExecutionRuntime::execution_diag`; shared forward calls
-`ensureDiagnostics(stream)` separately so the REINFORCE baseline survives across
-steps while per-row Category 1 execution bags are re-provisioned.
+`ensureDiagnostics(stream)` separately so the reusable device workspace remains
+allocated while per-row Category 1 execution bags are re-provisioned.
 
 This keeps execution cleanup behind one fail-loud execution-block boundary instead of scattering vector clears and `ExecutionMemory::clear(...)` calls through shared forward.
 
@@ -238,11 +236,15 @@ The current implementation does **not** do blended writes.
 It always computes a softmax distribution `p_write` for learning/diagnostics,
 then performs a hard write to exactly one slot. Training queries the standalone
 optimizer-step `ExecutionTransitionSchedule` and deterministically assigns each
-complete trajectory to teacher or model authority. Structured CE and REINFORCE
-weights do not implicitly select execution authority. Inference and validation
-always use model argmax.
+complete trajectory to teacher or model authority. Loss weights do not implicitly
+select execution authority. Inference and validation always use model argmax.
 
-The content term uses scaled query/key scoring, `dot(q_write, K_write) / sqrt(d_key)`, before the learned content coefficient is applied. This keeps initialization variance independent of key width and avoids saturating the write softmax before structured cross-entropy can train it.
+Argument selection uses direct structured cross-entropy against the canonical
+teacher slots. Because transition decisions are deterministic `argmax`, the
+execution objective does not include a policy-gradient surrogate or reward
+baseline.
+
+The content term is `alpha * dot(q_write, K_write)`, with the learned `alpha` coefficient initialized to `1 / sqrt(d_key)`. Folding the static attention scale into `alpha` keeps initialization variance independent of key width without a separate runtime multiply.
 
 Low selection entropy or `max(p_write)` above the configured confidence threshold is diagnostic, not an invalid execution state. Debug mode reports those conditions and training continues; non-finite or non-normalized softmax output remains fatal. Entropy regularization belongs to the auxiliary loss rather than the execution-state validity flag.
 
@@ -278,8 +280,7 @@ The runtime carries device-side error/state buffers for validation through
 - division clamp counter,
 - division-invalid flag,
 - execution index scratch,
-- packed execution-record scratch,
-- persistent REINFORCE baseline.
+- packed execution-record scratch.
 
 Softmax and numeric failures do **not** degrade gracefully.
 They accumulate a stage id and `finalizeStepOrThrow(...)` throws at the end of the step with a named stage.

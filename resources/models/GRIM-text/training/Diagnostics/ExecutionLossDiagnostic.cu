@@ -275,7 +275,6 @@ void runExecutionLossDiagnostic(
     int active_steps = 0;
     int teacher_forced_steps = 0;
     int scalar_loss_terms = 0;
-    int reinforce_term_count = 0;
 
     if (model_hp.execution_block_enabled) {
         if (static_cast<int>(forward_outputs.exec_outputs_per_row.size()) != payload.batch_size) {
@@ -307,8 +306,7 @@ void runExecutionLossDiagnostic(
         const float div_weight = execution_hp.div_invalid_penalty_weight;
         const bool need_teacher_targets =
             (model_hp.structured_ce_enabled && structured_weight > 0.0f) ||
-            stop_weight > 0.0f ||
-            execution_hp.arg_reinforce_weight > 0.0f;
+            stop_weight > 0.0f;
         if (need_teacher_targets &&
             (payload.teacher_steps.empty() ||
              static_cast<int>(payload.teacher_steps.size()) != payload.batch_size)) {
@@ -430,17 +428,6 @@ void runExecutionLossDiagnostic(
                     scalar_loss_terms++;
                 }
 
-                if (execution_hp.arg_reinforce_weight > 0.0f &&
-                    !step_output.teacher_forced_transition &&
-                    step_output.record.op_id ==
-                        (*teacher_row)[static_cast<std::size_t>(step_index)].op_id) {
-                    // The REINFORCE baseline is stateful and is updated while the
-                    // loss is assembled. Count its denominator effect exactly;
-                    // its value intentionally remains visible in the residual.
-                    scalar_loss_terms++;
-                    reinforce_term_count++;
-                }
-
                 if (entropy_weight > 0.0f) {
                     row_entropy_sum += normalizedEntropy(
                         step_output.p_arg1, "p_arg1", row, step_index);
@@ -506,7 +493,6 @@ void runExecutionLossDiagnostic(
             << " residual=" << formatScalar(residual)
             << " scalar_terms=" << scalar_loss_terms
             << " active_steps=" << active_steps
-            << " reinforce_terms=" << reinforce_term_count
             << " teacher_forced_ratio=" << formatScalar(teacher_forced_ratio, 4)
             << " raw_ce={gate:" << formatScalar(gate.rawMean(), 4)
             << ",stop:" << formatScalar(stop.rawMean(), 4)
@@ -544,8 +530,7 @@ void runExecutionLossDiagnostic(
              << "  div pre_norm=" << formatScalar(static_cast<float>(div_penalty_pre_norm))
              << " mixed_contribution=" << formatScalar(div_contribution) << "\n"
              << "  entropy contribution=" << formatScalar(entropy_contribution) << "\n"
-             << "  teacher_forced_steps=" << teacher_forced_steps << "/" << active_steps
-             << " reinforce_terms_in_residual=" << reinforce_term_count;
+             << "  teacher_forced_steps=" << teacher_forced_steps << "/" << active_steps;
     EQ_LOG(
         ctx.logging.tape.get(),
         GRIM::Logging::LogGroup::Loss,

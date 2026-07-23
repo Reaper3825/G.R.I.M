@@ -194,7 +194,7 @@ private:
         if (startsWith(key, "execution_block_") || startsWith(key, "selector_") ||
             startsWith(key, "step_") || startsWith(key, "entropy_") ||
             startsWith(key, "value_match_") || startsWith(key, "final_slot_") ||
-            startsWith(key, "div_") || startsWith(key, "arg_reinforce_") ||
+            startsWith(key, "div_") ||
             startsWith(key, "structured_ce_") || startsWith(key, "decode_time_slot_")) {
             return "Execution Block";
         }

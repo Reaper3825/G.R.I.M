@@ -29,8 +29,8 @@ namespace GRIM::Diagnostics {
 ///
 /// This is diagnostic-only: it does not mutate the live loss tensor or change
 /// backward behavior. `residual = loss_result.execution_loss - reconstructed`
-/// intentionally exposes terms the diagnostic cannot independently reproduce
-/// (for example an enabled stateful REINFORCE term).
+/// exposes any mismatch between the live objective and the independently
+/// reconstructed terms.
 void runExecutionLossDiagnostic(
     GRIMText::Training::TrainingContext& ctx,
     const GRIM::Batching::BatchPayload& payload,
@@ -39,4 +39,3 @@ void runExecutionLossDiagnostic(
     int batch_idx);
 
 } // namespace GRIM::Diagnostics
-

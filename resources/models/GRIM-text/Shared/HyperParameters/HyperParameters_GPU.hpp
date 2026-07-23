@@ -455,9 +455,6 @@ struct LanguageModelConfig {
     float execution_block_transition_alpha_ramp_fraction = 0.0f;
     float div_invalid_penalty_weight = 0.0f;
 
-    float arg_reinforce_weight = 0.0f;
-    float arg_reinforce_baseline_decay = 0.0f;
-
     bool  structured_ce_enabled = false;
     float structured_ce_weight  = 0.0f;
     float execute_ce_weight = 0.0f;
@@ -1627,13 +1624,11 @@ inline void validateRootConfigDocument(
         validateNonNegativeFiniteFields(params, {
             validationField("execution_block_entropy_weight", &LanguageModelConfig::execution_block_entropy_weight),
             validationField("execution_block_transition_hard_threshold", &LanguageModelConfig::execution_block_transition_hard_threshold),
-            validationField("execution_block_div_invalid_penalty_weight", &LanguageModelConfig::div_invalid_penalty_weight),
-            validationField("execution_block_arg_reinforce_weight", &LanguageModelConfig::arg_reinforce_weight)
+            validationField("execution_block_div_invalid_penalty_weight", &LanguageModelConfig::div_invalid_penalty_weight)
         }, caller);
         validateClosedUnitIntervalFields(params, {
             validationField("execution_block_entropy_collapse_threshold", &LanguageModelConfig::execution_block_entropy_collapse_threshold),
             validationField("execution_block_write_collapse_threshold", &LanguageModelConfig::execution_block_write_collapse_threshold),
-            validationField("execution_block_arg_reinforce_baseline_decay", &LanguageModelConfig::arg_reinforce_baseline_decay),
             validationField("execution_block_transition_alpha_start", &LanguageModelConfig::execution_block_transition_alpha_start),
             validationField("execution_block_transition_alpha_end", &LanguageModelConfig::execution_block_transition_alpha_end),
             validationField("execution_block_transition_alpha_ramp_fraction", &LanguageModelConfig::execution_block_transition_alpha_ramp_fraction)
@@ -2043,8 +2038,6 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(execution_block_transition_alpha_end);
     GRIM_LOAD_CONFIG_FIELD(execution_block_transition_alpha_ramp_fraction);
     GRIM_LOAD_CONFIG_LEAF("execution_block_div_invalid_penalty_weight", div_invalid_penalty_weight);
-    GRIM_LOAD_CONFIG_LEAF("execution_block_arg_reinforce_weight", arg_reinforce_weight);
-    GRIM_LOAD_CONFIG_LEAF("execution_block_arg_reinforce_baseline_decay", arg_reinforce_baseline_decay);
     GRIM_LOAD_CONFIG_LEAF("execution_block_structured_ce_weight", structured_ce_weight);
     GRIM_LOAD_CONFIG_LEAF("execution_block_execute_ce_weight", execute_ce_weight);
     GRIM_LOAD_CONFIG_LEAF("execution_block_stop_ce_weight", stop_ce_weight);
@@ -2530,8 +2523,6 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_transition_alpha_end);
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_transition_alpha_ramp_fraction);
     GRIM_WRITE_FINAL_CONFIG_FIELD(div_invalid_penalty_weight);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(arg_reinforce_weight);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(arg_reinforce_baseline_decay);
     GRIM_WRITE_FINAL_CONFIG_FIELD(structured_ce_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(structured_ce_weight);
     GRIM_WRITE_FINAL_CONFIG_FIELD(execute_ce_weight);

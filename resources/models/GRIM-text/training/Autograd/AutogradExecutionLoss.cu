@@ -59,68 +59,6 @@ __global__ void kernelDivInvalidPenaltyBackward(
     }
 }
 
-__global__ void kernelArgReinforceLossForward(
-    float* __restrict__ out_loss,
-    float* __restrict__ out_advantage,
-    const float* __restrict__ p_arg1,
-    const float* __restrict__ p_arg2,
-    int idx1,
-    int idx2,
-    const float* __restrict__ v_out,
-    float expected_value,
-    float* __restrict__ baseline,
-    float baseline_decay,
-    float weight
-) {
-    if (threadIdx.x != 0) return;
-    const float err = fabsf(v_out[0] - expected_value);
-    const float baseline_prev = baseline[0];
-    // Error-as-cost REINFORCE: worse-than-baseline choices must receive a
-    // negative coefficient on NLL so gradient descent pushes their probability
-    // down, while better-than-baseline choices receive a positive coefficient.
-    float advantage = baseline_prev - err;
-    constexpr float kAdvClamp = 5.0f;
-    advantage = fminf(fmaxf(advantage, -kAdvClamp), kAdvClamp);
-
-    if (weight > 0.0f) {
-        const float updated = baseline_decay * baseline_prev + (1.0f - baseline_decay) * err;
-        constexpr float kBaselineMin = 0.0f;
-        constexpr float kBaselineMax = 1e6f;
-        baseline[0] = fminf(fmaxf(updated, kBaselineMin), kBaselineMax);
-    }
-
-    out_advantage[0] = advantage;
-    constexpr float kMinProb = 1e-7f;
-    const float nll1 = -logf(fmaxf(p_arg1[idx1], kMinProb));
-    const float nll2 = -logf(fmaxf(p_arg2[idx2], kMinProb));
-    out_loss[0] = weight * advantage * (nll1 + nll2);
-}
-
-__global__ void kernelArgReinforceLossBackward(
-    float* __restrict__ grad_p_arg1,
-    float* __restrict__ grad_p_arg2,
-    const float* __restrict__ grad_out,
-    int idx1,
-    int idx2,
-    const float* __restrict__ saved_p_arg1,
-    const float* __restrict__ saved_p_arg2,
-    const float* __restrict__ saved_advantage,
-    float weight
-) {
-    if (threadIdx.x != 0) return;
-    const float adv = saved_advantage[0];
-    const float g = grad_out[0];
-    constexpr float kMinProb = 1e-7f;
-    if (grad_p_arg1) {
-        const float p1 = fmaxf(saved_p_arg1[idx1], kMinProb);
-        grad_p_arg1[idx1] += g * weight * adv * (-1.0f / p1);
-    }
-    if (grad_p_arg2) {
-        const float p2 = fmaxf(saved_p_arg2[idx2], kMinProb);
-        grad_p_arg2[idx2] += g * weight * adv * (-1.0f / p2);
-    }
-}
-
 struct DivInvalidPenaltyGradFn : public GradFn {
     int saved_div_flag_ = 0;
     float weight_ = 0.0f;
@@ -180,145 +118,6 @@ struct DivInvalidPenaltyGradFn : public GradFn {
         p_op_grad_fn_.reset();
     }
 };
-
-struct ArgReinforceLossGradFn : public GradFn {
-    int idx1_ = -1;
-    int idx2_ = -1;
-    int num_values_ = 0;
-    float weight_ = 0.0f;
-
-    float* saved_p_arg1_ = nullptr;
-    float* saved_p_arg2_ = nullptr;
-    float* saved_advantage_ = nullptr;
-
-    float* grad_p_arg1_ = nullptr;
-    float* grad_p_arg2_ = nullptr;
-    std::shared_ptr<float> owned_grad_p_arg1_;
-    std::shared_ptr<float> owned_grad_p_arg2_;
-    std::shared_ptr<GradFn> p_arg1_grad_fn_;
-    std::shared_ptr<GradFn> p_arg2_grad_fn_;
-    TensorContract::TensorShape p_arg1_shape_;
-    TensorContract::TensorShape p_arg2_shape_;
-    bool p_arg1_requires_grad_ = false;
-    bool p_arg2_requires_grad_ = false;
-
-    ArgReinforceLossGradFn() { op_name = "autograd_exec_arg_reinforce_loss"; }
-
-    ~ArgReinforceLossGradFn() override {
-        if (saved_p_arg1_) cudaFree(saved_p_arg1_);
-        if (saved_p_arg2_) cudaFree(saved_p_arg2_);
-        if (saved_advantage_) cudaFree(saved_advantage_);
-    }
-
-    float* allocate_advantage_buffer(cudaStream_t stream) {
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_advantage_), sizeof(float), "autograd_exec_reinforce_saved_advantage");
-        cudaMemsetAsync(saved_advantage_, 0, sizeof(float), stream);
-        return saved_advantage_;
-    }
-
-    void capture(
-        int idx1,
-        int idx2,
-        Tensor& p_arg1_t,
-        Tensor& p_arg2_t,
-        float weight,
-        int num_values,
-        cudaStream_t stream
-    ) {
-        idx1_ = idx1;
-        idx2_ = idx2;
-        weight_ = weight;
-        num_values_ = num_values;
-
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_p_arg1_), static_cast<size_t>(num_values_) * sizeof(float), "autograd_exec_saved_p_arg1");
-        cudaMallocOrThrow(reinterpret_cast<void**>(&saved_p_arg2_), static_cast<size_t>(num_values_) * sizeof(float), "autograd_exec_saved_p_arg2");
-        cudaMemcpyAsync(saved_p_arg1_, p_arg1_t.data, static_cast<size_t>(num_values_) * sizeof(float), cudaMemcpyDeviceToDevice, stream);
-        cudaMemcpyAsync(saved_p_arg2_, p_arg2_t.data, static_cast<size_t>(num_values_) * sizeof(float), cudaMemcpyDeviceToDevice, stream);
-
-        p_arg1_requires_grad_ = p_arg1_t.requires_grad;
-        p_arg2_requires_grad_ = p_arg2_t.requires_grad;
-        p_arg1_shape_ = p_arg1_t.shape;
-        p_arg2_shape_ = p_arg2_t.shape;
-        p_arg1_grad_fn_ = p_arg1_t.grad_fn;
-        p_arg2_grad_fn_ = p_arg2_t.grad_fn;
-        register_input(p_arg1_t.grad_fn);
-        register_input(p_arg2_t.grad_fn);
-
-        auto setup_grad_buf = [&](Tensor& t, float*& grad_ptr, std::shared_ptr<float>& owned_grad) {
-            if (!t.requires_grad) return;
-            if (t.is_leaf) {
-                t.ensure_grad();
-                grad_ptr = t.grad_data();
-            } else {
-                float* buf = nullptr;
-                cudaMallocOrThrow(reinterpret_cast<void**>(&buf), static_cast<size_t>(num_values_) * sizeof(float), "autograd_exec_reinforce_grad_buf");
-                cudaMemsetAsync(buf, 0, static_cast<size_t>(num_values_) * sizeof(float), stream);
-                owned_grad = std::shared_ptr<float>(buf, [](float* p) { cudaFree(p); });
-                grad_ptr = owned_grad.get();
-            }
-        };
-        setup_grad_buf(p_arg1_t, grad_p_arg1_, owned_grad_p_arg1_);
-        setup_grad_buf(p_arg2_t, grad_p_arg2_, owned_grad_p_arg2_);
-    }
-
-    void apply_impl(const Tensor& grad_output,
-                    cudaStream_t stream,
-                    const Batching::BatchPayload* backward_payload,
-                    const Batching::BatchDeviceBindings* backward_bindings) override {
-        if (applied) return;
-        applied = true;
-
-        kernelArgReinforceLossBackward<<<1, kWarpSize, 0, stream>>>(
-            grad_p_arg1_, grad_p_arg2_, grad_output.data,
-            idx1_, idx2_, saved_p_arg1_, saved_p_arg2_, saved_advantage_, weight_);
-        CUDA_CHECK_KERNEL();
-
-        if (p_arg1_requires_grad_ && p_arg1_grad_fn_) {
-            Tensor view;
-            view.data = grad_p_arg1_;
-            view.shape = p_arg1_shape_;
-            view.owns_data = false;
-            view.stream = stream;
-            p_arg1_grad_fn_->apply(view, stream, backward_payload, backward_bindings);
-        }
-        if (p_arg2_requires_grad_ && p_arg2_grad_fn_) {
-            Tensor view;
-            view.data = grad_p_arg2_;
-            view.shape = p_arg2_shape_;
-            view.owns_data = false;
-            view.stream = stream;
-            p_arg2_grad_fn_->apply(view, stream, backward_payload, backward_bindings);
-        }
-    }
-
-    void release_saved() override {
-        GradFn::release_saved();
-        if (saved_p_arg1_) { cudaFree(saved_p_arg1_); saved_p_arg1_ = nullptr; }
-        if (saved_p_arg2_) { cudaFree(saved_p_arg2_); saved_p_arg2_ = nullptr; }
-        if (saved_advantage_) { cudaFree(saved_advantage_); saved_advantage_ = nullptr; }
-        grad_p_arg1_ = nullptr;
-        grad_p_arg2_ = nullptr;
-        owned_grad_p_arg1_.reset();
-        owned_grad_p_arg2_.reset();
-        p_arg1_grad_fn_.reset();
-        p_arg2_grad_fn_.reset();
-    }
-};
-void requireScalarTensor(const Tensor& tensor, const char* label, int row, int step) {
-    if (!tensor.data) {
-        throw std::runtime_error(
-            std::string("addExecutionAuxiliaryLoss: retained tensor '") + label
-            + "' is NULL at row=" + std::to_string(row)
-            + " step=" + std::to_string(step));
-    }
-    if (tensor.numel() != 1) {
-        throw std::runtime_error(
-            std::string("addExecutionAuxiliaryLoss: retained tensor '") + label
-            + "' is not scalar at row=" + std::to_string(row)
-            + " step=" + std::to_string(step)
-            + " numel=" + std::to_string(tensor.numel()));
-    }
-}
 
 void requireTensor(const Tensor& tensor, const char* label, int row, int step) {
     if (!tensor.data) {
@@ -396,47 +195,6 @@ Tensor makeDivInvalidPenalty(Tensor& p_op_tensor, bool div_was_clamped, float we
     return loss;
 }
 
-Tensor makeArgReinforceLoss(
-    Tensor& p_arg1_tensor,
-    Tensor& p_arg2_tensor,
-    int idx1,
-    int idx2,
-    const Tensor& v_out_tensor,
-    float expected_value,
-    float* reinforce_baseline,
-    float baseline_decay,
-    float weight,
-    int num_value_slots,
-    cudaStream_t stream
-) {
-    if (!reinforce_baseline) {
-        throw std::runtime_error("addExecutionAuxiliaryLoss: reinforce baseline buffer is NULL while arg_reinforce_weight > 0");
-    }
-    Tensor loss = Tensor::zeros({1, 1}, stream, "autograd_exec_arg_reinforce_loss");
-    auto grad_fn = std::make_shared<ArgReinforceLossGradFn>();
-    float* saved_advantage = grad_fn->allocate_advantage_buffer(stream);
-
-    kernelArgReinforceLossForward<<<1, 1, 0, stream>>>(
-        loss.data,
-        saved_advantage,
-        p_arg1_tensor.data,
-        p_arg2_tensor.data,
-        idx1,
-        idx2,
-        v_out_tensor.data,
-        expected_value,
-        reinforce_baseline,
-        baseline_decay,
-        weight);
-    CUDA_CHECK_KERNEL();
-
-    grad_fn->capture(idx1, idx2, p_arg1_tensor, p_arg2_tensor, weight, num_value_slots, stream);
-    loss.grad_fn = grad_fn;
-    loss.requires_grad = true;
-    loss.is_leaf = false;
-    return loss;
-}
-
 }  // namespace
 
 ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
@@ -492,8 +250,7 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
 
     const bool need_teacher_targets =
         (model_hp.structured_ce_enabled && model_hp.execution_block_structured_ce_weight > 0.0f)
-        || (model_hp.execution_block_stop_ce_weight > 0.0f)
-        || (execution_hp.arg_reinforce_weight > 0.0f);
+        || (model_hp.execution_block_stop_ce_weight > 0.0f);
 
     if (need_teacher_targets) {
         if (payload.teacher_steps.empty()) {
@@ -535,7 +292,6 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
     const float stop_ce_weight = model_hp.execution_block_stop_ce_weight;
     const int num_slots = execution_hp.num_slots;
     const int num_scratch_slots = execution_hp.num_scratch_slots;
-    const int num_value_slots = num_slots - num_scratch_slots;
     const int num_ops = execution_hp.num_ops;
 
     if (execution_hp.div_invalid_penalty_weight > 0.0f && num_ops <= kDivOpIdx) {
@@ -783,54 +539,6 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
                     num_ops,
                     ctx.stream);
                 addExecLossTerm(std::move(penalty), "div_invalid_penalty", b, k, ExecLossFlag::Op);
-            }
-
-            // REINFORCE is an on-policy estimator. Teacher-authored transitions
-            // retain structured CE, but must not be presented as sampled model
-            // actions while the alpha handoff is in progress.
-            if (execution_hp.arg_reinforce_weight > 0.0f &&
-                !sout.teacher_forced_transition) {
-                if (!teacher_row) {
-                    throw std::runtime_error(
-                        "addExecutionAuxiliaryLoss: arg REINFORCE reached row="
-                        + std::to_string(b) + " step=" + std::to_string(k)
-                        + " without teacher_steps");
-                }
-                if (k >= static_cast<int>(teacher_row->size())) {
-                    throw std::runtime_error(
-                        "addExecutionAuxiliaryLoss: teacher_steps row="
-                        + std::to_string(b) + " is missing step=" + std::to_string(k)
-                        + " required for argument REINFORCE");
-                }
-                const auto& teacher = (*teacher_row)[k];
-                requirePositiveTemperature(sout.selection_temperature, b, k);
-                const int teacher_op = requireOpTarget(teacher.op_id, num_ops, b, k, "teacher op_id");
-                const int selected_op = requireOpTarget(sout.record.op_id, num_ops, b, k, "selected op_id");
-                const int selected_arg1 = requireValueSlotTarget(sout.record.arg1_slot, num_scratch_slots, num_slots, b, k, "selected arg1_slot");
-                const int selected_arg2 = requireValueSlotTarget(sout.record.arg2_slot, num_scratch_slots, num_slots, b, k, "selected arg2_slot");
-                const float effective_weight = (selected_op == teacher_op)
-                    ? execution_hp.arg_reinforce_weight
-                    : 0.0f;
-                if (effective_weight > 0.0f) {
-                    ensurePArg1Live();
-                    ensurePArg2Live();
-                    requireScalarTensor(sout.v_out_tensor, "v_out_tensor", b, k);
-                    Tensor& p_arg1 = p_arg1_live;
-                    Tensor& p_arg2 = p_arg2_live;
-                    Tensor reinforce = makeArgReinforceLoss(
-                        p_arg1,
-                        p_arg2,
-                        selected_arg1,
-                        selected_arg2,
-                        sout.v_out_tensor,
-                        teacher.expected_value,
-                        ctx.training_state->execution_runtime.execution_diag.reinforceBaseline(),
-                        execution_hp.arg_reinforce_baseline_decay,
-                        effective_weight,
-                        num_value_slots,
-                        ctx.stream);
-                    addExecLossTerm(std::move(reinforce), "arg_reinforce_loss", b, k, ExecLossFlag::Arg);
-                }
             }
 
             if (model_hp.execution_block_entropy_aux_weight > 0.0f) {

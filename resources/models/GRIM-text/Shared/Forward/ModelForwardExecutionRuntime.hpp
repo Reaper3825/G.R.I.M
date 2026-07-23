@@ -24,11 +24,9 @@ struct ModelForwardExecutionRuntime {
     std::vector<std::vector<ExecutionRecord>> execution_trace_by_row;
     std::vector<Tensor> trace_state_by_row;
 
-    // Durable home of the execution-step diagnostic / hardening buffers. The
-    // per-step flags/records are Category 3 workspace (re-written each step);
-    // reinforce_baseline is a Category 2 durable EMA. Allocated once via
-    // ensureDiagnostics() and intentionally NOT touched by clear() so the EMA
-    // survives across steps.
+    // Durable home of the execution-step diagnostic / hardening workspace.
+    // The per-step flags/records are Category 3 buffers re-written each step.
+    // Allocation is retained across calls to avoid rebuilding the workspace.
     ExecutionBlockDiagnosticsBuffers execution_diag;
 
     void ensureDiagnostics(cudaStream_t stream) {

@@ -71,9 +71,9 @@ struct ExecutionMemory {
 //  ExecutionBlockDiagnosticsBuffers
 //
 //  Persistent device-side diagnostic / hardening buffers for the execution
-//  step. Allocated once, reused every step. The per-step flags/records are
-//  Category 3 workspace (stale contents between steps); reinforce_baseline is a
-//  durable EMA. Owned by one long-lived owner; the math ops borrow it.
+//  step. Allocated once, reused every step. The flags/records are Category 3
+//  workspace with stale contents between steps. Owned by one long-lived owner;
+//  the math ops borrow it.
 //======================================================//
 struct ExecutionBlockDiagnosticsBuffers {
     int* d_numeric_error_flag = nullptr;  // atomicMax stage-id: numeric, softmax, collapse
@@ -82,7 +82,6 @@ struct ExecutionBlockDiagnosticsBuffers {
     int* d_exec_idx           = nullptr;  // [4] arg1_rel, arg2_rel, op_id, write_slot (abs)
     int* d_exec_record_i      = nullptr;  // [3] packed for ExecutionRecord ints
     float* d_exec_record_f    = nullptr;  // [3] value_before_1, value_before_2, value_after
-    float* d_reinforce_baseline = nullptr; // [1] EMA of transition_err for REINFORCE variance reduction
 
     ExecutionBlockDiagnosticsBuffers() = default;
     ~ExecutionBlockDiagnosticsBuffers() { destroy(); }
@@ -105,8 +104,6 @@ struct ExecutionBlockDiagnosticsBuffers {
     int* execIndices() const      { return d_exec_idx; }
     int* execRecordI() const      { return d_exec_record_i; }
     float* execRecordF() const    { return d_exec_record_f; }
-    float* reinforceBaseline() const { return d_reinforce_baseline; }
-
 private:
     void moveFrom(ExecutionBlockDiagnosticsBuffers& other) noexcept {
         d_numeric_error_flag = other.d_numeric_error_flag;
@@ -115,14 +112,12 @@ private:
         d_exec_idx           = other.d_exec_idx;
         d_exec_record_i      = other.d_exec_record_i;
         d_exec_record_f      = other.d_exec_record_f;
-        d_reinforce_baseline = other.d_reinforce_baseline;
         other.d_numeric_error_flag = nullptr;
         other.d_div_clamp_count    = nullptr;
         other.d_div_invalid_flag   = nullptr;
         other.d_exec_idx           = nullptr;
         other.d_exec_record_i      = nullptr;
         other.d_exec_record_f      = nullptr;
-        other.d_reinforce_baseline = nullptr;
     }
 };
 
@@ -131,8 +126,8 @@ private:
 //
 //  The execution math no longer hangs off ExecutionBlockLayer state. Callers
 //  pass the construction hyperparameters explicitly, plus a runtime-owned
-//  ExecutionBlockDiagnosticsBuffers (durable REINFORCE baseline + per-step
-//  workspace) where the step machinery needs one.
+//  ExecutionBlockDiagnosticsBuffers workspace where the step machinery needs
+//  one.
 //======================================================//
 
 //--------------------------------------------------//

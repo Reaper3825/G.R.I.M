@@ -58,8 +58,6 @@ void ExecutionBlockDiagnosticsBuffers::allocate(cudaStream_t stream) {
     cudaMallocOrThrow(reinterpret_cast<void**>(&d_exec_idx), 4 * sizeof(int), "exec_idx");
     cudaMallocOrThrow(reinterpret_cast<void**>(&d_exec_record_i), 3 * sizeof(int), "exec_record_i");
     cudaMallocOrThrow(reinterpret_cast<void**>(&d_exec_record_f), 3 * sizeof(float), "exec_record_f");
-    cudaMallocOrThrow(reinterpret_cast<void**>(&d_reinforce_baseline), sizeof(float), "exec_reinforce_baseline");
-    CUDA_CHECK(cudaMemsetAsync(d_reinforce_baseline, 0, sizeof(float), stream));
 }
 
 void ExecutionBlockDiagnosticsBuffers::destroy() {
@@ -69,14 +67,12 @@ void ExecutionBlockDiagnosticsBuffers::destroy() {
     if (d_exec_idx)           cudaFree(d_exec_idx);
     if (d_exec_record_i)      cudaFree(d_exec_record_i);
     if (d_exec_record_f)      cudaFree(d_exec_record_f);
-    if (d_reinforce_baseline) cudaFree(d_reinforce_baseline);
     d_numeric_error_flag = nullptr;
     d_div_clamp_count    = nullptr;
     d_div_invalid_flag   = nullptr;
     d_exec_idx           = nullptr;
     d_exec_record_i      = nullptr;
     d_exec_record_f      = nullptr;
-    d_reinforce_baseline = nullptr;
 }
 
 //======================================================//

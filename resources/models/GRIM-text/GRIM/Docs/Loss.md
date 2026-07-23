@@ -33,7 +33,9 @@ Loss backward already applies `1/N`. Do **not** add another `1/tokens` scaling i
 
 ## Execution auxiliary normalization
 
-ExecutionBlock auxiliary losses assembled in `AutogradTraining.cu` must be added to `loss_tensor` as one normalized aggregate, not as raw per-step sums. The local execution objective is accumulated over active scalar loss terms — transition loss, division penalties, arg REINFORCE loss, and each structured selection CE decision — then divided by that active term count before a single `autograd::add()` into the main loss.
+ExecutionBlock auxiliary losses assembled in `AutogradTraining.cu` must be added to `loss_tensor` as one normalized aggregate, not as raw per-step sums. The local execution objective is accumulated over active scalar loss terms — execution-gate CE, stop-control CE, structured op/argument/write CE, and division penalties — then divided by that active term count before a single `autograd::add()` into the main loss.
+
+Argument selection is supervised directly from `BatchPayload.teacher_steps`. The execution path is deterministic (`argmax`) and does not use a policy-gradient objective, reward baseline, or persistent loss-side state.
 
 Loss decomposition at the training boundary is explicit: `LossResult` / `BatchResult` carry `text_loss`, `selector_loss`, and `execution_loss`. Do not recreate a blended `aux_loss` bucket; it hides the real source of non-text loss and corrupts telemetry semantics. (The old `selector_loss` channel was deleted with the execution-entangled decode-time selector; new numeric supervision heads will add their own explicit channels.)
 

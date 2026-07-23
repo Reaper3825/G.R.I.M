@@ -115,8 +115,6 @@ bool testStepOutputDefaults(std::string& message) {
                    "op_logits_tensor should start null");
     EB_ASSERT_TRUE(!sout.write_logits_tensor.data,
                    "write_logits_tensor should start null");
-    EB_ASSERT_TRUE(!sout.v_out_tensor.data,
-                   "v_out_tensor should start null");
     EB_ASSERT_TRUE(!sout.stop_logits_tensor.data,
                    "stop_logits_tensor should start null");
     EB_ASSERT_TRUE(!sout.stop_probabilities.data,

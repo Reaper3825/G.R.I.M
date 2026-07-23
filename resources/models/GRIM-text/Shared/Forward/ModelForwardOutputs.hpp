@@ -74,11 +74,10 @@ struct ExecutionBlockStepOutput {
     ExecStepMetrics metrics;     // populated when debug_mode is enabled
 
     // Retained live tensors for later loss assembly (Category 1 graph-owned)
-    Tensor arg1_logits_tensor;     // [1, V_val] live logits for arg1 CE / REINFORCE
-    Tensor arg2_logits_tensor;     // [1, V_val] live logits for arg2 CE / REINFORCE
+    Tensor arg1_logits_tensor;     // [1, V_val] live logits for arg1 CE
+    Tensor arg2_logits_tensor;     // [1, V_val] live logits for arg2 CE
     Tensor op_logits_tensor;       // [1, num_ops] live logits for op CE / div penalty
     Tensor write_logits_tensor;    // [1, V] live logits for write-slot CE
-    Tensor v_out_tensor;           // [1, 1] retained detached result for argument-selection REINFORCE reward
     Tensor stop_logits_tensor;      // [1, 2], class 0=CONTINUE, class 1=STOP
     Tensor stop_probabilities;      // [1, 2]
 

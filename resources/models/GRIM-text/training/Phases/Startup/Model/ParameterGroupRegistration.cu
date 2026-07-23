@@ -1250,7 +1250,9 @@ void initializeExecutionBlockParameterTensors(
     params.W_key_proj = make_param(dm, dk, weight_init_seed + 5, "exec_block.W_key_proj");
     params.W_write_query = make_param(4 * dm, dk, weight_init_seed + 7, "exec_block.W_write_query");
     params.W_write_key = make_param(dk, dk, weight_init_seed + 8, "exec_block.W_write_key");
-    params.alpha = make_scalar(1.0f, "exec_block.alpha");
+    params.alpha = make_scalar(
+        1.0f / std::sqrt(static_cast<float>(dk)),
+        "exec_block.alpha");
     params.beta = make_scalar(1.0f, "exec_block.beta");
     params.step_embeddings = make_param(K, dm, weight_init_seed + 9, "exec_block.step_embeddings");
     params.type_num_embed = make_param(1, dt, weight_init_seed + 10, "exec_block.type_num_embed");

@@ -518,7 +518,7 @@ LossResult computeAutogradLoss(
 
     // ═══════════════════════════════════════════════════════════════════════════
     // EXECUTION BLOCK LOSS — assembled at the explicit autograd loss boundary
-    // from retained forward tensors (logits, v_out, teacher scalar, clamp flag).
+    // from retained forward tensors (selection logits and clamp flags).
     // ═══════════════════════════════════════════════════════════════════════════
     // Only assemble the execution auxiliary loss when the execution block is
     // actually active on both the context and the model HP. When execution is

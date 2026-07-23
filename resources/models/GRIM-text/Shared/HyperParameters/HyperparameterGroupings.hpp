@@ -442,8 +442,6 @@ struct ExecutionBlockConstructionHP {
     float transition_hard_threshold = 0.0f;
     int gate_warmup_steps = 0;
     float div_invalid_penalty_weight = 0.0f;
-    float arg_reinforce_weight = 0.0f;
-    float arg_reinforce_baseline_decay = 0.0f;
 };
 
 // NumberEncoder construction view — numeric-meaning input path.
@@ -549,8 +547,6 @@ struct ModelHP {
     float execution_block_transition_hard_threshold = 0.0f;
     int execution_block_gate_warmup_steps = 0;
     float execution_block_div_invalid_penalty_weight = 0.0f;
-    float execution_block_arg_reinforce_weight = 0.0f;
-    float execution_block_arg_reinforce_baseline_decay = 0.0f;
     float execution_block_entropy_aux_weight = 0.0f;
     float execution_block_structured_ce_weight = 0.0f;
     float execution_block_execute_ce_weight = 0.0f;
@@ -1351,8 +1347,6 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.execution_block_transition_hard_threshold = requireFloat("execution_block_transition_hard_threshold");
     view.execution_block_gate_warmup_steps = 0;
     view.execution_block_div_invalid_penalty_weight = requireFloat("execution_block_div_invalid_penalty_weight");
-    view.execution_block_arg_reinforce_weight = requireFloat("execution_block_arg_reinforce_weight");
-    view.execution_block_arg_reinforce_baseline_decay = requireFloat("execution_block_arg_reinforce_baseline_decay");
     view.execution_block_entropy_aux_weight = requireFloat("execution_block_entropy_aux_weight");
     view.execution_block_structured_ce_weight = requireFloat("execution_block_structured_ce_weight");
     view.execution_block_execute_ce_weight = requireFloat("execution_block_execute_ce_weight");
@@ -1498,8 +1492,6 @@ inline ExecutionBlockConstructionHP executionBlockConstructionHP(
     view.transition_hard_threshold = model.execution_block_transition_hard_threshold;
     view.gate_warmup_steps = model.execution_block_gate_warmup_steps;
     view.div_invalid_penalty_weight = model.execution_block_div_invalid_penalty_weight;
-    view.arg_reinforce_weight = model.execution_block_arg_reinforce_weight;
-    view.arg_reinforce_baseline_decay = model.execution_block_arg_reinforce_baseline_decay;
     return view;
 }
 

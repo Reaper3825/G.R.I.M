@@ -49,7 +49,7 @@ struct LossResult {
     float loss_value = 0.0f;         // Ground-truth: D2H read of loss_tensor AFTER all autograd::add()
     float text_loss = 0.0f;          // Pure next-token CE, before execution/selector additions
     float selector_loss = 0.0f;      // Scaled arg/option selector CE (α_sel * CE); own channel, no longer folded into execution_loss
-    float execution_loss = 0.0f;     // Execution-block auxiliary contribution ONLY (transition/structured CE/div/REINFORCE); 0.0 when the block is disabled
+    float execution_loss = 0.0f;     // Execution-block auxiliary contribution ONLY (structured CE/division/entropy); 0.0 when the block is disabled
     float entropy_monitor = 0.0f;    // Execution entropy monitoring scalar; not added to loss_tensor
     float weight_text = 1.0f;
     int valid_tokens = 0;
