@@ -28,6 +28,7 @@ struct BatchDeviceStorage {
     Tensor numeric_values_tensor;
     Tensor atom_mask_tensor;
     Tensor atom_flags_tensor;
+    Tensor atom_entry_ids_tensor;
     Tensor token_to_slot_map_tensor;
     Tensor atom_positions_tensor;
     Tensor atom_types_tensor;
@@ -45,6 +46,9 @@ struct BatchDeviceStorage {
     // NumberEncoder buffers; pool capacity is max_tokens (every token could be an
     // atom), row_atom_offset capacity is batch_size + 1.
     Tensor pool_numeric_values_tensor;      // float [1, max_tokens]
+    Tensor pool_numeric_float_values_tensor; // double [max_tokens], stored in 2x float bytes
+    Tensor pool_numeric_int_values_tensor;  // int64 [max_tokens], stored in 2x float bytes
+    Tensor pool_numeric_kinds_tensor;       // uint8 [max_tokens]
     Tensor pool_atom_types_tensor;          // int32 [1, max_tokens]
     Tensor row_atom_offset_tensor;          // int32 [1, batch_size + 1]
     Tensor bootstrap_slot_to_pool_index_tensor; // int32 [1, batch_size * execution slots]

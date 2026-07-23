@@ -623,10 +623,14 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 " does not match ExecutionBlock num_slots=" +
                 std::to_string(execution_hp.num_slots));
         }
-        if (!bindings->d_bootstrap_slot_to_pool_index ||
+        if (!bindings->d_atom_entry_ids ||
+            !bindings->d_pool_numeric_float_values ||
+            !bindings->d_pool_numeric_int_values ||
+            !bindings->d_pool_numeric_kinds ||
+            !bindings->d_bootstrap_slot_to_pool_index ||
             bindings->execution_slot_count != execution_hp.num_slots) {
             throw std::runtime_error(
-                "ModelForward: selector-to-execution bootstrap bridge bindings are "
+                "ModelForward: atom-entry-pool execution bootstrap bindings are "
                 "missing or have incompatible slot geometry");
         }
     }
@@ -875,13 +879,18 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                     if (!execute_row) continue;
 
                     if (!request.bindings || !request.bindings->d_token_to_slot_map
-                        || !request.bindings->d_numeric_values) {
+                        || !request.bindings->d_atom_entry_ids
+                        || !request.bindings->d_pool_numeric_float_values
+                        || !request.bindings->d_pool_numeric_int_values
+                        || !request.bindings->d_pool_numeric_kinds
+                        || !request.bindings->d_bootstrap_slot_to_pool_index
+                        || request.bindings->num_pool_atoms <= 0) {
                         throw std::runtime_error(
-                            "ModelForward(no_grad): execution decision has no bootstrap bindings");
+                            "ModelForward(no_grad): execution decision has no atom-entry-pool "
+                            "bootstrap bindings");
                     }
                     auto& memory = forward_outputs.exec_memories[b];
-                    if (execution_selector_bridge_requested &&
-                        !forward_outputs.selector_candidate_keys.data) {
+                    if (!forward_outputs.selector_candidate_keys.data) {
                         throw std::runtime_error(
                             "ModelForward(no_grad): execution bootstrap has selector bridge "
                             "metadata but no candidate-key tensor");
@@ -890,18 +899,17 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                         execution_hp,
                         memory,
                         *execution_block_parameters,
-                        request.bindings->d_numeric_values + row_offset,
+                        request.bindings->d_atom_entry_ids + row_offset,
+                        request.bindings->d_pool_numeric_float_values,
+                        request.bindings->d_pool_numeric_int_values,
+                        request.bindings->d_pool_numeric_kinds,
                         request.bindings->d_token_to_slot_map + row_offset,
-                        execution_selector_bridge_requested
-                            ? forward_outputs.selector_candidate_keys.data
-                            : nullptr,
-                        execution_selector_bridge_requested
-                            ? request.bindings->d_bootstrap_slot_to_pool_index +
-                                static_cast<size_t>(b) * execution_hp.num_slots
-                            : nullptr,
-                        execution_selector_bridge_requested
-                            ? request.bindings->num_pool_atoms
-                            : 0,
+                        forward_outputs.selector_candidate_keys.data,
+                        request.bindings->d_bootstrap_slot_to_pool_index +
+                            static_cast<size_t>(b) * execution_hp.num_slots,
+                        payload.row_atom_offset[static_cast<size_t>(b)],
+                        payload.row_atom_offset[static_cast<size_t>(b) + 1],
+                        request.bindings->num_pool_atoms,
                         row_len,
                         request.stream);
 
@@ -1126,14 +1134,18 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                     const int row_len = requirePayloadRowLength(payload, b, "ModelForward ExecutionBlock bootstrap");
 
                     if (!request.bindings || !request.bindings->d_token_to_slot_map
-                        || !request.bindings->d_numeric_values) {
+                        || !request.bindings->d_atom_entry_ids
+                        || !request.bindings->d_pool_numeric_float_values
+                        || !request.bindings->d_pool_numeric_int_values
+                        || !request.bindings->d_pool_numeric_kinds
+                        || !request.bindings->d_bootstrap_slot_to_pool_index
+                        || request.bindings->num_pool_atoms <= 0) {
                         throw std::runtime_error(
                             "ModelForward: execution-active row " + std::to_string(b)
-                            + " has no slot map or numeric values for bootstrap — "
-                            "compiled payload marks row active but bootstrap data is missing");
+                            + " has no slot map or atom-entry-pool values for bootstrap; "
+                            "compiled payload marks row active but pool data is missing");
                     }
-                    if (execution_selector_bridge_requested &&
-                        !forward_outputs.selector_candidate_keys.data) {
+                    if (!forward_outputs.selector_candidate_keys.data) {
                         throw std::runtime_error(
                             "ModelForward: execution-active row has selector bridge metadata "
                             "but no candidate-key tensor");
@@ -1142,18 +1154,17 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                         execution_hp,
                         M_b,
                         *execution_block_parameters,
-                        request.bindings->d_numeric_values + tok_off,
+                        request.bindings->d_atom_entry_ids + tok_off,
+                        request.bindings->d_pool_numeric_float_values,
+                        request.bindings->d_pool_numeric_int_values,
+                        request.bindings->d_pool_numeric_kinds,
                         request.bindings->d_token_to_slot_map + tok_off,
-                        execution_selector_bridge_requested
-                            ? forward_outputs.selector_candidate_keys.data
-                            : nullptr,
-                        execution_selector_bridge_requested
-                            ? request.bindings->d_bootstrap_slot_to_pool_index +
-                                static_cast<size_t>(b) * execution_hp.num_slots
-                            : nullptr,
-                        execution_selector_bridge_requested
-                            ? request.bindings->num_pool_atoms
-                            : 0,
+                        forward_outputs.selector_candidate_keys.data,
+                        request.bindings->d_bootstrap_slot_to_pool_index +
+                            static_cast<size_t>(b) * execution_hp.num_slots,
+                        payload.row_atom_offset[static_cast<size_t>(b)],
+                        payload.row_atom_offset[static_cast<size_t>(b) + 1],
+                        request.bindings->num_pool_atoms,
                         row_len, request.stream);
 
                     if (payload.teacher_step_mask.empty()

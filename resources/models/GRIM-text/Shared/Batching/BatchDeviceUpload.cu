@@ -174,6 +174,12 @@ BatchDeviceBindings uploadBatchToDevice(
     if (!cached_slot_map_ptr) {
         throw std::runtime_error("uploadBatchToDevice: BatchDeviceStorage.token_to_slot_map_tensor.data is NULL");
     }
+    uint32_t* cached_atom_entry_ids_ptr =
+        reinterpret_cast<uint32_t*>(storage.atom_entry_ids_tensor.data);
+    if (!cached_atom_entry_ids_ptr) {
+        throw std::runtime_error(
+            "uploadBatchToDevice: BatchDeviceStorage.atom_entry_ids_tensor.data is NULL");
+    }
     int* cached_atom_positions_ptr = reinterpret_cast<int*>(storage.atom_positions_tensor.data);
     if (!cached_atom_positions_ptr) {
         throw std::runtime_error("uploadBatchToDevice: BatchDeviceStorage.atom_positions_tensor.data is NULL");
@@ -221,6 +227,12 @@ BatchDeviceBindings uploadBatchToDevice(
             reinterpret_cast<uint32_t*>(storage.atom_flags_tensor.data), payload.atom_flags.data(),
             atom_flag_bytes, cudaMemcpyHostToDevice, stream));
     }
+    BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+        cached_atom_entry_ids_ptr,
+        payload.atom_entry_ids.data(),
+        payload.atom_entry_ids.size() * sizeof(uint32_t),
+        cudaMemcpyHostToDevice,
+        stream));
 
     // Round 4: token_to_slot_map.
     BATCH_UPLOAD_CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -307,6 +319,9 @@ BatchDeviceBindings uploadBatchToDevice(
     // whenever the pool storage exists (NumberEncoder enabled), even for batches
     // with zero atoms (empty windows); values/types only when the pool is non-empty.
     float* cached_pool_values_ptr = nullptr;
+    double* cached_pool_float_values_ptr = nullptr;
+    int64_t* cached_pool_int_values_ptr = nullptr;
+    uint8_t* cached_pool_kinds_ptr = nullptr;
     int*   cached_pool_types_ptr = nullptr;
     int*   cached_row_atom_offset_ptr = nullptr;
     int*   cached_pool_digit_values_ptr = nullptr;
@@ -318,7 +333,18 @@ BatchDeviceBindings uploadBatchToDevice(
     int*   cached_bootstrap_slot_to_pool_index_ptr = nullptr;
     if (storage.pool_numeric_values_tensor.data && !payload.row_atom_offset.empty()) {
         cached_pool_values_ptr = storage.pool_numeric_values_tensor.data;
+        cached_pool_float_values_ptr =
+            reinterpret_cast<double*>(storage.pool_numeric_float_values_tensor.data);
+        cached_pool_int_values_ptr =
+            reinterpret_cast<int64_t*>(storage.pool_numeric_int_values_tensor.data);
+        cached_pool_kinds_ptr =
+            reinterpret_cast<uint8_t*>(storage.pool_numeric_kinds_tensor.data);
         cached_pool_types_ptr = reinterpret_cast<int*>(storage.pool_atom_types_tensor.data);
+        if (!cached_pool_float_values_ptr || !cached_pool_int_values_ptr ||
+            !cached_pool_kinds_ptr || !cached_pool_types_ptr) {
+            throw std::runtime_error(
+                "uploadBatchToDevice: exact atom-entry pool storage is incomplete");
+        }
         cached_row_atom_offset_ptr = reinterpret_cast<int*>(storage.row_atom_offset_tensor.data);
         BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
             cached_row_atom_offset_ptr, payload.row_atom_offset.data(),
@@ -352,6 +378,24 @@ BatchDeviceBindings uploadBatchToDevice(
                 cached_pool_values_ptr, payload.pool_numeric_values.data(),
                 payload.pool_numeric_values.size() * sizeof(float),
                 cudaMemcpyHostToDevice, stream));
+            BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+                cached_pool_float_values_ptr,
+                payload.pool_numeric_float_values.data(),
+                payload.pool_numeric_float_values.size() * sizeof(double),
+                cudaMemcpyHostToDevice,
+                stream));
+            BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+                cached_pool_int_values_ptr,
+                payload.pool_numeric_int_values.data(),
+                payload.pool_numeric_int_values.size() * sizeof(int64_t),
+                cudaMemcpyHostToDevice,
+                stream));
+            BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+                cached_pool_kinds_ptr,
+                payload.pool_numeric_kinds.data(),
+                payload.pool_numeric_kinds.size() * sizeof(uint8_t),
+                cudaMemcpyHostToDevice,
+                stream));
             BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
                 cached_pool_types_ptr, payload.pool_atom_types.data(),
                 payload.pool_atom_types.size() * sizeof(int),
@@ -402,6 +446,7 @@ BatchDeviceBindings uploadBatchToDevice(
     bindings.d_atom_flags       = storage.atom_flags_tensor.data
         ? reinterpret_cast<uint32_t*>(storage.atom_flags_tensor.data)
         : nullptr;
+    bindings.d_atom_entry_ids   = cached_atom_entry_ids_ptr;
     bindings.d_token_to_slot_map = cached_slot_map_ptr;
     bindings.d_atom_positions   = cached_atom_positions_ptr;
     bindings.d_atom_types       = cached_atom_types_ptr;
@@ -411,6 +456,12 @@ BatchDeviceBindings uploadBatchToDevice(
     bindings.d_atom_digit_slot_features = cached_atom_digit_slot_features_ptr;
     bindings.d_atom_global_features     = cached_atom_global_features_ptr;
     bindings.d_pool_numeric_values = (payload.num_pool_atoms > 0) ? cached_pool_values_ptr : nullptr;
+    bindings.d_pool_numeric_float_values =
+        (payload.num_pool_atoms > 0) ? cached_pool_float_values_ptr : nullptr;
+    bindings.d_pool_numeric_int_values =
+        (payload.num_pool_atoms > 0) ? cached_pool_int_values_ptr : nullptr;
+    bindings.d_pool_numeric_kinds =
+        (payload.num_pool_atoms > 0) ? cached_pool_kinds_ptr : nullptr;
     bindings.d_pool_atom_types     = (payload.num_pool_atoms > 0) ? cached_pool_types_ptr : nullptr;
     bindings.d_row_atom_offset     = cached_row_atom_offset_ptr;
     bindings.num_pool_atoms        = payload.num_pool_atoms;
@@ -475,6 +526,11 @@ std::shared_ptr<BatchDeviceStorage> createBatchDeviceStorage(
         false,
         stream,
         "batch_atom_flags");
+    storage->atom_entry_ids_tensor = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(1, max_tokens),
+        false,
+        stream,
+        "batch_atom_entry_ids");
     storage->token_to_slot_map_tensor = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(1, max_tokens),
         false,
@@ -533,6 +589,21 @@ std::shared_ptr<BatchDeviceStorage> createBatchDeviceStorage(
             false,
             stream,
             "batch_pool_numeric_values");
+        storage->pool_numeric_float_values_tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, max_tokens * 2),
+            false,
+            stream,
+            "batch_pool_numeric_float_values");
+        storage->pool_numeric_int_values_tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, max_tokens * 2),
+            false,
+            stream,
+            "batch_pool_numeric_int_values");
+        storage->pool_numeric_kinds_tensor = Tensor::zeros(
+            TensorContract::TensorShape::make_BSM(1, max_tokens),
+            false,
+            stream,
+            "batch_pool_numeric_kinds");
         storage->pool_atom_types_tensor = Tensor::zeros(
             TensorContract::TensorShape::make_BSM(1, max_tokens),
             false,

@@ -2,6 +2,7 @@
 #include "../../Shared/Forward/ModelForwardOutputs.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
+#include "../../Shared/UnigramByte/AtomTable.hpp"
 
 using GRIM::CudaAlloc::cudaMallocOrThrow;
 
@@ -35,15 +36,48 @@ __global__ void kernelBootstrapSlotMarkValid(
 
 __global__ void kernelBootstrapSlotWriteValues(
     float* __restrict__ M_values,
-    const float* __restrict__ numeric_values,
+    const uint32_t* __restrict__ atom_entry_ids,
+    const double* __restrict__ pool_numeric_float_values,
+    const int64_t* __restrict__ pool_numeric_int_values,
+    const uint8_t* __restrict__ pool_numeric_kinds,
+    const int* __restrict__ bootstrap_slot_to_pool_index,
     const int* __restrict__ slot_last_pos,
+    int row_pool_begin,
+    int row_pool_end,
+    int num_pool_atoms,
+    int* __restrict__ bridge_error,
     int V
 ) {
     const int slot = blockIdx.x * blockDim.x + threadIdx.x;
     if (slot >= V) return;
     int pos = slot_last_pos[slot];
     if (pos >= 0) {
-        M_values[slot] = numeric_values[pos];
+        const uint32_t local_entry = atom_entry_ids[pos];
+        const uint64_t pool_index_wide =
+            static_cast<uint64_t>(row_pool_begin) + static_cast<uint64_t>(local_entry);
+        if (local_entry == GRIM::Tokenizer::kAtomEntryNone ||
+            pool_index_wide >= static_cast<uint64_t>(row_pool_end) ||
+            pool_index_wide >= static_cast<uint64_t>(num_pool_atoms)) {
+            if (bridge_error) atomicCAS(bridge_error, 0, 1);
+            M_values[slot] = 0.0f;
+            return;
+        }
+        const int pool_index = static_cast<int>(pool_index_wide);
+        if (bootstrap_slot_to_pool_index[slot] != pool_index) {
+            if (bridge_error) atomicCAS(bridge_error, 0, 1);
+            M_values[slot] = 0.0f;
+            return;
+        }
+
+        const uint8_t kind = pool_numeric_kinds[pool_index];
+        if (kind == static_cast<uint8_t>(GRIM::Tokenizer::NumericPayloadKind::INTEGER)) {
+            M_values[slot] = static_cast<float>(pool_numeric_int_values[pool_index]);
+        } else if (kind == static_cast<uint8_t>(GRIM::Tokenizer::NumericPayloadKind::FLOAT)) {
+            M_values[slot] = static_cast<float>(pool_numeric_float_values[pool_index]);
+        } else {
+            if (bridge_error) atomicCAS(bridge_error, 0, 1);
+            M_values[slot] = 0.0f;
+        }
     }
 }
 
@@ -65,14 +99,10 @@ __global__ void kernelBootstrapSlotEmbeddings(
     if (slot >= V || valid_mask[slot] == 0.0f) return;
 
     const float val = values[slot];
-    int pool_index = -1;
-    const bool bridge_enabled = selector_candidate_keys != nullptr;
-    if (bridge_enabled) {
-        pool_index = bootstrap_slot_to_pool_index[slot];
-        if (pool_index < 0 || pool_index >= num_pool_atoms) {
-            if (threadIdx.x == 0 && bridge_error) atomicCAS(bridge_error, 0, 1);
-            pool_index = -1;
-        }
+    int pool_index = bootstrap_slot_to_pool_index[slot];
+    if (pool_index < 0 || pool_index >= num_pool_atoms) {
+        if (threadIdx.x == 0 && bridge_error) atomicCAS(bridge_error, 0, 1);
+        pool_index = -1;
     }
     extern __shared__ float smem[];
     for (int d = threadIdx.x; d < d_model; d += blockDim.x) {
@@ -398,31 +428,48 @@ void executionBlockBootstrapMemoryFromSlotMap(
     const HyperParameters::ExecutionBlockConstructionHP& hp,
     ExecutionMemory& M,
     ExecutionBlockParameterTensors& parameters,
-    const float* device_numeric_values,
+    const uint32_t* device_atom_entry_ids,
+    const double* device_pool_numeric_float_values,
+    const int64_t* device_pool_numeric_int_values,
+    const uint8_t* device_pool_numeric_kinds,
     const int32_t* device_slot_map,
     const float* selector_candidate_keys,
     const int* bootstrap_slot_to_pool_index,
+    int row_pool_begin,
+    int row_pool_end,
     int num_pool_atoms,
     int row_tokens,
     cudaStream_t stream)
 {
-    EXEC_CHECK(device_numeric_values != nullptr, "bootstrapMemoryFromSlotMap: device_numeric_values is null");
+    EXEC_CHECK(device_atom_entry_ids != nullptr,
+               "bootstrapMemoryFromSlotMap: device_atom_entry_ids is null");
+    EXEC_CHECK(device_pool_numeric_float_values != nullptr,
+               "bootstrapMemoryFromSlotMap: device_pool_numeric_float_values is null");
+    EXEC_CHECK(device_pool_numeric_int_values != nullptr,
+               "bootstrapMemoryFromSlotMap: device_pool_numeric_int_values is null");
+    EXEC_CHECK(device_pool_numeric_kinds != nullptr,
+               "bootstrapMemoryFromSlotMap: device_pool_numeric_kinds is null");
     EXEC_CHECK(device_slot_map != nullptr, "bootstrapMemoryFromSlotMap: device_slot_map is null");
     EXEC_CHECK(row_tokens > 0, "bootstrapMemoryFromSlotMap: row_tokens must be positive");
-    const bool has_selector_keys = selector_candidate_keys != nullptr;
-    const bool has_bridge_map = bootstrap_slot_to_pool_index != nullptr;
-    EXEC_CHECK(has_selector_keys == has_bridge_map,
-               "bootstrapMemoryFromSlotMap: selector keys and slot-to-pool map must be supplied together");
-    if (has_selector_keys) {
-        EXEC_CHECK(num_pool_atoms > 0,
-                   "bootstrapMemoryFromSlotMap: selector bridge requires num_pool_atoms > 0");
-    } else {
-        EXEC_CHECK(num_pool_atoms == 0,
-                   "bootstrapMemoryFromSlotMap: num_pool_atoms must be zero when selector bridge is absent");
-    }
+    EXEC_CHECK(selector_candidate_keys != nullptr,
+               "bootstrapMemoryFromSlotMap: selector_candidate_keys is null");
+    EXEC_CHECK(bootstrap_slot_to_pool_index != nullptr,
+               "bootstrapMemoryFromSlotMap: bootstrap_slot_to_pool_index is null");
+    EXEC_CHECK(num_pool_atoms > 0,
+               "bootstrapMemoryFromSlotMap: atom-entry pool must contain at least one entry");
+    EXEC_CHECK(row_pool_begin >= 0 && row_pool_begin < row_pool_end,
+               "bootstrapMemoryFromSlotMap: row atom-entry pool window is empty or invalid");
+    EXEC_CHECK(row_pool_end <= num_pool_atoms,
+               "bootstrapMemoryFromSlotMap: row atom-entry pool window exceeds pool bounds");
     auto& params = parameters;
 
     const int V = hp.num_slots;
+    int* d_bridge_error = nullptr;
+    cudaMallocOrThrow(
+        reinterpret_cast<void**>(&d_bridge_error),
+        sizeof(int),
+        "bootstrap_selector_bridge_error");
+    CUDA_CHECK(cudaMemsetAsync(d_bridge_error, 0, sizeof(int), stream));
 
     // Two-pass bootstrap: resolve race condition when multiple tokens map to same slot.
     // Pass 1: mark valid + find highest-position token per slot (deterministic last-writer-wins).
@@ -439,21 +486,24 @@ void executionBlockBootstrapMemoryFromSlotMap(
     // Pass 2: write values — only the highest-position token per slot writes.
     const int slot_blocks = (V + kBlockSize - 1) / kBlockSize;
     kernelBootstrapSlotWriteValues<<<slot_blocks, kBlockSize, 0, stream>>>(
-        M.values.data, device_numeric_values, d_slot_last_pos, V);
+        M.values.data,
+        device_atom_entry_ids,
+        device_pool_numeric_float_values,
+        device_pool_numeric_int_values,
+        device_pool_numeric_kinds,
+        bootstrap_slot_to_pool_index,
+        d_slot_last_pos,
+        row_pool_begin,
+        row_pool_end,
+        num_pool_atoms,
+        d_bridge_error,
+        V);
     CUDA_CHECK_KERNEL();
     cudaFreeAsync(d_slot_last_pos, stream);
 
     const int dm = hp.d_model;
     const int dk = hp.d_key;
     const size_t smem_bytes = dm * sizeof(float);
-    int* d_bridge_error = nullptr;
-    if (has_selector_keys) {
-        cudaMallocOrThrow(
-            reinterpret_cast<void**>(&d_bridge_error),
-            sizeof(int),
-            "bootstrap_selector_bridge_error");
-        CUDA_CHECK(cudaMemsetAsync(d_bridge_error, 0, sizeof(int), stream));
-    }
     kernelBootstrapSlotEmbeddings<<<V, kBlockSize, smem_bytes, stream>>>(
         M.state_embeds.data, M.key_embeds.data,
         M.values.data, M.valid_mask.data,
@@ -465,21 +515,19 @@ void executionBlockBootstrapMemoryFromSlotMap(
         d_bridge_error,
         V, dm, dk);
     CUDA_CHECK_KERNEL();
-    if (d_bridge_error) {
-        int h_bridge_error = 0;
-        CUDA_CHECK(cudaMemcpyAsync(
-            &h_bridge_error,
-            d_bridge_error,
-            sizeof(int),
-            cudaMemcpyDeviceToHost,
-            stream));
-        CUDA_CHECK(cudaStreamSynchronize(stream));
-        CUDA_CHECK(cudaFree(d_bridge_error));
-        if (h_bridge_error != 0) {
-            throw std::runtime_error(
-                "bootstrapMemoryFromSlotMap: a valid authored execution slot has no "
-                "in-range selector-pool identity");
-        }
+    int h_bridge_error = 0;
+    CUDA_CHECK(cudaMemcpyAsync(
+        &h_bridge_error,
+        d_bridge_error,
+        sizeof(int),
+        cudaMemcpyDeviceToHost,
+        stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    CUDA_CHECK(cudaFree(d_bridge_error));
+    if (h_bridge_error != 0) {
+        throw std::runtime_error(
+            "bootstrapMemoryFromSlotMap: authored atom_entry_id, slot-to-pool identity, "
+            "or exact numeric payload is invalid");
     }
 
     const int dt = hp.d_type;

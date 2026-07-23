@@ -610,26 +610,58 @@ bool testSelectorExecutionForwardBridge(std::string& message) {
             cudaMemcpyHostToDevice,
             stream);
 
-        const std::vector<float> h_numeric_values{7.0f, 7.0f};
+        const std::vector<double> h_pool_numeric_float_values{0.0, 11.5};
+        const std::vector<int64_t> h_pool_numeric_int_values{7, 0};
+        const std::vector<uint8_t> h_pool_numeric_kinds{
+            static_cast<uint8_t>(Tokenizer::NumericPayloadKind::INTEGER),
+            static_cast<uint8_t>(Tokenizer::NumericPayloadKind::FLOAT)};
+        const std::vector<uint32_t> h_atom_entry_ids{0, 1};
         const std::vector<int32_t> h_slot_map{2, 3};
         const std::vector<int> h_slot_to_pool{-1, -1, 0, 1};
         Batching::BatchPayload payload;
         payload.batch_size = 1;
         payload.execution_slot_count = V;
         payload.bootstrap_slot_to_pool_index = h_slot_to_pool;
-        float* d_numeric_values = nullptr;
+        double* d_pool_numeric_float_values = nullptr;
+        int64_t* d_pool_numeric_int_values = nullptr;
+        uint8_t* d_pool_numeric_kinds = nullptr;
+        uint32_t* d_atom_entry_ids = nullptr;
         int32_t* d_slot_map = nullptr;
         int* d_slot_to_pool = nullptr;
-        cudaMalloc(reinterpret_cast<void**>(&d_numeric_values),
-                   h_numeric_values.size() * sizeof(float));
+        cudaMalloc(reinterpret_cast<void**>(&d_pool_numeric_float_values),
+                   h_pool_numeric_float_values.size() * sizeof(double));
+        cudaMalloc(reinterpret_cast<void**>(&d_pool_numeric_int_values),
+                   h_pool_numeric_int_values.size() * sizeof(int64_t));
+        cudaMalloc(reinterpret_cast<void**>(&d_pool_numeric_kinds),
+                   h_pool_numeric_kinds.size() * sizeof(uint8_t));
+        cudaMalloc(reinterpret_cast<void**>(&d_atom_entry_ids),
+                   h_atom_entry_ids.size() * sizeof(uint32_t));
         cudaMalloc(reinterpret_cast<void**>(&d_slot_map),
                    h_slot_map.size() * sizeof(int32_t));
         cudaMalloc(reinterpret_cast<void**>(&d_slot_to_pool),
                    h_slot_to_pool.size() * sizeof(int));
         cudaMemcpyAsync(
-            d_numeric_values,
-            h_numeric_values.data(),
-            h_numeric_values.size() * sizeof(float),
+            d_pool_numeric_float_values,
+            h_pool_numeric_float_values.data(),
+            h_pool_numeric_float_values.size() * sizeof(double),
+            cudaMemcpyHostToDevice,
+            stream);
+        cudaMemcpyAsync(
+            d_pool_numeric_int_values,
+            h_pool_numeric_int_values.data(),
+            h_pool_numeric_int_values.size() * sizeof(int64_t),
+            cudaMemcpyHostToDevice,
+            stream);
+        cudaMemcpyAsync(
+            d_pool_numeric_kinds,
+            h_pool_numeric_kinds.data(),
+            h_pool_numeric_kinds.size() * sizeof(uint8_t),
+            cudaMemcpyHostToDevice,
+            stream);
+        cudaMemcpyAsync(
+            d_atom_entry_ids,
+            h_atom_entry_ids.data(),
+            h_atom_entry_ids.size() * sizeof(uint32_t),
             cudaMemcpyHostToDevice,
             stream);
         cudaMemcpyAsync(
@@ -649,13 +681,35 @@ bool testSelectorExecutionForwardBridge(std::string& message) {
             hp,
             memory,
             params,
-            d_numeric_values,
+            d_atom_entry_ids,
+            d_pool_numeric_float_values,
+            d_pool_numeric_int_values,
+            d_pool_numeric_kinds,
             d_slot_map,
             candidate_keys.data,
             d_slot_to_pool,
+            /*row_pool_begin=*/0,
+            /*row_pool_end=*/pool_atoms,
             pool_atoms,
             static_cast<int>(h_slot_map.size()),
             stream);
+
+        std::vector<float> h_values(static_cast<size_t>(V), 0.0f);
+        cudaMemcpy(
+            h_values.data(),
+            memory.values.data,
+            h_values.size() * sizeof(float),
+            cudaMemcpyDeviceToHost);
+        EB_ASSERT_NEAR(
+            h_values[2],
+            static_cast<float>(h_pool_numeric_int_values[0]),
+            1e-6f,
+            "bootstrap slot 2 gathers its scalar from atom-pool entry 0");
+        EB_ASSERT_NEAR(
+            h_values[3],
+            static_cast<float>(h_pool_numeric_float_values[1]),
+            1e-6f,
+            "bootstrap slot 3 gathers its scalar from atom-pool entry 1");
 
         std::vector<float> h_state(static_cast<size_t>(V) * dm, 0.0f);
         cudaMemcpy(
@@ -712,7 +766,43 @@ bool testSelectorExecutionForwardBridge(std::string& message) {
                 "operand candidate 1 includes absolute slot identity");
         }
 
-        cudaFree(d_numeric_values);
+        const int invalid_pool_index = pool_atoms;
+        cudaMemcpyAsync(
+            d_slot_to_pool + 3,
+            &invalid_pool_index,
+            sizeof(int),
+            cudaMemcpyHostToDevice,
+            stream);
+        memory.clear(stream);
+        bool invalid_pool_identity_threw = false;
+        try {
+            executionBlockBootstrapMemoryFromSlotMap(
+                hp,
+                memory,
+                params,
+                d_atom_entry_ids,
+                d_pool_numeric_float_values,
+                d_pool_numeric_int_values,
+                d_pool_numeric_kinds,
+                d_slot_map,
+                candidate_keys.data,
+                d_slot_to_pool,
+                /*row_pool_begin=*/0,
+                /*row_pool_end=*/pool_atoms,
+                pool_atoms,
+                static_cast<int>(h_slot_map.size()),
+                stream);
+        } catch (const std::runtime_error&) {
+            invalid_pool_identity_threw = true;
+        }
+        EB_ASSERT_TRUE(
+            invalid_pool_identity_threw,
+            "bootstrap must fail when a populated slot maps outside the atom-entry pool");
+
+        cudaFree(d_pool_numeric_float_values);
+        cudaFree(d_pool_numeric_int_values);
+        cudaFree(d_pool_numeric_kinds);
+        cudaFree(d_atom_entry_ids);
         cudaFree(d_slot_map);
         cudaFree(d_slot_to_pool);
     }

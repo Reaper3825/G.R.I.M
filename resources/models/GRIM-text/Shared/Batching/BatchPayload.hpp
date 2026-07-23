@@ -206,6 +206,9 @@ struct BatchPayload {
     int num_pool_atoms = 0;
     std::vector<int> row_atom_offset;          // [batch_size + 1] prefix offsets into the pool
     std::vector<float> pool_numeric_values;    // [E] float view (matching / agreement assert)
+    std::vector<double> pool_numeric_float_values; // [E] exact float/double payload
+    std::vector<int64_t> pool_numeric_int_values;  // [E] exact integer payload
+    std::vector<uint8_t> pool_numeric_kinds;       // [E] Tokenizer::NumericPayloadKind
     std::vector<int> pool_atom_types;          // [E] Tokenizer::AtomType enum values
 
     // Arg/option selector supervision (execution-independent). For each position t
@@ -474,7 +477,9 @@ struct BatchPayload {
         if (number_encoder_digit_slots == 0) {
             if (!atom_digit_values.empty() || !atom_digit_pow10_index.empty() ||
                 !atom_digit_mask.empty() || !atom_digit_slot_features.empty() ||
-                !atom_global_features.empty()) {
+                !atom_global_features.empty() || !pool_numeric_values.empty() ||
+                !pool_numeric_float_values.empty() || !pool_numeric_int_values.empty() ||
+                !pool_numeric_kinds.empty() || !pool_atom_types.empty()) {
                 throw std::runtime_error(
                     std::string(caller) + ": BatchPayload number-encoder channels are populated "
                     "while number_encoder_digit_slots=0");
@@ -505,6 +510,15 @@ struct BatchPayload {
             requireChannelSize(atom_global_features.size(),
                                atoms * static_cast<std::size_t>(kNumberGlobalFeatureDim),
                                "atom_global_features");
+
+            const std::size_t pool_entries = static_cast<std::size_t>(num_pool_atoms);
+            requireChannelSize(pool_numeric_values.size(), pool_entries, "pool_numeric_values");
+            requireChannelSize(
+                pool_numeric_float_values.size(), pool_entries, "pool_numeric_float_values");
+            requireChannelSize(
+                pool_numeric_int_values.size(), pool_entries, "pool_numeric_int_values");
+            requireChannelSize(pool_numeric_kinds.size(), pool_entries, "pool_numeric_kinds");
+            requireChannelSize(pool_atom_types.size(), pool_entries, "pool_atom_types");
         }
         // Selector-to-execution bootstrap identity geometry and agreement.
         if (execution_slot_count < 0) {

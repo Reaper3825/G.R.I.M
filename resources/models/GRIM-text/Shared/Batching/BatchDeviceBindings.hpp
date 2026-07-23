@@ -54,6 +54,7 @@ struct BatchDeviceBindings {
     float*    d_numeric_values  = nullptr;  // [payload.total_tokens]
     uint8_t*  d_atom_mask       = nullptr;  // [payload.total_tokens] (nullable when atom mask not used)
     uint32_t* d_atom_flags      = nullptr;  // [payload.total_tokens] (nullable when not allocated)
+    uint32_t* d_atom_entry_ids  = nullptr;  // [payload.total_tokens], row-local AtomTable entry id
     int32_t*  d_token_to_slot_map = nullptr; // [payload.total_tokens]
     int*      d_atom_positions  = nullptr;  // [payload.authoredAtomCount()] compact authored atom token positions
     int*      d_atom_types      = nullptr;  // [payload.authoredAtomCount()] compact authored atom types aligned with d_atom_positions
@@ -73,6 +74,9 @@ struct BatchDeviceBindings {
     // [d_row_atom_offset[r], d_row_atom_offset[r+1]). Nullable when the
     // NumberEncoder/selector is disabled (num_pool_atoms == 0).
     float*    d_pool_numeric_values = nullptr; // [num_pool_atoms]
+    double*   d_pool_numeric_float_values = nullptr; // [num_pool_atoms], exact float payload
+    int64_t*  d_pool_numeric_int_values = nullptr; // [num_pool_atoms], exact integer payload
+    uint8_t*  d_pool_numeric_kinds = nullptr; // [num_pool_atoms], NumericPayloadKind
     int*      d_pool_atom_types     = nullptr; // [num_pool_atoms]
     int*      d_row_atom_offset     = nullptr; // [batch_size + 1]
     int       num_pool_atoms        = 0;

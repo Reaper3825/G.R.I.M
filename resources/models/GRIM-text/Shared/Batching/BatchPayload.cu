@@ -381,6 +381,9 @@ void materializeAtomEntryPool(
     payload.num_pool_atoms = 0;
     payload.row_atom_offset.clear();
     payload.pool_numeric_values.clear();
+    payload.pool_numeric_float_values.clear();
+    payload.pool_numeric_int_values.clear();
+    payload.pool_numeric_kinds.clear();
     payload.pool_atom_types.clear();
     payload.pool_digit_values.clear();
     payload.pool_digit_pow10_index.clear();
@@ -424,6 +427,10 @@ void materializeAtomEntryPool(
     const std::size_t E = static_cast<std::size_t>(total_entries);
     const std::size_t S = static_cast<std::size_t>(digit_slots);
     payload.pool_numeric_values.assign(E, 0.0f);
+    payload.pool_numeric_float_values.assign(E, 0.0);
+    payload.pool_numeric_int_values.assign(E, 0);
+    payload.pool_numeric_kinds.assign(
+        E, static_cast<uint8_t>(GRIM::Tokenizer::NumericPayloadKind::NONE));
     payload.pool_atom_types.assign(E, 0);
     payload.pool_digit_values.assign(E * S, 0);
     payload.pool_digit_pow10_index.assign(E * S, 0);
@@ -449,7 +456,18 @@ void materializeAtomEntryPool(
                     " not retrievable (entry ids must be contiguous 0..size-1)");
             }
             const std::size_t pool_idx = static_cast<std::size_t>(base) + entry_id;
+            const auto numeric_payload = atom_table->getNumericValue(entry_id);
+            if (!numeric_payload.has_value()) {
+                throw std::runtime_error(
+                    std::string(caller) + ": atom-entry pool row " + std::to_string(row) +
+                    " entry id " + std::to_string(entry_id) +
+                    " has no exact numeric payload");
+            }
             payload.pool_numeric_values[pool_idx] = entry->numeric_value;
+            payload.pool_numeric_float_values[pool_idx] = numeric_payload->float_value;
+            payload.pool_numeric_int_values[pool_idx] = numeric_payload->int_value;
+            payload.pool_numeric_kinds[pool_idx] =
+                static_cast<uint8_t>(numeric_payload->kind);
             payload.pool_atom_types[pool_idx] = static_cast<int>(entry->type);
             if (GRIM::Tokenizer::isNumericAtom(entry->type)) {
                 fillNumberEncoderEntryFeatures(

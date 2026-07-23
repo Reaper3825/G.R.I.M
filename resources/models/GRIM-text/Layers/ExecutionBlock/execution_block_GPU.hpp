@@ -182,17 +182,22 @@ void executionBlockStep(
 );
 
 //--------------------------------------------------//
-// Bootstrap: copy literal values into M.values and fuse selector candidate
-// identity into M.state_embeds via the slot-to-pool map (detached, no grad).
+// Bootstrap: gather literal values and NumberEncoder keys from the same
+// atom-entry pool identity, then populate ExecutionMemory (detached, no grad).
 //--------------------------------------------------//
 void executionBlockBootstrapMemoryFromSlotMap(
     const HyperParameters::ExecutionBlockConstructionHP& hp,
     ExecutionMemory& M,
     ExecutionBlockParameterTensors& parameters,
-    const float* device_numeric_values,  // [row_tokens]
-    const int32_t* device_slot_map,      // [row_tokens]
-    const float* selector_candidate_keys, // [num_pool_atoms, d_model], nullable with map
-    const int* bootstrap_slot_to_pool_index, // [num_slots], nullable with keys
+    const uint32_t* device_atom_entry_ids,       // [row_tokens], row-local entry id
+    const double* device_pool_numeric_float_values, // [num_pool_atoms]
+    const int64_t* device_pool_numeric_int_values,  // [num_pool_atoms]
+    const uint8_t* device_pool_numeric_kinds,       // [num_pool_atoms]
+    const int32_t* device_slot_map,                 // [row_tokens]
+    const float* selector_candidate_keys,           // [num_pool_atoms, d_model]
+    const int* bootstrap_slot_to_pool_index,        // [num_slots]
+    int row_pool_begin,
+    int row_pool_end,
     int num_pool_atoms,
     int row_tokens,
     cudaStream_t stream
