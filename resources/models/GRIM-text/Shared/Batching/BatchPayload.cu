@@ -591,6 +591,8 @@ void materializeBootstrapSlotPoolMap(
         static_cast<std::size_t>(payload.batch_size) *
             static_cast<std::size_t>(execution_num_slots),
         -1);
+    std::vector<int> bootstrap_slot_token_positions(
+        payload.bootstrap_slot_to_pool_index.size(), -1);
 
     for (int token_pos = 0; token_pos < payload.total_tokens; ++token_pos) {
         const int slot = payload.token_to_slot_map[static_cast<std::size_t>(token_pos)];
@@ -630,12 +632,20 @@ void materializeBootstrapSlotPoolMap(
                 std::to_string(row) + " selector-pool window");
         }
 
-        // Preserve the existing bootstrap contract: scan left-to-right and let
-        // the final authored occurrence bound to a slot win.
-        payload.bootstrap_slot_to_pool_index[
+        const std::size_t bridge_index =
             static_cast<std::size_t>(row) *
                 static_cast<std::size_t>(execution_num_slots) +
-            static_cast<std::size_t>(slot)] = pool_index;
+            static_cast<std::size_t>(slot);
+        const int prior_token_pos = bootstrap_slot_token_positions[bridge_index];
+        if (prior_token_pos >= 0) {
+            throw std::runtime_error(
+                std::string(caller) + ": row " + std::to_string(row) +
+                " maps token positions " + std::to_string(prior_token_pos) + " and " +
+                std::to_string(token_pos) + " to duplicate execution slot " +
+                std::to_string(slot));
+        }
+        bootstrap_slot_token_positions[bridge_index] = token_pos;
+        payload.bootstrap_slot_to_pool_index[bridge_index] = pool_index;
     }
 }
 
@@ -1181,6 +1191,8 @@ BatchPayload buildInferenceBatchPayload(
                 std::to_string(execution_num_scratch_slots) +
                 " must be in [0, execution_num_slots)");
         }
+        std::vector<int> slot_token_positions(
+            static_cast<std::size_t>(execution_num_slots), -1);
         for (int t = 0; t < seq_len; ++t) {
             const int32_t slot = token_to_slot_map[static_cast<size_t>(t)];
             if (slot != -1) {
@@ -1191,6 +1203,16 @@ BatchPayload buildInferenceBatchPayload(
                         std::to_string(execution_num_scratch_slots) + ", " +
                         std::to_string(execution_num_slots) + ") or -1");
                 }
+                const int prior_token_pos =
+                    slot_token_positions[static_cast<std::size_t>(slot)];
+                if (prior_token_pos >= 0) {
+                    throw std::runtime_error(
+                        "buildInferenceBatchPayload: token positions " +
+                        std::to_string(prior_token_pos) + " and " +
+                        std::to_string(t) + " map to duplicate execution slot " +
+                        std::to_string(slot));
+                }
+                slot_token_positions[static_cast<std::size_t>(slot)] = t;
             }
         }
     }

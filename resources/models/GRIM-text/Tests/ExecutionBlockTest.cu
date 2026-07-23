@@ -506,9 +506,7 @@ bool testSelectorExecutionBootstrapMetadata(std::string& message) {
     const std::vector<uint32_t> atom_flags{
         integer_entry->flags, float_entry->flags, integer_entry->flags};
     const std::vector<uint32_t> atom_entry_ids{integer_id, float_id, integer_id};
-    // Slot 3 is deliberately rebound: the bridge must match ExecutionBlock's
-    // existing left-to-right bootstrap contract, where the final occurrence wins.
-    const std::vector<int32_t> slot_map{3, 3, 4};
+    const std::vector<int32_t> slot_map{3, 4, 5};
 
     auto payload = GRIM::Batching::buildInferenceBatchPayload(
         token_ids,
@@ -530,15 +528,17 @@ bool testSelectorExecutionBootstrapMetadata(std::string& message) {
                  "bridge carries execution slot geometry");
     EB_ASSERT_EQ(static_cast<int>(payload.bootstrap_slot_to_pool_index.size()), 8,
                  "bridge is one row by execution slots");
-    EB_ASSERT_EQ(payload.bootstrap_slot_to_pool_index[3], 1,
-                 "rebound slot resolves to final token occurrence's selector candidate");
-    EB_ASSERT_EQ(payload.bootstrap_slot_to_pool_index[4], 0,
+    EB_ASSERT_EQ(payload.bootstrap_slot_to_pool_index[3], 0,
+                 "first slot preserves its selector candidate identity");
+    EB_ASSERT_EQ(payload.bootstrap_slot_to_pool_index[4], 1,
                  "second slot preserves its selector candidate identity");
+    EB_ASSERT_EQ(payload.bootstrap_slot_to_pool_index[5], 0,
+                 "third slot may reference the same candidate through a distinct token");
     EB_ASSERT_EQ(payload.bootstrap_slot_to_pool_index[2], -1,
                  "unbound slot remains explicitly unmapped");
 
     auto invalid = payload;
-    invalid.bootstrap_slot_to_pool_index[4] = 1;
+    invalid.bootstrap_slot_to_pool_index[4] = 0;
     bool threw = false;
     try {
         invalid.validate("testSelectorExecutionBootstrapMetadata");
@@ -546,6 +546,30 @@ bool testSelectorExecutionBootstrapMetadata(std::string& message) {
         threw = true;
     }
     EB_ASSERT_TRUE(threw, "validation rejects selector/slot identity disagreement");
+
+    bool duplicate_slot_threw = false;
+    try {
+        (void)GRIM::Batching::buildInferenceBatchPayload(
+            token_ids,
+            numeric_values,
+            atom_mask,
+            atom_flags,
+            atom_table,
+            atom_entry_ids,
+            /*token_to_slot_map=*/{3, 3, 4},
+            /*vocab_size=*/1024,
+            /*batch_capacity=*/1,
+            /*max_cached_seq_len=*/16,
+            /*execution_num_slots=*/8,
+            /*execution_num_scratch_slots=*/2,
+            /*number_encoder_digit_slots=*/16,
+            /*number_encoder_max_abs_pow10=*/32);
+    } catch (const std::runtime_error&) {
+        duplicate_slot_threw = true;
+    }
+    EB_ASSERT_TRUE(
+        duplicate_slot_threw,
+        "inference payload construction rejects duplicate bootstrap slot bindings");
     return true;
 }
 
@@ -620,8 +644,15 @@ bool testSelectorExecutionForwardBridge(std::string& message) {
         const std::vector<int> h_slot_to_pool{-1, -1, 0, 1};
         Batching::BatchPayload payload;
         payload.batch_size = 1;
+        payload.max_seq_len = static_cast<int>(h_slot_map.size());
+        payload.total_tokens = payload.max_seq_len;
+        payload.seq_lengths = {payload.max_seq_len};
+        payload.token_to_slot_map = h_slot_map;
+        payload.num_pool_atoms = pool_atoms;
+        payload.row_atom_offset = {0, pool_atoms};
         payload.execution_slot_count = V;
         payload.bootstrap_slot_to_pool_index = h_slot_to_pool;
+        Batching::BatchDeviceBindings bindings;
         double* d_pool_numeric_float_values = nullptr;
         int64_t* d_pool_numeric_int_values = nullptr;
         uint8_t* d_pool_numeric_kinds = nullptr;
@@ -676,22 +707,23 @@ bool testSelectorExecutionForwardBridge(std::string& message) {
             h_slot_to_pool.size() * sizeof(int),
             cudaMemcpyHostToDevice,
             stream);
+        bindings.d_atom_entry_ids = d_atom_entry_ids;
+        bindings.d_pool_numeric_float_values = d_pool_numeric_float_values;
+        bindings.d_pool_numeric_int_values = d_pool_numeric_int_values;
+        bindings.d_pool_numeric_kinds = d_pool_numeric_kinds;
+        bindings.d_token_to_slot_map = d_slot_map;
+        bindings.d_bootstrap_slot_to_pool_index = d_slot_to_pool;
+        bindings.num_pool_atoms = pool_atoms;
+        bindings.execution_slot_count = V;
 
         executionBlockBootstrapMemoryFromSlotMap(
             hp,
             memory,
             params,
-            d_atom_entry_ids,
-            d_pool_numeric_float_values,
-            d_pool_numeric_int_values,
-            d_pool_numeric_kinds,
-            d_slot_map,
+            payload,
+            bindings,
+            /*batch_row=*/0,
             candidate_keys.data,
-            d_slot_to_pool,
-            /*row_pool_begin=*/0,
-            /*row_pool_end=*/pool_atoms,
-            pool_atoms,
-            static_cast<int>(h_slot_map.size()),
             stream);
 
         std::vector<float> h_values(static_cast<size_t>(V), 0.0f);
@@ -780,17 +812,10 @@ bool testSelectorExecutionForwardBridge(std::string& message) {
                 hp,
                 memory,
                 params,
-                d_atom_entry_ids,
-                d_pool_numeric_float_values,
-                d_pool_numeric_int_values,
-                d_pool_numeric_kinds,
-                d_slot_map,
+                payload,
+                bindings,
+                /*batch_row=*/0,
                 candidate_keys.data,
-                d_slot_to_pool,
-                /*row_pool_begin=*/0,
-                /*row_pool_end=*/pool_atoms,
-                pool_atoms,
-                static_cast<int>(h_slot_map.size()),
                 stream);
         } catch (const std::runtime_error&) {
             invalid_pool_identity_threw = true;

@@ -899,18 +899,10 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                         execution_hp,
                         memory,
                         *execution_block_parameters,
-                        request.bindings->d_atom_entry_ids + row_offset,
-                        request.bindings->d_pool_numeric_float_values,
-                        request.bindings->d_pool_numeric_int_values,
-                        request.bindings->d_pool_numeric_kinds,
-                        request.bindings->d_token_to_slot_map + row_offset,
+                        payload,
+                        *request.bindings,
+                        b,
                         forward_outputs.selector_candidate_keys.data,
-                        request.bindings->d_bootstrap_slot_to_pool_index +
-                            static_cast<size_t>(b) * execution_hp.num_slots,
-                        payload.row_atom_offset[static_cast<size_t>(b)],
-                        payload.row_atom_offset[static_cast<size_t>(b) + 1],
-                        request.bindings->num_pool_atoms,
-                        row_len,
                         request.stream);
 
                     bool stopped = false;
@@ -1130,8 +1122,8 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
 
                     auto& M_b = forward_outputs.exec_memories[b];
 
-                    const int tok_off = b * payload.max_seq_len;
-                    const int row_len = requirePayloadRowLength(payload, b, "ModelForward ExecutionBlock bootstrap");
+                    requirePayloadRowLength(
+                        payload, b, "ModelForward ExecutionBlock bootstrap");
 
                     if (!request.bindings || !request.bindings->d_token_to_slot_map
                         || !request.bindings->d_atom_entry_ids
@@ -1154,18 +1146,11 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                         execution_hp,
                         M_b,
                         *execution_block_parameters,
-                        request.bindings->d_atom_entry_ids + tok_off,
-                        request.bindings->d_pool_numeric_float_values,
-                        request.bindings->d_pool_numeric_int_values,
-                        request.bindings->d_pool_numeric_kinds,
-                        request.bindings->d_token_to_slot_map + tok_off,
+                        payload,
+                        *request.bindings,
+                        b,
                         forward_outputs.selector_candidate_keys.data,
-                        request.bindings->d_bootstrap_slot_to_pool_index +
-                            static_cast<size_t>(b) * execution_hp.num_slots,
-                        payload.row_atom_offset[static_cast<size_t>(b)],
-                        payload.row_atom_offset[static_cast<size_t>(b) + 1],
-                        request.bindings->num_pool_atoms,
-                        row_len, request.stream);
+                        request.stream);
 
                     if (payload.teacher_step_mask.empty()
                         || static_cast<int>(payload.teacher_step_mask.size()) <= b) {

@@ -557,6 +557,7 @@ struct BatchPayload {
             }
 
             std::vector<int> expected(expected_size, -1);
+            std::vector<int> bootstrap_slot_token_positions(expected_size, -1);
             for (int token_pos = 0; token_pos < total_tokens; ++token_pos) {
                 const int slot = token_to_slot_map[static_cast<std::size_t>(token_pos)];
                 if (slot < 0) {
@@ -593,11 +594,21 @@ struct BatchPayload {
                         std::to_string(local_entry) + " outside row " +
                         std::to_string(row) + " selector-pool window");
                 }
-                // Match ExecutionBlock bootstrap semantics: later authored
-                // occurrences overwrite earlier occurrences of the same slot.
-                expected[static_cast<std::size_t>(row) *
-                             static_cast<std::size_t>(execution_slot_count) +
-                         static_cast<std::size_t>(slot)] = pool_index;
+                const std::size_t bridge_index =
+                    static_cast<std::size_t>(row) *
+                        static_cast<std::size_t>(execution_slot_count) +
+                    static_cast<std::size_t>(slot);
+                const int prior_token_pos =
+                    bootstrap_slot_token_positions[bridge_index];
+                if (prior_token_pos >= 0) {
+                    throw std::runtime_error(
+                        std::string(caller) + ": row " + std::to_string(row) +
+                        " maps token positions " + std::to_string(prior_token_pos) +
+                        " and " + std::to_string(token_pos) +
+                        " to duplicate execution slot " + std::to_string(slot));
+                }
+                bootstrap_slot_token_positions[bridge_index] = token_pos;
+                expected[bridge_index] = pool_index;
             }
             if (bootstrap_slot_to_pool_index != expected) {
                 throw std::runtime_error(

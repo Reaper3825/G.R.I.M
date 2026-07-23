@@ -182,24 +182,19 @@ void executionBlockStep(
 );
 
 //--------------------------------------------------//
-// Bootstrap: gather literal values and NumberEncoder keys from the same
-// atom-entry pool identity, then populate ExecutionMemory (detached, no grad).
+// Bootstrap one payload row: gather literal values and NumberEncoder keys from
+// the same atom-entry pool identity, then populate ExecutionMemory (detached,
+// no grad). Row geometry and host semantics come from payload; device addresses
+// come from the bindings produced when that payload was uploaded.
 //--------------------------------------------------//
 void executionBlockBootstrapMemoryFromSlotMap(
     const HyperParameters::ExecutionBlockConstructionHP& hp,
     ExecutionMemory& M,
     ExecutionBlockParameterTensors& parameters,
-    const uint32_t* device_atom_entry_ids,       // [row_tokens], row-local entry id
-    const double* device_pool_numeric_float_values, // [num_pool_atoms]
-    const int64_t* device_pool_numeric_int_values,  // [num_pool_atoms]
-    const uint8_t* device_pool_numeric_kinds,       // [num_pool_atoms]
-    const int32_t* device_slot_map,                 // [row_tokens]
-    const float* selector_candidate_keys,           // [num_pool_atoms, d_model]
-    const int* bootstrap_slot_to_pool_index,        // [num_slots]
-    int row_pool_begin,
-    int row_pool_end,
-    int num_pool_atoms,
-    int row_tokens,
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
+    int batch_row,
+    const float* selector_candidate_keys,  // [payload.num_pool_atoms, d_model]
     cudaStream_t stream
 );
 

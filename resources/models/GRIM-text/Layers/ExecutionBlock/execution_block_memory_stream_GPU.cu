@@ -15,69 +15,59 @@ using Forward::ExecutionBlockStepOutput;
 
 constexpr float kResidualFusionScale = 0.7071067811865475f; // 1 / sqrt(2)
 
-// Bootstrap slots — last-token-wins semantics for duplicate slot mappings.
-// Multiple tokens may map to the same slot; we use atomicExch on valid_mask
-// (idempotent) and a two-pass approach: first mark valid, then a second kernel
-// writes values for only the highest-position token per slot (deterministic).
-__global__ void kernelBootstrapSlotMarkValid(
-    float* __restrict__ M_valid_mask,
-    int* __restrict__ slot_last_pos,
-    const int32_t* __restrict__ slot_map,
-    int total_tokens, int V
-) {
-    const int pos = blockIdx.x * blockDim.x + threadIdx.x;
-    if (pos >= total_tokens) return;
-    const int slot = slot_map[pos];
-    if (slot >= 0 && slot < V) {
-        M_valid_mask[slot] = 1.0f;  // idempotent — race-safe
-        atomicMax(&slot_last_pos[slot], pos);  // deterministic: highest position wins
-    }
-}
-
-__global__ void kernelBootstrapSlotWriteValues(
+// Bootstrap slots. The host boundary guarantees that each populated slot has
+// exactly one authored token binding, so each thread owns one distinct slot.
+__global__ void kernelBootstrapSlots(
     float* __restrict__ M_values,
+    float* __restrict__ M_valid_mask,
     const uint32_t* __restrict__ atom_entry_ids,
     const double* __restrict__ pool_numeric_float_values,
     const int64_t* __restrict__ pool_numeric_int_values,
     const uint8_t* __restrict__ pool_numeric_kinds,
+    const int32_t* __restrict__ slot_map,
     const int* __restrict__ bootstrap_slot_to_pool_index,
-    const int* __restrict__ slot_last_pos,
     int row_pool_begin,
     int row_pool_end,
     int num_pool_atoms,
     int* __restrict__ bridge_error,
+    int row_tokens,
     int V
 ) {
-    const int slot = blockIdx.x * blockDim.x + threadIdx.x;
-    if (slot >= V) return;
-    int pos = slot_last_pos[slot];
-    if (pos >= 0) {
-        const uint32_t local_entry = atom_entry_ids[pos];
-        const uint64_t pool_index_wide =
-            static_cast<uint64_t>(row_pool_begin) + static_cast<uint64_t>(local_entry);
-        if (local_entry == GRIM::Tokenizer::kAtomEntryNone ||
-            pool_index_wide >= static_cast<uint64_t>(row_pool_end) ||
-            pool_index_wide >= static_cast<uint64_t>(num_pool_atoms)) {
-            if (bridge_error) atomicCAS(bridge_error, 0, 1);
-            M_values[slot] = 0.0f;
-            return;
-        }
-        const int pool_index = static_cast<int>(pool_index_wide);
-        if (bootstrap_slot_to_pool_index[slot] != pool_index) {
-            if (bridge_error) atomicCAS(bridge_error, 0, 1);
-            M_values[slot] = 0.0f;
-            return;
-        }
+    const int pos = blockIdx.x * blockDim.x + threadIdx.x;
+    if (pos >= row_tokens) return;
+    const int slot = slot_map[pos];
+    if (slot < 0) return;
+    if (slot >= V) {
+        if (bridge_error) atomicCAS(bridge_error, 0, 1);
+        return;
+    }
 
-        const uint8_t kind = pool_numeric_kinds[pool_index];
-        if (kind == static_cast<uint8_t>(GRIM::Tokenizer::NumericPayloadKind::INTEGER)) {
-            M_values[slot] = static_cast<float>(pool_numeric_int_values[pool_index]);
-        } else if (kind == static_cast<uint8_t>(GRIM::Tokenizer::NumericPayloadKind::FLOAT)) {
-            M_values[slot] = static_cast<float>(pool_numeric_float_values[pool_index]);
-        } else {
-            if (bridge_error) atomicCAS(bridge_error, 0, 1);
-            M_values[slot] = 0.0f;
-        }
+    M_valid_mask[slot] = 1.0f;
+    const uint32_t local_entry = atom_entry_ids[pos];
+    const uint64_t pool_index_wide =
+        static_cast<uint64_t>(row_pool_begin) + static_cast<uint64_t>(local_entry);
+    if (local_entry == GRIM::Tokenizer::kAtomEntryNone ||
+        pool_index_wide >= static_cast<uint64_t>(row_pool_end) ||
+        pool_index_wide >= static_cast<uint64_t>(num_pool_atoms)) {
+        if (bridge_error) atomicCAS(bridge_error, 0, 1);
+        M_values[slot] = 0.0f;
+        return;
+    }
+    const int pool_index = static_cast<int>(pool_index_wide);
+    if (bootstrap_slot_to_pool_index[slot] != pool_index) {
+        if (bridge_error) atomicCAS(bridge_error, 0, 1);
+        M_values[slot] = 0.0f;
+        return;
+    }
+
+    const uint8_t kind = pool_numeric_kinds[pool_index];
+    if (kind == static_cast<uint8_t>(GRIM::Tokenizer::NumericPayloadKind::INTEGER)) {
+        M_values[slot] = static_cast<float>(pool_numeric_int_values[pool_index]);
+    } else if (kind == static_cast<uint8_t>(GRIM::Tokenizer::NumericPayloadKind::FLOAT)) {
+        M_values[slot] = static_cast<float>(pool_numeric_float_values[pool_index]);
+    } else {
+        if (bridge_error) atomicCAS(bridge_error, 0, 1);
+        M_values[slot] = 0.0f;
     }
 }
 
@@ -428,33 +418,66 @@ void executionBlockBootstrapMemoryFromSlotMap(
     const HyperParameters::ExecutionBlockConstructionHP& hp,
     ExecutionMemory& M,
     ExecutionBlockParameterTensors& parameters,
-    const uint32_t* device_atom_entry_ids,
-    const double* device_pool_numeric_float_values,
-    const int64_t* device_pool_numeric_int_values,
-    const uint8_t* device_pool_numeric_kinds,
-    const int32_t* device_slot_map,
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
+    int batch_row,
     const float* selector_candidate_keys,
-    const int* bootstrap_slot_to_pool_index,
-    int row_pool_begin,
-    int row_pool_end,
-    int num_pool_atoms,
-    int row_tokens,
     cudaStream_t stream)
 {
-    EXEC_CHECK(device_atom_entry_ids != nullptr,
-               "bootstrapMemoryFromSlotMap: device_atom_entry_ids is null");
-    EXEC_CHECK(device_pool_numeric_float_values != nullptr,
-               "bootstrapMemoryFromSlotMap: device_pool_numeric_float_values is null");
-    EXEC_CHECK(device_pool_numeric_int_values != nullptr,
-               "bootstrapMemoryFromSlotMap: device_pool_numeric_int_values is null");
-    EXEC_CHECK(device_pool_numeric_kinds != nullptr,
-               "bootstrapMemoryFromSlotMap: device_pool_numeric_kinds is null");
-    EXEC_CHECK(device_slot_map != nullptr, "bootstrapMemoryFromSlotMap: device_slot_map is null");
+    EXEC_CHECK(batch_row >= 0 && batch_row < payload.batch_size,
+               "bootstrapMemoryFromSlotMap: batch_row is out of payload bounds");
+    EXEC_CHECK(payload.max_seq_len > 0,
+               "bootstrapMemoryFromSlotMap: payload.max_seq_len must be positive");
+    EXEC_CHECK(payload.seq_lengths.size() == static_cast<size_t>(payload.batch_size),
+               "bootstrapMemoryFromSlotMap: payload.seq_lengths does not match batch_size");
+    EXEC_CHECK(payload.token_to_slot_map.size() == static_cast<size_t>(payload.total_tokens),
+               "bootstrapMemoryFromSlotMap: payload.token_to_slot_map does not match total_tokens");
+    EXEC_CHECK(payload.row_atom_offset.size()
+                   == static_cast<size_t>(payload.batch_size + 1),
+               "bootstrapMemoryFromSlotMap: payload.row_atom_offset does not match batch_size");
+    EXEC_CHECK(payload.execution_slot_count == hp.num_slots,
+               "bootstrapMemoryFromSlotMap: payload execution slot count does not match hp");
+    EXEC_CHECK(bindings.execution_slot_count == payload.execution_slot_count,
+               "bootstrapMemoryFromSlotMap: binding execution slot count does not match payload");
+    EXEC_CHECK(bindings.num_pool_atoms == payload.num_pool_atoms,
+               "bootstrapMemoryFromSlotMap: binding atom-entry pool count does not match payload");
+    EXEC_CHECK(bindings.d_atom_entry_ids != nullptr,
+               "bootstrapMemoryFromSlotMap: bindings.d_atom_entry_ids is null");
+    EXEC_CHECK(bindings.d_pool_numeric_float_values != nullptr,
+               "bootstrapMemoryFromSlotMap: bindings.d_pool_numeric_float_values is null");
+    EXEC_CHECK(bindings.d_pool_numeric_int_values != nullptr,
+               "bootstrapMemoryFromSlotMap: bindings.d_pool_numeric_int_values is null");
+    EXEC_CHECK(bindings.d_pool_numeric_kinds != nullptr,
+               "bootstrapMemoryFromSlotMap: bindings.d_pool_numeric_kinds is null");
+    EXEC_CHECK(bindings.d_token_to_slot_map != nullptr,
+               "bootstrapMemoryFromSlotMap: bindings.d_token_to_slot_map is null");
+    EXEC_CHECK(bindings.d_bootstrap_slot_to_pool_index != nullptr,
+               "bootstrapMemoryFromSlotMap: bindings.d_bootstrap_slot_to_pool_index is null");
+
+    const int row_offset = batch_row * payload.max_seq_len;
+    const int row_tokens = payload.seq_lengths[static_cast<size_t>(batch_row)];
+    const int row_pool_begin = payload.row_atom_offset[static_cast<size_t>(batch_row)];
+    const int row_pool_end = payload.row_atom_offset[static_cast<size_t>(batch_row) + 1];
+    const int num_pool_atoms = payload.num_pool_atoms;
+    const uint32_t* device_atom_entry_ids =
+        bindings.d_atom_entry_ids + row_offset;
+    const int32_t* device_slot_map =
+        bindings.d_token_to_slot_map + row_offset;
+    const int* bootstrap_slot_to_pool_index =
+        bindings.d_bootstrap_slot_to_pool_index
+            + static_cast<size_t>(batch_row) * payload.execution_slot_count;
+    const double* device_pool_numeric_float_values =
+        bindings.d_pool_numeric_float_values;
+    const int64_t* device_pool_numeric_int_values =
+        bindings.d_pool_numeric_int_values;
+    const uint8_t* device_pool_numeric_kinds =
+        bindings.d_pool_numeric_kinds;
+
     EXEC_CHECK(row_tokens > 0, "bootstrapMemoryFromSlotMap: row_tokens must be positive");
+    EXEC_CHECK(row_tokens <= payload.max_seq_len,
+               "bootstrapMemoryFromSlotMap: row_tokens exceeds payload.max_seq_len");
     EXEC_CHECK(selector_candidate_keys != nullptr,
                "bootstrapMemoryFromSlotMap: selector_candidate_keys is null");
-    EXEC_CHECK(bootstrap_slot_to_pool_index != nullptr,
-               "bootstrapMemoryFromSlotMap: bootstrap_slot_to_pool_index is null");
     EXEC_CHECK(num_pool_atoms > 0,
                "bootstrapMemoryFromSlotMap: atom-entry pool must contain at least one entry");
     EXEC_CHECK(row_pool_begin >= 0 && row_pool_begin < row_pool_end,
@@ -464,6 +487,25 @@ void executionBlockBootstrapMemoryFromSlotMap(
     auto& params = parameters;
 
     const int V = hp.num_slots;
+    std::vector<int> slot_token_positions(static_cast<size_t>(V), -1);
+    for (int token_pos = 0; token_pos < row_tokens; ++token_pos) {
+        const int slot = payload.token_to_slot_map[
+            static_cast<size_t>(row_offset + token_pos)];
+        EXEC_CHECK(slot >= -1 && slot < V,
+                   "bootstrapMemoryFromSlotMap: token_to_slot_map contains an out-of-range slot");
+        if (slot < 0) {
+            continue;
+        }
+        const int prior_token_pos = slot_token_positions[static_cast<size_t>(slot)];
+        if (prior_token_pos >= 0) {
+            throw std::runtime_error(
+                "bootstrapMemoryFromSlotMap: batch row " + std::to_string(batch_row) +
+                " maps token positions " + std::to_string(prior_token_pos) + " and " +
+                std::to_string(token_pos) + " to duplicate slot " + std::to_string(slot));
+        }
+        slot_token_positions[static_cast<size_t>(slot)] = token_pos;
+    }
+
     int* d_bridge_error = nullptr;
     cudaMallocOrThrow(
         reinterpret_cast<void**>(&d_bridge_error),
@@ -471,35 +513,23 @@ void executionBlockBootstrapMemoryFromSlotMap(
         "bootstrap_selector_bridge_error");
     CUDA_CHECK(cudaMemsetAsync(d_bridge_error, 0, sizeof(int), stream));
 
-    // Two-pass bootstrap: resolve race condition when multiple tokens map to same slot.
-    // Pass 1: mark valid + find highest-position token per slot (deterministic last-writer-wins).
-    int* d_slot_last_pos = nullptr;
-    cudaMallocOrThrow(reinterpret_cast<void**>(&d_slot_last_pos), V * sizeof(int), "bootstrap_slot_last_pos");
-    CUDA_CHECK(cudaMemsetAsync(d_slot_last_pos, 0xFF, V * sizeof(int), stream));  // fill with -1
-
     const int blocks = (row_tokens + kBlockSize - 1) / kBlockSize;
-    kernelBootstrapSlotMarkValid<<<blocks, kBlockSize, 0, stream>>>(
-        M.valid_mask.data, d_slot_last_pos,
-        device_slot_map, row_tokens, V);
-    CUDA_CHECK_KERNEL();
-
-    // Pass 2: write values — only the highest-position token per slot writes.
-    const int slot_blocks = (V + kBlockSize - 1) / kBlockSize;
-    kernelBootstrapSlotWriteValues<<<slot_blocks, kBlockSize, 0, stream>>>(
+    kernelBootstrapSlots<<<blocks, kBlockSize, 0, stream>>>(
         M.values.data,
+        M.valid_mask.data,
         device_atom_entry_ids,
         device_pool_numeric_float_values,
         device_pool_numeric_int_values,
         device_pool_numeric_kinds,
+        device_slot_map,
         bootstrap_slot_to_pool_index,
-        d_slot_last_pos,
         row_pool_begin,
         row_pool_end,
         num_pool_atoms,
         d_bridge_error,
+        row_tokens,
         V);
     CUDA_CHECK_KERNEL();
-    cudaFreeAsync(d_slot_last_pos, stream);
 
     const int dm = hp.d_model;
     const int dk = hp.d_key;
