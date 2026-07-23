@@ -1,29 +1,18 @@
 #pragma once
 //======================================================//
 //  ArgSelectorCeGradFn.hpp
-//  Selection cross-entropy for the arg/option selector.
+//  Backward node for the arg/option selector cross-entropy loss.
 //
-//  Forward:  loss = -(1/N) Σ_{t: target[t]>=0} log softmax(selection_logits[t,:])[target[t]]
-//            over num_classes = num_pool_atoms candidates; out-of-row-window
-//            candidates are already masked to -inf in selection_logits, so they
-//            contribute ~0 probability. N = num_valid supervised rows.
 //  Backward: grad_logits[t,e] = (softmax[t,e] - onehot(target[t])) * grad/N
 //            (0 for unsupervised rows). The exact softmax-CE gradient.
 //
-//  Self-contained (no log_softmax/NLL coupling): the forward saves the softmax
-//  probabilities and the backward reconstructs the gradient directly, propagating
-//  to selection_logits' upstream grad_fn — the same chaining pattern as
-//  ScaleScalarGradFn.
-//
-//  Owns:
-//    - struct ArgSelectorCeGradFn   (declared here)
-//    - autograd::argSelectorLoss(...) (forward op; defined in .cu)
+//  The forward loss operation lives in Shared/Loss/ComputeLoss/ArgSelectorLoss.
 //======================================================//
 
 #include "../TensorContract_GPU.hpp"
 
-#include <memory>
 #include <cuda_runtime.h>
+#include <memory>
 
 namespace GRIM {
 namespace autograd {
@@ -46,15 +35,6 @@ struct ArgSelectorCeGradFn : public GradFn {
                     const Batching::BatchDeviceBindings* backward_bindings) override;
     void release_saved() override;
 };
-
-// Scalar selection cross-entropy. d_targets is the per-row batch-global candidate
-// index (or -1 to ignore). num_valid is the count of supervised rows (>= 0).
-Tensor argSelectorLoss(const Tensor& selection_logits,
-                       const int* d_targets,
-                       int total_tokens,
-                       int num_classes,
-                       int num_valid,
-                       cudaStream_t stream);
 
 }  // namespace autograd
 }  // namespace GRIM

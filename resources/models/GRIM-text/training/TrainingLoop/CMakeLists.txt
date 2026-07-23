@@ -444,6 +444,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/Activations/GELU/GELU.cu
     ../../Shared/StreamController/StreamController_GPU.cu
     ../../Shared/Loss/ComputeLoss/AutogradLoss.cu
+    ../../Shared/Loss/ComputeLoss/ArgSelectorLoss.cu
     ../../Shared/Loss/ComputeLoss/CrossEntropyNLL.cu
     ../../Shared/Loss/LossSignals/LossSignals.cu
 )

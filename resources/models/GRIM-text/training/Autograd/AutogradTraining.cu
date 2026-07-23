@@ -16,7 +16,7 @@
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
-#include "../../Shared/TensorContract/GradFns/ArgSelectorCeGradFn.hpp"
+#include "../../Shared/Loss/ComputeLoss/ArgSelectorLoss.hpp"
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../../Shared/UnigramByte/Unigram.hpp"
 #include "../../Shared/Execution/ExecutionPayloadValidation.hpp"
