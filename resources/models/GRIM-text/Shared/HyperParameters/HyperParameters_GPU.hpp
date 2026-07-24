@@ -467,6 +467,14 @@ struct LanguageModelConfig {
     int   number_encoder_d_hidden = 0;
     int   number_encoder_max_abs_pow10 = 0;
 
+    // SlotSeedEncoder (contextual numeric-placeholder -> execution-slot seed).
+    // Consumes the causal hidden state at authored <INT>/<FLOAT> positions and
+    // constructs the learned d_model representation used to initialize slots.
+    bool  slot_seed_encoder_enabled = false;
+    int   slot_seed_encoder_d_hidden = 0;
+    bool  slot_seed_encoder_bias_enabled = false;
+    bool  slot_seed_encoder_type_embedding_enabled = false;
+
     // Execution-first structured CE loss config (Step X / Y multipliers)
     float step_x_multiplier = 0.0f;
     float step_y_multiplier = 0.0f;
@@ -1659,6 +1667,19 @@ inline void validateRootConfigDocument(
                 " exceeds the int16 pow10 capacity of arg_number digit bindings");
         }
     }
+    if (params.slot_seed_encoder_enabled) {
+        if (!params.use_atom_data) {
+            throw std::runtime_error(
+                std::string(caller) + ": slot_seed_encoder_enabled=true requires use_atom_data=true");
+        }
+        if (!params.execution_block_enabled) {
+            throw std::runtime_error(
+                std::string(caller) + ": slot_seed_encoder_enabled=true requires execution_block_enabled=true");
+        }
+        validatePositiveFields(params, {
+            validationField("slot_seed_encoder_d_hidden", &LanguageModelConfig::slot_seed_encoder_d_hidden)
+        }, caller);
+    }
     if (params.generation_strategy == SamplingStrategy::UNSPECIFIED) {
         throw std::runtime_error(std::string(caller) + ": generation_strategy is UNSPECIFIED");
     }
@@ -2045,6 +2066,10 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(number_encoder_max_digit_slots);
     GRIM_LOAD_CONFIG_FIELD(number_encoder_d_hidden);
     GRIM_LOAD_CONFIG_FIELD(number_encoder_max_abs_pow10);
+    GRIM_LOAD_CONFIG_FIELD(slot_seed_encoder_enabled);
+    GRIM_LOAD_CONFIG_FIELD(slot_seed_encoder_d_hidden);
+    GRIM_LOAD_CONFIG_FIELD(slot_seed_encoder_bias_enabled);
+    GRIM_LOAD_CONFIG_FIELD(slot_seed_encoder_type_embedding_enabled);
     GRIM_LOAD_CONFIG_FIELD(single_stream_mode);
     GRIM_LOAD_CONFIG_FIELD(disable_async_frees);
     GRIM_LOAD_CONFIG_FIELD(synchronize_after_kernels);
@@ -2304,6 +2329,7 @@ inline void validateRootBiasConfig(
     require_global("ffn_output_bias_enabled");
     require_global("number_encoder_contribution_bias_enabled");
     require_global("number_encoder_global_bias_enabled");
+    require_global("slot_seed_encoder_bias_enabled");
     require_global("lm_head_bias_enabled");
     require_global("execution_block_decode_bias_enabled");
     require_global("execution_block_value_embedding_bias_enabled");
@@ -2531,6 +2557,10 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(number_encoder_max_digit_slots);
     GRIM_WRITE_FINAL_CONFIG_FIELD(number_encoder_d_hidden);
     GRIM_WRITE_FINAL_CONFIG_FIELD(number_encoder_max_abs_pow10);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(slot_seed_encoder_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(slot_seed_encoder_d_hidden);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(slot_seed_encoder_bias_enabled);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(slot_seed_encoder_type_embedding_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(step_x_multiplier);
     GRIM_WRITE_FINAL_CONFIG_FIELD(step_y_multiplier);
     GRIM_WRITE_FINAL_CONFIG_FIELD(step_y_overrides_x);

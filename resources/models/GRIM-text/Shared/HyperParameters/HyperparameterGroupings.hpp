@@ -459,6 +459,17 @@ struct NumberEncoderConstructionHP {
     bool global_bias_enabled = false;
 };
 
+// SlotSeedEncoder construction view — contextual numeric-placeholder path.
+// The encoder consumes the causal hidden state at an authored <INT>/<FLOAT>
+// position and produces the d_model seed used to initialize its execution slot.
+struct SlotSeedEncoderConstructionHP {
+    bool enabled = false;
+    int d_model = 0;
+    int d_hidden = 0;
+    bool bias_enabled = false;
+    bool type_embedding_enabled = false;
+};
+
 // Unified model-side config payload for future Phase2 handoff -> Phase2 training.
 // Immutable read view rooted on AiConfigSnapshot (raw document owner) and
 // assembled from training.config authored leaves plus explicit derived formulas.
@@ -557,6 +568,12 @@ struct ModelHP {
     int number_encoder_d_hidden = 0;
     int number_encoder_max_digit_slots = 0;
     int number_encoder_max_abs_pow10 = 0;
+
+    bool slot_seed_encoder_enabled = false;
+    int slot_seed_encoder_d_model = 0;
+    int slot_seed_encoder_d_hidden = 0;
+    bool slot_seed_encoder_bias_enabled = false;
+    bool slot_seed_encoder_type_embedding_enabled = false;
 
     PositionalEncodingType positional_encoding = PositionalEncodingType::UNSPECIFIED;
     bool structured_ce_enabled = false;
@@ -1358,6 +1375,13 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     view.number_encoder_max_digit_slots = requireInt("number_encoder_max_digit_slots");
     view.number_encoder_max_abs_pow10 = requireInt("number_encoder_max_abs_pow10");
 
+    view.slot_seed_encoder_enabled = requireBool("slot_seed_encoder_enabled");
+    view.slot_seed_encoder_d_model = d_model;
+    view.slot_seed_encoder_d_hidden = requireInt("slot_seed_encoder_d_hidden");
+    view.slot_seed_encoder_bias_enabled = requireBool("slot_seed_encoder_bias_enabled");
+    view.slot_seed_encoder_type_embedding_enabled =
+        requireBool("slot_seed_encoder_type_embedding_enabled");
+
     view.positional_encoding = parsePositionalEncodingFlags(
         requireBool("use_rope"), requireBool("use_alibi"));
     view.structured_ce_enabled = requireBool("execution_block_structured_ce_enabled");
@@ -1509,6 +1533,20 @@ inline NumberEncoderConstructionHP numberEncoderConstructionHP(
     view.pow10_buckets = 2 * model.number_encoder_max_abs_pow10 + 1;
     view.contribution_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "number_encoder_contribution_bias_enabled");
     view.global_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "number_encoder_global_bias_enabled");
+    return view;
+}
+
+inline SlotSeedEncoderConstructionHP slotSeedEncoderConstructionHP(
+    const GRIM::Config::AiConfigSnapshot& snapshot)
+{
+    const auto model = modelHP(snapshot);
+
+    SlotSeedEncoderConstructionHP view;
+    view.enabled = model.slot_seed_encoder_enabled;
+    view.d_model = model.slot_seed_encoder_d_model;
+    view.d_hidden = model.slot_seed_encoder_d_hidden;
+    view.bias_enabled = model.slot_seed_encoder_bias_enabled;
+    view.type_embedding_enabled = model.slot_seed_encoder_type_embedding_enabled;
     return view;
 }
 

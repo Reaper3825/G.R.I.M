@@ -865,7 +865,7 @@ Tensor encodeAtomEntryPoolKeys(
     if (!hp.enabled) {
         throw std::runtime_error("encodeAtomEntryPoolKeys: called while hp.enabled=false");
     }
-    if (num_pool_atoms <= 0) {+
+    if (num_pool_atoms <= 0) {
         throw std::runtime_error("encodeAtomEntryPoolKeys: num_pool_atoms must be > 0");
     }
     if (!stream) {
