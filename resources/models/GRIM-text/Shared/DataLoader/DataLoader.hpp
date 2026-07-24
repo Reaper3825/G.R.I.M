@@ -16,8 +16,10 @@ namespace GRIM {
 //   with the shared vocab unless `force_rebuild_vocab=true` explicitly allows
 //   tokenizer retraining.
 // - Writes GRMT sequences with per-token numeric side-channel data.
-// - Loads `concept_blocks.fb` via ConceptExecutionSequenceBuilder:
-//   canonical structured execution records with paired bootstrap/teacher payloads.
+// - Loads `concept_blocks.fb`, renders canonical learning text, and calls
+//   UniByte's tokenization entry point once per sequence.
+// - Structured execution compilation is intentionally stubbed until state
+//   atoms bind directly from AtomTable entries to execution slots.
 // - Optionally filtered by `curriculum_manifest.json` (concept_block_ids).
 //
 // Returns true on success. Throws on fatal errors (missing concept blocks).

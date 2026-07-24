@@ -11,33 +11,15 @@
 
 #include <nlohmann/json.hpp>
 
-#include <cmath>
 #include <sstream>
 #include <string>
-#include <vector>
 
 namespace GRIM::ConceptCanonical {
 
-struct LiteralSpan {
-    int binding_index = -1;
-    size_t byte_start = 0;
-    size_t byte_end = 0;
-};
-
 struct RenderResult {
     std::string text;
-    std::vector<LiteralSpan> literal_spans;
     size_t execution_prompt_byte_end = 0;
 };
-
-inline std::string formatNumber(double value) {
-    if (value == std::floor(value) && std::fabs(value) < 1e12) {
-        return std::to_string(static_cast<long long>(value));
-    }
-    std::ostringstream out;
-    out << value;
-    return out.str();
-}
 
 inline RenderResult render(const nlohmann::json& j) {
     RenderResult result;
@@ -49,27 +31,6 @@ inline RenderResult render(const nlohmann::json& j) {
         result.execution_prompt_byte_end = static_cast<size_t>(out.tellp());
     }
 
-    if (j.contains("state_0") && j["state_0"].is_object()) {
-        const auto& state = j["state_0"];
-        out << "STATE0";
-        if (state.contains("type") && state["type"].is_string()
-            && !state["type"].get<std::string>().empty()) {
-            out << " type=" << state["type"].get<std::string>();
-        }
-        if (state.contains("atoms") && state["atoms"].is_array()) {
-            int binding_index = 0;
-            for (const auto& atom : state["atoms"]) {
-                if (!atom.is_number()) continue;
-                out << " ";
-                const size_t byte_start = static_cast<size_t>(out.tellp());
-                out << formatNumber(atom.get<double>());
-                const size_t byte_end = static_cast<size_t>(out.tellp());
-                result.literal_spans.push_back({binding_index++, byte_start, byte_end});
-            }
-        }
-        out << "\n";
-    }
-
     const nlohmann::json* explanation = nullptr;
     if (j.contains("explanation") && j["explanation"].is_array()) {
         explanation = &j["explanation"];
@@ -79,22 +40,6 @@ inline RenderResult render(const nlohmann::json& j) {
     if (explanation) {
         for (const auto& step : *explanation) {
             if (step.is_string()) out << "EXP: " << step.get<std::string>() << "\n";
-        }
-    }
-
-    if (j.contains("execution") && j["execution"].is_array()) {
-        for (const auto& step : j["execution"]) {
-            if (!step.is_object()) continue;
-            out << "EXEC " << step.value("op", std::string());
-            if (step.contains("args") && step["args"].is_array()) {
-                for (const auto& arg : step["args"]) {
-                    if (arg.is_number()) out << " " << formatNumber(arg.get<double>());
-                }
-            }
-            if (step.contains("result") && step["result"].is_number()) {
-                out << " => " << formatNumber(step["result"].get<double>());
-            }
-            out << "\n";
         }
     }
 

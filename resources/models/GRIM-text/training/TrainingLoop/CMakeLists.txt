@@ -603,7 +603,6 @@ add_executable(train_gpu
     ../metrics_collector.hpp
     ../TrainingEvents.hpp
     ../../Shared/DataLoader/DataLoader.cu
-    ../../Shared/DataLoader/ConceptExecutionSequenceBuilder.cu
     ../../Shared/SoftRestart/SoftRestart.cu
 )
 
@@ -814,7 +813,6 @@ add_executable(train_tokenizer
     ../Phases/ConfigDump.cu
     ../Phases/DataStatsDump.cu
     ../../Shared/DataLoader/DataLoader.cu
-    ../../Shared/DataLoader/ConceptExecutionSequenceBuilder.cu
 )
 
 set_target_properties(train_tokenizer PROPERTIES

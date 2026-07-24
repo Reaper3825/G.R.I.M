@@ -26,6 +26,7 @@
 
 #include <nlohmann/json.hpp>
 #include "../../../../../DataCollection/concept_block_generated.h"
+#include "../../../../../DataCollection/concept_block_canonical.hpp"
 #include "../GRMT/GrmtFormat.hpp"
 #include "../LogRecorder/LogRecorder.hpp"
 #include "../UnigramByte/TokenLayout.hpp"
@@ -36,7 +37,6 @@
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"  // also pulls in control/ai_config_paths.hpp transitively (correct order)
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../Batching/BatchPayload.hpp"
-#include "ConceptExecutionSequenceBuilder.hpp"
 #include "../../training/Phases/Startup/SlidingWindow.hpp"
 #include "../../training/Phases/ConfigDump.hpp"
 #include "../../training/Phases/Phase1_Startup.hpp"
@@ -48,17 +48,15 @@ namespace GRIM {
 // ─── Concept blocks corpus loading ──────────────────────────────────────────
 //
 // Loads concept_blocks.fb (with a legacy JSONL fallback during rollout) and
-// returns the canonical JSON objects consumed by the sequence builder.
-// The canonical builder (ConceptExecutionSequenceBuilder) handles all
-// structured execution record building, text rendering, and payload
-// compilation — no __SLOTS__ debug path.
+// returns canonical JSON objects. Canonical learning text is rendered here
+// and sent directly through UniByte's public tokenization entry point.
 //
 namespace {
 
 using json = nlohmann::json;
 
 // Curriculum filter returned by loadCurriculumFilter().
-// concept_ids: blocks that get canonical Q:/STATE0/EXP:/EXEC/A: formatting.
+// concept_ids: blocks that get canonical Q:/EXP:/A: formatting.
 // plaintext_ids: blocks treated as raw text (pretraining mode).
 // When has_filter is false, all entries are included as concept blocks.
 struct CurriculumFilter {
@@ -529,9 +527,9 @@ bool PrepareTrainingDataFromCache(
 			                    (curriculum_filter.has_filter &&
 			                     curriculum_filter.plaintext_ids.count(entry_id) > 0);
 			if (is_plaintext)
-				vocab_corpus.push_back(GRIM::DataLoader::renderPlainText(cj, false));
+				vocab_corpus.push_back(GRIM::ConceptCanonical::renderPlainText(cj));
 			else
-				vocab_corpus.push_back(GRIM::DataLoader::renderCanonicalText(cj));
+				vocab_corpus.push_back(GRIM::ConceptCanonical::render(cj).text);
 		}
 		if (!tokenizer.unigramLM().trainFromCorpus(vocab_corpus, build_hp)) {
 			throw std::runtime_error("[DataLoader] tokenizer training returned false; refusing to encode GRMT without a finalized tokenizer runtime state");
@@ -591,20 +589,10 @@ bool PrepareTrainingDataFromCache(
 	          << " concept sequences..." << std::endl << std::flush;
 	std::vector<TokenizedSequence> all_tokens;
 	all_tokens.reserve(concept_json_entries.size());
-	int concept_exec_base_slot = 0;
-	if (const char* ev = std::getenv("GRIM_CONCEPT_EXEC_BASE_SLOT")) {
-		try {
-			concept_exec_base_slot = std::stoi(ev);
-		} catch (const std::exception& e) {
-			throw std::runtime_error(
-				"[DataLoader] GRIM_CONCEPT_EXEC_BASE_SLOT is not a valid integer: " +
-				std::string(ev) + " (" + e.what() + ")");
-		}
-	}
-	const int expected_exec_steps = tokenizer_hp.execution_block_num_steps;
 	size_t plaintext_count = 0;
 	size_t concept_build_failures = 0;
 	size_t selected_entries_skipped = 0;  // short text / encoder returned nullopt
+	bool warned_execution_bridge_stub = false;
 	for (const auto& cj : concept_json_entries) {
 		try {
 			std::string entry_id = cj.value("id", std::string());
@@ -614,7 +602,7 @@ bool PrepareTrainingDataFromCache(
 
 			if (is_plaintext) {
 				// ── Pretraining path: plain text, no execution payload ──
-				std::string text = GRIM::DataLoader::renderPlainText(cj, false);
+				std::string text = GRIM::ConceptCanonical::renderPlainText(cj);
 				if (text.size() < min_cleaned_text_length) { ++selected_entries_skipped; continue; }
 
 				auto seq = build_sequence(text);
@@ -626,43 +614,43 @@ bool PrepareTrainingDataFromCache(
 				continue;
 			}
 
-			// ── Concept path: canonical formatting + execution payload ──
-			auto built = GRIM::DataLoader::buildConceptSequence(cj, tokenizer, concept_exec_base_slot);
-			if (built.canonical_text.size() < min_cleaned_text_length) { ++selected_entries_skipped; continue; }
-
-			if (built.payload.execution_active) {
-				const int actual_steps = static_cast<int>(built.payload.teacher_steps.size());
-				if (actual_steps == 0) {
-					throw std::runtime_error(
-						"DataLoader: execution-active concept entry has 0 teacher_steps "
-						"— cannot pad from nothing");
-				}
-				if (actual_steps > expected_exec_steps) {
-					std::string exec_entry_id = "(unknown)";
-					if (cj.contains("id") && cj["id"].is_string())
-						exec_entry_id = cj["id"].get<std::string>();
-					else if (cj.contains("name") && cj["name"].is_string())
-						exec_entry_id = cj["name"].get<std::string>();
-					throw std::runtime_error(
-						"DataLoader: execution-active concept entry \"" + exec_entry_id
-						+ "\" has teacher_steps=" + std::to_string(actual_steps)
-						+ " > execution_block_num_steps=" + std::to_string(expected_exec_steps)
-						+ " — truncation would lose computation; fix data or increase config num_steps");
-				}
-				// Padding deferred to buildBatchPayload where step_mask is constructed.
-				// GRMT stores original step count; batch builder pads + masks.
+			// STATE0 and EXEC are internal structure, not training text. This is
+			// the only atom-tokenization call for the concept encoding path.
+			auto rendered = GRIM::ConceptCanonical::render(cj);
+			if (rendered.text.size() < min_cleaned_text_length) {
+				++selected_entries_skipped;
+				continue;
 			}
 
-			auto seq = materialize_sequence(std::move(built.encoded));
+			size_t prompt_token_count = 0;
+			auto encoded = tokenizer.tokenizeWithMetadata(
+				rendered.text,
+				rendered.execution_prompt_byte_end,
+				&prompt_token_count);
+			auto seq = materialize_sequence(std::move(encoded));
 			if (!seq) { ++selected_entries_skipped; continue; }
-			seq->execution_active = built.payload.execution_active;
-			seq->execution_gate_target = built.payload.execution_gate_target;
-			seq->execution_prompt_end_pos = built.payload.execution_prompt_end_pos;
-			seq->execution_prompt_length = built.payload.execution_prompt_length;
-			if (built.payload.execution_active) {
-				seq->token_exec_slots = std::move(built.payload.token_exec_slots);
-				seq->compiled_bootstrap_bindings = std::move(built.payload.compiled_bootstrap_bindings);
-				seq->teacher_steps = std::move(built.payload.teacher_steps);
+
+			seq->execution_active = false;
+			seq->execution_gate_target =
+				GRIM::Execution::ExecutionGateTarget::UNSUPERVISED;
+			seq->execution_prompt_length = static_cast<int32_t>(prompt_token_count);
+			seq->execution_prompt_end_pos =
+				prompt_token_count == 0
+					? -1
+					: static_cast<int32_t>(prompt_token_count - 1);
+
+			const bool has_internal_execution_state =
+				(cj.contains("state_0") && cj["state_0"].is_object()) ||
+				(cj.contains("execution") && cj["execution"].is_array() &&
+				 !cj["execution"].empty());
+			if (has_internal_execution_state && !warned_execution_bridge_stub) {
+				std::cerr
+					<< "[DataLoader] WARNING: execution supervision is stubbed: "
+					<< "STATE0/EXEC are not rendered as tokens, and the AtomTable-entry "
+					<< "to execution-slot compiler is not implemented yet. Affected rows "
+					<< "remain execution-unsupervised."
+					<< std::endl;
+				warned_execution_bridge_stub = true;
 			}
 			all_tokens.push_back(std::move(*seq));
 		} catch (const std::exception& e) {
