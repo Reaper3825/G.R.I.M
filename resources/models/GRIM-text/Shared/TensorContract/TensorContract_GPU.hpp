@@ -545,7 +545,8 @@ enum class ParamGroupType : uint8_t {
     EXECUTION_BLOCK = 5,///< Execution block weights (decode MLP, arg/op/slot select, cross-attn)
     NUMBER_ENCODER = 6, ///< NumberEncoder digit-place numeric-meaning weights (digit/pow10 emb, contribution + global MLPs)
     ARG_SELECTOR = 7,   ///< Arg/option selector head (query projection over candidate atom-entry keys); execution-independent
-    COUNT = 8           ///< Number of parameter group types
+    SLOT_SEED_ENCODER = 8, ///< Contextual numeric-placeholder to execution-slot seed encoder
+    COUNT = 9           ///< Number of parameter group types
 };
 
 enum class ParamStatsBucket : uint8_t {
@@ -1591,6 +1592,32 @@ Tensor mul_scalar(const Tensor& x, float scalar, cudaStream_t stream = nullptr);
  * scale: [rows, 1], x: [rows, cols] → [rows, cols]
  */
 Tensor broadcast_row_mul(const Tensor& scale, const Tensor& x, cudaStream_t stream = nullptr);
+
+/**
+ * Route contextual token rows into dense execution-slot rows using the
+ * payload-uploaded token_to_slot_map and compact authored atom bindings.
+ * Optional type embeddings are fused during routing. Backward scatters slot
+ * gradients into the source token rows and the two-row type table.
+ */
+Tensor gather_slot_seed_inputs(
+    const Tensor& token_states,
+    const Tensor& type_embeddings,
+    bool type_embedding_enabled,
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
+    int num_slots,
+    cudaStream_t stream = nullptr);
+
+/**
+ * Zero dense execution-slot rows that have no authored token binding, using
+ * the existing token_to_slot_map rather than a materialized mask tensor.
+ */
+Tensor mask_unauthored_slot_rows(
+    const Tensor& input,
+    const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
+    int num_slots,
+    cudaStream_t stream = nullptr);
 
 /**
  * Place a [rows, cols] tensor at row_offset inside a zero-padded [total_rows, cols] output.

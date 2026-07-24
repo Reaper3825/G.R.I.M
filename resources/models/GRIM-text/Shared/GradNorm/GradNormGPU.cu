@@ -157,6 +157,10 @@ GradNormStatus accumulateGroupMetrics(
             m.arg_selector_sum_sq += sum_sq;
             m.arg_selector_count += count;
             return GradNormStatus::SUCCESS;
+        case GRIM::ParamGroupType::SLOT_SEED_ENCODER:
+            m.slot_seed_encoder_sum_sq += sum_sq;
+            m.slot_seed_encoder_count += count;
+            return GradNormStatus::SUCCESS;
         case GRIM::ParamGroupType::COUNT:
             return GradNormStatus::INVALID_PARAM;
         default:

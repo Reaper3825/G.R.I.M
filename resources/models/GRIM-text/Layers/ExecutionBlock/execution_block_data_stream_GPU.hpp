@@ -33,7 +33,8 @@ void executeStepCoordinatorImpl(
 	Forward::RecordEncodeBackwardStaging& record_encode_backward_staging,
 	Tensor& trace_state,
 	const std::vector<Forward::ExecutionRecord>& prior_records,
-	const Tensor* selector_candidate_keys);
+	const Tensor* selector_candidate_keys,
+	const Tensor* slot_seeds);
 
 // Materialize only the non-differentiable hard transition decision. The caller
 // supplies trajectory authority explicitly; auxiliary loss weights do not

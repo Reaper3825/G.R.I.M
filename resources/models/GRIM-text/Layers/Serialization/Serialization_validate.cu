@@ -272,6 +272,78 @@ bool validate_checkpoint_capabilities(
         }
     }
 
+    // ─── SlotSeedEncoder ───
+    if (req.requires_slot_seed_encoder) {
+        const auto* fb_slot_seed = model_fb->slot_seed_encoder();
+        if (!fb_slot_seed) {
+            Logging::EmitModuleError(
+                kLogModule,
+                "[load] FATAL: SlotSeedEncoder required but missing in checkpoint");
+            return false;
+        }
+        const auto& slot_seed = load_req.slot_seed_encoder;
+        auto required_slot_seed_field = [&](
+            const flatbuffers::Vector<float>* source,
+            const DeviceWriteView& destination,
+            const char* name) -> bool {
+            if (!source) {
+                Logging::EmitModuleError(
+                    kLogModule,
+                    Msg("[load] FATAL: missing required SlotSeedEncoder field: ",
+                        name));
+                return false;
+            }
+            if (!destination.ptr) {
+                Logging::EmitModuleError(
+                    kLogModule,
+                    Msg("[load] FATAL: null model destination for "
+                        "SlotSeedEncoder field: ", name));
+                return false;
+            }
+            if (static_cast<std::size_t>(source->size()) !=
+                destination.count) {
+                Logging::EmitModuleError(
+                    kLogModule,
+                    Msg("[load] FATAL: SlotSeedEncoder field ", name,
+                        " size mismatch: checkpoint=", source->size(),
+                        " model_numel=", destination.count));
+                return false;
+            }
+            return true;
+        };
+        auto optional_slot_seed_field = [&](
+            const flatbuffers::Vector<float>* source,
+            const DeviceWriteView& destination,
+            const char* name) -> bool {
+            if (!destination.ptr) {
+                return true;
+            }
+            return required_slot_seed_field(source, destination, name);
+        };
+        ok = true;
+        ok = ok && required_slot_seed_field(
+            fb_slot_seed->w_seed_in_data(),
+            slot_seed.W_seed_in,
+            "W_seed_in");
+        ok = ok && optional_slot_seed_field(
+            fb_slot_seed->b_seed_in_data(),
+            slot_seed.b_seed_in,
+            "b_seed_in");
+        ok = ok && required_slot_seed_field(
+            fb_slot_seed->w_seed_out_data(),
+            slot_seed.W_seed_out,
+            "W_seed_out");
+        ok = ok && optional_slot_seed_field(
+            fb_slot_seed->b_seed_out_data(),
+            slot_seed.b_seed_out,
+            "b_seed_out");
+        ok = ok && optional_slot_seed_field(
+            fb_slot_seed->type_embeddings_data(),
+            slot_seed.type_embeddings,
+            "type_embeddings");
+        if (!ok) return false;
+    }
+
     // ─── ExecutionBlock ───
     if (req.requires_execution_block) {
         const auto* fb_eb = model_fb->execution_block();

@@ -747,7 +747,8 @@ void executeStepCoordinatorImpl(
     GRIM::Forward::RecordEncodeBackwardStaging& record_encode_backward_staging,
     Tensor& trace_state,
     const std::vector<ExecutionRecord>& prior_records,
-    const Tensor* selector_candidate_keys
+    const Tensor* selector_candidate_keys,
+    const Tensor* slot_seeds
 ) {
     // ModelForwardOutputs owns the supplied backward staging. The step output
     // remains diagnostics/live-loss output and is not the staging owner.
@@ -841,6 +842,7 @@ void executeStepCoordinatorImpl(
         batch_row,
         prior_records,
         selector_candidate_keys,
+        slot_seeds,
         stream,
         work);
     kernelCheckFinite<<<(V_val + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(

@@ -14,6 +14,7 @@ void buildValueSlotCandidates(
 	int batch_row,
 	const std::vector<Forward::ExecutionRecord>& prior_records,
 	const Tensor* selector_candidate_keys,
+	const Tensor* slot_seeds,
 	cudaStream_t stream,
 	StepWorkingSet& work);
 

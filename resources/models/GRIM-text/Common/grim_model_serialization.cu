@@ -125,6 +125,8 @@ bool saveLanguageModelCheckpoint(
     auto* lm_head_parameters = parameter_registry.getLmHeadParameters();
     auto* number_encoder_parameters = parameter_registry.getNumberEncoderParameters();
     auto* selector_parameters = parameter_registry.getSelectorParameters();
+    auto* slot_seed_encoder_parameters =
+        parameter_registry.getSlotSeedEncoderParameters();
     auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
     auto* gpu_encoder_owner = gpu_model_state.gpu_encoder.get();
     EmitModuleInfo(ModuleId::Checkpoint, "Request initialized with version " + std::to_string(GRIM_MODEL_VERSION));
@@ -245,6 +247,32 @@ bool saveLanguageModelCheckpoint(
         request.sources.arg_selector.enabled = true;
         assignReadTensor(request.sources.arg_selector.W_q, selector_parameters->W_q);
         EmitModuleInfo(ModuleId::Checkpoint, "Processing ArgSelector weights for FlatBuffer serialization");
+    }
+
+    if (slot_seed_encoder_parameters) {
+        auto assignReadTensor = [](DeviceReadView& v, const Tensor& t) {
+            v.ptr = t.data;
+            v.count = t.data ? static_cast<std::size_t>(t.numel()) : 0;
+        };
+        request.sources.slot_seed_encoder.enabled = true;
+        assignReadTensor(
+            request.sources.slot_seed_encoder.W_seed_in,
+            slot_seed_encoder_parameters->W_seed_in);
+        assignReadTensor(
+            request.sources.slot_seed_encoder.b_seed_in,
+            slot_seed_encoder_parameters->b_seed_in);
+        assignReadTensor(
+            request.sources.slot_seed_encoder.W_seed_out,
+            slot_seed_encoder_parameters->W_seed_out);
+        assignReadTensor(
+            request.sources.slot_seed_encoder.b_seed_out,
+            slot_seed_encoder_parameters->b_seed_out);
+        assignReadTensor(
+            request.sources.slot_seed_encoder.type_embeddings,
+            slot_seed_encoder_parameters->type_embeddings);
+        EmitModuleInfo(
+            ModuleId::Checkpoint,
+            "Processing SlotSeedEncoder weights for FlatBuffer serialization");
     }
 
     // ExecutionBlock v4 weights — serialized via FlatBuffer
@@ -375,6 +403,8 @@ bool loadLanguageModelCheckpoint(
     auto* lm_head_parameters = parameter_registry.getLmHeadParameters();
     auto* number_encoder_parameters = parameter_registry.getNumberEncoderParameters();
     auto* selector_parameters = parameter_registry.getSelectorParameters();
+    auto* slot_seed_encoder_parameters =
+        parameter_registry.getSlotSeedEncoderParameters();
     auto* execution_block_parameters = parameter_registry.getExecutionBlockParameters();
 
     if (!training_state.initialized) {
@@ -396,6 +426,8 @@ bool loadLanguageModelCheckpoint(
     // Pattern B: call site is the sole authority for what the model requires.
     request.capabilities.requires_number_encoder = (number_encoder_parameters != nullptr);
     request.capabilities.requires_arg_selector = (selector_parameters != nullptr);
+    request.capabilities.requires_slot_seed_encoder =
+        (slot_seed_encoder_parameters != nullptr);
     request.capabilities.requires_execution_block = (execution_block_parameters != nullptr);
     request.capabilities.requires_final_rms_gamma = (lm_head_parameters != nullptr
                                                       && lm_head_parameters->final_rms_gamma.data != nullptr
@@ -520,6 +552,32 @@ bool loadLanguageModelCheckpoint(
                     static_cast<std::size_t>(selector_parameters->W_q.numel()));
     }
 
+    if (slot_seed_encoder_parameters) {
+        auto assignWriteTensor = [&](DeviceWriteView& view, Tensor& tensor) {
+            if (tensor.data) {
+                assignWrite(
+                    view,
+                    tensor.data,
+                    static_cast<std::size_t>(tensor.numel()));
+            }
+        };
+        assignWriteTensor(
+            request.slot_seed_encoder.W_seed_in,
+            slot_seed_encoder_parameters->W_seed_in);
+        assignWriteTensor(
+            request.slot_seed_encoder.b_seed_in,
+            slot_seed_encoder_parameters->b_seed_in);
+        assignWriteTensor(
+            request.slot_seed_encoder.W_seed_out,
+            slot_seed_encoder_parameters->W_seed_out);
+        assignWriteTensor(
+            request.slot_seed_encoder.b_seed_out,
+            slot_seed_encoder_parameters->b_seed_out);
+        assignWriteTensor(
+            request.slot_seed_encoder.type_embeddings,
+            slot_seed_encoder_parameters->type_embeddings);
+    }
+
     // ExecutionBlock v4 weight destinations — loaded via FlatBuffer
     if (execution_block_parameters) {
         assignWrite(request.execution_block.w_decode_1, execution_block_parameters->w_decode_1.data, static_cast<std::size_t>(execution_block_parameters->w_decode_1.numel()));
@@ -590,6 +648,7 @@ bool loadLanguageModelCheckpoint(
         {
             std::ostringstream oss;
             oss << "[load]   capabilities: number_encoder=" << request.capabilities.requires_number_encoder
+                << " slot_seed_encoder=" << request.capabilities.requires_slot_seed_encoder
                 << " exec_block=" << request.capabilities.requires_execution_block
                 << " final_rms=" << request.capabilities.requires_final_rms_gamma;
             EmitModuleError(ModuleId::Checkpoint, oss.str());
@@ -599,6 +658,7 @@ bool loadLanguageModelCheckpoint(
                 oss << "[load]   registry pointers: embedding=" << (embedding_parameters ? "OK" : "NULL")
                 << " lm_head_params=" << (lm_head_parameters ? "OK" : "NULL")
                 << " number_encoder=" << (number_encoder_parameters ? "OK" : "NULL")
+                << " slot_seed_encoder=" << (slot_seed_encoder_parameters ? "OK" : "NULL")
                 << " exec_block=" << (execution_block_parameters ? "OK" : "NULL");
             EmitModuleError(ModuleId::Checkpoint, oss.str());
         }

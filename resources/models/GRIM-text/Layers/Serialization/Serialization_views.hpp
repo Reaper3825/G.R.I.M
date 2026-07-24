@@ -213,4 +213,21 @@ struct SerializationArgSelectorWriteView {
 	DeviceWriteView W_q;
 };
 
+struct SerializationSlotSeedEncoderReadView {
+	DeviceReadView W_seed_in;
+	DeviceReadView b_seed_in;
+	DeviceReadView W_seed_out;
+	DeviceReadView b_seed_out;
+	DeviceReadView type_embeddings;
+	bool enabled = false;
+};
+
+struct SerializationSlotSeedEncoderWriteView {
+	DeviceWriteView W_seed_in;
+	DeviceWriteView b_seed_in;
+	DeviceWriteView W_seed_out;
+	DeviceWriteView b_seed_out;
+	DeviceWriteView type_embeddings;
+};
+
 } // namespace GRIM

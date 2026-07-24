@@ -15,6 +15,7 @@
 #include "../../Layers/LMHead/lm_head_GPU.hpp"
 #include "../../Layers/ArgSelector/ArgSelector_GPU.hpp"
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
+#include "../../Layers/SlotSeedEncoder/SlotSeedEncoder_GPU.hpp"
 #include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
 #include "../InferenceState/KvCacheState_GPU.hpp"
 #include "../CudaAllocUtils.hpp"
@@ -291,6 +292,57 @@ GRIM::FeedForwardParameterTensors detachFeedForwardParameters(
     return detached;
 }
 
+GRIM::SlotSeedEncoderParameterTensors detachSlotSeedEncoderParameters(
+    const GRIM::SlotSeedEncoderParameterTensors& parameters,
+    const HyperParameters::SlotSeedEncoderConstructionHP& hp,
+    cudaStream_t stream)
+{
+    GRIM::SlotSeedEncoderParameterTensors detached{};
+    detached.W_seed_in = parameters.W_seed_in.detach(stream);
+    detached.W_seed_out = parameters.W_seed_out.detach(stream);
+    if (hp.bias_enabled) {
+        detached.b_seed_in = parameters.b_seed_in.detach(stream);
+        detached.b_seed_out = parameters.b_seed_out.detach(stream);
+    }
+    if (hp.type_embedding_enabled) {
+        detached.type_embeddings = parameters.type_embeddings.detach(stream);
+    }
+    return detached;
+}
+
+void materializeForwardSlotSeeds(
+    const ModelForwardRequest& request,
+    const HyperParameters::SlotSeedEncoderConstructionHP& hp,
+    const Tensor& contextual_hidden_states,
+    const Batching::BatchPayload& payload,
+    int num_slots,
+    ModelForwardOutputs& forward_outputs)
+{
+    if (!hp.enabled) {
+        return;
+    }
+
+    const auto& registered =
+        request.parameter_registry->requireSlotSeedEncoderParameters(
+            "executeModelForward(slot_seed_encoder)");
+    const GRIM::SlotSeedEncoderParameterTensors* active = &registered;
+    GRIM::SlotSeedEncoderParameterTensors detached{};
+    if (!request.graph.connect_parameter_graph) {
+        detached = detachSlotSeedEncoderParameters(registered, hp, request.stream);
+        active = &detached;
+    }
+
+    SlotSeedEncoder::forward(
+        hp,
+        *active,
+        contextual_hidden_states,
+        payload,
+        *request.bindings,
+        num_slots,
+        request.stream,
+        forward_outputs);
+}
+
 GRIM::EncodingLayerParameterTensors detachEncodingLayerParameters(
     const GRIM::EncodingLayerParameterTensors& parameters,
     bool qkv_bias_enabled,
@@ -464,6 +516,8 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const auto embedding_hp = HyperParameters::embeddingLayerConstructionHP(*cfg);
     const auto encoder_hp = HyperParameters::encoderLayerConstructionHP(*cfg);
     const auto execution_hp = HyperParameters::executionBlockConstructionHP(*cfg);
+    const auto slot_seed_encoder_hp =
+        HyperParameters::slotSeedEncoderConstructionHP(*cfg);
     const auto lm_head_hp = HyperParameters::lmHeadLayerConstructionHP(*cfg);
     const bool center_encoder_residuals = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "center_encoder_residuals");
     const bool lm_head_center_hidden_states = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "lm_head_center_hidden_states");
@@ -821,6 +875,18 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                     std::string(cudaGetErrorString(sync_err)));
             }
 
+            if (layer_idx == exec_layer &&
+                execution_block_active &&
+                slot_seed_encoder_hp.enabled) {
+                materializeForwardSlotSeeds(
+                    request,
+                    slot_seed_encoder_hp,
+                    owned,
+                    payload,
+                    execution_hp.num_slots,
+                    forward_outputs);
+            }
+
             if (payload.isInferencePrefill()
                 && layer_idx == exec_layer
                 && execution_block_active) {
@@ -930,6 +996,9 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                             execution_runtime.execution_trace_by_row[b],
                             execution_selector_bridge_requested
                                 ? &forward_outputs.selector_candidate_keys
+                                : nullptr,
+                            slot_seed_encoder_hp.enabled
+                                ? &forward_outputs.slot_seeds
                                 : nullptr);
                         execution_runtime.execution_trace_by_row[b].push_back(step_output.record);
 
@@ -1077,6 +1146,18 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 "enc_layer_output",
                 "executeModelForward(retained_graph)");
 
+            if (layer_idx == exec_layer &&
+                execution_block_active &&
+                slot_seed_encoder_hp.enabled) {
+                materializeForwardSlotSeeds(
+                    request,
+                    slot_seed_encoder_hp,
+                    layer_output,
+                    payload,
+                    execution_hp.num_slots,
+                    forward_outputs);
+            }
+
             if (layer_idx == exec_layer && execution_block_active) {
                 const float T = execution_hp.temp_start;
 
@@ -1194,6 +1275,9 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                             runtime.execution_runtime->execution_trace_by_row[b],
                             execution_selector_bridge_requested
                                 ? &forward_outputs.selector_candidate_keys
+                                : nullptr,
+                            slot_seed_encoder_hp.enabled
+                                ? &forward_outputs.slot_seeds
                                 : nullptr);
                         runtime.execution_runtime->execution_trace_by_row[b].push_back(step_diag.record);
                         forward_outputs.exec_outputs_per_row[b].steps.push_back(std::move(step_diag));

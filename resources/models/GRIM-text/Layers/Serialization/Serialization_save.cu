@@ -342,6 +342,54 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         Logging::EmitModuleInfo(kLogModule, "[save] ArgSelector weights serialized");
     }
 
+    flatbuffers::Offset<GRIMTransformer::SlotSeedEncoderWeights>
+        fb_slot_seed_encoder = 0;
+    const auto& slot_seed_view = request.sources.slot_seed_encoder;
+    if (slot_seed_view.enabled) {
+        if (!slot_seed_view.W_seed_in.ptr || !slot_seed_view.W_seed_out.ptr) {
+            Logging::EmitModuleError(
+                kLogModule,
+                "[save] SlotSeedEncoder enabled but required weights are missing");
+            return false;
+        }
+        auto dl = [&](const DeviceReadView& view, const char* name) {
+            return download_device_vector(view, name);
+        };
+        using FloatVecOffset =
+            flatbuffers::Offset<flatbuffers::Vector<float>>;
+        const FloatVecOffset b_seed_in =
+            slot_seed_view.b_seed_in.ptr
+                ? builder.CreateVector(dl(
+                    slot_seed_view.b_seed_in, "SlotSeedEncoder b_seed_in"))
+                : 0;
+        const FloatVecOffset b_seed_out =
+            slot_seed_view.b_seed_out.ptr
+                ? builder.CreateVector(dl(
+                    slot_seed_view.b_seed_out, "SlotSeedEncoder b_seed_out"))
+                : 0;
+        const FloatVecOffset type_embeddings =
+            slot_seed_view.type_embeddings.ptr
+                ? builder.CreateVector(dl(
+                    slot_seed_view.type_embeddings,
+                    "SlotSeedEncoder type_embeddings"))
+                : 0;
+        fb_slot_seed_encoder =
+            GRIMTransformer::CreateSlotSeedEncoderWeights(
+                builder,
+                builder.CreateVector(dl(
+                    slot_seed_view.W_seed_in,
+                    "SlotSeedEncoder W_seed_in")),
+                b_seed_in,
+                builder.CreateVector(dl(
+                    slot_seed_view.W_seed_out,
+                    "SlotSeedEncoder W_seed_out")),
+                b_seed_out,
+                type_embeddings);
+        Logging::EmitModuleInfo(
+            kLogModule,
+            "[save] SlotSeedEncoder weights serialized");
+    }
+
     flatbuffers::Offset<GRIMTransformer::ExecutionBlockWeights> fb_execution_block = 0;
     const auto& eb_view = request.sources.execution_block;
     if (eb_view.enabled && eb_view.w_decode_1.ptr) {
@@ -430,7 +478,8 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
         fb_execution_block,
         fb_number_encoder,
         fb_arg_selector,
-        fb_latent_trajectory_preset);
+        fb_latent_trajectory_preset,
+        fb_slot_seed_encoder);
 
     builder.Finish(fb_model, "GRMT");
 
@@ -512,6 +561,7 @@ bool SerializationLayer::save(const SerializationSaveRequest& request) {
                 verify_component("training_metadata", raw->training_metadata());
                 verify_component("number_encoder", raw->number_encoder());
                 verify_component("arg_selector", raw->arg_selector());
+                verify_component("slot_seed_encoder", raw->slot_seed_encoder());
                 verify_component("execution_block", raw->execution_block());
                 verify_component("latent_trajectory_preset", raw->latent_trajectory_preset());
 

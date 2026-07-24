@@ -71,6 +71,10 @@ struct ArgSelectorWeights;
 struct ArgSelectorWeightsBuilder;
 struct ArgSelectorWeightsT;
 
+struct SlotSeedEncoderWeights;
+struct SlotSeedEncoderWeightsBuilder;
+struct SlotSeedEncoderWeightsT;
+
 struct ModelConfig;
 struct ModelConfigBuilder;
 struct ModelConfigT;
@@ -2697,6 +2701,128 @@ inline ::flatbuffers::Offset<ArgSelectorWeights> CreateArgSelectorWeightsDirect(
 
 ::flatbuffers::Offset<ArgSelectorWeights> CreateArgSelectorWeights(::flatbuffers::FlatBufferBuilder &_fbb, const ArgSelectorWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 
+struct SlotSeedEncoderWeightsT : public ::flatbuffers::NativeTable {
+  typedef SlotSeedEncoderWeights TableType;
+  std::vector<float> w_seed_in_data{};
+  std::vector<float> b_seed_in_data{};
+  std::vector<float> w_seed_out_data{};
+  std::vector<float> b_seed_out_data{};
+  std::vector<float> type_embeddings_data{};
+};
+
+struct SlotSeedEncoderWeights FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef SlotSeedEncoderWeightsT NativeTableType;
+  typedef SlotSeedEncoderWeightsBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_W_SEED_IN_DATA = 4,
+    VT_B_SEED_IN_DATA = 6,
+    VT_W_SEED_OUT_DATA = 8,
+    VT_B_SEED_OUT_DATA = 10,
+    VT_TYPE_EMBEDDINGS_DATA = 12
+  };
+  const ::flatbuffers::Vector<float> *w_seed_in_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_SEED_IN_DATA);
+  }
+  const ::flatbuffers::Vector<float> *b_seed_in_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_B_SEED_IN_DATA);
+  }
+  const ::flatbuffers::Vector<float> *w_seed_out_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_W_SEED_OUT_DATA);
+  }
+  const ::flatbuffers::Vector<float> *b_seed_out_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_B_SEED_OUT_DATA);
+  }
+  const ::flatbuffers::Vector<float> *type_embeddings_data() const {
+    return GetPointer<const ::flatbuffers::Vector<float> *>(VT_TYPE_EMBEDDINGS_DATA);
+  }
+  bool Verify(::flatbuffers::Verifier &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_W_SEED_IN_DATA) &&
+           verifier.VerifyVector(w_seed_in_data()) &&
+           VerifyOffset(verifier, VT_B_SEED_IN_DATA) &&
+           verifier.VerifyVector(b_seed_in_data()) &&
+           VerifyOffset(verifier, VT_W_SEED_OUT_DATA) &&
+           verifier.VerifyVector(w_seed_out_data()) &&
+           VerifyOffset(verifier, VT_B_SEED_OUT_DATA) &&
+           verifier.VerifyVector(b_seed_out_data()) &&
+           VerifyOffset(verifier, VT_TYPE_EMBEDDINGS_DATA) &&
+           verifier.VerifyVector(type_embeddings_data()) &&
+           verifier.EndTable();
+  }
+  SlotSeedEncoderWeightsT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  void UnPackTo(SlotSeedEncoderWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  static ::flatbuffers::Offset<SlotSeedEncoderWeights> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const SlotSeedEncoderWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+};
+
+struct SlotSeedEncoderWeightsBuilder {
+  typedef SlotSeedEncoderWeights Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_w_seed_in_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> w_seed_in_data) {
+    fbb_.AddOffset(SlotSeedEncoderWeights::VT_W_SEED_IN_DATA, w_seed_in_data);
+  }
+  void add_b_seed_in_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> b_seed_in_data) {
+    fbb_.AddOffset(SlotSeedEncoderWeights::VT_B_SEED_IN_DATA, b_seed_in_data);
+  }
+  void add_w_seed_out_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> w_seed_out_data) {
+    fbb_.AddOffset(SlotSeedEncoderWeights::VT_W_SEED_OUT_DATA, w_seed_out_data);
+  }
+  void add_b_seed_out_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> b_seed_out_data) {
+    fbb_.AddOffset(SlotSeedEncoderWeights::VT_B_SEED_OUT_DATA, b_seed_out_data);
+  }
+  void add_type_embeddings_data(::flatbuffers::Offset<::flatbuffers::Vector<float>> type_embeddings_data) {
+    fbb_.AddOffset(SlotSeedEncoderWeights::VT_TYPE_EMBEDDINGS_DATA, type_embeddings_data);
+  }
+  explicit SlotSeedEncoderWeightsBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<SlotSeedEncoderWeights> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<SlotSeedEncoderWeights>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<SlotSeedEncoderWeights> CreateSlotSeedEncoderWeights(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_seed_in_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> b_seed_in_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> w_seed_out_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> b_seed_out_data = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<float>> type_embeddings_data = 0) {
+  SlotSeedEncoderWeightsBuilder builder_(_fbb);
+  builder_.add_type_embeddings_data(type_embeddings_data);
+  builder_.add_b_seed_out_data(b_seed_out_data);
+  builder_.add_w_seed_out_data(w_seed_out_data);
+  builder_.add_b_seed_in_data(b_seed_in_data);
+  builder_.add_w_seed_in_data(w_seed_in_data);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<SlotSeedEncoderWeights> CreateSlotSeedEncoderWeightsDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const std::vector<float> *w_seed_in_data = nullptr,
+    const std::vector<float> *b_seed_in_data = nullptr,
+    const std::vector<float> *w_seed_out_data = nullptr,
+    const std::vector<float> *b_seed_out_data = nullptr,
+    const std::vector<float> *type_embeddings_data = nullptr) {
+  auto w_seed_in_data__ = w_seed_in_data ? _fbb.CreateVector<float>(*w_seed_in_data) : 0;
+  auto b_seed_in_data__ = b_seed_in_data ? _fbb.CreateVector<float>(*b_seed_in_data) : 0;
+  auto w_seed_out_data__ = w_seed_out_data ? _fbb.CreateVector<float>(*w_seed_out_data) : 0;
+  auto b_seed_out_data__ = b_seed_out_data ? _fbb.CreateVector<float>(*b_seed_out_data) : 0;
+  auto type_embeddings_data__ = type_embeddings_data ? _fbb.CreateVector<float>(*type_embeddings_data) : 0;
+  return GRIMTransformer::CreateSlotSeedEncoderWeights(
+      _fbb,
+      w_seed_in_data__,
+      b_seed_in_data__,
+      w_seed_out_data__,
+      b_seed_out_data__,
+      type_embeddings_data__);
+}
+
+::flatbuffers::Offset<SlotSeedEncoderWeights> CreateSlotSeedEncoderWeights(::flatbuffers::FlatBufferBuilder &_fbb, const SlotSeedEncoderWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+
 struct ModelConfigT : public ::flatbuffers::NativeTable {
   typedef ModelConfig TableType;
   uint32_t vocab_size = 0;
@@ -3204,6 +3330,7 @@ struct TransformerModelT : public ::flatbuffers::NativeTable {
   std::unique_ptr<GRIMTransformer::NumberEncoderWeightsT> number_encoder{};
   std::unique_ptr<GRIMTransformer::ArgSelectorWeightsT> arg_selector{};
   std::unique_ptr<GRIMTransformer::LatentTrajectoryPresetWeightsT> latent_trajectory_preset{};
+  std::unique_ptr<GRIMTransformer::SlotSeedEncoderWeightsT> slot_seed_encoder{};
   TransformerModelT() = default;
   TransformerModelT(const TransformerModelT &o);
   TransformerModelT(TransformerModelT&&) FLATBUFFERS_NOEXCEPT = default;
@@ -3231,7 +3358,8 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_EXECUTION_BLOCK = 32,
     VT_NUMBER_ENCODER = 34,
     VT_ARG_SELECTOR = 36,
-    VT_LATENT_TRAJECTORY_PRESET = 38
+    VT_LATENT_TRAJECTORY_PRESET = 38,
+    VT_SLOT_SEED_ENCODER = 40
   };
   uint32_t version() const {
     return GetField<uint32_t>(VT_VERSION, 0);
@@ -3287,6 +3415,9 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const GRIMTransformer::LatentTrajectoryPresetWeights *latent_trajectory_preset() const {
     return GetPointer<const GRIMTransformer::LatentTrajectoryPresetWeights *>(VT_LATENT_TRAJECTORY_PRESET);
   }
+  const GRIMTransformer::SlotSeedEncoderWeights *slot_seed_encoder() const {
+    return GetPointer<const GRIMTransformer::SlotSeedEncoderWeights *>(VT_SLOT_SEED_ENCODER);
+  }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<uint32_t>(verifier, VT_VERSION, 4) &&
@@ -3321,6 +3452,8 @@ struct TransformerModel FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyTable(arg_selector()) &&
            VerifyOffset(verifier, VT_LATENT_TRAJECTORY_PRESET) &&
            verifier.VerifyTable(latent_trajectory_preset()) &&
+           VerifyOffset(verifier, VT_SLOT_SEED_ENCODER) &&
+           verifier.VerifyTable(slot_seed_encoder()) &&
            verifier.EndTable();
   }
   TransformerModelT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
@@ -3386,6 +3519,9 @@ struct TransformerModelBuilder {
   void add_latent_trajectory_preset(::flatbuffers::Offset<GRIMTransformer::LatentTrajectoryPresetWeights> latent_trajectory_preset) {
     fbb_.AddOffset(TransformerModel::VT_LATENT_TRAJECTORY_PRESET, latent_trajectory_preset);
   }
+  void add_slot_seed_encoder(::flatbuffers::Offset<GRIMTransformer::SlotSeedEncoderWeights> slot_seed_encoder) {
+    fbb_.AddOffset(TransformerModel::VT_SLOT_SEED_ENCODER, slot_seed_encoder);
+  }
   explicit TransformerModelBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -3420,11 +3556,13 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(
     ::flatbuffers::Offset<GRIMTransformer::ExecutionBlockWeights> execution_block = 0,
     ::flatbuffers::Offset<GRIMTransformer::NumberEncoderWeights> number_encoder = 0,
     ::flatbuffers::Offset<GRIMTransformer::ArgSelectorWeights> arg_selector = 0,
-    ::flatbuffers::Offset<GRIMTransformer::LatentTrajectoryPresetWeights> latent_trajectory_preset = 0) {
+    ::flatbuffers::Offset<GRIMTransformer::LatentTrajectoryPresetWeights> latent_trajectory_preset = 0,
+    ::flatbuffers::Offset<GRIMTransformer::SlotSeedEncoderWeights> slot_seed_encoder = 0) {
   TransformerModelBuilder builder_(_fbb);
   builder_.add_last_modified_timestamp(last_modified_timestamp);
   builder_.add_creation_timestamp(creation_timestamp);
   builder_.add_checksum_xxhash64(checksum_xxhash64);
+  builder_.add_slot_seed_encoder(slot_seed_encoder);
   builder_.add_latent_trajectory_preset(latent_trajectory_preset);
   builder_.add_arg_selector(arg_selector);
   builder_.add_number_encoder(number_encoder);
@@ -3462,7 +3600,8 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModelDirect(
     ::flatbuffers::Offset<GRIMTransformer::ExecutionBlockWeights> execution_block = 0,
     ::flatbuffers::Offset<GRIMTransformer::NumberEncoderWeights> number_encoder = 0,
     ::flatbuffers::Offset<GRIMTransformer::ArgSelectorWeights> arg_selector = 0,
-    ::flatbuffers::Offset<GRIMTransformer::LatentTrajectoryPresetWeights> latent_trajectory_preset = 0) {
+    ::flatbuffers::Offset<GRIMTransformer::LatentTrajectoryPresetWeights> latent_trajectory_preset = 0,
+    ::flatbuffers::Offset<GRIMTransformer::SlotSeedEncoderWeights> slot_seed_encoder = 0) {
   auto encoder_layers__ = encoder_layers ? _fbb.CreateVector<::flatbuffers::Offset<GRIMTransformer::EncoderLayerWeights>>(*encoder_layers) : 0;
   auto final_rms_gamma__ = final_rms_gamma ? _fbb.CreateVector<float>(*final_rms_gamma) : 0;
   return GRIMTransformer::CreateTransformerModel(
@@ -3484,7 +3623,8 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModelDirect(
       execution_block,
       number_encoder,
       arg_selector,
-      latent_trajectory_preset);
+      latent_trajectory_preset,
+      slot_seed_encoder);
 }
 
 ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(::flatbuffers::FlatBufferBuilder &_fbb, const TransformerModelT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
@@ -4226,6 +4366,44 @@ inline ::flatbuffers::Offset<ArgSelectorWeights> CreateArgSelectorWeights(::flat
       _w_q_data);
 }
 
+inline SlotSeedEncoderWeightsT *SlotSeedEncoderWeights::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
+  auto _o = std::unique_ptr<SlotSeedEncoderWeightsT>(new SlotSeedEncoderWeightsT());
+  UnPackTo(_o.get(), _resolver);
+  return _o.release();
+}
+
+inline void SlotSeedEncoderWeights::UnPackTo(SlotSeedEncoderWeightsT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
+  (void)_o;
+  (void)_resolver;
+  { auto _e = w_seed_in_data(); if (_e) { _o->w_seed_in_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_seed_in_data[_i] = _e->Get(_i); } } else { _o->w_seed_in_data.resize(0); } }
+  { auto _e = b_seed_in_data(); if (_e) { _o->b_seed_in_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->b_seed_in_data[_i] = _e->Get(_i); } } else { _o->b_seed_in_data.resize(0); } }
+  { auto _e = w_seed_out_data(); if (_e) { _o->w_seed_out_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->w_seed_out_data[_i] = _e->Get(_i); } } else { _o->w_seed_out_data.resize(0); } }
+  { auto _e = b_seed_out_data(); if (_e) { _o->b_seed_out_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->b_seed_out_data[_i] = _e->Get(_i); } } else { _o->b_seed_out_data.resize(0); } }
+  { auto _e = type_embeddings_data(); if (_e) { _o->type_embeddings_data.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->type_embeddings_data[_i] = _e->Get(_i); } } else { _o->type_embeddings_data.resize(0); } }
+}
+
+inline ::flatbuffers::Offset<SlotSeedEncoderWeights> SlotSeedEncoderWeights::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const SlotSeedEncoderWeightsT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateSlotSeedEncoderWeights(_fbb, _o, _rehasher);
+}
+
+inline ::flatbuffers::Offset<SlotSeedEncoderWeights> CreateSlotSeedEncoderWeights(::flatbuffers::FlatBufferBuilder &_fbb, const SlotSeedEncoderWeightsT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  (void)_rehasher;
+  (void)_o;
+  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const SlotSeedEncoderWeightsT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
+  auto _w_seed_in_data = _o->w_seed_in_data.size() ? _fbb.CreateVector(_o->w_seed_in_data) : 0;
+  auto _b_seed_in_data = _o->b_seed_in_data.size() ? _fbb.CreateVector(_o->b_seed_in_data) : 0;
+  auto _w_seed_out_data = _o->w_seed_out_data.size() ? _fbb.CreateVector(_o->w_seed_out_data) : 0;
+  auto _b_seed_out_data = _o->b_seed_out_data.size() ? _fbb.CreateVector(_o->b_seed_out_data) : 0;
+  auto _type_embeddings_data = _o->type_embeddings_data.size() ? _fbb.CreateVector(_o->type_embeddings_data) : 0;
+  return GRIMTransformer::CreateSlotSeedEncoderWeights(
+      _fbb,
+      _w_seed_in_data,
+      _b_seed_in_data,
+      _w_seed_out_data,
+      _b_seed_out_data,
+      _type_embeddings_data);
+}
+
 inline ModelConfigT *ModelConfig::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
   auto _o = std::unique_ptr<ModelConfigT>(new ModelConfigT());
   UnPackTo(_o.get(), _resolver);
@@ -4402,7 +4580,8 @@ inline TransformerModelT::TransformerModelT(const TransformerModelT &o)
         execution_block((o.execution_block) ? new GRIMTransformer::ExecutionBlockWeightsT(*o.execution_block) : nullptr),
         number_encoder((o.number_encoder) ? new GRIMTransformer::NumberEncoderWeightsT(*o.number_encoder) : nullptr),
         arg_selector((o.arg_selector) ? new GRIMTransformer::ArgSelectorWeightsT(*o.arg_selector) : nullptr),
-        latent_trajectory_preset((o.latent_trajectory_preset) ? new GRIMTransformer::LatentTrajectoryPresetWeightsT(*o.latent_trajectory_preset) : nullptr) {
+        latent_trajectory_preset((o.latent_trajectory_preset) ? new GRIMTransformer::LatentTrajectoryPresetWeightsT(*o.latent_trajectory_preset) : nullptr),
+        slot_seed_encoder((o.slot_seed_encoder) ? new GRIMTransformer::SlotSeedEncoderWeightsT(*o.slot_seed_encoder) : nullptr) {
   encoder_layers.reserve(o.encoder_layers.size());
   for (const auto &encoder_layers_ : o.encoder_layers) { encoder_layers.emplace_back((encoder_layers_) ? new GRIMTransformer::EncoderLayerWeightsT(*encoder_layers_) : nullptr); }
 }
@@ -4426,6 +4605,7 @@ inline TransformerModelT &TransformerModelT::operator=(TransformerModelT o) FLAT
   std::swap(number_encoder, o.number_encoder);
   std::swap(arg_selector, o.arg_selector);
   std::swap(latent_trajectory_preset, o.latent_trajectory_preset);
+  std::swap(slot_seed_encoder, o.slot_seed_encoder);
   return *this;
 }
 
@@ -4456,6 +4636,7 @@ inline void TransformerModel::UnPackTo(TransformerModelT *_o, const ::flatbuffer
   { auto _e = number_encoder(); if (_e) { if(_o->number_encoder) { _e->UnPackTo(_o->number_encoder.get(), _resolver); } else { _o->number_encoder = std::unique_ptr<GRIMTransformer::NumberEncoderWeightsT>(_e->UnPack(_resolver)); } } else if (_o->number_encoder) { _o->number_encoder.reset(); } }
   { auto _e = arg_selector(); if (_e) { if(_o->arg_selector) { _e->UnPackTo(_o->arg_selector.get(), _resolver); } else { _o->arg_selector = std::unique_ptr<GRIMTransformer::ArgSelectorWeightsT>(_e->UnPack(_resolver)); } } else if (_o->arg_selector) { _o->arg_selector.reset(); } }
   { auto _e = latent_trajectory_preset(); if (_e) { if(_o->latent_trajectory_preset) { _e->UnPackTo(_o->latent_trajectory_preset.get(), _resolver); } else { _o->latent_trajectory_preset = std::unique_ptr<GRIMTransformer::LatentTrajectoryPresetWeightsT>(_e->UnPack(_resolver)); } } else if (_o->latent_trajectory_preset) { _o->latent_trajectory_preset.reset(); } }
+  { auto _e = slot_seed_encoder(); if (_e) { if(_o->slot_seed_encoder) { _e->UnPackTo(_o->slot_seed_encoder.get(), _resolver); } else { _o->slot_seed_encoder = std::unique_ptr<GRIMTransformer::SlotSeedEncoderWeightsT>(_e->UnPack(_resolver)); } } else if (_o->slot_seed_encoder) { _o->slot_seed_encoder.reset(); } }
 }
 
 inline ::flatbuffers::Offset<TransformerModel> TransformerModel::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const TransformerModelT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
@@ -4484,6 +4665,7 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(::flatbuff
   auto _number_encoder = _o->number_encoder ? CreateNumberEncoderWeights(_fbb, _o->number_encoder.get(), _rehasher) : 0;
   auto _arg_selector = _o->arg_selector ? CreateArgSelectorWeights(_fbb, _o->arg_selector.get(), _rehasher) : 0;
   auto _latent_trajectory_preset = _o->latent_trajectory_preset ? CreateLatentTrajectoryPresetWeights(_fbb, _o->latent_trajectory_preset.get(), _rehasher) : 0;
+  auto _slot_seed_encoder = _o->slot_seed_encoder ? CreateSlotSeedEncoderWeights(_fbb, _o->slot_seed_encoder.get(), _rehasher) : 0;
   return GRIMTransformer::CreateTransformerModel(
       _fbb,
       _version,
@@ -4503,7 +4685,8 @@ inline ::flatbuffers::Offset<TransformerModel> CreateTransformerModel(::flatbuff
       _execution_block,
       _number_encoder,
       _arg_selector,
-      _latent_trajectory_preset);
+      _latent_trajectory_preset,
+      _slot_seed_encoder);
 }
 
 inline const GRIMTransformer::TransformerModel *GetTransformerModel(const void *buf) {

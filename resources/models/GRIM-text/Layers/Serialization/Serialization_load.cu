@@ -611,6 +611,67 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
         Logging::EmitModuleInfo(kLogModule, "[load] ArgSelector weights loaded");
     }
 
+    if (req.requires_slot_seed_encoder) {
+        const auto* fb_slot_seed = model_fb->slot_seed_encoder();
+        if (!fb_slot_seed) {
+            Logging::EmitModuleError(
+                kLogModule,
+                "[load] FATAL: SlotSeedEncoder required but missing in checkpoint");
+            return false;
+        }
+        auto upload_required = [&](
+            const flatbuffers::Vector<float>* source,
+            const DeviceWriteView& destination,
+            const char* name) -> bool {
+            if (!source || !destination.ptr) {
+                return false;
+            }
+            std::vector<float> host(source->begin(), source->end());
+            return upload_device_vector(host, destination, name);
+        };
+        auto upload_optional = [&](
+            const flatbuffers::Vector<float>* source,
+            const DeviceWriteView& destination,
+            const char* name) -> bool {
+            if (!destination.ptr) {
+                return true;
+            }
+            return upload_required(source, destination, name);
+        };
+        const auto& slot_seed = request.slot_seed_encoder;
+        bool slot_seed_ok = true;
+        slot_seed_ok = slot_seed_ok && upload_required(
+            fb_slot_seed->w_seed_in_data(),
+            slot_seed.W_seed_in,
+            "SlotSeedEncoder W_seed_in");
+        slot_seed_ok = slot_seed_ok && upload_optional(
+            fb_slot_seed->b_seed_in_data(),
+            slot_seed.b_seed_in,
+            "SlotSeedEncoder b_seed_in");
+        slot_seed_ok = slot_seed_ok && upload_required(
+            fb_slot_seed->w_seed_out_data(),
+            slot_seed.W_seed_out,
+            "SlotSeedEncoder W_seed_out");
+        slot_seed_ok = slot_seed_ok && upload_optional(
+            fb_slot_seed->b_seed_out_data(),
+            slot_seed.b_seed_out,
+            "SlotSeedEncoder b_seed_out");
+        slot_seed_ok = slot_seed_ok && upload_optional(
+            fb_slot_seed->type_embeddings_data(),
+            slot_seed.type_embeddings,
+            "SlotSeedEncoder type_embeddings");
+        if (!slot_seed_ok) {
+            Logging::EmitModuleError(
+                kLogModule,
+                "[load] FATAL: SlotSeedEncoder weights are missing or invalid");
+            return false;
+        }
+        request.report.slot_seed_encoder_loaded = true;
+        Logging::EmitModuleInfo(
+            kLogModule,
+            "[load] SlotSeedEncoder weights loaded");
+    }
+
     // ─── ExecutionBlock (gated by requires_execution_block) ───
     if (req.requires_execution_block) {
         const auto* fb_eb = model_fb->execution_block();
@@ -680,6 +741,13 @@ bool SerializationLayer::load(SerializationLoadRequest& request) {
     }
     if (req.requires_arg_selector && !request.report.arg_selector_loaded) {
         Logging::EmitModuleError(kLogModule, "[load] FATAL: ArgSelector required but not loaded");
+        return false;
+    }
+    if (req.requires_slot_seed_encoder &&
+        !request.report.slot_seed_encoder_loaded) {
+        Logging::EmitModuleError(
+            kLogModule,
+            "[load] FATAL: SlotSeedEncoder required but not loaded");
         return false;
     }
     if (req.requires_execution_block && !request.report.execution_block_loaded) {

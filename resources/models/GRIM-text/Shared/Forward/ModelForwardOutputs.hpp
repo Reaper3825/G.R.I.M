@@ -421,6 +421,15 @@ public:
     // Empty unless the forward graph policy requested emit_selector_logits.
     Tensor selector_logits;
 
+    // Contextual numeric-placeholder slot-seed state. ModelForwardOutputs is
+    // the sole owner of every buffer referenced by SlotSeedEncoder backward.
+    Tensor slot_seed_contextual_input;       // routed context + optional type embedding
+    Tensor slot_seed_hidden_pre_activation;  // MLP input projection; SiLU cache
+    Tensor slot_seed_hidden_activation;      // SiLU(hidden_pre_activation)
+    Tensor slot_seed_residual_delta;         // hidden @ W_seed_out (+ bias)
+    Tensor slot_seed_unmasked;               // contextual_input + residual_delta
+    Tensor slot_seeds;                       // authored-slot-gated dense slot seeds
+
     // Optional reasoning / execution forward-owned state.
     Tensor scratch_atom_embeddings;
     std::vector<ExecutionMemoryOwnedStorage> exec_memory_storage;
@@ -606,6 +615,14 @@ public:
         logits_tensor = Tensor();
         selector_candidate_keys = Tensor();
         selector_logits = Tensor();
+        // Reverse graph order keeps non-owning backward caches alive until
+        // their consumer GradFns have been released.
+        slot_seeds = Tensor();
+        slot_seed_unmasked = Tensor();
+        slot_seed_residual_delta = Tensor();
+        slot_seed_hidden_activation = Tensor();
+        slot_seed_hidden_pre_activation = Tensor();
+        slot_seed_contextual_input = Tensor();
         scratch_atom_embeddings = Tensor();
         for (auto& staging : normalized_entropy_backward_staging) {
             staging.saved_probs = Tensor();
@@ -709,6 +726,16 @@ public:
         reportTensor("logits_tensor", logits_tensor);
         reportTensor("selector_candidate_keys", selector_candidate_keys);
         reportTensor("selector_logits", selector_logits);
+        reportTensor("slot_seed_contextual_input", slot_seed_contextual_input);
+        reportTensor(
+            "slot_seed_hidden_pre_activation",
+            slot_seed_hidden_pre_activation);
+        reportTensor(
+            "slot_seed_hidden_activation",
+            slot_seed_hidden_activation);
+        reportTensor("slot_seed_residual_delta", slot_seed_residual_delta);
+        reportTensor("slot_seed_unmasked", slot_seed_unmasked);
+        reportTensor("slot_seeds", slot_seeds);
         reportTensor("scratch_atom_embeddings", scratch_atom_embeddings);
         for (size_t row = 0; row < exec_memory_storage.size(); ++row) {
             const auto& storage = exec_memory_storage[row];

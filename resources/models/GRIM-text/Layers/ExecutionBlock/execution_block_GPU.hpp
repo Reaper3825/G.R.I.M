@@ -152,6 +152,9 @@ void executionBlockPredictGate(
 //                  trace_state = autograd::add(trace_state, step_emb)).
 // prior_records:   host-side ExecutionRecord history for this row (read-only).
 //                  Used to build trace_vec = f(encoded history).
+// slot_seeds:      optional MFO-owned [batch_size * V, d_model] authored-slot
+//                  states. Existing primitives route live authored rows into
+//                  operand candidates; hard-written slots use runtime memory.
 //
 // Atom positions are NOT passed in: the step sources them directly from the
 // global atom mask (bindings.d_atom_mask) for this batch row.
@@ -173,7 +176,8 @@ void executionBlockStep(
     Forward::RecordEncodeBackwardStaging& record_encode_backward_staging,
     Tensor& trace_state,
     const std::vector<Forward::ExecutionRecord>& prior_records,
-    const Tensor* selector_candidate_keys = nullptr
+    const Tensor* selector_candidate_keys = nullptr,
+    const Tensor* slot_seeds = nullptr
 );
 
 //--------------------------------------------------//

@@ -11,6 +11,8 @@
 //    - Encoder durable per-layer parameter tensor owner
 //    - NumberEncoder durable tensor owner
 //    - NumberEncoder parameter-group inventory
+//    - SlotSeedEncoder durable tensor owner
+//    - SlotSeedEncoder parameter-group inventory
 //    - ExecutionBlock durable parameter tensor owner
 //    - ExecutionBlock parameter-group inventory
 //    - FeedForward durable per-layer parameter tensor owner
@@ -81,6 +83,18 @@ struct NumberEncoderParameterTensors {
 // Registered under ParamGroupType::ARG_SELECTOR (docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md).
 struct SelectorParameterTensors {
     Tensor W_q;   // [d_model, d_model] query projection
+};
+
+// SlotSeedEncoder — contextual numeric-placeholder representation.
+//   hidden = SiLU(context @ W_seed_in + b_seed_in)
+//   seed   = context + hidden @ W_seed_out + b_seed_out
+// The optional type embedding is added to context before the residual MLP.
+struct SlotSeedEncoderParameterTensors {
+    Tensor W_seed_in;       // [d_model, d_hidden]
+    Tensor b_seed_in;       // [1, d_hidden] when bias_enabled=true
+    Tensor W_seed_out;      // [d_hidden, d_model]
+    Tensor b_seed_out;      // [1, d_model] when bias_enabled=true
+    Tensor type_embeddings; // [2, d_model] for <INT>/<FLOAT> when enabled
 };
 
 struct ExecutionBlockParameterTensors {
@@ -155,6 +169,7 @@ struct StartupParameterRegistry {
     std::vector<GRIM::EncodingLayerParameterTensors> encoding_layer_parameter_tensors;
     std::unique_ptr<GRIM::NumberEncoderParameterTensors> number_encoder_parameters;
     std::unique_ptr<GRIM::SelectorParameterTensors> selector_parameters;
+    std::unique_ptr<GRIM::SlotSeedEncoderParameterTensors> slot_seed_encoder_parameters;
     std::unique_ptr<GRIM::ExecutionBlockParameterTensors> execution_block_parameters;
     std::vector<GRIM::FeedForwardParameterTensors> feed_forward_parameter_tensors;
     // Single durable optimizer/autograd parameter inventory owner.
@@ -308,6 +323,33 @@ struct StartupParameterRegistry {
         return *selector_parameters;
     }
 
+    GRIM::SlotSeedEncoderParameterTensors* getSlotSeedEncoderParameters() {
+        return slot_seed_encoder_parameters.get();
+    }
+
+    const GRIM::SlotSeedEncoderParameterTensors* getSlotSeedEncoderParameters() const {
+        return slot_seed_encoder_parameters.get();
+    }
+
+    GRIM::SlotSeedEncoderParameterTensors& requireSlotSeedEncoderParameters(const char* caller) {
+        if (!slot_seed_encoder_parameters) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": StartupParameterRegistry.slot_seed_encoder_parameters is NULL");
+        }
+        return *slot_seed_encoder_parameters;
+    }
+
+    const GRIM::SlotSeedEncoderParameterTensors& requireSlotSeedEncoderParameters(
+        const char* caller) const {
+        if (!slot_seed_encoder_parameters) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": StartupParameterRegistry.slot_seed_encoder_parameters is NULL");
+        }
+        return *slot_seed_encoder_parameters;
+    }
+
     GRIM::ExecutionBlockParameterTensors& requireExecutionBlockParameters(const char* caller) {
         if (!execution_block_parameters) {
             throw std::runtime_error(std::string(caller) + ": StartupParameterRegistry.execution_block_parameters is NULL");
@@ -406,6 +448,9 @@ using NumberEncoderTensorParameterSpec =
 using SelectorTensorParameterSpec =
     TensorParameterSpec<GRIM::SelectorParameterTensors>;
 
+using SlotSeedEncoderTensorParameterSpec =
+    TensorParameterSpec<GRIM::SlotSeedEncoderParameterTensors>;
+
 using EncodingLayerTensorParameterSpec =
     TensorParameterSpec<GRIM::EncodingLayerParameterTensors>;
 
@@ -448,6 +493,25 @@ inline constexpr std::array<SelectorTensorParameterSpec, 1>
     kSelectorTensorParameters = {{
         {"selector_W_q", &GRIM::SelectorParameterTensors::W_q,
          GRIM::ParamGroupType::ARG_SELECTOR, GRIM::ParamStatsBucket::ENCODER},
+    }};
+
+inline constexpr std::array<SlotSeedEncoderTensorParameterSpec, 5>
+    kSlotSeedEncoderTensorParameters = {{
+        {"slot_seed_encoder_W_seed_in",
+         &GRIM::SlotSeedEncoderParameterTensors::W_seed_in,
+         GRIM::ParamGroupType::SLOT_SEED_ENCODER, GRIM::ParamStatsBucket::ENCODER},
+        {"slot_seed_encoder_b_seed_in",
+         &GRIM::SlotSeedEncoderParameterTensors::b_seed_in,
+         GRIM::ParamGroupType::SLOT_SEED_ENCODER, GRIM::ParamStatsBucket::ENCODER},
+        {"slot_seed_encoder_W_seed_out",
+         &GRIM::SlotSeedEncoderParameterTensors::W_seed_out,
+         GRIM::ParamGroupType::SLOT_SEED_ENCODER, GRIM::ParamStatsBucket::ENCODER},
+        {"slot_seed_encoder_b_seed_out",
+         &GRIM::SlotSeedEncoderParameterTensors::b_seed_out,
+         GRIM::ParamGroupType::SLOT_SEED_ENCODER, GRIM::ParamStatsBucket::ENCODER},
+        {"slot_seed_encoder_type_embeddings",
+         &GRIM::SlotSeedEncoderParameterTensors::type_embeddings,
+         GRIM::ParamGroupType::SLOT_SEED_ENCODER, GRIM::ParamStatsBucket::ENCODER},
     }};
 
 inline constexpr std::array<ExecutionBlockTensorParameterSpec, 35>
@@ -653,6 +717,40 @@ inline void registerSelectorParameters(
                             spec.type,
                             spec.stats_bucket,
                             spec.layer);
+    }
+}
+
+template <typename RegistrarT>
+inline void registerSlotSeedEncoderParameters(
+    GRIM::SlotSeedEncoderParameterTensors& slot_seed_encoder_parameters,
+    const GRIM::HyperParameters::SlotSeedEncoderConstructionHP& hp,
+    RegistrarT& registrar) {
+    for (const auto& spec : kSlotSeedEncoderTensorParameters) {
+        const bool is_bias =
+            spec.tensor_member == &GRIM::SlotSeedEncoderParameterTensors::b_seed_in ||
+            spec.tensor_member == &GRIM::SlotSeedEncoderParameterTensors::b_seed_out;
+        const bool is_type_embedding =
+            spec.tensor_member == &GRIM::SlotSeedEncoderParameterTensors::type_embeddings;
+        if (is_bias || is_type_embedding) {
+            const bool enabled = is_bias ? hp.bias_enabled : hp.type_embedding_enabled;
+            registrar.addConfigGatedTensor(
+                spec.name,
+                slot_seed_encoder_parameters.*(spec.tensor_member),
+                spec.type,
+                spec.stats_bucket,
+                spec.layer,
+                enabled,
+                is_bias
+                    ? "slot_seed_encoder_bias_enabled=false"
+                    : "slot_seed_encoder_type_embedding_enabled=false");
+            continue;
+        }
+        registrar.addTensor(
+            spec.name,
+            slot_seed_encoder_parameters.*(spec.tensor_member),
+            spec.type,
+            spec.stats_bucket,
+            spec.layer);
     }
 }
 

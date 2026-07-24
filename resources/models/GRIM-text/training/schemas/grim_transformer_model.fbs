@@ -194,6 +194,14 @@ table ArgSelectorWeights {
   w_q_data: [float];
 }
 
+table SlotSeedEncoderWeights {
+  w_seed_in_data: [float];
+  b_seed_in_data: [float];
+  w_seed_out_data: [float];
+  b_seed_out_data: [float];
+  type_embeddings_data: [float];
+}
+
 table ModelConfig {
   vocab_size: uint32;
   d_model: uint32;
@@ -252,6 +260,8 @@ table TransformerModel {
   number_encoder: NumberEncoderWeights;
   arg_selector: ArgSelectorWeights;
   latent_trajectory_preset: LatentTrajectoryPresetWeights;
+  // Appended for FlatBuffer field-id compatibility with checkpoint v15.
+  slot_seed_encoder: SlotSeedEncoderWeights;
 }
 
 root_type TransformerModel;

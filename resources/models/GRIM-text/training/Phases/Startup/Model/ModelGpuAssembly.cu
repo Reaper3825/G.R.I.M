@@ -515,6 +515,18 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
                 std::cout << "✓ NumberEncoder parameters created\n";
             }
 
+            const auto slot_seed_encoder_hp =
+                GRIM::HyperParameters::slotSeedEncoderConstructionHP(model_cfg);
+            if (slot_seed_encoder_hp.enabled) {
+                GRIMText::Training::Startup::ModelRegistration::
+                    initializeSlotSeedEncoderParameterTensors(
+                        parameter_registry,
+                        slot_seed_encoder_hp,
+                        weight_init_seed + 45,
+                        init_stream);
+                std::cout << "SlotSeedEncoder parameters created\n";
+            }
+
             const bool selector_enabled =
                 GRIM::HyperParameters::snapshotTrainingConfigField<bool>(model_cfg, "selector_enabled");
             if (selector_enabled) {
