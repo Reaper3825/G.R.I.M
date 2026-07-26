@@ -169,6 +169,46 @@ int requireWriteTarget(int slot_id, int scratch_slots, int num_slots, int row, i
     return slot_id;
 }
 
+void requireInitializedValueTarget(
+    const Tensor& state_before_valid,
+    int slot_id,
+    int num_slots,
+    int row,
+    int step,
+    const char* label,
+    cudaStream_t stream
+) {
+    requireTensor(state_before_valid, "state_before_valid", row, step);
+    if (state_before_valid.numel() != static_cast<size_t>(num_slots)) {
+        throw std::runtime_error(
+            "addExecutionAuxiliaryLoss: state_before_valid has "
+            + std::to_string(state_before_valid.numel())
+            + " elements but expected num_slots=" + std::to_string(num_slots)
+            + " at row=" + std::to_string(row)
+            + " step=" + std::to_string(step));
+    }
+
+    float valid = 0.0f;
+    CUDA_CHECK(cudaMemcpyAsync(
+        &valid,
+        state_before_valid.data + slot_id,
+        sizeof(float),
+        cudaMemcpyDeviceToHost,
+        stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+
+    if (!std::isfinite(valid) || valid < 0.5f) {
+        throw std::runtime_error(
+            std::string("addExecutionAuxiliaryLoss: refusing masked ") + label
+            + " CE target at row=" + std::to_string(row)
+            + " step=" + std::to_string(step)
+            + " slot=" + std::to_string(slot_id)
+            + " state_before_valid=" + std::to_string(valid)
+            + "; teacher argument targets must reference slots initialized by "
+              "bootstrap or an earlier write");
+    }
+}
+
 void readScalarFromDevice(const Tensor& tensor, float& out_value, cudaStream_t stream, const char* label) {
     if (!tensor.data) {
         throw std::runtime_error(std::string("addExecutionAuxiliaryLoss: cannot read NULL scalar tensor '") + label + "'");
@@ -498,6 +538,22 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
                 const int arg1_target = requireValueSlotTarget(teacher.arg1_slot, num_scratch_slots, num_slots, b, k, "teacher arg1_slot");
                 const int arg2_target = requireValueSlotTarget(teacher.arg2_slot, num_scratch_slots, num_slots, b, k, "teacher arg2_slot");
                 const int write_target = requireWriteTarget(teacher.write_slot, num_scratch_slots, num_slots, b, k);
+                requireInitializedValueTarget(
+                    sout.state_before_valid,
+                    teacher.arg1_slot,
+                    num_slots,
+                    b,
+                    k,
+                    "arg1",
+                    ctx.stream);
+                requireInitializedValueTarget(
+                    sout.state_before_valid,
+                    teacher.arg2_slot,
+                    num_slots,
+                    b,
+                    k,
+                    "arg2",
+                    ctx.stream);
                 requirePositiveTemperature(sout.selection_temperature, b, k);
                 const float inverse_selection_temperature = 1.0f / sout.selection_temperature;
 
