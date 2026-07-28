@@ -101,6 +101,8 @@ struct ExecutionTransitionScheduleInputs {
     float initial_student_alpha = 0.0f;
     float final_student_alpha = 1.0f;
     float ramp_fraction = 0.0f;
+    bool force_teacher = false;
+    bool force_student = false;
 };
 
 struct TrainingSeedHP {
@@ -640,6 +642,10 @@ inline ExecutionTransitionScheduleInputs executionTransitionScheduleInputs(
         snapshot, "execution_block_transition_alpha_end");
     inputs.ramp_fraction = snapshotTrainingConfigField<float>(
         snapshot, "execution_block_transition_alpha_ramp_fraction");
+    inputs.force_teacher = snapshotTrainingConfigField<bool>(
+        snapshot, "execution_block_force_teacher");
+    inputs.force_student = snapshotTrainingConfigField<bool>(
+        snapshot, "execution_block_force_student");
     return inputs;
 }
 
@@ -1635,6 +1641,8 @@ makeExecutionTransitionScheduleConfig(
     cfg.ramp_steps = inputs.ramp_fraction <= 0.0f
         ? 0
         : std::max(1, static_cast<int>(inputs.ramp_fraction * total_steps));
+    cfg.force_teacher = inputs.force_teacher;
+    cfg.force_student = inputs.force_student;
     return cfg;
 }
 

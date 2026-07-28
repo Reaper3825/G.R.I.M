@@ -16,6 +16,8 @@ struct ExecutionTransitionScheduleConfig {
     float initial_student_alpha = 0.0f;
     float final_student_alpha = 1.0f;
     int ramp_steps = 0;
+    bool force_teacher = false;
+    bool force_student = false;
 };
 
 struct ExecutionTransitionScheduleResult {
@@ -42,6 +44,11 @@ public:
                 "[ExecutionTransitionSchedule] ramp_steps must be >= 0, got " +
                 std::to_string(config_.ramp_steps));
         }
+        if (config_.force_teacher && config_.force_student) {
+            throw std::runtime_error(
+                "[ExecutionTransitionSchedule] force_teacher and force_student "
+                "cannot both be true");
+        }
     }
 
     // The +1 mirrors LR warmup semantics: update zero already receives a small
@@ -54,6 +61,14 @@ public:
         }
 
         ExecutionTransitionScheduleResult result;
+        if (config_.force_teacher) {
+            result.student_alpha = 0.0f;
+            return result;
+        }
+        if (config_.force_student) {
+            result.student_alpha = 1.0f;
+            return result;
+        }
         if (config_.ramp_steps == 0) {
             result.student_alpha = config_.final_student_alpha;
             return result;

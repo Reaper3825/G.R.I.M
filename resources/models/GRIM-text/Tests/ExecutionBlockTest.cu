@@ -1330,6 +1330,35 @@ bool testExecutionTransitionSchedule(std::string& message) {
     EB_ASSERT_NEAR(schedule.studentAlpha(100), 1.0f, 1e-6f,
                    "student authority should hold after ramp completion");
 
+    ExecutionTransitionScheduleConfig teacher_cfg = cfg;
+    teacher_cfg.force_teacher = true;
+    ExecutionTransitionSchedule teacher_schedule(teacher_cfg);
+    EB_ASSERT_NEAR(teacher_schedule.studentAlpha(0), 0.0f, 1e-6f,
+                   "teacher override must pin update zero to teacher authority");
+    EB_ASSERT_NEAR(teacher_schedule.studentAlpha(100), 0.0f, 1e-6f,
+                   "teacher override must pin post-ramp updates to teacher authority");
+
+    ExecutionTransitionScheduleConfig student_cfg = cfg;
+    student_cfg.force_student = true;
+    ExecutionTransitionSchedule student_schedule(student_cfg);
+    EB_ASSERT_NEAR(student_schedule.studentAlpha(0), 1.0f, 1e-6f,
+                   "student override must pin update zero to student authority");
+    EB_ASSERT_NEAR(student_schedule.studentAlpha(100), 1.0f, 1e-6f,
+                   "student override must pin post-ramp updates to student authority");
+
+    bool rejected_conflicting_overrides = false;
+    try {
+        ExecutionTransitionScheduleConfig conflicting_cfg = cfg;
+        conflicting_cfg.force_teacher = true;
+        conflicting_cfg.force_student = true;
+        ExecutionTransitionSchedule conflicting_schedule(conflicting_cfg);
+        (void)conflicting_schedule;
+    } catch (const std::runtime_error&) {
+        rejected_conflicting_overrides = true;
+    }
+    EB_ASSERT_TRUE(rejected_conflicting_overrides,
+                   "teacher and student overrides must be mutually exclusive");
+
     EB_ASSERT_TRUE(!useModelTrajectory(0.0f, 3, 7, 1),
                    "alpha zero must always select the teacher");
     EB_ASSERT_TRUE(useModelTrajectory(1.0f, 3, 7, 1),

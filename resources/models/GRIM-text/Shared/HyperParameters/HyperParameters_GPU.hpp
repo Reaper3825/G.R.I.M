@@ -453,6 +453,8 @@ struct LanguageModelConfig {
     float execution_block_transition_alpha_start = 0.0f;
     float execution_block_transition_alpha_end = 1.0f;
     float execution_block_transition_alpha_ramp_fraction = 0.0f;
+    bool  execution_block_force_teacher = false;
+    bool  execution_block_force_student = false;
     float div_invalid_penalty_weight = 0.0f;
 
     bool  structured_ce_enabled = false;
@@ -1648,6 +1650,13 @@ inline void validateRootConfigDocument(
                 ": execution_block_transition_alpha_end must be >= "
                 "execution_block_transition_alpha_start");
         }
+        if (params.execution_block_force_teacher &&
+            params.execution_block_force_student) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": execution_block_force_teacher and "
+                "execution_block_force_student cannot both be true");
+        }
     }
     if (params.number_encoder_enabled) {
         if (!params.use_atom_data) {
@@ -2058,6 +2067,8 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(execution_block_transition_alpha_start);
     GRIM_LOAD_CONFIG_FIELD(execution_block_transition_alpha_end);
     GRIM_LOAD_CONFIG_FIELD(execution_block_transition_alpha_ramp_fraction);
+    GRIM_LOAD_CONFIG_FIELD(execution_block_force_teacher);
+    GRIM_LOAD_CONFIG_FIELD(execution_block_force_student);
     GRIM_LOAD_CONFIG_LEAF("execution_block_div_invalid_penalty_weight", div_invalid_penalty_weight);
     GRIM_LOAD_CONFIG_LEAF("execution_block_structured_ce_weight", structured_ce_weight);
     GRIM_LOAD_CONFIG_LEAF("execution_block_execute_ce_weight", execute_ce_weight);
@@ -2548,6 +2559,8 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_transition_alpha_start);
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_transition_alpha_end);
     GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_transition_alpha_ramp_fraction);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_force_teacher);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(execution_block_force_student);
     GRIM_WRITE_FINAL_CONFIG_FIELD(div_invalid_penalty_weight);
     GRIM_WRITE_FINAL_CONFIG_FIELD(structured_ce_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(structured_ce_weight);

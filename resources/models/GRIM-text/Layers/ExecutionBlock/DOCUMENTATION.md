@@ -239,6 +239,13 @@ optimizer-step `ExecutionTransitionSchedule` and deterministically assigns each
 complete trajectory to teacher or model authority. Loss weights do not implicitly
 select execution authority. Inference and validation always use model argmax.
 
+For teacher/student loss isolation runs, set exactly one of
+`execution_block_force_teacher` or `execution_block_force_student` to `true`.
+The selected override pins the effective student alpha to `0` or `1`
+respectively for every training row and bypasses the configured alpha schedule.
+Leave both flags `false` for scheduled behavior; setting both to `true` is a
+startup configuration error.
+
 Argument selection uses direct structured cross-entropy against the canonical
 teacher slots. Because transition decisions are deterministic `argmax`, the
 execution objective does not include a policy-gradient surrogate or reward
