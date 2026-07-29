@@ -1,6 +1,5 @@
 #pragma once
 
-#include "../../../../Shared/Dynamic_Execution/ExecutionTransitionSchedule.hpp"
 #include "../../../../Shared/Dynamic_LR/LRSchedule.hpp"
 #include "../../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
@@ -19,8 +18,6 @@ struct EpochPlan {
     int steps_per_epoch = 0;
     int warmup_steps = 0;
     ::GRIM::LR::LRScheduleConfig lr_config;
-    ::GRIM::ExecutionTransition::ExecutionTransitionScheduleConfig
-        execution_transition_config;
 };
 
 inline EpochPlan finalizeEpochPlanOrThrow(
@@ -99,11 +96,6 @@ inline EpochPlan finalizeEpochPlanOrThrow(
         ::GRIM::HyperParameters::learningRateScheduleInputs(config),
         plan.estimated_total_steps,
         plan.steps_per_epoch);
-    plan.execution_transition_config =
-        ::GRIM::HyperParameters::makeExecutionTransitionScheduleConfig(
-            ::GRIM::HyperParameters::executionTransitionScheduleInputs(config),
-            plan.estimated_total_steps);
-
     return plan;
 }
 

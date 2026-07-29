@@ -315,17 +315,6 @@ void ModelForwardRequest::validate(const char* caller) const {
     if (!stream) throw std::runtime_error(std::string(caller) + ": stream is NULL");
     if (!payload) throw std::runtime_error(std::string(caller) + ": payload is NULL");
     if (!bindings) throw std::runtime_error(std::string(caller) + ": bindings is NULL");
-    if (!std::isfinite(execution_transition_student_alpha) ||
-        execution_transition_student_alpha < 0.0f ||
-        execution_transition_student_alpha > 1.0f) {
-        throw std::runtime_error(
-            std::string(caller) +
-            ": execution_transition_student_alpha must be finite and in [0, 1]");
-    }
-    if (optimizer_step < 0) {
-        throw std::runtime_error(
-            std::string(caller) + ": optimizer_step must be >= 0");
-    }
     (void)graphPolicyName(graph);
     const auto execution_hp = HyperParameters::executionBlockConstructionHP(*config);
     if (execution_hp.enabled) {

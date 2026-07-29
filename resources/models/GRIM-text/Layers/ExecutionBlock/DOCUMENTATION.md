@@ -157,15 +157,11 @@ At a high level, one step does this:
    - `p_arg2` is scored from the shared decision input plus
      `arg1_summary * W_arg1_to_arg2`, so operand selection factors as
      `p(arg1 | context) * p(arg2 | context, p(arg1))`,
-   - the optimizer-step execution-transition schedule chooses one authority for
-     the complete trajectory,
-   - model trajectories materialize hard argmax slot reads,
-   - teacher trajectories materialize hard reads from the authoritative
-     `BatchPayload.teacher_steps` entry while retaining model logits for loss.
+   - materialize hard argmax slot reads from the model distributions,
+   - retain the soft distributions for auxiliary structured loss.
 6. **Select and apply the operation**
    - compute the built-in four ops: `+`, `-`, `*`, safe `/`,
-   - choose the detached hard operation from the same mode-specific decision
-     source used for operands,
+   - choose the detached hard operation from the model argmax,
    - keep the soft distribution for diagnostics/loss/gradients.
 7. **Update trace state**
    - encode the current discrete execution record,
@@ -180,8 +176,7 @@ At a high level, one step does this:
 10. **Score write destinations**
     - compute `p_write` over all slots.
 11. **Hard write back**
-    - choose one slot from the trajectory authority (`p_write` argmax for a
-      model trajectory, teacher step for a teacher trajectory),
+    - choose one slot from the model `p_write` argmax,
     - overwrite `values`, `state_embeds`, `key_embeds`, `atom_embeds`, `type_embed`,
     - set `valid_mask[slot] = 1`,
     - set `recent_write_mask` to a one-hot vector for that slot.
@@ -234,17 +229,10 @@ This keeps execution cleanup behind one fail-loud execution-block boundary inste
 The current implementation does **not** do blended writes.
 
 It always computes a softmax distribution `p_write` for learning/diagnostics,
-then performs a hard write to exactly one slot. Training queries the standalone
-optimizer-step `ExecutionTransitionSchedule` and deterministically assigns each
-complete trajectory to teacher or model authority. Loss weights do not implicitly
-select execution authority. Inference and validation always use model argmax.
-
-For teacher/student loss isolation runs, set exactly one of
-`execution_block_force_teacher` or `execution_block_force_student` to `true`.
-The selected override pins the effective student alpha to `0` or `1`
-respectively for every training row and bypasses the configured alpha schedule.
-Leave both flags `false` for scheduled behavior; setting both to `true` is a
-startup configuration error.
+then performs a hard model-argmax write to exactly one slot. The model likewise
+owns the hard read and operation decisions in every mode. Teacher steps never
+substitute for those live decisions. The connected-graph runner still uses the
+teacher mask to align the number of emitted step outputs with the auxiliary loss.
 
 Argument selection uses direct structured cross-entropy against the canonical
 teacher slots. Because transition decisions are deterministic `argmax`, the

@@ -12,7 +12,6 @@
 #include "../Layers/ExecutionBlock/execution_block_data_stream_GPU.hpp"
 #include "../Layers/ExecutionBlock/execution_block_memory_stream_GPU.hpp"
 #include "../Shared/Batching/BatchPayload.hpp"
-#include "../Shared/Dynamic_Execution/ExecutionTransitionSchedule.hpp"
 #include "../Shared/Execution/ExecutionResultEmission.hpp"
 #include "../Shared/Forward/ModelForwardOutputs.hpp"
 #include "../Shared/Forward/ModelForwardRuntimePayload.hpp"
@@ -125,9 +124,6 @@ bool testStepOutputDefaults(std::string& message) {
                    "selection_temperature should default zero");
     EB_ASSERT_TRUE(!sout.div_was_clamped,
                    "div_was_clamped should default false");
-    EB_ASSERT_TRUE(!sout.teacher_forced_transition,
-                   "teacher_forced_transition should default false");
-
     EB_ASSERT_EQ(sout.record.arg1_slot, -1, "record.arg1_slot default");
     EB_ASSERT_EQ(sout.record.arg2_slot, -1, "record.arg2_slot default");
     EB_ASSERT_EQ(sout.record.op_id, -1, "record.op_id default");
@@ -1233,10 +1229,10 @@ bool testFirstExecutionErrorWins(std::string& message) {
 }
 
 //======================================================//
-//  20. Hard transition decision follows payload mode
+//  20. Hard transition decision uses model argmax
 //======================================================//
 
-bool testHardTransitionDecisionPolicy(std::string& message) {
+bool testHardTransitionUsesModelArgmax(std::string& message) {
     cudaStream_t stream = nullptr;
     cudaStreamCreate(&stream);
 
@@ -1263,110 +1259,23 @@ bool testHardTransitionDecisionPolicy(std::string& message) {
         cudaMemcpyAsync(work.p_op.data, op, sizeof(op), cudaMemcpyHostToDevice, stream);
         cudaMemcpyAsync(work.p_write.data, write, sizeof(write), cudaMemcpyHostToDevice, stream);
 
-        Batching::BatchPayload payload;
-        payload.mode = Batching::BatchPayloadMode::Training;
-        payload.batch_size = 1;
-        payload.teacher_steps = {{Execution::TeacherStep{
-            /*op_id=*/2,
-            /*arg1_slot=*/3,
-            /*arg2_slot=*/4,
-            /*write_slot=*/5,
-            /*expected_value=*/0.0f}}};
-        payload.teacher_step_mask = {{1}};
-
         GRIM::ExecutionBlockInternal::materializeHardReadAndOpDecision(
-            hp, diag, payload, 0, 0, true, stream, work);
+            hp, diag, stream, work);
         GRIM::ExecutionBlockInternal::materializeHardWriteDecision(
-            hp, diag, payload, 0, 0, true, stream, work);
+            hp, diag, stream, work);
 
         int indices[4] = {-1, -1, -1, -1};
         cudaMemcpyAsync(indices, diag.execIndices(), sizeof(indices),
                         cudaMemcpyDeviceToHost, stream);
         cudaStreamSynchronize(stream);
-        EB_ASSERT_EQ(indices[0], 1, "training arg1 uses teacher slot relative to S");
-        EB_ASSERT_EQ(indices[1], 2, "training arg2 uses teacher slot relative to S");
-        EB_ASSERT_EQ(indices[2], 2, "training op uses teacher op");
-        EB_ASSERT_EQ(indices[3], 5, "training write uses teacher slot");
-
-        payload.mode = Batching::BatchPayloadMode::InferencePrefill;
-        GRIM::ExecutionBlockInternal::materializeHardReadAndOpDecision(
-            hp, diag, payload, 0, 0, false, stream, work);
-        GRIM::ExecutionBlockInternal::materializeHardWriteDecision(
-            hp, diag, payload, 0, 0, false, stream, work);
-        cudaMemcpyAsync(indices, diag.execIndices(), sizeof(indices),
-                        cudaMemcpyDeviceToHost, stream);
-        cudaStreamSynchronize(stream);
-        EB_ASSERT_EQ(indices[0], 4, "inference arg1 uses model argmax");
-        EB_ASSERT_EQ(indices[1], 0, "inference arg2 uses model argmax");
-        EB_ASSERT_EQ(indices[2], 3, "inference op uses model argmax");
-        EB_ASSERT_EQ(indices[3], 7, "inference write uses model argmax");
+        EB_ASSERT_EQ(indices[0], 4, "arg1 uses model argmax");
+        EB_ASSERT_EQ(indices[1], 0, "arg2 uses model argmax");
+        EB_ASSERT_EQ(indices[2], 3, "op uses model argmax");
+        EB_ASSERT_EQ(indices[3], 7, "write uses model argmax");
     }
 
     diag.destroy();
     cudaStreamDestroy(stream);
-    return true;
-}
-
-bool testExecutionTransitionSchedule(std::string& message) {
-    using namespace GRIM::ExecutionTransition;
-
-    ExecutionTransitionScheduleConfig cfg;
-    cfg.initial_student_alpha = 0.0f;
-    cfg.final_student_alpha = 1.0f;
-    cfg.ramp_steps = 10;
-    ExecutionTransitionSchedule schedule(cfg);
-
-    const auto first = schedule.query(0);
-    EB_ASSERT_TRUE(first.student_alpha > 0.0f,
-                   "update zero should already have progressive student exposure");
-    EB_ASSERT_TRUE(first.student_alpha < 1.0f,
-                   "update zero should remain inside the handoff ramp");
-    EB_ASSERT_TRUE(first.in_ramp, "update zero should report in_ramp");
-
-    const auto last = schedule.query(9);
-    EB_ASSERT_NEAR(last.student_alpha, 1.0f, 1e-6f,
-                   "last ramp update should reach full student authority");
-    EB_ASSERT_TRUE(!last.in_ramp, "completed ramp should clear in_ramp");
-    EB_ASSERT_NEAR(schedule.studentAlpha(100), 1.0f, 1e-6f,
-                   "student authority should hold after ramp completion");
-
-    ExecutionTransitionScheduleConfig teacher_cfg = cfg;
-    teacher_cfg.force_teacher = true;
-    ExecutionTransitionSchedule teacher_schedule(teacher_cfg);
-    EB_ASSERT_NEAR(teacher_schedule.studentAlpha(0), 0.0f, 1e-6f,
-                   "teacher override must pin update zero to teacher authority");
-    EB_ASSERT_NEAR(teacher_schedule.studentAlpha(100), 0.0f, 1e-6f,
-                   "teacher override must pin post-ramp updates to teacher authority");
-
-    ExecutionTransitionScheduleConfig student_cfg = cfg;
-    student_cfg.force_student = true;
-    ExecutionTransitionSchedule student_schedule(student_cfg);
-    EB_ASSERT_NEAR(student_schedule.studentAlpha(0), 1.0f, 1e-6f,
-                   "student override must pin update zero to student authority");
-    EB_ASSERT_NEAR(student_schedule.studentAlpha(100), 1.0f, 1e-6f,
-                   "student override must pin post-ramp updates to student authority");
-
-    bool rejected_conflicting_overrides = false;
-    try {
-        ExecutionTransitionScheduleConfig conflicting_cfg = cfg;
-        conflicting_cfg.force_teacher = true;
-        conflicting_cfg.force_student = true;
-        ExecutionTransitionSchedule conflicting_schedule(conflicting_cfg);
-        (void)conflicting_schedule;
-    } catch (const std::runtime_error&) {
-        rejected_conflicting_overrides = true;
-    }
-    EB_ASSERT_TRUE(rejected_conflicting_overrides,
-                   "teacher and student overrides must be mutually exclusive");
-
-    EB_ASSERT_TRUE(!useModelTrajectory(0.0f, 3, 7, 1),
-                   "alpha zero must always select the teacher");
-    EB_ASSERT_TRUE(useModelTrajectory(1.0f, 3, 7, 1),
-                   "alpha one must always select the model");
-    const bool first_pick = useModelTrajectory(0.5f, 3, 7, 1);
-    const bool repeated_pick = useModelTrajectory(0.5f, 3, 7, 1);
-    EB_ASSERT_EQ(first_pick, repeated_pick,
-                 "trajectory selection must be deterministic");
     return true;
 }
 
@@ -1406,8 +1315,7 @@ int GRIM::Test::runExecutionBlockTests() {
     suite.addTest("Inference: terminal result emission contract", testTerminalExecutionResultEmissionContract);
     suite.addTest("Inference: generated result session table", testGeneratedNumericAtomSessionTable);
     suite.addTest("Validation: first execution error wins", testFirstExecutionErrorWins);
-    suite.addTest("Policy: execution transition alpha schedule", testExecutionTransitionSchedule);
-    suite.addTest("Policy: hard transition follows payload mode", testHardTransitionDecisionPolicy);
+    suite.addTest("Execution: hard transition uses model argmax", testHardTransitionUsesModelArgmax);
 
     auto results = suite.runAll();
 

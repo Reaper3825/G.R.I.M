@@ -169,7 +169,6 @@ void executionBlockStep(
     const Batching::BatchDeviceBindings& bindings,
     int batch_row,
     int step,
-    bool teacher_force_transition,
     float temperature,
     cudaStream_t stream,
     Forward::ExecutionBlockStepOutput& forward_output,

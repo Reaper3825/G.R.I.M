@@ -273,7 +273,6 @@ void runExecutionLossDiagnostic(
     double entropy_row_contribution_sum = 0.0;
     int entropy_row_count = 0;
     int active_steps = 0;
-    int teacher_forced_steps = 0;
     int scalar_loss_terms = 0;
 
     if (model_hp.execution_block_enabled) {
@@ -377,7 +376,6 @@ void runExecutionLossDiagnostic(
 
                 const auto& step_output = row_output.steps[static_cast<std::size_t>(step_index)];
                 active_steps++;
-                if (step_output.teacher_forced_transition) teacher_forced_steps++;
 
                 if (stop_weight > 0.0f) {
                     const int target = step_index + 1 == static_cast<int>(row_output.steps.size()) ? 1 : 0;
@@ -468,9 +466,6 @@ void runExecutionLossDiagnostic(
         arg1_contribution + arg2_contribution + write_contribution +
         div_contribution + entropy_contribution;
     const float residual = loss_result.execution_loss - reconstructed;
-    const float teacher_forced_ratio = active_steps > 0
-        ? static_cast<float>(teacher_forced_steps) / static_cast<float>(active_steps)
-        : 0.0f;
 
     const float finite_values[] = {
         gate.rawMean(), stop.rawMean(), op.rawMean(), arg1.rawMean(), arg2.rawMean(),
@@ -478,7 +473,7 @@ void runExecutionLossDiagnostic(
         gate_contribution, stop_contribution, op_contribution, arg1_contribution,
         arg2_contribution, write_contribution, div_contribution, reconstructed, residual,
         gate.accuracy(), stop.accuracy(), op.accuracy(), arg1.accuracy(),
-        arg2.accuracy(), write.accuracy(), teacher_forced_ratio};
+        arg2.accuracy(), write.accuracy()};
     for (float value : finite_values) {
         if (!std::isfinite(value)) {
             throw std::runtime_error(
@@ -493,7 +488,6 @@ void runExecutionLossDiagnostic(
             << " residual=" << formatScalar(residual)
             << " scalar_terms=" << scalar_loss_terms
             << " active_steps=" << active_steps
-            << " teacher_forced_ratio=" << formatScalar(teacher_forced_ratio, 4)
             << " raw_ce={gate:" << formatScalar(gate.rawMean(), 4)
             << ",stop:" << formatScalar(stop.rawMean(), 4)
             << ",op:" << formatScalar(op.rawMean(), 4)
@@ -529,8 +523,7 @@ void runExecutionLossDiagnostic(
              << "  " << formatScalar(write.accuracy()) << "  " << formatScalar(write_contribution) << "\n"
              << "  div pre_norm=" << formatScalar(static_cast<float>(div_penalty_pre_norm))
              << " mixed_contribution=" << formatScalar(div_contribution) << "\n"
-             << "  entropy contribution=" << formatScalar(entropy_contribution) << "\n"
-             << "  teacher_forced_steps=" << teacher_forced_steps << "/" << active_steps;
+             << "  entropy contribution=" << formatScalar(entropy_contribution);
     EQ_LOG(
         ctx.logging.tape.get(),
         GRIM::Logging::LogGroup::Loss,
@@ -564,7 +557,6 @@ void runExecutionLossDiagnostic(
     writeTelemetry(ctx, MetricStream::EXEC_ARG1_ACCURACY, arg1.accuracy());
     writeTelemetry(ctx, MetricStream::EXEC_ARG2_ACCURACY, arg2.accuracy());
     writeTelemetry(ctx, MetricStream::EXEC_WRITE_ACCURACY, write.accuracy());
-    writeTelemetry(ctx, MetricStream::EXEC_TEACHER_FORCED_RATIO, teacher_forced_ratio);
     writeTelemetry(ctx, MetricStream::EXEC_LOSS_SCALAR_TERM_COUNT,
                    static_cast<float>(scalar_loss_terms));
 }

@@ -9,14 +9,12 @@
 
 #include "ModelForwardExecutionBlock_GPU.hpp"
 
-#include "../Dynamic_Execution/ExecutionTransitionSchedule.hpp"
 #include "../HyperParameters/HyperparameterGroupings.hpp"
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 #include "../../Layers/SlotSeedEncoder/SlotSeedEncoder_GPU.hpp"
 #include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
 
 #include <array>
-#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -122,18 +120,6 @@ void materializeForwardSlotSeeds(
         num_slots,
         request.stream,
         forward_outputs);
-}
-
-bool teacherOwnsExecutionTrajectory(
-    const ModelForwardRequest& request,
-    int batch_row)
-{
-    if (!request.payload || !request.payload->isTraining()) return false;
-    return !ExecutionTransition::useModelTrajectory(
-        request.execution_transition_student_alpha,
-        static_cast<std::uint64_t>(request.optimizer_step),
-        request.batch_idx,
-        batch_row);
 }
 
 }  // namespace
@@ -339,8 +325,6 @@ void runExecutionBlockNoGraph(
             request.stream);
 
         bool stopped = false;
-        const bool teacher_force_transition =
-            teacherOwnsExecutionTrajectory(request, b);
         for (int step = 0; step < exec_step_count; ++step) {
             ExecutionBlockStepOutput step_output;
             auto& record_encode_backward_staging =
@@ -356,7 +340,6 @@ void runExecutionBlockNoGraph(
                 *request.bindings,
                 b,
                 step,
-                teacher_force_transition,
                 execution_hp.temp_start,
                 request.stream,
                 step_output,
@@ -517,8 +500,6 @@ void runExecutionBlockConnectedGraph(
                 "ModelForward: execution-active row has zero real teacher steps");
         }
 
-        const bool teacher_force_transition =
-            teacherOwnsExecutionTrajectory(request, b);
         for (int step = 0; step < real_step_count; ++step) {
             ExecutionBlockStepOutput step_diag;
             auto& record_encode_backward_staging =
@@ -530,7 +511,6 @@ void runExecutionBlockConnectedGraph(
                 layer_output, M_b, *execution_block_parameters,
                 payload, *request.bindings, b,
                 step,
-                teacher_force_transition,
                 T, request.stream,
                 step_diag,
                 record_encode_backward_staging,

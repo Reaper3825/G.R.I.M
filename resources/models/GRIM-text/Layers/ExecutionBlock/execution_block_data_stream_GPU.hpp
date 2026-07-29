@@ -26,7 +26,6 @@ void executeStepCoordinatorImpl(
 	const Batching::BatchDeviceBindings& bindings,
 	int batch_row,
 	int step,
-	bool teacher_force_transition,
 	float temperature,
 	cudaStream_t stream,
 	Forward::ExecutionBlockStepOutput& forward_output,
@@ -36,26 +35,16 @@ void executeStepCoordinatorImpl(
 	const Tensor* selector_candidate_keys,
 	const Tensor* slot_seeds);
 
-// Materialize only the non-differentiable hard transition decision. The caller
-// supplies trajectory authority explicitly; auxiliary loss weights do not
-// implicitly choose the executed policy. Live model tensors remain unchanged.
+// Materialize the model's non-differentiable hard transition decision.
 void materializeHardReadAndOpDecision(
 	const HyperParameters::ExecutionBlockConstructionHP& hp,
 	ExecutionBlockDiagnosticsBuffers& diag,
-	const Batching::BatchPayload& payload,
-	int batch_row,
-	int step,
-	bool teacher_force_transition,
 	cudaStream_t stream,
 	const StepWorkingSet& work);
 
 void materializeHardWriteDecision(
 	const HyperParameters::ExecutionBlockConstructionHP& hp,
 	ExecutionBlockDiagnosticsBuffers& diag,
-	const Batching::BatchPayload& payload,
-	int batch_row,
-	int step,
-	bool teacher_force_transition,
 	cudaStream_t stream,
 	const StepWorkingSet& work);
 }

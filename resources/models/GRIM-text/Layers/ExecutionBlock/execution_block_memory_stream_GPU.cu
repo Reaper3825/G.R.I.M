@@ -956,10 +956,9 @@ void finalizeStepOrThrow(
         char buf[640];
         snprintf(buf, sizeof(buf),
             "ExecutionBlock FATAL: invalid state at step %d - %s (stage id=%d); "
-            "decision=%s; equation=slot[%d](%.9g) %s slot[%d](%.9g) -> "
+            "equation=slot[%d](%.9g) %s slot[%d](%.9g) -> "
             "slot[%d]=%.9g; magnitude_limit=%.9g",
             step, stageIdToName(h_error), h_error,
-            forward_output.teacher_forced_transition ? "teacher" : "model",
             ri[0], static_cast<double>(rf[0]), op_str,
             ri[1], static_cast<double>(rf[1]), write_slot,
             static_cast<double>(rf[2]), static_cast<double>(hp.magnitude_limit));

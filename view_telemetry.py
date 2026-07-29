@@ -107,11 +107,10 @@ TELEMETRY_STREAM_NAMES_BY_INDEX = {
     89: "exec_arg1_accuracy",
     90: "exec_arg2_accuracy",
     91: "exec_write_accuracy",
-    92: "exec_teacher_forced_ratio",
     93: "exec_loss_scalar_term_count",
 }
 
-DEAD_TELEMETRY_STREAM_INDICES = {26, 62, 63, 64, 65, 66, 67}
+DEAD_TELEMETRY_STREAM_INDICES = {26, 62, 63, 64, 65, 66, 67, 92}
 DEAD_TELEMETRY_STREAM_NAMES = {
     "mtp_loss_frac",
     "sb_atom_embed_rms",
@@ -156,7 +155,6 @@ TELEMETRY_UNIT_INTERVAL_FIELDS = {
     "exec_arg1_accuracy",
     "exec_arg2_accuracy",
     "exec_write_accuracy",
-    "exec_teacher_forced_ratio",
 }
 TELEMETRY_FIELD_LABELS = {
     "raw_observation": "raw_observation",
@@ -1272,14 +1270,12 @@ def main():
     exec_div_pre_norm = streams.get("exec_loss_div_pre_norm")
     exec_div_contribution = streams.get("exec_loss_div_contribution")
     exec_entropy_contribution = streams.get("exec_loss_entropy_contribution")
-    exec_teacher_forced = streams.get("exec_teacher_forced_ratio")
     exec_scalar_terms = streams.get("exec_loss_scalar_term_count")
 
     exec_loss_diag_streams = [
         exec_loss_reconstructed,
         exec_loss_residual,
         exec_div_pre_norm,
-        exec_teacher_forced,
         exec_scalar_terms,
         *(stream for _, stream, _ in exec_raw_ce_streams),
         *(stream for _, stream, _ in exec_contribution_streams),

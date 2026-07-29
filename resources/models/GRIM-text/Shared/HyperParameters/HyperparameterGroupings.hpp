@@ -7,7 +7,6 @@
 #include <vector>
 
 #include "HyperParameters_GPU.hpp"
-#include "../Dynamic_Execution/ExecutionTransitionSchedule.hpp"
 #include "../Dynamic_LR/LRSchedule.hpp"
 
 namespace GRIM::HyperParameters {
@@ -95,14 +94,6 @@ struct LearningRateScheduleInputs {
     int warmup_steps = 0;
     bool cosine_decay_enabled = false;
     bool cosine_warm_restarts = false;
-};
-
-struct ExecutionTransitionScheduleInputs {
-    float initial_student_alpha = 0.0f;
-    float final_student_alpha = 1.0f;
-    float ramp_fraction = 0.0f;
-    bool force_teacher = false;
-    bool force_student = false;
 };
 
 struct TrainingSeedHP {
@@ -629,23 +620,6 @@ inline LearningRateScheduleInputs learningRateScheduleInputs(
     inputs.warmup_steps = hp.warmup_steps;
     inputs.cosine_decay_enabled = hp.cosine_decay_enabled;
     inputs.cosine_warm_restarts = hp.cosine_warm_restarts;
-    return inputs;
-}
-
-inline ExecutionTransitionScheduleInputs executionTransitionScheduleInputs(
-    const GRIM::Config::AiConfigSnapshot& snapshot)
-{
-    ExecutionTransitionScheduleInputs inputs;
-    inputs.initial_student_alpha = snapshotTrainingConfigField<float>(
-        snapshot, "execution_block_transition_alpha_start");
-    inputs.final_student_alpha = snapshotTrainingConfigField<float>(
-        snapshot, "execution_block_transition_alpha_end");
-    inputs.ramp_fraction = snapshotTrainingConfigField<float>(
-        snapshot, "execution_block_transition_alpha_ramp_fraction");
-    inputs.force_teacher = snapshotTrainingConfigField<bool>(
-        snapshot, "execution_block_force_teacher");
-    inputs.force_student = snapshotTrainingConfigField<bool>(
-        snapshot, "execution_block_force_student");
     return inputs;
 }
 
@@ -1627,22 +1601,6 @@ inline ::GRIM::LR::LRScheduleConfig makeLRScheduleConfig(
     cfg.steps_per_epoch = steps_per_epoch;
     cfg.cosine_decay_enabled = inputs.cosine_decay_enabled;
     cfg.warm_restarts = inputs.cosine_warm_restarts;
-    return cfg;
-}
-
-inline ::GRIM::ExecutionTransition::ExecutionTransitionScheduleConfig
-makeExecutionTransitionScheduleConfig(
-    const ExecutionTransitionScheduleInputs& inputs,
-    int total_steps)
-{
-    ::GRIM::ExecutionTransition::ExecutionTransitionScheduleConfig cfg;
-    cfg.initial_student_alpha = inputs.initial_student_alpha;
-    cfg.final_student_alpha = inputs.final_student_alpha;
-    cfg.ramp_steps = inputs.ramp_fraction <= 0.0f
-        ? 0
-        : std::max(1, static_cast<int>(inputs.ramp_fraction * total_steps));
-    cfg.force_teacher = inputs.force_teacher;
-    cfg.force_student = inputs.force_student;
     return cfg;
 }
 
