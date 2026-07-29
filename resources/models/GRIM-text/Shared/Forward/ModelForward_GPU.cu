@@ -8,14 +8,12 @@
 #endif
 
 #include "ModelForward_GPU.hpp"
-#include "../Dynamic_Execution/ExecutionTransitionSchedule.hpp"
+#include "ModelForwardExecutionBlock_GPU.hpp"
 
 #include "../../GRIM/grim_language_model_cuda.hpp"
 #include "../../Layers/Encoding/Encoding_GPU.hpp"
 #include "../../Layers/LMHead/lm_head_GPU.hpp"
 #include "../../Layers/ArgSelector/ArgSelector_GPU.hpp"
-#include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
-#include "../../Layers/SlotSeedEncoder/SlotSeedEncoder_GPU.hpp"
 #include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
 #include "../InferenceState/KvCacheState_GPU.hpp"
 #include "../CudaAllocUtils.hpp"
@@ -25,12 +23,11 @@
 #include "../HyperParameters/HyperparameterGroupings.hpp"
 #include "../VerboseLogging.hpp"
 
-#include <algorithm>
-#include <array>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace GRIM {
@@ -50,13 +47,7 @@ const TensorContract::Shape2D& requireTensor2DShape(
     const char* label);
 
 const char* graphPolicyName(const ModelForwardGraphPolicy& graph) {
-    if (graph.connect_parameter_graph && graph.retain_backward_graph) {
-        return "autograd_connected";
-    }
-    if (!graph.connect_parameter_graph && !graph.retain_backward_graph) {
-        return "read_only";
-    }
-    throw std::runtime_error("ModelForward: invalid graph policy — connect_parameter_graph and retain_backward_graph must agree at this boundary");
+    return graph.connect_parameter_graph ? "autograd_connected" : "read_only";
 }
 
 const TensorContract::Shape2D& requireTensor2DShape(
@@ -93,28 +84,6 @@ void requireCenteringSequenceLengths(const Batching::BatchPayload& payload,
     }
 }
 
-int requirePayloadRowLength(const Batching::BatchPayload& payload,
-                            int row,
-                            const char* caller) {
-    if (row < 0 || row >= payload.batch_size) {
-        throw std::runtime_error(std::string(caller) + ": row index " +
-                                 std::to_string(row) + " out of range for batch_size=" +
-                                 std::to_string(payload.batch_size));
-    }
-    if (static_cast<int>(payload.seq_lengths.size()) != payload.batch_size) {
-        throw std::runtime_error(std::string(caller) + ": payload.seq_lengths size (" +
-                                 std::to_string(payload.seq_lengths.size()) +
-                                 ") != batch_size (" + std::to_string(payload.batch_size) + ")");
-    }
-    const int row_len = payload.seq_lengths[static_cast<size_t>(row)];
-    if (row_len <= 0 || row_len > payload.max_seq_len) {
-        throw std::runtime_error(std::string(caller) + ": invalid seq_lengths[" +
-                                 std::to_string(row) + "]=" + std::to_string(row_len) +
-                                 " for payload.max_seq_len=" + std::to_string(payload.max_seq_len));
-    }
-    return row_len;
-}
-
 Tensor viewCommittedTensor(const Tensor& owned,
                            cudaStream_t stream,
                            const char* debug_name,
@@ -132,31 +101,6 @@ Tensor viewCommittedTensor(const Tensor& owned,
     view.grad_fn = owned.grad_fn;
     view.stream = stream;
     return view;
-}
-
-std::array<float, 2> readBinaryControlProbabilities(
-    const Tensor& probabilities,
-    cudaStream_t stream,
-    const char* caller)
-{
-    probabilities.require(caller);
-    if (probabilities.numel() != 2) {
-        throw std::runtime_error(std::string(caller) + ": expected exactly two probabilities");
-    }
-    std::array<float, 2> host{};
-    cudaError_t copy_err = cudaMemcpyAsync(
-        host.data(), probabilities.data, 2 * sizeof(float),
-        cudaMemcpyDeviceToHost, stream);
-    if (copy_err != cudaSuccess) {
-        throw std::runtime_error(std::string(caller) + ": cudaMemcpyAsync failed: " +
-                                 cudaGetErrorString(copy_err));
-    }
-    cudaError_t sync_err = cudaStreamSynchronize(stream);
-    if (sync_err != cudaSuccess) {
-        throw std::runtime_error(std::string(caller) + ": cudaStreamSynchronize failed: " +
-                                 cudaGetErrorString(sync_err));
-    }
-    return host;
 }
 
 // Encode the candidate atom-entry pool once for both forward consumers:
@@ -292,57 +236,6 @@ GRIM::FeedForwardParameterTensors detachFeedForwardParameters(
     return detached;
 }
 
-GRIM::SlotSeedEncoderParameterTensors detachSlotSeedEncoderParameters(
-    const GRIM::SlotSeedEncoderParameterTensors& parameters,
-    const HyperParameters::SlotSeedEncoderConstructionHP& hp,
-    cudaStream_t stream)
-{
-    GRIM::SlotSeedEncoderParameterTensors detached{};
-    detached.W_seed_in = parameters.W_seed_in.detach(stream);
-    detached.W_seed_out = parameters.W_seed_out.detach(stream);
-    if (hp.bias_enabled) {
-        detached.b_seed_in = parameters.b_seed_in.detach(stream);
-        detached.b_seed_out = parameters.b_seed_out.detach(stream);
-    }
-    if (hp.type_embedding_enabled) {
-        detached.type_embeddings = parameters.type_embeddings.detach(stream);
-    }
-    return detached;
-}
-
-void materializeForwardSlotSeeds(
-    const ModelForwardRequest& request,
-    const HyperParameters::SlotSeedEncoderConstructionHP& hp,
-    const Tensor& contextual_hidden_states,
-    const Batching::BatchPayload& payload,
-    int num_slots,
-    ModelForwardOutputs& forward_outputs)
-{
-    if (!hp.enabled) {
-        return;
-    }
-
-    const auto& registered =
-        request.parameter_registry->requireSlotSeedEncoderParameters(
-            "executeModelForward(slot_seed_encoder)");
-    const GRIM::SlotSeedEncoderParameterTensors* active = &registered;
-    GRIM::SlotSeedEncoderParameterTensors detached{};
-    if (!request.graph.connect_parameter_graph) {
-        detached = detachSlotSeedEncoderParameters(registered, hp, request.stream);
-        active = &detached;
-    }
-
-    SlotSeedEncoder::forward(
-        hp,
-        *active,
-        contextual_hidden_states,
-        payload,
-        *request.bindings,
-        num_slots,
-        request.stream,
-        forward_outputs);
-}
-
 GRIM::EncodingLayerParameterTensors detachEncodingLayerParameters(
     const GRIM::EncodingLayerParameterTensors& parameters,
     bool qkv_bias_enabled,
@@ -396,18 +289,6 @@ GRIM::LMHeadParameterTensors detachLmHeadParameters(
         detached.mlp_W_down = parameters.mlp_W_down.detach(stream);
     }
     return detached;
-}
-
-bool teacherOwnsExecutionTrajectory(
-    const ModelForwardRequest& request,
-    int batch_row)
-{
-    if (!request.payload || !request.payload->isTraining()) return false;
-    return !ExecutionTransition::useModelTrajectory(
-        request.execution_transition_student_alpha,
-        static_cast<std::uint64_t>(request.optimizer_step),
-        request.batch_idx,
-        batch_row);
 }
 
 }  // namespace
@@ -482,8 +363,8 @@ void ModelForwardRequest::validate(const char* caller) const {
         (void)parameter_registry->requireSelectorParameters(caller);
     }
     if (kv_cache) {
-        if (graph.connect_parameter_graph || graph.retain_backward_graph) {
-            throw std::runtime_error(std::string(caller) + ": kv_cache requires a read-only graph policy (connect_parameter_graph == retain_backward_graph == false)");
+        if (graph.connect_parameter_graph) {
+            throw std::runtime_error(std::string(caller) + ": kv_cache requires connect_parameter_graph == false");
         }
         if (graph.enable_dropout) {
             throw std::runtime_error(std::string(caller) + ": kv_cache decode is read-only and cannot run with dropout");
@@ -553,7 +434,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const auto& embedding_parameters = request.parameter_registry->requireEmbeddingParameters("executeModelForward");
     const auto& lm_head_parameters = request.parameter_registry->requireLmHeadParameters("executeModelForward");
     const bool connect_parameter_graph = request.graph.connect_parameter_graph;
-    const bool retain_backward_graph = request.graph.retain_backward_graph;
     const bool dropout_enabled = request.graph.enable_dropout;
 
     if (center_encoder_residuals || lm_head_center_hidden_states) {
@@ -729,7 +609,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
             "encoder layer after the configured execution layer");
     }
 
-    if (!retain_backward_graph) {
+    if (!connect_parameter_graph) {
         Tensor running;
         std::vector<bool> inference_execution_active(
             static_cast<size_t>(payload.batch_size), false);
@@ -753,54 +633,21 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
 
             Tensor* layer_input = (layer_idx == 0) ? &forward_outputs.embedding_tensor : &running;
             Tensor execution_read_augmented_input;
-            if (exec_layer >= 0
-                && layer_idx > exec_layer
-                && execution_block_active) {
-                bool has_execution_readback = false;
-                if (payload.isInferencePrefill() && !forward_outputs.exec_memories.empty()) {
-                    for (int b = 0; b < payload.batch_size; ++b) {
-                        if (!inference_execution_active[static_cast<size_t>(b)]) continue;
-                        const Tensor& read_source = has_execution_readback
-                            ? execution_read_augmented_input
-                            : *layer_input;
-                        const int row_len = requirePayloadRowLength(
-                            payload, b, "ModelForward(no_grad) execution prefill readback");
-                        const int final_token_offset = b * payload.max_seq_len + row_len - 1;
-                        Tensor row_delta = GRIM::executionBlockCrossAttentionRead(
-                            execution_hp, read_source, forward_outputs.exec_memories[b],
-                            *execution_block_parameters, total_tokens, request.stream,
-                            final_token_offset, 1,
-                            runtime.read_gate_accum_tensor
-                                ? runtime.read_gate_accum_tensor->data
-                                : nullptr);
-                        Tensor padded = autograd::zero_pad(
-                            row_delta, final_token_offset, total_tokens, request.stream);
-                        execution_read_augmented_input = autograd::add(
-                            read_source, padded, request.stream);
-                        has_execution_readback = true;
-                    }
-                } else if (payload.isInferenceDecode() && runtime.persistent_execution_memory) {
-                    if (payload.batch_size != 1) {
-                        throw std::runtime_error(
-                            "ModelForward(no_grad): persistent decode execution memory requires batch_size == 1");
-                    }
-                    const int row_len = requirePayloadRowLength(
-                        payload, 0, "ModelForward(no_grad) persistent decode readback");
-                    Tensor row_delta = GRIM::executionBlockCrossAttentionRead(
-                        execution_hp, *layer_input, *runtime.persistent_execution_memory,
-                        *execution_block_parameters, total_tokens, request.stream,
-                        /*token_offset=*/0, row_len,
-                        runtime.read_gate_accum_tensor
-                            ? runtime.read_gate_accum_tensor->data
-                            : nullptr);
-                    execution_read_augmented_input = autograd::add(
-                        *layer_input, row_delta, request.stream);
-                    runtime.persistent_execution_memory_was_read = true;
-                    has_execution_readback = true;
-                }
-                if (has_execution_readback) {
-                    layer_input = &execution_read_augmented_input;
-                }
+            const bool has_execution_readback = applyExecutionBlockReadback(
+                request,
+                execution_hp,
+                execution_block_parameters,
+                total_tokens,
+                layer_idx,
+                exec_layer,
+                execution_block_active,
+                inference_execution_active,
+                *layer_input,
+                execution_read_augmented_input,
+                runtime,
+                forward_outputs);
+            if (has_execution_readback) {
+                layer_input = &execution_read_augmented_input;
             }
 
             const auto& encoding_parameters = request.parameter_registry->requireEncodingLayerParameters(
@@ -875,152 +722,20 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                     std::string(cudaGetErrorString(sync_err)));
             }
 
-            if (layer_idx == exec_layer &&
-                execution_block_active &&
-                slot_seed_encoder_hp.enabled) {
-                materializeForwardSlotSeeds(
-                    request,
-                    slot_seed_encoder_hp,
-                    owned,
-                    payload,
-                    execution_hp.num_slots,
-                    forward_outputs);
-            }
-
-            if (payload.isInferencePrefill()
-                && layer_idx == exec_layer
-                && execution_block_active) {
-                std::vector<bool> provision_rows(
-                    static_cast<size_t>(payload.batch_size), true);
-                auto& execution_runtime = *runtime.execution_runtime;
-                Forward::provisionExecutionForwardRuntime(
-                    provision_rows,
-                    payload.batch_size,
-                    execution_hp.num_slots,
-                    execution_hp.atom_embedding_dim,
-                    execution_hp.d_model,
-                    execution_hp.d_key,
-                    execution_hp.d_type,
-                    false,
-                    request.stream,
-                    forward_outputs,
-                    execution_runtime);
-                execution_runtime.ensureDiagnostics(request.stream);
-
-                for (int b = 0; b < payload.batch_size; ++b) {
-                    auto& row_output = forward_outputs.exec_outputs_per_row[b];
-                    GRIM::executionBlockPredictGate(
-                        execution_hp,
-                        owned,
-                        *execution_block_parameters,
-                        payload,
-                        b,
-                        request.stream,
-                        &row_output.gate);
-                    const auto gate_probs = readBinaryControlProbabilities(
-                        row_output.gate.probabilities,
-                        request.stream,
-                        "ModelForward(no_grad) execution gate");
-                    row_output.gate.noop_probability = gate_probs[0];
-                    row_output.gate.execute_probability = gate_probs[1];
-                    row_output.gate.predicted_class = gate_probs[1] > gate_probs[0] ? 1 : 0;
-
-                    const int row_len = requirePayloadRowLength(
-                        payload, b, "ModelForward(no_grad) execution bootstrap");
-                    const int row_offset = b * payload.max_seq_len;
-                    bool has_bootstrap_slot = false;
-                    for (int t = 0; t < row_len; ++t) {
-                        if (payload.token_to_slot_map[static_cast<size_t>(row_offset + t)] >= 0) {
-                            has_bootstrap_slot = true;
-                            break;
-                        }
-                    }
-                    const bool execute_row = row_output.gate.predicted_class == 1
-                        && has_bootstrap_slot;
-                    row_output.execution_suppressed_no_bootstrap =
-                        row_output.gate.predicted_class == 1 && !has_bootstrap_slot;
-                    inference_execution_active[static_cast<size_t>(b)] = execute_row;
-                    if (!execute_row) continue;
-
-                    if (!request.bindings || !request.bindings->d_token_to_slot_map
-                        || !request.bindings->d_atom_entry_ids
-                        || !request.bindings->d_pool_numeric_float_values
-                        || !request.bindings->d_pool_numeric_int_values
-                        || !request.bindings->d_pool_numeric_kinds
-                        || !request.bindings->d_bootstrap_slot_to_pool_index
-                        || request.bindings->num_pool_atoms <= 0) {
-                        throw std::runtime_error(
-                            "ModelForward(no_grad): execution decision has no atom-entry-pool "
-                            "bootstrap bindings");
-                    }
-                    auto& memory = forward_outputs.exec_memories[b];
-                    if (!forward_outputs.selector_candidate_keys.data) {
-                        throw std::runtime_error(
-                            "ModelForward(no_grad): execution bootstrap has selector bridge "
-                            "metadata but no candidate-key tensor");
-                    }
-                    GRIM::executionBlockBootstrapMemoryFromSlotMap(
-                        execution_hp,
-                        memory,
-                        *execution_block_parameters,
-                        payload,
-                        *request.bindings,
-                        b,
-                        forward_outputs.selector_candidate_keys.data,
-                        request.stream);
-
-                    bool stopped = false;
-                    const bool teacher_force_transition =
-                        teacherOwnsExecutionTrajectory(request, b);
-                    for (int step = 0; step < exec_K; ++step) {
-                        ExecutionBlockStepOutput step_output;
-                        auto& record_encode_backward_staging =
-                            forward_outputs.appendRecordEncodeBackwardStaging(
-                                1, request.stream);
-                        GRIM::executionBlockStep(
-                            execution_hp,
-                            execution_runtime.execution_diag,
-                            owned,
-                            memory,
-                            *execution_block_parameters,
-                            payload,
-                            *request.bindings,
-                            b,
-                            step,
-                            teacher_force_transition,
-                            execution_hp.temp_start,
-                            request.stream,
-                            step_output,
-                            record_encode_backward_staging,
-                            execution_runtime.trace_state_by_row[b],
-                            execution_runtime.execution_trace_by_row[b],
-                            execution_selector_bridge_requested
-                                ? &forward_outputs.selector_candidate_keys
-                                : nullptr,
-                            slot_seed_encoder_hp.enabled
-                                ? &forward_outputs.slot_seeds
-                                : nullptr);
-                        execution_runtime.execution_trace_by_row[b].push_back(step_output.record);
-
-                        const auto stop_probs = readBinaryControlProbabilities(
-                            step_output.stop_probabilities,
-                            request.stream,
-                            "ModelForward(no_grad) stop control");
-                        step_output.continue_probability = stop_probs[0];
-                        step_output.stop_probability = stop_probs[1];
-                        step_output.stop_predicted_class = stop_probs[1] >= stop_probs[0] ? 1 : 0;
-                        stopped = step_output.stop_predicted_class == 1;
-                        row_output.steps.push_back(std::move(step_output));
-                        if (stopped) {
-                            row_output.stopped_by_model = true;
-                            break;
-                        }
-                    }
-                    if (!stopped) {
-                        row_output.stopped_at_max_steps = true;
-                    }
-                }
-            }
+            runExecutionBlockNoGraph(
+                request,
+                execution_hp,
+                slot_seed_encoder_hp,
+                execution_block_parameters,
+                layer_idx,
+                exec_layer,
+                exec_K,
+                execution_block_active,
+                execution_selector_bridge_requested,
+                owned,
+                runtime,
+                forward_outputs,
+                inference_execution_active);
             running = std::move(owned);
         }
 
@@ -1073,57 +788,22 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 layer_idx,
                 "executeModelForward(retained_graph)");
 
-            if (exec_layer >= 0 && layer_idx > exec_layer
-                && execution_block_active
-                && !forward_outputs.exec_memories.empty()) {
-                // executeStep(...) may export the immediate step result on the
-                // execution layer output, but persistent ExecutionMemory is a
-                // downstream side channel. During retained-graph training its
-                // first consumer is the execution prompt-end token. Unlike the
-                // row-final token (whose next-token target is masked), this
-                // position can influence supervised completion tokens through
-                // the remaining causal encoder layer(s).
-                bool has_execution_readback = false;
-                for (int b = 0; b < payload.batch_size; ++b) {
-                    const bool row_exec_active = !payload.execution_active.empty()
-                        && payload.execution_active[b];
-                    if (!row_exec_active) continue;
-                    const Tensor& read_source = has_execution_readback
-                        ? execution_read_augmented_input
-                        : *layer_input;
-                    const int row_len = requirePayloadRowLength(
-                        payload, b, "ModelForward ExecutionBlock next-layer input readback");
-                    if (payload.execution_prompt_end_positions.empty()) {
-                        throw std::runtime_error(
-                            "ModelForward ExecutionBlock training readback requires "
-                            "execution_prompt_end_positions");
-                    }
-                    const int prompt_end =
-                        payload.execution_prompt_end_positions[static_cast<size_t>(b)];
-                    if (prompt_end < 0 || prompt_end >= row_len) {
-                        throw std::runtime_error(
-                            "ModelForward ExecutionBlock training readback prompt_end=" +
-                            std::to_string(prompt_end) + " is outside row " +
-                            std::to_string(b) + " length " + std::to_string(row_len));
-                    }
-                    const int readback_token_offset =
-                        b * payload.max_seq_len + prompt_end;
-                    Tensor row_delta = GRIM::executionBlockCrossAttentionRead(
-                        execution_hp, read_source, forward_outputs.exec_memories[b], *execution_block_parameters,
-                        total_tokens, request.stream,
-                        readback_token_offset, 1,
-                        runtime.read_gate_accum_tensor
-                            ? runtime.read_gate_accum_tensor->data
-                            : nullptr);
-                    Tensor padded = autograd::zero_pad(
-                        row_delta, readback_token_offset, total_tokens, request.stream);
-                    execution_read_augmented_input = autograd::add(
-                        read_source, padded, request.stream);
-                    has_execution_readback = true;
-                }
-                if (has_execution_readback) {
-                    layer_input = &execution_read_augmented_input;
-                }
+            const bool has_execution_readback =
+                applyExecutionBlockReadback(
+                request,
+                execution_hp,
+                execution_block_parameters,
+                total_tokens,
+                layer_idx,
+                exec_layer,
+                execution_block_active,
+                payload.execution_active,
+                *layer_input,
+                execution_read_augmented_input,
+                runtime,
+                forward_outputs);
+            if (has_execution_readback) {
+                layer_input = &execution_read_augmented_input;
             }
 
             forwardEncodingLayer(
@@ -1146,144 +826,19 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 "enc_layer_output",
                 "executeModelForward(retained_graph)");
 
-            if (layer_idx == exec_layer &&
-                execution_block_active &&
-                slot_seed_encoder_hp.enabled) {
-                materializeForwardSlotSeeds(
-                    request,
-                    slot_seed_encoder_hp,
-                    layer_output,
-                    payload,
-                    execution_hp.num_slots,
-                    forward_outputs);
-            }
-
-            if (layer_idx == exec_layer && execution_block_active) {
-                const float T = execution_hp.temp_start;
-
-                auto& execution_runtime = *runtime.execution_runtime;
-                Forward::provisionExecutionForwardRuntime(
-                    payload.execution_active,
-                    payload.batch_size,
-                    execution_hp.num_slots,
-                    execution_hp.atom_embedding_dim,
-                    execution_hp.d_model,
-                    execution_hp.d_key,
-                    execution_hp.d_type,
-                    connect_parameter_graph,
-                    request.stream,
-                    forward_outputs,
-                    execution_runtime);
-                execution_runtime.ensureDiagnostics(request.stream);
-
-                for (int b = 0; b < payload.batch_size; ++b) {
-                    const bool row_exec_active = !payload.execution_active.empty()
-                        && payload.execution_active[b];
-
-                    const bool gate_supervised = !payload.execution_gate_targets.empty()
-                        && payload.execution_gate_targets[b]
-                            != Execution::ExecutionGateTarget::UNSUPERVISED;
-                    if (gate_supervised) {
-                        GRIM::executionBlockPredictGate(
-                            execution_hp,
-                            layer_output,
-                            *execution_block_parameters,
-                            payload,
-                            b,
-                            request.stream,
-                            &forward_outputs.exec_outputs_per_row[b].gate);
-                    }
-
-                    if (!row_exec_active) continue;
-
-                    auto& M_b = forward_outputs.exec_memories[b];
-
-                    requirePayloadRowLength(
-                        payload, b, "ModelForward ExecutionBlock bootstrap");
-
-                    if (!request.bindings || !request.bindings->d_token_to_slot_map
-                        || !request.bindings->d_atom_entry_ids
-                        || !request.bindings->d_pool_numeric_float_values
-                        || !request.bindings->d_pool_numeric_int_values
-                        || !request.bindings->d_pool_numeric_kinds
-                        || !request.bindings->d_bootstrap_slot_to_pool_index
-                        || request.bindings->num_pool_atoms <= 0) {
-                        throw std::runtime_error(
-                            "ModelForward: execution-active row " + std::to_string(b)
-                            + " has no slot map or atom-entry-pool values for bootstrap; "
-                            "compiled payload marks row active but pool data is missing");
-                    }
-                    if (!forward_outputs.selector_candidate_keys.data) {
-                        throw std::runtime_error(
-                            "ModelForward: execution-active row has selector bridge metadata "
-                            "but no candidate-key tensor");
-                    }
-                    GRIM::executionBlockBootstrapMemoryFromSlotMap(
-                        execution_hp,
-                        M_b,
-                        *execution_block_parameters,
-                        payload,
-                        *request.bindings,
-                        b,
-                        forward_outputs.selector_candidate_keys.data,
-                        request.stream);
-
-                    if (payload.teacher_step_mask.empty()
-                        || static_cast<int>(payload.teacher_step_mask.size()) <= b) {
-                        throw std::runtime_error(
-                            "ModelForward: execution-active row has no teacher_step_mask");
-                    }
-                    const auto& step_mask = payload.teacher_step_mask[b];
-                    int real_step_count = 0;
-                    bool saw_padding = false;
-                    for (int step = 0; step < exec_K; ++step) {
-                        const bool is_real = step < static_cast<int>(step_mask.size())
-                            && step_mask[static_cast<size_t>(step)] != 0;
-                        if (!is_real) {
-                            saw_padding = true;
-                            continue;
-                        }
-                        if (saw_padding) {
-                            throw std::runtime_error(
-                                "ModelForward: teacher_step_mask must contain a contiguous real-step prefix");
-                        }
-                        ++real_step_count;
-                    }
-                    if (real_step_count <= 0) {
-                        throw std::runtime_error(
-                            "ModelForward: execution-active row has zero real teacher steps");
-                    }
-
-                    const bool teacher_force_transition =
-                        teacherOwnsExecutionTrajectory(request, b);
-                    for (int step = 0; step < real_step_count; ++step) {
-                        ExecutionBlockStepOutput step_diag;
-                        auto& record_encode_backward_staging =
-                            forward_outputs.appendRecordEncodeBackwardStaging(
-                                1, request.stream);
-
-                        GRIM::executionBlockStep(
-                            execution_hp, execution_runtime.execution_diag,
-                            layer_output, M_b, *execution_block_parameters,
-                            payload, *request.bindings, b,
-                            step,
-                            teacher_force_transition,
-                            T, request.stream,
-                            step_diag,
-                            record_encode_backward_staging,
-                            runtime.execution_runtime->trace_state_by_row[b],
-                            runtime.execution_runtime->execution_trace_by_row[b],
-                            execution_selector_bridge_requested
-                                ? &forward_outputs.selector_candidate_keys
-                                : nullptr,
-                            slot_seed_encoder_hp.enabled
-                                ? &forward_outputs.slot_seeds
-                                : nullptr);
-                        runtime.execution_runtime->execution_trace_by_row[b].push_back(step_diag.record);
-                        forward_outputs.exec_outputs_per_row[b].steps.push_back(std::move(step_diag));
-                    }
-                }
-            }
+            runExecutionBlockConnectedGraph(
+                request,
+                execution_hp,
+                slot_seed_encoder_hp,
+                execution_block_parameters,
+                layer_idx,
+                exec_layer,
+                exec_K,
+                execution_block_active,
+                execution_selector_bridge_requested,
+                layer_output,
+                runtime,
+                forward_outputs);
 
             forward_outputs.encoder_layer_outputs.push_back(std::move(layer_output));
         }
@@ -1326,96 +881,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     }
 
     materializeForwardSelectorLogits(request, payload, forward_outputs);
-
-    if constexpr (GRIM::VerboseLogging::ENABLE_EXPENSIVE_DIAGNOSTICS) {
-        constexpr int kSamplePositions = 1024;
-        const int sample_size = std::min(kSamplePositions, total_tokens);
-        std::vector<float> h_encoder(sample_size * d_model);
-        std::vector<float> h_logits(sample_size * payload.vocab_size);
-
-        cudaMemcpyAsync(h_encoder.data(), live_lm_head_input->data,
-                        sample_size * d_model * sizeof(float),
-                        cudaMemcpyDeviceToHost, request.stream);
-        cudaMemcpyAsync(h_logits.data(), forward_outputs.logits_tensor.data,
-                        sample_size * payload.vocab_size * sizeof(float),
-                        cudaMemcpyDeviceToHost, request.stream);
-        cudaStreamSynchronize(request.stream);
-
-        for (int pos = 0; pos < sample_size; ++pos) {
-            const float* h = h_encoder.data() + pos * d_model;
-            const float* logits_row = h_logits.data() + pos * payload.vocab_size;
-
-            int argmax_token = 0;
-            float max_logit_val = logits_row[0];
-            for (int v = 1; v < payload.vocab_size; ++v) {
-                if (logits_row[v] > max_logit_val) {
-                    max_logit_val = logits_row[v];
-                    argmax_token = v;
-                }
-            }
-
-            std::vector<float> h_weights_argmax(d_model);
-            cudaMemcpyAsync(h_weights_argmax.data(),
-                            lm_head_parameters.weights.data + static_cast<size_t>(argmax_token) * d_model,
-                            d_model * sizeof(float),
-                            cudaMemcpyDeviceToHost, request.stream);
-            cudaStreamSynchronize(request.stream);
-
-            float h_sum = 0.0f, h_sum_sq = 0.0f, h_min = h[0], h_max = h[0];
-            for (int d = 0; d < d_model; ++d) {
-                h_sum += h[d];
-                h_sum_sq += h[d] * h[d];
-                h_min = std::min(h_min, h[d]);
-                h_max = std::max(h_max, h[d]);
-            }
-            float h_mean = h_sum / d_model;
-            float h_rms = std::sqrt(h_sum_sq / d_model);
-
-            float w_sum = 0.0f, w_sum_sq = 0.0f, w_min = h_weights_argmax[0], w_max = h_weights_argmax[0];
-            for (int d = 0; d < d_model; ++d) {
-                w_sum += h_weights_argmax[d];
-                w_sum_sq += h_weights_argmax[d] * h_weights_argmax[d];
-                w_min = std::min(w_min, h_weights_argmax[d]);
-                w_max = std::max(w_max, h_weights_argmax[d]);
-            }
-            float w_mean = w_sum / d_model;
-            float w_rms = std::sqrt(w_sum_sq / d_model);
-
-            float dot_product_argmax = 0.0f;
-            float positive_contrib = 0.0f, negative_contrib = 0.0f;
-            for (int d = 0; d < d_model; ++d) {
-                float contrib = h[d] * h_weights_argmax[d];
-                dot_product_argmax += contrib;
-                if (contrib > 0) positive_contrib += contrib;
-                else negative_contrib += contrib;
-            }
-
-            float h_rms_val = std::sqrt(h_sum_sq / d_model);
-            float w_rms_val = std::sqrt(w_sum_sq / d_model);
-            float cosine_sim = (h_rms_val > 1e-8f && w_rms_val > 1e-8f)
-                               ? (dot_product_argmax / (h_rms_val * w_rms_val * d_model)) : 0.0f;
-
-            fprintf(stderr, "═══════════════════════════════════════════════════════════════════════════\n");
-            fprintf(stderr, "[LOGIT_ANALYSIS] Position %d: Why does logit[v] = Σ_d h[d] × W[v,d] choose token %d?\n", pos, argmax_token);
-            fprintf(stderr, "═══════════════════════════════════════════════════════════════════════════\n");
-            fprintf(stderr, "HIDDEN STATE h[pos=%d]:\n", pos);
-            fprintf(stderr, "  Statistics: mean=%.6f (offset) rms=%.6f (magnitude) range=[%.6f, %.6f]\n",
-                    h_mean, h_rms, h_min, h_max);
-            fprintf(stderr, "WEIGHT ROW W[%d] (predicted token):\n", argmax_token);
-            fprintf(stderr, "  Statistics: mean=%.6f rms=%.6f range=[%.6f, %.6f]\n",
-                    w_mean, w_rms, w_min, w_max);
-            fprintf(stderr, "DOT_PRODUCT ANALYSIS Σ_d h[d]×W[%d,d]:\n", argmax_token);
-            fprintf(stderr, "  Raw computation: %.6f\n", dot_product_argmax);
-            fprintf(stderr, "  ├─ Positive contributions (h×W>0): %.6f (%.1f%%)\n",
-                    positive_contrib, 100.0f * positive_contrib / (std::abs(dot_product_argmax) + 1e-8f));
-            fprintf(stderr, "  ├─ Negative contributions (h×W<0): %.6f (%.1f%%)\n",
-                    negative_contrib, 100.0f * std::abs(negative_contrib) / (std::abs(dot_product_argmax) + 1e-8f));
-            fprintf(stderr, "  ├─ Cosine alignment: %.6f (1.0=perfect alignment, 0=orthogonal, -1=opposite)\n", cosine_sim);
-            fprintf(stderr, "RESULT:\n");
-            fprintf(stderr, "  logit[%d]=%.6f (PREDICTED argmax token)\n", argmax_token, max_logit_val);
-            fprintf(stderr, "\n");
-        }
-    }
 
     MFWD_INFO("Forward complete: logits shape=[" << total_tokens << ", " << payload.vocab_size << "]");
 

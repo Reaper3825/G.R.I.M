@@ -202,7 +202,7 @@ Use this section as the implementation queue. The order below is the architectur
   - remove forward-time parameter metadata writes
   - replace hidden `TrainingState` reach-through with explicit caller-owned output/scratch payloads that do not evolve durable state as a side effect of forward
 - **Exit signal:**
-  - `ModelForwardGraphPolicy{false,false,false,false}` can be described as “reads model parameters through detached views, writes only forward outputs and explicit session/runtime payloads”
+  - `ModelForwardGraphPolicy{false,false,false}` can be described as “reads model parameters through detached views, writes only forward outputs and explicit session/runtime payloads”
 
 ### Patch 2 — runtime-owner split (`boundary-owner` agent)
 

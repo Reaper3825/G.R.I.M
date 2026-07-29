@@ -35,7 +35,7 @@ Status: implemented.
 
 - [x] Extract the training/eval full-forward math from `AutogradTraining.cu` into `Shared/Forward/ModelForward_GPU.cu`.
 - [x] Route training and inference through the same shared forward primitive; Phase2 training now calls `Forward::executeModelForward(...)` explicitly and autograd owns only loss/backward.
-- [x] Route inference prefill through the shared primitive with `ModelForwardGraphPolicy{false,false,false,false}`: read-only parameter graph, no backward retention, no dropout, and optional forward extras requested explicitly.
+- [x] Route inference prefill through the shared primitive with `ModelForwardGraphPolicy{false,false,false}`: read-only parameter graph, no dropout, and optional forward extras requested explicitly.
 - [x] Use the shared full-forward primitive with a session-scoped KV cache for incremental decode.
 - [x] Delete the temporary `InferenceForward_GPU.{hpp,cu}` primitive.
 - [x] Keep loss/backward code in `training/Autograd`.

@@ -128,7 +128,6 @@ std::vector<float> runInferencePrefill(GRIM::LanguageModel* model,
     request.batch_idx = 0;
     request.graph = GRIM::Forward::ModelForwardGraphPolicy{
         /*connect_parameter_graph=*/false,
-        /*retain_backward_graph=*/false,
         /*enable_dropout=*/false};
 
     auto forward_outputs = GRIM::Forward::executeModelForward(request, runtime_payload);

@@ -611,7 +611,6 @@ GRIM::Forward::ModelForwardRequest buildTrainingForwardRequest(
         execution_transition_student_alpha;
     request.graph = GRIM::Forward::ModelForwardGraphPolicy{
         /*connect_parameter_graph=*/true,
-        /*retain_backward_graph=*/true,
         /*enable_dropout=*/true,
         /*emit_selector_logits=*/emit_selector_logits};
     return request;
@@ -1255,12 +1254,11 @@ ValidationResult runValidation(TrainingContext& ctx) {
         // graph) with dropout DISABLED — identical to the inference forward.
         // The text-CE and selector terms read only explicitly emitted outputs,
         // valid under this read-only policy. NOTE: if execution_block_enabled is
-        // ever turned on, the execution auxiliary loss reads retained execution
-        // forward tensors — revisit retain_backward_graph here before relying on
-        // a validation execution-loss term.
+        // ever turned on, the execution auxiliary loss reads graph-connected
+        // execution tensors — validation must not rely on that backward-only
+        // execution-loss path while connect_parameter_graph remains false.
         forward_request.graph = GRIM::Forward::ModelForwardGraphPolicy{
             /*connect_parameter_graph=*/false,
-            /*retain_backward_graph=*/false,
             /*enable_dropout=*/false,
             /*emit_selector_logits=*/emit_selector_logits};
 

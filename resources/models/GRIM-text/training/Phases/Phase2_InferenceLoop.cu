@@ -334,7 +334,6 @@ GRIM::GeneratedSequence generateOneSequence(
         const bool emit_selector_logits = want_selector && use_selector;
         request.graph = GRIM::Forward::ModelForwardGraphPolicy{
             /*connect_parameter_graph=*/false,
-            /*retain_backward_graph=*/false,
             /*enable_dropout=*/false,
             /*emit_selector_logits=*/emit_selector_logits};
 

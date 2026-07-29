@@ -375,8 +375,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   **Diagnostic Code Assessment:**
   - Issue #93/#95 diagnostic blocks (cudaMemcpy stats, column variance) are INSIDE the
     `if (use_learned_pos_emb)` guard → NEVER EXECUTED with ALIBI_ROPE. Dead diagnostic code.
-  - Issue #91 diagnostic (full embedding dump after ScratchBlock) is behind
-    `ENABLE_EXPENSIVE_DIAGNOSTICS` compile-time guard. Not a performance concern.
+  - Issue #91 expensive forward diagnostic was removed during logging cleanup.
 
   ---
 

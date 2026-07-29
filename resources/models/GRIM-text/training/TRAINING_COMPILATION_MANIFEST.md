@@ -392,7 +392,7 @@ Use this checklist to systematically audit each file in the order it's used duri
 
 - [x] **Inference_GPU.cu** ✅ DELETED (phase-2 boundary split)
   - Phase2 inference owns the generation session: prompt/current-sequence payload construction, sampling, appending, and decode.
-  - `training/Phases/Phase2_InferenceLoop.cu::generateOneSequence(...)` now uploads the explicit payload, authors `ModelForwardRequest` / `ModelForwardRuntimePayload`, enters `Shared/Forward/ModelForward_GPU.cu` with `ModelForwardGraphPolicy{false,false,false,false}`, returns last-token logits to the sampler, and clears intermediates.
+  - `training/Phases/Phase2_InferenceLoop.cu::generateOneSequence(...)` now uploads the explicit payload, authors `ModelForwardRequest` / `ModelForwardRuntimePayload`, enters `Shared/Forward/ModelForward_GPU.cu` with `ModelForwardGraphPolicy{false,false,false}`, returns last-token logits to the sampler, and clears intermediates.
   - **DELETED**: `scoreSequenceFullContext_()`, `primeGenerationSession()`, `continueGenerationSession()`, `scoreNextTokenWithKvCache_()`, KV-cache/decode scratch allocation, and the second encoder-layer implementation.
   - No AutogradContext inference path remains; inference uses the shared read-only full-context graph only ✅
 
@@ -506,8 +506,7 @@ Use this checklist to systematically audit each file in the order it's used duri
   **Diagnostic Code Assessment:**
   - Issue #93/#95 diagnostic blocks (cudaMemcpy stats, column variance) are INSIDE the
     `if (use_learned_pos_emb)` guard → NEVER EXECUTED with ALIBI_ROPE. Dead diagnostic code.
-  - Issue #91 diagnostic (full embedding dump after ScratchBlock) is behind
-    `ENABLE_EXPENSIVE_DIAGNOSTICS` compile-time guard. Not a performance concern.
+  - Issue #91 expensive forward diagnostic was removed during logging cleanup.
 
   ---
 

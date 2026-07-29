@@ -28,8 +28,6 @@ constexpr bool ENABLE_BACKWARD_FLASH_ATTN_LOGS = false;///< "[BACKWARD layer=X] 
 // Loss computation logging - DISABLED FOR PRODUCTION
 constexpr bool ENABLE_LOSS_BACKWARD_SAMPLING = false;  ///< NLLLossGradFn diagnostic sampling
 
-// Expensive diagnostics (D2H copies for analysis - disable for production training)
-constexpr bool ENABLE_EXPENSIVE_DIAGNOSTICS = false;   ///< Rule 21 argmax analysis, embedding cosine, etc.
 // Rho computation feeds two independent sinks. Keep telemetry enabled for
 // post-training CSV analysis while allowing the verbose equation logs to stay off.
 constexpr bool ENABLE_RHO_BUILDUP_LOGS = false;        ///< [RHO_BUILDUP_EQUATION*] written logger/tape output
