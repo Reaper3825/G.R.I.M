@@ -46,7 +46,7 @@ void runExecutionBlockNoGraph(
     int exec_step_count,
     bool execution_block_active,
     bool execution_selector_bridge_requested,
-    const Tensor& layer_output,
+    Tensor& layer_output,
     ModelForwardRuntimePayload& runtime,
     ModelForwardOutputs& forward_outputs,
     std::vector<bool>& execution_active_by_row);
@@ -61,7 +61,7 @@ void runExecutionBlockConnectedGraph(
     int exec_step_count,
     bool execution_block_active,
     bool execution_selector_bridge_requested,
-    const Tensor& layer_output,
+    Tensor& layer_output,
     ModelForwardRuntimePayload& runtime,
     ModelForwardOutputs& forward_outputs);
 
