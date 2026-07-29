@@ -38,7 +38,7 @@ For batch=10, seq=1024, heads=16, head_dim=64:
 ### 1. Unigram Tokenizer Runtime Workspace
 ```cpp
 // HyperParameters_GPU.hpp
-constexpr size_t UNIGRAM_MAX_SEQUENCE_LENGTH = 4096;  // static tokenizer workspace floor, not model sequence policy
+constexpr size_t UNIGRAM_MAX_SEQUENCE_LENGTH = 16ULL * 1024;  // static tokenizer workspace floor, not model sequence policy
 ```
 - `UNIGRAM_MAX_SEQUENCE_LENGTH` is only the static capacity floor for generic/server tokenizer runtime init.
 - Corpus training/GRMT generation dynamically finalizes tokenizer runtime state with `longest_normalized_e_step_segment` via `UnigramTrainingRuntimeReport`; long concept rows must not be capped by this static floor.

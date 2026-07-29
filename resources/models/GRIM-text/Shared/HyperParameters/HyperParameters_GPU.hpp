@@ -109,7 +109,7 @@ constexpr float UNIGRAM_PRUNE_THRESHOLD = 0.0001f;    // Tokens <0.01% usage get
 constexpr int UNIGRAM_MIN_VOCAB_SIZE = 8000;          // Don't prune below this
 constexpr double UNIGRAM_MIN_COUNT = 1.0;             // Tokens used <1 time get pruned
 constexpr size_t UNIGRAM_MAX_SUBWORD_BYTES = 100ULL * 1024 * 1024;  // 100MB limit for subword mining
-constexpr size_t UNIGRAM_MAX_SEQUENCE_LENGTH = 4096;  // Static tokenizer workspace floor
+constexpr size_t UNIGRAM_MAX_SEQUENCE_LENGTH = 16ULL * 1024;  // Static tokenizer workspace floor
 
 //======================================================//
 // GELU Activation Constants
