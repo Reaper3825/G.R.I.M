@@ -12,6 +12,7 @@
 #ifdef USE_CUDA
 
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
+#include "../Execution/SlotIdentity.hpp"
 #include "../CudaAllocUtils.hpp"
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 
@@ -42,10 +43,10 @@ struct ExecStepMetrics {
 };
 
 struct ExecutionRecord {
-    int arg1_slot = -1;
-    int arg2_slot = -1;
+    Execution::SlotId arg1_slot;
+    Execution::SlotId arg2_slot;
     int op_id = -1;
-    int write_slot = -1;
+    Execution::SlotId write_slot;
     float value_before_1 = 0.0f;
     float value_before_2 = 0.0f;
     float value_after = 0.0f;

@@ -147,7 +147,7 @@ GRIM::GeneratedSequence generateOneSequence(
     const auto& prompt_numeric_values = prompt_payload.numeric_values;
     const auto& prompt_atom_mask = prompt_payload.atom_mask;
     const auto& prompt_atom_flags = prompt_payload.atom_flags;
-    const auto& prompt_token_to_slot_map = prompt_payload.token_to_slot_map;
+    const auto& prompt_token_to_slot_index_map = prompt_payload.token_to_slot_index_map;
     const auto& prompt_atom_entry_ids = prompt_payload.atom_entry_ids;
     const auto authored_prompt_atom_table = prompt_payload.seq_atom_tables[0];
     auto generation_atom_table = authored_prompt_atom_table
@@ -162,10 +162,10 @@ GRIM::GeneratedSequence generateOneSequence(
     sequence.token_numeric_values = prompt_numeric_values;
     sequence.token_atom_mask = prompt_atom_mask;
     sequence.context_atom_table = prompt_atom_table;
-    if (prompt_token_to_slot_map.size() != prompt_tokens.size()) {
-        throw std::runtime_error("Phase2 payload inference: token_to_slot_map length mismatch");
+    if (prompt_token_to_slot_index_map.size() != prompt_tokens.size()) {
+        throw std::runtime_error("Phase2 payload inference: token_to_slot_index_map length mismatch");
     }
-    sequence.token_to_slot_map = prompt_token_to_slot_map;
+    sequence.token_to_slot_index_map = prompt_token_to_slot_index_map;
     if (prompt_atom_entry_ids.size() != prompt_tokens.size()) {
         throw std::runtime_error("Phase2 payload inference: atom_entry_ids length mismatch");
     }
@@ -369,6 +369,12 @@ GRIM::GeneratedSequence generateOneSequence(
                     execution_output.execution_suppressed_no_bootstrap;
                 telemetry.stopped_by_model = execution_output.stopped_by_model;
                 telemetry.stopped_at_max_steps = execution_output.stopped_at_max_steps;
+                if (active_payload.compiled_slot_bindings.empty()) {
+                    throw std::runtime_error(
+                        "generateOneSequence: execution telemetry has no compiled slot bindings");
+                }
+                telemetry.compiled_slot_bindings =
+                    active_payload.compiled_slot_bindings.front();
                 telemetry.steps.reserve(execution_output.steps.size());
                 for (size_t step_idx = 0; step_idx < execution_output.steps.size(); ++step_idx) {
                     const auto& step = execution_output.steps[step_idx];
@@ -481,6 +487,7 @@ GRIM::GeneratedSequence generateOneSequence(
                 tail.execution_control.stopped_by_model,
                 tail.execution_control.stopped_at_max_steps,
                 tail.execution_control.steps,
+                tail.execution_control.compiled_slot_bindings,
                 tail.execution_control.final_slot_values,
                 tail.execution_control.final_slot_valid);
             tail.execution_control.terminal_result_available = emission.available;
@@ -561,7 +568,7 @@ GRIM::GeneratedSequence generateOneSequence(
         sequence.token_scores.push_back(s.log_probability);
         sequence.token_numeric_values.push_back(numeric_value);
         sequence.token_atom_mask.push_back(atom_mask);
-        sequence.token_to_slot_map.push_back(-1);
+        sequence.token_to_slot_index_map.push_back(-1);
         sequence.atom_entry_ids.push_back(atom_entry_id);
         sequence_atom_flags.push_back(atom_flags);
         sequence.score += s.log_probability;
@@ -824,9 +831,9 @@ Phase2TextInferenceResult executePhase2TextInference(
 
     result.prompt_token_count = tokens.size();
 
-    std::vector<int32_t> prompt_token_to_slot_map(tokens.size(), -1);
+    std::vector<int32_t> prompt_token_to_slot_index_map(tokens.size(), -1);
     if (execution_hp.enabled) {
-        prompt_token_to_slot_map = GRIM::Batching::buildInferenceExecutionSlotMap(
+        prompt_token_to_slot_index_map = GRIM::Batching::buildInferenceExecutionSlotIndexMap(
             tokens,
             atom_mask,
             execution_hp.num_slots,
@@ -840,7 +847,7 @@ Phase2TextInferenceResult executePhase2TextInference(
         atom_flags,
         prompt_atom_table,
         atom_entry_ids,
-        prompt_token_to_slot_map,
+        prompt_token_to_slot_index_map,
         vocab_size,
         static_cast<size_t>(batch_size),
         static_cast<size_t>(max_cached_seq_len),

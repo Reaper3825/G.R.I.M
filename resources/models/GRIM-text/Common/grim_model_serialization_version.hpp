@@ -47,6 +47,10 @@ inline constexpr std::uint32_t GRIM_MODEL_VERSION = 16;
 // v15: Added execution gate supervision and prefix-only planner boundary:
 //      int8 execution_gate_target, int32 execution_prompt_end_pos,
 //      int32 execution_prompt_length
-inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 15;
+// v16: Replaced semantic raw slot integers with opaque uint64 SlotId values.
+//      Added CompiledSlotBinding[count] (SlotId -> dense int32 SlotIndex).
+//      Bootstrap bindings carry SlotIndex; TeacherStep carries SlotId fields.
+//      There is no reader compatibility path for earlier execution metadata.
+inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 16;
 
 } // namespace GRIM

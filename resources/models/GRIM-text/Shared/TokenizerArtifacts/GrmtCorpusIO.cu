@@ -10,6 +10,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
+#include <unordered_set>
 #include <utility>
 
 #ifdef _WIN32
@@ -68,6 +69,38 @@ T readScalar(std::istream& input, const std::string& source) {
     T value{};
     readExact(input, &value, sizeof(T), source);
     return value;
+}
+
+void writeSlotId(
+    std::ostream& output,
+    GRIM::Execution::SlotId id,
+    const std::string& sink)
+{
+    writeScalar(output, id.serialized(), sink);
+}
+
+GRIM::Execution::SlotId readSlotId(
+    std::istream& input,
+    const std::string& source)
+{
+    return GRIM::Execution::SlotId::fromSerialized(
+        readScalar<GRIM::Execution::SlotId::Storage>(input, source));
+}
+
+void writeSlotIndex(
+    std::ostream& output,
+    GRIM::Execution::SlotIndex index,
+    const std::string& sink)
+{
+    writeScalar(output, index.dense(), sink);
+}
+
+GRIM::Execution::SlotIndex readSlotIndex(
+    std::istream& input,
+    const std::string& source)
+{
+    return GRIM::Execution::SlotIndex::fromDense(
+        readScalar<GRIM::Execution::SlotIndex::Storage>(input, source));
 }
 
 void publishTempFileOrThrow(const fs::path& temp_path, const fs::path& final_path) {
@@ -159,9 +192,9 @@ void GrmtSequence::validateForWrite(const std::string& source) const {
                                  std::to_string(atom_entry_ids.size()) +
                                  " != token_ids.size()=" + std::to_string(n));
     }
-    if (token_exec_slots.size() != n) {
-        throw std::runtime_error("[GRMT] " + source + ": token_exec_slots.size()=" +
-                                 std::to_string(token_exec_slots.size()) +
+    if (token_exec_slot_indices.size() != n) {
+        throw std::runtime_error("[GRMT] " + source + ": token_exec_slot_indices.size()=" +
+                                 std::to_string(token_exec_slot_indices.size()) +
                                  " != token_ids.size()=" + std::to_string(n));
     }
     if (!GRIM::Execution::isValidExecutionGateTarget(execution_gate_target)) {
@@ -238,6 +271,83 @@ void GrmtSequence::validateForWrite(const std::string& source) const {
         throw std::runtime_error("[GRMT] " + source +
                                  ": execution_active sequence has no teacher_steps");
     }
+    if (execution_active && compiled_slot_bindings.empty()) {
+        throw std::runtime_error("[GRMT] " + source +
+                                 ": execution_active sequence has no compiled_slot_bindings");
+    }
+    if (execution_active && compiled_bootstrap_bindings.empty()) {
+        throw std::runtime_error("[GRMT] " + source +
+                                 ": execution_active sequence has no compiled_bootstrap_bindings");
+    }
+    if (!execution_active &&
+        (!compiled_slot_bindings.empty() ||
+         !compiled_bootstrap_bindings.empty() ||
+         !teacher_steps.empty())) {
+        throw std::runtime_error("[GRMT] " + source +
+                                 ": inactive sequence carries execution metadata");
+    }
+
+    std::unordered_set<std::uint64_t> slot_ids;
+    std::unordered_set<std::int32_t> slot_indices;
+    for (const auto& binding : compiled_slot_bindings) {
+        if (!binding.slot_id.valid() || !binding.slot_index.valid()) {
+            throw std::runtime_error("[GRMT] " + source +
+                                     ": compiled slot binding contains an invalid primitive");
+        }
+        if (static_cast<std::size_t>(binding.slot_index.dense()) >=
+            compiled_slot_bindings.size()) {
+            throw std::runtime_error("[GRMT] " + source +
+                                     ": compiled SlotIndex is outside its dense table");
+        }
+        if (!slot_ids.insert(binding.slot_id.serialized()).second ||
+            !slot_indices.insert(binding.slot_index.dense()).second) {
+            throw std::runtime_error("[GRMT] " + source +
+                                     ": compiled slot bindings are not bijective");
+        }
+    }
+
+    std::vector<std::int32_t> expected_slot_indices(n, -1);
+    std::unordered_set<std::int32_t> bootstrap_positions;
+    std::unordered_set<std::int32_t> bootstrap_slot_indices;
+    for (std::size_t i = 0; i < compiled_bootstrap_bindings.size(); ++i) {
+        const auto& binding = compiled_bootstrap_bindings[i];
+        if (binding.binding_id != static_cast<std::int32_t>(i)) {
+            throw std::runtime_error("[GRMT] " + source +
+                                     ": bootstrap binding_id is not its row-local ordinal");
+        }
+        if (binding.token_pos < 0 ||
+            static_cast<std::size_t>(binding.token_pos) >= n) {
+            throw std::runtime_error("[GRMT] " + source +
+                                     ": bootstrap token_pos is outside the sequence");
+        }
+        if (!GRIM::Execution::findSlotId(
+                compiled_slot_bindings, binding.slot_index).has_value()) {
+            throw std::runtime_error("[GRMT] " + source +
+                                     ": bootstrap SlotIndex has no semantic binding");
+        }
+        if (!bootstrap_positions.insert(binding.token_pos).second ||
+            !bootstrap_slot_indices.insert(binding.slot_index.dense()).second) {
+            throw std::runtime_error("[GRMT] " + source +
+                                     ": bootstrap bindings are not injective");
+        }
+        expected_slot_indices[static_cast<std::size_t>(binding.token_pos)] =
+            binding.slot_index.dense();
+    }
+    if (token_exec_slot_indices != expected_slot_indices) {
+        throw std::runtime_error("[GRMT] " + source +
+                                 ": token_exec_slot_indices do not match bootstrap bindings");
+    }
+    for (const auto& step : teacher_steps) {
+        if (!GRIM::Execution::findSlotIndex(
+                compiled_slot_bindings, step.arg1_slot).has_value() ||
+            !GRIM::Execution::findSlotIndex(
+                compiled_slot_bindings, step.arg2_slot).has_value() ||
+            !GRIM::Execution::findSlotIndex(
+                compiled_slot_bindings, step.write_slot).has_value()) {
+            throw std::runtime_error("[GRMT] " + source +
+                                     ": teacher SlotId has no compiled runtime binding");
+        }
+    }
 }
 
 GrmtCorpusWriter::GrmtCorpusWriter(
@@ -313,24 +423,32 @@ void GrmtCorpusWriter::writeSequence(const GrmtSequence& sequence) {
     writeScalar(file_, gate_target, sink);
     writeScalar(file_, sequence.execution_prompt_end_pos, sink);
     writeScalar(file_, sequence.execution_prompt_length, sink);
-    writeExact(file_, sequence.token_exec_slots.data(), static_cast<std::size_t>(len) * sizeof(std::int32_t), sink);
+    writeExact(file_, sequence.token_exec_slot_indices.data(), static_cast<std::size_t>(len) * sizeof(std::int32_t), sink);
 
-    static_assert(sizeof(GRIM::Execution::CompiledBootstrapBinding) == 12,
-        "CompiledBootstrapBinding must be 12 bytes for bulk GRMT serialization");
-    const std::uint32_t cbb_count = static_cast<std::uint32_t>(sequence.compiled_bootstrap_bindings.size());
-    writeScalar(file_, cbb_count, sink);
-    if (cbb_count > 0) {
-        writeExact(file_, sequence.compiled_bootstrap_bindings.data(),
-                   static_cast<std::size_t>(cbb_count) * sizeof(GRIM::Execution::CompiledBootstrapBinding), sink);
+    const std::uint32_t csb_count =
+        static_cast<std::uint32_t>(sequence.compiled_slot_bindings.size());
+    writeScalar(file_, csb_count, sink);
+    for (const auto& binding : sequence.compiled_slot_bindings) {
+        writeSlotId(file_, binding.slot_id, sink);
+        writeSlotIndex(file_, binding.slot_index, sink);
     }
 
-    static_assert(sizeof(GRIM::Execution::TeacherStep) == 20,
-        "TeacherStep must be 20 bytes for bulk GRMT serialization");
+    const std::uint32_t cbb_count = static_cast<std::uint32_t>(sequence.compiled_bootstrap_bindings.size());
+    writeScalar(file_, cbb_count, sink);
+    for (const auto& binding : sequence.compiled_bootstrap_bindings) {
+        writeScalar(file_, binding.binding_id, sink);
+        writeScalar(file_, binding.token_pos, sink);
+        writeSlotIndex(file_, binding.slot_index, sink);
+    }
+
     const std::uint32_t ts_count = static_cast<std::uint32_t>(sequence.teacher_steps.size());
     writeScalar(file_, ts_count, sink);
-    if (ts_count > 0) {
-        writeExact(file_, sequence.teacher_steps.data(),
-                   static_cast<std::size_t>(ts_count) * sizeof(GRIM::Execution::TeacherStep), sink);
+    for (const auto& step : sequence.teacher_steps) {
+        writeScalar(file_, step.op_id, sink);
+        writeSlotId(file_, step.arg1_slot, sink);
+        writeSlotId(file_, step.arg2_slot, sink);
+        writeSlotId(file_, step.write_slot, sink);
+        writeScalar(file_, step.expected_value, sink);
     }
 
     ++written_sequences_;
@@ -416,25 +534,36 @@ bool GrmtCorpusReader::readNext(GrmtSequence& out_sequence) {
     seq.execution_prompt_end_pos = readScalar<std::int32_t>(file_, source);
     seq.execution_prompt_length = readScalar<std::int32_t>(file_, source);
 
-    seq.token_exec_slots.resize(seq_len);
-    readExact(file_, seq.token_exec_slots.data(), static_cast<std::size_t>(seq_len) * sizeof(std::int32_t), source);
+    seq.token_exec_slot_indices.resize(seq_len);
+    readExact(file_, seq.token_exec_slot_indices.data(), static_cast<std::size_t>(seq_len) * sizeof(std::int32_t), source);
+
+    const std::uint32_t csb_count = readScalar<std::uint32_t>(file_, source);
+    seq.compiled_slot_bindings.reserve(csb_count);
+    for (std::uint32_t i = 0; i < csb_count; ++i) {
+        seq.compiled_slot_bindings.push_back(GRIM::Execution::CompiledSlotBinding{
+            readSlotId(file_, source),
+            readSlotIndex(file_, source)});
+    }
 
     const std::uint32_t cbb_count = readScalar<std::uint32_t>(file_, source);
-    static_assert(sizeof(GRIM::Execution::CompiledBootstrapBinding) == 12,
-        "CompiledBootstrapBinding must be 12 bytes for bulk GRMT deserialization");
-    if (cbb_count > 0) {
-        seq.compiled_bootstrap_bindings.resize(cbb_count);
-        readExact(file_, seq.compiled_bootstrap_bindings.data(),
-                  static_cast<std::size_t>(cbb_count) * sizeof(GRIM::Execution::CompiledBootstrapBinding), source);
+    seq.compiled_bootstrap_bindings.reserve(cbb_count);
+    for (std::uint32_t i = 0; i < cbb_count; ++i) {
+        seq.compiled_bootstrap_bindings.push_back(
+            GRIM::Execution::CompiledBootstrapBinding{
+                readScalar<std::int32_t>(file_, source),
+                readScalar<std::int32_t>(file_, source),
+                readSlotIndex(file_, source)});
     }
 
     const std::uint32_t ts_count = readScalar<std::uint32_t>(file_, source);
-    static_assert(sizeof(GRIM::Execution::TeacherStep) == 20,
-        "TeacherStep must be 20 bytes for bulk GRMT deserialization");
-    if (ts_count > 0) {
-        seq.teacher_steps.resize(ts_count);
-        readExact(file_, seq.teacher_steps.data(),
-                  static_cast<std::size_t>(ts_count) * sizeof(GRIM::Execution::TeacherStep), source);
+    seq.teacher_steps.reserve(ts_count);
+    for (std::uint32_t i = 0; i < ts_count; ++i) {
+        seq.teacher_steps.push_back(GRIM::Execution::TeacherStep{
+            readScalar<int>(file_, source),
+            readSlotId(file_, source),
+            readSlotId(file_, source),
+            readSlotId(file_, source),
+            readScalar<float>(file_, source)});
     }
 
     seq.validateForWrite(source);

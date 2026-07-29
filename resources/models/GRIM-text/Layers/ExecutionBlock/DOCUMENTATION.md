@@ -111,12 +111,14 @@ explicitly through `ExecutionBlockDiagnosticsBuffers` where needed.
 The caller must provide:
 
 - `token_offset` and `row_tokens` describing the active valid row span inside `H` (`payload.seq_lengths[b]`, not padded `payload.max_seq_len`),
-- `token_to_slot_map` for that row only.
+- `token_to_slot_index_map` for that row only.
 
 Numeric-atom annotations are read directly from the global atom mask
 (`bindings.d_atom_mask`) row slice. State-bearing positions are not inferred from
-that mask: they are defined exclusively by the row-local `token_to_slot_map`, which
-is validated against `compiled_bootstrap_bindings`. `payload.atom_mask` is validated
+that mask: they are defined exclusively by the row-local `token_to_slot_index_map`, which
+is validated against `compiled_bootstrap_bindings`. Semantic identity is carried by
+opaque `SlotId` values and lowered only through the row's `compiled_slot_bindings`;
+the dense token map never defines identity. `payload.atom_mask` is validated
 at build time to equal `token_layout.isAtom(token_id)`, so it matches ScratchBlock's
 atom detection exactly.
 
@@ -125,10 +127,10 @@ The execution-block boundary fail-loud checks:
 - `token_offset >= 0`
 - `row_tokens > 0`
 - `token_offset + row_tokens <= total_tokens`
-- `token_to_slot_map != nullptr`
+- `token_to_slot_index_map != nullptr`
 - `bindings.d_atom_mask != nullptr`
-- every mapped position (`token_to_slot_map[pos] >= 0`) is a numeric atom and maps to an initialized value-slot in `[S, V)`
-- ordinary numeric atoms may remain unmapped (`token_to_slot_map[pos] == -1`); they are not execution state
+- every mapped position (`token_to_slot_index_map[pos] >= 0`) is a numeric atom and maps to an initialized value-slot in `[S, V)`
+- ordinary numeric atoms may remain unmapped (`token_to_slot_index_map[pos] == -1`); they are not execution state
 
 Important current nuance:
 

@@ -285,7 +285,7 @@ void runExecutionBlockNoGraph(
         const int row_offset = b * payload.max_seq_len;
         bool has_bootstrap_slot = false;
         for (int t = 0; t < row_len; ++t) {
-            if (payload.token_to_slot_map[static_cast<size_t>(row_offset + t)] >= 0) {
+            if (payload.token_to_slot_index_map[static_cast<size_t>(row_offset + t)] >= 0) {
                 has_bootstrap_slot = true;
                 break;
             }
@@ -297,7 +297,7 @@ void runExecutionBlockNoGraph(
         execution_active_by_row[static_cast<size_t>(b)] = execute_row;
         if (!execute_row) continue;
 
-        if (!request.bindings || !request.bindings->d_token_to_slot_map
+        if (!request.bindings || !request.bindings->d_token_to_slot_index_map
             || !request.bindings->d_atom_entry_ids
             || !request.bindings->d_pool_numeric_float_values
             || !request.bindings->d_pool_numeric_int_values
@@ -447,7 +447,7 @@ void runExecutionBlockConnectedGraph(
         requirePayloadRowLength(
             payload, b, "ModelForward ExecutionBlock bootstrap");
 
-        if (!request.bindings || !request.bindings->d_token_to_slot_map
+        if (!request.bindings || !request.bindings->d_token_to_slot_index_map
             || !request.bindings->d_atom_entry_ids
             || !request.bindings->d_pool_numeric_float_values
             || !request.bindings->d_pool_numeric_int_values

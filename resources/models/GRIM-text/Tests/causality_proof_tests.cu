@@ -76,7 +76,7 @@ std::vector<float> runInferencePrefill(GRIM::LanguageModel* model,
     const auto execution_hp = GRIM::HyperParameters::executionBlockConstructionHP(cfg);
     std::vector<uint32_t> atom_flags(tokens.size(), 0);
     std::vector<uint32_t> atom_entry_ids(tokens.size(), GRIM::Tokenizer::kAtomEntryNone);
-    std::vector<int32_t> token_to_slot_map(tokens.size(), -1);
+    std::vector<int32_t> token_to_slot_index_map(tokens.size(), -1);
 
     GRIM::Batching::BatchPayload payload = GRIM::Batching::buildInferenceBatchPayload(
         tokens,
@@ -85,7 +85,7 @@ std::vector<float> runInferencePrefill(GRIM::LanguageModel* model,
         atom_flags,
         nullptr,
         atom_entry_ids,
-        token_to_slot_map,
+        token_to_slot_index_map,
         cfg.vocab_size,
         static_cast<size_t>(cfg.batch_size),
         static_cast<size_t>(cfg.max_cached_seq_len),

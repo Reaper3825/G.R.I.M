@@ -471,8 +471,8 @@ void executionBlockBootstrapMemoryFromSlotMap(
                "bootstrapMemoryFromSlotMap: payload.max_seq_len must be positive");
     EXEC_CHECK(payload.seq_lengths.size() == static_cast<size_t>(payload.batch_size),
                "bootstrapMemoryFromSlotMap: payload.seq_lengths does not match batch_size");
-    EXEC_CHECK(payload.token_to_slot_map.size() == static_cast<size_t>(payload.total_tokens),
-               "bootstrapMemoryFromSlotMap: payload.token_to_slot_map does not match total_tokens");
+    EXEC_CHECK(payload.token_to_slot_index_map.size() == static_cast<size_t>(payload.total_tokens),
+               "bootstrapMemoryFromSlotMap: payload.token_to_slot_index_map does not match total_tokens");
     EXEC_CHECK(payload.row_atom_offset.size()
                    == static_cast<size_t>(payload.batch_size + 1),
                "bootstrapMemoryFromSlotMap: payload.row_atom_offset does not match batch_size");
@@ -490,8 +490,8 @@ void executionBlockBootstrapMemoryFromSlotMap(
                "bootstrapMemoryFromSlotMap: bindings.d_pool_numeric_int_values is null");
     EXEC_CHECK(bindings.d_pool_numeric_kinds != nullptr,
                "bootstrapMemoryFromSlotMap: bindings.d_pool_numeric_kinds is null");
-    EXEC_CHECK(bindings.d_token_to_slot_map != nullptr,
-               "bootstrapMemoryFromSlotMap: bindings.d_token_to_slot_map is null");
+    EXEC_CHECK(bindings.d_token_to_slot_index_map != nullptr,
+               "bootstrapMemoryFromSlotMap: bindings.d_token_to_slot_index_map is null");
     EXEC_CHECK(bindings.d_bootstrap_slot_to_pool_index != nullptr,
                "bootstrapMemoryFromSlotMap: bindings.d_bootstrap_slot_to_pool_index is null");
 
@@ -503,7 +503,7 @@ void executionBlockBootstrapMemoryFromSlotMap(
     const uint32_t* device_atom_entry_ids =
         bindings.d_atom_entry_ids + row_offset;
     const int32_t* device_slot_map =
-        bindings.d_token_to_slot_map + row_offset;
+        bindings.d_token_to_slot_index_map + row_offset;
     const int* bootstrap_slot_to_pool_index =
         bindings.d_bootstrap_slot_to_pool_index
             + static_cast<size_t>(batch_row) * payload.execution_slot_count;
@@ -530,10 +530,10 @@ void executionBlockBootstrapMemoryFromSlotMap(
     const int V = hp.num_slots;
     std::vector<int> slot_token_positions(static_cast<size_t>(V), -1);
     for (int token_pos = 0; token_pos < row_tokens; ++token_pos) {
-        const int slot = payload.token_to_slot_map[
+        const int slot = payload.token_to_slot_index_map[
             static_cast<size_t>(row_offset + token_pos)];
         EXEC_CHECK(slot >= -1 && slot < V,
-                   "bootstrapMemoryFromSlotMap: token_to_slot_map contains an out-of-range slot");
+                   "bootstrapMemoryFromSlotMap: token_to_slot_index_map contains an out-of-range slot");
         if (slot < 0) {
             continue;
         }
@@ -683,11 +683,22 @@ void buildValueSlotCandidates(
             V,
             S);
         CUDA_CHECK_KERNEL();
+        if (payload.compiled_slot_bindings.empty() ||
+            batch_row >= static_cast<int>(payload.compiled_slot_bindings.size())) {
+            throw std::runtime_error(
+                "buildValueSlotCandidates: row has no semantic/runtime slot bindings");
+        }
+        const auto& slot_bindings =
+            payload.compiled_slot_bindings[static_cast<std::size_t>(batch_row)];
         for (const auto& record : prior_records) {
-            EXEC_CHECK(record.write_slot >= S && record.write_slot < V,
+            const int write_slot = Execution::requireSlotIndex(
+                slot_bindings,
+                record.write_slot,
+                "buildValueSlotCandidates prior write").dense();
+            EXEC_CHECK(write_slot >= S && write_slot < V,
                 "buildValueSlotCandidates: prior write slot is outside value-slot range");
-            const int candidate_row = record.write_slot - S;
-            const int route_col = batch_row * V + record.write_slot;
+            const int candidate_row = write_slot - S;
+            const int route_col = batch_row * V + write_slot;
             CUDA_CHECK(cudaMemsetAsync(
                 slot_seed_route.data
                     + static_cast<size_t>(candidate_row) * total_slot_rows
@@ -745,10 +756,21 @@ void buildValueSlotCandidates(
                 "buildValueSlotCandidates: selector-to-slot map geometry mismatch");
 
             std::vector<uint8_t> overwritten(static_cast<size_t>(V), 0);
+            if (payload.compiled_slot_bindings.empty() ||
+                batch_row >= static_cast<int>(payload.compiled_slot_bindings.size())) {
+                throw std::runtime_error(
+                    "buildValueSlotCandidates: row has no semantic/runtime slot bindings");
+            }
+            const auto& slot_bindings =
+                payload.compiled_slot_bindings[static_cast<std::size_t>(batch_row)];
             for (const auto& record : prior_records) {
-                EXEC_CHECK(record.write_slot >= S && record.write_slot < V,
+                const int write_slot = Execution::requireSlotIndex(
+                    slot_bindings,
+                    record.write_slot,
+                    "buildValueSlotCandidates overwritten write").dense();
+                EXEC_CHECK(write_slot >= S && write_slot < V,
                     "buildValueSlotCandidates: prior write slot is outside value-slot range");
-                overwritten[static_cast<size_t>(record.write_slot)] = 1;
+                overwritten[static_cast<size_t>(write_slot)] = 1;
             }
 
             std::vector<float> host_pool_route(
@@ -917,6 +939,7 @@ void finalizeStepOrThrow(
     const HyperParameters::ExecutionBlockConstructionHP& hp,
     ExecutionBlockDiagnosticsBuffers& diag,
     ExecutionBlockStepOutput& forward_output,
+    const std::vector<Execution::CompiledSlotBinding>& slot_bindings,
     int step,
     cudaStream_t stream
 ) {
@@ -934,10 +957,19 @@ void finalizeStepOrThrow(
         cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
-    forward_output.record.arg1_slot = ri[0];
-    forward_output.record.arg2_slot = ri[1];
+    forward_output.record.arg1_slot = Execution::requireSlotId(
+        slot_bindings,
+        Execution::SlotIndex::fromDense(ri[0]),
+        "finalizeStepOrThrow arg1");
+    forward_output.record.arg2_slot = Execution::requireSlotId(
+        slot_bindings,
+        Execution::SlotIndex::fromDense(ri[1]),
+        "finalizeStepOrThrow arg2");
     forward_output.record.op_id = ri[2];
-    forward_output.record.write_slot = write_slot;
+    forward_output.record.write_slot = Execution::requireSlotId(
+        slot_bindings,
+        Execution::SlotIndex::fromDense(write_slot),
+        "finalizeStepOrThrow write");
     forward_output.record.value_before_1 = rf[0];
     forward_output.record.value_before_2 = rf[1];
     forward_output.record.value_after = rf[2];

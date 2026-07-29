@@ -102,8 +102,8 @@ void executionBlockStep(
     // validateExecutionPayload(). Only the local call-boundary contract that
     // BatchPayload does not own is checked here.
     EXEC_CHECK_SHAPE2(H, "H (executeStep)", payload.total_tokens, hp.d_model);
-    EXEC_CHECK(bindings.d_token_to_slot_map != nullptr,
-               "executeStep: bindings.d_token_to_slot_map is null");
+    EXEC_CHECK(bindings.d_token_to_slot_index_map != nullptr,
+               "executeStep: bindings.d_token_to_slot_index_map is null");
     EXEC_CHECK(bindings.d_atom_mask != nullptr,
                "executeStep: bindings.d_atom_mask is null - execution sources atom "
                "positions directly from the global atom mask");

@@ -10,8 +10,8 @@ It is **not** a substitute for `DOCUMENTATION.md` kernel-level detail; it focuse
 
 | Responsibility | You (data / pipeline) | Model (trained weights) |
 |----------------|-------------------------|-------------------------|
-| Which literal is which scalar in memory | `token_to_slot_map` per token (`-1` = non-state) + numeric side channel; `bootstrapMemoryFromSlotMap` copies into `M.values[slot]` | — |
-| Which slot is arg1 / arg2 | `teacher_steps` supplies structured CE targets when enabled | `w_arg1_select` scores arg1 over **value-slot** rows; `W_arg1_to_arg2` projects its soft candidate summary into the `w_arg2_select` query before argmax and hard reads from `M.values` |
+| Which literal initializes which runtime register | `token_to_slot_index_map` per token (`-1` = non-state) + numeric side channel; `bootstrapMemoryFromSlotMap` copies into `M.values[index]` | — |
+| Which semantic slot is arg1 / arg2 | `teacher_steps` supplies opaque `SlotId` targets; `compiled_slot_bindings` lowers them to per-row `SlotIndex` values | `w_arg1_select` scores arg1 over **value-slot** rows; `W_arg1_to_arg2` projects its soft candidate summary into the `w_arg2_select` query before argmax and hard reads from `M.values` |
 | Which operation (+ − * /) | — | `W_op_select_` from pooled context + soft arg hiddens; softmax → argmax → `kernelHardPickOpForward` |
 | Where to write the result | — | Write head softmax over `V` (scratch masked) → argmax → `kernelHardWriteScalarDev` |
 | What token to predict next | Targets in the batch / LM loss | LM head, injection path, rest of encoder |
@@ -31,11 +31,12 @@ zero-initialized conditional projection begins to move.
 - Fill **`numeric_values`** at each token position with the **literal** (e.g. `3.0`, `5.0`).
 - Set **`atom_mask`** (and related flags) consistently with how `buildBatchPayload` / the dataloader already builds batches.
 
-### 2. Slot map (mandatory for register semantics)
+### 2. Compiled slot-index map (mandatory for register semantics)
 
-- For each **state-bearing numeric token**, set **`token_to_slot_map[pos]`** to an integer slot id in **`[num_scratch_slots, num_slots)`** (value registers only).
+- For each **state-bearing numeric token**, set **`token_to_slot_index_map[pos]`** to a dense runtime index in **`[num_scratch_slots, num_slots)`** (value registers only).
 - Use **two distinct slots** for two addends (e.g. first literal → slot `S`, second → `S+1`, or fixed indices like `0` and `1` when `num_scratch_slots == 0`).
 - All **non-state** positions should be **`-1`**.
+- Carry semantic identities separately as opaque `SlotId` values and provide one explicit `compiled_slot_bindings` bijection for the row. Never infer identity from the dense index.
 
 Bootstrap runs once per forward at the execution layer (before `executeStep` loops): it copies literals into **`M.values[slot]`** and sets **`valid_mask`**. It also uses `bootstrap_slot_to_pool_index` to fuse the authored token's NumberEncoder-derived selector key into **`M.state_embeds[slot]`**. Generated writes replace that state embedding, so authored provenance cannot remain stale after an overwrite.
 
@@ -73,26 +74,26 @@ So the model learns **which slots to read** only if **incorrect reads hurt** the
 
 Add **explicit supervision** (requires training changes), for example:
 
-- Auxiliary cross-entropy on **`p_arg1` / `p_arg2`** against **gold slot indices** derived from the same `token_to_slot_map` you already build, or
+- Auxiliary cross-entropy on **`p_arg1` / `p_arg2`** against gold opaque `SlotId` targets lowered through `compiled_slot_bindings`, or
 - Intermediate **copy/move** tasks (“value in slot i should appear in slot j”) before harder arithmetic.
 
 ---
 
 ## Inference and generation
 
-- **Single forward** (`forward`, `forwardInit`, explicit Phase2 inference shared-forward calls, etc.): upload **`token_to_slot_map`** together with tokens and numerics so bootstrap and `executeStep` see the same contract as training.
-- **Autoregressive `generate` / `forwardStep`:** the default path appends new tokens with **slot id `-1`** unless you pass a non-default **`new_token_slot_id`** into **`forwardStep`** (and a policy for which slot each generated `<NUM>` should use). Without that, **decode-time** numbers do not participate in registers the same way as a fully specified prompt map.
+- **Single forward** (`forward`, `forwardInit`, explicit Phase2 inference shared-forward calls, etc.): upload **`token_to_slot_index_map`** together with tokens and numerics so bootstrap and `executeStep` see the same contract as training.
+- **Autoregressive decode:** generated tokens default to runtime index `-1`. Decode-time values require an explicit policy that allocates a semantic `SlotId`, lowers it to a row-lifetime `SlotIndex`, and updates both projections together.
 
 ---
 
 ## Quick checklist (addition-style)
 
 1. **`execution_block_enabled`** and scratch path enabled as required by `AutogradTraining.cu` gating.
-2. **Two literals** in the side channel with **two distinct value slots** in `token_to_slot_map`.
+2. **Two literals** in the side channel with **two distinct value slots** in `token_to_slot_index_map`.
 3. **Consistent mapping rule** across examples (or explicit gold for future aux loss).
 4. **Answer tokens / numeric targets** aligned with the task so wrong operands hurt the objective.
 5. **`K` large enough** if the expression needs more than one ALU step.
-6. **Inference:** H2D copy of **`token_to_slot_map`**; **generation:** define slot policy for new `<NUM>` if you need register execution while decoding.
+6. **Inference:** H2D copy of **`token_to_slot_index_map`**; **generation:** define slot policy for new `<NUM>` if you need register execution while decoding.
 
 ---
 
@@ -112,8 +113,8 @@ Later encoder layers may run **`crossAttentionRead`** from memory starting at **
 
 - `execution_block_GPU.hpp` / `execution_block_GPU.cu` — register machine and kernels.
 - `AutogradTraining.cu` — when the block runs; bootstrap and `executeStep` invocation.
-- `Shared/Batching/BatchPayload.*` — where `token_to_slot_map` is assembled for training.
-- `Shared/Batching/BatchDeviceUpload.cu` — H2D of `token_to_slot_map` into `cached_token_to_slot_map`.
+- `Shared/Batching/BatchPayload.*` — where `token_to_slot_index_map` is assembled for training.
+- `Shared/Batching/BatchDeviceUpload.cu` — H2D of `token_to_slot_index_map` into `BatchDeviceBindings::d_token_to_slot_index_map`.
 - `Phase2_InferenceLoop.cu` / `Shared/Forward/ModelForward_GPU.cu` — Phase2 authors inference payloads, uploads slot maps through `BatchDeviceBindings`, and drives shared-forward model scoring.
 
 ---
@@ -133,7 +134,7 @@ Structured fields in JSON may include:
 
 Encoding path: canonical text (`Q:`, `STATE0`, `EXEC`, …) plus a trailing **`__SLOTS__`** block (one numeric per line; order = `state_0.atoms` then each execution step’s `args` + `result`). The **last K numeric atoms** in the tokenized sequence get `token_exec_slots` = `base + 0..K-1` (base from env **`GRIM_CONCEPT_EXEC_BASE_SLOT`**, default `0`).
 
-**GRMT v10** appends `token_exec_slots[len]` after per-token atom strings; Phase1 sliding windows and `buildBatchPayload` keep that map aligned.
+**GRMT v10** appended `token_exec_slots[len]` after per-token atom strings. Current GRMT uses opaque `SlotId` teacher targets plus explicit compiled slot bindings.
 
 ### Target architecture (what it should look like later)
 
@@ -143,7 +144,7 @@ Concept blocks stay **thin curriculum records**: primarily **`id`** (+ optional 
 
 1. Resolve `cb_id` → canonical structured sequence (not re-embed the full block from `concept_blocks.jsonl`).
 2. Run **one** encoding pipeline on that resolved text/structure (same as other corpus rows).
-3. Derive **`token_exec_slots` / numeric side channels** from the **structured record** (or a shared schema), not from a duplicate `__SLOTS__` serialization of the block file.
+3. Derive **`token_exec_slot_indices` / numeric side channels** from the **structured record** (or a shared schema), not from a duplicate `__SLOTS__` serialization of the block file.
 
 Until that exists, the debug path above is intentionally redundant (block JSON is both UI curriculum and training source).
 

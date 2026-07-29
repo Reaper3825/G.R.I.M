@@ -577,7 +577,7 @@ bool PrepareTrainingDataFromCache(
 		for (size_t j = 0; j + 1 < seq_len; ++j) {
 			seq.targets[j] = seq.token_ids[j + 1];
 		}
-		seq.token_exec_slots.assign(seq_len, -1);
+		seq.token_exec_slot_indices.assign(seq_len, -1);
 		return seq;
 	};
 

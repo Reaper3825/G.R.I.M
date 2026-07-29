@@ -13,11 +13,14 @@
 
 #pragma once
 
+#include "SlotIdentity.hpp"
+
 #include <algorithm>
 #include <cstdint>
-#include <vector>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace GRIM {
 namespace Execution {
@@ -53,15 +56,27 @@ inline bool isValidExecutionGateTarget(ExecutionGateTarget target) {
 //   - which slot should receive the write
 //   - what scalar result is expected
 //
-// token_exec_slots and teacher_steps are PAIRED projections of one
+// compiled_slot_bindings and teacher_steps are paired projections of one
 // canonical record and must never be authored independently.
 // =============================================================================
 struct TeacherStep {
-    int op_id;
-    int arg1_slot;
-    int arg2_slot;
-    int write_slot;
-    float expected_value;
+    int op_id = -1;
+    SlotId arg1_slot;
+    SlotId arg2_slot;
+    SlotId write_slot;
+    float expected_value = 0.0f;
+};
+
+// =============================================================================
+// CompiledSlotBinding — explicit semantic/runtime lowering for one row
+//
+// SlotId remains stable for the semantic episode. SlotIndex is a dense register
+// address scoped to this compiled row payload. Neither value may be inferred
+// from the other; every lowering and trace materialization crosses this table.
+// =============================================================================
+struct CompiledSlotBinding {
+    SlotId slot_id;
+    SlotIndex slot_index;
 };
 
 // =============================================================================
@@ -77,9 +92,9 @@ struct TeacherStep {
 // named in bootstrap_bindings[].
 // =============================================================================
 struct CompiledBootstrapBinding {
-    int32_t binding_id;     // Ordinal within the row's bootstrap binding set
-    int32_t token_pos;      // Token position that initializes this slot
-    int32_t slot_id;        // Slot being initialized at this position
+    int32_t binding_id = -1; // Ordinal within the row's bootstrap binding set
+    int32_t token_pos = -1;  // Token position that initializes this slot
+    SlotIndex slot_index;   // Dense runtime slot initialized at this position
 };
 
 // =============================================================================
@@ -92,7 +107,7 @@ struct CompiledBootstrapBinding {
 // =============================================================================
 struct BootstrapLiteralBinding {
     int32_t literal_id;         // Ordinal within the structured record
-    int32_t slot_id;            // Slot this literal initializes
+    SlotId slot_id;             // Semantic slot this literal initializes
     int32_t occurrence_role;    // Semantic role identifier
     int32_t rendered_span_id;   // Identifier for the rendered text span
 };
@@ -103,7 +118,7 @@ struct BootstrapLiteralBinding {
 // This is the ACTUAL truth for execution-active rows. It exists BEFORE
 // tokenization and is the only place where execution meaning originates.
 //
-// token_exec_slots and teacher_steps are DERIVED projections.
+// Runtime slot indices and teacher slot identities are derived projections.
 // bootstrap_bindings defines the only literals allowed to seed registers.
 //
 // Rules:
@@ -123,9 +138,9 @@ struct StructuredExecutionRecord {
     // Ordered execution steps with expected outputs
     struct ExecutionStep {
         int op_id;
-        int arg1_slot;
-        int arg2_slot;
-        int write_slot;
+        SlotId arg1_slot;
+        SlotId arg2_slot;
+        SlotId write_slot;
         float expected_value;
     };
     std::vector<ExecutionStep> steps;
@@ -134,8 +149,8 @@ struct StructuredExecutionRecord {
     // The unique set of slot ids referenced by this row's execution program.
     // Includes bootstrap binding slot ids + teacher-step read/write slot ids.
     // Fixed before tokenization, does not change during execution.
-    // D_row ⊆ [S, V) where S,V are configured slot range bounds.
-    std::vector<int32_t> slot_domain;
+    // Compiled indices for D_row lie within [0, V); identities have no range semantics.
+    std::vector<SlotId> slot_domain;
 };
 
 // =============================================================================
@@ -149,11 +164,11 @@ struct StructuredExecutionRecord {
 // requirement, NOT the activation source.
 //
 // Runtime D_row is reconstructed as:
-//   D_row = { b.slot_id | b ∈ compiled_bootstrap_bindings }
+//   D_row = { b.slot_id | b ∈ compiled_slot_bindings }
 //           ∪ { step.arg1_slot, step.arg2_slot, step.write_slot | step ∈ teacher_steps }
 // It is NOT serialized separately.
 //
-// token_exec_slots is compiled ONLY from bootstrap_bindings[], not from
+// token_exec_slot_indices is compiled ONLY from bootstrap_bindings[], not from
 // arbitrary numeric tokens in rendered text.
 // =============================================================================
 struct CompiledStructuredExecutionPayload {
@@ -168,36 +183,99 @@ struct CompiledStructuredExecutionPayload {
     int32_t execution_prompt_length = 0;
 
     // Runtime binding projection: per-token slot assignment
-    // token_exec_slots[pos] >= 0 means state-bearing, -1 means non-state-bearing
-    std::vector<int32_t> token_exec_slots;
+    // token_exec_slot_indices[pos] >= 0 means state-bearing, -1 means non-state-bearing.
+    // These are temporary dense addresses, never semantic identities.
+    std::vector<int32_t> token_exec_slot_indices;
 
     // Compiled bootstrap provenance
     std::vector<CompiledBootstrapBinding> compiled_bootstrap_bindings;
+
+    // Explicit episode-local identity -> dense runtime address lowering
+    std::vector<CompiledSlotBinding> compiled_slot_bindings;
 
     // Execution supervision projection
     std::vector<TeacherStep> teacher_steps;
 };
 
 // =============================================================================
-// Utility: Reconstruct the row-local slot domain D_row from compiled payload
+// Utilities: Resolve the explicit semantic/runtime slot boundary
 //
-// D_row^{runtime} = { b.slot_id | b ∈ compiled_bootstrap_bindings }
+// D_row = { b.slot_id | b ∈ compiled_slot_bindings }
 //                   ∪ { step.arg1_slot, step.arg2_slot, step.write_slot | step ∈ teacher_steps }
 //
 // Configured slot ranges [S, V) remain outer bounds only.
 // =============================================================================
-#ifdef __CUDACC__
-__host__
-#endif
-inline std::vector<int32_t> reconstructSlotDomain(
+inline std::optional<SlotIndex> findSlotIndex(
+    const std::vector<CompiledSlotBinding>& bindings,
+    SlotId id)
+{
+    if (!id.valid()) {
+        return std::nullopt;
+    }
+    for (const auto& binding : bindings) {
+        if (binding.slot_id == id) {
+            return binding.slot_index;
+        }
+    }
+    return std::nullopt;
+}
+
+inline std::optional<SlotId> findSlotId(
+    const std::vector<CompiledSlotBinding>& bindings,
+    SlotIndex index)
+{
+    if (!index.valid()) {
+        return std::nullopt;
+    }
+    for (const auto& binding : bindings) {
+        if (binding.slot_index == index) {
+            return binding.slot_id;
+        }
+    }
+    return std::nullopt;
+}
+
+inline SlotIndex requireSlotIndex(
+    const std::vector<CompiledSlotBinding>& bindings,
+    SlotId id,
+    const std::string& context)
+{
+    const auto resolved = findSlotIndex(bindings, id);
+    if (!resolved.has_value()) {
+        throw std::runtime_error(
+            context + ": semantic slot " + describeSlotId(id)
+            + " has no compiled runtime binding");
+    }
+    return *resolved;
+}
+
+inline SlotId requireSlotId(
+    const std::vector<CompiledSlotBinding>& bindings,
+    SlotIndex index,
+    const std::string& context)
+{
+    const auto resolved = findSlotId(bindings, index);
+    if (!resolved.has_value()) {
+        throw std::runtime_error(
+            context + ": runtime slot index " + describeSlotIndex(index)
+            + " has no semantic identity binding");
+    }
+    return *resolved;
+}
+
+inline std::vector<SlotId> reconstructSlotDomain(
+    const std::vector<CompiledSlotBinding>& bindings,
     const std::vector<CompiledBootstrapBinding>& bootstrap_bindings,
     const std::vector<TeacherStep>& teacher_steps)
 {
-    std::vector<int32_t> domain;
-    domain.reserve(bootstrap_bindings.size() * 1 + teacher_steps.size() * 3);
+    std::vector<SlotId> domain;
+    domain.reserve(bootstrap_bindings.size() + teacher_steps.size() * 3);
 
-    for (const auto& b : bootstrap_bindings) {
-        domain.push_back(b.slot_id);
+    for (const auto& binding : bootstrap_bindings) {
+        domain.push_back(requireSlotId(
+            bindings,
+            binding.slot_index,
+            "reconstructSlotDomain bootstrap"));
     }
     for (const auto& step : teacher_steps) {
         domain.push_back(step.arg1_slot);
@@ -205,7 +283,6 @@ inline std::vector<int32_t> reconstructSlotDomain(
         domain.push_back(step.write_slot);
     }
 
-    // De-duplicate and sort
     std::sort(domain.begin(), domain.end());
     domain.erase(std::unique(domain.begin(), domain.end()), domain.end());
 

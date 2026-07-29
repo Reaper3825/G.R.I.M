@@ -15,7 +15,7 @@ namespace GRIM::Execution {
 
 struct ExecutionResultEmission {
     bool available = false;
-    int slot = -1;
+    SlotId slot;
     float value = 0.0f;
     Tokenizer::AtomType atom_type = Tokenizer::AtomType::ATOM_INT;
 };
@@ -28,6 +28,7 @@ inline ExecutionResultEmission resolveTerminalExecutionResult(
     bool stopped_by_model,
     bool stopped_at_max_steps,
     const std::vector<ExecutionStepControlTelemetry>& steps,
+    const std::vector<CompiledSlotBinding>& slot_bindings,
     const std::vector<float>& final_slot_values,
     const std::vector<uint8_t>& final_slot_valid)
 {
@@ -53,17 +54,21 @@ inline ExecutionResultEmission resolveTerminalExecutionResult(
         throw std::runtime_error(
             "resolveTerminalExecutionResult: terminal step was not classified STOP");
     }
-    const int slot = terminal_step.write_slot;
-    if (slot < 0 || static_cast<size_t>(slot) >= final_slot_values.size()) {
+    const SlotId slot = terminal_step.write_slot;
+    const int slot_index = requireSlotIndex(
+        slot_bindings,
+        slot,
+        "resolveTerminalExecutionResult terminal write").dense();
+    if (static_cast<size_t>(slot_index) >= final_slot_values.size()) {
         throw std::runtime_error(
             "resolveTerminalExecutionResult: terminal write slot is out of range");
     }
-    if (final_slot_valid[static_cast<size_t>(slot)] == 0) {
+    if (final_slot_valid[static_cast<size_t>(slot_index)] == 0) {
         throw std::runtime_error(
             "resolveTerminalExecutionResult: terminal write slot is not valid");
     }
 
-    const float value = final_slot_values[static_cast<size_t>(slot)];
+    const float value = final_slot_values[static_cast<size_t>(slot_index)];
     if (!std::isfinite(value)) {
         throw std::runtime_error(
             "resolveTerminalExecutionResult: terminal result is not finite");

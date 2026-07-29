@@ -332,7 +332,7 @@ void runExecutionLossDiagnostic(
                 : payload.execution_active[static_cast<std::size_t>(row)];
             if (!row_active) continue;
 
-            const std::vector<GRIM::Batching::TeacherStep>* teacher_row = nullptr;
+            const std::vector<GRIM::Execution::TeacherStep>* teacher_row = nullptr;
             if (!payload.teacher_steps.empty()) {
                 teacher_row = &payload.teacher_steps[static_cast<std::size_t>(row)];
                 int real_teacher_steps = 0;
@@ -387,10 +387,22 @@ void runExecutionLossDiagnostic(
 
                 if (model_hp.structured_ce_enabled && structured_weight > 0.0f) {
                     const auto& teacher = (*teacher_row)[static_cast<std::size_t>(step_index)];
+                    if (payload.compiled_slot_bindings.empty() ||
+                        row >= static_cast<int>(payload.compiled_slot_bindings.size())) {
+                        throw std::runtime_error(
+                            "runExecutionLossDiagnostic: teacher targets have no compiled slot bindings");
+                    }
+                    const auto& slot_bindings =
+                        payload.compiled_slot_bindings[static_cast<std::size_t>(row)];
                     const int op_target = teacher.op_id;
-                    const int arg1_target = teacher.arg1_slot - execution_hp.num_scratch_slots;
-                    const int arg2_target = teacher.arg2_slot - execution_hp.num_scratch_slots;
-                    const int write_target = teacher.write_slot;
+                    const int arg1_target = GRIM::Execution::requireSlotIndex(
+                        slot_bindings, teacher.arg1_slot, "diagnostic teacher arg1").dense()
+                        - execution_hp.num_scratch_slots;
+                    const int arg2_target = GRIM::Execution::requireSlotIndex(
+                        slot_bindings, teacher.arg2_slot, "diagnostic teacher arg2").dense()
+                        - execution_hp.num_scratch_slots;
+                    const int write_target = GRIM::Execution::requireSlotIndex(
+                        slot_bindings, teacher.write_slot, "diagnostic teacher write").dense();
 
                     const auto op_observation = observeClassification(
                         step_output.op_logits_tensor, op_target, "op_logits", row, step_index,

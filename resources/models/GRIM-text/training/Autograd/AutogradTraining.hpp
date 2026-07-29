@@ -144,7 +144,7 @@ struct AutogradContext {
         if (!payload) throw std::runtime_error(std::string(caller) + ": payload is NULL");
         if (!device_bindings) throw std::runtime_error(std::string(caller) + ": device_bindings is NULL");
         payload->validate(caller);
-        if (!device_bindings->d_input_ids || !device_bindings->d_target_ids || !device_bindings->d_token_to_slot_map) {
+        if (!device_bindings->d_input_ids || !device_bindings->d_target_ids || !device_bindings->d_token_to_slot_index_map) {
             throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings has NULL device pointers");
         }
     }

@@ -24,16 +24,16 @@ namespace Execution {
 //     - Non-execution rows: execution_active==false, teacher_steps empty,
 //       compiled_bootstrap_bindings empty, all slots==-1
 //     - Execution-active rows: execution_active==true, bootstrap bindings
-//       non-empty and injective in token_pos and slot_id, teacher steps
-//       present with valid slot IDs, token_exec_slots consistent with
-//       bootstrap bindings legal
+//       non-empty and injective in token_pos and SlotIndex, a complete
+//       SlotId/SlotIndex bijection, teacher steps with resolvable SlotId
+//       targets, and token_exec_slot_indices consistent with bootstrap bindings
 //
 //   Batch-level:
 //     - Dimension arrays match batch_size
 //     - No "half execution-active" rows
-//     - R = { pos | token_exec_slots[pos] != -1 } matches bootstrap bindings exactly
+//     - R = { pos | token_exec_slot_indices[pos] != -1 } matches bootstrap bindings exactly
 //     - D_row reconstructed from bootstrap bindings ∪ teacher steps
-//     - token_exec_slots and compiled_bootstrap_bindings are mutually consistent
+//     - token_exec_slot_indices and compiled_bootstrap_bindings are mutually consistent
 //
 // @param payload  The fully-built BatchPayload to validate
 // @param caller   Identifying string for error messages (e.g. "buildBatchPayload")

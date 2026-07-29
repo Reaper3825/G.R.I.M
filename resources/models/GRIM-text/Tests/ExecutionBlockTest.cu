@@ -23,6 +23,7 @@
 
 #include <cmath>
 #include <memory>
+#include <type_traits>
 #include <vector>
 
 using namespace GRIM;
@@ -124,8 +125,8 @@ bool testStepOutputDefaults(std::string& message) {
                    "selection_temperature should default zero");
     EB_ASSERT_TRUE(!sout.div_was_clamped,
                    "div_was_clamped should default false");
-    EB_ASSERT_EQ(sout.record.arg1_slot, -1, "record.arg1_slot default");
-    EB_ASSERT_EQ(sout.record.arg2_slot, -1, "record.arg2_slot default");
+    EB_ASSERT_TRUE(!sout.record.arg1_slot.valid(), "record.arg1_slot default");
+    EB_ASSERT_TRUE(!sout.record.arg2_slot.valid(), "record.arg2_slot default");
     EB_ASSERT_EQ(sout.record.op_id, -1, "record.op_id default");
     EB_ASSERT_EQ(sout.metrics.div_clamp_count, 0, "metrics.div_clamp_count default");
 
@@ -315,14 +316,48 @@ bool testExecutionBlockConstructionHPDefaults(std::string& message) {
 bool testExecutionRecordDefaults(std::string& message) {
     GRIM::Forward::ExecutionRecord rec{};
 
-    EB_ASSERT_EQ(rec.arg1_slot, -1, "arg1_slot default -1");
-    EB_ASSERT_EQ(rec.arg2_slot, -1, "arg2_slot default -1");
+    EB_ASSERT_TRUE(!rec.arg1_slot.valid(), "arg1_slot default invalid");
+    EB_ASSERT_TRUE(!rec.arg2_slot.valid(), "arg2_slot default invalid");
     EB_ASSERT_EQ(rec.op_id, -1, "op_id default -1");
-    EB_ASSERT_EQ(rec.write_slot, -1, "write_slot default -1");
+    EB_ASSERT_TRUE(!rec.write_slot.valid(), "write_slot default invalid");
     EB_ASSERT_NEAR(rec.value_before_1, 0.0f, 1e-6f, "value_before_1 default");
     EB_ASSERT_NEAR(rec.value_before_2, 0.0f, 1e-6f, "value_before_2 default");
     EB_ASSERT_NEAR(rec.value_after, 0.0f, 1e-6f, "value_after default");
 
+    return true;
+}
+
+bool testOpaqueSlotIdentityLowering(std::string& message) {
+    static_assert(!std::is_convertible_v<GRIM::Execution::SlotId, int>,
+                  "semantic SlotId must not implicitly become a tensor index");
+    static_assert(!std::is_convertible_v<GRIM::Execution::SlotIndex, int>,
+                  "runtime SlotIndex must cross an explicit device ABI boundary");
+
+    const auto input = GRIM::Execution::SlotId::fromLocalOrdinal(0);
+    const auto output = GRIM::Execution::SlotId::fromLocalOrdinal(1);
+    const std::vector<GRIM::Execution::CompiledSlotBinding> layout_a{
+        {input, GRIM::Execution::SlotIndex::fromDense(2)},
+        {output, GRIM::Execution::SlotIndex::fromDense(5)}
+    };
+    const std::vector<GRIM::Execution::CompiledSlotBinding> layout_b{
+        {input, GRIM::Execution::SlotIndex::fromDense(5)},
+        {output, GRIM::Execution::SlotIndex::fromDense(2)}
+    };
+
+    EB_ASSERT_EQ(
+        GRIM::Execution::requireSlotIndex(layout_a, input, "test layout A").dense(),
+        2,
+        "layout A lowers semantic input independently");
+    EB_ASSERT_EQ(
+        GRIM::Execution::requireSlotIndex(layout_b, input, "test layout B").dense(),
+        5,
+        "slot permutation changes only the compiled address");
+    EB_ASSERT_TRUE(
+        GRIM::Execution::requireSlotId(
+            layout_b,
+            GRIM::Execution::SlotIndex::fromDense(2),
+            "test reverse layout") == output,
+        "reverse materialization restores the semantic output identity");
     return true;
 }
 
@@ -550,7 +585,7 @@ bool testSelectorExecutionBootstrapMetadata(std::string& message) {
             atom_flags,
             atom_table,
             atom_entry_ids,
-            /*token_to_slot_map=*/{3, 3, 4},
+            /*token_to_slot_index_map=*/{3, 3, 4},
             /*vocab_size=*/1024,
             /*batch_capacity=*/1,
             /*max_cached_seq_len=*/16,
@@ -641,7 +676,7 @@ bool testSelectorExecutionForwardBridge(std::string& message) {
         payload.max_seq_len = static_cast<int>(h_slot_map.size());
         payload.total_tokens = payload.max_seq_len;
         payload.seq_lengths = {payload.max_seq_len};
-        payload.token_to_slot_map = h_slot_map;
+        payload.token_to_slot_index_map = h_slot_map;
         payload.num_pool_atoms = pool_atoms;
         payload.row_atom_offset = {0, pool_atoms};
         payload.execution_slot_count = V;
@@ -705,7 +740,7 @@ bool testSelectorExecutionForwardBridge(std::string& message) {
         bindings.d_pool_numeric_float_values = d_pool_numeric_float_values;
         bindings.d_pool_numeric_int_values = d_pool_numeric_int_values;
         bindings.d_pool_numeric_kinds = d_pool_numeric_kinds;
-        bindings.d_token_to_slot_map = d_slot_map;
+        bindings.d_token_to_slot_index_map = d_slot_map;
         bindings.d_bootstrap_slot_to_pool_index = d_slot_to_pool;
         bindings.num_pool_atoms = pool_atoms;
         bindings.execution_slot_count = V;
@@ -765,6 +800,7 @@ bool testSelectorExecutionForwardBridge(std::string& message) {
             /*batch_row=*/0,
             /*prior_records=*/{},
             &candidate_keys,
+            /*slot_seeds=*/nullptr,
             stream,
             work);
         std::vector<float> h_candidates(static_cast<size_t>(V - S) * dm, 0.0f);
@@ -888,9 +924,15 @@ bool testSelectorExecutionBackwardBridge(std::string& message) {
     payload.batch_size = 1;
     payload.execution_slot_count = V;
     payload.bootstrap_slot_to_pool_index = {-1, -1, 0, 1};
+    payload.compiled_slot_bindings = {{
+        {Execution::SlotId::fromLocalOrdinal(0), Execution::SlotIndex::fromDense(0)},
+        {Execution::SlotId::fromLocalOrdinal(1), Execution::SlotIndex::fromDense(1)},
+        {Execution::SlotId::fromLocalOrdinal(2), Execution::SlotIndex::fromDense(2)},
+        {Execution::SlotId::fromLocalOrdinal(3), Execution::SlotIndex::fromDense(3)}
+    }};
 
     ExecutionRecord overwritten_record{};
-    overwritten_record.write_slot = 3;
+    overwritten_record.write_slot = Execution::SlotId::fromLocalOrdinal(3);
     const std::vector<ExecutionRecord> prior_records{overwritten_record};
 
     ExecutionBlockInternal::StepWorkingSet work;
@@ -902,6 +944,7 @@ bool testSelectorExecutionBackwardBridge(std::string& message) {
         /*batch_row=*/0,
         prior_records,
         &candidate_keys,
+        /*slot_seeds=*/nullptr,
         stream,
         work);
 
@@ -1083,7 +1126,7 @@ bool testInferenceSlotCompiler(std::string& message) {
         float_token};
     const std::vector<uint8_t> atom_mask{0, 1, 0, 1};
 
-    const auto slot_map = GRIM::Batching::buildInferenceExecutionSlotMap(
+    const auto slot_map = GRIM::Batching::buildInferenceExecutionSlotIndexMap(
         tokens, atom_mask, /*num_slots=*/5, /*num_scratch_slots=*/2);
 
     EB_ASSERT_EQ(slot_map.size(), tokens.size(), "slot map geometry");
@@ -1106,7 +1149,7 @@ bool testInferenceSlotCompilerOverflow(std::string& message) {
 
     bool threw = false;
     try {
-        (void)GRIM::Batching::buildInferenceExecutionSlotMap(
+        (void)GRIM::Batching::buildInferenceExecutionSlotIndexMap(
             tokens, atom_mask, /*num_slots=*/3, /*num_scratch_slots=*/2);
     } catch (const std::runtime_error&) {
         threw = true;
@@ -1152,24 +1195,32 @@ bool testPersistentExecutionMemoryRuntimeContract(std::string& message) {
 //======================================================//
 
 bool testTerminalExecutionResultEmissionContract(std::string& message) {
+    const auto slot1 = GRIM::Execution::SlotId::fromLocalOrdinal(1);
+    const auto slot3 = GRIM::Execution::SlotId::fromLocalOrdinal(3);
+    const std::vector<GRIM::Execution::CompiledSlotBinding> slot_bindings{
+        {GRIM::Execution::SlotId::fromLocalOrdinal(0), GRIM::Execution::SlotIndex::fromDense(0)},
+        {slot1, GRIM::Execution::SlotIndex::fromDense(1)},
+        {GRIM::Execution::SlotId::fromLocalOrdinal(2), GRIM::Execution::SlotIndex::fromDense(2)},
+        {slot3, GRIM::Execution::SlotIndex::fromDense(3)}
+    };
     std::vector<GRIM::ExecutionStepControlTelemetry> steps(2);
     steps[0].predicted_class = 0;
-    steps[0].write_slot = 1;
+    steps[0].write_slot = slot1;
     steps[1].predicted_class = 1;
-    steps[1].write_slot = 3;
+    steps[1].write_slot = slot3;
     const std::vector<float> values{0.0f, 4.0f, 0.0f, 42.0f};
     const std::vector<uint8_t> valid{0, 1, 0, 1};
 
     const auto emission = GRIM::Execution::resolveTerminalExecutionResult(
-        true, true, false, steps, values, valid);
+        true, true, false, steps, slot_bindings, values, valid);
     EB_ASSERT_TRUE(emission.available, "model-stopped terminal result is available");
-    EB_ASSERT_EQ(emission.slot, 3, "terminal STOP step owns the result slot");
+    EB_ASSERT_TRUE(emission.slot == slot3, "terminal STOP step owns the result slot");
     EB_ASSERT_NEAR(emission.value, 42.0f, 1e-6f, "terminal result value");
     EB_ASSERT_TRUE(emission.atom_type == GRIM::Tokenizer::AtomType::ATOM_INT,
                    "integral result uses INT atom");
 
     const auto max_step_only = GRIM::Execution::resolveTerminalExecutionResult(
-        true, false, true, steps, values, valid);
+        true, false, true, steps, slot_bindings, values, valid);
     EB_ASSERT_TRUE(!max_step_only.available,
                    "reaching max steps does not implicitly choose a result");
 
@@ -1177,7 +1228,7 @@ bool testTerminalExecutionResultEmissionContract(std::string& message) {
     try {
         const std::vector<uint8_t> invalid{0, 1, 0, 0};
         (void)GRIM::Execution::resolveTerminalExecutionResult(
-            true, true, false, steps, values, invalid);
+            true, true, false, steps, slot_bindings, values, invalid);
     } catch (const std::runtime_error&) {
         rejected_invalid = true;
     }
@@ -1299,6 +1350,7 @@ int GRIM::Test::runExecutionBlockTests() {
     suite.addTest("Config: ExecutionBlockConstructionHP defaults", testExecutionBlockConstructionHPDefaults);
     suite.addTest("Config: execution operand-selection scale", testExecutionOperandSelectionScale);
     suite.addTest("Record: ExecutionRecord defaults", testExecutionRecordDefaults);
+    suite.addTest("Metadata: opaque SlotId lowering", testOpaqueSlotIdentityLowering);
     suite.addTest("Metrics: ExecStepMetrics defaults", testExecStepMetricsDefaults);
     suite.addTest("Arithmetic: four-op semantics", testFourOpsSemantics);
     suite.addTest("Bootstrap: slot map semantics", testBootstrapSlotMapSemantics);

@@ -22,7 +22,7 @@ constexpr int kSlotRoutingBlockSize = 256;
 __global__ void kernel_gather_slot_seed_inputs(
     const float* __restrict__ token_states,
     const float* __restrict__ type_embeddings,
-    const int32_t* __restrict__ token_to_slot_map,
+    const int32_t* __restrict__ token_to_slot_index_map,
     const int* __restrict__ atom_positions,
     const int* __restrict__ atom_types,
     float* __restrict__ output,
@@ -39,7 +39,7 @@ __global__ void kernel_gather_slot_seed_inputs(
 
     const int token = atom_positions[atom];
     if (token < 0 || token >= total_tokens) return;
-    const int slot = token_to_slot_map[token];
+    const int slot = token_to_slot_index_map[token];
     if (slot < 0 || slot >= num_slots) return;
     const int batch_row = token / max_seq_len;
     if (batch_row < 0 || batch_row >= batch_size) return;
@@ -60,7 +60,7 @@ __global__ void kernel_gather_slot_seed_inputs(
 
 __global__ void kernel_gather_slot_seed_inputs_backward(
     const float* __restrict__ grad_output,
-    const int32_t* __restrict__ token_to_slot_map,
+    const int32_t* __restrict__ token_to_slot_index_map,
     const int* __restrict__ atom_positions,
     const int* __restrict__ atom_types,
     float* __restrict__ token_states_grad,
@@ -79,7 +79,7 @@ __global__ void kernel_gather_slot_seed_inputs_backward(
 
     const int token = atom_positions[atom];
     if (token < 0 || token >= total_tokens) return;
-    const int slot = token_to_slot_map[token];
+    const int slot = token_to_slot_index_map[token];
     if (slot < 0 || slot >= num_slots) return;
     const int batch_row = token / max_seq_len;
     if (batch_row < 0 || batch_row >= batch_size) return;
@@ -109,7 +109,7 @@ __global__ void kernel_gather_slot_seed_inputs_backward(
 
 __global__ void kernel_mask_unauthored_slot_rows(
     const float* __restrict__ input,
-    const int32_t* __restrict__ token_to_slot_map,
+    const int32_t* __restrict__ token_to_slot_index_map,
     const int* __restrict__ atom_positions,
     float* __restrict__ output,
     int authored_atom_count,
@@ -124,7 +124,7 @@ __global__ void kernel_mask_unauthored_slot_rows(
 
     const int token = atom_positions[atom];
     if (token < 0 || token >= total_tokens) return;
-    const int slot = token_to_slot_map[token];
+    const int slot = token_to_slot_index_map[token];
     if (slot < 0 || slot >= num_slots) return;
     const int batch_row = token / max_seq_len;
     if (batch_row < 0 || batch_row >= batch_size) return;
@@ -139,7 +139,7 @@ __global__ void kernel_mask_unauthored_slot_rows(
 
 __global__ void kernel_mask_unauthored_slot_rows_backward(
     const float* __restrict__ grad_output,
-    const int32_t* __restrict__ token_to_slot_map,
+    const int32_t* __restrict__ token_to_slot_index_map,
     const int* __restrict__ atom_positions,
     float* __restrict__ input_grad,
     int authored_atom_count,
@@ -154,7 +154,7 @@ __global__ void kernel_mask_unauthored_slot_rows_backward(
 
     const int token = atom_positions[atom];
     if (token < 0 || token >= total_tokens) return;
-    const int slot = token_to_slot_map[token];
+    const int slot = token_to_slot_index_map[token];
     if (slot < 0 || slot >= num_slots) return;
     const int batch_row = token / max_seq_len;
     if (batch_row < 0 || batch_row >= batch_size) return;
@@ -172,9 +172,9 @@ void requireRoutingBindings(
     int authored_atom_count,
     const char* caller)
 {
-    if (!bindings.d_token_to_slot_map) {
+    if (!bindings.d_token_to_slot_index_map) {
         throw std::runtime_error(
-            std::string(caller) + ": d_token_to_slot_map is NULL");
+            std::string(caller) + ": d_token_to_slot_index_map is NULL");
     }
     if (authored_atom_count > 0 &&
         (!bindings.d_atom_positions || !bindings.d_atom_types)) {
@@ -320,7 +320,7 @@ void SlotSeedInputGradFn::apply_impl(
             0,
             stream>>>(
             grad_output.data,
-            backward_bindings->d_token_to_slot_map,
+            backward_bindings->d_token_to_slot_index_map,
             backward_bindings->d_atom_positions,
             backward_bindings->d_atom_types,
             token_states_grad,
@@ -446,7 +446,7 @@ void AuthoredSlotMaskGradFn::apply_impl(
             0,
             stream>>>(
             grad_output.data,
-            backward_bindings->d_token_to_slot_map,
+            backward_bindings->d_token_to_slot_index_map,
             backward_bindings->d_atom_positions,
             input_grad,
             authored_atom_count,
@@ -539,7 +539,7 @@ Tensor gather_slot_seed_inputs(
             stream>>>(
             token_states.data,
             type_embeddings.data,
-            bindings.d_token_to_slot_map,
+            bindings.d_token_to_slot_index_map,
             bindings.d_atom_positions,
             bindings.d_atom_types,
             result.data,
@@ -607,7 +607,7 @@ Tensor mask_unauthored_slot_rows(
             0,
             stream>>>(
             input.data,
-            bindings.d_token_to_slot_map,
+            bindings.d_token_to_slot_index_map,
             bindings.d_atom_positions,
             result.data,
             authored_atom_count,

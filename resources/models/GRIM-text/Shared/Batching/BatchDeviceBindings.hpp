@@ -55,7 +55,7 @@ struct BatchDeviceBindings {
     uint8_t*  d_atom_mask       = nullptr;  // [payload.total_tokens] (nullable when atom mask not used)
     uint32_t* d_atom_flags      = nullptr;  // [payload.total_tokens] (nullable when not allocated)
     uint32_t* d_atom_entry_ids  = nullptr;  // [payload.total_tokens], row-local AtomTable entry id
-    int32_t*  d_token_to_slot_map = nullptr; // [payload.total_tokens]
+    int32_t*  d_token_to_slot_index_map = nullptr; // [payload.total_tokens]
     int*      d_atom_positions  = nullptr;  // [payload.authoredAtomCount()] compact authored atom token positions
     int*      d_atom_types      = nullptr;  // [payload.authoredAtomCount()] compact authored atom types aligned with d_atom_positions
 

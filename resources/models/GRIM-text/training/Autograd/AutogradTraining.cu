@@ -370,7 +370,7 @@ void validateLossBoundaryInputs(
 
     payload.validate(caller);
 
-    if (!ctx.device_bindings->d_input_ids || !ctx.device_bindings->d_target_ids || !ctx.device_bindings->d_token_to_slot_map) {
+    if (!ctx.device_bindings->d_input_ids || !ctx.device_bindings->d_target_ids || !ctx.device_bindings->d_token_to_slot_index_map) {
         throw std::runtime_error(std::string(caller) + ": BatchDeviceBindings has NULL device pointers");
     }
 }

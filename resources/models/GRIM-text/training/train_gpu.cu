@@ -161,6 +161,10 @@ GRIM::HyperParameters::GenerationHP generationHPFromRequest(
     return gen_config;
 }
 
+json slotIdentityJson(GRIM::Execution::SlotId id) {
+    return id.valid() ? json(id.serialized()) : json(nullptr);
+}
+
 json inferenceStatsJson(const GRIMText::Training::Phase2TextInferenceResult& result) {
     const char* gate_decision = !result.execution_control.gate_evaluated
         ? "not_evaluated"
@@ -173,10 +177,10 @@ json inferenceStatsJson(const GRIMText::Training::Phase2TextInferenceResult& res
             {"decision", step.predicted_class == 1 ? "stop" : "continue"},
             {"continue_probability", step.continue_probability},
             {"stop_probability", step.stop_probability},
-            {"arg1_slot", step.arg1_slot},
-            {"arg2_slot", step.arg2_slot},
+            {"arg1_slot_id", slotIdentityJson(step.arg1_slot)},
+            {"arg2_slot_id", slotIdentityJson(step.arg2_slot)},
             {"op_id", step.op_id},
-            {"write_slot", step.write_slot},
+            {"write_slot_id", slotIdentityJson(step.write_slot)},
             {"value_before_1", step.value_before_1},
             {"value_before_2", step.value_before_2},
             {"value_after", step.value_after}
@@ -201,7 +205,8 @@ json inferenceStatsJson(const GRIMText::Training::Phase2TextInferenceResult& res
             {"persistent_memory_available", result.execution_control.persistent_memory_available},
             {"persistent_memory_read_during_decode", result.execution_control.persistent_memory_read_during_decode},
             {"terminal_result_available", result.execution_control.terminal_result_available},
-            {"terminal_result_slot", result.execution_control.terminal_result_slot},
+            {"terminal_result_slot_id",
+             slotIdentityJson(result.execution_control.terminal_result_slot)},
             {"terminal_result_value", result.execution_control.terminal_result_value},
             {"terminal_result_emitted", result.execution_control.terminal_result_emitted},
             {"terminal_result_emission_token_index", result.execution_control.terminal_result_emission_token_index},

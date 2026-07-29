@@ -170,9 +170,9 @@ BatchDeviceBindings uploadBatchToDevice(
     if (!cached_atom_mask_ptr) {
         throw std::runtime_error("uploadBatchToDevice: BatchDeviceStorage.atom_mask_tensor.data is NULL");
     }
-    int32_t* cached_slot_map_ptr = reinterpret_cast<int32_t*>(storage.token_to_slot_map_tensor.data);
+    int32_t* cached_slot_map_ptr = reinterpret_cast<int32_t*>(storage.token_to_slot_index_map_tensor.data);
     if (!cached_slot_map_ptr) {
-        throw std::runtime_error("uploadBatchToDevice: BatchDeviceStorage.token_to_slot_map_tensor.data is NULL");
+        throw std::runtime_error("uploadBatchToDevice: BatchDeviceStorage.token_to_slot_index_map_tensor.data is NULL");
     }
     uint32_t* cached_atom_entry_ids_ptr =
         reinterpret_cast<uint32_t*>(storage.atom_entry_ids_tensor.data);
@@ -234,9 +234,9 @@ BatchDeviceBindings uploadBatchToDevice(
         cudaMemcpyHostToDevice,
         stream));
 
-    // Round 4: token_to_slot_map.
+    // Round 4: token_to_slot_index_map.
     BATCH_UPLOAD_CUDA_CHECK(cudaStreamSynchronize(stream));
-    BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(cached_slot_map_ptr, payload.token_to_slot_map.data(),
+    BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(cached_slot_map_ptr, payload.token_to_slot_index_map.data(),
         slot_map_bytes, cudaMemcpyHostToDevice, stream));
     BATCH_UPLOAD_CUDA_CHECK(cudaStreamSynchronize(stream));
 
@@ -447,7 +447,7 @@ BatchDeviceBindings uploadBatchToDevice(
         ? reinterpret_cast<uint32_t*>(storage.atom_flags_tensor.data)
         : nullptr;
     bindings.d_atom_entry_ids   = cached_atom_entry_ids_ptr;
-    bindings.d_token_to_slot_map = cached_slot_map_ptr;
+    bindings.d_token_to_slot_index_map = cached_slot_map_ptr;
     bindings.d_atom_positions   = cached_atom_positions_ptr;
     bindings.d_atom_types       = cached_atom_types_ptr;
     bindings.d_atom_digit_values        = cached_atom_digit_values_ptr;
@@ -531,11 +531,11 @@ std::shared_ptr<BatchDeviceStorage> createBatchDeviceStorage(
         false,
         stream,
         "batch_atom_entry_ids");
-    storage->token_to_slot_map_tensor = Tensor::zeros(
+    storage->token_to_slot_index_map_tensor = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(1, max_tokens),
         false,
         stream,
-        "batch_token_to_slot_map");
+        "batch_token_to_slot_index_map");
     storage->atom_positions_tensor = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(1, max_tokens),
         false,

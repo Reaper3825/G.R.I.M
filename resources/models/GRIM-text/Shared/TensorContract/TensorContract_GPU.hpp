@@ -1595,7 +1595,7 @@ Tensor broadcast_row_mul(const Tensor& scale, const Tensor& x, cudaStream_t stre
 
 /**
  * Route contextual token rows into dense execution-slot rows using the
- * payload-uploaded token_to_slot_map and compact authored atom bindings.
+ * payload-uploaded token_to_slot_index_map and compact authored atom bindings.
  * Optional type embeddings are fused during routing. Backward scatters slot
  * gradients into the source token rows and the two-row type table.
  */
@@ -1610,7 +1610,7 @@ Tensor gather_slot_seed_inputs(
 
 /**
  * Zero dense execution-slot rows that have no authored token binding, using
- * the existing token_to_slot_map rather than a materialized mask tensor.
+ * the existing token_to_slot_index_map rather than a materialized mask tensor.
  */
 Tensor mask_unauthored_slot_rows(
     const Tensor& input,

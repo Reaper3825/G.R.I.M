@@ -29,7 +29,7 @@ struct BatchDeviceStorage {
     Tensor atom_mask_tensor;
     Tensor atom_flags_tensor;
     Tensor atom_entry_ids_tensor;
-    Tensor token_to_slot_map_tensor;
+    Tensor token_to_slot_index_map_tensor;
     Tensor atom_positions_tensor;
     Tensor atom_types_tensor;
 

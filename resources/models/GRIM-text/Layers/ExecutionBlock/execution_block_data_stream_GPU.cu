@@ -677,10 +677,17 @@ void executeStepCoordinatorImpl(
     int* d_exec_idx = diag.execIndices();
     int* d_exec_record_i = diag.execRecordI();
     float* d_exec_record_f = diag.execRecordF();
+    if (payload.compiled_slot_bindings.empty() ||
+        batch_row >= static_cast<int>(payload.compiled_slot_bindings.size())) {
+        throw std::runtime_error(
+            "executeStepCoordinatorImpl: row has no semantic/runtime slot bindings");
+    }
+    const auto& slot_bindings =
+        payload.compiled_slot_bindings[static_cast<std::size_t>(batch_row)];
 
     // Row-local device slot map: derived from BatchDeviceBindings (host BatchPayload no
     // longer carries device pointers — see Shared/Batching/BatchDeviceBindings.hpp).
-    const int32_t* d_slot_map_row = bindings.d_token_to_slot_map
+    const int32_t* d_slot_map_row = bindings.d_token_to_slot_index_map
         + static_cast<size_t>(batch_row) * payload.max_seq_len;
     const int row_tokens = payload.seq_lengths[static_cast<size_t>(batch_row)];
     if (payload.execution_prompt_lengths.empty()) {
@@ -781,8 +788,14 @@ void executeStepCoordinatorImpl(
         std::vector<int> h_slot1(N_prior), h_slot2(N_prior), h_ops(N_prior);
         std::vector<float> h_scalars(N_prior * 3);
         for (int i = 0; i < N_prior; ++i) {
-            h_slot1[i] = prior_records[i].arg1_slot;
-            h_slot2[i] = prior_records[i].arg2_slot;
+            h_slot1[i] = Execution::requireSlotIndex(
+                slot_bindings,
+                prior_records[i].arg1_slot,
+                "executeStepCoordinatorImpl prior arg1").dense();
+            h_slot2[i] = Execution::requireSlotIndex(
+                slot_bindings,
+                prior_records[i].arg2_slot,
+                "executeStepCoordinatorImpl prior arg2").dense();
             h_ops[i] = prior_records[i].op_id;
             h_scalars[i * 3 + 0] = prior_records[i].value_before_1;
             h_scalars[i * 3 + 1] = prior_records[i].value_before_2;
@@ -1164,7 +1177,8 @@ void executeStepCoordinatorImpl(
     if (hp.debug_mode) {
         forward_output.metrics.inject_gate_value = h_inject_gate_value;
     }
-    finalizeStepOrThrow(hp, diag, forward_output, step, stream);
+    finalizeStepOrThrow(
+        hp, diag, forward_output, slot_bindings, step, stream);
     forward_output.div_was_clamped = (h_div_flag != 0);
 }
 

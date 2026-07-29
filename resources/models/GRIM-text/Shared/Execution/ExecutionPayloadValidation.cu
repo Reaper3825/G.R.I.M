@@ -56,6 +56,13 @@ void validateExecutionPayload(
         throw std::runtime_error(
             tag + ": execution_prompt_lengths.size() must equal batch_size");
     }
+    if (!payload.compiled_slot_bindings.empty() &&
+        static_cast<int>(payload.compiled_slot_bindings.size()) != B) {
+        throw std::runtime_error(
+            tag + ": compiled_slot_bindings.size()=" +
+            std::to_string(payload.compiled_slot_bindings.size()) +
+            " != batch_size=" + std::to_string(B));
+    }
     if (!payload.compiled_bootstrap_bindings.empty() &&
         static_cast<int>(payload.compiled_bootstrap_bindings.size()) != B) {
         throw std::runtime_error(
@@ -122,8 +129,11 @@ void validateExecutionPayload(
         const auto& cbb = payload.compiled_bootstrap_bindings.empty()
             ? std::vector<CompiledBootstrapBinding>{}
             : payload.compiled_bootstrap_bindings[b];
+        const auto& csb = payload.compiled_slot_bindings.empty()
+            ? std::vector<CompiledSlotBinding>{}
+            : payload.compiled_slot_bindings[b];
         const auto& ts = payload.teacher_steps.empty()
-            ? std::vector<Batching::TeacherStep>{}
+            ? std::vector<TeacherStep>{}
             : payload.teacher_steps[b];
 
         if (!active) {
@@ -145,13 +155,18 @@ void validateExecutionPayload(
                     "has execution_active=false but non-empty compiled_bootstrap_bindings ("
                     + std::to_string(cbb.size()) + " bindings)"));
             }
+            if (!csb.empty()) {
+                throw std::runtime_error(row_tag(
+                    "has execution_active=false but non-empty compiled_slot_bindings ("
+                    + std::to_string(csb.size()) + " bindings)"));
+            }
 
-            // all token_exec_slots in this row must be -1
+            // all token_exec_slot_indices in this row must be -1
             for (int t = 0; t < seq_len; ++t) {
-                const int32_t slot = payload.token_to_slot_map[row_offset + t];
+                const int32_t slot = payload.token_to_slot_index_map[row_offset + t];
                 if (slot != -1) {
                     throw std::runtime_error(row_tag(
-                        "has execution_active=false but token_to_slot_map[" +
+                        "has execution_active=false but token_to_slot_index_map[" +
                         std::to_string(t) + "]=" + std::to_string(slot) +
                         " (must be -1 for non-execution rows)"));
                 }
@@ -167,6 +182,11 @@ void validateExecutionPayload(
                 throw std::runtime_error(row_tag(
                     "has execution_active=true but empty compiled_bootstrap_bindings"));
             }
+            if (static_cast<int>(csb.size()) != num_slots) {
+                throw std::runtime_error(row_tag(
+                    "compiled_slot_bindings.size()=" + std::to_string(csb.size()) +
+                    " != execution_block_num_slots=" + std::to_string(num_slots)));
+            }
 
             // teacher_steps must have exactly num_steps entries
             if (static_cast<int>(ts.size()) != num_steps) {
@@ -177,11 +197,48 @@ void validateExecutionPayload(
 
             // ── Bootstrap binding injectivity and range checks ──
 
+            // Semantic identities and dense runtime addresses form a complete,
+            // row-lifetime bijection. No identity is derived from an index.
+            std::unordered_set<std::uint64_t> semantic_ids;
+            std::unordered_set<int32_t> runtime_indices;
+            for (size_t i = 0; i < csb.size(); ++i) {
+                const auto& binding = csb[i];
+                if (!binding.slot_id.valid()) {
+                    throw std::runtime_error(row_tag(
+                        "compiled_slot_bindings[" + std::to_string(i) +
+                        "] has invalid semantic SlotId"));
+                }
+                if (!binding.slot_index.valid() ||
+                    binding.slot_index.dense() >= num_slots) {
+                    throw std::runtime_error(row_tag(
+                        "compiled_slot_bindings[" + std::to_string(i) +
+                        "].slot_index=" + describeSlotIndex(binding.slot_index) +
+                        " out of range [0, " + std::to_string(num_slots) + ")"));
+                }
+                if (!semantic_ids.insert(binding.slot_id.serialized()).second) {
+                    throw std::runtime_error(row_tag(
+                        "compiled_slot_bindings has duplicate semantic SlotId=" +
+                        describeSlotId(binding.slot_id)));
+                }
+                if (!runtime_indices.insert(binding.slot_index.dense()).second) {
+                    throw std::runtime_error(row_tag(
+                        "compiled_slot_bindings has duplicate runtime SlotIndex=" +
+                        describeSlotIndex(binding.slot_index)));
+                }
+            }
+
             std::unordered_set<int32_t> bound_positions;
-            std::unordered_set<int32_t> bound_slots;
+            std::unordered_set<int32_t> bound_slot_indices;
 
             for (size_t i = 0; i < cbb.size(); ++i) {
                 const auto& binding = cbb[i];
+
+                if (binding.binding_id != static_cast<int32_t>(i)) {
+                    throw std::runtime_error(row_tag(
+                        "compiled_bootstrap_bindings[" + std::to_string(i) +
+                        "].binding_id=" + std::to_string(binding.binding_id) +
+                        " must equal its row-local ordinal"));
+                }
 
                 // token_pos in valid range for this row
                 if (binding.token_pos < 0 || binding.token_pos >= seq_len) {
@@ -202,13 +259,17 @@ void validateExecutionPayload(
                         " does not identify a numeric atom token"));
                 }
 
-                // slot_id in valid range
-                if (binding.slot_id < 0 || binding.slot_id >= num_slots) {
+                if (!binding.slot_index.valid() ||
+                    binding.slot_index.dense() >= num_slots) {
                     throw std::runtime_error(row_tag(
                         "compiled_bootstrap_bindings[" + std::to_string(i) +
-                        "].slot_id=" + std::to_string(binding.slot_id) +
+                        "].slot_index=" + describeSlotIndex(binding.slot_index) +
                         " out of range [0, " + std::to_string(num_slots) + ")"));
                 }
+                (void)requireSlotId(
+                    csb,
+                    binding.slot_index,
+                    row_tag("compiled_bootstrap_bindings resolution"));
 
                 // Injective in token_pos
                 if (!bound_positions.insert(binding.token_pos).second) {
@@ -217,11 +278,11 @@ void validateExecutionPayload(
                         std::to_string(binding.token_pos)));
                 }
 
-                // Injective in slot_id
-                if (!bound_slots.insert(binding.slot_id).second) {
+                // Injective in compiled runtime address
+                if (!bound_slot_indices.insert(binding.slot_index.dense()).second) {
                     throw std::runtime_error(row_tag(
-                        "compiled_bootstrap_bindings has duplicate slot_id=" +
-                        std::to_string(binding.slot_id)));
+                        "compiled_bootstrap_bindings has duplicate slot_index=" +
+                        describeSlotIndex(binding.slot_index)));
                 }
             }
 
@@ -236,58 +297,48 @@ void validateExecutionPayload(
                         std::to_string(step.op_id) + " out of range [0, " +
                         std::to_string(num_ops) + ")"));
                 }
-                if (step.arg1_slot < 0 || step.arg1_slot >= num_slots) {
-                    throw std::runtime_error(row_tag(
-                        "teacher_steps[" + std::to_string(k) + "].arg1_slot=" +
-                        std::to_string(step.arg1_slot) + " out of range [0, " +
-                        std::to_string(num_slots) + ")"));
-                }
-                if (step.arg2_slot < 0 || step.arg2_slot >= num_slots) {
-                    throw std::runtime_error(row_tag(
-                        "teacher_steps[" + std::to_string(k) + "].arg2_slot=" +
-                        std::to_string(step.arg2_slot) + " out of range [0, " +
-                        std::to_string(num_slots) + ")"));
-                }
-                if (step.write_slot < 0 || step.write_slot >= num_slots) {
-                    throw std::runtime_error(row_tag(
-                        "teacher_steps[" + std::to_string(k) + "].write_slot=" +
-                        std::to_string(step.write_slot) + " out of range [0, " +
-                        std::to_string(num_slots) + ")"));
-                }
+                (void)requireSlotIndex(
+                    csb, step.arg1_slot,
+                    row_tag("teacher_steps[" + std::to_string(k) + "].arg1_slot"));
+                (void)requireSlotIndex(
+                    csb, step.arg2_slot,
+                    row_tag("teacher_steps[" + std::to_string(k) + "].arg2_slot"));
+                (void)requireSlotIndex(
+                    csb, step.write_slot,
+                    row_tag("teacher_steps[" + std::to_string(k) + "].write_slot"));
             }
 
             // ── Reconstruct D_row from compiled_bootstrap_bindings ∪ teacher_steps ──
 
-            std::vector<int32_t> d_row = reconstructSlotDomain(cbb, ts);
+            std::vector<SlotId> d_row = reconstructSlotDomain(csb, cbb, ts);
 
-            // All D_row slots must be in range (already checked individually above,
-            // but verify the reconstructed set as a cross-check)
-            for (int32_t slot : d_row) {
-                if (slot < 0 || slot >= num_slots) {
+            // Every semantic domain member must lower through the row binding table.
+            for (SlotId slot : d_row) {
+                if (!findSlotIndex(csb, slot).has_value()) {
                     throw std::runtime_error(row_tag(
                         "reconstructed D_row contains slot_id=" +
-                        std::to_string(slot) + " out of range [0, " +
-                        std::to_string(num_slots) + ")"));
+                        describeSlotId(slot) + " without a compiled binding"));
                 }
             }
 
-            // ── token_exec_slots ↔ compiled_bootstrap_bindings consistency ──
-            // R = { pos | token_exec_slots[pos] != -1 } must match bootstrap bindings exactly.
-            // For every binding (token_pos, slot_id): token_exec_slots[token_pos] == slot_id.
-            // For every pos NOT in a binding: token_exec_slots[pos] == -1.
+            // ── token_exec_slot_indices ↔ compiled_bootstrap_bindings consistency ──
+            // R = { pos | token_exec_slot_indices[pos] != -1 } must match bootstrap bindings exactly.
+            // For every binding (token_pos, slot_index):
+            // token_exec_slot_indices[token_pos] == slot_index.
+            // For every pos NOT in a binding: token_exec_slot_indices[pos] == -1.
 
             // Build expected slot map from bootstrap bindings
             std::vector<int32_t> expected_slots(seq_len, -1);
             for (const auto& binding : cbb) {
-                expected_slots[binding.token_pos] = binding.slot_id;
+                expected_slots[binding.token_pos] = binding.slot_index.dense();
             }
 
             for (int t = 0; t < seq_len; ++t) {
-                const int32_t actual = payload.token_to_slot_map[row_offset + t];
+                const int32_t actual = payload.token_to_slot_index_map[row_offset + t];
                 const int32_t expected = expected_slots[t];
                 if (actual != expected) {
                     throw std::runtime_error(row_tag(
-                        "token_to_slot_map[" + std::to_string(t) + "]=" +
+                        "token_to_slot_index_map[" + std::to_string(t) + "]=" +
                         std::to_string(actual) + " but expected " +
                         std::to_string(expected) +
                         " from compiled_bootstrap_bindings"));

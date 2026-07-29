@@ -18,13 +18,16 @@ struct GrmtSequence {
     std::vector<std::uint32_t> token_atom_flags;
     std::shared_ptr<GRIM::Tokenizer::AtomTable> atom_table;
     std::vector<std::uint32_t> atom_entry_ids;
-    std::vector<std::int32_t> token_exec_slots;
+    // Compiled dense runtime indices only. Semantic identities are carried by
+    // compiled_slot_bindings and never inferred from these tensor addresses.
+    std::vector<std::int32_t> token_exec_slot_indices;
 
     bool execution_active = false;
     GRIM::Execution::ExecutionGateTarget execution_gate_target =
         GRIM::Execution::ExecutionGateTarget::UNSUPERVISED;
     std::int32_t execution_prompt_end_pos = -1;
     std::int32_t execution_prompt_length = 0;
+    std::vector<GRIM::Execution::CompiledSlotBinding> compiled_slot_bindings;
     std::vector<GRIM::Execution::CompiledBootstrapBinding> compiled_bootstrap_bindings;
     std::vector<GRIM::Execution::TeacherStep> teacher_steps;
 

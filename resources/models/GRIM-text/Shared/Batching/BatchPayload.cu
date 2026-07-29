@@ -25,13 +25,13 @@
 namespace GRIM {
 namespace Batching {
 
-std::vector<int32_t> buildInferenceExecutionSlotMap(
+std::vector<int32_t> buildInferenceExecutionSlotIndexMap(
     const std::vector<int>& token_ids,
     const std::vector<uint8_t>& atom_mask,
     int num_slots,
     int num_scratch_slots)
 {
-    const char* caller = "buildInferenceExecutionSlotMap";
+    const char* caller = "buildInferenceExecutionSlotIndexMap";
     if (token_ids.size() != atom_mask.size()) {
         throw std::runtime_error(
             std::string(caller) + ": token_ids.size()=" + std::to_string(token_ids.size()) +
@@ -79,6 +79,23 @@ std::vector<int32_t> buildInferenceExecutionSlotMap(
 }
 
 namespace {
+
+std::vector<Execution::CompiledSlotBinding> compileEpisodeSlotBindings(int num_slots)
+{
+    if (num_slots <= 0) {
+        throw std::runtime_error(
+            "compileEpisodeSlotBindings: num_slots must be positive");
+    }
+
+    std::vector<Execution::CompiledSlotBinding> bindings;
+    bindings.reserve(static_cast<std::size_t>(num_slots));
+    for (int index = 0; index < num_slots; ++index) {
+        bindings.push_back(Execution::CompiledSlotBinding{
+            Execution::SlotId::fromLocalOrdinal(static_cast<std::uint64_t>(index)),
+            Execution::SlotIndex::fromDense(index)});
+    }
+    return bindings;
+}
 
 void requirePositiveVocab(int vocab_size, const char* caller)
 {
@@ -578,12 +595,12 @@ void materializeBootstrapSlotPoolMap(
             std::string(caller) + ": selector-to-execution bridge requires "
             "row_atom_offset.size() == batch_size + 1");
     }
-    if (static_cast<int>(payload.token_to_slot_map.size()) != payload.total_tokens ||
+    if (static_cast<int>(payload.token_to_slot_index_map.size()) != payload.total_tokens ||
         static_cast<int>(payload.atom_entry_ids.size()) != payload.total_tokens ||
         static_cast<int>(payload.atom_mask.size()) != payload.total_tokens) {
         throw std::runtime_error(
             std::string(caller) + ": selector-to-execution bridge requires aligned "
-            "token_to_slot_map, atom_entry_ids, and atom_mask arrays");
+            "token_to_slot_index_map, atom_entry_ids, and atom_mask arrays");
     }
 
     payload.execution_slot_count = execution_num_slots;
@@ -595,13 +612,13 @@ void materializeBootstrapSlotPoolMap(
         payload.bootstrap_slot_to_pool_index.size(), -1);
 
     for (int token_pos = 0; token_pos < payload.total_tokens; ++token_pos) {
-        const int slot = payload.token_to_slot_map[static_cast<std::size_t>(token_pos)];
+        const int slot = payload.token_to_slot_index_map[static_cast<std::size_t>(token_pos)];
         if (slot < 0) {
             continue;
         }
         if (slot >= execution_num_slots) {
             throw std::runtime_error(
-                std::string(caller) + ": token_to_slot_map[" +
+                std::string(caller) + ": token_to_slot_index_map[" +
                 std::to_string(token_pos) + "]=" + std::to_string(slot) +
                 " exceeds execution_num_slots=" +
                 std::to_string(execution_num_slots));
@@ -705,6 +722,7 @@ BatchPayload buildBatchPayload(
         GRIM::Execution::ExecutionGateTarget execution_gate_target;
         int32_t execution_prompt_end_pos;
         int32_t execution_prompt_length;
+        const std::vector<GRIM::Execution::CompiledSlotBinding>* compiled_slot_bindings;
         const std::vector<GRIM::Execution::CompiledBootstrapBinding>* compiled_bootstrap_bindings;
         const std::vector<GRIM::Execution::TeacherStep>* teacher_steps;
     };
@@ -822,14 +840,14 @@ BatchPayload buildBatchPayload(
         }
 
         const std::vector<int32_t>* exec_slots_ptr = nullptr;
-        if (!seq->token_exec_slots.empty()) {
-            if (static_cast<int>(seq->token_exec_slots.size()) != seq_len) {
+        if (!seq->token_exec_slot_indices.empty()) {
+            if (static_cast<int>(seq->token_exec_slot_indices.size()) != seq_len) {
                 throw std::runtime_error(
                     "buildBatchPayload: sequence " + std::to_string(sid) +
-                    " token_exec_slots.size()=" + std::to_string(seq->token_exec_slots.size()) +
+                    " token_exec_slot_indices.size()=" + std::to_string(seq->token_exec_slot_indices.size()) +
                     " != token_ids.size()=" + std::to_string(seq_len));
             }
-            exec_slots_ptr = &seq->token_exec_slots;
+            exec_slots_ptr = &seq->token_exec_slot_indices;
         }
 
         raw.push_back({
@@ -846,6 +864,7 @@ BatchPayload buildBatchPayload(
             seq->execution_gate_target,
             seq->execution_prompt_end_pos,
             seq->execution_prompt_length,
+            &seq->compiled_slot_bindings,
             &seq->compiled_bootstrap_bindings,
             &seq->teacher_steps
         });
@@ -919,7 +938,7 @@ BatchPayload buildBatchPayload(
     payload.atom_mask.assign(flat_size, 0);
     payload.atom_flags.assign(flat_size, 0);
     payload.atom_entry_ids.assign(flat_size, GRIM::Tokenizer::kAtomEntryNone);
-    payload.token_to_slot_map.assign(flat_size, -1);
+    payload.token_to_slot_index_map.assign(flat_size, -1);
     payload.seq_atom_tables.resize(payload.batch_size);
     payload.valid_target_counts.resize(payload.batch_size, 0);
 
@@ -929,6 +948,7 @@ BatchPayload buildBatchPayload(
         payload.batch_size, GRIM::Execution::ExecutionGateTarget::UNSUPERVISED);
     payload.execution_prompt_end_positions.resize(payload.batch_size, -1);
     payload.execution_prompt_lengths.resize(payload.batch_size, 0);
+    payload.compiled_slot_bindings.resize(payload.batch_size);
     payload.compiled_bootstrap_bindings.resize(payload.batch_size);
     payload.teacher_steps.resize(payload.batch_size);
     payload.teacher_step_mask.resize(payload.batch_size);
@@ -1003,7 +1023,7 @@ BatchPayload buildBatchPayload(
 
         // Copy execution slot map (runtime substrate metadata; -1 for non-state-bearing)
         if (r.exec_slots) {
-            std::memcpy(&payload.token_to_slot_map[row_offset],
+            std::memcpy(&payload.token_to_slot_index_map[row_offset],
                         r.exec_slots->data(),
                         seq_len * sizeof(int32_t));
         }
@@ -1017,6 +1037,9 @@ BatchPayload buildBatchPayload(
         payload.execution_gate_targets[b] = r.execution_gate_target;
         payload.execution_prompt_end_positions[b] = r.execution_prompt_end_pos;
         payload.execution_prompt_lengths[b] = r.execution_prompt_length;
+        if (r.compiled_slot_bindings && !r.compiled_slot_bindings->empty()) {
+            payload.compiled_slot_bindings[b] = *r.compiled_slot_bindings;
+        }
         if (r.compiled_bootstrap_bindings && !r.compiled_bootstrap_bindings->empty()) {
             payload.compiled_bootstrap_bindings[b] = *r.compiled_bootstrap_bindings;
         }
@@ -1047,7 +1070,7 @@ BatchPayload buildBatchPayload(
     // ═════════════════════════════════════════════════════════════════════════
     // PHASE 4b: Execution-slot target masking
     //
-    // Tokens owned by the execution block (token_to_slot_map[p] >= 0) are
+    // Tokens owned by the execution block (token_to_slot_index_map[p] >= 0) are
     // supervised by the numeric head, NOT by LM cross-entropy.  Because the
     // DataLoader shift convention is target_ids[t] = token_ids[t+1] (the LM
     // at position t predicts the token at position t+1), the LM CE that
@@ -1073,7 +1096,7 @@ BatchPayload buildBatchPayload(
             const int row_start = b * S;
             const int row_end   = row_start + payload.seq_lengths[b];
             for (int p = row_start; p < row_end; ++p) {
-                if (payload.token_to_slot_map[p] < 0) continue;
+                if (payload.token_to_slot_index_map[p] < 0) continue;
                 // The LM CE predicting position p lives at target_ids[p-1].
                 // Skip when p is the row's first token (no in-row predictor).
                 if (p == row_start) continue;
@@ -1131,7 +1154,7 @@ BatchPayload buildInferenceBatchPayload(
     const std::vector<uint32_t>& atom_flags,
     std::shared_ptr<const GRIM::Tokenizer::AtomTable> atom_table,
     const std::vector<uint32_t>& atom_entry_ids,
-    const std::vector<int32_t>& token_to_slot_map,
+    const std::vector<int32_t>& token_to_slot_index_map,
     int vocab_size,
     size_t batch_capacity,
     size_t max_cached_seq_len,
@@ -1169,20 +1192,20 @@ BatchPayload buildInferenceBatchPayload(
             std::to_string(atom_entry_ids.size()) + " != token_ids.size()=" +
             std::to_string(seq_len));
     }
-    if (!token_to_slot_map.empty() && static_cast<int>(token_to_slot_map.size()) != seq_len) {
+    if (!token_to_slot_index_map.empty() && static_cast<int>(token_to_slot_index_map.size()) != seq_len) {
         throw std::runtime_error(
-            "buildInferenceBatchPayload: token_to_slot_map.size()=" +
-            std::to_string(token_to_slot_map.size()) + " != token_ids.size()=" +
+            "buildInferenceBatchPayload: token_to_slot_index_map.size()=" +
+            std::to_string(token_to_slot_index_map.size()) + " != token_ids.size()=" +
             std::to_string(seq_len));
     }
 
     // Inference activation is decided by the EXECUTE/NOOP head at the final
     // prompt token. A slot map only supplies candidate bootstrap bindings.
     bool row_execution_active = false;
-    if (!token_to_slot_map.empty()) {
+    if (!token_to_slot_index_map.empty()) {
         if (execution_num_slots <= 0) {
             throw std::runtime_error(
-                "buildInferenceBatchPayload: execution_num_slots must be > 0 when token_to_slot_map is provided");
+                "buildInferenceBatchPayload: execution_num_slots must be > 0 when token_to_slot_index_map is provided");
         }
         if (execution_num_scratch_slots < 0 ||
             execution_num_scratch_slots >= execution_num_slots) {
@@ -1194,11 +1217,11 @@ BatchPayload buildInferenceBatchPayload(
         std::vector<int> slot_token_positions(
             static_cast<std::size_t>(execution_num_slots), -1);
         for (int t = 0; t < seq_len; ++t) {
-            const int32_t slot = token_to_slot_map[static_cast<size_t>(t)];
+            const int32_t slot = token_to_slot_index_map[static_cast<size_t>(t)];
             if (slot != -1) {
                 if (slot < execution_num_scratch_slots || slot >= execution_num_slots) {
                     throw std::runtime_error(
-                        "buildInferenceBatchPayload: token_to_slot_map[" + std::to_string(t) +
+                        "buildInferenceBatchPayload: token_to_slot_index_map[" + std::to_string(t) +
                         "]=" + std::to_string(slot) + " out of value-slot range [" +
                         std::to_string(execution_num_scratch_slots) + ", " +
                         std::to_string(execution_num_slots) + ") or -1");
@@ -1237,9 +1260,14 @@ BatchPayload buildInferenceBatchPayload(
     payload.atom_mask = atom_mask;
     payload.atom_flags = atom_flags;
     payload.atom_entry_ids = atom_entry_ids;
-    payload.token_to_slot_map.assign(static_cast<size_t>(seq_len), -1);
-    if (!token_to_slot_map.empty()) {
-        payload.token_to_slot_map = token_to_slot_map;
+    payload.token_to_slot_index_map.assign(static_cast<size_t>(seq_len), -1);
+    if (!token_to_slot_index_map.empty()) {
+        payload.token_to_slot_index_map = token_to_slot_index_map;
+    }
+    if (execution_num_slots > 0) {
+        payload.compiled_slot_bindings.resize(1);
+        payload.compiled_slot_bindings[0] =
+            compileEpisodeSlotBindings(execution_num_slots);
     }
     payload.seq_atom_tables.resize(1);
     payload.seq_atom_tables[0] = atom_table;

@@ -79,9 +79,9 @@ void forward(
         throw std::runtime_error(
             "SlotSeedEncoder::forward: num_slots must be > 0");
     }
-    if (static_cast<int>(payload.token_to_slot_map.size()) != payload.total_tokens) {
+    if (static_cast<int>(payload.token_to_slot_index_map.size()) != payload.total_tokens) {
         throw std::runtime_error(
-            "SlotSeedEncoder::forward: BatchPayload.token_to_slot_map size does "
+            "SlotSeedEncoder::forward: BatchPayload.token_to_slot_index_map size does "
             "not match total_tokens");
     }
     if (payload.atom_positions.size() != payload.atom_types.size()) {
@@ -143,13 +143,13 @@ void forward(
 
     int authored_slot_count = 0;
     for (int token = 0; token < payload.total_tokens; ++token) {
-        const int slot = payload.token_to_slot_map[static_cast<std::size_t>(token)];
+        const int slot = payload.token_to_slot_index_map[static_cast<std::size_t>(token)];
         if (slot < 0) {
             continue;
         }
         if (slot >= num_slots) {
             throw std::runtime_error(
-                "SlotSeedEncoder::forward: token_to_slot_map[" +
+                "SlotSeedEncoder::forward: token_to_slot_index_map[" +
                 std::to_string(token) + "]=" + std::to_string(slot) +
                 " is outside num_slots=" + std::to_string(num_slots));
         }

@@ -46,10 +46,6 @@ struct BatchDeviceStorage;
 
 namespace Batching {
 
-// TeacherStep is now defined in Execution/ExecutionMetadata.hpp as GRIM::Execution::TeacherStep.
-// This alias preserves call-site compatibility during the cutover.
-using TeacherStep = GRIM::Execution::TeacherStep;
-
 enum class BatchPayloadMode {
     Training,
     InferencePrefill,
@@ -96,7 +92,9 @@ struct BatchPayload {
     std::vector<float> numeric_values;       // [total_tokens] padded with 0.0f
     std::vector<uint8_t> atom_mask;          // [total_tokens] padded with 0 (1 = any atom type)
     std::vector<uint32_t> atom_flags;         // [total_tokens] padded with 0 (type-specific metadata from AtomTable)
-    std::vector<int32_t> token_to_slot_map;   // [total_tokens] padded with -1 (slot_id for execution; -1 = non-state-bearing)
+    // Dense, batch-lifetime runtime addresses. Semantic SlotId values are
+    // resolved only through compiled_slot_bindings.
+    std::vector<int32_t> token_to_slot_index_map; // [total_tokens], -1 = non-state-bearing
 
     // Compact authored atom facts. These are materialized ONCE behind the
     // payload boundary and uploaded as-is for ScratchBlock consumption.
@@ -104,7 +102,7 @@ struct BatchPayload {
     std::vector<int> atom_positions;          // [num_atoms] flat token indices into input_ids/numeric_values/atom_flags
     std::vector<int> atom_types;              // [num_atoms] Tokenizer::AtomType enum values aligned with atom_positions
 
-    // NOTE: Device pointers used to live here as `mutable d_token_to_slot_map`
+    // NOTE: Device pointers used to live here as `mutable d_token_to_slot_index_map`
     // and `mutable d_atom_mask`, written by the upload path and read by the
     // forward/loss path. They have moved to `GRIM::Batching::BatchDeviceBindings`
     // (Shared/Batching/BatchDeviceBindings.hpp). The underlying device buffer
@@ -120,7 +118,7 @@ struct BatchPayload {
     // When non-empty: teacher_steps.size() == batch_size, each inner vector
     // has exactly execution_block_num_steps entries (1:1 with ExecutionBlock steps).
     // ═══════════════════════════════════════════════════════════════════════════
-    std::vector<std::vector<TeacherStep>> teacher_steps;
+    std::vector<std::vector<GRIM::Execution::TeacherStep>> teacher_steps;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // TEACHER STEP MASK (for padded-step loss zeroing)
@@ -137,7 +135,7 @@ struct BatchPayload {
     // Non-empty teacher_steps is a supervised-training payload validity
     // requirement, NOT the activation source.
     //
-    // token_to_slot_map (above) is the runtime binding projection.
+    // token_to_slot_index_map (above) is the runtime-address projection.
     // teacher_steps (above) is the supervision projection.
     // compiled_bootstrap_bindings is the compiled provenance.
     //
@@ -149,6 +147,7 @@ struct BatchPayload {
     std::vector<GRIM::Execution::ExecutionGateTarget> execution_gate_targets; // [batch_size]
     std::vector<int32_t> execution_prompt_end_positions; // [batch_size], row-relative
     std::vector<int32_t> execution_prompt_lengths;       // [batch_size]
+    std::vector<std::vector<GRIM::Execution::CompiledSlotBinding>> compiled_slot_bindings; // [batch_size]
     std::vector<std::vector<GRIM::Execution::CompiledBootstrapBinding>> compiled_bootstrap_bindings;  // [batch_size]
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -269,7 +268,7 @@ struct BatchPayload {
                !atom_mask.empty() ||
                !atom_flags.empty() ||
                !atom_entry_ids.empty() ||
-               !token_to_slot_map.empty();
+               !token_to_slot_index_map.empty();
     }
     bool hasTrainingTargets() const { return mode == BatchPayloadMode::Training; }
 
@@ -427,10 +426,10 @@ struct BatchPayload {
                 std::to_string(atom_flags.size()) + " != total_tokens=" +
                 std::to_string(total_tokens));
         }
-        if (ownsHostInputData() && static_cast<int>(token_to_slot_map.size()) != total_tokens) {
+        if (ownsHostInputData() && static_cast<int>(token_to_slot_index_map.size()) != total_tokens) {
             throw std::runtime_error(
-                std::string(caller) + ": BatchPayload.token_to_slot_map.size()=" +
-                std::to_string(token_to_slot_map.size()) + " != total_tokens=" +
+                std::string(caller) + ": BatchPayload.token_to_slot_index_map.size()=" +
+                std::to_string(token_to_slot_index_map.size()) + " != total_tokens=" +
                 std::to_string(total_tokens));
         }
         if (static_cast<int>(atom_positions.size()) != static_cast<int>(atom_types.size())) {
@@ -559,13 +558,13 @@ struct BatchPayload {
             std::vector<int> expected(expected_size, -1);
             std::vector<int> bootstrap_slot_token_positions(expected_size, -1);
             for (int token_pos = 0; token_pos < total_tokens; ++token_pos) {
-                const int slot = token_to_slot_map[static_cast<std::size_t>(token_pos)];
+                const int slot = token_to_slot_index_map[static_cast<std::size_t>(token_pos)];
                 if (slot < 0) {
                     continue;
                 }
                 if (slot >= execution_slot_count) {
                     throw std::runtime_error(
-                        std::string(caller) + ": token_to_slot_map[" +
+                        std::string(caller) + ": token_to_slot_index_map[" +
                         std::to_string(token_pos) + "]=" + std::to_string(slot) +
                         " exceeds execution_slot_count=" +
                         std::to_string(execution_slot_count));
@@ -613,7 +612,7 @@ struct BatchPayload {
             if (bootstrap_slot_to_pool_index != expected) {
                 throw std::runtime_error(
                     std::string(caller) + ": BatchPayload.bootstrap_slot_to_pool_index "
-                    "does not agree with token_to_slot_map + atom_entry_ids");
+                    "does not agree with token_to_slot_index_map + atom_entry_ids");
             }
         }
         // Teacher steps validation (when populated for arithmetic batches)
@@ -661,6 +660,13 @@ struct BatchPayload {
             static_cast<int>(execution_prompt_lengths.size()) != batch_size) {
             throw std::runtime_error(
                 std::string(caller) + ": BatchPayload.execution_prompt_lengths.size() != batch_size");
+        }
+        if (!compiled_slot_bindings.empty() &&
+            static_cast<int>(compiled_slot_bindings.size()) != batch_size) {
+            throw std::runtime_error(
+                std::string(caller) + ": BatchPayload.compiled_slot_bindings.size()=" +
+                std::to_string(compiled_slot_bindings.size()) + " != batch_size=" +
+                std::to_string(batch_size));
         }
         if (!compiled_bootstrap_bindings.empty()) {
             if (static_cast<int>(compiled_bootstrap_bindings.size()) != batch_size) {
@@ -740,7 +746,7 @@ BatchPayload buildBatchPayload(
  * Numeric atoms are assigned left-to-right into [num_scratch_slots, num_slots).
  * Any metadata mismatch or capacity overflow fails before device upload.
  */
-std::vector<int32_t> buildInferenceExecutionSlotMap(
+std::vector<int32_t> buildInferenceExecutionSlotIndexMap(
     const std::vector<int>& token_ids,
     const std::vector<uint8_t>& atom_mask,
     int num_slots,
@@ -760,7 +766,7 @@ BatchPayload buildInferenceBatchPayload(
     const std::vector<uint32_t>& atom_flags,
     std::shared_ptr<const GRIM::Tokenizer::AtomTable> atom_table,
     const std::vector<uint32_t>& atom_entry_ids,
-    const std::vector<int32_t>& token_to_slot_map,
+    const std::vector<int32_t>& token_to_slot_index_map,
     int vocab_size,
     size_t batch_capacity,
     size_t max_cached_seq_len,

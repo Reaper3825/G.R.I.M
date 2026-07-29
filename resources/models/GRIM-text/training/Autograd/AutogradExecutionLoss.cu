@@ -147,31 +147,31 @@ int requireOpTarget(int target, int num_ops, int row, int step, const char* labe
     return target;
 }
 
-int requireValueSlotTarget(int slot_id, int scratch_slots, int num_slots, int row, int step, const char* label) {
-    if (slot_id < scratch_slots || slot_id >= num_slots) {
+int requireValueSlotTarget(int slot_index, int scratch_slots, int num_slots, int row, int step, const char* label) {
+    if (slot_index < scratch_slots || slot_index >= num_slots) {
         throw std::runtime_error(
-            std::string("addExecutionAuxiliaryLoss: ") + label + "=" + std::to_string(slot_id)
+            std::string("addExecutionAuxiliaryLoss: ") + label + "=" + std::to_string(slot_index)
             + " is outside execution value-slot range [" + std::to_string(scratch_slots)
             + "," + std::to_string(num_slots) + ") at row="
             + std::to_string(row) + " step=" + std::to_string(step));
     }
-    return slot_id - scratch_slots;
+    return slot_index - scratch_slots;
 }
 
-int requireWriteTarget(int slot_id, int scratch_slots, int num_slots, int row, int step) {
-    if (slot_id < scratch_slots || slot_id >= num_slots) {
+int requireWriteTarget(int slot_index, int scratch_slots, int num_slots, int row, int step) {
+    if (slot_index < scratch_slots || slot_index >= num_slots) {
         throw std::runtime_error(
-            "addExecutionAuxiliaryLoss: teacher write_slot=" + std::to_string(slot_id)
+            "addExecutionAuxiliaryLoss: teacher write_slot_index=" + std::to_string(slot_index)
             + " is outside writable slot range [" + std::to_string(scratch_slots)
             + "," + std::to_string(num_slots) + ") at row="
             + std::to_string(row) + " step=" + std::to_string(step));
     }
-    return slot_id;
+    return slot_index;
 }
 
 void requireInitializedValueTarget(
     const Tensor& state_before_valid,
-    int slot_id,
+    int slot_index,
     int num_slots,
     int row,
     int step,
@@ -191,7 +191,7 @@ void requireInitializedValueTarget(
     float valid = 0.0f;
     CUDA_CHECK(cudaMemcpyAsync(
         &valid,
-        state_before_valid.data + slot_id,
+        state_before_valid.data + slot_index,
         sizeof(float),
         cudaMemcpyDeviceToHost,
         stream));
@@ -202,7 +202,7 @@ void requireInitializedValueTarget(
             std::string("addExecutionAuxiliaryLoss: refusing masked ") + label
             + " CE target at row=" + std::to_string(row)
             + " step=" + std::to_string(step)
-            + " slot=" + std::to_string(slot_id)
+            + " slot_index=" + std::to_string(slot_index)
             + " state_before_valid=" + std::to_string(valid)
             + "; teacher argument targets must reference slots initialized by "
               "bootstrap or an earlier write");
@@ -408,7 +408,7 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
         Tensor row_entropy_sum;
         bool have_row_entropy_sum = false;
         int row_entropy_terms = 0;
-        const std::vector<Batching::TeacherStep>* teacher_row = nullptr;
+        const std::vector<Execution::TeacherStep>* teacher_row = nullptr;
         if (!payload.teacher_steps.empty()) {
             teacher_row = &payload.teacher_steps[b];
             int real_teacher_steps = 0;
@@ -534,13 +534,32 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
 
             if (teacher_row && model_hp.structured_ce_enabled && ce_weight > 0.0f) {
                 const auto& teacher = (*teacher_row)[k];
+                if (payload.compiled_slot_bindings.empty() ||
+                    b >= static_cast<int>(payload.compiled_slot_bindings.size())) {
+                    throw std::runtime_error(
+                        "addExecutionAuxiliaryLoss: row " + std::to_string(b) +
+                        " has teacher SlotId targets but no compiled slot bindings");
+                }
+                const auto& slot_bindings = payload.compiled_slot_bindings[b];
+                const int arg1_slot_index = Execution::requireSlotIndex(
+                    slot_bindings,
+                    teacher.arg1_slot,
+                    "addExecutionAuxiliaryLoss teacher arg1").dense();
+                const int arg2_slot_index = Execution::requireSlotIndex(
+                    slot_bindings,
+                    teacher.arg2_slot,
+                    "addExecutionAuxiliaryLoss teacher arg2").dense();
+                const int write_slot_index = Execution::requireSlotIndex(
+                    slot_bindings,
+                    teacher.write_slot,
+                    "addExecutionAuxiliaryLoss teacher write").dense();
                 const int op_target = requireOpTarget(teacher.op_id, num_ops, b, k, "teacher op_id");
-                const int arg1_target = requireValueSlotTarget(teacher.arg1_slot, num_scratch_slots, num_slots, b, k, "teacher arg1_slot");
-                const int arg2_target = requireValueSlotTarget(teacher.arg2_slot, num_scratch_slots, num_slots, b, k, "teacher arg2_slot");
-                const int write_target = requireWriteTarget(teacher.write_slot, num_scratch_slots, num_slots, b, k);
+                const int arg1_target = requireValueSlotTarget(arg1_slot_index, num_scratch_slots, num_slots, b, k, "teacher arg1_slot");
+                const int arg2_target = requireValueSlotTarget(arg2_slot_index, num_scratch_slots, num_slots, b, k, "teacher arg2_slot");
+                const int write_target = requireWriteTarget(write_slot_index, num_scratch_slots, num_slots, b, k);
                 requireInitializedValueTarget(
                     sout.state_before_valid,
-                    teacher.arg1_slot,
+                    arg1_slot_index,
                     num_slots,
                     b,
                     k,
@@ -548,7 +567,7 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
                     ctx.stream);
                 requireInitializedValueTarget(
                     sout.state_before_valid,
-                    teacher.arg2_slot,
+                    arg2_slot_index,
                     num_slots,
                     b,
                     k,

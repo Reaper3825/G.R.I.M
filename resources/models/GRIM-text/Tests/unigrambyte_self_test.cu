@@ -2526,7 +2526,7 @@ static TokenizerArtifacts::GrmtSequence makePersistenceGrmtSequence() {
     sequence.token_atom_flags.assign(n, 0);
     sequence.atom_table = std::make_shared<AtomTable>();
     sequence.atom_entry_ids.assign(n, kAtomEntryNone);
-    sequence.token_exec_slots.assign(n, -1);
+    sequence.token_exec_slot_indices.assign(n, -1);
     return sequence;
 }
 
