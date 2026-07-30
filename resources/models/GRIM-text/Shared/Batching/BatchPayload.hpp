@@ -26,8 +26,6 @@
 #include <stdexcept>
 #include <numeric>
 
-#include "../Execution/ExecutionMetadata.hpp"
-
 // Forward declaration for GRMT-authored training rows.
 namespace GRIM { namespace TokenizerArtifacts { struct GrmtSequence; } }
 
@@ -76,9 +74,8 @@ struct BatchPayload {
     int actual_tokens = 0;                   // sum of real sequence lengths (no padding); telemetry/diagnostics token count owner
     int padding_tokens = 0;                  // total_tokens - actual_tokens
     int valid_tokens = 0;                    // total unmasked targets (for loss mean reduction)
-    // LM-supervised token count AFTER execution-slot target masking.
-    // Set by buildBatchPayload() Phase 4b.  Equals valid_tokens when no
-    // execution-slot masking occurs.
+    // LM-supervised token count. Training payloads keep this aligned with
+    // valid_tokens; inference payloads carry no loss targets.
     int lm_valid_tokens = 0;
     int vocab_size = 0;                      // vocabulary size (for loss kernels + target validation)
     std::vector<int> seq_lengths;            // [batch_size] — original length per sequence before padding
@@ -92,8 +89,7 @@ struct BatchPayload {
     std::vector<float> numeric_values;       // [total_tokens] padded with 0.0f
     std::vector<uint8_t> atom_mask;          // [total_tokens] padded with 0 (1 = any atom type)
     std::vector<uint32_t> atom_flags;         // [total_tokens] padded with 0 (type-specific metadata from AtomTable)
-    // Dense, batch-lifetime runtime addresses. Semantic SlotId values are
-    // resolved only through compiled_slot_bindings.
+    // Dense bootstrap slot addresses used to materialize authored ARG seeds.
     std::vector<int32_t> token_to_slot_index_map; // [total_tokens], -1 = non-state-bearing
 
     // Compact authored atom facts. These are materialized ONCE behind the
@@ -110,46 +106,6 @@ struct BatchPayload {
     // borrow step-local addresses only through `BatchDeviceBindings`.
     // Host semantic fields remain immutable after buildBatchPayload() returns.
     std::shared_ptr<BatchDeviceStorage> device_storage;
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // TRANSITION TARGETS (for structured CE supervision)
-    // Populated for supervised execution rows; empty for non-execution rows.
-    // transition_targets[b][k] = TransitionInvocation for batch row b, execution step k.
-    // When non-empty: transition_targets.size() == batch_size, each inner vector
-    // has exactly execution_block_num_steps entries (1:1 with ExecutionBlock steps).
-    // ═══════════════════════════════════════════════════════════════════════════
-    std::vector<std::vector<GRIM::Execution::TransitionInvocation>> transition_targets;
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // TRANSITION TARGET MASK (for padded-step loss zeroing)
-    // transition_target_mask[b][k] = 1 for real steps, 0 for padded steps.
-    // Constructed at batch-build time from original transition_targets count vs
-    // execution_block_num_steps. Loss loops skip steps where mask == 0.
-    // ═══════════════════════════════════════════════════════════════════════════
-    std::vector<std::vector<uint8_t>> transition_target_mask;
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // COMPILED STRUCTURED-EXECUTION PAYLOAD
-    //
-    // execution_active[b] is the AUTHORITATIVE activation bit per row.
-    // Non-empty transition_targets is a supervised-training payload validity
-    // requirement, NOT the activation source.
-    //
-    // token_to_slot_index_map (above) is the runtime-address projection.
-    // transition_targets (above) is the supervision projection.
-    // compiled_bootstrap_bindings is the compiled provenance.
-    //
-    // Runtime D_row is reconstructed from compiled_bootstrap_bindings ∪ transition_targets.
-    // ═══════════════════════════════════════════════════════════════════════
-    // Supervised rows use this as the dataset-authored activation. Inference prefill
-    // starts inactive and lets the execution gate make the runtime decision.
-    std::vector<bool> execution_active;    // [batch_size]
-    std::vector<GRIM::Execution::ExecutionGateTarget> execution_gate_targets; // [batch_size]
-    std::vector<int32_t> execution_prompt_end_positions; // [batch_size], row-relative
-    std::vector<int32_t> execution_prompt_lengths;       // [batch_size]
-    std::vector<std::vector<GRIM::Execution::CompiledSlotBinding>> compiled_slot_bindings; // [batch_size]
-    std::vector<std::vector<GRIM::Execution::CompiledTransitionBinding>> compiled_transition_bindings; // [batch_size]
-    std::vector<std::vector<GRIM::Execution::CompiledBootstrapBinding>> compiled_bootstrap_bindings;  // [batch_size]
 
     // ═══════════════════════════════════════════════════════════════════════════
     // ATOM TABLE SIDE CHANNEL (host-only, NOT transferred to GPU)
@@ -230,15 +186,13 @@ struct BatchPayload {
     std::vector<float> pool_digit_slot_features;   // [E * S * kNumberSlotFeatureDim]
     std::vector<float> pool_global_features;       // [E * kNumberGlobalFeatureDim]
 
-    // Selector-to-execution identity bridge for authored bootstrap operands.
+    // Selector-to-bootstrap identity bridge for authored ARG operands.
     // Layout is row-major [batch_size * execution_slot_count]. Each entry is
     // the batch-global selector-pool index whose authored token initializes
-    // that execution slot, or -1 when the slot has no authored bootstrap.
+    // that bootstrap slot, or -1 when the slot has no authored seed.
     //
-    // This is identity/provenance metadata only: the selector still owns the
-    // candidate representation and ExecutionBlock still owns arg-role scoring.
-    // Generated result slots are runtime state and therefore remain outside
-    // this static bootstrap map.
+    // This is identity/provenance metadata only. The selector owns candidate
+    // representation; SlotSeedEncoder materializes the mapped seeds.
     int execution_slot_count = 0;
     std::vector<int> bootstrap_slot_to_pool_index;
 
@@ -310,7 +264,7 @@ struct BatchPayload {
             throw std::runtime_error(
                 std::string(caller) + ": BatchPayload.lm_valid_tokens=" +
                 std::to_string(lm_valid_tokens) +
-                " (must be > 0 after execution-slot target masking)");
+                " (must be > 0)");
         }
         if (isInference() && valid_tokens != 0) {
             throw std::runtime_error(
@@ -486,7 +440,7 @@ struct BatchPayload {
             }
             if (execution_slot_count != 0 || !bootstrap_slot_to_pool_index.empty()) {
                 throw std::runtime_error(
-                    std::string(caller) + ": selector-to-execution bootstrap metadata is populated "
+                    std::string(caller) + ": selector-to-bootstrap metadata is populated "
                     "while number_encoder_digit_slots=0");
             }
         } else {
@@ -520,7 +474,7 @@ struct BatchPayload {
             requireChannelSize(pool_numeric_kinds.size(), pool_entries, "pool_numeric_kinds");
             requireChannelSize(pool_atom_types.size(), pool_entries, "pool_atom_types");
         }
-        // Selector-to-execution bootstrap identity geometry and agreement.
+        // Selector-to-bootstrap identity geometry and agreement.
         if (execution_slot_count < 0) {
             throw std::runtime_error(
                 std::string(caller) + ": BatchPayload.execution_slot_count=" +
@@ -546,13 +500,13 @@ struct BatchPayload {
             }
             if (row_atom_offset.size() != static_cast<std::size_t>(batch_size) + 1) {
                 throw std::runtime_error(
-                    std::string(caller) + ": selector-to-execution bootstrap metadata requires "
+                    std::string(caller) + ": selector-to-bootstrap metadata requires "
                     "row_atom_offset.size() == batch_size + 1");
             }
             if (ownsHostInputData() &&
                 static_cast<int>(atom_entry_ids.size()) != total_tokens) {
                 throw std::runtime_error(
-                    std::string(caller) + ": selector-to-execution bootstrap metadata requires "
+                    std::string(caller) + ": selector-to-bootstrap metadata requires "
                     "atom_entry_ids.size() == total_tokens");
             }
 
@@ -572,7 +526,7 @@ struct BatchPayload {
                 }
                 if (atom_mask[static_cast<std::size_t>(token_pos)] == 0) {
                     throw std::runtime_error(
-                        std::string(caller) + ": execution bootstrap token_pos=" +
+                        std::string(caller) + ": ARG bootstrap token_pos=" +
                         std::to_string(token_pos) + " is not an atom and cannot map to "
                         "the selector candidate pool");
                 }
@@ -583,13 +537,13 @@ struct BatchPayload {
                 const int row_end = row_atom_offset[static_cast<std::size_t>(row) + 1];
                 if (local_entry == std::numeric_limits<uint32_t>::max()) {
                     throw std::runtime_error(
-                        std::string(caller) + ": execution bootstrap token_pos=" +
+                        std::string(caller) + ": ARG bootstrap token_pos=" +
                         std::to_string(token_pos) + " has no atom_entry_id");
                 }
                 const int pool_index = row_begin + static_cast<int>(local_entry);
                 if (pool_index < row_begin || pool_index >= row_end) {
                     throw std::runtime_error(
-                        std::string(caller) + ": execution bootstrap token_pos=" +
+                        std::string(caller) + ": ARG bootstrap token_pos=" +
                         std::to_string(token_pos) + " has atom_entry_id=" +
                         std::to_string(local_entry) + " outside row " +
                         std::to_string(row) + " selector-pool window");
@@ -605,7 +559,7 @@ struct BatchPayload {
                         std::string(caller) + ": row " + std::to_string(row) +
                         " maps token positions " + std::to_string(prior_token_pos) +
                         " and " + std::to_string(token_pos) +
-                        " to duplicate execution slot " + std::to_string(slot));
+                        " to duplicate bootstrap slot " + std::to_string(slot));
                 }
                 bootstrap_slot_token_positions[bridge_index] = token_pos;
                 expected[bridge_index] = pool_index;
@@ -616,76 +570,6 @@ struct BatchPayload {
                     "does not agree with token_to_slot_index_map + atom_entry_ids");
             }
         }
-        // Transition-target geometry validation
-        if (!transition_targets.empty()) {
-            if (static_cast<int>(transition_targets.size()) != batch_size) {
-                throw std::runtime_error(
-                    std::string(caller) + ": BatchPayload.transition_targets.size()=" +
-                    std::to_string(transition_targets.size()) + " != batch_size=" +
-                    std::to_string(batch_size));
-            }
-        }
-
-        // Compiled execution payload validation
-        if (!execution_active.empty()) {
-            if (static_cast<int>(execution_active.size()) != batch_size) {
-                throw std::runtime_error(
-                    std::string(caller) + ": BatchPayload.execution_active.size()=" +
-                    std::to_string(execution_active.size()) + " != batch_size=" +
-                    std::to_string(batch_size));
-            }
-            // execution_active with false + non-empty transition_targets is a structural error
-            for (int b = 0; b < batch_size; ++b) {
-                if (!execution_active[b] && !transition_targets.empty()
-                    && !transition_targets[b].empty()) {
-                    throw std::runtime_error(
-                        std::string(caller) + ": row " + std::to_string(b) +
-                        " has execution_active=false but non-empty transition_targets — "
-                        "transition_targets alone do not activate execution");
-                }
-            }
-        }
-        if (!execution_gate_targets.empty() &&
-            static_cast<int>(execution_gate_targets.size()) != batch_size) {
-            throw std::runtime_error(
-                std::string(caller) + ": BatchPayload.execution_gate_targets.size()=" +
-                std::to_string(execution_gate_targets.size()) + " != batch_size=" +
-                std::to_string(batch_size));
-        }
-        if (!execution_prompt_end_positions.empty() &&
-            static_cast<int>(execution_prompt_end_positions.size()) != batch_size) {
-            throw std::runtime_error(
-                std::string(caller) + ": BatchPayload.execution_prompt_end_positions.size() != batch_size");
-        }
-        if (!execution_prompt_lengths.empty() &&
-            static_cast<int>(execution_prompt_lengths.size()) != batch_size) {
-            throw std::runtime_error(
-                std::string(caller) + ": BatchPayload.execution_prompt_lengths.size() != batch_size");
-        }
-        if (!compiled_slot_bindings.empty() &&
-            static_cast<int>(compiled_slot_bindings.size()) != batch_size) {
-            throw std::runtime_error(
-                std::string(caller) + ": BatchPayload.compiled_slot_bindings.size()=" +
-                std::to_string(compiled_slot_bindings.size()) + " != batch_size=" +
-                std::to_string(batch_size));
-        }
-        if (!compiled_transition_bindings.empty() &&
-            static_cast<int>(compiled_transition_bindings.size()) != batch_size) {
-            throw std::runtime_error(
-                std::string(caller) +
-                ": BatchPayload.compiled_transition_bindings.size()=" +
-                std::to_string(compiled_transition_bindings.size()) +
-                " != batch_size=" + std::to_string(batch_size));
-        }
-        if (!compiled_bootstrap_bindings.empty()) {
-            if (static_cast<int>(compiled_bootstrap_bindings.size()) != batch_size) {
-                throw std::runtime_error(
-                    std::string(caller) + ": BatchPayload.compiled_bootstrap_bindings.size()=" +
-                    std::to_string(compiled_bootstrap_bindings.size()) + " != batch_size=" +
-                    std::to_string(batch_size));
-            }
-        }
-
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -728,9 +612,7 @@ struct BatchPayload {
  * @param vocab_size     Model token-space width for target validation
  * @param batch_size         Fixed training batch size / row capacity
  * @param max_cached_seq_len GPU cache sequence length capacity
- * @param execution_num_slots  ExecutionBlock slot count (from config)
- * @param execution_num_ops    ExecutionBlock op count (from config)
- * @param execution_num_steps  ExecutionBlock step count (from config)
+ * @param execution_num_slots  ARG bootstrap slot count (from retained config)
  * @param number_encoder_digit_slots   NumberEncoder per-atom digit slot capacity (0 = disabled)
  * @param number_encoder_max_abs_pow10 NumberEncoder pow10 bucket half-range (required when slots > 0)
  * @return Complete BatchPayload ready for downstream consumption
@@ -743,14 +625,12 @@ BatchPayload buildBatchPayload(
     size_t batch_size,
     size_t max_cached_seq_len,
     int execution_num_slots,
-    int execution_num_ops,
-    int execution_num_steps,
     int number_encoder_digit_slots,
     int number_encoder_max_abs_pow10);
 
 /**
  * Compile tokenizer-authored numeric atom positions into deterministic
- * ExecutionBlock value-slot bindings for inference prefill.
+ * ARG bootstrap value-slot bindings for inference prefill.
  *
  * Numeric atoms are assigned left-to-right into [num_scratch_slots, num_slots).
  * Any metadata mismatch or capacity overflow fails before device upload.
@@ -781,7 +661,6 @@ BatchPayload buildInferenceBatchPayload(
     size_t max_cached_seq_len,
     int execution_num_slots,
     int execution_num_scratch_slots,
-    int execution_num_transitions,
     int number_encoder_digit_slots,
     int number_encoder_max_abs_pow10);
 

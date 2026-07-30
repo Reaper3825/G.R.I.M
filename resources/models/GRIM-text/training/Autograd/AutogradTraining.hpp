@@ -25,8 +25,6 @@
 #include "../../Shared/Batching/BatchDeviceBindings.hpp"
 // MUST include full definitions for types used in AutogradContext
 #include "../../GRIM/grim_language_model_cuda.hpp"
-// ExecutionBlock for internal numeric reasoning
-#include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
@@ -47,10 +45,8 @@ using ::GRIM::GPUGrimEncoder;
  */
 struct LossResult {
     float loss_value = 0.0f;         // Ground-truth: D2H read of loss_tensor AFTER all autograd::add()
-    float text_loss = 0.0f;          // Pure next-token CE, before execution/selector additions
-    float selector_loss = 0.0f;      // Scaled arg/option selector CE (α_sel * CE); own channel, no longer folded into execution_loss
-    float execution_loss = 0.0f;     // Execution-block auxiliary contribution ONLY (structured CE/division/entropy); 0.0 when the block is disabled
-    float entropy_monitor = 0.0f;    // Execution entropy monitoring scalar; not added to loss_tensor
+    float text_loss = 0.0f;          // Pure next-token CE, before selector additions
+    float selector_loss = 0.0f;      // Scaled arg/option selector CE (α_sel * CE)
     float weight_text = 1.0f;
     int valid_tokens = 0;
     bool success = false;
@@ -180,7 +176,7 @@ AutogradContext initAutogradContext(
  * the caller-owned AutogradLossState for backward, and returns
  * the host-side LossResult consumed by Phase2.
  * 
- * Computes text CE plus the enabled execution/selector auxiliary terms,
+ * Computes text CE plus the enabled selector auxiliary term,
  * leaves the canonical loss Tensor on AutogradLossState for backward, and
  * returns decomposed host-side scalars to Phase2.
  * 

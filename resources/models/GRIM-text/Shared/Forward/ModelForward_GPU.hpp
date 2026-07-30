@@ -73,8 +73,8 @@ struct ModelForwardRequest {
     // KV-cache decode/prefill path over this session cache instead of full
     // self-attention. Requires connect_parameter_graph == false, batch_size == 1,
     // and dropout disabled.
-    // ExecutionBlock inference may run during InferencePrefill; decode windows do
-    // not re-bootstrap or re-execute it. Training callers leave this null.
+    // ARG bootstrap seeding may run during InferencePrefill; decode windows do
+    // not rematerialize the authored seeds. Training callers leave this null.
     KvCacheState* kv_cache = nullptr;
 
     void validate(const char* caller) const;

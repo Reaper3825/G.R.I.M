@@ -4,7 +4,6 @@
 //======================================================//
 
 #include "AutogradTraining.hpp"
-#include "AutogradExecutionLoss.hpp"
 
 // MUST include full definition of GPUGrimEncoder for method calls
 #include "../../GRIM/grim_language_model_cuda.hpp"
@@ -12,14 +11,12 @@
 #include "../../Layers/Encoding/Encoding_GPU.hpp"
 #include "../../Layers/Encoding/AblationFlags.hpp"
 #include "../../Layers/LMHead/lm_head_GPU.hpp"
-#include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
 #include "../../Shared/Loss/ComputeLoss/ArgSelectorLoss.hpp"
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../../Shared/UnigramByte/Unigram.hpp"
-#include "../../Shared/Execution/ExecutionPayloadValidation.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 
 #include <iostream>
@@ -102,11 +99,6 @@ struct GradientSignalExpectation {
 
 struct GradientVerificationActivity {
     bool text_loss_active = false;
-    bool exec_op_loss_active = false;
-    bool exec_arg_loss_active = false;
-    bool exec_write_selection_ce_active = false;
-    bool exec_execute_ce_active = false;
-    bool exec_stop_ce_active = false;
 };
 
 struct GradientSignalBaselines {
@@ -261,19 +253,6 @@ GradientDeltaProbe probeGradientDelta(
 GradientVerificationActivity detectGradientVerificationActivity(AutogradContext& ctx) {
     GradientVerificationActivity activity{};
     activity.text_loss_active = ctx.payload && ctx.payload->lm_valid_tokens > 0;
-    if (ctx.loss_state) {
-        const auto& loss_state = *ctx.loss_state;
-        // These flags are set only by computeAutogradLoss() when an execution
-        // loss term passes execution_active / transition_target_mask filtering and is
-        // actually added into the normalized execution auxiliary objective.
-        // Do not infer activity from exec_outputs_per_row: that includes padded
-        // or inactive diagnostics that may never reach loss_tensor.
-        activity.exec_op_loss_active = loss_state.exec_op_ce_added;
-        activity.exec_arg_loss_active = loss_state.exec_arg_ce_added;
-        activity.exec_write_selection_ce_active = loss_state.exec_write_ce_added;
-        activity.exec_execute_ce_active = loss_state.exec_execute_ce_added;
-        activity.exec_stop_ce_active = loss_state.exec_stop_ce_added;
-    }
     return activity;
 }
 
@@ -315,33 +294,6 @@ GradientSignalBaselines captureGradientVerificationBaselines(
                 auto& ffn0 = ctx.parameter_registry->requireFeedForwardParameters(0, "captureGradientSignalBaselines");
                 captureExpected(ffn0.W2, "layer 0 ffnW2 (attn ablated)");
             }
-        }
-    }
-
-    if (ctx.execution_block_enabled && model_hp.execution_block_enabled) {
-        if (!ctx.parameter_registry) {
-            throw std::runtime_error("captureGradientSignalBaselines: execution-block loss is active but ctx.parameter_registry is NULL");
-        }
-        auto* execution_block_parameters = ctx.parameter_registry->getExecutionBlockParameters();
-        if (!execution_block_parameters) {
-            throw std::runtime_error("captureGradientSignalBaselines: execution-block layer exists but registry-owned execution-block parameters are NULL");
-        }
-        if (activity.exec_op_loss_active) {
-            captureExpected(execution_block_parameters->W_op_select, "exec block W_op_select");
-        }
-        if (activity.exec_arg_loss_active) {
-            captureExpected(execution_block_parameters->w_arg1_select, "exec block w_arg1_select");
-            captureExpected(execution_block_parameters->w_arg2_select, "exec block w_arg2_select");
-            captureExpected(execution_block_parameters->W_arg1_to_arg2, "exec block W_arg1_to_arg2");
-        }
-        if (activity.exec_write_selection_ce_active) {
-            captureExpected(execution_block_parameters->W_write_query, "exec block W_write_query");
-        }
-        if (activity.exec_execute_ce_active) {
-            captureExpected(execution_block_parameters->W_execute, "exec block W_execute");
-        }
-        if (activity.exec_stop_ce_active) {
-            captureExpected(execution_block_parameters->W_stop, "exec block W_stop");
         }
     }
 
@@ -391,7 +343,6 @@ LossResult computeAutogradLoss(
     // RULE 20: Fail loud
     validateLossBoundaryInputs(ctx, payload, "computeAutogradLoss");
     const auto* cfg = ctx.config;
-    const auto model_hp = GRIM::HyperParameters::modelHP(*cfg);
     
     // RULE 20: Fail loud - validate logits tensor was populated by forward pass
     auto& forward_outputs = *ctx.forward_outputs;
@@ -450,7 +401,7 @@ LossResult computeAutogradLoss(
     // ═══════════════════════════════════════════════════════════════════════════
     // Scaled selector contribution actually added to loss_tensor (0 when the
     // selector is disabled or fires no supervised candidates this step). Reported
-    // as its own channel so it no longer leaks into the execution_loss residual.
+    // as its own channel.
     float selector_loss_scaled = 0.0f;
     const bool selector_enabled =
         GRIM::HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "selector_enabled");
@@ -517,30 +468,8 @@ LossResult computeAutogradLoss(
     result.valid_tokens = lm_valid_tokens;
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // EXECUTION BLOCK LOSS — assembled at the explicit autograd loss boundary
-    // from retained forward tensors (selection logits and clamp flags).
+    // POST-SELECTOR OBJECTIVE BOUNDARY
     // ═══════════════════════════════════════════════════════════════════════════
-    // Only assemble the execution auxiliary loss when the execution block is
-    // actually active on both the context and the model HP. When execution is
-    // disabled, there is no execution loss to add — skip the call entirely
-    // instead of letting addExecutionAuxiliaryLoss() throw on the disabled ctx.
-    ExecutionAuxiliaryLossSummary exec_summary{};
-    if (ctx.execution_block_enabled && model_hp.execution_block_enabled) {
-        exec_summary = addExecutionAuxiliaryLoss(
-            ctx,
-            payload,
-            forward_outputs,
-            loss_state);
-    }
-    const float exec_structured_ce = exec_summary.structured_ce;
-    const float exec_entropy_monitor = exec_summary.entropy_monitor;
-    if (exec_summary.scalar_loss_terms > 0) {
-        AG_INFO("Execution auxiliary loss normalized over " << exec_summary.scalar_loss_terms
-                << " scalar loss terms across " << exec_summary.active_steps
-                << " active execution steps");
-    }
-    result.entropy_monitor = exec_entropy_monitor;
-
     // ═══════════════════════════════════════════════════════════════════════════
     // GROUND-TRUTH LOSS: Read the ACTUAL tensor that backward will differentiate.
     // This is the single source of truth — no manual reconstruction from stale
@@ -553,22 +482,16 @@ LossResult computeAutogradLoss(
 
     result.loss_value = actual_loss;
     result.selector_loss = selector_loss_scaled;
-    // Selector has its own reported channel now — subtract it so execution_loss is a
-    // true execution-block-only residual (reads 0.0 when the block is disabled).
-    result.execution_loss = actual_loss - text_ce_loss - selector_loss_scaled;
     result.weight_text = 1.0f;
     
     if (!std::isfinite(result.loss_value)) {
         throw std::runtime_error("computeAutogradLoss: combined loss is non-finite (actual_tensor=" 
             + std::to_string(actual_loss) + " text_ce=" + std::to_string(text_ce_loss)
-            + " exec_ce=" + std::to_string(exec_structured_ce) + ")");
+            + " selector=" + std::to_string(selector_loss_scaled) + ")");
     }
     
     AG_INFO("Loss computed: total=" << actual_loss << " text_ce=" << text_ce_loss
             << " selector=" << result.selector_loss
-            << " execution=" << result.execution_loss
-            << " exec_ce=" << exec_structured_ce
-            << " exec_entropy_monitor=" << exec_entropy_monitor
             << " lm_valid=" << lm_valid_tokens);
     
     result.success = true;
@@ -1029,73 +952,6 @@ bool verifyGradientsAreConnectedImpl(
         }
     }
 
-    // ExecutionBlock parameters
-    if (ctx.execution_block_enabled) {
-        if (!ctx.parameter_registry) {
-            throw std::runtime_error("verifyGradientsAreConnectedImpl: execution_block_enabled but ctx.parameter_registry is NULL");
-        }
-        auto* execution_block_parameters = ctx.parameter_registry->getExecutionBlockParameters();
-        if (!execution_block_parameters) {
-            throw std::runtime_error("verifyGradientsAreConnectedImpl: execution_block_enabled but registry-owned execution-block parameters are NULL");
-        }
-        auto checkEB = [&](Tensor& t, const char* name) {
-            if (t.data) requireAllocatedFinite(t, "exec block " + std::string(name));
-        };
-        auto& eb = *execution_block_parameters;
-        checkEB(eb.w_decode_1, "w_decode_1");
-        checkEB(eb.b_decode_1, "b_decode_1");
-        checkEB(eb.w_decode_2, "w_decode_2");
-        checkEB(eb.w_arg1_select, "w_arg1_select");
-        checkEB(eb.w_arg2_select, "w_arg2_select");
-        checkEB(eb.W_arg1_to_arg2, "W_arg1_to_arg2");
-        checkEB(eb.W_op_select, "W_op_select");
-        checkEB(eb.W_key_proj, "W_key_proj");
-        checkEB(eb.W_write_query, "W_write_query");
-        checkEB(eb.W_write_key, "W_write_key");
-        checkEB(eb.alpha, "alpha");
-        checkEB(eb.beta, "beta");
-        checkEB(eb.step_embeddings, "step_embeddings");
-        checkEB(eb.type_num_embed, "type_num_embed");
-        checkEB(eb.W_value_to_emb, "W_value_to_emb");
-        checkEB(eb.b_value_to_emb, "b_value_to_emb");
-        checkEB(eb.w_inject_gate, "w_inject_gate");
-        checkEB(eb.W_Q_read, "W_Q_read");
-        checkEB(eb.W_K_read, "W_K_read");
-        checkEB(eb.W_V_read, "W_V_read");
-        checkEB(eb.W_O_read, "W_O_read");
-        checkEB(eb.W_gate_read, "W_gate_read");
-        checkEB(eb.tau, "tau");
-        checkEB(eb.E_slot, "E_slot");
-        checkEB(eb.E_op, "E_op");
-        checkEB(eb.W_scal, "W_scal");
-        checkEB(eb.b_scal, "b_scal");
-        checkEB(eb.W_trace, "W_trace");
-        checkEB(eb.b_trace, "b_trace");
-        checkEB(eb.W_reason_gate, "W_reason_gate");
-        checkEB(eb.W_trace_gate, "W_trace_gate");
-        checkEB(eb.W_execute, "W_execute");
-        checkEB(eb.b_execute, "b_execute");
-        checkEB(eb.W_stop, "W_stop");
-        checkEB(eb.b_stop, "b_stop");
-        if (activity.exec_op_loss_active) {
-            requireReceivedGradient(eb.W_op_select, "exec block W_op_select");
-        }
-        if (activity.exec_arg_loss_active) {
-            requireReceivedGradient(eb.w_arg1_select, "exec block w_arg1_select");
-            requireReceivedGradient(eb.w_arg2_select, "exec block w_arg2_select");
-            requireReceivedGradient(eb.W_arg1_to_arg2, "exec block W_arg1_to_arg2");
-        }
-        if (activity.exec_write_selection_ce_active) {
-            requireReceivedGradient(eb.W_write_query, "exec block W_write_query");
-        }
-        if (activity.exec_execute_ce_active) {
-            requireReceivedGradient(eb.W_execute, "exec block W_execute");
-        }
-        if (activity.exec_stop_ce_active) {
-            requireReceivedGradient(eb.W_stop, "exec block W_stop");
-        }
-    }
-    
     return ok;
 }
 }  // namespace

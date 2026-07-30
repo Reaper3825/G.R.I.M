@@ -245,10 +245,9 @@ enum class MetricStream : int {
     RESERVED_67              = 67,
     EXECUTION_LOSS           = 68,
 
-    // Execution-objective diagnostic decomposition. These streams are written
-    // by ExecutionLossDiagnostic at the single Phase-2 loss boundary. Raw CE
-    // and accuracy expose head learning; contribution streams reconstruct the
-    // aggregate execution objective in the same normalization used by autograd.
+    // Legacy execution-objective stream IDs are retained for telemetry schema
+    // compatibility. The removed teacher-forced execution path no longer
+    // writes them.
     EXEC_LOSS_GATE_CE_RAW          = 69,
     EXEC_LOSS_STOP_CE_RAW          = 70,
     EXEC_LOSS_OP_CE_RAW            = 71,

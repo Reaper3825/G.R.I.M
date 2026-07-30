@@ -36,8 +36,6 @@ GRIM::Batching::BatchPayload buildPayloadFromAssignmentImpl(
 {
     const auto fixed_shape = GRIM::HyperParameters::trainingFixedShapeHP(ctx.config);
     const int execution_block_num_slots = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "execution_block_num_slots");
-    const int execution_block_num_ops = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "execution_block_num_ops");
-    const int execution_block_num_steps = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "execution_block_num_steps");
     const auto number_encoder_hp = GRIM::HyperParameters::numberEncoderConstructionHP(ctx.config);
     const int number_encoder_digit_slots = number_encoder_hp.enabled ? number_encoder_hp.max_digit_slots : 0;
     const int number_encoder_max_abs_pow10 = number_encoder_hp.max_abs_pow10;
@@ -70,8 +68,6 @@ GRIM::Batching::BatchPayload buildPayloadFromAssignmentImpl(
         static_cast<std::size_t>(fixed_shape.batch_size),
         static_cast<std::size_t>(fixed_shape.max_seq_len),
         execution_block_num_slots,
-        execution_block_num_ops,
-        execution_block_num_steps,
         number_encoder_digit_slots,
         number_encoder_max_abs_pow10);
 }

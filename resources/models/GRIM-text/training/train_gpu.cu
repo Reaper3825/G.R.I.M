@@ -162,69 +162,13 @@ GRIM::HyperParameters::GenerationHP generationHPFromRequest(
     return gen_config;
 }
 
-json slotIdentityJson(GRIM::Execution::SlotId id) {
-    return id.valid() ? json(id.serialized()) : json(nullptr);
-}
-
-json transitionIdentityJson(GRIM::Execution::TransitionId id) {
-    return id.valid() ? json(id.serialized()) : json(nullptr);
-}
-
-json slotIdentitiesJson(const std::vector<GRIM::Execution::SlotId>& ids) {
-    json values = json::array();
-    for (const auto id : ids) {
-        values.push_back(slotIdentityJson(id));
-    }
-    return values;
-}
-
 json inferenceStatsJson(const GRIMText::Training::Phase2TextInferenceResult& result) {
-    const char* gate_decision = !result.execution_control.gate_evaluated
-        ? "not_evaluated"
-        : (result.execution_control.gate_predicted_class == 1 ? "execute" : "noop");
-    json execution_steps = json::array();
-    for (const auto& step : result.execution_control.steps) {
-        execution_steps.push_back(json{
-            {"step_index", step.step_index},
-            {"predicted_class", step.predicted_class},
-            {"decision", step.predicted_class == 1 ? "stop" : "continue"},
-            {"continue_probability", step.continue_probability},
-            {"stop_probability", step.stop_probability},
-            {"transition_id", transitionIdentityJson(step.invocation.transition_id)},
-            {"argument_slot_ids", slotIdentitiesJson(step.invocation.arguments)},
-            {"result_slot_ids", slotIdentitiesJson(step.invocation.results)},
-            {"argument_values", step.argument_values},
-            {"result_values", step.result_values}
-        });
-    }
     return json{
         {"prompt_token_count", result.prompt_token_count},
         {"sequence_token_count", result.sequence_token_count},
         {"encode_ms", result.encode_ms},
         {"generation_ms", result.generation_ms},
-        {"decode_ms", result.decode_ms},
-        {"execution_control", {
-            {"gate_evaluated", result.execution_control.gate_evaluated},
-            {"gate_predicted_class", result.execution_control.gate_predicted_class},
-            {"gate_decision", gate_decision},
-            {"noop_probability", result.execution_control.noop_probability},
-            {"execute_probability", result.execution_control.execute_probability},
-            {"execution_ran", result.execution_control.execution_ran},
-            {"execution_suppressed_no_bootstrap", result.execution_control.execution_suppressed_no_bootstrap},
-            {"stopped_by_model", result.execution_control.stopped_by_model},
-            {"stopped_at_max_steps", result.execution_control.stopped_at_max_steps},
-            {"persistent_memory_available", result.execution_control.persistent_memory_available},
-            {"persistent_memory_read_during_decode", result.execution_control.persistent_memory_read_during_decode},
-            {"terminal_result_available", result.execution_control.terminal_result_available},
-            {"terminal_result_slot_id",
-             slotIdentityJson(result.execution_control.terminal_result_slot)},
-            {"terminal_result_value", result.execution_control.terminal_result_value},
-            {"terminal_result_emitted", result.execution_control.terminal_result_emitted},
-            {"terminal_result_emission_token_index", result.execution_control.terminal_result_emission_token_index},
-            {"final_slot_values", result.execution_control.final_slot_values},
-            {"final_slot_valid", result.execution_control.final_slot_valid},
-            {"steps", std::move(execution_steps)}
-        }}
+        {"decode_ms", result.decode_ms}
     };
 }
 

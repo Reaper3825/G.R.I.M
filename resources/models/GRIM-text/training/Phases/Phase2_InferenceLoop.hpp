@@ -24,7 +24,6 @@ struct Phase2TextInferenceResult {
     std::int64_t encode_ms = 0;
     std::int64_t generation_ms = 0;
     std::int64_t decode_ms = 0;
-    GRIM::ExecutionControlTelemetry execution_control;
 };
 
 /**

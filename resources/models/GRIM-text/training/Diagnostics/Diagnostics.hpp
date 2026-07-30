@@ -14,7 +14,6 @@
 #include "AtomStatsDiagnostic.hpp"
 #include "LossBaselineDiagnostic.hpp"
 #include "LossStatsDiagnostic.hpp"
-#include "ExecutionLossDiagnostic.hpp"
 #include "GradientNormDiagnostic.hpp"
 #include "PostClipParamGradEmbLmEquation.hpp"
 #include "OptimizerStepGuards.hpp"

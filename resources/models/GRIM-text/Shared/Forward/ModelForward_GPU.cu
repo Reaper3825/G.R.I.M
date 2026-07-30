@@ -8,7 +8,7 @@
 #endif
 
 #include "ModelForward_GPU.hpp"
-#include "ModelForwardExecutionBlock_GPU.hpp"
+#include "ModelForwardArgBootstrap_GPU.hpp"
 
 #include "../../GRIM/grim_language_model_cuda.hpp"
 #include "../../Layers/Encoding/Encoding_GPU.hpp"
@@ -103,17 +103,15 @@ Tensor viewCommittedTensor(const Tensor& owned,
     return view;
 }
 
-// Encode the candidate atom-entry pool once for both forward consumers:
-// token-level selector scoring and ExecutionBlock authored-slot bootstrap.
+// Encode the candidate atom-entry pool once for token-level selector scoring.
 // Candidate keys are independent of encoder hidden state, so preparing them
 // before the encoder loop does not change selector causality.
 void materializeForwardSelectorCandidateKeys(
     const ModelForwardRequest& request,
     const Batching::BatchPayload& payload,
-    bool execution_bridge_requested,
     ModelForwardOutputs& forward_outputs) {
     forward_outputs.selector_candidate_keys = Tensor();
-    if (!request.graph.emit_selector_logits && !execution_bridge_requested) {
+    if (!request.graph.emit_selector_logits) {
         return;
     }
 
@@ -319,11 +317,10 @@ void ModelForwardRequest::validate(const char* caller) const {
     const auto execution_hp = HyperParameters::executionBlockConstructionHP(*config);
     if (execution_hp.enabled) {
         if (!execution_block_enabled) {
-            throw std::runtime_error(std::string(caller) + ": execution_block_enabled=false while ExecutionBlockConstructionHP.enabled=true");
+            throw std::runtime_error(std::string(caller) + ": execution_block_enabled=false while argument bootstrap is configured");
         }
-        (void)parameter_registry->requireExecutionBlockParameters(caller);
     } else if (execution_block_enabled) {
-        throw std::runtime_error(std::string(caller) + ": execution_block_enabled=true while ExecutionBlockConstructionHP.enabled=false");
+        throw std::runtime_error(std::string(caller) + ": execution_block_enabled=true while argument bootstrap is not configured");
     }
     if (payload->batch_size <= 0) throw std::runtime_error(std::string(caller) + ": BatchPayload.batch_size <= 0");
     if (payload->max_seq_len <= 0) throw std::runtime_error(std::string(caller) + ": BatchPayload.max_seq_len <= 0");
@@ -397,28 +394,14 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const int num_layers = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "num_layers");
     const bool use_layer_scale = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "use_layer_scale");
     const int execution_block_layer = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "execution_block_layer");
-    const int execution_block_num_steps = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "execution_block_num_steps");
-    const bool execution_block_active = execution_hp.enabled && request.execution_block_enabled;
-    auto* execution_block_parameters = execution_block_active
-        ? &request.parameter_registry->requireExecutionBlockParameters("executeModelForward")
-        : nullptr;
-
-    runtime_payload.validate(
-        "executeModelForward",
-        execution_block_active);
+    const bool arg_bootstrap_active =
+        execution_hp.enabled &&
+        request.execution_block_enabled &&
+        slot_seed_encoder_hp.enabled;
 
     const auto& payload = *request.payload;
-    auto& runtime = runtime_payload;
-    runtime.persistent_execution_memory_was_read = false;
+    (void)runtime_payload;
     ModelForwardOutputs forward_outputs;
-    if (execution_block_active) {
-        forward_outputs.ensureExecutionBatchGeometry(
-            static_cast<size_t>(payload.batch_size),
-            "executeModelForward");
-        runtime.execution_runtime->ensureBatchGeometry(
-            static_cast<size_t>(payload.batch_size),
-            "executeModelForward");
-    }
     const auto* bindings = request.bindings;
     const auto& embedding_parameters = request.parameter_registry->requireEmbeddingParameters("executeModelForward");
     const auto& lm_head_parameters = request.parameter_registry->requireLmHeadParameters("executeModelForward");
@@ -534,31 +517,24 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
         }
     }
 
-    const bool execution_selector_bridge_requested =
-        execution_block_active && payload.execution_slot_count > 0;
-    if (execution_selector_bridge_requested) {
+    if (arg_bootstrap_active && payload.execution_slot_count > 0) {
         if (payload.execution_slot_count != execution_hp.num_slots) {
             throw std::runtime_error(
                 "ModelForward: payload.execution_slot_count=" +
                 std::to_string(payload.execution_slot_count) +
-                " does not match ExecutionBlock num_slots=" +
+                " does not match argument-bootstrap num_slots=" +
                 std::to_string(execution_hp.num_slots));
         }
-        if (!bindings->d_atom_entry_ids ||
-            !bindings->d_pool_numeric_float_values ||
-            !bindings->d_pool_numeric_int_values ||
-            !bindings->d_pool_numeric_kinds ||
-            !bindings->d_bootstrap_slot_to_pool_index ||
+        if (!bindings->d_token_to_slot_index_map ||
             bindings->execution_slot_count != execution_hp.num_slots) {
             throw std::runtime_error(
-                "ModelForward: atom-entry-pool execution bootstrap bindings are "
-                "missing or have incompatible slot geometry");
+                "ModelForward: argument-bootstrap slot bindings are missing or "
+                "have incompatible geometry");
         }
     }
     materializeForwardSelectorCandidateKeys(
         request,
         payload,
-        execution_selector_bridge_requested,
         forward_outputs);
 
     if (dropout_enabled && dropout_rate > 0.0f) {
@@ -582,26 +558,16 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     forward_outputs.clearRetainedLayerOutputs();
     forward_outputs.embedding_tensor.is_leaf = false;
 
-    int exec_layer = -1;
-    int exec_K = 0;
-    if (execution_block_active) {
-        exec_layer = execution_block_layer;
-        if (exec_layer < 0) exec_layer = num_layers - 2;
-        if (exec_layer < 0) exec_layer = 0;
-        if (exec_layer >= num_layers) exec_layer = num_layers - 1;
-        exec_K = execution_block_num_steps;
-    }
-    if (payload.isInferenceDecode() && runtime.persistent_execution_memory &&
-        exec_layer >= num_layers - 1) {
-        throw std::runtime_error(
-            "ModelForward: persistent execution-memory decode readback requires at least one "
-            "encoder layer after the configured execution layer");
+    int bootstrap_layer = -1;
+    if (arg_bootstrap_active) {
+        bootstrap_layer = execution_block_layer;
+        if (bootstrap_layer < 0) bootstrap_layer = num_layers - 2;
+        if (bootstrap_layer < 0) bootstrap_layer = 0;
+        if (bootstrap_layer >= num_layers) bootstrap_layer = num_layers - 1;
     }
 
     if (!connect_parameter_graph) {
         Tensor running;
-        std::vector<bool> inference_execution_active(
-            static_cast<size_t>(payload.batch_size), false);
         forward_outputs.reserveLayerOutputs(num_layers);
         MFWD_INFO("Step 2: Running " << num_layers << " encoder layers (no_grad)...");
 
@@ -621,23 +587,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
             forward_outputs.pushLayerOutputs();
 
             Tensor* layer_input = (layer_idx == 0) ? &forward_outputs.embedding_tensor : &running;
-            Tensor execution_read_augmented_input;
-            const bool has_execution_readback = applyExecutionBlockReadback(
-                request,
-                execution_hp,
-                execution_block_parameters,
-                total_tokens,
-                layer_idx,
-                exec_layer,
-                execution_block_active,
-                inference_execution_active,
-                *layer_input,
-                execution_read_augmented_input,
-                runtime,
-                forward_outputs);
-            if (has_execution_readback) {
-                layer_input = &execution_read_augmented_input;
-            }
 
             const auto& encoding_parameters = request.parameter_registry->requireEncodingLayerParameters(
                 layer_idx,
@@ -711,20 +660,15 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                     std::string(cudaGetErrorString(sync_err)));
             }
 
-            runExecutionBlockNoGraph(
+            materializeForwardArgBootstrapSeeds(
                 request,
-                execution_hp,
                 slot_seed_encoder_hp,
-                execution_block_parameters,
+                execution_hp.num_slots,
                 layer_idx,
-                exec_layer,
-                exec_K,
-                execution_block_active,
-                execution_selector_bridge_requested,
+                bootstrap_layer,
+                arg_bootstrap_active,
                 owned,
-                runtime,
-                forward_outputs,
-                inference_execution_active);
+                forward_outputs);
             running = std::move(owned);
         }
 
@@ -765,7 +709,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
             const Tensor* layer_input = (layer_idx == 0)
                 ? &forward_outputs.embedding_tensor
                 : &forward_outputs.encoder_layer_outputs.back();
-            Tensor execution_read_augmented_input;
             const auto& encoding_parameters = request.parameter_registry->requireEncodingLayerParameters(
                 layer_idx,
                 "executeModelForward(retained_graph)");
@@ -776,24 +719,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
             const auto& ffn_parameters = request.parameter_registry->requireFeedForwardParameters(
                 layer_idx,
                 "executeModelForward(retained_graph)");
-
-            const bool has_execution_readback =
-                applyExecutionBlockReadback(
-                request,
-                execution_hp,
-                execution_block_parameters,
-                total_tokens,
-                layer_idx,
-                exec_layer,
-                execution_block_active,
-                payload.execution_active,
-                *layer_input,
-                execution_read_augmented_input,
-                runtime,
-                forward_outputs);
-            if (has_execution_readback) {
-                layer_input = &execution_read_augmented_input;
-            }
 
             forwardEncodingLayer(
                 enc_layer->hp(),
@@ -815,18 +740,14 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 "enc_layer_output",
                 "executeModelForward(retained_graph)");
 
-            runExecutionBlockConnectedGraph(
+            materializeForwardArgBootstrapSeeds(
                 request,
-                execution_hp,
                 slot_seed_encoder_hp,
-                execution_block_parameters,
+                execution_hp.num_slots,
                 layer_idx,
-                exec_layer,
-                exec_K,
-                execution_block_active,
-                execution_selector_bridge_requested,
+                bootstrap_layer,
+                arg_bootstrap_active,
                 layer_output,
-                runtime,
                 forward_outputs);
 
             forward_outputs.encoder_layer_outputs.push_back(std::move(layer_output));

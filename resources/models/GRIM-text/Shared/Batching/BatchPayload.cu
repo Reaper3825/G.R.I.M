@@ -15,7 +15,6 @@
 #include "Batching_GPU.hpp"
 #include "../../Shared/UnigramByte/TokenLayout.hpp"
 #include "../TokenizerArtifacts/GrmtSequence.hpp"
-#include "../Execution/ExecutionPayloadValidation.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -66,7 +65,7 @@ std::vector<int32_t> buildInferenceExecutionSlotIndexMap(
         if (!Tokenizer::isNumericAtom(atom_type)) {
             throw std::runtime_error(
                 std::string(caller) + ": non-numeric atom at position " +
-                std::to_string(t) + " cannot bind ExecutionBlock value memory");
+                std::to_string(t) + " cannot bind ARG bootstrap value memory");
         }
         if (next_slot >= num_slots) {
             throw std::runtime_error(
@@ -79,42 +78,6 @@ std::vector<int32_t> buildInferenceExecutionSlotIndexMap(
 }
 
 namespace {
-
-std::vector<Execution::CompiledSlotBinding> compileEpisodeSlotBindings(int num_slots)
-{
-    if (num_slots <= 0) {
-        throw std::runtime_error(
-            "compileEpisodeSlotBindings: num_slots must be positive");
-    }
-
-    std::vector<Execution::CompiledSlotBinding> bindings;
-    bindings.reserve(static_cast<std::size_t>(num_slots));
-    for (int index = 0; index < num_slots; ++index) {
-        bindings.push_back(Execution::CompiledSlotBinding{
-            Execution::SlotId::fromLocalOrdinal(static_cast<std::uint64_t>(index)),
-            Execution::SlotIndex::fromDense(index)});
-    }
-    return bindings;
-}
-
-std::vector<Execution::CompiledTransitionBinding> compileEpisodeTransitionBindings(
-    int num_transitions)
-{
-    if (num_transitions <= 0) {
-        throw std::runtime_error(
-            "compileEpisodeTransitionBindings: num_transitions must be positive");
-    }
-
-    std::vector<Execution::CompiledTransitionBinding> bindings;
-    bindings.reserve(static_cast<std::size_t>(num_transitions));
-    for (int index = 0; index < num_transitions; ++index) {
-        bindings.push_back(Execution::CompiledTransitionBinding{
-            Execution::TransitionId::fromLocalOrdinal(
-                static_cast<std::uint64_t>(index)),
-            Execution::TransitionIndex::fromDense(index)});
-    }
-    return bindings;
-}
 
 void requirePositiveVocab(int vocab_size, const char* caller)
 {
@@ -131,7 +94,6 @@ BatchPayload makeInferenceBasePayload(
     size_t batch_capacity,
     size_t max_cached_seq_len,
     BatchPayloadMode mode,
-    bool row_execution_active,
     const char* caller)
 {
     if (mode == BatchPayloadMode::Training) {
@@ -171,15 +133,6 @@ BatchPayload makeInferenceBasePayload(
     payload.seq_lengths.assign(1, seq_len);
     payload.valid_target_counts.assign(1, 0);
     payload.fits_in_cache = true;
-
-    payload.execution_active.assign(1, row_execution_active);
-    payload.execution_gate_targets.assign(
-        1, GRIM::Execution::ExecutionGateTarget::UNSUPERVISED);
-    payload.execution_prompt_end_positions.assign(1, seq_len - 1);
-    payload.execution_prompt_lengths.assign(1, seq_len);
-    payload.compiled_bootstrap_bindings.resize(1);
-    payload.transition_targets.resize(1);
-    payload.transition_target_mask.resize(1);
 
     return payload;
 }
@@ -592,7 +545,7 @@ void materializeAtomEntryPool(
     }
 }
 
-// Materialize the static identity bridge between authored execution bootstrap
+// Materialize the static identity bridge between authored ARG bootstrap
 // slots and selector-pool candidates. The bridge is deliberately built from
 // token occurrence metadata (slot binding + row-local atom entry), never by
 // matching numeric values, so equal-valued occurrences retain their identity.
@@ -611,14 +564,14 @@ void materializeBootstrapSlotPoolMap(
     if (payload.row_atom_offset.size() !=
         static_cast<std::size_t>(payload.batch_size) + 1) {
         throw std::runtime_error(
-            std::string(caller) + ": selector-to-execution bridge requires "
+            std::string(caller) + ": selector-to-bootstrap bridge requires "
             "row_atom_offset.size() == batch_size + 1");
     }
     if (static_cast<int>(payload.token_to_slot_index_map.size()) != payload.total_tokens ||
         static_cast<int>(payload.atom_entry_ids.size()) != payload.total_tokens ||
         static_cast<int>(payload.atom_mask.size()) != payload.total_tokens) {
         throw std::runtime_error(
-            std::string(caller) + ": selector-to-execution bridge requires aligned "
+            std::string(caller) + ": selector-to-bootstrap bridge requires aligned "
             "token_to_slot_index_map, atom_entry_ids, and atom_mask arrays");
     }
 
@@ -644,7 +597,7 @@ void materializeBootstrapSlotPoolMap(
         }
         if (payload.atom_mask[static_cast<std::size_t>(token_pos)] == 0) {
             throw std::runtime_error(
-                std::string(caller) + ": execution bootstrap token_pos=" +
+                std::string(caller) + ": ARG bootstrap token_pos=" +
                 std::to_string(token_pos) +
                 " is not an atom and has no selector-pool identity");
         }
@@ -656,13 +609,13 @@ void materializeBootstrapSlotPoolMap(
             payload.atom_entry_ids[static_cast<std::size_t>(token_pos)];
         if (local_entry == GRIM::Tokenizer::kAtomEntryNone) {
             throw std::runtime_error(
-                std::string(caller) + ": execution bootstrap token_pos=" +
+                std::string(caller) + ": ARG bootstrap token_pos=" +
                 std::to_string(token_pos) + " has no atom_entry_id");
         }
         const int pool_index = row_begin + static_cast<int>(local_entry);
         if (pool_index < row_begin || pool_index >= row_end) {
             throw std::runtime_error(
-                std::string(caller) + ": execution bootstrap token_pos=" +
+                std::string(caller) + ": ARG bootstrap token_pos=" +
                 std::to_string(token_pos) + " has atom_entry_id=" +
                 std::to_string(local_entry) + " outside row " +
                 std::to_string(row) + " selector-pool window");
@@ -677,7 +630,7 @@ void materializeBootstrapSlotPoolMap(
             throw std::runtime_error(
                 std::string(caller) + ": row " + std::to_string(row) +
                 " maps token positions " + std::to_string(prior_token_pos) + " and " +
-                std::to_string(token_pos) + " to duplicate execution slot " +
+                std::to_string(token_pos) + " to duplicate bootstrap slot " +
                 std::to_string(slot));
         }
         bootstrap_slot_token_positions[bridge_index] = token_pos;
@@ -695,8 +648,6 @@ BatchPayload buildBatchPayload(
     size_t batch_size,
     size_t max_cached_seq_len,
     int execution_num_slots,
-    int execution_num_ops,
-    int execution_num_steps,
     int number_encoder_digit_slots,
     int number_encoder_max_abs_pow10)
 {
@@ -736,15 +687,6 @@ BatchPayload buildBatchPayload(
         const std::vector<int32_t>* exec_slots;
         int length;
 
-        // Compiled execution metadata (per-row, not per-token)
-        bool execution_active;
-        GRIM::Execution::ExecutionGateTarget execution_gate_target;
-        int32_t execution_prompt_end_pos;
-        int32_t execution_prompt_length;
-        const std::vector<GRIM::Execution::CompiledSlotBinding>* compiled_slot_bindings;
-        const std::vector<GRIM::Execution::CompiledTransitionBinding>* compiled_transition_bindings;
-        const std::vector<GRIM::Execution::CompiledBootstrapBinding>* compiled_bootstrap_bindings;
-        const std::vector<GRIM::Execution::TransitionInvocation>* transition_targets;
     };
 
     std::vector<RawSeq> raw;
@@ -879,15 +821,7 @@ BatchPayload buildBatchPayload(
             seq->atom_table,
             &seq->atom_entry_ids,
             exec_slots_ptr,
-            seq_len,
-            seq->execution_active,
-            seq->execution_gate_target,
-            seq->execution_prompt_end_pos,
-            seq->execution_prompt_length,
-            &seq->compiled_slot_bindings,
-            &seq->compiled_transition_bindings,
-            &seq->compiled_bootstrap_bindings,
-            &seq->transition_targets
+            seq_len
         });
 
         payload.seq_lengths[b] = seq_len;
@@ -963,18 +897,6 @@ BatchPayload buildBatchPayload(
     payload.seq_atom_tables.resize(payload.batch_size);
     payload.valid_target_counts.resize(payload.batch_size, 0);
 
-    // Compiled execution metadata arrays — sized to batch_size
-    payload.execution_active.resize(payload.batch_size, false);
-    payload.execution_gate_targets.resize(
-        payload.batch_size, GRIM::Execution::ExecutionGateTarget::UNSUPERVISED);
-    payload.execution_prompt_end_positions.resize(payload.batch_size, -1);
-    payload.execution_prompt_lengths.resize(payload.batch_size, 0);
-    payload.compiled_slot_bindings.resize(payload.batch_size);
-    payload.compiled_transition_bindings.resize(payload.batch_size);
-    payload.compiled_bootstrap_bindings.resize(payload.batch_size);
-    payload.transition_targets.resize(payload.batch_size);
-    payload.transition_target_mask.resize(payload.batch_size);
-
     payload.valid_tokens = 0;
 
     for (int b = 0; b < payload.batch_size; ++b) {
@@ -1043,7 +965,7 @@ BatchPayload buildBatchPayload(
                     r.atom_entry_ids->data(),
                     seq_len * sizeof(uint32_t));
 
-        // Copy execution slot map (runtime substrate metadata; -1 for non-state-bearing)
+        // Copy ARG bootstrap slot map (-1 for tokens that do not seed a slot).
         if (r.exec_slots) {
             std::memcpy(&payload.token_to_slot_index_map[row_offset],
                         r.exec_slots->data(),
@@ -1054,38 +976,6 @@ BatchPayload buildBatchPayload(
         // Store AtomTable reference for this batch row
         payload.seq_atom_tables[b] = r.atom_table;
 
-        // Compiled execution metadata (per-row)
-        payload.execution_active[b] = r.execution_active;
-        payload.execution_gate_targets[b] = r.execution_gate_target;
-        payload.execution_prompt_end_positions[b] = r.execution_prompt_end_pos;
-        payload.execution_prompt_lengths[b] = r.execution_prompt_length;
-        if (r.compiled_slot_bindings && !r.compiled_slot_bindings->empty()) {
-            payload.compiled_slot_bindings[b] = *r.compiled_slot_bindings;
-        }
-        if (r.compiled_transition_bindings &&
-            !r.compiled_transition_bindings->empty()) {
-            payload.compiled_transition_bindings[b] =
-                *r.compiled_transition_bindings;
-        }
-        if (r.compiled_bootstrap_bindings && !r.compiled_bootstrap_bindings->empty()) {
-            payload.compiled_bootstrap_bindings[b] = *r.compiled_bootstrap_bindings;
-        }
-        if (r.transition_targets && !r.transition_targets->empty()) {
-            const int real_count = static_cast<int>(r.transition_targets->size());
-            payload.transition_targets[b] = *r.transition_targets;
-
-            // Pad to execution_num_steps by repeating last step
-            if (real_count < execution_num_steps) {
-                const auto& last = payload.transition_targets[b].back();
-                payload.transition_targets[b].resize(execution_num_steps, last);
-            }
-
-            // Build step mask: 1 = real step, 0 = padded step
-            payload.transition_target_mask[b].assign(execution_num_steps, 0);
-            for (int k = 0; k < std::min(real_count, execution_num_steps); ++k) {
-                payload.transition_target_mask[b][k] = 1;
-            }
-        }
     }
 
     materializeAuthoredAtomFacts(payload, "buildBatchPayload");
@@ -1095,49 +985,9 @@ BatchPayload buildBatchPayload(
     materializeBootstrapSlotPoolMap(payload, execution_num_slots, "buildBatchPayload");
 
     // ═════════════════════════════════════════════════════════════════════════
-    // PHASE 4b: Execution-slot target masking
-    //
-    // Tokens owned by the execution block (token_to_slot_index_map[p] >= 0) are
-    // supervised by the numeric head, NOT by LM cross-entropy.  Because the
-    // DataLoader shift convention is target_ids[t] = token_ids[t+1] (the LM
-    // at position t predicts the token at position t+1), the LM CE that
-    // would supervise predicting an execution-owned token at position p lives
-    // at target_ids[p-1].  We mask THAT position, not target_ids[p] (which
-    // predicts the *next* token after the slot and is generally a normal LM
-    // target).  If p is the first token in its row (p == row_start) there is
-    // no in-row LM position predicting it, so nothing to mask.
-    // Only execution-active rows can have valid slots.  Tokens that are atoms
-    // but have NO slot (slot == -1) remain under LM CE — they are ordinary
-    // numeric text, not execution-owned.
-    // Accounting: each masked LM target decrements both valid_target_counts[b]
-    // and the batch-level valid_tokens, so the validate() invariant
-    // sum(valid_target_counts) == valid_tokens is preserved.  lm_valid_tokens
-    // is then equal to the post-mask valid_tokens (kept as a distinct field so
-    // downstream callers that read it continue to work unchanged).
+    // ARG bootstrap metadata does not alter LM target ownership.
     // ═════════════════════════════════════════════════════════════════════════
-    {
-        int slots_masked = 0;
-        for (int b = 0; b < payload.batch_size; ++b) {
-            if (!payload.execution_active[b])
-                continue;  // Row has no execution supervision — no slots possible
-            const int row_start = b * S;
-            const int row_end   = row_start + payload.seq_lengths[b];
-            for (int p = row_start; p < row_end; ++p) {
-                if (payload.token_to_slot_index_map[p] < 0) continue;
-                // The LM CE predicting position p lives at target_ids[p-1].
-                // Skip when p is the row's first token (no in-row predictor).
-                if (p == row_start) continue;
-                const int pred_idx = p - 1;
-                if (payload.target_ids[pred_idx] != -1) {
-                    payload.target_ids[pred_idx] = -1;
-                    payload.valid_target_counts[b]--;
-                    slots_masked++;
-                }
-            }
-        }
-        payload.valid_tokens   -= slots_masked;
-        payload.lm_valid_tokens = payload.valid_tokens;
-    }
+    payload.lm_valid_tokens = payload.valid_tokens;
 
     // ═════════════════════════════════════════════════════════════════════════
     // PHASE 5: Final validation
@@ -1158,18 +1008,12 @@ BatchPayload buildBatchPayload(
     }
     if (payload.lm_valid_tokens <= 0) {
         throw std::runtime_error(
-            "buildBatchPayload: lm_valid_tokens=0 after execution-slot masking "
-            "(valid_tokens=" + std::to_string(payload.valid_tokens) +
-            ") — all LM targets were claimed by execution slots");
+            "buildBatchPayload: lm_valid_tokens=0 after target masking "
+            "(valid_tokens=" + std::to_string(payload.valid_tokens) + ")");
     }
 
     // Cross-check geometry invariants (Rule 20: crash if anything is wrong)
     payload.validate("buildBatchPayload");
-
-    // Execution payload validation (WS4: single shared validator)
-    GRIM::Execution::validateExecutionPayload(
-        payload, "buildBatchPayload",
-        execution_num_slots, execution_num_ops, execution_num_steps);
 
     return payload;
 }
@@ -1187,7 +1031,6 @@ BatchPayload buildInferenceBatchPayload(
     size_t max_cached_seq_len,
     int execution_num_slots,
     int execution_num_scratch_slots,
-    int execution_num_transitions,
     int number_encoder_digit_slots,
     int number_encoder_max_abs_pow10)
 {
@@ -1227,9 +1070,7 @@ BatchPayload buildInferenceBatchPayload(
             std::to_string(seq_len));
     }
 
-    // Inference activation is decided by the EXECUTE/NOOP head at the final
-    // prompt token. A slot map only supplies candidate bootstrap bindings.
-    bool row_execution_active = false;
+    // A slot map supplies only authored ARG bootstrap bindings.
     if (!token_to_slot_index_map.empty()) {
         if (execution_num_slots <= 0) {
             throw std::runtime_error(
@@ -1260,7 +1101,7 @@ BatchPayload buildInferenceBatchPayload(
                     throw std::runtime_error(
                         "buildInferenceBatchPayload: token positions " +
                         std::to_string(prior_token_pos) + " and " +
-                        std::to_string(t) + " map to duplicate execution slot " +
+                        std::to_string(t) + " map to duplicate bootstrap slot " +
                         std::to_string(slot));
                 }
                 slot_token_positions[static_cast<std::size_t>(slot)] = t;
@@ -1280,7 +1121,7 @@ BatchPayload buildInferenceBatchPayload(
 
     BatchPayload payload = makeInferenceBasePayload(
         seq_len, vocab_size, batch_capacity, max_cached_seq_len,
-        BatchPayloadMode::InferencePrefill, row_execution_active, caller);
+        BatchPayloadMode::InferencePrefill, caller);
 
     payload.input_ids = token_ids;
     payload.target_ids.assign(static_cast<size_t>(seq_len), -1);
@@ -1291,16 +1132,6 @@ BatchPayload buildInferenceBatchPayload(
     payload.token_to_slot_index_map.assign(static_cast<size_t>(seq_len), -1);
     if (!token_to_slot_index_map.empty()) {
         payload.token_to_slot_index_map = token_to_slot_index_map;
-    }
-    if (execution_num_slots > 0) {
-        payload.compiled_slot_bindings.resize(1);
-        payload.compiled_slot_bindings[0] =
-            compileEpisodeSlotBindings(execution_num_slots);
-    }
-    if (execution_num_transitions > 0) {
-        payload.compiled_transition_bindings.resize(1);
-        payload.compiled_transition_bindings[0] =
-            compileEpisodeTransitionBindings(execution_num_transitions);
     }
     payload.seq_atom_tables.resize(1);
     payload.seq_atom_tables[0] = atom_table;
@@ -1320,7 +1151,7 @@ BatchPayload buildInferenceDecodePayload(int vocab_size)
     const char* caller = "buildInferenceDecodePayload";
     BatchPayload payload = makeInferenceBasePayload(
         1, vocab_size, 1, 1,
-        BatchPayloadMode::InferenceDecode, false, caller);
+        BatchPayloadMode::InferenceDecode, caller);
     payload.validate(caller);
     return payload;
 }

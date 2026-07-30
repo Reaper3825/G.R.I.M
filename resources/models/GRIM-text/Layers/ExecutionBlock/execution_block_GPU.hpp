@@ -1,61 +1,31 @@
 //======================================================//
 //  execution_block_GPU.hpp
-//  Differentiable Register Machine — GPU
+//  Retained execution-storage scaffold
 //
-//  Declares: ExecutionMemory, ExecutionBlockDiagnosticsBuffers, execution-block free operations.
-//  Durable trainable parameter ownership lives in
-//  training/Phases/Startup/Model/ParameterRegistry.hpp.
-//  Forward-owned execution output payload types live in
-//  Shared/Forward/ModelForwardOutputs.hpp.
-//
-//  No CUDA kernels here. No orchestration logic.
-//  No serialization code.
+//  The legacy gate/op/arg/write/stop/readback machine has been removed.
+//  Parameter ownership remains in ParameterRegistry, and this lightweight
+//  storage view remains available while the generator/candidate/verifier
+//  replacement is introduced.
 //======================================================//
 
 #pragma once
 
 #ifdef USE_CUDA
 
-#include <cuda_runtime.h>
-#include <cstdint>
-#include <memory>
-#include <vector>
-
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
-#include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
-#include "../../Shared/Batching/BatchPayload.hpp"
-#include "../../Shared/Batching/BatchDeviceBindings.hpp"
-#include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
 
 namespace GRIM {
-namespace Forward {
-struct ExecStepMetrics;
-struct ExecutionRecord;
-struct ExecutionGateOutput;
-struct ExecutionBlockStepOutput;
-struct ExecutionBlockOutput;
-struct RecordEncodeBackwardStaging;
-}
 
-//======================================================//
-//  ExecutionMemory — addressable register file
-//
-//  Each instance represents ONE batch row's register file [V, …].
-//  Per-row isolation: the active owner stores one row of tensors and binds a
-//  non-owning ExecutionMemory view. Execution-block math never allocates or
-//  owns the register storage.
-//======================================================//
 struct ExecutionMemory {
-    Tensor values;            // [V, 1]       scalar ground truth per slot
-    Tensor atom_embeds;       // [V, 64]      ScratchBlock-format encoding
-    Tensor state_embeds;      // [V, d_model] runtime content; bootstrap fuses value + selector key
-    Tensor valid_mask;        // [V]          1.0 if filled, 0.0 if empty
-    Tensor usage;             // [V]          decayed cross-attn read weight
-    Tensor key_embeds;        // [V, d_key]   addressing keys
-    Tensor type_embed;        // [V, d_type]  type tag per slot
-    Tensor recent_write_mask; // [V]          one-hot mask of the most recent hard write
+    Tensor values;
+    Tensor atom_embeds;
+    Tensor state_embeds;
+    Tensor valid_mask;
+    Tensor usage;
+    Tensor key_embeds;
+    Tensor type_embed;
+    Tensor recent_write_mask;
 
-    void clear(cudaStream_t stream);
     void bind(
         Tensor& values_owner,
         Tensor& atom_embeds_owner,
@@ -64,153 +34,34 @@ struct ExecutionMemory {
         Tensor& usage_owner,
         Tensor& key_embeds_owner,
         Tensor& type_embed_owner,
-        Tensor& recent_write_mask_owner);
-};
-
-//======================================================//
-//  ExecutionBlockDiagnosticsBuffers
-//
-//  Persistent device-side diagnostic / hardening buffers for the execution
-//  step. Allocated once, reused every step. The flags/records are Category 3
-//  workspace with stale contents between steps. Owned by one long-lived owner;
-//  the math ops borrow it.
-//======================================================//
-struct ExecutionBlockDiagnosticsBuffers {
-    int* d_numeric_error_flag = nullptr;  // atomicMax stage-id: numeric, softmax, collapse
-    int* d_div_clamp_count    = nullptr;  // atomicAdd on division clamp
-    int* d_div_invalid_flag   = nullptr;  // [1] per-step: 1 if division was clamped, 0 otherwise
-    int* d_exec_idx           = nullptr;  // [4] arg1_rel, arg2_rel, op_id, write_slot (abs)
-    int* d_exec_record_i      = nullptr;  // [3] packed for ExecutionRecord ints
-    float* d_exec_record_f    = nullptr;  // [3] value_before_1, value_before_2, value_after
-
-    ExecutionBlockDiagnosticsBuffers() = default;
-    ~ExecutionBlockDiagnosticsBuffers() { destroy(); }
-
-    ExecutionBlockDiagnosticsBuffers(const ExecutionBlockDiagnosticsBuffers&) = delete;
-    ExecutionBlockDiagnosticsBuffers& operator=(const ExecutionBlockDiagnosticsBuffers&) = delete;
-    ExecutionBlockDiagnosticsBuffers(ExecutionBlockDiagnosticsBuffers&& other) noexcept { moveFrom(other); }
-    ExecutionBlockDiagnosticsBuffers& operator=(ExecutionBlockDiagnosticsBuffers&& other) noexcept {
-        if (this != &other) { destroy(); moveFrom(other); }
-        return *this;
-    }
-
-    bool allocated() const { return d_numeric_error_flag != nullptr; }
-    void allocate(cudaStream_t stream);  // defined in execution_block_GPU.cu
-    void destroy();                      // defined in execution_block_GPU.cu
-
-    int* numericErrorFlag() const { return d_numeric_error_flag; }
-    int* divClampCount() const    { return d_div_clamp_count; }
-    int* divInvalidFlag() const   { return d_div_invalid_flag; }
-    int* execIndices() const      { return d_exec_idx; }
-    int* execRecordI() const      { return d_exec_record_i; }
-    float* execRecordF() const    { return d_exec_record_f; }
-private:
-    void moveFrom(ExecutionBlockDiagnosticsBuffers& other) noexcept {
-        d_numeric_error_flag = other.d_numeric_error_flag;
-        d_div_clamp_count    = other.d_div_clamp_count;
-        d_div_invalid_flag   = other.d_div_invalid_flag;
-        d_exec_idx           = other.d_exec_idx;
-        d_exec_record_i      = other.d_exec_record_i;
-        d_exec_record_f      = other.d_exec_record_f;
-        other.d_numeric_error_flag = nullptr;
-        other.d_div_clamp_count    = nullptr;
-        other.d_div_invalid_flag   = nullptr;
-        other.d_exec_idx           = nullptr;
-        other.d_exec_record_i      = nullptr;
-        other.d_exec_record_f      = nullptr;
+        Tensor& recent_write_mask_owner)
+    {
+        values = Tensor::from_ptr(
+            values_owner.data, values_owner.shape, false,
+            values_owner.requires_grad, "execution_memory_values");
+        atom_embeds = Tensor::from_ptr(
+            atom_embeds_owner.data, atom_embeds_owner.shape, false,
+            atom_embeds_owner.requires_grad, "execution_memory_atom_embeds");
+        state_embeds = Tensor::from_ptr(
+            state_embeds_owner.data, state_embeds_owner.shape, false,
+            state_embeds_owner.requires_grad, "execution_memory_state_embeds");
+        valid_mask = Tensor::from_ptr(
+            valid_mask_owner.data, valid_mask_owner.shape, false,
+            valid_mask_owner.requires_grad, "execution_memory_valid_mask");
+        usage = Tensor::from_ptr(
+            usage_owner.data, usage_owner.shape, false,
+            usage_owner.requires_grad, "execution_memory_usage");
+        key_embeds = Tensor::from_ptr(
+            key_embeds_owner.data, key_embeds_owner.shape, false,
+            key_embeds_owner.requires_grad, "execution_memory_key_embeds");
+        type_embed = Tensor::from_ptr(
+            type_embed_owner.data, type_embed_owner.shape, false,
+            type_embed_owner.requires_grad, "execution_memory_type_embed");
+        recent_write_mask = Tensor::from_ptr(
+            recent_write_mask_owner.data, recent_write_mask_owner.shape, false,
+            recent_write_mask_owner.requires_grad, "execution_memory_recent_write_mask");
     }
 };
-
-//======================================================//
-//  Execution-block free operations
-//
-//  The execution math no longer hangs off ExecutionBlockLayer state. Callers
-//  pass the construction hyperparameters explicitly, plus a runtime-owned
-//  ExecutionBlockDiagnosticsBuffers workspace where the step machinery needs
-//  one.
-//======================================================//
-
-//--------------------------------------------------//
-// Activation control head. Reads only the row-relative planner query token.
-//--------------------------------------------------//
-void executionBlockPredictGate(
-    const HyperParameters::ExecutionBlockConstructionHP& hp,
-    Tensor& H,
-    ExecutionBlockParameterTensors& parameters,
-    const Batching::BatchPayload& payload,
-    int batch_row,
-    cudaStream_t stream,
-    Forward::ExecutionGateOutput* output);
-
-//--------------------------------------------------//
-// Forward: one execution step — mutates H and M
-// token_offset / row_tokens enable per-batch-row processing:
-//   context = reduce_mean(H[token_offset : token_offset + row_tokens])
-//   injection at H[token_offset + row_tokens - 1]
-//
-// trace_state:     [1, d_model] running accumulator for this row (mutated:
-//                  trace_state = autograd::add(trace_state, step_emb)).
-// prior_records:   host-side ExecutionRecord history for this row (read-only).
-//                  Used to build trace_vec = f(encoded history).
-// slot_seeds:      optional MFO-owned [batch_size * V, d_model] authored-slot
-//                  states. Existing primitives route live authored rows into
-//                  operand candidates; hard-written slots use runtime memory.
-//
-// Atom positions are NOT passed in: the step sources them directly from the
-// global atom mask (bindings.d_atom_mask) for this batch row.
-//--------------------------------------------------//
-void executionBlockStep(
-    const HyperParameters::ExecutionBlockConstructionHP& hp,
-    ExecutionBlockDiagnosticsBuffers& diag,
-    Tensor& H,                          // [total_tokens, d_model] mutated in place
-    ExecutionMemory& M,
-    ExecutionBlockParameterTensors& parameters,
-    const Batching::BatchPayload& payload,
-    const Batching::BatchDeviceBindings& bindings,
-    int batch_row,
-    int step,
-    float temperature,
-    cudaStream_t stream,
-    Forward::ExecutionBlockStepOutput& forward_output,
-    Forward::RecordEncodeBackwardStaging& record_encode_backward_staging,
-    Tensor& trace_state,
-    const std::vector<Forward::ExecutionRecord>& prior_records,
-    const Tensor* selector_candidate_keys = nullptr,
-    const Tensor* slot_seeds = nullptr
-);
-
-//--------------------------------------------------//
-// Bootstrap one payload row: gather literal values and NumberEncoder keys from
-// the same atom-entry pool identity, then populate ExecutionMemory (detached,
-// no grad). Row geometry and host semantics come from payload; device addresses
-// come from the bindings produced when that payload was uploaded.
-//--------------------------------------------------//
-void executionBlockBootstrapMemoryFromSlotMap(
-    const HyperParameters::ExecutionBlockConstructionHP& hp,
-    ExecutionMemory& M,
-    ExecutionBlockParameterTensors& parameters,
-    const Batching::BatchPayload& payload,
-    const Batching::BatchDeviceBindings& bindings,
-    int batch_row,
-    const float* selector_candidate_keys,  // [payload.num_pool_atoms, d_model]
-    cudaStream_t stream
-);
-
-//--------------------------------------------------//
-// Cross-attention read: H = H + g * W_O(R)
-// token_offset / row_tokens enable per-batch-row processing.
-//--------------------------------------------------//
-Tensor executionBlockCrossAttentionRead(
-    const HyperParameters::ExecutionBlockConstructionHP& hp,
-    const Tensor& hidden_states,
-    ExecutionMemory& M,
-    ExecutionBlockParameterTensors& parameters,
-    int total_tokens,
-    cudaStream_t stream,
-    int token_offset = 0,
-    int row_tokens = -1,
-    float* d_gate_accum = nullptr  // [2] device: [sum, count] for telemetry
-);
 
 }  // namespace GRIM
 

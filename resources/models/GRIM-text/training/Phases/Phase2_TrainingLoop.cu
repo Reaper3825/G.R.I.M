@@ -21,7 +21,6 @@
 #include "../../Shared/Forward/ModelForward_GPU.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
 #include "../../Shared/VerboseLogging.hpp"
-#include "../../Shared/Execution/ExecutionPayloadValidation.hpp"
 #include "../Autograd/AutogradTraining.hpp"
 #include "../../Shared/Optimizers/OptimizerUpdate_GPU.hpp"  // launchOptimizerUpdate
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"  // single entry point; transitively pulls in control/ai_config_paths.hpp (resolveGrimRoot, etc.)
@@ -488,14 +487,7 @@ void runOptimizerWindowFromEpoch(
         tel_input.should_step       = true;
         tel_input.text_loss         = result.text_loss;
         tel_input.selector_loss     = result.selector_loss;
-        tel_input.execution_loss    = result.execution_loss;
         tel_input.max_seq_len       = payload.max_seq_len;
-        tel_input.exec_selection_entropy = result.exec_selection_entropy;
-        tel_input.exec_op_entropy        = result.exec_op_entropy;
-        tel_input.exec_div_clamp_rate    = result.exec_div_clamp_rate;
-        tel_input.exec_max_p_write       = result.exec_max_p_write;
-        tel_input.exec_active_ratio      = result.exec_active_ratio;
-        tel_input.inject_gate_mean       = result.inject_gate_mean;
         tel_input.batch_idx         = batch_idx;
         tel_input.global_step       = ctx.global_step;
         tel_input.actual_vocab_size = payload.vocab_size;
@@ -519,18 +511,6 @@ GRIMText::Training::Startup::ForwardTopologyView validateTrainingForwardInputs(
 {
     payload.validate(caller);
 
-    const auto execution_hp = GRIM::HyperParameters::executionBlockConstructionHP(config);
-    GRIM::Execution::validateExecutionPayload(
-        payload,
-        caller,
-        execution_hp.num_slots,
-        execution_hp.num_ops,
-        execution_hp.num_exec_steps);
-
-    if (!payload.transition_targets.empty() && !execution_hp.enabled) {
-        std::cerr << "[Phase2] WARN: batch has transition_targets while execution_block_enabled=false; "
-                  << "training with plain cross-entropy over text tokens" << std::endl;
-    }
     return gpu_model.requireForwardTopology(config, caller);
 }
 
@@ -560,13 +540,9 @@ void configureAutogradLossInputs(
     autograd_ctx.skip_equation_logging = skip_equation_logging;
 }
 
-GRIM::Forward::ModelForwardRuntimePayload buildTrainingForwardRuntimePayload(
-    GRIM::TrainingState& training_state)
+GRIM::Forward::ModelForwardRuntimePayload buildTrainingForwardRuntimePayload()
 {
-    GRIM::Forward::ModelForwardRuntimePayload runtime_payload{};
-    runtime_payload.execution_runtime = &training_state.execution_runtime;
-    runtime_payload.read_gate_accum_tensor = &training_state.read_gate_accum_tensor;
-    return runtime_payload;
+    return {};
 }
 
 GRIM::Forward::ModelForwardRequest buildTrainingForwardRequest(
@@ -597,90 +573,6 @@ GRIM::Forward::ModelForwardRequest buildTrainingForwardRequest(
         /*enable_dropout=*/true,
         /*emit_selector_logits=*/emit_selector_logits};
     return request;
-}
-
-void snapshotReadGateMean(
-    GRIM::TrainingState& training_state,
-    cudaStream_t stream)
-{
-    if (!training_state.read_gate_accum_tensor.data) {
-        throw std::runtime_error(
-            "snapshotReadGateMean: TrainingState.read_gate_accum_tensor is NULL");
-    }
-
-    float h_accum[2] = {0.0f, 0.0f};
-    CUDA_CHECK(cudaMemcpyAsync(
-        h_accum,
-        training_state.read_gate_accum_tensor.data,
-        2 * sizeof(float),
-        cudaMemcpyDeviceToHost,
-        stream));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-    training_state.h_read_gate_mean = (h_accum[1] > 0.0f)
-        ? (h_accum[0] / h_accum[1])
-        : 0.0f;
-}
-
-void snapshotExecutionTelemetry(
-    const GRIM::Forward::ModelForwardOutputs& forward_outputs,
-    const GRIM::Batching::BatchPayload& payload,
-    BatchResult& result)
-{
-    if (forward_outputs.exec_outputs_per_row.empty()) {
-        return;
-    }
-    if (static_cast<int>(forward_outputs.exec_outputs_per_row.size()) != payload.batch_size) {
-        throw std::runtime_error(
-            "snapshotExecutionTelemetry: exec_outputs_per_row size=" +
-            std::to_string(forward_outputs.exec_outputs_per_row.size()) +
-            " != payload.batch_size=" + std::to_string(payload.batch_size));
-    }
-    if (static_cast<int>(payload.execution_active.size()) != payload.batch_size) {
-        throw std::runtime_error(
-            "snapshotExecutionTelemetry: payload.execution_active size=" +
-            std::to_string(payload.execution_active.size()) +
-            " != payload.batch_size=" + std::to_string(payload.batch_size));
-    }
-
-    int active_rows = 0;
-    int total_steps = 0;
-    float sum_selection_entropy = 0.0f;
-    float sum_op_entropy = 0.0f;
-    int total_div_clamps = 0;
-    float sum_max_p_write = 0.0f;
-    float sum_inject_gate = 0.0f;
-    int inject_gate_count = 0;
-
-    for (int b = 0; b < payload.batch_size; ++b) {
-        if (!payload.execution_active[static_cast<size_t>(b)]) {
-            continue;
-        }
-        active_rows++;
-
-        for (const auto& step : forward_outputs.exec_outputs_per_row[static_cast<size_t>(b)].steps) {
-            const auto& m = step.metrics;
-            sum_selection_entropy += (m.arg1_entropy + m.arg2_entropy + m.op_entropy + m.write_entropy) / 4.0f;
-            sum_op_entropy += m.op_entropy;
-            total_div_clamps += m.div_clamp_count;
-            sum_max_p_write += m.max_p_write;
-            sum_inject_gate += m.inject_gate_value;
-            total_steps++;
-            inject_gate_count++;
-        }
-    }
-
-    if (total_steps > 0) {
-        result.exec_selection_entropy = sum_selection_entropy / static_cast<float>(total_steps);
-        result.exec_op_entropy = sum_op_entropy / static_cast<float>(total_steps);
-        result.exec_div_clamp_rate = static_cast<float>(total_div_clamps) / static_cast<float>(total_steps);
-        result.exec_max_p_write = sum_max_p_write / static_cast<float>(total_steps);
-    }
-    if (payload.batch_size > 0) {
-        result.exec_active_ratio = static_cast<float>(active_rows) / static_cast<float>(payload.batch_size);
-    }
-    if (inject_gate_count > 0) {
-        result.inject_gate_mean = sum_inject_gate / static_cast<float>(inject_gate_count);
-    }
 }
 
 } // namespace
@@ -789,16 +681,8 @@ BatchResult processBatch(
     training_state.autograd_batch_idx = plan.batch_idx;
     TapeSkipScope tape_skip_scope(plan.should_accumulate);
 
-    if (!training_state.read_gate_accum_tensor.data) {
-        throw std::runtime_error(
-            "processBatch: TrainingState.read_gate_accum_tensor is NULL - "
-            "Phase1 startup must allocate the read-gate workspace before Phase2 runs");
-    }
-
-    CUDA_CHECK(cudaMemsetAsync(training_state.read_gate_accum_tensor.data, 0, 2 * sizeof(float), stream));
-
     GRIM::Forward::ModelForwardRuntimePayload runtime_payload =
-        buildTrainingForwardRuntimePayload(training_state);
+        buildTrainingForwardRuntimePayload();
     const bool emit_selector_logits =
         GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "selector_enabled");
     const int optimizer_step = static_cast<int>(ctx.optimizer.optimizer_step.step);
@@ -878,8 +762,6 @@ BatchResult processBatch(
         loss_config,
         plan.should_accumulate);
 
-    snapshotReadGateMean(training_state, stream);
-
     auto loss_result = GRIM::Autograd::computeAutogradLoss(
         autograd_ctx,
         payload,
@@ -930,13 +812,6 @@ BatchResult processBatch(
     result.loss = loss_result.loss_value;
     result.text_loss = loss_result.text_loss;
     result.selector_loss = loss_result.selector_loss;
-    result.execution_loss = loss_result.execution_loss;
-    GRIM::Diagnostics::runExecutionLossDiagnostic(
-        ctx,
-        payload,
-        forward_outputs,
-        loss_result,
-        batch_idx);
     PHASE2_DEBUG_STDERR("[DEBUG-PROCESS] explicit forward + autograd loss/backward returned, loss=%f success=%d\n", 
                         result.loss, static_cast<int>(loss_result.success));
 
@@ -1008,8 +883,6 @@ BatchResult processBatch(
             batch_idx,
             rho_post_backward_options);
     }
-    snapshotExecutionTelemetry(forward_outputs, payload, result);
-    
     if (!std::isfinite(result.loss)) {
         throw std::runtime_error("Non-finite batch loss: " + std::to_string(result.loss));
     }
@@ -1206,15 +1079,8 @@ ValidationResult runValidation(TrainingContext& ctx) {
         const auto forward_topology = validateTrainingForwardInputs(
             ctx.config, ctx.gpu_model, val_payload, "runValidation");
 
-        // read_gate_accum_tensor is reused TrainingState workspace; reset it
-        // exactly like processBatch so the execution-block read path is clean.
-        if (training_state.read_gate_accum_tensor.data) {
-            CUDA_CHECK(cudaMemsetAsync(
-                training_state.read_gate_accum_tensor.data, 0, 2 * sizeof(float), stream));
-        }
-
         GRIM::Forward::ModelForwardRuntimePayload runtime_payload =
-            buildTrainingForwardRuntimePayload(training_state);
+            buildTrainingForwardRuntimePayload();
 
         GRIM::Forward::ModelForwardRequest forward_request{};
         forward_request.config = &model_config;
@@ -1230,10 +1096,7 @@ ValidationResult runValidation(TrainingContext& ctx) {
         // Eval policy: read-only forward (no autograd edges, no retained backward
         // graph) with dropout DISABLED — identical to the inference forward.
         // The text-CE and selector terms read only explicitly emitted outputs,
-        // valid under this read-only policy. NOTE: if execution_block_enabled is
-        // ever turned on, the execution auxiliary loss reads graph-connected
-        // execution tensors — validation must not rely on that backward-only
-        // execution-loss path while connect_parameter_graph remains false.
+        // valid under this read-only policy.
         forward_request.graph = GRIM::Forward::ModelForwardGraphPolicy{
             /*connect_parameter_graph=*/false,
             /*enable_dropout=*/false,

@@ -59,13 +59,6 @@ struct BatchResult {
     float loss = 0.0f;
     float text_loss = 0.0f;
     float selector_loss = 0.0f;
-    float execution_loss = 0.0f;
-    float exec_selection_entropy = 0.0f;
-    float exec_op_entropy = 0.0f;
-    float exec_div_clamp_rate = 0.0f;
-    float exec_max_p_write = 0.0f;
-    float exec_active_ratio = 0.0f;
-    float inject_gate_mean = 0.0f;
     float grad_rms = 0.0f;
     bool grad_rms_valid = false;
     float learning_rate = 0.0f;

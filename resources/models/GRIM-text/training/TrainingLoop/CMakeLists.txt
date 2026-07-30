@@ -417,25 +417,20 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../Phases/Startup/Model/ParameterGroupRegistration.hpp
     ../../Shared/Gradients/GradStatsCollector.cu
     ../../Shared/Forward/ModelForward_GPU.cu
-    ../../Shared/Forward/ModelForwardExecutionBlock_GPU.cu
+    ../../Shared/Forward/ModelForwardArgBootstrap_GPU.cu
     ../../Shared/InferenceState/KvCacheState_GPU.cu
     ../Autograd/AutogradContext.cu
-    ../Autograd/AutogradExecutionLoss.cu
     ../Autograd/AutogradTraining.cu
     ../../Layers/HardcodedStates/HardcodedStates_GPU.cu
     ../../Layers/Embedding/Embedding_GPU.cu
     ../../Layers/LMHead/lm_head_GPU.cu
     ../../Layers/ArgSelector/ArgSelector_GPU.cu
     ../../Layers/SlotSeedEncoder/SlotSeedEncoder_GPU.cu
-    ../../Layers/ExecutionBlock/execution_block_GPU.cu
-    ../../Layers/ExecutionBlock/execution_block_memory_stream_GPU.cu
-    ../../Layers/ExecutionBlock/execution_block_data_stream_GPU.cu
     ../../Layers/Quantization/Quantization_GPU.cu
     ../../Shared/Batching/Batching_GPU.cu
     ../../Shared/Batching/BatchDeviceUpload.cu
     ../../Shared/Batching/BatchPayload.cu
     ../../Shared/Batching/EpochBatching.cu
-    ../../Shared/Execution/ExecutionPayloadValidation.cu
     ../../Layers/Encoding/Encoding_GPU.cu
     ../../Layers/Encoding/EncoderDiagnostics.cu
     ../../Layers/FlashAttention/EncoderSelfAttention_GPU.cu
@@ -571,8 +566,6 @@ add_executable(train_gpu
     ../Diagnostics/LossBaselineDiagnostic.hpp
     ../Diagnostics/LossStatsDiagnostic.cu
     ../Diagnostics/LossStatsDiagnostic.hpp
-    ../Diagnostics/ExecutionLossDiagnostic.cu
-    ../Diagnostics/ExecutionLossDiagnostic.hpp
     ../Diagnostics/GradientNormDiagnostic.cu
     ../Diagnostics/GradientNormDiagnostic.hpp
     ../Diagnostics/PostClipParamGradEmbLmEquation.cu
@@ -928,52 +921,6 @@ target_include_directories(gradient_verification_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Layers
 )
 
-# ExecutionBlock test executable
-add_executable(execution_block_test
-    ../../Tests/ExecutionBlockTest.cu
-    ../../Layers/ExecutionBlock/execution_block_GPU.cu
-    ../../Layers/ExecutionBlock/execution_block_memory_stream_GPU.cu
-    ../../Layers/ExecutionBlock/execution_block_data_stream_GPU.cu
-    ../../Shared/Batching/BatchPayload.cu
-    ../../Shared/Execution/ExecutionPayloadValidation.cu
-    ../../Shared/PBM/PositionalBiasMethod.cu
-    ../../Shared/PBM/PBMStateOwner.cu
-    ${GRIM_TENSORCONTRACT_CU}
-    ../../Shared/TensorConversion/TensorConversion.cu
-)
-
-set_target_properties(execution_block_test PROPERTIES
-    CUDA_SEPARABLE_COMPILATION ON
-    CUDA_RESOLVE_DEVICE_SYMBOLS ON
-    CUDA_ARCHITECTURES "${GRIM_CUDA_ARCHITECTURES}"
-     CUDA_RUNTIME_LIBRARY Shared
-)
-
-target_compile_options(execution_block_test PRIVATE
-    $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
-
-)
-
-target_compile_definitions(execution_block_test PRIVATE
-    USE_CUDA
-)
-
-target_link_libraries(execution_block_test PRIVATE
-    nlohmann_json::nlohmann_json
-    CUDA::cudart
-    CUDA::cublas
-    grim_flash_attention
-    grim_unigrambyte_tokenizer
-)
-
-target_include_directories(execution_block_test PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../..
-    ${CMAKE_CURRENT_SOURCE_DIR}/../..
-    ${CMAKE_CURRENT_SOURCE_DIR}/..
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../GRIM
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../Layers
-)
 endif()
 
 # ============================================================================
@@ -989,7 +936,6 @@ if(GRIM_TRAINING_BUILD_TEST_EXECUTABLES)
     message(STATUS "  - grmt_vocab_metrics_test: GRMT corpus + vocabulary metrics diagnostics")
     message(STATUS "  - flash_attention_test: Flash Attention forward/backward test suite")
     message(STATUS "  - gradient_verification_test: Encoder gradient collapse debugging")
-    message(STATUS "  - execution_block_test: ExecutionBlock batching, state transitions, and config tests")
 else()
     message(STATUS "  - TrainingLoop test executables: disabled (set -DGRIM_TRAINING_BUILD_TEST_EXECUTABLES=ON to enable)")
 endif()

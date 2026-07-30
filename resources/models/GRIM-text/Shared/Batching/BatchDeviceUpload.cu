@@ -361,7 +361,7 @@ BatchDeviceBindings uploadBatchToDevice(
             if (storage.execution_slot_count_capacity != payload.execution_slot_count ||
                 !storage.bootstrap_slot_to_pool_index_tensor.data) {
                 throw std::runtime_error(
-                    "uploadBatchToDevice: selector-to-execution bridge capacity does not "
+                    "uploadBatchToDevice: selector-to-bootstrap bridge capacity does not "
                     "match payload.execution_slot_count=" +
                     std::to_string(payload.execution_slot_count));
             }
