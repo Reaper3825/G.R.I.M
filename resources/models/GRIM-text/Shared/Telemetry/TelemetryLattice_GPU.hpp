@@ -272,6 +272,7 @@ enum class MetricStream : int {
     EXEC_ARG1_ACCURACY             = 89,
     EXEC_ARG2_ACCURACY             = 90,
     EXEC_WRITE_ACCURACY            = 91,
+    RESERVED_92                    = 92,
     EXEC_LOSS_SCALAR_TERM_COUNT    = 93,
 };
 

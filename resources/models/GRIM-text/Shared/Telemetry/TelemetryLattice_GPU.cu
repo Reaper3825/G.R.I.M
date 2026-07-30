@@ -396,6 +396,7 @@ const char* getMetricStreamName(MetricStream stream) {
         case MetricStream::EXEC_ARG1_ACCURACY: return "exec_arg1_accuracy";
         case MetricStream::EXEC_ARG2_ACCURACY: return "exec_arg2_accuracy";
         case MetricStream::EXEC_WRITE_ACCURACY: return "exec_write_accuracy";
+        case MetricStream::RESERVED_92: return "reserved_92";
         case MetricStream::EXEC_LOSS_SCALAR_TERM_COUNT: return "exec_loss_scalar_term_count";
         default: return "unknown";
     }
