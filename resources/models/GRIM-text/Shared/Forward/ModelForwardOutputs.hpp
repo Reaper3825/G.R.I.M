@@ -22,31 +22,6 @@
 namespace GRIM {
 namespace Forward {
 
-// Owning storage for one row's execution register file. Shared execution math
-// receives only the non-owning ExecutionMemory view bound by this owner.
-struct ExecutionMemoryOwnedStorage {
-    Tensor values;
-    Tensor atom_embeds;
-    Tensor state_embeds;
-    Tensor valid_mask;
-    Tensor usage;
-    Tensor key_embeds;
-    Tensor type_embed;
-    Tensor recent_write_mask;
-
-    void bind(ExecutionMemory& memory) {
-        memory.bind(
-            values,
-            atom_embeds,
-            state_embeds,
-            valid_mask,
-            usage,
-            key_embeds,
-            type_embed,
-            recent_write_mask);
-    }
-};
-
 struct ModelForwardOutputs {
 private:
     static int countGradFns(const std::vector<Tensor>& tensors) {

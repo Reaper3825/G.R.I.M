@@ -20,14 +20,13 @@
 namespace GRIM {
 
 struct GenerationState {
-    // Persistent inference execution state. Survives prefill -> decode steps
-    // within a generation session and is invalidated only at session reset.
+    // Retained inference storage scaffold. No post-bootstrap execution path
+    // currently reads or writes it.
     Forward::ExecutionMemoryOwnedStorage exec_memory_storage;
     ExecutionMemory exec_memory;
     bool has_exec_memory = false;
 
-    // Decode-time ExecutionBlock trace state for autoregressive generation.
-    // Training forward traces remain TrainingState-owned; these are session state.
+    // Compatibility shell retained for session-layout stability.
     Forward::ModelForwardExecutionRuntime execution_runtime;
 
     // Session-scoped KV cache for autoregressive decode. Buffers are allocated

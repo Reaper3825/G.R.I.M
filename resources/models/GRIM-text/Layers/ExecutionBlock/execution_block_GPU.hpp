@@ -63,6 +63,35 @@ struct ExecutionMemory {
     }
 };
 
+namespace Forward {
+
+// Owning storage retained beside its non-owning view so startup/inference
+// state can use the scaffold without depending on ModelForwardOutputs.
+struct ExecutionMemoryOwnedStorage {
+    Tensor values;
+    Tensor atom_embeds;
+    Tensor state_embeds;
+    Tensor valid_mask;
+    Tensor usage;
+    Tensor key_embeds;
+    Tensor type_embed;
+    Tensor recent_write_mask;
+
+    void bind(ExecutionMemory& memory) {
+        memory.bind(
+            values,
+            atom_embeds,
+            state_embeds,
+            valid_mask,
+            usage,
+            key_embeds,
+            type_embed,
+            recent_write_mask);
+    }
+};
+
+}  // namespace Forward
+
 }  // namespace GRIM
 
 #endif  // USE_CUDA
