@@ -125,9 +125,12 @@ bool testStepOutputDefaults(std::string& message) {
                    "selection_temperature should default zero");
     EB_ASSERT_TRUE(!sout.div_was_clamped,
                    "div_was_clamped should default false");
-    EB_ASSERT_TRUE(!sout.record.arg1_slot.valid(), "record.arg1_slot default");
-    EB_ASSERT_TRUE(!sout.record.arg2_slot.valid(), "record.arg2_slot default");
-    EB_ASSERT_EQ(sout.record.op_id, -1, "record.op_id default");
+    EB_ASSERT_TRUE(!sout.record.invocation.transition_id.valid(),
+                   "record transition identity default");
+    EB_ASSERT_TRUE(sout.record.invocation.arguments.empty(),
+                   "record arguments default empty");
+    EB_ASSERT_TRUE(sout.record.invocation.results.empty(),
+                   "record results default empty");
     EB_ASSERT_EQ(sout.metrics.div_clamp_count, 0, "metrics.div_clamp_count default");
 
     return true;
@@ -316,14 +319,40 @@ bool testExecutionBlockConstructionHPDefaults(std::string& message) {
 bool testExecutionRecordDefaults(std::string& message) {
     GRIM::Forward::ExecutionRecord rec{};
 
-    EB_ASSERT_TRUE(!rec.arg1_slot.valid(), "arg1_slot default invalid");
-    EB_ASSERT_TRUE(!rec.arg2_slot.valid(), "arg2_slot default invalid");
-    EB_ASSERT_EQ(rec.op_id, -1, "op_id default -1");
-    EB_ASSERT_TRUE(!rec.write_slot.valid(), "write_slot default invalid");
-    EB_ASSERT_NEAR(rec.value_before_1, 0.0f, 1e-6f, "value_before_1 default");
-    EB_ASSERT_NEAR(rec.value_before_2, 0.0f, 1e-6f, "value_before_2 default");
-    EB_ASSERT_NEAR(rec.value_after, 0.0f, 1e-6f, "value_after default");
+    EB_ASSERT_TRUE(!rec.invocation.transition_id.valid(),
+                   "transition identity default invalid");
+    EB_ASSERT_TRUE(rec.invocation.arguments.empty(), "arguments default empty");
+    EB_ASSERT_TRUE(rec.invocation.results.empty(), "results default empty");
+    EB_ASSERT_TRUE(rec.argument_values.empty(), "argument values default empty");
+    EB_ASSERT_TRUE(rec.result_values.empty(), "result values default empty");
 
+    return true;
+}
+
+bool testOpaqueTransitionIdentityLowering(std::string& message) {
+    static_assert(!std::is_convertible_v<GRIM::Execution::TransitionId, int>,
+                  "semantic TransitionId must not implicitly become a model-head index");
+    static_assert(!std::is_convertible_v<GRIM::Execution::TransitionIndex, int>,
+                  "runtime TransitionIndex must cross an explicit device ABI boundary");
+
+    const auto addition = GRIM::Execution::TransitionId::fromLocalOrdinal(0);
+    const auto subtraction = GRIM::Execution::TransitionId::fromLocalOrdinal(1);
+    const std::vector<GRIM::Execution::CompiledTransitionBinding> layout{
+        {addition, GRIM::Execution::TransitionIndex::fromDense(1)},
+        {subtraction, GRIM::Execution::TransitionIndex::fromDense(0)}
+    };
+
+    EB_ASSERT_EQ(
+        GRIM::Execution::requireTransitionIndex(
+            layout, addition, "test transition lowering").dense(),
+        1,
+        "transition identity lowers only through the compiled table");
+    EB_ASSERT_TRUE(
+        GRIM::Execution::requireTransitionId(
+            layout,
+            GRIM::Execution::TransitionIndex::fromDense(0),
+            "test reverse transition lowering") == subtraction,
+        "reverse lowering restores the semantic transition identity");
     return true;
 }
 
@@ -467,14 +496,24 @@ bool testExecutionBlockOutputMultiStep(std::string& message) {
 
     for (int k = 0; k < 3; ++k) {
         GRIM::Forward::ExecutionBlockStepOutput s{};
-        s.record.op_id = k;
+        s.record.invocation.transition_id =
+            GRIM::Execution::TransitionId::fromLocalOrdinal(k);
         output.steps.push_back(std::move(s));
     }
 
     EB_ASSERT_EQ(static_cast<int>(output.steps.size()), 3, "3 steps added");
-    EB_ASSERT_EQ(output.steps[0].record.op_id, 0, "step 0 op_id");
-    EB_ASSERT_EQ(output.steps[1].record.op_id, 1, "step 1 op_id");
-    EB_ASSERT_EQ(output.steps[2].record.op_id, 2, "step 2 op_id");
+    EB_ASSERT_TRUE(
+        output.steps[0].record.invocation.transition_id ==
+            GRIM::Execution::TransitionId::fromLocalOrdinal(0),
+        "step 0 transition identity");
+    EB_ASSERT_TRUE(
+        output.steps[1].record.invocation.transition_id ==
+            GRIM::Execution::TransitionId::fromLocalOrdinal(1),
+        "step 1 transition identity");
+    EB_ASSERT_TRUE(
+        output.steps[2].record.invocation.transition_id ==
+            GRIM::Execution::TransitionId::fromLocalOrdinal(2),
+        "step 2 transition identity");
 
     return true;
 }
@@ -550,6 +589,7 @@ bool testSelectorExecutionBootstrapMetadata(std::string& message) {
         /*max_cached_seq_len=*/16,
         /*execution_num_slots=*/8,
         /*execution_num_scratch_slots=*/2,
+        /*execution_num_transitions=*/4,
         /*number_encoder_digit_slots=*/16,
         /*number_encoder_max_abs_pow10=*/32);
 
@@ -591,6 +631,7 @@ bool testSelectorExecutionBootstrapMetadata(std::string& message) {
             /*max_cached_seq_len=*/16,
             /*execution_num_slots=*/8,
             /*execution_num_scratch_slots=*/2,
+            /*execution_num_transitions=*/4,
             /*number_encoder_digit_slots=*/16,
             /*number_encoder_max_abs_pow10=*/32);
     } catch (const std::runtime_error&) {
@@ -932,7 +973,9 @@ bool testSelectorExecutionBackwardBridge(std::string& message) {
     }};
 
     ExecutionRecord overwritten_record{};
-    overwritten_record.write_slot = Execution::SlotId::fromLocalOrdinal(3);
+    overwritten_record.invocation.results = {
+        Execution::SlotId::fromLocalOrdinal(3)
+    };
     const std::vector<ExecutionRecord> prior_records{overwritten_record};
 
     ExecutionBlockInternal::StepWorkingSet work;
@@ -1028,6 +1071,7 @@ bool testInferencePromptControlBoundary(std::string& message) {
         /*max_cached_seq_len=*/16,
         /*execution_num_slots=*/8,
         /*execution_num_scratch_slots=*/0,
+        /*execution_num_transitions=*/4,
         /*number_encoder_digit_slots=*/0,
         /*number_encoder_max_abs_pow10=*/0);
 
@@ -1042,6 +1086,17 @@ bool testInferencePromptControlBoundary(std::string& message) {
         payload.execution_gate_targets[0]
             == GRIM::Execution::ExecutionGateTarget::UNSUPERVISED,
         "inference control must come from the model, not a teacher target");
+    EB_ASSERT_EQ(
+        static_cast<int>(payload.compiled_transition_bindings[0].size()),
+        4,
+        "inference payload compiles the current transition dispatcher");
+    EB_ASSERT_TRUE(
+        GRIM::Execution::requireTransitionId(
+            payload.compiled_transition_bindings[0],
+            GRIM::Execution::TransitionIndex::fromDense(2),
+            "test inference transition table")
+            == GRIM::Execution::TransitionId::fromLocalOrdinal(2),
+        "inference transition trace materializes through the compiled table");
 
     return true;
 }
@@ -1071,6 +1126,7 @@ bool testInferenceDecodeHostInputOwnership(std::string& message) {
         /*max_cached_seq_len=*/1,
         /*execution_num_slots=*/8,
         /*execution_num_scratch_slots=*/0,
+        /*execution_num_transitions=*/4,
         /*number_encoder_digit_slots=*/0,
         /*number_encoder_max_abs_pow10=*/0);
 
@@ -1205,9 +1261,13 @@ bool testTerminalExecutionResultEmissionContract(std::string& message) {
     };
     std::vector<GRIM::ExecutionStepControlTelemetry> steps(2);
     steps[0].predicted_class = 0;
-    steps[0].write_slot = slot1;
+    steps[0].invocation.transition_id =
+        GRIM::Execution::TransitionId::fromLocalOrdinal(0);
+    steps[0].invocation.results = {slot1};
     steps[1].predicted_class = 1;
-    steps[1].write_slot = slot3;
+    steps[1].invocation.transition_id =
+        GRIM::Execution::TransitionId::fromLocalOrdinal(0);
+    steps[1].invocation.results = {slot3};
     const std::vector<float> values{0.0f, 4.0f, 0.0f, 42.0f};
     const std::vector<uint8_t> valid{0, 1, 0, 1};
 
@@ -1232,7 +1292,7 @@ bool testTerminalExecutionResultEmissionContract(std::string& message) {
     } catch (const std::runtime_error&) {
         rejected_invalid = true;
     }
-    EB_ASSERT_TRUE(rejected_invalid, "invalid terminal write slot must fail loudly");
+    EB_ASSERT_TRUE(rejected_invalid, "invalid terminal result slot must fail loudly");
     return true;
 }
 
@@ -1351,6 +1411,7 @@ int GRIM::Test::runExecutionBlockTests() {
     suite.addTest("Config: execution operand-selection scale", testExecutionOperandSelectionScale);
     suite.addTest("Record: ExecutionRecord defaults", testExecutionRecordDefaults);
     suite.addTest("Metadata: opaque SlotId lowering", testOpaqueSlotIdentityLowering);
+    suite.addTest("Metadata: opaque TransitionId lowering", testOpaqueTransitionIdentityLowering);
     suite.addTest("Metrics: ExecStepMetrics defaults", testExecStepMetricsDefaults);
     suite.addTest("Arithmetic: four-op semantics", testFourOpsSemantics);
     suite.addTest("Bootstrap: slot map semantics", testBootstrapSlotMapSemantics);

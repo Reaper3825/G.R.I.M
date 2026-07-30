@@ -35,10 +35,10 @@ Loss backward already applies `1/N`. Do **not** add another `1/tokens` scaling i
 
 ExecutionBlock auxiliary losses assembled in `AutogradTraining.cu` must be added to `loss_tensor` as one normalized aggregate, not as raw per-step sums. The local execution objective is accumulated over active scalar loss terms — execution-gate CE, stop-control CE, structured op/argument/write CE, and division penalties — then divided by that active term count before a single `autograd::add()` into the main loss.
 
-Argument selection is supervised directly from `BatchPayload.teacher_steps`. The execution path is deterministic (`argmax`) and does not use a policy-gradient objective, reward baseline, or persistent loss-side state.
+Argument selection is supervised directly from `BatchPayload.transition_targets`. The execution path is deterministic (`argmax`) and does not use a policy-gradient objective, reward baseline, or persistent loss-side state.
 
 Loss decomposition at the training boundary is explicit: `LossResult` / `BatchResult` carry `text_loss`, `selector_loss`, and `execution_loss`. Do not recreate a blended `aux_loss` bucket; it hides the real source of non-text loss and corrupts telemetry semantics. (The old `selector_loss` channel was deleted with the execution-entangled decode-time selector; new numeric supervision heads will add their own explicit channels.)
 
-Why: text CE is already averaged over valid tokens. Raw execution sums make rows with more teacher steps exert more loss pressure and make batch composition change the effective execution-loss weight.
+Why: text CE is already averaged over valid tokens. Raw execution sums make rows with more transition targets exert more loss pressure and make batch composition change the effective execution-loss weight.
 
 Execution entropy is monitoring-only, not added to `loss_tensor`. Its row loop must mirror execution supervision masking: skip inactive rows, skip rows with no unmasked real steps, fail loud if `computeEntropyLoss(...)` returns null data, and average by the number of monitored rows rather than `payload.batch_size`.

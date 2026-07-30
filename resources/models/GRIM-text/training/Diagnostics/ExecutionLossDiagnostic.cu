@@ -292,10 +292,10 @@ void runExecutionLossDiagnostic(
             throw std::runtime_error(
                 "runExecutionLossDiagnostic: execution_gate_targets size does not match batch_size");
         }
-        if (!payload.teacher_step_mask.empty() &&
-            static_cast<int>(payload.teacher_step_mask.size()) != payload.batch_size) {
+        if (!payload.transition_target_mask.empty() &&
+            static_cast<int>(payload.transition_target_mask.size()) != payload.batch_size) {
             throw std::runtime_error(
-                "runExecutionLossDiagnostic: teacher_step_mask size does not match batch_size");
+                "runExecutionLossDiagnostic: transition_target_mask size does not match batch_size");
         }
 
         const float structured_weight = model_hp.execution_block_structured_ce_weight;
@@ -303,14 +303,14 @@ void runExecutionLossDiagnostic(
         const float stop_weight = model_hp.execution_block_stop_ce_weight;
         const float entropy_weight = model_hp.execution_block_entropy_aux_weight;
         const float div_weight = execution_hp.div_invalid_penalty_weight;
-        const bool need_teacher_targets =
+        const bool need_transition_targets =
             (model_hp.structured_ce_enabled && structured_weight > 0.0f) ||
             stop_weight > 0.0f;
-        if (need_teacher_targets &&
-            (payload.teacher_steps.empty() ||
-             static_cast<int>(payload.teacher_steps.size()) != payload.batch_size)) {
+        if (need_transition_targets &&
+            (payload.transition_targets.empty() ||
+             static_cast<int>(payload.transition_targets.size()) != payload.batch_size)) {
             throw std::runtime_error(
-                "runExecutionLossDiagnostic: teacher-dependent losses require one teacher row per batch row");
+                "runExecutionLossDiagnostic: transition-target losses require one target row per batch row");
         }
 
         for (int row = 0; row < payload.batch_size; ++row) {
@@ -332,32 +332,32 @@ void runExecutionLossDiagnostic(
                 : payload.execution_active[static_cast<std::size_t>(row)];
             if (!row_active) continue;
 
-            const std::vector<GRIM::Execution::TeacherStep>* teacher_row = nullptr;
-            if (!payload.teacher_steps.empty()) {
-                teacher_row = &payload.teacher_steps[static_cast<std::size_t>(row)];
-                int real_teacher_steps = 0;
-                if (!payload.teacher_step_mask.empty()) {
+            const std::vector<GRIM::Execution::TransitionInvocation>* target_row = nullptr;
+            if (!payload.transition_targets.empty()) {
+                target_row = &payload.transition_targets[static_cast<std::size_t>(row)];
+                int real_transition_targets = 0;
+                if (!payload.transition_target_mask.empty()) {
                     bool saw_padding = false;
                     for (uint8_t mask_value :
-                         payload.teacher_step_mask[static_cast<std::size_t>(row)]) {
+                         payload.transition_target_mask[static_cast<std::size_t>(row)]) {
                         if (mask_value == 0) {
                             saw_padding = true;
                         } else {
                             if (saw_padding) {
                                 throw std::runtime_error(
-                                    "runExecutionLossDiagnostic: teacher step mask must be a contiguous prefix");
+                                    "runExecutionLossDiagnostic: transition target mask must be a contiguous prefix");
                             }
-                            ++real_teacher_steps;
+                            ++real_transition_targets;
                         }
                     }
                 } else {
-                    real_teacher_steps = static_cast<int>(teacher_row->size());
+                    real_transition_targets = static_cast<int>(target_row->size());
                 }
-                if (static_cast<int>(row_output.steps.size()) != real_teacher_steps) {
+                if (static_cast<int>(row_output.steps.size()) != real_transition_targets) {
                     throw std::runtime_error(
                         "runExecutionLossDiagnostic: row=" + std::to_string(row) +
                         " output step count=" + std::to_string(row_output.steps.size()) +
-                        " real teacher step count=" + std::to_string(real_teacher_steps));
+                        " real transition target count=" + std::to_string(real_transition_targets));
                 }
             }
 
@@ -366,10 +366,10 @@ void runExecutionLossDiagnostic(
             for (int step_index = 0;
                  step_index < static_cast<int>(row_output.steps.size());
                  ++step_index) {
-                if (!payload.teacher_step_mask.empty() &&
+                if (!payload.transition_target_mask.empty() &&
                     step_index < static_cast<int>(
-                        payload.teacher_step_mask[static_cast<std::size_t>(row)].size()) &&
-                    payload.teacher_step_mask[static_cast<std::size_t>(row)]
+                        payload.transition_target_mask[static_cast<std::size_t>(row)].size()) &&
+                    payload.transition_target_mask[static_cast<std::size_t>(row)]
                                              [static_cast<std::size_t>(step_index)] == 0) {
                     continue;
                 }
@@ -386,23 +386,51 @@ void runExecutionLossDiagnostic(
                 }
 
                 if (model_hp.structured_ce_enabled && structured_weight > 0.0f) {
-                    const auto& teacher = (*teacher_row)[static_cast<std::size_t>(step_index)];
+                    const auto& target =
+                        (*target_row)[static_cast<std::size_t>(step_index)];
                     if (payload.compiled_slot_bindings.empty() ||
                         row >= static_cast<int>(payload.compiled_slot_bindings.size())) {
                         throw std::runtime_error(
-                            "runExecutionLossDiagnostic: teacher targets have no compiled slot bindings");
+                            "runExecutionLossDiagnostic: transition targets "
+                            "have no compiled slot bindings");
+                    }
+                    if (payload.compiled_transition_bindings.empty() ||
+                        row >= static_cast<int>(
+                            payload.compiled_transition_bindings.size())) {
+                        throw std::runtime_error(
+                            "runExecutionLossDiagnostic: transition targets "
+                            "have no compiled transition bindings");
+                    }
+                    if (target.arguments.size() != 2 ||
+                        target.results.size() != 1) {
+                        throw std::runtime_error(
+                            "runExecutionLossDiagnostic: current execution "
+                            "heads require two arguments and one result");
                     }
                     const auto& slot_bindings =
                         payload.compiled_slot_bindings[static_cast<std::size_t>(row)];
-                    const int op_target = teacher.op_id;
+                    const auto& transition_bindings =
+                        payload.compiled_transition_bindings[
+                            static_cast<std::size_t>(row)];
+                    const int op_target =
+                        GRIM::Execution::requireTransitionIndex(
+                            transition_bindings,
+                            target.transition_id,
+                            "diagnostic transition target").dense();
                     const int arg1_target = GRIM::Execution::requireSlotIndex(
-                        slot_bindings, teacher.arg1_slot, "diagnostic teacher arg1").dense()
+                        slot_bindings,
+                        target.arguments[0],
+                        "diagnostic transition argument 0").dense()
                         - execution_hp.num_scratch_slots;
                     const int arg2_target = GRIM::Execution::requireSlotIndex(
-                        slot_bindings, teacher.arg2_slot, "diagnostic teacher arg2").dense()
+                        slot_bindings,
+                        target.arguments[1],
+                        "diagnostic transition argument 1").dense()
                         - execution_hp.num_scratch_slots;
                     const int write_target = GRIM::Execution::requireSlotIndex(
-                        slot_bindings, teacher.write_slot, "diagnostic teacher write").dense();
+                        slot_bindings,
+                        target.results[0],
+                        "diagnostic transition result 0").dense();
 
                     const auto op_observation = observeClassification(
                         step_output.op_logits_tensor, op_target, "op_logits", row, step_index,

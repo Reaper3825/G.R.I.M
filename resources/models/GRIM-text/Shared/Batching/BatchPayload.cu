@@ -97,6 +97,25 @@ std::vector<Execution::CompiledSlotBinding> compileEpisodeSlotBindings(int num_s
     return bindings;
 }
 
+std::vector<Execution::CompiledTransitionBinding> compileEpisodeTransitionBindings(
+    int num_transitions)
+{
+    if (num_transitions <= 0) {
+        throw std::runtime_error(
+            "compileEpisodeTransitionBindings: num_transitions must be positive");
+    }
+
+    std::vector<Execution::CompiledTransitionBinding> bindings;
+    bindings.reserve(static_cast<std::size_t>(num_transitions));
+    for (int index = 0; index < num_transitions; ++index) {
+        bindings.push_back(Execution::CompiledTransitionBinding{
+            Execution::TransitionId::fromLocalOrdinal(
+                static_cast<std::uint64_t>(index)),
+            Execution::TransitionIndex::fromDense(index)});
+    }
+    return bindings;
+}
+
 void requirePositiveVocab(int vocab_size, const char* caller)
 {
     if (vocab_size <= 0) {
@@ -159,8 +178,8 @@ BatchPayload makeInferenceBasePayload(
     payload.execution_prompt_end_positions.assign(1, seq_len - 1);
     payload.execution_prompt_lengths.assign(1, seq_len);
     payload.compiled_bootstrap_bindings.resize(1);
-    payload.teacher_steps.resize(1);
-    payload.teacher_step_mask.resize(1);
+    payload.transition_targets.resize(1);
+    payload.transition_target_mask.resize(1);
 
     return payload;
 }
@@ -723,8 +742,9 @@ BatchPayload buildBatchPayload(
         int32_t execution_prompt_end_pos;
         int32_t execution_prompt_length;
         const std::vector<GRIM::Execution::CompiledSlotBinding>* compiled_slot_bindings;
+        const std::vector<GRIM::Execution::CompiledTransitionBinding>* compiled_transition_bindings;
         const std::vector<GRIM::Execution::CompiledBootstrapBinding>* compiled_bootstrap_bindings;
-        const std::vector<GRIM::Execution::TeacherStep>* teacher_steps;
+        const std::vector<GRIM::Execution::TransitionInvocation>* transition_targets;
     };
 
     std::vector<RawSeq> raw;
@@ -865,8 +885,9 @@ BatchPayload buildBatchPayload(
             seq->execution_prompt_end_pos,
             seq->execution_prompt_length,
             &seq->compiled_slot_bindings,
+            &seq->compiled_transition_bindings,
             &seq->compiled_bootstrap_bindings,
-            &seq->teacher_steps
+            &seq->transition_targets
         });
 
         payload.seq_lengths[b] = seq_len;
@@ -949,9 +970,10 @@ BatchPayload buildBatchPayload(
     payload.execution_prompt_end_positions.resize(payload.batch_size, -1);
     payload.execution_prompt_lengths.resize(payload.batch_size, 0);
     payload.compiled_slot_bindings.resize(payload.batch_size);
+    payload.compiled_transition_bindings.resize(payload.batch_size);
     payload.compiled_bootstrap_bindings.resize(payload.batch_size);
-    payload.teacher_steps.resize(payload.batch_size);
-    payload.teacher_step_mask.resize(payload.batch_size);
+    payload.transition_targets.resize(payload.batch_size);
+    payload.transition_target_mask.resize(payload.batch_size);
 
     payload.valid_tokens = 0;
 
@@ -1040,23 +1062,28 @@ BatchPayload buildBatchPayload(
         if (r.compiled_slot_bindings && !r.compiled_slot_bindings->empty()) {
             payload.compiled_slot_bindings[b] = *r.compiled_slot_bindings;
         }
+        if (r.compiled_transition_bindings &&
+            !r.compiled_transition_bindings->empty()) {
+            payload.compiled_transition_bindings[b] =
+                *r.compiled_transition_bindings;
+        }
         if (r.compiled_bootstrap_bindings && !r.compiled_bootstrap_bindings->empty()) {
             payload.compiled_bootstrap_bindings[b] = *r.compiled_bootstrap_bindings;
         }
-        if (r.teacher_steps && !r.teacher_steps->empty()) {
-            const int real_count = static_cast<int>(r.teacher_steps->size());
-            payload.teacher_steps[b] = *r.teacher_steps;
+        if (r.transition_targets && !r.transition_targets->empty()) {
+            const int real_count = static_cast<int>(r.transition_targets->size());
+            payload.transition_targets[b] = *r.transition_targets;
 
             // Pad to execution_num_steps by repeating last step
             if (real_count < execution_num_steps) {
-                const auto& last = payload.teacher_steps[b].back();
-                payload.teacher_steps[b].resize(execution_num_steps, last);
+                const auto& last = payload.transition_targets[b].back();
+                payload.transition_targets[b].resize(execution_num_steps, last);
             }
 
             // Build step mask: 1 = real step, 0 = padded step
-            payload.teacher_step_mask[b].assign(execution_num_steps, 0);
+            payload.transition_target_mask[b].assign(execution_num_steps, 0);
             for (int k = 0; k < std::min(real_count, execution_num_steps); ++k) {
-                payload.teacher_step_mask[b][k] = 1;
+                payload.transition_target_mask[b][k] = 1;
             }
         }
     }
@@ -1160,6 +1187,7 @@ BatchPayload buildInferenceBatchPayload(
     size_t max_cached_seq_len,
     int execution_num_slots,
     int execution_num_scratch_slots,
+    int execution_num_transitions,
     int number_encoder_digit_slots,
     int number_encoder_max_abs_pow10)
 {
@@ -1268,6 +1296,11 @@ BatchPayload buildInferenceBatchPayload(
         payload.compiled_slot_bindings.resize(1);
         payload.compiled_slot_bindings[0] =
             compileEpisodeSlotBindings(execution_num_slots);
+    }
+    if (execution_num_transitions > 0) {
+        payload.compiled_transition_bindings.resize(1);
+        payload.compiled_transition_bindings[0] =
+            compileEpisodeTransitionBindings(execution_num_transitions);
     }
     payload.seq_atom_tables.resize(1);
     payload.seq_atom_tables[0] = atom_table;

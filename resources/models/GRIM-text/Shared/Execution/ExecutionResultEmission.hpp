@@ -54,18 +54,27 @@ inline ExecutionResultEmission resolveTerminalExecutionResult(
         throw std::runtime_error(
             "resolveTerminalExecutionResult: terminal step was not classified STOP");
     }
-    const SlotId slot = terminal_step.write_slot;
+    if (!terminal_step.invocation.transition_id.valid()) {
+        throw std::runtime_error(
+            "resolveTerminalExecutionResult: terminal step has no transition identity");
+    }
+    if (terminal_step.invocation.results.size() != 1) {
+        throw std::runtime_error(
+            "resolveTerminalExecutionResult: terminal transition must expose "
+            "exactly one result for scalar emission");
+    }
+    const SlotId slot = terminal_step.invocation.results.front();
     const int slot_index = requireSlotIndex(
         slot_bindings,
         slot,
-        "resolveTerminalExecutionResult terminal write").dense();
+        "resolveTerminalExecutionResult terminal result").dense();
     if (static_cast<size_t>(slot_index) >= final_slot_values.size()) {
         throw std::runtime_error(
-            "resolveTerminalExecutionResult: terminal write slot is out of range");
+            "resolveTerminalExecutionResult: terminal result slot is out of range");
     }
     if (final_slot_valid[static_cast<size_t>(slot_index)] == 0) {
         throw std::runtime_error(
-            "resolveTerminalExecutionResult: terminal write slot is not valid");
+            "resolveTerminalExecutionResult: terminal result slot is not valid");
     }
 
     const float value = final_slot_values[static_cast<size_t>(slot_index)];

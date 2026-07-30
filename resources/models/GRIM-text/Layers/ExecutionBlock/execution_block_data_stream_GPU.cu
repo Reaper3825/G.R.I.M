@@ -208,7 +208,7 @@ __global__ void kernelApplyLogitMask(
 
 // [DELETED] kernelOperandConsistencyGrad — removed per Fix #1.
 // Value-path gradients must NOT leak into arg selection via any route.
-// Selection CE from TeacherSelectionTargets is the ONLY arg selection signal.
+// Selection CE from transition argument targets is the ONLY arg selection signal.
 
 __global__ void kernelFourOps(
     float* __restrict__ results,
@@ -684,6 +684,16 @@ void executeStepCoordinatorImpl(
     }
     const auto& slot_bindings =
         payload.compiled_slot_bindings[static_cast<std::size_t>(batch_row)];
+    if (payload.compiled_transition_bindings.empty() ||
+        batch_row >= static_cast<int>(
+            payload.compiled_transition_bindings.size())) {
+        throw std::runtime_error(
+            "executeStepCoordinatorImpl: row has no semantic/runtime "
+            "transition bindings");
+    }
+    const auto& transition_bindings =
+        payload.compiled_transition_bindings[
+            static_cast<std::size_t>(batch_row)];
 
     // Row-local device slot map: derived from BatchDeviceBindings (host BatchPayload no
     // longer carries device pointers — see Shared/Batching/BatchDeviceBindings.hpp).
@@ -788,18 +798,30 @@ void executeStepCoordinatorImpl(
         std::vector<int> h_slot1(N_prior), h_slot2(N_prior), h_ops(N_prior);
         std::vector<float> h_scalars(N_prior * 3);
         for (int i = 0; i < N_prior; ++i) {
+            const auto& record = prior_records[i];
+            if (record.invocation.arguments.size() != 2 ||
+                record.invocation.results.size() != 1 ||
+                record.argument_values.size() != 2 ||
+                record.result_values.size() != 1) {
+                throw std::runtime_error(
+                    "executeStepCoordinatorImpl: current executor history "
+                    "requires two arguments and one result");
+            }
             h_slot1[i] = Execution::requireSlotIndex(
                 slot_bindings,
-                prior_records[i].arg1_slot,
-                "executeStepCoordinatorImpl prior arg1").dense();
+                record.invocation.arguments[0],
+                "executeStepCoordinatorImpl prior argument 0").dense();
             h_slot2[i] = Execution::requireSlotIndex(
                 slot_bindings,
-                prior_records[i].arg2_slot,
-                "executeStepCoordinatorImpl prior arg2").dense();
-            h_ops[i] = prior_records[i].op_id;
-            h_scalars[i * 3 + 0] = prior_records[i].value_before_1;
-            h_scalars[i * 3 + 1] = prior_records[i].value_before_2;
-            h_scalars[i * 3 + 2] = prior_records[i].value_after;
+                record.invocation.arguments[1],
+                "executeStepCoordinatorImpl prior argument 1").dense();
+            h_ops[i] = Execution::requireTransitionIndex(
+                transition_bindings,
+                record.invocation.transition_id,
+                "executeStepCoordinatorImpl prior transition").dense();
+            h_scalars[i * 3 + 0] = record.argument_values[0];
+            h_scalars[i * 3 + 1] = record.argument_values[1];
+            h_scalars[i * 3 + 2] = record.result_values[0];
         }
 
         int *d_slot1 = nullptr, *d_slot2 = nullptr, *d_ops = nullptr;
@@ -1178,7 +1200,13 @@ void executeStepCoordinatorImpl(
         forward_output.metrics.inject_gate_value = h_inject_gate_value;
     }
     finalizeStepOrThrow(
-        hp, diag, forward_output, slot_bindings, step, stream);
+        hp,
+        diag,
+        forward_output,
+        slot_bindings,
+        transition_bindings,
+        step,
+        stream);
     forward_output.div_was_clamped = (h_div_flag != 0);
 }
 

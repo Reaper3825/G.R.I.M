@@ -474,12 +474,12 @@ void runExecutionBlockConnectedGraph(
             forward_outputs.selector_candidate_keys.data,
             request.stream);
 
-        if (payload.teacher_step_mask.empty()
-            || static_cast<int>(payload.teacher_step_mask.size()) <= b) {
+        if (payload.transition_target_mask.empty()
+            || static_cast<int>(payload.transition_target_mask.size()) <= b) {
             throw std::runtime_error(
-                "ModelForward: execution-active row has no teacher_step_mask");
+                "ModelForward: execution-active row has no transition_target_mask");
         }
-        const auto& step_mask = payload.teacher_step_mask[b];
+        const auto& step_mask = payload.transition_target_mask[b];
         int real_step_count = 0;
         bool saw_padding = false;
         for (int step = 0; step < exec_step_count; ++step) {
@@ -491,13 +491,13 @@ void runExecutionBlockConnectedGraph(
             }
             if (saw_padding) {
                 throw std::runtime_error(
-                    "ModelForward: teacher_step_mask must contain a contiguous real-step prefix");
+                    "ModelForward: transition_target_mask must contain a contiguous real-step prefix");
             }
             ++real_step_count;
         }
         if (real_step_count <= 0) {
             throw std::runtime_error(
-                "ModelForward: execution-active row has zero real teacher steps");
+                "ModelForward: execution-active row has zero real transition targets");
         }
 
         for (int step = 0; step < real_step_count; ++step) {

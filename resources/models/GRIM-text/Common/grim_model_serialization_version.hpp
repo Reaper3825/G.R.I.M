@@ -49,8 +49,12 @@ inline constexpr std::uint32_t GRIM_MODEL_VERSION = 16;
 //      int32 execution_prompt_length
 // v16: Replaced semantic raw slot integers with opaque uint64 SlotId values.
 //      Added CompiledSlotBinding[count] (SlotId -> dense int32 SlotIndex).
-//      Bootstrap bindings carry SlotIndex; TeacherStep carries SlotId fields.
+//      Bootstrap bindings carry SlotIndex; transition targets carry SlotId fields.
 //      There is no reader compatibility path for earlier execution metadata.
-inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 16;
+// v17: Replaced arithmetic-specific teacher records with variable-arity
+//      TransitionInvocation targets. Added opaque uint64 TransitionId values
+//      lowered through per-row CompiledTransitionBinding tables. Argument and
+//      result payload values remain outside transition metadata.
+inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 17;
 
 } // namespace GRIM

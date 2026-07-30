@@ -112,42 +112,43 @@ struct BatchPayload {
     std::shared_ptr<BatchDeviceStorage> device_storage;
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // TEACHER EXECUTION STEPS (for structured CE supervision)
-    // Populated for arithmetic batches; empty for non-execution batches.
-    // teacher_steps[b][k] = TeacherStep for batch row b, execution step k.
-    // When non-empty: teacher_steps.size() == batch_size, each inner vector
+    // TRANSITION TARGETS (for structured CE supervision)
+    // Populated for supervised execution rows; empty for non-execution rows.
+    // transition_targets[b][k] = TransitionInvocation for batch row b, execution step k.
+    // When non-empty: transition_targets.size() == batch_size, each inner vector
     // has exactly execution_block_num_steps entries (1:1 with ExecutionBlock steps).
     // ═══════════════════════════════════════════════════════════════════════════
-    std::vector<std::vector<GRIM::Execution::TeacherStep>> teacher_steps;
+    std::vector<std::vector<GRIM::Execution::TransitionInvocation>> transition_targets;
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // TEACHER STEP MASK (for padded-step loss zeroing)
-    // teacher_step_mask[b][k] = 1 for real steps, 0 for padded steps.
-    // Constructed at batch-build time from original teacher_steps count vs
+    // TRANSITION TARGET MASK (for padded-step loss zeroing)
+    // transition_target_mask[b][k] = 1 for real steps, 0 for padded steps.
+    // Constructed at batch-build time from original transition_targets count vs
     // execution_block_num_steps. Loss loops skip steps where mask == 0.
     // ═══════════════════════════════════════════════════════════════════════════
-    std::vector<std::vector<uint8_t>> teacher_step_mask;
+    std::vector<std::vector<uint8_t>> transition_target_mask;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // COMPILED STRUCTURED-EXECUTION PAYLOAD
     //
     // execution_active[b] is the AUTHORITATIVE activation bit per row.
-    // Non-empty teacher_steps is a supervised-training payload validity
+    // Non-empty transition_targets is a supervised-training payload validity
     // requirement, NOT the activation source.
     //
     // token_to_slot_index_map (above) is the runtime-address projection.
-    // teacher_steps (above) is the supervision projection.
+    // transition_targets (above) is the supervision projection.
     // compiled_bootstrap_bindings is the compiled provenance.
     //
-    // Runtime D_row is reconstructed from compiled_bootstrap_bindings ∪ teacher_steps.
+    // Runtime D_row is reconstructed from compiled_bootstrap_bindings ∪ transition_targets.
     // ═══════════════════════════════════════════════════════════════════════
-    // Supervised rows use this as the teacher-forced activation. Inference prefill
+    // Supervised rows use this as the dataset-authored activation. Inference prefill
     // starts inactive and lets the execution gate make the runtime decision.
     std::vector<bool> execution_active;    // [batch_size]
     std::vector<GRIM::Execution::ExecutionGateTarget> execution_gate_targets; // [batch_size]
     std::vector<int32_t> execution_prompt_end_positions; // [batch_size], row-relative
     std::vector<int32_t> execution_prompt_lengths;       // [batch_size]
     std::vector<std::vector<GRIM::Execution::CompiledSlotBinding>> compiled_slot_bindings; // [batch_size]
+    std::vector<std::vector<GRIM::Execution::CompiledTransitionBinding>> compiled_transition_bindings; // [batch_size]
     std::vector<std::vector<GRIM::Execution::CompiledBootstrapBinding>> compiled_bootstrap_bindings;  // [batch_size]
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -615,12 +616,12 @@ struct BatchPayload {
                     "does not agree with token_to_slot_index_map + atom_entry_ids");
             }
         }
-        // Teacher steps validation (when populated for arithmetic batches)
-        if (!teacher_steps.empty()) {
-            if (static_cast<int>(teacher_steps.size()) != batch_size) {
+        // Transition-target geometry validation
+        if (!transition_targets.empty()) {
+            if (static_cast<int>(transition_targets.size()) != batch_size) {
                 throw std::runtime_error(
-                    std::string(caller) + ": BatchPayload.teacher_steps.size()=" +
-                    std::to_string(teacher_steps.size()) + " != batch_size=" +
+                    std::string(caller) + ": BatchPayload.transition_targets.size()=" +
+                    std::to_string(transition_targets.size()) + " != batch_size=" +
                     std::to_string(batch_size));
             }
         }
@@ -633,14 +634,14 @@ struct BatchPayload {
                     std::to_string(execution_active.size()) + " != batch_size=" +
                     std::to_string(batch_size));
             }
-            // execution_active with false + non-empty teacher_steps is a structural error
+            // execution_active with false + non-empty transition_targets is a structural error
             for (int b = 0; b < batch_size; ++b) {
-                if (!execution_active[b] && !teacher_steps.empty()
-                    && !teacher_steps[b].empty()) {
+                if (!execution_active[b] && !transition_targets.empty()
+                    && !transition_targets[b].empty()) {
                     throw std::runtime_error(
                         std::string(caller) + ": row " + std::to_string(b) +
-                        " has execution_active=false but non-empty teacher_steps — "
-                        "teacher_steps alone do not activate execution");
+                        " has execution_active=false but non-empty transition_targets — "
+                        "transition_targets alone do not activate execution");
                 }
             }
         }
@@ -667,6 +668,14 @@ struct BatchPayload {
                 std::string(caller) + ": BatchPayload.compiled_slot_bindings.size()=" +
                 std::to_string(compiled_slot_bindings.size()) + " != batch_size=" +
                 std::to_string(batch_size));
+        }
+        if (!compiled_transition_bindings.empty() &&
+            static_cast<int>(compiled_transition_bindings.size()) != batch_size) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": BatchPayload.compiled_transition_bindings.size()=" +
+                std::to_string(compiled_transition_bindings.size()) +
+                " != batch_size=" + std::to_string(batch_size));
         }
         if (!compiled_bootstrap_bindings.empty()) {
             if (static_cast<int>(compiled_bootstrap_bindings.size()) != batch_size) {
@@ -772,6 +781,7 @@ BatchPayload buildInferenceBatchPayload(
     size_t max_cached_seq_len,
     int execution_num_slots,
     int execution_num_scratch_slots,
+    int execution_num_transitions,
     int number_encoder_digit_slots,
     int number_encoder_max_abs_pow10);
 

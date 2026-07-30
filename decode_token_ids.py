@@ -13,12 +13,10 @@ serialized records (4 special-token metadata records + learned unigram pieces),
 not the full token-space size. The token-space size is stored separately in the
 header and must equal special + bytes + atoms + learned pieces.
 
-Current training_data.grmt format is GRMT v12. Rows persist atom side channels
-(numeric payloads, atom masks/flags, and per-token atom text) plus execution
-metadata after the token arrays, so this script reads the full row and decodes
-atoms the same way the current tokenizer does: prefer persisted raw atom text,
-otherwise fall back to numeric payload formatting, otherwise show the atom-type
-placeholder.
+Current training_data.grmt format is GRMT v17. Rows persist atom side channels,
+per-sequence AtomTable data, opaque slot/transition lowering tables, and
+variable-arity transition invocations. This script reads the full current row
+layout and decodes atoms from their persisted AtomTable entries.
 
 Usage:
     python decode_token_ids.py
@@ -62,7 +60,8 @@ UNIGRAM_TOKEN_START = ATOM_TOKEN_END                 # 262
 KTMG_VOCAB_VERSION = 4
 KTMG_MAX_PIECE_LENGTH = 32
 GRMT_MAGIC = 0x474D5254
-GRMT_FORMAT_VERSION = 12
+GRMT_FORMAT_VERSION = 17
+ATOM_ENTRY_NONE = 0xFFFFFFFF
 PAD_TOKEN_ID = 1
 
 
@@ -126,6 +125,49 @@ def read_f32_array(f, count: int, source: str) -> list[float]:
 
 def skip_exact(f, size: int, source: str):
     read_exact(f, size, source)
+
+
+def read_atom_table_texts(f, source: str) -> dict[int, str]:
+    has_atom_table = read_u8(f, source)
+    if has_atom_table > 1:
+        raise ValueError(f"Invalid AtomTable presence flag in {source}: {has_atom_table}")
+    if has_atom_table == 0:
+        return {}
+    if read_exact(f, 4, source) != b"ATMB":
+        raise ValueError(f"Bad AtomTable magic in {source}")
+
+    entry_count = read_u32(f, source)
+    pool_size = read_u32(f, source)
+    raw_text_refs: dict[int, tuple[int, int]] = {}
+    for _ in range(entry_count):
+        skip_exact(f, 8, source)  # hash
+        entry_id = read_u32(f, source)
+        skip_exact(f, 8, source)  # type, category, origin, padding
+        raw_offset = read_u32(f, source)
+        raw_length = read_u32(f, source)
+        skip_exact(f, 36, source)  # confidence through reserved_zero
+        has_arg_number = read_u8(f, source)
+        if has_arg_number:
+            skip_exact(f, 82, source)  # fixed AtomNumber fields
+            digit_count = read_u32(f, source)
+            skip_exact(f, 15 * digit_count, source)
+        raw_text_refs[entry_id] = (raw_offset, raw_length)
+
+    skip_exact(f, 8 * entry_count, source)  # exact float payloads
+    skip_exact(f, 8 * entry_count, source)  # exact integer payloads
+    skip_exact(f, entry_count, source)      # numeric payload kinds
+    pool = read_exact(f, pool_size, source)
+
+    texts: dict[int, str] = {}
+    for entry_id, (offset, length) in raw_text_refs.items():
+        end = offset + length
+        if end > len(pool):
+            raise ValueError(
+                f"AtomTable raw text span is out of range in {source}: "
+                f"entry_id={entry_id} span=[{offset},{end}) pool_size={len(pool)}"
+            )
+        texts[entry_id] = pool[offset:end].decode("utf-8", errors="strict")
+    return texts
 
 
 # ── Token layout helpers ─────────────────────────────────────────────────────
@@ -332,19 +374,23 @@ def read_grmt_header(path: Path) -> dict:
 def iter_grmt_sequences(path: Path):
     """Yield decoded GRMT rows using the current persisted row layout.
 
-    GRMT v12 per-sequence layout (must read ALL fields to stay in sync):
+    GRMT v17 per-sequence layout (must read ALL fields to stay in sync):
       uint32         seq_len
       int32[seq_len] token_ids
       int32[seq_len] targets
       float[seq_len] numeric_values
       uint8[seq_len] atom_mask
       uint32[seq_len] atom_flags
-      repeated seq_len times: uint16 atom_text_len + atom_text bytes
-      uint8 execution_active
+      uint32[seq_len] atom_entry_ids
+      uint8 has_atom_table + optional AtomTable payload
+      uint8 execution_active, int8 execution_gate_target
+      int32 execution_prompt_end_pos, int32 execution_prompt_length
       int32[seq_len] token_exec_slots
+      uint32 compiled_slot_binding_count, then {uint64 SlotId, int32 SlotIndex}
+      uint32 compiled_transition_binding_count, then
+          {uint64 TransitionId, int32 TransitionIndex}
       uint32 compiled_bootstrap_binding_count, then 12 bytes each
-      uint32 teacher_step_count, then 20 bytes each
-      uint32 slot_selection_target_count, then {uint8 kind, int32 slot_id} each
+      uint32 transition_target_count, then variable-arity TransitionInvocation
     """
     with open(path, "rb") as f:
         source = str(path)
@@ -366,16 +412,25 @@ def iter_grmt_sequences(path: Path):
             token_numeric_values = read_f32_array(f, seq_len, row_source)
             token_atom_mask = list(read_exact(f, seq_len, row_source))
             token_atom_flags = read_u32_array(f, seq_len, row_source)
+            atom_entry_ids = read_u32_array(f, seq_len, row_source)
+            atom_table_texts = read_atom_table_texts(f, row_source)
+            missing_atom_entry_ids = sorted({
+                entry_id for entry_id in atom_entry_ids
+                if entry_id != ATOM_ENTRY_NONE and entry_id not in atom_table_texts
+            })
+            if missing_atom_entry_ids:
+                raise ValueError(
+                    f"GRMT atom_entry_ids are absent from the AtomTable in {row_source}: "
+                    f"{missing_atom_entry_ids}"
+                )
+            atom_texts = [
+                "" if entry_id == ATOM_ENTRY_NONE
+                else atom_table_texts.get(entry_id, "")
+                for entry_id in atom_entry_ids
+            ]
 
-            atom_texts = []
             for token_index in range(seq_len):
-                atom_text_len = read_u16(f, row_source)
-                if atom_text_len > 0:
-                    atom_text = read_exact(f, atom_text_len, row_source).decode("utf-8", errors="strict")
-                else:
-                    atom_text = ""
-                atom_texts.append(atom_text)
-
+                atom_text = atom_texts[token_index]
                 token_id = tokens[token_index]
                 token_is_atom = is_atom_token_id(token_id)
 
@@ -396,18 +451,27 @@ def iter_grmt_sequences(path: Path):
                     )
 
             execution_active = (read_u8(f, row_source) != 0)
+            skip_exact(f, 1, row_source)                          # execution_gate_target (int8)
+            skip_exact(f, 4, row_source)                          # execution_prompt_end_pos
+            skip_exact(f, 4, row_source)                          # execution_prompt_length
             skip_exact(f, 4 * seq_len, row_source)                # token_exec_slots (int32)
+
+            csb_count = read_u32(f, row_source)
+            skip_exact(f, 12 * csb_count, row_source)             # CompiledSlotBinding
+
+            ctb_count = read_u32(f, row_source)
+            skip_exact(f, 12 * ctb_count, row_source)             # CompiledTransitionBinding
 
             cbb_count = read_u32(f, row_source)
             skip_exact(f, 12 * cbb_count, row_source)             # CompiledBootstrapBinding
 
-            teacher_step_count = read_u32(f, row_source)
-            skip_exact(f, 20 * teacher_step_count, row_source)    # TeacherStep
-
-            slot_selection_target_count = read_u32(f, row_source)
-            for _ in range(slot_selection_target_count):
-                skip_exact(f, 1, row_source)                      # SlotSelectionTargetKind uint8
-                skip_exact(f, 4, row_source)                      # slot_id int32
+            transition_target_count = read_u32(f, row_source)
+            for _ in range(transition_target_count):
+                skip_exact(f, 8, row_source)                      # TransitionId
+                argument_count = read_u32(f, row_source)
+                skip_exact(f, 8 * argument_count, row_source)     # argument SlotIds
+                result_count = read_u32(f, row_source)
+                skip_exact(f, 8 * result_count, row_source)       # result SlotIds
 
             yield GrmtSequenceRecord(
                 index=idx,

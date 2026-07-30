@@ -39,6 +39,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -165,6 +166,18 @@ json slotIdentityJson(GRIM::Execution::SlotId id) {
     return id.valid() ? json(id.serialized()) : json(nullptr);
 }
 
+json transitionIdentityJson(GRIM::Execution::TransitionId id) {
+    return id.valid() ? json(id.serialized()) : json(nullptr);
+}
+
+json slotIdentitiesJson(const std::vector<GRIM::Execution::SlotId>& ids) {
+    json values = json::array();
+    for (const auto id : ids) {
+        values.push_back(slotIdentityJson(id));
+    }
+    return values;
+}
+
 json inferenceStatsJson(const GRIMText::Training::Phase2TextInferenceResult& result) {
     const char* gate_decision = !result.execution_control.gate_evaluated
         ? "not_evaluated"
@@ -177,13 +190,11 @@ json inferenceStatsJson(const GRIMText::Training::Phase2TextInferenceResult& res
             {"decision", step.predicted_class == 1 ? "stop" : "continue"},
             {"continue_probability", step.continue_probability},
             {"stop_probability", step.stop_probability},
-            {"arg1_slot_id", slotIdentityJson(step.arg1_slot)},
-            {"arg2_slot_id", slotIdentityJson(step.arg2_slot)},
-            {"op_id", step.op_id},
-            {"write_slot_id", slotIdentityJson(step.write_slot)},
-            {"value_before_1", step.value_before_1},
-            {"value_before_2", step.value_before_2},
-            {"value_after", step.value_after}
+            {"transition_id", transitionIdentityJson(step.invocation.transition_id)},
+            {"argument_slot_ids", slotIdentitiesJson(step.invocation.arguments)},
+            {"result_slot_ids", slotIdentitiesJson(step.invocation.results)},
+            {"argument_values", step.argument_values},
+            {"result_values", step.result_values}
         });
     }
     return json{

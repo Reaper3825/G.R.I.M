@@ -375,6 +375,12 @@ GRIM::GeneratedSequence generateOneSequence(
                 }
                 telemetry.compiled_slot_bindings =
                     active_payload.compiled_slot_bindings.front();
+                if (active_payload.compiled_transition_bindings.empty()) {
+                    throw std::runtime_error(
+                        "generateOneSequence: execution telemetry has no compiled transition bindings");
+                }
+                telemetry.compiled_transition_bindings =
+                    active_payload.compiled_transition_bindings.front();
                 telemetry.steps.reserve(execution_output.steps.size());
                 for (size_t step_idx = 0; step_idx < execution_output.steps.size(); ++step_idx) {
                     const auto& step = execution_output.steps[step_idx];
@@ -384,13 +390,9 @@ GRIM::GeneratedSequence generateOneSequence(
                         step.stop_predicted_class,
                         step.continue_probability,
                         step.stop_probability,
-                        record.arg1_slot,
-                        record.arg2_slot,
-                        record.op_id,
-                        record.write_slot,
-                        record.value_before_1,
-                        record.value_before_2,
-                        record.value_after});
+                        record.invocation,
+                        record.argument_values,
+                        record.result_values});
                 }
             }
 
@@ -521,6 +523,7 @@ GRIM::GeneratedSequence generateOneSequence(
             vocab_size, /*batch_capacity=*/1, /*max_cached_seq_len=*/1,
             execution_hp.num_slots,
             execution_hp.num_scratch_slots,
+            execution_hp.num_ops,
             number_encoder_hp.enabled ? number_encoder_hp.max_digit_slots : 0,
             number_encoder_hp.max_abs_pow10);
         decode_payload.mode = GRIM::Batching::BatchPayloadMode::InferenceDecode;
@@ -853,6 +856,7 @@ Phase2TextInferenceResult executePhase2TextInference(
         static_cast<size_t>(max_cached_seq_len),
         execution_hp.num_slots,
         execution_hp.num_scratch_slots,
+        execution_hp.num_ops,
         number_encoder_hp.enabled ? number_encoder_hp.max_digit_slots : 0,
         number_encoder_hp.max_abs_pow10);
 

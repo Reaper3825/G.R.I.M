@@ -527,8 +527,8 @@ GRIMText::Training::Startup::ForwardTopologyView validateTrainingForwardInputs(
         execution_hp.num_ops,
         execution_hp.num_exec_steps);
 
-    if (!payload.teacher_steps.empty() && !execution_hp.enabled) {
-        std::cerr << "[Phase2] WARN: batch has teacher_steps while execution_block_enabled=false; "
+    if (!payload.transition_targets.empty() && !execution_hp.enabled) {
+        std::cerr << "[Phase2] WARN: batch has transition_targets while execution_block_enabled=false; "
                   << "training with plain cross-entropy over text tokens" << std::endl;
     }
     return gpu_model.requireForwardTopology(config, caller);

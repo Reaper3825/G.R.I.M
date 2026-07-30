@@ -86,14 +86,14 @@ concept_blocks.jsonl
 │  Compile execution payload  │  Match each bootstrap literal's
 │  via byte-offset            │  byte range against the tokenizer's
 │  intersection               │  StructuralSpan content_offset.
-│                             │  Assigns slot_id to token position.
+│                             │  Assigns compiled SlotIndex to token position.
 └──────────────┬──────────────┘
                │
                ▼
 ┌─────────────────────────────┐
 │  Write GRMT binary          │  Per-sequence: token_exec_slots,
-│  training data              │  teacher_steps, compiled bindings,
-│                             │  slot_selection_targets
+│  training data              │  transition_targets, compiled slot
+│                             │  and transition bindings
 └─────────────────────────────┘
 ```
 
@@ -108,14 +108,15 @@ concept_blocks.jsonl
    - Selects two operand slots via learned attention over register state embeddings
    - Selects an operation (+, −, ×, ÷) via a learned distribution
    - Computes the result and writes it to a learned destination slot
-   - The **teacher steps** provide the ground truth for what *should* happen
+   - `TransitionInvocation` targets provide the executable transition and its
+     ordered argument/result slot identities
 
 3. **Cross-Attention Read**: After execution, subsequent encoder layers can
    read from the register file via cross-attention.
 
 4. **Loss Computation**: The execution block contributes several loss terms:
-   - **Structured CE**: Cross-entropy on arg selection, op selection, write
-     destination against teacher steps
+   - **Structured CE**: Cross-entropy on argument, transition, and result-slot
+     selection after opaque identities are lowered through per-row bindings
    - **Entropy regularization**: Prevents distribution collapse
    - **Causal consistency**: Validates multi-step sequential reasoning
    - **Selector supervision** (when enabled): Teaches the decode-time slot
@@ -229,6 +230,11 @@ var, but you should leave it at 0 unless you have a specific reason).
 
 ### 4.3 Slot Numbering for Execution Steps
 
+Slot numbers in source examples are authoring-local ordinals only. The durable
+contract stores opaque `SlotId` identities and a per-row
+`CompiledSlotBinding`; neither the teacher nor runtime may infer meaning from
+the ordinal, a `STATE` label, or a dense `SlotIndex`.
+
 Each execution step's result is automatically written to the next slot after
 all bootstrap slots:
 
@@ -239,7 +245,8 @@ If state_0.atoms has 2 values (slots 0 and 1):
   ...
 ```
 
-You do **not** specify `write_slot` in your JSON — it is derived automatically.
+You do **not** specify a result slot in your JSON — its opaque `SlotId` is
+derived automatically and placed in `TransitionInvocation.results`.
 If you need more steps than available slots, increase `num_slots` in config.
 
 ### 4.4 Non-State-Bearing Tokens
@@ -254,14 +261,20 @@ assigned automatically. You do not control it in your JSON.
 
 ### 5.1 Supported Operations
 
-| `op` string | Operation | op_id |
-|-------------|-----------|-------|
+| `op` string | Current executor transition | Dense `TransitionIndex` |
+|-------------|-----------------------------|-------------------------|
 | `"add"` or `"+"` | Addition | 0 |
 | `"sub"` or `"-"` | Subtraction | 1 |
 | `"mul"` or `"*"` | Multiplication | 2 |
 | `"div"` or `"/"` | Division (safe — crashes on zero divisor) | 3 |
 
 There are exactly 4 operations. No other op strings are accepted.
+
+These numbers are positions in the current arithmetic dispatcher, not semantic
+operation identities. The compiled payload assigns an opaque `TransitionId`
+and lowers it through `CompiledTransitionBinding`. Future tools, model routes,
+and physical actions use the same `TransitionInvocation` representation with
+their own signatures; slot payload composition remains an `AtomTable` concern.
 
 ### 5.2 Arg Resolution
 
@@ -335,43 +348,12 @@ For the example above: need `num_slots >= 5` and `num_steps >= 2`.
 
 ---
 
-## 6. Selector Supervision (Advanced)
+## 6. Result Emission
 
-The **decode-time slot selector** is a separate learned module that decides,
-during generation, which register slot a generated `<NUM>` token should bind
-to. This is needed at inference time when the model generates new numbers.
-
-### 6.1 How It Works
-
-At each decode position during generation:
-- If the model wants to generate a `<NUM>` token, the selector evaluates all
-  live (valid) slots and either selects one (**Selected**), selects none
-  (**Null**), or finds ambiguity (**Ambiguous**)
-- **Selected**: the `<NUM>` token binds to that slot's value
-- **Null** or **Ambiguous**: the `<NUM>` token is **masked out** — it cannot
-  be generated at that position
-
-### 6.2 Providing Selector Supervision in Your Data
-
-For each token position in a sequence, you can specify a **selector supervision
-target** with one of three kinds:
-
-| Kind | Meaning | When to use |
-|------|---------|-------------|
-| **Ignore** | This position does not participate in selector loss | Default for all positions; use for non-numeric tokens |
-| **Null** | The correct answer is "no slot selected" | Positions where a `<NUM>` appears but should NOT bind to any slot |
-| **Slot** | The correct answer is a specific slot_id | Positions where a `<NUM>` should bind to a known slot |
-
-### 6.3 Current Default
-
-The builder currently emits **all-Ignore** for selector supervision targets.
-This means selector supervision loss is zero — the selector learns only from
-end-to-end gradient pressure.
-
-To enable explicit selector supervision, set `selector.supervision_weight > 0`
-in `ai_config.json` and populate `slot_selection_targets` in your data
-pipeline. This is an advanced feature; for most use cases, all-Ignore is
-correct and sufficient.
+The old decode-time slot selector and its `slot_selection_targets` channel are
+deleted. A completed execution result is exposed only from the explicit result
+slot of the final `TransitionInvocation` after the learned stop controller
+chooses `STOP`. Do not recreate an execution-state selector to infer this slot.
 
 ---
 
@@ -556,8 +538,8 @@ Violations produce an exception with a descriptive error message.
 | Rule | Error |
 |------|-------|
 | `token_to_slot_map` slot_id outside `[0, num_slots)` and not -1 | "slot_id=N at position P out of range" |
-| `teacher_steps` count doesn't match config `num_steps` | Validation failure |
-| `slot_selection_targets` length != sequence length | Validation failure |
+| `transition_targets` count doesn't match config `num_steps` | Validation failure |
+| Slot or transition identity has no compiled row binding | Validation failure |
 
 ---
 

@@ -4,6 +4,29 @@ This document explains how to **structure training (and inference) sequences** s
 
 It is **not** a substitute for `DOCUMENTATION.md` kernel-level detail; it focuses on **data design**, **supervision**, and **expectations**.
 
+The durable supervision unit is a domain-neutral `TransitionInvocation`:
+
+```text
+TransitionInvocation {
+    transition_id
+    arguments: [SlotId, ...]
+    results:   [SlotId, ...]
+}
+```
+
+`SlotId` and `TransitionId` are opaque identities. They do not mean `STATE 0`,
+addition, a numeric register, or a dense tensor address. Per-row compiled
+binding tables lower them to the current executor's `SlotIndex` and
+`TransitionIndex`. Slot payloads, types, objects, and internal composition
+belong to `AtomTable` and runtime state, not to transition metadata.
+
+The current CUDA executor implements binary scalar arithmetic, so its adapter
+requires two arguments and one result. That is an executor capability boundary,
+not the representation contract. A future mouse-move or tool-call transition
+uses the same invocation shape with its own signature; for example, a mouse
+transition consumes coordinate-bearing slots as action arguments rather than
+grouping those values inside a slot.
+
 ---
 
 ## What you provide vs what the model learns
@@ -11,15 +34,16 @@ It is **not** a substitute for `DOCUMENTATION.md` kernel-level detail; it focuse
 | Responsibility | You (data / pipeline) | Model (trained weights) |
 |----------------|-------------------------|-------------------------|
 | Which literal initializes which runtime register | `token_to_slot_index_map` per token (`-1` = non-state) + numeric side channel; `bootstrapMemoryFromSlotMap` copies into `M.values[index]` | — |
-| Which semantic slot is arg1 / arg2 | `teacher_steps` supplies opaque `SlotId` targets; `compiled_slot_bindings` lowers them to per-row `SlotIndex` values | `w_arg1_select` scores arg1 over **value-slot** rows; `W_arg1_to_arg2` projects its soft candidate summary into the `w_arg2_select` query before argmax and hard reads from `M.values` |
-| Which operation (+ − * /) | — | `W_op_select_` from pooled context + soft arg hiddens; softmax → argmax → `kernelHardPickOpForward` |
-| Where to write the result | — | Write head softmax over `V` (scratch masked) → argmax → `kernelHardWriteScalarDev` |
+| Which semantic slots are arguments | `transition_targets.arguments` supplies ordered opaque `SlotId` targets; `compiled_slot_bindings` lowers them per row | Current `w_arg1_select` / `w_arg2_select` heads predict the two arithmetic arguments |
+| Which transition executes | `transition_targets.transition_id` supplies an opaque target; `compiled_transition_bindings` lowers it per row | Current `W_op_select_` head predicts a dense arithmetic dispatcher class |
+| Which semantic slots receive results | `transition_targets.results` supplies ordered opaque `SlotId` targets | Current write head predicts the one scalar result slot |
 | What token to predict next | Targets in the batch / LM loss | LM head, injection path, rest of encoder |
 
-The compiled `teacher_steps` payload supplies gold arg1/arg2 slots. When
-structured CE is enabled, those targets directly supervise both selector
-logits; arg2 CE also flows through the conditional summary into arg1 once the
-zero-initialized conditional projection begins to move.
+The compiled `transition_targets` payload supplies gold transition, argument,
+and result identities. Structured CE lowers those identities through the
+per-row tables and supervises the current transition/argument/result heads.
+No target value is stored in the invocation and no meaning is inferred from an
+identity or ordinal.
 
 ---
 
@@ -62,20 +86,16 @@ Start with a **stable surface form**, then diversify:
 
 ## How the model learns to “identify args”
 
-### Default (no new code)
+### Current selector path
 
 - Arg logits are built from **slot-only** candidate hiddens (`M.state_embeds` masked by validity).
 - Forward: **argmax** chooses operand slots; **values** come only from **`M.values`** at those indices.
 - Backward: **straight-through** style routing sends gradients through **softmax** on arg distributions (see `SlotValueSTGradFn` and related autograd nodes in `execution_block_GPU.cu`).
 
-So the model learns **which slots to read** only if **incorrect reads hurt** the scalar or representation paths that your **actual loss** differentiates through.
-
-### If arg selection is too weak
-
-Add **explicit supervision** (requires training changes), for example:
-
-- Auxiliary cross-entropy on **`p_arg1` / `p_arg2`** against gold opaque `SlotId` targets lowered through `compiled_slot_bindings`, or
-- Intermediate **copy/move** tasks (“value in slot i should appear in slot j”) before harder arithmetic.
+Structured CE explicitly supervises **`p_arg1` / `p_arg2`** against opaque
+argument `SlotId` targets lowered through `compiled_slot_bindings`. Scalar and
+representation paths provide additional task pressure without becoming the
+source of semantic slot identity.
 
 ---
 
@@ -134,7 +154,11 @@ Structured fields in JSON may include:
 
 Encoding path: canonical text (`Q:`, `STATE0`, `EXEC`, …) plus a trailing **`__SLOTS__`** block (one numeric per line; order = `state_0.atoms` then each execution step’s `args` + `result`). The **last K numeric atoms** in the tokenized sequence get `token_exec_slots` = `base + 0..K-1` (base from env **`GRIM_CONCEPT_EXEC_BASE_SLOT`**, default `0`).
 
-**GRMT v10** appended `token_exec_slots[len]` after per-token atom strings. Current GRMT uses opaque `SlotId` teacher targets plus explicit compiled slot bindings.
+Those labels are surface text only. They are not semantic identities and the
+teacher/runtime must not derive slot or transition meaning from them.
+
+Current GRMT uses opaque slot and transition identities, explicit per-row
+lowering tables, and variable-arity `TransitionInvocation` records.
 
 ### Target architecture (what it should look like later)
 
@@ -150,4 +174,5 @@ Until that exists, the debug path above is intentionally redundant (block JSON i
 
 ---
 
-*Last updated to match the slot-only, hard-read/hard-write ExecutionBlock design and inference slot-map wiring.*
+*Last updated for the opaque transition-invocation contract and the current
+binary-scalar executor adapter.*

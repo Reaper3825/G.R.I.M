@@ -21,13 +21,9 @@ struct ExecutionStepControlTelemetry {
     int predicted_class = -1;  // 0=CONTINUE, 1=STOP
     float continue_probability = 0.0f;
     float stop_probability = 0.0f;
-    Execution::SlotId arg1_slot;
-    Execution::SlotId arg2_slot;
-    int op_id = -1;
-    Execution::SlotId write_slot;
-    float value_before_1 = 0.0f;
-    float value_before_2 = 0.0f;
-    float value_after = 0.0f;
+    Execution::TransitionInvocation invocation;
+    std::vector<float> argument_values;
+    std::vector<float> result_values;
 };
 
 struct ExecutionControlTelemetry {
@@ -48,6 +44,7 @@ struct ExecutionControlTelemetry {
     int terminal_result_emission_token_index = -1;
     std::vector<ExecutionStepControlTelemetry> steps;
     std::vector<Execution::CompiledSlotBinding> compiled_slot_bindings;
+    std::vector<Execution::CompiledTransitionBinding> compiled_transition_bindings;
     std::vector<float> final_slot_values;
     std::vector<uint8_t> final_slot_valid;
 };

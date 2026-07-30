@@ -264,7 +264,7 @@ GradientVerificationActivity detectGradientVerificationActivity(AutogradContext&
     if (ctx.loss_state) {
         const auto& loss_state = *ctx.loss_state;
         // These flags are set only by computeAutogradLoss() when an execution
-        // loss term passes execution_active / teacher_step_mask filtering and is
+        // loss term passes execution_active / transition_target_mask filtering and is
         // actually added into the normalized execution auxiliary objective.
         // Do not infer activity from exec_outputs_per_row: that includes padded
         // or inactive diagnostics that may never reach loss_tensor.

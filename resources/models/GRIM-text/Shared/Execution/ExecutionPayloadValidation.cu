@@ -63,6 +63,13 @@ void validateExecutionPayload(
             std::to_string(payload.compiled_slot_bindings.size()) +
             " != batch_size=" + std::to_string(B));
     }
+    if (!payload.compiled_transition_bindings.empty() &&
+        static_cast<int>(payload.compiled_transition_bindings.size()) != B) {
+        throw std::runtime_error(
+            tag + ": compiled_transition_bindings.size()=" +
+            std::to_string(payload.compiled_transition_bindings.size()) +
+            " != batch_size=" + std::to_string(B));
+    }
     if (!payload.compiled_bootstrap_bindings.empty() &&
         static_cast<int>(payload.compiled_bootstrap_bindings.size()) != B) {
         throw std::runtime_error(
@@ -70,11 +77,11 @@ void validateExecutionPayload(
             std::to_string(payload.compiled_bootstrap_bindings.size()) +
             " != batch_size=" + std::to_string(B));
     }
-    if (!payload.teacher_steps.empty() &&
-        static_cast<int>(payload.teacher_steps.size()) != B) {
+    if (!payload.transition_targets.empty() &&
+        static_cast<int>(payload.transition_targets.size()) != B) {
         throw std::runtime_error(
-            tag + ": teacher_steps.size()=" +
-            std::to_string(payload.teacher_steps.size()) +
+            tag + ": transition_targets.size()=" +
+            std::to_string(payload.transition_targets.size()) +
             " != batch_size=" + std::to_string(B));
     }
 
@@ -132,21 +139,24 @@ void validateExecutionPayload(
         const auto& csb = payload.compiled_slot_bindings.empty()
             ? std::vector<CompiledSlotBinding>{}
             : payload.compiled_slot_bindings[b];
-        const auto& ts = payload.teacher_steps.empty()
-            ? std::vector<TeacherStep>{}
-            : payload.teacher_steps[b];
+        const auto& ctb = payload.compiled_transition_bindings.empty()
+            ? std::vector<CompiledTransitionBinding>{}
+            : payload.compiled_transition_bindings[b];
+        const auto& targets = payload.transition_targets.empty()
+            ? std::vector<TransitionInvocation>{}
+            : payload.transition_targets[b];
 
         if (!active) {
             // ─────────────────────────────────────────────────────────────────
             // NON-EXECUTION ROW
             // ─────────────────────────────────────────────────────────────────
 
-            // teacher_steps must be empty
-            if (!ts.empty()) {
+            // transition_targets must be empty
+            if (!targets.empty()) {
                 throw std::runtime_error(row_tag(
-                    "has execution_active=false but non-empty teacher_steps ("
-                    + std::to_string(ts.size()) + " steps) — "
-                    "teacher_steps alone do not activate execution"));
+                    "has execution_active=false but non-empty transition_targets ("
+                    + std::to_string(targets.size()) + " steps) — "
+                    "transition_targets alone do not activate execution"));
             }
 
             // compiled_bootstrap_bindings must be empty
@@ -159,6 +169,12 @@ void validateExecutionPayload(
                 throw std::runtime_error(row_tag(
                     "has execution_active=false but non-empty compiled_slot_bindings ("
                     + std::to_string(csb.size()) + " bindings)"));
+            }
+            if (!ctb.empty()) {
+                throw std::runtime_error(row_tag(
+                    "has execution_active=false but non-empty "
+                    "compiled_transition_bindings (" +
+                    std::to_string(ctb.size()) + " bindings)"));
             }
 
             // all token_exec_slot_indices in this row must be -1
@@ -187,11 +203,17 @@ void validateExecutionPayload(
                     "compiled_slot_bindings.size()=" + std::to_string(csb.size()) +
                     " != execution_block_num_slots=" + std::to_string(num_slots)));
             }
-
-            // teacher_steps must have exactly num_steps entries
-            if (static_cast<int>(ts.size()) != num_steps) {
+            if (static_cast<int>(ctb.size()) != num_ops) {
                 throw std::runtime_error(row_tag(
-                    "teacher_steps.size()=" + std::to_string(ts.size()) +
+                    "compiled_transition_bindings.size()=" +
+                    std::to_string(ctb.size()) +
+                    " != execution_block_num_ops=" + std::to_string(num_ops)));
+            }
+
+            // transition_targets must have exactly num_steps entries
+            if (static_cast<int>(targets.size()) != num_steps) {
+                throw std::runtime_error(row_tag(
+                    "transition_targets.size()=" + std::to_string(targets.size()) +
                     " != execution_block_num_steps=" + std::to_string(num_steps)));
             }
 
@@ -224,6 +246,39 @@ void validateExecutionPayload(
                     throw std::runtime_error(row_tag(
                         "compiled_slot_bindings has duplicate runtime SlotIndex=" +
                         describeSlotIndex(binding.slot_index)));
+                }
+            }
+
+            std::unordered_set<std::uint64_t> transition_ids;
+            std::unordered_set<int32_t> transition_indices;
+            for (size_t i = 0; i < ctb.size(); ++i) {
+                const auto& binding = ctb[i];
+                if (!binding.transition_id.valid()) {
+                    throw std::runtime_error(row_tag(
+                        "compiled_transition_bindings[" + std::to_string(i) +
+                        "] has invalid semantic TransitionId"));
+                }
+                if (!binding.transition_index.valid() ||
+                    binding.transition_index.dense() >= num_ops) {
+                    throw std::runtime_error(row_tag(
+                        "compiled_transition_bindings[" + std::to_string(i) +
+                        "].transition_index=" +
+                        describeTransitionIndex(binding.transition_index) +
+                        " out of range [0, " + std::to_string(num_ops) + ")"));
+                }
+                if (!transition_ids.insert(
+                        binding.transition_id.serialized()).second) {
+                    throw std::runtime_error(row_tag(
+                        "compiled_transition_bindings has duplicate "
+                        "TransitionId=" +
+                        describeTransitionId(binding.transition_id)));
+                }
+                if (!transition_indices.insert(
+                        binding.transition_index.dense()).second) {
+                    throw std::runtime_error(row_tag(
+                        "compiled_transition_bindings has duplicate "
+                        "TransitionIndex=" +
+                        describeTransitionIndex(binding.transition_index)));
                 }
             }
 
@@ -286,31 +341,55 @@ void validateExecutionPayload(
                 }
             }
 
-            // ── Teacher step range checks ──
+            // ── Transition target resolution and current executor arity ──
 
-            for (int k = 0; k < static_cast<int>(ts.size()); ++k) {
-                const auto& step = ts[k];
-
-                if (step.op_id < 0 || step.op_id >= num_ops) {
+            for (int k = 0; k < static_cast<int>(targets.size()); ++k) {
+                const auto& invocation = targets[k];
+                (void)requireTransitionIndex(
+                    ctb,
+                    invocation.transition_id,
+                    row_tag(
+                        "transition_targets[" + std::to_string(k) +
+                        "].transition_id"));
+                if (invocation.arguments.size() != 2) {
                     throw std::runtime_error(row_tag(
-                        "teacher_steps[" + std::to_string(k) + "].op_id=" +
-                        std::to_string(step.op_id) + " out of range [0, " +
-                        std::to_string(num_ops) + ")"));
+                        "transition_targets[" + std::to_string(k) +
+                        "].arguments.size()=" +
+                        std::to_string(invocation.arguments.size()) +
+                        " but the current executor requires 2"));
                 }
-                (void)requireSlotIndex(
-                    csb, step.arg1_slot,
-                    row_tag("teacher_steps[" + std::to_string(k) + "].arg1_slot"));
-                (void)requireSlotIndex(
-                    csb, step.arg2_slot,
-                    row_tag("teacher_steps[" + std::to_string(k) + "].arg2_slot"));
-                (void)requireSlotIndex(
-                    csb, step.write_slot,
-                    row_tag("teacher_steps[" + std::to_string(k) + "].write_slot"));
+                if (invocation.results.size() != 1) {
+                    throw std::runtime_error(row_tag(
+                        "transition_targets[" + std::to_string(k) +
+                        "].results.size()=" +
+                        std::to_string(invocation.results.size()) +
+                        " but the current executor requires 1"));
+                }
+                for (std::size_t argument = 0;
+                     argument < invocation.arguments.size();
+                     ++argument) {
+                    (void)requireSlotIndex(
+                        csb,
+                        invocation.arguments[argument],
+                        row_tag(
+                            "transition_targets[" + std::to_string(k) +
+                            "].arguments[" + std::to_string(argument) + "]"));
+                }
+                for (std::size_t result = 0;
+                     result < invocation.results.size();
+                     ++result) {
+                    (void)requireSlotIndex(
+                        csb,
+                        invocation.results[result],
+                        row_tag(
+                            "transition_targets[" + std::to_string(k) +
+                            "].results[" + std::to_string(result) + "]"));
+                }
             }
 
-            // ── Reconstruct D_row from compiled_bootstrap_bindings ∪ teacher_steps ──
+            // ── Reconstruct D_row from compiled_bootstrap_bindings ∪ transition_targets ──
 
-            std::vector<SlotId> d_row = reconstructSlotDomain(csb, cbb, ts);
+            std::vector<SlotId> d_row = reconstructSlotDomain(csb, cbb, targets);
 
             // Every semantic domain member must lower through the row binding table.
             for (SlotId slot : d_row) {

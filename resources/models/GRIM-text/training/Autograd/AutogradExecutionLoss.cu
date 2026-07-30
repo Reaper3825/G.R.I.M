@@ -10,12 +10,14 @@
 #include "../../Layers/ExecutionBlock/execution_block_internal.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
+#include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/TensorContract/GradFns/NormalizedEntropyGradFn.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 
 #include <cuda_runtime.h>
 
 #include <cmath>
+#include <cstdio>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -137,11 +139,17 @@ void requirePositiveTemperature(float temperature, int row, int step) {
     }
 }
 
-int requireOpTarget(int target, int num_ops, int row, int step, const char* label) {
-    if (target < 0 || target >= num_ops) {
+int requireTransitionTarget(
+    int target,
+    int num_transitions,
+    int row,
+    int step,
+    const char* label)
+{
+    if (target < 0 || target >= num_transitions) {
         throw std::runtime_error(
             std::string("addExecutionAuxiliaryLoss: ") + label + "=" + std::to_string(target)
-            + " is outside [0," + std::to_string(num_ops) + ") at row="
+            + " is outside [0," + std::to_string(num_transitions) + ") at row="
             + std::to_string(row) + " step=" + std::to_string(step));
     }
     return target;
@@ -161,7 +169,7 @@ int requireValueSlotTarget(int slot_index, int scratch_slots, int num_slots, int
 int requireWriteTarget(int slot_index, int scratch_slots, int num_slots, int row, int step) {
     if (slot_index < scratch_slots || slot_index >= num_slots) {
         throw std::runtime_error(
-            "addExecutionAuxiliaryLoss: teacher write_slot_index=" + std::to_string(slot_index)
+            "addExecutionAuxiliaryLoss: transition result slot_index=" + std::to_string(slot_index)
             + " is outside writable slot range [" + std::to_string(scratch_slots)
             + "," + std::to_string(num_slots) + ") at row="
             + std::to_string(row) + " step=" + std::to_string(step));
@@ -204,7 +212,7 @@ void requireInitializedValueTarget(
             + " step=" + std::to_string(step)
             + " slot_index=" + std::to_string(slot_index)
             + " state_before_valid=" + std::to_string(valid)
-            + "; teacher argument targets must reference slots initialized by "
+            + "; transition argument targets must reference slots initialized by "
               "bootstrap or an earlier write");
     }
 }
@@ -275,11 +283,11 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
             + std::to_string(payload.execution_active.size())
             + " does not match payload.batch_size=" + std::to_string(payload.batch_size));
     }
-    if (!payload.teacher_step_mask.empty()
-        && static_cast<int>(payload.teacher_step_mask.size()) != payload.batch_size) {
+    if (!payload.transition_target_mask.empty()
+        && static_cast<int>(payload.transition_target_mask.size()) != payload.batch_size) {
         throw std::runtime_error(
-            "addExecutionAuxiliaryLoss: teacher_step_mask size="
-            + std::to_string(payload.teacher_step_mask.size())
+            "addExecutionAuxiliaryLoss: transition_target_mask size="
+            + std::to_string(payload.transition_target_mask.size())
             + " does not match payload.batch_size=" + std::to_string(payload.batch_size));
     }
     if (!payload.execution_gate_targets.empty()
@@ -288,19 +296,19 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
             "addExecutionAuxiliaryLoss: execution_gate_targets size does not match batch_size");
     }
 
-    const bool need_teacher_targets =
+    const bool need_transition_targets =
         (model_hp.structured_ce_enabled && model_hp.execution_block_structured_ce_weight > 0.0f)
         || (model_hp.execution_block_stop_ce_weight > 0.0f);
 
-    if (need_teacher_targets) {
-        if (payload.teacher_steps.empty()) {
+    if (need_transition_targets) {
+        if (payload.transition_targets.empty()) {
             throw std::runtime_error(
-                "addExecutionAuxiliaryLoss: teacher-dependent execution losses are enabled but payload.teacher_steps is empty");
+                "addExecutionAuxiliaryLoss: transition-target losses are enabled but payload.transition_targets is empty");
         }
-        if (static_cast<int>(payload.teacher_steps.size()) != payload.batch_size) {
+        if (static_cast<int>(payload.transition_targets.size()) != payload.batch_size) {
             throw std::runtime_error(
-                "addExecutionAuxiliaryLoss: teacher_steps size="
-                + std::to_string(payload.teacher_steps.size())
+                "addExecutionAuxiliaryLoss: transition_targets size="
+                + std::to_string(payload.transition_targets.size())
                 + " does not match payload.batch_size=" + std::to_string(payload.batch_size));
         }
     }
@@ -326,7 +334,7 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
     int ce_tensor_count = 0;
     float ce_scalar_sum = 0.0f;
     int monitored_entropy_rows = 0;
-    const bool have_step_mask = !payload.teacher_step_mask.empty();
+    const bool have_step_mask = !payload.transition_target_mask.empty();
     const float ce_weight = model_hp.execution_block_structured_ce_weight;
     const float execute_ce_weight = model_hp.execution_block_execute_ce_weight;
     const float stop_ce_weight = model_hp.execution_block_stop_ce_weight;
@@ -408,40 +416,40 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
         Tensor row_entropy_sum;
         bool have_row_entropy_sum = false;
         int row_entropy_terms = 0;
-        const std::vector<Execution::TeacherStep>* teacher_row = nullptr;
-        if (!payload.teacher_steps.empty()) {
-            teacher_row = &payload.teacher_steps[b];
-            int real_teacher_steps = 0;
+        const std::vector<Execution::TransitionInvocation>* target_row = nullptr;
+        if (!payload.transition_targets.empty()) {
+            target_row = &payload.transition_targets[b];
+            int real_transition_targets = 0;
             if (have_step_mask) {
                 bool saw_padding = false;
-                for (uint8_t mask_value : payload.teacher_step_mask[b]) {
+                for (uint8_t mask_value : payload.transition_target_mask[b]) {
                     if (mask_value == 0) {
                         saw_padding = true;
                     } else {
                         if (saw_padding) {
                             throw std::runtime_error(
-                                "addExecutionAuxiliaryLoss: teacher step mask must be a contiguous prefix");
+                                "addExecutionAuxiliaryLoss: transition target mask must be a contiguous prefix");
                         }
-                        ++real_teacher_steps;
+                        ++real_transition_targets;
                     }
                 }
             } else {
-                real_teacher_steps = static_cast<int>(teacher_row->size());
+                real_transition_targets = static_cast<int>(target_row->size());
             }
-            if (static_cast<int>(row_steps.size()) != real_teacher_steps) {
+            if (static_cast<int>(row_steps.size()) != real_transition_targets) {
                 throw std::runtime_error(
                     "addExecutionAuxiliaryLoss: row " + std::to_string(b)
                     + " produced " + std::to_string(row_steps.size())
-                    + " execution outputs but teacher mask has "
-                    + std::to_string(real_teacher_steps) + " real steps");
+                    + " execution outputs but transition target mask has "
+                    + std::to_string(real_transition_targets) + " real steps");
             }
         }
 
         for (int k = 0; k < static_cast<int>(row_steps.size()); ++k) {
             if (have_step_mask
-                && b < static_cast<int>(payload.teacher_step_mask.size())
-                && k < static_cast<int>(payload.teacher_step_mask[b].size())
-                && payload.teacher_step_mask[b][k] == 0) {
+                && b < static_cast<int>(payload.transition_target_mask.size())
+                && k < static_cast<int>(payload.transition_target_mask[b].size())
+                && payload.transition_target_mask[b][k] == 0) {
                 continue;
             }
 
@@ -532,30 +540,106 @@ ExecutionAuxiliaryLossSummary addExecutionAuxiliaryLoss(
                 row_entropy_terms++;
             };
 
-            if (teacher_row && model_hp.structured_ce_enabled && ce_weight > 0.0f) {
-                const auto& teacher = (*teacher_row)[k];
+            if (target_row && model_hp.structured_ce_enabled && ce_weight > 0.0f) {
+                const auto& target = (*target_row)[k];
                 if (payload.compiled_slot_bindings.empty() ||
                     b >= static_cast<int>(payload.compiled_slot_bindings.size())) {
                     throw std::runtime_error(
                         "addExecutionAuxiliaryLoss: row " + std::to_string(b) +
-                        " has teacher SlotId targets but no compiled slot bindings");
+                        " has transition SlotId targets but no compiled slot bindings");
                 }
+                if (payload.compiled_transition_bindings.empty() ||
+                    b >= static_cast<int>(
+                        payload.compiled_transition_bindings.size())) {
+                    throw std::runtime_error(
+                        "addExecutionAuxiliaryLoss: row " + std::to_string(b) +
+                        " has a TransitionId target but no compiled "
+                        "transition bindings");
+                }
+                if (target.arguments.size() != 2 ||
+                    target.results.size() != 1) {
+                    throw std::runtime_error(
+                        "addExecutionAuxiliaryLoss: current execution heads "
+                        "require two transition arguments and one result");
+                }
+                const auto& realized = sout.record.invocation;
+                if (!realized.transition_id.valid() ||
+                    realized.arguments.size() != 2 ||
+                    realized.results.size() != 1) {
+                    throw std::runtime_error(
+                        "addExecutionAuxiliaryLoss: realized transition trace "
+                        "does not satisfy the current executor contract");
+                }
+                const bool transition_match =
+                    realized.transition_id == target.transition_id;
+                const bool arguments_match =
+                    realized.arguments == target.arguments;
+                const bool results_match =
+                    realized.results == target.results;
+                const bool exact_target_match =
+                    transition_match && arguments_match && results_match;
+
+                char target_probe[768];
+                snprintf(
+                    target_probe,
+                    sizeof(target_probe),
+                    "[TEMP_TRANSITION_TARGET_MEASUREMENT] row=%d step=%d "
+                    "exact_target_match=%d transition_match=%d "
+                    "arguments_match=%d results_match=%d "
+                    "expected={transition_id=%llu,args=[%llu,%llu],results=[%llu]} "
+                    "realized={transition_id=%llu,args=[%llu,%llu],results=[%llu]}",
+                    b,
+                    k,
+                    exact_target_match ? 1 : 0,
+                    transition_match ? 1 : 0,
+                    arguments_match ? 1 : 0,
+                    results_match ? 1 : 0,
+                    static_cast<unsigned long long>(
+                        target.transition_id.serialized()),
+                    static_cast<unsigned long long>(
+                        target.arguments[0].serialized()),
+                    static_cast<unsigned long long>(
+                        target.arguments[1].serialized()),
+                    static_cast<unsigned long long>(
+                        target.results[0].serialized()),
+                    static_cast<unsigned long long>(
+                        realized.transition_id.serialized()),
+                    static_cast<unsigned long long>(
+                        realized.arguments[0].serialized()),
+                    static_cast<unsigned long long>(
+                        realized.arguments[1].serialized()),
+                    static_cast<unsigned long long>(
+                        realized.results[0].serialized()));
+                GRIM::Logging::EmitModuleInfo(
+                    GRIM::Logging::ModuleId::ExecutionBlock,
+                    target_probe);
+
                 const auto& slot_bindings = payload.compiled_slot_bindings[b];
+                const auto& transition_bindings =
+                    payload.compiled_transition_bindings[b];
                 const int arg1_slot_index = Execution::requireSlotIndex(
                     slot_bindings,
-                    teacher.arg1_slot,
-                    "addExecutionAuxiliaryLoss teacher arg1").dense();
+                    target.arguments[0],
+                    "addExecutionAuxiliaryLoss transition argument 0").dense();
                 const int arg2_slot_index = Execution::requireSlotIndex(
                     slot_bindings,
-                    teacher.arg2_slot,
-                    "addExecutionAuxiliaryLoss teacher arg2").dense();
+                    target.arguments[1],
+                    "addExecutionAuxiliaryLoss transition argument 1").dense();
                 const int write_slot_index = Execution::requireSlotIndex(
                     slot_bindings,
-                    teacher.write_slot,
-                    "addExecutionAuxiliaryLoss teacher write").dense();
-                const int op_target = requireOpTarget(teacher.op_id, num_ops, b, k, "teacher op_id");
-                const int arg1_target = requireValueSlotTarget(arg1_slot_index, num_scratch_slots, num_slots, b, k, "teacher arg1_slot");
-                const int arg2_target = requireValueSlotTarget(arg2_slot_index, num_scratch_slots, num_slots, b, k, "teacher arg2_slot");
+                    target.results[0],
+                    "addExecutionAuxiliaryLoss transition result 0").dense();
+                const int op_target = requireTransitionTarget(
+                    Execution::requireTransitionIndex(
+                        transition_bindings,
+                        target.transition_id,
+                        "addExecutionAuxiliaryLoss transition target").dense(),
+                    num_ops,
+                    b,
+                    k,
+                    "transition_index");
+                const int arg1_target = requireValueSlotTarget(arg1_slot_index, num_scratch_slots, num_slots, b, k, "transition argument 0");
+                const int arg2_target = requireValueSlotTarget(arg2_slot_index, num_scratch_slots, num_slots, b, k, "transition argument 1");
                 const int write_target = requireWriteTarget(write_slot_index, num_scratch_slots, num_slots, b, k);
                 requireInitializedValueTarget(
                     sout.state_before_valid,

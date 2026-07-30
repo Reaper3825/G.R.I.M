@@ -691,9 +691,14 @@ void buildValueSlotCandidates(
         const auto& slot_bindings =
             payload.compiled_slot_bindings[static_cast<std::size_t>(batch_row)];
         for (const auto& record : prior_records) {
+            if (record.invocation.results.size() != 1) {
+                throw std::runtime_error(
+                    "buildValueSlotCandidates: current executor history "
+                    "requires one transition result");
+            }
             const int write_slot = Execution::requireSlotIndex(
                 slot_bindings,
-                record.write_slot,
+                record.invocation.results[0],
                 "buildValueSlotCandidates prior write").dense();
             EXEC_CHECK(write_slot >= S && write_slot < V,
                 "buildValueSlotCandidates: prior write slot is outside value-slot range");
@@ -764,9 +769,14 @@ void buildValueSlotCandidates(
             const auto& slot_bindings =
                 payload.compiled_slot_bindings[static_cast<std::size_t>(batch_row)];
             for (const auto& record : prior_records) {
+                if (record.invocation.results.size() != 1) {
+                    throw std::runtime_error(
+                        "buildValueSlotCandidates: current executor history "
+                        "requires one transition result");
+                }
                 const int write_slot = Execution::requireSlotIndex(
                     slot_bindings,
-                    record.write_slot,
+                    record.invocation.results[0],
                     "buildValueSlotCandidates overwritten write").dense();
                 EXEC_CHECK(write_slot >= S && write_slot < V,
                     "buildValueSlotCandidates: prior write slot is outside value-slot range");
@@ -940,6 +950,7 @@ void finalizeStepOrThrow(
     ExecutionBlockDiagnosticsBuffers& diag,
     ExecutionBlockStepOutput& forward_output,
     const std::vector<Execution::CompiledSlotBinding>& slot_bindings,
+    const std::vector<Execution::CompiledTransitionBinding>& transition_bindings,
     int step,
     cudaStream_t stream
 ) {
@@ -957,33 +968,8 @@ void finalizeStepOrThrow(
         cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
-    forward_output.record.arg1_slot = Execution::requireSlotId(
-        slot_bindings,
-        Execution::SlotIndex::fromDense(ri[0]),
-        "finalizeStepOrThrow arg1");
-    forward_output.record.arg2_slot = Execution::requireSlotId(
-        slot_bindings,
-        Execution::SlotIndex::fromDense(ri[1]),
-        "finalizeStepOrThrow arg2");
-    forward_output.record.op_id = ri[2];
-    forward_output.record.write_slot = Execution::requireSlotId(
-        slot_bindings,
-        Execution::SlotIndex::fromDense(write_slot),
-        "finalizeStepOrThrow write");
-    forward_output.record.value_before_1 = rf[0];
-    forward_output.record.value_before_2 = rf[1];
-    forward_output.record.value_after = rf[2];
-
-    // Emit execution record via module log system
     static const char* op_names[] = {"+", "-", "*", "/"};
     const char* op_str = (ri[2] >= 0 && ri[2] < 4) ? op_names[ri[2]] : "?";
-    char msg[256];
-    snprintf(msg, sizeof(msg),
-        "[EXEC_RECORD_EQUATION] step=%d: slot[%d](%.4f) %s slot[%d](%.4f) -> slot[%d]=%.4f",
-        step, ri[0], rf[0], op_str, ri[1], rf[1], write_slot, rf[2]);
-    GRIM::Logging::EmitModuleInfo(
-        GRIM::Logging::ModuleId::ExecutionBlock, msg);
-
     if (h_error > 0) {
         char buf[640];
         snprintf(buf, sizeof(buf),
@@ -999,6 +985,100 @@ void finalizeStepOrThrow(
                 std::string("[ExecutionBlock debug] ") + buf);
         throw std::runtime_error(buf);
     }
+
+    const auto transition_index = Execution::TransitionIndex::fromDense(ri[2]);
+    const auto argument_0_index = Execution::SlotIndex::fromDense(ri[0]);
+    const auto argument_1_index = Execution::SlotIndex::fromDense(ri[1]);
+    const auto result_0_index = Execution::SlotIndex::fromDense(write_slot);
+
+    auto& invocation = forward_output.record.invocation;
+    invocation.transition_id = Execution::requireTransitionId(
+        transition_bindings,
+        transition_index,
+        "finalizeStepOrThrow transition");
+    invocation.arguments = {
+        Execution::requireSlotId(
+            slot_bindings,
+            argument_0_index,
+            "finalizeStepOrThrow argument 0"),
+        Execution::requireSlotId(
+            slot_bindings,
+            argument_1_index,
+            "finalizeStepOrThrow argument 1")};
+    invocation.results = {
+        Execution::requireSlotId(
+            slot_bindings,
+            result_0_index,
+            "finalizeStepOrThrow result 0")};
+    forward_output.record.argument_values = {rf[0], rf[1]};
+    forward_output.record.result_values = {rf[2]};
+
+    // TEMPORARY CONTRACT PROBE: runs for every completed execution step.
+    // The measurements originate in the device-selected diagnostics above.
+    // Resolve them back through the compiled tables and require an exact
+    // identity -> dense-index round trip before reporting success.
+    const int measured_transition_index = Execution::requireTransitionIndex(
+        transition_bindings,
+        invocation.transition_id,
+        "temporary transition probe round trip").dense();
+    const int measured_argument_0_index = Execution::requireSlotIndex(
+        slot_bindings,
+        invocation.arguments[0],
+        "temporary transition probe argument 0 round trip").dense();
+    const int measured_argument_1_index = Execution::requireSlotIndex(
+        slot_bindings,
+        invocation.arguments[1],
+        "temporary transition probe argument 1 round trip").dense();
+    const int measured_result_0_index = Execution::requireSlotIndex(
+        slot_bindings,
+        invocation.results[0],
+        "temporary transition probe result 0 round trip").dense();
+    const bool round_trip_ok =
+        measured_transition_index == ri[2] &&
+        measured_argument_0_index == ri[0] &&
+        measured_argument_1_index == ri[1] &&
+        measured_result_0_index == write_slot;
+    if (!round_trip_ok) {
+        throw std::runtime_error(
+            "finalizeStepOrThrow: temporary transition contract probe "
+            "detected a semantic/runtime lowering mismatch");
+    }
+
+    char contract_probe[768];
+    snprintf(
+        contract_probe,
+        sizeof(contract_probe),
+        "[TEMP_TRANSITION_CONTRACT_PROBE] step=%d round_trip_ok=1 "
+        "transition={id=%llu,index=%d} arity={arguments=%zu,results=%zu} "
+        "arguments=[{id=%llu,index=%d,value=%.9g},"
+        "{id=%llu,index=%d,value=%.9g}] "
+        "results=[{id=%llu,index=%d,value=%.9g}]",
+        step,
+        static_cast<unsigned long long>(invocation.transition_id.serialized()),
+        measured_transition_index,
+        invocation.arguments.size(),
+        invocation.results.size(),
+        static_cast<unsigned long long>(invocation.arguments[0].serialized()),
+        measured_argument_0_index,
+        static_cast<double>(forward_output.record.argument_values[0]),
+        static_cast<unsigned long long>(invocation.arguments[1].serialized()),
+        measured_argument_1_index,
+        static_cast<double>(forward_output.record.argument_values[1]),
+        static_cast<unsigned long long>(invocation.results[0].serialized()),
+        measured_result_0_index,
+        static_cast<double>(forward_output.record.result_values[0]));
+    GRIM::Logging::EmitModuleInfo(
+        GRIM::Logging::ModuleId::ExecutionBlock,
+        contract_probe);
+
+    // Emit execution record via module log system
+    char msg[256];
+    snprintf(msg, sizeof(msg),
+        "[EXEC_RECORD_EQUATION] step=%d: slot[%d](%.4f) %s slot[%d](%.4f) -> slot[%d]=%.4f",
+        step, ri[0], rf[0], op_str, ri[1], rf[1], write_slot, rf[2]);
+    GRIM::Logging::EmitModuleInfo(
+        GRIM::Logging::ModuleId::ExecutionBlock, msg);
+
 }
 
 Tensor crossAttentionReadImpl(

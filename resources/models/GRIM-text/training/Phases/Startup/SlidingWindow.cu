@@ -117,7 +117,7 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
         }
 
         // Execution-active rows MUST NOT be fragmented — compiled_bootstrap_bindings
-        // and teacher_steps are whole-sequence structures with no windowing semantics.
+        // and transition_targets are whole-sequence structures with no windowing semantics.
         if (seq.execution_active ||
             seq.execution_gate_target != GRIM::Execution::ExecutionGateTarget::UNSUPERVISED) {
             throw std::runtime_error(

@@ -45,6 +45,7 @@ void finalizeStepOrThrow(
 	ExecutionBlockDiagnosticsBuffers& diag,
 	Forward::ExecutionBlockStepOutput& forward_output,
 	const std::vector<Execution::CompiledSlotBinding>& slot_bindings,
+	const std::vector<Execution::CompiledTransitionBinding>& transition_bindings,
 	int step,
 	cudaStream_t stream);
 

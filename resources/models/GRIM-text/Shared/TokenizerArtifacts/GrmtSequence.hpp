@@ -28,8 +28,9 @@ struct GrmtSequence {
     std::int32_t execution_prompt_end_pos = -1;
     std::int32_t execution_prompt_length = 0;
     std::vector<GRIM::Execution::CompiledSlotBinding> compiled_slot_bindings;
+    std::vector<GRIM::Execution::CompiledTransitionBinding> compiled_transition_bindings;
     std::vector<GRIM::Execution::CompiledBootstrapBinding> compiled_bootstrap_bindings;
-    std::vector<GRIM::Execution::TeacherStep> teacher_steps;
+    std::vector<GRIM::Execution::TransitionInvocation> transition_targets;
 
     bool hasAnyValidTarget() const;
     void validateForWrite(const std::string& source) const;
