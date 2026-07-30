@@ -72,7 +72,7 @@ struct BatchDeviceBindings {
     // Candidate atom-entry pool (arg/option selector). Batch-global "menu" of
     // options the selector scores; row r's window is
     // [d_row_atom_offset[r], d_row_atom_offset[r+1]). Nullable when the
-    // NumberEncoder/selector is disabled (num_pool_atoms == 0).
+    // selector is disabled (num_pool_atoms == 0).
     float*    d_pool_numeric_values = nullptr; // [num_pool_atoms]
     double*   d_pool_numeric_float_values = nullptr; // [num_pool_atoms], exact float payload
     int64_t*  d_pool_numeric_int_values = nullptr; // [num_pool_atoms], exact integer payload
@@ -81,22 +81,8 @@ struct BatchDeviceBindings {
     int*      d_row_atom_offset     = nullptr; // [batch_size + 1]
     int       num_pool_atoms        = 0;
 
-    // Static authored-bootstrap identity bridge. Row-major mapping from
-    // execution slot to batch-global selector-pool candidate, or -1.
-    int*      d_bootstrap_slot_to_pool_index = nullptr; // [batch_size * execution_slot_count]
-    int       execution_slot_count = 0;
-
-    // Per-entry NumberEncoder feature channels for selector key encoding (compact,
-    // indexed by pool entry; E = num_pool_atoms, S = number_encoder_digit_slots).
-    // Nullable when the NumberEncoder/selector is disabled.
-    int*      d_pool_digit_values        = nullptr; // [E * S]
-    int*      d_pool_digit_pow10_index   = nullptr; // [E * S]
-    float*    d_pool_digit_mask          = nullptr; // [E * S]
-    float*    d_pool_digit_slot_features = nullptr; // [E * S * kNumberSlotFeatureDim]
-    float*    d_pool_global_features     = nullptr; // [E * kNumberGlobalFeatureDim]
-
     // Arg/option selector supervision: per-token batch-global target pool index
-    // (or -1). Nullable when the selector/NumberEncoder is disabled.
+    // (or -1). Nullable when the selector is disabled.
     int*      d_arg_select_targets = nullptr; // [total_tokens]
 };
 

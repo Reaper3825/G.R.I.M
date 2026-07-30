@@ -78,8 +78,8 @@ struct NumberEncoderParameterTensors {
 };
 
 // Arg/option selector head parameters (execution-INDEPENDENT). A single query
-// projection W_q maps encoder hidden states into the candidate-key space; the
-// selector scores W_q·h_t against the NumberEncoder-derived candidate keys.
+// projection W_q maps encoder hidden states into an externally owned
+// candidate-key space.
 // Registered under ParamGroupType::ARG_SELECTOR (docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md).
 struct SelectorParameterTensors {
     Tensor W_q;   // [d_model, d_model] query projection

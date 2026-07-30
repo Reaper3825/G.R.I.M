@@ -48,9 +48,8 @@ struct ModelForwardGraphPolicy {
     // autograd edges to durable parameters.
     bool connect_parameter_graph = false;
     bool enable_dropout = false;
-    // Arg/option selector head: when true, the forward encodes candidate atom-entry
-    // keys and emits ModelForwardOutputs::selector_logits [total_tokens, num_pool_atoms].
-    // Requires the NumberEncoder + selector to be enabled and a non-empty pool.
+    // Reserved request bit for selector-logit materialization. Candidate-key
+    // generation is not owned by the core model forward.
     bool emit_selector_logits = false;
 };
 

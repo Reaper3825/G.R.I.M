@@ -399,6 +399,7 @@ GRIM::GeneratedSequence generateOneSequence(
             vocab_size, /*batch_capacity=*/1, /*max_cached_seq_len=*/1,
             execution_hp.num_slots,
             execution_hp.num_scratch_slots,
+            use_selector,
             number_encoder_hp.enabled ? number_encoder_hp.max_digit_slots : 0,
             number_encoder_hp.max_abs_pow10);
         decode_payload.mode = GRIM::Batching::BatchPayloadMode::InferenceDecode;
@@ -678,6 +679,9 @@ Phase2TextInferenceResult executePhase2TextInference(
             execution_hp.num_scratch_slots);
     }
     const auto number_encoder_hp = GRIM::HyperParameters::numberEncoderConstructionHP(model_config);
+    const bool selector_enabled =
+        GRIM::HyperParameters::snapshotTrainingConfigField<bool>(
+            model_config, "selector_enabled");
     auto prompt_payload = GRIM::Batching::buildInferenceBatchPayload(
         tokens,
         numeric_values,
@@ -691,6 +695,7 @@ Phase2TextInferenceResult executePhase2TextInference(
         static_cast<size_t>(max_cached_seq_len),
         execution_hp.num_slots,
         execution_hp.num_scratch_slots,
+        selector_enabled,
         number_encoder_hp.enabled ? number_encoder_hp.max_digit_slots : 0,
         number_encoder_hp.max_abs_pow10);
 

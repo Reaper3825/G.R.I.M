@@ -254,12 +254,12 @@ public:
     Tensor lm_head_mlp_swiglu_out;    // [total_tokens, mlp_d_ff] silu ⊙ up
     Tensor lm_head_mlp_residual_out;  // [total_tokens, d_model] u = z + alpha * (swiglu @ W_down)
     Tensor logits_tensor;
-    // NumberEncoder-derived candidate keys shared by the token-level selector
-    // and authored ARG bootstrap seeding.
+    // Candidate keys supplied by the independent selector pipeline. Core model
+    // forward does not derive these from NumberEncoder.
     Tensor selector_candidate_keys; // [num_pool_atoms, d_model]
     // Arg/option selector head: [total_tokens, num_pool_atoms] selection logits over
     // the candidate atom-entry pool (out-of-row-window candidates masked to -inf).
-    // Empty unless the forward graph policy requested emit_selector_logits.
+    // Empty until the independent selector pipeline materializes keys and logits.
     Tensor selector_logits;
 
     // Contextual numeric-placeholder slot-seed state. ModelForwardOutputs is

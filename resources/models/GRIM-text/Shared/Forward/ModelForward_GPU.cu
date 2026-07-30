@@ -13,7 +13,6 @@
 #include "../../GRIM/grim_language_model_cuda.hpp"
 #include "../../Layers/Encoding/Encoding_GPU.hpp"
 #include "../../Layers/LMHead/lm_head_GPU.hpp"
-#include "../../Layers/ArgSelector/ArgSelector_GPU.hpp"
 #include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
 #include "../InferenceState/KvCacheState_GPU.hpp"
 #include "../CudaAllocUtils.hpp"
@@ -23,7 +22,6 @@
 #include "../HyperParameters/HyperparameterGroupings.hpp"
 #include "../VerboseLogging.hpp"
 
-#include <cmath>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -101,123 +99,6 @@ Tensor viewCommittedTensor(const Tensor& owned,
     view.grad_fn = owned.grad_fn;
     view.stream = stream;
     return view;
-}
-
-// Encode the candidate atom-entry pool once for token-level selector scoring.
-// Candidate keys are independent of encoder hidden state, so preparing them
-// before the encoder loop does not change selector causality.
-void materializeForwardSelectorCandidateKeys(
-    const ModelForwardRequest& request,
-    const Batching::BatchPayload& payload,
-    ModelForwardOutputs& forward_outputs) {
-    forward_outputs.selector_candidate_keys = Tensor();
-    if (!request.graph.emit_selector_logits) {
-        return;
-    }
-
-    const int num_pool_atoms = request.bindings->num_pool_atoms;
-    if (num_pool_atoms <= 0) {
-        return;  // No candidate entries in this batch — nothing to select among.
-    }
-
-    const auto number_encoder_hp = HyperParameters::numberEncoderConstructionHP(*request.config);
-    if (!number_encoder_hp.enabled) {
-        throw std::runtime_error(
-            "executeModelForward: selector candidate keys require the NumberEncoder "
-            "to be enabled");
-    }
-    if (!request.bindings->d_pool_digit_values || !request.bindings->d_pool_digit_pow10_index ||
-        !request.bindings->d_pool_digit_mask || !request.bindings->d_pool_digit_slot_features ||
-        !request.bindings->d_pool_global_features || !request.bindings->d_row_atom_offset) {
-        throw std::runtime_error(
-            "executeModelForward: selector candidate keys requested but candidate-pool "
-            "device bindings are NULL");
-    }
-
-    auto& ne = request.parameter_registry->requireNumberEncoderParameters("executeModelForward(selector)");
-    // Connected (training): encode keys against the registered NumberEncoder
-    // leaves so the selection loss accumulates gradient into them — the selector
-    // teaches the encoder which candidate entries to keep distinguishable.
-    // Read-only (inference): detached copies so the keys are forward-only and no
-    // graph edges are retained (mirrors the W_q detach below).
-    GRIM::NumberEncoderParameterTensors ne_detached{};
-    const GRIM::NumberEncoderParameterTensors* ne_src = &ne;
-    if (!request.graph.connect_parameter_graph) {
-        ne_detached.digit_emb = ne.digit_emb.detach(request.stream);
-        ne_detached.pow10_emb = ne.pow10_emb.detach(request.stream);
-        ne_detached.W_c1 = ne.W_c1.detach(request.stream);
-        ne_detached.b_c1 = ne.b_c1.detach(request.stream);
-        ne_detached.W_c2 = ne.W_c2.detach(request.stream);
-        ne_detached.W_g1 = ne.W_g1.detach(request.stream);
-        ne_detached.b_g1 = ne.b_g1.detach(request.stream);
-        ne_detached.W_g2 = ne.W_g2.detach(request.stream);
-        ne_src = &ne_detached;
-    }
-    autograd::NumberEncoderForwardParams ne_params{};
-    ne_params.digit_emb = &ne_src->digit_emb;
-    ne_params.pow10_emb = &ne_src->pow10_emb;
-    ne_params.W_c1 = &ne_src->W_c1;
-    ne_params.b_c1 = &ne_src->b_c1;
-    ne_params.W_c2 = &ne_src->W_c2;
-    ne_params.W_g1 = &ne_src->W_g1;
-    ne_params.b_g1 = &ne_src->b_g1;
-    ne_params.W_g2 = &ne_src->W_g2;
-
-    forward_outputs.selector_candidate_keys = autograd::encodeAtomEntryPoolKeys(
-        ne_params, number_encoder_hp,
-        request.bindings->d_pool_digit_values,
-        request.bindings->d_pool_digit_pow10_index,
-        request.bindings->d_pool_digit_mask,
-        request.bindings->d_pool_digit_slot_features,
-        request.bindings->d_pool_global_features,
-        num_pool_atoms, request.stream);
-}
-
-// Arg/option selector head: score the live LM-head hidden state against the
-// already-materialized candidate pool. Emits selector_logits
-// [total_tokens, num_pool_atoms].
-void materializeForwardSelectorLogits(
-    const ModelForwardRequest& request,
-    const Batching::BatchPayload& payload,
-    ModelForwardOutputs& forward_outputs) {
-    forward_outputs.selector_logits = Tensor();
-    if (!request.graph.emit_selector_logits) {
-        return;
-    }
-
-    const int num_pool_atoms = request.bindings->num_pool_atoms;
-    if (num_pool_atoms <= 0) {
-        return;
-    }
-    if (!forward_outputs.selector_candidate_keys.data) {
-        throw std::runtime_error(
-            "executeModelForward: selector logits requested before candidate keys "
-            "were materialized");
-    }
-
-    Tensor* sel_input = forward_outputs.liveLmHeadInputOrNull();
-    if (!sel_input || !sel_input->data) {
-        throw std::runtime_error(
-            "executeModelForward: live LM-head input is NULL before selector materialization");
-    }
-
-    auto& sel = request.parameter_registry->requireSelectorParameters("executeModelForward(selector)");
-    // Connected (training): score against the registered W_q leaf so gradient
-    // accumulates into the optimizer-visible buffer. Read-only (inference): a
-    // detached copy so no graph edges are retained.
-    Tensor W_q_detached;
-    const Tensor* W_q_ptr = &sel.W_q;
-    if (!request.graph.connect_parameter_graph) {
-        W_q_detached = sel.W_q.detach(request.stream);
-        W_q_ptr = &W_q_detached;
-    }
-
-    const int d_model = HyperParameters::snapshotTrainingConfigField<int>(*request.config, "d_model");
-    const float selector_scale = 1.0f / std::sqrt(static_cast<float>(d_model));
-
-    forward_outputs.selector_logits = ArgSelector::argSelectorForward(
-        *sel_input, *W_q_ptr, forward_outputs.selector_candidate_keys, payload,
-        request.bindings->d_row_atom_offset, num_pool_atoms, selector_scale, request.stream);
 }
 
 GRIM::FeedForwardParameterTensors detachFeedForwardParameters(
@@ -342,11 +223,6 @@ void ModelForwardRequest::validate(const char* caller) const {
         if (!selector_enabled) {
             throw std::runtime_error(std::string(caller) + ": graph.emit_selector_logits=true while config.selector_enabled=false");
         }
-        const bool number_encoder_enabled = HyperParameters::snapshotTrainingConfigField<bool>(*config, "number_encoder_enabled");
-        if (!number_encoder_enabled) {
-            throw std::runtime_error(std::string(caller) + ": graph.emit_selector_logits=true requires number_encoder_enabled=true (selector keys are NumberEncoder-derived)");
-        }
-        (void)parameter_registry->requireSelectorParameters(caller);
     }
     if (kv_cache) {
         if (graph.connect_parameter_graph) {
@@ -517,26 +393,10 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
         }
     }
 
-    if (arg_bootstrap_active && payload.execution_slot_count > 0) {
-        if (payload.execution_slot_count != execution_hp.num_slots) {
-            throw std::runtime_error(
-                "ModelForward: payload.execution_slot_count=" +
-                std::to_string(payload.execution_slot_count) +
-                " does not match argument-bootstrap num_slots=" +
-                std::to_string(execution_hp.num_slots));
-        }
-        if (!bindings->d_token_to_slot_index_map ||
-            bindings->execution_slot_count != execution_hp.num_slots) {
-            throw std::runtime_error(
-                "ModelForward: argument-bootstrap slot bindings are missing or "
-                "have incompatible geometry");
-        }
+    if (arg_bootstrap_active && !bindings->d_token_to_slot_index_map) {
+        throw std::runtime_error(
+            "ModelForward: argument-bootstrap token-to-slot bindings are missing");
     }
-    materializeForwardSelectorCandidateKeys(
-        request,
-        payload,
-        forward_outputs);
-
     if (dropout_enabled && dropout_rate > 0.0f) {
         const uint64_t emb_dropout_seed = request.batch_idx * 2654435761ULL + 500;
         constexpr uint64_t kEmbeddingDropoutMaskStream = 0x0005000000000001ULL;
@@ -789,8 +649,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     if (!live_lm_head_input || !live_lm_head_input->data) {
         throw std::runtime_error("ModelForward: LM-head input snapshot is NULL after LMHeadLayer::forward");
     }
-
-    materializeForwardSelectorLogits(request, payload, forward_outputs);
 
     MFWD_INFO("Forward complete: logits shape=[" << total_tokens << ", " << payload.vocab_size << "]");
 

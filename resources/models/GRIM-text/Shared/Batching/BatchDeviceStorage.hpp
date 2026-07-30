@@ -42,30 +42,21 @@ struct BatchDeviceStorage {
     Tensor atom_digit_slot_features_tensor; // float [1, max_tokens * digit_slots * kNumberSlotFeatureDim]
     Tensor atom_global_features_tensor;     // float [1, max_tokens * kNumberGlobalFeatureDim]
 
-    // Candidate atom-entry pool (arg/option selector). Allocated with the
-    // NumberEncoder buffers; pool capacity is max_tokens (every token could be an
-    // atom), row_atom_offset capacity is batch_size + 1.
+    // Candidate atom-entry pool (arg/option selector). Allocated independently
+    // when selector_enabled=true; pool capacity is max_tokens (every token could
+    // be an atom), row_atom_offset capacity is batch_size + 1.
     Tensor pool_numeric_values_tensor;      // float [1, max_tokens]
     Tensor pool_numeric_float_values_tensor; // double [max_tokens], stored in 2x float bytes
     Tensor pool_numeric_int_values_tensor;  // int64 [max_tokens], stored in 2x float bytes
     Tensor pool_numeric_kinds_tensor;       // uint8 [max_tokens]
     Tensor pool_atom_types_tensor;          // int32 [1, max_tokens]
     Tensor row_atom_offset_tensor;          // int32 [1, batch_size + 1]
-    Tensor bootstrap_slot_to_pool_index_tensor; // int32 [1, batch_size * execution slots]
-    // Per-entry NumberEncoder feature channels for selector key encoding (same
-    // capacity as the per-token digit channels: max_tokens * digit_slots).
-    Tensor pool_digit_values_tensor;        // int32 [1, max_tokens * digit_slots]
-    Tensor pool_digit_pow10_index_tensor;   // int32 [1, max_tokens * digit_slots]
-    Tensor pool_digit_mask_tensor;          // float [1, max_tokens * digit_slots]
-    Tensor pool_digit_slot_features_tensor; // float [1, max_tokens * digit_slots * kNumberSlotFeatureDim]
-    Tensor pool_global_features_tensor;     // float [1, max_tokens * kNumberGlobalFeatureDim]
     Tensor arg_select_targets_tensor;       // int32 [1, max_tokens] selector supervision
 
     int batch_size_capacity = 0;
     int max_seq_len_capacity = 0;
     int max_tokens_capacity = 0;
     int number_encoder_digit_slots_capacity = 0;
-    int execution_slot_count_capacity = 0;
 };
 
 std::shared_ptr<BatchDeviceStorage> createBatchDeviceStorage(

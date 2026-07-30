@@ -350,11 +350,9 @@ void materializeNumberEncoderChannels(
 // options. Execution-INDEPENDENT: the pool is built purely from authored
 // AtomTable data, never from ExecutionMemory (GRIM/Docs/DeletedCode.md).
 //
-// Gated on number_encoder_digit_slots > 0 (the selector requires the
-// NumberEncoder), so when the NumberEncoder is disabled this is a no-op and there
-// is ZERO behavior change to existing training. Must be called AFTER
-// materializeNumberEncoderChannels (which sets number_encoder_digit_slots) and
-// after atom side-channels / seq_atom_tables are assembled.
+// Gated only on selector_enabled. Candidate metadata does not depend on
+// NumberEncoder construction. Must be called after atom side-channels and
+// seq_atom_tables are assembled.
 //
 // Each row r enumerates its entries in id order 0..size-1, so a token's batch-
 // global pool index is row_atom_offset[row] + <row-local atom_entry_id>. A
@@ -364,7 +362,7 @@ void materializeNumberEncoderChannels(
 // =============================================================================
 void materializeAtomEntryPool(
     BatchPayload& payload,
-    int max_abs_pow10,
+    bool selector_enabled,
     const char* caller)
 {
     payload.num_pool_atoms = 0;
@@ -374,21 +372,11 @@ void materializeAtomEntryPool(
     payload.pool_numeric_int_values.clear();
     payload.pool_numeric_kinds.clear();
     payload.pool_atom_types.clear();
-    payload.pool_digit_values.clear();
-    payload.pool_digit_pow10_index.clear();
-    payload.pool_digit_mask.clear();
-    payload.pool_digit_slot_features.clear();
-    payload.pool_global_features.clear();
     payload.arg_select_targets.clear();
     payload.arg_select_valid_count = 0;
 
-    const int digit_slots = payload.number_encoder_digit_slots;
-    if (digit_slots <= 0) {
-        return;  // Selector/NumberEncoder disabled — pool stays empty (no-op).
-    }
-    if (max_abs_pow10 <= 0) {
-        throw std::runtime_error(
-            std::string(caller) + ": atom-entry pool requires max_abs_pow10 > 0 when number_encoder is enabled");
+    if (!selector_enabled) {
+        return;
     }
     if (!payload.ownsHostInputData()) {
         throw std::runtime_error(
@@ -414,24 +402,13 @@ void materializeAtomEntryPool(
     payload.num_pool_atoms = total_entries;
 
     const std::size_t E = static_cast<std::size_t>(total_entries);
-    const std::size_t S = static_cast<std::size_t>(digit_slots);
     payload.pool_numeric_values.assign(E, 0.0f);
     payload.pool_numeric_float_values.assign(E, 0.0);
     payload.pool_numeric_int_values.assign(E, 0);
     payload.pool_numeric_kinds.assign(
         E, static_cast<uint8_t>(GRIM::Tokenizer::NumericPayloadKind::NONE));
     payload.pool_atom_types.assign(E, 0);
-    payload.pool_digit_values.assign(E * S, 0);
-    payload.pool_digit_pow10_index.assign(E * S, 0);
-    payload.pool_digit_mask.assign(E * S, 0.0f);
-    payload.pool_digit_slot_features.assign(
-        E * S * static_cast<std::size_t>(BatchPayload::kNumberSlotFeatureDim), 0.0f);
-    payload.pool_global_features.assign(
-        E * static_cast<std::size_t>(BatchPayload::kNumberGlobalFeatureDim), 0.0f);
-
-    // Pass 2: per-entry value/type + selector-key features (numeric entries only;
-    // non-numeric entries keep zero features / mask). Keys are encoded from the
-    // SAME features as the input side via the shared helper.
+    // Pass 2: exact per-entry value and type metadata.
     for (int row = 0; row < payload.batch_size; ++row) {
         const auto& atom_table = payload.seq_atom_tables[static_cast<std::size_t>(row)];
         const int row_entries = atom_table ? static_cast<int>(atom_table->size()) : 0;
@@ -458,15 +435,6 @@ void materializeAtomEntryPool(
             payload.pool_numeric_kinds[pool_idx] =
                 static_cast<uint8_t>(numeric_payload->kind);
             payload.pool_atom_types[pool_idx] = static_cast<int>(entry->type);
-            if (GRIM::Tokenizer::isNumericAtom(entry->type)) {
-                fillNumberEncoderEntryFeatures(
-                    *entry, pool_idx, digit_slots, max_abs_pow10,
-                    payload.pool_digit_values, payload.pool_digit_pow10_index,
-                    payload.pool_digit_mask, payload.pool_digit_slot_features,
-                    payload.pool_global_features,
-                    std::string(caller) + ": atom-entry pool row " + std::to_string(row) +
-                    " entry " + std::to_string(entry_id));
-            }
         }
     }
 
@@ -545,99 +513,6 @@ void materializeAtomEntryPool(
     }
 }
 
-// Materialize the static identity bridge between authored ARG bootstrap
-// slots and selector-pool candidates. The bridge is deliberately built from
-// token occurrence metadata (slot binding + row-local atom entry), never by
-// matching numeric values, so equal-valued occurrences retain their identity.
-void materializeBootstrapSlotPoolMap(
-    BatchPayload& payload,
-    int execution_num_slots,
-    const char* caller)
-{
-    payload.execution_slot_count = 0;
-    payload.bootstrap_slot_to_pool_index.clear();
-
-    // The selector candidate pool does not exist when NumberEncoder is off.
-    if (payload.number_encoder_digit_slots <= 0 || execution_num_slots <= 0) {
-        return;
-    }
-    if (payload.row_atom_offset.size() !=
-        static_cast<std::size_t>(payload.batch_size) + 1) {
-        throw std::runtime_error(
-            std::string(caller) + ": selector-to-bootstrap bridge requires "
-            "row_atom_offset.size() == batch_size + 1");
-    }
-    if (static_cast<int>(payload.token_to_slot_index_map.size()) != payload.total_tokens ||
-        static_cast<int>(payload.atom_entry_ids.size()) != payload.total_tokens ||
-        static_cast<int>(payload.atom_mask.size()) != payload.total_tokens) {
-        throw std::runtime_error(
-            std::string(caller) + ": selector-to-bootstrap bridge requires aligned "
-            "token_to_slot_index_map, atom_entry_ids, and atom_mask arrays");
-    }
-
-    payload.execution_slot_count = execution_num_slots;
-    payload.bootstrap_slot_to_pool_index.assign(
-        static_cast<std::size_t>(payload.batch_size) *
-            static_cast<std::size_t>(execution_num_slots),
-        -1);
-    std::vector<int> bootstrap_slot_token_positions(
-        payload.bootstrap_slot_to_pool_index.size(), -1);
-
-    for (int token_pos = 0; token_pos < payload.total_tokens; ++token_pos) {
-        const int slot = payload.token_to_slot_index_map[static_cast<std::size_t>(token_pos)];
-        if (slot < 0) {
-            continue;
-        }
-        if (slot >= execution_num_slots) {
-            throw std::runtime_error(
-                std::string(caller) + ": token_to_slot_index_map[" +
-                std::to_string(token_pos) + "]=" + std::to_string(slot) +
-                " exceeds execution_num_slots=" +
-                std::to_string(execution_num_slots));
-        }
-        if (payload.atom_mask[static_cast<std::size_t>(token_pos)] == 0) {
-            throw std::runtime_error(
-                std::string(caller) + ": ARG bootstrap token_pos=" +
-                std::to_string(token_pos) +
-                " is not an atom and has no selector-pool identity");
-        }
-
-        const int row = token_pos / payload.max_seq_len;
-        const int row_begin = payload.row_atom_offset[static_cast<std::size_t>(row)];
-        const int row_end = payload.row_atom_offset[static_cast<std::size_t>(row) + 1];
-        const uint32_t local_entry =
-            payload.atom_entry_ids[static_cast<std::size_t>(token_pos)];
-        if (local_entry == GRIM::Tokenizer::kAtomEntryNone) {
-            throw std::runtime_error(
-                std::string(caller) + ": ARG bootstrap token_pos=" +
-                std::to_string(token_pos) + " has no atom_entry_id");
-        }
-        const int pool_index = row_begin + static_cast<int>(local_entry);
-        if (pool_index < row_begin || pool_index >= row_end) {
-            throw std::runtime_error(
-                std::string(caller) + ": ARG bootstrap token_pos=" +
-                std::to_string(token_pos) + " has atom_entry_id=" +
-                std::to_string(local_entry) + " outside row " +
-                std::to_string(row) + " selector-pool window");
-        }
-
-        const std::size_t bridge_index =
-            static_cast<std::size_t>(row) *
-                static_cast<std::size_t>(execution_num_slots) +
-            static_cast<std::size_t>(slot);
-        const int prior_token_pos = bootstrap_slot_token_positions[bridge_index];
-        if (prior_token_pos >= 0) {
-            throw std::runtime_error(
-                std::string(caller) + ": row " + std::to_string(row) +
-                " maps token positions " + std::to_string(prior_token_pos) + " and " +
-                std::to_string(token_pos) + " to duplicate bootstrap slot " +
-                std::to_string(slot));
-        }
-        bootstrap_slot_token_positions[bridge_index] = token_pos;
-        payload.bootstrap_slot_to_pool_index[bridge_index] = pool_index;
-    }
-}
-
 }  // namespace
 
 BatchPayload buildBatchPayload(
@@ -647,7 +522,7 @@ BatchPayload buildBatchPayload(
     const GRIM::Tokenizer::TokenLayout& token_layout,
     size_t batch_size,
     size_t max_cached_seq_len,
-    int execution_num_slots,
+    bool selector_enabled,
     int number_encoder_digit_slots,
     int number_encoder_max_abs_pow10)
 {
@@ -981,8 +856,7 @@ BatchPayload buildBatchPayload(
     materializeAuthoredAtomFacts(payload, "buildBatchPayload");
     materializeNumberEncoderChannels(
         payload, number_encoder_digit_slots, number_encoder_max_abs_pow10, "buildBatchPayload");
-    materializeAtomEntryPool(payload, number_encoder_max_abs_pow10, "buildBatchPayload");
-    materializeBootstrapSlotPoolMap(payload, execution_num_slots, "buildBatchPayload");
+    materializeAtomEntryPool(payload, selector_enabled, "buildBatchPayload");
 
     // ═════════════════════════════════════════════════════════════════════════
     // ARG bootstrap metadata does not alter LM target ownership.
@@ -1031,6 +905,7 @@ BatchPayload buildInferenceBatchPayload(
     size_t max_cached_seq_len,
     int execution_num_slots,
     int execution_num_scratch_slots,
+    bool selector_enabled,
     int number_encoder_digit_slots,
     int number_encoder_max_abs_pow10)
 {
@@ -1139,9 +1014,7 @@ BatchPayload buildInferenceBatchPayload(
     materializeAuthoredAtomFacts(payload, caller);
     materializeNumberEncoderChannels(
         payload, number_encoder_digit_slots, number_encoder_max_abs_pow10, caller);
-    materializeAtomEntryPool(payload, number_encoder_max_abs_pow10, caller);
-    materializeBootstrapSlotPoolMap(payload, execution_num_slots, caller);
-
+    materializeAtomEntryPool(payload, selector_enabled, caller);
     payload.validate(caller);
     return payload;
 }
