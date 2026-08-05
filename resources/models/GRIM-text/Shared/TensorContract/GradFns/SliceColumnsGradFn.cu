@@ -6,7 +6,6 @@
 //======================================================//
 
 #include "SliceColumnsGradFn.hpp"
-#include "../../CudaAllocUtils.hpp"
 
 #include <cuda_runtime.h>
 #include <stdexcept>
@@ -53,7 +52,6 @@ __global__ void kernel_slice_columns_backward(
 }  // anonymous namespace
 
 namespace GRIM {
-using CudaAlloc::cudaMallocOrThrow;
 namespace autograd {
 
 SliceColumnsGradFn::SliceColumnsGradFn() {
@@ -62,22 +60,10 @@ SliceColumnsGradFn::SliceColumnsGradFn() {
 
 void SliceColumnsGradFn::capture_inputs(Tensor& x, cudaStream_t stream) {
     x_requires_grad = x.requires_grad;
-    x_shape = x.shape;
-    x_grad_fn = x.grad_fn;
-    register_input(x.grad_fn);
 
     if (x_requires_grad) {
-        if (x.is_leaf) {
-            x.ensure_grad();
-            grad_x = x.grad_data();
-        } else {
-            const size_t n = x.numel();
-            float* buffer = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), n * sizeof(float), "SliceColumnsGradFn_grad_x");
-            cudaMemsetAsync(buffer, 0, n * sizeof(float), stream);
-            owned_grad_x = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
-            grad_x = owned_grad_x.get();
-        }
+        x_gradient = capture_input_gradient(
+            x, stream, "SliceColumnsGradFn::capture_inputs");
     }
 }
 
@@ -89,22 +75,21 @@ void SliceColumnsGradFn::apply_impl(const Tensor& grad_output,
     if (applied) return;
     applied = true;
 
-    if (x_requires_grad && grad_x) {
-        kernel_slice_columns_backward<<<rows, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-            grad_x, grad_output.data, rows, in_cols, col_offset, out_cols);
-        if (x_grad_fn) {
-            Tensor view;
-            view.data = grad_x; view.shape = x_shape;
-            view.owns_data = false; view.stream = stream;
-            x_grad_fn->apply(view, stream, backward_payload, backward_bindings);
-        }
+    if (!x_requires_grad) return;
+    if (!x_gradient) {
+        throw std::runtime_error("SliceColumnsGradFn::apply: x gradient Tensor is NULL");
     }
+
+    kernel_slice_columns_backward<<<rows, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
+        x_gradient->data, grad_output.data, rows, in_cols, col_offset, out_cols);
+    propagate_input_gradient(
+        x_gradient, stream, backward_payload, backward_bindings,
+        "SliceColumnsGradFn::apply");
 }
 
 void SliceColumnsGradFn::release_saved() {
     GradFn::release_saved();
-    grad_x = nullptr;
-    x_grad_fn.reset();
+    x_gradient.reset();
 }
 
 Tensor slice_columns(const Tensor& x, int col_offset, int out_cols, cudaStream_t stream) {

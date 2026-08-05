@@ -26,15 +26,20 @@ __global__ void kernelGatedTraceUpdateBackward(
     const float* __restrict__ old_trace,
     const float* __restrict__ candidate,
     const float* __restrict__ gate_vals,
-    int N)
+    int N,
+    bool old_trace_requires_grad,
+    bool candidate_requires_grad,
+    bool gate_logits_requires_grad)
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= N) return;
     const float g = gate_vals[i];
     const float u = upstream[i];
-    d_old_trace[i] += u * g;
-    d_candidate[i] += u * (1.0f - g);
-    d_gate_logits[i] += u * (old_trace[i] - candidate[i]) * g * (1.0f - g);
+    if (old_trace_requires_grad) d_old_trace[i] += u * g;
+    if (candidate_requires_grad) d_candidate[i] += u * (1.0f - g);
+    if (gate_logits_requires_grad) {
+        d_gate_logits[i] += u * (old_trace[i] - candidate[i]) * g * (1.0f - g);
+    }
 }
 
 void checkKernel(const char* caller) {
@@ -81,39 +86,18 @@ void GatedTraceUpdateGradFn::capture(
     old_trace_requires_grad = old_trace_t.requires_grad;
     candidate_requires_grad = candidate_t.requires_grad;
     gate_logits_requires_grad = gate_logits_t.requires_grad;
-    old_trace_shape = old_trace_t.shape;
-    candidate_shape = candidate_t.shape;
-    gate_logits_shape = gate_logits_t.shape;
-    old_trace_grad_fn = old_trace_t.grad_fn;
-    candidate_grad_fn = candidate_t.grad_fn;
-    gate_logits_grad_fn = gate_logits_t.grad_fn;
-    register_input(old_trace_t.grad_fn);
-    register_input(candidate_t.grad_fn);
-    register_input(gate_logits_t.grad_fn);
-
-    auto setup_grad_buf = [&](Tensor& tensor,
-                              float*& grad,
-                              std::shared_ptr<float>& owned,
-                              size_t count) {
-        if (!tensor.requires_grad) return;
-        if (tensor.is_leaf) {
-            tensor.ensure_grad();
-            grad = tensor.grad_data();
-        } else {
-            float* buf = nullptr;
-            cudaMallocOrThrow(
-                reinterpret_cast<void**>(&buf),
-                count * sizeof(float),
-                "gated_trace_grad_buf");
-            cudaMemsetAsync(buf, 0, count * sizeof(float), stream);
-            owned = std::shared_ptr<float>(buf, [](float* p) { cudaFree(p); });
-            grad = owned.get();
-        }
-    };
-
-    setup_grad_buf(old_trace_t, grad_old_trace, owned_grad_old_trace, dm);
-    setup_grad_buf(candidate_t, grad_candidate, owned_grad_candidate, dm);
-    setup_grad_buf(gate_logits_t, grad_gate_logits, owned_grad_gate_logits, dm);
+    if (old_trace_requires_grad) {
+        old_trace_gradient = capture_input_gradient(
+            old_trace_t, stream, "GatedTraceUpdateGradFn::capture old_trace");
+    }
+    if (candidate_requires_grad) {
+        candidate_gradient = capture_input_gradient(
+            candidate_t, stream, "GatedTraceUpdateGradFn::capture candidate");
+    }
+    if (gate_logits_requires_grad) {
+        gate_logits_gradient = capture_input_gradient(
+            gate_logits_t, stream, "GatedTraceUpdateGradFn::capture gate_logits");
+    }
 }
 
 void GatedTraceUpdateGradFn::apply_impl(
@@ -125,6 +109,28 @@ void GatedTraceUpdateGradFn::apply_impl(
     if (applied) return;
     applied = true;
 
+    float* grad_old_trace = nullptr;
+    float* grad_candidate = nullptr;
+    float* grad_gate_logits = nullptr;
+    if (old_trace_requires_grad) {
+        if (!old_trace_gradient) {
+            throw std::runtime_error("GatedTraceUpdateGradFn::apply: old_trace gradient Tensor is NULL");
+        }
+        grad_old_trace = old_trace_gradient->data;
+    }
+    if (candidate_requires_grad) {
+        if (!candidate_gradient) {
+            throw std::runtime_error("GatedTraceUpdateGradFn::apply: candidate gradient Tensor is NULL");
+        }
+        grad_candidate = candidate_gradient->data;
+    }
+    if (gate_logits_requires_grad) {
+        if (!gate_logits_gradient) {
+            throw std::runtime_error("GatedTraceUpdateGradFn::apply: gate_logits gradient Tensor is NULL");
+        }
+        grad_gate_logits = gate_logits_gradient->data;
+    }
+
     const int blocks = (dm_ + kBlockSize - 1) / kBlockSize;
     kernelGatedTraceUpdateBackward<<<blocks, kBlockSize, 0, stream>>>(
         grad_old_trace,
@@ -134,32 +140,26 @@ void GatedTraceUpdateGradFn::apply_impl(
         saved_old_trace,
         saved_candidate,
         saved_gate_vals,
-        dm_);
+        dm_,
+        old_trace_requires_grad,
+        candidate_requires_grad,
+        gate_logits_requires_grad);
     checkKernel("GatedTraceUpdateGradFn::apply kernelGatedTraceUpdateBackward");
 
-    if (old_trace_requires_grad && old_trace_grad_fn) {
-        Tensor view;
-        view.data = grad_old_trace;
-        view.shape = old_trace_shape;
-        view.owns_data = false;
-        view.stream = stream;
-        old_trace_grad_fn->apply(view, stream, backward_payload, backward_bindings);
+    if (old_trace_requires_grad) {
+        propagate_input_gradient(
+            old_trace_gradient, stream, backward_payload, backward_bindings,
+            "GatedTraceUpdateGradFn::apply old_trace");
     }
-    if (candidate_requires_grad && candidate_grad_fn) {
-        Tensor view;
-        view.data = grad_candidate;
-        view.shape = candidate_shape;
-        view.owns_data = false;
-        view.stream = stream;
-        candidate_grad_fn->apply(view, stream, backward_payload, backward_bindings);
+    if (candidate_requires_grad) {
+        propagate_input_gradient(
+            candidate_gradient, stream, backward_payload, backward_bindings,
+            "GatedTraceUpdateGradFn::apply candidate");
     }
-    if (gate_logits_requires_grad && gate_logits_grad_fn) {
-        Tensor view;
-        view.data = grad_gate_logits;
-        view.shape = gate_logits_shape;
-        view.owns_data = false;
-        view.stream = stream;
-        gate_logits_grad_fn->apply(view, stream, backward_payload, backward_bindings);
+    if (gate_logits_requires_grad) {
+        propagate_input_gradient(
+            gate_logits_gradient, stream, backward_payload, backward_bindings,
+            "GatedTraceUpdateGradFn::apply gate_logits");
     }
 }
 
@@ -168,12 +168,9 @@ void GatedTraceUpdateGradFn::release_saved() {
     if (saved_old_trace) { cudaFree(saved_old_trace); saved_old_trace = nullptr; }
     if (saved_candidate) { cudaFree(saved_candidate); saved_candidate = nullptr; }
     if (saved_gate_vals) { cudaFree(saved_gate_vals); saved_gate_vals = nullptr; }
-    grad_old_trace = nullptr;
-    grad_candidate = nullptr;
-    grad_gate_logits = nullptr;
-    old_trace_grad_fn.reset();
-    candidate_grad_fn.reset();
-    gate_logits_grad_fn.reset();
+    old_trace_gradient.reset();
+    candidate_gradient.reset();
+    gate_logits_gradient.reset();
 }
 
 }  // namespace GRIM::autograd

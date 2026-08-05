@@ -689,6 +689,89 @@ void setUseEngineBackward(bool enabled) {
     g_use_engine_backward = enabled;
 }
 
+std::shared_ptr<Tensor> GradFn::capture_input_gradient(Tensor& input,
+                                                      cudaStream_t stream,
+                                                      const char* context) {
+    if (context == nullptr || *context == '\0') {
+        throw std::runtime_error("GradFn::capture_input_gradient: context is NULL or empty");
+    }
+    if (stream == nullptr) {
+        throw std::runtime_error(std::string(context) +
+                                 ": stream is NULL - caller MUST provide valid stream");
+    }
+    input.require(context);
+    if (!input.requires_grad) {
+        throw std::runtime_error(std::string(context) + ": input does not require grad");
+    }
+    if (input.is_leaf && input.grad_fn) {
+        throw std::runtime_error(std::string(context) + ": leaf input unexpectedly has a producer");
+    }
+    if (!input.is_leaf && !input.grad_fn) {
+        throw std::runtime_error(std::string(context) + ": non-leaf input has no producer");
+    }
+
+    register_input(input.grad_fn);
+    if (input.is_leaf) {
+        input.ensure_grad();
+        if (!input.grad_) {
+            throw std::runtime_error(std::string(context) +
+                                     ": leaf gradient tensor is NULL after ensure_grad");
+        }
+        if (!input.grad_->is_leaf || input.grad_->grad_fn) {
+            throw std::runtime_error(std::string(context) +
+                                     ": leaf gradient tensor has invalid autograd metadata");
+        }
+        return input.grad_;
+    }
+
+    auto gradient = std::make_shared<Tensor>(Tensor::zeros(
+        input.shape,
+        false,
+        stream,
+        context));
+    gradient->is_leaf = false;
+    gradient->grad_fn = input.grad_fn;
+    return gradient;
+}
+
+void GradFn::propagate_input_gradient(
+    const std::shared_ptr<Tensor>& gradient,
+    cudaStream_t stream,
+    const Batching::BatchPayload* backward_payload,
+    const Batching::BatchDeviceBindings* backward_bindings,
+    const char* context) {
+    if (context == nullptr || *context == '\0') {
+        throw std::runtime_error("GradFn::propagate_input_gradient: context is NULL or empty");
+    }
+    if (stream == nullptr) {
+        throw std::runtime_error(std::string(context) +
+                                 ": stream is NULL - caller MUST provide valid stream");
+    }
+    if (!gradient) {
+        throw std::runtime_error(std::string(context) + ": gradient tensor is NULL");
+    }
+    gradient->require(context);
+
+    if (gradient->is_leaf) {
+        if (gradient->grad_fn) {
+            throw std::runtime_error(std::string(context) +
+                                     ": leaf gradient tensor unexpectedly has a producer");
+        }
+        gradient->record_leaf_gradient_delivery();
+        return;
+    }
+    if (!gradient->grad_fn) {
+        throw std::runtime_error(std::string(context) +
+                                 ": non-leaf gradient tensor has no producer");
+    }
+
+    gradient->grad_fn->apply(
+            *gradient,
+            stream,
+            backward_payload,
+            backward_bindings);
+}
+
 void GradFn::receive_gradient(const Tensor& contribution, cudaStream_t stream) {
     contribution.require("GradFn::receive_gradient contribution");
     if (stream == nullptr) {

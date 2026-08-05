@@ -87,38 +87,14 @@ BroadcastRowMulGradFn::BroadcastRowMulGradFn() {
 void BroadcastRowMulGradFn::capture_inputs(Tensor& s, Tensor& x, cudaStream_t stream) {
     scale_requires_grad = s.requires_grad;
     x_requires_grad = x.requires_grad;
-    scale_shape = s.shape;
-    x_shape = x.shape;
-    scale_grad_fn = s.grad_fn;
-    x_grad_fn = x.grad_fn;
-    register_input(s.grad_fn);
-    register_input(x.grad_fn);
 
     if (scale_requires_grad) {
-        if (s.is_leaf) {
-            s.ensure_grad();
-            scale_grad = s.grad_data();
-        } else {
-            const size_t s_numel = s.numel();
-            float* buffer = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), s_numel * sizeof(float), "BroadcastRowMulGradFn_scale_grad");
-            cudaMemsetAsync(buffer, 0, s_numel * sizeof(float), stream);
-            owned_scale_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
-            scale_grad = owned_scale_grad.get();
-        }
+        scale_gradient = capture_input_gradient(
+            s, stream, "BroadcastRowMulGradFn::capture_inputs scale");
     }
     if (x_requires_grad) {
-        if (x.is_leaf) {
-            x.ensure_grad();
-            x_grad = x.grad_data();
-        } else {
-            const size_t x_numel = x.numel();
-            float* buffer = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), x_numel * sizeof(float), "BroadcastRowMulGradFn_x_grad");
-            cudaMemsetAsync(buffer, 0, x_numel * sizeof(float), stream);
-            owned_x_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
-            x_grad = owned_x_grad.get();
-        }
+        x_gradient = capture_input_gradient(
+            x, stream, "BroadcastRowMulGradFn::capture_inputs x");
     }
 }
 
@@ -142,30 +118,28 @@ void BroadcastRowMulGradFn::apply_impl(const Tensor& grad_output,
     const int total = rows * cols;
 
     if (x_requires_grad) {
-        if (!x_grad) throw std::runtime_error("BroadcastRowMulGradFn::apply: x_grad is NULL");
+        if (!x_gradient) throw std::runtime_error("BroadcastRowMulGradFn::apply: x gradient Tensor is NULL");
         kernel_broadcast_row_mul_backward_x<<<(total + AUTOGRAD_BLOCK_SIZE - 1) / AUTOGRAD_BLOCK_SIZE, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-            grad_output.data, cached_scale, x_grad, rows, cols);
+            grad_output.data, cached_scale, x_gradient->data, rows, cols);
         trackKernelLaunch("kernel_broadcast_row_mul_backward_x", stream);
     }
 
     if (scale_requires_grad) {
-        if (!scale_grad) throw std::runtime_error("BroadcastRowMulGradFn::apply: scale_grad is NULL");
+        if (!scale_gradient) throw std::runtime_error("BroadcastRowMulGradFn::apply: scale gradient Tensor is NULL");
         kernel_broadcast_row_mul_backward_scale<<<rows, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-            grad_output.data, cached_x, scale_grad, rows, cols);
+            grad_output.data, cached_x, scale_gradient->data, rows, cols);
         trackKernelLaunch("kernel_broadcast_row_mul_backward_scale", stream);
     }
 
-    if (x_requires_grad && x_grad_fn) {
-        Tensor view;
-        view.data = x_grad; view.shape = x_shape;
-        view.owns_data = false; view.stream = stream;
-        x_grad_fn->apply(view, stream, backward_payload, backward_bindings);
+    if (x_requires_grad) {
+        propagate_input_gradient(
+            x_gradient, stream, backward_payload, backward_bindings,
+            "BroadcastRowMulGradFn::apply x");
     }
-    if (scale_requires_grad && scale_grad_fn) {
-        Tensor view;
-        view.data = scale_grad; view.shape = scale_shape;
-        view.owns_data = false; view.stream = stream;
-        scale_grad_fn->apply(view, stream, backward_payload, backward_bindings);
+    if (scale_requires_grad) {
+        propagate_input_gradient(
+            scale_gradient, stream, backward_payload, backward_bindings,
+            "BroadcastRowMulGradFn::apply scale");
     }
 }
 
@@ -173,10 +147,8 @@ void BroadcastRowMulGradFn::release_saved() {
     GradFn::release_saved();
     cached_scale = nullptr;
     cached_x = nullptr;
-    scale_grad = nullptr;
-    x_grad = nullptr;
-    scale_grad_fn.reset();
-    x_grad_fn.reset();
+    scale_gradient.reset();
+    x_gradient.reset();
 }
 
 Tensor broadcast_row_mul(const Tensor& scale, const Tensor& x, cudaStream_t stream) {

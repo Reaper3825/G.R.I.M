@@ -15,15 +15,12 @@ namespace autograd {
 
 struct ProjectOutPC1GradFn : public GradFn {
     bool input_requires_grad = false;
-    TensorContract::TensorShape input_shape;
     std::size_t element_count = 0;
     int num_rows = 0;
     int num_cols = 0;
     int power_iters = 0;
 
-    float* input_grad = nullptr;
-    std::shared_ptr<GradFn> input_grad_fn;
-    std::shared_ptr<float> owned_input_grad;
+    std::shared_ptr<Tensor> input_gradient;
 
     float* input_data_saved = nullptr;
     std::shared_ptr<float> owned_input_data;

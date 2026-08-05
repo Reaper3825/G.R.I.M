@@ -29,14 +29,8 @@ namespace autograd {
 struct BroadcastRowMulGradFn : public GradFn {
     bool scale_requires_grad = false;
     bool x_requires_grad = false;
-    float* scale_grad = nullptr;
-    float* x_grad = nullptr;
-    std::shared_ptr<float> owned_scale_grad;
-    std::shared_ptr<float> owned_x_grad;
-    TensorContract::TensorShape scale_shape;
-    TensorContract::TensorShape x_shape;
-    std::shared_ptr<GradFn> scale_grad_fn;
-    std::shared_ptr<GradFn> x_grad_fn;
+    std::shared_ptr<Tensor> scale_gradient;
+    std::shared_ptr<Tensor> x_gradient;
     const float* cached_scale = nullptr;
     const float* cached_x = nullptr;
     int rows = 0;

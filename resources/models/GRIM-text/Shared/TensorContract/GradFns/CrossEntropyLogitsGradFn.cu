@@ -69,25 +69,11 @@ CrossEntropyLogitsGradFn::~CrossEntropyLogitsGradFn() {
 }
 
 void CrossEntropyLogitsGradFn::capture_input(Tensor& logits, cudaStream_t stream) {
-    input_grad_fn = logits.grad_fn;
-    register_input(logits.grad_fn);
-    input_shape = logits.shape;
     C = logits.shape.as_2d().cols;
-    input_is_leaf = logits.is_leaf;
 
     if (logits.requires_grad) {
-        if (logits.is_leaf) {
-            logits.ensure_grad();
-            grad_logits = logits.grad_data();
-        } else {
-            float* buf = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buf), static_cast<size_t>(C) * sizeof(float), "CELogitsGradFn_grad_logits");
-            cudaMemsetAsync(buf, 0, static_cast<size_t>(C) * sizeof(float), stream);
-            owned_grad_logits = std::shared_ptr<float>(buf, [](float* p) {
-                queueForDeferredCleanup(p);
-            });
-            grad_logits = owned_grad_logits.get();
-        }
+        logits_gradient = capture_input_gradient(
+            logits, stream, "CrossEntropyLogitsGradFn::capture_input");
     }
 }
 
@@ -101,23 +87,21 @@ void CrossEntropyLogitsGradFn::apply_impl(const Tensor& grad_output,
     if (!saved_probs) {
         throw std::runtime_error("CrossEntropyLogitsGradFn::apply: saved_probs is NULL");
     }
-    if (!grad_logits) {
-        throw std::runtime_error("CrossEntropyLogitsGradFn::apply: grad_logits is NULL");
+    if (!logits_gradient) {
+        throw std::runtime_error("CrossEntropyLogitsGradFn::apply: logits gradient Tensor is NULL");
     }
 
     const int threads = (C < 256) ? C : 256;
     const int blocks = (C + threads - 1) / threads;
     kernel_ce_logits_backward<<<blocks, threads, 0, stream>>>(
-        grad_output.data, saved_probs, grad_logits, C, target_idx);
+        grad_output.data, saved_probs, logits_gradient->data, C, target_idx);
 
-    if (input_grad_fn && input_grad_fn->op_name) {
-        Tensor view;
-        view.data = grad_logits;
-        view.shape = input_shape;
-        view.owns_data = false;
-        view.stream = stream;
-        input_grad_fn->apply(view, stream, backward_payload, backward_bindings);
-    }
+    propagate_input_gradient(
+        logits_gradient,
+        stream,
+        backward_payload,
+        backward_bindings,
+        "CrossEntropyLogitsGradFn::apply");
 }
 
 void CrossEntropyLogitsGradFn::release_saved() {
@@ -126,8 +110,7 @@ void CrossEntropyLogitsGradFn::release_saved() {
         queueForDeferredCleanup(saved_probs);
     }
     saved_probs = nullptr;
-    grad_logits = nullptr;
-    input_grad_fn.reset();
+    logits_gradient.reset();
 }
 
 Tensor cross_entropy_logits(const Tensor& logits, int target_idx, cudaStream_t stream) {

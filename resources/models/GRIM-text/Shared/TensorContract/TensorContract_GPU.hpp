@@ -796,6 +796,26 @@ struct GradFn {
     }
 
 protected:
+    /**
+     * Capture storage for one differentiable input gradient and register its
+     * producer edge. Leaf inputs share their persistent Tensor::grad_; non-leaf
+     * inputs receive zeroed Tensor-owned scratch for this graph.
+     */
+    std::shared_ptr<Tensor> capture_input_gradient(Tensor& input,
+                                                   cudaStream_t stream,
+                                                   const char* context);
+
+    /**
+     * Deliver a captured input gradient. A producer continues backward;
+     * absence of a producer denotes a validated leaf gradient destination.
+     */
+    void propagate_input_gradient(
+        const std::shared_ptr<Tensor>& gradient,
+        cudaStream_t stream,
+        const Batching::BatchPayload* backward_payload,
+        const Batching::BatchDeviceBindings* backward_bindings,
+        const char* context);
+
     virtual void apply_impl(const Tensor& grad_output,
                             cudaStream_t stream,
                             const Batching::BatchPayload* backward_payload,

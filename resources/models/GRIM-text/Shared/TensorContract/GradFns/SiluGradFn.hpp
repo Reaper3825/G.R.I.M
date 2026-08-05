@@ -25,10 +25,7 @@ namespace autograd {
 
 struct SiluGradFn : public GradFn {
     bool input_requires_grad = false;
-    float* input_grad = nullptr;
-    std::shared_ptr<float> owned_input_grad;
-    TensorContract::TensorShape input_shape;
-    std::shared_ptr<GradFn> input_grad_fn;
+    std::shared_ptr<Tensor> input_gradient;
     const float* cached_input = nullptr;          ///< Non-owning ref into source tensor
     std::size_t cached_size = 0;
 

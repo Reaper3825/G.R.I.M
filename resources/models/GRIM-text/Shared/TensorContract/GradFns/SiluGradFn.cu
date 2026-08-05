@@ -103,22 +103,9 @@ SiluGradFn::~SiluGradFn() {
 
 void SiluGradFn::capture_input(Tensor& x, cudaStream_t stream) {
     input_requires_grad = x.requires_grad;
-    input_shape = x.shape;
-    input_grad_fn = x.grad_fn;
-    register_input(x.grad_fn);
-
     if (input_requires_grad) {
-        if (x.is_leaf) {
-            x.ensure_grad();
-            input_grad = x.grad_data();
-        } else {
-            const size_t x_numel = x.numel();
-            float* buffer = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), x_numel * sizeof(float), "SiluGradFn_input_grad");
-            cudaMemsetAsync(buffer, 0, x_numel * sizeof(float), stream);
-            owned_input_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
-            input_grad = owned_input_grad.get();
-        }
+        input_gradient = capture_input_gradient(
+            x, stream, "SiluGradFn::capture_input");
     }
 }
 
@@ -139,8 +126,8 @@ void SiluGradFn::apply_impl(const Tensor& grad_output,
     applied = true;
 
     if (!input_requires_grad) return;
-    if (!input_grad) {
-        throw std::runtime_error("SiluGradFn::apply: input_grad is NULL");
+    if (!input_gradient) {
+        throw std::runtime_error("SiluGradFn::apply: input gradient Tensor is NULL");
     }
     if (!cached_input) {
         throw std::runtime_error("SiluGradFn::apply: cached_input is NULL");
@@ -152,23 +139,22 @@ void SiluGradFn::apply_impl(const Tensor& grad_output,
     }
 
     kernel_silu_backward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-        grad_output.data, cached_input, input_grad, count);
+        grad_output.data, cached_input, input_gradient->data, count);
     trackKernelLaunch("kernel_silu_backward", stream);
 
-    if (input_grad_fn) {
-        Tensor view;
-        view.data = input_grad; view.shape = input_shape;
-        view.owns_data = false; view.stream = stream;
-        input_grad_fn->apply(view, stream, backward_payload, backward_bindings);
-    }
+    propagate_input_gradient(
+        input_gradient,
+        stream,
+        backward_payload,
+        backward_bindings,
+        "SiluGradFn::apply");
 }
 
 void SiluGradFn::release_saved() {
     GradFn::release_saved();
     cached_input = nullptr;
     cached_size = 0;
-    input_grad = nullptr;
-    input_grad_fn.reset();
+    input_gradient.reset();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

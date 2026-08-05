@@ -5,7 +5,6 @@
 
 #include "SigmoidGradFn.hpp"
 #include "../TensorContract_GPU.hpp"
-#include "../../CudaAllocUtils.hpp"
 
 #include <cuda_runtime.h>
 #include <cstdio>
@@ -82,8 +81,6 @@ __global__ void kernel_sigmoid_backward(
 
 namespace GRIM {
 
-using CudaAlloc::cudaMallocOrThrow;
-
 namespace autograd {
 
 SigmoidGradFn::SigmoidGradFn() {
@@ -96,22 +93,10 @@ SigmoidGradFn::~SigmoidGradFn() {
 
 void SigmoidGradFn::capture_input(Tensor& x, cudaStream_t stream) {
     input_requires_grad = x.requires_grad;
-    input_shape = x.shape;
-    input_grad_fn = x.grad_fn;
-    register_input(x.grad_fn);
 
     if (input_requires_grad) {
-        if (x.is_leaf) {
-            x.ensure_grad();
-            input_grad = x.grad_data();
-        } else {
-            const size_t n = x.numel();
-            float* buffer = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), n * sizeof(float), "SigmoidGradFn_input_grad");
-            cudaMemsetAsync(buffer, 0, n * sizeof(float), stream);
-            owned_input_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
-            input_grad = owned_input_grad.get();
-        }
+        input_gradient = capture_input_gradient(
+            x, stream, "SigmoidGradFn::capture_input");
     }
 }
 
@@ -132,8 +117,8 @@ void SigmoidGradFn::apply_impl(const Tensor& grad_output,
     applied = true;
 
     if (!input_requires_grad) return;
-    if (!input_grad) {
-        throw std::runtime_error("SigmoidGradFn::apply: input_grad is NULL");
+    if (!input_gradient) {
+        throw std::runtime_error("SigmoidGradFn::apply: input gradient Tensor is NULL");
     }
     if (!cached_input) {
         throw std::runtime_error("SigmoidGradFn::apply: cached_input is NULL");
@@ -145,25 +130,19 @@ void SigmoidGradFn::apply_impl(const Tensor& grad_output,
     }
 
     kernel_sigmoid_backward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-        grad_output.data, cached_input, input_grad, count);
+        grad_output.data, cached_input, input_gradient->data, count);
     trackKernelLaunch("kernel_sigmoid_backward", stream);
 
-    if (input_grad_fn) {
-        Tensor view;
-        view.data = input_grad;
-        view.shape = input_shape;
-        view.owns_data = false;
-        view.stream = stream;
-        input_grad_fn->apply(view, stream, backward_payload, backward_bindings);
-    }
+    propagate_input_gradient(
+        input_gradient, stream, backward_payload, backward_bindings,
+        "SigmoidGradFn::apply");
 }
 
 void SigmoidGradFn::release_saved() {
     GradFn::release_saved();
     cached_input = nullptr;
     cached_size = 0;
-    input_grad = nullptr;
-    input_grad_fn.reset();
+    input_gradient.reset();
 }
 
 Tensor sigmoid(const Tensor& x, cudaStream_t stream, const float* input_cache) {

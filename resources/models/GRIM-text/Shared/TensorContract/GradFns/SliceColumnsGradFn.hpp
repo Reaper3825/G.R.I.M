@@ -18,10 +18,7 @@ namespace autograd {
 
 struct SliceColumnsGradFn : public GradFn {
     bool x_requires_grad = false;
-    float* grad_x = nullptr;
-    std::shared_ptr<float> owned_grad_x;
-    TensorContract::TensorShape x_shape;
-    std::shared_ptr<GradFn> x_grad_fn;
+    std::shared_ptr<Tensor> x_gradient;
     int rows = 0;
     int in_cols = 0;
     int col_offset = 0;

@@ -224,15 +224,6 @@ void SlotSeedInputGradFn::capture_inputs(
     type_embedding_enabled = use_type_embeddings;
     type_embeddings_requires_grad =
         use_type_embeddings && type_embeddings.requires_grad;
-    token_states_shape = token_states.shape;
-    type_embeddings_shape = type_embeddings.shape;
-    token_states_grad_fn = token_states.grad_fn;
-    type_embeddings_grad_fn =
-        use_type_embeddings ? type_embeddings.grad_fn : nullptr;
-    register_input(token_states.grad_fn);
-    if (use_type_embeddings) {
-        register_input(type_embeddings.grad_fn);
-    }
 
     batch_size = payload.batch_size;
     max_seq_len = payload.max_seq_len;
@@ -242,43 +233,13 @@ void SlotSeedInputGradFn::capture_inputs(
     d_model = token_states.shape.as_2d().cols;
 
     if (token_states_requires_grad) {
-        if (token_states.is_leaf) {
-            token_states.ensure_grad();
-            token_states_grad = token_states.grad_data();
-        } else {
-            float* buffer = nullptr;
-            const std::size_t bytes =
-                token_states.numel() * sizeof(float);
-            CudaAlloc::cudaMallocOrThrow(
-                reinterpret_cast<void**>(&buffer),
-                bytes,
-                "SlotSeedInputGradFn_token_states_grad");
-            cudaMemsetAsync(buffer, 0, bytes, stream);
-            owned_token_states_grad = std::shared_ptr<float>(
-                buffer,
-                [](float* ptr) { queueForDeferredCleanup(ptr); });
-            token_states_grad = owned_token_states_grad.get();
-        }
+        token_states_gradient = capture_input_gradient(
+            token_states, stream, "SlotSeedInputGradFn::capture_inputs token_states");
     }
 
     if (type_embeddings_requires_grad) {
-        if (type_embeddings.is_leaf) {
-            type_embeddings.ensure_grad();
-            type_embeddings_grad = type_embeddings.grad_data();
-        } else {
-            float* buffer = nullptr;
-            const std::size_t bytes =
-                type_embeddings.numel() * sizeof(float);
-            CudaAlloc::cudaMallocOrThrow(
-                reinterpret_cast<void**>(&buffer),
-                bytes,
-                "SlotSeedInputGradFn_type_embeddings_grad");
-            cudaMemsetAsync(buffer, 0, bytes, stream);
-            owned_type_embeddings_grad = std::shared_ptr<float>(
-                buffer,
-                [](float* ptr) { queueForDeferredCleanup(ptr); });
-            type_embeddings_grad = owned_type_embeddings_grad.get();
-        }
+        type_embeddings_gradient = capture_input_gradient(
+            type_embeddings, stream, "SlotSeedInputGradFn::capture_inputs type_embeddings");
     }
 }
 
@@ -309,10 +270,18 @@ void SlotSeedInputGradFn::apply_impl(
 
     if ((token_states_requires_grad || type_embeddings_requires_grad) &&
         authored_atom_count > 0) {
-        if ((token_states_requires_grad && !token_states_grad) ||
-            (type_embeddings_requires_grad && !type_embeddings_grad)) {
+        if ((token_states_requires_grad && !token_states_gradient) ||
+            (type_embeddings_requires_grad && !type_embeddings_gradient)) {
             throw std::runtime_error(
                 "SlotSeedInputGradFn::apply: captured input gradient is NULL");
+        }
+        float* token_states_grad = nullptr;
+        float* type_embeddings_grad = nullptr;
+        if (token_states_requires_grad) {
+            token_states_grad = token_states_gradient->data;
+        }
+        if (type_embeddings_requires_grad) {
+            type_embeddings_grad = type_embeddings_gradient->data;
         }
         kernel_gather_slot_seed_inputs_backward<<<
             authored_atom_count,
@@ -338,33 +307,23 @@ void SlotSeedInputGradFn::apply_impl(
             stream);
     }
 
-    if (token_states_requires_grad && token_states_grad_fn) {
-        Tensor view;
-        view.data = token_states_grad;
-        view.shape = token_states_shape;
-        view.owns_data = false;
-        view.stream = stream;
-        token_states_grad_fn->apply(
-            view, stream, backward_payload, backward_bindings);
+    if (token_states_requires_grad) {
+        propagate_input_gradient(
+            token_states_gradient, stream, backward_payload, backward_bindings,
+            "SlotSeedInputGradFn::apply token_states");
     }
-    if (type_embeddings_requires_grad && type_embeddings_grad_fn) {
-        Tensor view;
-        view.data = type_embeddings_grad;
-        view.shape = type_embeddings_shape;
-        view.owns_data = false;
-        view.stream = stream;
-        type_embeddings_grad_fn->apply(
-            view, stream, backward_payload, backward_bindings);
+    if (type_embeddings_requires_grad) {
+        propagate_input_gradient(
+            type_embeddings_gradient, stream, backward_payload, backward_bindings,
+            "SlotSeedInputGradFn::apply type_embeddings");
     }
 }
 
 void SlotSeedInputGradFn::release_saved()
 {
     GradFn::release_saved();
-    token_states_grad = nullptr;
-    type_embeddings_grad = nullptr;
-    token_states_grad_fn.reset();
-    type_embeddings_grad_fn.reset();
+    token_states_gradient.reset();
+    type_embeddings_gradient.reset();
 }
 
 AuthoredSlotMaskGradFn::AuthoredSlotMaskGradFn()
@@ -379,9 +338,6 @@ void AuthoredSlotMaskGradFn::capture_input(
     cudaStream_t stream)
 {
     input_requires_grad = input.requires_grad;
-    input_shape = input.shape;
-    input_grad_fn = input.grad_fn;
-    register_input(input.grad_fn);
     batch_size = payload.batch_size;
     max_seq_len = payload.max_seq_len;
     total_tokens = payload.total_tokens;
@@ -390,22 +346,8 @@ void AuthoredSlotMaskGradFn::capture_input(
     d_model = input.shape.as_2d().cols;
 
     if (input_requires_grad) {
-        if (input.is_leaf) {
-            input.ensure_grad();
-            input_grad = input.grad_data();
-        } else {
-            float* buffer = nullptr;
-            const std::size_t bytes = input.numel() * sizeof(float);
-            CudaAlloc::cudaMallocOrThrow(
-                reinterpret_cast<void**>(&buffer),
-                bytes,
-                "AuthoredSlotMaskGradFn_input_grad");
-            cudaMemsetAsync(buffer, 0, bytes, stream);
-            owned_input_grad = std::shared_ptr<float>(
-                buffer,
-                [](float* ptr) { queueForDeferredCleanup(ptr); });
-            input_grad = owned_input_grad.get();
-        }
+        input_gradient = capture_input_gradient(
+            input, stream, "AuthoredSlotMaskGradFn::capture_input");
     }
 }
 
@@ -435,9 +377,9 @@ void AuthoredSlotMaskGradFn::apply_impl(
         authored_atom_count,
         "AuthoredSlotMaskGradFn::apply");
 
-    if (!input_grad) {
+    if (!input_gradient) {
         throw std::runtime_error(
-            "AuthoredSlotMaskGradFn::apply: captured input gradient is NULL");
+            "AuthoredSlotMaskGradFn::apply: captured input gradient Tensor is NULL");
     }
     if (authored_atom_count > 0) {
         kernel_mask_unauthored_slot_rows_backward<<<
@@ -448,7 +390,7 @@ void AuthoredSlotMaskGradFn::apply_impl(
             grad_output.data,
             backward_bindings->d_token_to_slot_index_map,
             backward_bindings->d_atom_positions,
-            input_grad,
+            input_gradient->data,
             authored_atom_count,
             total_tokens,
             max_seq_len,
@@ -460,22 +402,15 @@ void AuthoredSlotMaskGradFn::apply_impl(
             stream);
     }
 
-    if (input_grad_fn) {
-        Tensor view;
-        view.data = input_grad;
-        view.shape = input_shape;
-        view.owns_data = false;
-        view.stream = stream;
-        input_grad_fn->apply(
-            view, stream, backward_payload, backward_bindings);
-    }
+    propagate_input_gradient(
+        input_gradient, stream, backward_payload, backward_bindings,
+        "AuthoredSlotMaskGradFn::apply");
 }
 
 void AuthoredSlotMaskGradFn::release_saved()
 {
     GradFn::release_saved();
-    input_grad = nullptr;
-    input_grad_fn.reset();
+    input_gradient.reset();
 }
 
 Tensor gather_slot_seed_inputs(

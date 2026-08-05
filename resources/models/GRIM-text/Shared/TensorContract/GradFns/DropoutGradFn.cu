@@ -140,23 +140,9 @@ DropoutGradFn::~DropoutGradFn() {
 
 void DropoutGradFn::capture_input(Tensor& x, cudaStream_t stream) {
     input_requires_grad = x.requires_grad;
-    input_shape = x.shape;
-    input_grad_fn = x.grad_fn;
-    register_input(x.grad_fn);
-
     if (input_requires_grad) {
-        if (x.is_leaf) {
-            x.ensure_grad();
-            input_grad = x.grad_data();
-            owns_input_grad = false;
-        } else {
-            const size_t grad_size = x.numel();
-            cudaMallocOrThrow(reinterpret_cast<void**>(&input_grad), grad_size * sizeof(float), "DropoutGradFn_input_grad");
-            throwIfCudaFailed(
-                cudaMemsetAsync(input_grad, 0, grad_size * sizeof(float), stream),
-                "DropoutGradFn::capture_input: cudaMemsetAsync(input_grad) failed");
-            owns_input_grad = true;
-        }
+        input_gradient = capture_input_gradient(
+            x, stream, "DropoutGradFn::capture_input");
     }
 }
 
@@ -185,8 +171,8 @@ void DropoutGradFn::apply_impl(const Tensor& grad_output,
     if (!saved_mask) {
         throw std::runtime_error("DropoutGradFn::apply: saved_mask is NULL - forward must save dropout mask for backward");
     }
-    if (!input_grad) {
-        throw std::runtime_error("DropoutGradFn::apply: input_grad is NULL - capture_input() must be called first");
+    if (!input_gradient) {
+        throw std::runtime_error("DropoutGradFn::apply: input gradient Tensor is NULL - capture_input() must be called first");
     }
     if (!grad_output.data) {
         throw std::runtime_error("DropoutGradFn::apply: grad_output.data is NULL");
@@ -196,25 +182,25 @@ void DropoutGradFn::apply_impl(const Tensor& grad_output,
             "DropoutGradFn::apply: grad_output numel mismatch, expected " +
             std::to_string(count) + " got " + std::to_string(grad_output.numel()));
     }
-    input_shape.require("DropoutGradFn::apply input_shape");
+    input_gradient->shape.require("DropoutGradFn::apply input shape");
     grad_output.shape.require("DropoutGradFn::apply grad_output.shape");
-    if (!tensorShapesEqual(grad_output.shape, input_shape)) {
-        throw std::runtime_error("DropoutGradFn::apply: grad_output shape mismatch with captured input_shape");
+    if (!tensorShapesEqual(grad_output.shape, input_gradient->shape)) {
+        throw std::runtime_error("DropoutGradFn::apply: grad_output shape mismatch with captured input gradient shape");
     }
 
     kernel_dropout_backward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-        grad_output.data, saved_mask, input_grad, scale, count);
+        grad_output.data, saved_mask, input_gradient->data, scale, count);
     trackKernelLaunch("kernel_dropout_backward", stream);
     throwIfCudaFailed(cudaGetLastError(), "DropoutGradFn::apply: kernel_dropout_backward launch failed");
 
     applied = true;
 
-    if (input_grad_fn) {
-        Tensor view;
-        view.data = input_grad; view.shape = input_shape;
-        view.owns_data = false; view.stream = stream;
-        input_grad_fn->apply(view, stream, backward_payload, backward_bindings);
-    }
+    propagate_input_gradient(
+        input_gradient,
+        stream,
+        backward_payload,
+        backward_bindings,
+        "DropoutGradFn::apply");
 }
 
 void DropoutGradFn::release_saved() {
@@ -223,12 +209,7 @@ void DropoutGradFn::release_saved() {
         cudaFree(saved_mask);
         saved_mask = nullptr;
     }
-    if (owns_input_grad && input_grad) {
-        cudaFree(input_grad);
-        owns_input_grad = false;
-    }
-    input_grad = nullptr;
-    input_grad_fn.reset();
+    input_gradient.reset();
 }
 
 Tensor dropout(const Tensor& x, float p, std::uint64_t seed, cudaStream_t stream,

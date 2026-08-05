@@ -154,23 +154,10 @@ LogSoftmaxGradFn::~LogSoftmaxGradFn() {
 
 void LogSoftmaxGradFn::capture_input(Tensor& x, cudaStream_t stream) {
     input_requires_grad = x.requires_grad;
-    input_shape = x.shape;
-    input_grad_fn = x.grad_fn;
-    register_input(x.grad_fn);
 
     if (input_requires_grad) {
-        if (x.is_leaf) {
-            x.ensure_grad();
-            input_grad = x.grad_data();
-            owns_input_grad = false;
-        } else {
-            const size_t bytes = x.shape.total_elements() * sizeof(float);
-            cudaMallocOrThrow(reinterpret_cast<void**>(&input_grad), bytes, "LogSoftmaxGradFn_input_grad");
-            throwIfCudaFailed(
-                cudaMemsetAsync(input_grad, 0, bytes, stream),
-                "LogSoftmaxGradFn::capture_input: cudaMemsetAsync(input_grad) failed");
-            owns_input_grad = true;
-        }
+        input_gradient = capture_input_gradient(
+            x, stream, "LogSoftmaxGradFn::capture_input");
     }
 }
 
@@ -201,25 +188,20 @@ void LogSoftmaxGradFn::apply_impl(const Tensor& grad_output,
 
     if (!input_requires_grad) return;
     if (!saved_log_softmax) throw std::runtime_error("LogSoftmaxGradFn::apply: saved_log_softmax is NULL - forward must save output for backward");
-    if (!input_grad) {
+    if (!input_gradient) {
         throw std::runtime_error(
-            "LogSoftmaxGradFn::apply: input_grad is NULL - "
+            "LogSoftmaxGradFn::apply: input gradient Tensor is NULL - "
             "capture_input() must be called first");
     }
 
     kernel_log_softmax_backward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-        grad_output.data, saved_log_softmax, input_grad, num_tokens, dim);
+        grad_output.data, saved_log_softmax, input_gradient->data, num_tokens, dim);
     trackKernelLaunch("kernel_log_softmax_backward", stream);
     throwIfCudaFailed(cudaGetLastError(), "LogSoftmaxGradFn::apply: kernel_log_softmax_backward launch failed");
 
-    if (input_grad_fn) {
-        Tensor view;
-        view.data = input_grad;
-        view.shape = input_shape;
-        view.owns_data = false;
-        view.stream = stream;
-        input_grad_fn->apply(view, stream, backward_payload, backward_bindings);
-    }
+    propagate_input_gradient(
+        input_gradient, stream, backward_payload, backward_bindings,
+        "LogSoftmaxGradFn::apply");
 }
 
 void LogSoftmaxGradFn::release_saved() {
@@ -230,12 +212,7 @@ void LogSoftmaxGradFn::release_saved() {
     } else {
         saved_log_softmax = nullptr;
     }
-    if (owns_input_grad && input_grad) {
-        cudaFree(input_grad);
-        input_grad = nullptr;
-    }
-    owns_input_grad = false;
-    input_grad_fn.reset();
+    input_gradient.reset();
 }
 
 Tensor log_softmax(const Tensor& x, cudaStream_t stream, bool save_output_copy) {

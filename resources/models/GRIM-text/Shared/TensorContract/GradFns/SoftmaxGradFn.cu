@@ -139,24 +139,10 @@ SoftmaxGradFn::~SoftmaxGradFn() {
 
 void SoftmaxGradFn::capture_input(Tensor& x, cudaStream_t stream) {
     input_requires_grad = x.requires_grad;
-    input_shape = x.shape;
-    input_grad_fn = x.grad_fn;
-    register_input(x.grad_fn);
 
     if (input_requires_grad) {
-        if (x.is_leaf) {
-            x.ensure_grad();
-            input_grad = x.grad_data();
-        } else {
-            const size_t n = x.numel();
-            float* buffer = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), n * sizeof(float), "SoftmaxGradFn_input_grad");
-            cudaMemsetAsync(buffer, 0, n * sizeof(float), stream);
-            owned_input_grad = std::shared_ptr<float>(buffer, [](float* p) {
-                queueForDeferredCleanup(p);
-            });
-            input_grad = owned_input_grad.get();
-        }
+        input_gradient = capture_input_gradient(
+            x, stream, "SoftmaxGradFn::capture_input");
     }
 }
 
@@ -177,19 +163,16 @@ void SoftmaxGradFn::apply_impl(const Tensor& grad_output,
     if (applied) return;
     applied = true;
     if (!input_requires_grad) return;
-    if (!saved_softmax || !input_grad) {
+    if (!saved_softmax || !input_gradient) {
         throw std::runtime_error("SoftmaxGradFn::apply: saved data or grad buffer is NULL");
     }
 
     kernel_softmax_backward<<<num_tokens, AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-        grad_output.data, saved_softmax, input_grad, num_tokens, dim, inv_temperature);
+        grad_output.data, saved_softmax, input_gradient->data, num_tokens, dim, inv_temperature);
 
-    if (input_grad_fn) {
-        Tensor view;
-        view.data = input_grad; view.shape = input_shape;
-        view.owns_data = false; view.stream = stream;
-        input_grad_fn->apply(view, stream, backward_payload, backward_bindings);
-    }
+    propagate_input_gradient(
+        input_gradient, stream, backward_payload, backward_bindings,
+        "SoftmaxGradFn::apply");
 }
 
 void SoftmaxGradFn::release_saved() {
@@ -198,8 +181,7 @@ void SoftmaxGradFn::release_saved() {
         cudaFree(saved_softmax);
         saved_softmax = nullptr;
     }
-    input_grad = nullptr;
-    input_grad_fn.reset();
+    input_gradient.reset();
 }
 
 Tensor softmax(const Tensor& x, float temperature, cudaStream_t stream) {

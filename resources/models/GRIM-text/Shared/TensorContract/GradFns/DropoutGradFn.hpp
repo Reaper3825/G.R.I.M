@@ -16,10 +16,7 @@ namespace autograd {
 
 struct DropoutGradFn : public GradFn {
     bool input_requires_grad = false;
-    float* input_grad = nullptr;
-    bool owns_input_grad = false;
-    TensorContract::TensorShape input_shape;
-    std::shared_ptr<GradFn> input_grad_fn;
+    std::shared_ptr<Tensor> input_gradient;
     std::uint8_t* saved_mask = nullptr;
     float scale = 1.0f;
     std::size_t count = 0;

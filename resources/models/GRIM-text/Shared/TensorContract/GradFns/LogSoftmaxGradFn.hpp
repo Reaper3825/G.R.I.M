@@ -14,10 +14,7 @@ namespace autograd {
 
 struct LogSoftmaxGradFn : public GradFn {
     bool input_requires_grad = false;
-    float* input_grad = nullptr;
-    bool owns_input_grad = false;
-    TensorContract::TensorShape input_shape;
-    std::shared_ptr<GradFn> input_grad_fn;
+    std::shared_ptr<Tensor> input_gradient;
     float* saved_log_softmax = nullptr;
     bool owns_saved_log_softmax = true;
     int num_tokens = 0;

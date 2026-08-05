@@ -309,7 +309,6 @@ void ProjectOutPC1GradFn::capture_input(Tensor& input, int rows, int cols, int n
                                  std::to_string((std::size_t)rows * (std::size_t)cols));
 
     input_requires_grad = input.requires_grad;
-    input_shape = input.shape;
     element_count = input.numel();
     num_rows = rows;
     num_cols = cols;
@@ -325,8 +324,8 @@ void ProjectOutPC1GradFn::capture_input(Tensor& input, int rows, int cols, int n
         return;
     }
 
-    input_grad_fn = input.grad_fn;
-    register_input(input.grad_fn);
+    input_gradient = capture_input_gradient(
+        input, stream, "ProjectOutPC1GradFn::capture_input");
 
     float* input_copy = nullptr;
     cudaMallocOrThrow(reinterpret_cast<void**>(&input_copy), element_count * sizeof(float), "ProjectOutPC1GradFn_input_data");
@@ -334,20 +333,6 @@ void ProjectOutPC1GradFn::capture_input(Tensor& input, int rows, int cols, int n
                       "ProjectOutPC1GradFn::capture_input: cudaMemcpyAsync(input_data) failed");
     owned_input_data.reset(input_copy, [](float* p) { queueForDeferredCleanup(p); });
     input_data_saved = owned_input_data.get();
-
-    if (input.is_leaf) {
-        input.ensure_grad();
-        input_grad = input.grad_data();
-        AG_TRACE("[ProjectOutPC1GradFn] Using persistent input_grad buffer (leaf): %p\n", (void*)input_grad);
-    } else {
-        float* buf = nullptr;
-        cudaMallocOrThrow(reinterpret_cast<void**>(&buf), element_count * sizeof(float), "ProjectOutPC1GradFn_input_grad");
-        cudaMemsetAsync(buf, 0, element_count * sizeof(float), stream);
-        owned_input_grad.reset(buf, [](float* p) { queueForDeferredCleanup(p); });
-        input_grad = owned_input_grad.get();
-        AG_TRACE("[ProjectOutPC1GradFn] Allocated input_grad buffer (non-leaf): %zu floats at %p\n",
-                 element_count, (void*)input_grad);
-    }
 
     owned_g.reset(g_device, [](float* p) { queueForDeferredCleanup(p); });
     g_saved = owned_g.get();
@@ -379,8 +364,8 @@ void ProjectOutPC1GradFn::apply_impl(const Tensor& grad_output,
         throw std::runtime_error("ProjectOutPC1GradFn::apply: grad_output.numel()=" +
                                  std::to_string(grad_output.numel()) +
                                  " != captured element_count=" + std::to_string(element_count));
-    if (!input_grad)
-        throw std::runtime_error("ProjectOutPC1GradFn::apply: input_grad is NULL - capture_input did not run or wiring is broken");
+    if (!input_gradient)
+        throw std::runtime_error("ProjectOutPC1GradFn::apply: input gradient Tensor is NULL - capture_input did not run or wiring is broken");
     if (power_iters < 1)
         throw std::runtime_error("ProjectOutPC1GradFn::apply: power_iters must be >= 1, got " +
                                  std::to_string(power_iters));
@@ -414,7 +399,7 @@ void ProjectOutPC1GradFn::apply_impl(const Tensor& grad_output,
     kernel_pc1_gemv_Hg<<<(num_rows + blk - 1) / blk, blk, 0, stream>>>(
         grad_output.data, g_saved, beta_buf.get(), num_rows, num_cols);
     kernel_pc1_project_accum<<<num_rows, 256, 0, stream>>>(
-        grad_output.data, g_saved, input_grad, num_rows, num_cols);
+        grad_output.data, g_saved, input_gradient->data, num_rows, num_cols);
     kernel_pc1_gemv_HtV<<<(num_cols + blk - 1) / blk, blk, 0, stream>>>(
         input_data_saved, beta_buf.get(), tmp1_buf.get(), num_rows, num_cols);
     kernel_pc1_gemv_HtV<<<(num_cols + blk - 1) / blk, blk, 0, stream>>>(
@@ -435,11 +420,11 @@ void ProjectOutPC1GradFn::apply_impl(const Tensor& grad_output,
         kernel_pc1_gemv_Hg<<<(num_rows + blk - 1) / blk, blk, 0, stream>>>(
             input_data_saved, g_i, v_buf.get(), num_rows, num_cols);
         kernel_pc1_outer_accum<<<elem_grid, blk, 0, stream>>>(
-            v_buf.get(), adj_pre_norm_buf.get(), input_grad, num_rows, num_cols, 1.0f);
+            v_buf.get(), adj_pre_norm_buf.get(), input_gradient->data, num_rows, num_cols, 1.0f);
         kernel_pc1_gemv_Hg<<<(num_rows + blk - 1) / blk, blk, 0, stream>>>(
             input_data_saved, adj_pre_norm_buf.get(), dv_buf.get(), num_rows, num_cols);
         kernel_pc1_outer_accum<<<elem_grid, blk, 0, stream>>>(
-            dv_buf.get(), g_i, input_grad, num_rows, num_cols, 1.0f);
+            dv_buf.get(), g_i, input_gradient->data, num_rows, num_cols, 1.0f);
         kernel_pc1_gemv_HtV<<<(num_cols + blk - 1) / blk, blk, 0, stream>>>(
             input_data_saved, dv_buf.get(), adj_current, num_rows, num_cols);
         throwIfCudaFailed(cudaGetLastError(), "ProjectOutPC1GradFn::apply: power-iteration reverse launch failed");
@@ -450,32 +435,26 @@ void ProjectOutPC1GradFn::apply_impl(const Tensor& grad_output,
     kernel_pc1_normalize_backward<<<1, 256, 0, stream>>>(
         adj_next, g_history_saved, inv_norm_saved, 0, adj_pre_norm_buf.get(), num_cols);
     kernel_pc1_mean_backward_accum<<<elem_grid, blk, 0, stream>>>(
-        adj_pre_norm_buf.get(), input_grad, num_rows, num_cols);
+        adj_pre_norm_buf.get(), input_gradient->data, num_rows, num_cols);
     throwIfCudaFailed(cudaGetLastError(), "ProjectOutPC1GradFn::apply: seed reverse launch failed");
     throwIfCudaFailed(cudaStreamSynchronize(stream), "ProjectOutPC1GradFn::apply: seed reverse failed");
 
-    if (input_grad_fn) {
-        Tensor input_grad_tensor;
-        input_grad_tensor.data = input_grad;
-        input_grad_tensor.shape = input_shape;
-        input_grad_tensor.owns_data = false;
-        input_grad_tensor.stream = stream;
-        input_grad_fn->apply(input_grad_tensor, stream, backward_payload, backward_bindings);
-    }
+    propagate_input_gradient(
+        input_gradient, stream, backward_payload, backward_bindings,
+        "ProjectOutPC1GradFn::apply");
 }
 
 void ProjectOutPC1GradFn::release_saved() {
-    owned_input_grad.reset();
+    GradFn::release_saved();
+    input_gradient.reset();
     owned_input_data.reset();
     owned_g.reset();
     owned_g_history.reset();
     owned_inv_norms.reset();
-    input_grad = nullptr;
     input_data_saved = nullptr;
     g_saved = nullptr;
     g_history_saved = nullptr;
     inv_norm_saved = nullptr;
-    input_grad_fn.reset();
     power_iters = 0;
 }
 

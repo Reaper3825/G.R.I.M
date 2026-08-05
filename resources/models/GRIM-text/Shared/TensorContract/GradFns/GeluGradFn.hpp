@@ -24,10 +24,7 @@ namespace autograd {
 
 struct GeluGradFn : public GradFn {
     bool input_requires_grad = false;
-    float* input_grad = nullptr;
-    std::shared_ptr<float> owned_input_grad;       ///< ISSUE #56: owned grad buffer for non-leaf
-    TensorContract::TensorShape input_shape;
-    std::shared_ptr<GradFn> input_grad_fn;
+    std::shared_ptr<Tensor> input_gradient;
     std::shared_ptr<float> owned_cache;            ///< ISSUE #51: owned copy of cached input
     const float* cached_input = nullptr;           ///< Points to owned_cache.get()
     std::size_t cached_size = 0;

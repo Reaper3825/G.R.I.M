@@ -13,16 +13,11 @@ namespace GRIM {
 namespace autograd {
 
 struct CrossEntropyLogitsGradFn : public GradFn {
-    std::shared_ptr<GradFn> input_grad_fn;
-    TensorContract::TensorShape input_shape;
+    std::shared_ptr<Tensor> logits_gradient;
     float* saved_probs = nullptr;
     bool owns_saved = true;
     int C = 0;
     int target_idx = 0;
-
-    std::shared_ptr<float> owned_grad_logits;
-    float* grad_logits = nullptr;
-    bool input_is_leaf = false;
 
     CrossEntropyLogitsGradFn();
     ~CrossEntropyLogitsGradFn() override;

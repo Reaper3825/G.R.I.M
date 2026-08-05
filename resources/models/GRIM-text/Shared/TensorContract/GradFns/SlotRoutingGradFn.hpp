@@ -16,14 +16,8 @@ struct SlotSeedInputGradFn : public GradFn {
     bool token_states_requires_grad = false;
     bool type_embeddings_requires_grad = false;
     bool type_embedding_enabled = false;
-    float* token_states_grad = nullptr;
-    float* type_embeddings_grad = nullptr;
-    std::shared_ptr<float> owned_token_states_grad;
-    std::shared_ptr<float> owned_type_embeddings_grad;
-    TensorContract::TensorShape token_states_shape;
-    TensorContract::TensorShape type_embeddings_shape;
-    std::shared_ptr<GradFn> token_states_grad_fn;
-    std::shared_ptr<GradFn> type_embeddings_grad_fn;
+    std::shared_ptr<Tensor> token_states_gradient;
+    std::shared_ptr<Tensor> type_embeddings_gradient;
     int batch_size = 0;
     int max_seq_len = 0;
     int total_tokens = 0;
@@ -52,10 +46,7 @@ struct SlotSeedInputGradFn : public GradFn {
 
 struct AuthoredSlotMaskGradFn : public GradFn {
     bool input_requires_grad = false;
-    float* input_grad = nullptr;
-    std::shared_ptr<float> owned_input_grad;
-    TensorContract::TensorShape input_shape;
-    std::shared_ptr<GradFn> input_grad_fn;
+    std::shared_ptr<Tensor> input_gradient;
     int batch_size = 0;
     int max_seq_len = 0;
     int total_tokens = 0;

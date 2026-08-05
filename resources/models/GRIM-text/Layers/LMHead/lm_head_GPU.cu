@@ -29,6 +29,7 @@
 //======================================================//
 
 #include "lm_head_GPU.hpp"
+#include "../../Shared/Goal/MeanPool_GPU.hpp"
 #include "../../Shared/TensorContract/LMHeadGemmDiagnostics.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 
@@ -130,6 +131,11 @@ void forwardLmHead(
         normalized = autograd::rms_norm(input, lm_final_rms_gamma, hp.rms_epsilon, stream);
         current_input = &normalized;
     }
+
+    forward_outputs.goal.target_state.emplace();
+    forward_outputs.goal.target_state->norm_mean_pool = meanPoolHiddenStates(
+        *current_input,
+        stream);
 
     // ════════════════════════════════════════════════════════════════════
     // STEP 0.5: Optional head-side residual SwiGLU adapter (capacity expansion)

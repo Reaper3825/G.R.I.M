@@ -16,18 +16,9 @@ struct GatedTraceUpdateGradFn : public GradFn {
     float* saved_gate_vals = nullptr;
     int dm_ = 0;
 
-    float* grad_old_trace = nullptr;
-    float* grad_candidate = nullptr;
-    float* grad_gate_logits = nullptr;
-    std::shared_ptr<float> owned_grad_old_trace;
-    std::shared_ptr<float> owned_grad_candidate;
-    std::shared_ptr<float> owned_grad_gate_logits;
-    std::shared_ptr<GradFn> old_trace_grad_fn;
-    std::shared_ptr<GradFn> candidate_grad_fn;
-    std::shared_ptr<GradFn> gate_logits_grad_fn;
-    TensorContract::TensorShape old_trace_shape;
-    TensorContract::TensorShape candidate_shape;
-    TensorContract::TensorShape gate_logits_shape;
+    std::shared_ptr<Tensor> old_trace_gradient;
+    std::shared_ptr<Tensor> candidate_gradient;
+    std::shared_ptr<Tensor> gate_logits_gradient;
     bool old_trace_requires_grad = false;
     bool candidate_requires_grad = false;
     bool gate_logits_requires_grad = false;

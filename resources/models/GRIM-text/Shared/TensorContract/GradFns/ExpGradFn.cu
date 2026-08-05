@@ -5,7 +5,6 @@
 
 #include "ExpGradFn.hpp"
 #include "../TensorContract_GPU.hpp"
-#include "../../CudaAllocUtils.hpp"
 
 #include <cuda_runtime.h>
 #include <cstdio>
@@ -84,8 +83,6 @@ __global__ void kernel_exp_backward(
 
 namespace GRIM {
 
-using CudaAlloc::cudaMallocOrThrow;
-
 namespace autograd {
 
 ExpGradFn::ExpGradFn() {
@@ -98,22 +95,10 @@ ExpGradFn::~ExpGradFn() {
 
 void ExpGradFn::capture_input(Tensor& x, cudaStream_t stream) {
     input_requires_grad = x.requires_grad;
-    input_shape = x.shape;
-    input_grad_fn = x.grad_fn;
-    register_input(x.grad_fn);
 
     if (input_requires_grad) {
-        if (x.is_leaf) {
-            x.ensure_grad();
-            input_grad = x.grad_data();
-        } else {
-            const size_t x_numel = x.numel();
-            float* buffer = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), x_numel * sizeof(float), "ExpGradFn_input_grad");
-            cudaMemsetAsync(buffer, 0, x_numel * sizeof(float), stream);
-            owned_input_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
-            input_grad = owned_input_grad.get();
-        }
+        input_gradient = capture_input_gradient(
+            x, stream, "ExpGradFn::capture_input");
     }
 }
 
@@ -134,8 +119,8 @@ void ExpGradFn::apply_impl(const Tensor& grad_output,
     applied = true;
 
     if (!input_requires_grad) return;
-    if (!input_grad) {
-        throw std::runtime_error("ExpGradFn::apply: input_grad is NULL");
+    if (!input_gradient) {
+        throw std::runtime_error("ExpGradFn::apply: input gradient Tensor is NULL");
     }
     if (!cached_output) {
         throw std::runtime_error("ExpGradFn::apply: cached_output is NULL");
@@ -147,23 +132,19 @@ void ExpGradFn::apply_impl(const Tensor& grad_output,
     }
 
     kernel_exp_backward<<<gridForCount(count), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-        grad_output.data, cached_output, input_grad, count);
+        grad_output.data, cached_output, input_gradient->data, count);
     trackKernelLaunch("kernel_exp_backward", stream);
 
-    if (input_grad_fn) {
-        Tensor view;
-        view.data = input_grad; view.shape = input_shape;
-        view.owns_data = false; view.stream = stream;
-        input_grad_fn->apply(view, stream, backward_payload, backward_bindings);
-    }
+    propagate_input_gradient(
+        input_gradient, stream, backward_payload, backward_bindings,
+        "ExpGradFn::apply");
 }
 
 void ExpGradFn::release_saved() {
     GradFn::release_saved();
     cached_output = nullptr;
     cached_size = 0;
-    input_grad = nullptr;
-    input_grad_fn.reset();
+    input_gradient.reset();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -132,46 +132,20 @@ LayerScaleGradFn::LayerScaleGradFn() {
 }
 
 void LayerScaleGradFn::capture_inputs(Tensor& input, Tensor& scale_param, cudaStream_t stream) {
-    input_shape = input.shape;
-    scale_shape = scale_param.shape;
     element_count = input.numel();
-    input_grad_fn = input.grad_fn;
-    scale_grad_fn = scale_param.grad_fn;
-    register_input(input.grad_fn);
-    register_input(scale_param.grad_fn);
 
     const auto input_dims = input.shape.as_2d();
     rows = input_dims.rows;
     cols = input_dims.cols;
 
     if (input.requires_grad) {
-        if (input.is_leaf) {
-            input.ensure_grad();
-            input_grad = input.grad_data();
-        } else {
-            float* buffer = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), element_count * sizeof(float), "LayerScaleGradFn_input_grad");
-            cudaMemsetAsync(buffer, 0, element_count * sizeof(float), stream);
-            owned_input_grad = std::shared_ptr<float>(buffer, [](float* p) {
-                queueForDeferredCleanup(p);
-            });
-            input_grad = owned_input_grad.get();
-        }
+        input_gradient = capture_input_gradient(
+            input, stream, "LayerScaleGradFn::capture_inputs input");
     }
 
     if (scale_param.requires_grad) {
-        if (scale_param.is_leaf) {
-            scale_param.ensure_grad();
-            scale_grad = scale_param.grad_data();
-        } else {
-            float* buffer = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), scale_param.numel() * sizeof(float), "LayerScaleGradFn_scale_grad");
-            cudaMemsetAsync(buffer, 0, scale_param.numel() * sizeof(float), stream);
-            owned_scale_grad = std::shared_ptr<float>(buffer, [](float* p) {
-                queueForDeferredCleanup(p);
-            });
-            scale_grad = owned_scale_grad.get();
-        }
+        scale_gradient = capture_input_gradient(
+            scale_param, stream, "LayerScaleGradFn::capture_inputs scale");
     }
 
     float* scale_buffer = nullptr;
@@ -218,13 +192,13 @@ void LayerScaleGradFn::apply_impl(const Tensor& grad_output,
         throw std::runtime_error("LayerScaleGradFn::apply: saved scale_data is NULL");
     }
 
-    if (input_grad) {
+    if (input_gradient) {
         kernel_layer_scale_backward_input<<<gridForCount(n), AUTOGRAD_BLOCK_SIZE, 0, stream>>>(
-            input_grad, grad_output.data, scale_data, rows, cols);
+            input_gradient->data, grad_output.data, scale_data, rows, cols);
         checkCudaLaunch("kernel_layer_scale_backward_input");
     }
 
-    if (scale_grad) {
+    if (scale_gradient) {
         if (!input_data) {
             throw std::runtime_error("LayerScaleGradFn::apply: saved input_data is NULL while scale requires grad");
         }
@@ -232,47 +206,31 @@ void LayerScaleGradFn::apply_impl(const Tensor& grad_output,
             throw std::runtime_error("LayerScaleGradFn::apply: cols exceeds 1D grid limit for scale gradient");
         }
         kernel_layer_scale_backward_scale<<<cols, 256, 0, stream>>>(
-            grad_output.data, input_data, scale_grad, rows, cols);
+            grad_output.data, input_data, scale_gradient->data, rows, cols);
         checkCudaLaunch("kernel_layer_scale_backward_scale");
     }
 
-    if (input_grad_fn) {
-        if (!input_grad) {
-            throw std::runtime_error("LayerScaleGradFn::apply: input_grad is NULL but input_grad_fn exists");
-        }
-        Tensor input_grad_tensor;
-        input_grad_tensor.data = input_grad;
-        input_grad_tensor.shape = input_shape;
-        input_grad_tensor.owns_data = false;
-        input_grad_tensor.stream = stream;
-        input_grad_fn->apply(input_grad_tensor, stream, backward_payload, backward_bindings);
+    if (input_gradient) {
+        propagate_input_gradient(
+            input_gradient, stream, backward_payload, backward_bindings,
+            "LayerScaleGradFn::apply input");
     }
 
-    if (scale_grad_fn) {
-        if (!scale_grad) {
-            throw std::runtime_error("LayerScaleGradFn::apply: scale_grad is NULL but scale_grad_fn exists");
-        }
-        Tensor scale_grad_tensor;
-        scale_grad_tensor.data = scale_grad;
-        scale_grad_tensor.shape = scale_shape;
-        scale_grad_tensor.owns_data = false;
-        scale_grad_tensor.stream = stream;
-        scale_grad_fn->apply(scale_grad_tensor, stream, backward_payload, backward_bindings);
+    if (scale_gradient) {
+        propagate_input_gradient(
+            scale_gradient, stream, backward_payload, backward_bindings,
+            "LayerScaleGradFn::apply scale");
     }
 }
 
 void LayerScaleGradFn::release_saved() {
     GradFn::release_saved();
-    owned_input_grad.reset();
     owned_input_data.reset();
     owned_scale_data.reset();
-    owned_scale_grad.reset();
     input_data = nullptr;
-    input_grad = nullptr;
     scale_data = nullptr;
-    scale_grad = nullptr;
-    input_grad_fn.reset();
-    scale_grad_fn.reset();
+    input_gradient.reset();
+    scale_gradient.reset();
 }
 
 Tensor layer_scale(const Tensor& x, Tensor& scale_param, cudaStream_t stream) {

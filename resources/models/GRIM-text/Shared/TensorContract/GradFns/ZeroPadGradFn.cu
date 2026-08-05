@@ -6,7 +6,6 @@
 #include "ZeroPadGradFn.hpp"
 #include "../GradientAccumulation.hpp"
 #include "../TensorContract_GPU.hpp"
-#include "../../CudaAllocUtils.hpp"
 
 #include <cuda_runtime.h>
 #include <cstdio>
@@ -20,8 +19,6 @@ void trackKernelLaunch(const char* kernel_name, cudaStream_t stream);
 
 namespace GRIM {
 
-using CudaAlloc::cudaMallocOrThrow;
-
 namespace autograd {
 
 ZeroPadGradFn::ZeroPadGradFn() {
@@ -34,23 +31,12 @@ ZeroPadGradFn::~ZeroPadGradFn() {
 
 void ZeroPadGradFn::capture_input(Tensor& x, cudaStream_t stream, size_t offset_elems) {
     input_requires_grad = x.requires_grad;
-    input_shape = x.shape;
-    input_grad_fn = x.grad_fn;
-    register_input(x.grad_fn);
     input_count = x.numel();
     offset_elements = offset_elems;
 
     if (input_requires_grad) {
-        if (x.is_leaf) {
-            x.ensure_grad();
-            input_grad = x.grad_data();
-        } else {
-            float* buffer = nullptr;
-            cudaMallocOrThrow(reinterpret_cast<void**>(&buffer), input_count * sizeof(float), "ZeroPadGradFn_input_grad");
-            cudaMemsetAsync(buffer, 0, input_count * sizeof(float), stream);
-            owned_input_grad = std::shared_ptr<float>(buffer, [](float* p) { queueForDeferredCleanup(p); });
-            input_grad = owned_input_grad.get();
-        }
+        input_gradient = capture_input_gradient(
+            x, stream, "ZeroPadGradFn::capture_input");
     }
 }
 
@@ -63,12 +49,12 @@ void ZeroPadGradFn::apply_impl(const Tensor& grad_output,
     applied = true;
 
     if (!input_requires_grad) return;
-    if (!input_grad) {
-        throw std::runtime_error("ZeroPadGradFn::apply: input_grad is NULL");
+    if (!input_gradient) {
+        throw std::runtime_error("ZeroPadGradFn::apply: input gradient Tensor is NULL");
     }
 
     // grad_x += grad_output[offset_elements : offset_elements + input_count]
-    accumulate_grad(input_grad,
+    accumulate_grad(input_gradient->data,
                     grad_output.data + offset_elements,
                     input_count,
                     1.0f,
@@ -76,18 +62,14 @@ void ZeroPadGradFn::apply_impl(const Tensor& grad_output,
                     "ZeroPadGradFn::apply input_grad");
     trackKernelLaunch("zero_pad_backward", stream);
 
-    if (input_grad_fn) {
-        Tensor view;
-        view.data = input_grad; view.shape = input_shape;
-        view.owns_data = false; view.stream = stream;
-        input_grad_fn->apply(view, stream, backward_payload, backward_bindings);
-    }
+    propagate_input_gradient(
+        input_gradient, stream, backward_payload, backward_bindings,
+        "ZeroPadGradFn::apply");
 }
 
 void ZeroPadGradFn::release_saved() {
     GradFn::release_saved();
-    input_grad = nullptr;
-    input_grad_fn.reset();
+    input_gradient.reset();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

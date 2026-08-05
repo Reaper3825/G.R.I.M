@@ -23,10 +23,7 @@ namespace autograd {
 
 struct MulScalarGradFn : public GradFn {
     bool input_requires_grad = false;
-    float* input_grad = nullptr;
-    std::shared_ptr<float> owned_input_grad;
-    TensorContract::TensorShape input_shape;
-    std::shared_ptr<GradFn> input_grad_fn;
+    std::shared_ptr<Tensor> input_gradient;
     float scalar = 0.0f;
     std::size_t count = 0;
 
