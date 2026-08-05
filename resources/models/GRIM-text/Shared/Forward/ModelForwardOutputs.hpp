@@ -11,6 +11,7 @@
 
 #ifdef USE_CUDA
 
+#include "../Goal/Goal.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 
@@ -235,6 +236,7 @@ public:
     // ═══════════════════════════════════════════════════════════════════════════
     // CROSS-LAYER LIVE TENSORS
     // ═══════════════════════════════════════════════════════════════════════════
+    Goal goal;
     Tensor embedding_tensor;
     Tensor embedding_structured_state;
     Tensor embedding_gate_concat;
@@ -301,6 +303,7 @@ public:
     }
 
     void clear() {
+        goal = Goal{};
         clearRetainedLayerOutputs();
         embedding_tensor = Tensor();
         embedding_structured_state = Tensor();

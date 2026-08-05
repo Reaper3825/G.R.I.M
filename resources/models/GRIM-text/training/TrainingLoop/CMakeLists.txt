@@ -418,6 +418,8 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/Gradients/GradStatsCollector.cu
     ../../Shared/Forward/ModelForward_GPU.cu
     ../../Shared/Forward/ModelForwardArgBootstrap_GPU.cu
+    ../../Shared/Goal/MeanPool_GPU.cu
+    ../../Shared/Goal/MeanPool_GPU.hpp
     ../../Shared/InferenceState/KvCacheState_GPU.cu
     ../Autograd/AutogradContext.cu
     ../Autograd/AutogradTraining.cu
@@ -582,6 +584,8 @@ add_executable(train_gpu
     ../Diagnostics/PredictionDistributionDiagnostic.hpp
     ../Diagnostics/DiagnosticGates.cu
     ../Diagnostics/DiagnosticGates.hpp
+    ../Diagnostics/HistogramDiagnostic.cu
+    ../Diagnostics/HistogramDiagnostic.hpp
     ../Phases/Phase3_Cleanup.cu
     ../Phases/Phase3_Cleanup.hpp
     ../Subprocess/subprocess_status.hpp

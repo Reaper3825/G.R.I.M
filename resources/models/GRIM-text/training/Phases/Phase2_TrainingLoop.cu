@@ -73,6 +73,41 @@ std::string formatMetric(std::string_view name, float value, int precision) {
     return std::string(name) + "=" + formatScalar(value, precision);
 }
 
+void logNormMeanPoolHistogram(
+    TrainingContext& ctx,
+    const GRIM::Forward::ModelForwardOutputs& forward_outputs,
+    int batch_idx,
+    std::string_view phase,
+    cudaStream_t stream)
+{
+    constexpr int kBinCount = 32;
+    constexpr float kMinValue = -1.0f;
+    constexpr float kMaxValue = 1.0f;
+
+    if (!forward_outputs.goal.target_state) {
+        throw std::runtime_error(
+            "logNormMeanPoolHistogram: forward output has no target_state");
+    }
+    const GRIM::Tensor& norm_mean_pool =
+        forward_outputs.goal.target_state->norm_mean_pool;
+    norm_mean_pool.require("logNormMeanPoolHistogram norm_mean_pool");
+
+    const GRIM::Diagnostics::Histogram histogram =
+        GRIM::Diagnostics::computeHistogram(
+            norm_mean_pool.data,
+            norm_mean_pool.numel(),
+            kBinCount,
+            kMinValue,
+            kMaxValue,
+            stream);
+    GRIM::Diagnostics::logHistogram(
+        ctx,
+        histogram,
+        "goal.target_state.norm_mean_pool",
+        phase,
+        batch_idx);
+}
+
 // Query LR schedule at a given step, honoring stability overrides.
 float getScheduledLearningRate(
     const GRIM::LR::LRSchedule& schedule,
@@ -705,6 +740,12 @@ BatchResult processBatch(
             ("ForwardAllocationSizes batch=" + std::to_string(batch_idx + 1)).c_str());
     }
     auto forward_outputs = GRIM::Forward::executeModelForward(forward_request, runtime_payload);
+    Internal::logNormMeanPoolHistogram(
+        ctx,
+        forward_outputs,
+        batch_idx,
+        "training",
+        stream);
     if constexpr (GRIM::VerboseLogging::ENABLE_GPU_MEMORY_DIAGNOSTICS &&
                   GRIM::VerboseLogging::ENABLE_GPU_ALLOCATION_LEDGER) {
         if (ctx.logging.logger) {
@@ -1103,6 +1144,12 @@ ValidationResult runValidation(TrainingContext& ctx) {
             /*emit_selector_logits=*/emit_selector_logits};
 
         auto forward_outputs = GRIM::Forward::executeModelForward(forward_request, runtime_payload);
+        Internal::logNormMeanPoolHistogram(
+            ctx,
+            forward_outputs,
+            val_idx,
+            "validation",
+            stream);
 
         GRIM::Autograd::AutogradLossState autograd_loss_state;
         // Rule 20 single-owner clear for this val step's forward/loss state.

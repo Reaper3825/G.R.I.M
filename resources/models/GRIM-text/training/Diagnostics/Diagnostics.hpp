@@ -22,3 +22,4 @@
 #include "PostOptimizerWeightTrace.hpp"
 #include "PredictionDistributionDiagnostic.hpp"
 #include "DiagnosticGates.hpp"
+#include "HistogramDiagnostic.hpp"

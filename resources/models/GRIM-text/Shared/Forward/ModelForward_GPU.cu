@@ -8,6 +8,7 @@
 #endif
 
 #include "ModelForward_GPU.hpp"
+#include "../Goal/MeanPool_GPU.hpp"
 #include "ModelForwardArgBootstrap_GPU.hpp"
 
 #include "../../GRIM/grim_language_model_cuda.hpp"
@@ -625,6 +626,11 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
         forward_outputs.encoder_output_tensor.stream = request.stream;
         forward_outputs.encoder_output_tensor.grad_fn = last.grad_fn;
     }
+
+    forward_outputs.goal.target_state.emplace();
+    forward_outputs.goal.target_state->norm_mean_pool = meanPoolHiddenStates(
+        forward_outputs.encoder_output_tensor,
+        request.stream);
 
     const GRIM::LMHeadParameterTensors* lm_head_parameter_ptr = &lm_head_parameters;
     GRIM::LMHeadParameterTensors detached_lm_head_parameters{};
