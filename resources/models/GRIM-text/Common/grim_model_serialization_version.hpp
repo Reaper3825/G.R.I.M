@@ -45,8 +45,8 @@ inline constexpr std::uint32_t GRIM_MODEL_VERSION = 16;
 //      uint8  has_atom_table
 //      AtomTable binary payload (entries + exact numeric payload arrays + string pool)
 // v15: Added execution gate supervision and prefix-only planner boundary:
-//      int8 execution_gate_target, int32 execution_prompt_end_pos,
-//      int32 execution_prompt_length
+//      int8 execution_gate_target, int32 prompt_end_pos,
+//      int32 prompt_length
 // v16: Replaced semantic raw slot integers with opaque uint64 SlotId values.
 //      Added CompiledSlotBinding[count] (SlotId -> dense int32 SlotIndex).
 //      Bootstrap bindings carry SlotIndex; transition targets carry SlotId fields.

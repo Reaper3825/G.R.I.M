@@ -1,13 +1,20 @@
 #pragma once
 
-#include "../TensorContract/TensorContract_GPU.hpp"
-
 #include <cuda_runtime.h>
 
 namespace GRIM {
 
-Tensor meanPoolHiddenStates(
-    const Tensor& hidden_states,
+namespace Batching {
+struct BatchPayload;
+}
+
+namespace Forward {
+struct ModelForwardOutputs;
+}
+
+void meanPoolHiddenStates(
+    const Batching::BatchPayload& payload,
+    Forward::ModelForwardOutputs& forward_outputs,
     cudaStream_t stream);
 
 } // namespace GRIM

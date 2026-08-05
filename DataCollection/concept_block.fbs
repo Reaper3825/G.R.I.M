@@ -32,7 +32,7 @@ table ConceptBlockState1 {
 table ConceptBlock {
     id: string;
     name: string;
-    question: string;
+    prompt: string;
     intermediates: [string];
     answer: string;
     execution_gate_target: ExecutionGateTarget = Unsupervised;
@@ -45,6 +45,7 @@ table ConceptBlock {
     format_type: string;
     source_sequence_id: string;
     timestamp: long;
+    goal: string;
 }
 
 table ConceptBlockDataset {

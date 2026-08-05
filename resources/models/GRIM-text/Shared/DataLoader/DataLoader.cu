@@ -228,7 +228,7 @@ json conceptBlockFlatBufferToJson(const GRIMConcept::ConceptBlock& source) {
 	json j;
 	j["id"] = fbString(source.id());
 	j["name"] = fbString(source.name());
-	j["question"] = fbString(source.question());
+	j["prompt"] = fbString(source.prompt());
 	j["answer"] = fbString(source.answer());
 	j["format_type"] = fbString(source.format_type());
 	j["source_sequence_id"] = fbString(source.source_sequence_id());
@@ -581,10 +581,6 @@ bool PrepareTrainingDataFromCache(
 		return seq;
 	};
 
-	auto build_sequence = [&](const std::string& text) -> std::optional<TokenizedSequence> {
-		return materialize_sequence(tokenizer.tokenizeWithMetadata(text));
-	};
-
 	std::cout << "[DataLoader] Encoding " << concept_json_entries.size()
 	          << " concept sequences..." << std::endl << std::flush;
 	std::vector<TokenizedSequence> all_tokens;
@@ -602,13 +598,21 @@ bool PrepareTrainingDataFromCache(
 
 			if (is_plaintext) {
 				// ── Pretraining path: plain text, no execution payload ──
-				std::string text = GRIM::ConceptCanonical::renderPlainText(cj);
-				if (text.size() < min_cleaned_text_length) { ++selected_entries_skipped; continue; }
+				auto rendered = GRIM::ConceptCanonical::renderPlainTextWithPromptBoundary(cj);
+				if (rendered.text.size() < min_cleaned_text_length) { ++selected_entries_skipped; continue; }
 
-				auto seq = build_sequence(text);
+				size_t prompt_token_count = 0;
+				auto seq = materialize_sequence(tokenizer.tokenizeWithMetadata(
+					rendered.text,
+					rendered.prompt_byte_end,
+					&prompt_token_count));
 				if (!seq) { ++selected_entries_skipped; continue; }
 				seq->execution_active = false;
 				seq->execution_gate_target = GRIM::Execution::ExecutionGateTarget::UNSUPERVISED;
+				seq->prompt_length = static_cast<int32_t>(prompt_token_count);
+				seq->prompt_end_pos = prompt_token_count == 0
+					? -1
+					: static_cast<int32_t>(prompt_token_count - 1);
 				all_tokens.push_back(std::move(*seq));
 				++plaintext_count;
 				continue;
@@ -625,7 +629,7 @@ bool PrepareTrainingDataFromCache(
 			size_t prompt_token_count = 0;
 			auto encoded = tokenizer.tokenizeWithMetadata(
 				rendered.text,
-				rendered.execution_prompt_byte_end,
+				rendered.prompt_byte_end,
 				&prompt_token_count);
 			auto seq = materialize_sequence(std::move(encoded));
 			if (!seq) { ++selected_entries_skipped; continue; }
@@ -633,8 +637,8 @@ bool PrepareTrainingDataFromCache(
 			seq->execution_active = false;
 			seq->execution_gate_target =
 				GRIM::Execution::ExecutionGateTarget::UNSUPERVISED;
-			seq->execution_prompt_length = static_cast<int32_t>(prompt_token_count);
-			seq->execution_prompt_end_pos =
+			seq->prompt_length = static_cast<int32_t>(prompt_token_count);
+			seq->prompt_end_pos =
 				prompt_token_count == 0
 					? -1
 					: static_cast<int32_t>(prompt_token_count - 1);

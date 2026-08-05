@@ -245,6 +245,10 @@ public:
     Tensor embedding_gate_delta;
     std::vector<Tensor> encoder_layer_outputs;
     Tensor encoder_output_tensor;
+    // Final-layer hidden states after the optional pre-LM-head RMSNorm. This
+    // lives on the forward sink so downstream forward operations can consume
+    // it without borrowing a function-local tensor.
+    Tensor final_normalized_hidden_states;
     Tensor lm_head_input_tensor;
     // LM-head residual SwiGLU adapter (config.lm_head_mlp_enabled) retained
     // intermediates. gate/silu/up must survive until backward: SiluGradFn and
@@ -283,6 +287,9 @@ public:
         if (lm_head_mlp_residual_out.data) {
             return &lm_head_mlp_residual_out;
         }
+        if (final_normalized_hidden_states.data) {
+            return &final_normalized_hidden_states;
+        }
         if (encoder_output_tensor.data) {
             return &encoder_output_tensor;
         }
@@ -295,6 +302,9 @@ public:
         }
         if (lm_head_mlp_residual_out.data) {
             return &lm_head_mlp_residual_out;
+        }
+        if (final_normalized_hidden_states.data) {
+            return &final_normalized_hidden_states;
         }
         if (encoder_output_tensor.data) {
             return &encoder_output_tensor;
@@ -313,6 +323,7 @@ public:
         embedding_gate_delta = Tensor();
         clearTensorVector(encoder_layer_outputs);
         encoder_output_tensor = Tensor();
+        final_normalized_hidden_states = Tensor();
         lm_head_input_tensor = Tensor();
         lm_head_mlp_gate_out = Tensor();
         lm_head_mlp_silu_out = Tensor();
@@ -401,6 +412,7 @@ public:
         reportTensor("embedding_gate_delta", embedding_gate_delta);
         reportVector("encoder_layer_outputs", encoder_layer_outputs);
         reportTensor("encoder_output_tensor", encoder_output_tensor);
+        reportTensor("final_normalized_hidden_states", final_normalized_hidden_states);
         reportTensor("lm_head_input_tensor", lm_head_input_tensor);
         reportTensor("lm_head_mlp_gate_out", lm_head_mlp_gate_out);
         reportTensor("lm_head_mlp_silu_out", lm_head_mlp_silu_out);

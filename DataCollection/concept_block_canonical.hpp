@@ -18,17 +18,22 @@ namespace GRIM::ConceptCanonical {
 
 struct RenderResult {
     std::string text;
-    size_t execution_prompt_byte_end = 0;
+    // Logical <prompt>...</prompt> boundary. The delimiters are metadata only
+    // and are never emitted into model-visible text.
+    size_t prompt_byte_end = 0;
 };
 
 inline RenderResult render(const nlohmann::json& j) {
     RenderResult result;
     std::ostringstream out;
 
-    if (j.contains("question") && j["question"].is_string()
-        && !j["question"].get<std::string>().empty()) {
-        out << "Q: " << j["question"].get<std::string>() << "\n";
-        result.execution_prompt_byte_end = static_cast<size_t>(out.tellp());
+    if (j.contains("prompt") && j["prompt"].is_string()
+        && !j["prompt"].get<std::string>().empty()) {
+        out << j["prompt"].get<std::string>();
+        result.prompt_byte_end = static_cast<size_t>(out.tellp());
+        // Keep human-readable content separated while leaving the newline
+        // outside the logical prompt span.
+        out << "\n";
     }
 
     const nlohmann::json* explanation = nullptr;
@@ -54,11 +59,14 @@ inline RenderResult render(const nlohmann::json& j) {
     return result;
 }
 
-inline std::string renderPlainText(const nlohmann::json& j) {
+inline RenderResult renderPlainTextWithPromptBoundary(const nlohmann::json& j) {
+    RenderResult result;
     std::ostringstream out;
-    if (j.contains("question") && j["question"].is_string()
-        && !j["question"].get<std::string>().empty()) {
-        out << j["question"].get<std::string>() << "\n";
+    if (j.contains("prompt") && j["prompt"].is_string()
+        && !j["prompt"].get<std::string>().empty()) {
+        out << j["prompt"].get<std::string>();
+        result.prompt_byte_end = static_cast<size_t>(out.tellp());
+        out << "\n";
     }
     const nlohmann::json* explanation = nullptr;
     if (j.contains("explanation") && j["explanation"].is_array()) {
@@ -75,12 +83,17 @@ inline std::string renderPlainText(const nlohmann::json& j) {
         && !j["answer"].get<std::string>().empty()) {
         out << j["answer"].get<std::string>() << "\n";
     }
-    return out.str();
+    result.text = out.str();
+    return result;
+}
+
+inline std::string renderPlainText(const nlohmann::json& j) {
+    return renderPlainTextWithPromptBoundary(j).text;
 }
 
 inline nlohmann::json toCanonicalJson(const ConceptBlock& cb) {
     nlohmann::json j{
-        {"question", cb.question},
+        {"prompt", cb.prompt},
         {"explanation", cb.explanation.empty() ? cb.intermediates : cb.explanation},
         {"answer", cb.answer}
     };

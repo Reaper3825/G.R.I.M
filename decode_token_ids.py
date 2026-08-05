@@ -384,7 +384,7 @@ def iter_grmt_sequences(path: Path):
       uint32[seq_len] atom_entry_ids
       uint8 has_atom_table + optional AtomTable payload
       uint8 execution_active, int8 execution_gate_target
-      int32 execution_prompt_end_pos, int32 execution_prompt_length
+      int32 prompt_end_pos, int32 prompt_length
       int32[seq_len] token_exec_slots
       uint32 compiled_slot_binding_count, then {uint64 SlotId, int32 SlotIndex}
       uint32 compiled_transition_binding_count, then
@@ -452,8 +452,8 @@ def iter_grmt_sequences(path: Path):
 
             execution_active = (read_u8(f, row_source) != 0)
             skip_exact(f, 1, row_source)                          # execution_gate_target (int8)
-            skip_exact(f, 4, row_source)                          # execution_prompt_end_pos
-            skip_exact(f, 4, row_source)                          # execution_prompt_length
+            skip_exact(f, 4, row_source)                          # prompt_end_pos
+            skip_exact(f, 4, row_source)                          # prompt_length
             skip_exact(f, 4 * seq_len, row_source)                # token_exec_slots (int32)
 
             csb_count = read_u32(f, row_source)

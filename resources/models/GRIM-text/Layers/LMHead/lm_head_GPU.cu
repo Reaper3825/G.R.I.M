@@ -53,6 +53,7 @@ void forwardLmHead(
     cudaStream_t stream,
     cublasHandle_t cublas_handle,
     Forward::ModelForwardOutputs& forward_outputs) {
+    forward_outputs.final_normalized_hidden_states = Tensor();
     forward_outputs.lm_head_input_tensor = Tensor();
     forward_outputs.lm_head_mlp_gate_out = Tensor();
     forward_outputs.lm_head_mlp_silu_out = Tensor();
@@ -125,16 +126,16 @@ void forwardLmHead(
     // ════════════════════════════════════════════════════════════════════
 
     const Tensor* current_input = &input;
-    Tensor normalized;
 
     if (lm_final_rms_gamma.data) {
-        normalized = autograd::rms_norm(input, lm_final_rms_gamma, hp.rms_epsilon, stream);
-        current_input = &normalized;
+        forward_outputs.final_normalized_hidden_states =
+            autograd::rms_norm(input, lm_final_rms_gamma, hp.rms_epsilon, stream);
+        current_input = &forward_outputs.final_normalized_hidden_states;
     }
 
-    forward_outputs.goal.target_state.emplace();
-    forward_outputs.goal.target_state->norm_mean_pool = meanPoolHiddenStates(
-        *current_input,
+    meanPoolHiddenStates(
+        payload,
+        forward_outputs,
         stream);
 
     // ════════════════════════════════════════════════════════════════════
@@ -248,17 +249,8 @@ void forwardLmHead(
         forward_outputs.lm_head_input_tensor = std::move(centered_hidden_for_pc1);
         matmul_input = &forward_outputs.lm_head_input_tensor;
     } else {
-        if (current_input == &normalized) {
-            // RMSNorm was applied but no centering — preserve the normalized
-            // tensor in the forward sink LM-input view so it does not dangle when
-            // this function returns (normalized is a local).
-            forward_outputs.lm_head_input_tensor = std::move(normalized);
-            matmul_input = &forward_outputs.lm_head_input_tensor;
-        }
-        // When the adapter ran (hp.mlp_enabled), current_input already points at
-        // forward_outputs.lm_head_mlp_residual_out, which the sink retains;
-        // matmul_input == current_input needs no re-materialization here and
-        // liveLmHeadInputOrNull() resolves the residual as the live LM input.
+        // current_input already points at forward-owned storage: the adapter
+        // residual, the final normalized hidden states, or the encoder output.
     }
 
     // ════════════════════════════════════════════════════════════════════

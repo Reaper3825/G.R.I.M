@@ -568,6 +568,8 @@ BatchPayload buildBatchPayload(
     raw.reserve(payload.batch_size);
 
     payload.seq_lengths.resize(payload.batch_size);
+    payload.prompt_lengths.resize(payload.batch_size, 0);
+    payload.prompt_end_positions.resize(payload.batch_size, -1);
     payload.max_seq_len = 0;
     payload.actual_tokens = 0;
 
@@ -700,6 +702,8 @@ BatchPayload buildBatchPayload(
         });
 
         payload.seq_lengths[b] = seq_len;
+        payload.prompt_lengths[b] = seq->prompt_length;
+        payload.prompt_end_positions[b] = seq->prompt_end_pos;
         payload.actual_tokens += seq_len;
 
     }

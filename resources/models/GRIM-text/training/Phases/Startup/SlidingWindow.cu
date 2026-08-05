@@ -44,11 +44,8 @@ void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
             // Remap compiled_bootstrap_bindings token_pos to match.
             for (auto& b : seq.compiled_bootstrap_bindings)
                 b.token_pos += 1;
-            if (seq.execution_prompt_end_pos >= 0) {
-                seq.execution_prompt_end_pos += 1;
-            }
-            if (seq.execution_prompt_length > 0) {
-                seq.execution_prompt_length += 1;
+            if (seq.prompt_end_pos >= 0) {
+                seq.prompt_end_pos += 1;
             }
             added_bos_out++;
         }
@@ -130,6 +127,27 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
 
         long_seq_count++;
         const size_t seq_len = seq.token_ids.size();
+        const bool has_prompt_span = seq.prompt_length > 0;
+        size_t prompt_start = 0;
+        size_t prompt_end = 0;  // exclusive
+        if (has_prompt_span) {
+            if (seq.prompt_end_pos < 0 ||
+                seq.prompt_end_pos >= static_cast<int32_t>(seq_len)) {
+                throw std::runtime_error(
+                    "Sliding window (" + split_name + "): invalid prompt_end_pos=" +
+                    std::to_string(seq.prompt_end_pos) + " for sequence length=" +
+                    std::to_string(seq_len));
+            }
+            const int32_t derived_start =
+                seq.prompt_end_pos - seq.prompt_length + 1;
+            if (derived_start < 0) {
+                throw std::runtime_error(
+                    "Sliding window (" + split_name + "): prompt span extends before sequence start");
+            }
+            prompt_start = static_cast<size_t>(derived_start);
+            prompt_end = static_cast<size_t>(seq.prompt_end_pos) + 1;
+        }
+        bool prompt_span_assigned = !has_prompt_span;
         size_t start = 0;
         const size_t stride = static_cast<size_t>(sliding_window_stride);
         bool is_first_window = true;
@@ -214,6 +232,22 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
             }
 
             // Variable-length window — BatchPayload owns padding.
+            // Logical prompt delimiters are side-channel positions, not token
+            // IDs. Preserve the complete prompt on the first window that owns
+            // it; partial overlaps must not masquerade as a complete prompt.
+            if (!prompt_span_assigned &&
+                prompt_start >= start && prompt_end <= end) {
+                const size_t local_offset = prepend_bos ? 1 : 0;
+                const size_t local_prompt_start =
+                    local_offset + (prompt_start - start);
+                const size_t local_prompt_end =
+                    local_offset + (prompt_end - start);
+                window.prompt_length = static_cast<int32_t>(
+                    local_prompt_end - local_prompt_start);
+                window.prompt_end_pos = static_cast<int32_t>(local_prompt_end - 1);
+                prompt_span_assigned = true;
+            }
+
             windowed.push_back(std::move(window));
             generated_windows++;
 
@@ -221,6 +255,12 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
             if (end == seq_len) break;
             start += stride;
             is_first_window = false;
+        }
+
+        if (!prompt_span_assigned) {
+            throw std::runtime_error(
+                "Sliding window (" + split_name + "): no window contains the complete prompt span; "
+                "increase max_seq_len or shorten the prompt");
         }
     }
 

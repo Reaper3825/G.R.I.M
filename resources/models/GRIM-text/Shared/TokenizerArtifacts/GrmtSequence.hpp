@@ -25,8 +25,8 @@ struct GrmtSequence {
     bool execution_active = false;
     GRIM::Execution::ExecutionGateTarget execution_gate_target =
         GRIM::Execution::ExecutionGateTarget::UNSUPERVISED;
-    std::int32_t execution_prompt_end_pos = -1;
-    std::int32_t execution_prompt_length = 0;
+    std::int32_t prompt_end_pos = -1;
+    std::int32_t prompt_length = 0;
     std::vector<GRIM::Execution::CompiledSlotBinding> compiled_slot_bindings;
     std::vector<GRIM::Execution::CompiledTransitionBinding> compiled_transition_bindings;
     std::vector<GRIM::Execution::CompiledBootstrapBinding> compiled_bootstrap_bindings;

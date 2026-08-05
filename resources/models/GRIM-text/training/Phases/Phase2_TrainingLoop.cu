@@ -85,8 +85,10 @@ void logNormMeanPoolHistogram(
     constexpr float kMaxValue = 1.0f;
 
     if (!forward_outputs.goal.target_state) {
-        throw std::runtime_error(
-            "logNormMeanPoolHistogram: forward output has no target_state");
+        // This batch has no row containing both a complete prompt and a
+        // post-prompt response span, so the conditional mean-pool operation
+        // correctly emitted no target state.
+        return;
     }
     const GRIM::Tensor& norm_mean_pool =
         forward_outputs.goal.target_state->norm_mean_pool;

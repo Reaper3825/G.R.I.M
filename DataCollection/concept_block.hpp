@@ -70,7 +70,7 @@ struct ConceptBlock {
     std::string id;
     std::string name;
 
-    std::string question;
+    std::string prompt;
     std::vector<std::string> intermediates;
     std::string answer;
 
@@ -113,8 +113,8 @@ inline std::string validateConceptBlockExecutionControl(const ConceptBlock& cb) 
     const bool has_steps = !cb.execution.empty();
 
     if (cb.execution_gate_target != ConceptExecutionGateTarget::Unsupervised
-        && cb.question.empty()) {
-        return "supervised execution control requires a non-empty question";
+        && cb.prompt.empty()) {
+        return "supervised execution control requires a non-empty prompt";
     }
 
     if (cb.execution_gate_target == ConceptExecutionGateTarget::Noop) {
@@ -199,8 +199,8 @@ struct ConceptFormatPreset {
 };
 
 inline constexpr ConceptFormatPreset kConceptPresets[] = {
-    { "qa",               "Q/A",              "Question",   nullptr,            "Answer",  0 },
-    { "chain_of_thought", "Chain of Thought", "Question",   "Thought Steps",    "Answer",  3 },
+    { "qa",               "Q/A",              "Prompt",   nullptr,            "Answer",  0 },
+    { "chain_of_thought", "Chain of Thought", "Prompt",   "Thought Steps",    "Answer",  3 },
     { "definition",       "Definition",       "Term",       "Examples / Notes", "Summary", 2 },
     { "proof",            "Proof",            "Theorem",    "Proof Steps",      "QED",     3 },
     { "derivation",       "Derivation",       "Expression", "Derivation Steps", "Result",  2 },

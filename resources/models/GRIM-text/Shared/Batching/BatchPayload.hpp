@@ -80,6 +80,10 @@ struct BatchPayload {
     int vocab_size = 0;                      // vocabulary size (for loss kernels + target validation)
     std::vector<int> seq_lengths;            // [batch_size] — original length per sequence before padding
     std::vector<int> valid_target_counts;    // [batch_size] — unmasked targets per sequence
+    // Logical <prompt>...</prompt> boundaries. Delimiters never appear in
+    // input_ids. For a non-empty span, start = end - length + 1.
+    std::vector<int32_t> prompt_lengths;       // [batch_size], 0 = no complete prompt in this row
+    std::vector<int32_t> prompt_end_positions; // [batch_size], inclusive; -1 when length is 0
 
     // ═══════════════════════════════════════════════════════════════════════════
     // PADDED DATA (flat [batch_size * max_seq_len] layout, computed ONCE)
@@ -262,6 +266,40 @@ struct BatchPayload {
                 std::string(caller) + ": BatchPayload.seq_lengths.size()=" +
                 std::to_string(seq_lengths.size()) + " != batch_size=" +
                 std::to_string(batch_size));
+        }
+        if (isTraining() &&
+            (static_cast<int>(prompt_lengths.size()) != batch_size ||
+             static_cast<int>(prompt_end_positions.size()) != batch_size)) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": training prompt-boundary arrays must both have batch_size entries");
+        }
+        if (!prompt_lengths.empty() || !prompt_end_positions.empty()) {
+            if (static_cast<int>(prompt_lengths.size()) != batch_size ||
+                static_cast<int>(prompt_end_positions.size()) != batch_size) {
+                throw std::runtime_error(
+                    std::string(caller) + ": prompt-boundary array size mismatch");
+            }
+            for (int b = 0; b < batch_size; ++b) {
+                const int32_t length = prompt_lengths[static_cast<std::size_t>(b)];
+                const int32_t end = prompt_end_positions[static_cast<std::size_t>(b)];
+                if (length == 0) {
+                    if (end != -1) {
+                        throw std::runtime_error(
+                            std::string(caller) +
+                            ": empty prompt span requires end=-1 at batch row " +
+                            std::to_string(b));
+                    }
+                    continue;
+                }
+                if (length < 0 || end < 0 ||
+                    end >= seq_lengths[static_cast<std::size_t>(b)] ||
+                    end - length + 1 < 0) {
+                    throw std::runtime_error(
+                        std::string(caller) + ": invalid prompt span at batch row " +
+                        std::to_string(b));
+                }
+            }
         }
         if (isTraining() && static_cast<int>(valid_target_counts.size()) != batch_size) {
             throw std::runtime_error(

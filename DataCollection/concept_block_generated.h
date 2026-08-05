@@ -265,7 +265,7 @@ struct ConceptBlock FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_ID = 4,
     VT_NAME = 6,
-    VT_QUESTION = 8,
+    VT_PROMPT = 8,
     VT_INTERMEDIATES = 10,
     VT_ANSWER = 12,
     VT_EXECUTION_GATE_TARGET = 14,
@@ -277,7 +277,8 @@ struct ConceptBlock FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_STEP_INDEX = 26,
     VT_FORMAT_TYPE = 28,
     VT_SOURCE_SEQUENCE_ID = 30,
-    VT_TIMESTAMP = 32
+    VT_TIMESTAMP = 32,
+    VT_GOAL = 34
   };
   const ::flatbuffers::String *id() const {
     return GetPointer<const ::flatbuffers::String *>(VT_ID);
@@ -285,8 +286,8 @@ struct ConceptBlock FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const ::flatbuffers::String *name() const {
     return GetPointer<const ::flatbuffers::String *>(VT_NAME);
   }
-  const ::flatbuffers::String *question() const {
-    return GetPointer<const ::flatbuffers::String *>(VT_QUESTION);
+  const ::flatbuffers::String *prompt() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_PROMPT);
   }
   const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *intermediates() const {
     return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *>(VT_INTERMEDIATES);
@@ -324,14 +325,17 @@ struct ConceptBlock FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   int64_t timestamp() const {
     return GetField<int64_t>(VT_TIMESTAMP, 0);
   }
+  const ::flatbuffers::String *goal() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_GOAL);
+  }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffset(verifier, VT_ID) &&
            verifier.VerifyString(id()) &&
            VerifyOffset(verifier, VT_NAME) &&
            verifier.VerifyString(name()) &&
-           VerifyOffset(verifier, VT_QUESTION) &&
-           verifier.VerifyString(question()) &&
+           VerifyOffset(verifier, VT_PROMPT) &&
+           verifier.VerifyString(prompt()) &&
            VerifyOffset(verifier, VT_INTERMEDIATES) &&
            verifier.VerifyVector(intermediates()) &&
            verifier.VerifyVectorOfStrings(intermediates()) &&
@@ -356,6 +360,8 @@ struct ConceptBlock FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyOffset(verifier, VT_SOURCE_SEQUENCE_ID) &&
            verifier.VerifyString(source_sequence_id()) &&
            VerifyField<int64_t>(verifier, VT_TIMESTAMP, 8) &&
+           VerifyOffset(verifier, VT_GOAL) &&
+           verifier.VerifyString(goal()) &&
            verifier.EndTable();
   }
 };
@@ -370,8 +376,8 @@ struct ConceptBlockBuilder {
   void add_name(::flatbuffers::Offset<::flatbuffers::String> name) {
     fbb_.AddOffset(ConceptBlock::VT_NAME, name);
   }
-  void add_question(::flatbuffers::Offset<::flatbuffers::String> question) {
-    fbb_.AddOffset(ConceptBlock::VT_QUESTION, question);
+  void add_prompt(::flatbuffers::Offset<::flatbuffers::String> prompt) {
+    fbb_.AddOffset(ConceptBlock::VT_PROMPT, prompt);
   }
   void add_intermediates(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> intermediates) {
     fbb_.AddOffset(ConceptBlock::VT_INTERMEDIATES, intermediates);
@@ -409,6 +415,9 @@ struct ConceptBlockBuilder {
   void add_timestamp(int64_t timestamp) {
     fbb_.AddElement<int64_t>(ConceptBlock::VT_TIMESTAMP, timestamp, 0);
   }
+  void add_goal(::flatbuffers::Offset<::flatbuffers::String> goal) {
+    fbb_.AddOffset(ConceptBlock::VT_GOAL, goal);
+  }
   explicit ConceptBlockBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -424,7 +433,7 @@ inline ::flatbuffers::Offset<ConceptBlock> CreateConceptBlock(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     ::flatbuffers::Offset<::flatbuffers::String> id = 0,
     ::flatbuffers::Offset<::flatbuffers::String> name = 0,
-    ::flatbuffers::Offset<::flatbuffers::String> question = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> prompt = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> intermediates = 0,
     ::flatbuffers::Offset<::flatbuffers::String> answer = 0,
     GRIMConcept::ExecutionGateTarget execution_gate_target = GRIMConcept::ExecutionGateTarget::Unsupervised,
@@ -436,9 +445,11 @@ inline ::flatbuffers::Offset<ConceptBlock> CreateConceptBlock(
     ::flatbuffers::Offset<::flatbuffers::Vector<int32_t>> step_index = 0,
     ::flatbuffers::Offset<::flatbuffers::String> format_type = 0,
     ::flatbuffers::Offset<::flatbuffers::String> source_sequence_id = 0,
-    int64_t timestamp = 0) {
+    int64_t timestamp = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> goal = 0) {
   ConceptBlockBuilder builder_(_fbb);
   builder_.add_timestamp(timestamp);
+  builder_.add_goal(goal);
   builder_.add_source_sequence_id(source_sequence_id);
   builder_.add_format_type(format_type);
   builder_.add_step_index(step_index);
@@ -449,7 +460,7 @@ inline ::flatbuffers::Offset<ConceptBlock> CreateConceptBlock(
   builder_.add_explanation(explanation);
   builder_.add_answer(answer);
   builder_.add_intermediates(intermediates);
-  builder_.add_question(question);
+  builder_.add_prompt(prompt);
   builder_.add_name(name);
   builder_.add_id(id);
   builder_.add_execution_gate_target(execution_gate_target);
@@ -460,7 +471,7 @@ inline ::flatbuffers::Offset<ConceptBlock> CreateConceptBlockDirect(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     const char *id = nullptr,
     const char *name = nullptr,
-    const char *question = nullptr,
+    const char *prompt = nullptr,
     const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *intermediates = nullptr,
     const char *answer = nullptr,
     GRIMConcept::ExecutionGateTarget execution_gate_target = GRIMConcept::ExecutionGateTarget::Unsupervised,
@@ -472,10 +483,11 @@ inline ::flatbuffers::Offset<ConceptBlock> CreateConceptBlockDirect(
     const std::vector<int32_t> *step_index = nullptr,
     const char *format_type = nullptr,
     const char *source_sequence_id = nullptr,
-    int64_t timestamp = 0) {
+    int64_t timestamp = 0,
+    const char *goal = nullptr) {
   auto id__ = id ? _fbb.CreateString(id) : 0;
   auto name__ = name ? _fbb.CreateString(name) : 0;
-  auto question__ = question ? _fbb.CreateString(question) : 0;
+  auto prompt__ = prompt ? _fbb.CreateString(prompt) : 0;
   auto intermediates__ = intermediates ? _fbb.CreateVector<::flatbuffers::Offset<::flatbuffers::String>>(*intermediates) : 0;
   auto answer__ = answer ? _fbb.CreateString(answer) : 0;
   auto explanation__ = explanation ? _fbb.CreateVector<::flatbuffers::Offset<::flatbuffers::String>>(*explanation) : 0;
@@ -483,11 +495,12 @@ inline ::flatbuffers::Offset<ConceptBlock> CreateConceptBlockDirect(
   auto step_index__ = step_index ? _fbb.CreateVector<int32_t>(*step_index) : 0;
   auto format_type__ = format_type ? _fbb.CreateString(format_type) : 0;
   auto source_sequence_id__ = source_sequence_id ? _fbb.CreateString(source_sequence_id) : 0;
+  auto goal__ = goal ? _fbb.CreateString(goal) : 0;
   return GRIMConcept::CreateConceptBlock(
       _fbb,
       id__,
       name__,
-      question__,
+      prompt__,
       intermediates__,
       answer__,
       execution_gate_target,
@@ -499,7 +512,8 @@ inline ::flatbuffers::Offset<ConceptBlock> CreateConceptBlockDirect(
       step_index__,
       format_type__,
       source_sequence_id__,
-      timestamp);
+      timestamp,
+      goal__);
 }
 
 struct ConceptBlockDataset FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
