@@ -1,5 +1,6 @@
 #pragma once
 
+#include "popup_material_ir.hpp"
 #include <cstdint>
 #include <cstddef>
 #include <vector>
@@ -109,6 +110,7 @@ struct PopupMeshCache
     float    fps         = 30.0f;
     uint32_t maxVertices = 0;
     uint32_t maxIndices  = 0;
+    PopupMaterialProgram materialProgram;
     std::vector<PopupMeshFrame> frames;
 
     bool empty() const { return frames.empty(); }

@@ -70,6 +70,94 @@ void generateNormals(PopupMeshFrame& frame)
         v.nx = n[0]; v.ny = n[1]; v.nz = n[2];
     }
 }
+
+void validateMaterialProgram(const PopupMaterialProgram& program, const std::string& path)
+{
+    if (program.registerCount == 0 || program.registerCount > POPUP_MATERIAL_MAX_REGISTERS)
+        throw std::runtime_error("Mesh cache loader: invalid material register count in " + path);
+    if (program.instructions.empty() ||
+        program.instructions.size() > POPUP_MATERIAL_MAX_INSTRUCTIONS)
+        throw std::runtime_error("Mesh cache loader: invalid material instruction count in " + path);
+    if (program.parameters.size() > POPUP_MATERIAL_MAX_PARAMETERS)
+        throw std::runtime_error("Mesh cache loader: material parameter limit exceeded in " + path);
+
+    for (const PopupMaterialInstruction& instruction : program.instructions)
+    {
+        const uint32_t opcode = static_cast<uint32_t>(instruction.opcode);
+        if (opcode < static_cast<uint32_t>(PopupMaterialOpcode::LoadConstant) ||
+            opcode >= static_cast<uint32_t>(PopupMaterialOpcode::Count))
+            throw std::runtime_error("Mesh cache loader: invalid material opcode in " + path);
+        constexpr uint32_t knownInstructionFlags =
+            static_cast<uint32_t>(PopupMaterialInstructionFlag::Clamp) |
+            static_cast<uint32_t>(PopupMaterialInstructionFlag::ClampFactor) |
+            static_cast<uint32_t>(PopupMaterialInstructionFlag::ClampResult);
+        if ((static_cast<uint32_t>(instruction.flags) & ~knownInstructionFlags) != 0)
+            throw std::runtime_error("Mesh cache loader: unknown material instruction flags in " + path);
+        if (instruction.destination >= program.registerCount ||
+            instruction.sourceA >= program.registerCount ||
+            instruction.sourceB >= program.registerCount ||
+            instruction.sourceC >= program.registerCount)
+            throw std::runtime_error("Mesh cache loader: material register index out of range in " + path);
+        if (instruction.parameterOffset > program.parameters.size() ||
+            instruction.parameterCount > program.parameters.size() - instruction.parameterOffset)
+            throw std::runtime_error("Mesh cache loader: material parameter span out of range in " + path);
+
+        uint32_t expectedParameterCount = 0;
+        switch (instruction.opcode)
+        {
+            case PopupMaterialOpcode::LoadConstant:
+            case PopupMaterialOpcode::LayerWeight:
+            case PopupMaterialOpcode::Fresnel:
+            case PopupMaterialOpcode::ExtractComponent:
+                expectedParameterCount = 1;
+                break;
+            case PopupMaterialOpcode::NoiseTexture:
+            case PopupMaterialOpcode::WaveTexture:
+            case PopupMaterialOpcode::Mapping:
+                expectedParameterCount = 3;
+                break;
+            case PopupMaterialOpcode::PrincipledLit:
+                expectedParameterCount = 2;
+                break;
+            case PopupMaterialOpcode::ColorRamp:
+            {
+                if (instruction.parameterCount < 3 || (instruction.parameterCount & 1u) == 0)
+                    throw std::runtime_error("Mesh cache loader: invalid ColorRamp parameter count in " + path);
+                const PopupMaterialParameter& header = program.parameters[instruction.parameterOffset];
+                if (!std::isfinite(header.z) || header.z < 1.0f || header.z > 32.0f ||
+                    std::floor(header.z) != header.z)
+                    throw std::runtime_error("Mesh cache loader: invalid ColorRamp element count in " + path);
+                const uint32_t elementCount = static_cast<uint32_t>(header.z);
+                if (instruction.parameterCount != 1 + elementCount * 2)
+                    throw std::runtime_error("Mesh cache loader: invalid ColorRamp element count in " + path);
+                expectedParameterCount = instruction.parameterCount;
+                break;
+            }
+            case PopupMaterialOpcode::LoadVertexColor:
+            case PopupMaterialOpcode::LoadTexCoord:
+            case PopupMaterialOpcode::LoadWorldNormal:
+            case PopupMaterialOpcode::LoadWorldPosition:
+            case PopupMaterialOpcode::LoadViewDirection:
+            case PopupMaterialOpcode::Add:
+            case PopupMaterialOpcode::Multiply:
+            case PopupMaterialOpcode::VectorScale:
+            case PopupMaterialOpcode::Mix:
+            case PopupMaterialOpcode::Emission:
+            case PopupMaterialOpcode::Transparent:
+            case PopupMaterialOpcode::MixShader:
+            case PopupMaterialOpcode::OutputSurface:
+                break;
+            case PopupMaterialOpcode::Invalid:
+            case PopupMaterialOpcode::Count:
+                throw std::runtime_error("Mesh cache loader: invalid material opcode schema in " + path);
+        }
+        if (instruction.parameterCount != expectedParameterCount)
+            throw std::runtime_error("Mesh cache loader: invalid material opcode parameter count in " + path);
+    }
+
+    if (program.instructions.back().opcode != PopupMaterialOpcode::OutputSurface)
+        throw std::runtime_error("Mesh cache loader: material program has no final OutputSurface in " + path);
+}
 } // namespace
 
 PopupMeshCache loadPopupMeshCache(const std::string& gmcPath, uint32_t defaultColorABGR)
@@ -80,8 +168,8 @@ PopupMeshCache loadPopupMeshCache(const std::string& gmcPath, uint32_t defaultCo
 
     char magic[8] = { 0 };
     readBytes(file, magic, sizeof(magic), gmcPath, "magic");
-    if (std::memcmp(magic, "GRIMMC01", 8) != 0)
-        throw std::runtime_error("Mesh cache loader: bad magic (not a GRIMMC01 file): " + gmcPath);
+    if (std::memcmp(magic, "GRIMMC03", 8) != 0)
+        throw std::runtime_error("Mesh cache loader: bad magic (expected GRIMMC03; rebake the cache): " + gmcPath);
 
     PopupMeshCache cache;
     cache.fps            = readPOD<float>(file, gmcPath, "fps");
@@ -90,16 +178,47 @@ PopupMeshCache loadPopupMeshCache(const std::string& gmcPath, uint32_t defaultCo
     cache.maxVertices    = readPOD<uint32_t>(file, gmcPath, "maxVertices");
     cache.maxIndices     = readPOD<uint32_t>(file, gmcPath, "maxIndices");
 
-    if (cache.fps <= 0.0f)        cache.fps = 30.0f;
+    if (cache.fps <= 0.0f)
+        throw std::runtime_error("Mesh cache loader: fps must be > 0 in " + gmcPath);
     if (frameCount == 0)
         throw std::runtime_error("Mesh cache loader: frameCount is 0 in " + gmcPath);
 
+    constexpr uint32_t knownFlags = GMC_FLAG_HAS_NORMALS | GMC_FLAG_HAS_UV |
+                                    GMC_FLAG_HAS_COLOR | GMC_FLAG_HAS_MATERIAL_PROGRAM;
+    if ((flags & ~knownFlags) != 0)
+        throw std::runtime_error("Mesh cache loader: unknown flags in " + gmcPath);
+
     const bool hasNormals = (flags & GMC_FLAG_HAS_NORMALS) != 0;
     const bool hasUV      = (flags & GMC_FLAG_HAS_UV) != 0;
+    const bool hasColor   = (flags & GMC_FLAG_HAS_COLOR) != 0;
+    const bool hasMaterialProgram = (flags & GMC_FLAG_HAS_MATERIAL_PROGRAM) != 0;
+
+    if (hasMaterialProgram)
+    {
+        cache.materialProgram.registerCount = readPOD<uint32_t>(file, gmcPath, "material registerCount");
+        const uint32_t instructionCount = readPOD<uint32_t>(file, gmcPath, "material instructionCount");
+        const uint32_t parameterCount = readPOD<uint32_t>(file, gmcPath, "material parameterCount");
+
+        if (instructionCount > POPUP_MATERIAL_MAX_INSTRUCTIONS)
+            throw std::runtime_error("Mesh cache loader: material instruction limit exceeded in " + gmcPath);
+        if (parameterCount > POPUP_MATERIAL_MAX_PARAMETERS)
+            throw std::runtime_error("Mesh cache loader: material parameter limit exceeded in " + gmcPath);
+
+        cache.materialProgram.instructions.resize(instructionCount);
+        readBytes(file, cache.materialProgram.instructions.data(),
+                  cache.materialProgram.instructions.size() * sizeof(PopupMaterialInstruction),
+                  gmcPath, "material instructions");
+        cache.materialProgram.parameters.resize(parameterCount);
+        readBytes(file, cache.materialProgram.parameters.data(),
+                  cache.materialProgram.parameters.size() * sizeof(PopupMaterialParameter),
+                  gmcPath, "material parameters");
+        validateMaterialProgram(cache.materialProgram, gmcPath);
+    }
 
     cache.frames.reserve(frameCount);
 
     std::vector<float> posBuf, nrmBuf, uvBuf;
+    std::vector<uint32_t> colorBuf;
 
     for (uint32_t f = 0; f < frameCount; ++f)
     {
@@ -139,6 +258,11 @@ PopupMeshCache loadPopupMeshCache(const std::string& gmcPath, uint32_t defaultCo
             uvBuf.resize(static_cast<size_t>(vertCount) * 2);
             readBytes(file, uvBuf.data(), uvBuf.size() * sizeof(float), gmcPath, "uvs");
         }
+        if (hasColor)
+        {
+            colorBuf.resize(vertCount);
+            readBytes(file, colorBuf.data(), colorBuf.size() * sizeof(uint32_t), gmcPath, "material colors");
+        }
 
         frame.vertices.resize(vertCount);
         for (uint32_t v = 0; v < vertCount; ++v)
@@ -165,7 +289,10 @@ PopupMeshCache loadPopupMeshCache(const std::string& gmcPath, uint32_t defaultCo
 
             // Tangents are not used without a normal map; leave a sane default.
             vert.tx = 1.0f; vert.ty = 0.0f; vert.tz = 0.0f; vert.tw = 1.0f;
-            vert.abgr = defaultColorABGR;
+            if (hasColor)
+                vert.abgr = colorBuf[v];
+            else
+                vert.abgr = defaultColorABGR;
         }
 
         frame.indices.resize(indexCount);

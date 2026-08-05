@@ -39,9 +39,11 @@ struct PopupShaderState
     bgfx::UniformHandle u_lightParams = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle u_alpha       = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle u_emissive    = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle u_cameraPos   = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle s_albedo      = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle s_normal      = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle s_packed      = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle s_materialProgram = BGFX_INVALID_HANDLE;
 };
 
 PopupShaderState* popupShadersCreate()
@@ -78,9 +80,11 @@ PopupShaderState* popupShadersCreate()
     state->u_lightParams = bgfx::createUniform("u_lightParams", bgfx::UniformType::Vec4);
     state->u_alpha       = bgfx::createUniform("u_alpha",       bgfx::UniformType::Vec4);
     state->u_emissive    = bgfx::createUniform("u_emissive",    bgfx::UniformType::Vec4);
+    state->u_cameraPos   = bgfx::createUniform("u_cameraPos",   bgfx::UniformType::Vec4);
     state->s_albedo      = bgfx::createUniform("s_albedo",      bgfx::UniformType::Sampler);
     state->s_normal      = bgfx::createUniform("s_normal",      bgfx::UniformType::Sampler);
     state->s_packed      = bgfx::createUniform("s_packed",      bgfx::UniformType::Sampler);
+    state->s_materialProgram = bgfx::createUniform("s_materialProgram", bgfx::UniformType::Sampler);
 
     return state;
 #endif
@@ -94,9 +98,11 @@ void popupShadersDestroy(PopupShaderState* shaders)
     if (bgfx::isValid(shaders->u_lightParams)) bgfx::destroy(shaders->u_lightParams);
     if (bgfx::isValid(shaders->u_alpha))       bgfx::destroy(shaders->u_alpha);
     if (bgfx::isValid(shaders->u_emissive))    bgfx::destroy(shaders->u_emissive);
+    if (bgfx::isValid(shaders->u_cameraPos))   bgfx::destroy(shaders->u_cameraPos);
     if (bgfx::isValid(shaders->s_albedo))      bgfx::destroy(shaders->s_albedo);
     if (bgfx::isValid(shaders->s_normal))      bgfx::destroy(shaders->s_normal);
     if (bgfx::isValid(shaders->s_packed))      bgfx::destroy(shaders->s_packed);
+    if (bgfx::isValid(shaders->s_materialProgram)) bgfx::destroy(shaders->s_materialProgram);
     delete shaders;
 }
 
@@ -117,9 +123,11 @@ bgfx::UniformHandle popupShadersGetUniform(const PopupShaderState* shaders, Popu
         case PopupShaderUniform::LightParams: return shaders->u_lightParams;
         case PopupShaderUniform::Alpha:       return shaders->u_alpha;
         case PopupShaderUniform::Emissive:    return shaders->u_emissive;
+        case PopupShaderUniform::CameraPos:   return shaders->u_cameraPos;
         case PopupShaderUniform::AlbedoSampler: return shaders->s_albedo;
         case PopupShaderUniform::NormalSampler:  return shaders->s_normal;
         case PopupShaderUniform::PackedSampler:  return shaders->s_packed;
+        case PopupShaderUniform::MaterialProgramSampler: return shaders->s_materialProgram;
     }
     throw std::runtime_error("popupShadersGetUniform: unknown uniform");
 }

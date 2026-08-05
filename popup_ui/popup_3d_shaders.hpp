@@ -16,9 +16,11 @@ enum class PopupShaderUniform
     LightParams,     // vec4: x = intensity, y = ambient
     Alpha,           // vec4: x = alpha multiplier
     Emissive,        // vec4: x = emissive multiplier
+    CameraPos,       // vec4: xyz = world-space camera position
     AlbedoSampler,   // sampler2D: s_albedo  (stage 0)
     NormalSampler,   // sampler2D: s_normal  (stage 1)
-    PackedSampler    // sampler2D: s_packed  (stage 2) — R=AO G=roughness B=metallic A=opacity
+    PackedSampler,   // sampler2D: s_packed  (stage 2) — R=AO G=roughness B=metallic A=opacity
+    MaterialProgramSampler // sampler2D: s_materialProgram (stage 3)
 };
 
 // Create shader program from embedded bytecodes (no file I/O).

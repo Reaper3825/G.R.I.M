@@ -90,7 +90,7 @@ endif()
 if (MSVC)
     add_compile_options(/Zc:__cplusplus)
     add_compile_options(/Zc:preprocessor)
-    add_compile_options($<$<CONFIG:Debug>:/FS>)
+    add_compile_options(/FS)
 endif()
 
 add_compile_definitions(

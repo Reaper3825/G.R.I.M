@@ -11,6 +11,7 @@
 #include <cstring>
 #include <cmath>
 #include <chrono>
+#include <vector>
 
 #include <stb/stb_image.h>
 #include "logger.hpp"
@@ -41,6 +42,57 @@ static SlotGPU s_slotGPU[Popup3DRenderer::kSlotCount];
 
 // 1x1 white fallback for unbound texture samplers (avoids sampling zeros on Metal)
 static bgfx::TextureHandle s_whiteFallback = BGFX_INVALID_HANDLE;
+
+static constexpr uint16_t kMaterialProgramTextureWidth = 512;
+static constexpr uint16_t kMaterialInstructionTexelOffset = 1;
+static constexpr uint16_t kMaterialParameterTexelOffset =
+    kMaterialInstructionTexelOffset + POPUP_MATERIAL_MAX_INSTRUCTIONS * 2;
+
+static void uploadMaterialProgram(Popup3DRenderer& r, const PopupMaterialProgram* program)
+{
+    if (r.materialProgramUploaded && program == r.uploadedMaterialProgram)
+        return;
+
+    std::vector<float> texels(static_cast<size_t>(kMaterialProgramTextureWidth) * 4, 0.0f);
+    if (program)
+    {
+        texels[0] = 1.0f;
+        texels[1] = static_cast<float>(program->instructions.size());
+        texels[2] = static_cast<float>(program->parameters.size());
+        texels[3] = static_cast<float>(program->registerCount);
+
+        for (size_t index = 0; index < program->instructions.size(); ++index)
+        {
+            const PopupMaterialInstruction& instruction = program->instructions[index];
+            const size_t first = static_cast<size_t>(kMaterialInstructionTexelOffset + index * 2) * 4;
+            texels[first + 0] = static_cast<float>(instruction.opcode);
+            texels[first + 1] = static_cast<float>(instruction.destination);
+            texels[first + 2] = static_cast<float>(instruction.sourceA);
+            texels[first + 3] = static_cast<float>(instruction.sourceB);
+            texels[first + 4] = static_cast<float>(instruction.sourceC);
+            texels[first + 5] = static_cast<float>(instruction.parameterOffset);
+            texels[first + 6] = static_cast<float>(instruction.parameterCount);
+            texels[first + 7] = static_cast<float>(instruction.flags);
+        }
+
+        for (size_t index = 0; index < program->parameters.size(); ++index)
+        {
+            const PopupMaterialParameter& parameter = program->parameters[index];
+            const size_t first = static_cast<size_t>(kMaterialParameterTexelOffset + index) * 4;
+            texels[first + 0] = parameter.x;
+            texels[first + 1] = parameter.y;
+            texels[first + 2] = parameter.z;
+            texels[first + 3] = parameter.w;
+        }
+    }
+
+    const bgfx::Memory* memory = bgfx::copy(
+        texels.data(), static_cast<uint32_t>(texels.size() * sizeof(float)));
+    bgfx::updateTexture2D(r.materialProgramTex, 0, 0, 0, 0,
+                          kMaterialProgramTextureWidth, 1, memory);
+    r.uploadedMaterialProgram = program;
+    r.materialProgramUploaded = true;
+}
 
 // -------------------------------------------------------
 // Slot GPU resource management
@@ -106,6 +158,8 @@ static void validateCaps()
         throw std::runtime_error("Popup3DRenderer: BGFX_CAPS_TEXTURE_BLIT not supported");
     if (!(caps->supported & BGFX_CAPS_TEXTURE_READ_BACK))
         throw std::runtime_error("Popup3DRenderer: BGFX_CAPS_TEXTURE_READ_BACK not supported");
+    if (!(caps->formats[bgfx::TextureFormat::RGBA32F] & BGFX_CAPS_FORMAT_TEXTURE_2D))
+        throw std::runtime_error("Popup3DRenderer: RGBA32F material program textures not supported");
 }
 
 // -------------------------------------------------------
@@ -157,6 +211,14 @@ void popup3DRendererInit(Popup3DRenderer& r,
         s_whiteFallback = bgfx::createTexture2D(1, 1, false, 1,
             bgfx::TextureFormat::RGBA8, BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP, mem);
     }
+
+    r.materialProgramTex = bgfx::createTexture2D(
+        kMaterialProgramTextureWidth, 1, false, 1, bgfx::TextureFormat::RGBA32F,
+        BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
+        BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT);
+    if (!bgfx::isValid(r.materialProgramTex))
+        throw std::runtime_error("Popup3DRenderer: failed to create material program texture");
+    uploadMaterialProgram(r, nullptr);
 
     r.initialized  = true;
 
@@ -250,6 +312,7 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
     // and may select a baked geometry frame to draw instead of the static mesh.
     PopupRenderInput eff = input;
     const PopupMeshFrame* clipFrame = nullptr;
+    const PopupMaterialProgram* materialProgram = nullptr;
     if (r.anim)
     {
         PopupClipEval ev;
@@ -265,6 +328,7 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
             eff.transform.position[1] += ev.posOffset[1];
             eff.transform.position[2] += ev.posOffset[2];
             clipFrame = ev.frame;
+            materialProgram = ev.materialProgram;
         }
     }
 
@@ -355,13 +419,20 @@ void popup3DRendererSubmit(Popup3DRenderer& r,
         float emissive[4] = { eff.emissiveMul, 0.0f, 0.0f, 0.0f };
         bgfx::setUniform(popupShadersGetUniform(r.shaders, PopupShaderUniform::Emissive), emissive);
 
-        // Always bind all 3 texture slots — Metal returns (0,0,0,0) for unbound samplers
+        float cameraPos[4] = { 0.0f, 0.0f, 3.5f, 0.0f };
+        bgfx::setUniform(popupShadersGetUniform(r.shaders, PopupShaderUniform::CameraPos), cameraPos);
+
+        uploadMaterialProgram(r, materialProgram);
+
+        // Always bind all four texture slots; some backends return zero for unbound samplers.
         bgfx::TextureHandle albedo = bgfx::isValid(r.albedoTex) ? r.albedoTex : s_whiteFallback;
         bgfx::TextureHandle normal = bgfx::isValid(r.normalTex) ? r.normalTex : s_whiteFallback;
         bgfx::TextureHandle packed = bgfx::isValid(r.packedTex) ? r.packedTex : s_whiteFallback;
         bgfx::setTexture(0, popupShadersGetUniform(r.shaders, PopupShaderUniform::AlbedoSampler), albedo);
         bgfx::setTexture(1, popupShadersGetUniform(r.shaders, PopupShaderUniform::NormalSampler), normal);
         bgfx::setTexture(2, popupShadersGetUniform(r.shaders, PopupShaderUniform::PackedSampler), packed);
+        bgfx::setTexture(3, popupShadersGetUniform(r.shaders, PopupShaderUniform::MaterialProgramSampler),
+                 r.materialProgramTex);
     }
 
     // ---- Set render state ----
@@ -518,6 +589,9 @@ void popup3DRendererShutdown(Popup3DRenderer& r)
     if (bgfx::isValid(r.albedoTex)) { bgfx::destroy(r.albedoTex); r.albedoTex = BGFX_INVALID_HANDLE; }
     if (bgfx::isValid(r.normalTex)) { bgfx::destroy(r.normalTex); r.normalTex = BGFX_INVALID_HANDLE; }
     if (bgfx::isValid(r.packedTex)) { bgfx::destroy(r.packedTex); r.packedTex = BGFX_INVALID_HANDLE; }
+    if (bgfx::isValid(r.materialProgramTex)) { bgfx::destroy(r.materialProgramTex); r.materialProgramTex = BGFX_INVALID_HANDLE; }
+    r.uploadedMaterialProgram = nullptr;
+    r.materialProgramUploaded = false;
     if (bgfx::isValid(s_whiteFallback)) { bgfx::destroy(s_whiteFallback); s_whiteFallback = BGFX_INVALID_HANDLE; }
     if (r.shaders)     { popupShadersDestroy(r.shaders);   r.shaders     = nullptr; }
     if (r.mesh)        { popupMeshDestroy(r.mesh);          r.mesh        = nullptr; }

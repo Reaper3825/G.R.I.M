@@ -83,6 +83,7 @@ struct PopupClipEval
 
     // Non-null when a baked mesh-cache frame should be drawn this frame.
     const PopupMeshFrame* frame = nullptr;
+    const PopupMaterialProgram* materialProgram = nullptr;
 
     bool finished = false;       // tween reached its end (non-looping)
 };

@@ -36,6 +36,11 @@ struct Popup3DRenderer
     // INVALID = defaults (AO=1, roughness=0.5, metallic=0, opacity=1).
     bgfx::TextureHandle packedTex = BGFX_INVALID_HANDLE;
 
+    // Material VM bytecode and parameters packed into one RGBA32F row.
+    bgfx::TextureHandle materialProgramTex = BGFX_INVALID_HANDLE;
+    const PopupMaterialProgram* uploadedMaterialProgram = nullptr;
+    bool materialProgramUploaded = false;
+
     // Readback ring (3 slots)
     static constexpr int kSlotCount = 3;
     PopupReadbackSlot slots[kSlotCount];

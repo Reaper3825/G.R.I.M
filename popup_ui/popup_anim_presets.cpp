@@ -411,6 +411,7 @@ bool popupClipEngineEvaluate(PopupClipEngine* engine, double nowSeconds, PopupCl
     bool  transientFinished = false;
     float tAlpha = 1.0f, tScale = 1.0f, tEmis = 0.0f, tSpin = 0.0f;
     const PopupMeshFrame* transientFrame = nullptr;
+    const PopupMaterialProgram* transientMaterialProgram = nullptr;
 
     if (engine->curIdx >= 0 && engine->curIdx < static_cast<int>(engine->presets.size()))
     {
@@ -453,6 +454,7 @@ bool popupClipEngineEvaluate(PopupClipEngine* engine, double nowSeconds, PopupCl
                     if (fi < 0) fi = 0;
                 }
                 transientFrame = &cache.frames[fi];
+                transientMaterialProgram = &cache.materialProgram;
             }
         }
     }
@@ -544,8 +546,9 @@ bool popupClipEngineEvaluate(PopupClipEngine* engine, double nowSeconds, PopupCl
     out.active = transientActive || poseActive;
     if (!out.active)
     {
-        out.frame     = nullptr;
-        out.poseBlend = engine->poseBlend;
+        out.frame           = nullptr;
+        out.materialProgram = nullptr;
+        out.poseBlend       = engine->poseBlend;
         return false;
     }
 
@@ -556,9 +559,10 @@ bool popupClipEngineEvaluate(PopupClipEngine* engine, double nowSeconds, PopupCl
     out.posOffset[0] = pX;
     out.posOffset[1] = pY;
     out.posOffset[2] = pZ;
-    out.frame        = transientFrame;
-    out.finished     = transientFinished;
-    out.poseBlend    = engine->poseBlend;
+    out.frame           = transientFrame;
+    out.materialProgram = transientMaterialProgram;
+    out.finished        = transientFinished;
+    out.poseBlend       = engine->poseBlend;
     return true;
 }
 

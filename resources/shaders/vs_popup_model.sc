@@ -1,5 +1,5 @@
-$input a_position, a_normal, a_texcoord0
-$output v_worldNormal, v_texcoord0, v_worldPos
+$input a_position, a_normal, a_texcoord0, a_color0
+$output v_worldNormal, v_texcoord0, v_worldPos, v_color0
 
 #include <bgfx_shader.sh>
 
@@ -17,4 +17,7 @@ void main()
 
     // Pass UV
     v_texcoord0 = a_texcoord0;
+
+    // Pass baked Blender material color (or the loader's visible debug color)
+    v_color0 = a_color0;
 }
