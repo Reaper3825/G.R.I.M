@@ -237,7 +237,7 @@ scripts/train_bridges2.sbatch
 scripts/run_train_on_anvil.sh
 .dmp
 *.dmp*
-
+/logs
 # Geospatial runtime cache databases (too large for GitHub)
 cache/geospatial/*.sqlite
 cache/geospatial/*.sqlite-shm

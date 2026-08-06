@@ -234,17 +234,8 @@ json conceptBlockFlatBufferToJson(const GRIMConcept::ConceptBlock& source) {
 	j["source_sequence_id"] = fbString(source.source_sequence_id());
 	j["timestamp"] = source.timestamp();
 	j["intermediate_count"] = source.intermediate_count();
-
-	switch (source.execution_gate_target()) {
-		case GRIMConcept::ExecutionGateTarget::Noop:
-			j["execution_gate_target"] = "noop";
-			break;
-		case GRIMConcept::ExecutionGateTarget::Execute:
-			j["execution_gate_target"] = "execute";
-			break;
-		default:
-			j["execution_gate_target"] = "ignore";
-			break;
+	if (const auto* goal = source.goal()) {
+		j["goal"] = json{{"target_state", fbString(goal->target_state())}};
 	}
 
 	j["intermediates"] = json::array();
@@ -258,16 +249,6 @@ json conceptBlockFlatBufferToJson(const GRIMConcept::ConceptBlock& source) {
 	j["step_index"] = json::array();
 	if (const auto* values = source.step_index()) {
 		for (const auto value : *values) j["step_index"].push_back(value);
-	}
-
-	if (const auto* state0 = source.state_0()) {
-		json state;
-		state["type"] = fbString(state0->type());
-		state["atoms"] = json::array();
-		if (const auto* atoms = state0->atoms()) {
-			for (const auto value : *atoms) state["atoms"].push_back(value);
-		}
-		j["state_0"] = std::move(state);
 	}
 
 	if (const auto* steps = source.execution()) {
@@ -289,9 +270,6 @@ json conceptBlockFlatBufferToJson(const GRIMConcept::ConceptBlock& source) {
 		}
 	}
 
-	if (const auto* state1 = source.state_1()) {
-		j["state_1"] = json{{"result", state1->result()}};
-	}
 	return j;
 }
 
@@ -347,7 +325,7 @@ void loadConceptBlocks(const fs::path& cache_dir,
 				flatbuffer_path.string());
 		}
 		const auto* dataset = GRIMConcept::GetConceptBlockDataset(buffer.data());
-		constexpr uint32_t supported_schema_version = 1;
+		constexpr uint32_t supported_schema_version = 2;
 		if (!dataset || dataset->schema_version() > supported_schema_version) {
 			throw std::runtime_error(
 				"[DataLoader] FATAL: unsupported concept-block schema version " +

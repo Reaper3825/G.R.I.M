@@ -39,6 +39,7 @@ public:
                       uint32_t color, float spread);
     void drawText(const Vec2& pos, const std::string& text, uint32_t color);
     float measureTextWidth(const std::string& text) const;
+    std::vector<std::string> wrapText(const std::string& text, float maxWidth) const;
     void drawLine(const Vec2& start, const Vec2& end, uint32_t color, float thickness = 1.0f);
     
     // Load a TTF/OTF font from a file path. fontSize is in pixels.

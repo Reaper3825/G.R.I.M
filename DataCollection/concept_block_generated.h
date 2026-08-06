@@ -15,118 +15,17 @@ static_assert(FLATBUFFERS_VERSION_MAJOR == 25 &&
 
 namespace GRIMConcept {
 
-struct ConceptBlockState0;
-struct ConceptBlockState0Builder;
-
 struct ConceptExecutionStep;
 struct ConceptExecutionStepBuilder;
 
-struct ConceptBlockState1;
-struct ConceptBlockState1Builder;
+struct Goal;
+struct GoalBuilder;
 
 struct ConceptBlock;
 struct ConceptBlockBuilder;
 
 struct ConceptBlockDataset;
 struct ConceptBlockDatasetBuilder;
-
-enum class ExecutionGateTarget : uint8_t {
-  Unsupervised = 0,
-  Noop = 1,
-  Execute = 2,
-  MIN = Unsupervised,
-  MAX = Execute
-};
-
-inline const ExecutionGateTarget (&EnumValuesExecutionGateTarget())[3] {
-  static const ExecutionGateTarget values[] = {
-    ExecutionGateTarget::Unsupervised,
-    ExecutionGateTarget::Noop,
-    ExecutionGateTarget::Execute
-  };
-  return values;
-}
-
-inline const char * const *EnumNamesExecutionGateTarget() {
-  static const char * const names[4] = {
-    "Unsupervised",
-    "Noop",
-    "Execute",
-    nullptr
-  };
-  return names;
-}
-
-inline const char *EnumNameExecutionGateTarget(ExecutionGateTarget e) {
-  if (::flatbuffers::IsOutRange(e, ExecutionGateTarget::Unsupervised, ExecutionGateTarget::Execute)) return "";
-  const size_t index = static_cast<size_t>(e);
-  return EnumNamesExecutionGateTarget()[index];
-}
-
-struct ConceptBlockState0 FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef ConceptBlockState0Builder Builder;
-  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
-    VT_ATOMS = 4,
-    VT_TYPE = 6
-  };
-  const ::flatbuffers::Vector<double> *atoms() const {
-    return GetPointer<const ::flatbuffers::Vector<double> *>(VT_ATOMS);
-  }
-  const ::flatbuffers::String *type() const {
-    return GetPointer<const ::flatbuffers::String *>(VT_TYPE);
-  }
-  bool Verify(::flatbuffers::Verifier &verifier) const {
-    return VerifyTableStart(verifier) &&
-           VerifyOffset(verifier, VT_ATOMS) &&
-           verifier.VerifyVector(atoms()) &&
-           VerifyOffset(verifier, VT_TYPE) &&
-           verifier.VerifyString(type()) &&
-           verifier.EndTable();
-  }
-};
-
-struct ConceptBlockState0Builder {
-  typedef ConceptBlockState0 Table;
-  ::flatbuffers::FlatBufferBuilder &fbb_;
-  ::flatbuffers::uoffset_t start_;
-  void add_atoms(::flatbuffers::Offset<::flatbuffers::Vector<double>> atoms) {
-    fbb_.AddOffset(ConceptBlockState0::VT_ATOMS, atoms);
-  }
-  void add_type(::flatbuffers::Offset<::flatbuffers::String> type) {
-    fbb_.AddOffset(ConceptBlockState0::VT_TYPE, type);
-  }
-  explicit ConceptBlockState0Builder(::flatbuffers::FlatBufferBuilder &_fbb)
-        : fbb_(_fbb) {
-    start_ = fbb_.StartTable();
-  }
-  ::flatbuffers::Offset<ConceptBlockState0> Finish() {
-    const auto end = fbb_.EndTable(start_);
-    auto o = ::flatbuffers::Offset<ConceptBlockState0>(end);
-    return o;
-  }
-};
-
-inline ::flatbuffers::Offset<ConceptBlockState0> CreateConceptBlockState0(
-    ::flatbuffers::FlatBufferBuilder &_fbb,
-    ::flatbuffers::Offset<::flatbuffers::Vector<double>> atoms = 0,
-    ::flatbuffers::Offset<::flatbuffers::String> type = 0) {
-  ConceptBlockState0Builder builder_(_fbb);
-  builder_.add_type(type);
-  builder_.add_atoms(atoms);
-  return builder_.Finish();
-}
-
-inline ::flatbuffers::Offset<ConceptBlockState0> CreateConceptBlockState0Direct(
-    ::flatbuffers::FlatBufferBuilder &_fbb,
-    const std::vector<double> *atoms = nullptr,
-    const char *type = nullptr) {
-  auto atoms__ = atoms ? _fbb.CreateVector<double>(*atoms) : 0;
-  auto type__ = type ? _fbb.CreateString(type) : 0;
-  return GRIMConcept::CreateConceptBlockState0(
-      _fbb,
-      atoms__,
-      type__);
-}
 
 struct ConceptExecutionStep FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef ConceptExecutionStepBuilder Builder;
@@ -219,45 +118,55 @@ inline ::flatbuffers::Offset<ConceptExecutionStep> CreateConceptExecutionStepDir
       result);
 }
 
-struct ConceptBlockState1 FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
-  typedef ConceptBlockState1Builder Builder;
+struct Goal FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef GoalBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
-    VT_RESULT = 4
+    VT_TARGET_STATE = 4
   };
-  double result() const {
-    return GetField<double>(VT_RESULT, 0.0);
+  const ::flatbuffers::String *target_state() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_TARGET_STATE);
   }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
-           VerifyField<double>(verifier, VT_RESULT, 8) &&
+           VerifyOffset(verifier, VT_TARGET_STATE) &&
+           verifier.VerifyString(target_state()) &&
            verifier.EndTable();
   }
 };
 
-struct ConceptBlockState1Builder {
-  typedef ConceptBlockState1 Table;
+struct GoalBuilder {
+  typedef Goal Table;
   ::flatbuffers::FlatBufferBuilder &fbb_;
   ::flatbuffers::uoffset_t start_;
-  void add_result(double result) {
-    fbb_.AddElement<double>(ConceptBlockState1::VT_RESULT, result, 0.0);
+  void add_target_state(::flatbuffers::Offset<::flatbuffers::String> target_state) {
+    fbb_.AddOffset(Goal::VT_TARGET_STATE, target_state);
   }
-  explicit ConceptBlockState1Builder(::flatbuffers::FlatBufferBuilder &_fbb)
+  explicit GoalBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
   }
-  ::flatbuffers::Offset<ConceptBlockState1> Finish() {
+  ::flatbuffers::Offset<Goal> Finish() {
     const auto end = fbb_.EndTable(start_);
-    auto o = ::flatbuffers::Offset<ConceptBlockState1>(end);
+    auto o = ::flatbuffers::Offset<Goal>(end);
     return o;
   }
 };
 
-inline ::flatbuffers::Offset<ConceptBlockState1> CreateConceptBlockState1(
+inline ::flatbuffers::Offset<Goal> CreateGoal(
     ::flatbuffers::FlatBufferBuilder &_fbb,
-    double result = 0.0) {
-  ConceptBlockState1Builder builder_(_fbb);
-  builder_.add_result(result);
+    ::flatbuffers::Offset<::flatbuffers::String> target_state = 0) {
+  GoalBuilder builder_(_fbb);
+  builder_.add_target_state(target_state);
   return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<Goal> CreateGoalDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const char *target_state = nullptr) {
+  auto target_state__ = target_state ? _fbb.CreateString(target_state) : 0;
+  return GRIMConcept::CreateGoal(
+      _fbb,
+      target_state__);
 }
 
 struct ConceptBlock FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -268,17 +177,14 @@ struct ConceptBlock FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_PROMPT = 8,
     VT_INTERMEDIATES = 10,
     VT_ANSWER = 12,
-    VT_EXECUTION_GATE_TARGET = 14,
-    VT_EXPLANATION = 16,
-    VT_STATE_0 = 18,
-    VT_EXECUTION = 20,
-    VT_STATE_1 = 22,
-    VT_INTERMEDIATE_COUNT = 24,
-    VT_STEP_INDEX = 26,
-    VT_FORMAT_TYPE = 28,
-    VT_SOURCE_SEQUENCE_ID = 30,
-    VT_TIMESTAMP = 32,
-    VT_GOAL = 34
+    VT_EXPLANATION = 14,
+    VT_EXECUTION = 16,
+    VT_INTERMEDIATE_COUNT = 18,
+    VT_STEP_INDEX = 20,
+    VT_FORMAT_TYPE = 22,
+    VT_SOURCE_SEQUENCE_ID = 24,
+    VT_TIMESTAMP = 26,
+    VT_GOAL = 28
   };
   const ::flatbuffers::String *id() const {
     return GetPointer<const ::flatbuffers::String *>(VT_ID);
@@ -295,20 +201,11 @@ struct ConceptBlock FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const ::flatbuffers::String *answer() const {
     return GetPointer<const ::flatbuffers::String *>(VT_ANSWER);
   }
-  GRIMConcept::ExecutionGateTarget execution_gate_target() const {
-    return static_cast<GRIMConcept::ExecutionGateTarget>(GetField<uint8_t>(VT_EXECUTION_GATE_TARGET, 0));
-  }
   const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *explanation() const {
     return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *>(VT_EXPLANATION);
   }
-  const GRIMConcept::ConceptBlockState0 *state_0() const {
-    return GetPointer<const GRIMConcept::ConceptBlockState0 *>(VT_STATE_0);
-  }
   const ::flatbuffers::Vector<::flatbuffers::Offset<GRIMConcept::ConceptExecutionStep>> *execution() const {
     return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<GRIMConcept::ConceptExecutionStep>> *>(VT_EXECUTION);
-  }
-  const GRIMConcept::ConceptBlockState1 *state_1() const {
-    return GetPointer<const GRIMConcept::ConceptBlockState1 *>(VT_STATE_1);
   }
   int32_t intermediate_count() const {
     return GetField<int32_t>(VT_INTERMEDIATE_COUNT, 0);
@@ -325,8 +222,8 @@ struct ConceptBlock FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   int64_t timestamp() const {
     return GetField<int64_t>(VT_TIMESTAMP, 0);
   }
-  const ::flatbuffers::String *goal() const {
-    return GetPointer<const ::flatbuffers::String *>(VT_GOAL);
+  const GRIMConcept::Goal *goal() const {
+    return GetPointer<const GRIMConcept::Goal *>(VT_GOAL);
   }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -341,17 +238,12 @@ struct ConceptBlock FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyVectorOfStrings(intermediates()) &&
            VerifyOffset(verifier, VT_ANSWER) &&
            verifier.VerifyString(answer()) &&
-           VerifyField<uint8_t>(verifier, VT_EXECUTION_GATE_TARGET, 1) &&
            VerifyOffset(verifier, VT_EXPLANATION) &&
            verifier.VerifyVector(explanation()) &&
            verifier.VerifyVectorOfStrings(explanation()) &&
-           VerifyOffset(verifier, VT_STATE_0) &&
-           verifier.VerifyTable(state_0()) &&
            VerifyOffset(verifier, VT_EXECUTION) &&
            verifier.VerifyVector(execution()) &&
            verifier.VerifyVectorOfTables(execution()) &&
-           VerifyOffset(verifier, VT_STATE_1) &&
-           verifier.VerifyTable(state_1()) &&
            VerifyField<int32_t>(verifier, VT_INTERMEDIATE_COUNT, 4) &&
            VerifyOffset(verifier, VT_STEP_INDEX) &&
            verifier.VerifyVector(step_index()) &&
@@ -361,7 +253,7 @@ struct ConceptBlock FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyString(source_sequence_id()) &&
            VerifyField<int64_t>(verifier, VT_TIMESTAMP, 8) &&
            VerifyOffset(verifier, VT_GOAL) &&
-           verifier.VerifyString(goal()) &&
+           verifier.VerifyTable(goal()) &&
            verifier.EndTable();
   }
 };
@@ -385,20 +277,11 @@ struct ConceptBlockBuilder {
   void add_answer(::flatbuffers::Offset<::flatbuffers::String> answer) {
     fbb_.AddOffset(ConceptBlock::VT_ANSWER, answer);
   }
-  void add_execution_gate_target(GRIMConcept::ExecutionGateTarget execution_gate_target) {
-    fbb_.AddElement<uint8_t>(ConceptBlock::VT_EXECUTION_GATE_TARGET, static_cast<uint8_t>(execution_gate_target), 0);
-  }
   void add_explanation(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> explanation) {
     fbb_.AddOffset(ConceptBlock::VT_EXPLANATION, explanation);
   }
-  void add_state_0(::flatbuffers::Offset<GRIMConcept::ConceptBlockState0> state_0) {
-    fbb_.AddOffset(ConceptBlock::VT_STATE_0, state_0);
-  }
   void add_execution(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<GRIMConcept::ConceptExecutionStep>>> execution) {
     fbb_.AddOffset(ConceptBlock::VT_EXECUTION, execution);
-  }
-  void add_state_1(::flatbuffers::Offset<GRIMConcept::ConceptBlockState1> state_1) {
-    fbb_.AddOffset(ConceptBlock::VT_STATE_1, state_1);
   }
   void add_intermediate_count(int32_t intermediate_count) {
     fbb_.AddElement<int32_t>(ConceptBlock::VT_INTERMEDIATE_COUNT, intermediate_count, 0);
@@ -415,7 +298,7 @@ struct ConceptBlockBuilder {
   void add_timestamp(int64_t timestamp) {
     fbb_.AddElement<int64_t>(ConceptBlock::VT_TIMESTAMP, timestamp, 0);
   }
-  void add_goal(::flatbuffers::Offset<::flatbuffers::String> goal) {
+  void add_goal(::flatbuffers::Offset<GRIMConcept::Goal> goal) {
     fbb_.AddOffset(ConceptBlock::VT_GOAL, goal);
   }
   explicit ConceptBlockBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
@@ -436,17 +319,14 @@ inline ::flatbuffers::Offset<ConceptBlock> CreateConceptBlock(
     ::flatbuffers::Offset<::flatbuffers::String> prompt = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> intermediates = 0,
     ::flatbuffers::Offset<::flatbuffers::String> answer = 0,
-    GRIMConcept::ExecutionGateTarget execution_gate_target = GRIMConcept::ExecutionGateTarget::Unsupervised,
     ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> explanation = 0,
-    ::flatbuffers::Offset<GRIMConcept::ConceptBlockState0> state_0 = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<GRIMConcept::ConceptExecutionStep>>> execution = 0,
-    ::flatbuffers::Offset<GRIMConcept::ConceptBlockState1> state_1 = 0,
     int32_t intermediate_count = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<int32_t>> step_index = 0,
     ::flatbuffers::Offset<::flatbuffers::String> format_type = 0,
     ::flatbuffers::Offset<::flatbuffers::String> source_sequence_id = 0,
     int64_t timestamp = 0,
-    ::flatbuffers::Offset<::flatbuffers::String> goal = 0) {
+    ::flatbuffers::Offset<GRIMConcept::Goal> goal = 0) {
   ConceptBlockBuilder builder_(_fbb);
   builder_.add_timestamp(timestamp);
   builder_.add_goal(goal);
@@ -454,16 +334,13 @@ inline ::flatbuffers::Offset<ConceptBlock> CreateConceptBlock(
   builder_.add_format_type(format_type);
   builder_.add_step_index(step_index);
   builder_.add_intermediate_count(intermediate_count);
-  builder_.add_state_1(state_1);
   builder_.add_execution(execution);
-  builder_.add_state_0(state_0);
   builder_.add_explanation(explanation);
   builder_.add_answer(answer);
   builder_.add_intermediates(intermediates);
   builder_.add_prompt(prompt);
   builder_.add_name(name);
   builder_.add_id(id);
-  builder_.add_execution_gate_target(execution_gate_target);
   return builder_.Finish();
 }
 
@@ -474,17 +351,14 @@ inline ::flatbuffers::Offset<ConceptBlock> CreateConceptBlockDirect(
     const char *prompt = nullptr,
     const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *intermediates = nullptr,
     const char *answer = nullptr,
-    GRIMConcept::ExecutionGateTarget execution_gate_target = GRIMConcept::ExecutionGateTarget::Unsupervised,
     const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *explanation = nullptr,
-    ::flatbuffers::Offset<GRIMConcept::ConceptBlockState0> state_0 = 0,
     const std::vector<::flatbuffers::Offset<GRIMConcept::ConceptExecutionStep>> *execution = nullptr,
-    ::flatbuffers::Offset<GRIMConcept::ConceptBlockState1> state_1 = 0,
     int32_t intermediate_count = 0,
     const std::vector<int32_t> *step_index = nullptr,
     const char *format_type = nullptr,
     const char *source_sequence_id = nullptr,
     int64_t timestamp = 0,
-    const char *goal = nullptr) {
+    ::flatbuffers::Offset<GRIMConcept::Goal> goal = 0) {
   auto id__ = id ? _fbb.CreateString(id) : 0;
   auto name__ = name ? _fbb.CreateString(name) : 0;
   auto prompt__ = prompt ? _fbb.CreateString(prompt) : 0;
@@ -495,7 +369,6 @@ inline ::flatbuffers::Offset<ConceptBlock> CreateConceptBlockDirect(
   auto step_index__ = step_index ? _fbb.CreateVector<int32_t>(*step_index) : 0;
   auto format_type__ = format_type ? _fbb.CreateString(format_type) : 0;
   auto source_sequence_id__ = source_sequence_id ? _fbb.CreateString(source_sequence_id) : 0;
-  auto goal__ = goal ? _fbb.CreateString(goal) : 0;
   return GRIMConcept::CreateConceptBlock(
       _fbb,
       id__,
@@ -503,17 +376,14 @@ inline ::flatbuffers::Offset<ConceptBlock> CreateConceptBlockDirect(
       prompt__,
       intermediates__,
       answer__,
-      execution_gate_target,
       explanation__,
-      state_0,
       execution__,
-      state_1,
       intermediate_count,
       step_index__,
       format_type__,
       source_sequence_id__,
       timestamp,
-      goal__);
+      goal);
 }
 
 struct ConceptBlockDataset FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {

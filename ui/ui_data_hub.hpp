@@ -375,14 +375,10 @@ private:
     std::shared_ptr<UIInputBox>  cbSearchInput_;
     std::shared_ptr<UIInputBox>  cbNameInput_;
     std::shared_ptr<UITextArea>  cbPromptArea_;
+    std::shared_ptr<UITextArea>  cbTargetStateArea_;
     std::shared_ptr<UITextArea>  cbAnswerArea_;
     std::shared_ptr<UITextArea>  cbCustomPromptArea_;
     std::vector<std::shared_ptr<UITextArea>> cbIntermediateAreas_;
-
-    // ── State 0 / Execution / State 1 widgets ───────────
-    std::shared_ptr<UIDropdown>  cbExecutionGateDropdown_;
-    std::shared_ptr<UIInputBox>  cbState0TypeInput_;
-    std::shared_ptr<UIInputBox>  cbState0AtomsInput_;     // comma-separated doubles
 
     struct CBExecStepRow {
         std::shared_ptr<UIDropdown>  opDropdown;    // add/sub/mul/div

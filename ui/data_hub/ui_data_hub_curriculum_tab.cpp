@@ -250,47 +250,15 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     cbPromptArea_->drawOverlay(renderer, position);
     ey += (conceptMode ? areaH : areaH * 2.0f) + 16.0f;
 
+    renderer.drawText({editorX + ePad, ey}, "Target State (optional)",
+                      UITheme::Colors::TextSecondary);
+    ey += 20.0f;
+    cbTargetStateArea_->setPosition(editorX + ePad, ey);
+    cbTargetStateArea_->setSize(eInnerW, areaH);
+    cbTargetStateArea_->drawOverlay(renderer, position);
+    ey += areaH + 16.0f;
+
     if (conceptMode) {
-        renderer.drawText({editorX + ePad, ey}, "Execution Gate Target",
-                          UITheme::Colors::TextSecondary);
-        ey += 20.0f;
-        cbExecutionGateDropdown_->setPosition(editorX + ePad, ey);
-        cbExecutionGateDropdown_->setSize(eInnerW, fieldH);
-        cbExecutionGateDropdown_->drawOverlay(renderer, position);
-        ey += fieldH + 16.0f;
-    }
-
-    // ─── STATE0: Bootstrap Atoms (concept mode only) ────
-    if (conceptMode) {
-    renderer.drawRect({editorX + ePad, ey}, {eInnerW, 1.0f}, 0x18FFFFFF);
-    ey += sectionGap;
-    {
-        float s0StartY = ey;
-        ey += sectionPad;
-
-        renderer.drawText({editorX + ePad + sectionPad, ey}, "STATE0  (bootstrap atoms)",
-                          UITheme::Colors::TextSecondary);
-        ey += 20.0f;
-        float halfW = (eInnerW - 2.0f * sectionPad - 12.0f) * 0.5f;
-        float innerLeft = editorX + ePad + sectionPad;
-        renderer.drawText({innerLeft, ey}, "Type", UITheme::Colors::TextMuted);
-        renderer.drawText({innerLeft + halfW + 12.0f, ey}, "Atoms (comma-separated)",
-                          UITheme::Colors::TextMuted);
-        ey += 16.0f;
-        cbState0TypeInput_->setPosition(innerLeft, ey);
-        cbState0TypeInput_->setSize(halfW, fieldH);
-        cbState0TypeInput_->drawOverlay(renderer, position);
-        cbState0AtomsInput_->setPosition(innerLeft + halfW + 12.0f, ey);
-        cbState0AtomsInput_->setSize(halfW, fieldH);
-        cbState0AtomsInput_->drawOverlay(renderer, position);
-        ey += fieldH + sectionPad;
-
-        // Section background (drawn behind)
-        renderer.drawRoundedRect({editorX + ePad, s0StartY},
-                                 {eInnerW, ey - s0StartY}, 0x0CFFFFFF, sectionRad);
-    }
-    ey += 16.0f;
-
     // ─── EXP: Explanation / Intermediates ────────────────
     if (preset.intermediatesLabel) {
         renderer.drawRect({editorX + ePad, ey}, {eInnerW, 1.0f}, 0x18FFFFFF);
@@ -400,18 +368,6 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
         execStepActionMenu_->drawOverlay(renderer, position);
         ey += 32.0f;
 
-        // STATE1 derived result (inside the exec box)
-        if (!cbExecStepRows_.empty()) {
-            renderer.drawRect({innerLeft, ey}, {innerW, 1.0f}, 0x10FFFFFF);
-            ey += 8.0f;
-            std::string s1Label = "STATE1  result = ";
-            auto& lastRow = cbExecStepRows_.back();
-            std::string resText = lastRow.resultInput ? lastRow.resultInput->getText() : "?";
-            s1Label += resText.empty() ? "?" : resText;
-            renderer.drawText({innerLeft, ey}, s1Label, UITheme::Colors::Success);
-            ey += 20.0f;
-        }
-
         ey += sectionPad;
 
         // Section background
@@ -420,7 +376,7 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     }
     ey += 16.0f;
 
-    } // end if (conceptMode) — STATE0 / EXP / EXEC hidden in PT mode
+    } // end if (conceptMode) — EXP / EXEC hidden in PT mode
 
     // ─── A: Answer (concept mode only) ────────────────────
     if (conceptMode) {
@@ -459,8 +415,9 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
         }
         std::string preview = buildTrainingPreview(previewCB, conceptMode);
 
-        // Pre-count lines so we can draw the background FIRST
+        // Pre-count wrapped lines so we can draw the background first.
         std::vector<std::pair<std::string, uint32_t>> previewLines;
+        const float previewTextW = eInnerW - 20.0f;
         {
             std::istringstream pss(preview);
             std::string pline;
@@ -478,7 +435,8 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
                     else if (pline.size() >= 4 && pline.substr(0, 4) == "EXP:")
                         lineCol = UITheme::Colors::TextSecondary;
                 }
-                previewLines.push_back({pline, lineCol});
+                for (const std::string& wrapped : renderer.wrapText(pline, previewTextW))
+                    previewLines.push_back({wrapped, lineCol});
             }
         }
 
@@ -609,11 +567,11 @@ void UIDataHubPanel::loadConceptBlockIntoEditor(size_t cbIndex) {
 
     if (cbNameInput_)    cbNameInput_->setText(cb.name);
     if (cbPromptArea_) cbPromptArea_->setText(cb.prompt);
-    if (cbAnswerArea_)   cbAnswerArea_->setText(cb.answer);
-    if (cbExecutionGateDropdown_) {
-        cbExecutionGateDropdown_->setSelectedIndex(
-            static_cast<int>(cb.execution_gate_target));
+    if (cbTargetStateArea_) {
+        cbTargetStateArea_->setText(
+            cb.goal.has_value() ? cb.goal->target_state : std::string());
     }
+    if (cbAnswerArea_)   cbAnswerArea_->setText(cb.answer);
 
     int pi = GRIM::presetIndexForKey(cb.format_type);
     if (cbListTypeDropdown_ && pi >= 0) cbListTypeDropdown_->setSelectedIndex(pi);
@@ -621,17 +579,6 @@ void UIDataHubPanel::loadConceptBlockIntoEditor(size_t cbIndex) {
     syncIntermediateAreas(static_cast<int>(cb.intermediates.size()));
     for (size_t i = 0; i < cb.intermediates.size() && i < cbIntermediateAreas_.size(); ++i) {
         cbIntermediateAreas_[i]->setText(cb.intermediates[i]);
-    }
-
-    // State 0
-    if (cbState0TypeInput_)  cbState0TypeInput_->setText(cb.state_0.type);
-    if (cbState0AtomsInput_) {
-        std::ostringstream oss;
-        for (size_t i = 0; i < cb.state_0.atoms.size(); ++i) {
-            if (i > 0) oss << ", ";
-            oss << cb.state_0.atoms[i];
-        }
-        cbState0AtomsInput_->setText(oss.str());
     }
 
     // Execution steps
@@ -673,11 +620,9 @@ void UIDataHubPanel::loadConceptBlockIntoEditor(size_t cbIndex) {
 void UIDataHubPanel::clearCBEditor() {
     if (cbNameInput_)    cbNameInput_->setText("");
     if (cbPromptArea_) cbPromptArea_->setText("");
+    if (cbTargetStateArea_) cbTargetStateArea_->setText("");
     if (cbAnswerArea_)   cbAnswerArea_->setText("");
-    if (cbExecutionGateDropdown_) cbExecutionGateDropdown_->setSelectedIndex(0);
     cbIntermediateAreas_.clear();
-    if (cbState0TypeInput_)   cbState0TypeInput_->setText("");
-    if (cbState0AtomsInput_)  cbState0AtomsInput_->setText("");
     cbExecStepRows_.clear();
     cbEditorScrollOffset_ = 0.0f;
 }
@@ -725,25 +670,18 @@ bool UIDataHubPanel::buildConceptBlockFromEditor(
     out.name = cbNameInput_ ? cbNameInput_->getText() : "";
     out.prompt = cbPromptArea_ ? cbPromptArea_->getText() : "";
     out.answer = cbAnswerArea_ ? cbAnswerArea_->getText() : "";
+    if (cbTargetStateArea_ && !cbTargetStateArea_->getText().empty()) {
+        out.goal = GRIM::ConceptBlockGoal{cbTargetStateArea_->getText()};
+    }
 
     const int preset_index = cbListTypeDropdown_
         ? cbListTypeDropdown_->getSelectedIndex() : 1;
     out.format_type = (preset_index >= 0 && preset_index < GRIM::kConceptPresetCount)
         ? GRIM::kConceptPresets[preset_index].key : "chain_of_thought";
 
-    const int gate_index = cbExecutionGateDropdown_
-        ? cbExecutionGateDropdown_->getSelectedIndex() : 0;
-    if (gate_index < 0 || gate_index > 2) {
-        validation_error = "invalid execution gate selection";
-        return false;
-    }
-    out.execution_gate_target =
-        static_cast<GRIM::ConceptExecutionGateTarget>(gate_index);
-
     for (const auto& area : cbIntermediateAreas_) {
         out.intermediates.push_back(area ? area->getText() : "");
     }
-    out.state_0.type = cbState0TypeInput_ ? cbState0TypeInput_->getText() : "";
 
     auto trim = [](std::string value) {
         const auto first = value.find_first_not_of(" \t\r\n");
@@ -796,11 +734,6 @@ bool UIDataHubPanel::buildConceptBlockFromEditor(
         return true;
     };
 
-    if (cbState0AtomsInput_
-        && !parseDoubles(cbState0AtomsInput_->getText(), "STATE0 atoms", out.state_0.atoms)) {
-        return false;
-    }
-
     static const char* op_names[] = {"add", "sub", "mul", "div"};
     for (size_t i = 0; i < cbExecStepRows_.size(); ++i) {
         const auto& row = cbExecStepRows_[i];
@@ -834,10 +767,6 @@ bool UIDataHubPanel::buildConceptBlockFromEditor(
         out.execution.push_back(std::move(step));
     }
 
-    if (!out.execution.empty()) {
-        out.state_1.result = out.execution.back().result;
-        out.state_1.has_result = true;
-    }
     out.recomputeDerived();
     validation_error = GRIM::validateConceptBlockExecutionControl(out);
     return validation_error.empty();

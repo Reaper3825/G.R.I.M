@@ -8,7 +8,7 @@
 
 namespace GRIM::ConceptBlockIO {
 
-inline constexpr uint32_t kSchemaVersion = 1;
+inline constexpr uint32_t kSchemaVersion = 2;
 
 // Reads and verifies a complete concept-block FlatBuffer. On failure, returns
 // false, leaves `blocks` empty, and optionally describes the error.

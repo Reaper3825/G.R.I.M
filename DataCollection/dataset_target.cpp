@@ -20,13 +20,15 @@ static GRIM::ConceptBlock conceptBlockFromJson(const json& j) {
     GRIM::ConceptBlock cb;
     cb.id                 = j.value("id", std::string());
     cb.name               = j.value("name", std::string());
-    cb.prompt           = j.value("prompt", std::string());
+    cb.prompt             = j.at("question").get<std::string>();
     cb.answer             = j.value("answer", std::string());
-    cb.execution_gate_target = GRIM::conceptExecutionGateTargetFromJsonValue(
-        j.value("execution_gate_target", std::string("ignore")));
     cb.format_type        = j.value("format_type", std::string("chain_of_thought"));
     cb.source_sequence_id = j.value("source_sequence_id", std::string());
     cb.timestamp          = j.value("timestamp", int64_t(0));
+    if (j.contains("goal") && j["goal"].is_object()) {
+        cb.goal = GRIM::ConceptBlockGoal{
+            j["goal"].value("target_state", std::string())};
+    }
 
     if (j.contains("intermediates") && j["intermediates"].is_array()) {
         for (const auto& s : j["intermediates"]) {
@@ -36,16 +38,6 @@ static GRIM::ConceptBlock conceptBlockFromJson(const json& j) {
     if (j.contains("explanation") && j["explanation"].is_array()) {
         for (const auto& s : j["explanation"]) {
             if (s.is_string()) cb.explanation.push_back(s.get<std::string>());
-        }
-    }
-
-    if (j.contains("state_0") && j["state_0"].is_object()) {
-        const auto& s0 = j["state_0"];
-        cb.state_0.type = s0.value("type", std::string());
-        if (s0.contains("atoms") && s0["atoms"].is_array()) {
-            for (const auto& a : s0["atoms"]) {
-                if (a.is_number()) cb.state_0.atoms.push_back(a.get<double>());
-            }
         }
     }
 
@@ -67,21 +59,6 @@ static GRIM::ConceptBlock conceptBlockFromJson(const json& j) {
             }
             cb.execution.push_back(std::move(step));
         }
-    }
-
-    if (j.contains("state_1") && j["state_1"].is_object()) {
-        const auto& s1 = j["state_1"];
-        if (s1.contains("result") && s1["result"].is_number()) {
-            cb.state_1.result     = s1["result"].get<double>();
-            cb.state_1.has_result = true;
-        }
-    }
-
-    // Legacy execution blocks predate the explicit gate field. Preserve their
-    // established meaning when loading them into the updated editor.
-    if (!j.contains("execution_gate_target")
-        && (!cb.state_0.atoms.empty() || !cb.execution.empty())) {
-        cb.execution_gate_target = GRIM::ConceptExecutionGateTarget::Execute;
     }
 
     cb.recomputeDerived();

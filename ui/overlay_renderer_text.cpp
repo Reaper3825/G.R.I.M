@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <stdexcept>
 
 #define STB_TRUETYPE_IMPLEMENTATION
 #include <stb/stb_truetype.h>
@@ -341,4 +342,59 @@ float OverlayRenderer::measureTextWidth(const std::string& text) const
         width += it->second.xadvance;
     }
     return width;
+}
+
+std::vector<std::string> OverlayRenderer::wrapText(const std::string& text,
+                                                   float maxWidth) const
+{
+    if (maxWidth <= 0.0f)
+        throw std::invalid_argument("OverlayRenderer::wrapText requires maxWidth > 0");
+
+    std::vector<std::string> wrappedLines;
+    size_t logicalStart = 0;
+    while (logicalStart <= text.size()) {
+        const size_t newline = text.find('\n', logicalStart);
+        const size_t logicalEnd = newline == std::string::npos ? text.size() : newline;
+        const std::string logicalLine = text.substr(logicalStart, logicalEnd - logicalStart);
+
+        if (logicalLine.empty()) {
+            wrappedLines.push_back("");
+        } else {
+            size_t lineStart = 0;
+            while (lineStart < logicalLine.size()) {
+                size_t cursor = lineStart;
+                size_t lastSpace = std::string::npos;
+                size_t fittingEnd = lineStart;
+
+                while (cursor < logicalLine.size()) {
+                    const size_t codepointStart = cursor;
+                    decodeUtf8(logicalLine, cursor);
+                    if (logicalLine[codepointStart] == ' ')
+                        lastSpace = codepointStart;
+                    if (measureTextWidth(logicalLine.substr(lineStart, cursor - lineStart))
+                        > maxWidth) {
+                        break;
+                    }
+                    fittingEnd = cursor;
+                }
+
+                if (fittingEnd == lineStart) {
+                    decodeUtf8(logicalLine, fittingEnd);
+                } else if (cursor < logicalLine.size()
+                           && lastSpace != std::string::npos
+                           && lastSpace > lineStart) {
+                    fittingEnd = lastSpace;
+                }
+
+                wrappedLines.push_back(logicalLine.substr(lineStart, fittingEnd - lineStart));
+                lineStart = fittingEnd;
+                while (lineStart < logicalLine.size() && logicalLine[lineStart] == ' ')
+                    ++lineStart;
+            }
+        }
+
+        if (newline == std::string::npos) break;
+        logicalStart = newline + 1;
+    }
+    return wrappedLines;
 }

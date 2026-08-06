@@ -7,17 +7,6 @@
 // explicit migration behavior.
 namespace GRIMConcept;
 
-enum ExecutionGateTarget : ubyte {
-    Unsupervised = 0,
-    Noop = 1,
-    Execute = 2
-}
-
-table ConceptBlockState0 {
-    atoms: [double];
-    type: string;
-}
-
 table ConceptExecutionStep {
     op: string;
     args: [double];
@@ -25,8 +14,8 @@ table ConceptExecutionStep {
     result: double;
 }
 
-table ConceptBlockState1 {
-    result: double;
+table Goal {
+    target_state: string;
 }
 
 table ConceptBlock {
@@ -35,17 +24,14 @@ table ConceptBlock {
     prompt: string;
     intermediates: [string];
     answer: string;
-    execution_gate_target: ExecutionGateTarget = Unsupervised;
     explanation: [string];
-    state_0: ConceptBlockState0;
     execution: [ConceptExecutionStep];
-    state_1: ConceptBlockState1;
     intermediate_count: int;
     step_index: [int];
     format_type: string;
     source_sequence_id: string;
     timestamp: long;
-    goal: string;
+    goal: Goal;
 }
 
 table ConceptBlockDataset {

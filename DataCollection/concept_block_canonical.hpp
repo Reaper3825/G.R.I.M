@@ -97,12 +97,8 @@ inline nlohmann::json toCanonicalJson(const ConceptBlock& cb) {
         {"explanation", cb.explanation.empty() ? cb.intermediates : cb.explanation},
         {"answer", cb.answer}
     };
-    if (!cb.state_0.type.empty() || !cb.state_0.atoms.empty()) {
-        j["state_0"] = nlohmann::json{
-            {"type", cb.state_0.type},
-            {"atoms", cb.state_0.atoms}
-        };
-    }
+    if (cb.goal.has_value())
+        j["goal"] = nlohmann::json{{"target_state", cb.goal->target_state}};
     if (!cb.execution.empty()) {
         j["execution"] = nlohmann::json::array();
         for (const auto& step : cb.execution) {
@@ -113,9 +109,6 @@ inline nlohmann::json toCanonicalJson(const ConceptBlock& cb) {
                 {"result", step.result}
             });
         }
-    }
-    if (cb.state_1.has_result) {
-        j["state_1"] = nlohmann::json{{"result", cb.state_1.result}};
     }
     return j;
 }

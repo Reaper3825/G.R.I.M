@@ -43,14 +43,7 @@ ConceptBlock fromFlatBuffer(const GRIMConcept::ConceptBlock& source) {
     block.prompt = stringValue(source.prompt());
     block.intermediates = stringVectorValue(source.intermediates());
     block.answer = stringValue(source.answer());
-    block.execution_gate_target =
-        static_cast<ConceptExecutionGateTarget>(source.execution_gate_target());
     block.explanation = stringVectorValue(source.explanation());
-
-    if (const auto* state0 = source.state_0()) {
-        block.state_0.atoms = scalarVectorValue(state0->atoms());
-        block.state_0.type = stringValue(state0->type());
-    }
 
     if (const auto* steps = source.execution()) {
         block.execution.reserve(steps->size());
@@ -65,16 +58,14 @@ ConceptBlock fromFlatBuffer(const GRIMConcept::ConceptBlock& source) {
         }
     }
 
-    if (const auto* state1 = source.state_1()) {
-        block.state_1.result = state1->result();
-        block.state_1.has_result = true;
-    }
-
     block.intermediate_count = source.intermediate_count();
     block.step_index = scalarVectorValue(source.step_index());
     block.format_type = stringValue(source.format_type());
     block.source_sequence_id = stringValue(source.source_sequence_id());
     block.timestamp = source.timestamp();
+    if (const auto* goal = source.goal()) {
+        block.goal = ConceptBlockGoal{stringValue(goal->target_state())};
+    }
 
     // Derived fields are normalized on load so older/additive schema versions
     // cannot leave the editor with stale counts or step indices.
@@ -100,14 +91,6 @@ toFlatBuffer(flatbuffers::FlatBufferBuilder& builder, const ConceptBlock& block)
     const auto answer = builder.CreateString(block.answer);
     const auto explanation = createStringVector(builder, block.explanation);
 
-    flatbuffers::Offset<GRIMConcept::ConceptBlockState0> state0;
-    if (!block.state_0.type.empty() || !block.state_0.atoms.empty()) {
-        state0 = GRIMConcept::CreateConceptBlockState0(
-            builder,
-            builder.CreateVector(block.state_0.atoms),
-            builder.CreateString(block.state_0.type));
-    }
-
     std::vector<flatbuffers::Offset<GRIMConcept::ConceptExecutionStep>> steps;
     steps.reserve(block.execution.size());
     for (const auto& step : block.execution) {
@@ -120,14 +103,14 @@ toFlatBuffer(flatbuffers::FlatBufferBuilder& builder, const ConceptBlock& block)
     }
     const auto execution = builder.CreateVector(steps);
 
-    flatbuffers::Offset<GRIMConcept::ConceptBlockState1> state1;
-    if (block.state_1.has_result) {
-        state1 = GRIMConcept::CreateConceptBlockState1(builder, block.state_1.result);
-    }
-
     const auto step_index = builder.CreateVector(block.step_index);
     const auto format_type = builder.CreateString(block.format_type);
     const auto source_sequence_id = builder.CreateString(block.source_sequence_id);
+    flatbuffers::Offset<GRIMConcept::Goal> goal;
+    if (block.goal.has_value()) {
+        goal = GRIMConcept::CreateGoal(
+            builder, builder.CreateString(block.goal->target_state));
+    }
 
     return GRIMConcept::CreateConceptBlock(
         builder,
@@ -136,16 +119,14 @@ toFlatBuffer(flatbuffers::FlatBufferBuilder& builder, const ConceptBlock& block)
         prompt,
         intermediates,
         answer,
-        static_cast<GRIMConcept::ExecutionGateTarget>(block.execution_gate_target),
         explanation,
-        state0,
         execution,
-        state1,
         block.intermediate_count,
         step_index,
         format_type,
         source_sequence_id,
-        block.timestamp);
+        block.timestamp,
+        goal);
 }
 
 size_t estimatedBufferSize(const std::vector<ConceptBlock>& blocks) {
@@ -166,7 +147,7 @@ size_t estimatedBufferSize(const std::vector<ConceptBlock>& blocks) {
             + block.source_sequence_id.size());
         for (const auto& text : block.intermediates) add(8 + text.size());
         for (const auto& text : block.explanation) add(8 + text.size());
-        add(block.state_0.atoms.size() * sizeof(double) + block.state_0.type.size());
+        if (block.goal.has_value()) add(16 + block.goal->target_state.size());
         add(block.step_index.size() * sizeof(int32_t));
         for (const auto& step : block.execution) {
             add(96 + step.op.size() + step.args.size() * sizeof(double)

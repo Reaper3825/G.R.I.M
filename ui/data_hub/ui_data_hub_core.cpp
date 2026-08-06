@@ -502,23 +502,14 @@ UIDataHubPanel::UIDataHubPanel()
     cbNameInput_ = std::make_shared<UIInputBox>();
     cbNameInput_->setPlaceholder("Block name...");
 
-    cbPromptArea_ = std::make_shared<UITextArea>("Prompt", "",
+    cbPromptArea_ = std::make_shared<UITextArea>("", "",
         [](const std::string&) {});
-    cbAnswerArea_ = std::make_shared<UITextArea>("Answer", "",
+    cbTargetStateArea_ = std::make_shared<UITextArea>("", "",
+        [](const std::string&) {});
+    cbAnswerArea_ = std::make_shared<UITextArea>("", "",
         [](const std::string&) {});
     cbCustomPromptArea_ = std::make_shared<UITextArea>("Custom Prompt", "",
         [](const std::string&) {});
-
-    // ── State 0 / Execution / State 1 widgets ───────────
-    cbExecutionGateDropdown_ = std::make_shared<UIDropdown>(
-        "Execution Gate",
-        std::vector<std::string>{"Unsupervised", "Noop", "Execute"},
-        0, [](int, const std::string&) {});
-    cbExecutionGateDropdown_->setMaxVisibleItems(3);
-    cbState0TypeInput_ = std::make_shared<UIInputBox>();
-    cbState0TypeInput_->setPlaceholder("e.g. arithmetic");
-    cbState0AtomsInput_ = std::make_shared<UIInputBox>();
-    cbState0AtomsInput_->setPlaceholder("e.g. 2.0, 3.0");
 
     btnCBGenerate_ = std::make_shared<UIButton>("Generate", [this]() {
         generateConceptBlock();
@@ -539,9 +530,6 @@ UIDataHubPanel::UIDataHubPanel()
     execStepActionMenu_ = std::make_shared<UIActionMenu>("Exec Steps");
     execStepActionMenu_->addItem("+ Exec Step", [this]() {
         syncExecStepRows(static_cast<int>(cbExecStepRows_.size()) + 1);
-        if (cbExecutionGateDropdown_)
-            cbExecutionGateDropdown_->setSelectedIndex(
-                static_cast<int>(GRIM::ConceptExecutionGateTarget::Execute));
     }, UITheme::Colors::Success);
     execStepActionMenu_->addItem("- Exec Step", [this]() {
         if (!cbExecStepRows_.empty())
@@ -790,8 +778,7 @@ UIDataHubPanel::UIDataHubPanel()
     curriculumWidgets_ = {
         cbModelDropdown_, cbCurriculumDropdown_, cbCurriculumRenameInput_,
         cbListTypeDropdown_, cbTypeFilterDropdown_, cbCurriculumFilterToggle_, cbSearchInput_,
-        cbNameInput_, cbPromptArea_, cbAnswerArea_, cbCustomPromptArea_,
-        cbExecutionGateDropdown_, cbState0TypeInput_, cbState0AtomsInput_,
+        cbNameInput_, cbPromptArea_, cbTargetStateArea_, cbAnswerArea_, cbCustomPromptArea_,
         btnCBGenerate_, stepActionMenu_, execStepActionMenu_, blockActionMenu_,
         curriculumActionMenu_, blockCurriculumMenu_
     };

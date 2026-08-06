@@ -22,7 +22,6 @@
 #include "core/platform_window.hpp"  
 #include "helpers/mouse.hpp"
 #include "helpers/key.hpp"
-#include "helpers/cerr_suppressor.hpp"
 #include "net/websocket_server.hpp"
 #include "ui/ui_root.hpp"
 #include "ui/console_panel.hpp"
@@ -135,7 +134,6 @@ void signalHandler(int signal) {
 // ============================================================
 int main(int argc, char* argv[])
 {
-    GRIM::CerrSuppressor cerrFilter;
     initLogger("grim.log");
     GRIM::InstallCrashDumpHandler();
     LOG_PHASE("Initializing G.R.I.M", true);
