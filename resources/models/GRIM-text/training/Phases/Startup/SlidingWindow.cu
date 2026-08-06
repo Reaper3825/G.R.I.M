@@ -16,6 +16,171 @@
 
 namespace GRIMText::Training {
 
+namespace {
+
+using GrmtSequence = GRIM::TokenizerArtifacts::GrmtSequence;
+
+struct SftWindowConstruction {
+    std::vector<GrmtSequence> sequences;
+    size_t long_sequence_count = 0;
+    size_t generated_window_count = 0;
+};
+
+void appendSftTokenRange(GrmtSequence& destination,
+                         const GrmtSequence& source,
+                         size_t begin,
+                         size_t end) {
+    destination.token_ids.insert(destination.token_ids.end(),
+        source.token_ids.begin() + static_cast<ptrdiff_t>(begin),
+        source.token_ids.begin() + static_cast<ptrdiff_t>(end));
+    destination.targets.insert(destination.targets.end(),
+        source.targets.begin() + static_cast<ptrdiff_t>(begin),
+        source.targets.begin() + static_cast<ptrdiff_t>(end));
+    destination.token_numeric_values.insert(destination.token_numeric_values.end(),
+        source.token_numeric_values.begin() + static_cast<ptrdiff_t>(begin),
+        source.token_numeric_values.begin() + static_cast<ptrdiff_t>(end));
+    destination.token_atom_mask.insert(destination.token_atom_mask.end(),
+        source.token_atom_mask.begin() + static_cast<ptrdiff_t>(begin),
+        source.token_atom_mask.begin() + static_cast<ptrdiff_t>(end));
+    destination.atom_entry_ids.insert(destination.atom_entry_ids.end(),
+        source.atom_entry_ids.begin() + static_cast<ptrdiff_t>(begin),
+        source.atom_entry_ids.begin() + static_cast<ptrdiff_t>(end));
+    destination.token_atom_flags.insert(destination.token_atom_flags.end(),
+        source.token_atom_flags.begin() + static_cast<ptrdiff_t>(begin),
+        source.token_atom_flags.begin() + static_cast<ptrdiff_t>(end));
+    if (!source.token_exec_slot_indices.empty()) {
+        destination.token_exec_slot_indices.insert(destination.token_exec_slot_indices.end(),
+            source.token_exec_slot_indices.begin() + static_cast<ptrdiff_t>(begin),
+            source.token_exec_slot_indices.begin() + static_cast<ptrdiff_t>(end));
+    }
+}
+
+SftWindowConstruction constructSftWindows(
+    const std::vector<GrmtSequence>& sequences,
+    const std::string& split_name,
+    int max_seq_len,
+    int sliding_window_stride) {
+    SftWindowConstruction result;
+    result.sequences.reserve(sequences.size());
+
+    const size_t response_overlap = static_cast<size_t>(
+        max_seq_len - sliding_window_stride);
+
+    for (const auto& sequence : sequences) {
+        const size_t sequence_length = sequence.token_ids.size();
+        if (sequence.prompt_length <= 0 || sequence.prompt_end_pos < 0) {
+            throw std::runtime_error(
+                "Sliding window (" + split_name +
+                "): training_stage=sft requires a non-empty prompt span on every sequence");
+        }
+        if (sequence.prompt_end_pos >= static_cast<int32_t>(sequence_length) ||
+            sequence.prompt_end_pos - sequence.prompt_length + 1 < 0) {
+            throw std::runtime_error(
+                "Sliding window (" + split_name + "): invalid prompt span");
+        }
+
+        // Pin the entire prefix through prompt_end_pos. A configured BOS may
+        // precede the logical prompt span and remains part of this prefix.
+        const size_t prefix_length =
+            static_cast<size_t>(sequence.prompt_end_pos) + 1;
+        if (prefix_length >= sequence_length) {
+            throw std::runtime_error(
+                "Sliding window (" + split_name +
+                "): training_stage=sft prompt leaves no response tokens");
+        }
+        if (prefix_length >= static_cast<size_t>(max_seq_len)) {
+            throw std::runtime_error(
+                "Sliding window (" + split_name + "): SFT prefix length=" +
+                std::to_string(prefix_length) +
+                " leaves no response capacity within max_seq_len=" +
+                std::to_string(max_seq_len));
+        }
+
+        const size_t response_length = sequence_length - prefix_length;
+        const size_t response_capacity =
+            static_cast<size_t>(max_seq_len) - prefix_length;
+        const bool fragmented = response_length > response_capacity;
+        if (fragmented && response_overlap >= response_capacity) {
+            throw std::runtime_error(
+                "Sliding window (" + split_name + "): SFT response capacity=" +
+                std::to_string(response_capacity) +
+                " cannot preserve configured response overlap=" +
+                std::to_string(response_overlap));
+        }
+        if (fragmented &&
+            (sequence.execution_active ||
+             sequence.execution_gate_target != GRIM::Execution::ExecutionGateTarget::UNSUPERVISED)) {
+            throw std::runtime_error(
+                "Execution-control-supervised SFT sequence exceeds max_seq_len; "
+                "execution-control rows cannot be fragmented");
+        }
+
+        const size_t response_hop = fragmented
+            ? response_capacity - response_overlap
+            : response_capacity;
+        size_t response_begin = 0;
+        size_t previous_response_end = 0;
+        bool first_window = true;
+        if (fragmented) {
+            ++result.long_sequence_count;
+        }
+
+        while (response_begin < response_length) {
+            const size_t response_end =
+                std::min(response_length, response_begin + response_capacity);
+            const size_t owned_response_begin = first_window
+                ? 0
+                : previous_response_end;
+
+            GrmtSequence window;
+            if (!fragmented) {
+                window = sequence;
+            } else {
+                window.atom_table = sequence.atom_table;
+                appendSftTokenRange(window, sequence, 0, prefix_length);
+                appendSftTokenRange(
+                    window,
+                    sequence,
+                    prefix_length + response_begin,
+                    prefix_length + response_end);
+                window.prompt_length = sequence.prompt_length;
+                window.prompt_end_pos = sequence.prompt_end_pos;
+            }
+
+            // Visible prompt/overlap context is not supervision. Re-author the
+            // targets so each newly owned response token is predicted once.
+            std::fill(window.targets.begin(), window.targets.end(), -1);
+            for (size_t response_token = owned_response_begin;
+                 response_token < response_end;
+                 ++response_token) {
+                const size_t source_target_position =
+                    prefix_length + response_token - 1;
+                const size_t local_token_position =
+                    prefix_length + response_token - response_begin;
+                window.targets[local_token_position - 1] =
+                    sequence.targets[source_target_position];
+            }
+            window.targets.back() = -1;
+
+            result.sequences.push_back(std::move(window));
+            if (fragmented) {
+                ++result.generated_window_count;
+            }
+
+            previous_response_end = response_end;
+            if (response_end == response_length) {
+                break;
+            }
+            response_begin += response_hop;
+            first_window = false;
+        }
+    }
+
+    return result;
+}
+
+} // namespace
+
 void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& sequences,
                           bool add_bos_token,
                           bool add_eos_token,
@@ -72,6 +237,7 @@ void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
 
 void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& sequences,
                          const std::string& split_name,
+                         GRIM::HyperParameters::TrainingStage training_stage,
                          int max_seq_len,
                          int sliding_window_stride,
                          int min_seq_valid_tokens,
@@ -87,6 +253,35 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
     if (added_bos > 0 || added_eos > 0) {
         logger.log("[Data] Boundary tokens (" + split_name + "): added_bos=" +
                    std::to_string(added_bos) + " added_eos=" + std::to_string(added_eos));
+    }
+
+    if (training_stage == GRIM::HyperParameters::TrainingStage::SFT) {
+        auto construction = constructSftWindows(
+            sequences, split_name, max_seq_len, sliding_window_stride);
+        sequences = std::move(construction.sequences);
+        if (construction.long_sequence_count > 0) {
+            logger.log("Sliding window (" + split_name + "): " +
+                       std::to_string(construction.long_sequence_count) +
+                       " long SFT sequences expanded into " +
+                       std::to_string(construction.generated_window_count) +
+                       " prompt-pinned response windows");
+        }
+        filterOverlongSequences(sequences, split_name, max_seq_len, logger);
+        filterShortSequences(sequences, split_name, min_seq_valid_tokens, logger);
+        return;
+    }
+    if (training_stage != GRIM::HyperParameters::TrainingStage::PT) {
+        throw std::runtime_error(
+            "Sliding window (" + split_name + "): training_stage=" +
+            std::string(GRIM::HyperParameters::trainingStageToJsonString(training_stage)) +
+            " has no authored window-construction policy");
+    }
+
+    // PT owns the full document stream. Prompt metadata, if present in a
+    // reused artifact, must not change PT windowing or downstream pooling.
+    for (auto& sequence : sequences) {
+        sequence.prompt_length = 0;
+        sequence.prompt_end_pos = -1;
     }
 
     std::vector<GRIM::TokenizerArtifacts::GrmtSequence> windowed;

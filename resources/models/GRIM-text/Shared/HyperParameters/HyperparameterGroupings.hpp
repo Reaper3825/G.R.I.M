@@ -34,6 +34,7 @@ inline ImmutableArrayView<T> immutableArrayView(const std::vector<T>& values) {
 struct DataLoadingHP {
     int min_seq_valid_tokens = 0;
     int sliding_window_stride = 0;
+    TrainingStage training_stage = TrainingStage::UNSPECIFIED;
 };
 
 struct PathsHP {
@@ -595,6 +596,7 @@ inline DataLoadingHP dataLoadingHP(const LanguageModelConfig& config) {
     DataLoadingHP view;
     view.min_seq_valid_tokens = config.min_seq_valid_tokens;
     view.sliding_window_stride = config.sliding_window_stride;
+    view.training_stage = config.training_stage;
     return view;
 }
 
@@ -929,6 +931,7 @@ inline DataLoadingHP dataLoadingHP(const GRIM::Config::AiConfigSnapshot& snapsho
     DataLoadingHP view;
     view.min_seq_valid_tokens = snapshotTrainingConfigField<int>(snapshot, "min_seq_valid_tokens");
     view.sliding_window_stride = snapshotTrainingConfigField<int>(snapshot, "sliding_window_stride");
+    view.training_stage = snapshotTrainingConfigField<TrainingStage>(snapshot, "training_stage");
     return view;
 }
 

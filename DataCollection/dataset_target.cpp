@@ -20,7 +20,7 @@ static GRIM::ConceptBlock conceptBlockFromJson(const json& j) {
     GRIM::ConceptBlock cb;
     cb.id                 = j.value("id", std::string());
     cb.name               = j.value("name", std::string());
-    cb.question           = j.value("question", std::string());
+    cb.prompt           = j.value("prompt", std::string());
     cb.answer             = j.value("answer", std::string());
     cb.execution_gate_target = GRIM::conceptExecutionGateTargetFromJsonValue(
         j.value("execution_gate_target", std::string("ignore")));
@@ -714,7 +714,7 @@ std::vector<size_t> DatasetTarget::searchConceptBlocks(
         const auto& cb = conceptBlocks_[i];
         if (!lq.empty()) {
             bool match = toLower(cb.name).find(lq) != std::string::npos
-                      || toLower(cb.question).find(lq) != std::string::npos
+                      || toLower(cb.prompt).find(lq) != std::string::npos
                       || toLower(cb.answer).find(lq) != std::string::npos;
             if (!match) {
                 for (const auto& line : cb.intermediates) {
@@ -752,7 +752,7 @@ std::vector<size_t> DatasetTarget::filterConceptBlocks(
             continue;
         if (!lq.empty()) {
             bool match = toLower(cb.name).find(lq) != std::string::npos
-                      || toLower(cb.question).find(lq) != std::string::npos
+                      || toLower(cb.prompt).find(lq) != std::string::npos
                       || toLower(cb.answer).find(lq) != std::string::npos;
             if (!match) {
                 for (const auto& line : cb.intermediates) {

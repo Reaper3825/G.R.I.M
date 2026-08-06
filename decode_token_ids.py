@@ -60,7 +60,7 @@ UNIGRAM_TOKEN_START = ATOM_TOKEN_END                 # 262
 KTMG_VOCAB_VERSION = 4
 KTMG_MAX_PIECE_LENGTH = 32
 GRMT_MAGIC = 0x474D5254
-GRMT_FORMAT_VERSION = 18
+GRMT_FORMAT_VERSION = 17
 ATOM_ENTRY_NONE = 0xFFFFFFFF
 PAD_TOKEN_ID = 1
 
@@ -74,6 +74,8 @@ class GrmtSequenceRecord:
     token_atom_flags: list[int]
     atom_texts: list[str]
     execution_active: bool
+    prompt_end_pos: int
+    prompt_length: int
 
 
 # ── Binary helpers ───────────────────────────────────────────────────────────
@@ -452,8 +454,8 @@ def iter_grmt_sequences(path: Path):
 
             execution_active = (read_u8(f, row_source) != 0)
             skip_exact(f, 1, row_source)                          # execution_gate_target (int8)
-            skip_exact(f, 4, row_source)                          # prompt_end_pos
-            skip_exact(f, 4, row_source)                          # prompt_length
+            prompt_end_pos = read_i32(f, row_source)
+            prompt_length = read_i32(f, row_source)
             skip_exact(f, 4 * seq_len, row_source)                # token_exec_slots (int32)
 
             csb_count = read_u32(f, row_source)
@@ -481,6 +483,8 @@ def iter_grmt_sequences(path: Path):
                 token_atom_flags=token_atom_flags,
                 atom_texts=atom_texts,
                 execution_active=execution_active,
+                prompt_end_pos=prompt_end_pos,
+                prompt_length=prompt_length,
             )
 
 
@@ -712,6 +716,19 @@ def cmd_decode_sequences(args, vocab: dict[int, str]):
         print(f"{'═' * 80}")
         exec_tag = "exec-active" if record.execution_active else "exec-inactive"
         print(f"  Sequence {record.index}  |  {len(record.token_ids)} tokens  |  {len(text)} chars  |  {exec_tag}")
+        if record.prompt_length > 0:
+            prompt_start = record.prompt_end_pos - record.prompt_length + 1
+            response_start = record.prompt_end_pos + 1
+            print(
+                f"  Prompt [{prompt_start}, {response_start}) = {record.prompt_length} tokens"
+                f"  |  Response [{response_start}, {len(record.token_ids)}) = "
+                f"{len(record.token_ids) - response_start} tokens"
+            )
+        else:
+            print(
+                f"  Prompt: absent (length={record.prompt_length}, end={record.prompt_end_pos})"
+                f"  |  Whole-stream tokens={len(record.token_ids)}"
+            )
         print(f"{'═' * 80}")
         if args.raw:
             for i, tid in enumerate(record.token_ids):
@@ -822,12 +839,42 @@ def cmd_stats(args, vocab: dict[int, str]):
     unknown_ids = set()
     execution_active_count = 0
     atom_token_count = 0
+    prompt_lengths = []
+    response_lengths = []
+    promptless_count = 0
+    invalid_prompt_count = 0
+    prompt_over_stride_count = 0
+    prompt_at_or_over_window_count = 0
+    over_window_count = 0
 
     for record in iter_grmt_sequences(grmt):
         seq_lengths.append(len(record.token_ids))
         total_tokens += len(record.token_ids)
         if record.execution_active:
             execution_active_count += 1
+        if len(record.token_ids) > 1024:
+            over_window_count += 1
+        if record.prompt_length == 0:
+            promptless_count += 1
+            if record.prompt_end_pos != -1:
+                invalid_prompt_count += 1
+        else:
+            prompt_start = record.prompt_end_pos - record.prompt_length + 1
+            response_start = record.prompt_end_pos + 1
+            if (
+                record.prompt_length < 0
+                or prompt_start < 0
+                or record.prompt_end_pos >= len(record.token_ids)
+                or response_start > len(record.token_ids)
+            ):
+                invalid_prompt_count += 1
+            else:
+                prompt_lengths.append(record.prompt_length)
+                response_lengths.append(len(record.token_ids) - response_start)
+                if record.prompt_length > 768:
+                    prompt_over_stride_count += 1
+                if record.prompt_length >= 1024:
+                    prompt_at_or_over_window_count += 1
         atom_token_count += sum(1 for tid in record.token_ids if is_atom_token_id(tid))
         for tid in record.token_ids:
             token_counter[tid] += 1
@@ -843,6 +890,26 @@ def cmd_stats(args, vocab: dict[int, str]):
         print(f"  Avg seq length : {sum(seq_lengths) / len(seq_lengths):.1f}")
         print(f"  Min seq length : {min(seq_lengths)}")
         print(f"  Max seq length : {max(seq_lengths)}")
+        print(f"  Seq > 1024     : {over_window_count:,}")
+    print()
+
+    print("=== Prompt / Response Geometry ===")
+    print(f"  Prompt-bearing : {len(prompt_lengths):,}")
+    print(f"  Promptless      : {promptless_count:,}")
+    print(f"  Invalid spans   : {invalid_prompt_count:,}")
+    if prompt_lengths:
+        print(
+            f"  Prompt tokens   : min={min(prompt_lengths):,} "
+            f"avg={sum(prompt_lengths) / len(prompt_lengths):.1f} "
+            f"max={max(prompt_lengths):,}"
+        )
+        print(
+            f"  Response tokens : min={min(response_lengths):,} "
+            f"avg={sum(response_lengths) / len(response_lengths):.1f} "
+            f"max={max(response_lengths):,}"
+        )
+        print(f"  Prompt > 768    : {prompt_over_stride_count:,}")
+        print(f"  Prompt >= 1024  : {prompt_at_or_over_window_count:,}")
     print()
 
     if unknown_ids:

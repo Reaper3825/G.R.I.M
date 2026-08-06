@@ -502,7 +502,7 @@ UIDataHubPanel::UIDataHubPanel()
     cbNameInput_ = std::make_shared<UIInputBox>();
     cbNameInput_->setPlaceholder("Block name...");
 
-    cbQuestionArea_ = std::make_shared<UITextArea>("Question", "",
+    cbPromptArea_ = std::make_shared<UITextArea>("Prompt", "",
         [](const std::string&) {});
     cbAnswerArea_ = std::make_shared<UITextArea>("Answer", "",
         [](const std::string&) {});
@@ -561,9 +561,9 @@ UIDataHubPanel::UIDataHubPanel()
     blockActionMenu_->addItem("Save", [this]() {
         if (!datasetTarget_) return;
         std::string name = cbNameInput_ ? cbNameInput_->getText() : "";
-        std::string question = cbQuestionArea_ ? cbQuestionArea_->getText() : "";
-        if (name.empty() && question.empty()) {
-            addLog("ConceptBlock needs a name or question", 1);
+        std::string prompt = cbPromptArea_ ? cbPromptArea_->getText() : "";
+        if (name.empty() && prompt.empty()) {
+            addLog("ConceptBlock needs a name or prompt", 1);
             return;
         }
 
@@ -578,7 +578,7 @@ UIDataHubPanel::UIDataHubPanel()
             return;
         }
         cb.name = name;
-        cb.question = question;
+        cb.prompt = prompt;
         cb.format_type = formatKey;
 
         cb.timestamp = std::chrono::duration_cast<std::chrono::seconds>(
@@ -595,7 +595,7 @@ UIDataHubPanel::UIDataHubPanel()
                 addLog("Failed to update ConceptBlock", 2);
             }
         } else {
-            std::string seed = cb.name + cb.question + std::to_string(cb.timestamp);
+            std::string seed = cb.name + cb.prompt + std::to_string(cb.timestamp);
             cb.id = "";
             uint64_t h1 = 14695981039346656037ULL;
             uint64_t h2 = 14695981039346656037ULL;
@@ -790,7 +790,7 @@ UIDataHubPanel::UIDataHubPanel()
     curriculumWidgets_ = {
         cbModelDropdown_, cbCurriculumDropdown_, cbCurriculumRenameInput_,
         cbListTypeDropdown_, cbTypeFilterDropdown_, cbCurriculumFilterToggle_, cbSearchInput_,
-        cbNameInput_, cbQuestionArea_, cbAnswerArea_, cbCustomPromptArea_,
+        cbNameInput_, cbPromptArea_, cbAnswerArea_, cbCustomPromptArea_,
         cbExecutionGateDropdown_, cbState0TypeInput_, cbState0AtomsInput_,
         btnCBGenerate_, stepActionMenu_, execStepActionMenu_, blockActionMenu_,
         curriculumActionMenu_, blockCurriculumMenu_

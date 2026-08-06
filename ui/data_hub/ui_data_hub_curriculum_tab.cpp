@@ -143,7 +143,7 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
 
         if (isDraft) {
             nameStr = cbNameInput_ ? cbNameInput_->getText() : "";
-            qRaw    = cbQuestionArea_ ? cbQuestionArea_->getText() : "";
+            qRaw    = cbPromptArea_ ? cbPromptArea_->getText() : "";
             int pti = cbListTypeDropdown_ ? cbListTypeDropdown_->getSelectedIndex() : 1;
             if (pti >= 0 && pti < GRIM::kConceptPresetCount)
                 formatKey = GRIM::kConceptPresets[pti].key;
@@ -157,7 +157,7 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
             }
             auto cb = datasetTarget_ ? datasetTarget_->getConceptBlock(realIdx) : GRIM::ConceptBlock{};
             nameStr   = cb.name;
-            qRaw      = cb.question;
+            qRaw      = cb.prompt;
             formatKey = cb.format_type;
             blockId   = cb.id;
         }
@@ -245,9 +245,9 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
         renderer.drawText({editorX + ePad, ey}, "Text", UITheme::Colors::TextSecondary);
     }
     ey += 20.0f;
-    cbQuestionArea_->setPosition(editorX + ePad, ey);
-    cbQuestionArea_->setSize(eInnerW, conceptMode ? areaH : areaH * 2.0f);
-    cbQuestionArea_->drawOverlay(renderer, position);
+    cbPromptArea_->setPosition(editorX + ePad, ey);
+    cbPromptArea_->setSize(eInnerW, conceptMode ? areaH : areaH * 2.0f);
+    cbPromptArea_->drawOverlay(renderer, position);
     ey += (conceptMode ? areaH : areaH * 2.0f) + 16.0f;
 
     if (conceptMode) {
@@ -608,7 +608,7 @@ void UIDataHubPanel::loadConceptBlockIntoEditor(size_t cbIndex) {
     if (cb.id.empty()) return;
 
     if (cbNameInput_)    cbNameInput_->setText(cb.name);
-    if (cbQuestionArea_) cbQuestionArea_->setText(cb.question);
+    if (cbPromptArea_) cbPromptArea_->setText(cb.prompt);
     if (cbAnswerArea_)   cbAnswerArea_->setText(cb.answer);
     if (cbExecutionGateDropdown_) {
         cbExecutionGateDropdown_->setSelectedIndex(
@@ -672,7 +672,7 @@ void UIDataHubPanel::loadConceptBlockIntoEditor(size_t cbIndex) {
 
 void UIDataHubPanel::clearCBEditor() {
     if (cbNameInput_)    cbNameInput_->setText("");
-    if (cbQuestionArea_) cbQuestionArea_->setText("");
+    if (cbPromptArea_) cbPromptArea_->setText("");
     if (cbAnswerArea_)   cbAnswerArea_->setText("");
     if (cbExecutionGateDropdown_) cbExecutionGateDropdown_->setSelectedIndex(0);
     cbIntermediateAreas_.clear();
@@ -723,7 +723,7 @@ bool UIDataHubPanel::buildConceptBlockFromEditor(
     validation_error.clear();
     out = GRIM::ConceptBlock{};
     out.name = cbNameInput_ ? cbNameInput_->getText() : "";
-    out.question = cbQuestionArea_ ? cbQuestionArea_->getText() : "";
+    out.prompt = cbPromptArea_ ? cbPromptArea_->getText() : "";
     out.answer = cbAnswerArea_ ? cbAnswerArea_->getText() : "";
 
     const int preset_index = cbListTypeDropdown_
@@ -850,10 +850,10 @@ std::string UIDataHubPanel::buildTrainingPreview(const GRIM::ConceptBlock& cb, b
 }
 
 void UIDataHubPanel::generateConceptBlock() {
-    if (!structurer_ || !cbQuestionArea_) return;
-    std::string input = cbQuestionArea_->getText();
+    if (!structurer_ || !cbPromptArea_) return;
+    std::string input = cbPromptArea_->getText();
     if (input.empty()) {
-        addLog("Enter a question/prompt to generate from", 1);
+        addLog("Enter a prompt to generate from", 1);
         return;
     }
 
@@ -866,12 +866,12 @@ void UIDataHubPanel::generateConceptBlock() {
     }
 
     std::vector<std::string> intermediates;
-    std::string question;
+    std::string prompt;
     std::string answer;
 
     for (const auto& line : results) {
         if (line.size() > 3 && line.substr(0, 3) == "Q: ") {
-            question = line.substr(3);
+            prompt = line.substr(3);
         } else if (line.size() > 3 && line.substr(0, 3) == "T: ") {
             intermediates.push_back(line.substr(3));
         } else if (line.size() > 3 && line.substr(0, 3) == "A: ") {
@@ -879,8 +879,8 @@ void UIDataHubPanel::generateConceptBlock() {
         }
     }
 
-    if (!question.empty() && cbQuestionArea_)
-        cbQuestionArea_->setText(question);
+    if (!prompt.empty() && cbPromptArea_)
+        cbPromptArea_->setText(prompt);
 
     syncIntermediateAreas(static_cast<int>(intermediates.size()));
     for (size_t i = 0; i < intermediates.size() && i < cbIntermediateAreas_.size(); ++i) {

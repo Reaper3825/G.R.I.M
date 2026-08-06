@@ -15,6 +15,7 @@
 //======================================================//
 
 #include "../../../Shared/TokenizerArtifacts/GrmtSequence.hpp"  // GRIM::TokenizerArtifacts::GrmtSequence
+#include "../../../Shared/HyperParameters/HyperparameterEnums.hpp"
 #include "../../training_logger.hpp"        // TrainingLogger
 
 #include <cstddef>
@@ -79,6 +80,7 @@ void filterShortSequences(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
 // Args:
 //   sequences            - in/out: sequences to window (mutated in place)
 //   split_name           - "train" / "val", used only for log lines
+//   training_stage       - selects PT document windows or SFT prompt-pinned windows
 //   max_seq_len          - maximum window length
 //   sliding_window_stride - hop size between windows; usually < max_seq_len
 //   min_seq_valid_tokens - minimum unmasked targets per output sequence
@@ -88,6 +90,7 @@ void filterShortSequences(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
 //   logger               - emits per-split summary lines
 void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& sequences,
                          const std::string& split_name,
+                         GRIM::HyperParameters::TrainingStage training_stage,
                          int max_seq_len,
                          int sliding_window_stride,
                          int min_seq_valid_tokens,

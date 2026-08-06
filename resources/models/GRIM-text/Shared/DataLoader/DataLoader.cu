@@ -1196,6 +1196,7 @@ SequenceData buildPhase1SequenceData(
 
 	logger.log("[Data] Applying sliding windows to train split...");
 	applySlidingWindows(data.train_seqs, "train",
+						data_hp.training_stage,
 						max_seq_len, data_hp.sliding_window_stride, data_hp.min_seq_valid_tokens,
 						tokenizer_hp.add_bos, tokenizer_hp.add_eos, logger);
 	logger.log("[Data] Train split post-window sequence count=" +
@@ -1213,6 +1214,7 @@ SequenceData buildPhase1SequenceData(
 
 	logger.log("[Data] Applying sliding windows to validation split...");
 	applySlidingWindows(data.val_seqs, "val",
+						data_hp.training_stage,
 						max_seq_len, data_hp.sliding_window_stride, data_hp.min_seq_valid_tokens,
 						tokenizer_hp.add_bos, tokenizer_hp.add_eos, logger);
 	logger.log("[Data] Validation split post-window sequence count=" +

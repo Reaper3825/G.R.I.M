@@ -374,7 +374,7 @@ private:
     std::shared_ptr<UIToggle>    cbCurriculumFilterToggle_;
     std::shared_ptr<UIInputBox>  cbSearchInput_;
     std::shared_ptr<UIInputBox>  cbNameInput_;
-    std::shared_ptr<UITextArea>  cbQuestionArea_;
+    std::shared_ptr<UITextArea>  cbPromptArea_;
     std::shared_ptr<UITextArea>  cbAnswerArea_;
     std::shared_ptr<UITextArea>  cbCustomPromptArea_;
     std::vector<std::shared_ptr<UITextArea>> cbIntermediateAreas_;
