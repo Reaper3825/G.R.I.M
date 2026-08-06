@@ -249,6 +249,9 @@ public:
     // lives on the forward sink so downstream forward operations can consume
     // it without borrowing a function-local tensor.
     Tensor final_normalized_hidden_states;
+    // Generic pooled hidden-state output. This is not goal.target_state;
+    // target-state production belongs to the frozen target model.
+    Tensor mean_pool;
     Tensor lm_head_input_tensor;
     // LM-head residual SwiGLU adapter (config.lm_head_mlp_enabled) retained
     // intermediates. gate/silu/up must survive until backward: SiluGradFn and
@@ -324,6 +327,7 @@ public:
         clearTensorVector(encoder_layer_outputs);
         encoder_output_tensor = Tensor();
         final_normalized_hidden_states = Tensor();
+        mean_pool = Tensor();
         lm_head_input_tensor = Tensor();
         lm_head_mlp_gate_out = Tensor();
         lm_head_mlp_silu_out = Tensor();
@@ -413,6 +417,7 @@ public:
         reportVector("encoder_layer_outputs", encoder_layer_outputs);
         reportTensor("encoder_output_tensor", encoder_output_tensor);
         reportTensor("final_normalized_hidden_states", final_normalized_hidden_states);
+        reportTensor("mean_pool", mean_pool);
         reportTensor("lm_head_input_tensor", lm_head_input_tensor);
         reportTensor("lm_head_mlp_gate_out", lm_head_mlp_gate_out);
         reportTensor("lm_head_mlp_silu_out", lm_head_mlp_silu_out);

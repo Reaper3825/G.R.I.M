@@ -54,6 +54,7 @@ void forwardLmHead(
     cublasHandle_t cublas_handle,
     Forward::ModelForwardOutputs& forward_outputs) {
     forward_outputs.final_normalized_hidden_states = Tensor();
+    forward_outputs.mean_pool = Tensor();
     forward_outputs.lm_head_input_tensor = Tensor();
     forward_outputs.lm_head_mlp_gate_out = Tensor();
     forward_outputs.lm_head_mlp_silu_out = Tensor();
@@ -133,10 +134,62 @@ void forwardLmHead(
         current_input = &forward_outputs.final_normalized_hidden_states;
     }
 
-    meanPoolHiddenStates(
-        payload,
-        forward_outputs,
-        stream);
+    // Each training batch row is one sequence containing prompt and response
+    // tokens. Select only its post-prompt token span here;
+    // meanPoolHiddenStates itself remains a generic operation over
+    // caller-authored token spans. A sequence
+    // without a prompt span is pooled over all of its real (non-PAD) rows.
+    if (!payload.prompt_lengths.empty() || !payload.prompt_end_positions.empty()) {
+        if (static_cast<int>(payload.prompt_lengths.size()) != batch_size ||
+            static_cast<int>(payload.prompt_end_positions.size()) != batch_size) {
+            throw std::runtime_error(
+                "forwardLmHead: prompt-boundary array size mismatch");
+        }
+
+        std::vector<MeanPoolSequenceSpan> mean_pool_spans;
+        mean_pool_spans.reserve(static_cast<std::size_t>(batch_size));
+        for (int batch_row = 0; batch_row < batch_size; ++batch_row) {
+            const std::size_t row = static_cast<std::size_t>(batch_row);
+            const int sequence_length = payload.seq_lengths[row];
+            const int prompt_length = payload.prompt_lengths[row];
+            const int prompt_end = payload.prompt_end_positions[row];
+
+            int first_response_token = 0;
+            if (prompt_length == 0) {
+                if (prompt_end != -1) {
+                    throw std::runtime_error(
+                        "forwardLmHead: empty prompt requires end=-1 at batch row " +
+                        std::to_string(batch_row));
+                }
+            } else {
+                const int prompt_start = prompt_end - prompt_length + 1;
+                if (prompt_length < 0 || prompt_start < 0 ||
+                    prompt_end < 0 || prompt_end >= sequence_length) {
+                    throw std::runtime_error(
+                        "forwardLmHead: invalid prompt span at batch row " +
+                        std::to_string(batch_row));
+                }
+                first_response_token = prompt_end + 1;
+            }
+
+            const int response_token_count =
+                sequence_length - first_response_token;
+            if (response_token_count <= 0) {
+                throw std::runtime_error(
+                    "forwardLmHead: prompt leaves no response tokens to mean-pool at batch row " +
+                    std::to_string(batch_row));
+            }
+            mean_pool_spans.push_back(MeanPoolSequenceSpan{
+                batch_row,
+                first_response_token,
+                sequence_length});
+        }
+        forward_outputs.mean_pool = meanPoolHiddenStates(
+            *current_input,
+            rows_per_sequence,
+            mean_pool_spans,
+            stream);
+    }
 
     // ════════════════════════════════════════════════════════════════════
     // STEP 0.5: Optional head-side residual SwiGLU adapter (capacity expansion)

@@ -117,7 +117,7 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     const float qColX    = x + 8.0f + nameColW;
     renderer.drawText({x + 8.0f, y + 6.0f}, "Name", UITheme::Colors::TextSecondary);
     renderer.drawText({qColX, y + 6.0f},
-                      conceptMode ? "Question (preview)" : "Text (preview)",
+                      conceptMode ? "Prompt (preview)" : "Text (preview)",
                       UITheme::Colors::TextSecondary);
     renderer.drawText({x + listW - 118.0f, y + 6.0f}, "Type", UITheme::Colors::TextSecondary);
 

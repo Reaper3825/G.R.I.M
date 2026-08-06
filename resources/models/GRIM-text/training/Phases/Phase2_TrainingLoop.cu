@@ -73,7 +73,7 @@ std::string formatMetric(std::string_view name, float value, int precision) {
     return std::string(name) + "=" + formatScalar(value, precision);
 }
 
-void logNormMeanPoolHistogram(
+void logMeanPoolHistogram(
     TrainingContext& ctx,
     const GRIM::Forward::ModelForwardOutputs& forward_outputs,
     int batch_idx,
@@ -84,20 +84,13 @@ void logNormMeanPoolHistogram(
     constexpr float kMinValue = -1.0f;
     constexpr float kMaxValue = 1.0f;
 
-    if (!forward_outputs.goal.target_state) {
-        // This batch has no row containing both a complete prompt and a
-        // post-prompt response span, so the conditional mean-pool operation
-        // correctly emitted no target state.
-        return;
-    }
-    const GRIM::Tensor& norm_mean_pool =
-        forward_outputs.goal.target_state->norm_mean_pool;
-    norm_mean_pool.require("logNormMeanPoolHistogram norm_mean_pool");
+    const GRIM::Tensor& mean_pool = forward_outputs.mean_pool;
+    mean_pool.require("logMeanPoolHistogram mean_pool");
 
     const GRIM::Diagnostics::Histogram histogram =
         GRIM::Diagnostics::computeHistogram(
-            norm_mean_pool.data,
-            norm_mean_pool.numel(),
+            mean_pool.data,
+            mean_pool.numel(),
             kBinCount,
             kMinValue,
             kMaxValue,
@@ -105,7 +98,7 @@ void logNormMeanPoolHistogram(
     GRIM::Diagnostics::logHistogram(
         ctx,
         histogram,
-        "goal.target_state.norm_mean_pool",
+        "model.mean_pool",
         phase,
         batch_idx);
 }
@@ -742,7 +735,7 @@ BatchResult processBatch(
             ("ForwardAllocationSizes batch=" + std::to_string(batch_idx + 1)).c_str());
     }
     auto forward_outputs = GRIM::Forward::executeModelForward(forward_request, runtime_payload);
-    Internal::logNormMeanPoolHistogram(
+    Internal::logMeanPoolHistogram(
         ctx,
         forward_outputs,
         batch_idx,
@@ -1146,7 +1139,7 @@ ValidationResult runValidation(TrainingContext& ctx) {
             /*emit_selector_logits=*/emit_selector_logits};
 
         auto forward_outputs = GRIM::Forward::executeModelForward(forward_request, runtime_payload);
-        Internal::logNormMeanPoolHistogram(
+        Internal::logMeanPoolHistogram(
             ctx,
             forward_outputs,
             val_idx,
