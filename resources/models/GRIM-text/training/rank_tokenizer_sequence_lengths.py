@@ -158,7 +158,7 @@ def load_curriculum_selection(registry_path: Path, curriculum_name: str | None) 
 
 def render_plain(j: dict[str, Any]) -> str:
     parts: list[str] = []
-    q = j.get("question")
+    q = j.get("prompt")
     if isinstance(q, str) and q:
         parts.extend((q, "\n"))
 
@@ -254,8 +254,8 @@ def raw_excerpt(text: str, max_chars: int = 160) -> str:
 
 
 def make_record(j: dict[str, Any], cid: str, line_no: int, metrics: Metrics, text: str) -> dict[str, Any]:
-    question_value = j.get("question")
-    question = question_value[:120] if isinstance(question_value, str) else ""
+    prompt_value = j.get("prompt")
+    prompt = prompt_value[:120] if isinstance(prompt_value, str) else ""
     return {
         "id": cid,
         "line": line_no,
@@ -266,7 +266,7 @@ def make_record(j: dict[str, Any], cid: str, line_no: int, metrics: Metrics, tex
         "numeric_atoms": metrics.numeric_atoms,
         "unparseable": metrics.unparseable,
         "excerpt": raw_excerpt(text),
-        "question": question,
+        "prompt": prompt,
     }
 
 

@@ -375,7 +375,7 @@ def build_house_block(*, block_id: str, name: str, question: str,
         "intermediate_count": len(clean_intermediates),
         "intermediates": clean_intermediates,
         "name": name,
-        "question": clean_question,
+        "prompt": clean_question,
         "step_index": list(range(len(clean_intermediates))),
         "timestamp": timestamp,
     }
@@ -491,7 +491,7 @@ def screen_text_content(text: str, args: argparse.Namespace) -> tuple[bool, str]
 
 def block_plaintext(block: dict) -> str:
     parts: list[str] = []
-    question = block.get("question", "")
+    question = block.get("prompt", "")
     if isinstance(question, str) and question.strip():
         parts.append(question.strip())
 
@@ -878,7 +878,7 @@ def write_registry_and_manifest(registry: dict, curriculum: dict, plaintext_ids:
 def print_sample(block: dict) -> None:
     preview = "\n".join(
         part for part in [
-            block.get("question", ""),
+            block.get("prompt", ""),
             *block.get("intermediates", []),
             block.get("answer", ""),
         ]

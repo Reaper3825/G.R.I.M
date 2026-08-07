@@ -347,7 +347,7 @@ def make_base_entry(entry_id: str, name: str, question: str, answer: float) -> d
     return {
         "id": entry_id,
         "name": name,
-        "question": question,
+        "prompt": question,
         "intermediates": [],
         "explanation": [],
         "answer": format_number(answer),
@@ -401,11 +401,11 @@ def validate_entry(entry: dict[str, Any], max_slots: int = 8, max_steps: int = 4
     target = entry.get("execution_gate_target")
     if target not in {"execute", "noop"}:
         raise ValueError(f"{entry.get('id')}: invalid gate target {target!r}")
-    if not entry.get("question") or not entry.get("answer"):
-        raise ValueError(f"{entry.get('id')}: question and answer are required")
+    if not entry.get("prompt") or not entry.get("answer"):
+        raise ValueError(f"{entry.get('id')}: prompt and answer are required")
     if entry.get("format_type") != "qa":
         raise ValueError(f"{entry['id']}: all policy rows must use format_type=qa")
-    cue_words = CONTROL_CUE_WORDS.intersection(WORD_RE.findall(entry["question"].lower()))
+    cue_words = CONTROL_CUE_WORDS.intersection(WORD_RE.findall(entry["prompt"].lower()))
     if cue_words:
         raise ValueError(f"{entry['id']}: leaked control cue words {sorted(cue_words)}")
 
@@ -456,7 +456,7 @@ def lexical_audit(entries: Iterable[dict[str, Any]]) -> list[tuple[str, float, i
     totals = collections.Counter()
     for entry in entries:
         target = entry["execution_gate_target"]
-        words = set(WORD_RE.findall(entry["question"].lower()))
+        words = set(WORD_RE.findall(entry["prompt"].lower()))
         counts[target].update(words)
         totals[target] += 1
 
@@ -489,8 +489,8 @@ def validate_pairs(pairs: list[PolicyPair]) -> dict[str, Any]:
 
     all_entries: list[dict[str, Any]] = []
     for pair in pairs:
-        execute_words = WORD_RE.findall(pair.execute["question"].lower())
-        noop_words = WORD_RE.findall(pair.noop["question"].lower())
+        execute_words = WORD_RE.findall(pair.execute["prompt"].lower())
+        noop_words = WORD_RE.findall(pair.noop["prompt"].lower())
         if not execute_words or not noop_words:
             raise ValueError(f"{pair.pair_id}: prompt has no lexical tokens")
         if execute_words[0] != noop_words[0]:
@@ -511,17 +511,17 @@ def validate_pairs(pairs: list[PolicyPair]) -> dict[str, Any]:
                 raise ValueError(f"{pair.pair_id}: target mismatch")
             if entry["id"] in ids:
                 raise ValueError(f"duplicate id: {entry['id']}")
-            if entry["question"] in questions:
-                raise ValueError(f"duplicate question: {entry['question']}")
+            if entry["prompt"] in questions:
+                raise ValueError(f"duplicate prompt: {entry['prompt']}")
             ids.add(entry["id"])
-            questions.add(entry["question"])
+            questions.add(entry["prompt"])
             family_counts[pair.family][target] += 1
-            lengths[target].append(len(entry["question"]))
-            numeric_counts[target][len(NUMBER_RE.findall(entry["question"]))] += 1
+            lengths[target].append(len(entry["prompt"]))
+            numeric_counts[target][len(NUMBER_RE.findall(entry["prompt"]))] += 1
             all_entries.append(entry)
 
-        execute_numbers = NUMBER_RE.findall(pair.execute["question"])
-        noop_numbers = NUMBER_RE.findall(pair.noop["question"])
+        execute_numbers = NUMBER_RE.findall(pair.execute["prompt"])
+        noop_numbers = NUMBER_RE.findall(pair.noop["prompt"])
         if execute_numbers != noop_numbers:
             raise ValueError(
                 f"{pair.pair_id}: counterfactual rows expose different numeric contexts")
@@ -589,11 +589,11 @@ def generate_pairs(pair_count: int, seed: int) -> list[PolicyPair]:
     for index in range(pair_count):
         for _ in range(1000):
             pair = make_pair(index, rng)
-            if (pair.execute["question"] not in questions
-                    and pair.noop["question"] not in questions):
+            if (pair.execute["prompt"] not in questions
+                    and pair.noop["prompt"] not in questions):
                 pairs.append(pair)
-                questions.add(pair.execute["question"])
-                questions.add(pair.noop["question"])
+                questions.add(pair.execute["prompt"])
+                questions.add(pair.noop["prompt"])
                 break
         else:
             raise RuntimeError(

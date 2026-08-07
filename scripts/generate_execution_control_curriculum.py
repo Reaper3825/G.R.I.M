@@ -170,7 +170,7 @@ def make_execute_entry(split: str, index: int, rng: random.Random) -> dict[str, 
     return {
         "id": block_id,
         "name": f"Execution Control v1 {split} EXECUTE {index:06d}",
-        "question": question,
+        "prompt": question,
         "intermediates": explanations,
         "explanation": explanations,
         "answer": format_number(final_result),
@@ -218,7 +218,7 @@ def make_noop_entry(split: str, index: int, rng: random.Random) -> dict[str, Any
     return {
         "id": block_id,
         "name": f"Execution Control v1 {split} NOOP {index:06d}",
-        "question": question,
+        "prompt": question,
         "intermediates": [],
         "explanation": [],
         "answer": answer,
@@ -232,7 +232,7 @@ def make_noop_entry(split: str, index: int, rng: random.Random) -> dict[str, Any
 
 def validate_entry(entry: dict[str, Any], max_slots: int = 8) -> None:
     target = entry["execution_gate_target"]
-    if not entry.get("question"):
+    if not entry.get("prompt"):
         raise ValueError(f"{entry['id']}: missing question")
     if target == "noop":
         if "state_0" in entry or "execution" in entry:

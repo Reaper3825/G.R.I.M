@@ -35,7 +35,7 @@ def split_plaintext_document(text: str):
 
 def reconstruct_plaintext(row: dict) -> str:
     parts = []
-    question = row.get("question", "")
+    question = row.get("prompt", "")
     if isinstance(question, str) and question.strip():
         parts.append(question.strip())
 
@@ -70,7 +70,7 @@ def normalize_pt_row(row: dict) -> dict:
         "intermediate_count": len(intermediates),
         "intermediates": intermediates,
         "name": name,
-        "question": question,
+        "prompt": question,
         "step_index": step_index,
         "timestamp": row.get("timestamp", 0),
     }

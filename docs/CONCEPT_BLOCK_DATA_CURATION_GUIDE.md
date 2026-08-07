@@ -138,8 +138,8 @@ schema with required and optional fields:
     // ─── Optional metadata ───
     "name": "addition_basic_01",       // Optional. Human-readable block name.
 
-    // ─── Required: the question ───
-    "question": "What is 42 plus 17?", // Required. The problem statement.
+    // ─── Required: the prompt ───
+    "prompt": "What is 42 plus 17?",   // Required. The problem statement.
 
     // ─── Required for execution: initial state ───
     "state_0": {

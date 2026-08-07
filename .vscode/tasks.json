@@ -157,6 +157,17 @@
 			"isBackground": false,
 			"problemMatcher": [],
 			"group": "build"
+		},
+		{
+			"label": "Data: Migrate ConceptBlock prompts",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"scripts/migrate_concept_blocks_prompt_field.py"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "none"
 		}
 	]
 }

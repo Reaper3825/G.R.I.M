@@ -22,7 +22,7 @@ def write_dataset_envelope(jsonl_path: Path, output_path: Path) -> int:
     with jsonl_path.open("r", encoding="utf-8") as source, output_path.open(
         "w", encoding="utf-8", newline="\n"
     ) as output:
-        output.write('{"schema_version":1,"blocks":[')
+        output.write('{"schema_version":2,"blocks":[')
         for line_number, line in enumerate(source, 1):
             stripped = line.strip()
             if not stripped:
@@ -33,17 +33,15 @@ def write_dataset_envelope(jsonl_path: Path, output_path: Path) -> int:
                 raise ValueError(f"{jsonl_path}:{line_number}: {error}") from error
             if not isinstance(entry.get("id"), str) or not entry["id"]:
                 raise ValueError(f"{jsonl_path}:{line_number}: missing string id")
-            gate_target = entry.get("execution_gate_target", "ignore")
-            gate_values = {
-                "ignore": "Unsupervised",
-                "unsupervised": "Unsupervised",
-                "noop": "Noop",
-                "execute": "Execute",
-            }
-            if gate_target not in gate_values:
-                raise ValueError(
-                    f"{jsonl_path}:{line_number}: invalid execution_gate_target {gate_target!r}")
-            entry["execution_gate_target"] = gate_values[gate_target]
+            if "question" in entry:
+                raise ValueError(f"{jsonl_path}:{line_number}: legacy question field is forbidden")
+            prompt = entry.get("prompt")
+            if not isinstance(prompt, str) or not prompt:
+                raise ValueError(f"{jsonl_path}:{line_number}: missing non-empty prompt")
+
+            entry.pop("execution_gate_target", None)
+            entry.pop("state_0", None)
+            entry.pop("state_1", None)
             if count:
                 output.write(",")
             # Preserve numeric JSON types while normalizing syntax for flatc.

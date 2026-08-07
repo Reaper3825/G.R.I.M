@@ -31,10 +31,10 @@ class ExecutionPolicyCurriculumTests(unittest.TestCase):
 
     def test_pairs_have_matched_numeric_context_and_distinct_questions(self) -> None:
         for pair in policy.generate_pairs(240, 777):
-            self.assertNotEqual(pair.execute["question"], pair.noop["question"])
+            self.assertNotEqual(pair.execute["prompt"], pair.noop["prompt"])
             self.assertEqual(
-                policy.NUMBER_RE.findall(pair.execute["question"]),
-                policy.NUMBER_RE.findall(pair.noop["question"]),
+                policy.NUMBER_RE.findall(pair.execute["prompt"]),
+                policy.NUMBER_RE.findall(pair.noop["prompt"]),
             )
             self.assertIn("execution", pair.execute)
             self.assertNotIn("execution", pair.noop)

@@ -15,12 +15,12 @@
 using json = nlohmann::json;
 namespace fs = std::filesystem;
 
-// Legacy JSONL import helper. New persistence is concept_blocks.fb.
+// JSONL import helper. New persistence is concept_blocks.fb.
 static GRIM::ConceptBlock conceptBlockFromJson(const json& j) {
     GRIM::ConceptBlock cb;
     cb.id                 = j.value("id", std::string());
     cb.name               = j.value("name", std::string());
-    cb.prompt             = j.at("question").get<std::string>();
+    cb.prompt             = j.at("prompt").get<std::string>();
     cb.answer             = j.value("answer", std::string());
     cb.format_type        = j.value("format_type", std::string("chain_of_thought"));
     cb.source_sequence_id = j.value("source_sequence_id", std::string());

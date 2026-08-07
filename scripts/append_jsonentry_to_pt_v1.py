@@ -112,7 +112,7 @@ def build_house_block(
         "intermediate_count": len(normalized_intermediates),
         "intermediates": normalized_intermediates,
         "name": resolved_name,
-        "question": normalized_question,
+        "prompt": normalized_question,
         "step_index": step_index,
         "timestamp": timestamp,
     }
@@ -126,9 +126,9 @@ def build_block_from_concept_json(payload: dict) -> dict:
         payload.get("intermediates", payload.get("explanation")),
         "intermediates",
     )
-    question = payload.get("question", "")
+    question = payload.get("prompt", "")
     if not isinstance(question, str):
-        raise RuntimeError("concept-block JSON input field 'question' must be a string")
+        raise RuntimeError("concept-block JSON input field 'prompt' must be a string")
     format_type = payload.get("format_type", "chain_of_thought")
     if not isinstance(format_type, str) or not format_type.strip():
         raise RuntimeError("concept-block JSON input field 'format_type' must be a non-empty string")
@@ -190,9 +190,9 @@ def build_block_from_message_json(
 def build_plaintext_block(text: str) -> dict:
     if (parsed := try_parse_json(text)) is not None:
         if isinstance(parsed, dict):
-            if all(key not in parsed for key in ("question", "answer", "intermediates", "explanation")):
+            if all(key not in parsed for key in ("prompt", "answer", "intermediates", "explanation")):
                 raise RuntimeError(
-                    "JSON object input must be a concept-block-style object with question/answer fields"
+                    "JSON object input must be a concept-block-style object with prompt/answer fields"
                 )
             return build_block_from_concept_json(parsed)
         if isinstance(parsed, list):

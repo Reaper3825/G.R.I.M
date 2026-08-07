@@ -44,7 +44,7 @@ inline RenderResult render(const nlohmann::json& j) {
     }
     if (explanation) {
         for (const auto& step : *explanation) {
-            if (step.is_string()) out << "EXP: " << step.get<std::string>() << "\n";
+            if (step.is_string()) out << step.get<std::string>() << "\n";
         }
     }
 
@@ -52,7 +52,7 @@ inline RenderResult render(const nlohmann::json& j) {
     // result exists. This is required for NOOP-supervised Q/A blocks.
     if (j.contains("answer") && j["answer"].is_string()
         && !j["answer"].get<std::string>().empty()) {
-        out << "A: " << j["answer"].get<std::string>() << "\n";
+        out << j["answer"].get<std::string>() << "\n";
     }
 
     result.text = out.str();

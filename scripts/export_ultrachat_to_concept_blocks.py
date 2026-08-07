@@ -3,7 +3,7 @@
 Stream HuggingFaceH4/ultrachat_200k and append ConceptBlock-shaped JSONL lines.
 
 Each user -> assistant turn becomes one block:
-  question  = user content
+    prompt    = user content
   answer    = assistant content
   intermediates = []  (plain instruct/chat; no forced CoT)
 
@@ -126,7 +126,7 @@ def main() -> int:
                 block = {
                     "id": f"cb_uc_{idx:08d}",
                     "name": "UltraChat",
-                    "question": q,
+                    "prompt": q,
                     "intermediates": [],
                     "answer": a,
                     "format_type": "chain_of_thought",
