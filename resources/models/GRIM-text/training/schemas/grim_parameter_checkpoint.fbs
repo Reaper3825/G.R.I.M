@@ -1,0 +1,123 @@
+// GRIM parameter-registry checkpoint schema.
+//
+// This format intentionally has no compatibility path for the former
+// TransformerModel checkpoint schema. A loader must reject any format_version
+// other than the one it implements.
+//
+// The checkpoint is an exact snapshot of StartupParameterRegistry::parameter_groups:
+//   - one directory entry per registered group, in registry order;
+//   - one contiguous FP32 payload region, also in registry order;
+//   - no architecture-specific tensor fields or optional-component tables.
+//
+// Generated C++ is produced in the build tree by flatbuffers_generate_headers;
+// generated artifacts are not checked into the source tree.
+
+namespace GRIMCheckpoint;
+
+enum ParameterGroupType : ubyte {
+  EMBEDDING = 0,
+  LM_HEAD = 1,
+  ATTENTION = 2,
+  FFN = 3,
+  RMSNORM = 4,
+  EXECUTION_BLOCK = 5,
+  NUMBER_ENCODER = 6,
+  ARG_SELECTOR = 7,
+  SLOT_SEED_ENCODER = 8
+}
+
+enum ParameterStatsBucket : ubyte {
+  EMBEDDING = 0,
+  ENCODER = 1,
+  LM_HEAD = 2
+}
+
+// Mirrors TensorContract::Layout. Parameter tensors currently use BSM, but the
+// complete contract is recorded so a same-numel layout change cannot load.
+enum TensorLayout : ubyte {
+  BSM = 0,
+  QKV_FUSED = 1,
+  LOGITS = 2,
+  BHSD = 3,
+  BSHD = 4
+}
+
+// Device storage is currently always FP32. This field describes stored bytes,
+// not the lower-precision compute policy used by kernels.
+enum TensorStorageType : ubyte {
+  FP32 = 0
+}
+
+enum ParameterComputePrecision : ubyte {
+  FP32 = 0,
+  BF16_COMPUTE = 1
+}
+
+// Canonical finalized model-semantics fact. Entries must be unique and sorted
+// lexicographically by name. The exact set is defined by the checkpoint
+// compatibility-fact builder, not by the file writer. This captures semantic
+// settings that do not necessarily alter the parameter inventory, such as
+// positional encoding or parameterless attention behavior.
+table CompatibilityFact {
+  name: string (required);
+  canonical_value: string (required);
+}
+
+// Directory entry for one live ParameterGroup.
+//
+// Loader requirements:
+//   - names are non-empty and unique;
+//   - entries exactly match the current registry in registry order;
+//   - shape has exactly 2 elements for BSM/QKV_FUSED/LOGITS and exactly 4 for
+//     BHSD/BSHD, with every dimension nonzero;
+//   - element_count equals the checked product of shape;
+//   - payload_size equals element_count * sizeof(storage_type);
+//   - payload ranges are aligned, contiguous, non-overlapping, ordered like
+//     parameters, and fully cover ParameterCheckpoint.payload;
+//   - payload_xxhash64 is verified before any host-to-device write.
+table ParameterEntry {
+  name: string (required);
+  group_type: ParameterGroupType;
+  stats_bucket: ParameterStatsBucket;
+  layer_index: int = -1;
+  layout: TensorLayout;
+  shape: [uint32] (required);
+  storage_type: TensorStorageType = FP32;
+  compute_precision: ParameterComputePrecision = FP32;
+  element_count: uint64;
+  payload_offset: uint64;
+  payload_size: uint64;
+  payload_xxhash64: uint64;
+}
+
+table ParameterCheckpoint {
+  // Strict format discriminator. Version mismatch is fatal; there is no
+  // migration or best-effort field loading.
+  format_version: uint32;
+
+  // Opaque 128-bit identifier authored once for the checkpoint transaction. A
+  // future optimizer state file can record the same ID to prevent cross-pairing.
+  checkpoint_id: string (required);
+  creation_timestamp_ms: uint64;
+
+  // Ordered, self-describing semantic compatibility contract. The checksum is
+  // over the canonical length-prefixed name/value encoding, not FlatBuffer
+  // object bytes.
+  compatibility_facts: [CompatibilityFact] (required);
+  compatibility_xxhash64: uint64;
+
+  // Exact StartupParameterRegistry::parameter_groups manifest. Its checksum is
+  // over a canonical length-prefixed encoding of every entry field except the
+  // per-entry payload checksum and payload location.
+  parameters: [ParameterEntry] (required);
+  manifest_xxhash64: uint64;
+
+  // Concatenated tensor bytes in parameters/registry order. Offsets in each
+  // ParameterEntry are relative to the first byte of this vector.
+  payload: [ubyte] (required);
+  payload_xxhash64: uint64;
+}
+
+root_type ParameterCheckpoint;
+file_identifier "GRCP";
+file_extension "grimckpt";

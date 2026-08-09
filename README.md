@@ -539,7 +539,7 @@ G.R.I.M/
 | `ai_config.json` | All model, training, loss, MMO, and data collection configuration |
 | `CMakePresets.json` | Build presets with CUDA 12.5 and vcpkg paths |
 | `vcpkg.json` | C++ dependency manifest (20 packages) |
-| `resources/models/GRIM-text/training/schemas/grim_transformer_model.fbs` | FlatBuffer schema for model serialization |
+| `resources/models/GRIM-text/training/schemas/grim_parameter_checkpoint.fbs` | Registry-driven GRIM-text parameter checkpoint schema |
 | `control/training_control.fbs` | FlatBuffer schema for training RPC |
 | `control/data_collection_protocol.fbs` | FlatBuffer schema for data ingestion |
 

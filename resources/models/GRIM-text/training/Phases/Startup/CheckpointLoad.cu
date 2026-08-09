@@ -3,7 +3,7 @@
 #include "CheckpointLoad.hpp"
 #include "InitFacts.hpp"
 
-#include "../../../Common/grim_model_serialization.hpp"
+#include "../../../Common/ParameterCheckpoint.hpp"
 #include "../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../../Shared/LogRecorder/LogRecorder.hpp"
 
@@ -67,8 +67,8 @@ long long trailingEpochNumber(const std::string& stem) {
 
 // Ordered list of usable checkpoints in checkpoint_dir, "latest" first.
 // Ranking: most recent modification time, then highest parsed epoch number.
-// Partial atomic-write artifacts (e.g. "*.bin.transfer.497") and the ".mtp"
-// side-cars are skipped by requiring a ".bin" extension.
+// Partial atomic-write artifacts and optimizer sidecars are skipped by
+// requiring the registry-checkpoint extension.
 std::vector<std::string> rankedCheckpoints(const std::string& checkpoint_dir) {
     std::vector<std::string> result;
     if (checkpoint_dir.empty()) {
@@ -94,7 +94,7 @@ std::vector<std::string> rankedCheckpoints(const std::string& checkpoint_dir) {
             continue;
         }
         const auto& path = entry.path();
-        if (path.extension() != ".bin") {
+        if (path.extension() != ".grimckpt") {
             continue;
         }
         const auto size = fs::file_size(path, ec);
@@ -130,9 +130,9 @@ std::vector<std::string> rankedCheckpoints(const std::string& checkpoint_dir) {
 
 // Resolve the ordered set of checkpoint candidates to attempt, honoring
 // training.config.grim_text_checkpoint_select:
-//   - ""/"default"    → the configured grim_text_model path (legacy behavior)
-//   - "latest"        → every *.bin in the checkpoint dir, newest first
-//   - "<name>.bin"    → that file inside the checkpoint dir
+//   - ""/"default"    → the configured grim_text_model path
+//   - "latest"        → every *.grimckpt in the checkpoint dir, newest first
+//   - "<name>.grimckpt" → that file inside the checkpoint dir
 //   - "<path>/<name>" → an explicit (possibly relative) path
 std::vector<std::string> resolveCheckpointCandidates(
     const GRIM::HyperParameters::CheckpointLoadHP& checkpoint_hp,
@@ -236,8 +236,12 @@ void loadRequestedCheckpoint(TrainingContext& ctx)
         }
 
         logger.log("Loading requested checkpoint: " + candidate);
-        if (!GRIM::loadLanguageModelCheckpoint(*ctx.model, ctx.requireTrainingState("CheckpointLoaded"), ctx.gpu_model, ctx.parameter_registry, candidate)) {
-            last_reason = "loadLanguageModelCheckpoint() failed for requested checkpoint: " + candidate;
+        if (!GRIM::Checkpoint::loadParameterCheckpoint(
+                ctx.config,
+                ctx.parameter_registry,
+                ctx.requireTrainingState("CheckpointLoaded").stream_ctrl.getPrimaryStream(),
+                candidate)) {
+            last_reason = "loadParameterCheckpoint() failed for requested checkpoint: " + candidate;
             logger.log(last_reason);
             if (candidates.size() > 1) {
                 logger.log("Trying next checkpoint candidate...");
@@ -278,9 +282,13 @@ void runSaveTestIfRequested(TrainingContext& ctx)
     ctx.logging.logger->log("========================================");
     ctx.logging.logger->log("  SAVE TEST MODE");
     ctx.logging.logger->log("========================================");
-    std::string test_save_path = paths_hp.checkpoint_dir + "/save_test.bin";
-    ctx.logging.logger->log("Testing saveLanguageModelCheckpoint() to: " + test_save_path);
-    bool save_ok = GRIM::saveLanguageModelCheckpoint(*ctx.model, ctx.gpu_model, ctx.parameter_registry, test_save_path);
+    std::string test_save_path = paths_hp.checkpoint_dir + "/save_test.grimckpt";
+    ctx.logging.logger->log("Testing saveParameterCheckpoint() to: " + test_save_path);
+    bool save_ok = GRIM::Checkpoint::saveParameterCheckpoint(
+        ctx.config,
+        ctx.parameter_registry,
+        ctx.requireTrainingState("CheckpointLoaded save test").stream_ctrl.getPrimaryStream(),
+        test_save_path);
     if (save_ok) {
         EmitModuleInfo(ModuleId::Checkpoint, "✓ Save test PASSED", 0);
         if (fs::exists(test_save_path)) {

@@ -249,9 +249,9 @@ collect_via_tar() {
   log_progress 75 "Completed gzip tar stream transfer"
 }
 
-latest_remote_checkpoint_bin() {
+latest_remote_checkpoint() {
   ssh "${BRIDGES2_SSH_OPTS[@]}" "$BRIDGES2_SSH" \
-    "ls -1 \"$REMOTE_BASE\"/checkpoint_epoch_*.bin 2>/dev/null | sort -V | tail -n 1" | tr -d "\r"
+    "ls -1 \"$REMOTE_BASE\"/checkpoint_epoch_*.grimckpt 2>/dev/null | sort -V | tail -n 1" | tr -d "\r"
 }
 
 remote_file_size_bytes() {
@@ -275,19 +275,19 @@ verify_local_size() {
 }
 
 log_latest_checkpoint_download_target() {
-  local latest_bin_remote latest_bin_size
-  latest_bin_remote="$(latest_remote_checkpoint_bin)"
-  if [[ -z "$latest_bin_remote" ]]; then
-    log_progress 30 "No checkpoint_epoch_*.bin found on Bridges-2 under $REMOTE_BASE"
+  local latest_checkpoint_remote latest_checkpoint_size
+  latest_checkpoint_remote="$(latest_remote_checkpoint)"
+  if [[ -z "$latest_checkpoint_remote" ]]; then
+    log_progress 30 "No checkpoint_epoch_*.grimckpt found on Bridges-2 under $REMOTE_BASE"
     return 0
   fi
 
-  latest_bin_size="$(remote_file_size_bytes "$latest_bin_remote")"
-  if [[ -z "$latest_bin_size" ]]; then
-    latest_bin_size="unknown"
+  latest_checkpoint_size="$(remote_file_size_bytes "$latest_checkpoint_remote")"
+  if [[ -z "$latest_checkpoint_size" ]]; then
+    latest_checkpoint_size="unknown"
   fi
 
-  log_progress 30 "Checkpoint target: $(basename "$latest_bin_remote") (${latest_bin_size} bytes on Bridges-2)"
+  log_progress 30 "Checkpoint target: $(basename "$latest_checkpoint_remote") (${latest_checkpoint_size} bytes on Bridges-2)"
 }
 
 pull_single_remote_file() {
@@ -303,7 +303,7 @@ pull_single_remote_file() {
   tmp_path="$local_file.transfer.$$"
   rm -f "$tmp_path"
 
-  if [[ "$TRANSFER_METHOD" == "auto" ]] && [[ "$remote_file" == *.bin || "$remote_file" == *.bin.mtp || "$remote_file" == *.mtp ]]; then
+  if [[ "$TRANSFER_METHOD" == "auto" ]] && [[ "$remote_file" == *.bin || "$remote_file" == *.grimckpt || "$remote_file" == *.opt ]]; then
     prefer_raw_before_gzip=true
   fi
 
@@ -390,26 +390,27 @@ pull_single_remote_file() {
 }
 
 ensure_latest_checkpoint_pair() {
-  local latest_bin_remote latest_bin_name latest_bin_local latest_mtp_remote latest_mtp_local
+  local latest_checkpoint_remote latest_checkpoint_name latest_checkpoint_local
+  local latest_optimizer_remote latest_optimizer_local
 
-  latest_bin_remote="$(latest_remote_checkpoint_bin)"
-  if [[ -z "$latest_bin_remote" ]]; then
-    log_progress 90 "No checkpoint_epoch_*.bin found under $REMOTE_BASE"
+  latest_checkpoint_remote="$(latest_remote_checkpoint)"
+  if [[ -z "$latest_checkpoint_remote" ]]; then
+    log_progress 90 "No checkpoint_epoch_*.grimckpt found under $REMOTE_BASE"
     return 0
   fi
 
-  latest_bin_name="$(basename "$latest_bin_remote")"
-  latest_bin_local="$LOCAL_BASE/$latest_bin_name"
-  log_progress 90 "Ensuring latest checkpoint exists locally: $latest_bin_name"
-  pull_single_remote_file "$latest_bin_remote" "$latest_bin_local"
+  latest_checkpoint_name="$(basename "$latest_checkpoint_remote")"
+  latest_checkpoint_local="$LOCAL_BASE/$latest_checkpoint_name"
+  log_progress 90 "Ensuring latest checkpoint exists locally: $latest_checkpoint_name"
+  pull_single_remote_file "$latest_checkpoint_remote" "$latest_checkpoint_local"
 
-  latest_mtp_remote="$latest_bin_remote.mtp"
-  latest_mtp_local="$latest_bin_local.mtp"
-  if ssh "${BRIDGES2_SSH_OPTS[@]}" "$BRIDGES2_SSH" "test -f \"$latest_mtp_remote\""; then
-    log_progress 95 "Ensuring latest MTP checkpoint exists locally: $(basename "$latest_mtp_remote")"
-    pull_single_remote_file "$latest_mtp_remote" "$latest_mtp_local"
+  latest_optimizer_remote="${latest_checkpoint_remote%.grimckpt}.opt"
+  latest_optimizer_local="${latest_checkpoint_local%.grimckpt}.opt"
+  if ssh "${BRIDGES2_SSH_OPTS[@]}" "$BRIDGES2_SSH" "test -f \"$latest_optimizer_remote\""; then
+    log_progress 95 "Ensuring optimizer sidecar exists locally: $(basename "$latest_optimizer_remote")"
+    pull_single_remote_file "$latest_optimizer_remote" "$latest_optimizer_local"
   else
-    log_progress 95 "Latest MTP checkpoint not found for $latest_bin_name"
+    log_progress 95 "Optimizer sidecar not found for $latest_checkpoint_name"
   fi
 }
 
@@ -456,7 +457,7 @@ do_collect() {
     else
       log_latest_checkpoint_download_target
 
-      if [[ -n "$(latest_remote_checkpoint_bin)" ]]; then
+      if [[ -n "$(latest_remote_checkpoint)" ]]; then
         log_progress 40 "Checkpoint mode: downloading latest checkpoint pair with pull-logs transfer path"
         ensure_latest_checkpoint_pair
       elif detect_remote_rsync; then

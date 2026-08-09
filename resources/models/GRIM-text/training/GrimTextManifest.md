@@ -1176,17 +1176,11 @@ For each encoding layer (Layer 0 → Layer 11):
 
 ### 6.1 Final Checkpoint Save
 
-- [ ] **Layers/Serialization/Serialization_GPU.cu**
-  - Low-level FlatBuffers serialization kernels
-  - Saves model weights to checkpoint format
-  - **GQA compatibility**: Validates checkpoint num_kv_heads matches config - VERIFY validation present
-  - Pattern to check: Verify saves all weights including adaptive components (LayerScale, RMSNorm gains, embedding scale)
-
-- [ ] **Common/grim_model_serialization.cu**
-  - High-level serialization orchestration
-  - Coordinates checkpoint save/load operations
-  - Pattern to check: Verify proper error handling for I/O failures
-  - Pattern to check: Verify checkpoint versioning and compatibility checks
+- [x] **Common/ParameterCheckpoint.{hpp,cu}**
+  - Strict `.grimckpt` save/load iterates `StartupParameterRegistry::parameter_groups` in registry order.
+  - The registry manifest validates every name, category, stats bucket, layer, layout, shape, precision, element count, payload range, and checksum before restore mutates GPU memory.
+  - Finalized config facts validate parameterless model semantics; the former architecture-specific serializer and TransformerModel schema were deleted with no backward-compatibility path.
+  - Phase 3 passes `TrainingContext::parameter_registry` and the primary CUDA stream directly to the checkpoint boundary.
 
 ---
 

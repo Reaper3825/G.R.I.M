@@ -19,6 +19,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -200,6 +201,14 @@ public:
                    int layer = -1,
                    float wd_mult = 1.0f,
                    float lr_mult = 1.0f) {
+        if (name.empty()) {
+            throw std::runtime_error(
+                "[buildParameterGroups] parameter group name must not be empty");
+        }
+        if (!registered_names_.insert(name).second) {
+            throw std::runtime_error(
+                "[buildParameterGroups] duplicate parameter group name: " + name);
+        }
         if (!tensor.data || !tensor.has_grad() || tensor.numel() == 0) {
             throwUntrainableTensor(name, tensor, layer);
         }
@@ -296,6 +305,7 @@ private:
     std::vector<ParameterGroup>& groups_;
     const GRIM::Config::AiConfigSnapshot& config_;
     const OptimizerUpdateHP optimizer_hp_;
+    std::unordered_set<std::string> registered_names_;
     std::vector<const void*> registered_data_;
 };
 

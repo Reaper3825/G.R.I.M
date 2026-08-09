@@ -112,12 +112,15 @@ static_assert(sizeof(OptFileHeader) == 4+4+4+4+4+4+4+4+RESERVED_BYTES,
 //======================================================//
 
 std::string optimizerSidecarPath(const std::string& checkpoint_path) {
-    if (checkpoint_path.size() < 4 ||
-        checkpoint_path.substr(checkpoint_path.size() - 4) != ".bin") {
+    const fs::path model_path(checkpoint_path);
+    if (model_path.extension() != ".grimckpt") {
         throw std::runtime_error(
-            "[optimizerSidecarPath] checkpoint path must end with .bin: " + checkpoint_path);
+            "[optimizerSidecarPath] checkpoint path must end with .grimckpt: " +
+            checkpoint_path);
     }
-    return checkpoint_path.substr(0, checkpoint_path.size() - 4) + ".opt";
+    fs::path sidecar_path = model_path;
+    sidecar_path.replace_extension(".opt");
+    return sidecar_path.string();
 }
 
 //======================================================//

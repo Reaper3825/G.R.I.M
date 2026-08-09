@@ -10,7 +10,17 @@
 #include <stdexcept>
 #include <string>
 
-#include "../../Common/grim_model_serialization_version.hpp"
+namespace GRIM {
+
+// Current GRMT training tensor stream version.
+//
+// v17 replaced arithmetic-specific teacher records with variable-arity
+// TransitionInvocation targets. Opaque uint64 TransitionId values are lowered
+// through per-row CompiledTransitionBinding tables. Argument and result payload
+// values remain outside transition metadata.
+inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 17;
+
+} // namespace GRIM
 
 namespace GRIM::GRMT {
 

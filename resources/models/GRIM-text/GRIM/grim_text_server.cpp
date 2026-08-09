@@ -348,7 +348,7 @@ void waitForWorkerReady(const TrainGpuProcess& worker, int worker_port) {
     }
 
     throw std::runtime_error("grim_text_server: timed out waiting for train_gpu inference worker readiness");
-}
+} 
 
 void forwardToWorker(
     int worker_port,
@@ -471,3 +471,4 @@ int main(int argc, char** argv)
 #endif
     return 0;
 }
+ 

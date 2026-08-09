@@ -368,6 +368,15 @@ int main(int argc, char** argv) {
             argc,
             argv,
             execution_mode);
+        const auto finalized_execution_mode =
+            GRIM::HyperParameters::snapshotExecutionMode(startup_config);
+        EmitModuleInfo(
+            ModuleId::TrainingOrchestrator,
+            std::string("[Phase 1] Execution path selected | requested=") +
+                GRIM::HyperParameters::modelExecutionModeToJsonString(execution_mode) +
+                " | finalized=" +
+                GRIM::HyperParameters::modelExecutionModeToJsonString(finalized_execution_mode),
+            0);
         EmitModuleInfo(ModuleId::TrainingOrchestrator,
             "[Phase 1] ✓ Startup config ready from canonical ai_config.json", 0);
         

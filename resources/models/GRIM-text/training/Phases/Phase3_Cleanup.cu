@@ -20,7 +20,7 @@
 #include "Phase2_TrainingLoop.hpp"
 #include "../OptimizerCheckpoint.hpp"
 
-#include "../../Common/grim_model_serialization.hpp"
+#include "../../Common/ParameterCheckpoint.hpp"
 #include "../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
@@ -151,7 +151,7 @@ std::string saveFinalModel(TrainingContext& ctx, const std::string& suffix) {
     EmitModuleInfo(ModuleId::Checkpoint, "Saving final model...", ctx.global_step);
     const auto paths_hp = ::GRIM::HyperParameters::pathsHP(ctx.config);
     
-    std::string final_path = paths_hp.checkpoint_dir + "/checkpoint" + suffix + ".bin";
+    std::string final_path = paths_hp.checkpoint_dir + "/checkpoint" + suffix + ".grimckpt";
     
 #ifdef USE_CUDA
     cudaError_t sync_err = cudaDeviceSynchronize();
@@ -162,7 +162,11 @@ std::string saveFinalModel(TrainingContext& ctx, const std::string& suffix) {
 #endif
     
     try {
-        bool save_result = GRIM::saveLanguageModelCheckpoint(*ctx.model, ctx.gpu_model, ctx.parameter_registry, final_path);
+        bool save_result = GRIM::Checkpoint::saveParameterCheckpoint(
+            ctx.config,
+            ctx.parameter_registry,
+            ctx.requireTrainingState("saveFinalModel").stream_ctrl.getPrimaryStream(),
+            final_path);
         if (save_result) {
             EmitModuleInfo(ModuleId::Checkpoint, 
                 "✓ Final model saved: " + final_path, ctx.global_step);
@@ -262,9 +266,13 @@ bool saveBestCheckpoint(
 
     const auto paths_hp = ::GRIM::HyperParameters::pathsHP(ctx.config);
     std::string checkpoint_path = paths_hp.checkpoint_dir +
-                                  "/checkpoint_epoch_" + std::to_string(epoch + 1) + ".bin";
+                                  "/checkpoint_epoch_" + std::to_string(epoch + 1) + ".grimckpt";
     try {
-        bool save_result = GRIM::saveLanguageModelCheckpoint(*ctx.model, ctx.gpu_model, ctx.parameter_registry, checkpoint_path);
+        bool save_result = GRIM::Checkpoint::saveParameterCheckpoint(
+            ctx.config,
+            ctx.parameter_registry,
+            ctx.requireTrainingState("saveBestCheckpoint").stream_ctrl.getPrimaryStream(),
+            checkpoint_path);
         if (save_result) {
             ctx.logging.logger->log("  ✓ Checkpoint saved: " + checkpoint_path);
             if (fs::exists(checkpoint_path)) {
@@ -474,10 +482,6 @@ void writeFinalStatus(
 void releaseResources(TrainingContext& ctx) {
     EmitModuleInfo(ModuleId::Training, "Releasing resources...", ctx.global_step);
 
-#ifdef USE_CUDA
-    // No durable ModelForwardOutputs owner remains on TrainingState/GenerationState.
-    // Per-call shared-forward outputs are cleared by their Phase2 scopes.
-#endif
 
     // Release model (LanguageModel subobjects free PBM; TrainingState frees Tensor buffers, TeacherLogits, etc.)
     if (ctx.model) {

@@ -1,6 +1,6 @@
 # GRIM-text Learned Parameters Reference
 
-> Extracted from the serialization layer (`Serialization_views.hpp`, `Serialization_save.cu`, `grim_transformer_model.fbs`).
+> The live inventory is authored by `ParameterGroupRegistration.cu` and owned by `StartupParameterRegistry::parameter_groups`; `ParameterCheckpoint.cu` persists that inventory generically.
 > All shapes assume runtime config from `ai_config.json`: `d_model=768`, `num_heads=12`, `num_kv_heads=4`, `head_dim=64`, `d_ff=3072`, `num_layers=6`, `max_seq_len=2048`, `V=8` (execution slots), `K=4` (execution steps), `num_ops=4`, `d_key=64`, `d_type=16`, `atom_embedding_dim=64`.
 
 ---
@@ -242,8 +242,8 @@ Not serialized in the FlatBuffers schema. Per head:
 
 ## Checkpoint Format
 
-- **File identifier:** `GRMT`
-- **File extension:** `.grmt`
-- **Serialization:** FlatBuffers with post-write CRC32 + xxHash64 verification
-- **Schema:** `resources/models/GRIM-text/training/schemas/grim_transformer_model.fbs`
-- **Numeric head:** Schema field exists (`numeric_head`) but is **never populated** (layer deleted Issue #142).
+- **File identifier:** `GRCP`
+- **File extension:** `.grimckpt`
+- **Serialization:** FlatBuffers with an exact registry manifest, compatibility facts, per-parameter xxHash64, whole-payload xxHash64, and post-write verification
+- **Schema:** `resources/models/GRIM-text/training/schemas/grim_parameter_checkpoint.fbs`
+- **Inventory:** Every registered parameter is serialized in registry order; there are no architecture-specific tensor fields or deleted-layer placeholders.

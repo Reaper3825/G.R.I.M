@@ -61,15 +61,14 @@ Input Files:
   - models/vocab.bin              # Vocabulary file (from grim_data_pipeline)
 
 Output Files:
-  - checkpoints/*.bin             # Model checkpoints during training
-  - models/grim_text.bin          # Final trained model
+  - checkpoints/*.grimckpt        # Registry parameter checkpoints during training
   - training_status.fb            # Real-time training status (FlatBuffer)
   - logs/training_*.fb            # Training logs and metrics
 
 Command Line Options:
   --data <path>          Training data path (default: data/training_data.grmt)
   --vocab <path>         Vocabulary path (default: models/vocab.bin)
-  --output <path>        Output model path (default: models/grim_text.bin)
+  --output <path>        Output checkpoint path (must end in .grimckpt)
   --epochs <n>           Number of epochs (default: 3)
   --batch <n>            Batch size (default: 8)
   --lr <float>           Learning rate (default: 0.0001)
@@ -80,10 +79,9 @@ Directory Structure:
     │   └── training_data.grmt    # INPUT: Training data
     ├── models/
     │   ├── vocab.bin             # INPUT: Vocabulary
-    │   └── grim_text.bin         # OUTPUT: Trained model
     ├── checkpoints/              # OUTPUT: Model checkpoints
-    │   ├── checkpoint_500.bin
-    │   ├── checkpoint_1000.bin
+    │   ├── checkpoint_epoch_1.grimckpt
+    │   ├── checkpoint_epoch_2.grimckpt
     │   └── ...
     ├── logs/                     # OUTPUT: Training logs
     │   └── training_*.fb
@@ -97,7 +95,7 @@ Directory Structure:
 ### grim_model.exe (Inference Server)
 Input Files:
   - models/vocab.bin              # Vocabulary file (from training)
-  - models/grim_text.bin          # Trained model weights (from training)
+  - checkpoints/checkpoint_epoch_1.grimckpt # Trained registry parameter checkpoint
 
 Runtime Behavior:
   - Starts HTTP server at http://127.0.0.1:11435
@@ -120,7 +118,7 @@ Directory Structure:
   GRIM/
     └── models/
         ├── vocab.bin             # INPUT: Vocabulary
-        └── grim_text.bin         # INPUT: Trained model
+        └── checkpoint_epoch_1.grimckpt # INPUT: Trained model checkpoint
 
 
 ## =============================================================================
@@ -141,10 +139,10 @@ Directory Structure:
 
 4. Training Phase:
    train_gpu.exe (data/training_data.grmt + models/vocab.bin) 
-     → models/grim_text.bin + checkpoints/*.bin
+     → checkpoints/*.grimckpt
 
 5. Inference Phase:
-   grim_model.exe (models/vocab.bin + models/grim_text.bin) 
+   grim_model.exe (models/vocab.bin + checkpoints/checkpoint_epoch_1.grimckpt)
      → HTTP API server
 
 
@@ -156,4 +154,3 @@ To begin the pipeline, you only need:
   ✓ DataCollection/source_data.json  # Configure your data sources
 
 All other files are generated automatically through the pipeline!
-

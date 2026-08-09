@@ -376,7 +376,6 @@ add_library(grim_cuda_kernels OBJECT
     ../../Shared/Optimizers/OptimizerUpdateTrace.cu
     ../../Shared/Optimizers/AdamW/AdamW_Kernal_GPU.cu
     ../../Shared/Optimizers/RAdamW/RAdamW_Kernal_GPU.cu
-    ../BiasGradientKernel.cu  # Bias gradient kernel (was in deleted BackwardKernels.cu)
 )
 set_target_properties(grim_cuda_kernels PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF
@@ -475,34 +474,67 @@ target_link_libraries(grim_language_model_gpu_impl PUBLIC
     nlohmann_json::nlohmann_json
 )
 
-# Model serialization library
-add_library(grim_model_serialization STATIC
-
-    ../../Layers/Serialization/Serialization_validate.cu
-    ../../Layers/Serialization/Serialization_load.cu
-    ../../Layers/Serialization/Serialization_save.cu
-    ../../Common/grim_model_serialization.cu
+# Registry parameter checkpoint schema and I/O library
+set(GRIM_PARAMETER_CHECKPOINT_SCHEMA
+    ${CMAKE_CURRENT_SOURCE_DIR}/../schemas/grim_parameter_checkpoint.fbs
 )
-set_target_properties(grim_model_serialization PROPERTIES
+set(GRIM_PARAMETER_CHECKPOINT_GENERATED_DIR
+    ${CMAKE_CURRENT_BINARY_DIR}/grim_parameter_checkpoint_schema
+)
+set(GRIM_PARAMETER_CHECKPOINT_GENERATED_HEADER
+    ${GRIM_PARAMETER_CHECKPOINT_GENERATED_DIR}/grim_parameter_checkpoint_generated.h
+)
+
+# BuildFlatBuffers.cmake's flatbuffers_generate_headers() calls source_group()
+# with CMAKE_CURRENT_SOURCE_DIR as its tree root, so it cannot accept the
+# canonical sibling training/schemas directory. Keep the schema there and own
+# the one generated-header command explicitly.
+add_custom_command(
+    OUTPUT ${GRIM_PARAMETER_CHECKPOINT_GENERATED_HEADER}
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            ${GRIM_PARAMETER_CHECKPOINT_GENERATED_DIR}
+    COMMAND $<TARGET_FILE:flatbuffers::flatc>
+            -o ${GRIM_PARAMETER_CHECKPOINT_GENERATED_DIR}
+            -c ${GRIM_PARAMETER_CHECKPOINT_SCHEMA}
+    DEPENDS
+        flatbuffers::flatc
+        ${GRIM_PARAMETER_CHECKPOINT_SCHEMA}
+    COMMENT "Generating GRIM registry parameter checkpoint FlatBuffer header"
+    VERBATIM
+)
+add_custom_target(generate_grim_parameter_checkpoint_schema
+    DEPENDS ${GRIM_PARAMETER_CHECKPOINT_GENERATED_HEADER}
+)
+
+add_library(grim_parameter_checkpoint STATIC
+    ../../Common/ParameterCheckpoint.cu
+    ../../Common/ParameterCheckpoint.hpp
+    ${GRIM_PARAMETER_CHECKPOINT_GENERATED_HEADER}
+)
+add_dependencies(grim_parameter_checkpoint
+    generate_grim_parameter_checkpoint_schema
+)
+set_target_properties(grim_parameter_checkpoint PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF
     CUDA_ARCHITECTURES "${GRIM_CUDA_ARCHITECTURES}"
 )
-target_include_directories(grim_model_serialization PRIVATE
+target_include_directories(grim_parameter_checkpoint PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../..
     ${CMAKE_CURRENT_SOURCE_DIR}/../..
     ${CMAKE_CURRENT_SOURCE_DIR}/..
     ${CMAKE_CURRENT_SOURCE_DIR}/../../GRIM
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared             # Shared/ folder for TrainingState, etc.
     ${CMAKE_CURRENT_SOURCE_DIR}/../../archive
+    ${GRIM_PARAMETER_CHECKPOINT_GENERATED_DIR}
 )
-target_link_libraries(grim_model_serialization PRIVATE
+target_link_libraries(grim_parameter_checkpoint PRIVATE
     flatbuffers::flatbuffers
     CUDA::cudart
 )
-target_compile_options(grim_model_serialization PRIVATE
+target_compile_options(grim_parameter_checkpoint PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
 )
-target_compile_definitions(grim_model_serialization PRIVATE USE_CUDA)
+target_compile_definitions(grim_parameter_checkpoint PRIVATE USE_CUDA)
 
 # Main GPU training executable (three-phase architecture)
 add_executable(train_gpu 
@@ -641,7 +673,7 @@ target_link_libraries(train_gpu PRIVATE
     grim_training_kernels
     grim_cuda_kernels
     grim_language_model_gpu_impl
-    grim_model_serialization
+    grim_parameter_checkpoint
     grim_unigrambyte_tokenizer
     grim_log_recorder
     $<$<PLATFORM_ID:Windows>:ws2_32>

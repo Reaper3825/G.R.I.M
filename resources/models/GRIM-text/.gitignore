@@ -67,6 +67,7 @@ training/logs/
 checkpoints/
 training/models/
 *.bin
+*.grimckpt
 *.npz
 *.npy
 *.pt

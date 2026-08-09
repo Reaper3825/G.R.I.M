@@ -187,7 +187,7 @@ Use this checklist to systematically audit each file in the order it's used duri
     - Guarded QK-norm alpha allocation (`attn_alpha_q`, `attn_alpha_k`) behind `if constexpr (HyperParameters::QK_NORMALIZATION_ENABLED)` — was allocating 12 layers × 2 Tensors + ensure_grad for a disabled feature.
     - Removed leftover debug spew from InitTrainingState.cu: `[DEBUG-LAYER-ALLOC]`, `[DEBUG-CORRUPTION-CHECK]` fprintf blocks (investigation artifacts).
   - **Third audit findings (7 found, 5 fixed, 1 pending, 1 deferred):**
-    - **FINDING 1 — OWNERSHIP REFACTOR: TrainingTensors owns ALL parameter Tensors** ✅ FIXED: The 4 auxiliary tensors (`lm_head_bias`, `numeric_head_weights`, `numeric_head_bias`, `final_rms_gamma`) were previously double-allocated — once in `TrainingTensors::initializeParams()` (unused) and again in `InitTrainingState.cu`. Resolution: Removed duplicate allocations from `InitTrainingState.cu`, kept sole ownership in `TrainingTensors::initializeParams()`. Removed the 4 member declarations from `TrainingState_GPU.hpp` entirely — they are now accessed exclusively via `tensors_->X`. Updated ALL access sites across 7 files (AutogradTraining.cu, LanguageModel_Training.cu, grim_model_serialization.cu, Phase2_TrainingLoop.cu, InitInferenceState.cu, TrainingStateGPU.cu, Phase1_Startup.cu). Added `numeric_head_enabled` parameter through the init chain so TrainingTensors can conditionally allocate numeric head tensors. Also fixed InitInferenceState.cu which was missing `final_rms_gamma` allocation entirely — inference would have crashed loading checkpoints with rms_gamma.
+    - **FINDING 1 — OWNERSHIP REFACTOR: TrainingTensors owns ALL parameter Tensors** ✅ FIXED: The 4 auxiliary tensors (`lm_head_bias`, `numeric_head_weights`, `numeric_head_bias`, `final_rms_gamma`) were previously double-allocated — once in `TrainingTensors::initializeParams()` (unused) and again in `InitTrainingState.cu`. Resolution: Removed duplicate allocations from `InitTrainingState.cu`, kept sole ownership in `TrainingTensors::initializeParams()`. Removed the 4 member declarations from `TrainingState_GPU.hpp` entirely — they are now accessed exclusively via `tensors_->X`. Updated the then-current serializer and all training/inference access sites. Added `numeric_head_enabled` through the init chain so TrainingTensors could conditionally allocate numeric head tensors. Also fixed InitInferenceState.cu, which had been missing `final_rms_gamma` allocation entirely.
     - **FINDING 2 — `TrainingTensors::zeroGrad()` was DEAD CODE** ✅ FIXED: Deleted from TrainingTensors.cu and .hpp. `LanguageModel::zeroGrad()` handles all gradient zeroing.
     - **FINDING 3 — `single_token_{logits,hidden}` dead allocations** ✅ FIXED: Removed from InitTrainingState.cu. Leftover from planned incremental KV cache never implemented.
     - **FINDING 4 — `layer_scale_init` misleading default** ✅ FIXED: Changed default from `0.1f` to `1.0f` in `HyperParameters_GPU.hpp` and the `ai_config.json` parser to match production config (Issue #129).
@@ -1323,17 +1323,11 @@ For each encoding layer (Layer 0 → Layer 11):
 
 ### 6.1 Final Checkpoint Save
 
-- [ ] **Layers/Serialization/Serialization_GPU.cu**
-  - Low-level FlatBuffers serialization kernels
-  - Saves model weights to checkpoint format
-  - **GQA compatibility**: Validates checkpoint num_kv_heads matches config - VERIFY validation present
-  - Pattern to check: Verify saves all weights including adaptive components (LayerScale, RMSNorm gains, embedding scale)
-
-- [ ] **Common/grim_model_serialization.cu**
-  - High-level serialization orchestration
-  - Coordinates checkpoint save/load operations
-  - Pattern to check: Verify proper error handling for I/O failures
-  - Pattern to check: Verify checkpoint versioning and compatibility checks
+- [x] **Common/ParameterCheckpoint.{hpp,cu}**
+  - Strict `.grimckpt` save/load iterates `StartupParameterRegistry::parameter_groups` in registry order.
+  - The registry manifest validates every name, category, stats bucket, layer, layout, shape, precision, element count, payload range, and checksum before restore mutates GPU memory.
+  - Finalized config facts validate parameterless model semantics; the former architecture-specific serializer and TransformerModel schema were deleted with no backward-compatibility path.
+  - Phase 3 passes `TrainingContext::parameter_registry` and the primary CUDA stream directly to the checkpoint boundary.
 
 ---
 

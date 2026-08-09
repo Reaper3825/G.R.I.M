@@ -11,7 +11,7 @@
 //
 //  SIDECAR CONVENTION
 //  ==================
-//  For a model checkpoint at:  checkpoint_epoch_7.bin
+//  For a model checkpoint at:  checkpoint_epoch_7.grimckpt
 //  The optimizer sidecar is:   checkpoint_epoch_7.opt
 //
 //  BINARY FORMAT (v1)
@@ -65,10 +65,10 @@ struct TrainingContext;
 /**
  * @brief Derive the optimizer sidecar path from a model checkpoint path.
  *
- * Replaces ".bin" extension with ".opt".
- * Throws if the input path does not end with ".bin".
+ * Replaces ".grimckpt" extension with ".opt".
+ * Throws if the input path does not end with ".grimckpt".
  *
- * @param checkpoint_path Path to the model checkpoint (.bin)
+ * @param checkpoint_path Path to the model checkpoint (.grimckpt)
  * @return Corresponding optimizer sidecar path (.opt)
  */
 std::string optimizerSidecarPath(const std::string& checkpoint_path);

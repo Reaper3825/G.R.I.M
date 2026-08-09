@@ -1274,12 +1274,10 @@ std::unique_ptr<GRIM::Tokenizer::UniByte> LoadInferenceTokenizer(
 	::TrainingLogger& logger)
 {
 	const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(config);
-	const auto paths_hp = GRIM::HyperParameters::pathsHP(config);
-	Internal::validateStartupPaths(tokenizer_hp, paths_hp);
 
-	logger.log("Loading tokenizer artifact bundle...");
+	logger.log("Loading shared tokenizer vocabulary...");
 	auto tokenizer = std::make_unique<GRIM::Tokenizer::UniByte>(tokenizer_hp);
-	(void)GRIM::TokenizerArtifacts::loadTokenizerArtifactBundle(tokenizer_hp, *tokenizer);
+	(void)GRIM::TokenizerArtifacts::loadSharedTokenizerVocabulary(tokenizer_hp, *tokenizer);
 	logger.log("Initializing tokenizer CUDA Viterbi runtime...");
 	if (!tokenizer->initGPU()) {
 		throw std::runtime_error("LoadInferenceTokenizer: UniByte::initGPU() returned false after artifact load");
