@@ -366,6 +366,8 @@ private:
     
     // Thread safety
     mutable std::mutex mtx;
+    bool initialized_ = false;
+    bool shutdown_complete_ = false;
 };
 
 // Backward compatibility alias

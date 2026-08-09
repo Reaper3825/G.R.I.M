@@ -235,14 +235,23 @@ void UnifiedMemoryStorage::initialize(const std::string& storagePath) {
     else {
         LOG_DEBUG("UnifiedMemory", "No existing memory file, starting fresh");
     }
+
+    initialized_ = true;
+    shutdown_complete_ = false;
 }
 
 void UnifiedMemoryStorage::shutdown() {
-    flush();
+    std::lock_guard<std::mutex> lock(mtx);
+    if (!initialized_ || shutdown_complete_) return;
+
+    saveToDisk();
+    saveToFlatBuffer();
+    shutdown_complete_ = true;
 }
 
 void UnifiedMemoryStorage::flush() {
     std::lock_guard<std::mutex> lock(mtx);
+    if (!initialized_ || shutdown_complete_) return;
     saveToDisk();
     saveToFlatBuffer();
 }

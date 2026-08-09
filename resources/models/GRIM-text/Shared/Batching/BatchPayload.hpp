@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include "../Goal/GoalSpanView.hpp"
+
 #include <algorithm>
 #include <cstdint>
 #include <cstddef>
@@ -27,7 +29,10 @@
 #include <numeric>
 
 // Forward declaration for GRMT-authored training rows.
-namespace GRIM { namespace TokenizerArtifacts { struct GrmtSequence; } }
+namespace GRIM {
+struct Goal;
+namespace TokenizerArtifacts { struct GrmtSequence; }
+}
 
 // Forward declaration — full definition in UnigramByte/AtomTable.hpp
 namespace GRIM { namespace Tokenizer { class AtomTable; } }
@@ -84,6 +89,9 @@ struct BatchPayload {
     // input_ids. For a non-empty span, start = end - length + 1.
     std::vector<int32_t> prompt_lengths;       // [batch_size], 0 = no complete prompt in this row
     std::vector<int32_t> prompt_end_positions; // [batch_size], inclusive; -1 when length is 0
+    // Immutable authored Goal metadata aligned one-to-one with training rows.
+    // Entries may be null when a source row has no goal identifier.
+    std::vector<std::shared_ptr<const GRIM::Goal>> goals; // [batch_size]
 
     // ═══════════════════════════════════════════════════════════════════════════
     // PADDED DATA (flat [batch_size * max_seq_len] layout, computed ONCE)
@@ -216,6 +224,8 @@ struct BatchPayload {
         throw std::runtime_error("BatchPayload.mode contains an unknown value");
     }
 
+    GRIM::GoalSpanView goalSpansForRow(std::size_t row) const;
+
     void validate(const char* caller) const {
         if (batch_size <= 0) {
             throw std::runtime_error(
@@ -273,6 +283,17 @@ struct BatchPayload {
             throw std::runtime_error(
                 std::string(caller) +
                 ": training prompt-boundary arrays must both have batch_size entries");
+        }
+        if (isTraining() && static_cast<int>(goals.size()) != batch_size) {
+            throw std::runtime_error(
+                std::string(caller) + ": BatchPayload.goals.size()=" +
+                std::to_string(goals.size()) + " != batch_size=" +
+                std::to_string(batch_size));
+        }
+        if (isInference() && !goals.empty()) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": inference BatchPayload must not carry training-row goal metadata");
         }
         if (!prompt_lengths.empty() || !prompt_end_positions.empty()) {
             if (static_cast<int>(prompt_lengths.size()) != batch_size ||

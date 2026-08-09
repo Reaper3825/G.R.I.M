@@ -209,7 +209,7 @@ void DeviceCommServer::saveHubConnection() const {
 // ─── Server lifecycle ────────────────────────────────────
 
 bool DeviceCommServer::start() {
-    if (running_) {
+    if (running_ || server_thread_.joinable()) {
         LOG_ERROR(TAG, "Server already running");
         return false;
     }
@@ -231,15 +231,28 @@ bool DeviceCommServer::start() {
         }
     }
 
-    running_ = true;
+    {
+        std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+        startup_complete_ = false;
+        listen_succeeded_ = false;
+        stop_requested_ = false;
+        server_loop_ = nullptr;
+        server_app_ = nullptr;
+    }
     uint16_t port = config_.port;
 
     server_thread_ = std::thread([this, port, idle_timeout]() {
         LOG_DEBUG(TAG, "Starting device comm server on port " + std::to_string(port));
 
         try {
-            uWS::App()
-            .ws<DevicePerSocketData>("/*", {
+            uWS::App app;
+            {
+                std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+                server_loop_ = app.getLoop();
+                server_app_ = &app;
+            }
+
+            app.ws<DevicePerSocketData>("/*", {
                 .compression = uWS::DISABLED,
                 .maxPayloadLength = config_.max_chunk_size_bytes + 1024, // chunk + overhead
                 .idleTimeout = idle_timeout,
@@ -486,33 +499,90 @@ bool DeviceCommServer::start() {
                     res->end(response.dump());
                 });
             })
-            .listen(port, [port](auto* listen_socket) {
+            .listen(port, [this, port](auto* listen_socket) {
+                {
+                    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+                    listen_succeeded_ = listen_socket != nullptr;
+                    startup_complete_ = true;
+                    running_ = listen_succeeded_;
+                }
+                startup_cv_.notify_all();
+
                 if (listen_socket) {
                     LOG_DEBUG(TAG, "Device comm server listening on port " + std::to_string(port));
                 } else {
                     LOG_ERROR(TAG, "Failed to listen on port " + std::to_string(port));
                 }
-            })
-            .run();
+            });
+
+            bool should_run = false;
+            {
+                std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+                should_run = listen_succeeded_ && !stop_requested_;
+                if (listen_succeeded_ && stop_requested_)
+                    app.close();
+            }
+            if (should_run)
+                app.run();
 
         } catch (const std::exception& e) {
             LOG_ERROR(TAG, "Device comm server error: " + std::string(e.what()));
         }
 
-        running_ = false;
+        {
+            std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+            server_app_ = nullptr;
+            server_loop_ = nullptr;
+            running_ = false;
+            if (!startup_complete_) {
+                listen_succeeded_ = false;
+                startup_complete_ = true;
+            }
+        }
+        startup_cv_.notify_all();
     });
 
-    return true;
+    bool started = false;
+    {
+        std::unique_lock<std::mutex> lock(lifecycle_mutex_);
+        startup_cv_.wait(lock, [this] { return startup_complete_; });
+        started = listen_succeeded_;
+    }
+    if (!started && server_thread_.joinable())
+        server_thread_.join();
+    return started;
 }
 
 void DeviceCommServer::stop() {
-    if (!running_) return;
-    running_ = false;
+    {
+        std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+        if (!server_thread_.joinable()) {
+            running_ = false;
+            return;
+        }
 
-    // uWebSockets doesn't have a built-in stop from outside the event loop.
-    // The thread will exit when the event loop stops (e.g., on process shutdown).
-    if (server_thread_.joinable()) {
-        server_thread_.detach();
+        stop_requested_ = true;
+        running_ = false;
+        if (server_loop_ && server_app_) {
+            auto* app = server_app_;
+            server_loop_->defer([app]() { app->close(); });
+        }
+    }
+
+    if (server_thread_.get_id() == std::this_thread::get_id()) {
+        LOG_ERROR(TAG, "Device comm server cannot join itself during shutdown");
+        return;
+    }
+    if (server_thread_.joinable())
+        server_thread_.join();
+
+    {
+        std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+        server_app_ = nullptr;
+        server_loop_ = nullptr;
+        startup_complete_ = false;
+        listen_succeeded_ = false;
+        stop_requested_ = false;
     }
     LOG_DEBUG(TAG, "Device comm server stopped");
 }

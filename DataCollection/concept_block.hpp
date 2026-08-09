@@ -30,8 +30,16 @@ struct ConceptExecutionStep {
     double               result = 0.0;
 };
 
+// Evidence stays nested with its criterion so downstream verification never
+// has to infer the association from parallel arrays or criterion text keys.
+struct ConceptBlockSuccessCriterion {
+    std::string criterion;
+    std::string evidence;
+};
+
 struct ConceptBlockGoal {
     std::string target_state;
+    std::vector<ConceptBlockSuccessCriterion> success_criteria;
 };
 
 struct ConceptBlock {

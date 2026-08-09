@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+namespace GRIM { struct Goal; }
+
 namespace GRIM::TokenizerArtifacts {
 
 struct GrmtSequence {
@@ -31,6 +33,10 @@ struct GrmtSequence {
     std::vector<GRIM::Execution::CompiledTransitionBinding> compiled_transition_bindings;
     std::vector<GRIM::Execution::CompiledBootstrapBinding> compiled_bootstrap_bindings;
     std::vector<GRIM::Execution::TransitionInvocation> transition_targets;
+
+    // Authored row-level goal metadata. Shared ownership lets sliding-window
+    // rows retain one immutable Goal without copying its runtime Tensor state.
+    std::shared_ptr<const GRIM::Goal> goal;
 
     bool hasAnyValidTarget() const;
     void validateForWrite(const std::string& source) const;

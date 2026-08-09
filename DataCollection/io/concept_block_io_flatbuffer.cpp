@@ -64,7 +64,18 @@ ConceptBlock fromFlatBuffer(const GRIMConcept::ConceptBlock& source) {
     block.source_sequence_id = stringValue(source.source_sequence_id());
     block.timestamp = source.timestamp();
     if (const auto* goal = source.goal()) {
-        block.goal = ConceptBlockGoal{stringValue(goal->target_state())};
+        ConceptBlockGoal decoded_goal;
+        decoded_goal.target_state = stringValue(goal->target_state());
+        if (const auto* criteria = goal->success_criteria()) {
+            decoded_goal.success_criteria.reserve(criteria->size());
+            for (const auto* source_criterion : *criteria) {
+                if (!source_criterion) continue;
+                decoded_goal.success_criteria.push_back(ConceptBlockSuccessCriterion{
+                    stringValue(source_criterion->criterion()),
+                    stringValue(source_criterion->evidence())});
+            }
+        }
+        block.goal = std::move(decoded_goal);
     }
 
     // Derived fields are normalized on load so older/additive schema versions
@@ -108,8 +119,18 @@ toFlatBuffer(flatbuffers::FlatBufferBuilder& builder, const ConceptBlock& block)
     const auto source_sequence_id = builder.CreateString(block.source_sequence_id);
     flatbuffers::Offset<GRIMConcept::Goal> goal;
     if (block.goal.has_value()) {
+        std::vector<flatbuffers::Offset<GRIMConcept::SuccessCriterion>> criteria;
+        criteria.reserve(block.goal->success_criteria.size());
+        for (const auto& entry : block.goal->success_criteria) {
+            criteria.push_back(GRIMConcept::CreateSuccessCriterion(
+                builder,
+                builder.CreateString(entry.criterion),
+                builder.CreateString(entry.evidence)));
+        }
         goal = GRIMConcept::CreateGoal(
-            builder, builder.CreateString(block.goal->target_state));
+            builder,
+            builder.CreateString(block.goal->target_state),
+            builder.CreateVector(criteria));
     }
 
     return GRIMConcept::CreateConceptBlock(
@@ -147,7 +168,11 @@ size_t estimatedBufferSize(const std::vector<ConceptBlock>& blocks) {
             + block.source_sequence_id.size());
         for (const auto& text : block.intermediates) add(8 + text.size());
         for (const auto& text : block.explanation) add(8 + text.size());
-        if (block.goal.has_value()) add(16 + block.goal->target_state.size());
+        if (block.goal.has_value()) {
+            add(16 + block.goal->target_state.size());
+            for (const auto& entry : block.goal->success_criteria)
+                add(32 + entry.criterion.size() + entry.evidence.size());
+        }
         add(block.step_index.size() * sizeof(int32_t));
         for (const auto& step : block.execution) {
             add(96 + step.op.size() + step.args.size() * sizeof(double)

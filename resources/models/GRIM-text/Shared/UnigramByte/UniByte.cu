@@ -160,18 +160,50 @@ UniByteResult UniByte::tokenizeWithMetadata(
     const std::string& text,
     size_t forced_segment_boundary,
     size_t* token_count_at_boundary) const {
+    if (!token_count_at_boundary) {
+        return tokenizeWithMetadata(
+            text, std::vector<size_t>{}, nullptr);
+    }
+
+    std::vector<size_t> token_counts;
+    UniByteResult result = tokenizeWithMetadata(
+        text,
+        std::vector<size_t>{forced_segment_boundary},
+        &token_counts);
+    *token_count_at_boundary = token_counts.front();
+    return result;
+}
+
+UniByteResult UniByte::tokenizeWithMetadata(
+    const std::string& text,
+    const std::vector<size_t>& forced_segment_boundaries,
+    std::vector<size_t>* token_counts_at_boundaries) const {
     UniByteResult result;
 
-    const bool track_boundary = token_count_at_boundary != nullptr;
-    if (track_boundary && forced_segment_boundary > text.size()) {
-        throw std::runtime_error(
-            "UniByte::tokenizeWithMetadata: forced segment boundary exceeds text length");
+    const bool track_boundaries = !forced_segment_boundaries.empty();
+    std::vector<size_t> ignored_token_counts;
+    std::vector<size_t>& token_counts = token_counts_at_boundaries
+        ? *token_counts_at_boundaries
+        : ignored_token_counts;
+    token_counts.assign(forced_segment_boundaries.size(), 0);
+    for (size_t index = 0; index < forced_segment_boundaries.size(); ++index) {
+        if (forced_segment_boundaries[index] > text.size()) {
+            throw std::runtime_error(
+                "UniByte::tokenizeWithMetadata: forced segment boundary exceeds text length");
+        }
+        if (index > 0 &&
+            forced_segment_boundaries[index] <
+                forced_segment_boundaries[index - 1]) {
+            throw std::runtime_error(
+                "UniByte::tokenizeWithMetadata: forced segment boundaries must be nondecreasing");
+        }
     }
-    bool boundary_recorded = false;
+    size_t boundary_index = 0;
     auto recordBoundary = [&](size_t byte_pos) {
-        if (track_boundary && !boundary_recorded && byte_pos == forced_segment_boundary) {
-            *token_count_at_boundary = result.token_ids.size();
-            boundary_recorded = true;
+        while (boundary_index < forced_segment_boundaries.size() &&
+               forced_segment_boundaries[boundary_index] == byte_pos) {
+            token_counts[boundary_index] = result.token_ids.size();
+            ++boundary_index;
         }
     };
 
@@ -276,9 +308,9 @@ UniByteResult UniByte::tokenizeWithMetadata(
             const AtomTokenizationPayload& atom_payload = atom_tokens[struct_idx];
             const StructuralSpan& span = atom_payload.span;
 
-            if (track_boundary && !boundary_recorded
-                && forced_segment_boundary > span.start
-                && forced_segment_boundary < span.end) {
+            if (boundary_index < forced_segment_boundaries.size() &&
+                forced_segment_boundaries[boundary_index] > span.start &&
+                forced_segment_boundaries[boundary_index] < span.end) {
                 throw std::runtime_error(
                     "UniByte::tokenizeWithMetadata: forced segment boundary falls inside an atom span");
             }
@@ -302,10 +334,10 @@ UniByteResult UniByte::tokenizeWithMetadata(
         if (struct_idx < atom_tokens.size()) {
             segment_end = atom_tokens[struct_idx].span.start;
         }
-        if (track_boundary && !boundary_recorded
-            && forced_segment_boundary > pos
-            && forced_segment_boundary < segment_end) {
-            segment_end = forced_segment_boundary;
+        if (boundary_index < forced_segment_boundaries.size() &&
+            forced_segment_boundaries[boundary_index] > pos &&
+            forced_segment_boundaries[boundary_index] < segment_end) {
+            segment_end = forced_segment_boundaries[boundary_index];
         }
 
         appendSegmentTokens(pos, segment_end);
@@ -313,9 +345,10 @@ UniByteResult UniByte::tokenizeWithMetadata(
         pos = segment_end;
     }
     recordBoundary(pos);
-    if (track_boundary && !boundary_recorded) {
+    if (track_boundaries &&
+        boundary_index != forced_segment_boundaries.size()) {
         throw std::runtime_error(
-            "UniByte::tokenizeWithMetadata: failed to materialize forced segment boundary");
+            "UniByte::tokenizeWithMetadata: failed to materialize all forced segment boundaries");
     }
     
     // Pipeline contract: validate all per-token arrays are consistent

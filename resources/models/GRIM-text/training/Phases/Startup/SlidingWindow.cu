@@ -7,6 +7,7 @@
 //======================================================//
 
 #include "SlidingWindow.hpp"
+#include "../../../Shared/Goal/Goal.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -25,6 +26,53 @@ struct SftWindowConstruction {
     size_t long_sequence_count = 0;
     size_t generated_window_count = 0;
 };
+
+std::shared_ptr<const GRIM::Goal> offsetGoalSpans(
+    const std::shared_ptr<const GRIM::Goal>& source,
+    std::int32_t offset) {
+    if (!source || offset == 0) {
+        return source;
+    }
+
+    auto shifted = std::make_shared<GRIM::Goal>();
+    if (source->target_state.has_value()) {
+        GRIM::TargetState target_state;
+        target_state.token_ids = source->target_state->token_ids;
+        target_state.span = GRIM::GoalTokenSpan{
+            source->target_state->span.begin + offset,
+            source->target_state->span.end + offset};
+        shifted->target_state = std::move(target_state);
+    }
+    if (source->success_criteria.has_value()) {
+        GRIM::SuccessCriteria criteria = *source->success_criteria;
+        criteria.span.begin += offset;
+        criteria.span.end += offset;
+        for (auto& entry : criteria.entries) {
+            entry.criterion_span.begin += offset;
+            entry.criterion_span.end += offset;
+            entry.evidence_span.begin += offset;
+            entry.evidence_span.end += offset;
+        }
+        shifted->success_criteria = std::move(criteria);
+    }
+    return shifted;
+}
+
+bool goalFitsPrefix(const std::shared_ptr<const GRIM::Goal>& goal,
+                    size_t source_end) {
+    if (!goal) {
+        return false;
+    }
+    if (goal->target_state.has_value() &&
+        static_cast<size_t>(goal->target_state->span.end) > source_end) {
+        return false;
+    }
+    if (goal->success_criteria.has_value() &&
+        static_cast<size_t>(goal->success_criteria->span.end) > source_end) {
+        return false;
+    }
+    return true;
+}
 
 void appendSftTokenRange(GrmtSequence& destination,
                          const GrmtSequence& source,
@@ -137,6 +185,7 @@ SftWindowConstruction constructSftWindows(
                 window = sequence;
             } else {
                 window.atom_table = sequence.atom_table;
+                window.goal = sequence.goal;
                 appendSftTokenRange(window, sequence, 0, prefix_length);
                 appendSftTokenRange(
                     window,
@@ -212,6 +261,7 @@ void injectBoundaryTokens(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
             if (seq.prompt_end_pos >= 0) {
                 seq.prompt_end_pos += 1;
             }
+            seq.goal = offsetGoalSpans(seq.goal, 1);
             added_bos_out++;
         }
 
@@ -357,6 +407,11 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
             size_t end = std::min(seq_len, start + effective_max);
 
             GRIM::TokenizerArtifacts::GrmtSequence window;
+            // PT windows do not pin goal metadata. Retain it only on the
+            // leading window when every authored logical span is present.
+            if (is_first_window && goalFitsPrefix(seq.goal, end)) {
+                window.goal = seq.goal;
+            }
 
             // For non-first windows, prepend BOS token (gated on add_bos_token config)
             if (prepend_bos) {

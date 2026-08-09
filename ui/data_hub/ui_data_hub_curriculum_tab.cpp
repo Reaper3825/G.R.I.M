@@ -250,13 +250,61 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     cbPromptArea_->drawOverlay(renderer, position);
     ey += (conceptMode ? areaH : areaH * 2.0f) + 16.0f;
 
-    renderer.drawText({editorX + ePad, ey}, "Target State (optional)",
-                      UITheme::Colors::TextSecondary);
-    ey += 20.0f;
-    cbTargetStateArea_->setPosition(editorX + ePad, ey);
-    cbTargetStateArea_->setSize(eInnerW, areaH);
-    cbTargetStateArea_->drawOverlay(renderer, position);
-    ey += areaH + 16.0f;
+    // ─── Goal identifier ────────────────────────────────
+    renderer.drawRect({editorX + ePad, ey}, {eInnerW, 1.0f}, 0x18FFFFFF);
+    ey += sectionGap;
+    {
+        const float goalStartY = ey;
+        const float innerLeft = editorX + ePad + sectionPad;
+        const float innerW = eInnerW - 2.0f * sectionPad;
+        const float criterionAreaH = 44.0f;
+        const float criterionBlockH = 148.0f;
+        const float goalSectionH = sectionPad + 22.0f + 20.0f + areaH + 14.0f
+            + criterionBlockH * static_cast<float>(cbSuccessCriterionRows_.size())
+            + 32.0f + sectionPad;
+
+        renderer.drawRoundedRect({editorX + ePad, goalStartY},
+                                 {eInnerW, goalSectionH}, 0x0CFFFFFF, sectionRad);
+
+        ey += sectionPad;
+        renderer.drawText({innerLeft, ey}, "GOAL IDENTIFIER",
+                          UITheme::Colors::TextSecondary);
+        ey += 22.0f;
+
+        renderer.drawText({innerLeft, ey}, "Target State (optional)",
+                          UITheme::Colors::TextMuted);
+        ey += 20.0f;
+        cbTargetStateArea_->setPosition(innerLeft, ey);
+        cbTargetStateArea_->setSize(innerW, areaH);
+        cbTargetStateArea_->drawOverlay(renderer, position);
+        ey += areaH + 14.0f;
+
+        for (size_t ci = 0; ci < cbSuccessCriterionRows_.size(); ++ci) {
+            auto& row = cbSuccessCriterionRows_[ci];
+            renderer.drawText({innerLeft, ey},
+                              "Success Criterion " + std::to_string(ci + 1),
+                              UITheme::Colors::TextMuted);
+            ey += 20.0f;
+            row.criterionArea->setPosition(innerLeft, ey);
+            row.criterionArea->setSize(innerW, criterionAreaH);
+            row.criterionArea->drawOverlay(renderer, position);
+            ey += criterionAreaH + 8.0f;
+
+            renderer.drawText({innerLeft, ey}, "Evidence (required)",
+                              UITheme::Colors::TextMuted);
+            ey += 20.0f;
+            row.evidenceArea->setPosition(innerLeft, ey);
+            row.evidenceArea->setSize(innerW, criterionAreaH);
+            row.evidenceArea->drawOverlay(renderer, position);
+            ey += criterionAreaH + 12.0f;
+        }
+
+        successCriteriaActionMenu_->setPosition(innerLeft, ey);
+        successCriteriaActionMenu_->setSize(108.0f, 26.0f);
+        successCriteriaActionMenu_->drawOverlay(renderer, position);
+        ey += 32.0f + sectionPad;
+    }
+    ey += 16.0f;
 
     if (conceptMode) {
     // ─── EXP: Explanation / Intermediates ────────────────
@@ -397,7 +445,7 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     ey += sectionGap;
     {
         renderer.drawText({editorX + ePad, ey},
-                          conceptMode ? "Training Preview (canonical format)"
+                          conceptMode ? "Training Preview (logical delimiters)"
                                       : "Training Preview (raw)",
                           UITheme::Colors::TextSecondary);
         ey += 22.0f;
@@ -571,6 +619,16 @@ void UIDataHubPanel::loadConceptBlockIntoEditor(size_t cbIndex) {
         cbTargetStateArea_->setText(
             cb.goal.has_value() ? cb.goal->target_state : std::string());
     }
+    syncSuccessCriterionRows(
+        cb.goal.has_value() ? static_cast<int>(cb.goal->success_criteria.size()) : 0);
+    if (cb.goal.has_value()) {
+        for (size_t i = 0; i < cb.goal->success_criteria.size(); ++i) {
+            cbSuccessCriterionRows_[i].criterionArea->setText(
+                cb.goal->success_criteria[i].criterion);
+            cbSuccessCriterionRows_[i].evidenceArea->setText(
+                cb.goal->success_criteria[i].evidence);
+        }
+    }
     if (cbAnswerArea_)   cbAnswerArea_->setText(cb.answer);
 
     int pi = GRIM::presetIndexForKey(cb.format_type);
@@ -622,9 +680,27 @@ void UIDataHubPanel::clearCBEditor() {
     if (cbPromptArea_) cbPromptArea_->setText("");
     if (cbTargetStateArea_) cbTargetStateArea_->setText("");
     if (cbAnswerArea_)   cbAnswerArea_->setText("");
+    cbSuccessCriterionRows_.clear();
     cbIntermediateAreas_.clear();
     cbExecStepRows_.clear();
     cbEditorScrollOffset_ = 0.0f;
+}
+
+void UIDataHubPanel::syncSuccessCriterionRows(int count) {
+    if (count < 0) count = 0;
+    while (static_cast<int>(cbSuccessCriterionRows_.size()) < count) {
+        CBSuccessCriterionRow row;
+        row.criterionArea = std::make_shared<UITextArea>(
+            "", "",
+            [](const std::string&) {});
+        row.evidenceArea = std::make_shared<UITextArea>(
+            "", "",
+            [](const std::string&) {});
+        cbSuccessCriterionRows_.push_back(std::move(row));
+    }
+    while (static_cast<int>(cbSuccessCriterionRows_.size()) > count) {
+        cbSuccessCriterionRows_.pop_back();
+    }
 }
 
 void UIDataHubPanel::syncIntermediateAreas(int count) {
@@ -670,8 +746,37 @@ bool UIDataHubPanel::buildConceptBlockFromEditor(
     out.name = cbNameInput_ ? cbNameInput_->getText() : "";
     out.prompt = cbPromptArea_ ? cbPromptArea_->getText() : "";
     out.answer = cbAnswerArea_ ? cbAnswerArea_->getText() : "";
-    if (cbTargetStateArea_ && !cbTargetStateArea_->getText().empty()) {
-        out.goal = GRIM::ConceptBlockGoal{cbTargetStateArea_->getText()};
+    auto trim = [](std::string value) {
+        const auto first = value.find_first_not_of(" \t\r\n");
+        if (first == std::string::npos) return std::string{};
+        const auto last = value.find_last_not_of(" \t\r\n");
+        return value.substr(first, last - first + 1);
+    };
+    const std::string target_state = cbTargetStateArea_
+        ? trim(cbTargetStateArea_->getText()) : std::string{};
+    if (!target_state.empty() || !cbSuccessCriterionRows_.empty()) {
+        GRIM::ConceptBlockGoal goal;
+        goal.target_state = target_state;
+        for (size_t i = 0; i < cbSuccessCriterionRows_.size(); ++i) {
+            const auto& row = cbSuccessCriterionRows_[i];
+            const std::string criterion = row.criterionArea
+                ? trim(row.criterionArea->getText()) : std::string{};
+            const std::string evidence = row.evidenceArea
+                ? trim(row.evidenceArea->getText()) : std::string{};
+            if (criterion.empty()) {
+                validation_error = "Success criterion " + std::to_string(i + 1)
+                    + " cannot be empty";
+                return false;
+            }
+            if (evidence.empty()) {
+                validation_error = "Evidence for success criterion "
+                    + std::to_string(i + 1) + " is required";
+                return false;
+            }
+            goal.success_criteria.push_back(
+                GRIM::ConceptBlockSuccessCriterion{criterion, evidence});
+        }
+        out.goal = std::move(goal);
     }
 
     const int preset_index = cbListTypeDropdown_
@@ -683,12 +788,6 @@ bool UIDataHubPanel::buildConceptBlockFromEditor(
         out.intermediates.push_back(area ? area->getText() : "");
     }
 
-    auto trim = [](std::string value) {
-        const auto first = value.find_first_not_of(" \t\r\n");
-        if (first == std::string::npos) return std::string{};
-        const auto last = value.find_last_not_of(" \t\r\n");
-        return value.substr(first, last - first + 1);
-    };
     auto parseDoubles = [&](const std::string& text, const std::string& field,
                             std::vector<double>& values) {
         if (trim(text).empty()) return true;
@@ -774,7 +873,7 @@ bool UIDataHubPanel::buildConceptBlockFromEditor(
 
 std::string UIDataHubPanel::buildTrainingPreview(const GRIM::ConceptBlock& cb, bool conceptMode) const {
     return conceptMode
-        ? GRIM::ConceptCanonical::render(cb).text
+        ? GRIM::ConceptCanonical::renderLogicalTrainingPreview(cb)
         : GRIM::ConceptCanonical::renderPlainText(cb);
 }
 

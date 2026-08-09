@@ -26,8 +26,18 @@ static GRIM::ConceptBlock conceptBlockFromJson(const json& j) {
     cb.source_sequence_id = j.value("source_sequence_id", std::string());
     cb.timestamp          = j.value("timestamp", int64_t(0));
     if (j.contains("goal") && j["goal"].is_object()) {
-        cb.goal = GRIM::ConceptBlockGoal{
-            j["goal"].value("target_state", std::string())};
+        GRIM::ConceptBlockGoal goal;
+        goal.target_state = j["goal"].value("target_state", std::string());
+        if (j["goal"].contains("success_criteria")
+            && j["goal"]["success_criteria"].is_array()) {
+            for (const auto& item : j["goal"]["success_criteria"]) {
+                if (!item.is_object()) continue;
+                goal.success_criteria.push_back(GRIM::ConceptBlockSuccessCriterion{
+                    item.value("criterion", std::string()),
+                    item.value("evidence", std::string())});
+            }
+        }
+        cb.goal = std::move(goal);
     }
 
     if (j.contains("intermediates") && j["intermediates"].is_array()) {

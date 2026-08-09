@@ -19,12 +19,19 @@ bool WebSocketServer::start(uint16_t port) {
     LOG_DEBUG("WebSocket", "=== WebSocket Server Startup Sequence ===");
     LOG_DEBUG("WebSocket", "Requested port: " + std::to_string(port));
     
-    if (running) {
+    if (running || serverThread.joinable()) {
         LOG_ERROR("WebSocket", "Server is already running - ignoring start request");
         return false;
     }
 
-    running = true;
+    {
+        std::lock_guard<std::mutex> lock(lifecycleMutex_);
+        startupComplete_ = false;
+        listenSucceeded_ = false;
+        stopRequested_ = false;
+        serverLoop_ = nullptr;
+        serverApp_ = nullptr;
+    }
 
     LOG_DEBUG("WebSocket", "Creating server thread...");
     serverThread = std::thread([this, port]() {
@@ -34,8 +41,14 @@ bool WebSocketServer::start(uint16_t port) {
         try {
             LOG_DEBUG("WebSocket", "Initializing uWebSockets App...");
 
-            uWS::App()
-             .ws<PerSocketData>("/*", {
+            uWS::App app;
+            {
+                std::lock_guard<std::mutex> lock(lifecycleMutex_);
+                serverLoop_ = app.getLoop();
+                serverApp_ = &app;
+            }
+
+            app.ws<PerSocketData>("/*", {
                     /* Settings */
                     .compression = uWS::SHARED_COMPRESSOR,
                     .maxPayloadLength = 16 * 1024 * 1024,
@@ -141,6 +154,14 @@ bool WebSocketServer::start(uint16_t port) {
                     }
                 })
                 .listen(port, [this, port](auto *listen_socket) {
+                    {
+                        std::lock_guard<std::mutex> lock(lifecycleMutex_);
+                        listenSucceeded_ = listen_socket != nullptr;
+                        startupComplete_ = true;
+                        running = listenSucceeded_;
+                    }
+                    startupCv_.notify_all();
+
                     if (listen_socket) {
                         LOG_PHASE("WebSocket server started", true);
                         LOG_DEBUG("WebSocket", "Listening on port " + std::to_string(port));
@@ -148,10 +169,18 @@ bool WebSocketServer::start(uint16_t port) {
                     } else {
                         LOG_ERROR("WebSocket", "Failed to bind to port " + std::to_string(port));
                         LOG_ERROR("WebSocket", "Port may be in use or require admin privileges");
-                        running = false;
                     }
-                })
-                .run();
+                });
+
+            bool shouldRun = false;
+            {
+                std::lock_guard<std::mutex> lock(lifecycleMutex_);
+                shouldRun = listenSucceeded_ && !stopRequested_;
+                if (listenSucceeded_ && stopRequested_)
+                    app.close();
+            }
+            if (shouldRun)
+                app.run();
 
             LOG_DEBUG("WebSocket", "Server event loop exited");
             LOG_PHASE("WebSocket server stopped", true);
@@ -161,34 +190,71 @@ bool WebSocketServer::start(uint16_t port) {
             running = false;
         } catch (...) {
             LOG_ERROR("WebSocket", "Unknown exception in server thread");
-            running = false;
         }
 
+        {
+            std::lock_guard<std::mutex> lock(lifecycleMutex_);
+            serverApp_ = nullptr;
+            serverLoop_ = nullptr;
+            running = false;
+            if (!startupComplete_) {
+                listenSucceeded_ = false;
+                startupComplete_ = true;
+            }
+        }
+        startupCv_.notify_all();
         LOG_DEBUG("WebSocket", "Server thread exiting");
     });
 
-    serverThread.detach();
-    LOG_DEBUG("WebSocket", "Server thread detached; running asynchronously");
-    return true;
+    bool started = false;
+    {
+        std::unique_lock<std::mutex> lock(lifecycleMutex_);
+        startupCv_.wait(lock, [this] { return startupComplete_; });
+        started = listenSucceeded_;
+    }
+    if (!started && serverThread.joinable())
+        serverThread.join();
+    return started;
 }
 
 void WebSocketServer::stop() {
     LOG_DEBUG("WebSocket", "=== WebSocket Server Shutdown Sequence ===");
 
-    if (!running) {
-        LOG_DEBUG("WebSocket", "Server not running - nothing to stop");
-        return;
+    {
+        std::lock_guard<std::mutex> lock(lifecycleMutex_);
+        if (!serverThread.joinable()) {
+            running = false;
+            LOG_DEBUG("WebSocket", "Server not running - nothing to stop");
+            return;
+        }
+
+        stopRequested_ = true;
+        running = false;
+        if (serverLoop_ && serverApp_) {
+            auto* app = serverApp_;
+            serverLoop_->defer([app]() { app->close(); });
+        }
     }
 
-    running = false;
-
+    if (serverThread.get_id() == std::this_thread::get_id()) {
+        LOG_ERROR("WebSocket", "Server cannot join itself during shutdown");
+        return;
+    }
     if (serverThread.joinable()) {
-        LOG_DEBUG("WebSocket", "Detaching server thread (uWS::App().run() blocks indefinitely)");
-        serverThread.detach();
+        LOG_DEBUG("WebSocket", "Waiting for server event loop to exit");
+        serverThread.join();
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(lifecycleMutex_);
+        serverApp_ = nullptr;
+        serverLoop_ = nullptr;
+        startupComplete_ = false;
+        listenSucceeded_ = false;
+        stopRequested_ = false;
     }
 
     LOG_PHASE("WebSocket server shutdown", true);
-    LOG_DEBUG("WebSocket", "uWebSockets event loop may still be running");
     LOG_DEBUG("WebSocket", "=== WebSocket Server Shutdown Complete ===");
 }
 

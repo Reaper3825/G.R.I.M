@@ -18,6 +18,9 @@ namespace GRIMConcept {
 struct ConceptExecutionStep;
 struct ConceptExecutionStepBuilder;
 
+struct SuccessCriterion;
+struct SuccessCriterionBuilder;
+
 struct Goal;
 struct GoalBuilder;
 
@@ -118,18 +121,90 @@ inline ::flatbuffers::Offset<ConceptExecutionStep> CreateConceptExecutionStepDir
       result);
 }
 
+struct SuccessCriterion FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef SuccessCriterionBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_CRITERION = 4,
+    VT_EVIDENCE = 6
+  };
+  const ::flatbuffers::String *criterion() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_CRITERION);
+  }
+  const ::flatbuffers::String *evidence() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_EVIDENCE);
+  }
+  bool Verify(::flatbuffers::Verifier &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_CRITERION) &&
+           verifier.VerifyString(criterion()) &&
+           VerifyOffset(verifier, VT_EVIDENCE) &&
+           verifier.VerifyString(evidence()) &&
+           verifier.EndTable();
+  }
+};
+
+struct SuccessCriterionBuilder {
+  typedef SuccessCriterion Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_criterion(::flatbuffers::Offset<::flatbuffers::String> criterion) {
+    fbb_.AddOffset(SuccessCriterion::VT_CRITERION, criterion);
+  }
+  void add_evidence(::flatbuffers::Offset<::flatbuffers::String> evidence) {
+    fbb_.AddOffset(SuccessCriterion::VT_EVIDENCE, evidence);
+  }
+  explicit SuccessCriterionBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<SuccessCriterion> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<SuccessCriterion>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<SuccessCriterion> CreateSuccessCriterion(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::String> criterion = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> evidence = 0) {
+  SuccessCriterionBuilder builder_(_fbb);
+  builder_.add_evidence(evidence);
+  builder_.add_criterion(criterion);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<SuccessCriterion> CreateSuccessCriterionDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const char *criterion = nullptr,
+    const char *evidence = nullptr) {
+  auto criterion__ = criterion ? _fbb.CreateString(criterion) : 0;
+  auto evidence__ = evidence ? _fbb.CreateString(evidence) : 0;
+  return GRIMConcept::CreateSuccessCriterion(
+      _fbb,
+      criterion__,
+      evidence__);
+}
+
 struct Goal FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef GoalBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
-    VT_TARGET_STATE = 4
+    VT_TARGET_STATE = 4,
+    VT_SUCCESS_CRITERIA = 6
   };
   const ::flatbuffers::String *target_state() const {
     return GetPointer<const ::flatbuffers::String *>(VT_TARGET_STATE);
+  }
+  const ::flatbuffers::Vector<::flatbuffers::Offset<GRIMConcept::SuccessCriterion>> *success_criteria() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<GRIMConcept::SuccessCriterion>> *>(VT_SUCCESS_CRITERIA);
   }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffset(verifier, VT_TARGET_STATE) &&
            verifier.VerifyString(target_state()) &&
+           VerifyOffset(verifier, VT_SUCCESS_CRITERIA) &&
+           verifier.VerifyVector(success_criteria()) &&
+           verifier.VerifyVectorOfTables(success_criteria()) &&
            verifier.EndTable();
   }
 };
@@ -140,6 +215,9 @@ struct GoalBuilder {
   ::flatbuffers::uoffset_t start_;
   void add_target_state(::flatbuffers::Offset<::flatbuffers::String> target_state) {
     fbb_.AddOffset(Goal::VT_TARGET_STATE, target_state);
+  }
+  void add_success_criteria(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<GRIMConcept::SuccessCriterion>>> success_criteria) {
+    fbb_.AddOffset(Goal::VT_SUCCESS_CRITERIA, success_criteria);
   }
   explicit GoalBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
@@ -154,19 +232,24 @@ struct GoalBuilder {
 
 inline ::flatbuffers::Offset<Goal> CreateGoal(
     ::flatbuffers::FlatBufferBuilder &_fbb,
-    ::flatbuffers::Offset<::flatbuffers::String> target_state = 0) {
+    ::flatbuffers::Offset<::flatbuffers::String> target_state = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<GRIMConcept::SuccessCriterion>>> success_criteria = 0) {
   GoalBuilder builder_(_fbb);
+  builder_.add_success_criteria(success_criteria);
   builder_.add_target_state(target_state);
   return builder_.Finish();
 }
 
 inline ::flatbuffers::Offset<Goal> CreateGoalDirect(
     ::flatbuffers::FlatBufferBuilder &_fbb,
-    const char *target_state = nullptr) {
+    const char *target_state = nullptr,
+    const std::vector<::flatbuffers::Offset<GRIMConcept::SuccessCriterion>> *success_criteria = nullptr) {
   auto target_state__ = target_state ? _fbb.CreateString(target_state) : 0;
+  auto success_criteria__ = success_criteria ? _fbb.CreateVector<::flatbuffers::Offset<GRIMConcept::SuccessCriterion>>(*success_criteria) : 0;
   return GRIMConcept::CreateGoal(
       _fbb,
-      target_state__);
+      target_state__,
+      success_criteria__);
 }
 
 struct ConceptBlock FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {

@@ -13,6 +13,7 @@
 
 #ifdef USE_CUDA
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -76,6 +77,7 @@ struct ModelForwardRequest {
     // not rematerialize the authored seeds. Training callers leave this null.
     KvCacheState* kv_cache = nullptr;
 
+    GoalSpanView goalSpansForRow(std::size_t row) const;
     void validate(const char* caller) const;
 };
 

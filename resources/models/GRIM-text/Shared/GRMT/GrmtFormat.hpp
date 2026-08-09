@@ -14,11 +14,18 @@ namespace GRIM {
 
 // Current GRMT training tensor stream version.
 //
+// v19 adds invisible logical token spans for target state, the full criteria
+// collection, and each ordered criterion/evidence pair. Goal content is pinned
+// ahead of the prompt; delimiter strings never enter model-visible tokens.
+//
+// v18 adds row-level Goal metadata: target-state tokens and ordered,
+// evidence-paired success-criterion tokens.
+//
 // v17 replaced arithmetic-specific teacher records with variable-arity
 // TransitionInvocation targets. Opaque uint64 TransitionId values are lowered
 // through per-row CompiledTransitionBinding tables. Argument and result payload
 // values remain outside transition metadata.
-inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 17;
+inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 19;
 
 } // namespace GRIM
 

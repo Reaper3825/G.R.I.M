@@ -195,6 +195,15 @@ public:
         const std::string& text,
         size_t forced_segment_boundary = std::string::npos,
         size_t* token_count_at_boundary = nullptr) const;
+
+    // Multi-boundary form used for invisible nested logical delimiters. Byte
+    // boundaries must be nondecreasing; duplicate offsets are allowed and
+    // receive the same token count. Boundaries force independent segmentation
+    // without emitting delimiter tokens.
+    UniByteResult tokenizeWithMetadata(
+        const std::string& text,
+        const std::vector<size_t>& forced_segment_boundaries,
+        std::vector<size_t>* token_counts_at_boundaries) const;
     
     //--------------------------------------------------//
     // Decoding

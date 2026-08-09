@@ -1,5 +1,6 @@
 #include "GrmtCorpusIO.hpp"
 
+#include "../Goal/Goal.hpp"
 #include "../UnigramByte/TokenLayout.hpp"
 
 #include <algorithm>
@@ -133,6 +134,303 @@ GRIM::Execution::TransitionIndex readTransitionIndex(
 {
     return GRIM::Execution::TransitionIndex::fromDense(
         readScalar<GRIM::Execution::TransitionIndex::Storage>(input, source));
+}
+
+std::uint32_t checkedCount(std::size_t count,
+                           const std::string& field,
+                           const std::string& sink) {
+    if (count > std::numeric_limits<std::uint32_t>::max()) {
+        throw std::runtime_error(
+            "[GRMT] " + field + " is too large to serialize in " + sink);
+    }
+    return static_cast<std::uint32_t>(count);
+}
+
+void validateGoalMetadata(const std::shared_ptr<const GRIM::Goal>& goal,
+                          const std::string& source) {
+    if (!goal) {
+        return;
+    }
+    if (!goal->target_state.has_value() &&
+        !goal->success_criteria.has_value()) {
+        throw std::runtime_error(
+            "[GRMT] " + source + ": goal has no target_state or success_criteria");
+    }
+
+    auto validate_token_ids = [&source](const std::vector<std::int32_t>& token_ids,
+                                        const GRIM::GoalTokenSpan& span,
+                                        const std::string& field) {
+        if (token_ids.empty()) {
+            throw std::runtime_error(
+                "[GRMT] " + source + ": " + field + " has no tokens");
+        }
+        if (!span.valid() ||
+            static_cast<std::size_t>(span.length()) != token_ids.size()) {
+            throw std::runtime_error(
+                "[GRMT] " + source + ": " + field +
+                " logical span does not match its token count");
+        }
+        for (std::size_t index = 0; index < token_ids.size(); ++index) {
+            if (token_ids[index] < 0) {
+                throw std::runtime_error(
+                    "[GRMT] " + source + ": " + field + " contains negative token id at index=" +
+                    std::to_string(index));
+            }
+        }
+    };
+
+    if (goal->target_state.has_value()) {
+        validate_token_ids(
+            goal->target_state->token_ids,
+            goal->target_state->span,
+            "goal.target_state");
+    }
+    if (goal->success_criteria.has_value()) {
+        const auto& criteria = *goal->success_criteria;
+        const auto& entries = criteria.entries;
+        if (entries.empty()) {
+            throw std::runtime_error(
+                "[GRMT] " + source + ": goal.success_criteria has no entries");
+        }
+        if (!criteria.span.valid()) {
+            throw std::runtime_error(
+                "[GRMT] " + source + ": goal.success_criteria span is invalid");
+        }
+        for (std::size_t index = 0; index < entries.size(); ++index) {
+            const std::string prefix =
+                "goal.success_criteria[" + std::to_string(index) + "]";
+            validate_token_ids(
+                entries[index].token_ids,
+                entries[index].criterion_span,
+                prefix + ".criterion");
+            validate_token_ids(
+                entries[index].evidence_token_ids,
+                entries[index].evidence_span,
+                prefix + ".evidence");
+            if (entries[index].criterion_span.end >
+                entries[index].evidence_span.begin) {
+                throw std::runtime_error(
+                    "[GRMT] " + source + ": " + prefix +
+                    " criterion/evidence spans are out of order");
+            }
+            if (index > 0 &&
+                entries[index - 1].evidence_span.end >
+                    entries[index].criterion_span.begin) {
+                throw std::runtime_error(
+                    "[GRMT] " + source +
+                    ": success-criterion pairs overlap or are out of order");
+            }
+        }
+        if (criteria.span.begin != entries.front().criterion_span.begin ||
+            criteria.span.end != entries.back().evidence_span.end) {
+            throw std::runtime_error(
+                "[GRMT] " + source +
+                ": outer criteria span does not enclose the ordered pairs exactly");
+        }
+    }
+}
+
+void validateGoalTokenSlices(const std::shared_ptr<const GRIM::Goal>& goal,
+                             const std::vector<int>& sequence_token_ids,
+                             const std::string& source) {
+    if (!goal) {
+        return;
+    }
+    auto validate = [&sequence_token_ids, &source](
+        const std::vector<std::int32_t>& expected,
+        const GRIM::GoalTokenSpan& span,
+        const std::string& field) {
+        if (static_cast<std::size_t>(span.end) > sequence_token_ids.size() ||
+            !std::equal(
+                expected.begin(), expected.end(),
+                sequence_token_ids.begin() + span.begin)) {
+            throw std::runtime_error(
+                "[GRMT] " + source + ": " + field +
+                " tokens do not match the delimited sequence span");
+        }
+    };
+    if (goal->target_state.has_value()) {
+        validate(goal->target_state->token_ids,
+                 goal->target_state->span,
+                 "goal.target_state");
+    }
+    if (goal->success_criteria.has_value()) {
+        for (std::size_t index = 0;
+             index < goal->success_criteria->entries.size();
+             ++index) {
+            const auto& entry = goal->success_criteria->entries[index];
+            const std::string prefix =
+                "goal.success_criteria[" + std::to_string(index) + "]";
+            validate(entry.token_ids, entry.criterion_span,
+                     prefix + ".criterion");
+            validate(entry.evidence_token_ids, entry.evidence_span,
+                     prefix + ".evidence");
+        }
+    }
+}
+
+void validateGoalTokenRange(const std::shared_ptr<const GRIM::Goal>& goal,
+                            std::uint32_t vocab_size,
+                            const std::string& source) {
+    if (!goal) {
+        return;
+    }
+    auto validate = [vocab_size, &source](
+        const std::vector<std::int32_t>& token_ids,
+        const std::string& field) {
+        for (std::size_t index = 0; index < token_ids.size(); ++index) {
+            if (static_cast<std::uint32_t>(token_ids[index]) >= vocab_size) {
+                throw std::runtime_error(
+                    "[GRMT] " + source + ": " + field + " token id=" +
+                    std::to_string(token_ids[index]) + " at index=" +
+                    std::to_string(index) + " is outside vocab_size=" +
+                    std::to_string(vocab_size));
+            }
+        }
+    };
+
+    if (goal->target_state.has_value()) {
+        validate(goal->target_state->token_ids, "goal.target_state");
+    }
+    if (goal->success_criteria.has_value()) {
+        for (std::size_t index = 0;
+             index < goal->success_criteria->entries.size();
+             ++index) {
+            const auto& entry = goal->success_criteria->entries[index];
+            const std::string prefix =
+                "goal.success_criteria[" + std::to_string(index) + "]";
+            validate(entry.token_ids, prefix + ".criterion");
+            validate(entry.evidence_token_ids, prefix + ".evidence");
+        }
+    }
+}
+
+void writeTokenIds(std::ostream& output,
+                   const std::vector<std::int32_t>& token_ids,
+                   const std::string& field,
+                   const std::string& sink) {
+    const std::uint32_t count = checkedCount(token_ids.size(), field, sink);
+    writeScalar(output, count, sink);
+    writeExact(output, token_ids.data(),
+               static_cast<std::size_t>(count) * sizeof(std::int32_t), sink);
+}
+
+std::vector<std::int32_t> readTokenIds(std::istream& input,
+                                       const std::string& source) {
+    const std::uint32_t count = readScalar<std::uint32_t>(input, source);
+    std::vector<std::int32_t> token_ids(count);
+    readExact(input, token_ids.data(),
+              static_cast<std::size_t>(count) * sizeof(std::int32_t), source);
+    return token_ids;
+}
+
+void writeGoalSpan(std::ostream& output,
+                   const GRIM::GoalTokenSpan& span,
+                   const std::string& sink) {
+    writeScalar(output, span.begin, sink);
+    writeScalar(output, span.end, sink);
+}
+
+GRIM::GoalTokenSpan readGoalSpan(std::istream& input,
+                                 const std::string& source) {
+    return GRIM::GoalTokenSpan{
+        readScalar<std::int32_t>(input, source),
+        readScalar<std::int32_t>(input, source)};
+}
+
+void writeGoalForSequence(std::ostream& output,
+                          const GrmtSequence& sequence,
+                          const std::string& sink) {
+    validateGoalMetadata(sequence.goal, sink);
+    const std::uint8_t has_goal = sequence.goal ? 1 : 0;
+    writeScalar(output, has_goal, sink);
+    if (!sequence.goal) {
+        return;
+    }
+
+    const std::uint8_t has_target_state =
+        sequence.goal->target_state.has_value() ? 1 : 0;
+    writeScalar(output, has_target_state, sink);
+    if (has_target_state != 0) {
+        writeTokenIds(output, sequence.goal->target_state->token_ids,
+                      "goal.target_state", sink);
+        writeGoalSpan(output, sequence.goal->target_state->span, sink);
+    }
+
+    const std::uint8_t has_success_criteria =
+        sequence.goal->success_criteria.has_value() ? 1 : 0;
+    writeScalar(output, has_success_criteria, sink);
+    if (has_success_criteria == 0) {
+        return;
+    }
+
+    const auto& entries = sequence.goal->success_criteria->entries;
+    const std::uint32_t entry_count =
+        checkedCount(entries.size(), "goal.success_criteria", sink);
+    writeGoalSpan(output, sequence.goal->success_criteria->span, sink);
+    writeScalar(output, entry_count, sink);
+    for (const auto& entry : entries) {
+        writeTokenIds(output, entry.token_ids,
+                      "goal.success_criteria.criterion", sink);
+        writeGoalSpan(output, entry.criterion_span, sink);
+        writeTokenIds(output, entry.evidence_token_ids,
+                      "goal.success_criteria.evidence", sink);
+        writeGoalSpan(output, entry.evidence_span, sink);
+    }
+}
+
+std::shared_ptr<const GRIM::Goal> readGoalForSequence(
+    std::istream& input,
+    const std::string& source) {
+    const std::uint8_t has_goal = readScalar<std::uint8_t>(input, source);
+    if (has_goal > 1) {
+        throw std::runtime_error(
+            "[GRMT] invalid goal flag in " + source);
+    }
+    if (has_goal == 0) {
+        return nullptr;
+    }
+
+    auto goal = std::make_shared<GRIM::Goal>();
+    const std::uint8_t has_target_state =
+        readScalar<std::uint8_t>(input, source);
+    if (has_target_state > 1) {
+        throw std::runtime_error(
+            "[GRMT] invalid target_state flag in " + source);
+    }
+    if (has_target_state != 0) {
+        GRIM::TargetState target_state;
+        target_state.token_ids = readTokenIds(input, source);
+        target_state.span = readGoalSpan(input, source);
+        goal->target_state = std::move(target_state);
+    }
+
+    const std::uint8_t has_success_criteria =
+        readScalar<std::uint8_t>(input, source);
+    if (has_success_criteria > 1) {
+        throw std::runtime_error(
+            "[GRMT] invalid success_criteria flag in " + source);
+    }
+    if (has_success_criteria != 0) {
+        GRIM::SuccessCriteria success_criteria;
+        success_criteria.span = readGoalSpan(input, source);
+        const std::uint32_t entry_count =
+            readScalar<std::uint32_t>(input, source);
+        success_criteria.entries.reserve(entry_count);
+        for (std::uint32_t index = 0; index < entry_count; ++index) {
+            GRIM::SuccessCriterion entry;
+            entry.token_ids = readTokenIds(input, source);
+            entry.criterion_span = readGoalSpan(input, source);
+            entry.evidence_token_ids = readTokenIds(input, source);
+            entry.evidence_span = readGoalSpan(input, source);
+            success_criteria.entries.push_back(std::move(entry));
+        }
+        goal->success_criteria = std::move(success_criteria);
+    }
+
+    std::shared_ptr<const GRIM::Goal> immutable_goal = std::move(goal);
+    validateGoalMetadata(immutable_goal, source);
+    return immutable_goal;
 }
 
 void publishTempFileOrThrow(const fs::path& temp_path, const fs::path& final_path) {
@@ -332,6 +630,9 @@ void GrmtSequence::validateForWrite(const std::string& source) const {
                                  ": inactive sequence carries execution metadata");
     }
 
+    validateGoalMetadata(goal, source);
+    validateGoalTokenSlices(goal, token_ids, source);
+
     std::unordered_set<std::uint64_t> slot_ids;
     std::unordered_set<std::int32_t> slot_indices;
     for (const auto& binding : compiled_slot_bindings) {
@@ -489,6 +790,7 @@ void GrmtCorpusWriter::writeSequence(const GrmtSequence& sequence) {
 
     const std::string sink = temp_path_.string() + "#seq" + std::to_string(written_sequences_);
     sequence.validateForWrite(sink);
+    validateGoalTokenRange(sequence.goal, vocab_size_, sink);
 
     const std::uint32_t len = static_cast<std::uint32_t>(sequence.token_ids.size());
     writeScalar(file_, len, sink);
@@ -506,6 +808,7 @@ void GrmtCorpusWriter::writeSequence(const GrmtSequence& sequence) {
     writeScalar(file_, gate_target, sink);
     writeScalar(file_, sequence.prompt_end_pos, sink);
     writeScalar(file_, sequence.prompt_length, sink);
+    writeGoalForSequence(file_, sequence, sink);
     writeExact(file_, sequence.token_exec_slot_indices.data(), static_cast<std::size_t>(len) * sizeof(std::int32_t), sink);
 
     const std::uint32_t csb_count =
@@ -634,6 +937,7 @@ bool GrmtCorpusReader::readNext(GrmtSequence& out_sequence) {
     seq.execution_gate_target = static_cast<GRIM::Execution::ExecutionGateTarget>(gate_target);
     seq.prompt_end_pos = readScalar<std::int32_t>(file_, source);
     seq.prompt_length = readScalar<std::int32_t>(file_, source);
+    seq.goal = readGoalForSequence(file_, source);
 
     seq.token_exec_slot_indices.resize(seq_len);
     readExact(file_, seq.token_exec_slot_indices.data(), static_cast<std::size_t>(seq_len) * sizeof(std::int32_t), source);
@@ -691,6 +995,7 @@ bool GrmtCorpusReader::readNext(GrmtSequence& out_sequence) {
     }
 
     seq.validateForWrite(source);
+    validateGoalTokenRange(seq.goal, header_.vocab_size, source);
 
     out_sequence = std::move(seq);
     ++sequences_read_;

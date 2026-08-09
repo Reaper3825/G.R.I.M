@@ -1,8 +1,9 @@
 //======================================================//
 //  Shared ConceptBlock training-text renderer.
 //
-//  DataHub preview and GRIM-text corpus compilation both call this renderer,
-//  preventing the authoring preview from drifting from the trained text.
+//  GRIM-text corpus compilation uses the model-visible renderer below.
+//  DataHub uses renderLogicalTrainingPreview() to expose the invisible span
+//  structure without inserting those tags into compiled model text.
 //======================================================//
 
 #pragma once
@@ -11,24 +12,108 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstddef>
 #include <sstream>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace GRIM::ConceptCanonical {
 
+struct LogicalByteSpan {
+    size_t begin = 0;
+    size_t end = 0;
+    bool present = false;
+};
+
+struct SuccessCriterionByteSpans {
+    LogicalByteSpan criterion;
+    LogicalByteSpan evidence;
+};
+
 struct RenderResult {
     std::string text;
+    // Invisible logical goal delimiters. All ranges are half-open byte spans
+    // into text and none of the delimiter strings are emitted.
+    LogicalByteSpan target_state;
+    LogicalByteSpan criteria;
+    std::vector<SuccessCriterionByteSpans> success_criteria;
     // Logical <prompt>...</prompt> boundary. The delimiters are metadata only
     // and are never emitted into model-visible text.
+    size_t prompt_byte_begin = 0;
     size_t prompt_byte_end = 0;
 };
+
+inline void appendLogicalSpan(std::ostringstream& out,
+                              const std::string& text,
+                              LogicalByteSpan& span) {
+    if (text.empty()) {
+        return;
+    }
+    span.begin = static_cast<size_t>(out.tellp());
+    out << text;
+    span.end = static_cast<size_t>(out.tellp());
+    span.present = true;
+}
 
 inline RenderResult render(const nlohmann::json& j) {
     RenderResult result;
     std::ostringstream out;
 
+    if (j.contains("goal") && j["goal"].is_object()) {
+        const auto& goal = j["goal"];
+        if (goal.contains("target_state") && goal["target_state"].is_string()) {
+            appendLogicalSpan(
+                out, goal["target_state"].get<std::string>(), result.target_state);
+            if (result.target_state.present) {
+                out << "\n\n";
+            }
+        }
+
+        if (goal.contains("success_criteria") &&
+            goal["success_criteria"].is_array() &&
+            !goal["success_criteria"].empty()) {
+            result.criteria.begin = static_cast<size_t>(out.tellp());
+            result.success_criteria.reserve(goal["success_criteria"].size());
+            for (size_t index = 0; index < goal["success_criteria"].size(); ++index) {
+                const auto& source_entry = goal["success_criteria"][index];
+                SuccessCriterionByteSpans entry;
+                if (source_entry.is_object()) {
+                    if (source_entry.contains("criterion") &&
+                        source_entry["criterion"].is_string()) {
+                        appendLogicalSpan(
+                            out,
+                            source_entry["criterion"].get<std::string>(),
+                            entry.criterion);
+                    }
+                    if (entry.criterion.present) {
+                        out << "\n";
+                    }
+                    if (source_entry.contains("evidence") &&
+                        source_entry["evidence"].is_string()) {
+                        appendLogicalSpan(
+                            out,
+                            source_entry["evidence"].get<std::string>(),
+                            entry.evidence);
+                    }
+                }
+                result.success_criteria.push_back(entry);
+                if (index + 1 < goal["success_criteria"].size()) {
+                    out << "\n\n";
+                }
+            }
+            result.criteria.end = static_cast<size_t>(out.tellp());
+            result.criteria.present =
+                result.criteria.end > result.criteria.begin;
+            if (result.criteria.present) {
+                out << "\n\n";
+            }
+        }
+    }
+
     if (j.contains("prompt") && j["prompt"].is_string()
         && !j["prompt"].get<std::string>().empty()) {
+        result.prompt_byte_begin = static_cast<size_t>(out.tellp());
         out << j["prompt"].get<std::string>();
         result.prompt_byte_end = static_cast<size_t>(out.tellp());
         // Keep human-readable content separated while leaving the newline
@@ -64,6 +149,7 @@ inline RenderResult renderPlainTextWithPromptBoundary(const nlohmann::json& j) {
     std::ostringstream out;
     if (j.contains("prompt") && j["prompt"].is_string()
         && !j["prompt"].get<std::string>().empty()) {
+        result.prompt_byte_begin = static_cast<size_t>(out.tellp());
         out << j["prompt"].get<std::string>();
         result.prompt_byte_end = static_cast<size_t>(out.tellp());
         out << "\n";
@@ -97,8 +183,17 @@ inline nlohmann::json toCanonicalJson(const ConceptBlock& cb) {
         {"explanation", cb.explanation.empty() ? cb.intermediates : cb.explanation},
         {"answer", cb.answer}
     };
-    if (cb.goal.has_value())
-        j["goal"] = nlohmann::json{{"target_state", cb.goal->target_state}};
+    if (cb.goal.has_value()) {
+        nlohmann::json goal{{"target_state", cb.goal->target_state}};
+        goal["success_criteria"] = nlohmann::json::array();
+        for (const auto& entry : cb.goal->success_criteria) {
+            goal["success_criteria"].push_back(nlohmann::json{
+                {"criterion", entry.criterion},
+                {"evidence", entry.evidence}
+            });
+        }
+        j["goal"] = std::move(goal);
+    }
     if (!cb.execution.empty()) {
         j["execution"] = nlohmann::json::array();
         for (const auto& step : cb.execution) {
@@ -115,6 +210,56 @@ inline nlohmann::json toCanonicalJson(const ConceptBlock& cb) {
 
 inline RenderResult render(const ConceptBlock& cb) {
     return render(toCanonicalJson(cb));
+}
+
+// Human-facing inspection form for the invisible logical spans used by corpus
+// compilation. These tags are never passed to UniByte or model input_ids.
+inline std::string renderLogicalTrainingPreview(const ConceptBlock& cb) {
+    std::ostringstream out;
+    if (cb.goal.has_value()) {
+        if (!cb.goal->target_state.empty()) {
+            out << "<target_state>\n"
+                << cb.goal->target_state
+                << "\n</target_state>\n\n";
+        }
+        if (!cb.goal->success_criteria.empty()) {
+            out << "<criteria>\n";
+            for (size_t index = 0;
+                 index < cb.goal->success_criteria.size();
+                 ++index) {
+                const auto& entry = cb.goal->success_criteria[index];
+                out << "    <criterion>\n"
+                    << "    " << entry.criterion << "\n"
+                    << "    </criterion>\n"
+                    << "    <evidence>\n"
+                    << "    " << entry.evidence << "\n"
+                    << "    </evidence>\n";
+                if (index + 1 < cb.goal->success_criteria.size()) {
+                    out << "\n";
+                }
+            }
+            out << "</criteria>\n\n";
+        }
+    }
+
+    if (!cb.prompt.empty()) {
+        out << "<prompt>\n" << cb.prompt << "\n</prompt>\n\n";
+    }
+
+    const auto& explanation = cb.explanation.empty()
+        ? cb.intermediates
+        : cb.explanation;
+    if (!explanation.empty() || !cb.answer.empty()) {
+        out << "<answer>\n";
+        for (const auto& step : explanation) {
+            out << step << "\n";
+        }
+        if (!cb.answer.empty()) {
+            out << cb.answer << "\n";
+        }
+        out << "</answer>\n";
+    }
+    return out.str();
 }
 
 inline std::string renderPlainText(const ConceptBlock& cb) {

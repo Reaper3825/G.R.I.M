@@ -750,6 +750,10 @@ int main(int argc, char* argv[])
         g_deviceCommServer.reset();
     }
 
+    // Persist memory while the logger and all owning infrastructure are still
+    // alive. The global destructor becomes an idempotent no-op after this.
+    g_memoryStorage.shutdown();
+
     LOG_PHASE("All subsystems shut down", true);
     LOG_PHASE("G.R.I.M terminated successfully", true);
     shutdownLogger();

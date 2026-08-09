@@ -6,8 +6,12 @@
 #include "../storage/storage_manager.hpp"
 #include "../transfer/file_transfer_manager.hpp"
 
+#include <uwebsockets/App.h>
+
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -94,6 +98,13 @@ private:
 
     std::atomic<bool> running_{false};
     std::thread       server_thread_;
+    std::mutex lifecycle_mutex_;
+    std::condition_variable startup_cv_;
+    uWS::Loop* server_loop_ = nullptr;
+    uWS::App* server_app_ = nullptr;
+    bool startup_complete_ = false;
+    bool listen_succeeded_ = false;
+    bool stop_requested_ = false;
 };
 
 } // namespace GRIM

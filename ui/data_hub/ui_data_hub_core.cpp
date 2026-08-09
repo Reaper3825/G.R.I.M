@@ -515,6 +515,15 @@ UIDataHubPanel::UIDataHubPanel()
         generateConceptBlock();
     });
 
+    successCriteriaActionMenu_ = std::make_shared<UIActionMenu>("Criteria");
+    successCriteriaActionMenu_->addItem("+ Criterion", [this]() {
+        syncSuccessCriterionRows(static_cast<int>(cbSuccessCriterionRows_.size()) + 1);
+    }, UITheme::Colors::Success);
+    successCriteriaActionMenu_->addItem("- Criterion", [this]() {
+        if (!cbSuccessCriterionRows_.empty())
+            cbSuccessCriterionRows_.pop_back();
+    }, UITheme::Colors::Danger);
+
     stepActionMenu_ = std::make_shared<UIActionMenu>("Steps");
     stepActionMenu_->addItem("+ Step", [this]() {
         auto area = std::make_shared<UITextArea>(
@@ -779,7 +788,7 @@ UIDataHubPanel::UIDataHubPanel()
         cbModelDropdown_, cbCurriculumDropdown_, cbCurriculumRenameInput_,
         cbListTypeDropdown_, cbTypeFilterDropdown_, cbCurriculumFilterToggle_, cbSearchInput_,
         cbNameInput_, cbPromptArea_, cbTargetStateArea_, cbAnswerArea_, cbCustomPromptArea_,
-        btnCBGenerate_, stepActionMenu_, execStepActionMenu_, blockActionMenu_,
+        btnCBGenerate_, successCriteriaActionMenu_, stepActionMenu_, execStepActionMenu_, blockActionMenu_,
         curriculumActionMenu_, blockCurriculumMenu_
     };
 
@@ -1223,6 +1232,10 @@ void UIDataHubPanel::update(const InputState& input, float dt) {
             for (auto& w : curriculumWidgets_) w->update(input, dt);
             for (auto& area : cbIntermediateAreas_)
                 if (area) area->update(input, dt);
+            for (auto& row : cbSuccessCriterionRows_) {
+                if (row.criterionArea) row.criterionArea->update(input, dt);
+                if (row.evidenceArea)  row.evidenceArea->update(input, dt);
+            }
             for (auto& row : cbExecStepRows_) {
                 if (row.opDropdown)    row.opDropdown->update(input, dt);
                 if (row.argSlotsInput) row.argSlotsInput->update(input, dt);
@@ -1392,6 +1405,8 @@ bool UIDataHubPanel::drawOverlay(OverlayRenderer& renderer) {
         queueActionMenu_->drawExpandedList(renderer, position);
     if (blockActionMenu_ && blockActionMenu_->isExpanded())
         blockActionMenu_->drawExpandedList(renderer, position);
+    if (successCriteriaActionMenu_ && successCriteriaActionMenu_->isExpanded())
+        successCriteriaActionMenu_->drawExpandedList(renderer, position);
     if (execStepActionMenu_ && execStepActionMenu_->isExpanded())
         execStepActionMenu_->drawExpandedList(renderer, position);
     if (stepActionMenu_ && stepActionMenu_->isExpanded())

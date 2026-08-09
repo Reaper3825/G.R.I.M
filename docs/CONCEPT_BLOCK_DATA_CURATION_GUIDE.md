@@ -44,6 +44,7 @@ Each concept block encodes:
 | **Execution steps** | A ground-truth program: "read slot A and slot B, apply operation, write result to slot C" |
 | An **answer** | The expected natural-language output containing the computed result |
 | Optional **explanation** lines | Chain-of-thought reasoning steps |
+| An optional **goal identifier** | A target state plus evidence-backed success criteria for downstream verification |
 
 The model does **not** see the execution program at inference time. During
 training, the program provides **teacher supervision** so the model learns
@@ -141,6 +142,17 @@ schema with required and optional fields:
     // ─── Required: the prompt ───
     "prompt": "What is 42 plus 17?",   // Required. The problem statement.
 
+    // ─── Optional: goal identifier ───
+    "goal": {
+        "target_state": "The sum is known and reported.",
+        "success_criteria": [
+            {
+                "criterion": "The response gives the sum as 59.",
+                "evidence": "The final answer states: The answer is 59."
+            }
+        ]
+    },
+
     // ─── Required for execution: initial state ───
     "state_0": {
         "type": "arithmetic",          // Optional. Semantic type tag.
@@ -185,6 +197,20 @@ schema with required and optional fields:
 
 - `"explanation"` and `"intermediates"` are interchangeable; the builder
   checks for both and uses whichever is present.
+
+### Goal identifier
+
+- `goal.target_state` remains optional and independent of success criteria.
+- `goal.success_criteria` is an ordered array. Each criterion owns its
+  `evidence` field, so duplicate criterion text and later edits cannot break
+  the criterion-to-evidence association.
+- DataHub requires non-empty evidence for every success criterion it saves.
+- For concept-mode SFT, goal content is pinned before the prompt in this exact
+  logical order: `<target_state>`, outer `<criteria>`, then each
+  `<criterion>` immediately followed by its matching `<evidence>`, followed by
+  `<prompt>` and the response.
+- These delimiter strings appear in DataHub's logical training preview only.
+  They are stored as half-open token spans and never enter model `input_ids`.
 
 ---
 

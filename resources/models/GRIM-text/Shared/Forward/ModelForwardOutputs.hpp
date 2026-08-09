@@ -12,9 +12,12 @@
 #ifdef USE_CUDA
 
 #include "../Goal/Goal.hpp"
+#include "../Goal/GoalSpanView.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
 
+#include <cstddef>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -25,6 +28,8 @@ namespace Forward {
 
 struct ModelForwardOutputs {
 private:
+    std::vector<std::shared_ptr<const Goal>> row_goals_;
+
     static int countGradFns(const std::vector<Tensor>& tensors) {
         int count = 0;
         for (const auto& tensor : tensors) {
@@ -77,6 +82,49 @@ private:
     }
 
 public:
+
+    void setGoalMetadata(
+        std::size_t batch_size,
+        const std::vector<std::shared_ptr<const Goal>>& goals) {
+        if (batch_size == 0) {
+            throw std::runtime_error(
+                "ModelForwardOutputs::setGoalMetadata: batch_size must be > 0");
+        }
+        if (goals.empty()) {
+            row_goals_.assign(batch_size, nullptr);
+            return;
+        }
+        if (goals.size() != batch_size) {
+            throw std::runtime_error(
+                "ModelForwardOutputs::setGoalMetadata: goals.size()=" +
+                std::to_string(goals.size()) + " != batch_size=" +
+                std::to_string(batch_size));
+        }
+        row_goals_ = goals;
+    }
+
+    std::size_t goalRowCount() const noexcept { return row_goals_.size(); }
+
+    GoalSpanView goalSpansForRow(std::size_t row) const {
+        if (row >= row_goals_.size()) {
+            throw std::out_of_range(
+                "ModelForwardOutputs::goalSpansForRow: row=" +
+                std::to_string(row) + " is outside goalRowCount=" +
+                std::to_string(row_goals_.size()));
+        }
+        const Goal* goal = row_goals_[row].get();
+        if (!goal) {
+            return GoalSpanView{};
+        }
+        const GoalTokenSpan* target_state = goal->target_state.has_value()
+            ? &goal->target_state->span
+            : nullptr;
+        const SuccessCriteria* success_criteria =
+            goal->success_criteria.has_value()
+                ? &*goal->success_criteria
+                : nullptr;
+        return GoalSpanView(target_state, success_criteria);
+    }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // PER-LAYER RETAINED TENSORS
@@ -236,7 +284,6 @@ public:
     // ═══════════════════════════════════════════════════════════════════════════
     // CROSS-LAYER LIVE TENSORS
     // ═══════════════════════════════════════════════════════════════════════════
-    Goal goal;
     Tensor embedding_tensor;
     Tensor embedding_structured_state;
     Tensor embedding_gate_concat;
@@ -249,7 +296,7 @@ public:
     // lives on the forward sink so downstream forward operations can consume
     // it without borrowing a function-local tensor.
     Tensor final_normalized_hidden_states;
-    // Generic pooled hidden-state output. This is not goal.target_state;
+    // Generic pooled hidden-state output. This is not target-state Goal metadata;
     // target-state production belongs to the frozen target model.
     Tensor mean_pool;
     Tensor lm_head_input_tensor;
@@ -316,7 +363,7 @@ public:
     }
 
     void clear() {
-        goal = Goal{};
+        row_goals_.clear();
         clearRetainedLayerOutputs();
         embedding_tensor = Tensor();
         embedding_structured_state = Tensor();
