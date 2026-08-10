@@ -6,6 +6,8 @@
 #include "PhysicalFrameConditioner.hpp"
 #include "PhysicalEnvironmentLogTag.hpp"
 #include "PhysicalFrameBus.hpp"
+#include "PhysicalStereoCapture.hpp"
+#include "PhysicalStereoFrameBus.hpp"
 #include "logger.hpp"
 
 #include <atomic>
@@ -28,6 +30,8 @@ struct PhysicalEnvironmentState {
     const ::GRIM::DeviceCommServer*         device_server    = nullptr;
     std::vector<PhysicalCameraSource>       directory;
     std::unique_ptr<PhysicalCameraStream>   active_stream;
+    std::unique_ptr<PhysicalStereoCapture>  stereo_capture;
+    PhysicalStereoCaptureConfig             stereo_config{};
     std::string                             active_label;
     std::string                             last_error_reason;
     cv::Mat                                 pull_scratch;   // worker → bus copy buffer
@@ -144,6 +148,23 @@ void DrainActiveStreamLocked(PhysicalEnvironmentState& s) {
     }
 }
 
+void DrainStereoCaptureLocked(PhysicalEnvironmentState& s) {
+    if (!s.stereo_capture) return;
+    PhysicalStereoFramePair pair;
+    if (s.stereo_capture->PullLatestSynchronizedPairInto(pair)) {
+        PhysicalStereoFrameBus::Instance().PublishPhysicalStereoFramePairToBus(
+            pair, s.stereo_config);
+    }
+    const auto status = s.stereo_capture->GetPhysicalStereoCaptureStatus();
+    if (!status.last_error_reason.empty()) {
+        const std::string prefixed = "stereo capture failed: " + status.last_error_reason;
+        if (s.last_error_reason != prefixed) {
+            s.last_error_reason = prefixed;
+            LOG_ERROR(PHYSICAL_ENV_LOG_TAG, prefixed);
+        }
+    }
+}
+
 } // anonymous namespace
 
 void RegisterPhysicalEnvironmentDeviceServer(const ::GRIM::DeviceCommServer* server) {
@@ -162,6 +183,7 @@ void TickPhysicalEnvironment() {
         if (s.shutting_down) return;
         LazyInitLocked(s);
         DrainActiveStreamLocked(s);
+        DrainStereoCaptureLocked(s);
     }
     // Calibrator runs OUTSIDE the env-loop mutex: it has its own mutex and
     // it consumes from the FrameBus (which is independently locked). This
@@ -177,16 +199,20 @@ void ShutdownPhysicalEnvironment() {
     // the worker thread (which may briefly want the lock for nothing — it
     // doesn't, but defensive) can join cleanly.
     std::unique_ptr<PhysicalCameraStream> to_destroy;
+    std::unique_ptr<PhysicalStereoCapture> stereo_to_destroy;
     {
         std::lock_guard<std::mutex> lk(s.mutex);
         s.shutting_down = true;
         to_destroy      = std::move(s.active_stream);
+        stereo_to_destroy = std::move(s.stereo_capture);
     }
     to_destroy.reset(); // joins the worker
+    stereo_to_destroy.reset();
 
     {
         std::lock_guard<std::mutex> lk(s.mutex);
         PhysicalFrameBus::Instance().ResetPhysicalFrameBus();
+        PhysicalStereoFrameBus::Instance().ResetPhysicalStereoFrameBus();
         s.conditioner.ResetPhysicalSignalConditioningTemporalState();
         s.directory.clear();
         s.active_label.clear();
@@ -256,6 +282,19 @@ uint64_t GetActiveStreamFrameCounter() {
     return s.active_stream ? s.active_stream->GetFrameCounter() : 0;
 }
 
+PhysicalStereoCaptureStatus GetPhysicalStereoCaptureStatusSnapshot() {
+    auto& s = GetState();
+    std::lock_guard<std::mutex> lk(s.mutex);
+    if (!s.stereo_capture) return PhysicalStereoCaptureStatus{};
+    return s.stereo_capture->GetPhysicalStereoCaptureStatus();
+}
+
+bool IsPhysicalStereoCaptureActive() {
+    const auto status = GetPhysicalStereoCaptureStatusSnapshot();
+    return status.left_state == PhysicalCameraStreamState::Streaming
+        && status.right_state == PhysicalCameraStreamState::Streaming;
+}
+
 PhysicalSignalConditioningConfig GetPhysicalSignalConditioningConfigSnapshot() {
     auto& s = GetState();
     std::lock_guard<std::mutex> lk(s.mutex);
@@ -287,16 +326,21 @@ void RequestOpenPhysicalCameraSource(const std::string& url,
     }
 
     std::unique_ptr<PhysicalCameraStream> previous;
+    std::unique_ptr<PhysicalStereoCapture> previous_stereo;
     {
         auto& s = GetState();
         std::lock_guard<std::mutex> lk(s.mutex);
         previous              = std::move(s.active_stream);
+        previous_stereo       = std::move(s.stereo_capture);
         s.active_label        = display_label;
         s.last_error_reason.clear();
         s.last_pulled_counter = 0;
     }
     previous.reset(); // join old worker outside lock
+    previous_stereo.reset();
     PhysicalFrameBus::Instance().ResetPhysicalFrameBus();
+    PhysicalStereoFrameBus::Instance().ResetPhysicalStereoFrameBus();
+    ResetPhysicalCalibrationState();
     {
         auto& s = GetState();
         std::lock_guard<std::mutex> lk(s.mutex);
@@ -327,12 +371,54 @@ void RequestClosePhysicalCameraSource() {
     }
     previous.reset();
     PhysicalFrameBus::Instance().ResetPhysicalFrameBus();
+    ResetPhysicalCalibrationState();
     {
         auto& s = GetState();
         std::lock_guard<std::mutex> lk(s.mutex);
         s.conditioner.ResetPhysicalSignalConditioningTemporalState();
     }
     LOG_DEBUG(PHYSICAL_ENV_LOG_TAG, "RequestClosePhysicalCameraSource: closed");
+}
+
+void RequestOpenPhysicalStereoCameraPair(const PhysicalStereoCaptureConfig& config) {
+    std::unique_ptr<PhysicalCameraStream> previous_mono;
+    std::unique_ptr<PhysicalStereoCapture> previous_stereo;
+    {
+        auto& s = GetState();
+        std::lock_guard<std::mutex> lk(s.mutex);
+        previous_mono   = std::move(s.active_stream);
+        previous_stereo = std::move(s.stereo_capture);
+        s.active_label.clear();
+        s.last_pulled_counter = 0;
+        s.last_error_reason.clear();
+    }
+    previous_mono.reset();
+    previous_stereo.reset();
+    PhysicalFrameBus::Instance().ResetPhysicalFrameBus();
+    PhysicalStereoFrameBus::Instance().ResetPhysicalStereoFrameBus();
+    ResetPhysicalCalibrationState();
+
+    auto fresh = std::make_unique<PhysicalStereoCapture>();
+    fresh->OpenPhysicalStereoCapture(config);
+    {
+        auto& s = GetState();
+        std::lock_guard<std::mutex> lk(s.mutex);
+        s.stereo_config  = config;
+        s.stereo_capture = std::move(fresh);
+        s.conditioner.ResetPhysicalSignalConditioningTemporalState();
+    }
+}
+
+void RequestClosePhysicalStereoCameraPair() {
+    std::unique_ptr<PhysicalStereoCapture> previous;
+    {
+        auto& s = GetState();
+        std::lock_guard<std::mutex> lk(s.mutex);
+        previous = std::move(s.stereo_capture);
+    }
+    previous.reset();
+    PhysicalStereoFrameBus::Instance().ResetPhysicalStereoFrameBus();
+    ResetPhysicalCalibrationState();
 }
 
 void RequestConfigurePhysicalSignalConditioning(const PhysicalSignalConditioningConfig& config) {

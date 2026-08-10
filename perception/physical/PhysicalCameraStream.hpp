@@ -2,6 +2,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -17,6 +19,13 @@ enum class PhysicalCameraStreamState : uint8_t {
     Streaming = 2,
     Failed    = 3,
     Closed    = 4
+};
+
+struct PhysicalCapturedCameraFrame {
+    cv::Mat   image;
+    uint64_t  frame_counter    = 0;
+    uint64_t  capture_steady_ns = 0;
+    uint64_t  capture_wall_ns   = 0;
 };
 
 // One live IP camera connection, driven by a worker thread.
@@ -57,6 +66,12 @@ public:
     // there is no frame yet OR if the frame counter has not advanced.
     bool PullLatestFrameInto(cv::Mat& out, uint64_t& last_seen_counter) const;
 
+    // Copies the oldest retained frame newer than `last_seen_counter`.
+    // The worker retains a bounded queue specifically so a stereo coordinator
+    // can pair frames by capture timestamp instead of racing two latest slots.
+    bool PullNextCapturedFrameInto(PhysicalCapturedCameraFrame& out,
+                                   uint64_t& last_seen_counter) const;
+
 private:
     void RunCaptureWorker(); // worker entry point
 
@@ -68,6 +83,7 @@ private:
 
     mutable std::mutex                            frame_mutex_;
     cv::Mat                                       latest_frame_; // BGR8
+    std::deque<PhysicalCapturedCameraFrame>       captured_frames_;
     mutable std::mutex                            error_mutex_;
     std::string                                   last_error_reason_;
 

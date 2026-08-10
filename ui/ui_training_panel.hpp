@@ -2,7 +2,7 @@
 //======================================================//
 //  UITrainingPanel — Unified Model + Training Hub
 //
-//  Five tabs: Home | Knowledge Gaps | Tool Gaps | Training | Tokenizer
+//  Five tabs: Home | Knowledge Gaps | Tool Gaps | Model Config | Tokenizer
 //
 //  Merges the former ModelRegistry panel and Training panel
 //  into a single DataHub-style tabbed interface.
@@ -10,34 +10,28 @@
 //  - Home:           model browser (registry status, resource bars)
 //  - Knowledge Gaps: gap queue (router misses → create model)
 //  - Tool Gaps:      tool-gap proposals (ToolGapPlanner)
-//  - Training:       hyperparameters, training controls, monitoring
+//  - Model Config:   edit a snapshot and compile a per-model .grimcfg
 //  - Tokenizer:      standalone tokenizer validation & encode
 //======================================================//
 
 #include "primitives/ui_panel.hpp"
 #include "primitives/ui_button.hpp"
-#include "primitives/ui_slider.hpp"
 #include "primitives/ui_progress_bar.hpp"
-#include "primitives/ui_layout_box.hpp"
 #include "primitives/ui_inputbox.hpp"
 #include "primitives/ui_dropdown.hpp"
 #include "primitives/ui_label.hpp"
 #include "primitives/ui_scrollbox.hpp"
-#include "primitives/ui_graph.hpp"
-#include "ui_training_config.hpp"
 #include "control/training_controller.hpp"
 #include "control/hyperparameter_registry.hpp"
 #include "../MMO/Shared/MMD.hpp"
 #include "../MMO/Core/ToolGapPlanner.hpp"
-#include "../hardware/resource_values.hpp"
+#include <future>
 #include <memory>
 #include <string>
 #include <vector>
 #include <mutex>
 #include <chrono>
-#include <optional>
 #include <atomic>
-#include "DataCollection/dataset_target.hpp"
 
 class OverlayRenderer;
 struct InputState;
@@ -60,7 +54,7 @@ enum class TrainingPanelTab : uint8_t {
     Home          = 0,
     KnowledgeGaps = 1,
     ToolGaps      = 2,
-    Training      = 3,
+    ModelConfig   = 3,
     Tokenizer     = 4
 };
 
@@ -80,12 +74,6 @@ public:
     TrainingPanelTab currentView() const { return activeTab_; }
 
     // --- Public training control (used by commands_training.cpp) ─
-    void startTrainingSession();
-    void stopTrainingSession();
-    void pauseTrainingSession();
-    void resumeTrainingSession();
-    void shutdownTrainingServer();
-
     // --- Knowledge gap intake -----------------------------------
     void pushKnowledgeGap(KnowledgeGapEntry entry);
     size_t pendingGapCount() const;
@@ -101,9 +89,6 @@ public:
     void prefillCreatorFromGap(const KnowledgeGapEntry& gap);
 
     // --- Focus query --------------------------------------------
-    bool isAnySliderEditing() const;
-    bool isAnyInputEditing() const;
-
 private:
     // ═════════════════════════════════════════════════════
     //  Tab state
@@ -113,7 +98,7 @@ private:
     std::shared_ptr<UIButton> tabHomeBtn_;
     std::shared_ptr<UIButton> tabKnowledgeGapsBtn_;
     std::shared_ptr<UIButton> tabToolGapsBtn_;
-    std::shared_ptr<UIButton> tabTrainingBtn_;
+    std::shared_ptr<UIButton> tabModelConfigBtn_;
     std::shared_ptr<UIButton> tabTokenizerBtn_;
 
     // ═════════════════════════════════════════════════════
@@ -211,143 +196,51 @@ private:
     //  Training tab
     // ═════════════════════════════════════════════════════
 
-    // Training controller
+    // Tokenizer service connectivity. Config compilation is local and never
+    // starts a training process.
     std::unique_ptr<GRIM::UI::UITrainingController> trainingController;
-    GRIMText::TrainingState currentState;
-    GRIMText::TrainingStats currentStats;
-    GRIMText::TrainingConfig currentConfig;
-
-    bool serverConnected;
-    bool serverStarting;
-    std::string lastError;
-    std::string checkpointMergeStatus;
-    float pollTimer;
-    float pollInterval;
-
-    // Configuration sliders
-    std::shared_ptr<UISlider> epochsSlider;
-    std::shared_ptr<UISlider> batchSizeSlider;
-    std::shared_ptr<UISlider> learningRateSlider;
-    std::shared_ptr<UISlider> maxSeqLenSlider;
-    std::shared_ptr<UISlider> warmupStepsSlider;
-
-    // Config buttons
-    std::shared_ptr<UIButton> saveConfigButton;
-
-    // Action buttons (bottom bar)
-    std::shared_ptr<UIButton> startButton;
-    std::shared_ptr<UIButton> stopButton;
-    std::shared_ptr<UIButton> pauseResumeButton;
-    std::shared_ptr<UIButton> resetStatusButton;
-    std::shared_ptr<UIButton> closeButton;
-    std::shared_ptr<UIButton> runTokenizerButton;
-
-    // Curriculum + Model selection
-    std::shared_ptr<UIDropdown> curriculumDropdown_;
-    std::shared_ptr<UIDropdown> trainModelDropdown_;
-    std::string selectedCurriculumId_;
-    std::string selectedTrainModelId_;
-    std::unique_ptr<DatasetTarget> trainingDatasetTarget_;
-
-    std::string vocabPathBuffer;
-    std::string modelPathBuffer;
-    std::string checkpointsPathBuffer;
-    std::string logsPathBuffer;
-
-    // Progress bars
-    std::shared_ptr<UIProgressBar> trainingProgressBar;
-
-    // System resource monitoring
-    std::shared_ptr<UIGraph> resourceMonitorGraph;
-    float resourceSampleTimer;
-    float resourceSampleInterval;
-    std::vector<DataPoint> cpuHistory;
-    std::vector<DataPoint> memoryHistory;
-    std::vector<DataPoint> gpuHistory;
-    int resourceSampleCount;
-    int maxResourceSamples;
-
-    // Loss tracking
-    struct LossPoint {
-        int step;
-        float loss;
-    };
-    std::vector<LossPoint> lossHistory;
-    size_t maxLossHistory;
-
-    // Dataset tracking
-    std::string datasetSizeInfo;
-    std::string checkpointStatsInfo;
-    float datasetUpdateTimer;
-    float datasetUpdateInterval;
-
-    struct DatasetSnapshotResult {
-        std::string datasetInfo;
-        std::string checkpointInfo;
-    };
-    std::atomic<bool> datasetSnapshotInFlight{false};
-    std::mutex datasetSnapshotMutex;
-    std::optional<DatasetSnapshotResult> pendingDatasetSnapshot;
-
-    // Hardware info
-    std::string hardwareInfo;
-    std::string estimatedTimeStr;
-    float estimatedTrainingTimeSeconds = 0.0f;
-
-    // Logs
-    struct LogEntry {
-        std::string timestamp;
-        std::string message;
-        int level = 0;
-    };
-    std::vector<LogEntry> logEntries;
-    std::mutex logMutex;
-    size_t maxLogEntries;
-    float logScrollPosition;
-    bool autoScrollLogs;
-
-    // Training tab draw methods
-    void drawTrainingTab(OverlayRenderer& renderer, const PanelRect& content);
-    void drawBottomBar(OverlayRenderer& renderer, float barY, float barWidth, float barX);
-    void drawStatCard(OverlayRenderer& renderer, const Vec2& pos, const Vec2& sz,
-                      const std::string& label, const std::string& value, uint32_t accentColor);
-
-    // Training internals
-    void initializeController();
-    void setupCallbacks();
-    void resetState();
+    bool serverConnected = false;
+    float pollTimer = 0.0f;
+    float pollInterval = 0.2f;
     void pollServer();
-    void handleStartTraining();
-    void handleStopTraining();
-    void handlePauseResume();
-    void loadConfigFromJSON();
-    void saveConfigToJSON();
-    void updateConfigFromSliders();
-    void updateSlidersFromConfig();
-    void loadPathsFromConfig();
-    void savePathsToConfig();
-    void refreshCurriculumDropdown();
-    void refreshModelDropdown();
-    void refreshTrainingDropdowns();
-    void updateResourceMonitoring(float dt);
-    void updateHardwareInfo();
-    void calculateTrainingEstimate();
-    void updateDatasetSize();
-    void updateCheckpointStats();
-    std::string readDatasetSizeSnapshot();
-    std::string readCheckpointStatsSnapshot();
-    void requestDatasetSnapshot();
-    void applyPendingDatasetSnapshot();
 
-    // Callbacks
-    void onProgressUpdate(const GRIMText::TrainingStats& stats);
-    void onStateChange(GRIMText::TrainingState oldState, GRIMText::TrainingState newState);
-    void onError(const std::string& error);
+    // Model configuration preset creator.
+    nlohmann::json configPresetDocument_;
+    bool configPresetDirty_ = false;
+    std::vector<std::string> configModelIds_;
+    std::string configModelIdBuffer_;
+    std::string configVocabPathBuffer_;
+    std::string configCompilerPathBuffer_;
+    std::string configCompileStatus_;
+    bool configCompileSuccess_ = false;
 
-    // Logging
-    void addLog(const std::string& message, int level);
-    std::string getStateString(GRIMText::TrainingState state) const;
-    uint32_t getStateColor(GRIMText::TrainingState state) const;
+    std::shared_ptr<UIDropdown> configModelDropdown_;
+    std::shared_ptr<UIInputBox> configModelIdInput_;
+    std::shared_ptr<UIInputBox> configVocabPathInput_;
+    std::shared_ptr<UIInputBox> configCompilerPathInput_;
+    std::shared_ptr<UIButton> configCompileButton_;
+    std::shared_ptr<UIButton> configReloadButton_;
+
+    struct ConfigCompileResult {
+        bool success = false;
+        std::string message;
+    };
+    std::future<ConfigCompileResult> configCompileFuture_;
+
+    void drawModelConfigTab(OverlayRenderer& renderer, const PanelRect& content);
+    void updateModelConfigTab(const InputState& input, float dt);
+    void beginConfigCompile();
+    void applyConfigCompileResult();
+    void reloadConfigPresetTemplate();
+    void refreshConfigModelDropdown();
+    std::string findConfigCompilerExecutable() const;
+    std::string configOutputPath() const;
+    static ConfigCompileResult compileConfigPreset(
+        const nlohmann::json& source,
+        const std::string& compilerPath,
+        const std::string& vocabPath,
+        const std::string& modelStorePath,
+        const std::string& modelId);
 
     // Tokenizer runner state
     bool tokenizerRunning_ = false;
@@ -357,6 +250,9 @@ private:
     GRIMText::TrainingControlClient::TokenizerResult lastTokenizerResult_;
     void handleRunTokenizer();
     void drawTokenizerStatus(OverlayRenderer& renderer, float x, float y, float width);
+    void drawStatCard(OverlayRenderer& renderer, const Vec2& pos, const Vec2& size,
+                      const std::string& label, const std::string& value,
+                      uint32_t accentColor);
 
     // ═════════════════════════════════════════════════════
     //  Tokenizer tab
@@ -383,18 +279,13 @@ private:
     void drawEncodeResults(OverlayRenderer& renderer, float x, float y, float width, float maxHeight);
     void handleEncodeText();
 
-    // Config scroll
-    float configScrollOffset = 0.0f;
-    float configContentHeight = 0.0f;
-
     // ═════════════════════════════════════════════════════
-    //  Runtime training.config registry (filterable param browser)
+    //  FlatBuffer model-schema registry (filterable authored-field browser)
     // ═════════════════════════════════════════════════════
     GRIM::Config::HyperparameterRegistry hyperparamRegistry_;
     bool hyperparamsLoaded_ = false;
 
     std::shared_ptr<UIDropdown> paramCategoryFilter_;
-    std::shared_ptr<UIScrollBox> paramScrollBox_;
     float paramScrollOffset_ = 0.0f;
     int selectedParamCategory_ = 0;        // 0 = "All"
     int hoveredParamRow_ = -1;
@@ -407,12 +298,11 @@ private:
     int editingParamIndex_ = -1;              // index into current filtered list (-1 = none)
     std::string editParamBuffer_;             // backing string for the input box
     std::shared_ptr<UIInputBox> paramEditInput_;
-    bool paramEditDirty_ = false;             // true when a value was changed (pending save)
-
     void loadHyperparamSnapshot();
     void drawParamBrowser(OverlayRenderer& renderer, const Vec2& origin, const Vec2& sz);
     void processParamBrowserClicks(const InputState& input);
     void commitParamEdit();
     void cancelParamEdit();
-    bool persistHyperparamToJSON(const GRIM::Config::HyperparamEntry& entry, const nlohmann::json& value);
+    bool setPresetHyperparamValue(const GRIM::Config::HyperparamEntry& entry,
+                                  const nlohmann::json& value);
 };

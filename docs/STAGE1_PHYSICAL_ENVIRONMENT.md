@@ -28,6 +28,8 @@ single UI surface.
 | Enumeration | `perception/physical/PhysicalCameraDirectory.cpp` | Scan local NICs, local device indices, and hub-registered devices. Produce a list of candidates with explicit `status_reason` for Disabled entries. |
 | Platform NIC scan | `perception/physical/PhysicalNicScan_macos.mm` / `_win32.cpp` / `_linux.cpp` | OS-specific IPv4 address enumeration. |
 | Capture worker | `perception/physical/PhysicalCameraStream.cpp` | One worker thread per active source. Owns a `cv::VideoCapture`. Publishes `latest_frame_` under a mutex. |
+| Stereo coordinator | `perception/physical/PhysicalStereoCapture.cpp` | Owns two capture workers and pairs bounded timestamped frames within an explicit skew limit. |
+| Stereo frame bus | `perception/physical/PhysicalStereoFrameBus.cpp` | Publishes the latest immutable synchronized left/right packet. |
 | Frame bus | `perception/physical/PhysicalFrameBus.cpp` | Single global publish point. `PublishPhysicalFrameToBus()` + `PullLatestFrameView()`. Monotonic counter. |
 | Tick orchestrator | `perception/physical/PhysicalEnvironmentLoop.cpp` | `TickPhysicalEnvironment()` called once per main-loop iteration. Drains the active stream into the bus. |
 | UI panel | `ui/ui_physical_environment_panel.cpp` | Refresh / Source dropdown / URL field / Connect / Disconnect / live preview / status / error. |
@@ -65,6 +67,13 @@ again after open and logs the final backend-reported values.
 **Candidates with no `url_template`** are flagged `Disabled` and MUST carry a
 populated `status_reason` explaining why (Rule 20 — fail loud, no silent
 fallbacks). The UI shows `status_reason` as amber text beneath the URL field.
+
+Each worker also timestamps decoded frames at the capture boundary and retains
+the eight newest records. The stereo coordinator consumes those records in
+order, rejects whichever queue head is too old, and publishes a pair only when
+the absolute timestamp difference is within the configured limit. Starting a
+stereo pair closes the single-camera stream, and starting a single-camera stream
+closes the stereo pair, preventing duplicate opens of a USB camera.
 
 ---
 

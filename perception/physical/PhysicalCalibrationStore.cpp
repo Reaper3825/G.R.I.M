@@ -6,6 +6,7 @@
 #include <opencv2/core/persistence.hpp>
 
 #include <chrono>
+#include <cstdint>
 #include <ctime>
 #include <filesystem>
 #include <iomanip>
@@ -63,15 +64,39 @@ void ValidateCalibrationDataForPersistence(const PhysicalCalibrationData& d, con
 
 } // anonymous
 
-std::string GetPhysicalCalibrationStorePath() {
-    fs::path base = fs::path(GRIM_ROOT_DIR) / "data" / "perception" / "physical";
+std::string GetPhysicalCalibrationStorePath(const std::string& source_url,
+                                            const cv::Size&    image_size) {
+    if (source_url.empty()) {
+        ThrowWithLocation(__FUNCTION__, "source_url is empty");
+    }
+    if (image_size.width <= 0 || image_size.height <= 0) {
+        ThrowWithLocation(__FUNCTION__,
+            "image_size must be positive (got "
+            + std::to_string(image_size.width) + "x"
+            + std::to_string(image_size.height) + ")");
+    }
+
+    const std::string identity = source_url + "|"
+        + std::to_string(image_size.width) + "x" + std::to_string(image_size.height);
+    uint64_t identity_hash = 14695981039346656037ull;
+    for (const unsigned char byte : identity) {
+        identity_hash ^= static_cast<uint64_t>(byte);
+        identity_hash *= 1099511628211ull;
+    }
+
+    std::ostringstream filename;
+    filename << "intrinsic_" << std::hex << std::setw(16) << std::setfill('0')
+             << identity_hash << ".json";
+
+    fs::path base = fs::path(GRIM_ROOT_DIR) / "data" / "perception" / "physical"
+                  / "camera_calibrations";
     std::error_code ec;
     fs::create_directories(base, ec);
     if (ec) {
         ThrowWithLocation(__FUNCTION__,
             "failed to create directory '" + base.string() + "': " + ec.message());
     }
-    return (base / "camera_calibration.json").string();
+    return (base / filename.str()).string();
 }
 
 void SavePhysicalCalibrationDataToPath(const PhysicalCalibrationData& data,

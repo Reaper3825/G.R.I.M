@@ -682,6 +682,7 @@ if(MSVC)
 endif()
 
 target_link_libraries(train_gpu PRIVATE
+    grim_compiled_model_config
     flatbuffers::flatbuffers
     nlohmann_json::nlohmann_json
     httplib::httplib
@@ -773,6 +774,7 @@ target_compile_options(tokenizer_self_test PRIVATE
 )
 
 target_link_libraries(tokenizer_self_test PRIVATE
+    grim_compiled_model_config
     nlohmann_json::nlohmann_json
     CUDA::cudart
     grim_unigrambyte_tokenizer
@@ -880,6 +882,7 @@ target_compile_options(train_tokenizer PRIVATE
 )
 
 target_link_libraries(train_tokenizer PRIVATE
+    grim_compiled_model_config
     nlohmann_json::nlohmann_json
     CUDA::cudart
     grim_unigrambyte_tokenizer

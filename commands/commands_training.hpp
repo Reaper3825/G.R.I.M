@@ -3,10 +3,10 @@
 namespace GRIM {
 namespace Training {
 
-// Start training with current configuration
+// Legacy command entry point: opens the model-config preset creator.
 void startTraining();
 
-// Stop training and shutdown server
+// Legacy command entry point: opens the model-config preset creator.
 void stopTraining();
 
 } // namespace Training

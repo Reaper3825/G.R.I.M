@@ -15,10 +15,8 @@ namespace GRIM { namespace Perception { namespace Physical {
 //  PhysicalCameraCalibrator
 //
 //  Owns the per-process calibration state machine. Responsibilities:
-//    - On first tick (lazy init), attempt to load any saved calibration from
-//      the bootstrap path. If present and valid, the subsystem starts in
-//      "Calibrated" state and downstream code can immediately call
-//      UndistortBgrFrameUsingPhysicalCalibration().
+//    - When the active FrameBus source changes, load only the intrinsic
+//      profile matching that source URL and capture resolution.
 //    - When capture is active, every TickPhysicalCameraCalibration() pulls
 //      the latest frame from PhysicalFrameBus, runs lighting-adaptive
 //      detection, and (if a pattern is found AND coverage policy permits)
@@ -71,6 +69,11 @@ struct PhysicalCalibrationStatus {
     cv::Size    calibrated_image_size {0, 0};
     double      rms_reprojection_error  = 0.0;
 
+    // Active camera profile identity.
+    std::string active_source_url;
+    std::string active_source_label;
+    std::string active_profile_path;
+
     // Last error / status string for UI
     std::string status_reason;
 };
@@ -114,12 +117,13 @@ void RequestClearPhysicalCalibrationSamples();
 // fewer than `min_samples_required` (=10) samples, or if calibration fails.
 void RequestRunIntrinsicCalibrationFromSamples();
 
-// Persist the current calibration to the bootstrap path. Throws if no
-// calibration is available (nothing to save).
+// Persist the current calibration to its camera/resolution profile. Throws if
+// no calibration is available (nothing to save).
 void RequestSavePhysicalCalibrationToDisk();
 
-// Reload calibration from the bootstrap path. Returns true if a file was
-// found and loaded. Throws on parse / shape errors.
+// Reload calibration for the active FrameBus camera/resolution. Returns true
+// if its profile was found. Throws when no active frame identifies a camera,
+// or on parse / identity / shape errors.
 bool RequestLoadPhysicalCalibrationFromDisk();
 
 // Reconfigure the chessboard pattern. Throws on invalid dims. Clearing

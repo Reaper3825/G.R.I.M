@@ -1,8 +1,8 @@
 #pragma once
 //======================================================//
-// HyperparameterRegistry — enumerates GRIM runtime
-// training.config leaves with display metadata for UI
-// browsing.
+// HyperparameterRegistry — exposes only the authored fields that feed the
+// grim_compiled_hyperparameters.fbs model artifact. Runtime training policy
+// (optimizer, batching, logging, telemetry, and similar settings) is excluded.
 //
 // This file intentionally does NOT include GRIM-text
 // headers. GRIM.exe owns runtime ai_config.json access
@@ -91,21 +91,127 @@ struct HyperparamEntry {
 
 class HyperparameterRegistry {
 public:
-    void populate(const nlohmann::json& trainingConfig) {
-        if (!trainingConfig.is_object()) {
-            throw std::runtime_error("HyperparameterRegistry::populate: training.config must be an object");
+    void populateModelConfigSchema(const nlohmann::json& sourceConfig) {
+        if (!sourceConfig.is_object()) {
+            throw std::runtime_error(
+                "HyperparameterRegistry::populateModelConfigSchema: source config must be an object");
         }
+
+        struct SchemaField {
+            const char* key;
+            const char* table;
+        };
+
+        // These are the human-authored compiler inputs for the corresponding
+        // FlatBuffer tables. Compiler-derived fields (hashes, dimensions,
+        // capabilities, vocab facts, and lookup vectors) are intentionally not
+        // editable here.
+        static constexpr SchemaField fields[] = {
+            {"d_model", "ArchitectureConfig"},
+            {"num_layers", "ArchitectureConfig"},
+            {"num_heads", "ArchitectureConfig"},
+            {"num_kv_heads", "ArchitectureConfig"},
+            {"max_seq_len", "ArchitectureConfig"},
+            {"tie_embeddings", "ArchitectureConfig"},
+            {"embedding_scale", "ArchitectureConfig"},
+
+            {"use_bias", "BiasPolicy"},
+            {"attention_qkv_bias_enabled", "BiasPolicy"},
+            {"attention_output_bias_enabled", "BiasPolicy"},
+            {"ffn_output_bias_enabled", "BiasPolicy"},
+            {"lm_head_bias_enabled", "BiasPolicy"},
+
+            {"causal_mask", "AttentionConfig"},
+            {"use_pre_norm", "AttentionConfig"},
+            {"fuse_qkv", "AttentionConfig"},
+            {"qk_norm_enabled", "AttentionConfig"},
+            {"attention_off_by_one", "AttentionConfig"},
+            {"attention_residual_gate_enabled", "AttentionConfig"},
+
+            {"use_rope", "PositionalEncodingConfig"},
+            {"use_alibi", "PositionalEncodingConfig"},
+            {"rope_base_seq_len", "PositionalEncodingConfig"},
+            {"alibi_min_locality_distance", "PositionalEncodingConfig"},
+            {"alibi_slope_exponent", "PositionalEncodingConfig"},
+            {"alibi_max_bias", "PositionalEncodingConfig"},
+            {"rope_theta", "PositionalEncodingConfig"},
+            {"rope_scaling", "PositionalEncodingConfig"},
+
+            {"rms_epsilon", "EncoderConfig"},
+            {"use_layer_scale", "EncoderConfig"},
+            {"center_encoder_residuals", "EncoderConfig"},
+
+            {"lm_head_unigram_bias", "LmHeadConfig"},
+            {"lm_head_center_hidden_states", "LmHeadConfig"},
+            {"center_logits", "LmHeadConfig"},
+            {"project_out_pc1", "LmHeadConfig"},
+            {"pc1_power_iters", "LmHeadConfig"},
+            {"lm_head_mlp_enabled", "LmHeadConfig"},
+            {"lm_head_mlp_d_ff", "LmHeadConfig"},
+            {"lm_head_mlp_alpha", "LmHeadConfig"},
+
+            {"use_atom_data", "ModelFeatures"},
+            {"atom_embedding_dim", "ModelFeatures"},
+            {"selector_enabled", "ModelFeatures"},
+
+            {"execution_block_enabled", "ExecutionBlockConfig"},
+            {"execution_block_layer", "ExecutionBlockConfig"},
+            {"execution_block_num_ops", "ExecutionBlockConfig"},
+            {"execution_block_num_slots", "ExecutionBlockConfig"},
+            {"execution_block_num_scratch_slots", "ExecutionBlockConfig"},
+            {"execution_block_num_steps", "ExecutionBlockConfig"},
+            {"execution_block_value_decode_input_dim", "ExecutionBlockConfig"},
+            {"execution_block_value_decode_hidden_dim", "ExecutionBlockConfig"},
+            {"execution_block_d_type", "ExecutionBlockConfig"},
+            {"execution_block_cross_attn_topk", "ExecutionBlockConfig"},
+            {"execution_block_usage_decay", "ExecutionBlockConfig"},
+            {"execution_block_inject_gate_temp", "ExecutionBlockConfig"},
+            {"execution_block_result_slot_mode", "ExecutionBlockConfig"},
+            {"execution_block_result_slot_index", "ExecutionBlockConfig"},
+            {"execution_block_magnitude_limit", "ExecutionBlockConfig"},
+            {"execution_block_causal_w1_transition", "ExecutionBlockConfig"},
+            {"execution_block_decode_bias_enabled", "ExecutionBlockConfig"},
+            {"execution_block_value_embedding_bias_enabled", "ExecutionBlockConfig"},
+            {"execution_block_scalar_bias_enabled", "ExecutionBlockConfig"},
+            {"execution_block_trace_bias_enabled", "ExecutionBlockConfig"},
+
+            {"number_encoder_enabled", "NumberEncoderConfig"},
+            {"number_encoder_max_digit_slots", "NumberEncoderConfig"},
+            {"number_encoder_d_hidden", "NumberEncoderConfig"},
+            {"number_encoder_max_abs_pow10", "NumberEncoderConfig"},
+            {"number_encoder_contribution_bias_enabled", "NumberEncoderConfig"},
+            {"number_encoder_global_bias_enabled", "NumberEncoderConfig"},
+
+            {"slot_seed_encoder_enabled", "SlotSeedEncoderConfig"},
+            {"slot_seed_encoder_d_hidden", "SlotSeedEncoderConfig"},
+            {"slot_seed_encoder_bias_enabled", "SlotSeedEncoderConfig"},
+            {"slot_seed_encoder_type_embedding_enabled", "SlotSeedEncoderConfig"},
+
+            {"tokenizer_model_type", "TokenizerConfig"},
+            {"tokenizer_special_tokens", "TokenizerConfig"},
+            {"tokenizer_add_bos", "TokenizerConfig"},
+            {"tokenizer_add_eos", "TokenizerConfig"},
+            {"tokenizer_unk_token", "TokenizerConfig"},
+            {"tokenizer_pad_token", "TokenizerConfig"},
+            {"tokenizer_bos_token", "TokenizerConfig"},
+            {"tokenizer_eos_token", "TokenizerConfig"},
+            {"tokenizer_enable_nfkc_normalization", "TokenizerConfig"},
+            {"tokenizer_enable_lowercasing", "TokenizerConfig"},
+            {"tokenizer_enable_byte_fallback", "TokenizerConfig"},
+            {"tokenizer_enable_atom_reasoning", "TokenizerConfig"},
+            {"tokenizer_detect_numbers", "TokenizerConfig"},
+        };
 
         entries_.clear();
         categories_.clear();
-
-        for (const auto& item : trainingConfig.items()) {
-            addEntry(item.key(), item.value());
+        for (const SchemaField& field : fields) {
+            const auto value = sourceConfig.find(field.key);
+            if (value == sourceConfig.end()) continue;
+            addEntry(field.key, field.table, *value);
+            if (std::find(categories_.begin(), categories_.end(), field.table) == categories_.end()) {
+                categories_.push_back(field.table);
+            }
         }
-
-        std::set<std::string> cats;
-        for (const auto& e : entries_) cats.insert(e.category);
-        categories_.assign(cats.begin(), cats.end());
     }
 
     const std::vector<HyperparamEntry>& entries() const { return entries_; }
@@ -126,14 +232,6 @@ public:
 private:
     std::vector<HyperparamEntry> entries_;
     std::vector<std::string> categories_;
-
-    static bool startsWith(const std::string& text, const std::string& prefix) {
-        return text.rfind(prefix, 0) == 0;
-    }
-
-    static bool contains(const std::string& text, const std::string& needle) {
-        return text.find(needle) != std::string::npos;
-    }
 
     static HyperparamType inferType(const nlohmann::json& value) {
         if (value.is_boolean()) return HyperparamType::Bool;
@@ -168,57 +266,13 @@ private:
         return out;
     }
 
-    static std::string categoryForKey(const std::string& key) {
-        if (startsWith(key, "optimizer_") || key == "learning_rate" || key == "weight_decay" ||
-            key == "grad_clip_norm" || startsWith(key, "cosine_") || key == "warmup_fraction") {
-            return "Optimizer";
-        }
-        if (startsWith(key, "soft_restart_")) return "Soft Restart";
-        if (startsWith(key, "auto_stop_")) return "Auto Stop";
-        if (startsWith(key, "shuffle_")) return "Shuffle";
-        if (startsWith(key, "telemetry_lattice_")) return "Telemetry Lattice";
-        if (startsWith(key, "telemetry_")) return "Telemetry";
-        if (startsWith(key, "logging_") || startsWith(key, "log_recorder_")) return "Logging";
-        if (startsWith(key, "loss_")) return "Loss";
-        if (startsWith(key, "lm_head_") || key == "freeze_learned_rms_gammas" ||
-            key == "center_logits" || key == "center_encoder_residuals" ||
-            key == "project_out_pc1" || key == "pc1_power_iters") {
-            return "LM Head";
-        }
-        if (contains(key, "attention") || startsWith(key, "qk_norm") || startsWith(key, "rope_") ||
-            startsWith(key, "alibi_") || key == "use_flash_attention") {
-            return "Attention";
-        }
-        if (startsWith(key, "layer_scale") || key == "use_layer_scale") return "Layer Scale";
-        if (startsWith(key, "scratch") || key == "use_scratch_block") return "Scratch Block";
-        if (startsWith(key, "execution_block_") || startsWith(key, "selector_") ||
-            startsWith(key, "step_") || startsWith(key, "entropy_") ||
-            startsWith(key, "value_match_") || startsWith(key, "final_slot_") ||
-            startsWith(key, "div_") ||
-            startsWith(key, "structured_ce_") || startsWith(key, "decode_time_slot_")) {
-            return "Execution Block";
-        }
-        if (startsWith(key, "single_stream") || startsWith(key, "disable_async") ||
-            startsWith(key, "synchronize_after")) {
-            return "CUDA";
-        }
-        if (startsWith(key, "embedding_")) return "Embedding";
-        if (startsWith(key, "stability_")) return "Stability";
-        if (startsWith(key, "prediction_comparison_") || startsWith(key, "logit_update_trace_") ||
-            startsWith(key, "hardcoded_")) {
-            return "Diagnostics";
-        }
-        if (startsWith(key, "generation_")) return "Generation";
-        if (startsWith(key, "tokenizer_") || startsWith(key, "subprocess_")) return "Tokenizer";
-        if (startsWith(key, "parameter_precision_")) return "Precision";
-        return "Core";
-    }
-
-    void addEntry(const std::string& key, const nlohmann::json& value) {
+    void addEntry(const std::string& key,
+                  const std::string& schemaTable,
+                  const nlohmann::json& value) {
         HyperparamEntry e;
         e.key = key;
         e.display_name = makeDisplayName(key);
-        e.category = categoryForKey(key);
+        e.category = schemaTable;
         e.type = inferType(value);
         e.value = value;
         entries_.push_back(std::move(e));

@@ -76,6 +76,10 @@ struct PhysicalCalibrationModuleState {
     // Calibration result
     PhysicalCalibrationData                             calib;
     bool                                                calib_valid        = false;
+    std::string                                         active_source_url;
+    std::string                                         active_source_label;
+    cv::Size                                            active_image_size {0, 0};
+    std::string                                         active_profile_path;
     PhysicalCalibrationStage                            stage = PhysicalCalibrationStage::Uncalibrated;
     std::string                                         status_reason;
 };
@@ -108,34 +112,88 @@ void LazyInitLocked(PhysicalCalibrationModuleState& s) {
     if (s.initialized) return;
     s.initialized = true;
     EnsureCoverageGridSizedLocked(s);
+    s.stage         = PhysicalCalibrationStage::Uncalibrated;
+    s.status_reason = "waiting for an active camera to select its calibration profile";
+}
 
-    PhysicalCalibrationData on_disk;
-    bool loaded = false;
-    try {
-        loaded = LoadPhysicalCalibrationDataFromPath(GetPhysicalCalibrationStorePath(), on_disk);
-    } catch (const std::exception& e) {
-        s.stage         = PhysicalCalibrationStage::Failed;
-        s.status_reason = std::string("LazyInit: load failed: ") + e.what();
-        LOG_ERROR(PHYSICAL_ENV_LOG_TAG, s.status_reason);
+void ClearSamplePoolLocked(PhysicalCalibrationModuleState& s) {
+    s.accepted_image_points.clear();
+    s.samples_image_size = cv::Size(0, 0);
+    EnsureCoverageGridSizedLocked(s);
+    std::fill(s.coverage_cell_counts.begin(), s.coverage_cell_counts.end(), 0);
+    s.last_accept_time = std::chrono::steady_clock::time_point{};
+}
+
+bool LoadActiveProfileLocked(PhysicalCalibrationModuleState& s) {
+    if (s.active_source_url.empty() || s.active_image_size.width <= 0
+        || s.active_image_size.height <= 0) {
+        ThrowWithLocation(__FUNCTION__, "active camera identity is incomplete");
+    }
+
+    s.active_profile_path = GetPhysicalCalibrationStorePath(
+        s.active_source_url, s.active_image_size);
+    PhysicalCalibrationData loaded_data;
+    const bool loaded = LoadPhysicalCalibrationDataFromPath(
+        s.active_profile_path, loaded_data);
+    if (!loaded) {
+        s.calib = {};
+        s.calib_valid = false;
+        if (!s.capturing) s.stage = PhysicalCalibrationStage::Uncalibrated;
+        s.status_reason = "no calibration for active camera '"
+            + s.active_source_label + "' at "
+            + std::to_string(s.active_image_size.width) + "x"
+            + std::to_string(s.active_image_size.height);
+        return false;
+    }
+    if (loaded_data.source_url_at_capture != s.active_source_url) {
+        ThrowWithLocation(__FUNCTION__,
+            "profile source mismatch: active='" + s.active_source_url
+            + "' stored='" + loaded_data.source_url_at_capture + "'");
+    }
+    if (loaded_data.image_size != s.active_image_size) {
+        ThrowWithLocation(__FUNCTION__,
+            "profile resolution mismatch: active="
+            + std::to_string(s.active_image_size.width) + "x"
+            + std::to_string(s.active_image_size.height) + " stored="
+            + std::to_string(loaded_data.image_size.width) + "x"
+            + std::to_string(loaded_data.image_size.height));
+    }
+
+    s.calib = std::move(loaded_data);
+    s.calib_valid = true;
+    s.pattern_inner_cols = s.calib.pattern_inner_cols;
+    s.pattern_inner_rows = s.calib.pattern_inner_rows;
+    s.pattern_square_meters = s.calib.pattern_square_meters;
+    if (!s.capturing) s.stage = PhysicalCalibrationStage::LoadedFromDisk;
+    s.status_reason = "loaded active camera calibration from '"
+        + s.active_profile_path + "'";
+    LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
+        "PhysicalCameraCalibrator: " + s.status_reason);
+    return true;
+}
+
+void ActivateFrameProfileLocked(PhysicalCalibrationModuleState& s) {
+    if (s.pull_view.source_url.empty()) {
+        ThrowWithLocation(__FUNCTION__, "FrameBus packet has no source_url");
+    }
+    const cv::Size frame_size(s.pull_view.raw_image.cols, s.pull_view.raw_image.rows);
+    if (frame_size.width <= 0 || frame_size.height <= 0) {
+        ThrowWithLocation(__FUNCTION__, "FrameBus packet has invalid raw image size");
+    }
+    if (s.active_source_url == s.pull_view.source_url
+        && s.active_image_size == frame_size) {
+        s.active_source_label = s.pull_view.source_label;
         return;
     }
 
-    if (loaded) {
-        s.calib                  = std::move(on_disk);
-        s.calib_valid            = true;
-        s.stage                  = PhysicalCalibrationStage::LoadedFromDisk;
-        s.pattern_inner_cols     = s.calib.pattern_inner_cols;
-        s.pattern_inner_rows     = s.calib.pattern_inner_rows;
-        s.pattern_square_meters  = s.calib.pattern_square_meters;
-        s.status_reason          = "loaded calibration from disk";
-        LOG_DEBUG(PHYSICAL_ENV_LOG_TAG,
-                  "PhysicalCameraCalibrator: lazy-init loaded prior calibration "
-                  "(rms=" + std::to_string(s.calib.rms_reprojection_error)
-                  + ", samples=" + std::to_string(s.calib.sample_count) + ")");
-    } else {
-        s.stage         = PhysicalCalibrationStage::Uncalibrated;
-        s.status_reason = "no prior calibration on disk; capture samples to begin";
-    }
+    ClearSamplePoolLocked(s);
+    s.calib = {};
+    s.calib_valid = false;
+    s.active_source_url = s.pull_view.source_url;
+    s.active_source_label = s.pull_view.source_label;
+    s.active_image_size = frame_size;
+    s.active_profile_path.clear();
+    LoadActiveProfileLocked(s);
 }
 
 // Pull a fresh frame view from the FrameBus (under module lock).
@@ -147,6 +205,7 @@ bool PullLatestFrameLocked(PhysicalCalibrationModuleState& s) {
         if (s.last_frame_present) {
             s.last_frame_width  = s.pull_view.raw_image.cols;
             s.last_frame_height = s.pull_view.raw_image.rows;
+            ActivateFrameProfileLocked(s);
         }
         return true;
     }
@@ -271,6 +330,9 @@ PhysicalCalibrationStatus GetPhysicalCalibrationStatusSnapshot() {
         out.calibrated_image_size  = s.calib.image_size;
         out.rms_reprojection_error = s.calib.rms_reprojection_error;
     }
+    out.active_source_url   = s.active_source_url;
+    out.active_source_label = s.active_source_label;
+    out.active_profile_path = s.active_profile_path;
     out.status_reason = s.status_reason;
     return out;
 }
@@ -306,6 +368,13 @@ void UndistortBgrFrameUsingPhysicalCalibration(const cv::Mat& bgr_in, cv::Mat& b
     if (bgr_in.type() != CV_8UC3) {
         ThrowWithLocation(__FUNCTION__,
             "expected CV_8UC3, got type=" + std::to_string(bgr_in.type()));
+    }
+    if (bgr_in.size() != s.calib.image_size) {
+        ThrowWithLocation(__FUNCTION__,
+            "input resolution " + std::to_string(bgr_in.cols) + "x"
+            + std::to_string(bgr_in.rows) + " does not match calibration resolution "
+            + std::to_string(s.calib.image_size.width) + "x"
+            + std::to_string(s.calib.image_size.height));
     }
     cv::undistort(bgr_in, bgr_out, s.calib.camera_matrix, s.calib.dist_coeffs);
 }
@@ -356,11 +425,7 @@ void RequestCapturePhysicalCalibrationSampleNow() {
 void RequestClearPhysicalCalibrationSamples() {
     auto& s = GetModule();
     std::lock_guard<std::mutex> lk(s.mutex);
-    s.accepted_image_points.clear();
-    s.samples_image_size = cv::Size(0, 0);
-    EnsureCoverageGridSizedLocked(s);
-    std::fill(s.coverage_cell_counts.begin(), s.coverage_cell_counts.end(), 0);
-    s.last_accept_time = std::chrono::steady_clock::time_point{};
+    ClearSamplePoolLocked(s);
     s.status_reason    = "samples cleared";
     LOG_DEBUG(PHYSICAL_ENV_LOG_TAG, "RequestClearPhysicalCalibrationSamples");
 }
@@ -423,6 +488,10 @@ void RequestRunIntrinsicCalibrationFromSamples() {
     K.convertTo(K,    CV_64F);
     dist.convertTo(dist, CV_64F);
 
+    if (s.active_source_url.empty() || s.active_image_size != s.samples_image_size) {
+        ThrowWithLocation(__FUNCTION__,
+            "sample pool is not bound to the active camera profile");
+    }
     s.calib                          = {};
     s.calib.camera_matrix            = K;
     s.calib.dist_coeffs              = dist;
@@ -433,8 +502,8 @@ void RequestRunIntrinsicCalibrationFromSamples() {
     s.calib.pattern_inner_rows       = s.pattern_inner_rows;
     s.calib.pattern_square_meters    = s.pattern_square_meters;
     s.calib.created_at_iso           = FormatTimestampUtcIso();
-    s.calib.source_url_at_capture    = s.pull_view.source_url;
-    s.calib.source_label_at_capture  = s.pull_view.source_label;
+    s.calib.source_url_at_capture    = s.active_source_url;
+    s.calib.source_label_at_capture  = s.active_source_label;
     s.calib_valid                    = true;
     s.stage                          = PhysicalCalibrationStage::Calibrated;
     s.status_reason                  = "calibration complete (rms="
@@ -445,6 +514,7 @@ void RequestRunIntrinsicCalibrationFromSamples() {
 
 void RequestSavePhysicalCalibrationToDisk() {
     PhysicalCalibrationData snapshot;
+    std::string profile_path;
     {
         auto& s = GetModule();
         std::lock_guard<std::mutex> lk(s.mutex);
@@ -455,34 +525,28 @@ void RequestSavePhysicalCalibrationToDisk() {
         snapshot = s.calib;
         snapshot.camera_matrix = s.calib.camera_matrix.clone();
         snapshot.dist_coeffs   = s.calib.dist_coeffs.clone();
+        profile_path = GetPhysicalCalibrationStorePath(
+            snapshot.source_url_at_capture, snapshot.image_size);
     }
-    SavePhysicalCalibrationDataToPath(snapshot, GetPhysicalCalibrationStorePath());
+    SavePhysicalCalibrationDataToPath(snapshot, profile_path);
     {
         auto& s = GetModule();
         std::lock_guard<std::mutex> lk(s.mutex);
-        s.status_reason = "calibration saved to '" + GetPhysicalCalibrationStorePath() + "'";
+        s.active_profile_path = profile_path;
+        s.status_reason = "calibration saved to '" + profile_path + "'";
     }
 }
 
 bool RequestLoadPhysicalCalibrationFromDisk() {
-    PhysicalCalibrationData data;
-    const bool loaded = LoadPhysicalCalibrationDataFromPath(
-        GetPhysicalCalibrationStorePath(), data);
     auto& s = GetModule();
     std::lock_guard<std::mutex> lk(s.mutex);
-    if (loaded) {
-        s.calib                  = std::move(data);
-        s.calib_valid            = true;
-        s.pattern_inner_cols     = s.calib.pattern_inner_cols;
-        s.pattern_inner_rows     = s.calib.pattern_inner_rows;
-        s.pattern_square_meters  = s.calib.pattern_square_meters;
-        s.stage                  = PhysicalCalibrationStage::LoadedFromDisk;
-        s.status_reason          = "reloaded calibration from disk";
-    } else {
-        s.status_reason = "no calibration file on disk at '"
-                        + GetPhysicalCalibrationStorePath() + "'";
+    LazyInitLocked(s);
+    PullLatestFrameLocked(s);
+    if (s.active_source_url.empty()) {
+        ThrowWithLocation(__FUNCTION__,
+            "no active camera frame is available to identify the calibration profile");
     }
-    return loaded;
+    return LoadActiveProfileLocked(s);
 }
 
 void RequestReconfigurePhysicalCalibrationPattern(int   inner_cols,
@@ -518,6 +582,10 @@ void ResetPhysicalCalibrationState() {
     s.coverage_cell_counts.clear();
     s.calib       = {};
     s.calib_valid = false;
+    s.active_source_url.clear();
+    s.active_source_label.clear();
+    s.active_image_size = cv::Size(0, 0);
+    s.active_profile_path.clear();
     s.capturing   = false;
     s.stage       = PhysicalCalibrationStage::Uncalibrated;
     s.status_reason.clear();

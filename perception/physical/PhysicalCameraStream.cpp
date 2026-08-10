@@ -307,6 +307,11 @@ void PhysicalCameraStream::OpenPhysicalCameraStream(const std::string& url) {
     frame_counter_  = 0;
     measured_fps_   = 0.0;
     {
+        std::lock_guard<std::mutex> lk(frame_mutex_);
+        latest_frame_.release();
+        captured_frames_.clear();
+    }
+    {
         std::lock_guard<std::mutex> lk(error_mutex_);
         last_error_reason_.clear();
     }
@@ -349,17 +354,33 @@ double PhysicalCameraStream::GetMeasuredFps() const {
 
 bool PhysicalCameraStream::PullLatestFrameInto(cv::Mat& out,
                                                 uint64_t& last_seen_counter) const {
+    std::lock_guard<std::mutex> lk(frame_mutex_);
     const uint64_t current = frame_counter_.load();
-    if (current == 0 || current == last_seen_counter) {
-        return false;
-    }
-    {
-        std::lock_guard<std::mutex> lk(frame_mutex_);
-        if (latest_frame_.empty()) return false;
-        latest_frame_.copyTo(out);
-    }
+    if (current == 0 || current == last_seen_counter || latest_frame_.empty()) return false;
+    latest_frame_.copyTo(out);
     last_seen_counter = current;
     return true;
+}
+
+bool PhysicalCameraStream::PullNextCapturedFrameInto(
+    PhysicalCapturedCameraFrame& out,
+    uint64_t& last_seen_counter) const
+{
+    std::lock_guard<std::mutex> lk(frame_mutex_);
+    for (const auto& frame : captured_frames_) {
+        if (frame.frame_counter <= last_seen_counter) continue;
+        if (frame.image.empty() || frame.capture_steady_ns == 0 || frame.capture_wall_ns == 0) {
+            throw std::runtime_error(
+                "PhysicalCameraStream::PullNextCapturedFrameInto: retained frame is incomplete");
+        }
+        frame.image.copyTo(out.image);
+        out.frame_counter     = frame.frame_counter;
+        out.capture_steady_ns = frame.capture_steady_ns;
+        out.capture_wall_ns   = frame.capture_wall_ns;
+        last_seen_counter     = frame.frame_counter;
+        return true;
+    }
+    return false;
 }
 
 void PhysicalCameraStream::RunCaptureWorker() {
@@ -580,14 +601,32 @@ void PhysicalCameraStream::RunCaptureWorker() {
         fps_window_retrieve_ms += std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - retrieve_start).count();
 
-        const auto store_start = std::chrono::steady_clock::now();
+        const auto capture_steady = std::chrono::steady_clock::now();
+        const auto capture_wall   = std::chrono::system_clock::now();
+        const uint64_t capture_steady_ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                capture_steady.time_since_epoch()).count());
+        const uint64_t capture_wall_ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                capture_wall.time_since_epoch()).count());
+        const auto store_start = capture_steady;
         {
             std::lock_guard<std::mutex> lk(frame_mutex_);
-            scratch.copyTo(latest_frame_);
+            PhysicalCapturedCameraFrame captured;
+            scratch.copyTo(captured.image);
+            latest_frame_              = captured.image;
+            captured.frame_counter     = frame_counter_.load() + 1;
+            captured.capture_steady_ns = capture_steady_ns;
+            captured.capture_wall_ns   = capture_wall_ns;
+            captured_frames_.push_back(std::move(captured));
+            constexpr size_t kCapturedFrameQueueCapacity = 8;
+            while (captured_frames_.size() > kCapturedFrameQueueCapacity) {
+                captured_frames_.pop_front();
+            }
+            frame_counter_.store(captured_frames_.back().frame_counter);
         }
         fps_window_store_ms += std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - store_start).count();
-        ++frame_counter_;
         ++fps_window_frames;
 
         auto now = std::chrono::steady_clock::now();

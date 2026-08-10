@@ -161,7 +161,9 @@ BGR frames on `PhysicalFrameBus`.
 | `PhysicalNicScan` (per-OS .cpp/.mm)       | Enumerate IPv4 NICs (loopback + link-local marked `Disabled`).                                       |
 | `PhysicalCameraDirectory`                 | Combine local NICs + local USB/builtin/virtual cameras + hub devices (DeviceCommServer) into a candidate list; local rows are backend-pinned so multiple cameras on one host are selectable. |
 | `PhysicalCameraSource`                    | One row in the directory: origin, status, label, `url_template`.                                     |
-| `PhysicalCameraStream`                    | OpenCV `VideoCapture` worker; reports state Idle / Connecting / Streaming / Failed.                  |
+| `PhysicalCameraStream`                    | OpenCV `VideoCapture` worker; reports state Idle / Connecting / Streaming / Failed and retains a bounded timestamped frame queue. |
+| `PhysicalStereoCapture`                   | Owns an explicit left/right stream pair and synchronizes retained frames within a configured skew limit. |
+| `PhysicalStereoFrameBus`                  | Publishes immutable synchronized left/right packets for stereo processing and UI diagnostics. |
 | `PhysicalFrameConditioner`                | Resize (Stretch or Letterbox), denoise (median blur), exposure correction, optional deblur/stabilization, color-space, **quality gate**, and per-frame `PhysicalSceneStability` thumbnail diff. |
 | `PhysicalFrameBus`                        | Singleton single-producer/multi-consumer latest-frame slot (raw + model + metadata).                |
 
@@ -198,13 +200,19 @@ GetActiveStreamFps(); GetActiveStreamFrameCounter();
 GetLastEnvironmentError();
 ```
 
+The Stereo tab selects two Ready camera-directory entries and opens them as an
+exclusive pair. It displays both accepted frames plus signed timestamp skew,
+pair count, per-stream FPS, and left/right rejection counters. Stereo capture
+currently stops at synchronized frame publication; calibration, rectification,
+and disparity are subsequent milestones.
+
 ### Camera calibration
 
 Calibration is its own subsystem layered on top of Stage 1:
 
 * [PhysicalCameraCalibrator.hpp](../perception/physical/PhysicalCameraCalibrator.hpp) — state machine (Uncalibrated → LoadedFromDisk → Capturing → Calibrated → Failed), pulls frames from `PhysicalFrameBus`, runs lighting-adaptive checkerboard detection, manages a coverage-aware sample pool, runs `cv::calibrateCamera`, and exposes `UndistortBgrFrameUsingPhysicalCalibration()`.
 * [PhysicalCalibrationPattern.hpp](../perception/physical/PhysicalCalibrationPattern.hpp) — physical pattern descriptor (cols × rows × square size in metres).
-* [PhysicalCalibrationStore.hpp](../perception/physical/PhysicalCalibrationStore.hpp) — disk persistence for `K` and distortion coefficients.
+* [PhysicalCalibrationStore.hpp](../perception/physical/PhysicalCalibrationStore.hpp) — per-camera, per-resolution disk persistence for `K` and distortion coefficients. Profiles are keyed by capture source URL plus raw resolution and validated against their stored provenance when loaded.
 
 The calibrator is consumed by **Stage 5** (visual odometry refuses to run
 without intrinsics).

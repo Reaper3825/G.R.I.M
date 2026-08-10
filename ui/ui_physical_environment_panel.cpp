@@ -48,6 +48,17 @@ std::string FormatOrigin(PE::PhysicalCameraOrigin o) {
     return "Unknown";
 }
 
+const char* FormatCameraStreamState(PE::PhysicalCameraStreamState state) {
+    switch (state) {
+        case PE::PhysicalCameraStreamState::Idle: return "Idle";
+        case PE::PhysicalCameraStreamState::Opening: return "Opening";
+        case PE::PhysicalCameraStreamState::Streaming: return "Streaming";
+        case PE::PhysicalCameraStreamState::Failed: return "Failed";
+        case PE::PhysicalCameraStreamState::Closed: return "Closed";
+    }
+    return "Invalid";
+}
+
 std::string MakeDropdownLine(const PE::PhysicalCameraSource& s) {
     return "[" + FormatOrigin(s.origin) + "/" + FormatStatus(s.status) + "] " + s.label;
 }
@@ -134,6 +145,8 @@ UIPhysicalEnvironmentPanel::UIPhysicalEnvironmentPanel()
     // ── Tab buttons ──
     tab_camera_btn_ = std::make_shared<UIButton>(" Camera ",
         [this]() { setActiveTab(Tab::Camera); });
+    tab_stereo_btn_ = std::make_shared<UIButton>(" Stereo ",
+        [this]() { setActiveTab(Tab::Stereo); });
     tab_calibration_btn_ = std::make_shared<UIButton>(" Calibration ",
         [this]() { setActiveTab(Tab::Calibration); });
     tab_perception_btn_ = std::make_shared<UIButton>(" Perception ",
@@ -312,6 +325,19 @@ UIPhysicalEnvironmentPanel::UIPhysicalEnvironmentPanel()
             }
         });
 
+    stereo_left_dropdown_ = std::make_shared<UIDropdown>(
+        "Left camera", std::vector<std::string>{"(no candidates yet)"}, 0,
+        [](int, const std::string&) {});
+    stereo_right_dropdown_ = std::make_shared<UIDropdown>(
+        "Right camera", std::vector<std::string>{"(no candidates yet)"}, 0,
+        [](int, const std::string&) {});
+    stereo_skew_box_ = std::make_shared<UIInputBox>(&stereo_skew_buffer_);
+    stereo_skew_box_->setPlaceholder("maximum skew ms");
+    stereo_connect_button_ = std::make_shared<UIButton>(" Connect Pair ",
+        [this]() { HandleStereoConnectClicked(); });
+    stereo_disconnect_button_ = std::make_shared<UIButton>(" Disconnect Pair ",
+        [this]() { HandleStereoDisconnectClicked(); });
+
     try {
         PE::RequestPhysicalCameraDirectoryRefresh();
         RebuildSourceDropdownFromDirectory();
@@ -388,6 +414,24 @@ void UIPhysicalEnvironmentPanel::RebuildSourceDropdownFromDirectory() {
             }
         }
     }
+    if (stereo_left_dropdown_) stereo_left_dropdown_->setItems(lines);
+    if (stereo_right_dropdown_) stereo_right_dropdown_->setItems(lines);
+    int first_ready = -1;
+    int second_ready = -1;
+    for (size_t i = 0; i < last_directory_.size(); ++i) {
+        if (last_directory_[i].status != PE::PhysicalCameraCandidateStatus::Ready) continue;
+        if (first_ready < 0) first_ready = static_cast<int>(i);
+        else if (second_ready < 0) {
+            second_ready = static_cast<int>(i);
+            break;
+        }
+    }
+    if (first_ready >= 0 && stereo_left_dropdown_) {
+        stereo_left_dropdown_->setSelectedIndex(first_ready);
+    }
+    if (second_ready >= 0 && stereo_right_dropdown_) {
+        stereo_right_dropdown_->setSelectedIndex(second_ready);
+    }
 }
 
 void UIPhysicalEnvironmentPanel::HandleRefreshClicked() {
@@ -430,6 +474,60 @@ void UIPhysicalEnvironmentPanel::HandleDisconnectClicked() {
     PE::RequestClosePhysicalCameraSource();
     last_seen_counter_ = 0;
     have_any_frame_    = false;
+}
+
+void UIPhysicalEnvironmentPanel::HandleStereoConnectClicked() {
+    if (!stereo_left_dropdown_ || !stereo_right_dropdown_) {
+        throw std::runtime_error(
+            "HandleStereoConnectClicked: stereo camera dropdown is null");
+    }
+    const int left_index  = stereo_left_dropdown_->getSelectedIndex();
+    const int right_index = stereo_right_dropdown_->getSelectedIndex();
+    if (left_index < 0 || right_index < 0
+        || left_index >= static_cast<int>(last_directory_.size())
+        || right_index >= static_cast<int>(last_directory_.size())) {
+        stereo_ui_status_ = "Stereo selection is outside the current camera directory.";
+        LOG_ERROR(kPanelLogTag, stereo_ui_status_);
+        return;
+    }
+    const auto& left  = last_directory_[static_cast<size_t>(left_index)];
+    const auto& right = last_directory_[static_cast<size_t>(right_index)];
+    if (left.status != PE::PhysicalCameraCandidateStatus::Ready
+        || right.status != PE::PhysicalCameraCandidateStatus::Ready
+        || left.url_template.empty() || right.url_template.empty()) {
+        stereo_ui_status_ = "Both stereo selections must be Ready camera sources.";
+        LOG_ERROR(kPanelLogTag, stereo_ui_status_);
+        return;
+    }
+    float maximum_skew_ms = 0.0f;
+    if (!TryParseFloat(stereo_skew_buffer_, maximum_skew_ms)) {
+        stereo_ui_status_ = "Maximum stereo skew is not a valid number.";
+        LOG_ERROR(kPanelLogTag, stereo_ui_status_);
+        return;
+    }
+
+    PE::PhysicalStereoCaptureConfig config;
+    config.left_url             = left.url_template;
+    config.left_label           = left.label;
+    config.right_url            = right.url_template;
+    config.right_label          = right.label;
+    config.maximum_pair_skew_ms = static_cast<double>(maximum_skew_ms);
+    try {
+        PE::RequestOpenPhysicalStereoCameraPair(config);
+        stereo_last_seen_pair_counter_ = 0;
+        have_any_stereo_pair_ = false;
+        stereo_ui_status_ = "Stereo pair opening.";
+    } catch (const std::exception& e) {
+        stereo_ui_status_ = std::string("Stereo pair open failed: ") + e.what();
+        LOG_ERROR(kPanelLogTag, stereo_ui_status_);
+    }
+}
+
+void UIPhysicalEnvironmentPanel::HandleStereoDisconnectClicked() {
+    PE::RequestClosePhysicalStereoCameraPair();
+    stereo_last_seen_pair_counter_ = 0;
+    have_any_stereo_pair_ = false;
+    stereo_ui_status_ = "Stereo pair disconnected.";
 }
 
 void UIPhysicalEnvironmentPanel::SyncSignalSettingsControlsFromSubsystem() {
@@ -720,44 +818,50 @@ void UIPhysicalEnvironmentPanel::update(const InputState& input, float dt) {
     // ── Tab bar ──
     const float tab_y = position.y + titleBarHeight + 4.0f;
     if (tab_camera_btn_) {
-        tab_camera_btn_->setSize(90.0f, kTabBarHeight - 4.0f);
+        tab_camera_btn_->setSize(78.0f, kTabBarHeight - 4.0f);
         tab_camera_btn_->setPosition(position.x + kTabBarPad, tab_y);
         tab_camera_btn_->update(input, dt);
     }
+    if (tab_stereo_btn_) {
+        tab_stereo_btn_->setSize(78.0f, kTabBarHeight - 4.0f);
+        tab_stereo_btn_->setPosition(position.x + kTabBarPad + 84.0f, tab_y);
+        tab_stereo_btn_->update(input, dt);
+    }
     if (tab_calibration_btn_) {
-        tab_calibration_btn_->setSize(110.0f, kTabBarHeight - 4.0f);
-        tab_calibration_btn_->setPosition(position.x + kTabBarPad + 96.0f, tab_y);
+        tab_calibration_btn_->setSize(98.0f, kTabBarHeight - 4.0f);
+        tab_calibration_btn_->setPosition(position.x + kTabBarPad + 168.0f, tab_y);
         tab_calibration_btn_->update(input, dt);
     }
     if (tab_perception_btn_) {
-        tab_perception_btn_->setSize(105.0f, kTabBarHeight - 4.0f);
-        tab_perception_btn_->setPosition(position.x + kTabBarPad + 212.0f, tab_y);
+        tab_perception_btn_->setSize(96.0f, kTabBarHeight - 4.0f);
+        tab_perception_btn_->setPosition(position.x + kTabBarPad + 272.0f, tab_y);
         tab_perception_btn_->update(input, dt);
     }
     if (tab_interaction_btn_) {
-        tab_interaction_btn_->setSize(110.0f, kTabBarHeight - 4.0f);
-        tab_interaction_btn_->setPosition(position.x + kTabBarPad + 323.0f, tab_y);
+        tab_interaction_btn_->setSize(98.0f, kTabBarHeight - 4.0f);
+        tab_interaction_btn_->setPosition(position.x + kTabBarPad + 374.0f, tab_y);
         tab_interaction_btn_->update(input, dt);
     }
     if (tab_spatial_btn_) {
-        tab_spatial_btn_->setSize(90.0f, kTabBarHeight - 4.0f);
-        tab_spatial_btn_->setPosition(position.x + kTabBarPad + 439.0f, tab_y);
+        tab_spatial_btn_->setSize(76.0f, kTabBarHeight - 4.0f);
+        tab_spatial_btn_->setPosition(position.x + kTabBarPad + 478.0f, tab_y);
         tab_spatial_btn_->update(input, dt);
     }
     if (tab_localization_btn_) {
-        tab_localization_btn_->setSize(115.0f, kTabBarHeight - 4.0f);
-        tab_localization_btn_->setPosition(position.x + kTabBarPad + 535.0f, tab_y);
+        tab_localization_btn_->setSize(108.0f, kTabBarHeight - 4.0f);
+        tab_localization_btn_->setPosition(position.x + kTabBarPad + 560.0f, tab_y);
         tab_localization_btn_->update(input, dt);
     }
     if (tab_world_btn_) {
-        tab_world_btn_->setSize(85.0f, kTabBarHeight - 4.0f);
-        tab_world_btn_->setPosition(position.x + kTabBarPad + 656.0f, tab_y);
+        tab_world_btn_->setSize(72.0f, kTabBarHeight - 4.0f);
+        tab_world_btn_->setPosition(position.x + kTabBarPad + 674.0f, tab_y);
         tab_world_btn_->update(input, dt);
     }
 
     // ── Tab content ──
     switch (active_tab_) {
         case Tab::Camera:       UpdateCameraTab(input, dt);       break;
+        case Tab::Stereo:       UpdateStereoTab(input, dt);       break;
         case Tab::Calibration:  UpdateCalibrationTab(input, dt);  break;
         case Tab::Perception:   UpdatePerceptionTab(input, dt);   break;
         case Tab::Interaction:  UpdateInteractionTab(input, dt);  break;
@@ -836,6 +940,46 @@ void UIPhysicalEnvironmentPanel::UpdateCameraTab(const InputState& input, float 
     place_btn(signal_quality_gate_btn_, x0 + 306.0f, settings_y3, 120.0f);
 
     (void)settings_y4;
+}
+
+void UIPhysicalEnvironmentPanel::UpdateStereoTab(const InputState& input, float dt) {
+    stereo_capture_status_ = PE::GetPhysicalStereoCaptureStatusSnapshot();
+    try {
+        if (PE::PhysicalStereoFrameBus::Instance().PullLatestPhysicalStereoFrameView(
+                stereo_frame_view_, stereo_last_seen_pair_counter_)) {
+            have_any_stereo_pair_ = true;
+        }
+    } catch (const std::exception& e) {
+        stereo_ui_status_ = std::string("Stereo frame pull failed: ") + e.what();
+        LOG_ERROR(kPanelLogTag, stereo_ui_status_);
+    }
+
+    const float content_top = position.y + titleBarHeight + kTabBarHeight + 8.0f;
+    if (stereo_left_dropdown_) {
+        stereo_left_dropdown_->setPosition(position.x + 16.0f, content_top);
+        stereo_left_dropdown_->setSize(size.x - 32.0f, 30.0f);
+        stereo_left_dropdown_->update(input, dt);
+    }
+    if (stereo_right_dropdown_) {
+        stereo_right_dropdown_->setPosition(position.x + 16.0f, content_top + 38.0f);
+        stereo_right_dropdown_->setSize(size.x - 32.0f, 30.0f);
+        stereo_right_dropdown_->update(input, dt);
+    }
+    if (stereo_skew_box_) {
+        stereo_skew_box_->setPosition(position.x + 136.0f, content_top + 80.0f);
+        stereo_skew_box_->setSize(100.0f, 26.0f);
+        stereo_skew_box_->update(input, dt);
+    }
+    if (stereo_connect_button_) {
+        stereo_connect_button_->setPosition(position.x + 250.0f, content_top + 80.0f);
+        stereo_connect_button_->setSize(130.0f, 26.0f);
+        stereo_connect_button_->update(input, dt);
+    }
+    if (stereo_disconnect_button_) {
+        stereo_disconnect_button_->setPosition(position.x + 388.0f, content_top + 80.0f);
+        stereo_disconnect_button_->setSize(150.0f, 26.0f);
+        stereo_disconnect_button_->update(input, dt);
+    }
 }
 
 void UIPhysicalEnvironmentPanel::UpdateCalibrationTab(const InputState& input, float dt) {
@@ -975,6 +1119,7 @@ bool UIPhysicalEnvironmentPanel::drawOverlay(OverlayRenderer& renderer) {
 
     // ── Tab buttons ──
     if (tab_camera_btn_)       tab_camera_btn_->drawOverlay(renderer, position);
+    if (tab_stereo_btn_)       tab_stereo_btn_->drawOverlay(renderer, position);
     if (tab_calibration_btn_)  tab_calibration_btn_->drawOverlay(renderer, position);
     if (tab_perception_btn_)   tab_perception_btn_->drawOverlay(renderer, position);
     if (tab_interaction_btn_)  tab_interaction_btn_->drawOverlay(renderer, position);
@@ -988,19 +1133,21 @@ bool UIPhysicalEnvironmentPanel::drawOverlay(OverlayRenderer& renderer) {
         float ix = 0.0f, iw = 0.0f;
         switch (active_tab_) {
             case Tab::Camera:
-                ix = position.x + kTabBarPad;          iw = 90.0f; break;
+                ix = position.x + kTabBarPad;          iw = 78.0f; break;
+            case Tab::Stereo:
+                ix = position.x + kTabBarPad + 84.0f;  iw = 78.0f; break;
             case Tab::Calibration:
-                ix = position.x + kTabBarPad + 96.0f;  iw = 110.0f; break;
+                ix = position.x + kTabBarPad + 168.0f; iw = 98.0f; break;
             case Tab::Perception:
-                ix = position.x + kTabBarPad + 212.0f; iw = 105.0f; break;
+                ix = position.x + kTabBarPad + 272.0f; iw = 96.0f; break;
             case Tab::Interaction:
-                ix = position.x + kTabBarPad + 323.0f; iw = 110.0f; break;
+                ix = position.x + kTabBarPad + 374.0f; iw = 98.0f; break;
             case Tab::Spatial:
-                ix = position.x + kTabBarPad + 439.0f; iw = 90.0f; break;
+                ix = position.x + kTabBarPad + 478.0f; iw = 76.0f; break;
             case Tab::Localization:
-                ix = position.x + kTabBarPad + 535.0f; iw = 115.0f; break;
+                ix = position.x + kTabBarPad + 560.0f; iw = 108.0f; break;
             case Tab::World:
-                ix = position.x + kTabBarPad + 656.0f; iw = 85.0f; break;
+                ix = position.x + kTabBarPad + 674.0f; iw = 72.0f; break;
         }
         renderer.drawRect({ix, y}, {iw, 2.0f}, UITheme::Colors::Primary);
     }
@@ -1013,6 +1160,7 @@ bool UIPhysicalEnvironmentPanel::drawOverlay(OverlayRenderer& renderer) {
 
     switch (active_tab_) {
         case Tab::Camera:       DrawCameraTab(renderer);       break;
+        case Tab::Stereo:       DrawStereoTab(renderer);       break;
         case Tab::Calibration:  DrawCalibrationTab(renderer);  break;
         case Tab::Perception:   DrawPerceptionTab(renderer);   break;
         case Tab::Interaction:  DrawInteractionTab(renderer);  break;
@@ -1157,6 +1305,98 @@ void UIPhysicalEnvironmentPanel::DrawCameraTab(OverlayRenderer& renderer) {
     }
 }
 
+void UIPhysicalEnvironmentPanel::DrawStereoTab(OverlayRenderer& renderer) {
+    const float pad = 16.0f;
+    const float gap = 10.0f;
+    const float content_top = position.y + titleBarHeight + kTabBarHeight;
+    const float frame_y = content_top + 126.0f;
+    const float frame_w = (size.x - pad * 2.0f - gap) * 0.5f;
+    const float frame_h = std::max(
+        80.0f, size.y - (frame_y - position.y) - 104.0f);
+    const float left_x  = position.x + pad;
+    const float right_x = left_x + frame_w + gap;
+
+    renderer.drawText({position.x + 16.0f, content_top + 88.0f},
+                      "Max skew (ms)", UITheme::Colors::TextSecondary);
+    renderer.drawText({left_x, frame_y - 18.0f}, "LEFT / PRIMARY",
+                      UITheme::Colors::TextPrimary);
+    renderer.drawText({right_x, frame_y - 18.0f}, "RIGHT",
+                      UITheme::Colors::TextPrimary);
+
+    renderer.drawRect({left_x - 1.0f, frame_y - 1.0f},
+                      {frame_w + 2.0f, frame_h + 2.0f}, UITheme::Colors::DividerLine);
+    renderer.drawRect({right_x - 1.0f, frame_y - 1.0f},
+                      {frame_w + 2.0f, frame_h + 2.0f}, UITheme::Colors::DividerLine);
+    renderer.drawRect({left_x, frame_y}, {frame_w, frame_h}, UITheme::Colors::Background);
+    renderer.drawRect({right_x, frame_y}, {frame_w, frame_h}, UITheme::Colors::Background);
+
+    if (have_any_stereo_pair_
+        && !stereo_frame_view_.left_image.empty()
+        && !stereo_frame_view_.right_image.empty()) {
+        DrawBgrFrameIntoOverlay(renderer, stereo_frame_view_.left_image,
+                                stereo_frame_view_.pair_counter, false,
+                                left_x, frame_y, frame_w, frame_h,
+                                stereo_left_blit_cache_);
+        DrawBgrFrameIntoOverlay(renderer, stereo_frame_view_.right_image,
+                                stereo_frame_view_.pair_counter, false,
+                                right_x, frame_y, frame_w, frame_h,
+                                stereo_right_blit_cache_);
+    } else {
+        renderer.drawText({left_x + 10.0f, frame_y + 10.0f},
+                          "No synchronized pair published.",
+                          UITheme::Colors::TextSecondary);
+        renderer.drawText({right_x + 10.0f, frame_y + 10.0f},
+                          "No synchronized pair published.",
+                          UITheme::Colors::TextSecondary);
+    }
+
+    const float status_y = frame_y + frame_h + 8.0f;
+    const bool streaming = PE::IsPhysicalStereoCaptureActive();
+    renderer.drawText(
+        {left_x, status_y},
+        std::string("Stereo: ") + (streaming ? "STREAMING" : "not streaming")
+        + "  |  left=" + FormatCameraStreamState(stereo_capture_status_.left_state)
+        + "  right=" + FormatCameraStreamState(stereo_capture_status_.right_state),
+        streaming ? UITheme::Colors::TextPrimary : UITheme::Colors::Warning);
+    {
+        std::ostringstream ss;
+        ss << "Pairs=" << stereo_capture_status_.synchronized_pair_count
+           << "  signed_skew=" << FormatDouble(stereo_capture_status_.last_signed_skew_ms, 3) << "ms"
+           << "  limit=" << FormatDouble(stereo_capture_status_.maximum_pair_skew_ms, 1) << "ms";
+        renderer.drawText({left_x, status_y + 18.0f}, ss.str(), UITheme::Colors::TextSecondary);
+    }
+    {
+        std::ostringstream ss;
+        ss << "Left: frame=" << stereo_capture_status_.left_frame_counter
+           << " fps=" << FormatDouble(stereo_capture_status_.left_fps, 1)
+           << " rejected=" << stereo_capture_status_.rejected_left_count
+           << "  |  Right: frame=" << stereo_capture_status_.right_frame_counter
+           << " fps=" << FormatDouble(stereo_capture_status_.right_fps, 1)
+           << " rejected=" << stereo_capture_status_.rejected_right_count;
+        renderer.drawText({left_x, status_y + 36.0f}, ss.str(), UITheme::Colors::TextSecondary);
+    }
+    if (!stereo_capture_status_.last_error_reason.empty()) {
+        renderer.drawText({left_x, status_y + 54.0f},
+                          "Error: " + stereo_capture_status_.last_error_reason,
+                          UITheme::Colors::Danger);
+    } else if (!stereo_ui_status_.empty()) {
+        renderer.drawText({left_x, status_y + 54.0f}, stereo_ui_status_,
+                          UITheme::Colors::TextSecondary);
+    }
+
+    if (stereo_skew_box_) stereo_skew_box_->drawOverlay(renderer, position);
+    if (stereo_connect_button_) stereo_connect_button_->drawOverlay(renderer, position);
+    if (stereo_disconnect_button_) stereo_disconnect_button_->drawOverlay(renderer, position);
+    if (stereo_left_dropdown_) stereo_left_dropdown_->drawOverlay(renderer, position);
+    if (stereo_right_dropdown_) stereo_right_dropdown_->drawOverlay(renderer, position);
+    if (stereo_left_dropdown_ && stereo_left_dropdown_->isExpanded()) {
+        stereo_left_dropdown_->drawExpandedList(renderer, position);
+    }
+    if (stereo_right_dropdown_ && stereo_right_dropdown_->isExpanded()) {
+        stereo_right_dropdown_->drawExpandedList(renderer, position);
+    }
+}
+
 void UIPhysicalEnvironmentPanel::DrawCalibrationTab(OverlayRenderer& renderer) {
     const float pad        = 12.0f;
     const float top_block  = 70.0f;   // two rows of controls
@@ -1208,6 +1448,7 @@ void UIPhysicalEnvironmentPanel::DrawCalibrationTab(OverlayRenderer& renderer) {
             ss << "(no frame on bus — connect a source on the Camera tab)";
         } else {
             ss << cal_last_status_.last_frame_width << "x" << cal_last_status_.last_frame_height
+               << "  |  camera=" << cal_last_status_.active_source_label
                << "  |  detector=" << (cal_last_status_.last_pattern_found
                                           ? cal_last_status_.last_detector_used
                                           : std::string("(none)"))

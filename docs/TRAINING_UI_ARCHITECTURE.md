@@ -1,5 +1,10 @@
 # GRIM-text Training UI - Real-Time Progress Tracking
 
+> Historical architecture note. The GRIM UI no longer launches or monitors
+> local training. The former Training tab is now the per-model `.grimcfg`
+> creator documented in `ui/UI_TRAINING_PANEL_README.md`; HPC training is
+> managed through the SSH workflow.
+
 ## Overview
 Complete real-time training monitoring system with **zero coupling** between GRIM.exe and GRIM-text training backend.
 

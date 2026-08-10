@@ -9,6 +9,7 @@
 #include "perception/physical/PhysicalCameraCalibrator.hpp"
 #include "perception/physical/PhysicalFrameConditioner.hpp"
 #include "perception/physical/PhysicalFrameBus.hpp"
+#include "perception/physical/PhysicalStereoFrameBus.hpp"
 #include "perception/physical/PhysicalPerceptionPrimitiveBus.hpp"
 #include "perception/physical/PhysicalPerceptionPrimitivesLoop.hpp"
 #include "perception/physical/PhysicalHandGestureBus.hpp"
@@ -47,12 +48,13 @@ class UIPhysicalEnvironmentPanel : public UIPanel {
 public:
     enum class Tab : uint8_t {
         Camera       = 0,
-        Calibration  = 1,
-        Perception   = 2,
-        Interaction  = 3,
-        Spatial      = 4,
-        Localization = 5,
-        World        = 6
+        Stereo       = 1,
+        Calibration  = 2,
+        Perception   = 3,
+        Interaction  = 4,
+        Spatial      = 5,
+        Localization = 6,
+        World        = 7
     };
 
     UIPhysicalEnvironmentPanel();
@@ -139,6 +141,26 @@ private:
     GRIM::Perception::Physical::PhysicalSignalConditioningStatus   signal_status_;
     bool                        camera_show_model_signal_ = true;
 
+    // ── Stereo capture tab ──
+    void HandleStereoConnectClicked();
+    void HandleStereoDisconnectClicked();
+    void UpdateStereoTab(const InputState& input, float dt);
+    void DrawStereoTab(OverlayRenderer& renderer);
+
+    std::shared_ptr<UIDropdown> stereo_left_dropdown_;
+    std::shared_ptr<UIDropdown> stereo_right_dropdown_;
+    std::shared_ptr<UIInputBox> stereo_skew_box_;
+    std::shared_ptr<UIButton>   stereo_connect_button_;
+    std::shared_ptr<UIButton>   stereo_disconnect_button_;
+    std::string                 stereo_skew_buffer_ = "15.0";
+    std::string                 stereo_ui_status_;
+    GRIM::Perception::Physical::PhysicalStereoCaptureStatus stereo_capture_status_;
+    GRIM::Perception::Physical::PhysicalStereoFrameBus::FrameView stereo_frame_view_;
+    uint64_t                    stereo_last_seen_pair_counter_ = 0;
+    bool                        have_any_stereo_pair_ = false;
+    PreviewBlitCache            stereo_left_blit_cache_;
+    PreviewBlitCache            stereo_right_blit_cache_;
+
     // ── Calibration tab ──
     void HandleStartCaptureClicked();
     void HandleStopCaptureClicked();
@@ -181,6 +203,7 @@ private:
 
     // ── Tab bar ──
     std::shared_ptr<UIButton>   tab_camera_btn_;
+    std::shared_ptr<UIButton>   tab_stereo_btn_;
     std::shared_ptr<UIButton>   tab_calibration_btn_;
     std::shared_ptr<UIButton>   tab_perception_btn_;
     std::shared_ptr<UIButton>   tab_interaction_btn_;

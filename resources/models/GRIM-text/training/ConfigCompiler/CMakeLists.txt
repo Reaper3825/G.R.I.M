@@ -41,6 +41,29 @@ add_custom_target(generate_grim_compiled_hyperparameters_schema
     DEPENDS ${GRIM_COMPILED_HYPERPARAMETERS_GENERATED_HEADER}
 )
 
+# Low-level runtime reader for the compiler's immutable model artifact. Keeping
+# this in the CXX-only compiler project lets TrainingLoop consume the same wire
+# contract without adding a CUDA or trainer dependency to configuration loading.
+add_library(grim_compiled_model_config STATIC
+    ../../Shared/ModelConfig/CompiledModelConfig.cpp
+    ../../Shared/ModelConfig/CompiledModelConfig.hpp
+    ${GRIM_COMPILED_HYPERPARAMETERS_GENERATED_HEADER}
+)
+add_dependencies(grim_compiled_model_config
+    generate_grim_compiled_hyperparameters_schema
+)
+target_include_directories(grim_compiled_model_config
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../Shared/ModelConfig
+    PRIVATE
+        ${GRIM_COMPILED_HYPERPARAMETERS_GENERATED_DIR}
+)
+target_link_libraries(grim_compiled_model_config PUBLIC
+    flatbuffers::flatbuffers
+    nlohmann_json::nlohmann_json
+)
+target_compile_features(grim_compiled_model_config PUBLIC cxx_std_17)
+
 add_executable(compile_model_config
     compile_model_config.cpp
     ${GRIM_COMPILED_HYPERPARAMETERS_GENERATED_HEADER}

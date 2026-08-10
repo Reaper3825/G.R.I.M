@@ -9,9 +9,9 @@ namespace GRIM { namespace Perception { namespace Physical {
 // ─────────────────────────────────────────────────────────────────────────────
 //  PhysicalCalibrationStore
 //
-//  On-disk persistence of intrinsic camera calibration. Single canonical
-//  location under the GRIM root: <GRIM_ROOT>/data/perception/physical/
-//  camera_calibration.json
+//  On-disk persistence of intrinsic camera calibration. Each camera and
+//  capture resolution has a distinct profile under:
+//  <GRIM_ROOT>/data/perception/physical/camera_calibrations/
 //
 //  The format is OpenCV FileStorage (JSON dialect). It captures camera
 //  matrix K, distortion coefficients, the image size that was calibrated
@@ -41,10 +41,12 @@ struct PhysicalCalibrationData {
     std::string   source_label_at_capture;
 };
 
-// Returns the canonical absolute path used by Save/Load. Creates the parent
-// directory chain if it does not yet exist (so that Save can succeed on a
-// fresh checkout). Throws on filesystem errors.
-std::string GetPhysicalCalibrationStorePath();
+// Returns the canonical absolute path for one camera and capture resolution.
+// Creates the parent directory chain if needed. Source URL is the stable
+// camera identity used by the capture directory (for example device:0).
+// Throws when identity/size is invalid or on filesystem errors.
+std::string GetPhysicalCalibrationStorePath(const std::string& source_url,
+                                            const cv::Size&    image_size);
 
 // Persist `data` to `path`. Throws on validation failure (e.g. K is wrong
 // shape) or I/O failure.

@@ -37,6 +37,8 @@ publishes exactly one bus snapshot, and downstream stages only read buses.
 | `PhysicalCameraDirectory.*` | Enumerates selectable camera/NIC/hub sources. |
 | `PhysicalCameraSource.*` | Describes one selectable source row. |
 | `PhysicalCameraStream.*` | Worker-threaded `cv::VideoCapture` wrapper. |
+| `PhysicalStereoCapture.*` | Owns two camera streams, drains bounded timestamped frame queues, and accepts pairs within an explicit skew limit. |
+| `PhysicalStereoFrameBus.*` | Immutable latest synchronized left/right frame packet bus for stereo consumers and UI diagnostics. |
 | `PhysicalFrameConditioner.*` | Quality gate, stabilization/denoise/exposure/deblur/resize/color conversion, scene-stability timing. |
 | `PhysicalFrameBus.*` | Single-producer/multi-consumer latest-frame packet bus. |
 | `PhysicalNicScan.hpp`, `PhysicalNicScan_win32.cpp`, `PhysicalNicScan_macos.mm`, `PhysicalNicScan_linux.cpp` | Platform NIC enumeration. Only the host implementation is compiled. |
@@ -53,16 +55,38 @@ Consumers MUST treat `FrameView::raw_image`, `FrameView::model_image`, and
 `FrameView::image` as read-only. If a consumer needs in-place OpenCV mutation,
 it must `clone()` into a local scratch image first.
 
+### Stereo capture milestone
+
+`PhysicalCameraStream` retains a bounded queue of timestamped decoded frames in
+addition to its existing latest-frame slot. `PhysicalStereoCapture` owns an
+explicit left/right stream pair and rejects the older side until the two queue
+heads are within `maximum_pair_skew_ms`. Accepted pairs are published on
+`PhysicalStereoFrameBus`; rejection counters and signed skew are visible on the
+Physical Environment panel's Stereo tab. Positive skew means the left frame was
+captured later than the right frame.
+
+Single-camera and stereo capture are mutually exclusive so local camera devices
+are never opened by both paths. This milestone does not rectify images or
+calculate disparity yet.
+
 ## Stage 1 Auxiliary — Calibration
 
 | Files | Responsibility |
 |---|---|
 | `PhysicalCameraCalibrator.*` | Pulls Stage-1 frames, detects calibration patterns, computes intrinsics/distortion. |
 | `PhysicalCalibrationPattern.*` | Pattern geometry + lighting-robust detection helpers. |
-| `PhysicalCalibrationStore.*` | Disk persistence for calibration results. |
+| `PhysicalCalibrationStore.*` | Per-camera, per-resolution disk persistence for intrinsic calibration results. |
 
 Calibration is an auxiliary Stage-1 consumer and a Stage-5 prerequisite; it is
 not part of the Stage-2 inference path.
+
+Intrinsic profiles are stored under
+`data/perception/physical/camera_calibrations/`. The profile key is a stable
+hash of the capture source URL and raw image resolution. Selecting a different
+camera or resolution clears incompatible in-memory samples and loads only the
+matching profile. Stored source provenance and resolution are validated again
+after loading; mismatches fail loudly instead of applying another camera's
+intrinsics.
 
 ## Stage 2 — Perception Primitives
 

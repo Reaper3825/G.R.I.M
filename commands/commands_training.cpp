@@ -10,27 +10,27 @@ namespace GRIM {
 namespace Training {
 
 void startTraining() {
-    LOG_DEBUG("Training", "start_training command invoked");
+    LOG_DEBUG("Training", "Local training is disabled; opening model config creator");
     
     if (!g_trainingPanel) {
         LOG_ERROR("Training", "Training panel not initialized");
         return;
     }
     
-    // Trigger training start through the panel
-    g_trainingPanel->startTrainingSession();
+    g_trainingPanel->setView(TrainingPanelTab::ModelConfig);
+    g_trainingPanel->setVisible(true);
 }
 
 void stopTraining() {
-    LOG_DEBUG("Training", "stop_training command invoked");
+    LOG_DEBUG("Training", "Local training controls are not available in the HPC workflow");
     
     if (!g_trainingPanel) {
         LOG_ERROR("Training", "Training panel not initialized");
         return;
     }
     
-    // Trigger training stop through the panel
-    g_trainingPanel->stopTrainingSession();
+    g_trainingPanel->setView(TrainingPanelTab::ModelConfig);
+    g_trainingPanel->setVisible(true);
 }
 
 } // namespace Training

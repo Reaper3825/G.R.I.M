@@ -2,6 +2,7 @@
 
 #include "PhysicalCameraSource.hpp"
 #include "PhysicalFrameConditioner.hpp"
+#include "PhysicalStereoCapture.hpp"
 
 #include <string>
 #include <vector>
@@ -50,6 +51,8 @@ bool                              IsPhysicalCameraStreamActive();
 bool                              IsPhysicalCameraStreamFailed();
 double                            GetActiveStreamFps();
 uint64_t                          GetActiveStreamFrameCounter();
+PhysicalStereoCaptureStatus       GetPhysicalStereoCaptureStatusSnapshot();
+bool                              IsPhysicalStereoCaptureActive();
 
 PhysicalSignalConditioningConfig  GetPhysicalSignalConditioningConfigSnapshot();
 PhysicalSignalConditioningStatus  GetPhysicalSignalConditioningStatusSnapshot();
@@ -67,6 +70,11 @@ void RequestOpenPhysicalCameraSource(const std::string& url,
 
 // Close the active stream and clear the frame bus.
 void RequestClosePhysicalCameraSource();
+
+// Opens an explicit two-camera capture mode. Any active single-camera stream
+// is closed first so a local device is never opened by both modes at once.
+void RequestOpenPhysicalStereoCameraPair(const PhysicalStereoCaptureConfig& config);
+void RequestClosePhysicalStereoCameraPair();
 
 // Replaces the full config atomically. Throws on invalid config.
 void RequestConfigurePhysicalSignalConditioning(const PhysicalSignalConditioningConfig& config);
