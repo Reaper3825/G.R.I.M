@@ -550,14 +550,12 @@ add_executable(train_gpu
     ../Phases/Startup/Capacity/MemorySnapshot.cu
     ../Phases/Startup/Capacity/MemorySnapshot.hpp
     ../Phases/Startup/Data/DataInfo.hpp
-    ../Phases/Startup/Model/LayerAssembly.cu
-    ../Phases/Startup/Model/LayerAssembly.hpp
     ../Phases/Startup/Model/ModelAllocationState.cu
     ../Phases/Startup/Model/ModelAllocationState.hpp
     ../Phases/Startup/CheckpointLoad.cu
     ../Phases/Startup/CheckpointLoad.hpp
-    ../Phases/Startup/Resume/ResumeState.cu
-    ../Phases/Startup/Resume/ResumeState.hpp
+    ../Phases/Startup/OptimizerReady.cu
+    ../Phases/Startup/OptimizerReady.hpp
     ../Phases/Startup/Epoch/EpochPlan.cu
     ../Phases/Startup/Epoch/EpochPlan.hpp
     ../Phases/Startup/Batching/PlannedBatches.cu

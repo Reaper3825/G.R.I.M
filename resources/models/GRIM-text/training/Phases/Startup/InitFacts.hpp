@@ -39,7 +39,7 @@ namespace GRIMText::Training {
 //         separately from lm buffer (would double-step the tied weights)
 //
 // Pre-conditions:
-//   - ctx.model is fully constructed and parameter-group registration has run
+//   - GPU topology is fully constructed and parameter-group registration has run
 void verifyAndDumpInitFacts(TrainingContext& ctx);
 
 } // namespace GRIMText::Training

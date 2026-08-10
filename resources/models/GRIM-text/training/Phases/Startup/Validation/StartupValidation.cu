@@ -52,9 +52,10 @@ void validateStartupOrThrow(const StartupValidationInputs& inputs) {
     require(static_cast<int>(ctx.data.vocab_size) == GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "vocab_size"),
             "SequenceData.vocab_size does not match config.vocab_size");
 
-    require(ctx.model != nullptr, "model is null");
-    require(ctx.model_allocation.model_max_tokens_per_batch == fixed_shape.max_tokens_per_batch,
-            "model allocation token mirror does not match trainingFixedShapeHP");
+        require(ctx.gpu_model.gpu_encoder != nullptr, "GPU encoder is null");
+        require(ctx.training_state != nullptr, "training state owner is null");
+        require(ctx.training_state->initialized, "training runtime is not initialized");
+        (void)ctx.parameter_registry.requireParameterGroups("validateStartupOrThrow");
 
     require(ctx.telemetry.lattice != nullptr, "telemetry lattice is null");
     require(ctx.telemetry.csv_logger != nullptr, "telemetry CSV logger is null");
@@ -73,8 +74,6 @@ void validateStartupOrThrow(const StartupValidationInputs& inputs) {
         require(ctx.epoch_plan.total_batches == static_cast<int>(ctx.train_payloads.size()),
                 "EpochPlan total_batches does not match authored train payload count");
     }
-    require(ctx.epoch_plan.estimated_total_steps == ctx.estimated_total_steps,
-            "EpochPlan estimated_total_steps does not match TrainingContext");
     require(ctx.epoch_plan.estimated_total_steps > 0, "estimated_total_steps <= 0");
     require(ctx.lr_schedule.has_value(), "lr_schedule is not initialized");
     require(static_cast<int>(ctx.epoch_batch_order.size()) == schedule_hp.epochs,

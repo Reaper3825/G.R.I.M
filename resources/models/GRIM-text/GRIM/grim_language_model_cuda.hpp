@@ -1,4 +1,3 @@
-//DEAD MARKED FOR REMOVAL
 //======================================================//
 //  grim_language_model_cuda.hpp
 //======================================================//
@@ -44,29 +43,6 @@
 #endif
 
 namespace GRIM {
-class LanguageModel;
-namespace PBM {
-class PBMStateOwner;
-}
-}
-
-namespace ParameterRegistry {
-struct StartupParameterRegistry;
-}
-
-namespace GRIMText {
-namespace Training {
-namespace Startup {
-void initializeCuBLASHandle(::GRIM::TrainingState& training_state);
-void initializePBM(const ::GRIM::Config::AiConfigSnapshot& model_cfg, ::GRIM::TrainingState& training_state, ::GRIM::PBM::PBMStateOwner& pbm_owner);
-void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg, ::GRIM::TrainingState& training_state, const ::GRIM::PBM::PBMStateOwner& pbm_owner, GpuModelState& gpu_model_state, ::ParameterRegistry::StartupParameterRegistry& parameter_registry, std::uint64_t weight_init_seed);
-void initializeTrainingRuntime(::GRIM::TrainingState& training_state, const ::GRIM::PBM::PBMStateOwner& pbm_owner);
-void initializeInferenceRuntime(const ::GRIM::Config::AiConfigSnapshot& model_cfg, ::GRIM::TrainingState& training_state, ::GRIM::GenerationState& generation_state, const ::GRIM::PBM::PBMStateOwner& pbm_owner, const GpuModelState& gpu_model_state, const ::ParameterRegistry::StartupParameterRegistry& parameter_registry);
-} // namespace Startup
-} // namespace Training
-} // namespace GRIMText
-
-namespace GRIM {
 
 //======================================================//
 //  Forward Declarations
@@ -77,51 +53,7 @@ namespace GRIM {
 // second alias owner in this header.
 class EncodingLayer;
 
-// GPUGrimEncoder is defined later in this file but used by LanguageModel class
 class GPUGrimEncoder;
-
-//======================================================//
-//  LanguageModel Class Declaration
-//======================================================//
-
-class LanguageModel {
-public:
-    // Constructor / Destructor
-    explicit LanguageModel(const Config::AiConfigSnapshot& config)
-        : config_(config)
-    {
-        // Startup owns all CUDA-side assembly sequencing. The model constructor
-        // only captures the finalized config and fail-loud validates the CUDA
-        // execution contract.
-#ifdef USE_CUDA
-        if (!HyperParameters::snapshotTrainingConfigField<bool>(config_, "use_gpu")) {
-            throw std::runtime_error("LanguageModel requires config.use_gpu=true when built with CUDA");
-        }
-#endif
-    }
-    ~LanguageModel() = default;
-
-#ifdef USE_CUDA
-    // Startup-owned GPU topology binding. LanguageModel borrows this durable
-    // state; it does not own the assembled encoder/layer objects.
-    void bindGpuModelState(GRIMText::Training::Startup::GpuModelState& gpu_model_state) noexcept {
-        gpu_model_state_ = &gpu_model_state;
-    }
-
-#endif
-
-    // Config access
-    const Config::AiConfigSnapshot& getConfig() const { return config_; }
-    
-private:
-    Config::AiConfigSnapshot config_;
-    
-#ifdef USE_CUDA
-    // Borrowed startup-owned durable GPU model topology.
-    GRIMText::Training::Startup::GpuModelState* gpu_model_state_ = nullptr;
-#endif
-    
-};
 
 //======================================================//
 //  GPU Classes (Forward Declarations Only)

@@ -591,7 +591,7 @@ struct GradientVerificationState {
  * raw float* here.
  * 
  * OWNERSHIP: ParameterGroup does NOT own the Tensor or moment memory.
- * The TrainingState/LanguageModel that creates it owns the underlying buffers.
+ * The creating durable state owner owns the underlying buffers.
  * 
  * WEIGHT TYING: When tie_embeddings=true, embedding and LM head share
  * the same Tensor data/grad.  The optimizer must NOT update aliased

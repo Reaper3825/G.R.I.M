@@ -52,11 +52,6 @@ void TelemetryReady(TrainingContext& ctx) {
         throw std::runtime_error("FATAL: trainingFixedShapeHP is invalid (token_budget=" +
                                  std::to_string(token_budget) + " seq_cap=" + std::to_string(seq_cap) + ")");
     }
-    if (static_cast<uint32_t>(ctx.model_allocation.model_max_tokens_per_batch) != token_budget) {
-        throw std::runtime_error("FATAL: model max_tokens_per_batch does not match trainingFixedShapeHP (model=" +
-                                 std::to_string(ctx.model_allocation.model_max_tokens_per_batch) +
-                                 " grouping=" + std::to_string(token_budget) + ")");
-    }
     ctx.telemetry.control_config.reference_tokens = static_cast<float>(token_budget);
     ctx.telemetry.control_config.reference_seq_len = static_cast<float>(seq_cap);
     ctx.telemetry.control_config.spike_mild_threshold = control_hp.spike_mild_threshold;

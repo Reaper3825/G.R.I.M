@@ -87,7 +87,7 @@ void logDiagnosticSample(TrainingContext& ctx,
     }
     state.last_sample_step = optimizer_step;
 
-    if (!ctx.model || !ctx.logging.logger) {
+    if (!ctx.logging.logger) {
         return;
     }
     // Drain deferred CUDA errors from training before launching inference kernels.

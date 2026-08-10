@@ -159,8 +159,8 @@ void launchAdamWKernel(ParameterGroup& group,
 //  launchAdamWStep - AdamW Optimizer Step (all groups)
 //======================================================//
 //
-//  Moved from LanguageModel::updateWeights() to break the
-//  coupling between the model class and optimizer orchestration.
+//  This optimizer-owned update boundary keeps optimizer orchestration
+//  independent from model topology.
 //  StartupParameterRegistry owns the parameter groups (via buildParameterGroups()),
 //  but stepping the optimizer is training infrastructure, not model logic.
 //

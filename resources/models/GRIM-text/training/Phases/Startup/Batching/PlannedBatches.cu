@@ -125,11 +125,6 @@ GRIM::Batching::BatchPayload buildValPayload(
 }
 
 void PlannedBatchesReady(TrainingContext& ctx) {
-    if (!ctx.model) {
-        throw std::runtime_error(
-            "FATAL: PlannedBatchesReady requires an allocated model — "
-            "call ModelAllocated before this step");
-    }
     if (ctx.data.vocab_size == 0) {
         throw std::runtime_error(
             "FATAL: PlannedBatchesReady requires LoadTrainingData to author ctx.data.vocab_size");

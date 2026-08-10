@@ -5,7 +5,7 @@
 #include "Startup/Capacity/CapacityStem.hpp"
 #include "Startup/Model/ModelAllocationState.hpp"
 #include "Startup/CheckpointLoad.hpp"
-#include "Startup/Resume/ResumeState.hpp"
+#include "Startup/OptimizerReady.hpp"
 #include "Startup/Telemetry/TelemetryInitInputs.hpp"
 #include "Startup/Epoch/EpochPlan.hpp"
 #include "Startup/Batching/PlannedBatches.hpp"
@@ -101,21 +101,14 @@ Phase1Result executePhase1(GRIM::Config::AiConfigSnapshot config) {
         }
         GRIM::Logging::EmitModuleInfo(
             GRIM::Logging::ModuleId::Training,
-            "[Phase1] Preparing layer assembly inputs before model allocation...",
+            "[Phase1] Preparing model inputs before allocation...",
             0);
-        ctx.layer_assembly = Startup::buildLayerAssembly(
-            ctx.config,
-            inference_vocab_size,
-            ctx.rng.init_seed);
-        {
-            const auto& layer_assembly = ctx.layer_assembly.requireReady("executePhase1[inference]");
-            GRIM::Logging::EmitModuleInfo(
-                GRIM::Logging::ModuleId::Training,
-                "[Phase1] ✓ Layer assembly ready | vocab=" + std::to_string(layer_assembly.inputs.actual_vocab_size) +
-                    " | init_seed=" + std::to_string(layer_assembly.inputs.weight_init_seed),
-                0);
-        }
-        ModelAllocated(ctx);
+        GRIM::Logging::EmitModuleInfo(
+            GRIM::Logging::ModuleId::Training,
+            "[Phase1] ✓ Model inputs ready | vocab=" + std::to_string(inference_vocab_size) +
+                " | init_seed=" + std::to_string(ctx.rng.init_seed),
+            0);
+        ModelAllocated(ctx, inference_vocab_size, ctx.rng.init_seed);
         CheckpointLoaded(ctx);
         ctx.start_time = std::chrono::steady_clock::now();
         Phase1Result result{Phase1Outcome::ready_for_inference, std::move(ctx)};
@@ -182,24 +175,17 @@ Phase1Result executePhase1(GRIM::Config::AiConfigSnapshot config) {
     }
     GRIM::Logging::EmitModuleInfo(
         GRIM::Logging::ModuleId::Training,
-        "[Phase1] Preparing layer assembly inputs before model allocation...",
+        "[Phase1] Preparing model inputs before allocation...",
         0);
-    ctx.layer_assembly = Startup::buildLayerAssembly(
-        ctx.config,
-        ctx.data.vocab_size,
-        ctx.rng.init_seed);
-    {
-        const auto& layer_assembly = ctx.layer_assembly.requireReady("executePhase1[training]");
-        GRIM::Logging::EmitModuleInfo(
-            GRIM::Logging::ModuleId::Training,
-            "[Phase1] ✓ Layer assembly ready | vocab=" + std::to_string(layer_assembly.inputs.actual_vocab_size) +
-                " | init_seed=" + std::to_string(layer_assembly.inputs.weight_init_seed),
-            0);
-    }
-    ModelAllocated(ctx);
+    GRIM::Logging::EmitModuleInfo(
+        GRIM::Logging::ModuleId::Training,
+        "[Phase1] ✓ Model inputs ready | vocab=" + std::to_string(ctx.data.vocab_size) +
+            " | init_seed=" + std::to_string(ctx.rng.init_seed),
+        0);
+    ModelAllocated(ctx, ctx.data.vocab_size, ctx.rng.init_seed);
     CheckpointLoaded(ctx);
     validateAttentionOffByOne(ctx);
-    ResumeStateReady(ctx);
+    OptimizerReady(ctx);
     TelemetryReady(ctx);
     PlannedBatchesReady(ctx);
     EpochPlanReady(ctx);

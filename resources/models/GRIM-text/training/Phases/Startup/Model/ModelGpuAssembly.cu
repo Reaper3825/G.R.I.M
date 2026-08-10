@@ -256,7 +256,7 @@ void initializePBM(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
     cudaStream_t stream = requirePrimaryStream(
         training_state,
         caller,
-        "Startup::initializePBM: StreamController is not initialized - ModelAllocationState must initialize stream_ctrl before PBM");
+        "Startup::initializePBM: StreamController is not initialized - ModelAllocated must initialize stream_ctrl before PBM");
 
     const auto pbm_hp = GRIM::HyperParameters::pbmConstructionHP(model_cfg);
     validatePBMConfigOrThrow(model_cfg, pbm_hp, caller);
@@ -417,9 +417,9 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
         const cudaStream_t init_stream = requirePrimaryStream(
             training_state,
             kAssembleGpuModelCaller,
-            "FATAL: StreamController not initialized. ModelAllocationState must initialize stream_ctrl before Startup::assembleGpuModel().");
-        requireCublasHandle(training_state, kAssembleGpuModelCaller, "cuBLAS handle not initialized. ModelAllocationState must initialize cuBLAS before Startup::assembleGpuModel().");
-        requirePBMReady(pbm_owner.initialized(), kAssembleGpuModelCaller, "PBM not initialized before encoder construction. ModelAllocationState must initialize PBM before Startup::assembleGpuModel().");
+            "FATAL: StreamController not initialized. ModelAllocated must initialize stream_ctrl before Startup::assembleGpuModel().");
+        requireCublasHandle(training_state, kAssembleGpuModelCaller, "cuBLAS handle not initialized. ModelAllocated must initialize cuBLAS before Startup::assembleGpuModel().");
+        requirePBMReady(pbm_owner.initialized(), kAssembleGpuModelCaller, "PBM not initialized before encoder construction. ModelAllocated must initialize PBM before Startup::assembleGpuModel().");
 
         //======================================================//
         //  1) Build GPU encoder

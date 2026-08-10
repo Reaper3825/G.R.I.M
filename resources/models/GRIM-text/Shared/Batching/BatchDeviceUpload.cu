@@ -76,7 +76,7 @@ BatchDeviceBindings uploadBatchToDevice(
     const int cfg_max_tokens_per_batch = HyperParameters::snapshotTrainingConfigField<int>(config, "max_tokens_per_batch");
     if (payload.isTraining() && HyperParameters::snapshotExecutionMode(config) == HyperParameters::ModelExecutionMode::INFERENCE) {
         throw std::runtime_error(
-            "uploadBatchToDevice: training BatchPayload cannot be uploaded by an inference-mode LanguageModel");
+            "uploadBatchToDevice: training BatchPayload cannot be uploaded in inference mode");
     }
 
     if (!stream) {

@@ -55,9 +55,6 @@ std::shared_ptr<GRIM::Batching::BatchDeviceStorage> ensureInferenceDeviceStorage
 }
 
 void validateInferenceContext(const TrainingContext& ctx) {
-    if (!ctx.model) {
-        throw std::runtime_error("Phase2 payload inference: Phase1 context model is NULL");
-    }
     if (!ctx.training_state) {
         throw std::runtime_error("Phase2 payload inference: Phase1 context training_state is NULL");
     }
@@ -90,7 +87,7 @@ void validatePromptPayload(const GRIM::Batching::BatchPayload& prompt_payload) {
 }
 
 void validateInferenceForwardPayload(
-    const GRIM::LanguageModel& model,
+    const GRIM::Config::AiConfigSnapshot& config,
     const GRIM::Batching::BatchPayload& active_payload,
     const char* caller)
 {
@@ -102,7 +99,6 @@ void validateInferenceForwardPayload(
         throw std::runtime_error(std::string(caller) + ": batch_size must be 1");
     }
 
-    const auto& config = model.getConfig();
     const bool use_gpu = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "use_gpu");
     const int max_seq_len = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "max_seq_len");
     const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "vocab_size");
@@ -125,7 +121,7 @@ void validateInferenceForwardPayload(
 }
 
 GRIM::GeneratedSequence generateOneSequence(
-    GRIM::LanguageModel& model,
+    const GRIM::Config::AiConfigSnapshot& config,
     GRIM::TrainingState& training_state,
     GRIM::GenerationState& generation_state,
     GRIMText::Training::Startup::GpuModelState& gpu_model_state,
@@ -137,7 +133,6 @@ GRIM::GeneratedSequence generateOneSequence(
 {
     validatePromptPayload(prompt_payload);
 
-    const auto& config = model.getConfig();
     const bool use_gpu = GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "use_gpu");
     const int max_seq_len = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "max_seq_len");
     const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "vocab_size");
@@ -298,7 +293,7 @@ GRIM::GeneratedSequence generateOneSequence(
     // by q_len. Returns the last n_tail rows of the primary logits.
     auto runCachedForward = [&](GRIM::Batching::BatchPayload& active_payload,
                                 int n_tail, bool want_selector) -> TailLogits {
-        validateInferenceForwardPayload(model, active_payload, "generateOneSequence");
+        validateInferenceForwardPayload(config, active_payload, "generateOneSequence");
         const int q_len = active_payload.total_tokens;
         if (n_tail <= 0 || n_tail > q_len) {
             throw std::runtime_error("generateOneSequence: invalid n_tail=" + std::to_string(n_tail) +
@@ -306,7 +301,7 @@ GRIM::GeneratedSequence generateOneSequence(
         }
         inference_device_storage = ensureInferenceDeviceStorage(
             active_payload, config, stream, std::move(inference_device_storage), "generateOneSequence");
-        const auto bindings = GRIM::Batching::uploadBatchToDevice(model.getConfig(), active_payload, stream);
+        const auto bindings = GRIM::Batching::uploadBatchToDevice(config, active_payload, stream);
 
         GRIM::Forward::ModelForwardRuntimePayload runtime_payload{};
 
@@ -602,7 +597,7 @@ std::vector<GRIM::GeneratedSequence> generatePayloadSequences(
         if (sequence_hp.seed != 0) {
             sequence_hp.seed += static_cast<unsigned int>(i);
         }
-        outputs.push_back(generateOneSequence(*ctx.model, training_state, generation_state, ctx.gpu_model, ctx.parameter_registry, ctx.pbm_owner.state(), prompt_payload, sequence_hp, stream_callback));
+        outputs.push_back(generateOneSequence(ctx.config, training_state, generation_state, ctx.gpu_model, ctx.parameter_registry, ctx.pbm_owner.state(), prompt_payload, sequence_hp, stream_callback));
 
     }
     return outputs;

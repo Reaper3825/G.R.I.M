@@ -175,7 +175,7 @@ struct StartupParameterRegistry {
     // Single durable optimizer/autograd parameter inventory owner.
     // ParameterGroup entries are non-owning views into the tensor owners in
     // this registry and startup-owned layer topology. Do not mirror this
-    // vector on LanguageModel or TrainingContext.
+    // vector elsewhere on TrainingContext.
     std::vector<GRIM::ParameterGroup> parameter_groups;
 
     GRIM::EmbeddingParameterTensors* getEmbeddingParameters() {

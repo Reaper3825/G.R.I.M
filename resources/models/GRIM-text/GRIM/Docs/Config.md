@@ -95,7 +95,7 @@ if (max_seq_len == 0)
 `training.config.min_seq_valid_tokens` is also authored data policy; it must not be derived from `max_seq_len`. It must be `>= 0`: `0` disables short-row filtering, while `1` removes only rows that have no trainable target after boundary masking. Phase1 must fail at the data-loading boundary if this filter empties the training split and report the active filtering values.
 
 ## Validation token budget
-Validation MUST use Phase1-authored config facts (`ctx.config.max_seq_len`, `ctx.config.hyperparameters.batch_size`, `ctx.model_allocation.model_max_tokens_per_batch`, or a non-duplicate explicit `HyperparameterGroupings.hpp` view such as `trainingFixedShapeHP()`), never the `LanguageModel` config accessor and never a hardcoded constant — buffer overflow crash otherwise. Batch scheduling consumes configured `max_seq_len` and `batch_size` directly; it must not derive sequence length from `max_tokens_per_batch` or a capacity wrapper.
+Validation MUST use Phase1-authored config facts through `TrainingContext.config` or a non-duplicate explicit `HyperparameterGroupings.hpp` view such as `trainingFixedShapeHP()`, never a copied config object or hardcoded constant — buffer overflow crash otherwise. Batch scheduling consumes configured `max_seq_len` and `batch_size` directly; it must not derive sequence length from `max_tokens_per_batch` or a capacity wrapper.
 
 ## `per_token_grad_scale=true`
 Required. See [Encoder.md](Encoder.md).

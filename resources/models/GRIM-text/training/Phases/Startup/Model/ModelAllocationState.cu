@@ -8,7 +8,6 @@
 #include "../../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../../../Shared/LogRecorder/LogRecorder.hpp"
 
-#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -20,24 +19,23 @@ namespace GRIMText::Training {
 
 namespace Internal {
 
-std::unique_ptr<GRIM::LanguageModel> initializeModel(
+void initializeModel(
     const GRIM::Config::AiConfigSnapshot& config_snapshot,
+    std::uint32_t actual_vocab_size,
+    std::uint64_t weight_init_seed,
     GRIM::TrainingState& training_state,
     GRIM::GenerationState& generation_state,
     GRIM::PBM::PBMStateOwner& pbm_owner,
     Startup::GpuModelState& gpu_model_state,
     ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
-    const Startup::LayerAssembly& layer_assembly,
     const GRIMText::Training::Startup::ModelRegistration::OutputUnigramPriorView* output_unigram_prior,
     TrainingLogger& logger)
 {
-    const auto& assembly = layer_assembly.requireReady("ModelAllocationState::initializeModel");
-    const uint64_t weight_init_seed = assembly.inputs.weight_init_seed;
     const auto encoder_hp = GRIM::HyperParameters::encoderLayerConstructionHP(config_snapshot);
 
     logger.log("Initializing model with weight_init_seed=" + std::to_string(weight_init_seed) + "...");
-    logger.log("Layer assembly inputs prepared: actual_vocab_size=" +
-               std::to_string(assembly.inputs.actual_vocab_size));
+    logger.log("Model inputs prepared: actual_vocab_size=" +
+               std::to_string(actual_vocab_size));
 
     if (GRIM::HyperParameters::snapshotTrainingConfigField<GRIM::HyperParameters::HardcodedPattern>(config_snapshot, "hardcoded_hidden_pattern") != GRIM::HyperParameters::HardcodedPattern::DISABLED) {
         logger.log("⚠️  Hardcoded hidden-state diagnostic mode is active; exact config values are listed by ConfigDump.");
@@ -70,9 +68,6 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
 
         logger.log("✓ CUDA device initialized: " + std::string(props.name));
     }
-
-    auto model = std::make_unique<GRIM::LanguageModel>(config_snapshot);
-    model->bindGpuModelState(gpu_model_state);
 
     {
         GRIM::StreamControllerConfig stream_config;
@@ -150,54 +145,38 @@ std::unique_ptr<GRIM::LanguageModel> initializeModel(
 #endif
 
     logger.log("✓ Model initialized");
-    return model;
 }
 
 } // namespace Internal
 
-ModelAllocationState captureAndValidateModelAllocationOrThrow(const TrainingContext& ctx) {
-    if (!ctx.model) {
-        throw std::runtime_error("FATAL: ModelAllocated validation called before model exists");
-    }
-
-    const auto fixed_shape = GRIM::HyperParameters::trainingFixedShapeHP(ctx.config);
-    const int max_cached_seq_len = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "max_cached_seq_len");
-    if (max_cached_seq_len != fixed_shape.max_seq_len) {
-        throw std::runtime_error("FATAL: model max_cached_seq_len does not match trainingFixedShapeHP (model=" +
-                                 std::to_string(max_cached_seq_len) +
-                                 " grouping=" + std::to_string(fixed_shape.max_seq_len) + ")");
-    }
-
-    ModelAllocationState allocation;
-    allocation.model_max_tokens_per_batch = fixed_shape.max_tokens_per_batch;
-
-    return allocation;
-}
-
-void ModelAllocated(TrainingContext& ctx) {
+void ModelAllocated(
+    TrainingContext& ctx,
+    std::uint32_t actual_vocab_size,
+    std::uint64_t weight_init_seed) {
     using GRIM::Logging::EmitModuleError;
     using GRIM::Logging::EmitModuleInfo;
     using GRIM::Logging::ModuleId;
 
     const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "vocab_size");
-    const auto& layer_assembly = ctx.layer_assembly.requireReady("ModelAllocated");
-    const std::uint32_t actual_vocab_size = layer_assembly.inputs.actual_vocab_size;
     if (actual_vocab_size == 0) {
         throw std::runtime_error(
-            "FATAL: layer assembly actual_vocab_size is zero before model initialization");
+            "FATAL: actual_vocab_size is zero before model initialization");
     }
     if (vocab_size != static_cast<int>(actual_vocab_size)) {
         throw std::runtime_error(
-            "FATAL: runtime model vocab_size drifted from startup artifact fact: actual_vocab_size=" +
+            "FATAL: runtime model vocab_size drifted from startup fact: actual_vocab_size=" +
             std::to_string(actual_vocab_size) +
             " config.vocab_size=" + std::to_string(vocab_size));
     }
 
     if (ctx.data.vocab_size != 0 && ctx.data.vocab_size != actual_vocab_size) {
         throw std::runtime_error(
-            "FATAL: layer assembly actual_vocab_size drifted from SequenceData.vocab_size (assembly=" +
+            "FATAL: actual_vocab_size drifted from SequenceData.vocab_size (startup=" +
             std::to_string(actual_vocab_size) +
             " sequence_data=" + std::to_string(ctx.data.vocab_size) + ")");
+    }
+    if (weight_init_seed == 0) {
+        throw std::runtime_error("FATAL: weight_init_seed is zero before model initialization");
     }
 
     GRIMText::Training::Startup::ModelRegistration::OutputUnigramPriorView output_unigram_prior{};
@@ -244,14 +223,15 @@ void ModelAllocated(TrainingContext& ctx) {
         if (!ctx.generation_state) {
             throw std::runtime_error("FATAL: GenerationState owner is NULL before model initialization");
         }
-        ctx.model = Internal::initializeModel(
+        Internal::initializeModel(
             ctx.config,
+            actual_vocab_size,
+            weight_init_seed,
             *ctx.training_state,
             *ctx.generation_state,
             ctx.pbm_owner,
             ctx.gpu_model,
             ctx.parameter_registry,
-            layer_assembly,
             pass_output_unigram_prior ? &output_unigram_prior : nullptr,
             *ctx.logging.logger);
     } catch (const std::exception& e) {
@@ -262,8 +242,6 @@ void ModelAllocated(TrainingContext& ctx) {
     if (pass_output_unigram_prior) {
         ctx.data.output_unigram_prior = {};
     }
-
-    ctx.model_allocation = captureAndValidateModelAllocationOrThrow(ctx);
 }
 
 } // namespace GRIMText::Training

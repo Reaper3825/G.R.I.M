@@ -388,9 +388,11 @@ int main(int argc, char** argv) {
 
         auto ctx = std::move(phase1.context);
 
-        if (!ctx.model) {
+        if (!ctx.gpu_model.gpu_encoder ||
+            !ctx.training_state ||
+            !ctx.training_state->initialized) {
             EmitModuleError(ModuleId::TrainingOrchestrator, 
-                "Phase 1 failed: model not initialized", 0);
+                "Phase 1 failed: GPU model topology or runtime not initialized", 0);
             return 1;
         }
 

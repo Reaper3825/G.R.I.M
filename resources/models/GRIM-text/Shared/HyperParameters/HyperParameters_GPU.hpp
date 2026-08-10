@@ -407,7 +407,7 @@ struct LanguageModelConfig {
     TrainingStage training_stage = TrainingStage::UNSPECIFIED;
 
     // Parameter-group precision policy. Registration reads these from the
-    // actual LanguageModelConfig carried by LanguageModel::getConfig(); do not
+    // finalized LanguageModelConfig carried by AiConfigSnapshot; do not
     // pass a sidecar precision wrapper beside the model config.
     ParameterGroupPrecision parameter_precision_embedding = ParameterGroupPrecision::UNSPECIFIED;
     ParameterGroupPrecision parameter_precision_lm_head = ParameterGroupPrecision::UNSPECIFIED;

@@ -30,9 +30,8 @@ void launchAdamWKernel(ParameterGroup& group,
 //  Orchestration (all ParameterGroups)
 //------------------------------------------------------//
 //
-//  These free functions contain the AdamW optimizer logic that
-//  was previously on LanguageModel. They operate directly on
-//  parameter groups — no model dependency.
+//  These free functions contain the AdamW optimizer logic and operate
+//  directly on parameter groups — no model dependency.
 //
 //  Callers are responsible for:
 //    1. Building parameter groups through Phase1 ParameterGroupRegistration

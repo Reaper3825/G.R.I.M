@@ -1,11 +1,10 @@
-#include "ResumeState.hpp"
+#include "OptimizerReady.hpp"
 
-#include "../ClassBalancedWeights.hpp"
-#include "../Model/ParameterGroupRegistration.hpp"
-#include "../../Phase1_Startup.hpp"
-#include "../../../OptimizerCheckpoint.hpp"
+#include "ClassBalancedWeights.hpp"
+#include "Model/ParameterGroupRegistration.hpp"
+#include "../Phase1_Startup.hpp"
+#include "../../OptimizerCheckpoint.hpp"
 
-#include <cstdint>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
@@ -19,7 +18,6 @@ namespace Internal {
 void initializeOptimizer(TrainingContext& ctx) {
     auto& logger = *ctx.logging.logger;
     auto& opt = ctx.optimizer;
-    auto& model = *ctx.model;
     const auto soft_restart_hp =
         GRIM::HyperParameters::softRestartHP(ctx.config);
 
@@ -28,7 +26,7 @@ void initializeOptimizer(TrainingContext& ctx) {
     GRIMText::Training::Startup::ModelRegistration::bindOptimizerState(
         ctx.parameter_registry,
         opt.optimizer_state,
-        ctx.requireTrainingState("ResumeState::initializeOptimizer").stream_ctrl.getPrimaryStream());
+        ctx.requireTrainingState("OptimizerReady::initializeOptimizer").stream_ctrl.getPrimaryStream());
 
     GRIM::SoftRestart::SoftRestartConfig sr_cfg;
     sr_cfg.cooldown_steps = soft_restart_hp.cooldown_steps;
@@ -39,7 +37,7 @@ void initializeOptimizer(TrainingContext& ctx) {
     auto* gpu_encoder = ctx.gpu_model.gpu_encoder.get();
     if (!gpu_encoder) {
         throw std::runtime_error(
-            "ResumeState::initializeOptimizer: ctx.gpu_model.gpu_encoder is NULL - "
+            "OptimizerReady::initializeOptimizer: ctx.gpu_model.gpu_encoder is NULL - "
             "ensure Startup::assembleGpuModel(ctx.config, ctx.training_state, ctx.gpu_model, ctx.parameter_registry, weight_init_seed) completes before optimizer init");
     }
     const int num_layers = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "num_layers");
@@ -72,26 +70,8 @@ void initializeOptimizer(TrainingContext& ctx) {
 
 } // namespace Internal
 
-ResumeState captureResumeState(const TrainingContext& ctx) {
-    ResumeState st;
-    st.loaded_checkpoint_path = ctx.loaded_checkpoint_path;
-    st.resumed = !ctx.loaded_checkpoint_path.empty();
-
-    if (st.resumed) {
-        st.optimizer_sidecar_path = optimizerSidecarPath(ctx.loaded_checkpoint_path);
-    }
-
-    st.optimizer_step = ctx.optimizer.optimizer_step.step;
-    st.global_step = ctx.global_step;
-    st.best_val_loss = ctx.best_val_loss;
-    st.epochs_completed = ctx.epochs_completed;
-    st.accumulation_slot = ctx.optimizer.accumulationSlot();
-    return st;
-}
-
-void ResumeStateReady(TrainingContext& ctx) {
+void OptimizerReady(TrainingContext& ctx) {
     Internal::initializeOptimizer(ctx);
-    ctx.resume_state = captureResumeState(ctx);
 
     const auto loss_config = GRIM::HyperParameters::lossConfigHP(ctx.config);
     if (loss_config.class_balanced_enabled) {
@@ -99,10 +79,9 @@ void ResumeStateReady(TrainingContext& ctx) {
             ctx.data.train_seqs,
             ctx.data.vocab_size,
             loss_config.class_balanced_beta,
-            ctx.requireTrainingState("ResumeStateReady"),
+            ctx.requireTrainingState("OptimizerReady"),
             *ctx.logging.logger);
     }
 }
 
 } // namespace GRIMText::Training
-

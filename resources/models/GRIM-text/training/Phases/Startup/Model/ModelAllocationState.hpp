@@ -6,12 +6,10 @@ namespace GRIMText::Training {
 
 struct TrainingContext;
 
-struct ModelAllocationState {
-    int model_max_tokens_per_batch = 0;
-};
-
-ModelAllocationState captureAndValidateModelAllocationOrThrow(const TrainingContext& ctx);
-void ModelAllocated(TrainingContext& ctx);
+void ModelAllocated(
+	TrainingContext& ctx,
+	std::uint32_t actual_vocab_size,
+	std::uint64_t weight_init_seed);
 
 } // namespace GRIMText::Training
 

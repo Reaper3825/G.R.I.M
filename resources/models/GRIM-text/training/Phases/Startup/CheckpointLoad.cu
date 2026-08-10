@@ -173,9 +173,7 @@ std::vector<std::string> resolveCheckpointCandidates(
 
 void loadRequestedCheckpoint(TrainingContext& ctx)
 {
-    if (!ctx.model) {
-        throw std::runtime_error("CheckpointLoaded: model is NULL; call ModelAllocated(ctx) before CheckpointLoaded(ctx)");
-    }
+    (void)ctx.parameter_registry.requireParameterGroups("CheckpointLoaded");
     if (!ctx.logging.logger) {
         throw std::runtime_error("CheckpointLoaded: logger is NULL; call LoggingReady(ctx) before CheckpointLoaded(ctx)");
     }
@@ -267,9 +265,7 @@ void runSaveTestIfRequested(TrainingContext& ctx)
     if (!GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "save_test_mode")) {
         return;
     }
-    if (!ctx.model) {
-        throw std::runtime_error("CheckpointLoaded save-test: model is NULL");
-    }
+    (void)ctx.parameter_registry.requireParameterGroups("CheckpointLoaded save-test");
     if (!ctx.logging.logger) {
         throw std::runtime_error("CheckpointLoaded save-test: logger is NULL");
     }

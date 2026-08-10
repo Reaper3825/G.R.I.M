@@ -961,7 +961,7 @@ bool verifyGradientsAreConnected(AutogradContext& ctx) {
 }
 
 // Finding 2 (Rule 26): computeGradientNorm() DELETED — redundant with
-// Phase2's ctx.model->computeGradNorm(true) which produces per-component breakdown.
+// Phase2's registered-parameter gradient diagnostics.
 // The old function duplicated a full L2 norm scan + cudaStreamSynchronize per batch
 // whose result was only logged and never consumed by Phase2.
 

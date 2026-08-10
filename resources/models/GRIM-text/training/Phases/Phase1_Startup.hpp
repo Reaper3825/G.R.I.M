@@ -44,7 +44,6 @@
 // transitively (and in the correct order) by HyperParameters_GPU.hpp below.
 #include "../../Shared/HyperParameters/HyperParameters_GPU.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
-#include "../../GRIM/grim_language_model_cuda.hpp"
 #include "../../Shared/TrainingState/TrainingState_GPU.hpp"
 #include "../../Shared/InferenceState/GenerationState_GPU.hpp"
 #include "../../Shared/Optimizers/OptimizerState_GPU.hpp"
@@ -72,13 +71,9 @@
 // Extracted startup subsystems
 #include "Startup/Rng.hpp"
 #include "Startup/Logging.hpp"
-#include "Startup/Capacity/MemorySnapshot.hpp"
-#include "Startup/Model/LayerAssembly.hpp"
+#include "Startup/Model/ModelGpuState.hpp"
 #include "Startup/Model/ParameterRegistry.hpp"
-#include "Startup/Model/ModelAllocationState.hpp"
-#include "Startup/CheckpointLoad.hpp"
 #include "Startup/Epoch/EpochPlan.hpp"
-#include "Startup/Resume/ResumeState.hpp"
 
 namespace GRIMText::Training {
 
@@ -211,37 +206,21 @@ struct TrainingContext {
     // finalization writes computed/validated leaves back into document;
     // consumers slice immutable grouped views from this snapshot.
     GRIM::Config::AiConfigSnapshot config;
-    // Post-allocation validation evidence (fails loud on mismatch)
-    ModelAllocationState model_allocation;
-    // Resume metadata (populated after optimizer sidecar restore attempt)
-    ResumeState resume_state;
-    // Phase1-authored startup/model input seam gathered after tokenizer/data
-    // facts and RNG are ready, but before ModelAllocated consumes it. It is
-    // not a topology or documentation owner.
-    GRIMText::Training::Startup::LayerAssembly layer_assembly;
     // Startup-owned epoch plan facts (LR schedule config, total steps, warmup)
     EpochPlan epoch_plan;
-    // Startup-owned durable PBM buffers. This is the explicit PBM owner;
-    // GpuModelState and LanguageModel only borrow PBM state during startup/
-    // runtime assembly.
+    // Startup-owned durable PBM buffers.
     GRIM::PBM::PBMStateOwner pbm_owner;
-    // Startup-owned durable GPU model topology. `layer_assembly` is the
-    // pre-allocation input seam; `gpu_model` is the actual long-
-    // lived owner once assembly happens. LanguageModel borrows this state; it
-    // is not the owner of encoder/layer topology.
+    // Startup-owned durable GPU model topology.
     GRIMText::Training::Startup::GpuModelState gpu_model;
     // Single startup-owned writable-parameter access point. ParameterRegistry
     // owns the flattened LM-head tensor bundle plus migrated subsystem tensor
     // owners; ParameterGroupRegistration sequences assembly, validation, and
     // inventory publication against this durable registry.
     ::ParameterRegistry::StartupParameterRegistry parameter_registry;
-    // Durable runtime owner for CUDA training state. Phase1 constructs and
-    // initializes it directly; Phase2 and support modules must access it from
-    // TrainingContext instead of tunneling through LanguageModel.
+    // Durable runtime owner for CUDA training state.
     std::unique_ptr<GRIM::TrainingState> training_state = std::make_unique<GRIM::TrainingState>();
     // Durable runtime owner for autoregressive inference/generation state.
-    // Phase1 initializes it directly for inference mode; Phase2 inference
-    // consumes it from TrainingContext instead of tunneling through LanguageModel.
+    // Phase1 initializes it directly for inference mode.
     std::unique_ptr<GRIM::GenerationState> generation_state = std::make_unique<GRIM::GenerationState>();
 
     //==================================================//
@@ -270,9 +249,6 @@ struct TrainingContext {
      *  index 0 for the authored step count. */
     std::vector<std::vector<int>> epoch_batch_order;
 
-    // Model
-    std::unique_ptr<GRIM::LanguageModel> model;
-    
     // Data
     SequenceData data;
     
@@ -296,8 +272,6 @@ struct TrainingContext {
     
     // State tracking
     int global_step = 0;
-    /** Estimated total steps (epochs * batches per epoch), set during Phase1 EpochPlanReady. */
-    int estimated_total_steps = 0;
     
     /** Deterministic LR schedule — exposed curve queryable at any step.
      *  Constructed in Phase1 after PlannedBatchesReady authors the train payload count. */
@@ -372,14 +346,6 @@ struct TrainingContext {
         return *generation_state;
     }
 
-    // Validation check
-    bool is_valid() const {
-        return model != nullptr &&
-               training_state != nullptr &&
-               generation_state != nullptr &&
-               logging.logger != nullptr &&
-               !data.train_views.empty();
-    }
 };
 
 //======================================================//

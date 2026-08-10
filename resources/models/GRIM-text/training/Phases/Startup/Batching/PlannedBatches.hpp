@@ -24,7 +24,7 @@
 //  PRECONDITIONS
 //  =============
 //  - LoadTrainingData (train/val views and sequence lengths populated)
-//  - ModelAllocated (ctx.model is non-null)
+//  - ModelAllocated (GPU topology and runtime are initialized)
 //  - HyperparametersReady (ctx.config has fixed max_seq_len and batch_size)
 //  - LoadTrainingData authored ctx.data.vocab_size + runtime vocab
 //  - RngReady (ctx.rng.data_seed is set so epoch permutations are deterministic)

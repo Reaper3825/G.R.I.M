@@ -481,13 +481,6 @@ void writeFinalStatus(
 
 void releaseResources(TrainingContext& ctx) {
     EmitModuleInfo(ModuleId::Training, "Releasing resources...", ctx.global_step);
-
-
-    // Release model (LanguageModel subobjects free PBM; TrainingState frees Tensor buffers, TeacherLogits, etc.)
-    if (ctx.model) {
-        ctx.model.reset();
-        EmitModuleInfo(ModuleId::Training, "✓ Model released", ctx.global_step);
-    }
     
     // Clear training data
     ctx.data.train_seqs.clear();

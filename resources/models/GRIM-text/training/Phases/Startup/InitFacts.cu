@@ -100,11 +100,6 @@ void emitInitFactKeyValue(const std::string& key, const std::string& value) {
 } // namespace
 
 void verifyAndDumpInitFacts(TrainingContext& ctx) {
-    if (!ctx.model) {
-        throw std::runtime_error(
-            "verifyAndDumpInitFacts: ctx.model is null (called before initializeModel?)");
-    }
-
     // ── Collect the live structural facts ────────────────────────────
     auto& embedding_parameters = ctx.parameter_registry.requireEmbeddingParameters("verifyAndDumpInitFacts");
     auto& lm_head_parameters = ctx.parameter_registry.requireLmHeadParameters("verifyAndDumpInitFacts");
