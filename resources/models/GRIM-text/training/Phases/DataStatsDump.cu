@@ -35,12 +35,6 @@ std::string fmtBytes(std::size_t bytes) {
     return oss.str();
 }
 
-std::string fmtPercent(double frac) {
-    std::ostringstream oss;
-    oss << std::fixed << std::setprecision(2) << (frac * 100.0) << "%";
-    return oss.str();
-}
-
 // Resident set size of the current process (host RAM actually held).
 // Returns 0 if the platform query fails.
 std::size_t queryHostResidentBytes() {
@@ -69,35 +63,8 @@ std::size_t queryHostResidentBytes() {
 }
 
 void appendMemoryStats(
-    const DataStatsSnapshot& snap,
     std::vector<std::pair<std::string, std::string>>& rows)
 {
-    rows.emplace_back("memory.snapshot", "phase1/startup");
-
-    if (snap.memory_total_bytes > 0) {
-        const std::size_t gpu_total = static_cast<std::size_t>(snap.memory_total_bytes);
-        const std::size_t gpu_free = static_cast<std::size_t>(snap.memory_free_bytes);
-        const std::size_t gpu_used = (gpu_total >= gpu_free) ? (gpu_total - gpu_free) : 0;
-        const double used_frac = static_cast<double>(gpu_used) / static_cast<double>(gpu_total);
-        const double free_frac = static_cast<double>(gpu_free) / static_cast<double>(gpu_total);
-
-        rows.emplace_back("memory.gpu.device_id",   std::to_string(snap.memory_device));
-        rows.emplace_back("memory.gpu.device_name", snap.memory_device_name.empty() ? "(unknown)" : snap.memory_device_name);
-        rows.emplace_back("memory.gpu.total",       fmtBytes(gpu_total));
-        rows.emplace_back("memory.gpu.used",        fmtBytes(gpu_used));
-        rows.emplace_back("memory.gpu.free",        fmtBytes(gpu_free));
-        rows.emplace_back("memory.gpu.used_pct",    fmtPercent(used_frac));
-        rows.emplace_back("memory.gpu.free_pct",    fmtPercent(free_frac));
-
-        const char* status = "ok";
-        if (used_frac >= 0.95) status = "CRITICAL (<5% free)";
-        else if (used_frac >= 0.80) status = "WARNING (<20% free)";
-        else if (used_frac >= 0.50) status = "elevated (<50% free)";
-        rows.emplace_back("memory.gpu.status", status);
-    } else {
-        rows.emplace_back("memory.gpu", "(unavailable)");
-    }
-
     const std::size_t host_rss = queryHostResidentBytes();
     rows.emplace_back("memory.host.rss",
         host_rss > 0 ? fmtBytes(host_rss) : std::string("(unavailable)"));
@@ -121,7 +88,7 @@ void dumpDataStats(
     rows.emplace_back("actual_vocab_size",    std::to_string(snap.actual_vocab_size));
     rows.emplace_back("train_sequence_count", std::to_string(snap.train_sequence_count));
     rows.emplace_back("val_sequence_count",   std::to_string(snap.val_sequence_count));
-    appendMemoryStats(snap, rows);
+    appendMemoryStats(rows);
 
     std::size_t longest_name = 0;
     for (const auto& kv : rows) {

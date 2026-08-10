@@ -1,7 +1,6 @@
 #include "Phase1_Startup.hpp"
 
 #include "Startup/Logging.hpp"
-#include "Startup/Capacity/MemorySnapshot.hpp"
 #include "Startup/Capacity/CapacityStem.hpp"
 #include "Startup/Model/ModelAllocationState.hpp"
 #include "Startup/CheckpointLoad.hpp"
@@ -70,7 +69,6 @@ Phase1Result executePhase1(GRIM::Config::AiConfigSnapshot config) {
     ctx.config = std::move(config);
 
     LoggingReady(ctx);
-    const MemorySnapshot startup_memory_snapshot = captureMemorySnapshotOrThrow();
     HyperparametersReady(ctx);
     CheckpointPlanReady(ctx);
 
@@ -165,7 +163,7 @@ Phase1Result executePhase1(GRIM::Config::AiConfigSnapshot config) {
         return result;
     }
 
-    LoadTrainingData(ctx, startup_memory_snapshot);
+    LoadTrainingData(ctx);
     RngReady(ctx);
     if (ctx.data.vocab_size == 0) {
         throw std::runtime_error("executePhase1[training]: SequenceData.vocab_size must be ready before layer assembly");

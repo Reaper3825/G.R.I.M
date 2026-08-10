@@ -84,7 +84,6 @@ set(TRAINING_CU_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Rng.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Logging.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Capacity/CapacityStem.cu
-    ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Capacity/MemorySnapshot.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/Model/ModelAllocationState.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/CheckpointLoad.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/../training/Phases/Startup/OptimizerReady.cu

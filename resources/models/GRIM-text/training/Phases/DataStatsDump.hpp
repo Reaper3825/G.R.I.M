@@ -2,7 +2,7 @@
 //  DataStatsDump.hpp
 //  Visual dump of startup data-side stats: source paths,
 //  GRMT header vocab size, train/val sequence counts, and
-//  startup memory footprint.
+//  host memory footprint.
 //
 //  Lives separately from ConfigDump (which only knows about
 //  TrainingHyperparameters / DerivedScheduleInfo) but is
@@ -33,10 +33,6 @@ struct DataStatsSnapshot {
     std::size_t   train_sequence_count = 0;
     std::size_t   val_sequence_count   = 0;
 
-    int           memory_device      = -1;
-    std::string   memory_device_name;
-    std::uint64_t memory_total_bytes = 0;
-    std::uint64_t memory_free_bytes  = 0;
 };
 
 //======================================================//

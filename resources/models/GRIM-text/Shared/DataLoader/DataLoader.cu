@@ -1538,7 +1538,7 @@ void authorOutputUnigramPrior(TrainingContext& ctx, std::uint32_t vocab_size) {
 		0);
 }
 
-void LoadTrainingData(TrainingContext& ctx, const MemorySnapshot& startup_memory_snapshot) {
+void LoadTrainingData(TrainingContext& ctx) {
 	using GRIM::Logging::EmitModuleInfo;
 	using GRIM::Logging::ModuleId;
 
@@ -1588,10 +1588,6 @@ void LoadTrainingData(TrainingContext& ctx, const MemorySnapshot& startup_memory
 	data_stats.actual_vocab_size = actual_vocab_size;
 	data_stats.train_sequence_count = ctx.data.train_seqs.size();
 	data_stats.val_sequence_count = ctx.data.val_seqs.size();
-	data_stats.memory_device = startup_memory_snapshot.device;
-	data_stats.memory_device_name = startup_memory_snapshot.device_name;
-	data_stats.memory_total_bytes = startup_memory_snapshot.total_bytes;
-	data_stats.memory_free_bytes = startup_memory_snapshot.free_bytes;
 
 	dumpAllHyperparameters(
 		ctx.config,

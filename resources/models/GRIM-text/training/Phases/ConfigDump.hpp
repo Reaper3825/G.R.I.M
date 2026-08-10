@@ -49,7 +49,7 @@ struct ConfigDumpOptions {
 // the actual authored root plus schedule evidence.
 //
 // If `data_stats` is non-null, dumpDataStats(...) is invoked inside
-// the same banner block so vocab, sequence-count, and startup memory
+// the same banner block so vocab, sequence-count, and host memory
 // info is shown alongside the hyperparameters.
 //======================================================//
 void dumpAllHyperparameters(

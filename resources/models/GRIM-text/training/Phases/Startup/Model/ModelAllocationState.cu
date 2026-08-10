@@ -31,8 +31,6 @@ void initializeModel(
     const GRIMText::Training::Startup::ModelRegistration::OutputUnigramPriorView* output_unigram_prior,
     TrainingLogger& logger)
 {
-    const auto encoder_hp = GRIM::HyperParameters::encoderLayerConstructionHP(config_snapshot);
-
     logger.log("Initializing model with weight_init_seed=" + std::to_string(weight_init_seed) + "...");
     logger.log("Model inputs prepared: actual_vocab_size=" +
                std::to_string(actual_vocab_size));
@@ -125,24 +123,6 @@ void initializeModel(
     } else {
         throw std::runtime_error("initializeModel: unsupported execution_mode");
     }
-
-#ifdef USE_CUDA
-    {
-        auto* gpu_encoder = gpu_model_state.gpu_encoder.get();
-        if (!gpu_encoder) {
-            throw std::runtime_error(
-                "ModelAllocationState::initializeModel: gpu_model_state.gpu_encoder is NULL after GPU model layer assembly");
-        }
-        const int num_layers = encoder_hp.num_layers;
-        for (int layer = 0; layer < num_layers; ++layer) {
-            auto* enc = gpu_encoder->getLayer(layer);
-            if (!enc) {
-                throw std::runtime_error("Encoder layer " + std::to_string(layer) + " is NULL after GPU model layer assembly");
-            }
-        }
-        logger.log("✓ Encoder layers verified");
-    }
-#endif
 
     logger.log("✓ Model initialized");
 }

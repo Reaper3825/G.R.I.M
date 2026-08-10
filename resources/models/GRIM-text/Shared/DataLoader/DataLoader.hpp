@@ -30,7 +30,6 @@ bool PrepareTrainingDataFromCache(const HyperParameters::TokenizerHP& tokenizer_
 namespace GRIMText::Training {
 
 struct TrainingContext;
-struct MemorySnapshot;
 
 void syncRuntimeVocabSizeFromActualOrThrow(
 	GRIM::Config::AiConfigSnapshot& config,
@@ -41,7 +40,7 @@ std::unique_ptr<GRIM::Tokenizer::UniByte> LoadInferenceTokenizer(
 	const GRIM::Config::AiConfigSnapshot& config,
 	::TrainingLogger& logger);
 
-void LoadTrainingData(TrainingContext& ctx, const MemorySnapshot& startup_memory_snapshot);
+void LoadTrainingData(TrainingContext& ctx);
 
 } // namespace GRIMText::Training
 

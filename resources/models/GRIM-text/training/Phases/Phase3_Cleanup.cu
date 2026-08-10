@@ -313,9 +313,8 @@ void finalizeEpochOutcome(
     ctx.logging.logger->log("[Epoch " + std::to_string(epoch_idx + 1) + "] " +
                             Internal::formatMetric("avg_loss", result.avg_loss));
 
-    // Peak GPU memory high-water mark across the run so far (sampled each batch
-    // in Phase2). Unlike the startup "memory.gpu.used" snapshot, this reflects
-    // the real training footprint (params + grads + activations + optimizer state).
+    // Peak GPU memory high-water mark across the run so far, sampled each batch
+    // in Phase2 to reflect params + grads + activations + optimizer state.
     if (ctx.peak_gpu_used_bytes > 0) {
         const double mib = static_cast<double>(ctx.peak_gpu_used_bytes) / (1024.0 * 1024.0);
         const double gib = mib / 1024.0;

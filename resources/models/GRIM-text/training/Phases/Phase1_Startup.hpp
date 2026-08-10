@@ -303,9 +303,8 @@ struct TrainingContext {
     // Resource high-water marks
     /** Peak device-wide GPU memory used (= total - free via cudaMemGetInfo),
      *  tracked as a high-water mark across the whole run. Sampled cheaply each
-     *  batch in Phase2 (the startup "memory.gpu.used" snapshot is pre-allocation
-     *  and is NOT this). Logged at epoch end and reported in the Phase3 summary.
-     *  0 until the first sample. */
+        *  batch in Phase2, logged at epoch end, and reported in the Phase3 summary.
+        *  0 until the first sample. */
     std::uint64_t peak_gpu_used_bytes = 0;
     /** Device total bytes captured alongside the peak sample (for % reporting). */
     std::uint64_t gpu_total_bytes = 0;
