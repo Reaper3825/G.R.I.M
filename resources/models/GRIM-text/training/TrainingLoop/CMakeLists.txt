@@ -181,6 +181,24 @@ if(GRIM_TRAINING_MANUAL_DEPS_READY)
         add_library(flatbuffers::flatbuffers ALIAS grim_training_flatbuffers)
     endif()
 
+    # Header staging cannot provide the schema compiler. Locate a host flatc
+    # explicitly so generated checkpoint/config headers remain available in
+    # manual-dependency builds as well.
+    if(NOT TARGET flatbuffers::flatc)
+        find_program(GRIM_TRAINING_FLATC_EXECUTABLE
+            NAMES flatc
+            HINTS
+                "${GRIM_TRAINING_MANUAL_DEPS_ROOT}/flatbuffers/bin"
+                "${GRIM_VCPKG_TRIPLET_DIR}/tools/flatbuffers"
+            REQUIRED
+        )
+        add_executable(grim_training_flatc IMPORTED GLOBAL)
+        set_target_properties(grim_training_flatc PROPERTIES
+            IMPORTED_LOCATION "${GRIM_TRAINING_FLATC_EXECUTABLE}"
+        )
+        add_executable(flatbuffers::flatc ALIAS grim_training_flatc)
+    endif()
+
     if(NOT TARGET grim_training_httplib)
         add_library(grim_training_httplib INTERFACE)
         target_include_directories(grim_training_httplib INTERFACE "${GRIM_TRAINING_HTTPLIB_INCLUDE_DIR}")
@@ -472,6 +490,12 @@ target_link_libraries(grim_language_model_gpu_impl PUBLIC
     CUDA::cudart
     CUDA::cublas
     nlohmann_json::nlohmann_json
+)
+
+# Also available as its own CXX-only CMake project under ConfigCompiler/.
+add_subdirectory(
+    ../ConfigCompiler
+    ${CMAKE_CURRENT_BINARY_DIR}/ConfigCompiler
 )
 
 # Registry parameter checkpoint schema and I/O library

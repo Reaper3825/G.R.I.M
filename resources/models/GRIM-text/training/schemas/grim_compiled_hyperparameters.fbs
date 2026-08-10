@@ -1,21 +1,22 @@
 // GRIM-text compiled hyperparameter artifact.
 //
 // This is the output contract for the independent configuration compiler. The
-// compiler consumes human-authored configuration, resolves aliases and paths,
-// computes formula-derived values, validates the complete model/run contract,
-// and writes one immutable artifact for train_gpu or another GRIM-text host.
+// compiler consumes human-authored model configuration, computes formula-derived
+// values, validates the complete model contract, and writes one immutable
+// artifact for train_gpu or another GRIM-text host.
 //
 // Design rules:
 //   - This schema is not a binary image of LanguageModelConfig or any C++ ABI.
 //   - Tables are organized by ownership domain, not by JSON field-name prefix.
 //   - Optional feature tables are absent when the compiled model omits them.
-//   - All scalar values are final effective values unless explicitly marked as
-//     authored input or startup-bound evidence.
+//   - The artifact contains only model-semantic values. Training procedure,
+//     optimizer/loss policy, batching, schedules, paths, runtime backend choices,
+//     generation, logging, diagnostics, and telemetry belong in separate files.
+//   - A change to a semantic field must imply model incompatibility and normally
+//     requires retraining or loading a checkpoint compiled for the new contract.
 //   - The loader must reject unsupported schema/semantic versions, malformed
 //     digests, missing required tables, invalid enum sentinels, and failed
 //     cross-field invariants before exposing any config view.
-//   - Relative artifact paths are resolved from the directory containing the
-//     .grimcfg file. Absolute paths remain absolute.
 
 namespace GRIMConfig;
 
@@ -26,20 +27,6 @@ namespace GRIMConfig;
 // depend on the numeric ordinals of C++ enums in HyperparameterEnums.hpp.
 // ---------------------------------------------------------------------------
 
-enum ModelExecutionMode : ubyte {
-  Unspecified = 0,
-  Training = 1,
-  Inference = 2
-}
-
-enum TrainingStage : ubyte {
-  Unspecified = 0,
-  PreTraining = 1,
-  SupervisedFineTuning = 2,
-  DirectPreferenceOptimization = 3,
-  ReinforcementLearningFromHumanFeedback = 4
-}
-
 enum PositionalEncodingType : ubyte {
   Unspecified = 0,
   None = 1,
@@ -48,108 +35,36 @@ enum PositionalEncodingType : ubyte {
   AlibiRope = 4
 }
 
-enum SamplingStrategy : ubyte {
-  Unspecified = 0,
-  Greedy = 1,
-  TopK = 2,
-  TopP = 3,
-  MinP = 4,
-  Typical = 5,
-  TopKTopP = 6,
-  BeamSearch = 7
-}
-
-enum OptimizerKind : ubyte {
-  Unspecified = 0,
-  AdamW = 1,
-  RAdamW = 2
-}
-
-enum ParameterComputePrecision : ubyte {
-  Unspecified = 0,
-  Fp32 = 1,
-  Bf16Compute = 2
-}
-
-enum HardcodedPattern : ubyte {
-  Disabled = 0,
-  RandomCentered = 1,
-  OrthogonalW277 = 2,
-  AlignedW277 = 3,
-  ConstantUniform = 4,
-  ZeroMeanSine = 5
-}
-
-enum VocabBindingState : ubyte {
-  // The artifact contains only the requested tokenizer build width. A startup
-  // binder must supply and validate the observed artifact width before model
-  // allocation. This state is valid for tokenizer-producing workflows only.
-  TargetOnly = 0,
-
-  // vocab_size was observed from the tokenizer/GRMT artifact by the compiler
-  // and is immutable for training/inference startup.
-  ArtifactBound = 1
-}
-
-enum RuntimeCapability : ushort {
+enum ModelCapability : ushort {
   Unknown = 0,
-  Cuda = 1,
-  FlashAttention = 2,
-  Alibi = 3,
-  Rope = 4,
-  GroupedQueryAttention = 5,
-  LayerScale = 6,
-  QkNorm = 7,
-  AttentionOffByOne = 8,
-  AttentionResidualGate = 9,
-  ExecutionBlock = 10,
-  NumberEncoder = 11,
-  ArgSelector = 12,
-  SlotSeedEncoder = 13,
-  LmHeadMlp = 14,
-  Bf16Compute = 15,
-  AtomData = 16,
-  ScratchBlocks = 17
+  Alibi = 1,
+  Rope = 2,
+  GroupedQueryAttention = 3,
+  LayerScale = 4,
+  QkNorm = 5,
+  AttentionOffByOne = 6,
+  AttentionResidualGate = 7,
+  ExecutionBlock = 8,
+  NumberEncoder = 9,
+  ArgSelector = 10,
+  SlotSeedEncoder = 11,
+  LmHeadMlp = 12,
+  AtomData = 13
 }
 
 // ---------------------------------------------------------------------------
-// Artifact identity, provenance, integrity, and compatibility
+// Artifact identity, integrity, and compatibility
 // ---------------------------------------------------------------------------
-
-table SourceProvenance {
-  // Informational source path. It is not used to locate runtime artifacts.
-  source_path:string;
-
-  // SHA-256 of the exact authoring input bytes. Must contain exactly 32 bytes.
-  source_sha256:[ubyte] (required);
-
-  // Optional profile name selected from the source document.
-  source_profile:string;
-
-  // Human-readable compiler build/version identifier.
-  compiler_version:string (required);
-  compiled_timestamp_ms:uint64;
-}
-
-table ConfigIdentity {
-  model_id:string (required);
-  model_name:string;
-  model_version:string;
-  config_id:string (required);
-
-  // Identifies the semantic rules used to derive and validate values. This is
-  // separate from schema_version because formulas can change without changing
-  // the FlatBuffer shape.
-  semantic_version:uint32;
-}
 
 table ConfigIntegrity {
-  // SHA-256 over the compiler's canonical semantic encoding of all effective
-  // configuration values. Must contain exactly 32 bytes.
+  // SHA-256 over the complete serialized artifact after normalizing this
+  // vector and both uint64 hashes to zero. Must contain exactly 32 bytes.
+  // This makes verification independent of the source JSON and compiler.
   semantic_sha256:[ubyte] (required);
 
-  // Hash over model/checkpoint compatibility facts only. Training cadence,
-  // logging, and diagnostics must not affect this value.
+  // xxHash64 over the same normalized serialized artifact. This schema stores
+  // model/checkpoint compatibility facts only, so the full semantic image is
+  // also the compatibility image.
   model_compatibility_xxhash64:uint64;
 
   // Hash over the required capability vector in canonical numeric order.
@@ -168,10 +83,8 @@ table ArchitectureConfig {
   d_ff:uint32;
   max_seq_len:uint32;
 
-  // Final model token-space width. With TargetOnly binding this is zero until
-  // the startup binder produces an EffectiveModelConfig.
+  // Final model token-space width, bound to TokenizerConfig.vocab_sha256.
   vocab_size:uint32;
-  vocab_binding_state:VocabBindingState = TargetOnly;
 
   tie_embeddings:bool;
   embedding_scale:float32;
@@ -186,13 +99,6 @@ table DerivedArchitecture {
   is_gqa:bool;
 
   attention_softmax_scale:float32;
-  residual_projection_init_gain:float32;
-  min_seq_len_for_flash:uint32;
-
-  // Effective fixed-shape/cache geometry after mode/profile selection.
-  effective_batch_size:uint32;
-  max_cached_seq_len:uint32;
-  max_tokens_per_batch:uint64;
 
   // Compiler-produced PBM lookup tables.
   pbm_alibi_slopes:[float32] (required);
@@ -204,7 +110,6 @@ table DerivedArchitecture {
 // ---------------------------------------------------------------------------
 
 table BiasPolicy {
-  global_enabled:bool;
   attention_qkv:bool;
   attention_output:bool;
   ffn_output:bool;
@@ -212,8 +117,6 @@ table BiasPolicy {
 }
 
 table AttentionConfig {
-  use_flash_attention:bool;
-  attention_dropout:float32;
   causal_mask:bool = true;
   use_pre_norm:bool = true;
   fuse_qkv:bool = true;
@@ -233,12 +136,9 @@ table PositionalEncodingConfig {
 }
 
 table EncoderConfig {
-  dropout_rate:float32;
   rms_epsilon:float32;
   use_layer_scale:bool;
-  layer_scale_init:float32;
   center_residuals:bool;
-  freeze_learned_rms_gammas:bool;
 }
 
 table LmHeadConfig {
@@ -271,33 +171,8 @@ table ExecutionBlockConfig {
   inject_gate_temperature:float32;
   result_slot_mode:uint32;
   result_slot_index:int32 = -1;
-  debug_mode:bool;
-  entropy_collapse_threshold:float32;
-  write_collapse_threshold:float32;
   magnitude_limit:float32;
-  diversity_kappa:float32;
-  temperature_start:float32;
-  temperature_end:float32;
-  temperature_schedule:uint32;
-  entropy_weight:float32;
-
-  transition_hard_threshold:float32;
-  gate_warmup_steps:uint32;
-  causal_w1_transition:bool;
-
-  step_x_multiplier:float32;
-  step_y_multiplier:float32;
-  step_y_overrides_x:bool;
-  entropy_aux_weight:float32;
-  value_match_epsilon:float32;
-  final_slot_consistency_weight:float32;
-  div_invalid_penalty_weight:float32;
-  div_magnitude_penalty_weight:float32;
-
-  structured_ce_enabled:bool;
-  structured_ce_weight:float32;
-  execute_ce_weight:float32;
-  stop_ce_weight:float32;
+  causal_w1_transition:float32;
 
   decode_bias_enabled:bool;
   value_embedding_bias_enabled:bool;
@@ -318,12 +193,6 @@ table NumberEncoderConfig {
   global_bias_enabled:bool;
 }
 
-// Presence of this table means the compiled model contains ArgSelector.
-table ArgSelectorConfig {
-  alpha:float32;
-  alpha_warmup_steps:uint32;
-}
-
 // Presence of this table means the compiled model contains SlotSeedEncoder.
 table SlotSeedEncoderConfig {
   d_hidden:uint32;
@@ -331,19 +200,7 @@ table SlotSeedEncoderConfig {
   type_embedding_enabled:bool;
 }
 
-table ScratchBlockReasoningConfig {
-  enabled:bool;
-  detect_numbers:bool;
-}
-
-table ScratchArenaConfig {
-  max_tokens_per_block:uint64;
-  num_blocks:uint64;
-  write_combined:bool;
-}
-
 table ModelFeatures {
-  use_gpu:bool = true;
   use_atom_data:bool;
   atom_embedding_dim:uint32;
   bias:BiasPolicy (required);
@@ -355,60 +212,21 @@ table ModelFeatures {
   // Optional topology components. Absence means the model omits the component.
   execution_block:ExecutionBlockConfig;
   number_encoder:NumberEncoderConfig;
-  arg_selector:ArgSelectorConfig;
+  arg_selector_enabled:bool;
   slot_seed_encoder:SlotSeedEncoderConfig;
-  scratch_block_reasoning:ScratchBlockReasoningConfig;
-  scratch_arena:ScratchArenaConfig;
-}
-
-table ParameterPrecisionConfig {
-  embedding:ParameterComputePrecision = Unspecified;
-  lm_head:ParameterComputePrecision = Unspecified;
-  attention:ParameterComputePrecision = Unspecified;
-  ffn:ParameterComputePrecision = Unspecified;
-  rmsnorm:ParameterComputePrecision = Unspecified;
-  execution_block:ParameterComputePrecision = Unspecified;
-  number_encoder:ParameterComputePrecision = Unspecified;
-  arg_selector:ParameterComputePrecision = Unspecified;
-  slot_seed_encoder:ParameterComputePrecision = Unspecified;
-  reasoning_head:ParameterComputePrecision = Unspecified;
 }
 
 // ---------------------------------------------------------------------------
-// Model-owned artifact paths and tokenizer contract
+// Tokenizer and token-ID contract
 // ---------------------------------------------------------------------------
-
-table ArtifactPaths {
-  training_data_path:string;
-  tokenizer_output_grmt_path:string;
-  vocab_path:string (required);
-  output_model_path:string (required);
-  checkpoint_dir:string;
-  checkpoint_select:string;
-  log_dir:string;
-  training_status_path:string;
-
-  collected_data_path:string;
-  collector_log_path:string;
-  directory_collection_path:string;
-  model_store_path:string;
-  source_config_path:string;
-  verified_data_path:string;
-}
 
 table TokenizerConfig {
-  target_vocab_size:uint32;
-  max_vocab_size:uint32;
-  max_length:uint32;
-  character_coverage:float32;
-  min_cleaned_text_length:uint32;
-  min_subword_frequency:uint32;
-  prune_during_mining:bool;
-  parallel_subword_mining:bool;
-  subword_mining_workers:uint32;
-  subword_mining_max_bytes:uint64;
-
   model_type:string;
+
+  // SHA-256 of the exact vocabulary/tokenizer artifact. Must contain exactly
+  // 32 bytes and must match ArchitectureConfig.vocab_size.
+  vocab_sha256:[ubyte] (required);
+
   special_tokens:[string] (required);
   add_bos:bool;
   add_eos:bool;
@@ -416,321 +234,41 @@ table TokenizerConfig {
   pad_token:string;
   bos_token:string;
   eos_token:string;
+  unk_token_id:int32 = -1;
+  pad_token_id:int32 = -1;
+  bos_token_id:int32 = -1;
+  eos_token_id:int32 = -1;
   enable_nfkc_normalization:bool;
   enable_lowercasing:bool;
-  enable_parallel_tokenization:bool;
-  parallel_threshold:uint32;
   enable_byte_fallback:bool;
-  expected_checksum:string;
-  save_text_vocab:bool;
-  vocab_score_multiplier:float32;
 
   enable_atom_reasoning:bool;
   detect_numbers:bool;
-  force_rebuild_vocab:bool;
-  clear_merged_cache_on_merge:bool;
-  subprocess_only_mode:bool;
-}
-
-// ---------------------------------------------------------------------------
-// Training, optimizer, loss, and schedule policy
-// ---------------------------------------------------------------------------
-
-table RunSelection {
-  current_model_training:string;
-  tokenizer_curriculum:string;
-  training_curriculum:string;
-  training_stage:TrainingStage = Unspecified;
-}
-
-table TrainingCoreConfig {
-  epochs:uint32;
-  seed:int64;
-  batch_size:uint32;
-  gradient_accumulation_steps:uint32;
-  batch_strategy:string;
-  sliding_window_stride:uint32;
-  min_seq_valid_tokens:uint32;
-
-  single_batch_overfit_enabled:bool;
-  single_batch_overfit_max_steps:uint32;
-  shuffle_train_enabled:bool;
-  shuffle_train_epochs:uint32;
-
-  log_interval:uint32;
-  atom_stats_interval:uint32;
-  atom_stats_max_sequences:uint32;
-  validation_interval:uint32;
-  checkpoint_interval:uint32;
-  save_test_mode:bool;
-}
-
-table LearningRateScheduleConfig {
-  learning_rate:float32;
-  cosine_decay_min_lr:float32;
-  warmup_fraction:float32;
-
-  // Formula-derived once total steps are known. Zero is permitted only when
-  // the artifact was compiled before a concrete dataset/epoch plan was bound.
-  warmup_steps:uint32;
-
-  cosine_decay_enabled:bool;
-  cosine_warm_restarts:bool;
-}
-
-table OptimizerConfig {
-  kind:OptimizerKind = Unspecified;
-  weight_decay:float32;
-  beta1:float32;
-  beta2:float32;
-  epsilon:float32;
-  use_depth_aware_upsilon:bool;
-
-  gradient_clip_enabled:bool;
-  configured_gradient_clip_norm:float32;
-  effective_per_token_gradient_limit:float32;
-  per_token_gradient_scale:bool;
-
-  embedding_freeze_enabled:bool;
-  embedding_freeze_after_step:int32 = -1;
-}
-
-table LossConfig {
-  masking_enabled:bool;
-  masking_tag:string;
-
-  label_smoothing_enabled:bool;
-  label_smoothing_epsilon:float32;
-  focal_enabled:bool;
-  focal_gamma:float32;
-  focal_alpha:float32;
-  preference_enabled:bool;
-  preference_beta:float32;
-  distillation_enabled:bool;
-  distillation_temperature:float32;
-  distillation_lambda:float32;
-  entropy_regularization_enabled:bool;
-  entropy_regularization_lambda:float32;
-  class_balanced_enabled:bool;
-  class_balanced_beta:float32;
-}
-
-table SoftRestartConfig {
-  enabled:bool;
-  loss_increase_threshold:float32;
-  max_step_window:uint32;
-  cooldown_steps:uint32;
-}
-
-table AutoStopConfig {
-  enabled:bool;
-  plateau_patience:uint32;
-  plateau_min_delta:float32;
-  high_loss_threshold:float32;
-  high_loss_patience:uint32;
-}
-
-table StabilityOverrideEvidence {
-  // These record which authored stability profile produced the effective
-  // values. Runtime consumers use the final architecture/training values.
-  enabled:bool;
-  authored_batch_size:uint32;
-  authored_max_seq_len:uint32;
-  authored_clip_per_token:float32;
-}
-
-table DerivedSchedule {
-  // Dataset/epoch-plan-bound evidence. Zero means it was intentionally left for
-  // Phase 1 binding rather than guessed by the config compiler.
-  batches_per_epoch:uint64;
-  total_training_steps:uint64;
-  safe_last_step:uint64;
-}
-
-// ---------------------------------------------------------------------------
-// Runtime execution and generation policy
-// ---------------------------------------------------------------------------
-
-table RuntimeExecutionConfig {
-  execution_mode:ModelExecutionMode = Unspecified;
-  use_simd:bool;
-  num_threads:uint32;
-  single_stream_mode:bool;
-  disable_async_frees:bool;
-  synchronize_after_kernels:bool;
-}
-
-table GenerationConfig {
-  strategy:SamplingStrategy = Unspecified;
-  max_new_tokens:uint32;
-  min_new_tokens:uint32;
-  temperature:float32;
-  top_k:uint32;
-  top_p:float32;
-  min_p:float32;
-  typical_p:float32;
-  repetition_penalty:float32;
-  repetition_penalty_window:uint32;
-  frequency_penalty:float32;
-  presence_penalty:float32;
-  no_repeat_ngram_size:uint32;
-  do_sample:bool;
-  enable_scratchblock_reasoning:bool;
-  num_return_sequences:uint32;
-  eos_token_id:int32 = -1;
-  pad_token_id:int32 = -1;
-  bos_token_id:int32 = -1;
-  unk_token_id:int32 = -1;
-  bad_words_ids:[int32] (required);
-  masked_numeric_literal_ids:[int32] (required);
-  seed:uint32;
-}
-
-// ---------------------------------------------------------------------------
-// Logging, diagnostics, and telemetry
-// ---------------------------------------------------------------------------
-
-table StringMapEntry {
-  key:string (required);
-  value:string (required);
-}
-
-table LogRecorderLayers {
-  embedding:bool;
-  rms_norm:bool;
-  attention:bool;
-  feed_forward:bool;
-  residual:bool;
-  encoding:bool;
-  serialization:bool;
-  execution_block:bool;
-}
-
-table LoggingConfig {
-  log_recorder_enabled:bool;
-  log_recorder_default_level:string;
-  log_recorder_modules:[StringMapEntry] (required);
-  log_recorder_layers:LogRecorderLayers (required);
-
-  tape_default_level:string;
-  equation_csv_enabled:bool;
-  stderr_enabled:bool;
-  initial_capacity:uint64;
-  group_overrides:[StringMapEntry] (required);
-}
-
-table DiagnosticsConfig {
-  inference_diagnostic_enabled:bool;
-  inference_diagnostic_interval:uint32;
-
-  prediction_comparison_enabled:bool;
-  prediction_comparison_interval:uint32;
-  prediction_comparison_top_k:uint32;
-  prediction_comparison_max_positions:uint32;
-  prediction_comparison_log_path:string;
-
-  logit_update_trace_enabled:bool;
-  logit_update_trace_interval:uint32;
-
-  attention_diagnostic_enabled:bool;
-  attention_diagnostic_layer:uint32;
-  attention_diagnostic_head:uint32;
-
-  hardcoded_pattern:HardcodedPattern = Disabled;
-  hardcoded_log_every_n_batches:uint32;
-}
-
-table TelemetryControlConfig {
-  enabled:bool;
-  spike_mild_threshold:float32;
-  spike_moderate_threshold:float32;
-  spike_severe_threshold:float32;
-  moderate_gradient_scale:float32;
-  moderate_cooldown_extension:uint32;
-  min_gradient_for_nonzero_loss:float32;
-  loss_threshold_for_gradient_check:float32;
-  max_consecutive_zero_gradient_steps:uint32;
-  sequence_length_regime_change_threshold:float32;
-  regime_change_suppression_steps:uint32;
-  volatility_damping_threshold:float32;
-  max_volatility_damping:float32;
-  gradient_decay_threshold:float32;
-  max_decay_boost:float32;
-  progress_boost_threshold:float32;
-  max_progress_boost:float32;
-  outlier_frequency_trigger:float32;
-  outlier_persistence_trigger:float32;
-  anchor_drift_sigma_multiplier:float32;
-  soft_restart_cooldown_steps:uint32;
-  warmup_steps:uint32;
-  baseline_stabilization_steps:uint32;
-  verbose_logging:bool;
-  fail_loud_on_accumulation_bug:bool;
-
-  plateau_noise_enabled:bool;
-  plateau_noise_patience:uint32;
-  plateau_noise_variance_threshold:float32;
-  plateau_noise_standard_deviation:float32;
-  plateau_noise_proportional:bool;
-  plateau_noise_cooldown:uint32;
-  plateau_noise_max_per_epoch:uint32;
-}
-
-table TelemetryLatticeConfig {
-  num_levels:uint32;
-  num_streams:uint32;
-  beta_mu:float32;
-  beta_a:float32;
-  beta_delta:float32;
-  beta_r:float32;
-  beta_run:float32;
-  beta_v:float32;
-  k_out0:float32;
-  alpha_v:float32;
-  epsilon:float32;
-  strict_mode:bool;
 }
 
 // ---------------------------------------------------------------------------
 // Root artifact
 // ---------------------------------------------------------------------------
 
-table CompiledHyperparameters {
+table CompiledModelHyperparameters {
   // FlatBuffer wire shape version implemented by the loader.
   schema_version:uint32 = 1;
 
-  identity:ConfigIdentity (required);
-  provenance:SourceProvenance (required);
+  // Identifies the formula/validation rules used to produce this artifact.
+  // It is separate from schema_version because computations can change without
+  // changing the FlatBuffer wire shape.
+  semantic_version:uint32;
+
   integrity:ConfigIntegrity (required);
 
-  required_capabilities:[RuntimeCapability] (required);
+  required_capabilities:[ModelCapability] (required);
 
   architecture:ArchitectureConfig (required);
   derived_architecture:DerivedArchitecture (required);
   features:ModelFeatures (required);
-  parameter_precision:ParameterPrecisionConfig (required);
-
-  paths:ArtifactPaths (required);
   tokenizer:TokenizerConfig (required);
-
-  run_selection:RunSelection (required);
-  training:TrainingCoreConfig (required);
-  learning_rate_schedule:LearningRateScheduleConfig (required);
-  optimizer:OptimizerConfig (required);
-  loss:LossConfig (required);
-  soft_restart:SoftRestartConfig (required);
-  auto_stop:AutoStopConfig (required);
-  stability_override_evidence:StabilityOverrideEvidence (required);
-  derived_schedule:DerivedSchedule (required);
-
-  runtime:RuntimeExecutionConfig (required);
-  generation:GenerationConfig (required);
-  logging:LoggingConfig (required);
-  diagnostics:DiagnosticsConfig (required);
-  telemetry_control:TelemetryControlConfig (required);
-  telemetry_lattice:TelemetryLatticeConfig (required);
 }
 
-root_type CompiledHyperparameters;
+root_type CompiledModelHyperparameters;
 file_identifier "GCFG";
 file_extension "grimcfg";
