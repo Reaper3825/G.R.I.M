@@ -15,8 +15,9 @@ namespace GRIM {
 // Current GRMT training tensor stream version.
 //
 // v19 adds invisible logical token spans for target state, the full criteria
-// collection, and each ordered criterion/evidence pair. Goal content is pinned
-// ahead of the prompt; delimiter strings never enter model-visible tokens.
+// collection, and each ordered criterion/evidence pair. Evidence spans may be
+// absent for criteria awaiting evidence generation. The prompt is pinned ahead
+// of the goal decomposition; delimiter strings never enter model-visible tokens.
 //
 // v18 adds row-level Goal metadata: target-state tokens and ordered,
 // evidence-paired success-criterion tokens.

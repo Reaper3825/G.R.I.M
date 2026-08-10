@@ -59,6 +59,24 @@ inline void appendLogicalSpan(std::ostringstream& out,
 inline RenderResult render(const nlohmann::json& j) {
     RenderResult result;
     std::ostringstream out;
+    const bool has_goal_decomposition =
+        j.contains("goal") && j["goal"].is_object() &&
+        ((j["goal"].contains("target_state") &&
+          j["goal"]["target_state"].is_string() &&
+          !j["goal"]["target_state"].get<std::string>().empty()) ||
+         (j["goal"].contains("success_criteria") &&
+          j["goal"]["success_criteria"].is_array() &&
+          !j["goal"]["success_criteria"].empty()));
+
+    if (j.contains("prompt") && j["prompt"].is_string()
+        && !j["prompt"].get<std::string>().empty()) {
+        result.prompt_byte_begin = static_cast<size_t>(out.tellp());
+        out << j["prompt"].get<std::string>();
+        result.prompt_byte_end = static_cast<size_t>(out.tellp());
+        // Keep the pinned prompt visually separate from goal decomposition
+        // while leaving the separator outside the logical prompt span.
+        out << (has_goal_decomposition ? "\n\n" : "\n");
+    }
 
     if (j.contains("goal") && j["goal"].is_object()) {
         const auto& goal = j["goal"];
@@ -74,6 +92,7 @@ inline RenderResult render(const nlohmann::json& j) {
             goal["success_criteria"].is_array() &&
             !goal["success_criteria"].empty()) {
             result.criteria.begin = static_cast<size_t>(out.tellp());
+            size_t criteria_content_end = result.criteria.begin;
             result.success_criteria.reserve(goal["success_criteria"].size());
             for (size_t index = 0; index < goal["success_criteria"].size(); ++index) {
                 const auto& source_entry = goal["success_criteria"][index];
@@ -85,6 +104,9 @@ inline RenderResult render(const nlohmann::json& j) {
                             out,
                             source_entry["criterion"].get<std::string>(),
                             entry.criterion);
+                        if (entry.criterion.present) {
+                            criteria_content_end = entry.criterion.end;
+                        }
                     }
                     if (entry.criterion.present) {
                         out << "\n";
@@ -95,6 +117,9 @@ inline RenderResult render(const nlohmann::json& j) {
                             out,
                             source_entry["evidence"].get<std::string>(),
                             entry.evidence);
+                        if (entry.evidence.present) {
+                            criteria_content_end = entry.evidence.end;
+                        }
                     }
                 }
                 result.success_criteria.push_back(entry);
@@ -102,23 +127,13 @@ inline RenderResult render(const nlohmann::json& j) {
                     out << "\n\n";
                 }
             }
-            result.criteria.end = static_cast<size_t>(out.tellp());
+            result.criteria.end = criteria_content_end;
             result.criteria.present =
                 result.criteria.end > result.criteria.begin;
             if (result.criteria.present) {
                 out << "\n\n";
             }
         }
-    }
-
-    if (j.contains("prompt") && j["prompt"].is_string()
-        && !j["prompt"].get<std::string>().empty()) {
-        result.prompt_byte_begin = static_cast<size_t>(out.tellp());
-        out << j["prompt"].get<std::string>();
-        result.prompt_byte_end = static_cast<size_t>(out.tellp());
-        // Keep human-readable content separated while leaving the newline
-        // outside the logical prompt span.
-        out << "\n";
     }
 
     const nlohmann::json* explanation = nullptr;
@@ -216,6 +231,11 @@ inline RenderResult render(const ConceptBlock& cb) {
 // compilation. These tags are never passed to UniByte or model input_ids.
 inline std::string renderLogicalTrainingPreview(const ConceptBlock& cb) {
     std::ostringstream out;
+
+    if (!cb.prompt.empty()) {
+        out << "<prompt>\n" << cb.prompt << "\n</prompt>\n\n";
+    }
+
     if (cb.goal.has_value()) {
         if (!cb.goal->target_state.empty()) {
             out << "<target_state>\n"
@@ -230,20 +250,18 @@ inline std::string renderLogicalTrainingPreview(const ConceptBlock& cb) {
                 const auto& entry = cb.goal->success_criteria[index];
                 out << "    <criterion>\n"
                     << "    " << entry.criterion << "\n"
-                    << "    </criterion>\n"
-                    << "    <evidence>\n"
-                    << "    " << entry.evidence << "\n"
-                    << "    </evidence>\n";
+                    << "    </criterion>\n";
+                if (!entry.evidence.empty()) {
+                    out << "    <evidence>\n"
+                        << "    " << entry.evidence << "\n"
+                        << "    </evidence>\n";
+                }
                 if (index + 1 < cb.goal->success_criteria.size()) {
                     out << "\n";
                 }
             }
             out << "</criteria>\n\n";
         }
-    }
-
-    if (!cb.prompt.empty()) {
-        out << "<prompt>\n" << cb.prompt << "\n</prompt>\n\n";
     }
 
     const auto& explanation = cb.explanation.empty()

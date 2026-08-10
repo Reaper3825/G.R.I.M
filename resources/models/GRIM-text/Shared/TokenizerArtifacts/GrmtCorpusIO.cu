@@ -178,6 +178,22 @@ void validateGoalMetadata(const std::shared_ptr<const GRIM::Goal>& goal,
             }
         }
     };
+    auto validate_optional_token_ids =
+        [&source, &validate_token_ids](
+            const std::vector<std::int32_t>& token_ids,
+            const GRIM::GoalTokenSpan& span,
+            const std::string& field) {
+            if (token_ids.empty()) {
+                if (span.begin != -1 || span.end != -1) {
+                    throw std::runtime_error(
+                        "[GRMT] " + source + ": " + field +
+                        " absent tokens require an absent logical span");
+                }
+                return false;
+            }
+            validate_token_ids(token_ids, span, field);
+            return true;
+        };
 
     if (goal->target_state.has_value()) {
         validate_token_ids(
@@ -203,26 +219,34 @@ void validateGoalMetadata(const std::shared_ptr<const GRIM::Goal>& goal,
                 entries[index].token_ids,
                 entries[index].criterion_span,
                 prefix + ".criterion");
-            validate_token_ids(
+            const bool has_evidence = validate_optional_token_ids(
                 entries[index].evidence_token_ids,
                 entries[index].evidence_span,
                 prefix + ".evidence");
-            if (entries[index].criterion_span.end >
+            if (has_evidence && entries[index].criterion_span.end >
                 entries[index].evidence_span.begin) {
                 throw std::runtime_error(
                     "[GRMT] " + source + ": " + prefix +
                     " criterion/evidence spans are out of order");
             }
-            if (index > 0 &&
-                entries[index - 1].evidence_span.end >
-                    entries[index].criterion_span.begin) {
-                throw std::runtime_error(
-                    "[GRMT] " + source +
-                    ": success-criterion pairs overlap or are out of order");
+            if (index > 0) {
+                const auto& previous = entries[index - 1];
+                const std::int32_t previous_end = previous.evidence_span.valid()
+                    ? previous.evidence_span.end
+                    : previous.criterion_span.end;
+                if (previous_end > entries[index].criterion_span.begin) {
+                    throw std::runtime_error(
+                        "[GRMT] " + source +
+                        ": success-criterion pairs overlap or are out of order");
+                }
             }
         }
+        const auto& last_entry = entries.back();
+        const std::int32_t last_end = last_entry.evidence_span.valid()
+            ? last_entry.evidence_span.end
+            : last_entry.criterion_span.end;
         if (criteria.span.begin != entries.front().criterion_span.begin ||
-            criteria.span.end != entries.back().evidence_span.end) {
+            criteria.span.end != last_end) {
             throw std::runtime_error(
                 "[GRMT] " + source +
                 ": outer criteria span does not enclose the ordered pairs exactly");
@@ -263,8 +287,10 @@ void validateGoalTokenSlices(const std::shared_ptr<const GRIM::Goal>& goal,
                 "goal.success_criteria[" + std::to_string(index) + "]";
             validate(entry.token_ids, entry.criterion_span,
                      prefix + ".criterion");
-            validate(entry.evidence_token_ids, entry.evidence_span,
-                     prefix + ".evidence");
+            if (!entry.evidence_token_ids.empty()) {
+                validate(entry.evidence_token_ids, entry.evidence_span,
+                         prefix + ".evidence");
+            }
         }
     }
 }

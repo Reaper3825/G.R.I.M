@@ -7,8 +7,9 @@
 
 namespace GRIM {
 
-// One verifier contract. Keeping criterion and evidence in the same record
-// preserves their field-level association through corpus/window/batch copies.
+// One verifier contract. Keeping optional evidence in the same record preserves
+// its field-level association through corpus/window/batch copies. An empty
+// evidence_token_ids vector and invalid evidence_span mean evidence is pending.
 struct SuccessCriterion {
     std::vector<std::int32_t> token_ids;
     GoalTokenSpan criterion_span;

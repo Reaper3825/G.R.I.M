@@ -138,13 +138,18 @@ def validate_entries(entries: list[dict[str, Any]], vocab_path: Path) -> dict[st
     }
 
 
-def replace_owned_entries(path: Path, entries: list[dict[str, Any]], dry_run: bool) -> tuple[int, int]:
+def replace_owned_entries(
+    path: Path,
+    entries: list[dict[str, Any]],
+    dry_run: bool,
+    entry_prefix: str = ENTRY_PREFIX,
+) -> tuple[int, int]:
     if not path.exists():
         raise FileNotFoundError(f"concept block dataset not found: {path}")
     kept = 0
     removed = 0
     seen_owned_ids: set[str] = set()
-    owned_marker = ENTRY_PREFIX.encode("ascii")
+    owned_marker = entry_prefix.encode("ascii")
     if dry_run:
         with path.open("rb") as source:
             for line_number, line in enumerate(source, start=1):
@@ -153,9 +158,9 @@ def replace_owned_entries(path: Path, entries: list[dict[str, Any]], dry_run: bo
                 if owned_marker in line:
                     row = json.loads(line)
                     block_id = row.get("id")
-                    if not isinstance(block_id, str) or not block_id.startswith(ENTRY_PREFIX):
+                    if not isinstance(block_id, str) or not block_id.startswith(entry_prefix):
                         raise ValueError(
-                            f"{path}:{line_number}: {ENTRY_PREFIX} appears outside an owned id")
+                            f"{path}:{line_number}: {entry_prefix} appears outside an owned id")
                     if block_id in seen_owned_ids:
                         raise ValueError(f"{path}:{line_number}: duplicate owned id {block_id}")
                     seen_owned_ids.add(block_id)
@@ -175,9 +180,9 @@ def replace_owned_entries(path: Path, entries: list[dict[str, Any]], dry_run: bo
                 if owned_marker in line:
                     row = json.loads(line)
                     block_id = row.get("id")
-                    if not isinstance(block_id, str) or not block_id.startswith(ENTRY_PREFIX):
+                    if not isinstance(block_id, str) or not block_id.startswith(entry_prefix):
                         raise ValueError(
-                            f"{path}:{line_number}: {ENTRY_PREFIX} appears outside an owned id")
+                            f"{path}:{line_number}: {entry_prefix} appears outside an owned id")
                     if block_id in seen_owned_ids:
                         raise ValueError(f"{path}:{line_number}: duplicate owned id {block_id}")
                     seen_owned_ids.add(block_id)
@@ -200,21 +205,27 @@ def replace_owned_entries(path: Path, entries: list[dict[str, Any]], dry_run: bo
     return removed, kept
 
 
-def update_registry(path: Path, entries: list[dict[str, Any]], dry_run: bool) -> None:
+def update_registry(
+    path: Path,
+    entries: list[dict[str, Any]],
+    dry_run: bool,
+    curriculum_id: str = CURRICULUM_ID,
+    curriculum_name: str = CURRICULUM_NAME,
+) -> None:
     if not path.exists():
         raise FileNotFoundError(f"curriculum registry not found: {path}")
     registry = json.loads(path.read_text(encoding="utf-8"))
     curricula = registry.get("curriculums")
     if not isinstance(curricula, list):
         raise ValueError("curriculum registry must contain a curriculums array")
-    matches = [item for item in curricula if item.get("id") == CURRICULUM_ID]
+    matches = [item for item in curricula if item.get("id") == curriculum_id]
     if len(matches) > 1:
-        raise ValueError(f"curriculum registry contains duplicate id {CURRICULUM_ID}")
-    curriculum = matches[0] if matches else {"id": CURRICULUM_ID, "timestamp": int(time.time())}
+        raise ValueError(f"curriculum registry contains duplicate id {curriculum_id}")
+    curriculum = matches[0] if matches else {"id": curriculum_id, "timestamp": int(time.time())}
     if not matches:
         curricula.append(curriculum)
     curriculum.update({
-        "name": CURRICULUM_NAME,
+        "name": curriculum_name,
         "format_as_concept": True,
         "concept_block_ids": [entry["id"] for entry in entries],
     })

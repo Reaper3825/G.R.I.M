@@ -768,11 +768,6 @@ bool UIDataHubPanel::buildConceptBlockFromEditor(
                     + " cannot be empty";
                 return false;
             }
-            if (evidence.empty()) {
-                validation_error = "Evidence for success criterion "
-                    + std::to_string(i + 1) + " is required";
-                return false;
-            }
             goal.success_criteria.push_back(
                 GRIM::ConceptBlockSuccessCriterion{criterion, evidence});
         }

@@ -733,11 +733,13 @@ bool PrepareTrainingDataFromCache(
 					boundaries, token_counts, prefix + ".criterion");
 				entry.token_ids = span_token_ids(
 					sequence, entry.criterion_span, prefix + ".criterion");
-				entry.evidence_span = token_span(
-					rendered.success_criteria[index].evidence,
-					boundaries, token_counts, prefix + ".evidence");
-				entry.evidence_token_ids = span_token_ids(
-					sequence, entry.evidence_span, prefix + ".evidence");
+				if (rendered.success_criteria[index].evidence.present) {
+					entry.evidence_span = token_span(
+						rendered.success_criteria[index].evidence,
+						boundaries, token_counts, prefix + ".evidence");
+					entry.evidence_token_ids = span_token_ids(
+						sequence, entry.evidence_span, prefix + ".evidence");
+				}
 				success_criteria.entries.push_back(std::move(entry));
 			}
 			if (!success_criteria.entries.empty()) {

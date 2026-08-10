@@ -50,8 +50,10 @@ std::shared_ptr<const GRIM::Goal> offsetGoalSpans(
         for (auto& entry : criteria.entries) {
             entry.criterion_span.begin += offset;
             entry.criterion_span.end += offset;
-            entry.evidence_span.begin += offset;
-            entry.evidence_span.end += offset;
+            if (entry.evidence_span.valid()) {
+                entry.evidence_span.begin += offset;
+                entry.evidence_span.end += offset;
+            }
         }
         shifted->success_criteria = std::move(criteria);
     }

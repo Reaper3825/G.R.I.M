@@ -30,8 +30,9 @@ struct ConceptExecutionStep {
     double               result = 0.0;
 };
 
-// Evidence stays nested with its criterion so downstream verification never
-// has to infer the association from parallel arrays or criterion text keys.
+// Optional evidence stays nested with its criterion so downstream verification
+// never has to infer the association from parallel arrays or criterion text
+// keys. An empty string means the criterion is waiting for evidence generation.
 struct ConceptBlockSuccessCriterion {
     std::string criterion;
     std::string evidence;

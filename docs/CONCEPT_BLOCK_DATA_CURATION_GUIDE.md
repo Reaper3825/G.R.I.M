@@ -204,11 +204,12 @@ schema with required and optional fields:
 - `goal.success_criteria` is an ordered array. Each criterion owns its
   `evidence` field, so duplicate criterion text and later edits cannot break
   the criterion-to-evidence association.
-- DataHub requires non-empty evidence for every success criterion it saves.
-- For concept-mode SFT, goal content is pinned before the prompt in this exact
-  logical order: `<target_state>`, outer `<criteria>`, then each
-  `<criterion>` immediately followed by its matching `<evidence>`, followed by
-  `<prompt>` and the response.
+- A success criterion's `evidence` is optional. Omit it or store an empty
+  string when the criterion is intentionally waiting for evidence generation.
+- For concept-mode SFT, the prompt is pinned before the goal decomposition in
+  this exact logical order: `<prompt>`, `<target_state>`, outer `<criteria>`,
+  then each `<criterion>` immediately followed by its matching `<evidence>`
+  when present, followed by the response.
 - These delimiter strings appear in DataHub's logical training preview only.
   They are stored as half-open token spans and never enter model `input_ids`.
 
