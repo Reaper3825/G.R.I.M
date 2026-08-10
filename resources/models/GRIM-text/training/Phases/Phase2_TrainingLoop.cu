@@ -80,6 +80,11 @@ void logMeanPoolHistogram(
     std::string_view phase,
     cudaStream_t stream)
 {
+    constexpr bool kEnableMeanPoolHistogramLogging = false;
+    if (!kEnableMeanPoolHistogramLogging) {
+        return;
+    }
+
     constexpr int kBinCount = 32;
     constexpr float kMinValue = -1.0f;
     constexpr float kMaxValue = 1.0f;
