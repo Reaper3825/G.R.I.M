@@ -1,10 +1,10 @@
 # GRIM model configuration compiler
 
 `compile_model_config` is a host-only compiler for immutable `.grimcfg`
-artifacts. It reads the human-authored `training.config` object and an exact
-KTMG v4 `vocab.bin`, computes model-derived values, validates cross-field
-invariants, and emits the `GCFG` FlatBuffer defined in
-`../schemas/grim_compiled_hyperparameters.fbs`.
+artifacts. It reads the single human-authored root object in
+`model_config.json`, computes model-derived values, validates cross-field
+invariants, and emits the `GCFG` FlatBuffer
+defined in `../schemas/grim_compiled_hyperparameters.fbs`.
 
 It intentionally does not include or link `Shared/HyperParameters`, tokenizer
 runtime classes, CUDA, or training startup code. Formula and validation changes
@@ -27,13 +27,16 @@ The TrainingLoop build also exposes the same target through `add_subdirectory`.
 
 ```text
 compile_model_config \
-  --input ai_config.json \
-  --vocab resources/models/GRIM-text/training/data/vocab.bin \
+  --input model_config.json \
   --output model.grimcfg
 ```
 
-The compiler verifies the vocabulary's structure and derives `vocab_size` from
-its actual token-space header. `vocab_sha256` binds the exact vocabulary bytes.
+Vocabulary size is intentionally late-bound by training or inference startup
+before model allocation. Exact vocabulary identity belongs to trained-weight or
+checkpoint compatibility metadata, represented separately by
+`../schemas/grim_model_manifest.fbs`, not to this reusable model preset. The
+input must be the model object itself; `ai_config.json` and `training.config`
+wrappers are not accepted.
 
 Artifact integrity is source-independent: SHA-256 and model-compatibility
 xxHash64 are computed over the serialized artifact after normalizing all three

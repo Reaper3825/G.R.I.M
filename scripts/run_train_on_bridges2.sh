@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run GRIM-text training on PSC Bridges-2 via SSH.
-# Usage: ./scripts/run_train_on_bridges2.sh [--build] [--jobs N] [--exclude NODELIST] [--sbatch] [--sync TARGET...] [--sync-all|--sync-mcs|--sync-cbs|--sync-crs|--sync-fas] [--pull-vocab] [--pull-logs] [--allow-vcpkg-tool-downloads]
+# Usage: ./scripts/run_train_on_bridges2.sh [--build] [--jobs N] [--exclude NODELIST] [--sbatch] [--sync TARGET...] [--sync-all|--sync-mcs|--sync-cbs|--sync-crs|--sync-fas|--sync-gmc PATH] [--pull-vocab] [--pull-logs] [--allow-vcpkg-tool-downloads]
 #
 # Prerequisites:
 #   - SSH: ssh uwadkins@bridges2.psc.edu (or add to ~/.ssh/config as Host bridges2)
@@ -46,6 +46,10 @@
 #   --sync-mcs       Push merged_verified_cache.jsonl.
 #   --sync-cbs       Push concept_blocks.jsonl (if present locally).
 #   --sync-crs       Push curriculum_registry.json (if present locally).
+#   --sync-gmc PATH  Push a local per-model model.grimcfg to the matching model-store directory on Bridges-2.
+#                    Equivalent grouped form: --sync gmc PATH
+#                    PATH must be resources/models/model_store/<model-id>/model.grimcfg.
+#                    GRIM_BRIDGES2_GMC_PATH provides the same path through the environment.
 #   --sync-fas       On --build, run scripts/bridges2_ensure_flash_attention.sh (skips forced git pull if FA
 #                    gitlink + pinned Cutlass SHA already match remote; still applies patches).
 #   --allow-vcpkg-tool-downloads
@@ -72,6 +76,7 @@ BUILD_DIR="$TRAINING_DIR/TrainingLoop/build"
 EXE="$BUILD_DIR/train_gpu"
 TRAINING_DATA_DIR="$REPO_ROOT/resources/models/GRIM-text/training/data"
 TRAINING_LOGS_DIR="$REPO_ROOT/resources/models/GRIM-text/training/logs"
+LOCAL_MODEL_STORE_DIR="$REPO_ROOT/resources/models/model_store"
 CACHE_PATH="$TRAINING_DATA_DIR/merged_verified_cache.jsonl"
 CONCEPT_BLOCKS_PATH="$TRAINING_DATA_DIR/concept_blocks.jsonl"
 CURRICULUM_REGISTRY_PATH="$TRAINING_DATA_DIR/curriculum_registry.json"
@@ -102,6 +107,8 @@ FLAG_SYNC_MCS=false
 FLAG_SYNC_CBS=false
 FLAG_SYNC_FAS=false
 FLAG_SYNC_CRS=false
+FLAG_SYNC_GMC=false
+LOCAL_GMC_PATH=""
 DO_TD=false
 DO_UT=false
 DO_TT=false
@@ -135,6 +142,15 @@ while [[ $# -gt 0 ]]; do
     --sync-cbs)       FLAG_SYNC_CBS=true; shift ;;
     --sync-crs)       FLAG_SYNC_CRS=true; shift ;;
     --sync-fas)       FLAG_SYNC_FAS=true; shift ;;
+    --sync-gmc)
+      [[ $# -lt 2 || -z "$2" || "$2" == --* ]] && {
+        echo "ERROR: --sync-gmc requires resources/models/model_store/<model-id>/model.grimcfg" >&2
+        exit 1
+      }
+      FLAG_SYNC_GMC=true
+      LOCAL_GMC_PATH="$2"
+      shift 2
+      ;;
     --allow-vcpkg-tool-downloads) ALLOW_VCPKG_TOOL_DOWNLOADS=true; shift ;;
     --exclude)
       [[ $# -lt 2 || -z "$2" ]] && { echo "ERROR: --exclude requires a Slurm node list (e.g. w001)"; exit 1; }
@@ -155,7 +171,16 @@ while [[ $# -gt 0 ]]; do
           cbs) FLAG_SYNC_CBS=true ;;
           crs) FLAG_SYNC_CRS=true ;;
           fas) FLAG_SYNC_FAS=true ;;
-          *)   echo "ERROR: Unknown sync target: $1 (valid: all mcs cbs crs fas)"; exit 1 ;;
+          gmc)
+            [[ $# -lt 2 || -z "$2" || "$2" == --* ]] && {
+              echo "ERROR: --sync gmc requires resources/models/model_store/<model-id>/model.grimcfg" >&2
+              exit 1
+            }
+            FLAG_SYNC_GMC=true
+            LOCAL_GMC_PATH="$2"
+            shift
+            ;;
+          *)   echo "ERROR: Unknown sync target: $1 (valid: all mcs cbs crs fas gmc PATH)"; exit 1 ;;
         esac
         shift
       done
@@ -201,11 +226,13 @@ if [[ "${GRIM_BRIDGES2_USE_MANUAL_DEPS:-0}" == "1" ]]; then
   exit 1
 fi
 
-# MCS/CBS/CRS/FAS = merged cache / concept blocks / curriculum registry / flash-attention (build). Default: skip all; opt in via flags or SYNC_* env.
+# MCS/CBS/CRS/FAS/GMC = merged cache / concept blocks / curriculum registry /
+# flash-attention (build) / compiled GRIM model config. Default: skip all.
 SKIP_MCS=1
 SKIP_CBS=1
 SKIP_CRS=1
 SKIP_FAS=1
+SKIP_GMC=1
 if [[ "$FLAG_SYNC_ALL" == true ]] || [[ "${GRIM_BRIDGES2_SYNC_ALL:-0}" == "1" ]]; then
   SKIP_MCS=0
   SKIP_CBS=0
@@ -216,12 +243,59 @@ fi
 [[ "$FLAG_SYNC_CBS" == true ]] || [[ "${GRIM_BRIDGES2_SYNC_CBS:-0}" == "1" ]] && SKIP_CBS=0
 [[ "$FLAG_SYNC_CRS" == true ]] || [[ "${GRIM_BRIDGES2_SYNC_CRS:-0}" == "1" ]] && SKIP_CRS=0
 [[ "$FLAG_SYNC_FAS" == true ]] || [[ "${GRIM_BRIDGES2_SYNC_FAS:-0}" == "1" ]] && SKIP_FAS=0
+if [[ -z "$LOCAL_GMC_PATH" && -n "${GRIM_BRIDGES2_GMC_PATH:-}" ]]; then
+  LOCAL_GMC_PATH="$GRIM_BRIDGES2_GMC_PATH"
+  FLAG_SYNC_GMC=true
+fi
+[[ "$FLAG_SYNC_GMC" == true ]] && SKIP_GMC=0
+
+GMC_PATH_EXPANDED=""
+GMC_MODEL_ID=""
+REMOTE_GMC=""
+if [[ "$SKIP_GMC" == "0" ]]; then
+  GMC_PATH_EXPANDED="${LOCAL_GMC_PATH/#\~/$HOME}"
+  if [[ "$GMC_PATH_EXPANDED" != /* ]]; then
+    GMC_PATH_EXPANDED="$REPO_ROOT/$GMC_PATH_EXPANDED"
+  fi
+  if [[ ! -f "$GMC_PATH_EXPANDED" ]]; then
+    echo "ERROR: GMC model config not found at $GMC_PATH_EXPANDED" >&2
+    exit 1
+  fi
+  if [[ "$(basename "$GMC_PATH_EXPANDED")" != "model.grimcfg" ]]; then
+    echo "ERROR: GMC path must end in model.grimcfg: $GMC_PATH_EXPANDED" >&2
+    exit 1
+  fi
+  if [[ ! -d "$LOCAL_MODEL_STORE_DIR" ]]; then
+    echo "ERROR: local model store not found at $LOCAL_MODEL_STORE_DIR" >&2
+    exit 1
+  fi
+
+  GMC_PARENT_DIR="$(cd "$(dirname "$GMC_PATH_EXPANDED")" && pwd -P)"
+  LOCAL_MODEL_STORE_ABS="$(cd "$LOCAL_MODEL_STORE_DIR" && pwd -P)"
+  case "$GMC_PARENT_DIR" in
+    "$LOCAL_MODEL_STORE_ABS"/*) GMC_MODEL_ID="${GMC_PARENT_DIR#"$LOCAL_MODEL_STORE_ABS"/}" ;;
+    *)
+      echo "ERROR: GMC path must be directly under $LOCAL_MODEL_STORE_ABS/<model-id>/model.grimcfg" >&2
+      exit 1
+      ;;
+  esac
+  if [[ -z "$GMC_MODEL_ID" || "$GMC_MODEL_ID" == */* || "$GMC_MODEL_ID" == "." || "$GMC_MODEL_ID" == ".." ]]; then
+    echo "ERROR: GMC path must identify exactly one model-store directory: $GMC_PATH_EXPANDED" >&2
+    exit 1
+  fi
+  if [[ ! "$GMC_MODEL_ID" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
+    echo "ERROR: GMC model ID must contain only letters, digits, '_' or '-': $GMC_MODEL_ID" >&2
+    exit 1
+  fi
+  REMOTE_GMC="$BRIDGES2_DIR/resources/models/model_store/$GMC_MODEL_ID/model.grimcfg"
+fi
 
 _assets_mcs=$([[ "$SKIP_MCS" == 0 ]] && echo sync || echo off)
 _assets_cbs=$([[ "$SKIP_CBS" == 0 ]] && echo sync || echo off)
 _assets_crs=$([[ "$SKIP_CRS" == 0 ]] && echo sync || echo off)
 _assets_fas=$([[ "$SKIP_FAS" == 0 ]] && echo sync || echo off)
-echo "[Bridges-2] training assets: MCS=$_assets_mcs  CBS=$_assets_cbs  CRS=$_assets_crs  FAS=$_assets_fas  (default off — use --sync-all or --sync-{mcs,cbs,crs,fas})"
+_assets_gmc=$([[ "$SKIP_GMC" == 0 ]] && echo "sync:$GMC_MODEL_ID" || echo off)
+echo "[Bridges-2] training assets: MCS=$_assets_mcs  CBS=$_assets_cbs  CRS=$_assets_crs  FAS=$_assets_fas  GMC=$_assets_gmc"
 
 # Validate (path/account have defaults; override with env if needed)
 if [[ -z "$BRIDGES2_DIR" ]]; then
@@ -325,6 +399,7 @@ fi
 SINGLE_SHOT=false
 if [[ "$USE_SBATCH" == true && "$DO_TD" != true && "$DO_UT" != true && "$DO_TT" != true \
       && "$SKIP_MCS" == "1" && "$SKIP_CBS" == "1" && "$SKIP_CRS" == "1" \
+      && "$SKIP_GMC" == "1" \
       && "${GRIM_ALLOW_VCPKG_TOOL_DOWNLOADS:-0}" != "1" ]]; then
   SINGLE_SHOT=true
 fi
@@ -1484,6 +1559,10 @@ elif [[ -f "$CURRICULUM_REGISTRY_PATH_EXPANDED" ]]; then
   transfer_training_file "curriculum_registry.json" "$CURRICULUM_REGISTRY_PATH_EXPANDED" "$REMOTE_CURRICULUM_REGISTRY"
 else
   echo "Skipping curriculum_registry.json (not found at $CURRICULUM_REGISTRY_PATH_EXPANDED)."
+fi
+
+if [[ "$SKIP_GMC" != "1" ]]; then
+  transfer_training_file "GMC model.grimcfg ($GMC_MODEL_ID)" "$GMC_PATH_EXPANDED" "$REMOTE_GMC"
 fi
 
 # Transfer canonical ai_config.json

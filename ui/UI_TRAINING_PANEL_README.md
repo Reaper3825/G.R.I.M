@@ -30,17 +30,18 @@ The tab:
 3. Applies edits only to the in-memory preset. It does not mutate
    `ai_config.json`.
 4. Selects an existing text-model directory or accepts a new model ID.
-5. Invokes the standalone `compile_model_config` executable with the selected
-   KTMG v4 `vocab.bin`.
+5. Invokes the standalone `compile_model_config` executable with the authored
+   model configuration.
 6. Writes the artifact atomically to:
 
    ```text
    resources/models/model_store/<model-id>/model.grimcfg
    ```
 
-The compiler derives vocabulary geometry, validates cross-field invariants,
-and embeds the artifact integrity hashes. A failed compilation leaves an
-existing `model.grimcfg` intact.
+The compiler derives model geometry, validates cross-field invariants, and
+embeds the artifact integrity hashes. Vocabulary size remains late-bound by
+training or inference startup. A failed compilation leaves an existing
+`model.grimcfg` intact.
 
 ## Config compiler
 

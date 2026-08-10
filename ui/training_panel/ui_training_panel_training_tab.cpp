@@ -378,7 +378,6 @@ std::string quoteCommandPath(const fs::path& path) {
 
 int runConfigCompilerProcess(const fs::path& compiler,
                              const fs::path& input,
-                             const fs::path& vocab,
                              const fs::path& output,
                              const fs::path& logPath) {
 #ifdef _WIN32
@@ -408,7 +407,6 @@ int runConfigCompilerProcess(const fs::path& compiler,
 
     std::wstring commandLine = quoteWide(compiler) +
         L" --input " + quoteWide(input) +
-        L" --vocab " + quoteWide(vocab) +
         L" --output " + quoteWide(output);
 
     STARTUPINFOW startup{};
@@ -448,7 +446,6 @@ int runConfigCompilerProcess(const fs::path& compiler,
     const std::string command =
         quoteCommandPath(compiler) +
         " --input " + quoteCommandPath(input) +
-        " --vocab " + quoteCommandPath(vocab) +
         " --output " + quoteCommandPath(output) +
         " > " + quoteCommandPath(logPath) + " 2>&1";
     return std::system(command.c_str());
@@ -590,16 +587,15 @@ void UITrainingPanel::beginConfigCompile() {
     configCompileStatus_ = "Compiling immutable model configuration...";
     configCompileSuccess_ = false;
 
-    const nlohmann::json source = configPresetDocument_;
+    const nlohmann::json source =
+        configPresetDocument_.at("training").at("config");
     const std::string compilerPath = configCompilerPathBuffer_;
-    const std::string vocabPath = configVocabPathBuffer_;
     const std::string modelId = configModelIdBuffer_;
     configCompileFuture_ = std::async(
         std::launch::async,
         &UITrainingPanel::compileConfigPreset,
         source,
         compilerPath,
-        vocabPath,
         modelStorePath,
         modelId);
 }
@@ -629,7 +625,6 @@ void UITrainingPanel::applyConfigCompileResult() {
 UITrainingPanel::ConfigCompileResult UITrainingPanel::compileConfigPreset(
     const nlohmann::json& source,
     const std::string& compilerPath,
-    const std::string& vocabPath,
     const std::string& modelStorePath,
     const std::string& modelId)
 {
@@ -639,14 +634,11 @@ UITrainingPanel::ConfigCompileResult UITrainingPanel::compileConfigPreset(
 
     try {
         if (!isValidModelId(modelId)) throw std::runtime_error("invalid model ID");
-        if (!source.contains("training") || !source.at("training").is_object() ||
-            !source.at("training").contains("config") ||
-            !source.at("training").at("config").is_object()) {
-            throw std::runtime_error("preset source does not contain training.config");
+        if (!source.is_object()) {
+            throw std::runtime_error("model configuration source must be one root object");
         }
 
         const fs::path compiler = resolvePathFromGrimRoot(compilerPath);
-        const fs::path vocab = resolvePathFromGrimRoot(vocabPath);
         const fs::path store = resolvePathFromGrimRoot(modelStorePath);
         const fs::path modelDirectory = store / modelId;
         const fs::path output = modelDirectory / "model.grimcfg";
@@ -656,10 +648,6 @@ UITrainingPanel::ConfigCompileResult UITrainingPanel::compileConfigPreset(
         if (!fs::is_regular_file(compiler)) {
             throw std::runtime_error("config compiler not found: " + compiler.string());
         }
-        if (!fs::is_regular_file(vocab)) {
-            throw std::runtime_error("vocabulary not found: " + vocab.string());
-        }
-
         fs::create_directories(modelDirectory);
         {
             std::ofstream input(inputPath, std::ios::trunc);
@@ -671,7 +659,7 @@ UITrainingPanel::ConfigCompileResult UITrainingPanel::compileConfigPreset(
         std::error_code ec;
         fs::remove(logPath, ec);
         const int exitCode = runConfigCompilerProcess(
-            compiler, inputPath, vocab, output, logPath);
+            compiler, inputPath, output, logPath);
         std::string compilerOutput;
         {
             std::ifstream log(logPath);
@@ -707,7 +695,6 @@ UITrainingPanel::ConfigCompileResult UITrainingPanel::compileConfigPreset(
 void UITrainingPanel::updateModelConfigTab(const InputState& input, float dt) {
     if (configModelDropdown_) configModelDropdown_->update(input, dt);
     if (configModelIdInput_) configModelIdInput_->update(input, dt);
-    if (configVocabPathInput_) configVocabPathInput_->update(input, dt);
     if (configCompilerPathInput_) configCompilerPathInput_->update(input, dt);
     if (configCompileButton_) configCompileButton_->update(input, dt);
     if (configReloadButton_) configReloadButton_->update(input, dt);
@@ -844,13 +831,6 @@ void UITrainingPanel::drawModelConfigTab(OverlayRenderer& renderer, const PanelR
     configModelIdInput_->drawOverlay(renderer, position);
     y += 38.0f;
 
-    renderer.drawText({innerX, y}, "Vocabulary", Colors::TextSecondary);
-    y += 18.0f;
-    configVocabPathInput_->setPosition(innerX, y);
-    configVocabPathInput_->setSize(innerW, 28.0f);
-    configVocabPathInput_->drawOverlay(renderer, position);
-    y += 38.0f;
-
     renderer.drawText({innerX, y}, "Config compiler", Colors::TextSecondary);
     y += 18.0f;
     configCompilerPathInput_->setPosition(innerX, y);
@@ -897,6 +877,6 @@ void UITrainingPanel::drawModelConfigTab(OverlayRenderer& renderer, const PanelR
     y += 20.0f;
     renderer.drawText(
         {innerX, y},
-        "The compiler derives vocabulary geometry, validates invariants, and writes model.grimcfg atomically.",
+        "The compiler derives model geometry, validates invariants, and writes model.grimcfg atomically.",
         Colors::TextMuted);
 }

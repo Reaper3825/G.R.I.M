@@ -49,7 +49,6 @@ struct CompiledArchitectureConfig {
     std::uint32_t num_kv_heads = 0;
     std::uint32_t d_ff = 0;
     std::uint32_t max_seq_len = 0;
-    std::uint32_t vocab_size = 0;
     bool tie_embeddings = false;
     float embedding_scale = 0.0f;
 };
@@ -164,7 +163,6 @@ struct CompiledModelFeatures {
 
 struct CompiledTokenizerConfig {
     std::string model_type;
-    std::array<std::uint8_t, 32> vocab_sha256{};
     std::vector<std::string> special_tokens;
     bool add_bos = false;
     bool add_eos = false;

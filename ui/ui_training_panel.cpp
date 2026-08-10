@@ -155,15 +155,6 @@ UITrainingPanel::UITrainingPanel()
     configModelIdInput_->setPlaceholder("model-id");
     configModelIdInput_->setSize(420.0f, 28.0f);
 
-    try {
-        configVocabPathBuffer_ = aiConfig.at("paths").at("grim_text").at("vocab").get<std::string>();
-    } catch (...) {
-        configVocabPathBuffer_ = "resources/models/GRIM-text/training/data/vocab.bin";
-    }
-    configVocabPathInput_ = std::make_shared<UIInputBox>(&configVocabPathBuffer_);
-    configVocabPathInput_->setPlaceholder("Path to KTMG v4 vocab.bin");
-    configVocabPathInput_->setSize(420.0f, 28.0f);
-
     configCompilerPathBuffer_ = findConfigCompilerExecutable();
     configCompilerPathInput_ = std::make_shared<UIInputBox>(&configCompilerPathBuffer_);
     configCompilerPathInput_->setPlaceholder("Path to compile_model_config executable");

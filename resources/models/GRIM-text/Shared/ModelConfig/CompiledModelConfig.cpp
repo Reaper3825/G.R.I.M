@@ -20,8 +20,8 @@ namespace {
 
 namespace fs = std::filesystem;
 
-constexpr std::uint32_t kSupportedSchemaVersion = 1;
-constexpr std::uint32_t kSupportedSemanticVersion = 1;
+constexpr std::uint32_t kSupportedSchemaVersion = 2;
+constexpr std::uint32_t kSupportedSemanticVersion = 2;
 constexpr std::uintmax_t kMaximumArtifactBytes = 16u * 1024u * 1024u;
 
 class Sha256 {
@@ -282,7 +282,7 @@ void validateDecoded(const CompiledModelConfigSnapshot& c) {
     const auto& d = c.derived_architecture;
     const auto& f = c.features;
     if (a.d_model == 0 || a.num_layers == 0 || a.num_heads == 0 ||
-        a.num_kv_heads == 0 || a.max_seq_len == 0 || a.vocab_size == 0) {
+        a.num_kv_heads == 0 || a.max_seq_len == 0) {
         throw std::runtime_error("compiled architecture contains a zero required dimension");
     }
     if (a.d_model % a.num_heads != 0 || a.num_heads % a.num_kv_heads != 0 ||
@@ -495,7 +495,7 @@ CompiledModelConfigSnapshot loadCompiledModelConfig(const fs::path& artifact_pat
     }
 
     result.architecture = {a->d_model(), a->num_layers(), a->num_heads(), a->num_kv_heads(),
-        a->d_ff(), a->max_seq_len(), a->vocab_size(), a->tie_embeddings(), a->embedding_scale()};
+        a->d_ff(), a->max_seq_len(), a->tie_embeddings(), a->embedding_scale()};
     result.derived_architecture = {d->head_dim(), d->heads_per_kv_group(), d->kv_dim(),
         d->qkv_dim(), d->rotary_dim(), d->is_gqa(), d->attention_softmax_scale(),
         copyFloats(d->pbm_alibi_slopes()), copyFloats(d->pbm_rope_inv_freq())};
@@ -541,10 +541,6 @@ CompiledModelConfigSnapshot loadCompiledModelConfig(const fs::path& artifact_pat
     }
 
     result.tokenizer.model_type = copyString(t->model_type(), "tokenizer.model_type");
-    if (!t->vocab_sha256() || t->vocab_sha256()->size() != 32) {
-        throw std::runtime_error("model config tokenizer vocab SHA-256 is malformed");
-    }
-    std::copy(t->vocab_sha256()->begin(), t->vocab_sha256()->end(), result.tokenizer.vocab_sha256.begin());
     if (!t->special_tokens()) throw std::runtime_error("model config tokenizer special_tokens is missing");
     for (const auto* token : *t->special_tokens()) {
         result.tokenizer.special_tokens.push_back(copyString(token, "tokenizer.special_tokens[]"));

@@ -209,14 +209,12 @@ private:
     bool configPresetDirty_ = false;
     std::vector<std::string> configModelIds_;
     std::string configModelIdBuffer_;
-    std::string configVocabPathBuffer_;
     std::string configCompilerPathBuffer_;
     std::string configCompileStatus_;
     bool configCompileSuccess_ = false;
 
     std::shared_ptr<UIDropdown> configModelDropdown_;
     std::shared_ptr<UIInputBox> configModelIdInput_;
-    std::shared_ptr<UIInputBox> configVocabPathInput_;
     std::shared_ptr<UIInputBox> configCompilerPathInput_;
     std::shared_ptr<UIButton> configCompileButton_;
     std::shared_ptr<UIButton> configReloadButton_;
@@ -238,7 +236,6 @@ private:
     static ConfigCompileResult compileConfigPreset(
         const nlohmann::json& source,
         const std::string& compilerPath,
-        const std::string& vocabPath,
         const std::string& modelStorePath,
         const std::string& modelId);
 

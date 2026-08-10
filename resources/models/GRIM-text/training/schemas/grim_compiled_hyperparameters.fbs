@@ -83,9 +83,6 @@ table ArchitectureConfig {
   d_ff:uint32;
   max_seq_len:uint32;
 
-  // Final model token-space width, bound to TokenizerConfig.vocab_sha256.
-  vocab_size:uint32;
-
   tie_embeddings:bool;
   embedding_scale:float32;
 }
@@ -217,15 +214,11 @@ table ModelFeatures {
 }
 
 // ---------------------------------------------------------------------------
-// Tokenizer and token-ID contract
+// Tokenizer behavior and reserved token-ID contract
 // ---------------------------------------------------------------------------
 
 table TokenizerConfig {
   model_type:string;
-
-  // SHA-256 of the exact vocabulary/tokenizer artifact. Must contain exactly
-  // 32 bytes and must match ArchitectureConfig.vocab_size.
-  vocab_sha256:[ubyte] (required);
 
   special_tokens:[string] (required);
   add_bos:bool;
@@ -252,7 +245,7 @@ table TokenizerConfig {
 
 table CompiledModelHyperparameters {
   // FlatBuffer wire shape version implemented by the loader.
-  schema_version:uint32 = 1;
+  schema_version:uint32 = 2;
 
   // Identifies the formula/validation rules used to produce this artifact.
   // It is separate from schema_version because computations can change without

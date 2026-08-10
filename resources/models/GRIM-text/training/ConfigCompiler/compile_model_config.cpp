@@ -26,26 +26,13 @@ using json = nlohmann::json;
 
 namespace {
 
-constexpr std::uint32_t kSchemaVersion = 1;
-constexpr std::uint32_t kSemanticVersion = 1;
+constexpr std::uint32_t kSchemaVersion = 2;
+constexpr std::uint32_t kSemanticVersion = 2;
 constexpr std::uint32_t kFfnMultiplier = 4;
-constexpr std::uint32_t kSpecialTokenCount = 4;
-constexpr std::uint32_t kByteTokenCount = 256;
-constexpr std::uint32_t kAtomTokenCount = 2;
-constexpr std::uint32_t kUnigramOffset =
-    kSpecialTokenCount + kByteTokenCount + kAtomTokenCount;
-constexpr std::uint32_t kMaxPieceLength = 32;
 
 struct Cli {
     fs::path input;
-    fs::path vocab;
     fs::path output;
-};
-
-struct VocabFacts {
-    std::vector<std::uint8_t> bytes;
-    std::array<std::uint8_t, 32> sha256{};
-    std::uint32_t token_space_size = 0;
 };
 
 struct EffectiveConfig {
@@ -55,7 +42,6 @@ struct EffectiveConfig {
     std::uint32_t num_kv_heads = 0;
     std::uint32_t d_ff = 0;
     std::uint32_t max_seq_len = 0;
-    std::uint32_t vocab_size = 0;
     bool tie_embeddings = false;
     float embedding_scale = 0.0f;
 
@@ -346,134 +332,12 @@ std::uint64_t xxhash64(const std::uint8_t* input, std::size_t length, std::uint6
     return h;
 }
 
-std::vector<std::uint8_t> readFile(const fs::path& path) {
-    std::ifstream stream(path, std::ios::binary | std::ios::ate);
-    if (!stream) throw std::runtime_error("cannot open file: " + path.string());
-    const auto end = stream.tellg();
-    if (end < 0) throw std::runtime_error("cannot determine file size: " + path.string());
-    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(end));
-    stream.seekg(0);
-    if (!bytes.empty()) {
-        stream.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-    }
-    if (!stream) throw std::runtime_error("failed reading file: " + path.string());
-    return bytes;
-}
-
-class ByteCursor {
-public:
-    ByteCursor(const std::vector<std::uint8_t>& bytes, const fs::path& source)
-        : bytes_(bytes), source_(source.string()) {}
-
-    std::uint16_t u16() {
-        require(2);
-        const auto value = static_cast<std::uint16_t>(bytes_[at_]) |
-                           static_cast<std::uint16_t>(bytes_[at_ + 1] << 8);
-        at_ += 2;
-        return value;
-    }
-    std::uint32_t u32() {
-        require(4);
-        const auto value = readLe32(bytes_.data() + at_);
-        at_ += 4;
-        return value;
-    }
-    std::int32_t i32() { return static_cast<std::int32_t>(u32()); }
-    float f32() {
-        const std::uint32_t bits = u32();
-        float value = 0.0f;
-        std::memcpy(&value, &bits, sizeof(value));
-        return value;
-    }
-    std::string text(std::size_t size) {
-        require(size);
-        std::string value(reinterpret_cast<const char*>(bytes_.data() + at_), size);
-        at_ += size;
-        return value;
-    }
-    void skip(std::size_t size) { require(size); at_ += size; }
-    bool done() const { return at_ == bytes_.size(); }
-
-private:
-    void require(std::size_t size) const {
-        if (size > bytes_.size() - at_) {
-            throw std::runtime_error("truncated KTMG vocabulary artifact: " + source_);
-        }
-    }
-    const std::vector<std::uint8_t>& bytes_;
-    std::string source_;
-    std::size_t at_ = 0;
-};
-
-VocabFacts inspectVocab(const fs::path& path) {
-    VocabFacts facts;
-    facts.bytes = readFile(path);
-    facts.sha256 = sha256(facts.bytes.data(), facts.bytes.size());
-    ByteCursor cursor(facts.bytes, path);
-    if (cursor.text(4) != "KTMG") throw std::runtime_error("vocabulary is not a KTMG artifact: " + path.string());
-    const std::uint16_t version = cursor.u16();
-    if (version != 4) throw std::runtime_error("unsupported KTMG vocabulary version " + std::to_string(version));
-    cursor.skip(4); // Historical checksum placeholder; exact bytes are covered by SHA-256.
-    const std::uint32_t record_count = cursor.u32();
-    const std::uint32_t max_length = cursor.u32();
-    if (max_length != kMaxPieceLength) {
-        throw std::runtime_error("KTMG max piece length must be " + std::to_string(kMaxPieceLength));
-    }
-    cursor.skip(3); // Reserved flags.
-    facts.token_space_size = cursor.u32();
-    if (record_count < kSpecialTokenCount) throw std::runtime_error("KTMG vocabulary omits special-token records");
-
-    static constexpr std::array<const char*, 4> special_text{{"<unk>", "<pad>", "<s>", "</s>"}};
-    std::array<bool, 4> special_seen{};
-    std::set<std::string> learned_tokens;
-    std::uint32_t learned_count = 0;
-    for (std::uint32_t record = 0; record < record_count; ++record) {
-        const std::uint32_t length = cursor.u32();
-        if (length == 0 || length > kMaxPieceLength) {
-            throw std::runtime_error("invalid KTMG piece length at record " + std::to_string(record));
-        }
-        const std::string token = cursor.text(length);
-        const float score = cursor.f32();
-        const std::int32_t token_id = cursor.i32();
-        if (!std::isfinite(score)) throw std::runtime_error("non-finite KTMG score at record " + std::to_string(record));
-        if (token_id >= 0 && token_id < static_cast<std::int32_t>(kSpecialTokenCount)) {
-            const auto index = static_cast<std::size_t>(token_id);
-            if (special_seen[index] || token != special_text[index]) {
-                throw std::runtime_error("invalid KTMG special-token metadata at record " + std::to_string(record));
-            }
-            special_seen[index] = true;
-        } else {
-            const std::int32_t expected = static_cast<std::int32_t>(kUnigramOffset + learned_count);
-            if (token_id != expected) {
-                throw std::runtime_error("non-contiguous KTMG learned token ID at record " + std::to_string(record));
-            }
-            if (!learned_tokens.insert(token).second) {
-                throw std::runtime_error("duplicate KTMG learned token at record " + std::to_string(record));
-            }
-            ++learned_count;
-        }
-    }
-    if (!cursor.done()) throw std::runtime_error("KTMG vocabulary has trailing bytes: " + path.string());
-    if (std::find(special_seen.begin(), special_seen.end(), false) != special_seen.end()) {
-        throw std::runtime_error("KTMG vocabulary does not define all four special tokens");
-    }
-    if (record_count != learned_count + kSpecialTokenCount) {
-        throw std::runtime_error("KTMG vocabulary record accounting mismatch");
-    }
-    const std::uint32_t computed_size = kUnigramOffset + learned_count;
-    if (facts.token_space_size != computed_size) {
-        throw std::runtime_error("KTMG token-space header " + std::to_string(facts.token_space_size) +
-                                 " does not match computed size " + std::to_string(computed_size));
-    }
-    return facts;
-}
-
 template <typename T>
 T required(const json& config, const char* name) {
     try {
         return config.at(name).get<T>();
     } catch (const std::exception& e) {
-        throw std::runtime_error(std::string("invalid required training.config.") + name + ": " + e.what());
+        throw std::runtime_error(std::string("invalid required model_config.") + name + ": " + e.what());
     }
 }
 
@@ -481,7 +345,7 @@ std::uint32_t requiredU32(const json& config, const char* name, bool allow_zero 
     const auto value = required<std::int64_t>(config, name);
     if (value < (allow_zero ? 0 : 1) ||
         value > static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max())) {
-        throw std::runtime_error(std::string("training.config.") + name + " is out of uint32 range");
+        throw std::runtime_error(std::string("model_config.") + name + " is out of uint32 range");
     }
     return static_cast<std::uint32_t>(value);
 }
@@ -489,14 +353,14 @@ std::uint32_t requiredU32(const json& config, const char* name, bool allow_zero 
 std::int32_t requiredI32(const json& config, const char* name) {
     const auto value = required<std::int64_t>(config, name);
     if (value < std::numeric_limits<std::int32_t>::min() || value > std::numeric_limits<std::int32_t>::max()) {
-        throw std::runtime_error(std::string("training.config.") + name + " is out of int32 range");
+        throw std::runtime_error(std::string("model_config.") + name + " is out of int32 range");
     }
     return static_cast<std::int32_t>(value);
 }
 
 float requiredFinite(const json& config, const char* name) {
     const float value = required<float>(config, name);
-    if (!std::isfinite(value)) throw std::runtime_error(std::string("training.config.") + name + " must be finite");
+    if (!std::isfinite(value)) throw std::runtime_error(std::string("model_config.") + name + " must be finite");
     return value;
 }
 
@@ -553,15 +417,11 @@ std::vector<float> computeRopeInvFreq(const EffectiveConfig& c) {
     return frequencies;
 }
 
-EffectiveConfig compileEffectiveConfig(const json& document, const VocabFacts& vocab) {
-    const json* config_ptr = nullptr;
-    try {
-        config_ptr = &document.at("training").at("config");
-    } catch (const std::exception& e) {
-        throw std::runtime_error(std::string("input must contain object training.config: ") + e.what());
+EffectiveConfig compileEffectiveConfig(const json& model_config) {
+    if (!model_config.is_object()) {
+        throw std::runtime_error("model_config.json root must be an object");
     }
-    const json& j = *config_ptr;
-    if (!j.is_object()) throw std::runtime_error("training.config must be an object");
+    const json& j = model_config;
     EffectiveConfig c;
     c.d_model = requiredU32(j, "d_model");
     c.num_layers = requiredU32(j, "num_layers");
@@ -576,7 +436,6 @@ EffectiveConfig compileEffectiveConfig(const json& document, const VocabFacts& v
         throw std::runtime_error("derived d_ff overflows uint32");
     }
     c.d_ff = c.d_model * kFfnMultiplier;
-    c.vocab_size = vocab.token_space_size;
     c.tie_embeddings = required<bool>(j, "tie_embeddings");
     c.embedding_scale = requiredFinite(j, "embedding_scale");
     requirePositive(c.embedding_scale, "embedding_scale");
@@ -606,9 +465,9 @@ EffectiveConfig compileEffectiveConfig(const json& document, const VocabFacts& v
     requireBiasParent(use_bias, c.ffn_output_bias, "ffn_output_bias_enabled");
     requireBiasParent(use_bias, c.lm_head_bias, "lm_head_bias_enabled");
 
-    c.causal_mask = j.value("causal_mask", true);
-    c.use_pre_norm = j.value("use_pre_norm", true);
-    c.fuse_qkv = j.value("fuse_qkv", true);
+    c.causal_mask = required<bool>(j, "causal_mask");
+    c.use_pre_norm = required<bool>(j, "use_pre_norm");
+    c.fuse_qkv = required<bool>(j, "fuse_qkv");
     c.qk_norm = required<bool>(j, "qk_norm_enabled");
     c.attention_off_by_one = required<bool>(j, "attention_off_by_one");
     c.attention_residual_gate = required<bool>(j, "attention_residual_gate_enabled");
@@ -630,7 +489,7 @@ EffectiveConfig compileEffectiveConfig(const json& document, const VocabFacts& v
     c.alibi_slopes = computeAlibiSlopes(c);
     c.rope_inv_freq = computeRopeInvFreq(c);
 
-    c.rms_epsilon = j.value("rms_epsilon", 1.0e-5f);
+    c.rms_epsilon = requiredFinite(j, "rms_epsilon");
     requirePositive(c.rms_epsilon, "rms_epsilon");
     c.use_layer_scale = required<bool>(j, "use_layer_scale");
     c.center_residuals = required<bool>(j, "center_encoder_residuals");
@@ -792,7 +651,6 @@ std::uint64_t capabilityHash(const std::vector<GRIMConfig::ModelCapability>& cap
 
 std::vector<std::uint8_t> buildArtifact(
     const EffectiveConfig& c,
-    const VocabFacts& vocab,
     const std::array<std::uint8_t, 32>& semantic_hash,
     std::uint64_t model_hash,
     std::uint64_t capability_hash) {
@@ -809,7 +667,7 @@ std::vector<std::uint8_t> buildArtifact(
 
     const auto architecture = GRIMConfig::CreateArchitectureConfig(
         builder, c.d_model, c.num_layers, c.num_heads, c.num_kv_heads, c.d_ff,
-        c.max_seq_len, c.vocab_size, c.tie_embeddings, c.embedding_scale);
+        c.max_seq_len, c.tie_embeddings, c.embedding_scale);
     const auto alibi = builder.CreateVector(c.alibi_slopes);
     const auto rope = builder.CreateVector(c.rope_inv_freq);
     const auto derived = GRIMConfig::CreateDerivedArchitecture(
@@ -867,9 +725,8 @@ std::vector<std::uint8_t> buildArtifact(
     special_strings.reserve(c.tokenizer_special_tokens.size());
     for (const auto& value : c.tokenizer_special_tokens) special_strings.push_back(builder.CreateString(value));
     const auto special_tokens = builder.CreateVector(special_strings);
-    const auto vocab_hash = builder.CreateVector(vocab.sha256.data(), vocab.sha256.size());
     const auto tokenizer = GRIMConfig::CreateTokenizerConfig(
-        builder, model_type, vocab_hash, special_tokens, c.tokenizer_add_bos,
+        builder, model_type, special_tokens, c.tokenizer_add_bos,
         c.tokenizer_add_eos, builder.CreateString(c.tokenizer_unk_token),
         builder.CreateString(c.tokenizer_pad_token), builder.CreateString(c.tokenizer_bos_token),
         builder.CreateString(c.tokenizer_eos_token), 0, 1, 2, 3,
@@ -948,17 +805,16 @@ Cli parseCli(int argc, char** argv) {
             return fs::path(argv[i]);
         };
         if (arg == "--input") cli.input = value();
-        else if (arg == "--vocab") cli.vocab = value();
         else if (arg == "--output") cli.output = value();
         else if (arg == "--help" || arg == "-h") {
-            std::cout << "Usage: compile_model_config --input ai_config.json --vocab vocab.bin --output model.grimcfg\n";
+            std::cout << "Usage: compile_model_config --input model_config.json --output model.grimcfg\n";
             std::exit(0);
         } else {
             throw std::runtime_error("unknown argument: " + arg);
         }
     }
-    if (cli.input.empty() || cli.vocab.empty() || cli.output.empty()) {
-        throw std::runtime_error("--input, --vocab, and --output are required");
+    if (cli.input.empty() || cli.output.empty()) {
+        throw std::runtime_error("--input and --output are required");
     }
     return cli;
 }
@@ -981,16 +837,15 @@ int main(int argc, char** argv) {
     try {
         const Cli cli = parseCli(argc, argv);
         const json source = readJson(cli.input);
-        const VocabFacts vocab = inspectVocab(cli.vocab);
-        const EffectiveConfig config = compileEffectiveConfig(source, vocab);
+        const EffectiveConfig config = compileEffectiveConfig(source);
         const std::uint64_t capability_hash = capabilityHash(config.capabilities);
 
         const std::array<std::uint8_t, 32> zero_hash{};
-        const auto provisional = buildArtifact(config, vocab, zero_hash, 0, 0);
+        const auto provisional = buildArtifact(config, zero_hash, 0, 0);
         const auto normalized = normalizedArtifact(provisional);
         const auto semantic_hash = sha256(normalized.data(), normalized.size());
         const std::uint64_t model_hash = xxhash64(normalized.data(), normalized.size());
-        const auto artifact = buildArtifact(config, vocab, semantic_hash, model_hash, capability_hash);
+        const auto artifact = buildArtifact(config, semantic_hash, model_hash, capability_hash);
         verifyFlatBuffer(artifact);
 
         const auto verification_image = normalizedArtifact(artifact);
@@ -1003,8 +858,6 @@ int main(int argc, char** argv) {
         std::cout << "compiled " << cli.output.string() << "\n"
                   << "  schema_version: " << kSchemaVersion << "\n"
                   << "  semantic_version: " << kSemanticVersion << "\n"
-                  << "  vocab_size: " << config.vocab_size << "\n"
-                  << "  vocab_sha256: " << hex(vocab.sha256.data(), vocab.sha256.size()) << "\n"
                   << "  semantic_sha256: " << hex(semantic_hash.data(), semantic_hash.size()) << "\n"
                   << "  model_compatibility_xxhash64: 0x" << std::hex << model_hash << "\n"
                   << "  capability_xxhash64: 0x" << capability_hash << std::dec << "\n";
