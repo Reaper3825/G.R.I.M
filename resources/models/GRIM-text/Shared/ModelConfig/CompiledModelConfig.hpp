@@ -61,11 +61,13 @@ struct CompiledDerivedArchitecture {
     std::uint32_t rotary_dim = 0;
     bool is_gqa = false;
     float attention_softmax_scale = 0.0f;
+    float residual_projection_init_gain = 0.0f;
     std::vector<float> pbm_alibi_slopes;
     std::vector<float> pbm_rope_inv_freq;
 };
 
 struct CompiledBiasPolicy {
+    bool use_bias = false;
     bool attention_qkv = false;
     bool attention_output = false;
     bool ffn_output = false;
@@ -94,6 +96,7 @@ struct CompiledPositionalEncodingConfig {
 struct CompiledEncoderConfig {
     float rms_epsilon = 0.0f;
     bool use_layer_scale = false;
+    float layer_scale_init = 0.0f;
     bool center_residuals = false;
 };
 

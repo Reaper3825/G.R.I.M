@@ -1513,7 +1513,8 @@ inline NumberEncoderConstructionHP numberEncoderConstructionHP(
     view.d_hidden = model.number_encoder_d_hidden;
     view.max_digit_slots = model.number_encoder_max_digit_slots;
     view.max_abs_pow10 = model.number_encoder_max_abs_pow10;
-    view.pow10_buckets = 2 * model.number_encoder_max_abs_pow10 + 1;
+    view.pow10_buckets = snapshotTrainingConfigField<int>(
+        snapshot, "number_encoder_pow10_buckets");
     view.contribution_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "number_encoder_contribution_bias_enabled");
     view.global_bias_enabled = snapshotTrainingConfigField<bool>(snapshot, "number_encoder_global_bias_enabled");
     return view;

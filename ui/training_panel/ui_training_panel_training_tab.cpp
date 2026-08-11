@@ -20,21 +20,21 @@ using namespace UITrainingPanelDetail;
 
 void UITrainingPanel::loadHyperparamSnapshot() {
     try {
-        configPresetDocument_ = loadGrimRuntimeAiConfig();
-        if (!configPresetDocument_.contains("training") ||
-            !configPresetDocument_.at("training").is_object()) {
-            throw std::runtime_error("ai_config.json missing object: training");
+        const nlohmann::json aiConfig = loadGrimRuntimeAiConfig();
+        configModelStorePath_ = aiConfig.at("paths").at("grim_text")
+            .at("model_store").get<std::string>();
+
+        const std::filesystem::path sourcePath =
+            std::filesystem::path(getGrimRootDir()) / "model_config.json";
+        std::ifstream source(sourcePath);
+        if (!source) {
+            throw std::runtime_error("cannot open model_config.json at " + sourcePath.string());
         }
-        nlohmann::json& training = configPresetDocument_.at("training");
-        if (!training.contains("config") || !training.at("config").is_object()) {
-            throw std::runtime_error("ai_config.json missing object: training.config");
+        source >> configPresetDocument_;
+        if (!configPresetDocument_.is_object()) {
+            throw std::runtime_error("model_config.json root must be one object");
         }
-        nlohmann::json& sourceConfig = training["config"];
-        if (!sourceConfig.contains("causal_mask")) sourceConfig["causal_mask"] = true;
-        if (!sourceConfig.contains("use_pre_norm")) sourceConfig["use_pre_norm"] = true;
-        if (!sourceConfig.contains("fuse_qkv")) sourceConfig["fuse_qkv"] = true;
-        if (!sourceConfig.contains("rms_epsilon")) sourceConfig["rms_epsilon"] = 1.0e-5;
-        hyperparamRegistry_.populateModelConfigSchema(sourceConfig);
+        hyperparamRegistry_.populateModelConfigSchema(configPresetDocument_);
         hyperparamsLoaded_ = true;
         configPresetDirty_ = false;
         configCompileStatus_ = "FlatBuffer model schema loaded";
@@ -339,9 +339,8 @@ void UITrainingPanel::cancelParamEdit() {
 bool UITrainingPanel::setPresetHyperparamValue(const GRIM::Config::HyperparamEntry& entry,
                                                 const nlohmann::json& value) {
     try {
-        configPresetDocument_["training"]["config"][entry.key] = value;
-        hyperparamRegistry_.populateModelConfigSchema(
-            configPresetDocument_.at("training").at("config"));
+        configPresetDocument_[entry.key] = value;
+        hyperparamRegistry_.populateModelConfigSchema(configPresetDocument_);
         configPresetDirty_ = true;
         configCompileStatus_ = "Preset modified in memory; create .grimcfg to save it";
         configCompileSuccess_ = true;
@@ -517,7 +516,7 @@ void UITrainingPanel::refreshConfigModelDropdown() {
 
     try {
         const fs::path store = resolvePathFromGrimRoot(
-            configPresetDocument_.at("paths").at("grim_text").at("model_store").get<std::string>());
+            configModelStorePath_);
         if (fs::is_directory(store)) {
             for (const auto& entry : fs::directory_iterator(store)) {
                 if (entry.is_directory()) modelIds.insert(entry.path().filename().string());
@@ -547,7 +546,7 @@ std::string UITrainingPanel::configOutputPath() const {
     if (!isValidModelId(configModelIdBuffer_)) return {};
     try {
         const fs::path store = resolvePathFromGrimRoot(
-            configPresetDocument_.at("paths").at("grim_text").at("model_store").get<std::string>());
+            configModelStorePath_);
         return relativeDisplayPath(store / configModelIdBuffer_ / "model.grimcfg");
     } catch (...) {
         return {};
@@ -576,8 +575,10 @@ void UITrainingPanel::beginConfigCompile() {
 
     std::string modelStorePath;
     try {
-        modelStorePath = configPresetDocument_.at("paths").at("grim_text")
-            .at("model_store").get<std::string>();
+        modelStorePath = configModelStorePath_;
+        if (modelStorePath.empty()) {
+            throw std::runtime_error("model-store path is empty");
+        }
     } catch (const std::exception& e) {
         configCompileStatus_ = std::string("Missing model-store path: ") + e.what();
         configCompileSuccess_ = false;
@@ -587,8 +588,7 @@ void UITrainingPanel::beginConfigCompile() {
     configCompileStatus_ = "Compiling immutable model configuration...";
     configCompileSuccess_ = false;
 
-    const nlohmann::json source =
-        configPresetDocument_.at("training").at("config");
+    const nlohmann::json source = configPresetDocument_;
     const std::string compilerPath = configCompilerPathBuffer_;
     const std::string modelId = configModelIdBuffer_;
     configCompileFuture_ = std::async(

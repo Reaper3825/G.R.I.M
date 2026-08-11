@@ -22,8 +22,8 @@ expected to run remotely through the HPC/SSH workflow.
 
 The tab:
 
-1. Uses the runtime model values as in-memory defaults for the authored inputs
-   to `grim_compiled_hyperparameters.fbs`.
+1. Loads root `model_config.json` as the in-memory authored input for
+   `grim_compiled_hyperparameters.fbs`.
 2. Exposes only model-semantic fields, grouped by FlatBuffer table. Training
    procedure, optimizer, loss, batching, logging, diagnostics, and telemetry
    settings are excluded.

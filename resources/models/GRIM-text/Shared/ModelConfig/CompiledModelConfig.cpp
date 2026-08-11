@@ -20,8 +20,8 @@ namespace {
 
 namespace fs = std::filesystem;
 
-constexpr std::uint32_t kSupportedSchemaVersion = 2;
-constexpr std::uint32_t kSupportedSemanticVersion = 2;
+constexpr std::uint32_t kSupportedSchemaVersion = 3;
+constexpr std::uint32_t kSupportedSemanticVersion = 3;
 constexpr std::uintmax_t kMaximumArtifactBytes = 16u * 1024u * 1024u;
 
 class Sha256 {
@@ -291,10 +291,13 @@ void validateDecoded(const CompiledModelConfigSnapshot& c) {
     }
     const std::uint32_t expected_head = a.d_model / a.num_heads;
     const std::uint32_t expected_kv = a.num_kv_heads * expected_head;
+    const float expected_residual_gain =
+        1.0f / std::sqrt(2.0f * static_cast<float>(a.num_layers));
     if (a.d_ff != a.d_model * 4u || d.head_dim != expected_head ||
         d.heads_per_kv_group != a.num_heads / a.num_kv_heads ||
         d.kv_dim != expected_kv || d.qkv_dim != a.d_model + 2u * expected_kv ||
-        d.rotary_dim != expected_head || d.is_gqa != (a.num_kv_heads < a.num_heads)) {
+        d.rotary_dim != expected_head || d.is_gqa != (a.num_kv_heads < a.num_heads) ||
+        std::abs(d.residual_projection_init_gain - expected_residual_gain) > 1.0e-6f) {
         throw std::runtime_error("compiled derived architecture does not match architecture geometry");
     }
     if (d.pbm_alibi_slopes.size() != a.num_heads ||
@@ -303,16 +306,36 @@ void validateDecoded(const CompiledModelConfigSnapshot& c) {
     }
     requireFinite(a.embedding_scale, "architecture.embedding_scale");
     requireFinite(d.attention_softmax_scale, "derived_architecture.attention_softmax_scale");
+    requireFinite(d.residual_projection_init_gain, "derived_architecture.residual_projection_init_gain");
     requireFinite(f.encoder.rms_epsilon, "features.encoder.rms_epsilon");
-    if (a.embedding_scale <= 0.0f || d.attention_softmax_scale <= 0.0f || f.encoder.rms_epsilon <= 0.0f) {
+    requireFinite(f.encoder.layer_scale_init, "features.encoder.layer_scale_init");
+    if (a.embedding_scale <= 0.0f || d.attention_softmax_scale <= 0.0f ||
+        d.residual_projection_init_gain <= 0.0f || f.encoder.rms_epsilon <= 0.0f ||
+        (f.encoder.use_layer_scale && f.encoder.layer_scale_init <= 0.0f)) {
         throw std::runtime_error("compiled model contains a non-positive scale or epsilon");
     }
     if (f.positional_encoding.kind <= CompiledPositionalEncoding::Unspecified ||
         f.positional_encoding.kind > CompiledPositionalEncoding::AlibiRope) {
         throw std::runtime_error("compiled positional encoding is invalid");
     }
+    const auto requireBiasParent = [&](bool child, const char* name) {
+        if (child && !f.bias.use_bias) {
+            throw std::runtime_error(std::string("compiled bias field requires use_bias: ") + name);
+        }
+    };
+    requireBiasParent(f.bias.attention_qkv, "attention_qkv");
+    requireBiasParent(f.bias.attention_output, "attention_output");
+    requireBiasParent(f.bias.ffn_output, "ffn_output");
+    requireBiasParent(f.bias.lm_head, "lm_head");
+    if (f.lm_head.unigram_bias_enabled && !f.bias.lm_head) {
+        throw std::runtime_error("compiled lm-head unigram bias requires lm-head bias");
+    }
     if (f.execution_block) {
         const auto& e = *f.execution_block;
+        requireBiasParent(e.decode_bias_enabled, "execution_block.decode_bias");
+        requireBiasParent(e.value_embedding_bias_enabled, "execution_block.value_embedding_bias");
+        requireBiasParent(e.scalar_bias_enabled, "execution_block.scalar_bias");
+        requireBiasParent(e.trace_bias_enabled, "execution_block.trace_bias");
         if (!f.use_atom_data || e.num_ops == 0 || e.num_slots == 0 || e.num_steps == 0 ||
             e.d_key != d.head_dim || e.cross_attention_head_dim != d.head_dim ||
             e.num_scratch_slots > e.num_slots || e.cross_attention_top_k > e.num_slots ||
@@ -322,6 +345,8 @@ void validateDecoded(const CompiledModelConfigSnapshot& c) {
     }
     if (f.number_encoder) {
         const auto& n = *f.number_encoder;
+        requireBiasParent(n.contribution_bias_enabled, "number_encoder.contribution_bias");
+        requireBiasParent(n.global_bias_enabled, "number_encoder.global_bias");
         if (!f.use_atom_data || n.max_digit_slots == 0 || n.d_hidden == 0 ||
             n.pow10_buckets != n.max_abs_pow10 * 2u + 1u) {
             throw std::runtime_error("compiled number-encoder contract is invalid");
@@ -332,6 +357,9 @@ void validateDecoded(const CompiledModelConfigSnapshot& c) {
     }
     if (f.slot_seed_encoder && (!f.use_atom_data || !f.execution_block || f.slot_seed_encoder->d_hidden == 0)) {
         throw std::runtime_error("compiled slot-seed encoder contract is invalid");
+    }
+    if (f.slot_seed_encoder) {
+        requireBiasParent(f.slot_seed_encoder->bias_enabled, "slot_seed_encoder.bias");
     }
     if (c.tokenizer.model_type.empty() || c.tokenizer.special_tokens.size() != 4 ||
         c.tokenizer.unk_token_id != 0 || c.tokenizer.pad_token_id != 1 ||
@@ -498,12 +526,13 @@ CompiledModelConfigSnapshot loadCompiledModelConfig(const fs::path& artifact_pat
         a->d_ff(), a->max_seq_len(), a->tie_embeddings(), a->embedding_scale()};
     result.derived_architecture = {d->head_dim(), d->heads_per_kv_group(), d->kv_dim(),
         d->qkv_dim(), d->rotary_dim(), d->is_gqa(), d->attention_softmax_scale(),
-        copyFloats(d->pbm_alibi_slopes()), copyFloats(d->pbm_rope_inv_freq())};
+        d->residual_projection_init_gain(), copyFloats(d->pbm_alibi_slopes()),
+        copyFloats(d->pbm_rope_inv_freq())};
 
     result.features.use_atom_data = f->use_atom_data();
     result.features.atom_embedding_dim = f->atom_embedding_dim();
-    result.features.bias = {f->bias()->attention_qkv(), f->bias()->attention_output(),
-        f->bias()->ffn_output(), f->bias()->lm_head()};
+    result.features.bias = {f->bias()->use_bias(), f->bias()->attention_qkv(),
+        f->bias()->attention_output(), f->bias()->ffn_output(), f->bias()->lm_head()};
     result.features.attention = {f->attention()->causal_mask(), f->attention()->use_pre_norm(),
         f->attention()->fuse_qkv(), f->attention()->qk_norm_enabled(),
         f->attention()->off_by_one_enabled(), f->attention()->residual_gate_enabled()};
@@ -515,7 +544,7 @@ CompiledModelConfigSnapshot loadCompiledModelConfig(const fs::path& artifact_pat
         f->positional_encoding()->alibi_max_bias(), f->positional_encoding()->rope_theta(),
         f->positional_encoding()->rope_scaling()};
     result.features.encoder = {f->encoder()->rms_epsilon(), f->encoder()->use_layer_scale(),
-        f->encoder()->center_residuals()};
+        f->encoder()->layer_scale_init(), f->encoder()->center_residuals()};
     result.features.lm_head = {f->lm_head()->unigram_bias_enabled(),
         f->lm_head()->center_hidden_states(), f->lm_head()->center_logits(),
         f->lm_head()->project_out_pc1(), f->lm_head()->pc1_power_iters(),

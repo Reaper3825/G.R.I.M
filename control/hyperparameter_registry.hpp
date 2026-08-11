@@ -139,6 +139,7 @@ public:
 
             {"rms_epsilon", "EncoderConfig"},
             {"use_layer_scale", "EncoderConfig"},
+            {"layer_scale_init", "EncoderConfig"},
             {"center_encoder_residuals", "EncoderConfig"},
 
             {"lm_head_unigram_bias", "LmHeadConfig"},

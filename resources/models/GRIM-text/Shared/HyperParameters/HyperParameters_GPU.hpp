@@ -33,7 +33,8 @@
 // HyperParameters_GPU.hpp - typed config owner / computation boundary
 // 
 // This header owns the first authoritative typed handoff produced from the
-// raw ai_config.json snapshot loaded by control/ai_config_paths.hpp.
+// raw ai_config.json plus compiled model snapshot loaded by
+// control/ai_config_paths.hpp.
 //
 // Structure:
 // 1. Core constants (always available, even in CUDA)
@@ -61,15 +62,6 @@ constexpr int CUDA_MAX_GRID_SIZE = 65535;         // Maximum blocks per grid dim
 // Derived CUDA constants - use primary constants for consistency
 constexpr int CUDA_QUANTIZATION_THREADS = CUDA_BLOCK_SIZE_STANDARD;  // Quantization kernel threads
 constexpr int CUDA_REDUCTION_MAX_BLOCKS = CUDA_BLOCK_SIZE_STANDARD;  // Cap grid size for reductions
-
-//======================================================//
-// Model Architecture Formula Constants
-// Architecture values themselves are authored in ai_config.json and consumed
-// through the HyperParameters snapshot-document finalization boundary. Constants in
-// this section may only be formulas or static kernel capabilities, never
-// authored model defaults.
-//======================================================//
-constexpr int D_FF_MULTIPLIER = 4;  // d_ff = d_model * multiplier
 
 //======================================================//
 // Numerical Stability Constants
@@ -155,11 +147,11 @@ constexpr int ATOM_TOKEN_END = ATOM_TOKEN_START + Tokenizer::kAtomTypeCount;  //
 constexpr uint32_t MAX_REASONABLE_VOCAB_SIZE = 2000000; // Sanity check for vocab detection
 
 // BOS/EOS Token Insertion Control
-// These flags are loaded from ai_config.json [tokenizer] section:
+// These flags are loaded from the compiled model tokenizer contract:
 //   add_bos: true/false - Controls whether to prepend BOS token to sequences
 //   add_eos: true/false - Controls whether to append EOS token to sequences
 // Used by Startup/SlidingWindow after LoadTrainingData reads GRMT rows.
-// See: ai_config.json [tokenizer] { "add_bos": true, "add_eos": true }
+// The authored source is model_config.json.
 
 //======================================================//
 // Flash Attention Constants
@@ -274,15 +266,6 @@ enum class ModelExecutionMode {
 };
 
 struct LanguageModelConfig;
-inline std::vector<float> computeDerivedPBMAlibiSlopes(
-    const LanguageModelConfig& params,
-    const char* caller);
-inline std::vector<float> computeDerivedPBMRopeInvFreq(
-    const LanguageModelConfig& params,
-    const char* caller);
-inline void populateDerivedPBMTables(
-    LanguageModelConfig& params,
-    const char* caller);
 
 struct LanguageModelConfig {
     int d_model = 0;
@@ -320,43 +303,6 @@ struct LanguageModelConfig {
     float residual_projection_init_gain = 0.0f;
 
     int vocab_size = 0;        // Configured model token-space width / tokenizer target vocab size.
-
-    void computeDerivedValues() {
-        if (d_model <= 0 || num_heads <= 0 || num_kv_heads <= 0) {
-            throw std::runtime_error("LanguageModelConfig::computeDerivedValues: d_model, num_heads, and num_kv_heads must be > 0");
-        }
-        if ((d_model % num_heads) != 0) {
-            throw std::runtime_error(
-                "LanguageModelConfig::computeDerivedValues: d_model (" +
-                std::to_string(d_model) + ") must be divisible by num_heads (" +
-                std::to_string(num_heads) + ")");
-        }
-        if (!isValidGQAConfig(num_heads, num_kv_heads)) {
-            throw std::runtime_error(
-                "LanguageModelConfig::computeDerivedValues: invalid GQA config num_heads=" +
-                std::to_string(num_heads) + " num_kv_heads=" + std::to_string(num_kv_heads));
-        }
-        if (num_layers <= 0) {
-            throw std::runtime_error(
-                "LanguageModelConfig::computeDerivedValues: num_layers must be > 0, got " +
-                std::to_string(num_layers));
-        }
-
-        head_dim = d_model / num_heads;
-        heads_per_kv_group = computeHeadsPerKVGroup(num_heads, num_kv_heads);
-        kv_dim = computeKVProjectionSize(d_model, num_heads, num_kv_heads);
-        qkv_dim = computeQKVProjectionSize(d_model, num_heads, num_kv_heads);
-        rotary_dim = head_dim;
-        attention_softmax_scale = computeAttentionSoftmaxScale(
-            head_dim, "LanguageModelConfig::computeDerivedValues");
-        is_gqa = num_kv_heads < num_heads;
-        populateDerivedPBMTables(*this, "LanguageModelConfig::computeDerivedValues");
-        if (d_ff <= 0) {
-            d_ff = d_model * D_FF_MULTIPLIER;
-        }
-        residual_projection_init_gain =
-            1.0f / std::sqrt(2.0f * static_cast<float>(num_layers));
-    }
 
     // Cache limits
     int max_cached_seq_len = 0;
@@ -1012,7 +958,7 @@ inline void validateLessThanFields(
 namespace GRIM {
 namespace HyperParameters {
 
-inline void deriveComputedLanguageModelConfig(LanguageModelConfig& params);
+inline void deriveTrainingRuntimeConfig(LanguageModelConfig& params);
 inline int computeMaxTokensPerBatch(int batch_size, int max_seq_len, const char* caller);
 inline void refreshMutableTrainingDerivedValues(LanguageModelConfig& params,
                                                 int effective_max_seq_len,
@@ -1040,7 +986,7 @@ namespace GRIM {
 namespace HyperParameters {
 
 inline LanguageModelConfig finalizeLanguageModelConfig(
-    const nlohmann::json& document,
+    const GRIM::Config::AiConfigSnapshot& snapshot,
     int argc,
     char** argv,
     ModelExecutionMode execution_mode);
@@ -1065,7 +1011,7 @@ inline int computeMaxTokensPerBatch(int batch_size, int max_seq_len, const char*
     return static_cast<int>(token_budget);
 }
 
-inline std::vector<float> computeDerivedPBMAlibiSlopes(
+inline std::vector<float> computeExpectedPBMAlibiSlopes(
     const LanguageModelConfig& params,
     const char* caller)
 {
@@ -1146,7 +1092,7 @@ inline std::vector<float> computeDerivedPBMAlibiSlopes(
     return slopes;
 }
 
-inline std::vector<float> computeDerivedPBMRopeInvFreq(
+inline std::vector<float> computeExpectedPBMRopeInvFreq(
     const LanguageModelConfig& params,
     const char* caller)
 {
@@ -1195,12 +1141,30 @@ inline std::vector<float> computeDerivedPBMRopeInvFreq(
     return inv_freq;
 }
 
-inline void populateDerivedPBMTables(
-    LanguageModelConfig& params,
+inline void validateCompiledPBMTables(
+    const LanguageModelConfig& params,
     const char* caller)
 {
-    params.pbm_alibi_slopes = computeDerivedPBMAlibiSlopes(params, caller);
-    params.pbm_rope_inv_freq = computeDerivedPBMRopeInvFreq(params, caller);
+    const auto expected_alibi = computeExpectedPBMAlibiSlopes(params, caller);
+    const auto expected_rope = computeExpectedPBMRopeInvFreq(params, caller);
+    if (params.pbm_alibi_slopes.size() != expected_alibi.size() ||
+        params.pbm_rope_inv_freq.size() != expected_rope.size()) {
+        throw std::runtime_error(std::string(caller) +
+            ": compiled PBM table dimensions do not match the model contract");
+    }
+    const auto require_close = [&](const std::vector<float>& actual,
+                                   const std::vector<float>& expected,
+                                   const char* name) {
+        for (std::size_t i = 0; i < actual.size(); ++i) {
+            const float tolerance = 1.0e-6f * std::max(1.0f, std::abs(expected[i]));
+            if (!std::isfinite(actual[i]) || std::abs(actual[i] - expected[i]) > tolerance) {
+                throw std::runtime_error(std::string(caller) + ": compiled " + name +
+                    " differs from compiler formula at index " + std::to_string(i));
+            }
+        }
+    };
+    require_close(params.pbm_alibi_slopes, expected_alibi, "pbm_alibi_slopes");
+    require_close(params.pbm_rope_inv_freq, expected_rope, "pbm_rope_inv_freq");
 }
 
 inline void refreshMutableTrainingDerivedValues(LanguageModelConfig& params,
@@ -1240,54 +1204,17 @@ inline void refreshMutableTrainingDerivedValues(LanguageModelConfig& params,
     }
 }
 
-inline void deriveComputedLanguageModelConfig(LanguageModelConfig& params) {
+inline void deriveTrainingRuntimeConfig(LanguageModelConfig& params) {
     if (params.max_seq_len <= 0) {
         throw std::runtime_error(
-            "deriveComputedLanguageModelConfig: max_seq_len must be > 0, got " +
+            "deriveTrainingRuntimeConfig: max_seq_len must be > 0, got " +
             std::to_string(params.max_seq_len));
     }
     params.min_seq_len_for_flash = params.max_seq_len / 4;
     params.scratch_max_tokens_per_block = static_cast<size_t>(params.max_seq_len);
     params.attention_dropout = params.dropout_rate;
-    params.d_ff = params.d_model * D_FF_MULTIPLIER;
     refreshMutableTrainingDerivedValues(
-        params, params.max_seq_len, "deriveComputedLanguageModelConfig");
-
-    if (params.d_model <= 0 || params.num_heads <= 0 || params.num_kv_heads <= 0) {
-        throw std::runtime_error(
-            "deriveComputedLanguageModelConfig: d_model, num_heads, and num_kv_heads must be > 0");
-    }
-    if ((params.d_model % params.num_heads) != 0) {
-        throw std::runtime_error(
-            "deriveComputedLanguageModelConfig: d_model (" +
-            std::to_string(params.d_model) + ") must be divisible by num_heads (" +
-            std::to_string(params.num_heads) + ")");
-    }
-    if (!isValidGQAConfig(params.num_heads, params.num_kv_heads)) {
-        throw std::runtime_error(
-            "deriveComputedLanguageModelConfig: invalid GQA config num_heads=" +
-            std::to_string(params.num_heads) + " num_kv_heads=" +
-            std::to_string(params.num_kv_heads));
-    }
-    const int head_dim = params.d_model / params.num_heads;
-    params.head_dim = head_dim;
-    params.heads_per_kv_group = computeHeadsPerKVGroup(params.num_heads, params.num_kv_heads);
-    params.kv_dim = computeKVProjectionSize(params.d_model, params.num_heads, params.num_kv_heads);
-    params.qkv_dim = computeQKVProjectionSize(params.d_model, params.num_heads, params.num_kv_heads);
-    params.rotary_dim = head_dim;
-    params.attention_softmax_scale = computeAttentionSoftmaxScale(
-        head_dim, "deriveComputedLanguageModelConfig");
-    params.is_gqa = params.num_kv_heads < params.num_heads;
-    populateDerivedPBMTables(params, "deriveComputedLanguageModelConfig");
-    if (params.num_layers <= 0) {
-        throw std::runtime_error(
-            "deriveComputedLanguageModelConfig: num_layers must be > 0, got " +
-            std::to_string(params.num_layers));
-    }
-    params.residual_projection_init_gain =
-        1.0f / std::sqrt(2.0f * static_cast<float>(params.num_layers));
-    params.execution_block_d_key = head_dim;
-    params.execution_block_cross_attn_head_dim = head_dim;
+        params, params.max_seq_len, "deriveTrainingRuntimeConfig");
 
     if (params.tokenizer_max_vocab_size > 0 &&
         params.tokenizer_target_vocab_size > params.tokenizer_max_vocab_size) {
@@ -1307,7 +1234,7 @@ inline void deriveComputedLanguageModelConfig(LanguageModelConfig& params) {
 
     if (params.warmup_fraction <= 0.0f || params.warmup_fraction >= 1.0f) {
         throw std::runtime_error(
-            "deriveComputedLanguageModelConfig: warmup_fraction must be in (0, 1), got " +
+            "deriveTrainingRuntimeConfig: warmup_fraction must be in (0, 1), got " +
             std::to_string(params.warmup_fraction));
     }
 }
@@ -1340,6 +1267,7 @@ inline void validateRootConfigDocument(
         validationField("rope_base_seq_len", &LanguageModelConfig::rope_base_seq_len),
         validationField("alibi_min_locality_distance", &LanguageModelConfig::alibi_min_locality_distance)
     }, caller);
+    validateCompiledPBMTables(params, caller);
     if (params.sliding_window_stride > params.max_seq_len) {
         throw std::runtime_error(std::string(caller) + ": sliding_window_stride=" +
                                  std::to_string(params.sliding_window_stride) +
@@ -1800,11 +1728,162 @@ inline DerivedScheduleInfo computeDerivedSchedule(
 #endif // GRIM_CONFIG_AI_CONFIG_PATHS_HPP_INCLUDED
 
 //======================================================//
-// Config loading from the canonical ai_config.json snapshot.
+// Training/runtime loading from ai_config.json plus model mapping from the
+// selected compiled model snapshot.
 //======================================================//
 
 namespace GRIM {
 namespace HyperParameters {
+
+inline int compiledU32ToInt(std::uint32_t value, const char* field) {
+    if (value > static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
+        throw std::runtime_error(
+            std::string("compiled model field exceeds runtime int capacity: ") + field);
+    }
+    return static_cast<int>(value);
+}
+
+inline PositionalEncodingType compiledPositionalEncoding(
+    GRIM::Config::CompiledPositionalEncoding kind)
+{
+    using Compiled = GRIM::Config::CompiledPositionalEncoding;
+    switch (kind) {
+        case Compiled::None: return PositionalEncodingType::NONE;
+        case Compiled::Alibi: return PositionalEncodingType::ALIBI;
+        case Compiled::Rope: return PositionalEncodingType::ROPE;
+        case Compiled::AlibiRope: return PositionalEncodingType::ALIBI_ROPE;
+        case Compiled::Unspecified: break;
+    }
+    throw std::runtime_error("compiled model positional encoding is unspecified");
+}
+
+inline void applyCompiledModelConfig(
+    LanguageModelConfig& params,
+    const GRIM::Config::CompiledModelConfigSnapshot& compiled)
+{
+    const auto& a = compiled.architecture;
+    const auto& d = compiled.derived_architecture;
+    const auto& f = compiled.features;
+    const auto& p = f.positional_encoding;
+    const auto& e = f.encoder;
+    const auto& lm = f.lm_head;
+    const auto& t = compiled.tokenizer;
+
+    params.d_model = compiledU32ToInt(a.d_model, "architecture.d_model");
+    params.num_layers = compiledU32ToInt(a.num_layers, "architecture.num_layers");
+    params.num_heads = compiledU32ToInt(a.num_heads, "architecture.num_heads");
+    params.num_kv_heads = compiledU32ToInt(a.num_kv_heads, "architecture.num_kv_heads");
+    params.d_ff = compiledU32ToInt(a.d_ff, "architecture.d_ff");
+    params.max_seq_len = compiledU32ToInt(a.max_seq_len, "architecture.max_seq_len");
+    params.tie_embeddings = a.tie_embeddings;
+    params.embedding_scale = a.embedding_scale;
+
+    params.head_dim = compiledU32ToInt(d.head_dim, "derived_architecture.head_dim");
+    params.heads_per_kv_group = compiledU32ToInt(
+        d.heads_per_kv_group, "derived_architecture.heads_per_kv_group");
+    params.kv_dim = compiledU32ToInt(d.kv_dim, "derived_architecture.kv_dim");
+    params.qkv_dim = compiledU32ToInt(d.qkv_dim, "derived_architecture.qkv_dim");
+    params.rotary_dim = compiledU32ToInt(d.rotary_dim, "derived_architecture.rotary_dim");
+    params.is_gqa = d.is_gqa;
+    params.attention_softmax_scale = d.attention_softmax_scale;
+    params.residual_projection_init_gain = d.residual_projection_init_gain;
+    params.pbm_alibi_slopes = d.pbm_alibi_slopes;
+    params.pbm_rope_inv_freq = d.pbm_rope_inv_freq;
+
+    params.use_bias = f.bias.use_bias;
+    params.causal_mask = f.attention.causal_mask;
+    params.use_pre_norm = f.attention.use_pre_norm;
+    params.fuse_qkv = f.attention.fuse_qkv;
+    params.qk_norm_enabled = f.attention.qk_norm_enabled;
+    params.attention_off_by_one = f.attention.off_by_one_enabled;
+    params.attention_residual_gate_enabled = f.attention.residual_gate_enabled;
+
+    params.positional_encoding = compiledPositionalEncoding(p.kind);
+    params.rope_base_seq_len = compiledU32ToInt(p.rope_base_seq_len, "positional.rope_base_seq_len");
+    params.alibi_min_locality_distance = compiledU32ToInt(
+        p.alibi_min_locality_distance, "positional.alibi_min_locality_distance");
+    params.alibi_slope_exponent = p.alibi_slope_exponent;
+    params.alibi_max_bias = p.alibi_max_bias;
+    params.rope_theta = p.rope_theta;
+    params.rope_scaling = p.rope_scaling;
+
+    params.rms_epsilon = e.rms_epsilon;
+    params.use_layer_scale = e.use_layer_scale;
+    params.layer_scale_init = e.layer_scale_init;
+    params.center_encoder_residuals = e.center_residuals;
+
+    params.lm_head_unigram_bias = lm.unigram_bias_enabled;
+    params.lm_head_center_hidden_states = lm.center_hidden_states;
+    params.center_logits = lm.center_logits;
+    params.project_out_pc1 = lm.project_out_pc1;
+    params.pc1_power_iters = compiledU32ToInt(lm.pc1_power_iters, "lm_head.pc1_power_iters");
+    params.lm_head_mlp_enabled = lm.mlp_enabled;
+    params.lm_head_mlp_d_ff = compiledU32ToInt(lm.mlp_d_ff, "lm_head.mlp_d_ff");
+    params.lm_head_mlp_alpha = lm.mlp_alpha;
+
+    params.use_atom_data = f.use_atom_data;
+    params.atom_embedding_dim = compiledU32ToInt(f.atom_embedding_dim, "features.atom_embedding_dim");
+    params.execution_block_enabled = f.execution_block.has_value();
+    if (f.execution_block) {
+        const auto& x = *f.execution_block;
+        params.execution_block_layer = x.layer;
+        params.execution_block_num_ops = compiledU32ToInt(x.num_ops, "execution_block.num_ops");
+        params.execution_block_num_slots = compiledU32ToInt(x.num_slots, "execution_block.num_slots");
+        params.execution_block_num_scratch_slots = compiledU32ToInt(
+            x.num_scratch_slots, "execution_block.num_scratch_slots");
+        params.execution_block_num_steps = compiledU32ToInt(x.num_steps, "execution_block.num_steps");
+        params.execution_block_value_decode_input_dim = compiledU32ToInt(
+            x.value_decode_input_dim, "execution_block.value_decode_input_dim");
+        params.execution_block_value_decode_hidden_dim = compiledU32ToInt(
+            x.value_decode_hidden_dim, "execution_block.value_decode_hidden_dim");
+        params.execution_block_d_key = compiledU32ToInt(x.d_key, "execution_block.d_key");
+        params.execution_block_d_type = compiledU32ToInt(x.d_type, "execution_block.d_type");
+        params.execution_block_cross_attn_head_dim = compiledU32ToInt(
+            x.cross_attention_head_dim, "execution_block.cross_attention_head_dim");
+        params.execution_block_cross_attn_topk = compiledU32ToInt(
+            x.cross_attention_top_k, "execution_block.cross_attention_top_k");
+        params.execution_block_usage_decay = x.usage_decay;
+        params.execution_block_inject_gate_temp = x.inject_gate_temperature;
+        params.execution_block_result_slot_mode = compiledU32ToInt(
+            x.result_slot_mode, "execution_block.result_slot_mode");
+        params.execution_block_result_slot_index = x.result_slot_index;
+        params.execution_block_magnitude_limit = x.magnitude_limit;
+    }
+
+    params.number_encoder_enabled = f.number_encoder.has_value();
+    if (f.number_encoder) {
+        const auto& n = *f.number_encoder;
+        params.number_encoder_max_digit_slots = compiledU32ToInt(
+            n.max_digit_slots, "number_encoder.max_digit_slots");
+        params.number_encoder_d_hidden = compiledU32ToInt(n.d_hidden, "number_encoder.d_hidden");
+        params.number_encoder_max_abs_pow10 = compiledU32ToInt(
+            n.max_abs_pow10, "number_encoder.max_abs_pow10");
+    }
+
+    params.slot_seed_encoder_enabled = f.slot_seed_encoder.has_value();
+    if (f.slot_seed_encoder) {
+        const auto& s = *f.slot_seed_encoder;
+        params.slot_seed_encoder_d_hidden = compiledU32ToInt(
+            s.d_hidden, "slot_seed_encoder.d_hidden");
+        params.slot_seed_encoder_bias_enabled = s.bias_enabled;
+        params.slot_seed_encoder_type_embedding_enabled = s.type_embedding_enabled;
+    }
+
+    params.tokenizer_model_type = t.model_type;
+    params.tokenizer_special_tokens = t.special_tokens;
+    params.tokenizer_add_bos = t.add_bos;
+    params.tokenizer_add_eos = t.add_eos;
+    params.tokenizer_unk_token = t.unk_token;
+    params.tokenizer_pad_token = t.pad_token;
+    params.tokenizer_bos_token = t.bos_token;
+    params.tokenizer_eos_token = t.eos_token;
+    params.tokenizer_enable_nfkc_normalization = t.enable_nfkc_normalization;
+    params.tokenizer_enable_lowercasing = t.enable_lowercasing;
+    params.tokenizer_enable_byte_fallback = t.enable_byte_fallback;
+    params.tokenizer_enable_atom_reasoning = t.enable_atom_reasoning;
+    params.tokenizer_detect_numbers = t.detect_numbers;
+}
+
 inline LanguageModelConfig loadLanguageModelConfig(
     const nlohmann::json& document) {
     const auto& config = document.at("training").at("config");
@@ -1834,16 +1913,7 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_LEAF("gradient_clip", grad_clip_norm);
     GRIM_LOAD_CONFIG_FIELD(per_token_grad_scale);
     GRIM_LOAD_CONFIG_FIELD(force_rebuild_vocab);
-    GRIM_LOAD_CONFIG_FIELD(d_model);
-    GRIM_LOAD_CONFIG_FIELD(num_layers);
-    GRIM_LOAD_CONFIG_FIELD(num_heads);
-    GRIM_LOAD_CONFIG_FIELD(num_kv_heads);
-    GRIM_LOAD_CONFIG_FIELD(max_seq_len);
-    GRIM_LOAD_CONFIG_FIELD(tie_embeddings);
-    GRIM_LOAD_CONFIG_FIELD(use_bias);
-    GRIM_LOAD_CONFIG_FIELD(lm_head_unigram_bias);
     GRIM_LOAD_CONFIG_FIELD(dropout_rate);
-    GRIM_LOAD_CONFIG_FIELD(embedding_scale);
     GRIM_LOAD_CONFIG_FIELD(sliding_window_stride);
     GRIM_LOAD_CONFIG_FIELD(min_seq_valid_tokens);
     GRIM_LOAD_CONFIG_FIELD(warmup_fraction);
@@ -1865,15 +1935,6 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(parameter_precision_rmsnorm);
     GRIM_LOAD_CONFIG_FIELD(parameter_precision_execution_block);
 
-    params.positional_encoding = parsePositionalEncodingFlags(
-        config.at("use_rope").get<bool>(),
-        config.at("use_alibi").get<bool>());
-    GRIM_LOAD_CONFIG_FIELD(rope_base_seq_len);
-    GRIM_LOAD_CONFIG_FIELD(alibi_min_locality_distance);
-    GRIM_LOAD_CONFIG_FIELD(alibi_slope_exponent);
-    GRIM_LOAD_CONFIG_FIELD(alibi_max_bias);
-    GRIM_LOAD_CONFIG_FIELD(rope_theta);
-    GRIM_LOAD_CONFIG_FIELD(rope_scaling);
     GRIM_LOAD_CONFIG_FIELD(soft_restart_enabled);
     GRIM_LOAD_CONFIG_FIELD(soft_restart_loss_increase_threshold);
     GRIM_LOAD_CONFIG_FIELD(soft_restart_max_step_window);
@@ -1962,20 +2023,7 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(loss_masking_enabled);
     GRIM_LOAD_CONFIG_FIELD(loss_masking_tag);
     GRIM_LOAD_CONFIG_FIELD(lm_head_centering_enabled);
-    GRIM_LOAD_CONFIG_FIELD(lm_head_center_hidden_states);
-    GRIM_LOAD_CONFIG_FIELD(lm_head_mlp_enabled);
-    GRIM_LOAD_CONFIG_FIELD(lm_head_mlp_d_ff);
-    GRIM_LOAD_CONFIG_FIELD(lm_head_mlp_alpha);
     GRIM_LOAD_CONFIG_FIELD(freeze_learned_rms_gammas);
-    GRIM_LOAD_CONFIG_FIELD(center_logits);
-    GRIM_LOAD_CONFIG_FIELD(center_encoder_residuals);
-    GRIM_LOAD_CONFIG_FIELD(project_out_pc1);
-    GRIM_LOAD_CONFIG_FIELD(pc1_power_iters);
-    GRIM_LOAD_CONFIG_FIELD(use_layer_scale);
-    GRIM_LOAD_CONFIG_FIELD(layer_scale_init);
-    GRIM_LOAD_CONFIG_FIELD(qk_norm_enabled);
-    GRIM_LOAD_CONFIG_FIELD(attention_off_by_one);
-    GRIM_LOAD_CONFIG_FIELD(attention_residual_gate_enabled);
     if (config.at("hardcoded_hidden_states_enabled").get<bool>()) {
         params.hardcoded_hidden_pattern = config.at("hardcoded_hidden_states_pattern").get<HardcodedPattern>();
     }
@@ -2009,29 +2057,12 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(scratch_blocks_enabled);
     GRIM_LOAD_CONFIG_FIELD(scratch_num_blocks);
     GRIM_LOAD_CONFIG_FIELD(scratch_write_combined);
-    GRIM_LOAD_CONFIG_FIELD(use_atom_data);
-    GRIM_LOAD_CONFIG_FIELD(atom_embedding_dim);
-    GRIM_LOAD_CONFIG_FIELD(execution_block_enabled);
     GRIM_LOAD_CONFIG_FIELD(execution_block_debug_mode);
     GRIM_LOAD_CONFIG_LEAF("execution_block_step_y_overrides_x", step_y_overrides_x);
     GRIM_LOAD_CONFIG_LEAF("execution_block_structured_ce_enabled", structured_ce_enabled);
-    GRIM_LOAD_CONFIG_FIELD(execution_block_layer);
-    GRIM_LOAD_CONFIG_FIELD(execution_block_num_ops);
-    GRIM_LOAD_CONFIG_FIELD(execution_block_num_slots);
-    GRIM_LOAD_CONFIG_FIELD(execution_block_num_scratch_slots);
-    GRIM_LOAD_CONFIG_FIELD(execution_block_num_steps);
-    GRIM_LOAD_CONFIG_FIELD(execution_block_value_decode_input_dim);
-    GRIM_LOAD_CONFIG_FIELD(execution_block_value_decode_hidden_dim);
-    GRIM_LOAD_CONFIG_FIELD(execution_block_d_type);
-    GRIM_LOAD_CONFIG_FIELD(execution_block_cross_attn_topk);
-    GRIM_LOAD_CONFIG_FIELD(execution_block_result_slot_mode);
-    GRIM_LOAD_CONFIG_FIELD(execution_block_result_slot_index);
     GRIM_LOAD_CONFIG_FIELD(execution_block_temp_schedule);
-    GRIM_LOAD_CONFIG_FIELD(execution_block_usage_decay);
-    GRIM_LOAD_CONFIG_FIELD(execution_block_inject_gate_temp);
     GRIM_LOAD_CONFIG_FIELD(execution_block_entropy_collapse_threshold);
     GRIM_LOAD_CONFIG_FIELD(execution_block_write_collapse_threshold);
-    GRIM_LOAD_CONFIG_FIELD(execution_block_magnitude_limit);
     GRIM_LOAD_CONFIG_FIELD(execution_block_diversity_kappa);
     GRIM_LOAD_CONFIG_FIELD(execution_block_temp_start);
     GRIM_LOAD_CONFIG_FIELD(execution_block_temp_end);
@@ -2046,14 +2077,6 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_LEAF("execution_block_structured_ce_weight", structured_ce_weight);
     GRIM_LOAD_CONFIG_LEAF("execution_block_execute_ce_weight", execute_ce_weight);
     GRIM_LOAD_CONFIG_LEAF("execution_block_stop_ce_weight", stop_ce_weight);
-    GRIM_LOAD_CONFIG_FIELD(number_encoder_enabled);
-    GRIM_LOAD_CONFIG_FIELD(number_encoder_max_digit_slots);
-    GRIM_LOAD_CONFIG_FIELD(number_encoder_d_hidden);
-    GRIM_LOAD_CONFIG_FIELD(number_encoder_max_abs_pow10);
-    GRIM_LOAD_CONFIG_FIELD(slot_seed_encoder_enabled);
-    GRIM_LOAD_CONFIG_FIELD(slot_seed_encoder_d_hidden);
-    GRIM_LOAD_CONFIG_FIELD(slot_seed_encoder_bias_enabled);
-    GRIM_LOAD_CONFIG_FIELD(slot_seed_encoder_type_embedding_enabled);
     GRIM_LOAD_CONFIG_FIELD(single_stream_mode);
     GRIM_LOAD_CONFIG_FIELD(disable_async_frees);
     GRIM_LOAD_CONFIG_FIELD(synchronize_after_kernels);
@@ -2067,8 +2090,6 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(attention_diag_enabled);
     GRIM_LOAD_CONFIG_FIELD(attention_diag_layer);
     GRIM_LOAD_CONFIG_FIELD(attention_diag_head);
-    GRIM_LOAD_CONFIG_FIELD(tokenizer_enable_atom_reasoning);
-    GRIM_LOAD_CONFIG_FIELD(tokenizer_detect_numbers);
     GRIM_LOAD_CONFIG_FIELD(tokenizer_target_vocab_size);
     GRIM_LOAD_CONFIG_FIELD(tokenizer_max_vocab_size);
     GRIM_LOAD_CONFIG_FIELD(tokenizer_max_length);
@@ -2081,26 +2102,14 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(tokenizer_subword_mining_max_bytes);
     GRIM_LOAD_CONFIG_FIELD(tokenizer_prune_during_mining);
     GRIM_LOAD_CONFIG_FIELD(tokenizer_enable_parallel_subword_mining);
-    GRIM_LOAD_CONFIG_FIELD(tokenizer_add_bos);
-    GRIM_LOAD_CONFIG_FIELD(tokenizer_add_eos);
-    GRIM_LOAD_CONFIG_FIELD(tokenizer_enable_nfkc_normalization);
-    GRIM_LOAD_CONFIG_FIELD(tokenizer_enable_lowercasing);
     GRIM_LOAD_CONFIG_FIELD(tokenizer_enable_parallel_tokenization);
-    GRIM_LOAD_CONFIG_FIELD(tokenizer_enable_byte_fallback);
     GRIM_LOAD_CONFIG_FIELD(tokenizer_save_text_vocab);
-    GRIM_LOAD_CONFIG_FIELD(tokenizer_model_type);
-    GRIM_LOAD_CONFIG_FIELD(tokenizer_unk_token);
-    GRIM_LOAD_CONFIG_FIELD(tokenizer_pad_token);
-    GRIM_LOAD_CONFIG_FIELD(tokenizer_bos_token);
-    GRIM_LOAD_CONFIG_FIELD(tokenizer_eos_token);
     GRIM_LOAD_CONFIG_FIELD(tokenizer_expected_checksum);
-    GRIM_LOAD_CONFIG_FIELD(tokenizer_special_tokens);
     GRIM_LOAD_CONFIG_FIELD(subprocess_tokenizer_only_mode);
 
 #undef GRIM_LOAD_CONFIG_LEAF
 #undef GRIM_LOAD_CONFIG_FIELD
 
-    deriveComputedLanguageModelConfig(params);
     return params;
 }
 
@@ -2354,16 +2363,18 @@ inline int snapshotEffectiveMaxSeqLen(
     if (snapshotTrainingConfigField<bool>(snapshot, "stability_overrides_enabled")) {
         const int override_max_seq_len =
             snapshotTrainingConfigField<int>(snapshot, "stability_override_max_seq_len");
-        if (override_max_seq_len > 0) {
-            max_seq_len = override_max_seq_len;
+        if (override_max_seq_len > 0 && override_max_seq_len != max_seq_len) {
+            throw std::runtime_error(
+                std::string(caller) + ": stability_override_max_seq_len=" +
+                std::to_string(override_max_seq_len) +
+                " cannot replace compiled model max_seq_len=" + std::to_string(max_seq_len));
         }
     }
 
     if (max_seq_len <= 0) {
         throw std::runtime_error(
             std::string(caller) +
-            ": max_seq_len not configured in ai_config.json "
-            "(stability overrides or root config)");
+            ": compiled model max_seq_len must be positive");
     }
     return max_seq_len;
 }
@@ -2431,13 +2442,13 @@ inline ModelExecutionMode snapshotExecutionMode(
 }
 
 inline nlohmann::json buildFinalizedTrainingConfigDocument(
-    const nlohmann::json& document,
+    const GRIM::Config::AiConfigSnapshot& snapshot,
     int argc,
     char** argv,
     ModelExecutionMode execution_mode)
 {
     const LanguageModelConfig config = finalizeLanguageModelConfig(
-        document,
+        snapshot,
         argc,
         argv,
         execution_mode);
@@ -2767,6 +2778,53 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     finalized_config["grim_text_checkpoints"] = config.checkpoint_dir;
     finalized_config["grim_text_logs"] = config.log_dir;
     finalized_config["grim_text_training_status"] = config.status_path;
+
+    // Materialize compiled fields that intentionally do not have members on
+    // LanguageModelConfig. Existing downstream readers consume this transient
+    // compatibility view; none of these values are read from persisted JSON.
+    const auto& compiled = *snapshot.model_config;
+    const auto& features = compiled.features;
+    const auto& positional = features.positional_encoding;
+    finalized_config["use_rope"] =
+        positional.kind == GRIM::Config::CompiledPositionalEncoding::Rope ||
+        positional.kind == GRIM::Config::CompiledPositionalEncoding::AlibiRope;
+    finalized_config["use_alibi"] =
+        positional.kind == GRIM::Config::CompiledPositionalEncoding::Alibi ||
+        positional.kind == GRIM::Config::CompiledPositionalEncoding::AlibiRope;
+    finalized_config["attention_qkv_bias_enabled"] = features.bias.attention_qkv;
+    finalized_config["attention_output_bias_enabled"] = features.bias.attention_output;
+    finalized_config["ffn_output_bias_enabled"] = features.bias.ffn_output;
+    finalized_config["lm_head_bias_enabled"] = features.bias.lm_head;
+    finalized_config["selector_enabled"] = features.arg_selector_enabled;
+
+    if (features.execution_block) {
+        const auto& x = *features.execution_block;
+        finalized_config["execution_block_causal_w1_transition"] = x.causal_w1_transition;
+        finalized_config["execution_block_decode_bias_enabled"] = x.decode_bias_enabled;
+        finalized_config["execution_block_value_embedding_bias_enabled"] =
+            x.value_embedding_bias_enabled;
+        finalized_config["execution_block_scalar_bias_enabled"] = x.scalar_bias_enabled;
+        finalized_config["execution_block_trace_bias_enabled"] = x.trace_bias_enabled;
+    } else {
+        finalized_config["execution_block_causal_w1_transition"] = 0.0f;
+        finalized_config["execution_block_decode_bias_enabled"] = false;
+        finalized_config["execution_block_value_embedding_bias_enabled"] = false;
+        finalized_config["execution_block_scalar_bias_enabled"] = false;
+        finalized_config["execution_block_trace_bias_enabled"] = false;
+    }
+
+    if (features.number_encoder) {
+        const auto& n = *features.number_encoder;
+        finalized_config["number_encoder_pow10_buckets"] = n.pow10_buckets;
+        finalized_config["number_encoder_contribution_bias_enabled"] =
+            n.contribution_bias_enabled;
+        finalized_config["number_encoder_global_bias_enabled"] = n.global_bias_enabled;
+    } else {
+        finalized_config["number_encoder_pow10_buckets"] = 0;
+        finalized_config["number_encoder_contribution_bias_enabled"] = false;
+        finalized_config["number_encoder_global_bias_enabled"] = false;
+    }
+
     return finalized_config;
 }
 
@@ -2781,25 +2839,33 @@ inline void writeFinalizedTrainingConfigDocumentToSnapshot(
 }
 
 inline LanguageModelConfig finalizeLanguageModelConfig(
-    const nlohmann::json& document,
+    const GRIM::Config::AiConfigSnapshot& snapshot,
     int argc,
     char** argv,
     ModelExecutionMode execution_mode)
 {
-    // 1. Root registry + resolved path leaves from the raw snapshot document.
-    LanguageModelConfig config = loadLanguageModelConfig(document);
-    loadResolvedPathFields(config, document);
-
-    // 2. Resolve max_seq_len (must be configured)
-    if (config.stability_overrides_enabled &&
-        config.stability_override_max_seq_len > 0) {
-        config.max_seq_len = config.stability_override_max_seq_len;
-    } else if (config.max_seq_len > 0) {
-        // already authored on the root; keep it
-    } else {
+    if (!snapshot.model_config) {
         throw std::runtime_error(
-            "FATAL: max_seq_len not configured in ai_config.json "
-            "(stability overrides or root config)");
+            "finalizeLanguageModelConfig: no selected model.grimcfg was loaded");
+    }
+
+    // 1. Training/runtime policy comes from ai_config.json; immutable model
+    // semantics and compiler-derived geometry come from model.grimcfg.
+    LanguageModelConfig config = loadLanguageModelConfig(snapshot.document);
+    applyCompiledModelConfig(config, *snapshot.model_config);
+    loadResolvedPathFields(config, snapshot.document);
+    deriveTrainingRuntimeConfig(config);
+
+    // 2. Compiled max_seq_len is model geometry. The legacy stability field
+    // may be zero or repeat that value, but cannot replace the contract.
+    if (config.stability_overrides_enabled &&
+        config.stability_override_max_seq_len > 0 &&
+        config.stability_override_max_seq_len != config.max_seq_len) {
+        throw std::runtime_error(
+            "FATAL: stability_override_max_seq_len=" +
+            std::to_string(config.stability_override_max_seq_len) +
+            " cannot replace compiled model max_seq_len=" +
+            std::to_string(config.max_seq_len));
     }
 
     // 3. Resolve configured stride against the effective max_seq_len.
@@ -2814,7 +2880,7 @@ inline LanguageModelConfig finalizeLanguageModelConfig(
             std::to_string(config.sliding_window_stride) +
             " exceeds effective max_seq_len=" +
             std::to_string(config.max_seq_len) +
-            ". Update training.config.sliding_window_stride or stability_overrides.max_seq_len.");
+            ". Update training.config.sliding_window_stride or recompile the model configuration.");
     }
 
     // 4. Stability overrides (batch_size, grad_clip_norm)
@@ -2872,11 +2938,10 @@ inline LanguageModelConfig finalizeLanguageModelConfig(
         config.max_seq_len,
         "finalizeLanguageModelConfig");
 
+    // Provisional startup width only. Data/tokenizer ingestion replaces this
+    // with the observed runtime vocabulary size before model allocation.
     config.vocab_size = config.tokenizer_target_vocab_size;
     config.execution_mode = execution_mode;
-    config.causal_mask = true;
-    config.use_pre_norm = true;
-    config.fuse_qkv = true;
 
     const char* caller = nullptr;
     switch (execution_mode) {
@@ -2895,7 +2960,6 @@ inline LanguageModelConfig finalizeLanguageModelConfig(
             throw std::runtime_error("finalizeLanguageModelConfig: unsupported ModelExecutionMode value");
     }
 
-    config.computeDerivedValues();
     validateRootConfigDocument(config, caller);
     return config;
 }
@@ -2909,7 +2973,7 @@ inline GRIM::Config::AiConfigSnapshot finalizeAiConfigSnapshot(
     writeFinalizedTrainingConfigDocumentToSnapshot(
         snapshot,
         buildFinalizedTrainingConfigDocument(
-            snapshot.document,
+            snapshot,
             argc,
             argv,
             execution_mode));
@@ -2937,7 +3001,7 @@ inline LanguageModelConfig loadStartupConfig(
 {
     const auto snapshot = GRIM::Config::loadAiConfigSnapshot();
     return finalizeLanguageModelConfig(
-        snapshot.document,
+        snapshot,
         argc,
         argv,
         execution_mode);

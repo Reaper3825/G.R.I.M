@@ -27,6 +27,7 @@
     "rope_scaling": 1.0,
     "rms_epsilon": 0.00001,
     "use_layer_scale": false,
+    "layer_scale_init": 1.0,
     "center_encoder_residuals": false,
     "lm_head_unigram_bias": true,
     "lm_head_center_hidden_states": false,

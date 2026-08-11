@@ -96,6 +96,7 @@ table DerivedArchitecture {
   is_gqa:bool;
 
   attention_softmax_scale:float32;
+  residual_projection_init_gain:float32;
 
   // Compiler-produced PBM lookup tables.
   pbm_alibi_slopes:[float32] (required);
@@ -107,6 +108,7 @@ table DerivedArchitecture {
 // ---------------------------------------------------------------------------
 
 table BiasPolicy {
+  use_bias:bool;
   attention_qkv:bool;
   attention_output:bool;
   ffn_output:bool;
@@ -135,6 +137,7 @@ table PositionalEncodingConfig {
 table EncoderConfig {
   rms_epsilon:float32;
   use_layer_scale:bool;
+  layer_scale_init:float32;
   center_residuals:bool;
 }
 
@@ -245,7 +248,7 @@ table TokenizerConfig {
 
 table CompiledModelHyperparameters {
   // FlatBuffer wire shape version implemented by the loader.
-  schema_version:uint32 = 2;
+  schema_version:uint32 = 3;
 
   // Identifies the formula/validation rules used to produce this artifact.
   // It is separate from schema_version because computations can change without

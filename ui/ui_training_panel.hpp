@@ -206,6 +206,7 @@ private:
 
     // Model configuration preset creator.
     nlohmann::json configPresetDocument_;
+    std::string configModelStorePath_;
     bool configPresetDirty_ = false;
     std::vector<std::string> configModelIds_;
     std::string configModelIdBuffer_;

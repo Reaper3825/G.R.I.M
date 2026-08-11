@@ -26,8 +26,8 @@ using json = nlohmann::json;
 
 namespace {
 
-constexpr std::uint32_t kSchemaVersion = 2;
-constexpr std::uint32_t kSemanticVersion = 2;
+constexpr std::uint32_t kSchemaVersion = 3;
+constexpr std::uint32_t kSemanticVersion = 3;
 constexpr std::uint32_t kFfnMultiplier = 4;
 
 struct Cli {
@@ -52,9 +52,11 @@ struct EffectiveConfig {
     std::uint32_t rotary_dim = 0;
     bool is_gqa = false;
     float attention_softmax_scale = 0.0f;
+    float residual_projection_init_gain = 0.0f;
     std::vector<float> alibi_slopes;
     std::vector<float> rope_inv_freq;
 
+    bool use_bias = false;
     bool attention_qkv_bias = false;
     bool attention_output_bias = false;
     bool ffn_output_bias = false;
@@ -79,6 +81,7 @@ struct EffectiveConfig {
 
     float rms_epsilon = 1.0e-5f;
     bool use_layer_scale = false;
+    float layer_scale_init = 1.0f;
     bool center_residuals = false;
 
     bool lm_head_unigram_bias = false;
@@ -454,16 +457,18 @@ EffectiveConfig compileEffectiveConfig(const json& model_config) {
     c.rotary_dim = c.head_dim;
     c.is_gqa = c.num_kv_heads < c.num_heads;
     c.attention_softmax_scale = 1.0f / std::sqrt(static_cast<float>(c.head_dim));
+    c.residual_projection_init_gain =
+        1.0f / std::sqrt(2.0f * static_cast<float>(c.num_layers));
 
-    const bool use_bias = required<bool>(j, "use_bias");
+    c.use_bias = required<bool>(j, "use_bias");
     c.attention_qkv_bias = required<bool>(j, "attention_qkv_bias_enabled");
     c.attention_output_bias = required<bool>(j, "attention_output_bias_enabled");
     c.ffn_output_bias = required<bool>(j, "ffn_output_bias_enabled");
     c.lm_head_bias = required<bool>(j, "lm_head_bias_enabled");
-    requireBiasParent(use_bias, c.attention_qkv_bias, "attention_qkv_bias_enabled");
-    requireBiasParent(use_bias, c.attention_output_bias, "attention_output_bias_enabled");
-    requireBiasParent(use_bias, c.ffn_output_bias, "ffn_output_bias_enabled");
-    requireBiasParent(use_bias, c.lm_head_bias, "lm_head_bias_enabled");
+    requireBiasParent(c.use_bias, c.attention_qkv_bias, "attention_qkv_bias_enabled");
+    requireBiasParent(c.use_bias, c.attention_output_bias, "attention_output_bias_enabled");
+    requireBiasParent(c.use_bias, c.ffn_output_bias, "ffn_output_bias_enabled");
+    requireBiasParent(c.use_bias, c.lm_head_bias, "lm_head_bias_enabled");
 
     c.causal_mask = required<bool>(j, "causal_mask");
     c.use_pre_norm = required<bool>(j, "use_pre_norm");
@@ -492,6 +497,8 @@ EffectiveConfig compileEffectiveConfig(const json& model_config) {
     c.rms_epsilon = requiredFinite(j, "rms_epsilon");
     requirePositive(c.rms_epsilon, "rms_epsilon");
     c.use_layer_scale = required<bool>(j, "use_layer_scale");
+    c.layer_scale_init = requiredFinite(j, "layer_scale_init");
+    if (c.use_layer_scale) requirePositive(c.layer_scale_init, "layer_scale_init");
     c.center_residuals = required<bool>(j, "center_encoder_residuals");
 
     c.lm_head_unigram_bias = required<bool>(j, "lm_head_unigram_bias");
@@ -532,10 +539,10 @@ EffectiveConfig compileEffectiveConfig(const json& model_config) {
         c.execution_block_value_embedding_bias = required<bool>(j, "execution_block_value_embedding_bias_enabled");
         c.execution_block_scalar_bias = required<bool>(j, "execution_block_scalar_bias_enabled");
         c.execution_block_trace_bias = required<bool>(j, "execution_block_trace_bias_enabled");
-        requireBiasParent(use_bias, c.execution_block_decode_bias, "execution_block_decode_bias_enabled");
-        requireBiasParent(use_bias, c.execution_block_value_embedding_bias, "execution_block_value_embedding_bias_enabled");
-        requireBiasParent(use_bias, c.execution_block_scalar_bias, "execution_block_scalar_bias_enabled");
-        requireBiasParent(use_bias, c.execution_block_trace_bias, "execution_block_trace_bias_enabled");
+        requireBiasParent(c.use_bias, c.execution_block_decode_bias, "execution_block_decode_bias_enabled");
+        requireBiasParent(c.use_bias, c.execution_block_value_embedding_bias, "execution_block_value_embedding_bias_enabled");
+        requireBiasParent(c.use_bias, c.execution_block_scalar_bias, "execution_block_scalar_bias_enabled");
+        requireBiasParent(c.use_bias, c.execution_block_trace_bias, "execution_block_trace_bias_enabled");
         if (c.execution_block_layer < -1 || c.execution_block_layer >= static_cast<std::int32_t>(c.num_layers)) {
             throw std::runtime_error("execution_block_layer is outside [-1, num_layers)");
         }
@@ -568,8 +575,8 @@ EffectiveConfig compileEffectiveConfig(const json& model_config) {
         if (c.number_encoder_max_abs_pow10 > 32766u) throw std::runtime_error("number_encoder_max_abs_pow10 exceeds 32766");
         c.number_encoder_contribution_bias = required<bool>(j, "number_encoder_contribution_bias_enabled");
         c.number_encoder_global_bias = required<bool>(j, "number_encoder_global_bias_enabled");
-        requireBiasParent(use_bias, c.number_encoder_contribution_bias, "number_encoder_contribution_bias_enabled");
-        requireBiasParent(use_bias, c.number_encoder_global_bias, "number_encoder_global_bias_enabled");
+        requireBiasParent(c.use_bias, c.number_encoder_contribution_bias, "number_encoder_contribution_bias_enabled");
+        requireBiasParent(c.use_bias, c.number_encoder_global_bias, "number_encoder_global_bias_enabled");
     }
 
     c.arg_selector_enabled = required<bool>(j, "selector_enabled");
@@ -582,7 +589,7 @@ EffectiveConfig compileEffectiveConfig(const json& model_config) {
         c.slot_seed_encoder_d_hidden = requiredU32(j, "slot_seed_encoder_d_hidden");
         c.slot_seed_encoder_bias = required<bool>(j, "slot_seed_encoder_bias_enabled");
         c.slot_seed_encoder_type_embedding = required<bool>(j, "slot_seed_encoder_type_embedding_enabled");
-        requireBiasParent(use_bias, c.slot_seed_encoder_bias, "slot_seed_encoder_bias_enabled");
+        requireBiasParent(c.use_bias, c.slot_seed_encoder_bias, "slot_seed_encoder_bias_enabled");
     }
 
     c.tokenizer_model_type = required<std::string>(j, "tokenizer_model_type");
@@ -672,10 +679,12 @@ std::vector<std::uint8_t> buildArtifact(
     const auto rope = builder.CreateVector(c.rope_inv_freq);
     const auto derived = GRIMConfig::CreateDerivedArchitecture(
         builder, c.head_dim, c.heads_per_kv_group, c.kv_dim, c.qkv_dim,
-        c.rotary_dim, c.is_gqa, c.attention_softmax_scale, alibi, rope);
+        c.rotary_dim, c.is_gqa, c.attention_softmax_scale,
+        c.residual_projection_init_gain, alibi, rope);
 
     const auto bias = GRIMConfig::CreateBiasPolicy(
-        builder, c.attention_qkv_bias, c.attention_output_bias, c.ffn_output_bias, c.lm_head_bias);
+        builder, c.use_bias, c.attention_qkv_bias, c.attention_output_bias,
+        c.ffn_output_bias, c.lm_head_bias);
     const auto attention = GRIMConfig::CreateAttentionConfig(
         builder, c.causal_mask, c.use_pre_norm, c.fuse_qkv, c.qk_norm,
         c.attention_off_by_one, c.attention_residual_gate);
@@ -683,7 +692,7 @@ std::vector<std::uint8_t> buildArtifact(
         builder, c.positional_kind, c.rope_base_seq_len, c.alibi_min_locality_distance,
         c.alibi_slope_exponent, c.alibi_max_bias, c.rope_theta, c.rope_scaling);
     const auto encoder = GRIMConfig::CreateEncoderConfig(
-        builder, c.rms_epsilon, c.use_layer_scale, c.center_residuals);
+        builder, c.rms_epsilon, c.use_layer_scale, c.layer_scale_init, c.center_residuals);
     const auto lm_head = GRIMConfig::CreateLmHeadConfig(
         builder, c.lm_head_unigram_bias, c.lm_head_center_hidden_states,
         c.center_logits, c.project_out_pc1, c.pc1_power_iters,
