@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <sstream>
 #include <string>
 
 namespace fs = std::filesystem;
@@ -148,6 +149,23 @@ void LoggingReady(TrainingContext& ctx) {
     EmitModuleInfo(ModuleId::Training, "[Phase1] Initializing logging...", 0);
     ctx.logging = Internal::initializeLogging(ctx.config);
     Internal::setupBatchLogTape(ctx.logging, ctx.config);
+
+    // loadCompiledModelConfig() returns this snapshot only after FlatBuffer,
+    // schema, semantic, integrity, capability, and decoded-value validation.
+    // Report that already-established result; validation remains owned by the
+    // compiled-model loader.
+    if (ctx.config.model_config) {
+        const auto& compiled = *ctx.config.model_config;
+        std::ostringstream message;
+        message
+            << "[GRIMCFG] verified artifact=\"" << compiled.source_path.string() << '"'
+            << " schema_version=" << compiled.schema_version
+            << " semantic_version=" << compiled.semantic_version
+            << " model_compatibility_xxhash64=0x"
+            << std::hex << std::setfill('0') << std::setw(16)
+            << compiled.integrity.model_compatibility_xxhash64;
+        ctx.logging.logger->log(message.str());
+    }
 }
 
 } // namespace GRIMText::Training

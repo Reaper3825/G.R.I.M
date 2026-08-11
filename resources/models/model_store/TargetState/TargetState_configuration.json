@@ -1,0 +1,8 @@
+{
+  "assigned_sequence_ids": [],
+  "assigned_curriculum_ids": [
+    "curr_intent_action_target_state_v1"
+  ],
+  "curriculum_phases": [],
+  "model_id": "TargetState"
+}

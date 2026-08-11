@@ -21,7 +21,7 @@
 #include <cuda_bf16.h>
 
 namespace {
-    constexpr bool kEnableAttentionStepLogs = true;
+    constexpr bool kEnableAttentionStepLogs = false;
 
     void validateWeights(const GRIM::Tensor& W_qkv,
                          const GRIM::Tensor& b_qkv,
