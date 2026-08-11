@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
@@ -26,6 +27,26 @@ struct OptimizerTraceFormula {
     float radam_rectifier = 1.0f;
     bool radam_rectified = false;
 };
+
+std::uint32_t mixSampleOrdinal(std::uint32_t value) {
+    value += 0x9e3779b9u;
+    value = (value ^ (value >> 16)) * 0x85ebca6bu;
+    value = (value ^ (value >> 13)) * 0xc2b2ae35u;
+    return value ^ (value >> 16);
+}
+
+int stratifiedSampleIndex(int sample_idx, int sample_count, int total) {
+    const std::uint64_t begin =
+        static_cast<std::uint64_t>(sample_idx) * static_cast<std::uint64_t>(total) /
+        static_cast<std::uint64_t>(sample_count);
+    const std::uint64_t end =
+        static_cast<std::uint64_t>(sample_idx + 1) * static_cast<std::uint64_t>(total) /
+        static_cast<std::uint64_t>(sample_count);
+    const std::uint64_t width = end - begin;
+    const std::uint32_t hash = mixSampleOrdinal(
+        static_cast<std::uint32_t>(sample_idx) ^ static_cast<std::uint32_t>(total));
+    return static_cast<int>(begin + static_cast<std::uint64_t>(hash) % width);
+}
 
 OptimizerTraceFormula resolveTraceFormula(const HyperParameters::OptimizerUpdateHP& hp,
                                           int optimizer_step) {
@@ -199,20 +220,22 @@ OptimizerUpdateTraceMetrics computeOptimizerUpdateTrace(
         const int total = static_cast<int>(group.size());
         const int n = std::min(total, kOptimizerUpdateTraceSampleSize);
         if (n <= 0) continue;
-        const int stride = (total > n) ? (total / n) : 1;
         const float effective_lr = learning_rate * group.lr_multiplier;
 
         float h_params[kOptimizerUpdateTraceSampleSize];
         float h_m[kOptimizerUpdateTraceSampleSize];
         float h_v[kOptimizerUpdateTraceSampleSize];
 
-        if (stride <= 1) {
+        if (total <= n) {
             cudaMemcpyAsync(h_params, group.weights(), n * sizeof(float), cudaMemcpyDeviceToHost, stream);
             cudaMemcpyAsync(h_m, group.m_state(), n * sizeof(float), cudaMemcpyDeviceToHost, stream);
             cudaMemcpyAsync(h_v, group.v_state(), n * sizeof(float), cudaMemcpyDeviceToHost, stream);
         } else {
             for (int s = 0; s < n; ++s) {
-                const int idx = s * stride;
+                // Sample one deterministic, hashed offset from each equal-sized
+                // stratum. A fixed stride can align every sample to one matrix
+                // column or vector lane when tensor dimensions share factors.
+                const int idx = stratifiedSampleIndex(s, n, total);
                 cudaMemcpyAsync(&h_params[s], group.weights() + idx, sizeof(float), cudaMemcpyDeviceToHost, stream);
                 cudaMemcpyAsync(&h_m[s], group.m_state() + idx, sizeof(float), cudaMemcpyDeviceToHost, stream);
                 cudaMemcpyAsync(&h_v[s], group.v_state() + idx, sizeof(float), cudaMemcpyDeviceToHost, stream);

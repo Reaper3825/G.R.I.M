@@ -10,7 +10,6 @@
 #include "commands/commands_core.hpp"
 #include "commands/commands_ai.hpp"
 #include "memory/unified_memory.hpp"
-#include "nlp/nlp.hpp"
 #include "voice/voice_speak.hpp"
 #include "../MMO/Core/HardwareInventory.hpp"
 #include "../MMO/Core/ToolRegistry.hpp"  // Phase 0.25: plugin↔ToolRegistry sync
@@ -45,7 +44,6 @@
 
 // External globals
 extern std::unordered_map<std::string, CommandFunc> commandMap;
-extern NLP g_nlp;
 extern GRIM::UnifiedMemoryStorage g_memoryStorage;
 extern GRIM::MMO::HardwareInventory g_hardwareInventory;
 extern ConsoleHistory history;
@@ -423,21 +421,10 @@ static GrimResult api_delete_memory(const char* key) {
 // ============================================================================
 
 static GrimIntent api_classify_intent(const char* text) {
-    GrimIntent result = {};
-    
-    if (!text) {
-        return result;
-    }
-    
-    Intent intent = g_nlp.parse(text);  // Use parse() instead of classify()
-    
-    result.name = allocateString(intent.name);
-    result.description = allocateString(intent.description);
-    result.category = allocateString(intent.category);
-    result.matched = intent.matched;
-    result.confidence = intent.confidence;
-    
-    return result;
+    (void)text;
+    // ABI compatibility only. The application no longer classifies raw user
+    // text into host-authored intents.
+    return {};
 }
 
 static const char* api_resolve_synonym(const char* word) {

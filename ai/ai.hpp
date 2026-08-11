@@ -55,4 +55,3 @@ void warmupAI();
 // Synchronous + streaming AI wrappers
 // ====================================================
 CommandResult ai_process(const std::string& input);
-CommandResult ai_interpret(const std::string& input, bool allowCommands = true);

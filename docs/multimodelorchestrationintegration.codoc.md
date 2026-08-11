@@ -378,7 +378,7 @@ If a refactor changes code but not this document, the refactor is incomplete.
 - `ModelRegistry` — read-only dependency for router and sub-model info
 - `ModelLoader` — `ensureLoaded()` / `markInUse()` / `markIdle()` bracket around each backend call
 - `MMD.hpp` — uses `RequestEnvelope`, `ResponseEnvelope`, `ResponseStatus`, `ModelInfo`, `BackendType`
-- HTTP via cpr — same library used by existing `callAIAsync()` and `GRIMBackend`
+- HTTP via cpr — same library used by `callAIAsync()` and `GrimNativeBackend`
 
 **Legacy replaced**
 - `resolveBackendURL()` deleted entirely — no fallback, no shadow mode

@@ -8,8 +8,6 @@
 #include "memory/unified_memory.hpp"
 #include "memory/memory_buffer_rotation.hpp"
 #include "ai/ai_rl.hpp"
-#include "ai/intent_gate.hpp"
-#include "ai/task_planner.hpp" 
 #include "ai/grim_text_server_manager.hpp"  
 #include "ai/training_server_manager.hpp"  
 #include "core/window_manager.hpp"
@@ -36,7 +34,6 @@
 #include "geospatial/geospatial_runtime.hpp"
 #include "control/devices/server/device_comm_server.hpp"
 #include "resources.hpp"
-#include "nlp/nlp.hpp"
 #include "timer.hpp"
 #include "perception/perception.hpp"
 #include "perception/perception_context.hpp" 
@@ -282,7 +279,6 @@ int main(int argc, char* argv[])
     // ======================================================
     // 6.   Initialize Intent Classification System
     // ======================================================
-    GRIM::IntentGate::init();
     LOG_PHASE("Intent classification system initialized", true);
 
     // ======================================================
@@ -294,12 +290,6 @@ int main(int argc, char* argv[])
     // ✅ NEW: Initialize context-aware perception manager
     GRIM::Perception::initContextManager();
     LOG_PHASE("Perception context manager initialized", true);
-    
-    // ======================================================
-    // 6.7  Initialize Task Planner
-    // ======================================================
-    GRIM::TaskPlanner::init();
-    LOG_PHASE("Task planner initialized", true);
     
     // ======================================================
     // 7. Initialize BGFX global context (platform window)
@@ -533,12 +523,10 @@ int main(int argc, char* argv[])
     // ======================================================
     static std::vector<Timer> emptyTimers;
     static nlohmann::json emptyMemory;
-    static NLP dummyNLP;
-    
-    WakeKey::start(nullptr, emptyTimers, emptyMemory, dummyNLP);
+    WakeKey::start(&history, emptyTimers, emptyMemory);
     LOG_PHASE("WakeKey listener started", true);
 
-    WakeVoice::start(nullptr, emptyTimers, emptyMemory, dummyNLP);
+    WakeVoice::start(nullptr, emptyTimers, emptyMemory);
     LOG_PHASE("WakeVoice listener started", true);
 
     // ======================================================
@@ -722,7 +710,6 @@ int main(int argc, char* argv[])
     Voice::shutdownQueue();
     Voice::shutdownTTS();
     GRIM::RL::shutdown();
-    GRIM::IntentGate::shutdown(); 
     GRIM::Perception::Digital::ShutdownDigitalPerceptionPrimitives();
     GRIM::Perception::Digital::ShutdownDigitalEnvironment();
     GRIM::Perception::Digital::ShutdownDigitalContextProjector();

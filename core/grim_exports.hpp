@@ -17,7 +17,6 @@ namespace GRIM {
     class UnifiedMemoryStorage;
 }
 struct LocationInfo;
-struct Intent;
 struct Timer;
 class ConsoleHistory;
 namespace GRIM::MMO { struct HardwareInventory; }
@@ -34,7 +33,6 @@ extern "C" {
     GRIM_EXPORT_SYMBOL GRIM::UnifiedMemoryStorage g_memoryStorage;
     GRIM_EXPORT_SYMBOL GRIM::MMO::HardwareInventory g_hardwareInventory;
     GRIM_EXPORT_SYMBOL LocationInfo g_location;
-    GRIM_EXPORT_SYMBOL Intent g_lastIntent;
     GRIM_EXPORT_SYMBOL std::filesystem::path g_currentDir;
     GRIM_EXPORT_SYMBOL std::vector<Timer> timers;
     GRIM_EXPORT_SYMBOL nlohmann::json aiConfig;

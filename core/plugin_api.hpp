@@ -160,7 +160,6 @@ typedef struct GrimPluginAPI {
     // Common events:
     // - "command_executed" - fired after any command runs
     // - "user_input" - raw user text input
-    // - "intent_classified" - NLP intent detected
     // - "plugin_loaded" / "plugin_unloaded"
     // - "system_shutdown" - clean up resources
     
@@ -178,8 +177,10 @@ typedef struct GrimPluginAPI {
     GrimResult (*delete_memory)(const char* key);
     
     // ========================================================================
-    // NLP & AI Functions
+    // Language & AI Functions
     // ========================================================================
+    // Deprecated ABI slot: the host returns an unmatched result and performs
+    // no local intent classification.
     GrimIntent (*classify_intent)(const char* text);
     const char* (*resolve_synonym)(const char* word);
     

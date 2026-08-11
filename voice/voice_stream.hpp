@@ -6,7 +6,6 @@
 #include <atomic>
 #include <nlohmann/json.hpp>
 
-#include "nlp/nlp.hpp"
 #include "timer.hpp"
 #include "console_history.hpp"
 
@@ -36,8 +35,7 @@ namespace VoiceStream {
     bool start(whisper_context* ctx,
                ConsoleHistory* history,
                std::vector<Timer>& timers,
-               nlohmann::json& longTermMemory,
-               NLP& nlp);
+               nlohmann::json& longTermMemory);
     void stop();
     void calibrateSilence();
 }

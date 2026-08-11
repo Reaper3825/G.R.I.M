@@ -5,7 +5,6 @@
 #include <optional>
 #include <filesystem>
 #include "helpers/color.hpp"
-#include "intent.hpp"
 
 // ====================================================
 // Command result structure
@@ -31,9 +30,6 @@ extern std::unordered_map<std::string, CommandFunc> commandMap;
 
 // Correct type restored — matches old GRIM core
 extern std::filesystem::path g_currentDir;
-
-// Last NLP intent (for "nevermind" command)
-extern Intent g_lastIntent;
 
 // ====================================================
 // Core functions

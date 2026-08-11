@@ -14,7 +14,6 @@
 #include "commands_ui.hpp"
 #include "commands_grim.hpp"  // ? NEW: GRIM system commands
 #include "commands_perception.hpp"
-#include "commands_tasks.hpp"
 #include "commands_question.hpp"
 
 // Helper macro for registering with metadata
@@ -221,18 +220,6 @@ static void register_all_commands() {
                   "action", false);
     REGISTER_TOOL("click_on", cmdInputClickOn,
                   "Click on detected screen element",
-                  "action", false);
-
-    // ✅ NEW: Task management commands
-    LOG_DEBUG("Plugin", "Registering task management commands");
-    REGISTER_TOOL("execute_task", cmdExecuteTask,
-                  "Execute a task",
-                  "action", false);
-    REGISTER_TOOL("task_status", cmdTaskStatus,
-                  "Check task execution status",
-                  "information", true);
-    REGISTER_TOOL("task_cancel", cmdTaskCancel,
-                  "Cancel running task",
                   "action", false);
 
     // ✅ NEW: Timer commands

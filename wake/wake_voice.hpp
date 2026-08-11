@@ -6,7 +6,6 @@
 
 struct ConsoleHistory;
 struct Timer;
-class NLP;
 
 namespace Voice {
     bool initWakeWord(const std::string& accessKey,
@@ -19,8 +18,7 @@ namespace Voice {
 namespace WakeVoice {
     void start(ConsoleHistory* history,
                std::vector<Timer>& timers,
-               nlohmann::json& longTermMemory,
-               NLP& nlp);
+               nlohmann::json& longTermMemory);
     void stop();
     bool isRunning();
 }

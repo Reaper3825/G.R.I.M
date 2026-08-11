@@ -12,7 +12,6 @@
 #include <atomic>
 #include <filesystem>
 #include <nlohmann/json.hpp>
-#include "nlp/nlp.hpp"
 #include "commands/commands_core.hpp"
 #include "voice/voice_speak.hpp"
 #include "popup_ui/popup_ui.hpp"
@@ -194,8 +193,7 @@ static void stopPortAudio(PaStream* stream) {
 
 void start(ConsoleHistory* history,
            std::vector<Timer>& timers,
-           nlohmann::json& longTermMemory,
-           NLP& nlp)
+           nlohmann::json& longTermMemory)
 {
     if (g_running.load()) {
         LOG_DEBUG("WakeVoice", "Already running.");
@@ -215,7 +213,7 @@ void start(ConsoleHistory* history,
     }
 
     g_running = true;
-    g_thread = std::thread([history, &timers, &longTermMemory, &nlp]() {
+    g_thread = std::thread([history, &timers, &longTermMemory]() {
         const int frameLen = pv_porcupine_frame_length();
         const int sampleRate = pv_porcupine_sample_rate();
         std::vector<int16_t> frame(frameLen);

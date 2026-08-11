@@ -30,7 +30,6 @@
 #include "commands_core.hpp"
 #include "voice/voice_speak.hpp"
 #include "resources.hpp"
-#include "nlp/nlp.hpp"
 #include "logger.hpp"
 #include "core/audio_core.hpp"
 
@@ -63,8 +62,8 @@ CommandResult cmdVoice([[maybe_unused]] const std::string& arg) {
     }
 
     LOG_DEBUG("Voice", "Received transcript: " + transcript);
-    // NOTE: handleCommand() is called by the wake key system in wake_key.cpp
-    // We just return the transcript here without executing it again
+    // Return the transcript to the caller; wake-key captures use ai_process()
+    // directly and therefore do not execute this command a second time.
 
     return {
         true,                          // success
@@ -92,7 +91,7 @@ CommandResult cmdVoiceStream([[maybe_unused]] const std::string& arg) {
         };
     }
 
-    if (VoiceStream::start(Voice::g_state.ctx, &history, timers, longTermMemory, g_nlp)) {
+    if (VoiceStream::start(Voice::g_state.ctx, &history, timers, longTermMemory)) {
         LOG_DEBUG("Voice", "Voice streaming started");
         return {
             true,                               // success
@@ -389,7 +388,6 @@ CommandResult cmd_ttsDevice([[maybe_unused]] const std::string& arg) {
 CommandResult cmdNevermind(const std::string& arg)
 {
     (void)arg;
-    g_lastIntent = {}; // reset last NLP intent
     LOG_DEBUG("Command", "User cancelled last command with 'nevermind'");
 
     // Optionally stop active speech playback

@@ -990,11 +990,26 @@ BatchPayload buildInferenceBatchPayload(
             std::to_string(seq_len));
     }
 
-    // A slot map supplies only authored ARG bootstrap bindings.
-    if (!token_to_slot_index_map.empty()) {
+    // A full-length all--1 map is the canonical "no authored bindings" form.
+    // Execution geometry is required only when at least one token actually
+    // names a slot; vector presence alone does not make execution active.
+    bool has_slot_bindings = false;
+    for (std::size_t t = 0; t < token_to_slot_index_map.size(); ++t) {
+        const int32_t slot = token_to_slot_index_map[t];
+        if (slot < -1) {
+            throw std::runtime_error(
+                "buildInferenceBatchPayload: token_to_slot_index_map[" +
+                std::to_string(t) + "]=" + std::to_string(slot) +
+                " must be -1 or non-negative");
+        }
+        has_slot_bindings = has_slot_bindings || slot >= 0;
+    }
+
+    // Non-negative entries supply authored ARG bootstrap bindings.
+    if (has_slot_bindings) {
         if (execution_num_slots <= 0) {
             throw std::runtime_error(
-                "buildInferenceBatchPayload: execution_num_slots must be > 0 when token_to_slot_index_map is provided");
+                "buildInferenceBatchPayload: execution_num_slots must be > 0 when an authored slot binding exists");
         }
         if (execution_num_scratch_slots < 0 ||
             execution_num_scratch_slots >= execution_num_slots) {

@@ -1,10 +1,7 @@
 #include "voice_stream.hpp"
 #include "console_history.hpp"
 #include "ui/ui_helpers.hpp"
-#include "commands/commands_core.hpp"
 #include "ai/ai.hpp"
-#include "nlp/nlp.hpp"
-#include "synonyms.hpp"
 #include "resources.hpp"
 #include "voice.hpp"
 #include "logger.hpp"
@@ -13,7 +10,6 @@
 #include <filesystem>
 #include <mutex>
 #include <thread>
-#include <algorithm>
 #include <cctype>
 #include <cmath>
 
@@ -57,12 +53,12 @@ static bool isSilence(const std::vector<float>& pcm) {
 static std::string sanitizeTranscript(const std::string& input) {
     std::string out = input;
 
-    std::transform(out.begin(), out.end(), out.begin(),
-                   [](unsigned char c){ return std::tolower(c); });
-
-    while (!out.empty() && ispunct(out.back())) out.pop_back();
-    while (!out.empty() && isspace(out.front())) out.erase(out.begin());
-    while (!out.empty() && isspace(out.back())) out.pop_back();
+    while (!out.empty() && std::isspace(static_cast<unsigned char>(out.front()))) {
+        out.erase(out.begin());
+    }
+    while (!out.empty() && std::isspace(static_cast<unsigned char>(out.back()))) {
+        out.pop_back();
+    }
 
     return out;
 }
@@ -107,8 +103,7 @@ static void processPCM(whisper_context* ctx, const std::vector<float>& buffer) {
 static void run(whisper_context* ctx,
                 ConsoleHistory* uiHistory,
                 std::vector<Timer>& uiTimers,
-                nlohmann::json& uiLongTermMemory,
-                NLP& nlp)
+                nlohmann::json& uiLongTermMemory)
 {
     LOG_DEBUG("VoiceStream", "Run() thread entered.");
     LOG_PHASE("VoiceStream thread active", true);
@@ -217,16 +212,9 @@ static void run(whisper_context* ctx,
                 std::string clean = sanitizeTranscript(VoiceStream::g_state.partial);
                 LOG_DEBUG("VoiceStream", "Final transcript: " + clean);
 
-                Intent intent = nlp.parse(clean);
-                if (intent.matched) {
-                    LOG_DEBUG("VoiceStream", "Dispatching command: " + intent.name);
-                    handleCommand(clean);
-                } else {
-                    auto future = callAIAsync(VoiceStream::g_state.partial);
-                    std::string fullReply = future.get();
-
-                    uiHistory->push("[AI] " + fullReply, 0xFF00FF00);
-                }
+                CommandResult result = ai_process(clean);
+                uiHistory->push("[AI] " + result.message,
+                                result.success ? 0xFF00FF00 : 0xFF0000FF);
 
                 VoiceStream::g_state.partial.clear();
                 // Note: Console now uses ConsolePanel with UIInputBox - no direct buffer access
@@ -252,8 +240,7 @@ bool VoiceStream::isRunning() { return g_state.running; }
 bool VoiceStream::start(whisper_context* ctx,
                         ConsoleHistory* history,
                         std::vector<Timer>& timers,
-                        nlohmann::json& longTermMemory,
-                        NLP& nlp)
+                        nlohmann::json& longTermMemory)
 {
     // ------------------------------------------------------------
     // Prevent duplicate sessions
@@ -283,9 +270,9 @@ bool VoiceStream::start(whisper_context* ctx,
     // Launch new listening thread
     // ------------------------------------------------------------
     g_state.running = true;
-    g_state.thread = std::thread([=, &timers, &longTermMemory, &nlp]() mutable {
+    g_state.thread = std::thread([=, &timers, &longTermMemory]() mutable {
         LOG_DEBUG("VoiceStream", "Voice thread started.");
-        run(ctx, history, timers, longTermMemory, nlp);
+        run(ctx, history, timers, longTermMemory);
         LOG_DEBUG("VoiceStream", "Voice thread ended.");
     });
 
