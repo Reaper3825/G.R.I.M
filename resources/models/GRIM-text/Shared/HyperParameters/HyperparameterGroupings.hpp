@@ -1229,10 +1229,11 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     const int num_layers = requireInt("num_layers");
     const int num_heads = requireInt("num_heads");
     const int num_kv_heads = requireInt("num_kv_heads");
+    const int d_ff = requireInt("d_ff");
 
-    if (d_model <= 0 || num_layers <= 0 || num_heads <= 0 || num_kv_heads <= 0) {
+    if (d_model <= 0 || num_layers <= 0 || num_heads <= 0 || num_kv_heads <= 0 || d_ff <= 0) {
         throw std::runtime_error(
-            "modelHP(snapshot): d_model, num_layers, num_heads, and num_kv_heads must all be > 0");
+            "modelHP(snapshot): d_model, num_layers, num_heads, num_kv_heads, and d_ff must all be > 0");
     }
     if ((d_model % num_heads) != 0) {
         throw std::runtime_error(
@@ -1252,7 +1253,6 @@ inline ModelHP modelHP(const GRIM::Config::AiConfigSnapshot& snapshot)
     const int rotary_dim = head_dim;
     const float attention_softmax_scale = computeAttentionSoftmaxScale(
         head_dim, "modelHP(snapshot)");
-    const int d_ff = d_model * D_FF_MULTIPLIER;
     const int min_seq_len_for_flash = max_seq_len / 4;
     const float dropout_rate = requireFloat("dropout_rate");
     const float attention_dropout = dropout_rate;

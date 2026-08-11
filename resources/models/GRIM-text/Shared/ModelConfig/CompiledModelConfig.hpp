@@ -99,7 +99,7 @@ struct CompiledEncoderConfig {
     float layer_scale_init = 0.0f;
     bool center_residuals = false;
 };
-
+  
 struct CompiledLmHeadConfig {
     bool unigram_bias_enabled = false;
     bool center_hidden_states = false;
