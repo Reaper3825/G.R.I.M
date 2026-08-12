@@ -14,6 +14,7 @@
 #include <queue>
 #include <mutex>
 #include <condition_variable>
+#include <memory>
 #include <nlohmann/json.hpp>
 
 #ifdef _WIN32
@@ -46,6 +47,21 @@ namespace Voice {
     // =========================================================
     static bool g_ttsReady = false;
     static bool g_xttsV2Enabled = false;  // ? Track if XTTS v2 is loaded
+
+    class LegacyTTSProvider final : public ITTSProvider {
+    public:
+        const char* providerId() const noexcept override;
+        bool initialize() override;
+        void shutdown() noexcept override;
+        TTSProviderState state() const noexcept override;
+        TTSProviderCapabilities capabilities() const override;
+        TTSSynthesisResult synthesize(const TTSSynthesisRequest& request) override;
+
+    private:
+        TTSProviderState state_ = TTSProviderState::Stopped;
+    };
+
+    static std::unique_ptr<ITTSProvider> g_ttsProvider;
 
     #ifdef _WIN32
     static HANDLE hChildStdinWr = nullptr;
@@ -187,7 +203,7 @@ namespace Voice {
     // =========================================================
     // Init / Shutdown
     // =========================================================
-    bool initTTS() {
+    static bool initializeLegacyProvider() {
         // ? Initialize TTS cache first
         TTSCache::init();
         
@@ -355,7 +371,7 @@ namespace Voice {
         return true;
     }
 
-    void shutdownTTS() {
+    static void shutdownLegacyProvider() {
 #ifdef _WIN32
         if (hChildStdinWr) {
             std::string exitCmd = R"({"command":"exit"})" "\n";
@@ -386,6 +402,98 @@ namespace Voice {
         
         LOG_PHASE("Voice shutdownTTS complete", true);
         g_ttsReady = false;
+    }
+
+    const char* LegacyTTSProvider::providerId() const noexcept {
+        return g_engine.c_str();
+    }
+
+    bool LegacyTTSProvider::initialize() {
+        state_ = TTSProviderState::Starting;
+        const bool initialized = initializeLegacyProvider();
+        state_ = g_ttsReady
+            ? TTSProviderState::Ready
+            : (initialized ? TTSProviderState::Stopped : TTSProviderState::Failed);
+        return initialized;
+    }
+
+    void LegacyTTSProvider::shutdown() noexcept {
+        try {
+            shutdownLegacyProvider();
+            state_ = TTSProviderState::Stopped;
+        } catch (const std::exception& e) {
+            state_ = TTSProviderState::Failed;
+            LOG_ERROR("Voice/Provider", std::string("Provider shutdown failed: ") + e.what());
+        } catch (...) {
+            state_ = TTSProviderState::Failed;
+            LOG_ERROR("Voice/Provider", "Provider shutdown failed with unknown error");
+        }
+    }
+
+    TTSProviderState LegacyTTSProvider::state() const noexcept {
+        return state_;
+    }
+
+    TTSProviderCapabilities LegacyTTSProvider::capabilities() const {
+        TTSProviderCapabilities result;
+        result.supports_voice_selection = g_engine == "coqui";
+        result.supports_voice_cloning = g_xttsV2Enabled;
+        result.supports_language_selection = g_xttsV2Enabled;
+        result.supports_rate = (g_engine == "coqui" && !g_xttsV2Enabled)
+            || g_engine == "apple";
+        result.supports_pitch = g_engine == "apple";
+        if (g_xttsV2Enabled && !g_language.empty()) {
+            result.languages.push_back(g_language);
+        }
+        return result;
+    }
+
+    bool initTTS() {
+        if (!g_ttsProvider) {
+            g_ttsProvider = std::make_unique<LegacyTTSProvider>();
+        }
+        return g_ttsProvider->initialize();
+    }
+
+    void shutdownTTS() {
+        if (g_ttsProvider) {
+            g_ttsProvider->shutdown();
+            g_ttsProvider.reset();
+        }
+    }
+
+    bool isReady() {
+        return g_ttsProvider
+            && g_ttsProvider->state() == TTSProviderState::Ready;
+    }
+
+    const char* activeTTSProviderId() {
+        return g_ttsProvider ? g_ttsProvider->providerId() : "none";
+    }
+
+    TTSProviderState activeTTSProviderState() {
+        return g_ttsProvider
+            ? g_ttsProvider->state()
+            : TTSProviderState::Stopped;
+    }
+
+    TTSProviderCapabilities activeTTSProviderCapabilities() {
+        return g_ttsProvider
+            ? g_ttsProvider->capabilities()
+            : TTSProviderCapabilities{};
+    }
+
+    TTSSynthesisResult synthesize(const TTSSynthesisRequest& request) {
+        if (!g_ttsProvider) {
+            return {false, "", "ERR_TTS_PROVIDER_UNAVAILABLE", "No TTS provider is active"};
+        }
+        if (g_ttsProvider->state() != TTSProviderState::Ready) {
+            return {false, "", "ERR_TTS_PROVIDER_NOT_READY", "The active TTS provider is not ready"};
+        }
+        if (request.text.empty()) {
+            return {false, "", "ERR_TTS_EMPTY_TEXT", "TTS request text is empty"};
+        }
+        return g_ttsProvider->synthesize(request);
     }
     
     // =========================================================
@@ -438,13 +546,26 @@ namespace Voice {
             } else
 #endif
             if (engine == "coqui") {
-                std::string wavPath = coquiSpeak(item.text, g_speaker, effectiveSpeed, effectivePitch);
-                
+                TTSSynthesisRequest request;
+                request.text = item.text;
+                request.category = item.category;
+                request.voice_id = g_speaker;
+                request.language = g_language;
+                request.rate = effectiveSpeed;
+                request.pitch = effectivePitch;
+                request.emphasis = static_cast<double>(item.params.emphasis);
+
+                TTSSynthesisResult synthesis = synthesize(request);
+                std::string wavPath = synthesis.audio_path;
+
                 if (!wavPath.empty()) {
                     playAudio(wavPath);
                     while (isPlaying()) {
                         std::this_thread::sleep_for(std::chrono::milliseconds(50));
                     }
+                } else {
+                    LOG_ERROR("Voice/Provider",
+                              synthesis.error_code + ": " + synthesis.error_message);
                 }
             }
 #ifdef _WIN32
@@ -512,7 +633,13 @@ namespace Voice {
             
             if (existing.empty()) {
                 // Generate and cache
-                std::string wav = coquiSpeak(phrase, "default", 1.0);
+                TTSSynthesisRequest request;
+                request.text = phrase;
+                request.category = "system";
+                request.voice_id = "default";
+                request.language = g_language;
+                TTSSynthesisResult synthesis = synthesize(request);
+                std::string wav = synthesis.audio_path;
                 if (!wav.empty()) {
                     TTSCache::store(phrase, "default", 1.0, wav);
                     cached++;
@@ -524,10 +651,6 @@ namespace Voice {
         
         LOG_DEBUG("Voice", "Pre-cache complete: " + std::to_string(cached) + 
                  " generated, " + std::to_string(alreadyCached) + " already cached");
-    }
-
-    bool isReady() {
-        return g_ttsReady;
     }
 
     // =========================================================
@@ -712,6 +835,35 @@ namespace Voice {
         }
 #endif
         return "";
+    }
+
+    TTSSynthesisResult LegacyTTSProvider::synthesize(
+        const TTSSynthesisRequest& request) {
+        if (g_engine != "coqui") {
+            return {
+                false,
+                "",
+                "ERR_TTS_PROVIDER_UNSUPPORTED",
+                "The active legacy provider does not support file synthesis"
+            };
+        }
+
+        std::string audioPath = coquiSpeak(
+            request.text,
+            request.voice_id.empty() ? g_speaker : request.voice_id,
+            request.rate,
+            request.pitch);
+
+        if (audioPath.empty()) {
+            return {
+                false,
+                "",
+                "ERR_TTS_SYNTHESIS_FAILED",
+                "The active TTS provider did not produce audio"
+            };
+        }
+
+        return {true, audioPath, "", ""};
     }
 
     // =========================================================

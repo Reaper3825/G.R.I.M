@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <atomic>
+#include "tts_provider.hpp"
 
 namespace Voice {
     extern std::atomic<bool> g_isSpeaking;
@@ -15,6 +16,10 @@ namespace Voice {
     bool initTTS();
     void shutdownTTS();
     bool isReady();
+    const char* activeTTSProviderId();
+    TTSProviderState activeTTSProviderState();
+    TTSProviderCapabilities activeTTSProviderCapabilities();
+    TTSSynthesisResult synthesize(const TTSSynthesisRequest& request);
 
     void speak(const std::string& text, const std::string& category);
     void speak(const std::string& text, const std::string& category, const VoiceParams& params);
