@@ -165,6 +165,7 @@ node_modules/
 # Python / Virtual Environments
 # ==============================
 .venv/
+.venv-cosyvoice/
 .venv_ultrachat/
 venv/
 resources/.venv/
@@ -178,6 +179,7 @@ resources/.venv/
 *.onnx
 *.dic
 *.db
+/resources/models/Fun-CosyVoice3-0.5B/
 
 vcpkg_installed/** -text
 external/bgfx.cmake/

@@ -1,11 +1,15 @@
 [CmdletBinding()]
 param(
-    [string]$WorkspaceRoot = (Split-Path -Parent $PSScriptRoot),
+    [string]$WorkspaceRoot = "",
     [string]$PythonLauncher = "py",
     [string]$PythonVersion = "3.10"
 )
 
 $ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) {
+    $WorkspaceRoot = Split-Path -Parent $PSScriptRoot
+}
 
 $resolvedRoot = (Resolve-Path -LiteralPath $WorkspaceRoot).Path
 $repositoryPath = Join-Path $resolvedRoot "external\CosyVoice"
@@ -44,9 +48,25 @@ if ($LASTEXITCODE -ne 0) {
     throw "pip bootstrap failed."
 }
 
-& $pythonPath -m pip install -r (Join-Path $repositoryPath "requirements.txt")
+& $pythonPath -m pip install "setuptools<81" wheel
+if ($LASTEXITCODE -ne 0) {
+    throw "Python build tooling installation failed."
+}
+
+& $pythonPath -m pip install --no-build-isolation -r (Join-Path $repositoryPath "requirements.txt")
 if ($LASTEXITCODE -ne 0) {
     throw "CosyVoice dependency installation failed."
+}
+
+# The pinned PyPI sdist can produce a metadata-only wheel on current Windows
+# tooling. Repair it from the same tagged source release only when import fails.
+& $pythonPath -c "import whisper"
+if ($LASTEXITCODE -ne 0) {
+    & $pythonPath -m pip install --force-reinstall --no-deps --no-cache-dir `
+        --no-build-isolation "git+https://github.com/openai/whisper.git@v20231117"
+    if ($LASTEXITCODE -ne 0) {
+        throw "OpenAI Whisper source installation failed."
+    }
 }
 
 & $pythonPath -m pip install huggingface_hub

@@ -37,7 +37,7 @@ def load_runtime(repository, model_path):
 
     import torch
     import torchaudio
-    from cosyvoice.cli.auto_model import AutoModel
+    from cosyvoice.cli.cosyvoice import AutoModel
 
     log(f"Loading Fun-CosyVoice 3 model from {model_directory}")
     model = AutoModel(model_dir=str(model_directory))
