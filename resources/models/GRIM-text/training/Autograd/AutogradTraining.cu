@@ -551,7 +551,7 @@ BackwardResult executeAutogradBackward(
     // determine if backward itself produces zeros or if something later
     // corrupts the buffers.  Issue: "zero gradients every other batch"
     // ════════════════════════════════════════════════════════════════════
-    {
+    if constexpr (GRIM::VerboseLogging::ENABLE_AUTOGRAD_TRAINING_LOGS) {
         cudaStreamSynchronize(ctx.stream);
         auto& embedding_parameters = ctx.parameter_registry->requireEmbeddingParameters("executeAutogradBackward");
         auto& lm_head_parameters = ctx.parameter_registry->requireLmHeadParameters("executeAutogradBackward");

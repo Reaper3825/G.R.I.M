@@ -73,6 +73,33 @@ inline TrainingStage parseTrainingStage(const std::string& value) {
 }
 
 //======================================================//
+// Checkpoint resume mode
+// Selects whether a training run continues checkpoint progress or restarts it.
+//======================================================//
+enum class CheckpointResumeMode : uint8_t {
+    RESUME,
+    RESTART
+};
+
+inline const char* checkpointResumeModeToJsonString(CheckpointResumeMode mode) {
+    switch (mode) {
+        case CheckpointResumeMode::RESUME: return "resume";
+        case CheckpointResumeMode::RESTART: return "restart";
+    }
+    throw std::runtime_error("checkpointResumeModeToJsonString: unknown CheckpointResumeMode enum value");
+}
+
+inline CheckpointResumeMode parseCheckpointResumeMode(const std::string& value) {
+    const std::string normalized = normalizeHyperparameterEnumToken(value);
+    if (normalized == "resume") return CheckpointResumeMode::RESUME;
+    if (normalized == "restart") return CheckpointResumeMode::RESTART;
+
+    throw std::runtime_error(
+        "ai_config.json: training.config.checkpoint_resume_mode has unknown value '" + value +
+        "' (valid: resume, restart)");
+}
+
+//======================================================//
 // Positional Encoding Configuration
 // Supports ALiBi, RoPE, and Hybrid (ALiBi+RoPE)
 //======================================================//
@@ -324,6 +351,17 @@ struct adl_serializer<GRIM::HyperParameters::TrainingStage> {
 
     static void from_json(const json& j, GRIM::HyperParameters::TrainingStage& value) {
         value = GRIM::HyperParameters::parseTrainingStage(j.get<std::string>());
+    }
+};
+
+template <>
+struct adl_serializer<GRIM::HyperParameters::CheckpointResumeMode> {
+    static void to_json(json& j, const GRIM::HyperParameters::CheckpointResumeMode& value) {
+        j = GRIM::HyperParameters::checkpointResumeModeToJsonString(value);
+    }
+
+    static void from_json(const json& j, GRIM::HyperParameters::CheckpointResumeMode& value) {
+        value = GRIM::HyperParameters::parseCheckpointResumeMode(j.get<std::string>());
     }
 };
 

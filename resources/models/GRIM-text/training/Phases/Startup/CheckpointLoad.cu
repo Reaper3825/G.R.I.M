@@ -249,6 +249,8 @@ void loadRequestedCheckpoint(TrainingContext& ctx)
 
         logger.log("✓ Loaded weights from checkpoint: " + candidate);
         ctx.loaded_checkpoint_path = candidate;
+        ctx.checkpoint_latest_curriculum_completion =
+            GRIM::Checkpoint::readLatestCurriculumCompletion(candidate);
         logger.log(
             "[MODEL_INIT] RESULT=CHECKPOINT_LOADED checkpoint_loaded=true path=\"" +
             candidate + "\"");
@@ -392,6 +394,9 @@ void CheckpointPlanReady(TrainingContext& ctx) {
     }
 
     ctx.model_parameter_source_plan = ModelParameterSourcePlan::CHECKPOINT_RESTORE;
+    ctx.checkpoint_latest_curriculum_completion =
+        GRIM::Checkpoint::readLatestCurriculumCompletion(
+            ctx.planned_checkpoint_candidates.front());
     logger.log(
         "[MODEL_INIT] PLAN=CHECKPOINT_RESTORE training_stage=" +
         std::string(GRIM::HyperParameters::trainingStageToJsonString(checkpoint_hp.training_stage)) +

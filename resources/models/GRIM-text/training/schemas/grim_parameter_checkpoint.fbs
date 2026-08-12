@@ -63,6 +63,27 @@ table CompatibilityFact {
   canonical_value: string (required);
 }
 
+// Snapshot of the curriculum identity and membership metadata associated with
+// the latest training recorded by this model checkpoint.
+table CurriculumMetadata {
+  training_stage: string (required);
+  name: string (required);
+  id: string (required);
+  concept_block_ids: [string] (required);
+}
+
+// Cumulative epoch completion for one curriculum in this model's history.
+table CurriculumEpochCompletion {
+  curriculum_id: string (required);
+  epochs_completed: uint64;
+}
+
+// Latest curriculum metadata and its cumulative completed-epoch count.
+table LatestCurriculumCompletion {
+  curriculum: CurriculumMetadata (required);
+  epochs_completed: uint64;
+}
+
 // Directory entry for one live ParameterGroup.
 //
 // Loader requirements:
@@ -116,6 +137,11 @@ table ParameterCheckpoint {
   // ParameterEntry are relative to the first byte of this vector.
   payload: [ubyte] (required);
   payload_xxhash64: uint64;
+
+  // Optional training provenance. These fields are appended so checkpoints
+  // written before their introduction remain valid under format_version 1.
+  curriculum_epoch_ledger: [CurriculumEpochCompletion];
+  latest_curriculum_completion: LatestCurriculumCompletion;
 }
 
 root_type ParameterCheckpoint;

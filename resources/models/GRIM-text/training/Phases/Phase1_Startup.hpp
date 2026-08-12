@@ -64,6 +64,7 @@
 #include "../../Shared/LogRecorder/Sinks/CsvEquationSink.hpp"
 #include "../../Shared/LogRecorder/Sinks/StderrSink.hpp"
 #include "../../Shared/PBM/PBMStateOwner.hpp"
+#include "../../Common/ParameterCheckpoint.hpp"
 #include "../training_logger.hpp"
 #include "../training_status_writer.hpp"
 #include "../metrics_collector.hpp"
@@ -116,6 +117,7 @@ struct OptimizerContext {
     GRIM::OptimizerStep optimizer_step;
     GRIM::OptimizerState optimizer_state;
     GRIM::SoftRestart::SoftRestartController soft_restart_controller;
+    bool optimizer_state_restored = false;
 
     int accumulationSlot() const { return accumulation_slot_; }
 
@@ -251,6 +253,9 @@ struct TrainingContext {
 
     // Data
     SequenceData data;
+
+    /** Registry metadata for the curriculum consumed by this training run. */
+    std::optional<GRIM::CurriculumMetadata> current_curriculum_metadata;
     
     // Optimizer and controllers
     OptimizerContext optimizer;
@@ -277,6 +282,12 @@ struct TrainingContext {
      *  Constructed in Phase1 after PlannedBatchesReady authors the train payload count. */
     std::optional<GRIM::LR::LRSchedule> lr_schedule;
 
+    /** Paired startup positions keep the curriculum-local LR clock separate
+     *  from the lifetime optimizer clock restored from its sidecar. */
+    int lr_schedule_optimizer_step_at_start = 0;
+    int lr_schedule_step_at_start = 0;
+    std::uint64_t curriculum_epochs_completed_at_start = 0;
+
     float best_val_loss = std::numeric_limits<float>::infinity();
     /** Number of epochs actually completed (set by Phase 2; used by Phase 3 for summary). */
     int epochs_completed = 0;
@@ -290,6 +301,10 @@ struct TrainingContext {
 
     /** Ordered, preflight-validated checkpoint candidates for restore. */
     std::vector<std::string> planned_checkpoint_candidates;
+
+    /** Optional latest-curriculum provenance read from the planned checkpoint. */
+    std::optional<GRIM::Checkpoint::LatestCurriculumCompletionRecord>
+        checkpoint_latest_curriculum_completion;
     
     /** Path to the checkpoint that was loaded at startup (empty if fresh start). */
     std::string loaded_checkpoint_path;

@@ -319,6 +319,13 @@ void loadConceptBlocks(const fs::path& cache_dir,
 
 }  // namespace
 
+CurriculumMetadata LoadCurriculumMetadataFromRegistry(
+	const fs::path& directory,
+	const std::string& curriculum_name)
+{
+	return loadCurriculumMetadata(directory, curriculum_name);
+}
+
 bool PrepareTrainingDataFromCache(
 	const GRIM::HyperParameters::TokenizerHP& tokenizer_hp) {
 	const size_t min_cleaned_text_length = static_cast<size_t>(tokenizer_hp.min_cleaned_text_length);
@@ -1469,6 +1476,18 @@ void LoadTrainingData(TrainingContext& ctx) {
 	if (tokenizer_hp.training_curriculum.empty()) {
 		throw std::runtime_error(
 			"LoadTrainingData: training_curriculum is empty; select the curriculum represented by grim_text_training_data");
+	}
+	ctx.current_curriculum_metadata = GRIM::LoadCurriculumMetadataFromRegistry(
+		fs::path(tokenizer_hp.data_path).parent_path(),
+		tokenizer_hp.training_curriculum);
+	const std::string configured_training_stage =
+		GRIM::HyperParameters::trainingStageToJsonString(data_hp.training_stage);
+	if (ctx.current_curriculum_metadata->training_stage != configured_training_stage) {
+		throw std::runtime_error(
+			"LoadTrainingData: curriculum training_stage='" +
+			ctx.current_curriculum_metadata->training_stage +
+			"' does not match configured training_stage='" +
+			configured_training_stage + "'");
 	}
 	EmitModuleInfo(
 		ModuleId::Training,

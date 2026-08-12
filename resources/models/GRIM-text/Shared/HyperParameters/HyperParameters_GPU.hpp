@@ -351,6 +351,7 @@ struct LanguageModelConfig {
     // Execution mode - determines memory allocation strategy
     ModelExecutionMode execution_mode = ModelExecutionMode::INFERENCE;
     TrainingStage training_stage = TrainingStage::UNSPECIFIED;
+    CheckpointResumeMode checkpoint_resume_mode = CheckpointResumeMode::RESUME;
 
     // Parameter-group precision policy. Registration reads these from the
     // finalized LanguageModelConfig carried by AiConfigSnapshot; do not
@@ -1900,6 +1901,7 @@ inline LanguageModelConfig loadLanguageModelConfig(
     GRIM_LOAD_CONFIG_FIELD(tokenizer_curriculum);
     GRIM_LOAD_CONFIG_FIELD(training_curriculum);
     GRIM_LOAD_CONFIG_FIELD(training_stage);
+    GRIM_LOAD_CONFIG_FIELD(checkpoint_resume_mode);
     GRIM_LOAD_CONFIG_FIELD(tokenizer_output_grmt);
     GRIM_LOAD_CONFIG_FIELD(clear_merged_cache_on_merge);
     GRIM_LOAD_CONFIG_FIELD(epochs);
@@ -2261,7 +2263,8 @@ inline std::string resolveCurriculumGrmtPath(
 
 inline void loadResolvedPathFields(
     LanguageModelConfig& config,
-    const nlohmann::json& document)
+    const nlohmann::json& document,
+    const GRIM::Config::CompiledModelConfigSnapshot& model_config)
 {
     const auto& doc_config = document.at("training").at("config");
     config.data_path = resolveCurriculumGrmtPath(
@@ -2272,7 +2275,14 @@ inline void loadResolvedPathFields(
         config.tokenizer_curriculum);
     config.vocab_path = resolveMappedPath(doc_config.at("grim_text_vocab").get<std::string>());
     config.output_model_path = resolveMappedPath(doc_config.at("grim_text_model").get<std::string>());
-    config.checkpoint_dir = resolveMappedPath(doc_config.at("grim_text_checkpoints").get<std::string>());
+    const std::filesystem::path model_directory =
+        model_config.source_path.parent_path().lexically_normal();
+    if (model_directory.empty() || !std::filesystem::is_directory(model_directory)) {
+        throw std::runtime_error(
+            "FATAL: selected model.grimcfg has no usable model directory: " +
+            model_config.source_path.string());
+    }
+    config.checkpoint_dir = model_directory.string();
     config.log_dir = resolveMappedPath(doc_config.at("grim_text_logs").get<std::string>());
     config.status_path = resolveMappedPath(doc_config.at("grim_text_training_status").get<std::string>());
     if (config.data_path.empty() ||
@@ -2281,7 +2291,7 @@ inline void loadResolvedPathFields(
         config.checkpoint_dir.empty() ||
         config.log_dir.empty()) {
         throw std::runtime_error(
-            "FATAL: ai_config.json training.config grim_text_* path fields must all be non-empty");
+            "FATAL: resolved GRIM-text paths must all be non-empty");
     }
 }
 
@@ -2597,6 +2607,7 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_curriculum);
     GRIM_WRITE_FINAL_CONFIG_FIELD(training_curriculum);
     GRIM_WRITE_FINAL_CONFIG_FIELD(training_stage);
+    GRIM_WRITE_FINAL_CONFIG_FIELD(checkpoint_resume_mode);
     GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_output_grmt);
     GRIM_WRITE_FINAL_CONFIG_FIELD(log_recorder_enabled);
     GRIM_WRITE_FINAL_CONFIG_FIELD(log_recorder_default_level);
@@ -2853,7 +2864,7 @@ inline LanguageModelConfig finalizeLanguageModelConfig(
     // semantics and compiler-derived geometry come from model.grimcfg.
     LanguageModelConfig config = loadLanguageModelConfig(snapshot.document);
     applyCompiledModelConfig(config, *snapshot.model_config);
-    loadResolvedPathFields(config, snapshot.document);
+    loadResolvedPathFields(config, snapshot.document, *snapshot.model_config);
     deriveTrainingRuntimeConfig(config);
 
     // 2. Compiled max_seq_len is model geometry. The legacy stability field

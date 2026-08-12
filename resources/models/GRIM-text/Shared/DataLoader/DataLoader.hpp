@@ -1,13 +1,20 @@
 #pragma once
 
+#include <filesystem>
 #include <memory>
+#include <string>
 
+#include "../Curriculum/CurriculumMetadata.hpp"
 #include "../HyperParameters/HyperparameterGroupings.hpp"
 
 class TrainingLogger;
 namespace GRIM { namespace Tokenizer { class UniByte; } }
 
 namespace GRIM {
+
+CurriculumMetadata LoadCurriculumMetadataFromRegistry(
+    const std::filesystem::path& directory,
+    const std::string& curriculum_name);
 
 // Prepares GRIM-text training data from curriculum concept blocks.
 // - Writes `TokenizerHP::output_data_path`; training separately consumes

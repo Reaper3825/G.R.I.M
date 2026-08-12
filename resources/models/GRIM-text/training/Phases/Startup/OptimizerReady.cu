@@ -46,11 +46,15 @@ void initializeOptimizer(TrainingContext& ctx) {
     }
 
     logger.log("Found optimizer sidecar for loaded checkpoint: " + opt_path);
+    bool optimizer_state_loaded = false;
     try {
-        loadOptimizerState(ctx, opt_path);
+        optimizer_state_loaded = loadOptimizerState(ctx, opt_path);
     } catch (const std::exception& e) {
         logger.log(std::string("⚠ Optimizer sidecar load failed: ") + e.what());
         logger.log("  Continuing with fresh optimizer state for checkpoint: " + ctx.loaded_checkpoint_path);
+    }
+    if (optimizer_state_loaded) {
+        ctx.optimizer.optimizer_state_restored = true;
     }
 }
 

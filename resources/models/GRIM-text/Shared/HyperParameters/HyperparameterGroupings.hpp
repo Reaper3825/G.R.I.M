@@ -52,6 +52,7 @@ struct CheckpointLoadHP {
     std::string checkpoint_select;
     ModelExecutionMode execution_mode = ModelExecutionMode::INFERENCE;
     TrainingStage training_stage = TrainingStage::UNSPECIFIED;
+    CheckpointResumeMode checkpoint_resume_mode = CheckpointResumeMode::RESUME;
 };
 
 struct TokenizerHP {
@@ -964,6 +965,8 @@ inline CheckpointLoadHP checkpointLoadHP(
     }
     view.execution_mode = execution_mode;
     view.training_stage = snapshotTrainingConfigField<TrainingStage>(snapshot, "training_stage");
+    view.checkpoint_resume_mode =
+        snapshotTrainingConfigField<CheckpointResumeMode>(snapshot, "checkpoint_resume_mode");
     return view;
 }
 

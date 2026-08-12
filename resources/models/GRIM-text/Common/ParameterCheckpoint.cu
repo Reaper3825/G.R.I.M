@@ -658,11 +658,60 @@ bool shapeMatches(
 
 } // namespace
 
+std::optional<LatestCurriculumCompletionRecord>
+readLatestCurriculumCompletion(const std::string& path)
+{
+    requireCheckpointExtension(path, "readLatestCurriculumCompletion");
+    const std::vector<std::uint8_t> file = readFile(path);
+    if (file.size() < 8 || !flatbuffers::BufferHasIdentifier(file.data(), "GRCP")) {
+        throw std::runtime_error(
+            "readLatestCurriculumCompletion: checkpoint does not have the GRCP identifier: " + path);
+    }
+
+    flatbuffers::Verifier verifier(file.data(), file.size());
+    if (!GRIMCheckpoint::VerifyParameterCheckpointBuffer(verifier)) {
+        throw std::runtime_error(
+            "readLatestCurriculumCompletion: checkpoint failed FlatBuffer verification: " + path);
+    }
+
+    const auto* checkpoint = GRIMCheckpoint::GetParameterCheckpoint(file.data());
+    if (!checkpoint || checkpoint->format_version() != kParameterCheckpointVersion) {
+        throw std::runtime_error(
+            "readLatestCurriculumCompletion: unsupported checkpoint version in " + path);
+    }
+
+    const auto* latest = checkpoint->latest_curriculum_completion();
+    if (!latest) {
+        return std::nullopt;
+    }
+    const auto* stored = latest->curriculum();
+    if (!stored || !stored->training_stage() || !stored->name() || !stored->id() ||
+        !stored->concept_block_ids()) {
+        throw std::runtime_error(
+            "readLatestCurriculumCompletion: latest curriculum metadata is incomplete in " + path);
+    }
+
+    LatestCurriculumCompletionRecord result;
+    result.curriculum.training_stage = stored->training_stage()->str();
+    result.curriculum.name = stored->name()->str();
+    result.curriculum.id = stored->id()->str();
+    for (const auto* concept_block_id : *stored->concept_block_ids()) {
+        if (!concept_block_id || concept_block_id->size() == 0) {
+            throw std::runtime_error(
+                "readLatestCurriculumCompletion: latest curriculum contains an empty concept block ID in " + path);
+        }
+        result.curriculum.concept_block_ids.insert(concept_block_id->str());
+    }
+    result.epochs_completed = latest->epochs_completed();
+    return result;
+}
+
 bool saveParameterCheckpoint(
     const Config::AiConfigSnapshot& config,
     const ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     cudaStream_t stream,
-    const std::string& path)
+    const std::string& path,
+    const std::optional<LatestCurriculumCompletionRecord>& latest_curriculum_completion)
 {
     try {
         static std::mutex save_mutex;
@@ -733,6 +782,45 @@ bool saveParameterCheckpoint(
                 entry.payload_xxhash64));
         }
 
+        flatbuffers::Offset<GRIMCheckpoint::LatestCurriculumCompletion>
+            latest_curriculum_completion_offset;
+        if (latest_curriculum_completion) {
+            const auto& latest = *latest_curriculum_completion;
+            if (latest.curriculum.training_stage.empty() ||
+                latest.curriculum.name.empty() ||
+                latest.curriculum.id.empty() ||
+                latest.curriculum.concept_block_ids.empty()) {
+                throw std::runtime_error(
+                    "saveParameterCheckpoint: latest curriculum completion metadata is incomplete");
+            }
+
+            std::vector<std::string> concept_block_ids(
+                latest.curriculum.concept_block_ids.begin(),
+                latest.curriculum.concept_block_ids.end());
+            std::sort(concept_block_ids.begin(), concept_block_ids.end());
+            std::vector<flatbuffers::Offset<flatbuffers::String>> concept_block_id_offsets;
+            concept_block_id_offsets.reserve(concept_block_ids.size());
+            for (const auto& concept_block_id : concept_block_ids) {
+                if (concept_block_id.empty()) {
+                    throw std::runtime_error(
+                        "saveParameterCheckpoint: latest curriculum contains an empty concept block ID");
+                }
+                concept_block_id_offsets.push_back(builder.CreateString(concept_block_id));
+            }
+
+            const auto curriculum_offset = GRIMCheckpoint::CreateCurriculumMetadata(
+                builder,
+                builder.CreateString(latest.curriculum.training_stage),
+                builder.CreateString(latest.curriculum.name),
+                builder.CreateString(latest.curriculum.id),
+                builder.CreateVector(concept_block_id_offsets));
+            latest_curriculum_completion_offset =
+                GRIMCheckpoint::CreateLatestCurriculumCompletion(
+                    builder,
+                    curriculum_offset,
+                    latest.epochs_completed);
+        }
+
         const std::uint64_t creation_timestamp_ms = static_cast<std::uint64_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::system_clock::now().time_since_epoch()).count());
@@ -746,7 +834,9 @@ bool saveParameterCheckpoint(
             builder.CreateVector(entry_offsets),
             manifestChecksum(entries),
             builder.CreateVector(payload),
-            xxhash64(payload));
+            xxhash64(payload),
+            {},
+            latest_curriculum_completion_offset);
         builder.Finish(root, "GRCP");
 
         flatbuffers::Verifier verifier(builder.GetBufferPointer(), builder.GetSize());

@@ -34,6 +34,7 @@
 #include <iomanip>
 #include <cmath>
 #include <filesystem>
+#include <limits>
 
 #ifdef USE_CUDA
 #include <cuda_runtime.h>
@@ -143,6 +144,39 @@ TrainingSummary computeTrainingSummary(const TrainingContext& ctx) {
 
 } // namespace Internal
 
+namespace {
+
+GRIM::Checkpoint::LatestCurriculumCompletionRecord
+latestCurriculumCompletionForSave(
+    const TrainingContext& ctx,
+    int epochs_completed_this_run)
+{
+    if (!ctx.current_curriculum_metadata) {
+        throw std::runtime_error(
+            "Checkpoint save has no current curriculum metadata");
+    }
+    if (epochs_completed_this_run < 0) {
+        throw std::runtime_error(
+            "Checkpoint save received a negative completed-epoch count");
+    }
+    const std::uint64_t run_epochs =
+        static_cast<std::uint64_t>(epochs_completed_this_run);
+    if (run_epochs >
+        std::numeric_limits<std::uint64_t>::max() -
+            ctx.curriculum_epochs_completed_at_start) {
+        throw std::runtime_error(
+            "Checkpoint curriculum completed-epoch count overflow");
+    }
+
+    GRIM::Checkpoint::LatestCurriculumCompletionRecord latest;
+    latest.curriculum = *ctx.current_curriculum_metadata;
+    latest.epochs_completed =
+        ctx.curriculum_epochs_completed_at_start + run_epochs;
+    return latest;
+}
+
+} // namespace
+
 //======================================================//
 //  Final Model Save
 //======================================================//
@@ -162,11 +196,14 @@ std::string saveFinalModel(TrainingContext& ctx, const std::string& suffix) {
 #endif
     
     try {
+        const auto latest_curriculum_completion =
+            latestCurriculumCompletionForSave(ctx, ctx.epochs_completed);
         bool save_result = GRIM::Checkpoint::saveParameterCheckpoint(
             ctx.config,
             ctx.parameter_registry,
             ctx.requireTrainingState("saveFinalModel").stream_ctrl.getPrimaryStream(),
-            final_path);
+            final_path,
+            latest_curriculum_completion);
         if (save_result) {
             EmitModuleInfo(ModuleId::Checkpoint, 
                 "✓ Final model saved: " + final_path, ctx.global_step);
@@ -268,11 +305,14 @@ bool saveBestCheckpoint(
     std::string checkpoint_path = paths_hp.checkpoint_dir +
                                   "/checkpoint_epoch_" + std::to_string(epoch + 1) + ".grimckpt";
     try {
+        const auto latest_curriculum_completion =
+            latestCurriculumCompletionForSave(ctx, epoch + 1);
         bool save_result = GRIM::Checkpoint::saveParameterCheckpoint(
             ctx.config,
             ctx.parameter_registry,
             ctx.requireTrainingState("saveBestCheckpoint").stream_ctrl.getPrimaryStream(),
-            checkpoint_path);
+            checkpoint_path,
+            latest_curriculum_completion);
         if (save_result) {
             ctx.logging.logger->log("  ✓ Checkpoint saved: " + checkpoint_path);
             if (fs::exists(checkpoint_path)) {

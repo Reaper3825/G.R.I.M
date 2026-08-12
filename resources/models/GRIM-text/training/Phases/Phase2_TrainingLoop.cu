@@ -391,9 +391,23 @@ float scheduledLearningRateForOptimizerStep(
     const auto lr_inputs = ::GRIM::HyperParameters::learningRateScheduleInputs(ctx.config);
     const auto stability_hp =
         ::GRIM::HyperParameters::stabilityOverrideHP(ctx.config);
+    const std::int64_t schedule_step_wide =
+        static_cast<std::int64_t>(ctx.lr_schedule_step_at_start) +
+        static_cast<std::int64_t>(optimizer_step) -
+        static_cast<std::int64_t>(ctx.lr_schedule_optimizer_step_at_start);
+    if (schedule_step_wide < 0 ||
+        schedule_step_wide > std::numeric_limits<int>::max()) {
+        throw std::runtime_error(
+            "LR schedule step is outside the supported integer range (optimizer_step=" +
+            std::to_string(optimizer_step) + " optimizer_step_at_start=" +
+            std::to_string(ctx.lr_schedule_optimizer_step_at_start) +
+            " schedule_step_at_start=" +
+            std::to_string(ctx.lr_schedule_step_at_start) + ")");
+    }
+    const int schedule_step = static_cast<int>(schedule_step_wide);
     return Internal::getScheduledLearningRate(
         *ctx.lr_schedule,
-        optimizer_step,
+        schedule_step,
         lr_inputs.learning_rate,
         stability_hp.enabled);
 }
