@@ -43,6 +43,7 @@ ConceptBlock fromFlatBuffer(const GRIMConcept::ConceptBlock& source) {
     block.prompt = stringValue(source.prompt());
     block.intermediates = stringVectorValue(source.intermediates());
     block.answer = stringValue(source.answer());
+    block.raw = stringValue(source.raw());
     block.explanation = stringVectorValue(source.explanation());
 
     if (const auto* steps = source.execution()) {
@@ -100,6 +101,7 @@ toFlatBuffer(flatbuffers::FlatBufferBuilder& builder, const ConceptBlock& block)
     const auto prompt = builder.CreateString(block.prompt);
     const auto intermediates = createStringVector(builder, block.intermediates);
     const auto answer = builder.CreateString(block.answer);
+    const auto raw = builder.CreateString(block.raw);
     const auto explanation = createStringVector(builder, block.explanation);
 
     std::vector<flatbuffers::Offset<GRIMConcept::ConceptExecutionStep>> steps;
@@ -147,7 +149,8 @@ toFlatBuffer(flatbuffers::FlatBufferBuilder& builder, const ConceptBlock& block)
         format_type,
         source_sequence_id,
         block.timestamp,
-        goal);
+        goal,
+        raw);
 }
 
 size_t estimatedBufferSize(const std::vector<ConceptBlock>& blocks) {
@@ -164,7 +167,7 @@ size_t estimatedBufferSize(const std::vector<ConceptBlock>& blocks) {
     };
     for (const auto& block : blocks) {
         add(256 + block.id.size() + block.name.size() + block.prompt.size()
-            + block.answer.size() + block.format_type.size()
+            + block.answer.size() + block.raw.size() + block.format_type.size()
             + block.source_sequence_id.size());
         for (const auto& text : block.intermediates) add(8 + text.size());
         for (const auto& text : block.explanation) add(8 + text.size());

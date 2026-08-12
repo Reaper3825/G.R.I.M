@@ -4,6 +4,16 @@
 #include "io/dataset_io_json.hpp"
 #include "pipeline/pipeline_context.hpp"
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#endif
+
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <chrono>
@@ -11,17 +21,46 @@
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <stdexcept>
+#include <system_error>
 
 using json = nlohmann::json;
 namespace fs = std::filesystem;
+
+namespace {
+
+bool isValidCurriculumTrainingStage(const std::string& stage) {
+    return stage == "pt" || stage == "sft" ||
+           stage == "dpo" || stage == "rlhf";
+}
+
+bool replaceFileAtomically(const fs::path& temporary,
+                           const fs::path& destination,
+                           std::error_code& ec) {
+#ifdef _WIN32
+    if (::MoveFileExW(temporary.c_str(), destination.c_str(),
+                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        ec.clear();
+        return true;
+    }
+    ec = std::error_code(static_cast<int>(::GetLastError()), std::system_category());
+    return false;
+#else
+    fs::rename(temporary, destination, ec);
+    return !ec;
+#endif
+}
+
+} // namespace
 
 // JSONL import helper. New persistence is concept_blocks.fb.
 static GRIM::ConceptBlock conceptBlockFromJson(const json& j) {
     GRIM::ConceptBlock cb;
     cb.id                 = j.value("id", std::string());
     cb.name               = j.value("name", std::string());
-    cb.prompt             = j.at("prompt").get<std::string>();
+    cb.prompt             = j.value("prompt", std::string());
     cb.answer             = j.value("answer", std::string());
+    cb.raw                = j.value("raw", std::string());
     cb.format_type        = j.value("format_type", std::string("chain_of_thought"));
     cb.source_sequence_id = j.value("source_sequence_id", std::string());
     cb.timestamp          = j.value("timestamp", int64_t(0));
@@ -702,7 +741,8 @@ std::vector<size_t> DatasetTarget::searchConceptBlocks(
         if (!lq.empty()) {
             bool match = toLower(cb.name).find(lq) != std::string::npos
                       || toLower(cb.prompt).find(lq) != std::string::npos
-                      || toLower(cb.answer).find(lq) != std::string::npos;
+                      || toLower(cb.answer).find(lq) != std::string::npos
+                      || toLower(cb.raw).find(lq) != std::string::npos;
             if (!match) {
                 for (const auto& line : cb.intermediates) {
                     if (toLower(line).find(lq) != std::string::npos) {
@@ -793,10 +833,22 @@ bool DatasetTarget::loadCurriculumRegistry() {
                 curr.name      = cj.value("name", std::string());
                 curr.timestamp = cj.value("timestamp", int64_t(0));
                 curr.format_as_concept = cj.value("format_as_concept", true);
+                curr.training_stage = cj.value("training_stage", std::string("sft"));
+                if (!isValidCurriculumTrainingStage(curr.training_stage)) {
+                    throw std::runtime_error(
+                        "curriculum '" + curr.name + "' has invalid training_stage '" +
+                        curr.training_stage + "' (valid: pt, sft, dpo, rlhf)");
+                }
                 if (cj.contains("concept_block_ids") && cj["concept_block_ids"].is_array()) {
                     for (const auto& bid : cj["concept_block_ids"]) {
                         if (bid.is_string())
                             curr.concept_block_ids.push_back(bid.get<std::string>());
+                    }
+                }
+                if (cj.contains("plaintext_block_ids") && cj["plaintext_block_ids"].is_array()) {
+                    for (const auto& bid : cj["plaintext_block_ids"]) {
+                        if (bid.is_string())
+                            curr.plaintext_block_ids.push_back(bid.get<std::string>());
                     }
                 }
                 if (!curr.id.empty())
@@ -822,9 +874,13 @@ bool DatasetTarget::saveCurriculumRegistry() const {
         json cj;
         cj["id"]                = curr.id;
         cj["name"]              = curr.name;
+        cj["training_stage"]    = curr.training_stage;
         cj["timestamp"]         = curr.timestamp;
         cj["format_as_concept"] = curr.format_as_concept;
         cj["concept_block_ids"] = curr.concept_block_ids;
+        if (!curr.plaintext_block_ids.empty()) {
+            cj["plaintext_block_ids"] = curr.plaintext_block_ids;
+        }
         j["curriculums"].push_back(std::move(cj));
     }
 
@@ -836,8 +892,7 @@ bool DatasetTarget::saveCurriculumRegistry() const {
         out << j.dump(2) << "\n";
         if (!out.good()) return false;
     }
-    fs::rename(tmpPath, path, ec);
-    return !ec;
+    return replaceFileAtomically(tmpPath, path, ec);
 }
 
 size_t DatasetTarget::curriculumCount() const {
@@ -867,6 +922,7 @@ size_t DatasetTarget::getCurriculumIndexById(const std::string& curr_id) const {
 
 bool DatasetTarget::addCurriculum(const GRIM::Curriculum& curr) {
     if (curr.id.empty()) return false;
+    if (!isValidCurriculumTrainingStage(curr.training_stage)) return false;
     if (currIdIndex_.count(curr.id)) return false;
     curriculums_.push_back(curr);
     currIdIndex_[curr.id] = curriculums_.size() - 1;
@@ -877,6 +933,7 @@ bool DatasetTarget::updateCurriculum(const std::string& curr_id,
                                      const GRIM::Curriculum& curr) {
     auto it = currIdIndex_.find(curr_id);
     if (it == currIdIndex_.end()) return false;
+    if (!isValidCurriculumTrainingStage(curr.training_stage)) return false;
     curriculums_[it->second] = curr;
     curriculums_[it->second].id = curr_id;
     return saveCurriculumRegistry();

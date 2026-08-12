@@ -50,6 +50,9 @@ struct ConceptBlock {
     std::string prompt;
     std::vector<std::string> intermediates;
     std::string answer;
+    // Unstructured model-visible text. Raw blocks use this field instead of
+    // overloading prompt/answer with artificial document segments.
+    std::string raw;
 
     /// NL steps parallel to `intermediates`; JSON field `explanation`.
     std::vector<std::string> explanation;
@@ -129,6 +132,7 @@ inline constexpr ConceptFormatPreset kConceptPresets[] = {
     { "proof",            "Proof",            "Theorem",    "Proof Steps",      "QED",     3 },
     { "derivation",       "Derivation",       "Expression", "Derivation Steps", "Result",  2 },
     { "conversation",     "Conversation",     "User",       "Turns",            "Response", 2 },
+    { "raw",              "Raw",              "Raw",        nullptr,            nullptr,   0 },
 };
 
 inline constexpr int kConceptPresetCount = sizeof(kConceptPresets) / sizeof(kConceptPresets[0]);
@@ -153,8 +157,12 @@ struct Curriculum {
     std::string              id;
     std::string              name;
     std::vector<std::string> concept_block_ids;
+    std::vector<std::string> plaintext_block_ids;
+    // Training procedure metadata owned by the curriculum registry.
+    // Valid persisted values are: pt, sft, dpo, rlhf.
+    std::string              training_stage = "sft";
     int64_t                  timestamp = 0;
-    bool                     format_as_concept = true;  // false = plain text / pretraining mode
+    bool                     format_as_concept = true;  // false = render curriculum rows as plain text
 
     bool containsBlock(const std::string& cb_id) const {
         for (const auto& bid : concept_block_ids)

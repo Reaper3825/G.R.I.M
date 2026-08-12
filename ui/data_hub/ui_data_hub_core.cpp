@@ -450,6 +450,30 @@ UIDataHubPanel::UIDataHubPanel()
             selectActiveCurriculum(idx);
         });
 
+    cbTrainingStageDropdown_ = std::make_shared<UIDropdown>(
+        "Stage", std::vector<std::string>{"(select curriculum)", "PT", "SFT", "DPO", "RLHF"}, 0,
+        [this](int idx, const std::string&) {
+            static constexpr const char* kStageValues[] = {"pt", "sft", "dpo", "rlhf"};
+            if (idx <= 0 || idx > 4 || activeCurriculumId_.empty() || !datasetTarget_) {
+                syncCurriculumTrainingStageDropdown();
+                return;
+            }
+            auto curr = datasetTarget_->getCurriculumById(activeCurriculumId_);
+            if (curr.id.empty()) {
+                syncCurriculumTrainingStageDropdown();
+                return;
+            }
+            const std::string newStage = kStageValues[idx - 1];
+            if (curr.training_stage == newStage) return;
+            curr.training_stage = newStage;
+            if (datasetTarget_->updateCurriculum(activeCurriculumId_, curr)) {
+                addLog("Curriculum training stage set to: " + newStage, 0);
+            } else {
+                addLog("Failed to update curriculum training stage", 2);
+                syncCurriculumTrainingStageDropdown();
+            }
+        });
+
     cbListTypeDropdown_ = std::make_shared<UIDropdown>(
         "", GRIM::presetLabels(), 1,
         [this](int idx, const std::string&) {
@@ -468,12 +492,24 @@ UIDataHubPanel::UIDataHubPanel()
             const char* newKey = GRIM::kConceptPresets[idx].key;
             if (cb.format_type == newKey)
                 return;
+            if (std::string(newKey) == "raw") {
+                cb.raw = GRIM::ConceptCanonical::renderPlainText(cb);
+                cb.prompt.clear();
+                cb.answer.clear();
+                cb.intermediates.clear();
+                cb.explanation.clear();
+                cb.execution.clear();
+                cb.goal.reset();
+            } else if (cb.format_type == "raw") {
+                cb.prompt = std::move(cb.raw);
+                cb.raw.clear();
+            }
             cb.format_type = newKey;
             cb.recomputeDerived();
             if (datasetTarget_->updateConceptBlock(cb.id, cb))
                 addLog("Updated block type", 0);
         });
-    cbListTypeDropdown_->setMaxVisibleItems(6);
+    cbListTypeDropdown_->setMaxVisibleItems(7);
 
     {
         std::vector<std::string> typeFilterItems;
@@ -575,8 +611,14 @@ UIDataHubPanel::UIDataHubPanel()
             return;
         }
         cb.name = name;
-        cb.prompt = prompt;
         cb.format_type = formatKey;
+        if (formatKey == "raw") {
+            cb.raw = prompt;
+            cb.prompt.clear();
+        } else {
+            cb.prompt = prompt;
+            cb.raw.clear();
+        }
 
         cb.timestamp = std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
@@ -689,6 +731,7 @@ UIDataHubPanel::UIDataHubPanel()
         if (!datasetTarget_) return;
         GRIM::Curriculum curr;
         curr.name = "Untitled Curriculum";
+        curr.training_stage = "sft";
         curr.timestamp = std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
         std::string seed = curr.name + std::to_string(curr.timestamp)
@@ -761,7 +804,7 @@ UIDataHubPanel::UIDataHubPanel()
         auto curr = datasetTarget_->getCurriculumById(activeCurriculumId_);
         curr.format_as_concept = !curr.format_as_concept;
         if (datasetTarget_->updateCurriculum(activeCurriculumId_, curr)) {
-            std::string mode = curr.format_as_concept ? "Concept Block" : "Plain Text (PT)";
+            std::string mode = curr.format_as_concept ? "Concept Block" : "Plain Text";
             addLog("Curriculum format set to: " + mode, 0);
             refreshCurriculumTabState();
         }
@@ -785,7 +828,7 @@ UIDataHubPanel::UIDataHubPanel()
     });
 
     curriculumWidgets_ = {
-        cbModelDropdown_, cbCurriculumDropdown_, cbCurriculumRenameInput_,
+        cbModelDropdown_, cbCurriculumDropdown_, cbTrainingStageDropdown_, cbCurriculumRenameInput_,
         cbListTypeDropdown_, cbTypeFilterDropdown_, cbCurriculumFilterToggle_, cbSearchInput_,
         cbNameInput_, cbPromptArea_, cbTargetStateArea_, cbAnswerArea_, cbCustomPromptArea_,
         btnCBGenerate_, successCriteriaActionMenu_, stepActionMenu_, execStepActionMenu_, blockActionMenu_,
@@ -1393,6 +1436,8 @@ bool UIDataHubPanel::drawOverlay(OverlayRenderer& renderer) {
         cbTypeFilterDropdown_->drawExpandedList(renderer, position);
     if (cbCurriculumDropdown_ && cbCurriculumDropdown_->isExpanded())
         cbCurriculumDropdown_->drawExpandedList(renderer, position);
+    if (cbTrainingStageDropdown_ && cbTrainingStageDropdown_->isExpanded())
+        cbTrainingStageDropdown_->drawExpandedList(renderer, position);
     if (curriculumActionMenu_ && curriculumActionMenu_->isExpanded())
         curriculumActionMenu_->drawExpandedList(renderer, position);
     if (blockCurriculumMenu_ && blockCurriculumMenu_->isExpanded())

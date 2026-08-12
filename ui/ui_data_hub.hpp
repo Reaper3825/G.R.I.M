@@ -367,6 +367,7 @@ private:
 
     std::shared_ptr<UIDropdown>  cbModelDropdown_;
     std::shared_ptr<UIDropdown>  cbCurriculumDropdown_;
+    std::shared_ptr<UIDropdown>  cbTrainingStageDropdown_;
     /// Shown in the ConceptBlock list on the selected row (format / type).
     std::shared_ptr<UIDropdown>  cbListTypeDropdown_;
     /// Toolbar filter-by-type dropdown ("All", "Q/A", "Chain of Thought", etc.).
@@ -511,6 +512,7 @@ private:
     void generateConceptBlock();
     void populateCBModelDropdown();
     void populateCBCurriculumDropdown();
+    void syncCurriculumTrainingStageDropdown();
     void selectActiveCurriculum(int dropdownIndex);
 
     // ═════════════════════════════════════════════════════

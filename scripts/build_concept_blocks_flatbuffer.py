@@ -36,8 +36,11 @@ def write_dataset_envelope(jsonl_path: Path, output_path: Path) -> int:
             if "question" in entry:
                 raise ValueError(f"{jsonl_path}:{line_number}: legacy question field is forbidden")
             prompt = entry.get("prompt")
-            if not isinstance(prompt, str) or not prompt:
-                raise ValueError(f"{jsonl_path}:{line_number}: missing non-empty prompt")
+            raw = entry.get("raw")
+            if not ((isinstance(prompt, str) and prompt) or
+                    (isinstance(raw, str) and raw)):
+                raise ValueError(
+                    f"{jsonl_path}:{line_number}: missing non-empty prompt or raw text")
 
             entry.pop("execution_gate_target", None)
             entry.pop("state_0", None)

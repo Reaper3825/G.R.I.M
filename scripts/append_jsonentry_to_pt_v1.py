@@ -105,20 +105,30 @@ def build_house_block(
     step_index = list(range(len(normalized_intermediates)))
 
     return {
-        "answer": normalized_answer,
-        "explanation": normalized_intermediates,
-        "format_type": format_type,
+        "answer": "",
+        "explanation": [],
+        "format_type": "raw",
         "id": resolved_id,
-        "intermediate_count": len(normalized_intermediates),
-        "intermediates": normalized_intermediates,
+        "intermediate_count": 0,
+        "intermediates": [],
         "name": resolved_name,
-        "prompt": normalized_question,
-        "step_index": step_index,
+        "prompt": "",
+        "raw": canonical_plaintext,
+        "step_index": [],
         "timestamp": timestamp,
     }
 
 
 def build_block_from_concept_json(payload: dict) -> dict:
+    if isinstance(payload.get("raw"), str) and payload["raw"].strip():
+        return build_house_block(
+            question="",
+            intermediates=[],
+            answer=payload["raw"],
+            block_id=payload.get("id"),
+            name=payload.get("name"),
+            timestamp=payload.get("timestamp", 0),
+        )
     if "answer" not in payload or not isinstance(payload["answer"], str):
         raise RuntimeError("concept-block JSON input must include a string 'answer'")
 
@@ -190,7 +200,8 @@ def build_block_from_message_json(
 def build_plaintext_block(text: str) -> dict:
     if (parsed := try_parse_json(text)) is not None:
         if isinstance(parsed, dict):
-            if all(key not in parsed for key in ("prompt", "answer", "intermediates", "explanation")):
+            if all(key not in parsed for key in
+                   ("raw", "prompt", "answer", "intermediates", "explanation")):
                 raise RuntimeError(
                     "JSON object input must be a concept-block-style object with prompt/answer fields"
                 )
@@ -272,36 +283,31 @@ def find_curriculum(registry: dict) -> dict:
     )
 
 
-def ensure_plaintext_id_list(curriculum: dict) -> list[str]:
-    if curriculum.get("format_as_concept", True):
-        raise RuntimeError(
-            f"Curriculum '{CURRICULUM_NAME}' must have format_as_concept=false for plaintext rows"
-        )
-
-    plaintext_ids = curriculum.get("plaintext_block_ids")
-    if plaintext_ids is not None:
-        if not isinstance(plaintext_ids, list):
+def ensure_concept_id_list(curriculum: dict) -> list[str]:
+    concept_ids = curriculum.get("concept_block_ids")
+    if concept_ids is None:
+        legacy_ids = curriculum.pop("plaintext_block_ids", [])
+        if not isinstance(legacy_ids, list):
             raise RuntimeError(
                 f"Curriculum '{CURRICULUM_NAME}' has a non-list plaintext_block_ids field"
             )
-        if "concept_block_ids" not in curriculum:
-            curriculum["concept_block_ids"] = []
-        return plaintext_ids
-
-    concept_ids = curriculum.get("concept_block_ids")
-    if concept_ids is None:
-        curriculum["concept_block_ids"] = []
-        curriculum["plaintext_block_ids"] = []
-        return curriculum["plaintext_block_ids"]
+        curriculum["concept_block_ids"] = legacy_ids
+        return curriculum["concept_block_ids"]
 
     if not isinstance(concept_ids, list):
         raise RuntimeError(
             f"Curriculum '{CURRICULUM_NAME}' has a non-list concept_block_ids field"
         )
 
-    curriculum["plaintext_block_ids"] = list(concept_ids)
-    curriculum["concept_block_ids"] = []
-    return curriculum["plaintext_block_ids"]
+    legacy_ids = curriculum.pop("plaintext_block_ids", [])
+    if not isinstance(legacy_ids, list):
+        raise RuntimeError(
+            f"Curriculum '{CURRICULUM_NAME}' has a non-list plaintext_block_ids field"
+        )
+    for block_id in legacy_ids:
+        if block_id not in concept_ids:
+            concept_ids.append(block_id)
+    return concept_ids
 
 
 def write_registry(registry: dict) -> None:
@@ -310,11 +316,11 @@ def write_registry(registry: dict) -> None:
         handle.write("\n")
 
 
-def write_manifest(plaintext_ids: list[str]) -> None:
+def write_manifest(concept_ids: list[str]) -> None:
     manifest = {
-        "concept_block_ids": [],
-        "plaintext_block_ids": plaintext_ids,
+        "concept_block_ids": concept_ids,
         "format_as_concept": False,
+        "training_stage": "pt",
     }
     with CURRICULUM_MANIFEST_PATH.open("w", encoding="utf-8") as handle:
         json.dump(manifest, handle, ensure_ascii=False)
@@ -333,18 +339,19 @@ def main() -> None:
 
     registry = load_registry()
     curriculum = find_curriculum(registry)
-    plaintext_ids = ensure_plaintext_id_list(curriculum)
+    concept_ids = ensure_concept_id_list(curriculum)
 
-    if block["id"] not in plaintext_ids:
-        plaintext_ids.append(block["id"])
+    if block["id"] not in concept_ids:
+        concept_ids.append(block["id"])
+    curriculum["training_stage"] = "pt"
     curriculum["timestamp"] = int(time.time())
 
     write_registry(registry)
-    write_manifest(plaintext_ids)
+    write_manifest(concept_ids)
     clear_entry_file()
 
     print(f"{concept_block_action}: {block['id']}")
-    print(f"updated curriculum: {CURRICULUM_NAME} ({len(plaintext_ids)} plaintext ids)")
+    print(f"updated curriculum: {CURRICULUM_NAME} ({len(concept_ids)} concept block ids)")
     print(f"cleared: {JSONENTRY_PATH}")
 
 

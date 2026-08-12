@@ -38,6 +38,7 @@ table ConceptBlock {
     source_sequence_id: string;
     timestamp: long;
     goal: Goal;
+    raw: string;
 }
 
 table ConceptBlockDataset {

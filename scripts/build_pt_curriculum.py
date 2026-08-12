@@ -179,24 +179,28 @@ def find_or_create_curriculum(registry: dict) -> dict:
         "id": f"curr_pt_{hashlib.sha256(CURRICULUM_NAME.encode('utf-8')).hexdigest()[:16]}",
         "name": CURRICULUM_NAME,
         "concept_block_ids": [],
-        "plaintext_block_ids": [],
         "format_as_concept": False,
+        "training_stage": "pt",
         "timestamp": int(time.time()),
     }
     registry["curriculums"].append(curriculum)
     return curriculum
 
 
-def get_existing_plaintext_ids(curriculum: dict) -> list[str]:
-    plaintext_ids = curriculum.get("plaintext_block_ids")
-    if isinstance(plaintext_ids, list):
-        return [item for item in plaintext_ids if isinstance(item, str) and item.strip()]
-
+def get_existing_member_ids(curriculum: dict) -> list[str]:
+    member_ids: list[str] = []
     concept_ids = curriculum.get("concept_block_ids")
     if isinstance(concept_ids, list):
-        return [item for item in concept_ids if isinstance(item, str) and item.strip()]
+        member_ids.extend(
+            item for item in concept_ids if isinstance(item, str) and item.strip())
 
-    return []
+    # Legacy registry compatibility for the one-time raw-field migration.
+    plaintext_ids = curriculum.get("plaintext_block_ids")
+    if isinstance(plaintext_ids, list):
+        member_ids.extend(
+            item for item in plaintext_ids if isinstance(item, str) and item.strip())
+
+    return list(dict.fromkeys(member_ids))
 
 
 def load_progress_checkpoint(reset_progress: bool) -> dict:
@@ -367,16 +371,18 @@ def build_house_block(*, block_id: str, name: str, question: str,
     if not clean_answer:
         raise RuntimeError("plaintext PT row requires a non-empty answer segment")
 
+    raw = "\n".join(part for part in [clean_question, *clean_intermediates, clean_answer] if part)
     block = {
-        "answer": clean_answer,
-        "explanation": clean_intermediates,
-        "format_type": "chain_of_thought",
+        "answer": "",
+        "explanation": [],
+        "format_type": "raw",
         "id": block_id,
-        "intermediate_count": len(clean_intermediates),
-        "intermediates": clean_intermediates,
+        "intermediate_count": 0,
+        "intermediates": [],
         "name": name,
-        "prompt": clean_question,
-        "step_index": list(range(len(clean_intermediates))),
+        "prompt": "",
+        "raw": raw,
+        "step_index": [],
         "timestamp": timestamp,
     }
     if source_sequence_id.strip():
@@ -844,21 +850,22 @@ def commit_curriculum_snapshot(
     blocks: list[dict],
     next_offset: int,
 ) -> set[str]:
-    plaintext_ids = [block["id"] for block in blocks]
+    member_ids = [block["id"] for block in blocks]
     kept_non_pt, removed_old_pt = rewrite_concept_blocks(replace_ids, blocks)
-    write_registry_and_manifest(registry, curriculum, plaintext_ids)
+    write_registry_and_manifest(registry, curriculum, member_ids)
     print(
         f"Committed snapshot: pt_rows={len(blocks)} removed_previous={removed_old_pt} "
         f"kept_non_pt={kept_non_pt} next_offset={next_offset}",
         flush=True,
     )
-    return set(plaintext_ids)
+    return set(member_ids)
 
 
-def write_registry_and_manifest(registry: dict, curriculum: dict, plaintext_ids: list[str]) -> None:
-    curriculum["concept_block_ids"] = []
-    curriculum["plaintext_block_ids"] = plaintext_ids
+def write_registry_and_manifest(registry: dict, curriculum: dict, member_ids: list[str]) -> None:
+    curriculum["concept_block_ids"] = member_ids
+    curriculum.pop("plaintext_block_ids", None)
     curriculum["format_as_concept"] = False
+    curriculum["training_stage"] = "pt"
     curriculum["timestamp"] = int(time.time())
 
     atomic_write_text(
@@ -868,9 +875,9 @@ def write_registry_and_manifest(registry: dict, curriculum: dict, plaintext_ids:
     atomic_write_text(
         CURRICULUM_MANIFEST_PATH,
         json.dumps({
-            "concept_block_ids": [],
-            "plaintext_block_ids": plaintext_ids,
+            "concept_block_ids": member_ids,
             "format_as_concept": False,
+            "training_stage": "pt",
         }, ensure_ascii=False) + "\n",
     )
 
@@ -878,9 +885,7 @@ def write_registry_and_manifest(registry: dict, curriculum: dict, plaintext_ids:
 def print_sample(block: dict) -> None:
     preview = "\n".join(
         part for part in [
-            block.get("prompt", ""),
-            *block.get("intermediates", []),
-            block.get("answer", ""),
+            block.get("raw", ""),
         ]
         if isinstance(part, str) and part
     )
@@ -930,7 +935,7 @@ def main() -> None:
 
     registry = load_registry()
     curriculum = find_or_create_curriculum(registry)
-    old_pt_ids = get_existing_plaintext_ids(curriculum)
+    old_pt_ids = get_existing_member_ids(curriculum)
     progress = load_progress_checkpoint(args.reset_progress)
     target_count = determine_target_count(args, old_pt_ids)
     existing_blocks: list[dict] = []
@@ -1018,9 +1023,9 @@ def main() -> None:
                 f"Increase --max-scanned or relax the quality gates."
             )
 
-        plaintext_ids = [block["id"] for block in collected]
+        member_ids = [block["id"] for block in collected]
         kept_non_pt, removed_old_pt = rewrite_concept_blocks(replace_ids_for_commit, collected)
-        write_registry_and_manifest(registry, curriculum, plaintext_ids)
+        write_registry_and_manifest(registry, curriculum, member_ids)
 
         print("\nCurriculum cleanup complete.")
         print(f"  flagged replaced  : {len(flagged_existing)}")
@@ -1086,9 +1091,9 @@ def main() -> None:
         print_sample(collected[0])
         return
 
-    plaintext_ids = [block["id"] for block in collected]
+    member_ids = [block["id"] for block in collected]
     kept_non_pt, removed_old_pt = rewrite_concept_blocks(replace_ids_for_commit, collected)
-    write_registry_and_manifest(registry, curriculum, plaintext_ids)
+    write_registry_and_manifest(registry, curriculum, member_ids)
 
     print("\nCurriculum update complete.")
     print(f"  kept non-PT rows  : {kept_non_pt}")

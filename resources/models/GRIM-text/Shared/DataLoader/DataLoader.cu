@@ -28,6 +28,7 @@
 #include "../../../../../DataCollection/concept_block_generated.h"
 #include "../../../../../DataCollection/concept_block_canonical.hpp"
 #include "../Goal/Goal.hpp"
+#include "../Curriculum/CurriculumMetadata.hpp"
 #include "../GRMT/GrmtFormat.hpp"
 #include "../LogRecorder/LogRecorder.hpp"
 #include "../UnigramByte/TokenLayout.hpp"
@@ -56,169 +57,92 @@ namespace {
 
 using json = nlohmann::json;
 
-// Curriculum filter returned by loadCurriculumFilter().
-// concept_ids: blocks that get canonical Q:/EXP:/A: formatting.
-// plaintext_ids: blocks treated as raw text (pretraining mode).
-// When has_filter is false, all entries are included as concept blocks.
-struct CurriculumFilter {
-	std::unordered_set<std::string> concept_ids;
-	std::unordered_set<std::string> plaintext_ids;
-	bool has_filter = false;
-	bool format_as_concept = true;  // curriculum-level flag; false → all blocks render as plain text
-};
-
-// Load curriculum filter from curriculum_registry.json by name lookup.
-// Falls back to {curriculum_name}.json or curriculum_manifest.json if registry
-// doesn't contain the curriculum. THROWS when a named curriculum is specified
-// but cannot be found anywhere (Rule 20: no silent fallbacks).
-CurriculumFilter loadCurriculumFilter(const fs::path& dir, const std::string& curriculum_name) {
-	CurriculumFilter filter;
-
-	if (curriculum_name.empty()) {
-		// No curriculum specified — try legacy curriculum_manifest.json
-		fs::path manifest = dir / "curriculum_manifest.json";
-		if (!fs::exists(manifest)) {
-			std::cout << "[DataLoader] No curriculum specified; loading all blocks unfiltered." << std::endl;
-			return filter;
-		}
-		std::ifstream in(manifest);
-		if (!in.is_open()) {
-			throw std::runtime_error(
-				"[DataLoader] FATAL: cannot open curriculum manifest: " + manifest.string());
-		}
-		json j = json::parse(in);
-		if (j.contains("concept_block_ids") && j["concept_block_ids"].is_array()) {
-			for (const auto& id : j["concept_block_ids"])
-				if (id.is_string()) filter.concept_ids.insert(id.get<std::string>());
-		}
-		if (j.contains("plaintext_block_ids") && j["plaintext_block_ids"].is_array()) {
-			for (const auto& id : j["plaintext_block_ids"])
-				if (id.is_string()) filter.plaintext_ids.insert(id.get<std::string>());
-		}
-		if (j.contains("format_as_concept") && j["format_as_concept"].is_boolean())
-			filter.format_as_concept = j["format_as_concept"].get<bool>();
-		filter.has_filter = !filter.concept_ids.empty() || !filter.plaintext_ids.empty();
-		std::cout << "[DataLoader] Legacy manifest loaded: " << manifest.string() << std::endl;
-		return filter;
-	}
-
-	// ── Primary path: look up curriculum by name in curriculum_registry.json ──
-	fs::path registry_path = dir / "curriculum_registry.json";
-	bool found_in_registry = false;
-
-	if (fs::exists(registry_path)) {
-		std::ifstream reg_in(registry_path);
-		if (reg_in.is_open()) {
-			try {
-				json reg = json::parse(reg_in);
-				if (reg.contains("curriculums") && reg["curriculums"].is_array()) {
-					for (const auto& curr : reg["curriculums"]) {
-						if (!curr.contains("name") || !curr["name"].is_string()) continue;
-						if (curr["name"].get<std::string>() != curriculum_name) continue;
-
-						// Found it — extract block IDs and flags
-						found_in_registry = true;
-						if (curr.contains("format_as_concept") && curr["format_as_concept"].is_boolean())
-							filter.format_as_concept = curr["format_as_concept"].get<bool>();
-
-						if (curr.contains("concept_block_ids") && curr["concept_block_ids"].is_array()) {
-							for (const auto& id : curr["concept_block_ids"]) {
-								if (id.is_string()) {
-									if (filter.format_as_concept)
-										filter.concept_ids.insert(id.get<std::string>());
-									else
-										filter.plaintext_ids.insert(id.get<std::string>());
-								}
-							}
-						}
-						// Mixed PT/concept curriculums: registry must honor plaintext_block_ids
-						// with the same semantics as the per-curriculum manifest path.
-						if (curr.contains("plaintext_block_ids") && curr["plaintext_block_ids"].is_array()) {
-							for (const auto& id : curr["plaintext_block_ids"]) {
-								if (id.is_string())
-									filter.plaintext_ids.insert(id.get<std::string>());
-							}
-						}
-						std::cout << "[DataLoader] Curriculum '" << curriculum_name
-						          << "' loaded from registry: " << registry_path.string() << std::endl;
-						break;
-					}
-				}
-			} catch (const json::exception& e) {
-				std::cerr << "[DataLoader] WARNING: failed to parse curriculum_registry.json: "
-				          << e.what() << std::endl;
-			}
-		}
-	}
-
-	// ── Fallback: per-curriculum manifest file {name}.json ──
-	if (!found_in_registry) {
-		fs::path manifest = dir / (curriculum_name + ".json");
-		if (!fs::exists(manifest)) {
-			throw std::runtime_error(
-				"[DataLoader] FATAL: curriculum '" + curriculum_name
-				+ "' not found in curriculum_registry.json and no manifest at: "
-				+ manifest.string());
-		}
-		std::ifstream in(manifest);
-		if (!in.is_open()) {
-			throw std::runtime_error(
-				"[DataLoader] FATAL: cannot open curriculum manifest: " + manifest.string());
-		}
-		try {
-			json j = json::parse(in);
-			if (j.contains("concept_block_ids") && j["concept_block_ids"].is_array()) {
-				for (const auto& id : j["concept_block_ids"])
-					if (id.is_string()) filter.concept_ids.insert(id.get<std::string>());
-			}
-			if (j.contains("plaintext_block_ids") && j["plaintext_block_ids"].is_array()) {
-				for (const auto& id : j["plaintext_block_ids"])
-					if (id.is_string()) filter.plaintext_ids.insert(id.get<std::string>());
-			}
-			if (j.contains("format_as_concept") && j["format_as_concept"].is_boolean())
-				filter.format_as_concept = j["format_as_concept"].get<bool>();
-
-			if (!filter.format_as_concept && !filter.concept_ids.empty()) {
-				for (const auto& id : filter.concept_ids)
-					filter.plaintext_ids.insert(id);
-				filter.concept_ids.clear();
-			}
-			std::cout << "[DataLoader] Curriculum '" << curriculum_name
-			          << "' loaded from manifest: " << manifest.string() << std::endl;
-		} catch (const json::exception& e) {
-			throw std::runtime_error(
-				"[DataLoader] FATAL: failed to parse " + manifest.string() + ": " + e.what());
-		}
-	}
-
-	filter.has_filter = !filter.concept_ids.empty() || !filter.plaintext_ids.empty();
-
-	// For a NAMED curriculum, an empty ID set is always a configuration error.
-	// Without this, an empty/missing/typo'd ID list silently expands to the
-	// full corpus because loadConceptBlocksJson() only filters when has_filter
-	// is true. Rule 20: fail loud rather than train on the wrong data.
-	if (!curriculum_name.empty() && !filter.has_filter) {
+// Curriculum registry decoding. Runtime selection retains only the shared
+// metadata object and its unified ConceptBlock membership set.
+void addCurriculumMembership(const json& source, CurriculumMetadata& metadata) {
+	if (!source.contains("concept_block_ids") || !source["concept_block_ids"].is_array()) {
 		throw std::runtime_error(
-			"[DataLoader] FATAL: curriculum '" + curriculum_name +
-			"' resolved to an empty filter (concept_block_ids and plaintext_block_ids "
-			"are both empty/missing). Refusing to silently train on the entire corpus. "
-			"Fix the curriculum definition or remove the curriculum name to opt in to "
-			"full-corpus training.");
+			"[DataLoader] FATAL: curriculum '" + metadata.name +
+			"' is missing the concept_block_ids array");
+	}
+	for (const auto& id : source["concept_block_ids"]) {
+		if (!id.is_string() || id.get_ref<const std::string&>().empty()) {
+			throw std::runtime_error(
+				"[DataLoader] FATAL: curriculum '" + metadata.name +
+				"' contains an invalid concept_block_id");
+		}
+		metadata.concept_block_ids.insert(id.get<std::string>());
+	}
+}
+
+void readCurriculumMetadata(const json& source,
+	                        CurriculumMetadata& metadata,
+	                        const std::string& expected_name) {
+	metadata.id = source.value("id", std::string{});
+	metadata.name = source.value("name", std::string{});
+	metadata.training_stage = source.value("training_stage", std::string{});
+	if (metadata.id.empty() || metadata.name.empty() || metadata.name != expected_name) {
+		throw std::runtime_error(
+			"[DataLoader] FATAL: curriculum registry entry has invalid identity metadata");
+	}
+	if (metadata.training_stage != "pt" && metadata.training_stage != "sft" &&
+		metadata.training_stage != "dpo" && metadata.training_stage != "rlhf") {
+		throw std::runtime_error(
+			"[DataLoader] FATAL: curriculum '" + metadata.name +
+			"' has invalid training_stage '" + metadata.training_stage + "'");
+	}
+	addCurriculumMembership(source, metadata);
+}
+
+// curriculum_registry.json is the sole source of curriculum metadata.
+CurriculumMetadata loadCurriculumMetadata(const fs::path& dir, const std::string& curriculum_name) {
+	if (curriculum_name.empty()) {
+		throw std::runtime_error(
+			"[DataLoader] FATAL: curriculum name is required for registry lookup");
 	}
 
-	// Also force has_filter=true for any named curriculum so that the loader
-	// applies an explicit (possibly all-rejecting) filter rather than falling
-	// through to the unfiltered branch.
-	if (!curriculum_name.empty()) {
-		filter.has_filter = true;
+	const fs::path registry_path = dir / "curriculum_registry.json";
+	std::ifstream registry_input(registry_path);
+	if (!registry_input.is_open()) {
+		throw std::runtime_error(
+			"[DataLoader] FATAL: cannot open curriculum registry: " + registry_path.string());
 	}
 
-	std::cout << "[DataLoader]   format_as_concept=" << (filter.format_as_concept ? "true" : "false")
-	          << ", concept_ids=" << filter.concept_ids.size()
-	          << ", plaintext_ids=" << filter.plaintext_ids.size()
-	          << ", has_filter=" << (filter.has_filter ? "true" : "false")
-	          << std::endl;
-	return filter;
+	json registry;
+	try {
+		registry = json::parse(registry_input);
+	} catch (const json::exception& error) {
+		throw std::runtime_error(
+			"[DataLoader] FATAL: failed to parse " + registry_path.string() +
+			": " + error.what());
+	}
+	if (!registry.contains("curriculums") || !registry["curriculums"].is_array()) {
+		throw std::runtime_error(
+			"[DataLoader] FATAL: curriculum registry is missing the curriculums array");
+	}
+
+	for (const auto& source : registry["curriculums"]) {
+		if (!source.is_object() || source.value("name", std::string{}) != curriculum_name) continue;
+		CurriculumMetadata metadata;
+		readCurriculumMetadata(source, metadata, curriculum_name);
+		if (metadata.concept_block_ids.empty()) {
+			throw std::runtime_error(
+				"[DataLoader] FATAL: curriculum '" + curriculum_name +
+				"' has empty concept_block_ids");
+		}
+		std::cout << "[DataLoader] Curriculum '" << metadata.name
+		          << "' loaded from registry: " << registry_path.string()
+		          << ", curriculum_id=" << metadata.id
+		          << ", training_stage=" << metadata.training_stage
+		          << ", format_as_concept=" << (metadata.formatAsConcept() ? "true" : "false")
+		          << ", concept_block_ids=" << metadata.concept_block_ids.size()
+		          << std::endl;
+		return metadata;
+	}
+
+	throw std::runtime_error(
+		"[DataLoader] FATAL: curriculum '" + curriculum_name +
+		"' was not found in " + registry_path.string());
 }
 
 std::string fbString(const flatbuffers::String* value) {
@@ -231,6 +155,7 @@ json conceptBlockFlatBufferToJson(const GRIMConcept::ConceptBlock& source) {
 	j["name"] = fbString(source.name());
 	j["prompt"] = fbString(source.prompt());
 	j["answer"] = fbString(source.answer());
+	j["raw"] = fbString(source.raw());
 	j["format_type"] = fbString(source.format_type());
 	j["source_sequence_id"] = fbString(source.source_sequence_id());
 	j["timestamp"] = source.timestamp();
@@ -285,19 +210,17 @@ json conceptBlockFlatBufferToJson(const GRIMConcept::ConceptBlock& source) {
 	return j;
 }
 
-bool selectedByCurriculum(const std::string& id, const CurriculumFilter& filter) {
-	return !filter.has_filter ||
-	       filter.concept_ids.find(id) != filter.concept_ids.end() ||
-	       filter.plaintext_ids.find(id) != filter.plaintext_ids.end();
+bool selectedByCurriculum(const std::string& id, const CurriculumMetadata& metadata) {
+	return metadata.concept_block_ids.find(id) != metadata.concept_block_ids.end();
 }
 
 void loadConceptBlocks(const fs::path& cache_dir,
                        std::vector<json>& out,
-                       CurriculumFilter& out_filter,
-                       const std::string& curriculum_name = "") {
+                       CurriculumMetadata& out_metadata,
+                       const std::string& curriculum_name) {
 	const fs::path flatbuffer_path = cache_dir / "concept_blocks.fb";
 	const fs::path legacy_path = cache_dir / "concept_blocks.jsonl";
-	out_filter = loadCurriculumFilter(cache_dir, curriculum_name);
+	out_metadata = loadCurriculumMetadata(cache_dir, curriculum_name);
 
 	if (fs::exists(flatbuffer_path)) {
 		if (fs::exists(legacy_path)) {
@@ -352,13 +275,13 @@ void loadConceptBlocks(const fs::path& cache_dir,
 				if (!block) continue;
 				++total;
 				const std::string id = fbString(block->id());
-				if (!selectedByCurriculum(id, out_filter)) continue;
+				if (!selectedByCurriculum(id, out_metadata)) continue;
 				out.push_back(conceptBlockFlatBufferToJson(*block));
 				++accepted;
 			}
 		}
 		std::cout << "[DataLoader] Loaded " << accepted;
-		if (out_filter.has_filter) std::cout << "/" << total;
+		if (!out_metadata.concept_block_ids.empty()) std::cout << "/" << total;
 		std::cout << " concept blocks from " << flatbuffer_path.string() << std::endl;
 		return;
 	}
@@ -382,7 +305,7 @@ void loadConceptBlocks(const fs::path& cache_dir,
 		try {
 			auto j = json::parse(line);
 			++total;
-			if (!selectedByCurriculum(j.value("id", std::string()), out_filter)) continue;
+			if (!selectedByCurriculum(j.value("id", std::string()), out_metadata)) continue;
 			out.push_back(std::move(j));
 			++accepted;
 		} catch (const std::exception& e) {
@@ -390,7 +313,7 @@ void loadConceptBlocks(const fs::path& cache_dir,
 		}
 	}
 	std::cout << "[DataLoader] Loaded " << accepted;
-	if (out_filter.has_filter) std::cout << "/" << total;
+	if (!out_metadata.concept_block_ids.empty()) std::cout << "/" << total;
 	std::cout << " legacy concept blocks from " << legacy_path.string() << std::endl;
 }
 
@@ -470,8 +393,8 @@ bool PrepareTrainingDataFromCache(
 			  << cache_dir.string() << std::endl;
 
 	std::vector<nlohmann::json> concept_json_entries;
-	CurriculumFilter curriculum_filter;
-	loadConceptBlocks(cache_dir, concept_json_entries, curriculum_filter, tokenizer_hp.tokenizer_curriculum);
+	CurriculumMetadata curriculum_metadata;
+	loadConceptBlocks(cache_dir, concept_json_entries, curriculum_metadata, tokenizer_hp.tokenizer_curriculum);
 
 	// ── Curriculum startup summary ──
 	std::cout << "[DataLoader] ═══════════ Curriculum Config ═══════════" << std::endl;
@@ -483,10 +406,11 @@ bool PrepareTrainingDataFromCache(
 	std::cout << "[DataLoader]   tokenizer output     = " << build_hp.data_path << std::endl;
 	std::cout << "[DataLoader]   training curriculum  = " << tokenizer_hp.training_curriculum << std::endl;
 	std::cout << "[DataLoader]   training input       = " << tokenizer_hp.data_path << std::endl;
-	std::cout << "[DataLoader]   format_as_concept = " << (curriculum_filter.format_as_concept ? "true" : "false") << std::endl;
-	std::cout << "[DataLoader]   has_filter        = " << (curriculum_filter.has_filter ? "true" : "false") << std::endl;
-	std::cout << "[DataLoader]   concept_ids       = " << curriculum_filter.concept_ids.size() << std::endl;
-	std::cout << "[DataLoader]   plaintext_ids     = " << curriculum_filter.plaintext_ids.size() << std::endl;
+	std::cout << "[DataLoader]   curriculum id    = " << curriculum_metadata.id << std::endl;
+	std::cout << "[DataLoader]   curriculum name  = " << curriculum_metadata.name << std::endl;
+	std::cout << "[DataLoader]   training stage   = " << curriculum_metadata.training_stage << std::endl;
+	std::cout << "[DataLoader]   format concept   = " << (curriculum_metadata.formatAsConcept() ? "true" : "false") << std::endl;
+	std::cout << "[DataLoader]   selected blocks  = " << curriculum_metadata.concept_block_ids.size() << std::endl;
 	std::cout << "[DataLoader]   min_text_length   = " << min_cleaned_text_length << std::endl;
 	std::cout << "[DataLoader]   loaded blocks     = " << concept_json_entries.size() << std::endl;
 	std::cout << "[DataLoader] ═══════════════════════════════════════" << std::endl;
@@ -512,11 +436,9 @@ bool PrepareTrainingDataFromCache(
 		std::vector<std::string> vocab_corpus;
 		vocab_corpus.reserve(concept_json_entries.size());
 		for (const auto& cj : concept_json_entries) {
-			std::string entry_id = cj.value("id", std::string());
-			bool is_plaintext = !curriculum_filter.format_as_concept ||
-			                    (curriculum_filter.has_filter &&
-			                     curriculum_filter.plaintext_ids.count(entry_id) > 0);
-			if (is_plaintext)
+			bool is_raw_text = cj.value("format_type", std::string{}) == "raw" ||
+			                   !curriculum_metadata.formatAsConcept();
+			if (is_raw_text)
 				vocab_corpus.push_back(GRIM::ConceptCanonical::renderPlainText(cj));
 			else
 				vocab_corpus.push_back(GRIM::ConceptCanonical::render(cj).text);
@@ -758,18 +680,16 @@ bool PrepareTrainingDataFromCache(
 	          << " concept sequences..." << std::endl << std::flush;
 	std::vector<TokenizedSequence> all_tokens;
 	all_tokens.reserve(concept_json_entries.size());
-	size_t plaintext_count = 0;
+	size_t raw_text_count = 0;
 	size_t concept_build_failures = 0;
 	size_t selected_entries_skipped = 0;  // short text / encoder returned nullopt
 	bool warned_execution_bridge_stub = false;
 	for (const auto& cj : concept_json_entries) {
 		try {
-			std::string entry_id = cj.value("id", std::string());
-			bool is_plaintext = !curriculum_filter.format_as_concept ||
-			                    (curriculum_filter.has_filter &&
-			                     curriculum_filter.plaintext_ids.count(entry_id) > 0);
+			bool is_raw_text = cj.value("format_type", std::string{}) == "raw" ||
+			                   !curriculum_metadata.formatAsConcept();
 
-			if (is_plaintext) {
+			if (is_raw_text) {
 				// ── Pretraining path: plain text, no execution payload ──
 				auto rendered = GRIM::ConceptCanonical::renderPlainTextWithPromptBoundary(cj);
 				if (rendered.text.size() < min_cleaned_text_length) { ++selected_entries_skipped; continue; }
@@ -783,7 +703,7 @@ bool PrepareTrainingDataFromCache(
 				seq->execution_gate_target = GRIM::Execution::ExecutionGateTarget::UNSUPERVISED;
 				assign_prompt_span(*seq, rendered, boundaries, token_counts);
 				all_tokens.push_back(std::move(*seq));
-				++plaintext_count;
+				++raw_text_count;
 				continue;
 			}
 
@@ -828,9 +748,9 @@ bool PrepareTrainingDataFromCache(
 			std::cerr << "[DataLoader] concept build failed: " << e.what() << "\n";
 		}
 	}
-	if (plaintext_count > 0) {
-		std::cout << "[DataLoader] Encoded " << plaintext_count << " plaintext (PT) + "
-		          << (all_tokens.size() - plaintext_count) << " concept sequences" << std::endl;
+	if (raw_text_count > 0) {
+		std::cout << "[DataLoader] Encoded " << raw_text_count << " Raw + "
+		          << (all_tokens.size() - raw_text_count) << " structured sequences" << std::endl;
 	}
 
 	// Refuse to write a zero-sequence GRMT — every selected entry failed or was
@@ -865,7 +785,7 @@ bool PrepareTrainingDataFromCache(
 	// Silent skips (short text, empty encoder output) are only fatal under a
 	// filtered curriculum, where the curriculum names exactly the entries it
 	// expects to train on — dropping any of them silently is a partial GRMT.
-	if (curriculum_filter.has_filter && selected_entries_skipped > 0) {
+	if (!curriculum_metadata.concept_block_ids.empty() && selected_entries_skipped > 0) {
 		std::cerr << "[DataLoader] FATAL: " << selected_entries_skipped
 		          << " silently-skipped selected entry/entries under a filtered "
 		          << "curriculum. Refusing to produce a partial GRMT."

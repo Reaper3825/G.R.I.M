@@ -18,8 +18,11 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     float btnW  = 80.0f;
     float menuW = 100.0f;
 
-    // Proportional: two dropdowns share remaining space after menu
-    float ddW = (fullW - menuW - 3.0f * gap) * 0.5f;
+    // Model and curriculum share the flexible space; stage and format metadata
+    // keep fixed, readable slots.
+    float stageW = 240.0f;
+    float formatBadgeSlotW = 84.0f;
+    float ddW = (fullW - stageW - menuW - formatBadgeSlotW - 4.0f * gap) * 0.5f;
     if (ddW < 220.0f) ddW = 220.0f;
 
     float cx = x;
@@ -39,19 +42,24 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     }
     cx += ddW + gap;
 
+    cbTrainingStageDropdown_->setPosition(cx, y);
+    cbTrainingStageDropdown_->setSize(stageW, rowH);
+    cbTrainingStageDropdown_->drawOverlay(renderer, position);
+    cx += stageW + gap;
+
     curriculumActionMenu_->setPosition(cx, y + 4.0f);
     curriculumActionMenu_->setSize(menuW, rowH - 8.0f);
     curriculumActionMenu_->drawOverlay(renderer, position);
     cx += menuW + gap;
 
-    // Format-mode badge: show whether active curriculum is Concept or PT
+    // Format-mode badge is rendering metadata, separate from training stage.
     if (!activeCurriculumId_.empty() && datasetTarget_) {
         auto activeCurr = datasetTarget_->getCurriculumById(activeCurriculumId_);
         if (!activeCurr.id.empty()) {
-            const char* modeLabel = activeCurr.format_as_concept ? "Concept" : "PT";
+            const char* modeLabel = activeCurr.format_as_concept ? "Concept" : "Plain Text";
             uint32_t badgeBg = activeCurr.format_as_concept
                 ? UITheme::Colors::Success : 0xFF88AADD;
-            float badgeW = activeCurr.format_as_concept ? 68.0f : 38.0f;
+            float badgeW = activeCurr.format_as_concept ? 68.0f : 84.0f;
             float badgeH = rowH - 12.0f;
             float badgeY = y + 6.0f;
             renderer.drawRoundedRect({cx, badgeY}, {badgeW, badgeH}, badgeBg, 4.0f);
@@ -157,7 +165,7 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
             }
             auto cb = datasetTarget_ ? datasetTarget_->getConceptBlock(realIdx) : GRIM::ConceptBlock{};
             nameStr   = cb.name;
-            qRaw      = cb.prompt;
+            qRaw      = cb.format_type == "raw" ? cb.raw : cb.prompt;
             formatKey = cb.format_type;
             blockId   = cb.id;
         }
@@ -220,6 +228,8 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     int presetIdx = cbListTypeDropdown_ ? cbListTypeDropdown_->getSelectedIndex() : 1;
     if (presetIdx < 0 || presetIdx >= GRIM::kConceptPresetCount) presetIdx = 1;
     const auto& preset = GRIM::kConceptPresets[presetIdx];
+    const bool rawMode = std::string(preset.key) == "raw";
+    const bool structuredEditorMode = conceptMode && !rawMode;
 
     // ── Scrollable editor content ───────────────────────
     renderer.pushClipRect({editorX, y}, {editorW, availH});
@@ -238,7 +248,9 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     // Divider line
     renderer.drawRect({editorX + ePad, ey}, {eInnerW, 1.0f}, 0x18FFFFFF);
     ey += sectionGap;
-    if (conceptMode) {
+    if (rawMode) {
+        renderer.drawText({editorX + ePad, ey}, "Raw", UITheme::Colors::TextSecondary);
+    } else if (structuredEditorMode) {
         std::string qLabel = std::string("Q: ") + preset.questionLabel;
         renderer.drawText({editorX + ePad, ey}, qLabel, UITheme::Colors::TextSecondary);
     } else {
@@ -246,10 +258,11 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     }
     ey += 20.0f;
     cbPromptArea_->setPosition(editorX + ePad, ey);
-    cbPromptArea_->setSize(eInnerW, conceptMode ? areaH : areaH * 2.0f);
+    cbPromptArea_->setSize(eInnerW, structuredEditorMode ? areaH : areaH * 2.0f);
     cbPromptArea_->drawOverlay(renderer, position);
-    ey += (conceptMode ? areaH : areaH * 2.0f) + 16.0f;
+    ey += (structuredEditorMode ? areaH : areaH * 2.0f) + 16.0f;
 
+    if (structuredEditorMode) {
     // ─── Goal identifier ────────────────────────────────
     renderer.drawRect({editorX + ePad, ey}, {eInnerW, 1.0f}, 0x18FFFFFF);
     ey += sectionGap;
@@ -305,8 +318,9 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
         ey += 32.0f + sectionPad;
     }
     ey += 16.0f;
+    }
 
-    if (conceptMode) {
+    if (structuredEditorMode) {
     // ─── EXP: Explanation / Intermediates ────────────────
     if (preset.intermediatesLabel) {
         renderer.drawRect({editorX + ePad, ey}, {eInnerW, 1.0f}, 0x18FFFFFF);
@@ -427,7 +441,7 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     } // end if (conceptMode) — EXP / EXEC hidden in PT mode
 
     // ─── A: Answer (concept mode only) ────────────────────
-    if (conceptMode) {
+    if (structuredEditorMode) {
     renderer.drawRect({editorX + ePad, ey}, {eInnerW, 1.0f}, 0x18FFFFFF);
     ey += sectionGap;
     std::string aLabel = std::string("A: ") + preset.answerLabel;
@@ -445,8 +459,8 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
     ey += sectionGap;
     {
         renderer.drawText({editorX + ePad, ey},
-                          conceptMode ? "Training Preview (logical delimiters)"
-                                      : "Training Preview (raw)",
+                          structuredEditorMode ? "Training Preview (logical delimiters)"
+                                               : "Training Preview (raw)",
                           UITheme::Colors::TextSecondary);
         ey += 22.0f;
 
@@ -455,13 +469,13 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
         std::string previewValidationError;
         const bool previewValid =
             buildConceptBlockFromEditor(previewCB, previewValidationError);
-        if (conceptMode && !previewValid) {
+        if (structuredEditorMode && !previewValid) {
             renderer.drawText({editorX + ePad, ey},
                               "Validation: " + previewValidationError,
                               UITheme::Colors::Danger);
             ey += 20.0f;
         }
-        std::string preview = buildTrainingPreview(previewCB, conceptMode);
+        std::string preview = buildTrainingPreview(previewCB, structuredEditorMode);
 
         // Pre-count wrapped lines so we can draw the background first.
         std::vector<std::pair<std::string, uint32_t>> previewLines;
@@ -471,7 +485,7 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
             std::string pline;
             while (std::getline(pss, pline)) {
                 uint32_t lineCol = UITheme::Colors::TextMuted;
-                if (conceptMode) {
+                if (structuredEditorMode) {
                     if (pline.size() >= 2 && pline[0] == 'Q' && pline[1] == ':')
                         lineCol = UITheme::Colors::TextPrimary;
                     else if (pline.size() >= 2 && pline[0] == 'A' && pline[1] == ':')
@@ -564,6 +578,7 @@ void UIDataHubPanel::refreshCurriculumTabState() {
     datasetTarget_->loadConceptBlocks();
     cbTotalCount_ = datasetTarget_->conceptBlockCount();
     populateCBCurriculumDropdown();
+    syncCurriculumTrainingStageDropdown();
     // Count blocks in active curriculum
     if (!activeCurriculumId_.empty()) {
         auto curr = datasetTarget_->getCurriculumById(activeCurriculumId_);
@@ -614,7 +629,9 @@ void UIDataHubPanel::loadConceptBlockIntoEditor(size_t cbIndex) {
     if (cb.id.empty()) return;
 
     if (cbNameInput_)    cbNameInput_->setText(cb.name);
-    if (cbPromptArea_) cbPromptArea_->setText(cb.prompt);
+    if (cbPromptArea_) {
+        cbPromptArea_->setText(cb.format_type == "raw" ? cb.raw : cb.prompt);
+    }
     if (cbTargetStateArea_) {
         cbTargetStateArea_->setText(
             cb.goal.has_value() ? cb.goal->target_state : std::string());
@@ -778,6 +795,19 @@ bool UIDataHubPanel::buildConceptBlockFromEditor(
         ? cbListTypeDropdown_->getSelectedIndex() : 1;
     out.format_type = (preset_index >= 0 && preset_index < GRIM::kConceptPresetCount)
         ? GRIM::kConceptPresets[preset_index].key : "chain_of_thought";
+
+    if (out.format_type == "raw") {
+        out.raw = std::move(out.prompt);
+        out.prompt.clear();
+        out.answer.clear();
+        out.goal.reset();
+        if (trim(out.raw).empty()) {
+            validation_error = "Raw text cannot be empty";
+            return false;
+        }
+        out.recomputeDerived();
+        return true;
+    }
 
     for (const auto& area : cbIntermediateAreas_) {
         out.intermediates.push_back(area ? area->getText() : "");
@@ -997,6 +1027,20 @@ void UIDataHubPanel::populateCBCurriculumDropdown() {
     cbCurriculumDropdown_->setSelectedIndex(selectedIdx);
 }
 
+void UIDataHubPanel::syncCurriculumTrainingStageDropdown() {
+    if (!cbTrainingStageDropdown_) return;
+
+    int selectedIdx = 0;
+    if (datasetTarget_ && !activeCurriculumId_.empty()) {
+        const auto curr = datasetTarget_->getCurriculumById(activeCurriculumId_);
+        if (curr.training_stage == "pt") selectedIdx = 1;
+        else if (curr.training_stage == "sft") selectedIdx = 2;
+        else if (curr.training_stage == "dpo") selectedIdx = 3;
+        else if (curr.training_stage == "rlhf") selectedIdx = 4;
+    }
+    cbTrainingStageDropdown_->setSelectedIndex(selectedIdx);
+}
+
 void UIDataHubPanel::selectActiveCurriculum(int dropdownIndex) {
     if (!datasetTarget_) return;
     const auto& curricula = datasetTarget_->getCurriculums();
@@ -1008,5 +1052,6 @@ void UIDataHubPanel::selectActiveCurriculum(int dropdownIndex) {
         activeCurriculumId_ = curr.id;
         cbInCurrCount_ = static_cast<int>(curr.concept_block_ids.size());
     }
+    syncCurriculumTrainingStageDropdown();
     cbFilterDirty_ = true;
 }

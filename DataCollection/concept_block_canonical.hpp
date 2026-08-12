@@ -58,6 +58,11 @@ inline void appendLogicalSpan(std::ostringstream& out,
 
 inline RenderResult render(const nlohmann::json& j) {
     RenderResult result;
+    if (j.contains("raw") && j["raw"].is_string()
+        && !j["raw"].get<std::string>().empty()) {
+        result.text = j["raw"].get<std::string>();
+        return result;
+    }
     std::ostringstream out;
     const bool has_goal_decomposition =
         j.contains("goal") && j["goal"].is_object() &&
@@ -161,6 +166,11 @@ inline RenderResult render(const nlohmann::json& j) {
 
 inline RenderResult renderPlainTextWithPromptBoundary(const nlohmann::json& j) {
     RenderResult result;
+    if (j.contains("raw") && j["raw"].is_string()
+        && !j["raw"].get<std::string>().empty()) {
+        result.text = j["raw"].get<std::string>();
+        return result;
+    }
     std::ostringstream out;
     if (j.contains("prompt") && j["prompt"].is_string()
         && !j["prompt"].get<std::string>().empty()) {
@@ -196,7 +206,8 @@ inline nlohmann::json toCanonicalJson(const ConceptBlock& cb) {
     nlohmann::json j{
         {"prompt", cb.prompt},
         {"explanation", cb.explanation.empty() ? cb.intermediates : cb.explanation},
-        {"answer", cb.answer}
+        {"answer", cb.answer},
+        {"raw", cb.raw}
     };
     if (cb.goal.has_value()) {
         nlohmann::json goal{{"target_state", cb.goal->target_state}};
@@ -230,6 +241,9 @@ inline RenderResult render(const ConceptBlock& cb) {
 // Human-facing inspection form for the invisible logical spans used by corpus
 // compilation. These tags are never passed to UniByte or model input_ids.
 inline std::string renderLogicalTrainingPreview(const ConceptBlock& cb) {
+    if (cb.format_type == "raw" || !cb.raw.empty()) {
+        return cb.raw;
+    }
     std::ostringstream out;
 
     if (!cb.prompt.empty()) {
