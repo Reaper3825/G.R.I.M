@@ -139,7 +139,10 @@ void UISettingsMenu::cycleVoice() {
             current = pendingConfig["voice"]["engine"].get<std::string>();
         }
         
-        std::string next = (current == "coqui") ? "sapi" : "coqui";
+        std::string next = (current == "coqui") ? "cosyvoice" :
+                           (current == "cosyvoice" || current == "fun-cosyvoice3")
+                               ? "sapi"
+                               : "coqui";
         LOG_DEBUG("UISettingsMenu", "Voice engine: " + current + " -> " + next);
         
         // Ensure voice object exists

@@ -57,19 +57,26 @@ def synthesize(model, torch, torchaudio, request):
         raise ValueError("TTS output path is empty")
     output_path = Path(raw_output_path).resolve()
 
-    if reference_audio and reference_text:
+    if reference_audio:
         reference_path = Path(reference_audio).resolve()
         if not reference_path.is_file():
             raise FileNotFoundError(f"Reference audio not found: {reference_path}")
-        prompt_text = reference_text
-        if "<|endofprompt|>" not in prompt_text:
-            prompt_text = "You are a helpful assistant.<|endofprompt|>" + prompt_text
-        generated = model.inference_zero_shot(
-            text,
-            prompt_text,
-            str(reference_path),
-            stream=False,
-        )
+        if reference_text:
+            prompt_text = reference_text
+            if "<|endofprompt|>" not in prompt_text:
+                prompt_text = "You are a helpful assistant.<|endofprompt|>" + prompt_text
+            generated = model.inference_zero_shot(
+                text,
+                prompt_text,
+                str(reference_path),
+                stream=False,
+            )
+        else:
+            generated = model.inference_cross_lingual(
+                text,
+                str(reference_path),
+                stream=False,
+            )
     elif speaker and speaker != "default":
         generated = model.inference_zero_shot(
             text,
@@ -80,8 +87,7 @@ def synthesize(model, torch, torchaudio, request):
         )
     else:
         raise ValueError(
-            "CosyVoice requires reference_audio plus reference_text, "
-            "or a registered zero-shot speaker id"
+            "CosyVoice requires reference_audio or a registered zero-shot speaker id"
         )
 
     chunks = []

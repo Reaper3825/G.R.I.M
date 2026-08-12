@@ -599,7 +599,10 @@ namespace Voice {
             std::string engine = g_engine;
             auto it = g_rules.find(item.category);
             if (it != g_rules.end()) {
-                if (it->second == "coqui" || it->second == "sapi")
+                if (it->second == "coqui"
+                    || it->second == "cosyvoice"
+                    || it->second == "fun-cosyvoice3"
+                    || it->second == "sapi")
                     engine = it->second;
             }
 

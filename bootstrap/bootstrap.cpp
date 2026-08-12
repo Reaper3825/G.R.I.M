@@ -304,34 +304,44 @@ static void bootstrapHardwareAndResources() {
 // ================================================================
 static void bootstrapSubsystems() {
     auto voiceCfg = aiConfig["voice"];
-    bool needsCoqui = (voiceCfg.value("engine", "sapi") == "coqui");
+    const auto isNeuralTTSProvider = [](const std::string& engine) {
+        return engine == "coqui"
+            || engine == "cosyvoice"
+            || engine == "fun-cosyvoice3";
+    };
+    bool needsNeuralTTS = isNeuralTTSProvider(
+        voiceCfg.value("engine", "sapi"));
 
     if (voiceCfg.contains("rules")) {
         for (auto& [k, v] : voiceCfg["rules"].items()) {
-            if (v.get<std::string>() == "coqui") {
-                needsCoqui = true;
+            if (isNeuralTTSProvider(v.get<std::string>())) {
+                needsNeuralTTS = true;
                 break;
             }
         }
     }
 
-    if (needsCoqui) {
-        LOG_PHASE("Coqui TTS init", true);
-        LOG_DEBUG("Voice", "Initializing Coqui TTS bridge...");
+    if (needsNeuralTTS) {
+        const std::string configuredProvider =
+            voiceCfg.value("engine", "sapi");
+        LOG_PHASE("Neural TTS init", true);
+        LOG_DEBUG("Voice", "Initializing TTS provider: " + configuredProvider);
         if (!Voice::initTTS()) {
-            LOG_ERROR("Voice", "Failed to initialize Coqui bridge");
-            LOG_PHASE("Coqui TTS init", false);
+            LOG_ERROR("Voice", "Failed to initialize TTS provider: " + configuredProvider);
+            LOG_PHASE("Neural TTS init", false);
         } else {
-            LOG_PHASE("Coqui TTS init", true);
+            LOG_PHASE("Neural TTS init", true);
             LOG_DEBUG("Voice",
-                "Coqui XTTS v2 initialized (speaker=" +
+                std::string("TTS provider initialized (provider=") +
+                Voice::activeTTSProviderId() +
+                ", speaker=" +
                 voiceCfg.value("speaker", "default") +
                 ", language=" +
                 voiceCfg.value("language", "en") + ")");
         }
     } else {
-        LOG_PHASE("Coqui TTS skipped", true);
-        LOG_DEBUG("Voice", "Skipping Coqui init (engine=sapi only)");
+        LOG_PHASE("Neural TTS skipped", true);
+        LOG_DEBUG("Voice", "Skipping neural TTS init (engine=sapi only)");
     }
 
     LOG_DEBUG("RL", "Starting rl_bridge.py via unified BridgeManager...");
