@@ -1,4 +1,5 @@
 #include "voice_speak.hpp"
+#include "cosyvoice_provider.hpp"
 #include "tts_cache.hpp"  // ? Added
 #include "logger.hpp"
 #include "resources.hpp"
@@ -47,6 +48,7 @@ namespace Voice {
     // =========================================================
     static bool g_ttsReady = false;
     static bool g_xttsV2Enabled = false;  // ? Track if XTTS v2 is loaded
+    static CosyVoiceProviderConfig g_cosyVoiceConfig;
 
     class LegacyTTSProvider final : public ITTSProvider {
     public:
@@ -203,19 +205,36 @@ namespace Voice {
     // =========================================================
     // Init / Shutdown
     // =========================================================
-    static bool initializeLegacyProvider() {
-        // ? Initialize TTS cache first
-        TTSCache::init();
-        
-        // Initialize output directory relative to GRIM root
-        if (g_outputDir.empty()) {
-            std::string grimRoot = getGrimRootDir();
-            g_outputDir = fs::path(grimRoot) / "resources/tts_out";
+    static std::string resolveVoicePath(
+        const fs::path& grimRoot,
+        const std::string& configuredPath) {
+        if (configuredPath.empty()) {
+            return {};
         }
-        
+        const fs::path path(configuredPath);
+        return (path.is_absolute() ? path : grimRoot / path).lexically_normal().string();
+    }
+
+    static void loadVoiceConfiguration() {
+        const fs::path grimRoot = getGrimRootDir();
+        g_outputDir = grimRoot / "resources/tts_out";
+        g_cosyVoiceConfig.python_executable =
+            (grimRoot / ".venv-cosyvoice/Scripts/python.exe").string();
+        g_cosyVoiceConfig.repository_path =
+            (grimRoot / "external/CosyVoice").string();
+        g_cosyVoiceConfig.model_path =
+            (grimRoot / "resources/models/Fun-CosyVoice3-0.5B").string();
+        g_cosyVoiceConfig.bridge_script =
+            (grimRoot / "resources/python/cosyvoice_bridge.py").string();
+        g_cosyVoiceConfig.output_directory =
+            (grimRoot / "resources/tts_out/cosyvoice").string();
+        g_cosyVoiceConfig.reference_audio_path.clear();
+        g_cosyVoiceConfig.reference_text.clear();
+        g_cosyVoiceConfig.startup_timeout_ms = 180000;
+        g_cosyVoiceConfig.synthesis_timeout_ms = 120000;
+
         try {
-            std::string grimRoot = getGrimRootDir();
-            fs::path cfgPath = fs::path(grimRoot) / "ai_config.json";
+            const fs::path cfgPath = grimRoot / "ai_config.json";
             if (fs::exists(cfgPath)) {
                 std::ifstream in(cfgPath);
                 json cfg;
@@ -226,7 +245,50 @@ namespace Voice {
                     if (v.contains("speaker"))     g_speaker   = v["speaker"].get<std::string>();
                     if (v.contains("speed"))       g_speed     = v["speed"].get<double>();
                     if (v.contains("language"))    g_language  = v["language"].get<std::string>();  // ? Load language
-                    if (v.contains("output_dir"))  g_outputDir = v["output_dir"].get<std::string>();
+                    if (v.contains("output_dir")) {
+                        g_outputDir = resolveVoicePath(
+                            grimRoot,
+                            v["output_dir"].get<std::string>());
+                    }
+
+                    if (v.contains("cosyvoice") && v["cosyvoice"].is_object()) {
+                        const auto& cosy = v["cosyvoice"];
+                        if (cosy.contains("python")) {
+                            g_cosyVoiceConfig.python_executable = resolveVoicePath(
+                                grimRoot,
+                                cosy["python"].get<std::string>());
+                        }
+                        if (cosy.contains("repository")) {
+                            g_cosyVoiceConfig.repository_path = resolveVoicePath(
+                                grimRoot,
+                                cosy["repository"].get<std::string>());
+                        }
+                        if (cosy.contains("model")) {
+                            g_cosyVoiceConfig.model_path = resolveVoicePath(
+                                grimRoot,
+                                cosy["model"].get<std::string>());
+                        }
+                        if (cosy.contains("reference_audio")) {
+                            g_cosyVoiceConfig.reference_audio_path = resolveVoicePath(
+                                grimRoot,
+                                cosy["reference_audio"].get<std::string>());
+                        }
+                        if (cosy.contains("reference_text")) {
+                            g_cosyVoiceConfig.reference_text =
+                                cosy["reference_text"].get<std::string>();
+                        }
+                        if (cosy.contains("startup_timeout_ms")) {
+                            g_cosyVoiceConfig.startup_timeout_ms =
+                                cosy["startup_timeout_ms"].get<int>();
+                        }
+                        if (cosy.contains("synthesis_timeout_ms")) {
+                            g_cosyVoiceConfig.synthesis_timeout_ms =
+                                cosy["synthesis_timeout_ms"].get<int>();
+                        }
+                    }
+
+                    g_cosyVoiceConfig.output_directory =
+                        (g_outputDir / "cosyvoice").string();
                     
                     LOG_DEBUG("Voice/Init", "Loaded config: speaker=" + g_speaker + ", language=" + g_language + ", engine=" + g_engine);
                 }
@@ -234,6 +296,11 @@ namespace Voice {
         } catch (const std::exception& e) {
             LOG_ERROR("Voice/Init", std::string("Error reading ai_config.json: ") + e.what());
         }
+    }
+
+    static bool initializeLegacyProvider() {
+        // ? Initialize TTS cache first
+        TTSCache::init();
 
 #ifdef _WIN32
         if (g_engine == "coqui" && !g_ttsReady) {
@@ -449,8 +516,13 @@ namespace Voice {
     }
 
     bool initTTS() {
+        loadVoiceConfiguration();
         if (!g_ttsProvider) {
-            g_ttsProvider = std::make_unique<LegacyTTSProvider>();
+            if (g_engine == "cosyvoice" || g_engine == "fun-cosyvoice3") {
+                g_ttsProvider = createCosyVoiceProvider(g_cosyVoiceConfig);
+            } else {
+                g_ttsProvider = std::make_unique<LegacyTTSProvider>();
+            }
         }
         return g_ttsProvider->initialize();
     }
@@ -545,7 +617,9 @@ namespace Voice {
                 g_isSpeaking = false;
             } else
 #endif
-            if (engine == "coqui") {
+            if (engine == "coqui"
+                || engine == "cosyvoice"
+                || engine == "fun-cosyvoice3") {
                 TTSSynthesisRequest request;
                 request.text = item.text;
                 request.category = item.category;
