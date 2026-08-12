@@ -224,12 +224,16 @@ namespace Voice {
             (grimRoot / "external/CosyVoice").string();
         g_cosyVoiceConfig.model_path =
             (grimRoot / "resources/models/Fun-CosyVoice3-0.5B").string();
+        g_cosyVoiceConfig.text_normalization_path =
+            (grimRoot / "resources/models/wetext").string();
         g_cosyVoiceConfig.bridge_script =
             (grimRoot / "resources/python/cosyvoice_bridge.py").string();
         g_cosyVoiceConfig.output_directory =
             (grimRoot / "resources/tts_out/cosyvoice").string();
         g_cosyVoiceConfig.reference_audio_path.clear();
         g_cosyVoiceConfig.reference_text.clear();
+        g_cosyVoiceConfig.speaker_id = "grim";
+        g_cosyVoiceConfig.fp16 = true;
         g_cosyVoiceConfig.startup_timeout_ms = 180000;
         g_cosyVoiceConfig.synthesis_timeout_ms = 120000;
 
@@ -268,6 +272,11 @@ namespace Voice {
                                 grimRoot,
                                 cosy["model"].get<std::string>());
                         }
+                        if (cosy.contains("text_normalization")) {
+                            g_cosyVoiceConfig.text_normalization_path = resolveVoicePath(
+                                grimRoot,
+                                cosy["text_normalization"].get<std::string>());
+                        }
                         if (cosy.contains("reference_audio")) {
                             g_cosyVoiceConfig.reference_audio_path = resolveVoicePath(
                                 grimRoot,
@@ -276,6 +285,9 @@ namespace Voice {
                         if (cosy.contains("reference_text")) {
                             g_cosyVoiceConfig.reference_text =
                                 cosy["reference_text"].get<std::string>();
+                        }
+                        if (cosy.contains("fp16")) {
+                            g_cosyVoiceConfig.fp16 = cosy["fp16"].get<bool>();
                         }
                         if (cosy.contains("startup_timeout_ms")) {
                             g_cosyVoiceConfig.startup_timeout_ms =
@@ -289,6 +301,7 @@ namespace Voice {
 
                     g_cosyVoiceConfig.output_directory =
                         (g_outputDir / "cosyvoice").string();
+                    g_cosyVoiceConfig.speaker_id = g_speaker;
                     
                     LOG_DEBUG("Voice/Init", "Loaded config: speaker=" + g_speaker + ", language=" + g_language + ", engine=" + g_engine);
                 }

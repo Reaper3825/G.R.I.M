@@ -77,6 +77,7 @@ public:
         result.supports_voice_selection = true;
         result.supports_voice_cloning = true;
         result.supports_language_selection = true;
+        result.supports_rate = true;
         result.languages = {
             "zh", "en", "ja", "ko", "de", "es", "fr", "it", "ru"
         };
@@ -126,7 +127,9 @@ bool CosyVoiceProvider::initialize() {
         {"Python executable", &config_.python_executable, false},
         {"CosyVoice repository", &config_.repository_path, true},
         {"CosyVoice model", &config_.model_path, true},
+        {"CosyVoice text normalization assets", &config_.text_normalization_path, true},
         {"CosyVoice bridge", &config_.bridge_script, false},
+        {"CosyVoice reference audio", &config_.reference_audio_path, false},
     };
 
     for (const RequiredPath& required : required_paths) {
@@ -141,6 +144,48 @@ bool CosyVoiceProvider::initialize() {
             state_ = TTSProviderState::Failed;
             return false;
         }
+    }
+
+    const char* required_model_files[] = {
+        "cosyvoice3.yaml",
+        "llm.pt",
+        "flow.pt",
+        "hift.pt",
+        "campplus.onnx",
+        "speech_tokenizer_v3.onnx",
+    };
+    for (const char* file : required_model_files) {
+        const fs::path path = fs::path(config_.model_path) / file;
+        if (!fs::is_regular_file(path)) {
+            LOG_ERROR("Voice/CosyVoice", "Required model file is missing: " + path.string());
+            state_ = TTSProviderState::Failed;
+            return false;
+        }
+    }
+
+    const char* required_normalization_files[] = {
+        "en/tn/tagger.fst",
+        "en/tn/verbalizer.fst",
+        "zh/tn/tagger.fst",
+        "zh/tn/verbalizer.fst",
+    };
+    for (const char* file : required_normalization_files) {
+        const fs::path path = fs::path(config_.text_normalization_path) / file;
+        if (!fs::is_regular_file(path)) {
+            LOG_ERROR(
+                "Voice/CosyVoice",
+                "Required text normalization file is missing: " + path.string());
+            state_ = TTSProviderState::Failed;
+            return false;
+        }
+    }
+
+    if (config_.reference_text.empty()) {
+        LOG_ERROR(
+            "Voice/CosyVoice",
+            "CosyVoice 3 requires an exact transcript for the configured reference audio");
+        state_ = TTSProviderState::Failed;
+        return false;
     }
 
     std::error_code directory_error;
@@ -164,12 +209,22 @@ bool CosyVoiceProvider::initialize() {
             "Voice/CosyVoice",
             "Bridge failed to become ready: " +
                 response.value("message", std::string("no handshake received")));
+        if (process_.hProcess) {
+            TerminateProcess(process_.hProcess, 1);
+            WaitForSingleObject(process_.hProcess, 2000);
+        }
         closeHandles();
         state_ = TTSProviderState::Failed;
         return false;
     }
 
     state_ = TTSProviderState::Ready;
+    LOG_DEBUG(
+        "Voice/CosyVoice",
+        "Bridge runtime: device=" + response.value("device", std::string("unknown")) +
+            ", precision=" + response.value("precision", std::string("unknown")) +
+            ", speaker=" + response.value("speaker", std::string("unknown")) +
+            ", sample_rate=" + std::to_string(response.value("sample_rate", 0)));
     LOG_PHASE("Fun-CosyVoice 3 bridge ready", true);
     return true;
 #endif
@@ -186,7 +241,12 @@ void CosyVoiceProvider::shutdown() noexcept {
     }
 
     if (process_.hProcess) {
-        WaitForSingleObject(process_.hProcess, 2000);
+        const DWORD wait_result = WaitForSingleObject(process_.hProcess, 2000);
+        if (wait_result == WAIT_TIMEOUT) {
+            LOG_ERROR("Voice/CosyVoice", "Bridge did not exit in time; terminating owned process");
+            TerminateProcess(process_.hProcess, 1);
+            WaitForSingleObject(process_.hProcess, 2000);
+        }
     }
     closeHandles();
 #endif
@@ -214,6 +274,7 @@ TTSSynthesisResult CosyVoiceProvider::synthesize(
         {"text", request.text},
         {"speaker", request.voice_id},
         {"language", request.language},
+        {"speed", request.rate},
         {"reference_audio", config_.reference_audio_path},
         {"reference_text", config_.reference_text},
         {"out", output_path.string()},
@@ -283,7 +344,12 @@ bool CosyVoiceProvider::launchBridge() {
         quoteArgument(config_.python_executable) + " " +
         quoteArgument(config_.bridge_script) + " --persistent --repo " +
         quoteArgument(config_.repository_path) + " --model " +
-        quoteArgument(config_.model_path);
+        quoteArgument(config_.model_path) + " --text-normalization " +
+        quoteArgument(config_.text_normalization_path) + " --reference-audio " +
+        quoteArgument(config_.reference_audio_path) + " --reference-text " +
+        quoteArgument(config_.reference_text) + " --speaker-id " +
+        quoteArgument(config_.speaker_id) +
+        (config_.fp16 ? " --fp16" : "");
     std::vector<char> mutable_command(command.begin(), command.end());
     mutable_command.push_back('\0');
 

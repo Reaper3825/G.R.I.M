@@ -180,6 +180,7 @@ resources/.venv/
 *.dic
 *.db
 /resources/models/Fun-CosyVoice3-0.5B/
+/resources/models/wetext/
 
 vcpkg_installed/** -text
 external/bgfx.cmake/

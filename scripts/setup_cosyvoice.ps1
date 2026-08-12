@@ -16,6 +16,7 @@ $repositoryPath = Join-Path $resolvedRoot "external\CosyVoice"
 $environmentPath = Join-Path $resolvedRoot ".venv-cosyvoice"
 $pythonPath = Join-Path $environmentPath "Scripts\python.exe"
 $modelPath = Join-Path $resolvedRoot "resources\models\Fun-CosyVoice3-0.5B"
+$textNormalizationPath = Join-Path $resolvedRoot "resources\models\wetext"
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     throw "Git is required to provision CosyVoice."
@@ -74,7 +75,9 @@ if ($LASTEXITCODE -ne 0) {
     throw "huggingface_hub installation failed."
 }
 
-if (-not (Test-Path -LiteralPath $modelPath -PathType Container)) {
+if (-not (Test-Path -LiteralPath (Join-Path $modelPath "cosyvoice3.yaml") -PathType Leaf) -or
+    -not (Test-Path -LiteralPath (Join-Path $modelPath "llm.pt") -PathType Leaf) -or
+    -not (Test-Path -LiteralPath (Join-Path $modelPath "flow.pt") -PathType Leaf)) {
     $downloadCode = @"
 from huggingface_hub import snapshot_download
 snapshot_download(
@@ -88,8 +91,26 @@ snapshot_download(
     }
 }
 
+if (-not (Test-Path -LiteralPath (Join-Path $textNormalizationPath "en\tn\tagger.fst") -PathType Leaf) -or
+    -not (Test-Path -LiteralPath (Join-Path $textNormalizationPath "en\tn\verbalizer.fst") -PathType Leaf) -or
+    -not (Test-Path -LiteralPath (Join-Path $textNormalizationPath "zh\tn\tagger.fst") -PathType Leaf) -or
+    -not (Test-Path -LiteralPath (Join-Path $textNormalizationPath "zh\tn\verbalizer.fst") -PathType Leaf)) {
+    $normalizationCode = @"
+from modelscope import snapshot_download
+snapshot_download(
+    'pengzhendong/wetext',
+    local_dir=r'''$textNormalizationPath''',
+)
+"@
+    & $pythonPath -c $normalizationCode
+    if ($LASTEXITCODE -ne 0) {
+        throw "WeText normalization asset download failed."
+    }
+}
+
 Write-Host "Fun-CosyVoice 3 local runtime is provisioned."
 Write-Host "Python: $pythonPath"
 Write-Host "Repository: $repositoryPath"
 Write-Host "Model: $modelPath"
+Write-Host "Text normalization: $textNormalizationPath"
 Write-Host "The active ai_config voice engine was not changed."
