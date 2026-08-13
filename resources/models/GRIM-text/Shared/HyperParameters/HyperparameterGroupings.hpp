@@ -441,7 +441,7 @@ struct ExecutionBlockConstructionHP {
 
 // NumberEncoder construction view — numeric-meaning input path.
 // Encodes (digit, pow10) contribution slots plus a global mantissa/exponent
-// feature head per docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md. Selection-side
+// feature head. Selection-side
 // representation; execution consumes downstream results only.
 struct NumberEncoderConstructionHP {
     bool enabled = false;

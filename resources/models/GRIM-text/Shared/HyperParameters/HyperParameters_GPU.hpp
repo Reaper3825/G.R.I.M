@@ -405,7 +405,6 @@ struct LanguageModelConfig {
     float stop_ce_weight = 0.0f;
 
     // NumberEncoder (numeric-meaning input path) config.
-    // Digit-place contribution encoding per docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md.
     bool  number_encoder_enabled = false;
     int   number_encoder_max_digit_slots = 0;
     int   number_encoder_d_hidden = 0;

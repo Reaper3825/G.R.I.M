@@ -35,12 +35,6 @@ GRIM::Batching::BatchPayload buildPayloadFromAssignmentImpl(
     const std::vector<GRIM::TokenizerArtifacts::GrmtSequence*>& views)
 {
     const auto fixed_shape = GRIM::HyperParameters::trainingFixedShapeHP(ctx.config);
-    const auto number_encoder_hp = GRIM::HyperParameters::numberEncoderConstructionHP(ctx.config);
-    const bool selector_enabled =
-        GRIM::HyperParameters::snapshotTrainingConfigField<bool>(
-            ctx.config, "selector_enabled");
-    const int number_encoder_digit_slots = number_encoder_hp.enabled ? number_encoder_hp.max_digit_slots : 0;
-    const int number_encoder_max_abs_pow10 = number_encoder_hp.max_abs_pow10;
     const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(ctx.config, "vocab_size");
     const std::uint32_t actual_vocab_size = ctx.data.vocab_size;
     const auto layout = GRIM::Tokenizer::tokenLayoutFromActualVocabOrThrow(
@@ -69,9 +63,9 @@ GRIM::Batching::BatchPayload buildPayloadFromAssignmentImpl(
         layout,
         static_cast<std::size_t>(fixed_shape.batch_size),
         static_cast<std::size_t>(fixed_shape.max_seq_len),
-        selector_enabled,
-        number_encoder_digit_slots,
-        number_encoder_max_abs_pow10);
+        /*selector_enabled=*/false,
+        /*number_encoder_digit_slots=*/0,
+        /*number_encoder_max_abs_pow10=*/0);
 }
 
 //======================================================//

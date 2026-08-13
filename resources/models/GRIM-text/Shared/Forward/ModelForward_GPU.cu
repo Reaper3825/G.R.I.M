@@ -8,7 +8,6 @@
 #endif
 
 #include "ModelForward_GPU.hpp"
-#include "ModelForwardArgBootstrap_GPU.hpp"
 
 #include "../../GRIM/grim_language_model_cuda.hpp"
 #include "../../Layers/Encoding/Encoding_GPU.hpp"
@@ -17,7 +16,6 @@
 #include "../InferenceState/KvCacheState_GPU.hpp"
 #include "../CudaAllocUtils.hpp"
 #include "../TensorContract/TensorContract_GPU.hpp"
-#include "../TensorContract/GradFns/NumberEncoderGradFn.hpp"
 #include "ModelForwardOutputs.hpp"
 #include "../HyperParameters/HyperparameterGroupings.hpp"
 #include "../VerboseLogging.hpp"
@@ -226,12 +224,6 @@ void ModelForwardRequest::validate(const char* caller) const {
                                      " for payload.max_seq_len=" + std::to_string(payload->max_seq_len));
         }
     }
-    if (graph.emit_selector_logits) {
-        const bool selector_enabled = HyperParameters::snapshotTrainingConfigField<bool>(*config, "selector_enabled");
-        if (!selector_enabled) {
-            throw std::runtime_error(std::string(caller) + ": graph.emit_selector_logits=true while config.selector_enabled=false");
-        }
-    }
     if (kv_cache) {
         if (graph.connect_parameter_graph) {
             throw std::runtime_error(std::string(caller) + ": kv_cache requires connect_parameter_graph == false");
@@ -266,9 +258,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const auto* cfg = request.config;
     const auto embedding_hp = HyperParameters::embeddingLayerConstructionHP(*cfg);
     const auto encoder_hp = HyperParameters::encoderLayerConstructionHP(*cfg);
-    const auto execution_hp = HyperParameters::executionBlockConstructionHP(*cfg);
-    const auto slot_seed_encoder_hp =
-        HyperParameters::slotSeedEncoderConstructionHP(*cfg);
     const auto lm_head_hp = HyperParameters::lmHeadLayerConstructionHP(*cfg);
     const bool center_encoder_residuals = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "center_encoder_residuals");
     const bool lm_head_center_hidden_states = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "lm_head_center_hidden_states");
@@ -277,11 +266,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const float dropout_rate = HyperParameters::snapshotTrainingConfigField<float>(*cfg, "dropout_rate");
     const int num_layers = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "num_layers");
     const bool use_layer_scale = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "use_layer_scale");
-    const int execution_block_layer = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "execution_block_layer");
-    const bool arg_bootstrap_active =
-        execution_hp.enabled &&
-        request.execution_block_enabled &&
-        slot_seed_encoder_hp.enabled;
 
     const auto& payload = *request.payload;
     (void)runtime_payload;
@@ -342,71 +326,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     MFWD_INFO("Step 1: Token embedding complete, shape=[" << total_tokens << ", " << d_model
               << "] scale=" << embedding_scale);
 
-    // ─── Step 1n: NumberEncoder numeric-meaning fusion ──────────────────────
-    // x_t = token_embedding[<INT>/<FLOAT>] + number_embedding(arg_number).
-    // Selection-side input path (docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md):
-    // digit-place contribution slots are pooled per numeric atom and added at
-    // that atom's token position; all non-atom rows receive exact zero. The
-    // channels are CURRENT-token metadata only — next-token atom metadata is
-    // supervision and never enters this input boundary.
-    const auto number_encoder_hp = HyperParameters::numberEncoderConstructionHP(*cfg);
-    std::vector<Tensor> number_encoder_detached_params;  // keep-alive across the call window
-    Tensor number_encoder_out;                           // keep-alive across the call window
-    if (number_encoder_hp.enabled) {
-        if (payload.number_encoder_digit_slots != number_encoder_hp.max_digit_slots) {
-            throw std::runtime_error(
-                "ModelForward: payload.number_encoder_digit_slots=" +
-                std::to_string(payload.number_encoder_digit_slots) +
-                " != config max_digit_slots=" +
-                std::to_string(number_encoder_hp.max_digit_slots) +
-                " — payload was built against a different NumberEncoder config");
-        }
-        if (payload.authoredAtomCount() > 0) {
-            auto& number_encoder_parameters =
-                request.parameter_registry->requireNumberEncoderParameters("executeModelForward");
-            autograd::NumberEncoderForwardParams ne_params{};
-            if (connect_parameter_graph) {
-                ne_params.digit_emb = &number_encoder_parameters.digit_emb;
-                ne_params.pow10_emb = &number_encoder_parameters.pow10_emb;
-                ne_params.W_c1 = &number_encoder_parameters.W_c1;
-                ne_params.b_c1 = &number_encoder_parameters.b_c1;
-                ne_params.W_c2 = &number_encoder_parameters.W_c2;
-                ne_params.W_g1 = &number_encoder_parameters.W_g1;
-                ne_params.b_g1 = &number_encoder_parameters.b_g1;
-                ne_params.W_g2 = &number_encoder_parameters.W_g2;
-            } else {
-                number_encoder_detached_params.reserve(8);
-                number_encoder_detached_params.push_back(number_encoder_parameters.digit_emb.detach(request.stream));
-                number_encoder_detached_params.push_back(number_encoder_parameters.pow10_emb.detach(request.stream));
-                number_encoder_detached_params.push_back(number_encoder_parameters.W_c1.detach(request.stream));
-                number_encoder_detached_params.push_back(number_encoder_parameters.b_c1.detach(request.stream));
-                number_encoder_detached_params.push_back(number_encoder_parameters.W_c2.detach(request.stream));
-                number_encoder_detached_params.push_back(number_encoder_parameters.W_g1.detach(request.stream));
-                number_encoder_detached_params.push_back(number_encoder_parameters.b_g1.detach(request.stream));
-                number_encoder_detached_params.push_back(number_encoder_parameters.W_g2.detach(request.stream));
-                ne_params.digit_emb = &number_encoder_detached_params[0];
-                ne_params.pow10_emb = &number_encoder_detached_params[1];
-                ne_params.W_c1 = &number_encoder_detached_params[2];
-                ne_params.b_c1 = &number_encoder_detached_params[3];
-                ne_params.W_c2 = &number_encoder_detached_params[4];
-                ne_params.W_g1 = &number_encoder_detached_params[5];
-                ne_params.b_g1 = &number_encoder_detached_params[6];
-                ne_params.W_g2 = &number_encoder_detached_params[7];
-            }
-            number_encoder_out = autograd::number_encode(
-                ne_params, number_encoder_hp, payload, *bindings, request.stream);
-            forward_outputs.embedding_tensor = autograd::residual_add(
-                forward_outputs.embedding_tensor, number_encoder_out, request.stream);
-            MFWD_INFO("Step 1n: NumberEncoder fused into " << payload.authoredAtomCount()
-                      << " numeric atom positions (digit_slots=" << number_encoder_hp.max_digit_slots
-                      << ", d_hidden=" << number_encoder_hp.d_hidden << ")");
-        }
-    }
-
-    if (arg_bootstrap_active && !bindings->d_token_to_slot_index_map) {
-        throw std::runtime_error(
-            "ModelForward: argument-bootstrap token-to-slot bindings are missing");
-    }
     if (dropout_enabled && dropout_rate > 0.0f) {
         const uint64_t emb_dropout_seed = request.batch_idx * 2654435761ULL + 500;
         constexpr uint64_t kEmbeddingDropoutMaskStream = 0x0005000000000001ULL;
@@ -427,14 +346,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     forward_outputs.encoder_layer_outputs.clear();
     forward_outputs.clearRetainedLayerOutputs();
     forward_outputs.embedding_tensor.is_leaf = false;
-
-    int bootstrap_layer = -1;
-    if (arg_bootstrap_active) {
-        bootstrap_layer = execution_block_layer;
-        if (bootstrap_layer < 0) bootstrap_layer = num_layers - 2;
-        if (bootstrap_layer < 0) bootstrap_layer = 0;
-        if (bootstrap_layer >= num_layers) bootstrap_layer = num_layers - 1;
-    }
 
     if (!connect_parameter_graph) {
         Tensor running;
@@ -530,15 +441,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                     std::string(cudaGetErrorString(sync_err)));
             }
 
-            materializeForwardArgBootstrapSeeds(
-                request,
-                slot_seed_encoder_hp,
-                execution_hp.num_slots,
-                layer_idx,
-                bootstrap_layer,
-                arg_bootstrap_active,
-                owned,
-                forward_outputs);
             running = std::move(owned);
         }
 
@@ -609,16 +511,6 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
                 request.stream,
                 "enc_layer_output",
                 "executeModelForward(retained_graph)");
-
-            materializeForwardArgBootstrapSeeds(
-                request,
-                slot_seed_encoder_hp,
-                execution_hp.num_slots,
-                layer_idx,
-                bootstrap_layer,
-                arg_bootstrap_active,
-                layer_output,
-                forward_outputs);
 
             forward_outputs.encoder_layer_outputs.push_back(std::move(layer_output));
         }

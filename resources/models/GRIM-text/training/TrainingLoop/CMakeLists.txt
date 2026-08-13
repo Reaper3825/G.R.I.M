@@ -434,7 +434,6 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../Phases/Startup/Model/ParameterGroupRegistration.hpp
     ../../Shared/Gradients/GradStatsCollector.cu
     ../../Shared/Forward/ModelForward_GPU.cu
-    ../../Shared/Forward/ModelForwardArgBootstrap_GPU.cu
     ../../Shared/Goal/MeanPool_GPU.cu
     ../../Shared/Goal/MeanPool_GPU.hpp
     ../../Shared/InferenceState/KvCacheState_GPU.cu
@@ -444,7 +443,6 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Layers/Embedding/Embedding_GPU.cu
     ../../Layers/LMHead/lm_head_GPU.cu
     ../../Layers/ArgSelector/ArgSelector_GPU.cu
-    ../../Layers/SlotSeedEncoder/SlotSeedEncoder_GPU.cu
     ../../Layers/Quantization/Quantization_GPU.cu
     ../../Shared/Batching/Batching_GPU.cu
     ../../Shared/Batching/BatchDeviceUpload.cu

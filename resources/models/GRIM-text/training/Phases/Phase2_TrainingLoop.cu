@@ -732,8 +732,6 @@ BatchResult processBatch(
 
     GRIM::Forward::ModelForwardRuntimePayload runtime_payload =
         buildTrainingForwardRuntimePayload();
-    const bool emit_selector_logits =
-        GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "selector_enabled");
     const int optimizer_step = static_cast<int>(ctx.optimizer.optimizer_step.step);
     GRIM::Forward::ModelForwardRequest forward_request =
         buildTrainingForwardRequest(
@@ -746,7 +744,7 @@ BatchResult processBatch(
             payload,
             train_bindings,
             plan.batch_idx,
-            emit_selector_logits);
+            /*emit_selector_logits=*/false);
 
     if constexpr (GRIM::VerboseLogging::ENABLE_GPU_MEMORY_DIAGNOSTICS &&
                   GRIM::VerboseLogging::ENABLE_GPU_ALLOCATION_LEDGER) {
@@ -1097,8 +1095,6 @@ ValidationResult runValidation(TrainingContext& ctx) {
     const auto& model_config = ctx.config;
 
     // Match the training loss composition so the validation number is comparable.
-    const bool emit_selector_logits =
-        GRIM::HyperParameters::snapshotTrainingConfigField<bool>(ctx.config, "selector_enabled");
 
     // Validation must not record training-tape entries or equation-CSV rows.
     TapeSkipScope tape_skip_scope(/*skip=*/true);
@@ -1155,7 +1151,7 @@ ValidationResult runValidation(TrainingContext& ctx) {
         forward_request.graph = GRIM::Forward::ModelForwardGraphPolicy{
             /*connect_parameter_graph=*/false,
             /*enable_dropout=*/false,
-            /*emit_selector_logits=*/emit_selector_logits};
+            /*emit_selector_logits=*/false};
 
         auto forward_outputs = GRIM::Forward::executeModelForward(forward_request, runtime_payload);
         Internal::logMeanPoolHistogram(

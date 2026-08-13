@@ -61,7 +61,6 @@ struct LMHeadParameterTensors {
 };
 
 // NumberEncoder — numeric-meaning input path (digit-place contribution slots).
-// Selection-side representation per docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md.
 //   slot_i = digit_emb[digit] + pow10_emb[pow10_bucket] + W_c2 @ tanh(W_c1 @ slot_feat + b_c1)
 //   number_embedding = mean_over_real_slots(slot_i) + W_g2 @ tanh(W_g1 @ global_feat + b_g1)
 // Feature widths are the payload-owned contract
@@ -80,7 +79,6 @@ struct NumberEncoderParameterTensors {
 // Arg/option selector head parameters (execution-INDEPENDENT). A single query
 // projection W_q maps encoder hidden states into an externally owned
 // candidate-key space.
-// Registered under ParamGroupType::ARG_SELECTOR (docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md).
 struct SelectorParameterTensors {
     Tensor W_q;   // [d_model, d_model] query projection
 };

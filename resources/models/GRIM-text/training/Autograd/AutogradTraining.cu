@@ -14,7 +14,6 @@
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
-#include "../../Shared/Loss/ComputeLoss/ArgSelectorLoss.hpp"
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../../Shared/UnigramByte/Unigram.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
@@ -342,7 +341,6 @@ LossResult computeAutogradLoss(
     
     // RULE 20: Fail loud
     validateLossBoundaryInputs(ctx, payload, "computeAutogradLoss");
-    const auto* cfg = ctx.config;
     
     // RULE 20: Fail loud - validate logits tensor was populated by forward pass
     auto& forward_outputs = *ctx.forward_outputs;
@@ -391,106 +389,19 @@ LossResult computeAutogradLoss(
                                  std::to_string(text_ce_loss) + ")");
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // 3. Arg/option selector auxiliary loss: L_total += α_sel * CE(select_logits, target_entry)
-    //
-    // Trains the selector to pick the correct candidate atom-entry ("option") at
-    // each position. Execution-INDEPENDENT: targets are the next atom's entry
-    // (data-derived). No-op unless selector_enabled and the forward emitted
-    // selector_logits with a non-empty candidate pool + supervised targets.
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Scaled selector contribution actually added to loss_tensor (0 when the
-    // selector is disabled or fires no supervised candidates this step). Reported
-    // as its own channel.
-    float selector_loss_scaled = 0.0f;
-    const bool selector_enabled =
-        GRIM::HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "selector_enabled");
-    if (selector_enabled) {
-        const int sel_candidates = ctx.device_bindings->num_pool_atoms;
-        const int sel_valid = payload.arg_select_valid_count;
-        const float selector_alpha =
-            GRIM::HyperParameters::snapshotTrainingConfigField<float>(*cfg, "selector_alpha");
-        const bool sel_can_fire =
-            forward_outputs.selector_logits.data && sel_candidates > 0 &&
-            ctx.device_bindings->d_arg_select_targets && sel_valid > 0;
-
-        if (sel_can_fire && selector_alpha > 0.0f) {
-            Tensor selector_loss_tensor = autograd::argSelectorLoss(
-                forward_outputs.selector_logits,
-                ctx.device_bindings->d_arg_select_targets,
-                total_tokens,
-                sel_candidates,
-                sel_valid,
-                ctx.stream);
-
-            float selector_loss = 0.0f;
-            cudaMemcpyAsync(&selector_loss, selector_loss_tensor.data, sizeof(float),
-                            cudaMemcpyDeviceToHost, ctx.stream);
-            cudaStreamSynchronize(ctx.stream);
-            if (!std::isfinite(selector_loss)) {
-                throw std::runtime_error("computeAutogradLoss: selector loss is non-finite (" +
-                                         std::to_string(selector_loss) + ")");
-            }
-            // Always-on supervision telemetry: confirms the selector is actually
-            // trained this step (loss flows into W_q AND the NumberEncoder keys).
-            std::cerr << "[SELECTOR] CE=" << selector_loss
-                      << " valid=" << sel_valid
-                      << " candidates=" << sel_candidates
-                      << " alpha=" << selector_alpha << std::endl;
-
-            selector_loss_scaled = selector_alpha * selector_loss;
-            Tensor scaled_selector = autograd::scale_scalar(selector_loss_tensor, selector_alpha, ctx.stream);
-            loss_state.loss_tensor = autograd::add(loss_state.loss_tensor, scaled_selector, ctx.stream);
-        } else {
-            // Always-on: the selector is enabled but contributed NOTHING this
-            // step. Most commonly the batch has no supervised next-atom target
-            // (valid=0) — i.e. the curriculum lacks multi-candidate option rows.
-            std::cerr << "[SELECTOR] skipped (no supervised candidates this step):"
-                      << " logits=" << (forward_outputs.selector_logits.data ? 1 : 0)
-                      << " candidates=" << sel_candidates
-                      << " valid=" << sel_valid
-                      << " alpha=" << selector_alpha << std::endl;
-        }
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    float text_plus_aux_loss = 0.0f;
-    cudaMemcpyAsync(&text_plus_aux_loss, loss_state.loss_tensor.data, sizeof(float),
-                    cudaMemcpyDeviceToHost, ctx.stream);
-    cudaStreamSynchronize(ctx.stream);
-
-    if (!std::isfinite(text_plus_aux_loss)) {
-        throw std::runtime_error("computeAutogradLoss: text/selector loss is non-finite (" +
-                                 std::to_string(text_plus_aux_loss) + ")");
-    }
-
     result.text_loss = text_ce_loss;
     result.valid_tokens = lm_valid_tokens;
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // POST-SELECTOR OBJECTIVE BOUNDARY
-    // ═══════════════════════════════════════════════════════════════════════════
-    // ═══════════════════════════════════════════════════════════════════════════
-    // GROUND-TRUTH LOSS: Read the ACTUAL tensor that backward will differentiate.
-    // This is the single source of truth — no manual reconstruction from stale
-    // host-side scalars. text_loss was snapshot before exec additions.
-    // ═══════════════════════════════════════════════════════════════════════════
-    float actual_loss = 0.0f;
-    cudaMemcpyAsync(&actual_loss, loss_state.loss_tensor.data, sizeof(float),
-                    cudaMemcpyDeviceToHost, ctx.stream);
-    cudaStreamSynchronize(ctx.stream);
-
-    result.loss_value = actual_loss;
-    result.selector_loss = selector_loss_scaled;
+    result.loss_value = text_ce_loss;
+    result.selector_loss = 0.0f;
     result.weight_text = 1.0f;
     
     if (!std::isfinite(result.loss_value)) {
-        throw std::runtime_error("computeAutogradLoss: combined loss is non-finite (actual_tensor=" 
-            + std::to_string(actual_loss) + " text_ce=" + std::to_string(text_ce_loss)
-            + " selector=" + std::to_string(selector_loss_scaled) + ")");
+        throw std::runtime_error("computeAutogradLoss: loss is non-finite (text_ce="
+            + std::to_string(text_ce_loss)
+            + ")");
     }
     
-    AG_INFO("Loss computed: total=" << actual_loss << " text_ce=" << text_ce_loss
+    AG_INFO("Loss computed: total=" << text_ce_loss << " text_ce=" << text_ce_loss
             << " selector=" << result.selector_loss
             << " lm_valid=" << lm_valid_tokens);
     

@@ -14,7 +14,6 @@
 #include <stdexcept>
 #include <functional>
 #include <iterator>
-#include <unordered_set>
 #include <unordered_map>
 #include <cstdint>
 #include <exception>
@@ -955,149 +954,10 @@ namespace {
 using GrmtSequence = GRIM::TokenizerArtifacts::GrmtSequence;
 using ProgressCallback = std::function<void(const std::string&)>;
 
-struct NumberEncoderValidationStats {
-	size_t numeric_atom_tokens = 0;
-	size_t unique_numeric_entries = 0;
-	size_t sequences_with_numeric_atoms = 0;
-};
-
 struct LoadedTrainingCorpus {
 	std::vector<GrmtSequence> sequences;
 	std::uint32_t vocab_size = 0;
-	NumberEncoderValidationStats number_encoder_stats;
 };
-
-NumberEncoderValidationStats validateNumberEncoderSequenceCompatibilityOrThrow(
-	const GrmtSequence& seq,
-	size_t seq_idx,
-	const GRIM::HyperParameters::NumberEncoderConstructionHP& number_encoder_hp)
-{
-	NumberEncoderValidationStats stats;
-	if (!number_encoder_hp.enabled) {
-		return stats;
-	}
-	if (number_encoder_hp.max_digit_slots <= 0) {
-		throw std::runtime_error(
-			"LoadTrainingData: NumberEncoder is enabled but max_digit_slots=" +
-			std::to_string(number_encoder_hp.max_digit_slots) + " is not positive");
-	}
-	if (number_encoder_hp.max_abs_pow10 <= 0) {
-		throw std::runtime_error(
-			"LoadTrainingData: NumberEncoder is enabled but max_abs_pow10=" +
-			std::to_string(number_encoder_hp.max_abs_pow10) + " is not positive");
-	}
-	if (seq.atom_entry_ids.size() != seq.token_ids.size()) {
-		throw std::runtime_error(
-			"LoadTrainingData: atom_entry_ids length mismatch during NumberEncoder validation");
-	}
-
-	std::unordered_set<uint32_t> validated_entry_ids;
-	for (size_t token_pos = 0; token_pos < seq.token_ids.size(); ++token_pos) {
-		const int token_id = seq.token_ids[token_pos];
-		if (token_id < GRIM::Tokenizer::ATOM_TOKEN_OFFSET ||
-			token_id >= GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET) {
-			continue;
-		}
-
-		const auto atom_type = GRIM::Tokenizer::tokenIdToAtomType(token_id);
-		if (!GRIM::Tokenizer::isNumericAtom(atom_type)) {
-			continue;
-		}
-
-		if (stats.numeric_atom_tokens == 0) {
-			stats.sequences_with_numeric_atoms = 1;
-		}
-		++stats.numeric_atom_tokens;
-
-		if (!seq.atom_table) {
-			throw std::runtime_error(
-				"LoadTrainingData: sequence_index=" + std::to_string(seq_idx) +
-				" token_pos=" + std::to_string(token_pos) +
-				" has numeric atom token_id=" + std::to_string(token_id) +
-				" but no AtomTable");
-		}
-
-		const uint32_t entry_id = seq.atom_entry_ids[token_pos];
-		if (entry_id == GRIM::Tokenizer::kAtomEntryNone) {
-			throw std::runtime_error(
-				"LoadTrainingData: sequence_index=" + std::to_string(seq_idx) +
-				" token_pos=" + std::to_string(token_pos) +
-				" numeric atom token_id=" + std::to_string(token_id) +
-				" carries kAtomEntryNone");
-		}
-
-		if (!validated_entry_ids.insert(entry_id).second) {
-			continue;
-		}
-		++stats.unique_numeric_entries;
-
-		const auto entry = seq.atom_table->getAtom(entry_id);
-		if (!entry.has_value()) {
-			throw std::runtime_error(
-				"LoadTrainingData: sequence_index=" + std::to_string(seq_idx) +
-				" token_pos=" + std::to_string(token_pos) +
-				" atom_entry_id=" + std::to_string(entry_id) +
-				" is not retrievable from its AtomTable");
-		}
-
-		if (!GRIM::Tokenizer::isNumericAtom(entry->type)) {
-			throw std::runtime_error(
-				"LoadTrainingData: sequence_index=" + std::to_string(seq_idx) +
-				" token_pos=" + std::to_string(token_pos) +
-				" atom_entry_id=" + std::to_string(entry_id) +
-				" is not a numeric atom type");
-		}
-		if (!entry->arg_number.has_value()) {
-			throw std::runtime_error(
-				"LoadTrainingData: sequence_index=" + std::to_string(seq_idx) +
-				" token_pos=" + std::to_string(token_pos) +
-				" atom_entry_id=" + std::to_string(entry_id) +
-				" is missing required arg_number metadata");
-		}
-
-		const GRIM::Tokenizer::AtomNumber& number = *entry->arg_number;
-		const std::size_t digit_count = number.digits.size();
-		if (digit_count == 0) {
-			throw std::runtime_error(
-				"LoadTrainingData: sequence_index=" + std::to_string(seq_idx) +
-				" token_pos=" + std::to_string(token_pos) +
-				" atom_entry_id=" + std::to_string(entry_id) +
-				" has zero mantissa digit bindings");
-		}
-		if (digit_count > static_cast<std::size_t>(number_encoder_hp.max_digit_slots)) {
-			throw std::runtime_error(
-				"LoadTrainingData: sequence_index=" + std::to_string(seq_idx) +
-				" token_pos=" + std::to_string(token_pos) +
-				" atom_entry_id=" + std::to_string(entry_id) +
-				" has " + std::to_string(digit_count) +
-				" mantissa digits exceeding number_encoder_max_digit_slots=" +
-				std::to_string(number_encoder_hp.max_digit_slots));
-		}
-		for (std::size_t i = 0; i < digit_count; ++i) {
-			const GRIM::Tokenizer::DigitBinding& binding = number.digits[i];
-			if (binding.digit > 9) {
-				throw std::runtime_error(
-					"LoadTrainingData: sequence_index=" + std::to_string(seq_idx) +
-					" token_pos=" + std::to_string(token_pos) +
-					" atom_entry_id=" + std::to_string(entry_id) +
-					" digit[" + std::to_string(i) + "]=" + std::to_string(binding.digit) +
-					" is not a base-10 digit");
-			}
-			const int pow10 = static_cast<int>(binding.pow10);
-			if (pow10 < -number_encoder_hp.max_abs_pow10 || pow10 > number_encoder_hp.max_abs_pow10) {
-				throw std::runtime_error(
-					"LoadTrainingData: sequence_index=" + std::to_string(seq_idx) +
-					" token_pos=" + std::to_string(token_pos) +
-					" atom_entry_id=" + std::to_string(entry_id) +
-					" digit[" + std::to_string(i) + "] pow10=" + std::to_string(pow10) +
-					" outside configured number_encoder_max_abs_pow10=±" +
-					std::to_string(number_encoder_hp.max_abs_pow10));
-			}
-		}
-	}
-
-	return stats;
-}
 
 void emitProgress(const ProgressCallback& progress, const std::string& message)
 {
@@ -1108,7 +968,6 @@ void emitProgress(const ProgressCallback& progress, const std::string& message)
 
 LoadedTrainingCorpus readGrmtCorpusWithProgressOrThrow(
 	const std::string& path,
-	const GRIM::HyperParameters::NumberEncoderConstructionHP& number_encoder_hp,
 	const ProgressCallback& progress)
 {
 	GRIM::TokenizerArtifacts::GrmtCorpusReader reader(path);
@@ -1132,19 +991,6 @@ LoadedTrainingCorpus readGrmtCorpusWithProgressOrThrow(
 
 	GrmtSequence sequence;
 	while (reader.readNext(sequence)) {
-		const auto sequence_number_encoder_stats = validateNumberEncoderSequenceCompatibilityOrThrow(
-			sequence,
-			corpus.sequences.size(),
-			number_encoder_hp);
-		if (sequence_number_encoder_stats.numeric_atom_tokens > 0) {
-			if (corpus.number_encoder_stats.numeric_atom_tokens == 0) {
-				emitProgress(progress,
-					"[Data] NumberEncoder validation active during AtomTable reconstruction...");
-			}
-			corpus.number_encoder_stats.numeric_atom_tokens += sequence_number_encoder_stats.numeric_atom_tokens;
-			corpus.number_encoder_stats.unique_numeric_entries += sequence_number_encoder_stats.unique_numeric_entries;
-			corpus.number_encoder_stats.sequences_with_numeric_atoms += sequence_number_encoder_stats.sequences_with_numeric_atoms;
-		}
 		corpus.sequences.push_back(std::move(sequence));
 		sequence = GrmtSequence{};
 
@@ -1270,7 +1116,6 @@ void logAtomSideChannelDiagnostics(const std::vector<GrmtSequence>& sequences)
 
 SequenceData buildPhase1SequenceData(
 	const GRIM::HyperParameters::TokenizerHP& tokenizer_hp,
-	const GRIM::HyperParameters::NumberEncoderConstructionHP& number_encoder_hp,
 	const GRIM::HyperParameters::DataLoadingHP& data_hp,
 	::TrainingLogger& logger)
 {
@@ -1289,24 +1134,10 @@ SequenceData buildPhase1SequenceData(
 	};
 	auto corpus = readGrmtCorpusWithProgressOrThrow(
 		tokenizer_hp.data_path,
-		number_encoder_hp,
 		progress_logger);
 	emitProgress(progress_logger, "[Data] GRMT deserialization complete; validating side channels...");
 	sanitizeNumericSideChannels(corpus.sequences);
 	logAtomSideChannelDiagnostics(corpus.sequences);
-	if (number_encoder_hp.enabled) {
-		std::ostringstream number_encoder_msg;
-		number_encoder_msg << "[Data] NumberEncoder validation complete: validated "
-		                  << corpus.number_encoder_stats.numeric_atom_tokens
-		                  << " numeric atom tokens across "
-		                  << corpus.number_encoder_stats.sequences_with_numeric_atoms
-		                  << " sequences (unique atom entries="
-		                  << corpus.number_encoder_stats.unique_numeric_entries
-		                  << ", digit_slots=" << number_encoder_hp.max_digit_slots
-		                  << ", max_abs_pow10=" << number_encoder_hp.max_abs_pow10
-		                  << ")";
-		emitProgress(progress_logger, number_encoder_msg.str());
-	}
 	{
 		std::ostringstream done_msg;
 		done_msg << "[Data] GRMT validation complete: loaded_sequences=" << corpus.sequences.size()
@@ -1517,7 +1348,6 @@ void LoadTrainingData(TrainingContext& ctx) {
 	using GRIM::Logging::ModuleId;
 
 	const auto tokenizer_hp = GRIM::HyperParameters::tokenizerHP(ctx.config);
-	const auto number_encoder_hp = GRIM::HyperParameters::numberEncoderConstructionHP(ctx.config);
 	const auto paths_hp = GRIM::HyperParameters::pathsHP(ctx.config);
 	const auto data_hp = GRIM::HyperParameters::dataLoadingHP(ctx.config);
 	if (tokenizer_hp.training_curriculum.empty()) {
@@ -1549,7 +1379,6 @@ void LoadTrainingData(TrainingContext& ctx) {
 
 	ctx.data = Internal::buildPhase1SequenceData(
 		tokenizer_hp,
-		number_encoder_hp,
 		data_hp,
 		*ctx.logging.logger);
 

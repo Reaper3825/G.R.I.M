@@ -1614,32 +1614,6 @@ Tensor mul_scalar(const Tensor& x, float scalar, cudaStream_t stream = nullptr);
 Tensor broadcast_row_mul(const Tensor& scale, const Tensor& x, cudaStream_t stream = nullptr);
 
 /**
- * Route contextual token rows into dense execution-slot rows using the
- * payload-uploaded token_to_slot_index_map and compact authored atom bindings.
- * Optional type embeddings are fused during routing. Backward scatters slot
- * gradients into the source token rows and the two-row type table.
- */
-Tensor gather_slot_seed_inputs(
-    const Tensor& token_states,
-    const Tensor& type_embeddings,
-    bool type_embedding_enabled,
-    const Batching::BatchPayload& payload,
-    const Batching::BatchDeviceBindings& bindings,
-    int num_slots,
-    cudaStream_t stream = nullptr);
-
-/**
- * Zero dense execution-slot rows that have no authored token binding, using
- * the existing token_to_slot_index_map rather than a materialized mask tensor.
- */
-Tensor mask_unauthored_slot_rows(
-    const Tensor& input,
-    const Batching::BatchPayload& payload,
-    const Batching::BatchDeviceBindings& bindings,
-    int num_slots,
-    cudaStream_t stream = nullptr);
-
-/**
  * Place a [rows, cols] tensor at row_offset inside a zero-padded [total_rows, cols] output.
  * Creates ZeroPadGradFn if input.requires_grad.
  */

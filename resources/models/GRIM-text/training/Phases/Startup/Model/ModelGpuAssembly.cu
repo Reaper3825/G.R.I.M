@@ -333,11 +333,6 @@ void initializeInferenceRuntime(const ::GRIM::Config::AiConfigSnapshot& model_cf
         throw std::runtime_error(std::string("[") + caller + "] ExecutionBlock parameters not assembled by Startup::assembleGpuModel() while execution_block is enabled.");
     }
 
-    const auto number_encoder_hp = GRIM::HyperParameters::numberEncoderConstructionHP(model_cfg);
-    if (number_encoder_hp.enabled && !parameter_registry.getNumberEncoderParameters()) {
-        throw std::runtime_error(std::string("[") + caller + "] NumberEncoder parameters not assembled by Startup::assembleGpuModel() while number_encoder is enabled.");
-    }
-
     cublasSetStream(training_state.cublas_handle.get(), primary_stream);
     std::cout << "  ✓ Using pre-initialized StreamController and cuBLAS handle" << std::endl;
 
@@ -499,47 +494,6 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
                 output_unigram_prior);
             (void)requireLmHeadParametersReady(parameter_registry, "Startup::assembleGpuModel");
             std::cout << "✓ LM head parameters created\n";
-        }
-
-        //======================================================//
-        //  5) Build optional model heads/subsystems
-        //======================================================//
-        {
-            const auto number_encoder_hp = GRIM::HyperParameters::numberEncoderConstructionHP(model_cfg);
-            if (number_encoder_hp.enabled) {
-                GRIMText::Training::Startup::ModelRegistration::initializeNumberEncoderParameterTensors(
-                    parameter_registry,
-                    number_encoder_hp,
-                    weight_init_seed + 40,
-                    init_stream);
-                std::cout << "✓ NumberEncoder parameters created\n";
-            }
-
-            const auto slot_seed_encoder_hp =
-                GRIM::HyperParameters::slotSeedEncoderConstructionHP(model_cfg);
-            if (slot_seed_encoder_hp.enabled) {
-                GRIMText::Training::Startup::ModelRegistration::
-                    initializeSlotSeedEncoderParameterTensors(
-                        parameter_registry,
-                        slot_seed_encoder_hp,
-                        weight_init_seed + 45,
-                        init_stream);
-                std::cout << "SlotSeedEncoder parameters created\n";
-            }
-
-            const bool selector_enabled =
-                GRIM::HyperParameters::snapshotTrainingConfigField<bool>(model_cfg, "selector_enabled");
-            if (selector_enabled) {
-                const int selector_d_model =
-                    GRIM::HyperParameters::snapshotTrainingConfigField<int>(model_cfg, "d_model");
-                GRIMText::Training::Startup::ModelRegistration::initializeSelectorParameterTensors(
-                    parameter_registry,
-                    selector_enabled,
-                    selector_d_model,
-                    weight_init_seed + 50,
-                    init_stream);
-                std::cout << "✓ Arg/option selector parameters created\n";
-            }
         }
 
         initializeExecutionSubsystems(

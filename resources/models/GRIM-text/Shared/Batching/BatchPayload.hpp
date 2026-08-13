@@ -131,7 +131,7 @@ struct BatchPayload {
     // NUMBER ENCODER DIGIT-PLACE CHANNELS (compact, aligned with atom_positions)
     //
     // Materialized ONCE during payload build from each atom's CURRENT-token
-    // arg_number metadata (docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md). These are
+    // arg_number metadata. These are
     // input-side features for token t only — target-side (t+1) metadata is
     // supervision and is NEVER materialized into this input channel (hard
     // anti-leakage rule). Padding digit slots have atom_digit_mask == 0 and
@@ -155,7 +155,7 @@ struct BatchPayload {
     std::vector<float> atom_global_features;
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // CANDIDATE ATOM-ENTRY POOL (arg/option selector — docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md)
+    // CANDIDATE ATOM-ENTRY POOL
     //
     // The "menu" of options the selector chooses among: every row's AtomTable
     // entries, merged into ONE batch-global pool so the device selector can score
@@ -428,35 +428,6 @@ struct BatchPayload {
                 std::to_string(atom_positions.size()) + " != atom_types.size()=" +
                 std::to_string(atom_types.size()));
         }
-        if (ownsHostInputData()) {
-            int atom_mask_count = 0;
-            for (int idx = 0; idx < total_tokens; ++idx) {
-                if (atom_mask[static_cast<std::size_t>(idx)] != 0) {
-                    ++atom_mask_count;
-                }
-            }
-            if (atom_mask_count != static_cast<int>(atom_positions.size())) {
-                throw std::runtime_error(
-                    std::string(caller) + ": BatchPayload.atom_positions.size()=" +
-                    std::to_string(atom_positions.size()) +
-                    " != atom_mask population=" + std::to_string(atom_mask_count));
-            }
-            for (std::size_t atom_idx = 0; atom_idx < atom_positions.size(); ++atom_idx) {
-                const int token_pos = atom_positions[atom_idx];
-                if (token_pos < 0 || token_pos >= total_tokens) {
-                    throw std::runtime_error(
-                        std::string(caller) + ": BatchPayload.atom_positions[" +
-                        std::to_string(atom_idx) + "]=" + std::to_string(token_pos) +
-                        " out of range [0, " + std::to_string(total_tokens) + ")");
-                }
-                if (atom_mask[static_cast<std::size_t>(token_pos)] == 0) {
-                    throw std::runtime_error(
-                        std::string(caller) + ": BatchPayload.atom_positions[" +
-                        std::to_string(atom_idx) + "] points at non-atom token position " +
-                        std::to_string(token_pos));
-                }
-            }
-        }
         // NumberEncoder digit-place channel geometry (compact, atom-aligned)
         if (number_encoder_digit_slots < 0) {
             throw std::runtime_error(
@@ -608,19 +579,6 @@ BatchPayload buildBatchPayload(
     bool selector_enabled,
     int number_encoder_digit_slots,
     int number_encoder_max_abs_pow10);
-
-/**
- * Compile tokenizer-authored numeric atom positions into deterministic
- * ARG bootstrap value-slot bindings for inference prefill.
- *
- * Numeric atoms are assigned left-to-right into [num_scratch_slots, num_slots).
- * Any metadata mismatch or capacity overflow fails before device upload.
- */
-std::vector<int32_t> buildInferenceExecutionSlotIndexMap(
-    const std::vector<int>& token_ids,
-    const std::vector<uint8_t>& atom_mask,
-    int num_slots,
-    int num_scratch_slots);
 
 /**
  * Build a validated single-row inference prefill payload from tokenizer-authored

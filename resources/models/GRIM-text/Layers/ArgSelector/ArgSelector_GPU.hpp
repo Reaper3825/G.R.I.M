@@ -9,7 +9,6 @@
 //      score(t, e) = <W_q · h_t, key_e> * softmax_scale
 //  with candidates OUTSIDE token t's row window masked to -inf so each token only
 //  selects among its own row's entries (prompt + already-generated). This is the
-//  "selector owns selection" head from docs/ATOM_SELECTOR_IMPLEMENTATION_PLAN.md.
 //  Candidate-key ownership is outside this scoring helper.
 //
 //  Autograd: encoder_output and W_q carry gradient (the trunk + the selector

@@ -193,9 +193,6 @@ GRIM::GeneratedSequence generateOneSequence(
     if (vocab_size <= 0) {
         throw std::runtime_error("Phase2 payload inference: invalid vocab_size");
     }
-    const auto token_layout = GRIM::Tokenizer::tokenLayoutFromActualVocabOrThrow(
-        static_cast<std::uint32_t>(vocab_size),
-        "generateOneSequence");
     if (cfg.strategy == SamplingStrategy::BEAM_SEARCH) {
         throw std::runtime_error("Phase2 payload inference: BEAM_SEARCH is not supported");
     }
@@ -235,8 +232,6 @@ GRIM::GeneratedSequence generateOneSequence(
 
     generation_state.resetSession();
 
-    const auto number_encoder_hp = GRIM::HyperParameters::numberEncoderConstructionHP(config);
-
     GRIM::Sampling::SamplingPipeline pipeline(sampling_cfg);
     // ── KV-cache session setup ───────────────────────────────────────────────
     // Decode runs incrementally: prefill the prompt once (q_len=prompt_len), then
@@ -266,11 +261,6 @@ GRIM::GeneratedSequence generateOneSequence(
                              max_cached_seq_len, pbm.rope_inv_freq, stream);
     kv_cache.beginSession(stream);
 
-    // Arg/option selector decode bridge: when enabled, a generated numeric-atom
-    // placeholder (<INT>/<FLOAT>) is bound to the candidate atom-entry the trained
-    // selector picks from this row's pool (prompt atoms).
-    const bool use_selector =
-        GRIM::HyperParameters::snapshotTrainingConfigField<bool>(config, "selector_enabled");
     std::shared_ptr<GRIM::Batching::BatchDeviceStorage> inference_device_storage;
 
     // Host copy of the last n_tail logit rows. Rows are ordered oldest..newest.
@@ -278,13 +268,8 @@ GRIM::GeneratedSequence generateOneSequence(
         int n_rows = 0;
         int vocab = 0;
         std::vector<float> primary;            // [n_rows * vocab]
-        int num_pool_atoms = 0;                // candidate count for the selector rows
-        std::vector<float> selector;           // [n_rows * num_pool_atoms] (empty if no selector)
         const float* primaryRow(int i) const {
             return primary.data() + static_cast<size_t>(i) * static_cast<size_t>(vocab);
-        }
-        const float* selectorRow(int i) const {
-            return selector.data() + static_cast<size_t>(i) * static_cast<size_t>(num_pool_atoms);
         }
     };
 
@@ -292,7 +277,7 @@ GRIM::GeneratedSequence generateOneSequence(
     // appends this window's K/V to every layer's cache and advances cache_seqlens
     // by q_len. Returns the last n_tail rows of the primary logits.
     auto runCachedForward = [&](GRIM::Batching::BatchPayload& active_payload,
-                                int n_tail, bool want_selector) -> TailLogits {
+                                int n_tail) -> TailLogits {
         validateInferenceForwardPayload(config, active_payload, "generateOneSequence");
         const int q_len = active_payload.total_tokens;
         if (n_tail <= 0 || n_tail > q_len) {
@@ -317,11 +302,10 @@ GRIM::GeneratedSequence generateOneSequence(
         request.bindings = &bindings;
         request.batch_idx = 0;
         request.kv_cache = &kv_cache;
-        const bool emit_selector_logits = want_selector && use_selector;
         request.graph = GRIM::Forward::ModelForwardGraphPolicy{
             /*connect_parameter_graph=*/false,
             /*enable_dropout=*/false,
-            /*emit_selector_logits=*/emit_selector_logits};
+            /*emit_selector_logits=*/false};
 
         auto forward_outputs = GRIM::Forward::executeModelForward(request, runtime_payload);
         InferenceForwardScope inference_forward_scope{forward_outputs};
@@ -349,19 +333,6 @@ GRIM::GeneratedSequence generateOneSequence(
             throw std::runtime_error("generateOneSequence: cudaMemcpyAsync primary logits failed: " +
                                      std::string(cudaGetErrorString(copy_err)));
         }
-        if (emit_selector_logits && forward_outputs.selector_logits.data && bindings.num_pool_atoms > 0) {
-            tail.num_pool_atoms = bindings.num_pool_atoms;
-            const size_t sel_w = static_cast<size_t>(bindings.num_pool_atoms);
-            const size_t sel_tail_off = static_cast<size_t>(q_len - n_tail) * sel_w;
-            tail.selector.resize(static_cast<size_t>(n_tail) * sel_w);
-            cudaError_t scopy = cudaMemcpyAsync(
-                tail.selector.data(), forward_outputs.selector_logits.data + sel_tail_off,
-                static_cast<size_t>(n_tail) * sel_w * sizeof(float), cudaMemcpyDeviceToHost, stream);
-            if (scopy != cudaSuccess) {
-                throw std::runtime_error("generateOneSequence: cudaMemcpyAsync selector logits failed: " +
-                                         std::string(cudaGetErrorString(scopy)));
-            }
-        }
         cudaError_t sync_err = cudaStreamSynchronize(stream);
         if (sync_err != cudaSuccess) {
             throw std::runtime_error("generateOneSequence: cudaStreamSynchronize failed: " +
@@ -370,33 +341,25 @@ GRIM::GeneratedSequence generateOneSequence(
         return tail;
     };
 
-    // Build the one-token decode payload from the pending token's committed
-    // metadata. Generated numeric atoms retain their session AtomTable binding,
-    // so NumberEncoder sees their actual meaning on the following decode step.
     auto buildDecodePayload = [&]() -> GRIM::Batching::BatchPayload {
-        if (sequence.token_ids.empty() ||
-            sequence.token_numeric_values.size() != sequence.token_ids.size() ||
-            sequence.token_atom_mask.size() != sequence.token_ids.size() ||
-            sequence.atom_entry_ids.size() != sequence.token_ids.size() ||
-            sequence_atom_flags.size() != sequence.token_ids.size()) {
-            throw std::runtime_error(
-                "generateOneSequence: pending-token metadata is incomplete");
+        if (sequence.token_ids.empty()) {
+            throw std::runtime_error("generateOneSequence: no pending token for decode");
         }
         const size_t pending_index = sequence.token_ids.size() - 1;
         std::vector<int> feed_tokens{sequence.token_ids[pending_index]};
-        std::vector<float> numeric{sequence.token_numeric_values[pending_index]};
-        std::vector<uint8_t> amask{sequence.token_atom_mask[pending_index]};
-        std::vector<uint32_t> aflags{sequence_atom_flags[pending_index]};
-        std::vector<uint32_t> aentry{sequence.atom_entry_ids[pending_index]};
+        std::vector<float> numeric{0.0f};
+        std::vector<uint8_t> amask{0};
+        std::vector<uint32_t> aflags{0};
+        std::vector<uint32_t> aentry{GRIM::Tokenizer::kAtomEntryNone};
         const std::vector<int32_t> slotmap;  // empty -> no execution-active row
         auto decode_payload = GRIM::Batching::buildInferenceBatchPayload(
             feed_tokens, numeric, amask, aflags, prompt_atom_table, aentry, slotmap,
             vocab_size, /*batch_capacity=*/1, /*max_cached_seq_len=*/1,
             execution_hp.num_slots,
             execution_hp.num_scratch_slots,
-            use_selector,
-            number_encoder_hp.enabled ? number_encoder_hp.max_digit_slots : 0,
-            number_encoder_hp.max_abs_pow10);
+            /*selector_enabled=*/false,
+            /*number_encoder_digit_slots=*/0,
+            /*number_encoder_max_abs_pow10=*/0);
         decode_payload.mode = GRIM::Batching::BatchPayloadMode::InferenceDecode;
         return decode_payload;
     };
@@ -406,65 +369,18 @@ GRIM::GeneratedSequence generateOneSequence(
         return static_cast<int>(sequence.token_ids.size()) - prompt_len;
     };
 
-    // Commit one generated token and its optional atom binding metadata.
-    auto commitToken = [&](const GRIM::Sampling::SampleResult& s,
-                           float numeric_value, uint8_t atom_mask,
-                           uint32_t atom_flags, uint32_t atom_entry_id) {
+    auto commitToken = [&](const GRIM::Sampling::SampleResult& s) {
         sequence.token_ids.push_back(s.token_id);
         sequence.token_scores.push_back(s.log_probability);
-        sequence.token_numeric_values.push_back(numeric_value);
-        sequence.token_atom_mask.push_back(atom_mask);
+        sequence.token_numeric_values.push_back(0.0f);
+        sequence.token_atom_mask.push_back(0);
         sequence.token_to_slot_index_map.push_back(-1);
-        sequence.atom_entry_ids.push_back(atom_entry_id);
-        sequence_atom_flags.push_back(atom_flags);
+        sequence.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
+        sequence_atom_flags.push_back(0);
         sequence.score += s.log_probability;
         if (stream_callback) {
             (*stream_callback)(s.token_id, s.probability);
         }
-    };
-
-    // Numeric placeholders may use the selector over session AtomTable entries
-    // when a matching binding is available. Placeholder generation itself is
-    // owned by the LM and remains valid without selector candidates.
-    auto commitSampled = [&](const GRIM::Sampling::SampleResult& s, const TailLogits& tail, int row) {
-        const bool is_numeric_atom = token_layout.isAtom(s.token_id) &&
-            GRIM::Tokenizer::isNumericAtom(GRIM::Tokenizer::tokenIdToAtomType(s.token_id));
-        if (!is_numeric_atom) {
-            commitToken(s, 0.0f, /*atom_mask=*/0, /*atom_flags=*/0,
-                        GRIM::Tokenizer::kAtomEntryNone);
-            return;
-        }
-
-        const auto sampled_type = GRIM::Tokenizer::tokenIdToAtomType(s.token_id);
-        if (use_selector && tail.num_pool_atoms > 0 && !tail.selector.empty()) {
-            const float* sel_row = tail.selectorRow(row);
-            int best = -1;
-            float best_score = 0.0f;
-            for (int e = 0; e < tail.num_pool_atoms; ++e) {
-                const auto candidate = prompt_atom_table->getAtom(static_cast<uint32_t>(e));
-                if (!candidate.has_value()) {
-                    throw std::runtime_error(
-                        "generateOneSequence: selector candidate has no AtomTable entry");
-                }
-                if (candidate->type != sampled_type) {
-                    continue;
-                }
-                if (best < 0 || sel_row[e] > best_score) {
-                    best_score = sel_row[e];
-                    best = e;
-                }
-            }
-            if (best >= 0) {
-                // batch_size == 1: pool index equals the session table entry id.
-                const uint32_t entry_id = static_cast<uint32_t>(best);
-                const auto entry = prompt_atom_table->getAtom(entry_id);
-                commitToken(s, entry->numeric_value, /*atom_mask=*/1,
-                            entry->flags, entry_id);
-                return;
-            }
-        }
-        commitToken(s, 0.0f, /*atom_mask=*/0, /*atom_flags=*/0,
-                    GRIM::Tokenizer::kAtomEntryNone);
     };
 
     // Select the next token from a primary-logit row using the SAME pipeline +
@@ -488,8 +404,7 @@ GRIM::GeneratedSequence generateOneSequence(
     };
 
     // ── Prefill: populate the cache from the prompt; read the last position. ──
-    TailLogits prefill = runCachedForward(
-        prompt_payload, /*n_tail=*/1, /*want_selector=*/use_selector);
+    TailLogits prefill = runCachedForward(prompt_payload, /*n_tail=*/1);
 
     bool finished = false;
 
@@ -497,7 +412,7 @@ GRIM::GeneratedSequence generateOneSequence(
     // Its K/V is appended by the next cached forward as window position 0.
     {
         GRIM::Sampling::SampleResult first = selectFrom(prefill, 0, committedNewTokens());
-        commitSampled(first, prefill, 0);
+        commitToken(first);
         if (first.token_id == cfg.eos_token_id && committedNewTokens() >= cfg.min_new_tokens) {
             finished = true;
         }
@@ -514,11 +429,10 @@ GRIM::GeneratedSequence generateOneSequence(
         const int cache_base = kv_cache.currentSeqlen();
 
         GRIM::Batching::BatchPayload decode_payload = buildDecodePayload();
-        TailLogits tail = runCachedForward(
-            decode_payload, /*n_tail=*/1, /*want_selector=*/use_selector);
+        TailLogits tail = runCachedForward(decode_payload, /*n_tail=*/1);
         GRIM::Sampling::SampleResult chosen =
             selectFrom(tail, 0, committedNewTokens());
-        commitSampled(chosen, tail, 0);
+        commitToken(chosen);
 
         // The token just fed is now cached; the newly sampled token remains
         // pending for the next iteration.
@@ -583,7 +497,6 @@ Phase2TextInferenceResult executePhase2TextInference(
     const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(model_config, "vocab_size");
     const int batch_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(model_config, "batch_size");
     const int max_cached_seq_len = GRIM::HyperParameters::snapshotTrainingConfigField<int>(model_config, "max_cached_seq_len");
-    const auto execution_hp = GRIM::HyperParameters::executionBlockConstructionHP(model_config);
 
     if (tokenizer.vocabSize() != vocab_size) {
         throw std::runtime_error(
@@ -630,17 +543,6 @@ Phase2TextInferenceResult executePhase2TextInference(
     result.prompt_token_count = tokens.size();
 
     std::vector<int32_t> prompt_token_to_slot_index_map(tokens.size(), -1);
-    if (execution_hp.enabled) {
-        prompt_token_to_slot_index_map = GRIM::Batching::buildInferenceExecutionSlotIndexMap(
-            tokens,
-            atom_mask,
-            execution_hp.num_slots,
-            execution_hp.num_scratch_slots);
-    }
-    const auto number_encoder_hp = GRIM::HyperParameters::numberEncoderConstructionHP(model_config);
-    const bool selector_enabled =
-        GRIM::HyperParameters::snapshotTrainingConfigField<bool>(
-            model_config, "selector_enabled");
     auto prompt_payload = GRIM::Batching::buildInferenceBatchPayload(
         tokens,
         numeric_values,
@@ -652,11 +554,11 @@ Phase2TextInferenceResult executePhase2TextInference(
         vocab_size,
         static_cast<size_t>(batch_size),
         static_cast<size_t>(max_cached_seq_len),
-        execution_hp.num_slots,
-        execution_hp.num_scratch_slots,
-        selector_enabled,
-        number_encoder_hp.enabled ? number_encoder_hp.max_digit_slots : 0,
-        number_encoder_hp.max_abs_pow10);
+        /*num_execution_slots=*/0,
+        /*num_scratch_slots=*/0,
+        /*selector_enabled=*/false,
+        /*number_encoder_digit_slots=*/0,
+        /*number_encoder_max_abs_pow10=*/0);
 
     const auto start_generation = std::chrono::high_resolution_clock::now();
     auto generated = generatePayloadSequences(ctx, prompt_payload, generation_hp, nullptr);

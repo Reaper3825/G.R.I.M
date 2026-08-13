@@ -1588,10 +1588,7 @@ void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,
     registerTopLevelParameters(gpu_model_state, parameter_registry, registrar, config);
     registerEncoderParameters(gpu_model_state, parameter_registry, registrar, config);
 
-    registerNumberEncoderParameters(parameter_registry, registrar, config);
-    registerSlotSeedEncoderParameters(parameter_registry, registrar, config);
     registerExecutionBlockParameters(gpu_model_state, parameter_registry, registrar, config);
-    registerSelectorParameters(parameter_registry, registrar, config);
 
     validateRegisteredTensorPrecisionMetadata(rebuilt_groups);
     clearOptimizerBindings(rebuilt_groups);
