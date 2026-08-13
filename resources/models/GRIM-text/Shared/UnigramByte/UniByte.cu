@@ -230,7 +230,7 @@ UniByteResult UniByte::tokenizeWithMetadata(
 
     // Initialize and finalize atom registry before any unigram segmentation.
     // Detector-emitted atom spans are registered in the per-sequence AtomTable;
-    // the later merge loop only emits placeholders for these finalized spans.
+    // the later merge loop consumes the finalized typed-boundary payloads.
     AtomTableFromDetectionsResult atom_table_build = createAtomTableFromRawTextDetections(
         std::string_view(text.data(), text.size()),
         detections,
@@ -240,8 +240,9 @@ UniByteResult UniByte::tokenizeWithMetadata(
     result.atom_table = std::move(atom_table_build.atom_table);
     std::vector<AtomTokenizationPayload> atom_tokens = std::move(atom_table_build.atom_tokens);
 
-    // Pre-allocate based on heuristic: ~1 token per 3-4 bytes + atoms.
-    const size_t estimated_tokens = (text.size() / 3) + atom_tokens.size() + 8;
+    // Pre-allocate based on heuristic: ~1 token per 3-4 bytes plus two typed
+    // boundary tokens per detected atom occurrence.
+    const size_t estimated_tokens = (text.size() / 3) + (atom_tokens.size() * 2) + 8;
     result.token_ids.reserve(estimated_tokens);
     result.is_byte_fallback.reserve(estimated_tokens);
     result.token_numeric_values.reserve(estimated_tokens);
@@ -308,6 +309,14 @@ UniByteResult UniByte::tokenizeWithMetadata(
             const AtomTokenizationPayload& atom_payload = atom_tokens[struct_idx];
             const StructuralSpan& span = atom_payload.span;
 
+            if (!isAtomOpenTokenId(atom_payload.open_token_id) ||
+                !isAtomCloseTokenId(atom_payload.close_token_id) ||
+                tokenIdToAtomType(atom_payload.open_token_id) != span.atom_type ||
+                tokenIdToAtomType(atom_payload.close_token_id) != span.atom_type) {
+                throw std::runtime_error(
+                    "UniByte::tokenizeWithMetadata: atom payload has invalid or mismatched typed boundaries");
+            }
+
             if (boundary_index < forced_segment_boundaries.size() &&
                 forced_segment_boundaries[boundary_index] > span.start &&
                 forced_segment_boundaries[boundary_index] < span.end) {
@@ -315,15 +324,33 @@ UniByteResult UniByte::tokenizeWithMetadata(
                     "UniByte::tokenizeWithMetadata: forced segment boundary falls inside an atom span");
             }
 
-            result.token_ids.push_back(atom_payload.token_id);
+            // The opening boundary is the metadata anchor for the complete
+            // typed span. Its numeric target remains out-of-band in the
+            // per-token side channels and per-sequence AtomTable.
+            result.token_ids.push_back(atom_payload.open_token_id);
             result.is_byte_fallback.push_back(atom_payload.is_byte_fallback);
             result.token_numeric_values.push_back(atom_payload.token_numeric_value);
             result.token_atom_flags.push_back(atom_payload.token_atom_flags);
             result.atom_entry_ids.push_back(atom_payload.atom_entry_id);
             result.token_atom_mask.push_back(atom_payload.token_atom_mask);
+            result.atom_tokens++;
+
+            // Keep the detected value model-visible. It follows the ordinary
+            // unigram/byte fallback path, but detection is not re-entered, so
+            // the content cannot recursively create another atom span.
+            appendSegmentTokens(span.start, span.end);
+
+            // Closing boundaries are structural model tokens. The auxiliary
+            // atom target is anchored only at the opening boundary.
+            result.token_ids.push_back(atom_payload.close_token_id);
+            result.is_byte_fallback.push_back(false);
+            result.token_numeric_values.push_back(0.0f);
+            result.token_atom_flags.push_back(0);
+            result.atom_entry_ids.push_back(kAtomEntryNone);
+            result.token_atom_mask.push_back(0);
+            result.atom_tokens++;
 
             result.atoms.push_back(span);
-            result.atom_tokens++;
 
             pos = span.end;
             struct_idx++;
@@ -413,29 +440,10 @@ std::string UniByte::decode(const DecodeRequest& request) const {
                 result += specialTokenText(tid);
             }
         } else if (layout.isAtom(tid)) {
-            bool decoded_atom = false;
-            if (request.atom_entry_ids && request.atom_table) {
-                const uint32_t entry_id = request.atom_entry_ids[i];
-                if (entry_id != kAtomEntryNone) {
-                    const auto entry = request.atom_table->getAtom(entry_id);
-                    if (!entry) {
-                        throw std::runtime_error("UniByte::decode: atom_entry_id=" + std::to_string(entry_id) +
-                                                 " has no backing AtomEntry");
-                    }
-                    result += request.atom_table->atomToString(*entry);
-                    decoded_atom = true;
-                }
-            }
-            if (!decoded_atom && request.token_atom_mask && request.token_numeric_values &&
-                request.token_atom_mask[i] != 0) {
-                result += formatNumericValue(request.token_numeric_values[i]);
-                decoded_atom = true;
-            }
-            if (!decoded_atom) {
-                result += "<";
-                result += atomTypeName(tokenIdToAtomType(tid));
-                result += ">";
-            }
+            // Atom values are model-visible tokens between typed boundaries.
+            // Metadata remains available to downstream auxiliary objectives,
+            // but decode never substitutes it for in-band span content.
+            result += atomTokenText(tid);
         } else if (layout.isUnigram(tid)) {
             const UnigramPiece* piece = unigram_.getPiece(tid);
             if (!piece) {

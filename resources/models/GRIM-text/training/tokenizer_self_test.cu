@@ -124,10 +124,7 @@ std::string tokenTextForDisplay(const GrimTokenizer& tokenizer, int token_id) {
         return std::string(1, static_cast<char>(byte_value));
     }
     if (layout.isAtom(token_id)) {
-        std::string label = "<";
-        label += GRIM::Tokenizer::atomTypeName(GRIM::Tokenizer::tokenIdToAtomType(token_id));
-        label += ">";
-        return label;
+        return GRIM::Tokenizer::atomTokenText(token_id);
     }
     if (layout.isUnigram(token_id)) {
         const auto* piece = tokenizer.unigramLM().getPiece(token_id);
@@ -139,6 +136,17 @@ std::string tokenTextForDisplay(const GrimTokenizer& tokenizer, int token_id) {
     }
     throw std::runtime_error("tokenizer_self_test: token_id=" + std::to_string(token_id) +
                              " is outside the GRMT/tokenizer vocab layout");
+}
+
+std::string stripTypedAtomBoundaries(std::string text) {
+    for (const std::string tag : {"<INT>", "</INT>", "<FLOAT>", "</FLOAT>"}) {
+        for (std::size_t pos = text.find(tag);
+             pos != std::string::npos;
+             pos = text.find(tag, pos)) {
+            text.erase(pos, tag.size());
+        }
+    }
+    return text;
 }
 
 void printHeader(const std::string& title) {
@@ -226,9 +234,16 @@ SectionResults runSection1_EncodingDecoding(GrimTokenizer& tokenizer, bool verbo
                       << "\"" << escapeString(decoded) << "\"\n";
         }
         
-        // Check: does decoded contain all non-space chars from input?
+        std::string expected = input;
+        if (input == "123 + 456 = 579") {
+            expected = "<INT>123</INT> + <INT>456</INT> = <INT>579</INT>";
+        } else if (input == "What is 2+2?") {
+            expected = "What is <INT>2</INT>+<INT>2</INT>?";
+        }
+
+        // Check the complete decoded representation, including typed atom tags.
         std::string input_no_space, decoded_no_space;
-        for (char c : input) if (!std::isspace(c)) input_no_space += std::tolower(c);
+        for (char c : expected) if (!std::isspace(c)) input_no_space += std::tolower(c);
         for (char c : decoded) if (!std::isspace(c)) decoded_no_space += std::tolower(c);
         
         test.passed = (input_no_space == decoded_no_space);
@@ -319,7 +334,9 @@ SectionResults runSection2_SpacesGrammar(GrimTokenizer& tokenizer, bool verbose)
         // Check all punctuation preserved (ignoring spaces)
         std::string input_punct, output_punct;
         for (char c : input) if (std::ispunct(c)) input_punct += c;
-        for (char c : test.output) if (std::ispunct(c)) output_punct += c;
+        const std::string output_without_atom_boundaries =
+            stripTypedAtomBoundaries(test.output);
+        for (char c : output_without_atom_boundaries) if (std::ispunct(c)) output_punct += c;
         
         test.passed = (input_punct == output_punct);
         if (!test.passed) {

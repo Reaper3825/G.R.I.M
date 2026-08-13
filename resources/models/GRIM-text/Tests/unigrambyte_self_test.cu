@@ -16,6 +16,7 @@
 #include "../Shared/UnigramByte/Detectors/StructuralSpan.hpp"
 #include "../Shared/UnigramByte/AhoCorasick.hpp"
 #include "../Shared/TokenizerArtifacts/TokenizerArtifactBundle.hpp"
+#include "../training/Phases/Startup/SlidingWindow.hpp"
 
 #include <cuda_runtime.h>
 #include <algorithm>
@@ -153,7 +154,8 @@ static uint32_t registerSelfTestAtom(AtomTable& table,
     span.length = static_cast<uint32_t>(raw_text.size());
     span.content_offset = span.offset;
     span.content_length = span.length;
-    span.placeholder_id = atomTypeToTokenId(type);
+    span.open_token_id = atomTypeToOpenTokenId(type);
+    span.close_token_id = atomTypeToCloseTokenId(type);
 
     try {
         return table.registerSpan(span);
@@ -1314,7 +1316,8 @@ bool testUniByteRawTextDetectorRegistry(std::string& message) {
         span.length = static_cast<uint32_t>(detection.end - detection.start);
         span.content_offset = static_cast<uint32_t>(detection.start);
         span.content_length = static_cast<uint32_t>(detection.end - detection.start);
-        span.placeholder_id = atomTypeToTokenId(detection.atom_type);
+        span.open_token_id = atomTypeToOpenTokenId(detection.atom_type);
+        span.close_token_id = atomTypeToCloseTokenId(detection.atom_type);
         structures.push_back(span);
     }
 
@@ -1383,32 +1386,72 @@ bool testUniByteDateDetection(std::string& message) {
     return true;
 }
 
-bool testUniBytePlaceholderInjection(std::string& message) {
+bool testUniByteTypedAtomSpanInjection(std::string& message) {
     auto config = makeSelfTestTokenizerHP();
     config.target_vocab_size = 50000;
     config.detect_numbers = true;
     
     UniByte tokenizer(config);
     
-    std::string input = "Count: 12345";
+    std::string input = "Count: 12345 ratio: 3.5";
     auto result = tokenizer.tokenizeWithMetadata(input);
     
-    // Check that placeholder token was injected
-    bool found_placeholder = false;
-    for (int token : result.token_ids) {
-        // Atom tokens are in range [ATOM_TOKEN_OFFSET, ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE)
-        if (token >= static_cast<int>(ATOM_TOKEN_OFFSET) && token < static_cast<int>(ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE)) {
-            found_placeholder = true;
-            break;
-        }
+    const int open_id = atomTypeToOpenTokenId(AtomType::ATOM_INT);
+    const int close_id = atomTypeToCloseTokenId(AtomType::ATOM_INT);
+    const auto open_it = std::find(result.token_ids.begin(), result.token_ids.end(), open_id);
+    ASSERT_TRUE(open_it != result.token_ids.end(), "Should inject typed opening boundary for integer");
+
+    const auto close_it = std::find(open_it + 1, result.token_ids.end(), close_id);
+    ASSERT_TRUE(close_it != result.token_ids.end(), "Should inject matching typed closing boundary for integer");
+    ASSERT_TRUE(close_it > open_it + 1, "Integer value must remain tokenized inside typed boundaries");
+
+    const size_t open_index = static_cast<size_t>(open_it - result.token_ids.begin());
+    const size_t close_index = static_cast<size_t>(close_it - result.token_ids.begin());
+    ASSERT_EQ(result.token_atom_mask[open_index], static_cast<uint8_t>(1),
+              "Opening boundary must anchor atom metadata");
+    ASSERT_TRUE(result.atom_entry_ids[open_index] != kAtomEntryNone,
+                "Opening boundary must retain its AtomTable entry ID");
+    ASSERT_EQ(result.token_atom_mask[close_index], static_cast<uint8_t>(0),
+              "Closing boundary must not duplicate atom metadata");
+    ASSERT_EQ(result.atom_entry_ids[close_index], kAtomEntryNone,
+              "Closing boundary must not carry an AtomTable entry ID");
+    for (auto it = open_it + 1; it != close_it; ++it) {
+        const size_t content_index = static_cast<size_t>(it - result.token_ids.begin());
+        ASSERT_FALSE(isAtomTokenId(*it), "Atom content must use ordinary unigram/byte tokens");
+        ASSERT_EQ(result.token_atom_mask[content_index], static_cast<uint8_t>(0),
+                  "Atom content must not duplicate opening-boundary metadata");
+        ASSERT_EQ(result.atom_entry_ids[content_index], kAtomEntryNone,
+                  "Atom content must not carry an AtomTable entry ID");
     }
-    
-    ASSERT_TRUE(found_placeholder, "Should inject placeholder for number");
-    
+
+    const int float_open_id = atomTypeToOpenTokenId(AtomType::ATOM_FLOAT);
+    const int float_close_id = atomTypeToCloseTokenId(AtomType::ATOM_FLOAT);
+    const auto float_open_it = std::find(close_it + 1, result.token_ids.end(), float_open_id);
+    ASSERT_TRUE(float_open_it != result.token_ids.end(),
+                "Should inject typed opening boundary for float");
+    const auto float_close_it = std::find(float_open_it + 1, result.token_ids.end(), float_close_id);
+    ASSERT_TRUE(float_close_it != result.token_ids.end(),
+                "Should inject matching typed closing boundary for float");
+    ASSERT_TRUE(float_close_it > float_open_it + 1,
+                "Float value must remain tokenized inside typed boundaries");
+    const size_t float_open_index = static_cast<size_t>(float_open_it - result.token_ids.begin());
+    const size_t float_close_index = static_cast<size_t>(float_close_it - result.token_ids.begin());
+    ASSERT_EQ(result.token_atom_mask[float_open_index], static_cast<uint8_t>(1),
+              "Float opening boundary must anchor atom metadata");
+    ASSERT_EQ(result.token_atom_mask[float_close_index], static_cast<uint8_t>(0),
+              "Float closing boundary must not duplicate atom metadata");
+
+    const std::string expected =
+        "Count: <INT>12345</INT> ratio: <FLOAT>3.5</FLOAT>";
+    ASSERT_STR_EQ(tokenizer.decode(GRIM::Tokenizer::DecodeRequest(result)), expected,
+                  "Metadata-aware decode must preserve typed atom markup and in-band content");
+    ASSERT_STR_EQ(tokenizer.decode(GRIM::Tokenizer::DecodeRequest(result.token_ids)), expected,
+                  "ID-only decode must produce the same typed atom markup");
+
     return true;
 }
 
-    bool testUniBytePreRegistersAtomTableBeforePlaceholderEmission(std::string& message) {
+    bool testUniBytePreRegistersAtomTableBeforeSpanEmission(std::string& message) {
         auto config = makeSelfTestTokenizerHP();
         config.target_vocab_size = 50000;
         config.detect_numbers = true;
@@ -1419,7 +1462,7 @@ bool testUniBytePlaceholderInjection(std::string& message) {
         auto result = tokenizer.tokenizeWithMetadata(input);
 
         ASSERT_TRUE(result.atom_table != nullptr,
-                    "tokenizeWithMetadata must create a per-sequence AtomTable before placeholder merge");
+                    "tokenizeWithMetadata must create a per-sequence AtomTable before span merge");
         ASSERT_EQ(result.atoms.size(), static_cast<size_t>(2),
                   "Repeated-number fixture should yield two structural atom spans");
         ASSERT_TRUE(result.atoms[0].atom_entry_id != kAtomEntryNone,
@@ -1427,22 +1470,28 @@ bool testUniBytePlaceholderInjection(std::string& message) {
         ASSERT_EQ(result.atoms[0].atom_entry_id, result.atoms[1].atom_entry_id,
                   "Repeated identical atoms should deduplicate to one AtomTable entry before unigram runs");
 
-        size_t placeholder_count = 0;
+        size_t opening_count = 0;
+        size_t closing_count = 0;
         for (size_t i = 0; i < result.token_ids.size(); ++i) {
-            const bool token_is_atom = result.token_ids[i] >= static_cast<int>(ATOM_TOKEN_OFFSET) &&
-                                       result.token_ids[i] < static_cast<int>(UNIGRAM_VOCAB_OFFSET);
-            if (!token_is_atom) {
-                continue;
+            if (isAtomOpenTokenId(result.token_ids[i])) {
+                ++opening_count;
+                ASSERT_EQ(result.token_atom_mask[i], static_cast<uint8_t>(1),
+                          "Opening boundary must preserve token_atom_mask");
+                ASSERT_EQ(result.atom_entry_ids[i], result.atoms[0].atom_entry_id,
+                          "Opening boundary must reuse the pre-registered AtomTable entry ID");
+            } else if (isAtomCloseTokenId(result.token_ids[i])) {
+                ++closing_count;
+                ASSERT_EQ(result.token_atom_mask[i], static_cast<uint8_t>(0),
+                          "Closing boundary must not duplicate atom metadata");
+                ASSERT_EQ(result.atom_entry_ids[i], kAtomEntryNone,
+                          "Closing boundary must not carry an AtomTable entry ID");
             }
-            ++placeholder_count;
-            ASSERT_EQ(result.token_atom_mask[i], static_cast<uint8_t>(1),
-                      "Placeholder emission must preserve token_atom_mask for atom tokens");
-            ASSERT_EQ(result.atom_entry_ids[i], result.atoms[0].atom_entry_id,
-                      "Placeholder emission must reuse the pre-registered AtomTable entry ID");
         }
 
-        ASSERT_EQ(placeholder_count, static_cast<size_t>(2),
-                  "Repeated identical numbers should still emit two placeholder tokens");
+        ASSERT_EQ(opening_count, static_cast<size_t>(2),
+                  "Repeated identical numbers should emit two opening boundaries");
+        ASSERT_EQ(closing_count, static_cast<size_t>(2),
+                  "Repeated identical numbers should emit two closing boundaries");
 
         return true;
     }
@@ -1939,11 +1988,11 @@ bool testFullPipeline(std::string& message) {
     ASSERT_TRUE(result.token_ids.size() > 0, "Should produce tokens");
     ASSERT_TRUE(result.atoms.size() >= 2, "Should detect numeric structures only");
     
-    // Verify we can decode back through the single atom-aware decode entry point.
+    // Decode preserves typed boundaries and the model-visible values between them.
     std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(result));
-    
-    // Note: With placeholders, decoded may differ from input
-    // The key is that we have a valid token sequence
+    ASSERT_STR_EQ(decoded,
+                  "The price is <FLOAT>42.99</FLOAT>. Visit https://shop.com for <INT>3</INT> more info.",
+                  "Full pipeline decode must render typed numeric spans literally");
     
     return true;
 }
@@ -2200,7 +2249,9 @@ bool testUnicodeWithStructural(std::string& message) {
     ASSERT_TRUE(result.token_ids.size() > 0, "Unicode with numbers should produce tokens");
     
     std::string decoded = tokenizer.decode(GRIM::Tokenizer::DecodeRequest(result));
-    ASSERT_STR_EQ(decoded, input, "Unicode+numeric round-trip failed");
+    const std::string expected =
+        "æ—¥æœ¬ã®ä¾¡æ ¼ã¯ <FLOAT>42.5</FLOAT> å††ã§ã™";
+    ASSERT_STR_EQ(decoded, expected, "Unicode+numeric typed-span decode failed");
     
     return true;
 }
@@ -2383,7 +2434,8 @@ bool testNegativeNumbers(std::string& message) {
 
 bool testDigitsFollowedByAlpha(std::string& message) {
     // Regression test: digits followed by alphabetic chars (ordinals, units, versions)
-    // must still be detected as integer atoms, not leak as raw byte tokens.
+    // must still be detected as integer atoms while their digits remain visible
+    // as ordinary content tokens inside typed boundaries.
     auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
     config.detect_numbers = true;
@@ -2420,20 +2472,16 @@ bool testDigitsFollowedByAlpha(std::string& message) {
                              + ", expected=" + std::to_string(tc.expected_integers) + ")";
         ASSERT_TRUE(int_count == tc.expected_integers, fail_msg.c_str());
         
-        // Verify no digit byte tokens leaked through
-        for (size_t i = 0; i < result.token_ids.size(); ++i) {
-            int tid = result.token_ids[i];
-            if (tid >= static_cast<int>(BYTE_TOKEN_OFFSET) && 
-                tid < static_cast<int>(BYTE_TOKEN_OFFSET) + 256) {
-                int byte_val = tid - static_cast<int>(BYTE_TOKEN_OFFSET);
-                if (byte_val >= '0' && byte_val <= '9') {
-                    std::string leak_msg = "Digit byte token leaked in: " + tc.description
-                                         + " (token_id=" + std::to_string(tid) 
-                                         + ", byte='" + std::string(1, static_cast<char>(byte_val)) + "')";
-                    ASSERT_TRUE(false, leak_msg.c_str());
-                }
-            }
-        }
+        const int open_id = atomTypeToOpenTokenId(AtomType::ATOM_INT);
+        const int close_id = atomTypeToCloseTokenId(AtomType::ATOM_INT);
+        const auto open_it = std::find(result.token_ids.begin(), result.token_ids.end(), open_id);
+        ASSERT_TRUE(open_it != result.token_ids.end(),
+                    "Detected integer must emit an opening boundary");
+        const auto close_it = std::find(open_it + 1, result.token_ids.end(), close_id);
+        ASSERT_TRUE(close_it != result.token_ids.end(),
+                    "Detected integer must emit a matching closing boundary");
+        ASSERT_TRUE(close_it > open_it + 1,
+                    "Detected integer digits must remain as model-visible content tokens");
     }
     
     return true;
@@ -2512,12 +2560,18 @@ bool testByteFallbackRejectsMalformedGeneratedUtf8(std::string& message) {
 
 static TokenizerArtifacts::GrmtSequence makePersistenceGrmtSequence() {
     TokenizerArtifacts::GrmtSequence sequence;
+    const int int_open_id = atomTypeToOpenTokenId(AtomType::ATOM_INT);
+    const int int_close_id = atomTypeToCloseTokenId(AtomType::ATOM_INT);
     sequence.token_ids = {
-        BYTE_TOKEN_OFFSET + static_cast<int>('o'),
-        BYTE_TOKEN_OFFSET + static_cast<int>('k')
+        int_open_id,
+        BYTE_TOKEN_OFFSET + static_cast<int>('4'),
+        BYTE_TOKEN_OFFSET + static_cast<int>('2'),
+        int_close_id
     };
     sequence.targets = {
-        BYTE_TOKEN_OFFSET + static_cast<int>('k'),
+        BYTE_TOKEN_OFFSET + static_cast<int>('4'),
+        BYTE_TOKEN_OFFSET + static_cast<int>('2'),
+        int_close_id,
         EOS_TOKEN_ID
     };
     const std::size_t n = sequence.token_ids.size();
@@ -2527,7 +2581,280 @@ static TokenizerArtifacts::GrmtSequence makePersistenceGrmtSequence() {
     sequence.atom_table = std::make_shared<AtomTable>();
     sequence.atom_entry_ids.assign(n, kAtomEntryNone);
     sequence.token_exec_slot_indices.assign(n, -1);
+
+    const uint32_t entry_id = registerSelfTestAtom(
+        *sequence.atom_table, AtomType::ATOM_INT, "42");
+    if (entry_id == UINT32_MAX) {
+        throw std::runtime_error("makePersistenceGrmtSequence: failed to register integer atom");
+    }
+    const auto entry = sequence.atom_table->getAtom(entry_id);
+    if (!entry.has_value()) {
+        throw std::runtime_error("makePersistenceGrmtSequence: registered atom is not retrievable");
+    }
+    sequence.token_numeric_values[0] = entry->numeric_value;
+    sequence.token_atom_mask[0] = 1;
+    sequence.token_atom_flags[0] = entry->flags;
+    sequence.atom_entry_ids[0] = entry_id;
     return sequence;
+}
+
+bool testGrmtAtomSpanSideChannelValidation(std::string& message) {
+    auto valid = makePersistenceGrmtSequence();
+    try {
+        valid.validateForWrite("test valid typed atom span");
+    } catch (const std::exception& e) {
+        message = std::string("Valid typed atom span was rejected: ") + e.what();
+        return false;
+    }
+
+    std::filesystem::create_directories("output");
+    const std::string round_trip_path = "output/test_grmt_typed_atom_span.grmt";
+    const auto save_report = TokenizerArtifacts::saveGrmtCorpus(
+        round_trip_path,
+        std::vector<TokenizerArtifacts::GrmtSequence>{valid},
+        static_cast<std::uint32_t>(UNIGRAM_VOCAB_OFFSET));
+    ASSERT_EQ(save_report.written_sequences, 1u,
+              "Typed atom span fixture should persist as one GRMT row");
+    const auto round_trip = TokenizerArtifacts::loadGrmtCorpus(round_trip_path);
+    std::filesystem::remove(round_trip_path);
+    ASSERT_EQ(round_trip.header.version, GRIM::GRMT_FORMAT_VERSION,
+              "Typed atom span fixture should use the current GRMT format");
+    ASSERT_EQ(round_trip.sequences.size(), static_cast<std::size_t>(1),
+              "Typed atom span fixture should load as one GRMT row");
+    ASSERT_TRUE(round_trip.sequences[0].token_ids == valid.token_ids,
+                "Typed atom span token IDs must survive GRMT round-trip");
+    ASSERT_TRUE(round_trip.sequences[0].token_atom_mask == valid.token_atom_mask,
+                "Opening-only atom mask must survive GRMT round-trip");
+    ASSERT_TRUE(round_trip.sequences[0].atom_entry_ids == valid.atom_entry_ids,
+                "Opening-only AtomTable entry IDs must survive GRMT round-trip");
+
+    auto validationRejects = [](const TokenizerArtifacts::GrmtSequence& sequence) {
+        try {
+            sequence.validateForWrite("test invalid typed atom span");
+            return false;
+        } catch (const std::runtime_error&) {
+            return true;
+        }
+    };
+
+    auto missing_open_metadata = makePersistenceGrmtSequence();
+    missing_open_metadata.token_numeric_values[0] = 0.0f;
+    missing_open_metadata.token_atom_mask[0] = 0;
+    missing_open_metadata.token_atom_flags[0] = 0;
+    missing_open_metadata.atom_entry_ids[0] = kAtomEntryNone;
+    ASSERT_TRUE(validationRejects(missing_open_metadata),
+                "GRMT must reject an opening boundary without its metadata anchor");
+
+    auto close_metadata = makePersistenceGrmtSequence();
+    const std::size_t close_index = close_metadata.token_ids.size() - 1;
+    close_metadata.token_numeric_values[close_index] = close_metadata.token_numeric_values[0];
+    close_metadata.token_atom_mask[close_index] = 1;
+    close_metadata.token_atom_flags[close_index] = close_metadata.token_atom_flags[0];
+    close_metadata.atom_entry_ids[close_index] = close_metadata.atom_entry_ids[0];
+    ASSERT_TRUE(validationRejects(close_metadata),
+                "GRMT must reject duplicated metadata on a closing boundary");
+
+    auto content_metadata = makePersistenceGrmtSequence();
+    content_metadata.token_numeric_values[1] = content_metadata.token_numeric_values[0];
+    content_metadata.token_atom_mask[1] = 1;
+    content_metadata.token_atom_flags[1] = content_metadata.token_atom_flags[0];
+    content_metadata.atom_entry_ids[1] = content_metadata.atom_entry_ids[0];
+    ASSERT_TRUE(validationRejects(content_metadata),
+                "GRMT must reject atom metadata on ordinary span content");
+
+    auto mismatched_type = makePersistenceGrmtSequence();
+    mismatched_type.token_ids[0] = atomTypeToOpenTokenId(AtomType::ATOM_FLOAT);
+    ASSERT_TRUE(validationRejects(mismatched_type),
+                "GRMT must reject an opening boundary whose type disagrees with AtomTable");
+
+    return true;
+}
+
+static TokenizerArtifacts::GrmtSequence makeWindowingAtomSequence(
+    std::size_t prefix_tokens,
+    std::size_t suffix_tokens) {
+    TokenizerArtifacts::GrmtSequence sequence;
+    for (std::size_t i = 0; i < prefix_tokens; ++i) {
+        sequence.token_ids.push_back(
+            BYTE_TOKEN_OFFSET + static_cast<int>('a' + (i % 20)));
+    }
+    const std::size_t open_index = sequence.token_ids.size();
+    sequence.token_ids.push_back(atomTypeToOpenTokenId(AtomType::ATOM_INT));
+    sequence.token_ids.push_back(BYTE_TOKEN_OFFSET + static_cast<int>('4'));
+    sequence.token_ids.push_back(BYTE_TOKEN_OFFSET + static_cast<int>('2'));
+    sequence.token_ids.push_back(atomTypeToCloseTokenId(AtomType::ATOM_INT));
+    for (std::size_t i = 0; i < suffix_tokens; ++i) {
+        sequence.token_ids.push_back(
+            BYTE_TOKEN_OFFSET + static_cast<int>('u' + (i % 5)));
+    }
+
+    const std::size_t n = sequence.token_ids.size();
+    sequence.targets.assign(n, -1);
+    for (std::size_t i = 0; i + 1 < n; ++i) {
+        sequence.targets[i] = sequence.token_ids[i + 1];
+    }
+    sequence.token_numeric_values.assign(n, 0.0f);
+    sequence.token_atom_mask.assign(n, 0);
+    sequence.token_atom_flags.assign(n, 0);
+    sequence.atom_entry_ids.assign(n, kAtomEntryNone);
+    sequence.token_exec_slot_indices.assign(n, -1);
+    sequence.atom_table = std::make_shared<AtomTable>();
+
+    const uint32_t entry_id = registerSelfTestAtom(
+        *sequence.atom_table, AtomType::ATOM_INT, "42");
+    if (entry_id == UINT32_MAX) {
+        throw std::runtime_error("makeWindowingAtomSequence: failed to register integer atom");
+    }
+    const auto entry = sequence.atom_table->getAtom(entry_id);
+    if (!entry.has_value()) {
+        throw std::runtime_error("makeWindowingAtomSequence: atom entry is not retrievable");
+    }
+    sequence.token_numeric_values[open_index] = entry->numeric_value;
+    sequence.token_atom_mask[open_index] = 1;
+    sequence.token_atom_flags[open_index] = entry->flags;
+    sequence.atom_entry_ids[open_index] = entry_id;
+    return sequence;
+}
+
+bool testSlidingWindowsPreserveTypedAtomSpans(std::string& message) {
+    auto validateWindows = [&](const std::vector<TokenizerArtifacts::GrmtSequence>& windows,
+                               std::size_t max_seq_len,
+                               const char* stage) {
+        bool found_complete_span = false;
+        for (const auto& window : windows) {
+            if (window.token_ids.size() > max_seq_len) {
+                message = std::string(stage) + " emitted an overlong window";
+                return false;
+            }
+            bool inside_atom = false;
+            AtomType open_type = AtomType::ATOM_INT;
+            for (std::size_t i = 0; i < window.token_ids.size(); ++i) {
+                const int token_id = window.token_ids[i];
+                if (isAtomOpenTokenId(token_id)) {
+                    if (inside_atom || window.token_atom_mask[i] != 1 ||
+                        window.atom_entry_ids[i] == kAtomEntryNone) {
+                        message = std::string(stage) +
+                                  " emitted an invalid typed opening boundary";
+                        return false;
+                    }
+                    inside_atom = true;
+                    open_type = tokenIdToAtomType(token_id);
+                    continue;
+                }
+                if (isAtomCloseTokenId(token_id)) {
+                    if (!inside_atom || tokenIdToAtomType(token_id) != open_type ||
+                        window.token_atom_mask[i] != 0 ||
+                        window.atom_entry_ids[i] != kAtomEntryNone) {
+                        message = std::string(stage) +
+                                  " emitted an unmatched or metadata-bearing closing boundary";
+                        return false;
+                    }
+                    inside_atom = false;
+                    found_complete_span = true;
+                    continue;
+                }
+                if (window.token_atom_mask[i] != 0 ||
+                    window.atom_entry_ids[i] != kAtomEntryNone) {
+                    message = std::string(stage) +
+                              " moved atom metadata away from the opening boundary";
+                    return false;
+                }
+            }
+            if (inside_atom) {
+                message = std::string(stage) + " split a typed atom span";
+                return false;
+            }
+        }
+        if (!found_complete_span) {
+            message = std::string(stage) + " dropped the typed atom span";
+            return false;
+        }
+        return true;
+    };
+
+    std::filesystem::create_directories("output");
+    {
+        TrainingLogger logger("output", "sliding_window_atom_span");
+
+        std::vector<TokenizerArtifacts::GrmtSequence> pt_sequences{
+            makeWindowingAtomSequence(4, 4)};
+        GRIMText::Training::applySlidingWindows(
+            pt_sequences,
+            "atom-span-pt-test",
+            GRIM::HyperParameters::TrainingStage::PT,
+            6,
+            4,
+            0,
+            false,
+            false,
+            logger);
+        ASSERT_TRUE(pt_sequences.size() > 1,
+                    "PT atom-span fixture should produce multiple windows");
+        if (!validateWindows(pt_sequences, 6, "PT")) {
+            return false;
+        }
+
+        std::vector<TokenizerArtifacts::GrmtSequence> exact_capacity_sequences{
+            makeWindowingAtomSequence(0, 2)};
+        GRIMText::Training::applySlidingWindows(
+            exact_capacity_sequences,
+            "atom-span-exact-capacity-test",
+            GRIM::HyperParameters::TrainingStage::PT,
+            4,
+            3,
+            0,
+            false,
+            false,
+            logger);
+        ASSERT_TRUE(exact_capacity_sequences.size() > 1,
+                    "An exact-capacity atom span must preserve following tail tokens");
+        if (!validateWindows(exact_capacity_sequences, 4, "PT exact-capacity")) {
+            return false;
+        }
+
+        bool rejected_overcapacity_atom = false;
+        try {
+            std::vector<TokenizerArtifacts::GrmtSequence> overcapacity_sequences{
+                makeWindowingAtomSequence(0, 2)};
+            GRIMText::Training::applySlidingWindows(
+                overcapacity_sequences,
+                "atom-span-overcapacity-test",
+                GRIM::HyperParameters::TrainingStage::PT,
+                3,
+                2,
+                0,
+                false,
+                false,
+                logger);
+        } catch (const std::runtime_error&) {
+            rejected_overcapacity_atom = true;
+        }
+        ASSERT_TRUE(rejected_overcapacity_atom,
+                    "A typed atom span larger than window capacity must fail loudly");
+
+        auto sft_sequence = makeWindowingAtomSequence(6, 5);
+        sft_sequence.prompt_length = 2;
+        sft_sequence.prompt_end_pos = 1;
+        std::vector<TokenizerArtifacts::GrmtSequence> sft_sequences{
+            std::move(sft_sequence)};
+        GRIMText::Training::applySlidingWindows(
+            sft_sequences,
+            "atom-span-sft-test",
+            GRIM::HyperParameters::TrainingStage::SFT,
+            8,
+            6,
+            0,
+            false,
+            false,
+            logger);
+        ASSERT_TRUE(sft_sequences.size() > 1,
+                    "SFT atom-span fixture should produce multiple windows");
+        if (!validateWindows(sft_sequences, 8, "SFT")) {
+            return false;
+        }
+    }
+    std::filesystem::remove("output/training_sliding_window_atom_span.log");
+    return true;
 }
 
 bool testVocabTextExportBinaryLoad(std::string& message) {
@@ -3073,8 +3400,8 @@ int main(int argc, char** argv) {
     suite.addTest("UniByte.URLPassthrough.CaseInsensitive", testUniByteURLDetectionCaseInsensitive);
     suite.addTest("UniByte.EmailPassthrough", testUniByteEmailDetection);
     suite.addTest("UniByte.DateNumericOnly", testUniByteDateDetection);
-    suite.addTest("UniByte.PlaceholderInjection", testUniBytePlaceholderInjection);
-    suite.addTest("UniByte.PreRegistersAtomTableBeforePlaceholderEmission", testUniBytePreRegistersAtomTableBeforePlaceholderEmission);
+    suite.addTest("UniByte.TypedAtomSpanInjection", testUniByteTypedAtomSpanInjection);
+    suite.addTest("UniByte.PreRegistersAtomTableBeforeSpanEmission", testUniBytePreRegistersAtomTableBeforeSpanEmission);
     suite.addTest("UniByte.RoundTrip", testUniByteRoundTrip);
     
     // Section 5: AtomTable Tests
@@ -3137,6 +3464,8 @@ int main(int argc, char** argv) {
     suite.addTest("ByteFallback.RejectMalformedUtf8", testByteFallbackRejectsMalformedGeneratedUtf8);
     
     // Section 13: Vocabulary Persistence Tests
+    suite.addTest("GRMT.TypedAtomSpanSideChannels", testGrmtAtomSpanSideChannelValidation);
+    suite.addTest("SlidingWindow.TypedAtomSpanIntegrity", testSlidingWindowsPreserveTypedAtomSpans);
     suite.addTest("Vocab.TextExportBinaryLoad", testVocabTextExportBinaryLoad);
     suite.addTest("Vocab.SaveLoadBinary", testVocabSaveLoadBinary);
     suite.addTest("Vocab.SharedAcrossMultipleGrmts", testSharedVocabWritesMultipleGrmtsWithoutMutation);

@@ -4,8 +4,8 @@
 //  
 //  The AtomTable stores the actual values of detected
 //  structural atoms. When tokenization detects a number,
-//  the raw source value is stored here and a placeholder
-//  token is emitted. Round-trip raw text is the source of truth.
+//  the raw source value and typed span-boundary contract are stored here.
+//  Round-trip raw text is the source of truth.
 //  
 //  Features:
 //  - Type-safe atom storage and retrieval
@@ -203,7 +203,8 @@ class AtomTable;
 
 struct AtomTokenizationPayload {
     StructuralSpan span;
-    int token_id = -1;
+    int open_token_id = -1;
+    int close_token_id = -1;
     bool is_byte_fallback = false;
     float token_numeric_value = 0.0f;
     uint32_t token_atom_flags = 0;

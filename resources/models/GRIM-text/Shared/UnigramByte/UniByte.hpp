@@ -5,13 +5,13 @@
 //  This orchestrator combines:
 //  - Unigram LM for high-quality subword tokenization
 //  - Byte fallback for 100% coverage
-//  - Structural detection for atom injection
-//  - Placeholder system for atom reasoning integration
+//  - Structural detection for typed atom-span injection
+//  - Opening-boundary metadata for later auxiliary supervision
 //  
 //  Token ID Layout:
 //    [0-3]                    = Special tokens (<unk>, <pad>, <s>, </s>)
 //    [4-259]                  = Byte tokens (fallback)
-//    [ATOM_TOKEN_OFFSET..UNIGRAM_VOCAB_OFFSET-1] = Atom tokens (structural placeholders)
+//    [ATOM_TOKEN_OFFSET..UNIGRAM_VOCAB_OFFSET-1] = Typed atom boundary tokens
 //    [UNIGRAM_VOCAB_OFFSET+]  = Unigram vocabulary (regular pieces only)
 //  
 //  Author: GRIM Team
@@ -42,16 +42,16 @@ namespace Tokenizer {
 //======================================================//
 struct UniByteResult {
     std::vector<int> token_ids;
-    std::vector<StructuralSpan> atoms;          // Detected structures
+    std::vector<StructuralSpan> atoms;          // One source span per detected atom occurrence
     std::vector<bool> is_byte_fallback;         // Per-token: was byte fallback used?
-    std::vector<float> token_numeric_values;    // Per-token packed value from AtomTable (all atom types, 0 if none)
-    std::vector<uint32_t> token_atom_flags;     // Per-token type-specific flags from AtomTable (0 if not atom)
-    std::vector<uint8_t> token_atom_mask;       // Per-token atom mask (1 if token is any atom type)
+    std::vector<float> token_numeric_values;    // Opening-boundary auxiliary value (0 elsewhere)
+    std::vector<uint32_t> token_atom_flags;     // Opening-boundary type flags (0 elsewhere)
+    std::vector<uint8_t> token_atom_mask;       // 1 only at metadata-bearing opening boundaries
     std::shared_ptr<AtomTable> atom_table;       // Per-sequence atom registry (shared across windows)
-    std::vector<uint32_t> atom_entry_ids;        // Per-token index into atom_table (kAtomEntryNone = no atom)
+    std::vector<uint32_t> atom_entry_ids;        // Opening-boundary AtomTable index (kAtomEntryNone elsewhere)
     size_t unigram_tokens = 0;
     size_t byte_tokens = 0;
-    size_t atom_tokens = 0;
+    size_t atom_tokens = 0;                     // Emitted opening + closing boundary token count
     
     // ═══════════════════════════════════════════════════════════════════════════
     // Pipeline validation: ensures all per-token arrays are consistent before
@@ -97,6 +97,23 @@ struct UniByteResult {
                 std::to_string(atom_tokens) + " != total=" +
                 std::to_string(n));
         }
+        for (size_t i = 0; i < n; ++i) {
+            if (isAtomOpenTokenId(token_ids[i])) {
+                if (token_atom_mask[i] != 1 || atom_entry_ids[i] == kAtomEntryNone) {
+                    throw std::runtime_error(
+                        std::string(caller) +
+                        ": atom opening boundary is missing anchored metadata at token index=" +
+                        std::to_string(i));
+                }
+                continue;
+            }
+            if (token_atom_mask[i] != 0 || atom_entry_ids[i] != kAtomEntryNone) {
+                throw std::runtime_error(
+                    std::string(caller) +
+                    ": atom metadata is present outside an opening boundary at token index=" +
+                    std::to_string(i));
+            }
+        }
     }
     
     // Total token count
@@ -118,6 +135,10 @@ struct DecodeRequest {
     const uint8_t* token_atom_mask = nullptr;
     size_t token_atom_mask_count = 0;
     const AtomTable* atom_table = nullptr;
+
+    // Atom side channels remain part of the shared request shape for downstream
+    // consumers. UniByte::decode renders boundary IDs literally and does not
+    // reconstruct or replace the model-visible content from these fields.
 
     // When true, invalid UTF-8 in byte-fallback runs is replaced with the
     // Unicode replacement character (U+FFFD) instead of throwing. Use for

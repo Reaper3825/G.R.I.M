@@ -15,6 +15,9 @@ namespace GRIM::TokenizerArtifacts {
 struct GrmtSequence {
     std::vector<int> token_ids;
     std::vector<int> targets;
+    // Numeric atom metadata is aligned to token_ids but populated only at a
+    // typed atom opening boundary. Span content and closing boundaries carry
+    // zero/none values in every atom side channel.
     std::vector<float> token_numeric_values;
     std::vector<std::uint8_t> token_atom_mask;
     std::vector<std::uint32_t> token_atom_flags;

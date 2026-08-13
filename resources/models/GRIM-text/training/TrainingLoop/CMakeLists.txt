@@ -789,6 +789,7 @@ target_include_directories(tokenizer_self_test PRIVATE
 # UnigramByte tokenizer test executable
 add_executable(unigrambyte_self_test
     ../../Tests/unigrambyte_self_test.cu
+    ../Phases/Startup/SlidingWindow.cu
 )
 
 set_target_properties(unigrambyte_self_test PROPERTIES
@@ -801,6 +802,7 @@ target_compile_options(unigrambyte_self_test PRIVATE
 )
 
 target_link_libraries(unigrambyte_self_test PRIVATE
+    flatbuffers::flatbuffers
     nlohmann_json::nlohmann_json
     CUDA::cudart
     grim_unigrambyte_tokenizer

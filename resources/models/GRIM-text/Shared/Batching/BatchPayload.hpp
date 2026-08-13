@@ -18,6 +18,7 @@
 #pragma once
 
 #include "../Goal/GoalSpanView.hpp"
+#include "../UnigramByte/TokenLayout.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -40,8 +41,6 @@ namespace GRIM { namespace Tokenizer { class AtomTable; } }
 namespace GRIM {
 
 // Forward declaration — full definition in UnigramByte/UniByte.hpp
-namespace Tokenizer { struct TokenLayout; }
-
 namespace Batching {
 struct BatchAssignment;
 struct BatchDeviceStorage;
@@ -99,13 +98,15 @@ struct BatchPayload {
     std::vector<int> input_ids;              // [total_tokens] padded with Tokenizer::PAD_TOKEN_ID
     std::vector<int> target_ids;             // [total_tokens] padded with -1
     std::vector<float> numeric_values;       // [total_tokens] padded with 0.0f
-    std::vector<uint8_t> atom_mask;          // [total_tokens] padded with 0 (1 = any atom type)
-    std::vector<uint32_t> atom_flags;         // [total_tokens] padded with 0 (type-specific metadata from AtomTable)
+    std::vector<uint8_t> atom_mask;          // [total_tokens] padded with 0 (1 = atom opening metadata anchor)
+    std::vector<uint32_t> atom_flags;         // [total_tokens] padded with 0 (opening-only metadata from AtomTable)
     // Dense bootstrap slot addresses used to materialize authored ARG seeds.
     std::vector<int32_t> token_to_slot_index_map; // [total_tokens], -1 = non-state-bearing
 
-    // Compact authored atom facts. These are materialized ONCE behind the
-    // payload boundary and uploaded as-is for ScratchBlock consumption.
+    // Compact authored atom facts. Each position identifies a metadata-bearing
+    // typed opening boundary, never span content or a closing boundary. These
+    // are materialized ONCE behind the payload boundary and uploaded as-is for
+    // ScratchBlock consumption.
     // They are semantic data, not forward-time workspace.
     std::vector<int> atom_positions;          // [num_atoms] flat token indices into input_ids/numeric_values/atom_flags
     std::vector<int> atom_types;              // [num_atoms] Tokenizer::AtomType enum values aligned with atom_positions
@@ -121,8 +122,8 @@ struct BatchPayload {
 
     // ═══════════════════════════════════════════════════════════════════════════
     // ATOM TABLE SIDE CHANNEL (host-only, NOT transferred to GPU)
-    // atom_entry_ids[i] indexes into seq_atom_tables[batch_row] for token i.
-    // kAtomEntryNone = no atom at this position.
+    // atom_entry_ids[i] indexes into seq_atom_tables[batch_row] only when token
+    // i is a typed atom opening boundary. kAtomEntryNone is required elsewhere.
     // ═══════════════════════════════════════════════════════════════════════════
     std::vector<uint32_t> atom_entry_ids;    // [total_tokens] padded with kAtomEntryNone
     std::vector<std::shared_ptr<const GRIM::Tokenizer::AtomTable>> seq_atom_tables;  // [batch_size]
@@ -415,6 +416,35 @@ struct BatchPayload {
                 std::string(caller) + ": BatchPayload.atom_flags.size()=" +
                 std::to_string(atom_flags.size()) + " != total_tokens=" +
                 std::to_string(total_tokens));
+        }
+        if (ownsHostInputData() && static_cast<int>(atom_entry_ids.size()) != total_tokens) {
+            throw std::runtime_error(
+                std::string(caller) + ": BatchPayload.atom_entry_ids.size()=" +
+                std::to_string(atom_entry_ids.size()) + " != total_tokens=" +
+                std::to_string(total_tokens));
+        }
+        if (ownsHostInputData()) {
+            for (int i = 0; i < total_tokens; ++i) {
+                if (atom_mask[i] > 1) {
+                    throw std::runtime_error(
+                        std::string(caller) + ": BatchPayload.atom_mask[" +
+                        std::to_string(i) + "]=" + std::to_string(atom_mask[i]) +
+                        " (must be binary)");
+                }
+                const bool has_atom_metadata =
+                    atom_mask[i] != 0 ||
+                    atom_entry_ids[i] != GRIM::Tokenizer::kAtomEntryNone ||
+                    numeric_values[i] != 0.0f ||
+                    atom_flags[i] != 0;
+                if (has_atom_metadata &&
+                    !GRIM::Tokenizer::isAtomOpenTokenId(input_ids[i])) {
+                    throw std::runtime_error(
+                        std::string(caller) +
+                        ": atom metadata is present outside a typed opening boundary at index=" +
+                        std::to_string(i) + " token_id=" +
+                        std::to_string(input_ids[i]));
+                }
+            }
         }
         if (ownsHostInputData() && static_cast<int>(token_to_slot_index_map.size()) != total_tokens) {
             throw std::runtime_error(

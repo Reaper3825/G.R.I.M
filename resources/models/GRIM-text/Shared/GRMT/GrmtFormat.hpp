@@ -14,6 +14,11 @@ namespace GRIM {
 
 // Current GRMT training tensor stream version.
 //
+// v21 changes numeric atoms from one metadata-bearing placeholder token to a
+// typed boundary span. The serialized row shape is unchanged: atom metadata is
+// carried only at the opening boundary, while content and closing boundaries
+// have empty side channels.
+//
 // v20 adds ordered constraint token IDs and one invisible logical token span
 // per constraint. There is intentionally no collection-wide constraint span.
 //
@@ -29,7 +34,7 @@ namespace GRIM {
 // TransitionInvocation targets. Opaque uint64 TransitionId values are lowered
 // through per-row CompiledTransitionBinding tables. Argument and result payload
 // values remain outside transition metadata.
-inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 20;
+inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 21;
 
 } // namespace GRIM
 

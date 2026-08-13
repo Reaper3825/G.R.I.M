@@ -184,7 +184,7 @@ void TokenizerVocabFile::readInto(const GRIM::HyperParameters::TokenizerHP& toke
     std::cout << "[TokenizerVocabFile] Token-space size: " << saved_token_space_size
               << " (" << GRIM::Tokenizer::NUM_SPECIAL_TOKENS << " special + "
               << GRIM::Tokenizer::BYTE_VOCAB_SIZE << " bytes + "
-              << GRIM::Tokenizer::ATOM_VOCAB_SIZE << " atom type placeholders + "
+              << GRIM::Tokenizer::ATOM_VOCAB_SIZE << " typed atom boundaries + "
               << unigram.pieceCount() << " unigram pieces)" << std::endl;
 }
 
@@ -269,7 +269,7 @@ void TokenizerVocabFile::writeFrom(const GRIM::Tokenizer::UnigramLM& unigram,
     std::cout << "[TokenizerVocabFile] Wrote binary vocab (token-space size=" << token_space_size
               << " = " << GRIM::Tokenizer::NUM_SPECIAL_TOKENS << " special + "
               << GRIM::Tokenizer::BYTE_VOCAB_SIZE << " bytes + "
-              << GRIM::Tokenizer::ATOM_VOCAB_SIZE << " atom type placeholders + "
+              << GRIM::Tokenizer::ATOM_VOCAB_SIZE << " typed atom boundaries + "
               << piece_count << " unigram pieces) to " << sink << std::endl;
 
     if (tokenizer_hp.save_text_vocab) {

@@ -938,7 +938,8 @@ AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
         span.length = static_cast<uint32_t>(detection_length);
         span.content_offset = static_cast<uint32_t>(detection.start);
         span.content_length = static_cast<uint32_t>(detection_length);
-        span.placeholder_id = atomTypeToTokenId(detection.atom_type);
+        span.open_token_id = atomTypeToOpenTokenId(detection.atom_type);
+        span.close_token_id = atomTypeToCloseTokenId(detection.atom_type);
 
         const std::string_view atom_text(source_text.data() + detection.start, detection_length);
 
@@ -995,7 +996,8 @@ AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
             caller);
         AtomTokenizationPayload payload{};
         payload.span = span;
-        payload.token_id = span.placeholder_id;
+        payload.open_token_id = span.open_token_id;
+        payload.close_token_id = span.close_token_id;
         payload.is_byte_fallback = false;
         payload.token_numeric_value = entry->numeric_value;
         payload.token_atom_flags = entry->flags;
@@ -1549,7 +1551,8 @@ uint32_t AtomTable::registerGeneratedNumericValue(float value) {
     span.length = static_cast<uint32_t>(rendered.size());
     span.content_offset = 0;
     span.content_length = static_cast<uint32_t>(rendered.size());
-    span.placeholder_id = atomTypeToTokenId(span.atom_type);
+    span.open_token_id = atomTypeToOpenTokenId(span.atom_type);
+    span.close_token_id = atomTypeToCloseTokenId(span.atom_type);
 
     const size_t size_before = size();
     const uint32_t id = registerSpan(span);

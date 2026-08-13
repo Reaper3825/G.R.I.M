@@ -10,7 +10,7 @@
 //  Token ID layout:
 //    [0-3]                    = Special tokens (<unk>, <pad>, <s>, </s>)
 //    [4-259]                  = Byte tokens (fallback)
-//    [ATOM_TOKEN_OFFSET..UNIGRAM_VOCAB_OFFSET-1] = Atom tokens (structural placeholders)
+//    [ATOM_TOKEN_OFFSET..UNIGRAM_VOCAB_OFFSET-1] = Atom span boundary tokens
 //    [UNIGRAM_VOCAB_OFFSET+]  = Unigram vocabulary (regular pieces only)
 //
 //  Author: GRIM Team
@@ -70,11 +70,22 @@ enum class AtomType : int {
 
 constexpr int kAtomTypeCount = static_cast<int>(AtomType::ATOM_ACTIVE_COUNT);
 
+// Each active atom type owns an opening and closing boundary token. Opening
+// tokens intentionally retain the former placeholder IDs so the transition is
+// deterministic: <INT>=260 and <FLOAT>=261. Closing tokens follow as a second
+// type-indexed block: </INT>=262 and </FLOAT>=263.
+enum class AtomBoundaryKind : uint8_t {
+    OPEN = 0,
+    CLOSE = 1
+};
+
 //======================================================//
 //  Token ID Layout Constants
 //======================================================//
 constexpr int ATOM_TOKEN_OFFSET = BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE;  // Atoms start after byte tokens (260)
-inline constexpr int ATOM_VOCAB_SIZE = kAtomTypeCount;  // Atom slots derived from AtomType count
+inline constexpr int ATOM_OPEN_TOKEN_OFFSET = ATOM_TOKEN_OFFSET;
+inline constexpr int ATOM_CLOSE_TOKEN_OFFSET = ATOM_OPEN_TOKEN_OFFSET + kAtomTypeCount;
+inline constexpr int ATOM_VOCAB_SIZE = kAtomTypeCount * 2;
 inline constexpr int UNIGRAM_VOCAB_OFFSET = ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE;
 inline constexpr uint32_t ATOM_TOKEN_BASE = static_cast<uint32_t>(ATOM_TOKEN_OFFSET);
 inline constexpr uint32_t ATOM_TOKEN_MAX = static_cast<uint32_t>(UNIGRAM_VOCAB_OFFSET);
@@ -190,17 +201,45 @@ inline bool isAtomTokenId(int token_id) {
     return token_id >= ATOM_TOKEN_OFFSET && token_id < UNIGRAM_VOCAB_OFFSET;
 }
 
+inline bool isAtomOpenTokenId(int token_id) {
+    return token_id >= ATOM_OPEN_TOKEN_OFFSET && token_id < ATOM_CLOSE_TOKEN_OFFSET;
+}
+
+inline bool isAtomCloseTokenId(int token_id) {
+    return token_id >= ATOM_CLOSE_TOKEN_OFFSET && token_id < UNIGRAM_VOCAB_OFFSET;
+}
+
 //======================================================//
 //  Atom Token Helpers
 //======================================================//
-inline int atomTypeToTokenId(AtomType type) {
+inline int atomTypeIndexOrThrow(AtomType type, const char* caller) {
     switch (type) {
         case AtomType::ATOM_INT:
         case AtomType::ATOM_FLOAT:
-            return ATOM_TOKEN_OFFSET + static_cast<int>(type);
+            return static_cast<int>(type);
         default:
-            throw std::runtime_error("atomTypeToTokenId: invalid atom type cannot be mapped into the atom token range");
+            throw std::runtime_error(std::string(caller) +
+                                     ": invalid atom type cannot be mapped into the atom token range");
     }
+}
+
+inline int atomTypeToOpenTokenId(AtomType type) {
+    return ATOM_OPEN_TOKEN_OFFSET + atomTypeIndexOrThrow(type, "atomTypeToOpenTokenId");
+}
+
+inline int atomTypeToCloseTokenId(AtomType type) {
+    return ATOM_CLOSE_TOKEN_OFFSET + atomTypeIndexOrThrow(type, "atomTypeToCloseTokenId");
+}
+
+inline AtomBoundaryKind atomTokenBoundaryKind(int token_id) {
+    if (isAtomOpenTokenId(token_id)) {
+        return AtomBoundaryKind::OPEN;
+    }
+    if (isAtomCloseTokenId(token_id)) {
+        return AtomBoundaryKind::CLOSE;
+    }
+    throw std::runtime_error("atomTokenBoundaryKind: token_id=" + std::to_string(token_id) +
+                             " is outside the atom token range");
 }
 
 inline AtomType tokenIdToAtomType(int token_id) {
@@ -209,7 +248,10 @@ inline AtomType tokenIdToAtomType(int token_id) {
                                  " is outside the atom token range");
     }
 
-    switch (token_id - ATOM_TOKEN_OFFSET) {
+    const int type_index = isAtomOpenTokenId(token_id)
+        ? token_id - ATOM_OPEN_TOKEN_OFFSET
+        : token_id - ATOM_CLOSE_TOKEN_OFFSET;
+    switch (type_index) {
         case static_cast<int>(AtomType::ATOM_INT):
             return AtomType::ATOM_INT;
         case static_cast<int>(AtomType::ATOM_FLOAT):
@@ -226,6 +268,12 @@ inline const char* atomTypeName(AtomType type) {
         case AtomType::ATOM_FLOAT: return "FLOAT";
         default: return "UNKNOWN";
     }
+}
+
+inline std::string atomTokenText(int token_id) {
+    const AtomType type = tokenIdToAtomType(token_id);
+    const bool is_close = atomTokenBoundaryKind(token_id) == AtomBoundaryKind::CLOSE;
+    return std::string(is_close ? "</" : "<") + atomTypeName(type) + ">";
 }
 
 inline bool isNumericAtom(AtomType type) {

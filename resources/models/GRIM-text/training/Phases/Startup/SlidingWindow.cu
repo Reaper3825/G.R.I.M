@@ -8,9 +8,12 @@
 
 #include "SlidingWindow.hpp"
 #include "../../../Shared/Goal/Goal.hpp"
+#include "../../../Shared/UnigramByte/TokenLayout.hpp"
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -25,7 +28,112 @@ struct SftWindowConstruction {
     std::vector<GrmtSequence> sequences;
     size_t long_sequence_count = 0;
     size_t generated_window_count = 0;
+    size_t atom_safe_cut_adjustments = 0;
 };
+
+struct AtomTokenSpan {
+    size_t begin = 0;
+    size_t end = 0;  // exclusive
+};
+
+std::vector<AtomTokenSpan> collectAtomTokenSpans(
+    const std::vector<int>& token_ids,
+    const std::string& source) {
+    std::vector<AtomTokenSpan> spans;
+    spans.reserve(token_ids.size() / 8);
+
+    size_t open_index = 0;
+    std::optional<GRIM::Tokenizer::AtomType> open_type;
+    for (size_t i = 0; i < token_ids.size(); ++i) {
+        const int token_id = token_ids[i];
+        if (GRIM::Tokenizer::isAtomOpenTokenId(token_id)) {
+            if (open_type.has_value()) {
+                throw std::runtime_error(
+                    source + ": nested typed atom opening at token index=" +
+                    std::to_string(i) + " inside span opened at index=" +
+                    std::to_string(open_index));
+            }
+            open_index = i;
+            open_type = GRIM::Tokenizer::tokenIdToAtomType(token_id);
+            continue;
+        }
+        if (!GRIM::Tokenizer::isAtomCloseTokenId(token_id)) {
+            continue;
+        }
+        if (!open_type.has_value()) {
+            throw std::runtime_error(
+                source + ": typed atom closing boundary has no opening at token index=" +
+                std::to_string(i));
+        }
+        const auto close_type = GRIM::Tokenizer::tokenIdToAtomType(token_id);
+        if (close_type != *open_type) {
+            throw std::runtime_error(
+                source + ": typed atom boundary type mismatch: opening=" +
+                std::string(GRIM::Tokenizer::atomTypeName(*open_type)) +
+                " at index=" + std::to_string(open_index) + " closing=" +
+                GRIM::Tokenizer::atomTypeName(close_type) + " at index=" +
+                std::to_string(i));
+        }
+        spans.push_back(AtomTokenSpan{open_index, i + 1});
+        open_type.reset();
+    }
+
+    if (open_type.has_value()) {
+        throw std::runtime_error(
+            source + ": typed atom opening boundary has no closing boundary at token index=" +
+            std::to_string(open_index));
+    }
+    return spans;
+}
+
+const AtomTokenSpan* atomSpanContainingCut(
+    const std::vector<AtomTokenSpan>& spans,
+    size_t cut) {
+    const auto after = std::upper_bound(
+        spans.begin(), spans.end(), cut,
+        [](size_t value, const AtomTokenSpan& span) {
+            return value < span.begin;
+        });
+    if (after == spans.begin()) {
+        return nullptr;
+    }
+    const AtomTokenSpan& candidate = *(after - 1);
+    return candidate.begin < cut && cut < candidate.end ? &candidate : nullptr;
+}
+
+size_t rewindCutToAtomOpening(
+    const std::vector<AtomTokenSpan>& spans,
+    size_t cut,
+    size_t& adjustment_count) {
+    const AtomTokenSpan* span = atomSpanContainingCut(spans, cut);
+    if (!span) {
+        return cut;
+    }
+    ++adjustment_count;
+    return span->begin;
+}
+
+size_t truncateEndBeforeSplitAtom(
+    const std::vector<AtomTokenSpan>& spans,
+    size_t window_begin,
+    size_t desired_end,
+    size_t capacity,
+    const std::string& source,
+    size_t& adjustment_count) {
+    const AtomTokenSpan* span = atomSpanContainingCut(spans, desired_end);
+    if (!span) {
+        return desired_end;
+    }
+    if (span->begin <= window_begin) {
+        throw std::runtime_error(
+            source + ": typed atom span [" + std::to_string(span->begin) + "," +
+            std::to_string(span->end) + ") length=" +
+            std::to_string(span->end - span->begin) +
+            " exceeds available window capacity=" + std::to_string(capacity));
+    }
+    ++adjustment_count;
+    return span->begin;
+}
 
 std::shared_ptr<const GRIM::Goal> offsetGoalSpans(
     const std::shared_ptr<const GRIM::Goal>& source,
@@ -133,6 +241,9 @@ SftWindowConstruction constructSftWindows(
 
     for (const auto& sequence : sequences) {
         const size_t sequence_length = sequence.token_ids.size();
+        const auto atom_spans = collectAtomTokenSpans(
+            sequence.token_ids,
+            "Sliding window (" + split_name + ", SFT)");
         if (sequence.prompt_length <= 0 || sequence.prompt_end_pos < 0) {
             throw std::runtime_error(
                 "Sliding window (" + split_name +
@@ -165,6 +276,12 @@ SftWindowConstruction constructSftWindows(
         const size_t response_capacity =
             static_cast<size_t>(max_seq_len) - prefix_length;
         const bool fragmented = response_length > response_capacity;
+        if (atomSpanContainingCut(atom_spans, prefix_length)) {
+            throw std::runtime_error(
+                "Sliding window (" + split_name +
+                ", SFT): pinned prompt prefix ends inside a typed atom span at token cut=" +
+                std::to_string(prefix_length));
+        }
         if (fragmented && response_overlap >= response_capacity) {
             throw std::runtime_error(
                 "Sliding window (" + split_name + "): SFT response capacity=" +
@@ -183,19 +300,60 @@ SftWindowConstruction constructSftWindows(
         const size_t response_hop = fragmented
             ? response_capacity - response_overlap
             : response_capacity;
-        size_t response_begin = 0;
+        size_t nominal_response_begin = 0;
         size_t previous_response_end = 0;
+        size_t previous_window_begin = std::numeric_limits<size_t>::max();
         bool first_window = true;
         if (fragmented) {
             ++result.long_sequence_count;
         }
 
-        while (response_begin < response_length) {
-            const size_t response_end =
-                std::min(response_length, response_begin + response_capacity);
+        while (first_window || previous_response_end < response_length) {
+            const size_t requested_response_begin = first_window
+                ? nominal_response_begin
+                : std::min(nominal_response_begin, previous_response_end);
+            const size_t nominal_source_begin = prefix_length + requested_response_begin;
+            size_t source_begin = rewindCutToAtomOpening(
+                atom_spans,
+                nominal_source_begin,
+                result.atom_safe_cut_adjustments);
+            size_t response_begin = source_begin - prefix_length;
+            if (!first_window && response_begin == previous_window_begin) {
+                const AtomTokenSpan* repeated_span =
+                    atomSpanContainingCut(atom_spans, nominal_source_begin);
+                if (!repeated_span) {
+                    nominal_response_begin += response_hop;
+                    continue;
+                }
+                source_begin = repeated_span->end;
+                response_begin = source_begin - prefix_length;
+            }
+
+            const size_t desired_source_end =
+                std::min(sequence_length, source_begin + response_capacity);
+            const size_t source_end = truncateEndBeforeSplitAtom(
+                atom_spans,
+                source_begin,
+                desired_source_end,
+                response_capacity,
+                "Sliding window (" + split_name + ", SFT)",
+                result.atom_safe_cut_adjustments);
+            if (source_end <= source_begin) {
+                throw std::runtime_error(
+                    "Sliding window (" + split_name +
+                    ", SFT): atom-safe response window made no progress at source token index=" +
+                    std::to_string(source_begin));
+            }
+            const size_t response_end = source_end - prefix_length;
             const size_t owned_response_begin = first_window
                 ? 0
                 : previous_response_end;
+            if (owned_response_begin < response_begin) {
+                throw std::runtime_error(
+                    "Sliding window (" + split_name +
+                    ", SFT): atom-safe response windows left a source-token gap before index=" +
+                    std::to_string(source_begin));
+            }
 
             GrmtSequence window;
             if (!fragmented) {
@@ -228,16 +386,21 @@ SftWindowConstruction constructSftWindows(
             }
             window.targets.back() = -1;
 
+            (void)collectAtomTokenSpans(
+                window.token_ids,
+                "Sliding window (" + split_name + ", SFT output)");
+
             result.sequences.push_back(std::move(window));
             if (fragmented) {
                 ++result.generated_window_count;
             }
 
             previous_response_end = response_end;
+            previous_window_begin = response_begin;
             if (response_end == response_length) {
                 break;
             }
-            response_begin += response_hop;
+            nominal_response_begin += response_hop;
             first_window = false;
         }
     }
@@ -331,7 +494,9 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
                        std::to_string(construction.long_sequence_count) +
                        " long SFT sequences expanded into " +
                        std::to_string(construction.generated_window_count) +
-                       " prompt-pinned response windows");
+                       " prompt-pinned response windows" +
+                       " (atom_safe_cut_adjustments=" +
+                       std::to_string(construction.atom_safe_cut_adjustments) + ")");
         }
         filterOverlongSequences(sequences, split_name, max_seq_len, logger);
         filterShortSequences(sequences, split_name, min_seq_valid_tokens, logger);
@@ -357,6 +522,7 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
     size_t long_seq_count = 0;
     size_t generated_windows = 0;
     size_t bos_prepended = 0;
+    size_t atom_safe_cut_adjustments = 0;
 
     // Final-position autoregressive boundary mask. Required by
     // BatchPayload's Rule 20 invariant.
@@ -367,6 +533,9 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
     };
 
     for (const auto& seq : sequences) {
+        const auto atom_spans = collectAtomTokenSpans(
+            seq.token_ids,
+            "Sliding window (" + split_name + ", PT)");
         if (static_cast<int>(seq.token_ids.size()) <= max_seq_len) {
             // Short sequence or exactly max_seq_len — no windowing.
             GRIM::TokenizerArtifacts::GrmtSequence copy = seq;
@@ -410,18 +579,55 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
             prompt_end = static_cast<size_t>(seq.prompt_end_pos) + 1;
         }
         bool prompt_span_assigned = !has_prompt_span;
-        size_t start = 0;
+        size_t nominal_start = 0;
+        size_t previous_window_begin = std::numeric_limits<size_t>::max();
         const size_t stride = static_cast<size_t>(sliding_window_stride);
         bool is_first_window = true;
         size_t prev_source_end = 0;  // Track previous window's source end for overlap masking
 
-        while (start < seq_len) {
+        while (is_first_window || prev_source_end < seq_len) {
+            const size_t requested_start = is_first_window
+                ? nominal_start
+                : std::min(nominal_start, prev_source_end);
+            size_t start = rewindCutToAtomOpening(
+                atom_spans,
+                requested_start,
+                atom_safe_cut_adjustments);
+            if (!is_first_window && start == previous_window_begin) {
+                const AtomTokenSpan* repeated_span =
+                    atomSpanContainingCut(atom_spans, requested_start);
+                if (!repeated_span) {
+                    nominal_start += stride;
+                    continue;
+                }
+                start = repeated_span->end;
+            }
+
             // Reserve 1 token for BOS if this is not the first window and BOS is enabled
             const bool prepend_bos = !is_first_window && add_bos_token;
             const size_t effective_max = (is_first_window || !prepend_bos)
                 ? static_cast<size_t>(max_seq_len)
                 : static_cast<size_t>(max_seq_len - 1);
-            size_t end = std::min(seq_len, start + effective_max);
+            const size_t desired_end = std::min(seq_len, start + effective_max);
+            const size_t end = truncateEndBeforeSplitAtom(
+                atom_spans,
+                start,
+                desired_end,
+                effective_max,
+                "Sliding window (" + split_name + ", PT)",
+                atom_safe_cut_adjustments);
+            if (end <= start) {
+                throw std::runtime_error(
+                    "Sliding window (" + split_name +
+                    ", PT): atom-safe window made no progress at source token index=" +
+                    std::to_string(start));
+            }
+            if (!is_first_window && start > prev_source_end) {
+                throw std::runtime_error(
+                    "Sliding window (" + split_name +
+                    ", PT): atom-safe windows left a source-token gap before index=" +
+                    std::to_string(start));
+            }
 
             GRIM::TokenizerArtifacts::GrmtSequence window;
             // PT windows do not pin goal metadata. Retain it only on the
@@ -515,12 +721,17 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
                 prompt_span_assigned = true;
             }
 
+            (void)collectAtomTokenSpans(
+                window.token_ids,
+                "Sliding window (" + split_name + ", PT output)");
+
             windowed.push_back(std::move(window));
             generated_windows++;
 
             prev_source_end = end;  // Track for overlap masking in next window
+            previous_window_begin = start;
             if (end == seq_len) break;
-            start += stride;
+            nominal_start += stride;
             is_first_window = false;
         }
 
@@ -536,7 +747,9 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
         logger.log("Sliding window (" + split_name + "): " +
                    std::to_string(long_seq_count) + " long sequences expanded into " +
                    std::to_string(generated_windows) + " windows" +
-                   " (BOS prepended to " + std::to_string(bos_prepended) + " mid-sequence windows)");
+                   " (BOS prepended to " + std::to_string(bos_prepended) +
+                   " mid-sequence windows, atom_safe_cut_adjustments=" +
+                   std::to_string(atom_safe_cut_adjustments) + ")");
     }
 
     // Post-window cleanup. Both filters exist because windowing + BatchPayload

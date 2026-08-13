@@ -138,12 +138,11 @@ constexpr int UPSILON_REFERENCE_LAYERS = 12;      // Reference layer count (L_re
 
 //======================================================//
 // Tokenizer / Atom Token Configuration
-// Token layout: [0-3] Special, [4-259] Byte, [260-261] Atom (NONE+NUM), [262+] Unigram
+// Token layout: [0-3] Special, [4-259] Byte, [260-263] typed atom boundaries, [264+] Unigram
 //======================================================//
 constexpr int BYTE_TOKEN_END = Tokenizer::BYTE_TOKEN_OFFSET + Tokenizer::BYTE_VOCAB_SIZE;  // 260
 constexpr int ATOM_TOKEN_START = BYTE_TOKEN_END;  // First atom token ID (immediately after bytes)
-// Atom type count: single source of truth is Tokenizer::kAtomTypeCount (TokenLayout.hpp)
-constexpr int ATOM_TOKEN_END = ATOM_TOKEN_START + Tokenizer::kAtomTypeCount;  // 260 + kAtomTypeCount
+constexpr int ATOM_TOKEN_END = Tokenizer::UNIGRAM_VOCAB_OFFSET;
 constexpr uint32_t MAX_REASONABLE_VOCAB_SIZE = 2000000; // Sanity check for vocab detection
 
 // BOS/EOS Token Insertion Control

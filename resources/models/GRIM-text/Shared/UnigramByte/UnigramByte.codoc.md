@@ -10,7 +10,7 @@
 `UnigramByte` is a composed tokenizer with four jobs:
 
 1. `Detectors/DetectorRegistry` scans raw text for numeric atoms and non-token text features.
-2. `AtomTable` stores parsed numeric values and per-entry numeric decomposition metadata (`AtomEntry::arg_number`) so the model can keep a placeholder token and still recover the real value.
+2. `AtomTable` stores parsed numeric values and per-entry numeric decomposition metadata (`AtomEntry::arg_number`) as a separate auxiliary target while the model-visible value remains between typed boundary tokens.
 3. `UnigramLM` does learned subword tokenization on the residual non-atom text.
 4. `TokenLayout.hpp` owns the byte-token IDs and conversion helpers used when finalized unigram coverage overflows to raw bytes.
 
@@ -104,7 +104,7 @@ The live layout comes from `TokenLayout.hpp`.
 |---|---|---|
 | `0..3` | reserved layout special tokens | `UNK=0`, `PAD=1`, `BOS=2`, `EOS=3`; metadata lives in `TokenLayout.hpp` |
 | `4..259` | byte fallback tokens | one token per raw byte |
-| `ATOM_TOKEN_OFFSET..UNIGRAM_VOCAB_OFFSET-1` | atom tokens | current `AtomType` placeholders |
+| `ATOM_TOKEN_OFFSET..UNIGRAM_VOCAB_OFFSET-1` | atom tokens | typed opening/closing boundaries |
 | `UNIGRAM_VOCAB_OFFSET+` | learned unigram pieces | subword pieces only |
 
 ### Vocab-size ownership
@@ -139,7 +139,7 @@ The live layout comes from `TokenLayout.hpp`.
 flowchart LR
    IN[Input text] --> DET[scan raw detections]
    DET --> REG[create AtomTable payload]
-   REG --> INJ[inject atom payload placeholders]
+   REG --> INJ[inject typed atom spans]
     INJ --> NORM[normalizeSpaces]
    NORM --> SEG[UnigramViterbiSession]
     SEG --> FB{piece found?}
@@ -153,7 +153,7 @@ flowchart LR
 
 1. `DetectorRegistry::scan()` finds raw detections; `UniByte` passes them to `createAtomTableFromRawTextDetections()`.
 2. `createAtomTableFromRawTextDetections()` allocates the per-sequence `AtomTable`, registers each atom-emitting detection exactly once, and stores numeric `arg_number` / `DigitBinding` metadata on the deduped `AtomEntry` itself before returning `AtomTokenizationPayload` records.
-3. Each atom payload carries the finalized `StructuralSpan`, placeholder token ID, `atom_entry_id`, packed numeric value, atom flags, and atom mask used by the merge step.
+3. Each atom payload carries the finalized `StructuralSpan`, matching opening/closing token IDs, `atom_entry_id`, packed numeric value, atom flags, and atom mask used by the merge step.
 4. The original text is segmented around atom spans; non-atom gaps go through unigram segmentation, while atom gaps emit the returned atom payload directly.
 5. Text normalization happens before unigram segmentation of each non-atom gap.
 6. `UnigramLM::encode()` creates a `UnigramViterbiSession` over the normalized gap text.

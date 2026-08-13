@@ -68,8 +68,12 @@ void filterShortSequences(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
                           TrainingLogger& logger);
 
 // Expand any sequences longer than max_seq_len into a series of
-// overlapping windows. Sequences <= max_seq_len pass through unchanged
-// except for the final-position target mask.
+// overlapping windows. Typed atom spans are indivisible: every source and
+// output row is checked for matched, same-type boundaries, and a window cut
+// is moved to the opening boundary when it would split a span. An atom that
+// cannot fit in the available window capacity is rejected. Sequences <=
+// max_seq_len pass through unchanged except for the final-position target
+// mask.
 //
 // Calls injectBoundaryTokens internally before windowing, then calls
 // filterOverlongSequences and filterShortSequences after windowing.

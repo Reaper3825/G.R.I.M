@@ -22,7 +22,7 @@
 namespace TensorContract {
 
 constexpr int TOKEN_TYPE_GATE_UNIGRAM_OFFSET =
-    GRIM::Tokenizer::ATOM_TOKEN_OFFSET + GRIM::Tokenizer::kAtomTypeCount;
+    GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET;
 
 enum class TokenTypeGateClass : int {
     SPECIAL = 0,

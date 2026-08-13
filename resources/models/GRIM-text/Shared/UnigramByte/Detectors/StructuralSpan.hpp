@@ -30,7 +30,8 @@ struct StructuralSpan {
     uint32_t content_offset; // Offset to content
     uint32_t content_length; // Length of content
 
-    int placeholder_id = -1; // Token ID of placeholder when this structure emits an atom
+    int open_token_id = -1;  // Typed opening boundary token, e.g. <INT>
+    int close_token_id = -1; // Matching typed closing boundary token, e.g. </INT>
 };
 
 } // namespace Tokenizer

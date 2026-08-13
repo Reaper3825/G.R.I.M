@@ -669,22 +669,42 @@ void GrmtSequence::validateForWrite(const std::string& source) const {
 
     bool saw_atom_entry = false;
     for (std::size_t i = 0; i < n; ++i) {
-        const bool token_is_atom = token_ids[i] >= GRIM::Tokenizer::ATOM_TOKEN_OFFSET &&
-                                   token_ids[i] < GRIM::Tokenizer::UNIGRAM_VOCAB_OFFSET;
-        if (token_atom_mask[i] != 0 && !token_is_atom) {
-            throw std::runtime_error("[GRMT] " + source + ": token_atom_mask is set at non-atom token index=" +
-                                     std::to_string(i) + " token_id=" + std::to_string(token_ids[i]));
+        const bool token_is_atom_open = GRIM::Tokenizer::isAtomOpenTokenId(token_ids[i]);
+        if (token_atom_mask[i] > 1) {
+            throw std::runtime_error("[GRMT] " + source +
+                                     ": token_atom_mask must be binary at index=" +
+                                     std::to_string(i) + " value=" +
+                                     std::to_string(token_atom_mask[i]));
         }
-        if (atom_entry_ids[i] != GRIM::Tokenizer::kAtomEntryNone && !token_is_atom) {
-            throw std::runtime_error("[GRMT] " + source + ": atom_entry_id is set at non-atom token index=" +
-                                     std::to_string(i) + " token_id=" + std::to_string(token_ids[i]));
-        }
-        if (atom_entry_ids[i] != GRIM::Tokenizer::kAtomEntryNone) {
+
+        if (token_is_atom_open) {
+            if (token_atom_mask[i] != 1) {
+                throw std::runtime_error("[GRMT] " + source +
+                                         ": atom opening boundary has token_atom_mask=0 at index=" +
+                                         std::to_string(i) + " token_id=" +
+                                         std::to_string(token_ids[i]));
+            }
+            if (atom_entry_ids[i] == GRIM::Tokenizer::kAtomEntryNone) {
+                throw std::runtime_error("[GRMT] " + source +
+                                         ": atom opening boundary has no atom_entry_id at index=" +
+                                         std::to_string(i) + " token_id=" +
+                                         std::to_string(token_ids[i]));
+            }
             saw_atom_entry = true;
+            continue;
         }
-        if (token_is_atom && token_atom_mask[i] == 0) {
-            throw std::runtime_error("[GRMT] " + source + ": atom token has token_atom_mask=0 at index=" +
-                                     std::to_string(i) + " token_id=" + std::to_string(token_ids[i]));
+
+        if (token_atom_mask[i] != 0 ||
+            atom_entry_ids[i] != GRIM::Tokenizer::kAtomEntryNone ||
+            token_numeric_values[i] != 0.0f ||
+            token_atom_flags[i] != 0) {
+            const char* position_kind = GRIM::Tokenizer::isAtomCloseTokenId(token_ids[i])
+                ? "atom closing boundary"
+                : "non-opening token";
+            throw std::runtime_error("[GRMT] " + source + ": " + position_kind +
+                                     " carries atom metadata at index=" +
+                                     std::to_string(i) + " token_id=" +
+                                     std::to_string(token_ids[i]));
         }
     }
 
@@ -703,6 +723,15 @@ void GrmtSequence::validateForWrite(const std::string& source) const {
                                          std::to_string(entry_id) +
                                          " is not retrievable from atom_table at token index=" +
                                          std::to_string(i));
+            }
+            const auto token_type = GRIM::Tokenizer::tokenIdToAtomType(token_ids[i]);
+            if (entry->type != token_type) {
+                throw std::runtime_error("[GRMT] " + source + ": atom opening boundary type=" +
+                                         std::string(GRIM::Tokenizer::atomTypeName(token_type)) +
+                                         " does not match atom_entry_id=" +
+                                         std::to_string(entry_id) + " type=" +
+                                         GRIM::Tokenizer::atomTypeName(entry->type) +
+                                         " at token index=" + std::to_string(i));
             }
         }
     }
