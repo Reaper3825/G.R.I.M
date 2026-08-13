@@ -14,6 +14,9 @@ namespace GRIM {
 
 // Current GRMT training tensor stream version.
 //
+// v20 adds ordered constraint token IDs and one invisible logical token span
+// per constraint. There is intentionally no collection-wide constraint span.
+//
 // v19 adds invisible logical token spans for target state, the full criteria
 // collection, and each ordered criterion/evidence pair. Evidence spans may be
 // absent for criteria awaiting evidence generation. The prompt is pinned ahead
@@ -26,7 +29,7 @@ namespace GRIM {
 // TransitionInvocation targets. Opaque uint64 TransitionId values are lowered
 // through per-row CompiledTransitionBinding tables. Argument and result payload
 // values remain outside transition metadata.
-inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 19;
+inline constexpr std::uint32_t GRMT_FORMAT_VERSION = 20;
 
 } // namespace GRIM
 

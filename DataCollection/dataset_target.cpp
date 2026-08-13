@@ -76,6 +76,14 @@ static GRIM::ConceptBlock conceptBlockFromJson(const json& j) {
                     item.value("evidence", std::string())});
             }
         }
+        if (j["goal"].contains("constraints")
+            && j["goal"]["constraints"].is_array()) {
+            for (const auto& item : j["goal"]["constraints"]) {
+                if (item.is_string()) {
+                    goal.constraints.push_back(item.get<std::string>());
+                }
+            }
+        }
         cb.goal = std::move(goal);
     }
 

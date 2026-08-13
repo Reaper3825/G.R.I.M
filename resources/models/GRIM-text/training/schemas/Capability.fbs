@@ -1,0 +1,10 @@
+namespace GRIM;
+
+table Capability {
+  Name: string;
+  Id: string;
+  Tags: [string];
+  Type: string; // Memory, Tool, Model, Web
+}
+
+root_type Capability;

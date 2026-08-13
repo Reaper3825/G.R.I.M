@@ -60,7 +60,10 @@ GRIM::GoalSpanView BatchPayload::goalSpansForRow(std::size_t row) const {
         goal->success_criteria.has_value()
             ? &*goal->success_criteria
             : nullptr;
-    return GRIM::GoalSpanView(target_state, success_criteria);
+    const GRIM::Constraints* constraints = goal->constraints.has_value()
+        ? &*goal->constraints
+        : nullptr;
+    return GRIM::GoalSpanView(target_state, success_criteria, constraints);
 }
 
 std::vector<int32_t> buildInferenceExecutionSlotIndexMap(

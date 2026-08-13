@@ -13,7 +13,7 @@ serialized records (4 special-token metadata records + learned unigram pieces),
 not the full token-space size. The token-space size is stored separately in the
 header and must equal special + bytes + atoms + learned pieces.
 
-Current training_data.grmt format is GRMT v19. Rows persist atom side channels,
+Current training_data.grmt format is GRMT v20. Rows persist atom side channels,
 per-sequence AtomTable data, row-level Goal metadata, opaque slot/transition
 lowering tables, and variable-arity transition invocations. This script reads
 the full current row layout and decodes atoms from their persisted AtomTable
@@ -61,7 +61,7 @@ UNIGRAM_TOKEN_START = ATOM_TOKEN_END                 # 262
 KTMG_VOCAB_VERSION = 4
 KTMG_MAX_PIECE_LENGTH = 32
 GRMT_MAGIC = 0x474D5254
-GRMT_FORMAT_VERSION = 19
+GRMT_FORMAT_VERSION = 20
 ATOM_ENTRY_NONE = 0xFFFFFFFF
 PAD_TOKEN_ID = 1
 
@@ -83,6 +83,7 @@ class GrmtSequenceRecord:
     success_criteria: list[
         tuple[list[int], tuple[int, int], list[int], tuple[int, int]]
     ]
+    constraints: list[tuple[list[int], tuple[int, int]]]
 
 
 # ── Binary helpers ───────────────────────────────────────────────────────────
@@ -388,12 +389,13 @@ def read_goal_metadata(
     tuple[int, int] | None,
     tuple[int, int] | None,
     list[tuple[list[int], tuple[int, int], list[int], tuple[int, int]]],
+    list[tuple[list[int], tuple[int, int]]],
 ]:
     has_goal = read_u8(f, source)
     if has_goal not in (0, 1):
         raise ValueError(f"invalid GRMT goal flag in {source}: {has_goal}")
     if has_goal == 0:
-        return None, None, None, []
+        return None, None, None, [], []
 
     has_target_state = read_u8(f, source)
     if has_target_state not in (0, 1):
@@ -425,18 +427,32 @@ def read_goal_metadata(
                 (criterion, criterion_span, evidence, evidence_span)
             )
 
+    has_constraints = read_u8(f, source)
+    if has_constraints not in (0, 1):
+        raise ValueError(
+            f"invalid GRMT constraints flag in {source}: {has_constraints}"
+        )
+    constraints = []
+    if has_constraints:
+        entry_count = read_u32(f, source)
+        for _ in range(entry_count):
+            token_ids = read_i32_array(f, read_u32(f, source), source)
+            span = (read_i32(f, source), read_i32(f, source))
+            constraints.append((token_ids, span))
+
     return (
         target_state_token_ids,
         target_state_span,
         criteria_span,
         success_criteria,
+        constraints,
     )
 
 
 def iter_grmt_sequences(path: Path):
     """Yield decoded GRMT rows using the current persisted row layout.
 
-    GRMT v19 per-sequence layout (must read ALL fields to stay in sync):
+    GRMT v20 per-sequence layout (must read ALL fields to stay in sync):
       uint32         seq_len
       int32[seq_len] token_ids
       int32[seq_len] targets
@@ -447,7 +463,8 @@ def iter_grmt_sequences(path: Path):
       uint8 has_atom_table + optional AtomTable payload
       uint8 execution_active, int8 execution_gate_target
       int32 prompt_end_pos, int32 prompt_length
-      uint8 has_goal + optional target-state and criterion/evidence token spans
+      uint8 has_goal + optional target-state, criterion/evidence, and
+          per-constraint token spans
       int32[seq_len] token_exec_slots
       uint32 compiled_slot_binding_count, then {uint64 SlotId, int32 SlotIndex}
       uint32 compiled_transition_binding_count, then
@@ -522,6 +539,7 @@ def iter_grmt_sequences(path: Path):
                 target_state_span,
                 criteria_span,
                 success_criteria,
+                constraints,
             ) = read_goal_metadata(f, row_source)
             skip_exact(f, 4 * seq_len, row_source)                # token_exec_slots (int32)
 
@@ -556,6 +574,7 @@ def iter_grmt_sequences(path: Path):
                 target_state_span=target_state_span,
                 criteria_span=criteria_span,
                 success_criteria=success_criteria,
+                constraints=constraints,
             )
 
 

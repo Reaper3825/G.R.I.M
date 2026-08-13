@@ -76,6 +76,7 @@ ConceptBlock fromFlatBuffer(const GRIMConcept::ConceptBlock& source) {
                     stringValue(source_criterion->evidence())});
             }
         }
+        decoded_goal.constraints = stringVectorValue(goal->constraints());
         block.goal = std::move(decoded_goal);
     }
 
@@ -132,7 +133,8 @@ toFlatBuffer(flatbuffers::FlatBufferBuilder& builder, const ConceptBlock& block)
         goal = GRIMConcept::CreateGoal(
             builder,
             builder.CreateString(block.goal->target_state),
-            builder.CreateVector(criteria));
+            builder.CreateVector(criteria),
+            createStringVector(builder, block.goal->constraints));
     }
 
     return GRIMConcept::CreateConceptBlock(
@@ -175,6 +177,8 @@ size_t estimatedBufferSize(const std::vector<ConceptBlock>& blocks) {
             add(16 + block.goal->target_state.size());
             for (const auto& entry : block.goal->success_criteria)
                 add(32 + entry.criterion.size() + entry.evidence.size());
+            for (const auto& constraint : block.goal->constraints)
+                add(8 + constraint.size());
         }
         add(block.step_index.size() * sizeof(int32_t));
         for (const auto& step : block.execution) {

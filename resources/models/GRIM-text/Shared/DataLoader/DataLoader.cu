@@ -172,6 +172,12 @@ json conceptBlockFlatBufferToJson(const GRIMConcept::ConceptBlock& source) {
 				});
 			}
 		}
+		goal_json["constraints"] = json::array();
+		if (const auto* constraints = goal->constraints()) {
+			for (const auto* constraint : *constraints) {
+				goal_json["constraints"].push_back(fbString(constraint));
+			}
+		}
 		j["goal"] = std::move(goal_json);
 	}
 
@@ -513,6 +519,9 @@ bool PrepareTrainingDataFromCache(
 			add_span(entry.criterion);
 			add_span(entry.evidence);
 		}
+		for (const auto& constraint : rendered.constraints) {
+			add_span(constraint);
+		}
 		if (rendered.prompt_byte_end > rendered.prompt_byte_begin) {
 			boundaries.push_back(rendered.prompt_byte_begin);
 			boundaries.push_back(rendered.prompt_byte_end);
@@ -676,8 +685,46 @@ bool PrepareTrainingDataFromCache(
 			}
 		}
 
+		if (source_goal.contains("constraints")) {
+			if (!source_goal["constraints"].is_array()) {
+				throw std::runtime_error(
+					"[DataLoader] goal.constraints must be an array");
+			}
+
+			const auto& source_entries = source_goal["constraints"];
+			if (source_entries.size() != rendered.constraints.size()) {
+				throw std::runtime_error(
+					"[DataLoader] rendered constraint count mismatch");
+			}
+
+			GRIM::Constraints constraints;
+			for (std::size_t index = 0;
+			     index < source_entries.size();
+			     ++index) {
+				if (!source_entries[index].is_string()) {
+					throw std::runtime_error(
+						"[DataLoader] goal.constraints[" +
+						std::to_string(index) + "] must be a string");
+				}
+
+				GRIM::Constraint entry;
+				const std::string prefix =
+					"goal.constraints[" + std::to_string(index) + "]";
+				entry.constraint_span = token_span(
+					rendered.constraints[index],
+					boundaries, token_counts, prefix);
+				entry.token_ids = span_token_ids(
+					sequence, entry.constraint_span, prefix);
+				constraints.entries.push_back(std::move(entry));
+			}
+			if (!constraints.entries.empty()) {
+				goal->constraints = std::move(constraints);
+			}
+		}
+
 		if (!goal->target_state.has_value() &&
-		    !goal->success_criteria.has_value()) {
+		    !goal->success_criteria.has_value() &&
+		    !goal->constraints.has_value()) {
 			return nullptr;
 		}
 		return goal;

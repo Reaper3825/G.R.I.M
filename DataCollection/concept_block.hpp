@@ -41,6 +41,7 @@ struct ConceptBlockSuccessCriterion {
 struct ConceptBlockGoal {
     std::string target_state;
     std::vector<ConceptBlockSuccessCriterion> success_criteria;
+    std::vector<std::string> constraints;
 };
 
 struct ConceptBlock {

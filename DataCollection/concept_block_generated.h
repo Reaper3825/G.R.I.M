@@ -190,13 +190,17 @@ struct Goal FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef GoalBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_TARGET_STATE = 4,
-    VT_SUCCESS_CRITERIA = 6
+    VT_SUCCESS_CRITERIA = 6,
+    VT_CONSTRAINTS = 8
   };
   const ::flatbuffers::String *target_state() const {
     return GetPointer<const ::flatbuffers::String *>(VT_TARGET_STATE);
   }
   const ::flatbuffers::Vector<::flatbuffers::Offset<GRIMConcept::SuccessCriterion>> *success_criteria() const {
     return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<GRIMConcept::SuccessCriterion>> *>(VT_SUCCESS_CRITERIA);
+  }
+  const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *constraints() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *>(VT_CONSTRAINTS);
   }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -205,6 +209,9 @@ struct Goal FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyOffset(verifier, VT_SUCCESS_CRITERIA) &&
            verifier.VerifyVector(success_criteria()) &&
            verifier.VerifyVectorOfTables(success_criteria()) &&
+           VerifyOffset(verifier, VT_CONSTRAINTS) &&
+           verifier.VerifyVector(constraints()) &&
+           verifier.VerifyVectorOfStrings(constraints()) &&
            verifier.EndTable();
   }
 };
@@ -218,6 +225,9 @@ struct GoalBuilder {
   }
   void add_success_criteria(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<GRIMConcept::SuccessCriterion>>> success_criteria) {
     fbb_.AddOffset(Goal::VT_SUCCESS_CRITERIA, success_criteria);
+  }
+  void add_constraints(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> constraints) {
+    fbb_.AddOffset(Goal::VT_CONSTRAINTS, constraints);
   }
   explicit GoalBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
@@ -233,8 +243,10 @@ struct GoalBuilder {
 inline ::flatbuffers::Offset<Goal> CreateGoal(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     ::flatbuffers::Offset<::flatbuffers::String> target_state = 0,
-    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<GRIMConcept::SuccessCriterion>>> success_criteria = 0) {
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<GRIMConcept::SuccessCriterion>>> success_criteria = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> constraints = 0) {
   GoalBuilder builder_(_fbb);
+  builder_.add_constraints(constraints);
   builder_.add_success_criteria(success_criteria);
   builder_.add_target_state(target_state);
   return builder_.Finish();
@@ -243,13 +255,16 @@ inline ::flatbuffers::Offset<Goal> CreateGoal(
 inline ::flatbuffers::Offset<Goal> CreateGoalDirect(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     const char *target_state = nullptr,
-    const std::vector<::flatbuffers::Offset<GRIMConcept::SuccessCriterion>> *success_criteria = nullptr) {
+    const std::vector<::flatbuffers::Offset<GRIMConcept::SuccessCriterion>> *success_criteria = nullptr,
+    const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *constraints = nullptr) {
   auto target_state__ = target_state ? _fbb.CreateString(target_state) : 0;
   auto success_criteria__ = success_criteria ? _fbb.CreateVector<::flatbuffers::Offset<GRIMConcept::SuccessCriterion>>(*success_criteria) : 0;
+  auto constraints__ = constraints ? _fbb.CreateVector<::flatbuffers::Offset<::flatbuffers::String>>(*constraints) : 0;
   return GRIMConcept::CreateGoal(
       _fbb,
       target_state__,
-      success_criteria__);
+      success_criteria__,
+      constraints__);
 }
 
 struct ConceptBlock FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -421,8 +436,8 @@ inline ::flatbuffers::Offset<ConceptBlock> CreateConceptBlock(
     ::flatbuffers::Offset<GRIMConcept::Goal> goal = 0,
     ::flatbuffers::Offset<::flatbuffers::String> raw = 0) {
   ConceptBlockBuilder builder_(_fbb);
-  builder_.add_raw(raw);
   builder_.add_timestamp(timestamp);
+  builder_.add_raw(raw);
   builder_.add_goal(goal);
   builder_.add_source_sequence_id(source_sequence_id);
   builder_.add_format_type(format_type);

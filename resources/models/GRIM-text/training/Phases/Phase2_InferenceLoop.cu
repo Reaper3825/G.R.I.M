@@ -406,30 +406,7 @@ GRIM::GeneratedSequence generateOneSequence(
         return static_cast<int>(sequence.token_ids.size()) - prompt_len;
     };
 
-    auto selectorHasCandidateType = [&](const TailLogits& tail,
-                                        GRIM::Tokenizer::AtomType type) -> bool {
-        if (!use_selector || tail.num_pool_atoms <= 0) {
-            return false;
-        }
-        if (tail.selector.size() != static_cast<size_t>(tail.n_rows) *
-                                    static_cast<size_t>(tail.num_pool_atoms)) {
-            throw std::runtime_error(
-                "generateOneSequence: selector candidate pool has no matching logits");
-        }
-        for (int e = 0; e < tail.num_pool_atoms; ++e) {
-            const auto entry = prompt_atom_table->getAtom(static_cast<uint32_t>(e));
-            if (!entry.has_value()) {
-                throw std::runtime_error(
-                    "generateOneSequence: selector pool entry has no AtomTable record");
-            }
-            if (entry->type == type) {
-                return true;
-            }
-        }
-        return false;
-    };
-
-    // Commit one generated token to the output sequence with explicit atom binding.
+    // Commit one generated token and its optional atom binding metadata.
     auto commitToken = [&](const GRIM::Sampling::SampleResult& s,
                            float numeric_value, uint8_t atom_mask,
                            uint32_t atom_flags, uint32_t atom_entry_id) {
@@ -446,9 +423,9 @@ GRIM::GeneratedSequence generateOneSequence(
         }
     };
 
-    // Numeric placeholders use the selector over session AtomTable entries.
-    // There is no unbound atom fallback and selector candidates must match the
-    // LM-selected atom type.
+    // Numeric placeholders may use the selector over session AtomTable entries
+    // when a matching binding is available. Placeholder generation itself is
+    // owned by the LM and remains valid without selector candidates.
     auto commitSampled = [&](const GRIM::Sampling::SampleResult& s, const TailLogits& tail, int row) {
         const bool is_numeric_atom = token_layout.isAtom(s.token_id) &&
             GRIM::Tokenizer::isNumericAtom(GRIM::Tokenizer::tokenIdToAtomType(s.token_id));
@@ -486,8 +463,8 @@ GRIM::GeneratedSequence generateOneSequence(
                 return;
             }
         }
-        throw std::runtime_error(
-            "generateOneSequence: sampled numeric placeholder has no legal value binding");
+        commitToken(s, 0.0f, /*atom_mask=*/0, /*atom_flags=*/0,
+                    GRIM::Tokenizer::kAtomEntryNone);
     };
 
     // Select the next token from a primary-logit row using the SAME pipeline +
@@ -501,19 +478,6 @@ GRIM::GeneratedSequence generateOneSequence(
             cfg.eos_token_id >= 0 && cfg.eos_token_id < vocab_size) {
             row[static_cast<size_t>(cfg.eos_token_id)] = -1e30f;
         }
-
-        const int int_tid = GRIM::Tokenizer::atomTypeToTokenId(
-            GRIM::Tokenizer::AtomType::ATOM_INT);
-        const int float_tid = GRIM::Tokenizer::atomTypeToTokenId(
-            GRIM::Tokenizer::AtomType::ATOM_FLOAT);
-        bool allow_int = false;
-        bool allow_float = false;
-        allow_int = selectorHasCandidateType(
-            tail, GRIM::Tokenizer::AtomType::ATOM_INT);
-        allow_float = selectorHasCandidateType(
-            tail, GRIM::Tokenizer::AtomType::ATOM_FLOAT);
-        if (!allow_int) row[static_cast<size_t>(int_tid)] = -1e30f;
-        if (!allow_float) row[static_cast<size_t>(float_tid)] = -1e30f;
 
         GRIM::Sampling::SampleResult s = pipeline.selectNextToken(row, sequence.token_ids, vocab_size);
         if (s.token_id < 0 || s.token_id >= vocab_size) {

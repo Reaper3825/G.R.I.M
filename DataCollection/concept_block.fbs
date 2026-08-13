@@ -22,6 +22,7 @@ table SuccessCriterion {
 table Goal {
     target_state: string;
     success_criteria: [SuccessCriterion];
+    constraints: [string];
 }
 
 table ConceptBlock {

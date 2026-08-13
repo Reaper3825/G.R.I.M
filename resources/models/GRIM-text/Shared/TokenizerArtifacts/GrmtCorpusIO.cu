@@ -152,9 +152,11 @@ void validateGoalMetadata(const std::shared_ptr<const GRIM::Goal>& goal,
         return;
     }
     if (!goal->target_state.has_value() &&
-        !goal->success_criteria.has_value()) {
+        !goal->success_criteria.has_value() &&
+        !goal->constraints.has_value()) {
         throw std::runtime_error(
-            "[GRMT] " + source + ": goal has no target_state or success_criteria");
+            "[GRMT] " + source +
+            ": goal has no target_state, success_criteria, or constraints");
     }
 
     auto validate_token_ids = [&source](const std::vector<std::int32_t>& token_ids,
@@ -252,6 +254,28 @@ void validateGoalMetadata(const std::shared_ptr<const GRIM::Goal>& goal,
                 ": outer criteria span does not enclose the ordered pairs exactly");
         }
     }
+    if (goal->constraints.has_value()) {
+        const auto& entries = goal->constraints->entries;
+        if (entries.empty()) {
+            throw std::runtime_error(
+                "[GRMT] " + source + ": goal.constraints has no entries");
+        }
+        for (std::size_t index = 0; index < entries.size(); ++index) {
+            const std::string field =
+                "goal.constraints[" + std::to_string(index) + "]";
+            validate_token_ids(
+                entries[index].token_ids,
+                entries[index].constraint_span,
+                field);
+            if (index > 0 &&
+                entries[index - 1].constraint_span.end >
+                    entries[index].constraint_span.begin) {
+                throw std::runtime_error(
+                    "[GRMT] " + source +
+                    ": constraint spans overlap or are out of order");
+            }
+        }
+    }
 }
 
 void validateGoalTokenSlices(const std::shared_ptr<const GRIM::Goal>& goal,
@@ -293,6 +317,17 @@ void validateGoalTokenSlices(const std::shared_ptr<const GRIM::Goal>& goal,
             }
         }
     }
+    if (goal->constraints.has_value()) {
+        for (std::size_t index = 0;
+             index < goal->constraints->entries.size();
+             ++index) {
+            const auto& entry = goal->constraints->entries[index];
+            validate(
+                entry.token_ids,
+                entry.constraint_span,
+                "goal.constraints[" + std::to_string(index) + "]");
+        }
+    }
 }
 
 void validateGoalTokenRange(const std::shared_ptr<const GRIM::Goal>& goal,
@@ -327,6 +362,15 @@ void validateGoalTokenRange(const std::shared_ptr<const GRIM::Goal>& goal,
                 "goal.success_criteria[" + std::to_string(index) + "]";
             validate(entry.token_ids, prefix + ".criterion");
             validate(entry.evidence_token_ids, prefix + ".evidence");
+        }
+    }
+    if (goal->constraints.has_value()) {
+        for (std::size_t index = 0;
+             index < goal->constraints->entries.size();
+             ++index) {
+            validate(
+                goal->constraints->entries[index].token_ids,
+                "goal.constraints[" + std::to_string(index) + "]");
         }
     }
 }
@@ -386,22 +430,35 @@ void writeGoalForSequence(std::ostream& output,
     const std::uint8_t has_success_criteria =
         sequence.goal->success_criteria.has_value() ? 1 : 0;
     writeScalar(output, has_success_criteria, sink);
-    if (has_success_criteria == 0) {
-        return;
+    if (has_success_criteria != 0) {
+        const auto& entries = sequence.goal->success_criteria->entries;
+        const std::uint32_t entry_count =
+            checkedCount(entries.size(), "goal.success_criteria", sink);
+        writeGoalSpan(output, sequence.goal->success_criteria->span, sink);
+        writeScalar(output, entry_count, sink);
+        for (const auto& entry : entries) {
+            writeTokenIds(output, entry.token_ids,
+                          "goal.success_criteria.criterion", sink);
+            writeGoalSpan(output, entry.criterion_span, sink);
+            writeTokenIds(output, entry.evidence_token_ids,
+                          "goal.success_criteria.evidence", sink);
+            writeGoalSpan(output, entry.evidence_span, sink);
+        }
     }
 
-    const auto& entries = sequence.goal->success_criteria->entries;
-    const std::uint32_t entry_count =
-        checkedCount(entries.size(), "goal.success_criteria", sink);
-    writeGoalSpan(output, sequence.goal->success_criteria->span, sink);
-    writeScalar(output, entry_count, sink);
-    for (const auto& entry : entries) {
-        writeTokenIds(output, entry.token_ids,
-                      "goal.success_criteria.criterion", sink);
-        writeGoalSpan(output, entry.criterion_span, sink);
-        writeTokenIds(output, entry.evidence_token_ids,
-                      "goal.success_criteria.evidence", sink);
-        writeGoalSpan(output, entry.evidence_span, sink);
+    const std::uint8_t has_constraints =
+        sequence.goal->constraints.has_value() ? 1 : 0;
+    writeScalar(output, has_constraints, sink);
+    if (has_constraints != 0) {
+        const auto& entries = sequence.goal->constraints->entries;
+        const std::uint32_t entry_count =
+            checkedCount(entries.size(), "goal.constraints", sink);
+        writeScalar(output, entry_count, sink);
+        for (const auto& entry : entries) {
+            writeTokenIds(output, entry.token_ids,
+                          "goal.constraints", sink);
+            writeGoalSpan(output, entry.constraint_span, sink);
+        }
     }
 }
 
@@ -452,6 +509,26 @@ std::shared_ptr<const GRIM::Goal> readGoalForSequence(
             success_criteria.entries.push_back(std::move(entry));
         }
         goal->success_criteria = std::move(success_criteria);
+    }
+
+    const std::uint8_t has_constraints =
+        readScalar<std::uint8_t>(input, source);
+    if (has_constraints > 1) {
+        throw std::runtime_error(
+            "[GRMT] invalid constraints flag in " + source);
+    }
+    if (has_constraints != 0) {
+        GRIM::Constraints constraints;
+        const std::uint32_t entry_count =
+            readScalar<std::uint32_t>(input, source);
+        constraints.entries.reserve(entry_count);
+        for (std::uint32_t index = 0; index < entry_count; ++index) {
+            GRIM::Constraint entry;
+            entry.token_ids = readTokenIds(input, source);
+            entry.constraint_span = readGoalSpan(input, source);
+            constraints.entries.push_back(std::move(entry));
+        }
+        goal->constraints = std::move(constraints);
     }
 
     std::shared_ptr<const GRIM::Goal> immutable_goal = std::move(goal);

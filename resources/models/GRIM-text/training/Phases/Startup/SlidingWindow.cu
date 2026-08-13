@@ -57,6 +57,14 @@ std::shared_ptr<const GRIM::Goal> offsetGoalSpans(
         }
         shifted->success_criteria = std::move(criteria);
     }
+    if (source->constraints.has_value()) {
+        GRIM::Constraints constraints = *source->constraints;
+        for (auto& entry : constraints.entries) {
+            entry.constraint_span.begin += offset;
+            entry.constraint_span.end += offset;
+        }
+        shifted->constraints = std::move(constraints);
+    }
     return shifted;
 }
 
@@ -72,6 +80,13 @@ bool goalFitsPrefix(const std::shared_ptr<const GRIM::Goal>& goal,
     if (goal->success_criteria.has_value() &&
         static_cast<size_t>(goal->success_criteria->span.end) > source_end) {
         return false;
+    }
+    if (goal->constraints.has_value()) {
+        for (const auto& entry : goal->constraints->entries) {
+            if (static_cast<size_t>(entry.constraint_span.end) > source_end) {
+                return false;
+            }
+        }
     }
     return true;
 }

@@ -123,7 +123,10 @@ public:
             goal->success_criteria.has_value()
                 ? &*goal->success_criteria
                 : nullptr;
-        return GoalSpanView(target_state, success_criteria);
+        const Constraints* constraints = goal->constraints.has_value()
+            ? &*goal->constraints
+            : nullptr;
+        return GoalSpanView(target_state, success_criteria, constraints);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

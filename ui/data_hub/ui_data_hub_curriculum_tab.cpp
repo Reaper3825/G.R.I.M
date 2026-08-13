@@ -272,8 +272,11 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
         const float innerW = eInnerW - 2.0f * sectionPad;
         const float criterionAreaH = 44.0f;
         const float criterionBlockH = 148.0f;
+        const float constraintBlockH = 76.0f;
         const float goalSectionH = sectionPad + 22.0f + 20.0f + areaH + 14.0f
             + criterionBlockH * static_cast<float>(cbSuccessCriterionRows_.size())
+            + 32.0f
+            + constraintBlockH * static_cast<float>(cbConstraintAreas_.size())
             + 32.0f + sectionPad;
 
         renderer.drawRoundedRect({editorX + ePad, goalStartY},
@@ -315,6 +318,22 @@ void UIDataHubPanel::drawCurriculumTab(OverlayRenderer& renderer,
         successCriteriaActionMenu_->setPosition(innerLeft, ey);
         successCriteriaActionMenu_->setSize(108.0f, 26.0f);
         successCriteriaActionMenu_->drawOverlay(renderer, position);
+        ey += 32.0f;
+
+        for (size_t ci = 0; ci < cbConstraintAreas_.size(); ++ci) {
+            renderer.drawText({innerLeft, ey},
+                              "Constraint " + std::to_string(ci + 1),
+                              UITheme::Colors::TextMuted);
+            ey += 20.0f;
+            cbConstraintAreas_[ci]->setPosition(innerLeft, ey);
+            cbConstraintAreas_[ci]->setSize(innerW, criterionAreaH);
+            cbConstraintAreas_[ci]->drawOverlay(renderer, position);
+            ey += criterionAreaH + 12.0f;
+        }
+
+        constraintsActionMenu_->setPosition(innerLeft, ey);
+        constraintsActionMenu_->setSize(116.0f, 26.0f);
+        constraintsActionMenu_->drawOverlay(renderer, position);
         ey += 32.0f + sectionPad;
     }
     ey += 16.0f;
@@ -638,12 +657,17 @@ void UIDataHubPanel::loadConceptBlockIntoEditor(size_t cbIndex) {
     }
     syncSuccessCriterionRows(
         cb.goal.has_value() ? static_cast<int>(cb.goal->success_criteria.size()) : 0);
+    syncConstraintAreas(
+        cb.goal.has_value() ? static_cast<int>(cb.goal->constraints.size()) : 0);
     if (cb.goal.has_value()) {
         for (size_t i = 0; i < cb.goal->success_criteria.size(); ++i) {
             cbSuccessCriterionRows_[i].criterionArea->setText(
                 cb.goal->success_criteria[i].criterion);
             cbSuccessCriterionRows_[i].evidenceArea->setText(
                 cb.goal->success_criteria[i].evidence);
+        }
+        for (size_t i = 0; i < cb.goal->constraints.size(); ++i) {
+            cbConstraintAreas_[i]->setText(cb.goal->constraints[i]);
         }
     }
     if (cbAnswerArea_)   cbAnswerArea_->setText(cb.answer);
@@ -698,6 +722,7 @@ void UIDataHubPanel::clearCBEditor() {
     if (cbTargetStateArea_) cbTargetStateArea_->setText("");
     if (cbAnswerArea_)   cbAnswerArea_->setText("");
     cbSuccessCriterionRows_.clear();
+    cbConstraintAreas_.clear();
     cbIntermediateAreas_.clear();
     cbExecStepRows_.clear();
     cbEditorScrollOffset_ = 0.0f;
@@ -717,6 +742,17 @@ void UIDataHubPanel::syncSuccessCriterionRows(int count) {
     }
     while (static_cast<int>(cbSuccessCriterionRows_.size()) > count) {
         cbSuccessCriterionRows_.pop_back();
+    }
+}
+
+void UIDataHubPanel::syncConstraintAreas(int count) {
+    if (count < 0) count = 0;
+    while (static_cast<int>(cbConstraintAreas_.size()) < count) {
+        cbConstraintAreas_.push_back(std::make_shared<UITextArea>(
+            "", "", [](const std::string&) {}));
+    }
+    while (static_cast<int>(cbConstraintAreas_.size()) > count) {
+        cbConstraintAreas_.pop_back();
     }
 }
 
@@ -771,7 +807,8 @@ bool UIDataHubPanel::buildConceptBlockFromEditor(
     };
     const std::string target_state = cbTargetStateArea_
         ? trim(cbTargetStateArea_->getText()) : std::string{};
-    if (!target_state.empty() || !cbSuccessCriterionRows_.empty()) {
+    if (!target_state.empty() || !cbSuccessCriterionRows_.empty()
+        || !cbConstraintAreas_.empty()) {
         GRIM::ConceptBlockGoal goal;
         goal.target_state = target_state;
         for (size_t i = 0; i < cbSuccessCriterionRows_.size(); ++i) {
@@ -787,6 +824,16 @@ bool UIDataHubPanel::buildConceptBlockFromEditor(
             }
             goal.success_criteria.push_back(
                 GRIM::ConceptBlockSuccessCriterion{criterion, evidence});
+        }
+        for (size_t i = 0; i < cbConstraintAreas_.size(); ++i) {
+            const std::string constraint = cbConstraintAreas_[i]
+                ? trim(cbConstraintAreas_[i]->getText()) : std::string{};
+            if (constraint.empty()) {
+                validation_error = "Constraint " + std::to_string(i + 1)
+                    + " cannot be empty";
+                return false;
+            }
+            goal.constraints.push_back(constraint);
         }
         out.goal = std::move(goal);
     }

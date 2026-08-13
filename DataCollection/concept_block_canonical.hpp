@@ -38,6 +38,9 @@ struct RenderResult {
     LogicalByteSpan target_state;
     LogicalByteSpan criteria;
     std::vector<SuccessCriterionByteSpans> success_criteria;
+    // Each constraint owns an independent logical <constraints> span. There
+    // is intentionally no outer span covering the full collection.
+    std::vector<LogicalByteSpan> constraints;
     // Logical <prompt>...</prompt> boundary. The delimiters are metadata only
     // and are never emitted into model-visible text.
     size_t prompt_byte_begin = 0;
@@ -71,7 +74,10 @@ inline RenderResult render(const nlohmann::json& j) {
           !j["goal"]["target_state"].get<std::string>().empty()) ||
          (j["goal"].contains("success_criteria") &&
           j["goal"]["success_criteria"].is_array() &&
-          !j["goal"]["success_criteria"].empty()));
+          !j["goal"]["success_criteria"].empty()) ||
+         (j["goal"].contains("constraints") &&
+          j["goal"]["constraints"].is_array() &&
+          !j["goal"]["constraints"].empty()));
 
     if (j.contains("prompt") && j["prompt"].is_string()
         && !j["prompt"].get<std::string>().empty()) {
@@ -137,6 +143,24 @@ inline RenderResult render(const nlohmann::json& j) {
                 result.criteria.end > result.criteria.begin;
             if (result.criteria.present) {
                 out << "\n\n";
+            }
+        }
+
+        if (goal.contains("constraints") &&
+            goal["constraints"].is_array()) {
+            result.constraints.reserve(goal["constraints"].size());
+            for (const auto& source_constraint : goal["constraints"]) {
+                LogicalByteSpan constraint;
+                if (source_constraint.is_string()) {
+                    appendLogicalSpan(
+                        out,
+                        source_constraint.get<std::string>(),
+                        constraint);
+                    if (constraint.present) {
+                        out << "\n\n";
+                    }
+                }
+                result.constraints.push_back(constraint);
             }
         }
     }
@@ -218,6 +242,7 @@ inline nlohmann::json toCanonicalJson(const ConceptBlock& cb) {
                 {"evidence", entry.evidence}
             });
         }
+        goal["constraints"] = cb.goal->constraints;
         j["goal"] = std::move(goal);
     }
     if (!cb.execution.empty()) {
@@ -275,6 +300,11 @@ inline std::string renderLogicalTrainingPreview(const ConceptBlock& cb) {
                 }
             }
             out << "</criteria>\n\n";
+        }
+        for (const auto& constraint : cb.goal->constraints) {
+            out << "<constraints>\n"
+                << constraint
+                << "\n</constraints>\n\n";
         }
     }
 

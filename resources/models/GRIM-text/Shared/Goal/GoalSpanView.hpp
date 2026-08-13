@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Constraints.hpp"
 #include "SuccessCriteria.hpp"
 
 #include <cstddef>
@@ -21,14 +22,19 @@ class GoalSpanView {
 public:
     GoalSpanView() = default;
     GoalSpanView(const GoalTokenSpan* target_state,
-                 const SuccessCriteria* success_criteria) noexcept
-        : target_state_(target_state), success_criteria_(success_criteria) {}
+                 const SuccessCriteria* success_criteria,
+                 const Constraints* constraints) noexcept
+        : target_state_(target_state),
+          success_criteria_(success_criteria),
+          constraints_(constraints) {}
 
     bool hasGoal() const noexcept {
-        return target_state_ != nullptr || success_criteria_ != nullptr;
+        return target_state_ != nullptr || success_criteria_ != nullptr ||
+               constraints_ != nullptr;
     }
     bool hasTargetState() const noexcept { return target_state_ != nullptr; }
     bool hasCriteria() const noexcept { return success_criteria_ != nullptr; }
+    bool hasConstraints() const noexcept { return constraints_ != nullptr; }
 
     const GoalTokenSpan& targetStateSpan() const {
         if (!hasTargetState()) {
@@ -68,9 +74,30 @@ public:
             entries[index].evidence_span};
     }
 
+    std::size_t constraintCount() const noexcept {
+        return hasConstraints() ? constraints_->entries.size() : 0;
+    }
+
+    const GoalTokenSpan& constraintSpan(std::size_t index) const {
+        if (!hasConstraints()) {
+            throw std::runtime_error(
+                "GoalSpanView::constraintSpan: constraints are absent");
+        }
+        const auto& entries = constraints_->entries;
+        if (index >= entries.size()) {
+            throw std::out_of_range(
+                "GoalSpanView::constraintSpan: index=" +
+                std::to_string(index) +
+                " is outside constraintCount=" +
+                std::to_string(entries.size()));
+        }
+        return entries[index].constraint_span;
+    }
+
 private:
     const GoalTokenSpan* target_state_ = nullptr;
     const SuccessCriteria* success_criteria_ = nullptr;
+    const Constraints* constraints_ = nullptr;
 };
 
 } // namespace GRIM
