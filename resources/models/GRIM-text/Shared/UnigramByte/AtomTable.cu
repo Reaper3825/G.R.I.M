@@ -39,6 +39,8 @@ const char* atomCategoryName(AtomCategory category) {
     switch (category) {
         case AtomCategory::NUMERIC: return "NUMERIC";
         case AtomCategory::SYSTEM: return "SYSTEM";
+        case AtomCategory::TEXT: return "TEXT";
+        case AtomCategory::LOGICAL: return "LOGICAL";
         default: return "UNKNOWN";
     }
 }
@@ -240,7 +242,8 @@ bool stringRefInBounds(const StringRef& ref, size_t pool_size) {
 }
 
 bool atomTypeIsPersistable(AtomType type) {
-    return type == AtomType::ATOM_INT || type == AtomType::ATOM_FLOAT;
+    return type == AtomType::ATOM_INT || type == AtomType::ATOM_FLOAT ||
+           type == AtomType::ATOM_STRING || type == AtomType::ATOM_BOOL;
 }
 
 bool atomEntryIdInRange(uint32_t id, size_t entry_count) {
@@ -353,10 +356,15 @@ void validatePersistedAtomEntryOrThrow(
                        ", length=" + std::to_string(entry.raw_text_ref.length) +
                        ", pool_size=" + std::to_string(pool_size) + ")");
     }
-    if (entry.raw_text_ref.length == 0) {
+    if (entry.raw_text_ref.length == 0 && entry.type != AtomType::ATOM_STRING) {
         failValidation("entry.raw_text_ref.length", "raw text length is zero");
     }
-    if (entry.category != AtomCategory::NUMERIC && entry.category != AtomCategory::SYSTEM) {
+    const AtomCategory expected_category = entry.type == AtomType::ATOM_STRING
+        ? AtomCategory::TEXT
+        : entry.type == AtomType::ATOM_BOOL
+            ? AtomCategory::LOGICAL
+            : AtomCategory::NUMERIC;
+    if (entry.category != expected_category && entry.category != AtomCategory::SYSTEM) {
         failValidation("entry.category", std::string("unexpected category ") +
                                              atomCategoryName(entry.category));
     }
@@ -364,16 +372,20 @@ void validatePersistedAtomEntryOrThrow(
         failValidation("entry.reserved_zero", "expected 0 but found " +
                                               std::to_string(entry.reserved_zero));
     }
-    if (!entry.arg_number.has_value()) {
-        failValidation("entry.arg_number", "missing required arg_number payload");
-    }
-    if (entry.arg_number->number_atom_id != entry.id) {
-        failValidation("entry.arg_number.number_atom_id",
-                       "expected " + std::to_string(entry.id) +
-                       " but found " + std::to_string(entry.arg_number->number_atom_id));
-    }
-    if (entry.arg_number->digits.empty()) {
-        failValidation("entry.arg_number.digits", "digit binding list is empty");
+    if (isNumericAtom(entry.type)) {
+        if (!entry.arg_number.has_value()) {
+            failValidation("entry.arg_number", "missing required arg_number payload");
+        }
+        if (entry.arg_number->number_atom_id != entry.id) {
+            failValidation("entry.arg_number.number_atom_id",
+                           "expected " + std::to_string(entry.id) +
+                           " but found " + std::to_string(entry.arg_number->number_atom_id));
+        }
+        if (entry.arg_number->digits.empty()) {
+            failValidation("entry.arg_number.digits", "digit binding list is empty");
+        }
+    } else if (entry.arg_number.has_value()) {
+        failValidation("entry.arg_number", "non-numeric atom must not carry arg_number payload");
     }
 }
 
@@ -385,7 +397,9 @@ void validatePersistedNumericKindOrThrow(
     const char* location_label) {
     const uint8_t expected_kind = entry.type == AtomType::ATOM_INT
         ? static_cast<uint8_t>(NumericPayloadKind::INTEGER)
-        : static_cast<uint8_t>(NumericPayloadKind::FLOAT);
+        : entry.type == AtomType::ATOM_FLOAT
+            ? static_cast<uint8_t>(NumericPayloadKind::FLOAT)
+            : static_cast<uint8_t>(NumericPayloadKind::NONE);
     if (numeric_kind != expected_kind) {
         throw std::runtime_error(std::string(boundary) +
                                  ": numeric kind mismatch for entry id=" +
@@ -432,10 +446,32 @@ void validateRawTextDetectionForAtomTableCreation(
                                  " is empty for detector '" + std::string(detection.detector_name) + "'");
     }
     if (detection.start > static_cast<size_t>(std::numeric_limits<uint32_t>::max()) ||
-        detection.length() > static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
+        detection.byteLength() > static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
         throw std::runtime_error(std::string(caller) +
                                  ": raw text detection index=" + std::to_string(detection_index) +
-                                 " exceeds StructuralSpan uint32 offset/length capacity");
+                                  " exceeds StructuralSpan uint32 offset/length capacity");
+    }
+    if (detection.offset != static_cast<uint32_t>(detection.start) ||
+        detection.length != static_cast<uint32_t>(detection.byteLength())) {
+        throw std::runtime_error(std::string(caller) +
+                                 ": raw text detection index=" + std::to_string(detection_index) +
+                                 " has StructuralSpan offset/length inconsistent with start/end");
+    }
+    if (detection.emitsAtom()) {
+        const size_t content_start = static_cast<size_t>(detection.content_offset);
+        const size_t content_end = content_start + static_cast<size_t>(detection.content_length);
+        if (content_start < detection.start || content_end > detection.end ||
+            content_end < content_start) {
+            throw std::runtime_error(std::string(caller) +
+                                     ": raw text detection index=" + std::to_string(detection_index) +
+                                     " has content outside its StructuralSpan");
+        }
+        if (detection.content_length == 0 &&
+            detection.atom_type != AtomType::ATOM_STRING) {
+            throw std::runtime_error(std::string(caller) +
+                                     ": atom-emitting raw text detection index=" +
+                                     std::to_string(detection_index) + " has empty content");
+        }
     }
 }
 
@@ -464,7 +500,7 @@ int16_t requireInt16Pow10ForArgNumber(
     return static_cast<int16_t>(value);
 }
 
-[[noreturn]] void throwDetectorNumericAtomContractFailure(
+[[noreturn]] void throwDetectorAtomContractFailure(
     const char* caller,
     const Detector::RawTextDetection& detection,
     size_t detection_index,
@@ -479,7 +515,7 @@ int16_t requireInt16Pow10ForArgNumber(
                              ", span=[" + std::to_string(detection.start) + ", " +
                              std::to_string(detection.end) + "), raw_text='" +
                              std::string(atom_text) + "', reason='" + reason +
-                             "'; upstream detector/data pipeline bug: detector-emitted numeric spans must not fall back to text");
+                             "'; upstream detector/data pipeline bug: detector-emitted atom spans must not fall back to text");
 }
 
 [[noreturn]] void throwArgNumberPopulationFailure(
@@ -516,7 +552,7 @@ AtomNumber buildArgNumberFromContentText(
     }
     auto fail = [&](const std::string& reason) -> void {
         if (detection != nullptr) {
-            throwDetectorNumericAtomContractFailure(
+            throwDetectorAtomContractFailure(
                 caller,
                 *detection,
                 detection_index,
@@ -928,20 +964,18 @@ AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
             continue;
         }
 
-        const size_t detection_length = detection.end - detection.start;
-        StructuralSpan span{};
-        span.start = detection.start;
-        span.end = detection.end;
-        span.atom_type = detection.atom_type;
+        StructuralSpan span = detection;
         span.buffer_ptr = source_text.data();
-        span.offset = static_cast<uint32_t>(detection.start);
-        span.length = static_cast<uint32_t>(detection_length);
-        span.content_offset = static_cast<uint32_t>(detection.start);
-        span.content_length = static_cast<uint32_t>(detection_length);
-        span.open_token_id = atomTypeToOpenTokenId(detection.atom_type);
-        span.close_token_id = atomTypeToCloseTokenId(detection.atom_type);
+        if (span.open_token_id < 0) {
+            span.open_token_id = atomTypeToOpenTokenId(detection.atom_type);
+        }
+        if (span.close_token_id < 0) {
+            span.close_token_id = atomTypeToCloseTokenId(detection.atom_type);
+        }
 
-        const std::string_view atom_text(source_text.data() + detection.start, detection_length);
+        const std::string_view atom_text(
+            source_text.data() + span.content_offset,
+            span.content_length);
 
         bool registered = false;
         try {
@@ -961,7 +995,7 @@ AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
             // does not parse. Re-parse purely to recover the precise reason for
             // the detector-contract error; the hot path parses exactly once.
             const ParseResult parse_check = AtomTable::parseAtom(detection.atom_type, atom_text);
-            throwDetectorNumericAtomContractFailure(
+            throwDetectorAtomContractFailure(
                 caller,
                 detection,
                 detection_index,
@@ -996,13 +1030,8 @@ AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
             caller);
         AtomTokenizationPayload payload{};
         payload.span = span;
-        payload.open_token_id = span.open_token_id;
-        payload.close_token_id = span.close_token_id;
-        payload.is_byte_fallback = false;
         payload.token_numeric_value = entry->numeric_value;
         payload.token_atom_flags = entry->flags;
-        payload.token_atom_mask = 1;
-        payload.atom_entry_id = span.atom_entry_id;
         result.atom_tokens.push_back(payload);
         recordAtomEntryArgNumberSummary(*entry, result.arg_number_payload, caller);
     }
@@ -1454,7 +1483,7 @@ bool AtomTable::tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id) {
     double numeric_float_value = 0.0;
     int64_t numeric_int_value = 0;
     uint8_t numeric_kind = static_cast<uint8_t>(NumericPayloadKind::NONE);
-    packNumericValue(entry, parsed, numeric_float_value, numeric_int_value, numeric_kind);
+    packValue(entry, parsed, numeric_float_value, numeric_int_value, numeric_kind);
     ensureAtomEntryHasArgNumber(entry, raw_text, raw_span, content_span, "AtomTable::tryRegisterSpan");
 
     const uint64_t hash = computeHash(entry,
@@ -1614,11 +1643,35 @@ ParseResult AtomTable::parseAtom(AtomType type, std::string_view text) {
     if (type == AtomType::ATOM_FLOAT) {
         return parseFloat(text);
     }
+    if (type == AtomType::ATOM_STRING) {
+        return parseString(text);
+    }
+    if (type == AtomType::ATOM_BOOL) {
+        return parseBoolean(text);
+    }
     return ParseResult{
         false,
         AtomInteger{},
         "Unsupported AtomTable atom type " + std::to_string(static_cast<int>(type)) +
-            "; only ATOM_INT and ATOM_FLOAT are supported"
+            "; supported types are ATOM_INT, ATOM_FLOAT, ATOM_STRING, and ATOM_BOOL"
+    };
+}
+
+ParseResult AtomTable::parseString(std::string_view) {
+    return ParseResult{true, AtomString{}, {}};
+}
+
+ParseResult AtomTable::parseBoolean(std::string_view text) {
+    if (text == "true") {
+        return ParseResult{true, AtomBoolean{true}, {}};
+    }
+    if (text == "false") {
+        return ParseResult{true, AtomBoolean{false}, {}};
+    }
+    return ParseResult{
+        false,
+        AtomBoolean{},
+        "Invalid boolean format; expected 'true' or 'false'"
     };
 }
 
@@ -1827,9 +1880,10 @@ bool AtomTable::hasNumericValue(AtomType type) {
 
 AtomCategory AtomTable::getCategoryForType(AtomType type) {
     if (isNumericAtom(type)) return AtomCategory::NUMERIC;
+    if (type == AtomType::ATOM_STRING) return AtomCategory::TEXT;
+    if (type == AtomType::ATOM_BOOL) return AtomCategory::LOGICAL;
     throw std::runtime_error("AtomTable::getCategoryForType unsupported atom type " +
-                             std::to_string(static_cast<int>(type)) +
-                             "; only ATOM_INT and ATOM_FLOAT are supported");
+                             std::to_string(static_cast<int>(type)));
 }
 
 uint64_t AtomTable::computeHash(const AtomEntry& entry) const {
@@ -1911,14 +1965,14 @@ void AtomTable::setCategory(uint32_t id, AtomCategory category) {
 }
 
 //--------------------------------------------------//
-// GPU Packing (Numeric Values Only)
+// GPU Packing (numeric side channels plus type-specific flags)
 //--------------------------------------------------//
 
-void AtomTable::packNumericValue(AtomEntry& entry,
-                                 const AtomValue& parsed,
-                                 double& numeric_float_value,
-                                 int64_t& numeric_int_value,
-                                 uint8_t& numeric_kind) {
+void AtomTable::packValue(AtomEntry& entry,
+                          const AtomValue& parsed,
+                          double& numeric_float_value,
+                          int64_t& numeric_int_value,
+                          uint8_t& numeric_kind) {
     entry.numeric_value = 0.0f;
     entry.flags = 0;
     numeric_float_value = 0.0;
@@ -1940,6 +1994,9 @@ void AtomTable::packNumericValue(AtomEntry& entry,
             numeric_float_value = arg.value;
             numeric_kind = static_cast<uint8_t>(NumericPayloadKind::FLOAT);
             entry.flags = (arg.has_exponent ? 1 : 0) | (arg.exponent << 8);
+        }
+        else if constexpr (std::is_same_v<T, AtomBoolean>) {
+            entry.flags = arg.value ? 1u : 0u;
         }
     }, parsed);
 }

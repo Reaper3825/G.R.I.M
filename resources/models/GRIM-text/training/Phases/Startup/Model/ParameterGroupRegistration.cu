@@ -10,6 +10,7 @@
 #include "../../../../Shared/HyperParameters/HyperparameterGroupings.hpp"
 #include "../../../../Shared/LogRecorder/LogRecorder.hpp"
 #include "../../../../Shared/Optimizers/OptimizerState_GPU.hpp"
+#include "../../../../Shared/UnigramByte/TokenLayout.hpp"
 
 #include <array>
 #include <cmath>
@@ -1553,7 +1554,10 @@ void initializeSlotSeedEncoderParameterTensors(
     }
     if (slot_seed_encoder_hp.type_embedding_enabled) {
         params->type_embeddings = make_xavier(
-            2, d_model, weight_init_seed + 1, "slot_seed_encoder.type_embeddings");
+            GRIM::Tokenizer::kAtomTypeCount,
+            d_model,
+            weight_init_seed + 1,
+            "slot_seed_encoder.type_embeddings");
     }
 
     const cudaError_t sync_err = cudaStreamSynchronize(init_stream);

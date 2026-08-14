@@ -37,35 +37,49 @@ struct RawTextDetectorOptions {
         , detect_uppercase(uppercase) {}
 };
 
-struct RawTextDetection {
-    size_t start;
-    size_t end;
+// Detector-only metadata decorating the canonical StructuralSpan shape.
+// Span geometry and atom content are never mirrored here.
+struct RawTextDetection : StructuralSpan {
     RawTextFeature feature;
-    AtomType atom_type;
     const char* detector_name;
 
     RawTextDetection(size_t start_in,
                      size_t end_in,
                      AtomType atom_type_in,
                      const char* detector_name_in) noexcept
-        : start(start_in)
-        , end(end_in)
+        : feature(RawTextFeature::ATOM)
+        , detector_name(detector_name_in) {
+        start = start_in;
+        end = end_in;
+        atom_type = atom_type_in;
+        offset = static_cast<uint32_t>(start_in);
+        StructuralSpan::length = static_cast<uint32_t>(end_in - start_in);
+        content_offset = offset;
+        content_length = StructuralSpan::length;
+    }
+
+    RawTextDetection(const StructuralSpan& span,
+                     const char* detector_name_in) noexcept
+        : StructuralSpan(span)
         , feature(RawTextFeature::ATOM)
-        , atom_type(atom_type_in)
         , detector_name(detector_name_in) {}
 
     RawTextDetection(size_t start_in,
                      size_t end_in,
                      RawTextFeature feature_in,
                      const char* detector_name_in) noexcept
-        : start(start_in)
-        , end(end_in)
-        , feature(feature_in)
-        , atom_type(AtomType::ATOM_INT)
-        , detector_name(detector_name_in) {}
+        : feature(feature_in)
+        , detector_name(detector_name_in) {
+        start = start_in;
+        end = end_in;
+        offset = static_cast<uint32_t>(start_in);
+        StructuralSpan::length = static_cast<uint32_t>(end_in - start_in);
+        content_offset = offset;
+        content_length = StructuralSpan::length;
+    }
 
     bool emitsAtom() const noexcept { return feature == RawTextFeature::ATOM; }
-    size_t length() const noexcept { return end - start; }
+    size_t byteLength() const noexcept { return end - start; }
 };
 
 class RawTextDetector {

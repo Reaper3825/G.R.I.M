@@ -608,13 +608,13 @@ EffectiveConfig compileEffectiveConfig(const json& model_config) {
     if (c.tokenizer_model_type.empty()) throw std::runtime_error("tokenizer_model_type must not be empty");
     if (c.tokenizer_unk_token != "<unk>" || c.tokenizer_pad_token != "<pad>" ||
         c.tokenizer_bos_token != "<s>" || c.tokenizer_eos_token != "</s>") {
-        throw std::runtime_error("configured special-token strings do not match KTMG v4 token layout");
+        throw std::runtime_error("configured special-token strings do not match KTMG v5 token layout");
     }
     std::set<std::string> specials(c.tokenizer_special_tokens.begin(), c.tokenizer_special_tokens.end());
     if (specials.size() != c.tokenizer_special_tokens.size() || specials.size() != 4 ||
         specials.count("<unk>") == 0 || specials.count("<pad>") == 0 ||
         specials.count("<s>") == 0 || specials.count("</s>") == 0) {
-        throw std::runtime_error("tokenizer_special_tokens must contain each KTMG v4 special token exactly once");
+        throw std::runtime_error("tokenizer_special_tokens must contain each KTMG v5 special token exactly once");
     }
     if (c.tokenizer_enable_atom_reasoning && !c.use_atom_data) {
         throw std::runtime_error("tokenizer_enable_atom_reasoning requires use_atom_data");

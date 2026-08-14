@@ -92,7 +92,7 @@ struct SlotSeedEncoderParameterTensors {
     Tensor b_seed_in;       // [1, d_hidden] when bias_enabled=true
     Tensor W_seed_out;      // [d_hidden, d_model]
     Tensor b_seed_out;      // [1, d_model] when bias_enabled=true
-    Tensor type_embeddings; // [2, d_model] for <INT>/<FLOAT> when enabled
+    Tensor type_embeddings; // [kAtomTypeCount, d_model] when enabled
 };
 
 struct ExecutionBlockParameterTensors {

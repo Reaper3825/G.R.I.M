@@ -59,11 +59,13 @@ inline uint8_t tokenIdToByteOrThrow(int token_id, const char* caller) {
 }
 
 //======================================================//
-//  Atom Types — distinct tokens per numeric sub-type
+//  Atom Types — distinct tokens per authored value type
 //======================================================//
 enum class AtomType : int {
-    ATOM_INT   = 0,   // Integer literals: 42, -17, +5
-    ATOM_FLOAT = 1,   // Float literals: 3.14, -2.5e10, .5
+    ATOM_INT    = 0,   // Integer literals: 42, -17, +5
+    ATOM_FLOAT  = 1,   // Float literals: 3.14, -2.5e10, .5
+    ATOM_STRING = 2,   // Authored string values
+    ATOM_BOOL   = 3,   // Authored boolean values: true, false
     ATOM_ACTIVE_COUNT,
     ATOM_TYPE_COUNT = ATOM_ACTIVE_COUNT
 };
@@ -71,9 +73,9 @@ enum class AtomType : int {
 constexpr int kAtomTypeCount = static_cast<int>(AtomType::ATOM_ACTIVE_COUNT);
 
 // Each active atom type owns an opening and closing boundary token. Opening
-// tokens intentionally retain the former placeholder IDs so the transition is
-// deterministic: <INT>=260 and <FLOAT>=261. Closing tokens follow as a second
-// type-indexed block: </INT>=262 and </FLOAT>=263.
+// tokens begin at the former placeholder IDs: <INT>=260, <FLOAT>=261,
+// <STRING>=262, and <BOOL>=263. Closing tokens follow as a second type-indexed
+// block beginning at 264.
 enum class AtomBoundaryKind : uint8_t {
     OPEN = 0,
     CLOSE = 1
@@ -216,6 +218,8 @@ inline int atomTypeIndexOrThrow(AtomType type, const char* caller) {
     switch (type) {
         case AtomType::ATOM_INT:
         case AtomType::ATOM_FLOAT:
+        case AtomType::ATOM_STRING:
+        case AtomType::ATOM_BOOL:
             return static_cast<int>(type);
         default:
             throw std::runtime_error(std::string(caller) +
@@ -256,6 +260,10 @@ inline AtomType tokenIdToAtomType(int token_id) {
             return AtomType::ATOM_INT;
         case static_cast<int>(AtomType::ATOM_FLOAT):
             return AtomType::ATOM_FLOAT;
+        case static_cast<int>(AtomType::ATOM_STRING):
+            return AtomType::ATOM_STRING;
+        case static_cast<int>(AtomType::ATOM_BOOL):
+            return AtomType::ATOM_BOOL;
         default:
             throw std::runtime_error("tokenIdToAtomType: token_id=" + std::to_string(token_id) +
                                      " does not map to a live atom type");
@@ -266,6 +274,8 @@ inline const char* atomTypeName(AtomType type) {
     switch (type) {
         case AtomType::ATOM_INT:   return "INT";
         case AtomType::ATOM_FLOAT: return "FLOAT";
+        case AtomType::ATOM_STRING: return "STRING";
+        case AtomType::ATOM_BOOL:   return "BOOL";
         default: return "UNKNOWN";
     }
 }

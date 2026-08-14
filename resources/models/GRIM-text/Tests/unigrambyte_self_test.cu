@@ -1146,7 +1146,7 @@ bool testAtomTableArgNumberSupportsSignedDecimalExponent(std::string& message) {
     ASSERT_EQ(static_cast<int>(result.arg_number_payload.total_digits), 10,
               "Mantissa digit binding count mismatch");
 
-    const auto minus_four_entry = result.atom_table->getAtom(result.atom_tokens[0].atom_entry_id);
+    const auto minus_four_entry = result.atom_table->getAtom(result.atom_tokens[0].span.atom_entry_id);
     ASSERT_TRUE(minus_four_entry.has_value(), "-4 atom entry missing");
     ASSERT_TRUE(minus_four_entry->arg_number.has_value(), "-4 arg_number metadata missing");
     const AtomNumber& minus_four = *minus_four_entry->arg_number;
@@ -1155,7 +1155,7 @@ bool testAtomTableArgNumberSupportsSignedDecimalExponent(std::string& message) {
     ASSERT_EQ(static_cast<int>(minus_four.digits[0].digit), 4, "-4 digit mismatch");
     ASSERT_EQ(static_cast<int>(minus_four.digits[0].pow10), 0, "-4 digit pow10 mismatch");
 
-    const auto plus_four_entry = result.atom_table->getAtom(result.atom_tokens[1].atom_entry_id);
+    const auto plus_four_entry = result.atom_table->getAtom(result.atom_tokens[1].span.atom_entry_id);
     ASSERT_TRUE(plus_four_entry.has_value(), "+4 atom entry missing");
     ASSERT_TRUE(plus_four_entry->arg_number.has_value(), "+4 arg_number metadata missing");
     const AtomNumber& plus_four = *plus_four_entry->arg_number;
@@ -1163,7 +1163,7 @@ bool testAtomTableArgNumberSupportsSignedDecimalExponent(std::string& message) {
     ASSERT_EQ(static_cast<int>(plus_four.sign_negative), 0, "+4 should record a positive sign");
     ASSERT_EQ(static_cast<int>(plus_four.digits[0].digit), 4, "+4 digit mismatch");
 
-    const auto dot_seventy_five_entry = result.atom_table->getAtom(result.atom_tokens[2].atom_entry_id);
+    const auto dot_seventy_five_entry = result.atom_table->getAtom(result.atom_tokens[2].span.atom_entry_id);
     ASSERT_TRUE(dot_seventy_five_entry.has_value(), ".75 atom entry missing");
     ASSERT_TRUE(dot_seventy_five_entry->arg_number.has_value(), ".75 arg_number metadata missing");
     const AtomNumber& dot_seventy_five = *dot_seventy_five_entry->arg_number;
@@ -1182,7 +1182,7 @@ bool testAtomTableArgNumberSupportsSignedDecimalExponent(std::string& message) {
     ASSERT_EQ(static_cast<int>(dot_seventy_five.digits[1].pow10), -2,
               ".75 second digit pow10 mismatch");
 
-    const auto seventy_five_point_zero_entry = result.atom_table->getAtom(result.atom_tokens[3].atom_entry_id);
+    const auto seventy_five_point_zero_entry = result.atom_table->getAtom(result.atom_tokens[3].span.atom_entry_id);
     ASSERT_TRUE(seventy_five_point_zero_entry.has_value(), "75.0 atom entry missing");
     ASSERT_TRUE(seventy_five_point_zero_entry->arg_number.has_value(), "75.0 arg_number metadata missing");
     const AtomNumber& seventy_five_point_zero = *seventy_five_point_zero_entry->arg_number;
@@ -1195,7 +1195,7 @@ bool testAtomTableArgNumberSupportsSignedDecimalExponent(std::string& message) {
     ASSERT_EQ(static_cast<int>(seventy_five_point_zero.digits[2].pow10), -1,
               "75.0 fractional digit pow10 mismatch");
 
-    const auto one_e_six_entry = result.atom_table->getAtom(result.atom_tokens[4].atom_entry_id);
+    const auto one_e_six_entry = result.atom_table->getAtom(result.atom_tokens[4].span.atom_entry_id);
     ASSERT_TRUE(one_e_six_entry.has_value(), "1e6 atom entry missing");
     ASSERT_TRUE(one_e_six_entry->arg_number.has_value(), "1e6 arg_number metadata missing");
     const AtomNumber& one_e_six = *one_e_six_entry->arg_number;
@@ -1203,7 +1203,7 @@ bool testAtomTableArgNumberSupportsSignedDecimalExponent(std::string& message) {
     ASSERT_EQ(one_e_six.exponent_value, 6, "1e6 exponent value mismatch");
     ASSERT_EQ(static_cast<int>(one_e_six.digits[0].pow10), 6, "1e6 mantissa pow10 mismatch");
 
-    const auto signed_scientific_entry = result.atom_table->getAtom(result.atom_tokens[5].atom_entry_id);
+    const auto signed_scientific_entry = result.atom_table->getAtom(result.atom_tokens[5].span.atom_entry_id);
     ASSERT_TRUE(signed_scientific_entry.has_value(), "-1.5e-4 atom entry missing");
     ASSERT_TRUE(signed_scientific_entry->arg_number.has_value(), "-1.5e-4 arg_number metadata missing");
     const AtomNumber& signed_scientific = *signed_scientific_entry->arg_number;
@@ -1306,19 +1306,7 @@ bool testUniByteRawTextDetectorRegistry(std::string& message) {
         if (!detection.emitsAtom()) {
             continue;
         }
-
-        StructuralSpan span;
-        span.start = detection.start;
-        span.end = detection.end;
-        span.atom_type = detection.atom_type;
-        span.buffer_ptr = text.data();
-        span.offset = static_cast<uint32_t>(detection.start);
-        span.length = static_cast<uint32_t>(detection.end - detection.start);
-        span.content_offset = static_cast<uint32_t>(detection.start);
-        span.content_length = static_cast<uint32_t>(detection.end - detection.start);
-        span.open_token_id = atomTypeToOpenTokenId(detection.atom_type);
-        span.close_token_id = atomTypeToCloseTokenId(detection.atom_type);
-        structures.push_back(span);
+        structures.push_back(static_cast<const StructuralSpan&>(detection));
     }
 
     ASSERT_EQ(structures.size(), static_cast<size_t>(2), "Only atom detections should become structures");
@@ -1447,6 +1435,139 @@ bool testUniByteTypedAtomSpanInjection(std::string& message) {
                   "Metadata-aware decode must preserve typed atom markup and in-band content");
     ASSERT_STR_EQ(tokenizer.decode(GRIM::Tokenizer::DecodeRequest(result.token_ids)), expected,
                   "ID-only decode must produce the same typed atom markup");
+
+    return true;
+}
+
+bool testAuthoredAtomDelimiterDetector(std::string& message) {
+    auto registry = Detector::makeDefaultRawTextDetectorRegistry();
+    const Detector::RawTextDetectorOptions options(
+        false,
+        false,
+        false);
+    const std::string text =
+        "value=<INT> 42 </INT> ratio=<FLOAT>-3.5</FLOAT> "
+        "label=<STRING>  hello world  </STRING> enabled=<BOOL> true </BOOL>";
+    const auto detections = registry.scan(text, options);
+
+    ASSERT_EQ(detections.size(), static_cast<size_t>(4),
+              "Authored atom delimiters must claim their complete spans");
+
+    const auto& integer = detections[0];
+    ASSERT_TRUE(integer.emitsAtom(), "Authored integer span must emit an atom");
+    ASSERT_TRUE(integer.atom_type == AtomType::ATOM_INT,
+                "Authored integer span has the wrong atom type");
+    ASSERT_STR_EQ(text.substr(integer.start, integer.end - integer.start),
+                  "<INT> 42 </INT>",
+                  "Authored integer outer span mismatch");
+    ASSERT_STR_EQ(text.substr(integer.content_offset, integer.content_length),
+                  "42",
+                  "Authored integer content span mismatch");
+    const auto& floating = detections[1];
+    ASSERT_TRUE(floating.emitsAtom(), "Authored float span must emit an atom");
+    ASSERT_TRUE(floating.atom_type == AtomType::ATOM_FLOAT,
+                "Authored float span has the wrong atom type");
+    ASSERT_STR_EQ(text.substr(floating.content_offset, floating.content_length),
+                  "-3.5",
+                  "Authored float content span mismatch");
+    const auto& string_value = detections[2];
+    ASSERT_TRUE(string_value.atom_type == AtomType::ATOM_STRING,
+                "Authored string span has the wrong atom type");
+    ASSERT_STR_EQ(text.substr(string_value.content_offset, string_value.content_length),
+                  "  hello world  ",
+                  "Authored string content must preserve edge whitespace");
+    const auto& boolean = detections[3];
+    ASSERT_TRUE(boolean.atom_type == AtomType::ATOM_BOOL,
+                "Authored boolean span has the wrong atom type");
+    ASSERT_STR_EQ(text.substr(boolean.content_offset, boolean.content_length),
+                  "true",
+                  "Authored boolean content span mismatch");
+
+    const AtomTableFromDetectionsResult table_result =
+        createAtomTableFromRawTextDetections(
+            text,
+            detections,
+            16,
+            "testAuthoredAtomDelimiterDetector",
+            16);
+    ASSERT_EQ(table_result.atom_tokens.size(), static_cast<size_t>(4),
+              "Authored delimiter detections must register four atom payloads");
+    ASSERT_EQ(table_result.atom_tokens[0].span.open_token_id,
+              atomTypeToOpenTokenId(AtomType::ATOM_INT),
+              "Authored integer opening token mismatch");
+    ASSERT_EQ(table_result.atom_tokens[0].span.close_token_id,
+              atomTypeToCloseTokenId(AtomType::ATOM_INT),
+              "Authored integer closing token mismatch");
+    ASSERT_EQ(table_result.atom_tokens[0].token_numeric_value, 42.0f,
+              "Authored integer value was not stored");
+    ASSERT_EQ(table_result.atom_tokens[1].token_numeric_value, -3.5f,
+              "Authored float value was not stored");
+    ASSERT_EQ(table_result.atom_tokens[2].span.open_token_id,
+              atomTypeToOpenTokenId(AtomType::ATOM_STRING),
+              "Authored string opening token mismatch");
+    ASSERT_EQ(table_result.atom_tokens[2].span.close_token_id,
+              atomTypeToCloseTokenId(AtomType::ATOM_STRING),
+              "Authored string closing token mismatch");
+    ASSERT_EQ(table_result.atom_tokens[2].token_numeric_value, 0.0f,
+              "Authored string must not populate the numeric side channel");
+    ASSERT_EQ(table_result.atom_tokens[3].span.open_token_id,
+              atomTypeToOpenTokenId(AtomType::ATOM_BOOL),
+              "Authored boolean opening token mismatch");
+    ASSERT_EQ(table_result.atom_tokens[3].token_atom_flags, static_cast<uint32_t>(1),
+              "Authored true boolean value was not stored in type-specific flags");
+
+    const auto string_entry = table_result.atom_table->getAtom(
+        table_result.atom_tokens[2].span.atom_entry_id);
+    ASSERT_TRUE(string_entry.has_value(), "Authored string AtomTable entry is missing");
+    ASSERT_TRUE(string_entry->type == AtomType::ATOM_STRING,
+                "Authored string AtomTable type mismatch");
+    ASSERT_STR_EQ(std::string(table_result.atom_table->getString(string_entry->raw_text_ref)),
+                  "  hello world  ",
+                  "Authored string AtomTable value mismatch");
+    ASSERT_FALSE(table_result.atom_table->getNumericValue(string_entry->id).has_value(),
+                 "Authored string must not expose a numeric payload");
+
+    const auto bool_entry = table_result.atom_table->getAtom(
+        table_result.atom_tokens[3].span.atom_entry_id);
+    ASSERT_TRUE(bool_entry.has_value(), "Authored boolean AtomTable entry is missing");
+    ASSERT_TRUE(bool_entry->type == AtomType::ATOM_BOOL,
+                "Authored boolean AtomTable type mismatch");
+    ASSERT_EQ(bool_entry->flags, static_cast<uint32_t>(1),
+              "Authored boolean AtomTable value mismatch");
+    ASSERT_FALSE(table_result.atom_table->getNumericValue(bool_entry->id).has_value(),
+                 "Authored boolean must not expose a numeric payload");
+
+    std::stringstream persisted(std::ios::in | std::ios::out | std::ios::binary);
+    table_result.atom_table->serializeToStreamOrThrow(
+        persisted,
+        "testAuthoredAtomDelimiterDetector");
+    persisted.seekg(0);
+    AtomTable restored;
+    restored.deserializeFromStreamOrThrow(
+        persisted,
+        "testAuthoredAtomDelimiterDetector");
+    ASSERT_EQ(restored.size(), static_cast<size_t>(4),
+              "Persisted authored atom table entry count mismatch");
+    const auto restored_string = restored.getAtom(string_entry->id);
+    ASSERT_TRUE(restored_string.has_value() &&
+                    restored_string->type == AtomType::ATOM_STRING,
+                "Persisted string atom type mismatch");
+    ASSERT_STR_EQ(std::string(restored.getString(restored_string->raw_text_ref)),
+                  "  hello world  ",
+                  "Persisted string atom value mismatch");
+    const auto restored_bool = restored.getAtom(bool_entry->id);
+    ASSERT_TRUE(restored_bool.has_value() &&
+                    restored_bool->type == AtomType::ATOM_BOOL,
+                "Persisted boolean atom type mismatch");
+    ASSERT_EQ(restored_bool->flags, static_cast<uint32_t>(1),
+              "Persisted boolean atom value mismatch");
+
+    const ParseResult false_bool = AtomTable::parseAtom(AtomType::ATOM_BOOL, "false");
+    ASSERT_TRUE(false_bool.success, "Lowercase false must parse as an authored boolean");
+    ASSERT_FALSE(std::get<AtomBoolean>(false_bool.value).value,
+                 "Parsed false boolean value mismatch");
+    ASSERT_FALSE(AtomTable::parseAtom(AtomType::ATOM_BOOL, "TRUE").success,
+                 "Non-canonical boolean spelling must be rejected");
 
     return true;
 }
@@ -3396,6 +3517,7 @@ int main(int argc, char** argv) {
     suite.addTest("AtomTable.ArgNumberSupportsSignedDecimalExponent", testAtomTableArgNumberSupportsSignedDecimalExponent);
     suite.addTest("AtomTable.TokenizationRejectsMantissaDigitSlotOverflow", testAtomTokenizationRejectsMantissaDigitSlotOverflow);
     suite.addTest("UniByte.RawTextDetectorRegistry", testUniByteRawTextDetectorRegistry);
+    suite.addTest("UniByte.AuthoredAtomDelimiterDetector", testAuthoredAtomDelimiterDetector);
     suite.addTest("UniByte.URLPassthrough", testUniByteURLDetection);
     suite.addTest("UniByte.URLPassthrough.CaseInsensitive", testUniByteURLDetectionCaseInsensitive);
     suite.addTest("UniByte.EmailPassthrough", testUniByteEmailDetection);

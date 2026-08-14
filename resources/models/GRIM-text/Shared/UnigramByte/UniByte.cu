@@ -309,10 +309,10 @@ UniByteResult UniByte::tokenizeWithMetadata(
             const AtomTokenizationPayload& atom_payload = atom_tokens[struct_idx];
             const StructuralSpan& span = atom_payload.span;
 
-            if (!isAtomOpenTokenId(atom_payload.open_token_id) ||
-                !isAtomCloseTokenId(atom_payload.close_token_id) ||
-                tokenIdToAtomType(atom_payload.open_token_id) != span.atom_type ||
-                tokenIdToAtomType(atom_payload.close_token_id) != span.atom_type) {
+            if (!isAtomOpenTokenId(span.open_token_id) ||
+                !isAtomCloseTokenId(span.close_token_id) ||
+                tokenIdToAtomType(span.open_token_id) != span.atom_type ||
+                tokenIdToAtomType(span.close_token_id) != span.atom_type) {
                 throw std::runtime_error(
                     "UniByte::tokenizeWithMetadata: atom payload has invalid or mismatched typed boundaries");
             }
@@ -327,22 +327,25 @@ UniByteResult UniByte::tokenizeWithMetadata(
             // The opening boundary is the metadata anchor for the complete
             // typed span. Its numeric target remains out-of-band in the
             // per-token side channels and per-sequence AtomTable.
-            result.token_ids.push_back(atom_payload.open_token_id);
-            result.is_byte_fallback.push_back(atom_payload.is_byte_fallback);
+            result.token_ids.push_back(span.open_token_id);
+            result.is_byte_fallback.push_back(false);
             result.token_numeric_values.push_back(atom_payload.token_numeric_value);
             result.token_atom_flags.push_back(atom_payload.token_atom_flags);
-            result.atom_entry_ids.push_back(atom_payload.atom_entry_id);
-            result.token_atom_mask.push_back(atom_payload.token_atom_mask);
+            result.atom_entry_ids.push_back(span.atom_entry_id);
+            result.token_atom_mask.push_back(1);
             result.atom_tokens++;
 
             // Keep the detected value model-visible. It follows the ordinary
             // unigram/byte fallback path, but detection is not re-entered, so
             // the content cannot recursively create another atom span.
-            appendSegmentTokens(span.start, span.end);
+            appendSegmentTokens(
+                static_cast<size_t>(span.content_offset),
+                static_cast<size_t>(span.content_offset) +
+                    static_cast<size_t>(span.content_length));
 
             // Closing boundaries are structural model tokens. The auxiliary
             // atom target is anchored only at the opening boundary.
-            result.token_ids.push_back(atom_payload.close_token_id);
+            result.token_ids.push_back(span.close_token_id);
             result.is_byte_fallback.push_back(false);
             result.token_numeric_values.push_back(0.0f);
             result.token_atom_flags.push_back(0);

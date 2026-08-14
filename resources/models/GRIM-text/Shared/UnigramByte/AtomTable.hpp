@@ -58,15 +58,22 @@ struct AtomFloat {
     int exponent = 0;
 };
 
+// String bytes are stored once in AtomEntry::raw_text_ref. This marker keeps
+// the parse result typed without duplicating the string-pool payload.
+struct AtomString {};
+
+struct AtomBoolean {
+    bool value = false;
+};
+
 //======================================================//
 //  Atom Value Variant
 //======================================================//
-// Current AtomTable payloads are intentionally numeric-only. Raw-text detectors
-// may observe other source features, but only ATOM_INT and ATOM_FLOAT become
-// AtomTable entries.
 using AtomValue = std::variant<
     AtomInteger,
-    AtomFloat
+    AtomFloat,
+    AtomString,
+    AtomBoolean
 >;
 
 enum class NumericPayloadKind : uint8_t {
@@ -96,8 +103,10 @@ enum class AtomOrigin : uint8_t {
 //  Atom Category - High-level grouping
 //======================================================//
 enum class AtomCategory : uint8_t {
-    NUMERIC,      // Active AtomTable payloads: integers and floats
-    SYSTEM        // Reserved metadata category for explicitly system-marked numeric atoms
+    NUMERIC = 0,
+    SYSTEM = 1,
+    TEXT = 2,
+    LOGICAL = 3
 };
 
 //======================================================//
@@ -155,7 +164,7 @@ struct AtomNumberPopulationPayload {
 };
 
 //======================================================//
-//  Atom Entry - durable atom record plus numeric decomposition metadata
+//  Atom Entry - durable atom record plus optional numeric decomposition metadata
 //======================================================//
 struct alignas(64) AtomEntry {
     // --- Hot data ---
@@ -203,13 +212,8 @@ class AtomTable;
 
 struct AtomTokenizationPayload {
     StructuralSpan span;
-    int open_token_id = -1;
-    int close_token_id = -1;
-    bool is_byte_fallback = false;
     float token_numeric_value = 0.0f;
     uint32_t token_atom_flags = 0;
-    uint8_t token_atom_mask = 0;
-    uint32_t atom_entry_id = kAtomEntryNone;
 };
 
 struct AtomTableFromDetectionsResult {
@@ -292,6 +296,8 @@ public:
     // Type-specific parsing functions (strict grammar; no whitespace, no allocation)
     static ParseResult parseInteger(std::string_view text);
     static ParseResult parseFloat(std::string_view text);
+    static ParseResult parseString(std::string_view text);
+    static ParseResult parseBoolean(std::string_view text);
 
 
     //--------------------------------------------------//
@@ -429,12 +435,12 @@ private:
     // Locked id -> entry resolution. Throws on any invalid or corrupt id.
     AtomEntry& entryForIdLocked(uint32_t id, const char* caller);
     
-    // Pack numeric value for GPU (no string copying)
-    void packNumericValue(AtomEntry& entry,
-                          const AtomValue& parsed,
-                          double& numeric_float_value,
-                          int64_t& numeric_int_value,
-                          uint8_t& numeric_kind);
+    // Pack scalar/type-specific metadata without copying string payloads.
+    void packValue(AtomEntry& entry,
+                   const AtomValue& parsed,
+                   double& numeric_float_value,
+                   int64_t& numeric_int_value,
+                   uint8_t& numeric_kind);
 
     // Free internally-owned or transactional GPU data.
     static void freeGPUData(GPUAtomData& data);

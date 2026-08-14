@@ -5,6 +5,7 @@
 
 #include "DetectorRegistry.hpp"
 
+#include "AtomDelimiterDetector.hpp"
 #include "NumericDetectors.hpp"
 #include "TextFeatureDetectors.hpp"
 
@@ -84,8 +85,8 @@ std::vector<RawTextDetection> DetectorRegistry::scan(
                     "' returned detection with empty detector_name");
             }
 
-            const size_t candidate_len = candidate->length();
-            const size_t best_len = best.has_value() ? best->length() : 0;
+            const size_t candidate_len = candidate->byteLength();
+            const size_t best_len = best.has_value() ? best->byteLength() : 0;
             const int candidate_priority = detector->priority();
             if (!best.has_value() ||
                 candidate_len > best_len ||
@@ -109,6 +110,7 @@ std::vector<RawTextDetection> DetectorRegistry::scan(
 
 DetectorRegistry makeDefaultRawTextDetectorRegistry() {
     DetectorRegistry registry;
+    registry.registerDetector(std::make_unique<AtomDelimiterDetector>());
     registry.registerDetector(std::make_unique<FloatDetector>());
     registry.registerDetector(std::make_unique<IntegerDetector>());
     registry.registerDetector(std::make_unique<WhitespaceDetector>());
