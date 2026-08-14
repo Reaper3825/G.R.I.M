@@ -142,6 +142,7 @@ void materializeNumberAuxTargets(
     payload.number_aux_target_valid_row_count = 0;
     payload.number_aux_target_atom_index.clear();
     payload.number_aux_target_row_mask.clear();
+    payload.number_aux_target_step_index.clear();
     payload.number_aux_target_valid.clear();
     payload.number_aux_target_sign_negative.clear();
     payload.number_aux_target_base.clear();
@@ -175,6 +176,8 @@ void materializeNumberAuxTargets(
         static_cast<std::size_t>(payload.total_tokens), -1);
     payload.number_aux_target_row_mask.assign(
         static_cast<std::size_t>(payload.total_tokens), 0);
+    payload.number_aux_target_step_index.assign(
+        static_cast<std::size_t>(payload.total_tokens), -1);
     payload.number_aux_target_valid.assign(atoms, 0);
     payload.number_aux_target_sign_negative.assign(atoms, 0);
     payload.number_aux_target_base.assign(atoms, 0);
@@ -288,11 +291,14 @@ void materializeNumberAuxTargets(
             payload.seq_lengths[static_cast<std::size_t>(row)];
         bool any_valid_row = false;
         int position = flat_position;
+        int decoder_step = 0;
         for (; position < row_end &&
                payload.atom_aux_target_mask[static_cast<std::size_t>(position)] != 0;
-             ++position) {
+             ++position, ++decoder_step) {
             payload.number_aux_target_atom_index[static_cast<std::size_t>(position)] =
                 static_cast<int>(atom);
+            payload.number_aux_target_step_index[static_cast<std::size_t>(position)] =
+                decoder_step;
             if (payload.target_ids[static_cast<std::size_t>(position)] >= 0) {
                 payload.number_aux_target_row_mask[static_cast<std::size_t>(position)] = 1;
                 ++payload.number_aux_target_valid_row_count;

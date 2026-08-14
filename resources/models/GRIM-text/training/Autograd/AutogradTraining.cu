@@ -13,6 +13,7 @@
 #include "../../Layers/LMHead/lm_head_GPU.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
+#include "../../Shared/Backward/NumericAtomBackward.hpp"
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
 #include "../../Shared/Loss/ComputeLoss/NumericAtomLoss.hpp"
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"
@@ -99,6 +100,7 @@ struct GradientSignalExpectation {
 
 struct GradientVerificationActivity {
     bool text_loss_active = false;
+    bool numeric_atom_loss_active = false;
 };
 
 struct GradientSignalBaselines {
@@ -253,6 +255,8 @@ GradientDeltaProbe probeGradientDelta(
 GradientVerificationActivity detectGradientVerificationActivity(AutogradContext& ctx) {
     GradientVerificationActivity activity{};
     activity.text_loss_active = ctx.payload && ctx.payload->lm_valid_tokens > 0;
+    activity.numeric_atom_loss_active =
+        ctx.payload && ctx.payload->number_aux_target_valid_count > 0;
     return activity;
 }
 
@@ -295,6 +299,20 @@ GradientSignalBaselines captureGradientVerificationBaselines(
                 captureExpected(ffn0.W2, "layer 0 ffnW2 (attn ablated)");
             }
         }
+    }
+    if (activity.numeric_atom_loss_active) {
+        auto& numeric_parameters =
+            ctx.parameter_registry->requireNumberEncoderParameters(
+                "captureGradientSignalBaselines.NumericAtom");
+        captureExpected(
+            numeric_parameters.digit_emb,
+            "numeric atom digit embedding");
+        captureExpected(
+            numeric_parameters.pow10_emb,
+            "numeric atom pow10 embedding");
+        captureExpected(
+            numeric_parameters.numeric_atom_slot_emb,
+            "numeric atom slot embedding");
     }
 
     AG_INFO("Captured " << baselines.expected.size()
@@ -381,28 +399,72 @@ LossResult computeAutogradLoss(
         ctx.stream
     );
 
-    // Numeric reconstruction loss is evaluated from the batch-upload-owned
-    // target mirrors. It remains detached until NumericAtom backward is
-    // designed and is therefore not composed into the canonical root yet.
-    const Tensor numeric_atom_loss = autograd::NumericAtomLoss(
+    // Numeric reconstruction loss is computed independently, attached to its
+    // dedicated backward boundary, weighted, and then composed into the one
+    // canonical scalar root consumed by Tensor::backward().
+    constexpr float kNumericAtomLossWeight = 0.1f;
+    Tensor numeric_atom_loss = autograd::NumericAtomLoss(
         forward_outputs.numeric_atom,
         payload,
         *ctx.device_bindings,
         ctx.stream);
-    (void)numeric_atom_loss;
+    if (numeric_atom_loss.data) {
+        // Validation uses the same loss composition with a read-only forward.
+        // Only a graph-connected text loss authorizes backward attachment.
+        if (loss_state.loss_tensor.requires_grad) {
+            auto& numeric_parameters =
+                ctx.parameter_registry->requireNumberEncoderParameters(
+                    "computeAutogradLoss.NumericAtomBackward");
+            autograd::attachNumericAtomBackward(
+                numeric_atom_loss,
+                forward_outputs.encoder_output_tensor,
+                numeric_parameters.digit_emb,
+                numeric_parameters.pow10_emb,
+                numeric_parameters.numeric_atom_slot_emb,
+                forward_outputs.numeric_atom,
+                ctx.stream);
+        }
+        Tensor weighted_numeric_atom_loss = autograd::scale_scalar(
+            numeric_atom_loss,
+            kNumericAtomLossWeight,
+            ctx.stream);
+        loss_state.loss_tensor = autograd::add(
+            loss_state.loss_tensor,
+            weighted_numeric_atom_loss,
+            ctx.stream);
+    }
 
-    float text_ce_loss = 0.0f;
-    cudaMemcpyAsync(&text_ce_loss, loss_state.loss_tensor.data, sizeof(float),
+    // The graph is sealed before scalar readback. Recover the pure text term
+    // from the canonical total and the separately retained numeric component.
+    float total_loss = 0.0f;
+    float numeric_atom_loss_value = 0.0f;
+    cudaMemcpyAsync(&total_loss, loss_state.loss_tensor.data, sizeof(float),
                     cudaMemcpyDeviceToHost, ctx.stream);
+    if (numeric_atom_loss.data) {
+        cudaMemcpyAsync(
+            &numeric_atom_loss_value,
+            numeric_atom_loss.data,
+            sizeof(float),
+            cudaMemcpyDeviceToHost,
+            ctx.stream);
+    }
     cudaStreamSynchronize(ctx.stream);
+    const float text_ce_loss =
+        total_loss - kNumericAtomLossWeight * numeric_atom_loss_value;
     if (!std::isfinite(text_ce_loss)) {
         throw std::runtime_error("computeAutogradLoss: pure text CE is non-finite (" +
                                  std::to_string(text_ce_loss) + ")");
     }
+    if (!std::isfinite(numeric_atom_loss_value)) {
+        throw std::runtime_error(
+            "computeAutogradLoss: NumericAtom loss is non-finite (" +
+            std::to_string(numeric_atom_loss_value) + ")");
+    }
 
     result.text_loss = text_ce_loss;
+    result.numeric_atom_loss = numeric_atom_loss_value;
     result.valid_tokens = lm_valid_tokens;
-    result.loss_value = text_ce_loss;
+    result.loss_value = total_loss;
     result.selector_loss = 0.0f;
     result.weight_text = 1.0f;
     
@@ -412,7 +474,8 @@ LossResult computeAutogradLoss(
             + ")");
     }
     
-    AG_INFO("Loss computed: total=" << text_ce_loss << " text_ce=" << text_ce_loss
+    AG_INFO("Loss computed: total=" << total_loss << " text_ce=" << text_ce_loss
+            << " numeric_atom=" << result.numeric_atom_loss
             << " selector=" << result.selector_loss
             << " lm_valid=" << lm_valid_tokens);
     
@@ -753,6 +816,21 @@ bool verifyGradientsAreConnectedImpl(
         ok = false;
     } else if (lm_head_parameters.bias.data) {
         requireAllocatedFinite(lm_head_parameters.bias, "lm_head_bias");
+    }
+
+    if (activity.numeric_atom_loss_active) {
+        auto& numeric_parameters =
+            ctx.parameter_registry->requireNumberEncoderParameters(
+                "verifyGradientsAreConnectedImpl.NumericAtom");
+        requireReceivedGradient(
+            numeric_parameters.digit_emb,
+            "numeric atom digit embedding");
+        requireReceivedGradient(
+            numeric_parameters.pow10_emb,
+            "numeric atom pow10 embedding");
+        requireReceivedGradient(
+            numeric_parameters.numeric_atom_slot_emb,
+            "numeric atom slot embedding");
     }
 
     if (ctx.gpu_encoder) {

@@ -149,6 +149,9 @@ struct BatchPayload {
     //   number_aux_target_digits            [A * S]
     //   number_aux_target_pow10_index        [A * S]
     //   number_aux_target_digit_mask         [A * S]
+    //   number_aux_target_atom_index         [total_tokens]
+    //   number_aux_target_row_mask           [total_tokens]
+    //   number_aux_target_step_index         [total_tokens]
     // pow10_index maps signed place p to p + number_aux_target_max_abs_pow10.
     int number_aux_target_digit_slots = 0;
     int number_aux_target_max_abs_pow10 = 0;
@@ -156,6 +159,7 @@ struct BatchPayload {
     int number_aux_target_valid_row_count = 0;
     std::vector<int> number_aux_target_atom_index; // [total_tokens], -1 outside numeric AUX spans
     std::vector<uint8_t> number_aux_target_row_mask; // [total_tokens], valid numeric AUX loss rows
+    std::vector<int> number_aux_target_step_index; // [total_tokens], 0-based decoder step or -1 outside numeric AUX spans
     std::vector<uint8_t> number_aux_target_valid;
     std::vector<uint8_t> number_aux_target_sign_negative;
     std::vector<uint8_t> number_aux_target_base;
@@ -624,6 +628,7 @@ struct BatchPayload {
                 number_aux_target_valid_row_count != 0 ||
                 !number_aux_target_atom_index.empty() ||
                 !number_aux_target_row_mask.empty() ||
+                !number_aux_target_step_index.empty() ||
                 !number_aux_target_valid.empty() ||
                 !number_aux_target_sign_negative.empty() ||
                 !number_aux_target_base.empty() ||
@@ -645,6 +650,9 @@ struct BatchPayload {
             requireNumberTargetSize(number_aux_target_row_mask.size(),
                                     static_cast<std::size_t>(total_tokens),
                                     "number_aux_target_row_mask");
+            requireNumberTargetSize(number_aux_target_step_index.size(),
+                                    static_cast<std::size_t>(total_tokens),
+                                    "number_aux_target_step_index");
             requireNumberTargetSize(number_aux_target_valid.size(), target_atoms,
                                     "number_aux_target_valid");
             requireNumberTargetSize(number_aux_target_sign_negative.size(), target_atoms,
@@ -668,10 +676,13 @@ struct BatchPayload {
 
             int counted_valid = 0;
             int counted_valid_rows = 0;
+            std::vector<int> next_decoder_step(target_atoms, 0);
             for (int position = 0; position < total_tokens; ++position) {
                 const int atom_index = number_aux_target_atom_index[
                     static_cast<std::size_t>(position)];
                 const uint8_t row_valid = number_aux_target_row_mask[
+                    static_cast<std::size_t>(position)];
+                const int decoder_step = number_aux_target_step_index[
                     static_cast<std::size_t>(position)];
                 if (row_valid > 1 || atom_index < -1 ||
                     atom_index >= static_cast<int>(target_atoms)) {
@@ -688,9 +699,21 @@ struct BatchPayload {
                         atom_aux_target_mask[static_cast<std::size_t>(position)] == 0) {
                         throw std::runtime_error(
                             std::string(caller) +
-                            ": number auxiliary row routes outside a numeric AUX span at position=" +
+                                ": number auxiliary row routes outside a numeric AUX span at position=" +
+                                std::to_string(position));
+                    }
+                    if (decoder_step != next_decoder_step[
+                            static_cast<std::size_t>(atom_index)]++) {
+                        throw std::runtime_error(
+                            std::string(caller) +
+                            ": number auxiliary decoder steps are not contiguous at position=" +
                             std::to_string(position));
                     }
+                } else if (decoder_step != -1) {
+                    throw std::runtime_error(
+                        std::string(caller) +
+                        ": number auxiliary decoder step is present outside a routed numeric span at position=" +
+                        std::to_string(position));
                 }
                 if (row_valid != 0) {
                     if (atom_index < 0 || target_ids[static_cast<std::size_t>(position)] < 0) {

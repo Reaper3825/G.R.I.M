@@ -435,6 +435,7 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/Gradients/GradStatsCollector.cu
     ../../Shared/Forward/ModelForward_GPU.cu
     ../../Shared/Forward/NumericAtomForward.cu
+    ../../Shared/Backward/NumericAtomBackward.cu
     ../../Shared/Goal/MeanPool_GPU.cu
     ../../Shared/Goal/MeanPool_GPU.hpp
     ../../Shared/InferenceState/KvCacheState_GPU.cu

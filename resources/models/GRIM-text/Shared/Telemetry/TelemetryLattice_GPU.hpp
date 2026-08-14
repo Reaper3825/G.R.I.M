@@ -237,7 +237,7 @@ enum class MetricStream : int {
     // Raw loss decomposition from the completed BatchResult. These remain in
     // objective units so they can be graphed directly beside stream 0 (LOSS).
     TEXT_LOSS                = 61,
-    RESERVED_62              = 62,
+    NUMERIC_ATOM_LOSS        = 62,
     SELECTOR_LOSS            = 63,
     RESERVED_64              = 64,
     RESERVED_65              = 65,

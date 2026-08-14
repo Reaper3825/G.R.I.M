@@ -18,7 +18,8 @@ namespace autograd {
 
 // Computes the detached scalar NumericAtom reconstruction loss. Numeric target
 // device memory is owned by BatchDeviceStorage and borrowed through bindings;
-// this operation allocates only its one-element result Tensor.
+// the caller attaches the dedicated backward node during canonical loss
+// assembly.
 Tensor NumericAtomLoss(
     const Forward::NumericAtomForwardOutputs& forward_outputs,
     const Batching::BatchPayload& payload,

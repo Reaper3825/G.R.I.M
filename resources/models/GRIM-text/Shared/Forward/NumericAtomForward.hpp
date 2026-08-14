@@ -21,8 +21,8 @@ struct NumberEncoderParameterTensors;
 namespace Forward {
 
 // Atom-aligned numeric-head predictions. The physical Tensor layout remains
-// 2D; each row is one (numeric atom, digit slot) pair. NumericAtom-specific
-// backward propagation is intentionally not attached yet.
+// 2D; each row is one (numeric atom, digit slot) pair. This boundary remains
+// forward-only; the dedicated backward node is attached during loss assembly.
 struct NumericAtomForwardOutputs {
     bool evaluated = false;
     int numeric_atom_count = 0;

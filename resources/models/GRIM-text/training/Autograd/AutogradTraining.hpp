@@ -46,6 +46,7 @@ using ::GRIM::GPUGrimEncoder;
 struct LossResult {
     float loss_value = 0.0f;         // Ground-truth: D2H read of loss_tensor AFTER all autograd::add()
     float text_loss = 0.0f;          // Pure next-token CE, before selector additions
+    float numeric_atom_loss = 0.0f;  // Unweighted NumericAtom reconstruction loss
     float selector_loss = 0.0f;      // Scaled arg/option selector CE (α_sel * CE)
     float weight_text = 1.0f;
     int valid_tokens = 0;

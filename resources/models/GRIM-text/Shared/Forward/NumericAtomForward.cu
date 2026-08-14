@@ -204,16 +204,19 @@ NumericAtomForwardOutputs NumericAtomForward(
         anchor_positions,
         stream);
 
-    // The same digit and place embeddings used by the NumberEncoder provide
-    // tied output class directions for every atom slot.
+    // The dedicated NumericAtom backward boundary owns this branch's single
+    // gradient operation. Keep these classifier matmuls forward-only so they
+    // do not attach independent MatMulGradFn nodes.
+    Tensor digit_classifier = parameters.digit_emb.detach(stream);
+    Tensor pow10_classifier = parameters.pow10_emb.detach(stream);
     outputs.digit_logits = autograd::matmul(
         slot_states,
-        parameters.digit_emb,
+        digit_classifier,
         stream,
         /*transpose_b=*/true);
     outputs.pow10_logits = autograd::matmul(
         slot_states,
-        parameters.pow10_emb,
+        pow10_classifier,
         stream,
         /*transpose_b=*/true);
 

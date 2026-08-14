@@ -58,6 +58,7 @@ struct BatchResult {
     int batch_idx = 0;
     float loss = 0.0f;
     float text_loss = 0.0f;
+    float numeric_atom_loss = 0.0f;
     float selector_loss = 0.0f;
     float grad_rms = 0.0f;
     bool grad_rms_valid = false;

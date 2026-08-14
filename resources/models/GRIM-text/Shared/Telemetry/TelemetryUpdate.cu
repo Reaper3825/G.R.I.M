@@ -96,7 +96,7 @@ void populateCoreStreams(float* obs, const TelemetryBatchInput& input) {
 //------------------------------------------------------
 void populateLossComponentStreams(float* obs, const TelemetryBatchInput& input) {
     obs[61] = input.text_loss;
-    obs[62] = 0.0f;
+    obs[62] = input.numeric_atom_loss;
     obs[63] = input.selector_loss;
     obs[64] = 0.0f;
     obs[65] = 0.0f;

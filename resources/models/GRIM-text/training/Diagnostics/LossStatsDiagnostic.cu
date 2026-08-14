@@ -51,10 +51,12 @@ void runLossStatsDiagnostic(
         const float expected_random_loss = std::log(static_cast<float>(payload.vocab_size));
 
         std::ostringstream eq;
-        eq << "[BATCH_LOSS] loss = -sum(log(p_target)) / valid_tokens\n";
+        eq << "[BATCH_LOSS] total = text_ce + 0.1 * numeric_atom_loss\n";
         eq << "  valid_tokens=" << valid_tokens_eq << " vocab_size=" << payload.vocab_size << "\n";
-        eq << "  EXPECTED loss (random) = ln(" << payload.vocab_size << ") = " << expected_random_loss << "\n";
-        eq << "  ACTUAL loss = " << result.loss << "\n";
+        eq << "  EXPECTED text_ce (random) = ln(" << payload.vocab_size << ") = " << expected_random_loss << "\n";
+        eq << "  ACTUAL total = " << result.loss << "\n";
+        eq << "  ACTUAL text_ce = " << result.text_loss << "\n";
+        eq << "  ACTUAL numeric_atom_loss = " << result.numeric_atom_loss << "\n";
         EQ_LOG(ctx.logging.tape.get(), GRIM::Logging::LogGroup::Loss, GRIM::Logging::LogPhase::LOSS_COMPUTATION, -1, "BATCH_LOSS", eq.str().c_str());
     }
 
@@ -62,14 +64,15 @@ void runLossStatsDiagnostic(
         const int valid_tokens = payload.lm_valid_tokens;
         const int total_tokens = payload.total_tokens;
         const int masked_tokens = std::max(total_tokens - valid_tokens, 0);
-        const float loss_sum = (valid_tokens > 0)
-            ? result.loss * static_cast<float>(valid_tokens)
+        const float text_loss_sum = (valid_tokens > 0)
+            ? result.text_loss * static_cast<float>(valid_tokens)
             : 0.0f;
         std::ostringstream loss_stats;
         loss_stats << "[LossStats] batch=" << (batch_idx + 1)
                    << " loss_mean=" << formatScalar(result.loss, 4)
-                   << " loss_sum=" << formatScalar(loss_sum, 4)
+                   << " text_loss_sum=" << formatScalar(text_loss_sum, 4)
                    << " text_ce=" << formatScalar(result.text_loss, 4)
+                   << " numeric_atom=" << formatScalar(result.numeric_atom_loss, 4)
                    << " selector=" << formatScalar(result.selector_loss, 4)
                    << " valid_tokens=" << valid_tokens
                    << " masked_tokens=" << masked_tokens
