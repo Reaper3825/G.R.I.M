@@ -23,6 +23,13 @@ struct GrmtSequence {
     std::vector<std::uint32_t> token_atom_flags;
     std::shared_ptr<GRIM::Tokenizer::AtomTable> atom_table;
     std::vector<std::uint32_t> atom_entry_ids;
+    // Runtime-only causal ownership mask authored after BOS/EOS insertion and
+    // sliding-window construction. For <TYPE> value </TYPE>, positions from
+    // the opening boundary through the final value token are 1 so an auxiliary
+    // head owns prediction of the value tokens and matching close delimiter.
+    // The close-boundary position itself is 0 because the LM resumes there.
+    // This derived channel is intentionally not serialized in GRMT.
+    std::vector<std::uint8_t> token_atom_aux_target_mask;
     // Compiled dense runtime indices only. Semantic identities are carried by
     // compiled_slot_bindings and never inferred from these tensor addresses.
     std::vector<std::int32_t> token_exec_slot_indices;

@@ -73,7 +73,9 @@ void filterShortSequences(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
 // is moved to the opening boundary when it would split a span. An atom that
 // cannot fit in the available window capacity is rejected. Sequences <=
 // max_seq_len pass through unchanged except for the final-position target
-// mask.
+// mask. Every finalized output row receives token_atom_aux_target_mask in
+// causal prediction coordinates: opening through final value row = 1, typed
+// closing-boundary row = 0.
 //
 // Calls injectBoundaryTokens internally before windowing, then calls
 // filterOverlongSequences and filterShortSequences after windowing.

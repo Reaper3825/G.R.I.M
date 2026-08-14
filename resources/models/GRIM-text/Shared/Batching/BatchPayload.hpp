@@ -99,6 +99,13 @@ struct BatchPayload {
     std::vector<int> target_ids;             // [total_tokens] padded with -1
     std::vector<float> numeric_values;       // [total_tokens] padded with 0.0f
     std::vector<uint8_t> atom_mask;          // [total_tokens] padded with 0 (1 = atom opening metadata anchor)
+    // Causal prediction-row ownership authored by sliding-window construction.
+    // For <TYPE> value </TYPE>, 1 spans the opening boundary through the final
+    // value-token row, so the auxiliary head predicts value tokens + </TYPE>.
+    // The close-boundary row is 0; the LM resumes there.
+    // Host-only at this boundary; device upload and target routing belong to
+    // the auxiliary-head integration that follows this payload-population step.
+    std::vector<uint8_t> atom_aux_target_mask; // [total_tokens] padded with 0
     std::vector<uint32_t> atom_flags;         // [total_tokens] padded with 0 (opening-only metadata from AtomTable)
     // Dense bootstrap slot addresses used to materialize authored ARG seeds.
     std::vector<int32_t> token_to_slot_index_map; // [total_tokens], -1 = non-state-bearing
@@ -127,6 +134,39 @@ struct BatchPayload {
     // ═══════════════════════════════════════════════════════════════════════════
     std::vector<uint32_t> atom_entry_ids;    // [total_tokens] padded with kAtomEntryNone
     std::vector<std::shared_ptr<const GRIM::Tokenizer::AtomTable>> seq_atom_tables;  // [batch_size]
+
+    // NUMBER AUXILIARY TARGETS (compact, aligned with atom_positions)
+    //
+    // These are supervision, never NumberEncoder forward inputs. Numeric
+    // openings carry their complete AtomEntry::arg_number decomposition;
+    // non-numeric openings retain zero/default rows so atom_types remains the
+    // single extensible typed-routing authority. Row routing propagates the
+    // compact numeric target over its AUX-owned causal span; row_mask then
+    // intersects that ownership with target_ids validity/overlap masking.
+    //
+    // Layout (A = authoredAtomCount(), S = number_aux_target_digit_slots):
+    //   number_aux_target_* scalar channels [A]
+    //   number_aux_target_digits            [A * S]
+    //   number_aux_target_pow10_index        [A * S]
+    //   number_aux_target_digit_mask         [A * S]
+    // pow10_index maps signed place p to p + number_aux_target_max_abs_pow10.
+    int number_aux_target_digit_slots = 0;
+    int number_aux_target_max_abs_pow10 = 0;
+    int number_aux_target_valid_count = 0;
+    int number_aux_target_valid_row_count = 0;
+    std::vector<int> number_aux_target_atom_index; // [total_tokens], -1 outside numeric AUX spans
+    std::vector<uint8_t> number_aux_target_row_mask; // [total_tokens], valid numeric AUX loss rows
+    std::vector<uint8_t> number_aux_target_valid;
+    std::vector<uint8_t> number_aux_target_sign_negative;
+    std::vector<uint8_t> number_aux_target_base;
+    std::vector<uint16_t> number_aux_target_digit_count;
+    std::vector<int> number_aux_target_digits;
+    std::vector<int> number_aux_target_pow10_index;
+    std::vector<uint8_t> number_aux_target_digit_mask;
+    // Exact decoded entry value used by the later normalized-value objective.
+    std::vector<double> number_aux_target_float_values;
+    std::vector<int64_t> number_aux_target_int_values;
+    std::vector<uint8_t> number_aux_target_numeric_kinds;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // NUMBER ENCODER DIGIT-PLACE CHANNELS (compact, aligned with atom_positions)
@@ -210,6 +250,7 @@ struct BatchPayload {
         return !input_ids.empty() ||
                !numeric_values.empty() ||
                !atom_mask.empty() ||
+               !atom_aux_target_mask.empty() ||
                !atom_flags.empty() ||
                !atom_entry_ids.empty() ||
                !token_to_slot_index_map.empty();
@@ -226,6 +267,7 @@ struct BatchPayload {
     }
 
     GRIM::GoalSpanView goalSpansForRow(std::size_t row) const;
+    const uint8_t* atomAuxTargetMaskForRow(std::size_t row) const;
 
     void validate(const char* caller) const {
         if (batch_size <= 0) {
@@ -411,6 +453,17 @@ struct BatchPayload {
                 std::to_string(atom_mask.size()) + " != total_tokens=" +
                 std::to_string(total_tokens));
         }
+        if (isTraining() && static_cast<int>(atom_aux_target_mask.size()) != total_tokens) {
+            throw std::runtime_error(
+                std::string(caller) + ": BatchPayload.atom_aux_target_mask.size()=" +
+                std::to_string(atom_aux_target_mask.size()) + " != total_tokens=" +
+                std::to_string(total_tokens));
+        }
+        if (isInference() && !atom_aux_target_mask.empty()) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": inference BatchPayload must not carry training-only atom auxiliary ownership");
+        }
         if (ownsHostInputData() && static_cast<int>(atom_flags.size()) != total_tokens) {
             throw std::runtime_error(
                 std::string(caller) + ": BatchPayload.atom_flags.size()=" +
@@ -457,6 +510,259 @@ struct BatchPayload {
                 std::string(caller) + ": BatchPayload.atom_positions.size()=" +
                 std::to_string(atom_positions.size()) + " != atom_types.size()=" +
                 std::to_string(atom_types.size()));
+        }
+        if (ownsHostInputData()) {
+            std::size_t compact_atom_index = 0;
+            for (int row = 0; row < batch_size; ++row) {
+                bool inside_atom = false;
+                GRIM::Tokenizer::AtomType open_type =
+                    GRIM::Tokenizer::AtomType::ATOM_INT;
+                const int row_offset = row * max_seq_len;
+                const int row_length = seq_lengths[static_cast<std::size_t>(row)];
+                for (int token = 0; token < max_seq_len; ++token) {
+                    const int flat_position = row_offset + token;
+                    if (token >= row_length) {
+                        if (isTraining() &&
+                            atom_aux_target_mask[static_cast<std::size_t>(flat_position)] != 0) {
+                            throw std::runtime_error(
+                                std::string(caller) +
+                                ": atom auxiliary ownership is present on padding at flat position=" +
+                                std::to_string(flat_position));
+                        }
+                        continue;
+                    }
+
+                    const int token_id = input_ids[static_cast<std::size_t>(flat_position)];
+                    uint8_t expected_aux_owner = inside_atom ? 1 : 0;
+                    if (GRIM::Tokenizer::isAtomOpenTokenId(token_id)) {
+                        if (inside_atom) {
+                            throw std::runtime_error(
+                                std::string(caller) +
+                                ": nested typed atom opening at flat position=" +
+                                std::to_string(flat_position));
+                        }
+                        if (atom_mask[static_cast<std::size_t>(flat_position)] != 1) {
+                            throw std::runtime_error(
+                                std::string(caller) +
+                                ": typed atom opening is missing atom_mask=1 at flat position=" +
+                                std::to_string(flat_position));
+                        }
+                        inside_atom = true;
+                        open_type = GRIM::Tokenizer::tokenIdToAtomType(token_id);
+                        expected_aux_owner = 1;
+
+                        if (compact_atom_index >= atom_positions.size() ||
+                            atom_positions[compact_atom_index] != flat_position ||
+                            atom_types[compact_atom_index] != static_cast<int>(open_type)) {
+                            throw std::runtime_error(
+                                std::string(caller) +
+                                ": compact atom opening metadata does not match flat position=" +
+                                std::to_string(flat_position));
+                        }
+                        ++compact_atom_index;
+                    } else if (GRIM::Tokenizer::isAtomCloseTokenId(token_id)) {
+                        if (!inside_atom ||
+                            GRIM::Tokenizer::tokenIdToAtomType(token_id) != open_type) {
+                            throw std::runtime_error(
+                                std::string(caller) +
+                                ": unmatched or mismatched typed atom close at flat position=" +
+                                std::to_string(flat_position));
+                        }
+                        inside_atom = false;
+                        expected_aux_owner = 0;
+                    }
+
+                    if (isTraining() &&
+                        atom_aux_target_mask[static_cast<std::size_t>(flat_position)] !=
+                            expected_aux_owner) {
+                        throw std::runtime_error(
+                            std::string(caller) +
+                            ": atom_aux_target_mask disagrees with typed span at flat position=" +
+                            std::to_string(flat_position) + " expected=" +
+                            std::to_string(expected_aux_owner) + " actual=" +
+                            std::to_string(atom_aux_target_mask[
+                                static_cast<std::size_t>(flat_position)]));
+                    }
+                }
+                if (inside_atom) {
+                    throw std::runtime_error(
+                        std::string(caller) +
+                        ": typed atom opening has no close in batch row=" +
+                        std::to_string(row));
+                }
+            }
+            if (compact_atom_index != atom_positions.size()) {
+                throw std::runtime_error(
+                    std::string(caller) +
+                    ": compact atom metadata contains entries not backed by typed openings");
+            }
+        }
+        // Number auxiliary target geometry (compact, atom-aligned).
+        if (number_aux_target_digit_slots < 0 ||
+            number_aux_target_max_abs_pow10 < 0 ||
+            number_aux_target_valid_count < 0 ||
+            number_aux_target_valid_row_count < 0) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": BatchPayload number auxiliary target geometry contains a negative value");
+        }
+        const std::size_t target_atoms = atom_positions.size();
+        const std::size_t target_slots =
+            static_cast<std::size_t>(number_aux_target_digit_slots);
+        auto requireNumberTargetSize =
+            [&](std::size_t actual, std::size_t expected, const char* name) {
+                if (actual != expected) {
+                    throw std::runtime_error(
+                        std::string(caller) + ": BatchPayload." + name + ".size()=" +
+                        std::to_string(actual) + " != expected=" +
+                        std::to_string(expected));
+                }
+            };
+        if (number_aux_target_digit_slots == 0) {
+            if (number_aux_target_max_abs_pow10 != 0 ||
+                number_aux_target_valid_count != 0 ||
+                number_aux_target_valid_row_count != 0 ||
+                !number_aux_target_atom_index.empty() ||
+                !number_aux_target_row_mask.empty() ||
+                !number_aux_target_valid.empty() ||
+                !number_aux_target_sign_negative.empty() ||
+                !number_aux_target_base.empty() ||
+                !number_aux_target_digit_count.empty() ||
+                !number_aux_target_digits.empty() ||
+                !number_aux_target_pow10_index.empty() ||
+                !number_aux_target_digit_mask.empty() ||
+                !number_aux_target_float_values.empty() ||
+                !number_aux_target_int_values.empty() ||
+                !number_aux_target_numeric_kinds.empty()) {
+                throw std::runtime_error(
+                    std::string(caller) +
+                    ": number auxiliary targets are populated while digit_slots=0");
+            }
+        } else {
+            requireNumberTargetSize(number_aux_target_atom_index.size(),
+                                    static_cast<std::size_t>(total_tokens),
+                                    "number_aux_target_atom_index");
+            requireNumberTargetSize(number_aux_target_row_mask.size(),
+                                    static_cast<std::size_t>(total_tokens),
+                                    "number_aux_target_row_mask");
+            requireNumberTargetSize(number_aux_target_valid.size(), target_atoms,
+                                    "number_aux_target_valid");
+            requireNumberTargetSize(number_aux_target_sign_negative.size(), target_atoms,
+                                    "number_aux_target_sign_negative");
+            requireNumberTargetSize(number_aux_target_base.size(), target_atoms,
+                                    "number_aux_target_base");
+            requireNumberTargetSize(number_aux_target_digit_count.size(), target_atoms,
+                                    "number_aux_target_digit_count");
+            requireNumberTargetSize(number_aux_target_float_values.size(), target_atoms,
+                                    "number_aux_target_float_values");
+            requireNumberTargetSize(number_aux_target_int_values.size(), target_atoms,
+                                    "number_aux_target_int_values");
+            requireNumberTargetSize(number_aux_target_numeric_kinds.size(), target_atoms,
+                                    "number_aux_target_numeric_kinds");
+            requireNumberTargetSize(number_aux_target_digits.size(), target_atoms * target_slots,
+                                    "number_aux_target_digits");
+            requireNumberTargetSize(number_aux_target_pow10_index.size(), target_atoms * target_slots,
+                                    "number_aux_target_pow10_index");
+            requireNumberTargetSize(number_aux_target_digit_mask.size(), target_atoms * target_slots,
+                                    "number_aux_target_digit_mask");
+
+            int counted_valid = 0;
+            int counted_valid_rows = 0;
+            for (int position = 0; position < total_tokens; ++position) {
+                const int atom_index = number_aux_target_atom_index[
+                    static_cast<std::size_t>(position)];
+                const uint8_t row_valid = number_aux_target_row_mask[
+                    static_cast<std::size_t>(position)];
+                if (row_valid > 1 || atom_index < -1 ||
+                    atom_index >= static_cast<int>(target_atoms)) {
+                    throw std::runtime_error(
+                        std::string(caller) +
+                        ": invalid number auxiliary row routing at position=" +
+                        std::to_string(position));
+                }
+                if (atom_index >= 0) {
+                    const bool routed_numeric = GRIM::Tokenizer::isNumericAtom(
+                        static_cast<GRIM::Tokenizer::AtomType>(
+                            atom_types[static_cast<std::size_t>(atom_index)]));
+                    if (!routed_numeric ||
+                        atom_aux_target_mask[static_cast<std::size_t>(position)] == 0) {
+                        throw std::runtime_error(
+                            std::string(caller) +
+                            ": number auxiliary row routes outside a numeric AUX span at position=" +
+                            std::to_string(position));
+                    }
+                }
+                if (row_valid != 0) {
+                    if (atom_index < 0 || target_ids[static_cast<std::size_t>(position)] < 0) {
+                        throw std::runtime_error(
+                            std::string(caller) +
+                            ": valid number auxiliary row lacks routing or upstream target validity at position=" +
+                            std::to_string(position));
+                    }
+                    ++counted_valid_rows;
+                }
+            }
+            for (std::size_t atom = 0; atom < target_atoms; ++atom) {
+                const bool numeric = GRIM::Tokenizer::isNumericAtom(
+                    static_cast<GRIM::Tokenizer::AtomType>(atom_types[atom]));
+                const uint8_t valid = number_aux_target_valid[atom];
+                if (valid > 1) {
+                    throw std::runtime_error(
+                        std::string(caller) +
+                        ": number_aux_target_valid must be binary at atom=" +
+                        std::to_string(atom));
+                }
+                counted_valid += valid != 0 ? 1 : 0;
+                const std::size_t digit_count = number_aux_target_digit_count[atom];
+                if (!numeric) {
+                    if (valid != 0 || digit_count != 0 ||
+                        number_aux_target_base[atom] != 0) {
+                        throw std::runtime_error(
+                            std::string(caller) +
+                            ": non-numeric atom carries a number auxiliary target at atom=" +
+                            std::to_string(atom));
+                    }
+                    continue;
+                }
+                if (digit_count == 0 || digit_count > target_slots ||
+                    number_aux_target_base[atom] != 10) {
+                    throw std::runtime_error(
+                        std::string(caller) +
+                        ": invalid numeric auxiliary target geometry at atom=" +
+                        std::to_string(atom));
+                }
+                for (std::size_t slot = 0; slot < target_slots; ++slot) {
+                    const std::size_t index = atom * target_slots + slot;
+                    const uint8_t expected_mask = slot < digit_count ? 1 : 0;
+                    if (number_aux_target_digit_mask[index] != expected_mask) {
+                        throw std::runtime_error(
+                            std::string(caller) +
+                            ": number auxiliary digit mask disagrees with digit_count at atom=" +
+                            std::to_string(atom) + " slot=" + std::to_string(slot));
+                    }
+                    if (expected_mask != 0 &&
+                        (number_aux_target_digits[index] < 0 ||
+                         number_aux_target_digits[index] > 9 ||
+                         number_aux_target_pow10_index[index] < 0 ||
+                         number_aux_target_pow10_index[index] >
+                             2 * number_aux_target_max_abs_pow10)) {
+                        throw std::runtime_error(
+                            std::string(caller) +
+                            ": number auxiliary digit or pow10 target is out of range at atom=" +
+                            std::to_string(atom) + " slot=" + std::to_string(slot));
+                    }
+                }
+            }
+            if (counted_valid != number_aux_target_valid_count) {
+                throw std::runtime_error(
+                    std::string(caller) +
+                    ": number_aux_target_valid_count does not match target mask");
+            }
+            if (counted_valid_rows != number_aux_target_valid_row_count) {
+                throw std::runtime_error(
+                    std::string(caller) +
+                    ": number_aux_target_valid_row_count does not match row mask");
+            }
         }
         // NumberEncoder digit-place channel geometry (compact, atom-aligned)
         if (number_encoder_digit_slots < 0) {
@@ -595,8 +901,8 @@ struct BatchPayload {
  * @param batch_size         Fixed training batch size / row capacity
  * @param max_cached_seq_len GPU cache sequence length capacity
  * @param selector_enabled   Whether to materialize selector candidate metadata
- * @param number_encoder_digit_slots   NumberEncoder per-atom digit slot capacity (0 = disabled)
- * @param number_encoder_max_abs_pow10 NumberEncoder pow10 bucket half-range (required when slots > 0)
+ * @param number_encoder_digit_slots   Shared NumberEncoder/number-target digit capacity (0 = disabled)
+ * @param number_encoder_max_abs_pow10 Shared NumberEncoder/number-target pow10 half-range
  * @return Complete BatchPayload ready for downstream consumption
  */
 BatchPayload buildBatchPayload(

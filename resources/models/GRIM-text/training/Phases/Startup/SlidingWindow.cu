@@ -86,6 +86,33 @@ std::vector<AtomTokenSpan> collectAtomTokenSpans(
     return spans;
 }
 
+void authorAtomAuxTargetMask(
+    GrmtSequence& sequence,
+    const std::vector<AtomTokenSpan>& spans,
+    const std::string& source) {
+    sequence.token_atom_aux_target_mask.assign(sequence.token_ids.size(), 0);
+    for (const AtomTokenSpan& span : spans) {
+        if (span.begin >= span.end || span.end > sequence.token_ids.size()) {
+            throw std::runtime_error(
+                source + ": invalid typed atom token span [" +
+                std::to_string(span.begin) + "," + std::to_string(span.end) +
+                ") for sequence length=" +
+                std::to_string(sequence.token_ids.size()));
+        }
+
+        // AtomTokenSpan::end is one past the close delimiter. Causal rows from
+        // the opening boundary up to (but excluding) the close-boundary row
+        // predict every value token and finally the close delimiter itself.
+        const size_t close_position = span.end - 1;
+        std::fill(
+            sequence.token_atom_aux_target_mask.begin() +
+                static_cast<ptrdiff_t>(span.begin),
+            sequence.token_atom_aux_target_mask.begin() +
+                static_cast<ptrdiff_t>(close_position),
+            static_cast<uint8_t>(1));
+    }
+}
+
 const AtomTokenSpan* atomSpanContainingCut(
     const std::vector<AtomTokenSpan>& spans,
     size_t cut) {
@@ -386,8 +413,12 @@ SftWindowConstruction constructSftWindows(
             }
             window.targets.back() = -1;
 
-            (void)collectAtomTokenSpans(
+            const auto output_atom_spans = collectAtomTokenSpans(
                 window.token_ids,
+                "Sliding window (" + split_name + ", SFT output)");
+            authorAtomAuxTargetMask(
+                window,
+                output_atom_spans,
                 "Sliding window (" + split_name + ", SFT output)");
 
             result.sequences.push_back(std::move(window));
@@ -540,6 +571,10 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
             // Short sequence or exactly max_seq_len — no windowing.
             GRIM::TokenizerArtifacts::GrmtSequence copy = seq;
             MaskFinalTarget(copy);
+            authorAtomAuxTargetMask(
+                copy,
+                atom_spans,
+                "Sliding window (" + split_name + ", PT output)");
             windowed.push_back(std::move(copy));
             continue;
         }
@@ -721,8 +756,12 @@ void applySlidingWindows(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& se
                 prompt_span_assigned = true;
             }
 
-            (void)collectAtomTokenSpans(
+            const auto output_atom_spans = collectAtomTokenSpans(
                 window.token_ids,
+                "Sliding window (" + split_name + ", PT output)");
+            authorAtomAuxTargetMask(
+                window,
+                output_atom_spans,
                 "Sliding window (" + split_name + ", PT output)");
 
             windowed.push_back(std::move(window));

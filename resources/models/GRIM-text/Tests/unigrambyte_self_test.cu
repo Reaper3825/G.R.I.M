@@ -2783,6 +2783,12 @@ bool testGrmtAtomSpanSideChannelValidation(std::string& message) {
     ASSERT_TRUE(validationRejects(content_metadata),
                 "GRMT must reject atom metadata on ordinary span content");
 
+    auto runtime_aux_mask = makePersistenceGrmtSequence();
+    runtime_aux_mask.token_atom_aux_target_mask.assign(
+        runtime_aux_mask.token_ids.size(), 0);
+    ASSERT_TRUE(validationRejects(runtime_aux_mask),
+                "GRMT must reject serialization of the runtime-derived atom auxiliary target mask");
+
     auto mismatched_type = makePersistenceGrmtSequence();
     mismatched_type.token_ids[0] = atomTypeToOpenTokenId(AtomType::ATOM_FLOAT);
     ASSERT_TRUE(validationRejects(mismatched_type),
@@ -2847,13 +2853,19 @@ bool testSlidingWindowsPreserveTypedAtomSpans(std::string& message) {
                 message = std::string(stage) + " emitted an overlong window";
                 return false;
             }
+            if (window.token_atom_aux_target_mask.size() != window.token_ids.size()) {
+                message = std::string(stage) +
+                          " did not author a token-aligned atom auxiliary target mask";
+                return false;
+            }
             bool inside_atom = false;
             AtomType open_type = AtomType::ATOM_INT;
             for (std::size_t i = 0; i < window.token_ids.size(); ++i) {
                 const int token_id = window.token_ids[i];
                 if (isAtomOpenTokenId(token_id)) {
                     if (inside_atom || window.token_atom_mask[i] != 1 ||
-                        window.atom_entry_ids[i] == kAtomEntryNone) {
+                        window.atom_entry_ids[i] == kAtomEntryNone ||
+                        window.token_atom_aux_target_mask[i] != 1) {
                         message = std::string(stage) +
                                   " emitted an invalid typed opening boundary";
                         return false;
@@ -2865,7 +2877,8 @@ bool testSlidingWindowsPreserveTypedAtomSpans(std::string& message) {
                 if (isAtomCloseTokenId(token_id)) {
                     if (!inside_atom || tokenIdToAtomType(token_id) != open_type ||
                         window.token_atom_mask[i] != 0 ||
-                        window.atom_entry_ids[i] != kAtomEntryNone) {
+                        window.atom_entry_ids[i] != kAtomEntryNone ||
+                        window.token_atom_aux_target_mask[i] != 0) {
                         message = std::string(stage) +
                                   " emitted an unmatched or metadata-bearing closing boundary";
                         return false;
@@ -2878,6 +2891,12 @@ bool testSlidingWindowsPreserveTypedAtomSpans(std::string& message) {
                     window.atom_entry_ids[i] != kAtomEntryNone) {
                     message = std::string(stage) +
                               " moved atom metadata away from the opening boundary";
+                    return false;
+                }
+                const uint8_t expected_aux_owner = inside_atom ? 1 : 0;
+                if (window.token_atom_aux_target_mask[i] != expected_aux_owner) {
+                    message = std::string(stage) +
+                              " authored an incorrect causal atom auxiliary target mask";
                     return false;
                 }
             }

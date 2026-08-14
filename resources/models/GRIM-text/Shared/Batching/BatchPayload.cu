@@ -15,6 +15,7 @@
 #include "Batching_GPU.hpp"
 #include "../Goal/Goal.hpp"
 #include "../Goal/GoalSpanView.hpp"
+#include "../../Shared/UnigramByte/AtomTable.hpp"
 #include "../../Shared/UnigramByte/TokenLayout.hpp"
 #include "../TokenizerArtifacts/GrmtSequence.hpp"
 #include <algorithm>
@@ -66,6 +67,22 @@ GRIM::GoalSpanView BatchPayload::goalSpansForRow(std::size_t row) const {
     return GRIM::GoalSpanView(target_state, success_criteria, constraints);
 }
 
+const uint8_t* BatchPayload::atomAuxTargetMaskForRow(std::size_t row) const {
+    if (row >= static_cast<std::size_t>(batch_size)) {
+        throw std::out_of_range(
+            "BatchPayload::atomAuxTargetMaskForRow: row=" +
+            std::to_string(row) + " is outside batch_size=" +
+            std::to_string(batch_size));
+    }
+    if (atom_aux_target_mask.size() != static_cast<std::size_t>(total_tokens)) {
+        throw std::runtime_error(
+            "BatchPayload::atomAuxTargetMaskForRow: atom_aux_target_mask.size()=" +
+            std::to_string(atom_aux_target_mask.size()) + " != total_tokens=" +
+            std::to_string(total_tokens));
+    }
+    return atom_aux_target_mask.data() + row * static_cast<std::size_t>(max_seq_len);
+}
+
 namespace {
 
 void requirePositiveVocab(int vocab_size, const char* caller)
@@ -74,6 +91,228 @@ void requirePositiveVocab(int vocab_size, const char* caller)
         throw std::runtime_error(
             std::string(caller) + ": vocab_size=" + std::to_string(vocab_size) +
             " (must be > 0)");
+    }
+}
+
+void materializeCompactAtomOpenings(BatchPayload& payload, const char* caller)
+{
+    payload.atom_positions.clear();
+    payload.atom_types.clear();
+    if (!payload.ownsHostInputData()) {
+        return;
+    }
+    if (payload.input_ids.size() != static_cast<std::size_t>(payload.total_tokens) ||
+        payload.atom_mask.size() != static_cast<std::size_t>(payload.total_tokens)) {
+        throw std::runtime_error(
+            std::string(caller) +
+            ": cannot materialize compact atom openings before input_ids/atom_mask are complete");
+    }
+
+    for (int row = 0; row < payload.batch_size; ++row) {
+        const int row_length = payload.seq_lengths[static_cast<std::size_t>(row)];
+        const int row_offset = row * payload.max_seq_len;
+        for (int token = 0; token < row_length; ++token) {
+            const int flat_position = row_offset + token;
+            const int token_id = payload.input_ids[static_cast<std::size_t>(flat_position)];
+            if (!GRIM::Tokenizer::isAtomOpenTokenId(token_id)) {
+                continue;
+            }
+            if (payload.atom_mask[static_cast<std::size_t>(flat_position)] != 1) {
+                throw std::runtime_error(
+                    std::string(caller) +
+                    ": typed atom opening is missing atom_mask=1 at flat position=" +
+                    std::to_string(flat_position));
+            }
+            payload.atom_positions.push_back(flat_position);
+            payload.atom_types.push_back(static_cast<int>(
+                GRIM::Tokenizer::tokenIdToAtomType(token_id)));
+        }
+    }
+}
+
+void materializeNumberAuxTargets(
+    BatchPayload& payload,
+    int digit_slots,
+    int max_abs_pow10,
+    const char* caller)
+{
+    payload.number_aux_target_digit_slots = 0;
+    payload.number_aux_target_max_abs_pow10 = 0;
+    payload.number_aux_target_valid_count = 0;
+    payload.number_aux_target_valid_row_count = 0;
+    payload.number_aux_target_atom_index.clear();
+    payload.number_aux_target_row_mask.clear();
+    payload.number_aux_target_valid.clear();
+    payload.number_aux_target_sign_negative.clear();
+    payload.number_aux_target_base.clear();
+    payload.number_aux_target_digit_count.clear();
+    payload.number_aux_target_digits.clear();
+    payload.number_aux_target_pow10_index.clear();
+    payload.number_aux_target_digit_mask.clear();
+    payload.number_aux_target_float_values.clear();
+    payload.number_aux_target_int_values.clear();
+    payload.number_aux_target_numeric_kinds.clear();
+
+    if (digit_slots == 0) {
+        if (max_abs_pow10 != 0) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": number auxiliary max_abs_pow10 must be 0 when digit_slots=0");
+        }
+        return;
+    }
+    if (digit_slots < 0 || max_abs_pow10 < 0) {
+        throw std::runtime_error(
+            std::string(caller) +
+            ": number auxiliary target geometry must be non-negative");
+    }
+
+    const std::size_t atoms = payload.atom_positions.size();
+    const std::size_t slots = static_cast<std::size_t>(digit_slots);
+    payload.number_aux_target_digit_slots = digit_slots;
+    payload.number_aux_target_max_abs_pow10 = max_abs_pow10;
+    payload.number_aux_target_atom_index.assign(
+        static_cast<std::size_t>(payload.total_tokens), -1);
+    payload.number_aux_target_row_mask.assign(
+        static_cast<std::size_t>(payload.total_tokens), 0);
+    payload.number_aux_target_valid.assign(atoms, 0);
+    payload.number_aux_target_sign_negative.assign(atoms, 0);
+    payload.number_aux_target_base.assign(atoms, 0);
+    payload.number_aux_target_digit_count.assign(atoms, 0);
+    payload.number_aux_target_digits.assign(atoms * slots, 0);
+    payload.number_aux_target_pow10_index.assign(atoms * slots, 0);
+    payload.number_aux_target_digit_mask.assign(atoms * slots, 0);
+    payload.number_aux_target_float_values.assign(atoms, 0.0);
+    payload.number_aux_target_int_values.assign(atoms, 0);
+    payload.number_aux_target_numeric_kinds.assign(
+        atoms, static_cast<uint8_t>(GRIM::Tokenizer::NumericPayloadKind::NONE));
+
+    for (std::size_t atom = 0; atom < atoms; ++atom) {
+        const auto atom_type = static_cast<GRIM::Tokenizer::AtomType>(
+            payload.atom_types[atom]);
+        if (!GRIM::Tokenizer::isNumericAtom(atom_type)) {
+            continue;
+        }
+
+        const int flat_position = payload.atom_positions[atom];
+        const int row = flat_position / payload.max_seq_len;
+        if (row < 0 || row >= payload.batch_size ||
+            static_cast<std::size_t>(row) >= payload.seq_atom_tables.size() ||
+            !payload.seq_atom_tables[static_cast<std::size_t>(row)]) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": numeric opening cannot resolve its row AtomTable at atom=" +
+                std::to_string(atom));
+        }
+
+        const uint32_t entry_id =
+            payload.atom_entry_ids[static_cast<std::size_t>(flat_position)];
+        if (entry_id == GRIM::Tokenizer::kAtomEntryNone) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": numeric opening has no atom_entry_id at flat position=" +
+                std::to_string(flat_position));
+        }
+        const auto& table = payload.seq_atom_tables[static_cast<std::size_t>(row)];
+        const auto entry = table->getAtom(entry_id);
+        if (!entry.has_value()) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": numeric opening references missing AtomEntry id=" +
+                std::to_string(entry_id));
+        }
+        if (entry->type != atom_type || !entry->arg_number.has_value()) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": numeric AtomEntry type/decomposition mismatch for id=" +
+                std::to_string(entry_id));
+        }
+
+        const auto& number = *entry->arg_number;
+        if (number.digits.empty() || number.digits.size() > slots) {
+            throw std::runtime_error(
+                std::string(caller) + ": numeric AtomEntry id=" +
+                std::to_string(entry_id) + " has digit_count=" +
+                std::to_string(number.digits.size()) +
+                " outside configured digit_slots=" + std::to_string(digit_slots));
+        }
+        if (number.base != 10) {
+            throw std::runtime_error(
+                std::string(caller) + ": numeric AtomEntry id=" +
+                std::to_string(entry_id) + " has unsupported base=" +
+                std::to_string(number.base));
+        }
+
+        payload.number_aux_target_sign_negative[atom] = number.sign_negative;
+        payload.number_aux_target_base[atom] = number.base;
+        payload.number_aux_target_digit_count[atom] =
+            static_cast<uint16_t>(number.digits.size());
+        for (std::size_t slot = 0; slot < number.digits.size(); ++slot) {
+            const auto& digit = number.digits[slot];
+            const int pow10 = static_cast<int>(digit.pow10);
+            if (pow10 < -max_abs_pow10 || pow10 > max_abs_pow10) {
+                throw std::runtime_error(
+                    std::string(caller) + ": numeric AtomEntry id=" +
+                    std::to_string(entry_id) + " has pow10=" +
+                    std::to_string(pow10) + " outside configured range +/-" +
+                    std::to_string(max_abs_pow10));
+            }
+            const std::size_t index = atom * slots + slot;
+            payload.number_aux_target_digits[index] = static_cast<int>(digit.digit);
+            payload.number_aux_target_pow10_index[index] = pow10 + max_abs_pow10;
+            payload.number_aux_target_digit_mask[index] = 1;
+        }
+
+        const auto numeric = table->getNumericValue(entry_id);
+        if (!numeric.has_value()) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": numeric AtomEntry has no exact decoded value for id=" +
+                std::to_string(entry_id));
+        }
+        const auto expected_kind = atom_type == GRIM::Tokenizer::AtomType::ATOM_INT
+            ? GRIM::Tokenizer::NumericPayloadKind::INTEGER
+            : GRIM::Tokenizer::NumericPayloadKind::FLOAT;
+        if (numeric->kind != expected_kind) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": numeric AtomEntry exact-value kind disagrees with atom type for id=" +
+                std::to_string(entry_id));
+        }
+        payload.number_aux_target_float_values[atom] = numeric->float_value;
+        payload.number_aux_target_int_values[atom] = numeric->int_value;
+        payload.number_aux_target_numeric_kinds[atom] =
+            static_cast<uint8_t>(numeric->kind);
+
+        const int row_end = row * payload.max_seq_len +
+            payload.seq_lengths[static_cast<std::size_t>(row)];
+        bool any_valid_row = false;
+        int position = flat_position;
+        for (; position < row_end &&
+               payload.atom_aux_target_mask[static_cast<std::size_t>(position)] != 0;
+             ++position) {
+            payload.number_aux_target_atom_index[static_cast<std::size_t>(position)] =
+                static_cast<int>(atom);
+            if (payload.target_ids[static_cast<std::size_t>(position)] >= 0) {
+                payload.number_aux_target_row_mask[static_cast<std::size_t>(position)] = 1;
+                ++payload.number_aux_target_valid_row_count;
+                any_valid_row = true;
+            }
+        }
+        if (position >= row_end ||
+            !GRIM::Tokenizer::isAtomCloseTokenId(
+                payload.input_ids[static_cast<std::size_t>(position)]) ||
+            GRIM::Tokenizer::tokenIdToAtomType(
+                payload.input_ids[static_cast<std::size_t>(position)]) != atom_type) {
+            throw std::runtime_error(
+                std::string(caller) +
+                ": numeric auxiliary span does not terminate at its matching close for AtomEntry id=" +
+                std::to_string(entry_id));
+        }
+        if (any_valid_row) {
+            payload.number_aux_target_valid[atom] = 1;
+            ++payload.number_aux_target_valid_count;
+        }
     }
 }
 
@@ -136,8 +375,8 @@ BatchPayload buildBatchPayload(
     size_t batch_size,
     size_t max_cached_seq_len,
     bool,
-    int,
-    int)
+    int number_aux_target_digit_slots,
+    int number_aux_target_max_abs_pow10)
 {
     BatchPayload payload;
     payload.mode = BatchPayloadMode::Training;
@@ -169,6 +408,7 @@ BatchPayload buildBatchPayload(
         const std::vector<int>* targets;
         const std::vector<float>* numeric_values;
         const std::vector<uint8_t>* atom_mask;
+        const std::vector<uint8_t>* atom_aux_target_mask;
         const std::vector<uint32_t>* atom_flags;
         std::shared_ptr<const GRIM::Tokenizer::AtomTable> atom_table;
         const std::vector<uint32_t>* atom_entry_ids;
@@ -227,6 +467,14 @@ BatchPayload buildBatchPayload(
                 " atom_mask.size()=" + std::to_string(seq->token_atom_mask.size()) +
                 " != token_ids.size()=" + std::to_string(seq_len));
         }
+        if (static_cast<int>(seq->token_atom_aux_target_mask.size()) != seq_len) {
+            throw std::runtime_error(
+                "buildBatchPayload: sequence " + std::to_string(sid) +
+                " token_atom_aux_target_mask.size()=" +
+                std::to_string(seq->token_atom_aux_target_mask.size()) +
+                " != token_ids.size()=" + std::to_string(seq_len) +
+                " - sliding-window construction must author auxiliary ownership");
+        }
         if (static_cast<int>(seq->atom_entry_ids.size()) != seq_len) {
             throw std::runtime_error(
                 "buildBatchPayload: sequence " + std::to_string(sid) +
@@ -281,6 +529,7 @@ BatchPayload buildBatchPayload(
             &seq->targets,
             &seq->token_numeric_values,
             &seq->token_atom_mask,
+            &seq->token_atom_aux_target_mask,
             &seq->token_atom_flags,
             seq->atom_table,
             &seq->atom_entry_ids,
@@ -358,6 +607,7 @@ BatchPayload buildBatchPayload(
     payload.target_ids.assign(flat_size, -1);  // padding targets = masked
     payload.numeric_values.assign(flat_size, 0.0f);
     payload.atom_mask.assign(flat_size, 0);
+    payload.atom_aux_target_mask.assign(flat_size, 0);
     payload.atom_flags.assign(flat_size, 0);
     payload.atom_entry_ids.assign(flat_size, GRIM::Tokenizer::kAtomEntryNone);
     payload.token_to_slot_index_map.assign(flat_size, -1);
@@ -422,6 +672,11 @@ BatchPayload buildBatchPayload(
                     r.atom_mask->data(),
                     seq_len * sizeof(uint8_t));
 
+        // Copy causal auxiliary-head ownership authored by sliding windows.
+        std::memcpy(&payload.atom_aux_target_mask[row_offset],
+                    r.atom_aux_target_mask->data(),
+                    seq_len * sizeof(uint8_t));
+
         // Bulk copy atom flags (type-specific metadata from AtomTable)
         std::memcpy(&payload.atom_flags[row_offset],
                     r.atom_flags->data(),
@@ -444,6 +699,13 @@ BatchPayload buildBatchPayload(
         payload.seq_atom_tables[b] = r.atom_table;
 
     }
+
+    materializeCompactAtomOpenings(payload, "buildBatchPayload");
+    materializeNumberAuxTargets(
+        payload,
+        number_aux_target_digit_slots,
+        number_aux_target_max_abs_pow10,
+        "buildBatchPayload");
 
     // ═════════════════════════════════════════════════════════════════════════
     // ARG bootstrap metadata does not alter LM target ownership.
@@ -613,6 +875,7 @@ BatchPayload buildInferenceBatchPayload(
     payload.seq_atom_tables.resize(1);
     payload.seq_atom_tables[0] = atom_table;
 
+    materializeCompactAtomOpenings(payload, caller);
     payload.validate(caller);
     return payload;
 }

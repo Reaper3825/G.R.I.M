@@ -8,6 +8,7 @@
 #endif
 
 #include "ModelForward_GPU.hpp"
+#include "NumericAtomForward.hpp"
 
 #include "../../GRIM/grim_language_model_cuda.hpp"
 #include "../../Layers/Encoding/Encoding_GPU.hpp"
@@ -527,6 +528,14 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
         forward_outputs.encoder_output_tensor.stream = request.stream;
         forward_outputs.encoder_output_tensor.grad_fn = last.grad_fn;
     }
+
+    // The encoder output is the shared model hidden state. Typed auxiliary
+    // heads branch from it independently of the LM head and consume the
+    // complete BatchPayload semantic contract directly.
+    NumericAtomForward(
+        forward_outputs.encoder_output_tensor,
+        payload,
+        request.stream);
 
     const GRIM::LMHeadParameterTensors* lm_head_parameter_ptr = &lm_head_parameters;
     GRIM::LMHeadParameterTensors detached_lm_head_parameters{};

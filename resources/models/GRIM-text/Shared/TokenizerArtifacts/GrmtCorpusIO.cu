@@ -600,6 +600,11 @@ bool GrmtSequence::hasAnyValidTarget() const {
 
 void GrmtSequence::validateForWrite(const std::string& source) const {
     const std::size_t n = token_ids.size();
+    if (!token_atom_aux_target_mask.empty()) {
+        throw std::runtime_error(
+            "[GRMT] " + source +
+            ": token_atom_aux_target_mask is runtime-derived and must not be serialized");
+    }
     if (targets.size() != n) {
         throw std::runtime_error("[GRMT] " + source + ": targets.size()=" +
                                  std::to_string(targets.size()) + " != token_ids.size()=" +
