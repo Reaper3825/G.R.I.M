@@ -15,6 +15,7 @@
 #include "../Goal/GoalSpanView.hpp"
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Layers/ExecutionBlock/execution_block_GPU.hpp"
+#include "NumericAtomForward.hpp"
 
 #include <cstddef>
 #include <memory>
@@ -281,6 +282,8 @@ public:
         count += countGradFns(ffn_silu_out_per_layer);
         count += countGradFns(ffn_linear1_out_per_layer);
         count += countGradFns(ffn_swiglu_out_per_layer);
+        if (numeric_atom.digit_logits.grad_fn) ++count;
+        if (numeric_atom.pow10_logits.grad_fn) ++count;
         return count;
     }
 
@@ -313,6 +316,7 @@ public:
     Tensor lm_head_mlp_swiglu_out;    // [total_tokens, mlp_d_ff] silu ⊙ up
     Tensor lm_head_mlp_residual_out;  // [total_tokens, d_model] u = z + alpha * (swiglu @ W_down)
     Tensor logits_tensor;
+    NumericAtomForwardOutputs numeric_atom;
     // Candidate keys supplied by the independent selector pipeline. Core model
     // forward does not derive these from NumberEncoder.
     Tensor selector_candidate_keys; // [num_pool_atoms, d_model]
@@ -385,6 +389,7 @@ public:
         lm_head_mlp_swiglu_out = Tensor();
         lm_head_mlp_residual_out = Tensor();
         logits_tensor = Tensor();
+        numeric_atom.clear();
         selector_candidate_keys = Tensor();
         selector_logits = Tensor();
         // Reverse graph order keeps non-owning backward caches alive until
@@ -475,6 +480,8 @@ public:
         reportTensor("lm_head_mlp_swiglu_out", lm_head_mlp_swiglu_out);
         reportTensor("lm_head_mlp_residual_out", lm_head_mlp_residual_out);
         reportTensor("logits_tensor", logits_tensor);
+        reportTensor("numeric_atom.digit_logits", numeric_atom.digit_logits);
+        reportTensor("numeric_atom.pow10_logits", numeric_atom.pow10_logits);
         reportTensor("selector_candidate_keys", selector_candidate_keys);
         reportTensor("selector_logits", selector_logits);
         reportTensor("slot_seed_contextual_input", slot_seed_contextual_input);

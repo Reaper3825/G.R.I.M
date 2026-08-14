@@ -14,6 +14,7 @@
 #include "../../Shared/TensorContract/TensorContract_GPU.hpp"
 #include "../../Shared/CudaAllocUtils.hpp"
 #include "../../Shared/Loss/ComputeLoss/AutogradLoss.hpp"
+#include "../../Shared/Loss/ComputeLoss/NumericAtomLoss.hpp"
 #include "../../Shared/LogRecorder/BatchLogTape.hpp"
 #include "../../Shared/UnigramByte/Unigram.hpp"
 #include "../../Shared/HyperParameters/HyperparameterGroupings.hpp"
@@ -379,6 +380,15 @@ LossResult computeAutogradLoss(
         ctx.d_class_weights,
         ctx.stream
     );
+
+    // Numeric reconstruction loss boundary. The operation is currently a
+    // wiring stub and returns an empty Tensor, so it is not yet composed into
+    // the canonical backward root above.
+    const Tensor numeric_atom_loss = autograd::NumericAtomLoss(
+        forward_outputs.numeric_atom,
+        payload,
+        ctx.stream);
+    (void)numeric_atom_loss;
 
     float text_ce_loss = 0.0f;
     cudaMemcpyAsync(&text_ce_loss, loss_state.loss_tensor.data, sizeof(float),

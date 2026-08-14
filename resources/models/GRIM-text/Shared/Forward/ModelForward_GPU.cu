@@ -169,6 +169,15 @@ GRIM::LMHeadParameterTensors detachLmHeadParameters(
     return detached;
 }
 
+GRIM::NumberEncoderParameterTensors detachNumericAtomClassifierParameters(
+    const GRIM::NumberEncoderParameterTensors& parameters,
+    cudaStream_t stream) {
+    GRIM::NumberEncoderParameterTensors detached{};
+    detached.digit_emb = parameters.digit_emb.detach(stream);
+    detached.pow10_emb = parameters.pow10_emb.detach(stream);
+    return detached;
+}
+
 }  // namespace
 
 GoalSpanView ModelForwardRequest::goalSpansForRow(std::size_t row) const {
@@ -260,6 +269,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     const auto embedding_hp = HyperParameters::embeddingLayerConstructionHP(*cfg);
     const auto encoder_hp = HyperParameters::encoderLayerConstructionHP(*cfg);
     const auto lm_head_hp = HyperParameters::lmHeadLayerConstructionHP(*cfg);
+    const auto number_encoder_hp = HyperParameters::numberEncoderConstructionHP(*cfg);
     const bool center_encoder_residuals = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "center_encoder_residuals");
     const bool lm_head_center_hidden_states = HyperParameters::snapshotTrainingConfigField<bool>(*cfg, "lm_head_center_hidden_states");
     const int d_model = HyperParameters::snapshotTrainingConfigField<int>(*cfg, "d_model");
@@ -532,10 +542,29 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     // The encoder output is the shared model hidden state. Typed auxiliary
     // heads branch from it independently of the LM head and consume the
     // complete BatchPayload semantic contract directly.
-    NumericAtomForward(
-        forward_outputs.encoder_output_tensor,
-        payload,
-        request.stream);
+    if (number_encoder_hp.enabled) {
+        const auto& numeric_parameters =
+            request.parameter_registry->requireNumberEncoderParameters(
+                "executeModelForward.NumericAtomForward");
+        const GRIM::NumberEncoderParameterTensors* numeric_parameter_ptr =
+            &numeric_parameters;
+        GRIM::NumberEncoderParameterTensors detached_numeric_parameters{};
+        if (!connect_parameter_graph) {
+            detached_numeric_parameters = detachNumericAtomClassifierParameters(
+                numeric_parameters,
+                request.stream);
+            numeric_parameter_ptr = &detached_numeric_parameters;
+        }
+        forward_outputs.numeric_atom = NumericAtomForward(
+            forward_outputs.encoder_output_tensor,
+            *numeric_parameter_ptr,
+            payload,
+            request.stream);
+        if (!forward_outputs.numeric_atom.populated()) {
+            throw std::runtime_error(
+                "executeModelForward: NumericAtomForward returned empty logits");
+        }
+    }
 
     const GRIM::LMHeadParameterTensors* lm_head_parameter_ptr = &lm_head_parameters;
     GRIM::LMHeadParameterTensors detached_lm_head_parameters{};
