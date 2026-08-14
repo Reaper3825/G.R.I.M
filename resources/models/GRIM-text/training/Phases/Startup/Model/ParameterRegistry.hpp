@@ -68,6 +68,7 @@ struct LMHeadParameterTensors {
 struct NumberEncoderParameterTensors {
     Tensor digit_emb;   // [10, d_model] digit identity embedding
     Tensor pow10_emb;   // [pow10_buckets, d_model] place identity embedding
+    Tensor numeric_atom_slot_emb; // [max_digit_slots, d_model] auxiliary reconstruction slot identity
     Tensor W_c1;        // [BatchPayload::kNumberSlotFeatureDim, d_hidden] contribution MLP in
     Tensor b_c1;        // [1, d_hidden] contribution MLP bias
     Tensor W_c2;        // [d_hidden, d_model] contribution MLP out
@@ -467,11 +468,13 @@ inline constexpr std::array<EmbeddingTensorParameterSpec, 1>
          GRIM::ParamGroupType::EMBEDDING, GRIM::ParamStatsBucket::EMBEDDING},
     }};
 
-inline constexpr std::array<NumberEncoderTensorParameterSpec, 8>
+inline constexpr std::array<NumberEncoderTensorParameterSpec, 9>
     kNumberEncoderTensorParameters = {{
         {"number_encoder_digit_emb", &GRIM::NumberEncoderParameterTensors::digit_emb,
          GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
         {"number_encoder_pow10_emb", &GRIM::NumberEncoderParameterTensors::pow10_emb,
+         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
+        {"numeric_atom_slot_emb", &GRIM::NumberEncoderParameterTensors::numeric_atom_slot_emb,
          GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
         {"number_encoder_W_c1", &GRIM::NumberEncoderParameterTensors::W_c1,
          GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
