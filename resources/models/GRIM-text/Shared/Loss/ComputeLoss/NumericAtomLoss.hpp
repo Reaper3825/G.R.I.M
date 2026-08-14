@@ -8,6 +8,7 @@
 
 #include <cuda_runtime.h>
 
+#include "../../Batching/BatchDeviceBindings.hpp"
 #include "../../Batching/BatchPayload.hpp"
 #include "../../Forward/NumericAtomForward.hpp"
 #include "../../TensorContract/TensorContract_GPU.hpp"
@@ -15,12 +16,13 @@
 namespace GRIM {
 namespace autograd {
 
-// Computes the scalar numeric reconstruction loss from the typed numeric-head
-// outputs and BatchPayload-owned targets. This is currently a wiring stub; an
-// empty Tensor means that no numeric term is ready for loss composition yet.
+// Computes the detached scalar NumericAtom reconstruction loss. Numeric target
+// device memory is owned by BatchDeviceStorage and borrowed through bindings;
+// this operation allocates only its one-element result Tensor.
 Tensor NumericAtomLoss(
     const Forward::NumericAtomForwardOutputs& forward_outputs,
     const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
     cudaStream_t stream);
 
 }  // namespace autograd

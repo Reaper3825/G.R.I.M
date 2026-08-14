@@ -381,12 +381,13 @@ LossResult computeAutogradLoss(
         ctx.stream
     );
 
-    // Numeric reconstruction loss boundary. The operation is currently a
-    // wiring stub and returns an empty Tensor, so it is not yet composed into
-    // the canonical backward root above.
+    // Numeric reconstruction loss is evaluated from the batch-upload-owned
+    // target mirrors. It remains detached until NumericAtom backward is
+    // designed and is therefore not composed into the canonical root yet.
     const Tensor numeric_atom_loss = autograd::NumericAtomLoss(
         forward_outputs.numeric_atom,
         payload,
+        *ctx.device_bindings,
         ctx.stream);
     (void)numeric_atom_loss;
 

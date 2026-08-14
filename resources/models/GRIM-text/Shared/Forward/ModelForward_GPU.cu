@@ -175,6 +175,7 @@ GRIM::NumberEncoderParameterTensors detachNumericAtomClassifierParameters(
     GRIM::NumberEncoderParameterTensors detached{};
     detached.digit_emb = parameters.digit_emb.detach(stream);
     detached.pow10_emb = parameters.pow10_emb.detach(stream);
+    detached.numeric_atom_slot_emb = parameters.numeric_atom_slot_emb.detach(stream);
     return detached;
 }
 

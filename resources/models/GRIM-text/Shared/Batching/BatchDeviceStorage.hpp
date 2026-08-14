@@ -42,6 +42,13 @@ struct BatchDeviceStorage {
     Tensor atom_digit_slot_features_tensor; // float [1, max_tokens * digit_slots * kNumberSlotFeatureDim]
     Tensor atom_global_features_tensor;     // float [1, max_tokens * kNumberGlobalFeatureDim]
 
+    // NumericAtom supervision mirrors. These are populated once at the batch
+    // upload boundary and borrowed by NumericAtomLoss; the loss operation does
+    // not allocate or upload target data.
+    Tensor number_aux_target_digits_tensor;     // int32 [1, max_tokens * digit_slots]
+    Tensor number_aux_target_pow10_index_tensor; // int32 [1, max_tokens * digit_slots]
+    Tensor number_aux_target_digit_mask_tensor;  // uint8 [max_tokens * digit_slots]
+
     // Candidate atom-entry pool (arg/option selector). Allocated independently
     // when selector_enabled=true; pool capacity is max_tokens (every token could
     // be an atom), row_atom_offset capacity is batch_size + 1.
