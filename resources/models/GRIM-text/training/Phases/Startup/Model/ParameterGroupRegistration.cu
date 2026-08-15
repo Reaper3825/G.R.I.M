@@ -730,6 +730,7 @@ void validateParameterRegistrationConfig(const GRIM::Config::AiConfigSnapshot& c
     GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_ffn"), "parameter_precision_ffn", "buildParameterGroups");
     GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_rmsnorm"), "parameter_precision_rmsnorm", "buildParameterGroups");
     GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_execution_block"), "parameter_precision_execution_block", "buildParameterGroups");
+    GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_number_encoder"), "parameter_precision_number_encoder", "buildParameterGroups");
     GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_arg_selector"), "parameter_precision_arg_selector", "buildParameterGroups");
     GRIM::HyperParameters::validateParameterGroupPrecision(GRIM::HyperParameters::snapshotTrainingConfigField<ParameterGroupPrecision>(config, "parameter_precision_slot_seed_encoder"), "parameter_precision_slot_seed_encoder", "buildParameterGroups");
 }
@@ -1606,6 +1607,7 @@ void buildParameterGroups(const GRIM::Config::AiConfigSnapshot& config,
     registerTopLevelParameters(gpu_model_state, parameter_registry, registrar, config);
     registerEncoderParameters(gpu_model_state, parameter_registry, registrar, config);
 
+    registerNumberEncoderParameters(parameter_registry, registrar, config);
     registerExecutionBlockParameters(gpu_model_state, parameter_registry, registrar, config);
 
     validateRegisteredTensorPrecisionMetadata(rebuilt_groups);

@@ -165,6 +165,25 @@ void initializeExecutionSubsystems(
     std::cout << "✓ ExecutionBlock parameters created\n";
 }
 
+void initializeNumberEncoderSubsystem(
+    ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
+    const GRIM::Config::AiConfigSnapshot& model_cfg,
+    uint64_t weight_init_seed,
+    cudaStream_t init_stream) {
+    const auto number_encoder_hp =
+        GRIM::HyperParameters::numberEncoderConstructionHP(model_cfg);
+    GRIMText::Training::Startup::ModelRegistration::initializeNumberEncoderParameterTensors(
+        parameter_registry,
+        number_encoder_hp,
+        weight_init_seed + 40,
+        init_stream);
+    if (number_encoder_hp.enabled) {
+        (void)parameter_registry.requireNumberEncoderParameters(
+            "Startup::assembleGpuModel.NumberEncoder");
+        std::cout << "NumberEncoder/NumericAtom parameters created\n";
+    }
+}
+
 const GRIM::LMHeadParameterTensors& requireLmHeadParametersReady(
     const ::ParameterRegistry::StartupParameterRegistry& parameter_registry,
     const char* caller) {
@@ -332,6 +351,14 @@ void initializeInferenceRuntime(const ::GRIM::Config::AiConfigSnapshot& model_cf
     if (execution_hp.enabled && !parameter_registry.getExecutionBlockParameters()) {
         throw std::runtime_error(std::string("[") + caller + "] ExecutionBlock parameters not assembled by Startup::assembleGpuModel() while execution_block is enabled.");
     }
+    const auto number_encoder_hp =
+        GRIM::HyperParameters::numberEncoderConstructionHP(model_cfg);
+    if (number_encoder_hp.enabled &&
+        !parameter_registry.getNumberEncoderParameters()) {
+        throw std::runtime_error(
+            std::string("[") + caller +
+            "] NumberEncoder parameters not assembled by Startup::assembleGpuModel() while number_encoder is enabled.");
+    }
 
     cublasSetStream(training_state.cublas_handle.get(), primary_stream);
     std::cout << "  ✓ Using pre-initialized StreamController and cuBLAS handle" << std::endl;
@@ -495,6 +522,12 @@ void assembleGpuModel(const ::GRIM::Config::AiConfigSnapshot& model_cfg,
             (void)requireLmHeadParametersReady(parameter_registry, "Startup::assembleGpuModel");
             std::cout << "✓ LM head parameters created\n";
         }
+
+        initializeNumberEncoderSubsystem(
+            parameter_registry,
+            model_cfg,
+            weight_init_seed,
+            init_stream);
 
         initializeExecutionSubsystems(
             parameter_registry,
