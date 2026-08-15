@@ -181,6 +181,8 @@ GRIM::NumberEncoderParameterTensors detachNumericAtomParameters(
     detached.numeric_atom_Ur = parameters.numeric_atom_Ur.detach(stream);
     detached.numeric_atom_Wh = parameters.numeric_atom_Wh.detach(stream);
     detached.numeric_atom_Uh = parameters.numeric_atom_Uh.detach(stream);
+    detached.numeric_atom_stop_classifier =
+        parameters.numeric_atom_stop_classifier.detach(stream);
     return detached;
 }
 
@@ -550,7 +552,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     // complete BatchPayload semantic contract directly.
     // The recurrent NumericAtom training forward consumes teacher-forced
     // digit/pow10 targets. Inference owns a persistent per-open-atom state and
-    // will enter through its dedicated step boundary when that path is wired.
+    // enters through the dedicated NumericAtom inference step boundary.
     if (number_encoder_hp.enabled && payload.number_aux_target_digit_slots > 0) {
         const auto& numeric_parameters =
             request.parameter_registry->requireNumberEncoderParameters(

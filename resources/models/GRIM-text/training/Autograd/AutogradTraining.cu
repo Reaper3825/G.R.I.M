@@ -333,6 +333,9 @@ GradientSignalBaselines captureGradientVerificationBaselines(
         captureExpected(
             numeric_parameters.pow10_emb,
             "numeric atom pow10 embedding");
+        captureExpected(
+            numeric_parameters.numeric_atom_stop_classifier,
+            "numeric atom stop classifier");
         if (numericAtomTransitionReceivesSupervisedFutureLoss(ctx.payload)) {
             captureExpected(
                 numeric_parameters.numeric_atom_Wz,
@@ -869,6 +872,9 @@ bool verifyGradientsAreConnectedImpl(
         requireReceivedGradient(
             numeric_parameters.pow10_emb,
             "numeric atom pow10 embedding");
+        requireReceivedGradient(
+            numeric_parameters.numeric_atom_stop_classifier,
+            "numeric atom stop classifier");
         if (numericAtomTransitionReceivesSupervisedFutureLoss(ctx.payload)) {
             requireReceivedGradient(
                 numeric_parameters.numeric_atom_Wz,

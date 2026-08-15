@@ -713,8 +713,33 @@ BatchPayload buildBatchPayload(
         number_aux_target_max_abs_pow10,
         "buildBatchPayload");
 
+    // NumericAtom exclusively owns every target after a typed numeric OPEN,
+    // including the matching typed CLOSE stop target. Preserve the dedicated
+    // row mask authored above, then remove those targets from LM cross-entropy.
+    if (payload.number_aux_target_digit_slots > 0) {
+        for (int position = 0; position < payload.total_tokens; ++position) {
+            if (payload.number_aux_target_atom_index[static_cast<size_t>(position)] >= 0) {
+                payload.target_ids[static_cast<size_t>(position)] = -1;
+            }
+        }
+        payload.valid_tokens = 0;
+        std::fill(payload.valid_target_counts.begin(),
+                  payload.valid_target_counts.end(), 0);
+        for (int row = 0; row < payload.batch_size; ++row) {
+            const int row_offset = row * payload.max_seq_len;
+            const int row_end = row_offset + payload.seq_lengths[static_cast<size_t>(row)];
+            int valid_count = 0;
+            for (int position = row_offset; position < row_end; ++position) {
+                valid_count += payload.target_ids[static_cast<size_t>(position)] >= 0 ? 1 : 0;
+            }
+            payload.valid_target_counts[static_cast<size_t>(row)] = valid_count;
+            payload.valid_tokens += valid_count;
+        }
+    }
+
     // ═════════════════════════════════════════════════════════════════════════
-    // ARG bootstrap metadata does not alter LM target ownership.
+    // ARG bootstrap metadata does not alter LM target ownership. NumericAtom
+    // ownership was applied explicitly above.
     // ═════════════════════════════════════════════════════════════════════════
     payload.lm_valid_tokens = payload.valid_tokens;
 

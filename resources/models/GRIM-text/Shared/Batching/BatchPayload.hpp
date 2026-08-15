@@ -101,8 +101,8 @@ struct BatchPayload {
     std::vector<uint8_t> atom_mask;          // [total_tokens] padded with 0 (1 = atom opening metadata anchor)
     // Causal prediction-row ownership authored by sliding-window construction.
     // For <TYPE> value </TYPE>, 1 spans the opening boundary through the final
-    // value-token row, so the auxiliary head predicts value tokens + </TYPE>.
-    // The close-boundary row is 0; the LM resumes there.
+    // value-emission row, so the auxiliary head predicts digit/place emissions
+    // followed by </TYPE>. The close-boundary row is 0; the LM resumes there.
     // Host-only at this boundary; device upload and target routing belong to
     // the auxiliary-head integration that follows this payload-population step.
     std::vector<uint8_t> atom_aux_target_mask; // [total_tokens] padded with 0
@@ -716,10 +716,10 @@ struct BatchPayload {
                         std::to_string(position));
                 }
                 if (row_valid != 0) {
-                    if (atom_index < 0 || target_ids[static_cast<std::size_t>(position)] < 0) {
+                    if (atom_index < 0) {
                         throw std::runtime_error(
                             std::string(caller) +
-                            ": valid number auxiliary row lacks routing or upstream target validity at position=" +
+                            ": valid number auxiliary row lacks routing at position=" +
                             std::to_string(position));
                     }
                     ++counted_valid_rows;

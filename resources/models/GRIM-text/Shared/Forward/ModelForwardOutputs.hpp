@@ -284,6 +284,7 @@ public:
         count += countGradFns(ffn_swiglu_out_per_layer);
         if (numeric_atom.digit_logits.grad_fn) ++count;
         if (numeric_atom.pow10_logits.grad_fn) ++count;
+        if (numeric_atom.stop_logits.grad_fn) ++count;
         return count;
     }
 
@@ -482,6 +483,7 @@ public:
         reportTensor("logits_tensor", logits_tensor);
         reportTensor("numeric_atom.digit_logits", numeric_atom.digit_logits);
         reportTensor("numeric_atom.pow10_logits", numeric_atom.pow10_logits);
+        reportTensor("numeric_atom.stop_logits", numeric_atom.stop_logits);
         reportTensor("selector_candidate_keys", selector_candidate_keys);
         reportTensor("selector_logits", selector_logits);
         reportTensor("slot_seed_contextual_input", slot_seed_contextual_input);

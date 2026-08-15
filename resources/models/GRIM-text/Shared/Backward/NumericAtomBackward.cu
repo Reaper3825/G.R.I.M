@@ -36,8 +36,11 @@ __global__ void kernelNumericAtomBackward(
     const float* __restrict__ Ur,
     const float* __restrict__ Wh,
     const float* __restrict__ Uh,
+    const float* __restrict__ stop_classifier,
     const float* __restrict__ digit_logits,
     const float* __restrict__ pow10_logits,
+    const float* __restrict__ stop_logits,
+    const float* __restrict__ final_states,
     const float* __restrict__ step_states,
     const float* __restrict__ update_gates,
     const float* __restrict__ reset_gates,
@@ -59,6 +62,7 @@ __global__ void kernelNumericAtomBackward(
     float* Ur_gradient,
     float* Wh_gradient,
     float* Uh_gradient,
+    float* stop_classifier_gradient,
     int atom_count,
     int total_rows,
     int digit_slots,
@@ -93,6 +97,28 @@ __global__ void kernelNumericAtomBackward(
            target_digit_mask[target_base + step_count] != 0) {
         ++step_count;
     }
+
+    // The post-digit state owns the positive typed-CLOSE target. Seed reverse
+    // recurrence with that classifier gradient before walking digit steps.
+    const int stop_row = opening_row + step_count;
+    const bool stop_supervised = stop_row >= 0 && stop_row < total_rows &&
+        row_atom_index[stop_row] == atom &&
+        row_step_index[stop_row] == step_count && row_mask[stop_row] != 0;
+    if (stop_supervised) {
+        const float stop_gradient =
+            ((1.0f / (1.0f + __expf(-stop_logits[stop_row]))) - 1.0f) *
+            upstream_gradient[0] * normalization;
+        const float* final_state =
+            final_states + static_cast<size_t>(atom) * d_model;
+        for (int feature = threadIdx.x; feature < d_model; feature += blockDim.x) {
+            grad_next[feature] += stop_gradient * stop_classifier[feature];
+            if (stop_classifier_gradient) {
+                atomicAdd(&stop_classifier_gradient[feature],
+                          stop_gradient * final_state[feature]);
+            }
+        }
+    }
+    __syncthreads();
 
     for (int step = step_count - 1; step >= 0; --step) {
         const size_t target_index = target_base + step;
@@ -233,9 +259,16 @@ __global__ void kernelNumericAtomBackward(
                 digit_logits + static_cast<size_t>(row) * digit_classes;
             const float* pow10_row =
                 pow10_logits + static_cast<size_t>(row) * pow10_buckets;
+            const float stop_gradient =
+                (1.0f / (1.0f + __expf(-stop_logits[row]))) * scale;
 
             for (int feature = threadIdx.x; feature < d_model; feature += blockDim.x) {
-                float classifier_state_gradient = 0.0f;
+                float classifier_state_gradient =
+                    stop_gradient * stop_classifier[feature];
+                if (stop_classifier_gradient) {
+                    atomicAdd(&stop_classifier_gradient[feature],
+                              stop_gradient * state[feature]);
+                }
                 for (int cls = 0; cls < digit_classes; ++cls) {
                     const float probability =
                         __expf(digit_row[cls] - softmax_stats[0]) * softmax_stats[1];
@@ -297,6 +330,7 @@ struct NumericAtomBackwardFn final : public GradFn {
     std::shared_ptr<Tensor> Ur_gradient;
     std::shared_ptr<Tensor> Wh_gradient;
     std::shared_ptr<Tensor> Uh_gradient;
+    std::shared_ptr<Tensor> stop_classifier_gradient;
 
     const float* digit_embedding = nullptr;
     const float* pow10_embedding = nullptr;
@@ -306,8 +340,11 @@ struct NumericAtomBackwardFn final : public GradFn {
     const float* Ur = nullptr;
     const float* Wh = nullptr;
     const float* Uh = nullptr;
+    const float* stop_classifier = nullptr;
     const float* digit_logits = nullptr;
     const float* pow10_logits = nullptr;
+    const float* stop_logits = nullptr;
+    const float* final_states = nullptr;
     const float* step_states = nullptr;
     const float* update_gates = nullptr;
     const float* reset_gates = nullptr;
@@ -336,8 +373,11 @@ struct NumericAtomBackwardFn final : public GradFn {
         Ur = parameters.numeric_atom_Ur.data;
         Wh = parameters.numeric_atom_Wh.data;
         Uh = parameters.numeric_atom_Uh.data;
+        stop_classifier = parameters.numeric_atom_stop_classifier.data;
         digit_logits = outputs.digit_logits.data;
         pow10_logits = outputs.pow10_logits.data;
+        stop_logits = outputs.stop_logits.data;
+        final_states = outputs.final_states.data;
         step_states = outputs.step_states.data;
         update_gates = outputs.update_gates.data;
         reset_gates = outputs.reset_gates.data;
@@ -379,6 +419,12 @@ struct NumericAtomBackwardFn final : public GradFn {
             Uh_gradient = capture_input_gradient(
                 parameters.numeric_atom_Uh, stream, "NumericAtomBackward.Uh");
         }
+        if (parameters.numeric_atom_stop_classifier.requires_grad) {
+            stop_classifier_gradient = capture_input_gradient(
+                parameters.numeric_atom_stop_classifier,
+                stream,
+                "NumericAtomBackward.stop_classifier");
+        }
     }
 
     void apply_impl(
@@ -405,7 +451,8 @@ struct NumericAtomBackwardFn final : public GradFn {
                 "NumericAtomBackward: payload geometry disagrees with captured forward state");
         }
         if (!digit_embedding || !pow10_embedding || !Wz || !Uz || !Wr || !Ur ||
-            !Wh || !Uh || !digit_logits || !pow10_logits || !step_states ||
+            !Wh || !Uh || !stop_classifier || !digit_logits || !pow10_logits ||
+            !stop_logits || !final_states || !step_states ||
             !update_gates || !reset_gates || !candidates) {
             throw std::runtime_error(
                 "NumericAtomBackward: borrowed forward state is incomplete");
@@ -421,23 +468,30 @@ struct NumericAtomBackwardFn final : public GradFn {
                 "NumericAtomBackward: numeric target device bindings are incomplete");
         }
 
-        int valid_steps = 0;
+        int valid_digit_steps = 0;
+        int valid_stop_steps = 0;
         for (int row = 0; row < payload->total_tokens; ++row) {
             if (payload->number_aux_target_row_mask[static_cast<size_t>(row)] == 0) continue;
             const int atom =
                 payload->number_aux_target_atom_index[static_cast<size_t>(row)];
             const int step =
                 payload->number_aux_target_step_index[static_cast<size_t>(row)];
-            if (atom < 0 || atom >= atom_count || step < 0 || step >= digit_slots) continue;
-            valid_steps += payload->number_aux_target_digit_mask[
-                static_cast<size_t>(atom) * digit_slots + step] != 0;
+            if (atom < 0 || atom >= atom_count || step < 0 || step > digit_slots) continue;
+            const int digit_count = static_cast<int>(
+                payload->number_aux_target_digit_count[static_cast<size_t>(atom)]);
+            if (step < digit_count) {
+                ++valid_digit_steps;
+            } else if (step == digit_count) {
+                ++valid_stop_steps;
+            }
         }
-        if (valid_steps <= 0) {
-            throw std::runtime_error("NumericAtomBackward: no supervised decoder steps");
+        if (valid_digit_steps <= 0 || valid_stop_steps <= 0) {
+            throw std::runtime_error(
+                "NumericAtomBackward: digit and stop supervision are both required");
         }
 
         const float normalization =
-            1.0f / (2.0f * static_cast<float>(valid_steps));
+            1.0f / static_cast<float>(3 * valid_digit_steps + valid_stop_steps);
         const size_t shared_bytes =
             (static_cast<size_t>(5) * d_model + 4) * sizeof(float);
         kernelNumericAtomBackward<<<atom_count, kBlockSize, shared_bytes, stream>>>(
@@ -450,8 +504,11 @@ struct NumericAtomBackwardFn final : public GradFn {
             Ur,
             Wh,
             Uh,
+            stop_classifier,
             digit_logits,
             pow10_logits,
+            stop_logits,
+            final_states,
             step_states,
             update_gates,
             reset_gates,
@@ -473,6 +530,7 @@ struct NumericAtomBackwardFn final : public GradFn {
             Ur_gradient ? Ur_gradient->data : nullptr,
             Wh_gradient ? Wh_gradient->data : nullptr,
             Uh_gradient ? Uh_gradient->data : nullptr,
+            stop_classifier_gradient ? stop_classifier_gradient->data : nullptr,
             atom_count,
             hidden_rows,
             digit_slots,
@@ -498,6 +556,7 @@ struct NumericAtomBackwardFn final : public GradFn {
         propagate(Ur_gradient, "NumericAtomBackward.Ur");
         propagate(Wh_gradient, "NumericAtomBackward.Wh");
         propagate(Uh_gradient, "NumericAtomBackward.Uh");
+        propagate(stop_classifier_gradient, "NumericAtomBackward.stop_classifier");
     }
 
     void release_saved() override {
@@ -511,6 +570,7 @@ struct NumericAtomBackwardFn final : public GradFn {
         Ur_gradient.reset();
         Wh_gradient.reset();
         Uh_gradient.reset();
+        stop_classifier_gradient.reset();
         digit_embedding = nullptr;
         pow10_embedding = nullptr;
         Wz = nullptr;
@@ -519,8 +579,11 @@ struct NumericAtomBackwardFn final : public GradFn {
         Ur = nullptr;
         Wh = nullptr;
         Uh = nullptr;
+        stop_classifier = nullptr;
         digit_logits = nullptr;
         pow10_logits = nullptr;
+        stop_logits = nullptr;
+        final_states = nullptr;
         step_states = nullptr;
         update_gates = nullptr;
         reset_gates = nullptr;
@@ -601,10 +664,16 @@ void attachNumericAtomBackward(
                  "attachNumericAtomBackward.Wh");
     requireShape(parameters.numeric_atom_Uh, d_model, d_model,
                  "attachNumericAtomBackward.Uh");
+    requireShape(parameters.numeric_atom_stop_classifier, 1, d_model,
+                 "attachNumericAtomBackward.stop_classifier");
     requireShape(outputs.digit_logits, outputs.row_count, outputs.digit_classes,
                  "attachNumericAtomBackward.digit_logits");
     requireShape(outputs.pow10_logits, outputs.row_count, outputs.pow10_buckets,
                  "attachNumericAtomBackward.pow10_logits");
+    requireShape(outputs.stop_logits, outputs.row_count, 1,
+                 "attachNumericAtomBackward.stop_logits");
+    requireShape(outputs.final_states, outputs.atom_count, d_model,
+                 "attachNumericAtomBackward.final_states");
     requireShape(outputs.step_states, outputs.atom_count * digit_slots, d_model,
                  "attachNumericAtomBackward.step_states");
     requireShape(outputs.update_gates, outputs.atom_count * digit_slots, d_model,
@@ -621,7 +690,8 @@ void attachNumericAtomBackward(
         !parameters.pow10_emb.requires_grad || !parameters.numeric_atom_Wz.requires_grad ||
         !parameters.numeric_atom_Uz.requires_grad || !parameters.numeric_atom_Wr.requires_grad ||
         !parameters.numeric_atom_Ur.requires_grad || !parameters.numeric_atom_Wh.requires_grad ||
-        !parameters.numeric_atom_Uh.requires_grad) {
+        !parameters.numeric_atom_Uh.requires_grad ||
+        !parameters.numeric_atom_stop_classifier.requires_grad) {
         throw std::runtime_error(
             "attachNumericAtomBackward: all recurrent training inputs must require gradients");
     }

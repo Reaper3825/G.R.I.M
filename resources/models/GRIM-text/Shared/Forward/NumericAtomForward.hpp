@@ -20,12 +20,13 @@ struct NumberEncoderParameterTensors;
 namespace Forward {
 
 // Numeric decoder predictions aligned one-to-one with the shared causal
-// hidden-state rows. The LM head owns the typed OPEN/CLOSE delimiters. While a
-// numeric span is active, the corresponding row from each tensor describes
-// the next numeric digit and its power-of-ten position.
+// hidden-state rows. The LM head owns the typed OPEN delimiter. While a numeric
+// span is active, the corresponding row describes either the next numeric
+// digit/place emission or the typed CLOSE termination decision.
 //
-// The final state tensor exposes the completed per-atom recurrent state. The
-// LM head still owns typed CLOSE prediction; NumericAtom has no STOP class.
+// stop_logits[row] = dot(state_t, stop_classifier). NumericAtom owns typed CLOSE
+// prediction: digit rows target stop=0 and the first post-digit row targets
+// stop=1.
 struct NumericAtomForwardOutputs {
     bool evaluated = false;
     int row_count = 0;
@@ -36,6 +37,7 @@ struct NumericAtomForwardOutputs {
 
     Tensor digit_logits;  // [row_count, 10]
     Tensor pow10_logits;  // [row_count, pow10_buckets]
+    Tensor stop_logits;   // [row_count, 1]
     Tensor final_states;  // [atom_count, d_model], numeric entries populated
     Tensor step_states;   // [atom_count * decoder_step_capacity, d_model], state_t
     Tensor update_gates;  // [atom_count * decoder_step_capacity, d_model]
@@ -45,6 +47,7 @@ struct NumericAtomForwardOutputs {
     void clear() {
         digit_logits = Tensor();
         pow10_logits = Tensor();
+        stop_logits = Tensor();
         final_states = Tensor();
         step_states = Tensor();
         update_gates = Tensor();
@@ -60,7 +63,22 @@ struct NumericAtomForwardOutputs {
 
     bool populated() const {
         return evaluated && row_count > 0 &&
-               digit_logits.data != nullptr && pow10_logits.data != nullptr;
+               digit_logits.data != nullptr && pow10_logits.data != nullptr &&
+               stop_logits.data != nullptr;
+    }
+};
+
+// One inference-time projection from a persistent NumericAtom recurrent state.
+// Selection policy stays with generation orchestration; this primitive only
+// exposes the three learned decisions for the current state.
+struct NumericAtomInferenceLogits {
+    Tensor digit_logits;  // [1, 10]
+    Tensor pow10_logits;  // [1, pow10_buckets]
+    Tensor stop_logits;   // [1, 1]
+
+    bool populated() const {
+        return digit_logits.data != nullptr && pow10_logits.data != nullptr &&
+               stop_logits.data != nullptr;
     }
 };
 
@@ -73,6 +91,20 @@ NumericAtomForwardOutputs NumericAtomForward(
     const NumberEncoderParameterTensors& parameters,
     const Batching::BatchPayload& payload,
     const Batching::BatchDeviceBindings& bindings,
+    cudaStream_t stream);
+
+NumericAtomInferenceLogits NumericAtomInferenceProject(
+    const Tensor& recurrent_state,
+    const NumberEncoderParameterTensors& parameters,
+    cudaStream_t stream);
+
+// Advances the persistent state after generation selects one digit/place pair.
+// STOP has no transition; callers terminate without invoking this primitive.
+Tensor NumericAtomInferenceTransition(
+    const Tensor& recurrent_state,
+    const NumberEncoderParameterTensors& parameters,
+    int selected_digit,
+    int selected_pow10_index,
     cudaStream_t stream);
 
 }  // namespace Forward

@@ -9,6 +9,7 @@
 #include "Shared/Forward/GeneratedSequence.hpp"
 #include "../../Shared/Forward/ModelForwardRuntimePayload.hpp"
 #include "../../Shared/Forward/ModelForward_GPU.hpp"
+#include "../../Shared/Forward/NumericAtomForward.hpp"
 #include "../../Shared/InferenceState/KvCacheState_GPU.hpp"
 #include "../../Shared/Sampling/Sampling.hpp"
 #include "../../Shared/UnigramByte/AtomTable.hpp"
@@ -19,8 +20,12 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cmath>
+#include <map>
 #include <memory>
+#include <random>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace GRIMText::Training {
@@ -36,6 +41,108 @@ struct InferenceForwardScope {
         forward_outputs.clear();
     }
 };
+
+struct NumericEmission {
+    int digit = 0;
+    int pow10 = 0;
+};
+
+int selectNumericClass(
+    const std::vector<float>& logits,
+    bool do_sample,
+    float temperature,
+    std::mt19937& rng) {
+    if (logits.empty()) {
+        throw std::runtime_error("selectNumericClass: logits are empty");
+    }
+    if (!do_sample) {
+        return static_cast<int>(std::distance(
+            logits.begin(), std::max_element(logits.begin(), logits.end())));
+    }
+    const double safe_temperature = std::max(1.0e-6, static_cast<double>(temperature));
+    const float max_logit = *std::max_element(logits.begin(), logits.end());
+    std::vector<double> weights(logits.size(), 0.0);
+    for (size_t i = 0; i < logits.size(); ++i) {
+        weights[i] = std::exp(
+            (static_cast<double>(logits[i]) - static_cast<double>(max_logit)) /
+            safe_temperature);
+    }
+    std::discrete_distribution<int> distribution(weights.begin(), weights.end());
+    return distribution(rng);
+}
+
+bool selectNumericStop(
+    float stop_logit,
+    bool do_sample,
+    float temperature,
+    std::mt19937& rng) {
+    if (!do_sample) {
+        return stop_logit >= 0.0f;
+    }
+    const double safe_temperature = std::max(1.0e-6, static_cast<double>(temperature));
+    const double scaled = static_cast<double>(stop_logit) / safe_temperature;
+    const double probability = scaled >= 0.0
+        ? 1.0 / (1.0 + std::exp(-scaled))
+        : std::exp(scaled) / (1.0 + std::exp(scaled));
+    std::bernoulli_distribution distribution(probability);
+    return distribution(rng);
+}
+
+std::string renderCanonicalNumericAtom(
+    GRIM::Tokenizer::AtomType atom_type,
+    const std::vector<NumericEmission>& emissions) {
+    if (emissions.empty()) {
+        throw std::runtime_error(
+            "renderCanonicalNumericAtom: NumericAtom stopped without an emission");
+    }
+
+    // Accumulate exact base-10 contributions and carry duplicate places. This
+    // keeps semantic pairs out of the token stream and avoids float roundoff.
+    std::map<int, int> digits_by_place;
+    for (const NumericEmission& emission : emissions) {
+        if (emission.digit < 0 || emission.digit > 9) {
+            throw std::runtime_error(
+                "renderCanonicalNumericAtom: digit is out of range");
+        }
+        digits_by_place[emission.pow10] += emission.digit;
+    }
+    for (auto it = digits_by_place.begin(); it != digits_by_place.end(); ++it) {
+        if (it->second >= 10) {
+            digits_by_place[it->first + 1] += it->second / 10;
+            it->second %= 10;
+        }
+    }
+
+    int highest = digits_by_place.rbegin()->first;
+    int lowest = digits_by_place.begin()->first;
+    while (highest > 0 && digits_by_place[highest] == 0) --highest;
+    while (lowest < 0 && digits_by_place[lowest] == 0) ++lowest;
+
+    if (atom_type == GRIM::Tokenizer::AtomType::ATOM_INT && lowest < 0) {
+        throw std::runtime_error(
+            "NumericAtom inference: <INT> emitted a fractional place");
+    }
+
+    std::string rendered;
+    if (highest < 0) {
+        rendered = "0";
+    } else {
+        rendered.reserve(static_cast<size_t>(highest + 2));
+        for (int place = highest; place >= 0; --place) {
+            rendered.push_back(static_cast<char>('0' + digits_by_place[place]));
+        }
+    }
+
+    if (lowest < 0) {
+        rendered.push_back('.');
+        for (int place = -1; place >= lowest; --place) {
+            rendered.push_back(static_cast<char>('0' + digits_by_place[place]));
+        }
+    } else if (atom_type == GRIM::Tokenizer::AtomType::ATOM_FLOAT) {
+        rendered += ".0";
+    }
+    return rendered;
+}
 
 std::shared_ptr<GRIM::Batching::BatchDeviceStorage> ensureInferenceDeviceStorage(
     GRIM::Batching::BatchPayload& payload,
@@ -137,6 +244,8 @@ GRIM::GeneratedSequence generateOneSequence(
     const int max_seq_len = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "max_seq_len");
     const int vocab_size = GRIM::HyperParameters::snapshotTrainingConfigField<int>(config, "vocab_size");
     const auto execution_hp = GRIM::HyperParameters::executionBlockConstructionHP(config);
+    const auto number_encoder_hp =
+        GRIM::HyperParameters::numberEncoderConstructionHP(config);
     const auto& prompt_tokens = prompt_payload.input_ids;
     const auto& prompt_numeric_values = prompt_payload.numeric_values;
     const auto& prompt_atom_mask = prompt_payload.atom_mask;
@@ -233,6 +342,8 @@ GRIM::GeneratedSequence generateOneSequence(
     generation_state.resetSession();
 
     GRIM::Sampling::SamplingPipeline pipeline(sampling_cfg);
+    std::mt19937 numeric_rng(
+        cfg.seed == 0 ? std::random_device{}() : cfg.seed ^ 0x4E554D41u);
     // ── KV-cache session setup ───────────────────────────────────────────────
     // Decode runs incrementally: prefill the prompt once (q_len=prompt_len), then
     // decode one token at a time, reusing
@@ -268,6 +379,7 @@ GRIM::GeneratedSequence generateOneSequence(
         int n_rows = 0;
         int vocab = 0;
         std::vector<float> primary;            // [n_rows * vocab]
+        GRIM::Tensor numeric_initial_state;    // [1, d_model], optional
         const float* primaryRow(int i) const {
             return primary.data() + static_cast<size_t>(i) * static_cast<size_t>(vocab);
         }
@@ -277,7 +389,8 @@ GRIM::GeneratedSequence generateOneSequence(
     // appends this window's K/V to every layer's cache and advances cache_seqlens
     // by q_len. Returns the last n_tail rows of the primary logits.
     auto runCachedForward = [&](GRIM::Batching::BatchPayload& active_payload,
-                                int n_tail) -> TailLogits {
+                                int n_tail,
+                                bool capture_numeric_state) -> TailLogits {
         validateInferenceForwardPayload(config, active_payload, "generateOneSequence");
         const int q_len = active_payload.total_tokens;
         if (n_tail <= 0 || n_tail > q_len) {
@@ -333,6 +446,34 @@ GRIM::GeneratedSequence generateOneSequence(
             throw std::runtime_error("generateOneSequence: cudaMemcpyAsync primary logits failed: " +
                                      std::string(cudaGetErrorString(copy_err)));
         }
+        if (capture_numeric_state) {
+            const auto& encoder_state = forward_outputs.encoder_output_tensor;
+            encoder_state.require("generateOneSequence.numeric_atom_encoder_state");
+            if (!encoder_state.shape.is_2d_layout()) {
+                throw std::runtime_error(
+                    "generateOneSequence: encoder output must be 2D for NumericAtom inference");
+            }
+            const auto encoder_shape = encoder_state.shape.as_2d();
+            if (encoder_shape.rows != q_len || encoder_shape.cols != d_model) {
+                throw std::runtime_error(
+                    "generateOneSequence: encoder output shape disagrees with NumericAtom seed geometry");
+            }
+            tail.numeric_initial_state = GRIM::Tensor::zeros(
+                GRIM::TensorContract::TensorShape::make_BSM(1, d_model), false, stream,
+                "numeric_atom.inference_initial_state");
+            copy_err = cudaMemcpyAsync(
+                tail.numeric_initial_state.data,
+                encoder_state.data +
+                    static_cast<size_t>(q_len - 1) * static_cast<size_t>(d_model),
+                static_cast<size_t>(d_model) * sizeof(float),
+                cudaMemcpyDeviceToDevice,
+                stream);
+            if (copy_err != cudaSuccess) {
+                throw std::runtime_error(
+                    "generateOneSequence: NumericAtom state capture failed: " +
+                    std::string(cudaGetErrorString(copy_err)));
+            }
+        }
         cudaError_t sync_err = cudaStreamSynchronize(stream);
         if (sync_err != cudaSuccess) {
             throw std::runtime_error("generateOneSequence: cudaStreamSynchronize failed: " +
@@ -341,20 +482,21 @@ GRIM::GeneratedSequence generateOneSequence(
         return tail;
     };
 
-    auto buildDecodePayload = [&]() -> GRIM::Batching::BatchPayload {
-        if (sequence.token_ids.empty()) {
-            throw std::runtime_error("generateOneSequence: no pending token for decode");
+    auto buildDecodePayload = [&](const std::vector<int>& feed_tokens)
+        -> GRIM::Batching::BatchPayload {
+        if (feed_tokens.empty()) {
+            throw std::runtime_error("generateOneSequence: decode token window is empty");
         }
-        const size_t pending_index = sequence.token_ids.size() - 1;
-        std::vector<int> feed_tokens{sequence.token_ids[pending_index]};
-        std::vector<float> numeric{0.0f};
-        std::vector<uint8_t> amask{0};
-        std::vector<uint32_t> aflags{0};
-        std::vector<uint32_t> aentry{GRIM::Tokenizer::kAtomEntryNone};
+        std::vector<float> numeric(feed_tokens.size(), 0.0f);
+        std::vector<uint8_t> amask(feed_tokens.size(), 0);
+        std::vector<uint32_t> aflags(feed_tokens.size(), 0);
+        std::vector<uint32_t> aentry(
+            feed_tokens.size(), GRIM::Tokenizer::kAtomEntryNone);
         const std::vector<int32_t> slotmap;  // empty -> no execution-active row
         auto decode_payload = GRIM::Batching::buildInferenceBatchPayload(
             feed_tokens, numeric, amask, aflags, prompt_atom_table, aentry, slotmap,
-            vocab_size, /*batch_capacity=*/1, /*max_cached_seq_len=*/1,
+            vocab_size, /*batch_capacity=*/1,
+            /*max_cached_seq_len=*/feed_tokens.size(),
             execution_hp.num_slots,
             execution_hp.num_scratch_slots,
             /*selector_enabled=*/false,
@@ -383,6 +525,23 @@ GRIM::GeneratedSequence generateOneSequence(
         }
     };
 
+    auto commitSyntheticToken = [&](int token_id) {
+        if (token_id < 0 || token_id >= vocab_size) {
+            throw std::runtime_error(
+                "generateOneSequence: NumericAtom rendered token is out of range");
+        }
+        sequence.token_ids.push_back(token_id);
+        sequence.token_scores.push_back(0.0f);
+        sequence.token_numeric_values.push_back(0.0f);
+        sequence.token_atom_mask.push_back(0);
+        sequence.token_to_slot_index_map.push_back(-1);
+        sequence.atom_entry_ids.push_back(GRIM::Tokenizer::kAtomEntryNone);
+        sequence_atom_flags.push_back(0);
+        if (stream_callback) {
+            (*stream_callback)(token_id, 1.0f);
+        }
+    };
+
     // Select the next token from a primary-logit row using the SAME pipeline +
     // pre-min_new_tokens EOS mask as the full-recompute decoder. Numeric atom
     // availability is decided per row before sampling, never inferred afterward.
@@ -404,7 +563,114 @@ GRIM::GeneratedSequence generateOneSequence(
     };
 
     // ── Prefill: populate the cache from the prompt; read the last position. ──
-    TailLogits prefill = runCachedForward(prompt_payload, /*n_tail=*/1);
+    auto isNumericOpenToken = [](int token_id) -> bool {
+        return GRIM::Tokenizer::isAtomOpenTokenId(token_id) &&
+               GRIM::Tokenizer::isNumericAtom(
+                   GRIM::Tokenizer::tokenIdToAtomType(token_id));
+    };
+
+    auto decodeNumericAtom = [&](GRIM::Tensor recurrent_state,
+                                 GRIM::Tokenizer::AtomType atom_type)
+        -> std::vector<int> {
+        if (!number_encoder_hp.enabled || number_encoder_hp.max_digit_slots <= 0 ||
+            number_encoder_hp.max_abs_pow10 < 0 ||
+            number_encoder_hp.pow10_buckets !=
+                2 * number_encoder_hp.max_abs_pow10 + 1 ||
+            number_encoder_hp.d_model != d_model) {
+            throw std::runtime_error(
+                "generateOneSequence: LM emitted a numeric OPEN with invalid NumericAtom geometry");
+        }
+        auto& numeric_parameters = parameter_registry.requireNumberEncoderParameters(
+            "generateOneSequence.NumericAtomInference");
+        numeric_parameters.pow10_emb.require(
+            "generateOneSequence.NumericAtomInference.pow10_emb");
+        if (!numeric_parameters.pow10_emb.shape.is_2d_layout() ||
+            numeric_parameters.pow10_emb.shape.as_2d().rows !=
+                number_encoder_hp.pow10_buckets) {
+            throw std::runtime_error(
+                "generateOneSequence: NumericAtom parameter/config pow10 geometry mismatch");
+        }
+        std::vector<NumericEmission> emissions;
+        emissions.reserve(static_cast<size_t>(number_encoder_hp.max_digit_slots));
+
+        while (true) {
+            auto logits = GRIM::Forward::NumericAtomInferenceProject(
+                recurrent_state, numeric_parameters, stream);
+            std::vector<float> digit_logits(10, 0.0f);
+            std::vector<float> pow10_logits(
+                static_cast<size_t>(number_encoder_hp.pow10_buckets), 0.0f);
+            float stop_logit = 0.0f;
+            cudaError_t copy_err = cudaMemcpyAsync(
+                digit_logits.data(), logits.digit_logits.data,
+                digit_logits.size() * sizeof(float), cudaMemcpyDeviceToHost, stream);
+            if (copy_err == cudaSuccess) {
+                copy_err = cudaMemcpyAsync(
+                    pow10_logits.data(), logits.pow10_logits.data,
+                    pow10_logits.size() * sizeof(float), cudaMemcpyDeviceToHost, stream);
+            }
+            if (copy_err == cudaSuccess) {
+                copy_err = cudaMemcpyAsync(
+                    &stop_logit, logits.stop_logits.data, sizeof(float),
+                    cudaMemcpyDeviceToHost, stream);
+            }
+            if (copy_err != cudaSuccess) {
+                throw std::runtime_error(
+                    "generateOneSequence: NumericAtom logits copy failed: " +
+                    std::string(cudaGetErrorString(copy_err)));
+            }
+            const cudaError_t sync_err = cudaStreamSynchronize(stream);
+            if (sync_err != cudaSuccess) {
+                throw std::runtime_error(
+                    "generateOneSequence: NumericAtom logits sync failed: " +
+                    std::string(cudaGetErrorString(sync_err)));
+            }
+
+            // At least one semantic pair is required. Thereafter STOP owns
+            // termination and no digit/place selection is made on that step.
+            if (!emissions.empty()) {
+                if (selectNumericStop(
+                        stop_logit, cfg.do_sample, cfg.temperature, numeric_rng)) {
+                    break;
+                }
+                if (static_cast<int>(emissions.size()) >=
+                    number_encoder_hp.max_digit_slots) {
+                    break;
+                }
+            }
+
+            if (atom_type == GRIM::Tokenizer::AtomType::ATOM_INT) {
+                std::fill(
+                    pow10_logits.begin(),
+                    pow10_logits.begin() + number_encoder_hp.max_abs_pow10,
+                    -1.0e30f);
+            }
+            const int digit = selectNumericClass(
+                digit_logits, cfg.do_sample, cfg.temperature, numeric_rng);
+            const int pow10_index = selectNumericClass(
+                pow10_logits, cfg.do_sample, cfg.temperature, numeric_rng);
+            emissions.push_back(NumericEmission{
+                digit, pow10_index - number_encoder_hp.max_abs_pow10});
+            recurrent_state = GRIM::Forward::NumericAtomInferenceTransition(
+                recurrent_state,
+                numeric_parameters,
+                digit,
+                pow10_index,
+                stream);
+        }
+
+        const std::string canonical =
+            renderCanonicalNumericAtom(atom_type, emissions);
+        std::vector<int> rendered_tokens;
+        rendered_tokens.reserve(canonical.size() + 1);
+        for (const unsigned char byte : canonical) {
+            rendered_tokens.push_back(GRIM::Tokenizer::byteToTokenId(byte));
+        }
+        rendered_tokens.push_back(GRIM::Tokenizer::atomTypeToCloseTokenId(atom_type));
+        return rendered_tokens;
+    };
+
+    TailLogits prefill = runCachedForward(
+        prompt_payload, /*n_tail=*/1, /*capture_numeric_state=*/false);
 
     bool finished = false;
 
@@ -417,26 +683,69 @@ GRIM::GeneratedSequence generateOneSequence(
             finished = true;
         }
     }
-    // Decode one pending token per cached forward.
+    // Decode one pending LM token per cached forward. Numeric OPEN hands control
+    // to an out-of-band NumericAtom loop until STOP, then resumes after CLOSE.
     while (!finished) {
-        if (committedNewTokens() >= cfg.max_new_tokens) {
-            break;
-        }
-        if (static_cast<int>(sequence.token_ids.size()) >= max_seq_len) {
+        const int pending_token = sequence.token_ids.back();
+        const bool numeric_open = isNumericOpenToken(pending_token);
+        if (committedNewTokens() >= cfg.max_new_tokens ||
+            static_cast<int>(sequence.token_ids.size()) >= max_seq_len) {
+            if (numeric_open) {
+                throw std::runtime_error(
+                    "generateOneSequence: generation capacity ended on an unterminated numeric OPEN");
+            }
             break;
         }
 
         const int cache_base = kv_cache.currentSeqlen();
+        std::vector<int> pending_window{pending_token};
+        GRIM::Batching::BatchPayload decode_payload =
+            buildDecodePayload(pending_window);
+        TailLogits tail = runCachedForward(
+            decode_payload, /*n_tail=*/1,
+            /*capture_numeric_state=*/numeric_open);
+        kv_cache.setSeqlen(cache_base + 1, stream);
 
-        GRIM::Batching::BatchPayload decode_payload = buildDecodePayload();
-        TailLogits tail = runCachedForward(decode_payload, /*n_tail=*/1);
+        if (numeric_open) {
+            const auto atom_type = GRIM::Tokenizer::tokenIdToAtomType(pending_token);
+            std::vector<int> rendered_tokens = decodeNumericAtom(
+                std::move(tail.numeric_initial_state), atom_type);
+            if (committedNewTokens() + static_cast<int>(rendered_tokens.size()) >
+                    cfg.max_new_tokens ||
+                sequence.token_ids.size() + rendered_tokens.size() >
+                    static_cast<size_t>(max_seq_len)) {
+                throw std::runtime_error(
+                    "generateOneSequence: canonical NumericAtom span exceeds generation capacity");
+            }
+            for (const int token_id : rendered_tokens) {
+                commitSyntheticToken(token_id);
+            }
+
+            GRIM::Batching::BatchPayload rendered_payload =
+                buildDecodePayload(rendered_tokens);
+            TailLogits close_tail = runCachedForward(
+                rendered_payload, /*n_tail=*/1,
+                /*capture_numeric_state=*/false);
+            kv_cache.setSeqlen(
+                cache_base + 1 + static_cast<int>(rendered_tokens.size()), stream);
+
+            if (committedNewTokens() >= cfg.max_new_tokens ||
+                static_cast<int>(sequence.token_ids.size()) >= max_seq_len) {
+                break;
+            }
+            GRIM::Sampling::SampleResult chosen =
+                selectFrom(close_tail, 0, committedNewTokens());
+            commitToken(chosen);
+            if (chosen.token_id == cfg.eos_token_id &&
+                committedNewTokens() >= cfg.min_new_tokens) {
+                finished = true;
+            }
+            continue;
+        }
+
         GRIM::Sampling::SampleResult chosen =
             selectFrom(tail, 0, committedNewTokens());
         commitToken(chosen);
-
-        // The token just fed is now cached; the newly sampled token remains
-        // pending for the next iteration.
-        kv_cache.setSeqlen(cache_base + 1, stream);
 
         if (chosen.token_id == cfg.eos_token_id &&
             committedNewTokens() >= cfg.min_new_tokens) {
