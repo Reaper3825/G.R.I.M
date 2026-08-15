@@ -90,6 +90,7 @@ bool selectNumericStop(
 
 std::string renderCanonicalNumericAtom(
     GRIM::Tokenizer::AtomType atom_type,
+    bool sign_negative,
     const std::vector<NumericEmission>& emissions) {
     if (emissions.empty()) {
         throw std::runtime_error(
@@ -124,8 +125,11 @@ std::string renderCanonicalNumericAtom(
     }
 
     std::string rendered;
+    if (sign_negative) {
+        rendered.push_back('-');
+    }
     if (highest < 0) {
-        rendered = "0";
+        rendered.push_back('0');
     } else {
         rendered.reserve(static_cast<size_t>(highest + 2));
         for (int place = highest; place >= 0; --place) {
@@ -592,6 +596,8 @@ GRIM::GeneratedSequence generateOneSequence(
         }
         std::vector<NumericEmission> emissions;
         emissions.reserve(static_cast<size_t>(number_encoder_hp.max_digit_slots));
+        bool sign_selected = false;
+        bool sign_negative = false;
 
         while (true) {
             auto logits = GRIM::Forward::NumericAtomInferenceProject(
@@ -600,6 +606,7 @@ GRIM::GeneratedSequence generateOneSequence(
             std::vector<float> pow10_logits(
                 static_cast<size_t>(number_encoder_hp.pow10_buckets), 0.0f);
             float stop_logit = 0.0f;
+            float sign_logit = 0.0f;
             cudaError_t copy_err = cudaMemcpyAsync(
                 digit_logits.data(), logits.digit_logits.data,
                 digit_logits.size() * sizeof(float), cudaMemcpyDeviceToHost, stream);
@@ -613,6 +620,11 @@ GRIM::GeneratedSequence generateOneSequence(
                     &stop_logit, logits.stop_logits.data, sizeof(float),
                     cudaMemcpyDeviceToHost, stream);
             }
+            if (copy_err == cudaSuccess) {
+                copy_err = cudaMemcpyAsync(
+                    &sign_logit, logits.sign_logits.data, sizeof(float),
+                    cudaMemcpyDeviceToHost, stream);
+            }
             if (copy_err != cudaSuccess) {
                 throw std::runtime_error(
                     "generateOneSequence: NumericAtom logits copy failed: " +
@@ -623,6 +635,12 @@ GRIM::GeneratedSequence generateOneSequence(
                 throw std::runtime_error(
                     "generateOneSequence: NumericAtom logits sync failed: " +
                     std::string(cudaGetErrorString(sync_err)));
+            }
+
+            if (!sign_selected) {
+                sign_negative = selectNumericStop(
+                    sign_logit, cfg.do_sample, cfg.temperature, numeric_rng);
+                sign_selected = true;
             }
 
             // At least one semantic pair is required. Thereafter STOP owns
@@ -659,7 +677,7 @@ GRIM::GeneratedSequence generateOneSequence(
         }
 
         const std::string canonical =
-            renderCanonicalNumericAtom(atom_type, emissions);
+            renderCanonicalNumericAtom(atom_type, sign_negative, emissions);
         std::vector<int> rendered_tokens;
         rendered_tokens.reserve(canonical.size() + 1);
         for (const unsigned char byte : canonical) {

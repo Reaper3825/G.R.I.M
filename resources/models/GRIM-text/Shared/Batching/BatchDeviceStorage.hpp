@@ -49,6 +49,7 @@ struct BatchDeviceStorage {
     Tensor number_aux_target_pow10_index_tensor; // int32 [1, max_tokens * digit_slots]
     Tensor number_aux_target_digit_mask_tensor;  // uint8 [max_tokens * digit_slots]
     Tensor number_aux_target_valid_tensor;       // uint8 [max_tokens]
+    Tensor number_aux_target_sign_negative_tensor; // uint8 [max_tokens]
 
     // Candidate atom-entry pool (arg/option selector). Allocated independently
     // when selector_enabled=true; pool capacity is max_tokens (every token could

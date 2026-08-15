@@ -39,6 +39,7 @@ __global__ void kernelNumericAtomForward(
     const float* __restrict__ Ur,
     const float* __restrict__ Wh,
     const float* __restrict__ Uh,
+    const float* __restrict__ sign_classifier,
     const float* __restrict__ stop_classifier,
     const int* __restrict__ atom_positions,
     const int* __restrict__ atom_types,
@@ -48,6 +49,7 @@ __global__ void kernelNumericAtomForward(
     float* __restrict__ digit_logits,
     float* __restrict__ pow10_logits,
     float* __restrict__ stop_logits,
+    float* __restrict__ sign_logits,
     float* __restrict__ final_states,
     float* __restrict__ step_states,
     float* __restrict__ saved_update_gates,
@@ -83,6 +85,14 @@ __global__ void kernelNumericAtomForward(
     while (step_count < digit_slots &&
            target_digit_mask[target_base + step_count] != 0) {
         ++step_count;
+    }
+
+    if (threadIdx.x == 0) {
+        float sign_logit = 0.0f;
+        for (int feature = 0; feature < d_model; ++feature) {
+            sign_logit += state[feature] * sign_classifier[feature];
+        }
+        sign_logits[atom] = sign_logit;
     }
 
     for (int step = 0; step < step_count; ++step) {
@@ -188,10 +198,12 @@ __global__ void kernelNumericAtomInferenceProject(
     const float* __restrict__ state,
     const float* __restrict__ digit_embedding,
     const float* __restrict__ pow10_embedding,
+    const float* __restrict__ sign_classifier,
     const float* __restrict__ stop_classifier,
     float* __restrict__ digit_logits,
     float* __restrict__ pow10_logits,
     float* __restrict__ stop_logits,
+    float* __restrict__ sign_logits,
     int digit_classes,
     int pow10_buckets,
     int d_model) {
@@ -213,10 +225,13 @@ __global__ void kernelNumericAtomInferenceProject(
     }
     if (threadIdx.x == 0) {
         float stop_logit = 0.0f;
+        float sign_logit = 0.0f;
         for (int feature = 0; feature < d_model; ++feature) {
             stop_logit += state[feature] * stop_classifier[feature];
+            sign_logit += state[feature] * sign_classifier[feature];
         }
         stop_logits[0] = stop_logit;
+        sign_logits[0] = sign_logit;
     }
 }
 
@@ -351,6 +366,8 @@ NumericAtomForwardOutputs NumericAtomForward(
                        "NumericAtomForward.parameters.numeric_atom_Wh");
     requireMatrixShape(parameters.numeric_atom_Uh, d_model, d_model,
                        "NumericAtomForward.parameters.numeric_atom_Uh");
+    requireMatrixShape(parameters.numeric_atom_sign_classifier, 1, d_model,
+                       "NumericAtomForward.parameters.numeric_atom_sign_classifier");
     requireMatrixShape(parameters.numeric_atom_stop_classifier, 1, d_model,
                        "NumericAtomForward.parameters.numeric_atom_stop_classifier");
 
@@ -389,6 +406,11 @@ NumericAtomForwardOutputs NumericAtomForward(
         /*requires_grad=*/false,
         stream,
         "numeric_atom.stop_logits");
+    outputs.sign_logits = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(atom_count, 1),
+        /*requires_grad=*/false,
+        stream,
+        "numeric_atom.sign_logits");
     outputs.final_states = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(atom_count, d_model),
         /*requires_grad=*/false,
@@ -417,6 +439,7 @@ NumericAtomForwardOutputs NumericAtomForward(
         parameters.numeric_atom_Ur.data,
         parameters.numeric_atom_Wh.data,
         parameters.numeric_atom_Uh.data,
+        parameters.numeric_atom_sign_classifier.data,
         parameters.numeric_atom_stop_classifier.data,
         bindings.d_atom_positions,
         bindings.d_atom_types,
@@ -426,6 +449,7 @@ NumericAtomForwardOutputs NumericAtomForward(
         outputs.digit_logits.data,
         outputs.pow10_logits.data,
         outputs.stop_logits.data,
+        outputs.sign_logits.data,
         outputs.final_states.data,
         outputs.step_states.data,
         outputs.update_gates.data,
@@ -477,6 +501,8 @@ NumericAtomInferenceLogits NumericAtomInferenceProject(
                        "NumericAtomInferenceProject.parameters.digit_emb");
     requireMatrixShape(parameters.pow10_emb, pow10_buckets, d_model,
                        "NumericAtomInferenceProject.parameters.pow10_emb");
+    requireMatrixShape(parameters.numeric_atom_sign_classifier, 1, d_model,
+                       "NumericAtomInferenceProject.parameters.numeric_atom_sign_classifier");
     requireMatrixShape(parameters.numeric_atom_stop_classifier, 1, d_model,
                        "NumericAtomInferenceProject.parameters.numeric_atom_stop_classifier");
 
@@ -490,15 +516,20 @@ NumericAtomInferenceLogits NumericAtomInferenceProject(
     outputs.stop_logits = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(1, 1), false, stream,
         "numeric_atom.inference_stop_logits");
+    outputs.sign_logits = Tensor::zeros(
+        TensorContract::TensorShape::make_BSM(1, 1), false, stream,
+        "numeric_atom.inference_sign_logits");
 
     kernelNumericAtomInferenceProject<<<1, kBlockSize, 0, stream>>>(
         recurrent_state.data,
         parameters.digit_emb.data,
         parameters.pow10_emb.data,
+        parameters.numeric_atom_sign_classifier.data,
         parameters.numeric_atom_stop_classifier.data,
         outputs.digit_logits.data,
         outputs.pow10_logits.data,
         outputs.stop_logits.data,
+        outputs.sign_logits.data,
         10,
         pow10_buckets,
         d_model);

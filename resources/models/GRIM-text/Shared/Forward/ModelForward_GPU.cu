@@ -181,6 +181,8 @@ GRIM::NumberEncoderParameterTensors detachNumericAtomParameters(
     detached.numeric_atom_Ur = parameters.numeric_atom_Ur.detach(stream);
     detached.numeric_atom_Wh = parameters.numeric_atom_Wh.detach(stream);
     detached.numeric_atom_Uh = parameters.numeric_atom_Uh.detach(stream);
+    detached.numeric_atom_sign_classifier =
+        parameters.numeric_atom_sign_classifier.detach(stream);
     detached.numeric_atom_stop_classifier =
         parameters.numeric_atom_stop_classifier.detach(stream);
     return detached;

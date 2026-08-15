@@ -683,10 +683,17 @@ struct BatchPayload {
                         ": number_aux_target_valid must be binary at atom=" +
                         std::to_string(atom));
                 }
+                if (number_aux_target_sign_negative[atom] > 1) {
+                    throw std::runtime_error(
+                        std::string(caller) +
+                        ": number_aux_target_sign_negative must be binary at atom=" +
+                        std::to_string(atom));
+                }
                 counted_valid += valid != 0 ? 1 : 0;
                 const std::size_t digit_count = number_aux_target_digit_count[atom];
                 if (!numeric) {
                     if (valid != 0 || digit_count != 0 ||
+                        number_aux_target_sign_negative[atom] != 0 ||
                         number_aux_target_base[atom] != 0) {
                         throw std::runtime_error(
                             std::string(caller) +

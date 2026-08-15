@@ -76,6 +76,7 @@ struct NumberEncoderParameterTensors {
     Tensor numeric_atom_Ur; // [d_model, d_model] GRU reset-gate state projection
     Tensor numeric_atom_Wh; // [2 * d_model, d_model] GRU candidate input projection
     Tensor numeric_atom_Uh; // [d_model, d_model] GRU candidate state projection
+    Tensor numeric_atom_sign_classifier; // [1, d_model] negative-sign projection
     Tensor numeric_atom_stop_classifier; // [1, d_model] typed CLOSE / stop projection
     Tensor W_c1;        // [BatchPayload::kNumberSlotFeatureDim, d_hidden] contribution MLP in
     Tensor b_c1;        // [1, d_hidden] contribution MLP bias
@@ -476,7 +477,7 @@ inline constexpr std::array<EmbeddingTensorParameterSpec, 1>
          GRIM::ParamGroupType::EMBEDDING, GRIM::ParamStatsBucket::EMBEDDING},
     }};
 
-inline constexpr std::array<NumberEncoderTensorParameterSpec, 15>
+inline constexpr std::array<NumberEncoderTensorParameterSpec, 16>
     kNumberEncoderTensorParameters = {{
         {"number_encoder_digit_emb", &GRIM::NumberEncoderParameterTensors::digit_emb,
          GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
@@ -493,6 +494,8 @@ inline constexpr std::array<NumberEncoderTensorParameterSpec, 15>
         {"numeric_atom_Wh", &GRIM::NumberEncoderParameterTensors::numeric_atom_Wh,
          GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::ENCODER},
         {"numeric_atom_Uh", &GRIM::NumberEncoderParameterTensors::numeric_atom_Uh,
+         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::ENCODER},
+        {"numeric_atom_sign_classifier", &GRIM::NumberEncoderParameterTensors::numeric_atom_sign_classifier,
          GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::ENCODER},
         {"numeric_atom_stop_classifier", &GRIM::NumberEncoderParameterTensors::numeric_atom_stop_classifier,
          GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::ENCODER},

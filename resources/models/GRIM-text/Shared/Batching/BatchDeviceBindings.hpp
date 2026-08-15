@@ -75,6 +75,7 @@ struct BatchDeviceBindings {
     int*      d_number_aux_target_pow10_index = nullptr; // [atoms * digit_slots]
     uint8_t*  d_number_aux_target_digit_mask  = nullptr; // [atoms * digit_slots]
     uint8_t*  d_number_aux_target_valid       = nullptr; // [atoms]
+    uint8_t*  d_number_aux_target_sign_negative = nullptr; // [atoms]
 
     // Candidate atom-entry pool (arg/option selector). Batch-global "menu" of
     // options the selector scores; row r's window is

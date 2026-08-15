@@ -20,8 +20,8 @@ struct NumberEncoderParameterTensors;
 namespace Forward {
 
 // Numeric decoder predictions use compact atom-step rows independent of token
-// geometry. The LM head owns the typed OPEN delimiter; NumericAtom owns digit,
-// place, and STOP decisions after that opening state.
+// geometry. The LM head owns the typed OPEN delimiter; NumericAtom owns sign,
+// digit, place, and STOP decisions after that opening state.
 struct NumericAtomForwardOutputs {
     bool evaluated = false;
     int decoder_row_count = 0;
@@ -33,6 +33,7 @@ struct NumericAtomForwardOutputs {
     Tensor digit_logits;  // [atom_count * (decoder_step_capacity + 1), 10]
     Tensor pow10_logits;  // [atom_count * (decoder_step_capacity + 1), pow10_buckets]
     Tensor stop_logits;   // [atom_count * (decoder_step_capacity + 1), 1]
+    Tensor sign_logits;   // [atom_count, 1], projected from opening state_0
     Tensor final_states;  // [atom_count, d_model], numeric entries populated
     Tensor step_states;   // [atom_count * decoder_step_capacity, d_model], state_t
     Tensor update_gates;  // [atom_count * decoder_step_capacity, d_model]
@@ -43,6 +44,7 @@ struct NumericAtomForwardOutputs {
         digit_logits = Tensor();
         pow10_logits = Tensor();
         stop_logits = Tensor();
+        sign_logits = Tensor();
         final_states = Tensor();
         step_states = Tensor();
         update_gates = Tensor();
@@ -59,21 +61,22 @@ struct NumericAtomForwardOutputs {
     bool populated() const {
         return evaluated && decoder_row_count > 0 &&
                digit_logits.data != nullptr && pow10_logits.data != nullptr &&
-               stop_logits.data != nullptr;
+               stop_logits.data != nullptr && sign_logits.data != nullptr;
     }
 };
 
 // One inference-time projection from a persistent NumericAtom recurrent state.
 // Selection policy stays with generation orchestration; this primitive only
-// exposes the three learned decisions for the current state.
+// exposes the learned decisions for the current state.
 struct NumericAtomInferenceLogits {
     Tensor digit_logits;  // [1, 10]
     Tensor pow10_logits;  // [1, pow10_buckets]
     Tensor stop_logits;   // [1, 1]
+    Tensor sign_logits;   // [1, 1], consumed once from opening state_0
 
     bool populated() const {
         return digit_logits.data != nullptr && pow10_logits.data != nullptr &&
-               stop_logits.data != nullptr;
+             stop_logits.data != nullptr && sign_logits.data != nullptr;
     }
 };
 

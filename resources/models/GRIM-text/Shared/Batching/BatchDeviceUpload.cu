@@ -192,6 +192,7 @@ BatchDeviceBindings uploadBatchToDevice(
     int* cached_number_target_pow10_ptr = nullptr;
     uint8_t* cached_number_target_mask_ptr = nullptr;
     uint8_t* cached_number_target_valid_ptr = nullptr;
+    uint8_t* cached_number_target_sign_ptr = nullptr;
     if (payload.number_aux_target_digit_slots > 0) {
         if (payload.number_aux_target_digit_slots >
             storage.number_encoder_digit_slots_capacity) {
@@ -209,8 +210,11 @@ BatchDeviceBindings uploadBatchToDevice(
             storage.number_aux_target_digit_mask_tensor.data);
         cached_number_target_valid_ptr = reinterpret_cast<uint8_t*>(
             storage.number_aux_target_valid_tensor.data);
+        cached_number_target_sign_ptr = reinterpret_cast<uint8_t*>(
+            storage.number_aux_target_sign_negative_tensor.data);
         if (!cached_number_target_digits_ptr || !cached_number_target_pow10_ptr ||
-            !cached_number_target_mask_ptr || !cached_number_target_valid_ptr) {
+            !cached_number_target_mask_ptr || !cached_number_target_valid_ptr ||
+            !cached_number_target_sign_ptr) {
             throw std::runtime_error(
                 "uploadBatchToDevice: numeric target storage is NULL while payload targets are populated");
         }
@@ -235,6 +239,8 @@ BatchDeviceBindings uploadBatchToDevice(
         payload.number_aux_target_digit_mask.size() * sizeof(uint8_t);
     const size_t number_target_valid_bytes =
         payload.number_aux_target_valid.size() * sizeof(uint8_t);
+    const size_t number_target_sign_bytes =
+        payload.number_aux_target_sign_negative.size() * sizeof(uint8_t);
 
     auto copy_start = std::chrono::high_resolution_clock::now();
 
@@ -326,6 +332,12 @@ BatchDeviceBindings uploadBatchToDevice(
             number_target_valid_bytes,
             cudaMemcpyHostToDevice,
             stream));
+        BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
+            cached_number_target_sign_ptr,
+            payload.number_aux_target_sign_negative.data(),
+            number_target_sign_bytes,
+            cudaMemcpyHostToDevice,
+            stream));
         BATCH_UPLOAD_CUDA_CHECK(cudaStreamSynchronize(stream));
     }
 
@@ -356,6 +368,7 @@ BatchDeviceBindings uploadBatchToDevice(
     bindings.d_number_aux_target_pow10_index = cached_number_target_pow10_ptr;
     bindings.d_number_aux_target_digit_mask = cached_number_target_mask_ptr;
     bindings.d_number_aux_target_valid = cached_number_target_valid_ptr;
+    bindings.d_number_aux_target_sign_negative = cached_number_target_sign_ptr;
     return bindings;
 }
 
@@ -458,6 +471,11 @@ std::shared_ptr<BatchDeviceStorage> createBatchDeviceStorage(
             false,
             stream,
             "batch_number_aux_target_valid");
+        storage->number_aux_target_sign_negative_tensor = Tensor::empty(
+            TensorContract::TensorShape::make_BSM(1, max_tokens),
+            false,
+            stream,
+            "batch_number_aux_target_sign_negative");
     }
 
     return storage;

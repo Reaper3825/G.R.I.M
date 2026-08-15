@@ -1423,6 +1423,8 @@ void initializeNumberEncoderParameterTensors(
         2 * d_model, d_model, weight_init_seed + 10, "numeric_atom_Wh");
     params->numeric_atom_Uh = make_xavier(
         d_model, d_model, weight_init_seed + 11, "numeric_atom_Uh");
+    params->numeric_atom_sign_classifier = make_xavier(
+        1, d_model, weight_init_seed + 13, "numeric_atom_sign_classifier");
     params->numeric_atom_stop_classifier = make_xavier(
         1, d_model, weight_init_seed + 12, "numeric_atom_stop_classifier");
     params->W_c1 = make_xavier(GRIM::Batching::BatchPayload::kNumberSlotFeatureDim, d_hidden, weight_init_seed + 2, "number_encoder.W_c1");

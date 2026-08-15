@@ -22,7 +22,9 @@ __global__ void kernelNumericAtomLoss(
     const float* __restrict__ digit_logits,
     const float* __restrict__ pow10_logits,
     const float* __restrict__ stop_logits,
+    const float* __restrict__ sign_logits,
     const uint8_t* __restrict__ atom_valid,
+    const uint8_t* __restrict__ sign_negative_targets,
     const int* __restrict__ digit_targets,
     const int* __restrict__ pow10_targets,
     const uint8_t* __restrict__ digit_mask,
@@ -46,6 +48,14 @@ __global__ void kernelNumericAtomLoss(
         ++digit_count;
     }
     if (step > digit_count) return;
+
+    if (step == 0) {
+        const float sign_target = static_cast<float>(sign_negative_targets[atom]);
+        const float sign_logit = sign_logits[atom];
+        const float sign_bce = fmaxf(sign_logit, 0.0f) -
+            sign_logit * sign_target + log1pf(__expf(-fabsf(sign_logit)));
+        atomicAdd(loss_sum, sign_bce * scale);
+    }
 
     const float stop_target = step == digit_count ? 1.0f : 0.0f;
     const float stop_logit = stop_logits[decoder_row];
@@ -147,8 +157,14 @@ Tensor NumericAtomLoss(
         forward_outputs.decoder_row_count,
         1,
         "NumericAtomLoss.stop_logits");
+    requireLogitShape(
+        forward_outputs.sign_logits,
+        forward_outputs.atom_count,
+        1,
+        "NumericAtomLoss.sign_logits");
 
     if (!bindings.d_number_aux_target_valid ||
+        !bindings.d_number_aux_target_sign_negative ||
         !bindings.d_number_aux_target_digits ||
         !bindings.d_number_aux_target_pow10_index ||
         !bindings.d_number_aux_target_digit_mask) {
@@ -178,14 +194,16 @@ Tensor NumericAtomLoss(
         stream,
         "numeric_atom.loss");
     const float scale = 1.0f /
-        static_cast<float>(3 * valid_digit_steps + valid_stop_steps);
+        static_cast<float>(3 * valid_digit_steps + 2 * valid_stop_steps);
     const int blocks =
         (forward_outputs.decoder_row_count + kBlockSize - 1) / kBlockSize;
     kernelNumericAtomLoss<<<blocks, kBlockSize, 0, stream>>>(
         forward_outputs.digit_logits.data,
         forward_outputs.pow10_logits.data,
         forward_outputs.stop_logits.data,
+        forward_outputs.sign_logits.data,
         bindings.d_number_aux_target_valid,
+        bindings.d_number_aux_target_sign_negative,
         bindings.d_number_aux_target_digits,
         bindings.d_number_aux_target_pow10_index,
         bindings.d_number_aux_target_digit_mask,
