@@ -508,7 +508,26 @@ struct BatchPayload {
                 std::to_string(atom_positions.size()) + " != atom_types.size()=" +
                 std::to_string(atom_types.size()));
         }
-        if (ownsHostInputData()) {
+        if (ownsHostInputData() && isInferenceDecode()) {
+            if (!atom_positions.empty() || !atom_types.empty()) {
+                throw std::runtime_error(
+                    std::string(caller) +
+                    ": inference decode payload must not carry authored compact atoms");
+            }
+            for (int i = 0; i < total_tokens; ++i) {
+                if (atom_mask[static_cast<std::size_t>(i)] != 0 ||
+                    atom_entry_ids[static_cast<std::size_t>(i)] !=
+                        GRIM::Tokenizer::kAtomEntryNone ||
+                    numeric_values[static_cast<std::size_t>(i)] != 0.0f ||
+                    atom_flags[static_cast<std::size_t>(i)] != 0) {
+                    throw std::runtime_error(
+                        std::string(caller) +
+                        ": inference decode token carries authored atom metadata at index=" +
+                        std::to_string(i));
+                }
+            }
+        }
+        if (ownsHostInputData() && !isInferenceDecode()) {
             std::size_t compact_atom_index = 0;
             for (int row = 0; row < batch_size; ++row) {
                 bool inside_atom = false;
@@ -864,11 +883,11 @@ BatchPayload buildBatchPayload(
     int number_encoder_max_abs_pow10);
 
 /**
- * Build a validated single-row inference prefill payload from tokenizer-authored
- * metadata. This is the inference data-ingestion boundary: callers provide all
- * per-token atom side channels explicitly, and downstream CUDA code consumes the
- * resulting BatchPayload + BatchDeviceBindings pair. Non-negative slot bindings
- * must lie in [execution_num_scratch_slots, execution_num_slots).
+ * Build a validated single-row inference payload. Prefill mode consumes strict
+ * tokenizer-authored atom metadata and complete typed spans. Decode mode accepts
+ * generated structural atom boundaries with zero metadata because cached windows
+ * may contain only one side of a span. Non-negative slot bindings must lie in
+ * [execution_num_scratch_slots, execution_num_slots).
  */
 BatchPayload buildInferenceBatchPayload(
     const std::vector<int>& token_ids,
@@ -885,7 +904,8 @@ BatchPayload buildInferenceBatchPayload(
     int execution_num_scratch_slots,
     bool selector_enabled,
     int number_encoder_digit_slots,
-    int number_encoder_max_abs_pow10);
+    int number_encoder_max_abs_pow10,
+    BatchPayloadMode mode = BatchPayloadMode::InferencePrefill);
 
 /** Build a single-token inference decode geometry payload. */
 BatchPayload buildInferenceDecodePayload(int vocab_size);

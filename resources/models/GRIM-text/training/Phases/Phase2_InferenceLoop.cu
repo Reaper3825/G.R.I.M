@@ -501,8 +501,8 @@ GRIM::GeneratedSequence generateOneSequence(
             execution_hp.num_scratch_slots,
             /*selector_enabled=*/false,
             /*number_encoder_digit_slots=*/0,
-            /*number_encoder_max_abs_pow10=*/0);
-        decode_payload.mode = GRIM::Batching::BatchPayloadMode::InferenceDecode;
+            /*number_encoder_max_abs_pow10=*/0,
+            GRIM::Batching::BatchPayloadMode::InferenceDecode);
         return decode_payload;
     };
 

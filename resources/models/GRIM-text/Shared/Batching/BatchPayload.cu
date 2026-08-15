@@ -783,9 +783,14 @@ BatchPayload buildInferenceBatchPayload(
     int execution_num_scratch_slots,
     bool,
     int,
-    int)
+    int,
+    BatchPayloadMode mode)
 {
     const char* caller = "buildInferenceBatchPayload";
+    if (mode == BatchPayloadMode::Training) {
+        throw std::runtime_error(
+            "buildInferenceBatchPayload: mode must be an inference mode");
+    }
     const int seq_len = static_cast<int>(token_ids.size());
     if (seq_len <= 0) {
         throw std::runtime_error("buildInferenceBatchPayload: token_ids is empty");
@@ -887,7 +892,7 @@ BatchPayload buildInferenceBatchPayload(
 
     BatchPayload payload = makeInferenceBasePayload(
         seq_len, vocab_size, batch_capacity, max_cached_seq_len,
-        BatchPayloadMode::InferencePrefill, caller);
+        mode, caller);
 
     payload.input_ids = token_ids;
     payload.target_ids.assign(static_cast<size_t>(seq_len), -1);
@@ -902,7 +907,9 @@ BatchPayload buildInferenceBatchPayload(
     payload.seq_atom_tables.resize(1);
     payload.seq_atom_tables[0] = atom_table;
 
-    materializeCompactAtomOpenings(payload, caller);
+    if (mode == BatchPayloadMode::InferencePrefill) {
+        materializeCompactAtomOpenings(payload, caller);
+    }
     payload.validate(caller);
     return payload;
 }
