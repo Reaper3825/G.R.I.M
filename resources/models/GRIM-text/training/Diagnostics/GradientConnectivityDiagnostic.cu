@@ -192,18 +192,9 @@ bool numericAtomTransitionReceivesSupervisedFutureLoss(
     const Batching::BatchPayload* payload
 ) {
     if (!payload || payload->number_aux_target_digit_slots <= 0) return false;
-    const int digit_slots = payload->number_aux_target_digit_slots;
-    for (int row = 0; row < payload->total_tokens; ++row) {
-        if (payload->number_aux_target_row_mask[static_cast<size_t>(row)] == 0) continue;
-        const int atom = payload->number_aux_target_atom_index[static_cast<size_t>(row)];
-        const int step = payload->number_aux_target_step_index[static_cast<size_t>(row)];
-        if (atom < 0 ||
-            static_cast<size_t>(atom) >= payload->atom_positions.size() ||
-            step <= 0 || step >= digit_slots) {
-            continue;
-        }
-        if (payload->number_aux_target_digit_mask[
-                static_cast<size_t>(atom) * digit_slots + step] != 0) {
+    for (size_t atom = 0; atom < payload->number_aux_target_valid.size(); ++atom) {
+        if (payload->number_aux_target_valid[atom] != 0 &&
+            payload->number_aux_target_digit_count[atom] > 0) {
             return true;
         }
     }
