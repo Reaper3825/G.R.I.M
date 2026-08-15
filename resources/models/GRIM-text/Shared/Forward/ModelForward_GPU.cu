@@ -572,7 +572,8 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
             payload,
             *bindings,
             request.stream);
-        if (!forward_outputs.numeric_atom.populated()) {
+        if (forward_outputs.numeric_atom.atom_count > 0 &&
+            !forward_outputs.numeric_atom.populated()) {
             throw std::runtime_error(
                 "executeModelForward: NumericAtomForward returned empty logits");
         }

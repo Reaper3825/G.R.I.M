@@ -1,6 +1,6 @@
 //======================================================//
 //  NumericAtomLoss.cu
-//  Row-routed recurrent NumericAtom loss.
+//  Compact atom-step recurrent NumericAtom loss.
 //======================================================//
 
 #include "NumericAtomLoss.hpp"
@@ -22,25 +22,23 @@ __global__ void kernelNumericAtomLoss(
     const float* __restrict__ digit_logits,
     const float* __restrict__ pow10_logits,
     const float* __restrict__ stop_logits,
-    const int* __restrict__ row_atom_index,
-    const uint8_t* __restrict__ row_mask,
-    const int* __restrict__ row_step_index,
+    const uint8_t* __restrict__ atom_valid,
     const int* __restrict__ digit_targets,
     const int* __restrict__ pow10_targets,
     const uint8_t* __restrict__ digit_mask,
     float* __restrict__ loss_sum,
-    int total_rows,
+    int decoder_rows,
     int atom_count,
     int digit_slots,
     int digit_classes,
     int pow10_buckets,
     float scale) {
-    const int row = blockIdx.x * blockDim.x + threadIdx.x;
-    if (row >= total_rows || row_mask[row] == 0) return;
-
-    const int atom = row_atom_index[row];
-    const int step = row_step_index[row];
-    if (atom < 0 || atom >= atom_count || step < 0 || step > digit_slots) return;
+    const int decoder_row = blockIdx.x * blockDim.x + threadIdx.x;
+    if (decoder_row >= decoder_rows) return;
+    const int decoder_stride = digit_slots + 1;
+    const int atom = decoder_row / decoder_stride;
+    const int step = decoder_row % decoder_stride;
+    if (atom >= atom_count || atom_valid[atom] == 0) return;
 
     const size_t target_base = static_cast<size_t>(atom) * digit_slots;
     int digit_count = 0;
@@ -50,7 +48,7 @@ __global__ void kernelNumericAtomLoss(
     if (step > digit_count) return;
 
     const float stop_target = step == digit_count ? 1.0f : 0.0f;
-    const float stop_logit = stop_logits[row];
+    const float stop_logit = stop_logits[decoder_row];
     const float stop_bce = fmaxf(stop_logit, 0.0f) - stop_logit * stop_target +
         log1pf(__expf(-fabsf(stop_logit)));
     if (step == digit_count) {
@@ -62,9 +60,9 @@ __global__ void kernelNumericAtomLoss(
     const int digit_target = digit_targets[target_index];
     const int pow10_target = pow10_targets[target_index];
     const float* digit_row =
-        digit_logits + static_cast<size_t>(row) * digit_classes;
+        digit_logits + static_cast<size_t>(decoder_row) * digit_classes;
     const float* pow10_row =
-        pow10_logits + static_cast<size_t>(row) * pow10_buckets;
+        pow10_logits + static_cast<size_t>(decoder_row) * pow10_buckets;
 
     float digit_max = digit_row[0];
     for (int cls = 1; cls < digit_classes; ++cls) {
@@ -123,10 +121,11 @@ Tensor NumericAtomLoss(
     if (!forward_outputs.populated()) {
         throw std::runtime_error("NumericAtomLoss: recurrent forward outputs are incomplete");
     }
-    if (forward_outputs.row_count != payload.total_tokens ||
-        forward_outputs.atom_count != static_cast<int>(payload.atom_positions.size()) ||
+    if (forward_outputs.atom_count != static_cast<int>(payload.atom_positions.size()) ||
         forward_outputs.decoder_step_capacity !=
             payload.number_aux_target_digit_slots ||
+        forward_outputs.decoder_row_count != forward_outputs.atom_count *
+            (forward_outputs.decoder_step_capacity + 1) ||
         forward_outputs.digit_classes != 10 ||
         forward_outputs.pow10_buckets !=
             2 * payload.number_aux_target_max_abs_pow10 + 1) {
@@ -135,23 +134,21 @@ Tensor NumericAtomLoss(
     }
     requireLogitShape(
         forward_outputs.digit_logits,
-        forward_outputs.row_count,
+        forward_outputs.decoder_row_count,
         forward_outputs.digit_classes,
         "NumericAtomLoss.digit_logits");
     requireLogitShape(
         forward_outputs.pow10_logits,
-        forward_outputs.row_count,
+        forward_outputs.decoder_row_count,
         forward_outputs.pow10_buckets,
         "NumericAtomLoss.pow10_logits");
     requireLogitShape(
         forward_outputs.stop_logits,
-        forward_outputs.row_count,
+        forward_outputs.decoder_row_count,
         1,
         "NumericAtomLoss.stop_logits");
 
-    if (!bindings.d_number_aux_target_atom_index ||
-        !bindings.d_number_aux_target_row_mask ||
-        !bindings.d_number_aux_target_step_index ||
+    if (!bindings.d_number_aux_target_valid ||
         !bindings.d_number_aux_target_digits ||
         !bindings.d_number_aux_target_pow10_index ||
         !bindings.d_number_aux_target_digit_mask) {
@@ -161,25 +158,12 @@ Tensor NumericAtomLoss(
 
     const int digit_slots = payload.number_aux_target_digit_slots;
     int valid_digit_steps = 0;
-    int valid_stop_steps = 0;
-    for (int row = 0; row < payload.total_tokens; ++row) {
-        if (payload.number_aux_target_row_mask[static_cast<size_t>(row)] == 0) continue;
-        const int atom =
-            payload.number_aux_target_atom_index[static_cast<size_t>(row)];
-        const int step =
-            payload.number_aux_target_step_index[static_cast<size_t>(row)];
-        if (atom < 0 || atom >= forward_outputs.atom_count ||
-            step < 0 || step > digit_slots) {
-            continue;
-        }
-        const int digit_count = static_cast<int>(
+    for (int atom = 0; atom < forward_outputs.atom_count; ++atom) {
+        if (payload.number_aux_target_valid[static_cast<size_t>(atom)] == 0) continue;
+        valid_digit_steps += static_cast<int>(
             payload.number_aux_target_digit_count[static_cast<size_t>(atom)]);
-        if (step < digit_count) {
-            ++valid_digit_steps;
-        } else if (step == digit_count) {
-            ++valid_stop_steps;
-        }
     }
+    const int valid_stop_steps = payload.number_aux_target_valid_count;
     if (valid_digit_steps == 0) {
         return Tensor();
     }
@@ -196,19 +180,17 @@ Tensor NumericAtomLoss(
     const float scale = 1.0f /
         static_cast<float>(3 * valid_digit_steps + valid_stop_steps);
     const int blocks =
-        (forward_outputs.row_count + kBlockSize - 1) / kBlockSize;
+        (forward_outputs.decoder_row_count + kBlockSize - 1) / kBlockSize;
     kernelNumericAtomLoss<<<blocks, kBlockSize, 0, stream>>>(
         forward_outputs.digit_logits.data,
         forward_outputs.pow10_logits.data,
         forward_outputs.stop_logits.data,
-        bindings.d_number_aux_target_atom_index,
-        bindings.d_number_aux_target_row_mask,
-        bindings.d_number_aux_target_step_index,
+        bindings.d_number_aux_target_valid,
         bindings.d_number_aux_target_digits,
         bindings.d_number_aux_target_pow10_index,
         bindings.d_number_aux_target_digit_mask,
         result.data,
-        forward_outputs.row_count,
+        forward_outputs.decoder_row_count,
         forward_outputs.atom_count,
         digit_slots,
         forward_outputs.digit_classes,

@@ -441,6 +441,8 @@ add_library(grim_language_model_gpu_impl OBJECT
     ../../Shared/InferenceState/KvCacheState_GPU.cu
     ../Autograd/AutogradContext.cu
     ../Autograd/AutogradTraining.cu
+    ../Diagnostics/GradientConnectivityDiagnostic.cu
+    ../Diagnostics/GradientConnectivityDiagnostic.hpp
     ../../Layers/HardcodedStates/HardcodedStates_GPU.cu
     ../../Layers/Embedding/Embedding_GPU.cu
     ../../Layers/LMHead/lm_head_GPU.cu

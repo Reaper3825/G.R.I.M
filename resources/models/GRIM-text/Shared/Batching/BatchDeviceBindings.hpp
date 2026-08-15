@@ -74,9 +74,7 @@ struct BatchDeviceBindings {
     int*      d_number_aux_target_digits      = nullptr; // [atoms * digit_slots]
     int*      d_number_aux_target_pow10_index = nullptr; // [atoms * digit_slots]
     uint8_t*  d_number_aux_target_digit_mask  = nullptr; // [atoms * digit_slots]
-    int*      d_number_aux_target_atom_index  = nullptr; // [total_tokens], -1 outside numeric AUX spans
-    uint8_t*  d_number_aux_target_row_mask    = nullptr; // [total_tokens], valid NumericAtom rows
-    int*      d_number_aux_target_step_index  = nullptr; // [total_tokens], 0-based decoder step or -1
+    uint8_t*  d_number_aux_target_valid       = nullptr; // [atoms]
 
     // Candidate atom-entry pool (arg/option selector). Batch-global "menu" of
     // options the selector scores; row r's window is

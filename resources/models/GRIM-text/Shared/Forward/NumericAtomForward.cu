@@ -45,9 +45,6 @@ __global__ void kernelNumericAtomForward(
     const int* __restrict__ target_digits,
     const int* __restrict__ target_pow10,
     const uint8_t* __restrict__ target_digit_mask,
-    const int* __restrict__ row_atom_index,
-    const uint8_t* __restrict__ row_mask,
-    const int* __restrict__ row_step_index,
     float* __restrict__ digit_logits,
     float* __restrict__ pow10_logits,
     float* __restrict__ stop_logits,
@@ -57,7 +54,6 @@ __global__ void kernelNumericAtomForward(
     float* __restrict__ saved_reset_gates,
     float* __restrict__ saved_candidates,
     int atom_count,
-    int total_rows,
     int digit_slots,
     int digit_classes,
     int pow10_buckets,
@@ -91,36 +87,30 @@ __global__ void kernelNumericAtomForward(
 
     for (int step = 0; step < step_count; ++step) {
         const size_t target_index = target_base + step;
-        const int row = opening_row + step;
-        if (row < 0 || row >= total_rows ||
-            row_atom_index[row] != atom || row_step_index[row] != step) {
-            break;
-        }
+        const int decoder_row = atom * (digit_slots + 1) + step;
 
-        if (row_mask[row] != 0) {
-            for (int cls = threadIdx.x; cls < digit_classes; cls += blockDim.x) {
-                float logit = 0.0f;
-                for (int feature = 0; feature < d_model; ++feature) {
-                    logit += state[feature] *
-                        digit_embedding[static_cast<size_t>(cls) * d_model + feature];
-                }
-                digit_logits[static_cast<size_t>(row) * digit_classes + cls] = logit;
+        for (int cls = threadIdx.x; cls < digit_classes; cls += blockDim.x) {
+            float logit = 0.0f;
+            for (int feature = 0; feature < d_model; ++feature) {
+                logit += state[feature] *
+                    digit_embedding[static_cast<size_t>(cls) * d_model + feature];
             }
-            for (int cls = threadIdx.x; cls < pow10_buckets; cls += blockDim.x) {
-                float logit = 0.0f;
-                for (int feature = 0; feature < d_model; ++feature) {
-                    logit += state[feature] *
-                        pow10_embedding[static_cast<size_t>(cls) * d_model + feature];
-                }
-                pow10_logits[static_cast<size_t>(row) * pow10_buckets + cls] = logit;
+            digit_logits[static_cast<size_t>(decoder_row) * digit_classes + cls] = logit;
+        }
+        for (int cls = threadIdx.x; cls < pow10_buckets; cls += blockDim.x) {
+            float logit = 0.0f;
+            for (int feature = 0; feature < d_model; ++feature) {
+                logit += state[feature] *
+                    pow10_embedding[static_cast<size_t>(cls) * d_model + feature];
             }
-            if (threadIdx.x == 0) {
-                float stop_logit = 0.0f;
-                for (int feature = 0; feature < d_model; ++feature) {
-                    stop_logit += state[feature] * stop_classifier[feature];
-                }
-                stop_logits[row] = stop_logit;
+            pow10_logits[static_cast<size_t>(decoder_row) * pow10_buckets + cls] = logit;
+        }
+        if (threadIdx.x == 0) {
+            float stop_logit = 0.0f;
+            for (int feature = 0; feature < d_model; ++feature) {
+                stop_logit += state[feature] * stop_classifier[feature];
             }
+            stop_logits[decoder_row] = stop_logit;
         }
 
         const int digit = target_digits[target_index];
@@ -180,11 +170,8 @@ __global__ void kernelNumericAtomForward(
 
     // The first state after all teacher-forced digit/place transitions owns
     // the typed CLOSE decision. No recurrent transition follows stop.
-    const int stop_row = opening_row + step_count;
-    if (stop_row >= 0 && stop_row < total_rows &&
-        row_atom_index[stop_row] == atom &&
-        row_step_index[stop_row] == step_count &&
-        row_mask[stop_row] != 0 && threadIdx.x == 0) {
+    const int stop_row = atom * (digit_slots + 1) + step_count;
+    if (threadIdx.x == 0) {
         float stop_logit = 0.0f;
         for (int feature = 0; feature < d_model; ++feature) {
             stop_logit += state[feature] * stop_classifier[feature];
@@ -370,67 +357,38 @@ NumericAtomForwardOutputs NumericAtomForward(
     if (!bindings.d_atom_positions || !bindings.d_atom_types ||
         !bindings.d_number_aux_target_digits ||
         !bindings.d_number_aux_target_pow10_index ||
-        !bindings.d_number_aux_target_digit_mask ||
-        !bindings.d_number_aux_target_atom_index ||
-        !bindings.d_number_aux_target_row_mask ||
-        !bindings.d_number_aux_target_step_index) {
+        !bindings.d_number_aux_target_digit_mask) {
         throw std::runtime_error(
             "NumericAtomForward: numeric decoder device bindings are incomplete");
     }
 
-    // Fail before launching if the host-authored causal routing cannot carry
-    // every teacher-forced digit step for a numeric atom.
-    for (int atom = 0; atom < atom_count; ++atom) {
-        const auto atom_type = static_cast<Tokenizer::AtomType>(
-            payload.atom_types[static_cast<size_t>(atom)]);
-        if (!Tokenizer::isNumericAtom(atom_type)) continue;
-
-        const int opening_row = payload.atom_positions[static_cast<size_t>(atom)];
-        const int digit_count = static_cast<int>(
-            payload.number_aux_target_digit_count[static_cast<size_t>(atom)]);
-        for (int step = 0; step <= digit_count; ++step) {
-            const int row = opening_row + step;
-            if (row < 0 || row >= payload.total_tokens ||
-                payload.number_aux_target_atom_index[static_cast<size_t>(row)] != atom ||
-                payload.number_aux_target_step_index[static_cast<size_t>(row)] != step) {
-                throw std::runtime_error(
-                    "NumericAtomForward: causal row routing does not cover every numeric decoder digit/stop step");
-            }
-            if (step == digit_count &&
-                (row + 1 >= payload.total_tokens ||
-                 payload.input_ids[static_cast<size_t>(row + 1)] !=
-                    Tokenizer::atomTypeToCloseTokenId(atom_type))) {
-                throw std::runtime_error(
-                    "NumericAtomForward: stop supervision does not target the matching typed CLOSE token");
-            }
-        }
-    }
-
     NumericAtomForwardOutputs outputs;
     outputs.evaluated = true;
-    outputs.row_count = hidden_shape.rows;
     outputs.atom_count = atom_count;
     outputs.decoder_step_capacity = digit_slots;
+    outputs.decoder_row_count = atom_count * (digit_slots + 1);
     outputs.digit_classes = 10;
     outputs.pow10_buckets = pow10_buckets;
+    if (atom_count == 0) {
+        return outputs;
+    }
     outputs.digit_logits = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(outputs.row_count, outputs.digit_classes),
+        TensorContract::TensorShape::make_BSM(
+            outputs.decoder_row_count, outputs.digit_classes),
         /*requires_grad=*/false,
         stream,
         "numeric_atom.digit_logits");
     outputs.pow10_logits = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(outputs.row_count, outputs.pow10_buckets),
+        TensorContract::TensorShape::make_BSM(
+            outputs.decoder_row_count, outputs.pow10_buckets),
         /*requires_grad=*/false,
         stream,
         "numeric_atom.pow10_logits");
     outputs.stop_logits = Tensor::zeros(
-        TensorContract::TensorShape::make_BSM(outputs.row_count, 1),
+        TensorContract::TensorShape::make_BSM(outputs.decoder_row_count, 1),
         /*requires_grad=*/false,
         stream,
         "numeric_atom.stop_logits");
-    if (atom_count == 0) {
-        return outputs;
-    }
     outputs.final_states = Tensor::zeros(
         TensorContract::TensorShape::make_BSM(atom_count, d_model),
         /*requires_grad=*/false,
@@ -465,9 +423,6 @@ NumericAtomForwardOutputs NumericAtomForward(
         bindings.d_number_aux_target_digits,
         bindings.d_number_aux_target_pow10_index,
         bindings.d_number_aux_target_digit_mask,
-        bindings.d_number_aux_target_atom_index,
-        bindings.d_number_aux_target_row_mask,
-        bindings.d_number_aux_target_step_index,
         outputs.digit_logits.data,
         outputs.pow10_logits.data,
         outputs.stop_logits.data,
@@ -477,7 +432,6 @@ NumericAtomForwardOutputs NumericAtomForward(
         outputs.reset_gates.data,
         outputs.candidates.data,
         atom_count,
-        outputs.row_count,
         digit_slots,
         outputs.digit_classes,
         outputs.pow10_buckets,

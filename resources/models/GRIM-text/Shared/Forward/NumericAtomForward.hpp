@@ -19,25 +19,20 @@ struct NumberEncoderParameterTensors;
 
 namespace Forward {
 
-// Numeric decoder predictions aligned one-to-one with the shared causal
-// hidden-state rows. The LM head owns the typed OPEN delimiter. While a numeric
-// span is active, the corresponding row describes either the next numeric
-// digit/place emission or the typed CLOSE termination decision.
-//
-// stop_logits[row] = dot(state_t, stop_classifier). NumericAtom owns typed CLOSE
-// prediction: digit rows target stop=0 and the first post-digit row targets
-// stop=1.
+// Numeric decoder predictions use compact atom-step rows independent of token
+// geometry. The LM head owns the typed OPEN delimiter; NumericAtom owns digit,
+// place, and STOP decisions after that opening state.
 struct NumericAtomForwardOutputs {
     bool evaluated = false;
-    int row_count = 0;
+    int decoder_row_count = 0;
     int atom_count = 0;
     int decoder_step_capacity = 0;
     int digit_classes = 0;
     int pow10_buckets = 0;
 
-    Tensor digit_logits;  // [row_count, 10]
-    Tensor pow10_logits;  // [row_count, pow10_buckets]
-    Tensor stop_logits;   // [row_count, 1]
+    Tensor digit_logits;  // [atom_count * (decoder_step_capacity + 1), 10]
+    Tensor pow10_logits;  // [atom_count * (decoder_step_capacity + 1), pow10_buckets]
+    Tensor stop_logits;   // [atom_count * (decoder_step_capacity + 1), 1]
     Tensor final_states;  // [atom_count, d_model], numeric entries populated
     Tensor step_states;   // [atom_count * decoder_step_capacity, d_model], state_t
     Tensor update_gates;  // [atom_count * decoder_step_capacity, d_model]
@@ -54,7 +49,7 @@ struct NumericAtomForwardOutputs {
         reset_gates = Tensor();
         candidates = Tensor();
         evaluated = false;
-        row_count = 0;
+        decoder_row_count = 0;
         atom_count = 0;
         decoder_step_capacity = 0;
         digit_classes = 0;
@@ -62,7 +57,7 @@ struct NumericAtomForwardOutputs {
     }
 
     bool populated() const {
-        return evaluated && row_count > 0 &&
+        return evaluated && decoder_row_count > 0 &&
                digit_logits.data != nullptr && pow10_logits.data != nullptr &&
                stop_logits.data != nullptr;
     }

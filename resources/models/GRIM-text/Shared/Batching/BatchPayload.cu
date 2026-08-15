@@ -139,10 +139,6 @@ void materializeNumberAuxTargets(
     payload.number_aux_target_digit_slots = 0;
     payload.number_aux_target_max_abs_pow10 = 0;
     payload.number_aux_target_valid_count = 0;
-    payload.number_aux_target_valid_row_count = 0;
-    payload.number_aux_target_atom_index.clear();
-    payload.number_aux_target_row_mask.clear();
-    payload.number_aux_target_step_index.clear();
     payload.number_aux_target_valid.clear();
     payload.number_aux_target_sign_negative.clear();
     payload.number_aux_target_base.clear();
@@ -172,12 +168,6 @@ void materializeNumberAuxTargets(
     const std::size_t slots = static_cast<std::size_t>(digit_slots);
     payload.number_aux_target_digit_slots = digit_slots;
     payload.number_aux_target_max_abs_pow10 = max_abs_pow10;
-    payload.number_aux_target_atom_index.assign(
-        static_cast<std::size_t>(payload.total_tokens), -1);
-    payload.number_aux_target_row_mask.assign(
-        static_cast<std::size_t>(payload.total_tokens), 0);
-    payload.number_aux_target_step_index.assign(
-        static_cast<std::size_t>(payload.total_tokens), -1);
     payload.number_aux_target_valid.assign(atoms, 0);
     payload.number_aux_target_sign_negative.assign(atoms, 0);
     payload.number_aux_target_base.assign(atoms, 0);
@@ -291,17 +281,10 @@ void materializeNumberAuxTargets(
             payload.seq_lengths[static_cast<std::size_t>(row)];
         bool any_valid_row = false;
         int position = flat_position;
-        int decoder_step = 0;
         for (; position < row_end &&
                payload.atom_aux_target_mask[static_cast<std::size_t>(position)] != 0;
-             ++position, ++decoder_step) {
-            payload.number_aux_target_atom_index[static_cast<std::size_t>(position)] =
-                static_cast<int>(atom);
-            payload.number_aux_target_step_index[static_cast<std::size_t>(position)] =
-                decoder_step;
+             ++position) {
             if (payload.target_ids[static_cast<std::size_t>(position)] >= 0) {
-                payload.number_aux_target_row_mask[static_cast<std::size_t>(position)] = 1;
-                ++payload.number_aux_target_valid_row_count;
                 any_valid_row = true;
             }
         }
@@ -714,12 +697,25 @@ BatchPayload buildBatchPayload(
         "buildBatchPayload");
 
     // NumericAtom exclusively owns every target after a typed numeric OPEN,
-    // including the matching typed CLOSE stop target. Preserve the dedicated
-    // row mask authored above, then remove those targets from LM cross-entropy.
+    // including the matching typed CLOSE stop target. Token-span ownership is
+    // independent of the decoder's compact atom-step coordinates.
     if (payload.number_aux_target_digit_slots > 0) {
-        for (int position = 0; position < payload.total_tokens; ++position) {
-            if (payload.number_aux_target_atom_index[static_cast<size_t>(position)] >= 0) {
-                payload.target_ids[static_cast<size_t>(position)] = -1;
+        for (int row = 0; row < payload.batch_size; ++row) {
+            bool inside_numeric_atom = false;
+            const int row_offset = row * payload.max_seq_len;
+            const int row_end = row_offset + payload.seq_lengths[static_cast<size_t>(row)];
+            for (int position = row_offset; position < row_end; ++position) {
+                const int token_id = payload.input_ids[static_cast<size_t>(position)];
+                if (Tokenizer::isAtomOpenTokenId(token_id)) {
+                    inside_numeric_atom = Tokenizer::isNumericAtom(
+                        Tokenizer::tokenIdToAtomType(token_id));
+                } else if (Tokenizer::isAtomCloseTokenId(token_id)) {
+                    inside_numeric_atom = false;
+                }
+                if (inside_numeric_atom &&
+                    payload.atom_aux_target_mask[static_cast<size_t>(position)] != 0) {
+                    payload.target_ids[static_cast<size_t>(position)] = -1;
+                }
             }
         }
         payload.valid_tokens = 0;

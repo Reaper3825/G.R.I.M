@@ -1,6 +1,6 @@
 # Autograd / TensorContract
 
-Implementation: `resources/models/GRIM-text/Shared/TensorContract_GPU.cu` (all `GradFn` structs), `resources/models/GRIM-text/training/Autograd/AutogradTraining.cu` (forward/backward orchestration), and small loss primitives under `resources/models/GRIM-text/training/Autograd/`.
+Implementation: TensorContract operators and `GradFn` implementations live under `resources/models/GRIM-text/Shared/TensorContract/`; `resources/models/GRIM-text/training/Autograd/AutogradTraining.cu` owns loss/backward orchestration; and `resources/models/GRIM-text/training/Diagnostics/GradientConnectivityDiagnostic.cu` owns gradient probing, accumulation-delta verification, and ablation leak diagnostics.
 
 ## Prepared payload boundary
 Phase1/Phase1Startup owns semantic batch construction. By the time Phase2 calls autograd, `BatchPayload` is already complete: token IDs, targets, masks, execution teacher steps, selector targets, numeric values, and slot maps are Phase1-authored data. Autograd code must consume this prepared payload and matching `BatchDeviceBindings`; it must not rebuild, infer, repair, or silently synthesize missing supervision.

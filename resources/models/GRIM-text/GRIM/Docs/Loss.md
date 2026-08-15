@@ -41,4 +41,12 @@ Loss decomposition at the training boundary is explicit: `LossResult` / `BatchRe
 
 Why: text CE is already averaged over valid tokens. Raw execution sums make rows with more transition targets exert more loss pressure and make batch composition change the effective execution-loss weight.
 
+## NumericAtom compact supervision
+
+NumericAtom recurrent outputs are indexed by semantic decoder coordinates, never tokenizer rows:
+
+`decoder_row = atom * (digit_slots + 1) + step`
+
+Steps `[0, digit_count)` predict digit/place pairs and step `digit_count` predicts STOP. The extra capacity slot has no recurrent transition cache. Token-span masks may suppress LM targets and determine whether an atom is unmasked in a training window, but tokenizer positions and surface-token counts must never define NumericAtom decoder-step indices.
+
 Execution entropy is monitoring-only, not added to `loss_tensor`. Its row loop must mirror execution supervision masking: skip inactive rows, skip rows with no unmasked real steps, fail loud if `computeEntropyLoss(...)` returns null data, and average by the number of monitored rows rather than `payload.batch_size`.
