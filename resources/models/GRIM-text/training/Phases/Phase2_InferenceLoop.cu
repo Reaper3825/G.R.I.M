@@ -47,6 +47,11 @@ struct NumericEmission {
     int pow10 = 0;
 };
 
+struct DecodedNumericAtom {
+    std::string canonical_text;
+    std::vector<int> rendered_tokens;  // content bytes followed by typed CLOSE
+};
+
 int selectNumericClass(
     const std::vector<float>& logits,
     bool do_sample,
@@ -459,7 +464,7 @@ GRIM::GeneratedSequence generateOneSequence(
                     "generateOneSequence: encoder output shape disagrees with NumericAtom seed geometry");
             }
             tail.numeric_initial_state = GRIM::Tensor::zeros(
-                GRIM::TensorContract::TensorShape::make_BSM(1, d_model), false, stream,
+                ::TensorContract::TensorShape::make_BSM(1, d_model), false, stream,
                 "numeric_atom.inference_initial_state");
             copy_err = cudaMemcpyAsync(
                 tail.numeric_initial_state.data,
@@ -482,7 +487,8 @@ GRIM::GeneratedSequence generateOneSequence(
         return tail;
     };
 
-    auto buildDecodePayload = [&](const std::vector<int>& feed_tokens)
+    auto buildDecodePayload = [&](const std::vector<int>& feed_tokens,
+                                  uint32_t opening_atom_entry_id)
         -> GRIM::Batching::BatchPayload {
         if (feed_tokens.empty()) {
             throw std::runtime_error("generateOneSequence: decode token window is empty");
@@ -492,6 +498,27 @@ GRIM::GeneratedSequence generateOneSequence(
         std::vector<uint32_t> aflags(feed_tokens.size(), 0);
         std::vector<uint32_t> aentry(
             feed_tokens.size(), GRIM::Tokenizer::kAtomEntryNone);
+        if (opening_atom_entry_id != GRIM::Tokenizer::kAtomEntryNone) {
+            if (!GRIM::Tokenizer::isAtomOpenTokenId(feed_tokens.front())) {
+                throw std::runtime_error(
+                    "generateOneSequence: atom metadata must anchor an OPEN token");
+            }
+            const auto entry = generation_atom_table->getAtom(opening_atom_entry_id);
+            if (!entry.has_value()) {
+                throw std::runtime_error(
+                    "generateOneSequence: generated atom entry is not registered");
+            }
+            const auto open_type =
+                GRIM::Tokenizer::tokenIdToAtomType(feed_tokens.front());
+            if (entry->type != open_type) {
+                throw std::runtime_error(
+                    "generateOneSequence: generated atom entry type disagrees with OPEN token");
+            }
+            numeric.front() = entry->numeric_value;
+            amask.front() = 1;
+            aflags.front() = entry->flags;
+            aentry.front() = opening_atom_entry_id;
+        }
         const std::vector<int32_t> slotmap;  // empty -> no execution-active row
         auto decode_payload = GRIM::Batching::buildInferenceBatchPayload(
             feed_tokens, numeric, amask, aflags, prompt_atom_table, aentry, slotmap,
@@ -571,7 +598,7 @@ GRIM::GeneratedSequence generateOneSequence(
 
     auto decodeNumericAtom = [&](GRIM::Tensor recurrent_state,
                                  GRIM::Tokenizer::AtomType atom_type)
-        -> std::vector<int> {
+        -> DecodedNumericAtom {
         if (!number_encoder_hp.enabled || number_encoder_hp.max_digit_slots <= 0 ||
             number_encoder_hp.max_abs_pow10 < 0 ||
             number_encoder_hp.pow10_buckets !=
@@ -658,15 +685,15 @@ GRIM::GeneratedSequence generateOneSequence(
                 stream);
         }
 
-        const std::string canonical =
-            renderCanonicalNumericAtom(atom_type, emissions);
-        std::vector<int> rendered_tokens;
-        rendered_tokens.reserve(canonical.size() + 1);
-        for (const unsigned char byte : canonical) {
-            rendered_tokens.push_back(GRIM::Tokenizer::byteToTokenId(byte));
+        DecodedNumericAtom decoded;
+        decoded.canonical_text = renderCanonicalNumericAtom(atom_type, emissions);
+        decoded.rendered_tokens.reserve(decoded.canonical_text.size() + 1);
+        for (const unsigned char byte : decoded.canonical_text) {
+            decoded.rendered_tokens.push_back(GRIM::Tokenizer::byteToTokenId(byte));
         }
-        rendered_tokens.push_back(GRIM::Tokenizer::atomTypeToCloseTokenId(atom_type));
-        return rendered_tokens;
+        decoded.rendered_tokens.push_back(
+            GRIM::Tokenizer::atomTypeToCloseTokenId(atom_type));
+        return decoded;
     };
 
     TailLogits prefill = runCachedForward(
