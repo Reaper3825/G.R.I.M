@@ -63,12 +63,19 @@ struct LMHeadParameterTensors {
 // NumberEncoder — numeric-meaning input path (digit-place contribution slots).
 //   slot_i = digit_emb[digit] + pow10_emb[pow10_bucket] + W_c2 @ tanh(W_c1 @ slot_feat + b_c1)
 //   number_embedding = mean_over_real_slots(slot_i) + W_g2 @ tanh(W_g1 @ global_feat + b_g1)
+// NumericAtom decoder reuses digit_emb/pow10_emb as tied input/output tables
+// and owns Wz/Uz, Wr/Ur, Wh/Uh for its recurrent transition.
 // Feature widths are the payload-owned contract
 // (BatchPayload::kNumberSlotFeatureDim / kNumberGlobalFeatureDim).
 struct NumberEncoderParameterTensors {
     Tensor digit_emb;   // [10, d_model] digit identity embedding
     Tensor pow10_emb;   // [pow10_buckets, d_model] place identity embedding
-    Tensor numeric_atom_slot_emb; // [max_digit_slots, d_model] auxiliary reconstruction slot identity
+    Tensor numeric_atom_Wz; // [2 * d_model, d_model] GRU update-gate input projection
+    Tensor numeric_atom_Uz; // [d_model, d_model] GRU update-gate state projection
+    Tensor numeric_atom_Wr; // [2 * d_model, d_model] GRU reset-gate input projection
+    Tensor numeric_atom_Ur; // [d_model, d_model] GRU reset-gate state projection
+    Tensor numeric_atom_Wh; // [2 * d_model, d_model] GRU candidate input projection
+    Tensor numeric_atom_Uh; // [d_model, d_model] GRU candidate state projection
     Tensor W_c1;        // [BatchPayload::kNumberSlotFeatureDim, d_hidden] contribution MLP in
     Tensor b_c1;        // [1, d_hidden] contribution MLP bias
     Tensor W_c2;        // [d_hidden, d_model] contribution MLP out
@@ -468,14 +475,24 @@ inline constexpr std::array<EmbeddingTensorParameterSpec, 1>
          GRIM::ParamGroupType::EMBEDDING, GRIM::ParamStatsBucket::EMBEDDING},
     }};
 
-inline constexpr std::array<NumberEncoderTensorParameterSpec, 9>
+inline constexpr std::array<NumberEncoderTensorParameterSpec, 14>
     kNumberEncoderTensorParameters = {{
         {"number_encoder_digit_emb", &GRIM::NumberEncoderParameterTensors::digit_emb,
          GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
         {"number_encoder_pow10_emb", &GRIM::NumberEncoderParameterTensors::pow10_emb,
          GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
-        {"numeric_atom_slot_emb", &GRIM::NumberEncoderParameterTensors::numeric_atom_slot_emb,
-         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
+        {"numeric_atom_Wz", &GRIM::NumberEncoderParameterTensors::numeric_atom_Wz,
+         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::ENCODER},
+        {"numeric_atom_Uz", &GRIM::NumberEncoderParameterTensors::numeric_atom_Uz,
+         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::ENCODER},
+        {"numeric_atom_Wr", &GRIM::NumberEncoderParameterTensors::numeric_atom_Wr,
+         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::ENCODER},
+        {"numeric_atom_Ur", &GRIM::NumberEncoderParameterTensors::numeric_atom_Ur,
+         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::ENCODER},
+        {"numeric_atom_Wh", &GRIM::NumberEncoderParameterTensors::numeric_atom_Wh,
+         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::ENCODER},
+        {"numeric_atom_Uh", &GRIM::NumberEncoderParameterTensors::numeric_atom_Uh,
+         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::ENCODER},
         {"number_encoder_W_c1", &GRIM::NumberEncoderParameterTensors::W_c1,
          GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
         {"number_encoder_b_c1", &GRIM::NumberEncoderParameterTensors::b_c1,

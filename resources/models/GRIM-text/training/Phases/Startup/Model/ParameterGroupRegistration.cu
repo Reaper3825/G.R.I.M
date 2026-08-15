@@ -1410,11 +1410,18 @@ void initializeNumberEncoderParameterTensors(
 
     params->digit_emb = make_xavier(10, d_model, weight_init_seed, "number_encoder.digit_emb");
     params->pow10_emb = make_xavier(number_encoder_hp.pow10_buckets, d_model, weight_init_seed + 1, "number_encoder.pow10_emb");
-    params->numeric_atom_slot_emb = make_xavier(
-        number_encoder_hp.max_digit_slots,
-        d_model,
-        weight_init_seed + 6,
-        "numeric_atom_slot_emb");
+    params->numeric_atom_Wz = make_xavier(
+        2 * d_model, d_model, weight_init_seed + 6, "numeric_atom_Wz");
+    params->numeric_atom_Uz = make_xavier(
+        d_model, d_model, weight_init_seed + 7, "numeric_atom_Uz");
+    params->numeric_atom_Wr = make_xavier(
+        2 * d_model, d_model, weight_init_seed + 8, "numeric_atom_Wr");
+    params->numeric_atom_Ur = make_xavier(
+        d_model, d_model, weight_init_seed + 9, "numeric_atom_Ur");
+    params->numeric_atom_Wh = make_xavier(
+        2 * d_model, d_model, weight_init_seed + 10, "numeric_atom_Wh");
+    params->numeric_atom_Uh = make_xavier(
+        d_model, d_model, weight_init_seed + 11, "numeric_atom_Uh");
     params->W_c1 = make_xavier(GRIM::Batching::BatchPayload::kNumberSlotFeatureDim, d_hidden, weight_init_seed + 2, "number_encoder.W_c1");
     if (number_encoder_hp.contribution_bias_enabled) {
         params->b_c1 = GRIM::Tensor::zeros({1, d_hidden}, init_stream, "number_encoder.b_c1");

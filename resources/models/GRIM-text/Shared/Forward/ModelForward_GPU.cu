@@ -169,13 +169,18 @@ GRIM::LMHeadParameterTensors detachLmHeadParameters(
     return detached;
 }
 
-GRIM::NumberEncoderParameterTensors detachNumericAtomClassifierParameters(
+GRIM::NumberEncoderParameterTensors detachNumericAtomParameters(
     const GRIM::NumberEncoderParameterTensors& parameters,
     cudaStream_t stream) {
     GRIM::NumberEncoderParameterTensors detached{};
     detached.digit_emb = parameters.digit_emb.detach(stream);
     detached.pow10_emb = parameters.pow10_emb.detach(stream);
-    detached.numeric_atom_slot_emb = parameters.numeric_atom_slot_emb.detach(stream);
+    detached.numeric_atom_Wz = parameters.numeric_atom_Wz.detach(stream);
+    detached.numeric_atom_Uz = parameters.numeric_atom_Uz.detach(stream);
+    detached.numeric_atom_Wr = parameters.numeric_atom_Wr.detach(stream);
+    detached.numeric_atom_Ur = parameters.numeric_atom_Ur.detach(stream);
+    detached.numeric_atom_Wh = parameters.numeric_atom_Wh.detach(stream);
+    detached.numeric_atom_Uh = parameters.numeric_atom_Uh.detach(stream);
     return detached;
 }
 
@@ -543,7 +548,10 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
     // The encoder output is the shared model hidden state. Typed auxiliary
     // heads branch from it independently of the LM head and consume the
     // complete BatchPayload semantic contract directly.
-    if (number_encoder_hp.enabled) {
+    // The recurrent NumericAtom training forward consumes teacher-forced
+    // digit/pow10 targets. Inference owns a persistent per-open-atom state and
+    // will enter through its dedicated step boundary when that path is wired.
+    if (number_encoder_hp.enabled && payload.number_aux_target_digit_slots > 0) {
         const auto& numeric_parameters =
             request.parameter_registry->requireNumberEncoderParameters(
                 "executeModelForward.NumericAtomForward");
@@ -551,7 +559,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
             &numeric_parameters;
         GRIM::NumberEncoderParameterTensors detached_numeric_parameters{};
         if (!connect_parameter_graph) {
-            detached_numeric_parameters = detachNumericAtomClassifierParameters(
+            detached_numeric_parameters = detachNumericAtomParameters(
                 numeric_parameters,
                 request.stream);
             numeric_parameter_ptr = &detached_numeric_parameters;
@@ -560,6 +568,7 @@ ModelForwardOutputs executeModelForward(const ModelForwardRequest& request,
             forward_outputs.encoder_output_tensor,
             *numeric_parameter_ptr,
             payload,
+            *bindings,
             request.stream);
         if (!forward_outputs.numeric_atom.populated()) {
             throw std::runtime_error(

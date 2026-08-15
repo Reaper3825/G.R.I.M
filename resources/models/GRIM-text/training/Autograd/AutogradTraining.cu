@@ -260,6 +260,29 @@ GradientVerificationActivity detectGradientVerificationActivity(AutogradContext&
     return activity;
 }
 
+bool numericAtomTransitionReceivesSupervisedFutureLoss(
+    const Batching::BatchPayload* payload) {
+    if (!payload || payload->number_aux_target_digit_slots <= 0) return false;
+    const int digit_slots = payload->number_aux_target_digit_slots;
+    for (int row = 0; row < payload->total_tokens; ++row) {
+        if (payload->number_aux_target_row_mask[static_cast<size_t>(row)] == 0) continue;
+        const int atom =
+            payload->number_aux_target_atom_index[static_cast<size_t>(row)];
+        const int step =
+            payload->number_aux_target_step_index[static_cast<size_t>(row)];
+        if (atom < 0 ||
+            static_cast<size_t>(atom) >= payload->atom_positions.size() ||
+            step <= 0 || step >= digit_slots) {
+            continue;
+        }
+        if (payload->number_aux_target_digit_mask[
+                static_cast<size_t>(atom) * digit_slots + step] != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 GradientSignalBaselines captureGradientVerificationBaselines(
     AutogradContext& ctx,
     bool require_current_microbatch_delta
@@ -310,9 +333,26 @@ GradientSignalBaselines captureGradientVerificationBaselines(
         captureExpected(
             numeric_parameters.pow10_emb,
             "numeric atom pow10 embedding");
-        captureExpected(
-            numeric_parameters.numeric_atom_slot_emb,
-            "numeric atom slot embedding");
+        if (numericAtomTransitionReceivesSupervisedFutureLoss(ctx.payload)) {
+            captureExpected(
+                numeric_parameters.numeric_atom_Wz,
+                "numeric atom Wz");
+            captureExpected(
+                numeric_parameters.numeric_atom_Uz,
+                "numeric atom Uz");
+            captureExpected(
+                numeric_parameters.numeric_atom_Wr,
+                "numeric atom Wr");
+            captureExpected(
+                numeric_parameters.numeric_atom_Ur,
+                "numeric atom Ur");
+            captureExpected(
+                numeric_parameters.numeric_atom_Wh,
+                "numeric atom Wh");
+            captureExpected(
+                numeric_parameters.numeric_atom_Uh,
+                "numeric atom Uh");
+        }
     }
 
     AG_INFO("Captured " << baselines.expected.size()
@@ -403,11 +443,14 @@ LossResult computeAutogradLoss(
     // dedicated backward boundary, weighted, and then composed into the one
     // canonical scalar root consumed by Tensor::backward().
     constexpr float kNumericAtomLossWeight = 0.1f;
-    Tensor numeric_atom_loss = autograd::NumericAtomLoss(
-        forward_outputs.numeric_atom,
-        payload,
-        *ctx.device_bindings,
-        ctx.stream);
+    Tensor numeric_atom_loss;
+    if (payload.number_aux_target_valid_count > 0) {
+        numeric_atom_loss = autograd::NumericAtomLoss(
+            forward_outputs.numeric_atom,
+            payload,
+            *ctx.device_bindings,
+            ctx.stream);
+    }
     if (numeric_atom_loss.data) {
         // Validation uses the same loss composition with a read-only forward.
         // Only a graph-connected text loss authorizes backward attachment.
@@ -418,9 +461,7 @@ LossResult computeAutogradLoss(
             autograd::attachNumericAtomBackward(
                 numeric_atom_loss,
                 forward_outputs.encoder_output_tensor,
-                numeric_parameters.digit_emb,
-                numeric_parameters.pow10_emb,
-                numeric_parameters.numeric_atom_slot_emb,
+                numeric_parameters,
                 forward_outputs.numeric_atom,
                 ctx.stream);
         }
@@ -828,9 +869,26 @@ bool verifyGradientsAreConnectedImpl(
         requireReceivedGradient(
             numeric_parameters.pow10_emb,
             "numeric atom pow10 embedding");
-        requireReceivedGradient(
-            numeric_parameters.numeric_atom_slot_emb,
-            "numeric atom slot embedding");
+        if (numericAtomTransitionReceivesSupervisedFutureLoss(ctx.payload)) {
+            requireReceivedGradient(
+                numeric_parameters.numeric_atom_Wz,
+                "numeric atom Wz");
+            requireReceivedGradient(
+                numeric_parameters.numeric_atom_Uz,
+                "numeric atom Uz");
+            requireReceivedGradient(
+                numeric_parameters.numeric_atom_Wr,
+                "numeric atom Wr");
+            requireReceivedGradient(
+                numeric_parameters.numeric_atom_Ur,
+                "numeric atom Ur");
+            requireReceivedGradient(
+                numeric_parameters.numeric_atom_Wh,
+                "numeric atom Wh");
+            requireReceivedGradient(
+                numeric_parameters.numeric_atom_Uh,
+                "numeric atom Uh");
+        }
     }
 
     if (ctx.gpu_encoder) {

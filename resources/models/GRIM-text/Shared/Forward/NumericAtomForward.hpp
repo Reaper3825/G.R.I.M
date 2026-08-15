@@ -1,6 +1,6 @@
 //======================================================//
 //  NumericAtomForward.hpp
-//  Typed auxiliary forward branch for numeric atoms.
+//  Row-aligned numeric decoder heads.
 //======================================================//
 
 #pragma once
@@ -9,8 +9,7 @@
 
 #include <cuda_runtime.h>
 
-#include <vector>
-
+#include "../Batching/BatchDeviceBindings.hpp"
 #include "../Batching/BatchPayload.hpp"
 #include "../TensorContract/TensorContract_GPU.hpp"
 
@@ -20,55 +19,60 @@ struct NumberEncoderParameterTensors;
 
 namespace Forward {
 
-// Atom-aligned numeric-head predictions. The physical Tensor layout remains
-// 2D; each row is one (numeric atom, digit slot) pair. This boundary remains
-// forward-only; the dedicated backward node is attached during loss assembly.
+// Numeric decoder predictions aligned one-to-one with the shared causal
+// hidden-state rows. The LM head owns the typed OPEN/CLOSE delimiters. While a
+// numeric span is active, the corresponding row from each tensor describes
+// the next numeric digit and its power-of-ten position.
+//
+// The final state tensor exposes the completed per-atom recurrent state. The
+// LM head still owns typed CLOSE prediction; NumericAtom has no STOP class.
 struct NumericAtomForwardOutputs {
     bool evaluated = false;
-    int numeric_atom_count = 0;
-    int digit_slots = 0;
-    int total_rows = 0;
+    int row_count = 0;
+    int atom_count = 0;
+    int decoder_step_capacity = 0;
     int digit_classes = 0;
     int pow10_buckets = 0;
 
-    // Maps numeric output atom index back to the compact payload atom index.
-    std::vector<int> payload_atom_indices;
-
-    Tensor digit_logits;  // [numeric_atom_count * digit_slots, 10]
-    Tensor pow10_logits;  // [numeric_atom_count * digit_slots, pow10_buckets]
+    Tensor digit_logits;  // [row_count, 10]
+    Tensor pow10_logits;  // [row_count, pow10_buckets]
+    Tensor final_states;  // [atom_count, d_model], numeric entries populated
+    Tensor step_states;   // [atom_count * decoder_step_capacity, d_model], state_t
+    Tensor update_gates;  // [atom_count * decoder_step_capacity, d_model]
+    Tensor reset_gates;   // [atom_count * decoder_step_capacity, d_model]
+    Tensor candidates;    // [atom_count * decoder_step_capacity, d_model]
 
     void clear() {
         digit_logits = Tensor();
         pow10_logits = Tensor();
-        payload_atom_indices.clear();
+        final_states = Tensor();
+        step_states = Tensor();
+        update_gates = Tensor();
+        reset_gates = Tensor();
+        candidates = Tensor();
         evaluated = false;
-        numeric_atom_count = 0;
-        digit_slots = 0;
-        total_rows = 0;
+        row_count = 0;
+        atom_count = 0;
+        decoder_step_capacity = 0;
         digit_classes = 0;
         pow10_buckets = 0;
     }
 
     bool populated() const {
-        if (!evaluated) return false;
-        if (numeric_atom_count == 0) {
-            return total_rows == 0 && payload_atom_indices.empty();
-        }
-        return digit_logits.data != nullptr && pow10_logits.data != nullptr;
+        return evaluated && row_count > 0 &&
+               digit_logits.data != nullptr && pow10_logits.data != nullptr;
     }
 };
 
-// Numeric auxiliary-head branch from the shared model hidden state.
-//
-// BatchPayload remains the semantic owner of numeric atom routing and targets;
-// this operation must not accept exploded atom masks, positions, digit arrays,
-// or pow10 arrays as independent arguments. Each numeric opening-anchor hidden
-// state is expanded across numeric_atom_slot_emb before the tied digit/pow10
-// classifiers are applied.
+// Initializes state_0 from each numeric OPEN row, emits digit/pow10 logits from
+// state_t, then applies the teacher-forced GRU transition to produce
+// state_t+1. Payload and bindings provide semantic row routing and borrowed
+// target addresses; this operation owns neither storage nor orchestration.
 NumericAtomForwardOutputs NumericAtomForward(
     const Tensor& shared_hidden_state,
     const NumberEncoderParameterTensors& parameters,
     const Batching::BatchPayload& payload,
+    const Batching::BatchDeviceBindings& bindings,
     cudaStream_t stream);
 
 }  // namespace Forward

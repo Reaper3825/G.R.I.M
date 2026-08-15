@@ -1,16 +1,18 @@
 //======================================================//
 //  NumericAtomBackward.cu
-//  Dedicated NumericAtom autograd boundary.
+//  Reverse-time GRU derivative for NumericAtom.
 //======================================================//
 
 #include "NumericAtomBackward.hpp"
 
+#include "../../training/Phases/Startup/Model/ParameterRegistry.hpp"
 #include "../Batching/BatchDeviceBindings.hpp"
 #include "../Batching/BatchPayload.hpp"
 #include "../UnigramByte/TokenLayout.hpp"
 
 #include <cuda_runtime.h>
 
+#include <cstddef>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -26,109 +28,262 @@ constexpr int kBlockSize = 256;
 
 __global__ void kernelNumericAtomBackward(
     const float* __restrict__ upstream_gradient,
-    const float* __restrict__ hidden,
     const float* __restrict__ digit_embedding,
     const float* __restrict__ pow10_embedding,
-    const float* __restrict__ slot_embedding,
+    const float* __restrict__ Wz,
+    const float* __restrict__ Uz,
+    const float* __restrict__ Wr,
+    const float* __restrict__ Ur,
+    const float* __restrict__ Wh,
+    const float* __restrict__ Uh,
     const float* __restrict__ digit_logits,
     const float* __restrict__ pow10_logits,
-    const int* __restrict__ digit_targets,
-    const int* __restrict__ pow10_targets,
-    const uint8_t* __restrict__ digit_mask,
+    const float* __restrict__ step_states,
+    const float* __restrict__ update_gates,
+    const float* __restrict__ reset_gates,
+    const float* __restrict__ candidates,
+    const int* __restrict__ atom_positions,
+    const int* __restrict__ atom_types,
+    const int* __restrict__ row_atom_index,
+    const uint8_t* __restrict__ row_mask,
+    const int* __restrict__ row_step_index,
+    const int* __restrict__ target_digits,
+    const int* __restrict__ target_pow10,
+    const uint8_t* __restrict__ target_digit_mask,
     float* hidden_gradient,
     float* digit_embedding_gradient,
     float* pow10_embedding_gradient,
-    float* slot_embedding_gradient,
-    int anchor_position,
+    float* Wz_gradient,
+    float* Uz_gradient,
+    float* Wr_gradient,
+    float* Ur_gradient,
+    float* Wh_gradient,
+    float* Uh_gradient,
+    int atom_count,
+    int total_rows,
     int digit_slots,
     int digit_classes,
     int pow10_buckets,
     int d_model,
+    int int_atom_type,
+    int float_atom_type,
     float normalization) {
-    const size_t count = static_cast<size_t>(digit_slots) * d_model;
-    const size_t index = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (index >= count) return;
+    const int atom = blockIdx.x;
+    if (atom >= atom_count) return;
+    const int atom_type = atom_types[atom];
+    if (atom_type != int_atom_type && atom_type != float_atom_type) return;
 
-    const int slot = static_cast<int>(index / d_model);
-    const int feature = static_cast<int>(index % d_model);
-    if (digit_mask[slot] == 0) return;
+    extern __shared__ float workspace[];
+    float* grad_next = workspace;
+    float* grad_state = grad_next + d_model;
+    float* grad_az = grad_state + d_model;
+    float* grad_ar = grad_az + d_model;
+    float* grad_ah = grad_ar + d_model;
+    float* softmax_stats = grad_ah + d_model;
 
-    const int digit_target = digit_targets[slot];
-    const int pow10_target = pow10_targets[slot];
-    const float* digit_row =
-        digit_logits + static_cast<size_t>(slot) * digit_classes;
-    const float* pow10_row =
-        pow10_logits + static_cast<size_t>(slot) * pow10_buckets;
-
-    float digit_max = digit_row[0];
-    for (int cls = 1; cls < digit_classes; ++cls) {
-        digit_max = fmaxf(digit_max, digit_row[cls]);
+    for (int feature = threadIdx.x; feature < d_model; feature += blockDim.x) {
+        grad_next[feature] = 0.0f;
     }
-    float digit_exp_sum = 0.0f;
-    for (int cls = 0; cls < digit_classes; ++cls) {
-        digit_exp_sum += __expf(digit_row[cls] - digit_max);
-    }
-    const float digit_inv_sum = 1.0f / fmaxf(digit_exp_sum, 1e-20f);
+    __syncthreads();
 
-    float pow10_max = pow10_row[0];
-    for (int cls = 1; cls < pow10_buckets; ++cls) {
-        pow10_max = fmaxf(pow10_max, pow10_row[cls]);
+    const int opening_row = atom_positions[atom];
+    const size_t target_base = static_cast<size_t>(atom) * digit_slots;
+    int step_count = 0;
+    while (step_count < digit_slots &&
+           target_digit_mask[target_base + step_count] != 0) {
+        ++step_count;
     }
-    float pow10_exp_sum = 0.0f;
-    for (int cls = 0; cls < pow10_buckets; ++cls) {
-        pow10_exp_sum += __expf(pow10_row[cls] - pow10_max);
-    }
-    const float pow10_inv_sum = 1.0f / fmaxf(pow10_exp_sum, 1e-20f);
 
-    const float scale = upstream_gradient[0] * normalization;
-    const float slot_state =
-        hidden[static_cast<size_t>(anchor_position) * d_model + feature] +
-        slot_embedding[static_cast<size_t>(slot) * d_model + feature];
-    float slot_state_gradient = 0.0f;
+    for (int step = step_count - 1; step >= 0; --step) {
+        const size_t target_index = target_base + step;
+        const size_t activation_base = target_index * d_model;
+        const float* state = step_states + activation_base;
+        const float* z = update_gates + activation_base;
+        const float* r = reset_gates + activation_base;
+        const float* candidate = candidates + activation_base;
 
-    for (int cls = 0; cls < digit_classes; ++cls) {
-        const float probability =
-            __expf(digit_row[cls] - digit_max) * digit_inv_sum;
-        const float logit_gradient =
-            (probability - (cls == digit_target ? 1.0f : 0.0f)) * scale;
-        slot_state_gradient +=
-            logit_gradient *
-            digit_embedding[static_cast<size_t>(cls) * d_model + feature];
-        if (digit_embedding_gradient) {
-            atomicAdd(
-                &digit_embedding_gradient[
-                    static_cast<size_t>(cls) * d_model + feature],
-                logit_gradient * slot_state);
+        for (int output = threadIdx.x; output < d_model; output += blockDim.x) {
+            const float g_next = grad_next[output];
+            const float g_candidate = g_next * z[output];
+            const float g_update = g_next * (candidate[output] - state[output]);
+            grad_ah[output] =
+                g_candidate * (1.0f - candidate[output] * candidate[output]);
+            grad_az[output] = g_update * z[output] * (1.0f - z[output]);
         }
-    }
+        __syncthreads();
 
-    for (int cls = 0; cls < pow10_buckets; ++cls) {
-        const float probability =
-            __expf(pow10_row[cls] - pow10_max) * pow10_inv_sum;
-        const float logit_gradient =
-            (probability - (cls == pow10_target ? 1.0f : 0.0f)) * scale;
-        slot_state_gradient +=
-            logit_gradient *
-            pow10_embedding[static_cast<size_t>(cls) * d_model + feature];
-        if (pow10_embedding_gradient) {
-            atomicAdd(
-                &pow10_embedding_gradient[
-                    static_cast<size_t>(cls) * d_model + feature],
-                logit_gradient * slot_state);
+        for (int input = threadIdx.x; input < d_model; input += blockDim.x) {
+            float grad_reset_state = 0.0f;
+            for (int output = 0; output < d_model; ++output) {
+                grad_reset_state +=
+                    Uh[static_cast<size_t>(input) * d_model + output] *
+                    grad_ah[output];
+            }
+            const float grad_reset = grad_reset_state * state[input];
+            grad_ar[input] = grad_reset * r[input] * (1.0f - r[input]);
+            grad_state[input] =
+                grad_next[input] * (1.0f - z[input]) +
+                grad_reset_state * r[input];
         }
+        __syncthreads();
+
+        for (int input = threadIdx.x; input < d_model; input += blockDim.x) {
+            float recurrent_gradient = 0.0f;
+            for (int output = 0; output < d_model; ++output) {
+                recurrent_gradient +=
+                    Uz[static_cast<size_t>(input) * d_model + output] *
+                        grad_az[output] +
+                    Ur[static_cast<size_t>(input) * d_model + output] *
+                        grad_ar[output];
+            }
+            grad_state[input] += recurrent_gradient;
+        }
+
+        const int digit = target_digits[target_index];
+        const int pow10 = target_pow10[target_index];
+        const size_t matrix_count = static_cast<size_t>(d_model) * d_model;
+        for (size_t index = threadIdx.x; index < matrix_count; index += blockDim.x) {
+            const int input = static_cast<int>(index / d_model);
+            const int output = static_cast<int>(index % d_model);
+            const float state_value = state[input];
+            if (Uz_gradient) atomicAdd(&Uz_gradient[index], state_value * grad_az[output]);
+            if (Ur_gradient) atomicAdd(&Ur_gradient[index], state_value * grad_ar[output]);
+            if (Uh_gradient) {
+                atomicAdd(&Uh_gradient[index],
+                          r[input] * state_value * grad_ah[output]);
+            }
+        }
+
+        const size_t input_matrix_count =
+            static_cast<size_t>(2 * d_model) * d_model;
+        for (size_t index = threadIdx.x;
+             index < input_matrix_count;
+             index += blockDim.x) {
+            const int input = static_cast<int>(index / d_model);
+            const int output = static_cast<int>(index % d_model);
+            const int feature = input < d_model ? input : input - d_model;
+            const float input_value = input < d_model
+                ? digit_embedding[static_cast<size_t>(digit) * d_model + feature]
+                : pow10_embedding[static_cast<size_t>(pow10) * d_model + feature];
+            if (Wz_gradient) atomicAdd(&Wz_gradient[index], input_value * grad_az[output]);
+            if (Wr_gradient) atomicAdd(&Wr_gradient[index], input_value * grad_ar[output]);
+            if (Wh_gradient) atomicAdd(&Wh_gradient[index], input_value * grad_ah[output]);
+        }
+
+        for (int input = threadIdx.x; input < 2 * d_model; input += blockDim.x) {
+            float input_gradient = 0.0f;
+            for (int output = 0; output < d_model; ++output) {
+                input_gradient +=
+                    Wz[static_cast<size_t>(input) * d_model + output] * grad_az[output] +
+                    Wr[static_cast<size_t>(input) * d_model + output] * grad_ar[output] +
+                    Wh[static_cast<size_t>(input) * d_model + output] * grad_ah[output];
+            }
+            if (input < d_model) {
+                if (digit_embedding_gradient) {
+                    atomicAdd(
+                        &digit_embedding_gradient[
+                            static_cast<size_t>(digit) * d_model + input],
+                        input_gradient);
+                }
+            } else if (pow10_embedding_gradient) {
+                const int feature = input - d_model;
+                atomicAdd(
+                    &pow10_embedding_gradient[
+                        static_cast<size_t>(pow10) * d_model + feature],
+                    input_gradient);
+            }
+        }
+        __syncthreads();
+
+        const int row = opening_row + step;
+        const bool supervised = row >= 0 && row < total_rows &&
+            row_atom_index[row] == atom && row_step_index[row] == step &&
+            row_mask[row] != 0;
+        if (supervised && threadIdx.x == 0) {
+            const float* digit_row =
+                digit_logits + static_cast<size_t>(row) * digit_classes;
+            const float* pow10_row =
+                pow10_logits + static_cast<size_t>(row) * pow10_buckets;
+            float digit_max = digit_row[0];
+            for (int cls = 1; cls < digit_classes; ++cls) {
+                digit_max = fmaxf(digit_max, digit_row[cls]);
+            }
+            float digit_sum = 0.0f;
+            for (int cls = 0; cls < digit_classes; ++cls) {
+                digit_sum += __expf(digit_row[cls] - digit_max);
+            }
+            float pow10_max = pow10_row[0];
+            for (int cls = 1; cls < pow10_buckets; ++cls) {
+                pow10_max = fmaxf(pow10_max, pow10_row[cls]);
+            }
+            float pow10_sum = 0.0f;
+            for (int cls = 0; cls < pow10_buckets; ++cls) {
+                pow10_sum += __expf(pow10_row[cls] - pow10_max);
+            }
+            softmax_stats[0] = digit_max;
+            softmax_stats[1] = 1.0f / fmaxf(digit_sum, 1e-20f);
+            softmax_stats[2] = pow10_max;
+            softmax_stats[3] = 1.0f / fmaxf(pow10_sum, 1e-20f);
+        }
+        __syncthreads();
+
+        if (supervised) {
+            const float scale = upstream_gradient[0] * normalization;
+            const float* digit_row =
+                digit_logits + static_cast<size_t>(row) * digit_classes;
+            const float* pow10_row =
+                pow10_logits + static_cast<size_t>(row) * pow10_buckets;
+
+            for (int feature = threadIdx.x; feature < d_model; feature += blockDim.x) {
+                float classifier_state_gradient = 0.0f;
+                for (int cls = 0; cls < digit_classes; ++cls) {
+                    const float probability =
+                        __expf(digit_row[cls] - softmax_stats[0]) * softmax_stats[1];
+                    const float logit_gradient =
+                        (probability - (cls == digit ? 1.0f : 0.0f)) * scale;
+                    classifier_state_gradient +=
+                        logit_gradient *
+                        digit_embedding[static_cast<size_t>(cls) * d_model + feature];
+                    if (digit_embedding_gradient) {
+                        atomicAdd(
+                            &digit_embedding_gradient[
+                                static_cast<size_t>(cls) * d_model + feature],
+                            logit_gradient * state[feature]);
+                    }
+                }
+                for (int cls = 0; cls < pow10_buckets; ++cls) {
+                    const float probability =
+                        __expf(pow10_row[cls] - softmax_stats[2]) * softmax_stats[3];
+                    const float logit_gradient =
+                        (probability - (cls == pow10 ? 1.0f : 0.0f)) * scale;
+                    classifier_state_gradient +=
+                        logit_gradient *
+                        pow10_embedding[static_cast<size_t>(cls) * d_model + feature];
+                    if (pow10_embedding_gradient) {
+                        atomicAdd(
+                            &pow10_embedding_gradient[
+                                static_cast<size_t>(cls) * d_model + feature],
+                            logit_gradient * state[feature]);
+                    }
+                }
+                grad_state[feature] += classifier_state_gradient;
+            }
+        }
+        __syncthreads();
+
+        for (int feature = threadIdx.x; feature < d_model; feature += blockDim.x) {
+            grad_next[feature] = grad_state[feature];
+        }
+        __syncthreads();
     }
 
     if (hidden_gradient) {
-        atomicAdd(
-            &hidden_gradient[
-                static_cast<size_t>(anchor_position) * d_model + feature],
-            slot_state_gradient);
-    }
-    if (slot_embedding_gradient) {
-        atomicAdd(
-            &slot_embedding_gradient[
-                static_cast<size_t>(slot) * d_model + feature],
-            slot_state_gradient);
+        for (int feature = threadIdx.x; feature < d_model; feature += blockDim.x) {
+            atomicAdd(
+                &hidden_gradient[
+                    static_cast<size_t>(opening_row) * d_model + feature],
+                grad_next[feature]);
+        }
     }
 }
 
@@ -136,73 +291,104 @@ struct NumericAtomBackwardFn final : public GradFn {
     std::shared_ptr<Tensor> hidden_gradient;
     std::shared_ptr<Tensor> digit_embedding_gradient;
     std::shared_ptr<Tensor> pow10_embedding_gradient;
-    std::shared_ptr<Tensor> slot_embedding_gradient;
+    std::shared_ptr<Tensor> Wz_gradient;
+    std::shared_ptr<Tensor> Uz_gradient;
+    std::shared_ptr<Tensor> Wr_gradient;
+    std::shared_ptr<Tensor> Ur_gradient;
+    std::shared_ptr<Tensor> Wh_gradient;
+    std::shared_ptr<Tensor> Uh_gradient;
 
-    const float* hidden = nullptr;
     const float* digit_embedding = nullptr;
     const float* pow10_embedding = nullptr;
-    const float* slot_embedding = nullptr;
+    const float* Wz = nullptr;
+    const float* Uz = nullptr;
+    const float* Wr = nullptr;
+    const float* Ur = nullptr;
+    const float* Wh = nullptr;
+    const float* Uh = nullptr;
     const float* digit_logits = nullptr;
     const float* pow10_logits = nullptr;
+    const float* step_states = nullptr;
+    const float* update_gates = nullptr;
+    const float* reset_gates = nullptr;
+    const float* candidates = nullptr;
 
-    int numeric_atom_count = 0;
+    int atom_count = 0;
     int digit_slots = 0;
     int digit_classes = 0;
     int pow10_buckets = 0;
     int hidden_rows = 0;
     int d_model = 0;
 
-    NumericAtomBackwardFn() { op_name = "numeric_atom"; }
+    NumericAtomBackwardFn() { op_name = "numeric_atom_gru"; }
     ~NumericAtomBackwardFn() override { release_saved(); }
 
     void capture_inputs(
         Tensor& shared_hidden_state,
-        Tensor& digit_embedding_tensor,
-        Tensor& pow10_embedding_tensor,
-        Tensor& slot_embedding_tensor,
-        const Forward::NumericAtomForwardOutputs& forward_outputs,
+        NumberEncoderParameterTensors& parameters,
+        const Forward::NumericAtomForwardOutputs& outputs,
         cudaStream_t stream) {
-        hidden = shared_hidden_state.data;
-        digit_embedding = digit_embedding_tensor.data;
-        pow10_embedding = pow10_embedding_tensor.data;
-        slot_embedding = slot_embedding_tensor.data;
-        digit_logits = forward_outputs.digit_logits.data;
-        pow10_logits = forward_outputs.pow10_logits.data;
+        digit_embedding = parameters.digit_emb.data;
+        pow10_embedding = parameters.pow10_emb.data;
+        Wz = parameters.numeric_atom_Wz.data;
+        Uz = parameters.numeric_atom_Uz.data;
+        Wr = parameters.numeric_atom_Wr.data;
+        Ur = parameters.numeric_atom_Ur.data;
+        Wh = parameters.numeric_atom_Wh.data;
+        Uh = parameters.numeric_atom_Uh.data;
+        digit_logits = outputs.digit_logits.data;
+        pow10_logits = outputs.pow10_logits.data;
+        step_states = outputs.step_states.data;
+        update_gates = outputs.update_gates.data;
+        reset_gates = outputs.reset_gates.data;
+        candidates = outputs.candidates.data;
 
         if (shared_hidden_state.requires_grad) {
             hidden_gradient = capture_input_gradient(
-                shared_hidden_state,
-                stream,
-                "NumericAtomBackward.hidden");
+                shared_hidden_state, stream, "NumericAtomBackward.hidden");
         }
-        if (digit_embedding_tensor.requires_grad) {
+        if (parameters.digit_emb.requires_grad) {
             digit_embedding_gradient = capture_input_gradient(
-                digit_embedding_tensor,
-                stream,
-                "NumericAtomBackward.digit_embedding");
+                parameters.digit_emb, stream, "NumericAtomBackward.digit_embedding");
         }
-        if (pow10_embedding_tensor.requires_grad) {
+        if (parameters.pow10_emb.requires_grad) {
             pow10_embedding_gradient = capture_input_gradient(
-                pow10_embedding_tensor,
-                stream,
-                "NumericAtomBackward.pow10_embedding");
+                parameters.pow10_emb, stream, "NumericAtomBackward.pow10_embedding");
         }
-        if (slot_embedding_tensor.requires_grad) {
-            slot_embedding_gradient = capture_input_gradient(
-                slot_embedding_tensor,
-                stream,
-                "NumericAtomBackward.slot_embedding");
+        if (parameters.numeric_atom_Wz.requires_grad) {
+            Wz_gradient = capture_input_gradient(
+                parameters.numeric_atom_Wz, stream, "NumericAtomBackward.Wz");
+        }
+        if (parameters.numeric_atom_Uz.requires_grad) {
+            Uz_gradient = capture_input_gradient(
+                parameters.numeric_atom_Uz, stream, "NumericAtomBackward.Uz");
+        }
+        if (parameters.numeric_atom_Wr.requires_grad) {
+            Wr_gradient = capture_input_gradient(
+                parameters.numeric_atom_Wr, stream, "NumericAtomBackward.Wr");
+        }
+        if (parameters.numeric_atom_Ur.requires_grad) {
+            Ur_gradient = capture_input_gradient(
+                parameters.numeric_atom_Ur, stream, "NumericAtomBackward.Ur");
+        }
+        if (parameters.numeric_atom_Wh.requires_grad) {
+            Wh_gradient = capture_input_gradient(
+                parameters.numeric_atom_Wh, stream, "NumericAtomBackward.Wh");
+        }
+        if (parameters.numeric_atom_Uh.requires_grad) {
+            Uh_gradient = capture_input_gradient(
+                parameters.numeric_atom_Uh, stream, "NumericAtomBackward.Uh");
         }
     }
 
     void apply_impl(
         const Tensor& grad_output,
         cudaStream_t stream,
-        const Batching::BatchPayload* backward_payload,
-        const Batching::BatchDeviceBindings* backward_bindings) override {
+        const Batching::BatchPayload* payload,
+        const Batching::BatchDeviceBindings* bindings) override {
         if (applied) return;
         applied = true;
-        if (!backward_payload || !backward_bindings) {
+        if (!payload || !bindings) {
             throw std::runtime_error(
                 "NumericAtomBackward: payload and device bindings are required");
         }
@@ -210,132 +396,108 @@ struct NumericAtomBackwardFn final : public GradFn {
             throw std::runtime_error(
                 "NumericAtomBackward: upstream gradient must be scalar");
         }
-        if (!hidden || !digit_embedding || !pow10_embedding || !slot_embedding ||
-            !digit_logits || !pow10_logits) {
+        payload->validate("NumericAtomBackward");
+        if (payload->total_tokens != hidden_rows ||
+            static_cast<int>(payload->atom_positions.size()) != atom_count ||
+            payload->number_aux_target_digit_slots != digit_slots ||
+            2 * payload->number_aux_target_max_abs_pow10 + 1 != pow10_buckets) {
             throw std::runtime_error(
-                "NumericAtomBackward: borrowed forward data is incomplete");
+                "NumericAtomBackward: payload geometry disagrees with captured forward state");
         }
-        if (!backward_bindings->d_number_aux_target_digits ||
-            !backward_bindings->d_number_aux_target_pow10_index ||
-            !backward_bindings->d_number_aux_target_digit_mask) {
+        if (!digit_embedding || !pow10_embedding || !Wz || !Uz || !Wr || !Ur ||
+            !Wh || !Uh || !digit_logits || !pow10_logits || !step_states ||
+            !update_gates || !reset_gates || !candidates) {
             throw std::runtime_error(
-                "NumericAtomBackward: numeric target device bindings are NULL");
+                "NumericAtomBackward: borrowed forward state is incomplete");
+        }
+        if (!bindings->d_atom_positions || !bindings->d_atom_types ||
+            !bindings->d_number_aux_target_atom_index ||
+            !bindings->d_number_aux_target_row_mask ||
+            !bindings->d_number_aux_target_step_index ||
+            !bindings->d_number_aux_target_digits ||
+            !bindings->d_number_aux_target_pow10_index ||
+            !bindings->d_number_aux_target_digit_mask) {
+            throw std::runtime_error(
+                "NumericAtomBackward: numeric target device bindings are incomplete");
         }
 
-        backward_payload->validate("NumericAtomBackward");
-        if (backward_payload->total_tokens != hidden_rows ||
-            backward_payload->number_aux_target_digit_slots != digit_slots ||
-            2 * backward_payload->number_aux_target_max_abs_pow10 + 1 !=
-                pow10_buckets) {
-            throw std::runtime_error(
-                "NumericAtomBackward: payload geometry disagrees with the captured graph");
+        int valid_steps = 0;
+        for (int row = 0; row < payload->total_tokens; ++row) {
+            if (payload->number_aux_target_row_mask[static_cast<size_t>(row)] == 0) continue;
+            const int atom =
+                payload->number_aux_target_atom_index[static_cast<size_t>(row)];
+            const int step =
+                payload->number_aux_target_step_index[static_cast<size_t>(row)];
+            if (atom < 0 || atom >= atom_count || step < 0 || step >= digit_slots) continue;
+            valid_steps += payload->number_aux_target_digit_mask[
+                static_cast<size_t>(atom) * digit_slots + step] != 0;
         }
-        int valid_slot_count = 0;
-        int routed_numeric_atoms = 0;
-        const size_t payload_digit_slots = static_cast<size_t>(digit_slots);
-        for (size_t atom = 0; atom < backward_payload->atom_types.size(); ++atom) {
-            const auto atom_type = static_cast<Tokenizer::AtomType>(
-                backward_payload->atom_types[atom]);
-            if (!Tokenizer::isNumericAtom(atom_type)) continue;
-            ++routed_numeric_atoms;
-            if (backward_payload->number_aux_target_base[atom] != 10) {
-                throw std::runtime_error(
-                    "NumericAtomBackward: only base-10 numeric targets are supported");
-            }
-            if (backward_payload->number_aux_target_valid[atom] == 0) continue;
-            const size_t target_offset = atom * payload_digit_slots;
-            for (int slot = 0; slot < digit_slots; ++slot) {
-                valid_slot_count +=
-                    backward_payload->number_aux_target_digit_mask[
-                        target_offset + static_cast<size_t>(slot)] != 0;
-            }
-        }
-        if (routed_numeric_atoms != numeric_atom_count || valid_slot_count <= 0) {
-            throw std::runtime_error(
-                "NumericAtomBackward: payload routing disagrees with captured forward geometry");
+        if (valid_steps <= 0) {
+            throw std::runtime_error("NumericAtomBackward: no supervised decoder steps");
         }
 
         const float normalization =
-            1.0f / (2.0f * static_cast<float>(valid_slot_count));
-        const size_t per_atom_count =
-            static_cast<size_t>(digit_slots) * d_model;
-        const int blocks = static_cast<int>(
-            (per_atom_count + kBlockSize - 1) / kBlockSize);
+            1.0f / (2.0f * static_cast<float>(valid_steps));
+        const size_t shared_bytes =
+            (static_cast<size_t>(5) * d_model + 4) * sizeof(float);
+        kernelNumericAtomBackward<<<atom_count, kBlockSize, shared_bytes, stream>>>(
+            grad_output.data,
+            digit_embedding,
+            pow10_embedding,
+            Wz,
+            Uz,
+            Wr,
+            Ur,
+            Wh,
+            Uh,
+            digit_logits,
+            pow10_logits,
+            step_states,
+            update_gates,
+            reset_gates,
+            candidates,
+            bindings->d_atom_positions,
+            bindings->d_atom_types,
+            bindings->d_number_aux_target_atom_index,
+            bindings->d_number_aux_target_row_mask,
+            bindings->d_number_aux_target_step_index,
+            bindings->d_number_aux_target_digits,
+            bindings->d_number_aux_target_pow10_index,
+            bindings->d_number_aux_target_digit_mask,
+            hidden_gradient ? hidden_gradient->data : nullptr,
+            digit_embedding_gradient ? digit_embedding_gradient->data : nullptr,
+            pow10_embedding_gradient ? pow10_embedding_gradient->data : nullptr,
+            Wz_gradient ? Wz_gradient->data : nullptr,
+            Uz_gradient ? Uz_gradient->data : nullptr,
+            Wr_gradient ? Wr_gradient->data : nullptr,
+            Ur_gradient ? Ur_gradient->data : nullptr,
+            Wh_gradient ? Wh_gradient->data : nullptr,
+            Uh_gradient ? Uh_gradient->data : nullptr,
+            atom_count,
+            hidden_rows,
+            digit_slots,
+            digit_classes,
+            pow10_buckets,
+            d_model,
+            static_cast<int>(Tokenizer::AtomType::ATOM_INT),
+            static_cast<int>(Tokenizer::AtomType::ATOM_FLOAT),
+            normalization);
+        trackKernelLaunch("kernelNumericAtomBackward", stream);
 
-        int numeric_atom = 0;
-        for (size_t atom = 0; atom < backward_payload->atom_types.size(); ++atom) {
-            const auto atom_type = static_cast<Tokenizer::AtomType>(
-                backward_payload->atom_types[atom]);
-            if (!Tokenizer::isNumericAtom(atom_type)) continue;
-
-            const int output_atom = numeric_atom++;
-            if (backward_payload->number_aux_target_valid[atom] == 0) continue;
-            const int anchor_position = backward_payload->atom_positions[atom];
-            if (anchor_position < 0 ||
-                anchor_position >= backward_payload->total_tokens) {
-                throw std::runtime_error(
-                    "NumericAtomBackward: numeric anchor is outside payload geometry");
+        auto propagate = [&](const std::shared_ptr<Tensor>& gradient, const char* name) {
+            if (gradient) {
+                propagate_input_gradient(gradient, stream, payload, bindings, name);
             }
-
-            const size_t logit_row_offset =
-                static_cast<size_t>(output_atom) * digit_slots;
-            const size_t target_offset = atom * payload_digit_slots;
-            kernelNumericAtomBackward<<<blocks, kBlockSize, 0, stream>>>(
-                grad_output.data,
-                hidden,
-                digit_embedding,
-                pow10_embedding,
-                slot_embedding,
-                digit_logits + logit_row_offset * digit_classes,
-                pow10_logits + logit_row_offset * pow10_buckets,
-                backward_bindings->d_number_aux_target_digits + target_offset,
-                backward_bindings->d_number_aux_target_pow10_index + target_offset,
-                backward_bindings->d_number_aux_target_digit_mask + target_offset,
-                hidden_gradient ? hidden_gradient->data : nullptr,
-                digit_embedding_gradient ? digit_embedding_gradient->data : nullptr,
-                pow10_embedding_gradient ? pow10_embedding_gradient->data : nullptr,
-                slot_embedding_gradient ? slot_embedding_gradient->data : nullptr,
-                anchor_position,
-                digit_slots,
-                digit_classes,
-                pow10_buckets,
-                d_model,
-                normalization);
-            trackKernelLaunch("kernelNumericAtomBackward", stream);
-        }
-
-        if (hidden_gradient) {
-            propagate_input_gradient(
-                hidden_gradient,
-                stream,
-                backward_payload,
-                backward_bindings,
-                "NumericAtomBackward.hidden");
-        }
-        if (digit_embedding_gradient) {
-            propagate_input_gradient(
-                digit_embedding_gradient,
-                stream,
-                backward_payload,
-                backward_bindings,
-                "NumericAtomBackward.digit_embedding");
-        }
-        if (pow10_embedding_gradient) {
-            propagate_input_gradient(
-                pow10_embedding_gradient,
-                stream,
-                backward_payload,
-                backward_bindings,
-                "NumericAtomBackward.pow10_embedding");
-        }
-        if (slot_embedding_gradient) {
-            propagate_input_gradient(
-                slot_embedding_gradient,
-                stream,
-                backward_payload,
-                backward_bindings,
-                "NumericAtomBackward.slot_embedding");
-        }
+        };
+        propagate(hidden_gradient, "NumericAtomBackward.hidden");
+        propagate(digit_embedding_gradient, "NumericAtomBackward.digit_embedding");
+        propagate(pow10_embedding_gradient, "NumericAtomBackward.pow10_embedding");
+        propagate(Wz_gradient, "NumericAtomBackward.Wz");
+        propagate(Uz_gradient, "NumericAtomBackward.Uz");
+        propagate(Wr_gradient, "NumericAtomBackward.Wr");
+        propagate(Ur_gradient, "NumericAtomBackward.Ur");
+        propagate(Wh_gradient, "NumericAtomBackward.Wh");
+        propagate(Uh_gradient, "NumericAtomBackward.Uh");
     }
 
     void release_saved() override {
@@ -343,31 +505,54 @@ struct NumericAtomBackwardFn final : public GradFn {
         hidden_gradient.reset();
         digit_embedding_gradient.reset();
         pow10_embedding_gradient.reset();
-        slot_embedding_gradient.reset();
-        hidden = nullptr;
+        Wz_gradient.reset();
+        Uz_gradient.reset();
+        Wr_gradient.reset();
+        Ur_gradient.reset();
+        Wh_gradient.reset();
+        Uh_gradient.reset();
         digit_embedding = nullptr;
         pow10_embedding = nullptr;
-        slot_embedding = nullptr;
+        Wz = nullptr;
+        Uz = nullptr;
+        Wr = nullptr;
+        Ur = nullptr;
+        Wh = nullptr;
+        Uh = nullptr;
         digit_logits = nullptr;
         pow10_logits = nullptr;
+        step_states = nullptr;
+        update_gates = nullptr;
+        reset_gates = nullptr;
+        candidates = nullptr;
     }
 };
+
+void requireShape(
+    const Tensor& tensor,
+    int rows,
+    int columns,
+    const char* name) {
+    tensor.require(name);
+    if (!tensor.shape.is_2d_layout()) {
+        throw std::runtime_error(std::string(name) + " must be 2D");
+    }
+    const auto shape = tensor.shape.as_2d();
+    if (shape.rows != rows || shape.cols != columns) {
+        throw std::runtime_error(std::string(name) + " has invalid geometry");
+    }
+}
 
 }  // namespace
 
 void attachNumericAtomBackward(
     Tensor& numeric_atom_loss,
     Tensor& shared_hidden_state,
-    Tensor& digit_embedding,
-    Tensor& pow10_embedding,
-    Tensor& slot_embedding,
-    const Forward::NumericAtomForwardOutputs& forward_outputs,
+    NumberEncoderParameterTensors& parameters,
+    const Forward::NumericAtomForwardOutputs& outputs,
     cudaStream_t stream) {
     numeric_atom_loss.require("attachNumericAtomBackward.loss");
     shared_hidden_state.require("attachNumericAtomBackward.hidden");
-    digit_embedding.require("attachNumericAtomBackward.digit_embedding");
-    pow10_embedding.require("attachNumericAtomBackward.pow10_embedding");
-    slot_embedding.require("attachNumericAtomBackward.slot_embedding");
     if (!stream) {
         throw std::runtime_error("attachNumericAtomBackward: stream is NULL");
     }
@@ -376,79 +561,79 @@ void attachNumericAtomBackward(
         throw std::runtime_error(
             "attachNumericAtomBackward: loss must be a detached scalar");
     }
-    if (!forward_outputs.populated() ||
-        forward_outputs.numeric_atom_count <= 0 ||
-        forward_outputs.digit_slots <= 0 ||
-        forward_outputs.digit_classes <= 0 ||
-        forward_outputs.pow10_buckets <= 0) {
+    if (!outputs.populated() || outputs.atom_count <= 0) {
         throw std::runtime_error(
-            "attachNumericAtomBackward: forward outputs are incomplete");
+            "attachNumericAtomBackward: recurrent forward outputs are incomplete");
     }
-    if (!shared_hidden_state.shape.is_2d_layout() ||
-        !digit_embedding.shape.is_2d_layout() ||
-        !pow10_embedding.shape.is_2d_layout() ||
-        !slot_embedding.shape.is_2d_layout() ||
-        !forward_outputs.digit_logits.shape.is_2d_layout() ||
-        !forward_outputs.pow10_logits.shape.is_2d_layout()) {
+    if (!shared_hidden_state.shape.is_2d_layout()) {
         throw std::runtime_error(
-            "attachNumericAtomBackward: hidden, embeddings, and logits must be 2D");
+            "attachNumericAtomBackward: shared hidden state must be 2D");
     }
 
     const auto hidden_shape = shared_hidden_state.shape.as_2d();
-    const auto digit_embedding_shape = digit_embedding.shape.as_2d();
-    const auto pow10_embedding_shape = pow10_embedding.shape.as_2d();
-    const auto slot_embedding_shape = slot_embedding.shape.as_2d();
-    const auto digit_logit_shape = forward_outputs.digit_logits.shape.as_2d();
-    const auto pow10_logit_shape = forward_outputs.pow10_logits.shape.as_2d();
-    const int expected_logit_rows =
-        forward_outputs.numeric_atom_count * forward_outputs.digit_slots;
-    if (forward_outputs.total_rows != expected_logit_rows ||
-        digit_logit_shape.rows != expected_logit_rows ||
-        digit_logit_shape.cols != forward_outputs.digit_classes ||
-        pow10_logit_shape.rows != expected_logit_rows ||
-        pow10_logit_shape.cols != forward_outputs.pow10_buckets) {
+    const int d_model = hidden_shape.cols;
+    outputs.step_states.require("attachNumericAtomBackward.step_states");
+    if (!outputs.step_states.shape.is_2d_layout()) {
         throw std::runtime_error(
-            "attachNumericAtomBackward: logit geometry disagrees with forward metadata");
+            "attachNumericAtomBackward: step states must be 2D");
     }
-    if (hidden_shape.cols <= 0 ||
-        digit_embedding_shape.rows != forward_outputs.digit_classes ||
-        pow10_embedding_shape.rows != forward_outputs.pow10_buckets ||
-        slot_embedding_shape.rows != forward_outputs.digit_slots ||
-        digit_embedding_shape.cols != hidden_shape.cols ||
-        pow10_embedding_shape.cols != hidden_shape.cols ||
-        slot_embedding_shape.cols != hidden_shape.cols) {
+    const auto step_state_shape = outputs.step_states.shape.as_2d();
+    if (outputs.decoder_step_capacity <= 0 ||
+        step_state_shape.rows !=
+            outputs.atom_count * outputs.decoder_step_capacity) {
         throw std::runtime_error(
-            "attachNumericAtomBackward: embedding geometry disagrees with the shared hidden state");
+            "attachNumericAtomBackward: step-state rows are not decoder aligned");
     }
-    if (forward_outputs.digit_logits.requires_grad ||
-        forward_outputs.digit_logits.grad_fn ||
-        forward_outputs.pow10_logits.requires_grad ||
-        forward_outputs.pow10_logits.grad_fn) {
+    const int digit_slots = outputs.decoder_step_capacity;
+    requireShape(parameters.digit_emb, outputs.digit_classes, d_model,
+                 "attachNumericAtomBackward.digit_emb");
+    requireShape(parameters.pow10_emb, outputs.pow10_buckets, d_model,
+                 "attachNumericAtomBackward.pow10_emb");
+    requireShape(parameters.numeric_atom_Wz, 2 * d_model, d_model,
+                 "attachNumericAtomBackward.Wz");
+    requireShape(parameters.numeric_atom_Uz, d_model, d_model,
+                 "attachNumericAtomBackward.Uz");
+    requireShape(parameters.numeric_atom_Wr, 2 * d_model, d_model,
+                 "attachNumericAtomBackward.Wr");
+    requireShape(parameters.numeric_atom_Ur, d_model, d_model,
+                 "attachNumericAtomBackward.Ur");
+    requireShape(parameters.numeric_atom_Wh, 2 * d_model, d_model,
+                 "attachNumericAtomBackward.Wh");
+    requireShape(parameters.numeric_atom_Uh, d_model, d_model,
+                 "attachNumericAtomBackward.Uh");
+    requireShape(outputs.digit_logits, outputs.row_count, outputs.digit_classes,
+                 "attachNumericAtomBackward.digit_logits");
+    requireShape(outputs.pow10_logits, outputs.row_count, outputs.pow10_buckets,
+                 "attachNumericAtomBackward.pow10_logits");
+    requireShape(outputs.step_states, outputs.atom_count * digit_slots, d_model,
+                 "attachNumericAtomBackward.step_states");
+    requireShape(outputs.update_gates, outputs.atom_count * digit_slots, d_model,
+                 "attachNumericAtomBackward.update_gates");
+    requireShape(outputs.reset_gates, outputs.atom_count * digit_slots, d_model,
+                 "attachNumericAtomBackward.reset_gates");
+    requireShape(outputs.candidates, outputs.atom_count * digit_slots, d_model,
+                 "attachNumericAtomBackward.candidates");
+    if (digit_slots <= 0 || outputs.row_count != hidden_shape.rows) {
         throw std::runtime_error(
-            "attachNumericAtomBackward: logits must remain detached from independent backward nodes");
+            "attachNumericAtomBackward: recurrent geometry is inconsistent");
     }
-    if (!shared_hidden_state.requires_grad ||
-        !digit_embedding.requires_grad ||
-        !pow10_embedding.requires_grad ||
-        !slot_embedding.requires_grad) {
+    if (!shared_hidden_state.requires_grad || !parameters.digit_emb.requires_grad ||
+        !parameters.pow10_emb.requires_grad || !parameters.numeric_atom_Wz.requires_grad ||
+        !parameters.numeric_atom_Uz.requires_grad || !parameters.numeric_atom_Wr.requires_grad ||
+        !parameters.numeric_atom_Ur.requires_grad || !parameters.numeric_atom_Wh.requires_grad ||
+        !parameters.numeric_atom_Uh.requires_grad) {
         throw std::runtime_error(
-            "attachNumericAtomBackward: all training inputs must require gradients");
+            "attachNumericAtomBackward: all recurrent training inputs must require gradients");
     }
 
     auto grad_fn = std::make_shared<NumericAtomBackwardFn>();
-    grad_fn->numeric_atom_count = forward_outputs.numeric_atom_count;
-    grad_fn->digit_slots = forward_outputs.digit_slots;
-    grad_fn->digit_classes = forward_outputs.digit_classes;
-    grad_fn->pow10_buckets = forward_outputs.pow10_buckets;
+    grad_fn->atom_count = outputs.atom_count;
+    grad_fn->digit_slots = digit_slots;
+    grad_fn->digit_classes = outputs.digit_classes;
+    grad_fn->pow10_buckets = outputs.pow10_buckets;
     grad_fn->hidden_rows = hidden_shape.rows;
-    grad_fn->d_model = hidden_shape.cols;
-    grad_fn->capture_inputs(
-        shared_hidden_state,
-        digit_embedding,
-        pow10_embedding,
-        slot_embedding,
-        forward_outputs,
-        stream);
+    grad_fn->d_model = d_model;
+    grad_fn->capture_inputs(shared_hidden_state, parameters, outputs, stream);
 
     numeric_atom_loss.requires_grad = true;
     numeric_atom_loss.is_leaf = false;

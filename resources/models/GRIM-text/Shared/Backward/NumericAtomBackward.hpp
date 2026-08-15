@@ -1,6 +1,6 @@
 //======================================================//
 //  NumericAtomBackward.hpp
-//  Dedicated NumericAtom autograd boundary.
+//  Dedicated recurrent NumericAtom autograd boundary.
 //======================================================//
 
 #pragma once
@@ -13,17 +13,18 @@
 #include "../TensorContract/TensorContract_GPU.hpp"
 
 namespace GRIM {
+
+struct NumberEncoderParameterTensors;
+
 namespace autograd {
 
-// Attaches the single NumericAtom backward node to an already-computed scalar
-// loss. Forward computation, loss computation, graph scheduling, and storage
-// ownership remain outside this boundary.
+// Attaches the single reverse-time NumericAtom node to the detached scalar
+// loss. The node borrows forward activations and registry-owned parameters;
+// allocation, loss composition, scheduling, and ownership stay outside it.
 void attachNumericAtomBackward(
     Tensor& numeric_atom_loss,
     Tensor& shared_hidden_state,
-    Tensor& digit_embedding,
-    Tensor& pow10_embedding,
-    Tensor& slot_embedding,
+    NumberEncoderParameterTensors& parameters,
     const Forward::NumericAtomForwardOutputs& forward_outputs,
     cudaStream_t stream);
 
