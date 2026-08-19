@@ -93,7 +93,7 @@ GRIM::UnifiedMemoryObject MakeBaseRecord(
     float confidence)
 {
     GRIM::UnifiedMemoryObject obj(
-        GRIM::SourceType::SYSTEM_HW,
+        GRIM::MemoryDomain::SYSTEM_HW,
         type,
         intent,
         GRIM::ContextType::MONITOR,

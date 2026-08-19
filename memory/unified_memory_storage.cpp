@@ -50,7 +50,7 @@ std::string UnifiedMemoryObject::toJSON() const {
     
     j["id"] = id;
     j["timestamp"] = timestamp;
-    j["source"] = toString(source, SourceNames);
+    j["domain"] = toString(domain, DomainNames);
     j["type"] = toString(type, TypeNames);
     j["intent"] = toString(intent, IntentNames);
     j["context"] = toString(context, ContextNames);
@@ -76,7 +76,7 @@ UnifiedMemoryObject UnifiedMemoryObject::fromJSON(const std::string& jsonStr) {
     obj.id = j.value("id", generateID());
     obj.timestamp = j.value("timestamp", static_cast<uint64_t>(std::time(nullptr)));
     
- obj.source = fromString(j.value("source", "grim.internal"), SourceNames, SourceType::GRIM_INTERNAL);
+ obj.domain = fromString(j.value("domain", "grim.internal"), DomainNames, MemoryDomain::GRIM_INTERNAL);
     obj.type = fromString(j.value("type", "fact"), TypeNames, TypeTag::FACT);
  obj.intent = fromString(j.value("intent", "inform"), IntentNames, MemoryIntent::INFORM);
     obj.context = fromString(j.value("context", "conversation"), ContextNames, ContextType::CONVERSATION);
@@ -125,7 +125,7 @@ std::vector<uint8_t> UnifiedMemoryObject::toFlatBuffer() const {
     auto record = GRIM::Memory::CreateMemoryRecord(builder,
  id,
         timestamp,
-        static_cast<GRIM::Memory::SourceType>(source),
+        static_cast<GRIM::Memory::MemoryDomain>(domain),
         static_cast<GRIM::Memory::TypeTag>(type),
         static_cast<GRIM::Memory::IntentType>(intent),
       static_cast<GRIM::Memory::ContextType>(context),
@@ -164,7 +164,7 @@ UnifiedMemoryObject UnifiedMemoryObject::fromFlatBuffer(const uint8_t* data, siz
     obj.id = record->id();
     obj.timestamp = record->timestamp();
 
-    obj.source = static_cast<SourceType>(record->source());
+    obj.domain = static_cast<MemoryDomain>(record->domain());
     obj.type = static_cast<TypeTag>(record->type());
     obj.intent = static_cast<MemoryIntent>(record->intent());
     obj.context = static_cast<ContextType>(record->context());
@@ -326,7 +326,7 @@ void UnifiedMemoryStorage::saveToFlatBuffer() {
         
  auto record = GRIM::Memory::CreateMemoryRecord(builder,
        obj.id, obj.timestamp,
-            static_cast<GRIM::Memory::SourceType>(obj.source),
+            static_cast<GRIM::Memory::MemoryDomain>(obj.domain),
         static_cast<GRIM::Memory::TypeTag>(obj.type),
         static_cast<GRIM::Memory::IntentType>(obj.intent),
    static_cast<GRIM::Memory::ContextType>(obj.context),
@@ -379,7 +379,7 @@ void UnifiedMemoryStorage::loadFromFlatBuffer() {
    UnifiedMemoryObject obj;
        obj.id = record->id();
      obj.timestamp = record->timestamp();
-        obj.source = static_cast<SourceType>(record->source());
+        obj.domain = static_cast<MemoryDomain>(record->domain());
             obj.type = static_cast<TypeTag>(record->type());
             obj.intent = static_cast<MemoryIntent>(record->intent());
  obj.context = static_cast<ContextType>(record->context());
@@ -439,8 +439,8 @@ void UnifiedMemoryStorage::updateIndex(const UnifiedMemoryObject& obj) {
   // Update type index
     typeIndex[obj.type].push_back(obj.id);
     
-    // Update source index
-    sourceIndex[obj.source].push_back(obj.id);
+    // Update domain index
+    domainIndex[obj.domain].push_back(obj.id);
 }
 
 void UnifiedMemoryStorage::updateTagIndex(const UnifiedMemoryObject& obj) {
@@ -587,12 +587,12 @@ std::lock_guard<std::mutex> lock(mtx);
     return results;
 }
 
-std::vector<UnifiedMemoryObject> UnifiedMemoryStorage::getBySource(SourceType source) {
+std::vector<UnifiedMemoryObject> UnifiedMemoryStorage::getByDomain(MemoryDomain domain) {
     std::lock_guard<std::mutex> lock(mtx);
     std::vector<UnifiedMemoryObject> results;
     
-    auto it = sourceIndex.find(source);
-    if (it != sourceIndex.end()) {
+    auto it = domainIndex.find(domain);
+    if (it != domainIndex.end()) {
  for (uint64_t id : it->second) {
             auto memIt = longTerm.find(id);
   if (memIt != longTerm.end()) {
@@ -631,7 +631,7 @@ void UnifiedMemoryStorage::storeLearnedCommand(const std::string& phrase, const 
     UnifiedMemoryObject obj;
     obj.id = UnifiedMemoryObject::generateID();
   obj.timestamp = std::time(nullptr);
-    obj.source = SourceType::USER_TEXT;
+    obj.domain = MemoryDomain::USER_TEXT;
     obj.type = TypeTag::LEARNED_COMMAND;
     obj.intent = MemoryIntent::INFORM;
     obj.context = ContextType::COMMAND_LEARNING;
@@ -662,7 +662,7 @@ void UnifiedMemoryStorage::rebuildIndex() {
     
     tagIndex.clear();
     typeIndex.clear();
-    sourceIndex.clear();
+    domainIndex.clear();
     
     for (const auto& [id, obj] : longTerm) {
         updateIndex(obj);

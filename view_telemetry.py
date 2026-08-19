@@ -1404,33 +1404,20 @@ def main():
             ax.legend(fontsize=8)
 
         ax = fig6b.add_subplot(gs6b[2, 1])
-        if exec_teacher_forced is not None:
-            plot_raw_and_smooth(
-                ax, exec_teacher_forced.index, exec_teacher_forced["raw_observation"],
-                color="tab:cyan",
-                raw_label="_nolegend_",
-                smooth_label="teacher-forced ratio",
-                raw_alpha=0.10,
-                smooth_linewidth=1.4,
-            )
-        ax.set_ylim(-0.03, 1.03)
-        ax.set_ylabel("Teacher-forced fraction", color="tab:cyan")
-        ax.set_title("Supervision Mix and Scalar-Term Denominator")
-        ax.grid(True, alpha=0.3)
-        if ax.lines:
-            ax.legend(fontsize=8, loc="upper left")
         if exec_scalar_terms is not None:
-            ax2 = ax.twinx()
             plot_raw_and_smooth(
-                ax2, exec_scalar_terms.index, exec_scalar_terms["raw_observation"],
+                ax, exec_scalar_terms.index, exec_scalar_terms["raw_observation"],
                 color="tab:olive",
                 raw_label="_nolegend_",
                 smooth_label="scalar term count",
                 raw_alpha=0.10,
                 smooth_linewidth=1.3,
             )
-            ax2.set_ylabel("Scalar loss terms", color="tab:olive")
-            ax2.legend(fontsize=8, loc="upper right")
+        ax.set_ylabel("Scalar loss terms", color="tab:olive")
+        ax.set_title("Scalar-Term Denominator")
+        ax.grid(True, alpha=0.3)
+        if ax.lines:
+            ax.legend(fontsize=8)
 
         execution_loss_path = output_root(path) + "_exec_loss.png"
         save_figure(fig6b, execution_loss_path)

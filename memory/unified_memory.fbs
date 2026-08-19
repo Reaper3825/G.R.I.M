@@ -8,7 +8,7 @@ enum CommType : byte {
     UNKNOWN = 3
 }
 
-enum SourceType : byte {
+enum MemoryDomain : byte {
     USER_VOICE = 0,
     USER_TEXT = 1,
     SYSTEM_HW = 2,
@@ -59,7 +59,7 @@ enum Modality : byte {
 table MemoryRecord {
     id:ulong;
     timestamp:ulong;
-    source:SourceType;
+    domain:MemoryDomain;
     type:TypeTag;
     intent:IntentType;
     context:ContextType;
@@ -82,7 +82,7 @@ table IndexEntry {
     offset:ulong;
     embedding:[float];
     type:TypeTag;
-    source:SourceType;
+    domain:MemoryDomain;
     timestamp:ulong;
     confidence:float;
     tags:[string];

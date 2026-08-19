@@ -7713,6 +7713,31 @@
     },
     {
       "comm_type": "unknown",
+      "confidence": 0.7216445207595825,
+      "context": "monitor",
+      "id": 13405994629388531395,
+      "importance": 0.7216445207595825,
+      "intent": "inform",
+      "intent_name": "",
+      "modality": "vision",
+      "normalized": "person#8 labelled [\"a\"]",
+      "parent_id": 3599552370242804178,
+      "raw": "person#8 labelled [\"a\"]",
+      "recency_weight": 1.0,
+      "related_ids": [],
+      "source": "system.hw",
+      "tags": [
+        "physical",
+        "perception",
+        "ocr",
+        "class:person",
+        "object:8"
+      ],
+      "timestamp": 1786977107,
+      "type": "fact"
+    },
+    {
+      "comm_type": "unknown",
       "confidence": 0.8740931749343872,
       "context": "monitor",
       "id": 8649944767860313749,

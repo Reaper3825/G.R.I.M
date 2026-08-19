@@ -82,7 +82,7 @@ void recordUnknownCommand(const std::string& cmd, const std::string& arg)
         GRIM::UnifiedMemoryObject unknown;
         unknown.id = GRIM::UnifiedMemoryObject::generateID();
         unknown.timestamp = static_cast<uint64_t>(std::time(nullptr));
-        unknown.source = GRIM::SourceType::USER_TEXT;
+        unknown.domain = GRIM::MemoryDomain::USER_TEXT;
         unknown.type = GRIM::TypeTag::UNKNOWN_COMMAND;
         unknown.intent = GRIM::MemoryIntent::QUERY;
         unknown.context = GRIM::ContextType::CONVERSATION;

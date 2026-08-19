@@ -9,7 +9,7 @@ namespace GRIM {
 
 // ---------- ENUMS ---------- //
 enum class CommType      : uint8_t { COMMAND, QUESTION, BANTER, UNKNOWN };
-enum class MemorySource  : uint8_t { BASE, USER, FIELD, FUSED };
+enum class MemoryDomain  : uint8_t { BASE, USER, FIELD, FUSED };
 enum class ImportanceType: uint8_t { LOW, MEDIUM, HIGH };
 enum class Modality      : uint8_t { TEXT, AUDIO, VISION, SENSOR };
 
@@ -54,17 +54,14 @@ struct IndexEntry {
 
 // ---------- CONTEXT ---------- //
 struct ContextRecord {
-    MemorySource source = MemorySource::BASE;
+    MemoryDomain domain = MemoryDomain::BASE;
     uint64_t id = 0;
     float relevance = 0.0f;
     const MemoryEvent* ptr = nullptr;
 };
 
 struct Context {
-    std::vector<ContextRecord> base;
-    std::vector<ContextRecord> user;
-    std::vector<ContextRecord> field;
-    void mergeAll();
+    std::vector<ContextRecord> entries;
     void deduplicate();
     void pruneLowConfidence(float threshold = 0.3f);
     void truncateToTokenBudget(size_t token_limit);

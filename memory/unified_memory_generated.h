@@ -65,36 +65,36 @@ inline const char *EnumNameCommType(CommType e) {
   return EnumNamesCommType()[index];
 }
 
-enum SourceType : int8_t {
-  SourceType_USER_VOICE = 0,
-  SourceType_USER_TEXT = 1,
-  SourceType_SYSTEM_HW = 2,
-  SourceType_SYSTEM_SW = 3,
-  SourceType_NETWORK_API = 4,
-  SourceType_GRIM_INTERNAL = 5,
-  SourceType_BASE = 6,
-  SourceType_FIELD = 7,
-  SourceType_FUSED = 8,
-  SourceType_MIN = SourceType_USER_VOICE,
-  SourceType_MAX = SourceType_FUSED
+enum MemoryDomain : int8_t {
+  MemoryDomain_USER_VOICE = 0,
+  MemoryDomain_USER_TEXT = 1,
+  MemoryDomain_SYSTEM_HW = 2,
+  MemoryDomain_SYSTEM_SW = 3,
+  MemoryDomain_NETWORK_API = 4,
+  MemoryDomain_GRIM_INTERNAL = 5,
+  MemoryDomain_BASE = 6,
+  MemoryDomain_FIELD = 7,
+  MemoryDomain_FUSED = 8,
+  MemoryDomain_MIN = MemoryDomain_USER_VOICE,
+  MemoryDomain_MAX = MemoryDomain_FUSED
 };
 
-inline const SourceType (&EnumValuesSourceType())[9] {
-  static const SourceType values[] = {
-    SourceType_USER_VOICE,
-    SourceType_USER_TEXT,
-    SourceType_SYSTEM_HW,
-    SourceType_SYSTEM_SW,
-    SourceType_NETWORK_API,
-    SourceType_GRIM_INTERNAL,
-    SourceType_BASE,
-    SourceType_FIELD,
-    SourceType_FUSED
+inline const MemoryDomain (&EnumValuesMemoryDomain())[9] {
+  static const MemoryDomain values[] = {
+    MemoryDomain_USER_VOICE,
+    MemoryDomain_USER_TEXT,
+    MemoryDomain_SYSTEM_HW,
+    MemoryDomain_SYSTEM_SW,
+    MemoryDomain_NETWORK_API,
+    MemoryDomain_GRIM_INTERNAL,
+    MemoryDomain_BASE,
+    MemoryDomain_FIELD,
+    MemoryDomain_FUSED
   };
   return values;
 }
 
-inline const char * const *EnumNamesSourceType() {
+inline const char * const *EnumNamesMemoryDomain() {
   static const char * const names[10] = {
     "USER_VOICE",
     "USER_TEXT",
@@ -110,10 +110,10 @@ inline const char * const *EnumNamesSourceType() {
   return names;
 }
 
-inline const char *EnumNameSourceType(SourceType e) {
-  if (::flatbuffers::IsOutRange(e, SourceType_USER_VOICE, SourceType_FUSED)) return "";
+inline const char *EnumNameMemoryDomain(MemoryDomain e) {
+  if (::flatbuffers::IsOutRange(e, MemoryDomain_USER_VOICE, MemoryDomain_FUSED)) return "";
   const size_t index = static_cast<size_t>(e);
-  return EnumNamesSourceType()[index];
+  return EnumNamesMemoryDomain()[index];
 }
 
 enum TypeTag : int8_t {
@@ -289,7 +289,7 @@ struct MemoryRecord FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_ID = 4,
     VT_TIMESTAMP = 6,
-    VT_SOURCE = 8,
+    VT_DOMAIN = 8,
     VT_TYPE = 10,
     VT_INTENT = 12,
     VT_CONTEXT = 14,
@@ -312,8 +312,8 @@ struct MemoryRecord FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint64_t timestamp() const {
     return GetField<uint64_t>(VT_TIMESTAMP, 0);
   }
-  GRIM::Memory::SourceType source() const {
-    return static_cast<GRIM::Memory::SourceType>(GetField<int8_t>(VT_SOURCE, 0));
+  GRIM::Memory::MemoryDomain domain() const {
+    return static_cast<GRIM::Memory::MemoryDomain>(GetField<int8_t>(VT_DOMAIN, 0));
   }
   GRIM::Memory::TypeTag type() const {
     return static_cast<GRIM::Memory::TypeTag>(GetField<int8_t>(VT_TYPE, 0));
@@ -364,7 +364,7 @@ struct MemoryRecord FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     return VerifyTableStart(verifier) &&
            VerifyField<uint64_t>(verifier, VT_ID, 8) &&
            VerifyField<uint64_t>(verifier, VT_TIMESTAMP, 8) &&
-           VerifyField<int8_t>(verifier, VT_SOURCE, 1) &&
+           VerifyField<int8_t>(verifier, VT_DOMAIN, 1) &&
            VerifyField<int8_t>(verifier, VT_TYPE, 1) &&
            VerifyField<int8_t>(verifier, VT_INTENT, 1) &&
            VerifyField<int8_t>(verifier, VT_CONTEXT, 1) &&
@@ -401,8 +401,8 @@ struct MemoryRecordBuilder {
   void add_timestamp(uint64_t timestamp) {
     fbb_.AddElement<uint64_t>(MemoryRecord::VT_TIMESTAMP, timestamp, 0);
   }
-  void add_source(GRIM::Memory::SourceType source) {
-    fbb_.AddElement<int8_t>(MemoryRecord::VT_SOURCE, static_cast<int8_t>(source), 0);
+  void add_domain(GRIM::Memory::MemoryDomain domain) {
+    fbb_.AddElement<int8_t>(MemoryRecord::VT_DOMAIN, static_cast<int8_t>(domain), 0);
   }
   void add_type(GRIM::Memory::TypeTag type) {
     fbb_.AddElement<int8_t>(MemoryRecord::VT_TYPE, static_cast<int8_t>(type), 0);
@@ -464,7 +464,7 @@ inline ::flatbuffers::Offset<MemoryRecord> CreateMemoryRecord(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     uint64_t id = 0,
     uint64_t timestamp = 0,
-    GRIM::Memory::SourceType source = GRIM::Memory::SourceType_USER_VOICE,
+    GRIM::Memory::MemoryDomain domain = GRIM::Memory::MemoryDomain_USER_VOICE,
     GRIM::Memory::TypeTag type = GRIM::Memory::TypeTag_FACT,
     GRIM::Memory::IntentType intent = GRIM::Memory::IntentType_INFORM,
     GRIM::Memory::ContextType context = GRIM::Memory::ContextType_CONVERSATION,
@@ -498,7 +498,7 @@ inline ::flatbuffers::Offset<MemoryRecord> CreateMemoryRecord(
   builder_.add_context(context);
   builder_.add_intent(intent);
   builder_.add_type(type);
-  builder_.add_source(source);
+  builder_.add_domain(domain);
   return builder_.Finish();
 }
 
@@ -506,7 +506,7 @@ inline ::flatbuffers::Offset<MemoryRecord> CreateMemoryRecordDirect(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     uint64_t id = 0,
     uint64_t timestamp = 0,
-    GRIM::Memory::SourceType source = GRIM::Memory::SourceType_USER_VOICE,
+    GRIM::Memory::MemoryDomain domain = GRIM::Memory::MemoryDomain_USER_VOICE,
     GRIM::Memory::TypeTag type = GRIM::Memory::TypeTag_FACT,
     GRIM::Memory::IntentType intent = GRIM::Memory::IntentType_INFORM,
     GRIM::Memory::ContextType context = GRIM::Memory::ContextType_CONVERSATION,
@@ -532,7 +532,7 @@ inline ::flatbuffers::Offset<MemoryRecord> CreateMemoryRecordDirect(
       _fbb,
       id,
       timestamp,
-      source,
+      domain,
       type,
       intent,
       context,
@@ -557,7 +557,7 @@ struct IndexEntry FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_OFFSET = 6,
     VT_EMBEDDING = 8,
     VT_TYPE = 10,
-    VT_SOURCE = 12,
+    VT_DOMAIN = 12,
     VT_TIMESTAMP = 14,
     VT_CONFIDENCE = 16,
     VT_TAGS = 18
@@ -574,8 +574,8 @@ struct IndexEntry FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   GRIM::Memory::TypeTag type() const {
     return static_cast<GRIM::Memory::TypeTag>(GetField<int8_t>(VT_TYPE, 0));
   }
-  GRIM::Memory::SourceType source() const {
-    return static_cast<GRIM::Memory::SourceType>(GetField<int8_t>(VT_SOURCE, 0));
+  GRIM::Memory::MemoryDomain domain() const {
+    return static_cast<GRIM::Memory::MemoryDomain>(GetField<int8_t>(VT_DOMAIN, 0));
   }
   uint64_t timestamp() const {
     return GetField<uint64_t>(VT_TIMESTAMP, 0);
@@ -593,7 +593,7 @@ struct IndexEntry FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyOffset(verifier, VT_EMBEDDING) &&
            verifier.VerifyVector(embedding()) &&
            VerifyField<int8_t>(verifier, VT_TYPE, 1) &&
-           VerifyField<int8_t>(verifier, VT_SOURCE, 1) &&
+           VerifyField<int8_t>(verifier, VT_DOMAIN, 1) &&
            VerifyField<uint64_t>(verifier, VT_TIMESTAMP, 8) &&
            VerifyField<float>(verifier, VT_CONFIDENCE, 4) &&
            VerifyOffset(verifier, VT_TAGS) &&
@@ -619,8 +619,8 @@ struct IndexEntryBuilder {
   void add_type(GRIM::Memory::TypeTag type) {
     fbb_.AddElement<int8_t>(IndexEntry::VT_TYPE, static_cast<int8_t>(type), 0);
   }
-  void add_source(GRIM::Memory::SourceType source) {
-    fbb_.AddElement<int8_t>(IndexEntry::VT_SOURCE, static_cast<int8_t>(source), 0);
+  void add_domain(GRIM::Memory::MemoryDomain domain) {
+    fbb_.AddElement<int8_t>(IndexEntry::VT_DOMAIN, static_cast<int8_t>(domain), 0);
   }
   void add_timestamp(uint64_t timestamp) {
     fbb_.AddElement<uint64_t>(IndexEntry::VT_TIMESTAMP, timestamp, 0);
@@ -648,7 +648,7 @@ inline ::flatbuffers::Offset<IndexEntry> CreateIndexEntry(
     uint64_t offset = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<float>> embedding = 0,
     GRIM::Memory::TypeTag type = GRIM::Memory::TypeTag_FACT,
-    GRIM::Memory::SourceType source = GRIM::Memory::SourceType_USER_VOICE,
+    GRIM::Memory::MemoryDomain domain = GRIM::Memory::MemoryDomain_USER_VOICE,
     uint64_t timestamp = 0,
     float confidence = 0.0f,
     ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> tags = 0) {
@@ -659,7 +659,7 @@ inline ::flatbuffers::Offset<IndexEntry> CreateIndexEntry(
   builder_.add_tags(tags);
   builder_.add_confidence(confidence);
   builder_.add_embedding(embedding);
-  builder_.add_source(source);
+  builder_.add_domain(domain);
   builder_.add_type(type);
   return builder_.Finish();
 }
@@ -670,7 +670,7 @@ inline ::flatbuffers::Offset<IndexEntry> CreateIndexEntryDirect(
     uint64_t offset = 0,
     const std::vector<float> *embedding = nullptr,
     GRIM::Memory::TypeTag type = GRIM::Memory::TypeTag_FACT,
-    GRIM::Memory::SourceType source = GRIM::Memory::SourceType_USER_VOICE,
+    GRIM::Memory::MemoryDomain domain = GRIM::Memory::MemoryDomain_USER_VOICE,
     uint64_t timestamp = 0,
     float confidence = 0.0f,
     const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *tags = nullptr) {
@@ -682,7 +682,7 @@ inline ::flatbuffers::Offset<IndexEntry> CreateIndexEntryDirect(
       offset,
       embedding__,
       type,
-      source,
+      domain,
       timestamp,
       confidence,
       tags__);

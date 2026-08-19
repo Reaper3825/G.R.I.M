@@ -268,7 +268,7 @@ QuestionResult QuestionHandler::searchBaseMemory(const std::string& question) {
     for (const auto& keyword : keywords) {
         auto memories = g_memoryStorage.search(keyword, 10);
         for (const auto& mem : memories) {
-            if (mem.source != SourceType::GRIM_INTERNAL) continue;
+            if (mem.domain != MemoryDomain::GRIM_INTERNAL) continue;
             if (mem.context == ContextType::MONITOR) continue;
             if (mem.type == TypeTag::EVENT) continue;
             if (snippet_count >= MAX_SNIPPETS) break;
@@ -1010,7 +1010,7 @@ void QuestionHandler::storeQuestionContext(const std::string& question, const Qu
     UnifiedMemoryObject memory;
     memory.id = UnifiedMemoryObject::generateID();
     memory.timestamp = static_cast<uint64_t>(std::time(nullptr));
-    memory.source = SourceType::GRIM_INTERNAL;  // GRIM learned this
+    memory.domain = MemoryDomain::GRIM_INTERNAL;  // GRIM learned this
     memory.intent = MemoryIntent::INFORM;
     memory.context = ContextType::CONVERSATION;
     memory.confidence = result.confidence;

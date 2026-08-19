@@ -11,7 +11,7 @@ UnifiedMemoryObject StockData::toMemoryObject() const {
     UnifiedMemoryObject obj;
     obj.id = UnifiedMemoryObject::generateID();
     obj.timestamp = static_cast<uint64_t>(std::time(nullptr));
-    obj.source = SourceType::SYSTEM_SW;
+    obj.domain = MemoryDomain::SYSTEM_SW;
     obj.type = TypeTag::FACT;
     obj.intent = MemoryIntent::INFORM;
     obj.context = ContextType::MONITOR;

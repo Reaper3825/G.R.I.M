@@ -56,7 +56,7 @@ CommandResult cmdRemember(const std::string& arg) {
     GRIM::UnifiedMemoryObject obj;
     obj.id         = GRIM::UnifiedMemoryObject::generateID();
     obj.timestamp  = static_cast<uint64_t>(std::time(nullptr));
-    obj.source     = GRIM::SourceType::GRIM_INTERNAL;
+    obj.domain     = GRIM::MemoryDomain::GRIM_INTERNAL;
     obj.type       = GRIM::TypeTag::FACT;
     obj.intent     = GRIM::MemoryIntent::INFORM;
     obj.context    = GRIM::ContextType::CONVERSATION;
