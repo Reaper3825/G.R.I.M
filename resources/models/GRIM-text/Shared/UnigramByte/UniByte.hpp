@@ -52,6 +52,7 @@ struct UniByteResult {
     std::vector<uint32_t> atom_entry_ids;        // Opening-boundary AtomTable index (kAtomEntryNone elsewhere)
     size_t unigram_tokens = 0;
     size_t byte_tokens = 0;
+    size_t numeric_tokens = 0;
     size_t atom_tokens = 0;                     // Emitted opening + closing boundary token count
     
     // ═══════════════════════════════════════════════════════════════════════════
@@ -90,11 +91,12 @@ struct UniByteResult {
                 std::to_string(atom_entry_ids.size()) + " != token_ids.size()=" +
                 std::to_string(n));
         }
-        if (unigram_tokens + byte_tokens + atom_tokens != n) {
+        if (unigram_tokens + byte_tokens + numeric_tokens + atom_tokens != n) {
             throw std::runtime_error(
                 std::string(caller) + ": UniByteResult token count mismatch: unigram=" +
                 std::to_string(unigram_tokens) + " + byte=" +
-                std::to_string(byte_tokens) + " + atom=" +
+            std::to_string(byte_tokens) + " + numeric=" +
+            std::to_string(numeric_tokens) + " + atom=" +
                 std::to_string(atom_tokens) + " != total=" +
                 std::to_string(n));
         }

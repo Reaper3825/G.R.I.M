@@ -42,6 +42,7 @@ struct GRMTCorpusMetrics {
 
     // Token class breakdown (% of total_tokens)
     uint64_t byte_fallback_count = 0;
+    uint64_t numeric_count       = 0;
     uint64_t atom_count          = 0;
     uint64_t unk_count           = 0;
     uint64_t special_count       = 0;  // <pad>, <s>, </s>

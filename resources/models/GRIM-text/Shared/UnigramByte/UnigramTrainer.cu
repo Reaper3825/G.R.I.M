@@ -18,6 +18,7 @@
 #include "Unigram.hpp"
 #include "AtomTable.hpp"
 #include "Detectors/DetectorRegistry.hpp"
+#include "NumericTokens.hpp"
 #include "TextUtils.hpp"
 #include "Training/SubwordMining.hpp"
 #include "Training/UnigramForwardBackward.hpp"
@@ -542,6 +543,7 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
     all_atom_spans.reserve(texts.size());
 
     size_t total_atoms = 0;
+    size_t total_numeric_spans = 0;
     const bool detect = tokenizer_hp.enable_atom_reasoning;
     for (const auto& text : texts) {
         std::vector<AtomSpan> spans;
@@ -560,12 +562,31 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
             }
             total_atoms += spans.size();
         }
+
+        std::vector<NumericTokenSpan> atom_exclusions;
+        atom_exclusions.reserve(spans.size());
+        for (const AtomSpan& span : spans) {
+            atom_exclusions.push_back(NumericTokenSpan{span.start, span.end});
+        }
+        const std::vector<NumericTokenSpan> numeric_spans = findNumericTokenSpans(
+            std::string_view(text.data(), text.size()), atom_exclusions);
+        spans.reserve(spans.size() + numeric_spans.size());
+        for (const NumericTokenSpan& span : numeric_spans) {
+            spans.push_back(AtomSpan{span.start, span.end});
+        }
+        std::sort(spans.begin(), spans.end(), [](const AtomSpan& lhs, const AtomSpan& rhs) {
+            return lhs.start < rhs.start;
+        });
+        total_numeric_spans += numeric_spans.size();
         all_atom_spans.push_back(std::move(spans));
     }
 
     std::cout << "[UnigramLM] Detected " << total_atoms << " atoms across "
               << texts.size() << " texts (will skip during vocab training); "
               << "atom_reasoning=" << (detect ? "on" : "off") << std::endl;
+    std::cout << "[UnigramLM] Identified " << total_numeric_spans
+              << " non-atom numeric spans (fixed numeric vocabulary; will skip during learned-vocab training)"
+              << std::endl;
 
     const bool trained = trainFromCorpus(texts, all_atom_spans,
                                          tokenizer_hp.target_vocab_size,

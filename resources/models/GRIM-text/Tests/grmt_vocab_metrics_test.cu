@@ -16,6 +16,7 @@
 
 #include "grmt_vocab_metrics_test.hpp"
 #include "../Shared/UnigramByte/TokenLayout.hpp"
+#include "../Shared/UnigramByte/NumericTokens.hpp"
 #include "../Shared/UnigramByte/Unigram.hpp"
 #include "../Shared/UnigramByte/UniByte.hpp"
 #include "../Shared/GRMT/GrmtFormat.hpp"
@@ -56,6 +57,13 @@ std::unordered_map<int, std::string> GRIM::Test::loadVocabMap(const std::string&
     for (int b = 0; b < BYTE_VOCAB_SIZE; ++b) {
         char c = static_cast<char>(b);
         id_to_text[BYTE_TOKEN_OFFSET + b] = std::string(1, c);
+    }
+
+    // Fixed numeric tokens are layout-owned and therefore absent from the
+    // serialized learned-piece records.
+    for (int token_id = NUMERIC_TOKEN_OFFSET; token_id < NUMERIC_TOKEN_END; ++token_id) {
+        id_to_text[token_id] = std::string(
+            numericTokenTextOrThrow(token_id, "loadVocabMap"));
     }
 
     // Atom placeholder tokens
@@ -175,6 +183,8 @@ GRMTCorpusMetrics GRIM::Test::scanGRMT(
                 ++m.special_count;
             } else if (tid >= BYTE_TOKEN_OFFSET && tid < BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE) {
                 ++m.byte_fallback_count;
+            } else if (isNumericTokenId(static_cast<int>(tid))) {
+                ++m.numeric_count;
             } else if (tid >= ATOM_TOKEN_OFFSET && tid < static_cast<uint32_t>(ATOM_TOKEN_OFFSET + ATOM_VOCAB_SIZE)) {
                 ++m.atom_count;
             } else {
@@ -318,6 +328,8 @@ void GRIM::Test::printMetricsReport(
         << "    " << std::setprecision(2) << std::setw(7) << pct(m.unigram_count) << "%\n"
         << "║    byte fallback:    " << std::setw(12) << m.byte_fallback_count
         << "    " << std::setprecision(2) << std::setw(7) << pct(m.byte_fallback_count) << "%\n"
+        << "║    fixed numeric:    " << std::setw(12) << m.numeric_count
+        << "    " << std::setprecision(2) << std::setw(7) << pct(m.numeric_count) << "%\n"
         << "║    atom tokens:      " << std::setw(12) << m.atom_count
         << "    " << std::setprecision(2) << std::setw(7) << pct(m.atom_count) << "%\n"
         << "║    <unk>:            " << std::setw(12) << m.unk_count

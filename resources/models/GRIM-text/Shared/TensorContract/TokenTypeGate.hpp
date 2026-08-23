@@ -54,6 +54,12 @@ GRIM_TOKEN_GATE_HD inline TokenTypeGateClass tokenTypeGateClassForTokenId(
         token_id < GRIM::Tokenizer::BYTE_TOKEN_OFFSET + GRIM::Tokenizer::BYTE_VOCAB_SIZE) {
         return TokenTypeGateClass::BYTE;
     }
+    if (token_id >= GRIM::Tokenizer::NUMERIC_TOKEN_OFFSET &&
+        token_id < GRIM::Tokenizer::NUMERIC_TOKEN_END) {
+        // Fixed numeric tokens are ordinary model-visible text. They share the
+        // learned-piece subspace rather than the masked atom-boundary subspace.
+        return TokenTypeGateClass::UNIGRAM;
+    }
     if (token_id >= GRIM::Tokenizer::ATOM_TOKEN_OFFSET &&
         token_id < TOKEN_TYPE_GATE_UNIGRAM_OFFSET) {
         return TokenTypeGateClass::ATOM;

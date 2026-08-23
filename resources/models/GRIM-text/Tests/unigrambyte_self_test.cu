@@ -6,6 +6,7 @@
 #include "unigrambyte_self_test.hpp"
 
 #include "../Shared/UnigramByte/TokenLayout.hpp"
+#include "../Shared/UnigramByte/NumericTokens.hpp"
 #include "../Shared/UnigramByte/Unigram.hpp"
 #include "../Shared/UnigramByte/VocabWriteOp.hpp"
 #include "../Shared/UnigramByte/Training/UnigramForwardBackward.hpp"
@@ -996,6 +997,76 @@ bool testAhoCorasickCaseInsensitive(std::string& message) {
 //======================================================//
 //  Section 4: UniByte Orchestrator Tests
 //======================================================//
+
+bool testFixedNumericTokenEncoding(std::string& message) {
+    const std::string literal = "-11111.0000e+22";
+    std::vector<int> token_ids;
+    appendNumericLiteralTokenIds(literal, token_ids);
+
+    const std::vector<int> expected = {
+        NUMERIC_TOKEN_OFFSET + 42,
+        NUMERIC_TOKEN_OFFSET + 31,
+        NUMERIC_TOKEN_OFFSET + 1,
+        NUMERIC_TOKEN_OFFSET + 40,
+        NUMERIC_TOKEN_OFFSET + 30,
+        NUMERIC_TOKEN_OFFSET + 44,
+        NUMERIC_TOKEN_OFFSET + 43,
+        NUMERIC_TOKEN_OFFSET + 12
+    };
+    ASSERT_EQ(token_ids.size(), expected.size(),
+              "Fixed numeric encoding emitted the wrong token count");
+    for (size_t i = 0; i < expected.size(); ++i) {
+        ASSERT_EQ(token_ids[i], expected[i],
+                  "Fixed numeric encoding emitted the wrong token ID");
+        ASSERT_TRUE(isNumericTokenId(token_ids[i]),
+                    "Fixed numeric encoding escaped the numeric token range");
+    }
+
+    std::string reconstructed;
+    for (const int token_id : token_ids) {
+        reconstructed += numericTokenTextOrThrow(
+            token_id, "testFixedNumericTokenEncoding");
+    }
+    ASSERT_STR_EQ(reconstructed, literal,
+                  "Fixed numeric token table failed exact round-trip");
+
+    const auto config = makeSelfTestTokenizerHP();
+    UniByte tokenizer(config);
+    ASSERT_STR_EQ(tokenizer.decode(DecodeRequest(token_ids)), literal,
+                  "UniByte decode must render fixed numeric IDs without learned pieces");
+    return true;
+}
+
+bool testNumericTokenSpanSelectionExcludesAtoms(std::string& message) {
+    const std::string text = "outside=-12.5 atom=<INT>9999</INT> grouped=1,000 tail=.25";
+    const size_t atom_start = text.find("<INT>");
+    const size_t atom_close_start = text.find("</INT>");
+    ASSERT_TRUE(atom_start != std::string::npos && atom_close_start != std::string::npos,
+                "Numeric span test fixture is missing its atom delimiters");
+    const size_t atom_end = atom_close_start + std::string("</INT>").size();
+
+    const std::vector<NumericTokenSpan> spans = findNumericTokenSpans(
+        text, {NumericTokenSpan{atom_start, atom_end}});
+    std::vector<std::string> literals;
+    for (const NumericTokenSpan& span : spans) {
+        ASSERT_TRUE(span.end <= atom_start || span.start >= atom_end,
+                    "Numeric token selection entered an authored atom span");
+        literals.push_back(text.substr(span.start, span.end - span.start));
+    }
+
+    const std::vector<std::string> expected = {"-12.5", "1,000", ".25"};
+    ASSERT_EQ(literals.size(), expected.size(),
+              "Numeric span selection emitted the wrong number of literals");
+    for (size_t i = 0; i < expected.size(); ++i) {
+        ASSERT_STR_EQ(literals[i], expected[i],
+                      "Numeric span selection emitted the wrong literal");
+    }
+
+    ASSERT_EQ(numericLiteralLengthAt("plain punctuation + - . , e E", 18),
+              static_cast<size_t>(0),
+              "Standalone punctuation must not become a numeric token span");
+    return true;
+}
 
 bool testUniByteBasicEncode(std::string& message) {
     auto config = makeSelfTestTokenizerHP();
@@ -3319,6 +3390,8 @@ int main(int argc, char** argv) {
     suite.addTest("AhoCorasick.Visualization", testAhoCorasickVisualization);
 
     // Section 4: UniByte Orchestrator Tests
+    suite.addTest("NumericTokens.FixedEncoding", testFixedNumericTokenEncoding);
+    suite.addTest("NumericTokens.ExcludesAtomSpans", testNumericTokenSpanSelectionExcludesAtoms);
     suite.addTest("UniByte.BasicEncode", testUniByteBasicEncode);
     suite.addTest("AtomTable.RejectsBadNumericDetectionWithContext", testAtomTableRejectsBadNumericDetectionWithContext);
     suite.addTest("UniByte.DefaultRegistryDoesNotDetectPlainNumbers", testDefaultRegistryDoesNotDetectPlainNumbers);

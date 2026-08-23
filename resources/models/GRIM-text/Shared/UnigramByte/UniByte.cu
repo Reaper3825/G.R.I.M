@@ -9,6 +9,7 @@
 #include "UniByte.hpp"
 #include "AtomTable.hpp"
 #include "Detectors/DetectorRegistry.hpp"
+#include "NumericTokens.hpp"
 #include "TextUtils.hpp"
 #include "UnigramViterbi.hpp"
 
@@ -56,6 +57,13 @@ std::string formatTokenPrefix(const int* token_ids, size_t token_count) {
     }
     result.push_back(']');
     return result;
+}
+
+const char* boolText(bool value) {
+    if (value) {
+        return "true";
+    }
+    return "false";
 }
 
 // U+FFFD REPLACEMENT CHARACTER encoded as UTF-8.
@@ -255,7 +263,7 @@ UniByteResult UniByte::tokenizeWithMetadata(
     size_t pos = 0;
     size_t struct_idx = 0;
 
-    auto appendSegmentTokens = [&](size_t start, size_t end) {
+    auto appendSegmentTokens = [&](size_t start, size_t end, bool encode_numeric_tokens) {
         if (end <= start) {
             return;
         }
@@ -263,41 +271,77 @@ UniByteResult UniByte::tokenizeWithMetadata(
         const bool prepend_word_boundary =
             (start == 0) && result.token_ids.empty();
         const std::string normalized_segment = normalizeSpaces(segment, prepend_word_boundary);
-        UnigramViterbiSession segment_session(unigram_, normalized_segment, "UniByte::tokenizeWithMetadata");
-        const auto& segment_ids = segment_session.tokens();
-        const auto& segment_fallback_flags = segment_session.fallbackFlags();
-        if (segment_fallback_flags.size() != segment_ids.size()) {
-            throw std::runtime_error("UniByte::tokenizeWithMetadata: Viterbi fallback flag count=" +
-                                     std::to_string(segment_fallback_flags.size()) +
-                                     " != token count=" + std::to_string(segment_ids.size()));
-        }
-
-        for (size_t i = 0; i < segment_ids.size(); ++i) {
-            const int tid = segment_ids[i];
-            const bool fallback_transition = segment_fallback_flags[i];
-            const bool byte_fallback_used = fallback_transition && tokenizer_hp_.enable_byte_fallback;
-            const bool token_is_byte_id = tid >= BYTE_TOKEN_OFFSET && tid < BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE;
-            if (token_is_byte_id != byte_fallback_used) {
-                throw std::runtime_error("UniByte::tokenizeWithMetadata: Viterbi fallback flag/token-id mismatch at segment token index=" +
-                                         std::to_string(i) + ": token_id=" + std::to_string(tid) +
-                                         ", fallback_transition=" + (fallback_transition ? std::string("true") : std::string("false")) +
-                                         ", byte_fallback_enabled=" + (tokenizer_hp_.enable_byte_fallback ? std::string("true") : std::string("false")));
+        auto appendViterbiText = [&](std::string_view viterbi_text) {
+            if (viterbi_text.empty()) {
+                return;
+            }
+            UnigramViterbiSession segment_session(
+                unigram_, std::string(viterbi_text), "UniByte::tokenizeWithMetadata");
+            const auto& segment_ids = segment_session.tokens();
+            const auto& segment_fallback_flags = segment_session.fallbackFlags();
+            if (segment_fallback_flags.size() != segment_ids.size()) {
+                throw std::runtime_error("UniByte::tokenizeWithMetadata: Viterbi fallback flag count=" +
+                                         std::to_string(segment_fallback_flags.size()) +
+                                         " != token count=" + std::to_string(segment_ids.size()));
             }
 
-            result.token_ids.push_back(tid);
-            result.token_numeric_values.push_back(0.0f);
-            result.token_atom_flags.push_back(0);
-            result.atom_entry_ids.push_back(kAtomEntryNone);
-            appendNonAtomSideChannels();
+            for (size_t i = 0; i < segment_ids.size(); ++i) {
+                const int tid = segment_ids[i];
+                const bool fallback_transition = segment_fallback_flags[i];
+                const bool byte_fallback_used = fallback_transition && tokenizer_hp_.enable_byte_fallback;
+                const bool token_is_byte_id = tid >= BYTE_TOKEN_OFFSET && tid < BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE;
+                if (token_is_byte_id != byte_fallback_used) {
+                    throw std::runtime_error("UniByte::tokenizeWithMetadata: Viterbi fallback flag/token-id mismatch at segment token index=" +
+                                             std::to_string(i) + ": token_id=" + std::to_string(tid) +
+                                             ", fallback_transition=" + boolText(fallback_transition) +
+                                             ", byte_fallback_enabled=" + boolText(tokenizer_hp_.enable_byte_fallback));
+                }
 
-            if (byte_fallback_used) {
-                result.is_byte_fallback.push_back(true);
-                result.byte_tokens++;
-            } else {
+                result.token_ids.push_back(tid);
+                result.token_numeric_values.push_back(0.0f);
+                result.token_atom_flags.push_back(0);
+                result.atom_entry_ids.push_back(kAtomEntryNone);
+                appendNonAtomSideChannels();
+
                 result.is_byte_fallback.push_back(false);
-                result.unigram_tokens++;
+                if (byte_fallback_used) {
+                    result.is_byte_fallback.back() = true;
+                    result.byte_tokens++;
+                } else {
+                    result.unigram_tokens++;
+                }
             }
+        };
+
+        if (!encode_numeric_tokens) {
+            appendViterbiText(normalized_segment);
+            return;
         }
+
+        const std::vector<NumericTokenSpan> numeric_spans =
+            findNumericTokenSpans(normalized_segment);
+        size_t normalized_pos = 0;
+        for (const NumericTokenSpan& numeric_span : numeric_spans) {
+            appendViterbiText(std::string_view(normalized_segment).substr(
+                normalized_pos, numeric_span.start - normalized_pos));
+
+            const size_t first_numeric_token = result.token_ids.size();
+            appendNumericLiteralTokenIds(
+                std::string_view(normalized_segment).substr(
+                    numeric_span.start, numeric_span.end - numeric_span.start),
+                result.token_ids);
+            const size_t emitted_numeric_tokens = result.token_ids.size() - first_numeric_token;
+            for (size_t i = 0; i < emitted_numeric_tokens; ++i) {
+                result.is_byte_fallback.push_back(false);
+                result.token_numeric_values.push_back(0.0f);
+                result.token_atom_flags.push_back(0);
+                result.atom_entry_ids.push_back(kAtomEntryNone);
+                appendNonAtomSideChannels();
+            }
+            result.numeric_tokens += emitted_numeric_tokens;
+            normalized_pos = numeric_span.end;
+        }
+        appendViterbiText(std::string_view(normalized_segment).substr(normalized_pos));
     };
 
     while (pos < text.size()) {
@@ -338,7 +382,8 @@ UniByteResult UniByte::tokenizeWithMetadata(
             appendSegmentTokens(
                 static_cast<size_t>(span.content_offset),
                 static_cast<size_t>(span.content_offset) +
-                    static_cast<size_t>(span.content_length));
+                    static_cast<size_t>(span.content_length),
+                false);
 
             // Closing boundaries are structural model tokens. The auxiliary
             // atom target is anchored only at the opening boundary.
@@ -367,7 +412,7 @@ UniByteResult UniByte::tokenizeWithMetadata(
             segment_end = forced_segment_boundaries[boundary_index];
         }
 
-        appendSegmentTokens(pos, segment_end);
+        appendSegmentTokens(pos, segment_end, true);
 
         pos = segment_end;
     }
@@ -439,6 +484,8 @@ std::string UniByte::decode(const DecodeRequest& request) const {
             if (tid != PAD_TOKEN_ID) {
                 result += specialTokenText(tid);
             }
+        } else if (layout.isNumeric(tid)) {
+            result += numericTokenTextOrThrow(tid, "UniByte::decode");
         } else if (layout.isAtom(tid)) {
             // Atom values are model-visible tokens between typed boundaries.
             // Metadata remains available to downstream auxiliary objectives,

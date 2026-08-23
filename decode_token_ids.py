@@ -5,19 +5,20 @@ Decode token IDs from training_data.grmt using the current KTMG vocab.bin.
 Token ID Layout (current UniByte tokenizer):
   [0-3]       = Special tokens: <unk>=0, <pad>=1, <s>=2, </s>=3
   [4-259]     = Byte fallback (byte value = token_id - 4)
-  [260-261]   = Atom placeholders: <INT>, <FLOAT>
-  [262+]      = Unigram vocabulary pieces (from vocab.bin)
+    [260-305]   = Fixed numeric tokens
+    [306-313]   = Typed atom opening/closing boundaries
+    [314+]      = Unigram vocabulary pieces (from vocab.bin)
 
-Current vocab.bin format is KTMG v4. The saved record count is the number of
+Current vocab.bin format is KTMG v5. The saved record count is the number of
 serialized records (4 special-token metadata records + learned unigram pieces),
 not the full token-space size. The token-space size is stored separately in the
-header and must equal special + bytes + atoms + learned pieces.
+header and must equal special + bytes + numeric + atoms + learned pieces.
 
-Current training_data.grmt format is GRMT v20. Rows persist atom side channels,
+Current training_data.grmt format is GRMT v21. Rows persist atom side channels,
 per-sequence AtomTable data, row-level Goal metadata, opaque slot/transition
 lowering tables, and variable-arity transition invocations. This script reads
-the full current row layout and decodes atoms from their persisted AtomTable
-entries.
+the full current row layout. Typed atom boundaries decode literally; persisted
+AtomTable entries remain diagnostic side-channel data.
 
 Usage:
     python decode_token_ids.py
@@ -46,22 +47,33 @@ NUM_SPECIAL_TOKENS = 4
 SPECIAL_TOKEN_OFFSET = 0
 BYTE_TOKEN_OFFSET = NUM_SPECIAL_TOKENS  # 4
 BYTE_VOCAB_SIZE = 256
-ATOM_TOKEN_OFFSET = BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE  # 260
+NUMERIC_TOKEN_OFFSET = BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE  # 260
+NUMERIC_TOKEN_TEXT = (
+    [str(digit) for digit in range(10)]
+    + [str(digit) * 2 for digit in range(10)]
+    + [str(digit) * 3 for digit in range(10)]
+    + [str(digit) * 4 for digit in range(10)]
+    + [".", ",", "-", "+", "e", "E"]
+)
+NUMERIC_TOKEN_END = NUMERIC_TOKEN_OFFSET + len(NUMERIC_TOKEN_TEXT)  # 306
+ATOM_TOKEN_OFFSET = NUMERIC_TOKEN_END
 
 SPECIAL_NAMES = {0: "<unk>", 1: "<pad>", 2: "<s>", 3: "</s>"}
 
 ATOM_TYPE_LABELS = {
-    0: "<INT>",
-    1: "<FLOAT>",
+    0: "INT",
+    1: "FLOAT",
+    2: "STRING",
+    3: "BOOL",
 }
-NUM_ATOM_TYPES = len(ATOM_TYPE_LABELS)  # AtomType::ATOM_ACTIVE_COUNT: INT, FLOAT
+NUM_ATOM_TYPES = len(ATOM_TYPE_LABELS)
 
-ATOM_TOKEN_END = ATOM_TOKEN_OFFSET + NUM_ATOM_TYPES  # 262
-UNIGRAM_TOKEN_START = ATOM_TOKEN_END                 # 262
-KTMG_VOCAB_VERSION = 4
+ATOM_TOKEN_END = ATOM_TOKEN_OFFSET + 2 * NUM_ATOM_TYPES  # 314
+UNIGRAM_TOKEN_START = ATOM_TOKEN_END
+KTMG_VOCAB_VERSION = 5
 KTMG_MAX_PIECE_LENGTH = 32
 GRMT_MAGIC = 0x474D5254
-GRMT_FORMAT_VERSION = 20
+GRMT_FORMAT_VERSION = 21
 ATOM_ENTRY_NONE = 0xFFFFFFFF
 PAD_TOKEN_ID = 1
 
@@ -187,21 +199,32 @@ def is_special_token_id(token_id: int) -> bool:
 
 
 def is_byte_token_id(token_id: int) -> bool:
-    return BYTE_TOKEN_OFFSET <= token_id < ATOM_TOKEN_OFFSET
+    return BYTE_TOKEN_OFFSET <= token_id < NUMERIC_TOKEN_OFFSET
+
+
+def is_numeric_token_id(token_id: int) -> bool:
+    return NUMERIC_TOKEN_OFFSET <= token_id < NUMERIC_TOKEN_END
 
 
 def is_atom_token_id(token_id: int) -> bool:
     return ATOM_TOKEN_OFFSET <= token_id < ATOM_TOKEN_END
 
 
+def is_atom_open_token_id(token_id: int) -> bool:
+    return ATOM_TOKEN_OFFSET <= token_id < ATOM_TOKEN_OFFSET + NUM_ATOM_TYPES
+
+
 def atom_type_label_for_token_id(token_id: int) -> str:
     if not is_atom_token_id(token_id):
         raise ValueError(f"token_id={token_id} is outside the atom token range")
 
-    label = ATOM_TYPE_LABELS.get(token_id - ATOM_TOKEN_OFFSET)
+    atom_index = token_id - ATOM_TOKEN_OFFSET
+    is_close = atom_index >= NUM_ATOM_TYPES
+    type_index = atom_index - NUM_ATOM_TYPES if is_close else atom_index
+    label = ATOM_TYPE_LABELS.get(type_index)
     if label is None:
         raise ValueError(f"token_id={token_id} does not map to a live atom type")
-    return label
+    return f"</{label}>" if is_close else f"<{label}>"
 
 
 def format_numeric_value(value: float) -> str:
@@ -271,10 +294,13 @@ def load_vocab_bin(path: Path) -> dict[int, str]:
         token_id = BYTE_TOKEN_OFFSET + byte_value
         id_to_text[token_id] = bytes([byte_value]).decode("latin-1")
 
-    # Atom placeholder tokens come from TokenLayout.hpp.
-    for atom_index in range(NUM_ATOM_TYPES):
+    for numeric_index, text in enumerate(NUMERIC_TOKEN_TEXT):
+        id_to_text[NUMERIC_TOKEN_OFFSET + numeric_index] = text
+
+    # Typed atom opening/closing boundary tokens come from TokenLayout.hpp.
+    for atom_index in range(2 * NUM_ATOM_TYPES):
         token_id = ATOM_TOKEN_OFFSET + atom_index
-        id_to_text[token_id] = ATOM_TYPE_LABELS.get(atom_index, f"<ATOM{atom_index}>")
+        id_to_text[token_id] = atom_type_label_for_token_id(token_id)
 
     # Special-token metadata + learned unigram pieces from vocab.bin.
     with open(path, "rb") as f:
@@ -350,7 +376,8 @@ def load_vocab_bin(path: Path) -> dict[int, str]:
                 f"KTMG token-space size mismatch: header={token_space_size} "
                 f"computed={expected_token_space_size} "
                 f"({NUM_SPECIAL_TOKENS} special + {BYTE_VOCAB_SIZE} bytes + "
-                f"{NUM_ATOM_TYPES} atoms + {learned_piece_count} unigrams)"
+                f"{len(NUMERIC_TOKEN_TEXT)} numeric + {2 * NUM_ATOM_TYPES} atoms + "
+                f"{learned_piece_count} unigrams)"
             )
 
     return id_to_text
@@ -513,20 +540,26 @@ def iter_grmt_sequences(path: Path):
                 atom_text = atom_texts[token_index]
                 token_id = tokens[token_index]
                 token_is_atom = is_atom_token_id(token_id)
+                token_is_atom_open = is_atom_open_token_id(token_id)
 
-                if atom_text and not token_is_atom:
+                if atom_text and not token_is_atom_open:
                     raise ValueError(
-                        f"GRMT atom text exists for non-atom token in {row_source} "
+                        f"GRMT atom text exists outside an opening atom boundary in {row_source} "
                         f"index={token_index} token_id={token_id}"
                     )
-                if token_atom_mask[token_index] != 0 and not token_is_atom:
+                if token_atom_mask[token_index] != 0 and not token_is_atom_open:
                     raise ValueError(
-                        f"GRMT token_atom_mask is set for non-atom token in {row_source} "
+                        f"GRMT token_atom_mask is set outside an opening atom boundary in {row_source} "
                         f"index={token_index} token_id={token_id} mask={token_atom_mask[token_index]}"
                     )
-                if token_is_atom and token_atom_mask[token_index] == 0:
+                if token_is_atom_open and token_atom_mask[token_index] != 1:
                     raise ValueError(
-                        f"GRMT atom token has token_atom_mask=0 in {row_source} "
+                        f"GRMT atom opening boundary does not have token_atom_mask=1 in {row_source} "
+                        f"index={token_index} token_id={token_id}"
+                    )
+                if token_is_atom and not token_is_atom_open and token_atom_mask[token_index] != 0:
+                    raise ValueError(
+                        f"GRMT atom closing boundary has metadata in {row_source} "
                         f"index={token_index} token_id={token_id}"
                     )
 
@@ -593,20 +626,7 @@ def decode_atom_token(
     token_numeric_values: list[float] | None = None,
     token_atom_mask: list[int] | None = None,
 ) -> str:
-    atom_text = ""
-    if atom_texts is not None:
-        atom_text = atom_texts[token_index]
-    if atom_text:
-        return atom_text
-
-    if token_atom_mask is not None and token_atom_mask[token_index] != 0:
-        if token_numeric_values is None:
-            raise ValueError(
-                f"decode_atom_token: token_atom_mask is set at token index {token_index}, "
-                "but token_numeric_values is missing"
-            )
-        return format_numeric_value(token_numeric_values[token_index])
-
+    del token_index, atom_texts, token_numeric_values, token_atom_mask
     return decode_token(token_id, vocab)
 
 
@@ -622,8 +642,8 @@ def decode_sequence(
     Mirrors UniByte::decode semantics:
     - contiguous byte tokens are buffered as a raw byte run and must be valid UTF-8
     - PAD is skipped
-    - atom tokens prefer persisted atom text, then numeric payload formatting,
-      then the placeholder token text (<INT>/<FLOAT>)
+        - typed atom opening/closing boundaries render literally; side channels do
+            not replace model-visible in-band content
     """
     token_count = len(tokens)
     if atom_texts is not None and len(atom_texts) != token_count:
@@ -697,6 +717,8 @@ def token_type_label(tid: int) -> str:
         return "SPECIAL"
     if is_byte_token_id(tid):
         return "BYTE"
+    if is_numeric_token_id(tid):
+        return "NUMERIC"
     if is_atom_token_id(tid):
         return "ATOM"
     if tid >= UNIGRAM_TOKEN_START:
@@ -907,11 +929,13 @@ def cmd_stats(args, vocab: dict[int, str]):
     print("═══ Vocabulary ═══")
     n_special = NUM_SPECIAL_TOKENS
     n_byte = BYTE_VOCAB_SIZE
-    n_atom = NUM_ATOM_TYPES
+    n_numeric = len(NUMERIC_TOKEN_TEXT)
+    n_atom = 2 * NUM_ATOM_TYPES
     n_unigram = len(vocab) - UNIGRAM_TOKEN_START
     print(f"  Total entries : {len(vocab)}")
     print(f"  Special       : {n_special}  (IDs 0-{NUM_SPECIAL_TOKENS - 1})")
-    print(f"  Byte fallback : {n_byte}  (IDs {BYTE_TOKEN_OFFSET}-{ATOM_TOKEN_OFFSET - 1})")
+    print(f"  Byte fallback : {n_byte}  (IDs {BYTE_TOKEN_OFFSET}-{NUMERIC_TOKEN_OFFSET - 1})")
+    print(f"  Fixed numeric : {n_numeric}  (IDs {NUMERIC_TOKEN_OFFSET}-{NUMERIC_TOKEN_END - 1})")
     print(f"  Atom slots    : {n_atom}  (IDs {ATOM_TOKEN_OFFSET}-{ATOM_TOKEN_END - 1})")
     print(f"  Unigram pieces: {n_unigram}  (IDs {UNIGRAM_TOKEN_START}+)")
     print()
