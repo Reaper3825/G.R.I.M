@@ -56,7 +56,7 @@ UnigramByte/
 ├── Detectors/
 │   ├── TokenizerDetector.hpp      [NEW] — RawTextDetector parent class + result types
 │   ├── DetectorRegistry.hpp/.cu   [NEW] — detector registration + longest-match raw-text scan
-│   ├── NumericDetectors.hpp/.cu   [NEW] — integer/float atom detectors
+│   ├── AtomDelimiterDetector.hpp/.cu [NEW] — authored typed-delimiter atom-span placement
 │   └── TextFeatureDetectors.hpp/.cu [NEW] — whitespace/uppercase raw-text feature detectors
 ├── AhoCorasick.hpp          [MOD]  ~200 lines  — Remove #include "Unigram.hpp", include "TokenLayout.hpp" instead
 ├── AhoCorasick.cu           [KEEP] ~540 lines  — No changes
@@ -115,7 +115,7 @@ AhoCorasick.hpp ←── TokenLayout.hpp (instead of including Unigram.hpp)
 **Current target shape:**
 - `Detectors/TokenizerDetector.hpp` — `RawTextDetector` parent class, raw detection result, detector options.
 - `Detectors/DetectorRegistry.hpp/.cu` — registration, duplicate-name validation, priority ordering, longest-match raw-text scan.
-- `Detectors/NumericDetectors.hpp/.cu` — `IntegerDetector`, `FloatDetector` atom emitters.
+- `Detectors/AtomDelimiterDetector.hpp/.cu` — authored typed-delimiter atom-span placement.
 - `Detectors/TextFeatureDetectors.hpp/.cu` — `WhitespaceDetector`, `UppercaseRunDetector` non-atom raw-text feature detectors.
 
 **Delete dead detectors:** Cross-reference `DetectorRegistry::scan()` call sites to confirm which detectors emit atoms. Hex/binary/path/date/time/IP/string/identifier detectors are not active and must not be recreated without direct registry ownership.
@@ -180,7 +180,7 @@ After Steps 3-4, update UniByte.cu:
 Add new `.cu` files to the build:
 - `TextUtils.cu`
 - `Detectors/DetectorRegistry.cu`
-- `Detectors/NumericDetectors.cu`
+- `Detectors/AtomDelimiterDetector.cu`
 - `Detectors/TextFeatureDetectors.cu`
 - `UnigramTrainer.cu`
 

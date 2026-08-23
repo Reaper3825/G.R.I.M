@@ -1,8 +1,8 @@
 # Tokenizer — Atoms, Unigram, and Byte Overflow
 
-Files: `resources/models/GRIM-text/Shared/UnigramByte/`
+All tokenizer configuration lives in `ai_config.json`.
 - `GrimTokenizer.hpp` — alias to UniByte
-- `Detectors/` — raw-text detector parent class, registry, numeric detectors, whitespace/uppercase feature detectors
+- `Detectors/` — raw-text detector parent class, registry, authored atom-delimiter placement, and whitespace/uppercase feature detectors
 - `Unigram.cu` — learned vocab, trie build, encode/decode wrappers
 - `UnigramViterbi.hpp/.cu` — RAII Viterbi segmentation session and Viterbi CUDA kernels
 - `Training/SubwordMining.hpp/.cu` — training-only subword candidate mining, deterministic byte-proportional sampling, atom-aware count aggregation, and overflow-checked count math
@@ -13,7 +13,7 @@ Files: `resources/models/GRIM-text/Shared/UnigramByte/`
 
 The tokenizer architecture is deliberately staged in this order:
 
-1. **Atoms first.** Raw-text detectors identify numeric atoms on the original source bytes, and those spans are fully handled outside the unigram model.
+1. **Authored atoms first.** Typed delimiters identify explicit atom spans on the original source bytes. Plain numeric text is not detected as an atom.
 2. **Pure unigram second.** `UnigramTrainer` / `Training/UnigramForwardBackward.*` train the learned-piece model only on the residual non-atom text.
 3. **Byte overflow last.** Byte fallback is the runtime overflow path for any residual byte sequence that the finalized learned unigram model would otherwise leave as `UNK`.
 
@@ -24,6 +24,7 @@ This means byte fallback is **not** part of the intended unigram EM objective, *
 |-------|---------|
 | `[0, 3]` | Reserved layout special tokens (`UNK`, `PAD`, `BOS`, `EOS`) |
 | `[BYTE_TOKEN_OFFSET, BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE)` | Raw bytes (100% UTF-8 coverage) |
+| `[NUMERIC_TOKEN_OFFSET, NUMERIC_TOKEN_END)` | Fixed numeric tokens |
 | `[ATOM_TOKEN_OFFSET, UNIGRAM_VOCAB_OFFSET)` | Typed atom opening/closing boundaries |
 | `[UNIGRAM_VOCAB_OFFSET, …)` | Learned unigram pieces |
 
@@ -86,7 +87,7 @@ Special-token ownership is deliberately narrow:
 - CUDA Viterbi kernels report logical validation failures through the explicit `error_code` pointer and named `kUnigramViterbiCuda*` status constants. Do not use device `assert()` for correctness checks; callers/tests must synchronize, copy the status word, and fail if it is not `kUnigramViterbiCudaOk`.
 - CUDA backtrack must fail with `kUnigramViterbiCudaOutputBufferTooSmall` when the selected path token count exceeds `max_tokens`; never silently truncate and never rely on build-mode-dependent asserts for this path.
 - Do not add standalone greedy trie lookup kernels for production segmentation. A best local trie match is not Viterbi-compatible because it ignores prior path score, fallback cost, and tie policy; segmentation must go through `kernelViterbiForward` plus `kernelViterbiBacktrack`.
-- Punctuation-heavy structural spans (URLs, paths, numbers, etc.) must be handled by raw-text detectors/training skip spans, not by hard-coded punctuation splitting inside Viterbi.
+- Authored typed spans are removed by the detector prepass before Viterbi; ordinary URLs, paths, and numbers remain ordinary unigram/byte text. Do not add hard-coded punctuation splitting inside Viterbi.
 - `Training/UnigramForwardBackward.hpp/.cu` owns tokenizer-training soft EM. It builds a training-local trie from the current learned pieces, runs log-space forward-backward over every normalized non-atom residual segment, and accumulates posterior expected counts for learned pieces only. Do not replace this with `UnigramViterbiSession` inside training; Viterbi is hard-EM / single-best-path re-estimation, not true Unigram EM.
 - `UnigramLM::trainFromCorpus()` must fail at entry for invalid `target_vocab_size`, `character_coverage`, `min_subword_freq`, or `subword_mining_workers` so malformed direct calls cannot reach shrink/EM logic.
 - Original atom spans must be validated before logging byte totals or calling `normalizeWithSpans()`. Span size mismatches, reversed spans, out-of-bounds spans, and overlapping/unsorted spans are hard failures before any offset rewrite.
@@ -109,7 +110,7 @@ Special-token ownership is deliberately narrow:
 - Do not add raw CUDA pointer members, cleanup lambdas, or `cudaMalloc`/`cudaFree` blocks back into `Unigram.hpp` or `Unigram.cu`; extend `UnigramGpuMemory` instead.
 
 ## Hyperparameter grouping
-Config-driven tokenizer paths consume `GRIM::HyperParameters::TokenizerHP` directly from `HyperparameterGroupings.hpp`. `TokenizerHP` carries resolved `data_path`, `vocab_path`, and `force_rebuild_vocab`; tokenizer code must not carry `StartupConfig.paths`, `PathConfig`, or rebuild booleans beside it. Tokenizer leaves collapsed directly under `training.config` use the `tokenizer_*` prefix, including `tokenizer_target_vocab_size`, `tokenizer_max_vocab_size`, `tokenizer_max_length`, `tokenizer_character_coverage`, `tokenizer_min_cleaned_text_length`, `tokenizer_min_subword_freq`, `tokenizer_prune_during_mining`, `tokenizer_enable_parallel_subword_mining`, `tokenizer_subword_mining_workers`, `tokenizer_subword_mining_max_bytes`, `tokenizer_model_type`, `tokenizer_add_bos`, `tokenizer_add_eos`, `tokenizer_unk_token`, `tokenizer_pad_token`, `tokenizer_bos_token`, `tokenizer_eos_token`, `tokenizer_enable_nfkc_normalization`, `tokenizer_enable_lowercasing`, `tokenizer_enable_parallel_tokenization`, `tokenizer_parallel_threshold`, `tokenizer_enable_byte_fallback`, `tokenizer_expected_checksum`, `tokenizer_save_text_vocab`, `tokenizer_vocab_score_multiplier`, `tokenizer_special_tokens`, `tokenizer_enable_scratch_block_reasoning`, and `tokenizer_detect_numbers`; do not recreate nested `training.config.tokenizer.*` fields:
+Config-driven tokenizer paths consume `GRIM::HyperParameters::TokenizerHP` directly from `HyperparameterGroupings.hpp`. `TokenizerHP` carries resolved `data_path`, `vocab_path`, and `force_rebuild_vocab`; tokenizer code must not carry `StartupConfig.paths`, `PathConfig`, or rebuild booleans beside it. Tokenizer leaves collapsed directly under `training.config` use the `tokenizer_*` prefix, including `tokenizer_target_vocab_size`, `tokenizer_max_vocab_size`, `tokenizer_max_length`, `tokenizer_character_coverage`, `tokenizer_min_cleaned_text_length`, `tokenizer_min_subword_freq`, `tokenizer_prune_during_mining`, `tokenizer_enable_parallel_subword_mining`, `tokenizer_subword_mining_workers`, `tokenizer_subword_mining_max_bytes`, `tokenizer_model_type`, `tokenizer_add_bos`, `tokenizer_add_eos`, `tokenizer_unk_token`, `tokenizer_pad_token`, `tokenizer_bos_token`, `tokenizer_eos_token`, `tokenizer_enable_nfkc_normalization`, `tokenizer_enable_lowercasing`, `tokenizer_enable_parallel_tokenization`, `tokenizer_parallel_threshold`, `tokenizer_enable_byte_fallback`, `tokenizer_expected_checksum`, `tokenizer_save_text_vocab`, `tokenizer_vocab_score_multiplier`, `tokenizer_special_tokens`, and `tokenizer_enable_scratch_block_reasoning`; do not recreate nested `training.config.tokenizer.*` fields:
 
 - `train_tokenizer.cu` loads `AiConfigSnapshot::document`, finalizes it through HyperParameters, slices `TokenizerHP` directly from `AiConfigSnapshot`, and passes it into `PrepareTrainingDataFromCache()`.
 - `DataLoader.cu` receives that grouping, constructs `UniByte` for tokenization, and calls `tokenizer.unigramLM().trainFromCorpus(corpus, tokenizer_hp)` while building vocab + GRMT artifacts.
@@ -122,15 +123,15 @@ Do not hand-copy raw snapshot `tokenizer_*` document leaves plus `TrainingHyperp
 - Viterbi consumes the built trie as a read-only segmentation index; it does not create learned pieces or mutate vocab storage.
 - Rebuild the trie only after the learned-piece set changes during load/train. Runtime startup must load the saved final vocab as-is, not mutate it to a new cap.
 - `UniByte` owns a `DetectorRegistry` built during construction, **not** lazily.
-- Raw-text detection exists to mark source-byte spans before tokenization. Atom-emitting detectors (currently integer/float) become `StructuralSpan`s and `AtomTable` entries; non-atom detectors (currently whitespace/uppercase runs) are source-text features for diagnostics and future policies, not token IDs.
+- Raw-text detection exists to mark source-byte spans before tokenization. `AtomDelimiterDetector` places atom spans only at authored typed-delimiter bounds; ordinary numeric text remains in the unigram/byte stream. Whitespace/uppercase detectors are source-text features, not token IDs.
 - Raw-text detection must go through `DetectorRegistry`; do not call detector implementations directly from tokenizer runtime code.
 - Every concrete raw-text detector must live under `Shared/UnigramByte/Detectors/` and be registered by `makeDefaultRawTextDetectorRegistry()`. Do not add detector-like kernels, local scanner functions, or hard-coded pattern checks in `UniByte.cu`.
-- Detector-emitted atom spans are an upstream contract: if a detector marks a span as `ATOM_INT` / `ATOM_FLOAT` and `createAtomTableFromRawTextDetections()` cannot register the raw text, runtime tokenization, tokenizer training, and GRMT reconstruction must throw immediately. A failed registration must not silently degrade to plain-text tokenization. Successfully registered span content is deliberately tokenized through the ordinary unigram/byte path between its typed boundaries.
+- Detector-emitted atom spans are an upstream contract: if an authored typed span is marked as `ATOM_INT` / `ATOM_FLOAT` and `createAtomTableFromRawTextDetections()` cannot register its content, runtime tokenization, tokenizer training, and GRMT reconstruction must throw immediately. A failed registration must not silently degrade to plain-text tokenization. Successfully registered span content is deliberately tokenized through the ordinary unigram/byte path between its typed boundaries.
 - `createAtomTableFromRawTextDetections()` is the AtomTable creation and atom-token payload boundary: it allocates the per-sequence `AtomTable`, converts `RawTextDetection` records into finalized `StructuralSpan`s, registers atom-emitting spans exactly once, and returns `AtomTokenizationPayload` records containing that span plus the packed numeric value and atom flags. The span is the sole owner of its matching opening/closing token IDs and `atom_entry_id`; opening-boundary fallback and atom-mask values are emission constants and must not be mirrored into the payload.
-- `createAtomTableFromRawTextDetections()` also owns `arg_number` population for numeric atoms, but the durable owner is the deduped `AtomEntry` itself: each numeric entry must carry its own `arg_number` metadata (`AtomEntry::arg_number`) so repeated raw-text matches share one decomposition record, and AtomTable binary/text serialization persists it with the entry. The result payload keeps only summary counters (`total_numbers`, `total_digits`, `skipped_atoms`, `malformed_numbers`) for diagnostics. `malformed_numbers` is not a recovery path for detector-emitted numeric atoms: if the entry metadata cannot be populated, throw with detector name, raw text, byte offsets, atom type, and reason.
+- Tokenizer registration does not populate `AtomEntry::arg_number`, mantissa digit bindings, or `pow10`. It records the exact parsed scalar payload needed by the atom side channel and leaves numeric decomposition to its future explicit owner.
 - `UniByte::tokenizeWithMetadata()` must call `createAtomTableFromRawTextDetections()` immediately after `DetectorRegistry::scan()`. The later merge loop consumes returned `AtomTokenizationPayload` records directly and emits opening boundary, ordinary content tokens, then matching closing boundary. Metadata is anchored only at the opening boundary; do not fetch `AtomEntry` again, create a parallel finalized-span record, or call `registerSpan()` a second time during merge.
 - Detectors operate on source byte offsets only. Token-ID checks stay in token-layout helpers such as `isSpecialTokenId`, `TokenLayout::isByte`, `TokenLayout::isAtom`, and `TokenLayout::isUnigram`.
-- Whitespace boundaries are detector/data-quality ownership. `AtomTable` must not trim, normalize, canonicalize, or repair atom text; a numeric atom containing any whitespace is an upstream detector error and registration must fail.
+- Authored delimiter parsing owns content bounds. `AtomTable` must not normalize, canonicalize, or repair atom content; malformed typed numeric content is an upstream authored-data error and registration must fail.
 
 ## AtomTable indexing
 Token IDs include the atom offset. When indexing `entries_[]`:
@@ -146,7 +147,7 @@ AtomTable safety contracts:
 - Atom dedup uses hash buckets (`hash -> vector<atom_id>`) and compares every candidate by type plus raw text so a hash collision cannot evict an older atom from dedup lookup.
 - Numeric GPU side channels keep exact payload arrays (`double`, `int64_t`, and `NumericPayloadKind`) in addition to the legacy packed float used by older embedding paths. Do not round integer atoms through `float` for GPU numeric reconstruction.
 - Public numeric lookup is ID-based: use `AtomTable::getNumericValue(atom_id)` and read `NumericPayload`. Do not add `getNumericValue(const AtomEntry&)`; `AtomEntry::numeric_value` is a lossy legacy packed float.
-- `AtomEntry::arg_number` is durable per-entry metadata, not a parallel sidecar vector. Deduped numeric atoms must share one stored decomposition, and AtomTable `serializeToStreamOrThrow()` / `deserializeFromStreamOrThrow()` (plus `saveToTextFile()` for inspection) persist that metadata with the entry.
+- `AtomEntry::arg_number` remains an optional persisted field for entries that already carry externally authored decomposition metadata. Tokenizer registration must leave it absent.
 - AtomTable payloads are numeric-only: `AtomValue` may contain only `AtomInteger` or `AtomFloat`, and `parseAtom()` accepts only `ATOM_INT` / `ATOM_FLOAT`. Do not add `AtomGeneric` or any generic/unknown payload path.
 - Numeric parse failures must not register as `ATOM_INT` / `ATOM_FLOAT`. Reject the registration; there is no generic fallback payload.
 - Binary AtomTable load must validate every `StringRef` against `string_pool_` before exposing entries; corrupt offsets/lengths are a hard load failure.

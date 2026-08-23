@@ -86,6 +86,5 @@
     "tokenizer_enable_nfkc_normalization": true,
     "tokenizer_enable_lowercasing": false,
     "tokenizer_enable_byte_fallback": true,
-    "tokenizer_enable_atom_reasoning": true,
-    "tokenizer_detect_numbers": true
+    "tokenizer_enable_atom_reasoning": true
 }

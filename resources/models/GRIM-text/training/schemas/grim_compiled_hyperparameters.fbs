@@ -239,7 +239,6 @@ table TokenizerConfig {
   enable_byte_fallback:bool;
 
   enable_atom_reasoning:bool;
-  detect_numbers:bool;
 }
 
 // ---------------------------------------------------------------------------

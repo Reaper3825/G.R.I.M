@@ -156,13 +156,6 @@ struct AtomNumber {
     float confidence = 0.0f;
 };
 
-struct AtomNumberPopulationPayload {
-    uint32_t total_numbers = 0;
-    uint32_t total_digits = 0;
-    uint32_t skipped_atoms = 0;
-    uint32_t malformed_numbers = 0;
-};
-
 //======================================================//
 //  Atom Entry - durable atom record plus optional numeric decomposition metadata
 //======================================================//
@@ -219,15 +212,12 @@ struct AtomTokenizationPayload {
 struct AtomTableFromDetectionsResult {
     std::shared_ptr<AtomTable> atom_table;
     std::vector<AtomTokenizationPayload> atom_tokens;
-    AtomNumberPopulationPayload arg_number_payload;
 };
 
 AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
     std::string_view source_text,
     const std::vector<Detector::RawTextDetection>& detections,
-    int max_mantissa_digit_slots,
-    const char* caller,
-    int max_abs_pow10 = 0);
+    const char* caller);
 
 //======================================================//
 //  Atom Token ID Constants

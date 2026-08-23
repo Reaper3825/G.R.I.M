@@ -637,7 +637,6 @@ struct LanguageModelConfig {
     int attention_diag_head = 0;
 
     bool tokenizer_enable_atom_reasoning = false;
-    bool tokenizer_detect_numbers = false;
     int tokenizer_target_vocab_size = 0;
     int tokenizer_max_vocab_size = 0;
     int tokenizer_max_length = 0;
@@ -1870,7 +1869,6 @@ inline void applyCompiledModelConfig(
     params.tokenizer_enable_lowercasing = t.enable_lowercasing;
     params.tokenizer_enable_byte_fallback = t.enable_byte_fallback;
     params.tokenizer_enable_atom_reasoning = t.enable_atom_reasoning;
-    params.tokenizer_detect_numbers = t.detect_numbers;
 }
 
 inline LanguageModelConfig loadLanguageModelConfig(
@@ -2728,7 +2726,6 @@ inline nlohmann::json buildFinalizedTrainingConfigDocument(
     GRIM_WRITE_FINAL_CONFIG_FIELD(attention_diag_layer);
     GRIM_WRITE_FINAL_CONFIG_FIELD(attention_diag_head);
     GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_enable_atom_reasoning);
-    GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_detect_numbers);
     GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_target_vocab_size);
     GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_max_vocab_size);
     GRIM_WRITE_FINAL_CONFIG_FIELD(tokenizer_max_length);

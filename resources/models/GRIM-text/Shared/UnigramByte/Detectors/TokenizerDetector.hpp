@@ -27,13 +27,11 @@ enum class RawTextFeature : uint8_t {
 };
  
 struct RawTextDetectorOptions {
-    bool detect_numbers;
     bool detect_whitespace;
     bool detect_uppercase;
 
-    RawTextDetectorOptions(bool numbers, bool whitespace, bool uppercase) noexcept
-        : detect_numbers(numbers)
-        , detect_whitespace(whitespace)
+    RawTextDetectorOptions(bool whitespace, bool uppercase) noexcept
+        : detect_whitespace(whitespace)
         , detect_uppercase(uppercase) {}
 };
 

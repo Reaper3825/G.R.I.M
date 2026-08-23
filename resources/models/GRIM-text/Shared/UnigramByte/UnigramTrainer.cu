@@ -547,16 +547,13 @@ bool UnigramLM::trainFromCorpus(const std::vector<std::string>& texts,
         std::vector<AtomSpan> spans;
         if (detect) {
             const Detector::RawTextDetectorOptions detector_options(
-                tokenizer_hp.detect_numbers,
                 true,
                 true);
             const auto detections = detector_registry.scan(text, detector_options);
             const AtomTableFromDetectionsResult atom_table_build = createAtomTableFromRawTextDetections(
                 std::string_view(text.data(), text.size()),
                 detections,
-                tokenizer_hp.number_encoder_max_digit_slots,
-                "UnigramLM::trainFromCorpus",
-                tokenizer_hp.number_encoder_max_abs_pow10);
+                "UnigramLM::trainFromCorpus");
             spans.reserve(atom_table_build.atom_tokens.size());
             for (const AtomTokenizationPayload& atom_payload : atom_table_build.atom_tokens) {
                 spans.push_back({atom_payload.span.start, atom_payload.span.end});

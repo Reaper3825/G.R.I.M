@@ -222,7 +222,6 @@ UniByteResult UniByte::tokenizeWithMetadata(
     std::vector<Detector::RawTextDetection> detections;
     if (tokenizer_hp_.enable_atom_reasoning) {
         const Detector::RawTextDetectorOptions detector_options(
-            tokenizer_hp_.detect_numbers,
             true,
             true);
         detections = detector_registry_.scan(text, detector_options);
@@ -234,9 +233,7 @@ UniByteResult UniByte::tokenizeWithMetadata(
     AtomTableFromDetectionsResult atom_table_build = createAtomTableFromRawTextDetections(
         std::string_view(text.data(), text.size()),
         detections,
-        tokenizer_hp_.number_encoder_max_digit_slots,
-        "UniByte::tokenizeWithMetadata",
-        tokenizer_hp_.number_encoder_max_abs_pow10);
+        "UniByte::tokenizeWithMetadata");
     result.atom_table = std::move(atom_table_build.atom_table);
     std::vector<AtomTokenizationPayload> atom_tokens = std::move(atom_table_build.atom_tokens);
 

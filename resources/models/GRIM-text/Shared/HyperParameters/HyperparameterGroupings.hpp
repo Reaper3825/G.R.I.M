@@ -72,13 +72,10 @@ struct TokenizerHP {
     std::size_t subword_mining_max_bytes = 0;
 
     bool enable_atom_reasoning = false;
-    bool detect_numbers = false;
     bool enable_byte_fallback = false;
 
     bool add_bos = false;
     bool add_eos = false;
-    int number_encoder_max_digit_slots = 0;
-    int number_encoder_max_abs_pow10 = 0;
     bool force_rebuild_vocab = false;
     bool only_mode = false;
     bool save_text_vocab = false;
@@ -986,12 +983,9 @@ inline TokenizerHP tokenizerHP(const GRIM::Config::AiConfigSnapshot& snapshot) {
     view.subword_mining_workers = snapshotTrainingConfigField<int>(snapshot, "tokenizer_subword_mining_workers");
     view.subword_mining_max_bytes = snapshotTrainingConfigField<std::size_t>(snapshot, "tokenizer_subword_mining_max_bytes");
     view.enable_atom_reasoning = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_enable_atom_reasoning");
-    view.detect_numbers = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_detect_numbers");
     view.enable_byte_fallback = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_enable_byte_fallback");
     view.add_bos = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_add_bos");
     view.add_eos = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_add_eos");
-    view.number_encoder_max_digit_slots = snapshotTrainingConfigField<int>(snapshot, "number_encoder_max_digit_slots");
-    view.number_encoder_max_abs_pow10 = snapshotTrainingConfigField<int>(snapshot, "number_encoder_max_abs_pow10");
     view.force_rebuild_vocab = snapshotTrainingConfigField<bool>(snapshot, "force_rebuild_vocab");
     view.only_mode = snapshotTrainingConfigField<bool>(snapshot, "subprocess_tokenizer_only_mode");
     view.save_text_vocab = snapshotTrainingConfigField<bool>(snapshot, "tokenizer_save_text_vocab");

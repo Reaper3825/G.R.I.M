@@ -26,7 +26,7 @@ using json = nlohmann::json;
 
 namespace {
 
-constexpr std::uint32_t kSchemaVersion = 3;
+constexpr std::uint32_t kSchemaVersion = 4;
 constexpr std::uint32_t kSemanticVersion = 3;
 constexpr std::uint32_t kFfnMultiplier = 4;
 
@@ -141,7 +141,6 @@ struct EffectiveConfig {
     bool tokenizer_enable_lowercasing = false;
     bool tokenizer_enable_byte_fallback = false;
     bool tokenizer_enable_atom_reasoning = false;
-    bool tokenizer_detect_numbers = false;
 
     std::vector<GRIMConfig::ModelCapability> capabilities;
 };
@@ -604,7 +603,6 @@ EffectiveConfig compileEffectiveConfig(const json& model_config) {
     c.tokenizer_enable_lowercasing = required<bool>(j, "tokenizer_enable_lowercasing");
     c.tokenizer_enable_byte_fallback = required<bool>(j, "tokenizer_enable_byte_fallback");
     c.tokenizer_enable_atom_reasoning = required<bool>(j, "tokenizer_enable_atom_reasoning");
-    c.tokenizer_detect_numbers = required<bool>(j, "tokenizer_detect_numbers");
     if (c.tokenizer_model_type.empty()) throw std::runtime_error("tokenizer_model_type must not be empty");
     if (c.tokenizer_unk_token != "<unk>" || c.tokenizer_pad_token != "<pad>" ||
         c.tokenizer_bos_token != "<s>" || c.tokenizer_eos_token != "</s>") {
@@ -619,10 +617,6 @@ EffectiveConfig compileEffectiveConfig(const json& model_config) {
     if (c.tokenizer_enable_atom_reasoning && !c.use_atom_data) {
         throw std::runtime_error("tokenizer_enable_atom_reasoning requires use_atom_data");
     }
-    if (c.tokenizer_detect_numbers && !c.tokenizer_enable_atom_reasoning) {
-        throw std::runtime_error("tokenizer_detect_numbers requires tokenizer_enable_atom_reasoning");
-    }
-
     auto addCapability = [&](bool enabled, GRIMConfig::ModelCapability capability) {
         if (enabled) c.capabilities.push_back(capability);
     };
@@ -740,8 +734,7 @@ std::vector<std::uint8_t> buildArtifact(
         builder.CreateString(c.tokenizer_pad_token), builder.CreateString(c.tokenizer_bos_token),
         builder.CreateString(c.tokenizer_eos_token), 0, 1, 2, 3,
         c.tokenizer_enable_nfkc, c.tokenizer_enable_lowercasing,
-        c.tokenizer_enable_byte_fallback, c.tokenizer_enable_atom_reasoning,
-        c.tokenizer_detect_numbers);
+        c.tokenizer_enable_byte_fallback, c.tokenizer_enable_atom_reasoning);
 
     const auto root = GRIMConfig::CreateCompiledModelHyperparameters(
         builder, kSchemaVersion, kSemanticVersion, integrity, capabilities,

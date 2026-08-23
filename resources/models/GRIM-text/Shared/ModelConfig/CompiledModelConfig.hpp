@@ -181,7 +181,6 @@ struct CompiledTokenizerConfig {
     bool enable_lowercasing = false;
     bool enable_byte_fallback = false;
     bool enable_atom_reasoning = false;
-    bool detect_numbers = false;
 };
 
 struct CompiledModelConfigSnapshot {

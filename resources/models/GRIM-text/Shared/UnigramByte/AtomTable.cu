@@ -372,9 +372,9 @@ void validatePersistedAtomEntryOrThrow(
         failValidation("entry.reserved_zero", "expected 0 but found " +
                                               std::to_string(entry.reserved_zero));
     }
-    if (isNumericAtom(entry.type)) {
-        if (!entry.arg_number.has_value()) {
-            failValidation("entry.arg_number", "missing required arg_number payload");
+    if (entry.arg_number.has_value()) {
+        if (!isNumericAtom(entry.type)) {
+            failValidation("entry.arg_number", "non-numeric atom must not carry arg_number payload");
         }
         if (entry.arg_number->number_atom_id != entry.id) {
             failValidation("entry.arg_number.number_atom_id",
@@ -384,8 +384,6 @@ void validatePersistedAtomEntryOrThrow(
         if (entry.arg_number->digits.empty()) {
             failValidation("entry.arg_number.digits", "digit binding list is empty");
         }
-    } else if (entry.arg_number.has_value()) {
-        failValidation("entry.arg_number", "non-numeric atom must not carry arg_number payload");
     }
 }
 
@@ -475,31 +473,6 @@ void validateRawTextDetectionForAtomTableCreation(
     }
 }
 
-uint16_t requireUint16ForArgNumber(
-    uint32_t value,
-    const std::string& field_name,
-    const char* caller) {
-    if (value > static_cast<uint32_t>(std::numeric_limits<uint16_t>::max())) {
-        throw std::runtime_error(std::string(caller) +
-                                 ": arg_number " + field_name +
-                                 " exceeds uint16 capacity, value=" + std::to_string(value));
-    }
-    return static_cast<uint16_t>(value);
-}
-
-int16_t requireInt16Pow10ForArgNumber(
-    int32_t value,
-    const std::string& raw_text,
-    const char* caller) {
-    if (value < static_cast<int32_t>(std::numeric_limits<int16_t>::min()) ||
-        value > static_cast<int32_t>(std::numeric_limits<int16_t>::max())) {
-        throw std::runtime_error(std::string(caller) +
-                                 ": arg_number pow10 exceeds int16 capacity for numeric atom text='" +
-                                 raw_text + "', pow10=" + std::to_string(value));
-    }
-    return static_cast<int16_t>(value);
-}
-
 [[noreturn]] void throwDetectorAtomContractFailure(
     const char* caller,
     const Detector::RawTextDetection& detection,
@@ -516,312 +489,6 @@ int16_t requireInt16Pow10ForArgNumber(
                              std::to_string(detection.end) + "), raw_text='" +
                              std::string(atom_text) + "', reason='" + reason +
                              "'; upstream detector/data pipeline bug: detector-emitted atom spans must not fall back to text");
-}
-
-[[noreturn]] void throwArgNumberPopulationFailure(
-    const char* caller,
-    AtomType atom_type,
-    uint32_t atom_entry_id,
-    const TextSpan32& raw_span,
-    std::string_view atom_text,
-    const std::string& reason) {
-    throw std::runtime_error(std::string(caller) +
-                             ": failed to populate arg_number for numeric atom entry id=" +
-                             std::to_string(atom_entry_id) +
-                             ", atom_type=" + atomTypeName(atom_type) +
-                             ", raw_span={offset=" + std::to_string(raw_span.offset) +
-                             ", length=" + std::to_string(raw_span.length) +
-                             "}, raw_text='" + std::string(atom_text) +
-                             "', reason='" + reason + "'");
-}
-
-AtomNumber buildArgNumberFromContentText(
-    std::string_view content_text,
-    const TextSpan32& raw_span,
-    const TextSpan32& content_span,
-    uint32_t atom_entry_id,
-    float confidence,
-    AtomType atom_type,
-    const char* caller,
-    const Detector::RawTextDetection* detection,
-    size_t detection_index) {
-    if (!isNumericAtom(atom_type)) {
-        throw std::runtime_error(std::string(caller) +
-                                 ": buildArgNumberFromContentText requires numeric atom type, got " +
-                                 atomTypeName(atom_type));
-    }
-    auto fail = [&](const std::string& reason) -> void {
-        if (detection != nullptr) {
-            throwDetectorAtomContractFailure(
-                caller,
-                *detection,
-                detection_index,
-                atom_type,
-                content_text,
-                "failed to populate required atom entry arg_number metadata: " + reason);
-        }
-        throwArgNumberPopulationFailure(caller, atom_type, atom_entry_id, raw_span, content_text, reason);
-    };
-
-    if (content_text.size() != static_cast<size_t>(content_span.length)) {
-        throw std::runtime_error(std::string(caller) +
-                                 ": arg_number content_text size mismatch for atom_entry_id=" +
-                                 std::to_string(atom_entry_id) +
-                                 ", content_text.size()=" + std::to_string(content_text.size()) +
-                                 ", content_span.length=" + std::to_string(content_span.length));
-    }
-    if (content_span.length == 0) {
-        fail("empty numeric atom content span");
-    }
-
-    const uint32_t content_end = content_span.length;
-    const std::string atom_text(content_text.data(), content_text.size());
-
-    AtomNumber number{};
-    number.number_atom_id = atom_entry_id;
-    number.raw_span = raw_span;
-    number.content_span = content_span;
-    number.base = 10;
-    number.confidence = confidence;
-
-    uint32_t pos = 0;
-    if (pos < content_end && (content_text[pos] == '+' || content_text[pos] == '-')) {
-        number.has_sign = 1;
-        number.sign_negative = content_text[pos] == '-' ? 1 : 0;
-        number.sign_span.offset = content_span.offset + pos;
-        number.sign_span.length = 1;
-        ++pos;
-    }
-
-    number.digits.reserve(content_span.length);
-    uint32_t integer_digit_count = 0;
-    uint32_t fractional_digit_count = 0;
-    bool saw_decimal_point = false;
-
-    while (pos < content_end) {
-        const char c = content_text[pos];
-        if (c >= '0' && c <= '9') {
-            DigitBinding binding{};
-            binding.digit = static_cast<uint8_t>(c - '0');
-            binding.index_left = requireUint16ForArgNumber(
-                static_cast<uint32_t>(number.digits.size()), "digit.index_left", caller);
-            binding.digit_span.offset = content_span.offset + pos;
-            binding.digit_span.length = 1;
-            number.digits.push_back(binding);
-
-            if (saw_decimal_point) {
-                ++fractional_digit_count;
-            } else {
-                ++integer_digit_count;
-            }
-            ++pos;
-            continue;
-        }
-
-        if (c == '.' && !saw_decimal_point) {
-            saw_decimal_point = true;
-            number.has_decimal_point = 1;
-            number.decimal_point_span.offset = content_span.offset + pos;
-            number.decimal_point_span.length = 1;
-            ++pos;
-            continue;
-        }
-
-        break;
-    }
-
-    if (number.digits.empty()) {
-        fail("numeric atom has no mantissa digits");
-    }
-
-    number.mantissa_span.offset = number.digits.front().digit_span.offset;
-    number.mantissa_span.length =
-        number.digits.back().digit_span.offset - number.digits.front().digit_span.offset + 1U;
-
-    int32_t exponent_value = 0;
-    if (pos < content_end && (content_text[pos] == 'e' || content_text[pos] == 'E')) {
-        number.has_exponent = 1;
-        number.exponent_marker_span.offset = content_span.offset + pos;
-        number.exponent_marker_span.length = 1;
-        ++pos;
-
-        if (pos < content_end && (content_text[pos] == '+' || content_text[pos] == '-')) {
-            number.exponent_negative = content_text[pos] == '-' ? 1 : 0;
-            number.exponent_sign_span.offset = content_span.offset + pos;
-            number.exponent_sign_span.length = 1;
-            ++pos;
-        }
-
-        const uint32_t exponent_digits_begin = pos;
-        int64_t exponent_abs = 0;
-        uint32_t exponent_digit_count = 0;
-        while (pos < content_end) {
-            const unsigned char c = static_cast<unsigned char>(content_text[pos]);
-            if (c < static_cast<unsigned char>('0') || c > static_cast<unsigned char>('9')) {
-                break;
-            }
-            exponent_abs = exponent_abs * 10 + static_cast<int64_t>(c - static_cast<unsigned char>('0'));
-            if (exponent_abs > static_cast<int64_t>(std::numeric_limits<int16_t>::max())) {
-                fail("exponent magnitude exceeds arg_number pow10 capacity");
-            }
-            ++exponent_digit_count;
-            ++pos;
-        }
-        if (exponent_digit_count == 0) {
-            fail("exponent marker has no exponent digits");
-        }
-        number.exponent_digits_span.offset = content_span.offset + exponent_digits_begin;
-        number.exponent_digits_span.length = exponent_digit_count;
-        exponent_value = static_cast<int32_t>(exponent_abs);
-        if (number.exponent_negative) {
-            exponent_value = -exponent_value;
-        }
-        number.exponent_value = exponent_value;
-    }
-
-    if (pos != content_end) {
-        fail("unexpected non-numeric byte inside numeric atom at relative_offset=" + std::to_string(pos));
-    }
-
-    number.integer_digit_count = requireUint16ForArgNumber(integer_digit_count, "integer_digit_count", caller);
-    number.fractional_digit_count = requireUint16ForArgNumber(fractional_digit_count, "fractional_digit_count", caller);
-
-    // Finalize positional bindings now that mantissa width and exponent are known.
-    // pow10 is the digit's place value: digit * 10^pow10 contributes to the number.
-    const uint32_t digit_total = static_cast<uint32_t>(number.digits.size());
-    for (uint32_t i = 0; i < digit_total; ++i) {
-        DigitBinding& binding = number.digits[i];
-        binding.index_right = requireUint16ForArgNumber(digit_total - 1U - i, "digit.index_right", caller);
-        const int32_t pow10 = static_cast<int32_t>(integer_digit_count) - 1 -
-                              static_cast<int32_t>(i) + exponent_value;
-        binding.pow10 = requireInt16Pow10ForArgNumber(pow10, atom_text, caller);
-    }
-
-    return number;
-}
-
-void ensureAtomEntryHasArgNumber(
-    AtomEntry& entry,
-    std::string_view content_text,
-    const TextSpan32& raw_span,
-    const TextSpan32& content_span,
-    const char* caller,
-    const Detector::RawTextDetection* detection = nullptr,
-    size_t detection_index = 0) {
-    if (!isNumericAtom(entry.type)) {
-        return;
-    }
-    if (entry.arg_number.has_value()) {
-        if (entry.arg_number->number_atom_id != entry.id) {
-            throw std::runtime_error(std::string(caller) +
-                                     ": arg_number.number_atom_id mismatch for atom entry id=" +
-                                     std::to_string(entry.id) +
-                                     ", stored=" + std::to_string(entry.arg_number->number_atom_id));
-        }
-        return;
-    }
-    entry.arg_number = buildArgNumberFromContentText(
-        content_text,
-        raw_span,
-        content_span,
-        entry.id,
-        entry.confidence,
-        entry.type,
-        caller,
-        detection,
-        detection_index);
-}
-
-void recordAtomEntryArgNumberSummary(
-    const AtomEntry& entry,
-    AtomNumberPopulationPayload& payload,
-    const char* caller) {
-    if (!isNumericAtom(entry.type)) {
-        ++payload.skipped_atoms;
-        return;
-    }
-    if (!entry.arg_number.has_value()) {
-        throw std::runtime_error(std::string(caller) +
-                                 ": numeric atom entry id=" + std::to_string(entry.id) +
-                                 " is missing required arg_number metadata");
-    }
-    ++payload.total_numbers;
-    payload.total_digits += static_cast<uint32_t>(entry.arg_number->digits.size());
-}
-
-std::string mantissaDigitSequence(const AtomNumber& number) {
-    std::string seq;
-    seq.reserve(number.digits.size());
-    for (const DigitBinding& digit : number.digits) {
-        seq.push_back(static_cast<char>('0' + digit.digit));
-    }
-    return seq;
-}
-
-void validateTokenizationMantissaDigitSlotsOrThrow(
-    const AtomEntry& entry,
-    std::string_view atom_text,
-    size_t detection_index,
-    int max_mantissa_digit_slots,
-    const char* caller) {
-    if (max_mantissa_digit_slots <= 0 || !isNumericAtom(entry.type)) {
-        return;
-    }
-    if (!entry.arg_number.has_value()) {
-        throw std::runtime_error(std::string(caller) +
-                                 ": detection_index=" + std::to_string(detection_index) +
-                                 " numeric atom is missing arg_number metadata while validating max_mantissa_digit_slots=" +
-                                 std::to_string(max_mantissa_digit_slots));
-    }
-
-    const std::size_t digit_count = entry.arg_number->digits.size();
-    if (digit_count <= static_cast<std::size_t>(max_mantissa_digit_slots)) {
-        return;
-    }
-
-    throw std::runtime_error(std::string(caller) +
-                             ": detection_index=" + std::to_string(detection_index) +
-                             ", atom_entry_id=" + std::to_string(entry.id) +
-                             ", atom_type=" + atomTypeName(entry.type) +
-                             ", raw_text='" + std::string(atom_text) +
-                             "', mantissa_digit_sequence='" + mantissaDigitSequence(*entry.arg_number) +
-                             "', mantissa_digit_count=" + std::to_string(digit_count) +
-                             " exceeds max_mantissa_digit_slots=" +
-                             std::to_string(max_mantissa_digit_slots));
-}
-
-void validateTokenizationPow10RangeOrThrow(
-    const AtomEntry& entry,
-    std::string_view atom_text,
-    size_t detection_index,
-    int max_abs_pow10,
-    const char* caller) {
-    if (max_abs_pow10 <= 0 || !isNumericAtom(entry.type)) {
-        return;
-    }
-    if (!entry.arg_number.has_value()) {
-        throw std::runtime_error(std::string(caller) +
-                                 ": detection_index=" + std::to_string(detection_index) +
-                                 " numeric atom is missing arg_number metadata while validating max_abs_pow10=" +
-                                 std::to_string(max_abs_pow10));
-    }
-
-    const AtomNumber& number = *entry.arg_number;
-    for (std::size_t i = 0; i < number.digits.size(); ++i) {
-        const int pow10 = static_cast<int>(number.digits[i].pow10);
-        if (pow10 >= -max_abs_pow10 && pow10 <= max_abs_pow10) {
-            continue;
-        }
-        throw std::runtime_error(std::string(caller) +
-                                 ": detection_index=" + std::to_string(detection_index) +
-                                 ", atom_entry_id=" + std::to_string(entry.id) +
-                                 ", atom_type=" + atomTypeName(entry.type) +
-                                 ", raw_text='" + std::string(atom_text) +
-                                 "', mantissa_digit_sequence='" + mantissaDigitSequence(number) +
-                                 "', exponent_value=" + std::to_string(number.exponent_value) +
-                                 ", digit[" + std::to_string(i) + "] pow10=" + std::to_string(pow10) +
-                                 " outside max_abs_pow10=±" + std::to_string(max_abs_pow10));
-    }
 }
 
 } // namespace
@@ -927,9 +594,7 @@ AtomTable& AtomTable::operator=(AtomTable&& other) noexcept {
 AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
     std::string_view source_text,
     const std::vector<Detector::RawTextDetection>& detections,
-    int max_mantissa_digit_slots,
-    const char* caller,
-    int max_abs_pow10) {
+    const char* caller) {
     requireCallerLabel(caller, "createAtomTableFromRawTextDetections");
 
     AtomTableFromDetectionsResult result;
@@ -1016,24 +681,11 @@ AtomTableFromDetectionsResult createAtomTableFromRawTextDetections(
                                      ": registered atom_entry_id is not retrievable, atom_entry_id=" +
                                      std::to_string(span.atom_entry_id));
         }
-        validateTokenizationMantissaDigitSlotsOrThrow(
-            *entry,
-            atom_text,
-            detection_index,
-            max_mantissa_digit_slots,
-            caller);
-        validateTokenizationPow10RangeOrThrow(
-            *entry,
-            atom_text,
-            detection_index,
-            max_abs_pow10,
-            caller);
         AtomTokenizationPayload payload{};
         payload.span = span;
         payload.token_numeric_value = entry->numeric_value;
         payload.token_atom_flags = entry->flags;
         result.atom_tokens.push_back(payload);
-        recordAtomEntryArgNumberSummary(*entry, result.arg_number_payload, caller);
     }
 
     return result;
@@ -1456,9 +1108,6 @@ bool AtomTable::tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id) {
     
     // Use contentView for the atom content text.
     std::string_view raw_text(span.buffer_ptr + span.content_offset, span.content_length);
-    const TextSpan32 raw_span{span.offset, span.length};
-    const TextSpan32 content_span{span.content_offset, span.content_length};
-    
     // Parse once; this is the only parse on the new-atom path.
     const ParseResult result = parseAtom(span.atom_type, raw_text);
     if (!result.success) {
@@ -1484,7 +1133,6 @@ bool AtomTable::tryRegisterSpan(const StructuralSpan& span, uint32_t& out_id) {
     int64_t numeric_int_value = 0;
     uint8_t numeric_kind = static_cast<uint8_t>(NumericPayloadKind::NONE);
     packValue(entry, parsed, numeric_float_value, numeric_int_value, numeric_kind);
-    ensureAtomEntryHasArgNumber(entry, raw_text, raw_span, content_span, "AtomTable::tryRegisterSpan");
 
     const uint64_t hash = computeHash(entry,
                                       raw_text,

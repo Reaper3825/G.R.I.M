@@ -733,7 +733,6 @@ add_library(grim_unigrambyte_tokenizer STATIC
     ../../Shared/UnigramByte/TextUtils.cu
     ../../Shared/UnigramByte/Detectors/DetectorRegistry.cu
     ../../Shared/UnigramByte/Detectors/AtomDelimiterDetector.cu
-    ../../Shared/UnigramByte/Detectors/NumericDetectors.cu
     ../../Shared/UnigramByte/Detectors/TextFeatureDetectors.cu
     ../../Shared/UnigramByte/Training/SubwordMining.cu
     ../../Shared/UnigramByte/Training/UnigramForwardBackward.cu

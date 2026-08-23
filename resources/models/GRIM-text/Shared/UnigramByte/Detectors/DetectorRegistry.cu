@@ -6,7 +6,6 @@
 #include "DetectorRegistry.hpp"
 
 #include "AtomDelimiterDetector.hpp"
-#include "NumericDetectors.hpp"
 #include "TextFeatureDetectors.hpp"
 
 #include <algorithm>
@@ -111,8 +110,6 @@ std::vector<RawTextDetection> DetectorRegistry::scan(
 DetectorRegistry makeDefaultRawTextDetectorRegistry() {
     DetectorRegistry registry;
     registry.registerDetector(std::make_unique<AtomDelimiterDetector>());
-    registry.registerDetector(std::make_unique<FloatDetector>());
-    registry.registerDetector(std::make_unique<IntegerDetector>());
     registry.registerDetector(std::make_unique<WhitespaceDetector>());
     registry.registerDetector(std::make_unique<UppercaseRunDetector>());
     return registry;

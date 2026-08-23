@@ -20,7 +20,7 @@ namespace {
 
 namespace fs = std::filesystem;
 
-constexpr std::uint32_t kSupportedSchemaVersion = 3;
+constexpr std::uint32_t kSupportedSchemaVersion = 4;
 constexpr std::uint32_t kSupportedSemanticVersion = 3;
 constexpr std::uintmax_t kMaximumArtifactBytes = 16u * 1024u * 1024u;
 
@@ -588,7 +588,6 @@ CompiledModelConfigSnapshot loadCompiledModelConfig(const fs::path& artifact_pat
     result.tokenizer.enable_lowercasing = t->enable_lowercasing();
     result.tokenizer.enable_byte_fallback = t->enable_byte_fallback();
     result.tokenizer.enable_atom_reasoning = t->enable_atom_reasoning();
-    result.tokenizer.detect_numbers = t->detect_numbers();
 
     validateDecoded(result);
     return result;

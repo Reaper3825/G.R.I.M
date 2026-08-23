@@ -97,7 +97,6 @@ static ::GRIM::HyperParameters::TokenizerHP makeSelfTestTokenizerHP() {
     hp.min_subword_freq = 3;
     hp.enable_parallel_subword_mining = true;
     hp.enable_atom_reasoning = true;
-    hp.detect_numbers = true;
     hp.enable_byte_fallback = true;
     hp.vocab_score_multiplier = 1.0f;
     return hp;
@@ -1022,7 +1021,6 @@ bool testUniByteBasicEncode(std::string& message) {
 bool testUniByteStructuralDetection(std::string& message) {
     auto config = makeSelfTestTokenizerHP();
     config.target_vocab_size = 50000;
-    config.detect_numbers = true;
     
     UniByte tokenizer(config);
     
@@ -1046,7 +1044,6 @@ bool testUniByteStructuralDetection(std::string& message) {
 
     bool testUniByteRejectsUnparseableDetectedAtom(std::string& message) {
         auto config = makeSelfTestTokenizerHP();
-        config.detect_numbers = true;
 
         UniByte tokenizer(config);
 
@@ -1070,7 +1067,6 @@ bool testUniByteStructuralDetection(std::string& message) {
 
     bool testUnigramTrainRejectsUnparseableDetectedAtom(std::string& message) {
         auto config = makeSelfTestTokenizerHP();
-        config.detect_numbers = true;
 
         UnigramLM unigram;
 
@@ -1103,7 +1099,6 @@ bool testAtomTableRejectsBadNumericDetectionWithContext(std::string& message) {
         (void)createAtomTableFromRawTextDetections(
             std::string_view(text.data(), text.size()),
             detections,
-            0,
             "testAtomTableRejectsBadNumericDetectionWithContext");
     } catch (const std::exception& e) {
         threw = true;
@@ -1125,195 +1120,17 @@ bool testAtomTableRejectsBadNumericDetectionWithContext(std::string& message) {
     return true;
 }
 
-bool testAtomTableArgNumberSupportsSignedDecimalExponent(std::string& message) {
-    const std::string text = "-4 +4 .75 75.0 1e6 -1.5e-4";
-    Detector::DetectorRegistry registry = Detector::makeDefaultRawTextDetectorRegistry();
-    const Detector::RawTextDetectorOptions options(true, true, true);
-    const auto detections = registry.scan(text, options);
-
-    const AtomTableFromDetectionsResult result = createAtomTableFromRawTextDetections(
-        std::string_view(text.data(), text.size()),
-        detections,
-        0,
-        "testAtomTableArgNumberSupportsSignedDecimalExponent");
-
-    ASSERT_EQ(result.atom_tokens.size(), static_cast<size_t>(6),
-              "Expected six numeric atom tokens");
-    ASSERT_EQ(static_cast<int>(result.arg_number_payload.malformed_numbers), 0,
-              "arg_number population must not silently mark detector-approved numerics malformed");
-    ASSERT_EQ(static_cast<int>(result.arg_number_payload.total_numbers), 6,
-              "Every numeric atom should receive arg_number payload");
-    ASSERT_EQ(static_cast<int>(result.arg_number_payload.total_digits), 10,
-              "Mantissa digit binding count mismatch");
-
-    const auto minus_four_entry = result.atom_table->getAtom(result.atom_tokens[0].span.atom_entry_id);
-    ASSERT_TRUE(minus_four_entry.has_value(), "-4 atom entry missing");
-    ASSERT_TRUE(minus_four_entry->arg_number.has_value(), "-4 arg_number metadata missing");
-    const AtomNumber& minus_four = *minus_four_entry->arg_number;
-    ASSERT_EQ(static_cast<int>(minus_four.has_sign), 1, "-4 should record a sign");
-    ASSERT_EQ(static_cast<int>(minus_four.sign_negative), 1, "-4 should record a negative sign");
-    ASSERT_EQ(static_cast<int>(minus_four.digits[0].digit), 4, "-4 digit mismatch");
-    ASSERT_EQ(static_cast<int>(minus_four.digits[0].pow10), 0, "-4 digit pow10 mismatch");
-
-    const auto plus_four_entry = result.atom_table->getAtom(result.atom_tokens[1].span.atom_entry_id);
-    ASSERT_TRUE(plus_four_entry.has_value(), "+4 atom entry missing");
-    ASSERT_TRUE(plus_four_entry->arg_number.has_value(), "+4 arg_number metadata missing");
-    const AtomNumber& plus_four = *plus_four_entry->arg_number;
-    ASSERT_EQ(static_cast<int>(plus_four.has_sign), 1, "+4 should record a sign");
-    ASSERT_EQ(static_cast<int>(plus_four.sign_negative), 0, "+4 should record a positive sign");
-    ASSERT_EQ(static_cast<int>(plus_four.digits[0].digit), 4, "+4 digit mismatch");
-
-    const auto dot_seventy_five_entry = result.atom_table->getAtom(result.atom_tokens[2].span.atom_entry_id);
-    ASSERT_TRUE(dot_seventy_five_entry.has_value(), ".75 atom entry missing");
-    ASSERT_TRUE(dot_seventy_five_entry->arg_number.has_value(), ".75 arg_number metadata missing");
-    const AtomNumber& dot_seventy_five = *dot_seventy_five_entry->arg_number;
-    ASSERT_EQ(static_cast<int>(dot_seventy_five.has_decimal_point), 1,
-              ".75 should record decimal metadata");
-    ASSERT_EQ(static_cast<int>(dot_seventy_five.integer_digit_count), 0,
-              ".75 should have zero integer mantissa digits");
-    ASSERT_EQ(static_cast<int>(dot_seventy_five.fractional_digit_count), 2,
-              ".75 should have two fractional mantissa digits");
-    ASSERT_EQ(static_cast<int>(dot_seventy_five.digits[0].digit), 7,
-              ".75 first digit mismatch");
-    ASSERT_EQ(static_cast<int>(dot_seventy_five.digits[0].pow10), -1,
-              ".75 first digit pow10 mismatch");
-    ASSERT_EQ(static_cast<int>(dot_seventy_five.digits[1].digit), 5,
-              ".75 second digit mismatch");
-    ASSERT_EQ(static_cast<int>(dot_seventy_five.digits[1].pow10), -2,
-              ".75 second digit pow10 mismatch");
-
-    const auto seventy_five_point_zero_entry = result.atom_table->getAtom(result.atom_tokens[3].span.atom_entry_id);
-    ASSERT_TRUE(seventy_five_point_zero_entry.has_value(), "75.0 atom entry missing");
-    ASSERT_TRUE(seventy_five_point_zero_entry->arg_number.has_value(), "75.0 arg_number metadata missing");
-    const AtomNumber& seventy_five_point_zero = *seventy_five_point_zero_entry->arg_number;
-    ASSERT_EQ(static_cast<int>(seventy_five_point_zero.digits.size()), 3,
-              "75.0 should bind all mantissa digits");
-    ASSERT_EQ(static_cast<int>(seventy_five_point_zero.digits[0].pow10), 1,
-              "75.0 hundreds/tens place pow10 mismatch");
-    ASSERT_EQ(static_cast<int>(seventy_five_point_zero.digits[1].pow10), 0,
-              "75.0 ones place pow10 mismatch");
-    ASSERT_EQ(static_cast<int>(seventy_five_point_zero.digits[2].pow10), -1,
-              "75.0 fractional digit pow10 mismatch");
-
-    const auto one_e_six_entry = result.atom_table->getAtom(result.atom_tokens[4].span.atom_entry_id);
-    ASSERT_TRUE(one_e_six_entry.has_value(), "1e6 atom entry missing");
-    ASSERT_TRUE(one_e_six_entry->arg_number.has_value(), "1e6 arg_number metadata missing");
-    const AtomNumber& one_e_six = *one_e_six_entry->arg_number;
-    ASSERT_EQ(static_cast<int>(one_e_six.has_exponent), 1, "1e6 should record exponent metadata");
-    ASSERT_EQ(one_e_six.exponent_value, 6, "1e6 exponent value mismatch");
-    ASSERT_EQ(static_cast<int>(one_e_six.digits[0].pow10), 6, "1e6 mantissa pow10 mismatch");
-
-    const auto signed_scientific_entry = result.atom_table->getAtom(result.atom_tokens[5].span.atom_entry_id);
-    ASSERT_TRUE(signed_scientific_entry.has_value(), "-1.5e-4 atom entry missing");
-    ASSERT_TRUE(signed_scientific_entry->arg_number.has_value(), "-1.5e-4 arg_number metadata missing");
-    const AtomNumber& signed_scientific = *signed_scientific_entry->arg_number;
-    ASSERT_EQ(static_cast<int>(signed_scientific.has_sign), 1,
-              "-1.5e-4 should record mantissa sign");
-    ASSERT_EQ(static_cast<int>(signed_scientific.sign_negative), 1,
-              "-1.5e-4 should record negative mantissa sign");
-    ASSERT_EQ(static_cast<int>(signed_scientific.has_decimal_point), 1,
-              "-1.5e-4 should record decimal point");
-    ASSERT_EQ(static_cast<int>(signed_scientific.has_exponent), 1,
-              "-1.5e-4 should record exponent metadata");
-    ASSERT_EQ(static_cast<int>(signed_scientific.exponent_negative), 1,
-              "-1.5e-4 should record negative exponent sign");
-    ASSERT_EQ(signed_scientific.exponent_value, -4,
-              "-1.5e-4 exponent value mismatch");
-    ASSERT_EQ(static_cast<int>(signed_scientific.digits[0].digit), 1,
-              "-1.5e-4 first mantissa digit mismatch");
-    ASSERT_EQ(static_cast<int>(signed_scientific.digits[0].pow10), -4,
-              "-1.5e-4 first mantissa pow10 mismatch");
-    ASSERT_EQ(static_cast<int>(signed_scientific.digits[1].digit), 5,
-              "-1.5e-4 second mantissa digit mismatch");
-    ASSERT_EQ(static_cast<int>(signed_scientific.digits[1].pow10), -5,
-              "-1.5e-4 second mantissa pow10 mismatch");
-
-    return true;
-}
-
-bool testAtomTokenizationRejectsMantissaDigitSlotOverflow(std::string& message) {
-    const std::string text = "value 12345678901234567";
-    Detector::DetectorRegistry registry = Detector::makeDefaultRawTextDetectorRegistry();
-    const Detector::RawTextDetectorOptions options(true, true, true);
-    const auto detections = registry.scan(text, options);
-
-    bool threw = false;
-    std::string error_text;
-    try {
-        (void)createAtomTableFromRawTextDetections(
-            std::string_view(text.data(), text.size()),
-            detections,
-            16,
-            "testAtomTokenizationRejectsMantissaDigitSlotOverflow");
-    } catch (const std::runtime_error& e) {
-        threw = true;
-        error_text = e.what();
-    }
-
-    ASSERT_TRUE(threw, "Tokenization-time atom creation must fail when mantissa digit count exceeds configured max slots");
-    ASSERT_TRUE(error_text.find("max_mantissa_digit_slots=16") != std::string::npos,
-                "Overflow error must include configured max_mantissa_digit_slots");
-    ASSERT_TRUE(error_text.find("raw_text='12345678901234567'") != std::string::npos,
-                "Overflow error must include offending numeric raw_text");
-    ASSERT_TRUE(error_text.find("mantissa_digit_sequence='12345678901234567'") != std::string::npos,
-                "Overflow error must include offending mantissa digit sequence");
-
-    return true;
-}
-
-bool testUniByteRawTextDetectorRegistry(std::string& message) {
-    auto config = makeSelfTestTokenizerHP();
-    config.detect_numbers = true;
+bool testDefaultRegistryDoesNotDetectPlainNumbers(std::string& message) {
     auto registry = Detector::makeDefaultRawTextDetectorRegistry();
-    const Detector::RawTextDetectorOptions options(
-        config.detect_numbers,
-        true,
-        true);
+    const Detector::RawTextDetectorOptions options(true, true);
 
     const std::string text = "CPU 42\nGPU -3.5x";
     const auto detections = registry.scan(text, options);
 
-    ASSERT_EQ(detections.size(), static_cast<size_t>(6), "Raw detector count mismatch");
-
-    auto spanText = [&](size_t idx) {
-        const auto& d = detections[idx];
-        return text.substr(d.start, d.end - d.start);
-    };
-
-    ASSERT_TRUE(detections[0].feature == Detector::RawTextFeature::UPPERCASE_RUN,
-                "First raw detection should be uppercase");
-    ASSERT_FALSE(detections[0].emitsAtom(), "Uppercase detector must not emit atoms");
-    ASSERT_STR_EQ(spanText(0), "CPU", "Uppercase span mismatch");
-
-    ASSERT_TRUE(detections[1].feature == Detector::RawTextFeature::WHITESPACE,
-                "Second raw detection should be whitespace");
-    ASSERT_FALSE(detections[1].emitsAtom(), "Whitespace detector must not emit atoms");
-    ASSERT_STR_EQ(spanText(1), " ", "Whitespace span mismatch");
-
-    ASSERT_TRUE(detections[2].emitsAtom(), "Integer raw detection should emit atom");
-    ASSERT_TRUE(detections[2].atom_type == AtomType::ATOM_INT,
-                "Integer detector emitted wrong atom type");
-    ASSERT_STR_EQ(spanText(2), "42", "Integer span mismatch");
-
-    ASSERT_TRUE(detections[5].emitsAtom(), "Float raw detection should emit atom");
-    ASSERT_TRUE(detections[5].atom_type == AtomType::ATOM_FLOAT,
-                "Float detector emitted wrong atom type");
-    ASSERT_STR_EQ(spanText(5), "-3.5", "Float span mismatch");
-
-    std::vector<StructuralSpan> structures;
-    structures.reserve(detections.size());
     for (const auto& detection : detections) {
-        if (!detection.emitsAtom()) {
-            continue;
-        }
-        structures.push_back(static_cast<const StructuralSpan&>(detection));
+        ASSERT_FALSE(detection.emitsAtom(),
+                     "Default registry must not emit atoms for plain numeric text");
     }
-
-    ASSERT_EQ(structures.size(), static_cast<size_t>(2), "Only atom detections should become structures");
-    ASSERT_TRUE(structures[0].atom_type == AtomType::ATOM_INT,
-                "First structure should be integer atom");
-    ASSERT_TRUE(structures[1].atom_type == AtomType::ATOM_FLOAT,
-                "Second structure should be float atom");
 
     return true;
 }
@@ -1377,7 +1194,6 @@ bool testUniByteDateDetection(std::string& message) {
 bool testUniByteTypedAtomSpanInjection(std::string& message) {
     auto config = makeSelfTestTokenizerHP();
     config.target_vocab_size = 50000;
-    config.detect_numbers = true;
     
     UniByte tokenizer(config);
     
@@ -1443,7 +1259,6 @@ bool testAuthoredAtomDelimiterDetector(std::string& message) {
     auto registry = Detector::makeDefaultRawTextDetectorRegistry();
     const Detector::RawTextDetectorOptions options(
         false,
-        false,
         false);
     const std::string text =
         "value=<INT> 42 </INT> ratio=<FLOAT>-3.5</FLOAT> "
@@ -1487,9 +1302,7 @@ bool testAuthoredAtomDelimiterDetector(std::string& message) {
         createAtomTableFromRawTextDetections(
             text,
             detections,
-            16,
-            "testAuthoredAtomDelimiterDetector",
-            16);
+            "testAuthoredAtomDelimiterDetector");
     ASSERT_EQ(table_result.atom_tokens.size(), static_cast<size_t>(4),
               "Authored delimiter detections must register four atom payloads");
     ASSERT_EQ(table_result.atom_tokens[0].span.open_token_id,
@@ -1502,6 +1315,16 @@ bool testAuthoredAtomDelimiterDetector(std::string& message) {
               "Authored integer value was not stored");
     ASSERT_EQ(table_result.atom_tokens[1].token_numeric_value, -3.5f,
               "Authored float value was not stored");
+    const auto integer_entry = table_result.atom_table->getAtom(
+        table_result.atom_tokens[0].span.atom_entry_id);
+    ASSERT_TRUE(integer_entry.has_value(), "Authored integer AtomTable entry is missing");
+    ASSERT_FALSE(integer_entry->arg_number.has_value(),
+                 "Authored integer registration must not populate digit/pow10 metadata");
+    const auto float_entry = table_result.atom_table->getAtom(
+        table_result.atom_tokens[1].span.atom_entry_id);
+    ASSERT_TRUE(float_entry.has_value(), "Authored float AtomTable entry is missing");
+    ASSERT_FALSE(float_entry->arg_number.has_value(),
+                 "Authored float registration must not populate digit/pow10 metadata");
     ASSERT_EQ(table_result.atom_tokens[2].span.open_token_id,
               atomTypeToOpenTokenId(AtomType::ATOM_STRING),
               "Authored string opening token mismatch");
@@ -1575,7 +1398,6 @@ bool testAuthoredAtomDelimiterDetector(std::string& message) {
     bool testUniBytePreRegistersAtomTableBeforeSpanEmission(std::string& message) {
         auto config = makeSelfTestTokenizerHP();
         config.target_vocab_size = 50000;
-        config.detect_numbers = true;
 
         UniByte tokenizer(config);
 
@@ -2018,8 +1840,8 @@ bool testAtomTableHashDeduplication(std::string& message) {
     ASSERT_TRUE(entry1 && entry2, "Both atoms should exist");
     ASSERT_EQ(id1, id2, "Registering the same numeric atom should dedupe to one atom entry id");
     ASSERT_EQ(entry1->hash, entry2->hash, "Identical atoms should have same hash");
-    ASSERT_TRUE(entry1->arg_number.has_value(), "Deduped numeric atom should retain arg_number metadata");
-    ASSERT_TRUE(entry2->arg_number.has_value(), "Reloaded deduped numeric atom copy should carry arg_number metadata");
+    ASSERT_FALSE(entry1->arg_number.has_value(), "Tokenizer registration must not populate arg_number metadata");
+    ASSERT_FALSE(entry2->arg_number.has_value(), "Deduped atom copies must not gain arg_number metadata");
     
     // Different atom should have different hash
     uint32_t id3 = registerSelfTestAtom(table, AtomType::ATOM_INT, "200", 0, 3);
@@ -2031,49 +1853,26 @@ bool testAtomTableHashDeduplication(std::string& message) {
     return true;
 }
 
-bool testAtomTableArgNumberSerializesOnEntry(std::string& message) {
+bool testAtomTableDoesNotPopulateArgNumber(std::string& message) {
     AtomTable table;
     const uint32_t id = registerSelfTestAtom(table, AtomType::ATOM_FLOAT, "-1.5e-4", 12, 19);
-    ASSERT_TRUE(id != UINT32_MAX, "Failed to register numeric atom for arg_number serialization test");
+    ASSERT_TRUE(id != UINT32_MAX, "Failed to register numeric atom");
 
     const auto entry = table.getAtom(id);
     ASSERT_TRUE(entry.has_value(), "Original atom entry missing before serialization");
-    ASSERT_TRUE(entry->arg_number.has_value(), "Original atom entry missing arg_number metadata");
-
-    std::filesystem::create_directories("output");
-    const std::filesystem::path text_path = std::filesystem::path("output") / "atomtable_arg_number_entry.tsv";
+    ASSERT_FALSE(entry->arg_number.has_value(),
+                 "Tokenizer registration must not populate mantissa/digit/pow10 metadata");
 
     std::stringstream binary_stream;
-    table.serializeToStreamOrThrow(binary_stream, "testAtomTableArgNumberSerializesOnEntry binary_stream");
-    ASSERT_TRUE(table.saveToTextFile(text_path.string()), "AtomTable text save should include entry-owned arg_number metadata");
+    table.serializeToStreamOrThrow(binary_stream, "testAtomTableDoesNotPopulateArgNumber binary_stream");
 
     AtomTable loaded;
-    loaded.deserializeFromStreamOrThrow(binary_stream, "testAtomTableArgNumberSerializesOnEntry binary_stream");
+    loaded.deserializeFromStreamOrThrow(binary_stream, "testAtomTableDoesNotPopulateArgNumber binary_stream");
 
     const auto loaded_entry = loaded.getAtom(id);
     ASSERT_TRUE(loaded_entry.has_value(), "Loaded atom entry missing after serialization round-trip");
-    ASSERT_TRUE(loaded_entry->arg_number.has_value(), "Loaded atom entry missing arg_number metadata after serialization round-trip");
-
-    const AtomNumber& loaded_number = *loaded_entry->arg_number;
-    ASSERT_EQ(static_cast<int>(loaded_number.has_sign), 1, "Loaded arg_number should preserve mantissa sign metadata");
-    ASSERT_EQ(static_cast<int>(loaded_number.has_decimal_point), 1, "Loaded arg_number should preserve decimal-point metadata");
-    ASSERT_EQ(static_cast<int>(loaded_number.has_exponent), 1, "Loaded arg_number should preserve exponent metadata");
-    ASSERT_EQ(loaded_number.exponent_value, -4, "Loaded arg_number exponent mismatch");
-    ASSERT_EQ(static_cast<int>(loaded_number.digits.size()), 2, "Loaded arg_number digit count mismatch");
-    ASSERT_EQ(static_cast<int>(loaded_number.digits[0].pow10), -4, "Loaded arg_number first digit pow10 mismatch");
-    ASSERT_EQ(static_cast<int>(loaded_number.digits[1].pow10), -5, "Loaded arg_number second digit pow10 mismatch");
-
-    std::ifstream text_dump(text_path);
-    ASSERT_TRUE(text_dump.is_open(), "Serialized AtomTable text dump missing");
-    std::stringstream text_buffer;
-    text_buffer << text_dump.rdbuf();
-    const std::string text_dump_contents = text_buffer.str();
-    ASSERT_TRUE(text_dump_contents.find("arg_number") != std::string::npos,
-                "Text dump header should include arg_number column");
-    ASSERT_TRUE(text_dump_contents.find("pow10=-4") != std::string::npos,
-                "Text dump should serialize digit binding pow10 metadata");
-
-    std::filesystem::remove(text_path);
+    ASSERT_FALSE(loaded_entry->arg_number.has_value(),
+                 "Serialization must preserve the absence of arg_number metadata");
     return true;
 }
 
@@ -2086,7 +1885,6 @@ bool testFullPipeline(std::string& message) {
     auto config = makeSelfTestTokenizerHP();
     config.target_vocab_size = 50000;
     config.enable_byte_fallback = true;
-    config.detect_numbers = true;
     
     UniByte tokenizer(config);
     
@@ -2122,7 +1920,6 @@ bool testFullPipeline(std::string& message) {
 bool testAtomTableIntegration(std::string& message) {
     auto config = makeSelfTestTokenizerHP();
     config.target_vocab_size = 50000;
-    config.detect_numbers = true;
     
     UniByte tokenizer(config);
     
@@ -2360,7 +2157,6 @@ bool testUnicodeMultiLanguage(std::string& message) {
 bool testUnicodeWithStructural(std::string& message) {
     auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
-    config.detect_numbers = true;
     config.enable_atom_reasoning = true;  // Enable atom detection
     UniByte tokenizer(config);
     
@@ -2413,7 +2209,6 @@ bool testMultipleEmails(std::string& message) {
 bool testMixedNumbers(std::string& message) {
     auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
-    config.detect_numbers = true;
     UniByte tokenizer(config);
     
     std::string input = "Int: 42, Float: 3.14, Negative: -17, Scientific: 1.5e10, Hex: 0xFF";
@@ -2436,7 +2231,6 @@ bool testMixedNumbers(std::string& message) {
 bool testAdjacentStructural(std::string& message) {
     auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
-    config.detect_numbers = true;
     UniByte tokenizer(config);
     
     // Number immediately followed by letters should still tokenize cleanly.
@@ -2488,7 +2282,6 @@ bool testUnixPath(std::string& message) {
 bool testScientificNotation(std::string& message) {
     auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
-    config.detect_numbers = true;
     UniByte tokenizer(config);
     
     std::string input = "Values: 1.23e-10, 4.56E+20, 7.89e5";
@@ -2510,7 +2303,6 @@ bool testScientificNotation(std::string& message) {
 bool testIPAddressVsDecimal(std::string& message) {
     auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
-    config.detect_numbers = true;
     // Note: IP detection may be part of number detection or separate
     UniByte tokenizer(config);
     
@@ -2535,7 +2327,6 @@ bool testIPAddressVsDecimal(std::string& message) {
 bool testNegativeNumbers(std::string& message) {
     auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
-    config.detect_numbers = true;
     UniByte tokenizer(config);
     
     std::string input = "Temperature: -40 degrees, balance: -$1,234.56";
@@ -2560,7 +2351,6 @@ bool testDigitsFollowedByAlpha(std::string& message) {
     // as ordinary content tokens inside typed boundaries.
     auto config = makeSelfTestTokenizerHP();
     config.enable_byte_fallback = true;
-    config.detect_numbers = true;
     UniByte tokenizer(config);
     
     struct TestCase {
@@ -3530,20 +3320,12 @@ int main(int argc, char** argv) {
 
     // Section 4: UniByte Orchestrator Tests
     suite.addTest("UniByte.BasicEncode", testUniByteBasicEncode);
-    suite.addTest("UniByte.StructuralDetection", testUniByteStructuralDetection);
-    suite.addTest("UniByte.RejectsUnparseableDetectedAtom", testUniByteRejectsUnparseableDetectedAtom);
-    suite.addTest("Unigram.Train.RejectsUnparseableDetectedAtom", testUnigramTrainRejectsUnparseableDetectedAtom);
     suite.addTest("AtomTable.RejectsBadNumericDetectionWithContext", testAtomTableRejectsBadNumericDetectionWithContext);
-    suite.addTest("AtomTable.ArgNumberSupportsSignedDecimalExponent", testAtomTableArgNumberSupportsSignedDecimalExponent);
-    suite.addTest("AtomTable.TokenizationRejectsMantissaDigitSlotOverflow", testAtomTokenizationRejectsMantissaDigitSlotOverflow);
-    suite.addTest("UniByte.RawTextDetectorRegistry", testUniByteRawTextDetectorRegistry);
+    suite.addTest("UniByte.DefaultRegistryDoesNotDetectPlainNumbers", testDefaultRegistryDoesNotDetectPlainNumbers);
     suite.addTest("UniByte.AuthoredAtomDelimiterDetector", testAuthoredAtomDelimiterDetector);
     suite.addTest("UniByte.URLPassthrough", testUniByteURLDetection);
     suite.addTest("UniByte.URLPassthrough.CaseInsensitive", testUniByteURLDetectionCaseInsensitive);
     suite.addTest("UniByte.EmailPassthrough", testUniByteEmailDetection);
-    suite.addTest("UniByte.DateNumericOnly", testUniByteDateDetection);
-    suite.addTest("UniByte.TypedAtomSpanInjection", testUniByteTypedAtomSpanInjection);
-    suite.addTest("UniByte.PreRegistersAtomTableBeforeSpanEmission", testUniBytePreRegistersAtomTableBeforeSpanEmission);
     suite.addTest("UniByte.RoundTrip", testUniByteRoundTrip);
     
     // Section 5: AtomTable Tests
@@ -3564,11 +3346,9 @@ int main(int argc, char** argv) {
     suite.addTest("AtomTable.Clear", testAtomTableClear);
     suite.addTest("AtomTable.Metadata", testAtomTableMetadata);
     suite.addTest("AtomTable.HashDeduplication", testAtomTableHashDeduplication);
-    suite.addTest("AtomTable.ArgNumberSerializesOnEntry", testAtomTableArgNumberSerializesOnEntry);
+    suite.addTest("AtomTable.DoesNotPopulateArgNumber", testAtomTableDoesNotPopulateArgNumber);
     
     // Section 6: Integration Tests
-    suite.addTest("Integration.FullPipeline", testFullPipeline);
-    suite.addTest("Integration.AtomTable", testAtomTableIntegration);
     suite.addTest("Integration.BatchProcessing", testBatchProcessing);
     
     // Section 7: Edge Case Tests
@@ -3582,23 +3362,14 @@ int main(int argc, char** argv) {
     // Section 8: Unicode & Emoji Tests
     suite.addTest("Unicode.Emoji", testUnicodeEmoji);
     suite.addTest("Unicode.MultiLanguage", testUnicodeMultiLanguage);
-    suite.addTest("Unicode.WithNumbers", testUnicodeWithStructural);
     
     // Section 9: Multiple Structural Elements Tests
     suite.addTest("Structural.MultipleURLsPassthrough", testMultipleURLs);
     suite.addTest("Structural.MultipleEmailsPassthrough", testMultipleEmails);
-    suite.addTest("Structural.MixedNumbers", testMixedNumbers);
-    suite.addTest("Structural.Adjacent", testAdjacentStructural);
     
     // Section 10: Path Detection Tests
     suite.addTest("Path.WindowsPassthrough", testWindowsPath);
     suite.addTest("Path.UnixPassthrough", testUnixPath);
-    
-    // Section 11: Numeric Edge Cases
-    suite.addTest("Numeric.ScientificNotation", testScientificNotation);
-    suite.addTest("Numeric.IPvsDecimal", testIPAddressVsDecimal);
-    suite.addTest("Numeric.Negative", testNegativeNumbers);
-    suite.addTest("Numeric.DigitsFollowedByAlpha", testDigitsFollowedByAlpha);
     
     // Section 12: Byte Fallback Control Tests
     suite.addTest("ByteFallback.Disabled", testByteFallbackDisabled);

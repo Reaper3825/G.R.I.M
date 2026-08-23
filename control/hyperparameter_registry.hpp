@@ -200,7 +200,6 @@ public:
             {"tokenizer_enable_lowercasing", "TokenizerConfig"},
             {"tokenizer_enable_byte_fallback", "TokenizerConfig"},
             {"tokenizer_enable_atom_reasoning", "TokenizerConfig"},
-            {"tokenizer_detect_numbers", "TokenizerConfig"},
         };
 
         entries_.clear();

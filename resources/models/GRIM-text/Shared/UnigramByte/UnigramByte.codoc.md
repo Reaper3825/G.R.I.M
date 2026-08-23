@@ -282,7 +282,7 @@ Use this table as the “who owns what?” map.
 | `TextUtils.hpp/.cu` | UTF-8 helpers, SentencePiece-style whitespace normalization | tokenizer orchestration |
 | `Detectors/TokenizerDetector.hpp` | raw-text detector parent class and detection result types | token ID classification, token assembly, atom storage |
 | `Detectors/DetectorRegistry.hpp/.cu` | detector registration, priority ordering, longest-match raw-text scan | tokenizer HP ownership, token IDs |
-| `Detectors/NumericDetectors.hpp/.cu` | integer/float raw-text atom detection | AtomTable parsing, token emission |
+| `Detectors/AtomDelimiterDetector.hpp/.cu` | authored typed-delimiter atom-span placement | AtomTable parsing, token emission |
 | `Detectors/TextFeatureDetectors.hpp/.cu` | whitespace and uppercase raw-text feature detection | atom token emission, unigram segmentation |
 | `AhoCorasick.hpp/.cu` | multi-pattern prefix matching DFA | full numeric parsing, tokenizer output assembly |
 | `AtomTable.hpp/.cu` | parsed atom storage, dedup, GPU packing, numeric value access | subword segmentation |
@@ -327,7 +327,7 @@ Raw-text detection is registry-driven:
 
 1. `RawTextDetector` is the parent class for detectors that scan source byte offsets.
 2. `DetectorRegistry` owns registered detectors, priority ordering, and longest-match scanning.
-3. `DetectorRegistry::scan()` is the single registry traversal API. It returns raw detections for numbers, whitespace, uppercase runs, and future source-text features.
+3. `DetectorRegistry::scan()` is the single registry traversal API. It returns authored typed atom spans, whitespace, uppercase runs, and future source-text features. Plain numbers do not emit atom detections.
 4. `UniByte` and tokenizer training both consume `DetectorRegistry::scan()` directly and filter atom-emitting detections locally before `AtomTable` / `AtomSpan` work.
 
 Detector purpose is split deliberately:
@@ -340,8 +340,7 @@ Current detector surface:
 
 | Detector | Emits atom? | Example inputs |
 |---|---:|---|
-| `FloatDetector` | yes (`ATOM_FLOAT`) | `3.14`, `.5`, `-2.5e10` |
-| `IntegerDetector` | yes (`ATOM_INT`) | `42`, `-17`, `+5` |
+| `AtomDelimiterDetector` | yes (authored type) | `<INT>42</INT>`, `<FLOAT>-2.5</FLOAT>` |
 | `WhitespaceDetector` | no | space, tab, newline runs |
 | `UppercaseRunDetector` | no | `HTTP`, `USA`, `GPU` |
 
@@ -353,7 +352,7 @@ Current parser surface in `AtomTable`:
 | `parseFloat` | float parsing |
 | — | hex/binary parsing is not active |
 
-Right now the active emitted atom types are numeric: `ATOM_INT` and `ATOM_FLOAT`.
+Atom emission is placement-only: the authored delimiter determines the atom type and exact content bounds.
 
 ---
 

@@ -178,7 +178,6 @@ resources/models/model_store/<model_id>/
         "expected_checksum": 0,
         "scratch_block_reasoning": {
             "enabled": true,
-            "detect_numbers": true,
             "detect_urls": true,
             "detect_emails": true,
             "detect_paths": true,
