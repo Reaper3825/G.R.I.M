@@ -60,13 +60,8 @@ struct LMHeadParameterTensors {
     bool owns_weights = true;
 };
 
-// NumberEncoder — numeric-meaning input path (digit-place contribution slots).
-//   slot_i = digit_emb[digit] + pow10_emb[pow10_bucket] + W_c2 @ tanh(W_c1 @ slot_feat + b_c1)
-//   number_embedding = mean_over_real_slots(slot_i) + W_g2 @ tanh(W_g1 @ global_feat + b_g1)
-// NumericAtom decoder reuses digit_emb/pow10_emb as tied input/output tables
-// and owns Wz/Uz, Wr/Ur, Wh/Uh for its recurrent transition.
-// Feature widths are the payload-owned contract
-// (BatchPayload::kNumberSlotFeatureDim / kNumberGlobalFeatureDim).
+// NumericAtom decoder parameters. The decoder reuses digit_emb/pow10_emb as
+// tied input/output tables and owns Wz/Uz, Wr/Ur, Wh/Uh for its transition.
 struct NumberEncoderParameterTensors {
     Tensor digit_emb;   // [10, d_model] digit identity embedding
     Tensor pow10_emb;   // [pow10_buckets, d_model] place identity embedding
@@ -78,12 +73,6 @@ struct NumberEncoderParameterTensors {
     Tensor numeric_atom_Uh; // [d_model, d_model] GRU candidate state projection
     Tensor numeric_atom_sign_classifier; // [1, d_model] negative-sign projection
     Tensor numeric_atom_stop_classifier; // [1, d_model] typed CLOSE / stop projection
-    Tensor W_c1;        // [BatchPayload::kNumberSlotFeatureDim, d_hidden] contribution MLP in
-    Tensor b_c1;        // [1, d_hidden] contribution MLP bias
-    Tensor W_c2;        // [d_hidden, d_model] contribution MLP out
-    Tensor W_g1;        // [BatchPayload::kNumberGlobalFeatureDim, d_hidden] global mantissa/exponent MLP in
-    Tensor b_g1;        // [1, d_hidden] global MLP bias
-    Tensor W_g2;        // [d_hidden, d_model] global MLP out
 };
 
 // Arg/option selector head parameters (execution-INDEPENDENT). A single query
@@ -477,7 +466,7 @@ inline constexpr std::array<EmbeddingTensorParameterSpec, 1>
          GRIM::ParamGroupType::EMBEDDING, GRIM::ParamStatsBucket::EMBEDDING},
     }};
 
-inline constexpr std::array<NumberEncoderTensorParameterSpec, 16>
+inline constexpr std::array<NumberEncoderTensorParameterSpec, 10>
     kNumberEncoderTensorParameters = {{
         {"number_encoder_digit_emb", &GRIM::NumberEncoderParameterTensors::digit_emb,
          GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
@@ -499,18 +488,6 @@ inline constexpr std::array<NumberEncoderTensorParameterSpec, 16>
          GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::ENCODER},
         {"numeric_atom_stop_classifier", &GRIM::NumberEncoderParameterTensors::numeric_atom_stop_classifier,
          GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::ENCODER},
-        {"number_encoder_W_c1", &GRIM::NumberEncoderParameterTensors::W_c1,
-         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
-        {"number_encoder_b_c1", &GRIM::NumberEncoderParameterTensors::b_c1,
-         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
-        {"number_encoder_W_c2", &GRIM::NumberEncoderParameterTensors::W_c2,
-         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
-        {"number_encoder_W_g1", &GRIM::NumberEncoderParameterTensors::W_g1,
-         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
-        {"number_encoder_b_g1", &GRIM::NumberEncoderParameterTensors::b_g1,
-         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
-        {"number_encoder_W_g2", &GRIM::NumberEncoderParameterTensors::W_g2,
-         GRIM::ParamGroupType::NUMBER_ENCODER, GRIM::ParamStatsBucket::EMBEDDING},
     }};
 
 inline constexpr std::array<SelectorTensorParameterSpec, 1>
@@ -705,24 +682,8 @@ inline void registerExecutionBlockParameters(
 template <typename RegistrarT>
 inline void registerNumberEncoderParameters(
     GRIM::NumberEncoderParameterTensors& number_encoder_parameters,
-    RegistrarT& registrar,
-    bool contribution_bias_enabled,
-    bool global_bias_enabled) {
+    RegistrarT& registrar) {
     for (const auto& spec : kNumberEncoderTensorParameters) {
-        if (spec.tensor_member == &GRIM::NumberEncoderParameterTensors::b_c1 ||
-            spec.tensor_member == &GRIM::NumberEncoderParameterTensors::b_g1) {
-            const bool enabled = spec.tensor_member == &GRIM::NumberEncoderParameterTensors::b_c1
-                ? contribution_bias_enabled
-                : global_bias_enabled;
-            registrar.addConfigGatedTensor(spec.name,
-                                           number_encoder_parameters.*(spec.tensor_member),
-                                           spec.type,
-                                           spec.stats_bucket,
-                                           spec.layer,
-                                           enabled,
-                                           "corresponding number-encoder bias gate is false");
-            continue;
-        }
         registrar.addTensor(spec.name,
                             number_encoder_parameters.*(spec.tensor_member),
                             spec.type,

@@ -517,9 +517,7 @@ void registerNumberEncoderParameters(ParameterRegistry::StartupParameterRegistry
         "registerNumberEncoderParameters");
     ParameterRegistry::registerNumberEncoderParameters(
         number_encoder_tensor_owner,
-        registrar,
-        number_encoder_hp.contribution_bias_enabled,
-        number_encoder_hp.global_bias_enabled);
+        registrar);
 }
 
 void registerSelectorParameters(ParameterRegistry::StartupParameterRegistry& parameter_registry,
@@ -1381,10 +1379,6 @@ void initializeNumberEncoderParameterTensors(
         throw std::runtime_error("initializeNumberEncoderParameterTensors: d_model must be > 0, got " +
                                  std::to_string(number_encoder_hp.d_model));
     }
-    if (number_encoder_hp.d_hidden <= 0) {
-        throw std::runtime_error("initializeNumberEncoderParameterTensors: d_hidden must be > 0, got " +
-                                 std::to_string(number_encoder_hp.d_hidden));
-    }
     if (number_encoder_hp.max_digit_slots <= 0) {
         throw std::runtime_error("initializeNumberEncoderParameterTensors: max_digit_slots must be > 0, got " +
                                  std::to_string(number_encoder_hp.max_digit_slots));
@@ -1398,7 +1392,6 @@ void initializeNumberEncoderParameterTensors(
     }
 
     const int d_model = number_encoder_hp.d_model;
-    const int d_hidden = number_encoder_hp.d_hidden;
 
     auto params = std::make_unique<GRIM::NumberEncoderParameterTensors>();
     auto make_xavier = [&](int rows, int cols, std::uint64_t seed, const char* name) -> GRIM::Tensor {
@@ -1427,20 +1420,6 @@ void initializeNumberEncoderParameterTensors(
         1, d_model, weight_init_seed + 13, "numeric_atom_sign_classifier");
     params->numeric_atom_stop_classifier = make_xavier(
         1, d_model, weight_init_seed + 12, "numeric_atom_stop_classifier");
-    params->W_c1 = make_xavier(GRIM::Batching::BatchPayload::kNumberSlotFeatureDim, d_hidden, weight_init_seed + 2, "number_encoder.W_c1");
-    if (number_encoder_hp.contribution_bias_enabled) {
-        params->b_c1 = GRIM::Tensor::zeros({1, d_hidden}, init_stream, "number_encoder.b_c1");
-        params->b_c1.requires_grad_();
-        params->b_c1.alloc_grad();
-    }
-    params->W_c2 = make_xavier(d_hidden, d_model, weight_init_seed + 3, "number_encoder.W_c2");
-    params->W_g1 = make_xavier(GRIM::Batching::BatchPayload::kNumberGlobalFeatureDim, d_hidden, weight_init_seed + 4, "number_encoder.W_g1");
-    if (number_encoder_hp.global_bias_enabled) {
-        params->b_g1 = GRIM::Tensor::zeros({1, d_hidden}, init_stream, "number_encoder.b_g1");
-        params->b_g1.requires_grad_();
-        params->b_g1.alloc_grad();
-    }
-    params->W_g2 = make_xavier(d_hidden, d_model, weight_init_seed + 5, "number_encoder.W_g2");
 
     const cudaError_t sync_err = cudaStreamSynchronize(init_stream);
     if (sync_err != cudaSuccess) {
@@ -1449,9 +1428,8 @@ void initializeNumberEncoderParameterTensors(
     }
 
     parameter_registry.number_encoder_parameters = std::move(params);
-    emitInfo("[initializeNumberEncoderParameterTensors] Initialized registry-owned NumberEncoder tensors (d_model=" +
-             std::to_string(d_model) + ", d_hidden=" + std::to_string(d_hidden) +
-             ", pow10_buckets=" + std::to_string(number_encoder_hp.pow10_buckets) +
+    emitInfo("[initializeNumberEncoderParameterTensors] Initialized registry-owned NumericAtom tensors (d_model=" +
+             std::to_string(d_model) + ", pow10_buckets=" + std::to_string(number_encoder_hp.pow10_buckets) +
              ", max_digit_slots=" + std::to_string(number_encoder_hp.max_digit_slots) + ")");
 }
 
