@@ -188,37 +188,6 @@ BatchDeviceBindings uploadBatchToDevice(
     if (!cached_atom_types_ptr) {
         throw std::runtime_error("uploadBatchToDevice: BatchDeviceStorage.atom_types_tensor.data is NULL");
     }
-    int* cached_number_target_digits_ptr = nullptr;
-    int* cached_number_target_pow10_ptr = nullptr;
-    uint8_t* cached_number_target_mask_ptr = nullptr;
-    uint8_t* cached_number_target_valid_ptr = nullptr;
-    uint8_t* cached_number_target_sign_ptr = nullptr;
-    if (payload.number_aux_target_digit_slots > 0) {
-        if (payload.number_aux_target_digit_slots >
-            storage.number_encoder_digit_slots_capacity) {
-            throw std::runtime_error(
-                "uploadBatchToDevice: payload numeric target digit slots=" +
-                std::to_string(payload.number_aux_target_digit_slots) +
-                " exceed storage capacity=" +
-                std::to_string(storage.number_encoder_digit_slots_capacity));
-        }
-        cached_number_target_digits_ptr = reinterpret_cast<int*>(
-            storage.number_aux_target_digits_tensor.data);
-        cached_number_target_pow10_ptr = reinterpret_cast<int*>(
-            storage.number_aux_target_pow10_index_tensor.data);
-        cached_number_target_mask_ptr = reinterpret_cast<uint8_t*>(
-            storage.number_aux_target_digit_mask_tensor.data);
-        cached_number_target_valid_ptr = reinterpret_cast<uint8_t*>(
-            storage.number_aux_target_valid_tensor.data);
-        cached_number_target_sign_ptr = reinterpret_cast<uint8_t*>(
-            storage.number_aux_target_sign_negative_tensor.data);
-        if (!cached_number_target_digits_ptr || !cached_number_target_pow10_ptr ||
-            !cached_number_target_mask_ptr || !cached_number_target_valid_ptr ||
-            !cached_number_target_sign_ptr) {
-            throw std::runtime_error(
-                "uploadBatchToDevice: numeric target storage is NULL while payload targets are populated");
-        }
-    }
 
     const size_t input_ids_bytes   = payload.inputIdBytes();
     const size_t target_ids_bytes  = payload.targetIdBytes();
@@ -231,21 +200,11 @@ BatchDeviceBindings uploadBatchToDevice(
     const size_t slot_map_bytes  = payload.slotMapBytes();
     const size_t atom_position_bytes = payload.atomPositionBytes();
     const size_t atom_type_bytes = payload.atomTypeBytes();
-    const size_t number_target_digits_bytes =
-        payload.number_aux_target_digits.size() * sizeof(int);
-    const size_t number_target_pow10_bytes =
-        payload.number_aux_target_pow10_index.size() * sizeof(int);
-    const size_t number_target_mask_bytes =
-        payload.number_aux_target_digit_mask.size() * sizeof(uint8_t);
-    const size_t number_target_valid_bytes =
-        payload.number_aux_target_valid.size() * sizeof(uint8_t);
-    const size_t number_target_sign_bytes =
-        payload.number_aux_target_sign_negative.size() * sizeof(uint8_t);
 
     auto copy_start = std::chrono::high_resolution_clock::now();
 
     // Round 1: input_ids + target_ids. Targets arrive pre-masked from
-    // buildBatchPayload Phase 4b; payload.lm_valid_tokens already accounts for
+    // buildBatchPayload Phase 4; payload.lm_valid_tokens already accounts for
     // the post-masking LM-supervised count.
     BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(cached_token_ids_ptr, payload.input_ids.data(),
         input_ids_bytes, cudaMemcpyHostToDevice, stream));
@@ -304,41 +263,6 @@ BatchDeviceBindings uploadBatchToDevice(
     }
     BATCH_UPLOAD_CUDA_CHECK(cudaStreamSynchronize(stream));
 
-    // Round 6: numeric auxiliary target mirrors.
-    if (payload.number_aux_target_digit_slots > 0) {
-        BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
-            cached_number_target_digits_ptr,
-            payload.number_aux_target_digits.data(),
-            number_target_digits_bytes,
-            cudaMemcpyHostToDevice,
-            stream));
-        BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
-            cached_number_target_pow10_ptr,
-            payload.number_aux_target_pow10_index.data(),
-            number_target_pow10_bytes,
-            cudaMemcpyHostToDevice,
-            stream));
-        BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
-            cached_number_target_mask_ptr,
-            payload.number_aux_target_digit_mask.data(),
-            number_target_mask_bytes,
-            cudaMemcpyHostToDevice,
-            stream));
-        BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
-            cached_number_target_valid_ptr,
-            payload.number_aux_target_valid.data(),
-            number_target_valid_bytes,
-            cudaMemcpyHostToDevice,
-            stream));
-        BATCH_UPLOAD_CUDA_CHECK(cudaMemcpyAsync(
-            cached_number_target_sign_ptr,
-            payload.number_aux_target_sign_negative.data(),
-            number_target_sign_bytes,
-            cudaMemcpyHostToDevice,
-            stream));
-        BATCH_UPLOAD_CUDA_CHECK(cudaStreamSynchronize(stream));
-    }
-
     auto copy_end = std::chrono::high_resolution_clock::now();
     auto copy_ms = std::chrono::duration<double, std::milli>(copy_end - copy_start).count();
     if constexpr (VerboseLogging::ENABLE_VOCAB_TIMING_LOGS) {
@@ -362,11 +286,6 @@ BatchDeviceBindings uploadBatchToDevice(
     bindings.d_token_to_slot_index_map = cached_slot_map_ptr;
     bindings.d_atom_positions   = cached_atom_positions_ptr;
     bindings.d_atom_types       = cached_atom_types_ptr;
-    bindings.d_number_aux_target_digits = cached_number_target_digits_ptr;
-    bindings.d_number_aux_target_pow10_index = cached_number_target_pow10_ptr;
-    bindings.d_number_aux_target_digit_mask = cached_number_target_mask_ptr;
-    bindings.d_number_aux_target_valid = cached_number_target_valid_ptr;
-    bindings.d_number_aux_target_sign_negative = cached_number_target_sign_ptr;
     return bindings;
 }
 
@@ -389,16 +308,11 @@ std::shared_ptr<BatchDeviceStorage> createBatchDeviceStorage(
     const std::size_t token_capacity =
         static_cast<std::size_t>(workspace_hp.max_tokens_per_batch);
     const int max_tokens = static_cast<int>(token_capacity);
-    const auto number_encoder_hp =
-        HyperParameters::numberEncoderConstructionHP(config);
 
     auto storage = std::make_shared<BatchDeviceStorage>();
     storage->batch_size_capacity = workspace_hp.batch_size;
     storage->max_seq_len_capacity = HyperParameters::snapshotTrainingConfigField<int>(config, "max_cached_seq_len");
     storage->max_tokens_capacity = max_tokens;
-    storage->number_encoder_digit_slots_capacity = number_encoder_hp.enabled
-        ? number_encoder_hp.max_digit_slots
-        : 0;
 
     storage->target_ids_tensor = Tensor::empty(
         TensorContract::TensorShape::make_BSM(max_tokens, 1),
@@ -445,36 +359,6 @@ std::shared_ptr<BatchDeviceStorage> createBatchDeviceStorage(
         false,
         stream,
         "batch_atom_types");
-
-    if (storage->number_encoder_digit_slots_capacity > 0) {
-        const int numeric_target_capacity =
-            max_tokens * storage->number_encoder_digit_slots_capacity;
-        storage->number_aux_target_digits_tensor = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(1, numeric_target_capacity),
-            false,
-            stream,
-            "batch_number_aux_target_digits");
-        storage->number_aux_target_pow10_index_tensor = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(1, numeric_target_capacity),
-            false,
-            stream,
-            "batch_number_aux_target_pow10_index");
-        storage->number_aux_target_digit_mask_tensor = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(1, numeric_target_capacity),
-            false,
-            stream,
-            "batch_number_aux_target_digit_mask");
-        storage->number_aux_target_valid_tensor = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(1, max_tokens),
-            false,
-            stream,
-            "batch_number_aux_target_valid");
-        storage->number_aux_target_sign_negative_tensor = Tensor::empty(
-            TensorContract::TensorShape::make_BSM(1, max_tokens),
-            false,
-            stream,
-            "batch_number_aux_target_sign_negative");
-    }
 
     return storage;
 }

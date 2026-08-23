@@ -15,7 +15,6 @@
 #include "Batching_GPU.hpp"
 #include "../Goal/Goal.hpp"
 #include "../Goal/GoalSpanView.hpp"
-#include "../../Shared/UnigramByte/AtomTable.hpp"
 #include "../../Shared/UnigramByte/TokenLayout.hpp"
 #include "../TokenizerArtifacts/GrmtSequence.hpp"
 #include <cstdio>
@@ -129,181 +128,6 @@ void materializeCompactAtomOpenings(BatchPayload& payload, const char* caller)
     }
 }
 
-void materializeNumberAuxTargets(
-    BatchPayload& payload,
-    int digit_slots,
-    int max_abs_pow10,
-    const char* caller)
-{
-    payload.number_aux_target_digit_slots = 0;
-    payload.number_aux_target_max_abs_pow10 = 0;
-    payload.number_aux_target_valid_count = 0;
-    payload.number_aux_target_valid.clear();
-    payload.number_aux_target_sign_negative.clear();
-    payload.number_aux_target_base.clear();
-    payload.number_aux_target_digit_count.clear();
-    payload.number_aux_target_digits.clear();
-    payload.number_aux_target_pow10_index.clear();
-    payload.number_aux_target_digit_mask.clear();
-    payload.number_aux_target_float_values.clear();
-    payload.number_aux_target_int_values.clear();
-    payload.number_aux_target_numeric_kinds.clear();
-
-    if (digit_slots == 0) {
-        if (max_abs_pow10 != 0) {
-            throw std::runtime_error(
-                std::string(caller) +
-                ": number auxiliary max_abs_pow10 must be 0 when digit_slots=0");
-        }
-        return;
-    }
-    if (digit_slots < 0 || max_abs_pow10 < 0) {
-        throw std::runtime_error(
-            std::string(caller) +
-            ": number auxiliary target geometry must be non-negative");
-    }
-
-    const std::size_t atoms = payload.atom_positions.size();
-    const std::size_t slots = static_cast<std::size_t>(digit_slots);
-    payload.number_aux_target_digit_slots = digit_slots;
-    payload.number_aux_target_max_abs_pow10 = max_abs_pow10;
-    payload.number_aux_target_valid.assign(atoms, 0);
-    payload.number_aux_target_sign_negative.assign(atoms, 0);
-    payload.number_aux_target_base.assign(atoms, 0);
-    payload.number_aux_target_digit_count.assign(atoms, 0);
-    payload.number_aux_target_digits.assign(atoms * slots, 0);
-    payload.number_aux_target_pow10_index.assign(atoms * slots, 0);
-    payload.number_aux_target_digit_mask.assign(atoms * slots, 0);
-    payload.number_aux_target_float_values.assign(atoms, 0.0);
-    payload.number_aux_target_int_values.assign(atoms, 0);
-    payload.number_aux_target_numeric_kinds.assign(
-        atoms, static_cast<uint8_t>(GRIM::Tokenizer::NumericPayloadKind::NONE));
-
-    for (std::size_t atom = 0; atom < atoms; ++atom) {
-        const auto atom_type = static_cast<GRIM::Tokenizer::AtomType>(
-            payload.atom_types[atom]);
-        if (!GRIM::Tokenizer::isNumericAtom(atom_type)) {
-            continue;
-        }
-
-        const int flat_position = payload.atom_positions[atom];
-        const int row = flat_position / payload.max_seq_len;
-        if (row < 0 || row >= payload.batch_size ||
-            static_cast<std::size_t>(row) >= payload.seq_atom_tables.size() ||
-            !payload.seq_atom_tables[static_cast<std::size_t>(row)]) {
-            throw std::runtime_error(
-                std::string(caller) +
-                ": numeric opening cannot resolve its row AtomTable at atom=" +
-                std::to_string(atom));
-        }
-
-        const uint32_t entry_id =
-            payload.atom_entry_ids[static_cast<std::size_t>(flat_position)];
-        if (entry_id == GRIM::Tokenizer::kAtomEntryNone) {
-            throw std::runtime_error(
-                std::string(caller) +
-                ": numeric opening has no atom_entry_id at flat position=" +
-                std::to_string(flat_position));
-        }
-        const auto& table = payload.seq_atom_tables[static_cast<std::size_t>(row)];
-        const auto entry = table->getAtom(entry_id);
-        if (!entry.has_value()) {
-            throw std::runtime_error(
-                std::string(caller) +
-                ": numeric opening references missing AtomEntry id=" +
-                std::to_string(entry_id));
-        }
-        if (entry->type != atom_type || !entry->arg_number.has_value()) {
-            throw std::runtime_error(
-                std::string(caller) +
-                ": numeric AtomEntry type/decomposition mismatch for id=" +
-                std::to_string(entry_id));
-        }
-
-        const auto& number = *entry->arg_number;
-        if (number.digits.empty() || number.digits.size() > slots) {
-            throw std::runtime_error(
-                std::string(caller) + ": numeric AtomEntry id=" +
-                std::to_string(entry_id) + " has digit_count=" +
-                std::to_string(number.digits.size()) +
-                " outside configured digit_slots=" + std::to_string(digit_slots));
-        }
-        if (number.base != 10) {
-            throw std::runtime_error(
-                std::string(caller) + ": numeric AtomEntry id=" +
-                std::to_string(entry_id) + " has unsupported base=" +
-                std::to_string(number.base));
-        }
-
-        payload.number_aux_target_sign_negative[atom] = number.sign_negative;
-        payload.number_aux_target_base[atom] = number.base;
-        payload.number_aux_target_digit_count[atom] =
-            static_cast<uint16_t>(number.digits.size());
-        for (std::size_t slot = 0; slot < number.digits.size(); ++slot) {
-            const auto& digit = number.digits[slot];
-            const int pow10 = static_cast<int>(digit.pow10);
-            if (pow10 < -max_abs_pow10 || pow10 > max_abs_pow10) {
-                throw std::runtime_error(
-                    std::string(caller) + ": numeric AtomEntry id=" +
-                    std::to_string(entry_id) + " has pow10=" +
-                    std::to_string(pow10) + " outside configured range +/-" +
-                    std::to_string(max_abs_pow10));
-            }
-            const std::size_t index = atom * slots + slot;
-            payload.number_aux_target_digits[index] = static_cast<int>(digit.digit);
-            payload.number_aux_target_pow10_index[index] = pow10 + max_abs_pow10;
-            payload.number_aux_target_digit_mask[index] = 1;
-        }
-
-        const auto numeric = table->getNumericValue(entry_id);
-        if (!numeric.has_value()) {
-            throw std::runtime_error(
-                std::string(caller) +
-                ": numeric AtomEntry has no exact decoded value for id=" +
-                std::to_string(entry_id));
-        }
-        const auto expected_kind = atom_type == GRIM::Tokenizer::AtomType::ATOM_INT
-            ? GRIM::Tokenizer::NumericPayloadKind::INTEGER
-            : GRIM::Tokenizer::NumericPayloadKind::FLOAT;
-        if (numeric->kind != expected_kind) {
-            throw std::runtime_error(
-                std::string(caller) +
-                ": numeric AtomEntry exact-value kind disagrees with atom type for id=" +
-                std::to_string(entry_id));
-        }
-        payload.number_aux_target_float_values[atom] = numeric->float_value;
-        payload.number_aux_target_int_values[atom] = numeric->int_value;
-        payload.number_aux_target_numeric_kinds[atom] =
-            static_cast<uint8_t>(numeric->kind);
-
-        const int row_end = row * payload.max_seq_len +
-            payload.seq_lengths[static_cast<std::size_t>(row)];
-        bool any_valid_row = false;
-        int position = flat_position;
-        for (; position < row_end &&
-               payload.atom_aux_target_mask[static_cast<std::size_t>(position)] != 0;
-             ++position) {
-            if (payload.target_ids[static_cast<std::size_t>(position)] >= 0) {
-                any_valid_row = true;
-            }
-        }
-        if (position >= row_end ||
-            !GRIM::Tokenizer::isAtomCloseTokenId(
-                payload.input_ids[static_cast<std::size_t>(position)]) ||
-            GRIM::Tokenizer::tokenIdToAtomType(
-                payload.input_ids[static_cast<std::size_t>(position)]) != atom_type) {
-            throw std::runtime_error(
-                std::string(caller) +
-                ": numeric auxiliary span does not terminate at its matching close for AtomEntry id=" +
-                std::to_string(entry_id));
-        }
-        if (any_valid_row) {
-            payload.number_aux_target_valid[atom] = 1;
-            ++payload.number_aux_target_valid_count;
-        }
-    }
-}
-
 BatchPayload makeInferenceBasePayload(
     int seq_len,
     int vocab_size,
@@ -362,9 +186,7 @@ BatchPayload buildBatchPayload(
     const GRIM::Tokenizer::TokenLayout&,
     size_t batch_size,
     size_t max_cached_seq_len,
-    bool,
-    int number_aux_target_digit_slots,
-    int number_aux_target_max_abs_pow10)
+    bool)
 {
     BatchPayload payload;
     payload.mode = BatchPayloadMode::Training;
@@ -461,7 +283,7 @@ BatchPayload buildBatchPayload(
                 " token_atom_aux_target_mask.size()=" +
                 std::to_string(seq->token_atom_aux_target_mask.size()) +
                 " != token_ids.size()=" + std::to_string(seq_len) +
-                " - sliding-window construction must author auxiliary ownership");
+                " - sliding-window construction must author typed-span masking");
         }
         if (static_cast<int>(seq->atom_entry_ids.size()) != seq_len) {
             throw std::runtime_error(
@@ -631,17 +453,20 @@ BatchPayload buildBatchPayload(
         std::memcpy(&payload.target_ids[row_offset],
                     r.targets->data(),
                     seq_len * sizeof(int));
-        // Padding positions beyond seq_len already have target=-1 from assign()
-        // Defense-mask layout-only targets and count valid targets — SINGLE PASS.
+        // Padding positions beyond seq_len already have target=-1 from assign().
+        // Apply typed-span ownership and defense-mask layout-only targets while
+        // counting the final LM-supervised rows in one pass.
         // UNK, PAD, and BOS are never valid prediction targets.
         // EOS IS a valid target — model must learn to predict end-of-sequence.
         // This is a safety net; DataLoader should already mask these.
         int valid_count = 0;
         for (int t = 0; t < seq_len - 1; ++t) {
-            const int target = payload.target_ids[row_offset + t];
-            if (target >= 0 && GRIM::Tokenizer::isNeverTargetSpecialTokenId(target)) {
+            int& target = payload.target_ids[row_offset + t];
+            if (r.atom_aux_target_mask->at(static_cast<std::size_t>(t)) != 0) {
+                target = -1;
+            } else if (target >= 0 && GRIM::Tokenizer::isNeverTargetSpecialTokenId(target)) {
                 // Non-content token leaked through DataLoader — mask it
-                payload.target_ids[row_offset + t] = -1;
+                target = -1;
             } else if (target >= 0) {
                 ++valid_count;
             }
@@ -660,7 +485,7 @@ BatchPayload buildBatchPayload(
                     r.atom_mask->data(),
                     seq_len * sizeof(uint8_t));
 
-        // Copy auxiliary-target eligibility authored by sliding windows.
+        // Copy the typed-span mask authored by sliding windows.
         std::memcpy(&payload.atom_aux_target_mask[row_offset],
                     r.atom_aux_target_mask->data(),
                     seq_len * sizeof(uint8_t));
@@ -689,14 +514,9 @@ BatchPayload buildBatchPayload(
     }
 
     materializeCompactAtomOpenings(payload, "buildBatchPayload");
-    materializeNumberAuxTargets(
-        payload,
-        number_aux_target_digit_slots,
-        number_aux_target_max_abs_pow10,
-        "buildBatchPayload");
 
     // ═════════════════════════════════════════════════════════════════════════
-    // Auxiliary metadata does not alter LM target ownership.
+    // Typed-span rows are excluded from LM supervision by the authored mask.
     // ═════════════════════════════════════════════════════════════════════════
     payload.lm_valid_tokens = payload.valid_tokens;
 
@@ -740,8 +560,6 @@ BatchPayload buildInferenceBatchPayload(
     size_t batch_capacity,
     size_t max_cached_seq_len,
     bool,
-    int,
-    int,
     BatchPayloadMode mode)
 {
     const char* caller = "buildInferenceBatchPayload";

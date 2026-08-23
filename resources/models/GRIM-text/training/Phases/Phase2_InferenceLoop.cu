@@ -338,8 +338,6 @@ GRIM::GeneratedSequence generateOneSequence(
             vocab_size, /*batch_capacity=*/1,
             /*max_cached_seq_len=*/feed_tokens.size(),
             /*selector_enabled=*/false,
-            /*number_encoder_digit_slots=*/0,
-            /*number_encoder_max_abs_pow10=*/0,
             GRIM::Batching::BatchPayloadMode::InferenceDecode);
         return decode_payload;
     };
@@ -529,9 +527,7 @@ Phase2TextInferenceResult executePhase2TextInference(
         vocab_size,
         static_cast<size_t>(batch_size),
         static_cast<size_t>(max_cached_seq_len),
-        /*selector_enabled=*/false,
-        /*number_encoder_digit_slots=*/0,
-        /*number_encoder_max_abs_pow10=*/0);
+        /*selector_enabled=*/false);
 
     const auto start_generation = std::chrono::high_resolution_clock::now();
     auto generated = generatePayloadSequences(ctx, prompt_payload, generation_hp, nullptr);

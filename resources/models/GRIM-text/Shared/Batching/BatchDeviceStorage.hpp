@@ -33,23 +33,6 @@ struct BatchDeviceStorage {
     Tensor atom_positions_tensor;
     Tensor atom_types_tensor;
 
-    // NumberEncoder digit-place upload caches (Category 3 workspace; contents
-    // are valid only for the active upload boundary). Allocated only when
-    // number_encoder_enabled=true; geometry capacity is max_tokens * digit_slots.
-    Tensor atom_digit_values_tensor;        // int32 [1, max_tokens * digit_slots]
-    Tensor atom_digit_pow10_index_tensor;   // int32 [1, max_tokens * digit_slots]
-    Tensor atom_digit_mask_tensor;          // float [1, max_tokens * digit_slots]
-    Tensor atom_digit_slot_features_tensor; // float [1, max_tokens * digit_slots * kNumberSlotFeatureDim]
-    Tensor atom_global_features_tensor;     // float [1, max_tokens * kNumberGlobalFeatureDim]
-
-    // Numeric auxiliary target mirrors populated at the batch upload boundary
-    // and exposed through BatchDeviceBindings.
-    Tensor number_aux_target_digits_tensor;     // int32 [1, max_tokens * digit_slots]
-    Tensor number_aux_target_pow10_index_tensor; // int32 [1, max_tokens * digit_slots]
-    Tensor number_aux_target_digit_mask_tensor;  // uint8 [max_tokens * digit_slots]
-    Tensor number_aux_target_valid_tensor;       // uint8 [max_tokens]
-    Tensor number_aux_target_sign_negative_tensor; // uint8 [max_tokens]
-
     // Candidate atom-entry pool (arg/option selector). Allocated independently
     // when selector_enabled=true; pool capacity is max_tokens (every token could
     // be an atom), row_atom_offset capacity is batch_size + 1.
@@ -64,7 +47,6 @@ struct BatchDeviceStorage {
     int batch_size_capacity = 0;
     int max_seq_len_capacity = 0;
     int max_tokens_capacity = 0;
-    int number_encoder_digit_slots_capacity = 0;
 };
 
 std::shared_ptr<BatchDeviceStorage> createBatchDeviceStorage(

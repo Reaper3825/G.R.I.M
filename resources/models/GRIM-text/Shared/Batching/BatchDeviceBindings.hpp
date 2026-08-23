@@ -59,24 +59,6 @@ struct BatchDeviceBindings {
     int*      d_atom_positions  = nullptr;  // [payload.authoredAtomCount()] compact authored atom token positions
     int*      d_atom_types      = nullptr;  // [payload.authoredAtomCount()] compact authored atom types aligned with d_atom_positions
 
-    // NumberEncoder digit-place channels, compact and aligned with
-    // d_atom_positions. Geometry comes from the payload
-    // (authoredAtomCount() x number_encoder_digit_slots); nullable when the
-    // NumberEncoder is disabled.
-    int*      d_atom_digit_values        = nullptr; // [atoms * digit_slots]
-    int*      d_atom_digit_pow10_index   = nullptr; // [atoms * digit_slots]
-    float*    d_atom_digit_mask          = nullptr; // [atoms * digit_slots]
-    float*    d_atom_digit_slot_features = nullptr; // [atoms * digit_slots * kNumberSlotFeatureDim]
-    float*    d_atom_global_features     = nullptr; // [atoms * kNumberGlobalFeatureDim]
-
-    // Numeric auxiliary targets, compact and aligned with d_atom_positions.
-    // Borrowed from BatchDeviceStorage and nullable when NumberEncoder is off.
-    int*      d_number_aux_target_digits      = nullptr; // [atoms * digit_slots]
-    int*      d_number_aux_target_pow10_index = nullptr; // [atoms * digit_slots]
-    uint8_t*  d_number_aux_target_digit_mask  = nullptr; // [atoms * digit_slots]
-    uint8_t*  d_number_aux_target_valid       = nullptr; // [atoms]
-    uint8_t*  d_number_aux_target_sign_negative = nullptr; // [atoms]
-
     // Candidate atom-entry pool (arg/option selector). Batch-global "menu" of
     // options the selector scores; row r's window is
     // [d_row_atom_offset[r], d_row_atom_offset[r+1]). Nullable when the

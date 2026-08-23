@@ -75,7 +75,8 @@ void filterShortSequences(std::vector<GRIM::TokenizerArtifacts::GrmtSequence>& s
 // max_seq_len pass through unchanged except for the final-position target
 // mask. Every finalized output row receives token_atom_aux_target_mask in
 // causal prediction coordinates: opening through final value row = 1, typed
-// closing-boundary row = 0.
+// closing-boundary row = 0. BatchPayload uses this channel to suppress LM
+// targets inside complete typed spans independently of any reconstruction head.
 //
 // Calls injectBoundaryTokens internally before windowing, then calls
 // filterOverlongSequences and filterShortSequences after windowing.
