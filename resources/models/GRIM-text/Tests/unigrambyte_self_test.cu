@@ -1680,7 +1680,8 @@ bool testUniByteRoundTrip(std::string& message) {
         std::cout << "  tokens[" << i << "] = " << tid;
         if (tid < static_cast<int>(GRIM::Tokenizer::NUM_SPECIAL_TOKENS)) {
             std::cout << " (special)\n";
-        } else if (tid >= static_cast<int>(GRIM::Tokenizer::BYTE_TOKEN_OFFSET) && tid < static_cast<int>(ATOM_TOKEN_OFFSET)) {
+        } else if (tid >= static_cast<int>(GRIM::Tokenizer::BYTE_TOKEN_OFFSET) &&
+               tid < static_cast<int>(GRIM::Tokenizer::BYTE_TOKEN_OFFSET + GRIM::Tokenizer::BYTE_VOCAB_SIZE)) {
             std::cout << " (byte: '" << static_cast<char>(tid - GRIM::Tokenizer::BYTE_TOKEN_OFFSET) << "')\n";
         } else if (tid >= UNIGRAM_VOCAB_OFFSET) {
             const auto* piece = tokenizer.unigramLM().getPiece(tid);

@@ -191,7 +191,8 @@ GRMTCorpusMetrics GRIM::Test::scanGRMT(
             auto it = vocab.find(tid);
             if (it != vocab.end()) {
                 decoded += it->second;
-            } else if (tid >= BYTE_TOKEN_OFFSET && tid < ATOM_TOKEN_OFFSET) {
+            } else if (tid >= BYTE_TOKEN_OFFSET &&
+                       tid < BYTE_TOKEN_OFFSET + BYTE_VOCAB_SIZE) {
                 decoded += static_cast<char>(tid - BYTE_TOKEN_OFFSET);
             }
             // atom / unknown → skip (no text contribution)

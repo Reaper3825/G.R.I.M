@@ -11,6 +11,7 @@
 //  Token ID Layout:
 //    [0-3]                    = Special tokens (<unk>, <pad>, <s>, </s>)
 //    [4-259]                  = Byte tokens (fallback)
+//    [260-305]                = Fixed numeric tokens
 //    [ATOM_TOKEN_OFFSET..UNIGRAM_VOCAB_OFFSET-1] = Typed atom boundary tokens
 //    [UNIGRAM_VOCAB_OFFSET+]  = Unigram vocabulary (regular pieces only)
 //  
