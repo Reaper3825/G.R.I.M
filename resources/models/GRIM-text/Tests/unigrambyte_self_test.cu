@@ -2659,6 +2659,72 @@ bool testGrmtAtomSpanSideChannelValidation(std::string& message) {
     return true;
 }
 
+bool testGrmtFixedNumericTokenRoundTripAndRangeValidation(std::string& message) {
+    TokenizerArtifacts::GrmtSequence sequence;
+    appendNumericLiteralTokenIds("-11111.0000e+22", sequence.token_ids);
+    sequence.targets.assign(sequence.token_ids.size(), -1);
+    for (size_t index = 0; index + 1 < sequence.token_ids.size(); ++index) {
+        sequence.targets[index] = sequence.token_ids[index + 1];
+    }
+    const size_t n = sequence.token_ids.size();
+    sequence.token_numeric_values.assign(n, 0.0f);
+    sequence.token_atom_mask.assign(n, 0);
+    sequence.token_atom_flags.assign(n, 0);
+    sequence.atom_entry_ids.assign(n, kAtomEntryNone);
+    sequence.token_exec_slot_indices.assign(n, -1);
+
+    std::filesystem::create_directories("output");
+    const std::string round_trip_path = "output/test_grmt_fixed_numeric.grmt";
+    const std::uint32_t vocab_size = static_cast<std::uint32_t>(UNIGRAM_VOCAB_OFFSET);
+    const auto save_report = TokenizerArtifacts::saveGrmtCorpus(
+        round_trip_path,
+        std::vector<TokenizerArtifacts::GrmtSequence>{sequence},
+        vocab_size);
+    ASSERT_EQ(save_report.vocab_size, vocab_size,
+              "Numeric GRMT header must retain the full fixed token space");
+
+    const auto round_trip = TokenizerArtifacts::loadGrmtCorpus(round_trip_path);
+    std::filesystem::remove(round_trip_path);
+    ASSERT_EQ(round_trip.sequences.size(), static_cast<size_t>(1),
+              "Numeric GRMT fixture should load as one row");
+    ASSERT_TRUE(round_trip.sequences[0].token_ids == sequence.token_ids,
+                "Fixed numeric token IDs must survive GRMT round-trip unchanged");
+    ASSERT_TRUE(round_trip.sequences[0].targets == sequence.targets,
+                "Fixed numeric next-token targets must survive GRMT round-trip unchanged");
+
+    auto writerRejects = [vocab_size](TokenizerArtifacts::GrmtSequence invalid,
+                                      const std::string& path) {
+        try {
+            (void)TokenizerArtifacts::saveGrmtCorpus(
+                path,
+                std::vector<TokenizerArtifacts::GrmtSequence>{std::move(invalid)},
+                vocab_size);
+        } catch (const std::runtime_error&) {
+            std::filesystem::remove(path);
+            std::filesystem::remove(path + ".tmp");
+            return true;
+        }
+        std::filesystem::remove(path);
+        std::filesystem::remove(path + ".tmp");
+        return false;
+    };
+
+    auto invalid_token = sequence;
+    invalid_token.token_ids[0] = static_cast<int>(vocab_size);
+    ASSERT_TRUE(writerRejects(
+                    std::move(invalid_token),
+                    "output/test_grmt_invalid_primary_token.grmt"),
+                "GRMT writer must reject a primary token ID at vocab_size");
+
+    auto invalid_target = sequence;
+    invalid_target.targets[0] = static_cast<int>(vocab_size);
+    ASSERT_TRUE(writerRejects(
+                    std::move(invalid_target),
+                    "output/test_grmt_invalid_primary_target.grmt"),
+                "GRMT writer must reject a primary target ID at vocab_size");
+    return true;
+}
+
 static TokenizerArtifacts::GrmtSequence makeWindowingAtomSequence(
     std::size_t prefix_tokens,
     std::size_t suffix_tokens) {
@@ -3451,6 +3517,7 @@ int main(int argc, char** argv) {
     
     // Section 13: Vocabulary Persistence Tests
     suite.addTest("GRMT.TypedAtomSpanSideChannels", testGrmtAtomSpanSideChannelValidation);
+    suite.addTest("GRMT.FixedNumericTokenRoundTrip", testGrmtFixedNumericTokenRoundTripAndRangeValidation);
     suite.addTest("SlidingWindow.TypedAtomSpanIntegrity", testSlidingWindowsPreserveTypedAtomSpans);
     suite.addTest("Vocab.TextExportBinaryLoad", testVocabTextExportBinaryLoad);
     suite.addTest("Vocab.SaveLoadBinary", testVocabSaveLoadBinary);

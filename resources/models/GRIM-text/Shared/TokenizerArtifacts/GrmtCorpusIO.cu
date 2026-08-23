@@ -375,6 +375,35 @@ void validateGoalTokenRange(const std::shared_ptr<const GRIM::Goal>& goal,
     }
 }
 
+void validateSequenceTokenRange(const GrmtSequence& sequence,
+                                std::uint32_t vocab_size,
+                                const std::string& source) {
+    for (std::size_t index = 0; index < sequence.token_ids.size(); ++index) {
+        const int token_id = sequence.token_ids[index];
+        if (token_id < 0 || static_cast<std::uint32_t>(token_id) >= vocab_size) {
+            throw std::runtime_error(
+                "[GRMT] " + source + ": token_ids token id=" +
+                std::to_string(token_id) + " at index=" +
+                std::to_string(index) + " is outside vocab_size=" +
+                std::to_string(vocab_size));
+        }
+    }
+
+    for (std::size_t index = 0; index < sequence.targets.size(); ++index) {
+        const int target = sequence.targets[index];
+        if (target == -1) {
+            continue;
+        }
+        if (target < 0 || static_cast<std::uint32_t>(target) >= vocab_size) {
+            throw std::runtime_error(
+                "[GRMT] " + source + ": targets token id=" +
+                std::to_string(target) + " at index=" +
+                std::to_string(index) + " is outside vocab_size=" +
+                std::to_string(vocab_size) + " (only -1 is a valid sentinel)");
+        }
+    }
+}
+
 void writeTokenIds(std::ostream& output,
                    const std::vector<std::int32_t>& token_ids,
                    const std::string& field,
@@ -927,6 +956,7 @@ void GrmtCorpusWriter::writeSequence(const GrmtSequence& sequence) {
 
     const std::string sink = temp_path_.string() + "#seq" + std::to_string(written_sequences_);
     sequence.validateForWrite(sink);
+    validateSequenceTokenRange(sequence, vocab_size_, sink);
     validateGoalTokenRange(sequence.goal, vocab_size_, sink);
 
     const std::uint32_t len = static_cast<std::uint32_t>(sequence.token_ids.size());
@@ -1132,6 +1162,7 @@ bool GrmtCorpusReader::readNext(GrmtSequence& out_sequence) {
     }
 
     seq.validateForWrite(source);
+    validateSequenceTokenRange(seq, header_.vocab_size, source);
     validateGoalTokenRange(seq.goal, header_.vocab_size, source);
 
     out_sequence = std::move(seq);
